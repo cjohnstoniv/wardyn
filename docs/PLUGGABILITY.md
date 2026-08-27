@@ -69,9 +69,20 @@ impl *selectable*; it is only **blessed** once it passes its seam's
 `RunConformance` suite. That is what makes a "recommended production default" a
 falsifiable engineering promise rather than a marketing claim.
 
-**Selection convention:** every seam selects via a `WARDYN_<SEAM>` env var (CLI flag
-default < env var < explicit flag, via the `flagEnv` helper). Defaults reproduce
-today's behavior; no flag flip changes runtime behavior on its own.
+**Selection convention:** every **registry-backed** seam selects via a
+`WARDYN_<SEAM>` env var (CLI flag default < env var < explicit flag, via the
+`flagEnv` helper). Defaults reproduce today's behavior; no flag flip changes
+runtime behavior on its own.
+
+> **Not every seam is registry-backed, and this rule used to claim they all
+> were.** `egress.Evaluator` has a real interface AND a conformance suite, but
+> **no registry, no selector env var, and exactly one implementation** — the only
+> override is an in-process `Options.Evaluator` field that nothing outside tests
+> sets. `/healthz` correspondingly reports `policy_engine: {selected: "builtin"}`
+> with no `available` list, which is honest; step 5 below used to imply otherwise.
+> An interface plus a conformance suite is a real head start on pluggability. It
+> is not the same thing as a swappable seam, and the difference is exactly what
+> this document exists to keep straight.
 
 **Security invariants stay above every seam.** A pluggable policy engine, egress
 gateway, or confinement substrate may **never** weaken Wardyn's non-negotiables:
@@ -87,8 +98,9 @@ These run in the control plane / proxy *around* the seam, not inside it.
 2. `Register("<name>", <constructor>)` from your package's `init()`.
 3. Make it pass `<seam>test.RunConformance` (a 3-line `_test.go` calling the suite).
 4. Add a row to the matrix below.
-5. For the registry-backed seams (identity, secret store, recording, confinement
-   substrate) it now appears in `/healthz.components.<seam>.available`
+5. For the registry-backed seams — identity, secret store, recording, confinement
+   substrate, and **only** those four; `policy_engine` is NOT among them — it now
+   appears in `/healthz.components.<seam>.available`
    automatically (`<seam>` ∈ `identity`, `secret_store`, `recording`, `sandbox`)
    and is selectable via that seam's selector env var — `WARDYN_IDENTITY`,
    `WARDYN_SECRET_STORE`, and `WARDYN_RECORDING_STORE` respectively (the substrate
@@ -110,6 +122,25 @@ preserve L0 (the agent's sole egress is the wardyn-proxy endpoint) and fail clos
 when a demanded class cannot be enforced.
 
 ---
+
+## 2b. The four-layer question, answered honestly
+
+An agent-sandboxing platform decomposes into four layers, and the question an
+architecture review actually asks is which of them you can swap:
+
+| Layer | Wardyn today |
+|---|---|
+| **Physical sandbox** — the isolation boundary | **Genuinely pluggable.** `substrate.Substrate` has **two independently-built implementations** — Docker and Kubernetes — held to **one** conformance contract, and both are run in CI against a live daemon and a real kind+Calico cluster. Inside the Docker substrate there is a second, cheaper swap point: `WARDYN_CONFINEMENT_MAP` pins a different OCI runtime per confinement class (runc / gVisor / Kata / sysbox), so the isolation *technology* changes with no new substrate at all. |
+| **Ingress / egress controls** | **Split, and the halves differ.** The *decision* is a seam — `egress.Evaluator`, with a conformance suite — but it has one implementation and no selector (see §1). The *enforcement point*, the `wardyn-proxy` sidecar, is **not** swappable: a replacement would have to reimplement credential minting, the approval channel, recording upload, the git broker, the LLM routes, decision-log streaming, run-token handling and the MITM CA. There is no published contract for that, and there should not be one yet. Ingress is three hard-wired lanes (browser attach, SSH, UI relay) sharing one primitive, `ExecStream`. |
+| **LLM gateway** | **Hard-wired.** The provider hosts are string constants in `internal/egress/proxy/local_routes.go`; there is no swap point. What already ships on that path is real and often mistaken for less: proxy-side credential injection so the key is never resident, TLS-MITM of the CONNECT tunnel, and outbound content inspection whose coverage is reported honestly per endpoint rather than assumed. |
+| **MCP / tool gateway** | **Does not exist.** `cmd/wardyn-toolgate` is **not** one, despite speaking MCP: it is a single-tool stdio server that relays one harness's own permission prompt into Wardyn's approval FSM, and it is wired so it is the only MCP endpoint the agent can see. It has no policy, no tool allowlist, and no view of third-party MCP traffic. The L3 layer that would govern that is planned, not built. |
+
+**One of four is genuinely pluggable.** That is the honest answer, and it reads
+better than four seams that are really one seam and three intentions. The
+strongest thing to say here is the first row: *two implementations, one
+conformance contract, both enforced in CI* — which is a materially stronger claim
+than "we have an interface", and it is the only one of the four that has earned
+it.
 
 ## 3. Blessed-default-vs-alternate matrix
 

@@ -180,6 +180,38 @@ managed Kubernetes; every item below was verified against the code before it was
 
 ### Fixed
 
+- **`docs/PLUGGABILITY.md` claimed a selection convention that does not hold.**
+  Its rule — *"every seam selects via a `WARDYN_<SEAM>` env var"* — is false for
+  `egress.Evaluator`, which has a real interface and a conformance suite but **no
+  registry, no selector, and exactly one implementation**; the only override is an
+  in-process field nothing outside tests sets. `/healthz` was already honest about
+  this (`policy_engine` carries no `available` list); the doc was not. The same
+  claim was in `internal/component/registry.go`'s package doc. Both corrected, and
+  the doc now states the distinction it exists to keep straight: an interface plus
+  a conformance suite is a head start on pluggability, not a swappable seam.
+
+- **The threat model's own citation rule had no gate, and had rotted again.**
+  `threatmodel/THREAT-MODEL.md` §8 states that citations must name symbols, not
+  line numbers — *"an earlier pass pinned line numbers and six of nine had rotted
+  onto unrelated code (one past EOF)"* — and then kept nine of them, at least two
+  of which had rotted by 0.7. All nine now cite symbols, and
+  `TestCommentsCiteSymbolsNotLineNumbers`'s sibling extends the ban to
+  `threatmodel/*.md`. Also fixes four `Tier-1`/`Tier-3` occurrences (the pre-`CC`
+  names) and a security-doc contradiction: `docs/DATA-FLOW.md` called
+  `wardyn-proxy` the **L1** egress gateway; every other document calls it L2.
+
+### Added
+
+- **`docs/PLUGGABILITY.md` answers the four-layer question directly** — physical
+  sandbox / ingress-egress / LLM gateway / MCP tool gateway — with the honest
+  score: **one of four is genuinely pluggable.** It also promotes the strongest
+  pluggability claim in the codebase out of a matrix cell: `substrate.Substrate`
+  has **two independently-built implementations held to one conformance
+  contract**, both enforced in CI. And it states plainly that `wardyn-toolgate` is
+  **not** an MCP gateway despite speaking MCP.
+
+### Fixed
+
 - **The GPL corresponding-source offer covered the wrong images.** Its hardcoded
   list still named `agent-claude-code`, unpublished since 0.6.2, and omitted
   `agent-base`, which publishes in its place — so the loop errored on a ref that

@@ -42,6 +42,40 @@ var lineCitation = regexp.MustCompile(`[a-zA-Z0-9_]+\.go:[0-9]+`)
 // (and on any test fixture holding a compiler diagnostic), and it would also
 // flag matches inside string literals — which are data, not claims about the
 // code, and are none of this guard's business.
+// TestSecurityDocsCiteSymbolsNotLineNumbers extends the same rule to the threat
+// model, which is where the rot is most expensive: a security document that
+// sends a reviewer to unrelated code reads as sloppy about exactly the thing it
+// is asserting rigour about.
+//
+// The doc's own §8 already states the rule — "Citations below name SYMBOLS, not
+// line ranges — an earlier pass pinned line numbers and six of nine had rotted
+// onto unrelated code (one past EOF)". It stated it and then kept nine of them,
+// two of which had rotted again by 0.7. A rule with no gate is a preference.
+func TestSecurityDocsCiteSymbolsNotLineNumbers(t *testing.T) {
+	root := repoRoot(t)
+	// Markdown, so there is no AST to read comments from — but also no code, so
+	// every match IS a claim about the code. A raw scan is correct here.
+	docs, err := filepath.Glob(filepath.Join(root, "threatmodel", "*.md"))
+	if err != nil {
+		t.Fatalf("glob threatmodel: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("no threatmodel/*.md found — this guard would pass vacuously")
+	}
+	for _, doc := range docs {
+		b, err := os.ReadFile(doc)
+		if err != nil {
+			t.Fatalf("read %s: %v", doc, err)
+		}
+		rel, _ := filepath.Rel(root, doc)
+		for i, line := range strings.Split(string(b), "\n") {
+			if m := lineCitation.FindString(line); m != "" {
+				t.Errorf("%s:%d cites %q by line number — cite the SYMBOL instead; a line number does not survive a refactor and sends a security reviewer to unrelated code", rel, i+1, m)
+			}
+		}
+	}
+}
+
 func TestCommentsCiteSymbolsNotLineNumbers(t *testing.T) {
 	root := repoRoot(t)
 

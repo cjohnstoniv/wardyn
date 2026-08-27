@@ -2,8 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package component provides the shared registry that backs Wardyn's pluggable
-// component seams (identity provider, secret store, recording store, policy
-// evaluator, …). One generic implementation of name→constructor registration,
+// component seams: identity provider, secret store, recording store, and the
+// confinement substrate. NOT the policy evaluator — this doc used to list it and
+// no evaluator registry exists; egress.Evaluator has an interface and a
+// conformance suite but exactly one implementation and no selector, which is why
+// /healthz reports policy_engine with no `available` list.
+// One generic implementation of name→constructor registration,
 // default resolution, and duplicate detection, so every seam selects an
 // implementation uniformly via a WARDYN_<SEAM> name while keeping a type-safe,
 // seam-specific constructor signature.

