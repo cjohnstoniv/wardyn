@@ -46,7 +46,7 @@ is *about* would record it in the one place already under suspicion.
 | `run.fail` | Run fails before the agent starts (the D9 FailureHint gap this same register names) | `error`, `from` | `internal/api/runs_lifecycle.go:403` | internal |
 | `run.kill` | Operator or owner kills a run | (run state transition) | `internal/api/runs_lifecycle.go:539` | internal |
 | `run.exec` | Exec into a dispatched sandbox | `argv`, `error` | `internal/api/runs_dispatch.go:567` | internal |
-| `run.files` | A workspace file-browse operation on a run fails | `error` | `internal/api/run_files.go:315` | internal |
+| `run.files` | A workspace file-browse operation on a run fails | `error` | `internal/api/run_files.go:343` | internal |
 | `run.interactive` | `interactive_start` path taken | `note`, `sandbox_ref` | `internal/api/runs_dispatch.go:538` | internal |
 | `run.resources` | A run-resources query/update fails | `error` | `internal/api/run_resources.go:188` | internal |
 | `run.selftest` | Post-dispatch selftest gate (agent-image liveness check before a run is usable) | `confinement_class`, `detail`, `error`, `exit_code`, `fail_closed` | `internal/api/runs_dispatch.go:558` | internal |
