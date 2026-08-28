@@ -47,7 +47,16 @@ no package. That is what `deploy/compose/Dockerfile.wardynd`'s `ui-build` does.
 
 **2. Go builds:** add `ENV GOTOOLCHAIN=local` so the pinned-toolchain self-upgrade
 fetch (blocked behind a MITM proxy) is skipped; the corp CA above lets
-`go mod download` verify the module proxy.
+`go mod download` verify the module proxy. Also declare a module-mirror knob
+right after it:
+
+```dockerfile
+ARG GOPROXY=
+ENV GOPROXY=${GOPROXY}
+```
+
+Empty is identical to unset — the go command falls back to `$GOROOT/go.env`
+(`https://proxy.golang.org,direct`) — so this is a no-op on an OSS build.
 
 **3. npm/pnpm builds:** declare these **build-only ARGs** (never persistent ENV —
 a runtime proxy ENV would leak into agent runs, whose only egress is wardyn-proxy)
@@ -65,12 +74,12 @@ RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi 
 ```
 
 **4. Wire the knobs to the build entrypoints.** The Makefile threads
-`NPM_REGISTRY`/`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` into every `docker build` via
-`$(DOCKER_BUILD_ARGS)`; the compose stanzas pass them through `build.args`. So a
-corp user runs, e.g.:
+`NPM_REGISTRY`/`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`/`GOPROXY` into every
+`docker build` via `$(DOCKER_BUILD_ARGS)`; the compose stanzas pass them through
+`build.args`. So a corp user runs, e.g.:
 
 ```
-make agent-images NPM_REGISTRY=https://mirror.corp/api/npm/npm-remote HTTPS_PROXY=http://proxy.corp:8080
+make agent-images NPM_REGISTRY=https://mirror.corp/api/npm/npm-remote HTTPS_PROXY=http://proxy.corp:8080 GOPROXY=https://mirror.corp/api/go
 ```
 
 **5. pnpm not in the mirror.** `corepack` does **not** help — it fetches pnpm from
