@@ -36,6 +36,18 @@ Cluster-scoped (ClusterRole+ClusterRoleBinding): RuntimeClass lookups
 {{- if and (not .Values.serviceAccount.create) (not .Values.serviceAccount.name) -}}
 {{- fail "wardyn: k8s.enabled is set with serviceAccount.create=false and no serviceAccount.name — the RoleBinding/ClusterRoleBinding below would bind the k8s-runner privileges (pods/exec, secrets create/delete, networkpolicies create/delete) to the namespace's default ServiceAccount, handing them to every OTHER pod in the namespace that also uses it. Either leave serviceAccount.create=true (the default, a dedicated ServiceAccount), or set serviceAccount.name to an existing ServiceAccount you intend to grant these privileges to." -}}
 {{- end -}}
+{{/*
+k8s.rbac.create=false skips the four objects below — for a platform team
+that provisions equivalent RBAC out-of-band (e.g. via GitOps) and would
+rather this chart not manage it. `default dict` + `hasKey`, not
+`| default true`: a bool defaults false-on-false ("false | default true"
+== true), so an explicit create=false would be silently ignored by
+`| default true`. hasKey correctly treats an ABSENT key (an old
+--reuse-values map, or the chart's own default) as "not set" and falls
+through to true.
+*/}}
+{{- $rbac := .Values.k8s.rbac | default dict -}}
+{{- if or (not (hasKey $rbac "create")) $rbac.create -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -101,4 +113,5 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "wardyn.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{- end -}}
 {{- end -}}

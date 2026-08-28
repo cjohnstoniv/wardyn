@@ -144,6 +144,15 @@ extraEnv: []
 # sandboxes as pods in THIS cluster instead of containers on a Docker daemon.
 k8s:
   enabled: false
+  # Render the Role/RoleBinding/ClusterRole/ClusterRoleBinding below. Default
+  # true: wardynd still needs every one of those verbs bound to
+  # serviceAccount.name to drive the k8s runner substrate. Set false only
+  # when a platform team provisions equivalent RBAC out-of-band (e.g. via
+  # GitOps) and would rather this chart not manage it — you are then
+  # responsible for granting serviceAccount.name the exact verbs
+  # templates/rbac.yaml documents.
+  rbac:
+    create: true
   # Namespace every sandbox's Secret/NetworkPolicies/pods are created in.
   # Empty => the release namespace (no runs-namespace.yaml, no
   # createRunsNamespace — the chart never creates or labels one). A DIFFERENT,
