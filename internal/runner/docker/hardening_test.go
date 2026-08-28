@@ -46,7 +46,7 @@ func TestCapabilitiesFor_ClassMapping(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			caps := capabilitiesForWith(infoWithRuntimes(tt.runtimes...), nil)
+			caps := capabilitiesForWith(infoWithRuntimes(tt.runtimes...), nil, true)
 			if caps.Driver != driverName {
 				t.Errorf("Driver = %q, want %q", caps.Driver, driverName)
 			}
@@ -81,7 +81,7 @@ func TestCapabilitiesForWith_CC1UnhonorablePinNotAdvertised(t *testing.T) {
 	info := infoWithRuntimes("runsc") // runc + runsc present; sysbox is NOT
 	overrides := map[types.ConfinementClass]string{types.CC1: "sysbox"}
 
-	caps := capabilitiesForWith(info, overrides)
+	caps := capabilitiesForWith(info, overrides, true)
 
 	for _, c := range caps.ConfinementClasses {
 		if c == types.CC1 {
@@ -97,7 +97,7 @@ func TestCapabilitiesForWith_CC1UnhonorablePinNotAdvertised(t *testing.T) {
 	}
 
 	// Control: with a HONORABLE CC1 pin (sysbox present) CC1 is advertised again.
-	caps2 := capabilitiesForWith(infoWithRuntimes("sysbox"), overrides)
+	caps2 := capabilitiesForWith(infoWithRuntimes("sysbox"), overrides, true)
 	if !slices.Contains(caps2.ConfinementClasses, types.CC1) || caps2.Resolved[types.CC1] != "oci/sysbox" {
 		t.Errorf("honorable CC1=sysbox pin must advertise CC1 as oci/sysbox; classes=%v resolved=%v", caps2.ConfinementClasses, caps2.Resolved)
 	}
@@ -299,14 +299,14 @@ func TestCapabilitiesFor_ByoVaultRuntime(t *testing.T) {
 	info := infoWithRuntimes("firecracker") // registered, but not on the auto allowlist
 
 	// No pin: firecracker is unrecognized, so CC3 is NOT auto-advertised.
-	caps := capabilitiesForWith(info, nil)
+	caps := capabilitiesForWith(info, nil, true)
 	if slices.Contains(caps.ConfinementClasses, types.CC3) {
 		t.Fatalf("CC3 must NOT auto-advertise for an unrecognized runtime; got %v", caps.ConfinementClasses)
 	}
 
 	// Explicit operator pin: the operator vouches firecracker is a VM -> CC3 advertised.
 	overrides := map[types.ConfinementClass]string{types.CC3: "firecracker"}
-	caps2 := capabilitiesForWith(info, overrides)
+	caps2 := capabilitiesForWith(info, overrides, true)
 	if !slices.Contains(caps2.ConfinementClasses, types.CC3) {
 		t.Fatalf("CC3 must advertise for an operator-pinned BYO runtime; got %v", caps2.ConfinementClasses)
 	}
@@ -704,5 +704,19 @@ func TestCC3_KataFloorIsInstallTimeOnly_DocumentedResidual(t *testing.T) {
 	const wantSubstr = "there is no running-daemon version probe"
 	if !strings.Contains(normalized, wantSubstr) {
 		t.Errorf("THREAT-MODEL.md CC3 section must disclose that the Kata version floor is install-time only (no running-daemon version probe); the doc still presents the floor as if it were a property of the tier")
+	}
+}
+
+// TestCapabilities_SessionRecordingFollowsRecordConfig: a Record=false
+// substrate never wraps Exec with wardyn-rec, so it must not advertise
+// SessionRecording -- the site-config probe's lost-recording warning keys on
+// that flag and would otherwise fire for a cast that was never going to exist.
+func TestCapabilities_SessionRecordingFollowsRecordConfig(t *testing.T) {
+	info := infoWithRuntimes()
+	if !capabilitiesForWith(info, nil, true).SessionRecording {
+		t.Fatal("Record=true must advertise SessionRecording")
+	}
+	if capabilitiesForWith(info, nil, false).SessionRecording {
+		t.Fatal("Record=false must NOT advertise SessionRecording")
 	}
 }

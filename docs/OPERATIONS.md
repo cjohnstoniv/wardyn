@@ -1473,6 +1473,10 @@ also carry `warning` (see below).
 | `not_run` | A runner IS configured, but the throwaway sandbox that would have carried the probe never got to running it — an image pull failure, or a confinement class this host can't enforce. Distinct from `blocked`: `blocked` means the probe DID run and observed a real network fact; `not_run` means nothing was learned about the network either way. Setup's gate treats it the same as `no_runner` (unlocks Next with a neutral note, never a click-past). |
 | `timed_out` | The probe sandbox started and the task launched, but the run itself never reported completion within the wait budget (90s) — provably **not** a network verdict, unlike `blocked`. `detail` names the sandbox agent's own observed status at the deadline and `WARDYN_CONTROL_PLANE_URL` to check. The usual cause is the run's recording upload hanging against an unreachable control plane — see "Recording upload path on Kubernetes" below. |
 
+The recorder's upload bound ships inside the agent images: an image pinned through
+`WARDYN_AGENT_IMAGES` must be rebuilt from 0.6.6 (or use the published `agent-base:0.6.6`), or its
+recorder keeps the pre-0.6.6 60s upload tail.
+
 A probe is bounded well under two minutes and reclaims (kills) its sandbox if
 the run doesn't finish in time, so a wedged probe can never hold one open.
 

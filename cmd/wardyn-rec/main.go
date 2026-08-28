@@ -52,7 +52,7 @@ import (
 // control plane is unreachable from the run's proxy pod on Kubernetes). Vars,
 // not consts, purely so a test can shrink them instead of taking the full 20s
 // to exercise the bound. Previously a bare http.Client{Timeout: 60s} riding
-// http.DefaultTransport's default (unbounded-connect) dialer — a hang the
+// http.DefaultTransport's default (DefaultTransport's 30s dial-connect) dialer — a hang the
 // dialer itself never caught could hold a completed task's exit for a full
 // minute, longer than the site-config probe's own wait budget
 // (siteConfigProbeWaitTimeout, internal/api/site_config_probe.go). A cast is

@@ -239,7 +239,7 @@ func pickRuntime(info system.Info, want string) string {
 // class is advertised ONLY when its (possibly pinned) enforcing runtime is
 // actually registered — overrides never overclaim (invariant 5). Resolved
 // carries the per-class substrate label ("oci/<runtime>") for /healthz.
-func capabilitiesForWith(info system.Info, overrides map[types.ConfinementClass]string) runner.Capabilities {
+func capabilitiesForWith(info system.Info, overrides map[types.ConfinementClass]string, record bool) runner.Capabilities {
 	classes := []types.ConfinementClass{}
 	resolved := map[types.ConfinementClass]string{}
 	// CC1 is the floor, but an operator CC1 override (e.g. a stronger sysbox pin)
@@ -269,8 +269,11 @@ func capabilitiesForWith(info system.Info, overrides map[types.ConfinementClass]
 		StructuralEgress: true,
 		// L1 nftables default-deny is v0.5 — be honest, do not claim it.
 		NetworkPolicy: false,
-		// wardyn-rec sidecar is supported by Exec.
-		SessionRecording: true,
+		// Exec wraps the agent with wardyn-rec only when Config.Record is on
+		// (recordCmd); advertising recording a Record=false substrate never
+		// performs would make the site-config probe warn about a cast that was
+		// never going to be uploaded.
+		SessionRecording: record,
 	}
 }
 

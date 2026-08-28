@@ -1387,3 +1387,86 @@ func TestProbeFailureDetail_RunCompleteFailureWinsOverEarlierLaunchFailure(t *te
 		t.Errorf("incompleteReason = %q, want the run.complete event's error, not the earlier non-fatal one", res.incompleteReason)
 	}
 }
+
+// TestProbeFailureDetail_WaitsForALateRunCompleteEvent: the completion
+// watcher CASes the run to FAILED before finalizeRunTail records
+// run.complete, so a probe poll can see the terminal state while the trail is
+// still empty. probeFailureDetail must re-read briefly instead of reporting
+// "failed for an unreported reason" (which classifies as blocked -- the
+// verdict this release removes for a task that never ran).
+func TestProbeFailureDetail_WaitsForALateRunCompleteEvent(t *testing.T) {
+	oldTries, oldInterval := probeTrailSettleTries, probeTrailSettleInterval
+	probeTrailSettleTries, probeTrailSettleInterval = 20, 10*time.Millisecond
+	t.Cleanup(func() { probeTrailSettleTries, probeTrailSettleInterval = oldTries, oldInterval })
+
+	runID := uuid.New()
+	ps := newProbeStore(types.SiteConfig{})
+	srv := New(baseTestConfig(newHarness(t), ps))
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		ps.mu.Lock()
+		ps.events = append(ps.events, types.AuditEvent{RunID: &runID, Action: "run.complete", Outcome: "failure",
+			Data: mustJSON(map[string]any{"exec_started": false, "error": "k8s: exec wait: agent container never started (CreateContainerConfigError: secret missing)"})})
+		ps.mu.Unlock()
+	}()
+
+	res := srv.probeFailureDetail(context.Background(), runID, 0)
+	if !res.neverRan {
+		t.Fatalf("neverRan = false (reason %q), want true: the late run.complete event carries exec_started:false", res.incompleteReason)
+	}
+	if !strings.Contains(res.incompleteReason, "never started") {
+		t.Errorf("incompleteReason = %q, want the driver's reason", res.incompleteReason)
+	}
+}
+
+// TestProbeFailureDetail_DoesNotWaitOnALaunchFailure: a run whose row
+// carries a FailureHint died at launch and will never get a run.complete --
+// no re-read delay.
+func TestProbeFailureDetail_DoesNotWaitOnALaunchFailure(t *testing.T) {
+	oldTries, oldInterval := probeTrailSettleTries, probeTrailSettleInterval
+	probeTrailSettleTries, probeTrailSettleInterval = 5, 200*time.Millisecond
+	t.Cleanup(func() { probeTrailSettleTries, probeTrailSettleInterval = oldTries, oldInterval })
+
+	runID := uuid.New()
+	ps := newProbeStore(types.SiteConfig{})
+	ps.events = []types.AuditEvent{{RunID: &runID, Action: "run.create", Outcome: "failure",
+		Data: mustJSON(map[string]any{"error": "docker: pull: not found"})}}
+	ps.runs[runID] = types.AgentRun{ID: runID, State: types.RunFailed, FailureHint: "the sandbox could not be created: docker: pull: not found"}
+	srv := New(baseTestConfig(newHarness(t), ps))
+	start := time.Now()
+	res := srv.probeFailureDetail(context.Background(), runID, 0)
+	if !res.neverRan {
+		t.Fatal("neverRan = false, want true")
+	}
+	if time.Since(start) > 150*time.Millisecond {
+		t.Errorf("probeFailureDetail waited %s on a trail that already explained the failure", time.Since(start))
+	}
+}
+
+// TestProbeFailureDetail_NonFatalEarlyFailureDoesNotShortCircuitTheWait: a
+// NON-fatal failure event ahead of a late run.complete (a lost sandbox ref, a
+// proxy resolve) must not be mistaken for the explanation -- the row has no
+// FailureHint, so the re-read waits for run.complete and reads ITS exit code.
+func TestProbeFailureDetail_NonFatalEarlyFailureDoesNotShortCircuitTheWait(t *testing.T) {
+	oldTries, oldInterval := probeTrailSettleTries, probeTrailSettleInterval
+	probeTrailSettleTries, probeTrailSettleInterval = 20, 10*time.Millisecond
+	t.Cleanup(func() { probeTrailSettleTries, probeTrailSettleInterval = oldTries, oldInterval })
+
+	runID := uuid.New()
+	ps := newProbeStore(types.SiteConfig{})
+	ps.events = []types.AuditEvent{{RunID: &runID, Action: "run.create", Outcome: "failure",
+		Data: mustJSON(map[string]any{"sandbox_ref": "sb-1", "set_sandbox_ref_error": "store: connection reset"})}}
+	ps.runs[runID] = types.AgentRun{ID: runID, State: types.RunFailed}
+	srv := New(baseTestConfig(newHarness(t), ps))
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		ps.mu.Lock()
+		ps.events = append(ps.events, types.AuditEvent{RunID: &runID, Action: "run.complete", Outcome: "failure",
+			Data: mustJSON(map[string]any{"exit_code": 7, "state": "FAILED"})})
+		ps.mu.Unlock()
+	}()
+	res := srv.probeFailureDetail(context.Background(), runID, 0)
+	if res.neverRan || !res.hasExitCode || res.exitCode != 7 {
+		t.Fatalf("got neverRan=%v hasExitCode=%v exitCode=%d (%q), want the late run.complete's exit 7", res.neverRan, res.hasExitCode, res.exitCode, res.incompleteReason)
+	}
+}

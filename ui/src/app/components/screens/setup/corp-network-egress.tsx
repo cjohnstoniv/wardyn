@@ -156,6 +156,9 @@ function RedirectRow({
         </span>
       )}
       {testState.kind === "done" && <TestVerdictChip state={testState.result.state} />}
+      {testState.kind === "done" && testState.result.state === "reached" && testState.result.warning && (
+        <span className="text-[0.6875rem] text-warning" title={testState.result.warning}>recording never reached the control plane</span>
+      )}
       <Button
         size="sm"
         variant="outline"

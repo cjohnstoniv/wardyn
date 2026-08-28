@@ -207,7 +207,7 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 	if err != nil {
 		return substrate.ClassSupport{}, fmt.Errorf("docker: info: %w", err)
 	}
-	c := capabilitiesForWith(infoRes.Info, d.cfg.ConfinementRuntimes)
+	c := capabilitiesForWith(infoRes.Info, d.cfg.ConfinementRuntimes, d.cfg.Record)
 	return substrate.ClassSupport{
 		Classes:          c.ConfinementClasses,
 		Resolved:         c.Resolved,

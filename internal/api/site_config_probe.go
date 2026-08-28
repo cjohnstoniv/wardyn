@@ -138,7 +138,7 @@ var proxyProbeEndpointsLabel = func() string {
 // throwaway probe run to reach a terminal state before reclaiming it. The UI
 // shows seconds, not minutes, and a healthy path still finishes in ~20s — but
 // the budget must cover the run's actual WORST case, not just its curls:
-// task (2 targets x (5s connect + 15s max) = 40s) + startup (~2s) + the
+// task (2 targets x 15s --max-time, which bounds the connect too = 30s) + startup (~2s) + the
 // recorder's upload tail (uploadClientTimeout, cmd/wardyn-rec/main.go, 20s)
 // + margin = 90s. Every curl inside the probe scripts below is capped well
 // under this on its own, but a run.exec success does not mean the RUN is
@@ -386,7 +386,7 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 		// proof egress is blocked. Detach: the caller's ctx just expired.
 		detachedCtx := context.WithoutCancel(ctx)
 		res := probeRunResult{
-			incompleteReason: fmt.Sprintf("did not finish within %s", siteConfigProbeWaitTimeout),
+			incompleteReason: fmt.Sprintf("did not finish within %ds", int(siteConfigProbeWaitTimeout.Seconds())),
 			elapsed:          elapsed,
 		}
 		if s.execSucceeded(detachedCtx, runID) {
@@ -468,6 +468,25 @@ func (s *Server) probeAgentStatusAtDeadline(ctx context.Context, runID uuid.UUID
 	return string(st.State)
 }
 
+// probeTrailSettleTries/Interval bound how long probeFailureDetail waits for a
+// terminal run's audit trail to catch up with its state row (see the loop in
+// probeFailureDetail). 10 x 200ms: the gap is one recordAudit round-trip.
+var (
+	probeTrailSettleTries    = 10
+	probeTrailSettleInterval = 200 * time.Millisecond
+)
+
+// hasRunComplete reports whether events already carry the run.complete event
+// the completion watcher records once the task has exited.
+func hasRunComplete(events []types.AuditEvent) bool {
+	for _, ev := range events {
+		if ev.Action == "run.complete" {
+			return true
+		}
+	}
+	return false
+}
+
 // probeFailureDetail inspects a terminal-FAILED probe run's own audit trail
 // for the REAL reason: curl's exit code (from the run.complete event every
 // exec-mode run's completion watcher records -- runs_lifecycle.go) when the
@@ -477,6 +496,28 @@ func (s *Server) probeAgentStatusAtDeadline(ctx context.Context, runID uuid.UUID
 func (s *Server) probeFailureDetail(ctx context.Context, runID uuid.UUID, elapsed time.Duration) probeRunResult {
 	res := probeRunResult{elapsed: elapsed}
 	events, err := s.cfg.Store.QueryAuditEvents(ctx, runID, 100)
+	// The run row and the audit trail commit in sequence: the completion
+	// watcher CASes the terminal state first and records run.complete inside
+	// finalizeRunTail after it (runs_lifecycle.go), so a poll that just saw
+	// the terminal state can read a trail with no run.complete AND no failure
+	// event yet. Re-read briefly before concluding anything -- unless the run
+	// row says it died at launch (a launch failure never gets a run.complete).
+	// A launch failure is recognised by the ROW, not the trail: failAndRevoke
+	// stamps FailureHint on every create/dispatch failure, whereas a trail can
+	// carry NON-fatal failure events (a proxy resolve, a lost sandbox ref)
+	// ahead of the run.complete that is still on its way.
+	launchFailed := false
+	if run, gerr := s.cfg.Store.GetRun(ctx, runID); gerr == nil && run.FailureHint != "" {
+		launchFailed = true
+	}
+	for i := 0; i < probeTrailSettleTries && err == nil && !launchFailed && !hasRunComplete(events); i++ {
+		select {
+		case <-ctx.Done():
+			i = probeTrailSettleTries
+		case <-time.After(probeTrailSettleInterval):
+			events, err = s.cfg.Store.QueryAuditEvents(ctx, runID, 100)
+		}
+	}
 	if err != nil {
 		res.incompleteReason = "could not read the probe run's own audit trail: " + err.Error()
 		return res

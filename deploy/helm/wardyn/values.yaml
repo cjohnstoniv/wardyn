@@ -57,6 +57,12 @@ service:
 ingress:
   enabled: false
   className: ""
+  # The setup connectivity probe is one HTTP request that can legitimately
+  # take up to 90s (a sandbox launch + two curls + the recording upload).
+  # ingress-nginx's default proxy-read-timeout is 60s, so without an override
+  # the console gets a 504 instead of the verdict, e.g.:
+  #   nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+  # (use your controller's equivalent).
   annotations: {}
   hosts: []
   # hosts:

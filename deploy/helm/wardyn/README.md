@@ -486,6 +486,10 @@ the chart to guess a working default:
 ingress:
   enabled: true
   className: nginx
+  annotations:
+    # The setup connectivity probe is one request of up to 90s; ingress-nginx
+    # times reads out at 60s by default, which turns the verdict into a 504.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
   hosts:
     - host: wardyn.example.com
       paths:

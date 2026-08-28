@@ -208,7 +208,7 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 				// from "will never start" -- exactly the shape that made a
 				// k8s connectivity probe hang for its full wait budget
 				// whatever the network did (0.6.6).
-				if w := cs.State.Waiting; w != nil && terminalWaitingReasons[w.Reason] {
+				if w := cs.State.Waiting; w != nil && execNeverStartedReasons[w.Reason] {
 					return 0, fmt.Errorf("k8s: exec wait: agent container never started (%s: %s): %w",
 						w.Reason, w.Message, runner.ErrExecNeverStarted)
 				}
@@ -263,9 +263,33 @@ func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runn
 			// site_config_probe.go) has no other way to see -- whether the
 			// container is still legitimately starting or is stuck on a
 			// Reason that will never resolve (terminalWaitingReasons).
-			return runner.Status{State: types.RunStarting, Message: fmt.Sprintf("waiting: %s: %s", w.Reason, w.Message)}, nil
+			return runner.Status{State: types.RunStarting, Message: waitingMessage(w)}, nil
 		}
 		return runner.Status{State: types.RunStarting}, nil // no state populated yet
 	}
 	return runner.Status{State: types.RunStopped, Message: "agent exec not found"}, nil
+}
+
+// execNeverStartedReasons are the Waiting reasons under which the ephemeral
+// exec container will never run its process: terminalWaitingReasons
+// (canary.go) minus CrashLoopBackOff, because a crash-looping container DID
+// start -- its process ran and died, which is a task failure, not
+// ErrExecNeverStarted's "the task never ran". (Ephemeral containers are not
+// restarted, so the reason is not expected here; excluded for correctness.)
+var execNeverStartedReasons = map[string]bool{
+	"ImagePullBackOff":           true,
+	"ErrImagePull":               true,
+	"CreateContainerError":       true,
+	"CreateContainerConfigError": true,
+	"InvalidImageName":           true,
+	"RunContainerError":          true,
+}
+
+// waitingMessage words a Waiting container state for AgentStatus: the reason,
+// plus the kubelet's message only when it carries one.
+func waitingMessage(w *corev1.ContainerStateWaiting) string {
+	if w.Message == "" {
+		return "waiting: " + w.Reason
+	}
+	return "waiting: " + w.Reason + ": " + w.Message
 }

@@ -133,7 +133,7 @@ func (p proxyProbeSubject) pathClause() string {
 // secret).
 func timedOutDetail(agentStatus, controlPlaneURL string) string {
 	return fmt.Sprintf(
-		"The probe sandbox started and ran, but the run never reported completion within %s — not a network verdict. "+
+		"The probe sandbox started and ran, but the run never reported completion within %ds — not a network verdict. "+
 			"Sandbox agent status at the deadline: %s. The usual cause on Kubernetes is the run's recording upload to the "+
 			"control plane (via the proxy pod) hanging: check WARDYN_CONTROL_PLANE_URL (%s) is reachable from the runs namespace.",
 		siteConfigProbeWaitTimeout, agentStatus, controlPlaneURL)
@@ -288,6 +288,9 @@ func (s *Server) probeRecordingWarning(ctx context.Context, state string, runID 
 	if state != "reached" || s.cfg.RecordingStore == nil || s.cfg.Runner == nil {
 		return ""
 	}
+	// ponytail: a second Capabilities() call per probe (a docker info / a
+	// RuntimeClass get) beats threading a bool through runSiteConfigProbe's
+	// five return sites; revisit if a substrate's Capabilities ever gets slow.
 	caps, err := s.cfg.Runner.Capabilities(ctx)
 	if err != nil || !caps.SessionRecording {
 		return ""
