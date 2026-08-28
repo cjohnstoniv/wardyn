@@ -47,6 +47,27 @@ service:
   type: ClusterIP
   port: 8080
 
+# Optional Ingress fronting the console's HTTP port only (never `ui` or
+# `ssh` — see the "Console Ingress" / "UI sandbox gateway" / "Split SSH
+# exposure" README sections). Off by default — every cluster's ingress
+# controller / class / TLS story differs too much for the chart to guess a
+# working default. Gateway API HTTPRoute is deferred: no Gateway controller
+# in this chart's CI to exercise it against.
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  # hosts:
+  #   - host: wardyn.example.com
+  #     paths:
+  #       - path: /
+  #         pathType: Prefix
+  tls: []
+  # tls:
+  #   - hosts: ["wardyn.example.com"]
+  #     secretName: wardyn-tls
+
 serviceAccount:
   # Create a dedicated ServiceAccount for wardynd (recommended).
   create: true

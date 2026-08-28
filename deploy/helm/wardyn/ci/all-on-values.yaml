@@ -14,6 +14,21 @@ image:
   pullSecrets:
     - name: regcred
 
+# Console Ingress, the "other side" of ITS off-by-default switch.
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    kubernetes.io/tls-acme: "true"
+  hosts:
+    - host: wardyn.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - hosts: ["wardyn.example.com"]
+      secretName: wardyn-tls
+
 # Inline (demo) DSN mode => the chart renders its own Secret, and secrets.ageKey
 # is injectable (it is inline-mode only; see templates/secret.yaml's fail guard).
 postgres:
