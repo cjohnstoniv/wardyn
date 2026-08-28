@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"time"
 
@@ -76,7 +77,10 @@ sandbox to an external tool over the SSH gateway.
 }
 
 // waitForRunReady polls until the run is RUNNING and GET /runs/{id}/files
-// answers (409 = no sandbox yet, keep waiting). With wantGit it additionally
+// answers. The run state is re-read on EVERY tick, including after RUNNING: a
+// run that dies while its clone is landing exits 1/2 at once, never 124 later.
+// 409 from files (no sandbox yet) and transient 5xx keep waiting; any other
+// 4xx and 501 are permanent and fail immediately. With wantGit it additionally
 // waits for vcs:"git". Exit codes mirror waitForRun: FAILED→1, other terminal
 // states→2, timeout→124.
 func waitForRunReady(ctx context.Context, c *sdk.Client, runID uuid.UUID, timeout time.Duration, wantGit bool) (waitReadyResult, error) {
@@ -85,18 +89,18 @@ func waitForRunReady(ctx context.Context, c *sdk.Client, runID uuid.UUID, timeou
 	var res waitReadyResult
 	res.ID = runID
 	consecutiveErrs := 0
-	running := false
+	var lastFilesErr error
 	for {
-		if !running {
-			run, err := c.GetRun(ctx, runID)
-			switch {
-			case err != nil:
-				consecutiveErrs++
-				if consecutiveErrs >= 5 {
-					return res, fmt.Errorf("polling run %s failed %d times in a row: %w", runID, consecutiveErrs, err)
-				}
-			case run.State.IsTerminal():
-				res.State = run.State
+		run, err := c.GetRun(ctx, runID)
+		if err != nil {
+			consecutiveErrs++
+			if consecutiveErrs >= 5 {
+				return res, fmt.Errorf("polling run %s failed %d times in a row: %w", runID, consecutiveErrs, err)
+			}
+		} else {
+			consecutiveErrs = 0
+			res.State = run.State
+			if run.State.IsTerminal() {
 				if run.State == types.RunFailed {
 					msg := fmt.Sprintf("run %s FAILED before it was ready", runID)
 					if reason := runFailureReason(ctx, c, runID); reason != "" {
@@ -105,31 +109,34 @@ func waitForRunReady(ctx context.Context, c *sdk.Client, runID uuid.UUID, timeou
 					return res, &exitError{code: 1, err: errors.New(msg)}
 				}
 				return res, &exitError{code: 2, err: fmt.Errorf("run %s terminated before it was ready: %s", runID, run.State)}
-			case run.State == types.RunRunning:
-				consecutiveErrs = 0
-				running = true
-				res.State = run.State
+			}
+			if run.State == types.RunRunning {
 				if run.Repo != "" {
 					wantGit = true
 				}
-			default:
-				consecutiveErrs = 0
-				res.State = run.State
-			}
-		}
-		if running {
-			files, err := c.RunFiles(ctx, runID)
-			if err == nil {
-				res.Workspace.VCS = files.VCS
-				res.Workspace.Path = files.Path
-				if files.VCS == "git" || (!wantGit && files.VCS != "unknown") {
-					fmt.Fprintf(os.Stderr, "run %s ready: workspace %s (%s)\n", runID, files.Path, files.VCS)
-					return res, nil
+				files, ferr := c.RunFiles(ctx, runID)
+				switch {
+				case ferr == nil:
+					lastFilesErr = nil
+					res.Workspace.VCS = files.VCS
+					res.Workspace.Path = files.Path
+					if files.VCS == "git" || (!wantGit && files.VCS != "unknown") {
+						fmt.Fprintf(os.Stderr, "run %s ready: workspace %s (%s)\n", runID, files.Path, files.VCS)
+						return res, nil
+					}
+				case filesErrIsPermanent(ferr):
+					return res, fmt.Errorf("run %s: cannot read its workspace: %w", runID, ferr)
+				default:
+					lastFilesErr = ferr
 				}
 			}
 		}
 		if time.Now().After(deadline) {
-			return res, &exitError{code: 124, err: fmt.Errorf("timed out after %s waiting for run %s to be ready (last state %s, workspace vcs %q)", timeout, runID, res.State, res.Workspace.VCS)}
+			msg := fmt.Sprintf("timed out after %s waiting for run %s to be ready (last state %s, workspace vcs %q)", timeout, runID, res.State, res.Workspace.VCS)
+			if lastFilesErr != nil {
+				msg += ": last files error: " + lastFilesErr.Error()
+			}
+			return res, &exitError{code: 124, err: errors.New(msg)}
 		}
 		select {
 		case <-ctx.Done():
@@ -137,4 +144,24 @@ func waitForRunReady(ctx context.Context, c *sdk.Client, runID uuid.UUID, timeou
 		case <-time.After(waitPollInterval):
 		}
 	}
+}
+
+// filesErrIsPermanent reports whether a RunFiles error cannot be fixed by
+// waiting: 501 (the runner cannot exec into a sandbox at all) and any 4xx
+// except 409 (no sandbox YET). Everything else — network blips, 5xx — is
+// treated as transient.
+func filesErrIsPermanent(err error) bool {
+	var apiErr *sdk.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	switch {
+	case apiErr.Status == http.StatusConflict:
+		return false
+	case apiErr.Status == http.StatusNotImplemented:
+		return true
+	case apiErr.Status >= 400 && apiErr.Status < 500:
+		return true
+	}
+	return false
 }

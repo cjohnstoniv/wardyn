@@ -50,6 +50,15 @@ external tool that dials the sandbox itself.
 `,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			modes := 0
+			for _, on := range []bool{doPrint, doConfig, doJSON} {
+				if on {
+					modes++
+				}
+			}
+			if modes > 1 {
+				return errors.New("ssh: --print, --config and --json are mutually exclusive")
+			}
 			return runSSH(cmd, client(), args[0], doPrint, doConfig, doJSON)
 		},
 	}

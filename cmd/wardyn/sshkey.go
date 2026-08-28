@@ -179,6 +179,13 @@ func ensureLocalSSHKey(path string) (pub ssh.PublicKey, generated bool, err erro
 		if serr != nil {
 			return nil, false, fmt.Errorf("ssh-key: %s: %w", path, serr)
 		}
+		// The .pub sibling is part of the documented contract; restore it when a
+		// key was copied here without one.
+		if _, perr := os.Stat(path + ".pub"); errors.Is(perr, os.ErrNotExist) {
+			if werr := os.WriteFile(path+".pub", ssh.MarshalAuthorizedKey(signer.PublicKey()), 0o644); werr != nil {
+				return nil, false, fmt.Errorf("ssh-key: write %s.pub: %w", path, werr)
+			}
+		}
 		return signer.PublicKey(), false, nil
 	} else if !errors.Is(rerr, os.ErrNotExist) {
 		return nil, false, fmt.Errorf("ssh-key: read %s: %w", path, rerr)

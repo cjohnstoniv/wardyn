@@ -227,3 +227,79 @@ func TestRunWaitReady_JSON(t *testing.T) {
 		t.Errorf("workspace = %+v, want {vcs:none path:/home/agent/work}", res.Workspace)
 	}
 }
+
+// exitCodeOf unwraps the CLI's exitError; -1 when err is not one.
+func exitCodeOf(err error) int {
+	var ee *exitError
+	if errors.As(err, &ee) {
+		return ee.code
+	}
+	return -1
+}
+
+func fastPoll(t *testing.T) {
+	t.Helper()
+	prev := waitPollInterval
+	waitPollInterval = time.Millisecond
+	t.Cleanup(func() { waitPollInterval = prev })
+}
+
+// A run that dies AFTER it was seen RUNNING — the exact window --expect-git
+// waits in — must exit 2 at once, not burn the timeout to 124. Before the
+// state was re-read on every tick this spun on /files until the deadline.
+func TestWaitReady_RunDiesAfterRunningExitsTwo(t *testing.T) {
+	fastPoll(t)
+	id := uuid.New()
+	srv := runReadyServer(t, id, "octocat/hello", []types.RunState{types.RunRunning, types.RunKilled},
+		[]runFilesResp{{status: http.StatusConflict, body: `{"error":"no sandbox yet"}`}}, nil)
+	_, err := execWaitReadyText(t, srv, id.String(), "--timeout", "5s")
+	if code := exitCodeOf(err); code != 2 {
+		t.Fatalf("exit code = %d (err=%v), want 2 for a run killed after RUNNING", code, err)
+	}
+}
+
+// 501 (the runner cannot exec into a sandbox) is permanent: waiting cannot
+// change it, so the command fails immediately and names the error.
+func TestWaitReady_PermanentFilesErrorFailsFast(t *testing.T) {
+	fastPoll(t)
+	id := uuid.New()
+	srv := runReadyServer(t, id, "", []types.RunState{types.RunRunning},
+		[]runFilesResp{{status: http.StatusNotImplemented, body: `{"error":"runner has no exec stream"}`}}, nil)
+	start := time.Now()
+	_, err := execWaitReadyText(t, srv, id.String(), "--timeout", "5s")
+	if err == nil || !strings.Contains(err.Error(), "cannot read its workspace") {
+		t.Fatalf("err = %v, want an immediate 'cannot read its workspace' error", err)
+	}
+	if exitCodeOf(err) == 124 || time.Since(start) > 2*time.Second {
+		t.Fatalf("a permanent error must not wait for the deadline (err=%v, took %s)", err, time.Since(start))
+	}
+}
+
+// --expect-git makes a repo-less run wait for a git work tree; without the
+// flag the same responses would have returned at vcs:"none".
+func TestWaitReady_ExpectGitFlagWaitsForGit(t *testing.T) {
+	fastPoll(t)
+	id := uuid.New()
+	files := []runFilesResp{
+		{body: `{"vcs":"none","files":[],"path":"/home/agent/work","truncated":false}`},
+		{body: `{"vcs":"git","files":[],"path":"/home/agent/work/hello","truncated":false}`},
+	}
+	srv := runReadyServer(t, id, "", []types.RunState{types.RunRunning}, files, nil)
+	out, err := execWaitReadyText(t, srv, id.String(), "--expect-git", "--timeout", "5s")
+	if err != nil || !strings.Contains(out, "/home/agent/work/hello (git)") {
+		t.Fatalf("out=%q err=%v, want readiness at the git work tree", out, err)
+	}
+}
+
+// vcs:"unknown" (git ran and failed) is never "ready", even without
+// --expect-git: the deadline trips and the message names the last state.
+func TestWaitReady_UnknownVCSKeepsWaiting(t *testing.T) {
+	fastPoll(t)
+	id := uuid.New()
+	srv := runReadyServer(t, id, "", []types.RunState{types.RunRunning},
+		[]runFilesResp{{body: `{"vcs":"unknown","files":[],"path":"/home/agent/work","truncated":false}`}}, nil)
+	_, err := execWaitReadyText(t, srv, id.String(), "--timeout", "30ms")
+	if code := exitCodeOf(err); code != 124 || !strings.Contains(err.Error(), `vcs "unknown"`) {
+		t.Fatalf("exit=%d err=%v, want 124 naming vcs \"unknown\"", code, err)
+	}
+}

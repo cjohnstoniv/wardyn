@@ -319,9 +319,15 @@ func TestRunFilesScript_FindsClonedRepoUnderWorkDir(t *testing.T) {
 	}
 	w := t.TempDir()
 	repo := filepath.Join(w, "hello-world")
+	// A SECOND child repo that sorts before hello-world: with it present, only
+	// R= can explain the script picking hello-world — the child glob alone
+	// would pick a-first. Delete the ${R:+…} candidate and this test fails.
+	decoy := filepath.Join(w, "a-first")
 	for _, args := range [][]string{
 		{"init", "-q", repo},
 		{"-C", repo, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"},
+		{"init", "-q", decoy},
+		{"-C", decoy, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"},
 	} {
 		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
@@ -346,14 +352,15 @@ func TestRunFilesScript_FindsClonedRepoUnderWorkDir(t *testing.T) {
 	if code != 0 || !strings.HasPrefix(out, "path="+repo+"\n") {
 		t.Fatalf("with R: code=%d out=%q, want exit 0 and path=%s", code, out, repo)
 	}
-	// No R (a workspace-sourced run): the child search still finds it.
+	// No R (a workspace-sourced run): the child search finds the FIRST child
+	// work tree in glob order — the decoy — which is exactly why R exists.
 	out, code = run("W="+w, "R=")
-	if code != 0 || !strings.HasPrefix(out, "path="+repo+"\n") {
-		t.Fatalf("without R: code=%d out=%q, want exit 0 and path=%s", code, out, repo)
+	if code != 0 || !strings.HasPrefix(out, "path="+decoy+"\n") {
+		t.Fatalf("without R: code=%d out=%q, want exit 0 and path=%s", code, out, decoy)
 	}
 	// A wrong R must not break the fallback ordering.
 	out, code = run("W="+w, "R=nope")
-	if code != 0 || !strings.HasPrefix(out, "path="+repo+"\n") {
+	if code != 0 || !strings.HasPrefix(out, "path="+decoy+"\n") {
 		t.Fatalf("wrong R: code=%d out=%q", code, out)
 	}
 	// Nothing anywhere: exit 3 and the honest path.
