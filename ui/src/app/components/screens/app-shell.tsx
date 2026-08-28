@@ -136,7 +136,7 @@ function initials(principal: string): string {
   return (s || base.slice(0, 2)).toUpperCase();
 }
 
-// Flat sidebar nav — six items, no group headings (stage-1 redesign). Demos,
+// Flat sidebar nav — seven items, no group headings (stage-1 redesign). Demos,
 // Recordings, and Settings all left the sidebar: Demos and Settings are
 // reachable from the account menu below, Recordings stays addressable by route
 // (deep link, workspace/run actions) without their own nav entry.
@@ -511,7 +511,7 @@ function TopBar({
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             {/* The guided Getting Started funnel — an operator-chosen route
-                (setup-gate.ts has no hard gate any more), not the six-item
+                (setup-gate.ts has no hard gate any more), not the seven-item
                 sidebar: this menu entry and the Runs empty state's "guided
                 tour" link (runs-first-run.tsx) are the two ways in. */}
             <DropdownMenuItem asChild>
