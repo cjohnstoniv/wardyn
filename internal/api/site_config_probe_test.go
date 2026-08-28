@@ -250,6 +250,37 @@ func TestProbeFailureDetail_LaunchFailureIsNeverRan(t *testing.T) {
 	}
 }
 
+// TestProbeFailureDetail_ExecNeverStartedIsNeverRan is the 0.6.6 regression:
+// a run.complete FAILURE event carrying exec_started:false (written by
+// startCompletionWatcher's runner.ErrExecNeverStarted branch,
+// runs_lifecycle.go — the k8s driver having already proven the agent exec
+// container never started) must classify as neverRan, even though its own
+// action IS run.complete — the one case the plain run.complete-vs-not rule
+// gets wrong on its own.
+func TestProbeFailureDetail_ExecNeverStartedIsNeverRan(t *testing.T) {
+	runID := uuid.New()
+	ps := newProbeStore(types.SiteConfig{})
+	ps.events = []types.AuditEvent{
+		{RunID: &runID, Action: "run.complete", Outcome: "failure",
+			Data: mustJSON(map[string]any{
+				"exec_started": false,
+				"error":        "k8s: exec wait: agent container never started (CreateContainerConfigError: secret not found): runner: agent exec never started",
+			})},
+	}
+	srv := New(baseTestConfig(newHarness(t), ps))
+
+	res := srv.probeFailureDetail(context.Background(), runID, 0)
+	if res.hasExitCode {
+		t.Error("hasExitCode = true, want false: the exec never started")
+	}
+	if !res.neverRan {
+		t.Error("neverRan = false, want true: exec_started:false means the task never ran, despite the event being run.complete")
+	}
+	if !strings.Contains(res.incompleteReason, "CreateContainerConfigError") {
+		t.Errorf("incompleteReason = %q, want it to name the real reason", res.incompleteReason)
+	}
+}
+
 func TestFindEgressRedirect(t *testing.T) {
 	sc := types.SiteConfig{EgressRedirects: []types.EgressRedirect{
 		{From: "registry.npmjs.org", To: "artifactory.corp/npm", Ecosystem: "npm"},

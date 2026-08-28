@@ -12,11 +12,13 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 )
@@ -43,7 +45,11 @@ import (
 //     is not the daemon shutting down hands off to reconcileWatch rather than
 //     returning — see the Wait-error branch. agentExecID (the id Exec returned,
 //     "" for exec-less substrates) is what reconcileWatch probes for AGENT, not
-//     merely container, liveness.
+//     merely container, liveness. ONE exception: runner.ErrExecNeverStarted is
+//     not a transient probe error but a driver's proof the exec will never
+//     reach a terminal state on its own — handing that off would have
+//     reconcileWatch retry the same dead end forever, so it fails the run
+//     directly instead (exec_started:false in the run.complete event).
 func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string) {
 	if s.cfg.Runner == nil {
 		return
@@ -69,6 +75,32 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 
 		exitCode, werr := s.cfg.Runner.Wait(base, ref)
 		if werr != nil {
+			if errors.Is(werr, runner.ErrExecNeverStarted) {
+				// NOT a transient probe error: the driver has already proven
+				// the agent exec will never reach a terminal state on its own
+				// (e.g. a k8s ephemeral container stuck on a hard Waiting
+				// Reason). Handing this off to reconcileWatch below would
+				// have it retry the identical dead end forever, so this run
+				// is failed directly through the normal terminal tail —
+				// exactly one run.complete failure event, carrying
+				// exec_started:false so probeFailureDetail (site_config_probe.go)
+				// can tell "the task never ran" from "it ran but its own
+				// completion accounting failed".
+				data := map[string]any{"exec_started": false, "error": werr.Error()}
+				applied, uerr := s.casRunState(base, runID, types.RunRunning, types.RunFailed)
+				if uerr != nil {
+					data["error"] = uerr.Error() + " (original: " + werr.Error() + ")"
+					s.recordAudit(base, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
+						runID.String(), "failure", mustJSON(data)))
+					return
+				}
+				if !applied {
+					// Already terminal (e.g. killed concurrently) — nothing further to do.
+					return
+				}
+				s.finalizeRunTail(base, runID, ref, "run.complete", "failure", data)
+				return
+			}
 			// Audit the watcher's exit for forensics either way.
 			s.recordAudit(base, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.complete",
 				runID.String(), "failure", mustJSON(map[string]any{"error": werr.Error()})))

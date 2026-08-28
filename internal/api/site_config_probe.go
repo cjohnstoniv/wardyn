@@ -262,7 +262,11 @@ func upstreamFailDetail(reason string) string {
 // audit trail's failure event is anything OTHER than run.complete (the
 // sandbox never got to running the task at all -- e.g. CreateSandbox itself
 // failed), false when it IS run.complete (the task started running; only its
-// own completion accounting failed). classify* reports either shape as
+// own completion accounting failed) -- UNLESS that run.complete event itself
+// carries exec_started:false (startCompletionWatcher's runner.ErrExecNeverStarted
+// branch, runs_lifecycle.go), which means the driver already proved the
+// agent exec never started at all, so neverRan is true there too despite
+// the action being run.complete. classify* reports either shape as
 // `blocked` UNLESS neverRan, which gets its own `not_run` verdict -- "we
 // tried and did not get a clean answer" is not the same claim as "nothing
 // ever ran to observe".
@@ -509,6 +513,17 @@ func (s *Server) probeFailureDetail(ctx context.Context, runID uuid.UUID, elapse
 			continue
 		}
 		if ev.Action == "run.complete" {
+			// exec_started:false (startCompletionWatcher, runs_lifecycle.go)
+			// means the driver already proved the agent exec never started
+			// at all (runner.ErrExecNeverStarted, e.g. a k8s ephemeral
+			// container stuck on a hard Waiting reason) -- the task never
+			// ran, same claim as any other launch-phase failure below, even
+			// though the event's own action is run.complete.
+			var es struct {
+				ExecStarted *bool `json:"exec_started"`
+			}
+			_ = json.Unmarshal(ev.Data, &es)
+			res.neverRan = es.ExecStarted != nil && !*es.ExecStarted
 			res.incompleteReason = probeFailureReason(ev)
 			return res
 		}

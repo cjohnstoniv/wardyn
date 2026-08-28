@@ -316,6 +316,19 @@ type Status struct {
 	Message  string
 }
 
+// ErrExecNeverStarted is the sentinel a Runner's Wait returns when it can
+// prove the agent exec will NEVER reach a terminal state on its own — e.g.
+// the k8s driver's ephemeral "wardyn-agent" container stuck Waiting on a
+// hard-failure Reason (ImagePullBackOff, CreateContainerConfigError, ...)
+// that will not resolve without intervention. Distinct from every other Wait
+// error (a transient probe error, ctx cancellation): those mean "the agent
+// might still be running, we just couldn't observe it right now" and the
+// caller retries/hands off to the reconciler; this one means "the task never
+// ran and never will", so the caller (startCompletionWatcher,
+// runs_lifecycle.go) must fail the run immediately rather than treat it as a
+// transient hiccup to hand off.
+var ErrExecNeverStarted = errors.New("runner: agent exec never started")
+
 // Runner is the lifecycle contract. Implementations must be safe for
 // concurrent use. Every method must be idempotent where the verb implies it
 // (Stop/Kill on a gone sandbox return nil).

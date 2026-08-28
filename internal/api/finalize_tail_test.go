@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -48,6 +50,21 @@ func (a *syncAudit) has(runID uuid.UUID, action, outcome string) bool {
 		}
 	}
 	return false
+}
+
+// eventsFor returns every recorded event for runID/action, in recorded
+// order — used where a test needs to inspect an event's Data, not just
+// whether one landed.
+func (a *syncAudit) eventsFor(runID uuid.UUID, action string) []types.AuditEvent {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var out []types.AuditEvent
+	for _, ev := range a.events {
+		if ev.Action == action && ev.RunID != nil && *ev.RunID == runID {
+			out = append(out, ev)
+		}
+	}
+	return out
 }
 
 // finalizeTailRunner exits cleanly (Wait → 0) so the completion watcher takes its
@@ -154,3 +171,82 @@ func TestFinalizeTail_CompletionWatcherAndReconcile_ShareTerminalSequence(t *tes
 }
 
 var _ runner.Runner = (*finalizeTailRunner)(nil)
+
+// execNeverStartedRunner's Wait always fails wrapping runner.ErrExecNeverStarted
+// — modeling the k8s driver having already proven the agent exec container
+// will never reach a terminal state on its own (a hard Waiting reason).
+type execNeverStartedRunner struct {
+	*fakeRunner
+	mu    sync.Mutex
+	stops int
+}
+
+func (r *execNeverStartedRunner) Wait(context.Context, string) (int, error) {
+	return 0, fmt.Errorf("k8s: exec wait: agent container never started (CreateContainerConfigError: secret not found): %w",
+		runner.ErrExecNeverStarted)
+}
+
+func (r *execNeverStartedRunner) StopSandbox(context.Context, string) error {
+	r.mu.Lock()
+	r.stops++
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *execNeverStartedRunner) stopCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stops
+}
+
+// TestStartCompletionWatcher_ExecNeverStartedFailsRunDirectly is the 0.6.6
+// regression: a Wait error wrapping runner.ErrExecNeverStarted is proof the
+// agent exec will never reach a terminal state on its own — it must NOT be
+// treated as a transient probe error and handed off to reconcileWatch (which
+// would retry the identical dead end forever). The run must instead fail
+// directly through the normal terminal tail: exactly one run.complete
+// failure event, carrying exec_started:false, and the sandbox torn down.
+func TestStartCompletionWatcher_ExecNeverStartedFailsRunDirectly(t *testing.T) {
+	run := newFinalizeRun()
+	st := &dispatchTestStore{run: run, state: types.RunRunning}
+	brk := &raceBroker{}
+	rn := &execNeverStartedRunner{fakeRunner: &fakeRunner{}}
+	audit := &syncAudit{}
+	srv := newFinalizeTailServer(t, st, brk, rn, audit)
+
+	srv.startCompletionWatcher(run.ID, "ref-never-started", "exec-1")
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && st.State() != types.RunFailed {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if got := st.State(); got != types.RunFailed {
+		t.Fatalf("state = %q, want FAILED (exec-never-started is not a transient probe error)", got)
+	}
+	if rn.stopCount() != 1 {
+		t.Errorf("StopSandbox calls = %d, want exactly 1 (finalized through the normal terminal tail)", rn.stopCount())
+	}
+
+	failures := 0
+	sawExecStartedFalse := false
+	for _, ev := range audit.eventsFor(run.ID, "run.complete") {
+		if ev.Outcome != "failure" {
+			continue
+		}
+		failures++
+		var d struct {
+			ExecStarted *bool `json:"exec_started"`
+		}
+		_ = json.Unmarshal(ev.Data, &d)
+		if d.ExecStarted != nil && !*d.ExecStarted {
+			sawExecStartedFalse = true
+		}
+	}
+	if failures != 1 {
+		t.Errorf("run.complete failure events = %d, want exactly 1 (no duplicate audit)", failures)
+	}
+	if !sawExecStartedFalse {
+		t.Error("no run.complete failure event carried exec_started:false")
+	}
+}

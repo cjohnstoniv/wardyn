@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
@@ -209,6 +210,47 @@ func TestWait_ReturnsExitCode(t *testing.T) {
 	}
 	if code != 3 {
 		t.Errorf("Wait exit code = %d, want 3", code)
+	}
+}
+
+// TestWait_FailsClosedOnHardWaitingReason is the 0.6.6 regression: an
+// ephemeral exec container stuck Waiting on a Reason that will never resolve
+// on its own (terminalWaitingReasons, canary.go) must return
+// runner.ErrExecNeverStarted PROMPTLY, not poll forever waiting for a
+// Terminated status that will never arrive — the shape that made a k8s
+// connectivity probe hang for its full wait budget whatever the network did,
+// because run.exec had already recorded success (the apiserver accepted the
+// ephemeral container add) with no way to tell "still starting" from "will
+// never start".
+func TestWait_FailsClosedOnHardWaitingReason(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	ref := createAgentPodFixture(t, cs, uuid.New(), "wardyn/agent-claude:local", nil)
+	if _, err := d.Exec(context.Background(), ref, []string{"/usr/local/bin/agent-run", "task"}); err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	setPodStatus(t, cs, testNamespace, ref, func(st *corev1.PodStatus) {
+		st.EphemeralContainerStatuses = []corev1.ContainerStatus{{
+			Name: execContainerName,
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+				Reason: "CreateContainerConfigError", Message: "secret \"wardyn-agent\" not found",
+			}},
+		}}
+	})
+
+	// A short deadline: if Wait fell through to its normal poll loop instead
+	// of returning immediately on the hard reason, this proves it by timing
+	// out before the loop's own ctx.Err() branch would fire.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_, err := d.Wait(ctx, ref)
+	if err == nil {
+		t.Fatal("Wait: want an error for a container that will never start, got nil")
+	}
+	if !errors.Is(err, runner.ErrExecNeverStarted) {
+		t.Errorf("err = %v, want errors.Is(err, runner.ErrExecNeverStarted)", err)
+	}
+	if !strings.Contains(err.Error(), "CreateContainerConfigError") {
+		t.Errorf("err = %v, want it to name the observed Reason", err)
 	}
 }
 

@@ -197,6 +197,21 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 				if t := cs.State.Terminated; t != nil {
 					return int(t.ExitCode), nil
 				}
+				// Fail closed on a Waiting status the platform will never
+				// resolve on its own (terminalWaitingReasons, canary.go) --
+				// the shape a platform admission/policy engine or a missing
+				// ephemeral-container feature produces: the container never
+				// starts, so polling for Terminated would run out the ctx
+				// deadline instead of ever returning. Without this, run.exec
+				// still read success (the apiserver accepted the container
+				// add) and the caller had no way to tell "still starting"
+				// from "will never start" -- exactly the shape that made a
+				// k8s connectivity probe hang for its full wait budget
+				// whatever the network did (0.6.6).
+				if w := cs.State.Waiting; w != nil && terminalWaitingReasons[w.Reason] {
+					return 0, fmt.Errorf("k8s: exec wait: agent container never started (%s: %s): %w",
+						w.Reason, w.Message, runner.ErrExecNeverStarted)
+				}
 				break
 			}
 			// Added but not yet terminated (Waiting/Running/no status yet): keep polling.
