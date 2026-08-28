@@ -139,7 +139,7 @@ function Dock({
         <section
           aria-label={def.label}
           className={cn(
-            "absolute bottom-3 right-[4.5rem] top-16 flex w-[min(26rem,55vw)] flex-col rounded-xl p-3 shadow-2xl",
+            "absolute bottom-3 right-[4.5rem] top-16 flex w-[min(26rem,55vw)] flex-col rounded-xl p-3 shadow-floating",
             GLASS,
           )}
         >

@@ -177,7 +177,7 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
           )}
         </div>
 
-        <div className="rounded-2xl border border-border bg-card p-6 shadow-xl">
+        <div className="rounded-2xl border border-border bg-card p-6 shadow-floating">
           <div className="mb-4">
             <h2 className="text-base font-semibold text-foreground">Sign in</h2>
             <p className="mt-1 text-sm text-muted-foreground">

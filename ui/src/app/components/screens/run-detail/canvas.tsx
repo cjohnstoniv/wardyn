@@ -252,7 +252,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
       </div>
 
       {editing ? (
-        <div className="absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-1.5 rounded-xl border border-border bg-popover p-1.5 shadow-lg">
+        <div className="absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-1.5 rounded-xl border border-border bg-popover p-1.5 shadow-floating">
           <span className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-primary/40 bg-primary/10 px-2.5 text-xs font-medium text-primary">
             <LayoutGrid className="size-3.5" />
             {RUN_COCKPIT.editing}
@@ -306,7 +306,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
           <button
             type="button"
             onClick={() => setFocus(true)}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-popover px-2.5 text-xs font-medium text-muted-foreground shadow-lg hover:text-foreground"
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-popover px-2.5 text-xs font-medium text-muted-foreground shadow-xs hover:text-foreground"
           >
             <Expand className="size-3.5" />
             {RUN_COCKPIT.enterFocus}
@@ -314,7 +314,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
           <button
             type="button"
             onClick={() => setEditing(true)}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-popover px-2.5 text-xs font-medium text-muted-foreground shadow-lg hover:text-foreground"
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-popover px-2.5 text-xs font-medium text-muted-foreground shadow-xs hover:text-foreground"
           >
             <Pencil className="size-3.5" />
             {RUN_COCKPIT.editLayout}

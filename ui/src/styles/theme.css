@@ -266,6 +266,12 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
 
+  /* elevation — one floating-surface shadow, shared by both themes: popovers,
+     menus, dialogs, sheets and the run-cockpit's floating chrome. Nothing
+     else reaches this high; a surface that merely needs to lift off the page
+     uses Tailwind's own shadow-xs, and everything else is a hairline border. */
+  --shadow-floating: 0 12px 32px -8px rgb(0 0 0 / 0.22), 0 4px 12px -4px rgb(0 0 0 / 0.12);
+
   --color-sidebar: var(--sidebar);
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-accent: var(--sidebar-accent);
