@@ -148,6 +148,18 @@ env: {}
 #         secretKeyRef: {name: wardyn-oidc, key: client-secret}
 extraEnv: []
 
+# Optional default policy, baked into a ConfigMap and mounted read-only
+# instead of relying on the wardynd image's own baked-in default
+# (examples/policies/default.json — see README "Installation"). JSON TEXT,
+# not a YAML map: `--set-file defaultPolicy=path/to/policy.json` round-trips
+# a file unchanged, and a nested map here would invite a partial override
+# silently MERGING under `--reuse-values` instead of replacing the whole
+# document. Empty (default) => no ConfigMap, no WARDYN_DEFAULT_POLICY — the
+# image's own baked default applies. Wires WARDYN_DEFAULT_POLICY unless
+# env.WARDYN_DEFAULT_POLICY is already set (which always wins). See README
+# "Default policy" for the confinement-floor trap this can walk into.
+defaultPolicy: ""
+
 # Kubernetes runner substrate (internal/runner/k8s, `-tags k8s`, v0.5+). Off by
 # default — the Docker Compose stack (deploy/compose/) remains a fully
 # separate, independent path. Enabling this makes wardynd itself create/manage

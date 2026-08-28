@@ -490,7 +490,9 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	[ "$$(echo "$$out" | grep -c 'namespaceSelector: {}')" = "1" ] || { echo "unexpected namespaceSelector: {} peer (only the DNS egress rule may be cluster-wide)"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'automountServiceAccountToken: false')" = "2" ] || { echo "default render does not show automount:false exactly twice (the created ServiceAccount object + the pod spec) — k8s.enabled and ssh.enabled both default off, so both must still default-deny the API server token"; exit 1; }; \
 	echo "$$out" | grep -A14 "readinessProbe:" | grep -q 'path: "/readyz"' || { echo "readinessProbe no longer targets /readyz — a dead Postgres would read healthy again (W28-S1-7)"; exit 1; }; \
-	[ "$$(echo "$$out" | grep -c 'path: /healthz')" = "2" ] || { echo "expected exactly 2 probes still on /healthz (liveness + startup)"; exit 1; }
+	[ "$$(echo "$$out" | grep -c 'path: /healthz')" = "2" ] || { echo "expected exactly 2 probes still on /healthz (liveness + startup)"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'kind: ConfigMap')" = "0" ] || { echo "default render (no defaultPolicy set) still created a ConfigMap"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'WARDYN_DEFAULT_POLICY')" = "0" ] || { echo "default render (no defaultPolicy set) still set WARDYN_DEFAULT_POLICY"; exit 1; }
 	@out=$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml); \
 	echo "$$out" | grep -q "kind: PersistentVolumeClaim" || { echo "persistence.enabled rendered no PVC"; exit 1; }; \
 	echo "$$out" | grep -q 'value: "/data/recordings"' || { echo "WARDYN_RECORDING_DIR does not follow the persistent mount"; exit 1; }; \
@@ -511,7 +513,10 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q "targetPort: ssh" || { echo "ssh.enabled rendered no ssh Service port"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_UI_SANDBOX_LISTEN" || { echo "uiSandbox.enabled rendered no WARDYN_UI_SANDBOX_LISTEN — the chart would publish a port with no gateway behind it"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE" || { echo "uiSandbox.originTemplate did not render — every run would share one browser origin (threatmodel/THREAT-MODEL.md §5 #18)"; exit 1; }; \
-	echo "$$out" | grep -q "targetPort: ui" || { echo "uiSandbox.enabled rendered no ui Service port"; exit 1; }
+	echo "$$out" | grep -q "targetPort: ui" || { echo "uiSandbox.enabled rendered no ui Service port"; exit 1; }; \
+	echo "$$out" | grep -q "kind: ConfigMap" || { echo "defaultPolicy did not render a ConfigMap"; exit 1; }; \
+	echo "$$out" | grep -q 'value: "/etc/wardyn/default-policy/policy.json"' || { echo "defaultPolicy did not wire WARDYN_DEFAULT_POLICY at the ConfigMap mount path"; exit 1; }; \
+	echo "$$out" | grep -q "checksum/default-policy:" || { echo "defaultPolicy did not stamp the checksum pod annotation — an edit to the ConfigMap alone would not roll the pod"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn 2>&1 | grep -q "the public API would 401" || { echo "chart no longer refuses an install with neither an admin token nor an OIDC issuer"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set postgres.dsn.secretRef.name="" 2>&1 | grep -q "set either postgres.dsn" || { echo "chart no longer refuses an install with no DSN"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKey=fake 2>&1 | grep -q "secrets.ageKey applies to inline mode only" || { echo "chart no longer refuses an ageKey it would silently drop"; exit 1; }
@@ -535,6 +540,8 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.rbac=null | grep -q '^kind: Role$$' || { echo "k8s.rbac=null (a --reuse-values map that predates this key) no longer renders RBAC — hasKey must treat an absent key as unset, not as create=false"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeySecretRef.name=wardyn-age | grep -A3 "name: WARDYN_AGE_KEY" | grep -q "name: wardyn-age" || { echo "secrets.ageKeySecretRef.name did not wire WARDYN_AGE_KEY from that Secret"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeySecretRef.name=wardyn-age --set secrets.ageKeyFromSecret=true 2>&1 | grep -q "secrets.ageKeySecretRef.name is set together with" || { echo "chart no longer refuses two age-identity sources named at once"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set-file defaultPolicy=examples/policies/demo.json --set env.WARDYN_DEFAULT_POLICY=/examples/policies/demo.json | grep -q 'value: "/examples/policies/demo.json"' || { echo "env.WARDYN_DEFAULT_POLICY no longer wins over the ConfigMap-backed default"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set defaultPolicy='not json' 2>&1 | grep -q "mustFromJson" || { echo "chart no longer refuses an invalid defaultPolicy at render"; exit 1; }
 
 # ── kind Helm install-test (CI: ci.yml's helm-install-test job) ─────────────
 # helm-lint above only proves the chart RENDERS; this proves an install

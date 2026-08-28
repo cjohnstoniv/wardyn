@@ -41,6 +41,20 @@ extraEnv:
         name: wardyn-oidc
         key: client-secret
 
+# JSON text (see values.yaml's defaultPolicy doc for why), shaped like
+# examples/policies/demo.json — a CC1 floor, so it works unmodified on any
+# cluster (no k8s.runtimeClasses pin needed).
+defaultPolicy: |
+  {
+    "allowed_domains": ["proxy.golang.org"],
+    "denied_domains": [],
+    "first_use_approval": "deny_with_review",
+    "allowed_methods": [],
+    "min_confinement_class": "CC1",
+    "eligible_grants": [],
+    "auto_stop_after_sec": 0
+  }
+
 networkPolicy:
   ingress:
     from:

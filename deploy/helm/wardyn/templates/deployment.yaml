@@ -75,7 +75,14 @@ spec:
     metadata:
       labels:
         {{- include "wardyn.labels" . | nindent 8 }}
-      {{- with .Values.podAnnotations }}
+      {{- $podAnnotations := .Values.podAnnotations | default dict }}
+      {{- if .Values.defaultPolicy }}
+      {{/* Forces a rollout when the ConfigMap's content changes — a Deployment
+      update alone does not restart pods whose only reference to a ConfigMap is
+      a volume mount. */}}
+      {{- $podAnnotations = merge (dict "checksum/default-policy" (sha256sum .Values.defaultPolicy)) $podAnnotations }}
+      {{- end }}
+      {{- with $podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -172,6 +179,13 @@ spec:
             # overrides.
             - name: WARDYN_AUDIT_SPOOL
               value: {{ if .Values.persistence.enabled }}{{ printf "%s/audit-spool.jsonl" .Values.persistence.mountPath | quote }}{{ else }}"/tmp/audit-spool.jsonl"{{ end }}
+            {{- end }}
+            {{- if and .Values.defaultPolicy (not (hasKey .Values.env "WARDYN_DEFAULT_POLICY")) }}
+            # Points wardynd at the policy baked into the ConfigMap below,
+            # mounted read-only. An .Values.env entry overrides (e.g. to pick
+            # one of the image's own /examples/policies/ files instead).
+            - name: WARDYN_DEFAULT_POLICY
+              value: {{ "/etc/wardyn/default-policy/policy.json" | quote }}
             {{- end }}
             {{- range $k, $v := .Values.env }}
             - name: {{ $k }}
@@ -300,6 +314,11 @@ spec:
             - name: data
               mountPath: {{ .Values.persistence.mountPath }}
             {{- end }}
+            {{- if .Values.defaultPolicy }}
+            - name: default-policy
+              mountPath: /etc/wardyn/default-policy
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
@@ -307,6 +326,11 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "wardyn.fullname" . }}-data
+        {{- end }}
+        {{- if .Values.defaultPolicy }}
+        - name: default-policy
+          configMap:
+            name: {{ include "wardyn.fullname" . }}-default-policy
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

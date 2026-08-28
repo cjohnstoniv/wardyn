@@ -1,0 +1,22 @@
+{{/*
+Optional operator-supplied default policy (WARDYN_DEFAULT_POLICY), baked
+into a ConfigMap and mounted read-only instead of relying on the wardynd
+image's own baked-in default (examples/policies/default.json — README
+"Installation"). Rendered only when .Values.defaultPolicy is non-empty.
+
+`mustFromJson` here is deliberate: invalid JSON fails the RENDER (a clear
+message, no object created) instead of applying fine and either
+crash-looping the pod at policy load or, worse, quietly booting on the
+image's own baked default while the operator believes theirs took effect.
+*/}}
+{{- if .Values.defaultPolicy -}}
+{{- $_ := mustFromJson .Values.defaultPolicy -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wardyn.fullname" . }}-default-policy
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+data:
+  policy.json: {{ .Values.defaultPolicy | quote }}
+{{- end -}}
