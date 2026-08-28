@@ -56,6 +56,7 @@ on `/policies`) and validate through the same `validatePolicySpec`.
 | `workspace_repos` | `[]WorkspaceRepo` | `[]` | Additional git repos cloned into the run — the clone counterpart of `workspace_mounts`. |
 | `ui_apps` | `[]UIApp` | `[]` | In-sandbox loopback HTTP apps the UI gateway may relay to a browser. Operator-authored, never agent-chosen, and never a command string. |
 | `tool_rules` | `[]ToolRule` | `[]` | Per-tool effects for an autonomous run's own tool calls: `allow`, `hold` or `deny`. Narrows `tool_approvals=hold` from "ask about everything" to a policy. Operator-authored, evaluated proxy-side. |
+| `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered GitHub pushes — see ["`git_push_any_branch`: the per-run opt-out"](#git_push_any_branch-the-per-run-opt-out) below. Operator-authored; never agent-settable. |
 | `llm_inspection` | `LLMInspectionSpec` | omitted = **off** | Outbound content inspection on brokered LLM routes. |
 | `resources` | `ResourceLimits` | omitted = platform defaults | Sandbox CPU/memory/PID/disk caps. |
 
@@ -388,6 +389,33 @@ its next mint, since the ruleset has to be created per repo by hand. Turn it on
 only once the reads above return what they should on every repo you broker:
 `refs/heads/wardyn/**` instead of `refs/heads/wardyn/**/*` will fail the gate and
 block every governed push at GitHub as well.
+
+### `git_push_any_branch`: the per-run opt-out
+
+The branch-namespace confinement two sections up is default-**ON**, and an
+operator can turn it off for every run on a proxy process at once
+(`WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false`,
+`internal/egress/proxy/git_broker.go`'s `BranchNSEnforced`). `git_push_any_branch:
+true` is the same escape hatch scoped to **one run's policy** instead: a
+sandbox a human drives through an external tool ([docs/SSH.md](SSH.md) §6)
+that checks out and pushes its own branch name — not the
+`wardyn/<run-id>/*` one `agent-run` sets up — gets every push refused with no
+way to tell that tool why. Setting the field lets this run's brokered pushes
+land on any branch the granted token may write.
+
+Either switch produces the identical audit posture: a push forwarded with
+confinement off carries `rule_source: "brokered:git:branch-ns-off"`
+(`ruleSourceGitNSOff`) instead of the ordinary `"brokered:git"`, so a reader
+of the audit stream never has to know which of the two opt-outs was set to
+see that this run's pushes were not ref-checked.
+
+**This turns off Wardyn's own check, not the grant's.** The installation
+token itself is not narrowed by this field — see ["Bound the token
+itself"](#bound-the-token-itself-a-github-ruleset) above: a repository
+ruleset is the only thing that binds the token, and it keeps binding it
+exactly the same with `git_push_any_branch` on or off. Turning this on
+without a ruleset means the token can write anywhere the App installation
+can, same as it always could once a push left the proxy's own parser.
 
 ### `first_use_approval` modes
 

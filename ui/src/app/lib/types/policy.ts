@@ -153,6 +153,12 @@ export interface RunPolicySpec {
   // browser (mirrors Go's RunPolicySpec.UIApps). Read-only in the console —
   // ui_apps is operator-authored via the API/YAML, no editor in 0.6.
   ui_apps?: UIApp[];
+  // Turns off branch-namespace confinement for this run's brokered pushes
+  // (mirrors Go's RunPolicySpec.GitPushAnyBranch). For a sandbox a human
+  // drives through an external tool that names its own branches; the audit
+  // stream marks each such push brokered:git:branch-ns-off. Read-only in the
+  // console — operator-authored via the API/YAML.
+  git_push_any_branch?: boolean;
 }
 
 export interface RunPolicy {

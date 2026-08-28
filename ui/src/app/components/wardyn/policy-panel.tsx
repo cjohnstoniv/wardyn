@@ -318,6 +318,13 @@ export const FIELD_HELP = {
     doc: "ui_apps--uiapp",
     snippet: [{ name: "editor", port: 8080 }],
   },
+  git_push_any_branch: {
+    what: "Turns OFF branch-namespace confinement (default ON) for this run's brokered GitHub pushes.",
+    values:
+      "true | false (default). For a sandbox a human drives through an external tool that names its own branches — every such push is marked brokered:git:branch-ns-off in audit, on or off.",
+    doc: "git_push_any_branch-the-per-run-opt-out",
+    snippet: true,
+  },
 } satisfies Record<keyof RunPolicySpec, FieldHelp>;
 
 // Fields the RUN instance does not document: the Workspace card owns mounts

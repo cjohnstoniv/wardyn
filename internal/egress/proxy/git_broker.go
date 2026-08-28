@@ -129,11 +129,15 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	// allowSrc is the rule_source the ALLOW row below carries. A push forwarded
 	// with the parser opted out gets its own value (ruleSourceGitNSOff) so the
 	// audit stream distinguishes the two postures per push; everything else keeps
-	// the ordinary "brokered:git".
+	// the ordinary "brokered:git". Two switches opt out: the deployment-wide env
+	// (BranchNSEnforced) and the per-run policy field (git_push_any_branch, for a
+	// sandbox a human drives through an external tool that names its own
+	// branches) — same audit marker either way, so a reader never has to know
+	// which one was set.
 	var reqBody io.Reader = r.Body
 	allowSrc := ruleSourceGit
 	isPush := rest == "git-receive-pack"
-	if isPush && !BranchNSEnforced() {
+	if isPush && (!BranchNSEnforced() || p.policy.gitPushAnyBranch) {
 		allowSrc = ruleSourceGitNSOff
 	} else if isPush {
 		// git does not gzip receive-pack bodies (remote-curl only sets

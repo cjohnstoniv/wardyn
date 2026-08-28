@@ -66,6 +66,10 @@ type Policy struct {
 	// AllowedExactHost (credential injection) is unchanged — injection still
 	// requires an explicit exact allowlist entry even under allow-all.
 	allowAll bool
+	// gitPushAnyBranch mirrors RunPolicySpec.GitPushAnyBranch: this run's
+	// brokered pushes skip branch-namespace confinement (handleGitBroker). The
+	// per-run counterpart of the deployment-wide BranchNSEnforced() switch.
+	gitPushAnyBranch bool
 }
 
 // CompilePolicy builds a Policy from a RunPolicySpec. Domains are normalized
@@ -79,6 +83,7 @@ func CompilePolicy(spec types.RunPolicySpec) *Policy {
 		allowedMeth:      make(map[string]struct{}),
 		firstUse:         spec.FirstUseApproval.Normalize(),
 		allowAll:         spec.AllowAllEgress,
+		gitPushAnyBranch: spec.GitPushAnyBranch,
 	}
 	// Compiled into a map rather than scanned: validatePolicySpec already refuses
 	// duplicates, so the map cannot lose a rule, and an exact-match lookup is the

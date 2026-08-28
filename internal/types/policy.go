@@ -234,6 +234,25 @@ type RunPolicySpec struct {
 	// the worst a bad rule can do is ask a human more often, or refuse a call the
 	// agent wanted.
 	ToolRules []ToolRule `json:"tool_rules,omitempty"`
+	// GitPushAnyBranch turns OFF branch-namespace confinement for THIS run's
+	// brokered GitHub pushes. By default the proxy git-broker forwards a push
+	// only when every ref it updates lives under refs/heads/wardyn/<run-id>/
+	// (ARCHITECTURE.md "Git egress"), so an agent cannot rewrite main. That is
+	// the right default for an autonomous run and the wrong one for a sandbox
+	// a HUMAN drives through an external tool (an IDE or agent workbench over
+	// the SSH gateway) that names its own branches — the push is refused and
+	// the tool cannot explain why.
+	//
+	// true = forward pushes to any branch the granted token may write. The
+	// audit stream distinguishes the posture per push (rule_source
+	// brokered:git:branch-ns-off) and the grant's own GitHub ruleset still
+	// bounds what the token can touch (docs/POLICIES.md "Bound the token
+	// itself"). Operator-authored, never agent-settable; false/absent keeps
+	// today's behaviour exactly.
+	//
+	// ponytail: whole-namespace off, not a per-run allowed-prefix list — add a
+	// prefix list when someone needs an external tool AND confinement at once.
+	GitPushAnyBranch bool `json:"git_push_any_branch,omitempty"`
 }
 
 // ToolEffect is what a matching ToolRule does with the call.

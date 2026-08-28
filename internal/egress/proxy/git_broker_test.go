@@ -64,16 +64,16 @@ func newGitBrokerUpstream(t *testing.T, token string) *gitBrokerUpstream {
 	return u
 }
 
-// newGitBrokerProxy builds a Proxy with the git-broker allowlist wired and both the
-// control plane and github reachable at the single upstream (HTTPS so the mint
-// forward and the github re-origination share one TLS server).
-func newGitBrokerProxy(t *testing.T, grants map[string]uuid.UUID, upstreamAddr string) (*Proxy, *bytes.Buffer) {
+// newGitBrokerProxyWithSpec is newGitBrokerProxy with the compiled policy
+// spec overridable — TestGitBrokerPushPolicyOptOut uses it to turn on
+// GitPushAnyBranch without a second, near-identical constructor.
+func newGitBrokerProxyWithSpec(t *testing.T, grants map[string]uuid.UUID, upstreamAddr string, spec types.RunPolicySpec) (*Proxy, *bytes.Buffer) {
 	t.Helper()
 	buf := &bytes.Buffer{}
 	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
 	p := newProxy(Options{
 		RunID:           uuid.New(),
-		Policy:          CompilePolicy(types.RunPolicySpec{}),
+		Policy:          CompilePolicy(spec),
 		Sink:            sink,
 		Resolver:        publicResolver{},
 		Dial:            redirectDial(upstreamAddr),
@@ -83,6 +83,14 @@ func newGitBrokerProxy(t *testing.T, grants map[string]uuid.UUID, upstreamAddr s
 		GitGrants:       grants,
 	})
 	return p, buf
+}
+
+// newGitBrokerProxy builds a Proxy with the git-broker allowlist wired and both the
+// control plane and github reachable at the single upstream (HTTPS so the mint
+// forward and the github re-origination share one TLS server).
+func newGitBrokerProxy(t *testing.T, grants map[string]uuid.UUID, upstreamAddr string) (*Proxy, *bytes.Buffer) {
+	t.Helper()
+	return newGitBrokerProxyWithSpec(t, grants, upstreamAddr, types.RunPolicySpec{})
 }
 
 // TestGitBrokerClonesGrantedRepo: a granted repo's info/refs is re-originated to
@@ -484,6 +492,60 @@ func TestGitBrokerPushRuleSourceDistinguishesPosture(t *testing.T) {
 	}
 	if !strings.Contains(sink.String(), `"rule_source":"`+ruleSourceGit+`"`) {
 		t.Fatalf("decision log = %q, want the ordinary %s allow row", sink.String(), ruleSourceGit)
+	}
+}
+
+// TestGitBrokerPushPolicyOptOut is TestGitBrokerPushOptOut's per-run
+// counterpart: the SAME escape hatch, reached through the policy field
+// (git_push_any_branch) instead of the deployment-wide env — for a sandbox a
+// human drives through an external tool that names its own branches, where
+// flipping a whole proxy process's env would be both too wide (every run on
+// it) and not that run's operator's call to make.
+func TestGitBrokerPushPolicyOptOut(t *testing.T) {
+	t.Setenv(envEnforceBranchNS, "1") // deployment-wide enforcement stays ON
+	up := newGitBrokerUpstream(t, "gh-inst-token")
+	p, sink := newGitBrokerProxyWithSpec(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()},
+		upstreamAddr(up.srv), types.RunPolicySpec{GitPushAnyBranch: true})
+
+	body := pkt(someOID+" "+otherOID+" refs/heads/main"+firstCaps) + "0000" + "PACKDATA"
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost,
+		"/wardyn/gh/octocat/Hello-World.git/git-receive-pack", strings.NewReader(body)))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (this run's policy opts out of branch-namespace confinement); body=%q", rec.Code, rec.Body.String())
+	}
+	if string(up.gitBody) != body {
+		t.Fatalf("upstream body = %q, want the push streamed through unchanged", up.gitBody)
+	}
+	if !strings.Contains(sink.String(), ruleSourceGitNSOff) {
+		t.Fatalf("decision log = %q, want the per-run opt-out to carry rule_source %s, same as the env opt-out", sink.String(), ruleSourceGitNSOff)
+	}
+}
+
+// TestGitBrokerPushPolicyOptOutFalse is the negative control: with
+// GitPushAnyBranch false (the default zero value), an out-of-namespace push
+// is refused exactly as it would be with no such field at all — it only ever
+// turns confinement OFF, never adds a new way to turn it on.
+func TestGitBrokerPushPolicyOptOutFalse(t *testing.T) {
+	t.Setenv(envEnforceBranchNS, "1")
+	up := newGitBrokerUpstream(t, "gh-inst-token")
+	p, sink := newGitBrokerProxyWithSpec(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()},
+		upstreamAddr(up.srv), types.RunPolicySpec{GitPushAnyBranch: false})
+
+	body := pkt(someOID+" "+otherOID+" refs/heads/main"+firstCaps) + "0000" + "PACKDATA"
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost,
+		"/wardyn/gh/octocat/Hello-World.git/git-receive-pack", strings.NewReader(body)))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (git_push_any_branch:false must not weaken the default posture)", rec.Code)
+	}
+	if !strings.Contains(sink.String(), ruleSourceGitRef) {
+		t.Fatalf("decision log = %q, want a %s deny row", sink.String(), ruleSourceGitRef)
+	}
+	if up.gitHits != 0 {
+		t.Fatalf("github upstream was hit %d times for a denied push", up.gitHits)
 	}
 }
 
