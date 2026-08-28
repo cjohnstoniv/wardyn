@@ -520,7 +520,7 @@ export function ModelProviderCard({
              and painted over the page. */}
       <Dialog open={loginOpen !== null} onOpenChange={(o) => !o && setLoginOpen(null)}>
         <DialogContent
-          className="inset-0 top-0 left-0 m-auto h-fit max-h-[92vh] overflow-y-auto"
+          className="scroll-thin inset-0 top-0 left-0 m-auto h-fit max-h-[92vh] overflow-y-auto"
           // `translate` and `transform` are SEPARATE CSS properties in Tailwind
           // v4: translate-x-[-50%] emits `translate: -50% -50%`, which
           // `transform: none` does not reset. Left applied it shifted this

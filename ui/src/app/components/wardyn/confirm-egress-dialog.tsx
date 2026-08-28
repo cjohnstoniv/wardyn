@@ -74,7 +74,7 @@ export function ConfirmEgressDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         {bulk && (
-          <ul className="max-h-40 space-y-1 overflow-y-auto rounded-md border border-border bg-muted/40 px-3 py-2">
+          <ul className="scroll-thin max-h-40 space-y-1 overflow-y-auto rounded-md border border-border bg-muted/40 px-3 py-2">
             {hosts!.map((h) => (
               <li key={h} className="flex items-center gap-2">
                 {checkboxes && (
