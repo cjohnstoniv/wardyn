@@ -3,11 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # agent-run for wardyn/agent-base. The image contract requires this command;
-# agent-base ships no coding agent, so it cannot implement it. A derived image
-# REPLACES this file — see deploy/images/claude-code/agent-run.
+# agent-base ships no coding agent, so it cannot implement mode 1 (run a task
+# through an agent harness) or mode 3 (--idle). It CAN satisfy exec task mode
+# (WARDYN_TASK_MODE=exec, README.md §2): that lane runs the task as a plain
+# shell command, needs no coding agent, and is exactly what the setup
+# connectivity probe uses agent-base for — so honor it before falling through
+# to the usage stub. A derived image REPLACES this whole file — see
+# deploy/images/claude-code/agent-run.
 # ponytail: a stub, not a no-op — "command not found" from inside a sandbox is
 # far worse to debug than a sentence.
 set -euo pipefail
+source /usr/local/bin/agent-run-lib.sh
+# ponytail: exec task mode only — no clone/CA/credential prep, since the probe
+# policy never grants those (never sets InterceptTLS, so install_mitm_ca is
+# deliberately not called either).
+maybe_exec_task_mode "${1:-}"
 cat >&2 <<'MSG'
 agent-run: this is wardyn/agent-base, which ships no coding agent.
 
