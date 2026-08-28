@@ -284,9 +284,20 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 	// leave an orphaned identity/row.
 	launchCtx := context.WithoutCancel(ctx)
 	runID := uuid.New()
-	// Read-only, ephemeral, holds no credentials -- the operator's floor still
-	// governs, exactly like launchSourceScanRun's rationale (source_scan.go).
-	cc := s.defaultFloorClass()
+	// The probe tests EGRESS, not the operator's confinement floor -- dispatch
+	// at the strongest class the runner actually advertises (bestClass), same
+	// rationale as launchRecordRun (workspace_run.go). A CC2 floor with no
+	// RuntimeClass otherwise fails the probe before it ever reaches the
+	// network and reads as a proxy problem it never was. A Capabilities error,
+	// or a runner that advertises no usable class at all, is the same honest
+	// no_runner state as s.cfg.Runner == nil, just discovered one layer
+	// deeper -- both handlers below translate errProbeNoRunner before their
+	// generic 500 path.
+	caps, capsErr := s.cfg.Runner.Capabilities(ctx)
+	cc := bestClass(caps.ConfinementClasses)
+	if capsErr != nil || cc == "" {
+		return runID, probeRunResult{}, errProbeNoRunner
+	}
 	run, token, err := s.newStepRun(launchCtx, runID, actor, script, cc, func(run *types.AgentRun) {
 		run.AutoStopAfterSec = siteConfigProbeIdleCapSec
 	})
@@ -305,7 +316,12 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 
 	s.dispatchRun(launchCtx, created, dispatchParams{
 		RunToken: token,
-		Image:    agentImage("claude-code", s.cfg.AgentImages),
+		// "base": the probe runs a plain curl, never a coding agent -- base is
+		// the image Wardyn actually publishes for exec-only tasks. "claude-code"
+		// here pulled an image the project ships as a devcontainer harness, not
+		// a bare registry tag, and reliably failed to pull on any host that
+		// hadn't already built it.
+		Image: agentImage("base", s.cfg.AgentImages),
 		Policy: types.RunPolicySpec{
 			MinConfinementClass: cc,
 			AllowedDomains:      allowedDomains,
@@ -455,7 +471,9 @@ func probeTargetURL(raw string) string {
 
 // siteConfigProbeResponse is the shared {state, detail, elapsed_ms?} shape
 // both test-proxy and test-redirect return, always HTTP 200 -- the STATE,
-// never the transport, carries a probe's outcome (including no_runner). The
+// never the transport, carries a probe's outcome (including no_runner and
+// not_run -- the sandbox that would have carried the probe never got to
+// running it, so nothing was learned about the network at all). The
 // last three fields are test-proxy qualifiers the UI renders distinct
 // treatments from (the mock's ok/okdirect/okcustom/intercepted kinds) --
 // machine-readable so no client ever has to string-match a detail sentence:
@@ -480,6 +498,15 @@ type siteConfigProbeResponse struct {
 // there is nothing to launch a probe with. Always HTTP 200 (a state, not a
 // transport failure).
 var noRunnerResponse = siteConfigProbeResponse{State: "no_runner", Detail: "no runner configured, nothing to launch a probe with"}
+
+// errProbeNoRunner is runSiteConfigProbe's own sentinel for "a runner IS
+// configured, but it cannot describe itself, or it describes itself as
+// advertising no confinement class at all" -- the same honest no_runner
+// state noRunnerResponse reports for an absent Runner, just discovered one
+// layer deeper (after a Capabilities() call, before any sandbox is
+// attempted). Both handlers check for it with errors.Is before their generic
+// 500 path.
+var errProbeNoRunner = errors.New("runner declares no usable confinement class")
 
 // proxyProbeSubject is what classifyProxyProbe words its verdicts about:
 // endpoints for the messages that make a payload claim (reached/intercepted),
@@ -570,6 +597,15 @@ func classifyProxyProbe(res probeRunResult, subj proxyProbeSubject) siteConfigPr
 			what = subj.endpoints
 		}
 		resp.Detail = fmt.Sprintf("Could not reach %s: %s — probed %s.", what, curlFailureDetail(res.exitCode), subj.pathClause())
+	case res.neverRan:
+		// The sandbox that carries the probe never got to running it (a launch
+		// failure, e.g. an image pull or a confinement class this host can't
+		// enforce) -- distinct from blocked, which means the probe DID run and
+		// observed a real network fact. Nothing was learned about the network
+		// either way, so this must never render as a proxy problem.
+		resp.State = "not_run"
+		resp.Detail = fmt.Sprintf("The probe never ran: %s. Nothing was learned about %s — the sandbox that carries the probe could not start, so this says nothing about your proxy or your network.",
+			res.incompleteReason, subj.hosts)
 	default:
 		resp.State = "blocked"
 		resp.Detail = fmt.Sprintf("The probe of %s did not get a clean answer: %s", subj.hosts, res.incompleteReason)
@@ -600,6 +636,13 @@ func classifyRedirectProbe(res probeRunResult, toHost, fromHost string) siteConf
 		return siteConfigProbeResponse{
 			State:     "blocked",
 			Detail:    fmt.Sprintf("could not reach the mirror %s: %s", toHost, curlFailureDetail(res.exitCode)),
+			ElapsedMS: res.elapsed.Milliseconds(),
+		}
+	case res.neverRan:
+		return siteConfigProbeResponse{
+			State: "not_run",
+			Detail: fmt.Sprintf("The probe never ran: %s. Nothing was learned about %s — the sandbox that carries the probe could not start, so this says nothing about your proxy or your network.",
+				res.incompleteReason, toHost),
 			ElapsedMS: res.elapsed.Milliseconds(),
 		}
 	default:
@@ -720,6 +763,10 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 	actor := principalFromRequest(r)
 	runID, res, perr := s.runSiteConfigProbe(ctx, actor, script, hosts, nil, nil)
 	if perr != nil {
+		if errors.Is(perr, errProbeNoRunner) {
+			writeJSON(w, http.StatusOK, noRunnerResponse)
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "launch proxy probe: "+perr.Error())
 		return
 	}
@@ -790,6 +837,10 @@ func (s *Server) handleTestSiteConfigRedirect(w http.ResponseWriter, r *http.Req
 			"WARDYN_PROBE_FROM_URL": probeTargetURL(red.From),
 		})
 	if perr != nil {
+		if errors.Is(perr, errProbeNoRunner) {
+			writeJSON(w, http.StatusOK, noRunnerResponse)
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "launch redirect probe: "+perr.Error())
 		return
 	}

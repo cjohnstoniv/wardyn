@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -117,6 +118,18 @@ func TestClassifyRedirectProbe_BypassNeverInferred(t *testing.T) {
 	got := classifyRedirectProbe(probeRunResult{incompleteReason: "sandbox never started"}, "to.example", "from.example")
 	if got.State == "bypass" {
 		t.Fatalf("an incomplete probe (no exit code at all) must never be classified bypass; got %+v", got)
+	}
+}
+
+// TestClassifyRedirectProbe_NotRun mirrors TestClassifyProxyProbe_NotRun for
+// the redirect endpoint: a launch failure is not_run, never blocked.
+func TestClassifyRedirectProbe_NotRun(t *testing.T) {
+	got := classifyRedirectProbe(probeRunResult{neverRan: true, incompleteReason: "run.create: mint run identity: unavailable"}, "artifactory.corp", "registry.npmjs.org")
+	if got.State != "not_run" {
+		t.Fatalf("state = %q, want not_run (detail=%q)", got.State, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "never ran") {
+		t.Errorf("detail = %q, want it to say the probe never ran", got.Detail)
 	}
 }
 
@@ -238,15 +251,35 @@ type probeFakeRunner struct {
 	createErr error
 	stopCalls int
 	killCalls int
+	// capsClasses/capsErr override Capabilities' default single-CC1 answer --
+	// nil classes + nil err still yields [CC1]; a non-nil capsErr or an empty
+	// (non-nil) capsClasses slice drives the errProbeNoRunner path.
+	capsClasses []types.ConfinementClass
+	capsErr     error
+	// lastImage/lastClass record what runSiteConfigProbe actually dispatched,
+	// for tests asserting it picked the runner's own advertised class
+	// (bestClass) rather than the operator's confinement floor.
+	lastImage string
+	lastClass types.ConfinementClass
 }
 
 func (r *probeFakeRunner) Name() string { return "probe-fake" }
 func (r *probeFakeRunner) Capabilities(context.Context) (runner.Capabilities, error) {
-	return runner.Capabilities{Driver: "probe-fake", ConfinementClasses: []types.ConfinementClass{types.CC1}}, nil
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.capsErr != nil {
+		return runner.Capabilities{}, r.capsErr
+	}
+	classes := r.capsClasses
+	if classes == nil {
+		classes = []types.ConfinementClass{types.CC1}
+	}
+	return runner.Capabilities{Driver: "probe-fake", ConfinementClasses: classes}, nil
 }
 func (r *probeFakeRunner) CreateSandbox(_ context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.lastImage, r.lastClass = spec.Image, spec.ConfinementClass
 	if r.createErr != nil {
 		return runner.Sandbox{}, r.createErr
 	}
@@ -293,6 +326,11 @@ func (r *probeFakeRunner) stops() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.stopCalls
+}
+func (r *probeFakeRunner) dispatched() (image string, class types.ConfinementClass) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastImage, r.lastClass
 }
 
 // probeStore is BOTH the store.Store (dispatch's persistence seam) and the
@@ -666,6 +704,25 @@ func TestClassifyProxyProbe_InterceptedIsBlockedNotReached(t *testing.T) {
 	}
 }
 
+// TestClassifyProxyProbe_NotRun is I: a probe whose sandbox never got to
+// running (neverRan, e.g. an image pull failure or a confinement class this
+// host can't enforce) must classify as its own not_run state, distinct from
+// blocked -- blocked means the probe DID run and observed a real network
+// fact, and rendering a launch failure as "Blocked" (the classic corp-network
+// state) sends the operator chasing a proxy problem that was never there.
+func TestClassifyProxyProbe_NotRun(t *testing.T) {
+	got := classifyProxyProbe(probeRunResult{neverRan: true, incompleteReason: "run.dispatch: create sandbox: no such image"}, builtinSubject)
+	if got.State != "not_run" {
+		t.Fatalf("state = %q, want not_run (detail=%q)", got.State, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "never ran") || !strings.Contains(got.Detail, "no such image") {
+		t.Errorf("detail = %q, want it to say the probe never ran and name the real reason", got.Detail)
+	}
+	if got.State == "blocked" {
+		t.Error("a launch failure must never render as blocked")
+	}
+}
+
 func TestProxyProbeScript_ChecksBodyAndCoversEveryTarget(t *testing.T) {
 	// Two invariants the script must keep, both load-bearing:
 	//  1. every target's host is in the egress allowlist, or it fails as "DNS
@@ -722,6 +779,83 @@ func TestHandleTestSiteConfigProxy_NoRunner(t *testing.T) {
 	}
 	if ps.runCount() != 0 {
 		t.Error("no_runner must never attempt to launch a sandbox")
+	}
+}
+
+// TestHandleTestSiteConfigProxy_NoCapabilitiesIsNoRunner is the layer BEHIND
+// s.cfg.Runner == nil: a runner that IS configured but errors describing
+// itself (Capabilities) is the same honest no_runner state, not a 500 --
+// there is nothing further this probe can do without knowing what the runner
+// can even launch.
+func TestHandleTestSiteConfigProxy_NoCapabilitiesIsNoRunner(t *testing.T) {
+	fr := &probeFakeRunner{capsErr: errors.New("driver unavailable")}
+	srv, ps := newProbeHarness(t, types.SiteConfig{UpstreamProxyURL: "http://proxy.corp:3128"}, fr)
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-proxy", adminToken, "{}")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if got := decodeProbeResponse(t, w.Body.String()); got.State != "no_runner" {
+		t.Errorf("state = %q, want no_runner", got.State)
+	}
+	if ps.runCount() != 0 {
+		t.Error("a Capabilities error must never attempt to launch a sandbox")
+	}
+}
+
+// TestHandleTestSiteConfigProxy_ConfinementFloorUnavailable is G1/I: a runner
+// that advertises confinement classes but none the request can use (an empty
+// slice — e.g. every class this host can enforce was filtered out upstream)
+// must also read as no_runner, not a 500 or a misleading "blocked".
+func TestHandleTestSiteConfigProxy_ConfinementFloorUnavailable(t *testing.T) {
+	fr := &probeFakeRunner{capsClasses: []types.ConfinementClass{}}
+	srv, ps := newProbeHarness(t, types.SiteConfig{UpstreamProxyURL: "http://proxy.corp:3128"}, fr)
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-proxy", adminToken, "{}")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if got := decodeProbeResponse(t, w.Body.String()); got.State != "no_runner" {
+		t.Errorf("state = %q, want no_runner (bestClass of an empty set is \"\")", got.State)
+	}
+	if ps.runCount() != 0 {
+		t.Error("no usable class must never attempt to launch a sandbox")
+	}
+}
+
+// TestHandleTestSiteConfigProxy_UsesBaseImage is H: the probe must dispatch
+// the published agent-base image (a bare curl task, exec-mode, no coding
+// agent), never "claude-code" -- that name resolves to a devcontainer harness
+// image the project does not publish as a pullable tag, so the probe failed
+// to even start on any host that had not already built it locally, and the
+// failure read as a proxy problem it never was.
+func TestHandleTestSiteConfigProxy_UsesBaseImage(t *testing.T) {
+	fr := &probeFakeRunner{exitCode: 0}
+	srv, _ := newProbeHarness(t, types.SiteConfig{UpstreamProxyURL: "http://proxy.corp:3128"}, fr)
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-proxy", adminToken, "{}")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	image, class := fr.dispatched()
+	if !strings.Contains(image, "agent-base") {
+		t.Errorf("dispatched image = %q, want it to name agent-base", image)
+	}
+	if class != types.CC1 {
+		t.Errorf("dispatched class = %q, want the runner's own advertised class (CC1 here), never the operator's floor", class)
+	}
+}
+
+// TestHandleTestSiteConfigProxy_LaunchFailureIsNotRun end-to-ends the
+// createErr error-injection lane through the handler: a sandbox that never
+// launches must classify as not_run, never a 500 and never "Blocked".
+func TestHandleTestSiteConfigProxy_LaunchFailureIsNotRun(t *testing.T) {
+	fr := &probeFakeRunner{createErr: errors.New("no such image: agent-base")}
+	srv, _ := newProbeHarness(t, types.SiteConfig{UpstreamProxyURL: "http://proxy.corp:3128"}, fr)
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-proxy", adminToken, "{}")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	got := decodeProbeResponse(t, w.Body.String())
+	if got.State != "not_run" {
+		t.Errorf("state = %q, want not_run (detail=%q)", got.State, got.Detail)
 	}
 }
 
