@@ -926,6 +926,23 @@ all (both checks live inside the domains branch — `AllowedEmailDomains`,
 makes that moot for this recipe; set the domain(s) for real once you point this
 at a corporate IdP that isn't hand-curated the same way.
 
+With the domains list set, `email_verified` **absent** from the id_token and
+`email_verified: false` are two different denials, logged and coded
+separately (`auth_error=email_verified_absent` vs `email_unverified`). Entra
+ID tokens typically omit the claim entirely rather than sending it false —
+every login against such a tenant with the domains list set is denied, by
+design; there is no opt-in flag to relax it (a self-asserted, unverifiable
+email is exactly the risk this list exists to fail closed on). Prefer
+`WARDYN_OIDC_ROLE_MAP` against the IdP-signed `roles`/`groups` claims (plus
+the app registration's "assignment required" setting) instead of the domains
+list on such an IdP.
+
+`WARDYN_OIDC_CLIENT_SECRET` is optional: PKCE S256 is sent on every login
+regardless, so a **public client** registration (a SPA/native-app client type
+with no secret at all — some IdPs refuse to issue one for a confidential
+client) works the same as a confidential one. Leave it unset for that
+registration shape; nothing else in the OIDC config changes.
+
 ## Workspaces: three tiers
 
 A workspace is not one unit of configuration. Wardyn splits it into three:
@@ -1263,6 +1280,26 @@ nothing in the sandbox actually asks for. The UI labels these rows `network
 only` so the gap stays visible instead of reading like a redirect that does
 everything the row above it does.
 
+### Internal model gateway
+
+An internal, OpenAI-compatible model gateway is a common ask on a managed
+network: point every run's model calls at an internal endpoint instead of
+`api.anthropic.com`/`api.openai.com` directly. The supported path **today**
+is the same `egress_redirects` lane described above — point the row's `to` at
+the gateway hostname, with the agent itself configured to call the gateway
+directly (its own `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`, or an equivalent
+harness setting, pointed at the gateway, not at the public provider host).
+
+What does **not** work is redirecting Wardyn's *own* `ANTHROPIC_BASE_URL`/
+`OPENAI_BASE_URL` injection (the credential-injection lane a subscription or
+managed-harness login uses) through an `egress_redirects` row: `internal/
+egress/proxy/mitm.go` deliberately guards those two hosts so a redirect can't
+silently retarget where a run's injected credential is delivered — the same
+invariant that keeps a stolen redirect row from becoming a credential-theft
+gadget. A first-class, per-provider base-URL override (so the injection lane
+itself can point at an internal gateway) is planned for a future minor; see
+ROADMAP.md.
+
 ### Upgrading from `artifact_overrides`
 
 A site-config document saved before this shipped used
@@ -1354,7 +1391,14 @@ egress works, and it says which path it took. The question it answers ("can a
 sandbox on this host reach the internet?") matters most where nothing is
 configured yet. It goes out through the sandbox's normal egress, which
 dispatch already chains to the configured upstream, so it proves the path a
-real run takes rather than a reconstruction of it.
+real run takes rather than a reconstruction of it. It dispatches the
+published `agent-base` image (a plain curl task, no coding agent needed) at
+the STRONGEST confinement class this host's runner actually advertises —
+never the operator's configured floor. The question is whether egress works,
+not whether the floor is enforceable; a CC2 floor with no RuntimeClass
+registered used to fail the probe before it ever reached the network, and the
+launch failure read as a proxy problem it never was (see `not_run` below and
+the "Confinement floor" setup-checklist row).
 
 It also accepts an optional `{"url": "https://…"}`:
 
@@ -1419,6 +1463,7 @@ caller-named URL with no known payload, so a `reached` here is the weaker
 | `blocked` | Could not reach the proxy or the mirror. `detail` names the real cause — DNS failure, connection refused, TLS failure, timeout, or curl's own exit code — never a generic "failed". |
 | `bypass` | **Read this one carefully — it's the one that looks fine but isn't.** The mirror answers, but the public host it's supposed to replace is *also* still reachable, directly, from a sandbox. The redirect is configured but not enforced: a run can silently pull from the internet instead of the mirror, and every other signal — the row is filled in, the mirror answers — looks exactly like a working redirect. `test-redirect` only. |
 | `no_runner` | No runner is configured; there's nothing to launch a probe with. Not an error, and not a guess. |
+| `not_run` | A runner IS configured, but the throwaway sandbox that would have carried the probe never got to running it — an image pull failure, or a confinement class this host can't enforce. Distinct from `blocked`: `blocked` means the probe DID run and observed a real network fact; `not_run` means nothing was learned about the network either way. Setup's gate treats it the same as `no_runner` (unlocks Next with a neutral note, never a click-past). |
 
 A probe is bounded well under a minute and reclaims (kills) its sandbox if the
 run doesn't finish in time, so a wedged probe can never hold one open.
@@ -2103,25 +2148,34 @@ a real limitation checked against the driver, not a guess:
   canary) but not the independent kernel-level corroboration Compose +
   Tetragon provides.
 - **A pre-existing default-deny NetworkPolicy in `k8s.runsNamespace` refuses
-  boot outright, with no override.** The boot-time egress canary's phase A
-  applies no NetworkPolicy of its own — it only proves the cluster is
-  reachable at all before phase B proves Wardyn's deny-all rule takes effect.
-  If the namespace already carries a default-deny policy from something else
-  (a cluster-wide baseline, another operator's), phase A's pod is blocked too,
-  and wardynd refuses to boot with an INDETERMINATE verdict indistinguishable
-  from a genuinely broken cluster — even though per-run confinement would work
-  fine once Wardyn's own allow-rules are in place
-  (`internal/runner/k8s/canary.go`). **Fix**: give `k8s.runsNamespace` a
-  namespace with no ambient default-deny, or exempt Wardyn's pods from *that
-  policy's own* `podSelector` (a `matchExpressions` entry with
-  `key: wardyn.managed`, `operator: NotIn`, `values: ["true"]`) so it stops
-  selecting them. **Do not instead add a separate allow policy for
-  `wardyn.managed=true`**: NetworkPolicy allows are additive and both the agent
-  and proxy pods carry that label, so such a policy widens every sandbox pod's
-  egress past Wardyn's per-run deny+proxy-only policy
-  (`internal/runner/k8s/sandbox.go`) and flips the canary's phase B to "CNI
-  does not enforce" — which in turn invites
-  `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` and fully unconfined runs.
+  boot outright, with no override — unless the canary pod actually ran and
+  could not connect.** The boot-time egress canary's phase A applies no
+  NetworkPolicy of its own — it only proves the cluster is reachable at all
+  before phase B proves Wardyn's deny-all rule takes effect. If the namespace
+  already carries a default-deny policy from something else (a cluster-wide
+  baseline, another operator's), phase A's pod is blocked too, and wardynd
+  refuses to boot with an INDETERMINATE verdict indistinguishable from a
+  genuinely broken cluster — even though per-run confinement would work fine
+  once Wardyn's own allow-rules are in place (`internal/runner/k8s/canary.go`).
+  **Fix**: give `k8s.runsNamespace` a namespace with no ambient default-deny,
+  or exempt Wardyn's pods from *that policy's own* `podSelector` (a
+  `matchExpressions` entry with `key: wardyn.managed`, `operator: NotIn`,
+  `values: ["true"]`) so it stops selecting them. **Do not instead add a
+  separate allow policy for `wardyn.managed=true`**: NetworkPolicy allows are
+  additive and both the agent and proxy pods carry that label, so such a
+  policy widens every sandbox pod's egress past Wardyn's per-run
+  deny+proxy-only policy (`internal/runner/k8s/sandbox.go`) and flips the
+  canary's phase B to "CNI does not enforce" — which in turn invites
+  `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` and fully unconfined runs. **B1**: if
+  the namespace's ambient default-deny is expected — a managed, multi-tenant
+  cluster where a platform team applies the baseline — and the canary pod DID
+  reach Running with its own connect exiting exactly 1 (not "never reached
+  Running", not any other exit code), `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1`
+  acknowledges that shape and boots anyway. It is never proof of enforcement
+  (phase B is skipped — behind an existing ambient deny it could only ever
+  also refuse, proving nothing); the setup checklist's `k8s_egress_containment`
+  row grades this `warn` ("acknowledged, not proven"), never `ok`. The exempt-
+  the-podSelector fix above is still the way to get REAL proof.
 - **`replicas` stays 1 on k8s exactly as it does everywhere else** — see
   [One replica, by construction](#one-replica-by-construction) above; nothing
   about the k8s substrate changes that story (the masking registry is still

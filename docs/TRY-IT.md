@@ -25,7 +25,11 @@ A couple of config facts before you customize:
   when gVisor is registered, and `claude-llm.json` once a real model path is
   configured; host mode picks `claude-llm.json` or your staged subscription
   ceiling. The Getting Started **Review** step warns when your stored credential
-  and the live `WARDYN_DEFAULT_POLICY` disagree.
+  and the live `WARDYN_DEFAULT_POLICY` disagree — and separately, when the
+  policy's confinement floor names a tier this host's runner can't actually
+  enforce (a CC2 floor with no gVisor RuntimeClass registered, say): every run
+  on that policy would otherwise be refused before it launches, with the
+  first symptom an opaque error on the first real attempt.
 - **Secret-store durability.** `make setup` / `scripts/up.sh` mint and persist a
   `WARDYN_AGE_KEY`; only a hand-launched bare `wardynd` runs on an EPHEMERAL age
   key (secrets unreadable after restart) — run `wardynd -gen-age-key` to mint a

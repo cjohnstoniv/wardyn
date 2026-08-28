@@ -633,7 +633,10 @@ assumes the obvious thing:
   counter changes, rather than pressing once — which also covers the
   blocked-step case where the gate's own action button replaces Next entirely.
 - **The connectivity probe launches a real run.** "Test connectivity" proves the
-  path from inside a sandbox, so `has_runs` flips true during Act 2. That
+  path from inside a sandbox, so `has_runs` flips true during Act 2 — the run
+  dispatches the published `agent-base` image (a plain curl task, no coding
+  agent needed) at the strongest confinement class the runner advertises, not
+  the operator's configured floor. That
   matters because `firstRunLanding()` only redirects `/` → `/setup` while
   `has_runs` is false: the second time you run the driver against the same
   stack, `/` lands on Runs. Act 1 falls through to `/setup` rather than
