@@ -8,8 +8,64 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.6.5] — 2026-08-28
+
+A patch for the `k8s` runner on managed, multi-tenant Kubernetes — where a platform team owns RBAC
+and namespaces, a baseline default-deny NetworkPolicy already exists, the Postgres DSN Secret is
+operator-owned, and packages come from an allowlist mirror. Reported by an enterprise adopter on
+managed Kubernetes; every item below was verified against the code before it was fixed.
+
+### Security
+
+- **`golang.org/x/crypto` 0.54.0 → 0.55.0 (GO-2026-6303).** The SSH gateway's
+  `ssh.NewServerConn` reaches the code path where the source-address critical
+  option was not enforced for non-public-key auth callbacks; `govulncheck`
+  reports it as reachable and would block the merge gate. Fixed upstream in
+  0.55.0; `x/net` and `x/text` move with it as indirect dependencies.
+- **The chart's NetworkPolicy governs the control-plane pod only.** Its `podSelector` matched
+  `app.kubernetes.io/name` + `instance` — the two labels the shared helper puts on every pod the
+  release creates, and that sandbox pods can carry through caller-supplied labels. Any pod in the
+  release namespace carrying those two labels inherited the control plane's ingress rules (every non-http inbound port
+  denied) and, because NetworkPolicy allows are additive, its egress allowances. The selector now
+  also pins `app.kubernetes.io/component: control-plane`, which the pod template already carried; the
+  Deployment's own immutable `spec.selector` is untouched, so upgrades apply cleanly.
+
 ### Added
 
+- **`k8s.rbac.create`** (default `true`). `false` renders no Role/RoleBinding/ClusterRole/
+  ClusterRoleBinding and nothing in `k8s.runsNamespace`, for a platform that provisions runner RBAC
+  out of band and refuses cluster-scoped objects from tenants. The `serviceAccount.create=false`
+  without a name refusal stays either way.
+- **`ingress.*`** — an optional Ingress for the console's `http` port (class, annotations, hosts,
+  TLS). Off by default; the render is unchanged until enabled. The UI-sandbox gateway keeps its own
+  hand-authored Ingress on its own hostname by design.
+- **`secrets.ageKeySecretRef`** — the age identity from its own Secret, independent of the DSN
+  Secret, for a DSN a managed-Postgres operator owns and no one can add a key to. Naming it alongside
+  `ageKeyFromSecret`/`ageKey` is refused at render: two Secrets, one identity, and booting under the
+  wrong one is unrecoverable.
+- **`defaultPolicy`** — the default RunPolicy as JSON text (`--set-file defaultPolicy=my.json`),
+  rendered into a ConfigMap, mounted read-only, with `WARDYN_DEFAULT_POLICY` pointed at it and a
+  checksum annotation that rolls the pod on change. Until now the only chart-level choice was one of
+  the files baked into the image, whose shipped floor is CC2 — unadvertised on any cluster with no
+  `k8s.runtimeClasses` pinned.
+- **`WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1`** — an acknowledgement, distinct from
+  `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL`, for the one canary shape a tenant cannot fix: the baseline
+  phase's pod ran and could not reach the API server because the namespace already carries a
+  default-deny NetworkPolicy the platform team owns. Boot proceeds, the log says loudly that
+  enforcement is acknowledged rather than proven, and the setup page shows it as a `warn` row. A
+  canary pod that never started still refuses boot with no override. The refusal message now names
+  the acknowledgement next to the exemption it already named.
+- **A `confinement_floor` setup row** that warns when the default policy's floor is a class this
+  runner does not advertise — every run on the default policy would be refused before launch — and
+  names the two remedies (lower the floor via `defaultPolicy`/`WARDYN_DEFAULT_POLICY`, or pin a
+  RuntimeClass).
+- **A `not_run` verdict for the setup connectivity probe**, distinct from `blocked`: the probe
+  sandbox never started (an image pull, a confinement class this host cannot enforce), so nothing was
+  learned about the network. The console says so instead of "fix the proxy".
+- **OIDC public clients.** `WARDYN_OIDC_CLIENT_SECRET` is optional; without it the token exchange
+  runs as a public client (`client_id` in the body, PKCE S256 — which every login already sent).
+- **`GOPROXY` build arg** on every Go builder stage, plumbed through `make` and Compose like
+  `NPM_REGISTRY`; empty is identical to unset.
 - **The release pipeline can be rehearsed.** `release.yml` gains a
   `workflow_dispatch` with `dry_run` (default true): it builds every image, the
   CLI cross-builds and the chart package, runs the SBOM merge and its zero-npm
@@ -21,6 +77,36 @@ and does not yet follow semantic versioning (interfaces are not stable).
   would have failed a dry run. `make release-check` was green every time, because
   it validates the repository, not the workflow.
 
+
+### Fixed
+
+- **The setup connectivity probe blamed the proxy for its own failures.** It pulled
+  `agent-claude-code` — an image the project deliberately stopped publishing in 0.6.2 — and dispatched
+  at the default policy's CC2 floor, so on a stock managed cluster it failed at the image pull or at
+  `no confinement substrate can enforce class "CC2"`, and both surfaced as **Blocked** under the
+  proxy heading with "fix the proxy above". It now runs the published `agent-base` image (override
+  key `base` in `WARDYN_AGENT_IMAGES`) at the strongest class the runner actually advertises — the
+  probe tests egress, not the floor — and a sandbox that never started is `not_run`, never `blocked`.
+  `agent-base`'s `agent-run` stub honours `WARDYN_TASK_MODE=exec` so it can carry the probe;
+  `make setup` builds `wardyn/agent-base:local` on the from-source path and the Compose stack maps
+  the `base` key to it.
+- **A failed `run.complete` read as a clean exit.** The probe decoded the failure event's missing
+  `exit_code` as `0` and reported `reached` for a run whose watcher had errored.
+- **`email_verified` absent is no longer "false".** With `WARDYN_OIDC_EMAIL_DOMAINS` set, an
+  id_token with no `email_verified` claim at all — the norm for Entra ID — denied every login with
+  the message for a claim the IdP had set to `false`. Absent is its own `email_verified_absent`
+  outcome: the operator gets a server-side warning naming the claim, the issuer and the variable; the
+  user is told the provider sent no claim and to ask for App Roles instead of "verify your email".
+  The sign-in copy also named a variable that does not exist (`WARDYN_OIDC_ALLOWED_EMAIL_DOMAINS`).
+- **The setup barrier picker says it is a browser-local default.** Its instruction read as if it
+  set the server's floor; it never did (the footnote below it already said so).
+- **`NPM_REGISTRY` was bypassed by the npm self-upgrade.** The agent image Dockerfiles ran
+  `npm install -g npm@<version>` before `npm config set registry`, so behind a mirror that does not
+  proxy the public registry the build failed on its first install. The registry is set first.
+
+Not in this patch: an operator-configurable model-provider base URL (an internal OpenAI-compatible
+gateway as a first-class provider) — the supported path today is the EgressRedirect header-injection
+lane, documented in `docs/OPERATIONS.md`; a Gateway-API `HTTPRoute` variant of `ingress.*`.
 
 ## [0.6.4] — 2026-08-27
 
