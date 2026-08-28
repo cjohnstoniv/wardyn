@@ -137,7 +137,7 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	var reqBody io.Reader = r.Body
 	allowSrc := ruleSourceGit
 	isPush := rest == "git-receive-pack"
-	if isPush && (!BranchNSEnforced() || p.policy.gitPushAnyBranch) {
+	if isPush && (!BranchNSEnforced() || p.policy.GitPushAnyBranch()) {
 		allowSrc = ruleSourceGitNSOff
 	} else if isPush {
 		// git does not gzip receive-pack bodies (remote-curl only sets

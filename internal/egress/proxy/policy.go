@@ -129,6 +129,11 @@ func CompilePolicy(spec types.RunPolicySpec) *Policy {
 	return p
 }
 
+// GitPushAnyBranch reports whether this run's policy opts its brokered pushes
+// out of branch-namespace confinement. Nil-safe like ToolEffectFor: a proxy
+// built without a compiled policy keeps confinement ON.
+func (p *Policy) GitPushAnyBranch() bool { return p != nil && p.gitPushAnyBranch }
+
 // FirstUseMode reports how unknown domains are handled (always_deny /
 // deny_with_review / wait_for_review), normalized (never empty).
 func (p *Policy) FirstUseMode() types.FirstUseMode { return p.firstUse }

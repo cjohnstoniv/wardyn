@@ -106,10 +106,7 @@ func Clamp(proposed, ceiling types.RunPolicySpec) (types.RunPolicySpec, []string
 	}
 
 	// Allow-all egress.
-	if out.AllowAllEgress && !ceiling.AllowAllEgress {
-		warns = append(warns, "allow_all_egress disabled: operator policy does not permit allow-all egress")
-		out.AllowAllEgress = false
-	}
+	warns = clampOperatorSwitches(&out, ceiling, warns)
 
 	// Allowed domains: intersect down to the ceiling unless the ceiling allows all.
 	// An empty ceiling allowlist means default-deny (mirrors clampGrants/egress
@@ -470,4 +467,22 @@ func union(a, b []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// clampOperatorSwitches forces off the boolean controls only an operator may
+// widen: allow-all egress, and the push branch-namespace opt-out
+// (git_push_any_branch). A member's inline_policy may not switch either on
+// unless the ceiling already has — without the second clamp a member could
+// disable the operator's push confinement for their own run by posting the
+// field. Split out of Clamp so its branch count stays under the gocyclo gate.
+func clampOperatorSwitches(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
+	if out.AllowAllEgress && !ceiling.AllowAllEgress {
+		warns = append(warns, "allow_all_egress disabled: operator policy does not permit allow-all egress")
+		out.AllowAllEgress = false
+	}
+	if out.GitPushAnyBranch && !ceiling.GitPushAnyBranch {
+		warns = append(warns, "git_push_any_branch disabled: operator policy keeps push branch-namespace confinement on")
+		out.GitPushAnyBranch = false
+	}
+	return warns
 }

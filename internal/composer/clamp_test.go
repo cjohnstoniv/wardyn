@@ -143,6 +143,25 @@ func TestClamp_ForcesAllowAllEgressOff(t *testing.T) {
 	}
 }
 
+func TestClamp_ForcesGitPushAnyBranchOff(t *testing.T) {
+	got, warns := Clamp(types.RunPolicySpec{GitPushAnyBranch: true}, operatorCeiling(t))
+	if got.GitPushAnyBranch {
+		t.Errorf("git_push_any_branch must be forced off when the operator ceiling keeps confinement on")
+	}
+	if !hasWarn(warns, "git_push_any_branch disabled") {
+		t.Errorf("expected git_push_any_branch warning, got %v", warns)
+	}
+	ceiling := operatorCeiling(t)
+	ceiling.GitPushAnyBranch = true
+	got, warns = Clamp(types.RunPolicySpec{GitPushAnyBranch: true}, ceiling)
+	if !got.GitPushAnyBranch {
+		t.Errorf("git_push_any_branch must survive when the ceiling allows it")
+	}
+	if hasWarn(warns, "git_push_any_branch disabled") {
+		t.Errorf("no warning expected when the ceiling allows it, got %v", warns)
+	}
+}
+
 func TestClamp_IntersectsAllowedDomainsToCeiling(t *testing.T) {
 	got, warns := Clamp(types.RunPolicySpec{
 		AllowedDomains: []string{"api.anthropic.com", "evil.example.com"},
