@@ -30,6 +30,9 @@ NPM_REGISTRY ?=
 HTTP_PROXY   ?=
 HTTPS_PROXY  ?=
 NO_PROXY     ?=
+# Corporate Go module mirror (Athens/Artifactory/Nexus). Empty is identical to
+# unset — the go command falls back to $GOROOT/go.env (proxy.golang.org).
+GOPROXY      ?=
 # Native-binary agent installs (opt-in; npm stays the default). Behind a proxy
 # where public npm is blocked, install the native CLI instead:
 #   make agent-images-core CLAUDE_INSTALL=native            # checksum-verified download
@@ -47,6 +50,7 @@ DOCKER_BUILD_ARGS = \
 	$(call _build_arg,HTTP_PROXY,$(HTTP_PROXY)) \
 	$(call _build_arg,HTTPS_PROXY,$(HTTPS_PROXY)) \
 	$(call _build_arg,NO_PROXY,$(NO_PROXY)) \
+	$(call _build_arg,GOPROXY,$(GOPROXY)) \
 	$(call _build_arg,CLAUDE_INSTALL,$(CLAUDE_INSTALL)) \
 	$(call _build_arg,CODEX_INSTALL,$(CODEX_INSTALL)) \
 	$(call _build_arg,CLAUDE_CODE_VERSION,$(CLAUDE_CODE_VERSION)) \

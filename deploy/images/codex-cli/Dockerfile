@@ -41,6 +41,12 @@ WORKDIR /build
 # corporate MITM. The README.md companion makes the COPY succeed when the
 # corp-ca.pem* glob matches nothing.
 ENV GOTOOLCHAIN=local
+# Corporate Go module mirror (Athens/Artifactory/Nexus). Empty is identical to
+# unset: the go command falls back to $GOROOT/go.env (https://proxy.golang.org,direct).
+# GOSUMDB is deliberately not exposed — every mainstream mirror proxies /sumdb/;
+# add the same two lines if one ever does not.
+ARG GOPROXY=
+ENV GOPROXY=${GOPROXY}
 COPY deploy/images/README.md deploy/images/corp-ca.pem* /corp-ca/
 RUN if [ -f /corp-ca/corp-ca.pem ]; then \
         mkdir -p /usr/local/share/ca-certificates && \

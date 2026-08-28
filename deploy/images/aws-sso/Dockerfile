@@ -47,6 +47,12 @@ WORKDIR /build
 # self-upgrade fetch; the optional host-staged corp CA is trusted so `go mod
 # download` can verify the module proxy through a corporate MITM.
 ENV GOTOOLCHAIN=local
+# Corporate Go module mirror (Athens/Artifactory/Nexus). Empty is identical to
+# unset: the go command falls back to $GOROOT/go.env (https://proxy.golang.org,direct).
+# GOSUMDB is deliberately not exposed — every mainstream mirror proxies /sumdb/;
+# add the same two lines if one ever does not.
+ARG GOPROXY=
+ENV GOPROXY=${GOPROXY}
 COPY deploy/images/README.md deploy/images/corp-ca.pem* /corp-ca/
 RUN if [ -f /corp-ca/corp-ca.pem ]; then \
         mkdir -p /usr/local/share/ca-certificates && \

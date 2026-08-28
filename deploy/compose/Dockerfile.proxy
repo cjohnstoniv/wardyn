@@ -15,6 +15,12 @@ WORKDIR /build
 # corp-ca.pem* glob matches nothing. Base is Alpine here, so the CA tooling comes
 # from the `ca-certificates` apk package rather than Debian's.
 ENV GOTOOLCHAIN=local
+# Corporate Go module mirror (Athens/Artifactory/Nexus). Empty is identical to
+# unset: the go command falls back to $GOROOT/go.env (https://proxy.golang.org,direct).
+# GOSUMDB is deliberately not exposed — every mainstream mirror proxies /sumdb/;
+# add the same two lines if one ever does not.
+ARG GOPROXY=
+ENV GOPROXY=${GOPROXY}
 COPY deploy/images/README.md deploy/images/corp-ca.pem* /corp-ca/
 RUN apk add --no-cache ca-certificates && \
     if [ -f /corp-ca/corp-ca.pem ]; then \

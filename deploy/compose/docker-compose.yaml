@@ -145,6 +145,7 @@ services:
         HTTP_PROXY: "${HTTP_PROXY:-}"
         HTTPS_PROXY: "${HTTPS_PROXY:-}"
         NO_PROXY: "${NO_PROXY:-}"
+        GOPROXY: "${GOPROXY:-}"
         # Target for the host-native `wardyn` the image also builds (see
         # Dockerfile.wardynd) — scripts/up.sh sets these from the host's uname so
         # it can extract and run that binary for host-side proxy detection.
@@ -562,6 +563,9 @@ services:
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile.tetragon-ingest
+      # Corporate-build pass-through (empty by default; OSS builds ignore it).
+      args:
+        GOPROXY: "${GOPROXY:-}"
     image: wardyn/wardyn-tetragon-ingest:local
     container_name: ${WARDYN_NS:-wardyn}-tetragon-ingest
     profiles: ["groundtruth"]
@@ -604,6 +608,9 @@ services:
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile.proxy
+      # Corporate-build pass-through (empty by default; OSS builds ignore it).
+      args:
+        GOPROXY: "${GOPROXY:-}"
     # Same override knob as wardynd's, and the same variable wardynd reads
     # above — building this stanza and running the stack agree by construction.
     image: ${WARDYN_PROXY_IMAGE:-wardyn/wardyn-proxy:local}
@@ -626,6 +633,7 @@ services:
         HTTP_PROXY: "${HTTP_PROXY:-}"
         HTTPS_PROXY: "${HTTPS_PROXY:-}"
         NO_PROXY: "${NO_PROXY:-}"
+        GOPROXY: "${GOPROXY:-}"
     image: wardyn/agent-claude-code:local
     profiles: ["build-only"]
     command: ["sleep", "infinity"]
@@ -640,6 +648,7 @@ services:
         HTTP_PROXY: "${HTTP_PROXY:-}"
         HTTPS_PROXY: "${HTTPS_PROXY:-}"
         NO_PROXY: "${NO_PROXY:-}"
+        GOPROXY: "${GOPROXY:-}"
     image: wardyn/agent-codex-cli:local
     profiles: ["build-only"]
     command: ["sleep", "infinity"]
@@ -678,6 +687,7 @@ services:
         HTTP_PROXY: "${HTTP_PROXY:-}"
         HTTPS_PROXY: "${HTTPS_PROXY:-}"
         NO_PROXY: "${NO_PROXY:-}"
+        GOPROXY: "${GOPROXY:-}"
     image: wardyn/agent-aws-sso:local
     profiles: ["build-only"]
     command: ["sleep", "infinity"]
