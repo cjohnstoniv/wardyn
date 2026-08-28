@@ -46,6 +46,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -424,8 +425,15 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	// error from before role derivation existed: this is the ONE claims
 	// struct whose failure to parse must abort the login.
 	var claims struct {
-		Email         string `json:"email"`
-		EmailVerified bool   `json:"email_verified"`
+		Email string `json:"email"`
+		// *bool, not bool: an Entra ID token typically OMITS email_verified
+		// entirely rather than sending it false (see AllowedEmailDomains'
+		// doc), and a plain bool would silently decode that absence as
+		// false — the SAME denial as an IdP that explicitly told us the
+		// email is unverified, when in truth the IdP said nothing at all.
+		// C1: the gate below (4) treats nil and false as distinct denials,
+		// each with its own auth_error code.
+		EmailVerified *bool `json:"email_verified"`
 	}
 	if err := idToken.Claims(&claims); err != nil {
 		http.Error(w, "id_token claims extraction failed", http.StatusUnauthorized)
@@ -454,7 +462,21 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 
 	// (4) Domain check — fail closed.
 	if len(a.cfg.AllowedEmailDomains) > 0 {
-		if !claims.EmailVerified {
+		switch {
+		case claims.EmailVerified == nil:
+			// C1: distinct from "false" — the IdP said nothing at all about
+			// verification (Entra's normal shape), not that it explicitly
+			// failed. No opt-in flag to relax this: allowlisting a
+			// self-asserted, unverifiable email is exactly the risk
+			// AllowedEmailDomains exists to fail closed on. WARDYN_OIDC_ROLE_MAP
+			// (App Roles) is the documented better answer for an IdP that
+			// never sends this claim.
+			slog.Warn("oidc: login denied — the id_token carries no email_verified claim",
+				"issuer", a.cfg.IssuerURL, "claim", "email_verified", "env", "WARDYN_OIDC_EMAIL_DOMAINS")
+			clearCookie(w, sessionCookieName)
+			redirectAuthError(w, r, authErrorEmailVerifiedAbsent)
+			return
+		case !*claims.EmailVerified:
 			clearCookie(w, sessionCookieName)
 			redirectAuthError(w, r, authErrorEmailUnverified)
 			return
@@ -801,8 +823,14 @@ func clearCookie(w http.ResponseWriter, name string) {
 // human message; never the raw internal error text.
 const (
 	authErrorEmailUnverified = "email_unverified"
-	authErrorEmailDomain     = "email_domain"
-	authErrorNoRole          = "no_role"
+	// authErrorEmailVerifiedAbsent (C1): the id_token carries no
+	// email_verified claim at all — distinct from authErrorEmailUnverified,
+	// which means the IdP explicitly sent false. Entra ID tokens typically
+	// omit the claim entirely (AllowedEmailDomains' doc), so this is the
+	// common denial shape on an Entra tenant with AllowedEmailDomains set.
+	authErrorEmailVerifiedAbsent = "email_verified_absent"
+	authErrorEmailDomain         = "email_domain"
+	authErrorNoRole              = "no_role"
 	// authErrorOIDCTransient (D12): the token exchange kept failing with a
 	// network timeout or a 5xx from the IdP after retryExchange's retries —
 	// the IdP is having a bad moment, not the deployment being misconfigured.

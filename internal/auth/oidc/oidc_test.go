@@ -1174,6 +1174,80 @@ func TestDomainCheckMalformedEmail(t *testing.T) {
 	checkDomainFilter(t, "notanemail", []string{"example.com"}, false)
 }
 
+// ─── C1: email_verified absent vs explicitly false ───────────────────────────
+//
+// Entra ID tokens typically OMIT email_verified entirely rather than sending
+// it false (Config.AllowedEmailDomains' doc). A plain bool claims field
+// silently decoded that absence as false — indistinguishable from an IdP
+// that explicitly told us the email is unverified — and denied every login
+// on such a tenant with AllowedEmailDomains set, with no server log naming
+// why. EmailVerified is now *bool so the two shapes get their own auth_error
+// codes.
+
+// TestCallbackEmailVerifiedAbsentIsItsOwnCode: no email_verified claim in the
+// token (buildIDTokenRawClaim with a nil value — decodes identically to the
+// claim being absent) must deny with authErrorEmailVerifiedAbsent, its own
+// code distinct from "the IdP said unverified".
+func TestCallbackEmailVerifiedAbsentIsItsOwnCode(t *testing.T) {
+	env := newIdPEnv(t)
+	auth := env.newAuth(t, []string{"corp.example"})
+
+	env.buildIDTokenRawClaim(t, "sub-absent", "alice@corp.example", "email_verified", nil)
+	w, sess := doCallback(t, auth)
+	if w.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d: body: %s", w.Code, http.StatusFound, w.Body.String())
+	}
+	if loc := w.Result().Header.Get("Location"); !strings.Contains(loc, "auth_error=email_verified_absent") {
+		t.Errorf("Location = %q, want auth_error=email_verified_absent", loc)
+	}
+	if sess.Role != "" {
+		t.Errorf("role = %q, want no session (denied)", sess.Role)
+	}
+	assertSessionCookieCleared(t, w)
+}
+
+// TestCallbackEmailVerifiedFalseStaysEmailUnverified: an EXPLICIT
+// email_verified:false must keep denying with the existing
+// authErrorEmailUnverified code — unchanged behavior, never conflated with
+// the absent case above.
+func TestCallbackEmailVerifiedFalseStaysEmailUnverified(t *testing.T) {
+	env := newIdPEnv(t)
+	auth := env.newAuth(t, []string{"corp.example"})
+
+	env.buildIDTokenRawClaim(t, "sub-false", "alice@corp.example", "email_verified", false)
+	w, sess := doCallback(t, auth)
+	if w.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d: body: %s", w.Code, http.StatusFound, w.Body.String())
+	}
+	if loc := w.Result().Header.Get("Location"); !strings.Contains(loc, "auth_error=email_unverified") {
+		t.Errorf("Location = %q, want auth_error=email_unverified (unchanged from before C1)", loc)
+	}
+	if sess.Role != "" {
+		t.Errorf("role = %q, want no session (denied)", sess.Role)
+	}
+}
+
+// TestCallbackEmailVerifiedAbsentIsIgnoredWithoutDomains: the whole
+// email_verified gate lives INSIDE the `len(AllowedEmailDomains) > 0` check
+// — with no AllowedEmailDomains configured, an absent claim must not deny a
+// login that would otherwise succeed (the gate simply never runs).
+func TestCallbackEmailVerifiedAbsentIsIgnoredWithoutDomains(t *testing.T) {
+	env := newIdPEnv(t)
+	auth := env.newAuth(t, nil) // AllowedEmailDomains unset
+
+	env.buildIDTokenRawClaim(t, "sub-noverify-nodomain", "anyone@anywhere.io", "email_verified", nil)
+	w, sess := doCallback(t, auth)
+	if w.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d: body: %s", w.Code, http.StatusFound, w.Body.String())
+	}
+	if loc := w.Result().Header.Get("Location"); strings.Contains(loc, "auth_error") {
+		t.Errorf("Location = %q, want no auth_error (AllowedEmailDomains unset, so email_verified is never checked)", loc)
+	}
+	if sess.Sub == "" {
+		t.Error("no session issued, want a successful login")
+	}
+}
+
 // ─── TestLogoutClearsCookie ───────────────────────────────────────────────────
 
 func TestLogoutClearsCookie(t *testing.T) {

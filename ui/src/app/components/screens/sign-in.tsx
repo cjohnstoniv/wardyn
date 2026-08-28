@@ -34,8 +34,10 @@ function authErrorMessage(code: string): string {
   switch (code) {
     case "email_unverified":
       return "Your identity provider reports this email as unverified. Verify your email with your identity provider, then try again.";
+    case "email_verified_absent":
+      return "Your identity provider doesn't send an email_verified claim at all (common on Entra ID), so this console can't confirm the email on its own. Ask an operator to map your role via WARDYN_OIDC_ROLE_MAP (an App Role or group, not email domains) instead.";
     case "email_domain":
-      return "This email's domain isn't allowed to sign in to this console. Ask an operator to add it to WARDYN_OIDC_ALLOWED_EMAIL_DOMAINS.";
+      return "This email's domain isn't allowed to sign in to this console. Ask an operator to add it to WARDYN_OIDC_EMAIL_DOMAINS.";
     case "no_role":
       return "Your account has no Wardyn role assigned. Ask an operator to map your role (WARDYN_OIDC_ROLE_MAP) or add your email to WARDYN_OIDC_OPERATOR_EMAILS.";
     case "oidc_transient":

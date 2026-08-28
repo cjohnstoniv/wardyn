@@ -158,6 +158,18 @@ describe("SignIn — renders the OIDC callback's ?auth_error=<code> inline (W31-
     expect(await screen.findByRole("alert")).toHaveTextContent(/unverified/i);
   });
 
+  // C1: absent must render its OWN message — never conflated with
+  // email_unverified (the IdP explicitly said unverified) — and must name
+  // the real remedy (WARDYN_OIDC_ROLE_MAP), not domains.
+  it("renders the email_verified_absent message, distinct from email_unverified", async () => {
+    window.history.pushState({}, "", "/?auth_error=email_verified_absent");
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/doesn't send an email_verified claim/i);
+    expect(alert).toHaveTextContent(/WARDYN_OIDC_ROLE_MAP/);
+  });
+
   it("falls back to a generic message for an unrecognized code", async () => {
     window.history.pushState({}, "", "/?auth_error=something_new");
     healthMock.mockResolvedValue({});
