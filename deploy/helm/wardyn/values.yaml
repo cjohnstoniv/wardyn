@@ -243,6 +243,8 @@ uiSandbox:
   originTemplate: ""
 
 # Default-deny NetworkPolicy (Wardyn's L0 egress posture). See templates.
+# Its podSelector governs the control-plane pod ONLY (app.kubernetes.io/
+# component: control-plane) — never a sandbox pod, however it's labeled.
 networkPolicy:
   enabled: true
   postgres:

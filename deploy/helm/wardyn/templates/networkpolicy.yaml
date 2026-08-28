@@ -36,9 +36,23 @@ metadata:
   labels:
     {{- include "wardyn.labels" . | nindent 4 }}
 spec:
+  {{/*
+  Narrow past the bare name+instance selector below: NetworkPolicy allows
+  are ADDITIVE, and sandbox pods the k8s runner substrate creates
+  (internal/runner/k8s/naming.go's wardynLabels) can carry caller-supplied
+  "extra" labels that happen to match this release's
+  app.kubernetes.io/name+instance without ever setting
+  app.kubernetes.io/component — such a pod would otherwise silently inherit
+  wardynd's own egress (DNS, Postgres, the k8s API server), not just the
+  per-run allow rules it's actually supposed to get. The Deployment's own
+  spec.selector is immutable and stays name+instance only
+  (wardyn.selectorLabels, untouched) — this is a NetworkPolicy-only
+  narrowing to the control-plane pod.
+  */ -}}
   podSelector:
     matchLabels:
       {{- include "wardyn.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: control-plane
   policyTypes:
     - Ingress
     - Egress
