@@ -261,3 +261,57 @@ func (c *Client) RevokeSessions(ctx context.Context, sub string, all bool) error
 	return c.do(ctx, http.MethodPost, "/api/v1/sessions/revoke",
 		map[string]any{"sub": sub, "all": all}, nil)
 }
+
+// ListSSHKeys returns the caller's own registered SSH gateway keys — the
+// gateway's entire trust root (docs/SSH.md §1). There is no admin view of
+// another principal's keys. GET /api/v1/me/ssh-keys.
+func (c *Client) ListSSHKeys(ctx context.Context) ([]types.SSHPublicKey, error) {
+	var out []types.SSHPublicKey
+	err := c.do(ctx, http.MethodGet, "/api/v1/me/ssh-keys", nil, &out)
+	return out, err
+}
+
+// AddSSHKey registers one authorized_keys line under the caller's own
+// principal and returns the stored record (201). POST /api/v1/me/ssh-keys.
+// Fails closed on the server: 422 for private-key material, more than one key,
+// or an admin-token caller on an SSO deployment (such a key could never
+// authorize a human's run); 409 when the fingerprint is already registered.
+func (c *Client) AddSSHKey(ctx context.Context, name, publicKey string) (types.SSHPublicKey, error) {
+	var out types.SSHPublicKey
+	err := c.do(ctx, http.MethodPost, "/api/v1/me/ssh-keys",
+		map[string]string{"name": name, "public_key": publicKey}, &out)
+	return out, err
+}
+
+// RunFileStat is one changed file in a RunFiles listing.
+type RunFileStat struct {
+	Path string `json:"path"`
+	// Status is git's porcelain code ("M", "A", "D", "??", …); empty when git
+	// listed the file in the diff but not in status.
+	Status  string `json:"status,omitempty"`
+	Added   *int   `json:"added,omitempty"`
+	Deleted *int   `json:"deleted,omitempty"`
+	// Binary marks a file git declined to count lines for.
+	Binary bool `json:"binary,omitempty"`
+}
+
+// RunFiles is GET /api/v1/runs/{id}/files: what changed in a RUNNING sandbox's
+// workspace, read by one exec inside the sandbox. VCS is "git" (Files is the
+// diff-stat), "none" (Path names the directory inspected and it is not a git
+// work tree) or "unknown" (git ran and failed — most often it is missing from
+// the image). Path is present on every outcome so a caller can tell "no repo
+// here" from "looked in the wrong place".
+type RunFiles struct {
+	VCS       string        `json:"vcs"`
+	Path      string        `json:"path,omitempty"`
+	Files     []RunFileStat `json:"files"`
+	Truncated bool          `json:"truncated"`
+}
+
+// RunFiles lists a running sandbox's changed files (owner-or-admin). 409 when
+// the run has no sandbox yet, 501 when the runner cannot exec into one.
+func (c *Client) RunFiles(ctx context.Context, runID uuid.UUID) (RunFiles, error) {
+	var out RunFiles
+	err := c.do(ctx, http.MethodGet, "/api/v1/runs/"+runID.String()+"/files", nil, &out)
+	return out, err
+}

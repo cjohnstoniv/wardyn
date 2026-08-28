@@ -194,7 +194,7 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().BoolVar(&createJSON, "json", false, "emit the created run (or the --dry-run checklist) as JSON (progress goes to stderr)")
 
 	cmd.AddCommand(runListCmd(client), runGetCmd(client), runKillCmd(client),
-		runGrantsCmd(client), runRecordingCmd(client))
+		runGrantsCmd(client), runRecordingCmd(client), runWaitReadyCmd(client))
 	return cmd
 }
 

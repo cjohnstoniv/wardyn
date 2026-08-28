@@ -15,7 +15,7 @@
 // automates); it is a curated subset, NOT a 1:1 mirror of every route:
 //
 //   - runs:        CreateRun, Preflight, GetRun, ListRuns, ListGrants, KillRun,
-//     SynthesizeProfile, GetRecording
+//     SynthesizeProfile, GetRecording, RunFiles
 //   - approvals:   ListApprovals, Approve, Deny
 //   - policies:    CreatePolicy, GetPolicy, GetDefaultPolicy, ListPolicies, UpdatePolicy,
 //     DeletePolicy
@@ -29,6 +29,7 @@
 //   - identity:    Me
 //   - health:      Healthz
 //   - sessions:    RevokeSessions
+//   - ssh-keys:    ListSSHKeys, AddSSHKey
 //
 // NOT covered (drive these with the CLI or raw HTTP): attach WebSocket /
 // attach-ticket, harness-login device flow, and the agent-facing /internal/*

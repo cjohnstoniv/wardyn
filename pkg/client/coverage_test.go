@@ -40,6 +40,8 @@ var (
 	_ []client.EgressRedirect
 	_ client.ApprovalScope
 	_ client.DecisionOpts
+	_ []client.SSHPublicKey
+	_ client.RunFiles
 )
 
 // routeFamilies lists EVERY exported *client.Client method under the family
@@ -48,7 +50,7 @@ var (
 // parity in both directions.
 func routeFamilies() map[string][]string {
 	return map[string][]string{
-		"runs":        {"CreateRun", "Preflight", "GetRun", "ListGrants", "KillRun", "SynthesizeProfile", "GetRecording"},
+		"runs":        {"CreateRun", "Preflight", "GetRun", "ListGrants", "KillRun", "SynthesizeProfile", "GetRecording", "RunFiles"},
 		"runs.list":   {"ListRuns"},
 		"approvals":   {"ListApprovals", "Approve", "Deny"},
 		"policies":    {"CreatePolicy", "GetPolicy", "GetDefaultPolicy", "ListPolicies", "UpdatePolicy", "DeletePolicy"},
@@ -61,6 +63,7 @@ func routeFamilies() map[string][]string {
 		"identity":    {"Me"},
 		"health":      {"Healthz"},
 		"sessions":    {"RevokeSessions"},
+		"ssh-keys":    {"ListSSHKeys", "AddSSHKey"},
 	}
 }
 

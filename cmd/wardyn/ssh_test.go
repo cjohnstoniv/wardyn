@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -118,6 +119,90 @@ func TestRunSSH_EnabledBracketedIPv6(t *testing.T) {
 	want := "ssh run-1@::1 -p 2222"
 	if out != want {
 		t.Errorf("--print output = %q, want %q", out, want)
+	}
+}
+
+// --------------------------------------------------------------------------
+// runSSH --json: the target (host, port, username, fingerprint, command) for
+// a script or an external tool that dials the sandbox itself, rather than
+// shelling out to the local ssh(1) the way plain `wardyn ssh` does.
+// --------------------------------------------------------------------------
+
+func runSSHJSON(t *testing.T, healthzBody, runID string) (sshTarget, error) {
+	t.Helper()
+	srv := fakeHealthzServer(t, healthzBody)
+	defer srv.Close()
+
+	cmd := sshCmd(func() *sdk.Client { return &sdk.Client{BaseURL: srv.URL} })
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetContext(context.Background())
+	cmd.SetArgs([]string{runID, "--json"})
+	if err := cmd.Execute(); err != nil {
+		return sshTarget{}, err
+	}
+	var target sshTarget
+	if err := json.Unmarshal(out.Bytes(), &target); err != nil {
+		t.Fatalf("--json output not valid JSON: %v (%q)", err, out.String())
+	}
+	return target, nil
+}
+
+func TestRunSSH_JSON(t *testing.T) {
+	got, err := runSSHJSON(t,
+		`{"ssh":{"enabled":true,"advertise_addr":"wardyn.example.com:2222","host_key_fingerprint":"SHA256:abc"}}`,
+		"run-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := sshTarget{
+		Host: "wardyn.example.com", Port: 2222, Username: "run-1",
+		HostKeyFingerprint: "SHA256:abc", Command: "ssh run-1@wardyn.example.com -p 2222",
+	}
+	if got != want {
+		t.Errorf("--json output = %+v, want %+v", got, want)
+	}
+}
+
+// TestRunSSH_JSON_BareHostDefaultsPort22: --print's bare-host form omits the
+// -p flag entirely (ssh(1) applies its own default), but --json's Port field
+// always carries a number so a caller never has to reimplement that default.
+func TestRunSSH_JSON_BareHostDefaultsPort22(t *testing.T) {
+	got, err := runSSHJSON(t,
+		`{"ssh":{"enabled":true,"advertise_addr":"wardyn.example.com","host_key_fingerprint":"SHA256:abc"}}`,
+		"run-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Port != 22 {
+		t.Errorf("port = %d, want the conventional default 22 when the gateway advertises none", got.Port)
+	}
+	if got.Host != "wardyn.example.com" || got.Username != "run-1" {
+		t.Errorf("got %+v, want host=wardyn.example.com username=run-1", got)
+	}
+	if got.Command != "ssh run-1@wardyn.example.com" {
+		t.Errorf("command = %q, want the bare-host form with no -p flag", got.Command)
+	}
+}
+
+// TestRunSSH_JSON_CommandMatchesPrintOutput pins the doc comment's own claim:
+// --json's "command" field is the exact string --print would emit, not a
+// close approximation a caller might reasonably expect to differ.
+func TestRunSSH_JSON_CommandMatchesPrintOutput(t *testing.T) {
+	body := `{"ssh":{"enabled":true,"advertise_addr":"[2001:db8::1]:2222","host_key_fingerprint":"SHA256:abc"}}`
+	printOut, err := runSSHPrint(t, body, "run-1")
+	if err != nil {
+		t.Fatalf("--print: unexpected error: %v", err)
+	}
+	got, err := runSSHJSON(t, body, "run-1")
+	if err != nil {
+		t.Fatalf("--json: unexpected error: %v", err)
+	}
+	if got.Command != printOut {
+		t.Errorf("json command = %q, want it to equal --print's output %q", got.Command, printOut)
+	}
+	if got.HostKeyFingerprint != "SHA256:abc" {
+		t.Errorf("host_key_fingerprint = %q, want it carried through from /healthz", got.HostKeyFingerprint)
 	}
 }
 

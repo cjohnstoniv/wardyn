@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -34,6 +35,7 @@ type sshHealthz struct {
 func sshCmd(client clientFn) *cobra.Command {
 	var doPrint bool
 	var doConfig bool
+	var doJSON bool
 	cmd := &cobra.Command{
 		Use:   "ssh <run-id>",
 		Short: "Connect to a running sandbox over the SSH gateway",
@@ -42,19 +44,34 @@ func sshCmd(client clientFn) *cobra.Command {
 
 Reads the gateway's advertised address from GET /healthz (anonymous, no
 token needed) and execs the local ssh(1) binary. --print emits the command
-instead of running it; --config emits an ssh_config Host block.
+instead of running it; --config emits an ssh_config Host block; --json emits
+the target (host, port, username, host key fingerprint) for a script or an
+external tool that dials the sandbox itself.
 `,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSSH(cmd, client(), args[0], doPrint, doConfig)
+			return runSSH(cmd, client(), args[0], doPrint, doConfig, doJSON)
 		},
 	}
 	cmd.Flags().BoolVar(&doPrint, "print", false, "print the ssh command instead of running it")
 	cmd.Flags().BoolVar(&doConfig, "config", false, "print an ssh_config Host block instead of running it")
+	cmd.Flags().BoolVar(&doJSON, "json", false, "print the SSH target as JSON instead of connecting (host, port, username, host_key_fingerprint, command)")
 	return cmd
 }
 
-func runSSH(cmd *cobra.Command, c *sdk.Client, runID string, doPrint, doConfig bool) error {
+// sshTarget is `wardyn ssh --json`'s output: everything an external tool needs
+// to dial a sandbox over the gateway. Port is always populated (22 when the
+// advertised address names none) so a consumer never has to apply ssh's
+// default itself; Command is the exact `ssh` invocation --print would show.
+type sshTarget struct {
+	Host               string `json:"host"`
+	Port               int    `json:"port"`
+	Username           string `json:"username"`
+	HostKeyFingerprint string `json:"host_key_fingerprint,omitempty"`
+	Command            string `json:"command"`
+}
+
+func runSSH(cmd *cobra.Command, c *sdk.Client, runID string, doPrint, doConfig, doJSON bool) error {
 	raw, err := c.Healthz(cmd.Context())
 	if err != nil {
 		return err
@@ -97,6 +114,23 @@ func runSSH(cmd *cobra.Command, c *sdk.Client, runID string, doPrint, doConfig b
 	if doPrint {
 		fmt.Fprintln(cmd.OutOrStdout(), "ssh "+strings.Join(args, " "))
 		return nil
+	}
+
+	if doJSON {
+		portNum := 22
+		if port != "" {
+			n, err := strconv.Atoi(port)
+			if err != nil {
+				return fmt.Errorf("ssh: advertised port %q is not a number", port)
+			}
+			portNum = n
+		}
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		return enc.Encode(sshTarget{
+			Host: host, Port: portNum, Username: runID,
+			HostKeyFingerprint: health.SSH.HostKeyFingerprint,
+			Command:            "ssh " + strings.Join(args, " "),
+		})
 	}
 
 	sub := exec.CommandContext(cmd.Context(), "ssh", args...)

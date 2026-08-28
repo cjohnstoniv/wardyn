@@ -28,6 +28,11 @@ type (
 	// CreateRun, GetRun, and ListRuns.
 	AgentRun = types.AgentRun
 
+	// SSHPublicKey is one registered SSH gateway key (never a secret — the
+	// authorized_keys line plus its fingerprint). Returned by ListSSHKeys and
+	// AddSSHKey.
+	SSHPublicKey = types.SSHPublicKey
+
 	// RunPolicy is a declarative policy attached to runs. Returned by the
 	// policy methods (ListPolicies, GetPolicy, CreatePolicy, UpdatePolicy).
 	RunPolicy = types.RunPolicy

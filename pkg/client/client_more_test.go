@@ -573,3 +573,138 @@ func TestPutSiteConfig_StripsIntegrations(t *testing.T) {
 		t.Errorf("PutSiteConfig must not mutate the caller's SiteConfig, got %d integrations", len(captured.Integrations))
 	}
 }
+
+// --------------------------------------------------------------------------
+// SSH keys: ListSSHKeys / AddSSHKey
+// --------------------------------------------------------------------------
+
+func TestListSSHKeys_Decodes(t *testing.T) {
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/me/ssh-keys" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		checkAuth(t, r)
+		writeJSON(w, http.StatusOK, []client.SSHPublicKey{
+			{Fingerprint: "SHA256:abc", Principal: "alice@example.com", Name: "laptop", PublicKey: "ssh-ed25519 AAAA... laptop", Role: "member", CreatedAt: created},
+		})
+	}))
+	defer srv.Close()
+
+	got, err := newTestClient(srv).ListSSHKeys(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 || got[0].Fingerprint != "SHA256:abc" || got[0].Name != "laptop" || got[0].Role != "member" {
+		t.Errorf("got %+v, want one decoded key", got)
+	}
+	if !got[0].CreatedAt.Equal(created) {
+		t.Errorf("created_at = %v, want %v", got[0].CreatedAt, created)
+	}
+}
+
+// TestAddSSHKey_RequestBodyExactShapeAndDecodes pins the wire contract: the
+// request carries EXACTLY {name, public_key} (no fingerprint, no principal —
+// both are server-computed, never client-supplied), and a 201 decodes into
+// the created record.
+func TestAddSSHKey_RequestBodyExactShapeAndDecodes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/me/ssh-keys" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		checkAuth(t, r)
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("body not JSON: %v", err)
+		}
+		if len(body) != 2 || body["name"] != "laptop" || body["public_key"] != "ssh-ed25519 AAAA... laptop" {
+			t.Errorf("body = %v, want exactly {name, public_key}", body)
+		}
+		writeJSON(w, http.StatusCreated, client.SSHPublicKey{
+			Fingerprint: "SHA256:abc", Principal: "alice@example.com", Name: "laptop",
+			PublicKey: "ssh-ed25519 AAAA... laptop", Role: "member",
+		})
+	}))
+	defer srv.Close()
+
+	got, err := newTestClient(srv).AddSSHKey(context.Background(), "laptop", "ssh-ed25519 AAAA... laptop")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Fingerprint != "SHA256:abc" || got.Name != "laptop" {
+		t.Errorf("got %+v, want the decoded created key", got)
+	}
+}
+
+// TestAddSSHKey_422BecomesTypedErrorWithServerMessage: the handler's specific,
+// actionable refusal text (e.g. "this looks like a PRIVATE key...") must
+// survive as a typed *client.APIError a caller can act on, not collapse into
+// an opaque status code.
+func TestAddSSHKey_422BecomesTypedErrorWithServerMessage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
+			"error": "not a valid SSH public key: ssh: no key found",
+		})
+	}))
+	defer srv.Close()
+
+	_, err := newTestClient(srv).AddSSHKey(context.Background(), "laptop", "not-a-key")
+	apiErr := assertAPIError(t, err, http.StatusUnprocessableEntity)
+	if !strings.Contains(apiErr.Error(), "not a valid SSH public key") {
+		t.Errorf("Error() = %q, want it to carry the server's message", apiErr.Error())
+	}
+}
+
+// --------------------------------------------------------------------------
+// RunFiles
+// --------------------------------------------------------------------------
+
+func TestRunFiles_Decodes(t *testing.T) {
+	runID := uuid.New()
+	added, deleted := 12, 3
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/runs/"+runID.String()+"/files" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		checkAuth(t, r)
+		writeJSON(w, http.StatusOK, client.RunFiles{
+			VCS:  "git",
+			Path: "/home/agent/work",
+			Files: []client.RunFileStat{
+				{Path: "main.go", Status: "M", Added: &added, Deleted: &deleted},
+				{Path: "logo.png", Status: "A", Binary: true},
+			},
+			Truncated: true,
+		})
+	}))
+	defer srv.Close()
+
+	got, err := newTestClient(srv).RunFiles(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.VCS != "git" || got.Path != "/home/agent/work" || !got.Truncated {
+		t.Errorf("got %+v, want vcs=git path=/home/agent/work truncated=true", got)
+	}
+	if len(got.Files) != 2 || got.Files[0].Path != "main.go" || *got.Files[0].Added != 12 || *got.Files[0].Deleted != 3 {
+		t.Errorf("files[0] = %+v, want main.go +12/-3", got.Files[0])
+	}
+	if !got.Files[1].Binary || got.Files[1].Added != nil {
+		t.Errorf("files[1] = %+v, want a binary file with no counts (never a confident +0/-0)", got.Files[1])
+	}
+}
+
+// TestRunFiles_409Surfaces: a run with no sandbox yet (or a finished one) 409s
+// rather than inventing an empty file list.
+func TestRunFiles_409Surfaces(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "run has no sandbox to read (state=PENDING)"})
+	}))
+	defer srv.Close()
+
+	_, err := newTestClient(srv).RunFiles(context.Background(), uuid.New())
+	apiErr := assertAPIError(t, err, http.StatusConflict)
+	if !strings.Contains(apiErr.Error(), "run has no sandbox to read") {
+		t.Errorf("Error() = %q, want the server's message", apiErr.Error())
+	}
+}
