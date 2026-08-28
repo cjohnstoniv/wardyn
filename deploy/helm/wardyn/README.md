@@ -361,6 +361,16 @@ past Wardyn's per-run deny+proxy-only rule — and it would flip the canary's
 phase B to "CNI does not enforce", inviting
 `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` and fully unconfined runs.
 
+- The ack above only lets wardynd boot past phase A — it says nothing about
+  the proxy pod's OWN egress to `WARDYN_CONTROL_PLANE_URL` (where every run's
+  session recording uploads to). A cluster-wide baseline deny or a mesh
+  authorization policy can still drop that hop even with the ack in place,
+  and Wardyn's own per-run NetworkPolicy allows cannot override a
+  platform-applied deny elsewhere (allows are additive-only). The
+  site-config connectivity probe's `warning` field and `timed_out` state
+  (`docs/OPERATIONS.md`, "Testing it: two probes, not a courtesy button")
+  are how you find out — check them after install.
+
 ```bash
 helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_VERSION" -n wardyn \
   --set auth.adminToken.secretRef.name=wardyn-auth \

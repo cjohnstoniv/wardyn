@@ -1461,7 +1461,8 @@ traversed), `intercepted` (`blocked`'s captive-portal flavor — something
 answered, just not with the endpoint's published payload, rendered apart
 from a plain connection failure), and `custom` (the probe hit a
 caller-named URL with no known payload, so a `reached` here is the weaker
-"request completed" claim, never "payloads matched"):
+"request completed" claim, never "payloads matched"). Both endpoints may
+also carry `warning` (see below).
 
 | `state` | Means |
 |---|---|
@@ -1470,9 +1471,35 @@ caller-named URL with no known payload, so a `reached` here is the weaker
 | `bypass` | **Read this one carefully — it's the one that looks fine but isn't.** The mirror answers, but the public host it's supposed to replace is *also* still reachable, directly, from a sandbox. The redirect is configured but not enforced: a run can silently pull from the internet instead of the mirror, and every other signal — the row is filled in, the mirror answers — looks exactly like a working redirect. `test-redirect` only. |
 | `no_runner` | No runner is configured; there's nothing to launch a probe with. Not an error, and not a guess. |
 | `not_run` | A runner IS configured, but the throwaway sandbox that would have carried the probe never got to running it — an image pull failure, or a confinement class this host can't enforce. Distinct from `blocked`: `blocked` means the probe DID run and observed a real network fact; `not_run` means nothing was learned about the network either way. Setup's gate treats it the same as `no_runner` (unlocks Next with a neutral note, never a click-past). |
+| `timed_out` | The probe sandbox started and the task launched, but the run itself never reported completion within the wait budget (90s) — provably **not** a network verdict, unlike `blocked`. `detail` names the sandbox agent's own observed status at the deadline and `WARDYN_CONTROL_PLANE_URL` to check. The usual cause is the run's recording upload hanging against an unreachable control plane — see "Recording upload path on Kubernetes" below. |
 
-A probe is bounded well under a minute and reclaims (kills) its sandbox if the
-run doesn't finish in time, so a wedged probe can never hold one open.
+A probe is bounded well under two minutes and reclaims (kills) its sandbox if
+the run doesn't finish in time, so a wedged probe can never hold one open.
+
+**`warning` (both endpoints, `omitempty`).** Set alongside a `reached`
+verdict when the probe's OWN session recording never reached the control
+plane, even though egress itself worked — the "probe passes, recordings
+silently vanish" case an operator would otherwise never think to check.
+Present only when a `RecordingStore` is configured and the runner advertises
+session recording; absent (never an empty string) whenever there is nothing
+to warn about.
+
+**Recording upload path on Kubernetes.** Every exec-mode run's task is
+wrapped by `wardyn-rec`, which PUTs the finished recording to the proxy pod
+(`http://wardyn-proxy:3128/wardyn/v1/recordings/<runID>`), which in turn
+forwards it to `WARDYN_CONTROL_PLANE_URL` — the chart points this at the
+control plane's in-cluster Service FQDN. Delivery failure is deliberately
+non-fatal to the task (a hung upload never fails an otherwise-successful
+run), but it is bounded (`cmd/wardyn-rec/main.go`'s upload client timeout) so
+it cannot hold a finished task's exit for more than that bound. A
+cluster-wide baseline default-deny NetworkPolicy or a mesh authorization
+policy can drop the proxy-pod → control-plane hop even with the ambient-deny
+ack in place (`WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY`, "Kubernetes: known gaps"
+below) — Wardyn's own per-run NetworkPolicy allows are additive only within
+the namespaced policy model and cannot override a platform-applied deny
+elsewhere. The probe's `warning` field and `timed_out` state are how you find
+out: a `reached` probe with a lost-recording `warning`, or an outright
+`timed_out` verdict, both point at this same path.
 
 ## Toolchain-fidelity environment
 
