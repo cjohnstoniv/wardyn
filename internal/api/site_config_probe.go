@@ -416,28 +416,47 @@ func (s *Server) probeFailureDetail(ctx context.Context, runID uuid.UUID, elapse
 			return res
 		}
 	}
-	for _, ev := range events {
+	// Any launch-phase action (run.create, run.dispatch, run.exec, ...)
+	// failing means the sandbox never got to running the task; run.complete
+	// itself failing means it did (only the completion accounting did not)
+	// -- see the probeRunResult doc comment. The trail is in seq order and
+	// some launch-phase failures are NON-fatal (a lost sandbox ref, a grant
+	// that could not be written) and precede a run.complete that proves the
+	// task ran, so a run.complete failure wins over any earlier one.
+	var launchFail *types.AuditEvent
+	for i := range events {
+		ev := &events[i]
 		if ev.Outcome != "failure" {
 			continue
 		}
-		// Any launch-phase action (run.create, run.dispatch, run.exec, ...)
-		// means the sandbox never got to running the task; run.complete
-		// itself failing means it did (only the completion accounting did
-		// not) -- see the probeRunResult doc comment.
-		res.neverRan = ev.Action != "run.complete"
-		var d struct {
-			Error string `json:"error"`
+		if ev.Action == "run.complete" {
+			res.incompleteReason = probeFailureReason(ev)
+			return res
 		}
-		_ = json.Unmarshal(ev.Data, &d)
-		if d.Error != "" {
-			res.incompleteReason = fmt.Sprintf("%s: %s", ev.Action, d.Error)
-		} else {
-			res.incompleteReason = ev.Action + " did not succeed"
+		if launchFail == nil {
+			launchFail = ev
 		}
+	}
+	if launchFail != nil {
+		res.neverRan = true
+		res.incompleteReason = probeFailureReason(launchFail)
 		return res
 	}
 	res.incompleteReason = "the probe sandbox failed for an unreported reason"
 	return res
+}
+
+// probeFailureReason words one failure-outcome audit event for a probe verdict:
+// "<action>: <error>" when the event carried one, else the action alone.
+func probeFailureReason(ev *types.AuditEvent) string {
+	var d struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(ev.Data, &d)
+	if d.Error != "" {
+		return fmt.Sprintf("%s: %s", ev.Action, d.Error)
+	}
+	return ev.Action + " did not succeed"
 }
 
 // reclaimProbeRun tears down a site-config probe run that never reached a
@@ -507,7 +526,7 @@ var noRunnerResponse = siteConfigProbeResponse{State: "no_runner", Detail: "no r
 // layer deeper (after a Capabilities() call, before any sandbox is
 // attempted). Both handlers check for it with errors.Is before their generic
 // 500 path.
-var errProbeNoRunner = errors.New("runner declares no usable confinement class")
+var errProbeNoRunner = errors.New("the configured runner declares no usable confinement class, nothing to launch a probe with")
 
 // proxyProbeSubject is what classifyProxyProbe words its verdicts about:
 // endpoints for the messages that make a payload claim (reached/intercepted),
@@ -765,7 +784,9 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 	runID, res, perr := s.runSiteConfigProbe(ctx, actor, script, hosts, nil, nil)
 	if perr != nil {
 		if errors.Is(perr, errProbeNoRunner) {
-			writeJSON(w, http.StatusOK, noRunnerResponse)
+			// Same STATE as an absent runner, its own detail: "no runner
+			// configured" would be false on this host.
+			writeJSON(w, http.StatusOK, siteConfigProbeResponse{State: "no_runner", Detail: perr.Error()})
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "launch proxy probe: "+perr.Error())
@@ -839,7 +860,9 @@ func (s *Server) handleTestSiteConfigRedirect(w http.ResponseWriter, r *http.Req
 		})
 	if perr != nil {
 		if errors.Is(perr, errProbeNoRunner) {
-			writeJSON(w, http.StatusOK, noRunnerResponse)
+			// Same STATE as an absent runner, its own detail: "no runner
+			// configured" would be false on this host.
+			writeJSON(w, http.StatusOK, siteConfigProbeResponse{State: "no_runner", Detail: perr.Error()})
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "launch redirect probe: "+perr.Error())

@@ -306,7 +306,13 @@ export function corpNetworkGate(
       action: tab === "egress" ? undefined : { label: "Open Egress redirection", kind: "open_egress" },
     };
   }
-  const untested = redirects.filter((red) => c.redirectProbes[red.from]?.state !== "reached");
+  // no_runner / not_run rows are not "untested": nothing on this page can
+  // make a sandbox that will not start test them, so they get the same
+  // neutral pass-through the proxy verdict gets (the standing note still shows).
+  const untested = redirects.filter((red) => {
+    const s = c.redirectProbes[red.from]?.state;
+    return s !== "reached" && s !== "not_run" && s !== "no_runner";
+  });
   if (untested.length > 0) {
     return {
       on: false,

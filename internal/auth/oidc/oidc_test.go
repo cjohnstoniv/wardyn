@@ -126,6 +126,22 @@ func (e *idpEnv) buildIDTokenRawClaim(t *testing.T, sub, email, extraKey string,
 	return tok
 }
 
+// buildIDTokenOmitting signs a claim set from which `key` is genuinely absent
+// (deleted, not null) — the shape an IdP that never emits the claim produces.
+func (e *idpEnv) buildIDTokenOmitting(t *testing.T, sub, email, key string) string {
+	t.Helper()
+	claims := map[string]interface{}{
+		"iss": e.httpSrv.URL, "sub": sub, "aud": e.clientID,
+		"email": email, "email_verified": true, "nonce": roleCallbackNonce,
+		"iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
+	}
+	delete(claims, key)
+	raw, _ := json.Marshal(claims)
+	tok := oidctest.SignIDToken(e.priv, "test-key", "RS256", string(raw))
+	e.latestIDTok = tok
+	return tok
+}
+
 // newAuth builds an Authenticator that routes the oauth2 token exchange through
 // env.tokenSrv (via the rewriteTokenRT round-tripper) for full end-to-end tests.
 func (e *idpEnv) newAuth(t *testing.T, allowedDomains []string) *writoidc.Authenticator {
@@ -1835,4 +1851,25 @@ func TestMiddlewareRevocationBranchesSurfaceReason(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCallbackEmailVerifiedOmittedIsItsOwnCode is the absent-claim case with
+// the key genuinely missing from the id_token (buildIDTokenOmitting), not
+// present-as-null: the shape an IdP that never emits email_verified produces.
+func TestCallbackEmailVerifiedOmittedIsItsOwnCode(t *testing.T) {
+	env := newIdPEnv(t)
+	auth := env.newAuth(t, []string{"corp.example"})
+
+	env.buildIDTokenOmitting(t, "sub-omitted", "alice@corp.example", "email_verified")
+	w, sess := doCallback(t, auth)
+	if w.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d: body: %s", w.Code, http.StatusFound, w.Body.String())
+	}
+	if loc := w.Result().Header.Get("Location"); !strings.Contains(loc, "auth_error=email_verified_absent") {
+		t.Errorf("Location = %q, want auth_error=email_verified_absent", loc)
+	}
+	if sess.Role != "" {
+		t.Errorf("role = %q, want no session (denied)", sess.Role)
+	}
+	assertSessionCookieCleared(t, w)
 }

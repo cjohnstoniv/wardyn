@@ -24,7 +24,7 @@
 // (empty is a fine answer, but it has to be an answered question), and every
 // configured redirect testing reached — see steps.ts's corpNetworkGate,
 // the single source of truth setup-layout.tsx's Next button, the rail badge,
-// and this step's own done-ness all read. no_runner is the one honest bypass:
+// and this step's own done-ness all read. no_runner / not_run are the honest bypasses:
 // Wardyn is structurally unable to probe on this host, so holding the gate
 // open would trap the operator with no way to ever satisfy it. The gate's
 // PROOF (proxyProbe/egressVisited/redirectProbes) is lifted to the orchestrator

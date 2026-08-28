@@ -1061,3 +1061,28 @@ func mustQuote(v string) string {
 	}
 	return string(b)
 }
+
+// TestProbeFailureDetail_RunCompleteFailureWinsOverEarlierLaunchFailure: the
+// audit trail is in seq order and some launch-phase failures are NON-fatal
+// (a lost sandbox ref, a grant that could not be written) — the run still
+// executes. A later run.complete failure proves the task ran, so it must win
+// over the earlier event: this is a `blocked`-class result, never `not_run`.
+func TestProbeFailureDetail_RunCompleteFailureWinsOverEarlierLaunchFailure(t *testing.T) {
+	runID := uuid.New()
+	ps := newProbeStore(types.SiteConfig{})
+	ps.events = []types.AuditEvent{
+		{RunID: &runID, Action: "run.create", Outcome: "failure",
+			Data: mustJSON(map[string]any{"sandbox_ref": "sb-1", "set_sandbox_ref_error": "store: connection reset"})},
+		{RunID: &runID, Action: "run.complete", Outcome: "failure",
+			Data: mustJSON(map[string]any{"error": "wait: broken pipe"})},
+	}
+	srv := New(baseTestConfig(newHarness(t), ps))
+
+	res := srv.probeFailureDetail(context.Background(), runID, 0)
+	if res.neverRan {
+		t.Fatal("neverRan = true, want false: a run.complete failure after a non-fatal launch failure means the sandbox DID run")
+	}
+	if !strings.Contains(res.incompleteReason, "run.complete: wait: broken pipe") {
+		t.Errorf("incompleteReason = %q, want the run.complete event's error, not the earlier non-fatal one", res.incompleteReason)
+	}
+}

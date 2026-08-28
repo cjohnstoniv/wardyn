@@ -460,7 +460,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   }
   // Corporate network has no skip override any more: it's mandatory, and
   // stepDone/stepBadges already read the real gate (corpNetworkGate)
-  // above — no_runner is the only honest bypass, folded into that ladder.
+  // above — no_runner / not_run are the only honest bypasses, folded into that ladder.
   // A4: an optional step the operator navigated away from without configuring it
   // reads "Skipped" instead of a perpetual, un-acted-on "Optional" — a neutral
   // "you saw this and moved on" marker. Scoped to the exact still-default badge

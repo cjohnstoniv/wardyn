@@ -1291,12 +1291,18 @@ directly (its own `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`, or an equivalent
 harness setting, pointed at the gateway, not at the public provider host).
 
 What does **not** work is redirecting Wardyn's *own* `ANTHROPIC_BASE_URL`/
-`OPENAI_BASE_URL` injection (the credential-injection lane a subscription or
-managed-harness login uses) through an `egress_redirects` row: `internal/
-egress/proxy/mitm.go` deliberately guards those two hosts so a redirect can't
-silently retarget where a run's injected credential is delivered — the same
-invariant that keeps a stolen redirect row from becoming a credential-theft
-gadget. A first-class, per-provider base-URL override (so the injection lane
+`OPENAI_BASE_URL` injection (the lane a subscription or managed-harness login
+uses) through an `egress_redirects` row. A redirect row substitutes egress
+allowlist entries and emits per-tool config files for the tools it knows
+(`internal/types/types.go` `EgressRedirect`); it never rewrites an in-flight
+request, and the injection lane's base URL is platform-authored and pinned to
+the public provider host (`internal/api/runs_dispatch_llm.go`), so a row with
+`from: api.anthropic.com` changes nothing about where that lane's traffic
+goes. Separately, the proxy refuses to treat those two hosts as a corporate
+mirror target (`internal/egress/proxy/mitm.go`, the `To`-side guard), so a
+redirect cannot be pointed *at* them to swap an artifact token onto real
+provider traffic — the same invariant that keeps a stolen redirect row from
+becoming a credential-theft gadget. A first-class, per-provider base-URL override (so the injection lane
 itself can point at an internal gateway) is planned for a future minor; see
 ROADMAP.md.
 
@@ -1398,7 +1404,7 @@ never the operator's configured floor. The question is whether egress works,
 not whether the floor is enforceable; a CC2 floor with no RuntimeClass
 registered used to fail the probe before it ever reached the network, and the
 launch failure read as a proxy problem it never was (see `not_run` below and
-the "Confinement floor" setup-checklist row).
+the setup checklist's confinement-floor warning row).
 
 It also accepts an optional `{"url": "https://…"}`:
 

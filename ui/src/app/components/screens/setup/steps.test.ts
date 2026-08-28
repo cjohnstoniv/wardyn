@@ -460,6 +460,17 @@ describe("corp_network gate — corpNetworkGate drives the footer (head/reason/a
     expect(corpNetworkGate(corpNetwork, two).action).toEqual({ label: "Test all redirects", kind: "test_redirects" });
   });
 
+  it("a redirect whose probe could not run (not_run / no_runner) is not 'untested': nothing on this page can fix it, so the step passes through like the proxy verdict does", () => {
+    const one: EgressRedirect[] = [{ from: "https://registry.npmjs.org", to: "https://mirror.corp.internal" }];
+    const corpNetwork = { ...unset, proxyProbe: reached, redirectCount: 1, redirectProbes: { "https://registry.npmjs.org": notRun } };
+    expect(corpNetworkGate(corpNetwork, one)).toEqual({ on: true });
+    const noRunner: ProxyTestResult = { state: "no_runner", detail: "no runner configured, nothing to launch a probe with" };
+    expect(corpNetworkGate({ ...corpNetwork, redirectProbes: { "https://registry.npmjs.org": noRunner } }, one)).toEqual({ on: true });
+    // A genuinely untested sibling still holds the step.
+    const two: EgressRedirect[] = [...one, { from: "https://pypi.org/simple", to: "https://mirror.corp.internal/pypi" }];
+    expect(corpNetworkGate(corpNetwork, two).head).toBe(T.GATE_HEAD_EGRESS_UNTESTED);
+  });
+
   it("failing rows are NAMED, all at once, with an Open-Egress action — a bypassed and a blocked redirect both count", () => {
     const status = baseStatus();
     const readiness = deriveReadiness(status);
