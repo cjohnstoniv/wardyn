@@ -286,6 +286,7 @@
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-sans);
+    letter-spacing: 0.01em;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
@@ -302,7 +303,10 @@
   button { font-weight: var(--font-weight-medium); }
   input { font-weight: var(--font-weight-normal); }
 
-  .font-mono, code, kbd, pre { font-family: var(--font-mono); }
+  /* letter-spacing: normal, not inherited — body's new tracking would
+     otherwise leak onto monospace text and misalign the terminal's fixed
+     character grid. */
+  .font-mono, code, kbd, pre { font-family: var(--font-mono); letter-spacing: normal; }
 }
 
 /* thin, console-style scrollbars */
