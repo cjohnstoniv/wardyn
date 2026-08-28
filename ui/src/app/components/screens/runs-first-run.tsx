@@ -94,7 +94,7 @@ export function RunsFirstRun({
     <div className="flex flex-col items-center gap-10 px-4 py-14">
       <div className="w-full max-w-[620px] space-y-6 text-center">
         <div className="flex flex-col items-center gap-4">
-          <div className="flex size-14 items-center justify-center rounded-2xl border border-border bg-surface-2 text-muted-foreground">
+          <div className="flex size-14 items-center justify-center rounded-xl border border-border bg-surface-2 text-muted-foreground">
             <Hexagon className="size-6" />
           </div>
           <div className="space-y-1.5">
