@@ -172,9 +172,10 @@ func TestRedirectProbeScript_HTTPErrorIsNotReached(t *testing.T) {
 
 // TestProbeFailureDetail_RunCompleteFailureWithoutExitCodeIsNotReached is F2:
 // a run.complete FAILURE event (the completion watcher's own Wait error or
-// panic, runs_lifecycle.go:61,73) carries no exit_code key at all. Decoding
-// that into an int previously defaulted to 0 -- a clean exit that never
-// happened -- and reported the probe as "reached" for a run whose task result
+// panic, see startCompletionWatcher in runs_lifecycle.go) carries no
+// exit_code key at all. Decoding that into an int previously defaulted to
+// 0 -- a clean exit that never happened -- and reported the probe as
+// "reached" for a run whose task result
 // was never actually observed. Decoding into *int must leave hasExitCode
 // false, and since the run DID reach run.complete (only its own completion
 // accounting failed), neverRan must stay false too.

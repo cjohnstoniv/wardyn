@@ -245,10 +245,11 @@ func upstreamFailDetail(reason string) string {
 // resolved from its own audit trail -- never inferred. A COMPLETED run always
 // reports hasExitCode=true, exitCode=0; a FAILED run reports the real exit
 // code the task exited with (hasExitCode=true) -- but a run.complete FAILURE
-// event (a Wait error or a watcher panic, runs_lifecycle.go:61,73) carries no
-// exit_code at all, so hasExitCode stays false there too, same as a launch
-// that never started. incompleteReason is set whenever there IS no exit code
-// to report. neverRan distinguishes the two incomplete shapes: true when the
+// event (a Wait error or a watcher panic, see startCompletionWatcher in
+// runs_lifecycle.go) carries no exit_code at all, so hasExitCode stays false
+// there too, same as a launch that never started. incompleteReason is set
+// whenever there IS no exit code to report. neverRan distinguishes the two
+// incomplete shapes: true when the
 // audit trail's failure event is anything OTHER than run.complete (the
 // sandbox never got to running the task at all -- e.g. CreateSandbox itself
 // failed), false when it IS run.complete (the task started running; only its
