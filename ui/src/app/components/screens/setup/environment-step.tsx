@@ -290,7 +290,7 @@ export function EnvironmentStep({
       <p className="text-sm text-muted-foreground">
         {noRunner
           ? "The tier matrix is shown for reference — tiers can't be selected until a runner is available."
-          : "Weakest to strongest — pick a column to save it as the default barrier for new runs."}
+          : "Weakest to strongest — pick a column to save it in this browser as the default barrier for new runs."}
       </p>
 
       {/* The picker: a radiogroup whose radios are the three column headers. */}
