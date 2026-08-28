@@ -773,7 +773,7 @@ export function NewRunScreen() {
         </div>
 
         {/* ── Right: the live rail ───────────────────────────────── */}
-        <aside className="h-fit rounded-xl border border-border bg-surface-1 p-4 lg:sticky lg:top-6">
+        <aside className="h-fit rounded-xl border border-border bg-card p-4 lg:sticky lg:top-6">
           <p className="mb-3 text-sm font-semibold text-foreground">What this run can do</p>
 
           <div className="space-y-3">

@@ -14,7 +14,7 @@ import { cn } from "../../ui/utils";
 
 export function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-xl border border-border bg-surface-1">
+    <section className="rounded-xl border border-border bg-card">
       <div className="border-b border-border px-4 py-2.5">
         <h3 className="text-sm font-medium text-foreground">{title}</h3>
       </div>

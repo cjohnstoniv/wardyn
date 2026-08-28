@@ -63,7 +63,7 @@ function HostCard({
   const proxied = isProxyConfigured(siteConfig);
 
   return (
-    <section className="rounded-xl border border-border bg-surface-1 p-4">
+    <section className="rounded-xl border border-border bg-card p-4">
       <h3 className="text-sm font-medium text-foreground">Host</h3>
       <p className="mt-0.5 text-body leading-snug text-muted-foreground">
         The barriers this machine can build, and what every run inherits by default.
