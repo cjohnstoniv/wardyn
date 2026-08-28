@@ -8,6 +8,46 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.6.6] — 2026-08-28
+
+A follow-up to 0.6.5 for the `k8s` runner: on a cluster where the runs namespace cannot reach the
+control plane, the setup connectivity probe could never pass, and nothing on the console said why.
+Reported by the same enterprise adopter on managed Kubernetes after verifying every 0.6.5 item on
+their deployment.
+
+### Fixed
+
+- **The connectivity probe timed out before an exec-mode run could finish.** Every exec is
+  wrapped by `wardyn-rec`, which uploads the session cast to the control plane through the
+  proxy after the task exits. That upload waited up to 60s when the control plane was
+  unreachable, the probe waited only 50s, so on such a cluster the probe killed its own run at
+  +50s every time — reported as "did not finish within 50s" under the proxy heading, with the
+  task long since done. The recorder's upload is now bounded (5s connect, 20s total; delivery
+  stays non-fatal), the probe's budget is 90s (runner backstop 120s), and a run that started but
+  never reported back is its own `timed_out` verdict, whose detail carries the sandbox agent's
+  state at the deadline and points at `WARDYN_CONTROL_PLANE_URL`. The recorder bound ships
+  inside the agent images: rebuild any image pinned through `WARDYN_AGENT_IMAGES` from 0.6.6 (or
+  pull the published `agent-base:0.6.6`) — a pre-0.6.6 image keeps the 60s upload tail, which
+  the 90s budget covers only for a fast task.
+- **A k8s exec container that never starts no longer hangs the run.** `Wait` polled a `Waiting`
+  ephemeral container forever; a hard start failure (`CreateContainerConfigError`,
+  `ErrImagePull`, …) now fails the run with `exec_started: false` in its `run.complete` event,
+  the probe reports it as `not_run` naming the reason, and `AgentStatus` surfaces the waiting
+  reason.
+- **The probe run is labelled `base`**, the image key it actually dispatches, instead of
+  `claude-code`; the "Agent image toolchains" setup row names both the claude-code harness
+  image and the probe's `base` image.
+
+### Added
+
+- **`warning` on a passing probe when its recording never landed.** Egress can work while the
+  proxy pod cannot reach the control plane — every run then completes and silently loses its
+  session recording. The probe now checks that its own cast arrived and, if not, says so with
+  the `WARDYN_CONTROL_PLANE_URL` to check.
+- **Console Ingress read timeout guidance.** The probe is one HTTP request of up to 90s;
+  ingress-nginx's default 60s `proxy-read-timeout` turns the verdict into a 504. The chart's
+  values and README show the annotation to set.
+
 ## [0.6.5] — 2026-08-28
 
 A patch for the `k8s` runner on managed, multi-tenant Kubernetes — where a platform team owns RBAC
