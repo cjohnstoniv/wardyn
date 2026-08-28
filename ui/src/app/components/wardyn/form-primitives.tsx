@@ -48,7 +48,7 @@ export function Field({
         )}
       </div>
       {children}
-      {hint && <p className="text-[0.6875rem] leading-snug text-muted-foreground">{hint}</p>}
+      {hint && <p className="text-meta leading-snug text-muted-foreground">{hint}</p>}
     </div>
   );
 }
@@ -84,7 +84,7 @@ export function OptionCard({
     >
       <div className="text-sm font-medium text-foreground">{title}</div>
       {hint && (
-        <div className="mt-1 text-[0.6875rem] leading-snug text-muted-foreground">{hint}</div>
+        <div className="mt-1 text-meta leading-snug text-muted-foreground">{hint}</div>
       )}
     </button>
   );

@@ -493,10 +493,10 @@ function SectionHeading({
   return (
     <div className="mb-3 flex items-center gap-2">
       {Icon && <Icon className={cn("size-3.5", iconTint)} />}
-      <h2 className={cn("text-[0.6875rem] font-semibold uppercase tracking-wider", titleTint)}>{title}</h2>
+      <h2 className={cn("text-meta font-semibold uppercase tracking-wider", titleTint)}>{title}</h2>
       <span
         className={cn(
-          "rounded-full px-1.5 text-[0.6875rem] font-semibold",
+          "rounded-full px-1.5 text-meta font-semibold",
           countTint === "warning"
             ? "bg-warning-subtle text-warning"
             : "bg-muted text-muted-foreground",
@@ -554,14 +554,14 @@ function TitleGroup({
         {needsEyes && <BellRing className="size-3.5 text-warning" aria-hidden="true" />}
         <h2
           className={cn(
-            "max-w-[420px] truncate text-[0.8125rem] font-semibold",
+            "max-w-[420px] truncate text-body font-semibold",
             needsEyes ? "text-warning" : "text-foreground",
           )}
           title={title}
         >
           {title}
         </h2>
-        <span className="rounded-full bg-muted px-1.5 text-[0.6875rem] font-semibold text-muted-foreground">
+        <span className="rounded-full bg-muted px-1.5 text-meta font-semibold text-muted-foreground">
           {runs.length}
         </span>
         <span className="flex flex-wrap items-center gap-1.5">
@@ -570,7 +570,7 @@ function TitleGroup({
             return (
               <span key={st} className="flex items-center gap-1">
                 <RunStateBadge state={st} />
-                {n > 1 && <span className="text-[0.6875rem] text-muted-foreground">×{n}</span>}
+                {n > 1 && <span className="text-meta text-muted-foreground">×{n}</span>}
               </span>
             );
           })}
@@ -654,7 +654,7 @@ function RunCard({
       </div>
 
       {note && (
-        <div className="flex items-center gap-1.5 text-[0.7813rem] text-warning">
+        <div className="flex items-center gap-1.5 text-xs text-warning">
           <BellRing className="size-3.5 shrink-0" />
           <span>{note}</span>
         </div>
@@ -688,10 +688,10 @@ function RunCard({
               Review
             </Button>
           )}
-          <Mono className="max-w-[8rem] truncate text-[0.6875rem]" title={run.id}>
+          <Mono className="max-w-[8rem] truncate text-meta" title={run.id}>
             {shortId(run.id)}
           </Mono>
-          <span className="whitespace-nowrap text-[0.6875rem] text-muted-foreground" title={run.created_at}>
+          <span className="whitespace-nowrap text-meta text-muted-foreground" title={run.created_at}>
             {relativeTime(run.created_at)}
           </span>
         </div>
@@ -745,7 +745,7 @@ function RunsTable({
               return (
                 <TableRow key={`h:${row.header}`} className="hover:bg-transparent">
                   <TableCell colSpan={7} className="bg-surface-2/40 py-1.5">
-                    <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
+                    <span className="text-meta font-semibold uppercase tracking-wider text-muted-foreground">
                       {row.header}
                     </span>
                   </TableCell>
@@ -784,7 +784,7 @@ function RunsTable({
                 <TableCell>
                   {/* Run ID never truncates — it stays fully readable and the table
                       scrolls horizontally instead. */}
-                  <span className="whitespace-nowrap font-mono text-[0.7188rem] text-muted-foreground">{run.id}</span>
+                  <span className="whitespace-nowrap font-mono text-meta text-muted-foreground">{run.id}</span>
                 </TableCell>
                 <TableCell>
                   <span className="whitespace-nowrap text-xs text-muted-foreground" title={run.created_at}>

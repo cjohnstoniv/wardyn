@@ -96,7 +96,7 @@ export function stageChip(stage: SessionStage, rr?: RecordResult) {
 export function DetectedHints({ commands }: { commands: string[] }) {
   if (commands.length === 0) return null;
   return (
-    <div className="flex flex-wrap items-center gap-2 text-[0.6875rem] text-muted-foreground">
+    <div className="flex flex-wrap items-center gap-2 text-meta text-muted-foreground">
       <span>Detected commands:</span>
       {commands.slice(0, 4).map((c) => (
         <CopyPill key={c} text={c} />
@@ -112,7 +112,7 @@ export function AuthModeLine({ rr }: { rr: RecordResult }) {
   const label =
     rr.llm_mode === "subscription" ? "Claude subscription" : rr.llm_mode === "api-key" ? "API key" : rr.llm_mode;
   return (
-    <p className="flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-muted-foreground" data-testid="session-auth-mode">
+    <p className="flex flex-wrap items-center gap-1.5 text-meta text-muted-foreground" data-testid="session-auth-mode">
       <ShieldCheck className="size-3 shrink-0 text-success" />
       Model access: <span className="font-medium text-foreground">{label}</span>
       {rr.model ? (
@@ -128,7 +128,7 @@ export function AuthModeLine({ rr }: { rr: RecordResult }) {
 // A muted advisory note (the masking + sensor-blind honesty lines).
 export function HonestyNote({ text }: { text: string }) {
   return (
-    <p className="flex items-start gap-1.5 text-[0.6875rem] leading-snug text-muted-foreground">
+    <p className="flex items-start gap-1.5 text-meta leading-snug text-muted-foreground">
       <Info className="mt-0.5 size-3 shrink-0" />
       <span>{text}</span>
     </p>

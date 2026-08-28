@@ -546,7 +546,7 @@ export function NewRunScreen() {
                         />
                         Let it use tools before I attach
                       </label>
-                      <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+                      <p className="text-meta leading-snug text-muted-foreground">
                         Auto-approves the agent&apos;s own tool use until you join. The sandbox and
                         egress policy still apply.
                       </p>
@@ -594,7 +594,7 @@ export function NewRunScreen() {
                         ]}
                       />
                       {state.agent === "codex-cli" && (
-                        <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+                        <p className="text-meta leading-snug text-muted-foreground">
                           Codex CLI has no external tool-approval contract — this run always keeps the
                           sandbox as its only boundary.
                         </p>
@@ -686,31 +686,31 @@ export function NewRunScreen() {
                   className="rounded-lg border border-border bg-surface-2 p-3"
                   data-testid="run-spec-additions"
                 >
-                  <p className="text-[0.75rem] text-muted-foreground">
+                  <p className="text-xs text-muted-foreground">
                     Added for this run&apos;s selections:
                   </p>
                   <div className="mt-1.5 space-y-1">
                     {added.hosts.map((h) => (
                       <div key={h} className="flex flex-wrap items-center gap-1.5">
-                        <Mono className="text-[0.75rem] text-foreground">{h}</Mono>
+                        <Mono className="text-xs text-foreground">{h}</Mono>
                         <Chip tone="neutral">allowed_domains</Chip>
                       </div>
                     ))}
                     {added.grants.map((g, i) => (
                       <div key={`${g.kind}-${i}`} className="flex flex-wrap items-center gap-1.5">
-                        <Mono className="text-[0.75rem] text-foreground">{String(g.kind)}</Mono>
+                        <Mono className="text-xs text-foreground">{String(g.kind)}</Mono>
                         <Chip tone="neutral">eligible_grants</Chip>
                       </div>
                     ))}
                     {added.mounts.map((m) => (
                       <div key={m.target} className="flex flex-wrap items-center gap-1.5">
-                        <Mono className="text-[0.75rem] text-foreground">{m.target}</Mono>
+                        <Mono className="text-xs text-foreground">{m.target}</Mono>
                         <Chip tone="neutral">workspace_mounts</Chip>
                       </div>
                     ))}
                     {added.repos.map((r) => (
                       <div key={r.repo} className="flex flex-wrap items-center gap-1.5">
-                        <Mono className="text-[0.75rem] text-foreground">{r.repo}</Mono>
+                        <Mono className="text-xs text-foreground">{r.repo}</Mono>
                         <Chip tone="neutral">workspace_repos</Chip>
                       </div>
                     ))}
@@ -722,7 +722,7 @@ export function NewRunScreen() {
                   spec's min_confinement_class floor, which is why it keeps its
                   own control here rather than living in the JSON. */}
               <div className="border-t border-border pt-3">
-                <p className="mb-2 text-[0.8125rem] font-medium text-foreground">Barrier</p>
+                <p className="mb-2 text-body font-medium text-foreground">Barrier</p>
                 <Seg
                   label="Barrier"
                   value={cc}
@@ -739,7 +739,7 @@ export function NewRunScreen() {
                 />
                 {availableClasses &&
                   ORDERED_CLASSES.filter((c) => !availableClasses.includes(c)).map((c) => (
-                    <p key={c} className="mt-1.5 text-[0.6875rem] text-muted-foreground">
+                    <p key={c} className="mt-1.5 text-meta text-muted-foreground">
                       {CC_META[c].label} isn&apos;t installed on this host.
                     </p>
                   ))}
@@ -754,12 +754,12 @@ export function NewRunScreen() {
                   ORDERED_CLASSES.filter(
                     (c) => rank(c) < rank(floor) && (!availableClasses || availableClasses.includes(c)),
                   ).map((c) => (
-                    <p key={c} className="mt-1.5 text-[0.6875rem] text-muted-foreground">
+                    <p key={c} className="mt-1.5 text-meta text-muted-foreground">
                       {CC_META[c].label} is below the policy&apos;s floor ({CC_META[floor].label}).
                     </p>
                   ))}
                 {probeSettled && !availableClasses && (
-                  <p className="mt-1.5 text-[0.6875rem] text-muted-foreground">
+                  <p className="mt-1.5 text-meta text-muted-foreground">
                     Couldn&apos;t check which barriers this host has — all three stay selectable.
                   </p>
                 )}
@@ -775,8 +775,8 @@ export function NewRunScreen() {
           <div className="space-y-3">
             {selectedPolicy && (
               <RailSection title="Policy">
-                <p className="text-[0.8125rem] font-medium text-foreground">{selectedPolicy.name}</p>
-                <p className="mt-0.5 text-[0.75rem] text-muted-foreground">
+                <p className="text-body font-medium text-foreground">{selectedPolicy.name}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
                   The stored spec governs this run — barrier floor{" "}
                   {CC_META[selectedPolicy.spec.min_confinement_class].label},{" "}
                   {selectedPolicy.spec.allow_all_egress
@@ -789,18 +789,18 @@ export function NewRunScreen() {
             <RailSection title="Barrier">
               <div className="mb-1 flex items-center gap-2">
                 <Chip tone="neutral">{CC_META[cc].label}</Chip>
-                <span className="text-[0.75rem] text-muted-foreground">· {CC_META[cc].tagline}</span>
+                <span className="text-xs text-muted-foreground">· {CC_META[cc].tagline}</span>
               </div>
-              <p className="text-[0.75rem] text-muted-foreground">{CC_META[cc].doesntProtect}</p>
+              <p className="text-xs text-muted-foreground">{CC_META[cc].doesntProtect}</p>
             </RailSection>
 
             <RailSection title="Credentials">
               {isAgent && llmReady === false && (
-                <p className="mb-1.5 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-[0.75rem] text-foreground">
+                <p className="mb-1.5 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-foreground">
                   No model provider is connected. This run launches; its first model call fails.
                 </p>
               )}
-              <p className="text-[0.75rem] leading-relaxed text-muted-foreground">
+              <p className="text-xs leading-relaxed text-muted-foreground">
                 Minted at launch, injected by the proxy. Never written into the sandbox.
               </p>
             </RailSection>
@@ -809,7 +809,7 @@ export function NewRunScreen() {
                 a real fork now, and the rail is where this screen states
                 consequences rather than leaving them to be discovered. */}
             <RailSection title="Startup">
-              <p className="text-[0.75rem] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 {isInteractive
                   ? state.task.trim()
                     ? state.interactiveStart === "agent"
@@ -823,21 +823,21 @@ export function NewRunScreen() {
                     : "The command runs unattended in the sandbox, then the run stops."}
               </p>
               {!isInteractive && isAgent && state.agent === "claude-code" && state.toolApprovals === "hold" && (
-                <p className="mt-1.5 text-[0.75rem] text-muted-foreground">
+                <p className="mt-1.5 text-xs text-muted-foreground">
                   Tool use parks as approvals — an operator decides each one.
                 </p>
               )}
             </RailSection>
 
             <RailSection title="Recording">
-              <p className="text-[0.75rem] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 Every keystroke and every outbound connection.
               </p>
             </RailSection>
           </div>
 
           {error && (
-            <p className="mt-3 flex items-start gap-1.5 text-[0.75rem] text-danger">
+            <p className="mt-3 flex items-start gap-1.5 text-xs text-danger">
               <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
               {error}
             </p>
@@ -857,7 +857,7 @@ export function NewRunScreen() {
               had NO client-side validation at all before — an empty form
               launched, and the server's rejection arrived after the fact. */}
           {problem && !launching && (
-            <p className="mt-2 text-center text-[0.75rem] text-muted-foreground">{problem}</p>
+            <p className="mt-2 text-center text-xs text-muted-foreground">{problem}</p>
           )}
 
           {/* Preflight's own result, rendered right next to the actions that
@@ -866,7 +866,7 @@ export function NewRunScreen() {
               feature) plus the risk grade and the confinement class the run
               will actually be enforced at. */}
           {preflightError && (
-            <p className="mt-3 flex items-start gap-1.5 text-[0.75rem] text-danger">
+            <p className="mt-3 flex items-start gap-1.5 text-xs text-danger">
               <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
               {preflightError}
             </p>
@@ -878,13 +878,13 @@ export function NewRunScreen() {
                 <ConfinementChip value={preflightResult.enforced_confinement_class} />
               </div>
               {preflightResult.warnings && preflightResult.warnings.length > 0 ? (
-                <ul className="list-disc space-y-0.5 pl-4 text-[0.75rem] text-warning">
+                <ul className="list-disc space-y-0.5 pl-4 text-xs text-warning">
                   {preflightResult.warnings.map((w, i) => (
                     <li key={i}>{w}</li>
                   ))}
                 </ul>
               ) : (
-                <p className="text-[0.75rem] text-muted-foreground">No adjustments.</p>
+                <p className="text-xs text-muted-foreground">No adjustments.</p>
               )}
             </div>
           )}

@@ -40,8 +40,8 @@ import { ModelProviderCard, GitHostCard } from "./connection-cards";
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-4 py-1.5">
-      <span className="text-[0.8125rem] text-muted-foreground">{label}</span>
-      <span className="text-right text-[0.8125rem] text-foreground">{value}</span>
+      <span className="text-body text-muted-foreground">{label}</span>
+      <span className="text-right text-body text-foreground">{value}</span>
     </div>
   );
 }
@@ -65,7 +65,7 @@ function HostCard({
   return (
     <section className="rounded-xl border border-border bg-surface-1 p-4">
       <h3 className="text-sm font-medium text-foreground">Host</h3>
-      <p className="mt-0.5 text-[0.8125rem] leading-snug text-muted-foreground">
+      <p className="mt-0.5 text-body leading-snug text-muted-foreground">
         The barriers this machine can build, and what every run inherits by default.
       </p>
 
@@ -115,8 +115,8 @@ function HostCard({
         className="mt-3 flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-left transition-colors hover:border-border-strong"
       >
         <span>
-          <span className="block text-[0.8125rem] font-medium text-foreground">Corporate proxy &amp; egress</span>
-          <span className="block text-[0.6875rem] text-muted-foreground">
+          <span className="block text-body font-medium text-foreground">Corporate proxy &amp; egress</span>
+          <span className="block text-meta text-muted-foreground">
             {proxied ? (
               <>
                 Upstream proxy set — <Mono>{siteConfig?.upstream_proxy_url || "configured"}</Mono>
@@ -131,7 +131,7 @@ function HostCard({
       <button
         type="button"
         onClick={onRecheck}
-        className="mt-2 text-[0.6875rem] text-muted-foreground underline-offset-2 hover:underline"
+        className="mt-2 text-meta text-muted-foreground underline-offset-2 hover:underline"
       >
         Re-check this host
       </button>

@@ -353,7 +353,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
           <TabsTrigger value="PENDING" className="gap-2">
             Pending
             {pendingItems.length > 0 && (
-              <span className="rounded-full bg-warning-subtle px-1.5 text-[0.6875rem] font-semibold text-warning">
+              <span className="rounded-full bg-warning-subtle px-1.5 text-meta font-semibold text-warning">
                 {pendingItems.length}
               </span>
             )}

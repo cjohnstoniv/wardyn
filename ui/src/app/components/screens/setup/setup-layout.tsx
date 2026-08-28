@@ -176,7 +176,7 @@ export function SetupLayout({
                     {nextGate.head && (
                       <p
                         className={cn(
-                          "flex items-start gap-1.5 text-[0.8125rem] font-medium leading-snug",
+                          "flex items-start gap-1.5 text-body font-medium leading-snug",
                           nextGate.tone === "neutral" ? "text-foreground" : "text-warning",
                         )}
                       >

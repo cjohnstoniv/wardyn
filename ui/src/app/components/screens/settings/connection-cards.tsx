@@ -97,9 +97,9 @@ function Card({
   return (
     <section className="rounded-xl border border-border bg-surface-1 p-4">
       <h3 className="text-sm font-medium text-foreground">{title}</h3>
-      <p className="mt-0.5 text-[0.8125rem] leading-snug text-muted-foreground">{lede}</p>
+      <p className="mt-0.5 text-body leading-snug text-muted-foreground">{lede}</p>
       <div className="mt-3 space-y-2">{children}</div>
-      {footer && <p className="mt-3 text-[0.6875rem] leading-snug text-muted-foreground">{footer}</p>}
+      {footer && <p className="mt-3 text-meta leading-snug text-muted-foreground">{footer}</p>}
     </section>
   );
 }
@@ -155,13 +155,13 @@ function Lane({
           <span className="flex items-center gap-1.5">
             <span className="text-sm font-medium text-foreground">{title}</span>
             {connected && (
-              <span className="inline-flex items-center gap-0.5 rounded-md border border-ok/25 bg-ok-subtle px-1.5 py-px text-[0.625rem] font-medium text-ok">
+              <span className="inline-flex items-center gap-0.5 rounded-md border border-ok/25 bg-ok-subtle px-1.5 py-px text-meta font-medium text-ok">
                 <Check className="size-2.5" />
                 Connected
               </span>
             )}
           </span>
-          <span className="mt-0.5 block text-[0.6875rem] leading-snug text-muted-foreground">
+          <span className="mt-0.5 block text-meta leading-snug text-muted-foreground">
             {connected && connectedDetail ? connectedDetail : hint}
           </span>
         </span>
@@ -248,7 +248,7 @@ function SecretLane({
             {busy && <Loader2 className="size-3.5 animate-spin" />}
             Disconnect
           </Button>
-          <span className="text-[0.6875rem] text-muted-foreground">
+          <span className="text-meta text-muted-foreground">
             Stored as <Mono>{secretName}</Mono>
           </span>
         </div>
@@ -288,7 +288,7 @@ function SecretLane({
             Cancel
           </Button>
         )}
-        <span className="text-[0.6875rem] text-muted-foreground">
+        <span className="text-meta text-muted-foreground">
           {stored ? (
             <>
               Replaces <Mono>{secretName}</Mono>
@@ -308,7 +308,7 @@ function SecretLane({
 // clones. (The secret name rides on the Replace/Disconnect row below it.)
 function HostSummary({ host }: { host: string }) {
   return (
-    <p className="text-[0.8125rem] text-muted-foreground">
+    <p className="text-body text-muted-foreground">
       Clones <Mono>{host}</Mono> over an injected credential — the value itself is write-only and never read back.
     </p>
   );
@@ -389,7 +389,7 @@ export function ModelProviderCard({
           >
             {subRow ? (
               <div className="flex items-center gap-2">
-                <span className="text-[0.8125rem] text-muted-foreground">
+                <span className="text-body text-muted-foreground">
                   {managedSub
                     ? "Captured through a login sandbox and stored by Wardyn."
                     : "A login in this host's own Claude CLI — Wardyn reads it, but can't revoke it. Sign out with the CLI itself."}
@@ -409,7 +409,7 @@ export function ModelProviderCard({
               // Not merely disabled: a greyed-out button reads as "you lack
               // permission". The deployment itself cannot use this lane, so say so
               // and point at the two that work.
-              <p className="text-[0.8125rem] text-muted-foreground">
+              <p className="text-body text-muted-foreground">
                 Unavailable in this deployment — {status.auth.shared_subscription_reason}
               </p>
             ) : (
@@ -461,7 +461,7 @@ export function ModelProviderCard({
             onSelect={() => setLane("bedrock")}
           >
             <div className="space-y-4">
-              <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+              <p className="text-meta leading-snug text-muted-foreground">
                 {bedrockConfigured ? (
                   <>
                     Region <Mono>{status.bedrock?.region}</Mono> · model <Mono>{status.bedrock?.model}</Mono>.{" "}
@@ -483,7 +483,7 @@ export function ModelProviderCard({
                 <Button size="sm" variant="secondary" disabled={!operator} onClick={() => setLoginOpen("aws")}>
                   Sign in with SSO
                 </Button>
-                <span className="text-[0.6875rem] text-muted-foreground">
+                <span className="text-meta text-muted-foreground">
                   Device-code flow in a throwaway sandbox — exchanged per run for short-lived role credentials.
                 </span>
               </div>

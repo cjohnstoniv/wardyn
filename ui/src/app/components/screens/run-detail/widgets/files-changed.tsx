@@ -71,7 +71,7 @@ export function FilesChangedWidget({ runId, live }: { runId: string; live: boole
       Icon={FileDiff}
       right={
         totals && (totals.added > 0 || totals.deleted > 0) ? (
-          <span className="font-mono text-[0.625rem] text-muted-foreground">
+          <span className="font-mono text-meta text-muted-foreground">
             {totals.added > 0 && <span className="text-success">+{totals.added}</span>}
             {totals.added > 0 && totals.deleted > 0 && " "}
             {totals.deleted > 0 && <span className="text-danger">−{totals.deleted}</span>}
@@ -126,7 +126,7 @@ function renderBody(state: FilesState, live: boolean): React.ReactNode {
             ))}
           </div>
           {state.data.truncated && (
-            <div className="flex items-center gap-1.5 border-t border-border px-2.5 py-1.5 text-[0.625rem] text-warning">
+            <div className="flex items-center gap-1.5 border-t border-border px-2.5 py-1.5 text-meta text-warning">
               <AlertTriangle className="size-3 shrink-0" aria-hidden />
               {RUN_COCKPIT.filesTruncated}
             </div>
@@ -137,19 +137,19 @@ function renderBody(state: FilesState, live: boolean): React.ReactNode {
 }
 
 function Quiet({ text }: { text: string }) {
-  return <p className="px-2.5 py-3 text-[0.75rem] text-muted-foreground">{text}</p>;
+  return <p className="px-2.5 py-3 text-xs text-muted-foreground">{text}</p>;
 }
 
 function FileRow({ f }: { f: RunFileStat }) {
   return (
     <div className="flex items-center gap-2 px-2.5 py-1.5">
-      <span className="shrink-0 font-mono text-[0.625rem] text-muted-foreground" title={f.status}>
+      <span className="shrink-0 font-mono text-meta text-muted-foreground" title={f.status}>
         {f.status ?? "—"}
       </span>
-      <span className="min-w-0 flex-1 truncate font-mono text-[0.75rem] text-foreground" title={f.path}>
+      <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground" title={f.path}>
         {f.path}
       </span>
-      <span className="shrink-0 font-mono text-[0.625rem]">
+      <span className="shrink-0 font-mono text-meta">
         {/* Never `?? 0`: a binary/untracked file's counts are ABSENT, not 0.
             Showing "+0 −0" on a binary asset the agent just rewrote would
             claim nothing changed, which is false — so binary renders as its

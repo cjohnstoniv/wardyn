@@ -90,7 +90,7 @@ function subjectText(g: CapabilityGrant): string {
 // the screen rather than in a doc.
 function Fact({ icon: Icon, children }: { icon: React.ElementType; children: React.ReactNode }) {
   return (
-    <p className="flex max-w-[82ch] items-start gap-2 text-[0.8125rem] text-muted-foreground">
+    <p className="flex max-w-[82ch] items-start gap-2 text-body text-muted-foreground">
       <Icon className="mt-0.5 size-3.5 shrink-0" />
       <span>{children}</span>
     </p>
@@ -229,7 +229,7 @@ export function PermissionsScreen() {
       <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
         <div className="px-6 pt-5">
           <h2 className="text-sm font-medium text-foreground">{PERM.ENFORCEMENT_TITLE}</h2>
-          <p className="mt-0.5 text-[0.8125rem] text-muted-foreground">{PERM.ENFORCEMENT_LEAD}</p>
+          <p className="mt-0.5 text-body text-muted-foreground">{PERM.ENFORCEMENT_LEAD}</p>
         </div>
         <div className="mt-4">
           {CAPABILITY_KINDS.map((kind) => (
@@ -248,7 +248,7 @@ export function PermissionsScreen() {
       <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
         <div className="px-6 pt-5">
           <h2 className="text-sm font-medium text-foreground">{PERM.GRANTS_TITLE}</h2>
-          <p className="mt-1 text-[0.8125rem] text-muted-foreground">{PERM.GRANT_IS_NOT_SUCCESS}</p>
+          <p className="mt-1 text-body text-muted-foreground">{PERM.GRANT_IS_NOT_SUCCESS}</p>
           <Note>{PERM.PRECEDENCE}</Note>
         </div>
         <div className="mt-4">
@@ -316,7 +316,7 @@ export function PermissionsScreen() {
 
       <section className="mt-6 rounded-xl border border-border bg-card px-6 py-5">
         <h2 className="text-sm font-medium text-foreground">{PERM.SNAPSHOT_TITLE}</h2>
-        <p className="mt-1 max-w-[80ch] text-[0.8125rem] text-muted-foreground">{PERM.SNAPSHOT_BODY}</p>
+        <p className="mt-1 max-w-[80ch] text-body text-muted-foreground">{PERM.SNAPSHOT_BODY}</p>
       </section>
 
       <ConfirmEnforcement
@@ -378,13 +378,13 @@ function KindRow({
     <div className="grid grid-cols-[1fr_auto] items-start gap-4 border-t border-border px-6 py-4 first:border-t-0">
       <div>
         <div className="flex flex-wrap items-center gap-2">
-          <h3 className="text-[0.8125rem] font-medium text-foreground">{copy.label}</h3>
+          <h3 className="text-body font-medium text-foreground">{copy.label}</h3>
           <Chip tone={enforced ? "warning" : "neutral"} dot>
             {enforced ? PERM.CHIP_ON : PERM.CHIP_OFF}
           </Chip>
         </div>
         <p className="mt-0.5 text-xs text-muted-foreground">{copy.blurb}</p>
-        <p className={cn("mt-2 max-w-[76ch] text-[0.8125rem]", enforced ? "text-foreground" : "text-muted-foreground")}>
+        <p className={cn("mt-2 max-w-[76ch] text-body", enforced ? "text-foreground" : "text-muted-foreground")}>
           {enforced ? copy.enforced : copy.unenforced}
         </p>
         {/* Grants exist but the switch is off: they are recorded, not live. */}

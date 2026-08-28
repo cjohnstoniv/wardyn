@@ -163,31 +163,31 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
   return (
     <SectionCard title="Attach from your terminal" Icon={KeyRound}>
       {externalTool && (
-        <p className="mb-2 text-[0.7188rem] leading-relaxed text-muted-foreground">
+        <p className="mb-2 text-meta leading-relaxed text-muted-foreground">
           Managed by an external tool — killing this run tears down that tool's workspace.
         </p>
       )}
-      <p className="mb-2 text-[0.7813rem] leading-relaxed text-muted-foreground">
+      <p className="mb-2 text-xs leading-relaxed text-muted-foreground">
         The terminal on this page is one attachment to a persistent session. These land in the{" "}
         <span className="text-foreground">same session</span> — what you type in one shows up in the other, and
         detaching never ends the run.
       </p>
 
-      <p className="text-[0.75rem] font-medium text-foreground">Wardyn CLI</p>
-      <p className="mt-0.5 mb-1.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+      <p className="text-xs font-medium text-foreground">Wardyn CLI</p>
+      <p className="mt-0.5 mb-1.5 text-meta leading-relaxed text-muted-foreground">
         Works on every deployment — no gateway to enable, no key to register. Needs your admin token in{" "}
         <Mono className="text-foreground">WARDYN_ADMIN_TOKEN</Mono>. Ctrl-C or closing the session detaches.
       </p>
       <CodeBlock text={cliCommand} />
-      <p className="mt-1.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+      <p className="mt-1.5 text-meta leading-relaxed text-muted-foreground">
         Started with <Mono className="text-foreground">make setup</Mono>? The binary is at{" "}
         <Mono className="text-foreground">./bin/wardyn</Mono> in the repo.
       </p>
 
       <div className="mt-4 border-t border-border pt-3">
-        <p className="text-[0.75rem] font-medium text-foreground">SSH</p>
+        <p className="text-xs font-medium text-foreground">SSH</p>
         {!sshOn && (
-          <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+          <p className="mt-0.5 text-meta leading-relaxed text-muted-foreground">
             Off on this deployment. It gives you <Mono className="text-foreground">ssh</Mono>, scp and VS Code
             Remote-SSH straight into the sandbox, keyed to the SSH keys in Settings. An operator turns it on by
             setting <Mono className="text-foreground">WARDYN_SSH_LISTEN</Mono> and{" "}
@@ -198,8 +198,8 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
 
       {sshOn && !hasKeys && (
         <div className="mb-3 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5">
-          <p className="text-[0.75rem] font-medium text-foreground">Add your SSH key first</p>
-          <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+          <p className="text-xs font-medium text-foreground">Add your SSH key first</p>
+          <p className="mt-0.5 text-meta leading-relaxed text-muted-foreground">
             The command below is real, but no key is registered to connect with yet.
           </p>
           <Button asChild size="sm" className="mt-2">
@@ -213,29 +213,29 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
       {sshOn && (
       <div className={cn("mt-2", !hasKeys && "opacity-50")}>
         <CodeBlock text={command} />
-        <p className="mt-1.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+        <p className="mt-1.5 text-meta leading-relaxed text-muted-foreground">
           Or skip retyping it: <Mono className="text-foreground">wardyn ssh {run.id}</Mono>
         </p>
 
         <details className="mt-2.5">
-          <summary className="cursor-pointer text-[0.75rem] text-muted-foreground hover:text-foreground">
+          <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
             ssh config
           </summary>
           <CodeBlock text={sshConfig} className="mt-1.5" />
         </details>
 
         {ssh.host_key_fingerprint && (
-          <div className="mt-2.5 text-[0.7188rem]">
+          <div className="mt-2.5 text-meta">
             <Mono className="text-foreground">ED25519 {ssh.host_key_fingerprint}</Mono>
             <p className="mt-0.5 text-muted-foreground">Verify this against your client's prompt on first connect.</p>
           </div>
         )}
 
         <details className="mt-2.5">
-          <summary className="cursor-pointer text-[0.75rem] text-muted-foreground hover:text-foreground">
+          <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
             VS Code Remote-SSH
           </summary>
-          <div className="mt-1.5 space-y-1.5 text-[0.7188rem] text-muted-foreground">
+          <div className="mt-1.5 space-y-1.5 text-meta text-muted-foreground">
             <p>
               Remote-SSH → Connect to Host → <Mono className="text-foreground">wardyn-{shortId}</Mono>. One setting is
               required first, in VS Code's <Mono className="text-foreground">settings.json</Mono>:
@@ -251,7 +251,7 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
       )}
 
       {sshOn && (
-        <Link to="/ssh-keys" className="mt-3 inline-block text-[0.7813rem] font-medium text-primary hover:underline">
+        <Link to="/ssh-keys" className="mt-3 inline-block text-xs font-medium text-primary hover:underline">
           Manage SSH keys
         </Link>
       )}
@@ -259,28 +259,28 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
       {/* UI apps lane LAST: the mock's S3 (docs/design/ui-sandboxes-mock/index.html)
           orders the card CLI -> SSH (heading + command) -> UI apps. */}
       <div className="mt-4 border-t border-border pt-3">
-        <p className="text-[0.75rem] font-medium text-foreground">{UI_APPS_LANE.title}</p>
+        <p className="text-xs font-medium text-foreground">{UI_APPS_LANE.title}</p>
         {!uiSandboxOn && (
-          <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+          <p className="mt-0.5 text-meta leading-relaxed text-muted-foreground">
             {monoTokens(UI_APPS_LANE.off, "WARDYN_UI_SANDBOX_LISTEN")}
           </p>
         )}
         {uiSandboxOn && uiApps.length === 0 && (
-          <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+          <p className="mt-0.5 text-meta leading-relaxed text-muted-foreground">
             {monoTokens(UI_APPS_LANE.noApps, "ui_apps")}
           </p>
         )}
         {uiSandboxOn && uiApps.length > 0 && (
           <>
-            <p className="mt-0.5 mb-1.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+            <p className="mt-0.5 mb-1.5 text-meta leading-relaxed text-muted-foreground">
               {UI_APPS_LANE.intro}
             </p>
             {uiApps.map((app) => (
               <div key={app.name} className="mt-2">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <p className="text-[0.75rem] font-medium text-foreground">{app.name}</p>
-                    <Mono className="text-[0.7188rem] text-muted-foreground">
+                    <p className="text-xs font-medium text-foreground">{app.name}</p>
+                    <Mono className="text-meta text-muted-foreground">
                       {UI_APPS_LANE.appSub(app.port, app.path || "/")}
                     </Mono>
                   </div>
@@ -290,11 +290,11 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
                 </div>
                 {appError?.app === app.name && (
                   <div className="mt-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5">
-                    <p className="text-[0.75rem] font-medium text-foreground">
+                    <p className="text-xs font-medium text-foreground">
                       {UI_APPS_LANE.errorTitle(appError.app)}
                     </p>
                     {appError.message.startsWith(UI_APPS_LAUNCHER_MISSING_PREFIX) && (
-                      <p className="mt-0.5 text-[0.7188rem] leading-relaxed text-muted-foreground">
+                      <p className="mt-0.5 text-meta leading-relaxed text-muted-foreground">
                         {monoTokens(
                           UI_APPS_LANE.errorLauncher(app.name),
                           `/usr/local/bin/wardyn-ui-${app.name}`,
@@ -302,15 +302,15 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
                         )}
                       </p>
                     )}
-                    <p className="mt-1.5 font-mono text-[0.7188rem] leading-relaxed text-muted-foreground">
+                    <p className="mt-1.5 font-mono text-meta leading-relaxed text-muted-foreground">
                       {appError.message}
                     </p>
                   </div>
                 )}
               </div>
             ))}
-            <p className="mt-3 text-[0.7188rem] leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>
-            <p className="mt-2 text-[0.7188rem] leading-relaxed text-muted-foreground">{UI_APPS_LANE.noRecording}</p>
+            <p className="mt-3 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>
+            <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.noRecording}</p>
           </>
         )}
       </div>

@@ -102,7 +102,7 @@ export function Chip({
 // take focus. See wardyn/operator-context.tsx for the role this reads.
 export function OperatorOnlyHint() {
   return (
-    <span className="ml-auto text-[0.6875rem] font-normal normal-case text-muted-foreground">
+    <span className="ml-auto text-meta font-normal normal-case text-muted-foreground">
       {OPERATOR_ONLY_REASON}
     </span>
   );
@@ -344,7 +344,7 @@ export function AgentBadge({ agent, withLabel = true }: { agent: Agent; withLabe
   const m = agentMetaFor(agent);
   return (
     <span className="inline-flex items-center gap-2 text-sm">
-      <span className={cn("inline-flex size-6 shrink-0 items-center justify-center rounded-full text-[0.625rem] font-semibold", m.badge)}>
+      <span className={cn("inline-flex size-6 shrink-0 items-center justify-center rounded-full text-meta font-semibold", m.badge)}>
         {m.initials}
       </span>
       {withLabel && <span className="text-foreground">{m.label}</span>}
@@ -373,7 +373,7 @@ export function SectionCard({
     <section className="rounded-xl border border-border bg-card p-4">
       <div className="mb-3 flex items-center gap-2">
         {Icon && <Icon className="size-4 text-muted-foreground" />}
-        <h2 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">{title}</h2>
+        <h2 className="text-meta font-semibold uppercase tracking-wider text-muted-foreground">{title}</h2>
         {right && <div className="ml-auto">{right}</div>}
       </div>
       {children}

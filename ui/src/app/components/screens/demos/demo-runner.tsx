@@ -504,7 +504,7 @@ export function StepList({ steps, runId }: { steps: DemoStep[]; runId?: string }
     <ol className="mt-3 space-y-2" data-testid="demo-steps">
       {steps.map((s, i) => (
         <li key={i} className="flex gap-2 text-sm text-muted-foreground">
-          <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[0.6875rem] font-medium text-foreground">
+          <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-meta font-medium text-foreground">
             {i + 1}
           </span>
           <div className="min-w-0 space-y-1">

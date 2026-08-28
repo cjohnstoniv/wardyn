@@ -138,7 +138,7 @@ export function ReasonDialog({
                   )}
                 >
                   <span className="font-medium text-foreground">{label}</span>
-                  <span className="text-[0.6875rem] text-muted-foreground">{hint}</span>
+                  <span className="text-meta text-muted-foreground">{hint}</span>
                 </button>
               );
             })}

@@ -24,24 +24,24 @@ export function CredentialsWidget({ grants, audit }: { grants: CredentialGrant[]
       title="Credentials"
       Icon={KeyRound}
       right={
-        <span className="font-mono text-[0.625rem] text-muted-foreground">
+        <span className="font-mono text-meta text-muted-foreground">
           {grants.length} eligible · {minted.length} minted
         </span>
       }
     >
-      <p className="mb-2 text-[0.6875rem] leading-relaxed text-muted-foreground">
+      <p className="mb-2 text-meta leading-relaxed text-muted-foreground">
         {RUN_COCKPIT.credentialsEligibility}
       </p>
 
       {grants.length === 0 ? (
         // Reused verbatim from run-detail.tsx's GrantsCard — same fact, same words.
-        <p className="text-[0.75rem] text-muted-foreground">No credential grants are configured for this run.</p>
+        <p className="text-xs text-muted-foreground">No credential grants are configured for this run.</p>
       ) : (
         <div className="flex flex-col gap-1.5">
           {grants.map((g) => (
             <div key={g.id} className="flex items-center gap-2">
               <Chip tone="neutral">eligible</Chip>
-              <span className="min-w-0 flex-1 truncate font-mono text-[0.75rem] text-foreground" title={g.scope}>
+              <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground" title={g.scope}>
                 {g.scope}
               </span>
             </div>
@@ -55,12 +55,12 @@ export function CredentialsWidget({ grants, audit }: { grants: CredentialGrant[]
             <div key={e.id} className="flex items-center gap-2">
               <Chip tone="info">brokered</Chip>
               <span
-                className="min-w-0 flex-1 truncate font-mono text-[0.75rem] text-muted-foreground"
+                className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground"
                 title={e.target}
               >
                 {e.target || "credential"}
               </span>
-              <span className="shrink-0 font-mono text-[0.625rem] text-muted-foreground">
+              <span className="shrink-0 font-mono text-meta text-muted-foreground">
                 {relativeTime(e.time)}
               </span>
             </div>

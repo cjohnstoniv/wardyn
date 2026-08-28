@@ -338,7 +338,7 @@ function NewSessionForm({
           <Radio className="size-3.5" /> Start recording
         </Button>
       </div>
-      <p className="text-[0.6875rem] text-muted-foreground">
+      <p className="text-meta text-muted-foreground">
         Opens an attached terminal with the repo + your model provider ready. Do the real thing, then
         click Done recording to capture what it used. You can replay it confined once it settles.
       </p>
@@ -437,7 +437,7 @@ function SessionCard({
           <Button size="sm" variant="outline" onClick={() => onDoneRecording(openRR.run_id)}>
             <Square className="size-3.5" /> Done recording
           </Button>
-          <p className="text-[0.6875rem] leading-snug text-muted-foreground">{C.SESSION_SURVIVES}</p>
+          <p className="text-meta leading-snug text-muted-foreground">{C.SESSION_SURVIVES}</p>
         </div>
       )}
 
@@ -475,11 +475,11 @@ function SessionCard({
             idleHint="Watching for off-policy egress — anything you run that isn't approved pauses here for you to approve or reject, live."
             hasWorkspace
           />
-          <p className="text-[0.6875rem] leading-snug text-muted-foreground">{VERIFY_APPROVE_LEARNS_HINT}</p>
+          <p className="text-meta leading-snug text-muted-foreground">{VERIFY_APPROVE_LEARNS_HINT}</p>
           <Button size="sm" variant="outline" onClick={() => onDoneRecording(confinedRR.run_id)}>
             <Square className="size-3.5" /> Done
           </Button>
-          <p className="text-[0.6875rem] leading-snug text-muted-foreground">{C.SESSION_SURVIVES}</p>
+          <p className="text-meta leading-snug text-muted-foreground">{C.SESSION_SURVIVES}</p>
         </div>
       )}
 
@@ -576,12 +576,12 @@ function OrphanedSessionCard({
             idleHint="Watching for off-policy egress — anything you run that isn't approved pauses here for you to approve or reject, live."
             hasWorkspace
           />
-          <p className="text-[0.6875rem] leading-snug text-muted-foreground">{VERIFY_APPROVE_LEARNS_HINT}</p>
+          <p className="text-meta leading-snug text-muted-foreground">{VERIFY_APPROVE_LEARNS_HINT}</p>
           <Button size="sm" variant="outline" onClick={() => onDoneRecording(rr.run_id)} disabled={busy}>
             {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Square className="size-3.5" />}
             Done
           </Button>
-          <p className="text-[0.6875rem] leading-snug text-muted-foreground">{C.SESSION_SURVIVES}</p>
+          <p className="text-meta leading-snug text-muted-foreground">{C.SESSION_SURVIVES}</p>
         </div>
       ) : (
         <div className="mt-3">
@@ -673,7 +673,7 @@ function RecordReviewCard({
         )}
         {newHosts.length === 0 ? (
           !rr.egress_promoted && (
-            <p className="text-[0.6875rem] text-muted-foreground">
+            <p className="text-meta text-muted-foreground">
               {onlyPlumbingObserved
                 ? "Nothing needed approval — observed hosts were platform plumbing."
                 : "No new hosts to approve — everything this task reached is already allowed."}
@@ -697,7 +697,7 @@ function RecordReviewCard({
         {alreadyApproved.length > 0 && (
           <ul className="space-y-1 pt-1" aria-label="Already approved">
             {alreadyApproved.map((h) => (
-              <li key={h} className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
+              <li key={h} className="flex items-center gap-1.5 text-meta text-muted-foreground">
                 <Check className="size-3 shrink-0" />
                 <span className="font-mono line-through">{h}</span>
               </li>
@@ -816,7 +816,7 @@ function ConfinedReviewCard({
       <section className="space-y-2">
         <SectionLabel>Ran within your approved access</SectionLabel>
         {allowed.length === 0 ? (
-          <p className="text-[0.6875rem] text-muted-foreground">
+          <p className="text-meta text-muted-foreground">
             No egress captured yet — re-run your build/test/agent steps in the session above.
           </p>
         ) : (
@@ -905,7 +905,7 @@ function CaughtHosts({
             <label htmlFor={`caught-${host}`} className="flex-1 cursor-pointer">
               <Mono className="text-foreground">{host}</Mono>
             </label>
-            <span className={denied ? "text-[0.6875rem] text-danger" : "text-[0.6875rem] text-warning"}>
+            <span className={denied ? "text-meta text-danger" : "text-meta text-warning"}>
               {denied ? "blocked" : "pending approval"}
             </span>
             <Button size="sm" variant="outline" className="h-7" onClick={() => onApproveHosts([host])}>
@@ -920,7 +920,7 @@ function CaughtHosts({
           {picked.length === 1 ? "" : "s"} and replay again
         </Button>
       )}
-      <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+      <p className="text-meta leading-snug text-muted-foreground">
         These were denied or held for approval because they aren&apos;t in your approved set. Approve one
         only if this workspace legitimately needs it — otherwise leave it blocked. Anything denied live
         starts unchecked.

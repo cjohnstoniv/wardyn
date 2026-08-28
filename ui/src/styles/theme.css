@@ -201,6 +201,14 @@
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
 
+  /* type scale — four body rungs: 11 / 12 / 13 / 14px. 12px and 14px already
+     exist as Tailwind's built-in text-xs/text-sm; these two fill the gaps so
+     no call site needs an ad-hoc text-[...] value. 11px is the metadata rung
+     (trailing counts, timestamps, badges) — see form-primitives.tsx for the
+     12px helper-text rung immediately above it. */
+  --text-meta: 0.6875rem;
+  --text-body: 0.8125rem;
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);

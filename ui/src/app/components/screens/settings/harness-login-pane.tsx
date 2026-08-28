@@ -225,7 +225,7 @@ function ExpectList({ items }: { items: React.ReactNode[] }) {
     <ol className="space-y-1.5">
       {items.map((item, i) => (
         <li key={i} className="flex gap-2 text-xs leading-relaxed text-muted-foreground">
-          <span className="mt-px inline-flex size-4 shrink-0 items-center justify-center rounded-full border border-border font-mono text-[0.625rem] text-foreground">
+          <span className="mt-px inline-flex size-4 shrink-0 items-center justify-center rounded-full border border-border font-mono text-meta text-foreground">
             {i + 1}
           </span>
           <span className="min-w-0">{item}</span>

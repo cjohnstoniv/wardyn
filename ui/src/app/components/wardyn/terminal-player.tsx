@@ -84,7 +84,7 @@ export function TerminalPlayer({ recording }: { recording: Recording }) {
         {recording.header.title ? (
           <span className="ml-3 font-mono text-xs text-white/60">{recording.header.title}</span>
         ) : null}
-        <span className="ml-auto font-mono text-[0.6875rem] text-white/60">
+        <span className="ml-auto font-mono text-meta text-white/60">
           {recording.events.length} events
         </span>
         <div role="radiogroup" aria-label="Playback speed" className="ml-2 flex items-center gap-0.5">
@@ -98,8 +98,8 @@ export function TerminalPlayer({ recording }: { recording: Recording }) {
               onClick={() => setSpeed(x)}
               className={
                 speed === x
-                  ? "rounded px-1.5 py-0.5 font-mono text-[0.6875rem] bg-white/15 text-white"
-                  : "rounded px-1.5 py-0.5 font-mono text-[0.6875rem] text-white/50 hover:text-white"
+                  ? "rounded px-1.5 py-0.5 font-mono text-meta bg-white/15 text-white"
+                  : "rounded px-1.5 py-0.5 font-mono text-meta text-white/50 hover:text-white"
               }
             >
               {x}×

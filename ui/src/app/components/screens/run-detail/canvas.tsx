@@ -293,7 +293,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
             {RUN_COCKPIT.doneEditing}
           </button>
           {!persistable && (
-            <span className="max-w-[16rem] px-1.5 text-[0.6875rem] leading-tight text-muted-foreground">
+            <span className="max-w-[16rem] px-1.5 text-meta leading-tight text-muted-foreground">
               {RUN_COCKPIT.layoutNotPersisted}
             </span>
           )}
@@ -347,10 +347,10 @@ function TileHandle({
     >
       <GripVertical className="size-3 shrink-0 text-primary" aria-hidden />
       <Icon className="size-3 shrink-0 text-primary" aria-hidden />
-      <span className="truncate text-[0.6875rem] font-medium text-primary">{def.label}</span>
+      <span className="truncate text-meta font-medium text-primary">{def.label}</span>
       <span className="ml-auto flex shrink-0 items-center gap-1">
         {size && (
-          <span className="rounded bg-primary px-1 font-mono text-[0.625rem] font-semibold text-primary-foreground">
+          <span className="rounded bg-primary px-1 font-mono text-meta font-semibold text-primary-foreground">
             {size}
           </span>
         )}

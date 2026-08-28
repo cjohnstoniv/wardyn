@@ -55,13 +55,13 @@ export function EgressWidget({
       bodyClassName="p-0"
     >
       {visible.length === 0 ? (
-        <p className="px-2.5 py-3 text-[0.75rem] text-muted-foreground">
+        <p className="px-2.5 py-3 text-xs text-muted-foreground">
           No outbound connections recorded yet.
         </p>
       ) : (
         <div className="flex flex-col divide-y divide-border">
           {visible.map((e) => (
-            <div key={e.id} className="flex items-center gap-2 px-2.5 py-1.5 text-[0.75rem]">
+            <div key={e.id} className="flex items-center gap-2 px-2.5 py-1.5 text-xs">
               <EgressDecisionChip decision={e.decision} />
               {/* Held is drawn in full foreground (vs. muted for allow/deny) —
                   matches the board: a decision still awaiting a human reads
@@ -75,7 +75,7 @@ export function EgressWidget({
               >
                 {e.domain}
               </span>
-              <span className="shrink-0 font-mono text-[0.625rem] text-muted-foreground">
+              <span className="shrink-0 font-mono text-meta text-muted-foreground">
                 {relativeTime(e.time)}
               </span>
             </div>
@@ -91,7 +91,7 @@ export function EgressWidget({
       {onGoAudit && egress.length > visible.length && (
         <button
           onClick={onGoAudit}
-          className="w-full border-t border-border px-2.5 py-1.5 text-left text-[0.6875rem] font-medium text-primary hover:underline"
+          className="w-full border-t border-border px-2.5 py-1.5 text-left text-meta font-medium text-primary hover:underline"
         >
           Full history in Audit →
         </button>

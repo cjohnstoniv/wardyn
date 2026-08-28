@@ -221,7 +221,7 @@ export function WorkspacesScreen() {
                     </TableCell>
                     <TableCell>
                       <Mono
-                        className="block max-w-[260px] truncate text-[0.6875rem] text-muted-foreground"
+                        className="block max-w-[260px] truncate text-meta text-muted-foreground"
                         title={sourceSubLine(w)}
                       >
                         {sourceSubLine(w)}

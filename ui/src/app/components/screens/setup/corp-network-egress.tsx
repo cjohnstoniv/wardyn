@@ -86,7 +86,7 @@ export function useElapsedTimer(running: boolean): number {
 // ------------------------------------------------------------
 function TokenChip({ tokenRef }: { tokenRef: string }) {
   return (
-    <Chip tone="neutral" mono className="shrink-0 text-[0.625rem]" title={`token: ${tokenRef} — injected proxy-side at fetch time; the sandbox never holds it`}>
+    <Chip tone="neutral" mono className="shrink-0 text-meta" title={`token: ${tokenRef} — injected proxy-side at fetch time; the sandbox never holds it`}>
       token
     </Chip>
   );
@@ -99,7 +99,7 @@ function TokenChip({ tokenRef }: { tokenRef: string }) {
 // hard-rejects.
 function IntegrationTokenChip({ integrationRef }: { integrationRef: string }) {
   return (
-    <Chip tone="info" mono className="shrink-0 text-[0.625rem]" title={`token via integration: ${integrationRef} — injected proxy-side at fetch time; the sandbox never holds it`}>
+    <Chip tone="info" mono className="shrink-0 text-meta" title={`token via integration: ${integrationRef} — injected proxy-side at fetch time; the sandbox never holds it`}>
       integration
     </Chip>
   );
@@ -107,7 +107,7 @@ function IntegrationTokenChip({ integrationRef }: { integrationRef: string }) {
 
 function NetworkOnlyChip() {
   return (
-    <Chip tone="neutral" className="shrink-0 text-[0.625rem] opacity-70" title={T.NET_ONLY_TIP}>
+    <Chip tone="neutral" className="shrink-0 text-meta opacity-70" title={T.NET_ONLY_TIP}>
       network only
     </Chip>
   );
@@ -144,20 +144,20 @@ function RedirectRow({
       }}
     >
       <Mono className="shrink-0 text-xs text-foreground">{compactEndpoint(r.from)}</Mono>
-      <span className="shrink-0 text-[0.6875rem] text-muted-foreground">&rarr;</span>
+      <span className="shrink-0 text-meta text-muted-foreground">&rarr;</span>
       <Mono className="min-w-0 flex-1 truncate text-xs text-foreground">{compactEndpoint(r.to)}</Mono>
       {!r.ecosystem && <NetworkOnlyChip />}
       {r.token_secret_ref && <TokenChip tokenRef={r.token_secret_ref} />}
       {!r.token_secret_ref && r.token_integration_ref && <IntegrationTokenChip integrationRef={r.token_integration_ref} />}
-      {testState.kind === "idle" && <span className="shrink-0 text-[0.6875rem] text-muted-foreground">Not tested</span>}
+      {testState.kind === "idle" && <span className="shrink-0 text-meta text-muted-foreground">Not tested</span>}
       {testState.kind === "running" && (
-        <span className="inline-flex shrink-0 items-center gap-1.5 text-[0.6875rem] text-info">
+        <span className="inline-flex shrink-0 items-center gap-1.5 text-meta text-info">
           <Loader2 className="size-3 animate-spin" /> testing &middot; {testState.elapsedSec}s
         </span>
       )}
       {testState.kind === "done" && <TestVerdictChip state={testState.result.state} />}
       {testState.kind === "done" && testState.result.state === "reached" && testState.result.warning && (
-        <span className="text-[0.6875rem] text-warning" title={testState.result.warning}>recording never reached the control plane</span>
+        <span className="text-meta text-warning" title={testState.result.warning}>recording never reached the control plane</span>
       )}
       <Button
         size="sm"
@@ -206,7 +206,7 @@ function RedirectRowExpanded({
   return (
     <div className="space-y-2.5 bg-primary/5 p-3">
       <div className="flex items-center gap-2">
-        <span className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">Editing — full values</span>
+        <span className="text-meta font-medium uppercase tracking-wide text-muted-foreground">Editing — full values</span>
         <span className="flex-1" />
         <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={onCancel}>
           collapse
@@ -226,7 +226,7 @@ function RedirectRowExpanded({
       {/* What this row actually DOES at run start — the ecosystem tier also
           writes a tool config file; everything else is network-only, and
           needs nothing more (the mock's expanded-row mechanism line). */}
-      <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+      <p className="text-meta leading-snug text-muted-foreground">
         {r.ecosystem && ECOSYSTEM_CONFIG_FILE[r.ecosystem]
           ? `Runs also get a generated ${ECOSYSTEM_CONFIG_FILE[r.ecosystem]} pointing at the mirror — the network substitution covers anything that ignores it.`
           : T.NET_ONLY_TIP}
@@ -306,7 +306,7 @@ function FromCombobox({ id, value, onChange }: { id?: string; value: string; onC
                 <CommandItem key="__custom" value={typed} forceMount onSelect={() => pick(typed)} className="font-mono">
                   <Check className="size-3.5 opacity-0" />
                   {typed}
-                  <span className="ml-auto font-sans text-[0.6875rem] text-muted-foreground">use as typed</span>
+                  <span className="ml-auto font-sans text-meta text-muted-foreground">use as typed</span>
                 </CommandItem>
               </CommandGroup>
             )}
@@ -324,7 +324,7 @@ function FromCombobox({ id, value, onChange }: { id?: string; value: string; onC
                     <Check className={cn("size-3.5", value === url ? "opacity-100" : "opacity-0")} />
                     {url}
                   </span>
-                  <span className="font-sans text-[0.6875rem] text-muted-foreground">{eco}</span>
+                  <span className="font-sans text-meta text-muted-foreground">{eco}</span>
                 </CommandItem>
               ))}
             </CommandGroup>
@@ -489,7 +489,7 @@ export function EgressTab({
             )}
           </div>
           <div className="flex items-center gap-2">
-            <p className="text-[0.6875rem] text-muted-foreground">Full values on hover — click a row to edit.</p>
+            <p className="text-meta text-muted-foreground">Full values on hover — click a row to edit.</p>
             <span className="flex-1" />
             <Button size="sm" variant="outline" disabled={!operator} onClick={testAll}>
               Test all
@@ -500,7 +500,7 @@ export function EgressTab({
       {/* No forced visit any more (steps.ts), so no check icon dressed as an
           answer the operator never gave — just the quiet fact. */}
       {redirects.length === 0 && (
-        <p className="max-w-[560px] text-[0.8125rem] leading-snug text-muted-foreground">{T.EGRESS_SEEN_EMPTY}</p>
+        <p className="max-w-[560px] text-body leading-snug text-muted-foreground">{T.EGRESS_SEEN_EMPTY}</p>
       )}
       <AddRedirectForm operator={operator} onAdd={(r) => setRedirects([...redirects, r])} />
     </div>

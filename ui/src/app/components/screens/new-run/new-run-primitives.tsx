@@ -45,7 +45,7 @@ export function Seg({
           disabled={o.disabled}
           onClick={() => onChange(o.id)}
           className={cn(
-            "rounded-lg border px-3 py-1.5 text-[0.8125rem] font-medium transition-colors",
+            "rounded-lg border px-3 py-1.5 text-body font-medium transition-colors",
             value === o.id
               ? "border-primary bg-primary/10 text-primary"
               : "border-border text-foreground hover:border-border-strong",
@@ -62,7 +62,7 @@ export function Seg({
 export function RailSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="border-b border-border pb-3 last:border-0">
-      <p className="mb-1.5 text-[0.625rem] font-medium tracking-wide text-muted-foreground uppercase">{title}</p>
+      <p className="mb-1.5 text-meta font-medium tracking-wide text-muted-foreground uppercase">{title}</p>
       {children}
     </div>
   );

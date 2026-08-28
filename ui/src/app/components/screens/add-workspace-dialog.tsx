@@ -79,7 +79,7 @@ function Disclosure({
         className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left"
       >
         <span className="text-xs font-medium text-foreground">Advanced</span>
-        <span className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
+        <span className="flex items-center gap-1.5 text-meta text-muted-foreground">
           {!open && <span className="font-mono">{summary}</span>}
           <ChevronDown className={cn("size-3.5 transition-transform", open && "rotate-180")} />
         </span>
@@ -241,7 +241,7 @@ export function AddWorkspaceDialog({
               root-empty fail-closed (ValidateMemberMountSource) is what
               actually stops a stale client from racing past this hint. */}
           {kind === "local_dir" && localDirUnavailable && (
-            <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+            <p className="text-meta leading-snug text-muted-foreground">
               {MEMBER_WORKSPACE.LOCAL_DIR_UNAVAILABLE_BODY}
             </p>
           )}
@@ -265,7 +265,7 @@ export function AddWorkspaceDialog({
             </Field>
           )}
           {kind === "ephemeral" && (
-            <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+            <p className="text-meta leading-snug text-muted-foreground">
               An empty scratch directory at <span className="font-mono">/home/agent/work</span>, discarded when the
               run ends. Use this when the container is the point.
             </p>

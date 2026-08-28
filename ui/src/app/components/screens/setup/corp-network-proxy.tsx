@@ -131,8 +131,8 @@ function HostProxyCheckNote({ check }: { check: SetupCheck }) {
         warn ? "border-warning/30 bg-warning-subtle" : "border-border bg-muted/40",
       )}
     >
-      <p className={cn("text-[0.75rem] leading-snug", warn ? "text-warning" : "text-foreground")}>{check.detail}</p>
-      {check.fix && <p className="text-[0.6875rem] leading-snug text-muted-foreground">{check.fix}</p>}
+      <p className={cn("text-xs leading-snug", warn ? "text-warning" : "text-foreground")}>{check.detail}</p>
+      {check.fix && <p className="text-meta leading-snug text-muted-foreground">{check.fix}</p>}
     </div>
   );
 }
@@ -162,12 +162,12 @@ function EvidenceBlock({
           Re-check
         </Button>
       </div>
-      <p className="max-w-[560px] text-[0.6875rem] leading-snug text-muted-foreground">{T.EVIDENCE_EXPLAIN}</p>
+      <p className="max-w-[560px] text-meta leading-snug text-muted-foreground">{T.EVIDENCE_EXPLAIN}</p>
       {rows.length === 0 ? (
         hostProxyCheck?.detail ? (
           <HostProxyCheckNote check={hostProxyCheck} />
         ) : (
-          <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.EVIDENCE_NONE}</p>
+          <p className="text-meta leading-snug text-muted-foreground">{T.EVIDENCE_NONE}</p>
         )
       ) : (
         <>
@@ -177,19 +177,19 @@ function EvidenceBlock({
                 key={r.key}
                 className={cn("flex items-start gap-2.5 p-2.5", i > 0 && "border-t border-border")}
               >
-                <Mono className="w-32 shrink-0 pt-0.5 text-[0.6875rem] text-muted-foreground">{r.key}</Mono>
+                <Mono className="w-32 shrink-0 pt-0.5 text-meta text-muted-foreground">{r.key}</Mono>
                 <div className="min-w-0 flex-1 space-y-0.5">
                   <Mono className="block truncate text-xs text-foreground" title={r.value}>
                     {r.value}
                   </Mono>
-                  {r.note && <p className="text-[0.6875rem] leading-snug text-muted-foreground">{r.note}</p>}
+                  {r.note && <p className="text-meta leading-snug text-muted-foreground">{r.note}</p>}
                 </div>
                 {r.hasCredentials && (
-                  <Chip tone="warning" className="shrink-0 text-[0.625rem]" title="A credential was detected in this value (masked above).">
+                  <Chip tone="warning" className="shrink-0 text-meta" title="A credential was detected in this value (masked above).">
                     creds
                   </Chip>
                 )}
-                <Chip tone="neutral" mono className="shrink-0 text-[0.625rem]">
+                <Chip tone="neutral" mono className="shrink-0 text-meta">
                   {r.source}
                 </Chip>
                 {showUse && r.useValue && (
@@ -229,7 +229,7 @@ function ProxyVerdict({ result }: { result: ProxyTestResult }) {
       return (
         <span className="flex flex-wrap items-center gap-2">
           <Chip tone="info">Request completed</Chip>
-          <span className="text-[0.6875rem] text-muted-foreground">custom endpoint — not verified against a known payload</span>
+          <span className="text-meta text-muted-foreground">custom endpoint — not verified against a known payload</span>
         </span>
       );
     }
@@ -253,7 +253,7 @@ function ProxyVerdict({ result }: { result: ProxyTestResult }) {
     return (
       <span className="flex flex-wrap items-center gap-2">
         <Chip tone="warning" dot>Blocked · intercepted</Chip>
-        <span className="text-[0.6875rem] text-muted-foreground">answered 200 OK — with someone else&apos;s page</span>
+        <span className="text-meta text-muted-foreground">answered 200 OK — with someone else&apos;s page</span>
       </span>
     );
   }
@@ -321,14 +321,14 @@ function ProxyTestBlock({
       <div className="min-w-0 flex-1 space-y-1">
         {state.kind === "idle" && (
           <>
-            <span className="text-[0.6875rem] text-muted-foreground">Not tested</span>
-            <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.TEST_PROXY_HINT}</p>
+            <span className="text-meta text-muted-foreground">Not tested</span>
+            <p className="text-meta leading-snug text-muted-foreground">{T.TEST_PROXY_HINT}</p>
           </>
         )}
         {state.kind === "running" && (
           <>
-            <p className="text-[0.75rem] text-info">Starting a throwaway sandbox — {state.elapsedSec}s</p>
-            {!state.custom && <p className="text-[0.6875rem] leading-snug text-muted-foreground">{probeLine}</p>}
+            <p className="text-xs text-info">Starting a throwaway sandbox — {state.elapsedSec}s</p>
+            {!state.custom && <p className="text-meta leading-snug text-muted-foreground">{probeLine}</p>}
           </>
         )}
         {state.kind === "done" && (
@@ -337,15 +337,15 @@ function ProxyTestBlock({
             {state.result.state === "no_runner" ? (
               // The canon sentence, not the wire detail: it says what to DO
               // (configure a barrier), which the server's own line doesn't.
-              <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.TEST_NORUNNER}</p>
+              <p className="text-meta leading-snug text-muted-foreground">{T.TEST_NORUNNER}</p>
             ) : state.result.state === "not_run" ? (
               // Unlike no_runner, the wire detail DOES carry the specific
               // launch failure (an image pull, a confinement class this host
               // can't enforce) — worth showing. No TEST_STANDING though:
               // nothing was actually tested from a sandbox here.
               <>
-                <p className="text-[0.75rem] leading-snug text-foreground">{state.result.detail}</p>
-                <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.NOT_RUN_NOTE}</p>
+                <p className="text-xs leading-snug text-foreground">{state.result.detail}</p>
+                <p className="text-meta leading-snug text-muted-foreground">{T.NOT_RUN_NOTE}</p>
               </>
             ) : state.result.state === "timed_out" ? (
               // Same shape as not_run: the wire detail names the sandbox's
@@ -353,14 +353,14 @@ function ProxyTestBlock({
               // run never reported completion, so nothing was actually proven
               // by it either.
               <>
-                <p className="text-[0.75rem] leading-snug text-foreground">{state.result.detail}</p>
-                <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.TIMED_OUT_NOTE}</p>
+                <p className="text-xs leading-snug text-foreground">{state.result.detail}</p>
+                <p className="text-meta leading-snug text-muted-foreground">{T.TIMED_OUT_NOTE}</p>
               </>
             ) : (
               <>
-                <p className="text-[0.75rem] leading-snug text-foreground">{state.result.detail}</p>
+                <p className="text-xs leading-snug text-foreground">{state.result.detail}</p>
                 {state.result.custom && state.result.state === "reached" && (
-                  <p className="text-[0.75rem] leading-snug text-info">{T.CUSTOM_CAVEAT}</p>
+                  <p className="text-xs leading-snug text-info">{T.CUSTOM_CAVEAT}</p>
                 )}
                 {/* reached-only: the probe itself passed, but this run's
                     recording never reached the control plane — same caution
@@ -369,18 +369,18 @@ function ProxyTestBlock({
                     the gate: reached still unlocks Next either way. */}
                 {state.result.state === "reached" && state.result.warning && (
                   <div className="rounded-lg border border-warning/30 bg-warning-subtle p-2">
-                    <p className="text-[0.6875rem] leading-snug text-warning">{state.result.warning}</p>
+                    <p className="text-meta leading-snug text-warning">{state.result.warning}</p>
                   </div>
                 )}
                 {state.result.intercepted && (
                   <>
                     <div className="rounded-md border border-border bg-muted/40 px-2.5 py-2">
-                      <p className="text-[0.75rem] leading-snug text-foreground">{T.INTERCEPT_MEANS}</p>
+                      <p className="text-xs leading-snug text-foreground">{T.INTERCEPT_MEANS}</p>
                     </div>
-                    <p className="max-w-[620px] text-[0.6875rem] leading-snug text-muted-foreground">{T.PROBE_ENDPOINTS}</p>
+                    <p className="max-w-[620px] text-meta leading-snug text-muted-foreground">{T.PROBE_ENDPOINTS}</p>
                   </>
                 )}
-                <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.TEST_STANDING}</p>
+                <p className="text-meta leading-snug text-muted-foreground">{T.TEST_STANDING}</p>
               </>
             )}
             {/* Revealed ONLY after a failure — never on arrival, or everyone
@@ -393,8 +393,8 @@ function ProxyTestBlock({
             {state.result.state === "blocked" && (
               <div className="mt-1.5 space-y-2.5 rounded-lg border border-dashed border-border-strong p-3">
                 <div className="space-y-1">
-                  <p className="text-[0.8125rem] font-medium text-foreground">No public endpoint will answer here?</p>
-                  <p className="max-w-[560px] text-[0.6875rem] leading-snug text-muted-foreground">{T.CUSTOM_URL_WHY}</p>
+                  <p className="text-body font-medium text-foreground">No public endpoint will answer here?</p>
+                  <p className="max-w-[560px] text-meta leading-snug text-muted-foreground">{T.CUSTOM_URL_WHY}</p>
                 </div>
                 <div className="flex items-end gap-2">
                   <Field label="Test against a URL of your own" htmlFor="corp-custom-url" hint={T.CUSTOM_URL_HINT} className="min-w-0 flex-1">
@@ -424,9 +424,9 @@ function ProxyTestBlock({
                 {customReject && (
                   <div className="space-y-1.5">
                     <div className="rounded-md border border-danger/30 bg-danger-subtle px-2.5 py-2">
-                      <p className="text-[0.75rem] leading-snug text-danger">{customReject}</p>
+                      <p className="text-xs leading-snug text-danger">{customReject}</p>
                     </div>
-                    <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.CUSTOM_REJECT_WHY}</p>
+                    <p className="text-meta leading-snug text-muted-foreground">{T.CUSTOM_REJECT_WHY}</p>
                   </div>
                 )}
               </div>
@@ -603,15 +603,15 @@ export function HostProxyTab({
             <Button size="sm" className="shrink-0" disabled={!operator} onClick={() => saveUrl(candidates[0])}>
               Use detected proxy
             </Button>
-            <p className="min-w-0 flex-1 text-[0.75rem] text-foreground">
-              Configures <Mono className="text-[0.75rem]">{candidates[0]}</Mono> — the value Wardyn already read. No retyping.
+            <p className="min-w-0 flex-1 text-xs text-foreground">
+              Configures <Mono className="text-xs">{candidates[0]}</Mono> — the value Wardyn already read. No retyping.
             </p>
           </div>
         )}
 
         {!useSecret && !configured && candidates.length > 1 && !url && (
           <div className="space-y-2.5">
-            <p className="text-[0.75rem] text-foreground">Detected values differ — pick which one sandboxes chain through:</p>
+            <p className="text-xs text-foreground">Detected values differ — pick which one sandboxes chain through:</p>
             <RadioGroup value={String(selected)} onValueChange={(v) => setSelected(Number(v))} className="space-y-2">
               {candidates.map((c, i) => (
                 <div
@@ -652,13 +652,13 @@ export function HostProxyTab({
             {draftHasCreds ? (
               <>
                 <div className="rounded-lg border border-warning/30 bg-warning-subtle p-2">
-                  <p className="text-[0.6875rem] leading-snug text-warning">{T.CRED_URL_NOTE}</p>
+                  <p className="text-meta leading-snug text-warning">{T.CRED_URL_NOTE}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Chip tone="neutral" mono className="text-[0.625rem]">
+                  <Chip tone="neutral" mono className="text-meta">
                     {secretName}
                   </Chip>
-                  <p className="text-[0.6875rem] text-muted-foreground">{T.WRITE_ONLY}</p>
+                  <p className="text-meta text-muted-foreground">{T.WRITE_ONLY}</p>
                 </div>
                 <Button size="sm" disabled={!operator || saving} onClick={() => saveAsSecret(url, secretName)}>
                   {saving ? <Loader2 className="size-3.5 animate-spin" /> : "Save"}
@@ -703,7 +703,7 @@ export function HostProxyTab({
           <div className="space-y-2.5">
             <button
               type="button"
-              className="inline-flex items-center gap-1 text-[0.75rem] text-muted-foreground hover:text-foreground"
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
               onClick={() => setDisclosureOpen((o) => !o)}
             >
               <ChevronDown className={cn("size-3.5 transition-transform", !disclosureOpen && "-rotate-90")} />
@@ -725,14 +725,14 @@ export function HostProxyTab({
                     Add secret…
                   </Button>
                 </div>
-                <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.SECRET_INSTEAD_HINT}</p>
+                <p className="text-meta leading-snug text-muted-foreground">{T.SECRET_INSTEAD_HINT}</p>
                 <div className="flex items-center gap-2">
                   <Button size="sm" disabled={!operator || saving || !secretName.trim()} onClick={() => saveSecretRef(secretName)}>
                     Save
                   </Button>
                   <button
                     type="button"
-                    className="text-[0.75rem] text-muted-foreground hover:text-foreground"
+                    className="text-xs text-muted-foreground hover:text-foreground"
                     onClick={() => {
                       setUseSecret(false);
                       setDisclosureOpen(false);
@@ -747,7 +747,7 @@ export function HostProxyTab({
         ) : (
           <button
             type="button"
-            className="inline-flex items-center gap-1 text-[0.75rem] text-muted-foreground hover:text-foreground"
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
             onClick={() => {
               setUseSecret(true);
               setDisclosureOpen(true);

@@ -545,7 +545,7 @@ export function PolicyPanel({
           <div className="rounded-lg border border-border">
             <div className="flex items-center gap-2 border-b border-border px-3 py-2">
               <SectionLabel>Fields</SectionLabel>
-              <span className="ml-auto text-[0.6875rem] text-muted-foreground">
+              <span className="ml-auto text-meta text-muted-foreground">
                 Full reference: docs/POLICIES.md
               </span>
             </div>
@@ -568,7 +568,7 @@ export function PolicyPanel({
                         type="button"
                         variant="ghost"
                         size="sm"
-                        className="ml-auto h-6 px-2 text-[0.6875rem]"
+                        className="ml-auto h-6 px-2 text-meta"
                         aria-label={`Insert ${key}`}
                         disabled={!parsed.ok}
                         title={parsed.ok ? undefined : "Fix the JSON above first."}
@@ -581,12 +581,12 @@ export function PolicyPanel({
                         Insert
                       </Button>
                     </div>
-                    <p className="mt-0.5 text-[0.6875rem] leading-snug text-muted-foreground">
+                    <p className="mt-0.5 text-meta leading-snug text-muted-foreground">
                       {help.what}
                     </p>
                     {/* Full muted token, never a diluted one: the diluted form
                         drops this 11px text below AA (theme-contrast.test.ts). */}
-                    <p className="mt-0.5 text-[0.6875rem] italic leading-snug text-muted-foreground">
+                    <p className="mt-0.5 text-meta italic leading-snug text-muted-foreground">
                       {help.values}
                     </p>
                   </li>
@@ -609,7 +609,7 @@ export function PolicyPanel({
             <ShieldCheck className="size-4" />
             Preflight
           </Button>
-          <span className="text-[0.6875rem] text-muted-foreground">
+          <span className="text-meta text-muted-foreground">
             Checks the spec server-side and shows what would be clamped — before you launch.
           </span>
         </div>

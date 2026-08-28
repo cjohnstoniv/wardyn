@@ -347,7 +347,7 @@ export function WorkspaceDetailScreen() {
             <p className="text-xs text-foreground">
               Image <span className="font-mono">{image.mono}</span>
             </p>
-            <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">{image.blurb}</p>
+            <p className="mt-0.5 text-meta text-muted-foreground">{image.blurb}</p>
           </div>
           {image.rebuildable && (
             <Button size="sm" variant="outline" disabled={!operator || rebuilding} onClick={() => void rebuild()}>

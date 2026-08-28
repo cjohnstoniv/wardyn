@@ -106,9 +106,9 @@ export function LLMCredFields({
         )}
       </RadioGroup>
       {rows === null && (
-        <p className="text-[0.6875rem] leading-snug text-muted-foreground">Loading integrations…</p>
+        <p className="text-meta leading-snug text-muted-foreground">Loading integrations…</p>
       )}
-      <p className="text-[0.6875rem] leading-snug text-muted-foreground">
+      <p className="text-meta leading-snug text-muted-foreground">
         A run that picks this workspace/container inherits this model access — injected proxy-side at
         launch, never resident.
       </p>

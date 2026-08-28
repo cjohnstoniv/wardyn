@@ -794,13 +794,13 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
             read_only=false, so a daemon that never sends one shows no chip
             rather than a claim we cannot back. */}
         {(readOnly || displaced) && holderPrincipal && (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded border border-info/25 bg-info-subtle px-1.5 py-0.5 font-mono text-[11px] text-info">
+          <span className="inline-flex shrink-0 items-center gap-1 rounded border border-info/25 bg-info-subtle px-1.5 py-0.5 font-mono text-meta text-info">
             <Eye className="size-3" />
             {RUN_COCKPIT.heldBy(holderPrincipal)}
           </span>
         )}
         {!readOnly && !displaced && mode && connState === "open" && (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded border border-success/25 bg-success-subtle px-1.5 py-0.5 font-mono text-[11px] text-success">
+          <span className="inline-flex shrink-0 items-center gap-1 rounded border border-success/25 bg-success-subtle px-1.5 py-0.5 font-mono text-meta text-success">
             <span className="size-1.5 rounded-full bg-current" />
             {RUN_COCKPIT.driving}
           </span>
@@ -808,7 +808,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
         <div className="ml-auto flex items-center gap-2">
           {/* Live geometry — the grid this client actually has, post-refit. */}
           {geom && (
-            <span className="font-mono text-[11px] text-muted-foreground">
+            <span className="font-mono text-meta text-muted-foreground">
               {geom.cols}×{geom.rows}
             </span>
           )}
@@ -868,7 +868,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           // block selecting and copying the output, which a spectator can do.
           <div className="pointer-events-none absolute bottom-3 left-3 inline-flex items-center gap-2 rounded-lg border border-info/35 bg-info/15 px-2.5 py-1.5">
             <Eye className="size-3.5 text-info" />
-            <span className="font-mono text-[11px] text-info">{RUN_COCKPIT.watchingReadOnly}</span>
+            <span className="font-mono text-meta text-info">{RUN_COCKPIT.watchingReadOnly}</span>
           </div>
         )}
       </div>

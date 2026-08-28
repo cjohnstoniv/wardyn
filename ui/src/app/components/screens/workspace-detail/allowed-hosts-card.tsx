@@ -120,7 +120,7 @@ export function AllowedHostsCard({ ws, onWorkspaceUpdated }: { ws: Workspace; on
           {rows.map((r) => (
             <li key={r.host} className="flex items-center gap-3 rounded-lg border border-border p-2.5">
               <Mono className="flex-1 text-foreground">{r.host}</Mono>
-              <span className="text-[0.6875rem] text-muted-foreground">{r.provenance}</span>
+              <span className="text-meta text-muted-foreground">{r.provenance}</span>
               {r.removable ? (
                 <Button
                   size="icon"

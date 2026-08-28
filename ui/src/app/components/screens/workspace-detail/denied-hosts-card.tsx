@@ -54,7 +54,7 @@ export function DeniedHostsCard({ ws, onWorkspaceUpdated }: { ws: Workspace; onW
           {hosts.map((host) => (
             <li key={host} className="flex items-center gap-3 rounded-lg border border-border p-2.5">
               <Mono className="flex-1 text-foreground">{host}</Mono>
-              <span className="text-[0.6875rem] text-muted-foreground">denied for this workspace</span>
+              <span className="text-meta text-muted-foreground">denied for this workspace</span>
               <Button
                 size="icon"
                 variant="ghost"

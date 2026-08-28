@@ -313,7 +313,7 @@ export function RunDetailScreen() {
                 <TabsTrigger value="approvals" className="h-7 gap-1.5 text-xs">
                   <ShieldCheck className="size-3.5" /> Approvals
                   {pending.length > 0 && (
-                    <span className="rounded-full bg-warning-subtle px-1.5 text-[0.6563rem] font-semibold text-warning">
+                    <span className="rounded-full bg-warning-subtle px-1.5 text-meta font-semibold text-warning">
                       {pending.length}
                     </span>
                   )}
@@ -472,7 +472,7 @@ function Cockpit({
               shown; egress_domain is theirs to decide, credential and
               tool_call stay admin-only regardless. */}
           {viewerBlocked && (
-            <p className="rounded-lg border border-border bg-muted/40 px-2.5 py-2 text-[0.75rem] leading-relaxed text-muted-foreground">
+            <p className="rounded-lg border border-border bg-muted/40 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground">
               {VIEWER_APPROVAL_BLOCKS_NOTE}
             </p>
           )}
@@ -556,7 +556,7 @@ function TerminalPane({
                   : RUN_COCKPIT.recordingMissing
             }
             action={
-              <button onClick={onGoRecording} className="text-[0.75rem] font-medium text-primary hover:underline">
+              <button onClick={onGoRecording} className="text-xs font-medium text-primary hover:underline">
                 Open the Recording tab →
               </button>
             }
@@ -586,7 +586,7 @@ function TerminalPane({
             : RUN_MODE.autonomous.blurb
         }
         action={
-          <button onClick={onGoRecording} className="text-[0.75rem] font-medium text-primary hover:underline">
+          <button onClick={onGoRecording} className="text-xs font-medium text-primary hover:underline">
             Watch the captured session →
           </button>
         }
@@ -612,7 +612,7 @@ function PaneFrame({
         <SquareTerminal className="size-3.5 text-muted-foreground" aria-hidden />
         <span className="label-eyebrow">{title}</span>
         {chip && (
-          <Chip tone="neutral" className="font-mono text-[0.625rem]">
+          <Chip tone="neutral" className="font-mono text-meta">
             {chip}
           </Chip>
         )}
@@ -682,7 +682,7 @@ function ApprovalsTab({
               </span>
             </div>
             <div className="mt-3">
-              <Label className="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">
+              <Label className="text-meta uppercase tracking-wide text-muted-foreground">
                 Requested scope
               </Label>
               <JsonBlock value={a.requested_scope} className="mt-1.5" />
@@ -776,16 +776,16 @@ function AuditTab({
             {events.map((e) => (
               <div key={e.id} className="flex items-center gap-3 px-4 py-2.5">
                 <span
-                  className="w-[68px] shrink-0 font-mono text-[0.6875rem] text-muted-foreground"
+                  className="w-[68px] shrink-0 font-mono text-meta text-muted-foreground"
                   title={absoluteTime(e.time)}
                 >
                   {clockTime(e.time)}
                 </span>
                 <ActorTypeChip type={e.actor_type} />
-                <span className="w-[190px] shrink-0 truncate font-mono text-[0.75rem] text-muted-foreground" title={e.action}>
+                <span className="w-[190px] shrink-0 truncate font-mono text-xs text-muted-foreground" title={e.action}>
                   {e.action}
                 </span>
-                <span className="min-w-0 flex-1 truncate text-[0.7813rem] text-foreground" title={e.target}>
+                <span className="min-w-0 flex-1 truncate text-xs text-foreground" title={e.target}>
                   {e.target || "—"}
                 </span>
               </div>

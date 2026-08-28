@@ -74,14 +74,14 @@ function renderBody(state: SandboxState, live: boolean): React.ReactNode {
       );
     case "no-sandbox":
       return (
-        <p className="text-[0.75rem] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           {live ? RUN_COCKPIT.noSandboxYet : RUN_COCKPIT.sandboxGone}
         </p>
       );
     case "unsupported":
-      return <p className="text-[0.75rem] text-muted-foreground">{RUN_COCKPIT.execUnsupported}</p>;
+      return <p className="text-xs text-muted-foreground">{RUN_COCKPIT.execUnsupported}</p>;
     case "error":
-      return <p className="text-[0.75rem] text-muted-foreground">{RUN_COCKPIT.loadError}</p>;
+      return <p className="text-xs text-muted-foreground">{RUN_COCKPIT.loadError}</p>;
     case "ready":
       return <Metrics data={state.data} />;
   }
@@ -125,8 +125,8 @@ function Metric({ label, value, barPercent }: { label: string; value: string; ba
   return (
     <div>
       <div className="flex items-baseline justify-between">
-        <span className="text-[0.6875rem] text-muted-foreground">{label}</span>
-        <span className="font-mono text-[0.6875rem] text-foreground">{value}</span>
+        <span className="text-meta text-muted-foreground">{label}</span>
+        <span className="font-mono text-meta text-foreground">{value}</span>
       </div>
       {/* A bar needs a denominator — omitted (not a 0%-width bar) whenever
           barPercent is undefined, which covers both an unavailable metric and

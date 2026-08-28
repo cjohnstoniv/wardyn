@@ -542,7 +542,7 @@ function ProviderNameChips({ onPick }: { onPick: (name: string) => void }) {
           key={n}
           type="button"
           onClick={() => onPick(n)}
-          className="rounded-md border border-border px-2 py-1 font-mono text-[0.6875rem] text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
+          className="rounded-md border border-border px-2 py-1 font-mono text-meta text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
         >
           {n}
         </button>
@@ -550,7 +550,7 @@ function ProviderNameChips({ onPick }: { onPick: (name: string) => void }) {
       <button
         type="button"
         onClick={() => onPick("")}
-        className="rounded-md border border-dashed border-border px-2 py-1 text-[0.6875rem] text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
+        className="rounded-md border border-dashed border-border px-2 py-1 text-meta text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
       >
         Custom…
       </button>

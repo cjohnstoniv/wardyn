@@ -247,13 +247,13 @@ export function LiveApprovals({
   if (pending.length === 0) {
     if (pollError) {
       return (
-        <p className="text-[0.6875rem] text-warning" data-testid="live-approvals-poll-error">
+        <p className="text-meta text-warning" data-testid="live-approvals-poll-error">
           Couldn't check for pending approvals — retrying…
         </p>
       );
     }
     return (
-      <p className="text-[0.6875rem] text-muted-foreground" data-testid="live-approvals-idle">
+      <p className="text-meta text-muted-foreground" data-testid="live-approvals-idle">
         {idleHint}
       </p>
     );
@@ -299,7 +299,7 @@ export function LiveApprovals({
                 {TELEMETRY_TAG.label}
               </Chip>
             )}
-            {held && <span className="text-[0.625rem] uppercase tracking-wide text-warning">waiting</span>}
+            {held && <span className="text-meta uppercase tracking-wide text-warning">waiting</span>}
             {/* Split button: the bare click is "This run" (scope's default,
                 unchanged from before this feature existed) — the caret opens
                 the other three. Console page confirm buttons stay named
@@ -458,12 +458,12 @@ function ScopeMenu({
             {(["once", "run"] as const).map((s) => (
               <button key={s} type="button" onClick={() => pick(s)} className={SCOPE_ITEM_CLS}>
                 <span className="font-medium">{labels[s]}</span>
-                <span className="text-[0.6875rem] text-muted-foreground">{hints[s]}</span>
+                <span className="text-meta text-muted-foreground">{hints[s]}</span>
               </button>
             ))}
             <button type="button" onClick={() => setUntilMode(true)} className={SCOPE_ITEM_CLS}>
               <span className="font-medium">{labels.until}</span>
-              <span className="text-[0.6875rem] text-muted-foreground">{hints.until}</span>
+              <span className="text-meta text-muted-foreground">{hints.until}</span>
             </button>
             <button
               type="button"
@@ -472,7 +472,7 @@ function ScopeMenu({
               className={SCOPE_ITEM_CLS}
             >
               <span className="font-medium">{labels.always}</span>
-              <span className="text-[0.6875rem] text-muted-foreground">
+              <span className="text-meta text-muted-foreground">
                 {alwaysDisabled ? alwaysReason : hints.always}
               </span>
             </button>
@@ -485,7 +485,7 @@ function ScopeMenu({
                 setUntilMode(false);
                 setCustomUntil(null);
               }}
-              className="px-2 py-1 text-[0.6875rem] text-muted-foreground hover:text-foreground"
+              className="px-2 py-1 text-meta text-muted-foreground hover:text-foreground"
             >
               ← Back
             </button>
@@ -515,7 +515,7 @@ function ScopeMenu({
               <Button
                 size="sm"
                 variant="outline"
-                className="h-6 w-full text-[0.6875rem]"
+                className="h-6 w-full text-meta"
                 disabled={!customUntil}
                 onClick={() => pick("until", customUntil ?? undefined)}
               >

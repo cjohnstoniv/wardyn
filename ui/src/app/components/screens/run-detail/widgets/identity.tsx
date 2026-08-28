@@ -31,23 +31,23 @@ export function IdentityWidget({ run }: { run: AgentRun }) {
         <div className="mb-3 space-y-2 border-b border-border pb-3">
           {run.task && (
             <div>
-              <p className="mb-0.5 text-[0.75rem] text-muted-foreground">Task</p>
-              <p className="whitespace-pre-wrap text-[0.75rem] leading-snug text-foreground">
+              <p className="mb-0.5 text-xs text-muted-foreground">Task</p>
+              <p className="whitespace-pre-wrap text-xs leading-snug text-foreground">
                 {run.task}
               </p>
             </div>
           )}
           {run.description && (
             <div>
-              <p className="mb-0.5 text-[0.75rem] text-muted-foreground">Why</p>
-              <p className="whitespace-pre-wrap text-[0.75rem] leading-snug text-muted-foreground">
+              <p className="mb-0.5 text-xs text-muted-foreground">Why</p>
+              <p className="whitespace-pre-wrap text-xs leading-snug text-muted-foreground">
                 {run.description}
               </p>
             </div>
           )}
         </div>
       )}
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-[0.75rem]">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-xs">
         <dt className="text-muted-foreground">Run</dt>
         <dd className="min-w-0 truncate text-right font-mono text-foreground" title={run.id}>
           {run.id}

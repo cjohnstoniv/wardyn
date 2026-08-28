@@ -207,7 +207,7 @@ function Strip({ ctx }: { ctx: WidgetContext }) {
   ).length;
 
   return (
-    <div className="flex h-9 shrink-0 items-center gap-4 border-t border-border bg-card/80 px-5 font-mono text-[0.6875rem] backdrop-blur">
+    <div className="flex h-9 shrink-0 items-center gap-4 border-t border-border bg-card/80 px-5 font-mono text-meta backdrop-blur">
       <span className="text-muted-foreground">
         {RUN_COCKPIT.egress} <span className="text-success">{RUN_COCKPIT.allow(allow)}</span> ·{" "}
         <span className="text-warning">{RUN_COCKPIT.held(held)}</span> ·{" "}

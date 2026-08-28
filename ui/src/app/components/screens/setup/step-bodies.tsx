@@ -102,7 +102,7 @@ export function ReviewStep({
         <div className="flex items-center gap-2">
           <SectionLabel>{label}</SectionLabel>
           <span
-            className={`text-[0.6875rem] font-semibold tabular-nums ${
+            className={`text-meta font-semibold tabular-nums ${
               tone === "warning" ? "text-warning" : tone === "success" ? "text-success" : "text-muted-foreground"
             }`}
           >
@@ -127,7 +127,7 @@ export function ReviewStep({
         </p>
         <div className="flex shrink-0 items-center gap-2.5">
           {lastCheckedAt && (
-            <span className="text-[0.7188rem] text-muted-foreground">{lastCheckedLabel(lastCheckedAt)}</span>
+            <span className="text-meta text-muted-foreground">{lastCheckedLabel(lastCheckedAt)}</span>
           )}
           <Button variant="outline" size="sm" onClick={onRecheck} disabled={rechecking}>
             {rechecking ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
