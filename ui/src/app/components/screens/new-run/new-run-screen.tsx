@@ -42,6 +42,7 @@ import { capabilityAllowed, useMyCapabilities } from "../../../lib/capabilities"
 import { DENIED } from "../../../lib/permissions-copy";
 import { getErrorMessage } from "../../../lib/format";
 import { statusWord } from "../../../lib/workspace-status";
+import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
 import { Input } from "../../ui/input";
@@ -111,6 +112,9 @@ export function NewRunScreen() {
   const [addWsOpen, setAddWsOpen] = React.useState(false);
   const [availableClasses, setAvailableClasses] = React.useState<ConfinementClass[] | null>(null);
   const [launching, setLaunching] = React.useState(false);
+  // Rulebook §7: disable Launch the instant it fires, but only show the
+  // spinner once the request has been running long enough to need one.
+  const { disabled: launchDisabled, showSpinner: launchSpinning } = useDeferredBusy(launching);
   const [error, setError] = React.useState<string | null>(null);
   // Preflight is a dry-run of the SAME request Launch sends — see buildRunInput
   // below. Independent loading/result/error state from Launch's: the two
@@ -848,8 +852,12 @@ export function NewRunScreen() {
               here, beside Launch, because "what would be clamped" is the last
               thing read before committing. */}
           <div className="mt-4 flex gap-2">
-            <Button className="flex-1" disabled={launching || !!problem} onClick={launch}>
-              {launching && <Loader2 className="size-4 animate-spin" />}
+            <Button className="flex-1" disabled={launchDisabled || !!problem} onClick={launch}>
+              {/* The icon slot always renders (never just on launching) so the
+                  has-[>svg] padding rule and the icon+gap width never change —
+                  toggling `invisible` cannot shift "Launch run" sideways the
+                  way mounting/unmounting the icon would. */}
+              <Loader2 className={launchSpinning ? "size-4 animate-spin" : "size-4 animate-spin invisible"} />
               Launch run
             </Button>
           </div>

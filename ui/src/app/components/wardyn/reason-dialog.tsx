@@ -19,6 +19,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { cn } from "../ui/utils";
+import { useDeferredBusy } from "../../lib/use-deferred-busy";
 import { useOperator } from "./operator-context";
 import {
   ALWAYS_NEEDS_WORKSPACE,
@@ -67,6 +68,7 @@ export function ReasonDialog({
   const operator = useOperator();
   const [reason, setReason] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  const { disabled: submitDisabled, showSpinner } = useDeferredBusy(busy);
   const [scope, setScope] = React.useState<ApprovalScope>("run");
   // ISO string once chosen; null until the operator picks a preset or a time.
   const [until, setUntil] = React.useState<string | null>(null);
@@ -181,10 +183,10 @@ export function ReasonDialog({
           </Button>
           <Button
             onClick={submit}
-            disabled={busy || (!approve && !reason.trim()) || untilMissing}
+            disabled={submitDisabled || (!approve && !reason.trim()) || untilMissing}
             variant={approve ? "default" : "destructive"}
           >
-            {busy ? <Loader2 className="size-4 animate-spin" /> : approve ? <Check className="size-4" /> : <X className="size-4" />}
+            {showSpinner ? <Loader2 className="size-4 animate-spin" /> : approve ? <Check className="size-4" /> : <X className="size-4" />}
             {/* Approval does NOT mint — it AUTHORIZES the broker to mint later
                 in a separate transaction. Don't over-claim "& mint". Never
                 fold the scope into this label either — it stays exactly

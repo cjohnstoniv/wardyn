@@ -18,12 +18,13 @@
 // the agent on every mutating tool call), which is why some rows here have no
 // scope caret — see decide().
 import * as React from "react";
-import { ShieldAlert, Clock, Check, ChevronDown, X } from "lucide-react";
+import { ShieldAlert, Clock, Check, ChevronDown, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 import { decisionArgs, type ApprovalRequest, type ApprovalScope } from "../../lib/types";
 import { approvals as api } from "../../lib/api/approvals";
 import { getErrorMessage } from "../../lib/format";
 import { usePoll } from "../../lib/use-poll";
+import { useDeferredBusy } from "../../lib/use-deferred-busy";
 import { Button } from "../ui/button";
 import {
   AlertDialog,
@@ -156,6 +157,10 @@ export function LiveApprovals({
   // audit log) — but Approve's non-default scopes (picked from the caret)
   // decide immediately too, same reasoning, one click either way.
   const [denyTarget, setDenyTarget] = React.useState<DenyTarget | null>(null);
+  // Rulebook §7: `disabled` already follows `busy` immediately per-row below
+  // (`busy === a.id`) — only the spinner needs deferring, so only showSpinner
+  // is read from the hook.
+  const { showSpinner: decidingSpinner } = useDeferredBusy(busy !== null);
   // W20-hold-fsm-5: a failed poll used to fall silently back to the last
   // snapshot, which for an empty snapshot renders the SAME affirmative
   // "Watching for…" idle text as a confirmed-empty poll — the one state where
@@ -313,7 +318,12 @@ export function LiveApprovals({
               disabled={!operator || busy === a.id}
               onClick={() => decide(a, true)}
             >
-              <Check className="size-3.5" /> Approve
+              {busy === a.id && decidingSpinner ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Check className="size-3.5" />
+              )}{" "}
+              Approve
             </Button>
             {operator && scoped && (
               <ScopeMenu
@@ -331,7 +341,12 @@ export function LiveApprovals({
               disabled={!operator || busy === a.id}
               onClick={() => setDenyTarget({ request: a, scope: "run" })}
             >
-              <X className="size-3.5" /> Deny
+              {busy === a.id && decidingSpinner ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <X className="size-3.5" />
+              )}{" "}
+              Deny
             </Button>
             {operator && scoped && (
               <ScopeMenu

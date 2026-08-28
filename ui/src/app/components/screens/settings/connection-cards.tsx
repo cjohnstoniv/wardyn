@@ -33,6 +33,7 @@ import { harnessAuth } from "../../../lib/api/harness-auth";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { hostError, slugHost } from "../../../lib/scm-provider";
 import { getErrorMessage } from "../../../lib/format";
+import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import type { SetupStatus, SiteConfig } from "../../../lib/types";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
@@ -348,6 +349,7 @@ export function ModelProviderCard({
   );
   const [loginOpen, setLoginOpen] = React.useState<"anthropic" | "aws" | null>(null);
   const [busy, setBusy] = React.useState(false);
+  const { disabled: harnessBusy, showSpinner: harnessSpinning } = useDeferredBusy(busy);
 
   const disconnectHarness = async (provider: string) => {
     setBusy(true);
@@ -398,9 +400,16 @@ export function ModelProviderCard({
                   <Button
                     size="sm"
                     variant="ghost"
-                    disabled={!operator || busy}
+                    disabled={!operator || harnessBusy}
                     onClick={() => disconnectHarness("anthropic")}
                   >
+                    {/* Icon slot always renders — toggling `invisible` (rather
+                        than mounting/unmounting the icon) keeps has-[>svg]
+                        padding and the icon+gap width constant so the row
+                        doesn't jump when the spinner appears. */}
+                    <Loader2
+                      className={cn("size-3.5 animate-spin", !harnessSpinning && "invisible")}
+                    />
                     Disconnect
                   </Button>
                 )}
