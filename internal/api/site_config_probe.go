@@ -266,11 +266,22 @@ func upstreamFailDetail(reason string) string {
 // `blocked` UNLESS neverRan, which gets its own `not_run` verdict -- "we
 // tried and did not get a clean answer" is not the same claim as "nothing
 // ever ran to observe".
+//
+// timedOut is the third, disjoint shape: the WAIT itself expired (never a
+// terminal run state at all) after run.exec had already succeeded -- the
+// sandbox started and the task launched, so this is provably not a network
+// verdict, just a run that never reported back. agentStatus is the sandbox
+// agent's own observed state at the deadline (AgentStatus, best-effort --
+// "unknown" on any read failure), surfaced in the timed_out detail because
+// it is the one thing an operator staring at a stuck probe has no other way
+// to see. Set only alongside timedOut; every other field stays zero-value.
 type probeRunResult struct {
 	hasExitCode      bool
 	exitCode         int
 	neverRan         bool
 	incompleteReason string
+	timedOut         bool
+	agentStatus      string
 	elapsed          time.Duration
 }
 
@@ -362,11 +373,23 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 		// still a real, definite answer ("no clean response within the budget"), not a
 		// transport-level failure of the ENDPOINT -- report it as an incomplete
 		// probe (classify* turns that into `blocked`), never a 5xx.
-		s.reclaimProbeRun(context.WithoutCancel(ctx), runID)
-		return runID, probeRunResult{
+		//
+		// BUT a timeout after run.exec already succeeded is not a network
+		// verdict at all: the sandbox started and the task launched, so
+		// whatever ran out the clock (most often the recorder's own upload
+		// tail hanging against an unreachable control plane on Kubernetes,
+		// see cmd/wardyn-rec/main.go) is a completion-reporting problem, not
+		// proof egress is blocked. Detach: the caller's ctx just expired.
+		detachedCtx := context.WithoutCancel(ctx)
+		res := probeRunResult{
 			incompleteReason: fmt.Sprintf("did not finish within %s", siteConfigProbeWaitTimeout),
 			elapsed:          elapsed,
-		}, nil
+		}
+		if s.execSucceeded(detachedCtx, runID) {
+			res = probeRunResult{timedOut: true, agentStatus: s.probeAgentStatusAtDeadline(detachedCtx, runID), elapsed: elapsed}
+		}
+		s.reclaimProbeRun(detachedCtx, runID)
+		return runID, res, nil
 	}
 	if finalState == types.RunCompleted {
 		return runID, probeRunResult{hasExitCode: true, exitCode: 0, elapsed: elapsed}, nil
@@ -399,6 +422,46 @@ func (s *Server) probeInjections(ctx context.Context, runID uuid.UUID, grants []
 		out = append(out, runner.InjectionGrant{GrantID: grantID, Rule: rule})
 	}
 	return out, nil
+}
+
+// execSucceeded reports whether runID's audit trail already recorded a
+// successful run.exec -- i.e. the sandbox started and the agent process
+// launched -- as of the read. Used only by runSiteConfigProbe's timeout
+// branch to tell "the task never got a chance to run" (not_run, the existing
+// path) from "the task ran but the run itself never reported completion"
+// (timed_out, a new one).
+func (s *Server) execSucceeded(ctx context.Context, runID uuid.UUID) bool {
+	events, err := s.cfg.Store.QueryAuditEvents(ctx, runID, 100)
+	if err != nil {
+		return false
+	}
+	for _, ev := range events {
+		if ev.Action == "run.exec" && ev.Outcome == "success" {
+			return true
+		}
+	}
+	return false
+}
+
+// probeAgentStatusAtDeadline reads the probe run's sandbox agent status at
+// the moment its wait budget expired -- the cluster-internal fact an operator
+// staring at a stuck setup screen has no other way to see. Best-effort: a
+// missing run row, no configured Runner, or an AgentStatus error all degrade
+// to "unknown" rather than failing the whole timed_out report over a status
+// read that was only ever a bonus.
+func (s *Server) probeAgentStatusAtDeadline(ctx context.Context, runID uuid.UUID) string {
+	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if err != nil || s.cfg.Runner == nil {
+		return "unknown"
+	}
+	st, err := s.cfg.Runner.AgentStatus(ctx, run.SandboxRef, run.AgentExecID)
+	if err != nil {
+		return "unknown"
+	}
+	if st.Message != "" {
+		return fmt.Sprintf("%s: %s", st.State, st.Message)
+	}
+	return string(st.State)
 }
 
 // probeFailureDetail inspects a terminal-FAILED probe run's own audit trail
@@ -505,205 +568,6 @@ func probeTargetURL(raw string) string {
 	return "https://" + raw
 }
 
-// siteConfigProbeResponse is the shared {state, detail, elapsed_ms?} shape
-// both test-proxy and test-redirect return, always HTTP 200 -- the STATE,
-// never the transport, carries a probe's outcome (including no_runner and
-// not_run -- the sandbox that would have carried the probe never got to
-// running it, so nothing was learned about the network at all). The
-// last three fields are test-proxy qualifiers the UI renders distinct
-// treatments from (the mock's ok/okdirect/okcustom/intercepted kinds) --
-// machine-readable so no client ever has to string-match a detail sentence:
-//   - via: which path the probe actually traversed ("proxy" | "direct").
-//   - intercepted: state=blocked's captive-portal flavor -- something
-//     ANSWERED, but not with the endpoint's published payload. Same verdict
-//     as blocked (it is NOT reachability), rendered apart because it sends
-//     the operator to a different person than a refused connection does.
-//   - custom: the probe hit a caller-named URL with no known payload to
-//     verify, so a reached here is the deliberately WEAKER "request
-//     completed" claim, never the builtin targets' "payloads matched".
-type siteConfigProbeResponse struct {
-	State       string `json:"state"`
-	Detail      string `json:"detail"`
-	ElapsedMS   int64  `json:"elapsed_ms,omitempty"`
-	Via         string `json:"via,omitempty"`
-	Intercepted bool   `json:"intercepted,omitempty"`
-	Custom      bool   `json:"custom,omitempty"`
-}
-
-// noRunnerResponse is the honest, non-error answer for s.cfg.Runner == nil:
-// there is nothing to launch a probe with. Always HTTP 200 (a state, not a
-// transport failure).
-var noRunnerResponse = siteConfigProbeResponse{State: "no_runner", Detail: "no runner configured, nothing to launch a probe with"}
-
-// errProbeNoRunner is runSiteConfigProbe's own sentinel for "a runner IS
-// configured, but it cannot describe itself, or it describes itself as
-// advertising no confinement class at all" -- the same honest no_runner
-// state noRunnerResponse reports for an absent Runner, just discovered one
-// layer deeper (after a Capabilities() call, before any sandbox is
-// attempted). Both handlers check for it with errors.Is before their generic
-// 500 path.
-var errProbeNoRunner = errors.New("the configured runner declares no usable confinement class, nothing to launch a probe with")
-
-// proxyProbeSubject is what classifyProxyProbe words its verdicts about:
-// endpoints for the messages that make a payload claim (reached/intercepted),
-// hosts for connection-level failures (the path never got a say in a refused
-// connection), upstream naming the chain hop the probe traversed ("" = the
-// probe went direct). upstream is always DISPLAY-safe: the plain configured
-// URL (validateSiteConfig rejects userinfo in it) or the secret's NAME --
-// never a resolved secret value (see the NeverLogsCredentialedUpstreamURL
-// test).
-type proxyProbeSubject struct {
-	endpoints string
-	hosts     string
-	upstream  string
-	custom    bool
-	// resolveFailReason is resolveUpstreamProxyURL's failReason (runs_bedrock.go)
-	// when something WAS configured (a URL or a secret ref) but did not resolve
-	// to a usable proxy — "" both when nothing is configured and when it
-	// resolved fine. upstream stays "" in the fail case (never claim a hop
-	// dispatch would drop), so classify uses this to say WHY the probe went
-	// direct instead of silently reading like an unconfigured proxy.
-	resolveFailReason string
-}
-
-// via is the wire spelling of which path the probe traversed.
-func (p proxyProbeSubject) via() string {
-	if p.upstream != "" {
-		return "proxy"
-	}
-	return "direct"
-}
-
-// pathClause is the shared "through what" suffix wording ("through
-// wardyn-proxy chained to X" / "directly").
-func (p proxyProbeSubject) pathClause() string {
-	if p.upstream != "" {
-		return "through wardyn-proxy chained to " + p.upstream
-	}
-	return "directly"
-}
-
-// classifyProxyProbe turns what runSiteConfigProbe actually observed into the
-// test-proxy endpoint's {state, detail}, in the mock's own detail shapes
-// (T.TEST_OK / TEST_OK_DIRECT / TEST_BLOCKED / TEST_INTERCEPTED /
-// TEST_OK_CUSTOM -- wardyn-integrations.js). Every message still names what
-// was actually probed, and a custom target's reached is worded as the WEAKER
-// claim it is: "the request completed", never "payloads matched" -- the UI
-// adds its own caveat line (T.CUSTOM_CAVEAT), and this sentence stays honest
-// for any API/CLI consumer that never renders that line.
-func classifyProxyProbe(res probeRunResult, subj proxyProbeSubject) siteConfigProbeResponse {
-	resp := siteConfigProbeResponse{
-		ElapsedMS: res.elapsed.Milliseconds(),
-		Via:       subj.via(),
-		Custom:    subj.custom,
-	}
-	elapsed := res.elapsed.Round(time.Millisecond)
-	switch {
-	case res.hasExitCode && res.exitCode == 0:
-		resp.State = "reached"
-		switch {
-		case subj.custom:
-			resp.Detail = fmt.Sprintf("The request to %s completed %s in %s.", subj.endpoints, subj.pathClause(), elapsed)
-		case subj.upstream != "":
-			resp.Detail = fmt.Sprintf("Reached %s through wardyn-proxy chained to %s in %s — payloads matched, the full chain a run takes.",
-				subj.endpoints, subj.upstream, elapsed)
-		case subj.resolveFailReason != "":
-			// A proxy WAS configured but did not resolve to something dispatch can
-			// use — the probe went direct exactly like a real run would (W13-S1-4 /
-			// W12-W12-C-2), and must say so rather than reading like an
-			// unconfigured proxy (the branch below).
-			resp.Detail = fmt.Sprintf("Reached %s directly in %s — payloads matched, but the configured upstream proxy was NOT used: %s. A run would go direct too, not through the chain you configured.",
-				subj.endpoints, elapsed, upstreamFailDetail(subj.resolveFailReason))
-		default:
-			resp.Detail = fmt.Sprintf("Reached %s directly in %s — payloads matched. No proxy is configured and none was needed; sandboxes on this host go straight out.",
-				subj.endpoints, elapsed)
-		}
-	case res.hasExitCode && res.exitCode == proxyProbeInterceptedCode:
-		// The single most misleading corporate-network state, and the one an
-		// exit-code-only probe scores as success: something replied, so the
-		// connection worked, but it was not the endpoint we asked for.
-		resp.State = "blocked"
-		resp.Intercepted = true
-		resp.Detail = fmt.Sprintf("Something answered at %s, but the payload wasn't the published one — a captive portal or a corporate block page is intercepting. "+
-			"Egress is not actually open, whatever the reply said.", subj.endpoints)
-	case res.hasExitCode:
-		resp.State = "blocked"
-		what := "either endpoint (" + subj.hosts + ")"
-		if subj.custom {
-			what = subj.endpoints
-		}
-		resp.Detail = fmt.Sprintf("Could not reach %s: %s — probed %s.", what, curlFailureDetail(res.exitCode), subj.pathClause())
-	case res.neverRan:
-		// The sandbox that carries the probe never got to running it (a launch
-		// failure, e.g. an image pull or a confinement class this host can't
-		// enforce) -- distinct from blocked, which means the probe DID run and
-		// observed a real network fact. Nothing was learned about the network
-		// either way, so this must never render as a proxy problem.
-		resp.State = "not_run"
-		resp.Detail = fmt.Sprintf("The probe never ran: %s. Nothing was learned about %s — the sandbox that carries the probe could not start, so this says nothing about your proxy or your network.",
-			res.incompleteReason, subj.hosts)
-	default:
-		resp.State = "blocked"
-		resp.Detail = fmt.Sprintf("The probe of %s did not get a clean answer: %s", subj.hosts, res.incompleteReason)
-	}
-	return resp
-}
-
-// classifyRedirectProbe turns what runSiteConfigProbe actually observed into
-// the test-redirect endpoint's {state, detail}. See redirectProbeScript for
-// exactly what ran and what each exit code means.
-func classifyRedirectProbe(res probeRunResult, toHost, fromHost string) siteConfigProbeResponse {
-	switch {
-	case res.hasExitCode && res.exitCode == 0:
-		return siteConfigProbeResponse{
-			State: "reached",
-			Detail: fmt.Sprintf("%s is reachable via the mirror; %s is correctly blocked when dialed directly (redirect enforced) — checked in %s",
-				toHost, fromHost, res.elapsed.Round(time.Millisecond)),
-			ElapsedMS: res.elapsed.Milliseconds(),
-		}
-	case res.hasExitCode && res.exitCode == redirectProbeBypassCode:
-		return siteConfigProbeResponse{
-			State: "bypass",
-			Detail: fmt.Sprintf("%s is reachable via the mirror, but %s is ALSO still reachable directly from a sandbox — "+
-				"the redirect is configured but not enforced; runs can still bypass the mirror", toHost, fromHost),
-			ElapsedMS: res.elapsed.Milliseconds(),
-		}
-	case res.hasExitCode:
-		return siteConfigProbeResponse{
-			State:     "blocked",
-			Detail:    fmt.Sprintf("could not reach the mirror %s: %s", toHost, curlFailureDetail(res.exitCode)),
-			ElapsedMS: res.elapsed.Milliseconds(),
-		}
-	case res.neverRan:
-		return siteConfigProbeResponse{
-			State: "not_run",
-			Detail: fmt.Sprintf("The probe never ran: %s. Nothing was learned about %s — the sandbox that carries the probe could not start, so this says nothing about your proxy or your network.",
-				res.incompleteReason, toHost),
-			ElapsedMS: res.elapsed.Milliseconds(),
-		}
-	default:
-		return siteConfigProbeResponse{
-			State:     "blocked",
-			Detail:    fmt.Sprintf("the probe of the mirror %s did not get a clean answer: %s", toHost, res.incompleteReason),
-			ElapsedMS: res.elapsed.Milliseconds(),
-		}
-	}
-}
-
-// findEgressRedirect resolves the stored row whose From matches want
-// (case-insensitive on the stored spelling -- same convention as
-// unionAllowedDomains, helpers.go). This lookup IS the SSRF guard: it is the
-// only path from a caller's request to an actual probe target, so a `from`
-// the operator never configured can never be dialed.
-func findEgressRedirect(sc types.SiteConfig, want string) (types.EgressRedirect, bool) {
-	for _, red := range sc.EgressRedirects {
-		if strings.EqualFold(red.From, want) {
-			return red, true
-		}
-	}
-	return types.EgressRedirect{}, false
-}
-
 // handleTestSiteConfigProxy is POST /api/v1/site-config/test-proxy
 // (operator-only, audited). It launches a throwaway one-shot sandbox that
 // curls a known-reachable host through wardyn-proxy chained to the
@@ -808,7 +672,8 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "launch proxy probe: "+perr.Error())
 		return
 	}
-	resp := classifyProxyProbe(res, subj)
+	resp := classifyProxyProbe(res, subj, s.cfg.ControlPlaneURL)
+	resp.Warning = s.probeRecordingWarning(ctx, resp.State, runID)
 	s.recordAudit(ctx, s.auditEvent(&runID, actorTypeFromRequest(r), actor, "site_config.test_proxy",
 		"site_config", outcomeBool(resp.State == "reached"), mustJSON(map[string]any{
 			"state": resp.State, "target_host": strings.Join(hosts, ", "), "elapsed_ms": resp.ElapsedMS,
@@ -884,7 +749,8 @@ func (s *Server) handleTestSiteConfigRedirect(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, "launch redirect probe: "+perr.Error())
 		return
 	}
-	resp := classifyRedirectProbe(res, toHost, fromHost)
+	resp := classifyRedirectProbe(res, toHost, fromHost, s.cfg.ControlPlaneURL)
+	resp.Warning = s.probeRecordingWarning(ctx, resp.State, runID)
 	s.recordAudit(ctx, s.auditEvent(&runID, actorTypeFromRequest(r), actor, "site_config.test_redirect",
 		"site_config", outcomeBool(resp.State == "reached"), mustJSON(map[string]any{
 			"state": resp.State, "to_host": toHost, "from_host": fromHost, "elapsed_ms": resp.ElapsedMS,

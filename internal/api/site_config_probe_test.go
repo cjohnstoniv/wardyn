@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -20,12 +21,18 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
+	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // ─── classify* pure state-mapping tables ─────────────────────────────────────
+
+// testControlPlaneURL stands in for s.cfg.ControlPlaneURL across classify*
+// tests that don't care about its exact value, and is asserted verbatim by
+// the ones that do (the timed_out detail names it).
+const testControlPlaneURL = "http://wardyn.wardyn.svc.cluster.local:8080"
 
 // probeHostsLabel is the human-readable host list connection-level failure
 // details embed; payload-claim details (reached/intercepted) name the full
@@ -63,7 +70,7 @@ func TestClassifyProxyProbe(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := classifyProxyProbe(c.res, builtinSubject)
+			got := classifyProxyProbe(c.res, builtinSubject, testControlPlaneURL)
 			if got.State != c.wantState {
 				t.Errorf("state = %q, want %q (detail=%q)", got.State, c.wantState, got.Detail)
 			}
@@ -99,7 +106,7 @@ func TestClassifyRedirectProbe(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := classifyRedirectProbe(c.res, to, from)
+			got := classifyRedirectProbe(c.res, to, from, testControlPlaneURL)
 			if got.State != c.wantState {
 				t.Errorf("state = %q, want %q (detail=%q)", got.State, c.wantState, got.Detail)
 			}
@@ -115,7 +122,7 @@ func TestClassifyRedirectProbe(t *testing.T) {
 // on the sentinel exactly, and a run that never got an exit code at all must
 // never be misread as bypass.
 func TestClassifyRedirectProbe_BypassNeverInferred(t *testing.T) {
-	got := classifyRedirectProbe(probeRunResult{incompleteReason: "sandbox never started"}, "to.example", "from.example")
+	got := classifyRedirectProbe(probeRunResult{incompleteReason: "sandbox never started"}, "to.example", "from.example", testControlPlaneURL)
 	if got.State == "bypass" {
 		t.Fatalf("an incomplete probe (no exit code at all) must never be classified bypass; got %+v", got)
 	}
@@ -124,12 +131,33 @@ func TestClassifyRedirectProbe_BypassNeverInferred(t *testing.T) {
 // TestClassifyRedirectProbe_NotRun mirrors TestClassifyProxyProbe_NotRun for
 // the redirect endpoint: a launch failure is not_run, never blocked.
 func TestClassifyRedirectProbe_NotRun(t *testing.T) {
-	got := classifyRedirectProbe(probeRunResult{neverRan: true, incompleteReason: "run.create: mint run identity: unavailable"}, "artifactory.corp", "registry.npmjs.org")
+	got := classifyRedirectProbe(probeRunResult{neverRan: true, incompleteReason: "run.create: mint run identity: unavailable"}, "artifactory.corp", "registry.npmjs.org", testControlPlaneURL)
 	if got.State != "not_run" {
 		t.Fatalf("state = %q, want not_run (detail=%q)", got.State, got.Detail)
 	}
 	if !strings.Contains(got.Detail, "never ran") {
 		t.Errorf("detail = %q, want it to say the probe never ran", got.Detail)
+	}
+}
+
+// TestClassifyRedirectProbe_TimedOut is the redirect-endpoint half of the
+// 0.6.6 fix: a wait that expired AFTER run.exec already succeeded must never
+// read as a network verdict (blocked) or a launch failure (not_run) — it is
+// its own state, naming the agent status at the deadline and the control
+// plane URL to check.
+func TestClassifyRedirectProbe_TimedOut(t *testing.T) {
+	got := classifyRedirectProbe(probeRunResult{timedOut: true, agentStatus: "RUNNING"}, "artifactory.corp", "registry.npmjs.org", testControlPlaneURL)
+	if got.State != "timed_out" {
+		t.Fatalf("state = %q, want timed_out (detail=%q)", got.State, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "not a network verdict") {
+		t.Errorf("detail = %q, want it to disclaim being a network verdict", got.Detail)
+	}
+	if !strings.Contains(got.Detail, "RUNNING") {
+		t.Errorf("detail = %q, want it to name the observed agent status", got.Detail)
+	}
+	if !strings.Contains(got.Detail, testControlPlaneURL) {
+		t.Errorf("detail = %q, want it to name the control plane URL to check", got.Detail)
 	}
 }
 
@@ -257,6 +285,10 @@ type probeFakeRunner struct {
 	// (non-nil) capsClasses slice drives the errProbeNoRunner path.
 	capsClasses []types.ConfinementClass
 	capsErr     error
+	// sessionRecording feeds Capabilities().SessionRecording -- default false
+	// matches most probeFakeRunner tests (which don't care); the
+	// probeRecordingWarning tests set it true to drive that check.
+	sessionRecording bool
 	// lastImage/lastClass record what runSiteConfigProbe actually dispatched,
 	// for tests asserting it picked the runner's own advertised class
 	// (bestClass) rather than the operator's confinement floor.
@@ -275,7 +307,7 @@ func (r *probeFakeRunner) Capabilities(context.Context) (runner.Capabilities, er
 	if classes == nil {
 		classes = []types.ConfinementClass{types.CC1}
 	}
-	return runner.Capabilities{Driver: "probe-fake", ConfinementClasses: classes}, nil
+	return runner.Capabilities{Driver: "probe-fake", ConfinementClasses: classes, SessionRecording: r.sessionRecording}, nil
 }
 func (r *probeFakeRunner) CreateSandbox(_ context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
 	r.mu.Lock()
@@ -695,7 +727,7 @@ func TestClassifyProxyProbe_InterceptedIsBlockedNotReached(t *testing.T) {
 	// while egress is firmly shut. Now that a green probe UNLOCKS the setup
 	// gate, calling this reached would wave an operator through a network that
 	// cannot actually reach anything.
-	got := classifyProxyProbe(probeRunResult{hasExitCode: true, exitCode: proxyProbeInterceptedCode}, builtinSubject)
+	got := classifyProxyProbe(probeRunResult{hasExitCode: true, exitCode: proxyProbeInterceptedCode}, builtinSubject, testControlPlaneURL)
 	if got.State != "blocked" {
 		t.Fatalf("state = %q, want blocked — an intercepted reply is NOT reachability", got.State)
 	}
@@ -708,7 +740,7 @@ func TestClassifyProxyProbe_InterceptedIsBlockedNotReached(t *testing.T) {
 	// The flag exists so no client string-matches; but the plain blocked case
 	// must never set it — same verdict, different flavor, and only the real
 	// sentinel exit may produce the flavor.
-	if plain := classifyProxyProbe(probeRunResult{hasExitCode: true, exitCode: 7}, builtinSubject); plain.Intercepted {
+	if plain := classifyProxyProbe(probeRunResult{hasExitCode: true, exitCode: 7}, builtinSubject, testControlPlaneURL); plain.Intercepted {
 		t.Error("a connection-level blocked must never read as intercepted")
 	}
 }
@@ -720,7 +752,7 @@ func TestClassifyProxyProbe_InterceptedIsBlockedNotReached(t *testing.T) {
 // fact, and rendering a launch failure as "Blocked" (the classic corp-network
 // state) sends the operator chasing a proxy problem that was never there.
 func TestClassifyProxyProbe_NotRun(t *testing.T) {
-	got := classifyProxyProbe(probeRunResult{neverRan: true, incompleteReason: "run.dispatch: create sandbox: no such image"}, builtinSubject)
+	got := classifyProxyProbe(probeRunResult{neverRan: true, incompleteReason: "run.dispatch: create sandbox: no such image"}, builtinSubject, testControlPlaneURL)
 	if got.State != "not_run" {
 		t.Fatalf("state = %q, want not_run (detail=%q)", got.State, got.Detail)
 	}
@@ -729,6 +761,33 @@ func TestClassifyProxyProbe_NotRun(t *testing.T) {
 	}
 	if got.State == "blocked" {
 		t.Error("a launch failure must never render as blocked")
+	}
+}
+
+// TestClassifyProxyProbe_TimedOut is the F-shape regression: a wait that
+// expired after run.exec already succeeded (the sandbox started and the task
+// launched) must classify as its own `timed_out` state — never `blocked`
+// (that claims a real network fact was observed) and never `not_run` (that
+// claims the sandbox never got to running it, which is exactly wrong here).
+func TestClassifyProxyProbe_TimedOut(t *testing.T) {
+	got := classifyProxyProbe(probeRunResult{timedOut: true, agentStatus: "waiting: CreateContainerConfigError: image pull failed"}, builtinSubject, testControlPlaneURL)
+	if got.State != "timed_out" {
+		t.Fatalf("state = %q, want timed_out (detail=%q)", got.State, got.Detail)
+	}
+	if got.State == "blocked" || got.State == "not_run" {
+		t.Error("a timed_out verdict must never collapse into blocked or not_run")
+	}
+	if !strings.Contains(got.Detail, "never reported completion") {
+		t.Errorf("detail = %q, want it to say the run never reported completion", got.Detail)
+	}
+	if !strings.Contains(got.Detail, "waiting: CreateContainerConfigError") {
+		t.Errorf("detail = %q, want it to name the observed agent status", got.Detail)
+	}
+	if !strings.Contains(got.Detail, testControlPlaneURL) {
+		t.Errorf("detail = %q, want it to name WARDYN_CONTROL_PLANE_URL's value", got.Detail)
+	}
+	if !strings.Contains(got.Detail, "WARDYN_CONTROL_PLANE_URL") {
+		t.Errorf("detail = %q, want it to name the env var to check", got.Detail)
 	}
 }
 
@@ -1020,7 +1079,13 @@ func TestHandleTestSiteConfigRedirect_NoRunner(t *testing.T) {
 
 // TestSiteConfigProbe_TimeoutReclaimsSandbox pins the hard bound: a probe
 // whose task never finishes must not hold a live sandbox forever. It shrinks
-// the package's wait timeout so the test does not take the real 50s.
+// the package's wait timeout so the test does not take the real 90s.
+// probeFakeRunner's Exec always succeeds (a real run.exec success event
+// lands in the audit trail before its Wait ever blocks), so this is the
+// exec-succeeded shape and the correct state is `timed_out` (0.6.6) — see
+// TestHandleTestSiteConfigProxy_TimeoutAfterExecIsTimedOut for the fuller
+// assertion on that state's own detail; this test's job is only the
+// reclaim invariant, which holds identically either way.
 func TestSiteConfigProbe_TimeoutReclaimsSandbox(t *testing.T) {
 	orig := siteConfigProbeWaitTimeout
 	siteConfigProbeWaitTimeout = 100 * time.Millisecond
@@ -1034,8 +1099,8 @@ func TestSiteConfigProbe_TimeoutReclaimsSandbox(t *testing.T) {
 		t.Fatalf("code = %d, want 200 even on a probe timeout (still a definite, if blocked, answer); body=%s", w.Code, w.Body.String())
 	}
 	got := decodeProbeResponse(t, w.Body.String())
-	if got.State != "blocked" {
-		t.Errorf("state = %q, want blocked (the probe never finished)", got.State)
+	if got.State != "timed_out" {
+		t.Errorf("state = %q, want timed_out (the fake runner's Exec succeeds before Wait blocks)", got.State)
 	}
 
 	if n := fr.stops(); n != 1 {
@@ -1043,6 +1108,196 @@ func TestSiteConfigProbe_TimeoutReclaimsSandbox(t *testing.T) {
 	}
 	if st := ps.soleRunState(); st != types.RunKilled {
 		t.Errorf("run state = %q, want KILLED (a hung probe must not be left RUNNING forever)", st)
+	}
+}
+
+// TestHandleTestSiteConfigProxy_TimeoutAfterExecIsTimedOut is the 0.6.6
+// regression: a probe run whose task started (run.exec succeeded) but whose
+// wait budget expired before the run itself ever reported completion must
+// report `timed_out`, never `blocked` — a `blocked` verdict claims a real
+// network fact was observed, which is exactly the false signal the original
+// defect produced (a KILLED run with no run.complete event, misread as a
+// proxy problem). The detail must carry BOTH the sandbox agent status at the
+// deadline (probeFakeRunner's default AgentStatus: RunRunning) and the
+// control-plane URL to check, and the sandbox must still be reclaimed.
+func TestHandleTestSiteConfigProxy_TimeoutAfterExecIsTimedOut(t *testing.T) {
+	orig := siteConfigProbeWaitTimeout
+	siteConfigProbeWaitTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { siteConfigProbeWaitTimeout = orig })
+
+	fr := &probeFakeRunner{block: true} // Exec succeeds; Wait never returns on its own
+	cfg := baseTestConfig(newHarness(t), newProbeStore(types.SiteConfig{UpstreamProxyURL: "http://proxy.corp:3128"}))
+	ps := cfg.Store.(*probeStore)
+	cfg.Audit = ps
+	cfg.Runner = fr
+	cfg.ControlPlaneURL = testControlPlaneURL
+	srv := New(cfg)
+
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-proxy", adminToken, "{}")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	got := decodeProbeResponse(t, w.Body.String())
+	if got.State != "timed_out" {
+		t.Fatalf("state = %q, want timed_out (detail=%q)", got.State, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "RUNNING") {
+		t.Errorf("detail = %q, want it to name the sandbox agent status observed at the deadline", got.Detail)
+	}
+	if !strings.Contains(got.Detail, testControlPlaneURL) {
+		t.Errorf("detail = %q, want it to name WARDYN_CONTROL_PLANE_URL's configured value", got.Detail)
+	}
+
+	if n := fr.stops(); n != 1 {
+		t.Errorf("StopSandbox calls = %d, want exactly 1 (a timed-out probe's sandbox must still be reclaimed)", n)
+	}
+	if st := ps.soleRunState(); st != types.RunKilled {
+		t.Errorf("run state = %q, want KILLED (a timed-out probe must not be left RUNNING forever)", st)
+	}
+}
+
+// TestHandleTestSiteConfigRedirect_TimeoutAfterExecIsTimedOut is the
+// redirect-endpoint variant of the proxy test above.
+func TestHandleTestSiteConfigRedirect_TimeoutAfterExecIsTimedOut(t *testing.T) {
+	orig := siteConfigProbeWaitTimeout
+	siteConfigProbeWaitTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { siteConfigProbeWaitTimeout = orig })
+
+	fr := &probeFakeRunner{block: true}
+	cfg := baseTestConfig(newHarness(t), newProbeStore(redirectSiteConfig()))
+	ps := cfg.Store.(*probeStore)
+	cfg.Audit = ps
+	cfg.Runner = fr
+	cfg.ControlPlaneURL = testControlPlaneURL
+	srv := New(cfg)
+
+	body := `{"from":"registry.npmjs.org","to":"artifactory.corp/npm"}`
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-redirect", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	got := decodeProbeResponse(t, w.Body.String())
+	if got.State != "timed_out" {
+		t.Fatalf("state = %q, want timed_out (detail=%q)", got.State, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "RUNNING") || !strings.Contains(got.Detail, testControlPlaneURL) {
+		t.Errorf("detail = %q, want it to name the agent status and the control plane URL", got.Detail)
+	}
+	if st := ps.soleRunState(); st != types.RunKilled {
+		t.Errorf("run state = %q, want KILLED (a timed-out probe must still be reclaimed)", st)
+	}
+}
+
+// ─── lost-recording warning ───────────────────────────────────────────────────
+
+// probeRecordingStore is a minimal recording.Store fake for the
+// probeRecordingWarning tests: OpenCast is scriptable (found / a scriptable
+// error); SaveCast/SaveCastNamed are never exercised here.
+type probeRecordingStore struct {
+	openErr error // nil: OpenCast "finds" the cast; else returned verbatim
+}
+
+func (s *probeRecordingStore) SaveCast(context.Context, string, io.Reader) error { return nil }
+func (s *probeRecordingStore) SaveCastNamed(context.Context, string, string, io.Reader) error {
+	return nil
+}
+func (s *probeRecordingStore) OpenCast(context.Context, string) (io.ReadCloser, error) {
+	if s.openErr != nil {
+		return nil, s.openErr
+	}
+	return io.NopCloser(strings.NewReader("cast data")), nil
+}
+
+// TestProbeRecordingWarning covers probeRecordingWarning's own decision table
+// directly (not through a full probe run): a `reached` verdict whose own
+// recording never reached the control plane (RecordingStore.OpenCast ->
+// recording.ErrNotFound) must warn, even though egress itself worked --
+// every other combination (recording present, no store configured, the
+// runner doesn't advertise SessionRecording, or the verdict isn't `reached`
+// in the first place) must not.
+func TestProbeRecordingWarning(t *testing.T) {
+	runID := uuid.New()
+	cases := []struct {
+		name    string
+		state   string
+		store   recording.Store
+		sessRec bool
+		want    bool
+	}{
+		{"reached + recording present: no warning", "reached", &probeRecordingStore{}, true, false},
+		{"reached + recording missing: warning", "reached", &probeRecordingStore{openErr: recording.ErrNotFound}, true, true},
+		{"reached + missing but no store configured: no warning", "reached", nil, true, false},
+		{"reached + missing but runner doesn't advertise recording: no warning", "reached", &probeRecordingStore{openErr: recording.ErrNotFound}, false, false},
+		{"blocked + missing: never checked, no warning", "blocked", &probeRecordingStore{openErr: recording.ErrNotFound}, true, false},
+		{"reached + some other OpenCast error: no warning (not ErrNotFound)", "reached", &probeRecordingStore{openErr: errors.New("disk full")}, true, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := baseTestConfig(newHarness(t), newProbeStore(types.SiteConfig{}))
+			cfg.RecordingStore = c.store
+			cfg.Runner = &probeFakeRunner{sessionRecording: c.sessRec}
+			cfg.ControlPlaneURL = testControlPlaneURL
+			srv := New(cfg)
+
+			got := srv.probeRecordingWarning(context.Background(), c.state, runID)
+			if (got != "") != c.want {
+				t.Fatalf("warning = %q, want non-empty=%v", got, c.want)
+			}
+			if c.want && !strings.Contains(got, testControlPlaneURL) {
+				t.Errorf("warning = %q, want it to name the control plane URL to check", got)
+			}
+		})
+	}
+}
+
+// TestHandleTestSiteConfigProxy_ReachedWithLostRecordingWarns end-to-ends the
+// warning through the real handler: a healthy proxy probe whose own
+// recording never reached the control plane must still report state=reached
+// (egress genuinely works) but carry a non-empty Warning.
+func TestHandleTestSiteConfigProxy_ReachedWithLostRecordingWarns(t *testing.T) {
+	fr := &probeFakeRunner{exitCode: 0, sessionRecording: true}
+	cfg := baseTestConfig(newHarness(t), newProbeStore(types.SiteConfig{UpstreamProxyURL: "http://proxy.corp:3128"}))
+	ps := cfg.Store.(*probeStore)
+	cfg.Audit = ps
+	cfg.Runner = fr
+	cfg.RecordingStore = &probeRecordingStore{openErr: recording.ErrNotFound}
+	cfg.ControlPlaneURL = testControlPlaneURL
+	srv := New(cfg)
+
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-proxy", adminToken, "{}")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	got := decodeProbeResponse(t, w.Body.String())
+	if got.State != "reached" {
+		t.Fatalf("state = %q, want reached (egress itself worked)", got.State)
+	}
+	if got.Warning == "" {
+		t.Fatal("warning = \"\", want a non-empty lost-recording warning")
+	}
+	if !strings.Contains(got.Warning, testControlPlaneURL) {
+		t.Errorf("warning = %q, want it to name the control plane URL", got.Warning)
+	}
+}
+
+// TestHandleTestSiteConfigProxy_ReachedWithRecordingPresentNoWarning is the
+// flip side: a probe whose own recording DID land must carry no warning at
+// all (the JSON field must be omitted, not merely empty-string-rendered --
+// omitempty on Warning covers that).
+func TestHandleTestSiteConfigProxy_ReachedWithRecordingPresentNoWarning(t *testing.T) {
+	fr := &probeFakeRunner{exitCode: 0, sessionRecording: true}
+	cfg := baseTestConfig(newHarness(t), newProbeStore(types.SiteConfig{UpstreamProxyURL: "http://proxy.corp:3128"}))
+	cfg.Audit = cfg.Store.(*probeStore)
+	cfg.Runner = fr
+	cfg.RecordingStore = &probeRecordingStore{}
+	srv := New(cfg)
+
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-proxy", adminToken, "{}")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), `"warning"`) {
+		t.Errorf("body = %s, want no warning field when the recording landed", w.Body.String())
 	}
 }
 
