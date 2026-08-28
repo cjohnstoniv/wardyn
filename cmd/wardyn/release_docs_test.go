@@ -152,11 +152,19 @@ func TestReleaseWorkflowPublishesAgentAWSSSO(t *testing.T) {
 // half: `make agent-images` builds wardyn/agent-aws-sso:local, but
 // run-host.sh's WARDYN_AGENT_IMAGES default never routed the "aws-sso" agent
 // id to it, so a host-mode guided AWS SSO login fell back to the unpublished
-// ghcr convention ref even locally.
+// ghcr convention ref even locally. The 0.6.5 "base" row is the same shape of
+// proof for the setup connectivity probe's image (site_config_probe.go
+// dispatches the "base" key). The default lives in a single-quoted shell
+// variable now, so the keys are asserted unescaped.
 func TestRunHostMapsAwsSsoImage(t *testing.T) {
 	doc := readRepoDoc(t, "scripts/run-host.sh")
-	if !strings.Contains(doc, `\"aws-sso\":\"wardyn/agent-aws-sso:local\"`) {
-		t.Error(`scripts/run-host.sh's default WARDYN_AGENT_IMAGES omits "aws-sso":"wardyn/agent-aws-sso:local"`)
+	for _, want := range []string{
+		`"aws-sso":"wardyn/agent-aws-sso:local"`,
+		`"base":"wardyn/agent-base:local"`,
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("scripts/run-host.sh's default WARDYN_AGENT_IMAGES omits %s", want)
+		}
 	}
 }
 
