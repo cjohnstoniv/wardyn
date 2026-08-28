@@ -99,7 +99,10 @@
   --input: #e5e5e5;
   --input-background: #ffffff;
   --switch-background: #e5e5e5;
-  --ring: #a3a3a3;
+  /* focus ring: #a3a3a3 measured 2.52:1 on this background — below WCAG
+     1.4.11's 3:1 non-text minimum. Reuses --muted-foreground's value, already
+     proven at 4.74:1 here. */
+  --ring: #737373;
 
   --font-weight-normal: 400;
   --font-weight-medium: 500;
@@ -187,7 +190,10 @@
   --input: #262626;
   --input-background: #1f1f1f;
   --switch-background: #262626;
-  --ring: #404040;
+  /* focus ring: #404040 measured 1.91:1 on this background — below WCAG
+     1.4.11's 3:1 non-text minimum. Reuses --muted-foreground's value, already
+     proven at 7.85:1 here. */
+  --ring: #a3a3a3;
 
   --chart-4: #3b82f6;
 
