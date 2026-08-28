@@ -113,6 +113,11 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
   const sshOn = !!ssh?.enabled;
   const uiApps: UIApp[] = run.ui_apps ?? [];
   const uiSandboxOn = !!uiSandbox?.enabled;
+  // ponytail: "external:" is a bare description-string prefix, not a typed
+  // field on AgentRun — cheaper than a labels map for the one consumer this
+  // card is. Upgrade to a labels map (or a real field) once a second
+  // consumer needs the same signal.
+  const externalTool = !!run.description?.startsWith("external:");
 
   // Mints a single-use attach ticket (the SAME endpoint the terminal lanes
   // use) and opens the app on the UI-sandbox origin in a new tab. A failed
@@ -157,6 +162,11 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
 
   return (
     <SectionCard title="Attach from your terminal" Icon={KeyRound}>
+      {externalTool && (
+        <p className="mb-2 text-[0.7188rem] leading-relaxed text-muted-foreground">
+          Managed by an external tool — killing this run tears down that tool's workspace.
+        </p>
+      )}
       <p className="mb-2 text-[0.7813rem] leading-relaxed text-muted-foreground">
         The terminal on this page is one attachment to a persistent session. These land in the{" "}
         <span className="text-foreground">same session</span> — what you type in one shows up in the other, and

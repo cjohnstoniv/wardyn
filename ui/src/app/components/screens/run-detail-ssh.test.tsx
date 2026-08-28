@@ -129,6 +129,28 @@ describe("ConnectSSHCard — visibility", () => {
   });
 });
 
+// ponytail: "external:" is a bare description-string prefix (run-detail-ssh.tsx),
+// not a typed field — these two cases are its whole contract.
+describe("ConnectSSHCard — external-tool notice", () => {
+  it("renders the external-tool line when description starts with 'external:'", async () => {
+    healthMock.mockResolvedValue({});
+    listKeysMock.mockResolvedValue([]);
+    renderCard({ description: "external:vscode-remote" });
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+    expect(
+      screen.getByText("Managed by an external tool — killing this run tears down that tool's workspace."),
+    ).toBeInTheDocument();
+  });
+
+  it("omits the line when description is absent or does not start with 'external:'", async () => {
+    healthMock.mockResolvedValue({});
+    listKeysMock.mockResolvedValue([]);
+    renderCard({ description: "a run I described myself" });
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+    expect(screen.queryByText(/Managed by an external tool/)).toBeNull();
+  });
+});
+
 describe("ConnectSSHCard — content", () => {
   it("shows the full card (command, ssh config, fingerprint, VS Code disclosure) when a key is registered", async () => {
     healthMock.mockResolvedValue({

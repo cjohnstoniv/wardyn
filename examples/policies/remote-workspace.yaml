@@ -1,0 +1,71 @@
+# remote-workspace.yaml — a sandbox a HUMAN drives from an external tool (an
+# IDE or an agent workbench) over the SSH gateway, instead of a task string a
+# Wardyn-launched agent executes on its own.
+#
+#   wardyn ssh-key ensure                                     # once per machine
+#   wardyn run --agent claude-code --interactive --json \
+#     --policy-file examples/policies/remote-workspace.yaml   # -> prints the run, including its id
+#   wardyn run wait-ready <id> --json                         # waits past RUNNING for the clone to land
+#   wardyn ssh <id> --json                                    # {host, port, username, host_key_fingerprint, command}
+#
+# Point the external tool at the printed target. See docs/SSH.md "Other tools
+# over SSH" for what each command prints and why `run wait-ready` is the step
+# that makes this a four-command recipe instead of a poll-and-guess one.
+
+# Left minimal on purpose. Model-provider egress (api.anthropic.com and
+# friends) is unioned in automatically by dispatch from the run's OWN model
+# binding (subscription / api_key / Bedrock) — see applyLLMCredMount,
+# internal/api/llmcred.go — never from this list. Add hosts here only for
+# what the external tool or the agent inside the sandbox needs beyond that,
+# e.g. a package registry if it builds.
+allowed_domains: []
+
+# An unknown host raises an approval AND HOLDS the connection until a human
+# decides, instead of denying it outright. There is someone to hold for here
+# — the human at the other end of the SSH session is already watching — which
+# is exactly the case wait_for_review is for (docs/POLICIES.md
+# "first_use_approval modes").
+first_use_approval: wait_for_review
+
+min_confinement_class: CC1
+
+# Never reaped. The reaper's idle clock is Wardyn's own view of activity
+# (attach/egress); it has no way to see a human thinking inside the external
+# tool's own UI, or that tool's own agent working for hours between calls
+# that touch the sandbox at all — both would otherwise read as "idle".
+# auto_stop_after_sec: 0 (the default) means the same "never" to the reaper,
+# but -1 SAYS the omission was deliberate on a run like this, not an operator
+# who simply forgot the field.
+auto_stop_after_sec: -1
+
+eligible_grants:
+  # Cloning/pushing routes through the Wardyn git-broker (repo-scoped, token
+  # minted proxy-side, never in the sandbox) — github.com is NOT in
+  # allowed_domains. Write, so the external tool can push its work; approval-
+  # gated so a human decides once before the first push, the same posture
+  # any other write-capable credential gets. List the exact repo(s) this run
+  # may touch — an empty `repos: []` template denies direct GitHub egress
+  # AND fails to mint (docs/POLICIES.md "Brokered GitHub").
+  - kind: github_token
+    scope:
+      repos:
+        - octocat/Hello-World
+      permissions:
+        contents: write
+    ttl_seconds: 3600
+    requires_approval: true
+
+# Turns OFF branch-namespace confinement (the proxy's default-ON rule that a
+# brokered push may only touch refs/heads/wardyn/<run-id>/*,
+# ARCHITECTURE.md "Git egress") for THIS run's brokered pushes above. Without
+# it, an external tool that checks out and pushes its own feature-branch
+# name — not the wardyn/<run-id>/* one agent-run sets up — gets every push
+# refused with no way to explain to that tool why. Every push this opts back
+# in still goes through the broker (repo-scoped, minted proxy-side, never in
+# the sandbox) and is marked distinctly in audit — rule_source
+# "brokered:git:branch-ns-off" instead of the ordinary "brokered:git" — and
+# the grant's own GitHub ruleset, if one is configured, still bounds what the
+# token can touch regardless of this field (docs/POLICIES.md "Bound the
+# token itself"). See internal/types/policy.go's
+# RunPolicySpec.GitPushAnyBranch.
+git_push_any_branch: true

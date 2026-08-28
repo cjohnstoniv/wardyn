@@ -41,6 +41,23 @@ directory you name — edit `source`, then onboard it once with `wardyn workspac
 create --kind local_dir --source <path>` (a run may only mount an ONBOARDED
 source; the gate is un-bypassable). All three are commented.
 
+## remote-workspace.yaml
+
+The external-tool lane ([docs/SSH.md](../../docs/SSH.md) "Other tools over
+SSH"): a human drives this sandbox from their own IDE or agent workbench over
+the SSH gateway instead of handing Wardyn a task string. `auto_stop_after_sec:
+-1` because the reaper's idle clock cannot see a human thinking in their own
+editor, or that tool's own agent working between calls that touch the sandbox
+at all — both would otherwise read as idle. `first_use_approval:
+wait_for_review` holds an unknown-host connection for a live decision instead
+of denying it outright, on the premise that someone is already at the
+keyboard to decide. `git_push_any_branch: true` turns off the default
+branch-namespace confinement on the accompanying write-capable `github_token`
+grant, because the external tool names its own branch instead of the
+`wardyn/<run-id>/*` one `agent-run` sets up — see
+[docs/POLICIES.md](../../docs/POLICIES.md)'s "Bound the token itself" for what
+still bounds the token when this is on.
+
 ## default.json
 
 The out-of-the-box policy (`WARDYN_DEFAULT_POLICY`, also the ceiling every run

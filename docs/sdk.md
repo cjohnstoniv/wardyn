@@ -104,6 +104,8 @@ var (
     a   client.ApprovalRequest // ListApprovals / Approve / Deny
     p   client.RunPolicy       // ListPolicies / GetPolicy / Create / Update
     ev  client.AuditEvent      // AuditEvents
+    sk  client.SSHPublicKey    // ListSSHKeys / AddSSHKey
+    rf  client.RunFiles        // RunFiles
 )
 
 // Enums and their values are re-exported too:
