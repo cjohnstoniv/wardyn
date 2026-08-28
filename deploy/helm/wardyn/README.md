@@ -77,9 +77,14 @@ install.
   when enabled) ingress from this
   namespace, and (`k8s.enabled`) API-server egress plus an ingress peer for a
   separate `k8s.runsNamespace`.
-- **Role/RoleBinding + ClusterRole/ClusterRoleBinding** (`k8s.enabled` only) —
-  least-privilege RBAC for the k8s runner substrate; see
+- **Role/RoleBinding + ClusterRole/ClusterRoleBinding** (`k8s.enabled` only,
+  unless `k8s.rbac.create=false`) — least-privilege RBAC for the k8s runner
+  substrate; see
   [Kubernetes runner substrate](#kubernetes-runner-substrate-k8senabled).
+- **Ingress** (`ingress.enabled` only) — fronts the console's HTTP port; see
+  [Console Ingress](#console-ingress).
+- **ConfigMap** (`defaultPolicy` only) — a baked default policy, mounted
+  read-only; see [Default policy](#default-policy).
 
 ## Prerequisites
 
@@ -95,7 +100,11 @@ wiring) is rendered by this chart. In detail:
   canary verifies it and refuses to start the substrate on a non-enforcing
   CNI (kind's default kindnet is the classic case — the conformance CI lane
   pins kind + Calico; `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` downgrades the
-  refusal to a loud warning).
+  refusal to a loud warning). A DIFFERENT knob, `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1`,
+  never downgrades this enforcement refusal — it only acknowledges the
+  SEPARATE trap below (an ambient default-deny already present in
+  `k8s.runsNamespace`), and only when the canary pod actually ran and could
+  not connect.
 - **Postgres 12+** (external or managed).
 - A wardynd image: the chart's default pulls the CI-published one for a
   released version (see the callout at the top), or **build and push your
@@ -198,7 +207,9 @@ boot with `open examples/policies/default.json: no such file or directory`;
 on one of those, add
 `--set env.WARDYN_DEFAULT_POLICY=/examples/policies/default.json`). To use a
 different bundled policy, set `env.WARDYN_DEFAULT_POLICY` to any file under
-`/examples/policies/` (`demo.json`, ...).
+`/examples/policies/` (`demo.json`, ...). To bake a cluster-specific policy
+into the chart instead — an alternative to picking among the image's bundled
+ones — see [Default policy](#default-policy).
 
 **Upgrade note — `/readyz` is a 0.6-and-later endpoint.** The readiness probe
 targets `/readyz`. From 0.6.0 the chart's own default image serves it: an empty
@@ -335,6 +346,14 @@ existing policy's own `podSelector`** — e.g. a `matchExpressions` entry with
 policy simply stops selecting them and Wardyn's per-run policies are the only
 ones that apply.
 
+Can't get an exemption in place right away? `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1`
+boots anyway — but ONLY for the case phase A's pod actually ran and could not
+connect (exit 1). It is not a general override: a canary that never ran at
+all (an image pull failure, no scheduler capacity) still blocks boot with no
+acknowledgment path, and it is a different variable from the CNI-enforcement
+`WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` above — acknowledging an ambient deny is
+not the same claim as downgrading an enforcement refusal.
+
 **Do NOT instead add a separate allow policy for `wardyn.managed=true`.**
 NetworkPolicy allows are purely additive and every sandbox pod (agent *and*
 proxy) carries that label, so such a policy would widen every run's egress
@@ -357,6 +376,11 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   (the substrate drives the API server directly via client-go, which needs
   the pod's own projected ServiceAccount token; `automount=false` is the
   chart's own default, since a non-k8s wardynd calls no API server at all).
+- `k8s.rbac.create`: render the RBAC objects below. Default `true`. Set
+  `false` when a platform team provisions equivalent RBAC out-of-band (e.g.
+  GitOps-managed roles on a managed cluster) and would rather this chart
+  not manage its own copy — you are then responsible for granting
+  `serviceAccount.name` the exact verbs documented below.
 - `k8s.runsNamespace`: namespace every sandbox (Secret/NetworkPolicies/pods)
   is created in. Empty (default) => the release namespace, with nothing extra
   to set up. A DIFFERENT namespace must **already exist** — the chart never
@@ -440,6 +464,67 @@ control plane on a real cluster, AND (the k8s runner substrate,
 `internal/runner/k8s`) actually creates a confined sandbox there,
 conformance-tested on a NetworkPolicy-enforcing cluster (kind + Calico).
 
+## Console Ingress
+
+`ingress.*` fronts the console's `http` port only (API + UI + `/healthz`) —
+never `ssh` (TCP, not HTTP-routable) or `ui` (needs its own hostname, see
+[UI sandbox gateway](#ui-sandbox-gateway) below). Off by default, since
+every cluster's ingress controller / class / TLS story differs too much for
+the chart to guess a working default:
+
+```yaml
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: wardyn.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - hosts: ["wardyn.example.com"]
+      secretName: wardyn-tls
+```
+
+The chart refuses to render `ingress.enabled: true` with no `ingress.hosts`
+— an Ingress with no rules routes nothing. Gateway API's `HTTPRoute` is
+deliberately not offered yet: this chart's CI has no Gateway controller to
+render it against, and an untested template is worse than none.
+
+## Default policy
+
+`defaultPolicy` bakes an operator-chosen policy into a ConfigMap and mounts
+it read-only, wiring `WARDYN_DEFAULT_POLICY` at
+`/etc/wardyn/default-policy/policy.json` — an alternative to picking among
+the image's own bundled policies (see [Installation](#installation)) for a
+cluster that wants a specific floor (confinement class, egress allowlist,
+approval mode) enforced from day one instead of per-operator convention.
+
+**Watch the confinement floor.** `min_confinement_class` in the policy JSON
+is a hard floor. CC1 ships enforceable out of the box, but CC2/CC3 stay
+*unadvertised* until you also pin `k8s.runtimeClasses.CC2`/`.CC3` to an
+actual RuntimeClass (see
+[Kubernetes runner substrate](#kubernetes-runner-substrate-k8senabled)
+above). Bake a policy that floors at CC2 without also pinning
+`k8s.runtimeClasses.CC2`, and every run on this default is refused before
+it launches — silently from the chart's point of view, since the render
+still succeeds. `examples/policies/demo.json` (CC1) is the safe reference:
+it works unmodified on any cluster.
+
+```bash
+helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
+  --set-file defaultPolicy=examples/policies/demo.json \
+  ...
+```
+
+`--set-file` round-trips the file's bytes unchanged — a nested YAML map
+under `defaultPolicy` would invite a partial override silently merging
+under `--reuse-values` instead of replacing the whole document, so the
+chart takes JSON text instead. An operator-set `env.WARDYN_DEFAULT_POLICY`
+always wins over the ConfigMap-backed path (same last-one-wins precedence
+as `WARDYN_RECORDING_DIR`/`WARDYN_AUDIT_SPOOL`, see [Values](#values)
+below).
+
 ## Split SSH exposure
 
 `ssh.enabled` adds an SSH port to wardynd's EXISTING Service (no second
@@ -497,8 +582,11 @@ uiSandbox:
   originTemplate: https://run-{run}.ui.example.com
 ```
 
-Route it with an Ingress (or its own Service) against the Deployment's named
-`ui` containerPort, the same shape as the "Split SSH exposure" recipe above:
+`ingress.*` above deliberately cannot render this one — it targets the
+console's `http` port only, never `ui` (a different hostname is the
+control, not a routing detail). Route it with an Ingress (or its own
+Service) against the Deployment's named `ui` containerPort, the same shape
+as the "Split SSH exposure" recipe above:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -568,6 +656,8 @@ See `values.yaml` for all options. Key settings:
   (see the callout at the top) — override both for a locally built image or
   an unreleased commit. `image.tag` empty => `.Chart.AppVersion`.
 - `image.pullSecrets`: list of `{name: ...}` pull secrets for a private registry
+- `ingress.*`: optional Ingress for the console, off by default — see
+  [Console Ingress](#console-ingress) above.
 - `postgres.dsn.secretRef.name`: existing Secret holding the DSN under `postgres.dsn.key` (empty => inline mode)
 - `postgres.dsn.value`: inline DSN (inline mode only)
 - `auth.adminToken.secretRef.name` / `auth.adminToken.value`: admin bearer token,
@@ -587,8 +677,17 @@ See `values.yaml` for all options. Key settings:
   (e.g. its internal signing key) are written under whatever key that first boot
   generated — the NEXT boot generates a different one, can no longer decrypt
   them, and the pod crash-loops forever.
+- `secrets.ageKeySecretRef.name` / `.key`: age identity from a SEPARATE,
+  chart-unmanaged Secret — for an operator-owned Secret (e.g. one a Postgres
+  operator manages that would reject an extra `age-key` key added to it)
+  that isn't `postgres.dsn`'s own. Counts as wired for the refusal above.
+  Mutually exclusive with `ageKeyFromSecret`/`ageKey` — the chart refuses a
+  render naming two sources.
 - `secrets.allowEphemeralAgeKey`: override for the refusal above, the same
   acknowledge-the-ceiling shape as `allowMultiReplica`. Default `false`.
+- `defaultPolicy`: JSON text baking a default policy into a ConfigMap,
+  mounted read-only — see [Default policy](#default-policy) above. Empty
+  (default) => no ConfigMap, image's own baked default applies.
 - `readinessProbe.path`: readiness probe path, default `/readyz` (which pings
   Postgres — liveness and startup stay on `/healthz` regardless). The chart's
   own default image serves `/readyz` from 0.6.0 on, so leave this alone unless
@@ -632,8 +731,9 @@ See `values.yaml` for all options. Key settings:
   watchers, session recordings, and the ground-truth token rotator — are closed
   at the code level (Postgres-backed state, leases, and leader election); the
   masking registry is not, and neither are the other per-process items
-  enumerated in [docs/OPERATIONS.md](../../../docs/OPERATIONS.md) ("One replica,
-  by construction"). `allowMultiReplica` is an acceptance of that, not a fix.
+  enumerated in [docs/OPERATIONS.md#one-replica-by-construction](../../../docs/OPERATIONS.md#one-replica-by-construction)
+  ("One replica, by construction"). `allowMultiReplica` is an acceptance of
+  that, not a fix.
 - `allowMultiReplica`: override for the refusal above. Default `false`.
 
 Where this chart is headed: [ROADMAP.md](../../../ROADMAP.md).

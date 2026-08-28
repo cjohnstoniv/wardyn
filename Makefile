@@ -470,6 +470,12 @@ licenses: ## Every Go dependency licence must be on licenses/ALLOWED-LICENSES.tx
 #      wrong reason is a false green, which is the whole point of these guards.
 #   8. the replicas refusal's documented override, asserted to still RENDER —
 #      a guard with no way past would be a wall, not a guard.
+#   9. 0.6.5 additions, each side: k8s.rbac.create=false and its
+#      --reuse-values nil-safety twin (k8s.rbac=null); secrets.ageKeySecretRef
+#      wiring and its two-sources refusal; defaultPolicy's env-precedence and
+#      invalid-JSON refusal. (The NetworkPolicy podSelector narrowing and the
+#      Ingress/ConfigMap objects are asserted inline inside renders 1 and 2
+#      above, not a render of their own.)
 # No kubeconform: it resolves schemas at runtime from an unpinned upstream ref,
 # which would trade a network-free gate for a flaky one and break the pinning
 # discipline scripts/check-image-pins.sh exists to enforce.

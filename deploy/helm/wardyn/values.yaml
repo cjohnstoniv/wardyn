@@ -20,8 +20,9 @@ image:
   # Names of imagePullSecrets for a private registry (list of {name: ...}).
   pullSecrets: []
 
-# Leave at 1 — wardynd holds per-process state (see README / docs/OPERATIONS.md).
-# Anything higher is REFUSED at render time by templates/deployment.yaml.
+# Leave at 1 — wardynd holds per-process state (see README /
+# docs/OPERATIONS.md#one-replica-by-construction). Anything higher is
+# REFUSED at render time by templates/deployment.yaml.
 replicas: 1
 
 # Override for the refusal above. The pin is a SAFETY control, not modesty: the
