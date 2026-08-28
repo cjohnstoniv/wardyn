@@ -355,7 +355,7 @@ services:
       WARDYN_UI_SANDBOX_ADVERTISE: "${WARDYN_UI_SANDBOX_ADVERTISE:-}"
       # Agent image overrides: map agent-name -> OCI image ref. The demo tags
       # are produced by `make agent-images` or `docker compose --profile build-only build`.
-      WARDYN_AGENT_IMAGES: "${WARDYN_AGENT_IMAGES:-{\"claude-code\":\"wardyn/agent-claude-code:local\",\"codex-cli\":\"wardyn/agent-codex-cli:local\",\"aws-sso\":\"wardyn/agent-aws-sso:local\"}}"
+      WARDYN_AGENT_IMAGES: "${WARDYN_AGENT_IMAGES:-{\"base\":\"wardyn/agent-base:local\",\"claude-code\":\"wardyn/agent-claude-code:local\",\"codex-cli\":\"wardyn/agent-codex-cli:local\",\"aws-sso\":\"wardyn/agent-aws-sso:local\"}}"
       # Subscription auth mode. Proxy-side OAuth injection needs wardynd to run
       # where the operator's ~/.claude + `claude` binary live (host mode) so it
       # can mint/refresh the live token. The COMPOSE wardynd is distroless and
@@ -619,10 +619,28 @@ services:
     profiles: ["build-only"]
     command: ["--help"]
 
-  # agent-claude-code and agent-codex-cli are build-only stanzas: the docker
-  # runner launches agent containers on demand; these entries exist so
-  # `docker compose --profile build-only build` produces the tagged images.
-  # Both are parked under the build-only profile (never started by the demo).
+  # agent-base, agent-claude-code, and agent-codex-cli are build-only stanzas:
+  # the docker runner launches agent containers on demand; these entries exist
+  # so `docker compose --profile build-only build` produces the tagged images.
+  # All three are parked under the build-only profile (never started by the
+  # demo). agent-base ships no coding agent (deploy/images/common/agent-run-stub)
+  # — it exists so the setup connectivity probe has a published, curl-carrying
+  # image to dispatch instead of one this project never publishes.
+  agent-base:
+    build:
+      context: ../..
+      dockerfile: deploy/images/base/Dockerfile
+      # Corporate-build pass-through for the npm install (empty by default).
+      args:
+        NPM_REGISTRY: "${NPM_REGISTRY:-}"
+        HTTP_PROXY: "${HTTP_PROXY:-}"
+        HTTPS_PROXY: "${HTTPS_PROXY:-}"
+        NO_PROXY: "${NO_PROXY:-}"
+        GOPROXY: "${GOPROXY:-}"
+    image: wardyn/agent-base:local
+    profiles: ["build-only"]
+    command: ["sleep", "infinity"]
+
   agent-claude-code:
     build:
       context: ../..
