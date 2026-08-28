@@ -67,6 +67,14 @@ type ClassSupport struct {
 	// StructuralEgress and NetworkPolicy are not mutually exclusive in
 	// principle, but today's substrates each prove exactly one.
 	NetworkPolicy bool
+	// NetworkPolicyAcknowledged (B1) is true when an OPERATOR has accepted an
+	// ambient-default-deny-shaped canary failure as expected rather than the
+	// canary proving enforcement (WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY on the
+	// k8s substrate today). An acknowledgment, never proof — mutually
+	// exclusive with NetworkPolicy=true (alternate outcomes of the same
+	// boot-time canary), and must never be treated as satisfying an
+	// enforcement requirement NetworkPolicy alone gates.
+	NetworkPolicyAcknowledged bool
 	// SessionRecording reports wardyn-rec PTY recording support.
 	SessionRecording bool
 }

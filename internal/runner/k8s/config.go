@@ -35,6 +35,17 @@ const serviceAccountNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccou
 // expected failure mode for out-of-cluster kubeconfig use, not a bug — the
 // remedy is a reachable rest.Config (run in-cluster, or point kubeconfig at
 // a cluster this process can actually dial), not a flag.
+//
+// Do not conflate that PERMANENT shape with the one canaryIndeterminate DOES
+// have a partial override for (B1): a canary pod that reaches Running and
+// then exits exactly 1 is NOT "never got a verdict" — the apiserver was
+// reachable, the pod scheduled and ran, only its own connect attempt was
+// refused, which is what an ambient (platform-applied) default-deny
+// NetworkPolicy looks like from here. WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1
+// (Config.AckAmbientDefaultDeny) acknowledges exactly that narrow shape and
+// lets boot proceed anyway — see canary.go's runEgressCanary. An unreachable
+// apiserver still has no such override; this doc's "no operator override
+// restores boot" claim is scoped to that case, not to every indeterminate.
 func loadRestConfig() (*rest.Config, error) {
 	if cfg, err := rest.InClusterConfig(); err == nil {
 		return cfg, nil

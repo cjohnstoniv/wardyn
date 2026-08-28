@@ -803,14 +803,21 @@ func setupRunnerInfo(ctx context.Context, rn runner.Runner) (SetupRunner, string
 	}
 	netpolProven := ""
 	if out.Driver == "k8s" {
-		// c.NetworkPolicy is the orchestrator-aggregated ClassSupport signal;
-		// "unenforced" is the only non-enforced verdict a LIVE daemon can ever
-		// report here — an unenforced-without-override or a genuinely
-		// indeterminate canary both refuse to boot entirely
-		// (internal/runner/k8s's newWithClient).
-		if c.NetworkPolicy {
+		// c.NetworkPolicy / c.NetworkPolicyAcknowledged are the
+		// orchestrator-aggregated ClassSupport signals; a genuinely
+		// indeterminate canary (no ack, no override) refuses to boot entirely
+		// (internal/runner/k8s's newWithClient), so a LIVE daemon can only
+		// ever report one of these three. Acknowledged checked first: B1's
+		// WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY produces a driver that never set
+		// NetworkPolicy true (it is not proof), so the two are mutually
+		// exclusive in practice, but acknowledged-not-proven must never read
+		// as the stronger "enforced" claim if that ever changed.
+		switch {
+		case c.NetworkPolicyAcknowledged:
+			netpolProven = "acknowledged"
+		case c.NetworkPolicy:
 			netpolProven = "enforced"
-		} else {
+		default:
 			netpolProven = "unenforced"
 		}
 	}

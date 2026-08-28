@@ -37,6 +37,12 @@ type Capabilities struct {
 	StructuralEgress bool `json:"structural_egress"`
 	// NetworkPolicy reports L1 support (nftables / NetworkPolicy default-deny).
 	NetworkPolicy bool `json:"network_policy"`
+	// NetworkPolicyAcknowledged (B1): an operator has accepted an
+	// ambient-default-deny-shaped canary failure as expected rather than
+	// proven — see substrate.ClassSupport.NetworkPolicyAcknowledged's doc.
+	// omitempty: absent on every driver that predates B1 reads the same as
+	// false.
+	NetworkPolicyAcknowledged bool `json:"network_policy_acknowledged,omitempty"`
 	// SessionRecording reports wardyn-rec sidecar support.
 	SessionRecording bool `json:"session_recording"`
 }

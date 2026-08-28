@@ -223,6 +223,10 @@ func TestK8sEgressContainmentCheck(t *testing.T) {
 		{"k8s enforced: ok, no fix needed", "k8s", "enforced", true, "ok", false},
 		{"k8s unenforced (opted out): fail, fix names the opt-out to unset", "k8s", "unenforced", true, "fail", true},
 		{"k8s indeterminate (field absent): fail, never reads as enforcing", "k8s", "", true, "fail", false},
+		// B1: acknowledged is neither ok (never proven — phase B never ran)
+		// nor fail (the operator made an informed call on a managed cluster,
+		// which is a warn, not a red the checklist blocks on).
+		{"k8s acknowledged (B1): warn, never fail or ok", "k8s", "acknowledged", true, "warn", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -239,8 +243,8 @@ func TestK8sEgressContainmentCheck(t *testing.T) {
 			if chk.Status != tc.wantStatus {
 				t.Errorf("Status = %q, want %q", chk.Status, tc.wantStatus)
 			}
-			if chk.Status == "fail" && chk.Fix == "" {
-				t.Error("fail status must carry a Fix")
+			if (chk.Status == "fail" || chk.Status == "warn") && chk.Fix == "" {
+				t.Errorf("%s status must carry a Fix", chk.Status)
 			}
 			if strings.Contains(chk.Detail, "Enforcing") && chk.Status != "ok" {
 				t.Errorf("a non-ok row must never claim Enforcing in its Detail: %q", chk.Detail)
@@ -254,6 +258,29 @@ func TestK8sEgressContainmentCheck(t *testing.T) {
 				t.Errorf("fix mentions a WARDYN_ env var with no dual helm form: %q", chk.Fix)
 			}
 		})
+	}
+}
+
+// TestK8sEgressContainmentCheck_Acknowledged asserts the B1 row's exact
+// content: never claims proof, names the ack env, and its Fix points at the
+// real remedy (exempt Wardyn's pods, then unset the env) rather than just
+// suppressing the warning.
+func TestK8sEgressContainmentCheck_Acknowledged(t *testing.T) {
+	chk, ok := k8sEgressContainmentCheck("k8s", "acknowledged")
+	if !ok {
+		t.Fatal("ok = false, want true")
+	}
+	if chk.Status != "warn" {
+		t.Errorf("Status = %q, want warn", chk.Status)
+	}
+	if !strings.Contains(chk.Detail, "not proven") {
+		t.Errorf("Detail = %q, want it to say the canary never proved enforcement", chk.Detail)
+	}
+	if !strings.Contains(chk.Detail, "WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY") {
+		t.Errorf("Detail = %q, want it to name the ack env", chk.Detail)
+	}
+	if !strings.Contains(chk.Fix, "wardyn.managed") || !strings.Contains(chk.Fix, "WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY") {
+		t.Errorf("Fix = %q, want it to name both the exemption selector and the env to unset", chk.Fix)
 	}
 }
 

@@ -135,9 +135,9 @@ func envBuilderCheck(wired bool) SetupCheck {
 // checklist's "ready to launch" verdict even though CC1 sandboxes still
 // create fine (runnerCheck's own separate, milder grade covers that).
 //
-// netpolProven is "enforced" | "unenforced" | "". "unenforced" is the only
-// non-enforced verdict a LIVE wardynd can ever report — an indeterminate or
-// an unenforced-without-override canary both refuse to boot
+// netpolProven is "enforced" | "unenforced" | "acknowledged" | "". A LIVE
+// wardynd can only ever report one of the first three — a genuinely
+// indeterminate canary (no override, no ack) refuses to boot entirely
 // (internal/runner/k8s's newWithClient). "" covers three real cases, not
 // two: a non-k8s driver; a k8s daemon build that predates this computation;
 // AND a genuine k8s driver whose Capabilities() call itself just errored
@@ -154,6 +154,20 @@ func k8sEgressContainmentCheck(driver, netpolProven string) (SetupCheck, bool) {
 		return SetupCheck{
 			ID: id, Label: label, Status: "ok",
 			Detail: "Enforcing · NetworkPolicy (the boot-time canary proved a deny-all policy actually blocks egress).",
+		}, true
+	case "acknowledged":
+		// B1: never "ok" — an acknowledgment is not the canary proving
+		// anything (phase B never even ran, see runEgressCanary's comment on
+		// why running it would be theater behind an existing ambient deny).
+		return SetupCheck{
+			ID: id, Label: label, Status: "warn",
+			Detail: "Acknowledged, not proven — the operator confirmed this cluster's ambient default-deny NetworkPolicy (applied " +
+				"by the platform, not Wardyn) via WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1 (helm: env.WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY). " +
+				"The boot-time canary could not independently confirm Wardyn's own deny-all policy takes effect: behind an existing " +
+				"default-deny, that test can only ever also refuse, proving nothing either way, so it was skipped rather than run for show.",
+			Fix: "Prove it instead of acknowledging it: exempt Wardyn's own pods from the platform's ambient policy (a " +
+				"matchExpressions entry with key wardyn.managed, operator NotIn, values [\"true\"]) so the canary can run its real " +
+				"deny-all test, then unset WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY (helm: env.WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY).",
 		}, true
 	case "unenforced":
 		return SetupCheck{

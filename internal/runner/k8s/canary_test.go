@@ -8,6 +8,7 @@ package k8s
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -171,6 +172,117 @@ func TestNewWithClient_CanaryNetPolScopedToSuffix(t *testing.T) {
 	}
 	if !matched {
 		t.Errorf("no created canary pod carries labels[%s]=%q (the netpol's own selector value) — the selector would match nothing", labelRun, suffix)
+	}
+}
+
+// TestNewWithClient_AckAmbientDefaultDeny_Boots is B1's PASS path: phase A
+// reaches Running and exits exactly 1 — the shape an ambient (platform-
+// applied) default-deny NetworkPolicy produces — and AckAmbientDefaultDeny
+// is set. Construction must succeed, report acked (never enforced, which
+// would overclaim proof phase B never actually produced), and phase B must
+// never run at all: exactly ONE canary pod created.
+func TestNewWithClient_AckAmbientDefaultDeny_Boots(t *testing.T) {
+	cs := fake.NewClientset()
+	installCanaryReactorExitCodes(t, cs, 1, 0) // phase A itself exits 1
+	cs.ClearActions()
+
+	d, err := newWithClient(context.Background(), cs, testRestConfig(), Config{
+		Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test", AckAmbientDefaultDeny: true,
+	})
+	if err != nil {
+		t.Fatalf("newWithClient: %v", err)
+	}
+	if !d.netPolAcked {
+		t.Error("netPolAcked = false, want true")
+	}
+	if d.netPolEnforced {
+		t.Error("netPolEnforced = true, want false — acknowledged is not proof, phase B never ran")
+	}
+	cls, err := d.Classes(context.Background())
+	if err != nil {
+		t.Fatalf("Classes: %v", err)
+	}
+	if !cls.NetworkPolicyAcknowledged {
+		t.Error("ClassSupport.NetworkPolicyAcknowledged = false, want true")
+	}
+	if cls.NetworkPolicy {
+		t.Error("ClassSupport.NetworkPolicy = true, want false — acknowledged must never read as proven")
+	}
+
+	podsCreated := 0
+	for _, a := range cs.Actions() {
+		if a.GetVerb() == "create" && a.GetResource().Resource == "pods" {
+			podsCreated++
+		}
+	}
+	if podsCreated != 1 {
+		t.Errorf("canary pods created = %d, want exactly 1 (phase B must be skipped when the ack applies)", podsCreated)
+	}
+	assertCanaryCleanedUp(t, cs)
+}
+
+// TestNewWithClient_AckAmbientDefaultDeny_StuckPodStaysIndeterminate proves
+// the ack is scoped EXACTLY to "reached Running, exited 1" — a pod that never
+// reaches Running at all (ImagePullBackOff, same fixture as the plain
+// indeterminate test) must stay indeterminate and refuse boot regardless of
+// AckAmbientDefaultDeny; there is nothing here that shape could plausibly
+// acknowledge.
+func TestNewWithClient_AckAmbientDefaultDeny_StuckPodStaysIndeterminate(t *testing.T) {
+	cs := fake.NewClientset()
+	installStuckCanaryReactor(t, cs)
+
+	_, err := newWithClient(context.Background(), cs, testRestConfig(), Config{
+		Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test", AckAmbientDefaultDeny: true,
+	})
+	if err == nil {
+		t.Fatal("newWithClient: want an error refusing boot, got nil")
+	}
+	if !errors.Is(err, errCanaryIndeterminate) {
+		t.Errorf("err = %v, want errors.Is(err, errCanaryIndeterminate) — a stuck pod is not the ack's shape", err)
+	}
+}
+
+// TestNewWithClient_AckAmbientDefaultDeny_HealthyPhaseAIsUnaffected proves the
+// ack never suppresses a REAL two-phase test when phase A actually succeeds:
+// the normal enforced/unenforced verdict must come out exactly as if the ack
+// were never set.
+func TestNewWithClient_AckAmbientDefaultDeny_HealthyPhaseAIsUnaffected(t *testing.T) {
+	cs := fake.NewClientset()
+	installCanaryReactor(t, cs, false) // phase A exit 0, phase B exit 1 (enforced)
+
+	d, err := newWithClient(context.Background(), cs, testRestConfig(), Config{
+		Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test", AckAmbientDefaultDeny: true,
+	})
+	if err != nil {
+		t.Fatalf("newWithClient: %v", err)
+	}
+	if !d.netPolEnforced {
+		t.Error("netPolEnforced = false, want true — a healthy phase A must run the real two-phase test")
+	}
+	if d.netPolAcked {
+		t.Error("netPolAcked = true, want false — nothing was acknowledged, phase A never failed")
+	}
+}
+
+// TestNewWithClient_NoAck_ExitOneNamesTheEnv is the negative: without the ack
+// set, the SAME phase-A-exits-1 shape stays indeterminate, and its error
+// names the env var so an operator hitting this on a real managed cluster
+// knows the override exists.
+func TestNewWithClient_NoAck_ExitOneNamesTheEnv(t *testing.T) {
+	cs := fake.NewClientset()
+	installCanaryReactorExitCodes(t, cs, 1, 0)
+
+	_, err := newWithClient(context.Background(), cs, testRestConfig(), Config{
+		Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test",
+	})
+	if err == nil {
+		t.Fatal("newWithClient: want an error refusing boot, got nil")
+	}
+	if !errors.Is(err, errCanaryIndeterminate) {
+		t.Errorf("err = %v, want errors.Is(err, errCanaryIndeterminate)", err)
+	}
+	if !strings.Contains(err.Error(), "WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY") {
+		t.Errorf("err = %q, want it to name WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY", err.Error())
 	}
 }
 

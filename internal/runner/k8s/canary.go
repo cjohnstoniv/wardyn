@@ -48,6 +48,18 @@ const (
 	// canaryUnenforced means phase B's canary connected DESPITE the deny-all
 	// NetworkPolicy: this cluster's CNI does not enforce it.
 	canaryUnenforced
+	// canaryAcknowledged means phase A itself failed in exactly the shape an
+	// ambient (platform-applied, not Wardyn's) default-deny NetworkPolicy
+	// produces — the canary pod reached Running and its own connect exited 1
+	// (refused) — and the operator has explicitly accepted that via
+	// WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1 (Driver.Config.AckAmbientDefaultDeny).
+	// Phase B is deliberately SKIPPED in this case: behind an existing
+	// ambient default-deny, phase B's own additive deny-all policy can only
+	// ever also exit 1, proving nothing about whether Wardyn's netpol would
+	// work absent the platform's baseline — running it would be theater, not
+	// evidence. Never proof of enforcement (see ClassSupport.NetworkPolicy's
+	// doc) — only an acknowledged, unverified risk.
+	canaryAcknowledged
 )
 
 // terminalWaitingReasons are ContainerStateWaiting.Reason values that will
@@ -85,6 +97,18 @@ func (d *Driver) runEgressCanary(ctx context.Context) (canaryVerdict, error) {
 		return canaryIndeterminate, fmt.Errorf("egress canary: %w: %w", a.err, errCanaryIndeterminate)
 	}
 	if !a.reachedRunning || a.exitCode != 0 {
+		// B1: a pod that reached RUNNING and then exited exactly 1 is the one
+		// shape phase A can produce that is NOT a non-network failure — it is
+		// what an ambient (platform-applied) default-deny NetworkPolicy looks
+		// like from here too. An operator who has confirmed that IS this
+		// cluster's baseline (not a Wardyn misconfiguration) can say so via
+		// WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1 rather than being permanently
+		// refused boot with no override at all. Any other shape (never reached
+		// Running, or a different exit code) stays indeterminate regardless —
+		// the ack is scoped exactly to the one shape it actually explains.
+		if d.cfg.AckAmbientDefaultDeny && a.reachedRunning && a.exitCode == 1 {
+			return canaryAcknowledged, nil
+		}
 		// Phase A applies NO NetworkPolicy of its own — a failure here is
 		// indistinguishable from a namespace that ALREADY carries a
 		// default-deny NetworkPolicy from something else (a cluster-wide
@@ -102,7 +126,9 @@ func (d *Driver) runEgressCanary(ctx context.Context) (canaryVerdict, error) {
 			"Wardyn's pods from THAT policy's own podSelector (a matchExpressions entry with key wardyn.managed, operator NotIn, "+
 			"values [\"true\"]). Do NOT add a separate allow policy for wardyn.managed=true — NetworkPolicy allows are additive "+
 			"and both the agent and proxy pods carry that label, so it would widen every sandbox pod's egress past Wardyn's own "+
-			"per-run deny+proxy-only rule: %w",
+			"per-run deny+proxy-only rule. If a canary pod reaching Running and exiting exactly 1 IS the expected shape here — "+
+			"an ambient default-deny NetworkPolicy the platform already applies, not a Wardyn misconfiguration — set "+
+			"WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1 (exact case, exact value \"1\") to acknowledge it and boot anyway: %w",
 			a.reachedRunning, a.exitCode, errCanaryIndeterminate)
 	}
 

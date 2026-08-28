@@ -77,6 +77,16 @@ type Config struct {
 	// warning. Even then, ClassSupport.NetworkPolicy/StructuralEgress both
 	// stay false — an opted-out substrate must never read as confined.
 	AllowUnenforcedNetPol bool
+	// AckAmbientDefaultDeny is WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY: on a
+	// managed, multi-tenant cluster where a platform team already applies a
+	// baseline default-deny NetworkPolicy, phase A of the boot-time canary
+	// (which applies no policy of its own) fails in exactly that shape —
+	// reaches Running, exits 1 — and construction refuses to boot with no
+	// override at all (B1). This flag acknowledges that shape as expected
+	// rather than a Wardyn misconfiguration; see canary.go's runEgressCanary.
+	// Never a proof of enforcement: ClassSupport.NetworkPolicy stays false
+	// either way (see NetworkPolicyAcknowledged instead).
+	AckAmbientDefaultDeny bool
 }
 
 func (c *Config) withDefaults() {
@@ -102,6 +112,14 @@ type Driver struct {
 	// ClassSupport.NetworkPolicy is netPolEnforced either way.
 	netPolEnforced bool
 	netPolOptedOut bool
+	// netPolAcked is B1's third boot-time outcome: the operator acknowledged
+	// an ambient-default-deny-shaped phase-A failure (AckAmbientDefaultDeny)
+	// rather than the canary actually proving Wardyn's own policy is
+	// enforced. Deliberately SEPARATE from netPolEnforced, never folded into
+	// it — an acknowledged risk is not proof, and ClassSupport.NetworkPolicy
+	// must never overclaim (see its doc). Surfaced as
+	// ClassSupport.NetworkPolicyAcknowledged instead.
+	netPolAcked bool
 }
 
 var _ substrate.Substrate = (*Driver)(nil)
@@ -149,6 +167,9 @@ func newWithClient(ctx context.Context, cs kubernetes.Interface, restCfg *rest.C
 		d.netPolOptedOut = true
 	case canaryEnforced:
 		d.netPolEnforced = true
+	case canaryAcknowledged:
+		logWarnAckAmbientDefaultDeny()
+		d.netPolAcked = true
 	}
 	return d, nil
 }
@@ -166,6 +187,23 @@ func logWarnUnenforcedNetPolOptOut() {
 	msg := "wardynd: k8s NetworkPolicy is NOT enforced on this cluster (the boot-time egress canary connected despite a deny-all policy) and WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1 — proceeding anyway: " +
 		"every sandbox this substrate creates has UNCONFINED egress, not the L1 confinement Wardyn normally requires. Classes stay advertised, but NetworkPolicy and StructuralEgress both report false — " +
 		"this substrate will never read as confined on /healthz. Unset WARDYN_K8S_ALLOW_UNENFORCED_NETPOL and fix the cluster's CNI/NetworkPolicy support to restore real confinement."
+	slog.Warn(msg)
+}
+
+// logWarnAckAmbientDefaultDeny is B1's loud, unmissable warning when
+// WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1 let boot proceed past a phase-A
+// failure shaped like an ambient default-deny NetworkPolicy: the canary
+// never actually proved Wardyn's own policy is enforced (phase B never ran),
+// only that the operator has accepted that as this cluster's expected
+// baseline. Mirrors logWarnUnenforcedNetPolOptOut's contract — an operator
+// who set the override cannot miss that this is an acknowledgment, not proof.
+func logWarnAckAmbientDefaultDeny() {
+	msg := "wardynd: k8s egress canary phase A failed in exactly the shape an ambient (platform-applied) default-deny NetworkPolicy " +
+		"produces, and WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1 — proceeding anyway: phase B (the deny-all test that would actually prove " +
+		"Wardyn's own NetworkPolicy is enforced) was SKIPPED, because behind an existing ambient deny it could only ever also refuse, " +
+		"proving nothing. Classes stay advertised, but NetworkPolicy still reports false and NetworkPolicyAcknowledged reports true — " +
+		"this substrate reads as acknowledged-not-proven on /healthz and the setup checklist, never as confirmed confined. To get real " +
+		"proof, exempt Wardyn's own pods (wardyn.managed=true) from the platform's ambient policy and unset this env."
 	slog.Warn(msg)
 }
 
@@ -207,6 +245,12 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		Resolved:         resolved,
 		StructuralEgress: false, // this substrate proves L1, never L0 (see package doc)
 		NetworkPolicy:    d.netPolEnforced,
+		// NetworkPolicyAcknowledged (B1): the operator accepted an
+		// ambient-default-deny-shaped canary failure rather than the canary
+		// proving enforcement — see netPolAcked's doc. Never true at the same
+		// time NetworkPolicy is true (the two verdicts are mutually exclusive
+		// outcomes of the same boot-time canary).
+		NetworkPolicyAcknowledged: d.netPolAcked,
 		// Exec (see exec.go's recordCmd) wraps every ephemeral-container argv
 		// with wardyn-rec, delivering via the masked brokered proxy upload —
 		// the only path this substrate supports (mounts, and so any

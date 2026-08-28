@@ -241,15 +241,17 @@ func TestSetupStatus_ReadyFalseWhenRunnerNil(t *testing.T) {
 // setupCheckIdsStore uses for store.Store.
 type k8sRunner struct {
 	runner.Runner
-	networkPolicy bool
+	networkPolicy             bool
+	networkPolicyAcknowledged bool
 }
 
 func (k8sRunner) Name() string { return "k8s" }
 func (r k8sRunner) Capabilities(context.Context) (runner.Capabilities, error) {
 	return runner.Capabilities{
-		Driver:             "k8s",
-		ConfinementClasses: []types.ConfinementClass{types.CC1},
-		NetworkPolicy:      r.networkPolicy,
+		Driver:                    "k8s",
+		ConfinementClasses:        []types.ConfinementClass{types.CC1},
+		NetworkPolicy:             r.networkPolicy,
+		NetworkPolicyAcknowledged: r.networkPolicyAcknowledged,
 	}, nil
 }
 
@@ -293,6 +295,31 @@ func TestSetupStatus_K8sEgressContainmentCheck(t *testing.T) {
 				t.Errorf("k8s_egress_containment status = %q, want %q", found.Status, tc.wantStatus)
 			}
 		})
+	}
+}
+
+// TestSetupStatus_K8sEgressContainmentCheck_Acknowledged is B1's handler-
+// level twin of TestK8sEgressContainmentCheck_Acknowledged
+// (setup_checks_test.go): proves the "acknowledged" row actually reaches
+// /setup/status wired through the real Capabilities() call, warn-graded and
+// distinct from both the enforced (ok) and unenforced (fail) rows.
+func TestSetupStatus_K8sEgressContainmentCheck_Acknowledged(t *testing.T) {
+	srv := New(Config{AdminToken: adminToken, Runner: k8sRunner{networkPolicyAcknowledged: true}})
+	code, st := decodeSetup(t, srv, adminToken)
+	if code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", code)
+	}
+	var found *SetupCheck
+	for i := range st.Checks {
+		if st.Checks[i].ID == "k8s_egress_containment" {
+			found = &st.Checks[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("checks missing k8s_egress_containment; got %+v", st.Checks)
+	}
+	if found.Status != "warn" {
+		t.Errorf("k8s_egress_containment status = %q, want warn", found.Status)
 	}
 }
 

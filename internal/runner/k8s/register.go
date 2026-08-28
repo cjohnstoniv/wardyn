@@ -24,6 +24,7 @@ func init() {
 			ImagePullSecret:       os.Getenv("WARDYN_K8S_IMAGE_PULL_SECRET"),
 			ConfinementRuntimes:   d.ConfinementRuntimes,
 			AllowUnenforcedNetPol: os.Getenv("WARDYN_K8S_ALLOW_UNENFORCED_NETPOL") == "1",
+			AckAmbientDefaultDeny: os.Getenv("WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY") == "1",
 		})
 		if err != nil {
 			return nil, err
