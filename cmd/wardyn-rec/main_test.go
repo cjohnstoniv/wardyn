@@ -5,6 +5,7 @@ package main
 
 import (
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestQuoteArgs(t *testing.T) {
@@ -243,5 +245,51 @@ func TestRun_UploadURL_ServerError(t *testing.T) {
 	}
 	if err := run(args); err != nil {
 		t.Fatalf("recording upload failure must be non-fatal, got %v", err)
+	}
+}
+
+// TestUploadCast_BoundedTimeout is the regression guard for the 0.6.6 recorder
+// upload hang: a server that accepts the connection but never responds (the
+// shape of a control plane that is unreachable behind a mesh sidecar that
+// still completes the TCP handshake) must not be able to hold uploadCast open
+// anywhere near the old bare-60s bound. Shrinks the package's upload timeouts
+// so the test runs fast rather than taking the full real bound.
+func TestUploadCast_BoundedTimeout(t *testing.T) {
+	origDial, origClient := uploadDialTimeout, uploadClientTimeout
+	uploadDialTimeout = 200 * time.Millisecond
+	uploadClientTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { uploadDialTimeout, uploadClientTimeout = origDial, origClient })
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, aerr := ln.Accept()
+			if aerr != nil {
+				return
+			}
+			// Accept and hold: never read or write, so the client hangs
+			// waiting for a response that never comes.
+			_ = conn
+		}
+	}()
+
+	cast := filepath.Join(t.TempDir(), "out.cast")
+	if err := os.WriteFile(cast, []byte("test cast data"), 0o600); err != nil {
+		t.Fatalf("write cast: %v", err)
+	}
+
+	start := time.Now()
+	uerr := uploadCast(cast, "http://"+ln.Addr().String()+"/recording", "")
+	elapsed := time.Since(start)
+	if uerr == nil {
+		t.Fatal("uploadCast: want an error (the server never responds), got nil")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("uploadCast took %s, want it bounded well under 2s (shrunk timeouts: dial=%s client=%s)",
+			elapsed, uploadDialTimeout, uploadClientTimeout)
 	}
 }

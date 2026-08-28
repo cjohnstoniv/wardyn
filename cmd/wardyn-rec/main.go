@@ -36,6 +36,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -44,6 +45,22 @@ import (
 	"strings"
 	"syscall"
 	"time"
+)
+
+// uploadDialTimeout/uploadClientTimeout bound how long a finished task can be
+// held hostage by a recording upload that will never complete (e.g. the
+// control plane is unreachable from the run's proxy pod on Kubernetes). Vars,
+// not consts, purely so a test can shrink them instead of taking the full 20s
+// to exercise the bound. Previously a bare http.Client{Timeout: 60s} riding
+// http.DefaultTransport's default (unbounded-connect) dialer — a hang the
+// dialer itself never caught could hold a completed task's exit for a full
+// minute, longer than the site-config probe's own wait budget
+// (siteConfigProbeWaitTimeout, internal/api/site_config_probe.go). A cast is
+// small and the proxy hop is local, so 5s to dial / 20s total is generous,
+// not tight.
+var (
+	uploadDialTimeout   = 5 * time.Second
+	uploadClientTimeout = 20 * time.Second
 )
 
 func main() {
@@ -280,13 +297,22 @@ func copyToDir(srcPath, dstDir string) error {
 // is expected to return 2xx on success. Retries are not attempted to keep the
 // sidecar simple and dependency-free; callers that require reliability should
 // use -out-dir with a separate upload agent.
+//
+// The transport is a clone of http.DefaultTransport (keeping its
+// proxy-from-environment semantics — the upload URL is the sandbox's own
+// proxy route, e.g. http://wardyn-proxy:3128/wardyn/v1/recordings/<runID>,
+// which must still honour HTTP_PROXY/NO_PROXY the same as every other
+// sandbox egress call) with a bounded DialContext, plus a bounded overall
+// client Timeout — see uploadDialTimeout/uploadClientTimeout's doc.
 func uploadCast(srcPath, uploadURL, runToken string) error {
 	data, err := os.ReadFile(srcPath)
 	if err != nil {
 		return fmt.Errorf("read cast: %w", err)
 	}
 
-	client := &http.Client{Timeout: 60 * time.Second}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = (&net.Dialer{Timeout: uploadDialTimeout}).DialContext
+	client := &http.Client{Timeout: uploadClientTimeout, Transport: transport}
 	req, err := http.NewRequest(http.MethodPut, uploadURL, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
