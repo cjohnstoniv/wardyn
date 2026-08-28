@@ -195,7 +195,8 @@ ARG TARGETARCH
 # so upgrade npm itself: 11.19.0 vendors tar 7.5.19, the patched release.
 # Pinned exactly, and bumped deliberately, like every other version here.
 ARG NPM_VERSION=11.19.0
-RUN npm install -g "npm@${NPM_VERSION}" \
+RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
+ && npm install -g "npm@${NPM_VERSION}" \
  && npm --version
 # Host-staged native binary (opt-in, gitignored). The README.md decoy makes the
 # COPY succeed when the corp-bin glob matches nothing (the npm default path).

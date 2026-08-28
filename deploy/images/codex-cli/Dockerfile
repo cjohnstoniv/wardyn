@@ -135,7 +135,8 @@ ARG CODEX_INSTALL=npm
 # node:22-bookworm-slim digest ships a fixed one yet, and it is npm's internal
 # copy, so upgrading npm is the only reach. Keep in step with that image.
 ARG NPM_VERSION=11.19.0
-RUN npm install -g "npm@${NPM_VERSION}" \
+RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
+ && npm install -g "npm@${NPM_VERSION}" \
  && npm --version
 COPY deploy/images/README.md deploy/images/codex-cli/codex-bin* /codex-stage/
 RUN set -eu; \
