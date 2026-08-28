@@ -66,13 +66,13 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `go.opentelemetry.io/otel/trace` | Apache-2.0 | https://github.com/open-telemetry/opentelemetry-go/blob/trace/v1.44.0/trace/LICENSE |
 | `go.yaml.in/yaml/v2` | Apache-2.0 | https://github.com/yaml/go-yaml/blob/v2.4.3/LICENSE |
 | `go.yaml.in/yaml/v3` | MIT | https://github.com/yaml/go-yaml/blob/v3.0.4/LICENSE |
-| `golang.org/x/crypto` | BSD-3-Clause | https://cs.opensource.google/go/x/crypto/+/v0.54.0:LICENSE |
-| `golang.org/x/net` | BSD-3-Clause | https://cs.opensource.google/go/x/net/+/v0.56.0:LICENSE |
+| `golang.org/x/crypto` | BSD-3-Clause | https://cs.opensource.google/go/x/crypto/+/v0.55.0:LICENSE |
+| `golang.org/x/net` | BSD-3-Clause | https://cs.opensource.google/go/x/net/+/v0.57.0:LICENSE |
 | `golang.org/x/oauth2` | BSD-3-Clause | https://cs.opensource.google/go/x/oauth2/+/v0.36.0:LICENSE |
 | `golang.org/x/sync/semaphore` | BSD-3-Clause | https://cs.opensource.google/go/x/sync/+/v0.22.0:LICENSE |
 | `golang.org/x/sys` | BSD-3-Clause | https://cs.opensource.google/go/x/sys/+/v0.47.0:LICENSE |
 | `golang.org/x/term` | BSD-3-Clause | https://cs.opensource.google/go/x/term/+/v0.45.0:LICENSE |
-| `golang.org/x/text` | BSD-3-Clause | https://cs.opensource.google/go/x/text/+/v0.40.0:LICENSE |
+| `golang.org/x/text` | BSD-3-Clause | https://cs.opensource.google/go/x/text/+/v0.41.0:LICENSE |
 | `golang.org/x/time/rate` | BSD-3-Clause | https://cs.opensource.google/go/x/time/+/v0.14.0:LICENSE |
 | `google.golang.org/protobuf` | BSD-3-Clause | https://github.com/protocolbuffers/protobuf-go/blob/f2248ac996af/LICENSE |
 | `gopkg.in/evanphx/json-patch.v4` | BSD-3-Clause | https://github.com/evanphx/json-patch/blob/v4.13.0/LICENSE |
