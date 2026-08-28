@@ -362,6 +362,16 @@ function ProxyTestBlock({
                 {state.result.custom && state.result.state === "reached" && (
                   <p className="text-[0.75rem] leading-snug text-info">{T.CUSTOM_CAVEAT}</p>
                 )}
+                {/* reached-only: the probe itself passed, but this run's
+                    recording never reached the control plane — same caution
+                    styling as HostProxyCheckNote's warn state / CRED_URL_NOTE
+                    above, reused rather than a new component. Never changes
+                    the gate: reached still unlocks Next either way. */}
+                {state.result.state === "reached" && state.result.warning && (
+                  <div className="rounded-lg border border-warning/30 bg-warning-subtle p-2">
+                    <p className="text-[0.6875rem] leading-snug text-warning">{state.result.warning}</p>
+                  </div>
+                )}
                 {state.result.intercepted && (
                   <>
                     <div className="rounded-md border border-border bg-muted/40 px-2.5 py-2">

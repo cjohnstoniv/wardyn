@@ -33,6 +33,11 @@ export interface ProxyTestResult {
    *  verdict as blocked, rendered apart — it sends the operator to a
    *  different person than a refused connection does. */
   intercepted?: boolean;
+  /** state=reached only: the probe passed, but this run's session recording
+   *  never reached the control plane — runs will complete, but recordings
+   *  will be lost. Absent on a clean pass; never changes the gate (reached
+   *  still unlocks Next either way). */
+  warning?: string;
   /** The probe hit a caller-named URL with no known payload to verify — a
    *  reached here is the deliberately WEAKER "request completed" claim
    *  (T.CUSTOM_CAVEAT), never the builtin targets' "payloads matched". */

@@ -198,6 +198,22 @@ describe("Test probes — real states, never a fake pass, running disables+relab
     expect(screen.queryByText(T.TEST_STANDING)).not.toBeInTheDocument();
   });
 
+  it("a reached verdict's warning renders as a caution line under it — the recording-upload risk, not a network verdict", async () => {
+    testProxyMock.mockResolvedValueOnce({ state: "reached", detail: T.TEST_OK, via: "proxy", warning: T.TEST_OK_WARNING });
+    renderStep();
+    await userEvent.click(screen.getByRole("button", { name: /^test connectivity$/i }));
+    expect(await screen.findByText("Reached · via proxy")).toBeInTheDocument();
+    expect(screen.getByText(T.TEST_OK_WARNING)).toBeInTheDocument();
+  });
+
+  it("a reached verdict with no warning renders no caution line", async () => {
+    testProxyMock.mockResolvedValueOnce({ state: "reached", detail: T.TEST_OK, via: "proxy" });
+    renderStep();
+    await userEvent.click(screen.getByRole("button", { name: /^test connectivity$/i }));
+    expect(await screen.findByText("Reached · via proxy")).toBeInTheDocument();
+    expect(screen.queryByText(T.TEST_OK_WARNING)).not.toBeInTheDocument();
+  });
+
   it("a FAILED REQUEST is not a probe verdict — it must never render as 'Blocked'", async () => {
     // The whole point of these buttons is that a result means something. A 403,
     // a restarted wardynd, or a malformed payload never reached the network at

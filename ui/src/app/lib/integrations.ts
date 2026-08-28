@@ -71,6 +71,11 @@ export const T = {
     "The probe never ran: run.dispatch: create sandbox: no such image. Nothing was learned about www.msftconnecttest.com, detectportal.firefox.com — the sandbox that carries the probe could not start, so this says nothing about your proxy or your network.",
   TEST_TIMED_OUT:
     "The probe sandbox started and ran, but the run never reported completion within 90s — not a network verdict. Sandbox agent status at the deadline: running. The usual cause is the run's recording upload to the control plane (via the proxy pod) hanging: check WARDYN_CONTROL_PLANE_URL (http://wardyn-control-plane.wardyn.svc:8080) is reachable from the runs namespace.",
+  // The mock/test mirror of a reached probe's optional `warning` (health.ts's
+  // ProxyTestResult.warning) — the probe itself passed, but this run's
+  // session recording never reached the control plane.
+  TEST_OK_WARNING:
+    "Egress works, but this run's session recording never reached the control plane — runs will complete, and their recordings will be lost. Check WARDYN_CONTROL_PLANE_URL (http://wardyn-control-plane.wardyn.svc:8080) is reachable from the runs namespace — the proxy pod uploads recordings there.",
   TEST_STANDING:
     "Tested from a throwaway sandbox on this host — the same path a run takes. Nothing else is inferred from the result.",
   TEST_PROXY_HINT:
