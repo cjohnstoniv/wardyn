@@ -274,3 +274,33 @@ func TestAgentStatus_RestartSafe_ReadsLiveFromAPIServer(t *testing.T) {
 		t.Errorf("AgentStatus = %+v, want RunStopped exit_code=1", st)
 	}
 }
+
+// TestAgentStatus_WaitingReasonSurfacedInMessage is the 0.6.6 regression: a
+// Waiting ephemeral container used to report only State: RunStarting with no
+// Reason at all, so neither an operator nor the site-config probe's
+// timed_out detail (site_config_probe.go) could tell "still legitimately
+// starting" from "stuck on a platform problem". Message must now name both
+// the Reason and any Message the apiserver attached.
+func TestAgentStatus_WaitingReasonSurfacedInMessage(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	ref := createAgentPodFixture(t, cs, uuid.New(), "wardyn/agent-claude:local", nil)
+	setPodStatus(t, cs, testNamespace, ref, func(st *corev1.PodStatus) {
+		st.EphemeralContainerStatuses = []corev1.ContainerStatus{{
+			Name: execContainerName,
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+				Reason: "CreateContainerConfigError", Message: "secret \"wardyn-agent\" not found",
+			}},
+		}}
+	})
+
+	st, err := d.AgentStatus(context.Background(), ref, execContainerName)
+	if err != nil {
+		t.Fatalf("AgentStatus: %v", err)
+	}
+	if st.State != types.RunStarting {
+		t.Errorf("State = %q, want STARTING", st.State)
+	}
+	if !strings.Contains(st.Message, "CreateContainerConfigError") || !strings.Contains(st.Message, "wardyn-agent") {
+		t.Errorf("Message = %q, want it to name the Waiting Reason and Message", st.Message)
+	}
+}

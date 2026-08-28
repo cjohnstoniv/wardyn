@@ -242,7 +242,15 @@ func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runn
 		if cs.State.Running != nil {
 			return runner.Status{State: types.RunRunning}, nil
 		}
-		return runner.Status{State: types.RunStarting}, nil // Waiting, or no state populated yet
+		if w := cs.State.Waiting; w != nil {
+			// Named, not just RunStarting: this is the one detail an
+			// operator (or the site-config probe's timed_out detail,
+			// site_config_probe.go) has no other way to see -- whether the
+			// container is still legitimately starting or is stuck on a
+			// Reason that will never resolve (terminalWaitingReasons).
+			return runner.Status{State: types.RunStarting, Message: fmt.Sprintf("waiting: %s: %s", w.Reason, w.Message)}, nil
+		}
+		return runner.Status{State: types.RunStarting}, nil // no state populated yet
 	}
 	return runner.Status{State: types.RunStopped, Message: "agent exec not found"}, nil
 }
