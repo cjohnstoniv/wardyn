@@ -157,6 +157,57 @@ func TestRedirectProbeScript_HTTPErrorIsNotReached(t *testing.T) {
 	}
 }
 
+// TestProbeFailureDetail_RunCompleteFailureWithoutExitCodeIsNotReached is F2:
+// a run.complete FAILURE event (the completion watcher's own Wait error or
+// panic, runs_lifecycle.go:61,73) carries no exit_code key at all. Decoding
+// that into an int previously defaulted to 0 -- a clean exit that never
+// happened -- and reported the probe as "reached" for a run whose task result
+// was never actually observed. Decoding into *int must leave hasExitCode
+// false, and since the run DID reach run.complete (only its own completion
+// accounting failed), neverRan must stay false too.
+func TestProbeFailureDetail_RunCompleteFailureWithoutExitCodeIsNotReached(t *testing.T) {
+	runID := uuid.New()
+	ps := newProbeStore(types.SiteConfig{})
+	ps.events = []types.AuditEvent{
+		{RunID: &runID, Action: "run.complete", Outcome: "failure",
+			Data: mustJSON(map[string]any{"error": "wait: broken pipe"})},
+	}
+	srv := New(baseTestConfig(newHarness(t), ps))
+
+	res := srv.probeFailureDetail(context.Background(), runID, 0)
+	if res.hasExitCode {
+		t.Fatalf("hasExitCode = true (exitCode=%d), want false: a run.complete failure event has no exit_code and must never read as a clean exit", res.exitCode)
+	}
+	if res.neverRan {
+		t.Error("neverRan = true, want false: the run DID reach run.complete, only its own completion accounting failed")
+	}
+	if !strings.Contains(res.incompleteReason, "wait: broken pipe") {
+		t.Errorf("incompleteReason = %q, want it to name the real error", res.incompleteReason)
+	}
+}
+
+// TestProbeFailureDetail_LaunchFailureIsNeverRan is the complementary case: a
+// failure event whose action is NOT run.complete (e.g. run.dispatch, when
+// CreateSandbox itself failed) means the sandbox never got to running the
+// probe's task at all.
+func TestProbeFailureDetail_LaunchFailureIsNeverRan(t *testing.T) {
+	runID := uuid.New()
+	ps := newProbeStore(types.SiteConfig{})
+	ps.events = []types.AuditEvent{
+		{RunID: &runID, Action: "run.dispatch", Outcome: "failure",
+			Data: mustJSON(map[string]any{"error": "create sandbox: no space left on device"})},
+	}
+	srv := New(baseTestConfig(newHarness(t), ps))
+
+	res := srv.probeFailureDetail(context.Background(), runID, 0)
+	if res.hasExitCode {
+		t.Error("hasExitCode = true, want false: the sandbox never ran")
+	}
+	if !res.neverRan {
+		t.Error("neverRan = false, want true: run.dispatch failing means the probe never got to running")
+	}
+}
+
 func TestFindEgressRedirect(t *testing.T) {
 	sc := types.SiteConfig{EgressRedirects: []types.EgressRedirect{
 		{From: "registry.npmjs.org", To: "artifactory.corp/npm", Ecosystem: "npm"},

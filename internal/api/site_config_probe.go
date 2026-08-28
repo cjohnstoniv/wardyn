@@ -244,16 +244,22 @@ func upstreamFailDetail(reason string) string {
 // probeRunResult is what a throwaway site-config probe run actually observed,
 // resolved from its own audit trail -- never inferred. A COMPLETED run always
 // reports hasExitCode=true, exitCode=0; a FAILED run reports the real exit
-// code the task exited with (hasExitCode=true). incompleteReason is set
-// instead whenever there IS no exit code to report: the sandbox never got to
-// running the task at all (e.g. CreateSandbox itself failed), or the wait
-// budget ran out before the run reached a terminal state. Either way this is
-// still a definite, real observation -- classify* reports it as `blocked`,
-// never a transport-level error, because "we tried and did not get a clean
-// answer" is exactly what blocked means.
+// code the task exited with (hasExitCode=true) -- but a run.complete FAILURE
+// event (a Wait error or a watcher panic, runs_lifecycle.go:61,73) carries no
+// exit_code at all, so hasExitCode stays false there too, same as a launch
+// that never started. incompleteReason is set whenever there IS no exit code
+// to report. neverRan distinguishes the two incomplete shapes: true when the
+// audit trail's failure event is anything OTHER than run.complete (the
+// sandbox never got to running the task at all -- e.g. CreateSandbox itself
+// failed), false when it IS run.complete (the task started running; only its
+// own completion accounting failed). classify* reports either shape as
+// `blocked` UNLESS neverRan, which gets its own `not_run` verdict -- "we
+// tried and did not get a clean answer" is not the same claim as "nothing
+// ever ran to observe".
 type probeRunResult struct {
 	hasExitCode      bool
 	exitCode         int
+	neverRan         bool
 	incompleteReason string
 	elapsed          time.Duration
 }
@@ -379,11 +385,17 @@ func (s *Server) probeFailureDetail(ctx context.Context, runID uuid.UUID, elapse
 		if ev.Action != "run.complete" {
 			continue
 		}
+		// *int, not int: a run.complete FAILURE event (Wait error or watcher
+		// panic) carries no exit_code key at all, and an int field would
+		// silently decode that absence as 0 -- a clean exit that never
+		// happened, reported as if the probe reached its target. A nil
+		// pointer here means "no exit code observed", so this run falls
+		// through to the failure-event loop below.
 		var d struct {
-			ExitCode int `json:"exit_code"`
+			ExitCode *int `json:"exit_code"`
 		}
-		if json.Unmarshal(ev.Data, &d) == nil {
-			res.hasExitCode, res.exitCode = true, d.ExitCode
+		if json.Unmarshal(ev.Data, &d) == nil && d.ExitCode != nil {
+			res.hasExitCode, res.exitCode = true, *d.ExitCode
 			return res
 		}
 	}
@@ -391,6 +403,11 @@ func (s *Server) probeFailureDetail(ctx context.Context, runID uuid.UUID, elapse
 		if ev.Outcome != "failure" {
 			continue
 		}
+		// Any launch-phase action (run.create, run.dispatch, run.exec, ...)
+		// means the sandbox never got to running the task; run.complete
+		// itself failing means it did (only the completion accounting did
+		// not) -- see the probeRunResult doc comment.
+		res.neverRan = ev.Action != "run.complete"
 		var d struct {
 			Error string `json:"error"`
 		}
