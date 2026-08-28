@@ -60,7 +60,8 @@ type Scope = Record<string, unknown>;
 //                     github_token { repos, permissions }
 //                     api_key      { host, header, format, secret_name }
 //                     git_pat      { host, secret_name, username? }
-//   tool_call     — { tool, cmd, env } (defensive: no current backend producer)
+//   tool_call     — { tool, cmd, env } (raised by wardyn-toolgate, via the
+//                    proxy's brokered approvals route — the only producer)
 // The grant KIND is not carried in requested_scope, so we infer the credential
 // sub-kind from which keys are present — importantly to keep the git_pat nuance
 // (that token is readable by the agent's process, unlike a brokered credential).

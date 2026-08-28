@@ -346,3 +346,57 @@ func TestAgentStatus_WaitingReasonSurfacedInMessage(t *testing.T) {
 		t.Errorf("Message = %q, want it to name the Waiting Reason and Message", st.Message)
 	}
 }
+
+// TestAgentStatus_ExecAddedButNotYetStarted_MustNotReadTerminal is the
+// k8s half of GAP-RECONCILE-1, which the docker driver hardened and this
+// substrate never did.
+//
+// Between UpdateEphemeralContainers returning (run.exec records SUCCESS) and
+// the kubelet publishing the container's first status, the pod carries the
+// exec in Spec.EphemeralContainers with NO matching entry in
+// Status.EphemeralContainerStatuses. AgentStatus's fall-through
+// (exec.go, the trailing `return runner.Status{State: types.RunStopped,
+// Message: "agent exec not found"}`) reports that window as a DEFINITIVE
+// terminal state with a NIL error -- indistinguishable from "the agent exec
+// is gone".
+//
+// Both consumers finalize on exactly that pair: sweepRunWatchers
+// (reconcile.go, `if serr == nil && isTerminalRunState(st.State)`) and
+// reconcileWatch (reconcile.go, `if isTerminalRunState(st.State)`) turn a
+// nil-ExitCode terminal into RunFailed + StopSandbox. A wardynd restart (or a
+// watcher-lease handoff) landing in that window therefore kills a healthy,
+// just-started k8s exec run and reports it FAILED.
+//
+// The docker driver refuses to make that call: an exec-404 while the
+// container is still RUNNING returns an ERROR ("ambiguous; daemon restart
+// under live-restore?"), which routes both consumers into their bounded
+// retry/backoff instead of finalizing. k8s has strictly BETTER evidence here
+// -- the pod Get succeeded and the exec is present in Spec -- so it must not
+// report a terminal state it cannot support.
+//
+// Want: not-yet-started is RunStarting (the same verdict a Waiting status
+// gets), or an error. Either routes the reconciler to retry. Have: RunStopped
+// with a nil error.
+func TestAgentStatus_ExecAddedButNotYetStarted_MustNotReadTerminal(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	ref := createAgentPodFixture(t, cs, uuid.New(), "wardyn/agent-claude:local", nil)
+	setPodStatus(t, cs, testNamespace, ref, func(st *corev1.PodStatus) { st.Phase = corev1.PodRunning })
+
+	// Exec succeeds: the apiserver accepted the ephemeral container. The fake
+	// clientset does not pretend to be the kubelet, which is exactly the real
+	// pre-kubelet window -- Spec has the container, Status does not.
+	execID, err := d.Exec(context.Background(), ref, []string{"/usr/local/bin/agent-run", "task"})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+
+	st, err := d.AgentStatus(context.Background(), ref, execID)
+	if err != nil {
+		return // an error is an acceptable answer: it routes the reconciler to retry.
+	}
+	if st.State.IsTerminal() {
+		t.Fatalf("AgentStatus for an exec the apiserver accepted but the kubelet has not started yet = %+v; "+
+			"a terminal state with a nil error makes sweepRunWatchers/reconcileWatch finalize a healthy run FAILED "+
+			"and tear its sandbox down (docker returns an ambiguity ERROR for the same window, GAP-RECONCILE-1)", st)
+	}
+}

@@ -267,6 +267,21 @@ func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runn
 		}
 		return runner.Status{State: types.RunStarting}, nil // no state populated yet
 	}
+	// Present in Spec but absent from Status is the pre-kubelet window: the
+	// apiserver accepted the exec and the kubelet has not published its first
+	// status yet. Reporting THAT terminal (with a nil error, so nothing retries)
+	// makes sweepRunWatchers and reconcileWatch finalize a healthy just-started
+	// run FAILED and tear its sandbox down. It is the k8s half of
+	// GAP-RECONCILE-1, which the docker driver hardened ("ambiguous; daemon
+	// restart under live-restore?", driver.go) and this substrate never did --
+	// with strictly better evidence available, since the pod Get succeeded.
+	// An exec id absent from Spec was never exec'd against this pod; terminal
+	// is the right answer there and stays.
+	for _, ec := range pod.Spec.EphemeralContainers {
+		if ec.Name == agentExecID {
+			return runner.Status{State: types.RunStarting, Message: "agent exec accepted; kubelet has not started it yet"}, nil
+		}
+	}
 	return runner.Status{State: types.RunStopped, Message: "agent exec not found"}, nil
 }
 

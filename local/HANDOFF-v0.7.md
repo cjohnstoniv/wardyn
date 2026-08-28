@@ -30,6 +30,23 @@ Two more facts that plan will want:
   probe pass a literal `"base"`, and the rebase merged both. Both now resolve to
   `agent-base`; `setup.go`'s probe row only draws the contrast when an operator
   has re-pinned `claude-code`.
+- **`tool_call` approvals DO have a backend producer — do not repeat the claim
+  that they do not.** `wardyn-toolgate` POSTs through the proxy's brokered
+  approvals route (`handleBrokerCreateApproval`, `internal/egress/proxy/local_routes.go`),
+  which forwards to the *internal* approvals endpoint (`internal/api/internal.go`).
+  Reading only the public `internal/api/approvals.go` gives the wrong answer —
+  it mentions `tool_call` solely in clamp/refusal comments. A stale comment in
+  `approvals.tsx` said "no current backend producer"; corrected here.
+  What IS true, and the rendered card copy states it correctly, is that nothing
+  *enforces* the decision out of band: the toolgate is in-sandbox and
+  cooperative. Keep that wording — it matches `AGENT-THREAT-MODEL.md`'s
+  `partial` verdict and its named bypass class.
+- **`tool_rules` shipped with ZERO UI.** Per-tool `allow`/`hold`/`deny` is
+  proxy-side and settable only in the policy YAML/JSON — no console surface
+  reads or writes it, and a rule-decided call never creates an approval card at
+  all (it returns before the forward). **This is the single most obvious 0.7
+  feature for the UI campaign to surface**, and it is the first rung of Phase G.
+
 - `maxSSHSessionsPerRun = 4` is unchanged, and **B2 was not taken**: no number
   was measured, so none was invented. `TestSSHGateway_MixedChannelTypesShareOneCap`
   now pins the structural finding (the cap is shared across `session` and
@@ -38,49 +55,96 @@ Two more facts that plan will want:
 
 ---
 
-## 2. 🔴 An unfixed, field-reported bug — read before planning anything
+## 2. The field-reported k8s bug — diagnosed, and it is not what was reported
 
-**On the k8s substrate an exec-mode run appears never to reach a terminal
-state.** Reported from a live managed-Kubernetes deployment of 0.6.5, timed
-across three consecutive probe runs agreeing to a tenth of a second:
+**The reported mechanism is refuted, and the real cause already shipped in
+0.6.6.** The report was: *on k8s an exec-mode run never reaches a terminal state,
+because the driver execs into an idle main container and nothing transitions the
+run.* Traced end to end; wrong on both halves.
 
-```
-+  0.0s  identity.mint / upstream_proxy.resolve / policy.effective  success
-+  2.2s  run.exec                                                   success
-          (no run.complete event, ever)
-+ 52.2s  site_config.test_probe   failure, state=KILLED   <- exec + 50s exactly
-```
+- **The idle-main-container shape is not k8s-specific.** `internal/runner/k8s/sandbox.go`
+  and `internal/runner/docker/driver.go` run a byte-identical `sh -c AgentIdleScript`.
+- **k8s does track an agent exec id, and better than docker does.** It adds an
+  ephemeral container named `wardyn-agent` and returns that name, re-read from the
+  apiserver on every call — so it survives a wardynd restart, which docker's
+  in-memory `agentExecs` map does not.
+- **Something does mark the run terminal.** `runs_dispatch.go` persists the exec id
+  then calls `startCompletionWatcher`; `runs_lifecycle.go` waits, CASes
+  RUNNING→COMPLETED/FAILED and emits `run.complete`. All substrate-agnostic, and
+  present in 0.6.5 too.
+- **The timing evidence cannot discriminate.** `runSiteConfigProbe` calls
+  `dispatchRun` synchronously and starts its wait budget immediately after, so the
+  clock starts within milliseconds of the `run.exec` stamp. *Any* cause of
+  non-completion fails at exactly `run.exec + <budget>`. "Exactly +50s three times"
+  is evidence of a compiled constant, not of a completion mechanism.
 
-Not latency, not egress: the probe's own curl carries `--max-time 15`, and an
-internal endpoint answering in milliseconds produces the identical 50s timeout.
-The likely mechanism — flagged as inference, not confirmed — is that the k8s
-driver runs the pod's main container as an idle command and execs the task into
-it, so nothing transitions the RUN to terminal when that exec exits.
-`internal/runner/k8s/sandbox.go`'s `idleCmd` is consistent with this.
+**What actually happened on 0.6.5.** `cmd/wardyn-rec` uploads the cast *before*
+`os.Exit`, and 0.6.5 did that on a bare 60s client over the stdlib default
+(unbounded-connect) transport. A control plane the proxy pod cannot reach — a TCP
+connection accepted and held — kept a *finished* task's exec alive up to 60s.
+Budget 50s < tail 60s → KILLED at exactly +50s, regardless of the curl target,
+which is why an internal endpoint answering in milliseconds timed out identically.
+Docker never hit it because on compose the proxy reaches the control plane over a
+local network in milliseconds.
 
-**Severity is unresolved and matters:** if it is probe-only it is a bug; if every
-`--task-mode exec --wait` run on k8s hangs to its auto-stop, it is a release
-blocker for the CI lane in `docs/CI.md`. **A diagnosis agent was running when
-this handoff was written — check for its report before acting.**
+Fixed in 0.6.6, both ends: `wardyn-rec` gained a 5s dial / 20s client timeout on a
+cloned transport, and the probe budget went 50s → **90s** with the worst-case
+arithmetic written into the comment. 0.6.6 also shipped `ErrExecNeverStarted` for a
+hard `Waiting` reason, the `timed_out` verdict, and the named `Waiting` reason —
+which is the console half of this.
 
-Two candidate fixes, from the field: (a) complete an exec-mode run when its exec
-exits, emitting `run.complete` with the exec's status; (b) have the probe wait on
-the exec's completion rather than the run's terminal state.
+**Severity: probe-only. Not a release blocker.** `wardyn run --task-mode exec --wait`
+uses the CLI's own budget — default **30 minutes**, settable via `--timeout` /
+`WARDYN_CI_TIMEOUT`. A ≤60s completion tail is invisible to it; the run genuinely
+completes and `run.complete` genuinely fires. The probe's compiled 50s was the sole
+victim. **The CI lane in `docs/CI.md` was never affected.**
 
-**The UX half of this is arguably the bigger finding**, and belongs to the UI
-campaign: the failure is **undiagnosable from the console**. The verdict reads
-"did not finish within 50s" under the *proxy* heading with advice to fix the
-proxy; the `not_run` distinction does not fire because the sandbox DID start; and
-the wait budget is a compiled constant, so there is no operator-side mitigation.
-The reporter found it only by reading the audit trail through the API — after
-eight hours. **A governance product whose failure states are unreadable from its
-own console is the UX gap, in one concrete instance.**
+**Both field-proposed fixes were rejected, on the record.** (a) *"complete an
+exec-mode run when its exec exits"* is a zero-line diff — it is already the
+implementation. (b) *"have the probe wait on the exec rather than the run"* loses
+the COMPLETED/FAILED/KILLED distinction `probeFailureDetail` reads, skips
+`finalizeRunTail`'s revoke cascade and `StopSandbox`, puts a substrate-shaped
+completion path into `internal/api`, and would not have fixed the reported failure
+anyway — the exec was still running (uploading) at the 50s mark.
+
+### What the trace DID find: a separate live k8s defect, now fixed
+
+`internal/runner/k8s/exec.go`'s `AgentStatus` fell through to a **definitive
+terminal state with a nil error** whenever the pod Get succeeded and the exec was
+present in `Spec.EphemeralContainers` but the kubelet had not yet published a
+`Status.EphemeralContainerStatuses` entry — i.e. a healthy exec that just started.
+Both consumers finalize on exactly that pair (`sweepRunWatchers` and
+`reconcileWatch` in `reconcile.go`), and with a nil ExitCode both pick `RunFailed`
+and call `StopSandbox`. **A wardynd restart or a watcher-lease handoff landing in
+that window killed a healthy k8s run and reported it FAILED.**
+
+The docker driver refuses that call for the identical ambiguity (an exec-404 while
+the container still runs returns an *error*, GAP-RECONCILE-1) precisely so the
+reconciler retries. k8s had strictly better evidence and used it worse.
+
+Fixed here: present-in-Spec-but-not-in-Status now returns `RunStarting`; absent
+from Spec keeps the terminal answer. Pinned by
+`TestAgentStatus_ExecAddedButNotYetStarted_MustNotReadTerminal`, proven to fail on
+the pre-fix commit and pass after.
+
+**Residual, unproven:** `Wait`'s poll loop has no bound if a status entry never
+appears. Unreachable on any cluster whose kubelet works — a structural note, not a
+demonstrated defect.
+
+### The UX half stands, and belongs to the UI campaign
+
+0.6.6's `timed_out` verdict and named `Waiting` reason address part of it. What
+remains: the verdict still reads under the *proxy* heading with advice to fix the
+proxy, and the wait budget is a compiled constant with no operator-side
+mitigation. The reporter found this only by reading the audit trail through the
+API — after eight hours. **A governance product whose failure states are
+unreadable from its own console is the UX gap, in one concrete instance.**
 
 ---
 
 ## 3. What 0.7 shipped
 
-Twenty-nine commits. The full detail is in `CHANGELOG.md`'s `[Unreleased]`; this
+Thirty commits. The full detail is in `CHANGELOG.md`'s `[Unreleased]`; this
 is the shape.
 
 **Two defects that made shipped features not work at all:**
@@ -168,6 +232,27 @@ Two things the release will need that the plan documents but 0.7 could not do:
   '{{.Runtimes}}'` against both before trusting either.
 - **`docker ps` on BOTH daemons before starting anything.** An idle stack holds
   8080/2222/8081, and container names collide across projects.
+- **`make notices` DELETES tracked files when `ui/node_modules` is absent** —
+  including under `make release-check`, whose `--check` name promises
+  read-only. A fresh worktree has no UI deps, so the pnpm scan finds nothing,
+  the regenerated notices drop the npm half, and **44 `licenses/texts/npm/*`
+  files plus `THIRD-PARTY-NOTICES.md` show up deleted/modified in `git status`**
+  — a red gate that looks like a real copyleft regression and is not.
+  `pnpm install --frozen-lockfile` in `ui/` first; `git checkout -- licenses/
+  THIRD-PARTY-NOTICES.md` to undo it.
+- **A rebase can silently eat the CHANGELOG.** Trunk's 0.6.6 commit reset
+  `## [Unreleased]` to empty and opened `## [0.6.6]`. The rebase took trunk's
+  side of that hunk and **dropped all 529 lines of 0.7 entries** — no conflict,
+  no warning, and `make release-check` stayed green because it only greps that
+  the `[Unreleased]` heading exists. Restored from
+  `feat/v0.7-phase0-prerebase`. **After any rebase onto a release commit, diff
+  `CHANGELOG.md`'s `[Unreleased]` against the pre-rebase branch**, and re-read
+  restored entries for claims the new trunk made stale (one did: 0.6.6 fixed
+  the site-config probe's image key a different way than D5 did).
+- **`[Unreleased]` has eleven interleaved `### Added`/`### Fixed`/`### Changed`
+  headings**, one per commit, per the plan's F.0b rule. **F.1 must consolidate
+  them into one of each before the rename** — `RELEASING.md` step 6 pastes that
+  section verbatim into the GitHub Release body.
 - **Build it and run it.** Authoring alone missed a size estimate by 2×, a
   readiness loop calling an uninstalled binary, two packages declaring `noarch`
   while shipping a compiled binary, and a `set -e`+`pipefail` bug that killed a

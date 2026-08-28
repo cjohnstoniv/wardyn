@@ -113,7 +113,7 @@ built-in demos need no model either — see
 | Egress + approvals | Only path out is the proxy; an unlisted host can hold mid-flight — once, run, until, always | shipped | [POLICIES.md](docs/POLICIES.md) |
 | Record Mode | Run once open, get the minimal policy, replay confined — 26 of 30 scored competitors have no policy-derivation loop at all | shipped | [TRY-IT.md](docs/TRY-IT.md) |
 | Workspaces & secrets | Mounts only what the workspace declares; secrets write-only, never readable back | shipped | [OPERATIONS.md](docs/OPERATIONS.md) |
-| Policies & confinement | One policy picks the barrier: Fence (runc), Wall (gVisor), Vault (Kata, experimental); a host that can't enforce it refuses | shipped | [POLICIES.md](docs/POLICIES.md) |
+| Policies & confinement | One policy picks the barrier: Fence (runc), Wall (gVisor), Vault (Kata, experimental); a host that can't enforce it refuses. Right-size it — a read-only scan or an indexer does not need what an autonomous agent needs | shipped | [POLICIES.md](docs/POLICIES.md) |
 | Model access | Key, subscription or Bedrock injected proxy-side; the sandbox holds an inert sentinel | shipped | [TRY-IT.md](docs/TRY-IT.md) |
 | CI / headless | No UI, no human: the governed run's exit code becomes the pipeline's | shipped | [CI.md](docs/CI.md) |
 | Audit + attach | Three append-only streams a Postgres trigger won't let you rewrite; attach live from browser or SSH | shipped | [SSH.md](docs/SSH.md) |
