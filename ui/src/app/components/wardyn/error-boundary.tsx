@@ -12,10 +12,16 @@ interface Props {
   region?: string;
   // Optional custom fallback renderer.
   fallback?: (error: Error, reset: () => void) => React.ReactNode;
+  // When this changes while the boundary is showing a caught error, the error
+  // clears and the children mount fresh — e.g. a cockpit widget keyed on the
+  // run id, so switching runs (or tabs) can't leave a stale crash from what
+  // used to be here pinned on screen.
+  resetKey?: string | number;
 }
 
 interface State {
   error: Error | null;
+  resetKey?: string | number;
 }
 
 // A lazy-route chunk that fails to load almost always means the DEPLOYED BUILD
@@ -66,11 +72,16 @@ function reloadOnceForStaleChunk(): boolean {
 export class ErrorBoundary extends React.Component<Props, State> {
   constructor(props: Props) {
     super(props);
-    this.state = { error: null };
+    this.state = { error: null, resetKey: props.resetKey };
   }
 
-  static getDerivedStateFromError(error: Error): State {
+  static getDerivedStateFromError(error: Error): Partial<State> {
     return { error };
+  }
+
+  static getDerivedStateFromProps(props: Props, state: State): Partial<State> | null {
+    if (props.resetKey === state.resetKey) return null;
+    return { error: null, resetKey: props.resetKey };
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {

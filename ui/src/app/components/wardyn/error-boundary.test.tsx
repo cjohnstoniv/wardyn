@@ -113,3 +113,39 @@ describe("ErrorBoundary — ordinary render errors are untouched", () => {
     expect(screen.getByText(/^custom:/)).toBeInTheDocument();
   });
 });
+
+describe("ErrorBoundary — resetKey", () => {
+  it("clears a caught error and mounts the child fresh once resetKey changes", () => {
+    const { rerender } = render(
+      <ErrorBoundary region="Runs" resetKey="run-1">
+        <Boom message="boom" />
+      </ErrorBoundary>,
+    );
+    expect(screen.getByText(/Something went wrong rendering Runs/)).toBeInTheDocument();
+
+    rerender(
+      <ErrorBoundary region="Runs" resetKey="run-2">
+        <p>fresh content</p>
+      </ErrorBoundary>,
+    );
+    expect(screen.queryByText(/Something went wrong/)).not.toBeInTheDocument();
+    expect(screen.getByText("fresh content")).toBeInTheDocument();
+  });
+
+  it("leaves a caught error in place while resetKey stays the same", () => {
+    const { rerender } = render(
+      <ErrorBoundary region="Runs" resetKey="run-1">
+        <Boom message="boom" />
+      </ErrorBoundary>,
+    );
+    expect(screen.getByText(/Something went wrong rendering Runs/)).toBeInTheDocument();
+
+    rerender(
+      <ErrorBoundary region="Runs" resetKey="run-1">
+        <p>fresh content</p>
+      </ErrorBoundary>,
+    );
+    expect(screen.getByText(/Something went wrong rendering Runs/)).toBeInTheDocument();
+    expect(screen.queryByText("fresh content")).not.toBeInTheDocument();
+  });
+});

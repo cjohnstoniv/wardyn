@@ -29,6 +29,7 @@ import { toast } from "sonner";
 import type { RunLayoutPreset } from "../../../lib/api/run-layout";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { cn } from "../../ui/utils";
+import { ErrorBoundary } from "../../wardyn/error-boundary";
 import { RUN_COCKPIT } from "../../wardyn/copy";
 import { useFocusMode } from "../app-shell";
 import { FocusMode } from "./focus-mode";
@@ -244,7 +245,15 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
                     onRemove={def.required ? undefined : () => toggleWidget(id)}
                   />
                 )}
-                <div className={cn("flex min-h-0 flex-1 flex-col", FILL_TILE)}>{def.component(ctx)}</div>
+                <div className={cn("flex min-h-0 flex-1 flex-col", FILL_TILE)}>
+                  {/* One widget throwing must not blank the whole canvas —
+                      each tile gets its own boundary, keyed on the run so a
+                      stale crash from a PREVIOUS run can never survive
+                      switching to this one. */}
+                  <ErrorBoundary region={def.label} resetKey={ctx.run.id}>
+                    {def.component(ctx)}
+                  </ErrorBoundary>
+                </div>
               </div>
             );
           })}
