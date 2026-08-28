@@ -17,7 +17,7 @@ source /usr/local/bin/agent-run-lib.sh
 # ponytail: exec task mode only — no clone/CA/credential prep, since the probe
 # policy never grants those (never sets InterceptTLS, so install_mitm_ca is
 # deliberately not called either).
-maybe_exec_task_mode "${1:-}"
+[ "${1:-}" = "--idle" ] || maybe_exec_task_mode "${1:-}"
 cat >&2 <<'MSG'
 agent-run: this is wardyn/agent-base, which ships no coding agent.
 

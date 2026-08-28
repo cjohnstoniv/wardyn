@@ -48,7 +48,8 @@ no package. That is what `deploy/compose/Dockerfile.wardynd`'s `ui-build` does.
 **2. Go builds:** add `ENV GOTOOLCHAIN=local` so the pinned-toolchain self-upgrade
 fetch (blocked behind a MITM proxy) is skipped; the corp CA above lets
 `go mod download` verify the module proxy. Also declare a module-mirror knob
-right after it:
+right after it — in the **builder stage** (the one you `COPY --from`), never a
+runtime stage, for the same reason as the build-only ARGs in 3 below:
 
 ```dockerfile
 ARG GOPROXY=

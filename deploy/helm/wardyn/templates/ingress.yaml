@@ -38,7 +38,8 @@ spec:
     - host: {{ .host }}
       http:
         paths:
-          {{- range .paths }}
+          {{- /* no paths => the console root; `paths: null` renders an Ingress the API server rejects */ -}}
+          {{- range (.paths | default (list (dict "path" "/" "pathType" "Prefix"))) }}
           - path: {{ .path | default "/" }}
             pathType: {{ .pathType | default "Prefix" }}
             backend:

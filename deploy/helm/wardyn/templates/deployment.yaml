@@ -77,10 +77,10 @@ spec:
         {{- include "wardyn.labels" . | nindent 8 }}
       {{- $podAnnotations := .Values.podAnnotations | default dict }}
       {{- if .Values.defaultPolicy }}
-      {{/* Forces a rollout when the ConfigMap's content changes — a Deployment
+      {{- /* Forces a rollout when the ConfigMap's content changes — a Deployment
       update alone does not restart pods whose only reference to a ConfigMap is
-      a volume mount. */}}
-      {{- $podAnnotations = merge (dict "checksum/default-policy" (sha256sum .Values.defaultPolicy)) $podAnnotations }}
+      a volume mount. */ -}}
+      {{- $podAnnotations = merge (dict "checksum/default-policy" (sha256sum (toString .Values.defaultPolicy))) $podAnnotations }}
       {{- end }}
       {{- with $podAnnotations }}
       annotations:

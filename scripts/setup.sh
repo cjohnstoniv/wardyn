@@ -438,7 +438,8 @@ fi
 # deliberately NOT built here — the e2e scripts that use it build it themselves;
 # a first-time user never runs it.
 hd "Agent images (per-run sandboxes)"
-for _img in claude-code:wardyn/agent-claude-code:local \
+for _img in base:wardyn/agent-base:local \
+            claude-code:wardyn/agent-claude-code:local \
             codex-cli:wardyn/agent-codex-cli:local \
             aws-sso:wardyn/agent-aws-sso:local; do
   _img_dir="${_img%%:*}"; _img_tag="${_img#*:}"

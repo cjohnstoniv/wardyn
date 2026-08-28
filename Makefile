@@ -68,11 +68,14 @@ help:
 # Core = the two real agent harnesses a user actually runs. The oracle image is
 # a deterministic e2e stand-in (no LLM) — dev/e2e only, so setup paths build
 # core and the e2e scripts build oracle themselves.
-agent-images-core: ## Build the user-facing agent images (claude-code + codex-cli)
+agent-images-core: ## Build the user-facing agent images (base + claude-code + codex-cli)
 	@echo "Building agent images (build context: repo root)..."
+	# agent-base first: it carries the setup connectivity probe (site_config_probe.go dispatches the
+	# "base" key), so a host-mode install without it reports every probe as not_run.
+	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/base/Dockerfile        -t wardyn/agent-base:local        .
 	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local .
 	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/codex-cli/Dockerfile   -t wardyn/agent-codex-cli:local   .
-	@echo "Agent images built: wardyn/agent-claude-code:local  wardyn/agent-codex-cli:local"
+	@echo "Agent images built: wardyn/agent-base:local  wardyn/agent-claude-code:local  wardyn/agent-codex-cli:local"
 
 agent-images: agent-images-core ## Build all agent OCI images (core + oracle e2e stand-in + aws-sso)
 	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/oracle/Dockerfile      -t wardyn/agent-oracle:local      .
@@ -556,6 +559,11 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeySecretRef.name=wardyn-age --set secrets.ageKeyFromSecret=true 2>&1 | grep -q "secrets.ageKeySecretRef.name is set together with" || { echo "chart no longer refuses two age-identity sources named at once"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set-file defaultPolicy=examples/policies/demo.json --set env.WARDYN_DEFAULT_POLICY=/examples/policies/demo.json | grep -q 'value: "/examples/policies/demo.json"' || { echo "env.WARDYN_DEFAULT_POLICY no longer wins over the ConfigMap-backed default"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set defaultPolicy='not json' 2>&1 | grep -q "mustFromJson" || { echo "chart no longer refuses an invalid defaultPolicy at render"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set ingress.enabled=true 2>&1 | grep -q "ingress.enabled is set with no ingress.hosts" || { echo "chart no longer refuses ingress.enabled with no hosts — an Ingress with no rules applies cleanly and routes nothing"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set ingress.enabled=true --set 'ingress.hosts[0].host=wardyn.example.test' | grep -A2 'paths:' | grep -q 'path: /' || { echo "an ingress.hosts entry with no paths no longer defaults to the console root — it rendered paths: null, which the API server rejects"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set defaultPolicy='"just-a-string"' 2>&1 | grep -q "must be a JSON object" || { echo "chart no longer refuses a defaultPolicy that is valid JSON but not an object — wardynd cannot load it"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set defaultPolicy=123 2>&1 | grep -q "must be the policy as JSON TEXT" || { echo "chart no longer refuses a non-string defaultPolicy with a message naming the contract"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeySecretRef.name=wardyn-age --set secrets.ageKey=X 2>&1 | grep -q "pick exactly one age-identity source" || { echo "the two-age-sources refusal no longer wins over the inline-only one under the default external DSN — the operator is told about a mode they are not in"; exit 1; }
 
 # ── kind Helm install-test (CI: ci.yml's helm-install-test job) ─────────────
 # helm-lint above only proves the chart RENDERS; this proves an install
@@ -639,6 +647,16 @@ helm-install-test: ## kind: postgres + helm install the loaded image + prove /he
 		exit 1; \
 	fi; \
 	echo "/healthz OK (200) via kubectl port-forward -> Service -> Pod"
+	@echo "==> server-side dry-run of the optional objects (Ingress + default-policy ConfigMap): helm-lint is grep-over-render, this is the one lane that hands them to a real API server's schema validation"
+	helm template $(HELM_TEST_RELEASE) ./deploy/helm/wardyn \
+		--namespace $(HELM_TEST_NAMESPACE) \
+		--set image.repository=$(HELM_TEST_IMAGE_REPO) \
+		--set image.tag=$(HELM_TEST_IMAGE_TAG) \
+		--set secrets.ageKeyFromSecret=true \
+		--set auth.adminToken.value=dry-run-only \
+		--set ingress.enabled=true --set 'ingress.hosts[0].host=wardyn.example.test' \
+		--set-file defaultPolicy=examples/policies/demo.json \
+		| kubectl -n $(HELM_TEST_NAMESPACE) apply --dry-run=server -f - >/dev/null
 	@echo "==> teardown"
 	helm uninstall $(HELM_TEST_RELEASE) --namespace $(HELM_TEST_NAMESPACE)
 	kubectl delete namespace $(HELM_TEST_NAMESPACE) --wait=false

@@ -4,13 +4,18 @@ into a ConfigMap and mounted read-only instead of relying on the wardynd
 image's own baked-in default (examples/policies/default.json — README
 "Installation"). Rendered only when .Values.defaultPolicy is non-empty.
 
-`mustFromJson` here is deliberate: invalid JSON fails the RENDER (a clear
-message, no object created) instead of applying fine and either
-crash-looping the pod at policy load or, worse, quietly booting on the
-image's own baked default while the operator believes theirs took effect.
+The guards are deliberate: a non-string value, invalid JSON, or JSON that
+is not an object fails the RENDER (a clear message, no object created)
+instead of applying fine and crash-looping the pod at policy load. They
+check shape only — the policy's fields are still validated by wardynd.
 */}}
 {{- if .Values.defaultPolicy -}}
-{{- $_ := mustFromJson .Values.defaultPolicy -}}
+{{- if not (kindIs "string" .Values.defaultPolicy) -}}
+{{- fail "wardyn: defaultPolicy must be the policy as JSON TEXT (a string — e.g. --set-file defaultPolicy=my-policy.json), not a YAML map or number" -}}
+{{- end -}}
+{{- if not (kindIs "map" (mustFromJson .Values.defaultPolicy)) -}}
+{{- fail "wardyn: defaultPolicy must be a JSON object (a RunPolicy), not a bare JSON scalar or array" -}}
+{{- end -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:

@@ -521,9 +521,9 @@ helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
 under `defaultPolicy` would invite a partial override silently merging
 under `--reuse-values` instead of replacing the whole document, so the
 chart takes JSON text instead. An operator-set `env.WARDYN_DEFAULT_POLICY`
-always wins over the ConfigMap-backed path (same last-one-wins precedence
-as `WARDYN_RECORDING_DIR`/`WARDYN_AUDIT_SPOOL`, see [Values](#values)
-below).
+always wins over the ConfigMap-backed path (the chart omits its own entry
+when `env.WARDYN_DEFAULT_POLICY` is set, same as `WARDYN_RECORDING_DIR`/
+`WARDYN_AUDIT_SPOOL`, see [Values](#values) below).
 
 ## Split SSH exposure
 
