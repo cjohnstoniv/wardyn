@@ -306,6 +306,10 @@ describe("corp_network gate — corpNetworkGate drives the footer (head/reason/a
   const customPass: ProxyTestResult = { state: "reached", detail: "The request completed", custom: true };
   const noRunner: ProxyTestResult = { state: "no_runner", detail: "no runner configured" };
   const notRun: ProxyTestResult = { state: "not_run", detail: "The probe never ran: run.dispatch: create sandbox failed" };
+  const timedOut: ProxyTestResult = {
+    state: "timed_out",
+    detail: "The probe sandbox started and ran, but the run never reported completion within 90s. sandbox agent status at the deadline: running",
+  };
   const bypass: ProxyTestResult = { state: "bypass", detail: "reachable directly too" };
 
   it("reads 'Untested'/off with the probe action before any probe has run (the default when corpNetwork is omitted)", () => {
@@ -415,6 +419,24 @@ describe("corp_network gate — corpNetworkGate drives the footer (head/reason/a
     // was probed, egress included.
     const redirects: EgressRedirect[] = [{ from: "https://registry.npmjs.org", to: "https://mirror.corp.internal" }];
     expect(corpNetworkGate(corpNetwork, redirects).on).toBe(true);
+  });
+
+  it("timed_out UNLOCKS Next with a neutral standing note but never earns the checkmark — the sandbox ran but never reported back, nothing was proven", () => {
+    const status = baseStatus();
+    const readiness = deriveReadiness(status);
+    const corpNetwork = { ...unset, proxyProbe: timedOut };
+    expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({
+      text: "Untested · no report from the sandbox",
+      tone: "neutral",
+    });
+    expect(corpNetworkGate(corpNetwork, [])).toEqual({ on: true, head: T.GATE_HEAD_TIMED_OUT, reason: T.TIMED_OUT_NOTE, tone: "neutral" });
+    expect(stepDone(status, readiness, [], 0, corpNetwork).corp_network).toBe(false);
+    // Same reason as no_runner/not_run: nothing on this host was probed,
+    // egress included — a redirect row itself timed_out isn't "untested"
+    // either (it's the same structural bypass), so the gate still unlocks.
+    const redirects: EgressRedirect[] = [{ from: "https://registry.npmjs.org", to: "https://mirror.corp.internal" }];
+    expect(corpNetworkGate(corpNetwork, redirects).on).toBe(true);
+    expect(corpNetworkGate({ ...unset, proxyProbe: reached, redirectProbes: { "https://registry.npmjs.org": timedOut } }, redirects).on).toBe(true);
   });
 
   it("reached + zero redirects is DONE outright — no tab detour; nothing here must be configured", () => {

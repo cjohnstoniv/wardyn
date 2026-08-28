@@ -50,6 +50,10 @@ function TestVerdictChip({ state }: { state: ProxyTestResult["state"] }) {
   // and renders "Blocked" — the probe never ran, so nothing about this
   // redirect was actually observed.
   if (state === "not_run") return <Chip tone="neutral">Never ran</Chip>;
+  // Without this arm, timed_out falls through to the plain warning chip below
+  // and renders "Blocked" — the sandbox started and ran, it just never
+  // reported completion.
+  if (state === "timed_out") return <Chip tone="neutral">Probe never reported back</Chip>;
   return <Chip tone="warning" dot>{state === "bypass" ? "Redirect not enforced" : "Blocked"}</Chip>;
 }
 

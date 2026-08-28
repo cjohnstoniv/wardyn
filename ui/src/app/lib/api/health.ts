@@ -18,8 +18,11 @@ import { asJson, wfetch } from "./core";
 // never got to running it (e.g. an image pull failure, or a confinement
 // class this host can't enforce) — nothing was learned about the network
 // either way, so it must never render as blocked (T.GATE_HEAD_NOT_RUN).
+// "timed_out" means the sandbox started and ran but the run never reported
+// completion within the budget — the detail names the sandbox's state at the
+// deadline; a runner/recording-upload fact, never a network verdict.
 export interface ProxyTestResult {
-  state: "reached" | "blocked" | "bypass" | "no_runner" | "not_run";
+  state: "reached" | "blocked" | "bypass" | "no_runner" | "not_run" | "timed_out";
   detail: string;
   elapsed_ms?: number;
   /** Which path the proxy probe actually traversed. test-proxy only; absent

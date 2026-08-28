@@ -244,6 +244,11 @@ function ProxyVerdict({ result }: { result: ProxyTestResult }) {
   // and renders "Blocked" — exactly the misleading claim this state exists
   // to avoid (the probe never ran; nothing about the network was observed).
   if (result.state === "not_run") return <Chip tone="neutral">Never ran</Chip>;
+  // Without this arm, timed_out falls through to the plain warning chip below
+  // and renders "Blocked" — the sandbox started and ran, it just never
+  // reported completion; that's a runner/recording-upload fact, not a
+  // network verdict.
+  if (result.state === "timed_out") return <Chip tone="neutral">Probe never reported back</Chip>;
   if (result.intercepted) {
     return (
       <span className="flex flex-wrap items-center gap-2">
@@ -341,6 +346,15 @@ function ProxyTestBlock({
               <>
                 <p className="text-[0.75rem] leading-snug text-foreground">{state.result.detail}</p>
                 <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.NOT_RUN_NOTE}</p>
+              </>
+            ) : state.result.state === "timed_out" ? (
+              // Same shape as not_run: the wire detail names the sandbox's
+              // state at the deadline (worth showing); no TEST_STANDING — the
+              // run never reported completion, so nothing was actually proven
+              // by it either.
+              <>
+                <p className="text-[0.75rem] leading-snug text-foreground">{state.result.detail}</p>
+                <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.TIMED_OUT_NOTE}</p>
               </>
             ) : (
               <>

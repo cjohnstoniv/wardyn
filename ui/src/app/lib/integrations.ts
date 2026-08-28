@@ -69,6 +69,8 @@ export const T = {
     "No runner is configured on this host — there's nothing to launch a probe with. Configure a barrier first, then test.",
   TEST_NOT_RUN:
     "The probe never ran: run.dispatch: create sandbox: no such image. Nothing was learned about www.msftconnecttest.com, detectportal.firefox.com — the sandbox that carries the probe could not start, so this says nothing about your proxy or your network.",
+  TEST_TIMED_OUT:
+    "The probe sandbox started and ran, but the run never reported completion within 90s — not a network verdict. Sandbox agent status at the deadline: running. The usual cause is the run's recording upload to the control plane (via the proxy pod) hanging: check WARDYN_CONTROL_PLANE_URL (http://wardyn-control-plane.wardyn.svc:8080) is reachable from the runs namespace.",
   TEST_STANDING:
     "Tested from a throwaway sandbox on this host — the same path a run takes. Nothing else is inferred from the result.",
   TEST_PROXY_HINT:
@@ -91,6 +93,7 @@ export const T = {
   GATE_HEAD_EGRESS_FAILING: "A redirect isn't being enforced",
   GATE_HEAD_NORUNNER: "Nothing to test with",
   GATE_HEAD_NOT_RUN: "The probe never started",
+  GATE_HEAD_TIMED_OUT: "The probe never reported back",
   GATE_HEAD_CUSTOM_ON: "Passing on a weaker proof",
   GATE_EGRESS_UNTESTED:
     "Every configured redirect has to prove reached before this step hands off — test the rows above, or remove them.",
@@ -109,6 +112,13 @@ export const T = {
   // back to reconfigure a proxy that was never tested.
   NOT_RUN_NOTE:
     "Nothing was proven here — the sandbox that carries the probe never started, so nothing was learned about your network. The line above names the real cause: usually an image pull or a confinement class this host can't enforce. That's a runner problem, not a proxy one.",
+  // Distinct again: the sandbox DID start and run — the line above names its
+  // state at the deadline — but the run never reported completion in time.
+  // The usual cause is the recording upload to the control plane hanging, not
+  // the network this step exists to prove: fix WARDYN_CONTROL_PLANE_URL
+  // reachability from the runs namespace, then test again.
+  TIMED_OUT_NOTE:
+    "Nothing was proven here — the sandbox started and ran, but the run never reported completion. The line above names the sandbox's state at the deadline and the usual cause: on Kubernetes, the run's recording upload to the control plane via the proxy pod. Check WARDYN_CONTROL_PLANE_URL is reachable from the runs namespace — it isn't a proxy problem, so test again after fixing that.",
   // Intercepted is a variant of blocked, rendered apart — "nothing answered"
   // and "something answered and it wasn't the endpoint" send an operator to
   // different people.
