@@ -6,9 +6,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -145,8 +149,10 @@ func TestRunFiles_JoinsNumstatAndStatus(t *testing.T) {
 	if len(argv) != 3 || argv[0] != "/bin/sh" || argv[1] != "-c" || argv[2] != runFilesScript {
 		t.Errorf("argv = %q, want /bin/sh -c <runFilesScript>", argv)
 	}
-	if len(env) != 1 || env[0] != "W="+composerWorkspaceTarget {
-		t.Errorf("env = %q, want the workspace dir passed as W=", env)
+	// W is the mount target; R is the repo clone's leaf under it (empty here: the
+	// seeded run has no repo). Both are read by runFilesScript, in that order.
+	if len(env) != 2 || env[0] != "W="+composerWorkspaceTarget || env[1] != "R=" {
+		t.Errorf("env = %q, want [W=<workspace dir> R=]", env)
 	}
 	// Audit on FAILURE only: a polled read must not write a row per tick.
 	if len(audit.events) != 0 {
@@ -298,5 +304,73 @@ func TestRunFiles_StderrDrainedConcurrently(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("handler hung: stderr was not drained concurrently with stdout (runner.ExecSession's streaming contract)")
+	}
+}
+
+// TestRunFilesScript_FindsClonedRepoUnderWorkDir runs the REAL inspection script
+// against a workspace laid out the way agent-run lays out a --repo run: the mount
+// target W is a plain directory and the clone is its child. Before the
+// candidate ordering in runFilesScript existed this reported vcs=none at W —
+// the console's files widget then claimed "no git repository" for a sandbox
+// holding a full clone one level down.
+func TestRunFilesScript_FindsClonedRepoUnderWorkDir(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	w := t.TempDir()
+	repo := filepath.Join(w, "hello-world")
+	for _, args := range [][]string{
+		{"init", "-q", repo},
+		{"-C", repo, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run := func(env ...string) (string, int) {
+		cmd := exec.Command("/bin/sh", "-c", runFilesScript)
+		cmd.Dir = t.TempDir() // the exec's own cwd is NOT a work tree either
+		cmd.Env = append(os.Environ(), env...)
+		out, err := cmd.Output()
+		code := 0
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			code = ee.ExitCode()
+		} else if err != nil {
+			t.Fatalf("run script: %v", err)
+		}
+		return string(out), code
+	}
+	// R names the clone directly (the --repo run shape).
+	out, code := run("W="+w, "R=hello-world")
+	if code != 0 || !strings.HasPrefix(out, "path="+repo+"\n") {
+		t.Fatalf("with R: code=%d out=%q, want exit 0 and path=%s", code, out, repo)
+	}
+	// No R (a workspace-sourced run): the child search still finds it.
+	out, code = run("W="+w, "R=")
+	if code != 0 || !strings.HasPrefix(out, "path="+repo+"\n") {
+		t.Fatalf("without R: code=%d out=%q, want exit 0 and path=%s", code, out, repo)
+	}
+	// A wrong R must not break the fallback ordering.
+	out, code = run("W="+w, "R=nope")
+	if code != 0 || !strings.HasPrefix(out, "path="+repo+"\n") {
+		t.Fatalf("wrong R: code=%d out=%q", code, out)
+	}
+	// Nothing anywhere: exit 3 and the honest path.
+	empty := t.TempDir()
+	out, code = run("W="+empty, "R=")
+	if code != 3 || out != "path="+empty+"\n" {
+		t.Fatalf("empty: code=%d out=%q, want exit 3 and path=%s", code, out, empty)
+	}
+}
+
+func TestRepoCloneLeaf(t *testing.T) {
+	for in, want := range map[string]string{
+		"octocat/Hello-World": "Hello-World", "org/repo.git": "repo", "https://github.com/o/r.git": "r",
+		"repo": "repo", "": "", "org/repo/": "repo",
+	} {
+		if got := repoCloneLeaf(in); got != want {
+			t.Errorf("repoCloneLeaf(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

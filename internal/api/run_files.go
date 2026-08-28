@@ -120,19 +120,34 @@ const (
 // works), and — either way — REPORTS the directory it settled on, so a wrong
 // path shows up in the UI as a named path instead of a silent empty list.
 //
+// A --repo run is the common case this search exists for: agent-run clones it
+// to $W/<repo leaf> (deploy/images/common/agent-run-lib.sh), so W itself is a
+// plain directory and only its CHILD is a work tree — the script therefore tries
+// $W/$R (R = the repo leaf, from run.Repo) first, then W, then the exec's cwd,
+// then every child of W. Before that ordering existed every repo run read as
+// vcs=none at /home/agent/work: "nothing changed", confidently, for a sandbox
+// that had a full clone one directory down.
+//
 // exit 3 means "there is no git work tree here" — a fact about the workspace,
 // reported as 200 vcs=none. Any other nonzero exit lands in the same place
 // (git missing from the image, a repo we cannot read): in every case we did
 // not obtain a diff, and saying so beats inventing one.
 const runFilesScript = `D=""
-for c in "${W:-/home/agent/work}" .; do
+W="${W:-/home/agent/work}"
+# Candidates, most specific first: the run's own repo clone (agent-run clones a
+# --repo run to $W/<repo-leaf>, one level BELOW the mount target, so W itself is
+# never a work tree for those runs), then W, then the exec's cwd, then any child
+# of W that is a work tree (a workspace with repo sources lands them under W too).
+set -- ${R:+"$W/$R"} "$W" .
+for d in "$W"/*/; do [ -d "$d" ] && set -- "$@" "$d"; done
+for c in "$@"; do
   [ -d "$c" ] || continue
   if (cd "$c" && git -c safe.directory='*' rev-parse --is-inside-work-tree >/dev/null 2>&1); then
     D=$(cd "$c" && pwd)
     break
   fi
 done
-if [ -z "$D" ]; then printf 'path=%s\n' "${W:-/home/agent/work}"; exit 3; fi
+if [ -z "$D" ]; then printf 'path=%s\n' "$W"; exit 3; fi
 printf 'path=%s\n' "$D"
 printf '\036\n'
 cd "$D"
@@ -231,7 +246,9 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 
 	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{
 		Argv: []string{"/bin/sh", "-c", runFilesScript},
-		Env:  []string{"W=" + composerWorkspaceTarget},
+		// R is the repo clone's directory name under W for a --repo run (the leaf
+		// of org/name); empty otherwise. The script tries $W/$R before W itself.
+		Env: []string{"W=" + composerWorkspaceTarget, "R=" + repoCloneLeaf(run.Repo)},
 	})
 	if err != nil {
 		s.auditRunFilesFailure(r, id, err)
@@ -306,6 +323,17 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, runFilesResponse{
 		VCS: runFilesVCSGit, Files: files, Path: inspectedPath, Truncated: truncated,
 	})
+}
+
+// repoCloneLeaf is the directory agent-run clones a run's repo into under the
+// workspace mount target: the last path element of "org/name" (or of a URL),
+// minus a ".git" suffix. Empty for a run with no repo.
+func repoCloneLeaf(repo string) string {
+	repo = strings.TrimSuffix(strings.TrimRight(strings.TrimSpace(repo), "/"), ".git")
+	if i := strings.LastIndex(repo, "/"); i >= 0 {
+		repo = repo[i+1:]
+	}
+	return repo
 }
 
 // auditRunFilesFailure records the FAILURE-only run.files audit row (see
