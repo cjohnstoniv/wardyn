@@ -8,10 +8,10 @@ theme lacks names the token to add — it never invents a value.
 
 | Layer | Lives in | Owns |
 |---|---|---|
-| Tokens | `ui/src/styles/theme.css` — `:root` light (L14–116), `.dark` (L118–198) | Every color, radius, font family, weight |
-| Utility bindings | `theme.css` `@theme inline` (L200–265) | Token → utility class (`--color-primary` → `bg-primary`) |
-| Element defaults | `theme.css` `@layer base` (L267–292) | `body`, `h1`–`h4`, `label`, `button`, `input` |
-| Utilities | `theme.css` `@layer utilities` (L295–313) | `.scroll-thin`, `.label-eyebrow` |
+| Tokens | `ui/src/styles/theme.css` — `:root` light (L14–119), `.dark` (L121–204) | Every color, radius, font family, weight |
+| Utility bindings | `theme.css` `@theme inline` (L206–285) | Token → utility class (`--color-primary` → `bg-primary`) |
+| Element defaults | `theme.css` `@layer base` (L287–316) | `body`, `h1`–`h4`, `label`, `button`, `input` |
+| Utilities | `theme.css` `@layer utilities` (L319–338) | `.scroll-thin`, `.label-eyebrow` |
 | Primitives | `ui/src/app/components/ui/` | Role shells: `Button`, `Input`, `Dialog`, `DropdownMenu`, … |
 | Pattern layer | `ui/src/app/components/wardyn/` | Wardyn's vocabulary: `Chip`, `RunStateBadge`, `ConfinementChip`, `Field`, `OptionCard`, `EmptyState` |
 
@@ -61,9 +61,9 @@ Four body rungs. Nothing between them.
 
 | Rung | Size | Weight | Use | Today |
 |---|---|---|---|---|
-| 11px | `0.6875rem` | 600 uppercase for meta labels, 400 for captions | Section eyebrows, trailing metadata, captions, hints | `.label-eyebrow` (`theme.css:306–313`) — 600, `0.06em`, uppercase, `--muted-foreground` |
+| 11px | `0.6875rem` = `text-meta` | 600 uppercase for meta labels, 400 for captions | Section eyebrows, trailing metadata, captions, hints | `.label-eyebrow` (`theme.css:330–337`) — 600, `0.06em`, uppercase, `--muted-foreground` |
 | 12px | `0.75rem` = `text-xs` | 400 | Helper text, paths, secondary content, chips | `Chip` is `text-xs` (`primitives.tsx:78`) |
-| 13px | `0.8125rem` | 400–500 | Dense table rows, sidebar items | 21 ad-hoc `text-[0.8125rem]` uses |
+| 13px | `0.8125rem` = `text-body` | 400–500 | Dense table rows, sidebar items | `--text-body` (`theme.css`, `@theme inline`) |
 | 14px | `0.875rem` = `text-sm` | 400 body, 500 row titles | Body copy, button text, labels | `button`/`label` are 500 by base rule (`theme.css:287–288`) |
 
 Headings come from `@layer base`, used as-is: `h1` `1.5rem`/600/1.3/`-0.01em` · `h2`
@@ -76,13 +76,14 @@ Headings come from `@layer base`, used as-is: `h1` `1.5rem`/600/1.3/`-0.01em` ·
 - **Mono (`--font-mono`) is for literals only:** run ids, paths, commands, fingerprints,
   exit codes, URLs, wire values — never prose, labels, or emphasis (`Chip` takes `mono`
   for this, L80).
-- **No ad-hoc sizes.** Two missing tokens are why the drift exists: add `--text-meta:
-  0.6875rem` and `--text-dense: 0.8125rem` to `@theme inline`. Until then the rungs have
-  no named home — hence 126 `text-[0.6875rem]` and 60 `text-[0.75rem]` (longhand
-  `text-xs`) uses.
-- Round off-rung sizes to a rung: `text-[0.7188rem]` (×17), `text-[0.7813rem]` (×7),
-  `text-[0.6563rem]` (×1). `text-[0.625rem]` (×26) is the `AgentBadge` monogram — a
-  glyph, not text; give it a token to survive.
+- **No ad-hoc sizes.** The rungs have named homes: `--text-meta` (11px) and
+  `--text-body` (13px) sit in `@theme inline` beside `text-xs` and `text-sm`, and the
+  polish tier swept every `text-[…]` size onto one of them — a new `text-[…]` size is a
+  regression, not a style choice.
+- Off-rung sizes were rounded to a rung (11.5→11, 12.5→12, 13.5→13). The one
+  deliberate exception class is a glyph in fixed chrome (the `AgentBadge` monogram, the
+  tile-size pill), which sits at the 11px rung today; give it its own token if it ever
+  needs to be smaller than text.
 - Two 11px uppercase labels disagree on tracking: `.label-eyebrow` is `0.06em`,
   `SectionCard`'s `h2` is `tracking-wider` (L376). Use `.label-eyebrow`, as `WidgetCard`
   does (L436).
@@ -100,8 +101,9 @@ cards, run cards, icon wells. Exactly three elevation levels:
 | Lift | `shadow-xs` + border | Cards, `outline` buttons. Only `checkbox.tsx:17` and `radio-group.tsx:30` carry it today — the cards are border-only, which is in budget |
 | Floating | one `--shadow-floating` token | Popovers, dropdowns, selects, dialogs, sheets, floating toolbars |
 
-`--shadow-floating` **does not exist yet** — add it to both themes. It replaces the two
-spellings shipping one idea: `shadow-md` (`dropdown-menu.tsx:45`, `select.tsx:68`,
+`--shadow-floating` is ONE shared value in `theme.css` (`@theme inline`), deliberately not
+per-theme — a floating surface reads the same way in light and dark. It replaced the two
+spellings that shipped one idea: `shadow-md` (`dropdown-menu.tsx:45`, `select.tsx:68`,
 `popover.tsx:33`) and `shadow-lg` (`dialog.tsx:60`, `alert-dialog.tsx:57`,
 `sheet.tsx:61`, L233). A floating surface is one thing; it gets one shadow. Anything
 wanting a fourth level wants the focus ring.

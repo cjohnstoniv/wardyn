@@ -135,7 +135,7 @@ describe("ConnectSSHCard — external-tool notice", () => {
   it("renders the external-tool line when description starts with 'external:'", async () => {
     healthMock.mockResolvedValue({});
     listKeysMock.mockResolvedValue([]);
-    renderCard({ description: "external:vscode-remote" });
+    renderCard({ description: "external:my-tool" });
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
     expect(
       screen.getByText("Managed by an external tool — killing this run tears down that tool's workspace."),

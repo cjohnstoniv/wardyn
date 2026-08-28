@@ -304,7 +304,7 @@ describe("AppShell — account-menu trigger uses the shared Button (ui-shellAuth
     const header = screen.getByRole("banner");
     const headerButtons = within(header).getAllByRole("button");
     const accountTrigger = headerButtons[headerButtons.length - 1];
-    expect(accountTrigger).toHaveClass("focus-visible:ring-ring/50");
+    expect(accountTrigger).toHaveClass("focus-visible:ring-ring");
   });
 });
 

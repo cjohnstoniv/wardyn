@@ -429,7 +429,7 @@ function Switch({
       disabled={disabled}
       onClick={() => onCheckedChange(!checked)}
       className={cn(
-        "inline-flex h-[1.15rem] w-8 shrink-0 items-center rounded-full border border-transparent p-[1px] transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50",
+        "inline-flex h-[1.15rem] w-8 shrink-0 items-center rounded-full border border-transparent p-[1px] transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
         checked ? "bg-primary" : "bg-muted",
       )}
     >

@@ -51,11 +51,7 @@ editor, or that tool's own agent working between calls that touch the sandbox
 at all — both would otherwise read as idle. `first_use_approval:
 wait_for_review` holds an unknown-host connection for a live decision instead
 of denying it outright, on the premise that someone is already at the
-keyboard to decide. `git_push_any_branch: true` turns off the default
-branch-namespace confinement on the accompanying write-capable `github_token`
-grant, because the external tool names its own branch instead of the
-`wardyn/<run-id>/*` one `agent-run` sets up — see
-[docs/POLICIES.md](../../docs/POLICIES.md)'s "Bound the token itself" for what
+keyboard to decide. turns off Wardyn's own push branch-namespace check for this run (each such push is audited as `brokered:git:branch-ns-off`); the grant's GitHub ruleset still bounds what the token may touch.md](../../docs/POLICIES.md)'s "Bound the token itself" for what
 still bounds the token when this is on.
 
 ## default.json

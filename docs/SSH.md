@@ -224,7 +224,8 @@ RUNNING. Four commands, each doing one part:
 
 ```sh
 wardyn ssh-key ensure                                    # once per machine
-wardyn run --agent claude-code --interactive --json \
+wardyn run --agent claude-code --interactive --json \ \
+  --description "external:<tool>"   # the run page then says it is tool-managed
   --policy-file examples/policies/remote-workspace.yaml  # -> prints the run, including its id
 wardyn run wait-ready <id> --json                        # -> {"workspace":{"vcs":"git","path":"..."}}
 wardyn ssh <id> --json                                   # -> {"host","port","username","host_key_fingerprint","command"}
@@ -249,8 +250,8 @@ console's Files-changed widget polls (`GET /runs/{id}/files`,
 [`internal/api/run_files.go`](../internal/api/run_files.go)). Those are
 different moments — the workspace clone lands **after** the sandbox comes
 up, so a tool that opens the instant the run turns RUNNING routinely finds an
-empty directory. A run that names a repo (`--repo`, or a policy's
-`workspace_repos`) automatically waits for `vcs:"git"`; pass `--expect-git`
+empty directory. A run that names a repo (`--repo`, or a workspace whose
+sources include a repo) automatically waits for `vcs:"git"`; pass `--expect-git`
 to require that for a workspace-sourced run too. A terminal state reached
 before ready fails fast — FAILED exits `1` (with the dispatch failure reason
 when audit carries one, the same lookup `run --wait` uses), any other
