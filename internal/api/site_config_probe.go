@@ -33,8 +33,10 @@ const (
 	// second, runner-enforced backstop behind siteConfigProbeWaitTimeout
 	// (below) in case the control-plane wait itself never got the chance to
 	// run (e.g. a daemon restart mid-probe). Deliberately LARGER than the
-	// wait timeout so the handler's own reclaim is what normally fires first.
-	siteConfigProbeIdleCapSec = 60
+	// wait timeout so the handler's own reclaim is what normally fires
+	// first. 120: the same worst-case math as siteConfigProbeWaitTimeout
+	// (task budget + the recorder's upload tail), plus margin over it.
+	siteConfigProbeIdleCapSec = 120
 	// redirectProbeBypassCode is redirectProbeScript's own explicit sentinel
 	// exit code for "the mirror (To) is reachable AND the public host (From)
 	// is STILL reachable directly" -- bypass. Chosen far outside curl's own
@@ -134,11 +136,18 @@ var proxyProbeEndpointsLabel = func() string {
 
 // siteConfigProbeWaitTimeout bounds how long a handler waits for the
 // throwaway probe run to reach a terminal state before reclaiming it. The UI
-// shows seconds, not minutes; every curl inside the probe scripts below is
-// capped well under this, so the budget is never the tight constraint. A var
-// (not a const) purely so tests can shrink it instead of taking 50 real
-// seconds to exercise the timeout/reclaim path.
-var siteConfigProbeWaitTimeout = 50 * time.Second
+// shows seconds, not minutes, and a healthy path still finishes in ~20s — but
+// the budget must cover the run's actual WORST case, not just its curls:
+// task (2 targets x (5s connect + 15s max) = 40s) + startup (~2s) + the
+// recorder's upload tail (uploadClientTimeout, cmd/wardyn-rec/main.go, 20s)
+// + margin = 90s. Every curl inside the probe scripts below is capped well
+// under this on its own, but a run.exec success does not mean the RUN is
+// done — see runSiteConfigProbe's timeout branch, which distinguishes a
+// timeout after the task started (state `timed_out`) from one where the
+// sandbox never got that far (`not_run`). A var (not a const) purely so
+// tests can shrink it instead of taking 90 real seconds to exercise the
+// timeout/reclaim path.
+var siteConfigProbeWaitTimeout = 90 * time.Second
 
 // proxyProbeScript walks proxyProbeTargets through the sandbox's normal egress
 // path (HTTP_PROXY/HTTPS_PROXY already point at wardyn-proxy, which chains to
