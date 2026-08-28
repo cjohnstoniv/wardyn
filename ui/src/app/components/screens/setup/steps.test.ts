@@ -305,6 +305,7 @@ describe("corp_network gate — corpNetworkGate drives the footer (head/reason/a
   const intercepted: ProxyTestResult = { state: "blocked", detail: "something answered", intercepted: true };
   const customPass: ProxyTestResult = { state: "reached", detail: "The request completed", custom: true };
   const noRunner: ProxyTestResult = { state: "no_runner", detail: "no runner configured" };
+  const notRun: ProxyTestResult = { state: "not_run", detail: "The probe never ran: run.dispatch: create sandbox failed" };
   const bypass: ProxyTestResult = { state: "bypass", detail: "reachable directly too" };
 
   it("reads 'Untested'/off with the probe action before any probe has run (the default when corpNetwork is omitted)", () => {
@@ -396,6 +397,22 @@ describe("corp_network gate — corpNetworkGate drives the footer (head/reason/a
     expect(stepDone(status, readiness, [], 0, corpNetwork).corp_network).toBe(false);
     // The bypass holds even with unconfigured/untested redirects sitting there —
     // no_runner means NOTHING on this host can be probed, egress included.
+    const redirects: EgressRedirect[] = [{ from: "https://registry.npmjs.org", to: "https://mirror.corp.internal" }];
+    expect(corpNetworkGate(corpNetwork, redirects).on).toBe(true);
+  });
+
+  it("not_run UNLOCKS Next with a neutral standing note but never earns the checkmark — the probe sandbox never started, nothing was proven", () => {
+    const status = baseStatus();
+    const readiness = deriveReadiness(status);
+    const corpNetwork = { ...unset, proxyProbe: notRun };
+    expect(stepBadges(status, readiness, [], 0, corpNetwork).corp_network).toEqual({
+      text: "Untested · probe never ran",
+      tone: "neutral",
+    });
+    expect(corpNetworkGate(corpNetwork, [])).toEqual({ on: true, head: T.GATE_HEAD_NOT_RUN, reason: T.NOT_RUN_NOTE, tone: "neutral" });
+    expect(stepDone(status, readiness, [], 0, corpNetwork).corp_network).toBe(false);
+    // Same reason as no_runner: a launch failure means NOTHING on this host
+    // was probed, egress included.
     const redirects: EgressRedirect[] = [{ from: "https://registry.npmjs.org", to: "https://mirror.corp.internal" }];
     expect(corpNetworkGate(corpNetwork, redirects).on).toBe(true);
   });

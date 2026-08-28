@@ -67,6 +67,8 @@ export const T = {
     "The mirror answered, but registry.npmjs.org is still reachable from a sandbox — runs can still bypass the mirror.",
   TEST_NORUNNER:
     "No runner is configured on this host — there's nothing to launch a probe with. Configure a barrier first, then test.",
+  TEST_NOT_RUN:
+    "The probe never ran: run.dispatch: create sandbox: no such image. Nothing was learned about www.msftconnecttest.com, detectportal.firefox.com — the sandbox that carries the probe could not start, so this says nothing about your proxy or your network.",
   TEST_STANDING:
     "Tested from a throwaway sandbox on this host — the same path a run takes. Nothing else is inferred from the result.",
   TEST_PROXY_HINT:
@@ -88,6 +90,7 @@ export const T = {
   GATE_HEAD_EGRESS_UNTESTED: "Redirects aren't proven yet",
   GATE_HEAD_EGRESS_FAILING: "A redirect isn't being enforced",
   GATE_HEAD_NORUNNER: "Nothing to test with",
+  GATE_HEAD_NOT_RUN: "The probe never started",
   GATE_HEAD_CUSTOM_ON: "Passing on a weaker proof",
   GATE_EGRESS_UNTESTED:
     "Every configured redirect has to prove reached before this step hands off — test the rows above, or remove them.",
@@ -99,6 +102,13 @@ export const T = {
     "Passing on a custom endpoint — the request completed, which is weaker than the built-in check. Good enough to continue; worth re-running against the built-in endpoints if this host ever gets public egress.",
   NORUNNER_NOTE:
     "Nothing was proven here — there's no runner to launch a probe with, and Wardyn doesn't demand proof it can't collect. Configure a barrier, then come back and test.",
+  // Distinct from NORUNNER_NOTE: a runner IS configured, but the throwaway
+  // sandbox that would have carried the probe never started. The DETAIL line
+  // above this note names the real cause; this note just says what that
+  // means — a runner problem, not a proxy one — so the operator isn't sent
+  // back to reconfigure a proxy that was never tested.
+  NOT_RUN_NOTE:
+    "Nothing was proven here — the sandbox that carries the probe never started, so nothing was learned about your network. The line above names the real cause: usually an image pull or a confinement class this host can't enforce. That's a runner problem, not a proxy one.",
   // Intercepted is a variant of blocked, rendered apart — "nothing answered"
   // and "something answered and it wasn't the endpoint" send an operator to
   // different people.

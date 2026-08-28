@@ -240,6 +240,10 @@ function ProxyVerdict({ result }: { result: ProxyTestResult }) {
     );
   }
   if (result.state === "no_runner") return <Chip tone="neutral">Can&apos;t test here</Chip>;
+  // Without this arm, not_run falls through to the plain warning chip below
+  // and renders "Blocked" — exactly the misleading claim this state exists
+  // to avoid (the probe never ran; nothing about the network was observed).
+  if (result.state === "not_run") return <Chip tone="neutral">Never ran</Chip>;
   if (result.intercepted) {
     return (
       <span className="flex flex-wrap items-center gap-2">
@@ -329,6 +333,15 @@ function ProxyTestBlock({
               // The canon sentence, not the wire detail: it says what to DO
               // (configure a barrier), which the server's own line doesn't.
               <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.TEST_NORUNNER}</p>
+            ) : state.result.state === "not_run" ? (
+              // Unlike no_runner, the wire detail DOES carry the specific
+              // launch failure (an image pull, a confinement class this host
+              // can't enforce) — worth showing. No TEST_STANDING though:
+              // nothing was actually tested from a sandbox here.
+              <>
+                <p className="text-[0.75rem] leading-snug text-foreground">{state.result.detail}</p>
+                <p className="text-[0.6875rem] leading-snug text-muted-foreground">{T.NOT_RUN_NOTE}</p>
+              </>
             ) : (
               <>
                 <p className="text-[0.75rem] leading-snug text-foreground">{state.result.detail}</p>

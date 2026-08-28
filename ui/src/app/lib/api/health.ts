@@ -13,9 +13,13 @@ import { asJson, wfetch } from "./core";
 // redirect-only case where the mirror answered but the public endpoint is
 // STILL reachable from a sandbox (T.TEST_BYPASS); "no_runner" means there's
 // nothing on this host to launch the probe with (T.TEST_NORUNNER), including
-// an older server with no test endpoint at all.
+// an older server with no test endpoint at all. "not_run" means a runner IS
+// configured, but the throwaway sandbox that would have carried the probe
+// never got to running it (e.g. an image pull failure, or a confinement
+// class this host can't enforce) — nothing was learned about the network
+// either way, so it must never render as blocked (T.GATE_HEAD_NOT_RUN).
 export interface ProxyTestResult {
-  state: "reached" | "blocked" | "bypass" | "no_runner";
+  state: "reached" | "blocked" | "bypass" | "no_runner" | "not_run";
   detail: string;
   elapsed_ms?: number;
   /** Which path the proxy probe actually traversed. test-proxy only; absent

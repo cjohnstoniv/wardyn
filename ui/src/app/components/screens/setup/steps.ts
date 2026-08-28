@@ -171,8 +171,8 @@ export const OPTIONAL_STEPS = new Set<SetupStepId>([
   // Corporate network is NOT optional (see corpNetworkGate below):
   // proof of internet access gates Next, on the theory that everything after
   // it — a model provider, a git host — looks broken when it's really the
-  // network that's blocked. Only its own honest bypasses (no_runner) move you
-  // past it without proof.
+  // network that's blocked. Only its own honest bypasses (no_runner, not_run)
+  // move you past it without proof.
   // Integrations is OPTIONAL — every category it covers (model/harness, SCM
   // host) is itself skippable; Wardyn runs with none of them connected. The
   // barrier (Environment) is the sole hard requirement.
@@ -223,11 +223,12 @@ const CORP_NETWORK_UNSET: CorpNetworkState = {
 };
 
 // THE gate, in the mock's own ladder (wardyn-proto.js's corpGate): Next
-// unlocks ONLY on a probe that returned reached — or on no_runner, where
-// Wardyn is structurally incapable of collecting the proof and so does not
-// get to demand it. There is no click-past. `reason` is the specific,
-// actionable sentence rendered beside the button it locks (setup-layout.tsx);
-// on the two states that unlock WITHOUT the full builtin proof (no_runner, a
+// unlocks ONLY on a probe that returned reached — or on no_runner / not_run,
+// where Wardyn is structurally incapable of collecting the proof (no runner
+// at all, or the probe sandbox never got to running) and so does not get to
+// demand it. There is no click-past. `reason` is the specific, actionable
+// sentence rendered beside the button it locks (setup-layout.tsx); on the
+// states that unlock WITHOUT the full builtin proof (no_runner, not_run, a
 // custom-endpoint pass) the gate is on but the reason stays, as a NEUTRAL
 // standing note — the operator continues, and the weaker footing stays said.
 // Also the single source of truth corpNetworkBadge and stepDone's
@@ -256,10 +257,10 @@ function listJoin(names: string[]): string {
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
-// Ladder (order matters, and is the mock's): probe in flight -> no_runner
-// bypass -> intercepted (a blocked flavor with its own instruction — a
-// different person to call) -> blocked -> untested -> failing rows named all
-// at once -> untested rows -> a custom pass unlocks with its standing note.
+// Ladder (order matters, and is the mock's): probe in flight -> no_runner /
+// not_run bypass -> intercepted (a blocked flavor with its own instruction —
+// a different person to call) -> blocked -> untested -> failing rows named
+// all at once -> untested rows -> a custom pass unlocks with its standing note.
 // What is required is the PROOF, not configuration: no rung demands a visit
 // to Egress redirection — a host with no proxy and no redirects passes this
 // step with one click of Test connectivity. Anything configured must still
@@ -277,6 +278,7 @@ export function corpNetworkGate(
   const p = c.proxyProbe;
   if (c.probeRunning) return { on: false, head: T.GATE_HEAD_RUNNING, reason: T.GATE_RUNNING, tone: "neutral" };
   if (p?.state === "no_runner") return { on: true, head: T.GATE_HEAD_NORUNNER, reason: T.NORUNNER_NOTE, tone: "neutral" };
+  if (p?.state === "not_run") return { on: true, head: T.GATE_HEAD_NOT_RUN, reason: T.NOT_RUN_NOTE, tone: "neutral" };
   // Once the operator has typed a URL of their own, the gate probes THAT —
   // the one launch point relabels so it always says which endpoint it will try.
   const probe: CorpNetworkGate["action"] = c.customDraft.trim()
@@ -327,6 +329,7 @@ function corpNetworkBadge(c: CorpNetworkState, redirects: EgressRedirect[]): Ste
   const p = c.proxyProbe;
   if (c.probeRunning) return { text: "Testing…", tone: "info" };
   if (p?.state === "no_runner") return { text: "Untested · no runner", tone: "neutral" };
+  if (p?.state === "not_run") return { text: "Untested · probe never ran", tone: "neutral" };
   if (p?.state === "blocked") {
     return { text: p.intercepted ? "Blocked · intercepted" : "Blocked", tone: "warning" };
   }

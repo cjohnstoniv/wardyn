@@ -46,6 +46,10 @@ export function compactEndpoint(raw: string, maxLen = 48): string {
 function TestVerdictChip({ state }: { state: ProxyTestResult["state"] }) {
   if (state === "reached") return <Chip tone="success" dot>Reached</Chip>;
   if (state === "no_runner") return <Chip tone="neutral">Can&apos;t test here</Chip>;
+  // Without this arm, not_run falls through to the plain warning chip below
+  // and renders "Blocked" — the probe never ran, so nothing about this
+  // redirect was actually observed.
+  if (state === "not_run") return <Chip tone="neutral">Never ran</Chip>;
   return <Chip tone="warning" dot>{state === "bypass" ? "Redirect not enforced" : "Blocked"}</Chip>;
 }
 

@@ -168,6 +168,21 @@ describe("Test probes — real states, never a fake pass, running disables+relab
     expect(screen.queryByText(T.TEST_STANDING)).not.toBeInTheDocument();
   });
 
+  it("proxy Test: not_run (the probe sandbox never launched) never renders as 'Blocked'", async () => {
+    testProxyMock.mockResolvedValueOnce({ state: "not_run", detail: T.TEST_NOT_RUN });
+    renderStep();
+    await userEvent.click(screen.getByRole("button", { name: /^test connectivity$/i }));
+    expect(await screen.findByText("Never ran")).toBeInTheDocument();
+    expect(screen.getByText(T.TEST_NOT_RUN)).toBeInTheDocument();
+    expect(screen.getByText(T.NOT_RUN_NOTE)).toBeInTheDocument();
+    // The distinguishing regression this state exists to fix: a launch
+    // failure must never read as the classic corp-network "Blocked".
+    expect(screen.queryByText("Blocked")).not.toBeInTheDocument();
+    // Nothing was actually tested from a sandbox, so the standing note must
+    // not appear either (same rule as no_runner).
+    expect(screen.queryByText(T.TEST_STANDING)).not.toBeInTheDocument();
+  });
+
   it("a FAILED REQUEST is not a probe verdict — it must never render as 'Blocked'", async () => {
     // The whole point of these buttons is that a result means something. A 403,
     // a restarted wardynd, or a malformed payload never reached the network at
