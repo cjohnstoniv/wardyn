@@ -35,7 +35,19 @@ export function EmptyState({
   );
 }
 
-export function ErrorState({ message, onRetry }: { message?: string; onRetry?: () => void }) {
+export function ErrorState({
+  message,
+  onRetry,
+  action,
+}: {
+  message?: string;
+  onRetry?: () => void;
+  // A persistent error needs something to read, retry, or act on (rulebook
+  // §9). `onRetry` stays the plain-Retry shorthand; `action` is the same
+  // open-ended slot EmptyState already takes, for a caller that wants the
+  // retry rendered itself (or something other than retry).
+  action?: React.ReactNode;
+}) {
   return (
     <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
       <div className="flex size-12 items-center justify-center rounded-xl border border-danger/30 bg-danger-subtle text-danger">
@@ -52,6 +64,7 @@ export function ErrorState({ message, onRetry }: { message?: string; onRetry?: (
           <RotateCw className="size-3.5" /> Retry
         </Button>
       )}
+      {action}
     </div>
   );
 }

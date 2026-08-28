@@ -374,7 +374,13 @@ export function RunsScreen() {
         )
       ) : status === "error" ? (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
-          <ErrorState onRetry={load} />
+          <ErrorState
+            action={
+              <Button variant="outline" size="sm" onClick={load}>
+                <RotateCw className="size-3.5" /> Retry
+              </Button>
+            }
+          />
         </div>
       ) : trueEmpty ? (
         <RunsFirstRun

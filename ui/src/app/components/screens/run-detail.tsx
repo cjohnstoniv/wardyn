@@ -14,6 +14,7 @@ import {
   Check,
   LayoutDashboard,
   Loader2,
+  RotateCw,
   ScrollText,
   ShieldCheck,
   Sparkles,
@@ -272,7 +273,13 @@ export function RunDetailScreen() {
         </div>
       ) : status === "error" ? (
         <div className="m-6 rounded-xl border border-border bg-card">
-          <ErrorState onRetry={() => load(true)} />
+          <ErrorState
+            action={
+              <Button variant="outline" size="sm" onClick={() => load(true)}>
+                <RotateCw className="size-3.5" /> Retry
+              </Button>
+            }
+          />
         </div>
       ) : !run ? (
         <div className="m-6 rounded-xl border border-border bg-card">
