@@ -113,6 +113,16 @@ secrets:
   # allowEphemeralAgeKey below is the deliberate opt-out. See README
   # "Database (DSN)".
   ageKeyFromSecret: false
+  # Wire WARDYN_AGE_KEY from a SEPARATE, chart-unmanaged Secret — for an
+  # operator-owned Secret (e.g. one a Postgres operator manages, that would
+  # reject an extra "age-key" key added to it) that isn't postgres.dsn's
+  # own. Counts as wired for the refusal below just like ageKeyFromSecret.
+  # Mutually exclusive with ageKeyFromSecret/ageKey — the chart refuses a
+  # render naming two sources, since silently booting under whichever one
+  # wins is worse than a render that never happens.
+  ageKeySecretRef:
+    name: ""
+    key: age-key
   # Render an external-DSN install with an EPHEMERAL age identity anyway. The
   # combination above is refused by templates/secret.yaml because it is not a
   # trade-off, it is a scheduled outage: the pod crash-loops on its second start

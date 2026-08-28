@@ -34,6 +34,7 @@ out; guarded, the 0.5 defaults simply carry forward.
 */ -}}
 {{- $ssh := .Values.ssh | default dict -}}
 {{- $ui := .Values.uiSandbox | default dict -}}
+{{- $ageRef := .Values.secrets.ageKeySecretRef | default dict -}}
 {{- if and (gt (int .Values.replicas) 1) (not .Values.allowMultiReplica) -}}
 {{- fail "wardyn: replicas > 1 is refused. wardynd keeps state per-process that a second pod cannot see; the sharpest is the secret-masking registry (internal/secretmask) — an in-memory, process-local map that FAILS OPEN. Secrets are registered on whichever replica served the run's proxy injection; a session recording uploaded to any other replica finds an empty snapshot and is persisted VERBATIM, live credentials in cleartext, with a `success` audit event. The same holds for the live-attach cast. Run one replica (docs/OPERATIONS.md, \"One replica, by construction\"); set allowMultiReplica=true to render anyway and accept that." -}}
 {{- end -}}
@@ -114,7 +115,17 @@ spec:
                   name: {{ include "wardyn.authSecretName" . }}
                   key: {{ .Values.auth.adminToken.key }}
             {{- end }}
-            {{- if or .Values.secrets.ageKeyFromSecret (and .Values.secrets.ageKey (not .Values.postgres.dsn.secretRef.name)) }}
+            {{- if $ageRef.name }}
+            # age secret-store identity, wired from a SEPARATE Secret this
+            # chart never creates or otherwise references — for an operator-
+            # owned Secret (e.g. one a Postgres operator manages and would
+            # reject an extra "age-key" key on) that isn't postgres.dsn's own.
+            - name: WARDYN_AGE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ageRef.name }}
+                  key: {{ $ageRef.key | default "age-key" }}
+            {{- else if or .Values.secrets.ageKeyFromSecret (and .Values.secrets.ageKey (not .Values.postgres.dsn.secretRef.name)) }}
             # age secret-store identity (optional). Injected only when the Secret
             # we reference is KNOWN to carry an "age-key" entry — the chart wrote
             # it (inline mode) or the operator says so (ageKeyFromSecret).
