@@ -311,6 +311,69 @@ func TestSetupStatus_NonK8sRunnerOmitsEgressContainmentRow(t *testing.T) {
 	}
 }
 
+// TestSetupStatus_ConfinementFloorRow is the handler-level twin of
+// TestConfinementFloorCheck (setup_checks_test.go): proves the row actually
+// reaches /setup/status wired to the real DefaultPolicy and runner
+// Capabilities, not just the pure function in isolation.
+func TestSetupStatus_ConfinementFloorRow(t *testing.T) {
+	t.Run("floor unadvertised: warn row present", func(t *testing.T) {
+		srv := New(Config{
+			AdminToken:    adminToken,
+			Runner:        k8sRunner{}, // advertises only CC1
+			DefaultPolicy: types.RunPolicySpec{MinConfinementClass: types.CC2},
+		})
+		code, st := decodeSetup(t, srv, adminToken)
+		if code != http.StatusOK {
+			t.Fatalf("code = %d, want 200", code)
+		}
+		var found *SetupCheck
+		for i := range st.Checks {
+			if st.Checks[i].ID == "confinement_floor" {
+				found = &st.Checks[i]
+			}
+		}
+		if found == nil {
+			t.Fatalf("checks missing confinement_floor; got %+v", st.Checks)
+		}
+		if found.Status != "warn" {
+			t.Errorf("status = %q, want warn", found.Status)
+		}
+		if found.Fix == "" {
+			t.Error("warn row must carry a Fix")
+		}
+	})
+
+	t.Run("floor advertised: no row", func(t *testing.T) {
+		srv := New(Config{
+			AdminToken:    adminToken,
+			Runner:        &fakeRunner{}, // advertises CC1, CC2, CC3
+			DefaultPolicy: types.RunPolicySpec{MinConfinementClass: types.CC2},
+		})
+		code, st := decodeSetup(t, srv, adminToken)
+		if code != http.StatusOK {
+			t.Fatalf("code = %d, want 200", code)
+		}
+		for _, c := range st.Checks {
+			if c.ID == "confinement_floor" {
+				t.Errorf("floor IS advertised; must not carry a confinement_floor row: %+v", c)
+			}
+		}
+	})
+
+	t.Run("no floor configured: no row", func(t *testing.T) {
+		srv := New(Config{AdminToken: adminToken, Runner: k8sRunner{}})
+		code, st := decodeSetup(t, srv, adminToken)
+		if code != http.StatusOK {
+			t.Fatalf("code = %d, want 200", code)
+		}
+		for _, c := range st.Checks {
+			if c.ID == "confinement_floor" {
+				t.Errorf("no floor configured; must not carry a confinement_floor row: %+v", c)
+			}
+		}
+	})
+}
+
 // deploymentHostLike is true only for a claude provider that is BOTH installed
 // and logged in (host mode); anything less (not the claude tool, only one of
 // the two, or no providers at all) is false (compose/blind).

@@ -546,6 +546,11 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		envBuilderCheck(s.cfg.ImageBuilder != nil),
 		llmProviderCheck(llmDetail),
 	}
+	// confinement_floor: the operator's configured floor vs what this runner
+	// can actually enforce — see confinementFloorCheck.
+	if chk, ok := confinementFloorCheck(rnr, s.cfg.DefaultPolicy.MinConfinementClass); ok {
+		checks = append(checks, chk)
+	}
 	// k8s_egress_containment: the boot-time NetworkPolicy canary verdict —
 	// absent (no row) on a non-k8s driver; see k8sEgressContainmentCheck.
 	if chk, ok := k8sEgressContainmentCheck(rnr.Driver, k8sNetpolProven); ok {

@@ -51,6 +51,53 @@ func TestSsoRBACCheck(t *testing.T) {
 	}
 }
 
+func TestConfinementFloorCheck(t *testing.T) {
+	cases := []struct {
+		name       string
+		classes    []string
+		driver     string
+		floor      types.ConfinementClass
+		wantOK     bool
+		wantStatus string
+	}{
+		{"no floor configured: absent regardless of classes", []string{"CC1"}, "docker", "", false, ""},
+		{"no advertised classes: absent (runnerCheck already owns that failure)", nil, "docker", types.CC2, false, ""},
+		{"floor advertised (CC1 always is): absent", []string{"CC1", "CC2"}, "docker", types.CC1, false, ""},
+		{"floor advertised exactly: absent", []string{"CC1", "CC2"}, "docker", types.CC2, false, ""},
+		{"floor NOT advertised: warn", []string{"CC1"}, "docker", types.CC2, true, "warn"},
+		// M8: a Kata-only host advertises [CC1, CC3], no CC2 — membership, not
+		// rank, so a CC3-outranks-CC2 argument must NOT suppress this row.
+		{"Kata-only host [CC1,CC3] with a CC2 floor: warn, rank does not save it", []string{"CC1", "CC3"}, "docker", types.CC2, true, "warn"},
+		{"k8s driver with an unadvertised floor: warn, RuntimeClass fix", []string{"CC1"}, "k8s", types.CC2, true, "warn"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			chk, ok := confinementFloorCheck(SetupRunner{Driver: tc.driver, ConfinementClasses: tc.classes}, tc.floor)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v (chk=%+v)", ok, tc.wantOK, chk)
+			}
+			if !ok {
+				return
+			}
+			if chk.ID != "confinement_floor" {
+				t.Errorf("ID = %q, want confinement_floor", chk.ID)
+			}
+			if chk.Status != tc.wantStatus {
+				t.Errorf("Status = %q, want %q", chk.Status, tc.wantStatus)
+			}
+			if chk.Fix == "" {
+				t.Error("warn status must carry a Fix")
+			}
+			if tc.driver == "k8s" && !strings.Contains(chk.Fix, "RuntimeClass") {
+				t.Errorf("Fix = %q, want it to name the k8s RuntimeClass lever", chk.Fix)
+			}
+			if !strings.Contains(chk.Detail, string(tc.floor)) {
+				t.Errorf("Detail = %q, want it to name the configured floor", chk.Detail)
+			}
+		})
+	}
+}
+
 func TestTlsCookiePostureCheck(t *testing.T) {
 	cases := []struct {
 		name           string

@@ -63,6 +63,40 @@ func runnerCheck(rnr SetupRunner) SetupCheck {
 	}
 }
 
+// confinementFloorCheck warns when the operator's configured confinement
+// floor (DefaultPolicy.MinConfinementClass) is a class this runner does NOT
+// advertise: resolveEnforcedConfinement refuses every run on the default
+// policy before it ever launches (invariant 5, fail closed), and without
+// this row that shows up only as an opaque 422 on the first attempt, on a
+// host that otherwise looks ready. MEMBERSHIP, not rank — the same contract
+// resolveEnforcedConfinement itself enforces (M8): a Kata-only host
+// advertises [CC1, CC3], no CC2, and still refuses a CC2 floor even though
+// CC3 outranks it. No row at all — not even info — when there is nothing to
+// warn about: no floor configured (policy runs unconfined-by-default, i.e.
+// CC1), no advertised classes to compare against (runnerCheck already owns
+// that failure), or the floor IS advertised.
+func confinementFloorCheck(rnr SetupRunner, floor types.ConfinementClass) (SetupCheck, bool) {
+	if floor == "" || len(rnr.ConfinementClasses) == 0 {
+		return SetupCheck{}, false
+	}
+	if slices.Contains(rnr.ConfinementClasses, string(floor)) {
+		return SetupCheck{}, false
+	}
+	advertised := strings.Join(rnr.ConfinementClasses, ", ")
+	fix := fmt.Sprintf(
+		"Lower the floor to a class this runner advertises (%s) — set WARDYN_DEFAULT_POLICY (or the Helm chart's defaultPolicy) to a policy JSON with that min_confinement_class; examples/policies/demo.json is a CC1 reference.",
+		advertised)
+	if rnr.Driver == "k8s" {
+		fix += fmt.Sprintf(" Or register the floor's RuntimeClass in the cluster and pin it: helm upgrade --set k8s.runtimeClasses.%s=<name>.", floor)
+	}
+	return SetupCheck{
+		ID: "confinement_floor", Label: "Confinement floor", Status: "warn",
+		Detail: fmt.Sprintf("The configured confinement floor is %s, but this runner only advertises %s — every run on the default policy is refused before it launches.",
+			floor, advertised),
+		Fix: fix,
+	}, true
+}
+
 // envBuilderCheck reports whether the per-run sandbox image builder is wired — the
 // path a devcontainer build or a --image (bring-your-own-image) run needs. It is
 // OFF by default on the bare binary (WARDYN_ENVBUILD unset, or wardynd not built
