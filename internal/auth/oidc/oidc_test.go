@@ -150,6 +150,30 @@ func (e *idpEnv) newAuth(t *testing.T, allowedDomains []string) *writoidc.Authen
 	return auth
 }
 
+// newPublicAuth is newAuth with ClientSecret deliberately omitted (C2): a
+// public-client registration, same as newAuth otherwise, for the end-to-end
+// callback test.
+func (e *idpEnv) newPublicAuth(t *testing.T) *writoidc.Authenticator {
+	t.Helper()
+	rt := &rewriteTokenRT{
+		base:          http.DefaultTransport,
+		originalToken: e.httpSrv.URL + "/token",
+		replacedToken: e.tokenSrv.URL + "/",
+	}
+	ctx := gooidc.ClientContext(context.Background(), &http.Client{Transport: rt})
+	cfg := writoidc.Config{
+		IssuerURL:   e.httpSrv.URL,
+		ClientID:    e.clientID,
+		RedirectURL: "http://localhost/auth/callback",
+		// ClientSecret deliberately omitted.
+	}
+	auth, err := writoidc.New(ctx, cfg, testHMACKey)
+	if err != nil {
+		t.Fatalf("writoidc.New: %v", err)
+	}
+	return auth
+}
+
 // newRoleAuth is newAuth plus role-derivation config (WARDYN_OIDC_ROLE_MAP /
 // WARDYN_OIDC_DEFAULT_ROLE / the legacy WARDYN_OIDC_OPERATOR_EMAILS source),
 // for the role-derivation test suite (TestCallbackRole*). No domain
@@ -1327,6 +1351,10 @@ func TestSecureCookieAttribute(t *testing.T) {
 
 // ─── TestNewRejectsMissingConfig ──────────────────────────────────────────────
 
+// TestNewRejectsMissingConfig is C2-reshaped: ClientSecret is no longer in
+// this table at all — see TestNewAcceptsPublicClientWithNoSecret below for
+// the positive case an empty ClientSecret is now a VALID, public-client
+// configuration, not a missing-field error.
 func TestNewRejectsMissingConfig(t *testing.T) {
 	cases := []struct {
 		name string
@@ -1335,6 +1363,7 @@ func TestNewRejectsMissingConfig(t *testing.T) {
 		{"empty", writoidc.Config{}},
 		{"no client id", writoidc.Config{IssuerURL: "http://x", ClientSecret: "s", RedirectURL: "http://r"}},
 		{"no issuer", writoidc.Config{ClientID: "c", ClientSecret: "s", RedirectURL: "http://r"}},
+		{"no redirect url", writoidc.Config{IssuerURL: "http://x", ClientID: "c", ClientSecret: "s"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1343,6 +1372,53 @@ func TestNewRejectsMissingConfig(t *testing.T) {
 				t.Error("expected error, got nil")
 			}
 		})
+	}
+}
+
+// TestNewAcceptsPublicClientWithNoSecret is C2: an empty ClientSecret must no
+// longer be a required-field rejection — a public client (PKCE, no secret at
+// all) is a valid registration shape.
+func TestNewAcceptsPublicClientWithNoSecret(t *testing.T) {
+	env := newIdPEnv(t)
+	cfg := writoidc.Config{
+		IssuerURL:   env.httpSrv.URL,
+		ClientID:    "public-client",
+		RedirectURL: "http://localhost/auth/callback",
+		// ClientSecret deliberately omitted.
+	}
+	auth, err := writoidc.New(context.Background(), cfg, testHMACKey)
+	if err != nil {
+		t.Fatalf("New: %v (ClientSecret must be optional)", err)
+	}
+	if auth == nil {
+		t.Fatal("New returned a nil Authenticator with a nil error")
+	}
+}
+
+// TestCallbackPublicClientCompletesWithoutASecret is C2's end-to-end
+// regression: a full login (LoginHandler's PKCE state through
+// CallbackHandler's token exchange and session issuance) against a public
+// client — no ClientSecret configured at all — must complete exactly like a
+// confidential client's does. The fake token endpoint (idpEnv.tokenSrv)
+// asserts nothing about what the exchange request carries; this proves the
+// oauth2.Config AuthStyleInParams wiring doesn't break the round-trip, not
+// that any particular header/param is present or absent (that is proven at
+// the x/oauth2 library level — AuthStyleInParams with an empty ClientSecret
+// omits client_secret from the request entirely).
+func TestCallbackPublicClientCompletesWithoutASecret(t *testing.T) {
+	env := newIdPEnv(t)
+	auth := env.newPublicAuth(t)
+
+	env.buildIDTokenRawClaim(t, "sub-public", "alice@corp.example", "picture", "https://example.com/a.png")
+	w, sess := doCallback(t, auth)
+	if w.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d (public-client login must complete): body: %s", w.Code, http.StatusFound, w.Body.String())
+	}
+	if loc := w.Result().Header.Get("Location"); strings.Contains(loc, "auth_error") {
+		t.Errorf("Location = %q, want no auth_error", loc)
+	}
+	if sess.Sub != "sub-public" {
+		t.Errorf("session.Sub = %q, want sub-public (login must actually complete, not just redirect)", sess.Sub)
 	}
 }
 

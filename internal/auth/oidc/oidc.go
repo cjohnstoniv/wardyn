@@ -58,7 +58,8 @@ import (
 )
 
 // Config holds the OIDC client configuration. All fields except
-// AllowedEmailDomains are required.
+// AllowedEmailDomains and ClientSecret (C2: optional, for a public client)
+// are required.
 type Config struct {
 	// IssuerURL is the OIDC provider's PUBLIC issuer — the URL the user's
 	// browser is redirected to and the value of the "iss" claim in ID tokens
@@ -75,6 +76,12 @@ type Config struct {
 	// ClientID is the OAuth2 client identifier registered with the IdP.
 	ClientID string
 	// ClientSecret is the OAuth2 client secret. Never log this value.
+	// OPTIONAL (C2): empty registers this as a PUBLIC client — PKCE S256 is
+	// sent on every login regardless (LoginHandler), so a public client is
+	// not weaker, just a different registration shape some IdPs require
+	// (a SPA/native-app client type with no secret at all). See New's
+	// AuthStyleInParams wiring for why omitting the field here is not
+	// enough on its own.
 	ClientSecret string
 	// RedirectURL is the callback URL registered with the IdP.
 	// Must be <wardynd-base>/auth/callback.
@@ -237,8 +244,10 @@ type Authenticator struct {
 // be provided by the caller (e.g. loaded from the secret store). The key is
 // never logged.
 func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error) {
-	if cfg.IssuerURL == "" || cfg.ClientID == "" || cfg.ClientSecret == "" || cfg.RedirectURL == "" {
-		return nil, errors.New("oidc: IssuerURL, ClientID, ClientSecret, and RedirectURL are required")
+	// C2: ClientSecret is OPTIONAL — a public client (PKCE S256, no secret at
+	// all) is a valid registration shape, not a weaker one.
+	if cfg.IssuerURL == "" || cfg.ClientID == "" || cfg.RedirectURL == "" {
+		return nil, errors.New("oidc: IssuerURL, ClientID, and RedirectURL are required (ClientSecret is optional for a public client)")
 	}
 	if len(hmacKey) < 32 {
 		return nil, errors.New("oidc: hmacKey must be at least 32 bytes")
@@ -282,6 +291,18 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 		RedirectURL:  cfg.RedirectURL,
 		Endpoint:     provider.Endpoint(),
 		Scopes:       []string{gooidc.ScopeOpenID, "profile", "email"},
+	}
+	if cfg.ClientSecret == "" {
+		// C2: a public client's token request must never include a
+		// client_secret param, blank or otherwise — most IdPs reject that as
+		// a malformed confidential-client request. AutoDetect (the default)
+		// tries HTTP Basic auth FIRST, which x/oauth2 sends as
+		// "clientID:" (an empty password), still a client_secret-shaped
+		// credential the IdP may refuse for a registered public client.
+		// AuthStyleInParams is the one style x/oauth2 (v0.36.0) skips the
+		// client_secret form field for entirely when it's empty — see
+		// oauth2.Config.Endpoint's AuthStyle doc.
+		oa.Endpoint.AuthStyle = oauth2.AuthStyleInParams
 	}
 
 	verifier := provider.Verifier(&gooidc.Config{ClientID: cfg.ClientID})
