@@ -310,6 +310,13 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 	}
 	run, token, err := s.newStepRun(launchCtx, runID, actor, script, cc, func(run *types.AgentRun) {
 		run.AutoStopAfterSec = siteConfigProbeIdleCapSec
+		// The probe runs a plain curl, never a coding agent (see the Image
+		// comment on dispatchRun below) -- its own agent label should say so,
+		// not the newStepRun default of "claude-code". run.Agent gates only
+		// claude-code/codex-cli-specific LLM env (runs_dispatch_llm.go), which
+		// this probe must never receive anyway, so "base" is also the more
+		// correct value, not merely a cosmetic fix.
+		run.Agent = "base"
 	})
 	if err != nil {
 		return runID, probeRunResult{}, err

@@ -419,16 +419,21 @@ func agentImageCheck(images map[string]string) SetupCheck {
 	if isConventionNodeOnlyImage(ref) {
 		return SetupCheck{
 			ID: "agent_image", Label: "Agent image toolchains", Status: "warn",
-			Detail: "The configured claude-code agent image (" + ref + ") is the Node-only convention image — " +
+			Detail: "The claude-code harness image (" + ref + ") is the Node-only convention image — " +
 				"a non-JS workspace (Go/Rust/Java/Python) will fail verify/record with exit 127 (toolchain not found).",
 			Fix: "Wire a multi-toolchain image via WARDYN_AGENT_IMAGES (helm: env.WARDYN_AGENT_IMAGES) (e.g. build deploy/images/full " +
 				"(the fat toolchain image), or your own image satisfying the IMAGE CONTRACT in deploy/images/README.md), or pass a " +
 				"per-run base image in the New Run wizard's \"Sandbox image\" field — Wardyn wraps it with the runner tools.",
 		}
 	}
+	// The setup connectivity probe (site_config_probe.go) dispatches the
+	// "base" image, never "claude-code" (a probe is a bare curl task, not a
+	// coding agent) — named here too so an operator reading this row doesn't
+	// mistake it for what the probe actually runs.
 	return SetupCheck{
 		ID: "agent_image", Label: "Agent image toolchains", Status: "info",
-		Detail: "Configured claude-code agent image: " + ref + ". Wardyn cannot inspect image contents from the " +
+		Detail: "claude-code harness image: " + ref + ". The setup connectivity probe runs the `base` image: " +
+			agentImage("base", images) + ". Wardyn cannot inspect image contents from the " +
 			"control plane (no docker CLI in the distroless build) — verify a workspace to confirm its toolchains.",
 	}
 }

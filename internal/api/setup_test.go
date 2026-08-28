@@ -573,6 +573,16 @@ func TestAgentImageCheck(t *testing.T) {
 	if chk := agentImageCheck(map[string]string{"claude-code": "wardyn/agent-full:local"}); chk.Status != "info" {
 		t.Errorf("operator override image: status=%q, want info (not a red)", chk.Status)
 	}
+	// The info row names BOTH the claude-code harness image and the distinct
+	// `base` image the setup connectivity probe actually dispatches — the row
+	// used to say "Configured claude-code agent image" with no mention of the
+	// probe, which compounded the probe's own agent-label bug (0.6.6): an
+	// operator reading this row had no way to know the probe used a different
+	// image than the one named here.
+	if chk := agentImageCheck(map[string]string{"claude-code": "wardyn/agent-full:local"}); !strings.Contains(chk.Detail, "harness image") ||
+		!strings.Contains(chk.Detail, "connectivity probe runs the `base` image") {
+		t.Errorf("info detail = %q, want it to name the claude-code harness image AND the distinct base image the probe runs", chk.Detail)
+	}
 	for _, chk := range []SetupCheck{agentImageCheck(nil), agentImageCheck(map[string]string{"claude-code": "custom:tag"})} {
 		if chk.ID != "agent_image" {
 			t.Errorf("check id = %q, want agent_image", chk.ID)

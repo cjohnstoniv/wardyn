@@ -454,6 +454,14 @@ func (s *probeStore) soleRunState() types.RunState {
 	}
 	return ""
 }
+func (s *probeStore) soleRun() types.AgentRun {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.runs {
+		return r
+	}
+	return types.AgentRun{}
+}
 
 // newProbeHarness builds a Server whose Store AND Audit are the same
 // probeStore (see its doc comment) and whose Runner is fr (nil is a valid,
@@ -830,7 +838,7 @@ func TestHandleTestSiteConfigProxy_ConfinementFloorUnavailable(t *testing.T) {
 // failure read as a proxy problem it never was.
 func TestHandleTestSiteConfigProxy_UsesBaseImage(t *testing.T) {
 	fr := &probeFakeRunner{exitCode: 0}
-	srv, _ := newProbeHarness(t, types.SiteConfig{UpstreamProxyURL: "http://proxy.corp:3128"}, fr)
+	srv, ps := newProbeHarness(t, types.SiteConfig{UpstreamProxyURL: "http://proxy.corp:3128"}, fr)
 	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-proxy", adminToken, "{}")
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
@@ -841,6 +849,13 @@ func TestHandleTestSiteConfigProxy_UsesBaseImage(t *testing.T) {
 	}
 	if class != types.CC1 {
 		t.Errorf("dispatched class = %q, want the runner's own advertised class (CC1 here), never the operator's floor", class)
+	}
+	// The run's own Agent label must match what actually got dispatched
+	// (0.6.6): it used to default to "claude-code" from newStepRun even
+	// though the probe always runs "base", which compounded into
+	// agentImageCheck's misleading setup-readiness row.
+	if got := ps.soleRun().Agent; got != "base" {
+		t.Errorf("run.Agent = %q, want base (the probe never runs a coding agent)", got)
 	}
 }
 
