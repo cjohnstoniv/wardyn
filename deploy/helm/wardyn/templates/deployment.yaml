@@ -180,6 +180,9 @@ spec:
             - name: WARDYN_AUDIT_SPOOL
               value: {{ if .Values.persistence.enabled }}{{ printf "%s/audit-spool.jsonl" .Values.persistence.mountPath | quote }}{{ else }}"/tmp/audit-spool.jsonl"{{ end }}
             {{- end }}
+            {{- /* .Values.env only, not extraEnv: an extraEnv entry of the same
+            name renders AFTER this one and wins (k8s env: last-defined-wins),
+            so it needs no guard — a duplicate line, not a wrong value. */ -}}
             {{- if and .Values.defaultPolicy (not (hasKey .Values.env "WARDYN_DEFAULT_POLICY")) }}
             # Points wardynd at the policy baked into the ConfigMap below,
             # mounted read-only. An .Values.env entry overrides (e.g. to pick

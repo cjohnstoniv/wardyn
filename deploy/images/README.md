@@ -224,8 +224,9 @@ it and injects it only when forwarding internal API calls.
 | `vscode/`       | `wardyn/agent-vscode:local`  | `claude` (inherited); adds `code-server` behind the UI-sandbox relay |
 | `aws-sso/`      | `wardyn/agent-aws-sso:local` | `aws` (AWS CLI v2, no LLM harness) |
 
-`claude-code/` and `codex-cli/` are the two user-facing agent harnesses
-(`make agent-images-core`). `make agent-images` additionally builds `oracle/`
+`claude-code/` and `codex-cli/` are the two user-facing agent harnesses;
+`make agent-images-core` builds them plus `base/`, which carries the setup
+connectivity probe. `make agent-images` additionally builds `oracle/`
 — NOT a real coding agent: it runs a task's scripted, known-good solution so
 the e2e suite can prove each task in `test/e2e/tasks/` is solvable and its
 grader scores correctly — and `aws-sso/`, also not a coding agent: its only

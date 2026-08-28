@@ -202,7 +202,7 @@ func logWarnAckAmbientDefaultDeny() {
 		"produces, and WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1 — proceeding anyway: phase B (the deny-all test that would actually prove " +
 		"Wardyn's own NetworkPolicy is enforced) was SKIPPED, because behind an existing ambient deny it could only ever also refuse, " +
 		"proving nothing. Classes stay advertised, but NetworkPolicy still reports false and NetworkPolicyAcknowledged reports true — " +
-		"this substrate reads as acknowledged-not-proven on /healthz and the setup checklist, never as confirmed confined. To get real " +
+		"this substrate reads as acknowledged-not-proven on the setup checklist's k8s egress-containment row (runner capabilities: network_policy=false, network_policy_acknowledged=true), never as confirmed confined. To get real " +
 		"proof, exempt Wardyn's own pods (wardyn.managed=true) from the platform's ambient policy and unset this env."
 	slog.Warn(msg)
 }

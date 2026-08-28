@@ -109,7 +109,7 @@ cmd_reset_all() {
   _ra_rundir="${HOME}/.wardyn"
   # :local is the current locally-built tag; the :demo variants are the
   # pre-rename generation still present on boxes that set up before it.
-  _ra_images="wardyn/wardynd:local wardyn/wardyn-proxy:local wardyn/agent-claude-code:local wardyn/agent-codex-cli:local wardyn/agent-oracle:local wardyn/wardyn-tetragon-ingest:local wardyn/wardynd:demo wardyn/wardyn-proxy:demo wardyn/agent-claude-code:demo wardyn/agent-codex-cli:demo wardyn/agent-oracle:demo wardyn/wardyn-tetragon-ingest:demo"
+  _ra_images="wardyn/wardynd:local wardyn/wardyn-proxy:local wardyn/agent-base:local wardyn/agent-claude-code:local wardyn/agent-codex-cli:local wardyn/agent-oracle:local wardyn/wardyn-tetragon-ingest:local wardyn/wardynd:demo wardyn/wardyn-proxy:demo wardyn/agent-claude-code:demo wardyn/agent-codex-cli:demo wardyn/agent-oracle:demo wardyn/wardyn-tetragon-ingest:demo"
 
   # ── gather facts (read-only) ─────────────────────────────────────────
   _ra_host_pid=$(cat "${_ra_rundir}/host-wardynd.pid" 2>/dev/null || true)

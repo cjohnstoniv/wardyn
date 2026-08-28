@@ -38,7 +38,7 @@ A couple of config facts before you customize:
 ## Level 1 — governance demo (no keys)
 
 ```sh
-make agent-images-core   # build wardyn/agent-claude-code:local + agent-codex-cli:local
+make agent-images-core   # build wardyn/agent-base:local + agent-claude-code:local + agent-codex-cli:local
 make test-drive          # ARGS defaults to --up, which brings the compose stack up first
 ```
 

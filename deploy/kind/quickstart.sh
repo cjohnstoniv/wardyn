@@ -63,6 +63,10 @@ PROXY_IMAGE="wardyn/wardyn-proxy:quickstart"
 # build it once through make's NPM_REGISTRY/HTTPS_PROXY pass-through and this
 # script will find it and skip its own plain `docker build`.
 AGENT_IMAGE="wardyn/agent-claude-code:local"
+# agent-base carries the setup connectivity probe (site_config_probe.go dispatches
+# the "base" key); without it loaded, the probe would pull the ghcr tag this
+# script promises never to touch and report not_run.
+BASE_IMAGE="wardyn/agent-base:local"
 
 step() { printf '\n==> %s\n' "$*"; }
 die() { printf 'quickstart: %s\n' "$*" >&2; exit 1; }
@@ -71,7 +75,7 @@ if [[ "${1:-}" == "--down" ]]; then
   step "deleting kind cluster ${CLUSTER}"
   kind delete cluster --name "${CLUSTER}"
   echo "Cluster gone. The locally built images remain on this host:"
-  echo "  ${WARDYND_IMAGE}  ${PROXY_IMAGE}  ${AGENT_IMAGE}"
+  echo "  ${WARDYND_IMAGE}  ${PROXY_IMAGE}  ${AGENT_IMAGE}  ${BASE_IMAGE}"
   echo "  (docker rmi them if you want the disk back)"
   exit 0
 fi
@@ -97,6 +101,12 @@ else
   step "building the claude-code agent image (${AGENT_IMAGE}) — carries wardyn-rec, which k8s Exec requires"
   docker build -f deploy/images/claude-code/Dockerfile -t "${AGENT_IMAGE}" .
 fi
+if docker image inspect "${BASE_IMAGE}" >/dev/null 2>&1; then
+  echo "agent-base image ${BASE_IMAGE} already present — reusing it"
+else
+  step "building the agent-base image (${BASE_IMAGE}) — carries the setup connectivity probe"
+  docker build -f deploy/images/base/Dockerfile -t "${BASE_IMAGE}" .
+fi
 
 # ── 2. cluster + a CNI that actually enforces NetworkPolicy ─────────────────
 if kind get clusters 2>/dev/null | grep -qx "${CLUSTER}"; then
@@ -113,7 +123,7 @@ kubectl --context "${CONTEXT}" -n kube-system rollout status daemonset/calico-no
 kubectl --context "${CONTEXT}" -n kube-system rollout status deployment/calico-kube-controllers --timeout=180s
 
 step "loading images into the cluster (no registry pull)"
-for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}"; do
+for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${BASE_IMAGE}"; do
   kind load docker-image "${img}" --name "${CLUSTER}"
 done
 
@@ -212,7 +222,7 @@ networkPolicy:
 env:
   # The agent image is loaded into this cluster, not pullable from ghcr — point
   # the claude-code harness at the local tag or every run ImagePullBackOffs.
-  WARDYN_AGENT_IMAGES: '{"claude-code":"${AGENT_IMAGE}"}'
+  WARDYN_AGENT_IMAGES: '{"base":"${BASE_IMAGE}","claude-code":"${AGENT_IMAGE}"}'
 EOF
 
 step "helm upgrade --install ${RELEASE} (namespace ${NAMESPACE})"
