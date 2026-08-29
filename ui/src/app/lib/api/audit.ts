@@ -5,7 +5,7 @@
 
 // Audit log + the egress projection derived from audit events (the backend has
 // no /egress endpoint — egress decisions are read off audit rows).
-import type { AuditEvent, EgressDecision, Outcome } from "../types";
+import type { AuditEvent, EgressDecision, Outcome, RunEnding, RunEndingKind, RunState } from "../types";
 import { asJson, num, str, unwrapList, wfetch, withLimit } from "./core";
 
 // Project egress.allow / egress.deny / egress.pending audit events into
@@ -98,6 +98,55 @@ export function taskModeFromAudit(events: AuditEvent[]): string | undefined {
     if (typeof m === "string" && m) return m;
   }
   return undefined;
+}
+
+// Which audit action is the ROOT cause of a FAILED run, in the order a run
+// hits them. Read as: the sandbox image, then the image's own selftest. Any
+// other failing action stays "unknown" on purpose — run.dispatch/failure alone
+// covers a concurrent kill, a sandbox-create error and a teardown error, and
+// naming one of those as the cause would be a guess dressed as a diagnosis.
+const FAILED_CAUSE: Record<string, RunEndingKind> = {
+  "run.build": "image",
+  "run.selftest": "selftest",
+};
+
+/** The FIRST event matching `pick` — the root cause, not the last symptom. */
+function firstEvent(events: AuditEvent[], pick: (e: AuditEvent) => boolean): AuditEvent | undefined {
+  return events.find(pick);
+}
+
+// Why a run ended badly, from the trail the run page already holds. The console
+// half of the CLI's runFailureReason (cmd/wardyn/commands.go), which scans the
+// same events FORWARD for the first failure — the earliest failure is the
+// cause; everything after it is fallout.
+//
+// The run STATE picks the family and the audit picks the specifics, because
+// the two answer different questions: KILLED is never a build problem, and a
+// STOPPED run is only worth explaining when the reaper stopped it (a run
+// someone stopped on purpose is not a failure and gets no block at all).
+// Returns undefined for every state that ended fine — the block must not
+// appear on a run that completed.
+export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEnding | undefined {
+  const from = (kind: RunEndingKind, e: AuditEvent | undefined, action: string): RunEnding => ({
+    kind,
+    action: e?.action ?? action,
+    outcome: e?.outcome,
+    actor: e?.actor,
+    time: e?.time,
+  });
+  if (state === "KILLED") {
+    // The kill event carries WHO and WHEN. A KILLED run with no run.kill row
+    // (an older trail, or one truncated by the 1000-row cap) still gets the
+    // block — the state alone is the fact; only the attribution is missing.
+    return from("killed", firstEvent(events, (e) => e.action === "run.kill"), "run.kill");
+  }
+  if (state === "STOPPED") {
+    const stop = firstEvent(events, (e) => e.action === "run.autostop");
+    return stop ? from("auto_stop", stop, "run.autostop") : undefined;
+  }
+  if (state !== "FAILED") return undefined;
+  const cause = firstEvent(events, (e) => e.outcome === "failure" && e.action in FAILED_CAUSE);
+  return cause ? from(FAILED_CAUSE[cause.action], cause, cause.action) : { kind: "unknown", action: "" };
 }
 
 export const audit = {

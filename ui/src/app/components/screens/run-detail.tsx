@@ -77,6 +77,7 @@ import { ProfileReview } from "./profile-review";
 import { SummaryHeader } from "./run-detail-summary-header";
 import { RunDetailCommandBar } from "./run-detail-command-bar";
 import { RunCanvas } from "./run-detail/canvas";
+import { RunFailureBlock } from "./run-detail/failure-block";
 import type { WidgetContext } from "./run-detail/widget-registry";
 
 // Live refresh cadence for a non-terminal run's detail.
@@ -457,6 +458,12 @@ function Cockpit({
   const execMode = taskModeFromAudit(audit) === "exec";
   const terminalPane = (
     <>
+      {/* M7(b): above the terminal, because on a run that ended badly the
+          replay is not the news — why it ended is. Inside the terminal widget
+          rather than beside it so the canvas keeps placing exactly one hero,
+          and nothing on this page moves for a run that ended fine (the block
+          renders null unless the audit trail says otherwise). */}
+      <RunFailureBlock run={run} audit={audit} onGoAudit={onGoAudit} />
       <TerminalPane
         run={run}
         terminal={terminal}

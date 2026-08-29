@@ -41,15 +41,23 @@ vi.mock("../../lib/api/approvals", () => ({
 const listAuditMock = vi.fn().mockResolvedValue([]);
 // Settable so the exec-labeling test below can flip the run's task mode;
 // undefined = a harness run (the default every other test wants).
-const auditMocks = vi.hoisted(() => ({ taskMode: undefined as string | undefined }));
+const auditMocks = vi.hoisted(() => ({
+  taskMode: undefined as string | undefined,
+  ending: undefined as { kind: string; action: string } | undefined,
+}));
 vi.mock("../../lib/api/audit", () => ({
   audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) },
   egressFromAudit: () => [],
   exitCodeFromAudit: () => undefined,
   taskModeFromAudit: () => auditMocks.taskMode,
+  // The failure block reads the run's ending off the same trail. Mocked to
+  // "nothing to explain" by default so every existing case here keeps its
+  // exact layout; failure-block.test.tsx exercises the real derivation.
+  runEndingFromAudit: () => auditMocks.ending,
 }));
 afterEach(() => {
   auditMocks.taskMode = undefined;
+  auditMocks.ending = undefined;
 });
 vi.mock("../../lib/api/recordings", () => ({
   // Resolves, rather than a bare vi.fn() returning undefined: a FINISHED run on
@@ -145,6 +153,17 @@ describe("RunDetailScreen — the hero pane per run situation", () => {
     // pane were empty, which is the exact thing this test exists to catch.
     const pane = await screen.findByTestId("run-terminal-pane");
     expect(pane).toHaveTextContent(RUN_COCKPIT.finishedReplay);
+  });
+
+  // M7(b): the reason a run ended badly was in the audit trail all along; the
+  // page said only what STATE it was in. The block belongs in the hero pane —
+  // on a run that ended badly the replay is not the news.
+  it("a FAILED run explains itself in the hero pane, above the replay", async () => {
+    auditMocks.ending = { kind: "image", action: "run.build" };
+    renderRun({ ...RUN, state: "FAILED" });
+    const block = await screen.findByTestId("run-failure-block");
+    expect(screen.getByTestId("run-terminal-pane")).toContainElement(block);
+    expect(block).toHaveTextContent("What happened");
   });
 
   it("keeps run.task as the page's h1 — for an autonomous run it is the only statement of what it is doing", async () => {

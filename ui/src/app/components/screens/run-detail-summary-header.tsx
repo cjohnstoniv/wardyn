@@ -21,7 +21,10 @@ import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { useOperator, usePrincipal } from "../wardyn/operator-context";
 
 
-function formatElapsed(ms: number): string {
+// Exported for the failure block (run-detail/failure-block.tsx), which states
+// how far into a run an operator killed it — the same duration, in the same
+// words, as the clock in this bar.
+export function formatElapsed(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const h = Math.floor(totalSeconds / 3600);
   const m = Math.floor((totalSeconds % 3600) / 60);
