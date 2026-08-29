@@ -208,3 +208,19 @@ func TestInternalHost_EmptyCIDRs_FullLiftableSet_NotReservedOther(t *testing.T) 
 		t.Fatalf("198.18.0.1 (benchmarking, not in ipguard.Liftable) must stay denied, got %+v", guard)
 	}
 }
+
+// TestInternalHost_UnparseableCIDR_DropsWholeEntry: an entry with one good
+// CIDR and one unparseable CIDR must be dropped ENTIRELY, not admitted with
+// only the good CIDR — liftInternalHost treats zero CIDRs as "no CIDRs
+// declared" and lifts the FULL liftable set for the suffix, so silently
+// dropping only the bad CIDR out of an entry meant to be narrow would widen
+// it into that full-set default instead of narrowing it.
+func TestInternalHost_UnparseableCIDR_DropsWholeEntry(t *testing.T) {
+	res := fakeResolver{m: map[string][]net.IP{"gateway.corp.internal": ips("10.40.1.5")}}
+	p, _ := newInternalHostsProxy(t, types.RunPolicySpec{}, res,
+		[]types.InternalHost{{HostSuffix: "corp.internal", CIDRs: []string{"10.40.0.0/16", "not-a-cidr"}}},
+		nil, nil, "127.0.0.1:1")
+	if guard := p.vetHost("gateway.corp.internal"); !guard.Denied {
+		t.Fatalf("an entry carrying one unparseable CIDR must be dropped whole (fail closed), got %+v", guard)
+	}
+}

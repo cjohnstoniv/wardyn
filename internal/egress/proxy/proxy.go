@@ -312,19 +312,30 @@ func newProxy(opts Options) *Proxy {
 	// Compile each declared internal host: lowercase + trim the suffix (same
 	// normalization VetHost applies to the request host, so the comparison in
 	// liftInternalHost is exact), parse its CIDRs (already validated at
-	// site-config write time and at proxy Config load — a parse failure here
-	// just drops that one CIDR rather than widening scope).
+	// site-config write time and at proxy Config load). A parse failure here
+	// drops the WHOLE entry rather than just that one CIDR: liftInternalHost
+	// treats zero CIDRs as "no CIDRs declared" and lifts the full liftable
+	// set for the suffix, so silently dropping one bad CIDR out of several
+	// could widen an entry meant to be narrow into that full-set default —
+	// the opposite of "just drops that one CIDR".
 	internalHosts := make([]internalHostRule, 0, len(opts.InternalHosts))
 	for _, h := range opts.InternalHosts {
 		suffix := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h.HostSuffix)), ".")
 		if suffix == "" {
 			continue
 		}
-		var cidrs []*net.IPNet
+		cidrs := make([]*net.IPNet, 0, len(h.CIDRs))
+		ok := true
 		for _, c := range h.CIDRs {
-			if _, n, err := net.ParseCIDR(c); err == nil {
-				cidrs = append(cidrs, n)
+			_, n, err := net.ParseCIDR(c)
+			if err != nil {
+				ok = false
+				break
 			}
+			cidrs = append(cidrs, n)
+		}
+		if !ok {
+			continue
 		}
 		internalHosts = append(internalHosts, internalHostRule{suffix: suffix, cidrs: cidrs})
 	}
