@@ -34,14 +34,7 @@ export function AttentionLane({
   if (runs.length === 0) return null;
   return (
     <section aria-label="Needs you">
-      <SectionHeading
-        Icon={BellRing}
-        iconTint="text-warning"
-        title="Needs you"
-        titleTint="text-warning"
-        count={runs.length}
-        countTint="warning"
-      />
+      <SectionHeading Icon={BellRing} title="Needs you" count={runs.length} tone="warning" />
       <CardGrid>
         {runs.map((run) => (
           // Deliberately NOT `grouped`: a pinned card is out of its title

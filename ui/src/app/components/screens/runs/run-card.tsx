@@ -48,34 +48,37 @@ export function CardGrid({ children }: { children: React.ReactNode }) {
 
 export function SectionHeading({
   Icon,
-  iconTint,
   title,
-  titleTint = "text-muted-foreground",
   count,
-  countTint = "neutral",
-  hint,
+  tone = "neutral",
 }: {
   Icon?: React.ElementType;
-  iconTint?: string;
   title: string;
-  titleTint?: string;
   count: number;
-  countTint?: "neutral" | "warning";
-  hint?: string;
+  /** The Needs-you lane owns amber; every other heading is quiet. This was
+   *  three props (iconTint / titleTint / countTint) that no caller ever set
+   *  to different values — one heading has one tone. */
+  tone?: "neutral" | "warning";
 }) {
+  const warn = tone === "warning";
   return (
     <div className="mb-3 flex items-center gap-2">
-      {Icon && <Icon className={cn("size-3.5", iconTint)} />}
-      <h2 className={cn("text-meta font-semibold uppercase tracking-wider", titleTint)}>{title}</h2>
+      {Icon && <Icon className={cn("size-3.5", warn && "text-warning")} />}
+      {/* §3: the 11px uppercase rung is `.label-eyebrow` (0.06em), not a
+          hand-rolled `tracking-wider` that disagrees with it by 0.01em.
+          It hard-codes --muted-foreground and is emitted AFTER Tailwind's
+          colour utilities in the same @layer, so the amber variant has to
+          carry `!` to win the cascade — without it the lane heading renders
+          grey. */}
+      <h2 className={cn("label-eyebrow", warn && "text-warning!")}>{title}</h2>
       <span
         className={cn(
           "rounded-full px-1.5 text-meta font-semibold",
-          countTint === "warning" ? "bg-warning-subtle text-warning" : "bg-muted text-muted-foreground",
+          warn ? "bg-warning-subtle text-warning" : "bg-muted text-muted-foreground",
         )}
       >
         {count}
       </span>
-      {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
     </div>
   );
 }
