@@ -199,12 +199,16 @@ describe("LiveApprovals", () => {
       expect(denyMock).toHaveBeenCalledWith("t1", expect.any(String));
     });
 
-    it("never claims off-policy egress over a tool-only strip", async () => {
+    // The toolgate blocks the agent ON the PENDING row, so a tool-only strip is
+    // a HELD strip (isHeld) and takes the held heading — never the egress one.
+    it("never claims off-policy egress over a tool-only strip, and says the sandbox is waiting", async () => {
       listApprovalsMock.mockResolvedValue([toolRow()]);
       render(<LiveApprovals runId="r1" />);
       const panel = await screen.findByTestId("live-approvals");
       expect(within(panel).queryByText(/off-policy egress/i)).not.toBeInTheDocument();
-      expect(within(panel).getByText(/the agent is waiting on you/i)).toBeInTheDocument();
+      expect(within(panel).getByText(/Sandbox is waiting/i)).toBeInTheDocument();
+      // …and the row flags the live hold, like a wait_for_review egress row.
+      expect(within(panel).getByText("waiting")).toBeInTheDocument();
     });
   });
 

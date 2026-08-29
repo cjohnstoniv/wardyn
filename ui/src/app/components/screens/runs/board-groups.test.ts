@@ -51,6 +51,16 @@ describe("approvalSignals — held vs passive", () => {
     expect(s.get("run-1")).toEqual({ pending: 1, held: true });
   });
 
+  // A tool_call carries {tool,cmd,env} and NO mode, while wardyn-toolgate blocks
+  // the agent on the PENDING row itself — so the row is the hold, and reading it
+  // as passive left the run out of the Needs-you lane with the sandbox parked.
+  it("marks a tool_call approval as held even though its scope carries no mode", () => {
+    const s = approvalSignals([
+      approval({ kind: "tool_call", requested_scope: { tool: "Bash", cmd: "rm -rf build" } }),
+    ]);
+    expect(s.get("run-1")).toEqual({ pending: 1, held: true });
+  });
+
   it("marks a plain deny_with_review pending as passive, never held", () => {
     const s = approvalSignals([approval()]);
     expect(s.get("run-1")).toEqual({ pending: 1, passiveHold: true });
@@ -96,6 +106,22 @@ describe("needsAttention / needsYou", () => {
     // …and the same run with nothing parked on it does not.
     expect(needsAttention(r, none)).toBe(false);
     expect(needsYou(r, none)).toBe(false);
+  });
+
+  it("a pending tool_call pins a RUNNING run too — the toolgate is holding the agent", () => {
+    const signals = approvalSignals([
+      approval({ kind: "tool_call", requested_scope: { tool: "Bash", cmd: "rm -rf build" } }),
+    ]);
+    const r = run({ state: "RUNNING" });
+    expect(needsAttention(r, signals)).toBe(true);
+    expect(needsYou(r, signals)).toBe(true);
+  });
+
+  it("monitoring counts for needsAttention but NOT for needsYou — a passive pending is not a request", () => {
+    const signals = approvalSignals([approval()]);
+    const r = run({ state: "RUNNING" });
+    expect(needsAttention(r, signals)).toBe(true);
+    expect(needsYou(r, signals)).toBe(false);
   });
 
   it("WAITING_FOR_CONFIRMATION needs you with no approval row at all", () => {
