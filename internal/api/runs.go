@@ -141,8 +141,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// halves (foldRunIntegration; applyWorkspaceRequirements returns its events) —
 	// the audit is recorded once the run id is minted, below.
 	wsRefs := s.referencedWorkspaces(ctx, spec)
+	// Caller-scoped presence map, shared by the requirements fold and the warning below.
+	present := s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(r))
 	foldInteg, foldKind, bedrockRef := s.foldRunIntegration(ctx, s.secretOwnerFromRequest(r), &spec, req, wsRefs)
-	reqEvents := s.applyWorkspaceRequirements(ctx, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
+	reqEvents := s.applyWorkspaceRequirementsFor(ctx, present, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
 
 	// The primary host workspace directory this run will operate in (if any), used
 	// below to DISCOURAGE — warn, never block — sharing a directory with another
@@ -274,9 +276,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// warnings, so the operator sees it before the run wastes a sandbox. Computed on the
 	// resolved spec via the SAME helper preflight's checklist uses, so the two agree.
 	if runNeedsModelWarning(req) {
-		if la := s.resolveRunLLMAccess(ctx, req, spec, s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(r)), bedrockRef); la == nil || !la.Provisioned {
-			p, _ := s.llmProviderFor(req.Agent)
-			warnings = append(warnings, noModelAccessWarning(req.Agent, p, s.managedInjectReady("claude-code")))
+		if la := s.resolveRunLLMAccess(ctx, req, spec, present, bedrockRef); la == nil || !la.Provisioned {
+			warnings = append(warnings, s.noModelAccessWarningFor(req.Agent))
 		}
 	}
 
@@ -422,4 +423,11 @@ func noModelAccessWarning(agent string, p llmProvider, managedClaudePresent bool
 			"use --agent claude-code, or connect a credential for this agent."
 	}
 	return msg
+}
+
+// noModelAccessWarningFor renders the no-model-access warning for `agent`
+// against its (gateway-aware) provider and the managed-inject readiness.
+func (s *Server) noModelAccessWarningFor(agent string) string {
+	p, _ := s.llmProviderFor(agent)
+	return noModelAccessWarning(agent, p, s.managedInjectReady("claude-code"))
 }

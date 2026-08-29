@@ -152,7 +152,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		unionAllowedDomains(&spec, workspaceCloneEgress(ws))
 	}
 	_, _, bedrockRef := s.foldRunIntegration(ctx, s.secretOwnerFromRequest(r), &spec, req, wsRefs)
-	_ = s.applyWorkspaceRequirements(ctx, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
+	_ = s.applyWorkspaceRequirementsFor(ctx, presentSecrets, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
 
 	// Enforced confinement class — the SAME math launch runs, now on the FOLDED
 	// spec (enforcedConfinement, called by resolveEnforcedConfinement in

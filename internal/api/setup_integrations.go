@@ -88,9 +88,10 @@ func (si *SetupIntegration) UnmarshalJSON(b []byte) error {
 // integrationsWithCapabilities computes the full effective integration set
 // enriched with each row's live capabilities — the one computation GET
 // /integrations and SetupStatus.Integrations both call, so they can never
-// disagree. The zero-cost convenience form: computes its own live signals.
-func (s *Server) integrationsWithCapabilities(ctx context.Context) []SetupIntegration {
-	present := s.presentSecretNames(ctx)
+// disagree. `present` is the CALLER's presence map — owner-scoped for a
+// request (presentSecretNamesFor with secretOwnerFromRequest), so a member's
+// own key lists exactly as it resolves in their run; operator-wide elsewhere.
+func (s *Server) integrationsWithCapabilities(ctx context.Context, present map[string]bool) []SetupIntegration {
 	providers, _ := s.setupProviders()
 	return s.integrationsWithCapabilitiesUsing(ctx, present, providers, s.setupBedrock(ctx, present))
 }
@@ -121,7 +122,8 @@ func (s *Server) integrationsWithCapabilitiesUsing(ctx context.Context, present 
 //
 //	GET /api/v1/integrations
 func (s *Server) handleListIntegrations(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"integrations": s.integrationsWithCapabilities(r.Context())})
+	present := s.presentSecretNamesFor(r.Context(), s.secretOwnerFromRequest(r))
+	writeJSON(w, http.StatusOK, map[string]any{"integrations": s.integrationsWithCapabilities(r.Context(), present)})
 }
 
 // integrationByID recomputes the live capability matrix for exactly one row of

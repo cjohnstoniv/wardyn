@@ -252,6 +252,16 @@ func selectionsByWorkspaceID(sels []client.WorkspaceSelection) map[string]client
 // a non-empty egress addition, for the CALLER to audit (launch does; preflight
 // discards them — see requirementAuditEntry).
 func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.RunPolicySpec, agent string, wsRefs []types.Workspace, selections map[string]client.WorkspaceSelection) []requirementAuditEntry {
+	return s.applyWorkspaceRequirementsFor(ctx, nil, spec, agent, wsRefs, selections)
+}
+
+// applyWorkspaceRequirementsFor is applyWorkspaceRequirements with the
+// CALLER's presence map. A request handler passes the owner-scoped map it
+// already computed (presentSecretNamesFor with secretOwnerFromRequest), so a
+// workspace's integration requirement resolves a member's own key exactly as
+// their run will; nil means the operator namespace, computed lazily — the
+// record route and every existing test keep that.
+func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[string]bool, spec *types.RunPolicySpec, agent string, wsRefs []types.Workspace, selections map[string]client.WorkspaceSelection) []requirementAuditEntry {
 	var events []requirementAuditEntry
 	// Resolved AT MOST ONCE per call, lazily on the first integration: key
 	// found (PLATFORM-API-8) — effectiveIntegrations reads the site-config
@@ -322,11 +332,13 @@ func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.Run
 				// repo content routing the operator's stored secrets into a run)
 				// has no path here.
 				if !integrationRowsLoaded {
-					present := s.presentSecretNames(ctx)
+					if present == nil {
+						present = s.presentSecretNames(ctx)
+					}
 					integrationRows = s.effectiveIntegrations(ctx, present, s.setupBedrock(ctx, present))
 					integrationRowsLoaded = true
 				}
-				if ev, ok := s.applyIntegrationRequirement(ctx, integrationRows, spec, name); ok {
+				if ev, ok := s.applyIntegrationRequirement(ctx, present, integrationRows, spec, name); ok {
 					events = append(events, ev)
 				}
 			case "write":

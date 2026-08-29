@@ -363,3 +363,21 @@ func TestLLMGateway_BodyScanned(t *testing.T) {
 		t.Fatalf("scan summary = %+v, want block", d.Scan)
 	}
 }
+
+// TestLLMGateway_TrailingDotBaseURL_KeyTrimmed: a gateway base URL whose host
+// carries a trailing dot (accepted by validation, which only trims INSIDE its
+// self-reference rule) must still key gatewayVendor by the trimmed host —
+// every lookup trims, so an untrimmed key would be unmatchable and a direct
+// CONNECT to the gateway host would lose its LLM classification.
+func TestLLMGateway_TrailingDotBaseURL_KeyTrimmed(t *testing.T) {
+	p, _ := gatewayProxy(t, "https://gw.corp.internal./v1", fakeResolver{m: map[string][]net.IP{}}, "", nil)
+	if got := p.gatewayVendor["gw.corp.internal"]; got != anthropicHost {
+		t.Fatalf("gatewayVendor[trimmed host] = %q, want %q (keys: %v)", got, anthropicHost, p.gatewayVendor)
+	}
+	if _, untrimmed := p.gatewayVendor["gw.corp.internal."]; untrimmed {
+		t.Fatal("gatewayVendor must not carry the untrimmed key")
+	}
+	if !p.isLLMHost("gw.corp.internal.") || !p.isLLMHost("gw.corp.internal") {
+		t.Fatal("isLLMHost must match the gateway host with and without the trailing dot")
+	}
+}

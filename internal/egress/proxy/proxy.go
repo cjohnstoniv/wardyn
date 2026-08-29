@@ -362,7 +362,9 @@ func newProxy(opts Options) *Proxy {
 				port = n
 			}
 		}
-		host := strings.ToLower(u.Hostname())
+		// Trailing dot trimmed like every lookup (vetTrustedHost, isLLMHost,
+		// channelForHost) — an untrimmed key here is unmatchable.
+		host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
 		llmUpstreams[vendor] = llmUpstream{host: host, port: port, prefix: strings.TrimSuffix(u.Path, "/")}
 		gatewayVendor[host] = vendor
 	}

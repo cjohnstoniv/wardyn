@@ -275,3 +275,37 @@ func TestIntegrationFold_NeverDoubleGrantsAHost(t *testing.T) {
 		t.Errorf("events = %+v, want one — the second fold changed nothing, so it audits nothing", events)
 	}
 }
+
+// ─── the member's own key satisfies a workspace requirement ──────────────────
+
+// TestIntegrationFold_MemberOwnKeySatisfiesRequirement: an operator-configured
+// integration whose credential the operator has NOT stored is satisfied by the
+// MEMBER's own copy of that secret name when the caller's presence map is the
+// owner-scoped one (what POST /runs and /runs/preflight pass) — the member
+// substitutes only the credential VALUE, the row's host/header/egress stay
+// operator-authored. Negative control: the operator-wide map (what the record
+// route and every older caller use) grants nothing, and the requirement's
+// egress still folds without a credential (path-open-no-credential).
+func TestIntegrationFold_MemberOwnKeySatisfiesRequirement(t *testing.T) {
+	srv := runIntegrationSrv(t, []types.Integration{feedIntegration()}, nil)
+	srv.cfg.Secrets = &memSecrets{owned: map[string]map[string][]byte{"bob": {"artifactory-token": []byte("tok")}}}
+	ws := wsRequiring(uuid.New(), "integration:corp-artifactory", "required")
+
+	spec := &types.RunPolicySpec{}
+	present := srv.presentSecretNamesFor(context.Background(), "bob")
+	srv.applyWorkspaceRequirementsFor(context.Background(), present, spec, "claude-code", ws, nil)
+	if n, want := len(apiKeyScopes(t, spec)), len(feedIntegration().Egress); n != want {
+		t.Fatalf("member-owned secret must author one credential grant per requirement host; got %d, want %d", n, want)
+	}
+
+	spec = &types.RunPolicySpec{}
+	srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", ws, nil)
+	if n := len(apiKeyScopes(t, spec)); n != 0 {
+		t.Fatalf("operator-wide presence must not see a member's row; got %d grant(s)", n)
+	}
+	for _, h := range feedIntegration().Egress {
+		if !slices.Contains(spec.AllowedDomains, h) {
+			t.Fatalf("the requirement's egress %q must still fold without a credential", h)
+		}
+	}
+}

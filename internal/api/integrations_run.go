@@ -60,7 +60,10 @@ import (
 // explicit exact allowlist entry and deliberately does not honor allow-all
 // (Policy.AllowedExactHost), so without the entry an allow-all run would reach
 // the host and still fail to present the credential.
-func (s *Server) applyIntegrationRequirement(ctx context.Context, rows []integrationRow, spec *types.RunPolicySpec, id string) (requirementAuditEntry, bool) {
+// `present` is the caller's presence map — the SAME one `rows` was derived
+// from (applyWorkspaceRequirementsFor), owner-scoped on a request so a member's
+// own key both synthesises its row AND passes the stored-secret guard below.
+func (s *Server) applyIntegrationRequirement(ctx context.Context, present map[string]bool, rows []integrationRow, spec *types.RunPolicySpec, id string) (requirementAuditEntry, bool) {
 	integ, found := resolveIntegrationRefFrom(rows, id)
 	if !found || integ.Disabled || len(integ.Egress) == 0 {
 		return requirementAuditEntry{}, false
@@ -74,7 +77,7 @@ func (s *Server) applyIntegrationRequirement(ctx context.Context, rows []integra
 		addedEgress = unionAllowedDomains(spec, integ.Egress)
 	}
 	if !disabledCap["credential"] {
-		grantedHosts = s.applyIntegrationInjection(ctx, spec, integ)
+		grantedHosts = applyIntegrationInjection(present, spec, integ)
 	}
 	if len(addedEgress) == 0 && len(grantedHosts) == 0 {
 		// Everything this row offers was already on the spec (another workspace
@@ -137,14 +140,14 @@ func (s *Server) applyIntegrationRequirement(ctx context.Context, rows []integra
 //   - a host that already has an api_key grant is left alone — never
 //     double-grant a host, mirroring ensureLLMGrant/applyWorkspaceCreds.
 //     Whichever caller proposed it first wins.
-func (s *Server) applyIntegrationInjection(ctx context.Context, spec *types.RunPolicySpec, integ types.Integration) []string {
+func applyIntegrationInjection(present map[string]bool, spec *types.RunPolicySpec, integ types.Integration) []string {
 	// HeaderSecret is the row's proxy_header-delivered secret; an empty stored
 	// format is already materialized as "%s" (the raw secret IS the header
 	// value — the right default for a custom credential header like x-api-key
 	// or DD-API-KEY; injectionRuleFromScope defaults an empty format to
 	// "Bearer %s", which would be wrong for every one of those).
 	secretName, header, format, ok := integ.HeaderSecret()
-	if !ok || secretName == "" || !s.secretPresent(ctx, secretName) {
+	if !ok || secretName == "" || !present[secretName] {
 		return nil
 	}
 	var granted []string

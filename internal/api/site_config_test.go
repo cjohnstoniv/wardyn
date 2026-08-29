@@ -130,7 +130,7 @@ func TestValidateSiteConfig(t *testing.T) {
 // obvious SSRF-guard-widening mistakes are all refused at write time.
 func TestValidateSiteConfig_InternalHosts_Rejects(t *testing.T) {
 	bad := []string{
-		"127.0.0.0/8",   // loopback
+		"127.0.0.0/8",    // loopback
 		"169.254.0.0/16", // link-local/metadata
 		"0.0.0.0/0",      // everything
 		"8.8.8.0/24",     // public

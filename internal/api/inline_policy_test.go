@@ -943,3 +943,31 @@ func TestIntegrations_MemberKeySynthesisesRow_NoWarning(t *testing.T) {
 		t.Fatalf("member owning nothing must still get the no-model-access warning, got: %v", warns)
 	}
 }
+
+// TestIntegrations_MemberList_OwnKeyListed: GET /integrations lists the
+// member's own synthesised anthropic_api_key row (the list and the run's
+// resolve read the SAME owner-scoped presence map); a member owning nothing
+// sees no such row — the negative control.
+func TestIntegrations_MemberList_OwnKeyListed(t *testing.T) {
+	h := newHarness(t)
+	list := func(secrets *memSecrets) string {
+		t.Helper()
+		st := &runWarnStore{capStore: &capStore{}}
+		cfg := baseTestConfig(h, st)
+		cfg.OIDC = &oidc.Authenticator{}
+		cfg.Secrets = secrets
+		srv := New(cfg)
+		w := doSSO(t, srv, http.MethodGet, "/api/v1/integrations",
+			ssoSession(t, "bob", "bob@corp.example", oidc.RoleMember), "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("list = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		return w.Body.String()
+	}
+	if body := list(&memSecrets{owned: map[string]map[string][]byte{"bob": {"anthropic-api-key": []byte("sk-ant-test")}}}); !strings.Contains(body, `"anthropic_api_key"`) {
+		t.Fatalf("member's own key must list as the synthesised anthropic_api_key row, got: %s", body)
+	}
+	if body := list(&memSecrets{}); strings.Contains(body, `"anthropic_api_key"`) {
+		t.Fatalf("a member owning nothing must not see an anthropic_api_key row, got: %s", body)
+	}
+}
