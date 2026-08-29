@@ -329,6 +329,40 @@ describe("RunDetailScreen — Audit tab truncation cue", { timeout: 15_000 }, ()
   });
 });
 
+// M5: a tool call the run's own tool_rules answered creates no approval card, so
+// the audit trail is the only place that decision is visible — and it rides an
+// egress row whose target is the control plane. The tab must say who decided.
+describe("RunDetailScreen — Audit tab names a rule-decided tool call", () => {
+  it("renders the decision and the rule, not the control-plane host", async () => {
+    listAuditMock.mockImplementation((_id: string, action?: string) =>
+      Promise.resolve(
+        action
+          ? []
+          : [
+              {
+                id: "e1",
+                time: new Date().toISOString(),
+                actor_type: "system",
+                actor: "proxy",
+                action: "egress.allow",
+                outcome: "allow",
+                run_id: "run-1",
+                target: "wardynd:8080",
+                data: { rule_source: "policy:tool-allow" },
+              },
+            ],
+      ),
+    );
+    renderRun(RUN);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /audit/i }));
+
+    expect(await screen.findByText("Decided by rule")).toBeInTheDocument();
+    expect(screen.getByText("policy:tool-allow")).toBeInTheDocument();
+    expect(screen.queryByText("wardynd:8080")).not.toBeInTheDocument();
+  });
+});
+
 // W25-W25.2-3: /audit is run-scoped for a member (empty 200 without ?run_id=),
 // so the Audit tab's "open full Audit" link must carry the run — a bare /audit
 // drops a member on a feed that can never fill.
