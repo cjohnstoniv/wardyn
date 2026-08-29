@@ -826,6 +826,30 @@ hiding them would repeat the failure mode we are designed to avoid.
     This is the workspace-noun instance of residual #14's "there is exactly one
     operator tier", and it is bounded the same way.
 
+28. **A configured `WARDYN_TRUSTED_CA_FILE` makes the corporate middlebox a
+    trusted issuer for `wardynd`, every proxy sidecar, and every sandbox — not
+    merely tolerated on one hop.** The bundle is additive to the system roots,
+    so for as long as the knob is set the middlebox can read and rewrite
+    anything any of the three processes send over TLS: `wardynd`'s own OIDC
+    discovery, GitHub App transport, and audit-webhook calls (all ride the one
+    mutated `http.DefaultTransport`); the proxy sidecar's forward and
+    control-plane transports; and — because `installSandboxTrustedCA` appends
+    the same PEM into the sandbox's own CA trust — the agent's own TLS clients
+    on a passthrough (non-MITM'd) CONNECT tunnel too. Wardyn's own
+    inspection/masking (the `llm_inspection` guardrail, the per-run MITM CA)
+    sits INSIDE that envelope, not above it: a middlebox positioned to re-sign
+    wardynd's own OIDC/audit egress is positioned to re-sign whatever Wardyn
+    itself re-signs. There is no certificate pinning anywhere this trust
+    applies — the bound is scope, not depth: the PEM is operator-set at
+    process boot only (a flag/env value read once, never a `SiteConfig` field
+    an admin API write or a member could reach, never agent-reachable),
+    additive to the system bundle rather than a wholesale replacement, and
+    named honestly in `docs/OPERATIONS.md` and
+    `docs/adoption/corp-image-authoring.md` rather than silently assumed. A
+    BYOI base missing every system CA-bundle path loses public trust for its
+    OpenSSL-shaped clients entirely once this is set (residual 13's BYOI
+    trust boundary, sharpened) — a named, accepted ceiling, not a gap.
+
 ### 5.1a LLM egress content inspection — the honest-claims contract
 
 The optional `llm_inspection` guardrail (residuals #1, #2) is a **visibility +
