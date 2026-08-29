@@ -150,7 +150,21 @@ before step 3.
    (`releases/latest/download/` resolves only to non-prerelease releases; every
    Wardyn release is a pre-release, so `latest` 404s.) A later release that
    re-records an episode re-uploads under the same stable name and bumps the tag
-   in the linking docs (one `sed`).
+   in **both** `README.md` and `ui/src/app/lib/demo-videos.ts` — one `sed`
+   across both files, never just README: `cmd/wardynd/demo_videos_guard_test.go`
+   fails the build the moment the two disagree.
+
+   Also re-check the live redirect once per release, not just the tag:
+
+   ```sh
+   curl -sI "https://github.com/cjohnstoniv/wardyn/releases/download/$TAG/<name>.mp4" | grep -i '^location'
+   ```
+
+   The `Location` host it prints must already be one of the two hosts
+   `internal/api/server.go`'s `media-src` CSP directive allows
+   (`release-assets.githubusercontent.com` today) — GitHub has moved this host
+   before, and a silent mismatch means the player fails to load with no console
+   error a viewer would notice.
 
 ## Repo settings (GitHub-side)
 
