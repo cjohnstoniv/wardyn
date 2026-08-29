@@ -57,6 +57,15 @@ masked session casts flow back into the append-only audit log — drawn in
 [`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md) §8, "The three
 audit streams".
 
+The console itself (`wardynd`'s embedded UI) loads exactly one class of
+external resource, and only on explicit user click: the Getting Started demo
+episodes, fetched from GitHub Releases (`ui/src/app/lib/demo-videos.ts`,
+`episodeUrl`/`episodesFor`). `securityHeaders`' CSP `media-src` (`internal/api/server.go`)
+allowlists exactly the two hosts that request touches — `github.com` and the
+redirect target it resolves to — nothing else is fetched: no prefetch, no
+autoplay, and no third-party video player. An air-gapped mirror of the series
+is a named gap, not built.
+
 ### Feature surfaces on top of the core loop (all shipped)
 
 - **Workspace onboarding** — a workspace is a COMPOSITION of one or more
