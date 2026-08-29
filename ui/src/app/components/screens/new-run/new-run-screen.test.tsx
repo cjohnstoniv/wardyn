@@ -22,10 +22,18 @@ vi.mock("../../../lib/api/health", () => ({
 vi.mock("../../../lib/api/policies", () => ({
   policies: { listPolicies: () => Promise.resolve([]), createPolicy: vi.fn() },
 }));
+// The screen navigates on launch and on Esc — spy on it rather than asserting
+// against a URL bar the MemoryRouter does not render.
+const navigateMock = vi.fn();
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
+  return { ...actual, useNavigate: () => navigateMock };
+});
 const preflightRunMock = vi.fn();
+const createRunMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({
   runs: {
-    createRun: vi.fn(),
+    createRun: (...a: unknown[]) => createRunMock(...a),
     listRuns: () => Promise.resolve([]),
     preflightRun: (...a: unknown[]) => preflightRunMock(...a),
     // The PolicyPanel's SafetyMeter debounces a grade of the current spec; stub
@@ -55,6 +63,8 @@ beforeEach(() => {
   getSetupStatusMock.mockReset().mockResolvedValue(baseStatus());
   listWorkspacesMock.mockReset().mockResolvedValue([]);
   preflightRunMock.mockReset();
+  navigateMock.mockReset();
+  createRunMock.mockReset().mockResolvedValue({ id: "run_1" });
 });
 
 // Regression: useWorkspaceList does NOT fetch on mount — each caller loads it
@@ -314,5 +324,71 @@ describe("NewRunScreen — Preflight", () => {
     expect(button).toBeDisabled();
     resolve({ setup_items: [], enforced_confinement_class: "CC1", warnings: [] });
     await waitFor(() => expect(button).toBeEnabled());
+  });
+});
+
+// M4/rulebook §8: the keyboard contract. Launching a run is consequential, so
+// "which key commits it" is not a detail — Enter from the one single-line field
+// on the page, never from a textarea, and Esc leaves without taking the work
+// with it.
+describe("NewRunScreen — the keyboard contract", () => {
+  it("opens with focus on Title, not on the back-out button", async () => {
+    renderScreen();
+    await waitFor(() => expect(screen.getByLabelText("Title")).toHaveFocus());
+  });
+
+  it("launches on Enter from the title, but not while the gate is closed", async () => {
+    renderScreen();
+    const title = await screen.findByLabelText("Title");
+
+    // Empty title: the launch gate is closed, so Enter does nothing.
+    fireEvent.keyDown(title, { key: "Enter" });
+    expect(createRunMock).not.toHaveBeenCalled();
+
+    await user.type(title, "Refund flow");
+    fireEvent.keyDown(title, { key: "Enter" });
+    await waitFor(() => expect(createRunMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("never launches on Enter from a textarea — there it is a newline", async () => {
+    renderScreen();
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    await user.click(screen.getByRole("radio", { name: /^Autonomous/ }));
+    const task = screen.getByLabelText("Task");
+    await user.type(task, "fix the flaky test");
+
+    fireEvent.keyDown(task, { key: "Enter" });
+    expect(createRunMock).not.toHaveBeenCalled();
+  });
+
+  it("Esc backs out of an untouched form, and leaves a dirty one alone", async () => {
+    renderScreen();
+    await screen.findByLabelText("Title");
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(navigateMock).toHaveBeenCalledWith("/runs");
+
+    navigateMock.mockReset();
+    await user.type(screen.getByLabelText("Title"), "Refund flow");
+    fireEvent.keyDown(window, { key: "Escape" });
+    // Leaving is still one click on the ghost "Runs" button — it just does not
+    // happen by accident with unsaved work on screen.
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+});
+
+// The one validation-error state. aria-invalid is what paints it — the Input
+// primitive owns the ring, and this screen must never hand-paint one.
+describe("NewRunScreen — the title's error state", () => {
+  it("stays quiet until the operator has been in the field and left it empty", async () => {
+    renderScreen();
+    const title = await screen.findByLabelText("Title");
+    expect(title).not.toHaveAttribute("aria-invalid");
+
+    fireEvent.blur(title);
+    await waitFor(() => expect(title).toHaveAttribute("aria-invalid", "true"));
+
+    await user.type(title, "Refund flow");
+    expect(title).not.toHaveAttribute("aria-invalid");
   });
 });

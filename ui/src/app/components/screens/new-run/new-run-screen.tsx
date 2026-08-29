@@ -27,11 +27,13 @@
 // and NAMED on screen, never merged behind the operator's back.
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Loader2, Plus, TriangleAlert } from "lucide-react";
+import { ArrowLeft, Plus } from "lucide-react";
 import { toast } from "sonner";
 import type { AgentRun, ConfinementClass, PreflightResult, RunPolicySpec, Workspace } from "../../../lib/types";
+import { Link } from "react-router-dom";
 import type { WizardAgent } from "./wizard-types";
-import { RailSection, SectionCard, Seg } from "./new-run-primitives";
+import { SectionCard, Seg } from "./new-run-primitives";
+import { RunRail } from "./new-run-rail";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { policies as policiesApi } from "../../../lib/api/policies";
 import { health as healthApi } from "../../../lib/api/health";
@@ -50,7 +52,7 @@ import { Textarea } from "../../ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { Field } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
-import { Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
+import { Chip } from "../../wardyn/primitives";
 import { useOperator } from "../../wardyn/operator-context";
 import { CC_META } from "../../wardyn/cc-meta";
 import { RUN_MODE } from "../../wardyn/copy";
@@ -137,6 +139,10 @@ export function NewRunScreen() {
   // title character-perfect for a run to ever join its family — the feature
   // would look broken while working precisely as designed.
   const [knownTitles, setKnownTitles] = React.useState<string[]>([]);
+  // The ONE validation-error state on this form. Painted only once the operator
+  // has been in the field and left it empty — a red ring on an untouched form is
+  // an accusation about something nobody has done yet.
+  const [titleTouched, setTitleTouched] = React.useState(false);
 
   React.useEffect(() => {
     runsApi
@@ -301,6 +307,21 @@ export function NewRunScreen() {
   // the merged document on the custom lane, the stored one on the saved lane.
   // Null when there are no rules, so a policy written before the field existed
   // grows no empty rail section.
+  // What happens the moment this launches, in one sentence. Derived HERE and
+  // handed to the rail, so the rail cannot describe one run while Launch sends
+  // another.
+  const startupLine = isInteractive
+    ? state.task.trim()
+      ? state.interactiveStart === "agent"
+        ? `Starts ${agentName} on your prompt at boot — attach to watch and take over.`
+        : "Runs your startup command at boot, then a terminal is ready."
+      : state.interactiveStart === "agent"
+        ? `Comes up idle with the workspace ready. Attaching starts ${agentName} in it.`
+        : "Comes up idle with the workspace ready. Attaching drops you into a terminal."
+    : isAgent
+      ? `${agentName} runs the task unattended, then the run stops.`
+      : "The command runs unattended in the sandbox, then the run stops.";
+
   const toolRules = React.useMemo(() => {
     const spec = useSaved ? selectedPolicy?.spec : merged?.spec;
     return spec ? toolRulesSummary(spec) : null;
@@ -384,13 +405,29 @@ export function NewRunScreen() {
     }
   };
 
+  // Rulebook §8: Esc backs out quietly, with no prompt for an untouched form.
+  //
+  // ponytail: a DIRTY form ignores Esc rather than discarding the work — the
+  // explicit discard prompt the rulebook asks for needs copy M4 does not draw,
+  // and the ghost "Runs" button is still one click away. Wire the prompt when
+  // the mock carries its words.
+  const dirty =
+    !!state.title.trim() || !!state.description.trim() || !!state.task.trim() || !!state.selectedPolicyId;
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !dirty) navigate("/runs");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [dirty, navigate]);
+
   return (
     <div className="mx-auto w-full max-w-[1200px] px-6 py-6">
       <div className="mb-6 flex items-center gap-3">
         <Button variant="ghost" size="sm" onClick={() => navigate("/runs")}>
           <ArrowLeft className="size-4" /> Runs
         </Button>
-        <h1 className="text-xl font-semibold text-foreground">New run</h1>
+        <h1 className="text-foreground">New run</h1>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
@@ -409,6 +446,26 @@ export function NewRunScreen() {
                 <Input
                   id="nr-title"
                   required
+                  // Rulebook §8: default focus lands on the primary field, not
+                  // on the back-out button or the first select.
+                  autoFocus
+                  aria-invalid={titleTouched && !state.title.trim() ? true : undefined}
+                  onBlur={() => setTitleTouched(true)}
+                  // Rulebook §8: Enter submits from a SINGLE-LINE input. This is
+                  // the only one on the page; every other field is a textarea,
+                  // where Enter is a newline and nothing may claim it.
+                  //
+                  // ponytail: a plain handler rather than a real <form>. A form
+                  // would make every untyped <button> in this subtree (the
+                  // shared PolicyPanel's included) a submit button — an
+                  // accidental launch one refactor away. Wrap it in a form the
+                  // day ui/button.tsx defaults to type="button".
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.repeat && !problem && !launchDisabled) {
+                      e.preventDefault();
+                      void launch();
+                    }
+                  }}
                   maxLength={200}
                   // Native datalist: existing titles are offered as you type, so
                   // joining a family is a pick rather than an exact retype. No
@@ -498,20 +555,16 @@ export function NewRunScreen() {
                 // once at sandbox boot instead of discarded. Left blank, it's
                 // exactly today's idle-until-attach run.
                 <>
-                  <Field
+                  <Seg
                     label="Start with"
                     hint="The workspace is prepared before you land in it. Same barrier, same recording either way."
-                  >
-                    <Seg
-                      label="Start with"
-                      value={state.interactiveStart}
-                      onChange={(id) => patch({ interactiveStart: id as WizardState["interactiveStart"] })}
-                      options={[
-                        { id: "agent", label: `${agentName} — launch it in the workspace` },
-                        { id: "shell", label: "Terminal — a shell in the workspace dir" },
-                      ]}
-                    />
-                  </Field>
+                    value={state.interactiveStart}
+                    onChange={(id) => patch({ interactiveStart: id as WizardState["interactiveStart"] })}
+                    options={[
+                      { id: "agent", label: `${agentName} — launch it in the workspace` },
+                      { id: "shell", label: "Terminal — a shell in the workspace dir" },
+                    ]}
+                  />
                   {state.interactiveStart === "agent" ? (
                     <Field
                       label="Initial prompt (optional)"
@@ -546,7 +599,7 @@ export function NewRunScreen() {
                       auto-approve; a bare shell command has none, and an empty
                       seed has nothing to run unsupervised in the first place. */}
                   {state.interactiveStart === "agent" && state.task.trim() && (
-                    <div className="space-y-1">
+                    <div className="space-y-2">
                       <label
                         htmlFor="nr-seed-auto-tools"
                         className="flex items-center gap-2 text-xs text-foreground"
@@ -558,7 +611,7 @@ export function NewRunScreen() {
                         />
                         Let it use tools before I attach
                       </label>
-                      <p className="text-meta leading-snug text-muted-foreground">
+                      <p className="text-xs leading-snug text-muted-foreground">
                         Auto-approves the agent&apos;s own tool use until you join. The sandbox and
                         egress policy still apply.
                       </p>
@@ -591,27 +644,24 @@ export function NewRunScreen() {
                       calls to approve, and codex has no external approval
                       contract to route them through (disabled below, honestly). */}
                   {isAgent && (
-                    <div className="space-y-1.5">
-                      <Seg
-                        label="Tool approvals"
-                        value={state.toolApprovals}
-                        onChange={(id) => patch({ toolApprovals: id as WizardState["toolApprovals"] })}
-                        options={[
-                          { id: "auto", label: "Auto — the sandbox is the boundary" },
-                          {
-                            id: "hold",
-                            label: "Hold in Wardyn — every tool call parks as an approval",
-                            disabled: state.agent === "codex-cli",
-                          },
-                        ]}
-                      />
-                      {state.agent === "codex-cli" && (
-                        <p className="text-meta leading-snug text-muted-foreground">
-                          Codex CLI has no external tool-approval contract — this run always keeps the
-                          sandbox as its only boundary.
-                        </p>
-                      )}
-                    </div>
+                    <Seg
+                      label="Tool approvals"
+                      value={state.toolApprovals}
+                      onChange={(id) => patch({ toolApprovals: id as WizardState["toolApprovals"] })}
+                      hint={
+                        state.agent === "codex-cli"
+                          ? "Codex CLI has no external tool-approval contract — this run always keeps the sandbox as its only boundary."
+                          : undefined
+                      }
+                      options={[
+                        { id: "auto", label: "Auto — the sandbox is the boundary" },
+                        {
+                          id: "hold",
+                          label: "Hold in Wardyn — every tool call parks as an approval",
+                          disabled: state.agent === "codex-cli",
+                        },
+                      ]}
+                    />
                   )}
                 </>
               )}
@@ -650,7 +700,13 @@ export function NewRunScreen() {
             {selectedWorkspaceUngranted && (
               <p className="mt-2 text-xs text-muted-foreground">{DENIED.WORKSPACE_BODY}</p>
             )}
-            <Button variant="ghost" size="sm" className="mt-2 px-1" onClick={() => setAddWsOpen(true)}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="mt-2 px-1"
+              onClick={() => setAddWsOpen(true)}
+            >
               <Plus className="size-4" /> Add workspace
             </Button>
           </SectionCard>
@@ -669,18 +725,31 @@ export function NewRunScreen() {
                   active: useSaved,
                   onActiveChange: setUseSaved,
                   picker: (
-                    <Select value={state.selectedPolicyId ?? ""} onValueChange={onPickPolicy}>
-                      <SelectTrigger aria-label="Saved policy">
-                        <SelectValue placeholder="Pick a policy" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {savedPolicies.map((p) => (
-                          <SelectItem key={p.id} value={p.id}>
-                            {p.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <div className="space-y-2">
+                      <Select value={state.selectedPolicyId ?? ""} onValueChange={onPickPolicy}>
+                        <SelectTrigger aria-label="Saved policy">
+                          <SelectValue placeholder="Pick a policy" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {savedPolicies.map((p) => (
+                            <SelectItem key={p.id} value={p.id}>
+                              {p.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {/* Rulebook §9: an empty picker carries the action that
+                          fills it. With no stored policies this lane was a
+                          dropdown with nothing in it and no way out. */}
+                      {savedPolicies.length === 0 && (
+                        <p className="text-xs text-muted-foreground">
+                          No saved policies yet ·{" "}
+                          <Link to="/policies" className="font-medium text-info hover:underline">
+                            New policy →
+                          </Link>
+                        </p>
+                      )}
+                    </div>
                   ),
                 }}
               />
@@ -734,7 +803,6 @@ export function NewRunScreen() {
                   spec's min_confinement_class floor, which is why it keeps its
                   own control here rather than living in the JSON. */}
               <div className="border-t border-border pt-3">
-                <p className="mb-2 text-body font-medium text-foreground">Barrier</p>
                 <Seg
                   label="Barrier"
                   value={cc}
@@ -751,7 +819,7 @@ export function NewRunScreen() {
                 />
                 {availableClasses &&
                   ORDERED_CLASSES.filter((c) => !availableClasses.includes(c)).map((c) => (
-                    <p key={c} className="mt-1.5 text-meta text-muted-foreground">
+                    <p key={c} className="mt-2 text-xs text-muted-foreground">
                       {CC_META[c].label} isn&apos;t installed on this host.
                     </p>
                   ))}
@@ -766,12 +834,12 @@ export function NewRunScreen() {
                   ORDERED_CLASSES.filter(
                     (c) => rank(c) < rank(floor) && (!availableClasses || availableClasses.includes(c)),
                   ).map((c) => (
-                    <p key={c} className="mt-1.5 text-meta text-muted-foreground">
+                    <p key={c} className="mt-2 text-xs text-muted-foreground">
                       {CC_META[c].label} is below the policy&apos;s floor ({CC_META[floor].label}).
                     </p>
                   ))}
                 {probeSettled && !availableClasses && (
-                  <p className="mt-1.5 text-meta text-muted-foreground">
+                  <p className="mt-2 text-xs text-muted-foreground">
                     Couldn&apos;t check which barriers this host has — all three stay selectable.
                   </p>
                 )}
@@ -780,139 +848,26 @@ export function NewRunScreen() {
           </SectionCard>
         </div>
 
-        {/* ── Right: the live rail ───────────────────────────────── */}
-        <aside className="h-fit rounded-xl border border-border bg-card p-4 lg:sticky lg:top-6">
-          <p className="mb-3 text-sm font-semibold text-foreground">What this run can do</p>
-
-          <div className="space-y-3">
-            {selectedPolicy && (
-              <RailSection title="Policy">
-                <p className="text-body font-medium text-foreground">{selectedPolicy.name}</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  The stored spec governs this run — barrier floor{" "}
-                  {CC_META[selectedPolicy.spec.min_confinement_class].label},{" "}
-                  {selectedPolicy.spec.allow_all_egress
-                    ? "open egress"
-                    : `${(selectedPolicy.spec.allowed_domains ?? []).length} host${(selectedPolicy.spec.allowed_domains ?? []).length === 1 ? "" : "s"} allowed`}
-                  . It launches by reference, so nothing on this page is merged into it.
-                </p>
-              </RailSection>
-            )}
-            <RailSection title="Barrier">
-              <div className="mb-1 flex items-center gap-2">
-                <Chip tone="neutral">{CC_META[cc].label}</Chip>
-                <span className="text-xs text-muted-foreground">· {CC_META[cc].tagline}</span>
-              </div>
-              <p className="text-xs text-muted-foreground">{CC_META[cc].doesntProtect}</p>
-            </RailSection>
-
-            <RailSection title="Credentials">
-              {isAgent && llmReady === false && (
-                <p className="mb-1.5 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-foreground">
-                  No model provider is connected. This run launches; its first model call fails.
-                </p>
-              )}
-              <p className="text-xs leading-relaxed text-muted-foreground">
-                Minted at launch, injected by the proxy. Never written into the sandbox.
-              </p>
-            </RailSection>
-
-            {/* What actually happens when this launches. The startup choice is
-                a real fork now, and the rail is where this screen states
-                consequences rather than leaving them to be discovered. */}
-            <RailSection title="Startup">
-              <p className="text-xs text-muted-foreground">
-                {isInteractive
-                  ? state.task.trim()
-                    ? state.interactiveStart === "agent"
-                      ? `Starts ${agentName} on your prompt at boot — attach to watch and take over.`
-                      : "Runs your startup command at boot, then a terminal is ready."
-                    : state.interactiveStart === "agent"
-                      ? `Comes up idle with the workspace ready. Attaching starts ${agentName} in it.`
-                      : "Comes up idle with the workspace ready. Attaching drops you into a terminal."
-                  : isAgent
-                    ? `${agentName} runs the task unattended, then the run stops.`
-                    : "The command runs unattended in the sandbox, then the run stops."}
-              </p>
-              {!isInteractive && isAgent && state.agent === "claude-code" && state.toolApprovals === "hold" && (
-                <p className="mt-1.5 text-xs text-muted-foreground">
-                  Tool use parks as approvals — an operator decides each one.
-                </p>
-              )}
-            </RailSection>
-
-            {/* One line, and it NAMES the tools: "3 rules" alone would say
-                nothing about which calls still stop for a human. */}
-            {toolRules && (
-              <RailSection title="Tool rules">
-                <p className="text-xs text-muted-foreground">{toolRules}</p>
-              </RailSection>
-            )}
-
-            <RailSection title="Recording">
-              <p className="text-xs text-muted-foreground">
-                Every keystroke and every outbound connection.
-              </p>
-            </RailSection>
-          </div>
-
-          {error && (
-            <p className="mt-3 flex items-start gap-1.5 text-xs text-danger">
-              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-              {error}
-            </p>
-          )}
-
-          {/* Preflight moved ONTO the Policy panel, next to the document it
-              checks — one button, not two competing ones. Its result stays
-              here, beside Launch, because "what would be clamped" is the last
-              thing read before committing. */}
-          <div className="mt-4 flex gap-2">
-            <Button className="flex-1" disabled={launchDisabled || !!problem} onClick={launch}>
-              {/* The icon slot always renders (never just on launching) so the
-                  has-[>svg] padding rule and the icon+gap width never change —
-                  toggling `invisible` cannot shift "Launch run" sideways the
-                  way mounting/unmounting the icon would. */}
-              <Loader2 className={launchSpinning ? "size-4 animate-spin" : "size-4 animate-spin invisible"} />
-              Launch run
-            </Button>
-          </div>
-          {/* A disabled button that doesn't say why is a dead end. This screen
-              had NO client-side validation at all before — an empty form
-              launched, and the server's rejection arrived after the fact. */}
-          {problem && !launching && (
-            <p className="mt-2 text-center text-xs text-muted-foreground">{problem}</p>
-          )}
-
-          {/* Preflight's own result, rendered right next to the actions that
-              produced it. 4xx is the server's field-path message, verbatim;
-              success shows the member-clamp warnings (the point of the
-              feature) plus the risk grade and the confinement class the run
-              will actually be enforced at. */}
-          {preflightError && (
-            <p className="mt-3 flex items-start gap-1.5 text-xs text-danger">
-              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-              {preflightError}
-            </p>
-          )}
-          {preflightResult && (
-            <div className="mt-3 rounded-lg border border-border bg-surface-2 p-3" data-testid="preflight-result">
-              <div className="mb-1.5 flex flex-wrap items-center gap-2">
-                {preflightResult.overall_risk && <RiskBadge level={preflightResult.overall_risk} />}
-                <ConfinementChip value={preflightResult.enforced_confinement_class} />
-              </div>
-              {preflightResult.warnings && preflightResult.warnings.length > 0 ? (
-                <ul className="list-disc space-y-0.5 pl-4 text-xs text-warning">
-                  {preflightResult.warnings.map((w, i) => (
-                    <li key={i}>{w}</li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-xs text-muted-foreground">No adjustments.</p>
-              )}
-            </div>
-          )}
-        </aside>
+        {/* ── Right: the live rail, a fixed 320px ────────────────── */}
+        <RunRail
+          savedPolicy={selectedPolicy}
+          cc={cc}
+          showModelWarning={isAgent && llmReady === false}
+          startup={startupLine}
+          showHoldNote={
+            !isInteractive && isAgent && state.agent === "claude-code" && state.toolApprovals === "hold"
+          }
+          toolRules={toolRules}
+          launch={{
+            onLaunch: launch,
+            disabled: launchDisabled,
+            spinning: launchSpinning,
+            inFlight: launching,
+            problem,
+            error,
+          }}
+          preflight={{ error: preflightError, result: preflightResult }}
+        />
       </div>
 
       {addWsOpen && (

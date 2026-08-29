@@ -23,19 +23,31 @@ export function SectionCard({ title, children }: { title: string; children: Reac
   );
 }
 
+// M4: every control on the form carries a VISIBLE label at the same rung as
+// every other one — label 14/500, 8px, control, 8px, 12px hint. The segments
+// used to carry `label` as an aria-label only, so four controls on the page had
+// a name for screen readers and none for eyes. aria-labelledby keeps the
+// accessible name exactly what it was.
 export function Seg({
   options,
   value,
   onChange,
   label,
+  hint,
 }: {
   options: { id: string; label: string; disabled?: boolean }[];
   value: string;
   onChange: (id: string) => void;
   label: string;
+  hint?: React.ReactNode;
 }) {
+  const labelId = React.useId();
   return (
-    <div role="radiogroup" aria-label={label} className="flex flex-wrap gap-2">
+    <div className="space-y-2">
+      <div id={labelId} className="text-sm font-medium text-foreground">
+        {label}
+      </div>
+      <div role="radiogroup" aria-labelledby={labelId} className="flex flex-wrap gap-2">
       {options.map((o) => (
         <button
           key={o.id}
@@ -55,6 +67,8 @@ export function Seg({
           {o.label}
         </button>
       ))}
+      </div>
+      {hint && <p className="text-xs leading-snug text-muted-foreground">{hint}</p>}
     </div>
   );
 }
