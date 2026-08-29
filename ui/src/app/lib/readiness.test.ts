@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import type { SetupStatus } from "./types";
-import { hasLlmPath, deriveReadiness } from "./readiness";
+import { hasLlmPath, deriveReadiness, deploymentMode } from "./readiness";
 import { baseStatus } from "./test-fixtures";
 
 // A minimal-but-valid SetupStatus: no CLI login and no key secret — the case
@@ -144,6 +144,34 @@ describe("deriveReadiness — must not overclaim a connected model", () => {
     expect(r.llmReady).toBe(false);
     expect(r.llmLabel).toBe("");
     expect(r.composerReady).toBe(false);
+  });
+});
+
+// deploymentMode — only `sso` widens to multi-user; every other auth.mode,
+// including a future one this UI has never heard of, reads single-user.
+describe("deploymentMode", () => {
+  it("local reads single-user", () => {
+    expect(deploymentMode(status({ auth: { mode: "local", local_loopback: false } }))).toBe("single-user");
+  });
+
+  it("token reads single-user", () => {
+    expect(deploymentMode(status({ auth: { mode: "token", local_loopback: false } }))).toBe("single-user");
+  });
+
+  it("disabled reads single-user", () => {
+    expect(deploymentMode(status({ auth: { mode: "disabled", local_loopback: false } }))).toBe("single-user");
+  });
+
+  it("sso reads multi-user", () => {
+    expect(deploymentMode(status({ auth: { mode: "sso", local_loopback: false } }))).toBe("multi-user");
+  });
+
+  // Negative control: an unknown/future mode string must never widen to
+  // multi-user — single-user is the narrower, safer default.
+  it("an unknown mode reads single-user, not multi-user", () => {
+    expect(
+      deploymentMode(status({ auth: { mode: "future-mode" as SetupStatus["auth"]["mode"], local_loopback: false } })),
+    ).toBe("single-user");
   });
 });
 

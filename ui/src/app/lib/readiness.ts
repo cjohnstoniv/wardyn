@@ -95,6 +95,16 @@ export function deriveReadiness(status: SetupStatus): Readiness {
   };
 }
 
+// deploymentMode — single-user (one admin credential, no per-person identity)
+// vs multi-user (SSO, each person their own admin/member role). Derived, no
+// wire change: only `sso` widens the audience — an unknown/future auth.mode
+// reads single-user, the narrower/safer default.
+export type DeploymentMode = "single-user" | "multi-user";
+
+export function deploymentMode(s: SetupStatus): DeploymentMode {
+  return s.auth.mode === "sso" ? "multi-user" : "single-user";
+}
+
 // lastCheckedLabel — the relative "Checked Ns ago" line for the host-status
 // strip and any re-check control.
 export function lastCheckedLabel(at: Date | null): string {
