@@ -58,6 +58,11 @@ export interface ShellMeta {
   identityProvider: string;
   principal: string;
   method: string;
+  // True once the /me fetch has SETTLED — success or failure. This is the
+  // landing gate's signal (App.tsx's FirstRunLanding), and it must not be
+  // derived from `method` ("" after a failed /me) or a failed fetch strands
+  // "/" on a spinner forever; the role it then reads is the fail-open admin.
+  resolved: boolean;
   // Fail-open (see operator-context.tsx): starts true and stays true unless
   // /me resolves and explicitly says otherwise — an unresolved or failed
   // fetch must never read as "viewer".
@@ -81,6 +86,7 @@ function useMeta(): ShellMeta {
     identityProvider: "…",
     principal: "…",
     method: "",
+    resolved: false,
     operator: true,
     role: "admin",
     sessionExpiresAt: null,
@@ -95,6 +101,7 @@ function useMeta(): ShellMeta {
         identityProvider: h.identity_provider || "unknown",
         principal: me?.principal || "unknown",
         method: me?.method || "",
+        resolved: true,
         operator: me?.operator ?? true,
         role: me?.role ?? "admin",
         sessionExpiresAt: me?.session_expires_at ? new Date(me.session_expires_at) : null,
@@ -355,7 +362,7 @@ export function AppShell({
   // context default.
   return (
     <OperatorProvider operator={meta.operator} principal={meta.principal} memberLocalDirRoot={meta.memberLocalDirRoot}>
-    <RoleProvider role={meta.role} roleResolved={meta.method !== ""}>
+    <RoleProvider role={meta.role} roleResolved={meta.resolved}>
     <FocusContext.Provider value={focusValue}>
     <div className="flex h-screen flex-col bg-background text-foreground">
       {/* Skip-to-content: first focusable element, visually hidden until focused,

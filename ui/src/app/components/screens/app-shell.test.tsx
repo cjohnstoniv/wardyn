@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { AppShell, MobileNav, TopBar, useFocusMode } from "./app-shell";
+import { useRoleResolved } from "../wardyn/operator-context";
 import { ThemeProvider } from "../wardyn/theme-provider";
 import type { ConfinementClass } from "../../lib/types";
 
@@ -27,6 +28,7 @@ function renderMobileNav(role: "admin" | "member" = "admin") {
           identityProvider: "spiffe",
           principal: "u@example.test",
           method: "sso",
+          resolved: true,
           operator: role === "admin",
           role,
           sessionExpiresAt: null,
@@ -444,6 +446,7 @@ function renderTopBar(role: "admin" | "member") {
             identityProvider: "spiffe",
             principal: "u@example.test",
             method: "sso",
+            resolved: true,
             operator: role === "admin",
             role,
             sessionExpiresAt: null,
@@ -474,5 +477,48 @@ describe("TopBar — account-menu Demos entry (Phase 5)", () => {
     await user.click(screen.getAllByRole("button").at(-1)!);
     const menu = screen.getByRole("menu");
     expect(within(menu).getByText("Demos")).toBeInTheDocument();
+  });
+});
+
+// Phase 5: the landing gate (App.tsx's FirstRunLanding) waits on the shell's
+// roleResolved signal. It must mean "the /me fetch SETTLED", never "method is
+// non-empty" — a failed /me leaves method "" for good, and a signal derived
+// from it would strand "/" on a spinner forever. Here fetch rejects outright
+// (whoami → null), so the signal has to flip on the failure path too.
+describe("AppShell (roleResolved after a failed /me)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function Probe() {
+    return <span data-testid="probe">{useRoleResolved() ? "resolved" : "pending"}</span>;
+  }
+
+  it("flips to resolved once /me settles, even when it fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("connection refused")));
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <Routes>
+            <Route
+              element={
+                <AppShell
+                  pendingApprovals={0}
+                  attentionCount={0}
+                  onSignOut={() => {}}
+                  unreachable={true}
+                  lastOkAt={null}
+                  confinementClasses={[]}
+                />
+              }
+            >
+              <Route index element={<Probe />} />
+            </Route>
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    // Negative control: the first paint is pending — the signal is not a
+    // constant true (which would defeat the member/admin race the gate closes).
+    expect(screen.getByTestId("probe")).toHaveTextContent("pending");
+    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("resolved"));
   });
 });
