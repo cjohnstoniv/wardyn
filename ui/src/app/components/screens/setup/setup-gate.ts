@@ -23,6 +23,7 @@
 //
 // setup-screen re-exports these, so existing importers/tests are unaffected.
 import { lsGet, lsSet } from "../../../lib/storage";
+import type { Role } from "../../wardyn/operator-context";
 import type { SetupStepId } from "./steps";
 
 // ------------------------------------------------------------
@@ -66,7 +67,20 @@ export function markMemberGettingStartedSeen(): void {
 // answers has_runs:false from the synthetic READY_FALLBACK, so it is excluded
 // explicitly — a broken backend belongs on Runs behind the banner, not in a
 // tour whose every step would read as un-ready.
-export function firstRunLanding(status: { unreachable?: boolean; has_runs: boolean }): "/setup" | "/runs" {
+//
+// A member takes a DIFFERENT rule (Phase 5): their own per-browser
+// memberGettingStartedSeen() flag, never the admin's has_runs/setupDismissed
+// pair — a global has_runs:true (someone else's runs) must not skip a member
+// past their own first landing. role defaults to "admin" (the same fail-open
+// default the rest of this codebase uses for an unresolved role), so every
+// existing admin call site is unaffected.
+export function firstRunLanding(
+  status: { unreachable?: boolean; has_runs: boolean },
+  role: Role = "admin",
+): "/setup" | "/runs" {
+  if (role === "member") {
+    return !status.unreachable && !memberGettingStartedSeen() ? "/setup" : "/runs";
+  }
   return !status.unreachable && !status.has_runs && !setupDismissed() ? "/setup" : "/runs";
 }
 

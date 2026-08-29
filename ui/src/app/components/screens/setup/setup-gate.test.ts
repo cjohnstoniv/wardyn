@@ -12,6 +12,7 @@ import {
   markIntegrationsSkipped,
   loadVisitedSteps,
   markStepVisited,
+  markMemberGettingStartedSeen,
 } from "./setup-gate";
 
 // setupGateActive (the mandatory redirect of EVERY route to /setup) was deleted
@@ -61,5 +62,29 @@ describe("setup-gate — the funnel's own per-browser state (no hard gate any mo
     markStepVisited("corp_network");
     markStepVisited("environment"); // no duplicate
     expect(loadVisitedSteps().sort()).toEqual(["corp_network", "environment"]);
+  });
+});
+
+describe("firstRunLanding — a member takes a different rule than the admin", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("an undismissed member opens on their own Getting Started", () => {
+    expect(firstRunLanding({ has_runs: false }, "member")).toBe("/setup");
+  });
+
+  it("markMemberGettingStartedSeen() retires the redirect for that member", () => {
+    markMemberGettingStartedSeen();
+    expect(firstRunLanding({ has_runs: false }, "member")).toBe("/runs");
+  });
+
+  it("an unreachable daemon lands a member on Runs, not the tour", () => {
+    expect(firstRunLanding({ unreachable: true, has_runs: false }, "member")).toBe("/runs");
+  });
+
+  // Negative control: has_runs is a GLOBAL server signal (someone else's
+  // runs). A member's own landing must consult only their own per-browser
+  // flag, never this field.
+  it("a member with global has_runs:true still opens on their own Getting Started", () => {
+    expect(firstRunLanding({ has_runs: true }, "member")).toBe("/setup");
   });
 });

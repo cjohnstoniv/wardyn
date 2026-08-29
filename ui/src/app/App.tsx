@@ -19,6 +19,7 @@ import { setup as setupApi } from "./lib/api/setup";
 // from there drags the whole funnel (→ integrations → harness-login → xterm) into
 // the entry chunk and defeats the /setup route's code-splitting.
 import { firstRunLanding } from "./components/screens/setup/setup-gate";
+import { useRole, useRoleResolved } from "./components/wardyn/operator-context";
 import { approvals as approvalsApi } from "./lib/api/approvals";
 import { runs as runsApi } from "./lib/api/runs";
 import { usePoll } from "./lib/use-poll";
@@ -113,9 +114,17 @@ function RouteFallback() {
 // send a broken backend into the tour instead of showing AppShell's banner.
 // Waits for the first /setup/status before deciding — redirecting on the null
 // initial state would always pick Runs and the tour would never open.
-function FirstRunLanding({ status }: { status: SetupStatus | null }) {
-  if (status === null) return <RouteFallback />;
-  return <Navigate to={firstRunLanding(status)} replace />;
+//
+// Phase 5: also waits for the REAL role (useRoleResolved, operator-context.tsx)
+// — a member landed here before /me answers would otherwise be redirected
+// under the role context's fail-open "admin" default, which reads has_runs
+// against the wrong rule. Hooks are called unconditionally, before either
+// early return, per the rules of hooks.
+export function FirstRunLanding({ status }: { status: SetupStatus | null }) {
+  const role = useRole();
+  const roleResolved = useRoleResolved();
+  if (status === null || !roleResolved) return <RouteFallback />;
+  return <Navigate to={firstRunLanding(status, role)} replace />;
 }
 
 // What needs an operator's attention — surfaced as the amber count badge on the

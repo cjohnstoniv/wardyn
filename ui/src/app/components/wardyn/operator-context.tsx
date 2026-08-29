@@ -89,10 +89,36 @@ export type Role = "admin" | "member";
 // restricted member).
 const RoleContext = React.createContext<Role>("admin");
 
-export function RoleProvider({ role, children }: { role: Role; children: React.ReactNode }) {
-  return <RoleContext.Provider value={role}>{children}</RoleContext.Provider>;
+// Whether `role` above is the REAL, server-answered value yet, or still the
+// fail-open default (app-shell's useMeta starts `role: "admin", method: ""`
+// and flips only once whoami() resolves). Default true — the SAME fail-open
+// rationale as Role's own default: every unwrapped test and every consumer
+// that never passes this prop must read as resolved, not as "still loading
+// forever". App.tsx's FirstRunLanding is the one consumer that actually
+// blocks on it — it must not navigate a member on the admin default before
+// the real role is known.
+const RoleResolvedContext = React.createContext<boolean>(true);
+
+export function RoleProvider({
+  role,
+  roleResolved = true,
+  children,
+}: {
+  role: Role;
+  roleResolved?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <RoleContext.Provider value={role}>
+      <RoleResolvedContext.Provider value={roleResolved}>{children}</RoleResolvedContext.Provider>
+    </RoleContext.Provider>
+  );
 }
 
 export function useRole(): Role {
   return React.useContext(RoleContext);
+}
+
+export function useRoleResolved(): boolean {
+  return React.useContext(RoleResolvedContext);
 }

@@ -355,7 +355,7 @@ export function AppShell({
   // context default.
   return (
     <OperatorProvider operator={meta.operator} principal={meta.principal} memberLocalDirRoot={meta.memberLocalDirRoot}>
-    <RoleProvider role={meta.role}>
+    <RoleProvider role={meta.role} roleResolved={meta.method !== ""}>
     <FocusContext.Provider value={focusValue}>
     <div className="flex h-screen flex-col bg-background text-foreground">
       {/* Skip-to-content: first focusable element, visually hidden until focused,
