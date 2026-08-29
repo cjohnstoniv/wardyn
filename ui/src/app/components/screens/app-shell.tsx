@@ -107,6 +107,11 @@ function useMeta(): ShellMeta {
         sessionExpiresAt: me?.session_expires_at ? new Date(me.session_expires_at) : null,
         memberLocalDirRoot: me?.member_local_dir_root ?? null,
       });
+    }).catch(() => {
+      // health()/whoami() swallow their own errors today, so this is unreachable;
+      // it exists so `resolved` never depends on two other functions keeping
+      // that promise — a rejection here would strand the landing gate.
+      if (alive) setMeta((m) => ({ ...m, resolved: true }));
     });
     return () => {
       alive = false;
