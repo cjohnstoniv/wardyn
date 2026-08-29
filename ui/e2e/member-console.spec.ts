@@ -23,7 +23,10 @@ import { DENIED } from "../src/app/lib/permissions-copy";
 // not server-side ownership scoping itself (that's proven server-side: B2's
 // own tests, and internal/api/runs_policy.go's handleListRuns /
 // approvals.go's handleListApprovals creator-pager branches).
-async function mockMemberRole(page: import("@playwright/test").Page): Promise<void> {
+// Exported (Phase 5) so member-getting-started.spec.ts can drive the same
+// mocked-/me technique against the member Getting Started screen instead of
+// re-declaring an identical helper.
+export async function mockMemberRole(page: import("@playwright/test").Page): Promise<void> {
   await page.route("**/api/v1/me", async (route) => {
     const response = await route.fetch();
     const json = await response.json();
