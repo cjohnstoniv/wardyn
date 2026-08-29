@@ -21,6 +21,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"os/user"
@@ -246,6 +247,26 @@ func run() error {
 		return err
 	}
 
+	// Corporate CA trust (WARDYN_TRUSTED_CA_FILE): additive to the system roots
+	// for wardynd's OWN outbound TLS (installTrustedCA mutates the shared
+	// http.DefaultTransport every package here dials through — see
+	// internal/broker's GitHub App transport, internal/auth/oidc's issuer
+	// rewrite transport, and the audit webhook sink). The proxy sidecar and the
+	// sandbox get the SAME pemBundle forwarded at dispatch time (api.Config
+	// below); see trusted_ca.go. Refuse boot on error: an operator-typed trust
+	// boundary that fails to parse must not silently fall back to a narrower one.
+	trustedCAPEM, trustedCAPool, trustedCACount, err := loadTrustedCA(*f.trustedCAFile)
+	if err != nil {
+		return err
+	}
+	if trustedCACount > 0 {
+		slog.Info("wardynd: corporate CA trust configured (WARDYN_TRUSTED_CA_FILE)",
+			slog.Int("cert_count", trustedCACount), slog.Any("subjects", certSubjects(trustedCAPEM)))
+	}
+	if tr, ok := http.DefaultTransport.(*http.Transport); ok {
+		installTrustedCA(tr, trustedCAPool)
+	}
+
 	if *f.adminToken == "" && !lm.enabled {
 		slog.Warn("wardynd: admin token unset; the public API is DISABLED (only /healthz responds). Set WARDYN_ADMIN_TOKEN, enable OIDC, or use -local-mode for single-developer localhost use.")
 	}
@@ -326,6 +347,7 @@ func run() error {
 		LocalOperator:             lm.operator,
 		TrustDomain:               *f.trustDomain,
 		DefaultPolicy:             defaultPolicy,
+		TrustedCAPEM:              trustedCAPEM,
 		RunnerTarget:              runnerTarget,
 		UIDir:                     *f.uiDir,
 		ControlPlaneURL:           *f.controlURL,

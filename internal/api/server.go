@@ -221,6 +221,17 @@ type Config struct {
 	TrustDomain string
 	// DefaultPolicy is applied to runs created without an explicit policy_id.
 	DefaultPolicy types.RunPolicySpec
+	// TrustedCAPEM is WARDYN_TRUSTED_CA_FILE's content (cmd/wardynd's
+	// loadTrustedCA), read once at boot: a PEM bundle of additional roots a
+	// corporate TLS-inspecting middlebox signs with. "" (the default) means the
+	// knob is unset. Forwarded verbatim to two other trust boundaries dispatch
+	// composes per run — the proxy sidecar (runner.ProxyConfig.TrustedCAPEM,
+	// which rides WARDYN_PROXY_CONFIG_JSON) and the sandbox's own CA trust
+	// (installSandboxTrustedCA, appended to WARDYN_MITM_CA_PEM) — wardynd's OWN
+	// outbound TLS trusts it separately, via installTrustedCA mutating
+	// http.DefaultTransport at boot. Control-plane-authored only: never a
+	// SiteConfig field, never agent-reachable.
+	TrustedCAPEM string
 	// RunnerTarget records which target a run is dispatched to ("docker"|"k8s"),
 	// or "none" for a headless control plane (-runner none: runs stay PENDING).
 	// Defaults to "docker".
