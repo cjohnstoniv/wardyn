@@ -971,3 +971,45 @@ func TestIntegrations_MemberList_OwnKeyListed(t *testing.T) {
 		t.Fatalf("a member owning nothing must not see an anthropic_api_key row, got: %s", body)
 	}
 }
+
+// TestIntegrations_MemberSelectsOwnKey_NoWarning: the "Model access" lane a
+// member is told to use (MEMBERS.md "Your model key") — POST /runs with
+// integration_id "anthropic_api_key" and NO hand-authored grant — folds the
+// member's own key when the operator holds no row of that name, so the run
+// has model access and no warning fires. Negative control: the same request
+// from a member who owns nothing warns.
+func TestIntegrations_MemberSelectsOwnKey_NoWarning(t *testing.T) {
+	h := newHarness(t)
+	const body = `{"agent":"claude-code","task":"t","integration_id":"anthropic_api_key"}`
+	const noModelAccessSubstr = "no model credential resolves"
+	createRun := func(secrets *memSecrets) *httptest.ResponseRecorder {
+		t.Helper()
+		st := &runWarnStore{capStore: &capStore{}}
+		cfg := baseTestConfig(h, st)
+		cfg.OIDC = &oidc.Authenticator{}
+		cfg.Secrets = secrets
+		// No grant in the ceiling at all: the integration fold is what authors
+		// the api_key grant, post-clamp, from the selected row.
+		cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}}
+		srv := New(cfg)
+		return doSSO(t, srv, http.MethodPost, "/api/v1/runs",
+			ssoSession(t, "bob", "bob@corp.example", oidc.RoleMember), body)
+	}
+	w := createRun(&memSecrets{owned: map[string]map[string][]byte{"bob": {"anthropic-api-key": []byte("sk-ant-test")}}})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	var got createRunResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, w.Body.String())
+	}
+	if slices.ContainsFunc(got.Warnings, func(w string) bool { return strings.Contains(w, noModelAccessSubstr) }) {
+		t.Fatalf("selecting the synthesised anthropic_api_key row must fold the member's own key with no warning, got: %v", got.Warnings)
+	}
+	// Negative control: a member owning nothing (and no operator row) has no
+	// anthropic_api_key row to select at all — the eager integration_id check
+	// refuses the request outright, the same 400 a typo gets.
+	if w := createRun(&memSecrets{}); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "does not name an AI provider integration") {
+		t.Fatalf("a member owning nothing must be refused by the eager integration_id check; got %d: %s", w.Code, w.Body.String())
+	}
+}

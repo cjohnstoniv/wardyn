@@ -317,7 +317,10 @@ func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[
 				if req.Provenance != "operator_set" {
 					continue
 				}
-				if ev, ok := s.applyRequiredSecretGrant(ctx, spec, agent, name); ok {
+				if present == nil {
+					present = s.presentSecretNames(ctx)
+				}
+				if ev, ok := s.applyRequiredSecretGrant(present, spec, agent, name); ok {
 					events = append(events, ev)
 				}
 			case "integration":
@@ -383,7 +386,7 @@ func effectiveRequirements(ws types.Workspace) map[string]types.WorkspaceRequire
 // stored (an auto-mint grant with no resolvable secret would fail the proxy
 // CLOSED at startup — degrade silently to no-model-access instead of bricking
 // the run; compose_setup.go's checklist escalates the gap to blocking styling).
-func (s *Server) applyRequiredSecretGrant(ctx context.Context, spec *types.RunPolicySpec, agent, secretName string) (requirementAuditEntry, bool) {
+func (s *Server) applyRequiredSecretGrant(present map[string]bool, spec *types.RunPolicySpec, agent, secretName string) (requirementAuditEntry, bool) {
 	p, ok := s.llmProviderFor(agent)
 	if !ok {
 		return requirementAuditEntry{}, false
@@ -391,7 +394,7 @@ func (s *Server) applyRequiredSecretGrant(ctx context.Context, spec *types.RunPo
 	if _, exists := apiKeyGrantForHost(spec, p.host); exists {
 		return requirementAuditEntry{}, false
 	}
-	if !s.secretPresent(ctx, secretName) {
+	if !present[secretName] {
 		return requirementAuditEntry{}, false
 	}
 	scope, _ := json.Marshal(map[string]string{

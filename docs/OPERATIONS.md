@@ -1405,9 +1405,20 @@ Two more exclusions apply automatically, with no operator action: an address
 on the proxy's own network interfaces, and the resolved control-plane
 (`wardynd`) host — the sidecar shares its Docker network with Postgres/Dex/the
 registry container, and a declared internal host must never become a way to
-reach those. A lifted decision's audit `rule_source` reads
-`site-config:internal-host` instead of the default `policy:allowed`, so a
-lifted request is distinguishable from an ordinary allowed one.
+reach those. That exclusion is shaped by the Docker topology: on Kubernetes
+the sidecar's interface carries only the pod's own address and the control
+plane's neighbours (Postgres, Dex, the registry) are ClusterIP Services off
+that interface, so only the resolved `wardynd` address is excluded there —
+declare tight `cidrs` (the workload namespace's pod/Service ranges) and never
+a suffix that matches the control-plane namespace's DNS zone (a bare
+`svc.cluster.local` suffix with empty `cidrs` would reach every Service).
+The lift applies wherever the proxy resolves a hostname for a direct dial —
+the sandbox's CONNECT/plain-HTTP path, the MITM path, and the `git_pat`
+PAT-broker lane (its forge host is grant-derived), so a declared suffix that
+covers a self-hosted forge lets the brokered PAT reach it. A lifted
+decision's audit `rule_source` reads `site-config:internal-host` instead of
+the default `policy:allowed`, so a lifted request is distinguishable from an
+ordinary allowed one.
 
 ```json
 {
@@ -1436,8 +1447,14 @@ disallowed address kinds (`Proxy.vetTrustedHost`, reached only via
 alone — a sandbox that names the gateway host itself on an ordinary
 CONNECT/plain-HTTP request is treated exactly like any other host: policy
 (`allowed_domains`) plus the unconditional private-IP guard apply unchanged,
-so a private-address gateway stays unreachable that way without its own
-`SiteConfig.InternalHosts` declaration.
+so a private-address gateway named by hostname stays unreachable that way
+without its own `SiteConfig.InternalHosts` declaration. Prefer a hostname
+gateway: one configured by IP literal must be listed by that literal in
+`allowed_domains` (the api-key lane appends the provider host to every grant),
+and an exact literal-IP allowlist entry is honoured before the private-IP
+guard (`Policy.AllowsLiteralIP`) — the gateway box itself then becomes
+reachable from the sandbox on every port over a plain CONNECT (no credential
+rides that path; injection happens only on the brokered route).
 
 The operator MUST add the gateway host (exact) to the policy's
 `allowed_domains` — the credential grant the proxy injects still needs an

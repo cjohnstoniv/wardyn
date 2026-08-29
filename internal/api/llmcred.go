@@ -289,7 +289,11 @@ func subscriptionLane(integ types.Integration) string {
 // model access for the sandbox WORKLOAD — that comes only from a workspace's
 // secret: requirement (applyRequiredSecretGrant, runs_create.go) or an
 // explicit run grant, never from an integration binding.
-func (s *Server) applyIntegrationCreds(ctx context.Context, spec *types.RunPolicySpec, integ types.Integration, agent string) (kind string, bedrockRef *types.WorkspaceBedrockRef) {
+// `owner` is the caller's secret namespace (secretOwnerFromRequest): the
+// uniform-fold branch checks the row's credential is stored FOR THIS CALLER,
+// so a member's own copy of the provider-convention name folds exactly as an
+// operator's row does ("" = operator namespace).
+func (s *Server) applyIntegrationCreds(ctx context.Context, owner string, spec *types.RunPolicySpec, integ types.Integration, agent string) (kind string, bedrockRef *types.WorkspaceBedrockRef) {
 	// AI kinds only, even though the default branch below is kind-agnostic: this
 	// function answers "what credentials the run's MODEL". A generic connection
 	// is not a model provider, and resolveRunIntegration already refuses one at
@@ -354,7 +358,7 @@ func (s *Server) applyIntegrationCreds(ctx context.Context, spec *types.RunPolic
 		// bespoke transports because they genuinely are not header credentials
 		// (an OAuth mount/inject lane; SigV4 signing via WorkspaceBedrockRef).
 		secret, header, format := integrationKeyGrant(integ, p)
-		if secret == "" || !s.secretPresent(ctx, secret) {
+		if secret == "" || !s.presentSecretNamesFor(ctx, owner)[secret] {
 			return "", nil // absent secret would fail the proxy closed — fall back rather than hard-fail
 		}
 		if _, exists := apiKeyGrantForHost(spec, p.host); exists {
@@ -520,7 +524,7 @@ func (s *Server) foldRunIntegration(ctx context.Context, owner string, spec *typ
 	if !ok {
 		return types.Integration{}, "", nil
 	}
-	kind, bedrockRef := s.applyIntegrationCreds(ctx, spec, integ, req.Agent)
+	kind, bedrockRef := s.applyIntegrationCreds(ctx, owner, spec, integ, req.Agent)
 	// POSTURE: this branch re-injects the operator's ceiling ~/.claude mounts AFTER
 	// the clamp, deliberately (see applyLLMCredMount's contract) — which means any
 	// authenticated member can reach the resident subscription lane by passing
@@ -532,23 +536,6 @@ func (s *Server) foldRunIntegration(ctx context.Context, owner string, spec *typ
 		applyLLMCredMount(spec, s.cfg.DefaultPolicy, req.Agent, true)
 	}
 	return integ, kind, bedrockRef
-}
-
-// secretPresent reports whether a secret name exists in the store (best-effort;
-// a store error reads as "present" so a transient List failure never silently
-// drops a legitimately-configured workspace binding — the proxy still fails
-// closed at startup if it's truly absent).
-func (s *Server) secretPresent(ctx context.Context, name string) bool {
-	if s.cfg.Secrets == nil {
-		return false
-	}
-	// Operator namespace: a workspace binding names an operator-authored
-	// secret, never a member's own row.
-	names, err := s.cfg.Secrets.List(ctx)
-	if err != nil {
-		return true
-	}
-	return slices.Contains(names, name)
 }
 
 // ensureLLMGrant gives a COMPOSED run for an LLM-backed agent a path to its model.

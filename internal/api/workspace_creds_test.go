@@ -299,7 +299,7 @@ func TestApplyIntegrationCreds_IncompatibleAgentProvider_FoldsNothing(t *testing
 	scope := mustJSON(map[string]string{"host": "api.anthropic.com", "header": "x-api-key", "format": "%s", "secret_name": "anthropic-api-key"})
 	spec.EligibleGrants = []types.GrantSpec{{Kind: types.GrantAPIKey, Scope: scope}}
 
-	kind, bedrockRef := s.applyIntegrationCreds(context.Background(), spec, openaiInteg, "claude-code")
+	kind, bedrockRef := s.applyIntegrationCreds(context.Background(), "", spec, openaiInteg, "claude-code")
 	if kind != "" || bedrockRef != nil {
 		t.Fatalf("applyIntegrationCreds(openai_api_key, claude-code) = (%q, %v), want (\"\", nil) — no fold", kind, bedrockRef)
 	}
