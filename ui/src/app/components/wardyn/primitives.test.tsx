@@ -40,6 +40,22 @@ describe("RunStateBadge", () => {
     expect(screen.getByText("Running")).toBeInTheDocument();
   });
 
+  // CONSOLE-RULES §5: solid saturated red is KILLED's reserved treatment and it
+  // does not survive as bare text, so the label variant — which drops the pill
+  // everywhere else, for the board card's row 2 — keeps the chip for this one
+  // state. Nothing pinned that carve-out.
+  it("the label variant drops the pill, except for KILLED", () => {
+    const killed = render(<RunStateBadge state="KILLED" variant="label" />);
+    expect(screen.getByText("Killed")).toBeInTheDocument();
+    expect(killed.container.querySelector(".bg-danger")).not.toBeNull();
+    killed.unmount();
+
+    // FAILED is danger too, but not solid — it renders as the bare word.
+    const failed = render(<RunStateBadge state="FAILED" variant="label" />);
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(failed.container.querySelector(".bg-danger")).toBeNull();
+  });
+
   it("does not throw on an unknown state and shows the raw value", () => {
     const unknown = "SOME_FUTURE_STATE" as RunState;
     expect(() => render(<RunStateBadge state={unknown} />)).not.toThrow();
