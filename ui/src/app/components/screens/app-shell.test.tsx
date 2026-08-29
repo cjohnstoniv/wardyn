@@ -9,7 +9,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
-import { AppShell, MobileNav, useFocusMode } from "./app-shell";
+import { AppShell, MobileNav, TopBar, useFocusMode } from "./app-shell";
 import { ThemeProvider } from "../wardyn/theme-provider";
 import type { ConfinementClass } from "../../lib/types";
 
@@ -389,9 +389,9 @@ describe("MobileNav (below-md nav fallback)", () => {
 // B3: member nav is Runs · Approvals · Workspaces, nothing else — no Policies/
 // Permissions/Secrets/Audit/Recordings. Hiding is cosmetic (the server is the
 // real boundary); this pins the UI half of that contract. Demos/Integrations
-// left the sidebar entirely (stage-1 flatten) — Demos moved to the account menu
-// (TopBar), offered to every role since routes.go has no server-side gate on
-// it at all.
+// left the sidebar entirely (stage-1 flatten) — Demos moved to the account
+// menu (TopBar), which since Phase 5 hides it for members (its own describe
+// block below) — routes.go still has no server-side gate on it at all.
 describe("SidebarNav (member role — B3)", () => {
   // Workspaces joined the member set (mock M6): a member launches runs AGAINST
   // workspaces and could previously only glimpse them inside the New run
@@ -427,5 +427,52 @@ describe("SidebarNav (member role — B3)", () => {
       .map((el) => el.textContent ?? "")
       .filter((t) => labels.some((l) => t.startsWith(l)));
     expect(rendered.map((t) => labels.find((l) => t.startsWith(l)))).toEqual(labels);
+  });
+});
+
+// Phase 5: the account-menu Demos entry (TopBar, not SidebarNav — the
+// describe block above only drives the sidebar) is meaningless on a member's
+// own Getting Started, which has no /setup?step= deep link at all.
+function renderTopBar(role: "admin" | "member") {
+  return render(
+    <MemoryRouter>
+      <ThemeProvider>
+        <TopBar
+          onSignOut={() => {}}
+          meta={{
+            trustDomain: "example.test",
+            identityProvider: "spiffe",
+            principal: "u@example.test",
+            method: "sso",
+            operator: role === "admin",
+            role,
+            sessionExpiresAt: null,
+            memberLocalDirRoot: null,
+          }}
+          pendingApprovals={0}
+          attentionCount={0}
+          confinementClasses={[]}
+          onNewRun={() => {}}
+        />
+      </ThemeProvider>
+    </MemoryRouter>,
+  );
+}
+
+describe("TopBar — account-menu Demos entry (Phase 5)", () => {
+  it("member: no Demos item", async () => {
+    const user = userEvent.setup();
+    renderTopBar("member");
+    await user.click(screen.getAllByRole("button").at(-1)!);
+    const menu = screen.getByRole("menu");
+    expect(within(menu).queryByText("Demos")).toBeNull();
+  });
+
+  it("admin: Demos item present", async () => {
+    const user = userEvent.setup();
+    renderTopBar("admin");
+    await user.click(screen.getAllByRole("button").at(-1)!);
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByText("Demos")).toBeInTheDocument();
   });
 });

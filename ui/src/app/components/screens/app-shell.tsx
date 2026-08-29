@@ -441,7 +441,9 @@ export function AppShell({
   );
 }
 
-function TopBar({
+// Exported (like MobileNav above) so a unit test can drive the account menu
+// directly — SidebarNav's own member tests don't touch this at all.
+export function TopBar({
   onSignOut,
   meta,
   pendingApprovals,
@@ -549,9 +551,10 @@ function TopBar({
                 Getting Started's first demo step, the one demos surface now
                 (/demos only redirects here). Hidden for members (Phase 5):
                 /setup?step=sealed-box is meaningless on the member's own
-                Getting Started, which has no step query at all — the member
-                catalog is EpisodeList on the welcome hero and the per-section
-                StepEpisodes rows instead. */}
+                Getting Started (member-getting-started.tsx) — a member never
+                reaches the admin welcome hero or its step query at all, and
+                its own episode catalog is a single flat "Watch" list at the
+                bottom of the page, not a step deep link. */}
             {meta.role !== "member" && (
               <DropdownMenuItem asChild>
                 <Link to="/setup?step=sealed-box">
