@@ -42,6 +42,20 @@ export function dismissSetup(): void {
   lsSet(DISMISS_KEY, "1");
 }
 
+// Member Getting Started "seen" flag (Phase 5) — set the first time the
+// screen OBSERVES a non-empty own-runs list (never on a failed fetch), so a
+// member who has actually launched a run isn't sent back to the funnel by
+// firstRunLanding. Same lsGet/lsSet shape as DISMISS_KEY above.
+const MEMBER_GETTING_STARTED_SEEN_KEY = "wardyn-member-getting-started-seen";
+
+export function memberGettingStartedSeen(): boolean {
+  return lsGet(MEMBER_GETTING_STARTED_SEEN_KEY) === "1";
+}
+
+export function markMemberGettingStartedSeen(): void {
+  lsSet(MEMBER_GETTING_STARTED_SEEN_KEY, "1");
+}
+
 // Where "/" lands — App.tsx's FirstRunLanding is a thin wrapper over this.
 // Lives beside the dismiss flag it reads rather than in App.tsx so the whole
 // decision is one testable function.
