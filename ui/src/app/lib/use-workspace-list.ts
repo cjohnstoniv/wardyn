@@ -21,16 +21,26 @@ export function useWorkspaceList() {
   // Starts true: nothing has been fetched yet, so the empty initial list must not
   // be rendered as a confirmed "none".
   const [loading, setLoading] = React.useState(true);
+  // Additive (member Getting Started's "inline note on error"): every existing
+  // caller degrades to an empty list on a failed fetch and never reads this, so
+  // it changes nothing for them — a caller that wants to tell "fetch failed"
+  // apart from "genuinely none" (rather than treat both alike, per the doc
+  // comment above) can now do so without a second fetch of its own.
+  const [error, setError] = React.useState(false);
 
   // `clear` empties the list first — a dialog re-opening must not show the
   // previous session's workspaces while the new fetch is in flight.
   const reload = React.useCallback((clear = false) => {
     if (clear) setWorkspaces([]);
     setLoading(true);
+    setError(false);
     workspacesApi
       .listWorkspaces()
       .then(setWorkspaces)
-      .catch(() => setWorkspaces([]))
+      .catch(() => {
+        setWorkspaces([]);
+        setError(true);
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -51,5 +61,5 @@ export function useWorkspaceList() {
     [reload],
   );
 
-  return { workspaces, loading, reload, scanAndReload };
+  return { workspaces, loading, error, reload, scanAndReload };
 }
