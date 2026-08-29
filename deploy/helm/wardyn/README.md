@@ -282,6 +282,9 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
 
 ## Multi-user (admin/member RBAC)
 
+> This is the multi-user path. Admins read on; a member joining this
+> deployment wants docs/MEMBERS.md.
+
 Wardyn has a real two-role model — every OIDC session carries an **admin** or
 **member** role, derived at login (`internal/auth/oidc`'s `deriveRole`).
 `env.WARDYN_OIDC_ISSUER` alone only enables SSO (everyone signs in as admin,

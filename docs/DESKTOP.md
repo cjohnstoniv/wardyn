@@ -189,6 +189,9 @@ It works today on a **developer checkout** (`make agent-images` then
 
 ## The member-mode profile (topology m′)
 
+> The developer's own page for this profile is MEMBERS.md; this section
+> is the operator's.
+
 Everything above describes **topology a′: the developer is the operator**. It is
 the default and it is honest about its ceiling — the person at the keyboard sets
 the policy that bounds them.
