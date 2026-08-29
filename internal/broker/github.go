@@ -36,6 +36,9 @@ type GitHubMinterConfig struct {
 // restart before github_token grants can mint (the wizard's "add a key" path).
 // The App private key never leaves this process and is never placed in a sandbox.
 type githubMinter struct {
+	// store is always the operator namespace (buildGitHubMinter passes the raw
+	// store, never a .For(owner) view) — the GitHub App credential is
+	// operator-provisioned, not per-member.
 	store secretstore.Store
 	cfg   GitHubMinterConfig
 

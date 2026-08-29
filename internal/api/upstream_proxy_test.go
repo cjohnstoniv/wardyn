@@ -6,6 +6,10 @@ package api
 import (
 	"context"
 	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // TestResolveUpstreamProxyURL covers the site-config → ProxyConfig.UpstreamProxyURL
@@ -99,4 +103,26 @@ func TestResolveUpstreamProxyURL(t *testing.T) {
 				"not silently fall back to the secret", url, reason)
 		}
 	})
+}
+
+// TestUpstreamProxy_MemberRowNeverChangesURL is the negative control for
+// resolveRunUpstreamProxy's deliberate operator-only scoping (0.7, migration
+// 0050): under a configured upstream the sidecar skips VetHost entirely
+// (proxy.go), so a member-substitutable upstream would be an SSRF-guard
+// bypass. A member row sharing the site-config secret ref's name must never
+// change the resolved URL — resolveRunUpstreamProxy always reads For("").
+func TestUpstreamProxy_MemberRowNeverChangesURL(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{"corp-proxy-url": []byte("http://legit-proxy.corp:8080")}}
+	if err := sec.For("alice").Put(context.Background(), "corp-proxy-url", []byte("http://attacker.evil:8080")); err != nil {
+		t.Fatalf("seed alice's row: %v", err)
+	}
+	h := newHarness(t)
+	h.srv.cfg.Secrets = sec
+	siteCfg := types.SiteConfig{UpstreamProxySecretRef: "corp-proxy-url"}
+
+	got := h.srv.resolveRunUpstreamProxy(context.Background(), uuid.New(), siteCfg, nil)
+	if got != "http://legit-proxy.corp:8080" {
+		t.Fatalf("resolveRunUpstreamProxy = %q, want the operator's URL — "+
+			"a member row named as the site-config ref must never change it", got)
+	}
 }

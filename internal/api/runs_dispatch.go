@@ -642,8 +642,12 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 		return
 	}
 	var resolved, missing int
+	// run.CreatedBy: the run's own owner's row wins, falling back to the
+	// operator's (secretOwnerFromRequest.stamped rows never collide with an
+	// operator's own run identity string — see injection.go's Get for the
+	// same reasoning).
 	for _, name := range li.WorkspaceSecretNames {
-		val, err := s.cfg.Secrets.Get(ctx, name)
+		val, err := s.cfg.Secrets.For(run.CreatedBy).Get(ctx, name)
 		if err != nil || len(val) == 0 {
 			missing++
 			continue
@@ -719,7 +723,9 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 			skip = "the sandbox env already sets this variable; a grant may not override platform-authored env"
 		}
 		if skip == "" {
-			val, gerr := s.cfg.Secrets.Get(ctx, secretName)
+			// run.CreatedBy: same owner-then-operator-fallback rule as
+			// resolveLLMInspectionSecrets above.
+			val, gerr := s.cfg.Secrets.For(run.CreatedBy).Get(ctx, secretName)
 			if gerr != nil || len(val) == 0 {
 				skip = "secret could not be resolved"
 			} else {

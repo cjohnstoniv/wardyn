@@ -192,6 +192,8 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 
 	// Which stored secrets exist: token injection degrades to redirect-only when
 	// the referenced secret is absent (never fail the run on a dangling ref).
+	// Operator namespace: an artifact-registry token ref is site-config, not a
+	// member's own row.
 	present := map[string]bool{}
 	if s.cfg.Secrets != nil {
 		if names, err := s.cfg.Secrets.List(ctx); err == nil {

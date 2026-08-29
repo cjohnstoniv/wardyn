@@ -330,7 +330,7 @@ func (s *Server) readManagedBlob(ctx context.Context, provider string) (managedC
 	if s.cfg.Secrets == nil {
 		return managedCredBlob{}, false, nil
 	}
-	raw, err := s.cfg.Secrets.Get(ctx, harnessCredSecretName(provider))
+	raw, err := s.cfg.Secrets.Get(ctx, harnessCredSecretName(provider)) // operator-wide managed credential, not per-principal
 	if errors.Is(err, secretstore.ErrNotFound) {
 		return managedCredBlob{}, false, nil // absent == not connected (not an error)
 	}
@@ -357,7 +357,7 @@ func (s *Server) readAWSSSOBlob(ctx context.Context) (awsSSOBlob, bool, error) {
 	if s.cfg.Secrets == nil {
 		return awsSSOBlob{}, false, nil
 	}
-	raw, err := s.cfg.Secrets.Get(ctx, harnessCredSecretName(awsSSOProvider))
+	raw, err := s.cfg.Secrets.Get(ctx, harnessCredSecretName(awsSSOProvider)) // operator-wide, not per-principal
 	if errors.Is(err, secretstore.ErrNotFound) {
 		return awsSSOBlob{}, false, nil
 	}
@@ -386,7 +386,7 @@ func (s *Server) storeAWSSSOBlob(ctx context.Context, blob awsSSOBlob) error {
 	if err != nil {
 		return fmt.Errorf("marshal aws sso credential blob: %w", err)
 	}
-	return s.cfg.Secrets.Put(ctx, harnessCredSecretName(awsSSOProvider), raw)
+	return s.cfg.Secrets.Put(ctx, harnessCredSecretName(awsSSOProvider), raw) // operator-wide, not per-principal
 }
 
 // ── Login run launch ─────────────────────────────────────────────────────────
@@ -610,7 +610,7 @@ func (s *Server) handleHarnessCredentialPaste(w http.ResponseWriter, r *http.Req
 	}
 	blob := managedCredBlob{Token: token, CapturedAt: s.cfg.Now().UTC()}
 	raw, _ := json.Marshal(blob)
-	if err := s.cfg.Secrets.Put(r.Context(), hl.secretName, raw); err != nil {
+	if err := s.cfg.Secrets.Put(r.Context(), hl.secretName, raw); err != nil { // operator-wide route (operatorOnly), not per-principal
 		writeError(w, http.StatusInternalServerError, "store managed credential: "+err.Error())
 		return
 	}
@@ -645,7 +645,7 @@ func (s *Server) handleHarnessDisconnect(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "unknown provider: "+provider)
 		return
 	}
-	if err := s.cfg.Secrets.Delete(r.Context(), hl.secretName); err != nil {
+	if err := s.cfg.Secrets.Delete(r.Context(), hl.secretName); err != nil { // operator-wide route (operatorOnly), not per-principal
 		writeError(w, http.StatusInternalServerError, "delete managed credential: "+err.Error())
 		return
 	}
@@ -683,6 +683,8 @@ func NewManagedCredProvider(store secretstore.Store, provider string) subscripti
 }
 
 func (p *managedCredProvider) read() (subscription.Token, error) {
+	// p.store is the operator-wide managed credential (NewManagedCredProvider's
+	// caller passes the raw, unscoped store) — not per-principal.
 	raw, err := p.store.Get(context.Background(), harnessCredSecretName(p.provider))
 	if errors.Is(err, secretstore.ErrNotFound) {
 		return subscription.Token{}, fmt.Errorf("no managed %s credential connected", p.provider)

@@ -681,7 +681,9 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 	// same gate resolveRunUpstreamProxy applies at real dispatch time.
 	var getSecret func(context.Context, string) ([]byte, error)
 	if s.cfg.Secrets != nil {
-		getSecret = s.cfg.Secrets.Get
+		// Operator namespace ONLY, matching resolveRunUpstreamProxy: the probe
+		// must resolve the same value real dispatch would.
+		getSecret = s.cfg.Secrets.For("").Get
 	}
 	resolvedUpstream, upstreamFailReason := resolveUpstreamProxyURL(ctx, siteCfg.UpstreamProxyURL, siteCfg.UpstreamProxySecretRef, getSecret)
 	var upstream string

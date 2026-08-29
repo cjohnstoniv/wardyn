@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -212,4 +213,56 @@ func TestMintGitPAT_RegistersMask(t *testing.T) {
 	if !found {
 		t.Fatal("minted PAT was not registered in the mask registry")
 	}
+}
+
+// TestBrokerMint_GitPATAndSSHKey_OwnerScoped: both mintGitPAT and mintSSHKey
+// resolve through the run's OWN owner (identity.Claims.Sub, threaded from
+// mintKind), never the operator's row when the caller owns one under the
+// SAME secret name (0.7, migration 0050, member BYOK). callerFor's bare
+// claims (used by every other test in this file) carries no Sub and so
+// resolves the operator row, exactly as before this change — see
+// TestMintGitPAT_ReturnsStoredValueAndUsername /
+// TestMintSSHKey_ReturnsKeyMaterial for that unaffected path.
+func TestBrokerMint_GitPATAndSSHKey_OwnerScoped(t *testing.T) {
+	t.Run("git_pat", func(t *testing.T) {
+		secrets := newMemSecrets()
+		secrets.m["shared-pat"] = []byte("operator-pat-value")
+		if err := secrets.For("alice").Put(context.Background(), "shared-pat", []byte("alice-pat-value")); err != nil {
+			t.Fatalf("seed alice's row: %v", err)
+		}
+		db := newFakeDB()
+		b := New(db, secrets, &fakeAudit{}, nil, &FakeGitHubMinter{})
+		runID := uuid.New()
+		gid := seedGrant(db, runID, gitPATSpec("dev.azure.com", "shared-pat", ""))
+		caller := &identity.Claims{RunID: runID, SPIFFEID: spiffeForRun(runID), Sub: "alice"}
+
+		minted, err := b.MintForGrant(context.Background(), caller, gid)
+		if err != nil {
+			t.Fatalf("MintForGrant: %v", err)
+		}
+		if minted.Token != "alice-pat-value" {
+			t.Fatalf("token = %q, want alice's own row, not the operator's", minted.Token)
+		}
+	})
+
+	t.Run("ssh_key", func(t *testing.T) {
+		secrets := newMemSecrets()
+		secrets.m["shared-ssh-key"] = []byte("operator-key-material")
+		if err := secrets.For("alice").Put(context.Background(), "shared-ssh-key", []byte("alice-key-material")); err != nil {
+			t.Fatalf("seed alice's row: %v", err)
+		}
+		db := newFakeDB()
+		b := New(db, secrets, &fakeAudit{}, nil, &FakeGitHubMinter{})
+		runID := uuid.New()
+		gid := seedGrant(db, runID, sshKeySpec("github.com", "shared-ssh-key", "", ""))
+		caller := &identity.Claims{RunID: runID, SPIFFEID: spiffeForRun(runID), Sub: "alice"}
+
+		minted, err := b.MintForGrant(context.Background(), caller, gid)
+		if err != nil {
+			t.Fatalf("MintForGrant: %v", err)
+		}
+		if minted.Token != "alice-key-material" {
+			t.Fatalf("token = %q, want alice's own row, not the operator's", minted.Token)
+		}
+	})
 }

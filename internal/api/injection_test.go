@@ -340,3 +340,86 @@ func TestSecretsAPI_ReservesOAuthSentinels(t *testing.T) {
 		}
 	}
 }
+
+// mintRunTokenAs is mintRunToken with a caller-chosen Sub, for owner-scoping
+// tests that need to control which principal a run belongs to (mintRunToken
+// itself hardcodes "alice@example.com" for every other test in this file).
+func mintRunTokenAs(t *testing.T, h *harness, runID uuid.UUID, sub string) string {
+	t.Helper()
+	id, err := h.idp.MintRunIdentity(context.Background(), runID, sub, "", internalAudience)
+	if err != nil {
+		t.Fatalf("mint run identity: %v", err)
+	}
+	return id.Token
+}
+
+// TestInjectionResolve_OwnerRowWins_OperatorFallback_OtherOwnerUnreachableEvenWhenNamed
+// is invariant 1 (0.7, migration 0050, member BYOK) end to end through the
+// REAL handler: a run resolves ITS OWN owner's row when one exists, the
+// operator's when it does not, and never another owner's — even though every
+// run below names the EXACT SAME secret.
+func TestInjectionResolve_OwnerRowWins_OperatorFallback_OtherOwnerUnreachableEvenWhenNamed(t *testing.T) {
+	h, sec := newSecretsHarness(t) // seeds the operator's "anthropic-api-key" = "sk-ant-test"
+	if err := sec.For("alice").Put(context.Background(), "anthropic-api-key", []byte("sk-ant-alice")); err != nil {
+		t.Fatalf("seed alice's row: %v", err)
+	}
+	// bob owns nothing of his own.
+
+	resolve := func(sub string) string {
+		t.Helper()
+		runID := uuid.New()
+		token := mintRunTokenAs(t, h, runID, sub)
+		h.broker.minted = broker.Minted{
+			Kind: types.GrantAPIKey,
+			JTI:  "jti-" + sub,
+			Injection: &egress.InjectionRule{
+				Host: "api.anthropic.com", Header: "x-api-key",
+				SecretName: "anthropic-api-key", Format: "%s",
+			},
+		}
+		rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), token, "")
+		if rr.Code != http.StatusOK {
+			t.Fatalf("sub=%q: status = %d body=%s", sub, rr.Code, rr.Body.String())
+		}
+		var resp injectionResponse
+		_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+		return resp.Value
+	}
+
+	if got := resolve("alice"); got != "sk-ant-alice" {
+		t.Errorf("alice's run resolved %q, want her own row", got)
+	}
+	// "unreachable even when named": bob's grant above names the EXACT SAME
+	// secret name alice owns a row under, and still never reaches it.
+	if got := resolve("bob"); got != "sk-ant-test" {
+		t.Errorf("bob's run resolved %q, want the operator's fallback (he owns none, and must never see alice's)", got)
+	}
+}
+
+// TestInjectionResolve_OperatorRunUnchanged is the negative control for the
+// test above: an operator-created run (Sub shaped like actorFromRequest's
+// admin-token principal, a string secretOwnerFromRequest NEVER writes a row
+// under) resolves the operator's secret exactly as every run did before
+// Store.For existed.
+func TestInjectionResolve_OperatorRunUnchanged(t *testing.T) {
+	h, _ := newSecretsHarness(t) // operator's "anthropic-api-key" = "sk-ant-test"
+	runID := uuid.New()
+	token := mintRunTokenAs(t, h, runID, adminTokenPrincipal)
+	h.broker.minted = broker.Minted{
+		Kind: types.GrantAPIKey,
+		JTI:  "jti-operator",
+		Injection: &egress.InjectionRule{
+			Host: "api.anthropic.com", Header: "x-api-key",
+			SecretName: "anthropic-api-key", Format: "%s",
+		},
+	}
+	rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), token, "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp injectionResponse
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+	if resp.Value != "sk-ant-test" {
+		t.Fatalf("operator run resolved %q, want the operator's own value unchanged", resp.Value)
+	}
+}

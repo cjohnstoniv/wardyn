@@ -690,6 +690,8 @@ func loadOrCreateSecret(
 	valid func(raw []byte) bool,
 	generate func() ([]byte, error),
 ) ([]byte, error) {
+	// secretKeyStore has no For: the boot keys it bootstraps (identity signing,
+	// OIDC session) are process-global, never per-principal.
 	raw, err := secrets.Get(ctx, name)
 	switch {
 	case err == nil:
@@ -971,6 +973,8 @@ func parseEd25519PrivateKeyPEM(pemBytes []byte) (ed25519.PrivateKey, error) {
 // grants can mint. A github_token grant that reaches mint with the secrets still
 // absent fails closed with a clear error. Construction only validates the secret
 // NAMES; an error there is logged, not fatal.
+// secrets is the raw (operator-namespace) store, never a caller's .For(owner)
+// view — the GitHub App credential is operator-provisioned, not per-member.
 func buildGitHubMinter(secrets secretstore.Store) broker.GitHubMinter {
 	gh, err := broker.NewGitHubMinter(secrets, broker.GitHubMinterConfig{
 		AppIDSecret:      secretGitHubAppID,

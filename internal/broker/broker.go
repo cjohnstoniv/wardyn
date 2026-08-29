@@ -629,9 +629,9 @@ func (b *Broker) mintKind(ctx context.Context, caller *identity.Claims, spec typ
 	case types.GrantAPIKey:
 		return b.mintAPIKey(spec)
 	case types.GrantGitPAT:
-		return b.mintGitPAT(ctx, spec)
+		return b.mintGitPAT(ctx, caller, spec)
 	case types.GrantSSHKey:
-		return b.mintSSHKey(ctx, spec)
+		return b.mintSSHKey(ctx, caller, spec)
 	case types.GrantCloudSTS:
 		return Minted{}, ErrRequiresSPIRE
 	case types.GrantEnvSecret:

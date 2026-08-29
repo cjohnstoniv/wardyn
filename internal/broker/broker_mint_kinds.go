@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"time"
 )
@@ -16,6 +17,23 @@ import (
 // Per-kind credential minters (api_key / git_pat / ssh_key). Carved out of
 // broker.go by seam (file-size gate); mint() and mintKind() still own the
 // approval + audit invariants and dispatch here by GrantKind.
+
+// ownerOf is the secretstore.Store.For namespace a mint resolves its secret
+// from: the caller run's own identity Sub, or "" when caller is nil. NOTE a
+// residual this seam does not close: MintOnApproval reconstructs a bare
+// &identity.Claims{RunID: ...} with no Sub for the decide()->mint path, so an
+// approval-gated git_pat/ssh_key mint reached that way always resolves the
+// OPERATOR namespace regardless of the run's true owner — only the
+// auto-mint path (MintForGrant's real, fully-populated caller) is
+// member-owner-aware today. An operator-created run's own Sub never collides
+// with a member's stamped row (secretOwnerFromRequest's own doc comment), so
+// this degrades to today's single namespace for every pre-0.7 deployment.
+func ownerOf(caller *identity.Claims) string {
+	if caller == nil {
+		return ""
+	}
+	return caller.Sub
+}
 
 // mintAPIKey resolves the secret NAME to a proxy InjectionRule. The secret
 // VALUE is never read or returned here — late binding happens proxy-side, at
@@ -68,7 +86,7 @@ func (b *Broker) mintAPIKey(spec types.GrantSpec) (Minted, error) {
 // down-scope; per-use revocation/scoping would need the host's token API
 // (ADO/GitLab), out of scope. This is the honesty ceiling for this grant kind.
 // The returned Token is masked from PTY/asciicast by the maskReg.Add in mint().
-func (b *Broker) mintGitPAT(ctx context.Context, spec types.GrantSpec) (Minted, error) {
+func (b *Broker) mintGitPAT(ctx context.Context, caller *identity.Claims, spec types.GrantSpec) (Minted, error) {
 	var sc gitPATScope
 	if err := json.Unmarshal(spec.Scope, &sc); err != nil {
 		return Minted{}, fmt.Errorf("broker: decode git_pat scope: %w", err)
@@ -82,7 +100,10 @@ func (b *Broker) mintGitPAT(ctx context.Context, spec types.GrantSpec) (Minted, 
 	if b.secrets == nil {
 		return Minted{}, errors.New("broker: git_pat grant but no secret store configured (fail closed)")
 	}
-	value, err := b.secrets.Get(ctx, sc.SecretName)
+	// The run's own owner's row wins, falling back to the operator's — see
+	// ownerOf's doc comment for the one path (MintOnApproval) this does not
+	// cover.
+	value, err := b.secrets.For(ownerOf(caller)).Get(ctx, sc.SecretName)
 	if err != nil {
 		return Minted{}, fmt.Errorf("broker: read git_pat secret %q: %w", sc.SecretName, err)
 	}
@@ -115,7 +136,7 @@ func (b *Broker) mintGitPAT(ctx context.Context, spec types.GrantSpec) (Minted, 
 // Fails closed on missing host/key_secret_ref, a reserved secret name (defense-
 // in-depth at the sink), an unresolvable key secret, or an unresolvable
 // known_hosts secret when one was named.
-func (b *Broker) mintSSHKey(ctx context.Context, spec types.GrantSpec) (Minted, error) {
+func (b *Broker) mintSSHKey(ctx context.Context, caller *identity.Claims, spec types.GrantSpec) (Minted, error) {
 	var sc sshKeyScope
 	if err := json.Unmarshal(spec.Scope, &sc); err != nil {
 		return Minted{}, fmt.Errorf("broker: decode ssh_key scope: %w", err)
@@ -129,7 +150,10 @@ func (b *Broker) mintSSHKey(ctx context.Context, spec types.GrantSpec) (Minted, 
 	if b.secrets == nil {
 		return Minted{}, errors.New("broker: ssh_key grant but no secret store configured (fail closed)")
 	}
-	key, err := b.secrets.Get(ctx, sc.KeySecretRef)
+	// Same owner-then-operator-fallback rule as mintGitPAT, for both the key
+	// and its optional known_hosts material below.
+	owned := b.secrets.For(ownerOf(caller))
+	key, err := owned.Get(ctx, sc.KeySecretRef)
 	if err != nil {
 		return Minted{}, fmt.Errorf("broker: read ssh_key secret %q: %w", sc.KeySecretRef, err)
 	}
@@ -138,7 +162,7 @@ func (b *Broker) mintSSHKey(ctx context.Context, spec types.GrantSpec) (Minted, 
 	// is authoritative and this ref is normally unset.
 	var knownHosts string
 	if sc.KnownHostsSecretRef != "" {
-		kh, kerr := b.secrets.Get(ctx, sc.KnownHostsSecretRef)
+		kh, kerr := owned.Get(ctx, sc.KnownHostsSecretRef)
 		if kerr != nil {
 			return Minted{}, fmt.Errorf("broker: read ssh_key known_hosts secret %q: %w", sc.KnownHostsSecretRef, kerr)
 		}

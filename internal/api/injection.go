@@ -221,7 +221,15 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	secret, err := s.cfg.Secrets.Get(r.Context(), minted.Injection.SecretName)
+	// The run's OWN identity (claims.Sub) resolves it: the run's creator's own
+	// row wins, falling back to the operator's — never another member's, even
+	// one named by hand in this run's inline policy (structural: For(owner)
+	// never resolves a different owner's row). claims.Sub is "" for an
+	// operator-created run (secretOwnerFromRequest's PUT-time stamp never
+	// lands a row under any other string an operator's own caller might
+	// carry — see its doc comment), so this degrades to today's single
+	// namespace for every pre-0.7 deployment.
+	secret, err := s.cfg.Secrets.For(claims.Sub).Get(r.Context(), minted.Injection.SecretName)
 	if err != nil {
 		// Fail closed; the proxy refuses to start without its injections.
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
@@ -232,7 +240,7 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", minted.Injection.SecretName, "success",
-		mustJSON(map[string]any{"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI})))
+		mustJSON(map[string]any{"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI, "owner": claims.Sub})))
 
 	formattedValue := formatInjectionValue(minted.Injection.Format, secret)
 

@@ -108,7 +108,10 @@ func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, s
 	}
 	var getSecret func(context.Context, string) ([]byte, error)
 	if s.cfg.Secrets != nil {
-		getSecret = s.cfg.Secrets.Get
+		// Operator namespace ONLY (0.7): under an upstream the sidecar skips
+		// VetHost entirely, so a member-substitutable secret here would be an
+		// SSRF-guard bypass, not a convenience.
+		getSecret = s.cfg.Secrets.For("").Get
 	}
 	detail := map[string]any{
 		"secret_ref": siteCfg.UpstreamProxySecretRef, "url_configured": siteCfg.UpstreamProxyURL != "",

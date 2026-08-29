@@ -511,6 +511,8 @@ func (s *Server) secretPresent(ctx context.Context, name string) bool {
 	if s.cfg.Secrets == nil {
 		return false
 	}
+	// Operator namespace: a workspace binding names an operator-authored
+	// secret, never a member's own row.
 	names, err := s.cfg.Secrets.List(ctx)
 	if err != nil {
 		return true
