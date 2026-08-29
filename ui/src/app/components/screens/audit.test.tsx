@@ -459,4 +459,39 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(screen.queryByText(/Denied egress to wardynd:8080/)).not.toBeInTheDocument();
     expect(screen.getByText("Allowed egress to api.anthropic.com")).toBeInTheDocument();
   });
+
+  // 6a: the new rule_source chip mounts BESIDE an ordinary egress row's
+  // description, never instead of it — and never on a row a rule already
+  // decided (toolRuleDecision's row stays exactly as pinned above: this is
+  // the negative-control half of that same fixture, proving the facet/
+  // description path is unchanged for a non-tool rule_source).
+  it("6a: shows the rule_source chip beside real egress, and not on a rule-decided row", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({
+        id: "ruled",
+        action: "egress.deny",
+        outcome: "denied",
+        target: "wardynd:8080",
+        data: { rule_source: "policy:tool-deny" },
+      }),
+      ev({
+        id: "internal-host",
+        action: "egress.allow",
+        target: "registry.corp.example:443",
+        data: { rule_source: "site-config:internal-host" },
+      }),
+    ]);
+    renderScreen();
+
+    // The declared-internal-host row keeps its ordinary description AND gains
+    // the chip beside it.
+    expect(await screen.findByText("Allowed egress to registry.corp.example:443")).toBeInTheDocument();
+    expect(screen.getByText("Declared internal host")).toBeInTheDocument();
+
+    // The rule-decided row is untouched: "Decided by rule" + the raw source,
+    // never the new label, never a second chip.
+    expect(screen.getByText("Decided by rule")).toBeInTheDocument();
+    expect(screen.getByText("policy:tool-deny")).toBeInTheDocument();
+    expect(screen.queryByText("Refused by the built-in guard")).not.toBeInTheDocument();
+  });
 });

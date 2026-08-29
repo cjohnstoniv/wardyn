@@ -59,7 +59,7 @@ import {
   ApprovalStateBadge,
   Chip,
 } from "../wardyn/primitives";
-import { AuditDecision, toolRuleDecision } from "../wardyn/audit-decision";
+import { AuditDecision, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
 import { JsonBlock } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { TerminalPlayer } from "../wardyn/terminal-player";
@@ -806,8 +806,11 @@ function AuditTab({
                 {toolRuleDecision(e) ? (
                   <AuditDecision event={e} className="flex min-w-0 flex-1 items-center gap-2 text-xs" />
                 ) : (
-                  <span className="min-w-0 flex-1 truncate text-xs text-foreground" title={e.target}>
-                    {e.target || "—"}
+                  <span className="flex min-w-0 flex-1 items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate text-xs text-foreground" title={e.target}>
+                      {e.target || "—"}
+                    </span>
+                    <RuleSourceChip event={e} />
                   </span>
                 )}
               </div>

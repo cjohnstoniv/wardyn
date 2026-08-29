@@ -75,6 +75,31 @@ describe("egressFromAudit", () => {
     expect(out.map((d) => d.id)).toEqual(["wire"]);
   });
 
+  // Negative control for 6a (ui/src/app/lib/types/audit.ts's ruleSourceLabel,
+  // the console's rule_source chip): a mixed feed of tool-rule AND real
+  // rule_source-carrying egress rows must project identically to before that
+  // change — egressFromAudit keys on toolRuleDecision alone, never on the new
+  // ruleSourceLabel function, so a non-tool rule_source (site-config's
+  // internal-host lift, a builtin guard refusal) is a REAL connection and stays.
+  it("6a negative control: non-tool rule_source values are real connections, not decisions", () => {
+    const out = egressFromAudit([
+      ev({ id: "tool", action: "egress.deny", target: "wardynd:8443", data: { rule_source: "policy:tool-deny" } }),
+      ev({
+        id: "internal-host",
+        action: "egress.allow",
+        target: "registry.corp.example:443",
+        data: { rule_source: "site-config:internal-host" },
+      }),
+      ev({
+        id: "guard-refused",
+        action: "egress.deny",
+        target: "10.0.0.5:443",
+        data: { rule_source: "builtin:private-ip" },
+      }),
+    ]);
+    expect(out.map((d) => d.id)).toEqual(["internal-host", "guard-refused"]);
+  });
+
   it("carries the byte count from data when numeric, and omits it otherwise", () => {
     const [withBytes] = egressFromAudit([
       ev({ action: "egress.allow", target: "a:1", data: { bytes: 4096 } }),

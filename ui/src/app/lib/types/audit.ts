@@ -60,6 +60,36 @@ export function toolRuleDecision(e: AuditEvent): RuleDecision | null {
   return effect ? { effect, source } : null;
 }
 
+// --- rule_source console labels (6a) ---------------------------------------
+// rule_source has ONE other reader in the console: this function, which covers
+// every NON-tool-rule value (a real egress/approval/guard decision, not a
+// policy-answered tool call — those are toolRuleDecision's, immediately
+// above, and this function returns null for them so the two callers never
+// double-label one row). Pure and side-effect-free like toolRuleDecision, for
+// the same reason: RuleSourceChip (wardyn/audit-decision.tsx) renders it, and
+// lib/ must not import components/.
+export interface RuleSourceLabel {
+  label: string;
+  tone: "neutral" | "info" | "danger";
+}
+
+// ruleSourceLabel translates a wire rule_source value into console copy.
+// Unknown-but-present values fall back to the raw string rather than invented
+// copy (CONSOLE-RULES §10: never overclaim); callers pass "" or omit the field
+// entirely for "no rule_source" and get null either way.
+export function ruleSourceLabel(source: string): RuleSourceLabel | null {
+  if (!source || source.startsWith("policy:tool-")) return null; // toolRuleDecision's rows
+  if (source === "policy:allowed") return { label: "Allowed by policy", tone: "neutral" };
+  if (source.startsWith("approval:")) return { label: "Released by approval", tone: "neutral" };
+  if (source === "builtin:private-ip" || source === "builtin:dial-failed") {
+    return { label: "Refused by the built-in guard", tone: "danger" };
+  }
+  if (source.startsWith("brokered:git")) return { label: "Brokered", tone: "neutral" };
+  if (source === "site-config:internal-host") return { label: "Declared internal host", tone: "info" };
+  if (source.startsWith("egress.decisions.dropped:")) return { label: "Decisions dropped", tone: "neutral" };
+  return { label: source, tone: "neutral" };
+}
+
 // --- Run detail supporting shapes (UI-side, projected from audit events) ---
 export interface CredentialGrant {
   id: string;

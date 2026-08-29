@@ -45,7 +45,7 @@ import {
 } from "../wardyn/primitives";
 import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
-import { AuditDecision, toolRuleDecision } from "../wardyn/audit-decision";
+import { AuditDecision, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
 import { PageHeader } from "../wardyn/page-header";
 import { cn } from "../ui/utils";
 import { useOperator } from "../wardyn/operator-context";
@@ -705,8 +705,11 @@ function EventRow({ event, onDrill }: { event: AuditEvent; onDrill: (runId: stri
       {ruled ? (
         <AuditDecision event={event} className="flex min-w-0 flex-1 items-center gap-2 text-sm" />
       ) : (
-        <span className="min-w-0 flex-1 truncate text-sm text-foreground" title={describeEvent(event)}>
-          {describeEvent(event)}
+        <span className="flex min-w-0 flex-1 items-center gap-2">
+          <span className="min-w-0 flex-1 truncate text-sm text-foreground" title={describeEvent(event)}>
+            {describeEvent(event)}
+          </span>
+          <RuleSourceChip event={event} />
         </span>
       )}
       {event.run_id && (

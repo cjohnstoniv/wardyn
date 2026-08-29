@@ -10,8 +10,10 @@
 // invisible widening the surface exists to prevent.
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import type { AuditEvent } from "../../lib/types";
-import { AuditDecision, toolRuleDecision } from "./audit-decision";
+import { ruleSourceLabel } from "../../lib/types";
+import { AuditDecision, RuleSourceChip, toolRuleDecision } from "./audit-decision";
 
 function event(over: Partial<AuditEvent> = {}): AuditEvent {
   return {
@@ -76,6 +78,91 @@ describe("AuditDecision", () => {
 
   it("renders nothing for a row no rule decided, so the caller keeps its own text", () => {
     const { container } = render(<AuditDecision event={event({ data: { rule_source: "policy" } })} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+
+// 6a: ruleSourceLabel/RuleSourceChip cover every NON-tool-rule rule_source —
+// toolRuleDecision/AuditDecision above own "policy:tool-allow"/"policy:tool-deny"
+// and every "policy:tool-*" value, untouched by this section.
+describe("ruleSourceLabel", () => {
+  it("labels every enumerated value", () => {
+    expect(ruleSourceLabel("policy:allowed")).toEqual({ label: "Allowed by policy", tone: "neutral" });
+    expect(ruleSourceLabel("approval:appr_4c8e21")).toEqual({
+      label: "Released by approval",
+      tone: "neutral",
+    });
+    expect(ruleSourceLabel("builtin:private-ip")).toEqual({
+      label: "Refused by the built-in guard",
+      tone: "danger",
+    });
+    expect(ruleSourceLabel("builtin:dial-failed")).toEqual({
+      label: "Refused by the built-in guard",
+      tone: "danger",
+    });
+    expect(ruleSourceLabel("brokered:git")).toEqual({ label: "Brokered", tone: "neutral" });
+    expect(ruleSourceLabel("brokered:git:branch-ns-off")).toEqual({ label: "Brokered", tone: "neutral" });
+    expect(ruleSourceLabel("site-config:internal-host")).toEqual({
+      label: "Declared internal host",
+      tone: "info",
+    });
+    expect(ruleSourceLabel("egress.decisions.dropped:3")).toEqual({
+      label: "Decisions dropped",
+      tone: "neutral",
+    });
+  });
+
+  it("falls back to the raw value for an unrecognised source, never invented copy", () => {
+    expect(ruleSourceLabel("something-new")).toEqual({ label: "something-new", tone: "neutral" });
+  });
+
+  it("defers policy:tool-* to toolRuleDecision — null here, even for a value toolRuleDecision itself would not recognise", () => {
+    expect(ruleSourceLabel("policy:tool-allow")).toBeNull();
+    expect(ruleSourceLabel("policy:tool-deny")).toBeNull();
+    expect(ruleSourceLabel("policy:tool-future-kind")).toBeNull();
+  });
+
+  it("negative control: no rule_source at all is null", () => {
+    expect(ruleSourceLabel("")).toBeNull();
+  });
+});
+
+describe("RuleSourceChip", () => {
+  function renderChip(over: Partial<AuditEvent> = {}) {
+    return render(
+      <MemoryRouter>
+        <RuleSourceChip event={event(over)} />
+      </MemoryRouter>,
+    );
+  }
+
+  it("renders the label as a mono chip beside the row", () => {
+    renderChip({ data: { rule_source: "site-config:internal-host" } });
+    expect(screen.getByText("Declared internal host")).toBeInTheDocument();
+  });
+
+  it("links an approval source to the Approvals screen (no /approvals/<id> route exists)", () => {
+    renderChip({ data: { rule_source: "approval:appr_4c8e21" } });
+    const link = screen.getByRole("link");
+    expect(link).toHaveAttribute("href", "/approvals");
+    expect(link).toHaveTextContent("Released by approval");
+  });
+
+  it("renders bare (no link) for a non-approval source", () => {
+    renderChip({ data: { rule_source: "policy:allowed" } });
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+
+  // Negative control: an event with no rule_source renders no chip at all.
+  it("negative control: no rule_source renders nothing", () => {
+    const { container } = renderChip();
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  // Negative control: a tool-rule row's rule_source never reaches a label here
+  // (it stays AuditDecision's) — proving the two components partition cleanly.
+  it("negative control: a tool-rule source renders nothing (it is AuditDecision's row)", () => {
+    const { container } = renderChip({ data: { rule_source: "policy:tool-deny" } });
     expect(container).toBeEmptyDOMElement();
   });
 });
