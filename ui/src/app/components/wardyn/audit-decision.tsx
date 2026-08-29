@@ -17,38 +17,16 @@
 //
 // Shared because two screens show the same trail: the Audit screen and the run
 // page's Audit tab.
-import type { AuditEvent } from "../../lib/types";
+import { toolRuleDecision, type AuditEvent } from "../../lib/types";
 import { Chip } from "./primitives";
 
-// The rule_source values the proxy actually emits for a tool-rule decision
-// (internal/egress/proxy/local_routes.go's ruleSourceToolAllow/ToolDeny). They
-// ride an egress.allow / egress.deny audit event's `data.rule_source`, which is
-// what makes those two rows distinguishable from real network egress at all.
-const TOOL_RULE_SOURCES: Record<string, "allow" | "deny"> = {
-  "policy:tool-allow": "allow",
-  "policy:tool-deny": "deny",
-};
-
-export interface RuleDecision {
-  /** The effect the rule applied. */
-  effect: "allow" | "deny";
-  /** The wire rule_source, verbatim — the audit trail's "which rule". */
-  source: string;
-}
-
-// toolRuleDecision reports whether this event is a tool call the run's own
-// tool_rules answered, and which rule did it. Null for everything else —
-// including a human's approval.decide, which the row already describes in its
-// own words, and real egress, which names a host.
-//
-// Deliberately keyed on rule_source, not on the action alone: egress.allow is
-// also every ordinary allowed connection.
-export function toolRuleDecision(e: AuditEvent): RuleDecision | null {
-  const source = e.data?.rule_source;
-  if (typeof source !== "string") return null;
-  const effect = TOOL_RULE_SOURCES[source];
-  return effect ? { effect, source } : null;
-}
+// toolRuleDecision and RuleDecision moved to lib/types/audit.ts: egressFromAudit
+// (lib/api/audit.ts) has to exclude exactly the rows this component relabels,
+// and lib must not import from components/. Re-exported so the two mounts — the
+// Audit screen and the run page's Audit tab — keep taking the decision and its
+// label from one place.
+export { toolRuleDecision };
+export type { RuleDecision } from "../../lib/types";
 
 // The row's decision label. Renders nothing for an event no rule decided, so a
 // caller can fall back to its own description.

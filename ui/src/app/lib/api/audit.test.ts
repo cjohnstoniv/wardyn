@@ -60,6 +60,21 @@ describe("egressFromAudit", () => {
     expect(d.domain).toBe("—");
   });
 
+  // A tool call the run's own tool_rules answered rides an egress.allow/deny
+  // event whose TARGET is the control plane (emitLocalDecision logs against
+  // controlPlaneURL). It rendered in the Egress tile as a deny against
+  // "wardynd" — a host the sandbox never dialled — while the Audit tab called
+  // the same event "Decided by rule".
+  it("drops rule-decided tool calls: they are decisions, not connections", () => {
+    const out = egressFromAudit([
+      ev({ id: "tool", action: "egress.deny", target: "wardynd:8443", data: { rule_source: "policy:tool-deny" } }),
+      ev({ id: "tool2", action: "egress.allow", target: "wardynd:8443", data: { rule_source: "policy:tool-allow" } }),
+      // Ordinary policy-decided egress is a real connection and stays.
+      ev({ id: "wire", action: "egress.deny", target: "evil.example.com:443", data: { rule_source: "policy" } }),
+    ]);
+    expect(out.map((d) => d.id)).toEqual(["wire"]);
+  });
+
   it("carries the byte count from data when numeric, and omits it otherwise", () => {
     const [withBytes] = egressFromAudit([
       ev({ action: "egress.allow", target: "a:1", data: { bytes: 4096 } }),

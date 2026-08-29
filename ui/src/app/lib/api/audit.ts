@@ -6,6 +6,10 @@
 // Audit log + the egress projection derived from audit events (the backend has
 // no /egress endpoint — egress decisions are read off audit rows).
 import type { AuditEvent, EgressDecision, Outcome, RunEnding, RunEndingKind, RunState } from "../types";
+// The tool-rule decision lives with the audit shapes it reads (lib/types/audit.ts)
+// so both the egress projection below and wardyn/audit-decision.tsx take it from
+// one place — lib/api must not import from components/.
+import { toolRuleDecision } from "../types";
 import { asJson, num, str, unwrapList, wfetch, withLimit } from "./core";
 
 // Project egress.allow / egress.deny / egress.pending audit events into
@@ -19,7 +23,12 @@ export function egressFromAudit(events: AuditEvent[]): EgressDecision[] {
     "egress.pending": "pending",
   };
   return events
-    .filter((e) => e.action in map)
+    // A tool call the run's own tool_rules answered is NOT a connection: its
+    // target is the control plane, so it rendered in the Egress tile as
+    // "Deny · wardynd" — a host the sandbox never dialled — while the Audit
+    // tab described the same event as "Decided by rule". One event, two
+    // stories. The tile drops exactly the rows that surface relabels.
+    .filter((e) => e.action in map && !toolRuleDecision(e))
     .map((e) => {
       const d = (e.data ?? {}) as Record<string, unknown>;
       // Prefer an explicit domain in data; otherwise strip a :port off target.

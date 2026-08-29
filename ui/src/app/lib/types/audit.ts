@@ -21,6 +21,45 @@ export interface AuditEvent {
   data?: Record<string, unknown>;
 }
 
+// --- Tool-rule decisions ---------------------------------------------------
+// tool_rules lets a policy answer a tool call without waking anyone
+// (internal/egress/proxy/tool_rules.go). An `allow` or a `deny` creates NO
+// approval card, so the audit trail is the only place that decision is ever
+// visible — and it rides an egress.allow / egress.deny event whose target is
+// the CONTROL PLANE, because emitLocalDecision logs against controlPlaneURL's
+// host (local_routes.go). data.rule_source is what makes it distinguishable
+// from real network egress at all.
+//
+// The one runtime export in this file, and deliberately here: BOTH the egress
+// projection that must exclude these rows (lib/api/audit.ts) and the component
+// that relabels them (wardyn/audit-decision.tsx) read it, and lib/api must not
+// import from components/.
+const TOOL_RULE_SOURCES: Record<string, "allow" | "deny"> = {
+  "policy:tool-allow": "allow",
+  "policy:tool-deny": "deny",
+};
+
+export interface RuleDecision {
+  /** The effect the rule applied. */
+  effect: "allow" | "deny";
+  /** The wire rule_source, verbatim — the audit trail's "which rule". */
+  source: string;
+}
+
+// toolRuleDecision reports whether this event is a tool call the run's own
+// tool_rules answered, and which rule did it. Null for everything else —
+// including a human's approval.decide, which the row already describes in its
+// own words, and real egress, which names a host.
+//
+// Deliberately keyed on rule_source, not on the action alone: egress.allow is
+// also every ordinary allowed connection.
+export function toolRuleDecision(e: AuditEvent): RuleDecision | null {
+  const source = e.data?.rule_source;
+  if (typeof source !== "string") return null;
+  const effect = TOOL_RULE_SOURCES[source];
+  return effect ? { effect, source } : null;
+}
+
 // --- Run detail supporting shapes (UI-side, projected from audit events) ---
 export interface CredentialGrant {
   id: string;
