@@ -703,7 +703,7 @@ function EventRow({ event, onDrill }: { event: AuditEvent; onDrill: (runId: stri
       <ActorTypeChip type={event.actor_type} />
       <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       {ruled ? (
-        <AuditDecision event={event} className="flex min-w-0 flex-1 items-center gap-2" />
+        <AuditDecision event={event} className="flex min-w-0 flex-1 items-center gap-2 text-sm" />
       ) : (
         <span className="min-w-0 flex-1 truncate text-sm text-foreground" title={describeEvent(event)}>
           {describeEvent(event)}

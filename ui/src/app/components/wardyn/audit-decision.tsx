@@ -30,12 +30,16 @@ export type { RuleDecision } from "../../lib/types";
 
 // The row's decision label. Renders nothing for an event no rule decided, so a
 // caller can fall back to its own description.
+//
+// The label carries NO size of its own: the two mounts sit on rows at different
+// rungs (the Audit screen is text-sm, the run page's Audit tab text-xs), and a
+// hard-coded text-sm put two rungs in one row there (§3). Size rides className.
 export function AuditDecision({ event, className }: { event: AuditEvent; className?: string }) {
   const decision = toolRuleDecision(event);
   if (!decision) return null;
   return (
     <span className={className}>
-      <span className="text-sm font-medium text-foreground">Decided by rule</span>{" "}
+      <span className="font-medium text-foreground">Decided by rule</span>{" "}
       <Chip tone="neutral" mono title="rule_source">
         {decision.source}
       </Chip>

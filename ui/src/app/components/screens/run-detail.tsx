@@ -804,7 +804,7 @@ function AuditTab({
                     egress.allow/deny row whose target is the CONTROL PLANE —
                     so the row says who decided (M5), as the Audit screen does. */}
                 {toolRuleDecision(e) ? (
-                  <AuditDecision event={e} className="flex min-w-0 flex-1 items-center gap-2" />
+                  <AuditDecision event={e} className="flex min-w-0 flex-1 items-center gap-2 text-xs" />
                 ) : (
                   <span className="min-w-0 flex-1 truncate text-xs text-foreground" title={e.target}>
                     {e.target || "—"}

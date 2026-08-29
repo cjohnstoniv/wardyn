@@ -63,6 +63,17 @@ describe("AuditDecision", () => {
     expect(screen.getByText("policy:tool-deny")).toBeInTheDocument();
   });
 
+  // The label hard-coded text-sm, so on the run page's text-xs Audit tab the row
+  // carried two type rungs at once (§3). The mount owns the size now.
+  it("takes its size from the mount, never a rung of its own", () => {
+    render(
+      <AuditDecision event={event({ data: { rule_source: "policy:tool-deny" } })} className="text-xs" />,
+    );
+    const label = screen.getByText("Decided by rule");
+    expect(label.className).not.toMatch(/\btext-(xs|sm|base|body|meta)\b/);
+    expect(label.parentElement).toHaveClass("text-xs");
+  });
+
   it("renders nothing for a row no rule decided, so the caller keeps its own text", () => {
     const { container } = render(<AuditDecision event={event({ data: { rule_source: "policy" } })} />);
     expect(container).toBeEmptyDOMElement();
