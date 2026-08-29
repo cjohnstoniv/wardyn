@@ -320,7 +320,7 @@ WIDEN AN EGRESS CEILING, BIND CREDENTIAL MATERIAL or WRITE THE HOST
 its `promote-egress`, `env-as-code/write`, and the `reassign` below — workspace
 CRUD/scan/build itself is owner-or-admin since 0.6, see "Workspace ownership"),
 `PUT
-/site-config` and its connectivity probes, secret write/delete, `GET
+/site-config` and its connectivity probes, `GET
 /metrics`, the permissioning routes below, and bringing a custom devcontainer
 repo to a run (`devcontainer_repo` — `denyMemberRequest`,
 `internal/api/runs_create_validate.go`). A custom sandbox `image` is admin-only
@@ -377,6 +377,45 @@ column:
   member-owned workspace the audit actor stays the ADMIN (there is no
   impersonation on this path) and the event carries `workspace_owner` naming
   the member — see [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
+
+**Secret ownership (0.7, migration `0050`).** Secrets were one global,
+admin-only namespace until 0.7; `secrets` now carries `owned_by`, and `""` —
+every pre-0.7 row, and every row an admin writes without `?owner=` — means
+**operator-owned**, i.e. exactly today's behavior.
+
+- **Write/delete moved from admin-only to self-service.** Any signed-in human
+  may `PUT`/`DELETE /secrets/{name}` their OWN row (`secretOwnerFromRequest`:
+  `""` for an operator, their own principal for a member — the same rule
+  workspace ownership stamps with). A member's `DELETE` of another
+  principal's row is structurally unreachable (`secretstore.Store.For(owner)`
+  never resolves it) and answers the byte-identical 204 a never-set name
+  gets — no existence oracle. The four Bedrock/SigV4 credential names
+  (`aws-access-key-id`/`aws-secret-access-key`/`aws-session-token`/
+  `bedrock-api-key`) stay refused (403) for every non-operator PUT: Bedrock is
+  always resolved from the operator namespace, so a member row under one of
+  those names would read as configured in setup while dispatch never actually
+  uses it.
+- **`GET /secrets` returns `{names, mine}`.** `mine` is always the queried
+  namespace's own rows (reserved names filtered out). `names` keeps its
+  pre-0.7 meaning for an admin — the operator namespace, or one member's own
+  rows with `?owner=<principal>` — and for a member narrows to the
+  operator-owned names an eligible grant in the operator's ceiling actually
+  pairs with a host, closing a name-enumeration gap the flat pre-0.7
+  namespace had (a member could list every operator secret's name regardless
+  of any grant).
+- **A run resolves its owner's row, falling back to the operator's** — never
+  another member's, even when an inline policy names it by hand. The upstream
+  (corporate) proxy secret always stays resolved from the operator namespace:
+  under a configured upstream the sidecar skips the SSRF guard entirely, so a
+  member-substitutable value there would be a guard bypass, not a
+  convenience.
+- **`?owner=<principal>` is admin-only** on `DELETE`/`GET /secrets`, refused
+  with a constant 403 for anyone else — the same posture workspace
+  reassignment above uses.
+- **Cross-user admin writes are queryable.** `secret.write`/`secret.delete`
+  carry `secret_owner` naming the non-"" namespace a write landed in
+  (including a member's own ordinary write, not only an admin's `?owner=`
+  cross-write) — see [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
 
 **Deciding an approval is kind-restricted, not just owner-restricted**
 (`decide()`, `internal/api/approvals.go`): a member may approve or deny an

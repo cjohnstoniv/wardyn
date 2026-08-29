@@ -145,8 +145,6 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/workspaces/{id}/record":                       {class: classAdmin},
 	"POST /api/v1/workspaces/{id}/record/{task}/promote-egress": {class: classAdmin},
 	"POST /api/v1/workspaces/{id}/env-as-code/write":            {class: classAdmin},
-	"PUT /api/v1/secrets/{name}":                                {class: classAdmin},
-	"DELETE /api/v1/secrets/{name}":                             {class: classAdmin},
 	"PUT /api/v1/site-config":                                   {class: classAdmin},
 	"POST /api/v1/site-config/test-proxy":                       {class: classAdmin},
 	"POST /api/v1/site-config/test-redirect":                    {class: classAdmin},
@@ -201,11 +199,18 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/policies/default": {class: classMember},
 	"GET /api/v1/policies/{id}":    {class: classMember},
 	"GET /api/v1/runs":             {class: classMember},
-	"GET /api/v1/secrets":          {class: classMember},
-	"GET /api/v1/setup/status":     {class: classMember},
-	"GET /api/v1/site-config":      {class: classMember},
-	"GET /api/v1/sources":          {class: classMember},
-	"GET /api/v1/sources/{id}":     {class: classMember},
+	// PUT/DELETE moved here from classAdmin in 0.7 (migration `0050`,
+	// per-principal secrets): self-service, scoped to the caller's OWN row at
+	// the STORE (secretOwnerFromRequest) — same shape as /me/ssh-keys and
+	// /me/tokens above. The own-row/other-owner/admin-?owner= scoping this
+	// coarse matrix does not probe is secrets_test.go's job.
+	"PUT /api/v1/secrets/{name}":    {class: classMember},
+	"DELETE /api/v1/secrets/{name}": {class: classMember},
+	"GET /api/v1/secrets":           {class: classMember},
+	"GET /api/v1/setup/status":      {class: classMember},
+	"GET /api/v1/site-config":       {class: classMember},
+	"GET /api/v1/sources":           {class: classMember},
+	"GET /api/v1/sources/{id}":      {class: classMember},
 	// The workspace READS stay member-class: an operator-owned workspace — every
 	// pre-0048 row — is readable by any authenticated caller exactly as before.
 	// What 0048 adds is that another MEMBER's owned row 404s, which is the same

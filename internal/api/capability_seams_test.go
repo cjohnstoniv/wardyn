@@ -757,6 +757,13 @@ func listSecretNames(t *testing.T, srv *Server, sess *http.Cookie) []string {
 // TestListSecrets_MemberNarrowing: the listing is the reading half of the same
 // grant that bounds an inline policy, so the picker cannot offer a name the
 // launch gate would drop.
+//
+// Both fixture names are ceiling-paired (0.7, migration 0050:
+// memberVisibleOperatorSecretNames' unconditional pairing gate, tested on its
+// own in secrets_test.go) so this suite tests capSecret's OWN narrowing in
+// isolation, on top of a ceiling that already offers everything — a member
+// seeing NEITHER name because the ceiling pairs neither is a different,
+// already-covered case.
 func TestListSecrets_MemberNarrowing(t *testing.T) {
 	newSrv := func(t *testing.T, grants []types.CapabilityGrant, enf map[string]bool) *Server {
 		t.Helper()
@@ -767,13 +774,17 @@ func TestListSecrets_MemberNarrowing(t *testing.T) {
 			"prod-db-password":  []byte("hunter2"),
 		}}
 		h.srv.cfg.Store = &capStore{grants: grants, enf: enf}
+		h.srv.cfg.DefaultPolicy.EligibleGrants = []types.GrantSpec{
+			apiKeyGrantSpec("api.anthropic.com", "anthropic-api-key"),
+			envSecretGrant("CORP_DB_PASSWORD", "prod-db-password"),
+		}
 		h.srv.router = h.srv.routes()
 		return h.srv
 	}
 	member := ssoSession(t, capSub, capEmail, oidc.RoleMember)
 	admin := ssoSession(t, "sub-admin-secrets", "admin@corp.example", oidc.RoleAdmin)
 
-	t.Run("no grants and no switch: the whole list, exactly as 0.5 returned it", func(t *testing.T) {
+	t.Run("no grants and no switch: the whole ceiling-paired list, capSecret unenforced", func(t *testing.T) {
 		got := listSecretNames(t, newSrv(t, nil, nil), member)
 		slices.Sort(got)
 		if !slices.Equal(got, []string{"anthropic-api-key", "prod-db-password"}) {

@@ -345,6 +345,24 @@ func principalFromRequest(r *http.Request) string {
 	return name
 }
 
+// secretOwnerFromRequest derives the secret-store namespace (secretstore.
+// Store.For's owner argument) for the caller of an admin-gated action: ""
+// (the operator namespace) for an operator, else their own principal. This is
+// the SAME rule handleCreateWorkspace stamps workspace ownership with
+// (workspaces.go's owner := "" / isOperator branch) — generalized here so
+// every owner-scoped write/resolve in this package uses one call, not a
+// re-hand-rolled copy of the branch. Deliberately NOT bare
+// principalFromRequest, which returns a non-"" name for an operator too
+// (adminTokenPrincipal or a local-mode operator string) — an operator secret
+// must land in the "" namespace regardless of which string identifies that
+// particular operator caller.
+func (s *Server) secretOwnerFromRequest(r *http.Request) string {
+	if s.isOperator(r.Context()) {
+		return ""
+	}
+	return principalFromRequest(r)
+}
+
 // actorTypeFromRequest is the actor-type half of actorFromRequest, for audit
 // sites that already pass principalFromRequest(r) for the name. Pairing them as
 // (actorTypeFromRequest(r), principalFromRequest(r)) records a bare admin-token

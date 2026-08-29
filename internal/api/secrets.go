@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -138,11 +139,25 @@ func (s *Server) writableSecretName(w http.ResponseWriter, name string) bool {
 	return true
 }
 
-// handlePutSecret stores (or overwrites) a named secret. The value is write-
-// only: no API path ever returns it. Every write is an audit event.
+// handlePutSecret stores (or overwrites) a named secret in the caller's own
+// namespace (0.7, migration 0050: "" for an operator, else their own
+// principal — see secretOwnerFromRequest). The value is write-only: no API
+// path ever returns it. Every write is an audit event.
 func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	if !s.writableSecretName(w, name) {
+		return
+	}
+	owner := s.secretOwnerFromRequest(r)
+	// The Bedrock/SigV4 credential material is ALWAYS resolved from the
+	// operator namespace (runs_bedrock.go's setupBedrock reads present[...]
+	// off For("")) — a member row under one of these four names would read as
+	// "Bedrock is configured" in setup while dispatch never actually uses it,
+	// a confusing dead end rather than a working BYOK path. sinkReservedSecret
+	// deliberately excludes bedrock-api-key (the operator's legitimate write
+	// path); that exclusion does not extend to a non-operator here.
+	if owner != "" && (sinkReservedSecret(name) || name == bedrockAPIKeySecret) {
+		writeError(w, http.StatusForbidden, "secret name is reserved for platform internals")
 		return
 	}
 	var body putSecretRequest
@@ -162,69 +177,195 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("secret too short: must be at least %d bytes to be masked and scanned", secretmask.MinLen))
 		return
 	}
-	if err := s.cfg.Secrets.Put(r.Context(), name, []byte(body.Value)); err != nil {
+	if err := s.cfg.Secrets.For(owner).Put(r.Context(), name, []byte(body.Value)); err != nil {
 		writeError(w, http.StatusInternalServerError, "store secret: "+err.Error())
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"secret.write", name, "success", nil))
+		"secret.write", name, "success", secretOwnerAuditData(owner)))
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleDeleteSecret removes a named secret. Audited.
+// handleDeleteSecret removes a named secret from the caller's own namespace,
+// or (admin-only) another principal's via ?owner=. Idempotent and scoped:
+// another member's row is structurally unreachable (secretOwnerParam refuses
+// ?owner= for a non-operator, and For(owner) never resolves a different
+// owner's row), so deleting one 204s exactly like deleting a never-set name —
+// no existence oracle. Audited.
 func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	if !s.writableSecretName(w, name) {
 		return
 	}
-	if err := s.cfg.Secrets.Delete(r.Context(), name); err != nil {
+	owner, ok := s.secretOwnerParam(w, r)
+	if !ok {
+		return
+	}
+	if err := s.cfg.Secrets.For(owner).Delete(r.Context(), name); err != nil {
 		writeError(w, http.StatusInternalServerError, "delete secret: "+err.Error())
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"secret.delete", name, "success", nil))
+		"secret.delete", name, "success", secretOwnerAuditData(owner)))
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleListSecrets returns secret NAMES only — never values. Reserved
-// platform-internal keys (reservedSecretNames: wardyn-signing-key,
-// wardyn-session-key) are EXCLUDED from the listing: they back identity/session
-// handling and are not user-managed, so surfacing their names is an unnecessary
-// leak (and they are already non-writable/non-deletable via the API).
+// secretOwnerParam resolves the secret-store namespace a DELETE or the LIST
+// endpoint reads/writes: the caller's own (secretOwnerFromRequest) by
+// default, or ?owner=<principal> when the caller is an operator asking about
+// a specific member's rows. A non-operator naming ?owner= at all gets a
+// CONSTANT 403 — refused before any lookup, so it never varies with whether
+// the named principal exists — the same posture handleReassignWorkspace's
+// admin-only gate uses for the analogous workspace-ownership query.
+func (s *Server) secretOwnerParam(w http.ResponseWriter, r *http.Request) (owner string, ok bool) {
+	q := r.URL.Query().Get("owner")
+	if q == "" {
+		return s.secretOwnerFromRequest(r), true
+	}
+	if !s.isOperator(r.Context()) {
+		writeError(w, http.StatusForbidden, "?owner= is admin-only")
+		return "", false
+	}
+	return q, true
+}
+
+// secretOwnerAuditData is the secret.write/secret.delete audit Data: nil for
+// an operator-namespace write (byte-identical to pre-0050), or
+// {"secret_owner": owner} otherwise — a member's own PUT/DELETE and an
+// admin's ?owner= cross-write alike. Unlike workspace_owner.go's
+// auditWorkspaceDataFor (which stamps only when the actor and the owner
+// differ), this stamps on EVERY non-"" owner: which namespace a secret write
+// landed in is the whole point of the marker, including a member's own
+// ordinary write.
+func secretOwnerAuditData(owner string) json.RawMessage {
+	if owner == "" {
+		return nil
+	}
+	return mustJSON(map[string]any{"secret_owner": owner})
+}
+
+// secretsFor is the secret-store view for the current request's namespace —
+// the operator's for an operator, the caller's own for a member (see
+// secretOwnerFromRequest). Nil when no secret store is configured.
+func (s *Server) secretsFor(r *http.Request) secretstore.Store {
+	if s.cfg.Secrets == nil {
+		return nil
+	}
+	return s.cfg.Secrets.For(s.secretOwnerFromRequest(r))
+}
+
+// secretsForRun is the same view keyed by an already-resolved owner string —
+// dispatch-time and broker code holds run.CreatedBy or a caller's identity
+// Sub, not an *http.Request, to derive it from.
+func (s *Server) secretsForRun(owner string) secretstore.Store {
+	if s.cfg.Secrets == nil {
+		return nil
+	}
+	return s.cfg.Secrets.For(owner)
+}
+
+// handleListSecrets returns {"names": [...], "mine": [...]} — never values.
+// Reserved platform-internal keys (reservedSecretNames: wardyn-signing-key,
+// wardyn-session-key) are EXCLUDED from both: they back identity/session
+// handling and are not user-managed, so surfacing their names is an
+// unnecessary leak (and they are already non-writable/non-deletable via the
+// API).
 //
-// A MEMBER sees only the names their own `secret` grants cover once that kind
-// is enforced — the reading half of the same capability that bounds which
-// secrets their inline policy may reference (narrowMemberInlinePolicy), so the
-// picker cannot offer a name the launch gate will drop. Narrowed HERE and not
-// in listUserSecretNames, which also feeds the setup checklist and
-// presentSecretNames: those compute whether the DEPLOYMENT is provisioned, and
-// a member's own grants must not make an operator's secret read as missing.
+// `mine` is always the queried namespace's own rows (the caller's, or one
+// member's via admin ?owner=) — operator ⇒ mine == names.
+//
+// `names` keeps its PRE-0.7 meaning for an admin (this endpoint's three
+// existing UI callers are unchanged): the operator namespace, or one
+// member's own rows with ?owner=. For a MEMBER it narrows to the
+// operator-owned names an eligible grant in the operator's ceiling actually
+// PAIRS with (memberVisibleOperatorSecretNames), closing a name-enumeration
+// gap the flat pre-0.7 namespace had — capSeamAllowed(capSecret, n) alone
+// passed everything through whenever that capability was unenforced (the
+// default), so a member could list every operator secret's name regardless
+// of any grant. Narrowed HERE and not in listUserSecretNames, which also
+// feeds the setup checklist and presentSecretNames: those compute whether the
+// DEPLOYMENT is provisioned, and a member's own grants must not make an
+// operator's secret read as missing.
 func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
-	names, err := s.listUserSecretNames(r.Context())
+	ctx := r.Context()
+	owner, ok := s.secretOwnerParam(w, r)
+	if !ok {
+		return
+	}
+	mine, err := reservedFilteredSecretNames(ctx, s.cfg.Secrets.For(owner))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list secrets: "+err.Error())
 		return
 	}
-	kept := names[:0:0]
-	for _, n := range names {
-		ok, cerr := s.capSeamAllowed(r.Context(), capSecret, n)
-		if cerr != nil {
-			writeError(w, http.StatusInternalServerError, "resolve capability: "+cerr.Error())
+	names := mine
+	if !s.isOperator(ctx) {
+		names, err = s.memberVisibleOperatorSecretNames(ctx)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "list secrets: "+err.Error())
 			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"names": names, "mine": mine})
+}
+
+// memberVisibleOperatorSecretNames is handleListSecrets' member-facing
+// `names`: the reserved-filtered OPERATOR secret names an eligible grant in
+// the operator's ceiling (s.cfg.DefaultPolicy.EligibleGrants) actually pairs
+// with a host — storedSecretGrantPairing is the same extraction
+// filterMemberGrants uses to decide whether a MEMBER's own inline grant is
+// eligible-listed — narrowed further by the existing capSeamAllowed(capSecret,
+// …) gate once an operator enforces it. Ceiling-pairing is unconditional
+// (closes the name-enumeration gap regardless of enforcement); the capability
+// gate on top only ever narrows more.
+func (s *Server) memberVisibleOperatorSecretNames(ctx context.Context) ([]string, error) {
+	all, err := reservedFilteredSecretNames(ctx, s.cfg.Secrets.For(""))
+	if err != nil {
+		return nil, err
+	}
+	paired := map[string]bool{}
+	for _, g := range s.cfg.DefaultPolicy.EligibleGrants {
+		_, secretRef, knownHostsRef, covered, derr := storedSecretGrantPairing(g)
+		if !covered || derr != nil {
+			continue
+		}
+		if secretRef != "" {
+			paired[secretRef] = true
+		}
+		if knownHostsRef != "" {
+			paired[knownHostsRef] = true
+		}
+	}
+	kept := all[:0:0]
+	for _, n := range all {
+		if !paired[n] {
+			continue
+		}
+		ok, cerr := s.capSeamAllowed(ctx, capSecret, n)
+		if cerr != nil {
+			return nil, cerr
 		}
 		if ok {
 			kept = append(kept, n)
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"names": kept})
+	return kept, nil
 }
 
-// listUserSecretNames returns the present secret NAMES (never values) with the
-// reserved platform-internal keys (wardyn-signing-key, wardyn-session-key)
-// excluded. Shared by handleListSecrets and handleSetupStatus so both surface
-// the identical user-managed name set.
+// listUserSecretNames returns the OPERATOR namespace's present secret NAMES
+// (never values) with the reserved platform-internal keys (wardyn-signing-key,
+// wardyn-session-key) excluded. Shared by handleSetupStatus and
+// presentSecretNames — both compute whether the DEPLOYMENT is provisioned, an
+// operator-wide question, so this deliberately stays on For("") rather than
+// taking a caller's own namespace (handleListSecrets' `mine` is that read).
 func (s *Server) listUserSecretNames(ctx context.Context) ([]string, error) {
-	all, err := s.cfg.Secrets.List(ctx)
+	return reservedFilteredSecretNames(ctx, s.cfg.Secrets.For(""))
+}
+
+// reservedFilteredSecretNames lists store's names with the platform-reserved
+// keys excluded — the one loop listUserSecretNames (operator namespace) and
+// handleListSecrets' `mine` (any namespace) both need.
+func reservedFilteredSecretNames(ctx context.Context, store secretstore.Store) ([]string, error) {
+	all, err := store.List(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +384,9 @@ func (s *Server) listUserSecretNames(ctx context.Context) ([]string, error) {
 // record lane's api-key fallback), so the checklist's present/missing verdicts
 // can never disagree with the launch-time secret gate. Best-effort by design —
 // no secret store or a list error yields an empty (never nil) map, i.e. "no
-// secrets present", which fails those verdicts CLOSED.
+// secrets present", which fails those verdicts CLOSED. Operator namespace
+// only, via listUserSecretNames — these are deployment-provisioning verdicts,
+// not a per-caller view.
 func (s *Server) presentSecretNames(ctx context.Context) map[string]bool {
 	present := map[string]bool{}
 	if s.cfg.Secrets == nil {

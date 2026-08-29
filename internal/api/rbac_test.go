@@ -192,9 +192,13 @@ var gatedRoutes = []struct{ method, path string }{
 	// be able to fire them (cost + a real outbound request on the operator's behalf).
 	{http.MethodPost, "/api/v1/site-config/test-proxy"},
 	{http.MethodPost, "/api/v1/site-config/test-redirect"},
-	// 5. secrets — credential MATERIAL (the LIST is names-only and stays a read).
-	{http.MethodPut, "/api/v1/secrets/s1"},
-	{http.MethodDelete, "/api/v1/secrets/s1"},
+	// NOT here since 0.7 (migration `0050`, per-principal secrets): PUT/DELETE
+	// /secrets. Self-service moved them owner-or-admin — same reasoning the
+	// workspace-CRUD note above gives for its own routes: they no longer
+	// refuse EVERY member uniformly (a member's own row 204s/succeeds), so
+	// they don't fit this table's binary admin/not-admin shape. Their
+	// own-row/other-owner/admin-?owner= behavior is covered by secrets_test.go
+	// instead.
 	// 6. integrations — the row IS a credential binding (secret refs + egress);
 	// the LIST/GET stay reads (readRoutes), same split as secrets above.
 	{http.MethodPut, "/api/v1/integrations/i1"},

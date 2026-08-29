@@ -365,10 +365,9 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// field at all (strict decoding refuses one). An OPERATOR-created workspace
 	// stays owned_by="" (operator-owned), which is exactly today's behavior for
 	// every row, so an admin-only deployment is unchanged by this milestone.
-	owner := ""
-	if !s.isOperator(r.Context()) {
-		owner = principalFromRequest(r)
-	}
+	// secretOwnerFromRequest is the same "" when isOperator else principal
+	// rule, generalized (0.7) beyond its original secret-store name.
+	owner := s.secretOwnerFromRequest(r)
 	// A member's own local_dir sources must clear the member-safe mount gate
 	// (root allowlist + canonicalized real path + credential-dotfile deny +
 	// the writable allowlist). An operator's are unaffected.

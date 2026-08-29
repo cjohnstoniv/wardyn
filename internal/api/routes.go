@@ -79,9 +79,11 @@ func (s *Server) routes() chi.Router {
 			// COUNT (re-verify with `grep -c 'operatorOnly\.' routes.go` — that
 			// grep counts mountAccountRoutes' 2 in this same file too — plus
 			// mountLibraryRoutes' own 5, rather than trusting this comment — it
-			// has gone stale before, W7-S1-1): 27 direct registrations below +
-			// mountLibraryRoutes' 5 (sources.go — GET /base-images/{id} is gone,
-			// DEADCODE-1) + mountAccountRoutes' 2 (/tokens, /tokens/{id}) = 34. Five workspace routes (create/update/delete/scan/
+			// has gone stale before, W7-S1-1): 24 direct registrations below
+			// (0.7 moved PUT/DELETE /secrets off this group, see "Secret
+			// management" below) + mountLibraryRoutes' 5 (sources.go — GET
+			// /base-images/{id} is gone, DEADCODE-1) + mountAccountRoutes' 2
+			// (/tokens, /tokens/{id}) = 31. Five workspace routes (create/update/delete/scan/
 			// build) LEFT this group in 0048 for the owner-or-admin tier — the
 			// gate moved into their handlers, it was not dropped. NOT the whole admin
 			// surface: GET /metrics (outside /api/v1, its own explicit
@@ -307,13 +309,18 @@ func (s *Server) routes() chi.Router {
 			// readable through the API (read paths are the broker and the
 			// internal injection-resolve endpoint, both audited).
 			//
-			// The writes are operator-only: this is credential MATERIAL, a
-			// strictly larger blast radius than site-config (which only names a
-			// secret *ref*). The LIST stays viewer-readable — it returns names
-			// only, never values.
+			// WRITE/DELETE are self-service (0.7, migration `0050`), not
+			// admin-only: any signed-in human manages their OWN row
+			// (handlePutSecret/handleDeleteSecret scope by
+			// secretOwnerFromRequest) — an operator's own row is the ""
+			// namespace, exactly today's behavior. A member can never reach
+			// another member's row (Store.For(owner) never resolves it) or
+			// the four Bedrock/SigV4 names (still operator-only). Admin
+			// cross-principal reads/deletes go through ?owner=. The LIST
+			// stays viewer-readable — it returns names only, never values.
 			if s.cfg.Secrets != nil {
-				operatorOnly.Put("/secrets/{name}", s.handlePutSecret)
-				operatorOnly.Delete("/secrets/{name}", s.handleDeleteSecret)
+				r.Put("/secrets/{name}", s.handlePutSecret)
+				r.Delete("/secrets/{name}", s.handleDeleteSecret)
 				r.Get("/secrets", s.handleListSecrets)
 			}
 
