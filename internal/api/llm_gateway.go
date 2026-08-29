@@ -78,8 +78,13 @@ func validateOneLLMGateway(publicHost, raw string) (string, error) {
 		return "", fmt.Errorf("IP literal %q is loopback/link-local/metadata/unspecified/multicast/NAT64 — unreachable from the sandbox netns", host)
 	}
 	// Rule 5: must not equal the public provider host — a gateway "pointing at
-	// itself" is either a no-op or a way to defeat rule 1/4 via DNS.
-	if strings.EqualFold(host, publicHost) {
+	// itself" is either a no-op or a way to defeat rule 1/4 via DNS. Trim a
+	// trailing "." first: "api.anthropic.com." is DNS-identical to
+	// "api.anthropic.com" but EqualFold alone treats them as different hosts,
+	// so this rule would pass a request that then never matches gatewayVendor
+	// (whose keys, and every per-request host this proxy vets, are already
+	// dot-trimmed).
+	if strings.EqualFold(strings.TrimSuffix(host, "."), publicHost) {
 		return "", fmt.Errorf("host must not equal the public provider host %q", publicHost)
 	}
 	// Rule 6: query refused.

@@ -10,11 +10,11 @@ import "testing"
 // unset -> nil map baseline (byte-identical to today).
 func TestValidateLLMGateways(t *testing.T) {
 	cases := []struct {
-		name       string
-		anthropic  string
-		openai     string
-		ok         bool
-		wantHost   string // if ok, the parsed gateway host (via gatewayHost)
+		name        string
+		anthropic   string
+		openai      string
+		ok          bool
+		wantHost    string // if ok, the parsed gateway host (via gatewayHost)
 		checkVendor string
 	}{
 		{"both unset -> nil map", "", "", true, "", ""},
@@ -34,6 +34,7 @@ func TestValidateLLMGateways(t *testing.T) {
 		{"rule 4 exception: CGNAT literal allowed", "https://100.64.0.5", "", true, "100.64.0.5", "api.anthropic.com"},
 		{"rule 5: equals the public host refused", "https://api.anthropic.com", "", false, "", ""},
 		{"rule 5 case-insensitive: equals the public host refused", "https://API.ANTHROPIC.COM", "", false, "", ""},
+		{"rule 5 trailing-dot: equals the public host refused", "https://api.anthropic.com.", "", false, "", ""},
 		{"rule 6: query refused", "https://llm-gateway.corp.internal?x=1", "", false, "", ""},
 		{"rule 7: fragment refused", "https://llm-gateway.corp.internal#x", "", false, "", ""},
 		{"malformed URL refused", "https://[::", "", false, "", ""},
