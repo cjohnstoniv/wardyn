@@ -435,4 +435,28 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     renderScreen();
     await waitFor(() => expect(screen.getAllByText(/ground truth/i)).toHaveLength(1));
   });
+
+  // A call the run's own tool_rules answered raises no approval, so this row is
+  // the only trace of it. It rides an egress.allow envelope whose host is the
+  // CONTROL PLANE — so the generic egress description would name a host the
+  // agent never dialled, and the Egress facet would hide a tool call.
+  it("renders a rule-decided tool call as its own decision, not as egress", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({
+        id: "ruled",
+        action: "egress.deny",
+        outcome: "denied",
+        target: "wardynd:8080",
+        data: { rule_source: "policy:tool-deny" },
+      }),
+      ev({ id: "wire", action: "egress.allow", target: "api.anthropic.com", data: { rule_source: "policy" } }),
+    ]);
+    renderScreen();
+
+    expect(await screen.findByText("Decided by rule")).toBeInTheDocument();
+    expect(screen.getByText("policy:tool-deny")).toBeInTheDocument();
+    // The misleading line is GONE for that row, and still there for real egress.
+    expect(screen.queryByText(/Denied egress to wardynd:8080/)).not.toBeInTheDocument();
+    expect(screen.getByText("Allowed egress to api.anthropic.com")).toBeInTheDocument();
+  });
 });

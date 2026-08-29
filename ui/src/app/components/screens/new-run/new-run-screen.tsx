@@ -55,7 +55,7 @@ import { useOperator } from "../../wardyn/operator-context";
 import { CC_META } from "../../wardyn/cc-meta";
 import { RUN_MODE } from "../../wardyn/copy";
 import { getDefaultCc, resolveDefaultCc } from "../../wardyn/default-confinement";
-import { PolicyPanel, POLICY_TEMPLATES, parseSpec } from "../../wardyn/policy-panel";
+import { PolicyPanel, POLICY_TEMPLATES, parseSpec, toolRulesSummary } from "../../wardyn/policy-panel";
 import { AddWorkspaceDialog } from "../add-workspace-dialog";
 import { buildSpec, mergeRunSelections } from "./wizard-spec";
 import { agentLabel, initialWizardState, primaryWorkspaceId, type WizardState } from "./wizard-types";
@@ -297,6 +297,14 @@ export function NewRunScreen() {
     [specText, state, workspaces],
   );
   const added = merged?.added;
+  // What this run's tool_rules actually say, from the SAME spec that ships:
+  // the merged document on the custom lane, the stored one on the saved lane.
+  // Null when there are no rules, so a policy written before the field existed
+  // grows no empty rail section.
+  const toolRules = React.useMemo(() => {
+    const spec = useSaved ? selectedPolicy?.spec : merged?.spec;
+    return spec ? toolRulesSummary(spec) : null;
+  }, [useSaved, selectedPolicy, merged]);
   const hasAdditions =
     !!added && (added.hosts.length > 0 || added.grants.length > 0 || added.mounts.length > 0 || added.repos.length > 0);
 
@@ -832,6 +840,14 @@ export function NewRunScreen() {
                 </p>
               )}
             </RailSection>
+
+            {/* One line, and it NAMES the tools: "3 rules" alone would say
+                nothing about which calls still stop for a human. */}
+            {toolRules && (
+              <RailSection title="Tool rules">
+                <p className="text-xs text-muted-foreground">{toolRules}</p>
+              </RailSection>
+            )}
 
             <RailSection title="Recording">
               <p className="text-xs text-muted-foreground">

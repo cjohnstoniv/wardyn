@@ -45,6 +45,7 @@ import {
 } from "../wardyn/primitives";
 import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
+import { AuditDecision, toolRuleDecision } from "../wardyn/audit-decision";
 import { PageHeader } from "../wardyn/page-header";
 import { cn } from "../ui/utils";
 import { useOperator } from "../wardyn/operator-context";
@@ -95,8 +96,14 @@ const KIND_META: Record<EventKind, { label: string; Icon: React.ElementType }> =
 // network -> execution -> credentials -> human review -> everything else -> kill.
 const KIND_ORDER: EventKind[] = ["egress", "tool", "credentials", "approvals", "lifecycle", "enforcement"];
 
-function eventKind(action: string): EventKind {
+function eventKind(e: AuditEvent): EventKind {
+  const action = e.action;
   if (action === "run.kill") return "enforcement";
+  // A call the run's own tool_rules answered rides an egress.allow/deny
+  // envelope, but it is a TOOL call — the proxy answered it on the brokered
+  // approval route, not on the wire. Bucketing it under Egress hides it from
+  // the one facet an operator would look in.
+  if (toolRuleDecision(e)) return "tool";
   if (action.startsWith("egress.") || action.startsWith("llm.scan.")) return "egress";
   if (action.startsWith("kernel.") || action === "run.exec") return "tool";
   if (
@@ -360,7 +367,7 @@ export function AuditScreen() {
   // a kind (e.g. Approvals) this window has none of.
   const presentKinds = React.useMemo(() => {
     const s = new Set<EventKind>();
-    for (const e of events) s.add(eventKind(e.action));
+    for (const e of events) s.add(eventKind(e));
     return s;
   }, [events]);
 
@@ -374,7 +381,7 @@ export function AuditScreen() {
       e.actor.toLowerCase().includes(q) ||
       (e.target ?? "").toLowerCase().includes(q) ||
       (e.run_id ?? "").toLowerCase().includes(q);
-    const matchKind = kindFilter === "all" || eventKind(e.action) === kindFilter;
+    const matchKind = kindFilter === "all" || eventKind(e) === kindFilter;
     const matchActor = actorFilter === "all" || e.actor_type === actorFilter;
     return matchQ && matchKind && matchActor;
   });
@@ -679,7 +686,11 @@ function GroundTruthChip({ value }: { value?: { state?: string; reason?: string 
 }
 
 function EventRow({ event, onDrill }: { event: AuditEvent; onDrill: (runId: string) => void }) {
-  const kind = eventKind(event.action);
+  const kind = eventKind(event);
+  // A rule-decided call says who decided it instead of naming a host it never
+  // dialled — the decision log for one of these carries the CONTROL PLANE as
+  // its host, so "Allowed egress to …" would be false on the row.
+  const ruled = toolRuleDecision(event);
   const Icon = KIND_META[kind].Icon;
   return (
     <div className="flex items-center gap-3 px-4 py-3 hover:bg-surface-2/50">
@@ -691,9 +702,13 @@ function EventRow({ event, onDrill }: { event: AuditEvent; onDrill: (runId: stri
       </span>
       <ActorTypeChip type={event.actor_type} />
       <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-      <span className="min-w-0 flex-1 truncate text-sm text-foreground" title={describeEvent(event)}>
-        {describeEvent(event)}
-      </span>
+      {ruled ? (
+        <AuditDecision event={event} className="flex min-w-0 flex-1 items-center gap-2" />
+      ) : (
+        <span className="min-w-0 flex-1 truncate text-sm text-foreground" title={describeEvent(event)}>
+          {describeEvent(event)}
+        </span>
+      )}
       {event.run_id && (
         <button
           onClick={() => onDrill(event.run_id!)}

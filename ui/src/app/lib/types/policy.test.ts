@@ -4,7 +4,16 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { asFirstUseMode, firstUseRaisesApproval, firstUseLabel } from "./policy";
+import {
+  asFirstUseMode,
+  firstUseRaisesApproval,
+  firstUseLabel,
+  toolRulesProblem,
+  MAX_TOOL_RULES,
+  MAX_TOOL_RULE_NAME_LEN,
+  TOOL_RULE_DEFAULT,
+  type ToolEffect,
+} from "./policy";
 
 // The first-use egress-approval normalizer is the fail-closed trust boundary
 // between whatever the wire/policy JSON carries and the three modes the UI acts
@@ -83,5 +92,65 @@ describe("firstUseLabel", () => {
     // The review modes are unaffected by allowAll — they're never forced under
     // allow-all in the first place (buildSpec always forces always_deny there).
     expect(firstUseLabel("deny_with_review", true)).toBe("Ask");
+  });
+});
+
+// tool_rules is a SECURITY field with a closed enum and a duplicate refusal.
+// The mirror exists so the editor refuses what the API refuses instead of
+// round-tripping a 400 — if it drifts from internal/api/policy.go's
+// validateToolRules, the console starts promising writes the server rejects.
+describe("toolRulesProblem — mirrors validateToolRules", () => {
+  it("accepts an empty list — that IS today's behaviour, not a missing value", () => {
+    expect(toolRulesProblem([])).toBeNull();
+  });
+
+  it("accepts the documented example, default rule included", () => {
+    expect(
+      toolRulesProblem([
+        { tool: "Read", effect: "allow" },
+        { tool: "Bash", effect: "hold" },
+        { tool: "WebFetch", effect: "deny" },
+        { tool: TOOL_RULE_DEFAULT, effect: "hold" },
+      ]),
+    ).toBeNull();
+  });
+
+  it("refuses a duplicate tool — two rules for one tool means one does nothing", () => {
+    expect(
+      toolRulesProblem([
+        { tool: "Bash", effect: "allow" },
+        { tool: "Bash", effect: "deny" },
+      ]),
+    ).toMatch(/Two rules name/);
+  });
+
+  it("refuses an empty tool name and points at the default", () => {
+    expect(toolRulesProblem([{ tool: "", effect: "hold" }])).toMatch(/use \* for the default/);
+  });
+
+  it("refuses surrounding whitespace — the match is exact, so it would never fire", () => {
+    expect(toolRulesProblem([{ tool: "Bash ", effect: "hold" }])).toMatch(/never fire/);
+  });
+
+  it("refuses an effect outside the enum", () => {
+    expect(
+      toolRulesProblem([{ tool: "Bash", effect: "ask" as unknown as ToolEffect }]),
+    ).toMatch(/not an effect/);
+  });
+
+  it("refuses more rules than the server accepts, and names the cap", () => {
+    const many = Array.from({ length: MAX_TOOL_RULES + 1 }, (_, i) => ({
+      tool: `T${i}`,
+      effect: "hold" as const,
+    }));
+    expect(toolRulesProblem(many)).toContain(String(MAX_TOOL_RULES));
+    expect(toolRulesProblem(many.slice(0, MAX_TOOL_RULES))).toBeNull();
+  });
+
+  it("refuses a tool name past the length cap", () => {
+    expect(toolRulesProblem([{ tool: "x".repeat(MAX_TOOL_RULE_NAME_LEN + 1), effect: "hold" }])).toMatch(
+      /exceeds/,
+    );
+    expect(toolRulesProblem([{ tool: "x".repeat(MAX_TOOL_RULE_NAME_LEN), effect: "hold" }])).toBeNull();
   });
 });

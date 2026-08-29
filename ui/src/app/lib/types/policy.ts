@@ -117,6 +117,62 @@ export interface LLMInspectionSpec {
   block_min_severity?: string;
 }
 
+// ToolEffect mirrors types.ToolEffect — a CLOSED enum, which is why it is a
+// union here and not `string`: an unrecognised effect is a 400 server-side
+// (validateToolRules), never a silently-ignored rule that reads as enforcement.
+export type ToolEffect = "allow" | "hold" | "deny";
+
+// Display order for the effect picker: least to most restrictive.
+export const TOOL_EFFECTS: readonly ToolEffect[] = ["allow", "hold", "deny"];
+
+// The literal default rule. Policy.ToolEffectFor tries the exact tool name
+// first, then this — so it is the effect for every tool no rule names.
+export const TOOL_RULE_DEFAULT = "*";
+
+// One tool rule (mirrors types.ToolRule). `tool` is matched EXACTLY and
+// case-sensitively against the name the harness reports; there is no pattern
+// matching, and the one wildcard is the literal "*" default.
+export interface ToolRule {
+  tool: string;
+  effect: ToolEffect;
+}
+
+// Server-side ceilings, mirrored from internal/api/policy.go so the editor can
+// refuse what the API would refuse instead of round-tripping a 400.
+export const MAX_TOOL_RULES = 32;
+export const MAX_TOOL_RULE_NAME_LEN = 64;
+
+// toolRulesProblem mirrors validateToolRules (internal/api/policy.go): the same
+// refusals, in the same order, so the editor's message and the server's are
+// about the same thing. Returns null when the list would be accepted.
+//
+// The SERVER stays the authority — this only spares the operator a round trip.
+// An empty list is legal, and is today's behaviour: every gated call under
+// `hold` goes to a human.
+export function toolRulesProblem(rules: readonly ToolRule[]): string | null {
+  if (rules.length > MAX_TOOL_RULES) {
+    return `${rules.length} rules exceeds the maximum of ${MAX_TOOL_RULES}.`;
+  }
+  const seen = new Set<string>();
+  for (const r of rules) {
+    if (r.tool.trim() === "") return "Every rule needs a tool name (use * for the default).";
+    if (r.tool.trim() !== r.tool) {
+      return `“${r.tool}” has leading or trailing whitespace; the match is exact, so it would never fire.`;
+    }
+    if (r.tool.length > MAX_TOOL_RULE_NAME_LEN) {
+      return `“${r.tool}” exceeds ${MAX_TOOL_RULE_NAME_LEN} characters.`;
+    }
+    if (seen.has(r.tool)) {
+      return `Two rules name “${r.tool}” — one of them does nothing.`;
+    }
+    seen.add(r.tool);
+    if (!TOOL_EFFECTS.includes(r.effect)) {
+      return `“${r.effect}” is not an effect (want allow, hold or deny).`;
+    }
+  }
+  return null;
+}
+
 // Sandbox resource caps (mirrors types.ResourceLimits). A zero or omitted field
 // means "platform default" — dispatch fills conservative defaults so every run
 // is capped even under a policy that sets nothing.
@@ -149,6 +205,12 @@ export interface RunPolicySpec {
   llm_inspection?: LLMInspectionSpec;
   // Sandbox CPU/memory/PID/disk caps. Omitted => platform defaults.
   resources?: ResourceLimits;
+  // Per-tool effects for a run whose tool approvals are HELD (mirrors Go's
+  // RunPolicySpec.ToolRules). It narrows, never widens: a rule is consulted
+  // only for a run already in `hold`, so the worst a mistaken one can do is ask
+  // a human more often, or refuse a call the agent wanted. Omitted/empty is
+  // today's behaviour exactly — every gated call goes to a human.
+  tool_rules?: ToolRule[];
   // Declared in-sandbox loopback HTTP apps the UI gateway may relay to the
   // browser (mirrors Go's RunPolicySpec.UIApps). Read-only in the console —
   // ui_apps is operator-authored via the API/YAML, no editor in 0.6.

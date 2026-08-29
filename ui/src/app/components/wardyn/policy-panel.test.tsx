@@ -21,6 +21,7 @@ import {
   POLICY_TEMPLATES,
   PolicyPanel,
   templateText,
+  toolRulesSummary,
   type PolicyPanelInstance,
   type PolicyPanelProps,
 } from "./policy-panel";
@@ -285,5 +286,118 @@ describe("PolicyPanel — safety meter", () => {
     expect(meter).toHaveAttribute("data-safety", "");
     expect(meter).toHaveTextContent(/fix the json first/i);
     expect(gradePolicyMock).not.toHaveBeenCalled();
+  });
+});
+
+// tool_rules shipped in 0.7 with ZERO console surface: enforced by the proxy,
+// invisible in the UI. The section is the first rung of posture-gated autonomy,
+// so what it writes has to be exactly what the wire means — an implicit `hold`
+// default, an absent key for "no rules", and a duplicate refused before Save.
+describe("PolicyPanel — the tool_rules section", () => {
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+  function currentSpec(): RunPolicySpec {
+    return JSON.parse(specBox().value) as RunPolicySpec;
+  }
+
+  it("adds a rule and persists it into the spec document", async () => {
+    render(<Harness initial={VALID} />);
+    await user.click(screen.getByRole("button", { name: "Add rule" }));
+    await user.type(screen.getByLabelText("Tool 1"), "Bash");
+    await user.selectOptions(screen.getByLabelText("Effect 1"), "deny");
+
+    expect(currentSpec().tool_rules).toEqual([{ tool: "Bash", effect: "deny" }]);
+  });
+
+  it("removes a rule and drops the key entirely when the last one goes", async () => {
+    render(
+      <Harness
+        initial={JSON.stringify({ ...JSON.parse(VALID), tool_rules: [{ tool: "Bash", effect: "hold" }] })}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Remove rule" }));
+
+    // Absent, not `[]`: a policy written before the field existed has no key,
+    // and "no rules" has to serialise back to exactly that.
+    expect(Object.keys(currentSpec())).not.toContain("tool_rules");
+  });
+
+  it("keeps the * default out of the wire while it says hold, and writes it when it does not", async () => {
+    render(<Harness initial={VALID} />);
+    // The row renders at `hold` with nothing in the document — an absent "*"
+    // IS hold (ToolEffectFor falls through to the human).
+    const def = screen.getByLabelText("Default effect") as HTMLSelectElement;
+    expect(def.value).toBe("hold");
+    expect(Object.keys(currentSpec())).not.toContain("tool_rules");
+
+    await user.selectOptions(def, "deny");
+    expect(currentSpec().tool_rules).toEqual([{ tool: "*", effect: "deny" }]);
+  });
+
+  it("the default row cannot be removed", async () => {
+    render(<Harness initial={VALID} />);
+    expect(screen.queryByRole("button", { name: "Remove rule" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Add rule" }));
+    // One remove control, for the one named rule — never for "*".
+    expect(screen.getAllByRole("button", { name: "Remove rule" })).toHaveLength(1);
+  });
+
+  it("names the server's own refusal for a duplicate tool, before Save", async () => {
+    render(
+      <Harness
+        initial={JSON.stringify({
+          ...JSON.parse(VALID),
+          tool_rules: [
+            { tool: "Bash", effect: "allow" },
+            { tool: "Bash", effect: "deny" },
+          ],
+        })}
+      />,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Two rules name “Bash”/);
+  });
+
+  it("states the narrows-never-widens rule where the rules are authored", () => {
+    render(<Harness initial={VALID} />);
+    expect(
+      screen.getByText(/it never widens what the agent may do/),
+    ).toBeInTheDocument();
+  });
+});
+
+// The rail's one line. It names the tools on purpose: a bare count says nothing
+// about which calls still stop for a human.
+describe("toolRulesSummary", () => {
+  it("is null when the run has no rules, so the rail grows no empty section", () => {
+    expect(toolRulesSummary({ allowed_domains: [], first_use_approval: "always_deny", min_confinement_class: "CC2" })).toBeNull();
+  });
+
+  it("names every tool, its effect, and what happens to everything else", () => {
+    expect(
+      toolRulesSummary({
+        allowed_domains: [],
+        first_use_approval: "always_deny",
+        min_confinement_class: "CC2",
+        tool_rules: [
+          { tool: "Read", effect: "allow" },
+          { tool: "Bash", effect: "hold" },
+          { tool: "WebFetch", effect: "deny" },
+        ],
+      }),
+    ).toBe("3 rules · Read allowed, Bash held, WebFetch denied. Anything else is held.");
+  });
+
+  it("reads the default off an explicit * rule, and excludes it from the count", () => {
+    expect(
+      toolRulesSummary({
+        allowed_domains: [],
+        first_use_approval: "always_deny",
+        min_confinement_class: "CC2",
+        tool_rules: [
+          { tool: "Read", effect: "allow" },
+          { tool: "*", effect: "deny" },
+        ],
+      }),
+    ).toBe("1 rule · Read allowed. Anything else is denied.");
   });
 });
