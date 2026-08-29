@@ -48,7 +48,8 @@ export type NavLabel =
   | "Policies"
   | "Permissions"
   | "Secrets"
-  | "Audit";
+  | "Audit"
+  | "Recordings";
 
 // Sidebar entries are react-router <NavLink>s (role="link"), not <button>s.
 // Their accessible name can carry trailing content beyond the label — Runs/
@@ -70,10 +71,9 @@ export async function navTo(page: Page, label: NavLabel): Promise<void> {
   await sidebarLink(page, label).click();
 }
 
-// navToRoute reaches a screen that is NOT in the six-item sidebar. Recordings is
-// the current case — it is route-reachable until it folds into Audit as a tab.
-// Use navTo for anything the sidebar actually lists; reaching a sidebar entry
-// this way would stop proving the link works.
+// navToRoute reaches a screen that is NOT in the sidebar (a run detail page, a
+// workspace, /runs/new). Use navTo for anything the sidebar actually lists;
+// reaching a sidebar entry this way would stop proving the link works.
 //
 // This is a CLIENT-SIDE navigation, not page.goto(), and that distinction is
 // load-bearing: a full document load re-runs the app's auth probe, so any test

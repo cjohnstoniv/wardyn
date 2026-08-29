@@ -7,10 +7,10 @@ import { test, expect, gotoConsole, navTo, sidebarLink, type NavLabel } from "./
 
 // Navigation + theme + error-boundary coverage for the Wardyn admin console.
 //
-// The shell (app-shell.tsx) renders a FLAT seven-item sidebar — Runs, Approvals,
-// Workspaces, Policies, Permissions, Secrets, Audit — of react-router <NavLink>s
-// (role="link"), with no group headings. Settings, SSH keys and Demos live in
-// the account menu; Recordings is reachable by URL until it folds into Audit.
+// The shell (app-shell.tsx) renders a FLAT eight-item sidebar — Runs, Approvals,
+// Workspaces, Policies, Permissions, Secrets, Audit, Recordings — of react-router
+// <NavLink>s (role="link"), with no group headings. Settings, SSH keys and Demos
+// live in the account menu.
 // The top bar carries a "Toggle theme" button (aria-label) and a permanent
 // barrier chip. Each screen supplies its own <h1> via PageHeader.
 //

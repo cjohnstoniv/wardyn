@@ -18,6 +18,7 @@ import {
   LogOut,
   Menu,
   Moon,
+  Play,
   Plus,
   ScrollText,
   Settings,
@@ -136,10 +137,14 @@ function initials(principal: string): string {
   return (s || base.slice(0, 2)).toUpperCase();
 }
 
-// Flat sidebar nav — seven items, no group headings (stage-1 redesign). Demos,
-// Recordings, and Settings all left the sidebar: Demos and Settings are
-// reachable from the account menu below, Recordings stays addressable by route
-// (deep link, workspace/run actions) without their own nav entry.
+// Flat sidebar nav — eight items, no group headings (stage-1 redesign). Demos
+// and Settings are reachable from the account menu below rather than here.
+//
+// Recordings is BACK (mock M6). It left the sidebar on the theory that a deep
+// link from a run or a workspace was enough, which made the evidence trail
+// undiscoverable: the screen and its route existed, and nothing on the console
+// ever said so. It sits after Audit because the two answer the same question —
+// "what happened" — one as events, one as the session itself.
 interface NavItem {
   to: string;
   label: string;
@@ -158,18 +163,25 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/permissions", label: "Permissions", icon: Users },
   { to: "/secrets", label: "Secrets", icon: Lock },
   { to: "/audit", label: "Audit", icon: ScrollText },
+  { to: "/recordings", label: "Recordings", icon: Play },
 ];
 
 // Member console (B3): a member launches/governs only THEIR OWN runs — nav is
-// Runs · Approvals, nothing else (no Policies/Secrets/Workspaces/Audit).
-// Filtered by route path, never by re-deriving from a second copy of NAV_ITEMS.
+// Runs · Approvals · Workspaces, nothing else (no Policies/Permissions/
+// Secrets/Audit/Recordings). Filtered by route path, never by re-deriving from
+// a second copy of NAV_ITEMS.
+//
+// Workspaces joined the member set (mock M6): a member launches runs AGAINST
+// workspaces and had no way to see the ones they can use — the picker in the
+// New run wizard was the only place they appeared at all. The screen is
+// already server-scoped like every other member surface.
 //
 // Hiding here is COSMETIC ONLY — every route a member can't reach still
 // enforces that itself server-side (internal/api/routes.go's operatorOnly
 // group and the owner-or-admin routes); this just keeps a member from
 // discovering an admin-only screen as a raw 403 or an empty list instead of
 // simply not offering it.
-const MEMBER_NAV_PATHS = new Set(["/runs", "/approvals"]);
+const MEMBER_NAV_PATHS = new Set(["/runs", "/approvals", "/workspaces"]);
 function navItemsForRole(role: Role): NavItem[] {
   if (role !== "member") return NAV_ITEMS;
   return NAV_ITEMS.filter((i) => MEMBER_NAV_PATHS.has(i.to));
@@ -511,7 +523,7 @@ function TopBar({
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             {/* The guided Getting Started funnel — an operator-chosen route
-                (setup-gate.ts has no hard gate any more), not the seven-item
+                (setup-gate.ts has no hard gate any more), not the eight-item
                 sidebar: this menu entry and the Runs empty state's "guided
                 tour" link (runs-first-run.tsx) are the two ways in. */}
             <DropdownMenuItem asChild>

@@ -99,7 +99,7 @@ describe("Focus mode — the shell gets out of the way", () => {
     renderCockpitInShell();
     await screen.findByRole("heading", { name: "Egress" });
 
-    // Normal mode: the six-item shell is exactly as it always was.
+    // Normal mode: the full shell is exactly as it always was.
     expect(screen.getByRole("banner")).toBeInTheDocument();
     expect(screen.getByRole("complementary")).toBeInTheDocument();
 

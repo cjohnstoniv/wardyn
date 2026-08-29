@@ -368,7 +368,7 @@ describe("MobileNav (below-md nav fallback)", () => {
     await user.click(trigger);
 
     expect(trigger).toHaveAttribute("aria-expanded", "true");
-    for (const label of ["Runs", "Approvals", "Workspaces", "Policies", "Permissions", "Secrets", "Audit"]) {
+    for (const label of ["Runs", "Approvals", "Workspaces", "Policies", "Permissions", "Secrets", "Audit", "Recordings"]) {
       expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
     }
   });
@@ -386,33 +386,46 @@ describe("MobileNav (below-md nav fallback)", () => {
   });
 });
 
-// B3: member nav is Runs · Approvals, nothing else — no Policies/Secrets/
-// Workspaces/Audit. Hiding is cosmetic (the server is the real boundary);
-// this pins the UI half of that contract. Demos/Recordings/Integrations left
-// the sidebar entirely (stage-1 flatten) — Demos moved to the account menu
+// B3: member nav is Runs · Approvals · Workspaces, nothing else — no Policies/
+// Permissions/Secrets/Audit/Recordings. Hiding is cosmetic (the server is the
+// real boundary); this pins the UI half of that contract. Demos/Integrations
+// left the sidebar entirely (stage-1 flatten) — Demos moved to the account menu
 // (TopBar), offered to every role since routes.go has no server-side gate on
 // it at all.
 describe("SidebarNav (member role — B3)", () => {
-  it("shows only Runs and Approvals — admin-only items are absent", async () => {
+  // Workspaces joined the member set (mock M6): a member launches runs AGAINST
+  // workspaces and could previously only glimpse them inside the New run
+  // picker.
+  it("shows Runs, Approvals and Workspaces — admin-only items are absent", async () => {
     const user = userEvent.setup();
     renderMobileNav("member");
     await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
 
-    for (const label of ["Runs", "Approvals"]) {
+    for (const label of ["Runs", "Approvals", "Workspaces"]) {
       expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
     }
-    for (const label of ["Policies", "Permissions", "Secrets", "Workspaces", "Audit"]) {
+    for (const label of ["Policies", "Permissions", "Secrets", "Audit", "Recordings"]) {
       expect(screen.queryByRole("link", { name: new RegExp(`^${label}`) })).toBeNull();
     }
   });
 
-  it("admin nav is unchanged: every item is present", async () => {
+  // Recordings is back on the admin sidebar (mock M6) after Audit: the route
+  // and screen already existed and were reachable only by deep link, which
+  // made the evidence trail undiscoverable.
+  it("admin nav carries every item, with Recordings last — after Audit", async () => {
     const user = userEvent.setup();
     renderMobileNav("admin");
     await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
 
-    for (const label of ["Runs", "Approvals", "Workspaces", "Policies", "Permissions", "Secrets", "Audit"]) {
+    const labels = ["Runs", "Approvals", "Workspaces", "Policies", "Permissions", "Secrets", "Audit", "Recordings"];
+    for (const label of labels) {
       expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
     }
+    // Order is part of the contract, not an accident of the array.
+    const rendered = screen
+      .getAllByRole("link")
+      .map((el) => el.textContent ?? "")
+      .filter((t) => labels.some((l) => t.startsWith(l)));
+    expect(rendered.map((t) => labels.find((l) => t.startsWith(l)))).toEqual(labels);
   });
 });

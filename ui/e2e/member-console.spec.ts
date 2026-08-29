@@ -34,20 +34,22 @@ async function mockMemberRole(page: import("@playwright/test").Page): Promise<vo
 }
 
 test.describe("member console — nav absence (mocked /me role)", () => {
-  test("member nav is Runs · Approvals only — no admin-only items", async ({ page }) => {
+  test("member nav is Runs · Approvals · Workspaces only — no admin-only items", async ({ page }) => {
     await mockMemberRole(page);
     await gotoConsole(page);
 
-    for (const label of ["Runs", "Approvals"] as const) {
+    // Workspaces joined the member set (mock M6): a member launches runs
+    // against workspaces, and the New run picker was the only place they were
+    // visible at all.
+    for (const label of ["Runs", "Approvals", "Workspaces"] as const) {
       await expect(sidebarLink(page, label)).toBeVisible();
     }
-    // Workspaces is asserted absent too: the flat nav made it a first-class
-    // sidebar entry, so a member must not see it. MEMBER_NAV_PATHS
-    // (app-shell.tsx) is the single source of truth — Runs and Approvals only.
+    // MEMBER_NAV_PATHS (app-shell.tsx) is the single source of truth.
     // Permissions joined the sidebar in 0.6 and is admin-only: 0.6 ships no
     // member permissions screen at all, only the inline why-denied moments
-    // below, so it must not appear here either.
-    for (const label of ["Workspaces", "Policies", "Permissions", "Secrets", "Audit"] as const) {
+    // below, so it must not appear here. Recordings is the admin evidence
+    // trail and stays admin-only for the same reason Audit does.
+    for (const label of ["Policies", "Permissions", "Secrets", "Audit", "Recordings"] as const) {
       await expect(sidebarLink(page, label)).toHaveCount(0);
     }
   });
@@ -64,9 +66,9 @@ test.describe("member console — nav absence (mocked /me role)", () => {
     await expect(menu.getByText("member", { exact: true })).toBeVisible();
   });
 
-  test("admin (unmocked, today's default): the full six-item nav", async ({ page }) => {
+  test("admin (unmocked, today's default): the full eight-item nav", async ({ page }) => {
     await gotoConsole(page);
-    for (const label of ["Runs", "Approvals", "Workspaces", "Policies", "Permissions", "Secrets", "Audit"] as const) {
+    for (const label of ["Runs", "Approvals", "Workspaces", "Policies", "Permissions", "Secrets", "Audit", "Recordings"] as const) {
       await expect(sidebarLink(page, label)).toBeVisible();
     }
   });
