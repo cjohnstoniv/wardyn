@@ -34,7 +34,7 @@ import { PhaseRail } from "./phase-rail";
 import { EnvironmentStep } from "./environment-step";
 import { CorpNetworkStep, isProxyConfigured, proxyDetected, type CorpStepActions } from "./corp-network-step";
 import { IntegrationsStep } from "./integrations-step";
-import { ReviewStep, WorkspacesStep } from "./step-bodies";
+import { DeploymentStep, ReviewStep, WorkspacesStep } from "./step-bodies";
 import {
   DEMO_STEP_IDS,
   OPTIONAL_STEPS,
@@ -549,6 +549,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             rechecking={rechecking}
           />
         )}
+        {stepId === "people" && <DeploymentStep status={status} />}
         {stepId === "corp_network" && (
           <CorpNetworkStep
             status={status}

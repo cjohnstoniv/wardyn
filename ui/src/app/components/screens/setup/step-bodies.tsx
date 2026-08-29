@@ -17,16 +17,17 @@
 // saveSiteConfig; WorkspacesStep's own write is the one-shot POST inside
 // AddWorkspaceDialog).
 import * as React from "react";
+import { Link } from "react-router-dom";
 import { AlertTriangle, Info, Loader2, Plus, CircleCheck, RotateCw } from "lucide-react";
 import type { SetupCheck, SetupCheckStatus, SetupStatus, SiteConfig, Workspace } from "../../../lib/types";
 import { getErrorMessage } from "../../../lib/format";
-import { Chip, SectionLabel } from "../../wardyn/primitives";
-import { BTN, OPERATOR_ONLY_REASON } from "../../wardyn/copy";
+import { Chip, SectionCard, SectionLabel } from "../../wardyn/primitives";
+import { BTN, OPERATOR_ONLY_REASON, PEOPLE_STEP as PT } from "../../wardyn/copy";
 import { useOperator } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
 import { AddWorkspaceDialog } from "../add-workspace-dialog";
 import { sourceSubLine } from "../workspaces";
-import { Readiness } from "../../../lib/readiness";
+import { Readiness, deploymentMode } from "../../../lib/readiness";
 import { lastCheckedLabel } from "../../../lib/readiness";
 import { toast } from "sonner";
 import type { SetupStepId, StepBadge } from "./steps";
@@ -281,6 +282,71 @@ export function WorkspacesStep({
           onCreated={onReload}
         />
       )}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------
+// People step — "Who can sign in". A pure explainer, done on arrival
+// (steps.ts's stepDone.people): single-user (one admin credential, no
+// per-person identity) vs multi-user (SSO, role-mapped admins/members). Zero
+// teal here — the footer's Next is the surface's one affirmative action, so
+// every button in this body is `outline`.
+// ------------------------------------------------------------
+export function DeploymentStep({ status }: { status: SetupStatus }) {
+  if (deploymentMode(status) === "single-user") {
+    const lede = status.auth.mode === "local" ? PT.SINGLE_USER_LEDE_LOCAL : PT.SINGLE_USER_LEDE_TOKEN;
+    return (
+      <div className="space-y-4">
+        <div className="flex items-start gap-2">
+          <Chip tone="neutral">{PT.SINGLE_USER_CHIP}</Chip>
+          <p className="text-sm text-muted-foreground">{lede}</p>
+        </div>
+        <SectionCard title={PT.SINGLE_USER_HEADING}>
+          <p className="text-sm text-muted-foreground">{PT.SINGLE_USER_BODY}</p>
+          <p className="mt-3 text-xs text-muted-foreground">
+            {PT.SINGLE_USER_SSO_NOTE_PREFIX}
+            <span className="font-mono">{PT.SINGLE_USER_SSO_NOTE_DOC}</span>
+            {PT.SINGLE_USER_SSO_NOTE_SUFFIX}
+          </p>
+        </SectionCard>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start gap-2">
+        <Chip tone="neutral">{PT.MULTI_USER_CHIP}</Chip>
+        <p className="text-sm text-muted-foreground">{PT.MULTI_USER_LEDE}</p>
+      </div>
+      <SectionCard title={PT.MULTI_USER_HEADING}>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm text-muted-foreground">
+            {PT.MULTI_USER_ROLES_PREFIX}
+            <span className="font-mono">{PT.MULTI_USER_ROLES_VAR}</span>
+            {PT.MULTI_USER_ROLES_SUFFIX}
+          </p>
+          <Chip tone="success" dot>
+            {PT.MULTI_USER_SSO_CHIP}
+          </Chip>
+        </div>
+        <div className="my-3 border-t border-border" />
+        <p className="text-sm text-muted-foreground">
+          <span className="font-medium text-foreground">{PT.MULTI_USER_ADMINS_LABEL}</span>
+          {PT.MULTI_USER_ADMINS_BODY}
+        </p>
+        <p className="mt-2 text-sm text-muted-foreground">
+          <span className="font-medium text-foreground">{PT.MULTI_USER_MEMBERS_LABEL}</span>
+          {PT.MULTI_USER_MEMBERS_BODY}
+        </p>
+        <div className="mt-3 flex items-center gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link to="/permissions">{PT.MULTI_USER_PERMISSIONS_ACTION}</Link>
+          </Button>
+          <span className="text-xs text-muted-foreground">{PT.MULTI_USER_PERMISSIONS_HINT}</span>
+        </div>
+      </SectionCard>
     </div>
   );
 }

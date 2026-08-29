@@ -180,11 +180,11 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // Walk via the footer `Next: {label}` button (accessible name starts "Next:").
     // The Back button is anchored as /^back$/i so it can't collide with another
     // Back-ish verb. The walk is stepOrder(status), not the full STEP_ORDER:
-    // essentials [environment, corp_network, integrations] → Egress demos →
-    // Secrets demos → your work [workspaces] → finish [review]. This fixture
-    // has no model and no stored secret, so the SIX conditional demo steps
-    // (agent-in-the-box's needsModel, plus the five needsSecret ones) are
-    // filtered OUT — 14 walked of the 20 that exist. github-app-broker and
+    // essentials [environment, people, corp_network, integrations] → Egress
+    // demos → Secrets demos → your work [workspaces] → finish [review]. This
+    // fixture has no model and no stored secret, so the SIX conditional demo
+    // steps (agent-in-the-box's needsModel, plus the five needsSecret ones)
+    // are filtered OUT — 15 walked of the 21 that exist. github-app-broker and
     // sts-fail-closed stay walked: the first is TEACH+GATE (a disabled Start,
     // never a dropped step) and the second is keyless. Review is the LAST step:
     // the Launch step was cut, because its "Example — not live config" card
@@ -198,7 +198,12 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(screen.queryByText("gVisor runtime")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^back$/i })).toBeDisabled();
 
-    // Corporate network directly follows Environment (the order itself is the
+    // People directly follows Environment (Phase 5) — a pure explainer, done
+    // on arrival, with no gate of its own.
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(await screen.findAllByText("Single-user")).not.toHaveLength(0);
+
+    // Corporate network directly follows People (the order itself is the
     // fix for "blocked network reads as bad credential" — see steps.ts).
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByRole("heading", { name: /^network$/i })).toBeInTheDocument();
@@ -384,10 +389,38 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(listSecretsMock).toHaveBeenCalledTimes(2);
   });
 
+  // Phase 5 — the People step: renders with its label/heading, its badge reads
+  // the deployment mode, and it's done on arrival (an explainer, not a task).
+  describe("People step", () => {
+    it("renders the label, heading and Single-user badge, and is done on arrival", async () => {
+      renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=people");
+      // Both the page heading (STEP_HEADING) and the DeploymentStep body's own
+      // SectionCard render "Who can sign in" — the mock's own canon repeats it.
+      expect(await screen.findAllByRole("heading", { name: /who can sign in/i })).toHaveLength(2);
+
+      const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
+      const nav = within(navs[navs.length - 1]);
+      const btn = nav.getByRole("button", { name: /^people/i });
+      expect(within(btn).getByText("Single-user")).toBeInTheDocument();
+      // done.people === true: the checkmark renders on arrival, no action taken.
+      expect(btn.querySelector("svg.lucide-check")).toBeInTheDocument();
+    });
+
+    // Negative control: sso reads Multi-user, not Single-user, on the same step.
+    it("reads Multi-user when auth.mode is sso", async () => {
+      getSetupStatusMock.mockResolvedValue(baseStatus({ auth: { mode: "sso", local_loopback: false } }));
+      renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=people");
+      expect(await screen.findAllByText("Multi-user")).not.toHaveLength(0);
+      expect(screen.queryAllByText("Single-user")).toHaveLength(0);
+    });
+  });
+
   describe("Corporate network connectivity gate — wired through the real orchestrator", () => {
     it("the footer's button IS the probe while unproven; one reached probe makes the step done — no tab detour", async () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
+      await screen.findAllByText("Single-user");
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await screen.findByRole("heading", { name: /^network$/i });
 
@@ -429,6 +462,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     it("no_runner unlocks Next immediately with its standing note — nothing was proven, and the note keeps saying so", async () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
+      await screen.findAllByText("Single-user");
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await screen.findByRole("heading", { name: /^network$/i });
 
@@ -444,6 +479,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       });
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
+      await screen.findAllByText("Single-user");
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await screen.findByRole("heading", { name: /^network$/i });
 
@@ -468,6 +505,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     it("the gate survives leaving and re-entering the step — no re-test needed", async () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
+      await screen.findAllByText("Single-user");
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await clearCorpNetworkGate();
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
@@ -493,6 +532,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     it("the rail can't click past a blocked gate — same rule the footer's Next enforces; backward jumps are unaffected", async () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
+      await screen.findAllByText("Single-user");
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await screen.findByRole("heading", { name: /^network$/i });
       // Both PhaseRail landmarks share the "Setup steps" accessible name
@@ -538,6 +579,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence");
 
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
+    await screen.findAllByText("Single-user");
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
@@ -573,6 +616,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     );
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence");
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
+    await screen.findAllByText("Single-user");
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
 
@@ -595,6 +640,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
 
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
+      await screen.findAllByText("Single-user");
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await clearCorpNetworkGate();
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
@@ -619,6 +666,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
 
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
+      await screen.findAllByText("Single-user");
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await clearCorpNetworkGate();
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
@@ -639,6 +688,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
 
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
+      await screen.findAllByText("Single-user");
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await clearCorpNetworkGate();
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
@@ -669,6 +720,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     it("visited-step tracking round-trips through localStorage across a remount", async () => {
       const { unmount } = renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
+      await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
+      await screen.findAllByText("Single-user");
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
       await clearCorpNetworkGate();
       await user.click(screen.getByRole("button", { name: /^next:/i })); // -> integrations
@@ -701,7 +754,9 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // Corporate network is a mandatory gate even for a rail jump (W2-S1-2) —
     // clear it (same helper every other walkthrough in this suite uses) before
     // jumping to the final step.
-    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
+    await screen.findAllByText("Single-user");
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
 
     // Review is the final step now, and "Finish setup" is its completion.
@@ -739,9 +794,11 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   it("review step renders ok/warn/fail/info rows grouped, and Re-check calls getSetupStatus again", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence"); // environment settled
-    // walk to Review (the last step, 14 of 14 — six conditional demo steps are
+    // walk to Review (the last step, 15 of 15 — six conditional demo steps are
     // filtered out of this fixture's walk) — checks live there, not on the
     // barrier step
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
+    await screen.findAllByText("Single-user");
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
     for (let i = 0; i < 12; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
@@ -792,6 +849,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(screen.getByText("Vault")).toBeInTheDocument();
     expect(screen.queryByText("Secret store durability")).not.toBeInTheDocument();
     // Walk to Review: the non-platform check appears grouped; the platform note under "About this host".
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
+    await screen.findAllByText("Single-user");
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
     for (let i = 0; i < 12; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));

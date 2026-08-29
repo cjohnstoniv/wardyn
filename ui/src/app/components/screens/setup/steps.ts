@@ -10,7 +10,7 @@
 // case below). No React here by design — data/derivation only.
 import type { EgressRedirect, SetupStatus, Workspace } from "../../../lib/types";
 import type { ProxyTestResult } from "../../../lib/api/health";
-import { deriveReadiness, Readiness } from "../../../lib/readiness";
+import { deploymentMode, deriveReadiness, Readiness } from "../../../lib/readiness";
 import { DEMOS, DEMO_IDS, type Demo, type DemoId } from "../demos/demo-catalog";
 import { isUsable } from "../../../lib/workspace-status";
 import { T } from "../../../lib/integrations";
@@ -56,7 +56,7 @@ const demoStepsIn = (section: Demo["section"]): DemoStepId[] =>
 // full order; stepOrder(status) is the order actually walked — see it below
 // for the conditional steps that drop out. PHASES is the count to trust, not
 // this history.
-export type SetupStepId = "environment" | "corp_network" | "integrations" | DemoStepId | "workspaces" | "review";
+export type SetupStepId = "environment" | "people" | "corp_network" | "integrations" | DemoStepId | "workspaces" | "review";
 
 // demo id → title, from the catalog (single source of truth for the demo steps'
 // labels + headings, so they can't drift from what the demo pages show). No
@@ -69,6 +69,7 @@ const DEMO_TITLES = Object.fromEntries(DEMOS.map((d) => [d.id, d.title])) as Rec
 // here instead of each rebuilding the same map (F5).
 export const STEP_LABEL: Record<SetupStepId, string> = {
   environment: "Environment",
+  people: "People",
   corp_network: "Network",
   // "Secrets", not "Model & git host": every lane this step offers — API keys,
   // PATs, SSH keys, App credentials, even the login flows, which capture a
@@ -84,6 +85,7 @@ export const STEP_LABEL: Record<SetupStepId, string> = {
 
 export const STEP_HEADING: Record<SetupStepId, string> = {
   environment: "Pick your barrier",
+  people: "Who can sign in",
   // Same string as the rail label. Renamed from "Corporate network": that
   // name described the WORST case rather than the step, and read as skippable
   // to everyone not behind a corporate proxy — when what the step actually
@@ -123,7 +125,7 @@ export interface PhaseDef {
 // section" by embedding it. Each phase's membership is derived from the
 // catalog's own `section` field.
 export const PHASES: PhaseDef[] = [
-  { id: "essentials", label: "Essentials", steps: ["environment", "corp_network", "integrations"] },
+  { id: "essentials", label: "Essentials", steps: ["environment", "people", "corp_network", "integrations"] },
   { id: "demos_egress", label: "Egress demos", steps: demoStepsIn("egress") },
   { id: "demos_secrets", label: "Secrets demos", steps: demoStepsIn("secrets") },
   { id: "work", label: "Your work", steps: ["workspaces"] },
@@ -385,6 +387,10 @@ export function stepBadges(
     environment: r.barrierReady
       ? { text: `Ready · ${r.barrierCount} of 3 barriers`, tone: "success" }
       : { text: "Needs setup", tone: "warning" },
+    people:
+      deploymentMode(status) === "multi-user"
+        ? { text: "Multi-user", tone: "neutral" }
+        : { text: "Single-user", tone: "neutral" },
     corp_network: corpNetworkBadge(corpNetwork, corpNetworkRedirects),
     // Ladder: Optional -> Skipped (visited, left unconfigured — applied by the
     // orchestrator's generic visited-steps override, see setup-screen.tsx) ->
@@ -437,6 +443,9 @@ export function stepDone(
     // reads. An unrelated failing check must not blank this dot while the badge
     // stays green (Review owns the whole-checks rollup).
     environment: r.barrierReady,
+    // People is an explainer, not a task — done on arrival is honest (there is
+    // nothing to configure here to "finish" it).
+    people: true,
     // The mock's own done rule (wardyn-proto.js): gate.on && reached. no_runner
     // UNLOCKS Next (Wardyn can't demand proof it can't collect) but never
     // earns the checkmark — nothing was proven; a custom pass does count as

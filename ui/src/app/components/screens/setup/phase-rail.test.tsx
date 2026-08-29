@@ -14,6 +14,7 @@ import { DEMOS } from "../demos/demo-catalog";
 // sub-step included, since Getting Started absorbed the whole catalog.
 const BADGES: Record<SetupStepId, StepBadge> = {
   environment: { text: "Ready · 2 of 3 barriers", tone: "success" },
+  people: { text: "Single-user", tone: "neutral" },
   corp_network: { text: "Optional", tone: "neutral" },
   integrations: { text: "Ready · 2 connected", tone: "success" },
   "sealed-box": { text: "Optional", tone: "neutral" },
@@ -37,6 +38,7 @@ const BADGES: Record<SetupStepId, StepBadge> = {
 
 const DONE: Record<SetupStepId, boolean> = {
   environment: true,
+  people: true,
   corp_network: false,
   integrations: true,
   "sealed-box": false,
@@ -137,12 +139,13 @@ describe("PhaseRail", () => {
     expect(onSelect).toHaveBeenCalledWith("integrations");
   });
 
-  it("counts the essentials phase honestly (environment + corp_network + integrations)", () => {
+  it("counts the essentials phase honestly (environment + people + corp_network + integrations)", () => {
     const rail = renderRail("environment");
-    // Essentials = environment + corp_network + integrations. The fixture has
-    // environment and integrations done, corp_network merely Skipped (not
-    // done) — 2 of 3, an honest partial count.
-    expect(rail.getByText("2/3")).toBeInTheDocument();
+    // Essentials = environment + people + corp_network + integrations. The
+    // fixture has environment, people (an explainer, done on arrival) and
+    // integrations done, corp_network merely Skipped (not done) — 3 of 4, an
+    // honest partial count.
+    expect(rail.getByText("3/4")).toBeInTheDocument();
   });
 
   it('all-optional phases read "all optional", never a counter that cannot fill', () => {

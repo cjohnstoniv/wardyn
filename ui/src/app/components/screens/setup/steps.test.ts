@@ -173,6 +173,7 @@ describe("frozen contract — ids, labels, headings, order", () => {
   it("pins the frozen step ids and labels (e2e clicks `Next: {label}`)", () => {
     expect(Object.entries(STEP_LABEL)).toEqual([
       ["environment", "Environment"],
+      ["people", "People"],
       ["corp_network", "Network"],
       ["integrations", "Secrets"],
       // Every demo sub-step — labels come from the demo catalog titles.
@@ -198,6 +199,7 @@ describe("frozen contract — ids, labels, headings, order", () => {
       ["review", "Review"],
     ]);
     expect(STEP_HEADING.environment).toBe("Pick your barrier");
+    expect(STEP_HEADING.people).toBe("Who can sign in");
     expect(STEP_HEADING.corp_network).toBe("Network");
     expect(STEP_HEADING.integrations).toBe("Secrets");
   });
@@ -205,6 +207,7 @@ describe("frozen contract — ids, labels, headings, order", () => {
   it("pins STEP_ORDER to the phase walk (essentials -> egress demos -> secrets demos -> your work -> finish)", () => {
     expect(STEP_ORDER).toEqual([
       "environment",
+      "people",
       "corp_network",
       "integrations",
       "sealed-box",
@@ -225,7 +228,7 @@ describe("frozen contract — ids, labels, headings, order", () => {
       "workspaces",
       "review",
     ]);
-    expect(STEP_ORDER).toHaveLength(20);
+    expect(STEP_ORDER).toHaveLength(21);
     expect(PHASES.flatMap((p) => p.steps)).toEqual(STEP_ORDER);
     // Getting Started is the ONE demos surface: every catalog demo is a
     // sub-step, in catalog order, split into the two sections by `Demo.section`
@@ -243,6 +246,26 @@ describe("frozen contract — ids, labels, headings, order", () => {
 
   it("corp_network is required, not optional — proof of internet access gates Next", () => {
     expect(OPTIONAL_STEPS.has("corp_network")).toBe(false);
+  });
+
+  it("people is required, not optional — it's an explainer, not a task", () => {
+    expect(OPTIONAL_STEPS.has("people")).toBe(false);
+  });
+});
+
+describe("people badge/done", () => {
+  it("reads Single-user for local/token/disabled auth and is done on arrival", () => {
+    const status = baseStatus({ auth: { mode: "local", local_loopback: false } });
+    const readiness = deriveReadiness(status);
+    expect(stepBadges(status, readiness, [], 0).people).toEqual({ text: "Single-user", tone: "neutral" });
+    expect(stepDone(status, readiness, [], 0).people).toBe(true);
+  });
+
+  it("reads Multi-user for sso auth", () => {
+    const status = baseStatus({ auth: { mode: "sso", local_loopback: false } });
+    const readiness = deriveReadiness(status);
+    expect(stepBadges(status, readiness, [], 0).people).toEqual({ text: "Multi-user", tone: "neutral" });
+    expect(stepDone(status, readiness, [], 0).people).toBe(true);
   });
 });
 

@@ -603,3 +603,33 @@ export const EPISODES_COPY = {
   GROUP_MEMBER: "For members",
   GROUP_EVERYONE: "For everyone",
 } as const;
+
+// People step (step-bodies.tsx's DeploymentStep) — canon per the approved mock.
+export const PEOPLE_STEP = {
+  SINGLE_USER_CHIP: "Single-user",
+  MULTI_USER_CHIP: "Multi-user",
+  SINGLE_USER_LEDE_LOCAL:
+    "One admin credential — no sign-in at all — anyone who reaches this console on this machine is the admin. No per-person identity.",
+  SINGLE_USER_LEDE_TOKEN:
+    "One admin credential — the token the installer printed, or no sign-in at all under local mode. No per-person identity.",
+  SINGLE_USER_HEADING: "Who can sign in",
+  SINGLE_USER_BODY:
+    "Just you. Whoever holds the admin token (or reaches a local-mode console) is the admin; runs, policies, secrets and approvals are all yours. There is no member role until people sign in as themselves.",
+  SINGLE_USER_SSO_NOTE_PREFIX:
+    "To add people, configure SSO: each person gets their own identity and an admin or member role, and members get their own Getting Started. The recipe is in ",
+  SINGLE_USER_SSO_NOTE_DOC: "docs/OPERATIONS.md",
+  SINGLE_USER_SSO_NOTE_SUFFIX: ', "Second user, same host".',
+  MULTI_USER_LEDE: "People sign in with SSO; each is an admin or a member, per your role map.",
+  MULTI_USER_HEADING: "Who can sign in",
+  MULTI_USER_ROLES_PREFIX: "Roles come from ",
+  MULTI_USER_ROLES_VAR: "WARDYN_OIDC_ROLE_MAP",
+  MULTI_USER_ROLES_SUFFIX: ", or the operator allowlist",
+  MULTI_USER_SSO_CHIP: "SSO",
+  MULTI_USER_ADMINS_LABEL: "Admins",
+  MULTI_USER_ADMINS_BODY: " set the ceiling — policies, secrets, workspaces, site configuration.",
+  MULTI_USER_MEMBERS_LABEL: "Members",
+  MULTI_USER_MEMBERS_BODY:
+    " run inside it — their own workspaces, runs, approvals and SSH keys. They land on their own Getting Started the first time they sign in.",
+  MULTI_USER_PERMISSIONS_ACTION: "Open Permissions",
+  MULTI_USER_PERMISSIONS_HINT: "Capability grants, per person or group",
+} as const;

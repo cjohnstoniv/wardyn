@@ -41,16 +41,13 @@ describe("SetupLayout", () => {
     expect(screen.queryByText("Optional")).not.toBeInTheDocument();
   });
 
-  // Corporate network directly follows Environment (9->10: it came back as its
-  // own step, right before Integrations — see steps.ts's PHASES comment for
-  // why the ORDER is the actual fix for "blocked network reads as bad
-  // credential").
-  it("footer renders 'Next: Network' on the environment step and calls onSelect(\"corp_network\")", async () => {
+  // People directly follows Environment (Phase 5) — see steps.ts's PHASES.
+  it("footer renders 'Next: People' on the environment step and calls onSelect(\"people\")", async () => {
     const onSelect = vi.fn();
     renderLayout({ current: "environment", onSelect });
-    const nextBtn = screen.getByRole("button", { name: /^next: network$/i });
+    const nextBtn = screen.getByRole("button", { name: /^next: people$/i });
     await user.click(nextBtn);
-    expect(onSelect).toHaveBeenCalledWith("corp_network");
+    expect(onSelect).toHaveBeenCalledWith("people");
   });
 
   // No phase is collapsible in the rail, so the phase-level skip control never
@@ -68,7 +65,7 @@ describe("SetupLayout", () => {
   describe("nextGate — the footer's generic Next gate (head/reason/action)", () => {
     it("Next is enabled and nothing extra renders when nextGate is absent", () => {
       renderLayout({ current: "environment" });
-      expect(screen.getByRole("button", { name: /^next: network$/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /^next: people$/i })).toBeEnabled();
     });
 
     it("blocked without an action: Next is disabled, the head and reason render", () => {
@@ -76,7 +73,7 @@ describe("SetupLayout", () => {
         current: "environment",
         nextGate: { blocked: true, head: "Connectivity isn't proven yet", reason: "One probe, and this step is done.", tone: "warning" },
       });
-      expect(screen.getByRole("button", { name: /^next: network$/i })).toBeDisabled();
+      expect(screen.getByRole("button", { name: /^next: people$/i })).toBeDisabled();
       expect(screen.getByText("Connectivity isn't proven yet")).toBeInTheDocument();
       expect(screen.getByText("One probe, and this step is done.")).toBeInTheDocument();
     });
@@ -94,7 +91,7 @@ describe("SetupLayout", () => {
           action: { label: "Test connectivity", onClick: onAction },
         },
       });
-      expect(screen.queryByRole("button", { name: /^next: network$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^next: people$/i })).not.toBeInTheDocument();
       await user.click(screen.getByRole("button", { name: /^test connectivity$/i }));
       expect(onAction).toHaveBeenCalled();
       expect(onSelect).not.toHaveBeenCalled();
@@ -128,7 +125,7 @@ describe("SetupLayout", () => {
         onSelect,
         nextGate: { blocked: false, head: "Nothing to test with", reason: "Nothing was proven here.", tone: "neutral" },
       });
-      const next = screen.getByRole("button", { name: /^next: network$/i });
+      const next = screen.getByRole("button", { name: /^next: people$/i });
       expect(next).toBeEnabled();
       expect(screen.getByText("Nothing to test with")).toBeInTheDocument();
       expect(screen.getByText("Nothing was proven here.")).toBeInTheDocument();
@@ -141,7 +138,7 @@ describe("SetupLayout", () => {
         current: "environment",
         nextGate: { blocked: false, action: { label: "Should not render", onClick: vi.fn() } },
       });
-      expect(screen.getByRole("button", { name: /^next: network$/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /^next: people$/i })).toBeEnabled();
       expect(screen.queryByRole("button", { name: /should not render/i })).not.toBeInTheDocument();
     });
 
