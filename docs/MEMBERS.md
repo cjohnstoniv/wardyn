@@ -93,7 +93,11 @@ when you launch a run; your run then uses YOUR key, injected proxy-side
 exactly like an operator's own (the value is never resident in the sandbox).
 Setting your own key needs no operator integration or workspace requirement
 first — an unpaired stored secret still needs one of those, but your own
-key naming the provider convention does not.
+key naming the provider convention does not. The same rule reaches a
+workspace's integration requirement: when your admin's integration names a
+credential the admin has not stored, a secret you store under that same
+name is what your run injects — the integration's host, header and egress
+stay the admin's; only the value is yours.
 
 Bounds: this is API-key mode only — the resident Claude-subscription mount
 stays operator-only (see [DESKTOP.md § Model access on
