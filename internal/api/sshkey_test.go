@@ -349,12 +349,12 @@ func TestValidateInlineSecretRefs_SSHKey(t *testing.T) {
 	ctx := context.Background()
 
 	present := sshKeyPolicy("github.com", "anthropic-api-key") // reuse the seeded name
-	if code, err := h.srv.validateInlineSecretRefs(ctx, present); err != nil || code != 0 {
+	if code, err := h.srv.validateInlineSecretRefs(ctx, "", present); err != nil || code != 0 {
 		t.Fatalf("present ssh_key secret: code=%d err=%v, want (0,nil)", code, err)
 	}
 
 	missing := sshKeyPolicy("github.com", "no-such-key")
-	if code, err := h.srv.validateInlineSecretRefs(ctx, missing); err == nil || code != http.StatusUnprocessableEntity {
+	if code, err := h.srv.validateInlineSecretRefs(ctx, "", missing); err == nil || code != http.StatusUnprocessableEntity {
 		t.Fatalf("missing ssh_key secret: code=%d err=%v, want (422,err)", code, err)
 	}
 }

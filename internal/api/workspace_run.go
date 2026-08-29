@@ -389,7 +389,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// this call on the workspace carrying its own binding skipped tier 3 (the operator's
 	// site-wide default) for every unbound workspace's record/replay session, silently
 	// diverging from "Model access resolves" (docs/OPERATIONS.md).
-	_, integKind, bedrockRef := s.foldRunIntegration(ctx, &policy, createRunRequest{Agent: "claude-code"}, []types.Workspace{ws})
+	_, integKind, bedrockRef := s.foldRunIntegration(ctx, "", &policy, createRunRequest{Agent: "claude-code"}, []types.Workspace{ws})
 	subMounted := specHasMountTarget(&policy, claudeCredTarget)
 	if integKind == "" && !subMounted {
 		// No workspace/operator integration bound: fall back to the operator

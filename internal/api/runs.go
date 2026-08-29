@@ -141,7 +141,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// halves (foldRunIntegration; applyWorkspaceRequirements returns its events) —
 	// the audit is recorded once the run id is minted, below.
 	wsRefs := s.referencedWorkspaces(ctx, spec)
-	foldInteg, foldKind, bedrockRef := s.foldRunIntegration(ctx, &spec, req, wsRefs)
+	foldInteg, foldKind, bedrockRef := s.foldRunIntegration(ctx, s.secretOwnerFromRequest(r), &spec, req, wsRefs)
 	reqEvents := s.applyWorkspaceRequirements(ctx, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
 
 	// The primary host workspace directory this run will operate in (if any), used

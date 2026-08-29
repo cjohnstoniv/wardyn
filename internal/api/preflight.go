@@ -82,7 +82,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// foldRunIntegration time below (previewing as "no model access" on
 	// Review) and only failing for real once the operator clicks launch.
 	if req.IntegrationID != "" {
-		if in, ok := s.resolveIntegrationRef(ctx, req.IntegrationID); !ok || !types.AIProviderKind(in.Kind) {
+		if in, ok := s.resolveIntegrationRef(ctx, s.secretOwnerFromRequest(r), req.IntegrationID); !ok || !types.AIProviderKind(in.Kind) {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("integration_id %q does not name an AI provider integration", req.IntegrationID))
 			return
 		}
@@ -121,7 +121,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Which secrets actually exist (names only) — the SAME map compose builds.
-	presentSecrets := s.presentSecretNames(ctx)
+	presentSecrets := s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(r))
 
 	// Fold the run's model-access binding AND each referenced workspace's
 	// requirements contract into the spec BEFORE computing the enforced confinement
@@ -151,7 +151,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	for _, ws := range wsRefs {
 		unionAllowedDomains(&spec, workspaceCloneEgress(ws))
 	}
-	_, _, bedrockRef := s.foldRunIntegration(ctx, &spec, req, wsRefs)
+	_, _, bedrockRef := s.foldRunIntegration(ctx, s.secretOwnerFromRequest(r), &spec, req, wsRefs)
 	_ = s.applyWorkspaceRequirements(ctx, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
 
 	// Enforced confinement class — the SAME math launch runs, now on the FOLDED
@@ -218,7 +218,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		llmAccess = s.resolveRunLLMAccess(ctx, req, spec, presentSecrets, bedrockRef)
 	}
 
-	items := s.deriveSetupItems(ctx, runInput, spec, presentSecrets, llmAccess)
+	items := s.deriveSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, presentSecrets, llmAccess)
 	writeJSON(w, http.StatusOK, preflightResponse{
 		SetupItems:               items,
 		EnforcedConfinementClass: enforced,

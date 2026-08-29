@@ -175,7 +175,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// never run-selectable) fails loud here rather than silently resolving to
 	// nothing at foldRunIntegration time (llmcred.go).
 	if req.IntegrationID != "" {
-		if in, ok := s.resolveIntegrationRef(r.Context(), req.IntegrationID); !ok || !types.AIProviderKind(in.Kind) {
+		if in, ok := s.resolveIntegrationRef(r.Context(), s.secretOwnerFromRequest(r), req.IntegrationID); !ok || !types.AIProviderKind(in.Kind) {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("integration_id %q does not name an AI provider integration", req.IntegrationID))
 			return req, "", "", false
 		}

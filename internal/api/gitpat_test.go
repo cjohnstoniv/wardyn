@@ -57,17 +57,17 @@ func TestValidateInlineSecretRefs_GitPAT(t *testing.T) {
 	ctx := context.Background()
 
 	present := gitPATPolicy("gitlab.com", "anthropic-api-key") // reuse the seeded name
-	if code, err := h.srv.validateInlineSecretRefs(ctx, present); err != nil || code != 0 {
+	if code, err := h.srv.validateInlineSecretRefs(ctx, "", present); err != nil || code != 0 {
 		t.Fatalf("present git_pat secret: code=%d err=%v, want (0,nil)", code, err)
 	}
 
 	missing := gitPATPolicy("gitlab.com", "no-such-pat")
-	if code, err := h.srv.validateInlineSecretRefs(ctx, missing); err == nil || code != http.StatusUnprocessableEntity {
+	if code, err := h.srv.validateInlineSecretRefs(ctx, "", missing); err == nil || code != http.StatusUnprocessableEntity {
 		t.Fatalf("missing git_pat secret: code=%d err=%v, want (422,err)", code, err)
 	}
 
 	reserved := gitPATPolicy("gitlab.com", "wardyn-session-key")
-	if code, err := h.srv.validateInlineSecretRefs(ctx, reserved); err == nil || code != http.StatusUnprocessableEntity {
+	if code, err := h.srv.validateInlineSecretRefs(ctx, "", reserved); err == nil || code != http.StatusUnprocessableEntity {
 		t.Fatalf("reserved git_pat secret: code=%d err=%v, want (422,err)", code, err)
 	}
 

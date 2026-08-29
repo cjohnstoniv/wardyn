@@ -22,7 +22,7 @@ func foldRef(s *Server, spec *types.RunPolicySpec, ws *types.Workspace, agent st
 	if ws != nil {
 		refs = []types.Workspace{*ws}
 	}
-	integ, kind, _ := s.foldRunIntegration(context.Background(), spec, createRunRequest{Agent: agent}, refs)
+	integ, kind, _ := s.foldRunIntegration(context.Background(), "", spec, createRunRequest{Agent: agent}, refs)
 	if kind == "" {
 		return ""
 	}
@@ -193,7 +193,7 @@ func TestApplyPrimaryWorkspaceCreds_BedrockIntegration_OverridesGlobalRegionMode
 	ws := types.Workspace{LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "acme-bedrock"}}
 	req := createRunRequest{Agent: "claude-code"}
 
-	_, _, bedrockRef := s.foldRunIntegration(context.Background(), spec, req, []types.Workspace{ws})
+	_, _, bedrockRef := s.foldRunIntegration(context.Background(), "", spec, req, []types.Workspace{ws})
 	if bedrockRef == nil || bedrockRef.Region != wsRegion || bedrockRef.Model != wsModel {
 		t.Fatalf("bedrockRef = %+v, want region=%s model=%s", bedrockRef, wsRegion, wsModel)
 	}
@@ -224,7 +224,7 @@ func TestApplyPrimaryWorkspaceCreds_BedrockIntegration_ModelOnlyNoMalformedHost(
 	ws := types.Workspace{LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "acme-bedrock"}}
 	req := createRunRequest{Agent: "claude-code"}
 
-	_, _, bedrockRef := s.foldRunIntegration(context.Background(), spec, req, []types.Workspace{ws})
+	_, _, bedrockRef := s.foldRunIntegration(context.Background(), "", spec, req, []types.Workspace{ws})
 	if bedrockRef == nil || bedrockRef.Model != wsModel || bedrockRef.Region != "" {
 		t.Fatalf("bedrockRef = %+v, want region=\"\" model=%s", bedrockRef, wsModel)
 	}
@@ -248,13 +248,13 @@ func TestResolveRunIntegration_DisabledRow_NeverFolds(t *testing.T) {
 
 	t.Run("tier 1: explicit integration_id", func(t *testing.T) {
 		s := integrationTestServer(t, []types.Integration{disabled}, "acme-anthropic-key")
-		if _, ok := s.resolveRunIntegration(context.Background(), "acme-anthropic", ""); ok {
+		if _, ok := s.resolveRunIntegration(context.Background(), "", "acme-anthropic", ""); ok {
 			t.Fatal("resolveRunIntegration must refuse a Disabled row named by explicit integration_id")
 		}
 	})
 	t.Run("tier 2: workspace binding", func(t *testing.T) {
 		s := integrationTestServer(t, []types.Integration{disabled}, "acme-anthropic-key")
-		if _, ok := s.resolveRunIntegration(context.Background(), "", "acme-anthropic"); ok {
+		if _, ok := s.resolveRunIntegration(context.Background(), "", "", "acme-anthropic"); ok {
 			t.Fatal("resolveRunIntegration must refuse a Disabled row named by a workspace binding")
 		}
 	})
@@ -262,7 +262,7 @@ func TestResolveRunIntegration_DisabledRow_NeverFolds(t *testing.T) {
 		defaulted := disabled
 		defaulted.DefaultFor = []string{"agent_runs"}
 		s := integrationTestServer(t, []types.Integration{defaulted}, "acme-anthropic-key")
-		if _, ok := s.resolveRunIntegration(context.Background(), "", ""); ok {
+		if _, ok := s.resolveRunIntegration(context.Background(), "", "", ""); ok {
 			t.Fatal("resolveRunIntegration must refuse a Disabled row even as the site-wide agent_runs default")
 		}
 	})
@@ -271,7 +271,7 @@ func TestResolveRunIntegration_DisabledRow_NeverFolds(t *testing.T) {
 		spec := &types.RunPolicySpec{}
 		ws := types.Workspace{LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "acme-anthropic"}}
 		req := createRunRequest{Agent: "claude-code"}
-		_, kind, _ := s.foldRunIntegration(context.Background(), spec, req, []types.Workspace{ws})
+		_, kind, _ := s.foldRunIntegration(context.Background(), "", spec, req, []types.Workspace{ws})
 		if kind != "" {
 			t.Fatalf("foldRunIntegration folded a Disabled row: kind=%q", kind)
 		}
@@ -324,7 +324,7 @@ func TestApplyPrimaryWorkspaceCreds_DefaultForAgentRuns_AppliesWithNoWorkspace(t
 	spec := &types.RunPolicySpec{}
 	req := createRunRequest{Agent: "claude-code"}
 
-	_, _, bedrockRef := s.foldRunIntegration(context.Background(), spec, req, nil)
+	_, _, bedrockRef := s.foldRunIntegration(context.Background(), "", spec, req, nil)
 	if bedrockRef != nil {
 		t.Errorf("bedrockRef = %+v, want nil for an api_key integration", bedrockRef)
 	}
@@ -350,7 +350,7 @@ func TestApplyPrimaryWorkspaceCreds_ExecRunBindsNoIntegration(t *testing.T) {
 	spec := &types.RunPolicySpec{}
 	req := createRunRequest{Agent: "claude-code", TaskMode: "exec"}
 
-	integ, kind, bedrockRef := s.foldRunIntegration(context.Background(), spec, req, nil)
+	integ, kind, bedrockRef := s.foldRunIntegration(context.Background(), "", spec, req, nil)
 	if integ.ID != "" || kind != "" || bedrockRef != nil {
 		t.Errorf("exec run folded an integration: integ=%q kind=%q bedrockRef=%v, want all empty", integ.ID, kind, bedrockRef)
 	}
@@ -378,7 +378,7 @@ func TestApplyPrimaryWorkspaceCreds_DanglingWorkspaceRef_DoesNotCascadeToDefault
 	ws := types.Workspace{LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "does-not-exist"}}
 	req := createRunRequest{Agent: "claude-code"}
 
-	_, _, bedrockRef := s.foldRunIntegration(context.Background(), spec, req, []types.Workspace{ws})
+	_, _, bedrockRef := s.foldRunIntegration(context.Background(), "", spec, req, []types.Workspace{ws})
 	if bedrockRef != nil {
 		t.Errorf("bedrockRef = %+v, want nil (nothing should have folded)", bedrockRef)
 	}
@@ -400,7 +400,7 @@ func TestApplyPrimaryWorkspaceCreds_ExplicitIntegrationID_WinsOverWorkspaceRef(t
 	ws := types.Workspace{LLMCred: &types.WorkspaceLLMCred{IntegrationRef: "workspace-pick"}}
 	req := createRunRequest{Agent: "claude-code", IntegrationID: "explicit-pick"}
 
-	s.foldRunIntegration(context.Background(), spec, req, []types.Workspace{ws})
+	s.foldRunIntegration(context.Background(), "", spec, req, []types.Workspace{ws})
 	g, ok := apiKeyGrantForHost(spec, "api.anthropic.com")
 	if !ok {
 		t.Fatal("expected an api_key grant")
@@ -427,16 +427,16 @@ func TestResolveRunIntegration_ExplicitResidentHostID_RefusedWithoutWorkspacePin
 
 	// No workspace pin at all (a run with no workspace, or one the operator
 	// never pinned) — the explicit tier must refuse, not silently grant it.
-	if _, ok := s.resolveRunIntegration(context.Background(), "acme-sub-host", ""); ok {
+	if _, ok := s.resolveRunIntegration(context.Background(), "", "acme-sub-host", ""); ok {
 		t.Error("resident_host claimed by run-explicit id with no workspace pin at all")
 	}
 	// A DIFFERENT workspace's own pin does not launder an unrelated run's claim.
-	if _, ok := s.resolveRunIntegration(context.Background(), "acme-sub-host", "some-other-integration"); ok {
+	if _, ok := s.resolveRunIntegration(context.Background(), "", "acme-sub-host", "some-other-integration"); ok {
 		t.Error("resident_host claimed by run-explicit id while the primary workspace is pinned elsewhere")
 	}
 	// The workspace genuinely pinned to THIS integration may still use it via
 	// the explicit tier — the two tiers naming the same row is consent, not a conflict.
-	if _, ok := s.resolveRunIntegration(context.Background(), "acme-sub-host", "acme-sub-host"); !ok {
+	if _, ok := s.resolveRunIntegration(context.Background(), "", "acme-sub-host", "acme-sub-host"); !ok {
 		t.Error("resident_host refused even though the run's own primary workspace is pinned to it")
 	}
 	// The managed lane (no resident host credentials involved) is untouched by
@@ -445,7 +445,7 @@ func TestResolveRunIntegration_ExplicitResidentHostID_RefusedWithoutWorkspacePin
 		ID: "acme-sub-managed", Kind: types.IntegrationKindAnthropicSubscription,
 		Config: map[string]any{"lane": "managed"},
 	}})
-	if _, ok := managed.resolveRunIntegration(context.Background(), "acme-sub-managed", ""); !ok {
+	if _, ok := managed.resolveRunIntegration(context.Background(), "", "acme-sub-managed", ""); !ok {
 		t.Error("managed-lane subscription must still resolve via the explicit tier alone")
 	}
 }
@@ -495,7 +495,7 @@ func TestApplyPrimaryWorkspaceCreds_NoneConfiguredIsNoOp(t *testing.T) {
 	spec := &types.RunPolicySpec{}
 	req := createRunRequest{Agent: "claude-code"}
 
-	_, kind, bedrockRef := s.foldRunIntegration(context.Background(), spec, req, nil)
+	_, kind, bedrockRef := s.foldRunIntegration(context.Background(), "", spec, req, nil)
 	if bedrockRef != nil {
 		t.Fatalf("bedrockRef = %+v, want nil", bedrockRef)
 	}

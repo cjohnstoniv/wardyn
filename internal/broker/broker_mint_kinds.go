@@ -19,15 +19,12 @@ import (
 // approval + audit invariants and dispatch here by GrantKind.
 
 // ownerOf is the secretstore.Store.For namespace a mint resolves its secret
-// from: the caller run's own identity Sub, or "" when caller is nil. NOTE a
-// residual this seam does not close: MintOnApproval reconstructs a bare
-// &identity.Claims{RunID: ...} with no Sub for the decide()->mint path, so an
-// approval-gated git_pat/ssh_key mint reached that way always resolves the
-// OPERATOR namespace regardless of the run's true owner — only the
-// auto-mint path (MintForGrant's real, fully-populated caller) is
-// member-owner-aware today. An operator-created run's own Sub never collides
-// with a member's stamped row (secretOwnerFromRequest's own doc comment), so
-// this degrades to today's single namespace for every pre-0.7 deployment.
+// from: the caller run's own identity Sub, or "" when caller is nil.
+// MintOnApproval's caller loads the run and passes its CreatedBy as Sub, so
+// an approval-gated git_pat/ssh_key mint reached that way resolves the same
+// namespace the auto-mint path (MintForGrant's fully-populated caller) does.
+// An operator-created run's own Sub never collides with a member's stamped
+// row (secretOwnerFromRequest's own doc comment).
 func ownerOf(caller *identity.Claims) string {
 	if caller == nil {
 		return ""
@@ -100,9 +97,7 @@ func (b *Broker) mintGitPAT(ctx context.Context, caller *identity.Claims, spec t
 	if b.secrets == nil {
 		return Minted{}, errors.New("broker: git_pat grant but no secret store configured (fail closed)")
 	}
-	// The run's own owner's row wins, falling back to the operator's — see
-	// ownerOf's doc comment for the one path (MintOnApproval) this does not
-	// cover.
+	// The run's own owner's row wins, falling back to the operator's (ownerOf).
 	value, err := b.secrets.For(ownerOf(caller)).Get(ctx, sc.SecretName)
 	if err != nil {
 		return Minted{}, fmt.Errorf("broker: read git_pat secret %q: %w", sc.SecretName, err)

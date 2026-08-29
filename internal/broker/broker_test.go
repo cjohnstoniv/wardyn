@@ -637,7 +637,7 @@ func TestMintOnApproval_HappyPath(t *testing.T) {
 	gid := seedGrant(db, runID, spec)
 	aid := seedApproval(db, runID, gid, spec.Scope, types.ApprovalApproved)
 
-	minted, err := b.MintOnApproval(context.Background(), runID, gid)
+	minted, err := b.MintOnApproval(context.Background(), runID, gid, "")
 	if err != nil {
 		t.Fatalf("MintOnApproval: %v", err)
 	}
@@ -659,7 +659,7 @@ func TestMintOnApproval_RequiresApproval_NoApprovalRow_FailsClosed(t *testing.T)
 	gid := seedGrant(db, runID, spec)
 	// Deliberately seed NO approval row.
 
-	_, err := b.MintOnApproval(context.Background(), runID, gid)
+	_, err := b.MintOnApproval(context.Background(), runID, gid, "")
 	if !errors.Is(err, ErrNotApproved) {
 		t.Fatalf("want ErrNotApproved, got %v", err)
 	}

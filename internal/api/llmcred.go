@@ -430,9 +430,9 @@ func integrationKeyGrant(integ types.Integration, p llmProvider) (secret, header
 //
 // ok=false is today's honest no-model-access / global-provider-config
 // fallback, carried through every tier unchanged.
-func (s *Server) resolveRunIntegration(ctx context.Context, integrationID string, workspaceRef string) (types.Integration, bool) {
+func (s *Server) resolveRunIntegration(ctx context.Context, owner, integrationID string, workspaceRef string) (types.Integration, bool) {
 	if integrationID != "" {
-		in, ok := s.resolveIntegrationRef(ctx, integrationID)
+		in, ok := s.resolveIntegrationRef(ctx, owner, integrationID)
 		// bug-integrations-1: a Disabled row must never fold into a run's
 		// model access — this is the actual agent-run credential path
 		// (applyIntegrationCreds authors EligibleGrants/AllowedDomains from
@@ -466,7 +466,7 @@ func (s *Server) resolveRunIntegration(ctx context.Context, integrationID string
 		// integration, and cascading a stale/miscategorized ref to the
 		// site-wide default would be the exact credential surprise this
 		// tier's doc above says it refuses.
-		in, ok := s.resolveIntegrationRef(ctx, workspaceRef)
+		in, ok := s.resolveIntegrationRef(ctx, owner, workspaceRef)
 		if !ok || !types.AIProviderKind(in.Kind) || in.Disabled {
 			return types.Integration{}, false
 		}
@@ -492,7 +492,7 @@ func (s *Server) resolveRunIntegration(ctx context.Context, integrationID string
 // a run whose model access came from either would preview as having none.
 // kind == "" means nothing was bound (no integration resolved, a non-LLM
 // agent, or a resolved integration whose fold applied nothing).
-func (s *Server) foldRunIntegration(ctx context.Context, spec *types.RunPolicySpec, req createRunRequest, wsRefs []types.Workspace) (types.Integration, string, *types.WorkspaceBedrockRef) {
+func (s *Server) foldRunIntegration(ctx context.Context, owner string, spec *types.RunPolicySpec, req createRunRequest, wsRefs []types.Workspace) (types.Integration, string, *types.WorkspaceBedrockRef) {
 	// The run's PRIMARY workspace is wsRefs[0] when the spec references any —
 	// shared with preflight (which calls this same function) so the two
 	// cannot disagree about whose credential binding a run inherits.
@@ -516,7 +516,7 @@ func (s *Server) foldRunIntegration(ctx context.Context, spec *types.RunPolicySp
 	if _, ok := s.llmProviderFor(req.Agent); !ok {
 		return types.Integration{}, "", nil // non-LLM agent — nothing to bind
 	}
-	integ, ok := s.resolveRunIntegration(ctx, req.IntegrationID, workspaceRef)
+	integ, ok := s.resolveRunIntegration(ctx, owner, req.IntegrationID, workspaceRef)
 	if !ok {
 		return types.Integration{}, "", nil
 	}

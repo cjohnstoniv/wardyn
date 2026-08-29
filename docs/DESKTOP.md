@@ -330,25 +330,34 @@ what "clamped" does and does not mean once the caller is an admin).
 
 ## Model access on m′
 
-On the member-mode profile three shipped mechanisms compose into what looks
-like a dead end, and it is worth walking because the obvious reading is wrong:
+BYOK is no longer a dead end here — per-principal secrets shipped (0.7): a
+member writes their OWN `PUT /secrets/<name>` row (no admin action), and an
+inline `api_key` grant naming a model-provider host (the anthropic.com/
+openai.com convention, or a configured internal gateway) that pairs with a
+secret the member OWNS is admitted with no operator eligible-grant pairing
+at all — see [MEMBERS.md § Your model key](MEMBERS.md#your-model-key). The
+secret-exfil guard `filterMemberGrants` exists for is unaffected: the arm
+requires PROVABLE ownership (a names-only `Store.For(<member>).List`, never a
+value read, never another member's row) and a model-provider host the run's
+own already-clamped egress allows — an arbitrary stored secret paired with
+an arbitrary host is still dropped exactly as before.
+
+What m′'s other two mechanisms still hold:
 
 1. m′ makes **OIDC mandatory**.
 2. With OIDC configured, `wardynd` **refuses subscription injection** — a shared
    subscription credential would serve other people's runs, which the harness
-   vendor's terms prohibit.
-3. Secret writes on m′ are **admin-only**, so the developer cannot
-   `wardyn secret set anthropic-api-key` for themselves, and a member's own
-   inline `api_key` grant is dropped unless the operator eligible-listed that
-   exact {host, secret} pairing.
+   vendor's terms prohibit. BYOK is unaffected by this: it is the api-key
+   lane, never the resident-subscription mount.
 
-The daemon's own refusal message names the way out, and it is easy to read only
-the first half of it: *"Give each user their own API key … **or use Bedrock**"*.
-
-**Bedrock is the working path on m′, and it needs no member secret write.**
-
-It is **daemon-level, MDM-set** configuration rather than a per-member
-credential, so it routes around the wall above entirely:
+**Bedrock stays the MDM-managed lane — it is not a fallback BYOK replaces.**
+A member's own key is Claude/OpenAI API-key mode only; Bedrock needs its own
+AWS credential, which per-principal secrets deliberately does NOT extend to
+(`bedrock-api-key` and the AWS SigV4 pair are refused for a member's own
+`PUT /secrets` regardless of ownership — Bedrock member-BYO stays a Named
+gap). For a Bedrock-only fleet, or a member running `codex-cli` with no
+OpenAI key of their own, Bedrock is still the daemon-level, MDM-set path
+that needs no member secret write at all:
 
 | Variable | Set by |
 |---|---|
@@ -367,13 +376,12 @@ subscription lanes. No member grant, no workspace requirement, and nothing that
 member running `codex-cli` on m′ still needs an operator-provided OpenAI
 credential.
 
-**Rejected on the record:** `ROADMAP.md`'s alternative — re-running the
-provider-convention model grant *after* `filterMemberGrants`, so a member's own
-key survives with no integration behind it — is a real fix for **pure-BYOK for
-members**, which is a different flow. It is not needed to give an m′ fleet model
-access, and it reopens the secret-exfil guard `filterMemberGrants` exists for
-(a member pairing an arbitrary stored secret with an allowlisted host). Left as
-a Named gap for whoever wants BYOK-for-members specifically.
+**Superseded on the record:** an earlier draft of this page rejected re-running
+the provider-convention model grant after `filterMemberGrants` as reopening
+the secret-exfil guard. Per-principal secrets closed that: the own-key arm
+requires PROVABLE ownership of the exact secret name, not merely that it
+matches the convention, so a member still cannot pair an arbitrary stored
+secret with an arbitrary host — only their own key with a model-provider one.
 
 ## Operational hygiene
 

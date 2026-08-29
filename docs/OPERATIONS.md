@@ -416,6 +416,20 @@ every pre-0.7 row, and every row an admin writes without `?owner=` — means
   carry `secret_owner` naming the non-"" namespace a write landed in
   (including a member's own ordinary write, not only an admin's `?owner=`
   cross-write) — see [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
+- **Model access.** A member's own secret, stored under the provider
+  convention name (`anthropic-api-key`/`openai-api-key`), synthesises the
+  legacy `anthropic_api_key`/`openai_api_key` integration row exactly as the
+  operator's own does (`resolveIntegrationRef`), so `GET /integrations`
+  lists it, a run selecting it resolves model access, and no false "no
+  model access" warning fires when the operator holds no row of that name
+  at all. `filterMemberGrants` admits the matching hand-authored inline
+  `api_key` grant with no operator eligible-grant pairing when ALL hold: the
+  host is a model-provider host (the anthropic.com/openai.com convention, or
+  a configured internal gateway) that the run's own already-clamped egress
+  allows, and the member OWNS a secret by that exact name (a names-only
+  `Store.For(<member>).List`, never a value read) — every other grant kind,
+  and any pairing that fails one of those, stays ceiling-paired exactly as
+  before. See [MEMBERS.md § Your model key](MEMBERS.md#your-model-key).
 
 **Deciding an approval is kind-restricted, not just owner-restricted**
 (`decide()`, `internal/api/approvals.go`): a member may approve or deny an

@@ -266,3 +266,54 @@ func TestBrokerMint_GitPATAndSSHKey_OwnerScoped(t *testing.T) {
 		}
 	})
 }
+
+// TestMintOnApproval_MemberRunResolvesOwnerNamespace: an approval-gated
+// git_pat mint via MintOnApproval, with the run's CreatedBy passed as sub,
+// resolves the MEMBER's own secret row — not the operator's — closing the
+// residual ownerOf's doc comment used to name (a bare &identity.Claims{RunID}
+// with no Sub always fell back to the operator namespace on this path).
+func TestMintOnApproval_MemberRunResolvesOwnerNamespace(t *testing.T) {
+	secrets := newMemSecrets()
+	secrets.m["shared-pat"] = []byte("operator-pat-value")
+	if err := secrets.For("alice").Put(context.Background(), "shared-pat", []byte("alice-pat-value")); err != nil {
+		t.Fatalf("seed alice's row: %v", err)
+	}
+	db := newFakeDB()
+	b := New(db, secrets, &fakeAudit{}, nil, &FakeGitHubMinter{})
+	runID := uuid.New()
+	spec := gitPATSpec("dev.azure.com", "shared-pat", "")
+	spec.RequiresApproval = true
+	gid := seedGrant(db, runID, spec)
+	seedApproval(db, runID, gid, spec.Scope, types.ApprovalApproved)
+
+	minted, err := b.MintOnApproval(context.Background(), runID, gid, "alice")
+	if err != nil {
+		t.Fatalf("MintOnApproval: %v", err)
+	}
+	if minted.Token != "alice-pat-value" {
+		t.Fatalf("token = %q, want alice's own row (the run's CreatedBy), not the operator's", minted.Token)
+	}
+}
+
+// TestMintOnApproval_OperatorRunResolvesOperatorNamespace is the negative
+// control: an operator-created run (sub == "") still resolves the operator
+// namespace exactly as before this fix.
+func TestMintOnApproval_OperatorRunResolvesOperatorNamespace(t *testing.T) {
+	secrets := newMemSecrets()
+	secrets.m["shared-pat"] = []byte("operator-pat-value")
+	db := newFakeDB()
+	b := New(db, secrets, &fakeAudit{}, nil, &FakeGitHubMinter{})
+	runID := uuid.New()
+	spec := gitPATSpec("dev.azure.com", "shared-pat", "")
+	spec.RequiresApproval = true
+	gid := seedGrant(db, runID, spec)
+	seedApproval(db, runID, gid, spec.Scope, types.ApprovalApproved)
+
+	minted, err := b.MintOnApproval(context.Background(), runID, gid, "")
+	if err != nil {
+		t.Fatalf("MintOnApproval: %v", err)
+	}
+	if minted.Token != "operator-pat-value" {
+		t.Fatalf("token = %q, want the operator's row (operator-created run)", minted.Token)
+	}
+}

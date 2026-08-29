@@ -367,11 +367,15 @@ func resolveIntegrationRefFrom(rows []integrationRow, ref string) (types.Integra
 // empty or names nothing at all. The single-ref convenience form — a caller
 // resolving MULTIPLE refs in one request should compute effectiveIntegrations
 // once and call resolveIntegrationRefFrom directly (PLATFORM-API-8).
-func (s *Server) resolveIntegrationRef(ctx context.Context, ref string) (types.Integration, bool) {
+// owner (secretOwnerFromRequest — "" for an operator) widens the presence map
+// this resolves against to include the caller's OWN stored secrets, so a
+// member's own anthropic-api-key synthesises the legacy anthropic_api_key row
+// exactly as the operator's does. "" is byte-identical to the pre-6c behavior.
+func (s *Server) resolveIntegrationRef(ctx context.Context, owner, ref string) (types.Integration, bool) {
 	if ref == "" {
 		return types.Integration{}, false
 	}
-	present := s.presentSecretNames(ctx)
+	present := s.presentSecretNamesFor(ctx, owner)
 	return resolveIntegrationRefFrom(s.effectiveIntegrations(ctx, present, s.setupBedrock(ctx, present)), ref)
 }
 

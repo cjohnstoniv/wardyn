@@ -212,7 +212,7 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 	// Same fail-fast for the sibling reference: an api_key/git_pat/ssh_key grant
 	// naming a secret that does not exist. Advisory at author time (the secret can
 	// be deleted afterwards) — run-create stays the load-bearing gate.
-	if code, err := s.validateInlineSecretRefs(r.Context(), req.Spec); err != nil {
+	if code, err := s.validateInlineSecretRefs(r.Context(), s.secretOwnerFromRequest(r), req.Spec); err != nil {
 		writeError(w, code, "secret: "+err.Error())
 		return
 	}
@@ -260,7 +260,7 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, code, "workspace: "+err.Error())
 		return
 	}
-	if code, err := s.validateInlineSecretRefs(r.Context(), req.Spec); err != nil {
+	if code, err := s.validateInlineSecretRefs(r.Context(), s.secretOwnerFromRequest(r), req.Spec); err != nil {
 		writeError(w, code, "secret: "+err.Error())
 		return
 	}

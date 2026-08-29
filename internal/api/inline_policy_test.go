@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -179,7 +180,7 @@ func TestFilterMemberGrants(t *testing.T) {
 	// arbitrary stored secret with an allowlisted host is DROPPED - its pairing
 	// is not one the operator listed, so nothing is injected.
 	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantAPIKey}}}
-	kept, warns, code, err := h.srv.filterMemberGrants([]types.GrantSpec{apiKey("attacker.example", "prod-db-password")})
+	kept, warns, code, err := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{apiKey("attacker.example", "prod-db-password")})
 	if code != 0 || err != nil {
 		t.Fatalf("exfil pairing: code=%d err=%v, want (0,nil) - dropped, not errored", code, err)
 	}
@@ -189,41 +190,41 @@ func TestFilterMemberGrants(t *testing.T) {
 	// The run's OWN model-access grant (real provider key) is likewise dropped
 	// under a wildcard ceiling - that is fine, ensureLLMGrant re-adds it after
 	// resolveRunPolicy returns (see TestCreateRun_MemberInlineGrantExfilDropped).
-	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{apiKey("api.anthropic.com", "anthropic-api-key")}); len(kept) != 0 {
+	if kept, _, _, _ := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{apiKey("api.anthropic.com", "anthropic-api-key")}); len(kept) != 0 {
 		t.Fatalf("real-key LLM grant under wildcard ceiling: kept=%d, want 0 (dropped, re-folded downstream)", len(kept))
 	}
 
 	// A SPECIFIC operator pairing lets a member reuse THAT exact pairing...
 	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{EligibleGrants: []types.GrantSpec{apiKey("api.corp.example", "corp-key")}}
-	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{apiKey("API.Corp.Example", "corp-key")}); len(kept) != 1 {
+	if kept, _, _, _ := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{apiKey("API.Corp.Example", "corp-key")}); len(kept) != 1 {
 		t.Fatalf("exact operator-listed pairing (host case-insensitive): kept=%d, want 1", len(kept))
 	}
 	// ...but not that secret on a DIFFERENT host, nor a DIFFERENT secret on it.
-	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{apiKey("attacker.example", "corp-key")}); len(kept) != 0 {
+	if kept, _, _, _ := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{apiKey("attacker.example", "corp-key")}); len(kept) != 0 {
 		t.Fatalf("operator secret on attacker host: kept=%d, want 0 (dropped)", len(kept))
 	}
-	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{apiKey("api.corp.example", "prod-db-password")}); len(kept) != 0 {
+	if kept, _, _, _ := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{apiKey("api.corp.example", "prod-db-password")}); len(kept) != 0 {
 		t.Fatalf("different secret on listed host: kept=%d, want 0 (dropped)", len(kept))
 	}
 
 	// git_pat references a stored secret too - same drop.
 	gitPAT := types.GrantSpec{Kind: types.GrantGitPAT, Scope: mustJSON(map[string]any{"host": "git.attacker.example", "secret_name": "corp-key"})}
-	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{gitPAT}); len(kept) != 0 {
+	if kept, _, _, _ := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{gitPAT}); len(kept) != 0 {
 		t.Fatalf("member git_pat exfil pairing: kept=%d, want 0 (dropped)", len(kept))
 	}
 
 	// github_token references no stored secret - always kept (its scope is
 	// intersected by composer.Clamp, not gated here).
-	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{{Kind: types.GrantGitHubToken}}); len(kept) != 1 {
+	if kept, _, _, _ := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{{Kind: types.GrantGitHubToken}}); len(kept) != 1 {
 		t.Fatalf("github_token grant: kept=%d, want 1", len(kept))
 	}
 	// A malformed api_key scope is a bad request (fail closed), not a silent drop.
 	bad := types.GrantSpec{Kind: types.GrantAPIKey, Scope: mustJSON(map[string]any{"host": "api.corp.example"})} // no secret_name
-	if _, _, code, err := h.srv.filterMemberGrants([]types.GrantSpec{bad}); code != http.StatusUnprocessableEntity || err == nil {
+	if _, _, code, err := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{bad}); code != http.StatusUnprocessableEntity || err == nil {
 		t.Fatalf("malformed api_key scope: code=%d err=%v, want (422, error)", code, err)
 	}
 	// No grants: nothing to filter.
-	if kept, warns, code, err := h.srv.filterMemberGrants(nil); len(kept) != 0 || len(warns) != 0 || code != 0 || err != nil {
+	if kept, warns, code, err := h.srv.filterMemberGrants(context.Background(), "", nil, nil); len(kept) != 0 || len(warns) != 0 || code != 0 || err != nil {
 		t.Fatalf("no grants: kept=%d warns=%d code=%d err=%v", len(kept), len(warns), code, err)
 	}
 }
@@ -254,17 +255,17 @@ func TestFilterMemberGrants_SSHKeyKnownHostsPairing(t *testing.T) {
 	}
 
 	// Exact pairing (same host, key, known_hosts) is kept.
-	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{sshKey("github.com", "gh-ssh-key", "gh-known-hosts")}); len(kept) != 1 {
+	if kept, _, _, _ := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{sshKey("github.com", "gh-ssh-key", "gh-known-hosts")}); len(kept) != 1 {
 		t.Fatalf("exact ssh_key pairing incl. known_hosts: kept=%d, want 1", len(kept))
 	}
 	// Same host+key, but a DIFFERENT known_hosts_secret_ref of the member's own
 	// choosing: dropped. This is the W12-B-2 bypass case.
-	if kept, warns, code, err := h.srv.filterMemberGrants([]types.GrantSpec{sshKey("github.com", "gh-ssh-key", "attacker-secret")}); len(kept) != 0 || len(warns) != 1 || code != 0 || err != nil {
+	if kept, warns, code, err := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{sshKey("github.com", "gh-ssh-key", "attacker-secret")}); len(kept) != 0 || len(warns) != 1 || code != 0 || err != nil {
 		t.Fatalf("mismatched known_hosts_secret_ref: kept=%d warns=%d code=%d err=%v, want (0,1,0,nil) - member must not smuggle a different known_hosts ref", len(kept), len(warns), code, err)
 	}
 	// Same host+key, known_hosts_secret_ref OMITTED where the ceiling names one:
 	// also not an exact match, dropped.
-	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{sshKey("github.com", "gh-ssh-key", "")}); len(kept) != 0 {
+	if kept, _, _, _ := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{sshKey("github.com", "gh-ssh-key", "")}); len(kept) != 0 {
 		t.Fatalf("omitted known_hosts_secret_ref vs ceiling's set one: kept=%d, want 0", len(kept))
 	}
 
@@ -274,10 +275,10 @@ func TestFilterMemberGrants_SSHKeyKnownHostsPairing(t *testing.T) {
 	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{
 		EligibleGrants: []types.GrantSpec{sshKey("dev.azure.com", "ado-ssh-key", "")},
 	}
-	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{sshKey("dev.azure.com", "ado-ssh-key", "")}); len(kept) != 1 {
+	if kept, _, _, _ := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{sshKey("dev.azure.com", "ado-ssh-key", "")}); len(kept) != 1 {
 		t.Fatalf("both empty known_hosts_secret_ref: kept=%d, want 1", len(kept))
 	}
-	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{sshKey("dev.azure.com", "ado-ssh-key", "some-secret")}); len(kept) != 0 {
+	if kept, _, _, _ := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{sshKey("dev.azure.com", "ado-ssh-key", "some-secret")}); len(kept) != 0 {
 		t.Fatalf("member-added known_hosts_secret_ref where ceiling has none: kept=%d, want 0", len(kept))
 	}
 }
@@ -357,29 +358,29 @@ func TestValidateInlineSecretRefs_Matrix(t *testing.T) {
 	}
 
 	// present => ok (no error, code 0).
-	if code, err := h.srv.validateInlineSecretRefs(ctx, apiKeyGrant("anthropic-api-key")); err != nil || code != 0 {
+	if code, err := h.srv.validateInlineSecretRefs(ctx, "", apiKeyGrant("anthropic-api-key")); err != nil || code != 0 {
 		t.Fatalf("present secret: code=%d err=%v, want (0,nil)", code, err)
 	}
 
 	// no api_key grants => ok regardless of store.
 	noKeys := types.RunPolicySpec{MinConfinementClass: types.CC2}
-	if code, err := h.srv.validateInlineSecretRefs(ctx, noKeys); err != nil || code != 0 {
+	if code, err := h.srv.validateInlineSecretRefs(ctx, "", noKeys); err != nil || code != 0 {
 		t.Fatalf("no api_key grants: code=%d err=%v, want (0,nil)", code, err)
 	}
 
 	// missing secret => 422.
-	if code, err := h.srv.validateInlineSecretRefs(ctx, apiKeyGrant("does-not-exist")); err == nil || code != http.StatusUnprocessableEntity {
+	if code, err := h.srv.validateInlineSecretRefs(ctx, "", apiKeyGrant("does-not-exist")); err == nil || code != http.StatusUnprocessableEntity {
 		t.Fatalf("missing secret: code=%d err=%v, want (422,err)", code, err)
 	}
 
 	// reserved name => 422 (never even consults the store value).
-	if code, err := h.srv.validateInlineSecretRefs(ctx, apiKeyGrant("wardyn-signing-key")); err == nil || code != http.StatusUnprocessableEntity {
+	if code, err := h.srv.validateInlineSecretRefs(ctx, "", apiKeyGrant("wardyn-signing-key")); err == nil || code != http.StatusUnprocessableEntity {
 		t.Fatalf("reserved secret: code=%d err=%v, want (422,err)", code, err)
 	}
 
 	// no store configured => 422.
 	noStore := newHarness(t) // default harness has no Secrets store
-	if code, err := noStore.srv.validateInlineSecretRefs(ctx, apiKeyGrant("anthropic-api-key")); err == nil || code != http.StatusUnprocessableEntity {
+	if code, err := noStore.srv.validateInlineSecretRefs(ctx, "", apiKeyGrant("anthropic-api-key")); err == nil || code != http.StatusUnprocessableEntity {
 		t.Fatalf("no store: code=%d err=%v, want (422,err)", code, err)
 	}
 
@@ -388,12 +389,12 @@ func TestValidateInlineSecretRefs_Matrix(t *testing.T) {
 	// WITH a provider it validates without needing the name in the store (the
 	// saved-workspace-replay fix).
 	sentinel := apiKeyGrant(types.SubscriptionOAuthSecret)
-	if code, err := h.srv.validateInlineSecretRefs(ctx, sentinel); err == nil || code != http.StatusUnprocessableEntity {
+	if code, err := h.srv.validateInlineSecretRefs(ctx, "", sentinel); err == nil || code != http.StatusUnprocessableEntity {
 		t.Fatalf("sentinel w/o provider: code=%d err=%v, want (422,err)", code, err)
 	}
 	h.srv.cfg.SubscriptionToken = fakeSubToken{}
 	defer func() { h.srv.cfg.SubscriptionToken = nil }()
-	if code, err := h.srv.validateInlineSecretRefs(ctx, sentinel); err != nil || code != 0 {
+	if code, err := h.srv.validateInlineSecretRefs(ctx, "", sentinel); err != nil || code != 0 {
 		t.Fatalf("sentinel w/ provider: code=%d err=%v, want (0,nil)", code, err)
 	}
 }
@@ -662,7 +663,7 @@ func TestStoredSecretGrantPairing_UnknownKindIsRefused(t *testing.T) {
 
 	// Gate 1: the whole spec is rejected 422, never silently narrowed.
 	h := newHarness(t)
-	kept, _, code, ferr := h.srv.filterMemberGrants([]types.GrantSpec{unknown})
+	kept, _, code, ferr := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{unknown})
 	if code != http.StatusUnprocessableEntity || ferr == nil || len(kept) != 0 {
 		t.Fatalf("filterMemberGrants(unknown kind): kept=%d code=%d err=%v, want (0, 422, error)", len(kept), code, ferr)
 	}
@@ -670,7 +671,7 @@ func TestStoredSecretGrantPairing_UnknownKindIsRefused(t *testing.T) {
 	// Gate 2 (defense in depth — gate 1 runs first in the only shipped order):
 	// dropped rather than kept, so the ordering is not the only thing holding.
 	spec := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{unknown}}
-	warns, drops, nerr := h.srv.narrowMemberInlinePolicy(context.Background(), &spec)
+	warns, drops, nerr := h.srv.narrowMemberInlinePolicy(context.Background(), "", &spec)
 	if nerr != nil {
 		t.Fatalf("narrowMemberInlinePolicy: unexpected error %v", nerr)
 	}
@@ -684,5 +685,207 @@ func TestStoredSecretGrantPairing_UnknownKindIsRefused(t *testing.T) {
 		if _, _, _, covered, err := storedSecretGrantPairing(types.GrantSpec{Kind: k}); covered || err != nil {
 			t.Fatalf("%s: covered=%v err=%v, want (false, nil)", k, covered, err)
 		}
+	}
+}
+
+// ─── 6c: own-key exemptions ───────────────────────────────────────────────────
+
+// memberAPIKeyGrant builds an api_key grant scoped to (host, secret) — the
+// same shape apiKey() in TestFilterMemberGrants builds, factored out for the
+// own-key tests below.
+func memberAPIKeyGrant(host, secret string) types.GrantSpec {
+	return types.GrantSpec{Kind: types.GrantAPIKey, Scope: mustJSON(map[string]any{"host": host, "secret_name": secret})}
+}
+
+// TestFilterMemberGrants_OwnKeyToModelHost_Kept: a member's OWN api_key
+// secret, paired with a model-provider host the run's own (clamped) egress
+// allows, is admitted with NO operator eligible-grant pairing at all.
+func TestFilterMemberGrants_OwnKeyToModelHost_Kept(t *testing.T) {
+	h := newHarness(t)
+	h.srv.cfg.Secrets = &memSecrets{owned: map[string]map[string][]byte{"bob": {"my-anthropic-key": {}}}}
+	g := memberAPIKeyGrant("api.anthropic.com", "my-anthropic-key")
+	kept, warns, code, err := h.srv.filterMemberGrants(context.Background(), "bob", []string{"api.anthropic.com"}, []types.GrantSpec{g})
+	if err != nil || code != 0 {
+		t.Fatalf("own key to model host: code=%d err=%v", code, err)
+	}
+	if len(kept) != 1 || len(warns) != 0 {
+		t.Fatalf("own key to model host: kept=%d warns=%d, want (1, 0)", len(kept), len(warns))
+	}
+}
+
+// TestFilterMemberGrants_OwnsNothing_Dropped: the same host+ceiling, but the
+// member owns no secret by that name — dropped exactly as an unpaired one is.
+func TestFilterMemberGrants_OwnsNothing_Dropped(t *testing.T) {
+	h := newHarness(t)
+	h.srv.cfg.Secrets = &memSecrets{owned: map[string]map[string][]byte{"bob": {}}}
+	g := memberAPIKeyGrant("api.anthropic.com", "my-anthropic-key")
+	kept, _, code, err := h.srv.filterMemberGrants(context.Background(), "bob", []string{"api.anthropic.com"}, []types.GrantSpec{g})
+	if err != nil || code != 0 {
+		t.Fatalf("owns nothing: code=%d err=%v", code, err)
+	}
+	if len(kept) != 0 {
+		t.Fatalf("owns nothing: kept=%d, want 0", len(kept))
+	}
+}
+
+// TestFilterMemberGrants_OwnKeyToNonModelHost_Dropped: the member owns the
+// secret, but the host is not a model-provider host — the own-key arm never
+// fires for an arbitrary host (it would be a generic secret-exfil primitive).
+func TestFilterMemberGrants_OwnKeyToNonModelHost_Dropped(t *testing.T) {
+	h := newHarness(t)
+	h.srv.cfg.Secrets = &memSecrets{owned: map[string]map[string][]byte{"bob": {"my-key": {}}}}
+	g := memberAPIKeyGrant("attacker.example", "my-key")
+	kept, _, code, err := h.srv.filterMemberGrants(context.Background(), "bob", []string{"attacker.example"}, []types.GrantSpec{g})
+	if err != nil || code != 0 {
+		t.Fatalf("own key to non-model host: code=%d err=%v", code, err)
+	}
+	if len(kept) != 0 {
+		t.Fatalf("own key to non-model host: kept=%d, want 0", len(kept))
+	}
+}
+
+// TestFilterMemberGrants_UnpairedOperatorSecret_Dropped: an OPERATOR-owned
+// secret name (the member owns nothing by that name) paired with a model
+// host, with no operator eligible-grant pairing, is still dropped — ownership
+// must be proved, never assumed from the name alone.
+func TestFilterMemberGrants_UnpairedOperatorSecret_Dropped(t *testing.T) {
+	h := newHarness(t)
+	h.srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"anthropic-api-key": {}}, owned: map[string]map[string][]byte{"bob": {}}}
+	g := memberAPIKeyGrant("api.anthropic.com", "anthropic-api-key")
+	kept, _, code, err := h.srv.filterMemberGrants(context.Background(), "bob", []string{"api.anthropic.com"}, []types.GrantSpec{g})
+	if err != nil || code != 0 {
+		t.Fatalf("unpaired operator secret: code=%d err=%v", code, err)
+	}
+	if len(kept) != 0 {
+		t.Fatalf("unpaired operator secret: kept=%d, want 0 (the member does not own this name)", len(kept))
+	}
+}
+
+// TestFilterMemberGrants_GitPATOwnSecret_Dropped: the own-key arm is api_key
+// only — a git_pat pairing the member "owns" the secret for still needs the
+// operator's eligible-grant pairing (git_pat/ssh_key/env_secret stay
+// ceiling-paired, per the plan).
+func TestFilterMemberGrants_GitPATOwnSecret_Dropped(t *testing.T) {
+	h := newHarness(t)
+	h.srv.cfg.Secrets = &memSecrets{owned: map[string]map[string][]byte{"bob": {"my-pat": {}}}}
+	g := types.GrantSpec{Kind: types.GrantGitPAT, Scope: mustJSON(map[string]any{"host": "gitlab.corp.example", "secret_name": "my-pat"})}
+	kept, _, code, err := h.srv.filterMemberGrants(context.Background(), "bob", []string{"gitlab.corp.example"}, []types.GrantSpec{g})
+	if err != nil || code != 0 {
+		t.Fatalf("git_pat own secret: code=%d err=%v", code, err)
+	}
+	if len(kept) != 0 {
+		t.Fatalf("git_pat own secret: kept=%d, want 0 (git_pat stays ceiling-paired)", len(kept))
+	}
+}
+
+// TestNarrowMemberInlinePolicy_CapSecretOwnKey_Kept_OperatorOnlyName_Refused:
+// with capSecret ENFORCED and no capability grants at all, a member's own
+// secret name is exempt (kept); an operator-only name is still refused.
+func TestNarrowMemberInlinePolicy_CapSecretOwnKey_Kept_OperatorOnlyName_Refused(t *testing.T) {
+	st := &capStore{enf: map[string]bool{capSecret: true}}
+	srv := capServer(st)
+	srv.cfg.Secrets = &memSecrets{owned: map[string]map[string][]byte{"bob": {"my-own-key": {}}}}
+	ctx := memberCtx(nil)
+
+	own := &types.RunPolicySpec{EligibleGrants: []types.GrantSpec{memberAPIKeyGrant("api.anthropic.com", "my-own-key")}}
+	_, drops, err := srv.narrowMemberInlinePolicy(ctx, "bob", own)
+	if err != nil {
+		t.Fatalf("own key: unexpected error %v", err)
+	}
+	if len(own.EligibleGrants) != 1 || len(drops) != 0 {
+		t.Fatalf("own key must be kept under enforced capSecret with no grant, got kept=%d drops=%+v", len(own.EligibleGrants), drops)
+	}
+
+	opOnly := &types.RunPolicySpec{EligibleGrants: []types.GrantSpec{memberAPIKeyGrant("api.anthropic.com", "operator-only-key")}}
+	_, drops2, err2 := srv.narrowMemberInlinePolicy(ctx, "bob", opOnly)
+	if err2 != nil {
+		t.Fatalf("operator-only name: unexpected error %v", err2)
+	}
+	if len(opOnly.EligibleGrants) != 0 || len(drops2) != 1 {
+		t.Fatalf("an operator-only name must still be refused under enforced capSecret, got kept=%d drops=%+v", len(opOnly.EligibleGrants), drops2)
+	}
+}
+
+// TestValidateInlineSecretRefs_OwnName_201: an api_key grant naming a secret
+// the operator does NOT hold, but the member DOES own, passes — the operator
+// lacking the name is not itself a 422 once ownership covers it.
+func TestValidateInlineSecretRefs_OwnName_201(t *testing.T) {
+	h := newHarness(t)
+	h.srv.cfg.Secrets = &memSecrets{owned: map[string]map[string][]byte{"bob": {"my-anthropic-key": {}}}}
+	spec := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{memberAPIKeyGrant("api.anthropic.com", "my-anthropic-key")}}
+	if code, err := h.srv.validateInlineSecretRefs(context.Background(), "bob", spec); err != nil || code != 0 {
+		t.Fatalf("own name, operator lacks it: code=%d err=%v, want (0, nil)", code, err)
+	}
+	// Negative control: an operator-only name the member doesn't own still 422s.
+	spec2 := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{memberAPIKeyGrant("api.anthropic.com", "operator-only-key")}}
+	if code, err := h.srv.validateInlineSecretRefs(context.Background(), "bob", spec2); err == nil || code != http.StatusUnprocessableEntity {
+		t.Fatalf("operator-only name, not owned: code=%d err=%v, want (422, error)", code, err)
+	}
+}
+
+// TestCreateRun_OperatorStillUnclamped: an operator's inline_policy is NEVER
+// routed through filterMemberGrants/narrowMemberInlinePolicy — an egress host
+// and a grant pairing that would be dropped for a member survive untouched,
+// with zero clamp warnings, for an operator caller.
+func TestCreateRun_OperatorStillUnclamped(t *testing.T) {
+	h := newHarness(t)
+	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{
+		AllowedDomains:      []string{"api.anthropic.com"},
+		MinConfinementClass: types.CC2,
+	}
+	h.srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"prod-db-password": []byte("v")}}
+	req := createRunRequest{
+		Agent: "claude-code",
+		InlinePolicy: &types.RunPolicySpec{
+			MinConfinementClass: types.CC2,
+			AllowedDomains:      []string{"attacker.example"},
+			EligibleGrants:      []types.GrantSpec{memberAPIKeyGrant("attacker.example", "prod-db-password")},
+		},
+	}
+	w := httptest.NewRecorder()
+	// A plain request with no OIDC session reads as operator (isOperator).
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
+	spec, _, warnings, ok := h.srv.resolveRunPolicy(context.Background(), w, r, &req, false)
+	if !ok {
+		t.Fatalf("resolveRunPolicy rejected: %s", w.Body.String())
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("an operator must never be clamped, got warnings %v", warnings)
+	}
+	if len(spec.AllowedDomains) != 1 || spec.AllowedDomains[0] != "attacker.example" {
+		t.Fatalf("operator's own inline egress must survive unclamped, got %v", spec.AllowedDomains)
+	}
+	if len(spec.EligibleGrants) != 1 {
+		t.Fatalf("operator's own inline grant must survive unclamped, got %d", len(spec.EligibleGrants))
+	}
+}
+
+// TestIntegrations_MemberKeySynthesisesRow_NoWarning: a member's own
+// anthropic-api-key secret, with NO operator row of that name at all,
+// synthesises the legacy anthropic_api_key integration row and provisions
+// model access with no "no model access" warning.
+func TestIntegrations_MemberKeySynthesisesRow_NoWarning(t *testing.T) {
+	h := newHarness(t)
+	h.srv.cfg.Secrets = &memSecrets{owned: map[string]map[string][]byte{"bob": {"anthropic-api-key": []byte("sk-ant-test")}}}
+
+	integ, ok := h.srv.resolveIntegrationRef(context.Background(), "bob", "anthropic_api_key")
+	if !ok {
+		t.Fatal("member's own anthropic-api-key must synthesise the legacy anthropic_api_key row")
+	}
+	if !types.AIProviderKind(integ.Kind) {
+		t.Fatalf("synthesised row kind = %q, not an AI-provider kind", integ.Kind)
+	}
+
+	present := h.srv.presentSecretNamesFor(context.Background(), "bob")
+	if !present["anthropic-api-key"] {
+		t.Fatal("presentSecretNamesFor must include the member's own secret")
+	}
+	spec := &types.RunPolicySpec{
+		AllowedDomains: []string{"api.anthropic.com"},
+		EligibleGrants: []types.GrantSpec{memberAPIKeyGrant("api.anthropic.com", "anthropic-api-key")},
+	}
+	note, provisioned := h.srv.reconcileLLMAccess(spec, "claude-code", present, false, false)
+	if !provisioned {
+		t.Fatalf("expected model access provisioned with no operator row, got note=%q", note)
 	}
 }

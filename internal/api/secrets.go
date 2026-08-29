@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -408,6 +409,48 @@ func (s *Server) presentSecretNames(ctx context.Context) map[string]bool {
 		present[n] = true
 	}
 	return present
+}
+
+// presentSecretNamesFor widens presentSecretNames to a caller's own namespace:
+// the operator names UNION owner's own reserved-filtered names (For(owner).List
+// — own rows only, never another member's). owner == "" collapses to exactly
+// presentSecretNames (the byte-identical-for-operators case). This is what lets
+// a member's own anthropic-api-key synthesise their anthropic_api_key row
+// (effectiveIntegrations) and satisfy a model-access verdict with no operator
+// row at all.
+func (s *Server) presentSecretNamesFor(ctx context.Context, owner string) map[string]bool {
+	present := s.presentSecretNames(ctx)
+	if owner == "" || s.cfg.Secrets == nil {
+		return present
+	}
+	names, err := reservedFilteredSecretNames(ctx, s.cfg.Secrets.For(owner))
+	if err != nil {
+		return present
+	}
+	for _, n := range names {
+		present[n] = true
+	}
+	return present
+}
+
+// ownsSecret reports whether owner holds their OWN secret named name — a
+// names-only For(owner).List (own rows only, never the operator fallback Get
+// would give), so a member's ownership claim is provable, never merely
+// unrefuted. owner == "" (an operator) never "owns" anything by this path —
+// operator material is governed by the ceiling, not ownership.
+//
+// ponytail: one List call per invocation, no per-request cache — a member's
+// inline policy carries a handful of grants at most, so this never runs in a
+// loop large enough to matter; add a cache if a caller ever iterates hundreds.
+func (s *Server) ownsSecret(ctx context.Context, owner, name string) bool {
+	if owner == "" || name == "" || s.cfg.Secrets == nil {
+		return false
+	}
+	names, err := s.cfg.Secrets.For(owner).List(ctx)
+	if err != nil {
+		return false
+	}
+	return slices.Contains(names, name)
 }
 
 // formatInjectionValue applies an injection rule's Format ("%s"-style) to the

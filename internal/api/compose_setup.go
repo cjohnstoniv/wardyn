@@ -67,7 +67,7 @@ type SetupFix struct {
 // per compose round, after grading and before the advisory audit is assembled
 // (runComposePipeline). Non-blocking: items never gate the proposal, they only
 // inform the review panel (Decision 4).
-func (s *Server) deriveSetupItems(ctx context.Context, run composer.RunInput, spec types.RunPolicySpec, presentSecrets map[string]bool, llmAccess *composeLLMAccess) []SetupItem {
+func (s *Server) deriveSetupItems(ctx context.Context, owner string, run composer.RunInput, spec types.RunPolicySpec, presentSecrets map[string]bool, llmAccess *composeLLMAccess) []SetupItem {
 	var items []SetupItem
 
 	if it, ok := s.setupBackendItem(ctx, run, spec); ok {
@@ -85,7 +85,7 @@ func (s *Server) deriveSetupItems(ctx context.Context, run composer.RunInput, sp
 	workspaces := s.referencedWorkspaces(ctx, spec)
 	items = append(items, setupWorkspaceItems(workspaces)...)
 	items = append(items, setupWorkspaceSecretItems(workspaces, presentSecrets)...)
-	items = append(items, s.setupWorkspaceIntegrationItems(ctx, workspaces, presentSecrets)...)
+	items = append(items, s.setupWorkspaceIntegrationItems(ctx, owner, workspaces, presentSecrets)...)
 	items = append(items, setupRepoCredentialItems(spec, presentSecrets)...)
 	if it, ok := setupEgressWorkspaceItem(spec, workspaces); ok {
 		items = append(items, it)
@@ -603,7 +603,7 @@ const maxWorkspaceIntegrationRows = 6
 // Optional requirements are deliberately not rowed: they only apply when a run
 // enables them, so listing every one an operator declined would bury the
 // required set they actually depend on.
-func (s *Server) setupWorkspaceIntegrationItems(ctx context.Context, workspaces []types.Workspace, presentSecrets map[string]bool) []SetupItem {
+func (s *Server) setupWorkspaceIntegrationItems(ctx context.Context, owner string, workspaces []types.Workspace, presentSecrets map[string]bool) []SetupItem {
 	// id -> the workspace that requires it (first wins; the row is about the
 	// integration, and naming one workspace is enough provenance).
 	requiredBy := map[string]string{}
@@ -638,7 +638,7 @@ func (s *Server) setupWorkspaceIntegrationItems(ctx context.Context, workspaces 
 			})
 			break
 		}
-		integ, ok := s.resolveIntegrationRef(ctx, id)
+		integ, ok := s.resolveIntegrationRef(ctx, owner, id)
 		items = append(items, integrationSetupItem(id, requiredBy[id], integ, ok, presentSecrets))
 	}
 	return items

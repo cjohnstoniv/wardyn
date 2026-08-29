@@ -420,7 +420,7 @@ func (s *Server) promoteSkipHosts(ctx context.Context, ws types.Workspace) map[s
 func (s *Server) integrationRequirementHosts(ctx context.Context, ws types.Workspace) []string {
 	var hosts []string
 	for _, id := range requiredIntegrationIDs(ws) {
-		if integ, ok := s.resolveIntegrationRef(ctx, id); ok {
+		if integ, ok := s.resolveIntegrationRef(ctx, "", id); ok {
 			hosts = append(hosts, integ.Egress...)
 		}
 	}
@@ -438,7 +438,7 @@ func (s *Server) workspaceModelProviderHosts(ctx context.Context, ws types.Works
 	if ws.LLMCred == nil || ws.LLMCred.IntegrationRef == "" {
 		return nil
 	}
-	integ, ok := s.resolveIntegrationRef(ctx, ws.LLMCred.IntegrationRef)
+	integ, ok := s.resolveIntegrationRef(ctx, "", ws.LLMCred.IntegrationRef)
 	if !ok || integ.Kind != types.IntegrationKindBedrock {
 		return nil
 	}

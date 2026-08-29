@@ -472,7 +472,7 @@ func TestPG_ConcurrentMintOnApproval_ExactlyOnce(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start // release together to maximize contention on the mint tx
-			minted, err := b.MintOnApproval(ctx, runID, grantID)
+			minted, err := b.MintOnApproval(ctx, runID, grantID, "")
 			mu.Lock()
 			defer mu.Unlock()
 			switch {

@@ -85,20 +85,31 @@ action vocabulary is [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
 
 ## Your model key
 
-Members cannot store their own model credential yet — this is current, known
-truth, not a bug you've found. Until that lands, see
-[What to ask your admin for](#what-to-ask-your-admin-for) below: your admin
-grants model access through an operator integration or a workspace
-requirement. (This section will change, and gain a "Your model key" step in
-Getting Started, once per-principal secrets ship.)
+Store your own key under the provider-convention name from Getting Started ▸
+Your model key (`anthropic-api-key` for Claude, `openai-api-key` for Codex)
+via `PUT /secrets/<name>` or the console — `GET /secrets` shows it under
+`mine`, never under a name another member wrote. Pick it under Model access
+when you launch a run; your run then uses YOUR key, injected proxy-side
+exactly like an operator's own (the value is never resident in the sandbox).
+Setting your own key needs no operator integration or workspace requirement
+first — an unpaired stored secret still needs one of those, but your own
+key naming the provider convention does not.
+
+Bounds: this is API-key mode only — the resident Claude-subscription mount
+stays operator-only (see [DESKTOP.md § Model access on
+m′](DESKTOP.md#model-access-on-m)), and `bedrock-api-key`/AWS credential
+names are refused for a member's own `PUT /secrets` regardless (Bedrock
+stays the MDM-managed lane). Your own row is visible only to you and to your
+own runs — another member can never read or inject it, even by naming it in
+their own inline policy.
 
 ## What to ask your admin for
 
-- **Model access.** Today this means an operator integration, or a workspace
-  requirement, that re-adds a model grant after your policy is clamped — see
-  [DESKTOP.md § Model access on m′](DESKTOP.md#model-access-on-m) and
-  [ROADMAP.md](../ROADMAP.md) ("A member's inline model-access grant needs an
-  operator integration").
+- **Model access, when you'd rather not store your own key.** An operator
+  integration, or a workspace requirement, re-adds a model grant after your
+  policy is clamped — see [DESKTOP.md § Model access on
+  m′](DESKTOP.md#model-access-on-m). If you'd rather bring your own key, see
+  [Your model key](#your-model-key) above — no admin action needed.
 - **A custom sandbox image** — an `image` capability grant.
 - **A workspace root**, if you don't have one yet.
 - **A wider egress ceiling** — the stored policy is your admin's to change,

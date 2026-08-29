@@ -98,7 +98,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 			// launch by foldRunIntegration (an operator integration) or
 			// applyWorkspaceRequirements (a workspace requirement) below. See
 			// filterMemberGrants.
-			kept, grantWarns, code, gerr := s.filterMemberGrants(spec.EligibleGrants)
+			kept, grantWarns, code, gerr := s.filterMemberGrants(ctx, s.secretOwnerFromRequest(r), spec.AllowedDomains, spec.EligibleGrants)
 			if gerr != nil {
 				writeError(w, code, "invalid inline_policy: "+gerr.Error())
 				return types.RunPolicySpec{}, nil, nil, false
@@ -116,7 +116,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 			// 0.6 capabilities: the clamp above bounds the member to the
 			// OPERATOR's ceiling; this bounds what survived it to what THIS
 			// member personally holds.
-			capWarns, capDrops, cerr := s.narrowMemberInlinePolicy(ctx, &spec)
+			capWarns, capDrops, cerr := s.narrowMemberInlinePolicy(ctx, s.secretOwnerFromRequest(r), &spec)
 			if cerr != nil {
 				writeError(w, http.StatusInternalServerError, "resolve capability: "+cerr.Error())
 				return types.RunPolicySpec{}, nil, nil, false
@@ -134,7 +134,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 			writeError(w, http.StatusBadRequest, "invalid inline_policy: "+err.Error())
 			return types.RunPolicySpec{}, nil, nil, false
 		}
-		if code, err := s.validateInlineSecretRefs(ctx, spec); err != nil {
+		if code, err := s.validateInlineSecretRefs(ctx, s.secretOwnerFromRequest(r), spec); err != nil {
 			writeError(w, code, "invalid inline_policy: "+err.Error())
 			return types.RunPolicySpec{}, nil, nil, false
 		}
@@ -167,7 +167,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		writeError(w, http.StatusInternalServerError, "resolve policy: "+err.Error())
 		return types.RunPolicySpec{}, nil, nil, false
 	}
-	if code, err := s.validateInlineSecretRefs(ctx, spec); err != nil {
+	if code, err := s.validateInlineSecretRefs(ctx, s.secretOwnerFromRequest(r), spec); err != nil {
 		writeError(w, code, "invalid policy: "+err.Error())
 		return types.RunPolicySpec{}, nil, nil, false
 	}
@@ -207,7 +207,7 @@ type capDrop struct{ reason, detail string }
 // non-denied public host), so egress_host narrowing does nothing there. That is
 // the operator's own posture, named here so nobody reads a green switch as a
 // bound that deployment does not have.
-func (s *Server) narrowMemberInlinePolicy(ctx context.Context, spec *types.RunPolicySpec) ([]string, []capDrop, error) {
+func (s *Server) narrowMemberInlinePolicy(ctx context.Context, owner string, spec *types.RunPolicySpec) ([]string, []capDrop, error) {
 	var warns []string
 	var drops []capDrop
 
@@ -257,6 +257,12 @@ func (s *Server) narrowMemberInlinePolicy(ctx context.Context, spec *types.RunPo
 		refused := ""
 		for _, ref := range []string{secretRef, knownHostsRef} {
 			if ref == "" {
+				continue
+			}
+			// A name the member OWNS is exempt from capSecret: that capability
+			// bounds access to OPERATOR material, and a member's own row widens
+			// nothing (6c).
+			if s.ownsSecret(ctx, owner, ref) {
 				continue
 			}
 			ok, err := s.capSeamAllowed(ctx, capSecret, ref)
@@ -380,7 +386,7 @@ func (s *Server) auditMemberPolicyDrops(ctx context.Context, r *http.Request, dr
 // or, since the pairing switch closed, an UNKNOWN KIND — is a malformed request
 // → error (fail closed), never a silent drop. env_secret is admin-only and is
 // dropped for a member regardless of the ceiling; see the block below.
-func (s *Server) filterMemberGrants(grants []types.GrantSpec) (kept []types.GrantSpec, warns []string, code int, err error) {
+func (s *Server) filterMemberGrants(ctx context.Context, owner string, allowedDomains []string, grants []types.GrantSpec) (kept []types.GrantSpec, warns []string, code int, err error) {
 	ceiling := s.cfg.DefaultPolicy.EligibleGrants
 	for _, g := range grants {
 		host, secretRef, knownHostsRef, covered, derr := storedSecretGrantPairing(g)
@@ -394,6 +400,20 @@ func (s *Server) filterMemberGrants(grants []types.GrantSpec) (kept []types.Gran
 		if g.Kind == types.GrantAPIKey {
 			if _, _, isSentinel := s.oauthProviderForSentinel(secretRef); isSentinel {
 				kept = append(kept, g) // host-pinned to the provider by validateInlineSecretRefs
+				continue
+			}
+			// 6c own-key arm: a member's OWN api_key secret, paired with a
+			// model-provider host (isModelProviderHost — the gateway counts
+			// too) that the run's own already-clamped egress allows, is
+			// admitted with NO operator eligible-grant pairing at all — this
+			// is what lets a member's own model key be used with no hand-
+			// authored inline grant naming an operator secret. host must be
+			// an EXACT allowedDomains entry (the load-bearing half — Clamp
+			// has already intersected egress to the ceiling; the suffix
+			// match alone would admit evilanthropic.com), and ownership is
+			// proved by a names-only For(owner).List, never a value read.
+			if s.isModelProviderHost(host) && domainAllowedExact(allowedDomains, host) && s.ownsSecret(ctx, owner, secretRef) {
+				kept = append(kept, g)
 				continue
 			}
 		}
@@ -510,7 +530,7 @@ func storedSecretPairingInCeiling(kind types.GrantKind, host, secretRef, knownHo
 	return false
 }
 
-func (s *Server) validateInlineSecretRefs(ctx context.Context, spec types.RunPolicySpec) (int, error) {
+func (s *Server) validateInlineSecretRefs(ctx context.Context, owner string, spec types.RunPolicySpec) (int, error) {
 	// Collect the secret names referenced by api_key, git_pat AND ssh_key
 	// grants (all three resolve a stored secret by name — api_key proxy-side,
 	// git_pat via the git helper, ssh_key as the resident key + optional
@@ -599,7 +619,11 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, spec types.RunPol
 		known[n] = true
 	}
 	for _, n := range needed {
-		if !known[n] {
+		// A name in owner's OWN namespace (For(owner).List — own rows only) is
+		// accepted too — this is what lets a member's inline_policy name their
+		// own model key with no operator row of that name at all (6c). Never
+		// widens: an operator-only name still 422s below.
+		if !known[n] && !s.ownsSecret(ctx, owner, n) {
 			return http.StatusUnprocessableEntity, fmt.Errorf(
 				"api_key grant references unknown secret %q (set it first via the secrets API)", n)
 		}

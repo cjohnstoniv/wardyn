@@ -67,23 +67,23 @@ func TestFilterMemberGrants_EnvSecretIsAdminOnly(t *testing.T) {
 	}
 	listed := envSecretGrant("CORP_API_TOKEN", "corp-token")
 
-	kept, warns, code, err := h.srv.filterMemberGrants([]types.GrantSpec{listed})
+	kept, warns, code, err := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{listed})
 	if len(kept) != 0 || len(warns) != 1 || code != 0 || err != nil {
 		t.Fatalf("default posture: kept=%d warns=%d code=%d err=%v, want (0,1,0,nil) — env_secret is admin-only",
 			len(kept), len(warns), code, err)
 	}
 
 	t.Setenv(envAllowMemberEnvSecret, "1")
-	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{listed}); len(kept) != 1 {
+	if kept, _, _, _ := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{listed}); len(kept) != 1 {
 		t.Fatalf("posture open, ceiling-listed pairing: kept=%d, want 1", len(kept))
 	}
 	// Still bounded by the ceiling pairing once open: the NAME is part of the
 	// match, so an operator-blessed secret cannot be re-homed to a variable the
 	// operator never wrote.
-	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{envSecretGrant("OTHER_VAR", "corp-token")}); len(kept) != 0 {
+	if kept, _, _, _ := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{envSecretGrant("OTHER_VAR", "corp-token")}); len(kept) != 0 {
 		t.Fatalf("posture open, unlisted variable name: kept=%d, want 0", len(kept))
 	}
-	if kept, _, _, _ := h.srv.filterMemberGrants([]types.GrantSpec{envSecretGrant("CORP_API_TOKEN", "prod-db-password")}); len(kept) != 0 {
+	if kept, _, _, _ := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{envSecretGrant("CORP_API_TOKEN", "prod-db-password")}); len(kept) != 0 {
 		t.Fatalf("posture open, unlisted secret: kept=%d, want 0", len(kept))
 	}
 }

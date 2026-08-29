@@ -112,7 +112,7 @@ func TestSetupWorkspaceIntegrationItems_OnlyRequired(t *testing.T) {
 		"integration:corp-jira": {Level: "optional", Provenance: "operator_set"},
 		"egress:api.stripe.com": {Level: "required", Provenance: "operator_set"},
 	}}
-	items := srv.setupWorkspaceIntegrationItems(t.Context(), []types.Workspace{ws}, map[string]bool{"artifactory-token": true})
+	items := srv.setupWorkspaceIntegrationItems(t.Context(), "", []types.Workspace{ws}, map[string]bool{"artifactory-token": true})
 	if len(items) != 1 {
 		t.Fatalf("items = %+v, want exactly the one REQUIRED integration", items)
 	}
@@ -131,7 +131,7 @@ func TestSetupWorkspaceIntegrationItems_NoneIsNoRows(t *testing.T) {
 	ws := types.Workspace{Name: "payments", Requirements: map[string]types.WorkspaceRequirement{
 		"secret:acme-key": {Level: "required", Provenance: "operator_set"},
 	}}
-	if items := srv.setupWorkspaceIntegrationItems(t.Context(), []types.Workspace{ws}, nil); len(items) != 0 {
+	if items := srv.setupWorkspaceIntegrationItems(t.Context(), "", []types.Workspace{ws}, nil); len(items) != 0 {
 		t.Errorf("items = %+v, want none", items)
 	}
 }
@@ -144,7 +144,7 @@ func TestSetupWorkspaceIntegrationItems_UnconfiguredIsVisible(t *testing.T) {
 	ws := types.Workspace{Name: "payments", Requirements: map[string]types.WorkspaceRequirement{
 		"integration:not-configured-yet": {Level: "required", Provenance: "operator_set"},
 	}}
-	items := srv.setupWorkspaceIntegrationItems(t.Context(), []types.Workspace{ws}, nil)
+	items := srv.setupWorkspaceIntegrationItems(t.Context(), "", []types.Workspace{ws}, nil)
 	if len(items) != 1 || items[0].Status != "missing" {
 		t.Fatalf("items = %+v, want one missing row", items)
 	}

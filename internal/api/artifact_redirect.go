@@ -315,7 +315,7 @@ type redirectToken struct{ secretName, header, format string }
 // that is not in the store.
 func (s *Server) resolveRedirectToken(ctx context.Context, r types.EgressRedirect, present map[string]bool) (redirectToken, string) {
 	if r.TokenIntegrationRef != "" {
-		integ, found := s.resolveIntegrationRef(ctx, r.TokenIntegrationRef)
+		integ, found := s.resolveIntegrationRef(ctx, "", r.TokenIntegrationRef)
 		switch {
 		case !found:
 			return redirectToken{}, "token_integration_ref names no configured integration"

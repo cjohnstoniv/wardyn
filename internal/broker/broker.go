@@ -368,8 +368,14 @@ func (b *Broker) MintForGrant(ctx context.Context, caller *identity.Claims, gran
 // single-use + no-widening, calls the kind-specific minter, and writes
 // minted_jti back before committing. It is also reachable directly from the
 // approval FSM (decide -> mint) by callers that already hold approved state.
-func (b *Broker) MintOnApproval(ctx context.Context, runID, grantID uuid.UUID) (Minted, error) {
-	caller := &identity.Claims{RunID: runID, SPIFFEID: spiffeForRun(runID)}
+//
+// sub is the run's OWNER (its CreatedBy, "" for an operator-created run) —
+// the caller loads the run and passes it, so a git_pat/ssh_key mint on THIS
+// path resolves the run's own secretstore.Store.For namespace exactly like
+// MintForGrant's fully-populated caller does, instead of always falling back
+// to the operator namespace (see ownerOf).
+func (b *Broker) MintOnApproval(ctx context.Context, runID, grantID uuid.UUID, sub string) (Minted, error) {
+	caller := &identity.Claims{RunID: runID, SPIFFEID: spiffeForRun(runID), Sub: sub}
 	return b.mint(ctx, caller, grantID, uuid.Nil)
 }
 
