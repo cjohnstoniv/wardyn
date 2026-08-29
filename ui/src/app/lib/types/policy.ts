@@ -149,26 +149,41 @@ export const MAX_TOOL_RULE_NAME_LEN = 64;
 // The SERVER stays the authority — this only spares the operator a round trip.
 // An empty list is legal, and is today's behaviour: every gated call under
 // `hold` goes to a human.
-export function toolRulesProblem(rules: readonly ToolRule[]): string | null {
+//
+// The argument is UNKNOWN, not ToolRule[]: the panel's parseSpec is a bare cast
+// over a free-form textarea, so every shape a JSON document can hold reaches
+// here. A malformed one is a refusal to READ — a throw would hit the route's
+// ErrorBoundary and take the operator's whole draft with it.
+export function toolRulesProblem(rules: readonly ToolRule[] | unknown): string | null {
+  if (!Array.isArray(rules)) return "tool_rules must be a list.";
   if (rules.length > MAX_TOOL_RULES) {
     return `${rules.length} rules exceeds the maximum of ${MAX_TOOL_RULES}.`;
   }
   const seen = new Set<string>();
-  for (const r of rules) {
-    const name = r.tool.trim();
-    if (name === "") return "Every rule needs a tool name (use * for the default).";
+  for (const r of rules as readonly Partial<ToolRule>[]) {
+    // A missing or non-string name is the same refusal as an empty one — the
+    // rule still needs a name. Go never reaches validateToolRules for these:
+    // the decode into []types.ToolRule refuses them first, with no message
+    // worth mirroring.
+    const tool = r?.tool;
+    if (typeof tool !== "string" || tool.trim() === "") {
+      return "Every rule needs a tool name (use * for the default).";
+    }
+    const name = tool.trim();
     if (name.length > MAX_TOOL_RULE_NAME_LEN) {
       return `“${name}” exceeds ${MAX_TOOL_RULE_NAME_LEN} characters.`;
     }
-    if (name !== r.tool) {
-      return `“${r.tool}” has leading or trailing whitespace; the match is exact, so it would never fire.`;
+    if (name !== tool) {
+      return `“${tool}” has leading or trailing whitespace; the match is exact, so it would never fire.`;
     }
     if (seen.has(name)) {
       return `Two rules name “${name}” — one of them does nothing.`;
     }
     seen.add(name);
-    if (!TOOL_EFFECTS.includes(r.effect)) {
-      return `“${r.effect}” is not an effect (want allow, hold or deny).`;
+    // Widened deliberately: a missing/number/object effect is not a ToolEffect,
+    // and this closed-enum check is already the refusal for every one of them.
+    if (!(TOOL_EFFECTS as readonly unknown[]).includes(r.effect)) {
+      return `“${String(r.effect)}” is not an effect (want allow, hold or deny).`;
     }
   }
   return null;

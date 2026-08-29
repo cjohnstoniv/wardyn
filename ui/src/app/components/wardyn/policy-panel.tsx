@@ -405,12 +405,17 @@ const EFFECT_TONE: Record<ToolEffect, string> = {
 // and the caller then raises a human approval — which is exactly what hold does.
 // So the default row can state `hold` honestly whether or not the document
 // spells the rule out.
+//
+// A non-list `tool_rules` reads as NO rules: parseSpec is a bare cast, so the
+// textarea can hand this a string or an object, and the section has to render
+// the refusal toolRulesProblem returns for it — throwing here would hit the
+// route's ErrorBoundary and take the operator's draft with it.
 export function splitToolRules(rules: readonly ToolRule[] | undefined): {
   named: ToolRule[];
   defaultEffect: ToolEffect;
   explicitDefault: boolean;
 } {
-  const all = rules ?? [];
+  const all = Array.isArray(rules) ? rules : [];
   const fallback = all.find((r) => r.tool === TOOL_RULE_DEFAULT);
   return {
     named: all.filter((r) => r.tool !== TOOL_RULE_DEFAULT),
@@ -445,11 +450,11 @@ export function withToolRules(
 // The new-run rail's one line. It NAMES the tools: "3 rules" alone would say
 // nothing about which calls still stop for a human. Null when the run has no
 // rules at all, so a policy written before the field existed grows no empty
-// rail section.
+// rail section — and so does a malformed one, which the panel's own refusal
+// names rather than this rail inventing a summary of nothing.
 export function toolRulesSummary(spec: RunPolicySpec): string | null {
-  const rules = spec.tool_rules ?? [];
-  if (rules.length === 0) return null;
-  const { named, defaultEffect } = splitToolRules(rules);
+  const { named, defaultEffect, explicitDefault } = splitToolRules(spec.tool_rules);
+  if (named.length === 0 && !explicitDefault) return null;
   const tail = `Anything else is ${EFFECT_PAST[defaultEffect] ?? defaultEffect}.`;
   if (named.length === 0) return tail;
   const listed = named.map((r) => `${r.tool} ${EFFECT_PAST[r.effect] ?? r.effect}`).join(", ");

@@ -154,3 +154,37 @@ describe("toolRulesProblem — mirrors validateToolRules", () => {
     expect(toolRulesProblem([{ tool: "x".repeat(MAX_TOOL_RULE_NAME_LEN), effect: "hold" }])).toBeNull();
   });
 });
+
+// The panel's parseSpec is a bare cast over a free-form textarea, so this gets
+// whatever the operator typed — not a ToolRule[]. Every case below THREW before:
+// `[{}]` and `"x"` on `.tool.trim()`, `{}` on the for-of. The throw unmounted
+// the route (ErrorBoundary) mid-edit and took the draft with it. A refusal is
+// the only acceptable answer for a shape the server would 400 anyway.
+describe("toolRulesProblem — malformed documents refuse, never throw", () => {
+  const malformed: unknown[] = ["x", {}, 7, null, [{}], [null], [{ tool: 1, effect: "allow" }]];
+
+  it.each(malformed)("refuses %j with a message instead of throwing", (value) => {
+    const problem = toolRulesProblem(value);
+    expect(typeof problem).toBe("string");
+    expect(problem).not.toBe("");
+  });
+
+  it("says a non-list tool_rules is not a list", () => {
+    expect(toolRulesProblem("x")).toBe("tool_rules must be a list.");
+    expect(toolRulesProblem({})).toBe("tool_rules must be a list.");
+  });
+
+  it("treats a missing or non-string tool name as the same refusal as an empty one", () => {
+    const empty = toolRulesProblem([{ tool: "", effect: "hold" }]);
+    expect(toolRulesProblem([{}])).toBe(empty);
+    expect(toolRulesProblem([{ tool: 1, effect: "allow" }])).toBe(empty);
+  });
+
+  // The effect branch already refused a non-string (Array.includes is false for
+  // one, and the message stringifies it) — asserted so it stays that way beside
+  // the new tool guard.
+  it("refuses a non-string effect through the existing enum check", () => {
+    expect(toolRulesProblem([{ tool: "Bash" }])).toMatch(/is not an effect/);
+    expect(toolRulesProblem([{ tool: "Bash", effect: 1 }])).toMatch(/is not an effect/);
+  });
+});

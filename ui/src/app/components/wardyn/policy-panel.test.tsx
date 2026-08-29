@@ -363,6 +363,23 @@ describe("PolicyPanel — the tool_rules section", () => {
       screen.getByText(/it never widens what the agent may do/),
     ).toBeInTheDocument();
   });
+
+  // parseSpec is a bare cast: whatever object the textarea parses to arrives
+  // here as a "RunPolicySpec". Typing any of these used to THROW out of the
+  // section into the route's ErrorBoundary, blanking the screen and losing the
+  // draft mid-edit. The section has to keep rendering and say what is wrong.
+  it.each([
+    ["a rule with no fields", [{}]],
+    ["a rule with a numeric tool", [{ tool: 1, effect: "allow" }]],
+    ["a string instead of a list", "x"],
+    ["an object instead of a list", {}],
+  ])("renders a refusal, not a crash, for %s", (_label, tool_rules) => {
+    render(<Harness initial={JSON.stringify({ ...JSON.parse(VALID), tool_rules })} />);
+    // The section itself is still on screen…
+    expect(screen.getByText(/it never widens what the agent may do/)).toBeInTheDocument();
+    // …and it names the problem rather than swallowing it.
+    expect(screen.getByRole("alert")).toHaveTextContent(/\S/);
+  });
 });
 
 // The rail's one line. It names the tools on purpose: a bare count says nothing
