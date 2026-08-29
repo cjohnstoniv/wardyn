@@ -382,6 +382,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 			// WARDYN_TRUSTED_CA_FILE, forwarded verbatim so the sidecar's own
 			// outbound TLS trusts it too. "" when the operator knob is unset.
 			TrustedCAPEM: s.cfg.TrustedCAPEM,
+			// Operator-declared internal hostnames eligible for the proxy's
+			// private-IP-guard lift (site-config, read once above as siteCfg;
+			// nil on a GetSiteConfig error — fail safe, no lift).
+			InternalHosts: siteCfg.InternalHosts,
 		},
 		// Hard resource caps. A nil policy block (or a zero field) becomes the
 		// driver's conservative platform default, so EVERY sandbox is CPU/memory/

@@ -99,6 +99,18 @@ func TestValidateSiteConfig(t *testing.T) {
 				{From: "https://registry.npmjs.org/", To: "https://10.0.0.5/npm/", Ecosystem: "npm"},
 			}}, true,
 		},
+		{
+			"good internal host, no cidrs (full liftable set)",
+			types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "corp.internal"}}}, true,
+		},
+		{
+			"good internal host, cidr inside RFC1918",
+			types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "corp.internal", CIDRs: []string{"10.40.0.0/16"}}}}, true,
+		},
+		{
+			"bad internal host suffix (scheme)",
+			types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "https://corp.internal"}}}, false,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -108,6 +120,27 @@ func TestValidateSiteConfig(t *testing.T) {
 			}
 			if !c.ok && err == nil {
 				t.Fatal("expected an error, got nil")
+			}
+		})
+	}
+}
+
+// TestValidateSiteConfig_InternalHosts_Rejects: every declared CIDR must lie
+// ENTIRELY inside ipguard.Liftable (RFC1918/fc00::/7/100.64.0.0/10) — the
+// obvious SSRF-guard-widening mistakes are all refused at write time.
+func TestValidateSiteConfig_InternalHosts_Rejects(t *testing.T) {
+	bad := []string{
+		"127.0.0.0/8",   // loopback
+		"169.254.0.0/16", // link-local/metadata
+		"0.0.0.0/0",      // everything
+		"8.8.8.0/24",     // public
+		"::/0",           // everything, v6
+	}
+	for _, cidr := range bad {
+		t.Run(cidr, func(t *testing.T) {
+			err := validateInternalHosts([]types.InternalHost{{HostSuffix: "corp.internal", CIDRs: []string{cidr}}})
+			if err == nil {
+				t.Fatalf("cidr %q must be rejected (outside ipguard.Liftable)", cidr)
 			}
 		})
 	}

@@ -1359,6 +1359,47 @@ nothing in the sandbox actually asks for. The UI labels these rows `network
 only` so the gap stays visible instead of reading like a redirect that does
 everything the row above it does.
 
+### Internal hosts
+
+The proxy's unconditional private/loopback/link-local/metadata/CGNAT/NAT64 IP
+guard (`isBlockedIP`/`VetHost`, `internal/egress/proxy/policy.go`) denies a
+literal or resolved private-range address *regardless of policy* — the SSRF/
+DNS-rebinding defense L2 exists for. That is correct for an agent-chosen
+target, but it also means an in-cluster service name, `registry.corp.internal`,
+or any other genuinely internal hostname on RFC1918/CGNAT space was
+unreachable even when the policy allowlist named it — until now.
+
+`internal_hosts` is a list of `{host_suffix, cidrs}` entries on the same
+`SiteConfig` document as the rest of this page: each declares a hostname
+(matched by label suffix — `host_suffix` itself, or any host ending in
+`.`+`host_suffix`) whose resolved/literal address is *lifted* out of the
+private-IP guard, scoped to `cidrs` (or the full RFC1918 + `fc00::/7` +
+100.64.0.0/10 range when `cidrs` is empty). Loopback, link-local, the metadata
+address, other reserved ranges, and NAT64-embedded smuggling stay denied
+unconditionally — an entry can never lift those, no matter what `cidrs` says.
+Every declared CIDR must itself lie entirely inside that same liftable set;
+`PUT /site-config` 400s a CIDR that doesn't (`0.0.0.0/0`, `169.254.0.0/16`, and
+`127.0.0.0/8` are the obvious mistakes it catches).
+
+This lifts ONE thing: the SSRF builtin. The run's own policy allowlist
+(`allowed_domains`) still has to name the host separately — a declared internal
+host with no matching allowlist entry is denied by policy exactly as before.
+Two more exclusions apply automatically, with no operator action: an address
+on the proxy's own network interfaces, and the resolved control-plane
+(`wardynd`) host — the sidecar shares its Docker network with Postgres/Dex/the
+registry container, and a declared internal host must never become a way to
+reach those. A lifted decision's audit `rule_source` reads
+`site-config:internal-host` instead of the default `policy:allowed`, so a
+lifted request is distinguishable from an ordinary allowed one.
+
+```json
+{
+  "internal_hosts": [
+    { "host_suffix": "registry.corp.internal", "cidrs": ["10.40.0.0/16"] }
+  ]
+}
+```
+
 ### Internal model gateway
 
 An internal, OpenAI-compatible model gateway is a common ask on a managed

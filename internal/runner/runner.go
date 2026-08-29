@@ -179,6 +179,12 @@ type ProxyConfig struct {
 	// Control-plane-authored, same trust boundary as MITMCACertPEM/MITMCAKeyPEM
 	// above; empty => system roots only, byte-identical to today.
 	TrustedCAPEM string
+	// InternalHosts are the operator-declared internal hostnames
+	// (SiteConfig.InternalHosts, forwarded verbatim) eligible for the proxy's
+	// private-IP-guard lift. Control-plane-authored (the sandbox cannot set
+	// this); empty => no lift, byte-identical to today. Threaded to the proxy
+	// via proxy.Config's identically-named field (BuildProxyConfig below).
+	InternalHosts []types.InternalHost
 }
 
 // InjectionGrant pairs an api_key credential grant with its proxy-side

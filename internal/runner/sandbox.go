@@ -181,6 +181,7 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		PATGrants:        pc.PATGrants,
 		UpstreamProxyURL: pc.UpstreamProxyURL,
 		TrustedCAPEM:     pc.TrustedCAPEM,
+		InternalHosts:    pc.InternalHosts,
 	}
 	return json.Marshal(cfg)
 }

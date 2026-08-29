@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 
@@ -46,6 +47,17 @@ type Server struct {
 // injection credentials once (fail-closed on error) before returning.
 func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.Writer) (*Server, error) {
 	pol := CompilePolicy(cfg.Policy)
+
+	// Captured ONCE here (never per-request): the internal-host lift's
+	// own-subnet/control-plane exclusion (Proxy.onOwnSubnetOrControlPlane) needs
+	// both before any request is served. net.InterfaceAddrs() at this point
+	// already sees the control-plane network — NetworkConnect precedes
+	// ContainerStart on the docker driver, so the sidecar's container is joined
+	// to wardyn-internal before this process starts. A lookup failure for
+	// either is non-fatal: it just means the lift can never fire (fail closed
+	// toward the ORIGINAL unconditional deny, not toward widening it).
+	localSubnets := localInterfaceSubnets()
+	cpIP := resolveControlPlaneIP(cfg.ControlPlaneURL)
 
 	// ONE live token for the whole sidecar: the config's run token is the seed,
 	// and the renewer (started by ListenAndServe) rotates it in place before its
@@ -164,6 +176,9 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		RunToken:        ts,
 		Upstream:        up,
 		TLSClientConfig: tlsCfg,
+		InternalHosts:   cfg.InternalHosts,
+		LocalSubnets:    localSubnets,
+		ControlPlaneIP:  cpIP,
 	})
 	if ca != nil && len(cfg.MITMHosts) > 0 {
 		slog.InfoContext(ctx, "wardyn-proxy: TLS-MITM also enabled for operator-configured corp artifact host(s) (token injection)",
@@ -230,3 +245,42 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 // Addr returns the configured listen address.
 func (s *Server) Addr() string { return s.http.Addr }
+
+// localInterfaceSubnets returns this process's own interface subnets (best
+// effort — nil on any lookup failure, which only means the internal-host lift
+// can never exclude them, never that it admits more). Used ONLY by the
+// internal-host lift's own-subnet exclusion (Proxy.onOwnSubnetOrControlPlane).
+func localInterfaceSubnets() []*net.IPNet {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	out := make([]*net.IPNet, 0, len(addrs))
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// resolveControlPlaneIP resolves rawURL's host to a single IP using the
+// production resolver, mirroring resolveTrustedURL's own resolve step — but
+// runs before any Proxy exists (NewServer, ahead of newProxy), so it cannot go
+// through a *Proxy method. Best effort: nil on any parse/resolve failure,
+// which only means the internal-host lift can never exclude the control-plane
+// host, never that it admits more.
+func resolveControlPlaneIP(rawURL string) net.IP {
+	host, _, err := hostPortFromURL(rawURL)
+	if err != nil || host == "" {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip
+	}
+	ips, err := (netResolver{}).LookupIP(host)
+	if err != nil || len(ips) == 0 {
+		return nil
+	}
+	return ips[0]
+}

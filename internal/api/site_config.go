@@ -13,11 +13,13 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
+	"github.com/cjohnstoniv/wardyn/internal/ipguard"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -199,6 +201,34 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 			return fmt.Errorf("scm_hosts[%d]: invalid host %q", i, h)
 		}
 	}
+	if err := validateInternalHosts(cfg.InternalHosts); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateInternalHosts enforces SiteConfig.InternalHosts's write-time
+// invariant: every declared CIDR must lie ENTIRELY inside ipguard.Liftable
+// (RFC1918, fc00::/7, or 100.64.0.0/10) — never loopback, link-local, metadata,
+// multicast, or any other reserved range, which the proxy's blockKind
+// classification keeps un-liftable regardless of what an operator declares
+// here. A bare host_suffix must be a real host (validSiteHost); an entry with
+// no CIDRs is valid (it lifts the full Liftable set for that host).
+func validateInternalHosts(hosts []types.InternalHost) error {
+	for i, h := range hosts {
+		if !validSiteHost(h.HostSuffix) {
+			return fmt.Errorf("internal_hosts[%d].host_suffix: invalid host %q", i, h.HostSuffix)
+		}
+		for j, c := range h.CIDRs {
+			prefix, err := netip.ParsePrefix(c)
+			liftable := err == nil && slices.ContainsFunc(ipguard.Liftable, func(l netip.Prefix) bool {
+				return l.Bits() <= prefix.Bits() && l.Contains(prefix.Addr())
+			})
+			if !liftable {
+				return fmt.Errorf("internal_hosts[%d].cidrs[%d]: %q must lie inside RFC1918, fc00::/7 or 100.64.0.0/10", i, j, c)
+			}
+		}
+	}
 	return nil
 }
 
@@ -356,6 +386,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 			"upstream_proxy_configured": saved.UpstreamProxySecretRef != "" || saved.UpstreamProxyURL != "",
 			"egress_redirects_count":    len(saved.EgressRedirects),
 			"scm_hosts_count":           len(saved.ScmHosts),
+			"internal_hosts_count":      len(saved.InternalHosts),
 		})))
 	w.Header().Set("ETag", computeETag(saved))
 	// dangling_secret_refs surfaces the "reset+apply came back green but every

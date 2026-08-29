@@ -390,6 +390,11 @@ type IPGuardResult struct {
 	Denied bool
 	// Reason explains a denial (for the decision log rule_source).
 	Reason string
+	// Lifted is true when an address that isBlockedIP would otherwise deny was
+	// admitted only because the caller's lift predicate (vetHostLift) accepted
+	// it — i.e. an operator-declared internal host (SiteConfig.InternalHosts).
+	// Never true for VetHost (which always calls vetHostLift with a nil lift).
+	Lifted bool
 }
 
 // resolver abstracts DNS for testability.
@@ -409,17 +414,44 @@ func (netResolver) LookupIP(host string) ([]net.IP, error) {
 // On any failure or if every address is blocked, the result is Denied
 // (fail closed). The returned IP MUST be the one dialed — callers must not
 // re-resolve the hostname (TOCTOU / DNS-rebinding guard).
+//
+// VetHost is vetHostLift with no lift predicate — nothing in blockPrivate is
+// ever admitted. Kept as the exported, unconditional guard so every existing
+// caller/test keeps today's behavior; see vetHostLift for the internal-host
+// exception (Proxy.vetHost).
 func VetHost(host string, res resolver) IPGuardResult {
+	return vetHostLift(host, res, nil)
+}
+
+// vetHostLift is VetHost with one addition: when an address is blocked ONLY
+// because it is private/reserved (blockKind == blockPrivate — RFC1918/ULA/CGNAT,
+// never loopback/link-local/metadata/unspecified/multicast/NAT64, which stay
+// unconditionally denied), lift optionally admits it. lift == nil behaves
+// exactly like VetHost. Reason strings and the fail-closed shape (empty host /
+// resolve failure / no addresses / any blocked answer denies the whole host)
+// are unchanged from VetHost.
+func vetHostLift(host string, res resolver, lift func(net.IP) bool) IPGuardResult {
 	host = strings.TrimSuffix(strings.ToLower(host), ".")
 	if host == "" {
 		return IPGuardResult{Denied: true, Reason: "empty host"}
 	}
+	admit := func(ip net.IP) (bool, bool, string) { // ok, lifted, reason
+		kind, why := isBlockedIP(ip)
+		if kind == blockNone {
+			return true, false, ""
+		}
+		if kind == blockPrivate && lift != nil && lift(ip) {
+			return true, true, ""
+		}
+		return false, false, why
+	}
 	// Literal IP fast path.
 	if ip := net.ParseIP(host); ip != nil {
-		if blocked, why := isBlockedIP(ip); blocked {
+		ok, lifted, why := admit(ip)
+		if !ok {
 			return IPGuardResult{Denied: true, Reason: why}
 		}
-		return IPGuardResult{IP: ip}
+		return IPGuardResult{IP: ip, Lifted: lifted}
 	}
 	if res == nil {
 		res = netResolver{}
@@ -431,16 +463,32 @@ func VetHost(host string, res resolver) IPGuardResult {
 	if len(ips) == 0 {
 		return IPGuardResult{Denied: true, Reason: "no addresses"}
 	}
-	// If ANY resolved address is blocked, deny the whole host: a mix of
-	// public and private answers is the classic DNS-rebinding attack shape.
-	// Fail closed.
+	// If ANY resolved address is blocked (and not lifted), deny the whole host: a
+	// mix of public and private answers is the classic DNS-rebinding attack
+	// shape. Fail closed.
+	anyLifted := false
 	for _, ip := range ips {
-		if blocked, why := isBlockedIP(ip); blocked {
+		ok, lifted, why := admit(ip)
+		if !ok {
 			return IPGuardResult{Denied: true, Reason: fmt.Sprintf("blocked address %s: %s", ip, why)}
 		}
+		anyLifted = anyLifted || lifted
 	}
-	return IPGuardResult{IP: ips[0]}
+	return IPGuardResult{IP: ips[0], Lifted: anyLifted}
 }
+
+// blockKind classifies why isBlockedIP denies an address. Only blockPrivate is
+// ever eligible for vetHostLift's lift predicate — the other kinds are denied
+// unconditionally, by construction (never offered to lift).
+type blockKind uint8
+
+const (
+	blockNone          blockKind = iota // not blocked
+	blockLocal                          // loopback/link-local/multicast/unspecified/nil — never liftable
+	blockPrivate                        // RFC1918/ULA/CGNAT — the ONLY liftable kind (ipguard.Liftable)
+	blockReservedOther                  // other internal/ipguard.ReservedV4 entries — never liftable
+	blockNAT64                          // NAT64-embedded smuggling — never liftable
+)
 
 // isBlockedIP reports whether ip is in an unconditionally-denied range:
 // loopback, link-local (incl. the 169.254.169.254 metadata address), multicast,
@@ -452,16 +500,24 @@ func VetHost(host string, res resolver) IPGuardResult {
 // and 0.0.0.0 / :: precisely, so no proxy-local CIDR table is needed on top).
 // IPv4-mapped IPv6 addresses are unwrapped so a "::ffff:127.0.0.1" cannot
 // smuggle a loopback target past the guard.
-func isBlockedIP(ip net.IP) (bool, string) {
+//
+// The returned blockKind is finer than a bool ONLY so vetHostLift can tell
+// apart the one liftable case (blockPrivate — RFC1918/ULA/CGNAT,
+// ipguard.Liftable) from every other denial, which stays unconditional. Reason
+// strings are unchanged from before blockKind existed.
+func isBlockedIP(ip net.IP) (blockKind, string) {
 	if ip == nil {
-		return true, "nil ip"
+		return blockLocal, "nil ip"
 	}
 	if ip.IsUnspecified() || ip.IsLoopback() || ip.IsLinkLocalUnicast() ||
 		ip.IsLinkLocalMulticast() || ip.IsMulticast() {
-		return true, "loopback/link-local/multicast"
+		return blockLocal, "loopback/link-local/multicast"
 	}
 	if blocked, why := ipguard.PrivateReserved(ip); blocked {
-		return true, "private/reserved " + why
+		if ipguard.InLiftable(ip) {
+			return blockPrivate, "private/reserved " + why
+		}
+		return blockReservedOther, "private/reserved " + why
 	}
 	// NAT64-embedded IPv4 smuggling: inside a NAT64 prefix the low 32 bits ARE a
 	// real IPv4, so 64:ff9b::a9fe:a9fe reaches 169.254.169.254 while To4()==nil.
@@ -473,12 +529,12 @@ func isBlockedIP(ip net.IP) (bool, string) {
 	// IPv6 would false-positive legit addresses whose low 32 bits happen to fall
 	// in a reserved v4 range (e.g. any address ending ::1 -> 0.0.0.1 in 0/8).
 	if embedded, ok := ipguard.NAT64EmbeddedV4(ip); ok {
-		if blocked, why := isBlockedIP(embedded); blocked {
-			return true, "nat64-embedded " + why
+		if kind, why := isBlockedIP(embedded); kind != blockNone {
+			return blockNAT64, "nat64-embedded " + why
 		}
-		return true, "nat64 prefix (RFC 6052/8215)"
+		return blockNAT64, "nat64 prefix (RFC 6052/8215)"
 	}
-	return false, ""
+	return blockNone, ""
 }
 
 // decisionLog builds the structured egress.DecisionLog for a request.

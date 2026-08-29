@@ -60,4 +60,21 @@ export interface SiteConfig {
   // today (see lib/types/setup.ts's WireIntegration for the shape a caller
   // that DOES need to read integrations should use instead).
   readonly integrations?: unknown[];
+  // Operator-declared internal hostnames the proxy's unconditional private/
+  // reserved-IP SSRF guard is lifted for (an in-cluster service, a corporate
+  // registry, the internal model gateway) — see InternalHost. No reader exists
+  // yet (the Network step's rendering ships later); the field mirrors the
+  // server shape so a GET/PUT round-trip never drops it.
+  internal_hosts?: InternalHost[];
+}
+
+// One SiteConfig.internal_hosts entry — see that field's doc.
+export interface InternalHost {
+  // Matches a request host by label suffix: host_suffix itself, or any host
+  // ending in "."+host_suffix (never a substring/mid-label match).
+  host_suffix: string;
+  // Scopes the lift to these CIDRs only (each must lie inside RFC1918,
+  // fc00::/7, or 100.64.0.0/10 — validated server-side). Empty means the full
+  // liftable set for a matching host.
+  cidrs?: string[];
 }

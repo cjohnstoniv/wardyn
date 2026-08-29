@@ -123,7 +123,33 @@ type Proxy struct {
 	// CONNECT <real-host> to it; see upstream.go and dialThroughUpstream.
 	upstream *upstreamProxy
 
+	// internalHosts are the OPERATOR-DECLARED internal hostnames (site-config
+	// InternalHosts) eligible for vetHost's private-IP-guard lift — see
+	// Proxy.vetHost / liftInternalHost. Empty == no lift (byte-identical to
+	// before this field existed).
+	internalHosts []internalHostRule
+	// localSubnets are this proxy's OWN interface subnets, captured ONCE at
+	// construction (net.InterfaceAddrs, NewServer) — never re-read per request.
+	// liftInternalHost refuses to lift an address on one of these: the sidecar
+	// shares its control-plane network with postgres/dex/registry, so an
+	// internal-host declaration must not let a run reach the proxy's own
+	// network neighbors.
+	localSubnets []*net.IPNet
+	// controlPlaneIP is this run's wardynd address, resolved ONCE at
+	// construction (NewServer, before the Proxy exists) — never re-read per
+	// request. liftInternalHost refuses to lift this address for the same
+	// reason as localSubnets.
+	controlPlaneIP net.IP
+
 	now func() time.Time
+}
+
+// internalHostRule is one compiled SiteConfig.InternalHosts entry: a
+// label-suffix hostname match paired with the CIDRs its lift is scoped to (nil
+// == the full ipguard.Liftable set, per SiteConfig.InternalHosts's doc).
+type internalHostRule struct {
+	suffix string
+	cidrs  []*net.IPNet
 }
 
 // Options configures a Proxy. Nil fields fall back to production defaults.
@@ -163,6 +189,18 @@ type Options struct {
 	// direct dial. NewServer parses it from Config.UpstreamProxyURL; tests may
 	// build one via parseUpstreamProxy.
 	Upstream *upstreamProxy
+	// InternalHosts are the operator-declared internal hostnames (site-config,
+	// CONTROL-PLANE-authored — the sandbox cannot set this) eligible for
+	// vetHost's private-IP-guard lift. Empty == no lift (byte-identical to
+	// before this field existed). See Proxy.internalHosts.
+	InternalHosts []types.InternalHost
+	// LocalSubnets are the proxy's own interface subnets (net.InterfaceAddrs,
+	// captured once by NewServer before constructing Options). See
+	// Proxy.localSubnets.
+	LocalSubnets []*net.IPNet
+	// ControlPlaneIP is this run's wardynd address, resolved once by NewServer
+	// before constructing Options. See Proxy.controlPlaneIP.
+	ControlPlaneIP net.IP
 	// Dial overrides the connection dialer (tests). Production leaves it nil
 	// and a net.Dialer is used.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -246,6 +284,25 @@ func newProxy(opts Options) *Proxy {
 			patGrants[k] = g
 		}
 	}
+	// Compile each declared internal host: lowercase + trim the suffix (same
+	// normalization VetHost applies to the request host, so the comparison in
+	// liftInternalHost is exact), parse its CIDRs (already validated at
+	// site-config write time and at proxy Config load — a parse failure here
+	// just drops that one CIDR rather than widening scope).
+	internalHosts := make([]internalHostRule, 0, len(opts.InternalHosts))
+	for _, h := range opts.InternalHosts {
+		suffix := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h.HostSuffix)), ".")
+		if suffix == "" {
+			continue
+		}
+		var cidrs []*net.IPNet
+		for _, c := range h.CIDRs {
+			if _, n, err := net.ParseCIDR(c); err == nil {
+				cidrs = append(cidrs, n)
+			}
+		}
+		internalHosts = append(internalHosts, internalHostRule{suffix: suffix, cidrs: cidrs})
+	}
 	p := &Proxy{
 		runID:           opts.RunID,
 		policy:          opts.Policy,
@@ -265,6 +322,9 @@ func newProxy(opts Options) *Proxy {
 		controlPlaneURL: strings.TrimRight(opts.ControlPlaneURL, "/"),
 		runToken:        opts.RunToken,
 		upstream:        opts.Upstream,
+		internalHosts:   internalHosts,
+		localSubnets:    opts.LocalSubnets,
+		controlPlaneIP:  opts.ControlPlaneIP,
 		dial:            dial,
 		now:             now,
 	}
@@ -405,7 +465,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	// fault" (W13-S1-3).
 	var trustedLiteralIP net.IP
 	if ip := net.ParseIP(strings.TrimSuffix(strings.ToLower(host), ".")); ip != nil {
-		if blocked, _ := isBlockedIP(ip); blocked {
+		if kind, _ := isBlockedIP(ip); kind != blockNone {
 			if p.policy != nil && p.policy.AllowsLiteralIP(ip.String(), port) {
 				trustedLiteralIP = ip
 			} else {
@@ -495,12 +555,19 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		log := p.allowLog(req, approvalID)
 		return egress.Allow, target, &log
 	}
-	target, terr := p.egressTarget(host, port)
+	target, ruleSource, terr := p.egressTarget(host, port)
 	if terr != nil {
 		log := decisionLog(req, egress.Deny, "builtin:private-ip")
 		return egress.Deny, "", &log
 	}
 	log := p.allowLog(req, approvalID)
+	// The internal-host lift is the ONLY egressTarget outcome evaluate()
+	// attributes a non-default rule_source to, and only when the request was
+	// not already attributed to an approval (a released approval is the more
+	// specific, more useful audit fact).
+	if ruleSource != "" && approvalID == uuid.Nil {
+		log.RuleSource = ruleSource
+	}
 	return egress.Allow, target, &log
 }
 
@@ -516,16 +583,82 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 // With an operator upstream configured, the corp proxy — not this process —
 // resolves and dials, so the target is the real HOSTNAME:port sent by name
 // (see dialThroughUpstream / egressDial); otherwise the full local
-// private-IP-guarded resolve+pin (VetHost) applies as always.
-func (p *Proxy) egressTarget(host string, port int) (string, error) {
+// private-IP-guarded resolve+pin (Proxy.vetHost) applies as always.
+//
+// ruleSource is "" except "site-config:internal-host" when the address was
+// admitted only via the internal-host lift; only evaluate() consumes it — the
+// other four callers (serveMITMRequest, proxyLLMRequest, handleGitBroker,
+// handleGitPATBroker) discard it, unaffected.
+func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, err error) {
 	if p.upstream != nil {
-		return net.JoinHostPort(host, strconv.Itoa(port)), nil
+		return net.JoinHostPort(host, strconv.Itoa(port)), "", nil
 	}
-	guard := VetHost(host, p.res)
+	guard := p.vetHost(host)
 	if guard.Denied {
-		return "", fmt.Errorf("host %q denied: %s", host, guard.Reason)
+		return "", "", fmt.Errorf("host %q denied: %s", host, guard.Reason)
 	}
-	return net.JoinHostPort(guard.IP.String(), strconv.Itoa(port)), nil
+	if guard.Lifted {
+		ruleSource = "site-config:internal-host"
+	}
+	return net.JoinHostPort(guard.IP.String(), strconv.Itoa(port)), ruleSource, nil
+}
+
+// vetHost is VetHost plus the operator-declared internal-host exception: an
+// address that VetHost would deny ONLY for being private/reserved (RFC1918/
+// ULA/CGNAT — never loopback/link-local/metadata/unspecified/multicast/NAT64,
+// which vetHostLift never offers to lift) is admitted when host matches a
+// declared suffix AND the address falls inside that entry's CIDRs (no CIDRs =
+// the full ipguard.Liftable set) AND the address is not one of this proxy's
+// own interface subnets or its control-plane host. EVERY answer of a resolved
+// hostname must still be admissible (vetHostLift's rebinding rule is
+// unchanged) — a host with one liftable and one non-liftable answer is denied.
+func (p *Proxy) vetHost(host string) IPGuardResult {
+	normalized := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	return vetHostLift(host, p.res, func(ip net.IP) bool {
+		return p.liftInternalHost(normalized, ip)
+	})
+}
+
+// liftInternalHost reports whether ip may be lifted for host under a declared
+// SiteConfig.InternalHosts entry. host is already normalized (lowercased,
+// trailing dot trimmed) by vetHost.
+func (p *Proxy) liftInternalHost(host string, ip net.IP) bool {
+	if p.onOwnSubnetOrControlPlane(ip) {
+		return false
+	}
+	for _, r := range p.internalHosts {
+		if host != r.suffix && !strings.HasSuffix(host, "."+r.suffix) {
+			continue
+		}
+		if len(r.cidrs) == 0 {
+			// No CIDRs declared: the full liftable set (isBlockedIP already
+			// guarantees ip is RFC1918/ULA/CGNAT here — kind == blockPrivate).
+			return true
+		}
+		for _, c := range r.cidrs {
+			if c.Contains(ip) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// onOwnSubnetOrControlPlane reports whether ip is one of this proxy's own
+// interface subnets or its resolved control-plane host — both captured once at
+// construction (NewServer). The sidecar shares its control-plane network with
+// postgres/dex/registry (docker-compose), so an internal-host declaration must
+// never let a run reach the proxy's own network neighbors.
+func (p *Proxy) onOwnSubnetOrControlPlane(ip net.IP) bool {
+	if p.controlPlaneIP != nil && p.controlPlaneIP.Equal(ip) {
+		return true
+	}
+	for _, n := range p.localSubnets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // allowLog builds evaluate()'s Allow decision log. When the request's verdict

@@ -284,7 +284,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	// configured — the transport's egressDial chains the CONNECT and TLS then
 	// runs end-to-end proxy<->host — else the vetted IP (direct). Upstream mode
 	// relaxes the vetted-IP pin for this hop (see dialThroughUpstream).
-	target, terr := p.egressTarget(host, port)
+	target, _, terr := p.egressTarget(host, port)
 	if terr != nil {
 		p.emitLLMDecision(r, host, egress.Deny, mitmSource, nil)
 		p.httpError(w, "llm upstream vet failed", terr, http.StatusBadGateway)

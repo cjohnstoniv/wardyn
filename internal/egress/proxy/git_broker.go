@@ -183,7 +183,7 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	// corp proxy a resolved IP LITERAL it would refuse (W23-S1-4 / W19-W19d-3)
 	// — the one governed git lane must work on exactly the network it exists
 	// for.
-	target, err := p.egressTarget(githubHost, 443)
+	target, _, err := p.egressTarget(githubHost, 443)
 	if err != nil {
 		p.emitGitDecision(r, egress.Deny, ruleSourceGit)
 		p.httpError(w, "git upstream vet failed", err, http.StatusBadGateway)

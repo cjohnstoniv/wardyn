@@ -108,7 +108,7 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// Vet the destination through the SAME guard every other egress takes: a
 	// granted host that resolves into private space is still denied. The broker
 	// is a credential path, not a bypass of the IP guard.
-	target, err := p.egressTarget(host, 443)
+	target, _, err := p.egressTarget(host, 443)
 	if err != nil {
 		p.emitLocalDecision(r, egress.Deny, ruleSourcePATDenied, nil)
 		p.httpError(w, "vet git host", err, http.StatusForbidden)

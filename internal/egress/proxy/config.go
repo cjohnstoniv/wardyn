@@ -7,10 +7,13 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
+	"slices"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/ipguard"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -115,6 +118,13 @@ type Config struct {
 	// sandbox cannot set it. Empty (the default) => system roots only,
 	// byte-identical to today.
 	TrustedCAPEM string `json:"trusted_ca_pem,omitempty"`
+	// InternalHosts are the operator-declared internal hostnames
+	// (SiteConfig.InternalHosts, forwarded verbatim) eligible for the
+	// private-IP-guard lift in Proxy.vetHost — an admin-declared exception for a
+	// specific in-cluster/CGNAT service name, never attacker-reachable (the
+	// sandbox cannot set this). Empty (the default) => no lift, byte-identical
+	// to today.
+	InternalHosts []types.InternalHost `json:"internal_hosts,omitempty"`
 }
 
 const (
@@ -171,6 +181,24 @@ func (c *Config) applyDefaultsAndValidate() error {
 	// RETAINS the real pool (system roots + this bundle) for the live proxy.
 	if c.TrustedCAPEM != "" && !x509.NewCertPool().AppendCertsFromPEM([]byte(c.TrustedCAPEM)) {
 		return fmt.Errorf("config: trusted_ca_pem does not contain a valid PEM certificate")
+	}
+	// Parse-check (but do not retain a compiled form) each declared internal
+	// host's CIDRs: the persisted site-config already enforced "inside
+	// ipguard.Liftable" at write time (validateInternalHosts, internal/api), so
+	// a failure here means a config file authored outside that path. Fail
+	// closed rather than silently drop a malformed entry.
+	for i, h := range c.InternalHosts {
+		for j, cidr := range h.CIDRs {
+			prefix, err := netip.ParsePrefix(cidr)
+			if err != nil {
+				return fmt.Errorf("config: internal_hosts[%d].cidrs[%d]: %q: %w", i, j, cidr, err)
+			}
+			if !slices.ContainsFunc(ipguard.Liftable, func(l netip.Prefix) bool {
+				return l.Bits() <= prefix.Bits() && l.Contains(prefix.Addr())
+			}) {
+				return fmt.Errorf("config: internal_hosts[%d].cidrs[%d]: %q must lie inside RFC1918, fc00::/7 or 100.64.0.0/10", i, j, cidr)
+			}
+		}
 	}
 	return nil
 }

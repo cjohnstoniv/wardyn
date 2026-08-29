@@ -272,13 +272,50 @@ func TestVetHostBlocksPrivateAndMetadata(t *testing.T) {
 // low 32 bits happen to look like a reserved v4 (2606:4700:4700::1111 ends in
 // 0.0.17.17, inside 0.0.0.0/8) must NOT be denied.
 func TestNAT64EmbeddedNotOverblocking(t *testing.T) {
-	if blocked, why := isBlockedIP(net.ParseIP("2606:4700:4700::1111")); blocked {
+	if kind, why := isBlockedIP(net.ParseIP("2606:4700:4700::1111")); kind != blockNone {
 		t.Fatalf("public IPv6 outside NAT64 prefixes must not be blocked (reason=%q)", why)
 	}
 	// And a NAT64 address embedding a PUBLIC v4 is still blocked wholesale (the
 	// prefix is a by-IP bypass of hostname allowlisting): fail closed.
-	if blocked, _ := isBlockedIP(net.ParseIP("64:ff9b::5db8:d822")); !blocked { // 93.184.216.34
+	if kind, _ := isBlockedIP(net.ParseIP("64:ff9b::5db8:d822")); kind == blockNone { // 93.184.216.34
 		t.Fatalf("NAT64 prefix must be blocked wholesale (fail closed)")
+	}
+}
+
+// TestIsBlockedIPKind guards the blockKind classification vetHostLift's lift
+// predicate depends on: ONLY RFC1918/ULA/CGNAT (ipguard.Liftable) classify as
+// blockPrivate — every other denied range must stay unconditional (blockLocal/
+// blockReservedOther/blockNAT64), so an internal-host declaration can never
+// lift loopback, link-local, metadata, or the non-liftable ReservedV4 entries.
+func TestIsBlockedIPKind(t *testing.T) {
+	cases := []struct {
+		name string
+		ip   string
+		want blockKind
+	}{
+		{"public", "93.184.216.34", blockNone},
+		{"loopback", "127.0.0.1", blockLocal},
+		{"unspecified", "0.0.0.0", blockLocal},
+		{"link-local", "169.254.1.1", blockLocal},
+		{"metadata", "169.254.169.254", blockLocal},
+		{"multicast", "224.0.0.1", blockLocal},
+		{"ipv6 loopback", "::1", blockLocal},
+		{"rfc1918 10", "10.1.2.3", blockPrivate},
+		{"rfc1918 172", "172.16.5.5", blockPrivate},
+		{"rfc1918 192", "192.168.1.1", blockPrivate},
+		{"ipv6 ula", "fc00::1", blockPrivate},
+		{"cgnat", "100.64.0.1", blockPrivate},
+		{"reserved this-network", "0.5.5.5", blockReservedOther},
+		{"reserved benchmarking", "198.18.0.1", blockReservedOther},
+		{"nat64 metadata", "64:ff9b::a9fe:a9fe", blockNAT64},
+		{"nat64 rfc1918", "64:ff9b::0a00:0005", blockNAT64},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if kind, why := isBlockedIP(net.ParseIP(c.ip)); kind != c.want {
+				t.Fatalf("isBlockedIP(%q) kind = %v (reason=%q), want %v", c.ip, kind, why, c.want)
+			}
+		})
 	}
 }
 

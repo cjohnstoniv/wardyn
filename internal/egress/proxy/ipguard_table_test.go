@@ -26,13 +26,13 @@ func TestBlockedRangesMatchPreExtractionLists(t *testing.T) {
 		"::ffff:127.0.0.1", // IPv4-mapped loopback must not smuggle through
 	}
 	for _, s := range blocked {
-		if ok, _ := isBlockedIP(net.ParseIP(s)); !ok {
-			t.Errorf("isBlockedIP(%s) = false, want blocked", s)
+		if kind, _ := isBlockedIP(net.ParseIP(s)); kind == blockNone {
+			t.Errorf("isBlockedIP(%s) = blockNone, want blocked", s)
 		}
 	}
 	for _, s := range []string{"8.8.8.8", "93.184.216.34", "2606:4700:4700::1111"} {
-		if ok, why := isBlockedIP(net.ParseIP(s)); ok {
-			t.Errorf("isBlockedIP(%s) = true (%s), want allowed", s, why)
+		if kind, why := isBlockedIP(net.ParseIP(s)); kind != blockNone {
+			t.Errorf("isBlockedIP(%s) = %v (%s), want allowed", s, kind, why)
 		}
 	}
 }

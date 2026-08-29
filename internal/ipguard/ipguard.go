@@ -57,6 +57,32 @@ func PrivateReserved(ip net.IP) (bool, string) {
 	return false, ""
 }
 
+// Liftable is the private/reserved-address space an operator may declare a
+// specific internal hostname's SSRF-guard exception into (SiteConfig's
+// InternalHosts, and the proxy's per-request internal-host lift it drives).
+// Deliberately narrower than PrivateReserved's full denial set: RFC1918, the
+// IPv6 ULA range, and CGNAT only. Loopback/link-local/metadata/unspecified/
+// multicast/NAT64-embedded stay un-liftable by construction — the proxy's
+// blockKind classification (internal/egress/proxy) never offers them to the
+// lift predicate in the first place, and the site-config write validator
+// checks a declared CIDR against exactly this set.
+var Liftable = []netip.Prefix{
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("fc00::/7"),
+	netip.MustParsePrefix("100.64.0.0/10"), // CGNAT (RFC6598)
+}
+
+// InLiftable reports whether ip falls inside the Liftable set.
+func InLiftable(ip net.IP) bool {
+	addr, ok := addrOf(ip)
+	if !ok {
+		return false
+	}
+	return slices.ContainsFunc(Liftable, func(p netip.Prefix) bool { return p.Contains(addr) })
+}
+
 // NAT64EmbeddedV4 returns the IPv4 embedded in the low 32 bits of ip and true
 // when ip falls inside a NAT64 prefix; otherwise (nil, false). Callers block
 // the prefix wholesale and re-run the embedded v4 through their own v4 guard so

@@ -268,6 +268,30 @@ type SiteConfig struct {
 	// fields yet. IntegrationList folds pre-base-component rows forward at
 	// decode and drops legacy artifact_mirror/host_proxy topology rows.
 	Integrations IntegrationList `json:"integrations,omitempty"`
+	// InternalHosts declares an internal hostname (an in-cluster service, a
+	// corporate registry, the internal model gateway) the proxy's unconditional
+	// private/reserved-IP SSRF guard would otherwise refuse regardless of
+	// policy. Each entry LIFTS that guard for addresses matching its
+	// host_suffix, scoped to its own CIDRs (or the full RFC1918/ULA/CGNAT set
+	// when CIDRs is empty) — never loopback/link-local/metadata/unspecified/
+	// multicast/NAT64, which stay denied unconditionally. The policy verdict
+	// (allowed_domains/denied_domains) still has to allow the host separately —
+	// this only lifts the SSRF builtin. Admin-only; validated at write time
+	// (validateInternalHosts) so every declared CIDR lies inside
+	// ipguard.Liftable. Empty (the default) => no lift, byte-identical to today.
+	InternalHosts []InternalHost `json:"internal_hosts,omitempty"`
+}
+
+// InternalHost is one SiteConfig.InternalHosts entry — see that field's doc.
+type InternalHost struct {
+	// HostSuffix matches a request host by label suffix: HostSuffix itself, or
+	// any host ending in "."+HostSuffix (never a substring/mid-label match).
+	HostSuffix string `json:"host_suffix"`
+	// CIDRs scopes the lift to these ranges only. Each must lie entirely inside
+	// RFC1918, fc00::/7, or 100.64.0.0/10 (ipguard.Liftable) — never loopback/
+	// link-local/metadata/multicast/NAT64. Empty means the lift applies to the
+	// full Liftable set for a matching host.
+	CIDRs []string `json:"cidrs,omitempty"`
 }
 
 // ArtifactOverride is one ecosystem's corporate artifact-registry redirect: the
