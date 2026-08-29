@@ -90,7 +90,11 @@ test.describe("admin session at /setup (unmocked — negative control)", () => {
 
     await expect(page.getByRole("heading", { name: "Pick your barrier" })).toBeVisible();
 
-    await page.locator("header").getByRole("button").last().click();
+    // /setup renders the funnel's own <header> inside the shell, so scope to the
+    // shell's top bar (the first header in DOM order) before taking the last
+    // button — the account-menu trigger. An unscoped .last() lands on a funnel
+    // button and no menu ever opens.
+    await page.locator("header").first().getByRole("button").last().click();
     const menu = page.getByRole("menu");
     await expect(menu.getByText("Demos")).toBeVisible();
 
