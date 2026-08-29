@@ -58,8 +58,17 @@ func TestSecurityHeadersOnEveryResponse(t *testing.T) {
 		// this origin holds the admin bearer, so a broad media-src would let any
 		// page it can be tricked into loading embed arbitrary third-party media
 		// under it.
-		if strings.Contains(csp, "media-src *") || strings.Contains(csp, "media-src https:") {
-			t.Errorf("%s: CSP %q must not grant a wildcard media-src", path, csp)
+		// Equality on the whole segment, not Contains: a Contains check passes
+		// with a third host appended, which is exactly the widening this guards.
+		const wantMedia = "media-src 'self' https://github.com https://release-assets.githubusercontent.com"
+		var gotMedia string
+		for _, seg := range strings.Split(csp, "; ") {
+			if strings.HasPrefix(seg, "media-src ") {
+				gotMedia = strings.TrimSuffix(seg, ";")
+			}
+		}
+		if gotMedia != wantMedia {
+			t.Errorf("%s: CSP media-src = %q, want exactly %q", path, gotMedia, wantMedia)
 		}
 	}
 }

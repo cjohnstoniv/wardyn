@@ -63,6 +63,11 @@ describe("demo-videos", () => {
     ).toEqual(["02", "02b", "02c"]);
   });
 
+  it("a step id outside both contracts is NOT known (negative control)", () => {
+    const bogus = "not-a-real-step";
+    expect(knownAdminStepIds.has(bogus) || knownMemberStepIds.has(bogus)).toBe(false);
+  });
+
   it("episodesFor returns nothing for a step no episode declares", () => {
     expect(episodesFor("not-a-real-step")).toEqual([]);
   });
