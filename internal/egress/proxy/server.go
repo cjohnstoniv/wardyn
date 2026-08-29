@@ -66,6 +66,31 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// re-resolves, the approval client, and the brokered local routes.
 	ts := newTokenSource(cfg.RunToken)
 
+	// Corporate CA pool, built ONCE before any control-plane client exists:
+	// the forward transport (Options.TLSClientConfig below) AND the sidecar's
+	// own control-plane client must both trust a corp-issued wardynd cert.
+	// A caller-supplied client with no Transport rides http.DefaultTransport,
+	// which never sees the pool — so it is cloned onto a DefaultTransport
+	// clone (same proxy-from-env, timeouts, HTTP/2) carrying RootCAs.
+	var tlsCfg *tls.Config
+	if cfg.TrustedCAPEM != "" {
+		pool, perr := x509.SystemCertPool()
+		if perr != nil || pool == nil {
+			pool = x509.NewCertPool()
+		}
+		if !pool.AppendCertsFromPEM([]byte(cfg.TrustedCAPEM)) {
+			return nil, fmt.Errorf("trusted ca: no valid PEM certificates in trusted_ca_pem")
+		}
+		tlsCfg = &tls.Config{RootCAs: pool}
+	}
+	if tlsCfg != nil && client != nil && client.Transport == nil {
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.TLSClientConfig = tlsCfg
+		c := *client
+		c.Transport = tr
+		client = &c
+	}
+
 	sink := newDecisionSink(cfg.ControlPlaneURL, ts, cfg.DecisionBufferSize, client, stdout)
 
 	inj, err := buildInjector(ctx, cfg.ControlPlaneURL, ts, pol, cfg.Injection, client)
@@ -147,18 +172,6 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// this same PEM at config-load time without retaining a pool; this is the
 	// live proxy's own parse, matching parseUpstreamProxy's "validate at load,
 	// build for real here" split.
-	var tlsCfg *tls.Config
-	if cfg.TrustedCAPEM != "" {
-		pool, perr := x509.SystemCertPool()
-		if perr != nil || pool == nil {
-			pool = x509.NewCertPool()
-		}
-		if !pool.AppendCertsFromPEM([]byte(cfg.TrustedCAPEM)) {
-			_ = sink.close(context.Background())
-			return nil, fmt.Errorf("trusted ca: no valid PEM certificates in trusted_ca_pem")
-		}
-		tlsCfg = &tls.Config{RootCAs: pool}
-	}
 
 	p := newProxy(Options{
 		RunID:           cfg.RunID,

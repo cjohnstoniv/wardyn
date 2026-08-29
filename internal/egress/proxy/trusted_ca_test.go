@@ -9,6 +9,8 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -226,5 +228,57 @@ func TestNewServer_WiresTrustedCAPEM(t *testing.T) {
 	unset := newSrv(t, "")
 	if unset.proxy.transport.TLSClientConfig != nil {
 		t.Fatalf("unset Config.TrustedCAPEM: TLSClientConfig = %#v, want nil", unset.proxy.transport.TLSClientConfig)
+	}
+}
+
+// TestNewServer_ControlPlaneClientTrustsCorpCA: the sidecar's CONTROL-PLANE
+// client — not only the forward transport — trusts the corporate pool. A
+// caller-supplied client with no Transport would otherwise ride the process
+// DefaultTransport, which never sees the pool, and the injector's startup
+// resolve against a corp-issued wardynd cert would fail closed with x509.
+// The control plane here is a TLS server whose cert IS the "corporate" CA.
+func TestNewServer_ControlPlaneClientTrustsCorpCA(t *testing.T) {
+	grant := uuid.New()
+	cp := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/internal/injection/"+grant.String()) {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(types.ResolvedInjection{Header: "Authorization", Value: "Bearer tok"})
+	}))
+	defer cp.Close()
+	cpCertPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cp.Certificate().Raw})
+
+	build := func(trustedCAPEM string) error {
+		cfg := &Config{
+			RunID:           uuid.New(),
+			ControlPlaneURL: cp.URL,
+			RunToken:        "tok",
+			Listen:          "127.0.0.1:0",
+			Policy:          types.RunPolicySpec{AllowedDomains: []string{"example.com"}},
+			Injection:       []InjectionConfig{{InjectionRule: egress.InjectionRule{Host: "example.com"}, GrantID: grant}},
+			TrustedCAPEM:    trustedCAPEM,
+		}
+		if err := cfg.applyDefaultsAndValidate(); err != nil {
+			t.Fatalf("config: %v", err)
+		}
+		srv, err := NewServer(context.Background(), cfg, &http.Client{Timeout: time.Second}, &bytes.Buffer{})
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+		return nil
+	}
+
+	if err := build(string(cpCertPEM)); err != nil {
+		t.Fatalf("with the corp CA trusted, the startup resolve must succeed; got %v", err)
+	}
+	// Negative control: without the pool the SAME startup resolve fails closed
+	// on the corp-issued control-plane cert — proving the dial really happens
+	// and really depends on the pool.
+	if err := build(""); err == nil || !strings.Contains(err.Error(), "certificate") {
+		t.Fatalf("without the corp CA the startup resolve must fail on x509; got %v", err)
 	}
 }

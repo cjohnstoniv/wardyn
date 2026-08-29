@@ -51,17 +51,24 @@ func loadTrustedCA(path string) (pemBundle string, pool *x509.CertPool, n int, e
 	if serr != nil || sys == nil {
 		sys = x509.NewCertPool() // no system pool on this platform: additive to an empty base
 	}
+	var bundle []byte
 	for _, c := range certs {
 		sys.AddCert(c)
+		// The forwarded bundle is REBUILT from the parsed certificates — never the
+		// raw file — so nothing but CERTIFICATE blocks can reach a sandbox env
+		// (WARDYN_MITM_CA_PEM) or a proxy config (trusted_ca_pem).
+		bundle = append(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})...)
 	}
-	return string(raw), sys, len(certs), nil
+	return string(bundle), sys, len(certs), nil
 }
 
 // parseCertsPEM decodes every "CERTIFICATE" PEM block in raw. Any block that
-// fails to parse as a certificate, or a raw input with no certificate block
-// at all (garbage, or a key/CSR pasted by mistake), is an error — never a
-// silent skip: a corp CA file that doesn't parse as configured is a
-// configuration mistake, not a partial success.
+// fails to parse as a certificate, any block that is NOT a certificate (a
+// private key or CSR pasted alongside the cert — the common combined-export
+// shape), or a raw input with no certificate block at all is an error —
+// never a silent skip: a corp CA file that doesn't parse as configured is a
+// configuration mistake, not a partial success, and a private key must never
+// ride into every sandbox as trusted-issuer material.
 func parseCertsPEM(raw []byte) ([]*x509.Certificate, error) {
 	var certs []*x509.Certificate
 	rest := raw
@@ -72,7 +79,7 @@ func parseCertsPEM(raw []byte) ([]*x509.Certificate, error) {
 			break
 		}
 		if block.Type != "CERTIFICATE" {
-			continue
+			return nil, fmt.Errorf("unexpected %q PEM block: the file must hold certificates only", block.Type)
 		}
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {

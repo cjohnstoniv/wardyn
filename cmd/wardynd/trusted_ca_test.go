@@ -200,3 +200,48 @@ func TestBootWarnsWhenDefaultPolicyLacksGatewayHost(t *testing.T) {
 		t.Fatalf("no gateway configured must never warn, got %v", got)
 	}
 }
+
+// TestLoadTrustedCA_RefusesPrivateKeyBlock: a combined export (certificate +
+// private key in one file) is refused at boot — the alternative, forwarding
+// the raw file, would hand every sandbox and proxy the key as trusted-issuer
+// material. The error names the offending block so the operator knows what
+// to strip.
+func TestLoadTrustedCA_RefusesPrivateKeyBlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "corp-ca.pem")
+	combined := append(genTestCert(t, "corp-root"), []byte("-----BEGIN EC PRIVATE KEY-----\nAAAA\n-----END EC PRIVATE KEY-----\n")...)
+	if err := os.WriteFile(path, combined, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bundle, pool, n, err := loadTrustedCA(path)
+	if err == nil || !strings.Contains(err.Error(), "EC PRIVATE KEY") {
+		t.Fatalf("expected a refusal naming the private-key block, got err=%v", err)
+	}
+	if bundle != "" || pool != nil || n != 0 {
+		t.Fatalf("a refused file must forward nothing: bundle=%q pool=%v n=%d", bundle, pool != nil, n)
+	}
+}
+
+// TestLoadTrustedCA_BundleIsRebuiltFromCertificates: the forwarded bundle is
+// re-encoded from the parsed certificates, so leading comments, stray
+// whitespace and any other non-PEM text in the operator's file never reach a
+// sandbox — and the bundle round-trips to exactly the certs the pool holds.
+func TestLoadTrustedCA_BundleIsRebuiltFromCertificates(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "corp-ca.pem")
+	certPEM := genTestCert(t, "corp-root")
+	raw := append([]byte("# corporate root, exported 2026\n\n"), certPEM...)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bundle, _, n, err := loadTrustedCA(path)
+	if err != nil || n != 1 {
+		t.Fatalf("loadTrustedCA: n=%d err=%v", n, err)
+	}
+	if bundle != string(certPEM) {
+		t.Fatalf("bundle must be the re-encoded certificate only\n got: %q\nwant: %q", bundle, string(certPEM))
+	}
+	if strings.Contains(bundle, "#") {
+		t.Fatal("the operator's comment line leaked into the forwarded bundle")
+	}
+}

@@ -1292,7 +1292,10 @@ against a root none of them trust.
 
 `WARDYN_TRUSTED_CA_FILE` closes that gap: a PATH to a PEM bundle of
 additional trusted roots, additive to the system roots, read once at
-`wardynd` boot (see [ENV.md](ENV.md)). It reaches all three processes —
+`wardynd` boot (see [ENV.md](ENV.md)). The file must hold certificates only —
+a private key or CSR exported alongside the root is refused at boot
+(`loadTrustedCA`), and the bundle handed to the sidecar and the sandboxes is
+rebuilt from the parsed certificates, never copied from the raw file. It reaches all three processes —
 `wardynd` mutates the shared `http.DefaultTransport` every package here
 dials through; the proxy sidecar and every sandbox get the SAME bundle
 forwarded per run (`runner.ProxyConfig.TrustedCAPEM`,
