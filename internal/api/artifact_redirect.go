@@ -223,6 +223,19 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		if host == "" || seenHost[host] {
 			continue
 		}
+		// Veto: refuse a redirect whose To is the configured internal model
+		// gateway OR a public model-provider host — buildInjector's byHost map
+		// is last-write-wins, so a colliding row would swap an artifact token
+		// onto model traffic (or, for the public-host half, land the token on
+		// a live subscription/managed request that never expected one).
+		if s.isModelProviderHost(host) {
+			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
+				run.ID.String(), "warn", mustJSON(map[string]any{
+					"ecosystem": r.Ecosystem, "host": host,
+					"detail": "refused: To names a model-provider or configured gateway host, which would collide with the LLM injection route",
+				})))
+			continue
+		}
 		// W13-S1-5: the redirect's REAL port travels with the host into
 		// plan.mitmHosts (below) so the proxy's TLS-MITM allowlist — and the dial
 		// it performs once it has decrypted the tunnel — are scoped to the mirror
