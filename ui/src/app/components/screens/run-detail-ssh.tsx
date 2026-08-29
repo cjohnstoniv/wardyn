@@ -265,7 +265,11 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
             <p className="mt-0.5 text-meta leading-relaxed text-muted-foreground">
               {monoTokens(UI_APPS_LANE.off, "WARDYN_UI_SANDBOX_LISTEN")}
             </p>
-            <p className="mt-2 flex flex-wrap items-center gap-1.5 text-xs font-medium text-info">
+            {/* Muted, not --info: that token IS the text-link colour (§2), and
+                this line is deliberately not a link — the console does not serve
+                docs/, so it names the file instead. Painting it like a link was
+                a false affordance. */}
+            <p className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
               <BookOpen className="size-3.5 shrink-0" aria-hidden="true" />
               {UI_APPS_LANE.offDoc}
               <Mono className="text-meta text-muted-foreground">{UI_APPS_LANE.offDocPath}</Mono>

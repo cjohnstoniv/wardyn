@@ -273,6 +273,9 @@ describe("ConnectSSHCard — UI apps lane", () => {
     expect(screen.getByText(UI_APPS_LANE.offDocPath)).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /UI sandboxes/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /UI sandboxes/i })).toBeNull();
+    // …and it must not be PAINTED as one either: --info is the text-link colour
+    // (§2), so wearing it on a non-link is a false affordance.
+    expect(screen.getByText(UI_APPS_LANE.offDoc).closest("p")).toHaveClass("text-muted-foreground");
   });
 
   it("the doc pointer belongs to the off-state only — an enabled deployment does not show it", async () => {
