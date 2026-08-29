@@ -386,6 +386,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 			// private-IP-guard lift (site-config, read once above as siteCfg;
 			// nil on a GetSiteConfig error — fail safe, no lift).
 			InternalHosts: siteCfg.InternalHosts,
+			// Operator-configured internal model gateway(s) — WARDYN_ANTHROPIC_
+			// BASE_URL/WARDYN_OPENAI_BASE_URL, validated at boot. Empty => every
+			// brokered LLM route dials the vendor host, byte-identical to today.
+			LLMUpstreams: s.cfg.LLMGateways,
 		},
 		// Hard resource caps. A nil policy block (or a zero field) becomes the
 		// driver's conservative platform default, so EVERY sandbox is CPU/memory/

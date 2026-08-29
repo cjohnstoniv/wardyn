@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"net/url"
 	"os"
 	"slices"
 
@@ -125,6 +126,15 @@ type Config struct {
 	// sandbox cannot set this). Empty (the default) => no lift, byte-identical
 	// to today.
 	InternalHosts []types.InternalHost `json:"internal_hosts,omitempty"`
+	// LLMUpstreams maps a public vendor host ("api.anthropic.com" /
+	// "api.openai.com") to an operator-configured internal gateway base URL
+	// (api.Config.LLMGateways, forwarded verbatim; WARDYN_ANTHROPIC_BASE_URL /
+	// WARDYN_OPENAI_BASE_URL) that the /wardyn/llm/* brokered routes dial
+	// instead of the vendor host. Control-plane-authored, same trust boundary
+	// as TrustedCAPEM/InternalHosts above — the sandbox cannot set this. Empty
+	// (the default) => every brokered LLM route dials the vendor host,
+	// byte-identical to today.
+	LLMUpstreams map[string]string `json:"llm_upstreams,omitempty"`
 }
 
 const (
@@ -198,6 +208,16 @@ func (c *Config) applyDefaultsAndValidate() error {
 			}) {
 				return fmt.Errorf("config: internal_hosts[%d].cidrs[%d]: %q must lie inside RFC1918, fc00::/7 or 100.64.0.0/10", i, j, cidr)
 			}
+		}
+	}
+	// Parse-check (but do not retain a compiled form) each configured LLM
+	// gateway base URL: api.ValidateLLMGateways already fail-fast-checked these
+	// at boot without retaining a parsed form (same "validate at load, build
+	// for real here" split as TrustedCAPEM/UpstreamProxyURL above); a failure
+	// here means a config authored outside that path.
+	for vendor, raw := range c.LLMUpstreams {
+		if _, err := url.Parse(raw); err != nil {
+			return fmt.Errorf("config: llm_upstreams[%q]: %w", vendor, err)
 		}
 	}
 	return nil

@@ -182,6 +182,7 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		UpstreamProxyURL: pc.UpstreamProxyURL,
 		TrustedCAPEM:     pc.TrustedCAPEM,
 		InternalHosts:    pc.InternalHosts,
+		LLMUpstreams:     pc.LLMUpstreams,
 	}
 	return json.Marshal(cfg)
 }

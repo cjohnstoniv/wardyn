@@ -68,3 +68,38 @@ func TestProxyConfig_InternalHosts_RejectsNonLiftableCIDR(t *testing.T) {
 		t.Fatalf("non-liftable CIDR must be rejected at config load, got err=%v", err)
 	}
 }
+
+// TestProxyConfig_LLMUpstreams_EmptyRoundTrip: a configured gateway round-trips
+// through LoadConfigBytes, and unset carries an empty map — byte-identical to
+// today (every brokered LLM route dials the vendor host).
+func TestProxyConfig_LLMUpstreams_EmptyRoundTrip(t *testing.T) {
+	cfg, err := LoadConfigBytes(baseConfigJSON(t, map[string]any{
+		"llm_upstreams": map[string]string{anthropicHost: "https://llm-gateway.corp.internal/v1"},
+	}))
+	if err != nil {
+		t.Fatalf("LoadConfigBytes: %v", err)
+	}
+	if cfg.LLMUpstreams[anthropicHost] != "https://llm-gateway.corp.internal/v1" {
+		t.Fatalf("LLMUpstreams did not round-trip: %+v", cfg.LLMUpstreams)
+	}
+
+	cfg, err = LoadConfigBytes(baseConfigJSON(t, nil))
+	if err != nil {
+		t.Fatalf("LoadConfigBytes (empty): %v", err)
+	}
+	if len(cfg.LLMUpstreams) != 0 {
+		t.Fatalf("unset llm_upstreams must round-trip empty, got %+v", cfg.LLMUpstreams)
+	}
+}
+
+// TestProxyConfig_LLMUpstreams_RejectsMalformedURL: fail-closed parse-check —
+// api.ValidateLLMGateways already checked this at boot; a config authored
+// outside that path (hand-edited file) still cannot carry garbage.
+func TestProxyConfig_LLMUpstreams_RejectsMalformedURL(t *testing.T) {
+	_, err := LoadConfigBytes(baseConfigJSON(t, map[string]any{
+		"llm_upstreams": map[string]string{anthropicHost: "://not a url"},
+	}))
+	if err == nil {
+		t.Fatal("a malformed llm_upstreams URL must be rejected at config load")
+	}
+}

@@ -185,6 +185,13 @@ type ProxyConfig struct {
 	// this); empty => no lift, byte-identical to today. Threaded to the proxy
 	// via proxy.Config's identically-named field (BuildProxyConfig below).
 	InternalHosts []types.InternalHost
+	// LLMUpstreams maps a public vendor host to an operator-configured internal
+	// model gateway base URL (api.Config.LLMGateways, forwarded verbatim;
+	// WARDYN_ANTHROPIC_BASE_URL/WARDYN_OPENAI_BASE_URL). Control-plane-authored
+	// (the sandbox cannot set this); empty => every brokered LLM route dials
+	// the vendor host, byte-identical to today. Threaded to the proxy via
+	// proxy.Config's identically-named field (BuildProxyConfig below).
+	LLMUpstreams map[string]string
 }
 
 // InjectionGrant pairs an api_key credential grant with its proxy-side

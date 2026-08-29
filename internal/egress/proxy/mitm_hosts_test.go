@@ -65,15 +65,16 @@ func TestIsMITMHost_OperatorWidening(t *testing.T) {
 // TestChannelForHost_NonLLMIsGeneric: a corp artifact host maps to ChannelGeneric
 // so the LLM content scanner never runs against package-registry traffic.
 func TestChannelForHost_NonLLMIsGeneric(t *testing.T) {
-	if got := channelForHost("artifactory.corp"); string(got) == "" {
+	p := newProxy(Options{})
+	if got := p.channelForHost("artifactory.corp"); string(got) == "" {
 		t.Fatalf("channelForHost returned empty channel")
 	}
 	// classifyLLM(Generic, ...) must be scanNone regardless of method/path.
-	if classifyLLM(channelForHost("artifactory.corp"), "POST", "some/path") != scanNone {
+	if classifyLLM(p.channelForHost("artifactory.corp"), "POST", "some/path") != scanNone {
 		t.Errorf("corp artifact host must classify as scanNone (no LLM scanning)")
 	}
 	// LLM hosts keep their channels.
-	if classifyLLM(channelForHost(anthropicHost), "POST", "v1/messages") != scanMessages {
+	if classifyLLM(p.channelForHost(anthropicHost), "POST", "v1/messages") != scanMessages {
 		t.Errorf("anthropic /messages must still classify as scanMessages")
 	}
 }

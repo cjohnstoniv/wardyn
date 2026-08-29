@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -141,7 +142,26 @@ type Proxy struct {
 	// reason as localSubnets.
 	controlPlaneIP net.IP
 
+	// llmUpstreams is the OPERATOR-CONFIGURED internal-gateway table (vendor
+	// public host -> {host,port,prefix}), parsed once from Options.LLMUpstreams.
+	// Empty == every brokered LLM route dials the vendor host, byte-identical
+	// to today. See llmUpstream.
+	llmUpstreams map[string]llmUpstream
+	// gatewayVendor is the REVERSE of llmUpstreams (gateway host -> vendor
+	// public host), feeding egressTarget's gateway branch and isLLMHost/
+	// channelForHost so gateway traffic is recognised as LLM traffic.
+	gatewayVendor map[string]string
+
 	now func() time.Time
+}
+
+// llmUpstream is one configured internal-gateway target: the bare host, port
+// (443 when the base URL carried none), and path prefix (empty when the base
+// URL carried none) parsed from an api.Config.LLMGateways entry.
+type llmUpstream struct {
+	host   string
+	port   int
+	prefix string
 }
 
 // internalHostRule is one compiled SiteConfig.InternalHosts entry: a
@@ -201,6 +221,10 @@ type Options struct {
 	// ControlPlaneIP is this run's wardynd address, resolved once by NewServer
 	// before constructing Options. See Proxy.controlPlaneIP.
 	ControlPlaneIP net.IP
+	// LLMUpstreams maps a public vendor host to an operator-configured internal
+	// gateway base URL (Config.LLMUpstreams, forwarded verbatim). Empty == every
+	// brokered LLM route dials the vendor host. See Proxy.llmUpstreams.
+	LLMUpstreams map[string]string
 	// Dial overrides the connection dialer (tests). Production leaves it nil
 	// and a net.Dialer is used.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -303,6 +327,27 @@ func newProxy(opts Options) *Proxy {
 		}
 		internalHosts = append(internalHosts, internalHostRule{suffix: suffix, cidrs: cidrs})
 	}
+	// Compile the LLM-gateway table + its reverse lookup. LLMUpstreams is
+	// already validated (api.ValidateLLMGateways at boot, applyDefaultsAndValidate
+	// at config load) — a parse failure here just drops that one entry (falls
+	// back to the vendor host) rather than widening scope or panicking.
+	llmUpstreams := make(map[string]llmUpstream, len(opts.LLMUpstreams))
+	gatewayVendor := make(map[string]string, len(opts.LLMUpstreams))
+	for vendor, raw := range opts.LLMUpstreams {
+		u, err := url.Parse(raw)
+		if err != nil || u.Hostname() == "" {
+			continue
+		}
+		port := 443
+		if ps := u.Port(); ps != "" {
+			if n, perr := strconv.Atoi(ps); perr == nil && n > 0 {
+				port = n
+			}
+		}
+		host := strings.ToLower(u.Hostname())
+		llmUpstreams[vendor] = llmUpstream{host: host, port: port, prefix: strings.TrimSuffix(u.Path, "/")}
+		gatewayVendor[host] = vendor
+	}
 	p := &Proxy{
 		runID:           opts.RunID,
 		policy:          opts.Policy,
@@ -325,6 +370,8 @@ func newProxy(opts Options) *Proxy {
 		internalHosts:   internalHosts,
 		localSubnets:    opts.LocalSubnets,
 		controlPlaneIP:  opts.ControlPlaneIP,
+		llmUpstreams:    llmUpstreams,
+		gatewayVendor:   gatewayVendor,
 		dial:            dial,
 		now:             now,
 	}
@@ -571,96 +618,6 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	return egress.Allow, target, &log
 }
 
-// egressTarget resolves host:port to the dial target a forward-egress call
-// site should use for THIS proxy's mode — hiding the corp-upstream branch so
-// every forward-egress caller (evaluate, serveMITMRequest, proxyLLMRequest,
-// handleGitBroker) makes the SAME choice instead of each re-deriving it. A
-// site that forgot the branch (the brokered LLM routes and the git broker
-// both did, W19-W19d-3 / W23-S1-4) unconditionally required local DNS +ran the
-// full private-IP guard even under an operator upstream — where the sandbox
-// host frequently CANNOT resolve external names at all — and then handed the
-// corp proxy a resolved IP LITERAL to CONNECT instead of the real hostname.
-// With an operator upstream configured, the corp proxy — not this process —
-// resolves and dials, so the target is the real HOSTNAME:port sent by name
-// (see dialThroughUpstream / egressDial); otherwise the full local
-// private-IP-guarded resolve+pin (Proxy.vetHost) applies as always.
-//
-// ruleSource is "" except "site-config:internal-host" when the address was
-// admitted only via the internal-host lift; only evaluate() consumes it — the
-// other four callers (serveMITMRequest, proxyLLMRequest, handleGitBroker,
-// handleGitPATBroker) discard it, unaffected.
-func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, err error) {
-	if p.upstream != nil {
-		return net.JoinHostPort(host, strconv.Itoa(port)), "", nil
-	}
-	guard := p.vetHost(host)
-	if guard.Denied {
-		return "", "", fmt.Errorf("host %q denied: %s", host, guard.Reason)
-	}
-	if guard.Lifted {
-		ruleSource = "site-config:internal-host"
-	}
-	return net.JoinHostPort(guard.IP.String(), strconv.Itoa(port)), ruleSource, nil
-}
-
-// vetHost is VetHost plus the operator-declared internal-host exception: an
-// address that VetHost would deny ONLY for being private/reserved (RFC1918/
-// ULA/CGNAT — never loopback/link-local/metadata/unspecified/multicast/NAT64,
-// which vetHostLift never offers to lift) is admitted when host matches a
-// declared suffix AND the address falls inside that entry's CIDRs (no CIDRs =
-// the full ipguard.Liftable set) AND the address is not one of this proxy's
-// own interface subnets or its control-plane host. EVERY answer of a resolved
-// hostname must still be admissible (vetHostLift's rebinding rule is
-// unchanged) — a host with one liftable and one non-liftable answer is denied.
-func (p *Proxy) vetHost(host string) IPGuardResult {
-	normalized := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
-	return vetHostLift(host, p.res, func(ip net.IP) bool {
-		return p.liftInternalHost(normalized, ip)
-	})
-}
-
-// liftInternalHost reports whether ip may be lifted for host under a declared
-// SiteConfig.InternalHosts entry. host is already normalized (lowercased,
-// trailing dot trimmed) by vetHost.
-func (p *Proxy) liftInternalHost(host string, ip net.IP) bool {
-	if p.onOwnSubnetOrControlPlane(ip) {
-		return false
-	}
-	for _, r := range p.internalHosts {
-		if host != r.suffix && !strings.HasSuffix(host, "."+r.suffix) {
-			continue
-		}
-		if len(r.cidrs) == 0 {
-			// No CIDRs declared: the full liftable set (isBlockedIP already
-			// guarantees ip is RFC1918/ULA/CGNAT here — kind == blockPrivate).
-			return true
-		}
-		for _, c := range r.cidrs {
-			if c.Contains(ip) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// onOwnSubnetOrControlPlane reports whether ip is one of this proxy's own
-// interface subnets or its resolved control-plane host — both captured once at
-// construction (NewServer). The sidecar shares its control-plane network with
-// postgres/dex/registry (docker-compose), so an internal-host declaration must
-// never let a run reach the proxy's own network neighbors.
-func (p *Proxy) onOwnSubnetOrControlPlane(ip net.IP) bool {
-	if p.controlPlaneIP != nil && p.controlPlaneIP.Equal(ip) {
-		return true
-	}
-	for _, n := range p.localSubnets {
-		if n.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
-
 // allowLog builds evaluate()'s Allow decision log. When the request's verdict
 // was RELEASED by the first-use approval flow (approvalID != Nil), it
 // attributes rule_source to "approval:<id>" and sets ApprovalID — mirroring
@@ -817,7 +774,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if isLLMHost(host) {
+	if p.isLLMHost(host) {
 		// TLS-MITM-eligible host (Anthropic/OpenAI). Terminate TLS only when MITM of
 		// the LLM hosts is actually INTENDED for this run (subscription credential
 		// injection or intercept_tls content inspection) — p.mitmLLM. The per-run CA

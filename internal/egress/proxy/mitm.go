@@ -192,9 +192,14 @@ func (p *Proxy) isCorpMITMHost(host string) bool {
 // that is not a recognised LLM API (e.g. an operator corp artifact host being
 // MITM'd only for token injection) maps to ChannelGeneric, which classifyLLM
 // treats as not-prompt-bearing — so the LLM content scanner never runs against
-// package-registry traffic.
-func channelForHost(host string) contentscan.Channel {
-	switch strings.TrimSuffix(strings.ToLower(host), ".") {
+// package-registry traffic. A method (not a free function) so a configured
+// internal gateway's host classifies as its vendor's own channel, not generic.
+func (p *Proxy) channelForHost(host string) contentscan.Channel {
+	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	if vendor, ok := p.gatewayVendor[h]; ok {
+		h = vendor
+	}
+	switch h {
 	case openaiHost:
 		return contentscan.ChannelOpenAIChat
 	case anthropicHost:
@@ -272,11 +277,11 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 // to whatever answers there instead of the intended mirror (W13-S1-5).
 func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host string, port int) {
 	rest := strings.TrimPrefix(r.URL.Path, "/")
-	channel := channelForHost(host)
+	channel := p.channelForHost(host)
 	// Decision-log source: honest about WHY this tunnel was terminated — LLM
 	// inspection/injection vs corp artifact-token injection (no scan coverage).
 	mitmSource := ruleSourceLLMMITM
-	if !isLLMHost(host) {
+	if !p.isLLMHost(host) {
 		mitmSource = ruleSourceArtifactMITM
 	}
 
@@ -331,7 +336,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	}
 	// Forwards over the pinned transport; DialContext dials the vetted target from
 	// the request context, so the host is never re-resolved.
-	p.forwardInspectedLLM(w, r, host, rest, target, injectHdr, mitmSource, bodyReader, scanSummary)
+	p.forwardInspectedLLM(w, r, host, port, rest, target, injectHdr, mitmSource, bodyReader, scanSummary)
 }
 
 // oneConnListener hands a single already-accepted conn to http.Server.Serve and

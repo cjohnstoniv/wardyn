@@ -15,10 +15,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
@@ -53,26 +56,42 @@ const (
 // exercise the oversize path without allocating tens of MiB.
 var maxLLMScanBody = 32 << 20 // 32 MiB
 // handleLLMAnthropic proxies /wardyn/llm/anthropic/<rest> to
-// https://api.anthropic.com/<rest> with the brokered Anthropic credential.
+// https://api.anthropic.com/<rest> — or an operator-configured internal
+// gateway (Config.LLMUpstreams) — with the brokered Anthropic credential.
 func (p *Proxy) handleLLMAnthropic(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, llmAnthropicPrefix)
-	p.proxyLLMRequest(w, r, anthropicHost, rest, contentscan.ChannelAnthropicMessages)
+	host, port, prefix := p.llmUpstream(anthropicHost)
+	p.proxyLLMRequest(w, r, host, port, joinLLMPath(prefix, rest), contentscan.ChannelAnthropicMessages)
 }
 
 // handleLLMOpenAI proxies /wardyn/llm/openai/<rest> to https://api.openai.com/<rest>
-// with the brokered OpenAI credential (the Codex reverse-proxy route).
+// — or an operator-configured internal gateway — with the brokered OpenAI
+// credential (the Codex reverse-proxy route).
 func (p *Proxy) handleLLMOpenAI(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, llmOpenAIPrefix)
-	p.proxyLLMRequest(w, r, openaiHost, rest, contentscan.ChannelOpenAIChat)
+	host, port, prefix := p.llmUpstream(openaiHost)
+	p.proxyLLMRequest(w, r, host, port, joinLLMPath(prefix, rest), contentscan.ChannelOpenAIChat)
+}
+
+// joinLLMPath prepends an internal gateway's path prefix (from its base URL)
+// onto rest. Empty prefix (the unset-gateway default) returns rest unchanged —
+// the byte-identical-to-today case.
+func joinLLMPath(prefix, rest string) string {
+	if prefix == "" {
+		return rest
+	}
+	return strings.TrimPrefix(prefix, "/") + "/" + rest
 }
 
 // proxyLLMRequest is the shared reverse-proxy + inspection path for a brokered
 // LLM upstream. It applies the startup-minted credential, strips every sandbox-
 // supplied credential header, optionally inspects the body (blocking BEFORE the
-// allow decision is recorded), and forwards to host/<rest> over the vetted IP.
-// It is used by both the /wardyn/llm/* local routes and the TLS-MITM CONNECT
-// interception (serveMITM), so host/rest are passed explicitly.
-func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host, rest string, channel contentscan.Channel) {
+// allow decision is recorded), and forwards to host:port/<rest> over the vetted
+// IP. It is used by both the /wardyn/llm/* local routes and the TLS-MITM CONNECT
+// interception (serveMITM), so host/port/rest are passed explicitly — host is
+// ALREADY the resolved dial target (the configured gateway's host, or the
+// vendor host unset), never the raw vendor constant.
+func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host string, port int, rest string, channel contentscan.Channel) {
 	hdr, ok := p.inject.headerFor(host)
 	if !ok {
 		p.emitLLMDecision(r, host, egress.Deny, ruleSourceLLM, nil)
@@ -82,12 +101,21 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host, re
 		return
 	}
 
-	// egressTarget hides the corp-upstream branch (W23-S1-4 / W19-W19d-3): a
-	// brokered LLM route needs the same corp-proxy-by-name dial the MITM path
-	// (serveMITMRequest) already gets, not the local-DNS-required vetURL below.
-	target, _, err := p.egressTarget(host, 443)
+	// egressTarget hides the corp-upstream AND the configured-gateway branches
+	// (W23-S1-4 / W19-W19d-3): a brokered LLM route needs the same corp-proxy-
+	// by-name dial the MITM path (serveMITMRequest) already gets, and the same
+	// gateway per-request vet (vetTrustedHost) — not the local-DNS-required
+	// vetHost path unconditionally.
+	target, _, err := p.egressTarget(host, port)
 	if err != nil {
-		p.emitLLMDecision(r, host, egress.Deny, ruleSourceLLM, nil)
+		// A refused/unreachable configured gateway is a per-request dial
+		// failure, not an SSRF-shaped denial — distinguish it in the decision
+		// log so it reads as "the gateway didn't answer", not "brokered:llm".
+		source := ruleSourceLLM
+		if errors.Is(err, errGatewayVet) {
+			source = "builtin:dial-failed"
+		}
+		p.emitLLMDecision(r, host, egress.Deny, source, nil)
 		p.httpError(w, "llm upstream vet failed", err, http.StatusBadGateway)
 		return
 	}
@@ -103,20 +131,27 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host, re
 	}
 	// The brokered credential is guaranteed present here (headerFor ok above), so
 	// the sandbox credential is always stripped and the brokered one injected.
-	p.forwardInspectedLLM(w, r, host, rest, target, &hdr, ruleSourceLLM, bodyReader, scanSummary)
+	p.forwardInspectedLLM(w, r, host, port, rest, target, &hdr, ruleSourceLLM, bodyReader, scanSummary)
 }
 
 // forwardInspectedLLM is the shared credential-strip + forward-and-respond tail
 // for a brokered/MITM'd LLM upstream, used by both proxyLLMRequest and
-// serveMITMRequest. It builds the upstream request to host/<rest> over the pinned
-// target, sanitizes hop-by-hop headers, applies the credential (hdr != nil: strip
-// EVERY sandbox-supplied credential header — not just Authorization, so a sandbox
-// x-api-key cannot substitute the brokered credential when the rule injects under
-// a different header — then inject; hdr == nil: preserve the agent's own resident
-// credential, inspect-only), records the allow decision (scanSummary may be nil =
-// quiet), and streams the response back. ruleSource is the decision-log source.
-func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host, rest, target string, hdr *injectedHeader, ruleSource string, bodyReader io.Reader, scanSummary *egress.ScanSummary) {
-	upstreamURL := "https://" + host + "/" + rest
+// serveMITMRequest. It builds the upstream request to host[:port]/<rest> over
+// the pinned target (port omitted from the URL at 443 — the default port and
+// the byte-identical-to-today shape when no gateway is configured), sanitizes
+// hop-by-hop headers, applies the credential (hdr != nil: strip EVERY
+// sandbox-supplied credential header — not just Authorization, so a sandbox
+// x-api-key cannot substitute the brokered credential when the rule injects
+// under a different header — then inject; hdr == nil: preserve the agent's
+// own resident credential, inspect-only), records the allow decision
+// (scanSummary may be nil = quiet), and streams the response back. ruleSource
+// is the decision-log source.
+func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host string, port int, rest, target string, hdr *injectedHeader, ruleSource string, bodyReader io.Reader, scanSummary *egress.ScanSummary) {
+	hostport := host
+	if port != 443 {
+		hostport = net.JoinHostPort(host, strconv.Itoa(port))
+	}
+	upstreamURL := "https://" + hostport + "/" + rest
 	if r.URL.RawQuery != "" {
 		upstreamURL += "?" + r.URL.RawQuery
 	}
@@ -137,7 +172,7 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		outReq.Header.Del("X-Auth-Token")
 		outReq.Header.Set(hdr.name, hdr.value)
 	}
-	outReq.Host = host
+	outReq.Host = hostport
 	outReq.Header.Del("Host")
 
 	// The allow decision is emitted only AFTER a successful round-trip (same
@@ -406,10 +441,15 @@ func classifyOpenAILLM(method, rest string) int {
 }
 
 // isLLMHost reports whether host is a recognised model-API upstream (used to
-// emit honest opaque-tunnel coverage for CONNECT traffic).
-func isLLMHost(host string) bool {
+// emit honest opaque-tunnel coverage for CONNECT traffic). A method (not a
+// free function) so a configured internal gateway's host — reachable only
+// through THIS proxy's own gatewayVendor table — counts too.
+func (p *Proxy) isLLMHost(host string) bool {
 	h := strings.TrimSuffix(strings.ToLower(host), ".")
 	if h == anthropicHost || h == openaiHost {
+		return true
+	}
+	if _, ok := p.gatewayVendor[h]; ok {
 		return true
 	}
 	// AWS Bedrock runtime endpoints are regional.

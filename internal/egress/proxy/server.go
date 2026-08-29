@@ -177,6 +177,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		Upstream:        up,
 		TLSClientConfig: tlsCfg,
 		InternalHosts:   cfg.InternalHosts,
+		LLMUpstreams:    cfg.LLMUpstreams,
 		LocalSubnets:    localSubnets,
 		ControlPlaneIP:  cpIP,
 	})
