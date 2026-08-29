@@ -171,6 +171,7 @@ the same two SSH-gateway binaries, but deliberately **not** `openssh-client`/
 │    ├─ /wardyn/v1/approvals/{id}    ──► wardynd /api/v1/internal/approvals/{id}
 │    │     proxy injects run token; response passed through
 │    ├─ /wardyn/llm/anthropic/<rest> ──► https://api.anthropic.com/<rest>
+│    │     (or an operator-configured internal gateway — WARDYN_ANTHROPIC_BASE_URL)
 │    │     proxy applies brokered api_key InjectionRule (host=api.anthropic.com)
 │    │     if no rule is configured: 404 (no LLM credential brokered)
 │    └─ all other outbound requests: enforced against the run's egress policy

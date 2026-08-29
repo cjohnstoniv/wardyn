@@ -849,6 +849,29 @@ hiding them would repeat the failure mode we are designed to avoid.
     BYOI base missing every system CA-bundle path loses public trust for its
     OpenSSL-shaped clients entirely once this is set (residual 13's BYOI
     trust boundary, sharpened) — a named, accepted ceiling, not a gap.
+29. **The operator's model-provider credential is disclosed to whatever host
+    they nominate as the internal gateway.** `WARDYN_ANTHROPIC_BASE_URL`/
+    `WARDYN_OPENAI_BASE_URL` (`internal/api/llm_gateway.go`,
+    `Proxy.vetTrustedHost`/`egressTarget`) re-point the api-key lane's
+    brokered credential injection at a control-plane-authored host — the
+    same trust class as `WARDYN_TRUSTED_CA_FILE` above (boot-time only,
+    never a `SiteConfig` field, never agent-reachable). Once configured, the
+    live api-key credential (`buildInjector`'s minted grant) is sent to
+    that host on every model call; gateway-side retention, logging, or
+    forwarding of the plaintext key is outside Wardyn's boundary entirely —
+    the same trust an operator already extends to any corporate proxy they
+    nominate (`upstream_proxy_url`), stated explicitly here because a model
+    credential is higher-value than most. Bounded on every other axis: the
+    knob is validated at boot (`https://` only, no userinfo, the gateway
+    host must not equal the public provider host, loopback/link-
+    local/metadata/unspecified/multicast/NAT64-embedded literals refused —
+    RFC1918/CGNAT is the expected shape); the sandbox never resolves or
+    dials the gateway itself, so there is no rebinding window on this
+    path; and the veto in `planArtifactRedirect` keeps an unrelated
+    artifact-registry redirect from ever colliding with the same host.
+    **Scope, stated plainly:** only the api-key lane is redirected — a
+    subscription or Wardyn-managed run's credential still goes to
+    `api.anthropic.com` directly, unaffected by this knob.
 
 29. **`/healthz` is anonymous and now also names the k8s substrate's
     NetworkPolicy posture, not merely its confinement classes.** `handleHealthz`

@@ -152,7 +152,9 @@ wardyn-agent-<id> env | grep ANTHROPIC_API_KEY` prints the literal sentinel
 `wardyn-proxy-injected`, never your key); Claude Code talks to
 `ANTHROPIC_BASE_URL=http://wardyn-proxy:3128/wardyn/llm/anthropic`, where the
 proxy injects `x-api-key` and logs every model call as a `brokered:llm`
-decision in the audit trail. Watch the session live via Attach (`wardyn attach
+decision in the audit trail (an operator can re-point that brokered dial at
+an internal gateway — `WARDYN_ANTHROPIC_BASE_URL`, see OPERATIONS.md — with
+no sandbox-visible change at all). Watch the session live via Attach (`wardyn attach
 <id>`, or the console's Live terminal) — the **Recording** tab plays back the
 captured cast only after the fact, it has no live view.
 

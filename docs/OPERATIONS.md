@@ -1404,27 +1404,45 @@ lifted request is distinguishable from an ordinary allowed one.
 
 An internal, OpenAI-compatible model gateway is a common ask on a managed
 network: point every run's model calls at an internal endpoint instead of
-`api.anthropic.com`/`api.openai.com` directly. The supported path **today**
-is the same `egress_redirects` lane described above — point the row's `to` at
-the gateway hostname, with the agent itself configured to call the gateway
-directly (its own `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`, or an equivalent
-harness setting, pointed at the gateway, not at the public provider host).
+`api.anthropic.com`/`api.openai.com` directly. **Shipped for the api-key
+lane**: `WARDYN_ANTHROPIC_BASE_URL` / `WARDYN_OPENAI_BASE_URL` (see
+[ENV.md](ENV.md)) re-point the proxy's own brokered `/wardyn/llm/anthropic` /
+`/wardyn/llm/openai` route at the gateway instead of the public host —
+validated once at boot (`https://` only, RFC1918/CGNAT literal allowed,
+loopback/link-local/metadata/multicast/NAT64 refused, must not equal the
+public host) and forwarded to the proxy sidecar per run. No
+`SiteConfig.InternalHosts` declaration is needed for the gateway itself: the
+sandbox never resolves it — only the proxy does, per request, with its own
+refusal for the same disallowed address kinds.
 
-What does **not** work is redirecting Wardyn's *own* `ANTHROPIC_BASE_URL`/
-`OPENAI_BASE_URL` injection (the lane a subscription or managed-harness login
-uses) through an `egress_redirects` row. A redirect row substitutes egress
-allowlist entries and emits per-tool config files for the tools it knows
-(`internal/types/types.go` `EgressRedirect`); it never rewrites an in-flight
-request, and the injection lane's base URL is platform-authored and pinned to
-the public provider host (`internal/api/runs_dispatch_llm.go`), so a row with
-`from: api.anthropic.com` changes nothing about where that lane's traffic
-goes. Separately, the proxy refuses to treat those two hosts as a corporate
-mirror target (`internal/egress/proxy/mitm.go`, the `To`-side guard), so a
-redirect cannot be pointed *at* them to swap an artifact token onto real
-provider traffic — the same invariant that keeps a stolen redirect row from
-becoming a credential-theft gadget. A first-class, per-provider base-URL override (so the injection lane
-itself can point at an internal gateway) is planned for a future minor; see
-ROADMAP.md.
+The operator MUST add the gateway host (exact) to the policy's
+`allowed_domains` — the credential grant the proxy injects still needs an
+exact egress-allowlist entry, exactly like the public host does today; wardynd
+warns at boot when the default policy's `allowed_domains` omits a configured
+gateway's host. **Behind a corporate upstream proxy, the gateway must be
+reachable FROM that upstream** — with `upstream_proxy_url`/
+`upstream_proxy_secret_ref` also configured, every forward dial (the gateway
+included) is CONNECTed through the corp proxy by the transport, never
+dialled directly; there is no per-target bypass (a stated, documented
+ceiling — see the threat model).
+
+**Scope: the api-key lane only.** A subscription or Wardyn-managed-token run
+still talks to `api.anthropic.com` directly — the published agent images
+unconditionally `unset ANTHROPIC_BASE_URL` whenever a resident/managed
+credential is detected, and the harness-login (`claude setup-token`) lane is
+public too. Routing those lanes through a gateway needs an image change
+(teaching `agent-run` to honor an explicit operator-set base URL) — a Named
+gap, tracked in ROADMAP.md.
+
+Two invariants carry over from before this shipped, unchanged: the
+`egress_redirects` lane described above still works for pointing the AGENT'S
+OWN configuration (its `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` env, or an
+equivalent harness setting) at a gateway independently of Wardyn's own
+injection lane; and an `egress_redirects` row can never be pointed *at* the
+gateway or the public provider host to swap an artifact-registry token onto
+model traffic — `planArtifactRedirect` refuses that redirect outright
+(audited `run.artifact.redirect`, `warn`) rather than letting
+`buildInjector`'s last-write-wins host map silently collide the two.
 
 ### Upgrading from `artifact_overrides`
 
