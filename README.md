@@ -25,7 +25,7 @@ Pick by **who runs this box**. Everything here pulls cosign-signed, SBOM-atteste
 
 ### Single-user — you are the operator
 
-**Your own machine**, no login:
+**Your own machine** — no SSO; the installer prints an admin token you paste once:
 
 ```sh
 curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.4/install.sh | sh
