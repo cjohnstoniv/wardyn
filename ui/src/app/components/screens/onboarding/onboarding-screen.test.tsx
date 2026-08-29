@@ -6,6 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import type { SetupStatus } from "../../../lib/types";
 
 // OnboardingScreen now fetches getSetupStatus for its live readiness chips, and
@@ -57,7 +58,9 @@ describe("OnboardingScreen (welcome hero)", () => {
   // longer honest. The CTA drops the specific number entirely.
   it("the Get started CTA does not claim a stale specific time estimate", async () => {
     render(<OnboardingScreen onGetStarted={() => {}} />);
-    expect(screen.queryByText(/2 minutes/)).not.toBeInTheDocument();
+    // Word-bounded: the episode catalog below the CTA (EpisodeList) legitimately
+    // says "about 72 minutes" — a bare /2 minutes/ would false-positive on it.
+    expect(screen.queryByText(/\b2 minutes\b/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Get started/ })).toBeInTheDocument();
     await screen.findByText(/Barrier:/);
   });
@@ -114,33 +117,28 @@ describe("OnboardingScreen (welcome hero)", () => {
 
 // B4 HIGH-4: a member has no Getting Started nav entry, but a direct /setup
 // navigation must still land honestly — never the operator funnel (built from
-// a redacted SetupStatus a member can't act on), never a silent bounce.
+// a redacted SetupStatus a member can't act on), never a silent bounce. Since
+// Phase 5, it lands on the member's OWN Getting Started
+// (member-getting-started.tsx) rather than the old one-line notice —
+// member-getting-started.test.tsx covers that screen's own sections in full;
+// this suite only proves the routing swap.
 describe("GettingStarted (member direct navigation — B4 HIGH-4)", () => {
   beforeEach(() => {
     localStorage.clear();
     getSetupStatusMock.mockReset().mockResolvedValue(status());
   });
 
-  it("a member sees the honest notice, not the welcome hero or the funnel", () => {
+  it("a member sees their own Getting Started, not the admin welcome hero", async () => {
     render(
-      <RoleProvider role="member">
-        <GettingStarted onDone={() => {}} />
-      </RoleProvider>,
+      <MemoryRouter>
+        <RoleProvider role="member">
+          <GettingStarted onDone={() => {}} />
+        </RoleProvider>
+      </MemoryRouter>,
     );
-    expect(screen.getByText(/Setup is managed by your workspace admin/)).toBeInTheDocument();
+    expect(await screen.findByText("Getting started")).toBeInTheDocument();
+    expect(screen.getByText(/You're a member of this Wardyn/)).toBeInTheDocument();
     expect(screen.queryByText("Run anything. Keep your keys.")).not.toBeInTheDocument();
-  });
-
-  it("its action calls onDone (App.tsx's own navigate(\"/runs\"), not a second route)", async () => {
-    const user = userEvent.setup();
-    const onDone = vi.fn();
-    render(
-      <RoleProvider role="member">
-        <GettingStarted onDone={onDone} />
-      </RoleProvider>,
-    );
-    await user.click(screen.getByRole("button", { name: /go to runs/i }));
-    expect(onDone).toHaveBeenCalledTimes(1);
   });
 
   it("an admin (or the fail-open default) still sees the welcome hero", async () => {

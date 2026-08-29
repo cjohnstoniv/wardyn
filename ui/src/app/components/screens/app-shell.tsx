@@ -544,15 +544,21 @@ function TopBar({
                 <KeyRound className="size-4" /> SSH keys
               </Link>
             </DropdownMenuItem>
-            {/* Demos has no server-side role gate (routes.go), so it's offered
-                here for every role — same reasoning the old sidebar carried.
-                It points into Getting Started's first demo step: the funnel is
-                the one demos surface now, /demos only redirects here. */}
-            <DropdownMenuItem asChild>
-              <Link to="/setup?step=sealed-box">
-                <FlaskConical className="size-4" /> Demos
-              </Link>
-            </DropdownMenuItem>
+            {/* Demos has no server-side role gate (routes.go), so admins keep
+                the same reasoning the old sidebar carried — it points into
+                Getting Started's first demo step, the one demos surface now
+                (/demos only redirects here). Hidden for members (Phase 5):
+                /setup?step=sealed-box is meaningless on the member's own
+                Getting Started, which has no step query at all — the member
+                catalog is EpisodeList on the welcome hero and the per-section
+                StepEpisodes rows instead. */}
+            {meta.role !== "member" && (
+              <DropdownMenuItem asChild>
+                <Link to="/setup?step=sealed-box">
+                  <FlaskConical className="size-4" /> Demos
+                </Link>
+              </DropdownMenuItem>
+            )}
             {/* W31-S1-1: local mode has no session to sign out of — humanOrAdminAuth
                 (internal/api/http.go) bypasses auth entirely, so "Sign out" would drop
                 the client to a SignIn screen whose admin-token field is unchecked

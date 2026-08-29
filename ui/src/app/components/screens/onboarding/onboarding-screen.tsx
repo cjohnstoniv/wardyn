@@ -10,17 +10,18 @@
 // skip, no demo side-door (see GettingStarted below). Rendered inside the
 // AppShell as the "Getting started" nav content.
 import * as React from "react";
-import { ArrowRight, BrickWall, Compass, KeyRound, Shield } from "lucide-react";
+import { ArrowRight, BrickWall, KeyRound, Shield } from "lucide-react";
 import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
 import { strongestAvailable } from "../../wardyn/default-confinement";
-import { EmptyState } from "../../wardyn/states";
 import { useRole } from "../../wardyn/operator-context";
 import { setup as api } from "../../../lib/api/setup";
 import { lsGet, lsSet } from "../../../lib/storage";
 import type { SetupStatus } from "../../../lib/types";
 import { HowItWorksStrip, IntroBlurb } from "./intro";
+import { EpisodeList } from "./episode-card";
+import { MemberGettingStarted } from "./member-getting-started";
 import { deriveReadiness } from "../../../lib/readiness";
 import { SetupScreen } from "../setup/setup-screen";
 
@@ -37,33 +38,20 @@ export function markOnboardingSeen(): void {
   lsSet(ONBOARDING_KEY, "1");
 }
 
-// B4 HIGH-4: a member has no "Getting started" nav entry (setup is the
-// operator's funnel — app-shell.tsx), but nothing stops a direct /setup
-// navigation (an old bookmark, a shared link). Land honestly instead of
-// rendering the operator funnel (built from a redacted SetupStatus a member
-// can't act on) or silently bouncing them elsewhere unexplained.
-function MemberSetupNotice({ onDone }: { onDone: () => void }) {
-  return (
-    <div className="mx-auto flex min-h-[60vh] w-full max-w-[560px] items-center px-6">
-      <EmptyState
-        icon={Compass}
-        title="Setup is managed by your workspace admin"
-        description="Barriers, model access, and integrations are configured by an admin — your runs inherit what they've set up. There's nothing to configure here."
-        // onDone is App.tsx's navigate("/runs") — the same exit every finished
-        // funnel uses, not a second copy of the route.
-        action={<Button onClick={onDone}>Go to Runs</Button>}
-      />
-    </div>
-  );
-}
-
 // The "Getting started" flow: the welcome hero first (until seen), then the setup
 // funnel. No double stepper — the welcome has no stepper; the funnel has one.
+//
+// B4 HIGH-4 / Phase 5: a member has no "Getting started" nav entry (setup is
+// the operator's funnel — app-shell.tsx), but nothing stops a direct /setup
+// navigation (an old bookmark, a shared link). Land on the member's OWN
+// Getting Started (member-getting-started.tsx) instead of the operator funnel
+// (built from a redacted SetupStatus a member can't act on) — replaces the
+// former one-line MemberSetupNotice bounce.
 export function GettingStarted({ onDone }: { onDone: () => void }) {
   const role = useRole();
   const [seen, setSeen] = React.useState(onboardingSeen());
   if (role === "member") {
-    return <MemberSetupNotice onDone={onDone} />;
+    return <MemberGettingStarted onDone={onDone} />;
   }
   if (!seen) {
     // Single forward path: the welcome hands off INTO the funnel (no skip, no
@@ -192,6 +180,8 @@ export function OnboardingScreen({ onGetStarted }: { onGetStarted: () => void })
         A quick guided setup — the barrier is the only requirement; a model or agent
         is optional. You can revisit anytime under “Getting started” in the sidebar.
       </p>
+
+      <EpisodeList />
     </div>
   );
 }
