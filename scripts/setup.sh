@@ -24,9 +24,11 @@
 #    re-login), and proxy-injects your live token (never a stale copy). Skips the
 #    container; not recommended on Docker Desktop + WSL2 (Record/replay won't route).
 #
-# TEAM mode: a packaged one-command team setup does not exist, but admin/member
-# RBAC + SSO shipped in v0.5 — see docs/OPERATIONS.md §Multi-user and
-# deploy/compose/README.md for the recipe (Dex/OIDC + WARDYN_OIDC_ROLE_MAP).
+# TEAM (multi-user) mode: a packaged one-command setup does not exist, but
+# admin/member RBAC + SSO shipped in v0.5 — see docs/OPERATIONS.md §Multi-user
+# and deploy/compose/README.md for the admin's recipe (Dex/OIDC +
+# WARDYN_OIDC_ROLE_MAP). Joining a deployment someone else runs, not setting
+# one up? You don't need this script — see docs/MEMBERS.md.
 # WARDYN_SETUP_MODE=team prints that notice and exits.
 #
 # Barriers (Fence/Wall/Vault) that need a package install (gVisor, Kata) require sudo —
@@ -202,8 +204,9 @@ fi
 # (wardynd runs as you; uses your resident Claude login directly) is an advanced
 # escape hatch. ONE front door: with a TTY and no explicit WARDYN_SETUP_MODE we
 # ask (Enter = containerized); headless defaults to containerized too. TEAM (a
-# packaged one-command team setup) does not exist, but admin/member RBAC + SSO
-# shipped in v0.5 — see docs/OPERATIONS.md §Multi-user for the recipe.
+# packaged one-command multi-user setup) does not exist, but admin/member RBAC
+# + SSO shipped in v0.5 — see docs/OPERATIONS.md §Multi-user for the recipe,
+# or docs/MEMBERS.md if you're joining a deployment someone else runs.
 if [ -z "${WARDYN_SETUP_MODE:-}" ] && [ -t 0 ]; then
   hd "Where should the control plane run?"
   say "    1) containerized — the compose stack (default, recommended)"
@@ -268,14 +271,19 @@ case "${WARDYN_SETUP_MODE:-container}" in
     info "in-network (the Docker Desktop + WSL2 NAT workspace-Verify/Record fix). Set up model"
     info "access with 'wardyn subscription connect' (Claude subscription), an api-key secret, or"
     info "Bedrock — interactively after launch or headless via WARDYN_SUBSCRIPTION_TOKEN."
+    info "Offline host, or a mirror that hasn't onboarded pnpm? A failed image pull falls back to"
+    info "building from this checkout automatically (WARDYN_BUILD_LOCAL=1 forces that path) — see"
+    info "docs/adoption/make-setup-requires-ui-stage-on-pnpm-less-mirror.md."
     exec ./scripts/up.sh up
     ;;
   local|host) ;;
   team)
-    hd "A packaged one-command team setup does not exist"
+    hd "A packaged one-command multi-user (team) setup does not exist"
     warn "There is no team-mode installer here — but admin/member RBAC + SSO (Dex/OIDC,"
     warn "WARDYN_OIDC_ROLE_MAP) shipped in v0.5 on top of the same compose control plane."
-    warn "See docs/OPERATIONS.md §Multi-user and deploy/compose/README.md for the recipe."
+    warn "See docs/OPERATIONS.md §Multi-user and deploy/compose/README.md for the admin's recipe."
+    warn "Joining a deployment someone else runs, not setting one up? See docs/MEMBERS.md — you"
+    warn "don't need this script at all."
     warn "What this script sets up today, both single-user: CONTAINERIZED mode ('make setup' /"
     warn "Enter at the prompt — the compose stack, the default) and HOST mode"
     warn "(WARDYN_SETUP_MODE=local — advanced: wardynd runs as you, your Claude login injected"

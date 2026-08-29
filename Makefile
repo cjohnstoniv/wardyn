@@ -792,9 +792,13 @@ record-demo: ## Record the demo video (DESTRUCTIVE: resets the stack; ARGS: --no
 
 # ONE front door: asks containerized (default, recommended — the compose stack) vs
 # host (advanced escape hatch — wardynd runs as you, using your resident Claude
-# login). Enter / headless = containerized; a packaged one-command team setup does not
-# exist, but admin/member RBAC + SSO shipped in v0.5 — see docs/OPERATIONS.md §Multi-user
-# and deploy/compose/README.md for the recipe.
+# login). Enter / headless = containerized; a packaged one-command multi-user (team)
+# setup does not exist, but admin/member RBAC + SSO shipped in v0.5 — see
+# docs/OPERATIONS.md §Multi-user and deploy/compose/README.md for the admin's recipe,
+# or docs/MEMBERS.md if you're joining a deployment someone else runs. A failed image
+# pull (offline host, a mirror with no pnpm) falls back to building from this checkout
+# automatically — WARDYN_BUILD_LOCAL=1 forces that path; see
+# docs/adoption/make-setup-requires-ui-stage-on-pnpm-less-mirror.md.
 # In host mode a terminal PROMPTS for each credential (staging, AWS, SCM); a headless
 # run (no TTY) skips them unless WARDYN_STAGE_CLAUDE=1 / WARDYN_IMPORT_AWS=1 /
 # WARDYN_IMPORT_SCM=1 / WARDYN_FORCE_RESET=1 are set. Scripts that must not
