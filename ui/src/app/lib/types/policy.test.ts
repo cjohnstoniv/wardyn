@@ -153,6 +153,19 @@ describe("toolRulesProblem — mirrors validateToolRules", () => {
     );
     expect(toolRulesProblem([{ tool: "x".repeat(MAX_TOOL_RULE_NAME_LEN), effect: "hold" }])).toBeNull();
   });
+
+  // Go caps len(name) — BYTES. Measuring .length here (UTF-16 units) accepted a
+  // name the server then 400'd: 40 CJK characters is 40 units but 120 bytes.
+  it("measures the cap in bytes, as Go does, not in UTF-16 units", () => {
+    const cjk = "漢".repeat(40);
+    expect(cjk.length).toBeLessThanOrEqual(MAX_TOOL_RULE_NAME_LEN);
+    expect(new TextEncoder().encode(cjk).length).toBeGreaterThan(MAX_TOOL_RULE_NAME_LEN);
+    expect(toolRulesProblem([{ tool: cjk, effect: "hold" }])).toMatch(/exceeds/);
+
+    // 21 CJK characters is 63 bytes — still legal, so the byte count is not
+    // just a stricter character count.
+    expect(toolRulesProblem([{ tool: "漢".repeat(21), effect: "hold" }])).toBeNull();
+  });
 });
 
 // The panel's parseSpec is a bare cast over a free-form textarea, so this gets

@@ -140,7 +140,12 @@ export interface ToolRule {
 // Server-side ceilings, mirrored from internal/api/policy.go so the editor can
 // refuse what the API would refuse instead of round-tripping a 400.
 export const MAX_TOOL_RULES = 32;
+// BYTES, matching Go's len(name) — see toolRulesProblem. There is no HTML
+// attribute that counts bytes, which is why the tool input carries no
+// maxLength: the refusal below is the whole surface for this cap.
 export const MAX_TOOL_RULE_NAME_LEN = 64;
+
+const UTF8 = new TextEncoder();
 
 // toolRulesProblem mirrors validateToolRules (internal/api/policy.go): the same
 // refusals, in the same order, so the editor's message and the server's are
@@ -170,8 +175,12 @@ export function toolRulesProblem(rules: readonly ToolRule[] | unknown): string |
       return "Every rule needs a tool name (use * for the default).";
     }
     const name = tool.trim();
-    if (name.length > MAX_TOOL_RULE_NAME_LEN) {
-      return `“${name}” exceeds ${MAX_TOOL_RULE_NAME_LEN} characters.`;
+    // Go measures len(name) — BYTES, not UTF-16 units. Counting .length here
+    // let a 40-CJK-character name (120 bytes) pass the editor and come back a
+    // 400 at Save; the message says bytes because at that point the count and
+    // the character count are different numbers.
+    if (UTF8.encode(name).length > MAX_TOOL_RULE_NAME_LEN) {
+      return `“${name}” exceeds ${MAX_TOOL_RULE_NAME_LEN} bytes.`;
     }
     if (name !== tool) {
       return `“${tool}” has leading or trailing whitespace; the match is exact, so it would never fire.`;

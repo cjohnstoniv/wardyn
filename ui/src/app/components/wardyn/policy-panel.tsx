@@ -30,7 +30,6 @@ import * as React from "react";
 import { CircleCheck, CircleX, Globe, Plus, ShieldCheck, Timer, Trash2 } from "lucide-react";
 import type { RunPolicySpec, ToolEffect, ToolRule } from "../../lib/types";
 import {
-  MAX_TOOL_RULE_NAME_LEN,
   TOOL_EFFECTS,
   TOOL_RULE_DEFAULT,
   toolRulesProblem,
@@ -542,11 +541,15 @@ function ToolRulesSection({
 
       {named.map((rule, i) => (
         <div key={i} className={cn(RULE_GRID, "border-b border-border py-2")}>
+          {/* No maxLength: the cap is 64 BYTES (Go's len) and the attribute
+              counts UTF-16 units, so it cannot express this one — it would
+              silently swallow the 65th keystroke of a legal ASCII name while
+              still letting a 40-character CJK name (120 bytes) through. The
+              refusal below is the honest surface for the cap. */}
           <Input
             aria-label={`Tool ${i + 1}`}
             value={rule.tool}
             spellCheck={false}
-            maxLength={MAX_TOOL_RULE_NAME_LEN}
             placeholder="Bash"
             onChange={(e) => patchNamed(i, { tool: e.target.value })}
             className="h-8 font-mono text-body"
