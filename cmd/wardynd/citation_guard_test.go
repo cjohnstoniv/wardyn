@@ -76,6 +76,25 @@ func TestSecurityDocsCiteSymbolsNotLineNumbers(t *testing.T) {
 	}
 }
 
+// TestMembersDocCitesSymbolsNotLineNumbers extends the same rule to
+// docs/MEMBERS.md, the first member-facing doc: a line citation there rots
+// the same way it does everywhere else, and a member reader has even less
+// use for one than a security reviewer does. Cite endpoints, env vars and
+// doc anchors instead.
+func TestMembersDocCitesSymbolsNotLineNumbers(t *testing.T) {
+	root := repoRoot(t)
+	path := filepath.Join(root, "docs", "MEMBERS.md")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read docs/MEMBERS.md: %v", err)
+	}
+	for i, line := range strings.Split(string(b), "\n") {
+		if m := lineCitation.FindString(line); m != "" {
+			t.Errorf("docs/MEMBERS.md:%d cites %q by line number — cite the SYMBOL instead", i+1, m)
+		}
+	}
+}
+
 func TestCommentsCiteSymbolsNotLineNumbers(t *testing.T) {
 	root := repoRoot(t)
 

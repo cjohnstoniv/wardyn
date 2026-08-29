@@ -6,6 +6,7 @@ wizard — with its built-in demo steps — is the first-run path. Everything he
 | If you want to… | Read |
 |---|---|
 | Run it locally and watch the boundary hold | [TRY-IT.md](TRY-IT.md) |
+| Use a Wardyn someone else operates (you are a member, not the admin) | [MEMBERS.md](MEMBERS.md) |
 | Configure a deployment (every `WARDYN_*` variable, defaults, which binary reads it) | [ENV.md](ENV.md) |
 | Author a run policy (every `RunPolicySpec` field, defaults, legal values) | [POLICIES.md](POLICIES.md) + [examples/policies/](../examples/policies/) |
 | Run a governed sandbox from a pipeline, headless | [CI.md](CI.md) + [ci/](ci/) |
