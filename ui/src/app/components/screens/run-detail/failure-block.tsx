@@ -20,11 +20,13 @@
 // recognise renders the state and the audit link ALONE. No invented reason, and
 // the "What to do" list is dropped rather than filled with generic advice — a
 // wrong instruction costs an operator more than no instruction.
+import type { ReactNode } from "react";
 import { ScrollText } from "lucide-react";
 import type { AgentRun, AuditEvent, RunEndingKind } from "../../../lib/types";
 import { runEndingFromAudit } from "../../../lib/api/audit";
 import { absoluteTime } from "../../../lib/format";
 import { Button } from "../../ui/button";
+import { Mono } from "../../wardyn/code-block";
 import { formatElapsed } from "../run-detail-summary-header";
 
 // COPY CHANGE (M7): the two labels, the action, and the four reason bodies.
@@ -38,17 +40,22 @@ const OPEN_AUDIT = "Open audit trail";
 type EndingCopy = {
   /** `elapsed` is the run's own lifetime up to the ending event. */
   happened: (elapsed: string) => string;
-  todo: readonly string[];
+  /** Nodes, not strings, so a wire literal in a line can be <Mono> (§3). */
+  todo: readonly ReactNode[];
 };
 
 const ENDING_COPY: Partial<Record<RunEndingKind, EndingCopy>> = {
+  // run.build/failure is a BUILD, not a pull: a BYOI wrap, a request-level
+  // devcontainer, or the workspace's own image (runs_create.go's buildFailed,
+  // workspace_run_image.go's buildAudit). The server's own hint on the run is
+  // "the run's sandbox image could not be built"; the builder's error rides
+  // data.error, which the block renders verbatim above these lines.
   image: {
     happened: () =>
-      "The sandbox image never pulled, so the run stopped before the agent started. There is no exit code because nothing ran.",
+      "The sandbox image could not be built, so the run stopped before the agent started. There is no exit code because nothing ran.",
     todo: [
-      "Check the registry is reachable from the runner host.",
-      "Confirm the image tag in Base images still exists.",
-      "Re-run once the pull succeeds — the policy and workspace are unchanged.",
+      "Fix the image or the devcontainer it builds from, then start a new run — the policy and workspace are unchanged.",
+      "The audit row carries the builder's full output.",
     ],
   },
   selftest: {
@@ -74,11 +81,29 @@ const ENDING_COPY: Partial<Record<RunEndingKind, EndingCopy>> = {
       "Nobody attached and nothing reached out, so the run hit its idle auto-stop window and shut itself down. This is the policy working, not a fault.",
     todo: [
       "Nothing, if you were done — the recording and the audit trail are kept.",
-      "Raise auto_stop_after_sec in the policy if the window is too short.",
-      "Set the lifecycle to never-reap for a session you plan to leave sitting.",
+      <>
+        Raise <Mono>auto_stop_after_sec</Mono> in the policy if the window is too short, or set it
+        to <Mono>-1</Mono> for a session you plan to leave sitting.
+      </>,
     ],
   },
   // `unknown` is deliberately absent — see the file header.
+};
+
+// A kill whose cascade did NOT fully succeed. run.kill carries outcome
+// "failure" (plus a run.revoke/failure row) when KillSandbox, the identity
+// revoke or the broker revoke failed — internal/api/runs_lifecycle.go's HONEST
+// OUTCOME: the run IS marked KILLED, but the sandbox may still be live and a
+// minted token may still be valid until its TTL. The clean-kill copy above
+// asserts the opposite of all three, so this run gets its own.
+const KILL_INCOMPLETE: EndingCopy = {
+  happened: (elapsed) =>
+    `An operator killed this run ${elapsed} in, and a teardown step failed. The state is KILLED, but the sandbox may still be live and a credential it held may still work.`,
+  todo: [
+    "The audit row names the step that failed — read it before treating this run as contained.",
+    "Killing it again re-runs the same teardown; the cascade is safe to repeat.",
+    "Files written to a mounted workspace are still on the host; scratch is gone.",
+  ],
 };
 
 export function RunFailureBlock({
@@ -94,7 +119,8 @@ export function RunFailureBlock({
 }) {
   const ending = runEndingFromAudit(run.state, audit);
   if (!ending) return null;
-  const copy = ENDING_COPY[ending.kind];
+  const copy =
+    ending.kind === "killed" && ending.outcome === "failure" ? KILL_INCOMPLETE : ENDING_COPY[ending.kind];
   // The ending event's own timestamp bounds the run's lifetime; without one
   // (a truncated trail) fall back to the run's last update, which is what the
   // command bar's own clock freezes at.
@@ -115,10 +141,19 @@ export function RunFailureBlock({
         <>
           <p className="label-eyebrow">{HAPPENED}</p>
           <p className="mt-1 text-xs leading-relaxed text-foreground">{copy.happened(elapsed)}</p>
+          {/* The failing step's OWN words, mono because it is a wire value
+              (§3) — the same data.error the CLI's runFailureReason prints.
+              Under an unrecognised ending there is no copy block at all, so
+              this never appears without a cause naming it. */}
+          {ending.detail && (
+            <p className="mt-1 break-words text-muted-foreground">
+              <Mono>{ending.detail}</Mono>
+            </p>
+          )}
           <p className="label-eyebrow mt-3">{TODO}</p>
           <ul className="mt-1 space-y-0.5 text-xs leading-relaxed text-muted-foreground">
-            {copy.todo.map((line) => (
-              <li key={line} className="flex gap-2">
+            {copy.todo.map((line, i) => (
+              <li key={i} className="flex gap-2">
                 <span aria-hidden="true">·</span>
                 <span>{line}</span>
               </li>

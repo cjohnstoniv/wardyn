@@ -115,6 +115,11 @@ function firstEvent(events: AuditEvent[], pick: (e: AuditEvent) => boolean): Aud
   return events.find(pick);
 }
 
+/** The LAST event matching `pick` — the most recent attempt, not the first. */
+function lastEvent(events: AuditEvent[], pick: (e: AuditEvent) => boolean): AuditEvent | undefined {
+  return events.filter(pick).pop();
+}
+
 // Why a run ended badly, from the trail the run page already holds. The console
 // half of the CLI's runFailureReason (cmd/wardyn/commands.go), which scans the
 // same events FORWARD for the first failure — the earliest failure is the
@@ -133,19 +138,33 @@ export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEn
     outcome: e?.outcome,
     actor: e?.actor,
     time: e?.time,
+    detail: str(e?.data?.error) ?? str(e?.data?.reason) ?? str(e?.data?.detail),
   });
   if (state === "KILLED") {
-    // The kill event carries WHO and WHEN. A KILLED run with no run.kill row
-    // (an older trail, or one truncated by the 1000-row cap) still gets the
-    // block — the state alone is the fact; only the attribution is missing.
-    return from("killed", firstEvent(events, (e) => e.action === "run.kill"), "run.kill");
+    // The kill event carries WHO and WHEN. The LAST one, not the first: the
+    // server exempts an already-KILLED run from the terminal guard precisely so
+    // a kill whose teardown failed can be retried (runs_lifecycle.go), so the
+    // most recent attempt — not the first — is this run's containment truth. A
+    // KILLED run with no run.kill row at all (an older trail, or one truncated
+    // by the 1000-row cap) still gets the block: the state alone is the fact,
+    // only the attribution is missing.
+    return from("killed", lastEvent(events, (e) => e.action === "run.kill"), "run.kill");
   }
   if (state === "STOPPED") {
     const stop = firstEvent(events, (e) => e.action === "run.autostop");
     return stop ? from("auto_stop", stop, "run.autostop") : undefined;
   }
   if (state !== "FAILED") return undefined;
-  const cause = firstEvent(events, (e) => e.outcome === "failure" && e.action in FAILED_CAUSE);
+  // fail_closed:false is a WARN-ONLY selftest — an interactive BYOI run runs it
+  // for the warning and carries on (runs_dispatch.go's byoiSelftest(…, false)).
+  // Its run.selftest/failure row is not why a run that later failed for its own
+  // reason failed, and "refused before any task ran" would be a false diagnosis
+  // of a run that ran. Only an explicit false disqualifies a row: the key is
+  // absent on run.build and on older trails.
+  const cause = firstEvent(
+    events,
+    (e) => e.outcome === "failure" && e.action in FAILED_CAUSE && e.data?.fail_closed !== false,
+  );
   return cause ? from(FAILED_CAUSE[cause.action], cause, cause.action) : { kind: "unknown", action: "" };
 }
 

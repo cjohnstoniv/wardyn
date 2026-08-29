@@ -81,6 +81,41 @@ describe("runEndingFromAudit — the state picks the family, the audit picks the
       time: undefined,
     });
   });
+
+  // An INTERACTIVE BYOI run's selftest is WARN-ONLY (runs_dispatch.go's
+  // byoiSelftest(…, false)): it records run.selftest/failure and the run carries
+  // on. Treating that row as the cause told an operator whose run failed an hour
+  // later that it was "refused before any task ran" — a false diagnosis of a run
+  // that ran.
+  it("a warn-only selftest row is not a cause — fail_closed:false disqualifies it", () => {
+    const warned = ev("run.selftest", "failure", { data: { fail_closed: false } });
+    expect(runEndingFromAudit("FAILED", [warned])).toEqual({ kind: "unknown", action: "" });
+
+    // fail-closed, and an older trail with no flag at all, both still count.
+    expect(runEndingFromAudit("FAILED", [ev("run.selftest", "failure", { data: { fail_closed: true } })])?.kind)
+      .toBe("selftest");
+    expect(runEndingFromAudit("FAILED", [ev("run.selftest", "failure")])?.kind).toBe("selftest");
+  });
+
+  // The server exempts an already-KILLED run from the terminal guard so a kill
+  // whose teardown failed can be retried; the LAST attempt is the run's
+  // containment truth, not the first.
+  it("reads the LAST run.kill row — a successful retry is the current outcome", () => {
+    const ending = runEndingFromAudit("KILLED", [
+      ev("run.kill", "failure", { actor: "alice" }),
+      ev("run.kill", "success", { actor: "bob" }),
+    ]);
+    expect(ending).toMatchObject({ kind: "killed", outcome: "success", actor: "bob" });
+  });
+
+  // The failing step's own words, the same error/reason/detail keys the CLI's
+  // runFailureReason reads.
+  it("carries the audit row's own reason as `detail`", () => {
+    expect(
+      runEndingFromAudit("FAILED", [ev("run.build", "failure", { data: { error: "pull denied" } })])?.detail,
+    ).toBe("pull denied");
+    expect(runEndingFromAudit("FAILED", [ev("run.build", "failure")])?.detail).toBeUndefined();
+  });
 });
 
 describe("RunFailureBlock", () => {
@@ -93,12 +128,16 @@ describe("RunFailureBlock", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("image: says nothing ran, and why there is no exit code", () => {
-    renderBlock("FAILED", [ev("run.build", "failure")]);
+  // run.build is a BUILD failure (BYOI wrap / devcontainer / workspace image),
+  // never a pull — and the builder's reason is already on the row, so the block
+  // shows it rather than sending the operator to guess at a registry.
+  it("image: says the image could not be built, and prints the builder's own error", () => {
+    renderBlock("FAILED", [ev("run.build", "failure", { data: { error: "step 4/9: npm ci exited 1" } })]);
     expect(screen.getByText("What happened")).toBeInTheDocument();
-    expect(screen.getByText(/The sandbox image never pulled/)).toBeInTheDocument();
+    expect(screen.getByText(/The sandbox image could not be built/)).toBeInTheDocument();
+    expect(screen.getByText("step 4/9: npm ci exited 1")).toBeInTheDocument();
     expect(screen.getByText("What to do")).toBeInTheDocument();
-    expect(screen.getByText(/Confirm the image tag in Base images still exists/)).toBeInTheDocument();
+    expect(screen.getByText(/Fix the image or the devcontainer it builds from/)).toBeInTheDocument();
     expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-ending", "image");
   });
 
@@ -116,10 +155,25 @@ describe("RunFailureBlock", () => {
     expect(screen.getByText(/run\.kill · success · alice/)).toBeInTheDocument();
   });
 
-  it("auto_stop: framed as the policy working, not as a fault", () => {
+  it("auto_stop: framed as the policy working, and names the field that sets it", () => {
     renderBlock("STOPPED", [ev("run.autostop", "success", { actor: "wardyn/lifecycle-reaper" })]);
     expect(screen.getByText(/This is the policy working, not a fault\./)).toBeInTheDocument();
-    expect(screen.getByText(/Raise auto_stop_after_sec in the policy/)).toBeInTheDocument();
+    // The wire literal, in mono (§3) — the old line named a "never-reap
+    // lifecycle" control this console does not have.
+    expect(screen.getByText("auto_stop_after_sec")).toHaveClass("font-mono");
+    expect(screen.getByText("-1")).toHaveClass("font-mono");
+  });
+
+  // run.kill carries outcome "failure" when a teardown/revocation step failed
+  // (runs_lifecycle.go): the run is KILLED but may not be contained, so the
+  // clean-teardown copy — identity revoked, credential stopped working — would
+  // be three false claims on the one surface that must not make them.
+  it("killed with a failed teardown: says so instead of claiming containment", () => {
+    renderBlock("KILLED", [ev("run.kill", "failure", { actor: "alice", actor_type: "human" })]);
+    expect(screen.getByText(/a teardown step failed/)).toBeInTheDocument();
+    expect(screen.getByText(/may still be live/)).toBeInTheDocument();
+    expect(screen.queryByText(/identity revoked/)).not.toBeInTheDocument();
+    expect(screen.getByText(/read it before treating this run as contained/)).toBeInTheDocument();
   });
 
   it("unknown: the audit link and nothing else — no invented cause, no generic advice", () => {

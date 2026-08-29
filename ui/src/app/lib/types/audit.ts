@@ -50,8 +50,8 @@ export interface EgressDecision {
 // trail and says nothing more, rather than inventing advice (CONSOLE-RULES §10:
 // never overclaim).
 export type RunEndingKind =
-  | "image" // run.build failed: the sandbox image never came up, so nothing ran
-  | "selftest" // run.selftest failed: the wrapped image was refused before any task
+  | "image" // run.build failed: the sandbox image could not be built, so nothing ran
+  | "selftest" // run.selftest failed CLOSED: the wrapped image was refused before any task
   | "killed" // an operator killed it
   | "auto_stop" // the idle reaper stopped it — the policy working, not a fault
   | "unknown";
@@ -65,4 +65,10 @@ export interface RunEnding {
   actor?: string;
   /** When that event was recorded. */
   time?: string;
+  /**
+   * The failing step's own reason, verbatim off the audit row — the same
+   * error/reason/detail keys, in the same order, the CLI's runFailureReason
+   * reads (cmd/wardyn/commands.go). Absent when the row carried none.
+   */
+  detail?: string;
 }
