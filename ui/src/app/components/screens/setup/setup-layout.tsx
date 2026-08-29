@@ -24,6 +24,7 @@ import {
 } from "./steps";
 import { StatusChip } from "../../wardyn/status-chip";
 import { HowItWorksStrip, IntroBlurb } from "../onboarding/intro";
+import { StepEpisodes } from "../onboarding/episode-card";
 import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 
 export function SetupLayout({
@@ -155,6 +156,7 @@ export function SetupLayout({
             {OPTIONAL_STEPS.has(current) && <StatusChip status="optional" />}
           </div>
           {children}
+          <StepEpisodes stepId={current} />
 
           {/* Footer — forward-only. No early "skip"/"finish later" escape: the
               first-run gate keeps the operator in setup until the flow's end, where
