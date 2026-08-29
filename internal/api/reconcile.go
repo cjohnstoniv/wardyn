@@ -106,6 +106,7 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	if s.cfg.Runner == nil {
 		return buildErr
 	}
+	s.auditK8sNetpolIfUnenforced(ctx)
 	// Start the periodic sweep FIRST, before anything that can fail: a transient
 	// store error in the boot pass must not disable adoption for the process's
 	// whole lifetime, which is exactly what returning early ahead of this line
@@ -132,6 +133,30 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	// calls ListRuns unpaged and probes every terminal run carrying a ref, so its
 	// cost grows with run history forever and it would need leader election.
 	return errors.Join(buildErr, s.finalizeUndispatchedRuns(ctx), s.sweepRunWatchers(ctx), s.reconcileOrphanedSandbox(ctx), s.sweepOrphanedSandboxes(ctx))
+}
+
+// auditK8sNetpolIfUnenforced writes one boot-time audit row, "k8s.netpol_unenforced",
+// the moment k8sNetpolVerdict grades this runner "unenforced" or "acknowledged" —
+// the two verdicts under which every sandbox runs without a proven default-deny
+// NetworkPolicy. Silent on "enforced" and on every non-k8s driver (empty
+// verdict). Best-effort like the rest of ReconcileOnBoot: a failed
+// Capabilities() call already means no live k8s daemon to warn about, so it is
+// treated the same as a non-k8s driver, not as a reason to fail boot. Nil run
+// id, like apitokens.go's token.create/token.revoke rows — this is a
+// deployment-wide posture fact, not tied to any one run.
+func (s *Server) auditK8sNetpolIfUnenforced(ctx context.Context) {
+	driver := s.cfg.Runner.Name()
+	caps, err := s.cfg.Runner.Capabilities(ctx)
+	if err != nil {
+		return
+	}
+	verdict := k8sNetpolVerdict(driver, caps)
+	if verdict != "unenforced" && verdict != "acknowledged" {
+		return
+	}
+	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardyn/reconcile",
+		"k8s.netpol_unenforced", driver, "failure",
+		mustJSON(map[string]any{"verdict": verdict, "driver": driver})))
 }
 
 // sweepOrphanedSandboxes tears down the per-run containers of runs whose row no

@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -25,6 +26,86 @@ type errTeardownRunner struct {
 }
 
 func (e *errTeardownRunner) StopSandbox(context.Context, string) error { return e.stopErr }
+
+// TestAuditK8sNetpolIfUnenforced covers 6b commit 2: ReconcileOnBoot's
+// auditK8sNetpolIfUnenforced writes "k8s.netpol_unenforced" for the two
+// verdicts under which a sandbox runs unconfined (unenforced, acknowledged),
+// carrying {verdict, driver} with a nil run id (the apitokens.go token.create/
+// token.revoke precedent — a deployment-wide fact, not tied to a run).
+// Negative controls: a PROVEN-enforced k8s driver, a non-k8s driver, and a k8s
+// driver whose Capabilities() call itself errors must all stay silent.
+func TestAuditK8sNetpolIfUnenforced(t *testing.T) {
+	fire := func(t *testing.T, rn runner.Runner) *recRecorder {
+		t.Helper()
+		audit := &recRecorder{}
+		srv := New(Config{Runner: rn, Audit: audit})
+		srv.auditK8sNetpolIfUnenforced(context.Background())
+		return audit
+	}
+	find := func(events []types.AuditEvent) *types.AuditEvent {
+		for i := range events {
+			if events[i].Action == "k8s.netpol_unenforced" {
+				return &events[i]
+			}
+		}
+		return nil
+	}
+
+	for _, tc := range []struct {
+		name string
+		rn   runner.Runner
+	}{
+		{"unenforced", k8sRunner{}},
+		{"acknowledged", k8sRunner{networkPolicyAcknowledged: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			audit := fire(t, tc.rn)
+			ev := find(audit.events)
+			if ev == nil {
+				t.Fatalf("no k8s.netpol_unenforced event recorded (have %d events)", len(audit.events))
+			}
+			if ev.RunID != nil {
+				t.Errorf("RunID = %v, want nil (deployment-wide, not run-scoped)", ev.RunID)
+			}
+			if ev.ActorType != types.ActorSystem {
+				t.Errorf("ActorType = %q, want %q", ev.ActorType, types.ActorSystem)
+			}
+			var data struct {
+				Verdict string `json:"verdict"`
+				Driver  string `json:"driver"`
+			}
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				t.Fatalf("decode Data: %v", err)
+			}
+			wantVerdict := tc.name
+			if data.Verdict != wantVerdict {
+				t.Errorf("Data.verdict = %q, want %q", data.Verdict, wantVerdict)
+			}
+			if data.Driver != "k8s" {
+				t.Errorf("Data.driver = %q, want k8s", data.Driver)
+			}
+		})
+	}
+
+	t.Run("negative control: enforced stays silent", func(t *testing.T) {
+		audit := fire(t, k8sRunner{networkPolicy: true})
+		if ev := find(audit.events); ev != nil {
+			t.Errorf("k8s.netpol_unenforced fired on a PROVEN-enforced verdict: %+v", ev)
+		}
+	})
+	t.Run("negative control: non-k8s driver stays silent", func(t *testing.T) {
+		audit := fire(t, &fakeRunner{})
+		if ev := find(audit.events); ev != nil {
+			t.Errorf("k8s.netpol_unenforced fired on a non-k8s (Docker) driver: %+v", ev)
+		}
+	})
+	t.Run("negative control: Capabilities() error stays silent", func(t *testing.T) {
+		audit := fire(t, k8sRunner{capsErr: errors.New("k8s api unreachable")})
+		if ev := find(audit.events); ev != nil {
+			t.Errorf("k8s.netpol_unenforced fired despite a Capabilities() error: %+v", ev)
+		}
+	})
+}
 
 // TestReconcileFinalize_TeardownErrorAudited covers finding N2: when the boot
 // reconciler finalizes a stranded run and the sandbox teardown fails, it must

@@ -54,8 +54,8 @@ is *about* would record it in the one place already under suspicion.
 | `run.record.synthesize` | Record→Promote profile synthesis | `allowed_domains`, `anomalies`, `eligible_grants` | `internal/api/profile.go:156` | internal |
 | `run.revoke` | Credential/identity revoked on stop (API path), or the lifecycle reaper's revoke attempt fails | `runner_error`, `identity_error`, `broker_error` | `internal/api/runs_lifecycle.go:230`; reaper failure at `internal/lifecycle/lifecycle.go:368` | internal |
 | `run.autostop` | Idle-timeout autostop fires | `idle_for_sec`, `reason`, `threshold_sec` | `internal/lifecycle/lifecycle.go:346` | internal |
-| `run.reconcile` | The orphan-sandbox reconciler acts on a run at boot | (reconcile outcome) | `internal/api/reconcile.go:695` | internal |
-| `sandbox.orphan_sweep` | The boot-time orphan reconciler (`reconcileOrphanedSandbox`) FAILS to tear down a terminal run's still-live sandbox — emitted on failed teardown only; a still-failing teardown leaves the ref set for the next boot to retry | `sandbox_ref`, `teardown_error` | `internal/api/reconcile.go:212` (`stopSandboxOrAudit`, `internal/api/runs_lifecycle.go:195`) | internal |
+| `run.reconcile` | The orphan-sandbox reconciler acts on a run at boot | (reconcile outcome) | `internal/api/reconcile.go:717` | internal |
+| `sandbox.orphan_sweep` | The boot-time orphan reconciler (`reconcileOrphanedSandbox`) FAILS to tear down a terminal run's still-live sandbox — emitted on failed teardown only; a still-failing teardown leaves the ref set for the next boot to retry | `sandbox_ref`, `teardown_error` | `internal/api/reconcile.go:252` (`stopSandboxOrAudit`, `internal/api/runs_lifecycle.go:195`) | internal |
 | `sandbox.sweep_requested` | An OPERATOR triggered a sandbox sweep via `POST /api/v1/admin/sandboxes/sweep` — emitted on SUCCESS, recording who asked and how many were swept. Distinct from `sandbox.sweep`, which the primitive emits on failed teardown only. The boot pass runs the same primitive without this row, since nobody asked for it | `swept` | `internal/api/runs_lifecycle.go:605` | operator |
 | `sandbox.sweep` | `SweepTerminalSandboxes` (the callable sweep primitive over terminal runs with a live probed sandbox) FAILS to tear one down — emitted on failed teardown only, like its boot-time sibling | `sandbox_ref`, `teardown_error` | `internal/api/runs_lifecycle.go:268` (`stopSandboxOrAudit`, `internal/api/runs_lifecycle.go:195`) | internal |
 | `run.artifact.redirect` | Package-registry (artifact) redirect configured for a run | `detail`, `ecosystem`, `error`, `header`, `host`, `integration_id`, `port`, `secret_name` | `internal/api/artifact_redirect.go:231` | internal |
@@ -232,6 +232,7 @@ is `types.ActorSystem` and `Actor` is a fixed component name
 | Action | When | Data fields | Where | Stable? |
 |---|---|---|---|---|
 | `recording.retention.sweep` | The recordings age-based retention sweep runs (the retention knob `docs/ENV.md:47` names — see `docs/OPERATIONS.md`'s audit-retention paragraph for the asymmetry with the audit log itself, which has no such knob) | — | `cmd/wardynd/adapters.go:642` | internal |
+| `k8s.netpol_unenforced` | Boot-time NetworkPolicy canary verdict (`k8sNetpolVerdict`, also published on the anonymous `/healthz`'s `network_policy` field) grades this k8s substrate `unenforced` or `acknowledged` — every sandbox on it runs without a proven default-deny NetworkPolicy. Nil run id (deployment-wide, not tied to a run); silent on `enforced` and on every non-k8s driver | `verdict`, `driver` | `internal/api/reconcile.go:158` (`auditK8sNetpolIfUnenforced`) | internal |
 
 ## Notes on completeness
 
