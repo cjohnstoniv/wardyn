@@ -32,7 +32,7 @@ vi.mock("../../../lib/api/runs", () => ({
 import { HttpError } from "../../../lib/api/core";
 import { RUN_COCKPIT } from "../../wardyn/copy";
 import { RunCanvas } from "./canvas";
-import type { WidgetContext } from "./widget-registry";
+import { GRID_COLS, GRID_ROWS, presetLayout, type WidgetContext } from "./widget-registry";
 
 const RUN = {
   id: "run-1",
@@ -218,5 +218,60 @@ describe("RunCanvas — the terminal cannot be arranged away", () => {
 
     await waitFor(() => expect(widgetHeading("Egress")).not.toBeInTheDocument());
     expect(screen.getByTestId("run-terminal-pane")).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T2b/M3 — terminal-first. Every one of these already HELD when they were
+// written; they exist because nothing pinned them, so a preset edit could have
+// quietly demoted the session to a tile among tiles and no test would have
+// noticed. "Dominant" is the load-bearing word: at the top is not enough.
+// ---------------------------------------------------------------------------
+describe("the live preset is terminal-first", () => {
+  const area = (w: { w: number; h: number }) => w.w * w.h;
+
+  it("gives the terminal the whole viewport height and most of its width", () => {
+    const term = presetLayout("live").find((w) => w.widget === "terminal")!;
+    expect(term).toMatchObject({ x: 0, y: 0 });
+    // GRID_ROWS is one viewport (canvas.tsx derives rowHeight from it), so a
+    // full-height hero is a hero that never needs scrolling to.
+    expect(term.h).toBe(GRID_ROWS);
+    expect(term.w).toBeGreaterThan(GRID_COLS / 2);
+  });
+
+  it("makes it the biggest tile on the canvas, not merely the first", () => {
+    const live = presetLayout("live");
+    const term = live.find((w) => w.widget === "terminal")!;
+    for (const other of live.filter((w) => w.widget !== "terminal")) {
+      expect(area(other)).toBeLessThan(area(term));
+    }
+  });
+
+  it("an interactive RUNNING run lands on it — the run you drive is the run that needs the pixels", async () => {
+    render(<RunCanvas ctx={ctx({ run: { ...RUN, interactive: true } as WidgetContext["run"] })} />);
+    await waitFor(() => expect(getLayout).toHaveBeenCalledWith("live"));
+    // Interactive vs autonomous is the Terminal WIDGET's own state, never a
+    // third preset — so the arrangement is the same live one either way.
+    expect(await screen.findByRole("heading", { name: "Egress" })).toBeInTheDocument();
+    expect(tileY(screen.getByTestId("run-terminal-pane"))).toBeLessThan(
+      tileY(widgetHeading("Egress")) + 1,
+    );
+  });
+
+  it("still yields to a saved layout — terminal-first is the default, not a rule", async () => {
+    getLayout.mockResolvedValue({
+      preset: "live",
+      layout: [
+        { widget: "identity", x: 0, y: 0, w: 12, h: 6 },
+        { widget: "terminal", x: 0, y: 6, w: 12, h: 6 },
+      ],
+      updated_at: new Date().toISOString(),
+    });
+    render(<RunCanvas ctx={ctx({ run: { ...RUN, interactive: true } as WidgetContext["run"] })} />);
+    await waitFor(() =>
+      expect(tileY(screen.getByTestId("run-terminal-pane"))).toBeGreaterThan(
+        tileY(widgetHeading("Identity")),
+      ),
+    );
   });
 });
