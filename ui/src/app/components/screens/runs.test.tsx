@@ -513,6 +513,49 @@ describe("RunsScreen board — the pinned Needs-you lane", () => {
     expect(within(group).getAllByText("Failed")).toHaveLength(2);
   });
 
+  // The group header's danger signal follows the CARD RAIL, not needsAttention:
+  // "monitoring" (a passive deny_with_review pending) is inside needsAttention
+  // but no card paints it, so a red header sat over two ordinary RUNNING cards
+  // with nothing red on them.
+  it("a group whose only attention is a monitoring run gets no danger header", async () => {
+    listRunsMock.mockResolvedValue([
+      { ...run, id: "r1", title: "Nightly audit", task: "Watched step" },
+      { ...run, id: "r2", title: "Nightly audit", task: "Quiet step" },
+    ]);
+    listApprovalsMock.mockResolvedValue([
+      {
+        id: "a1",
+        run_id: "r1",
+        kind: "egress_domain",
+        requested_scope: { host: "unlisted.example" },
+        state: "PENDING",
+        requested_at: new Date().toISOString(),
+      },
+    ]);
+    renderScreen();
+
+    // The card states the passive pending, which proves the join landed — so
+    // the header below is read with the signal present, not before it arrives.
+    const group = await screen.findByRole("region", { name: "Nightly audit" });
+    expect(await within(group).findByText("1 waiting")).toBeInTheDocument();
+    expect(within(group).getByRole("heading", { name: "Nightly audit" }).className).not.toContain(
+      "text-danger",
+    );
+  });
+
+  it("a group holding a failed run still gets the danger header", async () => {
+    listRunsMock.mockResolvedValue([
+      { ...run, id: "r1", title: "Nightly audit", task: "Broken step", state: "FAILED" },
+      { ...run, id: "r2", title: "Nightly audit", task: "Quiet step" },
+    ]);
+    renderScreen();
+
+    const group = await screen.findByRole("region", { name: "Nightly audit" });
+    expect(within(group).getByRole("heading", { name: "Nightly audit" }).className).toContain(
+      "text-danger",
+    );
+  });
+
   it("no lane at all when nothing is asking — the heading is not permanent chrome", async () => {
     renderScreen();
     await screen.findByRole("button", { name: /run actions/i });

@@ -44,6 +44,7 @@ import {
   needsAttention,
   needsYou,
   rowHeadline,
+  runAttention,
   titleGroups,
   type RunSignals,
 } from "./runs/board-groups";
@@ -499,8 +500,11 @@ function TitleGroup({
   for (const r of runs) if (!states.includes(r.state as string)) states.push(r.state as string);
   // Runs that are asking for something are pinned to the lane above, so what
   // is left to flag here is a report — the group carries the danger tint its
-  // cards do, not the amber the lane owns.
-  const needsEyes = runs.some((r) => needsAttention(r, signals));
+  // cards do, not the amber the lane owns. The predicate is the CARD RAIL's,
+  // not needsAttention's: that one includes "monitoring" (a passive
+  // deny_with_review pending, which no card paints), so a group of two healthy
+  // RUNNING runs got a red header over cards with nothing red on them.
+  const needsEyes = runs.some((r) => runAttention(r, signals) === "interrupted");
   const shown = open ? runs : runs.slice(0, GROUP_PREVIEW);
 
   return (
