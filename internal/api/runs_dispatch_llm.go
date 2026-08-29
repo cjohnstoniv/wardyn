@@ -301,6 +301,47 @@ func (s *Server) provisionDispatchMITMCA(ctx context.Context, run types.AgentRun
 	return certPEM, keyPEM, true
 }
 
+// installSandboxTrustedCA appends the operator's corporate PEM
+// (WARDYN_TRUSTED_CA_FILE, corpPEM) to this run's sandbox CA trust, so a
+// TLS-inspecting corporate middlebox on the path between wardyn-proxy and the
+// real internet is trusted by the sandbox's OWN TLS clients on a passthrough
+// (non-MITM'd) CONNECT tunnel — not only by wardynd and wardyn-proxy
+// themselves (see trusted_ca.go / proxy/server.go). corpPEM == "" (the knob
+// unset) is a no-op: sandboxEnv is left exactly as provisionDispatchMITMCA
+// (or nothing, on a non-MITM run) left it.
+//
+// install_mitm_ca (agent-run-lib.sh) treats WARDYN_MITM_CA_PEM as an opaque
+// PEM bundle already — multiple certificates just concatenate — so appending
+// here is additive to whatever provisionDispatchMITMCA staged for this run's
+// OWN per-run interception CA. On a run with NO Wardyn-side MITM (that block
+// above never ran), WARDYN_MITM_CA_PEM would otherwise be entirely absent and
+// install_mitm_ca would no-op, so this also SEEDS it plus the four bundle
+// vars OpenSSL-shaped clients need — but only when provisionDispatchMITMCA
+// has not already set them, so a MITM'd run's own /tmp/wardyn paths are never
+// touched here.
+func installSandboxTrustedCA(corpPEM string, sandboxEnv map[string]string) {
+	if corpPEM == "" {
+		return
+	}
+	if existing := sandboxEnv["WARDYN_MITM_CA_PEM"]; existing != "" {
+		sandboxEnv["WARDYN_MITM_CA_PEM"] = existing + "\n" + corpPEM
+	} else {
+		sandboxEnv["WARDYN_MITM_CA_PEM"] = corpPEM
+	}
+	if sandboxEnv["NODE_EXTRA_CA_CERTS"] == "" {
+		sandboxEnv["NODE_EXTRA_CA_CERTS"] = "/tmp/wardyn/mitm-ca.pem"
+	}
+	if sandboxEnv["SSL_CERT_FILE"] == "" {
+		sandboxEnv["SSL_CERT_FILE"] = "/tmp/wardyn/ca-bundle.pem"
+	}
+	if sandboxEnv["REQUESTS_CA_BUNDLE"] == "" {
+		sandboxEnv["REQUESTS_CA_BUNDLE"] = "/tmp/wardyn/ca-bundle.pem"
+	}
+	if sandboxEnv["CURL_CA_BUNDLE"] == "" {
+		sandboxEnv["CURL_CA_BUNDLE"] = "/tmp/wardyn/ca-bundle.pem"
+	}
+}
+
 // authorSubscriptionInjection authors the subscription/managed proxy-side
 // credential: a re-mintable api_key grant whose SENTINEL secret name resolves
 // to a LIVE Anthropic OAuth token (resident host token, or the Wardyn-managed

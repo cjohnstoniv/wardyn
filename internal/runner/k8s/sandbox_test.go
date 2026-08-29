@@ -6,7 +6,9 @@
 package k8s
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -116,6 +118,84 @@ func TestCreateSandbox_RejectsMounts(t *testing.T) {
 // TestCreateSandbox_OrderAndRef covers the required creation order — BOTH
 // NetworkPolicies before any pod exists, proxy pod before agent pod — and
 // that the returned Sandbox.Ref is the agent pod name.
+// TestCreateSandbox_TrustedCAPEM proves the WARDYN_TRUSTED_CA_FILE forward
+// leg reaches BOTH k8s objects CreateSandbox builds from the spec dispatch
+// already staged: the agent pod's env (spec.Env, mutated by
+// installSandboxTrustedCA in internal/api BEFORE CreateSandbox is called —
+// this test supplies it pre-mutated, matching what dispatch hands the
+// driver) via envVars(spec.Env), and the proxy config Secret's JSON payload
+// (spec.ProxyConfig.TrustedCAPEM, commit 3) via runner.BuildProxyConfig. No
+// k8s-specific code carries this — it rides the SAME Env map and ProxyConfig
+// every other sandbox field already does; this test is the proof of that,
+// not a new code path.
+func TestCreateSandbox_TrustedCAPEM(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.7")
+	installAgentRunningReactor(t, cs)
+
+	spec := testSandboxSpec()
+	spec.Env["WARDYN_MITM_CA_PEM"] = "run-ca-pem\ncorp-ca-pem" // installSandboxTrustedCA's append shape
+	spec.ProxyConfig.TrustedCAPEM = "corp-ca-pem"
+
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+
+	agentPod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent pod: %v", err)
+	}
+	gotEnv, found := "", false
+	for _, e := range agentPod.Spec.Containers[0].Env {
+		if e.Name == "WARDYN_MITM_CA_PEM" {
+			gotEnv, found = e.Value, true
+		}
+	}
+	if !found || gotEnv != "run-ca-pem\ncorp-ca-pem" {
+		t.Errorf("agent pod WARDYN_MITM_CA_PEM (found=%v) = %q, want %q", found, gotEnv, "run-ca-pem\ncorp-ca-pem")
+	}
+
+	sec, err := cs.CoreV1().Secrets(testNamespace).Get(context.Background(), secretName(spec.RunID), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get proxy config secret: %v", err)
+	}
+	var cfg struct {
+		TrustedCAPEM string `json:"trusted_ca_pem"`
+	}
+	if err := json.Unmarshal(sec.Data[proxyConfigSecretKey], &cfg); err != nil {
+		t.Fatalf("unmarshal proxy config secret: %v", err)
+	}
+	if cfg.TrustedCAPEM != "corp-ca-pem" {
+		t.Errorf("proxy config secret trusted_ca_pem = %q, want %q", cfg.TrustedCAPEM, "corp-ca-pem")
+	}
+
+	// Negative control: an unset knob puts NEITHER the pod env key nor the
+	// secret's trusted_ca_pem key in place — byte-identical to a spec that
+	// predates this feature.
+	spec2 := testSandboxSpec()
+	sb2, err := d.CreateSandbox(context.Background(), spec2)
+	if err != nil {
+		t.Fatalf("CreateSandbox (unset): %v", err)
+	}
+	agentPod2, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb2.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent pod (unset): %v", err)
+	}
+	for _, e := range agentPod2.Spec.Containers[0].Env {
+		if e.Name == "WARDYN_MITM_CA_PEM" {
+			t.Errorf("agent pod (unset) carries WARDYN_MITM_CA_PEM = %q, want absent", e.Value)
+		}
+	}
+	sec2, err := cs.CoreV1().Secrets(testNamespace).Get(context.Background(), secretName(spec2.RunID), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get proxy config secret (unset): %v", err)
+	}
+	if bytes.Contains(sec2.Data[proxyConfigSecretKey], []byte("trusted_ca_pem")) {
+		t.Errorf("proxy config secret (unset) contains a trusted_ca_pem key, want omitted (omitempty)")
+	}
+}
+
 func TestCreateSandbox_OrderAndRef(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
 	installProxyIPReactor(t, cs, "10.244.0.7")

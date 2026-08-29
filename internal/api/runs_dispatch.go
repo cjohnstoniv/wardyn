@@ -258,6 +258,14 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 		}
 	}
 
+	// Corporate CA trust (WARDYN_TRUSTED_CA_FILE): append the operator's PEM to
+	// this run's sandbox CA trust exactly as provisionDispatchMITMCA does for
+	// the per-run MITM cert — see installSandboxTrustedCA. Runs unconditionally
+	// (no-op when the knob is unset) so a non-MITM run gets it too. Placed
+	// before resolveEnvSecretGrants below, so a user env_secret named
+	// SSL_CERT_FILE can never clobber the bundle this just staged.
+	installSandboxTrustedCA(s.cfg.TrustedCAPEM, sandboxEnv)
+
 	// Subscription / managed: author the proxy-side sentinel credential grant
 	// (see authorSubscriptionInjection for the re-mint + api-key-replacement
 	// rationale). A failed grant write already marked the run FAILED — stop.
