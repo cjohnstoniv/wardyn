@@ -124,3 +124,43 @@ func TestBuildProxyConfig(t *testing.T) {
 		t.Error("mitm_llm = false, want true")
 	}
 }
+
+// TestBuildProxyConfig_TrustedCAPEM covers the WARDYN_TRUSTED_CA_FILE forward
+// leg: ProxyConfig.TrustedCAPEM must reach the marshaled trusted_ca_pem key
+// verbatim, and — the negative control — an empty ProxyConfig.TrustedCAPEM
+// must leave that key ABSENT (omitempty), never an empty string, so an older
+// proxy binary with no field for it round-trips identically.
+func TestBuildProxyConfig_TrustedCAPEM(t *testing.T) {
+	runID := uuid.MustParse("55555555-5555-5555-5555-555555555555")
+
+	b, err := BuildProxyConfig(runID, ProxyConfig{
+		RunToken:        "tok",
+		ControlPlaneURL: "http://cp:8080",
+		TrustedCAPEM:    "-----BEGIN CERTIFICATE-----\ncorp\n-----END CERTIFICATE-----\n",
+	}, ProxyListenPort)
+	if err != nil {
+		t.Fatalf("BuildProxyConfig: %v", err)
+	}
+	var got struct {
+		TrustedCAPEM string `json:"trusted_ca_pem"`
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("BuildProxyConfig output not valid JSON: %v", err)
+	}
+	if want := "-----BEGIN CERTIFICATE-----\ncorp\n-----END CERTIFICATE-----\n"; got.TrustedCAPEM != want {
+		t.Errorf("trusted_ca_pem = %q, want %q", got.TrustedCAPEM, want)
+	}
+
+	// Negative control: empty TrustedCAPEM omits the key entirely.
+	b2, err := BuildProxyConfig(runID, ProxyConfig{RunToken: "tok", ControlPlaneURL: "http://cp:8080"}, ProxyListenPort)
+	if err != nil {
+		t.Fatalf("BuildProxyConfig: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b2, &raw); err != nil {
+		t.Fatalf("BuildProxyConfig output not valid JSON: %v", err)
+	}
+	if _, present := raw["trusted_ca_pem"]; present {
+		t.Errorf("trusted_ca_pem key present with an empty ProxyConfig.TrustedCAPEM, want absent (omitempty)")
+	}
+}

@@ -371,6 +371,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 			// Resolved above from site-config.UpstreamProxySecretRef; "" when
 			// unconfigured or unresolvable (direct dial, backward-compatible).
 			UpstreamProxyURL: upstreamProxyURL,
+			// WARDYN_TRUSTED_CA_FILE, forwarded verbatim so the sidecar's own
+			// outbound TLS trusts it too. "" when the operator knob is unset.
+			TrustedCAPEM: s.cfg.TrustedCAPEM,
 		},
 		// Hard resource caps. A nil policy block (or a zero field) becomes the
 		// driver's conservative platform default, so EVERY sandbox is CPU/memory/

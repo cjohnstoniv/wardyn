@@ -180,6 +180,7 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		GitGrants:        pc.GitGrants,
 		PATGrants:        pc.PATGrants,
 		UpstreamProxyURL: pc.UpstreamProxyURL,
+		TrustedCAPEM:     pc.TrustedCAPEM,
 	}
 	return json.Marshal(cfg)
 }

@@ -172,6 +172,13 @@ type ProxyConfig struct {
 	// URL) leaves this "" rather than failing the run — see
 	// resolveUpstreamProxyURL and its audit event run.upstream_proxy.resolve.
 	UpstreamProxyURL string
+	// TrustedCAPEM is the operator's corporate CA bundle (WARDYN_TRUSTED_CA_FILE,
+	// api.Config.TrustedCAPEM), forwarded verbatim so the sidecar's own outbound
+	// TLS additionally trusts it. Threaded to the proxy via proxy.Config's
+	// identically-named field (WARDYN_PROXY_CONFIG_JSON, BuildProxyConfig below).
+	// Control-plane-authored, same trust boundary as MITMCACertPEM/MITMCAKeyPEM
+	// above; empty => system roots only, byte-identical to today.
+	TrustedCAPEM string
 }
 
 // InjectionGrant pairs an api_key credential grant with its proxy-side
