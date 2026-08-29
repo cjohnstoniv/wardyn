@@ -113,3 +113,78 @@ describe("SummaryHeader — command bar", () => {
     expect(screen.queryByText(/waiting/i)).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// M3 — WHO beside WHAT. The identity glyph used to sit alone at the left of the
+// bar while the state chip lived four elements away past the repo and the
+// workspace path, so the same run read as two different shapes on the board and
+// in the cockpit. One pair, one attention vocabulary, no seam.
+// ---------------------------------------------------------------------------
+describe("SummaryHeader — the who + what glyph pair", () => {
+  const glyph = () => document.querySelector("[data-attention]")!;
+
+  it("puts the state glyph immediately after the agent badge, not across the bar", () => {
+    renderHeader(
+      <OperatorProvider operator>
+        <SummaryHeader run={runningInteractive} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    const g = glyph();
+    expect(g).toBeTruthy();
+    // Adjacent siblings inside one wrapper — the pair, never fused. "CC" is
+    // Claude Code's monogram (AgentBadge), so this asserts WHO then WHAT.
+    expect(g.previousElementSibling).toHaveTextContent("CC");
+  });
+
+  it("a RUNNING run with nothing pending reads as running", () => {
+    renderHeader(
+      <OperatorProvider operator>
+        <SummaryHeader run={runningInteractive} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(glyph()).toHaveAttribute("data-attention", "active");
+  });
+
+  it("a HELD approval outranks a merely pending one — the same order attentionRank uses", () => {
+    renderHeader(
+      <OperatorProvider operator>
+        <SummaryHeader
+          run={runningInteractive}
+          terminal={false}
+          pendingApprovalCount={4}
+          sandboxHeld
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    expect(glyph()).toHaveAttribute("data-attention", "permission");
+  });
+
+  it("a pending approval that is NOT holding the sandbox reads as monitoring, not as a demand", () => {
+    renderHeader(
+      <OperatorProvider operator>
+        <SummaryHeader
+          run={runningInteractive}
+          terminal={false}
+          pendingApprovalCount={1}
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    expect(glyph()).toHaveAttribute("data-attention", "monitoring");
+  });
+
+  it("a FAILED run reads as needing review, whatever is pending on it", () => {
+    renderHeader(
+      <OperatorProvider operator>
+        <SummaryHeader
+          run={{ ...runningInteractive, state: "FAILED" }}
+          terminal
+          pendingApprovalCount={2}
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    expect(glyph()).toHaveAttribute("data-attention", "interrupted");
+  });
+});

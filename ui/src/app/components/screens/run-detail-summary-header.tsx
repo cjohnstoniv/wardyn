@@ -15,6 +15,7 @@ import type { AgentRun } from "../../lib/types";
 import { runHeadline } from "../../lib/types";
 import { Button } from "../ui/button";
 import { AgentBadge, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
+import { RunStateGlyph } from "../wardyn/run-state-glyph";
 import { RUN_COCKPIT } from "../wardyn/copy";
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
@@ -98,7 +99,25 @@ export function SummaryHeader({
       </Link>
       <span className="h-5 w-px shrink-0 bg-border" aria-hidden="true" />
 
-      <AgentBadge agent={run.agent} withLabel={false} />
+      {/* M3: WHO beside WHAT, one adjacent pair (CONSOLE-RULES §5) — never
+          fused, and never separated across the bar. The identity glyph used to
+          sit here alone while the state lived four elements away past the repo
+          and the workspace path, so the same run read as two different shapes
+          on the board and in the cockpit. Same component the board's card
+          uses, off the same signals, so board -> cockpit has no seam. */}
+      <span className="flex shrink-0 items-center gap-1.5">
+        <AgentBadge agent={run.agent} withLabel={false} />
+        <RunStateGlyph
+          state={run.state}
+          signals={{
+            // The page already fetched both facts for the pending chip below:
+            // a HELD approval outranks a merely pending one, which is exactly
+            // attentionRank's own order (permission > monitoring).
+            held: sandboxHeld,
+            passiveHold: pendingApprovalCount > 0,
+          }}
+        />
+      </span>
 
       {/* Requirement: run.task stays an h1 (the board drops it, but for an
           autonomous run this is the only statement anywhere on the page of
