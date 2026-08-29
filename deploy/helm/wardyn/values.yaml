@@ -188,6 +188,17 @@ extraEnv: []
 # "Default policy" for the confinement-floor trap this can walk into.
 defaultPolicy: ""
 
+# Optional corporate CA trust (WARDYN_TRUSTED_CA_FILE): a PEM bundle of
+# additional trusted roots, baked into a ConfigMap (a certificate is public,
+# unlike defaultPolicy — no Secret involved) and mounted read-only. PEM TEXT,
+# not a YAML map: `--set-file trustedCA=path/to/corp-ca.pem` round-trips a
+# file unchanged. Empty (default) => no ConfigMap, no WARDYN_TRUSTED_CA_FILE
+# — system roots only, byte-identical to today. Wires WARDYN_TRUSTED_CA_FILE
+# unless env.WARDYN_TRUSTED_CA_FILE is already set (which always wins) — the
+# escape hatch for a CA delivered your own way (e.g. extraEnv + secretKeyRef
+# pointing at a path your own volume mounts). See README "Corporate CA trust".
+trustedCA: ""
+
 # Kubernetes runner substrate (internal/runner/k8s, `-tags k8s`, v0.5+). Off by
 # default — the Docker Compose stack (deploy/compose/) remains a fully
 # separate, independent path. Enabling this makes wardynd itself create/manage

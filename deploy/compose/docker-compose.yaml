@@ -280,6 +280,10 @@ services:
       # launch runs. Override with WARDYN_DEFAULT_POLICY=/examples/policies/default.json
       # on a CC2-capable host (the default.json policy demands CC2).
       WARDYN_DEFAULT_POLICY: "${WARDYN_DEFAULT_POLICY:-/examples/policies/demo.json}"
+      # Corporate CA trust (docs/ENV.md): a PATH to a PEM bundle of additional
+      # trusted roots — e.g. a file under the WARDYN_MANAGED_DIR mount below.
+      # Empty (default) = system roots only, byte-identical to today.
+      WARDYN_TRUSTED_CA_FILE: "${WARDYN_TRUSTED_CA_FILE:-}"
       WARDYN_RECORDING_DIR: "/data/recordings"
       # Recording delivery: wardyn-rec uploads finished casts through the
       # proxy's brokered route (run-token injected proxy-side; cross-run
@@ -448,14 +452,16 @@ services:
       # harmless empty path (Bedrock ~/.aws stays off until an operator sets the var).
       # See the WARDYN_BEDROCK_AWS_DIR note in this service's environment above.
       - ${WARDYN_BEDROCK_AWS_DIR:-/var/empty/wardyn-no-aws-dir}:${WARDYN_BEDROCK_AWS_DIR:-/var/empty/wardyn-no-aws-dir}:ro
-      # MDM-managed directory (WARDYN_MANAGED_DIR) — READ-ONLY, the desktop tier's
-      # one addition to this stack. WARDYN_DEFAULT_POLICY there is a HOST path
-      # (/etc/wardyn/policy.json) wardynd reads off disk at boot, so the directory
-      # has to be visible INSIDE the container at that same path. Unlike the two
-      # mounts above, the CONTAINER side is the fixed literal /etc/wardyn — the
-      # policy path is set by the MDM payload, not chosen by the operator — so only
-      # the host side varies. Default is a harmless empty path: every non-desktop
-      # deployment leaves this unset and mounts nothing. See docs/DESKTOP.md.
+      # MDM-managed directory (WARDYN_MANAGED_DIR) — READ-ONLY, the host dir
+      # mounted at the fixed container path /etc/wardyn: the desktop tier's MDM
+      # payload (WARDYN_DEFAULT_POLICY there is a HOST path, /etc/wardyn/policy.json,
+      # wardynd reads off disk at boot, so the directory has to be visible INSIDE
+      # the container at that same path), OR a corporate CA on ANY compose
+      # install (point WARDYN_TRUSTED_CA_FILE above at a file under this mount,
+      # e.g. /etc/wardyn/corp-ca.pem). Unlike the two mounts above, the CONTAINER
+      # side is the fixed literal /etc/wardyn — only the host side varies.
+      # Default is a harmless empty path: a deployment needing neither leaves
+      # this unset and mounts nothing. See docs/DESKTOP.md and docs/ENV.md.
       - ${WARDYN_MANAGED_DIR:-/var/empty/wardyn-no-managed-dir}:/etc/wardyn:ro
       - recordings:/data/recordings
       - audit:/data/audit

@@ -24,4 +24,27 @@ metadata:
     {{- include "wardyn.labels" . | nindent 4 }}
 data:
   policy.json: {{ .Values.defaultPolicy | quote }}
+{{- end }}
+{{/*
+Optional corporate CA trust (WARDYN_TRUSTED_CA_FILE): a PEM bundle of
+additional trusted roots a corporate TLS-inspecting middlebox signs with,
+baked into a ConfigMap (a certificate is public, unlike the age key or the
+DSN — no Secret involved) and mounted read-only. Rendered only when
+.Values.trustedCA is non-empty. PEM text is a string, not JSON — no shape
+guard beyond "it's a string"; wardynd itself refuses boot on a PEM that
+doesn't parse (loadTrustedCA), which is the real validation.
+*/}}
+{{- if .Values.trustedCA -}}
+{{- if not (kindIs "string" .Values.trustedCA) -}}
+{{- fail "wardyn: trustedCA must be PEM TEXT (a string — e.g. --set-file trustedCA=my-corp-ca.pem), not a YAML map or number" -}}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wardyn.fullname" . }}-trusted-ca
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+data:
+  ca.pem: {{ .Values.trustedCA | quote }}
 {{- end -}}

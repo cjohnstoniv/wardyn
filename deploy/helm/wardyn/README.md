@@ -543,6 +543,37 @@ always wins over the ConfigMap-backed path (the chart omits its own entry
 when `env.WARDYN_DEFAULT_POLICY` is set, same as `WARDYN_RECORDING_DIR`/
 `WARDYN_AUDIT_SPOOL`, see [Values](#values) below).
 
+## Corporate CA trust
+
+`trustedCA` bakes a PEM bundle of additional trusted roots into a ConfigMap
+(a certificate is public, so — unlike `defaultPolicy`'s sibling knobs that
+touch real secrets — no Secret is involved) and mounts it read-only, wiring
+`WARDYN_TRUSTED_CA_FILE` at `/etc/wardyn/trusted-ca/ca.pem`. Set it when this
+cluster's egress passes through a TLS-inspecting corporate middlebox: without
+it, `wardynd`'s own outbound TLS (OIDC discovery, the GitHub App transport,
+the audit webhook sink), the `wardyn-proxy` sidecar's forwarding transport,
+and every sandbox's own TLS clients on a passthrough CONNECT tunnel all fail
+certificate verification against that middlebox.
+
+```bash
+helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
+  --set-file trustedCA=/path/to/corp-ca.pem \
+  ...
+```
+
+Additive to the system roots, read once at `wardynd` boot — an unparseable
+bundle refuses boot naming the var rather than silently keeping a narrower
+trust set (see [docs/ENV.md](../../../docs/ENV.md) and
+[docs/OPERATIONS.md § Network](../../../docs/OPERATIONS.md#network-upstream-proxy-and-egress-redirects)).
+**Named ceiling**: a BYOI base image missing every system CA-bundle path
+loses public trust for OpenSSL-shaped sandbox clients once this is set — see
+[docs/adoption/corp-image-authoring.md](../../../docs/adoption/corp-image-authoring.md).
+An operator-set `env.WARDYN_TRUSTED_CA_FILE` always wins over the
+ConfigMap-backed path, same as `env.WARDYN_DEFAULT_POLICY` above — the escape
+hatch for a CA delivered your own way (e.g. `extraEnv` + `secretKeyRef`
+pointing `WARDYN_TRUSTED_CA_FILE` at a path a volume you wire yourself
+mounts, rather than this chart's own ConfigMap).
+
 ## Split SSH exposure
 
 `ssh.enabled` adds an SSH port to wardynd's EXISTING Service (no second
@@ -715,6 +746,9 @@ See `values.yaml` for all options. Key settings:
 - `defaultPolicy`: JSON text baking a default policy into a ConfigMap,
   mounted read-only — see [Default policy](#default-policy) above. Empty
   (default) => no ConfigMap, image's own baked default applies.
+- `trustedCA`: PEM text baking a corporate CA bundle into a ConfigMap,
+  mounted read-only — see [Corporate CA trust](#corporate-ca-trust) above.
+  Empty (default) => no ConfigMap, system roots only.
 - `readinessProbe.path`: readiness probe path, default `/readyz` (which pings
   Postgres — liveness and startup stay on `/healthz` regardless). The chart's
   own default image serves `/readyz` from 0.6.0 on, so leave this alone unless

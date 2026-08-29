@@ -15,7 +15,10 @@ WARDYN_CONTROL_PLANE_URL — refused at render if serviceAccount.automount is
 off, since the substrate drives the API server via client-go); ssh.* adds the
 optional SSH port + WARDYN_SSH_LISTEN/WARDYN_SSH_ADVERTISE; uiSandbox.* adds
 the optional UI-sandbox gateway port + WARDYN_UI_SANDBOX_LISTEN/_ADVERTISE/
-_ORIGIN_TEMPLATE (docs/UI-SANDBOXES.md).
+_ORIGIN_TEMPLATE (docs/UI-SANDBOXES.md). trustedCA mirrors defaultPolicy's
+shape (a second ConfigMap, mounted read-only, WARDYN_TRUSTED_CA_FILE pointed
+at it unless env.WARDYN_TRUSTED_CA_FILE already is) for a corporate CA bundle
+— see docs/OPERATIONS.md § Network.
 
 Hardening (defense in depth alongside the per-run sandbox envelope):
   - runs as a non-root user (the wardynd image is distroless:nonroot, uid 65532)
@@ -81,6 +84,9 @@ spec:
       update alone does not restart pods whose only reference to a ConfigMap is
       a volume mount. */ -}}
       {{- $podAnnotations = merge (dict "checksum/default-policy" (sha256sum (toString .Values.defaultPolicy))) $podAnnotations }}
+      {{- end }}
+      {{- if .Values.trustedCA }}
+      {{- $podAnnotations = merge (dict "checksum/trusted-ca" (sha256sum (toString .Values.trustedCA))) $podAnnotations }}
       {{- end }}
       {{- with $podAnnotations }}
       annotations:
@@ -189,6 +195,13 @@ spec:
             # one of the image's own /examples/policies/ files instead).
             - name: WARDYN_DEFAULT_POLICY
               value: {{ "/etc/wardyn/default-policy/policy.json" | quote }}
+            {{- end }}
+            {{- if and .Values.trustedCA (not (hasKey .Values.env "WARDYN_TRUSTED_CA_FILE")) }}
+            # Points wardynd at the corp CA bundle baked into the ConfigMap
+            # below, mounted read-only. An .Values.env entry overrides (e.g. a
+            # path your own volume/extraEnv mounts the PEM at instead).
+            - name: WARDYN_TRUSTED_CA_FILE
+              value: {{ "/etc/wardyn/trusted-ca/ca.pem" | quote }}
             {{- end }}
             {{- range $k, $v := .Values.env }}
             - name: {{ $k }}
@@ -322,6 +335,11 @@ spec:
               mountPath: /etc/wardyn/default-policy
               readOnly: true
             {{- end }}
+            {{- if .Values.trustedCA }}
+            - name: trusted-ca
+              mountPath: /etc/wardyn/trusted-ca
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
@@ -334,6 +352,11 @@ spec:
         - name: default-policy
           configMap:
             name: {{ include "wardyn.fullname" . }}-default-policy
+        {{- end }}
+        {{- if .Values.trustedCA }}
+        - name: trusted-ca
+          configMap:
+            name: {{ include "wardyn.fullname" . }}-trusted-ca
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
