@@ -4,37 +4,14 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { test, expect, ADMIN_TOKEN, gotoConsole, navToRoute, sidebarLink, sql } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, gotoConsole, mockMemberRole, navToRoute, sidebarLink, sql } from "./fixtures";
 import { DENIED } from "../src/app/lib/permissions-copy";
 
-// Member console (B3) — the seeded e2e backend authenticates every spec with
-// a bare admin bearer token (fixtures.ts's ADMIN_TOKEN), and isOperator
-// (internal/api/http.go) reads "no session role to demote" for any caller
-// with no OIDC human session — so a bearer-token caller is ALWAYS admin
-// server-side; there is no way to reach a genuine member session through
-// this harness without standing up OIDC. Per the lane brief's own fallback
-// ("Playwright spec on a MOCKED /me … no live backend"), GET /api/v1/me's
-// `role`/`operator` fields are spliced onto the REAL response (route.fetch()
-// + patch + refulfill — same technique corp-network.spec.ts already uses)
-// so principal/method stay genuine while the client believes it is signed in
-// as a member. Everything else (runs list, approvals list) still comes from
-// the real, unmodified, admin-scoped backend — this spec proves the RENDER
-// behavior a member role drives (nav filtering, the chip, empty/count copy),
-// not server-side ownership scoping itself (that's proven server-side: B2's
-// own tests, and internal/api/runs_policy.go's handleListRuns /
-// approvals.go's handleListApprovals creator-pager branches).
-// Exported (Phase 5) so member-getting-started.spec.ts can drive the same
-// mocked-/me technique against the member Getting Started screen instead of
-// re-declaring an identical helper.
-export async function mockMemberRole(page: import("@playwright/test").Page): Promise<void> {
-  await page.route("**/api/v1/me", async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
-    json.role = "member";
-    json.operator = false;
-    await route.fulfill({ response, json });
-  });
-}
+// This spec proves the RENDER behavior a member role drives (nav filtering,
+// the chip, empty/count copy) on top of mockMemberRole's mocked-/me splice —
+// see fixtures.ts for why the role is mocked and shared from there rather
+// than declared per-spec (Playwright refuses a spec file that imports
+// another spec file).
 
 test.describe("member console — nav absence (mocked /me role)", () => {
   test("member nav is Runs · Approvals · Workspaces only — no admin-only items", async ({ page }) => {

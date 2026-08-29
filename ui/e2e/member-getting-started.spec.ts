@@ -3,16 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, navToRoute } from "./fixtures";
-import { mockMemberRole } from "./member-console.spec";
+import { test, expect, gotoConsole, mockMemberRole, navToRoute } from "./fixtures";
 
-// Member Getting Started (Phase 5) — same mocked-/me technique as
-// member-console.spec.ts (the seeded backend always authenticates as admin
-// server-side; only the CLIENT believes it is a member). This spec proves the
-// render: the six member sections replace the operator funnel at /setup, the
-// account menu drops Demos, and the video player streams nothing until Watch
-// is pressed. Server-side ownership scoping (creator-scoped runs/secrets) is
-// proven in Go, not here — the daemon-backed part of the plan's invariant.
+// Member Getting Started (Phase 5) — same mockMemberRole splice
+// member-console.spec.ts uses (the seeded backend always authenticates as
+// admin server-side; only the CLIENT believes it is a member). This spec
+// proves the render: the six member sections replace the operator funnel at
+// /setup, the account menu drops Demos, and the video player streams nothing
+// until Watch is pressed. Server-side ownership scoping (creator-scoped
+// runs/secrets) is proven in Go, not here — the daemon-backed part of the
+// plan's invariant.
 
 const MEMBER_SECTION_TITLES = [
   "What's set up for you",

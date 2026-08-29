@@ -87,6 +87,33 @@ export async function navToRoute(page: Page, path: string): Promise<void> {
   }, path);
 }
 
+// Member console (B3) — the seeded e2e backend authenticates every spec with a
+// bare admin bearer token (ADMIN_TOKEN above), and isOperator
+// (internal/api/http.go) reads "no session role to demote" for any caller with
+// no OIDC human session — so a bearer-token caller is ALWAYS admin
+// server-side; there is no way to reach a genuine member session through this
+// harness without standing up OIDC. GET /api/v1/me's `role`/`operator` fields
+// are spliced onto the REAL response (route.fetch() + patch + refulfill —
+// same technique corp-network.spec.ts already uses) so principal/method stay
+// genuine while the client believes it is signed in as a member. Everything
+// else (runs list, secrets, approvals list) still comes from the real,
+// unmodified, admin-scoped backend — specs using this prove the RENDER
+// behavior a member role drives, not server-side ownership scoping itself
+// (that's proven server-side: B2's own tests, and
+// internal/api/runs_policy.go's handleListRuns / approvals.go's
+// handleListApprovals creator-pager branches). Shared here (not declared in
+// one spec file) because Playwright refuses a spec that imports another spec
+// file (`--list` collects zero tests when it sees one).
+export async function mockMemberRole(page: Page): Promise<void> {
+  await page.route("**/api/v1/me", async (route) => {
+    const response = await route.fetch();
+    const json = await response.json();
+    json.role = "member";
+    json.operator = false;
+    await route.fulfill({ response, json });
+  });
+}
+
 
 // Some specs seed state the API can't create (e.g. an approval — `POST
 // /internal/approvals` needs a run-scoped token, not the admin one), so they talk
