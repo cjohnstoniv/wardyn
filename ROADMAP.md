@@ -370,12 +370,13 @@ shipped behavior; none is scheduled.
   stack — a supply-chain workstream rather than an image build. **Deferred to
   0.8.**
 
-- **The managed-desktop demo episode (`02b`) is a failing stub.** Its grader arm
-  and persona quiz are written; the take is not shot. It is the
-  managed-desktop/member-mode story for the tier 0.7 is named after. Deferred
-  with the rest of the demo series to the video-restructure campaign, which
-  re-cuts every episode around three audiences rather than shooting this one
-  twice.
+- **Eight demo episodes are still unrecorded stubs.** 0.7 organised the install
+  paths around three audiences — single-user, multi-user, and joining a Wardyn
+  someone else runs — and the episodes now play inside Getting Started itself
+  (a manifest per episode, watched only on explicit click). `02b` (managed
+  desktop), `02c` (cloud), `04b` (members), `04c` (admin ops), `11`, `12`,
+  `12b` and `13` still carry `tag: null` — their grader arms and persona quizzes
+  are written, the takes are not shot.
 
 - **`--agent` is still required for a run that names no image.** **0.7 narrowed
   this rather than closing it.** A `task_mode=exec` run that carries an `--image`
@@ -407,7 +408,8 @@ shipped behavior; none is scheduled.
   ([field report](docs/adoption/corp-network-onboarding-findings.md))
 - **Team mode as a packaged, sealed multi-user product** — as opposed to the
   RBAC that ships IN the control plane today (see
-  [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "Multi-user: who can change what").
+  [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "Multi-user: who can change what",
+  and [docs/MEMBERS.md](docs/MEMBERS.md) for what a member themself can do).
   Admin/member roles and owner scoping are real and shipped (v0.5), and v0.6
   added capability grants over a user, an IdP group, or everyone (see "What
   v0.6 shipped") — which is authorization detail on top of those two roles, not
@@ -492,15 +494,38 @@ shipped behavior; none is scheduled.
   so its checklist shows the dropped grant and the resulting no-model-access
   before the member launches.
 
-  **0.7 note: this is NOT the member-mode model-access story.** A member on the
-  desktop tier's m′ profile reaches a model via **Bedrock**, which is daemon-level
-  MDM-set configuration rather than a per-member credential and therefore routes
-  around this gate entirely — documented in `docs/DESKTOP.md` "Model access on
-  m′". What remains below is specifically pure-BYOK-for-members, a different
-  flow. The fix, if that flow is wanted: re-run the provider-convention model
-  grant AFTER `filterMemberGrants`,
-  so a member's own key survives with no integration and no workspace
-  requirement behind it.
+  **Shipped in 0.7:** the pure-BYOK-for-members flow this bullet used to name as
+  a suggested fix — a member's own stored provider-convention key now survives
+  with no operator integration and no workspace requirement behind it (per-
+  principal secrets, migration `0050`; see the 0.7 CHANGELOG entry). This is
+  still not the member-mode model-access story on the desktop tier's m′ profile,
+  which reaches a model via **Bedrock** — daemon-level MDM-set configuration
+  rather than a per-member credential, routing around this gate entirely
+  (`docs/DESKTOP.md` "Model access on m′").
+- **A shell banner and a substrate-honest `ConfinementChip` reading the k8s
+  NetworkPolicy canary posture.** The Go field (`/healthz.network_policy`) and
+  the boot-time audit event ship in 0.7; nothing in the console or the CLI
+  reads either yet.
+- **An air-gapped video mirror, and a config-driven CSP to match it.** The demo
+  episodes stream from a fixed GitHub release host; a cluster with no outbound
+  internet has no way to serve or allow them.
+- **Member-BYO-Bedrock.** Per-principal secrets (0.7) cover the api-key
+  provider-convention lane; the four Bedrock/SigV4 credential names stay
+  admin-only for member writes.
+- **A gateway needing its own request-header shape.** The internal model
+  gateway (0.7) forwards the sandbox's existing provider headers unchanged;
+  a gateway that expects a different header or auth scheme has no seam yet.
+- **Subscription and Wardyn-managed runs through the internal model gateway.**
+  0.7 scopes the gateway to the api-key lane only; those lanes need
+  `deploy/images/claude-code/agent-run` to honour an explicit operator-set
+  base URL, which needs an image rebuild — 0.8.
+- **A per-target direct-dial bypass for a gateway behind a corporate
+  upstream proxy.** 0.7 dials the gateway THROUGH a configured upstream by
+  design (upstream-first); an operator who wants the gateway dialled
+  directly while everything else still goes through the upstream has no
+  knob for it.
+- **The Network step rendering "N trusted CA certs."** `/setup/status`
+  carries the count (0.7); no console reader exists yet.
 
 ## What is not on the roadmap
 
