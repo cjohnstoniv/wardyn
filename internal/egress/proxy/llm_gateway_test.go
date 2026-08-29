@@ -328,3 +328,38 @@ func TestLLMGateway_UpstreamFirst_CorpProxySeesCONNECT_DirectSeesZero(t *testing
 		t.Fatalf("corp proxy saw %q, want CONNECT llm-gateway.corp.internal:8443 (upstream-first: the gateway is dialled THROUGH the corp proxy, never directly)", gotConnect)
 	}
 }
+
+// TestLLMGateway_BodyScanned: a brokered request routed through a configured
+// gateway with a path prefix ("/v1", so the forwarded path is
+// "v1/v1/messages" — prefix + the client's own "v1/messages") is still
+// classified scanMessages and the walled-garden content scan actually runs —
+// proven via the same block-refuses-and-skips-upstream path the non-gateway
+// scan tests use (scan_test.go).
+func TestLLMGateway_BodyScanned(t *testing.T) {
+	const host = "llm-gateway.corp.internal"
+	res := fakeResolver{m: map[string][]net.IP{host: ips("10.40.1.5")}}
+	inj := staticInj(map[string]injectedHeader{host: {name: "X-Api-Key", value: "K"}})
+	cu := captureUpstream(t, true, "should-not-happen")
+	p, buf := gatewayProxy(t, "https://"+host+"/v1", res, upstreamAddr(cu.srv), inj)
+	p.scanner = scanEngine(t, "block", scanTestSecret)
+
+	body := anthropicMessagesBody("leak " + scanTestSecret)
+	rec := httptest.NewRecorder()
+	req := mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"v1/messages", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (the scan must run on the gateway path too)", rec.Code)
+	}
+	if cu.reached {
+		t.Fatal("a blocked request must never reach the gateway")
+	}
+	d := lastDecision(t, buf)
+	if d.Decision != egress.Deny || d.RuleSource != ruleSourceLLMBlocked {
+		t.Fatalf("decision = %+v, want scan:blocked deny", d)
+	}
+	if d.Scan == nil || d.Scan.Action != "block" {
+		t.Fatalf("scan summary = %+v, want block", d.Scan)
+	}
+}
