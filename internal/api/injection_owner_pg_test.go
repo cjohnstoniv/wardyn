@@ -114,7 +114,9 @@ func newRunOwnerPGHarness(t *testing.T) (*harness, *secretspg.Store) {
 // against a REAL secretstore/pg store: a member's PUT /secrets write lands
 // in her own namespace; a run she creates with a hand-authored inline
 // api_key grant naming that secret gets no false "no model access" warning
-// (the reviewer's #3 fix, runs.go:277); and the run's injection resolves HER
+// (the reviewer's #3 fix — handleCreateRun's model-access check now calls
+// presentSecretNamesFor, not the operator-only presentSecretNames); and the
+// run's injection resolves HER
 // row — never an operator row seeded under the SAME name with a DIFFERENT
 // value.
 func TestInvariant1_PGBacked_MemberOwnRowWinsOverOperator_NoWarning(t *testing.T) {

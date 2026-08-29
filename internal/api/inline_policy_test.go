@@ -867,7 +867,7 @@ func TestCreateRun_OperatorStillUnclamped(t *testing.T) {
 // model access with no "no model access" warning — proven at the unit level
 // AND through the real POST /api/v1/runs handler (handleCreateRun), which
 // used to consult the operator-only presentSecretNames and so disagreed with
-// preflight's presentSecretNamesFor (runs.go:277's since-fixed miss). The
+// preflight's presentSecretNamesFor (handleCreateRun's since-fixed miss). The
 // negative control (same request, member owns nothing) proves the warning
 // still fires — the fix widens presence, it does not silence the check.
 func TestIntegrations_MemberKeySynthesisesRow_NoWarning(t *testing.T) {
