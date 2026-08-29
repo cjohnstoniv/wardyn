@@ -14,12 +14,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Policy `git_push_any_branch`: a per-run opt-out of push branch-namespace confinement for a sandbox a human drives from an external tool; every such push is audited as `brokered:git:branch-ns-off`; clamped away from members' inline policies. Example: `examples/policies/remote-workspace.yaml`.
 - `docs/design/CONSOLE-RULES.md`: the console's design rulebook (color budget, four body type rungs, three elevation levels, the run status vocabulary and glyph pairing, in-flight feedback timing, the screen review rubric).
 - Console: error boundaries with `resetKey` isolate each cockpit widget per run; `useDeferredBusy` at remote-submit sites (disable at once, spinner only if the call lingers); `ErrorState` takes an action.
+- Console `tool_rules` surface: a per-tool allow / hold / deny editor in the policy panel (it refuses what the API would refuse, in the same order, before the round trip), a "What this run can do" line on the New run rail, and audit rows — on the Audit screen and the run page's Audit tab — that read **Decided by rule** with the verbatim `rule_source` for a tool call the policy answered without a human.
+- Runs board: two-row run cards with one shared attention rule — a held approval now counts, joined from the pending-approvals feed, so the board and the sidebar's amber badge can no longer disagree about the same run; a pinned **Needs you** lane above the title groups; a loading skeleton shaped like the card it stands in for.
+- Sidebar: members get **Workspaces**; **Recordings** returns for admins (it was route-only, so the evidence trail was undiscoverable). The UI-sandboxes off-state names `docs/UI-SANDBOXES.md` beside the need.
+- Run page: a run that ended badly says **What happened** and **What to do**, derived from its audit trail (image pull, selftest, kill, auto-stop); an ending the trail does not explain shows the state and the audit link only — no invented cause.
+- Setup: each corp-network probe verdict (`timed_out`, `not_run`, an exec that never started) gets its own heading, note and tone instead of sharing one.
+- Cockpit: the command bar carries the board's who + what status pair; the approvals strip caps at two rows and ranks held above passive; focus-mode shortcuts are labelled key chips spelled per platform.
+- New run: field rhythm and the rail from mock M4, Enter submits and Esc leaves an untouched form, preflight results unframed.
 ### Fixed
 - `GET /runs/{id}/files` reported `vcs:"none"` for every `--repo` run because it inspected the workspace mount target instead of the clone one level below it — the console's files widget claimed "no git repository" for a sandbox holding a full clone. It now finds the run's clone.
 - Console surfaces that referenced a nonexistent `bg-surface-1` token painted no background (new-run rail, settings and connection cards).
 - Focus rings now clear WCAG 1.4.11's 3:1 floor in both themes (`--ring` raised; the shared focus recipes no longer dilute it to 50%).
 ### Changed
 - Console type scale collapsed to four body rungs (`--text-meta` 11px, `text-xs`, `--text-body` 13px, `text-sm`) replacing ~260 ad-hoc sizes; three elevation levels with one `--shadow-floating`; body tracking `0.01em`; helper text at 12px; thin scrollbars on every scroller; radius one-offs onto the card scale.
+- `KILLED` counts as needing attention on the board and badge (rank beside `FAILED`); rule-decided tool calls file under the Audit screen's **Tool calls** facet rather than **Egress**.
 
 
 ### Fixed
