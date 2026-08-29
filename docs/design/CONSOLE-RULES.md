@@ -31,7 +31,7 @@ Teal is the only loud color, and it means *"press this."* Everything else is gre
 |---|---|---|---|
 | Affirmative action | `--primary` / `--primary-foreground` | The **one** `default` Button per surface (`button.tsx:12`) | Hover backgrounds, decoration, headings, ornamental icons |
 | Selected state | `--primary` at low alpha | `OptionCard` selected (`form-primitives.tsx:80`), `Checkbox`/`RadioGroup` checked, text `selection:` (`input.tsx:11`) | Anything not actually selected |
-| Focus ring | `--ring` | `focus-visible:border-ring focus-visible:ring-ring/50 ring-[3px]` (`button.tsx:8`, `input.tsx`) | Anything merely selected — the ring stays neutral so focus and selection read differently |
+| Focus ring | `--ring` | `focus-visible:border-ring focus-visible:ring-ring focus-visible:ring-[3px]` (`button.tsx:8`, `input.tsx:12`) — full alpha; a `/50` ring never met the 3:1 floor | Anything merely selected — the ring stays neutral so focus and selection read differently |
 | Active nav item | `--sidebar-accent` fill + `--sidebar-primary` rail | `navLinkClass` and the active rail (`app-shell.tsx:200–206, 241`) | A third active treatment — use the shipped one |
 | Barrier tier | METALS: `--fence-*` bronze, `--wall-*` silver, `--vault-*` gold | `ConfinementChip` (`primitives.tsx:190–221`), `BarrierStrengthStrip`, `tier-illustration.tsx:70–72`, the tier matrix (`setup/environment-step.tsx:53–55`) | Card borders, run state, buttons, section headers |
 | Run / approval / health state | `--success` `--warning` `--danger` `--info` `--cyan` + their `-subtle` fills | `Chip` tones (`primitives.tsx:39–47`), shell banners (`app-shell.tsx:378`), `TruncatedNote` | Decoration. Always paired with a glyph or word — never color alone |
