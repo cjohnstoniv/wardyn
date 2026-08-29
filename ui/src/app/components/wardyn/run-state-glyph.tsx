@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Archive, Check, CircleHelp, Loader2, Radio, ShieldX, Square } from "lucide-react";
-import type { RunState } from "../../lib/types/runs";
+import { isTerminalRunState, type RunState } from "../../lib/types/runs";
 import { cn } from "../ui/utils";
 
 /**
@@ -48,9 +48,20 @@ export type AttentionSignals = {
   working?: boolean;
 };
 
-/** Maps a run state plus live signals onto the attention vocabulary. */
+/**
+ * Maps a run state plus live signals onto the attention vocabulary.
+ *
+ * A TERMINAL run outranks its own hold signals. Neither the kill cascade nor a
+ * clean exit expires the run's PENDING approval rows (they live ~24h), so a
+ * run killed seconds after raising a hold still joins to `held` — and reading
+ * that first pinned a KILLED card to the Needs-you lane, offering a Review
+ * button for a decision that can no longer reach a sandbox that is gone. The
+ * outcome is the truth: what is left to do is read it, not answer it.
+ */
 export function attentionFor(state: RunState | string, s: AttentionSignals = {}): RunAttention {
-  if (s.held || state === "WAITING_FOR_CONFIRMATION") return "permission";
+  if (!isTerminalRunState(state as RunState) && (s.held || state === "WAITING_FOR_CONFIRMATION")) {
+    return "permission";
+  }
   if (state === "FAILED" || state === "KILLED") return "interrupted";
   if (s.passiveHold && state === "RUNNING") return "monitoring";
   switch (state) {

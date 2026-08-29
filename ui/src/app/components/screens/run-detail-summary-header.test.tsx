@@ -174,6 +174,23 @@ describe("SummaryHeader — the who + what glyph pair", () => {
     expect(glyph()).toHaveAttribute("data-attention", "monitoring");
   });
 
+  // The kill cascade leaves the run's PENDING approvals alive, so a run killed
+  // seconds after a wait_for_review raise still arrives here with sandboxHeld.
+  it("a KILLED run reads as needing review even while a hold is still parked on it", () => {
+    renderHeader(
+      <OperatorProvider operator>
+        <SummaryHeader
+          run={{ ...runningInteractive, state: "KILLED" }}
+          terminal
+          pendingApprovalCount={1}
+          sandboxHeld
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    expect(glyph()).toHaveAttribute("data-attention", "interrupted");
+  });
+
   it("a FAILED run reads as needing review, whatever is pending on it", () => {
     renderHeader(
       <OperatorProvider operator>

@@ -15,6 +15,16 @@ describe("attentionFor", () => {
     expect(attentionFor("KILLED")).toBe("interrupted");
     expect(attentionRank("interrupted")).toBeLessThan(attentionRank("working"));
   });
+  // Neither the kill cascade nor a clean exit expires the run's PENDING
+  // approval rows, so a run killed right after raising a hold still joins to
+  // `held`. The outcome wins — a KILLED card must not sit in the Needs-you
+  // lane asking for a decision no sandbox is left to receive.
+  it("a terminal state outranks a hold that outlived the run", () => {
+    expect(attentionFor("KILLED", { held: true })).toBe("interrupted");
+    expect(attentionFor("FAILED", { held: true })).toBe("interrupted");
+    expect(attentionFor("COMPLETED", { held: true })).toBe("done");
+    expect(attentionFor("STOPPED", { held: true })).toBe("inactive");
+  });
   it("a passive hold only matters while running", () => {
     expect(attentionFor("RUNNING", { passiveHold: true })).toBe("monitoring");
     expect(attentionFor("COMPLETED", { passiveHold: true })).toBe("done");
