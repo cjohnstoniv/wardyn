@@ -844,27 +844,37 @@ func setupRunnerInfo(ctx context.Context, rn runner.Runner) (SetupRunner, string
 			out.ConfinementSubstrates[string(k)] = v
 		}
 	}
-	netpolProven := ""
-	if out.Driver == "k8s" {
-		// c.NetworkPolicy / c.NetworkPolicyAcknowledged are the
-		// orchestrator-aggregated ClassSupport signals; a genuinely
-		// indeterminate canary (no ack, no override) refuses to boot entirely
-		// (internal/runner/k8s's newWithClient), so a LIVE daemon can only
-		// ever report one of these three. Acknowledged checked first: B1's
-		// WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY produces a driver that never set
-		// NetworkPolicy true (it is not proof), so the two are mutually
-		// exclusive in practice, but acknowledged-not-proven must never read
-		// as the stronger "enforced" claim if that ever changed.
-		switch {
-		case c.NetworkPolicyAcknowledged:
-			netpolProven = "acknowledged"
-		case c.NetworkPolicy:
-			netpolProven = "enforced"
-		default:
-			netpolProven = "unenforced"
-		}
+	return out, k8sNetpolVerdict(out.Driver, c)
+}
+
+// k8sNetpolVerdict grades a runner's aggregated NetworkPolicy signals into the
+// three live-daemon verdicts, or "" on any non-k8s driver. Shared by
+// setupRunnerInfo (admin-only /setup/status, its return value here is a k8s
+// egress-containment checklist row) and handleHealthz (anonymous /healthz's
+// "network_policy" field) — both already hold a driver name and a
+// runner.Capabilities from a successful Capabilities() call; a driver whose
+// Capabilities() itself errored never reaches this function, so that case
+// grades "" the same way a non-k8s driver does, at the caller.
+func k8sNetpolVerdict(driver string, caps runner.Capabilities) string {
+	if driver != "k8s" {
+		return ""
 	}
-	return out, netpolProven
+	// caps.NetworkPolicy / caps.NetworkPolicyAcknowledged are the
+	// orchestrator-aggregated ClassSupport signals; a genuinely indeterminate
+	// canary (no ack, no override) refuses to boot entirely (internal/runner/
+	// k8s's newWithClient), so a LIVE daemon can only ever report one of these
+	// three. Acknowledged checked first: B1's WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY
+	// produces a driver that never set NetworkPolicy true (it is not proof), so
+	// the two are mutually exclusive in practice, but acknowledged-not-proven
+	// must never read as the stronger "enforced" claim if that ever changed.
+	switch {
+	case caps.NetworkPolicyAcknowledged:
+		return "acknowledged"
+	case caps.NetworkPolicy:
+		return "enforced"
+	default:
+		return "unenforced"
+	}
 }
 
 // refRulesetTTL is how long one github_ref_ruleset answer is reused. The wizard

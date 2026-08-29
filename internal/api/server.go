@@ -661,14 +661,16 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	runnerName := ""
 	caps := []types.ConfinementClass(nil)
 	var substrates map[types.ConfinementClass]string
+	netpolVerdict := ""
 	if s.cfg.Runner != nil {
 		runnerName = s.cfg.Runner.Name()
 		if c, err := s.cfg.Runner.Capabilities(r.Context()); err == nil {
 			caps = c.ConfinementClasses
 			substrates = c.Resolved
+			netpolVerdict = k8sNetpolVerdict(runnerName, c)
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"status": "ok",
 		// version is the daemon's own build. It is a DELIBERATE disclosure on the
 		// anonymous /healthz (unlike the capability enumeration below, which is
@@ -729,7 +731,15 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// (JSON null) when the gateway is off, the same "a deployment without
 		// it simply omits the block" shape as ssh above.
 		"ui_sandbox": s.uiSandboxHealthz(),
-	})
+	}
+	// network_policy is k8sNetpolVerdict's "enforced"/"unenforced"/"acknowledged"
+	// grade, present ONLY on a k8s substrate — omitted from the map entirely
+	// (not even a JSON null) on Docker and every other driver, so a Docker
+	// deployment's /healthz shape never sprouts a k8s-only field.
+	if netpolVerdict != "" {
+		body["network_policy"] = netpolVerdict
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // ebpfGroundtruthStatus reports the eBPF/Tetragon ground-truth stream's health

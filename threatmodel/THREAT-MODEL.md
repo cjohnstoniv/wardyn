@@ -850,6 +850,16 @@ hiding them would repeat the failure mode we are designed to avoid.
     OpenSSL-shaped clients entirely once this is set (residual 13's BYOI
     trust boundary, sharpened) — a named, accepted ceiling, not a gap.
 
+29. **`/healthz` is anonymous and now also names the k8s substrate's
+    NetworkPolicy posture, not merely its confinement classes.** `handleHealthz`
+    already discloses `confinement_classes` to any unauthenticated caller
+    (residual/rationale above); it now adds `network_policy`
+    (`k8sNetpolVerdict`'s "enforced"/"unenforced"/"acknowledged"), present only
+    on a k8s substrate and omitted entirely elsewhere. This is the same
+    disclosure class as the fields beside it — a runtime posture fact, not a
+    credential or a topology detail — and it lets an operator's own monitoring
+    catch an unenforced-but-allowed cluster without an admin token.
+
 ### 5.1a LLM egress content inspection — the honest-claims contract
 
 The optional `llm_inspection` guardrail (residuals #1, #2) is a **visibility +

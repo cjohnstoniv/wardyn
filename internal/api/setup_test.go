@@ -243,16 +243,49 @@ type k8sRunner struct {
 	runner.Runner
 	networkPolicy             bool
 	networkPolicyAcknowledged bool
+	capsErr                   error // set to prove a failed Capabilities() call never reports a verdict
 }
 
 func (k8sRunner) Name() string { return "k8s" }
 func (r k8sRunner) Capabilities(context.Context) (runner.Capabilities, error) {
+	if r.capsErr != nil {
+		return runner.Capabilities{}, r.capsErr
+	}
 	return runner.Capabilities{
 		Driver:                    "k8s",
 		ConfinementClasses:        []types.ConfinementClass{types.CC1},
 		NetworkPolicy:             r.networkPolicy,
 		NetworkPolicyAcknowledged: r.networkPolicyAcknowledged,
 	}, nil
+}
+
+// TestK8sNetpolVerdict is the pure-function table test for k8sNetpolVerdict
+// (extracted from setupRunnerInfo's former inline switch, now shared with
+// handleHealthz's "network_policy" field): every live k8s Capabilities shape
+// grades to its verdict, and a non-k8s driver always grades "" regardless of
+// what its Capabilities happen to carry — the caller's own driver name gates
+// this function, not anything inside caps.
+func TestK8sNetpolVerdict(t *testing.T) {
+	cases := []struct {
+		name   string
+		driver string
+		caps   runner.Capabilities
+		want   string
+	}{
+		{"k8s enforced", "k8s", runner.Capabilities{NetworkPolicy: true}, "enforced"},
+		{"k8s unenforced", "k8s", runner.Capabilities{}, "unenforced"},
+		{"k8s acknowledged", "k8s", runner.Capabilities{NetworkPolicyAcknowledged: true}, "acknowledged"},
+		{"acknowledged wins over a stale NetworkPolicy=true", "k8s",
+			runner.Capabilities{NetworkPolicy: true, NetworkPolicyAcknowledged: true}, "acknowledged"},
+		{"docker driver: empty regardless of caps", "docker", runner.Capabilities{NetworkPolicy: true}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := k8sNetpolVerdict(tc.driver, tc.caps); got != tc.want {
+				t.Errorf("k8sNetpolVerdict(%q, %+v) = %q, want %q", tc.driver, tc.caps, got, tc.want)
+			}
+		})
+	}
 }
 
 // TestSetupStatus_K8sEgressContainmentCheck: handleSetupStatus's checks list
