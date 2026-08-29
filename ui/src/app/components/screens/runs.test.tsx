@@ -451,6 +451,97 @@ describe("RunsScreen — runs are grouped by title", () => {
   });
 });
 
+// ── mock M2: the pinned "Needs you" lane ────────────────────────────────────
+// The board used to flatten held approvals and failures into one amber
+// treatment. They are not one thing: an approval is a REQUEST (someone is
+// waiting on you) and a failure is a REPORT (something is over). The request
+// pins to a lane at the top; the report stays with the work it belongs to.
+describe("RunsScreen board — the pinned Needs-you lane", () => {
+  const held = (runId: string) => ({
+    id: `a-${runId}`,
+    run_id: runId,
+    kind: "egress_domain" as const,
+    requested_scope: { host: "held.example", mode: "wait_for_review" },
+    state: "PENDING" as const,
+    requested_at: new Date().toISOString(),
+  });
+
+  it("pins a run whose sandbox is held — the run state alone never says so", async () => {
+    listRunsMock.mockResolvedValue([{ ...run, id: "r1", task: "Rotate the staging credentials" }]);
+    listApprovalsMock.mockResolvedValue([held("r1")]);
+    renderScreen();
+
+    const lane = await screen.findByRole("region", { name: "Needs you" });
+    expect(within(lane).getByText("Rotate the staging credentials")).toBeInTheDocument();
+    // …and it states what is waiting, rather than a sentence restating the state.
+    expect(within(lane).getByText("1 waiting · sandbox held")).toBeInTheDocument();
+  });
+
+  it("a run is in the lane XOR its title group — never rendered twice", async () => {
+    listRunsMock.mockResolvedValue([
+      { ...run, id: "r1", title: "Nightly audit", task: "Held step", state: "WAITING_FOR_CONFIRMATION" },
+      { ...run, id: "r2", title: "Nightly audit", task: "Quiet step" },
+      { ...run, id: "r3", title: "Nightly audit", task: "Third step" },
+    ]);
+    renderScreen();
+
+    // Identity by short id, because a pinned card is OUT of its group and so
+    // names itself by title again — the same rule any ungrouped card follows.
+    const lane = await screen.findByRole("region", { name: "Needs you" });
+    const group = screen.getByRole("region", { name: "Nightly audit" });
+    expect(within(lane).getByTitle("r1")).toBeInTheDocument();
+    expect(within(group).queryByTitle("r1")).not.toBeInTheDocument();
+    expect(screen.getAllByTitle("r1")).toHaveLength(1);
+    // The group keeps the rest, and its count follows the run that left.
+    expect(within(group).getByText("Quiet step")).toBeInTheDocument();
+    expect(within(group).getByText("2")).toBeInTheDocument();
+  });
+
+  it("a failure is a report: it stays in its group and never pins to the lane", async () => {
+    listRunsMock.mockResolvedValue([
+      { ...run, id: "r1", title: "Nightly audit", task: "Broken step", state: "FAILED" },
+      { ...run, id: "r2", title: "Nightly audit", task: "Quiet step" },
+    ]);
+    renderScreen();
+
+    const group = await screen.findByRole("region", { name: "Nightly audit" });
+    expect(within(group).getByText("Broken step")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Needs you" })).not.toBeInTheDocument();
+    // The state word e2e pins is still in the DOM on the card's second row —
+    // twice inside a group, because the header carries per-state counts too.
+    expect(within(group).getAllByText("Failed")).toHaveLength(2);
+  });
+
+  it("no lane at all when nothing is asking — the heading is not permanent chrome", async () => {
+    renderScreen();
+    await screen.findByRole("button", { name: /run actions/i });
+    expect(screen.queryByRole("region", { name: "Needs you" })).not.toBeInTheDocument();
+  });
+
+  it("the table has no lane: a held run is still in its group there", async () => {
+    const user = userEvent.setup();
+    listRunsMock.mockResolvedValue([
+      { ...run, id: "r1", title: "Nightly audit", task: "Held step", state: "WAITING_FOR_CONFIRMATION" },
+      { ...run, id: "r2", title: "Nightly audit", task: "Quiet step" },
+    ]);
+    renderScreen();
+    await screen.findByRole("region", { name: "Needs you" });
+
+    await user.click(screen.getByRole("button", { name: /^table$/i }));
+    expect(screen.queryByRole("region", { name: "Needs you" })).not.toBeInTheDocument();
+    expect(screen.getAllByText("Held step")).toHaveLength(1);
+    expect(screen.getByText("Quiet step")).toBeInTheDocument();
+  });
+
+  // The board must not lose its runs because the approvals endpoint is having
+  // a bad day — it just loses the held join.
+  it("a failing approvals call still renders the board", async () => {
+    listApprovalsMock.mockRejectedValue(new Error("403"));
+    renderScreen();
+    expect(await screen.findByText("Fix flaky auth tests")).toBeInTheDocument();
+  });
+});
+
 // mock M2's honest fallbacks: nothing on the card is invented.
 describe("RunsScreen board — an ephemeral run names itself honestly", () => {
   it("falls back to its mode for the headline and says what the empty repo slot is", async () => {

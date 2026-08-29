@@ -38,9 +38,11 @@ import { PageHeader } from "../wardyn/page-header";
 import { useRole } from "../wardyn/operator-context";
 import { cn } from "../ui/utils";
 import { BoardSkeleton, CardGrid, RunActions, RunCard, SectionHeading } from "./runs/run-card";
+import { AttentionLane } from "./runs/attention-lane";
 import {
   approvalSignals,
   needsAttention,
+  needsYou,
   rowHeadline,
   titleGroups,
   type RunSignals,
@@ -233,7 +235,16 @@ export function RunsScreen() {
   // first. Keep the concatenation order if you touch this.
   const visible = [...facetAttention, ...facetActive, ...facetDone];
   const noMatches = status === "ready" && !trueEmpty && visible.length === 0;
-  const { groups: titled, loose } = titleGroups(visible);
+  // The board pins the runs that are ASKING for something into their own lane,
+  // so those are grouped OUT of the title groups — a run is in the lane XOR in
+  // a group, never rendered twice. The table has no lane, so it groups the
+  // whole list. `visible` is already in triage order and filter preserves it,
+  // so both splits are stable with no comparator — a poll that changes nothing
+  // moves nothing.
+  const lane = mode === "board" ? visible.filter((r) => needsYou(r, signals)) : [];
+  const { groups: titled, loose } = titleGroups(
+    lane.length > 0 ? visible.filter((r) => !needsYou(r, signals)) : visible,
+  );
 
   const openRun = (id: string) => navigate(`/runs/${encodeURIComponent(id)}`);
 
@@ -386,6 +397,8 @@ export function RunsScreen() {
         </div>
       ) : mode === "board" ? (
         <div className="space-y-7">
+          <AttentionLane runs={lane} signals={signals} onOpen={openRun} onKill={kill} />
+
           {titled.map((g) => (
             <TitleGroup
               key={g.title}
@@ -404,7 +417,9 @@ export function RunsScreen() {
               {/* Only labelled when there is something to distinguish it FROM —
                   on a board with no shared titles, "Ungrouped" describes every
                   run on the page and says nothing. */}
-              {titled.length > 0 && <SectionHeading title="Ungrouped" count={loose.length} />}
+              {(titled.length > 0 || lane.length > 0) && (
+                <SectionHeading title="Ungrouped" count={loose.length} />
+              )}
               <CardGrid>
                 {loose.map((run) => (
                   <RunCard key={run.id} run={run} signals={signals} onOpen={openRun} onKill={kill} />
