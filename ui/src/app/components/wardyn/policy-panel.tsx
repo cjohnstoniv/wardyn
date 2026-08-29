@@ -564,7 +564,7 @@ function ToolRulesSection({
             variant="ghost"
             size="icon"
             className="size-8"
-            aria-label="Remove rule"
+            aria-label={`Remove rule ${i + 1}`}
             onClick={() =>
               write(
                 named.filter((_, n) => n !== i),

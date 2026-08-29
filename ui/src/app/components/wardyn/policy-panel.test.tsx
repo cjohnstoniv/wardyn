@@ -315,7 +315,7 @@ describe("PolicyPanel — the tool_rules section", () => {
         initial={JSON.stringify({ ...JSON.parse(VALID), tool_rules: [{ tool: "Bash", effect: "hold" }] })}
       />,
     );
-    await user.click(screen.getByRole("button", { name: "Remove rule" }));
+    await user.click(screen.getByRole("button", { name: "Remove rule 1" }));
 
     // Absent, not `[]`: a policy written before the field existed has no key,
     // and "no rules" has to serialise back to exactly that.
@@ -336,10 +336,33 @@ describe("PolicyPanel — the tool_rules section", () => {
 
   it("the default row cannot be removed", async () => {
     render(<Harness initial={VALID} />);
-    expect(screen.queryByRole("button", { name: "Remove rule" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Remove rule/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Add rule" }));
     // One remove control, for the one named rule — never for "*".
-    expect(screen.getAllByRole("button", { name: "Remove rule" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: /^Remove rule/ })).toHaveLength(1);
+  });
+
+  // N icon-only buttons all reading "Remove rule" gave a screen reader no way
+  // to tell them apart, and no way to say which one it just pressed. The tool
+  // input beside it was already numbered.
+  it("numbers each remove button, so no two share an accessible name", async () => {
+    render(
+      <Harness
+        initial={JSON.stringify({
+          ...JSON.parse(VALID),
+          tool_rules: [
+            { tool: "Bash", effect: "deny" },
+            { tool: "Read", effect: "allow" },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Remove rule 1" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove rule 2" })).toBeInTheDocument();
+
+    // And it removes the row it names, not just "a" row.
+    await user.click(screen.getByRole("button", { name: "Remove rule 1" }));
+    expect(currentSpec().tool_rules).toEqual([{ tool: "Read", effect: "allow" }]);
   });
 
   it("names the server's own refusal for a duplicate tool, before Save", async () => {
