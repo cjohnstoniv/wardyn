@@ -299,3 +299,65 @@ func TestSecretsAPI_OperatorByteIdenticalPre0050(t *testing.T) {
 		t.Error("operator DELETE's audit event carries secret_owner; it must be absent for the operator namespace")
 	}
 }
+
+// TestPutSecret_AdminOwnerParam_LandsInMemberNamespace: ?owner= on PUT is
+// honoured exactly as on DELETE/GET — an admin's cross-write lands in the
+// NAMED member's namespace and never in the operator's (which is the Get
+// fallback for every member's runs, the one place a per-principal write must
+// not land by accident). Negative control: a member naming ?owner= gets the
+// same constant 403 the sibling endpoints give.
+func TestPutSecret_AdminOwnerParam_LandsInMemberNamespace(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{}}
+	h, srv := secretsRBACServer(t, sec)
+	admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
+
+	w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/anthropic-api-key?owner=bob", admin, `{"value":"sk-ant-bobs-key-value-0000"}`)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("admin PUT ?owner=bob = %d, want 204: %s", w.Code, w.Body.String())
+	}
+	if got, err := sec.For("bob").Get(context.Background(), "anthropic-api-key"); err != nil || string(got) != "sk-ant-bobs-key-value-0000" {
+		t.Fatalf("bob's row = (%q, %v), want the cross-written value", got, err)
+	}
+	if _, err := sec.Get(context.Background(), "anthropic-api-key"); !errors.Is(err, secretstore.ErrNotFound) {
+		t.Fatalf("operator namespace has a row after an admin's ?owner=bob PUT (err=%v); it must not", err)
+	}
+	ev := lastAuditEvent(t, h.audit.events, "secret.write")
+	if owner, ok := auditDataField(t, ev, "secret_owner"); !ok || owner != "bob" {
+		t.Errorf("audit secret_owner = (%q, present=%v), want bob", owner, ok)
+	}
+
+	t.Run("negative control: a member naming ?owner= is refused before any write", func(t *testing.T) {
+		sec := &memSecrets{m: map[string][]byte{}}
+		_, srv := secretsRBACServer(t, sec)
+		alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+		w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/anthropic-api-key?owner=bob", alice, `{"value":"sk-ant-bobs-key-value-0000"}`)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("member PUT ?owner=bob = %d, want 403: %s", w.Code, w.Body.String())
+		}
+		if len(sec.m) != 0 {
+			t.Fatalf("a refused PUT wrote %d row(s); it must write none", len(sec.m))
+		}
+	})
+}
+
+// TestDeleteSecret_MemberBedrockNames_403: the four Bedrock/SigV4 names are
+// refused for a non-operator on DELETE as well as PUT (the guard lives in the
+// shared writableSecretName), while an operator may still delete them.
+func TestDeleteSecret_MemberBedrockNames_403(t *testing.T) {
+	for _, name := range []string{bedrockAccessKeyIDSecret, bedrockSecretAccessKeySecret, bedrockSessionTokenSecret, bedrockAPIKeySecret} {
+		t.Run(name, func(t *testing.T) {
+			_, srv := secretsRBACServer(t, &memSecrets{m: map[string][]byte{}})
+			alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+			if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/"+name, alice, ""); w.Code != http.StatusForbidden {
+				t.Fatalf("member DELETE %s = %d, want 403: %s", name, w.Code, w.Body.String())
+			}
+		})
+	}
+	t.Run("negative control: an operator may still DELETE it", func(t *testing.T) {
+		_, srv := secretsRBACServer(t, &memSecrets{m: map[string][]byte{}})
+		admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
+		if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/"+bedrockAPIKeySecret, admin, ""); w.Code != http.StatusNoContent {
+			t.Fatalf("operator DELETE = %d, want 204: %s", w.Code, w.Body.String())
+		}
+	})
+}

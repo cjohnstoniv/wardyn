@@ -224,11 +224,13 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	// The run's OWN identity (claims.Sub) resolves it: the run's creator's own
 	// row wins, falling back to the operator's — never another member's, even
 	// one named by hand in this run's inline policy (structural: For(owner)
-	// never resolves a different owner's row). claims.Sub is "" for an
-	// operator-created run (secretOwnerFromRequest's PUT-time stamp never
-	// lands a row under any other string an operator's own caller might
-	// carry — see its doc comment), so this degrades to today's single
-	// namespace for every pre-0.7 deployment.
+	// never resolves a different owner's row). For an operator-created run
+	// claims.Sub is the operator's own identity string (admin-token,
+	// local:<op>, or an admin's OIDC sub) — never "" (the identity minter
+	// refuses an empty subject) — and secretOwnerFromRequest stamps an
+	// operator's writes under "" only, so no row ever exists under those
+	// strings and the lookup falls back to the operator row: today's single
+	// namespace, unchanged, for every pre-0.7 deployment.
 	secret, err := s.cfg.Secrets.For(claims.Sub).Get(r.Context(), minted.Injection.SecretName)
 	if err != nil {
 		// Fail closed; the proxy refuses to start without its injections.

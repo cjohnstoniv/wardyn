@@ -409,7 +409,7 @@ every pre-0.7 row, and every row an admin writes without `?owner=` — means
   under a configured upstream the sidecar skips the SSRF guard entirely, so a
   member-substitutable value there would be a guard bypass, not a
   convenience.
-- **`?owner=<principal>` is admin-only** on `DELETE`/`GET /secrets`, refused
+- **`?owner=<principal>` is admin-only** on `PUT`/`DELETE`/`GET /secrets` (an admin's cross-write lands in the NAMED member's namespace, never the operator's), refused
   with a constant 403 for anyone else — the same posture workspace
   reassignment above uses.
 - **Cross-user admin writes are queryable.** `secret.write`/`secret.delete`

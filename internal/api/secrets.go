@@ -127,12 +127,24 @@ type putSecretRequest struct {
 // writableSecretName validates a secret name is well-formed and not a
 // reserved platform-internal key, writing the appropriate 400/403 and
 // returning ok=false on failure. Shared by Put and Delete.
-func (s *Server) writableSecretName(w http.ResponseWriter, name string) bool {
+func (s *Server) writableSecretName(w http.ResponseWriter, name, owner string) bool {
 	if !secretNameRE.MatchString(name) {
 		writeError(w, http.StatusBadRequest, "invalid secret name (lowercase alphanumerics, '.', '_', '-')")
 		return false
 	}
 	if secretsAPIReserved(name) {
+		writeError(w, http.StatusForbidden, "secret name is reserved for platform internals")
+		return false
+	}
+	// The Bedrock/SigV4 credential material is ALWAYS resolved from the
+	// operator namespace (runs_bedrock.go's setupBedrock reads present[...]
+	// off For("")) — a member row under one of these four names would read as
+	// "Bedrock is configured" in setup while dispatch never actually uses it,
+	// a confusing dead end rather than a working BYOK path. sinkReservedSecret
+	// deliberately excludes bedrock-api-key (the operator's legitimate write
+	// path); that exclusion does not extend to a non-operator namespace. Shared
+	// by Put and Delete so both paths carry it.
+	if owner != "" && (sinkReservedSecret(name) || name == bedrockAPIKeySecret) {
 		writeError(w, http.StatusForbidden, "secret name is reserved for platform internals")
 		return false
 	}
@@ -145,19 +157,15 @@ func (s *Server) writableSecretName(w http.ResponseWriter, name string) bool {
 // path ever returns it. Every write is an audit event.
 func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	if !s.writableSecretName(w, name) {
+	// ?owner= is honoured here exactly as on DELETE/GET: an admin's cross-write
+	// lands in the NAMED member's namespace. Silently ignoring it would put the
+	// value in the operator namespace — the Get fallback for EVERY member's
+	// runs — which is the one blast radius a per-principal write must not have.
+	owner, ok := s.secretOwnerParam(w, r)
+	if !ok {
 		return
 	}
-	owner := s.secretOwnerFromRequest(r)
-	// The Bedrock/SigV4 credential material is ALWAYS resolved from the
-	// operator namespace (runs_bedrock.go's setupBedrock reads present[...]
-	// off For("")) — a member row under one of these four names would read as
-	// "Bedrock is configured" in setup while dispatch never actually uses it,
-	// a confusing dead end rather than a working BYOK path. sinkReservedSecret
-	// deliberately excludes bedrock-api-key (the operator's legitimate write
-	// path); that exclusion does not extend to a non-operator here.
-	if owner != "" && (sinkReservedSecret(name) || name == bedrockAPIKeySecret) {
-		writeError(w, http.StatusForbidden, "secret name is reserved for platform internals")
+	if !s.writableSecretName(w, name, owner) {
 		return
 	}
 	var body putSecretRequest
@@ -194,11 +202,11 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 // no existence oracle. Audited.
 func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	if !s.writableSecretName(w, name) {
-		return
-	}
 	owner, ok := s.secretOwnerParam(w, r)
 	if !ok {
+		return
+	}
+	if !s.writableSecretName(w, name, owner) {
 		return
 	}
 	if err := s.cfg.Secrets.For(owner).Delete(r.Context(), name); err != nil {
@@ -210,8 +218,8 @@ func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// secretOwnerParam resolves the secret-store namespace a DELETE or the LIST
-// endpoint reads/writes: the caller's own (secretOwnerFromRequest) by
+// secretOwnerParam resolves the secret-store namespace PUT, DELETE and the
+// LIST endpoint read/write: the caller's own (secretOwnerFromRequest) by
 // default, or ?owner=<principal> when the caller is an operator asking about
 // a specific member's rows. A non-operator naming ?owner= at all gets a
 // CONSTANT 403 — refused before any lookup, so it never varies with whether

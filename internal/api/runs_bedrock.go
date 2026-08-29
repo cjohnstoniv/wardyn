@@ -343,6 +343,9 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 	// header, so the proxy TLS-MITMs bedrock-runtime and injects it — the sandbox
 	// holds only a placeholder, never the real token (trust parity with api-key /
 	// subscription). Selected whenever a bedrock-api-key secret exists.
+	// Operator namespace on purpose (bare Get == For("")): Bedrock credentials are
+	// MDM/operator-set daemon config, never a member row (writableSecretName
+	// refuses these names for a non-operator).
 	if bearer, berr := s.cfg.Secrets.Get(ctx, bedrockAPIKeySecret); berr == nil && len(bearer) > 0 {
 		env := base()
 		// A non-empty sentinel so claude-code uses bearer auth (not SigV4); the proxy
@@ -442,6 +445,9 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 	// FALLBACK: resident SigV4 access keys. SigV4 signs each request in-process, so
 	// the creds MUST be resident in the sandbox env (documented exception, masked +
 	// modelRun-gated). Requires both access key + secret key.
+	// Operator namespace on purpose (bare Get == For("")): Bedrock credentials are
+	// MDM/operator-set daemon config, never a member row (writableSecretName
+	// refuses these names for a non-operator).
 	accessKey, aerr := s.cfg.Secrets.Get(ctx, bedrockAccessKeyIDSecret)
 	secretKey, serr := s.cfg.Secrets.Get(ctx, bedrockSecretAccessKeySecret)
 	if aerr != nil || serr != nil || len(accessKey) == 0 || len(secretKey) == 0 {
@@ -450,6 +456,9 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 	env := base()
 	env["AWS_ACCESS_KEY_ID"] = string(accessKey)
 	env["AWS_SECRET_ACCESS_KEY"] = string(secretKey)
+	// Operator namespace on purpose (bare Get == For("")): Bedrock credentials are
+	// MDM/operator-set daemon config, never a member row (writableSecretName
+	// refuses these names for a non-operator).
 	if tok, terr := s.cfg.Secrets.Get(ctx, bedrockSessionTokenSecret); terr == nil && len(tok) > 0 {
 		env["AWS_SESSION_TOKEN"] = string(tok)
 	}
