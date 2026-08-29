@@ -95,6 +95,7 @@ RUN addgroup -g 1000 agent \
 COPY --from=builder /out/wardyn-rec /usr/local/bin/wardyn-rec
 
 # agent-run launcher (repo-root context now, so COPY the full path).
+COPY deploy/images/common/agent-run-lib.sh /usr/local/bin/agent-run-lib.sh
 COPY deploy/images/oracle/agent-run /usr/local/bin/agent-run
 RUN chmod +x /usr/local/bin/agent-run /usr/local/bin/wardyn-rec
 

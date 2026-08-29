@@ -140,6 +140,28 @@ func run() error {
 	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Corporate CA trust (WARDYN_TRUSTED_CA_FILE): additive to the system roots
+	// for wardynd's OWN outbound TLS (installTrustedCA mutates the shared
+	// http.DefaultTransport every package here dials through — see
+	// internal/broker's GitHub App transport, internal/auth/oidc's issuer
+	// rewrite transport, and the audit webhook sink). The proxy sidecar and the
+	// sandbox get the SAME pemBundle forwarded at dispatch time (api.Config
+	// below); see trusted_ca.go. Refuse boot on error: an operator-typed trust
+	// boundary that fails to parse must not silently fall back to a narrower one.
+	trustedCAPEM, trustedCAPool, trustedCACount, err := loadTrustedCA(*f.trustedCAFile)
+	if err != nil {
+		return err
+	}
+	if trustedCACount > 0 {
+		slog.Info("wardynd: corporate CA trust configured (WARDYN_TRUSTED_CA_FILE)",
+			slog.Int("cert_count", trustedCACount), slog.Any("subjects", certSubjects(trustedCAPEM)))
+	}
+	if tr, ok := http.DefaultTransport.(*http.Transport); ok {
+		installTrustedCA(tr, trustedCAPool)
+	}
+	// (Validated before the DB connect on purpose: a typo'd path fails in
+	// milliseconds instead of after a 30s connect budget.)
+
 	// Connect + migrate (Postgres is the only required dependency). See
 	// connectAndMigrate for the WARDYN_PG_MIGRATE_DSN role-split (DDL protection)
 	// and the separate connect/migrate timeout budgets (W28-S1-4) — a fixed 30s
@@ -245,26 +267,6 @@ func run() error {
 	defaultPolicy, err := api.LoadPolicySpec(*f.policyPath)
 	if err != nil {
 		return err
-	}
-
-	// Corporate CA trust (WARDYN_TRUSTED_CA_FILE): additive to the system roots
-	// for wardynd's OWN outbound TLS (installTrustedCA mutates the shared
-	// http.DefaultTransport every package here dials through — see
-	// internal/broker's GitHub App transport, internal/auth/oidc's issuer
-	// rewrite transport, and the audit webhook sink). The proxy sidecar and the
-	// sandbox get the SAME pemBundle forwarded at dispatch time (api.Config
-	// below); see trusted_ca.go. Refuse boot on error: an operator-typed trust
-	// boundary that fails to parse must not silently fall back to a narrower one.
-	trustedCAPEM, trustedCAPool, trustedCACount, err := loadTrustedCA(*f.trustedCAFile)
-	if err != nil {
-		return err
-	}
-	if trustedCACount > 0 {
-		slog.Info("wardynd: corporate CA trust configured (WARDYN_TRUSTED_CA_FILE)",
-			slog.Int("cert_count", trustedCACount), slog.Any("subjects", certSubjects(trustedCAPEM)))
-	}
-	if tr, ok := http.DefaultTransport.(*http.Transport); ok {
-		installTrustedCA(tr, trustedCAPool)
 	}
 
 	if *f.adminToken == "" && !lm.enabled {

@@ -166,9 +166,11 @@ type Options struct {
 	// Dial overrides the connection dialer (tests). Production leaves it nil
 	// and a net.Dialer is used.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
-	// TLSClientConfig overrides the forwarding transport's TLS config. Tests
-	// use this to trust an httptest TLS server standing in for an HTTPS LLM
-	// upstream; production leaves it nil (system roots, ServerName from URL).
+	// TLSClientConfig is the TLS config for BOTH the forwarding and the
+	// control-plane transports. Production sets it from Config.TrustedCAPEM
+	// (system roots plus the operator's corporate CA bundle — see
+	// NewServer); nil means system roots alone. Tests use it to trust an
+	// httptest TLS server standing in for an HTTPS upstream.
 	TLSClientConfig *tls.Config
 	Now             func() time.Time
 }

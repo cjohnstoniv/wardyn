@@ -32,6 +32,15 @@
 # (HTTP_PROXY/HTTPS_PROXY are set by dispatch, exactly as for the real images).
 set -u
 
+# A corporate CA (WARDYN_TRUSTED_CA_FILE) or intercept_tls arrives as a
+# WARDYN_MITM_CA_PEM bundle with CURL_CA_BUNDLE & co. pointed at the file
+# install_mitm_ca writes; without this the task's curl fails on a missing
+# bundle. The lib is bash; this script is sh, so run it in a bash child — it
+# only writes files. No-op when no bundle was delivered.
+if [ -n "${WARDYN_MITM_CA_PEM:-}" ] && [ -f /usr/local/bin/agent-run-lib.sh ] && command -v bash >/dev/null 2>&1; then
+    bash -c '. /usr/local/bin/agent-run-lib.sh; install_mitm_ca' || true
+fi
+
 # ── selftest ─────────────────────────────────────────────────────────────────
 if [ "${1:-}" = "--selftest" ]; then
     echo "=== wardyn agent-run selftest (oracle) ==="
