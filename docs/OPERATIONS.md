@@ -1227,6 +1227,46 @@ with no signal anywhere. A secret referenced via `upstream_proxy_secret_ref`
 carries the same restriction; store the plain `http://` proxy URL in the
 secret even when it embeds a credential.
 
+### Corporate TLS-inspection root
+
+A TLS-inspecting upstream proxy — one that terminates and re-signs TLS with
+its own internal CA rather than merely relaying CONNECT bytes — is unusable
+with the published images out of the box: `wardynd`'s own outbound TLS (OIDC
+discovery, the GitHub App transport, the audit webhook sink), the
+`wardyn-proxy` sidecar's forwarding transport, and every sandbox's own TLS
+clients on a passthrough CONNECT tunnel all fail certificate verification
+against a root none of them trust.
+
+`WARDYN_TRUSTED_CA_FILE` closes that gap: a PATH to a PEM bundle of
+additional trusted roots, additive to the system roots, read once at
+`wardynd` boot (see [ENV.md](ENV.md)). It reaches all three processes —
+`wardynd` mutates the shared `http.DefaultTransport` every package here
+dials through; the proxy sidecar and every sandbox get the SAME bundle
+forwarded per run (`runner.ProxyConfig.TrustedCAPEM`,
+`installSandboxTrustedCA`). Unset is byte-identical to today. A file that
+does not exist, or whose content has no parseable certificate, refuses boot
+naming the var — an operator-typed trust boundary fails closed rather than
+silently keeping a narrower trust set.
+
+Delivery per install path: compose points it at a file under the
+`WARDYN_MANAGED_DIR:/etc/wardyn:ro` mount (no new volume); the desktop tier
+ships the PEM alongside `policy.json` in the same MDM payload
+([DESKTOP.md](DESKTOP.md)); the Helm chart's `trustedCA` value bakes the PEM
+into a ConfigMap and wires the env var for you (`--set-file
+trustedCA=corp-ca.pem`, see the chart README's "Corporate CA trust").
+
+**Named ceiling, accepted and documented rather than solved**: with the knob
+set, a run's sandbox env carries the corporate PEM even when Wardyn's own
+TLS-MITM is off for that run — which means a BYOI base image missing every
+system CA-bundle path (`agent-run-lib.sh`'s `install_mitm_ca` already warns
+"proxy-CA-only" in that shape) loses public trust for its OpenSSL-shaped
+clients (curl, Python, Ruby) once this is set; the published images are
+unaffected. See
+[docs/adoption/corp-image-authoring.md](adoption/corp-image-authoring.md) and
+[docs/ENVBUILD.md](ENVBUILD.md#base-image-trust-byoi). Not a `SiteConfig`
+field: this is a boot-time operator posture, never a live API write, never
+agent-reachable — see `threatmodel/THREAT-MODEL.md` residual #28.
+
 ### Egress redirects: two tiers
 
 `egress_redirects` is a list of `{from, to, token_secret_ref,

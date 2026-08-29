@@ -45,6 +45,15 @@ For **Node** stages, prefer `ENV NODE_EXTRA_CA_CERTS=/corp-ca/corp-ca.pem` on it
 own and skip the system-trust `RUN` entirely: npm/pnpm read that var, and it needs
 no package. That is what `deploy/compose/Dockerfile.wardynd`'s `ui-build` does.
 
+**This is the BUILD-TIME, contributor path** — `deploy/images/corp-ca.pem` trusts
+a corporate proxy only while these Dockerfiles themselves build, on the machine
+running `make setup` / `make agent-images`. It is unrelated to (and does not
+substitute for) `WARDYN_TRUSTED_CA_FILE`: the OPERATOR-facing, runtime knob a
+published `wardynd` reads at boot to trust a corporate TLS-inspecting middlebox
+for the deployment's own traffic — wardynd's outbound TLS, the proxy sidecar,
+and every sandbox — with no image rebuild at all. See
+[docs/OPERATIONS.md § "Corporate TLS-inspection root"](../OPERATIONS.md#corporate-tls-inspection-root).
+
 **2. Go builds:** add `ENV GOTOOLCHAIN=local` so the pinned-toolchain self-upgrade
 fetch (blocked behind a MITM proxy) is skipped; the corp CA above lets
 `go mod download` verify the module proxy. Also declare a module-mirror knob

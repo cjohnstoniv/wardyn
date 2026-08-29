@@ -103,6 +103,16 @@ resolved at wrap time, so what it points at is the operator's call. What the
 base's content cannot reach is the host: it only ever executes later, inside the
 run's confinement tier. See threatmodel/THREAT-MODEL.md §5 (residual 13).
 
+**A BYOI base and `WARDYN_TRUSTED_CA_FILE` interact.** When the operator sets
+that knob (docs/OPERATIONS.md § "Corporate TLS-inspection root"), a run's
+sandbox env carries the corporate PEM regardless of whether Wardyn's own
+TLS-MITM is active for that run — `agent-run-lib.sh`'s `install_mitm_ca`
+already warns "proxy-CA-only" when no system CA-bundle path exists in the
+image; on that BYOI shape, OpenSSL-shaped clients (curl, Python, Ruby) lose
+public trust entirely once the knob is set, since there is no system bundle
+left to fall back to. The published images all carry one and are unaffected.
+Named ceiling, accepted and documented — not solved.
+
 ## Envbuilder environment variables used
 
 - ENVBUILDER_GIT_URL     — repository URL to clone (git path only; omitted

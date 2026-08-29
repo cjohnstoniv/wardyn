@@ -339,6 +339,10 @@ wiring is needed. Pin a `@sha256:` digest to avoid mutable-tag drift between run
 (curl, Python `requests`, Ruby) via `SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE` /
 `CURL_CA_BUNDLE`, all set by dispatch. **Not covered:** JVM keystores and Deno
 (`DENO_CERT`) — a JVM/Deno toolchain in a BYOI image must trust the CA itself.
+When the operator sets `WARDYN_TRUSTED_CA_FILE` (docs/OPERATIONS.md § "Corporate
+TLS-inspection root"), its PEM rides the same `ca-bundle.pem` — appended even on
+a run with no per-run MITM CA of its own — so a BYOI base missing every system
+CA-bundle path loses OpenSSL-family public trust entirely once that knob is set.
 
 **Containment holds regardless of image; two defense-in-depth caveats.** The
 wrap clears the base's ENTRYPOINT and overwrites its runner tools from the
