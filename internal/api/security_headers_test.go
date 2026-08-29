@@ -13,8 +13,10 @@ import (
 // residual risk (threatmodel/THREAT-MODEL.md §5): the console is a full-admin
 // surface, so every response — the anonymous /healthz, a 401 from the admin-gated
 // API, and the SPA — must carry the clickjacking/sniffing defenses. It also pins
-// the two CSP directives that are easy to "tidy" into an outage: font-src data:
-// (the built CSS embeds its woff2) and connect-src ws: (the PTY attach).
+// the CSP directives that are easy to loosen without noticing: font-src data:
+// (the built CSS embeds its woff2), connect-src ws: (the PTY attach), and
+// media-src's exact two hosts (a wildcard here would let the console's
+// admin-bearing origin embed arbitrary third-party media).
 func TestSecurityHeadersOnEveryResponse(t *testing.T) {
 	h := newHarness(t)
 
@@ -39,6 +41,7 @@ func TestSecurityHeadersOnEveryResponse(t *testing.T) {
 			"font-src 'self' data:",                // console webfont is a data: URI
 			"connect-src 'self' ws: wss:",          // PTY attach WebSocket
 			"script-src 'self' 'wasm-unsafe-eval'", // recording replay player instantiates WASM
+			"media-src 'self' https://github.com https://release-assets.githubusercontent.com", // demo episodes are GitHub release assets, loaded only on click
 		} {
 			if !strings.Contains(csp, directive) {
 				t.Errorf("%s: CSP %q missing %q", path, csp, directive)
@@ -50,6 +53,13 @@ func TestSecurityHeadersOnEveryResponse(t *testing.T) {
 		// match inside 'wasm-unsafe-eval'.
 		if strings.Contains(csp, " 'unsafe-eval'") {
 			t.Errorf("%s: CSP %q must not grant 'unsafe-eval' (use 'wasm-unsafe-eval')", path, csp)
+		}
+		// media-src must name the two exact hosts, never open up to a wildcard —
+		// this origin holds the admin bearer, so a broad media-src would let any
+		// page it can be tricked into loading embed arbitrary third-party media
+		// under it.
+		if strings.Contains(csp, "media-src *") || strings.Contains(csp, "media-src https:") {
+			t.Errorf("%s: CSP %q must not grant a wildcard media-src", path, csp)
 		}
 	}
 }

@@ -656,6 +656,12 @@ func (s *Server) Handler() http.Handler { return s.router }
 //   - connect-src names ws:/wss: explicitly. 'self' matching a same-origin
 //     WebSocket is CSP3 behavior WebKit has historically not implemented, and
 //     the PTY attach must not silently die there.
+//   - media-src names github.com and release-assets.githubusercontent.com: the
+//     Getting Started demo episodes (ui/src/app/lib/demo-videos.ts) are GitHub
+//     release assets, loaded only on explicit click (no autoplay, no
+//     prefetch). The download link 302s from the first host to the second —
+//     CSP checks the redirect target, not just the link — and GitHub has moved
+//     that host before, so RELEASING.md's re-shoot step re-verifies it live.
 //   - script-src is 'self' plus 'wasm-unsafe-eval' — the RECORDING replay player
 //     (asciinema-player, a WASM VT core) calls WebAssembly.instantiate(), which
 //     browsers refuse under a bare default-src 'self'. 'wasm-unsafe-eval' permits
@@ -670,6 +676,7 @@ func (s *Server) Handler() http.Handler { return s.router }
 func securityHeaders(next http.Handler) http.Handler {
 	const csp = "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; " +
 		"object-src 'none'; connect-src 'self' ws: wss:; " +
+		"media-src 'self' https://github.com https://release-assets.githubusercontent.com; " +
 		"script-src 'self' 'wasm-unsafe-eval'; " +
 		"style-src 'self' 'unsafe-inline'; font-src 'self' data:"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
