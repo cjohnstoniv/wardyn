@@ -146,9 +146,12 @@ export function RunCard({
         {(asks || interrupted) && (
           <Button
             size="sm"
-            // A request is the affirmative action on its card; a report is
-            // evidence to go read, which is `outline` (§6).
-            variant={asks ? "default" : "outline"}
+            // §6: exactly one `default` button per surface, and the board's is
+            // the shell's New run. A lane of N asking cards was N teal buttons
+            // competing with it — the amber rail and the pinned lane already
+            // say which cards are the request, so this one only has to be
+            // reachable.
+            variant="outline"
             className="h-7 shrink-0"
             onClick={(e) => {
               e.stopPropagation();

@@ -78,7 +78,11 @@ describe("RunCard — two-row anatomy", () => {
 
   it("Review is always reachable on a card that needs eyes; Attach is revealed, never hover-only", () => {
     const { unmount } = renderCard(run({ state: "FAILED" }));
-    expect(screen.getByRole("button", { name: "Review" })).toBeInTheDocument();
+    const review = screen.getByRole("button", { name: "Review" });
+    expect(review).toBeInTheDocument();
+    // …and never teal: §2 keeps the accent for the one `default` button per
+    // surface, which on the board is the shell's New run.
+    expect(review.className).not.toContain("bg-primary");
     unmount();
 
     renderCard(run({ interactive: true, state: "RUNNING" }));
