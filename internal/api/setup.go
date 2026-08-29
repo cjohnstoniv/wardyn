@@ -100,6 +100,14 @@ type SetupStatus struct {
 	// banner / demo gating keep working for a member without any of that detail
 	// leaking. Kept in exact sync with ui/src/app/lib/types.ts's SetupStatus.
 	LLMReady bool `json:"llm_ready"`
+	// TrustedCACerts is the number of additional roots WARDYN_TRUSTED_CA_FILE
+	// loaded at boot (0 = unset). Derived from Config.TrustedCAPEM, never a
+	// second boot-time field — see handleSetupStatus. Go + test only: no
+	// console reader exists yet (the ui/src/app/lib/types.ts mirror is
+	// hand-maintained, added when the Network step renders it) and
+	// redactSetupStatusForMember does not zero it — a bare count carries no
+	// PEM content, host name, or other detail members are barred from.
+	TrustedCACerts int `json:"trusted_ca_certs,omitempty"`
 }
 
 // SetupHarness is a Wardyn-managed subscription credential's readiness. Derived
@@ -684,6 +692,9 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Integrations: integrations,
 		Harnesses:    setupHarnessTools(),
 		LLMReady:     llmReady,
+		// A count derived from the SAME PEM string TrustedCAPEM's doc comment
+		// describes — no second boot-time field to keep in sync. 0 when unset.
+		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),
 	}
 	if !s.isOperator(ctx) {
 		resp = redactSetupStatusForMember(resp)
