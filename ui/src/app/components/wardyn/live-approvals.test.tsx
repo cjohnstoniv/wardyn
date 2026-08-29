@@ -374,3 +374,89 @@ describe("LiveApprovals", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// M3 — the strip sits UNDER the terminal it belongs to, so it caps at two rows
+// and offers the rest behind the board's own "Show all N". That cap is what
+// makes the ordering load-bearing: an implicit "whatever the API returned"
+// order was harmless while every row was visible, and hides the one decision
+// parking the sandbox the moment it is not.
+// ---------------------------------------------------------------------------
+describe("LiveApprovals — precedence and the two-row overflow", () => {
+  beforeEach(() => {
+    listApprovalsMock.mockReset().mockResolvedValue([]);
+    approveMock.mockReset().mockResolvedValue({});
+    denyMock.mockReset().mockResolvedValue({});
+  });
+
+  /** n passive rows, then one held row LAST — the order the API might send. */
+  function heldLast(passiveCount: number): ApprovalRequest[] {
+    const rows = Array.from({ length: passiveCount }, (_, i) =>
+      pending({ id: `p${i}`, requested_scope: { host: `passive${i}.example` } }),
+    );
+    return [
+      ...rows,
+      pending({
+        id: "held",
+        requested_at: new Date().toISOString(),
+        requested_scope: { host: "held.example", mode: "wait_for_review" },
+      }),
+    ];
+  }
+
+  it("shows at most two rows and offers the rest — the strip never grows past the terminal", async () => {
+    listApprovalsMock.mockResolvedValue(heldLast(3));
+    render(<LiveApprovals runId="r1" />);
+    const panel = await screen.findByTestId("live-approvals");
+    expect(within(panel).getAllByTestId("live-approval-row")).toHaveLength(2);
+    expect(within(panel).getByTestId("live-approvals-show-all")).toHaveTextContent("Show all 4");
+  });
+
+  it("puts the HELD request first, even when the API sends it last — held outranks passive", async () => {
+    listApprovalsMock.mockResolvedValue(heldLast(3));
+    render(<LiveApprovals runId="r1" />);
+    const panel = await screen.findByTestId("live-approvals");
+    const rows = within(panel).getAllByTestId("live-approval-row");
+    expect(rows[0]).toHaveTextContent("held.example");
+    // The regression the cap creates: the one decision parking the sandbox
+    // must never be the row behind "Show all".
+    expect(within(panel).getByText("held.example")).toBeInTheDocument();
+  });
+
+  it("Show all reveals every row, and folds back", async () => {
+    listApprovalsMock.mockResolvedValue(heldLast(3));
+    render(<LiveApprovals runId="r1" />);
+    const panel = await screen.findByTestId("live-approvals");
+
+    await userEvent.click(within(panel).getByTestId("live-approvals-show-all"));
+    expect(within(panel).getAllByTestId("live-approval-row")).toHaveLength(4);
+    expect(within(panel).getByTestId("live-approvals-show-all")).toHaveTextContent("Show fewer");
+
+    await userEvent.click(within(panel).getByTestId("live-approvals-show-all"));
+    expect(within(panel).getAllByTestId("live-approval-row")).toHaveLength(2);
+  });
+
+  it("offers no overflow control when everything already fits", async () => {
+    listApprovalsMock.mockResolvedValue(heldLast(1));
+    render(<LiveApprovals runId="r1" />);
+    const panel = await screen.findByTestId("live-approvals");
+    expect(within(panel).getAllByTestId("live-approval-row")).toHaveLength(2);
+    expect(within(panel).queryByTestId("live-approvals-show-all")).not.toBeInTheDocument();
+  });
+
+  it("disables the row the instant Approve fires, without flashing a spinner (CONSOLE-RULES §7)", async () => {
+    listApprovalsMock.mockResolvedValue([pending()]);
+    let release: (v: unknown) => void = () => {};
+    approveMock.mockImplementation(() => new Promise((r) => (release = r)));
+    render(<LiveApprovals runId="r1" />);
+    const panel = await screen.findByTestId("live-approvals");
+    const approve = within(panel).getByRole("button", { name: /^Approve$/ });
+
+    await userEvent.click(approve);
+    // Disabled immediately; useDeferredBusy holds the spinner back, so a fast
+    // response never flashes one.
+    expect(approve).toBeDisabled();
+    expect(panel.querySelector(".animate-spin")).toBeNull();
+    release({});
+  });
+});

@@ -41,6 +41,7 @@ import { cn } from "../ui/utils";
 import { Mono } from "./code-block";
 import { Chip, OperatorOnlyHint, SectionLabel } from "./primitives";
 import { useOperator } from "./operator-context";
+import { attentionRank } from "./run-state-glyph";
 import {
   ALWAYS_NEEDS_WORKSPACE,
   APPROVAL_SCOPE_HINT,
@@ -126,6 +127,21 @@ function clip(s: string): string {
   return s.length > STRIP_LABEL_MAX ? s.slice(0, STRIP_LABEL_MAX - 1) + "…" : s;
 }
 
+// M3: two rows, then the overflow link — the strip sits UNDER the terminal it
+// belongs to and must never grow past it. A fifth held row pushing the session
+// off the screen is the strip defeating the surface it exists to serve.
+const STRIP_ROWS = 2;
+
+// The strip's own precedence, read from the ONE rank table the board's glyph
+// reads (run-state-glyph.tsx): a held request — the sandbox is parked on this
+// decision right now — is "permission" and outranks a passive pending, which is
+// "monitoring". It used to be implicit in whatever order the API returned,
+// which was harmless while every row was visible and is not harmless now that
+// only two are: the held row must never be the one behind "Show all".
+function rowRank(a: ApprovalRequest): number {
+  return attentionRank(isHeld(a) ? "permission" : "monitoring");
+}
+
 export function LiveApprovals({
   runId,
   reasonApprove = "approved live",
@@ -167,6 +183,8 @@ export function LiveApprovals({
   // silence is indistinguishable from "nothing pending." Tracked separately
   // from `pending` so a transient failure doesn't clear rows already shown.
   const [pollError, setPollError] = React.useState(false);
+  // The strip caps at STRIP_ROWS; this is the operator asking for the rest.
+  const [showAll, setShowAll] = React.useState(false);
 
   const refresh = React.useCallback(async () => {
     try {
@@ -264,6 +282,12 @@ export function LiveApprovals({
     );
   }
 
+  // Highest attention first (rowRank), then the API's own order — Array.sort is
+  // stable, so equally-ranked rows keep the order the server sent.
+  const ordered = [...pending].sort((a, b) => rowRank(a) - rowRank(b));
+  const shown = showAll ? ordered : ordered.slice(0, STRIP_ROWS);
+  const hiddenCount = ordered.length - shown.length;
+
   const anyHeld = pending.some(isHeld);
   // Never claim "egress" over a set that holds a tool call, and never claim
   // "held" over one nothing is waiting on.
@@ -283,7 +307,7 @@ export function LiveApprovals({
         {/* Named once for the whole panel, not per row. */}
         {!operator && <OperatorOnlyHint />}
       </div>
-      {pending.map((a) => {
+      {shown.map((a) => {
         const label = rowLabel(a);
         const held = isHeld(a);
         // Only egress decisions carry a scope (decide rule 4) — see decide().
@@ -360,6 +384,20 @@ export function LiveApprovals({
           </div>
         );
       })}
+      {/* The board's own disclosure string, so a strip and a card cannot
+          disagree about what "there are more" sounds like. --info, not the teal
+          accent (CONSOLE-RULES §2: teal means "press this to act", and showing
+          two more rows is not a decision). */}
+      {(hiddenCount > 0 || showAll) && (
+        <button
+          type="button"
+          onClick={() => setShowAll((v) => !v)}
+          className="text-meta font-semibold text-info hover:underline"
+          data-testid="live-approvals-show-all"
+        >
+          {showAll ? "Show fewer" : `Show all ${ordered.length}`}
+        </button>
+      )}
       <AlertDialog open={!!denyTarget} onOpenChange={(o) => !o && setDenyTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
