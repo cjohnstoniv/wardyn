@@ -101,12 +101,14 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 		return
 	}
 
-	// egressTarget hides the corp-upstream AND the configured-gateway branches
-	// (W23-S1-4 / W19-W19d-3): a brokered LLM route needs the same corp-proxy-
-	// by-name dial the MITM path (serveMITMRequest) already gets, and the same
-	// gateway per-request vet (vetTrustedHost) — not the local-DNS-required
-	// vetHost path unconditionally.
-	target, _, err := p.egressTarget(host, port)
+	// gatewayTarget is this route's OWN resolver, never egressTarget: upstream-
+	// first same as every other forward-egress path, but otherwise the
+	// gateway's relaxed per-request vet (vetTrustedHost) — never the
+	// SSRF-guarded p.vetHost path egressTarget applies to an ordinary host
+	// (W23-S1-4 / W19-W19d-3 covered the corp-upstream branch; folding the
+	// gateway vet into egressTarget too used to lift the private-IP guard for
+	// the gateway HOSTNAME on evaluate/serveMITMRequest as well).
+	target, err := p.gatewayTarget(host, port)
 	if err != nil {
 		// A refused/unreachable configured gateway is a per-request dial
 		// failure, not an SSRF-shaped denial — distinguish it in the decision

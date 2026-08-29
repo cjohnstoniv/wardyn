@@ -86,12 +86,14 @@ func TestLLMGateway_BrokeredRouteDialsGateway_PublicHostSeesZero_KeyInjected(t *
 // TestLLMGateway_SameHostOnConnectPath_StillBuiltinPrivateIP: the gateway
 // hostname's own RESOLVED IP, reached directly (not through the brokered
 // route, and not declared via SiteConfig.InternalHosts), still hits the
-// unconditional private-IP guard — the gateway lift lives in the
-// gatewayVendor table keyed by HOSTNAME, never by the address it resolves
-// to, so a literal-IP CONNECT to the same target is not silently widened.
+// unconditional private-IP guard — the gateway's relaxed vet lives ONLY in
+// gatewayTarget (proxyLLMRequest's own resolver), never in egressTarget, so
+// neither a literal-IP CONNECT nor the gateway HOSTNAME itself on the
+// ordinary CONNECT path (evaluate) is silently widened.
 func TestLLMGateway_SameHostOnConnectPath_StillBuiltinPrivateIP(t *testing.T) {
-	res := fakeResolver{m: map[string][]net.IP{"llm-gateway.corp.internal": ips("10.40.1.5")}}
-	p, _ := gatewayProxy(t, "https://llm-gateway.corp.internal/v1", res, "127.0.0.1:1", nil)
+	const host = "llm-gateway.corp.internal"
+	res := fakeResolver{m: map[string][]net.IP{host: ips("10.40.1.5")}}
+	p, _ := gatewayProxy(t, "https://"+host+"/v1", res, "127.0.0.1:1", nil)
 
 	// Literal IP address (what the gateway hostname resolves to), requested
 	// directly: p.gatewayVendor has no entry for the bare IP, and no
@@ -99,6 +101,98 @@ func TestLLMGateway_SameHostOnConnectPath_StillBuiltinPrivateIP(t *testing.T) {
 	guard := p.vetHost("10.40.1.5")
 	if !guard.Denied {
 		t.Fatalf("the gateway's own resolved IP, reached by literal address, must stay denied, got %+v", guard)
+	}
+
+	// The HOSTNAME itself, allowed by policy and requested via the ordinary
+	// CONNECT gate (evaluate) rather than the brokered LLM route, must ALSO
+	// stay denied: egressTarget carries no gateway branch, so it runs the
+	// same p.vetHost guard as any other host.
+	p2 := newProxy(Options{
+		RunID:        uuid.New(),
+		Policy:       CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{host}}),
+		Sink:         &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Resolver:     res,
+		Dial:         redirectDial("127.0.0.1:1"),
+		LLMUpstreams: map[string]string{anthropicHost: "https://" + host + "/v1"},
+	})
+	decision, target, log := p2.evaluate(context.Background(), host, 443, "CONNECT", "")
+	if decision != egress.Deny {
+		t.Fatalf("evaluate(gateway hostname) = %v/%q, want deny", decision, target)
+	}
+	if log == nil || log.RuleSource != "builtin:private-ip" {
+		t.Fatalf("rule_source = %+v, want builtin:private-ip", log)
+	}
+}
+
+// TestLLMGateway_GatewayHostnameOnConnectPath_StillBuiltinPrivateIP is the
+// review's repro for the fixed defect: egressTarget used to check
+// gatewayVendor BEFORE p.vetHost, so a gateway HOSTNAME in allowed_domains
+// resolving to an RFC1918 address (no InternalHosts declared) was ALLOWED on
+// the ordinary sandbox CONNECT/MITM paths, not only the brokered LLM route —
+// on every port an agent might try, since the branch never looked at the
+// port. Both call sites the review named (evaluate and serveMITMRequest)
+// must independently deny.
+func TestLLMGateway_GatewayHostnameOnConnectPath_StillBuiltinPrivateIP(t *testing.T) {
+	const host = "llm-gateway.corp.internal"
+	res := fakeResolver{m: map[string][]net.IP{host: ips("10.40.1.5")}}
+	spy := captureUpstream(t, true, "should-never-be-reached")
+	buf := &bytes.Buffer{}
+	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
+	p := newProxy(Options{
+		RunID:        uuid.New(),
+		Policy:       CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{host}}),
+		Sink:         sink,
+		Resolver:     res,
+		Dial:         redirectDial(upstreamAddr(spy.srv)),
+		LLMUpstreams: map[string]string{anthropicHost: "https://" + host + "/v1"},
+	})
+
+	for _, port := range []int{443, 8443, 22} {
+		decision, target, log := p.evaluate(context.Background(), host, port, "CONNECT", "")
+		if decision != egress.Deny {
+			t.Fatalf("port %d: evaluate = %v/%q, want deny", port, decision, target)
+		}
+		if log == nil || log.RuleSource != "builtin:private-ip" {
+			t.Fatalf("port %d: rule_source = %+v, want builtin:private-ip", port, log)
+		}
+	}
+
+	// serveMITMRequest is the second call site the review named — a MITM'd
+	// tunnel's own per-request dial must independently deny too, never
+	// reaching the private target even if some other caller got this far.
+	rec := httptest.NewRecorder()
+	p.serveMITMRequest(rec, httptest.NewRequest(http.MethodPost, "https://"+host+"/v1/messages", nil), host, 443)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("serveMITMRequest status = %d, want 502 (denied, never dialled)", rec.Code)
+	}
+	if spy.reached {
+		t.Fatal("serveMITMRequest must never reach the private gateway target")
+	}
+}
+
+// TestLLMGateway_ResolvesToOwnSubnet_Refused: a configured gateway resolving
+// into the proxy's own control-plane host (the sidecar shares its compose
+// network with postgres/dex/registry) must be refused by vetTrustedHost even
+// though the address is otherwise ordinary RFC1918 — vetTrustedHost's normal
+// exception for private/CGNAT space must never cover the proxy's own
+// neighbours. Asserted directly against gatewayTarget (white-box): an
+// end-to-end brokered-route test can't tell "refused before dialling" apart
+// from "dialled and failed" once the test dialer ignores its target address.
+func TestLLMGateway_ResolvesToOwnSubnet_Refused(t *testing.T) {
+	const host = "llm-gateway.corp.internal"
+	cpIP := net.ParseIP("10.40.0.9")
+	res := fakeResolver{m: map[string][]net.IP{host: ips("10.40.0.9")}}
+	p := newProxy(Options{
+		RunID:          uuid.New(),
+		Policy:         CompilePolicy(types.RunPolicySpec{}),
+		Sink:           &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Resolver:       res,
+		LLMUpstreams:   map[string]string{anthropicHost: "https://" + host + "/v1"},
+		ControlPlaneIP: cpIP,
+	})
+
+	if _, err := p.gatewayTarget(host, 443); !errors.Is(err, errGatewayVet) {
+		t.Fatalf("gatewayTarget = %v, want errGatewayVet (a gateway resolving to the proxy's own control-plane address must be refused)", err)
 	}
 }
 

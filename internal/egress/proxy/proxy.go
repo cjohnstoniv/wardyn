@@ -148,8 +148,9 @@ type Proxy struct {
 	// to today. See llmUpstream.
 	llmUpstreams map[string]llmUpstream
 	// gatewayVendor is the REVERSE of llmUpstreams (gateway host -> vendor
-	// public host), feeding egressTarget's gateway branch and isLLMHost/
-	// channelForHost so gateway traffic is recognised as LLM traffic.
+	// public host), feeding isLLMHost/channelForHost so gateway traffic is
+	// recognised as LLM traffic (coverage/classification only — the SSRF vet
+	// for the gateway host lives in gatewayTarget, not here).
 	gatewayVendor map[string]string
 
 	now func() time.Time

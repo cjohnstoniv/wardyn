@@ -22,8 +22,8 @@ import (
 
 // egressTarget resolves host:port to the dial target a forward-egress call
 // site should use for THIS proxy's mode — hiding the corp-upstream branch so
-// every forward-egress caller (evaluate, serveMITMRequest, proxyLLMRequest,
-// handleGitBroker) makes the SAME choice instead of each re-deriving it. A
+// every forward-egress caller (evaluate, serveMITMRequest, handleGitBroker,
+// handleGitPATBroker) makes the SAME choice instead of each re-deriving it. A
 // site that forgot the branch (the brokered LLM routes and the git broker
 // both did, W19-W19d-3 / W23-S1-4) unconditionally required local DNS +ran the
 // full private-IP guard even under an operator upstream — where the sandbox
@@ -34,30 +34,25 @@ import (
 // (see dialThroughUpstream / egressDial); otherwise the full local
 // private-IP-guarded resolve+pin (Proxy.vetHost) applies as always.
 //
+// This does NOT special-case a configured LLM gateway host: a sandbox that
+// names the gateway on an ordinary CONNECT/MITM path is just another host —
+// gatewayTarget (proxyLLMRequest's own resolver) is the ONLY place a gateway
+// gets vetTrustedHost's relaxed per-request vet, and only for the brokered
+// /wardyn/llm/* route the proxy itself dials. Folding that branch in here
+// used to lift the private-IP guard for the gateway HOSTNAME on every
+// forward-egress path (evaluate, serveMITMRequest), not just the brokered
+// route — fixed by removing it.
+//
 // ruleSource is "" except "site-config:internal-host" when the address was
 // admitted only via the internal-host lift; only evaluate() consumes it — the
-// other four callers (serveMITMRequest, proxyLLMRequest, handleGitBroker,
-// handleGitPATBroker) discard it, unaffected.
+// other three callers (serveMITMRequest, handleGitBroker, handleGitPATBroker)
+// discard it, unaffected.
 func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, err error) {
 	// Upstream-first (a stated ceiling, least code): with a corporate upstream
-	// configured, EVERY forward dial — including a configured LLM gateway — is
-	// CONNECTed through it by the transport, not only by this branch; a
-	// gateway the corp proxy cannot route 502s. See egressDial/
-	// dialThroughUpstream.
+	// configured, EVERY forward dial is CONNECTed through it by the
+	// transport, not only by this branch. See egressDial/dialThroughUpstream.
 	if p.upstream != nil {
 		return net.JoinHostPort(host, strconv.Itoa(port)), "", nil
-	}
-	// A configured LLM gateway is CONTROL-PLANE-authored (the operator typed
-	// it at boot), so it gets vetTrustedHost's per-request resolve+pin instead
-	// of the SSRF-guarded vetHost path below — AllowsLiteralIP/InternalHosts
-	// declarations are not needed for it, and there is no rebinding window
-	// since the sandbox never resolves it itself.
-	if _, ok := p.gatewayVendor[strings.TrimSuffix(strings.ToLower(host), ".")]; ok {
-		t, verr := p.vetTrustedHost(host, port)
-		if verr != nil {
-			return "", "", verr
-		}
-		return t, "", nil
 	}
 	guard := p.vetHost(host)
 	if guard.Denied {
@@ -86,20 +81,39 @@ func (p *Proxy) llmUpstream(vendor string) (host string, port int, prefix string
 // allow-shaped source.
 var errGatewayVet = errors.New("proxy: configured gateway host refused")
 
-// vetTrustedHost is egressTarget's gateway branch: a CONTROL-PLANE-authored
-// LLMUpstreams host (the operator typed it at boot) gets a per-request
-// resolve+pin like resolveTrustedURL, PLUS the refusal resolveTrustedURL
-// deliberately lacks — refuse if ANY answer is loopback/link-local/
-// unspecified/multicast/NAT64-embedded (RFC1918/CGNAT is fine; that is the
-// whole point of an internal gateway). Policy.AllowsLiteralIP does not apply
-// here (that is evaluate() step 0's mechanism, for an agent-chosen target);
-// this is a different trust class entirely. Resolution failure or a refused
-// answer returns errGatewayVet — the caller's request 502s; the run is
-// otherwise unaffected.
+// gatewayTarget resolves the dial target for the BROKERED LLM route only
+// (proxyLLMRequest) — never for evaluate/serveMITMRequest/the git+PAT
+// brokers, which all resolve an ordinary host through egressTarget's
+// SSRF-guarded p.vetHost like any other target. Upstream-first, same ceiling
+// as egressTarget: with a corp upstream configured the gateway is CONNECTed
+// through it by hostname (the transport resolves+dials, so there is no local
+// resolve to vet); otherwise the gateway gets vetTrustedHost's relaxed
+// per-request resolve+pin — it is CONTROL-PLANE-authored (the operator typed
+// it at boot), so no InternalHosts declaration is needed for it.
+func (p *Proxy) gatewayTarget(host string, port int) (string, error) {
+	if p.upstream != nil {
+		return net.JoinHostPort(host, strconv.Itoa(port)), nil
+	}
+	return p.vetTrustedHost(host, port)
+}
+
+// vetTrustedHost is gatewayTarget's own-proxy resolver: a CONTROL-PLANE-
+// authored LLMUpstreams host (the operator typed it at boot) gets a
+// per-request resolve+pin like resolveTrustedURL, PLUS the refusal
+// resolveTrustedURL deliberately lacks — refuse if ANY answer is loopback/
+// link-local/unspecified/multicast/NAT64-embedded (RFC1918/CGNAT is fine;
+// that is the whole point of an internal gateway) OR lands on this proxy's
+// own interface subnets/control-plane host (onOwnSubnetOrControlPlane — the
+// sidecar shares its control-plane network with postgres/dex/registry, and a
+// gateway resolving there must not reach them). Policy.AllowsLiteralIP does
+// not apply here (that is evaluate() step 0's mechanism, for an agent-chosen
+// target); this is a different trust class entirely. Resolution failure or a
+// refused answer returns errGatewayVet — the caller's request 502s; the run
+// is otherwise unaffected.
 func (p *Proxy) vetTrustedHost(host string, port int) (string, error) {
 	h := strings.TrimSuffix(strings.ToLower(host), ".")
 	if ip := net.ParseIP(h); ip != nil {
-		if trustedGatewayIPRefused(ip) {
+		if trustedGatewayIPRefused(ip) || p.onOwnSubnetOrControlPlane(ip) {
 			return "", errGatewayVet
 		}
 		return net.JoinHostPort(ip.String(), strconv.Itoa(port)), nil
@@ -113,7 +127,7 @@ func (p *Proxy) vetTrustedHost(host string, port int) (string, error) {
 		return "", errGatewayVet
 	}
 	for _, ip := range ips {
-		if trustedGatewayIPRefused(ip) {
+		if trustedGatewayIPRefused(ip) || p.onOwnSubnetOrControlPlane(ip) {
 			return "", errGatewayVet
 		}
 	}
