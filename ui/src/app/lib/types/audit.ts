@@ -80,11 +80,17 @@ export interface RuleSourceLabel {
 export function ruleSourceLabel(source: string): RuleSourceLabel | null {
   if (!source || source.startsWith("policy:tool-")) return null; // toolRuleDecision's rows
   if (source === "policy:allowed") return { label: "Allowed by policy", tone: "neutral" };
+  // Every other policy:* value the proxy emits is a refusal (denied,
+  // default-deny, method, evaluator-error) — the row's outcome column already
+  // says deny; this names WHY at the same weight as the builtin refusals.
+  if (source.startsWith("policy:")) return { label: "Refused by policy", tone: "danger" };
   if (source.startsWith("approval:")) return { label: "Released by approval", tone: "neutral" };
-  if (source === "builtin:private-ip" || source === "builtin:dial-failed") {
-    return { label: "Refused by the built-in guard", tone: "danger" };
-  }
-  if (source.startsWith("brokered:git")) return { label: "Brokered", tone: "neutral" };
+  // builtin:* is the proxy's own guard family (private-ip, dial-failed,
+  // upstream-proxy, …) — all refusals.
+  if (source.startsWith("builtin:")) return { label: "Refused by the built-in guard", tone: "danger" };
+  // brokered:* is every proxy-side brokered lane (git, mint, approvals,
+  // recording, scan-result, llm, sso-token, and git's :branch-ns-off suffix).
+  if (source.startsWith("brokered:")) return { label: "Brokered", tone: "neutral" };
   if (source === "site-config:internal-host") return { label: "Declared internal host", tone: "info" };
   if (source.startsWith("egress.decisions.dropped:")) return { label: "Decisions dropped", tone: "neutral" };
   return { label: source, tone: "neutral" };

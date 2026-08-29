@@ -56,21 +56,24 @@ export function AuditDecision({ event, className }: { event: AuditEvent; classNa
 // ordinary egress/approval/guard row still names a real target.
 //
 // approval:<id> is the one source with somewhere to go — there is no
-// /approvals/<id> route today, so it links to the Approvals screen rather
-// than a dead per-id URL; every other source renders the chip bare.
+// /approvals/<id> route today, so it links to the Approvals screen's Decided
+// tab (an approval that released traffic was, by construction, decided);
+// every other source renders the chip bare. The chip's title carries the
+// raw wire value so the id, the dropped count or the :branch-ns-off suffix
+// the label folds away is still one hover from the row.
 export function RuleSourceChip({ event, className }: { event: AuditEvent; className?: string }) {
   const source = event.data?.rule_source;
   if (typeof source !== "string") return null;
   const label = ruleSourceLabel(source);
   if (!label) return null;
   const chip = (
-    <Chip tone={label.tone} mono title="rule_source">
+    <Chip tone={label.tone} mono title={source}>
       {label.label}
     </Chip>
   );
   if (source.startsWith("approval:")) {
     return (
-      <Link to="/approvals" className={className}>
+      <Link to="/approvals?tab=decided" className={className}>
         {chip}
       </Link>
     );

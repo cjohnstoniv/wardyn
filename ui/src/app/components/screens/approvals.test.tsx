@@ -303,3 +303,25 @@ describe("ApprovalsScreen — egress host not granted (member)", () => {
     expect(await screen.findByText(DENIED.STALE_GROUPS)).toBeInTheDocument();
   });
 });
+
+describe("ApprovalsScreen ?tab=", () => {
+  it("?tab=decided opens the Decided tab (the audit chip's target); the default stays Pending", async () => {
+    render(
+      <MemoryRouter initialEntries={["/approvals?tab=decided"]}>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    const decided = await screen.findByRole("tab", { name: /decided/i });
+    expect(decided).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("negative control: without ?tab= the Pending tab is selected", async () => {
+    render(
+      <MemoryRouter initialEntries={["/approvals"]}>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    const decided = await screen.findByRole("tab", { name: /decided/i });
+    expect(decided).toHaveAttribute("aria-selected", "false");
+  });
+});

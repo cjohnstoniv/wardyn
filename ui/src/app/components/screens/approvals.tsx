@@ -4,7 +4,7 @@
  */
 
 import * as React from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   Archive,
   Check,
@@ -260,7 +260,11 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   const [decidedItems, setDecidedItems] = React.useState<ApprovalRequest[]>([]);
   const [longestList, setLongestList] = React.useState(0);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
-  const [filter, setFilter] = React.useState<Filter>("PENDING");
+  // ?tab=decided lands on the Decided tab — the audit trail's "Released by
+  // approval" chip links here for an approval that has, by construction,
+  // already been decided; the default stays the pending queue.
+  const [searchParams] = useSearchParams();
+  const [filter, setFilter] = React.useState<Filter>(searchParams.get("tab") === "decided" ? "decided" : "PENDING");
   const [prompt, setPrompt] = React.useState<{ id: string; action: "approve" | "deny"; kind: ApprovalRequest["kind"] } | null>(null);
 
   // MEDIUM fix: EXPIRED approvals were never fetched, so a request that timed

@@ -102,6 +102,15 @@ describe("ruleSourceLabel", () => {
     });
     expect(ruleSourceLabel("brokered:git")).toEqual({ label: "Brokered", tone: "neutral" });
     expect(ruleSourceLabel("brokered:git:branch-ns-off")).toEqual({ label: "Brokered", tone: "neutral" });
+    // every brokered lane the proxy emits, not only git
+    for (const s of ["brokered:mint", "brokered:approvals", "brokered:recording", "brokered:scan-result", "brokered:llm", "brokered:sso-token"]) {
+      expect(ruleSourceLabel(s), s).toEqual({ label: "Brokered", tone: "neutral" });
+    }
+    // the proxy's other policy refusals and builtin guards are labelled as such
+    for (const s of ["policy:denied", "policy:default-deny", "policy:method", "policy:evaluator-error"]) {
+      expect(ruleSourceLabel(s), s).toEqual({ label: "Refused by policy", tone: "danger" });
+    }
+    expect(ruleSourceLabel("builtin:upstream-proxy")).toEqual({ label: "Refused by the built-in guard", tone: "danger" });
     expect(ruleSourceLabel("site-config:internal-host")).toEqual({
       label: "Declared internal host",
       tone: "info",
@@ -144,8 +153,11 @@ describe("RuleSourceChip", () => {
   it("links an approval source to the Approvals screen (no /approvals/<id> route exists)", () => {
     renderChip({ data: { rule_source: "approval:appr_4c8e21" } });
     const link = screen.getByRole("link");
-    expect(link).toHaveAttribute("href", "/approvals");
+    expect(link).toHaveAttribute("href", "/approvals?tab=decided");
     expect(link).toHaveTextContent("Released by approval");
+    expect(link.getAttribute("href")).toContain("tab=decided");
+    // the wire value survives as the chip's title — the id is one hover away
+    expect(link.querySelector("[title]")?.getAttribute("title")).toMatch(/^approval:/);
   });
 
   it("renders bare (no link) for a non-approval source", () => {
