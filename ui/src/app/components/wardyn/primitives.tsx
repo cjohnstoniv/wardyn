@@ -107,6 +107,18 @@ export function Chip({
   );
 }
 
+/* ---------- generic "done" chip ---------- */
+// A SectionCard header's completion signal (member Getting Started, 6c's "Your
+// model key") — one shared glyph+label so every section's done state reads
+// identically instead of five near-identical inline chips.
+export function DoneChip() {
+  return (
+    <Chip tone="success" className="gap-1">
+      <Check className="size-3" /> Done
+    </Chip>
+  );
+}
+
 /* ---------- operator-only disabled reason ---------- */
 // Trailing note for a disabled operator-only control (a DropdownMenuItem, most
 // often) — VISIBLE text baked into the control's own content, not a
