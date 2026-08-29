@@ -274,7 +274,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// warnings, so the operator sees it before the run wastes a sandbox. Computed on the
 	// resolved spec via the SAME helper preflight's checklist uses, so the two agree.
 	if runNeedsModelWarning(req) {
-		if la := s.resolveRunLLMAccess(ctx, req, spec, s.presentSecretNames(ctx), bedrockRef); la == nil || !la.Provisioned {
+		if la := s.resolveRunLLMAccess(ctx, req, spec, s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(r)), bedrockRef); la == nil || !la.Provisioned {
 			p, _ := s.llmProviderFor(req.Agent)
 			warnings = append(warnings, noModelAccessWarning(req.Agent, p, s.managedInjectReady("claude-code")))
 		}

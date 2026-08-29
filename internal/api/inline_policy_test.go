@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -863,7 +864,12 @@ func TestCreateRun_OperatorStillUnclamped(t *testing.T) {
 // TestIntegrations_MemberKeySynthesisesRow_NoWarning: a member's own
 // anthropic-api-key secret, with NO operator row of that name at all,
 // synthesises the legacy anthropic_api_key integration row and provisions
-// model access with no "no model access" warning.
+// model access with no "no model access" warning — proven at the unit level
+// AND through the real POST /api/v1/runs handler (handleCreateRun), which
+// used to consult the operator-only presentSecretNames and so disagreed with
+// preflight's presentSecretNamesFor (runs.go:277's since-fixed miss). The
+// negative control (same request, member owns nothing) proves the warning
+// still fires — the fix widens presence, it does not silence the check.
 func TestIntegrations_MemberKeySynthesisesRow_NoWarning(t *testing.T) {
 	h := newHarness(t)
 	h.srv.cfg.Secrets = &memSecrets{owned: map[string]map[string][]byte{"bob": {"anthropic-api-key": []byte("sk-ant-test")}}}
@@ -887,5 +893,53 @@ func TestIntegrations_MemberKeySynthesisesRow_NoWarning(t *testing.T) {
 	note, provisioned := h.srv.reconcileLLMAccess(spec, "claude-code", present, false, false)
 	if !provisioned {
 		t.Fatalf("expected model access provisioned with no operator row, got note=%q", note)
+	}
+
+	// THROUGH THE HANDLER: a member's real create-run request, hand-authoring
+	// their own inline api_key grant naming their own secret (the
+	// filterMemberGrants own-key lane) — the request body is IDENTICAL in the
+	// positive and negative cases below; only whether "bob" owns the secret
+	// changes.
+	const body = `{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2",` +
+		`"allowed_domains":["api.anthropic.com"],` +
+		`"eligible_grants":[{"kind":"api_key","scope":{"host":"api.anthropic.com","secret_name":"anthropic-api-key"}}]}}`
+	const noModelAccessSubstr = "no model credential resolves"
+
+	createRun := func(secrets *memSecrets) []string {
+		t.Helper()
+		st := &runWarnStore{capStore: &capStore{}}
+		cfg := baseTestConfig(h, st)
+		cfg.OIDC = &oidc.Authenticator{}
+		cfg.Secrets = secrets
+		cfg.DefaultPolicy = types.RunPolicySpec{
+			MinConfinementClass: types.CC2,
+			AllowedDomains:      []string{"api.anthropic.com"},
+			// A bare api_key ceiling entry: composer.Clamp keeps a proposed
+			// grant only by KIND (clampGrants) before filterMemberGrants ever
+			// runs — the 6c own-key arm then admits the SPECIFIC (host,
+			// secret) pairing below with NO operator grant naming it.
+			EligibleGrants: []types.GrantSpec{{Kind: types.GrantAPIKey}},
+		}
+		srv := New(cfg)
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs",
+			ssoSession(t, "bob", "bob@corp.example", oidc.RoleMember), body)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+		}
+		var got createRunResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v; body=%s", err, w.Body.String())
+		}
+		return got.Warnings
+	}
+
+	if warns := createRun(&memSecrets{owned: map[string]map[string][]byte{"bob": {"anthropic-api-key": []byte("sk-ant-test")}}}); slices.ContainsFunc(warns, func(w string) bool { return strings.Contains(w, noModelAccessSubstr) }) {
+		t.Fatalf("member's own key must satisfy model access with no warning, got: %v", warns)
+	}
+
+	// Negative control: the member owns nothing — the SAME grant is dropped
+	// (filterMemberGrants: ownership unproven) and the warning must still fire.
+	if warns := createRun(&memSecrets{}); !slices.ContainsFunc(warns, func(w string) bool { return strings.Contains(w, noModelAccessSubstr) }) {
+		t.Fatalf("member owning nothing must still get the no-model-access warning, got: %v", warns)
 	}
 }

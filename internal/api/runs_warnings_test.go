@@ -16,8 +16,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// runWarnStore is capStore (capability rows) plus the two run methods
-// handleCreateRun needs to reach its 201 with no runner and no Postgres.
+// runWarnStore is capStore (capability rows) plus the run methods
+// handleCreateRun needs to reach its 201 with no runner and no Postgres —
+// CreateGrant only matters for a request whose EligibleGrants actually
+// survives narrowing (a member's own-key grant, say); the narrowing-only
+// tests below never reach it.
 type runWarnStore struct {
 	*capStore
 	created types.AgentRun
@@ -32,6 +35,10 @@ func (s *runWarnStore) GetSiteConfig(context.Context) (types.SiteConfig, error) 
 }
 
 func (s *runWarnStore) SetRunImage(context.Context, uuid.UUID, string) error { return nil }
+
+func (s *runWarnStore) CreateGrant(_ context.Context, g types.CredentialGrant) (types.CredentialGrant, error) {
+	return g, nil
+}
 
 func (s *runWarnStore) CreateRun(_ context.Context, run types.AgentRun) (types.AgentRun, error) {
 	s.created = run
