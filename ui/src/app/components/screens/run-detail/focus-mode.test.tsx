@@ -34,6 +34,7 @@ import { ThemeProvider } from "../../wardyn/theme-provider";
 import { RunCanvas } from "./canvas";
 import { FocusMode } from "./focus-mode";
 import { RUN_COCKPIT } from "../../wardyn/copy";
+import { MOD, chordLabel } from "../../wardyn/kbd";
 import type { WidgetContext } from "./widget-registry";
 
 const RUN = {
@@ -170,7 +171,7 @@ describe("Focus mode — the bottom strip states the facts", () => {
   // Scoped to the strip on purpose: the dock's Egress widget states "1 held"
   // too, and the strip's whole claim is that you can read the facts WITHOUT
   // opening the widget that holds them.
-  const strip = () => within(screen.getByText(RUN_COCKPIT.shortcuts).closest("div")!);
+  const strip = () => within(screen.getByText(RUN_COCKPIT.shortcutExitFocus).closest("div.flex.h-9")!);
 
   it("reads egress, credentials and the barrier without opening anything", () => {
     render(
@@ -234,11 +235,14 @@ describe("Focus mode — the bottom strip states the facts", () => {
     expect(screen.queryByText(RUN_COCKPIT.brokered(1))).toBeNull();
   });
 
-  it("hints only the shortcuts it actually binds", () => {
+  it("hints only the shortcuts it actually binds, as labelled key chips", () => {
     render(<FocusMode ctx={ctx()} onExit={() => {}} />);
-    const strip = screen.getByText(RUN_COCKPIT.shortcuts);
-    expect(strip).toBeInTheDocument();
+    // Two chords, each a key cap beside the word for what it does.
+    const caps = document.querySelectorAll("kbd");
+    expect([...caps].map((k) => k.textContent)).toEqual([chordLabel([MOD, "\\"]), "Esc"]);
+    expect(screen.getByText(RUN_COCKPIT.shortcutDock)).toBeInTheDocument();
+    expect(screen.getByText(RUN_COCKPIT.shortcutExitFocus)).toBeInTheDocument();
     // ⌘K / ⌘1..4 / ⇧⌘F are on the board's strip and are NOT wired here.
-    expect(strip.textContent).not.toMatch(/⌘K|⌘1|⇧⌘F/);
+    for (const cap of caps) expect(cap.textContent).not.toMatch(/⌘K|⌘1|⇧⌘F/);
   });
 });

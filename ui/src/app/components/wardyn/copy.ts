@@ -437,7 +437,13 @@ export const RUN_COCKPIT = {
   // (AttachTerminal ships a fullscreen BUTTON, not a key binding) are on the
   // board's strip and deliberately absent here: a hint that lies is worse than
   // no hint.
-  shortcuts: "⌘\\ dock · Esc exit focus",
+  //
+  // M3: the same two hints, as two labelled key chips rather than one run of
+  // text — the key itself is drawn by Kbd (kbd.tsx), which spells the modifier
+  // for the platform, so only the LABEL is copy. Same words, split at the
+  // separator they already had.
+  shortcutDock: "dock",
+  shortcutExitFocus: "exit focus",
 } as const;
 
 // UI apps lane (docs/design/ui-sandboxes-prompt.md §7, FROZEN) — the run-detail

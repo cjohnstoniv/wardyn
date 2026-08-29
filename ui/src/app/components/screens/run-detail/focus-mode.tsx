@@ -32,6 +32,7 @@ import { createPortal } from "react-dom";
 import { Minimize2, PanelRightClose } from "lucide-react";
 import { cn } from "../../ui/utils";
 import { ConfinementChip } from "../../wardyn/primitives";
+import { Kbd, MOD } from "../../wardyn/kbd";
 import { RUN_WIDGETS, WIDGET_IDS, type WidgetContext, type WidgetId } from "./widget-registry";
 
 // Glass: the board's rgba panel + backdrop blur, in theme tokens so it survives
@@ -224,7 +225,20 @@ function Strip({ ctx }: { ctx: WidgetContext }) {
         <ConfinementChip value={ctx.run.confinement_class} />
         <span className="text-muted-foreground">{ctx.run.runner_target}</span>
       </span>
-      <span className="ml-auto truncate text-muted-foreground">{RUN_COCKPIT.shortcuts}</span>
+      {/* M3: two labelled key chips instead of one run of text — the chord is
+          drawn by Kbd, which spells the modifier for the platform, so a Windows
+          or Linux operator is no longer told to press a key their keyboard does
+          not have. Still only the two chords this file actually binds. */}
+      <span className="ml-auto flex shrink-0 items-center gap-3 text-muted-foreground">
+        <span className="flex items-center gap-1.5">
+          <Kbd keys={[MOD, "\\"]} />
+          {RUN_COCKPIT.shortcutDock}
+        </span>
+        <span className="flex items-center gap-1.5">
+          <Kbd keys={["Esc"]} />
+          {RUN_COCKPIT.shortcutExitFocus}
+        </span>
+      </span>
     </div>
   );
 }
