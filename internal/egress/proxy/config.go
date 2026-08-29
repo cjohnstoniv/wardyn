@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -105,6 +106,15 @@ type Config struct {
 	// TRANSPORTED here by the run's ProxyConfig (WARDYN_PROXY_CONFIG_JSON,
 	// internal/runner/docker/driver.go).
 	UpstreamProxyURL string `json:"upstream_proxy_url,omitempty"`
+	// TrustedCAPEM is the OPERATOR's corporate CA bundle (WARDYN_TRUSTED_CA_FILE,
+	// wardynd's Config.TrustedCAPEM), forwarded verbatim per run so THIS
+	// sidecar's own outbound TLS (the forward/egress transport AND the
+	// control-plane transport, see NewServer) additionally trusts a corporate
+	// TLS-inspecting middlebox on the path to the real upstream. Control-plane
+	// authored, same trust boundary as MITMCACertPEM/MITMCAKeyPEM above — the
+	// sandbox cannot set it. Empty (the default) => system roots only,
+	// byte-identical to today.
+	TrustedCAPEM string `json:"trusted_ca_pem,omitempty"`
 }
 
 const (
@@ -155,6 +165,12 @@ func (c *Config) applyDefaultsAndValidate() error {
 	// scheme/host/port. The live proxy re-parses it in NewServer.
 	if _, err := parseUpstreamProxy(c.UpstreamProxyURL); err != nil {
 		return fmt.Errorf("config: %w", err)
+	}
+	// Validate (but do not retain) the trusted CA PEM, same shape as the
+	// upstream proxy URL above: fail fast on garbage. NewServer builds and
+	// RETAINS the real pool (system roots + this bundle) for the live proxy.
+	if c.TrustedCAPEM != "" && !x509.NewCertPool().AppendCertsFromPEM([]byte(c.TrustedCAPEM)) {
+		return fmt.Errorf("config: trusted_ca_pem does not contain a valid PEM certificate")
 	}
 	return nil
 }

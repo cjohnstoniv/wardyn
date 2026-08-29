@@ -13,6 +13,8 @@ package proxy
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -123,6 +125,29 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	ap.configureHold(cfg.Policy.FirstUseApproval.Normalize(),
 		time.Duration(cfg.Policy.FirstUseHoldSeconds)*time.Second, cfg.Policy.MaxHolds)
 
+	// Corporate CA trust (WARDYN_TRUSTED_CA_FILE, forwarded from wardynd as
+	// trusted_ca_pem): additive to the system roots for THIS sidecar's own
+	// outbound TLS. mkTransport (proxy.go) shares opts.TLSClientConfig between
+	// the forward/egress transport (MITM-terminated forwards + the brokered
+	// LLM/git/PAT routes) and the control-plane transport — one config covers
+	// both. Nil (unset) leaves it nil, byte-identical to today (system roots,
+	// ServerName from URL). applyDefaultsAndValidate already fail-fast-checked
+	// this same PEM at config-load time without retaining a pool; this is the
+	// live proxy's own parse, matching parseUpstreamProxy's "validate at load,
+	// build for real here" split.
+	var tlsCfg *tls.Config
+	if cfg.TrustedCAPEM != "" {
+		pool, perr := x509.SystemCertPool()
+		if perr != nil || pool == nil {
+			pool = x509.NewCertPool()
+		}
+		if !pool.AppendCertsFromPEM([]byte(cfg.TrustedCAPEM)) {
+			_ = sink.close(context.Background())
+			return nil, fmt.Errorf("trusted ca: no valid PEM certificates in trusted_ca_pem")
+		}
+		tlsCfg = &tls.Config{RootCAs: pool}
+	}
+
 	p := newProxy(Options{
 		RunID:           cfg.RunID,
 		Policy:          pol,
@@ -138,6 +163,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		ControlPlaneURL: cfg.ControlPlaneURL,
 		RunToken:        ts,
 		Upstream:        up,
+		TLSClientConfig: tlsCfg,
 	})
 	if ca != nil && len(cfg.MITMHosts) > 0 {
 		slog.InfoContext(ctx, "wardyn-proxy: TLS-MITM also enabled for operator-configured corp artifact host(s) (token injection)",
