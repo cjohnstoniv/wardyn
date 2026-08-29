@@ -218,6 +218,53 @@ function EvidenceBlock({
   );
 }
 
+// M7(a) — a verdict's OWN headline and tone, beside the verdict itself.
+//
+// The gap this closes: every non-reached verdict used to render as a bare chip
+// inside the proxy panel while its headline and its advice hung off the STEP
+// FOOTER (setup-layout's gate row), so a runner problem — a probe sandbox that
+// never started, or one that started and never reported back — read under the
+// proxy's heading with the proxy's instruction. An operator sent to reconfigure
+// a proxy that was never tested is being sent to fix the wrong thing.
+//
+// Zero new copy: every string below already exists in lib/integrations.ts, and
+// the mapping is the SAME ladder corpNetworkGate walks (steps.ts) — the two are
+// deliberately identical so the panel and the footer can never name two
+// different owners for one verdict. Only a real `blocked` (intercepted
+// included) is warning-toned, because only it names something fixable on this
+// step; the two runner verdicts unlock the gate and stay neutral.
+export function proxyVerdictBrief(
+  result: ProxyTestResult,
+): { head: string; note: string; tone: "warning" | "neutral" } | null {
+  switch (result.state) {
+    case "reached":
+      // Nothing broke. A custom pass is weaker, and CUSTOM_CAVEAT already says
+      // so inline — a headline over a pass would read as a fault.
+      return null;
+    case "no_runner":
+      return { head: T.GATE_HEAD_NORUNNER, note: T.TEST_NORUNNER, tone: "neutral" };
+    case "not_run":
+      return { head: T.GATE_HEAD_NOT_RUN, note: T.NOT_RUN_NOTE, tone: "neutral" };
+    case "timed_out":
+      // The wire detail rendered above this note carries the sandbox's state at
+      // the deadline AND the budget it blew — including the driver's own "agent
+      // exec never started" where it proved that (probeFailureDetail folds it
+      // into the detail string; there is no separate wire flag to read). The
+      // panel quotes that verbatim, which is the honest naming of the cause;
+      // this note only says whose problem it is.
+      return { head: T.GATE_HEAD_TIMED_OUT, note: T.TIMED_OUT_NOTE, tone: "neutral" };
+    case "blocked":
+      return result.intercepted
+        ? { head: T.GATE_HEAD_INTERCEPTED, note: T.GATE_INTERCEPTED, tone: "warning" }
+        : { head: T.GATE_HEAD_BLOCKED, note: T.GATE_BLOCKED, tone: "warning" };
+    default:
+      // `bypass`, and any state a newer server grows. corpNetworkGate treats
+      // every other non-reached state as "still untested" — same answer here,
+      // rather than inventing a headline this build cannot stand behind.
+      return { head: T.GATE_HEAD_UNTESTED, note: T.GATE_UNTESTED, tone: "warning" };
+  }
+}
+
 // The verdict, per the mock's proxyTestBlock kinds: a builtin reached says
 // which path it proved; a custom pass DELIBERATELY avoids the success
 // treatment ("Request completed", info tone — it must never read as a
@@ -300,6 +347,8 @@ function ProxyTestBlock({
   const running = state.kind === "running";
   const hasResult = state.kind === "done";
   const customPass = state.kind === "done" && state.result.state === "reached" && state.result.custom;
+  // M7(a): the verdict's own headline, note and tone. Null on a pass.
+  const brief = state.kind === "done" ? proxyVerdictBrief(state.result) : null;
   return (
     <div
       className={cn(
@@ -309,7 +358,14 @@ function ProxyTestBlock({
         "flex items-start gap-3 rounded-lg border p-3 [overflow-wrap:anywhere]",
         // The mock's okcustom container: a dashed info frame, so even the box
         // around a custom pass reads differently from a verified one.
-        customPass ? "border-dashed border-info/40" : "border-border",
+        customPass
+          ? "border-dashed border-info/40"
+          : // M7(a): the frame carries the verdict's tone, so a blocked probe
+            // looks different from a probe that never ran. Colour never says it
+            // alone — the headline and the toned Chip inside say it in words.
+            brief?.tone === "warning"
+            ? "border-warning/30"
+            : "border-border",
       )}
     >
       {!hideButton && (
@@ -333,32 +389,24 @@ function ProxyTestBlock({
         )}
         {state.kind === "done" && (
           <>
+            {/* M7(a): headline first, then the chip, then the wire detail, then
+                this verdict's own note. The order is the argument — the
+                operator reads WHAT happened before they read who owns it. */}
+            {brief && <p className="text-body font-medium text-foreground">{brief.head}</p>}
             <ProxyVerdict result={state.result} />
-            {state.result.state === "no_runner" ? (
-              // The canon sentence, not the wire detail: it says what to DO
-              // (configure a barrier), which the server's own line doesn't.
-              <p className="text-meta leading-snug text-muted-foreground">{T.TEST_NORUNNER}</p>
-            ) : state.result.state === "not_run" ? (
-              // Unlike no_runner, the wire detail DOES carry the specific
-              // launch failure (an image pull, a confinement class this host
-              // can't enforce) — worth showing. No TEST_STANDING though:
-              // nothing was actually tested from a sandbox here.
+            {/* no_runner is the one state with no wire detail worth quoting:
+                nothing launched, and its note says what to DO (configure a
+                barrier), which the server's own line doesn't. */}
+            {state.result.state !== "no_runner" && (
+              <p className="text-xs leading-snug text-foreground">{state.result.detail}</p>
+            )}
+            {brief && <p className="text-meta leading-snug text-muted-foreground">{brief.note}</p>}
+            {/* Everything past here is state-specific colour on top of the
+                head/detail/note spine above — never a second verdict. */}
+            {state.result.state !== "no_runner" &&
+              state.result.state !== "not_run" &&
+              state.result.state !== "timed_out" && (
               <>
-                <p className="text-xs leading-snug text-foreground">{state.result.detail}</p>
-                <p className="text-meta leading-snug text-muted-foreground">{T.NOT_RUN_NOTE}</p>
-              </>
-            ) : state.result.state === "timed_out" ? (
-              // Same shape as not_run: the wire detail names the sandbox's
-              // state at the deadline (worth showing); no TEST_STANDING — the
-              // run never reported completion, so nothing was actually proven
-              // by it either.
-              <>
-                <p className="text-xs leading-snug text-foreground">{state.result.detail}</p>
-                <p className="text-meta leading-snug text-muted-foreground">{T.TIMED_OUT_NOTE}</p>
-              </>
-            ) : (
-              <>
-                <p className="text-xs leading-snug text-foreground">{state.result.detail}</p>
                 {state.result.custom && state.result.state === "reached" && (
                   <p className="text-xs leading-snug text-info">{T.CUSTOM_CAVEAT}</p>
                 )}

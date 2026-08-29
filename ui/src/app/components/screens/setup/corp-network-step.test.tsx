@@ -753,3 +753,102 @@ describe("One launch point — gateResult hides the panel button; registered act
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// M7(a) — one verdict, one heading, one owner of the fix.
+//
+// The regression these pin: the probe verdict used to be a bare chip inside the
+// PROXY panel while its headline and advice hung off the step footer, so a run
+// that never started read under the proxy's heading with the proxy's
+// instruction. Every branch below asserts the verdict names itself and names
+// what to do next, in the panel, beside the result.
+// ---------------------------------------------------------------------------
+describe("Corporate network — each probe verdict under its own heading", () => {
+  beforeEach(() => {
+    cleanup();
+    testProxyMock.mockReset();
+    testRedirectMock.mockReset();
+  });
+
+  async function probe(result: unknown) {
+    testProxyMock.mockResolvedValueOnce(result);
+    renderStep();
+    await userEvent.click(screen.getByRole("button", { name: /^test connectivity$/i }));
+  }
+
+  it("blocked: the proxy's own headline AND the proxy's own next action, in the panel", async () => {
+    await probe({ state: "blocked", detail: T.TEST_BLOCKED });
+    expect(await screen.findByText(T.GATE_HEAD_BLOCKED)).toBeInTheDocument();
+    // The advice used to live ONLY in the step footer.
+    expect(screen.getByText(T.GATE_BLOCKED)).toBeInTheDocument();
+  });
+
+  it("intercepted: its own headline, its own meaning, and its own next action — never the plain blocked one", async () => {
+    await probe({ state: "blocked", detail: T.TEST_BLOCKED, intercepted: true });
+    expect(await screen.findByText(T.GATE_HEAD_INTERCEPTED)).toBeInTheDocument();
+    expect(screen.getByText(T.INTERCEPT_MEANS)).toBeInTheDocument();
+    expect(screen.getByText(T.GATE_INTERCEPTED)).toBeInTheDocument();
+    expect(screen.queryByText(T.GATE_HEAD_BLOCKED)).not.toBeInTheDocument();
+  });
+
+  it("timed_out: a RUNNER headline, not a proxy one — and the wire detail still names the cause", async () => {
+    await probe({ state: "timed_out", detail: T.TEST_TIMED_OUT });
+    expect(await screen.findByText(T.GATE_HEAD_TIMED_OUT)).toBeInTheDocument();
+    // The chip the demo/e2e narration reads stays exactly where it was.
+    expect(screen.getByText("Probe never reported back")).toBeInTheDocument();
+    expect(screen.getByText(T.TEST_TIMED_OUT)).toBeInTheDocument();
+    expect(screen.getByText(T.TIMED_OUT_NOTE)).toBeInTheDocument();
+    // The whole point: no proxy headline, and no proxy instruction.
+    expect(screen.queryByText(T.GATE_HEAD_BLOCKED)).not.toBeInTheDocument();
+    expect(screen.queryByText(T.GATE_BLOCKED)).not.toBeInTheDocument();
+  });
+
+  it("not_run: a RUNNER headline, and the launch failure quoted verbatim", async () => {
+    await probe({ state: "not_run", detail: T.TEST_NOT_RUN });
+    expect(await screen.findByText(T.GATE_HEAD_NOT_RUN)).toBeInTheDocument();
+    expect(screen.getByText("Never ran")).toBeInTheDocument();
+    expect(screen.getByText(T.TEST_NOT_RUN)).toBeInTheDocument();
+    expect(screen.getByText(T.NOT_RUN_NOTE)).toBeInTheDocument();
+    expect(screen.queryByText(T.GATE_HEAD_BLOCKED)).not.toBeInTheDocument();
+    expect(screen.queryByText(T.GATE_BLOCKED)).not.toBeInTheDocument();
+  });
+
+  it("no_runner: its own headline, and the sentence that says what to configure", async () => {
+    await probe({ state: "no_runner", detail: T.TEST_NORUNNER });
+    expect(await screen.findByText(T.GATE_HEAD_NORUNNER)).toBeInTheDocument();
+    expect(screen.getByText(T.TEST_NORUNNER)).toBeInTheDocument();
+  });
+
+  it("reached: no headline and no advice — a pass is not a failure state", async () => {
+    await probe({ state: "reached", detail: T.TEST_OK, via: "proxy" });
+    expect(await screen.findByText("Reached · via proxy")).toBeInTheDocument();
+    for (const head of [
+      T.GATE_HEAD_BLOCKED,
+      T.GATE_HEAD_INTERCEPTED,
+      T.GATE_HEAD_TIMED_OUT,
+      T.GATE_HEAD_NOT_RUN,
+      T.GATE_HEAD_NORUNNER,
+      T.GATE_HEAD_UNTESTED,
+    ]) {
+      expect(screen.queryByText(head)).not.toBeInTheDocument();
+    }
+  });
+
+  it("only a blocked verdict is warning-toned — a runner verdict that proves nothing must not read as amber", async () => {
+    const frame = (text: string) => screen.getByText(text).closest("div.rounded-lg.border")!;
+
+    await probe({ state: "blocked", detail: T.TEST_BLOCKED });
+    await screen.findByText(T.GATE_HEAD_BLOCKED);
+    expect(frame(T.GATE_HEAD_BLOCKED).className).toContain("border-warning/30");
+
+    cleanup();
+    await probe({ state: "timed_out", detail: T.TEST_TIMED_OUT });
+    await screen.findByText(T.GATE_HEAD_TIMED_OUT);
+    expect(frame(T.GATE_HEAD_TIMED_OUT).className).not.toContain("border-warning");
+
+    cleanup();
+    await probe({ state: "not_run", detail: T.TEST_NOT_RUN });
+    await screen.findByText(T.GATE_HEAD_NOT_RUN);
+    expect(frame(T.GATE_HEAD_NOT_RUN).className).not.toContain("border-warning");
+  });
+});
