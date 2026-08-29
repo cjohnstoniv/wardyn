@@ -13,13 +13,17 @@
 // time — the first not-done actionable section's — everything else outline;
 // zero teal once every actionable section is done. "What's set up for you"
 // and "Approvals you can decide" are informational (no done state) and never
-// enter that computation; "Your model key" reports its own done-ness back
-// via YourModelKey's onDoneChange (it owns its own fetch — see that file).
+// enter that computation. `mine` (the member's own secret names) is fetched
+// ONCE here and passed to YourModelKey — it also drives this page's own
+// "Model access" summary chip, so there is one round trip and one source of
+// truth; a Save/Remove inside YourModelKey calls back to re-fetch it, so both
+// readings flip together instead of drifting after a write.
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { AlertTriangle, FolderOpen, KeyRound, Rocket, ShieldCheck, Terminal } from "lucide-react";
 import { Button } from "../../ui/button";
 import { Chip, DoneChip, SectionCard, SectionLabel } from "../../wardyn/primitives";
+import { MEMBER_GETTING_STARTED as T } from "../../wardyn/copy";
 import { CC_META } from "../../wardyn/cc-meta";
 import { strongestAvailable } from "../../wardyn/default-confinement";
 import { useMemberLocalDirRoot } from "../../wardyn/operator-context";
@@ -37,7 +41,7 @@ import type { AgentRun, SetupStatus } from "../../../lib/types";
 
 type Variant = "default" | "outline";
 
-export function MemberGettingStarted({ onDone: _onDone }: { onDone: () => void }) {
+export function MemberGettingStarted() {
   const [status, setStatus] = React.useState<SetupStatus | null>(null);
   const [retryTick, setRetryTick] = React.useState(0);
 
@@ -58,18 +62,14 @@ export function MemberGettingStarted({ onDone: _onDone }: { onDone: () => void }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const [ownKeyOrProvided, setOwnKeyOrProvided] = React.useState(false);
   const [mine, setMine] = React.useState<string[] | null>(null);
-  React.useEffect(() => {
-    let active = true;
+  const loadSecrets = React.useCallback(() => {
     secretsApi
       .listSecretsMine()
-      .then((r) => active && setMine(r.mine))
-      .catch(() => active && setMine([]));
-    return () => {
-      active = false;
-    };
+      .then((r) => setMine(r.mine))
+      .catch(() => setMine([]));
   }, []);
+  React.useEffect(loadSecrets, [loadSecrets]);
 
   const [ownRuns, setOwnRuns] = React.useState<AgentRun[] | null>(null);
   React.useEffect(() => {
@@ -104,6 +104,7 @@ export function MemberGettingStarted({ onDone: _onDone }: { onDone: () => void }
   const hasOwnKey = mine?.includes("anthropic-api-key") ?? false;
 
   const workspaceDone = !unreachable && !wsLoading && workspaces.length > 0;
+  const modelKeyDone = !unreachable && (hasOwnKey || llmReady);
   const firstRunDone = !unreachable && (ownRuns?.length ?? 0) > 0;
   const connectDone = !unreachable && (sshKeyCount ?? 0) > 0;
 
@@ -119,7 +120,7 @@ export function MemberGettingStarted({ onDone: _onDone }: { onDone: () => void }
   // `default` slot.
   const actionable: { key: string; done: boolean }[] = [
     { key: "workspace", done: workspaceDone },
-    { key: "model-key", done: ownKeyOrProvided },
+    { key: "model-key", done: modelKeyDone },
     { key: "first-run", done: firstRunDone },
     { key: "connect-tools", done: connectDone },
   ];
@@ -132,23 +133,18 @@ export function MemberGettingStarted({ onDone: _onDone }: { onDone: () => void }
 
   return (
     <div className="mx-auto w-full max-w-[880px] px-6 py-8">
-      <h1 className="text-2xl font-semibold tracking-tight text-foreground">Getting started</h1>
-      <p className="mt-2 text-muted-foreground">
-        You&apos;re a member of this Wardyn. Your admin set the ceiling; you run inside it.
-      </p>
+      <h1>{T.TITLE}</h1>
+      <p className="mt-2 text-muted-foreground">{T.SUBTITLE}</p>
 
       <div className="mt-8 space-y-4">
-        <SectionCard title="What's set up for you">
+        <SectionCard title={T.SETUP_SUMMARY_TITLE}>
           {unreachable ? (
             <div role="alert" className="rounded-lg border border-warning/40 bg-warning-subtle p-3 text-sm text-warning">
               <div className="flex items-start gap-2">
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" />
                 <div>
-                  <p className="font-medium">Couldn&apos;t reach Wardyn.</p>
-                  <p className="mt-1 text-warning/90">
-                    Nothing below is marked done until it can be checked — a broken connection is not a finished
-                    step.
-                  </p>
+                  <p className="font-medium">{T.UNREACHABLE_TITLE}</p>
+                  <p className="mt-1 text-warning/90">{T.UNREACHABLE_BODY}</p>
                 </div>
               </div>
               <Button
@@ -157,86 +153,76 @@ export function MemberGettingStarted({ onDone: _onDone }: { onDone: () => void }
                 className="mt-3"
                 onClick={() => setRetryTick((n) => n + 1)}
               >
-                Retry
+                {T.RETRY}
               </Button>
             </div>
           ) : (
             <>
               <div className="flex flex-wrap gap-2">
-                {strongest && <Chip tone="neutral">Barrier · {CC_META[strongest].label}</Chip>}
+                {strongest && <Chip tone="neutral">{T.BARRIER_CHIP(CC_META[strongest].label)}</Chip>}
                 {hasOwnKey ? (
-                  <Chip tone="success">Model access · Your key</Chip>
+                  <Chip tone="success">{T.MODEL_ACCESS_OWN_CHIP}</Chip>
                 ) : llmReady ? (
-                  <Chip tone="success">Model access · Provided by your admin</Chip>
+                  <Chip tone="success">{T.MODEL_ACCESS_PROVIDED_CHIP}</Chip>
                 ) : null}
-                {status?.auth.mode === "sso" && <Chip tone="info">Sign-in · SSO</Chip>}
+                {status?.auth.mode === "sso" && <Chip tone="info">{T.SIGNIN_SSO_CHIP}</Chip>}
               </div>
-              <p className="mt-3 text-sm text-muted-foreground">
-                Your admin configured the barrier, network and shared credentials. Your runs inherit them.
-              </p>
+              <p className="mt-3 text-sm text-muted-foreground">{T.SETUP_SUMMARY_HELPER}</p>
             </>
           )}
         </SectionCard>
 
         <SectionCard
-          title="Add your workspace"
+          title={T.WORKSPACE_TITLE}
           Icon={FolderOpen}
           right={workspaceDone ? <DoneChip /> : undefined}
         >
-          <p className="text-sm text-muted-foreground">
-            A repo or directory a run can attach. Runs can only attach what is listed here.
-          </p>
+          <p className="text-sm text-muted-foreground">{T.WORKSPACE_BODY}</p>
           <p className="mt-1 text-sm text-muted-foreground">{memberLocalDirHint(memberLocalDirRoot)}</p>
-          {wsError && <p className="mt-1 text-xs text-danger">Couldn&apos;t check your workspaces.</p>}
+          {wsError && <p className="mt-1 text-xs text-danger">{T.WORKSPACE_ERROR}</p>}
           {!workspaceDone && (
             <Button asChild variant={variantFor("workspace")} size="sm" className="mt-3">
-              <Link to="/workspaces">Add workspace</Link>
+              <Link to="/workspaces">{T.WORKSPACE_ACTION}</Link>
             </Button>
           )}
         </SectionCard>
 
         <YourModelKey
           llmReady={llmReady}
+          mine={mine}
           known={!unreachable}
           variant={variantFor("model-key")}
-          onDoneChange={setOwnKeyOrProvided}
+          onChanged={loadSecrets}
         />
 
-        <SectionCard title="Your first run" Icon={Rocket} right={firstRunDone ? <DoneChip /> : undefined}>
-          <p className="text-sm text-muted-foreground">Launch a governed run against your workspace.</p>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Your policy is clamped to your admin&apos;s ceiling. Preflight shows exactly what launch will do —
-            read its warnings before you go.
-          </p>
+        <SectionCard title={T.FIRST_RUN_TITLE} Icon={Rocket} right={firstRunDone ? <DoneChip /> : undefined}>
+          <p className="text-sm text-muted-foreground">{T.FIRST_RUN_BODY}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{T.FIRST_RUN_HINT}</p>
           {!firstRunDone && (
             <Button asChild variant={variantFor("first-run")} size="sm" className="mt-3">
-              <Link to="/runs/new">New run</Link>
+              <Link to="/runs/new">{T.FIRST_RUN_ACTION}</Link>
             </Button>
           )}
         </SectionCard>
 
-        <SectionCard title="Approvals you can decide" Icon={ShieldCheck}>
-          <p className="text-sm text-muted-foreground">
-            When one of your runs reaches a host that isn&apos;t on the list, it holds at the door.
-          </p>
-          <p className="mt-1 text-sm text-muted-foreground">
-            You decide — once, for this run, until, or always. Credential and tool-call approvals stay with your
-            admin.
-          </p>
+        <SectionCard title={T.APPROVALS_TITLE} Icon={ShieldCheck}>
+          <p className="text-sm text-muted-foreground">{T.APPROVALS_BODY}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{T.APPROVALS_HINT}</p>
           <Button asChild variant="outline" size="sm" className="mt-3">
-            <Link to="/approvals">Open approvals</Link>
+            <Link to="/approvals">{T.APPROVALS_ACTION}</Link>
           </Button>
         </SectionCard>
 
-        <SectionCard title="Connect your tools" Icon={Terminal} right={connectDone ? <DoneChip /> : undefined}>
-          <p className="text-sm text-muted-foreground">Attach from your own terminal or editor over SSH.</p>
+        <SectionCard title={T.CONNECT_TITLE} Icon={Terminal} right={connectDone ? <DoneChip /> : undefined}>
+          <p className="text-sm text-muted-foreground">{T.CONNECT_BODY}</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            Register a key once: <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">wardyn ssh-key ensure</code>
+            {T.CONNECT_HINT_PREFIX}
+            <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">{T.CONNECT_COMMAND}</code>
           </p>
           {!connectDone && (
             <Button asChild variant={variantFor("connect-tools")} size="sm" className="mt-3">
               <Link to="/ssh-keys">
-                <KeyRound className="size-3.5" /> Add SSH key
+                <KeyRound className="size-3.5" /> {T.CONNECT_ACTION}
               </Link>
             </Button>
           )}

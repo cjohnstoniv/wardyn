@@ -7,9 +7,12 @@
 // own `anthropic-api-key` when your admin hasn't provided one. Four states:
 // empty (nothing set, nothing provided) / set (your own row exists) /
 // provided (your admin's model access covers you) / refused (the 400 from
-// secretmask.MinLen). Self-contained: owns its own fetch of `mine` so it can
-// be tested in isolation, and reports its done-ness up for the page's colour
-// budget via onDoneChange.
+// secretmask.MinLen). `mine` is owned by the PARENT (member-getting-started.tsx)
+// and passed down — it also drives that page's "Model access" summary chip,
+// so there is one fetch and one source of truth; a save/remove here calls
+// `onChanged()` to make the parent refetch rather than re-fetching locally
+// (two independent copies of `mine` is how "Provided by your admin" survived
+// a Save, and "Your key" survived a Remove).
 import * as React from "react";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
@@ -21,40 +24,33 @@ import { HttpError } from "../../../lib/api/core";
 
 export function YourModelKey({
   llmReady,
+  mine,
   variant,
   known = true,
-  onDoneChange,
+  onChanged,
 }: {
   llmReady: boolean;
+  // null while the parent's fetch is in flight — treated as "no own key yet"
+  // (same fail-closed default as everywhere else on this page).
+  mine: string[] | null;
   variant: "default" | "outline";
-  // The page's own setup-status fetch can be unreachable — a fact this
-  // section's independent secrets fetch has no way to see. `known = false`
-  // suppresses the done chip and reports not-done regardless of what this
-  // section found: "nothing on the page is marked done" while the daemon
-  // can't be reached is a page-wide guarantee, not a per-section one.
+  // The page's own setup-status fetch can be unreachable — a fact `mine`
+  // (a DIFFERENT endpoint) has no way to see. `known = false` suppresses the
+  // done chip regardless of what `mine` says: "nothing on the page is marked
+  // done" while the daemon can't be reached is a page-wide guarantee, not a
+  // per-section one.
   known?: boolean;
-  onDoneChange: (done: boolean) => void;
+  // Called after a successful Save/Remove so the parent refetches `mine`.
+  onChanged: () => void;
 }) {
-  const [mine, setMine] = React.useState<string[] | null>(null);
   const [editing, setEditing] = React.useState(false);
   const [revealEmpty, setRevealEmpty] = React.useState(false);
   const [value, setValue] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
-  const load = React.useCallback(() => {
-    secretsApi
-      .listSecretsMine()
-      .then((r) => setMine(r.mine))
-      .catch(() => setMine([]));
-  }, []);
-  React.useEffect(load, [load]);
-
   const hasOwn = mine?.includes(T.SECRET_NAME) ?? false;
   const done = known && (hasOwn || (llmReady && !hasOwn));
-  React.useEffect(() => {
-    onDoneChange(done);
-  }, [done, onDoneChange]);
 
   const save = async () => {
     setBusy(true);
@@ -64,7 +60,7 @@ export function YourModelKey({
       setValue("");
       setEditing(false);
       setRevealEmpty(false);
-      load();
+      onChanged();
     } catch (e) {
       setError(e instanceof HttpError && e.status === 400 ? T.REFUSED_SHORT : "Couldn't save this key.");
     } finally {
@@ -74,9 +70,12 @@ export function YourModelKey({
 
   const remove = async () => {
     setBusy(true);
+    setError(null);
     try {
       await secretsApi.deleteSecret(T.SECRET_NAME);
-      load();
+      onChanged();
+    } catch {
+      setError("Couldn't remove this key.");
     } finally {
       setBusy(false);
     }
@@ -101,7 +100,14 @@ export function YourModelKey({
             <Mono className="text-sm">••••••••••••</Mono>
           </div>
           <div className="mt-2 flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setEditing(true);
+                setError(null);
+              }}
+            >
               Rotate
             </Button>
             <Button variant="ghost" size="sm" onClick={remove} disabled={busy}>
@@ -109,6 +115,7 @@ export function YourModelKey({
             </Button>
           </div>
           <p className="mt-2 text-xs text-muted-foreground">{T.SET_HINT}</p>
+          {!editing && error && <p className="mt-1 text-xs text-danger">{error}</p>}
           {editing && (
             <EmptyForm
               value={value}
@@ -117,6 +124,10 @@ export function YourModelKey({
               busy={busy}
               variant={variant}
               onSave={save}
+              onCancel={() => {
+                setEditing(false);
+                setError(null);
+              }}
             />
           )}
         </div>
@@ -141,6 +152,7 @@ function EmptyForm({
   busy,
   variant,
   onSave,
+  onCancel,
 }: {
   value: string;
   setValue: (v: string) => void;
@@ -148,6 +160,9 @@ function EmptyForm({
   busy: boolean;
   variant: "default" | "outline";
   onSave: () => void;
+  // Only passed for a Rotate-in-progress — the genuinely empty state has
+  // nothing to cancel back to.
+  onCancel?: () => void;
 }) {
   return (
     <div className="mt-2">
@@ -162,9 +177,16 @@ function EmptyForm({
         className="mt-2"
       />
       {error && <p className="mt-1 text-xs text-danger">{error}</p>}
-      <Button variant={variant} size="sm" className="mt-2" onClick={onSave} disabled={busy || value.length === 0}>
-        Save key
-      </Button>
+      <div className="mt-2 flex gap-2">
+        <Button variant={variant} size="sm" onClick={onSave} disabled={busy || value.length === 0}>
+          Save key
+        </Button>
+        {onCancel && (
+          <Button variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
+            Cancel
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

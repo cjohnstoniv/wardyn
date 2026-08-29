@@ -5,6 +5,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { SetupStatus, AgentRun } from "../../../lib/types";
 import { baseStatus } from "../../../lib/test-fixtures";
@@ -15,11 +16,13 @@ vi.mock("../../../lib/api/setup", () => ({
 }));
 
 const listSecretsMineMock = vi.fn();
+const setSecretMock = vi.fn();
+const deleteSecretMock = vi.fn();
 vi.mock("../../../lib/api/secrets", () => ({
   secrets: {
     listSecretsMine: (...a: unknown[]) => listSecretsMineMock(...a),
-    setSecret: vi.fn(),
-    deleteSecret: vi.fn(),
+    setSecret: (...a: unknown[]) => setSecretMock(...a),
+    deleteSecret: (...a: unknown[]) => deleteSecretMock(...a),
   },
 }));
 
@@ -58,7 +61,7 @@ function run(id: string): AgentRun {
 function renderPage() {
   return render(
     <MemoryRouter>
-      <MemberGettingStarted onDone={() => {}} />
+      <MemberGettingStarted />
     </MemoryRouter>,
   );
 }
@@ -74,6 +77,8 @@ describe("MemberGettingStarted", () => {
     localStorage.clear();
     getSetupStatusMock.mockReset().mockResolvedValue(status());
     listSecretsMineMock.mockReset().mockResolvedValue({ names: [], mine: [] });
+    setSecretMock.mockReset().mockResolvedValue(undefined);
+    deleteSecretMock.mockReset().mockResolvedValue(undefined);
     listRunsMock.mockReset().mockResolvedValue([]);
     listKeysMock.mockReset().mockResolvedValue([]);
     listWorkspacesMock.mockReset().mockResolvedValue([]);
@@ -154,5 +159,36 @@ describe("MemberGettingStarted", () => {
     await waitFor(() => {
       expect(screen.queryByText("Done")).not.toBeInTheDocument();
     });
+  });
+
+  // Regression: the page's own "Model access" summary chip and the "Your
+  // model key" section used to read TWO independent copies of `mine` — after
+  // a Save the summary kept saying "Provided by your admin", after a Remove
+  // it kept saying "Your key". One fetch, passed down, fixes both at once.
+  it("Save flips 'Model access' to Your key; Remove flips it back — one listSecretsMine call per settle", async () => {
+    getSetupStatusMock.mockResolvedValue(status({ llm_ready: true }));
+    listSecretsMineMock
+      .mockResolvedValueOnce({ names: [], mine: [] })
+      .mockResolvedValueOnce({ names: ["anthropic-api-key"], mine: ["anthropic-api-key"] })
+      .mockResolvedValueOnce({ names: [], mine: [] });
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(await screen.findByText("Model access · Provided by your admin")).toBeInTheDocument();
+    expect(listSecretsMineMock).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: "Use my own key instead" }));
+    await user.type(screen.getByPlaceholderText("sk-ant-…"), "sk-ant-abcdefgh");
+    await user.click(screen.getByRole("button", { name: "Save key" }));
+
+    expect(await screen.findByText("Model access · Your key")).toBeInTheDocument();
+    expect(screen.queryByText("Model access · Provided by your admin")).not.toBeInTheDocument();
+    expect(listSecretsMineMock).toHaveBeenCalledTimes(2);
+
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+
+    expect(await screen.findByText("Model access · Provided by your admin")).toBeInTheDocument();
+    expect(screen.queryByText("Model access · Your key")).not.toBeInTheDocument();
+    expect(listSecretsMineMock).toHaveBeenCalledTimes(3);
   });
 });

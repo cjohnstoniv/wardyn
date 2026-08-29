@@ -545,4 +545,61 @@ export const YOUR_MODEL_KEY = {
   PROVIDED_BODY: "Model access is already configured for you.",
   USE_OWN_KEY: "Use my own key instead",
   REFUSED_SHORT: "Keys shorter than 8 characters are refused.",
+  SAVE_ERROR: "Couldn't save this key.",
+  REMOVE_ERROR: "Couldn't remove this key.",
+} as const;
+
+// Member Getting Started (Phase 5) — the six-SectionCard page a member lands
+// on at /setup. Canon per the approved mock; member-getting-started.tsx is
+// the sole reader.
+export const MEMBER_GETTING_STARTED = {
+  TITLE: "Getting started",
+  SUBTITLE: "You're a member of this Wardyn. Your admin set the ceiling; you run inside it.",
+  UNREACHABLE_TITLE: "Couldn't reach Wardyn.",
+  UNREACHABLE_BODY:
+    "Nothing below is marked done until it can be checked — a broken connection is not a finished step.",
+  RETRY: "Retry",
+  SETUP_SUMMARY_TITLE: "What's set up for you",
+  SETUP_SUMMARY_HELPER: "Your admin configured the barrier, network and shared credentials. Your runs inherit them.",
+  BARRIER_CHIP: (label: string) => `Barrier · ${label}`,
+  MODEL_ACCESS_OWN_CHIP: "Model access · Your key",
+  MODEL_ACCESS_PROVIDED_CHIP: "Model access · Provided by your admin",
+  SIGNIN_SSO_CHIP: "Sign-in · SSO",
+  WORKSPACE_TITLE: "Add your workspace",
+  WORKSPACE_BODY: "A repo or directory a run can attach. Runs can only attach what is listed here.",
+  WORKSPACE_ERROR: "Couldn't check your workspaces.",
+  WORKSPACE_ACTION: "Add workspace",
+  FIRST_RUN_TITLE: "Your first run",
+  FIRST_RUN_BODY: "Launch a governed run against your workspace.",
+  FIRST_RUN_HINT:
+    "Your policy is clamped to your admin's ceiling. Preflight shows exactly what launch will do — read its warnings before you go.",
+  FIRST_RUN_ACTION: "New run",
+  APPROVALS_TITLE: "Approvals you can decide",
+  APPROVALS_BODY: "When one of your runs reaches a host that isn't on the list, it holds at the door.",
+  APPROVALS_HINT:
+    "You decide — once, for this run, until, or always. Credential and tool-call approvals stay with your admin.",
+  APPROVALS_ACTION: "Open approvals",
+  CONNECT_TITLE: "Connect your tools",
+  CONNECT_BODY: "Attach from your own terminal or editor over SSH.",
+  CONNECT_HINT_PREFIX: "Register a key once: ",
+  CONNECT_COMMAND: "wardyn ssh-key ensure",
+  CONNECT_ACTION: "Add SSH key",
+} as const;
+
+// Demo episode rows (episode-card.tsx) — the funnel steps' "Watch" affordance
+// and the welcome hero's full catalog. Canon per the approved mock.
+export const EPISODES_COPY = {
+  WATCH: "Watch",
+  CLOSE: "Close",
+  NOT_RECORDED: "Not recorded yet",
+  STREAM_NOTE: "Streams from the Wardyn release on GitHub only after you press Watch. Nothing is prefetched.",
+  LOAD_ERROR: "Couldn't load this episode from GitHub.",
+  OPEN_RELEASE_PAGE: "Open the release page",
+  ALL_EPISODES_TITLE: "All episodes",
+  // Derived from EPISODES (recorded count, summed minutes) — never hand-typed,
+  // so a re-shoot that ships/reserves an episode can't leave this stale.
+  SUMMARY: (recorded: number, minutes: number) => `${recorded} recorded · about ${minutes} minutes · streamed from GitHub on click`,
+  GROUP_ADMIN: "For admins",
+  GROUP_MEMBER: "For members",
+  GROUP_EVERYONE: "For everyone",
 } as const;
