@@ -35,6 +35,26 @@ func agentLLMProvider(agent string) (llmProvider, bool) {
 	return *def.Gateway, true
 }
 
+// llmProviderFor is agentLLMProvider with the operator's internal-gateway
+// override applied: when s.cfg.LLMGateways configures a gateway for this
+// provider's public host, the returned host is the gateway's — everywhere the
+// api-key convention's host matters (grant scope, the exact egress-allowlist
+// entry, the no-model-access CTA), not just at the proxy's own dial. Every
+// caller of agentLLMProvider routes through this method instead; the
+// unexported function survives only as this method's implementation.
+func (s *Server) llmProviderFor(agent string) (llmProvider, bool) {
+	p, ok := agentLLMProvider(agent)
+	if !ok {
+		return p, false
+	}
+	if base, has := s.cfg.LLMGateways[p.host]; has {
+		if h := gatewayHost(base); h != "" {
+			p.host = h
+		}
+	}
+	return p, true
+}
+
 // apiKeyGrantScopeHost decodes an api_key grant scope's host field
 // (trimmed; "" when absent or undecodable).
 func apiKeyGrantScopeHost(scope json.RawMessage) string {
@@ -104,10 +124,10 @@ const (
 // unions these in so subscription/api-key wiring can attach and the model is
 // reachable (see launchRecordRun); without them applyLLMCredMount refuses to inject
 // a resident credential the agent could never use.
-func modelProviderEgress(ceiling types.RunPolicySpec) []string {
+func (s *Server) modelProviderEgress(ceiling types.RunPolicySpec) []string {
 	var out []string
 	for _, d := range ceiling.AllowedDomains {
-		if isModelProviderHost(d) {
+		if s.isModelProviderHost(d) {
 			out = append(out, d)
 		}
 	}
@@ -133,9 +153,20 @@ func modelProviderEgress(ceiling types.RunPolicySpec) []string {
 // The suffix match is loose — it also matches evilanthropic.com. For a REJECT
 // guard loose is the fail-CLOSED direction; for modelProviderEgress it only ever
 // filters hosts the OPERATOR already put in their own ceiling.
-func isModelProviderHost(h string) bool {
-	hl := strings.ToLower(strings.TrimSpace(h))
-	return strings.HasSuffix(hl, "anthropic.com") || hl == "api.openai.com"
+func (s *Server) isModelProviderHost(h string) bool {
+	hl := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
+	if strings.HasSuffix(hl, "anthropic.com") || hl == "api.openai.com" {
+		return true
+	}
+	// An operator-configured internal gateway host counts too — it IS the
+	// model-provider host for every run under the api-key lane (6c's
+	// filterMemberGrants arm and denyAlwaysReject below both need this).
+	for _, base := range s.cfg.LLMGateways {
+		if gatewayHost(base) == hl {
+			return true
+		}
+	}
+	return false
 }
 
 // ceilingBlessesClaudeCreds reports whether the operator ceiling blesses a Claude
@@ -268,7 +299,7 @@ func (s *Server) applyIntegrationCreds(ctx context.Context, spec *types.RunPolic
 	if !types.AIProviderKind(integ.Kind) {
 		return "", nil
 	}
-	p, ok := agentLLMProvider(agent)
+	p, ok := s.llmProviderFor(agent)
 	if !ok {
 		return "", nil // non-LLM agent — nothing to bind
 	}
@@ -482,7 +513,7 @@ func (s *Server) foldRunIntegration(ctx context.Context, spec *types.RunPolicySp
 	if len(wsRefs) > 0 && wsRefs[0].LLMCred != nil {
 		workspaceRef = wsRefs[0].LLMCred.IntegrationRef
 	}
-	if _, ok := agentLLMProvider(req.Agent); !ok {
+	if _, ok := s.llmProviderFor(req.Agent); !ok {
 		return types.Integration{}, "", nil // non-LLM agent — nothing to bind
 	}
 	integ, ok := s.resolveRunIntegration(ctx, req.IntegrationID, workspaceRef)
@@ -551,8 +582,8 @@ func (s *Server) secretPresent(ctx context.Context, name string) bool {
 // It emits NO warning: whether the run actually ENDS UP with model access is decided
 // after the clamp (which may strip the grant or the domain), so reconcileLLMAccess
 // reports the truthful FINAL state — never a pre-clamp promise the clamp revokes.
-func ensureLLMGrant(spec *types.RunPolicySpec, agent string, secretPresent map[string]bool, subscribed bool) {
-	p, ok := agentLLMProvider(agent)
+func (s *Server) ensureLLMGrant(spec *types.RunPolicySpec, agent string, secretPresent map[string]bool, subscribed bool) {
+	p, ok := s.llmProviderFor(agent)
 	if !ok {
 		return // non-LLM / unknown agent
 	}
@@ -641,8 +672,8 @@ type composeLLMAccess struct {
 // when the run will reach its model, false when it will launch but 404 on the first
 // model call. The caller surfaces false as a blocking acknowledgement, not a benign
 // clamp notice, so the two can never be conflated by prose-sniffing.
-func reconcileLLMAccess(spec *types.RunPolicySpec, agent string, secretPresent map[string]bool, subscriptionInject, managed bool) (string, bool) {
-	p, ok := agentLLMProvider(agent)
+func (s *Server) reconcileLLMAccess(spec *types.RunPolicySpec, agent string, secretPresent map[string]bool, subscriptionInject, managed bool) (string, bool) {
+	p, ok := s.llmProviderFor(agent)
 	if !ok {
 		return "", true
 	}
@@ -722,8 +753,13 @@ func reconcileLLMAccess(spec *types.RunPolicySpec, agent string, secretPresent m
 		removeAPIKeyGrantForHost(spec, p.host)
 	}
 
+	// Keyed on the PROVIDER (p.secret == the Anthropic convention name), not
+	// p.host: under a configured gateway p.host is the gateway's host, not
+	// "api.anthropic.com", but the subscription-mount hint still applies to
+	// every Anthropic-provider run regardless of which host its api-key lane
+	// dials.
 	subHint := ""
-	if p.host == "api.anthropic.com" {
+	if p.secret == "anthropic-api-key" {
 		subHint = ", or launch this proposal from the wizard with your Claude subscription mounted (the composer cannot mount host credentials)"
 	}
 	switch {

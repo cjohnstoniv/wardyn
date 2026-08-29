@@ -8,9 +8,14 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
+	"slices"
 	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // loadTrustedCA reads WARDYN_TRUSTED_CA_FILE (path, empty = unset — the
@@ -124,4 +129,53 @@ func certSubjects(pemBundle string) []string {
 		subjects = append(subjects, c.Subject.String())
 	}
 	return subjects
+}
+
+// gatewayHostFromBaseURL extracts the bare host from an already-validated
+// api.Config.LLMGateways entry (ValidateLLMGateways guarantees this parses),
+// for the boot-time default-policy-coverage warning in main.go.
+func gatewayHostFromBaseURL(base string) string {
+	u, err := url.Parse(base)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
+// defaultPolicyMissingGatewayHosts returns publicHost -> gatewayHost for every
+// configured LLM gateway whose host is NOT covered by defaultPolicy's egress
+// (an exact allowed_domains entry, or allow_all_egress) — the operator must
+// add it, or ensureLLMGrant's coupled egress entry drops at the clamp and
+// every run under that policy 404s on its first model call. Never refuses
+// boot: the default policy is not always the ceiling every run inherits (a
+// named policy_id may cover it instead), so this is advisory only.
+func defaultPolicyMissingGatewayHosts(defaultPolicy types.RunPolicySpec, llmGateways map[string]string) map[string]string {
+	missing := make(map[string]string)
+	for publicHost, base := range llmGateways {
+		gwHost := gatewayHostFromBaseURL(base)
+		if gwHost == "" {
+			continue
+		}
+		if defaultPolicy.AllowAllEgress {
+			continue
+		}
+		if slices.ContainsFunc(defaultPolicy.AllowedDomains, func(d string) bool {
+			return strings.EqualFold(strings.TrimSpace(d), gwHost)
+		}) {
+			continue
+		}
+		missing[publicHost] = gwHost
+	}
+	return missing
+}
+
+// warnMissingGatewayHosts logs defaultPolicyMissingGatewayHosts' result.
+// Split out from run() (cmd/wardynd/main.go) purely to keep its cyclomatic
+// complexity under the lint gate — the loop itself carries no branch run()
+// needs to see.
+func warnMissingGatewayHosts(defaultPolicy types.RunPolicySpec, llmGateways map[string]string) {
+	for publicHost, gwHost := range defaultPolicyMissingGatewayHosts(defaultPolicy, llmGateways) {
+		slog.Warn("wardynd: an internal model gateway is configured but the default policy's allowed_domains does not list it — runs under that policy will fail to reach their model",
+			slog.String("public_host", publicHost), slog.String("gateway_host", gwHost))
+	}
 }

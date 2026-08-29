@@ -73,7 +73,7 @@ func (s *Server) deriveSetupItems(ctx context.Context, run composer.RunInput, sp
 	if it, ok := s.setupBackendItem(ctx, run, spec); ok {
 		items = append(items, it)
 	}
-	if it, ok := setupLLMAccessItem(run.Agent, llmAccess, spec); ok {
+	if it, ok := s.setupLLMAccessItem(run.Agent, llmAccess, spec); ok {
 		items = append(items, it)
 	}
 	items = append(items, setupSecretItems(spec, presentSecrets)...)
@@ -104,7 +104,7 @@ func (s *Server) deriveSetupItems(ctx context.Context, run composer.RunInput, sp
 // subscription run mounts the operator's resident credential
 // (claudeCredTarget); every other LLM-backed run brokers an api_key that never
 // leaves the proxy.
-func setupLLMAccessItem(agent string, llmAccess *composeLLMAccess, spec types.RunPolicySpec) (SetupItem, bool) {
+func (s *Server) setupLLMAccessItem(agent string, llmAccess *composeLLMAccess, spec types.RunPolicySpec) (SetupItem, bool) {
 	if llmAccess == nil {
 		return SetupItem{}, false
 	}
@@ -132,7 +132,7 @@ func setupLLMAccessItem(agent string, llmAccess *composeLLMAccess, spec types.Ru
 		it.Residency = "proxy_injected"
 	}
 	if !llmAccess.Provisioned {
-		if p, ok := agentLLMProvider(agent); ok {
+		if p, ok := s.llmProviderFor(agent); ok {
 			// W15-W15b-composer-pipeline-6: name the run's ACTUAL resolved
 			// grant secret, not the provider convention name — an
 			// integration-bound run's api_key grant carries the

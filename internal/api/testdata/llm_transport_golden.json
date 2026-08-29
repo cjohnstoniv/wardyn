@@ -74,6 +74,20 @@
       "git.example.com"
     ]
   },
+  "claude-code/gateway-configured-with-api-key-injection-managed-false": {
+    "subscription": false,
+    "inject_sub": false,
+    "inject_managed": false,
+    "harness_login": false,
+    "bedrock_ready": false,
+    "inject_bedrock_bearer": false,
+    "sandbox_env": {
+      "ANTHROPIC_API_KEY": "wardyn-proxy-injected"
+    },
+    "allowed_domains": [
+      "git.example.com"
+    ]
+  },
   "claude-code/harness-login-bedrock-configured-gets-nothing": {
     "subscription": false,
     "inject_sub": false,

@@ -372,7 +372,7 @@ func effectiveRequirements(ws types.Workspace) map[string]types.WorkspaceRequire
 // CLOSED at startup — degrade silently to no-model-access instead of bricking
 // the run; compose_setup.go's checklist escalates the gap to blocking styling).
 func (s *Server) applyRequiredSecretGrant(ctx context.Context, spec *types.RunPolicySpec, agent, secretName string) (requirementAuditEntry, bool) {
-	p, ok := agentLLMProvider(agent)
+	p, ok := s.llmProviderFor(agent)
 	if !ok {
 		return requirementAuditEntry{}, false
 	}

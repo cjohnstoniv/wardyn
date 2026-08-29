@@ -73,8 +73,17 @@ type bootFlags struct {
 	// value) — precedent WARDYN_DEFAULT_POLICY. Empty = unset = every outbound
 	// TLS client in this process trusts exactly the system roots, as today.
 	trustedCAFile *string
-	ageKey        *string
-	proxyImage    *string
+	// anthropicBaseURL / openaiBaseURL are WARDYN_ANTHROPIC_BASE_URL /
+	// WARDYN_OPENAI_BASE_URL (see internal/api/llm_gateway.go's
+	// ValidateLLMGateways): an operator-set internal model gateway base URL
+	// re-pointing the api-key lane's brokered upstream. Empty (default) =
+	// every api-key lane dials the public provider host, byte-identical to
+	// today. Control-plane-authored, same posture class as trustedCAFile
+	// above — never a SiteConfig field, never agent-reachable.
+	anthropicBaseURL *string
+	openaiBaseURL    *string
+	ageKey           *string
+	proxyImage       *string
 
 	recordingDir       *string
 	recordingRetention *int
@@ -193,6 +202,8 @@ func parseBootFlags() *bootFlags {
 		controlURL:              flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "http://wardynd:8080", "externally-reachable control plane URL for sidecars"),
 		policyPath:              flagEnv("default-policy", "WARDYN_DEFAULT_POLICY", "examples/policies/default.json", "path to the default RunPolicy spec JSON"),
 		trustedCAFile:           flagEnv("trusted-ca-file", "WARDYN_TRUSTED_CA_FILE", "", "path to a PEM bundle of additional trusted roots (e.g. a corporate TLS-inspecting middlebox's CA), added to the system roots for wardynd's own outbound TLS, the proxy sidecar's forwarding transport, and every sandbox's CA trust. Empty (default) = system roots only, byte-identical to today"),
+		anthropicBaseURL:        flagEnv("anthropic-base-url", "WARDYN_ANTHROPIC_BASE_URL", "", "operator-set internal model gateway base URL (https://, RFC1918/CGNAT literal allowed) re-pointing the api-key lane's brokered upstream for Anthropic instead of api.anthropic.com. Empty (default) = the public host, byte-identical to today. Subscription/managed runs are unaffected — they still reach api.anthropic.com directly"),
+		openaiBaseURL:           flagEnv("openai-base-url", "WARDYN_OPENAI_BASE_URL", "", "same as -anthropic-base-url, for OpenAI's api-key lane (api.openai.com)"),
 		ageKey:                  flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated+logged if empty"),
 		proxyImage:              flagEnv("proxy-image", "WARDYN_PROXY_IMAGE", "", "OCI image for the wardyn-proxy sidecar (docker runner)"),
 

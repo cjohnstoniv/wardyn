@@ -792,13 +792,21 @@ func runToolchainNeeds(wsRefs []types.Workspace) *toolchainNeeds {
 }
 
 // hasAnthropicAPIKeyInjection reports whether the run already carries an api_key
-// injection targeting api.anthropic.com — i.e. the operator/compose set up the
-// api-key transport for Anthropic. The managed-subscription gate uses it to stay
-// a FALLBACK (fire only when nothing else credentials Anthropic), never a silent
-// override of an explicit api-key choice. Mirrors the drop-loop's host check.
-func hasAnthropicAPIKeyInjection(injections []runner.InjectionGrant) bool {
+// injection targeting Anthropic's api-key host — i.e. the operator/compose set up
+// the api-key transport for Anthropic. The managed-subscription gate uses it to
+// stay a FALLBACK (fire only when nothing else credentials Anthropic), never a
+// silent override of an explicit api-key choice. Mirrors the drop-loop's host
+// check. Gateway-aware (s.llmProviderFor(agent).host): under a configured
+// WARDYN_ANTHROPIC_BASE_URL the grant targets the gateway host, not
+// api.anthropic.com — comparing against the hardcoded public host would make
+// managed silently fire alongside an explicit api-key choice.
+func (s *Server) hasAnthropicAPIKeyInjection(agent string, injections []runner.InjectionGrant) bool {
+	p, ok := s.llmProviderFor(agent)
+	if !ok {
+		return false
+	}
 	for _, ig := range injections {
-		if strings.EqualFold(strings.TrimSuffix(ig.Rule.Host, "."), "api.anthropic.com") {
+		if strings.EqualFold(strings.TrimSuffix(ig.Rule.Host, "."), p.host) {
 			return true
 		}
 	}

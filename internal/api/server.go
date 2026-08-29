@@ -232,6 +232,15 @@ type Config struct {
 	// http.DefaultTransport at boot. Control-plane-authored only: never a
 	// SiteConfig field, never agent-reachable.
 	TrustedCAPEM string
+	// LLMGateways maps a public model-provider host ("api.anthropic.com" /
+	// "api.openai.com") to an operator-configured internal gateway base URL
+	// (WARDYN_ANTHROPIC_BASE_URL / WARDYN_OPENAI_BASE_URL, validated by
+	// ValidateLLMGateways). Control-plane-authored, same trust boundary as
+	// TrustedCAPEM above — the sandbox cannot set this. nil/empty (the
+	// default) => every api-key lane dials the public host, byte-identical to
+	// today. Scope: the api-key lane only — see (*Server).llmProviderFor;
+	// subscription/managed runs still reach the public host directly.
+	LLMGateways map[string]string
 	// RunnerTarget records which target a run is dispatched to ("docker"|"k8s"),
 	// or "none" for a headless control plane (-runner none: runs stay PENDING).
 	// Defaults to "docker".

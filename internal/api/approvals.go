@@ -812,7 +812,7 @@ func (s *Server) approveAlwaysRejects(ctx context.Context, ws types.Workspace) m
 func (s *Server) denyAlwaysReject(ctx context.Context, ws types.Workspace, host string) string {
 	const caveat = " (this guard covers model-provider and required-integration hosts only; " +
 		"a deny on another injected host fails loudly at proxy build instead)"
-	if isModelProviderHost(host) {
+	if s.isModelProviderHost(host) {
 		return "deny always on " + host + " would permanently break model access for this workspace: " +
 			"proxy-side credential injection refuses a denied host" + caveat
 	}

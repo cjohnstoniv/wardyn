@@ -170,7 +170,7 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	// policy, no integration id and no flag, so on a multi-user stack it silently
 	// serves the operator's subscription to every member.
 	managed := s.cfg.SubscriptionPostureOK && modelRun && !t.harnessLogin && !t.subscription && !t.bedrockReady &&
-		!hasAnthropicAPIKeyInjection(injections) && s.managedInjectReady(run.Agent) &&
+		!s.hasAnthropicAPIKeyInjection(run.Agent, injections) && s.managedInjectReady(run.Agent) &&
 		(policy.AllowAllEgress || len(policy.AllowedDomains) > 0)
 	t.injectManaged = managed
 

@@ -165,22 +165,35 @@ func TestManagedOptOut_APIKeyInjectionWins(t *testing.T) {
 	// The managed-subscription dispatch gate must stay a FALLBACK: when the run
 	// already carries an anthropic api-key injection (the operator chose api-key),
 	// managed must NOT fire and silently override it.
+	s := &Server{}
 	anthropic := []runner.InjectionGrant{{Rule: egress.InjectionRule{Host: "api.anthropic.com"}}}
-	if !hasAnthropicAPIKeyInjection(anthropic) {
+	if !s.hasAnthropicAPIKeyInjection("claude-code", anthropic) {
 		t.Fatal("should detect an api.anthropic.com injection")
 	}
 	// Trailing dot / case should still match (mirrors the sink host check).
 	dotted := []runner.InjectionGrant{{Rule: egress.InjectionRule{Host: "API.Anthropic.com."}}}
-	if !hasAnthropicAPIKeyInjection(dotted) {
+	if !s.hasAnthropicAPIKeyInjection("claude-code", dotted) {
 		t.Fatal("host match must normalize case + trailing dot")
 	}
 	// A non-anthropic injection (e.g. OpenAI) must NOT block managed.
 	other := []runner.InjectionGrant{{Rule: egress.InjectionRule{Host: "api.openai.com"}}}
-	if hasAnthropicAPIKeyInjection(other) {
+	if s.hasAnthropicAPIKeyInjection("claude-code", other) {
 		t.Fatal("a non-anthropic injection must not count")
 	}
-	if hasAnthropicAPIKeyInjection(nil) {
+	if s.hasAnthropicAPIKeyInjection("claude-code", nil) {
 		t.Fatal("no injections must not count")
+	}
+
+	// Gateway-aware: with WARDYN_ANTHROPIC_BASE_URL configured, the grant
+	// targets the GATEWAY host, not api.anthropic.com — the unset-gateway
+	// check above must not spuriously match it, and the gateway host must.
+	gw := &Server{cfg: Config{LLMGateways: map[string]string{"api.anthropic.com": "https://llm-gateway.corp.internal"}}}
+	if gw.hasAnthropicAPIKeyInjection("claude-code", anthropic) {
+		t.Fatal("a public-host injection must not count once a gateway is configured")
+	}
+	gwInjection := []runner.InjectionGrant{{Rule: egress.InjectionRule{Host: "llm-gateway.corp.internal"}}}
+	if !gw.hasAnthropicAPIKeyInjection("claude-code", gwInjection) {
+		t.Fatal("a gateway-host injection must count once a gateway is configured")
 	}
 }
 

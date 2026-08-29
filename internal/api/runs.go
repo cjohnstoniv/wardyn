@@ -275,7 +275,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// resolved spec via the SAME helper preflight's checklist uses, so the two agree.
 	if runNeedsModelWarning(req) {
 		if la := s.resolveRunLLMAccess(ctx, req, spec, s.presentSecretNames(ctx), bedrockRef); la == nil || !la.Provisioned {
-			p, _ := agentLLMProvider(req.Agent)
+			p, _ := s.llmProviderFor(req.Agent)
 			warnings = append(warnings, noModelAccessWarning(req.Agent, p, s.managedInjectReady("claude-code")))
 		}
 	}
@@ -366,7 +366,8 @@ type createRunResponse struct {
 func (s *Server) resolveRunLLMAccess(ctx context.Context, req createRunRequest, spec types.RunPolicySpec, presentSecrets map[string]bool, bedrockRef *types.WorkspaceBedrockRef) *composeLLMAccess {
 	llmSpec := spec
 	llmSpec.EligibleGrants = slices.Clone(spec.EligibleGrants)
-	_, hasAnthropicKey := apiKeyGrantForHost(&llmSpec, "api.anthropic.com")
+	llmProv, _ := s.llmProviderFor(req.Agent)
+	_, hasAnthropicKey := apiKeyGrantForHost(&llmSpec, llmProv.host)
 	subscriptionActive := specHasMountTarget(&llmSpec, claudeCredTarget)
 	// managed mirrors dispatch's precedence: a compose-mode managed token credentials a
 	// claude run with no resident subscription mount and no anthropic api-key grant.
@@ -374,7 +375,7 @@ func (s *Server) resolveRunLLMAccess(ctx context.Context, req createRunRequest, 
 		!hasAnthropicKey && s.managedInjectReady(req.Agent) &&
 		(llmSpec.AllowAllEgress || len(llmSpec.AllowedDomains) > 0)
 	var llmAccess *composeLLMAccess
-	if note, provisioned := reconcileLLMAccess(&llmSpec, req.Agent, presentSecrets, s.subscriptionInjectEnabled(), managed); note != "" {
+	if note, provisioned := s.reconcileLLMAccess(&llmSpec, req.Agent, presentSecrets, s.subscriptionInjectEnabled(), managed); note != "" {
 		llmAccess = &composeLLMAccess{Provisioned: provisioned, Note: note}
 	}
 	// Operator-configured Bedrock credentials the run automatically: dispatch's

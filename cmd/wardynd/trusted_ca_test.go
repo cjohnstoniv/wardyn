@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // genTestCert returns a self-signed cert (PEM) with the given CommonName —
@@ -175,4 +177,26 @@ func mustParseCert(t *testing.T, certPEM []byte) *x509.Certificate {
 		t.Fatal(err)
 	}
 	return cert
+}
+
+// TestBootWarnsWhenDefaultPolicyLacksGatewayHost: the advisory boot warning
+// fires only when a configured gateway's host is absent from the default
+// policy's egress, never on allow-all or an exact-covering entry, and never
+// when no gateway is configured at all.
+func TestBootWarnsWhenDefaultPolicyLacksGatewayHost(t *testing.T) {
+	gw := map[string]string{"api.anthropic.com": "https://llm-gateway.corp.internal"}
+
+	if got := defaultPolicyMissingGatewayHosts(types.RunPolicySpec{}, gw); len(got) != 1 || got["api.anthropic.com"] != "llm-gateway.corp.internal" {
+		t.Fatalf("expected the gateway host reported missing, got %v", got)
+	}
+	if got := defaultPolicyMissingGatewayHosts(types.RunPolicySpec{AllowedDomains: []string{"llm-gateway.corp.internal"}}, gw); len(got) != 0 {
+		t.Fatalf("an exact covering entry must suppress the warning, got %v", got)
+	}
+	if got := defaultPolicyMissingGatewayHosts(types.RunPolicySpec{AllowAllEgress: true}, gw); len(got) != 0 {
+		t.Fatalf("allow_all_egress must suppress the warning, got %v", got)
+	}
+	// Negative control: no gateway configured at all -> never warns.
+	if got := defaultPolicyMissingGatewayHosts(types.RunPolicySpec{}, nil); len(got) != 0 {
+		t.Fatalf("no gateway configured must never warn, got %v", got)
+	}
 }

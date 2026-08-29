@@ -392,7 +392,7 @@ func (s *Server) promoteSkipHosts(ctx context.Context, ws types.Workspace) map[s
 			skip[strings.ToLower(strings.TrimSpace(h))] = struct{}{}
 		}
 	}
-	add(modelProviderEgress(s.cfg.DefaultPolicy))
+	add(s.modelProviderEgress(s.cfg.DefaultPolicy))
 	// The WORKSPACE's own model-provider transport (SPINE-7): a bound bedrock
 	// integration's regional host is HARNESS plumbing a record session logs, not a
 	// workspace-specific egress need — modelProviderEgress only matches the

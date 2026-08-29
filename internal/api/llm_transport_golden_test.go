@@ -169,6 +169,26 @@ func llmGoldenCases() []llmGoldenCase {
 			}},
 		},
 
+		// (b') gateway-aware opt-out: an internal model gateway is configured
+		// AND a Wardyn-managed subscription blob is ALSO wired, but the api-key
+		// injection targets the GATEWAY host (not api.anthropic.com) — exactly
+		// what ensureLLMGrant now authors under a gateway. managed must still
+		// stay off: hasAnthropicAPIKeyInjection must recognize the gateway host,
+		// not just the hardcoded public one.
+		{
+			name:  "claude-code/gateway-configured-with-api-key-injection-managed-false",
+			agent: "claude-code",
+			cfg: Config{
+				LLMGateways:  map[string]string{"api.anthropic.com": "https://llm-gateway.corp.internal"},
+				ManagedToken: fakeSubProvider{tok: subscription.Token{Value: "managed-tok"}},
+				Secrets:      &memSecrets{m: map[string][]byte{"anthropic-api-key": []byte("sk-ant-test")}},
+			},
+			injections: []runner.InjectionGrant{{
+				GrantID: uuid.New(),
+				Rule:    egress.InjectionRule{Host: "llm-gateway.corp.internal", Header: "x-api-key", Format: "%s", SecretName: "anthropic-api-key"},
+			}},
+		},
+
 		// (c) an openai-api-key secret is present. resolveLLMTransport does not
 		// itself branch on secret presence for api-key mode (that's the proxy's
 		// injection-resolve job, at request time) — this cell exists to LOCK IN

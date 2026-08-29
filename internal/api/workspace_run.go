@@ -339,7 +339,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// applyLLMCredMount refuse the subscription mount (anthropicReachable=false) and
 	// silently fall back to a broken api-key path. Union the ceiling's model-provider
 	// egress in first so subscription/api-key wiring below attaches in both modes.
-	unionAllowedDomains(&policy, modelProviderEgress(s.cfg.DefaultPolicy))
+	unionAllowedDomains(&policy, s.modelProviderEgress(s.cfg.DefaultPolicy))
 
 	// Model access for the session comes from the WORKSPACE's OWN binding (SPINE-7)
 	// — the same resolveRunIntegration precedence (explicit → workspace pin →
@@ -398,7 +398,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		if m, _ := applyLLMCredMount(&policy, s.cfg.DefaultPolicy, "claude-code", true); m {
 			subMounted = true
 		} else {
-			ensureLLMGrant(&policy, "claude-code", s.presentSecretNames(ctx), false)
+			s.ensureLLMGrant(&policy, "claude-code", s.presentSecretNames(ctx), false)
 		}
 	}
 	llmMode := "none"

@@ -267,6 +267,19 @@ func run() error {
 		return err
 	}
 
+	// Internal model gateway (WARDYN_ANTHROPIC_BASE_URL / WARDYN_OPENAI_BASE_URL):
+	// validated once at boot, fail closed on a malformed value — same posture
+	// class as WARDYN_TRUSTED_CA_FILE above. Warn (never refuse: the default
+	// policy is not always the ceiling every run inherits) when the default
+	// policy's allowed_domains does not list a configured gateway's host — the
+	// operator must add it, or every run under that policy 404s on its first
+	// model call once ensureLLMGrant/reconcileLLMAccess point at the gateway.
+	llmGateways, err := api.ValidateLLMGateways(*f.anthropicBaseURL, *f.openaiBaseURL)
+	if err != nil {
+		return err
+	}
+	warnMissingGatewayHosts(defaultPolicy, llmGateways)
+
 	if *f.adminToken == "" && !lm.enabled {
 		slog.Warn("wardynd: admin token unset; the public API is DISABLED (only /healthz responds). Set WARDYN_ADMIN_TOKEN, enable OIDC, or use -local-mode for single-developer localhost use.")
 	}
@@ -348,6 +361,7 @@ func run() error {
 		TrustDomain:               *f.trustDomain,
 		DefaultPolicy:             defaultPolicy,
 		TrustedCAPEM:              trustedCAPEM,
+		LLMGateways:               llmGateways,
 		RunnerTarget:              runnerTarget,
 		UIDir:                     *f.uiDir,
 		ControlPlaneURL:           *f.controlURL,
