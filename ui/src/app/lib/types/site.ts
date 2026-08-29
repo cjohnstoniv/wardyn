@@ -62,9 +62,11 @@ export interface SiteConfig {
   readonly integrations?: unknown[];
   // Operator-declared internal hostnames the proxy's unconditional private/
   // reserved-IP SSRF guard is lifted for (an in-cluster service, a corporate
-  // registry, the internal model gateway) — see InternalHost. No reader exists
-  // yet (the Network step's rendering ships later); the field mirrors the
-  // server shape so a GET/PUT round-trip never drops it.
+  // registry) — see InternalHost. The internal model gateway needs no entry
+  // here: only the proxy's own brokered LLM route resolves/dials it, with its
+  // own relaxed vet (see OPERATIONS.md's Internal model gateway section). No
+  // reader exists yet (the Network step's rendering ships later); the field
+  // mirrors the server shape so a GET/PUT round-trip never drops it.
   internal_hosts?: InternalHost[];
 }
 
