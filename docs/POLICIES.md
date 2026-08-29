@@ -653,7 +653,11 @@ this through" is exactly as visible as "a human approved it".
 **It narrows; it never widens.** Rules are consulted only for a run already in
 `hold`, so adding one cannot make a supervised run autonomous. The worst a
 mistaken rule can do is ask a human more often, or refuse a call the agent
-wanted.
+wanted. That holds across the member seam too: a member's `inline_policy` may
+narrow the operator's rules, never widen them — the composer clamp raises any
+weaker effect to the operator's (`allow` < `hold` < `deny`) and carries the
+operator's own rules into the run, so a tool the operator denies stays denied
+in a run whose policy never mentioned it.
 
 **Matching.** Exact and case-sensitive on the tool name the harness reports.
 There is no pattern matching — a glob over tool names invites a rule that reads

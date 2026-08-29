@@ -108,6 +108,9 @@ func Clamp(proposed, ceiling types.RunPolicySpec) (types.RunPolicySpec, []string
 	// Allow-all egress.
 	warns = clampOperatorSwitches(&out, ceiling, warns)
 
+	// Per-tool effects: a proposal may narrow the operator's rules, never widen.
+	warns = clampToolRules(&out, ceiling, warns)
+
 	// Allowed domains: intersect down to the ceiling unless the ceiling allows all.
 	// An empty ceiling allowlist means default-deny (mirrors clampGrants/egress
 	// package semantics) — do NOT skip this block just because it's empty, or the
@@ -484,5 +487,68 @@ func clampOperatorSwitches(out *types.RunPolicySpec, ceiling types.RunPolicySpec
 		warns = append(warns, "git_push_any_branch disabled: operator policy keeps push branch-namespace confinement on")
 		out.GitPushAnyBranch = false
 	}
+	return warns
+}
+
+
+// toolStrictness orders the three effects so a clamp can take the stricter:
+// allow < hold < deny.
+func toolStrictness(e types.ToolEffect) int {
+	switch e {
+	case types.ToolDeny:
+		return 2
+	case types.ToolHold:
+		return 1
+	}
+	return 0
+}
+
+// ceilingToolEffect is what the operator ceiling says about one tool: its
+// exact rule, else its "*" default, else hold — the proxy's own lookup order
+// (proxy.Policy.ToolEffectFor), so the clamp and the enforcement agree.
+func ceilingToolEffect(ceiling types.RunPolicySpec, tool string) types.ToolEffect {
+	def := types.ToolHold
+	for _, r := range ceiling.ToolRules {
+		if r.Tool == tool {
+			return r.Effect
+		}
+		if r.Tool == "*" {
+			def = r.Effect
+		}
+	}
+	return def
+}
+
+// clampToolRules keeps a member's inline tool_rules from widening the
+// operator's. Per tool the stricter effect wins, and the ceiling's own rules
+// are carried into the result so a tool the operator denies stays denied when
+// the proposal is silent about it. ToolRules' contract is "it narrows; it
+// never widens" — that holds because the field is operator-authored, and the
+// inline_policy seam is exactly where someone else authors it: without this
+// clamp a member could post `{"tool":"*","effect":"allow"}` and turn a
+// supervised run autonomous.
+func clampToolRules(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
+	if len(out.ToolRules) == 0 {
+		if len(ceiling.ToolRules) > 0 {
+			out.ToolRules = append([]types.ToolRule(nil), ceiling.ToolRules...)
+		}
+		return warns
+	}
+	kept := make([]types.ToolRule, 0, len(out.ToolRules)+len(ceiling.ToolRules))
+	seen := map[string]bool{}
+	for _, r := range out.ToolRules {
+		if floor := ceilingToolEffect(ceiling, r.Tool); toolStrictness(r.Effect) < toolStrictness(floor) {
+			warns = append(warns, fmt.Sprintf("tool_rules: %q raised from %s to the operator's %s", r.Tool, r.Effect, floor))
+			r.Effect = floor
+		}
+		kept = append(kept, r)
+		seen[r.Tool] = true
+	}
+	for _, r := range ceiling.ToolRules {
+		if !seen[r.Tool] {
+			kept = append(kept, r)
+		}
+	}
+	out.ToolRules = kept
 	return warns
 }

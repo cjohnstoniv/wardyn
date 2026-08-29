@@ -703,3 +703,50 @@ func hasWarn(warns []string, substr string) bool {
 	}
 	return false
 }
+
+
+func TestClamp_ToolRulesNeverWiden(t *testing.T) {
+	ceiling := operatorCeiling(t)
+	ceiling.ToolRules = []types.ToolRule{{Tool: "WebFetch", Effect: types.ToolDeny}}
+	got, warns := Clamp(types.RunPolicySpec{ToolRules: []types.ToolRule{
+		{Tool: "*", Effect: types.ToolAllow},       // widens the ceiling's implicit hold: raised
+		{Tool: "Bash", Effect: types.ToolDeny},     // narrows: kept
+		{Tool: "WebFetch", Effect: types.ToolHold}, // weaker than the ceiling's deny: raised
+	}}, ceiling)
+	want := map[string]types.ToolEffect{"*": types.ToolHold, "Bash": types.ToolDeny, "WebFetch": types.ToolDeny}
+	if len(got.ToolRules) != len(want) {
+		t.Fatalf("clamped rules = %v, want one per tool in %v", got.ToolRules, want)
+	}
+	for _, r := range got.ToolRules {
+		if want[r.Tool] != r.Effect {
+			t.Errorf("tool %q: effect %s, want %s", r.Tool, r.Effect, want[r.Tool])
+		}
+	}
+	for _, w := range []string{`tool_rules: "*" raised from allow`, `tool_rules: "WebFetch" raised from hold`} {
+		if !hasWarn(warns, w) {
+			t.Errorf("expected warning %q, got %v", w, warns)
+		}
+	}
+	if hasWarn(warns, `"Bash"`) {
+		t.Errorf("a narrowing rule must not warn: %v", warns)
+	}
+
+	// A proposal with no rules inherits the ceiling's, so an operator deny
+	// still applies to a member run that never mentioned the tool.
+	got, warns = Clamp(types.RunPolicySpec{}, ceiling)
+	if len(got.ToolRules) != 1 || got.ToolRules[0] != ceiling.ToolRules[0] {
+		t.Errorf("silent proposal must carry the ceiling's rules, got %v", got.ToolRules)
+	}
+	if hasWarn(warns, "tool_rules") {
+		t.Errorf("inheriting the ceiling is not a clamp: %v", warns)
+	}
+
+	// A ceiling that allows a tool lets the proposal allow it too.
+	ceiling.ToolRules = []types.ToolRule{{Tool: "*", Effect: types.ToolAllow}}
+	got, _ = Clamp(types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "Read", Effect: types.ToolAllow}}}, ceiling)
+	for _, r := range got.ToolRules {
+		if r.Tool == "Read" && r.Effect != types.ToolAllow {
+			t.Errorf("Read should stay allow under an allow-all ceiling, got %s", r.Effect)
+		}
+	}
+}
