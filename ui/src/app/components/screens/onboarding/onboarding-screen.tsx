@@ -51,7 +51,10 @@ export function GettingStarted({ onDone }: { onDone: () => void }) {
   const role = useRole();
   const [seen, setSeen] = React.useState(onboardingSeen());
   if (role === "member") {
-    return <MemberGettingStarted onDone={onDone} />;
+    // No onDone: this is a page a member returns to, not a funnel step with
+    // an exit action — the old MemberSetupNotice's "Go to Runs" button (and
+    // the onDone it called) leaves with it.
+    return <MemberGettingStarted />;
   }
   if (!seen) {
     // Single forward path: the welcome hands off INTO the funnel (no skip, no

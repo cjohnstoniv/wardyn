@@ -15,6 +15,7 @@ import { Play } from "lucide-react";
 // same triangle.
 import { Button } from "../../ui/button";
 import { Chip, SectionLabel } from "../../wardyn/primitives";
+import { EPISODES_COPY as T } from "../../wardyn/copy";
 import { EPISODES, episodeUrl, episodesFor, releasePageUrl, type Episode } from "../../../lib/demo-videos";
 
 export function EpisodeRow({ episode }: { episode: Episode }) {
@@ -29,7 +30,7 @@ export function EpisodeRow({ episode }: { episode: Episode }) {
         <span className="min-w-0 flex-1 truncate text-sm text-foreground">{episode.title}</span>
         {episode.minutes && <span className="shrink-0 text-xs text-muted-foreground">{episode.minutes}</span>}
         {episode.tag === null ? (
-          <Chip tone="neutral">Not recorded yet</Chip>
+          <Chip tone="neutral">{T.NOT_RECORDED}</Chip>
         ) : open ? (
           <Button
             variant="ghost"
@@ -39,11 +40,11 @@ export function EpisodeRow({ episode }: { episode: Episode }) {
               setErrored(false);
             }}
           >
-            Close
+            {T.CLOSE}
           </Button>
         ) : (
           <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
-            Watch
+            {T.WATCH}
           </Button>
         )}
       </div>
@@ -56,17 +57,15 @@ export function EpisodeRow({ episode }: { episode: Episode }) {
             className="w-full rounded-lg"
             onError={() => setErrored(true)}
           />
-          <p className="text-xs text-muted-foreground">
-            Streams from the Wardyn release on GitHub only after you press Watch. Nothing is prefetched.
-          </p>
+          <p className="text-xs text-muted-foreground">{T.STREAM_NOTE}</p>
         </>
       )}
       {open && errored && episode.tag !== null && (
         <div className="text-sm text-muted-foreground">
-          Couldn&apos;t load this episode from GitHub.{" "}
+          {T.LOAD_ERROR}{" "}
           <Button variant="link" size="sm" className="h-auto p-0" asChild>
             <a href={releasePageUrl(episode.tag)} target="_blank" rel="noopener noreferrer">
-              Open the release page
+              {T.OPEN_RELEASE_PAGE}
             </a>
           </Button>
         </div>
@@ -80,7 +79,7 @@ export function StepEpisodes({ stepId }: { stepId: string }) {
   if (rows.length === 0) return null;
   return (
     <div className="mt-6">
-      <SectionLabel>Watch</SectionLabel>
+      <SectionLabel>{T.WATCH}</SectionLabel>
       <div className="mt-2">
         {rows.map((e) => (
           <EpisodeRow key={e.id} episode={e} />
@@ -91,18 +90,30 @@ export function StepEpisodes({ stepId }: { stepId: string }) {
 }
 
 const AUDIENCE_GROUPS: { audience: Episode["audience"]; label: string }[] = [
-  { audience: "admin", label: "For admins" },
-  { audience: "member", label: "For members" },
-  { audience: "everyone", label: "For everyone" },
+  { audience: "admin", label: T.GROUP_ADMIN },
+  { audience: "member", label: T.GROUP_MEMBER },
+  { audience: "everyone", label: T.GROUP_EVERYONE },
 ];
 
+// Derived from EPISODES itself (never hand-typed) so a re-shoot that ships or
+// reserves an episode (RELEASING.md's "one sed") cannot leave the summary
+// line stale — see catalogSummary's own test for the arithmetic pin.
+export function catalogSummary(episodes: Episode[]): { recorded: number; minutes: number } {
+  const recorded = episodes.filter((e) => e.tag !== null).length;
+  const totalSeconds = episodes.reduce((sum, e) => {
+    if (!e.minutes) return sum;
+    const [mm, ss] = e.minutes.split(":").map(Number);
+    return sum + mm * 60 + ss;
+  }, 0);
+  return { recorded, minutes: Math.round(totalSeconds / 60) };
+}
+
 export function EpisodeList() {
+  const { recorded, minutes } = catalogSummary(EPISODES);
   return (
     <div className="mt-10">
-      <h2 className="text-lg font-semibold text-foreground">All episodes</h2>
-      <p className="mt-1 text-sm text-muted-foreground">
-        13 recorded · about 72 minutes · streamed from GitHub on click
-      </p>
+      <h2 className="text-lg font-semibold text-foreground">{T.ALL_EPISODES_TITLE}</h2>
+      <p className="mt-1 text-sm text-muted-foreground">{T.SUMMARY(recorded, minutes)}</p>
       <div className="mt-4 space-y-6">
         {AUDIENCE_GROUPS.map((g) => {
           const rows = EPISODES.filter((e) => e.audience === g.audience);

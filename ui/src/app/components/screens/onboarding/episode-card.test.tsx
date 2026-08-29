@@ -6,8 +6,8 @@
 import { describe, it, expect } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { EpisodeRow, StepEpisodes, EpisodeList } from "./episode-card";
-import type { Episode } from "../../../lib/demo-videos";
+import { EpisodeRow, StepEpisodes, EpisodeList, catalogSummary } from "./episode-card";
+import { EPISODES, type Episode } from "../../../lib/demo-videos";
 
 const shipped: Episode = {
   id: "01",
@@ -84,12 +84,29 @@ describe("StepEpisodes", () => {
 });
 
 describe("EpisodeList", () => {
-  it("groups episodes by audience under the three headings", () => {
+  it("groups episodes by audience under the three headings, and derives the summary line from EPISODES", () => {
     render(<EpisodeList />);
+    const { recorded, minutes } = catalogSummary(EPISODES);
     expect(screen.getByText("All episodes")).toBeInTheDocument();
-    expect(screen.getByText("13 recorded · about 72 minutes · streamed from GitHub on click")).toBeInTheDocument();
+    expect(
+      screen.getByText(`${recorded} recorded · about ${minutes} minutes · streamed from GitHub on click`),
+    ).toBeInTheDocument();
     expect(screen.getByText("For admins")).toBeInTheDocument();
     expect(screen.getByText("For members")).toBeInTheDocument();
     expect(screen.getByText("For everyone")).toBeInTheDocument();
+  });
+});
+
+describe("catalogSummary", () => {
+  it("counts only recorded (non-null tag) episodes and sums their minutes, rounded", () => {
+    const fixture: Episode[] = [
+      { id: "a", title: "A", audience: "everyone", tag: "v1", file: "a.mp4", minutes: "1:30", steps: [] },
+      { id: "b", title: "B", audience: "everyone", tag: "v1", file: "b.mp4", minutes: "2:00", steps: [] },
+      { id: "c", title: "C", audience: "everyone", tag: null, file: "c.mp4", steps: [] },
+    ];
+    // Negative control: the reserved (tag: null) episode is excluded from
+    // both the recorded count and the minutes sum, even though it has no
+    // `minutes` to contribute anyway.
+    expect(catalogSummary(fixture)).toEqual({ recorded: 2, minutes: 4 });
   });
 });
