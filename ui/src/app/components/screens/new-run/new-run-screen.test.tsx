@@ -328,26 +328,25 @@ describe("NewRunScreen — Preflight", () => {
 });
 
 // M4/rulebook §8: the keyboard contract. Launching a run is consequential, so
-// "which key commits it" is not a detail — Enter from the one single-line field
-// on the page, never from a textarea, and Esc leaves without taking the work
-// with it.
+// "which key commits it" is not a detail — no key commits it, and Esc leaves
+// without taking the work with it.
 describe("NewRunScreen — the keyboard contract", () => {
   it("opens with focus on Title, not on the back-out button", async () => {
     renderScreen();
     await waitFor(() => expect(screen.getByLabelText("Title")).toHaveFocus());
   });
 
-  it("launches on Enter from the title, but not while the gate is closed", async () => {
+  // The title input carries the <datalist> of known run titles, and choosing a
+  // suggestion with Enter dispatches keydown Enter on the input (Chrome) — so
+  // an Enter-to-launch binding here turned "pick Nightly audit off the list"
+  // into "launch the run". Completion and commit cannot share a key.
+  it("never launches on Enter from the title — that key belongs to the datalist", async () => {
     renderScreen();
     const title = await screen.findByLabelText("Title");
+    await user.type(title, "Nightly audit");
 
-    // Empty title: the launch gate is closed, so Enter does nothing.
     fireEvent.keyDown(title, { key: "Enter" });
     expect(createRunMock).not.toHaveBeenCalled();
-
-    await user.type(title, "Refund flow");
-    fireEvent.keyDown(title, { key: "Enter" });
-    await waitFor(() => expect(createRunMock).toHaveBeenCalledTimes(1));
   });
 
   it("never launches on Enter from a textarea — there it is a newline", async () => {
@@ -373,6 +372,42 @@ describe("NewRunScreen — the keyboard contract", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     // Leaving is still one click on the ghost "Runs" button — it just does not
     // happen by accident with unsaved work on screen.
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  // Radix's DismissableLayer preventDefaults Escape on document CAPTURE and then
+  // dismisses; the event still bubbles on to window. Without a defaultPrevented
+  // guard, closing a Select or the Add-workspace dialog ALSO left the screen.
+  it("ignores an Escape another layer already handled", async () => {
+    renderScreen();
+    const title = await screen.findByLabelText("Title");
+
+    // Control: an unhandled Escape from inside the form does reach the window
+    // listener — so the assertion below cannot pass for the wrong reason.
+    fireEvent.keyDown(title, { key: "Escape" });
+    expect(navigateMock).toHaveBeenCalledWith("/runs");
+
+    navigateMock.mockReset();
+    const dismiss = (e: Event) => e.preventDefault();
+    document.addEventListener("keydown", dismiss, true);
+    fireEvent.keyDown(title, { key: "Escape" });
+    document.removeEventListener("keydown", dismiss, true);
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  // The predicate used to read title/description/task/policy-id only, so a form
+  // whose ONLY work was an authored policy body counted as untouched — Esc threw
+  // the document away without a word.
+  it("counts an edited policy body as dirty on its own", async () => {
+    renderScreen();
+    const spec = (await screen.findByLabelText("Spec (JSON)")) as HTMLTextAreaElement;
+
+    fireEvent.change(spec, {
+      target: { value: '{"min_confinement_class": "CC1", "auto_stop_after_sec": 7200}' },
+    });
+    expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("");
+
+    fireEvent.keyDown(window, { key: "Escape" });
     expect(navigateMock).not.toHaveBeenCalled();
   });
 });

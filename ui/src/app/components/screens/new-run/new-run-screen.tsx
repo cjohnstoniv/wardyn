@@ -111,6 +111,13 @@ export function NewRunScreen() {
   const [parsedFloor, setParsedFloor] = React.useState<ConfinementClass | undefined>(
     () => getDefaultCc() ?? "CC1",
   );
+  // The form as the MACHINE left it — what `dirty` below compares against.
+  // specText's baseline is fixed, but the barrier is the one field the machine
+  // writes on its own (the health probe re-resolves it, the policy floor
+  // up-clamps it), so its baseline moves with those writes. Comparing it to a
+  // constant would call an untouched form dirty and break Esc entirely.
+  const pristineSpec = React.useRef(specText);
+  const pristineCc = React.useRef(state.confinementClass);
   const [addWsOpen, setAddWsOpen] = React.useState(false);
   const [availableClasses, setAvailableClasses] = React.useState<ConfinementClass[] | null>(null);
   const [launching, setLaunching] = React.useState(false);
@@ -219,10 +226,9 @@ export function NewRunScreen() {
         if (classes.length) {
           // Re-resolve the persisted default against real availability —
           // this, not the seed above, is where Settings' promise comes true.
-          setState((s) => ({
-            ...s,
-            confinementClass: resolveDefaultCc(getDefaultCc(), classes),
-          }));
+          const resolved = resolveDefaultCc(getDefaultCc(), classes);
+          pristineCc.current = resolved;
+          setState((s) => ({ ...s, confinementClass: resolved }));
         }
       });
     probe();
@@ -290,7 +296,10 @@ export function NewRunScreen() {
   // "never below the floor" an invariant instead of a one-shot.
   React.useEffect(() => {
     if (!floor || !ORDERED_CLASSES.includes(floor)) return;
-    if (rank(floor) > rank(cc)) patch({ confinementClass: floor });
+    if (rank(floor) > rank(cc)) {
+      pristineCc.current = floor;
+      patch({ confinementClass: floor });
+    }
   }, [floor, cc, patch]);
 
   // The post-parse union, computed ONCE: the same value renders the "Added for
@@ -407,15 +416,27 @@ export function NewRunScreen() {
 
   // Rulebook §8: Esc backs out quietly, with no prompt for an untouched form.
   //
-  // ponytail: a DIRTY form ignores Esc rather than discarding the work — the
+  // "Untouched" is the WHOLE form, not four scalar fields: an edited policy
+  // body, an attached workspace, a changed barrier or run mode are all work
+  // this would throw away. One whole-state comparison rather than a field list,
+  // so a control added to this screen cannot quietly fall outside it.
+  //
+  // ponytail: a DIRTY form ignores Esc rather than prompting to discard — the
   // explicit discard prompt the rulebook asks for needs copy M4 does not draw,
   // and the ghost "Runs" button is still one click away. Wire the prompt when
   // the mock carries its words.
   const dirty =
-    !!state.title.trim() || !!state.description.trim() || !!state.task.trim() || !!state.selectedPolicyId;
+    useSaved ||
+    specText !== pristineSpec.current ||
+    JSON.stringify(state) !== JSON.stringify(initialWizardState(pristineCc.current));
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !dirty) navigate("/runs");
+      // defaultPrevented is load-bearing: Radix's DismissableLayer preventDefaults
+      // Escape on document capture and THEN dismisses, but the event still
+      // reaches window — so closing a Select or the Add-workspace dialog was also
+      // leaving the screen.
+      if (e.key !== "Escape" || e.defaultPrevented || dirty) return;
+      navigate("/runs");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -451,21 +472,12 @@ export function NewRunScreen() {
                   autoFocus
                   aria-invalid={titleTouched && !state.title.trim() ? true : undefined}
                   onBlur={() => setTitleTouched(true)}
-                  // Rulebook §8: Enter submits from a SINGLE-LINE input. This is
-                  // the only one on the page; every other field is a textarea,
-                  // where Enter is a newline and nothing may claim it.
-                  //
-                  // ponytail: a plain handler rather than a real <form>. A form
-                  // would make every untyped <button> in this subtree (the
-                  // shared PolicyPanel's included) a submit button — an
-                  // accidental launch one refactor away. Wrap it in a form the
-                  // day ui/button.tsx defaults to type="button".
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.repeat && !problem && !launchDisabled) {
-                      e.preventDefault();
-                      void launch();
-                    }
-                  }}
+                  // NO Enter-to-launch here. Rulebook §8 allows it from a
+                  // single-line input, but this is the input carrying the
+                  // datalist below: choosing a suggestion with Enter dispatches
+                  // keydown Enter on the input (Chrome), so picking a known
+                  // title off the list would LAUNCH the run. Completion and
+                  // commit cannot share a key. Launch is the rail's button.
                   maxLength={200}
                   // Native datalist: existing titles are offered as you type, so
                   // joining a family is a pick rather than an exact retype. No
