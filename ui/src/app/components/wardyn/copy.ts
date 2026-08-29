@@ -531,3 +531,18 @@ export function credentialKind(scope: Record<string, unknown>): CredentialKind {
   if ("secret_name" in scope || "username" in scope) return "git_pat";
   return "generic";
 }
+
+// Member Getting Started's "Your model key" section (6c BYOK) — the fixed
+// secret name every provider convention expects, and the per-state copy.
+// `SECRET_NAME` is a value (not just a type) precisely because the field
+// shows it verbatim as a mono label — it's the one name a member can register.
+export const YOUR_MODEL_KEY = {
+  SECRET_NAME: "anthropic-api-key",
+  EMPTY_BODY:
+    "Bring your own key. It is stored write-only under the provider's conventional name; nothing ever reads it back to you.",
+  SET_HINT: "Your runs can use this key — pick it under Model access when you launch.",
+  PROVIDED_CHIP: "Provided by your admin",
+  PROVIDED_BODY: "Model access is already configured for you.",
+  USE_OWN_KEY: "Use my own key instead",
+  REFUSED_SHORT: "Keys shorter than 8 characters are refused.",
+} as const;
