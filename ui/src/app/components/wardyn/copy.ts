@@ -611,8 +611,7 @@ export const PEOPLE_STEP = {
   SINGLE_USER_LEDE_LOCAL:
     "One admin credential — no sign-in at all — anyone who reaches this console on this machine is the admin. No per-person identity.",
   SINGLE_USER_LEDE_TOKEN:
-    "One admin credential — the token the installer printed, or no sign-in at all under local mode. No per-person identity.",
-  SINGLE_USER_HEADING: "Who can sign in",
+    "One admin credential — the token the installer printed. No per-person identity.",
   SINGLE_USER_BODY:
     "Just you. Whoever holds the admin token (or reaches a local-mode console) is the admin; runs, policies, secrets and approvals are all yours. There is no member role until people sign in as themselves.",
   SINGLE_USER_SSO_NOTE_PREFIX:
@@ -620,7 +619,6 @@ export const PEOPLE_STEP = {
   SINGLE_USER_SSO_NOTE_DOC: "docs/OPERATIONS.md",
   SINGLE_USER_SSO_NOTE_SUFFIX: ', "Second user, same host".',
   MULTI_USER_LEDE: "People sign in with SSO; each is an admin or a member, per your role map.",
-  MULTI_USER_HEADING: "Who can sign in",
   MULTI_USER_ROLES_PREFIX: "Roles come from ",
   MULTI_USER_ROLES_VAR: "WARDYN_OIDC_ROLE_MAP",
   MULTI_USER_ROLES_SUFFIX: ", or the operator allowlist",

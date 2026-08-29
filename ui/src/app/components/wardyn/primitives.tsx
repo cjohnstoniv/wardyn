@@ -410,18 +410,24 @@ export function SectionCard({
   right,
   children,
 }: {
-  title: string;
+  // Optional: a body whose page already carries the same <h2> (the setup
+  // funnel's step heading) omits it rather than announcing one name twice.
+  title?: string;
   Icon?: React.ElementType;
   right?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <section className="rounded-xl border border-border bg-card p-4">
-      <div className="mb-3 flex items-center gap-2">
-        {Icon && <Icon className="size-4 text-muted-foreground" />}
-        <h2 className="text-meta font-semibold uppercase tracking-wider text-muted-foreground">{title}</h2>
-        {right && <div className="ml-auto">{right}</div>}
-      </div>
+      {(title || Icon || right) && (
+        <div className="mb-3 flex items-center gap-2">
+          {Icon && <Icon className="size-4 text-muted-foreground" />}
+          {title && (
+            <h2 className="text-meta font-semibold uppercase tracking-wider text-muted-foreground">{title}</h2>
+          )}
+          {right && <div className="ml-auto">{right}</div>}
+        </div>
+      )}
       {children}
     </section>
   );

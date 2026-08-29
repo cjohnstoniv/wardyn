@@ -394,9 +394,10 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   describe("People step", () => {
     it("renders the label, heading and Single-user badge, and is done on arrival", async () => {
       renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=people");
-      // Both the page heading (STEP_HEADING) and the DeploymentStep body's own
-      // SectionCard render "Who can sign in" — the mock's own canon repeats it.
-      expect(await screen.findAllByRole("heading", { name: /who can sign in/i })).toHaveLength(2);
+      // Exactly ONE "Who can sign in" heading: the page heading (STEP_HEADING)
+      // carries it and the DeploymentStep's card deliberately has no title, so
+      // assistive tech never hears the same name twice at the same level.
+      expect(await screen.findAllByRole("heading", { name: /who can sign in/i })).toHaveLength(1);
 
       const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
       const nav = within(navs[navs.length - 1]);

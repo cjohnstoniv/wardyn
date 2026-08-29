@@ -302,7 +302,8 @@ export function DeploymentStep({ status }: { status: SetupStatus }) {
           <Chip tone="neutral">{PT.SINGLE_USER_CHIP}</Chip>
           <p className="text-sm text-muted-foreground">{lede}</p>
         </div>
-        <SectionCard title={PT.SINGLE_USER_HEADING}>
+        {/* No card title: the step heading above already reads "Who can sign in". */}
+        <SectionCard>
           <p className="text-sm text-muted-foreground">{PT.SINGLE_USER_BODY}</p>
           <p className="mt-3 text-xs text-muted-foreground">
             {PT.SINGLE_USER_SSO_NOTE_PREFIX}
@@ -320,7 +321,7 @@ export function DeploymentStep({ status }: { status: SetupStatus }) {
         <Chip tone="neutral">{PT.MULTI_USER_CHIP}</Chip>
         <p className="text-sm text-muted-foreground">{PT.MULTI_USER_LEDE}</p>
       </div>
-      <SectionCard title={PT.MULTI_USER_HEADING}>
+      <SectionCard>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm text-muted-foreground">
             {PT.MULTI_USER_ROLES_PREFIX}
