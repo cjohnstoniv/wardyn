@@ -534,8 +534,11 @@ function TitleGroup({
             );
           })}
         </span>
+        {/* A disclosure control is a link, not the surface's action —
+            CONSOLE-RULES §2 names this exact site: --info, never teal. The
+            approvals strip renders the identical string the same way. */}
         {runs.length > GROUP_PREVIEW && (
-          <button onClick={onToggle} className="ml-1 text-xs font-medium text-primary hover:underline">
+          <button onClick={onToggle} className="ml-1 text-xs font-medium text-info hover:underline">
             {open ? "Show fewer" : `Show all ${runs.length}`}
           </button>
         )}
@@ -657,7 +660,7 @@ function RunsTable({
           {rows.length > cap && (
             <>
               {" · "}
-              <button onClick={onLoadMore} className="font-medium text-primary hover:underline">
+              <button onClick={onLoadMore} className="font-medium text-info hover:underline">
                 Load {TABLE_STEP} more
               </button>
             </>
