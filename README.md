@@ -21,24 +21,26 @@ the flagship use.
 
 ## Install
 
-Two paths, neither needs a clone. Everything below pulls cosign-signed images
-with attested SBOMs — [`docs/VERIFY.md`](docs/VERIFY.md) is how you check that.
+Pick by **who runs this box**. Everything here pulls cosign-signed, SBOM-attested images — [`docs/VERIFY.md`](docs/VERIFY.md) checks that — no clone needed.
 
-**On your machine** — containerized control plane + UI:
+### Single-user — you are the operator
+
+**Your own machine**, no login:
 
 ```sh
 curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.4/install.sh | sh
 ```
 
-That URL is the **cosign-signed** copy, covered by the release's `SHA256SUMS`
-(`docs/VERIFY.md` checks it) — not tip-of-`main`, which nothing signs. The script
-still resolves and installs the newest release; only the script itself is pinned.
+Cosign-signed, not tip-of-`main`. Installs into `~/.wardyn`, opens Getting Started as an **admin**.
+**A managed laptop, one daemon per developer** — desktop profile a′: [`docs/DESKTOP.md`](docs/DESKTOP.md).
 
-Docker is the only requirement. It installs into `~/.wardyn`, mints this box's
-secret-store key locally, and starts the stack on <http://127.0.0.1:8080>.
-`WARDYN_VERSION`, `WARDYN_HOME` and `WARDYN_PORT` override the defaults.
+### Multi-user — an admin sets the ceiling, members run inside it
 
-**On Kubernetes** — the chart is a published OCI artifact:
+Each human gets an SSO identity and an **admin** or **member** role ([`docs/OPERATIONS.md`](docs/OPERATIONS.md#multi-user-who-can-change-what)).
+
+- **A shared host** — compose `--profile sso` + `WARDYN_OIDC_ROLE_MAP`: [OPERATIONS.md §"Second user, same host"](docs/OPERATIONS.md#second-user-same-host).
+- **Kubernetes** — a published OCI chart (command below).
+- **Managed laptops under org governance** — desktop profile m′: [`docs/DESKTOP.md`](docs/DESKTOP.md#the-member-mode-profile-topology-m).
 
 ```sh
 # NOT releases/latest — it excludes pre-releases, and every Wardyn release is
@@ -52,17 +54,15 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn \
   --set auth.adminToken.secretRef.name=wardyn-auth
 ```
 
-The chart needs an admin token or OIDC, a Postgres DSN, and an age identity —
-[`deploy/helm/wardyn/README.md`](deploy/helm/wardyn/README.md) covers each, plus
-admin/member RBAC, the Kubernetes runner substrate, SSH exposure and the full
-values table. Day-2 lives in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
-`.claude/skills/wardyn-k8s-setup/` ships an agent-readable recipe for the same
-path, so a coding agent working in a clone can drive the install.
+Needs an admin token or OIDC, a Postgres DSN and an age identity — role map, substrate
+and values table: [`deploy/helm/wardyn/README.md`](deploy/helm/wardyn/README.md).
 
-**Building from source is a contributor path, not an install path** — see
-[`CONTRIBUTING.md`](CONTRIBUTING.md). If you want it anyway: clone, then
-`make setup` (which asks containerized vs host, and pulls published images unless
-`WARDYN_BUILD_LOCAL=1`).
+### Joining a Wardyn someone else runs
+
+Install nothing — sign in with SSO and read **[`docs/MEMBERS.md`](docs/MEMBERS.md)**: what a member can do, your first run, and what to ask your admin for.
+
+**Building from source is a contributor path** — see [`CONTRIBUTING.md`](CONTRIBUTING.md). Clone, then `make setup`
+(a failed image pull falls back to building from this checkout; `WARDYN_BUILD_LOCAL=1` forces it).
 
 **That is the whole setup.** The barrier is the only requirement — no model, no
 API key, no agent. Put the sandbox rules in a small **YAML** (or JSON) policy and
