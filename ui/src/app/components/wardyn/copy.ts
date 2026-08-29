@@ -456,6 +456,14 @@ export const UI_APPS_LANE = {
   noRecording:
     "Session recording does not capture this: no keystrokes, no screen, no page content. Wardyn records that you opened and closed the app, never what you did in it.",
   off: "Off on this deployment. It relays a declared loopback port inside the sandbox — a code editor, a dev server — to your browser through Wardyn. An operator turns it on by setting WARDYN_UI_SANDBOX_LISTEN where wardynd starts.",
+  // The off-state's one affordance (mock M6): a pointer to the page that says
+  // how to turn it on, next to the need rather than in a footer (§9). NOT an
+  // <a href> — the console does not serve docs/, so a real link would 404;
+  // the repo's pattern is to name the file, as policy-panel.tsx does for
+  // docs/POLICIES.md. No button, either: a viewer cannot flip a server env var,
+  // and offering one would be a lie about who can act.
+  offDoc: "Read how to enable UI sandboxes",
+  offDocPath: "docs/UI-SANDBOXES.md",
   noApps:
     "On for this deployment, but this run's policy declares no UI apps. The relay serves only ports named in the policy's ui_apps list — an app is a name, a loopback port and a path.",
   errorTitle: (app: string) => `Couldn't start ${app}`,

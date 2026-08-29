@@ -258,6 +258,33 @@ describe("ConnectSSHCard — UI apps lane", () => {
     expect(screen.queryByRole("button", { name: /^Open /i })).toBeNull();
   });
 
+  // mock M6: the off-state's one affordance is a pointer to the page that says
+  // how to turn it on, placed next to the need rather than in a footer (§9).
+  it("off-state carries the doc pointer, naming the page — not a dead link and not a button", async () => {
+    healthMock.mockResolvedValue({});
+    listKeysMock.mockResolvedValue([]);
+    renderCard();
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+
+    expect(screen.getByText(UI_APPS_LANE.offDoc)).toBeInTheDocument();
+    // The file is named, because the console does not serve docs/ — an <a href>
+    // here would 404, and a button would pretend a viewer can set a server env
+    // var. Same pattern as policy-panel.tsx's docs/POLICIES.md reference.
+    expect(screen.getByText(UI_APPS_LANE.offDocPath)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /UI sandboxes/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /UI sandboxes/i })).toBeNull();
+  });
+
+  it("the doc pointer belongs to the off-state only — an enabled deployment does not show it", async () => {
+    healthMock.mockResolvedValue({
+      ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" },
+    });
+    listKeysMock.mockResolvedValue([]);
+    renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] });
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+    expect(screen.queryByText(UI_APPS_LANE.offDoc)).toBeNull();
+  });
+
   it("names the policy field when enabled but the run declares no apps", async () => {
     healthMock.mockResolvedValue({ ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
     listKeysMock.mockResolvedValue([]);

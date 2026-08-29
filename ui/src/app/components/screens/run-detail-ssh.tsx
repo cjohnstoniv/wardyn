@@ -28,7 +28,7 @@
 // see the amendment in docs/design/ui-sandboxes-prompt.md §9.)
 import * as React from "react";
 import { Link } from "react-router-dom";
-import { KeyRound } from "lucide-react";
+import { BookOpen, KeyRound } from "lucide-react";
 import type { AgentRun, SSHPublicKey, UIApp } from "../../lib/types";
 import { health as healthApi } from "../../lib/api/health";
 import { runs as runsApi } from "../../lib/api/runs";
@@ -261,9 +261,16 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
       <div className="mt-4 border-t border-border pt-3">
         <p className="text-xs font-medium text-foreground">{UI_APPS_LANE.title}</p>
         {!uiSandboxOn && (
-          <p className="mt-0.5 text-meta leading-relaxed text-muted-foreground">
-            {monoTokens(UI_APPS_LANE.off, "WARDYN_UI_SANDBOX_LISTEN")}
-          </p>
+          <>
+            <p className="mt-0.5 text-meta leading-relaxed text-muted-foreground">
+              {monoTokens(UI_APPS_LANE.off, "WARDYN_UI_SANDBOX_LISTEN")}
+            </p>
+            <p className="mt-2 flex flex-wrap items-center gap-1.5 text-xs font-medium text-info">
+              <BookOpen className="size-3.5 shrink-0" aria-hidden="true" />
+              {UI_APPS_LANE.offDoc}
+              <Mono className="text-meta text-muted-foreground">{UI_APPS_LANE.offDocPath}</Mono>
+            </p>
+          </>
         )}
         {uiSandboxOn && uiApps.length === 0 && (
           <p className="mt-0.5 text-meta leading-relaxed text-muted-foreground">
