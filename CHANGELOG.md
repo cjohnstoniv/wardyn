@@ -8,6 +8,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+<!-- UI/UX campaign (post-0.7 prep) — one consolidated set; Phase 5 bullets are appended here as they land. -->
+### Added
+- `wardyn ssh-key ensure|list`, `wardyn run wait-ready <id> --json` and `wardyn ssh <id> --json`: scripted key registration, readiness (RUNNING plus an inspectable workspace) and target discovery so an external IDE or agent tool can drive a sandbox over the SSH gateway (`docs/SSH.md` §6). SDK: `ListSSHKeys`, `AddSSHKey`, `RunFiles`.
+- Policy `git_push_any_branch`: a per-run opt-out of push branch-namespace confinement for a sandbox a human drives from an external tool; every such push is audited as `brokered:git:branch-ns-off`; clamped away from members' inline policies. Example: `examples/policies/remote-workspace.yaml`.
+- `docs/design/CONSOLE-RULES.md`: the console's design rulebook (color budget, four body type rungs, three elevation levels, the run status vocabulary and glyph pairing, in-flight feedback timing, the screen review rubric).
+- Console: error boundaries with `resetKey` isolate each cockpit widget per run; `useDeferredBusy` at remote-submit sites (disable at once, spinner only if the call lingers); `ErrorState` takes an action.
+### Fixed
+- `GET /runs/{id}/files` reported `vcs:"none"` for every `--repo` run because it inspected the workspace mount target instead of the clone one level below it — the console's files widget claimed "no git repository" for a sandbox holding a full clone. It now finds the run's clone.
+- Console surfaces that referenced a nonexistent `bg-surface-1` token painted no background (new-run rail, settings and connection cards).
+- Focus rings now clear WCAG 1.4.11's 3:1 floor in both themes (`--ring` raised; the shared focus recipes no longer dilute it to 50%).
+### Changed
+- Console type scale collapsed to four body rungs (`--text-meta` 11px, `text-xs`, `--text-body` 13px, `text-sm`) replacing ~260 ad-hoc sizes; three elevation levels with one `--shadow-floating`; body tracking `0.01em`; helper text at 12px; thin scrollbars on every scroller; radius one-offs onto the card scale.
+
+
 ### Fixed
 
 - **A wardynd restart could kill a healthy, just-started run on Kubernetes and
