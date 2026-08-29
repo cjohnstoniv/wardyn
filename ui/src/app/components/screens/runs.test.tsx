@@ -336,8 +336,9 @@ describe("RunsScreen — loading skeleton matches the active density", () => {
     const user = userEvent.setup();
     renderScreen();
 
-    // Board density (default), still loading: 6 BoardSkeleton mini-cards.
-    const boardCard = ".rounded-xl.border.border-border.bg-card.p-4";
+    // Board density (default), still loading: 6 BoardSkeleton mini-cards. The
+    // skeleton matches the card's own shape (§9) — two rows in a p-3 block.
+    const boardCard = ".rounded-xl.border.border-border.bg-card.p-3";
     expect(document.querySelectorAll(boardCard).length).toBe(6);
 
     await user.click(screen.getByRole("button", { name: /^table$/i }));

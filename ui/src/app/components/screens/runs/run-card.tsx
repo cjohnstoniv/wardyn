@@ -266,17 +266,22 @@ export function RunActions({
   );
 }
 
+// Skeletons match the final layout's height (CONSOLE-RULES §9): two rows in a
+// p-3 card, not the four-row p-4 block the card used to be — an over-tall
+// skeleton makes the board jump the moment the list lands.
 export function BoardSkeleton() {
   return (
-    <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(min(100%,34rem),1fr))]">
+    <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(min(100%,26rem),1fr))]">
       {Array.from({ length: 6 }).map((_, i) => (
-        <div key={i} className="space-y-3 rounded-xl border border-border bg-card p-4">
-          <div className="h-6 w-28 animate-pulse rounded bg-muted" />
-          <div className="h-3.5 w-40 animate-pulse rounded bg-muted" />
-          <div className="h-3.5 w-full animate-pulse rounded bg-muted" />
-          <div className="flex gap-2">
-            <div className="h-5 w-20 animate-pulse rounded bg-muted" />
-            <div className="h-5 w-12 animate-pulse rounded bg-muted" />
+        <div key={i} className="space-y-2 rounded-xl border border-border bg-card p-3">
+          <div className="flex items-center gap-2">
+            <div className="size-6 shrink-0 animate-pulse rounded-full bg-muted" />
+            <div className="h-3.5 w-full animate-pulse rounded bg-muted" />
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="h-4 w-28 animate-pulse rounded bg-muted" />
+            <div className="h-4 w-16 animate-pulse rounded bg-muted" />
+            <div className="ml-auto h-3 w-20 animate-pulse rounded bg-muted" />
           </div>
         </div>
       ))}
