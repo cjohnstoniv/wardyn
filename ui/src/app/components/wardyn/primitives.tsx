@@ -36,6 +36,18 @@ import type {
 /* ---------- generic semantic chip ---------- */
 type Tone = "neutral" | "success" | "warning" | "danger" | "info" | "cyan" | "primary";
 
+// Text-only tint for the same tone ladder — used where a state is a WORD in a
+// dense row rather than a pill (RunStateBadge's "label" variant).
+const toneText: Record<Tone, string> = {
+  neutral: "text-muted-foreground",
+  success: "text-success",
+  warning: "text-warning",
+  danger: "text-danger",
+  info: "text-info",
+  cyan: "text-cyan",
+  primary: "text-primary",
+};
+
 const toneClass: Record<Tone, string> = {
   neutral: "bg-muted text-muted-foreground border-border",
   success: "bg-success-subtle text-success border-success/25",
@@ -155,8 +167,30 @@ const runStateMeta: Record<
   KILLED: { tone: "danger", label: "Killed", Icon: ShieldX, solid: true },
 };
 
-export function RunStateBadge({ state }: { state: RunState }) {
+/**
+ * `variant`:
+ *   "chip"  (default) the pill — group headers, the table, the detail header.
+ *   "label" the same word at the 11px rung with no pill, for the board card's
+ *           row 2: the card already carries the state as a GLYPH on row 1, and
+ *           a second chip there sat beside the barrier chip as two competing
+ *           pills saying different things.
+ * One state table either way — the label variant is a rendering of it, not a
+ * second copy of it, so the word can never disagree with the chip.
+ *
+ * KILLED keeps its chip in both variants: solid saturated red is that outcome's
+ * reserved treatment (CONSOLE-RULES §5), and it does not survive as bare text.
+ */
+export function RunStateBadge({
+  state,
+  variant = "chip",
+}: {
+  state: RunState;
+  variant?: "chip" | "label";
+}) {
   const m = metaFor(runStateMeta, state as string, { tone: "neutral", label: String(state) });
+  if (variant === "label" && !m.solid) {
+    return <span className={cn("whitespace-nowrap text-meta", toneText[m.tone])}>{m.label}</span>;
+  }
   return (
     <Chip
       tone={m.tone}

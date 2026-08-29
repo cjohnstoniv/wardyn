@@ -22,7 +22,8 @@ import { firstRunLanding } from "./components/screens/setup/setup-gate";
 import { approvals as approvalsApi } from "./lib/api/approvals";
 import { runs as runsApi } from "./lib/api/runs";
 import { usePoll } from "./lib/use-poll";
-import type { AgentRun, ConfinementClass, SetupStatus } from "./lib/types";
+import type { AgentRun, ApprovalRequest, ConfinementClass, SetupStatus } from "./lib/types";
+import { approvalSignals, needsAttention } from "./components/screens/runs/board-groups";
 
 type AuthStatus = "checking" | "authed" | "unauthed";
 
@@ -117,10 +118,13 @@ function FirstRunLanding({ status }: { status: SetupStatus | null }) {
   return <Navigate to={firstRunLanding(status)} replace />;
 }
 
-// Run states that need an operator's attention — surfaced as the amber count
-// badge on the Runs nav entry. FAILED needs eyes; WAITING_FOR_CONFIRMATION
-// needs a click to unblock the agent.
-const ATTENTION_STATES = new Set(["FAILED", "WAITING_FOR_CONFIRMATION"]);
+// What needs an operator's attention — surfaced as the amber count badge on the
+// Runs nav entry — is `needsAttention` in screens/runs/board-groups, the SAME
+// predicate the board itself renders. This was a second hand-copied Set of run
+// states here, which meant the badge and the board could disagree about the
+// same run: neither knew about a held approval, which parks the sandbox while
+// the run state stays RUNNING, so a run the board could show as blocked never
+// reached the badge at all.
 
 // The Runs attention badge and the Approvals pending badge are background
 // signals visible from every screen, so both are polled — approvals can now be
@@ -134,22 +138,26 @@ export default function App() {
   const [attentionCount, setAttentionCount] = React.useState(0);
   const navigate = useNavigate();
 
-  const refreshPending = React.useCallback(() => {
-    approvalsApi
-      .listApprovals()
-      .then((a) => setPendingApprovals(a.filter((x) => x.state === "PENDING").length))
-      .catch(() => {
-        /* listApprovals already routes 401 through onUnauthorized */
-      });
-  }, []);
-
-  const refreshAttention = React.useCallback(() => {
-    runsApi
-      .listRuns()
-      .then((runs: AgentRun[]) => setAttentionCount(runs.filter((r) => ATTENTION_STATES.has(r.state as string)).length))
-      .catch(() => {
-        /* listRuns already routes 401 through onUnauthorized */
-      });
+  // Both badges come off ONE tick, because the attention count is now a join:
+  // a run is blocked when a held approval is parked on it, which lives in the
+  // approvals list, not on the run. Fetching them apart would let the two
+  // halves land a poll out of step and flash a wrong count. Each half fails
+  // independently — a broken approvals call still leaves an honest run badge.
+  // Counts, not lists, stay in state: this re-renders the whole shell, and the
+  // number is the only thing it renders.
+  const refreshBadges = React.useCallback(() => {
+    Promise.all([
+      approvalsApi.listApprovals("PENDING").catch(() => null),
+      runsApi.listRuns().catch(() => null),
+      /* both already route 401 through onUnauthorized */
+    ]).then(([approvals, runs]: [ApprovalRequest[] | null, AgentRun[] | null]) => {
+      const pending = approvals?.filter((a) => a.state === "PENDING") ?? [];
+      if (approvals) setPendingApprovals(pending.length);
+      if (runs) {
+        const signals = approvalSignals(pending);
+        setAttentionCount(runs.filter((r) => needsAttention(r, signals)).length);
+      }
+    });
   }, []);
 
   // Probe auth on mount: a live OIDC session cookie or a stored admin token
@@ -170,19 +178,12 @@ export default function App() {
   }, []);
 
   React.useEffect(() => {
-    if (auth === "authed") {
-      refreshPending();
-      refreshAttention();
-    }
-  }, [auth, refreshPending, refreshAttention]);
+    if (auth === "authed") refreshBadges();
+  }, [auth, refreshBadges]);
 
   // Keep both nav badges live across the whole console, not just while the
   // operator is on the Runs/Approvals screen (a decision made in RunDetail must
   // still tick the pending badge down).
-  const refreshBadges = React.useCallback(() => {
-    refreshAttention();
-    refreshPending();
-  }, [refreshAttention, refreshPending]);
   usePoll(refreshBadges, ATTENTION_POLL_MS, auth !== "authed");
 
   // Setup status feeds the first-run landing decision ("/" → tour or Runs).
@@ -319,7 +320,7 @@ export default function App() {
             path="/approvals"
             element={
               <React.Suspense fallback={<RouteFallback />}>
-                <ApprovalsScreen onChanged={refreshPending} />
+                <ApprovalsScreen onChanged={refreshBadges} />
               </React.Suspense>
             }
           />

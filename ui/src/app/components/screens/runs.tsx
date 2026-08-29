@@ -16,11 +16,12 @@
 // "New run" lives in the app shell top bar.
 import * as React from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { BellRing, Eye, FilterX, GitBranch, LayoutGrid, MoreHorizontal, RotateCw, Rows3, Search, Skull, TerminalSquare } from "lucide-react";
+import { FilterX, LayoutGrid, RotateCw, Rows3, Search, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
-import type { AgentRun, RunState, SetupStatus } from "../../lib/types";
-import { isTerminalRunState, runHeadline } from "../../lib/types";
+import type { AgentRun, ApprovalRequest, SetupStatus } from "../../lib/types";
+import { isTerminalRunState } from "../../lib/types";
 import { runs as api } from "../../lib/api/runs";
+import { approvals as approvalsApi } from "../../lib/api/approvals";
 import { setup as setupApi } from "../../lib/api/setup";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { usePoll } from "../../lib/use-poll";
@@ -30,16 +31,20 @@ import { NoBarrierBanner, RunsFirstRun } from "./runs-first-run";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { AgentBadge, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
-import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
-import { KillRunDialog } from "../wardyn/kill-run-dialog";
-import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { useRole } from "../wardyn/operator-context";
 import { cn } from "../ui/utils";
+import { BoardSkeleton, CardGrid, RunActions, RunCard, SectionHeading } from "./runs/run-card";
+import {
+  approvalSignals,
+  needsAttention,
+  rowHeadline,
+  titleGroups,
+  type RunSignals,
+} from "./runs/board-groups";
 
 // Runs is the eager landing route, so an eager wizard import would park the
 // whole new-run graph (workspaces + secrets screens and their dialogs) in the
@@ -53,49 +58,9 @@ const POLL_MS = 3000;
 // How often the first-run checklist / no-barrier blocker re-checks setup status.
 const SETUP_POLL_MS = 5000;
 
-// Which states need an operator's eyes — mirrors App.tsx ATTENTION_STATES (the
-// sidebar amber badge). FAILED needs review; WAITING_FOR_CONFIRMATION needs a
-// click to unblock the agent. Runs in these states are lifted OUT of Active/Done
-// into the amber "Needs your attention" section (so they never render twice).
-const ATTENTION_STATES = new Set<string>(["FAILED", "WAITING_FOR_CONFIRMATION"]);
-
 // Per-group collapsed preview before "Show all N".
 const GROUP_PREVIEW = 3;
 
-// ── title grouping ──────────────────────────────────────────────────────────
-// The board groups by the run's TITLE: runs that share one are the same piece
-// of work, and seeing the twelve nightly audits as one thing is the point of
-// naming them. It replaced grouping by state — the triage that gave up is
-// preserved two ways: the state facet still narrows BEFORE grouping, and the
-// input list arrives pre-ordered attention → active → done, so a group holding
-// a failed run floats to the top for free and its header says so.
-//
-// A title held by only ONE run is not a group. Those, and every untitled run
-// (legacy rows, CLI runs, the server's own system runs), fall into a single
-// trailing grid — a header per singleton is noise, not structure.
-//
-// ponytail: computed over the LOADED page, not the server. A title split across
-// a pagination boundary groups per page; add a server-side group-by if run
-// counts ever outgrow LIST_LIMIT.
-function titleGroups(runs: AgentRun[]): { groups: { title: string; runs: AgentRun[] }[]; loose: AgentRun[] } {
-  const by = new Map<string, AgentRun[]>();
-  for (const r of runs) {
-    const t = (r.title ?? "").trim();
-    if (t) by.set(t, [...(by.get(t) ?? []), r]);
-  }
-  const groups = [...by].filter(([, rs]) => rs.length > 1).map(([title, rs]) => ({ title, runs: rs }));
-  const grouped = new Set(groups.flatMap((g) => g.runs.map((r) => r.id)));
-  return { groups, loose: runs.filter((r) => !grouped.has(r.id)) };
-}
-
-// What one card/row calls itself. INSIDE a group the title is already on the
-// header, so the row's job is to distinguish this run from its siblings — the
-// task does that; the title would print three identical cards. Outside a group
-// the run has to name itself, which is runHeadline's whole purpose.
-function rowHeadline(run: AgentRun, grouped: boolean): string {
-  if (!grouped) return runHeadline(run);
-  return run.task || (run.interactive ? "Interactive session" : "—");
-}
 // Table display cap (client-side; listRuns returns the full set) + load-more step.
 const TABLE_STEP = 25;
 
@@ -136,9 +101,23 @@ export function RunsScreen() {
   // doesn't strand this screen on the synthetic READY_FALLBACK until a reload.
   usePoll(loadSetupStatus, SETUP_POLL_MS, !noBarrier && !setupStatus?.unreachable);
 
+  // Whether a run is HELD is not on the run — a held approval parks the sandbox
+  // while the state stays RUNNING — so the board joins the PENDING approvals
+  // onto the same tick that fetches the runs. One extra call on the poll that
+  // was already running, and no second cadence to drift against: a card's glyph
+  // and the sidebar's amber badge cannot end up a tick out of step about the
+  // same run.
+  const [signals, setSignals] = React.useState<RunSignals>(new Map());
   const fetchRuns = React.useCallback(() => {
-    return api.listRuns().then((r) => {
+    return Promise.all([
+      api.listRuns(),
+      // The approvals half is best-effort: an operator who cannot list
+      // approvals still gets a board, just without the held join. Losing the
+      // whole run list to it would be much the worse failure.
+      approvalsApi.listApprovals("PENDING").catch((): ApprovalRequest[] => []),
+    ]).then(([r, pending]) => {
       setRuns(r);
+      setSignals(approvalSignals(pending));
       setStatus("ready");
     });
   }, []);
@@ -228,12 +207,15 @@ export function RunsScreen() {
     return true;
   });
 
-  const attention = filtered.filter((r) => ATTENTION_STATES.has(r.state as string));
+  // "Needs attention" is the shared rule in board-groups (held approval, or
+  // awaiting confirmation, or failed/killed) — the same predicate App.tsx's
+  // sidebar badge counts, rather than this screen's own copy of a state list.
+  const attention = filtered.filter((r) => needsAttention(r, signals));
   const active = filtered.filter(
-    (r) => !isTerminalRunState(r.state) && !ATTENTION_STATES.has(r.state as string),
+    (r) => !isTerminalRunState(r.state) && !needsAttention(r, signals),
   );
   const done = filtered
-    .filter((r) => isTerminalRunState(r.state) && !ATTENTION_STATES.has(r.state as string))
+    .filter((r) => isTerminalRunState(r.state) && !needsAttention(r, signals))
     .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
 
   const trueEmpty = status === "ready" && runs.length === 0;
@@ -409,6 +391,7 @@ export function RunsScreen() {
               key={g.title}
               title={g.title}
               runs={g.runs}
+              signals={signals}
               open={!!expanded[g.title]}
               onToggle={() => setExpanded((s) => ({ ...s, [g.title]: !s[g.title] }))}
               onOpen={openRun}
@@ -424,14 +407,7 @@ export function RunsScreen() {
               {titled.length > 0 && <SectionHeading title="Ungrouped" count={loose.length} />}
               <CardGrid>
                 {loose.map((run) => (
-                  <RunCard
-                    key={run.id}
-                    run={run}
-                    attention={ATTENTION_STATES.has(run.state as string)}
-                    done={isTerminalRunState(run.state)}
-                    onOpen={openRun}
-                    onKill={kill}
-                  />
+                  <RunCard key={run.id} run={run} signals={signals} onOpen={openRun} onKill={kill} />
                 ))}
               </CardGrid>
             </section>
@@ -479,53 +455,6 @@ function DensityButton({
   );
 }
 
-function SectionHeading({
-  Icon,
-  iconTint,
-  title,
-  titleTint = "text-muted-foreground",
-  count,
-  countTint = "neutral",
-  hint,
-}: {
-  Icon?: React.ElementType;
-  iconTint?: string;
-  title: string;
-  titleTint?: string;
-  count: number;
-  countTint?: "neutral" | "warning";
-  hint?: string;
-}) {
-  return (
-    <div className="mb-3 flex items-center gap-2">
-      {Icon && <Icon className={cn("size-3.5", iconTint)} />}
-      <h2 className={cn("text-meta font-semibold uppercase tracking-wider", titleTint)}>{title}</h2>
-      <span
-        className={cn(
-          "rounded-full px-1.5 text-meta font-semibold",
-          countTint === "warning"
-            ? "bg-warning-subtle text-warning"
-            : "bg-muted text-muted-foreground",
-        )}
-      >
-        {count}
-      </span>
-      {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
-    </div>
-  );
-}
-
-function CardGrid({ children }: { children: React.ReactNode }) {
-  // auto-fill with a min(100%, floor) track: cards reflow and collapse to ONE
-  // column below ~1100px instead of clipping (min(100%, …) stops overflow on
-  // narrow containers).
-  return (
-    <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(min(100%,34rem),1fr))]">
-      {children}
-    </div>
-  );
-}
-
 // One title's runs: the board's grouping unit now that runs are named.
 //
 // The header carries per-state counts, which is what makes replacing the old
@@ -535,6 +464,7 @@ function CardGrid({ children }: { children: React.ReactNode }) {
 function TitleGroup({
   title,
   runs,
+  signals,
   open,
   onToggle,
   onOpen,
@@ -542,6 +472,7 @@ function TitleGroup({
 }: {
   title: string;
   runs: AgentRun[];
+  signals: RunSignals;
   open: boolean;
   onToggle: () => void;
   onOpen: (id: string) => void;
@@ -551,17 +482,20 @@ function TitleGroup({
   // `visible` arrives attention → active → done (see its comment).
   const states: string[] = [];
   for (const r of runs) if (!states.includes(r.state as string)) states.push(r.state as string);
-  const needsEyes = runs.some((r) => ATTENTION_STATES.has(r.state as string));
+  // Runs that are asking for something are pinned to the lane above, so what
+  // is left to flag here is a report — the group carries the danger tint its
+  // cards do, not the amber the lane owns.
+  const needsEyes = runs.some((r) => needsAttention(r, signals));
   const shown = open ? runs : runs.slice(0, GROUP_PREVIEW);
 
   return (
     <section aria-label={title}>
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        {needsEyes && <BellRing className="size-3.5 text-warning" aria-hidden="true" />}
+        {needsEyes && <TriangleAlert className="size-3.5 text-danger" aria-hidden="true" />}
         <h2
           className={cn(
             "max-w-[420px] truncate text-body font-semibold",
-            needsEyes ? "text-warning" : "text-foreground",
+            needsEyes ? "text-danger" : "text-foreground",
           )}
           title={title}
         >
@@ -589,120 +523,10 @@ function TitleGroup({
       </div>
       <CardGrid>
         {shown.map((run) => (
-          <RunCard
-            key={run.id}
-            run={run}
-            grouped
-            attention={ATTENTION_STATES.has(run.state as string)}
-            done={isTerminalRunState(run.state)}
-            onOpen={onOpen}
-            onKill={onKill}
-          />
+          <RunCard key={run.id} run={run} signals={signals} grouped onOpen={onOpen} onKill={onKill} />
         ))}
       </CardGrid>
     </section>
-  );
-}
-
-function RunCard({
-  run,
-  attention,
-  done,
-  grouped,
-  onOpen,
-  onKill,
-}: {
-  run: AgentRun;
-  attention?: boolean;
-  done?: boolean;
-  /** This card sits under a shared-title header, so it names its own work
-   *  rather than repeating the title — see rowHeadline. */
-  grouped?: boolean;
-  onOpen: (id: string) => void;
-  onKill: (id: string) => void;
-}) {
-  const terminal = isTerminalRunState(run.state);
-  const attachable = !!run.interactive && run.state === "RUNNING";
-  const note = attentionNote(run.state);
-
-  // fix: this container used to be role="button" tabIndex={0} — a widget
-  // role directly nesting the real Attach/Review/kebab <button>s below,
-  // which is an invalid ARIA structure (interactive-in-interactive). Mouse
-  // click-to-open stays via the plain onClick; keyboard/AT users already
-  // have a dedicated affordance for the same action (RunActions' "Open
-  // detail" menu item), so no functionality is lost by dropping the role.
-  return (
-    <div
-      onClick={() => onOpen(run.id)}
-      className={cn(
-        "group relative flex cursor-pointer flex-col gap-3 rounded-xl border bg-card p-4 text-left transition-colors hover:border-border-strong",
-        attention ? "border-warning/30" : "border-border",
-        done && "opacity-90",
-      )}
-    >
-      {attention && (
-        <span className="absolute inset-y-3 left-0 w-0.5 rounded-r bg-warning" aria-hidden="true" />
-      )}
-
-      <div className="flex items-start gap-2.5">
-        <AgentBadge agent={run.agent} withLabel={false} />
-        <p className="min-w-0 flex-1 text-sm font-medium leading-snug text-foreground">
-          {rowHeadline(run, !!grouped)}
-        </p>
-        <RunActions run={run} terminal={terminal} attachable={attachable} onOpen={onOpen} onKill={onKill} />
-      </div>
-
-      <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-        <GitBranch className="size-3.5 shrink-0" />
-        <span className="truncate font-mono" title={run.workspace_path || run.repo}>
-          {run.repo}
-        </span>
-      </div>
-
-      {note && (
-        <div className="flex items-center gap-1.5 text-xs text-warning">
-          <BellRing className="size-3.5 shrink-0" />
-          <span>{note}</span>
-        </div>
-      )}
-
-      <div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1.5 border-t border-border pt-3">
-        <RunStateBadge state={run.state} />
-        <ConfinementChip value={run.confinement_class} />
-        <BarrierStrengthStrip tier={run.confinement_class} muted={done} />
-        <div className="ml-auto flex items-center gap-2.5">
-          {attachable && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={(e) => {
-                e.stopPropagation();
-                onOpen(run.id);
-              }}
-            >
-              <TerminalSquare className="size-3.5" /> Attach
-            </Button>
-          )}
-          {attention && (
-            <Button
-              size="sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                onOpen(run.id);
-              }}
-            >
-              Review
-            </Button>
-          )}
-          <Mono className="max-w-[8rem] truncate text-meta" title={run.id}>
-            {shortId(run.id)}
-          </Mono>
-          <span className="whitespace-nowrap text-meta text-muted-foreground" title={run.created_at}>
-            {relativeTime(run.created_at)}
-          </span>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -823,93 +647,4 @@ function RunsTable({
       </div>
     </div>
   );
-}
-
-function RunActions({
-  run,
-  terminal,
-  attachable,
-  onOpen,
-  onKill,
-}: {
-  run: AgentRun;
-  terminal: boolean;
-  attachable: boolean;
-  onOpen: (id: string) => void;
-  onKill: (id: string) => void;
-}) {
-  // fix: the board's Kill action fired with no confirmation, unlike the
-  // identical action on Run Detail — one misclick here killed a run with zero
-  // chance to back out. The dialog is rendered as a SIBLING of
-  // DropdownMenuContent (not nested inside it), controlled by its own state, so
-  // it survives the menu's close/unmount.
-  const [confirmId, setConfirmId] = React.useState<string | null>(null);
-  return (
-    // This guard is RunCard's only defense (the board is the default Mode —
-    // RunCard has no TableCell of its own to also carry it, unlike the table
-    // row above): onClick-only let Enter/Space on the kebab reach RunCard's
-    // row-level onKeyDown and navigate instead of opening the menu.
-    <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon" className="size-8" aria-label="Run actions">
-            <MoreHorizontal className="size-4" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem onClick={() => onOpen(run.id)}>
-            <Eye className="size-4" /> Open detail
-          </DropdownMenuItem>
-          {attachable && (
-            <DropdownMenuItem onClick={() => onOpen(run.id)}>
-              <TerminalSquare className="size-4" /> Attach
-            </DropdownMenuItem>
-          )}
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            disabled={terminal}
-            onClick={() => setConfirmId(run.id)}
-            className="text-danger focus:text-danger"
-          >
-            <Skull className="size-4" /> Kill run
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-
-      <KillRunDialog
-        runId={confirmId}
-        onOpenChange={(o) => !o && setConfirmId(null)}
-        onConfirm={() => onKill(run.id)}
-      />
-    </div>
-  );
-}
-
-function BoardSkeleton() {
-  return (
-    <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(min(100%,34rem),1fr))]">
-      {Array.from({ length: 6 }).map((_, i) => (
-        <div key={i} className="space-y-3 rounded-xl border border-border bg-card p-4">
-          <div className="h-6 w-28 animate-pulse rounded bg-muted" />
-          <div className="h-3.5 w-40 animate-pulse rounded bg-muted" />
-          <div className="h-3.5 w-full animate-pulse rounded bg-muted" />
-          <div className="flex gap-2">
-            <div className="h-5 w-20 animate-pulse rounded bg-muted" />
-            <div className="h-5 w-12 animate-pulse rounded bg-muted" />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function attentionNote(state: RunState): string | null {
-  if (state === "WAITING_FOR_CONFIRMATION") return "Waiting for your confirmation";
-  if (state === "FAILED") return "Run failed — review what happened";
-  return null;
-}
-
-function shortId(id: string): string {
-  const base = id.replace(/^run_/, "");
-  return base.length > 10 ? base.slice(0, 8) + "…" : base;
 }

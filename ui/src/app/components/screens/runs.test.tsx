@@ -22,6 +22,10 @@ vi.mock("../../lib/api/runs", () => ({
     killRun: (...a: unknown[]) => killRunMock(...a),
   },
 }));
+const listApprovalsMock = vi.fn();
+vi.mock("../../lib/api/approvals", () => ({
+  approvals: { listApprovals: (...a: unknown[]) => listApprovalsMock(...a) },
+}));
 const getSetupStatusMock = vi.fn();
 vi.mock("../../lib/api/setup", () => ({
   setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
@@ -67,8 +71,11 @@ function renderScreen(role?: Role) {
 beforeEach(() => {
   listRunsMock.mockReset();
   killRunMock.mockReset();
+  listApprovalsMock.mockReset();
   getSetupStatusMock.mockReset();
   listRunsMock.mockResolvedValue([run]);
+  // Default: nothing parked on anything.
+  listApprovalsMock.mockResolvedValue([]);
   killRunMock.mockResolvedValue(undefined);
   // Non-blocking default: both barrier tiers available, nothing to re-check.
   getSetupStatusMock.mockResolvedValue(baseStatus({ ready: true }));
@@ -441,5 +448,18 @@ describe("RunsScreen — runs are grouped by title", () => {
     ]);
     renderScreen();
     expect(await screen.findByText("Debug the payments box")).toBeInTheDocument();
+  });
+});
+
+// mock M2's honest fallbacks: nothing on the card is invented.
+describe("RunsScreen board — an ephemeral run names itself honestly", () => {
+  it("falls back to its mode for the headline and says what the empty repo slot is", async () => {
+    listRunsMock.mockResolvedValue([
+      { ...run, id: "r1", title: "", task: "", repo: "", workspace_path: "", interactive: true },
+    ]);
+    renderScreen();
+
+    expect(await screen.findByText("Interactive session")).toBeInTheDocument();
+    expect(screen.getByText("Ephemeral scratch — no repo")).toBeInTheDocument();
   });
 });
