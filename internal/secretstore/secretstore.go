@@ -43,4 +43,23 @@ type Store interface {
 	Get(ctx context.Context, name string) ([]byte, error)
 	Delete(ctx context.Context, name string) error
 	List(ctx context.Context) ([]string, error)
+	// For returns a view of the store scoped to owner, the per-principal
+	// namespace introduced by migration 0050 (member BYOK). owner "" is the
+	// OPERATOR namespace — the zero value of every existing caller, so a call
+	// site that never invokes For is unaffected by this seam's existence.
+	//
+	// The four methods above behave differently under a non-"" owner:
+	//   - Get first tries the owner's own row, then FALLS BACK to the
+	//     operator's ("") row — a member with no key of their own still
+	//     resolves the operator's, exactly as before For existed.
+	//   - Put and Delete are scoped to the owner's row ONLY. They never read
+	//     or write the operator's row, and never fall back — a write always
+	//     means what it says.
+	//   - List returns the owner's OWN rows only, never unioned with the
+	//     operator's. A caller that wants "everything a principal may see"
+	//     composes it itself: For("").List() ∪ For(owner).List().
+	// This is a real backend implementation, not policy: a plugged-in
+	// alternate (OpenBao, KMS) implements the same fallback/isolation
+	// contract, held to it by the shared conformance suite.
+	For(owner string) Store
 }

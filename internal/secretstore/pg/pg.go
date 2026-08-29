@@ -34,6 +34,10 @@ type Store struct {
 	pool      *pgxpool.Pool
 	recipient age.Recipient // for encryption (Put)
 	identity  age.Identity  // for decryption (Get)
+	// owner is the secretstore.Store.For namespace this view is scoped to.
+	// "" (the zero value, and New's own result) is the operator namespace —
+	// every Store built before For existed keeps its exact behavior.
+	owner string
 }
 
 // New constructs a Store. identity must be an age.X25519Identity (or any
@@ -65,19 +69,31 @@ func New(pool *pgxpool.Pool, identity age.Identity) (*Store, error) {
 // Name identifies this backend for audit and UI.
 func (s *Store) Name() string { return "pg" }
 
+// For returns a view scoped to owner — see secretstore.Store.For's doc
+// comment for the fallback/isolation contract. A shallow copy: owner is the
+// only field that differs, so every view over the same *pgxpool.Pool sees
+// the same rows, just through a different (owned_by) lens.
+func (s *Store) For(owner string) secretstore.Store {
+	cp := *s
+	cp.owner = owner
+	return &cp
+}
+
 // Put encrypts value with the age key and upserts the ciphertext into the
-// secrets table. Duplicate names overwrite the previous ciphertext.
+// secrets table, scoped to this view's owner. Duplicate (owner, name) pairs
+// overwrite the previous ciphertext; a different owner holding the same name
+// is a DIFFERENT row (migration 0050's whole point) and is never touched.
 func (s *Store) Put(ctx context.Context, name string, value []byte) error {
 	ct, err := s.encrypt(value)
 	if err != nil {
 		return fmt.Errorf("pg secretstore: encrypt %s: %w", name, err)
 	}
 	_, err = s.pool.Exec(ctx, `
-		INSERT INTO secrets (name, ciphertext)
-		VALUES ($1, $2)
-		ON CONFLICT (name) DO UPDATE
-			SET ciphertext=$2, updated_at=now()`,
-		name, ct,
+		INSERT INTO secrets (owned_by, name, ciphertext)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (owned_by, name) DO UPDATE
+			SET ciphertext=$3, updated_at=now()`,
+		s.owner, name, ct,
 	)
 	if err != nil {
 		return fmt.Errorf("pg secretstore: put %s: %w", name, err)
@@ -85,12 +101,17 @@ func (s *Store) Put(ctx context.Context, name string, value []byte) error {
 	return nil
 }
 
-// Get retrieves and decrypts a secret by name.
+// Get retrieves and decrypts a secret by name: this view's own (owner, name)
+// row if one exists, else the operator's ("", name) row — a member with no
+// key of their own resolves the operator's, exactly as every caller did
+// before For existed. For owner="" the IN clause names "" twice, so only the
+// operator row can ever match.
 // Returns an error wrapping pgx.ErrNoRows (or a sentinel message) when absent.
 func (s *Store) Get(ctx context.Context, name string) ([]byte, error) {
 	var ct []byte
 	err := s.pool.QueryRow(ctx,
-		`SELECT ciphertext FROM secrets WHERE name=$1`, name,
+		`SELECT ciphertext FROM secrets WHERE owned_by IN ('', $1) AND name=$2 ORDER BY (owned_by = $1) DESC LIMIT 1`,
+		s.owner, name,
 	).Scan(&ct)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Satisfy BOTH the seam sentinel (secretstore.ErrNotFound, what the
@@ -109,17 +130,22 @@ func (s *Store) Get(ctx context.Context, name string) ([]byte, error) {
 	return plain, nil
 }
 
-// Delete removes a secret by name. Idempotent (no-op if absent).
+// Delete removes this view's own (owner, name) row. Idempotent (no-op if
+// absent) and never touches a different owner's row of the same name —
+// deleting a member's row leaves the operator's readable, and a member can
+// never reach another member's row to delete it in the first place.
 func (s *Store) Delete(ctx context.Context, name string) error {
-	if _, err := s.pool.Exec(ctx, `DELETE FROM secrets WHERE name=$1`, name); err != nil {
+	if _, err := s.pool.Exec(ctx, `DELETE FROM secrets WHERE owned_by=$1 AND name=$2`, s.owner, name); err != nil {
 		return fmt.Errorf("pg secretstore: delete %s: %w", name, err)
 	}
 	return nil
 }
 
-// List returns the names of all stored secrets in lexical order.
+// List returns this view's OWN secret names only, in lexical order — never
+// unioned with the operator's. A caller wanting "everything a principal may
+// see" composes For("").List() ∪ For(owner).List() itself.
 func (s *Store) List(ctx context.Context) ([]string, error) {
-	rows, err := s.pool.Query(ctx, `SELECT name FROM secrets ORDER BY name`)
+	rows, err := s.pool.Query(ctx, `SELECT name FROM secrets WHERE owned_by=$1 ORDER BY name`, s.owner)
 	if err != nil {
 		return nil, fmt.Errorf("pg secretstore: list: %w", err)
 	}
@@ -189,17 +215,22 @@ func Rekey(ctx context.Context, pool *pgxpool.Pool, oldID, newID age.Identity) (
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	type row struct {
-		name string
-		ct   []byte
+		ownedBy string
+		name    string
+		ct      []byte
 	}
-	rows, err := tx.Query(ctx, `SELECT name, ciphertext FROM secrets ORDER BY name FOR UPDATE`)
+	// ORDER BY owned_by, name (not name alone): two rows can now share a name
+	// under different owners (migration 0050), and the UPDATE below keys on
+	// BOTH columns — ordering by both just keeps the lock/abort order stable
+	// and readable, not for correctness.
+	rows, err := tx.Query(ctx, `SELECT owned_by, name, ciphertext FROM secrets ORDER BY owned_by, name FOR UPDATE`)
 	if err != nil {
 		return 0, fmt.Errorf("pg secretstore: rekey select: %w", err)
 	}
 	var all []row
 	for rows.Next() {
 		var r row
-		if err := rows.Scan(&r.name, &r.ct); err != nil {
+		if err := rows.Scan(&r.ownedBy, &r.name, &r.ct); err != nil {
 			rows.Close()
 			return 0, fmt.Errorf("pg secretstore: rekey scan: %w", err)
 		}
@@ -213,18 +244,30 @@ func Rekey(ctx context.Context, pool *pgxpool.Pool, oldID, newID age.Identity) (
 	// Row at a time (rather than decrypting everything up front) so at most ONE
 	// plaintext is resident at any moment, whatever the store holds.
 	for i, r := range all {
+		// desc identifies the row in an abort message. Bare name for an
+		// operator row (owned_by="") keeps existing abort-message assertions
+		// (e.g. "aaa-stray") matching byte-for-byte; a non-"" owner is
+		// prefixed since 0050 lets two rows share a name.
+		desc := r.name
+		if r.ownedBy != "" {
+			desc = r.ownedBy + "/" + r.name
+		}
 		plain, derr := from.decrypt(r.ct)
 		if derr != nil {
-			return 0, rekeyAbort(i, len(all), r.name, "decrypt with the old key", derr)
+			return 0, rekeyAbort(i, len(all), desc, "decrypt with the old key", derr)
 		}
 		ct, eerr := to.encrypt(plain)
 		if eerr != nil {
-			return 0, rekeyAbort(i, len(all), r.name, "encrypt with the new key", eerr)
+			return 0, rekeyAbort(i, len(all), desc, "encrypt with the new key", eerr)
 		}
+		// Keyed on BOTH columns (not name alone): with two owners sharing a
+		// name, a name-only WHERE would match and overwrite BOTH rows with
+		// THIS row's freshly re-encrypted ciphertext — the exact corruption
+		// TestRekey_TwoNamespacesKeepDistinctPlaintexts pins.
 		if _, uerr := tx.Exec(ctx,
-			`UPDATE secrets SET ciphertext=$2, updated_at=now() WHERE name=$1`, r.name, ct,
+			`UPDATE secrets SET ciphertext=$3, updated_at=now() WHERE owned_by=$1 AND name=$2`, r.ownedBy, r.name, ct,
 		); uerr != nil {
-			return 0, rekeyAbort(i, len(all), r.name, "update", uerr)
+			return 0, rekeyAbort(i, len(all), desc, "update", uerr)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {

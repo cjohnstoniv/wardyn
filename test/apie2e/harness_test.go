@@ -50,6 +50,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -75,29 +76,71 @@ const internalAudience = "wardyn-internal"
 // resolve works without a real at-rest secret backend (age/KMS). Values are
 // write-only from the API's perspective; this map is the at-rest store the
 // broker resolves against.
-type memSecrets struct{ m map[string][]byte }
+// m is the OPERATOR namespace (owner == "") — every existing literal in this
+// package keeps behaving exactly as before For existed. owned holds every
+// non-"" owner's rows, lazily allocated by For so every view derived from the
+// same root shares it.
+type memSecrets struct {
+	owner string
+	m     map[string][]byte
+	owned map[string]map[string][]byte
+}
 
 func newMemSecrets() *memSecrets { return &memSecrets{m: map[string][]byte{}} }
 
 func (s *memSecrets) Name() string { return "mem" }
 func (s *memSecrets) Put(_ context.Context, name string, v []byte) error {
-	s.m[name] = v
+	if s.owner == "" {
+		s.m[name] = v
+		return nil
+	}
+	if s.owned[s.owner] == nil {
+		s.owned[s.owner] = map[string][]byte{}
+	}
+	s.owned[s.owner][name] = v
 	return nil
 }
 func (s *memSecrets) Get(_ context.Context, name string) ([]byte, error) {
+	if s.owner != "" {
+		if v, ok := s.owned[s.owner][name]; ok {
+			return v, nil
+		}
+		// Fall through to the operator row below — the owner-view fallback.
+	}
 	v, ok := s.m[name]
 	if !ok {
 		return nil, os.ErrNotExist
 	}
 	return v, nil
 }
-func (s *memSecrets) Delete(_ context.Context, name string) error { delete(s.m, name); return nil }
+func (s *memSecrets) Delete(_ context.Context, name string) error {
+	if s.owner == "" {
+		delete(s.m, name)
+		return nil
+	}
+	delete(s.owned[s.owner], name)
+	return nil
+}
 func (s *memSecrets) List(_ context.Context) ([]string, error) {
-	out := make([]string, 0, len(s.m))
-	for k := range s.m {
+	src := s.m
+	if s.owner != "" {
+		src = s.owned[s.owner]
+	}
+	out := make([]string, 0, len(src))
+	for k := range src {
 		out = append(out, k)
 	}
 	return out, nil
+}
+
+// For returns an owner-scoped view sharing the same backing maps as s — see
+// secretstore.Store.For's doc comment for the fallback/isolation contract
+// this mirrors.
+func (s *memSecrets) For(owner string) secretstore.Store {
+	if s.owned == nil {
+		s.owned = map[string]map[string][]byte{}
+	}
+	return &memSecrets{owner: owner, m: s.m, owned: s.owned}
 }
 
 // ─── approval service adapter (copied from cmd/wardynd/adapters.go) ─────────────

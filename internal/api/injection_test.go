@@ -19,18 +19,39 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// memSecrets is a minimal secretstore.Store for tests.
-type memSecrets struct{ m map[string][]byte }
+// memSecrets is a minimal secretstore.Store for tests. m is the OPERATOR
+// namespace (owner == "") — every existing literal in this package
+// (&memSecrets{m: ...}) keeps behaving exactly as before For existed. owned
+// holds every non-"" owner's rows, lazily allocated by For so every view
+// derived from the same root shares it.
+type memSecrets struct {
+	owner string
+	m     map[string][]byte
+	owned map[string]map[string][]byte
+}
 
 func (s *memSecrets) Name() string { return "mem" }
 func (s *memSecrets) Put(_ context.Context, name string, v []byte) error {
-	if s.m == nil {
-		s.m = map[string][]byte{}
+	if s.owner == "" {
+		if s.m == nil {
+			s.m = map[string][]byte{}
+		}
+		s.m[name] = v
+		return nil
 	}
-	s.m[name] = v
+	if s.owned[s.owner] == nil {
+		s.owned[s.owner] = map[string][]byte{}
+	}
+	s.owned[s.owner][name] = v
 	return nil
 }
 func (s *memSecrets) Get(_ context.Context, name string) ([]byte, error) {
+	if s.owner != "" {
+		if v, ok := s.owned[s.owner][name]; ok {
+			return v, nil
+		}
+		// Fall through to the operator row below — the owner-view fallback.
+	}
 	v, ok := s.m[name]
 	if !ok {
 		// Honor the store contract: absent == ErrNotFound (a real Store wraps this
@@ -39,13 +60,34 @@ func (s *memSecrets) Get(_ context.Context, name string) ([]byte, error) {
 	}
 	return v, nil
 }
-func (s *memSecrets) Delete(_ context.Context, name string) error { delete(s.m, name); return nil }
+func (s *memSecrets) Delete(_ context.Context, name string) error {
+	if s.owner == "" {
+		delete(s.m, name)
+		return nil
+	}
+	delete(s.owned[s.owner], name)
+	return nil
+}
 func (s *memSecrets) List(_ context.Context) ([]string, error) {
+	src := s.m
+	if s.owner != "" {
+		src = s.owned[s.owner]
+	}
 	var out []string
-	for k := range s.m {
+	for k := range src {
 		out = append(out, k)
 	}
 	return out, nil
+}
+
+// For returns an owner-scoped view sharing the same backing maps as s — see
+// secretstore.Store.For's doc comment for the fallback/isolation contract
+// this mirrors.
+func (s *memSecrets) For(owner string) secretstore.Store {
+	if s.owned == nil {
+		s.owned = map[string]map[string][]byte{}
+	}
+	return &memSecrets{owner: owner, m: s.m, owned: s.owned}
 }
 
 func newSecretsHarness(t *testing.T) (*harness, *memSecrets) {

@@ -219,6 +219,60 @@ func TestRekeyOnEmptyStore(t *testing.T) {
 	}
 }
 
+// TestRekey_TwoNamespacesKeepDistinctPlaintexts is 0050's negative control on
+// Rekey: an operator row and a member row sharing the SAME secret name must
+// each keep their OWN plaintext across a rekey. Keying the UPDATE on name
+// alone (rather than (owned_by, name)) would let processing the second row
+// overwrite BOTH rows with its own re-encrypted ciphertext — silently
+// clobbering whichever owner was NOT the last one processed. See the doc
+// comment on Rekey's per-row loop for why the fix is keying on both columns.
+func TestRekey_TwoNamespacesKeepDistinctPlaintexts(t *testing.T) {
+	pool := rekeyDatabase(t)
+	ctx := context.Background()
+	oldID, newID := mustIdentity(t), mustIdentity(t)
+
+	oldStore, err := New(pool, oldID)
+	if err != nil {
+		t.Fatalf("New(old): %v", err)
+	}
+	const name = "anthropic-api-key"
+	operator := oldStore.For("")
+	alice := oldStore.For("alice")
+	if err := operator.Put(ctx, name, []byte("operator-value")); err != nil {
+		t.Fatalf("Put operator row: %v", err)
+	}
+	if err := alice.Put(ctx, name, []byte("alice-value")); err != nil {
+		t.Fatalf("Put alice row: %v", err)
+	}
+
+	n, err := Rekey(ctx, pool, oldID, newID)
+	if err != nil {
+		t.Fatalf("Rekey: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("Rekey re-encrypted %d rows, want 2 (one operator, one alice)", n)
+	}
+
+	newStore, err := New(pool, newID)
+	if err != nil {
+		t.Fatalf("New(new): %v", err)
+	}
+	gotOp, err := newStore.For("").Get(ctx, name)
+	if err != nil {
+		t.Fatalf("Get operator row under the new key: %v", err)
+	}
+	if string(gotOp) != "operator-value" {
+		t.Errorf("operator row = %q, want %q — the rekey clobbered it with alice's value", gotOp, "operator-value")
+	}
+	gotAlice, err := newStore.For("alice").Get(ctx, name)
+	if err != nil {
+		t.Fatalf("Get alice row under the new key: %v", err)
+	}
+	if string(gotAlice) != "alice-value" {
+		t.Errorf("alice row = %q, want %q — the rekey clobbered it with the operator's value", gotAlice, "alice-value")
+	}
+}
+
 // TestRekeyRejectsANonX25519Identity keeps the constructor's contract visible at
 // this seam: New derives the recipient from the identity, so an identity that
 // cannot produce one must fail here rather than mid-transaction.

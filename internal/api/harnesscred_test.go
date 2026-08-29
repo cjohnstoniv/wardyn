@@ -39,6 +39,10 @@ func (getErrStore) Delete(context.Context, string) error          { return nil }
 func (getErrStore) List(context.Context) ([]string, error)        { return nil, nil }
 func (s getErrStore) Get(context.Context, string) ([]byte, error) { return s.val, s.getErr }
 
+// For is a no-op: this fake's whole purpose is a fixed Get outcome regardless
+// of caller, and no test here scopes it by owner.
+func (s getErrStore) For(string) secretstore.Store { return s }
+
 // TestReadManagedBlob_DistinguishesStoreErrors pins only ErrNotFound is
 // "not connected" (found=false, err=nil). Any OTHER store error (decrypt failure
 // after key rotation, backend down) MUST propagate rather than masquerade as

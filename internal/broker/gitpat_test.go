@@ -15,26 +15,71 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// memSecrets is a minimal secretstore.Store for git_pat mint tests.
-type memSecrets struct{ m map[string][]byte }
+// memSecrets is a minimal secretstore.Store for git_pat/ssh_key mint tests. m
+// is the OPERATOR namespace (owner == "") — every existing literal in this
+// package keeps behaving exactly as before For existed. owned holds every
+// non-"" owner's rows, lazily allocated by For so every view derived from the
+// same root shares it.
+type memSecrets struct {
+	owner string
+	m     map[string][]byte
+	owned map[string]map[string][]byte
+}
 
 func newMemSecrets() *memSecrets { return &memSecrets{m: map[string][]byte{}} }
 
-func (s *memSecrets) Name() string                                    { return "mem" }
-func (s *memSecrets) Put(_ context.Context, n string, v []byte) error { s.m[n] = v; return nil }
-func (s *memSecrets) Delete(_ context.Context, n string) error        { delete(s.m, n); return nil }
+func (s *memSecrets) Name() string { return "mem" }
+func (s *memSecrets) Put(_ context.Context, n string, v []byte) error {
+	if s.owner == "" {
+		s.m[n] = v
+		return nil
+	}
+	if s.owned[s.owner] == nil {
+		s.owned[s.owner] = map[string][]byte{}
+	}
+	s.owned[s.owner][n] = v
+	return nil
+}
+func (s *memSecrets) Delete(_ context.Context, n string) error {
+	if s.owner == "" {
+		delete(s.m, n)
+		return nil
+	}
+	delete(s.owned[s.owner], n)
+	return nil
+}
 func (s *memSecrets) Get(_ context.Context, n string) ([]byte, error) {
+	if s.owner != "" {
+		if v, ok := s.owned[s.owner][n]; ok {
+			return v, nil
+		}
+		// Fall through to the operator row below — the owner-view fallback.
+	}
 	if v, ok := s.m[n]; ok {
 		return v, nil
 	}
 	return nil, secretstore.ErrNotFound
 }
 func (s *memSecrets) List(_ context.Context) ([]string, error) {
-	out := make([]string, 0, len(s.m))
-	for k := range s.m {
+	src := s.m
+	if s.owner != "" {
+		src = s.owned[s.owner]
+	}
+	out := make([]string, 0, len(src))
+	for k := range src {
 		out = append(out, k)
 	}
 	return out, nil
+}
+
+// For returns an owner-scoped view sharing the same backing maps as s — see
+// secretstore.Store.For's doc comment for the fallback/isolation contract
+// this mirrors.
+func (s *memSecrets) For(owner string) secretstore.Store {
+	if s.owned == nil {
+		s.owned = map[string]map[string][]byte{}
+	}
+	return &memSecrets{owner: owner, m: s.m, owned: s.owned}
 }
 
 func gitPATSpec(host, secret, username string) types.GrantSpec {
