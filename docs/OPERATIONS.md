@@ -1425,9 +1425,16 @@ lane**: `WARDYN_ANTHROPIC_BASE_URL` / `WARDYN_OPENAI_BASE_URL` (see
 validated once at boot (`https://` only, RFC1918/CGNAT literal allowed,
 loopback/link-local/metadata/multicast/NAT64 refused, must not equal the
 public host) and forwarded to the proxy sidecar per run. No
-`SiteConfig.InternalHosts` declaration is needed for the gateway itself: the
-sandbox never resolves it — only the proxy does, per request, with its own
-refusal for the same disallowed address kinds.
+`SiteConfig.InternalHosts` declaration is needed for the gateway itself
+**on that brokered route**: only the proxy's own `/wardyn/llm/*` handler
+resolves and dials it, per request, with its own refusal for the same
+disallowed address kinds (`Proxy.vetTrustedHost`, reached only via
+`Proxy.gatewayTarget`). That relaxed vet is scoped to the brokered route
+alone — a sandbox that names the gateway host itself on an ordinary
+CONNECT/plain-HTTP request is treated exactly like any other host: policy
+(`allowed_domains`) plus the unconditional private-IP guard apply unchanged,
+so a private-address gateway stays unreachable that way without its own
+`SiteConfig.InternalHosts` declaration.
 
 The operator MUST add the gateway host (exact) to the policy's
 `allowed_domains` — the credential grant the proxy injects still needs an

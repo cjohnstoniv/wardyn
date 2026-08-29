@@ -182,7 +182,7 @@ has a residual or bypass class, that is noted and also listed in section 5.
 |---|---|---|
 | L0 structural **[shipped]** | Sandbox network is gatewayless (`Internal:true`); the only off-host path is the wardyn-proxy sidecar | `HTTP_PROXY` env-var bypass class (no route exists to bypass to); direct IP egress |
 | L1 default-deny **[shipped on Kubernetes; Docker planned]** | Kubernetes: per-run NetworkPolicy default-deny (agent egress only to its own proxy; metadata `169.254.169.254` excluded), enforcement PROVEN by the boot canary — a non-enforcing CNI refuses boot. Docker: nftables default-deny still **[planned]** (L0 stands in structurally). Cilium toFQDNs **[planned]** | Non-HTTP raw-socket tunnels that never reach the proxy process at all; extends "no route but the proxy" to the Kubernetes topology. Defense-in-depth ATOP the metadata/link-local guard L2 already enforces below — the metadata block does not wait on L1 to ship |
-| L2 wardyn-proxy **[shipped]** | Domain allowlist (exact + `*.` wildcard); method rules; first-use approval (`always_deny` / `deny_with_review` / `wait_for_review`, which holds the connection for a live operator decision); proxy-side credential injection; an unconditional loopback/link-local/multicast/private-reserved/metadata/NAT64-embedded-v4 guard, checked pre-policy on a literal-IP target and again post-DNS-resolution on every direct-dialed hostname (the opt-in upstream corp-proxy hop defers that re-check to the corp proxy — §5's disclosed residual), that `allow_all_egress` does not reach. **One admin-authored exception**: `SiteConfig.InternalHosts` (`vetHostLift`/`Proxy.vetHost`, `internal/egress/proxy/proxy.go`) lifts the guard's RFC1918/ULA/CGNAT slice ONLY — never loopback/link-local/metadata/multicast/NAT64 — for a declared hostname, scoped to declared CIDRs, and never for an address on the proxy's own interface subnets or its resolved control-plane host (the sidecar's `wardyn-internal` network neighbors) | L7 exfil to unlisted domains; token leakage into sandbox; metadata-server theft and DNS-rebinding, including under `allow_all_egress` |
+| L2 wardyn-proxy **[shipped]** | Domain allowlist (exact + `*.` wildcard); method rules; first-use approval (`always_deny` / `deny_with_review` / `wait_for_review`, which holds the connection for a live operator decision); proxy-side credential injection; an unconditional loopback/link-local/multicast/private-reserved/metadata/NAT64-embedded-v4 guard, checked pre-policy on a literal-IP target and again post-DNS-resolution on every direct-dialed hostname (the opt-in upstream corp-proxy hop defers that re-check to the corp proxy — §5's disclosed residual), that `allow_all_egress` does not reach. **One admin-authored exception**: `SiteConfig.InternalHosts` (`vetHostLift`/`Proxy.vetHost`, `internal/egress/proxy/proxy.go`) lifts the guard's RFC1918/ULA/CGNAT slice ONLY — never loopback/link-local/metadata/multicast/NAT64 — for a declared hostname, scoped to declared CIDRs, and never for an address on the proxy's own interface subnets or its resolved control-plane host (the sidecar's `wardyn-internal` network neighbors). The configured internal model gateway (residual 29) is NOT a second exception to this guard: its own relaxed per-request vet (`Proxy.vetTrustedHost`, reached only via `Proxy.gatewayTarget`) is scoped to the proxy's own brokered `/wardyn/llm/*` route, never to an ordinary sandbox CONNECT/MITM naming the gateway host, which this same `Proxy.vetHost` guard covers unchanged | L7 exfil to unlisted domains; token leakage into sandbox; metadata-server theft and DNS-rebinding, including under `allow_all_egress` |
 | L3 MCP gateway **[v0.5+ — planned]** | Per-tool call approval and logging | Tool-call egress that bypasses the network proxy |
 
 Four egress layers stack outward from the sandbox — L0 structural confinement
@@ -852,7 +852,7 @@ hiding them would repeat the failure mode we are designed to avoid.
 29. **The operator's model-provider credential is disclosed to whatever host
     they nominate as the internal gateway.** `WARDYN_ANTHROPIC_BASE_URL`/
     `WARDYN_OPENAI_BASE_URL` (`internal/api/llm_gateway.go`,
-    `Proxy.vetTrustedHost`/`egressTarget`) re-point the api-key lane's
+    `Proxy.vetTrustedHost`/`Proxy.gatewayTarget`) re-point the api-key lane's
     brokered credential injection at a control-plane-authored host — the
     same trust class as `WARDYN_TRUSTED_CA_FILE` above (boot-time only,
     never a `SiteConfig` field, never agent-reachable). Once configured, the
@@ -865,9 +865,15 @@ hiding them would repeat the failure mode we are designed to avoid.
     knob is validated at boot (`https://` only, no userinfo, the gateway
     host must not equal the public provider host, loopback/link-
     local/metadata/unspecified/multicast/NAT64-embedded literals refused —
-    RFC1918/CGNAT is the expected shape); the sandbox never resolves or
-    dials the gateway itself, so there is no rebinding window on this
-    path; and the veto in `planArtifactRedirect` keeps an unrelated
+    RFC1918/CGNAT is the expected shape); only the proxy's own brokered
+    `/wardyn/llm/*` route (`Proxy.gatewayTarget`) ever resolves or dials the
+    gateway with that relaxed per-request vet, so there is no rebinding
+    window on THAT path — a sandbox that names the gateway host itself on
+    an ordinary CONNECT/MITM path is treated like any other host
+    (`Proxy.egressTarget`/`Proxy.vetHost`): policy plus the unconditional
+    private-IP guard apply unchanged, so a private-address gateway stays
+    unreachable from the sandbox without its own `SiteConfig.InternalHosts`
+    declaration; and the veto in `planArtifactRedirect` keeps an unrelated
     artifact-registry redirect from ever colliding with the same host.
     **Scope, stated plainly:** only the api-key lane is redirected — a
     subscription or Wardyn-managed run's credential still goes to
