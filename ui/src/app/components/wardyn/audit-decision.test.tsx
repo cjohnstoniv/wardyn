@@ -11,7 +11,7 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { AuditEvent } from "../../lib/types";
-import { AuditDecision, decidedByHuman, toolRuleDecision } from "./audit-decision";
+import { AuditDecision, toolRuleDecision } from "./audit-decision";
 
 function event(over: Partial<AuditEvent> = {}): AuditEvent {
   return {
@@ -53,9 +53,6 @@ describe("toolRuleDecision", () => {
       data: { decision: "APPROVED", approval_id: "appr_4c8e21" },
     });
     expect(toolRuleDecision(human)).toBeNull();
-    expect(decidedByHuman(human)).toBe(true);
-    // The system principal deciding on a human's behalf is not a human.
-    expect(decidedByHuman({ ...human, actor_type: "system" })).toBe(false);
   });
 });
 

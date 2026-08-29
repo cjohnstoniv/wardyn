@@ -50,12 +50,6 @@ export function toolRuleDecision(e: AuditEvent): RuleDecision | null {
   return effect ? { effect, source } : null;
 }
 
-// decidedByHuman reports whether a person decided this event. The counterpart
-// question to toolRuleDecision, for a caller laying the two out side by side.
-export function decidedByHuman(e: AuditEvent): boolean {
-  return e.action === "approval.decide" && e.actor_type === "human";
-}
-
 // The row's decision label. Renders nothing for an event no rule decided, so a
 // caller can fall back to its own description.
 export function AuditDecision({ event, className }: { event: AuditEvent; className?: string }) {

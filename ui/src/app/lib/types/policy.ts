@@ -155,17 +155,18 @@ export function toolRulesProblem(rules: readonly ToolRule[]): string | null {
   }
   const seen = new Set<string>();
   for (const r of rules) {
-    if (r.tool.trim() === "") return "Every rule needs a tool name (use * for the default).";
-    if (r.tool.trim() !== r.tool) {
+    const name = r.tool.trim();
+    if (name === "") return "Every rule needs a tool name (use * for the default).";
+    if (name.length > MAX_TOOL_RULE_NAME_LEN) {
+      return `“${name}” exceeds ${MAX_TOOL_RULE_NAME_LEN} characters.`;
+    }
+    if (name !== r.tool) {
       return `“${r.tool}” has leading or trailing whitespace; the match is exact, so it would never fire.`;
     }
-    if (r.tool.length > MAX_TOOL_RULE_NAME_LEN) {
-      return `“${r.tool}” exceeds ${MAX_TOOL_RULE_NAME_LEN} characters.`;
+    if (seen.has(name)) {
+      return `Two rules name “${name}” — one of them does nothing.`;
     }
-    if (seen.has(r.tool)) {
-      return `Two rules name “${r.tool}” — one of them does nothing.`;
-    }
-    seen.add(r.tool);
+    seen.add(name);
     if (!TOOL_EFFECTS.includes(r.effect)) {
       return `“${r.effect}” is not an effect (want allow, hold or deny).`;
     }
