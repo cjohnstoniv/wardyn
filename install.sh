@@ -224,7 +224,7 @@ if [ -n "${CLI_PATH}" ]; then
   esac
   echo "  Attach:       wardyn ssh <run-id>   (the SSH gateway is on at 127.0.0.1:${WARDYN_SSH_PORT:-2222})"
 fi
-echo "  Mode:         single-user — you are the admin. Multiple people? see docs/OPERATIONS.md \"Second user, same host\"."
+echo "  Mode:         single-user — you are the admin. Multiple people? https://github.com/${REPO}/blob/${VERSION}/docs/OPERATIONS.md#second-user-same-host"
 echo "  Admin token:  grep WARDYN_ADMIN_TOKEN ${HOME_DIR}/.env"
 echo "  Stop:         cd ${HOME_DIR} && docker compose down            (keeps all data)"
 echo "  Upgrade:      re-run this installer at the new version"

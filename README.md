@@ -31,7 +31,7 @@ Pick by **who runs this box**. Everything here pulls cosign-signed, SBOM-atteste
 curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.4/install.sh | sh
 ```
 
-Cosign-signed, not tip-of-`main`. Installs into `~/.wardyn`, opens Getting Started as an **admin**.
+Cosign-signed, not tip-of-`main` — only the script is pinned; it installs the newest release (`WARDYN_VERSION` overrides). Installs into `~/.wardyn`, opens Getting Started on <http://127.0.0.1:8080> as an **admin** (`WARDYN_HOME`, `WARDYN_PORT` override).
 **A managed laptop, one daemon per developer** — desktop profile a′: [`docs/DESKTOP.md`](docs/DESKTOP.md).
 
 ### Multi-user — an admin sets the ceiling, members run inside it
@@ -39,7 +39,7 @@ Cosign-signed, not tip-of-`main`. Installs into `~/.wardyn`, opens Getting Start
 Each human gets an SSO identity and an **admin** or **member** role ([`docs/OPERATIONS.md`](docs/OPERATIONS.md#multi-user-who-can-change-what)).
 
 - **A shared host** — compose `--profile sso` + `WARDYN_OIDC_ROLE_MAP`: [OPERATIONS.md §"Second user, same host"](docs/OPERATIONS.md#second-user-same-host).
-- **Kubernetes** — a published OCI chart (command below).
+- **Kubernetes** — a published OCI chart (the command after this list); `.claude/skills/wardyn-k8s-setup/` carries an agent-readable recipe for the same path.
 - **Managed laptops under org governance** — desktop profile m′: [`docs/DESKTOP.md`](docs/DESKTOP.md#the-member-mode-profile-topology-m).
 
 ```sh

@@ -37,8 +37,9 @@ entry in the console nav.
 A `local_dir` source must sit under a root your admin configured
 (`WARDYN_MEMBER_WORKSPACE_ROOTS`, or a per-member map that **replaces** the
 shared list for you) — see [ENV.md](ENV.md). Unset means you may mount no
-host directory; that is fail-closed by design, not a bug. `GET /me` shows
-your effective root. Writability is a second, separate gate.
+host directory; that is fail-closed by design, not a bug. `GET /me` shows the
+root or roots that apply to you — a hint for the console; the server enforces the
+boundary when a mount binds. Writability is a second, separate gate.
 
 Offboarding — handing a workspace back to your admin — is an admin action
 (`POST /workspaces/{id}/reassign`); see
