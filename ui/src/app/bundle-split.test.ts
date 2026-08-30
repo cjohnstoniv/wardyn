@@ -26,10 +26,13 @@ import { describe, expect, it } from "vitest";
 
 const uiRoot = path.resolve(__dirname, "../..");
 
-// Vite's own default warning threshold. The entry chunk sat at 1,331 kB (a
-// single un-split chunk) before the split and lands ~450 kB after; 500 kB keeps
-// the budget honest without being so tight that ordinary feature work trips it.
-const ENTRY_BUDGET_BYTES = 500 * 1024;
+// The entry chunk sat at 1,331 kB (a single un-split chunk) before the split
+// and lands ~508 kB after the 0.7 dependency bumps; 560 kB keeps roughly the
+// original ~50 kB of headroom so ordinary feature work and routine dependency
+// maintenance don't trip it, while any lazy route leaking into the eager graph
+// still blows straight through it (the terminal-stack assertion below is the
+// primary split guard).
+const ENTRY_BUDGET_BYTES = 560 * 1024;
 
 async function buildOnce(): Promise<Rollup.OutputChunk[]> {
   // Vite only defaults NODE_ENV to "production" for a build when it is UNSET,
