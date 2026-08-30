@@ -419,8 +419,6 @@ test("cold open + B1 — the card that learns", async () => {
   await beat(page, PACE.read);
   await caption(page, "Most of the time, you don't know everything the job will need.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "So don't guess. Watch.");
-  await beat(page, PACE.read);
   await caption(page, "Watch it first.");
   await beat(page, BEAT_SHORT);
   await caption(page, "And turn what you observe into policy.");
