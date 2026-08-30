@@ -77,10 +77,8 @@ player. An air-gapped mirror of the series is a named gap, not built.
   `/api/v1/workspaces/`.
 - **Record Mode — the moat.** Run a task open once, then synthesize a
   least-privilege policy from its captured audit trail (`internal/recordmode`,
-  `POST /api/v1/runs/{id}/profile`) and re-run it confined, by reference. It is
-  the rarest capability in the surveyed field — most competitors have no
-  policy-derivation loop at all, and the one that does keeps it off by default and
-  never confines a replay. The synthesized *allowlist* is derived from
+  `POST /api/v1/runs/{id}/profile`) and re-run it confined, by reference.
+  The synthesized *allowlist* is derived from
   PROXY-observed egress only (exact hosts that were actually allowed, never
   wildcarded, never a denied/pending host), so it can only ever subset what the
   observed run already reached — genuine least-privilege *discovery* still needs
@@ -150,9 +148,7 @@ forward-compatibility values; no transition produces them today.
    proxy-side (`egress.InjectionRule`), so as a rule no secret sits in env,
    disk, or args — static API keys and OAuth subscription tokens never enter the
    sandbox (env inside shows only an inert placeholder, the real value injected
-   on the wire), and broker-scoped credentials are minted and revoked per run,
-   where even the one competitor that matches this hygiene (Cloudflare OS) leans
-   on a long-lived human OAuth grant persisted server-side. These residuals break
+   on the wire), and broker-scoped credentials are minted and revoked per run. These residuals break
    that rule deliberately — each bounded and disclosed rather than hidden; the
    authoritative, complete table is `threatmodel/THREAT-MODEL.md` §5.1a:
 
@@ -197,8 +193,7 @@ forward-compatibility values; no transition produces them today.
    agent loop.
 5. **Fail closed; never overclaim.** Drivers declare `Capabilities()`;
    policy refuses what a substrate cannot enforce — it refuses to *start* rather
-   than silently downgrading the tier you asked for (Northflank's own docs
-   document silent substitution to gVisor; Anthropic's flagship path fails open),
+   than silently downgrading the tier you asked for,
    and the tier actually enforced is a queryable fact of the run record
    (Confinement Classes CC1 runc / CC2 gVisor, preferred wherever `runsc` is
    registered / CC3 Kata **[experimental]** — surfaced in the README, UI, and CLI
@@ -209,8 +204,7 @@ forward-compatibility values; no transition produces them today.
 6. **Audit is append-only and free.** Every mint/revoke/approval/policy
    change/egress decision is an event. The Postgres trigger blocks
    UPDATE/DELETE/TRUNCATE, so a written event can never be altered or erased —
-   append-only is enforced at the datastore, not by app convention (the closest
-   competitor's own docs recommend `DELETE FROM audit_logs` for maintenance).
+   append-only is enforced at the datastore, not by app convention.
    NOTE:
    control-plane audit WRITES (identity mint/revoke, approval decide, broker
    mint/revoke) are still best-effort — the call site is fire-and-forget
@@ -282,7 +276,7 @@ is decided by grant kind and host, and neither can cover the other's set:
 
 | Grant / transport | Mechanism | Where the credential lives |
 |---|---|---|
-| `github_token`, granted repo, HTTPS | **proxy git broker** — `git`'s `url.<broker>.insteadOf` rewrites the remote to `http://wardyn-proxy:3128/wardyn/gh/<org>/<repo>` (`internal/egress/proxy/git_broker.go`) | proxy memory only; dispatch subtracts + denies the broker-managed GitHub hosts for any run with git grants (`confineGitBrokerEgress`), so an un-brokered GitHub URL has no route **by name** — these are name-keyed denies, so under `allow_all_egress` a raw-IP CONNECT is a different key and is not bound by them (bounded in practice because no GitHub credential reaches a brokered sandbox). The repo is the unit of trust. Pushes are confined to `refs/heads/wardyn/<run-id>/*` by default (no surveyed competitor combines branch-namespace confinement, per-run identity, and a provable one-action kill+revoke) — `agent-run` checks the clone out onto `wardyn/<run-id>/work`; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts a proxy out |
+| `github_token`, granted repo, HTTPS | **proxy git broker** — `git`'s `url.<broker>.insteadOf` rewrites the remote to `http://wardyn-proxy:3128/wardyn/gh/<org>/<repo>` (`internal/egress/proxy/git_broker.go`) | proxy memory only; dispatch subtracts + denies the broker-managed GitHub hosts for any run with git grants (`confineGitBrokerEgress`), so an un-brokered GitHub URL has no route **by name** — these are name-keyed denies, so under `allow_all_egress` a raw-IP CONNECT is a different key and is not bound by them (bounded in practice because no GitHub credential reaches a brokered sandbox). The repo is the unit of trust. Pushes are confined to `refs/heads/wardyn/<run-id>/*` by default — `agent-run` checks the clone out onto `wardyn/<run-id>/work`; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts a proxy out |
 | `git_pat` (Azure DevOps / GitLab, or a GitHub PAT on a forge the run is NOT brokered for), HTTPS | **`wardyn-git-helper`** — brokers on `git`'s `get` and writes to stdout | helper stdout → `git`. **Not available for the SAME forge as a `github_token` grant** — refused at policy write (`validateGrantLaneExclusivity`), withheld from the sandbox at dispatch for anything already stored (`dropBrokeredGrants`), and refused at mint |
 | `ssh_key`, any host | **neither** — `agent-run` writes a 0400 key for the clone and shreds it after | resident file, wiped post-clone (documented exception, invariant 1). **Not available at all for the SAME forge as a `github_token` grant** — refused at policy write (`validateGrantLaneExclusivity`), and for anything already stored, withheld from the sandbox at dispatch (`dropBrokeredGrants`) while `confineGitBrokerEgress` denies that forge's SSH endpoint too |
 
@@ -321,7 +315,7 @@ wardyn-proxy (L7 allowlist + injection) **[shipped]** → L3 MCP/tool gateway
 |---|---|---|
 | L0 structural **[shipped]** | Sandbox network is gatewayless (`Internal:true`); the only off-host path is the wardyn-proxy sidecar | `HTTP_PROXY` env-var bypass class (no route exists to bypass to); direct IP egress |
 | L1 default-deny **[shipped on k8s; planned on docker]** | **k8s [shipped]**: per-run `NetworkPolicy` (blocking `169.254.169.254`), proven live by a boot-time egress canary that refuses to construct the substrate on a CNI that doesn't enforce it (`WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` is the logged, opt-in downgrade — see [ROADMAP.md](ROADMAP.md)). **docker [planned]**: nftables — not built (`internal/runner/docker/hardening.go`'s own comment: "be honest, do not claim it"); Cilium `toFQDNs` also planned, either target | Non-HTTP tunnels; metadata-server theft; DNS rebinding — on k8s today, both targets once nftables lands |
-| L2 wardyn-proxy **[shipped]** | Domain allowlist (exact + `*.` wildcard); method rules; first-use approval (`internal/types/policy.go`: `always_deny` / `deny_with_review` / `wait_for_review`, which holds the *same* in-flight connection open for a live operator decision and resumes it on approve — the field fail-then-retries, and the nearest analog in Vault/Teleport is Enterprise-only) — each decision itself carries a scope, `once` / `run` / `until` / `always` ([docs/POLICIES.md](docs/POLICIES.md)), bounding how far it reaches from one connection up to a permanent workspace-wide allow/deny; proxy-side credential injection | L7 exfil to unlisted domains; token leakage into sandbox |
+| L2 wardyn-proxy **[shipped]** | Domain allowlist (exact + `*.` wildcard); method rules; first-use approval (`internal/types/policy.go`: `always_deny` / `deny_with_review` / `wait_for_review`, which holds the *same* in-flight connection open for a live operator decision and resumes it on approve) — each decision itself carries a scope, `once` / `run` / `until` / `always` ([docs/POLICIES.md](docs/POLICIES.md)), bounding how far it reaches from one connection up to a permanent workspace-wide allow/deny; proxy-side credential injection | L7 exfil to unlisted domains; token leakage into sandbox |
 | L3 MCP gateway **[v0.5+ — planned]** | Per-tool call approval and logging | Tool-call egress that bypasses the network proxy |
 
 ## Deployment surface (anti-sprawl constraint)

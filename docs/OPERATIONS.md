@@ -849,14 +849,10 @@ walks every route the router actually registers and fails the build if any one o
 them — all 36 admin-gated routes included — is missing from its `routeMatrix`, so
 a new route must be classified admin/member/owner/anonymous/internal before it can
 ship; `internal/api/rbac_test.go` then proves each of the 19 widest admin-gated
-writes really does 403 a member. Worth stating plainly,
-because the field Wardyn is measured against puts exactly these controls behind a
-license — Coder bundles audit logging and template RBAC into a 30-day **Premium**
-trial, Vault's namespaces and hold-then-resume are Enterprise/HCP, OpenHands gates
-RBAC/SSO to Enterprise. What Wardyn gives up is *breadth* — this is a deliberate
-two-tier split, not per-user roles or multi-org depth — not the governance itself.
-A corporate evaluator used to OSS meaning a crippled trial should read the trade
-the other way here.
+writes really does 403 a member. Worth stating plainly: every control above
+ships in this Apache-2.0 build — there is no gated edition holding any of it
+back. What Wardyn gives up is *breadth* — this is a deliberate two-tier split,
+not per-user roles or multi-org depth — not the governance itself.
 
 ## Second user, same host
 
