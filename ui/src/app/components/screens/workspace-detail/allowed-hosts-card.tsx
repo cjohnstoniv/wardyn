@@ -10,14 +10,12 @@
 // is structural (the workspace can't function without reaching it) and
 // carries neither.
 import * as React from "react";
-import { X } from "lucide-react";
 import { toast } from "sonner";
-import { Button } from "../../ui/button";
-import { Mono } from "../../wardyn/code-block";
 import { getErrorMessage } from "../../../lib/format";
 import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
 import { effectiveWorkspaceRequirements, type Workspace } from "../../../lib/types";
 import { DetailSectionCard } from "./section-card";
+import { HostList, type HostRow } from "./host-list";
 import { useOperator } from "../../wardyn/operator-context";
 
 // Light, local parse — the same shape as the (retired) wizard's
@@ -33,12 +31,6 @@ function cloneHostOf(ws: Workspace): string | null {
   if (httpMatch) return httpMatch[1].toLowerCase();
   if (/^[\w.-]+\/[\w.-]+$/.test(s)) return "github.com";
   return null;
-}
-
-interface HostRow {
-  host: string;
-  provenance: string;
-  removable: boolean;
 }
 
 function hostRows(ws: Workspace): HostRow[] {
@@ -113,32 +105,7 @@ export function AllowedHostsCard({ ws, onWorkspaceUpdated }: { ws: Workspace; on
       title={`Allowed hosts · ${rows.length}`}
       subtitle="Every run against this workspace may reach these. Nothing is here unless you approved it or a recording proved it was used."
     >
-      {rows.length === 0 ? (
-        <p className="text-xs text-muted-foreground">Nothing approved yet.</p>
-      ) : (
-        <ul className="space-y-2">
-          {rows.map((r) => (
-            <li key={r.host} className="flex items-center gap-3 rounded-lg border border-border p-2.5">
-              <Mono className="flex-1 text-foreground">{r.host}</Mono>
-              <span className="text-meta text-muted-foreground">{r.provenance}</span>
-              {r.removable ? (
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  className="size-7 shrink-0"
-                  disabled={!operator || removing === r.host}
-                  onClick={() => void remove(r.host)}
-                  aria-label={`Remove ${r.host}`}
-                >
-                  <X className="size-3.5" />
-                </Button>
-              ) : (
-                <span className="w-7 shrink-0 text-center text-muted-foreground">—</span>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
+      <HostList rows={rows} emptyText="Nothing approved yet." canRemove={!!operator} removing={removing} onRemove={(h) => void remove(h)} />
     </DetailSectionCard>
   );
 }
