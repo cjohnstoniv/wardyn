@@ -8,8 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
-<!-- UI/UX campaign (post-0.7 prep) — one consolidated set; Phase 5 bullets are appended here as they land. -->
 ### Added
+
 - `wardyn ssh-key ensure|list`, `wardyn run wait-ready <id> --json` and `wardyn ssh <id> --json`: scripted key registration, readiness (RUNNING plus an inspectable workspace) and target discovery so an external IDE or agent tool can drive a sandbox over the SSH gateway (`docs/SSH.md` §6). SDK: `ListSSHKeys`, `AddSSHKey`, `RunFiles`.
 - Policy `git_push_any_branch`: a per-run opt-out of push branch-namespace confinement for a sandbox a human drives from an external tool; every such push is audited as `brokered:git:branch-ns-off`; clamped away from members' inline policies. Example: `examples/policies/remote-workspace.yaml`.
 - `docs/design/CONSOLE-RULES.md`: the console's design rulebook (color budget, four body type rungs, three elevation levels, the run status vocabulary and glyph pairing, in-flight feedback timing, the screen review rubric).
@@ -21,16 +21,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Setup: each corp-network probe verdict (`timed_out`, `not_run`, an exec that never started) gets its own heading, note and tone instead of sharing one.
 - Cockpit: the command bar carries the board's who + what status pair; the approvals strip caps at two rows and ranks held above passive; focus-mode shortcuts are labelled key chips spelled per platform.
 - New run: field rhythm and the rail from mock M4, Enter submits and Esc leaves an untouched form, preflight results unframed.
-### Fixed
-- `GET /runs/{id}/files` reported `vcs:"none"` for every `--repo` run because it inspected the workspace mount target instead of the clone one level below it — the console's files widget claimed "no git repository" for a sandbox holding a full clone. It now finds the run's clone.
-- Console surfaces that referenced a nonexistent `bg-surface-1` token painted no background (new-run rail, settings and connection cards).
-- Focus rings now clear WCAG 1.4.11's 3:1 floor in both themes (`--ring` raised; the shared focus recipes no longer dilute it to 50%).
-### Changed
-- Console type scale collapsed to four body rungs (`--text-meta` 11px, `text-xs`, `--text-body` 13px, `text-sm`) replacing ~260 ad-hoc sizes; three elevation levels with one `--shadow-floating`; body tracking `0.01em`; helper text at 12px; thin scrollbars on every scroller; radius one-offs onto the card scale.
-- `KILLED` counts as needing attention on the board and badge (rank beside `FAILED`); rule-decided tool calls file under the Audit screen's **Tool calls** facet rather than **Egress**.
-
-<!-- Audience-restructure campaign (0.7) -->
-### Added
 - Install instructions are organised by three audiences — running Wardyn for yourself, running it for a team, and joining a Wardyn someone else operates — with a new [`docs/MEMBERS.md`](docs/MEMBERS.md) for that last audience.
 - Getting Started can play the demo episodes in place: **Watch** streams the pinned release asset only after the click (no autoplay, no prefetch), an episode not yet recorded shows a plain "Not recorded yet" instead of a dead link, and a failed load offers the release page as a fallback.
 - An operator can trust a corporate TLS-inspecting proxy's root CA (`WARDYN_TRUSTED_CA_FILE`): the daemon, the proxy sidecar and every sandbox — including the published base image's exec-mode runs and the setup connectivity probe — pick it up, delivered on compose, the desktop profile and the Helm chart.
@@ -40,29 +30,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - An operator can declare internal hostnames — an in-cluster service, a corporate registry — that are allowed to resolve to private/CGNAT addresses, so an internal service is reachable by name instead of only by a literal IP (which breaks TLS and routing).
 - An operator can point the API-key model-access lane at an internal gateway instead of the public provider host (`WARDYN_ANTHROPIC_BASE_URL` / `WARDYN_OPENAI_BASE_URL`); subscription and Wardyn-managed runs still reach the public provider directly.
 - A member can bring their own model API key: it works in their own runs with no admin setup and is never reachable from anyone else's run. Members can set and remove their own secrets (`GET /secrets` now also returns `mine`); AWS/Bedrock credential names stay admin-only, and an admin can still manage a member's secrets via `?owner=`.
-### Changed
-- The `secrets` table's primary key widens from `name` to `(owned_by, name)` (migration `0050`) so a member can hold their own copy of a name the operator already uses; existing rows are unaffected and keep working exactly as before.
-
-
-### Fixed
-
-- **A wardynd restart could kill a healthy, just-started run on Kubernetes and
-  report it FAILED.** Between the apiserver accepting the agent's ephemeral
-  exec container and the kubelet publishing that container's first status, the
-  pod carries the exec in `Spec.EphemeralContainers` with no matching entry in
-  `Status.EphemeralContainerStatuses`. `AgentStatus` read that window as a
-  **definitive terminal state with a nil error** — indistinguishable from "the
-  exec is gone" — and both reconciler consumers finalize on exactly that pair,
-  so a restart or a watcher-lease handoff landing in the window turned a live
-  run into `FAILED` and tore its sandbox down. The docker driver already
-  refuses the equivalent call (an exec-404 while the container still runs
-  returns an ambiguity **error**, so the reconciler retries); k8s had strictly
-  better evidence available — the pod `Get` succeeded and the exec is in
-  `Spec` — and used it worse. Present-in-Spec-but-not-in-Status is now
-  `STARTING`; an exec id absent from `Spec` was never exec'd against that pod
-  and stays terminal.
-
-### Added
 
 - **The release pipeline can be rehearsed.** `release.yml` gains a
   `workflow_dispatch` with `dry_run` (default true): it builds every image, the
@@ -76,9 +43,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   provenance and 0.6.3 shipped an SBOM that understated its own contents. Both
   would have failed a dry run. `make release-check` was green every time, because
   it validates the repository, not the workflow.
-
-
-### Added
 
 - **A browser desktop (noVNC) is a shipped image variant.**
   `deploy/images/novnc/`, `make agent-image-novnc`, declared as
@@ -135,30 +99,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   invisible to the deployment: the client saw `ResourceShortage` and nothing was
   recorded. That mattered less while the gateway was off by default — the
   desktop envelope now ships it **on**.
-
-### Fixed
-
-- **`docs/PLUGGABILITY.md` claimed a selection convention that does not hold.**
-  Its rule — *"every seam selects via a `WARDYN_<SEAM>` env var"* — is false for
-  `egress.Evaluator`, which has a real interface and a conformance suite but **no
-  registry, no selector, and exactly one implementation**; the only override is an
-  in-process field nothing outside tests sets. `/healthz` was already honest about
-  this (`policy_engine` carries no `available` list); the doc was not. The same
-  claim was in `internal/component/registry.go`'s package doc. Both corrected, and
-  the doc now states the distinction it exists to keep straight: an interface plus
-  a conformance suite is a head start on pluggability, not a swappable seam.
-
-- **The threat model's own citation rule had no gate, and had rotted again.**
-  `threatmodel/THREAT-MODEL.md` §8 states that citations must name symbols, not
-  line numbers — *"an earlier pass pinned line numbers and six of nine had rotted
-  onto unrelated code (one past EOF)"* — and then kept nine of them, at least two
-  of which had rotted by 0.7. All nine now cite symbols, and
-  `TestCommentsCiteSymbolsNotLineNumbers`'s sibling extends the ban to
-  `threatmodel/*.md`. Also fixes four `Tier-1`/`Tier-3` occurrences (the pre-`CC`
-  names) and a security-doc contradiction: `docs/DATA-FLOW.md` called
-  `wardyn-proxy` the **L1** egress gateway; every other document calls it L2.
-
-### Added
 
 - **Git PATs for non-GitHub forges are never resident.** The two git lanes had
   opposite credential postures: a `github_token` was minted proxy-side and
@@ -239,85 +179,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   contract**, both enforced in CI. And it states plainly that `wardyn-toolgate` is
   **not** an MCP gateway despite speaking MCP.
 
-### Fixed
-
-- **The GPL corresponding-source offer covered the wrong images.** Its hardcoded
-  list still named `agent-claude-code`, unpublished since 0.6.2, and omitted
-  `agent-base`, which publishes in its place — so the loop errored on a ref that
-  does not exist while the image that IS published **was never scanned and had
-  no offer at all**. Publishing an image conveys its GPL/LGPL binaries, so that
-  is a real obligation, and it failed silently: a missing image produces no
-  output rather than an error. The same two errors were in `RELEASING.md`'s
-  manual cosign verification loop and in `release.yml`'s own header.
-
-  Regenerated against the published digests — and the first regeneration
-  **deleted** the section covering `agent-claude-code` 0.5.0/0.6.0, which are
-  **still pullable** and therefore still being conveyed. The generator now
-  retains a "still distributed, no longer published" section, verified by
-  `docker manifest inspect` (0.6.1 was never published; a comment in
-  `release.yml` claimed it was). Its stale default tag is gone — a default
-  silently regenerates the offer for the wrong release — and a new guard fails
-  when the offer's image list and `release.yml`'s publish matrix disagree in
-  either direction.
-
-- **`RELEASING.md`'s tag-gate job list was wrong in both directions.** It named
-  `sbom-stub`, which was **deleted** along with `make sbom` — so a maintainer
-  following it literally waited on a job that can never report — and it omitted
-  **`notices`**, the copyleft / unreviewed-dependency gate, telling them to skip
-  the one job that catches a GPL regression on a release that adds an X stack.
-  Both corrected, and a new guard fails when `ci.yml` and that list disagree in
-  either direction; this list had already drifted twice.
-
-### Changed
-
-- **In-editor extension installation is documented as unsupported by default.**
-  It reaches marketplace CDNs no shipped policy allowlists. The fix is baking
-  extensions into the image, not pasting a rotating CDN list into a policy.
-
-- **Scan-seeded egress now requires operator provenance, by default.**
-  `WARDYN_REQUIRE_OPERATOR_SET_EGRESS` shipped in 0.6 fully built and **off**,
-  because turning it on narrows egress for existing workspaces. 0.7 turns it on:
-  the asymmetry was the anomaly. The **secret** side of the very same `switch`
-  has always applied this provenance check unconditionally and calls the
-  boundary *"security-critical — do not relax"* — and the reason is identical
-  for egress. A hostile, or simply never-reviewed, repo could widen its own
-  run's allowlist just by naming a host in a committed file, with no operator
-  ever acting. **Upgrade impact:** a workspace whose egress requirements are
-  `scan_seeded` stops having them auto-added, and the run's warnings name what
-  was skipped; an operator declaring the host is the intended fix. Set
-  `WARDYN_REQUIRE_OPERATOR_SET_EGRESS=false` to restore the old behaviour.
-
-- **`--agent` is no longer required for a `task_mode=exec` run that names an
-  image.** exec runs the task as a plain shell command — no agent harness, no
-  model call — so naming an agent was a formality, and `docs/CI.md` documented
-  the workaround it forced (`--agent claude-code --image ubuntu:24.04
-  --task-mode exec`, in the document whose whole audience is exec). It is **not
-  a blanket default**: defaulting to `claude-code` would make every agentless
-  run eligible for the operator's live subscription credential, and defaulting
-  to `byoa`/`none` resolves to an image that does not exist (both 404 on the
-  registry). Harness mode still requires an agent.
-
-### Fixed
-
-- **`tool_approvals=hold` on an interactive run was accepted and silently
-  discarded.** Dispatch writes `WARDYN_TOOL_APPROVALS` only for non-interactive
-  runs, so the caller got a 201 and none of the supervision they asked for. It
-  is now a 400 naming the field. The run does not become unsupervised —
-  interactive tool use is already supervised in the attach pane — so this
-  refuses a contradiction rather than closing a hole. The guard sits **after**
-  the empty-task→interactive coercion, because a guard placed before it passes
-  and the field is still dropped.
-
-- **The custom base-image `steps` surface pretended to do something.**
-  Validation, caps and UI copy implied operator-authored Dockerfile lines would
-  be applied; nothing applies them, and nothing may — operator `RUN` lines would
-  execute on the **host** daemon during the wrap, outside every confinement
-  tier. The user-facing surface is gone. **The field itself stays**, documented
-  as catalog identity: it is part of the `base_images` UNIQUE index, so deleting
-  it would make every upsert write NULL and mint duplicate catalog rows.
-
-### Added
-
 - **The desktop tier is packageable** as a `.deb`, an `.rpm` and a tarball. `scripts/build-desktop-package.sh` builds
   a `.deb` and a tarball, **from a clean git tree — never by copying the working
   directory**. `deploy/compose/.env` is a real file on a maintainer's box: 0600,
@@ -343,19 +204,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `REPO_ROOT` as `../..`, and it ships the **`wardyn` CLI** — the tier installed
   no host binary at all, so `wardyn ssh` and `wardyn secret set` were both
   unreachable.
-
-### Fixed
-
-- **`env_get` killed its caller when a key was absent.** Its contract says
-  *"("" when absent)"*, but `grep` exits 1 and every caller runs under
-  `set -euo pipefail`, where `PIPEFAIL` propagates that — so
-  `v="$(env_get "$f" KEY)"` for an absent key **terminated the script silently
-  at the assignment**. It went unnoticed because the pre-existing call sites all
-  used the value inside an `if`, which `set -e` exempts; 0.7's new
-  `WARDYN_DOCKER_SOCK` lookup is the first plain assignment, and it stopped the
-  desktop launcher dead with no output.
-
-### Added
 
 - **Model access on m′ has a documented, working path — it is Bedrock.** Three
   shipped mechanisms compose into what reads as a dead end (m′ mandates OIDC;
@@ -442,6 +290,99 @@ and does not yet follow semantic versioning (interfaces are not stable).
   on every device.
 
 ### Fixed
+
+- `GET /runs/{id}/files` reported `vcs:"none"` for every `--repo` run because it inspected the workspace mount target instead of the clone one level below it — the console's files widget claimed "no git repository" for a sandbox holding a full clone. It now finds the run's clone.
+- Console surfaces that referenced a nonexistent `bg-surface-1` token painted no background (new-run rail, settings and connection cards).
+- Focus rings now clear WCAG 1.4.11's 3:1 floor in both themes (`--ring` raised; the shared focus recipes no longer dilute it to 50%).
+
+- **A wardynd restart could kill a healthy, just-started run on Kubernetes and
+  report it FAILED.** Between the apiserver accepting the agent's ephemeral
+  exec container and the kubelet publishing that container's first status, the
+  pod carries the exec in `Spec.EphemeralContainers` with no matching entry in
+  `Status.EphemeralContainerStatuses`. `AgentStatus` read that window as a
+  **definitive terminal state with a nil error** — indistinguishable from "the
+  exec is gone" — and both reconciler consumers finalize on exactly that pair,
+  so a restart or a watcher-lease handoff landing in the window turned a live
+  run into `FAILED` and tore its sandbox down. The docker driver already
+  refuses the equivalent call (an exec-404 while the container still runs
+  returns an ambiguity **error**, so the reconciler retries); k8s had strictly
+  better evidence available — the pod `Get` succeeded and the exec is in
+  `Spec` — and used it worse. Present-in-Spec-but-not-in-Status is now
+  `STARTING`; an exec id absent from `Spec` was never exec'd against that pod
+  and stays terminal.
+
+- **`docs/PLUGGABILITY.md` claimed a selection convention that does not hold.**
+  Its rule — *"every seam selects via a `WARDYN_<SEAM>` env var"* — is false for
+  `egress.Evaluator`, which has a real interface and a conformance suite but **no
+  registry, no selector, and exactly one implementation**; the only override is an
+  in-process field nothing outside tests sets. `/healthz` was already honest about
+  this (`policy_engine` carries no `available` list); the doc was not. The same
+  claim was in `internal/component/registry.go`'s package doc. Both corrected, and
+  the doc now states the distinction it exists to keep straight: an interface plus
+  a conformance suite is a head start on pluggability, not a swappable seam.
+
+- **The threat model's own citation rule had no gate, and had rotted again.**
+  `threatmodel/THREAT-MODEL.md` §8 states that citations must name symbols, not
+  line numbers — *"an earlier pass pinned line numbers and six of nine had rotted
+  onto unrelated code (one past EOF)"* — and then kept nine of them, at least two
+  of which had rotted by 0.7. All nine now cite symbols, and
+  `TestCommentsCiteSymbolsNotLineNumbers`'s sibling extends the ban to
+  `threatmodel/*.md`. Also fixes four `Tier-1`/`Tier-3` occurrences (the pre-`CC`
+  names) and a security-doc contradiction: `docs/DATA-FLOW.md` called
+  `wardyn-proxy` the **L1** egress gateway; every other document calls it L2.
+
+- **The GPL corresponding-source offer covered the wrong images.** Its hardcoded
+  list still named `agent-claude-code`, unpublished since 0.6.2, and omitted
+  `agent-base`, which publishes in its place — so the loop errored on a ref that
+  does not exist while the image that IS published **was never scanned and had
+  no offer at all**. Publishing an image conveys its GPL/LGPL binaries, so that
+  is a real obligation, and it failed silently: a missing image produces no
+  output rather than an error. The same two errors were in `RELEASING.md`'s
+  manual cosign verification loop and in `release.yml`'s own header.
+
+  Regenerated against the published digests — and the first regeneration
+  **deleted** the section covering `agent-claude-code` 0.5.0/0.6.0, which are
+  **still pullable** and therefore still being conveyed. The generator now
+  retains a "still distributed, no longer published" section, verified by
+  `docker manifest inspect` (0.6.1 was never published; a comment in
+  `release.yml` claimed it was). Its stale default tag is gone — a default
+  silently regenerates the offer for the wrong release — and a new guard fails
+  when the offer's image list and `release.yml`'s publish matrix disagree in
+  either direction.
+
+- **`RELEASING.md`'s tag-gate job list was wrong in both directions.** It named
+  `sbom-stub`, which was **deleted** along with `make sbom` — so a maintainer
+  following it literally waited on a job that can never report — and it omitted
+  **`notices`**, the copyleft / unreviewed-dependency gate, telling them to skip
+  the one job that catches a GPL regression on a release that adds an X stack.
+  Both corrected, and a new guard fails when `ci.yml` and that list disagree in
+  either direction; this list had already drifted twice.
+
+- **`tool_approvals=hold` on an interactive run was accepted and silently
+  discarded.** Dispatch writes `WARDYN_TOOL_APPROVALS` only for non-interactive
+  runs, so the caller got a 201 and none of the supervision they asked for. It
+  is now a 400 naming the field. The run does not become unsupervised —
+  interactive tool use is already supervised in the attach pane — so this
+  refuses a contradiction rather than closing a hole. The guard sits **after**
+  the empty-task→interactive coercion, because a guard placed before it passes
+  and the field is still dropped.
+
+- **The custom base-image `steps` surface pretended to do something.**
+  Validation, caps and UI copy implied operator-authored Dockerfile lines would
+  be applied; nothing applies them, and nothing may — operator `RUN` lines would
+  execute on the **host** daemon during the wrap, outside every confinement
+  tier. The user-facing surface is gone. **The field itself stays**, documented
+  as catalog identity: it is part of the `base_images` UNIQUE index, so deleting
+  it would make every upsert write NULL and mint duplicate catalog rows.
+
+- **`env_get` killed its caller when a key was absent.** Its contract says
+  *"("" when absent)"*, but `grep` exits 1 and every caller runs under
+  `set -euo pipefail`, where `PIPEFAIL` propagates that — so
+  `v="$(env_get "$f" KEY)"` for an absent key **terminated the script silently
+  at the assignment**. It went unnoticed because the pre-existing call sites all
+  used the value inside an `if`, which `set -e` exempts; 0.7's new
+  `WARDYN_DOCKER_SOCK` lookup is the first plain assignment, and it stopped the
+  desktop launcher dead with no output.
 
 - **The desktop tier's image pin did not work at all.** `wardyn-desktop.sh`
   `export`ed `WARDYN_WARDYND_IMAGE` with a `:latest` default *before* running
@@ -589,6 +530,39 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and modifies none, so it is not triggered. The page now says so, and names the
   condition that would re-open it.
 
+### Changed
+
+- Console type scale collapsed to four body rungs (`--text-meta` 11px, `text-xs`, `--text-body` 13px, `text-sm`) replacing ~260 ad-hoc sizes; three elevation levels with one `--shadow-floating`; body tracking `0.01em`; helper text at 12px; thin scrollbars on every scroller; radius one-offs onto the card scale.
+- `KILLED` counts as needing attention on the board and badge (rank beside `FAILED`); rule-decided tool calls file under the Audit screen's **Tool calls** facet rather than **Egress**.
+
+- The `secrets` table's primary key widens from `name` to `(owned_by, name)` (migration `0050`) so a member can hold their own copy of a name the operator already uses; existing rows are unaffected and keep working exactly as before.
+
+- **In-editor extension installation is documented as unsupported by default.**
+  It reaches marketplace CDNs no shipped policy allowlists. The fix is baking
+  extensions into the image, not pasting a rotating CDN list into a policy.
+
+- **Scan-seeded egress now requires operator provenance, by default.**
+  `WARDYN_REQUIRE_OPERATOR_SET_EGRESS` shipped in 0.6 fully built and **off**,
+  because turning it on narrows egress for existing workspaces. 0.7 turns it on:
+  the asymmetry was the anomaly. The **secret** side of the very same `switch`
+  has always applied this provenance check unconditionally and calls the
+  boundary *"security-critical — do not relax"* — and the reason is identical
+  for egress. A hostile, or simply never-reviewed, repo could widen its own
+  run's allowlist just by naming a host in a committed file, with no operator
+  ever acting. **Upgrade impact:** a workspace whose egress requirements are
+  `scan_seeded` stops having them auto-added, and the run's warnings name what
+  was skipped; an operator declaring the host is the intended fix. Set
+  `WARDYN_REQUIRE_OPERATOR_SET_EGRESS=false` to restore the old behaviour.
+
+- **`--agent` is no longer required for a `task_mode=exec` run that names an
+  image.** exec runs the task as a plain shell command — no agent harness, no
+  model call — so naming an agent was a formality, and `docs/CI.md` documented
+  the workaround it forced (`--agent claude-code --image ubuntu:24.04
+  --task-mode exec`, in the document whose whole audience is exec). It is **not
+  a blanket default**: defaulting to `claude-code` would make every agentless
+  run eligible for the operator's live subscription credential, and defaulting
+  to `byoa`/`none` resolves to an image that does not exist (both 404 on the
+  registry). Harness mode still requires an agent.
 
 ## [0.6.6] — 2026-08-28
 
