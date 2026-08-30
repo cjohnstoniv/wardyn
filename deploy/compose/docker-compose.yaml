@@ -1,4 +1,4 @@
-# Wardyn compose demo. Two CI-tested deployment paths exist (anti-Gitpod
+# Wardyn compose demo. Two CI-tested deployment paths exist (anti-sprawl
 # constraint): this one and deploy/helm/wardyn. This stack stands up Postgres,
 # Dex (human SSO IdP), and wardynd built WITH the docker runner so it can launch
 # real governed sandboxes on the host Docker daemon.
