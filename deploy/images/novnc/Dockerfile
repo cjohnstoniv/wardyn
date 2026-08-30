@@ -19,6 +19,17 @@
 # stage adds no ENTRYPOINT and keeps USER agent (uid 1000).
 FROM wardyn/agent-base:local
 
+# Local build recipe only — never in release.yml's publish matrix (a gate in
+# scripts/check-image-pins.sh keeps it out). The licences label extends the
+# inherited base expression with what THIS stage adds: x11vnc and procps
+# (GPL-2.0-only), openbox (GPL-2.0-or-later), websockify (LGPL-3.0),
+# noVNC (MPL-2.0), Xvfb/xterm (MIT/X11) — per-package copyright files are the
+# source of each.
+LABEL org.opencontainers.image.title="agent-novnc" \
+      org.opencontainers.image.description="Wardyn agent image: agent-base plus an X/noVNC desktop stack (local build only)" \
+      org.opencontainers.image.licenses="Apache-2.0 AND GPL-3.0-or-later AND GPL-2.0-only AND GPL-2.0-or-later AND LGPL-3.0-or-later AND MPL-2.0 AND MIT" \
+      org.opencontainers.image.source="https://github.com/cjohnstoniv/wardyn"
+
 USER root
 
 # PINNING, and why it differs from the vscode image's single tarball.

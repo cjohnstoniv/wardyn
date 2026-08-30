@@ -53,6 +53,10 @@ Wardyn is distributed through four channels:
 | **CLI binaries** | `wardyn-{linux,darwin}-{amd64,arm64}`, attached to each GitHub release |
 | **Helm chart** | pushed to `oci://ghcr.io/cjohnstoniv/charts` on release; also installable straight from this repo |
 
+Three more agent Dockerfiles (`vscode`, `novnc`, `full`) are **local build
+recipes only**: `make agent-images` builds them on your own machine, no registry
+publishes them, and a release gate keeps them out of the publish matrix.
+
 **Wardyn's own code and all of its dependencies are permissively licensed.** Every
 Go module compiled into the shipped binaries and every npm package bundled into
 the console is Apache-2.0, MIT, BSD, ISC or OFL-1.1. There is no copyleft, no

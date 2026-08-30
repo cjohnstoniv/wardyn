@@ -136,6 +136,19 @@ for df in "${PUBLISHED_DOCKERFILES[@]}"; do
   fi
 done
 
+# ── local-only recipes stay local ───────────────────────────────────────────
+#
+# vscode/novnc/full are build recipes (`make agent-images`), deliberately NOT
+# published: vscode and full layer on the agent-claude-code base, whose vendor
+# CLI Wardyn does not distribute, and none of the three carries the
+# licence-file COPYs the loop above requires. They would enter the matrix as
+# agent-vscode/agent-novnc/agent-full (the Makefile's naming), so the prefixed
+# form must be matched too — a bare-name pattern is vacuous.
+if [ -f "$RELEASE_WF" ] && grep -qE '^[[:space:]]+- name: (agent-)?(vscode|novnc|full)[[:space:]]*$' "$RELEASE_WF"; then
+  echo "FAIL: $RELEASE_WF publishes a local-only image (vscode/novnc/full). These are build recipes carrying vendor-licensed or unreviewed content; they must not enter the publish matrix." >&2
+  fail=1
+fi
+
 # ── every published image is vulnerability-scanned ──────────────────────────
 #
 # These are two hand-edited lists in two workflows, so they WILL drift: before

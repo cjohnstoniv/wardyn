@@ -15,6 +15,14 @@
 # nothing that changes it — no ENTRYPOINT, same USER agent (uid 1000).
 FROM wardyn/agent-claude-code:local
 
+# Local build recipe only — never in release.yml's publish matrix (a gate in
+# scripts/check-image-pins.sh keeps it out). The licences label extends the
+# inherited base expression with what THIS stage adds: code-server (MIT).
+LABEL org.opencontainers.image.title="agent-vscode" \
+      org.opencontainers.image.description="Wardyn agent image: claude-code plus code-server (local build only)" \
+      org.opencontainers.image.licenses="Apache-2.0 AND GPL-3.0-or-later AND MIT AND LicenseRef-Anthropic-Terms" \
+      org.opencontainers.image.source="https://github.com/cjohnstoniv/wardyn"
+
 USER root
 
 # code-server release tarball, sha256-verified against a checksum computed

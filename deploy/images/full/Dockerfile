@@ -28,6 +28,16 @@ FROM rust:1.82.0-slim-bookworm@sha256:1111c28d995d06a7863ba6cea3b3dcb87bebe65af8
 # resolvable upstream digest and is rebuilt+retagged on every local build.
 FROM wardyn/agent-claude-code:local
 
+# Local build recipe only — never in release.yml's publish matrix (a gate in
+# scripts/check-image-pins.sh keeps it out). The licences label extends the
+# inherited base expression with what THIS stage adds: Go (BSD-3-Clause),
+# Rust (MIT OR Apache-2.0), CPython (PSF-2.0), Temurin JDK (GPL-2.0 WITH
+# Classpath-exception-2.0), Maven (Apache-2.0), build-essential (GPL).
+LABEL org.opencontainers.image.title="agent-full" \
+      org.opencontainers.image.description="Wardyn agent image: claude-code plus full language toolchains (local build only)" \
+      org.opencontainers.image.licenses="Apache-2.0 AND GPL-3.0-or-later AND BSD-3-Clause AND MIT AND PSF-2.0 AND GPL-2.0-only WITH Classpath-exception-2.0 AND LicenseRef-Anthropic-Terms" \
+      org.opencontainers.image.source="https://github.com/cjohnstoniv/wardyn"
+
 # SSH SCM lane note: openssh-client + corkscrew (CONNECT ProxyCommand helper) and
 # the baked /etc/ssh/ssh_known_hosts are INHERITED from the base image above — no
 # re-install here (they are one FROM away). agent-run (also inherited) wires the
