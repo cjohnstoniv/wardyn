@@ -737,9 +737,20 @@ jobs:
         run: |
           BASE=${{ github.event.pull_request.base.sha }}
           if [ -z "$BASE" ]; then
-            # On push to main, just check the HEAD commit. `-1 HEAD` is the
-            # single-commit range equivalent of the PR BASE..HEAD below.
-            make dco DCO_RANGE="-1 HEAD"
+            # On push, check every commit the push introduced — `-1 HEAD`
+            # checked only the tip, so a multi-commit direct push could land
+            # unsigned commits behind one signed HEAD. github.event.before is
+            # the ref's previous tip; it is all-zeros on a newly created ref,
+            # and after a force-push it can name a commit this clone no longer
+            # has — both fall back to the single-commit check rather than
+            # erroring the job.
+            BEFORE=${{ github.event.before }}
+            if [ -n "$BEFORE" ] && ! echo "$BEFORE" | grep -qE '^0+$' \
+               && git cat-file -e "$BEFORE" 2>/dev/null; then
+              make dco DCO_RANGE="$BEFORE..HEAD"
+            else
+              make dco DCO_RANGE="-1 HEAD"
+            fi
           else
             # checkout@v4 on pull_request lands on the ephemeral auto-generated
             # merge commit, whose message has no Signed-off-by. `make dco` uses
