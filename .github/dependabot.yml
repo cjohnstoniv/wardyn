@@ -39,3 +39,8 @@ updates:
     groups:
       docker-base-images:
         patterns: ["*"]
+    ignore:
+      # Agent images ship on Node LTS lines only — odd-numbered majors are
+      # non-LTS. Extend this list when the next odd major appears.
+      - dependency-name: node
+        versions: ["25.*", "27.*"]
