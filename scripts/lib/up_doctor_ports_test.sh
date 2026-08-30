@@ -17,8 +17,10 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-if ! command -v docker >/dev/null 2>&1; then
-  echo "SKIP: docker not available to run scripts/up.sh doctor" >&2
+if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+  # cmd_doctor exits 2 on an unreachable daemon before any port assertion runs,
+  # so a present-but-dead docker must skip exactly like an absent one.
+  echo "SKIP: docker daemon not reachable to run scripts/up.sh doctor" >&2
   exit 0
 fi
 

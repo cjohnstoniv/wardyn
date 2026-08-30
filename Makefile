@@ -422,10 +422,15 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size gate
 # The shell half of the test suite: each of these pins a fixed regression in
 # scripts/ that no Go test can see (up.sh's reset warnings, the compose
 # namespace/port derivation, up-policy's parsing). Daemon-free by selection —
-# scripts/test-reset-all-sandbox-reap.sh and test-podman.sh are deliberately
-# NOT here, they need a live daemon / a podman host.
+# test-podman.sh is deliberately NOT here (needs a podman host), and
+# scripts/test-reset-all-sandbox-reap.sh needs a live daemon so it runs in
+# nightly.yml's test-drive job instead. up_doctor_ports_test self-skips when
+# no reachable daemon exists, so it is safe in the daemon-free set.
 test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	@echo "Running daemon-free shell regression tests..."
+	./scripts/lib/common_clone_present_test.sh
+	./scripts/lib/nightly_ssh_e2e_test.sh
+	./scripts/lib/up_doctor_ports_test.sh
 	./scripts/test-compose-ns-registry-port.sh
 	./scripts/test-desktop-profile.sh
 	./scripts/test-image-pins.sh

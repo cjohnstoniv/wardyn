@@ -65,7 +65,9 @@ def find_ffmpeg(explicit: str | None) -> str:
     )
     if hits:
         return str(hits[0])
-    return which("ffmpeg") or "ffmpeg"
+    if w := which("ffmpeg"):
+        return w
+    raise SystemExit("demo-drift: no ffmpeg found (pass --ffmpeg)")
 
 
 def winpath(ffmpeg: str, p: str) -> str:

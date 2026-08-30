@@ -4,42 +4,19 @@
 #
 # Regression test for W18-S1-2: the live SSH gateway e2e (`make test-e2e-ssh` /
 # scripts/run-e2e-ssh.sh) ran in NO CI workflow — nightly.yml had jobs for the
-# other live e2e lanes (test-e2e, test-e2e-live, test-drive, ci-mode-dogfood)
-# but none of them, nor any other job, invoked `make test-e2e-ssh`. This
-# statically checks that a nightly.yml job actually runs it, so a future
-# removal of that step regresses loudly instead of silently.
+# other live e2e lanes but none of them invoked it. This pins the invocation
+# itself, not just a job name, so a future removal regresses loudly. Plain
+# grep on purpose: the repo declares no YAML parser anywhere, and "does a
+# non-comment line invoke the suite" does not need one — comment lines are
+# stripped first because the job's own header comment names the target.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORKFLOW="${REPO_ROOT}/.github/workflows/nightly.yml"
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "SKIP: python3 not available to parse ${WORKFLOW}" >&2
-  exit 0
+if grep -Ev '^[[:space:]]*#' "${WORKFLOW}" | grep -Eq 'make test-e2e-ssh|run-e2e-ssh\.sh'; then
+  echo "ok - nightly.yml invokes the live SSH gateway e2e"
+else
+  echo "FAIL: no non-comment line in ${WORKFLOW} invokes 'make test-e2e-ssh' or run-e2e-ssh.sh (W18-S1-2)" >&2
+  exit 1
 fi
-
-python3 - "${WORKFLOW}" <<'PYEOF'
-import sys
-import yaml
-
-path = sys.argv[1]
-with open(path) as f:
-    doc = yaml.safe_load(f)
-
-jobs = doc.get("jobs", {})
-hit = None
-for job_name, job in jobs.items():
-    for step in job.get("steps", []):
-        run = step.get("run", "") or ""
-        if "make test-e2e-ssh" in run or "run-e2e-ssh.sh" in run:
-            hit = job_name
-            break
-    if hit:
-        break
-
-if not hit:
-    print(f"FAIL: no job in {path} runs `make test-e2e-ssh` / run-e2e-ssh.sh", file=sys.stderr)
-    sys.exit(1)
-
-print(f"ok - job {hit!r} in nightly.yml runs the live SSH gateway e2e")
-PYEOF

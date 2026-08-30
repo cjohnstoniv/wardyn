@@ -142,6 +142,8 @@ jobs:
         run: make agent-images-core
       - name: Guided governance test-drive (brings up its own compose stack)
         run: make test-drive
+      - name: Reset --all reaps stray sandboxes (dry-run assertions)
+        run: ./scripts/test-reset-all-sandbox-reap.sh
 
   # CI-mode dogfood: the exact flow docs/ci/github-actions.yml tells users to
   # run — scripts/ci-run.sh brings up a fresh control plane, launches ONE
