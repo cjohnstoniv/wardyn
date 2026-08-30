@@ -52,9 +52,14 @@ CALICO_MANIFEST="https://raw.githubusercontent.com/projectcalico/calico/${CALICO
 # Keeping them equal is what makes the printed URL match what the chart renders
 # and what wardynd advertises over SSH.
 NODE_HTTP_PORT=30080
-HTTP_PORT=8080
+# Host-side ports are overridable so the quickstart can run BESIDE another
+# stack already holding 8080/2222 (a local compose install, a dev daemon) —
+# the kind config pins publications to loopback, and a loopback collision is
+# silent: docker binds happily while the pre-existing socket keeps winning
+# every connection (see quickstart-kind-config.yaml's listenAddress note).
+HTTP_PORT="${WARDYN_QUICKSTART_HTTP_PORT:-8080}"
 NODE_SSH_PORT=30022
-SSH_PORT=2222
+SSH_PORT="${WARDYN_QUICKSTART_SSH_PORT:-2222}"
 # Locally built, `kind load`ed images. No registry is involved anywhere here.
 WARDYND_IMAGE="wardyn/wardynd:quickstart"
 PROXY_IMAGE="wardyn/wardyn-proxy:quickstart"
@@ -113,8 +118,17 @@ if kind get clusters 2>/dev/null | grep -qx "${CLUSTER}"; then
   step "kind cluster ${CLUSTER} already exists — reusing it"
 else
   step "creating kind cluster ${CLUSTER}"
+  # Non-default host ports render a temp copy of the checked-in config — the
+  # hostPort lines are the only thing that varies; NodePorts stay pinned.
+  KIND_CONFIG=deploy/kind/quickstart-kind-config.yaml
+  if [[ "${HTTP_PORT}" != "8080" || "${SSH_PORT}" != "2222" ]]; then
+    KIND_CONFIG="$(mktemp)"
+    sed -e "s/hostPort: 8080\$/hostPort: ${HTTP_PORT}/" \
+        -e "s/hostPort: 2222\$/hostPort: ${SSH_PORT}/" \
+      deploy/kind/quickstart-kind-config.yaml > "${KIND_CONFIG}"
+  fi
   kind create cluster --name "${CLUSTER}" \
-    --config deploy/kind/quickstart-kind-config.yaml --wait 90s
+    --config "${KIND_CONFIG}" --wait 90s
 fi
 
 step "installing Calico ${CALICO_VERSION} (kind's default CNI does not enforce NetworkPolicy)"
