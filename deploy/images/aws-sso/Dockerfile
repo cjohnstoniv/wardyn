@@ -38,7 +38,7 @@
 # $TARGETARCH below (pure Go, CGO_ENABLED=0) — no QEMU for the compile. Stage 2
 # does need it (apt + the AWS CLI installer run as the target arch; that stage
 # already selects x86_64/aarch64 off its own TARGETARCH).
-FROM --platform=$BUILDPLATFORM golang:1.26@sha256:ae5a2316d12f3e78fd99177dad452e6ad4f240af2d71d57b480c3477f250fec6 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27@sha256:4013ae0f9e7994f8535c58c811f8f863fbed38b72e0d51e6592156f758d66146 AS builder
 
 WORKDIR /build
 
@@ -224,7 +224,7 @@ RUN set -eu; \
 ENV AWS_PAGER=""
 
 # Create user `agent` (uid 1000, home /home/agent, work /home/agent/work) —
-# debian's useradd, unlike the node:22-bookworm-slim base the sibling images
+# debian's useradd, unlike the node:24-bookworm-slim base the sibling images
 # use, has no pre-existing uid-1000 user to rename.
 RUN groupadd -g 1000 agent \
  && useradd -m -u 1000 -g agent -d /home/agent -s /bin/bash agent \

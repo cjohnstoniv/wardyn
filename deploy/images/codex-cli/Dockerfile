@@ -1,7 +1,7 @@
 # wardyn/agent-codex-cli: OpenAI Codex CLI coding-agent image.
 #
 # Stage 1: build wardyn-rec and wardyn-git-helper from the repository root.
-# Stage 2: node:22-bookworm-slim installs Codex CLI plus OS utilities.
+# Stage 2: node:24-bookworm-slim installs Codex CLI plus OS utilities.
 #
 # IMAGE CONTRACT (all agent images must satisfy these — see deploy/images/README.md):
 #   - NO ENTRYPOINT: the Wardyn docker driver sets Cmd=["sleep","infinity"].
@@ -30,7 +30,7 @@
 # --platform=$BUILDPLATFORM: runs on the BUILDER's arch and cross-compiles to
 # $TARGETARCH below (pure Go, CGO_ENABLED=0) — no QEMU for the compile. Stage 2
 # does need it (apt + npm run as the target arch).
-FROM --platform=$BUILDPLATFORM golang:1.26@sha256:ae5a2316d12f3e78fd99177dad452e6ad4f240af2d71d57b480c3477f250fec6 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27@sha256:4013ae0f9e7994f8535c58c811f8f863fbed38b72e0d51e6592156f758d66146 AS builder
 
 WORKDIR /build
 
@@ -67,7 +67,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-rec ./
  && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-scan ./cmd/wardyn-scan
 
 # ── Stage 2: agent runtime ────────────────────────────────────────────────────
-FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3
+FROM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e
 
 # Apache-2.0 s4(a) requires a copy of the Licence to accompany the distribution and
 # s4(d) requires the NOTICE contents to be carried. Publishing an image IS
@@ -138,7 +138,7 @@ ARG NO_PROXY=
 ARG CODEX_INSTALL=npm
 # Same CVE-2026-59873 fix as the claude-code sibling: the base image's bundled
 # npm (10.9.8) vendors node-tar 7.5.11; 11.19.0 vendors the patched 7.5.19. No
-# node:22-bookworm-slim digest ships a fixed one yet, and it is npm's internal
+# node:24-bookworm-slim digest ships a fixed one yet, and it is npm's internal
 # copy, so upgrading npm is the only reach. Keep in step with that image.
 ARG NPM_VERSION=11.19.0
 RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
@@ -157,7 +157,7 @@ RUN set -eu; \
         npm install -g @openai/codex; \
     fi
 
-# The node:22-bookworm-slim base image ships a `node` user at uid=1000.
+# The node:24-bookworm-slim base image ships a `node` user at uid=1000.
 # Rename it to `agent` and relocate the home directory so the sandbox contract
 # is satisfied without creating a conflicting second uid-1000 user.
 RUN usermod  -l agent node \
@@ -201,7 +201,7 @@ WORKDIR /home/agent/work
 
 USER agent
 
-# The node:22-bookworm-slim base image sets ENTRYPOINT ["docker-entrypoint.sh"].
+# The node:24-bookworm-slim base image sets ENTRYPOINT ["docker-entrypoint.sh"].
 # MUST be cleared: the Wardyn docker driver sets Cmd=["sleep","infinity"] at
 # container create and launches the agent via Exec.  An ENTRYPOINT here would
 # wrap the driver-supplied Cmd, causing the sandbox to tear down immediately.

@@ -18,9 +18,9 @@
 # auto-download of a newer toolchain — the corporate / air-gapped posture — so a Go
 # older than a repo's `go` directive does not degrade, it FAILS: "go.mod requires
 # go >= 1.26 (running go 1.23.5; GOTOOLCHAIN=local)". Keep this at or above the
-# `toolchain` line of the repos you build (this digest is go1.26.5; wardyn itself
-# pins toolchain go1.26.5). Bump the pin rather than relaxing GOTOOLCHAIN.
-FROM golang:1.26@sha256:ae5a2316d12f3e78fd99177dad452e6ad4f240af2d71d57b480c3477f250fec6 AS goroot
+# `toolchain` line of the repos you build (this digest is go1.27; wardyn itself
+# pins toolchain go1.26.6). Bump the pin rather than relaxing GOTOOLCHAIN.
+FROM golang:1.27@sha256:4013ae0f9e7994f8535c58c811f8f863fbed38b72e0d51e6592156f758d66146 AS goroot
 FROM rust:1.82.0-slim-bookworm@sha256:1111c28d995d06a7863ba6cea3b3dcb87bebe65af8ec5517caaf2c8c26f38010 AS rustroot
 
 # Not digest-pinned: this is a locally-built image tag (produced by
