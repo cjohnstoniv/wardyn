@@ -12,6 +12,7 @@
 #
 # Usage: scripts/test-desktop-profile.sh
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DESK_DIR="${REPO_ROOT}/deploy/desktop"
@@ -109,7 +110,6 @@ for f in install.sh wardyn-desktop.sh; do
   fi
 done
 
-echo "test-desktop-profile: self-test PASS"
 
 # ── 7. the m-prime (member-mode) envelope's own invariants ──────────────────
 # Sections 1-3 prove it PARSES and that every var it sets is documented. Those
@@ -118,20 +118,19 @@ echo "test-desktop-profile: self-test PASS"
 MPRIME="${DESK_DIR}/wardyn.env.m-prime.example"
 [ -f "${MPRIME}" ] || fail "${MPRIME} not found — the member-mode profile docs/DESKTOP.md documents has no shipped envelope"
 
-mp_get() { grep -E "^$1=" "${MPRIME}" | head -1 | cut -d= -f2-; }
 
 # (a) It is actually member mode, with SSO. Either half alone is not m'.
-[ "$(mp_get WARDYN_MEMBER_MODE)" = "true" ] \
+[ "$(env_get "${MPRIME}" WARDYN_MEMBER_MODE)" = "true" ] \
   || fail "m-prime envelope does not set WARDYN_MEMBER_MODE=true"
-[ "$(mp_get WARDYN_LOCAL_MODE)" = "false" ] \
+[ "$(env_get "${MPRIME}" WARDYN_LOCAL_MODE)" = "false" ] \
   || fail "m-prime envelope must set WARDYN_LOCAL_MODE=false — a configured issuer plus explicit local mode is refused at boot, and would silently disable the SSO RBAC that makes this profile mean anything"
-[ -n "$(mp_get WARDYN_OIDC_ISSUER)" ] \
+[ -n "$(env_get "${MPRIME}" WARDYN_OIDC_ISSUER)" ] \
   || fail "m-prime envelope sets no WARDYN_OIDC_ISSUER — OIDC is mandatory on m', it is the only thing authenticating the member"
 
 # (b) The member can actually mount their own project directory. Unset means
 #     "members may not mount host directories at all", which turns off the one
 #     power m' exists to add.
-roots="$(mp_get WARDYN_MEMBER_WORKSPACE_ROOTS)"
+roots="$(env_get "${MPRIME}" WARDYN_MEMBER_WORKSPACE_ROOTS)"
 [ -n "${roots}" ] \
   || fail "m-prime envelope leaves WARDYN_MEMBER_WORKSPACE_ROOTS unset — members may then mount NOTHING, which is the one power m' exists to add"
 
@@ -313,3 +312,4 @@ grep -q 'PREFIX="${PAYLOAD}/usr/local/lib/wardyn"' "${PKGR}" \
   || fail "${PKGR}'s payload prefix changed — wardyn-desktop.sh's REPO_ROOT='../..' depends on the deploy/ level being present"
 
 echo "test-desktop-profile: m-prime invariants PASS"
+echo "test-desktop-profile: self-test PASS"

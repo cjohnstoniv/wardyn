@@ -53,7 +53,6 @@ IMAGES=(wardynd wardyn-proxy agent-base agent-codex-cli agent-aws-sso)
 # still owed and its section must be RETAINED across regenerations — regenerating
 # from the current publish set alone would delete the only offer covering images
 # that are still being conveyed.
-HISTORICAL_NOTE=1
 HISTORICAL_TAGS=(0.5.0 0.6.0)
 
 {
@@ -120,7 +119,7 @@ HISTORICAL_TAGS=(0.5.0 0.6.0)
   # is exactly what happened on the first regeneration for 0.7. That is a legal
   # regression that produces no error, so the sections are emitted here and
   # HISTORICAL_TAGS is the list to shrink only when a tag stops being pullable.
-  if [ "${HISTORICAL_NOTE:-0}" = "1" ]; then
+  if [ "${#HISTORICAL_TAGS[@]}" -gt 0 ]; then
     echo "## Still distributed, no longer published"
     echo
     echo "\`agent-claude-code\` was published through 0.6.0 and is no longer built by"
