@@ -630,6 +630,16 @@ func TestMintForGrant_AutoMint_APIKey_InjectionRuleNoSecret(t *testing.T) {
 	}
 }
 
+// mintOnApproval mirrors the removed production wrapper of the same shape:
+// run-scoped synthesized claims (the approval FSM's caller shape) with a Nil
+// approval hint. These tests exercise b.mint's chokepoint invariants —
+// exactly-once, fail-closed, namespace resolution — through exactly that
+// shape, so the shape lives on here.
+func mintOnApproval(b *Broker, ctx context.Context, runID, grantID uuid.UUID, sub string) (Minted, error) {
+	caller := &identity.Claims{RunID: runID, SPIFFEID: spiffeForRun(runID), Sub: sub}
+	return b.mint(ctx, caller, grantID, uuid.Nil)
+}
+
 func TestMintOnApproval_HappyPath(t *testing.T) {
 	b, db, _, _ := newTestBroker(t)
 	runID := uuid.New()
@@ -637,17 +647,17 @@ func TestMintOnApproval_HappyPath(t *testing.T) {
 	gid := seedGrant(db, runID, spec)
 	aid := seedApproval(db, runID, gid, spec.Scope, types.ApprovalApproved)
 
-	minted, err := b.MintOnApproval(context.Background(), runID, gid, "")
+	minted, err := mintOnApproval(b, context.Background(), runID, gid, "")
 	if err != nil {
-		t.Fatalf("MintOnApproval: %v", err)
+		t.Fatalf("mintOnApproval: %v", err)
 	}
 	if db.approvals[aid].mintedJTI != minted.JTI {
-		t.Fatal("MintOnApproval did not write minted_jti in tx")
+		t.Fatal("mintOnApproval did not write minted_jti in tx")
 	}
 }
 
 // TestMintOnApproval_RequiresApproval_NoApprovalRow_FailsClosed proves the
-// in-tx chokepoint self-check: MintOnApproval (Nil approval hint) on a grant
+// in-tx chokepoint self-check: mintOnApproval (Nil approval hint) on a grant
 // whose spec RequiresApproval but which has NO approval row must NOT auto-mint —
 // it fails closed with ErrNotApproved and never calls the minter. Without the
 // grantSpec.RequiresApproval guard the mint's `if row.hasApproval` block is
@@ -659,7 +669,7 @@ func TestMintOnApproval_RequiresApproval_NoApprovalRow_FailsClosed(t *testing.T)
 	gid := seedGrant(db, runID, spec)
 	// Deliberately seed NO approval row.
 
-	_, err := b.MintOnApproval(context.Background(), runID, gid, "")
+	_, err := mintOnApproval(b, context.Background(), runID, gid, "")
 	if !errors.Is(err, ErrNotApproved) {
 		t.Fatalf("want ErrNotApproved, got %v", err)
 	}

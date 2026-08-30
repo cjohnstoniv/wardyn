@@ -268,7 +268,7 @@ func TestBrokerMint_GitPATAndSSHKey_OwnerScoped(t *testing.T) {
 }
 
 // TestMintOnApproval_MemberRunResolvesOwnerNamespace: an approval-gated
-// git_pat mint via MintOnApproval, with the run's CreatedBy passed as sub,
+// git_pat mint via mintOnApproval, with the run's CreatedBy passed as sub,
 // resolves the MEMBER's own secret row — not the operator's — closing the
 // residual ownerOf's doc comment used to name (a bare &identity.Claims{RunID}
 // with no Sub always fell back to the operator namespace on this path).
@@ -286,9 +286,9 @@ func TestMintOnApproval_MemberRunResolvesOwnerNamespace(t *testing.T) {
 	gid := seedGrant(db, runID, spec)
 	seedApproval(db, runID, gid, spec.Scope, types.ApprovalApproved)
 
-	minted, err := b.MintOnApproval(context.Background(), runID, gid, "alice")
+	minted, err := mintOnApproval(b, context.Background(), runID, gid, "alice")
 	if err != nil {
-		t.Fatalf("MintOnApproval: %v", err)
+		t.Fatalf("mintOnApproval: %v", err)
 	}
 	if minted.Token != "alice-pat-value" {
 		t.Fatalf("token = %q, want alice's own row (the run's CreatedBy), not the operator's", minted.Token)
@@ -309,9 +309,9 @@ func TestMintOnApproval_OperatorRunResolvesOperatorNamespace(t *testing.T) {
 	gid := seedGrant(db, runID, spec)
 	seedApproval(db, runID, gid, spec.Scope, types.ApprovalApproved)
 
-	minted, err := b.MintOnApproval(context.Background(), runID, gid, "")
+	minted, err := mintOnApproval(b, context.Background(), runID, gid, "")
 	if err != nil {
-		t.Fatalf("MintOnApproval: %v", err)
+		t.Fatalf("mintOnApproval: %v", err)
 	}
 	if minted.Token != "operator-pat-value" {
 		t.Fatalf("token = %q, want the operator's row (operator-created run)", minted.Token)

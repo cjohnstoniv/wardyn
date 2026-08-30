@@ -20,9 +20,10 @@ import (
 
 // ownerOf is the secretstore.Store.For namespace a mint resolves its secret
 // from: the caller run's own identity Sub, or "" when caller is nil.
-// MintOnApproval's caller loads the run and passes its CreatedBy as Sub, so
-// an approval-gated git_pat/ssh_key mint reached that way resolves the same
-// namespace the auto-mint path (MintForGrant's fully-populated caller) does.
+// An approval-path mint synthesizes run-scoped claims carrying the run's
+// CreatedBy as Sub, so an approval-gated git_pat/ssh_key mint reached that way
+// resolves the same namespace the auto-mint path (MintForGrant's
+// fully-populated caller) does.
 // An operator-created run's own Sub never collides with a member's stamped
 // row (secretOwnerFromRequest's own doc comment).
 func ownerOf(caller *identity.Claims) string {

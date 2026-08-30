@@ -426,7 +426,7 @@ func TestPG_ConcurrentMint_AutoApprovalGrant_Independent(t *testing.T) {
 }
 
 // TestPG_ConcurrentMintOnApproval_ExactlyOnce is the tightest single-use race:
-// MintOnApproval skips MintForGrant's loadGrant/ensureApproval round-trips and
+// A run-claims mint (mintOnApproval) skips MintForGrant's loadGrant/ensureApproval round-trips and
 // goes STRAIGHT to the FOR UPDATE mint transaction, so all N goroutines contend
 // on selectGrantApprovalForUpdate near-simultaneously — the worst case for the
 // single-use guard. It asserts exactly one win, N-1 ErrAlreadyMinted, and one
@@ -472,7 +472,7 @@ func TestPG_ConcurrentMintOnApproval_ExactlyOnce(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start // release together to maximize contention on the mint tx
-			minted, err := b.MintOnApproval(ctx, runID, grantID, "")
+			minted, err := mintOnApproval(b, ctx, runID, grantID, "")
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -490,10 +490,10 @@ func TestPG_ConcurrentMintOnApproval_ExactlyOnce(t *testing.T) {
 	wg.Wait()
 
 	if len(other) != 0 {
-		t.Fatalf("unexpected errors from concurrent MintOnApproval: %v", other)
+		t.Fatalf("unexpected errors from concurrent mintOnApproval: %v", other)
 	}
 	if wins != 1 {
-		t.Fatalf("MintOnApproval winners = %d, want exactly 1 (single-use minted_jti)", wins)
+		t.Fatalf("mintOnApproval winners = %d, want exactly 1 (single-use minted_jti)", wins)
 	}
 	if already != n-1 {
 		t.Fatalf("ErrAlreadyMinted = %d, want %d", already, n-1)

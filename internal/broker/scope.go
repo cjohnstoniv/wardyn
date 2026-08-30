@@ -107,7 +107,8 @@ func newJTI() string {
 }
 
 // spiffeForRun builds the canonical run SPIFFE id used as the audit actor when
-// the caller claims are synthesized (e.g. MintOnApproval / revoke cascade).
+// the caller claims are synthesized (e.g. a run-scoped approval-path mint /
+// revoke cascade).
 func spiffeForRun(runID uuid.UUID) string {
 	return "spiffe://wardyn.local/agent-run/" + runID.String()
 }

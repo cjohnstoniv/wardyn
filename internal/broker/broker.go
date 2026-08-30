@@ -323,7 +323,7 @@ func (b *Broker) MintForGrant(ctx context.Context, caller *identity.Claims, gran
 
 	// Read the grant (and any approval) to decide routing. This pre-check is
 	// outside the mint tx; the authoritative single-use + state checks happen
-	// inside MintOnApproval's FOR UPDATE transaction.
+	// inside the mint's FOR UPDATE transaction.
 	spec, grantRunID, err := b.loadGrant(ctx, grantID)
 	if err != nil {
 		return Minted{}, err
@@ -360,23 +360,6 @@ func (b *Broker) MintForGrant(ctx context.Context, caller *identity.Claims, gran
 	default:
 		return Minted{}, fmt.Errorf("broker: unexpected approval state %q", ap.State)
 	}
-}
-
-// MintOnApproval mints the credential for an already-APPROVED, approval-gated
-// grant. It is the security chokepoint: a single FOR UPDATE transaction reads
-// the grant joined to its approval, verifies APPROVED + matching run +
-// single-use + no-widening, calls the kind-specific minter, and writes
-// minted_jti back before committing. It is also reachable directly from the
-// approval FSM (decide -> mint) by callers that already hold approved state.
-//
-// sub is the run's OWNER (its CreatedBy, "" for an operator-created run) —
-// the caller loads the run and passes it, so a git_pat/ssh_key mint on THIS
-// path resolves the run's own secretstore.Store.For namespace exactly like
-// MintForGrant's fully-populated caller does, instead of always falling back
-// to the operator namespace (see ownerOf).
-func (b *Broker) MintOnApproval(ctx context.Context, runID, grantID uuid.UUID, sub string) (Minted, error) {
-	caller := &identity.Claims{RunID: runID, SPIFFEID: spiffeForRun(runID), Sub: sub}
-	return b.mint(ctx, caller, grantID, uuid.Nil)
 }
 
 // mint runs the authoritative single-transaction mint. approvalHint, when
@@ -425,8 +408,8 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 
 	// Chokepoint self-enforcement: an approval-required grant must carry an
 	// approval row. MintForGrant's routing guarantees this, but re-check it in
-	// the tx so the mint is self-contained for EVERY entry point (MintOnApproval
-	// passes a Nil approval hint and would otherwise auto-mint an approval-gated
+	// the tx so the mint is self-contained for EVERY entry point (a caller
+	// passing a Nil approval hint would otherwise auto-mint an approval-gated
 	// grant that has no approval row). Fail closed.
 	if row.grantSpec.RequiresApproval && !row.hasApproval {
 		b.auditMint(ctx, caller, grantID, uuid.Nil, "", row.grantSpec.Scope, "denied")

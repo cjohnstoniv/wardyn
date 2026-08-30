@@ -71,11 +71,11 @@ done
 # ── label-truth manifest: diagram label -> the source that must contain it ───
 # Format: <needle>\t<file>. Both sides are required: the needle must appear at
 # the cited source AND in some extracted diagram, so neither can drift alone.
-# Deliberately UNPINNED: `MintOnApproval` (internal/broker/broker.go) and
-# `StopSandbox` (internal/api/runs_lifecycle.go) were pinned here until the doc
-# consolidation; no diagram or prose in DOCS names either symbol any more, so a
-# both-sides entry would fail on the diagram half. Re-add the entry — do not
-# weaken the rule — if a doc starts naming them again.
+# Deliberately UNPINNED: `StopSandbox` (internal/api/runs_lifecycle.go) was
+# pinned here until the doc consolidation (as was a broker mint seam since
+# removed); no diagram or prose in DOCS names it any more, so a both-sides
+# entry would fail on the diagram half. Re-add the entry — do not weaken the
+# rule — if a doc starts naming it again.
 while IFS=$'\t' read -r needle src; do
   [ -z "$needle" ] && continue
   case "$needle" in \#*) continue;; esac
