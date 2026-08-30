@@ -459,6 +459,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
+		s.cfg.Identity.RevokeRun(ctx, runID) //nolint:errcheck // best-effort cleanup of the minted-but-unused token
 		return types.AgentRun{}, fmt.Errorf("create harness login run: %w", err)
 	}
 	// Pre-login ~/.aws/config for the AWS flow, delivered through the SAME
