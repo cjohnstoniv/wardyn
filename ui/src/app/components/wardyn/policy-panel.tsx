@@ -409,7 +409,7 @@ const EFFECT_TONE: Record<ToolEffect, string> = {
 // textarea can hand this a string or an object, and the section has to render
 // the refusal toolRulesProblem returns for it — throwing here would hit the
 // route's ErrorBoundary and take the operator's draft with it.
-export function splitToolRules(rules: readonly ToolRule[] | undefined): {
+function splitToolRules(rules: readonly ToolRule[] | undefined): {
   named: ToolRule[];
   defaultEffect: ToolEffect;
   explicitDefault: boolean;
@@ -431,7 +431,7 @@ export function splitToolRules(rules: readonly ToolRule[] | undefined): {
 // line to documents that never asked for one. An empty result DROPS the key
 // entirely: `tool_rules: []` and no key at all mean the same thing, and the
 // shorter one is what a policy written before this field looks like.
-export function withToolRules(
+function withToolRules(
   spec: RunPolicySpec,
   named: readonly ToolRule[],
   defaultEffect: ToolEffect,

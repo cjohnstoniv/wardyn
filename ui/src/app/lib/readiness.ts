@@ -99,7 +99,7 @@ export function deriveReadiness(status: SetupStatus): Readiness {
 // vs multi-user (SSO, each person their own admin/member role). Derived, no
 // wire change: only `sso` widens the audience — an unknown/future auth.mode
 // reads single-user, the narrower/safer default.
-export type DeploymentMode = "single-user" | "multi-user";
+type DeploymentMode = "single-user" | "multi-user";
 
 export function deploymentMode(s: SetupStatus): DeploymentMode {
   return s.auth.mode === "sso" ? "multi-user" : "single-user";

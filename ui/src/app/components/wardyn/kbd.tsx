@@ -23,7 +23,7 @@ export const MOD = "Mod";
 // agrees on — userAgentData.platform is Chromium-only, and the userAgent
 // fallback covers the rest. Read per render rather than cached at module load
 // so a test can drive it, and because it is one regex on a short string.
-export function isApplePlatform(): boolean {
+function isApplePlatform(): boolean {
   if (typeof navigator === "undefined") return false;
   const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
   return /mac|iphone|ipad|ipod/i.test(nav.userAgentData?.platform || nav.platform || nav.userAgent);

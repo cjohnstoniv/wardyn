@@ -23,7 +23,7 @@ import { Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
 import { RailSection } from "./new-run-primitives";
 
-export interface RunRailProps {
+interface RunRailProps {
   /** The stored policy this run launches by reference, when there is one. */
   savedPolicy?: { name: string; spec: RunPolicySpec };
   /** The barrier the run REQUESTS (a separate wire field from the spec floor). */

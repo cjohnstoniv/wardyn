@@ -62,7 +62,7 @@ export function YourModelKey({
       setRevealEmpty(false);
       onChanged();
     } catch (e) {
-      setError(e instanceof HttpError && e.status === 400 ? T.REFUSED_SHORT : "Couldn't save this key.");
+      setError(e instanceof HttpError && e.status === 400 ? T.REFUSED_SHORT : T.SAVE_ERROR);
     } finally {
       setBusy(false);
     }
@@ -75,7 +75,7 @@ export function YourModelKey({
       await secretsApi.deleteSecret(T.SECRET_NAME);
       onChanged();
     } catch {
-      setError("Couldn't remove this key.");
+      setError(T.REMOVE_ERROR);
     } finally {
       setBusy(false);
     }

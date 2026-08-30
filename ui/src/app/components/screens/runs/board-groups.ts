@@ -26,7 +26,7 @@ const ATTENTION_RANK = 3;
 
 /** One run's live approval facts, as the glyph's signals plus the count the
  *  card states ("2 waiting · sandbox held"). */
-export interface RunApprovalSignals extends AttentionSignals {
+interface RunApprovalSignals extends AttentionSignals {
   pending: number;
 }
 

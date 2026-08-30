@@ -312,10 +312,6 @@ export function NewRunScreen() {
     [specText, state, workspaces],
   );
   const added = merged?.added;
-  // What this run's tool_rules actually say, from the SAME spec that ships:
-  // the merged document on the custom lane, the stored one on the saved lane.
-  // Null when there are no rules, so a policy written before the field existed
-  // grows no empty rail section.
   // What happens the moment this launches, in one sentence. Derived HERE and
   // handed to the rail, so the rail cannot describe one run while Launch sends
   // another.
@@ -331,6 +327,10 @@ export function NewRunScreen() {
       ? `${agentName} runs the task unattended, then the run stops.`
       : "The command runs unattended in the sandbox, then the run stops.";
 
+  // What this run's tool_rules actually say, from the SAME spec that ships:
+  // the merged document on the custom lane, the stored one on the saved lane.
+  // Null when there are no rules, so a policy written before the field existed
+  // grows no empty rail section.
   const toolRules = React.useMemo(() => {
     const spec = useSaved ? selectedPolicy?.spec : merged?.spec;
     return spec ? toolRulesSummary(spec) : null;

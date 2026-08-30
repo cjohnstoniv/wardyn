@@ -52,12 +52,12 @@ export const EPISODES: Episode[] = [
   { id: "13", title: "Your terminal, our cluster", audience: "everyone", tag: null, file: "wardyn-13-your-terminal-our-cluster.mp4", steps: [] },
 ];
 
-// Phase 5's member Getting Started has no code yet, so there is no real
-// section-id list this file can import (and, same as above, must not import a
-// screen module even once one exists). This is this file's own guess at what
-// those section ids will be named. COUPLING: if Phase 5 names its member
-// sections differently, update this list AND every member episode's `steps`
-// entry together — otherwise `episodesFor` silently returns nothing for them.
+// The member Getting Started screen (screens/onboarding/member-getting-started.tsx)
+// imports this list — never the reverse, lib/ must not import a screen — and
+// demo-videos.test.ts treats it as the allowed set of member step ids.
+// COUPLING: rename a member section and update this list AND every member
+// episode's `steps` entry together — otherwise `episodesFor` silently returns
+// nothing for it.
 export const MEMBER_SECTION_IDS = ["workspace", "first-run", "approvals"] as const;
 
 // null tag = not recorded yet — never build a URL for a release that doesn't

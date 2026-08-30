@@ -78,7 +78,7 @@ export function attentionFor(state: RunState | string, s: AttentionSignals = {})
   }
 }
 
-export const ATTENTION_LABEL: Record<RunAttention, string> = {
+const ATTENTION_LABEL: Record<RunAttention, string> = {
   permission: "Needs you",
   interrupted: "Needs review",
   monitoring: "Approval pending",

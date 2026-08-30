@@ -68,7 +68,7 @@ export function toolRuleDecision(e: AuditEvent): RuleDecision | null {
 // double-label one row). Pure and side-effect-free like toolRuleDecision, for
 // the same reason: RuleSourceChip (wardyn/audit-decision.tsx) renders it, and
 // lib/ must not import components/.
-export interface RuleSourceLabel {
+interface RuleSourceLabel {
   label: string;
   tone: "neutral" | "info" | "danger";
 }
