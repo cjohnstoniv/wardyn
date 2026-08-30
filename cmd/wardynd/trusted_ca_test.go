@@ -82,13 +82,21 @@ func TestLoadTrustedCA_ValidAppendsToSystemPool(t *testing.T) {
 		t.Fatal("returned PEM does not match the file content verbatim")
 	}
 
-	sysPool, _ := x509.SystemCertPool()
-	sysCount := 0
-	if sysPool != nil {
-		sysCount = len(sysPool.Subjects()) //nolint:staticcheck // deprecated but the simplest count for a test assertion
+	// The appended CA must be trusted by the returned pool — and, as the
+	// negative control, not by the system pool alone (else this assertion
+	// would be vacuous).
+	block, _ := pem.Decode(certA)
+	ca, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := len(pool.Subjects()); got <= sysCount { //nolint:staticcheck // see above
-		t.Fatalf("pool has %d subjects, want more than the system pool's %d (the two test certs must have been added)", got, sysCount)
+	if _, err := ca.Verify(x509.VerifyOptions{Roots: pool}); err != nil {
+		t.Fatalf("the appended test CA does not verify against the returned pool: %v", err)
+	}
+	if sysPool, _ := x509.SystemCertPool(); sysPool != nil {
+		if _, err := ca.Verify(x509.VerifyOptions{Roots: sysPool}); err == nil {
+			t.Fatal("the test CA verified against the system pool alone — the pool assertion above proves nothing")
+		}
 	}
 }
 
