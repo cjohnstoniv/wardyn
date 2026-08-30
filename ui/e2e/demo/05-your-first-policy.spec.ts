@@ -40,11 +40,12 @@
  * ── PROVENANCE: the retiring-08 lift ───────────────────────────────────────
  * The confinement-floor teaching, the create/save beat, the wall-vs-rules
  * distinction, and the floor-refuses beat are LIFTED VERBATIM from old-08
- * (ui/e2e/demo/retiring-policies-and-confinement.spec.ts, whose material this
+ * (the retired policies episode — deleted in the 0.7 cleanup; its 24 captions
+ * with no counterpart here are held in local/episode-06-firstrun-proposal.md — whose material this
  * episode absorbs per Workstream C of /home/cjohn/.claude/plans/merry-snacking-
  * harbor.md). Owner lines MOVE unchanged; the safety-meter beats, the panel/
  * template intro, the forward-looking reuse teaching, and the conclusion are
- * NEW, marked [OWNER SLOT — drafted] in local/episode-05-policy-proposal.md.
+ * NEW, marked [OWNER SLOT — drafted] in local/episode-05-policy-proposal.md (untracked working note).
  * The three B4 floor lines carry old-08's own DIALOG-STALE note (the refusal is
  * a STANDING form refusal now, before any launch request exists) — kept exactly
  * as old-08 shipped them, because new-05 films the identical on-form refusal.

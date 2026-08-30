@@ -27,7 +27,7 @@
  * lines moved verbatim — including the "The same law, five ways" chapter card,
  * which moved from act 8 to open the file. The opener and the close are
  * [OWNER SLOT — drafted] in local/episode-03-mega-proposal.md;
- * local/episode-03-stanza-check.py fails if a spec string and a stanza drift.
+ * local/episode-03-stanza-check.py (untracked) fails if a spec string and a stanza drift.
  *
  * STAGING THIS FILE OWNS (off camera): sweepStaleState(), then wardyn-demo-key,
  * wardyn-demo-api-token and wardyn-demo-pat, because all three of this

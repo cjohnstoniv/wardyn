@@ -907,7 +907,7 @@ case "${WARDYN_DEMO_VIDEO:-}" in
   13) check_video_13 ;;
   # check_video_08_policies (the old policies-and-confinement checks) is no
   # longer dispatched: that content retires into the new episode 05
-  # (ui/e2e/demo/retiring-policies-and-confinement.spec.ts carries it in the
+  # (the retired policies episode — now local/episode-06-firstrun-proposal.md — carried it in the
   # meantime). Left defined, unused, for whoever writes 05's real checks to
   # borrow from.
   03a) check_video_03a ;;

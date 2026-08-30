@@ -46,7 +46,7 @@
  *     local/secrets-episodes-dialog-proposals.md — carried verbatim.
  *   - The act-2 opener and the conclusion's detour pointer are
  *     [OWNER SLOT — drafted] in local/episode-03-mega-proposal.md (in take
- *     order). local/episode-03-stanza-check.py fails if a spec string and a
+ *     order). local/episode-03-stanza-check.py (untracked) fails if a spec string and a
  *     proposal stanza ever drift.
  *
  * STAGING THIS FILE OWNS (off camera):

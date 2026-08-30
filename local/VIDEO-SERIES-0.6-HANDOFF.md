@@ -59,7 +59,7 @@ Workstream C). Twelve numbered episodes + one terminal-only cluster episode stag
 | 13 | terminal-to-the-cluster | **prep only** (`scripts/demo-beats/13-terminal-to-the-cluster.sh`, grader `scripts/lib/verify-demo-take-13.sh`): k8s runner from a laptop terminal — never shot | terminal |
 
 Also on `main`: `walkthrough.spec.ts` (the no-flag end-to-end walkthrough, acts 1–6),
-`retiring-policies-and-confinement.spec.ts` (retired INTO 05 — a demolition candidate), the
+`retiring-policies-and-confinement.spec.ts` (deleted 2026-08-30; its 24 unique captions are in `local/episode-06-firstrun-proposal.md`), the
 in-product **demos catalog** (`ui/src/app/components/screens/demos/demo-catalog.ts`, 15 ids — episode
 03 films it), the recorder (`scripts/record-demo.sh`, `--video NN`, `--terminal-script`), the grader
 (`scripts/verify-demo-take.sh`, per-video `check_video_NN` dispatch — note the function NAMES still

@@ -33,7 +33,7 @@
  * (the no-network framing, the inline first_use_approval mode-choice, the
  * "designed to fail" off-list beat) are DIALOG-STALE — pulled from the take,
  * flagged in local/episode-06-firstrun-proposal.md, never edited in place.
- * local/episode-06-stanza-check.py holds spec and proposal in lockstep. Short
+ * local/episode-06-stanza-check.py (untracked) holds spec and proposal in lockstep. Short
  * stanzas ride BEAT_SHORT; full-length lines keep PACE.read.
  *
  * WHY AN OFFLINE COMMAND UNDER A 2-HOST POLICY. first-policy allows two hosts
