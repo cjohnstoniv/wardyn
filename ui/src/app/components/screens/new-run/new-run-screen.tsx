@@ -6,8 +6,8 @@
 // New run — ONE page, two columns, with a live rail that answers "what can this
 // run actually do?" while you build it.
 //
-// Ported from the Figma Make canon (src/screens/NewRunScreen.tsx in the "Wardyn
-// Simplified" file). It replaces a five-step modal wizard whose Review screen
+// Derived from the deleted Figma Make design snapshot's NewRunScreen. It
+// replaces a five-step modal wizard whose Review screen
 // was the first place the consequences of your choices appeared — by which
 // point you had made all of them blind.
 //

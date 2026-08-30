@@ -4,8 +4,8 @@
  */
 
 // Per-tier barrier marks for the Environment step's protection-matrix picker,
-// ported from the onboarding design snapshot. The
-// SVG paths are verbatim; only the color classes are swapped to this repo's real
+// derived from the deleted Figma Make onboarding snapshot. The SVG paths are
+// kept as drawn there; only the color classes are swapped to this repo's real
 // metal-ramp tokens (fence/wall/vault in theme.css), NOT the snapshot's --tier-*.
 // Fence = pickets with visible gaps, Wall = solid brick face, Vault = enclosed
 // strongbox. Colored via currentColor so the token drives fill.

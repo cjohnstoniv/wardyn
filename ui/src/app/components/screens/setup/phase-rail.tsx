@@ -4,9 +4,8 @@
  */
 
 // Phased vertical rail (brief §7.1) — full labels always visible, per-step live
-// badge, phase progress. Ported from
-// docs/design/figma-make-onboarding/src/components/setup/PhaseRail.tsx onto the
-// real (frozen) step ids/labels in ./steps. Pure presentational: the caller
+// badge, phase progress. Derived from the deleted Figma Make onboarding
+// snapshot's PhaseRail onto the real (frozen) step ids/labels in ./steps. Pure presentational: the caller
 // (setup-screen orchestrator) computes badges/done via stepBadges/stepDone.
 import { Check } from "lucide-react";
 import { cn } from "../../ui/utils";
