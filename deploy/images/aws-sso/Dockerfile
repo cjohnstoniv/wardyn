@@ -207,6 +207,13 @@ RUN set -eu; \
     mkdir -p /tmp/awscli-install; \
     unzip -q /tmp/awscliv2.zip -d /tmp/awscli-install; \
     /tmp/awscli-install/aws/install; \
+    # The zip carries AWS's bundled third-party attributions at
+    # aws/THIRD_PARTY_LICENSES, but `aws/install` copies only dist/ — so the
+    # file would die with the rm below and the shipped image would convey the
+    # bundled components with no attribution at all (Apache-2.0 s4). Preserve
+    # it explicitly; `install -D` fails the build closed if the zip layout
+    # ever stops carrying it.
+    install -D -m 0644 /tmp/awscli-install/aws/THIRD_PARTY_LICENSES /usr/share/doc/aws-cli/THIRD_PARTY_LICENSES; \
     rm -rf /tmp/awscliv2.zip /tmp/awscliv2.sig /tmp/awscli-install /aws-cli-pubkey.asc /awscli-stage; \
     apt-get purge -y --auto-remove gnupg; \
     rm -rf /var/lib/apt/lists/*

@@ -65,7 +65,10 @@ so the distinction from the image above is explicit rather than assumed.
 Bundles the AWS CLI v2 (Apache-2.0), installed from AWS's distribution and
 GPG-signature-verified at build time. Its bundled Python runtime is not visible to
 container SBOM tooling; treat the AWS CLI as an opaque vendored component when
-inventorying this image.
+inventorying this image. AWS's own attribution file for those bundled components
+ships inside the image at `/usr/share/doc/aws-cli/THIRD_PARTY_LICENSES` (the zip
+carries it, but AWS's installer does not copy it — the Dockerfile preserves it
+explicitly; images published before 0.7 lack it).
 
 ## All agent images
 

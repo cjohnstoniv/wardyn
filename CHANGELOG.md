@@ -259,6 +259,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- The `agent-aws-sso` image now ships AWS's `THIRD_PARTY_LICENSES` attribution
+  file at `/usr/share/doc/aws-cli/THIRD_PARTY_LICENSES`. The AWS CLI installer
+  copies only its `dist/` tree, so every previously published tag of this image
+  conveyed the CLI's bundled third-party components without their attribution
+  text; the build now preserves the file and fails closed if the installer zip
+  stops carrying it.
+
 - `GET /runs/{id}/files` reported `vcs:"none"` for every `--repo` run because it inspected the workspace mount target instead of the clone one level below it — the console's files widget claimed "no git repository" for a sandbox holding a full clone. It now finds the run's clone.
 - Console surfaces that referenced a nonexistent `bg-surface-1` token painted no background (new-run rail, settings and connection cards).
 - Focus rings now clear WCAG 1.4.11's 3:1 floor in both themes (`--ring` raised; the shared focus recipes no longer dilute it to 50%).
