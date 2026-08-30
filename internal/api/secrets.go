@@ -253,26 +253,6 @@ func secretOwnerAuditData(owner string) json.RawMessage {
 	return mustJSON(map[string]any{"secret_owner": owner})
 }
 
-// secretsFor is the secret-store view for the current request's namespace —
-// the operator's for an operator, the caller's own for a member (see
-// secretOwnerFromRequest). Nil when no secret store is configured.
-func (s *Server) secretsFor(r *http.Request) secretstore.Store {
-	if s.cfg.Secrets == nil {
-		return nil
-	}
-	return s.cfg.Secrets.For(s.secretOwnerFromRequest(r))
-}
-
-// secretsForRun is the same view keyed by an already-resolved owner string —
-// dispatch-time and broker code holds run.CreatedBy or a caller's identity
-// Sub, not an *http.Request, to derive it from.
-func (s *Server) secretsForRun(owner string) secretstore.Store {
-	if s.cfg.Secrets == nil {
-		return nil
-	}
-	return s.cfg.Secrets.For(owner)
-}
-
 // handleListSecrets returns {"names": [...], "mine": [...]} — never values.
 // Reserved platform-internal keys (reservedSecretNames: wardyn-signing-key,
 // wardyn-session-key) are EXCLUDED from both: they back identity/session

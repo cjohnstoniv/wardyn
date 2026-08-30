@@ -4,9 +4,11 @@
 package main
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -43,7 +45,7 @@ func TestPublishedImageListsAgree(t *testing.T) {
 		published[m[1]] = true
 	}
 	if len(published) < 3 {
-		t.Fatalf("parsed only %d published images from release.yml (%v) — the parse regressed and this guard would pass vacuously", len(published), keys(published))
+		t.Fatalf("parsed only %d published images from release.yml (%v) — the parse regressed and this guard would pass vacuously", len(published), slices.Sorted(maps.Keys(published)))
 	}
 	if !published["agent-base"] {
 		t.Errorf("release.yml no longer publishes agent-base; if that is deliberate, this guard and the consumers below need re-deriving")
@@ -86,13 +88,4 @@ func TestPublishedImageListsAgree(t *testing.T) {
 		t.Errorf("gpl-source-offer.sh scans images we do NOT publish: %v\n"+
 			"The scan silently produces nothing for them, which reads as 'no GPL packages' rather than 'never scanned'.", extra)
 	}
-}
-
-func keys(m map[string]bool) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }

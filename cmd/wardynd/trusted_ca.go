@@ -138,17 +138,6 @@ func certSubjects(pemBundle string) []string {
 	return subjects
 }
 
-// gatewayHostFromBaseURL extracts the bare host from an already-validated
-// api.Config.LLMGateways entry (ValidateLLMGateways guarantees this parses),
-// for the boot-time default-policy-coverage warning in main.go.
-func gatewayHostFromBaseURL(base string) string {
-	u, err := url.Parse(base)
-	if err != nil {
-		return ""
-	}
-	return u.Hostname()
-}
-
 // defaultPolicyMissingGatewayHosts returns publicHost -> gatewayHost for every
 // configured LLM gateway whose host is NOT covered by defaultPolicy's egress
 // (an exact allowed_domains entry, or allow_all_egress) — the operator must
@@ -159,7 +148,10 @@ func gatewayHostFromBaseURL(base string) string {
 func defaultPolicyMissingGatewayHosts(defaultPolicy types.RunPolicySpec, llmGateways map[string]string) map[string]string {
 	missing := make(map[string]string)
 	for publicHost, base := range llmGateways {
-		gwHost := gatewayHostFromBaseURL(base)
+		gwHost := ""
+		if u, err := url.Parse(base); err == nil { // ValidateLLMGateways guarantees this parses
+			gwHost = u.Hostname()
+		}
 		if gwHost == "" {
 			continue
 		}

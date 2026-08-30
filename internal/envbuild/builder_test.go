@@ -9,10 +9,10 @@ import (
 	"archive/tar"
 	"bytes"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -929,7 +929,7 @@ func TestBuildFinalizeContext_WiresGitCredentialHelper(t *testing.T) {
 
 	gitcfg, ok := files["gitconfig"]
 	if !ok {
-		t.Fatalf("no gitconfig in the finalize context; got %v", keysOf(files))
+		t.Fatalf("no gitconfig in the finalize context; got %v", slices.Sorted(maps.Keys(files)))
 	}
 	dockerfile := files["Dockerfile"]
 	if !strings.Contains(dockerfile, "COPY gitconfig /etc/gitconfig") {
@@ -963,13 +963,4 @@ func TestBuildFinalizeContext_WiresGitCredentialHelper(t *testing.T) {
 	if got := modes["gitconfig"]; got != 0o644 {
 		t.Errorf("gitconfig mode = %#o, want 0644 (root-owned: the sandbox user must not rewrite its own helper path)", got)
 	}
-}
-
-func keysOf(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }

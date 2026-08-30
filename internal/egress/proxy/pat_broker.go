@@ -31,6 +31,7 @@ package proxy
 // reason: a per-repo key would imply a confinement the credential does not have.
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -165,15 +166,6 @@ func (p *Proxy) patToken(ctx context.Context, g PATGrant) (token, username strin
 	if status != http.StatusOK {
 		return "", "", fmt.Errorf("mint status %d: %s", status, strings.TrimSpace(string(body)))
 	}
-	username = firstNonEmpty(user, g.Username, "pat")
+	username = cmp.Or(user, g.Username, "pat")
 	return tok, username, nil
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
