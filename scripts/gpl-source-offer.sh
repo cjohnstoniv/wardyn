@@ -48,15 +48,15 @@ export LC_ALL=C
 # on) while agent-base — the image that IS published — was never scanned at all.
 IMAGES=(wardynd wardyn-proxy agent-base agent-codex-cli agent-aws-sso)
 
-# PREVIOUSLY CONVEYED, NO LONGER PUBLISHED. agent-claude-code 0.5.0 and 0.6.0
-# were pullable from GHCR until the package was removed on 2026-08-30. The
-# GPLv3 s6(b) written offer accompanies each conveyed copy and runs three years
-# from the LAST conveyance, so the offer covering those copies is owed until at
-# least 2029-08-30 and its section must be RETAINED across regenerations.
-# Shrink this list only when a tag's offer window has fully lapsed — three
-# years after its conveyance ceased — never merely because the tag stopped
-# being pullable: withdrawing a tag starts that clock, it does not end it.
-HISTORICAL_TAGS=(0.5.0 0.6.0)
+# Frozen history: offers owed for artifacts that can no longer be re-scanned
+# (withdrawn tags, the deleted agent-claude-code package) live as static text
+# in deploy/images/third-party-gpl-historical.md, emitted verbatim below.
+# Regenerating from the CURRENT publish set alone once deleted the only offer
+# covering still-owed copies — a legal regression that produces no error — so
+# the historical file is REQUIRED: its absence fails this script rather than
+# silently narrowing the offer. Retire content from it only when a section's
+# stated three-year window has lapsed.
+HISTORICAL_FILE=deploy/images/third-party-gpl-historical.md
 
 {
   echo "# Corresponding source for GPL and LGPL components in the published images"
@@ -113,50 +113,8 @@ HISTORICAL_TAGS=(0.5.0 0.6.0)
     echo
   done
 
-  # ── PREVIOUSLY CONVEYED, NO LONGER PUBLISHED ──────────────────────────────
-  # The obligation attaches to CONVEYING, not to still being in the publish
-  # matrix. agent-claude-code:0.5.0 and :0.6.0 were pullable from GHCR until
-  # the package's removal on 2026-08-30 (0.6.1 and later never were — this
-  # comment once claimed 0.6.1 was, wrongly). The written offer runs three
-  # years from the LAST conveyance, so it is owed until at least 2029-08-30.
-  #
-  # Regenerating from the CURRENT publish set alone silently deletes this — which
-  # is exactly what happened on the first regeneration for 0.7. That is a legal
-  # regression that produces no error, so the sections are emitted here and
-  # HISTORICAL_TAGS shrinks only when a tag's three-year window has lapsed,
-  # never merely because it stopped being pullable.
-  if [ "${#HISTORICAL_TAGS[@]}" -gt 0 ]; then
-    echo "## Previously conveyed, no longer published"
-    echo
-    echo "\`agent-claude-code\` was published through 0.6.0 and is no longer built by"
-    echo "the release workflow (\`agent-base\` ships in its place). Its GHCR package"
-    echo "was removed on 2026-08-30, which ended conveyance; copies pulled before"
-    echo "then were conveyed, so the offer below stands until at least 2029-08-30 —"
-    echo "three years after the last conveyance. Retain this section until then."
-    echo
-    for htag in "${HISTORICAL_TAGS[@]}"; do
-      f="$SBOM_DIR/04-sbom-agent-claude-code-${htag}-amd64.json"
-      echo "### \`ghcr.io/cjohnstoniv/agent-claude-code:${htag}\`"
-      echo
-      if [ ! -f "$f" ]; then
-        echo "_No SBOM available — RE-SCAN BEFORE RELEASING; an absent section is not the same as no obligation._"
-        echo
-        continue
-      fi
-      n=$(jq -r '[.artifacts[] | select(((.licenses//[])|map(.value//.spdxExpression//"")|join(" "))|test("GPL";"i"))] | length' "$f")
-      echo "$n package(s) carrying a GPL or LGPL term."
-      echo
-      if [ "$n" -gt 0 ]; then
-        echo "| package | version | licence | type |"
-        echo "|---|---|---|---|"
-        jq -r '.artifacts[]
-               | select(((.licenses//[])|map(.value//.spdxExpression//"")|join(" "))|test("GPL";"i"))
-               | [.name, .version, (((.licenses//[])|map(.value//.spdxExpression//"")|join(", "))), .type]
-               | @tsv' "$f" \
-          | sort -u | while IFS=$'\t' read -r n v l t; do printf '| `%s` | %s | %s | %s |\n' "$n" "$v" "$l" "$t"; done
-      fi
-      echo
-    done
-  fi
+  # ── frozen history (see HISTORICAL_FILE above) ────────────────────────────
+  [ -f "$HISTORICAL_FILE" ] || { echo "FATAL: $HISTORICAL_FILE missing — regenerating without it would delete offers still owed" >&2; exit 1; }
+  cat "$HISTORICAL_FILE"
 } > "$OUT"
 echo "wrote $OUT ($(wc -l < "$OUT") lines)"

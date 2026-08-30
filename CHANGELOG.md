@@ -508,6 +508,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- The GPL corresponding-source offer (`deploy/images/THIRD-PARTY-GPL.md`) is
+  regenerated against the 0.6.6 published digests, and offers owed for
+  withdrawn tags now live as frozen text in
+  `deploy/images/third-party-gpl-historical.md` — the generator refuses to run
+  without that file, so a regeneration can never again silently delete an
+  offer that is still owed.
 - The default workspace-build image is pinned by tag **and** digest
   (`ghcr.io/coder/envbuilder:1.3.0@sha256:…`) instead of floating on `:latest`,
   so the third-party executable a build runs cannot change underneath a
