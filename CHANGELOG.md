@@ -309,11 +309,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   manual cosign verification loop and in `release.yml`'s own header.
 
   Regenerated against the published digests — and the first regeneration
-  **deleted** the section covering `agent-claude-code` 0.5.0/0.6.0, which are
-  **still pullable** and therefore still being conveyed. The generator now
-  retains a "still distributed, no longer published" section, verified by
-  `docker manifest inspect` (0.6.1 was never published; a comment in
-  `release.yml` claimed it was). Its stale default tag is gone — a default
+  **deleted** the section covering `agent-claude-code` 0.5.0/0.6.0, whose
+  copies had been conveyed and were still owed an offer. The generator now
+  retains a historical-offer section anchored to the last conveyance date
+  (0.6.1 was never published; a comment in `release.yml` claimed it was), and
+  that package's later removal from GHCR starts the offer's three-year clock
+  rather than ending it. Its stale default tag is gone — a default
   silently regenerates the offer for the wrong release — and a new guard fails
   when the offer's image list and `release.yml`'s publish matrix disagree in
   either direction.

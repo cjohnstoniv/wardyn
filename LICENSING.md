@@ -44,15 +44,14 @@ version released to date stays Apache-2.0 forever, and anyone may fork from it.
 
 ## What you get, and what it contains
 
-Wardyn is distributed through exactly two channels:
+Wardyn is distributed through four channels:
 
 | channel | what it is |
 |---|---|
 | **Source** | this git repository |
-| **Container images** | `ghcr.io/cjohnstoniv/{wardynd,wardyn-proxy,agent-claude-code,agent-codex-cli,agent-aws-sso}` |
-
-No standalone binaries are published, and the Helm chart is not pushed to a chart
-repository — it is installed from this repo.
+| **Container images** | `ghcr.io/cjohnstoniv/{wardynd,wardyn-proxy,agent-base,agent-codex-cli,agent-aws-sso}` |
+| **CLI binaries** | `wardyn-{linux,darwin}-{amd64,arm64}`, attached to each GitHub release |
+| **Helm chart** | pushed to `oci://ghcr.io/cjohnstoniv/charts` on release; also installable straight from this repo |
 
 **Wardyn's own code and all of its dependencies are permissively licensed.** Every
 Go module compiled into the shipped binaries and every npm package bundled into
@@ -74,11 +73,12 @@ binary:
   [`deploy/images/THIRD-PARTY-GPL.md`](deploy/images/THIRD-PARTY-GPL.md).
 - The agent images apt-install `asciinema` (GPL-3.0), executed as a subprocess and
   never linked. Covered by the same source offer.
-- **Some agent images bundle a third-party AI coding CLI that is not open source
-  at all**, governed by that vendor's terms rather than by anything in this
-  repository. See [`deploy/images/THIRD-PARTY-TERMS.md`](deploy/images/THIRD-PARTY-TERMS.md)
-  before pulling or redistributing those images. The two product images
-  (`wardynd`, `wardyn-proxy`) contain no such component.
+- **No published image bundles a proprietary AI coding CLI.** The retired
+  `agent-claude-code` image did; it left the release matrix in 0.6.2 and its
+  GHCR package was removed on 2026-08-30. Its Dockerfile remains a local build
+  recipe, and [`deploy/images/THIRD-PARTY-TERMS.md`](deploy/images/THIRD-PARTY-TERMS.md)
+  states the vendor terms that bind anyone who builds and runs it themselves.
+  The two product images (`wardynd`, `wardyn-proxy`) contain no such component.
 
 You do not have to take any of this on trust: every published image is
 cosign-signed and carries an attested CycloneDX SBOM and build provenance.

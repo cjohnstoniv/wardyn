@@ -1,6 +1,6 @@
 name: Release images
 
-# Publishes the FOUR images a Wardyn release actually ships, cosign-signed
+# Publishes the five images a Wardyn release actually ships, cosign-signed
 # (keyless), plus a signed-release SBOM — on every vX.Y.Z tag push
 # (RELEASING.md's tagging convention). This is the "release" half of image
 # publishing; .github/workflows/publish-image.yml remains the CONTINUOUS half
@@ -158,10 +158,11 @@ jobs:
           # also the honest arrangement: the operator installs that CLI under their
           # own agreement with its vendor. agent-base below is what ships instead.
           #
-          # 0.5.0 and 0.6.0 of agent-claude-code remain on GHCR — 0.6.1 was
-          # NEVER published, and this comment used to claim it was. Retracting them
-          # would break existing pulls of already-released versions, and they are
-          # documented in deploy/images/THIRD-PARTY-TERMS.md.
+          # 0.5.0 and 0.6.0 of agent-claude-code were published and later removed
+          # from GHCR (2026-08-30) — 0.6.1 was NEVER published, and this comment
+          # once claimed it was. The corresponding-source offer for copies pulled
+          # before removal is retained in deploy/images/THIRD-PARTY-GPL.md, and
+          # the vendor terms stay documented in deploy/images/THIRD-PARTY-TERMS.md.
           - name: agent-base
             dockerfile: deploy/images/base/Dockerfile
             build-args: ""

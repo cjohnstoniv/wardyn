@@ -1,14 +1,19 @@
-# Third-party terms in the published agent images
+# Third-party terms in the agent images
 
 Wardyn is Apache-2.0. **Some agent images bundle software that is not.** Read this
-before pulling, running, or redistributing them.
+before pulling, building, running, or redistributing them.
 
 Wardyn is not affiliated with, endorsed by, or sponsored by Anthropic PBC, OpenAI,
 or Amazon Web Services. Product and company names referenced here are the
 trademarks of their respective owners and are used only to describe what an image
 contains.
 
-## `agent-claude-code` — contains proprietary software
+## `agent-claude-code` — local build only; contains proprietary software
+
+Published at 0.5.0 and 0.6.0, retired from the release matrix in 0.6.2, and its
+GHCR package was removed on 2026-08-30 — no tag of it is pullable today. The
+Dockerfile remains a local build recipe (`make agent-images`), so everything
+below binds anyone who builds and runs the image themselves.
 
 | | |
 |---|---|
