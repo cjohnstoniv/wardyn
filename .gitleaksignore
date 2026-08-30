@@ -106,3 +106,5 @@ ad6a7ed32551d25c47d8e841aad20f8b8dc3165d:ui/e2e/demo/demos.ts:generic-api-key:53
 acd1f1335dcca55adca4f2d815aa34948b99c2bc:ui/e2e/demo/03-what-it-stops.spec.ts:generic-api-key:124
 55109ea22262ea0b5e93d2b79e05305c8c48ca4f:ui/e2e/demo/07-interactive-runs.spec.ts:generic-api-key:128
 d54b6a15e2fc415235e8079a86fe50a76897b495:ui/e2e/demo/06-interactive-runs.spec.ts:generic-api-key:128
+# false positive: a migration FILENAME (0050_secret_owned_by.sql) matched generic-api-key (deployments campaign, 6c commit 1)
+c7d58c0efb6876879fc8a2e83729cc12c151dd93:internal/store/store_secret_migration_pg_test.go:generic-api-key:22
