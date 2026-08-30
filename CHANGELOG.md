@@ -501,6 +501,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- The default workspace-build image is pinned by tag **and** digest
+  (`ghcr.io/coder/envbuilder:1.3.0@sha256:…`) instead of floating on `:latest`,
+  so the third-party executable a build runs cannot change underneath a
+  deployment; `WARDYN_ENVBUILD_IMAGE` (`-envbuild-image`) still moves the pin.
 - Console type scale collapsed to four body rungs (`--text-meta` 11px, `text-xs`, `--text-body` 13px, `text-sm`) replacing ~260 ad-hoc sizes; three elevation levels with one `--shadow-floating`; body tracking `0.01em`; helper text at 12px; thin scrollbars on every scroller; radius one-offs onto the card scale.
 - `KILLED` counts as needing attention on the board and badge (rank beside `FAILED`); rule-decided tool calls file under the Audit screen's **Tool calls** facet rather than **Egress**.
 

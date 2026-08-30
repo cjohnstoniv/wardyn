@@ -50,9 +50,12 @@ import (
 )
 
 const (
-	// defaultEnvbuilderImage is the upstream envbuilder release image. Callers
-	// may override via Builder.EnvbuilderImage for air-gapped or pinned setups.
-	defaultEnvbuilderImage = "ghcr.io/coder/envbuilder:latest"
+	// defaultEnvbuilderImage is the upstream envbuilder release image, pinned
+	// by tag AND digest so the default cannot drift under users (the registry
+	// tag is "1.3.0" — upstream's release tag v1.3.0 does not exist as an OCI
+	// tag). Callers may override via Builder.EnvbuilderImage for air-gapped or
+	// newer-pin setups.
+	defaultEnvbuilderImage = "ghcr.io/coder/envbuilder:1.3.0@sha256:b34ade2fb90a8536df76e7a15c6dd8c6352d0ae835a187b13467fa0c8a71e280"
 
 	// defaultBuildTimeout caps runaway builds so a stuck git-clone or package
 	// download does not hold a container slot indefinitely.

@@ -89,6 +89,21 @@ The complete component inventory is in
 `licenses/texts/`. Both are generated, CI-verified against drift, and shipped
 inside every image at `/usr/share/doc/wardyn/`.
 
+## Components invoked as separate processes
+
+Some features run third-party tools as separate processes or containers rather
+than linking them into Wardyn's binaries. Each is obtained unmodified under its
+own licence and is not part of the Wardyn distribution:
+
+- **envbuilder** (`ghcr.io/coder/envbuilder`, Apache-2.0) — workspace image
+  builds run the unmodified upstream image as its own container, pinned by tag
+  and digest in `internal/envbuild/builder.go` and overridable for air-gapped
+  or newer-pin deployments. Wardyn drives it through its documented environment
+  interface and links none of its code.
+- **asciinema** (GPL-3.0) — terminal recording inside the agent images,
+  executed as a subprocess and never linked; its corresponding-source offer is
+  in [`deploy/images/THIRD-PARTY-GPL.md`](deploy/images/THIRD-PARTY-GPL.md).
+
 ## Obligations if you redistribute Wardyn
 
 Running Wardyn internally imposes nothing on you. If you redistribute it — ship it
