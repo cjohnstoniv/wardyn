@@ -125,34 +125,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   automatic fallback** — falling back would silently return the PAT to the
   sandbox.
 
-- **`tool_rules`: an autonomous run's tool use is no longer all-or-nothing.**
-  `tool_approvals` had exactly two settings and no middle — `auto` runs every
-  tool with no gate at all, `hold` routes **every** gated call to a human. On a
-  real task the first is more autonomy than an operator wants and the second is
-  more interruptions than a human sustains, and an operator who tires of
-  approving picks `auto` for everything, which gates nothing.
-
-  A rule names a tool and an effect — `allow`, `hold` or `deny` — so *"read
-  freely, ask before shell, never fetch the web"* is expressible and the human is
-  asked only about the calls that warrant asking. `deny` matters as much as
-  `allow`: it is what stops a prompt-injected agent generating approval requests
-  until someone clicks yes.
-
-  **Evaluated proxy-side, outside the sandbox**, on the policy the control plane
-  resolved — a compromised agent cannot rewrite the rules that govern it. An
-  `allow` or `deny` creates **no approval card** but still lands in the decision
-  log (`policy:tool-allow` / `policy:tool-deny`), so "policy waved this through"
-  is as visible as "a human approved it".
-
-  **It narrows; it never widens.** Rules are consulted only for a run already in
-  `hold`, so adding one cannot make a supervised run autonomous — the worst a
-  mistaken rule can do is ask a human more often, or refuse a call. An empty rule
-  set is today's behaviour exactly, so every policy written before this field
-  means what it meant.
-
-- **`threatmodel/AGENT-THREAT-MODEL.md`** — a portable threat model for agent
-  systems generally: terminology, fourteen threat categories, and who owns which
-  control. The shipped `THREAT-MODEL.md` is excellent and is a threat model **of
   the Wardyn implementation** — its assets are our artifacts, its boundaries are
   named after our env vars, and one residual is about the coverage of a single Go
   test. It is structurally unusable by anyone not running Wardyn, and it has no
