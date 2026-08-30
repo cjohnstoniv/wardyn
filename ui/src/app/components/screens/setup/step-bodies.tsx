@@ -295,7 +295,9 @@ export function WorkspacesStep({
 // ------------------------------------------------------------
 export function DeploymentStep({ status }: { status: SetupStatus }) {
   if (deploymentMode(status) === "single-user") {
-    const lede = status.auth.mode === "local" ? PT.SINGLE_USER_LEDE_LOCAL : PT.SINGLE_USER_LEDE_TOKEN;
+    // Only token mode has "the token the installer printed"; local AND the
+    // (currently unreachable) disabled mode are both no-sign-in consoles.
+    const lede = status.auth.mode === "token" ? PT.SINGLE_USER_LEDE_TOKEN : PT.SINGLE_USER_LEDE_LOCAL;
     return (
       <div className="space-y-4">
         <div className="flex items-start gap-2">
