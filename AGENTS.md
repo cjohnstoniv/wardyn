@@ -9,8 +9,9 @@ them. It restates nothing that would drift.
 - No interface with one implementation, no factory for one product, no config knob for a value nothing
   sets, no wrapper that only delegates, no scaffolding "for later".
 - Reuse before you write. The shared homes, so you can find them before re-implementing them:
-  - `internal/api/helpers.go` — `parseIDParam`, `notFoundIf`, `decodeStrict`, `readCappedBody`, `refreshRun`,
-    `getWorkspaceOr404`, `ownsWorkspaceOrAdmin`, `unionAllowedDomains`.
+  - `internal/api/helpers.go` — `sortedKeys` (sorted map keys, never nil — JSON `[]` not `null`), `parseIDParam`,
+    `notFoundIf`, `decodeStrict`, `readCappedBody`, `refreshRun`, `getWorkspaceOr404`, `ownsWorkspaceOrAdmin`,
+    `unionAllowedDomains`.
   - `internal/store/pagination.go` — `collect[T]` for every `rows.Next()` loop; `store.Pager`.
   - `internal/cliutil`, `internal/sidecar`, `internal/dockerutil` — CLI, sidecar and Docker-client helpers
     shared across `cmd/` and `internal/`.
