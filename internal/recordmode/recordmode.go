@@ -502,11 +502,7 @@ func buildDomains(m map[string]*domainAgg) []DomainObservation {
 	if len(m) == 0 {
 		return nil
 	}
-	hosts := make([]string, 0, len(m))
-	for h := range m {
-		hosts = append(hosts, h)
-	}
-	sort.Strings(hosts)
+	hosts := slices.Sorted(maps.Keys(m))
 	out := make([]DomainObservation, 0, len(hosts))
 	for _, h := range hosts {
 		a := m[h]

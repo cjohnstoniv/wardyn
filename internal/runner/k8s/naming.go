@@ -6,7 +6,8 @@
 package k8s
 
 import (
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -222,11 +223,7 @@ func envVars(env map[string]string) []corev1.EnvVar {
 	if len(env) == 0 {
 		return nil
 	}
-	keys := make([]string, 0, len(env))
-	for k := range env {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(env))
 	out := make([]corev1.EnvVar, 0, len(env))
 	for _, k := range keys {
 		out = append(out, corev1.EnvVar{Name: k, Value: env[k]})

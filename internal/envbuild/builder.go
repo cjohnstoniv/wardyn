@@ -485,7 +485,7 @@ func (b *Builder) hardenedHostConfig() (*container.HostConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	pids := b.effectivePidsLimit()
+	pids := defaultBuildPidsLimit // no env override, unlike its siblings
 	hostCfg := &container.HostConfig{
 		AutoRemove: false, // we remove explicitly via defer to always force-remove.
 
@@ -591,11 +591,6 @@ func (b *Builder) effectiveNanoCPUs() (int64, error) {
 		return int64(c * 1e9), nil
 	}
 	return defaultBuildNanoCPUs, nil
-}
-
-// effectivePidsLimit resolves the build-container process cap.
-func (b *Builder) effectivePidsLimit() int64 {
-	return defaultBuildPidsLimit
 }
 
 // effectiveMaxContextBytes resolves the optional writable-layer size cap. Zero

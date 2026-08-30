@@ -9,10 +9,11 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -202,11 +203,7 @@ func writeTarGz(path string, files map[string][]byte) error {
 	tw := tar.NewWriter(gz)
 	defer tw.Close()
 
-	names := make([]string, 0, len(files))
-	for name := range files {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := slices.Sorted(maps.Keys(files))
 
 	now := time.Now()
 	for _, name := range names {

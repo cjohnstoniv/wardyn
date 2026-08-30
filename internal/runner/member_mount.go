@@ -6,9 +6,10 @@ package runner
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -317,18 +318,8 @@ func (p MemberMountPolicy) bootWarnings() []string {
 	}
 	check("WARDYN_MEMBER_WORKSPACE_ROOTS", p.Roots)
 	check("WARDYN_MEMBER_WRITABLE_ROOTS", p.WritableRoots)
-	for _, principal := range sortedKeys(p.RootsByPrincipal) {
+	for _, principal := range slices.Sorted(maps.Keys(p.RootsByPrincipal)) {
 		check("WARDYN_MEMBER_WORKSPACE_ROOTS_MAP["+principal+"]", p.RootsByPrincipal[principal])
 	}
-	return out
-}
-
-// sortedKeys keeps the boot warnings deterministic across map iterations.
-func sortedKeys(m map[string][]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
 	return out
 }

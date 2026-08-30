@@ -11,8 +11,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"path"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -89,11 +90,7 @@ func generatedFilesTar(files map[string]string, destDir string) (io.Reader, erro
 	tw := tar.NewWriter(&buf)
 	base := strings.TrimPrefix(destDir, "/")
 	// Deterministic order — nice for tests and reproducible archives.
-	names := make([]string, 0, len(files))
-	for name := range files {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := slices.Sorted(maps.Keys(files))
 	for _, name := range names {
 		content := files[name]
 		hdr := &tar.Header{

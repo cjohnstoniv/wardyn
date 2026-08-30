@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -180,14 +181,7 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 		switch {
 		case err == nil:
 			errs = 0
-			found := false
-			for _, ec := range pod.Spec.EphemeralContainers {
-				if ec.Name == execContainerName {
-					found = true
-					break
-				}
-			}
-			if !found {
+			if !slices.ContainsFunc(pod.Spec.EphemeralContainers, func(ec corev1.EphemeralContainer) bool { return ec.Name == execContainerName }) {
 				return 0, fmt.Errorf("k8s: exec wait: no agent exec tracked for ref %q (Exec not called?)", ref)
 			}
 			for _, cs := range pod.Status.EphemeralContainerStatuses {

@@ -115,10 +115,11 @@ func (s *Server) claimImportStep(ctx context.Context, ws types.Workspace, runID 
 }
 
 // newStepRun mints the run identity and builds the run row every
-// server-launched step/probe run (scan/verify/record/probe) shares: PENDING,
-// claude-code, State/SPIFFEID/RunnerTarget set. set customizes what differs
-// (the trusted linkage, Task specifics, AutoStopAfterSec) before the row is
-// returned; callers take run.CreatedAt as the launch clock.
+// server-launched step/probe/login run shares: PENDING, State/SPIFFEID/
+// RunnerTarget set, agent claude-code unless set overrides it. set customizes
+// what differs (the trusted linkage, Task specifics, AutoStopAfterSec, the
+// login lane's agent + Interactive) before the row is returned; callers take
+// run.CreatedAt as the launch clock.
 func (s *Server) newStepRun(ctx context.Context, runID uuid.UUID, actor, task string, cc types.ConfinementClass, set func(*types.AgentRun)) (types.AgentRun, string, error) {
 	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, actor, actor, internalAudience)
 	if err != nil {

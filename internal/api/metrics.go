@@ -7,8 +7,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -170,11 +171,7 @@ func (s *Server) writeSinkDrops(w io.Writer) {
 	if len(drops) == 0 {
 		return
 	}
-	names := make([]string, 0, len(drops))
-	for name := range drops {
-		names = append(names, name)
-	}
-	sort.Strings(names) // deterministic scrape output
+	names := slices.Sorted(maps.Keys(drops)) // deterministic scrape output
 	fmt.Fprint(w, "# HELP wardyn_audit_sink_drops_total Audit events dropped by a SIEM sink (buffer overflow or retry exhaustion), by sink.\n"+
 		"# TYPE wardyn_audit_sink_drops_total counter\n")
 	for _, name := range names {

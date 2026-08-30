@@ -428,17 +428,12 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	}
 
 	runID := uuid.New()
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, actor, actor, internalAudience)
+	run, token, err := s.newStepRun(ctx, runID, actor, harnessLoginTask, cc, func(run *types.AgentRun) {
+		run.Agent = hl.agent // the vendor CLI being logged into, never the catalog default
+		run.Interactive = true
+	})
 	if err != nil {
-		return types.AgentRun{}, fmt.Errorf("mint run identity: %w", err)
-	}
-	now := s.cfg.Now().UTC()
-	run := types.AgentRun{
-		ID: runID, CreatedAt: now, UpdatedAt: now, CreatedBy: actor,
-		Agent: hl.agent, Task: harnessLoginTask,
-		ConfinementClass: cc, State: types.RunPending, SPIFFEID: id.SPIFFEID,
-		RunnerTarget: s.cfg.RunnerTarget,
-		Interactive:  true,
+		return types.AgentRun{}, err
 	}
 	// Region-scoped SSO endpoints are resolved from the operator's boot config —
 	// the SSO region if set, else the Bedrock region (same precedence
@@ -483,7 +478,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// AWS, the non-secret ~/.aws/config above). The `--idle` path installs the MITM
 	// CA and attaches; the login pane auto-types the provider's command.
 	s.dispatchRun(ctx, created, dispatchParams{
-		RunToken: id.Token, Image: image, Policy: policy,
+		RunToken: token, Image: image, Policy: policy,
 		Interactive: true, ExtraEnv: extraEnv,
 	})
 	return s.refreshRun(ctx, runID, created), nil

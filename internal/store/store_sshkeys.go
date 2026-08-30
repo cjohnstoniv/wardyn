@@ -42,23 +42,7 @@ func (s PG) ListSSHKeysByPrincipal(ctx context.Context, principal string) ([]typ
 	const q = `
 		SELECT fingerprint, principal, name, public_key, role, role_checked_at, created_at
 		FROM ssh_public_keys WHERE principal = $1 ORDER BY created_at DESC`
-	rows, err := s.Pool.Query(ctx, q, principal)
-	if err != nil {
-		return nil, fmt.Errorf("store: list ssh keys: %w", err)
-	}
-	defer rows.Close()
-	out := []types.SSHPublicKey{}
-	for rows.Next() {
-		k, err := scanSSHKey(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, k)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: list ssh keys: %w", err)
-	}
-	return out, nil
+	return collect(ctx, s.Pool, "list", "ssh keys", q, []any{principal}, scanSSHKey)
 }
 
 // GetSSHKeyByFingerprint is the gateway's pre-auth lookup: given the offered

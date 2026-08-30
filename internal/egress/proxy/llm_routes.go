@@ -18,9 +18,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -351,11 +352,7 @@ func categoriesOf(findings []contentscan.Finding) []string {
 	for _, f := range findings {
 		set[string(f.Category)] = struct{}{}
 	}
-	out := make([]string, 0, len(set))
-	for c := range set {
-		out = append(out, c)
-	}
-	sort.Strings(out)
+	out := slices.Sorted(maps.Keys(set))
 	return out
 }
 

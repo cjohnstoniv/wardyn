@@ -6,8 +6,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -308,11 +309,7 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, inte
 	// helper as its credential path, unchanged. Non-secret: repo names only,
 	// space-separated canonical "<org>/<repo>", sorted for a stable env value.
 	if len(gitGrants) > 0 {
-		repos := make([]string, 0, len(gitGrants))
-		for key := range gitGrants {
-			repos = append(repos, key)
-		}
-		sort.Strings(repos)
+		repos := slices.Sorted(maps.Keys(gitGrants))
 		sandboxEnv["WARDYN_GIT_BROKER_REPOS"] = strings.Join(repos, " ")
 	}
 	// git_pat grants: surface the {host: grant_id} map so the git-credential
@@ -331,11 +328,7 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, inte
 	// WARDYN_GIT_PAT_BROKER_HOSTS below, which carries HOST NAMES ONLY and no
 	// grant id, so it cannot be used to mint anything.
 	if patBroker && len(gitPATGrants) > 0 {
-		hosts := make([]string, 0, len(gitPATGrants))
-		for h := range gitPATGrants {
-			hosts = append(hosts, h)
-		}
-		sort.Strings(hosts)
+		hosts := slices.Sorted(maps.Keys(gitPATGrants))
 		sandboxEnv["WARDYN_GIT_PAT_BROKER_HOSTS"] = strings.Join(hosts, " ")
 		gitPATGrants = nil
 	}

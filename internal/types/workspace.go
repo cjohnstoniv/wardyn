@@ -5,7 +5,8 @@ package types
 
 import (
 	"encoding/json"
-	"sort"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -382,11 +383,7 @@ var ClosedIntegrationKinds = map[string]bool{
 // "want one of: …" half of a rejected write's error. Sorted so the message is
 // deterministic across map iterations.
 func ClosedIntegrationKindList() []string {
-	out := make([]string, 0, len(ClosedIntegrationKinds))
-	for k := range ClosedIntegrationKinds {
-		out = append(out, k)
-	}
-	sort.Strings(out)
+	out := slices.Sorted(maps.Keys(ClosedIntegrationKinds))
 	return out
 }
 
@@ -666,7 +663,7 @@ func foldLegacyIntegration(l legacyIntegrationJSON) Integration {
 		}
 	}
 	var secrets []IntegrationSecret
-	for _, role := range sortedKeys(l.Credentials) {
+	for _, role := range slices.Sorted(maps.Keys(l.Credentials)) { // deterministic secrets order
 		name := l.Credentials[role]
 		var d *IntegrationDelivery
 		switch {
@@ -697,17 +694,6 @@ func cloneAnyMap(m map[string]any) map[string]any {
 		out[k] = v
 	}
 	return out
-}
-
-// sortedKeys returns m's keys sorted, so the fold's secrets order is
-// deterministic regardless of map iteration.
-func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 // IntegrationList is SiteConfig's integrations slice with the read-time

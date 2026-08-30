@@ -8,9 +8,10 @@ package docker
 import (
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"os/user"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -220,11 +221,7 @@ func pickRuntime(info system.Info, want string) string {
 	if _, ok := info.Runtimes[want]; ok {
 		return want
 	}
-	names := make([]string, 0, len(info.Runtimes))
-	for name := range info.Runtimes {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := slices.Sorted(maps.Keys(info.Runtimes))
 	for _, name := range names {
 		if strings.HasPrefix(name, want) {
 			return name
