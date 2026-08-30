@@ -4,6 +4,8 @@
 package hostrules
 
 import (
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -78,7 +80,7 @@ func TestEmitArtifactConfig_PerEcosystemSyntax(t *testing.T) {
 	}
 	// go rides env only: exactly the 5 file-based ecosystems, no go config file.
 	if len(files) != 5 {
-		t.Errorf("want 5 config files (npm/pip/cargo/maven/nuget), got %d: %v", len(files), keysOf(files))
+		t.Errorf("want 5 config files (npm/pip/cargo/maven/nuget), got %d: %v", len(files), slices.Sorted(maps.Keys(files)))
 	}
 }
 
@@ -104,15 +106,4 @@ func TestEmitArtifactConfig_PartialAndEmpty(t *testing.T) {
 	if env != nil {
 		t.Errorf("blank go base must not emit env, got %v", env)
 	}
-}
-
-// keysOf mirrors the helper this test used in its previous home
-// (internal/workspacescan/gen_test.go) — copied rather than exported, so the
-// two packages' tests stay independent.
-func keysOf(m map[string]string) []string {
-	ks := make([]string, 0, len(m))
-	for k := range m {
-		ks = append(ks, k)
-	}
-	return ks
 }

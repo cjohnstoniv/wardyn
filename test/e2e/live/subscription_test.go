@@ -9,7 +9,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -231,7 +233,7 @@ func (h *harness) launchSubscriptionInteractive(ctx context.Context, label strin
 	if err != nil {
 		var apiErr *client.APIError
 		if errors.As(err, &apiErr) && apiErr.Status == 422 && strings.Contains(apiErr.Body, "confinement") {
-			return types.AgentRun{}, class, "subscription runs floor to CC3/Vault; this host cannot enforce it (best installed: " + class + ", installed: " + strings.Join(keys(installed), ",") + ")"
+			return types.AgentRun{}, class, "subscription runs floor to CC3/Vault; this host cannot enforce it (best installed: " + class + ", installed: " + strings.Join(slices.Sorted(maps.Keys(installed)), ",") + ")"
 		}
 		h.t.Fatalf("CreateRun(subscription %s): %v", label, err)
 	}

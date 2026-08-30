@@ -7,8 +7,10 @@ package live
 
 import (
 	"context"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +24,7 @@ func TestLive_TierMatrix(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	installed := h.installedClasses(ctx)
-	t.Logf("installed confinement classes: %v", keys(installed))
+	t.Logf("installed confinement classes: %v", slices.Sorted(maps.Keys(installed)))
 
 	for _, class := range []string{"CC1", "CC2", "CC3"} {
 		class := class
@@ -201,14 +203,6 @@ func (h *harness) forT(t *testing.T) *harness {
 	cp := *h
 	cp.t = t
 	return &cp
-}
-
-func keys(m map[string]bool) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	return out
 }
 
 // sortedInstalled returns the installed confinement classes weakest-first (CC1,

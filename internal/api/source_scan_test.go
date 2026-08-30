@@ -6,8 +6,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -40,16 +42,16 @@ func TestSeedSourceRequirements_EveryRowValidates(t *testing.T) {
 		}
 	}
 	if row := seed["secret:aws-default-region"]; row.Level != "required" || row.Provenance != "scan_seeded" {
-		t.Fatalf("env-var name not mapped to storable secret name: %+v (keys=%v)", row, keysOf(seed))
+		t.Fatalf("env-var name not mapped to storable secret name: %+v (keys=%v)", row, slices.Sorted(maps.Keys(seed)))
 	}
 	if row := seed["secret:database-url"]; row.Level != "optional" {
 		t.Fatalf("optional flag lost in mapping: %+v", row)
 	}
 	if _, ok := seed["secret:already-storable.key"]; !ok {
-		t.Fatalf("already-storable name must pass through unchanged: keys=%v", keysOf(seed))
+		t.Fatalf("already-storable name must pass through unchanged: keys=%v", slices.Sorted(maps.Keys(seed)))
 	}
 	if len(seed) != 5 { // 3 secrets + 1 egress + 1 write (unstorable name skipped)
-		t.Fatalf("want 5 seeded rows, got %d: %v", len(seed), keysOf(seed))
+		t.Fatalf("want 5 seeded rows, got %d: %v", len(seed), slices.Sorted(maps.Keys(seed)))
 	}
 }
 
@@ -70,16 +72,8 @@ func TestSeedSourceRequirements_SuggestedEgressNeverSeeded(t *testing.T) {
 	}
 	seed := seedSourceRequirements(types.SourceRepo, "", p)
 	if len(seed) != 0 {
-		t.Fatalf("a profile with only SuggestedEgress must seed nothing (it is display-only, never a contract row): %v", keysOf(seed))
+		t.Fatalf("a profile with only SuggestedEgress must seed nothing (it is display-only, never a contract row): %v", slices.Sorted(maps.Keys(seed)))
 	}
-}
-
-func keysOf(m map[string]types.WorkspaceRequirement) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	return out
 }
 
 // localDirScanStore is the minimal store.Store scanLocalDirSource needs:

@@ -8,10 +8,12 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -275,7 +277,7 @@ func TestSupportBundleCmdEndToEnd(t *testing.T) {
 
 	for _, want := range []string{"cli-version.txt", "healthz.json", "setup-status.json", "audit-tail.json", "compose-config.redacted.yaml"} {
 		if _, ok := files[want]; !ok {
-			t.Errorf("bundle is missing %q; got entries %v", want, keysOf(files))
+			t.Errorf("bundle is missing %q; got entries %v", want, slices.Sorted(maps.Keys(files)))
 		}
 	}
 	if !strings.Contains(files["healthz.json"], "0.6.0") {
@@ -290,12 +292,4 @@ func TestSupportBundleCmdEndToEnd(t *testing.T) {
 	if strings.Contains(files["compose-config.redacted.yaml"], "demo-admin-token") {
 		t.Errorf("compose-config.redacted.yaml leaked the admin token: %s", files["compose-config.redacted.yaml"])
 	}
-}
-
-func keysOf(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	return out
 }

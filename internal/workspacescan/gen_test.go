@@ -5,6 +5,8 @@ package workspacescan
 
 import (
 	"encoding/json"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -82,13 +84,13 @@ func TestGenerateDevcontainer_ProfilesToJSON(t *testing.T) {
 			}
 			got, ok := files[genDevcontainerPath]
 			if !ok {
-				t.Fatalf("missing %s in output; got keys %v", genDevcontainerPath, keysOf(files))
+				t.Fatalf("missing %s in output; got keys %v", genDevcontainerPath, slices.Sorted(maps.Keys(files)))
 			}
 			if df := files[genDockerfilePath]; !strings.Contains(df, "FROM "+genBaseImage) {
 				t.Errorf("expected a generated Dockerfile FROM the base image, got %q", df)
 			}
 			if len(files) != 2 {
-				t.Errorf("expected exactly 2 generated files (devcontainer.json + Dockerfile), got %d: %v", len(files), keysOf(files))
+				t.Errorf("expected exactly 2 generated files (devcontainer.json + Dockerfile), got %d: %v", len(files), slices.Sorted(maps.Keys(files)))
 			}
 			if got != tc.want {
 				t.Errorf("devcontainer.json mismatch:\n got:\n%s\nwant:\n%s", got, tc.want)
@@ -208,12 +210,4 @@ func TestGenAgentToolDockerfile(t *testing.T) {
 	if !strings.HasPrefix(instrs[1], "RUN set -eu; ") {
 		t.Errorf("every RUN must fail the build closed: %q", instrs[1])
 	}
-}
-
-func keysOf(m map[string]string) []string {
-	ks := make([]string, 0, len(m))
-	for k := range m {
-		ks = append(ks, k)
-	}
-	return ks
 }
