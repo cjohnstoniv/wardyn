@@ -8,7 +8,6 @@ import {
   AlertCircle,
   ArrowRight,
   Building2,
-  Fingerprint,
   KeyRound,
   Loader2,
   Moon,
@@ -19,9 +18,14 @@ import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
-import { Chip } from "../wardyn/primitives";
 import { useTheme } from "../wardyn/theme-provider";
-import { errText, HttpError, setToken, wfetch, withLimit } from "../../lib/api/core";
+import {
+  errText,
+  HttpError,
+  setToken,
+  wfetch,
+  withLimit,
+} from "../../lib/api/core";
 import { health } from "../../lib/api/health";
 
 // W31-S1-5: the OIDC callback (internal/auth/oidc/oidc.go's CallbackHandler)
@@ -57,22 +61,14 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
   const [remember, setRemember] = React.useState(false);
   const [loading, setLoading] = React.useState<"token" | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  // Trust boundary shown pre-auth — populated from /healthz when it responds.
-  // Seeded EMPTY (not "wardyn.local"/"embedded", which are the DEFAULT-instance
-  // values and would be WRONG on a SPIRE/custom-trust-domain host where health()
-  // fails): we never assert a specific trust domain / provider that isn't real.
-  const [trustDomain, setTrustDomain] = React.useState("");
-  const [identityProvider, setIdentityProvider] = React.useState("");
   // Whether this control plane has OIDC configured (so GET /auth/login exists).
   // Defaults false: without the flow mounted the link would 404, and an older
   // server simply omits the field.
   const [sso, setSso] = React.useState(false);
   React.useEffect(() => {
-    health.health().then((h) => {
-      if (h.trust_domain) setTrustDomain(h.trust_domain);
-      if (h.identity_provider) setIdentityProvider(h.identity_provider);
-      setSso(!!h.sso);
-    });
+    // Still fetched for `sso` alone: it decides whether the SSO button exists.
+    // trust_domain / identity_provider are deliberately NOT read here any more.
+    health.health().then((h) => setSso(!!h.sso));
   }, []);
 
   // W31-S1-5: render the OIDC callback's ?auth_error=<code> (see
@@ -88,7 +84,11 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
     setError(authErrorMessage(code));
     params.delete("auth_error");
     const qs = params.toString();
-    window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
+    window.history.replaceState(
+      {},
+      "",
+      window.location.pathname + (qs ? `?${qs}` : ""),
+    );
   }, []);
 
   // W31-S1-4: probeAuth collapsed every failure — a rejected token (401), a
@@ -115,7 +115,9 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
     } catch (e) {
       if (e instanceof HttpError && e.status === 401) {
         setToken(null); // a real rejection — don't keep carrying a bad token
-        setError("That admin token was rejected. Check the value and try again.");
+        setError(
+          "That admin token was rejected. Check the value and try again.",
+        );
       } else {
         setError("Could not reach the control plane.");
       }
@@ -151,7 +153,11 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
         aria-label="Toggle theme"
         className="absolute right-4 top-4"
       >
-        {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
+        {theme === "dark" ? (
+          <Sun className="size-4" />
+        ) : (
+          <Moon className="size-4" />
+        )}
       </Button>
 
       <div className="relative w-full max-w-[400px]">
@@ -159,22 +165,14 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
           <div className="flex size-12 items-center justify-center rounded-full border border-primary/25 bg-primary/12">
             <ShieldCheck className="size-6 text-primary" />
           </div>
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">Wardyn</h1>
-          {(trustDomain || identityProvider) && (
-            <div className="flex flex-wrap items-center justify-center gap-2">
-              {trustDomain && (
-                <Chip tone="success" dot mono>
-                  {trustDomain}
-                </Chip>
-              )}
-              {identityProvider && (
-                <Chip tone="neutral" mono>
-                  <Fingerprint className="size-3" />
-                  identity: {identityProvider}
-                </Chip>
-              )}
-            </div>
-          )}
+          <h1 className="text-xl font-semibold tracking-tight text-foreground">
+            Wardyn
+          </h1>
+          {/* No trust-domain / identity-provider chips here. Someone at a sign-in
+              form cannot act on either, has not been taught the vocabulary, and on
+              a default install both are constants (wardyn.local / embedded). The
+              app chrome surfaces them where they are NON-default, which is the only
+              case worth a reader's attention. */}
         </div>
 
         <div className="rounded-xl border border-border bg-card p-6 shadow-floating">
@@ -211,8 +209,8 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
               />
             </div>
             <p className="text-xs text-muted-foreground">
-              Paste the token this control plane was started with (WARDYN_ADMIN_TOKEN; the
-              compose demo uses demo-admin-token).
+              Paste the token this control plane was started with
+              (WARDYN_ADMIN_TOKEN; the compose demo uses demo-admin-token).
             </p>
             <label className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
               <Checkbox
@@ -225,7 +223,11 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
                 (keeps the token after the browser closes)
               </span>
             </label>
-            <Button type="submit" className="mt-1 w-full" disabled={!token || loading !== null}>
+            <Button
+              type="submit"
+              className="mt-1 w-full"
+              disabled={!token || loading !== null}
+            >
               {loading === "token" ? (
                 <Loader2 className="size-4 animate-spin" />
               ) : (
@@ -249,7 +251,9 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
 
           <div className="my-5 flex items-center gap-3">
             <div className="h-px flex-1 bg-border" />
-            <span className="text-xs uppercase tracking-wide text-muted-foreground">or</span>
+            <span className="text-xs uppercase tracking-wide text-muted-foreground">
+              or
+            </span>
             <div className="h-px flex-1 bg-border" />
           </div>
 
@@ -270,8 +274,9 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
                 </a>
               </Button>
               <p className="mt-2 text-center text-xs text-muted-foreground">
-                Your role — admin or member — comes from your SSO role assignment. Everyone is
-                an admin only when neither a role map nor the operator allowlist is set.
+                Your role — admin or member — comes from your SSO role
+                assignment. Everyone is an admin only when neither a role map
+                nor the operator allowlist is set.
               </p>
             </>
           ) : (
@@ -286,15 +291,12 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
                 Sign in with SSO
               </Button>
               <p className="mt-2 text-center text-xs text-muted-foreground">
-                SSO sign-in isn&apos;t configured on this control plane — use an admin token.
+                SSO sign-in isn&apos;t configured on this control plane — use an
+                admin token.
               </p>
             </>
           )}
         </div>
-
-        <p className="mt-5 text-center text-xs text-muted-foreground">
-          Run identities are minted under this trust domain.
-        </p>
       </div>
     </div>
   );

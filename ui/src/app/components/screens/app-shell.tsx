@@ -4,7 +4,13 @@
  */
 
 import * as React from "react";
-import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import {
+  Link,
+  NavLink,
+  Outlet,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import {
   Activity,
   AlertTriangle,
@@ -44,7 +50,11 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { ErrorBoundary } from "../wardyn/error-boundary";
-import { OperatorProvider, RoleProvider, type Role } from "../wardyn/operator-context";
+import {
+  OperatorProvider,
+  RoleProvider,
+  type Role,
+} from "../wardyn/operator-context";
 import { health as api } from "../../lib/api/health";
 import type { ConfinementClass } from "../../lib/types";
 // The run wizard reaches the workspaces + secrets screens and their dialogs, so
@@ -94,25 +104,29 @@ function useMeta(): ShellMeta {
   });
   React.useEffect(() => {
     let alive = true;
-    Promise.all([api.health(), api.whoami()]).then(([h, me]) => {
-      if (!alive) return;
-      setMeta({
-        trustDomain: h.trust_domain || "unknown",
-        identityProvider: h.identity_provider || "unknown",
-        principal: me?.principal || "unknown",
-        method: me?.method || "",
-        resolved: true,
-        operator: me?.operator ?? true,
-        role: me?.role ?? "admin",
-        sessionExpiresAt: me?.session_expires_at ? new Date(me.session_expires_at) : null,
-        memberLocalDirRoot: me?.member_local_dir_root ?? null,
+    Promise.all([api.health(), api.whoami()])
+      .then(([h, me]) => {
+        if (!alive) return;
+        setMeta({
+          trustDomain: h.trust_domain || "unknown",
+          identityProvider: h.identity_provider || "unknown",
+          principal: me?.principal || "unknown",
+          method: me?.method || "",
+          resolved: true,
+          operator: me?.operator ?? true,
+          role: me?.role ?? "admin",
+          sessionExpiresAt: me?.session_expires_at
+            ? new Date(me.session_expires_at)
+            : null,
+          memberLocalDirRoot: me?.member_local_dir_root ?? null,
+        });
+      })
+      .catch(() => {
+        // health()/whoami() swallow their own errors today, so this is unreachable;
+        // it exists so `resolved` never depends on two other functions keeping
+        // that promise — a rejection here would strand the landing gate.
+        if (alive) setMeta((m) => ({ ...m, resolved: true }));
       });
-    }).catch(() => {
-      // health()/whoami() swallow their own errors today, so this is unreachable;
-      // it exists so `resolved` never depends on two other functions keeping
-      // that promise — a rejection here would strand the landing gate.
-      if (alive) setMeta((m) => ({ ...m, resolved: true }));
-    });
     return () => {
       alive = false;
     };
@@ -134,7 +148,8 @@ function useSessionExpiringSoon(expiresAt: Date | null): boolean {
       setSoon(false);
       return;
     }
-    const check = () => setSoon(expiresAt.getTime() - Date.now() <= SESSION_WARN_MS);
+    const check = () =>
+      setSoon(expiresAt.getTime() - Date.now() <= SESSION_WARN_MS);
     check();
     const id = setInterval(check, SESSION_CHECK_MS);
     return () => clearInterval(id);
@@ -165,7 +180,12 @@ interface NavItem {
 }
 const NAV_ITEMS: NavItem[] = [
   { to: "/runs", label: "Runs", icon: Activity, badge: "attention" },
-  { to: "/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals" },
+  {
+    to: "/approvals",
+    label: "Approvals",
+    icon: ShieldCheck,
+    badge: "approvals",
+  },
   { to: "/workspaces", label: "Workspaces", icon: FolderOpen },
   { to: "/policies", label: "Policies", icon: UserCog },
   // Permissioning (0.6 pillar 2) sits beside Policies: both answer "what is
@@ -213,7 +233,10 @@ interface FocusMode {
   focus: boolean;
   setFocus: (on: boolean) => void;
 }
-const FocusContext = React.createContext<FocusMode>({ focus: false, setFocus: () => {} });
+const FocusContext = React.createContext<FocusMode>({
+  focus: false,
+  setFocus: () => {},
+});
 
 /** The shell's focus state. Default: off, and setting it is a no-op — a screen
  *  rendered outside <AppShell> (every existing test) can call this safely. */
@@ -250,7 +273,11 @@ function SidebarNav({
       <nav className="space-y-0.5">
         {items.map((item) => {
           const count =
-            item.badge === "approvals" ? pendingApprovals : item.badge === "attention" ? attentionCount : 0;
+            item.badge === "approvals"
+              ? pendingApprovals
+              : item.badge === "attention"
+                ? attentionCount
+                : 0;
           return (
             <NavLink
               key={item.to}
@@ -264,7 +291,9 @@ function SidebarNav({
                   {isActive && (
                     <span className="absolute -left-3 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r bg-sidebar-primary" />
                   )}
-                  <item.icon className={cn("size-4", isActive && "text-foreground")} />
+                  <item.icon
+                    className={cn("size-4", isActive && "text-foreground")}
+                  />
                   <span className="flex-1 text-left">{item.label}</span>
                   {count > 0 && (
                     <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-warning-subtle px-1.5 text-meta font-semibold text-warning">
@@ -307,11 +336,20 @@ export function MobileNav(props: {
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
-        <Button variant="ghost" size="icon" className="md:hidden" aria-label="Open navigation menu">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="md:hidden"
+          aria-label="Open navigation menu"
+        >
           <Menu className="size-5" />
         </Button>
       </SheetTrigger>
-      <SheetContent side="left" aria-describedby={undefined} className="w-[248px] bg-sidebar px-3 py-4">
+      <SheetContent
+        side="left"
+        aria-describedby={undefined}
+        className="w-[248px] bg-sidebar px-3 py-4"
+      >
         <SheetTitle className="sr-only">Navigation</SheetTitle>
         <SidebarNav {...props} onNavigate={() => setOpen(false)} />
       </SheetContent>
@@ -350,15 +388,21 @@ export function AppShell({
   // The top bar's permanent barrier chip. Empty (no confinement classes at
   // all) reads "No barrier" — the one honest state a fresh/broken host can be
   // in.
-  const [confinementClasses, setConfinementClasses] = React.useState<ConfinementClass[]>([]);
+  const [confinementClasses, setConfinementClasses] = React.useState<
+    ConfinementClass[]
+  >([]);
   React.useEffect(() => {
-    if (confinementClassesProp !== undefined) setConfinementClasses(confinementClassesProp);
+    if (confinementClassesProp !== undefined)
+      setConfinementClasses(confinementClassesProp);
   }, [confinementClassesProp]);
 
   // See FocusContext above. Nothing here decides WHEN focus is on — the run
   // cockpit's canvas does, and it clears this on unmount.
   const [focus, setFocus] = React.useState(false);
-  const focusValue = React.useMemo<FocusMode>(() => ({ focus, setFocus }), [focus]);
+  const focusValue = React.useMemo<FocusMode>(
+    () => ({ focus, setFocus }),
+    [focus],
+  );
 
   // Wraps EVERYTHING the shell renders (nav, main/Outlet, and the New Run
   // dialog mounted below) — not just the Outlet — so every screen AND every
@@ -366,89 +410,106 @@ export function AppShell({
   // Add workspace) sees the real role instead of silently falling back to the
   // context default.
   return (
-    <OperatorProvider operator={meta.operator} principal={meta.principal} memberLocalDirRoot={meta.memberLocalDirRoot}>
-    <RoleProvider role={meta.role} roleResolved={meta.resolved}>
-    <FocusContext.Provider value={focusValue}>
-    <div className="flex h-screen flex-col bg-background text-foreground">
-      {/* Skip-to-content: first focusable element, visually hidden until focused,
+    <OperatorProvider
+      operator={meta.operator}
+      principal={meta.principal}
+      memberLocalDirRoot={meta.memberLocalDirRoot}
+    >
+      <RoleProvider role={meta.role} roleResolved={meta.resolved}>
+        <FocusContext.Provider value={focusValue}>
+          <div className="flex h-screen flex-col bg-background text-foreground">
+            {/* Skip-to-content: first focusable element, visually hidden until focused,
           so a keyboard user can jump past the nav to the main region (WCAG 2.4.1). */}
-      <a
-        href="#main-content"
-        className="sr-only rounded-md focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-50 focus:bg-primary focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-primary-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-      >
-        Skip to main content
-      </a>
-      {/* Hidden — not merely covered — in focus mode: the cockpit's overlay is
+            <a
+              href="#main-content"
+              className="sr-only rounded-md focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-50 focus:bg-primary focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-primary-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            >
+              Skip to main content
+            </a>
+            {/* Hidden — not merely covered — in focus mode: the cockpit's overlay is
           painted over the shell anyway, but leaving the header mounted would
           keep a dozen focusable controls ahead of the terminal in tab order
           (WCAG 2.4.3) and in the accessibility tree. */}
-      {!focus && (
-        <TopBar
-          onSignOut={onSignOut}
-          meta={meta}
-          pendingApprovals={pendingApprovals}
-          attentionCount={attentionCount}
-          confinementClasses={confinementClasses}
-          onNewRun={() => navigate("/runs/new")}
-        />
-      )}
-      {/* NOT hidden in focus mode, and z-50 so the cockpit's overlay (z-40)
+            {!focus && (
+              <TopBar
+                onSignOut={onSignOut}
+                meta={meta}
+                pendingApprovals={pendingApprovals}
+                attentionCount={attentionCount}
+                confinementClasses={confinementClasses}
+                onNewRun={() => navigate("/runs/new")}
+              />
+            )}
+            {/* NOT hidden in focus mode, and z-50 so the cockpit's overlay (z-40)
           cannot paint over it: this banner is the only thing that separates a
           quiet fleet from a dead daemon, and a full-bleed terminal is exactly
           where you would otherwise never notice. */}
-      {unreachable && (
-        <div
-          role="status"
-          className="relative z-50 flex shrink-0 items-center gap-2 border-b border-border bg-warning-subtle px-4 py-2 text-sm text-warning"
-        >
-          <AlertTriangle className="size-4 shrink-0" />
-          <span>Control plane unreachable — showing the last data received. {lastCheckedLabel(lastOkAt ?? null)}</span>
-        </div>
-      )}
-      {/* W31-S1-7: the SSO session dies outright at its expiry, with no
+            {unreachable && (
+              <div
+                role="status"
+                className="relative z-50 flex shrink-0 items-center gap-2 border-b border-border bg-warning-subtle px-4 py-2 text-sm text-warning"
+              >
+                <AlertTriangle className="size-4 shrink-0" />
+                <span>
+                  Control plane unreachable — showing the last data received.{" "}
+                  {lastCheckedLabel(lastOkAt ?? null)}
+                </span>
+              </div>
+            )}
+            {/* W31-S1-7: the SSO session dies outright at its expiry, with no
           refresh — this is the warning that never existed, so it is not a
           silent 401 that wipes the console mid-work. Re-authenticating now
           (while the current session still works) replaces it before it dies. */}
-      {!unreachable && sessionExpiringSoon && (
-        <div
-          role="status"
-          className="relative z-50 flex shrink-0 items-center gap-2 border-b border-border bg-warning-subtle px-4 py-2 text-sm text-warning"
-        >
-          <AlertTriangle className="size-4 shrink-0" />
-          <span>Your session is expiring soon.</span>
-          <a href="/auth/login" className="font-medium underline underline-offset-2">
-            Sign in again
-          </a>
-          <span>to avoid losing your place.</span>
-        </div>
-      )}
-      <div className="flex min-h-0 flex-1">
-        {!focus && (
-          <aside className="hidden w-[228px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">
-            <SidebarNav
-              pendingApprovals={pendingApprovals}
-              attentionCount={attentionCount}
-              meta={meta}
-            />
-          </aside>
-        )}
+            {!unreachable && sessionExpiringSoon && (
+              <div
+                role="status"
+                className="relative z-50 flex shrink-0 items-center gap-2 border-b border-border bg-warning-subtle px-4 py-2 text-sm text-warning"
+              >
+                <AlertTriangle className="size-4 shrink-0" />
+                <span>Your session is expiring soon.</span>
+                <a
+                  href="/auth/login"
+                  className="font-medium underline underline-offset-2"
+                >
+                  Sign in again
+                </a>
+                <span>to avoid losing your place.</span>
+              </div>
+            )}
+            <div className="flex min-h-0 flex-1">
+              {!focus && (
+                <aside className="hidden w-[228px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">
+                  <SidebarNav
+                    pendingApprovals={pendingApprovals}
+                    attentionCount={attentionCount}
+                    meta={meta}
+                  />
+                </aside>
+              )}
 
-        <main id="main-content" tabIndex={-1} className="scroll-thin min-w-0 flex-1 overflow-y-auto focus:outline-none">
-          {/* Keyed by pathname so navigating away from a screen that threw
+              <main
+                id="main-content"
+                tabIndex={-1}
+                className="scroll-thin min-w-0 flex-1 overflow-y-auto focus:outline-none"
+              >
+                {/* Keyed by pathname so navigating away from a screen that threw
               clears the caught error instead of wedging the console. */}
-          <ErrorBoundary key={location.pathname} region={location.pathname}>
-            <Outlet />
-          </ErrorBoundary>
-        </main>
-      </div>
+                <ErrorBoundary
+                  key={location.pathname}
+                  region={location.pathname}
+                >
+                  <Outlet />
+                </ErrorBoundary>
+              </main>
+            </div>
 
-      {/* The NewRunDialog mounted here. New run is a PAGE now (/runs/new): a
+            {/* The NewRunDialog mounted here. New run is a PAGE now (/runs/new): a
           five-step modal put the consequences of every choice on a Review
           screen you reached last, after making them all blind. The one-page
           screen shows the live policy rail beside the form the whole time. */}
-    </div>
-    </FocusContext.Provider>
-    </RoleProvider>
+          </div>
+        </FocusContext.Provider>
+      </RoleProvider>
     </OperatorProvider>
   );
 }
@@ -473,22 +534,51 @@ export function TopBar({
   const { theme, toggle } = useTheme();
   return (
     <header className="flex h-14 shrink-0 items-center gap-4 border-b border-border bg-card/70 px-4 backdrop-blur">
-      <MobileNav pendingApprovals={pendingApprovals} attentionCount={attentionCount} meta={meta} />
-      <Link to="/runs" className="rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
+      <MobileNav
+        pendingApprovals={pendingApprovals}
+        attentionCount={attentionCount}
+        meta={meta}
+      />
+      <Link
+        to="/runs"
+        className="rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+      >
         <WardynWordmark />
       </Link>
 
-      <div className="ml-2 hidden items-center gap-2 lg:flex">
-        <EnvIndicator trustDomain={meta.trustDomain} />
-        <Chip tone="neutral" className="font-mono">
-          <Fingerprint className="size-3" />
-          identity: {meta.identityProvider}
-        </Chip>
-      </div>
+      {/* Shown ONLY when non-default. A default install is always
+          wardyn.local / embedded, so these chips would be four constants nobody
+          can act on, occupying the most valuable strip on every screen — while
+          the footer panel still states the trust domain for anyone who wants it.
+          An external SPIRE provider or a custom trust domain IS worth a reader's
+          attention, and only then do they appear. */}
+      {(isCustomTrustDomain(meta.trustDomain) ||
+        isCustomIdentityProvider(meta.identityProvider)) && (
+        <div className="ml-2 hidden items-center gap-2 lg:flex">
+          {isCustomTrustDomain(meta.trustDomain) && (
+            <EnvIndicator trustDomain={meta.trustDomain} />
+          )}
+          {isCustomIdentityProvider(meta.identityProvider) && (
+            <Chip tone="neutral" className="font-mono">
+              <Fingerprint className="size-3" />
+              identity: {meta.identityProvider}
+            </Chip>
+          )}
+        </div>
+      )}
 
       <div className="ml-auto flex items-center gap-1.5">
-        <Button variant="ghost" size="icon" onClick={toggle} aria-label="Toggle theme">
-          {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={toggle}
+          aria-label="Toggle theme"
+        >
+          {theme === "dark" ? (
+            <Sun className="size-4" />
+          ) : (
+            <Moon className="size-4" />
+          )}
         </Button>
 
         <BarrierChip classes={confinementClasses} />
@@ -503,16 +593,25 @@ export function TopBar({
                 every sibling header control (theme toggle above, mobile nav
                 trigger) — its focus-visible ring is what keyboard focus falls
                 back to instead of the bare unthemed browser outline. */}
-            <Button variant="ghost" className="h-auto gap-2 rounded-md px-1.5 py-1">
-              <span className="flex size-7 items-center justify-center rounded-full bg-secondary text-xs text-foreground">{initials(meta.principal)}</span>
-              <span className="hidden text-sm sm:block">{meta.principal.split("@")[0]}</span>
+            <Button
+              variant="ghost"
+              className="h-auto gap-2 rounded-md px-1.5 py-1"
+            >
+              <span className="flex size-7 items-center justify-center rounded-full bg-secondary text-xs text-foreground">
+                {initials(meta.principal)}
+              </span>
+              <span className="hidden text-sm sm:block">
+                {meta.principal.split("@")[0]}
+              </span>
               <ChevronsUpDown className="size-3.5 text-muted-foreground" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
             <DropdownMenuLabel>
               <div className="flex items-center gap-1.5">
-                <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{meta.principal}</span>
+                <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
+                  {meta.principal}
+                </span>
                 {/* Role is a fact, not an alert (prompt-v2): a quiet chip, no
                     banner, no callout — admin is unchanged, member just says so.
                     Gated on meta.method like its sibling line below: /me hasn't
@@ -520,7 +619,10 @@ export function TopBar({
                     role default is "admin" (operator-context.tsx), which would
                     otherwise flash ADMIN next to a still-"unknown" principal. */}
                 {meta.method && (
-                  <Chip tone="neutral" className="shrink-0 uppercase tracking-wide">
+                  <Chip
+                    tone="neutral"
+                    className="shrink-0 uppercase tracking-wide"
+                  >
                     {meta.role}
                   </Chip>
                 )}
@@ -582,7 +684,10 @@ export function TopBar({
             {meta.method !== "local" && (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={onSignOut} className="text-danger focus:text-danger">
+                <DropdownMenuItem
+                  onClick={onSignOut}
+                  className="text-danger focus:text-danger"
+                >
                   <LogOut className="size-4" /> Sign out
                 </DropdownMenuItem>
               </>
@@ -591,6 +696,24 @@ export function TopBar({
         </DropdownMenu>
       </div>
     </header>
+  );
+}
+
+// The defaults every ordinary install reports (internal/identity/embedded's
+// DefaultTrustDomain, and the identity registry's default component). A value
+// equal to one of these carries no information, so the chrome stays quiet; the
+// placeholder and error states ("…", "unknown") are quiet for the same reason —
+// a chip that says "unknown" is worse than no chip.
+const DEFAULT_TRUST_DOMAIN = "wardyn.local";
+const DEFAULT_IDENTITY_PROVIDER = "embedded";
+
+export function isCustomTrustDomain(v: string): boolean {
+  return v !== "" && v !== "…" && v !== "unknown" && v !== DEFAULT_TRUST_DOMAIN;
+}
+
+export function isCustomIdentityProvider(v: string): boolean {
+  return (
+    v !== "" && v !== "…" && v !== "unknown" && v !== DEFAULT_IDENTITY_PROVIDER
   );
 }
 
@@ -616,7 +739,11 @@ function BarrierChip({ classes }: { classes: ConfinementClass[] }) {
     <Link
       to="/settings"
       className="rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-      aria-label={strongest ? "Sandbox barrier — open Settings" : "No sandbox barrier — open Settings"}
+      aria-label={
+        strongest
+          ? "Sandbox barrier — open Settings"
+          : "No sandbox barrier — open Settings"
+      }
     >
       {strongest ? (
         <ConfinementChip value={strongest} />
