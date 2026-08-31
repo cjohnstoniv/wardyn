@@ -212,6 +212,12 @@ service:
   # Reachable from the host through the kind config's extraPortMappings; the
   # node ports themselves are pinned onto the Service after install below.
   type: NodePort
+  # MUST be HTTP_PORT, not the chart's default: the patch below merges
+  # Service.spec.ports on the port NUMBER, so a Service port that disagrees
+  # with HTTP_PORT makes that patch ADD a port instead of updating one — and a
+  # second port in a multi-port Service is rejected for having no name. That
+  # only ever worked while HTTP_PORT happened to equal the chart default.
+  port: ${HTTP_PORT}
 k8s:
   enabled: true
   # Refused at render if empty, and it is a BOOT-time refusal in wardynd too
