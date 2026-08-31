@@ -11,19 +11,29 @@
 // importing these from the screen module dragged the whole terminal stack
 // into the initial bundle and defeated route-level code-splitting.
 //
-// There is NO hard gate here any more. The old setupGateActive + App.tsx's
-// RequireSetupComplete redirected EVERY route to /setup until the funnel was
-// finished; both are deleted and should not come back.
+// TWO different gates live here, and the difference matters.
 //
-// What replaced them is App.tsx's FirstRunLanding, which redirects "/" alone —
-// so a fresh install still OPENS on the tour (landing on an empty Runs board
-// left operators hunting for where to start) while every other route stays
-// directly reachable and nothing ever bounces you back in. setupDismissed()
-// below is that redirect's off-switch, set by one finish-or-skip.
+// firstRunLanding() decides where "/" alone lands, and an operator can dismiss
+// it for good. That is a convenience, not a gate.
+//
+// setupGateActive() IS a gate: while the daemon reports a setup check it grades
+// `fail` or `warn`, every route redirects to the funnel. It is NOT the old
+// funnel-completion gate that was deleted in 0.5 — that one demanded you FINISH
+// the tour, which is why it was obnoxious. This one asks only that the install
+// actually works: the daemon's own severity vocabulary decides, `info` never
+// gates (that is what info MEANS here — optional or permanent, e.g. no model
+// provider, which is optional because Wardyn governs non-agent runs too), and
+// demos and optional steps stay skippable throughout.
+//
+// It is deliberately SERVER-DERIVED with no browser flag. The dismiss flag
+// below outlives the install it describes — a browser that onboarded a previous
+// install skips the tour on a freshly wiped database — so a per-browser gate
+// would repeat exactly that bug.
 //
 // setup-screen re-exports these, so existing importers/tests are unaffected.
 import { lsGet, lsSet } from "../../../lib/storage";
 import type { Role } from "../../wardyn/operator-context";
+import type { SetupCheckStatus } from "../../../lib/types/setup";
 import type { SetupStepId } from "./steps";
 
 // ------------------------------------------------------------
@@ -79,9 +89,45 @@ export function firstRunLanding(
   role: Role = "admin",
 ): "/setup" | "/runs" {
   if (role === "member") {
-    return !status.unreachable && !memberGettingStartedSeen() ? "/setup" : "/runs";
+    return !status.unreachable && !memberGettingStartedSeen()
+      ? "/setup"
+      : "/runs";
   }
-  return !status.unreachable && !status.has_runs && !setupDismissed() ? "/setup" : "/runs";
+  return !status.unreachable && !status.has_runs && !setupDismissed()
+    ? "/setup"
+    : "/runs";
+}
+
+// ------------------------------------------------------------
+// The hard gate (server-derived).
+// ------------------------------------------------------------
+// True while this install has a setup check the DAEMON grades `fail` or
+// `warn`. `ok` and `info` never gate: setup_checks.go uses `info` for
+// "permanent / non-fixable or purely-optional", which is why an absent model
+// provider (llmProviderCheck: "a model provider is OPTIONAL — needed only for
+// agent-harness runs") does not hold anyone here.
+//
+// Three deliberate non-gates:
+//   - a MEMBER is never gated. `checks` is redacted for members (types/setup.ts),
+//     so a member cannot see, let alone clear, an operator's setup — gating them
+//     would be a trap with no exit.
+//   - an UNREACHABLE daemon is never gated. Its synthetic status proves nothing;
+//     a broken backend belongs behind AppShell's banner, not in a funnel whose
+//     every step would read un-ready.
+//   - an EMPTY check list is never gated, for the same reason: absent evidence
+//     is not evidence of a problem.
+//
+// The funnel is self-sufficient — its own steps configure the environment, the
+// network and secrets — so redirecting into it is never a dead end.
+export function setupGateActive(
+  status: { unreachable?: boolean; checks?: { status: SetupCheckStatus }[] },
+  role: Role = "admin",
+): boolean {
+  if (role !== "admin") return false;
+  if (status.unreachable) return false;
+  const checks = status.checks ?? [];
+  if (checks.length === 0) return false;
+  return checks.some((c) => c.status === "fail" || c.status === "warn");
 }
 
 // Integrations-skip flag — the operator explicitly chose to move past the
