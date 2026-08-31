@@ -6,6 +6,8 @@ package api
 import (
 	"net/http"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 )
 
 // handleSetupOnboardingComplete marks THIS INSTALL as having been through the
@@ -24,6 +26,22 @@ import (
 // timestamp — an operator revisiting and re-finishing the funnel is not a new
 // onboarding. Returns 200 either way; a caller that raced another and lost has
 // still achieved what it asked for.
+// mountSetupMutationRoutes hangs the setup flow's mutating endpoints off the
+// operator-only group — split from routes() at the funlen gate, and a real
+// seam: these are the calls the Getting Started funnel makes on the
+// operator's behalf, as opposed to the read-only status the whole console
+// polls. The harness-credential trio needs a secret store to write into;
+// the onboarding mark writes site config and mounts unconditionally.
+func (s *Server) mountSetupMutationRoutes(operatorOnly chi.Router) {
+	if s.cfg.Secrets != nil {
+		operatorOnly.Post("/setup/harness-login", s.handleHarnessLogin)
+		operatorOnly.Put("/setup/harness-credential/{provider}", s.handleHarnessCredentialPaste)
+		operatorOnly.Delete("/setup/harness-credential/{provider}", s.handleHarnessDisconnect)
+	}
+	// Install-side onboarding mark — why it exists is on the handler below.
+	operatorOnly.Post("/setup/onboarding-complete", s.handleSetupOnboardingComplete)
+}
+
 func (s *Server) handleSetupOnboardingComplete(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Store == nil {
 		writeError(w, http.StatusServiceUnavailable, "no store configured")

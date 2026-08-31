@@ -13,6 +13,9 @@ import {
   loadVisitedSteps,
   markStepVisited,
   setupGateActive,
+  gateAlreadyFired,
+  markGateFired,
+  resetGateForTests,
 } from "./setup-gate";
 
 // Two gates with different jobs: firstRunLanding steers "/" alone and is
@@ -171,8 +174,29 @@ describe("setupGateActive", () => {
   // a deliberately runner-less deployment (the e2e harness is one) could
   // never leave the funnel at all.
   it("never gates an install that has completed onboarding", () => {
-    expect(setupGateActive({ checks: [fail], onboarding_complete: true })).toBe(false);
-    expect(setupGateActive({ checks: [warn], onboarding_complete: true })).toBe(false);
-    expect(setupGateActive({ checks: [fail], onboarding_complete: false })).toBe(true);
+    expect(setupGateActive({ checks: [fail], onboarding_complete: true })).toBe(
+      false,
+    );
+    expect(setupGateActive({ checks: [warn], onboarding_complete: true })).toBe(
+      false,
+    );
+    expect(
+      setupGateActive({ checks: [fail], onboarding_complete: false }),
+    ).toBe(true);
+  });
+});
+
+// The gate fires once per page LOAD — an access lands a gated install in the
+// funnel, but the funnel's own affordances (People's "Open Permissions") must
+// then be able to navigate to gated routes without being bounced back to step
+// one. Module-level on purpose: /setup lives outside the gate's route wrapper,
+// so component state would be lost exactly when it matters.
+describe("gate-once-per-load", () => {
+  beforeEach(() => resetGateForTests());
+
+  it("arms once and stays fired for the rest of the load", () => {
+    expect(gateAlreadyFired()).toBe(false);
+    markGateFired();
+    expect(gateAlreadyFired()).toBe(true);
   });
 });

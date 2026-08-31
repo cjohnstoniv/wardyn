@@ -120,6 +120,31 @@ export function firstRunLanding(
 //
 // The funnel is self-sufficient — its own steps configure the environment, the
 // network and secrets — so redirecting into it is never a dead end.
+// The gate fires once per PAGE LOAD, not on every client-side navigation.
+// "Forced redirect for any UI site access" (the owner's requirement) means an
+// ACCESS — opening or reloading the console — always lands a gated install in
+// the funnel. It does not mean imprisonment: the funnel's own affordances
+// (People's "Open Permissions", the Secrets step's settings links) navigate to
+// gated routes, and a gate that re-fires on every navigation bounces its own
+// funnel back to step one — the walk that found this bug. Module-level rather
+// than component state on purpose: /setup sits OUTSIDE the gate's route
+// wrapper, so the wrapper unmounts while the operator is in the funnel and any
+// ref would forget the gate already fired. A fresh load (new tab, F5) re-arms.
+let gateFiredThisLoad = false;
+
+export function markGateFired(): void {
+  gateFiredThisLoad = true;
+}
+
+export function gateAlreadyFired(): boolean {
+  return gateFiredThisLoad;
+}
+
+// Test seam only: unit tests share one module instance across cases.
+export function resetGateForTests(): void {
+  gateFiredThisLoad = false;
+}
+
 export function setupGateActive(
   status: {
     unreachable?: boolean;

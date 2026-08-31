@@ -20,6 +20,8 @@ import { setup as setupApi } from "./lib/api/setup";
 // the entry chunk and defeats the /setup route's code-splitting.
 import {
   firstRunLanding,
+  gateAlreadyFired,
+  markGateFired,
   setupGateActive,
 } from "./components/screens/setup/setup-gate";
 import { useRole, useRoleResolved } from "./components/wardyn/operator-context";
@@ -186,11 +188,16 @@ function RequireSetup({ status }: { status: SetupStatus | null }) {
   const role = useRole();
   const roleResolved = useRoleResolved();
   if (status === null || !roleResolved) return <RouteFallback />;
-  return setupGateActive(status, role) ? (
-    <Navigate to="/setup" replace />
-  ) : (
-    <Outlet />
-  );
+  // Once per load: an access lands a gated install in the funnel; navigation
+  // OUT of the funnel afterwards is informed wandering, not a gate escape —
+  // the failing checks stay visible on every surface, and the funnel's own
+  // affordances (People's "Open Permissions" et al.) must be able to leave.
+  // See setup-gate.ts's gateFiredThisLoad for why this is module state.
+  if (!gateAlreadyFired() && setupGateActive(status, role)) {
+    markGateFired();
+    return <Navigate to="/setup" replace />;
+  }
+  return <Outlet />;
 }
 
 // What needs an operator's attention — surfaced as the amber count badge on the

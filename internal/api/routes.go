@@ -201,17 +201,7 @@ func (s *Server) routes() chi.Router {
 			// unset — can connect or disconnect the shared managed subscription
 			// every run inherits. Every connect/disconnect is audited
 			// (harness.credential.captured/disconnected).
-			if s.cfg.Secrets != nil {
-				operatorOnly.Post("/setup/harness-login", s.handleHarnessLogin)
-				operatorOnly.Put("/setup/harness-credential/{provider}", s.handleHarnessCredentialPaste)
-				operatorOnly.Delete("/setup/harness-credential/{provider}", s.handleHarnessDisconnect)
-			}
-
-			// Marks the install (not the browser) as having been through
-			// Getting Started — see handleSetupOnboardingComplete for why that
-			// distinction is the whole point. Operator-only: a member has their
-			// own landing and never walks this funnel.
-			operatorOnly.Post("/setup/onboarding-complete", s.handleSetupOnboardingComplete)
+			s.mountSetupMutationRoutes(operatorOnly)
 
 			// Policy management (gated to authenticated humans — a valid SSO
 			// session or the admin token). WRITES are additionally operator-only:
