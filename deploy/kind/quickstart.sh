@@ -308,5 +308,5 @@ Wardyn is up.
   SSH:    ssh -p ${SSH_PORT} <run-id>@127.0.0.1   (docs/SSH.md)
 
   kubectl --context ${CONTEXT} -n ${NAMESPACE} get pods
-  make kind-down    # delete the cluster
+  WARDYN_QUICKSTART_CLUSTER=${CLUSTER} deploy/kind/quickstart.sh --down    # delete the cluster
 EOF

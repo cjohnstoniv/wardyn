@@ -25,15 +25,8 @@ for v in TENANT_ID SP_OBJECT_ID ADMIN_ROLE_ID MEMBER_ROLE_ID; do
   [[ -n "${!v:-}" ]] || { echo "${v} not set — run 01-tenant-prep.sh and 02-app.sh first" >&2; exit 1; }
 done
 
-set_var() { # set_var NAME VALUE — idempotent upsert into .env.local, 0600
-  local name="$1" value="$2"
-  touch "${ENV_FILE}"; chmod 600 "${ENV_FILE}"
-  if grep -q "^${name}=" "${ENV_FILE}" 2>/dev/null; then
-    sed -i "s|^${name}=.*|${name}=${value@Q}|" "${ENV_FILE}"
-  else
-    printf '%s=%s\n' "${name}" "${value@Q}" >> "${ENV_FILE}"
-  fi
-}
+# shellcheck disable=SC1091
+source "${ROOT}/lib.sh"
 
 command -v az >/dev/null 2>&1 || { echo "az (Azure CLI) not found on PATH" >&2; exit 1; }
 
@@ -47,7 +40,7 @@ DOMAIN="$(az rest --method GET --url "https://graph.microsoft.com/v1.0/domains" 
 [[ -n "${DOMAIN}" ]] || { echo "could not read the tenant's default domain" >&2; exit 1; }
 echo "==> tenant default domain: ${DOMAIN}"
 
-# create_user NICK DISPLAY -> sets ${NICK^^}_UPN / _OID / _PASSWORD (env + .env.local)
+# create_user NICK DISPLAY -> writes ${NICK^^}_UPN / _OID / _PASSWORD to .env.local
 create_user() {
   local nick="$1" display="$2"
   local upn="${nick}@${DOMAIN}"
@@ -56,7 +49,18 @@ create_user() {
   local existing_oid
   existing_oid="$(az ad user show --id "${upn}" --query id -o tsv 2>/dev/null || true)"
   if [[ -n "${existing_oid}" ]]; then
-    echo "==> user ${upn} already exists (${existing_oid}) — reusing it, password unchanged"
+    local pw_var="${var_prefix}_PASSWORD"
+    if [[ -z "${!pw_var:-}" ]]; then
+      echo "==> user ${upn} already exists (${existing_oid}) — no ${pw_var} recorded"
+      echo "    (.env.local lost since it was created?) — minting a fresh password"
+      local pw
+      pw="$(openssl rand -base64 24)"
+      az ad user update --id "${upn}" --password "${pw}" \
+        --force-change-password-next-sign-in false
+      set_var "${pw_var}" "${pw}"
+    else
+      echo "==> user ${upn} already exists (${existing_oid}) — reusing it, password unchanged"
+    fi
   else
     local pw
     pw="$(openssl rand -base64 24)"

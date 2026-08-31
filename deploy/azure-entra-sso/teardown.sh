@@ -57,6 +57,12 @@ Still yours to do, deliberately not scripted here:
   # the OIDC client-secret Secret, if the cluster above is staying up longer:
   kubectl --context kind-wardyn-entra -n wardyn delete secret wardyn-entra-oidc
 
+  # local secret material this runbook wrote to disk (client secret, user
+  # passwords, the rendered OIDC overlay) — not deleted automatically above,
+  # since teardown.sh itself still needs .env.local's TENANT_ID/CLIENT_ID/UPNs
+  # to run the Entra deletions you just saw:
+  rm -f deploy/azure-entra-sso/{.env.local,values-entra.yaml}
+
   # the tenant itself: this leaves the throwaway directory behind. Delete it
   # in the portal — Azure Portal > Microsoft Entra ID > Manage tenants >
   # (select the throwaway tenant) > Delete. A tenant with no resources in it

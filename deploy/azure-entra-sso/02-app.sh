@@ -18,15 +18,8 @@ ENV_FILE="${ROOT}/.env.local"
 [[ -f "${ENV_FILE}" ]] && source "${ENV_FILE}"
 [[ -n "${TENANT_ID:-}" ]] || { echo "TENANT_ID not set — run 01-tenant-prep.sh first" >&2; exit 1; }
 
-set_var() { # set_var NAME VALUE — idempotent upsert into .env.local, 0600
-  local name="$1" value="$2"
-  touch "${ENV_FILE}"; chmod 600 "${ENV_FILE}"
-  if grep -q "^${name}=" "${ENV_FILE}" 2>/dev/null; then
-    sed -i "s|^${name}=.*|${name}=${value@Q}|" "${ENV_FILE}"
-  else
-    printf '%s=%s\n' "${name}" "${value@Q}" >> "${ENV_FILE}"
-  fi
-}
+# shellcheck disable=SC1091
+source "${ROOT}/lib.sh"
 
 command -v az >/dev/null 2>&1 || { echo "az (Azure CLI) not found on PATH" >&2; exit 1; }
 command -v uuidgen >/dev/null 2>&1 || { echo "uuidgen not found on PATH" >&2; exit 1; }
@@ -40,9 +33,28 @@ REDIRECT_URI="http://localhost:${HTTP_PORT}/auth/callback"
   exit 1
 }
 
-ADMIN_ROLE_ID="$(uuidgen)"
-MEMBER_ROLE_ID="$(uuidgen)"
-cat >"${ROOT}/approles.json" <<EOF
+EXISTING_APP_ID="$(az ad app list --display-name "${DISPLAY_NAME}" --query "[0].appId" -o tsv 2>/dev/null || true)"
+APP_REUSED=0
+if [[ -n "${EXISTING_APP_ID}" && "${EXISTING_APP_ID}" != "null" ]]; then
+  echo "==> app '${DISPLAY_NAME}' already exists (${EXISTING_APP_ID}) — reusing it"
+  CLIENT_ID="${EXISTING_APP_ID}"
+  APP_REUSED=1
+  echo "==> reading back the existing App Role GUIDs — a re-run must not mint fresh"
+  echo "    uuidgen'd ones the reused app doesn't have, or 03-people.sh's"
+  echo "    appRoleAssignedTo POST 400s against a role id that doesn't exist"
+  ADMIN_ROLE_ID="$(az ad app show --id "${CLIENT_ID}" --query "appRoles[?value=='Wardyn.Admin']|[0].id" -o tsv)"
+  MEMBER_ROLE_ID="$(az ad app show --id "${CLIENT_ID}" --query "appRoles[?value=='Wardyn.Member']|[0].id" -o tsv)"
+  [[ -n "${ADMIN_ROLE_ID}" && "${ADMIN_ROLE_ID}" != "None" ]] || { echo "app '${DISPLAY_NAME}' (${CLIENT_ID}) has no Wardyn.Admin App Role — delete it in the portal and re-run, or add the role by hand" >&2; exit 1; }
+  [[ -n "${MEMBER_ROLE_ID}" && "${MEMBER_ROLE_ID}" != "None" ]] || { echo "app '${DISPLAY_NAME}' (${CLIENT_ID}) has no Wardyn.Member App Role — delete it in the portal and re-run, or add the role by hand" >&2; exit 1; }
+  echo "==> az ad app update --web-redirect-uris ${REDIRECT_URI} (HTTP_PORT may have"
+  echo "    changed since this app was created — a stale redirect URI is AADSTS50011)"
+  az ad app update --id "${CLIENT_ID}" --web-redirect-uris "${REDIRECT_URI}"
+else
+  ADMIN_ROLE_ID="$(uuidgen)"
+  MEMBER_ROLE_ID="$(uuidgen)"
+  ROLES_JSON="$(mktemp)"
+  trap 'rm -f "${ROLES_JSON}"' EXIT
+  cat >"${ROLES_JSON}" <<EOF
 [
   {
     "allowedMemberTypes": ["User"],
@@ -62,16 +74,10 @@ cat >"${ROOT}/approles.json" <<EOF
   }
 ]
 EOF
-
-EXISTING_APP_ID="$(az ad app list --display-name "${DISPLAY_NAME}" --query "[0].appId" -o tsv 2>/dev/null || true)"
-if [[ -n "${EXISTING_APP_ID}" && "${EXISTING_APP_ID}" != "null" ]]; then
-  echo "==> app '${DISPLAY_NAME}' already exists (${EXISTING_APP_ID}) — reusing it"
-  CLIENT_ID="${EXISTING_APP_ID}"
-else
   echo "==> az ad app create --display-name ${DISPLAY_NAME}"
   CLIENT_ID="$(az ad app create --display-name "${DISPLAY_NAME}" \
     --web-redirect-uris "${REDIRECT_URI}" \
-    --app-roles @"${ROOT}/approles.json" \
+    --app-roles @"${ROLES_JSON}" \
     --query appId -o tsv)"
 fi
 
@@ -108,9 +114,13 @@ az rest --method PATCH \
   --headers "Content-Type=application/json" \
   --body '{"appRoleAssignmentRequired": true}'
 
-echo "==> resetting the client secret (not printed — written straight to .env.local)"
-CLIENT_SECRET="$(az ad app credential reset --id "${CLIENT_ID}" --append \
-  --query password -o tsv)"
+if [[ "${APP_REUSED}" == "1" && -n "${CLIENT_SECRET:-}" ]]; then
+  echo "==> app reused and CLIENT_SECRET already recorded in ${ENV_FILE} — skipping credential reset"
+else
+  echo "==> resetting the client secret (not printed — written straight to .env.local)"
+  CLIENT_SECRET="$(az ad app credential reset --id "${CLIENT_ID}" --append \
+    --query password -o tsv)"
+fi
 
 set_var CLIENT_ID "${CLIENT_ID}"
 set_var CLIENT_SECRET "${CLIENT_SECRET}"

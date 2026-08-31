@@ -21,15 +21,8 @@ ENV_FILE="${ROOT}/.env.local"
 # shellcheck disable=SC1090
 [[ -f "${ENV_FILE}" ]] && source "${ENV_FILE}"
 
-set_var() { # set_var NAME VALUE — idempotent upsert into .env.local, 0600
-  local name="$1" value="$2"
-  touch "${ENV_FILE}"; chmod 600 "${ENV_FILE}"
-  if grep -q "^${name}=" "${ENV_FILE}" 2>/dev/null; then
-    sed -i "s|^${name}=.*|${name}=${value@Q}|" "${ENV_FILE}"
-  else
-    printf '%s=%s\n' "${name}" "${value@Q}" >> "${ENV_FILE}"
-  fi
-}
+# shellcheck disable=SC1091
+source "${ROOT}/lib.sh"
 
 TENANT_ID="${1:-${TENANT_ID:-}}"
 [[ -n "${TENANT_ID}" ]] || {

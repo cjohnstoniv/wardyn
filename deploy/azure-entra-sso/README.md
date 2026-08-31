@@ -103,13 +103,22 @@ above).
 
 State first: this quickstart targets the **default Docker daemon** (no
 `DOCKER_HOST` override), not the `wardyn-docker.sock` daemon other Wardyn dev
-flows use — `docker ps` **both** daemons before you start, so a stray SSO
+flows use — check **both** daemons before you start, so a stray SSO
 validation cluster never lands where a live demo/e2e run expects the other
-one.
+one. If `TRY-IT.md`'s guidance already left `DOCKER_HOST` exported in this
+shell, `unset` it first — this quickstart must hit the default daemon, not
+whatever `DOCKER_HOST` last pointed at:
 
 ```sh
+docker ps                                                  # default daemon
+DOCKER_HOST=unix:///var/run/wardyn-docker.sock docker ps   # the other one
+unset DOCKER_HOST
+```
+
+```sh
+source deploy/azure-entra-sso/.env.local
 WARDYN_QUICKSTART_CLUSTER=wardyn-entra \
-WARDYN_QUICKSTART_HTTP_PORT=8480 \
+WARDYN_QUICKSTART_HTTP_PORT="${HTTP_PORT}" \
 WARDYN_QUICKSTART_SSH_PORT=2422 \
 deploy/kind/quickstart.sh
 ```
@@ -140,12 +149,22 @@ reports "not found" and leaves `wardyn-entra` running).
 ```sh
 kubectl --context kind-wardyn-entra -n wardyn create secret generic wardyn-entra-oidc \
   --from-literal=client-secret="${CLIENT_SECRET}" \
-  --dry-run=client -o yaml | kubectl --context kind-wardyn-entra apply -f -
+  --dry-run=client -o yaml | kubectl --context kind-wardyn-entra -n wardyn apply -f -
 
 helm --kube-context kind-wardyn-entra upgrade wardyn deploy/helm/wardyn \
   -n wardyn --reuse-values \
   -f deploy/azure-entra-sso/values-entra.yaml \
   --set-file defaultPolicy=deploy/kind/sso/default-policy.json
+
+kubectl --context kind-wardyn-entra -n wardyn rollout status deployment/wardyn --timeout=300s
+```
+
+If that doesn't go `Ready`, check what's actually wrong before assuming it's
+auth:
+
+```sh
+kubectl --context kind-wardyn-entra -n wardyn logs \
+  -l app.kubernetes.io/name=wardyn --tail=100 --all-containers
 ```
 
 `CLIENT_SECRET` comes from `.env.local` (`source deploy/azure-entra-sso/.env.local`
@@ -175,10 +194,15 @@ sets `auth.*` at all, and `--reuse-values` carries the quickstart's inline
 admin token forward from Step 3 — it is the recovery path if the role map
 ever locks every human out (same guidance as the chart README's own
 Multi-user section). Never `--set auth.adminToken.secretRef.name=wardyn-auth`
-here: no such Secret exists on this install, and the chart would stop
-rendering the Secret its own Deployment references (`templates/secret.yaml`
-only renders the inline-mode Secret when `secretRef.name` is empty), crash
-the render, or point at nothing — leaving no way back to admin at all.
+here: the inline-mode Secret carrying that token **does** exist on this
+install already (rendered from `auth.adminToken.value` by Step 3's install),
+but `templates/secret.yaml` only renders it while
+`secretRef.name` is empty (`{{- if and (not .Values.auth.adminToken.secretRef.name) .Values.auth.adminToken.value }}`)
+— set `secretRef.name` and that condition goes false, the block stops
+rendering, and the next `helm upgrade` deletes the Secret the Deployment's
+own `secretKeyRef` still points at. Not a clean switch to an external
+Secret that was never created — `CreateContainerConfigError`, and no way
+back to admin.
 
 ## The walk
 
@@ -191,19 +215,26 @@ observation) to `local/sso-people/FINDINGS.md` as you go.
    opening `127.0.0.1` starts the flow from one origin and completes it on
    another, and the ONLY symptom is a bare `400 invalid state parameter` with
    no further explanation. If you see that error, this is the first thing to
-   check, not an app-registration bug.
+   check, not an app-registration bug. A related failure mode: `kind`'s
+   `extraPortMappings` publish on the **IPv4** loopback only, so if this
+   host's resolver returns `::1` first for `localhost` (common on a fresh
+   Linux/WSL install), the browser will try IPv6 and get a connection
+   refused before it ever reaches Entra. If that happens, don't switch the
+   URL to `127.0.0.1` (that reintroduces the state-parameter mismatch
+   above) — instead pin `localhost` to `127.0.0.1` in `/etc/hosts`.
 2. **Sign in as `wardyn-admin`** (its UPN/password are in `.env.local`) — the
    **App Role path**: their token's `roles` claim carries `Wardyn.Admin`,
    which the chart's `WARDYN_OIDC_ROLE_MAP: "Wardyn.Admin=admin"` resolves to
    admin. Confirm you land in the forced **Getting Started** flow:
    - **Environment** step — confirm it renders.
    - **People** step — add `<ENG_GROUP_OID>=member` (from `.env.local`) as a
-     console-managed mapping, **in the UI**, then use the People step's own
-     claims preview on `wardyn-member`'s pending sign-in (or its most recent
-     one) to confirm the `groups` claim actually carries that object id — if
-     it doesn't, `groupMembershipClaims: SecurityGroup` didn't take on the
-     app registration (`02-app.sh`'s PATCH) and step 3 below will fail before
-     you get there. **Note:** this deliberately does not trip the console's
+     console-managed mapping, **in the UI**. Then, in the same signed-in tab,
+     open `http://localhost:8480/api/v1/me/capabilities` and read
+     `session_groups`: as `wardyn-admin` it must contain both `wardyn.admin`
+     and `<ADMIN_GROUP_OID>` (from `.env.local`) — proof that
+     `groupMembershipClaims: SecurityGroup` took on the app registration
+     (`02-app.sh`'s PATCH). If `<ADMIN_GROUP_OID>` is missing, step 3 below
+     will fail before you get there. **Note:** this deliberately does not trip the console's
      posture-flip guard (the one that warns when a role map goes from
      empty to non-empty mid-session) — the chart's own
      `WARDYN_OIDC_ROLE_MAP` is already non-empty (`Wardyn.Admin=admin`)
@@ -217,11 +248,22 @@ observation) to `local/sso-people/FINDINGS.md` as you go.
    required" gate only, matches no `WARDYN_OIDC_ROLE_MAP` entry — the chart
    map has none for it, by design), and `groups` carries the eng group's
    object id, which the **console row you just added** resolves to member.
-   Confirm you land in member's own (unforced, since People is admin-scoped)
-   Getting Started, and **launch a run** to prove the member path actually
-   works end to end, not just authenticates.
+   Confirm the same way as step 2: open
+   `http://localhost:8480/api/v1/me/capabilities` and check `session_groups`
+   contains `<ENG_GROUP_OID>` (from `.env.local`). Confirm you land in
+   member's own (unforced, since People is admin-scoped) Getting Started, and
+   **launch a run** — the assertion here is that the run **launches** (`201`,
+   pod scheduled), proving the member path works end to end, not just
+   authenticates. It won't necessarily *complete*: an actual agent turn needs
+   a model credential this runbook doesn't provision (`wardyn secret set
+   anthropic-api-key` in the console's Secrets step, per-user, gives it one
+   if you want to watch a full run).
 4. **`wardyn-outsider` — the two-gate demo.** `wardyn-outsider` has no group
-   and no App Role assignment (`03-people.sh`).
+   and no App Role assignment (`03-people.sh`). Use a fresh browser profile /
+   incognito window, or sign out of Entra first, for **both** sign-ins below
+   — a live `wardyn-admin` or `wardyn-member` (or even a prior `wardyn-outsider`)
+   session in the same tab is silently reused instead of prompting for
+   credentials, and the step then "passes" without testing anything.
    - With `appRoleAssignmentRequired: true` still set (Step 2's `02-app.sh`
      default): sign in as `wardyn-outsider` and confirm Entra itself refuses
      the sign-in with **AADSTS50105** ("the user is not assigned to a role
@@ -229,24 +271,24 @@ observation) to `local/sso-people/FINDINGS.md` as you go.
      Screenshot it.
    - Toggle the gate off:
      ```sh
+     source deploy/azure-entra-sso/.env.local
      az rest --method PATCH \
        --url "https://graph.microsoft.com/v1.0/servicePrincipals/${SP_OBJECT_ID}" \
        --headers "Content-Type=application/json" \
        --body '{"appRoleAssignmentRequired": false}'
      ```
-     Sign in as `wardyn-outsider` again: Entra now admits the sign-in (empty
-     `roles`, no matching `groups` entry), and **Wardyn's own gate** denies
-     it instead — redirected to `/?auth_error=no_role`. Screenshot it. Two
-     independent gates, two independent denials; this is the point of the
-     demo. Restore `appRoleAssignmentRequired: true` afterward if you're
-     continuing to use this tenant for anything else.
-5. **ID-token email-claim assertion.** Confirm the `email` claim actually
-   arrived on `wardyn-admin`'s (or `wardyn-member`'s) token — either via the
-   app's own console-side claims preview (same view used in step 2's People
-   check) or by decoding the raw ID token (`az account get-access-token`
-   won't show it; use the browser's network tab on the callback, or a
-   `jwt.io`-style decode of what the OIDC library logged). **Named fallback**
-   if it's absent: sign in with the recovery admin token
+     Sign in as `wardyn-outsider` again (same fresh-profile / signed-out rule
+     as above): Entra now admits the sign-in (empty `roles`, no matching
+     `groups` entry), and **Wardyn's own gate** denies it instead —
+     redirected to `/?auth_error=no_role`. Screenshot it. Two independent
+     gates, two independent denials; this is the point of the demo. Restore
+     `appRoleAssignmentRequired: true` afterward if you're continuing to use
+     this tenant for anything else.
+5. **ID-token email-claim assertion.** In the signed-in tab, open
+   `http://localhost:8480/api/v1/me` and read the `email` field: non-empty
+   means the optional `idToken.email` claim (`02-app.sh`'s PATCH) arrived and
+   the user object's `mail` attribute was actually populated. **Named
+   fallback** if it's empty: sign in with the recovery admin token
    (`kubectl --context kind-wardyn-entra -n wardyn get secret wardyn-auth -o
    jsonpath='{.data.admin-token}' | base64 -d`) and confirm Wardyn still
    functions without it — `email` is best-effort here (Context above), never
@@ -266,9 +308,11 @@ live-verifies the **IdP half** those seams stub out. The spec file itself is
 authored and lands with a later e2e-authoring phase, not this lane; this
 README documents its env-var contract now so that phase has something to
 implement against. Per the WRITE-ONLY scope of this lane, those two variable
-names are **not** added to `docs/ENV.md` — that file's envdoc reverse-ratchet
-guard fails on a documented var with no Go reader, since `WARDYN_ENTRA_E2E`
-et al. are consumed by the Playwright spec, not by `wardynd`.
+names are **not** added to `docs/ENV.md` — that's deferred with the spec:
+`WARDYN_ENTRA_E2E` et al. are consumed by the Playwright spec, not by
+`wardynd`, so documenting them there also needs an `envDocShellOnly` entry
+(`cmd/wardynd/envdoc_guard_test.go`), which belongs with the spec's own
+authoring phase, not this one.
 
 ## Teardown
 

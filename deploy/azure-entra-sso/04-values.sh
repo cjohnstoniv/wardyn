@@ -17,7 +17,7 @@ OUT="${ROOT}/values-entra.yaml"
 
 # shellcheck disable=SC1090
 [[ -f "${ENV_FILE}" ]] && source "${ENV_FILE}"
-for v in TENANT_ID CLIENT_ID HTTP_PORT WARDYN_ADMIN_UPN; do
+for v in TENANT_ID CLIENT_ID HTTP_PORT; do
   [[ -n "${!v:-}" ]] || { echo "${v} not set — run 01-tenant-prep.sh, 02-app.sh and 03-people.sh first" >&2; exit 1; }
 done
 
@@ -38,8 +38,15 @@ env:
   # every login (chart entries always win a duplicate key, per docs/ENV.md's
   # WARDYN_OIDC_ROLE_MAP row), silently overriding what the walk demonstrates.
   WARDYN_OIDC_ROLE_MAP: "Wardyn.Admin=admin"
-  WARDYN_OIDC_OPERATOR_EMAILS: "${WARDYN_ADMIN_UPN}"
   # Deliberately UNSET:
+  #   WARDYN_OIDC_OPERATOR_EMAILS — an allowlisted email would let it derive
+  #     admin regardless of the role map, making the App-Role-path assertion
+  #     in the walk unfalsifiable. Not needed either: the chart's render-time
+  #     `wardyn.authConfigured` guard (templates/secret.yaml) is already
+  #     satisfied by WARDYN_OIDC_ISSUER/auth.adminToken being set, and
+  #     wardynd's boot-time validateOperatorPosture (cmd/wardynd/boot_posture.go)
+  #     is satisfied by WARDYN_OIDC_ROLE_MAP being non-empty (hasRoleMap) —
+  #     an empty operator allowlist does not refuse to boot here.
   #   WARDYN_OIDC_DEFAULT_ROLE   — no match should deny the login, not admit one
   #   WARDYN_OIDC_EMAIL_DOMAINS  — Entra never emits email_verified; setting
   #     this fails EVERY login closed against this tenant (docs/ENV.md, this
