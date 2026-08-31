@@ -140,7 +140,11 @@ describe("SignIn — renders the OIDC callback's ?auth_error=<code> inline (W31-
     window.history.pushState({}, "", "/?auth_error=no_role");
     healthMock.mockResolvedValue({});
     renderSignIn();
-    expect(await screen.findByRole("alert")).toHaveTextContent(/no wardyn role assigned/i);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/no wardyn role assigned/i);
+    // §7.7's rule: name "your Wardyn admin" as who to ask — a signed-in human
+    // should never be told to go set an env var themselves.
+    expect(alert).toHaveTextContent(/ask your wardyn admin/i);
     expect(window.location.search).toBe("");
   });
 
@@ -168,6 +172,16 @@ describe("SignIn — renders the OIDC callback's ?auth_error=<code> inline (W31-
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/doesn't send an email_verified claim/i);
     expect(alert).toHaveTextContent(/WARDYN_OIDC_ROLE_MAP/);
+    expect(alert).toHaveTextContent(/ask your wardyn admin/i);
+  });
+
+  // New arm (0.7 SSO Phase 3, §7.7): the People preview panel's own
+  // "couldn't check" language, shared here for the same failure shape.
+  it("renders the role_check_unavailable message", async () => {
+    window.history.pushState({}, "", "/?auth_error=role_check_unavailable");
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/couldn't check your access/i);
   });
 
   it("falls back to a generic message for an unrecognized code", async () => {

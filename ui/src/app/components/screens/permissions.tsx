@@ -117,7 +117,10 @@ function Note({ tone = "plain", children }: { tone?: "plain" | "red"; children: 
 // not a Select: these are form choices, they are all visible at once in the
 // mock, and a plain button is the one control that stays clickable in both the
 // vitest and Playwright harnesses without a pointer-events dance.
-function Segmented<T extends string>({
+// Exported: the People step's role-mappings add form (access-panel.tsx) reuses
+// this exact idiom for its Admin/Member picker per the mock's own note ("per
+// the /permissions idiom") rather than a second near-identical component.
+export function Segmented<T extends string>({
   value,
   options,
   onChange,

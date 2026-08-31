@@ -626,9 +626,16 @@ export const PEOPLE_STEP = {
   SINGLE_USER_SSO_NOTE_DOC: "docs/OPERATIONS.md",
   SINGLE_USER_SSO_NOTE_SUFFIX: ', "Second user, same host".',
   MULTI_USER_LEDE: "People sign in with SSO; each is an admin or a member, per your role map.",
-  MULTI_USER_ROLES_PREFIX: "Roles come from ",
+  // CHANGED (docs/design/people-access-prompt.md §7.1) — the old PREFIX/SUFFIX
+  // pair read as one sentence naming ONE source (WARDYN_OIDC_ROLE_MAP or the
+  // operator allowlist), true when that was the whole role map; a role can now
+  // also come from a console row (the acting-surface table right below this
+  // lede), so leaving it unedited would have the lede contradict the table.
+  // PREFIX ends with ONE trailing space (before MULTI_USER_ROLES_VAR is
+  // concatenated in) — copy the literal string, do not trim it.
+  MULTI_USER_ROLES_PREFIX: "Roles come from the mappings below — your chart's ",
   MULTI_USER_ROLES_VAR: "WARDYN_OIDC_ROLE_MAP",
-  MULTI_USER_ROLES_SUFFIX: ", or the operator allowlist",
+  MULTI_USER_ROLES_SUFFIX: ", console rows added here, or the operator allowlist.",
   MULTI_USER_SSO_CHIP: "SSO",
   MULTI_USER_ADMINS_LABEL: "Admins",
   MULTI_USER_ADMINS_BODY: " set the ceiling — policies, secrets, workspaces, site configuration.",

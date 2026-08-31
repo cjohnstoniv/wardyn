@@ -28,14 +28,18 @@ import type {
 import { health as healthApi } from "../../../lib/api/health";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { setup as setupApi } from "../../../lib/api/setup";
+import { access as accessApi } from "../../../lib/api/access";
+import { HttpError } from "../../../lib/api/core";
 import { deriveIntegrations } from "../../../lib/api/integrations";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
+import type { AccessResponse } from "../../../lib/types";
+import type { AccessLoadState } from "./access-panel";
 import {
   getDefaultCc,
   resolveDefaultCc,
   setDefaultCc,
 } from "../../wardyn/default-confinement";
-import { deriveReadiness, lastCheckedLabel } from "../../../lib/readiness";
+import { deploymentMode, deriveReadiness, lastCheckedLabel } from "../../../lib/readiness";
 import { useOperator } from "../../wardyn/operator-context";
 import { SetupLayout } from "./setup-layout";
 import { PhaseRail } from "./phase-rail";
@@ -177,6 +181,30 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // from the funnel; they're embedded in the Integrations "Add integration"
   // dialog instead, which owns its own local copy for editing.
   const [siteConfig, setSiteConfig] = React.useState<SiteConfig | null>(null);
+  // Role-mappings acting surface (0.7 SSO Phase 3) — People's multi-user
+  // branch. Owned here, same split every other status-derived fetch on this
+  // screen follows (siteConfig, secrets): DeploymentStep only renders it.
+  // "loading" until the first fetch settles; recheck() re-fetches it
+  // alongside status/siteConfig/secrets whenever the CURRENT status reads
+  // multi-user.
+  const [access, setAccess] = React.useState<AccessResponse | null>(null);
+  const [accessState, setAccessState] = React.useState<AccessLoadState>("loading");
+  const loadAccess = React.useCallback(() => {
+    setAccessState((s) => (s === "ready" ? s : "loading"));
+    return accessApi
+      .getAccess()
+      .then((data) => {
+        setAccess(data);
+        setAccessState("ready");
+      })
+      .catch((e) => {
+        setAccess(null);
+        // 503 (requireOIDC's writeError) is a DISTINCT state from any other
+        // fetch failure — see access-panel.tsx's ACCESS_STATE.SSO_UNAVAILABLE_*
+        // vs FETCH_FAILED_*; containment, not discard, per §2.3.
+        setAccessState(e instanceof HttpError && e.status === 503 ? "sso_unavailable" : "fetch_failed");
+      });
+  }, []);
   // Default-barrier pick (E3). Null until an explicit click — until then the
   // effective selection is the resolved default (persisted pick if this host runs
   // it, else strongest available). Clicking a ready card both selects and persists.
@@ -338,9 +366,13 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         setLastCheckedAt(new Date());
         // A fresh probe landed — bump the token EnvironmentStep watches.
         setRecheckCount((n) => n + 1);
+        // Gated on the FRESH status, not the stale one this closure closed
+        // over — People's multi-user branch is the only reader, and a
+        // single-user deployment never needs this fetch at all.
+        if (deploymentMode(s) === "multi-user") void loadAccess();
       })
       .finally(() => setRechecking(false));
-  }, [reloadSiteConfig, loadSecrets]);
+  }, [reloadSiteConfig, loadSecrets, loadAccess]);
 
   React.useEffect(() => {
     recheck(); // also performs the initial SiteConfig + secrets GET (see recheck)
@@ -642,7 +674,9 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             rechecking={rechecking}
           />
         )}
-        {stepId === "people" && <DeploymentStep status={status} />}
+        {stepId === "people" && (
+          <DeploymentStep status={status} access={access} accessState={accessState} onReloadAccess={loadAccess} />
+        )}
         {stepId === "corp_network" && (
           <CorpNetworkStep
             status={status}

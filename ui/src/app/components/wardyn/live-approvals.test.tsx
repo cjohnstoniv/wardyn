@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ApprovalRequest } from "../../lib/types";
+import { OperatorProvider } from "./operator-context";
 
 const listApprovalsMock = vi.fn((..._a: unknown[]): Promise<ApprovalRequest[]> => Promise.resolve([]));
 const approveMock = vi.fn((..._a: unknown[]): Promise<unknown> => Promise.resolve({}));
@@ -359,6 +360,99 @@ describe("LiveApprovals", () => {
         scope: "until",
         until: new Date("2030-01-01T17:00").toISOString(),
       });
+    });
+  });
+
+  // F-12 (0.7 SSO Phase 3): the inline gate must mirror server truth
+  // (authorizeMemberDecision, internal/api/approvals.go) — a member may decide
+  // an egress_domain approval (this strip only ever shows rows on runs the
+  // viewer owns), never credential/tool_call, regardless of role.
+  describe("F-12 — member gating mirrors canDecideApproval, not a blanket operator check", () => {
+    it("a member CAN Approve/Deny an egress_domain row, and sees its scope caret", async () => {
+      listApprovalsMock.mockResolvedValue([pending({ id: "e1", requested_scope: { host: "unlisted.example" } })]);
+      render(
+        <OperatorProvider operator={false}>
+          <LiveApprovals runId="r1" />
+        </OperatorProvider>,
+      );
+      const panel = await screen.findByTestId("live-approvals");
+      expect(within(panel).getByRole("button", { name: /^Approve$/ })).not.toBeDisabled();
+      expect(within(panel).getByRole("button", { name: /^Deny$/ })).not.toBeDisabled();
+      // The caret used to be hidden outright for a non-operator — F-12 fixed
+      // that for the one kind a member may actually decide.
+      expect(within(panel).getAllByRole("button", { name: /more options/i })).toHaveLength(2);
+      // No "admin only" hint: every row shown is one this member can decide.
+      expect(screen.queryByText(/requires the admin role/i)).not.toBeInTheDocument();
+
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      await user.click(within(panel).getByRole("button", { name: /^Approve$/ }));
+      expect(approveMock).toHaveBeenCalledWith("e1", expect.any(String));
+    });
+
+    it("a member CANNOT Approve/Deny an api_key credential row — stays admin-only", async () => {
+      listApprovalsMock.mockResolvedValue([
+        pending({
+          id: "cred-key",
+          kind: "credential",
+          requested_scope: { host: "example.com", header: "X-Wardyn-Demo", secret_name: "wardyn-demo-key" },
+        }),
+      ]);
+      render(
+        <OperatorProvider operator={false}>
+          <LiveApprovals runId="r1" />
+        </OperatorProvider>,
+      );
+      const panel = await screen.findByTestId("live-approvals");
+      expect(within(panel).getByRole("button", { name: /^Approve$/ })).toBeDisabled();
+      expect(within(panel).getByRole("button", { name: /^Deny$/ })).toBeDisabled();
+      // A non-egress kind never renders the caret regardless of role (decide
+      // rule 4 400s any explicit scope on it) — unaffected by this fix.
+      expect(within(panel).queryAllByRole("button", { name: /more options/i })).toHaveLength(0);
+      expect(screen.getByText(/requires the admin role/i)).toBeInTheDocument();
+    });
+
+    it("a member CANNOT Approve/Deny a tool_call row — stays admin-only", async () => {
+      listApprovalsMock.mockResolvedValue([
+        pending({ id: "t1", kind: "tool_call", requested_scope: { tool: "Bash", cmd: "rm -rf build" } }),
+      ]);
+      render(
+        <OperatorProvider operator={false}>
+          <LiveApprovals runId="r1" />
+        </OperatorProvider>,
+      );
+      const panel = await screen.findByTestId("live-approvals");
+      expect(within(panel).getByRole("button", { name: /^Approve$/ })).toBeDisabled();
+      expect(within(panel).getByRole("button", { name: /^Deny$/ })).toBeDisabled();
+    });
+
+    it("a mixed strip shows the admin-only hint (a tool_call row is undecidable) even though the egress row IS decidable", async () => {
+      listApprovalsMock.mockResolvedValue([
+        pending({ id: "e1", requested_scope: { host: "unlisted.example" } }),
+        pending({ id: "t1", kind: "tool_call", requested_scope: { tool: "Bash", cmd: "ls" } }),
+      ]);
+      render(
+        <OperatorProvider operator={false}>
+          <LiveApprovals runId="r1" />
+        </OperatorProvider>,
+      );
+      const panel = await screen.findByTestId("live-approvals");
+      expect(screen.getByText(/requires the admin role/i)).toBeInTheDocument();
+      const rows = within(panel).getAllByTestId("live-approval-row");
+      const egressRow = rows.find((r) => r.textContent?.includes("unlisted.example"))!;
+      expect(within(egressRow).getByRole("button", { name: /^Approve$/ })).not.toBeDisabled();
+    });
+
+    it("an operator is unaffected — every kind stays fully decidable", async () => {
+      listApprovalsMock.mockResolvedValue([
+        pending({ id: "e1", requested_scope: { host: "unlisted.example" } }),
+        pending({ id: "t1", kind: "tool_call", requested_scope: { tool: "Bash", cmd: "ls" } }),
+      ]);
+      render(<LiveApprovals runId="r1" />); // default OperatorContext is TRUE
+      const panel = await screen.findByTestId("live-approvals");
+      for (const btn of within(panel).getAllByRole("button", { name: /^Approve$/ })) {
+        expect(btn).not.toBeDisabled();
+      }
+      expect(screen.queryByText(/requires the admin role/i)).not.toBeInTheDocument();
     });
   });
 

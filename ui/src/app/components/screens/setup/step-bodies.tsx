@@ -32,6 +32,8 @@ import { lastCheckedLabel } from "../../../lib/readiness";
 import { toast } from "sonner";
 import type { SetupStepId, StepBadge } from "./steps";
 import { statusTone, statusWord } from "../../../lib/workspace-status";
+import { AccessPanel, type AccessLoadState } from "./access-panel";
+import type { AccessResponse } from "../../../lib/types";
 
 // ------------------------------------------------------------
 // Shared check-row primitives (Review + the Corporate network step).
@@ -293,7 +295,21 @@ export function WorkspacesStep({
 // teal here — the footer's Next is the surface's one affirmative action, so
 // every button in this body is `outline`.
 // ------------------------------------------------------------
-export function DeploymentStep({ status }: { status: SetupStatus }) {
+export function DeploymentStep({
+  status,
+  access,
+  accessState,
+  onReloadAccess,
+}: {
+  status: SetupStatus;
+  // The role-mappings acting surface's data (0.7 SSO Phase 3) — undefined on
+  // the single-user branch, which never reads them. See AccessPanel's own
+  // header comment for why the orchestrator, not this component, owns the
+  // GET /access fetch.
+  access?: AccessResponse | null;
+  accessState?: AccessLoadState;
+  onReloadAccess?: () => void;
+}) {
   if (deploymentMode(status) === "single-user") {
     // Only token mode has "the token the installer printed"; local AND the
     // (currently unreachable) disabled mode are both no-sign-in consoles.
@@ -350,6 +366,17 @@ export function DeploymentStep({ status }: { status: SetupStatus }) {
           <span className="text-xs text-muted-foreground">{PT.MULTI_USER_PERMISSIONS_HINT}</span>
         </div>
       </SectionCard>
+
+      {/* §6: role mappings table + add form + Defaults, then the preview panel,
+          then the IdP-duties note — all inside AccessPanel, mounted AFTER the
+          existing Admins/Members card above (unchanged). accessState/onReloadAccess
+          are only undefined for a caller that hasn't wired the fetch yet (e.g. an
+          older test render) — default to a benign loading state rather than crash. */}
+      <AccessPanel
+        access={access ?? null}
+        state={accessState ?? "loading"}
+        onReload={onReloadAccess ?? (() => {})}
+      />
     </div>
   );
 }

@@ -27,6 +27,7 @@ import {
   withLimit,
 } from "../../lib/api/core";
 import { health } from "../../lib/api/health";
+import { SIGNIN } from "../../lib/people-access-copy";
 
 // W31-S1-5: the OIDC callback (internal/auth/oidc/oidc.go's CallbackHandler)
 // redirects a user-actionable login denial to "/?auth_error=<code>" instead
@@ -34,16 +35,27 @@ import { health } from "../../lib/api/health";
 // nobody reads is no better: it silently bounces back to this exact screen
 // with zero explanation. These are the stable, machine-readable codes
 // redirectAuthError sends; keep in sync with oidc.go's authError* consts.
+//
+// no_role/email_verified_absent are REWORDED (0.7 SSO Phase 3,
+// docs/design/people-access-prompt.md §7.7) — both now name "your Wardyn
+// admin" as who to ask, env var(s) demoted to a parenthetical, per that
+// section's rule that a signed-in human should never be told to go set an env
+// var themselves. role_check_unavailable is the one NEW arm (the People
+// step's preview panel and this screen share the same "couldn't check"
+// language). All three come from lib/people-access-copy.ts's SIGNIN table —
+// every other arm below is unchanged and out of scope this round.
 function authErrorMessage(code: string): string {
   switch (code) {
     case "email_unverified":
       return "Your identity provider reports this email as unverified. Verify your email with your identity provider, then try again.";
     case "email_verified_absent":
-      return "Your identity provider doesn't send an email_verified claim at all (common on Entra ID), so this console can't confirm the email on its own. Ask an operator to map your role via WARDYN_OIDC_ROLE_MAP (an App Role or group, not email domains) instead.";
+      return SIGNIN.EMAIL_VERIFIED_ABSENT;
     case "email_domain":
       return "This email's domain isn't allowed to sign in to this console. Ask an operator to add it to WARDYN_OIDC_EMAIL_DOMAINS.";
     case "no_role":
-      return "Your account has no Wardyn role assigned. Ask an operator to map your role (WARDYN_OIDC_ROLE_MAP) or add your email to WARDYN_OIDC_OPERATOR_EMAILS.";
+      return SIGNIN.NO_ROLE;
+    case "role_check_unavailable":
+      return SIGNIN.ROLE_CHECK_UNAVAILABLE;
     case "oidc_transient":
       return "Your identity provider didn't respond in time. This is usually temporary — try signing in again.";
     case "oidc_config":

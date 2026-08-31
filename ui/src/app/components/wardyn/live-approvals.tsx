@@ -20,7 +20,7 @@
 import * as React from "react";
 import { ShieldAlert, Clock, Check, ChevronDown, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
-import { decisionArgs, type ApprovalRequest, type ApprovalScope } from "../../lib/types";
+import { canDecideApproval, decisionArgs, type ApprovalRequest, type ApprovalScope } from "../../lib/types";
 import { approvals as api } from "../../lib/api/approvals";
 import { getErrorMessage } from "../../lib/format";
 import { usePoll } from "../../lib/use-poll";
@@ -313,8 +313,12 @@ export function LiveApprovals({
     >
       <div className="flex items-center gap-2">
         <SectionLabel>{heading}</SectionLabel>
-        {/* Named once for the whole panel, not per row. */}
-        {!operator && <OperatorOnlyHint />}
+        {/* Named once for the whole panel, not per row — but only when it's
+            actually true: F-12 fixed the row-level gate below to follow
+            canDecideApproval (a member CAN decide their own run's
+            egress_domain rows), so this hint must not claim "admin only"
+            over a strip the viewer can, in fact, act on. */}
+        {!operator && pending.some((a) => !canDecideApproval(operator, a.kind)) && <OperatorOnlyHint />}
       </div>
       {shown.map((a) => {
         const label = rowLabel(a);
@@ -344,11 +348,17 @@ export function LiveApprovals({
                 exactly "Approve"/"Deny" for e2e; this caret's own accessible
                 name must never contain "approve" (an unanchored /approve/i
                 query in the suite would then match two buttons). */}
+            {/* F-12: align with server truth (authorizeMemberDecision,
+                internal/api/approvals.go) instead of a blanket !operator —
+                canDecideApproval mirrors decide() exactly: a member may
+                decide an egress_domain approval (this strip only ever shows
+                rows on runs the viewer owns — see canDecideApproval's own
+                doc), credential and tool_call stay admin-only regardless. */}
             <Button
               size="sm"
               variant="outline"
               className="h-7 rounded-r-none border-r-0"
-              disabled={!operator || busy === a.id}
+              disabled={!canDecideApproval(operator, a.kind) || busy === a.id}
               onClick={() => decide(a, true)}
             >
               {busy === a.id && decidingSpinner ? (
@@ -358,7 +368,7 @@ export function LiveApprovals({
               )}{" "}
               Approve
             </Button>
-            {operator && scoped && (
+            {scoped && (
               <ScopeMenu
                 verb="approve"
                 hasWorkspace={hasWorkspace}
@@ -371,7 +381,7 @@ export function LiveApprovals({
               size="sm"
               variant="outline"
               className="h-7 ml-1 rounded-r-none border-r-0"
-              disabled={!operator || busy === a.id}
+              disabled={!canDecideApproval(operator, a.kind) || busy === a.id}
               onClick={() => setDenyTarget({ request: a, scope: "run" })}
             >
               {busy === a.id && decidingSpinner ? (
@@ -381,7 +391,7 @@ export function LiveApprovals({
               )}{" "}
               Deny
             </Button>
-            {operator && scoped && (
+            {scoped && (
               <ScopeMenu
                 verb="deny"
                 hasWorkspace={hasWorkspace}
