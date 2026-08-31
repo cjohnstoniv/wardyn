@@ -27,7 +27,7 @@
   --background:#ffffff; --foreground:#171717; --card:#ffffff; --surface-2:#f4f4f5;
   --muted-foreground:#737373; --border:#e5e5e5; --border-strong:#d4d4d4;
   --primary:#0f766e; --primary-fg:#ffffff;
-  --success:#047857; --warning:#92400e; --warning-subtle:rgba(245,158,11,.13);
+  --success:#047857; --success-subtle:rgba(4,120,87,.12); --warning:#92400e; --warning-subtle:rgba(245,158,11,.13);
   --danger:#b91c1c; --danger-subtle:rgba(239,68,68,.13);
   --info:#1d4ed8; --info-subtle:rgba(29,78,216,.13);
   --neutral-subtle:rgba(115,115,115,.12);
@@ -38,7 +38,7 @@ html[data-theme="dark"]{
   --background:#0a0a0a; --foreground:#ededed; --card:#111111; --surface-2:#1f1f1f;
   --muted-foreground:#a3a3a3; --border:#262626; --border-strong:#333333;
   --primary:#14b8a6; --primary-fg:#0a0a0a;
-  --success:#10b981; --warning:#f59e0b; --warning-subtle:rgba(245,158,11,.15);
+  --success:#10b981; --success-subtle:rgba(16,185,129,.15); --warning:#f59e0b; --warning-subtle:rgba(245,158,11,.15);
   --danger:#dc2626; --danger-subtle:rgba(220,38,38,.16);
   --info:#3b82f6; --info-subtle:rgba(59,130,246,.16);
   --neutral-subtle:rgba(163,163,163,.14);
@@ -77,6 +77,7 @@ hr.rule{border:0;border-top:1px solid var(--border);margin:0}
 .chip{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 9px;
   font-size:11.5px;font-weight:500;white-space:nowrap;border:1px solid transparent}
 .chip.neutral{background:var(--neutral-subtle);color:var(--muted-foreground)}
+.chip.success{background:var(--success-subtle);color:var(--success)}
 .chip.warning{background:var(--warning-subtle);color:var(--warning)}
 .chip.danger{background:var(--danger-subtle);color:var(--danger)}
 .chip.info{background:var(--info-subtle);color:var(--info)}
@@ -89,9 +90,18 @@ hr.rule{border:0;border-top:1px solid var(--border);margin:0}
   border:1px solid var(--border-strong);background:var(--card);color:var(--foreground)}
 .btn[disabled]{opacity:.45;cursor:not-allowed}
 .btn.sm{font-size:12px;padding:4px 10px}
+/* "Open Permissions" is a real <Link> (role=link), not a <button> — see F-1. Undo the
+   global a{color:var(--primary)} + underline so an anchor styled .btn reads identically
+   to a button one (still zero teal: var(--foreground), not var(--primary)). */
+a.btn{display:inline-block;text-decoration:none;color:var(--foreground)}
 .linkbtn{background:none;border:0;color:var(--muted-foreground);font:inherit;font-size:12.5px;
   cursor:pointer;text-decoration:underline;text-underline-offset:2px;padding:0}
 .linkbtn.info{color:var(--info)}
+/* scaffold-only chrome for a Q3 variant label (NOT part of the design being drawn) — same
+   typographic language as .tag/.mockbar so it reads as review scaffolding at a glance. */
+.varlabel{padding:8px 24px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted-foreground);background:var(--surface-2);border-top:1px solid var(--border)}
+.varlabel b{color:var(--foreground);letter-spacing:0;text-transform:none}
 
 /* mappings table */
 table{width:100%;border-collapse:collapse;font-size:13px}
@@ -188,13 +198,14 @@ td .sub{font-size:11.5px;color:var(--muted-foreground);display:block;margin-top:
     <div class="pad">
       <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px">
         <p class="secsub">Roles come from the mappings below — your chart's <span class="mono">WARDYN_OIDC_ROLE_MAP</span>, console rows added here, or the operator allowlist.</p>
-        <span class="chip neutral"><i class="dot"></i>SSO</span>
+        <span class="chip success"><i class="dot"></i>SSO</span>
       </div>
       <div style="margin:14px 0;border-top:1px solid var(--border)"></div>
       <p class="secsub"><b style="color:var(--foreground);font-weight:500">Admins</b> set the ceiling — policies, secrets, workspaces, site configuration.</p>
       <p class="secsub" style="margin-top:6px"><b style="color:var(--foreground);font-weight:500">Members</b> run inside it — their own workspaces, runs, approvals and SSH keys. They land on their own Getting Started the first time they sign in.</p>
       <div style="margin-top:12px;display:flex;align-items:center;gap:10px">
-        <button class="btn sm" type="button">Open Permissions</button>
+        <!-- Real element is <Button asChild><Link to="/permissions">> — role=link, per F-1/§5#4. -->
+        <a class="btn sm" href="#">Open Permissions</a>
         <span class="secsub">Capability grants, per person or group</span>
       </div>
     </div>
@@ -206,7 +217,7 @@ td .sub{font-size:11.5px;color:var(--muted-foreground);display:block;margin-top:
       <div class="note plain">Takes effect at next sign-in. A person already signed in keeps the role they were given until then.</div>
     </div>
 
-    <div class="pad" style="padding-bottom:6px"><p class="secsub" style="font-weight:500;color:var(--foreground)">Variant A — one merged table, source column (recommended, Q3)</p></div>
+    <div class="varlabel">Q3 variant A <b>— one merged table, source column (recommended)</b></div>
     <table>
       <thead><tr><th>Value</th><th>Role</th><th>Source</th><th>Added</th><th></th></tr></thead>
       <tbody>
@@ -239,20 +250,26 @@ td .sub{font-size:11.5px;color:var(--muted-foreground);display:block;margin-top:
           <td style="color:var(--muted-foreground)">1 hour ago</td>
           <td class="right"><button class="linkbtn" type="button">Delete</button></td>
         </tr>
+        <tr class="shadowed">
+          <td><span class="mono">carol@corp.example</span></td>
+          <td><span class="chip neutral">Member</span></td>
+          <td><div class="val"><span class="chip neutral">Console</span><span class="chip warning">Shadowed by your operator allowlist</span></div>
+            <span class="sub">This value is on your chart's <span class="mono">WARDYN_OIDC_OPERATOR_EMAILS</span> and always resolves to admin. The row is stored but has no effect until the allowlist entry or this row is removed.</span></td>
+          <td style="color:var(--muted-foreground)">2 hours ago</td>
+          <td class="right"><button class="linkbtn" type="button">Delete</button></td>
+        </tr>
         <tr>
           <td><span class="mono">bob@corp.example</span></td>
           <td><span class="chip neutral">Member</span></td>
           <td><div class="val"><span class="chip neutral">Console</span><span class="chip warning">Unverified claim</span></div>
-            <span class="sub">This is an email-keyed mapping riding an unverified IdP claim (WARDYN_OIDC_EMAIL_DOMAINS is unset, so email_verified isn't enforced). Prefer an App Role or group instead.</span></td>
+            <span class="sub">This is an email-keyed mapping riding an unverified IdP claim (<span class="mono">WARDYN_OIDC_EMAIL_DOMAINS</span> is unset, so <span class="mono">email_verified</span> isn't enforced). Prefer an App Role or group instead.</span></td>
           <td style="color:var(--muted-foreground)">yesterday</td>
           <td class="right"><button class="linkbtn" type="button">Delete</button></td>
         </tr>
       </tbody>
     </table>
 
-    <div class="pad" style="padding-top:20px;padding-bottom:6px;border-top:1px solid var(--border)">
-      <p class="secsub" style="font-weight:500;color:var(--foreground)">Variant B — separate blocks, same rows/strings (alternative, Q3)</p>
-    </div>
+    <div class="varlabel" style="border-top:1px solid var(--border)">Q3 variant B <b>— separate blocks, same rows/strings (alternative)</b></div>
     <div class="two" style="padding:0 24px 18px">
       <div>
         <h4 style="font-size:13px;margin-bottom:8px">From your chart</h4>
@@ -268,21 +285,42 @@ td .sub{font-size:11.5px;color:var(--muted-foreground);display:block;margin-top:
       <div>
         <h4 style="font-size:13px;margin-bottom:8px">Console</h4>
         <table>
-          <thead><tr><th>Value</th><th>Role</th><th></th></tr></thead>
+          <thead><tr><th>Value</th><th>Role</th><th>Added</th><th></th></tr></thead>
           <tbody>
-            <tr><td><span class="mono">alice@corp.example</span></td><td><span class="chip neutral">Admin</span></td><td class="right"><button class="linkbtn" type="button">Delete</button></td></tr>
-            <tr class="shadowed"><td><span class="mono">Wardyn.Contractors</span><span class="sub">Shadowed by your chart</span></td><td><span class="chip neutral">Member</span></td><td class="right"><button class="linkbtn" type="button">Delete</button></td></tr>
+            <tr>
+              <td><span class="mono">alice@corp.example</span></td>
+              <td><span class="chip neutral">Admin</span></td>
+              <td style="color:var(--muted-foreground)">3 days ago</td>
+              <td class="right"><button class="linkbtn" type="button">Delete</button></td>
+            </tr>
+            <tr class="shadowed">
+              <td><span class="mono">Wardyn.Contractors</span>
+                <div class="val" style="margin-top:4px"><span class="chip warning">Shadowed by your chart</span></div>
+                <span class="sub">Your chart now maps this value too, and the chart always wins. This row is stored but has no effect until you remove the chart entry or delete this row.</span></td>
+              <td><span class="chip neutral">Member</span></td>
+              <td style="color:var(--muted-foreground)">1 hour ago</td>
+              <td class="right"><button class="linkbtn" type="button">Delete</button></td>
+            </tr>
+            <tr>
+              <td><span class="mono">bob@corp.example</span>
+                <div class="val" style="margin-top:4px"><span class="chip warning">Unverified claim</span></div>
+                <span class="sub">This is an email-keyed mapping riding an unverified IdP claim (<span class="mono">WARDYN_OIDC_EMAIL_DOMAINS</span> is unset, so <span class="mono">email_verified</span> isn't enforced). Prefer an App Role or group instead.</span></td>
+              <td><span class="chip neutral">Member</span></td>
+              <td style="color:var(--muted-foreground)">yesterday</td>
+              <td class="right"><button class="linkbtn" type="button">Delete</button></td>
+            </tr>
           </tbody>
         </table>
       </div>
     </div>
 
     <hr class="rule">
+    <div class="pad" style="padding-bottom:0"><h3 class="sectitle">Defaults</h3></div>
     <div class="kv">
       <div class="k">Default role</div><div class="v"><span class="chip neutral">Member</span></div>
-      <div class="h">Applies to anyone who matches no mapping above. Set in your chart's WARDYN_OIDC_DEFAULT_ROLE.</div>
+      <div class="h">Applies to anyone who matches no mapping above. Set in your chart's <span class="mono">WARDYN_OIDC_DEFAULT_ROLE</span>.</div>
       <div class="k" style="margin-top:10px">Operator allowlist</div><div class="v" style="margin-top:10px"><span class="mono">ops@corp.example</span></div>
-      <div class="h">Always admin, on top of any mapping above. Set in your chart's WARDYN_OIDC_OPERATOR_EMAILS.</div>
+      <div class="h">Always admin, on top of any mapping above. Set in your chart's <span class="mono">WARDYN_OIDC_OPERATOR_EMAILS</span>.</div>
     </div>
 
     <hr class="rule">
@@ -305,7 +343,7 @@ td .sub{font-size:11.5px;color:var(--muted-foreground);display:block;margin-top:
     <hr class="rule">
     <div class="pad">
       <h3 class="sectitle">Preview a sign-in</h3>
-      <p class="secsub" style="margin-top:6px">Paste the roles, groups, or email a person's token would carry, or <button class="linkbtn info" type="button">test with my own session</button>, to see the role they'd derive at their next sign-in. Nothing here is saved.</p>
+      <p class="secsub" style="margin-top:6px">Paste the roles, groups, or email a person's token would carry, or <button class="linkbtn" type="button">test with my own session</button>, to see the role they'd derive at their next sign-in. Nothing here is saved.</p>
       <div class="form" style="grid-template-columns:1fr auto;padding-left:0;padding-right:0">
         <div class="f">
           <label>Roles, groups, or email</label>
@@ -315,6 +353,7 @@ td .sub{font-size:11.5px;color:var(--muted-foreground);display:block;margin-top:
         <div class="f"><button class="btn" type="button">Preview</button></div>
       </div>
       <div class="note plain" style="margin-top:4px">Would sign in as admin — matched by Wardyn.Admin.</div>
+      <div class="note plain">Would sign in as member — nothing matched, so your default role applies.</div>
       <div class="note plain">Would be denied at sign-in — nothing matched, and no default role is set.</div>
       <div class="note plain">Couldn't check this against your mappings — try again.</div>
     </div>
@@ -327,14 +366,15 @@ td .sub{font-size:11.5px;color:var(--muted-foreground);display:block;margin-top:
   </div>
 </section>
 
-<!-- ============ INSET — first-row acknowledgement ============ -->
+<!-- ============ INSET — first-row acknowledgement (no default role set) ============ -->
 <section class="state">
-  <div class="tag"><span>Inset</span><b>First console row added — chart empty, the posture-flip guard</b></div>
+  <div class="tag"><span>Inset</span><b>First console row added — chart empty, allowlist set, no default role (narrowing)</b></div>
   <div class="frame">
     <div class="dlgwrap">
       <div class="dlg">
-        <h3>Add the first mapping?</h3>
-        <p>Anyone matching no mapping will be made member at next sign-in.</p>
+        <h3>This first mapping changes who gets in</h3>
+        <p>Today, anyone matching no mapping signs in as a member. After this mapping, they will be denied at their next sign-in.</p>
+        <p style="margin-top:6px">People on your operator allowlist stay admins either way.</p>
         <div class="ack"><input type="checkbox" id="ack1"><label for="ack1">I understand this changes who can sign in.</label></div>
         <div class="row"><button class="btn" type="button">Cancel</button><button class="btn" type="button">Add mapping</button></div>
       </div>
@@ -342,17 +382,78 @@ td .sub{font-size:11.5px;color:var(--muted-foreground);display:block;margin-top:
   </div>
 </section>
 
-<!-- ============ INSET — delete-last-row acknowledgement ============ -->
+<!-- ============ INSET — first-row acknowledgement (default role = admin, WIDENING) ============ -->
 <section class="state">
-  <div class="tag"><span>Inset</span><b>Last console row deleted — chart empty, reverting to zero mappings</b></div>
+  <div class="tag"><span>Inset</span><b>First console row added — chart empty, allowlist set, default role admin (the silent-widening case, F-16)</b></div>
   <div class="frame">
     <div class="dlgwrap">
       <div class="dlg">
-        <h3>Delete the last mapping?</h3>
-        <p>Everyone who signs in becomes admin at next sign-in — the same legacy behavior as an unconfigured role map.</p>
+        <h3>This first mapping changes who gets in</h3>
+        <p>Today, anyone matching no mapping signs in as a member. After this mapping, they will sign in as an admin at their next sign-in.</p>
+        <p style="margin-top:6px">People on your operator allowlist stay admins either way.</p>
+        <div class="ack"><input type="checkbox" id="ack1b"><label for="ack1b">I understand this changes who can sign in.</label></div>
+        <div class="row"><button class="btn" type="button">Cancel</button><button class="btn" type="button">Add mapping</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ INSET — delete-last-row acknowledgement (no default role set) ============ -->
+<section class="state">
+  <div class="tag"><span>Inset</span><b>Last console row deleted — chart empty, allowlist set, no default role (widening back)</b></div>
+  <div class="frame">
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Removing the last mapping changes who gets in</h3>
+        <p>Today, anyone matching no mapping is denied at sign-in. After this removal, they will sign in as a member at their next sign-in.</p>
+        <p style="margin-top:6px">People on your operator allowlist stay admins either way.</p>
         <div class="ack"><input type="checkbox" id="ack2"><label for="ack2">I understand this changes who can sign in.</label></div>
         <div class="row"><button class="btn" type="button">Cancel</button><button class="btn" type="button">Delete mapping</button></div>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ INSET — delete-last-row acknowledgement (default role = admin, narrowing back) ============ -->
+<section class="state">
+  <div class="tag"><span>Inset</span><b>Last console row deleted — chart empty, allowlist set, default role admin (reverses the widening above)</b></div>
+  <div class="frame">
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Removing the last mapping changes who gets in</h3>
+        <p>Today, anyone matching no mapping signs in as an admin. After this removal, they will sign in as a member at their next sign-in.</p>
+        <p style="margin-top:6px">People on your operator allowlist stay admins either way.</p>
+        <div class="ack"><input type="checkbox" id="ack2b"><label for="ack2b">I understand this changes who can sign in.</label></div>
+        <div class="row"><button class="btn" type="button">Cancel</button><button class="btn" type="button">Delete mapping</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ INSET — plain delete confirm (no lockout, no posture guard) ============ -->
+<section class="state">
+  <div class="tag"><span>Inset</span><b>Plain delete confirm — an ordinary console-row delete, no guard applies</b></div>
+  <div class="frame">
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Delete the mapping for "eng-team"?</h3>
+        <p>At their next sign-in, they fall through to whatever the rest of your map resolves to.</p>
+        <div class="row"><button class="btn" type="button">Cancel</button><button class="btn" type="button">Delete</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ INSET — defaults, unset ============ -->
+<section class="state">
+  <div class="tag"><span>Inset</span><b>Defaults block — both unset</b></div>
+  <div class="frame">
+    <div class="pad" style="padding-bottom:0"><h3 class="sectitle">Defaults</h3></div>
+    <div class="kv">
+      <div class="k">Default role</div><div class="v" style="color:var(--muted-foreground)">Unset — anyone matching no mapping is denied at sign-in.</div>
+      <div class="h">Applies to anyone who matches no mapping above. Set in your chart's <span class="mono">WARDYN_OIDC_DEFAULT_ROLE</span>.</div>
+      <div class="k" style="margin-top:10px">Operator allowlist</div><div class="v" style="margin-top:10px;color:var(--muted-foreground)">None set.</div>
+      <div class="h">Always admin, on top of any mapping above. Set in your chart's <span class="mono">WARDYN_OIDC_OPERATOR_EMAILS</span>.</div>
     </div>
   </div>
 </section>
@@ -373,21 +474,24 @@ td .sub{font-size:11.5px;color:var(--muted-foreground);display:block;margin-top:
       <div class="f"><button class="btn" type="button" disabled>Add mapping</button></div>
     </div>
     <div class="pad" style="padding-top:0">
-      <div class="note red">"Wardyn.Admin" is already mapped in your chart's WARDYN_OIDC_ROLE_MAP — the chart always wins, so a console row here would only ever be shadowed. Edit your chart values instead.</div>
-      <div class="note red" style="margin-top:8px">"ops@corp.example" is already on your chart's operator allowlist (WARDYN_OIDC_OPERATOR_EMAILS) and always resolves to admin — a console row here would have no effect. Edit your chart values instead.</div>
+      <div class="note red">"Wardyn.Admin" is already mapped in your chart's <span class="mono">WARDYN_OIDC_ROLE_MAP</span> — the chart always wins, so a console row here would only ever be shadowed. Edit your chart values instead.</div>
+      <div class="note red" style="margin-top:8px">"ops@corp.example" is already on your chart's operator allowlist (<span class="mono">WARDYN_OIDC_OPERATOR_EMAILS</span>) and always resolves to admin — a console row here would have no effect. Edit your chart values instead.</div>
     </div>
   </div>
 </section>
 
 <!-- ============ INSET — lockout refusal ============ -->
 <section class="state">
-  <div class="tag"><span>Inset</span><b>Lockout refusal — a write that would leave the acting admin non-admin</b></div>
+  <div class="tag"><span>Inset</span><b>Lockout refusal — POST-ATTEMPT: server-authoritative, not a client pre-check (F-13/§2.2)</b></div>
   <div class="frame">
     <div class="dlgwrap">
       <div class="dlg">
         <h3>Delete the mapping for "alice@corp.example"?</h3>
+        <p>At their next sign-in, they fall through to whatever the rest of your map resolves to.</p>
         <div class="note red" style="max-width:none;margin-top:12px">This change would leave you without admin access, checked against your last sign-in — refused. The admin token is never bound by this check, so it stays your recovery path if you lock out any other way.</div>
-        <div class="row"><button class="btn" type="button">Cancel</button><button class="btn" type="button" disabled>Delete</button></div>
+        <!-- Delete stays enabled: nothing here is disabled pre-emptively, the 400 above is
+             what a real attempt just came back with. -->
+        <div class="row"><button class="btn" type="button">Cancel</button><button class="btn" type="button">Delete</button></div>
       </div>
     </div>
   </div>

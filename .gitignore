@@ -99,8 +99,8 @@ ds-bundle/
 /docs/reviews/
 # ...except the mock-round artifacts a shipped feature is CONTRACTED to: the
 # console's app strings are byte-matched against the frozen table in the prompt
-# doc and against the mock that draws it, by a test in ui/. A contract a test
-# depends on cannot live only on the author's disk. Everything else under
+# doc and against the mock that draws it, kept in lockstep by the frozen copy
+# module + mock-round review (not an automated test). Everything else under
 # docs/design/ stays local — hence the per-artifact opt-in, not a blanket unignore.
 /docs/design/*
 !/docs/design/ui-sandboxes-prompt.md
