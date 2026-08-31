@@ -638,19 +638,9 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		hostProxyCheck(hostProxy, plat.Containerized && !setup.HostProxySeeded()))
 
 	// sso_rbac / tls_cookie_posture: both OIDC-gated (mirror how every other
-	// conditional check gates on its own applicability). consoleRows follows
-	// the SAME nil-Store guard the permissions_posture read below applies: a
-	// nil Store or a failed read leaves it false, the conservative direction
-	// — it surfaces the sso_rbac warning rather than silently hiding it
-	// behind a People-step row this call could not actually confirm exists.
+	// conditional check gates on its own applicability).
 	oidcConfigured := s.cfg.OIDC != nil
-	consoleRows := false
-	if oidcConfigured && s.cfg.Store != nil {
-		if rows, err := s.cfg.Store.ListRoleMappings(ctx); err == nil {
-			consoleRows = len(rows) > 0
-		}
-	}
-	if chk, ok := ssoRBACCheck(oidcConfigured, s.cfg.OIDCRoleMapConfigured, consoleRows); ok {
+	if chk, ok := ssoRBACCheck(oidcConfigured, s.cfg.OIDCRoleMapConfigured, s.consoleRoleMappingsPresent(ctx, oidcConfigured)); ok {
 		checks = append(checks, chk)
 	}
 	if chk, ok := tlsCookiePostureCheck(oidcConfigured, s.cfg.OIDCRedirectURL, s.cfg.OIDCSecureCookies); ok {
@@ -752,6 +742,20 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 // for every member regardless of the real runner state. Only Driver and the
 // per-class ConfinementSubstrates map — genuine diagnostic detail — are
 // dropped.
+// consoleRoleMappingsPresent reports whether any console role-mapping rows
+// exist, for ssoRBACCheck's merged-map presence input. It follows the SAME
+// nil-Store guard the permissions_posture read applies: a nil Store or a
+// failed read reports false, the conservative direction — it surfaces the
+// sso_rbac warning rather than silently hiding it behind a People-step row
+// this call could not actually confirm exists.
+func (s *Server) consoleRoleMappingsPresent(ctx context.Context, oidcConfigured bool) bool {
+	if !oidcConfigured || s.cfg.Store == nil {
+		return false
+	}
+	rows, err := s.cfg.Store.ListRoleMappings(ctx)
+	return err == nil && len(rows) > 0
+}
+
 func redactSetupStatusForMember(st SetupStatus) SetupStatus {
 	st.Checks = []SetupCheck{}
 	st.Providers = []SetupProvider{}
