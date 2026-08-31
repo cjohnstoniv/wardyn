@@ -5,7 +5,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { Page } from "@playwright/test";
-import { test, expect, gotoConsole, sql } from "./fixtures";
+import { test, expect, gotoConsole, mockMemberRole, sql } from "./fixtures";
 
 // ---------------------------------------------------------------------------
 // Approvals screen e2e (lane: approvals, port 8088, db wardyn_e2e).
@@ -536,6 +536,95 @@ test.describe("Approvals — decision-scope split button (run cockpit)", () => {
       await expect(denyMenu.getByRole("button", { name: /^Deny always\b/ })).toBeVisible();
       await page.keyboard.press("Escape");
       await expect(page.getByRole("menu")).toHaveCount(0);
+    } finally {
+      deleteApproval(id);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F-12 pinning — LiveApprovals' row-level gate follows canDecideApproval
+// (server truth: authorizeMemberDecision, internal/api/approvals.go), not a
+// blanket !operator disable. A member may decide an egress_domain approval on
+// a run they own; credential and tool_call stay admin-only regardless.
+//
+// mockMemberRole (fixtures.ts) only flips what the CLIENT believes about its
+// own role — this harness always authenticates every request with the seeded
+// admin bearer token server-side (isOperator has no per-human session to
+// demote), so the decide() call below rides that real admin token and
+// genuinely succeeds. That is fine and explicitly documented as fine: the
+// RENDER decision (is the button enabled) is what F-12 pins, not server-side
+// ownership scoping — that is proven in Go (see this file's own report / the
+// TestDecide_MemberKindRestriction and TestAuthzMatrix coverage in
+// internal/api/authz_test.go).
+//
+// A true "foreign run" negative is NOT meaningfully testable at this
+// component: LiveApprovals only ever polls approvals already filtered to
+// `a.run_id === runId` (live-approvals.tsx's refresh()), so a row from a
+// different run can never even reach this strip to be rendered disabled or
+// enabled — there is no client-side ownership check for a render test to
+// exercise (canDecideApproval mirrors decide() on KIND alone; ownership is a
+// precondition of the row existing at all, per canDecideApproval's own doc).
+// The non-egress-kind negative below is the real, honestly-automatable
+// negative case.
+test.describe("F-12 — LiveApprovals row gate mirrors canDecideApproval, not a blanket operator check", () => {
+  test("a member's Approve/Deny are ENABLED on their own run's egress_domain approval, and a real decide round-trips", async ({
+    page,
+  }) => {
+    clearPending();
+    const runId = runningRunId();
+    const marker = uniqueMarker("f12-egress");
+    const id = seedPending({ kind: "egress_domain", scope: { host: marker, port: 443 } });
+
+    try {
+      await mockMemberRole(page);
+      await page.goto(`/runs/${runId}`);
+      await expect(page.getByText("Running", { exact: true }).first()).toBeVisible();
+
+      const row = page.getByTestId("live-approval-row").filter({ hasText: markerRe(marker) });
+      await expect(row).toBeVisible();
+      const approveBtn = row.getByRole("button", { name: "Approve" });
+      const denyBtn = row.getByRole("button", { name: "Deny" });
+      // F-12: was blanket-disabled for any non-operator; now enabled for the
+      // one kind a member may decide.
+      await expect(approveBtn).toBeEnabled();
+      await expect(denyBtn).toBeEnabled();
+      // The strip must not claim "admin only" over a row the viewer can, in
+      // fact, act on (live-approvals.tsx's OperatorOnlyHint gate). Scoped to
+      // the strip itself — the page can carry an unrelated "blocked until an
+      // admin decides it" banner elsewhere that also mentions "admin".
+      const panel = page.getByTestId("live-approvals");
+      await expect(panel.getByText("Requires the admin role.", { exact: true })).toHaveCount(0);
+
+      await approveBtn.click();
+      // A real decide() round trip (rides the harness's real admin bearer
+      // token) — the row leaves PENDING and the strip goes idle.
+      await expect(row).toHaveCount(0, { timeout: 10_000 });
+      await expect(page.getByTestId("live-approvals-idle")).toBeVisible();
+    } finally {
+      deleteApproval(id);
+    }
+  });
+
+  test("negative: a non-egress kind (tool_call) stays disabled for a member on the SAME owned run", async ({ page }) => {
+    clearPending();
+    const runId = runningRunId();
+    const id = seedPending({ kind: "tool_call", scope: { tool: "bash", cmd: "rm -rf /" } });
+
+    try {
+      await mockMemberRole(page);
+      await page.goto(`/runs/${runId}`);
+      await expect(page.getByText("Running", { exact: true }).first()).toBeVisible();
+
+      const row = page.getByTestId("live-approval-row");
+      await expect(row).toBeVisible();
+      await expect(row.getByRole("button", { name: "Approve" })).toBeDisabled();
+      await expect(row.getByRole("button", { name: "Deny" })).toBeDisabled();
+      // credential/tool_call stay admin-only regardless of ownership — the
+      // hint IS shown here, unlike the all-egress case above. Scoped to the
+      // strip itself (see the positive test's comment for why).
+      const panel = page.getByTestId("live-approvals");
+      await expect(panel.getByText("Requires the admin role.", { exact: true })).toBeVisible();
     } finally {
       deleteApproval(id);
     }
