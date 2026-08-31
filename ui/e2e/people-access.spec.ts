@@ -37,7 +37,9 @@ function baseAccessBody(over: Record<string, unknown> = {}) {
     mappings: [],
     default_role: "",
     operator_emails_present: false,
-    operator_emails: [],
+    // W-4: the real server sends null (Go nil slice), not [] — the panel must
+    // survive it. A fixture of [] here masked a crash the live walk exposed.
+    operator_emails: null,
     allow_email_mappings: false,
     email_domains_configured: false,
     posture: { map_empty: true, before: "an admin", after: "be denied", changes: true },

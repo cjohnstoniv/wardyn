@@ -195,11 +195,18 @@ func (s *Server) handleGetAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	chart := s.cfg.OIDC.ChartRoleMap()
 	before, after, changes := accessRolePosture(s.cfg.OIDC)
+	// A nil slice marshals to JSON null, but the field is typed string[] on the
+	// wire and the console reads its .length — so an install with no operator
+	// emails must still send [], never null.
+	operatorEmails := s.cfg.OperatorEmails
+	if operatorEmails == nil {
+		operatorEmails = []string{}
+	}
 	writeJSON(w, http.StatusOK, accessResponse{
 		Mappings:               accessMappingsView(chart, rows, s.cfg.OIDC),
 		DefaultRole:            s.cfg.OIDC.DefaultRole(),
 		OperatorEmailsPresent:  s.cfg.OIDC.HasOperatorEmails(),
-		OperatorEmails:         s.cfg.OperatorEmails,
+		OperatorEmails:         operatorEmails,
 		AllowEmailMappings:     s.cfg.AllowEmailMappings,
 		EmailDomainsConfigured: s.cfg.OIDC.HasEmailDomains(),
 		Posture: accessPosture{

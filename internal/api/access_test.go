@@ -10,6 +10,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -432,6 +433,34 @@ func TestAccess_GetIncludesOperatorEmailAddresses(t *testing.T) {
 	want := []string{"ops@corp.example", "root@corp.example"}
 	if !slices.Equal(resp.OperatorEmails, want) {
 		t.Errorf("operator_emails = %v, want %v", resp.OperatorEmails, want)
+	}
+}
+
+// TestAccess_GetOperatorEmailsNeverNull (W-4): with no operator emails
+// configured, operator_emails must still be a JSON array, never null — a nil
+// slice marshals to null, and the console reads its .length, so null crashes
+// the whole /setup page (found by the live Entra walk, not CI: the e2e
+// fixture had sent [] and so never reproduced the real nil-slice shape).
+func TestAccess_GetOperatorEmailsNeverNull(t *testing.T) {
+	auth := newAccessAuth(t, map[string]string{"wardyn.admin": "admin"}, "", nil, nil)
+	cfg := baseTestConfig(newHarness(t), &roleMapStore{})
+	cfg.OIDC = auth
+	cfg.OperatorEmails = nil
+	srv := New(cfg)
+
+	w := do(t, srv, http.MethodGet, "/api/v1/access", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if bytes.Contains(w.Body.Bytes(), []byte(`"operator_emails":null`)) {
+		t.Errorf("operator_emails serialized as null; want []: %s", w.Body.String())
+	}
+	var resp accessResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.OperatorEmails == nil {
+		t.Error("OperatorEmails is nil; want non-nil empty slice")
 	}
 }
 

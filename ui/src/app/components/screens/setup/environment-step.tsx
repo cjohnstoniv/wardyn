@@ -302,7 +302,7 @@ export function EnvironmentStep({
           noRunner && "pointer-events-none opacity-60",
         )}
       >
-        <table className="w-full min-w-[720px] border-collapse text-sm">
+        <table className="w-full min-w-[720px] table-fixed border-collapse text-sm">
           <thead>
             <tr>
               <th className="w-[220px] border-b bg-muted/40 px-4 py-3 text-left align-bottom font-normal">
@@ -575,7 +575,7 @@ function ColumnState({
         ) : (
           <>
             <div className="flex items-center justify-between gap-2 rounded-lg border bg-muted px-2.5 py-1.5">
-              <code className="truncate font-mono text-xs text-foreground">$ {guide.command}</code>
+              <code className="min-w-0 truncate font-mono text-xs text-foreground">$ {guide.command}</code>
               <CopyButton
                 text={guide.command}
                 label="Copy setup command"

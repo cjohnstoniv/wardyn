@@ -328,9 +328,9 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
             {/* Real addresses (GET /access's operator_emails), per commit 544467ed —
                 operator_emails_present stays a separate field but isn't needed here
                 now that the list itself is on the wire. */}
-            {access.operator_emails.length > 0 ? (
+            {(access.operator_emails ?? []).length > 0 ? (
               <span className="flex flex-wrap gap-x-2 gap-y-1 font-mono text-xs">
-                {access.operator_emails.map((email) => (
+                {(access.operator_emails ?? []).map((email) => (
                   <Mono key={email} className="text-foreground">
                     {email}
                   </Mono>
