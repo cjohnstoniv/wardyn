@@ -28,6 +28,7 @@ const KEYLESS_DEMOS = [
   { id: "fail-then-approve", title: "Fail, then approve" },
   { id: "held-at-the-door", title: "Held at the door" },
   { id: "lines-that-cant-be-crossed", title: "Lines that can't be crossed" },
+  { id: "denied-however-spelled", title: "Denied, however you spell it" },
   { id: "github-app-broker", title: "A token the sandbox never even sees" },
   { id: "sts-fail-closed", title: "No identity, no credential" },
 ];

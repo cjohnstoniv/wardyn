@@ -24,18 +24,26 @@ const KEYLESS = DEMOS.filter((d) => !d.needsModel);
 // - record-a-policy reuses the open-egress combo (Record Mode, not an
 //   egress-approval-mode showcase — recording needs egress wide open, that's
 //   the point).
+// - denied-however-spelled reuses lines-that-cant-be-crossed's open-egress
+//   always-deny combo (the deny-list/normalization axis, not a new approval
+//   mode — what it showcases is denied_domains beating allow-all and host
+//   spelling normalization).
 // - once-or-for-good reuses fail-then-approve's deny_with_review (the
 //   decision-SCOPE axis, not a new first_use_approval mode — scope is
 //   orthogonal to FirstUseMode).
 const SHOWCASE_QUARTET = KEYLESS.filter(
-  (d) => d.section === "egress" && d.id !== "record-a-policy" && d.id !== "once-or-for-good",
+  (d) =>
+    d.section === "egress" &&
+    d.id !== "record-a-policy" &&
+    d.id !== "once-or-for-good" &&
+    d.id !== "denied-however-spelled",
 );
 
 describe("demo catalog", () => {
-  it("ships exactly fourteen keyless demos with distinct ids/titles", () => {
-    expect(KEYLESS).toHaveLength(14);
-    expect(new Set(KEYLESS.map((d) => d.id)).size).toBe(14);
-    expect(new Set(KEYLESS.map((d) => d.title)).size).toBe(14);
+  it("ships exactly fifteen keyless demos with distinct ids/titles", () => {
+    expect(KEYLESS).toHaveLength(15);
+    expect(new Set(KEYLESS.map((d) => d.id)).size).toBe(15);
+    expect(new Set(KEYLESS.map((d) => d.title)).size).toBe(15);
   });
 
   it("sections split the original egress demos from the new secrets demos", () => {
@@ -44,6 +52,7 @@ describe("demo catalog", () => {
       "fail-then-approve",
       "held-at-the-door",
       "lines-that-cant-be-crossed",
+      "denied-however-spelled",
       "agent-in-the-box",
       "record-a-policy",
       "once-or-for-good",

@@ -91,6 +91,7 @@ export const DEMO_IDS = [
   "fail-then-approve",
   "held-at-the-door",
   "lines-that-cant-be-crossed",
+  "denied-however-spelled",
   "agent-in-the-box",
   "record-a-policy",
   "once-or-for-good",
@@ -116,7 +117,7 @@ export interface Demo {
   caution?: string;
   policy: RunPolicySpec;
   /** Which Getting-Started sub-section this demo belongs to: network egress
-   *  governance (the original seven) or secrets governance (keeping a value
+   *  governance or secrets governance (keeping a value
    *  out of the sandbox, whether or not it ever touches egress). */
   section: "egress" | "secrets";
   steps: DemoStep[];
@@ -236,7 +237,7 @@ export const DEMOS: Demo[] = [
         text: "The command HANGS: Wardyn is holding the connection open, waiting for you.",
       },
       {
-        text: "Within ~30 seconds, click Approve below — the same hanging command completes. (Miss the window and it falls back to a 403 — approve and re-run.)",
+        text: "Within ~30 seconds, click Approve below — the same hanging command completes. (Miss the window and it falls back to a 403 stamped X-Wardyn-Egress: approval-pending — 'wait, then retry', not a hard no. Approve and re-run.)",
       },
       {
         cmd: "curl -sSI --max-time 60 https://wikipedia.org",
@@ -284,6 +285,44 @@ export const DEMOS: Demo[] = [
       "In Policy, pick the 'Allow-all — observe first' template — \"allow_all_egress\": true.",
       "The cloud-metadata + private-range limits aren't settings — the proxy's floor refuses them, on the record, beneath any policy.",
       "Launch interactive, reach a public host, then try 169.254.169.254 and a 192.168.x.x address.",
+    ],
+  },
+  {
+    id: "denied-however-spelled",
+    section: "egress",
+    title: "Denied, however you spell it",
+    teaches:
+      "denied_domains beats allow-all — every FQDN spelling of a blocked host meets the same deny, and the 403 names its reason in response headers.",
+    overview:
+      "Egress is wide open except for one host you explicitly denied — denied_domains wins over allow_all_egress. Then try to dodge the list: \"example.com.\" with a trailing dot is a legal FQDN spelling of the very same host, and the classic way past a naive deny-list. Wardyn normalizes every spelling to one canonical host before any matching, so the dodge meets the identical 403 — and the refusal explains itself in response headers: X-Wardyn-Egress: denied, X-Wardyn-Egress-Reason: policy:denied, and X-Wardyn-Host naming the canonical host it matched, not the spelling you sent. A script inside the sandbox can tell a hard no from a not-yet-approved wait without guessing.",
+    caution:
+      "Fence (CC1) shares your machine's kernel and this box allows the public internet — safe here only because nothing is mounted: no repo, no key, no workspace. The point is the one host that stays out of reach no matter how it's spelled.",
+    policy: {
+      ...SHARED,
+      allowed_domains: [],
+      allow_all_egress: true,
+      denied_domains: ["example.com"],
+      first_use_approval: "always_deny",
+    },
+    steps: [
+      {
+        cmd: "curl -sSI https://example.org",
+        text: "Works: egress is wide open — this policy allows the public internet.",
+      },
+      {
+        cmd: "curl -sSI --max-time 5 https://example.com",
+        text: "Refused — 403, even under allow-all: denied_domains always wins. The response headers say why (X-Wardyn-Egress: denied, X-Wardyn-Egress-Reason: policy:denied) and the deny lands in the Audit panel as policy:denied.",
+      },
+      {
+        cmd: "curl -sSI --max-time 5 https://example.com.",
+        text: "The dodge: a trailing dot is a legal spelling of the SAME host, and it used to slip past naive deny-lists. Refused identically — and X-Wardyn-Host: example.com shows the proxy matched the canonical host, not your spelling.",
+      },
+    ],
+    setupUi: [
+      "New Run → pick a barrier (Fence here; nothing is mounted, so the blast radius is a bare sandbox).",
+      "In Policy, pick the 'Allow-all — observe first' template — \"allow_all_egress\": true.",
+      "Add \"denied_domains\": [\"example.com\"] — the one line that beats allow-all.",
+      "Launch interactive, reach a public host, then try the denied host — dotted and undotted.",
     ],
   },
   {

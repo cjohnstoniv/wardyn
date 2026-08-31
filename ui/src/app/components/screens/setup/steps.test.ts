@@ -181,6 +181,7 @@ describe("frozen contract — ids, labels, headings, order", () => {
       ["fail-then-approve", "Fail, then approve"],
       ["held-at-the-door", "Held at the door"],
       ["lines-that-cant-be-crossed", "Lines that can't be crossed"],
+      ["denied-however-spelled", "Denied, however you spell it"],
       ["agent-in-the-box", "The agent in the box"],
       ["record-a-policy", "Record a policy"],
       ["once-or-for-good", "Once, or for good"],
@@ -214,6 +215,7 @@ describe("frozen contract — ids, labels, headings, order", () => {
       "fail-then-approve",
       "held-at-the-door",
       "lines-that-cant-be-crossed",
+      "denied-however-spelled",
       "agent-in-the-box",
       "record-a-policy",
       "once-or-for-good",
@@ -228,7 +230,7 @@ describe("frozen contract — ids, labels, headings, order", () => {
       "workspaces",
       "review",
     ]);
-    expect(STEP_ORDER).toHaveLength(21);
+    expect(STEP_ORDER).toHaveLength(22);
     expect(PHASES.flatMap((p) => p.steps)).toEqual(STEP_ORDER);
     // Getting Started is the ONE demos surface: every catalog demo is a
     // sub-step, in catalog order, split into the two sections by `Demo.section`

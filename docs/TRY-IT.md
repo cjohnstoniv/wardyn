@@ -83,7 +83,7 @@ Prefer clicking? The Getting Started wizard's demo steps
 (<http://localhost:8080/setup?step=sealed-box> — `/demos` redirects there)
 launch throwaway sandboxes with an embedded terminal and live approvals — no
 repo, no workspace. Two sections: **Egress demos** and **Secrets demos**.
-Fourteen of the fifteen need no model at all, only the sandbox barrier itself
+Fifteen of the sixteen need no model at all, only the sandbox barrier itself
 (most of the Secrets ones additionally want a stored secret, which the same wizard
 walks you through adding; a couple gate on a GitHub App, or nothing at all). The Egress group includes:
 **the sealed box** (`always_deny` — `curl` fails instantly with a 403), **fail
@@ -91,7 +91,10 @@ then approve** (`deny_with_review` — approve, retry, it succeeds), **held at t
 door** (`wait_for_review` — `curl` *hangs* at the proxy until you approve, then
 the same in-flight command completes), **lines that can't be crossed**
 (allow-all policy, yet `169.254.169.254` and private-IP probes stay denied — no
-policy can grant them), **once, or for good** (`deny_with_review` — approve with
+policy can grant them), **denied, however you spell it** (allow-all plus one
+`denied_domains` entry — the trailing-dot spelling of the blocked host meets the
+same 403, and the refusal names its reason in `X-Wardyn-Egress` headers),
+**once, or for good** (`deny_with_review` — approve with
 **Once** and the retry succeeds, but the *next* attempt after that raises a
 brand-new approval: the grant covers one connection, not the run), and **record
 a policy** (allow-all policy, then synthesize what it actually touched into a

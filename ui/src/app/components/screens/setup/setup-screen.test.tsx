@@ -188,7 +188,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // demos → Secrets demos → your work [workspaces] → finish [review]. This
     // fixture has no model and no stored secret, so the SIX conditional demo
     // steps (agent-in-the-box's needsModel, plus the five needsSecret ones)
-    // are filtered OUT — 15 walked of the 21 that exist. github-app-broker and
+    // are filtered OUT — 16 walked of the 22 that exist. github-app-broker and
     // sts-fail-closed stay walked: the first is TEACH+GATE (a disabled Start,
     // never a dropped step) and the second is keyless. Review is the LAST step:
     // the Launch step was cut, because its "Example — not live config" card
@@ -241,6 +241,10 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(
       await screen.findByRole("heading", { name: /lines that can't be crossed/i }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(
+      await screen.findByRole("heading", { name: /denied, however you spell it/i }),
     ).toBeInTheDocument();
     // The harness demo sits HERE in catalog order — and is skipped straight
     // over, because no model is connected in this fixture.
@@ -809,7 +813,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     await screen.findAllByText("Single-user");
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
-    for (let i = 0; i < 12; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
+    for (let i = 0; i < 13; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
     await screen.findByRole("heading", { name: /review readiness/i });
     expect(screen.getByText("gVisor runtime")).toBeInTheDocument(); // ok (Ready group)
     expect(screen.getByText("Loopback bind")).toBeInTheDocument(); // warn (Worth a look)
@@ -861,7 +865,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     await screen.findAllByText("Single-user");
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
-    for (let i = 0; i < 12; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
+    for (let i = 0; i < 13; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
     await screen.findByRole("heading", { name: /review readiness/i });
     expect(screen.getByText("Secret store durability")).toBeInTheDocument();
     expect(screen.getByText("About this host")).toBeInTheDocument();
