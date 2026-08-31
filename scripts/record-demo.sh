@@ -145,7 +145,9 @@ fi
 # port with bearer auth killed a rehearsal at the subscription-connect step for
 # a video that never uses the model).
 STACKLESS=0
-[[ "${VIDEO}" == "01" || "${VIDEO}" == "02b" ]] && STACKLESS=1
+# 02c/04c film the kind cluster (the 02c beats BUILD it; 04c expects the
+# post-02c state) — record-demo must not touch the compose stack for either.
+[[ "${VIDEO}" == "01" || "${VIDEO}" == "02b" || "${VIDEO}" == "02c" || "${VIDEO}" == "04c" ]] && STACKLESS=1
 [[ "${STACKLESS}" == 1 ]] && DO_RESET=0
 
 log()  { printf '\033[1;35m[record-demo]\033[0m %s\n' "$*"; }

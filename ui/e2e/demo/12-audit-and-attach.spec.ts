@@ -57,6 +57,14 @@ import { act, beat, caption, chapter, PACE, spotlight } from "./overlay";
 // importing it is what registers this file's beforeAll/afterAll, and each beat
 // reads the page out of stage() rather than closing over a module-level `let`.
 import { stage } from "./stage";
+import { sweepStaleState } from "./sweep";
+
+// S6 stage hygiene (and the 0.7 onboarded-install mark) — every post-setup
+// episode sweeps before rolling; see sweep.ts.
+test.beforeAll(async () => {
+  if (!process.env.WARDYN_DEMO) return;
+  await sweepStaleState();
+});
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 

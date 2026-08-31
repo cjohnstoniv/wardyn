@@ -306,15 +306,33 @@ class Myvoice(Engine):
                     pass
 
     def render(self, text: str, dest: Path) -> None:
-        if self.proc is None:
-            self._start()
-        name = f"{os.getpid()}_{next(_counter)}.wav"
-        self.proc.stdin.write(json.dumps({"text": text, "out": f"/renders/narrate/{name}"}) + "\n")
-        self.proc.stdin.flush()
-        reply = self._reply()
-        if not reply.get("ok"):
-            raise RuntimeError(reply.get("error", "engine returned no clip"))
-        shutil.move(str(self.out_dir / name), str(dest))
+        # One restart on a dead engine, then fail. Without this a single engine
+        # death (a transient GPU squeeze during model load, say) poisons EVERY
+        # later line in the session: proc is no longer None, so each render
+        # writes into a dead pipe and the whole prewarm reports N-1 failures
+        # for one real fault (observed 2026-08-31: 1 death -> 1227 "failed").
+        for attempt in (1, 2):
+            if self.proc is None or self.proc.poll() is not None:
+                self.proc = None
+                self._start()
+            name = f"{os.getpid()}_{next(_counter)}.wav"
+            try:
+                self.proc.stdin.write(json.dumps({"text": text, "out": f"/renders/narrate/{name}"}) + "\n")
+                self.proc.stdin.flush()
+                reply = self._reply()
+            except (BrokenPipeError, RuntimeError):
+                if attempt == 1:
+                    try:
+                        self.proc.kill()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self.proc = None
+                    continue
+                raise
+            if not reply.get("ok"):
+                raise RuntimeError(reply.get("error", "engine returned no clip"))
+            shutil.move(str(self.out_dir / name), str(dest))
+            return
 
 
 def pick_engine(which: str, voice: str) -> Engine:

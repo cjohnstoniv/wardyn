@@ -1,0 +1,28 @@
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Overlay flipping the quickstart install from admin-token to Dex SSO.
+# Apply with --reuse-values so the quickstart's image/substrate values persist.
+auth:
+  adminToken:
+    value: ""          # OIDC replaces the token (chart renders on issuer instead)
+env:
+  WARDYN_OIDC_ISSUER: "http://localhost:5557"
+  WARDYN_OIDC_INTERNAL_ISSUER: "http://wardyn-dex.wardyn.svc.cluster.local:5556"
+  WARDYN_OIDC_CLIENT_ID: "wardyn"
+  WARDYN_OIDC_REDIRECT_URL: "http://localhost:8280/auth/callback"
+  WARDYN_OIDC_EMAIL_DOMAINS: "wardyn.local"
+  WARDYN_OIDC_OPERATOR_EMAILS: "admin@wardyn.local"
+  WARDYN_OIDC_ROLE_MAP: "admin@wardyn.local=admin,member@wardyn.local=member"
+extraEnv:
+  - name: WARDYN_OIDC_CLIENT_SECRET
+    value: "wardyn-oidc-secret"   # demo literal — must match dex.yaml staticClients
+networkPolicy:
+  egress:
+    extra:
+      - to:
+          - podSelector:
+              matchLabels: {app: wardyn-dex}
+        ports:
+          - port: 5556
+            protocol: TCP

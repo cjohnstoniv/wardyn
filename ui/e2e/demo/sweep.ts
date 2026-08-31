@@ -55,6 +55,15 @@ async function list(path: string): Promise<Array<Record<string, unknown>>> {
  * the take — the take's own asserts will say what's actually wrong.
  */
 export async function sweepStaleState(workspacePaths: string[] = []): Promise<void> {
+  // 0.7: the setup gate force-lands ANY route on an un-onboarded install
+  // (server-derived SiteConfig.OnboardingCompletedAt — a reset stack starts
+  // un-onboarded). Every spec that sweeps is a post-setup script ("an operator
+  // finished Getting Started before this film"), so marking the install
+  // onboarded is stage hygiene exactly like the run/approval sweeps below:
+  // the stage must match the script. Idempotent server-side; episode 02 films
+  // the fresh-install story and deliberately does NOT sweep.
+  await fetch(`${API}/setup/onboarding-complete`, { method: "POST", headers: HEADERS }).catch(() => {});
+
   for (const a of await list("/approvals?state=PENDING")) {
     await fetch(`${API}/approvals/${a.id}/deny`, {
       method: "POST",

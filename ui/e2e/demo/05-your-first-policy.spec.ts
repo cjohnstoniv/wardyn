@@ -98,6 +98,7 @@ import { act, beat, caption, centerInFrame, chapter, PACE, spotlight } from "./o
 // (one browser, one context, one recorded page), and every beat reads the page
 // out of stage() inside a test body rather than closing over a module binding.
 import { stage } from "./stage";
+import { sweepStaleState } from "./sweep";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -176,6 +177,8 @@ function editorDialog(page: Page) {
 // thing standing between a developer's stack and that.
 // ---------------------------------------------------------------------------
 test.beforeAll(async () => {
+  // S6 stage hygiene (and the 0.7 onboarded-install mark) — see sweep.ts.
+  if (process.env.WARDYN_DEMO) await sweepStaleState();
   if (!process.env.WARDYN_DEMO) return;
   const page = stage();
   const headers = apiHeaders();

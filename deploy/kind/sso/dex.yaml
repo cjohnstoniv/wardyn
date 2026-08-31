@@ -1,0 +1,72 @@
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Demo-grade Dex for the kind quickstart cluster — mirrors deploy/compose/dex.yaml
+# (same image digest, same client id/secret, same "password" bcrypt literal; the
+# hash stays literal because Dex env-expansion corrupts $2a$/$10$ segments).
+# Split-horizon: issuer is the BROWSER-facing URL (kubectl port-forward 5557);
+# wardynd reaches Dex at the in-cluster Service via WARDYN_OIDC_INTERNAL_ISSUER.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wardyn-dex
+  namespace: wardyn
+data:
+  config.yaml: |
+    issuer: http://localhost:5557
+    storage:
+      type: memory
+    web:
+      http: 0.0.0.0:5556
+    oauth2:
+      skipApprovalScreen: true
+    staticClients:
+      - id: wardyn
+        name: Wardyn
+        secret: wardyn-oidc-secret
+        redirectURIs:
+          - http://localhost:8280/auth/callback
+    enablePasswordDB: true
+    staticPasswords:
+      - email: "admin@wardyn.local"
+        hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
+        username: "admin"
+        userID: "gsv-admin-0001"
+      - email: "member@wardyn.local"
+        hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
+        username: "member"
+        userID: "gsv-member-0001"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wardyn-dex
+  namespace: wardyn
+  labels: {app: wardyn-dex}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: wardyn-dex}
+  template:
+    metadata:
+      labels: {app: wardyn-dex}
+    spec:
+      containers:
+        - name: dex
+          image: ghcr.io/dexidp/dex:v2.40.0@sha256:3e35d5d0f7dbd33fbadc36a71ff58cf4097ab98d73d22f6cb9a6471a32e028af
+          command: ["dex", "serve", "/etc/dex/cfg/config.yaml"]
+          ports: [{containerPort: 5556}]
+          volumeMounts: [{name: cfg, mountPath: /etc/dex/cfg}]
+      volumes:
+        - name: cfg
+          configMap: {name: wardyn-dex}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wardyn-dex
+  namespace: wardyn
+  labels: {app: wardyn-dex}
+spec:
+  selector: {app: wardyn-dex}
+  ports: [{port: 5556, targetPort: 5556}]
