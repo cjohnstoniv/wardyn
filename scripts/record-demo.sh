@@ -292,10 +292,19 @@ if [[ "${DO_RECORD}" == 1 ]]; then  # needed for the join/transcode either way
   # list did not, so this "no libx264" every time on a build that has it.
   _ff_devices="$("${FFMPEG}" -hide_banner -devices 2>&1)"
   _ff_encoders="$("${FFMPEG}" -hide_banner -encoders 2>&1)"
-  case "${_ff_devices}" in
-    *gdigrab*) ;;
-    *) die "${FFMPEG} has no gdigrab — it cannot capture a Windows desktop" ;;
-  esac
+  # gdigrab is only LOAD-BEARING when a desktop rectangle will actually be
+  # captured — the terminal lane. A console-only take's picture is recorded by
+  # the browser itself; ffmpeg here only joins/muxes/transcodes, which any
+  # libx264 build can do (including a Linux one via WARDYN_DEMO_FFMPEG when
+  # the ffmpeg.exe interop socket is flapping). Demanding a Windows capture
+  # device for a take that never grabs the desktop killed whole console-only
+  # sessions on flap nights.
+  if [[ -n "${TERMINAL_SCRIPT}" ]]; then
+    case "${_ff_devices}" in
+      *gdigrab*) ;;
+      *) die "${FFMPEG} has no gdigrab — it cannot capture a Windows desktop" ;;
+    esac
+  fi
   case "${_ff_encoders}" in
     *" libx264"*) ;;
     *) die "${FFMPEG} has no libx264 encoder" ;;
@@ -312,6 +321,11 @@ fi
 
 # Output path: prefer the real Windows Videos folder — encoding 1080p30 onto the
 # \\wsl$ 9p share drops frames.
+# ffpath: the encoder's view of a file. ffmpeg.exe needs the Windows spelling;
+# a Linux ffmpeg (WARDYN_DEMO_FFMPEG on interop-flap nights) needs the native
+# path — handing it \\wsl.localhost UNC form fails every open.
+ffpath() { case "${FFMPEG:-}" in *.exe) wslpath -w "$1" ;; *) printf '%s' "$1" ;; esac; }
+
 OUT_DIR="${WARDYN_DEMO_OUT_DIR:-}"
 if [[ -z "${OUT_DIR}" ]]; then
   WIN_VIDEOS="$(powershell.exe -NoProfile -Command '[Environment]::GetFolderPath("MyVideos")' 2>/dev/null | tr -d '\r')"
@@ -401,7 +415,7 @@ start_capture() {
   "${FFMPEG}" -hide_banner -loglevel error -y \
     -f gdigrab -framerate "${FRAMERATE}" -draw_mouse 1 "${GEOM[@]}" -i desktop \
     -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \
-    "$(wslpath -w "${OUT}")" < "${FIFO}" &
+    "$(ffpath "${OUT}")" < "${FIFO}" &
   FFPID=$!
   # The picture's t=0, handed to the beat script so its narration cues are timed
   # from the START OF THE VIDEO and not from the moment the script happened to
@@ -627,18 +641,18 @@ if [[ "${DO_RECORD}" == 1 && -n "${BROWSER_VID}" && -s "${BROWSER_VID}" ]]; then
     step "Joining terminal + console segments"
     FINAL="${OUT%.mp4}-full.mp4"
     "${FFMPEG}" -hide_banner -loglevel error -y \
-      -i "$(wslpath -w "${OUT}")" -i "$(wslpath -w "${BROWSER_VID}")" \
+      -i "$(ffpath "${OUT}")" -i "$(ffpath "${BROWSER_VID}")" \
       -filter_complex "${V}[a];[1:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:-1:-1,setsar=1,fps=30[b];[a][b]concat=n=2:v=1[v]" \
       -map "[v]" -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \
-      "$(wslpath -w "${FINAL}")" \
+      "$(ffpath "${FINAL}")" \
       && JOINED=1 \
       || { log "join failed — segments are still usable separately"; FINAL=""; }
   else
     step "Encoding the console recording"
     FINAL="${OUT}"
-    "${FFMPEG}" -hide_banner -loglevel error -y -i "$(wslpath -w "${BROWSER_VID}")" \
+    "${FFMPEG}" -hide_banner -loglevel error -y -i "$(ffpath "${BROWSER_VID}")" \
       -vf "fps=30,setsar=1" -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \
-      "$(wslpath -w "${FINAL}")" || { log "encode failed — the raw webm is still there"; FINAL=""; }
+      "$(ffpath "${FINAL}")" || { log "encode failed — the raw webm is still there"; FINAL=""; }
   fi
 elif [[ "${DO_RECORD}" == 1 && "${HAVE_TERMINAL}" == 1 && -s "${OUT}" ]]; then
   step "Terminal-only take"
@@ -717,7 +731,7 @@ if [[ "${DO_VOICE}" == 1 && -n "${FINAL}" && -s "${FINAL}" ]] \
   if [[ "${JOINED}" == 1 ]]; then
     OFFSET="$(python3 -c "
 import subprocess,sys
-out=subprocess.run(['${FFMPEG}','-hide_banner','-i',r'$(wslpath -w "${OUT}")'],capture_output=True,text=True).stderr
+out=subprocess.run(['${FFMPEG}','-hide_banner','-i',r'$(ffpath "${OUT}")'],capture_output=True,text=True).stderr
 for l in out.splitlines():
     if 'Duration:' in l:
         h,m,rest=l.split('Duration:')[1].split(',')[0].strip().split(':')

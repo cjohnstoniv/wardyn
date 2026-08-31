@@ -23,9 +23,9 @@ V02C_RUNNER="$(curl -fsS --max-time 10 "${V02C_API}/healthz" 2>/dev/null | jq -r
   || bad "${V02C_API}/healthz reports runner=${V02C_RUNNER}, not k8s — the browser half did not film the cluster"
 
 # 2. The identity claim: Dex answered and the chart is rendered on OIDC.
-V02C_AUTH="$(curl -fsS --max-time 10 "${V02C_API}/healthz" 2>/dev/null | jq -r '.components.identity.selected // "-"' 2>/dev/null || echo '-')"
-[[ "${V02C_AUTH}" == "oidc" ]] && ok "identity=oidc — the SSO flip the terminal half filmed is live" \
-  || bad "identity=${V02C_AUTH}, not oidc — the SSO overlay never landed"
+V02C_SSO="$(curl -fsS --max-time 10 "${V02C_API}/healthz" 2>/dev/null | jq -r '.sso // false' 2>/dev/null || echo false)"
+[[ "${V02C_SSO}" == "true" ]] && ok "healthz sso=true — the SSO flip the terminal half filmed is live" \
+  || bad "healthz sso=${V02C_SSO} — the SSO overlay never landed (components.identity is the WORKLOAD provider, not auth)"
 
 # 3. The unlock claim: "Finish setup" recorded completion FOR THE INSTALL.
 #    Read from the cluster's own API with its operator identity absent — the

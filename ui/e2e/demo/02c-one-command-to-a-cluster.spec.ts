@@ -66,8 +66,9 @@ test("V02c act 1 — sign in, and the install refuses to let you wander", async 
 
   // The 0.7 gate: an un-onboarded install force-lands EVERY access here.
   await page.waitForURL(/\/setup/, { timeout: 60_000 });
-  await page.goto("/policies");
-  await page.waitForURL(/\/setup/, { timeout: 30_000 });
+  // "Every door" is pinned by ui/e2e/setup-gate.spec.ts (route-by-route); the
+  // film shows one honest forced landing — a second mid-take goto proved
+  // flaky under recording load and taught nothing the suite doesn't.
   await caption(page, "And this is deliberate: until this install is set up, every door leads here.");
   await beat(page, PACE.read);
   await caption(page, "Not a wall — a checklist. Let's clear it.");

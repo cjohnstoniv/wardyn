@@ -106,6 +106,7 @@ test("V12b act 2 — a member's run asks for the outside world", async () => {
   await page.goto("/runs/new");
   await expect(page.getByRole("heading", { name: "New run", level: 1 })).toBeVisible({ timeout: 30_000 });
   await caption(page, "A member launches a run of their own: a terminal, nothing mounted, Minimal policy.");
+  await beat(page, PACE.read);
   await page.getByRole("combobox", { name: "Title" }).fill("reach for the outside world");
   await act(page, page.getByRole("radio", { name: /^Terminal/ }), "No agent needed — a shell is enough to meet the boundary.");
   await act(page, page.getByRole("button", { name: "Minimal" }), "Minimal policy: unlisted hosts raise an approval —");
@@ -179,6 +180,7 @@ test("V12b act 4 — the second human", async () => {
   await dexSignIn("admin@wardyn.local");
   await page.waitForURL(/\/(runs|setup)/, { timeout: 60_000 });
   await caption(page, "A second human — the admin — with their own queue.");
+  await beat(page, PACE.read);
   await page.goto("/approvals");
   await caption(page, "Same row, different human: this decision is allowed to exist.");
   await beat(page, PACE.read);
