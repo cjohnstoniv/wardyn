@@ -1,0 +1,455 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wardyn — People access mock</title>
+<!--
+  People acting-surface mock · static, for owner review.
+  Every visible string is verbatim from docs/design/people-access-prompt.md §7
+  (the frozen table — source of truth; the implementation later imports from
+  it into ui/src/app/lib/people-access-copy.ts). No build, no deps, no fetch —
+  open the file. Tokens + CSS idioms copied from
+  docs/design/permissioning-mock/index.html, with one deliberate departure:
+  ZERO teal on this step, and every button is plain outline — no filled
+  primary/amber/danger buttons anywhere below (DeploymentStep's existing
+  rule: the footer's Next is the surface's one affirmative action). Role
+  chips (Admin/Member) are neutral, never amber — the "grants are amber"
+  convention from /permissions does not apply here; this is not a grant
+  surface.
+-->
+<style>
+:root{
+  --background:#ffffff; --foreground:#171717; --card:#ffffff; --surface-2:#f4f4f5;
+  --muted-foreground:#737373; --border:#e5e5e5; --border-strong:#d4d4d4;
+  --primary:#0f766e; --primary-fg:#ffffff;
+  --success:#047857; --warning:#92400e; --warning-subtle:rgba(245,158,11,.13);
+  --danger:#b91c1c; --danger-subtle:rgba(239,68,68,.13);
+  --info:#1d4ed8; --info-subtle:rgba(29,78,216,.13);
+  --neutral-subtle:rgba(115,115,115,.12);
+  --font-sans:"Inter",ui-sans-serif,system-ui,-apple-system,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+}
+html[data-theme="dark"]{
+  --background:#0a0a0a; --foreground:#ededed; --card:#111111; --surface-2:#1f1f1f;
+  --muted-foreground:#a3a3a3; --border:#262626; --border-strong:#333333;
+  --primary:#14b8a6; --primary-fg:#0a0a0a;
+  --success:#10b981; --warning:#f59e0b; --warning-subtle:rgba(245,158,11,.15);
+  --danger:#dc2626; --danger-subtle:rgba(220,38,38,.16);
+  --info:#3b82f6; --info-subtle:rgba(59,130,246,.16);
+  --neutral-subtle:rgba(163,163,163,.14);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--background);color:var(--foreground);
+  font-family:var(--font-sans);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+code,.mono{font-family:var(--font-mono);font-size:.8125rem}
+h1,h2,h3,h4{margin:0;font-weight:600;letter-spacing:-.01em}
+p{margin:0}
+a{color:var(--primary)}
+
+/* ---- mock page chrome (NOT part of the design — the review scaffold) ---- */
+.sheet{max-width:1120px;margin:0 auto;padding:32px 24px 96px}
+.mockbar{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;gap:12px;align-items:center;
+  padding:12px 24px;background:var(--card);border-bottom:1px solid var(--border)}
+.mockbar h1{font-size:15px}
+.mockbar .sub{font-size:12.5px;color:var(--muted-foreground)}
+.mockbar button{margin-left:auto;font:inherit;font-size:13px;padding:6px 12px;border-radius:8px;
+  border:1px solid var(--border-strong);background:var(--card);color:var(--foreground);cursor:pointer}
+.state{margin-top:44px}
+.state > .tag{display:flex;gap:10px;align-items:baseline;margin-bottom:10px;
+  font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted-foreground)}
+.state > .tag b{color:var(--foreground);font-size:13px;letter-spacing:0;text-transform:none}
+.frame{border:1px solid var(--border);border-radius:14px;background:var(--card);overflow:hidden}
+.frame > .pad{padding:22px 24px}
+
+/* ---- console primitives ---- */
+.lead{color:var(--muted-foreground);font-size:14px;margin-top:6px;max-width:74ch}
+.fact{display:flex;gap:8px;margin-top:14px;font-size:13px;color:var(--muted-foreground);max-width:82ch}
+.fact svg{flex:none;margin-top:3px;color:var(--muted-foreground)}
+.sectitle{font-size:14px;margin-top:0}
+.secsub{font-size:13px;color:var(--muted-foreground);margin-top:2px}
+hr.rule{border:0;border-top:1px solid var(--border);margin:0}
+
+.chip{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 9px;
+  font-size:11.5px;font-weight:500;white-space:nowrap;border:1px solid transparent}
+.chip.neutral{background:var(--neutral-subtle);color:var(--muted-foreground)}
+.chip.warning{background:var(--warning-subtle);color:var(--warning)}
+.chip.danger{background:var(--danger-subtle);color:var(--danger)}
+.chip.info{background:var(--info-subtle);color:var(--info)}
+.dot{width:6px;height:6px;border-radius:999px;background:currentColor}
+
+/* Zero teal on this step: every button is the plain outline shell — no
+   .primary/.amber/.danger fills anywhere below (unlike the permissioning
+   mock, which uses filled buttons for its enforce/add actions). */
+.btn{font:inherit;font-size:13px;font-weight:500;padding:6px 13px;border-radius:8px;cursor:pointer;
+  border:1px solid var(--border-strong);background:var(--card);color:var(--foreground)}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+.btn.sm{font-size:12px;padding:4px 10px}
+.linkbtn{background:none;border:0;color:var(--muted-foreground);font:inherit;font-size:12.5px;
+  cursor:pointer;text-decoration:underline;text-underline-offset:2px;padding:0}
+.linkbtn.info{color:var(--info)}
+
+/* mappings table */
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead th{text-align:left;font-weight:500;font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--muted-foreground);padding:10px 24px;border-bottom:1px solid var(--border)}
+tbody td{padding:11px 24px;border-bottom:1px solid var(--border);vertical-align:top}
+tbody tr:last-child td{border-bottom:0}
+tbody tr.shadowed{background:var(--warning-subtle)}
+td .val{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+td .sub{font-size:11.5px;color:var(--muted-foreground);display:block;margin-top:3px;max-width:52ch}
+.right{text-align:right}
+
+/* empty state */
+.empty{padding:34px 24px;text-align:center}
+.empty h4{font-size:13.5px}
+.empty p{font-size:12.5px;color:var(--muted-foreground);margin-top:5px;max-width:52ch;
+  margin-left:auto;margin-right:auto}
+
+/* add form */
+.form{display:grid;grid-template-columns:1fr 1fr auto;gap:14px 16px;padding:18px 24px;align-items:end}
+.form .f{display:flex;flex-direction:column;gap:5px;min-width:0}
+.form label{font-size:12px;font-weight:500}
+.form .ctl{border:1px solid var(--border-strong);border-radius:8px;background:var(--background);
+  padding:7px 10px;font-size:13px;color:var(--foreground);min-height:34px;display:flex;align-items:center;
+  gap:8px}
+.form .ctl.ph{color:var(--muted-foreground)}
+.form .hint{font-size:11.5px;color:var(--muted-foreground);max-width:44ch}
+.seg{display:inline-flex;border:1px solid var(--border-strong);border-radius:8px;overflow:hidden}
+.seg span{padding:6px 11px;font-size:12.5px;color:var(--muted-foreground);border-left:1px solid var(--border);cursor:pointer}
+.seg span:first-child{border-left:0}
+.seg span.sel{background:var(--surface-2);color:var(--foreground);font-weight:500}
+
+/* dialog */
+.dlg{max-width:470px;margin:0 auto;border:1px solid var(--border);border-radius:14px;
+  background:var(--card);padding:20px 22px;box-shadow:0 12px 34px rgba(0,0,0,.22)}
+.dlg h3{font-size:15px}
+.dlg p{margin-top:9px;font-size:13px;color:var(--muted-foreground)}
+.dlg .row{margin-top:18px;display:flex;gap:10px;justify-content:flex-end}
+.dlgwrap{background:var(--surface-2);padding:28px 20px}
+.ack{margin-top:14px;display:flex;gap:8px;align-items:flex-start;font-size:12.5px;color:var(--foreground)}
+.ack input{margin-top:2px}
+
+/* notes / defaults / preview */
+.note{margin-top:9px;display:flex;gap:8px;align-items:flex-start;border-radius:9px;padding:8px 11px;
+  font-size:12.5px;max-width:78ch}
+.note.amber{background:var(--warning-subtle);color:var(--warning)}
+.note.red{background:var(--danger-subtle);color:var(--danger)}
+.note.plain{background:var(--surface-2);color:var(--muted-foreground)}
+.kv{display:grid;grid-template-columns:180px 1fr;gap:4px 18px;padding:16px 24px;font-size:13px}
+.kv .k{color:var(--muted-foreground)}
+.kv .v{display:flex;align-items:center;gap:8px}
+.kv .h{grid-column:2;font-size:12px;color:var(--muted-foreground);margin-top:2px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media (max-width:860px){.form{grid-template-columns:1fr}.two{grid-template-columns:1fr}.kv{grid-template-columns:1fr}}
+
+/* rail-preview strip — canon constraint #3: the phase rail's "Multi-user"
+   badge is the FIRST such text node on the page, rendering before the step
+   body's own MULTI_USER_CHIP chip. This strip stands in for that rail item. */
+.railstrip{max-width:1120px;margin:24px auto 0;padding:0 24px}
+.rail{display:inline-flex;align-items:center;gap:9px;border:1px solid var(--border);border-radius:10px;
+  padding:8px 14px;background:var(--card);font-size:13px}
+.rail .dim{color:var(--muted-foreground)}
+</style>
+</head>
+<body>
+
+<div class="mockbar">
+  <div>
+    <h1>People — mock, acting-surface round</h1>
+    <div class="sub">Strings verbatim from <code>docs/design/people-access-prompt.md</code> §7. Static: nothing here is wired.</div>
+  </div>
+  <button id="tt" type="button">Light / dark</button>
+</div>
+
+<!-- ===== phase-rail preview — the FIRST "Multi-user" text node on the page (hard canon #3) ===== -->
+<div class="railstrip">
+  <div class="rail"><span class="dim">Essentials ›</span> People <span class="chip neutral"><i class="dot"></i>Multi-user</span></div>
+</div>
+
+<div class="sheet">
+
+<!-- ============ MAIN STATE — step chrome + role mappings + preview ============ -->
+<section class="state" style="margin-top:20px">
+  <div class="tag"><span>Main state</span><b>Multi-user — chart + console mappings, shadowed row, add form, preview</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h2 style="font-size:19px">Who can sign in</h2>
+      <div class="lead" style="display:flex;align-items:start;gap:8px;margin-top:10px">
+        <span class="chip neutral">Multi-user</span>
+        <span>People sign in with SSO; each is an admin or a member, per your role map.</span>
+      </div>
+    </div>
+    <hr class="rule">
+    <div class="pad">
+      <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px">
+        <p class="secsub">Roles come from the mappings below — your chart's <span class="mono">WARDYN_OIDC_ROLE_MAP</span>, console rows added here, or the operator allowlist.</p>
+        <span class="chip neutral"><i class="dot"></i>SSO</span>
+      </div>
+      <div style="margin:14px 0;border-top:1px solid var(--border)"></div>
+      <p class="secsub"><b style="color:var(--foreground);font-weight:500">Admins</b> set the ceiling — policies, secrets, workspaces, site configuration.</p>
+      <p class="secsub" style="margin-top:6px"><b style="color:var(--foreground);font-weight:500">Members</b> run inside it — their own workspaces, runs, approvals and SSH keys. They land on their own Getting Started the first time they sign in.</p>
+      <div style="margin-top:12px;display:flex;align-items:center;gap:10px">
+        <button class="btn sm" type="button">Open Permissions</button>
+        <span class="secsub">Capability grants, per person or group</span>
+      </div>
+    </div>
+
+    <hr class="rule">
+    <div class="pad" style="padding-bottom:0">
+      <h3 class="sectitle">Role mappings</h3>
+      <p class="secsub">A value — an Entra App Role, a groups-claim entry, or an email — mapped to admin or member.</p>
+      <div class="note plain">Takes effect at next sign-in. A person already signed in keeps the role they were given until then.</div>
+    </div>
+
+    <div class="pad" style="padding-bottom:6px"><p class="secsub" style="font-weight:500;color:var(--foreground)">Variant A — one merged table, source column (recommended, Q3)</p></div>
+    <table>
+      <thead><tr><th>Value</th><th>Role</th><th>Source</th><th>Added</th><th></th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="mono">Wardyn.Admin</span></td>
+          <td><span class="chip neutral">Admin</span></td>
+          <td><div class="val"><span class="chip neutral">From your chart</span></div><span class="sub">Edit in your chart values.</span></td>
+          <td style="color:var(--muted-foreground)">—</td>
+          <td class="right"></td>
+        </tr>
+        <tr>
+          <td><span class="mono">eng-team</span></td>
+          <td><span class="chip neutral">Member</span></td>
+          <td><div class="val"><span class="chip neutral">From your chart</span></div><span class="sub">Edit in your chart values.</span></td>
+          <td style="color:var(--muted-foreground)">—</td>
+          <td class="right"></td>
+        </tr>
+        <tr>
+          <td><span class="mono">alice@corp.example</span></td>
+          <td><span class="chip neutral">Admin</span></td>
+          <td><span class="chip neutral">Console</span></td>
+          <td style="color:var(--muted-foreground)">3 days ago</td>
+          <td class="right"><button class="linkbtn" type="button">Delete</button></td>
+        </tr>
+        <tr class="shadowed">
+          <td><span class="mono">Wardyn.Contractors</span></td>
+          <td><span class="chip neutral">Member</span></td>
+          <td><div class="val"><span class="chip neutral">Console</span><span class="chip warning">Shadowed by your chart</span></div>
+            <span class="sub">Your chart now maps this value too, and the chart always wins. This row is stored but has no effect until you remove the chart entry or delete this row.</span></td>
+          <td style="color:var(--muted-foreground)">1 hour ago</td>
+          <td class="right"><button class="linkbtn" type="button">Delete</button></td>
+        </tr>
+        <tr>
+          <td><span class="mono">bob@corp.example</span></td>
+          <td><span class="chip neutral">Member</span></td>
+          <td><div class="val"><span class="chip neutral">Console</span><span class="chip warning">Unverified claim</span></div>
+            <span class="sub">This is an email-keyed mapping riding an unverified IdP claim (WARDYN_OIDC_EMAIL_DOMAINS is unset, so email_verified isn't enforced). Prefer an App Role or group instead.</span></td>
+          <td style="color:var(--muted-foreground)">yesterday</td>
+          <td class="right"><button class="linkbtn" type="button">Delete</button></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="pad" style="padding-top:20px;padding-bottom:6px;border-top:1px solid var(--border)">
+      <p class="secsub" style="font-weight:500;color:var(--foreground)">Variant B — separate blocks, same rows/strings (alternative, Q3)</p>
+    </div>
+    <div class="two" style="padding:0 24px 18px">
+      <div>
+        <h4 style="font-size:13px;margin-bottom:8px">From your chart</h4>
+        <table>
+          <thead><tr><th>Value</th><th>Role</th></tr></thead>
+          <tbody>
+            <tr><td><span class="mono">Wardyn.Admin</span></td><td><span class="chip neutral">Admin</span></td></tr>
+            <tr><td><span class="mono">eng-team</span></td><td><span class="chip neutral">Member</span></td></tr>
+          </tbody>
+        </table>
+        <p class="secsub" style="margin-top:8px">Edit in your chart values.</p>
+      </div>
+      <div>
+        <h4 style="font-size:13px;margin-bottom:8px">Console</h4>
+        <table>
+          <thead><tr><th>Value</th><th>Role</th><th></th></tr></thead>
+          <tbody>
+            <tr><td><span class="mono">alice@corp.example</span></td><td><span class="chip neutral">Admin</span></td><td class="right"><button class="linkbtn" type="button">Delete</button></td></tr>
+            <tr class="shadowed"><td><span class="mono">Wardyn.Contractors</span><span class="sub">Shadowed by your chart</span></td><td><span class="chip neutral">Member</span></td><td class="right"><button class="linkbtn" type="button">Delete</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <hr class="rule">
+    <div class="kv">
+      <div class="k">Default role</div><div class="v"><span class="chip neutral">Member</span></div>
+      <div class="h">Applies to anyone who matches no mapping above. Set in your chart's WARDYN_OIDC_DEFAULT_ROLE.</div>
+      <div class="k" style="margin-top:10px">Operator allowlist</div><div class="v" style="margin-top:10px"><span class="mono">ops@corp.example</span></div>
+      <div class="h">Always admin, on top of any mapping above. Set in your chart's WARDYN_OIDC_OPERATOR_EMAILS.</div>
+    </div>
+
+    <hr class="rule">
+    <div class="pad" style="padding-bottom:0"><h3 class="sectitle">Add a mapping</h3></div>
+    <div class="form">
+      <div class="f">
+        <label>Value</label>
+        <div class="ctl ph mono">*.contractor-group</div>
+        <div class="hint">An Entra App Role or groups-claim value exactly as your identity provider sends it in the token, or an email address. Matched case-insensitively.</div>
+      </div>
+      <div class="f">
+        <label>Role</label>
+        <div class="seg"><span class="sel">Admin</span><span>Member</span></div>
+      </div>
+      <div class="f">
+        <button class="btn" type="button">Add mapping</button>
+      </div>
+    </div>
+
+    <hr class="rule">
+    <div class="pad">
+      <h3 class="sectitle">Preview a sign-in</h3>
+      <p class="secsub" style="margin-top:6px">Paste the roles, groups, or email a person's token would carry, or <button class="linkbtn info" type="button">test with my own session</button>, to see the role they'd derive at their next sign-in. Nothing here is saved.</p>
+      <div class="form" style="grid-template-columns:1fr auto;padding-left:0;padding-right:0">
+        <div class="f">
+          <label>Roles, groups, or email</label>
+          <div class="ctl ph mono" style="min-height:56px;align-items:flex-start;padding-top:9px">Wardyn.Admin</div>
+          <div class="hint">One value per line — an App Role, a group name, or an email address.</div>
+        </div>
+        <div class="f"><button class="btn" type="button">Preview</button></div>
+      </div>
+      <div class="note plain" style="margin-top:4px">Would sign in as admin — matched by Wardyn.Admin.</div>
+      <div class="note plain">Would be denied at sign-in — nothing matched, and no default role is set.</div>
+      <div class="note plain">Couldn't check this against your mappings — try again.</div>
+    </div>
+
+    <hr class="rule">
+    <div class="pad">
+      <div class="fact"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+        <span>Creating people and groups, and assigning Entra App Roles, happens in your identity provider — mapping a role here only tells Wardyn what to do with a value your IdP already sends. "Assignment required" on the app registration is Entra's gate, not this one's.</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ INSET — first-row acknowledgement ============ -->
+<section class="state">
+  <div class="tag"><span>Inset</span><b>First console row added — chart empty, the posture-flip guard</b></div>
+  <div class="frame">
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Add the first mapping?</h3>
+        <p>Anyone matching no mapping will be made member at next sign-in.</p>
+        <div class="ack"><input type="checkbox" id="ack1"><label for="ack1">I understand this changes who can sign in.</label></div>
+        <div class="row"><button class="btn" type="button">Cancel</button><button class="btn" type="button">Add mapping</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ INSET — delete-last-row acknowledgement ============ -->
+<section class="state">
+  <div class="tag"><span>Inset</span><b>Last console row deleted — chart empty, reverting to zero mappings</b></div>
+  <div class="frame">
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Delete the last mapping?</h3>
+        <p>Everyone who signs in becomes admin at next sign-in — the same legacy behavior as an unconfigured role map.</p>
+        <div class="ack"><input type="checkbox" id="ack2"><label for="ack2">I understand this changes who can sign in.</label></div>
+        <div class="row"><button class="btn" type="button">Cancel</button><button class="btn" type="button">Delete mapping</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ INSET — collision refusal (400) ============ -->
+<section class="state">
+  <div class="tag"><span>Inset</span><b>Collision refusal — a console row that only chart/operator would ever shadow</b></div>
+  <div class="frame">
+    <div class="form" style="padding-bottom:6px">
+      <div class="f">
+        <label>Value</label>
+        <div class="ctl mono">Wardyn.Admin</div>
+      </div>
+      <div class="f">
+        <label>Role</label>
+        <div class="seg"><span>Admin</span><span class="sel">Member</span></div>
+      </div>
+      <div class="f"><button class="btn" type="button" disabled>Add mapping</button></div>
+    </div>
+    <div class="pad" style="padding-top:0">
+      <div class="note red">"Wardyn.Admin" is already mapped in your chart's WARDYN_OIDC_ROLE_MAP — the chart always wins, so a console row here would only ever be shadowed. Edit your chart values instead.</div>
+      <div class="note red" style="margin-top:8px">"ops@corp.example" is already on your chart's operator allowlist (WARDYN_OIDC_OPERATOR_EMAILS) and always resolves to admin — a console row here would have no effect. Edit your chart values instead.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ INSET — lockout refusal ============ -->
+<section class="state">
+  <div class="tag"><span>Inset</span><b>Lockout refusal — a write that would leave the acting admin non-admin</b></div>
+  <div class="frame">
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Delete the mapping for "alice@corp.example"?</h3>
+        <div class="note red" style="max-width:none;margin-top:12px">This change would leave you without admin access, checked against your last sign-in — refused. The admin token is never bound by this check, so it stays your recovery path if you lock out any other way.</div>
+        <div class="row"><button class="btn" type="button">Cancel</button><button class="btn" type="button" disabled>Delete</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ INSET — empty state ============ -->
+<section class="state">
+  <div class="tag"><span>Inset</span><b>Empty console list</b></div>
+  <div class="frame">
+    <div class="empty">
+      <h4>No mappings added here</h4>
+      <p>Add one for a person or group. If your chart already maps someone, they're listed above and don't need a row here.</p>
+      <button class="btn" style="margin-top:14px" type="button">Add mapping</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ INSET — SSO not configured (503) ============ -->
+<section class="state">
+  <div class="tag"><span>Inset</span><b>SSO isn't configured — distinct from the (unchanged) single-user branch</b></div>
+  <div class="frame">
+    <div class="empty">
+      <h4>SSO isn't configured on this deployment</h4>
+      <p>Role mappings need SSO to mean anything — there's no per-person identity to map without it. This is likely a stale view; reload to see the single-user explainer instead.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ INSET — fetch-failed ============ -->
+<section class="state">
+  <div class="tag"><span>Inset</span><b>Fetch-failed — distinct from SSO-not-configured</b></div>
+  <div class="frame">
+    <div class="empty">
+      <h4>Couldn't load role mappings</h4>
+      <p>Something went wrong reaching the server. Your chart's mappings still apply even though this list can't confirm them right now.</p>
+      <button class="btn" style="margin-top:14px" type="button">Retry</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SINGLE-USER BRANCH — unchanged, for reference only ============ -->
+<section class="state">
+  <div class="tag"><span>Reference</span><b>Single-user branch — byte-for-byte unchanged, not part of this round</b></div>
+  <div class="frame">
+    <div class="pad">
+      <div class="lead" style="display:flex;align-items:start;gap:8px">
+        <span class="chip neutral">Single-user</span>
+        <span>One admin credential — the token the installer printed. No per-person identity.</span>
+      </div>
+      <div class="note plain" style="margin-top:14px">Just you. Whoever holds the admin token (or reaches a local-mode console) is the admin; runs, policies, secrets and approvals are all yours. There is no member role until people sign in as themselves.</div>
+      <p class="secsub" style="margin-top:10px">To add people, configure SSO: each person gets their own identity and an admin or member role, and members get their own Getting Started. The recipe is in <span class="mono">docs/OPERATIONS.md</span>, "Second user, same host".</p>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<script>
+document.getElementById("tt").addEventListener("click", function () {
+  var r = document.documentElement;
+  r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+});
+</script>
+</body>
+</html>
