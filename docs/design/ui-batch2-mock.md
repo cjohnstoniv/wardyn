@@ -13,7 +13,7 @@ mock is UI source of truth, and the canon strings below become app strings verba
 implementation lands (same shape as `permissions-copy.ts` following
 `permissioning-prompt.md`). Design-verified before implementation begins.
 
-Read against: `local/enterprise-poc-review/REGISTER.md` rows D7/D8/D9/D33;
+Read against: the field-review rows D7/D8/D9/D33;
 `docs/design/member-role-desktop.md` §DECISIONS + the M3 row of its M1–M5 table; the
 live `ui/src` surfaces cited under each item (paths + line numbers are current as of this
 worktree's base).

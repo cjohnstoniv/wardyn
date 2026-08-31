@@ -131,8 +131,13 @@ before step 3.
 7. **Publish the demo videos as release assets** (after step 6 — upload needs the
    Release to exist). Release assets live outside git history, so clones stay small.
    Stage the shipping take per episode — the newest `PASS` row per id in
-   `local/TAKES-LEDGER.md`'s attempt log, never `ls -t` (failed takes share the
-   folder) — under stable, timestamp-free names, then upload:
+   the takes ledger's attempt log, never `ls -t` (failed takes share the
+   folder) — under stable, timestamp-free names, then upload. The ledger is
+   OPERATOR-LOCAL and untracked (`/local/` is gitignored): it lives at
+   `local/TAKES-LEDGER.md` on the machine that recorded the takes, or wherever
+   `WARDYN_TAKES_LEDGER` points (`scripts/take-chain.sh:39` honors it). A fresh
+   clone has neither the ledger nor the footage, so run this on the recording
+   host:
 
    ```sh
    TAG=vX.Y.Z; SRC=/mnt/c/Users/Chaz/Videos; STAGE=$(mktemp -d)

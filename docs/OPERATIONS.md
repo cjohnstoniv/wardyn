@@ -123,9 +123,7 @@ Postgres trigger rejects `UPDATE` and `DELETE` on `audit_events`, and a
 statement-level guard (migration `0004`) rejects `TRUNCATE` — all three are
 asserted in `TestPG_AuditAppendOnly_TriggerRejects`
 (`internal/store/store_pg_test.go`), so an operator with direct database access
-cannot rewrite or silently thin the trail through Wardyn's own schema. The
-nearest competitor's own maintenance docs, by contrast, recommend `DELETE FROM
-audit_logs` to prune.
+cannot rewrite or silently thin the trail through Wardyn's own schema.
 
 Completeness survives an outage too. When a Postgres write fails — the store is
 briefly down, a transient error — the event is not dropped: it is fsync'd, one
