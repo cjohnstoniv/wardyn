@@ -47,16 +47,29 @@ export function markOnboardingSeen(): void {
 // Getting Started (member-getting-started.tsx) instead of the operator funnel
 // (built from a redacted SetupStatus a member can't act on) — replaces the
 // former one-line MemberSetupNotice bounce.
-export function GettingStarted({ onDone }: { onDone: () => void }) {
+export function GettingStarted({
+  onDone,
+  status,
+}: {
+  onDone: () => void;
+  status?: SetupStatus | null;
+}) {
   const role = useRole();
+  // The hero is a fact about the INSTALL now (status.onboarding_complete), not
+  // the browser: the per-browser flag was origin-scoped, so the same console
+  // reached at 127.0.0.1 and at localhost disagreed about whether the welcome
+  // had happened. The local flag survives as (a) the within-session handoff —
+  // clicking "Get started" advances without waiting for a status refetch — and
+  // (b) the legacy fallback for a daemon too old to report the field.
   const [seen, setSeen] = React.useState(onboardingSeen());
+  const installOnboarded = status?.onboarding_complete ?? false;
   if (role === "member") {
     // No onDone: this is a page a member returns to, not a funnel step with
     // an exit action — the old MemberSetupNotice's "Go to Runs" button (and
     // the onDone it called) leaves with it.
     return <MemberGettingStarted />;
   }
-  if (!seen) {
+  if (!installOnboarded && !seen) {
     // Single forward path: the welcome hands off INTO the funnel (no skip, no
     // demo side-door — demos live inside the funnel). The mandatory setup gate
     // (App.tsx) keeps the operator here until they finish the flow.
@@ -72,7 +85,13 @@ export function GettingStarted({ onDone }: { onDone: () => void }) {
   return <SetupScreen onDone={onDone} />;
 }
 
-function ReadinessRow({ status, loading }: { status: SetupStatus | null; loading: boolean }) {
+function ReadinessRow({
+  status,
+  loading,
+}: {
+  status: SetupStatus | null;
+  loading: boolean;
+}) {
   const readiness = status ? deriveReadiness(status) : null;
   const chip = (
     icon: React.ElementType,
@@ -99,8 +118,12 @@ function ReadinessRow({ status, loading }: { status: SetupStatus | null; loading
   };
   // Strongest AVAILABLE barrier label for the "Fence ready" text, from the real
   // confinement-class list.
-  const strongest = status ? strongestAvailable(status.runner.confinement_classes) : undefined;
-  const strongestLabel = strongest ? CC_META[strongest].label : CC_META.CC1.label;
+  const strongest = status
+    ? strongestAvailable(status.runner.confinement_classes)
+    : undefined;
+  const strongestLabel = strongest
+    ? CC_META[strongest].label
+    : CC_META.CC1.label;
   // Barrier (the one hard requirement) + Model (optional). The model chip reads
   // neutral "optional" when absent — not a warning "Needs setup" — because a run
   // works with no model (you drive it, or bring your own container). No Composer
@@ -112,7 +135,8 @@ function ReadinessRow({ status, loading }: { status: SetupStatus | null; loading
       </Chip>
     ) : readiness.llmReady ? (
       <Chip tone="success" dot>
-        <KeyRound className="size-3" /> {readiness.llmLabel ? `Model: ${readiness.llmLabel}` : "Model: ready"}
+        <KeyRound className="size-3" />{" "}
+        {readiness.llmLabel ? `Model: ${readiness.llmLabel}` : "Model: ready"}
       </Chip>
     ) : (
       <Chip tone="neutral">
@@ -121,16 +145,27 @@ function ReadinessRow({ status, loading }: { status: SetupStatus | null; loading
     );
   return (
     <div className="mt-8 w-full rounded-xl border border-border bg-muted/40 p-4 text-left">
-      <div className="mb-3 text-sm text-muted-foreground">This host right now:</div>
+      <div className="mb-3 text-sm text-muted-foreground">
+        This host right now:
+      </div>
       <div className="flex flex-wrap gap-2">
-        {chip(BrickWall, !!readiness?.barrierReady, `Barrier: ${strongestLabel} ready`, "Barrier: needs setup")}
+        {chip(
+          BrickWall,
+          !!readiness?.barrierReady,
+          `Barrier: ${strongestLabel} ready`,
+          "Barrier: needs setup",
+        )}
         {modelChip}
       </div>
     </div>
   );
 }
 
-export function OnboardingScreen({ onGetStarted }: { onGetStarted: () => void }) {
+export function OnboardingScreen({
+  onGetStarted,
+}: {
+  onGetStarted: () => void;
+}) {
   const [status, setStatus] = React.useState<SetupStatus | null>(null);
   const [loading, setLoading] = React.useState(true);
 
@@ -180,8 +215,9 @@ export function OnboardingScreen({ onGetStarted }: { onGetStarted: () => void })
       </div>
 
       <p className="mt-6 max-w-[560px] text-xs text-muted-foreground">
-        A quick guided setup — the barrier is the only requirement; a model or agent
-        is optional. You can revisit anytime under “Getting started” in the sidebar.
+        A quick guided setup — the barrier is the only requirement; a model or
+        agent is optional. You can revisit anytime under “Getting started” in
+        the sidebar.
       </p>
 
       <EpisodeList />

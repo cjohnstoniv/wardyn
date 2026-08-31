@@ -12,7 +12,6 @@ import {
   markIntegrationsSkipped,
   loadVisitedSteps,
   markStepVisited,
-  markMemberGettingStartedSeen,
   setupGateActive,
 } from "./setup-gate";
 
@@ -49,7 +48,9 @@ describe("setup-gate — the funnel's own per-browser state (no hard gate any mo
   // would otherwise send a broken backend into a tour reading un-ready at every
   // step instead of to Runs, where AppShell renders the unreachable banner.
   it("an unreachable daemon lands on Runs, not the tour", () => {
-    expect(firstRunLanding({ unreachable: true, has_runs: false })).toBe("/runs");
+    expect(firstRunLanding({ unreachable: true, has_runs: false })).toBe(
+      "/runs",
+    );
   });
 
   it("integrationsSkipped()/markIntegrationsSkipped() round-trip through localStorage", () => {
@@ -70,24 +71,52 @@ describe("setup-gate — the funnel's own per-browser state (no hard gate any mo
 describe("firstRunLanding — a member takes a different rule than the admin", () => {
   beforeEach(() => localStorage.clear());
 
-  it("an undismissed member opens on their own Getting Started", () => {
+  // A member always lands on THEIR page; it is theirs to leave. The old
+  // per-browser "seen" flag is gone: its one stated purpose (surviving a
+  // pruning of the member's runs) guards a scenario this codebase cannot
+  // produce, while its live failure mode — a shared browser handing member B
+  // member A's mark — was real. Done-states come from the page's own
+  // creator-scoped listRuns, not from this decision.
+  it("a member opens on their own Getting Started", () => {
     expect(firstRunLanding({ has_runs: false }, "member")).toBe("/setup");
   });
 
-  it("markMemberGettingStartedSeen() retires the redirect for that member", () => {
-    markMemberGettingStartedSeen();
-    expect(firstRunLanding({ has_runs: false }, "member")).toBe("/runs");
-  });
-
   it("an unreachable daemon lands a member on Runs, not the tour", () => {
-    expect(firstRunLanding({ unreachable: true, has_runs: false }, "member")).toBe("/runs");
+    expect(
+      firstRunLanding({ unreachable: true, has_runs: false }, "member"),
+    ).toBe("/runs");
   });
 
   // Negative control: has_runs is a GLOBAL server signal (someone else's
-  // runs). A member's own landing must consult only their own per-browser
-  // flag, never this field.
+  // runs). A member's landing never consults it.
   it("a member with global has_runs:true still opens on their own Getting Started", () => {
     expect(firstRunLanding({ has_runs: true }, "member")).toBe("/setup");
+  });
+});
+
+describe("firstRunLanding — the INSTALL's onboarding mark decides for an admin", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("a server-onboarded install lands on Runs, whatever this browser thinks", () => {
+    // No local flag set — a browser that has never been here before.
+    expect(
+      firstRunLanding({ has_runs: false, onboarding_complete: true }),
+    ).toBe("/runs");
+  });
+
+  it("a server-NOT-onboarded install opens the tour even if this browser dismissed one before", () => {
+    // The origin-scoped-flag bug, pinned as a spec: a stale local dismiss must
+    // not skip a fresh install's tour once the server says not-onboarded.
+    dismissSetup();
+    expect(
+      firstRunLanding({ has_runs: false, onboarding_complete: false }),
+    ).toBe("/setup");
+  });
+
+  it("an older daemon (field absent) falls back to the legacy browser flag", () => {
+    expect(firstRunLanding({ has_runs: false })).toBe("/setup");
+    dismissSetup();
+    expect(firstRunLanding({ has_runs: false })).toBe("/runs");
   });
 });
 

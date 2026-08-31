@@ -44,4 +44,18 @@ export const setup = {
       return READY_FALLBACK;
     }
   },
+
+  // POST /api/v1/setup/onboarding-complete — stamps the INSTALL as onboarded
+  // (idempotent server-side; the first completion is the fact of record).
+  // Best-effort by design: the operator finishing the funnel must land on
+  // Runs even if this write races a restart — an older daemon without the
+  // endpoint just means the funnel re-offers itself, which is the honest
+  // degradation.
+  async completeOnboarding(): Promise<void> {
+    try {
+      await wfetch("/setup/onboarding-complete", { method: "POST" });
+    } catch {
+      // Deliberate: see above.
+    }
+  },
 };

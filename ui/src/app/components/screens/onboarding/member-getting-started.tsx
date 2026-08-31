@@ -20,9 +20,21 @@
 // readings flip together instead of drifting after a write.
 import * as React from "react";
 import { Link } from "react-router-dom";
-import { AlertTriangle, FolderOpen, KeyRound, Rocket, ShieldCheck, Terminal } from "lucide-react";
+import {
+  AlertTriangle,
+  FolderOpen,
+  KeyRound,
+  Rocket,
+  ShieldCheck,
+  Terminal,
+} from "lucide-react";
 import { Button } from "../../ui/button";
-import { Chip, DoneChip, SectionCard, SectionLabel } from "../../wardyn/primitives";
+import {
+  Chip,
+  DoneChip,
+  SectionCard,
+  SectionLabel,
+} from "../../wardyn/primitives";
 import { MEMBER_GETTING_STARTED as T } from "../../wardyn/copy";
 import { CC_META } from "../../wardyn/cc-meta";
 import { strongestAvailable } from "../../wardyn/default-confinement";
@@ -33,7 +45,6 @@ import { runs as runsApi } from "../../../lib/api/runs";
 import { sshKeys as sshKeysApi } from "../../../lib/api/ssh-keys";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { MEMBER_WORKSPACE } from "../../../lib/permissions-copy";
-import { markMemberGettingStartedSeen } from "../setup/setup-gate";
 import { episodesFor, MEMBER_SECTION_IDS } from "../../../lib/demo-videos";
 import { EpisodeRow } from "./episode-card";
 import { YourModelKey } from "./your-model-key";
@@ -55,7 +66,12 @@ export function MemberGettingStarted() {
     };
   }, [retryTick]);
 
-  const { workspaces, loading: wsLoading, error: wsError, reload: reloadWorkspaces } = useWorkspaceList();
+  const {
+    workspaces,
+    loading: wsLoading,
+    error: wsError,
+    reload: reloadWorkspaces,
+  } = useWorkspaceList();
   const memberLocalDirRoot = useMemberLocalDirRoot();
   React.useEffect(() => {
     reloadWorkspaces();
@@ -108,13 +124,6 @@ export function MemberGettingStarted() {
   const firstRunDone = !unreachable && (ownRuns?.length ?? 0) > 0;
   const connectDone = !unreachable && (sshKeyCount ?? 0) > 0;
 
-  // Mark the funnel "seen" the FIRST time this screen observes a non-empty
-  // own-runs list — never on a failed fetch (ownRuns stays null, firstRunDone
-  // stays false, this effect never fires).
-  React.useEffect(() => {
-    if (firstRunDone) markMemberGettingStartedSeen();
-  }, [firstRunDone]);
-
   // Colour budget over the four ACTIONABLE sections, in page order. The other
   // two (setup summary, approvals) are informational and never win the one
   // `default` slot.
@@ -125,9 +134,12 @@ export function MemberGettingStarted() {
     { key: "connect-tools", done: connectDone },
   ];
   const firstNotDone = actionable.find((s) => !s.done)?.key;
-  const variantFor = (key: string): Variant => (key === firstNotDone ? "default" : "outline");
+  const variantFor = (key: string): Variant =>
+    key === firstNotDone ? "default" : "outline";
 
-  const strongest = status ? strongestAvailable(status.runner.confinement_classes) : undefined;
+  const strongest = status
+    ? strongestAvailable(status.runner.confinement_classes)
+    : undefined;
 
   const memberEpisodes = MEMBER_SECTION_IDS.flatMap((id) => episodesFor(id));
 
@@ -139,7 +151,10 @@ export function MemberGettingStarted() {
       <div className="mt-8 space-y-4">
         <SectionCard title={T.SETUP_SUMMARY_TITLE}>
           {unreachable ? (
-            <div role="alert" className="rounded-lg border border-warning/40 bg-warning-subtle p-3 text-sm text-warning">
+            <div
+              role="alert"
+              className="rounded-lg border border-warning/40 bg-warning-subtle p-3 text-sm text-warning"
+            >
               <div className="flex items-start gap-2">
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" />
                 <div>
@@ -159,15 +174,23 @@ export function MemberGettingStarted() {
           ) : (
             <>
               <div className="flex flex-wrap gap-2">
-                {strongest && <Chip tone="neutral">{T.BARRIER_CHIP(CC_META[strongest].label)}</Chip>}
+                {strongest && (
+                  <Chip tone="neutral">
+                    {T.BARRIER_CHIP(CC_META[strongest].label)}
+                  </Chip>
+                )}
                 {hasOwnKey ? (
                   <Chip tone="success">{T.MODEL_ACCESS_OWN_CHIP}</Chip>
                 ) : llmReady ? (
                   <Chip tone="success">{T.MODEL_ACCESS_PROVIDED_CHIP}</Chip>
                 ) : null}
-                {status?.auth.mode === "sso" && <Chip tone="info">{T.SIGNIN_SSO_CHIP}</Chip>}
+                {status?.auth.mode === "sso" && (
+                  <Chip tone="info">{T.SIGNIN_SSO_CHIP}</Chip>
+                )}
               </div>
-              <p className="mt-3 text-sm text-muted-foreground">{T.SETUP_SUMMARY_HELPER}</p>
+              <p className="mt-3 text-sm text-muted-foreground">
+                {T.SETUP_SUMMARY_HELPER}
+              </p>
             </>
           )}
         </SectionCard>
@@ -178,10 +201,19 @@ export function MemberGettingStarted() {
           right={workspaceDone ? <DoneChip /> : undefined}
         >
           <p className="text-sm text-muted-foreground">{T.WORKSPACE_BODY}</p>
-          <p className="mt-1 text-sm text-muted-foreground">{memberLocalDirHint(memberLocalDirRoot)}</p>
-          {wsError && <p className="mt-1 text-xs text-danger">{T.WORKSPACE_ERROR}</p>}
+          <p className="mt-1 text-sm text-muted-foreground">
+            {memberLocalDirHint(memberLocalDirRoot)}
+          </p>
+          {wsError && (
+            <p className="mt-1 text-xs text-danger">{T.WORKSPACE_ERROR}</p>
+          )}
           {!workspaceDone && (
-            <Button asChild variant={variantFor("workspace")} size="sm" className="mt-3">
+            <Button
+              asChild
+              variant={variantFor("workspace")}
+              size="sm"
+              className="mt-3"
+            >
               <Link to="/workspaces">{T.WORKSPACE_ACTION}</Link>
             </Button>
           )}
@@ -195,11 +227,22 @@ export function MemberGettingStarted() {
           onChanged={loadSecrets}
         />
 
-        <SectionCard title={T.FIRST_RUN_TITLE} Icon={Rocket} right={firstRunDone ? <DoneChip /> : undefined}>
+        <SectionCard
+          title={T.FIRST_RUN_TITLE}
+          Icon={Rocket}
+          right={firstRunDone ? <DoneChip /> : undefined}
+        >
           <p className="text-sm text-muted-foreground">{T.FIRST_RUN_BODY}</p>
-          <p className="mt-1 text-sm text-muted-foreground">{T.FIRST_RUN_HINT}</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {T.FIRST_RUN_HINT}
+          </p>
           {!firstRunDone && (
-            <Button asChild variant={variantFor("first-run")} size="sm" className="mt-3">
+            <Button
+              asChild
+              variant={variantFor("first-run")}
+              size="sm"
+              className="mt-3"
+            >
               <Link to="/runs/new">{T.FIRST_RUN_ACTION}</Link>
             </Button>
           )}
@@ -207,20 +250,33 @@ export function MemberGettingStarted() {
 
         <SectionCard title={T.APPROVALS_TITLE} Icon={ShieldCheck}>
           <p className="text-sm text-muted-foreground">{T.APPROVALS_BODY}</p>
-          <p className="mt-1 text-sm text-muted-foreground">{T.APPROVALS_HINT}</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {T.APPROVALS_HINT}
+          </p>
           <Button asChild variant="outline" size="sm" className="mt-3">
             <Link to="/approvals">{T.APPROVALS_ACTION}</Link>
           </Button>
         </SectionCard>
 
-        <SectionCard title={T.CONNECT_TITLE} Icon={Terminal} right={connectDone ? <DoneChip /> : undefined}>
+        <SectionCard
+          title={T.CONNECT_TITLE}
+          Icon={Terminal}
+          right={connectDone ? <DoneChip /> : undefined}
+        >
           <p className="text-sm text-muted-foreground">{T.CONNECT_BODY}</p>
           <p className="mt-1 text-sm text-muted-foreground">
             {T.CONNECT_HINT_PREFIX}
-            <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">{T.CONNECT_COMMAND}</code>
+            <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+              {T.CONNECT_COMMAND}
+            </code>
           </p>
           {!connectDone && (
-            <Button asChild variant={variantFor("connect-tools")} size="sm" className="mt-3">
+            <Button
+              asChild
+              variant={variantFor("connect-tools")}
+              size="sm"
+              className="mt-3"
+            >
               <Link to="/ssh-keys">
                 <KeyRound className="size-3.5" /> {T.CONNECT_ACTION}
               </Link>
@@ -246,5 +302,7 @@ export function MemberGettingStarted() {
 // One fact, one string — never a second copy of the same root-boundary
 // sentence (permissions-copy.ts's own note on ROOT_HINT/LOCAL_DIR_UNAVAILABLE_BODY).
 function memberLocalDirHint(root: string | null): string {
-  return root ? MEMBER_WORKSPACE.ROOT_HINT(root) : MEMBER_WORKSPACE.LOCAL_DIR_UNAVAILABLE_BODY;
+  return root
+    ? MEMBER_WORKSPACE.ROOT_HINT(root)
+    : MEMBER_WORKSPACE.LOCAL_DIR_UNAVAILABLE_BODY;
 }

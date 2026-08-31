@@ -381,7 +381,10 @@ export default function App() {
             path="/setup"
             element={
               <React.Suspense fallback={<RouteFallback />}>
-                <GettingStarted onDone={() => navigate("/runs")} />
+                <GettingStarted
+                  onDone={() => navigate("/runs")}
+                  status={setupStatus}
+                />
               </React.Suspense>
             }
           />

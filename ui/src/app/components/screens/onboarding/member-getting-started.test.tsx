@@ -38,11 +38,13 @@ vi.mock("../../../lib/api/ssh-keys", () => ({
 
 const listWorkspacesMock = vi.fn();
 vi.mock("../../../lib/api/workspaces", () => ({
-  workspaces: { listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a), scanWorkspace: vi.fn() },
+  workspaces: {
+    listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a),
+    scanWorkspace: vi.fn(),
+  },
 }));
 
 import { MemberGettingStarted } from "./member-getting-started";
-import { memberGettingStartedSeen } from "../setup/setup-gate";
 
 function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
   return baseStatus({
@@ -67,8 +69,8 @@ function renderPage() {
 }
 
 function defaultButtons(): Element[] {
-  return Array.from(document.querySelectorAll('[data-slot="button"]')).filter((el) =>
-    el.className.includes("bg-primary "),
+  return Array.from(document.querySelectorAll('[data-slot="button"]')).filter(
+    (el) => el.className.includes("bg-primary "),
   );
 }
 
@@ -96,7 +98,9 @@ describe("MemberGettingStarted", () => {
     ]) {
       // Section titles are <h2> headings; "Your first run" also names an
       // episode row (id 06) in the Watch list below, so scope to the heading.
-      expect(await screen.findByRole("heading", { name: title })).toBeInTheDocument();
+      expect(
+        await screen.findByRole("heading", { name: title }),
+      ).toBeInTheDocument();
     }
     expect(screen.queryByText("Pick your barrier")).not.toBeInTheDocument();
   });
@@ -106,24 +110,22 @@ describe("MemberGettingStarted", () => {
     listRunsMock.mockResolvedValue([]); // the member's own creator-scoped list
     renderPage();
 
+    // The section stays actionable: done-state comes from the member's OWN
+    // creator-scoped list, never the install-global has_runs.
     await screen.findByRole("heading", { name: "Your first run" });
-    expect(await screen.findByRole("link", { name: "New run" })).toBeInTheDocument();
-    await waitFor(() => expect(memberGettingStartedSeen()).toBe(false));
+    expect(
+      await screen.findByRole("link", { name: "New run" }),
+    ).toBeInTheDocument();
   });
 
-  it("a rejecting listRuns() leaves the section not-done and writes no flag", async () => {
+  it("a rejecting listRuns() leaves the section not-done", async () => {
     listRunsMock.mockRejectedValue(new Error("network"));
     renderPage();
 
+    // Fail-closed: no observed runs, the section stays actionable. (The old
+    // per-browser "seen" flag this screen once wrote is gone — a member's
+    // landing no longer depends on any browser state.)
     await screen.findByRole("link", { name: "New run" });
-    expect(memberGettingStartedSeen()).toBe(false);
-  });
-
-  it("marks the seen flag once a non-empty own-runs list is observed", async () => {
-    listRunsMock.mockResolvedValue([run("r1")]);
-    renderPage();
-
-    await waitFor(() => expect(memberGettingStartedSeen()).toBe(true));
   });
 
   it("exactly one default-variant action cold, and zero once every actionable section is done", async () => {
@@ -133,12 +135,19 @@ describe("MemberGettingStarted", () => {
     cold.unmount();
 
     listWorkspacesMock.mockResolvedValue([{ id: "w1" }]);
-    listSecretsMineMock.mockResolvedValue({ names: ["anthropic-api-key"], mine: ["anthropic-api-key"] });
+    listSecretsMineMock.mockResolvedValue({
+      names: ["anthropic-api-key"],
+      mine: ["anthropic-api-key"],
+    });
     listRunsMock.mockResolvedValue([run("r1")]);
-    listKeysMock.mockResolvedValue([{ fingerprint: "SHA256:abc", principal: "p", name: "k", public_key: "" }]);
+    listKeysMock.mockResolvedValue([
+      { fingerprint: "SHA256:abc", principal: "p", name: "k", public_key: "" },
+    ]);
 
     const { unmount } = renderPage();
-    await waitFor(() => expect(screen.queryAllByText("Done").length).toBeGreaterThan(0));
+    await waitFor(() =>
+      expect(screen.queryAllByText("Done").length).toBeGreaterThan(0),
+    );
     expect(defaultButtons().length).toBe(0);
     unmount();
   });
@@ -147,11 +156,18 @@ describe("MemberGettingStarted", () => {
     getSetupStatusMock.mockResolvedValue({ ...status(), unreachable: true });
     listWorkspacesMock.mockResolvedValue([{ id: "w1" }]);
     listRunsMock.mockResolvedValue([run("r1")]);
-    listKeysMock.mockResolvedValue([{ fingerprint: "SHA256:abc", principal: "p", name: "k", public_key: "" }]);
-    listSecretsMineMock.mockResolvedValue({ names: ["anthropic-api-key"], mine: ["anthropic-api-key"] });
+    listKeysMock.mockResolvedValue([
+      { fingerprint: "SHA256:abc", principal: "p", name: "k", public_key: "" },
+    ]);
+    listSecretsMineMock.mockResolvedValue({
+      names: ["anthropic-api-key"],
+      mine: ["anthropic-api-key"],
+    });
 
     renderPage();
-    expect(await screen.findByText("Couldn't reach Wardyn.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Couldn't reach Wardyn."),
+    ).toBeInTheDocument();
     expect(
       screen.getByText(/Nothing below is marked done until it can be checked/),
     ).toBeInTheDocument();
@@ -169,26 +185,41 @@ describe("MemberGettingStarted", () => {
     getSetupStatusMock.mockResolvedValue(status({ llm_ready: true }));
     listSecretsMineMock
       .mockResolvedValueOnce({ names: [], mine: [] })
-      .mockResolvedValueOnce({ names: ["anthropic-api-key"], mine: ["anthropic-api-key"] })
+      .mockResolvedValueOnce({
+        names: ["anthropic-api-key"],
+        mine: ["anthropic-api-key"],
+      })
       .mockResolvedValueOnce({ names: [], mine: [] });
     const user = userEvent.setup();
     renderPage();
 
-    expect(await screen.findByText("Model access · Provided by your admin")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Model access · Provided by your admin"),
+    ).toBeInTheDocument();
     expect(listSecretsMineMock).toHaveBeenCalledTimes(1);
 
-    await user.click(screen.getByRole("button", { name: "Use my own key instead" }));
+    await user.click(
+      screen.getByRole("button", { name: "Use my own key instead" }),
+    );
     await user.type(screen.getByPlaceholderText("sk-ant-…"), "sk-ant-abcdefgh");
     await user.click(screen.getByRole("button", { name: "Save key" }));
 
-    expect(await screen.findByText("Model access · Your key")).toBeInTheDocument();
-    expect(screen.queryByText("Model access · Provided by your admin")).not.toBeInTheDocument();
+    expect(
+      await screen.findByText("Model access · Your key"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Model access · Provided by your admin"),
+    ).not.toBeInTheDocument();
     expect(listSecretsMineMock).toHaveBeenCalledTimes(2);
 
     await user.click(screen.getByRole("button", { name: "Remove" }));
 
-    expect(await screen.findByText("Model access · Provided by your admin")).toBeInTheDocument();
-    expect(screen.queryByText("Model access · Your key")).not.toBeInTheDocument();
+    expect(
+      await screen.findByText("Model access · Provided by your admin"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Model access · Your key"),
+    ).not.toBeInTheDocument();
     expect(listSecretsMineMock).toHaveBeenCalledTimes(3);
   });
 });

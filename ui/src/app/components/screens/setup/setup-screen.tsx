@@ -20,19 +20,32 @@
 // is per-browser cosmetic state, not a lock on the rest of the console.
 import * as React from "react";
 import { useSearchParams } from "react-router-dom";
-import type { ConfinementClass, SetupStatus, SiteConfig } from "../../../lib/types";
+import type {
+  ConfinementClass,
+  SetupStatus,
+  SiteConfig,
+} from "../../../lib/types";
 import { health as healthApi } from "../../../lib/api/health";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { deriveIntegrations } from "../../../lib/api/integrations";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
-import { getDefaultCc, resolveDefaultCc, setDefaultCc } from "../../wardyn/default-confinement";
+import {
+  getDefaultCc,
+  resolveDefaultCc,
+  setDefaultCc,
+} from "../../wardyn/default-confinement";
 import { deriveReadiness, lastCheckedLabel } from "../../../lib/readiness";
 import { useOperator } from "../../wardyn/operator-context";
 import { SetupLayout } from "./setup-layout";
 import { PhaseRail } from "./phase-rail";
 import { EnvironmentStep } from "./environment-step";
-import { CorpNetworkStep, isProxyConfigured, proxyDetected, type CorpStepActions } from "./corp-network-step";
+import {
+  CorpNetworkStep,
+  isProxyConfigured,
+  proxyDetected,
+  type CorpStepActions,
+} from "./corp-network-step";
 import { IntegrationsStep } from "./integrations-step";
 import { DeploymentStep, ReviewStep, WorkspacesStep } from "./step-bodies";
 import {
@@ -85,7 +98,9 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     // steps survive) isn't known yet at mount, which is exactly what
     // stepOrder(null) returns. An unmet step that slips through here is pulled
     // back by the re-correct effect below the moment status lands.
-    return want && (stepOrder(null) as string[]).includes(want) ? (want as SetupStepId) : "environment";
+    return want && (stepOrder(null) as string[]).includes(want)
+      ? (want as SetupStepId)
+      : "environment";
   });
   const [status, setStatus] = React.useState<SetupStatus | null>(null);
   const [rechecking, setRechecking] = React.useState(false);
@@ -103,7 +118,9 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // a checkmark with nothing connected. Per-browser (setup-gate); a real
   // connected integration supersedes it. Generalized from the old per-step
   // "model-skipped" flag now that the provider picker lives inside Integrations.
-  const [skippedIntegrations, setSkippedIntegrations] = React.useState(integrationsSkipped());
+  const [skippedIntegrations, setSkippedIntegrations] = React.useState(
+    integrationsSkipped(),
+  );
   // Corporate network's gate proof (proxy probe / egress-tab visit / per-redirect
   // tests) — held HERE, not inside CorpNetworkStep, because that component
   // unmounts on navigation and this must survive leaving and re-entering the
@@ -111,14 +128,24 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // never persisted: a stale "reached" surviving a reload would be exactly the
   // false reassurance this whole feature exists to prevent.
   const [corpGate, setCorpGate] = React.useState<
-    Pick<CorpNetworkState, "proxyProbe" | "probeRunning" | "customDraft" | "redirectProbes">
+    Pick<
+      CorpNetworkState,
+      "proxyProbe" | "probeRunning" | "customDraft" | "redirectProbes"
+    >
   >({
     probeRunning: false,
     customDraft: "",
     redirectProbes: {},
   });
   const onCorpGateChange = React.useCallback(
-    (patch: Partial<Pick<CorpNetworkState, "proxyProbe" | "probeRunning" | "customDraft" | "redirectProbes">>) => {
+    (
+      patch: Partial<
+        Pick<
+          CorpNetworkState,
+          "proxyProbe" | "probeRunning" | "customDraft" | "redirectProbes"
+        >
+      >,
+    ) => {
       setCorpGate((g) => ({ ...g, ...patch }));
     },
     [],
@@ -139,7 +166,11 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     () => new Set(loadVisitedSteps()),
   );
   const [secretNames, setSecretNames] = React.useState<string[]>([]);
-  const { workspaces, loading: wsLoading, reload: loadWorkspaces } = useWorkspaceList();
+  const {
+    workspaces,
+    loading: wsLoading,
+    reload: loadWorkspaces,
+  } = useWorkspaceList();
   // Site config feeds the Integrations step's own derivation (SCM/mirror/proxy
   // rows) — read-only here now that the three corporate-baseline steps that
   // used to write it (Host Proxy / SCM Provider / Artifact Redirect) are gone
@@ -149,7 +180,9 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // Default-barrier pick (E3). Null until an explicit click — until then the
   // effective selection is the resolved default (persisted pick if this host runs
   // it, else strongest available). Clicking a ready card both selects and persists.
-  const [ccOverride, setCcOverride] = React.useState<ConfinementClass | null>(null);
+  const [ccOverride, setCcOverride] = React.useState<ConfinementClass | null>(
+    null,
+  );
   const selectDefault = React.useCallback((cc: ConfinementClass) => {
     setCcOverride(cc);
     setDefaultCc(cc);
@@ -204,7 +237,8 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
       const order = stepOrder(status);
       if (order.indexOf(next) <= order.indexOf(from)) return undefined;
       if (DEMOS.some((d) => d.id === next)) return undefined;
-      if (order.indexOf(next) <= order.indexOf("corp_network")) return undefined;
+      if (order.indexOf(next) <= order.indexOf("corp_network"))
+        return undefined;
       return gate.reason;
     },
     [stepId, status],
@@ -244,7 +278,11 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // which already enforces canSelect and the visited bookkeeping.
   React.useEffect(() => {
     const want = searchParams.get("step");
-    if (want && want !== stepId && (stepOrder(status) as string[]).includes(want)) {
+    if (
+      want &&
+      want !== stepId &&
+      (stepOrder(status) as string[]).includes(want)
+    ) {
       selectStep(want as SetupStepId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only param changes re-run this
@@ -255,7 +293,10 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // embedded Integrations step's own "Add integration" dialog, which keeps
   // its own local copy (see integrations/add-integration-dialog.tsx).
   const reloadSiteConfig = React.useCallback(() => {
-    return healthApi.getSiteConfig().then(setSiteConfig).catch(() => {});
+    return healthApi
+      .getSiteConfig()
+      .then(setSiteConfig)
+      .catch(() => {});
   }, []);
 
   // The one write path into SiteConfig from within Getting Started — today
@@ -271,7 +312,10 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   );
 
   const loadSecrets = React.useCallback(() => {
-    secretsApi.listSecrets().then(setSecretNames).catch(() => setSecretNames([]));
+    secretsApi
+      .listSecrets()
+      .then(setSecretNames)
+      .catch(() => setSecretNames([]));
   }, []);
 
   const recheck = React.useCallback(() => {
@@ -340,10 +384,18 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     const order = stepOrder(status);
     if (order.includes(stepId)) return;
     const before = STEP_ORDER.slice(0, STEP_ORDER.indexOf(stepId));
-    setStepId([...before].reverse().find((id) => order.includes(id)) ?? order[0]);
+    setStepId(
+      [...before].reverse().find((id) => order.includes(id)) ?? order[0],
+    );
   }, [status, stepId]);
 
   const finish = React.useCallback(() => {
+    // The INSTALL records completion (POST /setup/onboarding-complete,
+    // idempotent, audited). The per-browser flag is still written as a legacy
+    // fallback: an older daemon omits onboarding_complete from /setup/status,
+    // and firstRunLanding treats absent as not-onboarded — without the local
+    // flag such a daemon would re-open the tour on every visit forever.
+    void setupApi.completeOnboarding();
     dismissSetup();
     onDone();
   }, [onDone]);
@@ -372,13 +424,20 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // land on this screen. Only an operator's fully-informed, non-empty class
   // list may seed the initial persisted default.
   React.useEffect(() => {
-    if (status && status.runner.confinement_classes.length > 0 && !getDefaultCc()) setDefaultCc(selectedCc);
+    if (
+      status &&
+      status.runner.confinement_classes.length > 0 &&
+      !getDefaultCc()
+    )
+      setDefaultCc(selectedCc);
   }, [status, selectedCc]);
 
   if (!status || !readiness) {
     return (
       <div className="mx-auto w-full max-w-[1200px] px-6 py-8">
-        <p className="text-sm text-muted-foreground">Checking Wardyn&apos;s setup…</p>
+        <p className="text-sm text-muted-foreground">
+          Checking Wardyn&apos;s setup…
+        </p>
       </div>
     );
   }
@@ -389,13 +448,22 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   if (status.unreachable) {
     return (
       <div className="mx-auto w-full max-w-[1200px] px-6 py-8">
-        <h1 className="text-lg font-semibold text-foreground">Getting started</h1>
+        <h1 className="text-lg font-semibold text-foreground">
+          Getting started
+        </h1>
         <div className="mt-4 max-w-xl rounded-lg border border-border bg-muted/40 p-4">
           <p className="text-sm text-foreground">Couldn&apos;t reach Wardyn.</p>
           <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-            The setup status request didn&apos;t get an answer, so nothing on this page would be
-            trustworthy. Check that wardynd is running (<code className="rounded bg-background/70 px-1 py-0.5 text-xs">make setup</code>
-            , logs in <code className="rounded bg-background/70 px-1 py-0.5 text-xs">~/.wardyn/host-wardynd.log</code>), then re-check.
+            The setup status request didn&apos;t get an answer, so nothing on
+            this page would be trustworthy. Check that wardynd is running (
+            <code className="rounded bg-background/70 px-1 py-0.5 text-xs">
+              make setup
+            </code>
+            , logs in{" "}
+            <code className="rounded bg-background/70 px-1 py-0.5 text-xs">
+              ~/.wardyn/host-wardynd.log
+            </code>
+            ), then re-check.
           </p>
           <button
             className="mt-3 rounded-md border border-border px-3 py-1.5 text-sm text-foreground hover:bg-muted disabled:opacity-50"
@@ -421,7 +489,8 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // below) — counting them here too would double-count one configuration under
   // two steps.
   const integrationsData = deriveIntegrations(status, siteConfig, secretNames);
-  const integrationsCount = integrationsData.ai.length + integrationsData.scm.length;
+  const integrationsCount =
+    integrationsData.ai.length + integrationsData.scm.length;
   integrationsCountRef.current = integrationsCount;
   const corpRedirects = siteConfig?.egress_redirects ?? [];
   const corpNetwork: CorpNetworkState = {
@@ -440,8 +509,22 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // rail nor the footer offers a step whose Start is closed. badges/done stay
   // keyed by the full STEP_ORDER: a dropped step just never gets rendered.
   const walkOrder = stepOrder(status);
-  const badges = stepBadges(status, readiness, workspaces, integrationsCount, corpNetwork, corpRedirects);
-  const done = stepDone(status, readiness, workspaces, integrationsCount, corpNetwork, corpRedirects);
+  const badges = stepBadges(
+    status,
+    readiness,
+    workspaces,
+    integrationsCount,
+    corpNetwork,
+    corpRedirects,
+  );
+  const done = stepDone(
+    status,
+    readiness,
+    workspaces,
+    integrationsCount,
+    corpNetwork,
+    corpRedirects,
+  );
   // Each demo sub-step earns its checkmark once THAT demo has been launched (a
   // per-browser signal kept out of the pure stepBadges/stepDone — see steps.ts).
   for (const id of DEMO_STEP_IDS) {
@@ -486,7 +569,10 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // disabled Next — one launch point that names what it will do); while it is
   // ON a head/reason can still be present (no_runner / a custom-endpoint
   // pass) and renders as a neutral standing note beside the ENABLED button.
-  const corpGateResult = stepId === "corp_network" ? corpNetworkGate(corpNetwork, corpRedirects, corpTab) : null;
+  const corpGateResult =
+    stepId === "corp_network"
+      ? corpNetworkGate(corpNetwork, corpRedirects, corpTab)
+      : null;
   const dispatchCorpAction = (kind: CorpGateActionKind) => {
     const a = corpActionsRef.current;
     if (!a) return;
@@ -509,7 +595,10 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         reason: corpGateResult.reason,
         tone: corpGateResult.tone,
         action: corpGateResult.action
-          ? { label: corpGateResult.action.label, onClick: () => dispatchCorpAction(corpGateResult.action!.kind) }
+          ? {
+              label: corpGateResult.action.label,
+              onClick: () => dispatchCorpAction(corpGateResult.action!.kind),
+            }
           : undefined,
         nextLabel: corpOnProxyTab ? "Next: Egress redirection" : undefined,
         onNext: corpOnProxyTab ? () => setCorpTab("egress") : undefined,
@@ -537,7 +626,11 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         onSelect={selectStep}
         onFinish={finish}
         nextGate={nextGate}
-        backOverride={stepId === "corp_network" && corpTab === "egress" ? () => setCorpTab("proxy") : undefined}
+        backOverride={
+          stepId === "corp_network" && corpTab === "egress"
+            ? () => setCorpTab("proxy")
+            : undefined
+        }
         operator={operator}
       >
         {stepId === "environment" && (
@@ -569,23 +662,35 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
           />
         )}
         {stepId === "integrations" && (
-          <IntegrationsStep status={status} siteConfig={siteConfig} onRecheck={recheck} />
+          <IntegrationsStep
+            status={status}
+            siteConfig={siteConfig}
+            onRecheck={recheck}
+          />
         )}
         {DEMOS.some((d) => d.id === stepId) && (
           <React.Suspense
-            fallback={<p className="text-sm text-muted-foreground">Loading demo…</p>}
+            fallback={
+              <p className="text-sm text-muted-foreground">Loading demo…</p>
+            }
           >
             <DemoDetail
               demo={DEMOS.find((d) => d.id === stepId)!}
               barrierReady={readiness.barrierReady}
               githubAppReady={status ? !!status.secrets.github_app : true}
               onJump={selectStep}
-              onDemoLaunched={(id) => setLaunchedDemos((s) => new Set(s).add(id))}
+              onDemoLaunched={(id) =>
+                setLaunchedDemos((s) => new Set(s).add(id))
+              }
             />
           </React.Suspense>
         )}
         {stepId === "workspaces" && (
-          <WorkspacesStep workspaces={workspaces} loading={wsLoading} onReload={loadWorkspaces} />
+          <WorkspacesStep
+            workspaces={workspaces}
+            loading={wsLoading}
+            onReload={loadWorkspaces}
+          />
         )}
         {stepId === "review" && (
           <ReviewStep

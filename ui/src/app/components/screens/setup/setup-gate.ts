@@ -53,20 +53,6 @@ export function dismissSetup(): void {
   lsSet(DISMISS_KEY, "1");
 }
 
-// Member Getting Started "seen" flag (Phase 5) — set the first time the
-// screen OBSERVES a non-empty own-runs list (never on a failed fetch), so a
-// member who has actually launched a run isn't sent back to the funnel by
-// firstRunLanding. Same lsGet/lsSet shape as DISMISS_KEY above.
-const MEMBER_GETTING_STARTED_SEEN_KEY = "wardyn-member-getting-started-seen";
-
-export function memberGettingStartedSeen(): boolean {
-  return lsGet(MEMBER_GETTING_STARTED_SEEN_KEY) === "1";
-}
-
-export function markMemberGettingStartedSeen(): void {
-  lsSet(MEMBER_GETTING_STARTED_SEEN_KEY, "1");
-}
-
 // Where "/" lands — App.tsx's FirstRunLanding is a thin wrapper over this.
 // Lives beside the dismiss flag it reads rather than in App.tsx so the whole
 // decision is one testable function.
@@ -85,15 +71,30 @@ export function markMemberGettingStartedSeen(): void {
 // default the rest of this codebase uses for an unresolved role), so every
 // existing admin call site is unaffected.
 export function firstRunLanding(
-  status: { unreachable?: boolean; has_runs: boolean },
+  status: {
+    unreachable?: boolean;
+    has_runs: boolean;
+    onboarding_complete?: boolean;
+  },
   role: Role = "admin",
 ): "/setup" | "/runs" {
   if (role === "member") {
-    return !status.unreachable && !memberGettingStartedSeen()
-      ? "/setup"
-      : "/runs";
+    // A member always lands on THEIR page (it is theirs to leave). Their
+    // done-states come from creator-scoped listRuns observed live by the page
+    // itself — never the install-global has_runs, and no longer a per-browser
+    // "seen" flag either: that flag's one stated purpose was surviving a
+    // pruning of the member's runs, and nothing in this codebase prunes runs,
+    // while its live failure mode (a shared browser handing member B member
+    // A's mark) was real.
+    return !status.unreachable ? "/setup" : "/runs";
   }
-  return !status.unreachable && !status.has_runs && !setupDismissed()
+  // The INSTALL's own onboarding mark decides (server-derived, survives a
+  // browser change, agrees between 127.0.0.1 and localhost). setupDismissed()
+  // remains ONLY as the legacy fallback for a daemon too old to report the
+  // field — `??`, not `||`: absent must fall back to the flag, or every visit
+  // to an older daemon reopens the tour forever.
+  const onboarded = status.onboarding_complete ?? setupDismissed();
+  return !status.unreachable && !status.has_runs && !onboarded
     ? "/setup"
     : "/runs";
 }

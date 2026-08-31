@@ -222,6 +222,15 @@ export interface SetupStatus {
   // reason as `bedrock` — READY_FALLBACK and older daemons omit it; treat
   // absent as "unknown", not "false".
   llm_ready?: boolean;
+  /** Whether an operator has finished (or deliberately left) the Getting
+   *  Started funnel ON THIS INSTALL — SiteConfig.OnboardingCompletedAt
+   *  flattened to one bit. A fact about the install, never the browser: the
+   *  browser flags this replaces outlived wiped databases and were
+   *  origin-scoped, so 127.0.0.1 and localhost disagreed. Optional for the
+   *  same fixture-compat reason as llm_ready — older daemons omit it; absent
+   *  reads as false (not onboarded), which opens the funnel rather than
+   *  hiding it. */
+  onboarding_complete?: boolean;
   checks: SetupCheck[];
   auth: {
     mode: "local" | "sso" | "token" | "disabled";
