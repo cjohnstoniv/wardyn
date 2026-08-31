@@ -123,6 +123,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// demoted or has left (migration 0045's stamp ceiling).
 	"GET /api/v1/tokens":                                 {class: classAdmin},
 	"DELETE /api/v1/tokens/{id}":                         {class: classAdmin},
+	"POST /api/v1/setup/onboarding-complete":                   {class: classAdmin},
 	"POST /api/v1/setup/harness-login":                   {class: classAdmin},
 	"PUT /api/v1/setup/harness-credential/{provider}":    {class: classAdmin},
 	"DELETE /api/v1/setup/harness-credential/{provider}": {class: classAdmin},

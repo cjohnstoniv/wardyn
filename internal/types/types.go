@@ -280,6 +280,21 @@ type SiteConfig struct {
 	// (validateInternalHosts) so every declared CIDR lies inside
 	// ipguard.Liftable. Empty (the default) => no lift, byte-identical to today.
 	InternalHosts []InternalHost `json:"internal_hosts,omitempty"`
+	// OnboardingCompletedAt records when an operator finished (or deliberately
+	// left) the Getting Started funnel on THIS INSTALL. Nil until then.
+	//
+	// It lives here, server-side, because it is a fact about the install and
+	// every previous attempt to keep it in the browser was wrong in a way that
+	// shipped: a localStorage flag outlives the install it describes (a wiped
+	// database kept skipping its own funnel) and is scoped to an ORIGIN, so the
+	// same console reached at 127.0.0.1 and at localhost disagreed about
+	// whether onboarding had happened.
+	//
+	// NOT settable through PUT /site-config: the handler rejects a client-supplied
+	// value and carries the stored one forward, exactly as it does for
+	// Integrations — otherwise a naive GET-then-PUT round-trip by an older
+	// client would silently erase it.
+	OnboardingCompletedAt *time.Time `json:"onboarding_completed_at,omitempty"`
 }
 
 // InternalHost is one SiteConfig.InternalHosts entry — see that field's doc.

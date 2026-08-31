@@ -207,6 +207,12 @@ func (s *Server) routes() chi.Router {
 				operatorOnly.Delete("/setup/harness-credential/{provider}", s.handleHarnessDisconnect)
 			}
 
+			// Marks the install (not the browser) as having been through
+			// Getting Started — see handleSetupOnboardingComplete for why that
+			// distinction is the whole point. Operator-only: a member has their
+			// own landing and never walks this funnel.
+			operatorOnly.Post("/setup/onboarding-complete", s.handleSetupOnboardingComplete)
+
 			// Policy management (gated to authenticated humans — a valid SSO
 			// session or the admin token). WRITES are additionally operator-only:
 			// a signed-in MEMBER (B1's derived role) can read policies but not CRUD

@@ -53,6 +53,15 @@ type SetupStatus struct {
 	AgeKey SetupAgeKey `json:"age_key"`
 	// HasRuns drives the wizard's "launch your first run" done state.
 	HasRuns bool `json:"has_runs"`
+	// OnboardingComplete reports whether an operator has finished (or
+	// deliberately left) the Getting Started funnel ON THIS INSTALL —
+	// SiteConfig.OnboardingCompletedAt, flattened to the only bit the console
+	// needs. It is a fact about the install, not about the browser: the console
+	// used to keep this in localStorage, where it outlived wiped databases and
+	// disagreed with itself between 127.0.0.1 and localhost (different origins,
+	// different storage). The first-run landing, the welcome hero and the setup
+	// gate all read THIS.
+	OnboardingComplete bool `json:"onboarding_complete"`
 	// Platform is the OS + WSL posture the environment-step copy keys off.
 	Platform SetupPlatform `json:"platform"`
 	// HostProxy is the host-side proxy detection (env/shell/git/tool-config/OS)
@@ -638,9 +647,14 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		checks = append(checks, chk)
 	}
 
+	// Filled from the site-config read below, not a second one. A read failure
+	// leaves it false, which is the conservative direction: it opens the funnel
+	// rather than hiding it.
+	onboardingComplete := false
 	if s.cfg.Store != nil {
 		if sc, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
 			checks = append(checks, siteConfigCheck(sc, present), artifactRepoCheck(sc))
+			onboardingComplete = sc.OnboardingCompletedAt != nil
 		}
 		// permissions_posture (#19b): non-blocking/informational, so a read
 		// failure here is skipped rather than surfaced as a setup/status 500 —
@@ -683,17 +697,18 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 			SharedSubscriptionAllowed: s.cfg.SubscriptionPostureOK,
 			SharedSubscriptionReason:  s.cfg.SubscriptionPostureReason,
 		},
-		Runner:     rnr,
-		Providers:  providers,
-		Secrets:    sec,
-		AgeKey:     SetupAgeKey{Durable: s.cfg.AgeKeyDurable},
-		HasRuns:    hasRuns,
-		Platform:   SetupPlatform{OS: plat.OS, WSL: plat.WSL, KVM: plat.KVM},
-		HostProxy:  hostProxy,
-		SCM:        scmPosture,
-		Bedrock:    bedrock,
-		Deployment: SetupDeployment{HostLike: deploymentHostLike(providers)},
-		Harness:    harnessCreds,
+		Runner:             rnr,
+		Providers:          providers,
+		Secrets:            sec,
+		AgeKey:             SetupAgeKey{Durable: s.cfg.AgeKeyDurable},
+		HasRuns:            hasRuns,
+		OnboardingComplete: onboardingComplete,
+		Platform:           SetupPlatform{OS: plat.OS, WSL: plat.WSL, KVM: plat.KVM},
+		HostProxy:          hostProxy,
+		SCM:                scmPosture,
+		Bedrock:            bedrock,
+		Deployment:         SetupDeployment{HostLike: deploymentHostLike(providers)},
+		Harness:            harnessCreds,
 		// Integrations reuses the single integrationsWithCapabilitiesUsing call
 		// hoisted above (PLATFORM-API-7 optimization + HIGH-4 llm_ready reuse).
 		Integrations: integrations,

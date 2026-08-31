@@ -352,6 +352,14 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "integrations are managed through their own endpoints, not PUT /site-config")
 		return
 	}
+	// Same reasoning as Integrations above: onboarding state is server-owned and
+	// is carried forward from the stored document below. Rejected rather than
+	// ignored so a caller trying to set it learns why, instead of watching it
+	// silently not take.
+	if cfg.OnboardingCompletedAt != nil {
+		writeError(w, http.StatusBadRequest, "onboarding_completed_at is managed by the setup flow, not PUT /site-config")
+		return
+	}
 	if err := validateSiteConfig(cfg); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
 		return
@@ -376,6 +384,9 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg.Integrations = existing.Integrations
+	// Carry forward, or a round-trip PUT by any client erases the install's
+	// onboarding state — the exact footgun already solved once for Integrations.
+	cfg.OnboardingCompletedAt = existing.OnboardingCompletedAt
 	saved, err := s.cfg.Store.PutSiteConfig(r.Context(), cfg)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
