@@ -14,6 +14,7 @@
 package oidc
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -90,11 +91,159 @@ func ParseRoleMap(csv string) (map[string]string, error) {
 	return out, nil
 }
 
+// MatchSource names which config source produced a Match: a chart
+// WARDYN_OIDC_ROLE_MAP entry or a merged-in console row (MatchSourceMapRow —
+// mergeRoleMaps folds both into one map before deriveRole ever runs, so the
+// two are indistinguishable by the time a Match is built), the
+// WARDYN_OIDC_OPERATOR_EMAILS allowlist (MatchSourceOperatorAllowlist), or
+// DefaultRole's no-match fallthrough (MatchSourceDefaultRole).
+type MatchSource string
+
+const (
+	MatchSourceMapRow            MatchSource = "map_row"
+	MatchSourceOperatorAllowlist MatchSource = "operator_allowlist"
+	MatchSourceDefaultRole       MatchSource = "default_role"
+)
+
+// Match is one claim/email value that contributed to a derived role, with
+// where it came from. deriveRole returns every match it found — not only the
+// one that decided the outcome — so a caller (CallbackHandler's audit log,
+// PreviewRole's console preview) can show WHY a role came out the way it did,
+// not just which role won.
+type Match struct {
+	// Value is the claim/email value that matched, exactly as the ID token
+	// or email carried it — matching itself is case-insensitive (deriveRole
+	// lowers before lookup) but Value is not lowered, so a preview can show
+	// the human the literal claim that hit. Empty for a MatchSourceDefaultRole
+	// match, which was not driven by any claim value at all.
+	Value  string
+	Role   string
+	Source MatchSource
+}
+
+// RoleMapping is one console-managed (Getting Started → People) value=>role
+// row. Value arrives ALREADY CANONICAL — trimmed, ASCII, lowercase — the API
+// layer that owns writes to this store is responsible for canonicalizing a
+// row before it ever reaches here; mergeRoleMaps uses Value VERBATIM as a map
+// key and never re-lowers it, the same way ParseRoleMap's chart keys are
+// already lowercase by the time deriveRole looks one up.
+type RoleMapping struct {
+	Value string
+	Role  string
+}
+
+// RoleMappingSource is the console's store-backed role-mapping source,
+// read once per login by CallbackHandler and merged with the chart's
+// WARDYN_OIDC_ROLE_MAP (Config.RoleMap) — see mergeRoleMaps. Config.RoleMappings
+// wires it in; nil (the default) disables the console source entirely, the
+// same additive-optional-Config-field rule SessionRevocations follows.
+type RoleMappingSource interface {
+	// ListRoleMappings returns every console-managed row. A non-nil error
+	// DENIES the login in progress (CallbackHandler fails closed rather than
+	// falling back to env-only, which could WIDEN access under
+	// WARDYN_OIDC_DEFAULT_ROLE=admin) — this is not a best-effort read.
+	ListRoleMappings(ctx context.Context) ([]RoleMapping, error)
+}
+
+// mergeRoleMaps builds the map deriveRole looks values up in from the chart's
+// WARDYN_OIDC_ROLE_MAP (chart) plus the console's role-mapping rows (rows,
+// Config.RoleMappings) — kept as a small pure function so the merge rules
+// table-test cleanly, without a store or a signed ID token.
+//
+// chart always wins a duplicate key: rows is edited at runtime through the
+// console, chart is a boot-time deployment decision, and the API layer that
+// writes rows is expected to refuse CREATING a new collision — this arm only
+// exists for a later helm upgrade that introduces one out from under an
+// already-saved row, which is reported (not silently dropped) via the
+// returned shadowed list.
+//
+// A row whose Value matches a legacyAdminEmails entry (case-insensitively) is
+// shadowed the same way: the operator allowlist is a stronger, harder-to-edit
+// admin source, and a console row racing it to a different role would be a
+// confusing no-op regardless (emailInList / deriveRole's admin check already
+// wins over anything the map says).
+//
+// rows are used VERBATIM, never re-lowered — see RoleMapping's doc: the
+// canonicalization contract lives at the write boundary, not here.
+func mergeRoleMaps(chart map[string]string, legacyAdminEmails []string, rows []RoleMapping) (merged map[string]string, shadowed []string) {
+	merged = make(map[string]string, len(chart)+len(rows))
+	for k, v := range chart {
+		merged[k] = v
+	}
+	for _, row := range rows {
+		if _, dup := merged[row.Value]; dup {
+			shadowed = append(shadowed, row.Value)
+			continue
+		}
+		if emailInList(row.Value, legacyAdminEmails) {
+			shadowed = append(shadowed, row.Value)
+			continue
+		}
+		merged[row.Value] = row.Role
+	}
+	return merged, shadowed
+}
+
+// PreviewRole runs the SAME derivation CallbackHandler would for a login
+// carrying roles/groups/email — including a real read of Config.RoleMappings
+// when wired — so the console's People page can show an operator "who would
+// this row make an admin" without waiting for that person to sign in. err is
+// non-nil only when the store read itself failed (couldn't-check, distinct
+// from ok=false's "checked, and nothing matched"); it never falls back to an
+// env-only preview, for the same fail-closed reason CallbackHandler doesn't.
+//
+// roles/groups/email need no pre-normalization from the caller: deriveRole
+// does its own lowering at lookup time, and PreviewRole reuses it rather than
+// duplicating that rule here.
+func (a *Authenticator) PreviewRole(ctx context.Context, roles, groups []string, email string) (role string, matched []Match, ok bool, err error) {
+	roleMap := a.cfg.RoleMap
+	if a.cfg.RoleMappings != nil {
+		rows, lerr := a.cfg.RoleMappings.ListRoleMappings(ctx)
+		if lerr != nil {
+			return "", nil, false, lerr
+		}
+		roleMap, _ = mergeRoleMaps(a.cfg.RoleMap, a.cfg.LegacyAdminEmails, rows)
+	}
+	role, matched, ok = deriveRole(roles, groups, email, roleMap, a.cfg.LegacyAdminEmails, a.cfg.DefaultRole)
+	return role, matched, ok, nil
+}
+
+// ChartRoleMap returns a COPY of the boot-time WARDYN_OIDC_ROLE_MAP
+// (Config.RoleMap) entries — the console's People page uses it to show which
+// rows are chart-owned (and therefore always win a collision, see
+// mergeRoleMaps) versus console-managed. A copy, not the live map, so a
+// handler can never mutate boot config through the returned value.
+func (a *Authenticator) ChartRoleMap() map[string]string {
+	out := make(map[string]string, len(a.cfg.RoleMap))
+	for k, v := range a.cfg.RoleMap {
+		out[k] = v
+	}
+	return out
+}
+
+// DefaultRole returns Config.DefaultRole — the role a login falls through to
+// when the merged map (chart or console) is non-empty but nothing in it
+// matched. Empty means "deny", the same as an unset WARDYN_OIDC_DEFAULT_ROLE.
+func (a *Authenticator) DefaultRole() string {
+	return a.cfg.DefaultRole
+}
+
+// HasOperatorEmails reports whether Config.LegacyAdminEmails
+// (WARDYN_OIDC_OPERATOR_EMAILS) is non-empty — the console's People page
+// needs this to explain why a row's value already resolves to admin
+// independent of anything it manages (see mergeRoleMaps' shadow rule).
+func (a *Authenticator) HasOperatorEmails() bool {
+	return len(a.cfg.LegacyAdminEmails) > 0
+}
+
 // deriveRole computes the Wardyn role for a signed-in human from the ID
 // token's roles/groups claims, their email, and the derivation config
 // (Config.RoleMap / Config.LegacyAdminEmails / Config.DefaultRole). ok is
 // false only when roleMap is non-empty, nothing matched, and defaultRole is
-// empty — the caller (CallbackHandler) must then deny the login.
+// empty — the caller (CallbackHandler) must then deny the login. matches
+// carries provenance for every value that contributed (see Match) — CONSUMED
+// today only for logging/preview, never for the role decision itself, which
+// stays exactly the precedence below.
 //
 // Precedence:
 //  1. An empty roleMap disables claim-based derivation: the role comes from the
@@ -110,7 +259,7 @@ func ParseRoleMap(csv string) (map[string]string, error) {
 //     counts as an additional RoleAdmin match — it wins even over a
 //     RoleMember entry the same email also hits.
 //  3. If nothing matched at all: defaultRole if set, else deny.
-func deriveRole(rolesClaim, groupsClaim []string, email string, roleMap map[string]string, legacyAdminEmails []string, defaultRole string) (role string, ok bool) {
+func deriveRole(rolesClaim, groupsClaim []string, email string, roleMap map[string]string, legacyAdminEmails []string, defaultRole string) (role string, matches []Match, ok bool) {
 	if len(roleMap) == 0 {
 		// No role map: claim-based derivation is disabled, but the legacy
 		// operator allowlist still splits admin from member. WARDYN_OIDC_OPERATOR_EMAILS
@@ -121,15 +270,18 @@ func deriveRole(rolesClaim, groupsClaim []string, email string, roleMap map[stri
 		// signed-in human to admin. Only when NEITHER is set does every human
 		// default to admin (true pre-0.5, before the operator allowlist existed).
 		if len(legacyAdminEmails) == 0 {
-			return RoleAdmin, true
+			return RoleAdmin, nil, true
 		}
 		if emailInList(email, legacyAdminEmails) {
-			return RoleAdmin, true
+			return RoleAdmin, []Match{{Value: email, Role: RoleAdmin, Source: MatchSourceOperatorAllowlist}}, true
 		}
-		return RoleMember, true
+		return RoleMember, nil, true
 	}
-	admin := emailInList(email, legacyAdminEmails)
-	member := false
+	var admin, member bool
+	if emailInList(email, legacyAdminEmails) {
+		admin = true
+		matches = append(matches, Match{Value: email, Role: RoleAdmin, Source: MatchSourceOperatorAllowlist})
+	}
 	values := make([]string, 0, len(rolesClaim)+len(groupsClaim)+1)
 	values = append(values, rolesClaim...)
 	values = append(values, groupsClaim...)
@@ -143,19 +295,21 @@ func deriveRole(rolesClaim, groupsClaim []string, email string, roleMap map[stri
 		switch roleMap[strings.ToLower(strings.TrimSpace(v))] {
 		case RoleAdmin:
 			admin = true
+			matches = append(matches, Match{Value: v, Role: RoleAdmin, Source: MatchSourceMapRow})
 		case RoleMember:
 			member = true
+			matches = append(matches, Match{Value: v, Role: RoleMember, Source: MatchSourceMapRow})
 		}
 	}
 	switch {
 	case admin:
-		return RoleAdmin, true
+		return RoleAdmin, matches, true
 	case member:
-		return RoleMember, true
+		return RoleMember, matches, true
 	case defaultRole != "":
-		return defaultRole, true
+		return defaultRole, []Match{{Role: defaultRole, Source: MatchSourceDefaultRole}}, true
 	default:
-		return "", false
+		return "", nil, false
 	}
 }
 

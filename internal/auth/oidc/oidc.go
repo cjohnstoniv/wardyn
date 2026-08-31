@@ -142,6 +142,18 @@ type Config struct {
 	// other optional Config field.
 	Revocations SessionRevocations
 
+	// RoleMappings is the console-managed (Getting Started → People) role-
+	// mapping store. When wired, CallbackHandler reads it once per login and
+	// MERGES its rows with the chart's WARDYN_OIDC_ROLE_MAP (RoleMap, above) —
+	// see mergeRoleMaps: the chart wins a duplicate key. A wired store's read
+	// error DENIES the login exactly like the no-match case, via the distinct
+	// authErrorRoleCheckUnavailable code — it never falls back to the
+	// env-only map on error, since that could WIDEN access under
+	// DefaultRole=admin. nil (the default) is env-only role derivation,
+	// byte-identical to before this field existed — the same
+	// optional-Config-field rule Revocations, above, follows.
+	RoleMappings RoleMappingSource
+
 	// OnLogin, when set, is called synchronously from CallbackHandler after a
 	// login is APPROVED (role derived, session about to be issued) with the
 	// ID token's sub and the freshly-derived role. It exists for exactly one
@@ -510,16 +522,42 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// (5) Role derivation — see Config.RoleMap / deriveRole for precedence.
-	// Denying here (rather than issuing a roleless session) is what keeps
-	// decodeSession simple: every cookie this package ever writes has a
-	// non-empty Role.
-	role, ok := deriveRole(rc.Roles, gc.Groups, claims.Email, a.cfg.RoleMap, a.cfg.LegacyAdminEmails, a.cfg.DefaultRole)
+	// When RoleMappings (the console's Getting Started -> People store) is
+	// wired, its rows are merged with the chart map FIRST (mergeRoleMaps) — a
+	// store read error denies this login (authErrorRoleCheckUnavailable)
+	// rather than silently falling back to the env-only map, which could
+	// WIDEN access under WARDYN_OIDC_DEFAULT_ROLE=admin. Denying on !ok
+	// (rather than issuing a roleless session) is what keeps decodeSession
+	// simple: every cookie this package ever writes has a non-empty Role.
+	roleMap := a.cfg.RoleMap
+	if a.cfg.RoleMappings != nil {
+		rows, rerr := a.cfg.RoleMappings.ListRoleMappings(r.Context())
+		if rerr != nil {
+			slog.Error("oidc: console role-mapping store unavailable, denying login (fail closed)", "error", rerr)
+			clearCookie(w, sessionCookieName)
+			redirectAuthError(w, r, authErrorRoleCheckUnavailable)
+			return
+		}
+		var shadowed []string
+		roleMap, shadowed = mergeRoleMaps(a.cfg.RoleMap, a.cfg.LegacyAdminEmails, rows)
+		if len(shadowed) > 0 {
+			// A later helm upgrade introduced a chart/operator entry that
+			// collides with an already-saved console row — the API layer
+			// refuses CREATING a new collision, so this arm is the only way
+			// one reaches here.
+			slog.Warn("oidc: chart WARDYN_OIDC_ROLE_MAP/operator-email entry shadows a console-managed role mapping", "shadowed", shadowed)
+		}
+	}
+	role, matches, ok := deriveRole(rc.Roles, gc.Groups, claims.Email, roleMap, a.cfg.LegacyAdminEmails, a.cfg.DefaultRole)
 	if !ok {
 		// L6: a denied login must not leave a PRE-EXISTING session cookie
 		// (from before this re-login attempt) still valid in the browser.
 		clearCookie(w, sessionCookieName)
 		redirectAuthError(w, r, authErrorNoRole)
 		return
+	}
+	if len(matches) > 0 {
+		slog.Debug("oidc: role derivation matched", "sub", idToken.Subject, "role", role, "matches", matches)
 	}
 
 	// OnLogin fires once the login is APPROVED (past every denial branch
@@ -770,6 +808,13 @@ const (
 	authErrorEmailVerifiedAbsent = "email_verified_absent"
 	authErrorEmailDomain         = "email_domain"
 	authErrorNoRole              = "no_role"
+	// authErrorRoleCheckUnavailable: Config.RoleMappings is wired but
+	// ListRoleMappings errored — the console role-mapping store couldn't be
+	// read, distinct from authErrorNoRole's "checked, and nothing matched".
+	// Fails closed: the login is denied rather than falling back to the
+	// env-only WARDYN_OIDC_ROLE_MAP, which could WIDEN access under
+	// WARDYN_OIDC_DEFAULT_ROLE=admin.
+	authErrorRoleCheckUnavailable = "role_check_unavailable"
 	// authErrorOIDCTransient (D12): the token exchange kept failing with a
 	// network timeout or a 5xx from the IdP after retryExchange's retries —
 	// the IdP is having a bad moment, not the deployment being misconfigured.
