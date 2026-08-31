@@ -163,4 +163,16 @@ describe("setupGateActive", () => {
     expect(setupDismissed()).toBe(true);
     expect(setupGateActive({ checks: [warn] })).toBe(true);
   });
+
+  // "A place you go, not a wall you are trapped behind": once the INSTALL has
+  // been through onboarding, a later failure informs — banner, badges, the
+  // funnel a click away — but never confiscates the console. Without this, a
+  // runner dying on day 30 would wall an operator out of Audit and Runs, and
+  // a deliberately runner-less deployment (the e2e harness is one) could
+  // never leave the funnel at all.
+  it("never gates an install that has completed onboarding", () => {
+    expect(setupGateActive({ checks: [fail], onboarding_complete: true })).toBe(false);
+    expect(setupGateActive({ checks: [warn], onboarding_complete: true })).toBe(false);
+    expect(setupGateActive({ checks: [fail], onboarding_complete: false })).toBe(true);
+  });
 });

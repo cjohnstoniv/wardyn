@@ -222,6 +222,13 @@ cmd_down() {
 # crucially COMPLETED, the state that previously crashed the console.
 cmd_seed() {
   log "Seeding deterministic fixtures via API + SQL"
+  # The fixture install is ONBOARDED. The suite's specs exercise the console,
+  # not the first-run funnel (which has its own specs and mocks) — and this
+  # backend deliberately runs with NO runner, whose permanent runner:fail would
+  # otherwise hold every route behind the setup gate. This replaces the
+  # localStorage seam three specs used to fake per-browser; the install-side
+  # mark is the honest version of the same statement.
+  api POST /api/v1/setup/onboarding-complete '' >/dev/null 2>&1 || true
   # A handful of runs (the none runner leaves them PENDING; we re-state below).
   local agents=(claude-code codex-cli claude-code claude-code codex-cli claude-code claude-code claude-code claude-code)
   # Fixtures 0 and 1 deliberately SHARE a title so the Runs board actually has a

@@ -121,11 +121,22 @@ export function firstRunLanding(
 // The funnel is self-sufficient — its own steps configure the environment, the
 // network and secrets — so redirecting into it is never a dead end.
 export function setupGateActive(
-  status: { unreachable?: boolean; checks?: { status: SetupCheckStatus }[] },
+  status: {
+    unreachable?: boolean;
+    checks?: { status: SetupCheckStatus }[];
+    onboarding_complete?: boolean;
+  },
   role: Role = "admin",
 ): boolean {
   if (role !== "admin") return false;
   if (status.unreachable) return false;
+  // An install that has BEEN THROUGH onboarding is never walled in again —
+  // "a place you go, not a wall you are trapped behind" (the recorded reason
+  // the 0.5 gate died). Its failing checks stay visible on every surface;
+  // what they stop doing is confiscating the console. The gate's job is the
+  // FIRST run: a fresh install does not open on an unexplained, unusable
+  // board when the daemon itself says something is broken or degraded.
+  if (status.onboarding_complete) return false;
   const checks = status.checks ?? [];
   if (checks.length === 0) return false;
   return checks.some((c) => c.status === "fail" || c.status === "warn");

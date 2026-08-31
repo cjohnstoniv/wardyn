@@ -4,7 +4,12 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { test as base, expect, type Locator, type Page } from "@playwright/test";
+import {
+  test as base,
+  expect,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 
 // Shared Playwright fixtures for the Wardyn UI e2e suite. Specs run against the
 // seeded test backend booted by scripts/e2e-backend.sh (real wardynd + Postgres +
@@ -29,7 +34,7 @@ export const test = base.extend({
           /* private mode — ignore */
         }
       },
-      [TOKEN_KEY, ADMIN_TOKEN]
+      [TOKEN_KEY, ADMIN_TOKEN],
     );
     await use(page);
   },
@@ -63,6 +68,13 @@ export function sidebarLink(page: Page, label: NavLabel): Locator {
 // gotoConsole loads the app shell (pre-authed) and waits for the sidebar.
 export async function gotoConsole(page: Page): Promise<void> {
   await page.goto("/");
+  // "/" never stays "/": FirstRunLanding redirects to /runs or /setup once
+  // status and role resolve. The sidebar mounts BEFORE that redirect fires, so
+  // waiting on the sidebar alone returns with a Navigate still pending — and a
+  // test that immediately pushes its own route can then have it clobbered by
+  // the stale redirect (a race that widens under suite load; it cost a
+  // member-console run at /runs/new). Console-ready means the landing settled.
+  await page.waitForURL((u) => u.pathname !== "/");
   await expect(sidebarLink(page, "Runs")).toBeVisible();
 }
 
@@ -114,7 +126,6 @@ export async function mockMemberRole(page: Page): Promise<void> {
   });
 }
 
-
 // Some specs seed state the API can't create (e.g. an approval — `POST
 // /internal/approvals` needs a run-scoped token, not the admin one), so they talk
 // to the backend's own Postgres via `docker exec`, mirroring the seeding scripts.
@@ -129,7 +140,18 @@ const PG_DBNAME = process.env.WARDYN_E2E_PG_DBNAME || "wardyn_e2e";
 export function sql(statement: string): string {
   return execFileSync(
     "docker",
-    ["exec", "-i", PG_CONTAINER, "psql", "-U", "wardyn", "-d", PG_DBNAME, "-tAc", statement],
+    [
+      "exec",
+      "-i",
+      PG_CONTAINER,
+      "psql",
+      "-U",
+      "wardyn",
+      "-d",
+      PG_DBNAME,
+      "-tAc",
+      statement,
+    ],
     { encoding: "utf8" },
   ).trim();
 }
