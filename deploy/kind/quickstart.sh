@@ -37,7 +37,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT}"
 
 # ── identity (single source of truth; `make kind-down` calls this script) ────
-CLUSTER="wardyn-quickstart"
+CLUSTER="${WARDYN_QUICKSTART_CLUSTER:-wardyn-quickstart}"
 CONTEXT="kind-${CLUSTER}"
 NAMESPACE="wardyn"
 RELEASE="wardyn"

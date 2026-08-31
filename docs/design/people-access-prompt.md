@@ -539,4 +539,14 @@ post-deletion `{after}` values come from `HasOperatorEmails()` alone, never `Def
 
 ## Adjudication
 
-<!-- Owner answers go here. -->
+Adjudicated by the owner 2026-08-31 via question round on the published mock artifact.
+
+- **Q1 — keep the current order** (environment → People → network → secrets).
+- **Q2 — plain read-only "Defaults" block**, as mocked.
+- **Q3 — one merged table** (Variant A, Source column; chart rows read-only).
+- **Q4 — defer; no 04c re-take now.** Narration stays true; visual drift is accepted until the next recording pass.
+- **Q5 — yes: the F-12 cockpit fix ships in this campaign**, with the pinning spec (member decides an egress approval from the cockpit strip).
+- **Q6 — done-ness stays done-on-arrival.**
+- **Q7 — owner ruling (supersedes both mocked options): email-keyed console mappings are refused by default.** An org opts in via startup/helm config — new env var `WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` (bool, default `false`, exposed like every other `WARDYN_OIDC_*` through the chart's generic `env:` map). When opted in, email rows carry the §7.2 warn badge. Rationale: with SSO/Entra the default posture must steer to `roles`/`groups` keys. New frozen string this ruling creates (rendered on a refused POST):
+  `EMAIL_KEY_REFUSED`: "Email mappings are disabled on this install. Map an App Role or group instead, or opt in with `WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` in your chart." (env `WARDYN_OIDC_ROLE_MAP` email keys are unaffected — legacy, boot-warned.)
+- **Q8 — keep current behavior**: `WARDYN_OIDC_DEFAULT_ROLE` stays ignored at an empty merged map; the delete-guard copy states the real arm-1 outcome.

@@ -1,0 +1,5 @@
+# Everything below carries a client secret, user passwords, or a tenant id —
+# nothing in this directory's generated output is ever committed.
+.env.local
+values-entra.yaml
+*.secret
