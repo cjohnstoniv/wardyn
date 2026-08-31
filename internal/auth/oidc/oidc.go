@@ -541,11 +541,14 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 		var shadowed []string
 		roleMap, shadowed = mergeRoleMaps(a.cfg.RoleMap, a.cfg.LegacyAdminEmails, rows)
 		if len(shadowed) > 0 {
-			// A later helm upgrade introduced a chart/operator entry that
-			// collides with an already-saved console row — the API layer
-			// refuses CREATING a new collision, so this arm is the only way
-			// one reaches here.
-			slog.Warn("oidc: chart WARDYN_OIDC_ROLE_MAP/operator-email entry shadows a console-managed role mapping", "shadowed", shadowed)
+			// shadowed now covers two distinct causes mergeRoleMaps folds
+			// into one list: a chart/operator entry that collides with an
+			// already-saved console row (the API layer refuses CREATING a
+			// new collision, so a later helm upgrade is the only way one
+			// reaches here), or a console row that was itself rejected as
+			// non-canonical/invalid (see mergeRoleMaps). Either way the row
+			// contributed nothing to this login's role derivation.
+			slog.Warn("oidc: one or more console-managed role mappings were shadowed by chart/operator config or rejected as invalid", "shadowed", shadowed)
 		}
 	}
 	role, matches, ok := deriveRole(rc.Roles, gc.Groups, claims.Email, roleMap, a.cfg.LegacyAdminEmails, a.cfg.DefaultRole)

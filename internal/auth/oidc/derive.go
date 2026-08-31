@@ -122,11 +122,17 @@ type Match struct {
 }
 
 // RoleMapping is one console-managed (Getting Started → People) value=>role
-// row. Value arrives ALREADY CANONICAL — trimmed, ASCII, lowercase — the API
-// layer that owns writes to this store is responsible for canonicalizing a
-// row before it ever reaches here; mergeRoleMaps uses Value VERBATIM as a map
-// key and never re-lowers it, the same way ParseRoleMap's chart keys are
-// already lowercase by the time deriveRole looks one up.
+// row. Value is EXPECTED already canonical — trimmed, ASCII, lowercase — the
+// API layer that owns writes to this store is responsible for canonicalizing
+// a row before it ever reaches here. mergeRoleMaps no longer trusts that
+// contract blindly, though: a non-canonical row (empty, whitespace,
+// non-ASCII, mixed case) or an invalid Role is DROPPED AND LOGGED (via
+// mergeRoleMaps' shadowed return), never stored verbatim — an empty/
+// whitespace Value would otherwise match ANY empty/whitespace claim
+// (asciiOnly("") is true) and an invalid Role would be a dead key that still
+// changes deriveRole's arm. A canonical, valid row is still stored under
+// Value exactly as given, the same way ParseRoleMap's chart keys are already
+// lowercase by the time deriveRole looks one up.
 type RoleMapping struct {
 	Value string
 	Role  string
@@ -163,15 +169,45 @@ type RoleMappingSource interface {
 // confusing no-op regardless (emailInList / deriveRole's admin check already
 // wins over anything the map says).
 //
-// rows are used VERBATIM, never re-lowered — see RoleMapping's doc: the
-// canonicalization contract lives at the write boundary, not here.
+// shadowed ALSO carries a row rejected as non-canonical or invalid (see
+// RoleMapping's doc) — mergeRoleMaps does not trust the write boundary's
+// canonicalization contract blindly, since a row that violated it could
+// otherwise become a dead key (never matched by deriveRole's lowered claim
+// lookup) or, worse, an empty/whitespace key that matches ANY empty/
+// whitespace claim. Every arm of shadowed means the same thing to a caller:
+// this row contributed nothing to merged, and here is why (logged, not
+// silent).
+//
+// A canonical, valid row is stored under Value VERBATIM, never re-lowered:
+// the canonicalization contract lives at the write boundary, and by the time
+// a row survives the rejection check below it is already lowercase.
 func mergeRoleMaps(chart map[string]string, legacyAdminEmails []string, rows []RoleMapping) (merged map[string]string, shadowed []string) {
 	merged = make(map[string]string, len(chart)+len(rows))
 	for k, v := range chart {
 		merged[k] = v
 	}
 	for _, row := range rows {
-		if _, dup := merged[row.Value]; dup {
+		// Enforce the canonical contract RoleMapping's doc documents rather
+		// than trusting it: a non-canonical Value (empty, whitespace,
+		// non-ASCII, or not already lowercase) or an invalid Role is dropped
+		// here, not stored as a dead-or-dangerous key. An empty/whitespace
+		// Value would match ANY empty/whitespace claim in deriveRole's loop
+		// (asciiOnly("") is true) — an admin escalation if Role is admin. An
+		// invalid Role can never resolve to RoleAdmin/RoleMember in
+		// deriveRole's switch, but its mere presence still flips roleMap from
+		// empty to non-empty, moving deriveRole from its no-role-map arm
+		// (legacy allowlist alone) to its role-map-present arm — denying
+		// every login that arm 1 would have allowed, with no DefaultRole set.
+		if row.Value == "" || row.Value != strings.ToLower(strings.TrimSpace(row.Value)) || !asciiOnly(row.Value) || !ValidRole(row.Role) {
+			shadowed = append(shadowed, row.Value)
+			continue
+		}
+		// Explicit lowering here even though row.Value is already canonical
+		// (the check above enforced it): keeps this collision test correct
+		// and testable on its own terms, matching the operator-email arm
+		// below which is EqualFold (case-insensitive) rather than relying on
+		// chart keys happening to already be lowercase.
+		if _, dup := merged[strings.ToLower(row.Value)]; dup {
 			shadowed = append(shadowed, row.Value)
 			continue
 		}
@@ -288,17 +324,36 @@ func deriveRole(rolesClaim, groupsClaim []string, email string, roleMap map[stri
 	if email != "" {
 		values = append(values, email)
 	}
+	// seenMapRow dedupes MatchSourceMapRow entries keyed on the lowered claim
+	// value: the same value can legitimately appear in BOTH rolesClaim and
+	// groupsClaim (or repeated within one), which without this would append a
+	// duplicate Match for what a human reads as the same thing matching twice
+	// — PreviewRole's console preview renders this list verbatim. Keyed only
+	// on value, not source, because every match appended in THIS loop shares
+	// MatchSourceMapRow; it never dedupes against the operator-allowlist
+	// match above, which is a different source and stays even when the same
+	// email also hits a map row — that double entry is correct, distinct
+	// provenance (an email on both the allowlist and a map row), not a
+	// repeat of the same fact.
+	seenMapRow := make(map[string]bool, len(values))
 	for _, v := range values {
 		if !asciiOnly(v) {
 			continue // fail closed: see asciiOnly
 		}
-		switch roleMap[strings.ToLower(strings.TrimSpace(v))] {
+		key := strings.ToLower(strings.TrimSpace(v))
+		switch roleMap[key] {
 		case RoleAdmin:
 			admin = true
-			matches = append(matches, Match{Value: v, Role: RoleAdmin, Source: MatchSourceMapRow})
+			if !seenMapRow[key] {
+				seenMapRow[key] = true
+				matches = append(matches, Match{Value: v, Role: RoleAdmin, Source: MatchSourceMapRow})
+			}
 		case RoleMember:
 			member = true
-			matches = append(matches, Match{Value: v, Role: RoleMember, Source: MatchSourceMapRow})
+			if !seenMapRow[key] {
+				seenMapRow[key] = true
+				matches = append(matches, Match{Value: v, Role: RoleMember, Source: MatchSourceMapRow})
+			}
 		}
 	}
 	switch {

@@ -114,21 +114,73 @@ func TestMergeRoleMapsConsoleRowShadowedByOperatorEmail(t *testing.T) {
 	}
 }
 
-// TestMergeRoleMapsUsesRowsVerbatim pins the canonicalization contract on
-// RoleMapping.Value: mergeRoleMaps stores it AS GIVEN, never re-lowering — a
-// non-canonical (mixed-case) row becomes a merged key that the ASCII-lowered
-// claim lookup in deriveRole can never hit, proving the API layer — not this
-// function — owns canonicalization.
-func TestMergeRoleMapsUsesRowsVerbatim(t *testing.T) {
+// TestMergeRoleMapsRejectsNonCanonicalRow supersedes the old
+// TestMergeRoleMapsUsesRowsVerbatim: an Opus review found that storing a
+// non-canonical row VERBATIM (the old contract) let a bad row become either a
+// permanent dead key (never hit by deriveRole's lowered claim lookup) or,
+// worse, an empty/whitespace key that matches ANY empty/whitespace claim —
+// admin escalation. mergeRoleMaps now REJECTS a non-canonical row instead of
+// trusting the write boundary; this is the sanctioned rewrite the review
+// asked for, pinning the closed contract rather than the old open one.
+func TestMergeRoleMapsRejectsNonCanonicalRow(t *testing.T) {
 	rows := []writoidc.RoleMapping{{Value: "Eng-Team", Role: writoidc.RoleMember}}
 
-	merged, _ := writoidc.MergeRoleMapsForTest(nil, nil, rows)
+	merged, shadowed := writoidc.MergeRoleMapsForTest(nil, nil, rows)
 
-	if _, ok := merged["Eng-Team"]; !ok {
-		t.Fatalf("merged = %v, want the row's exact (non-lowered) value as the key", merged)
+	if len(merged) != 0 {
+		t.Errorf("merged = %v, want empty — a non-canonical (mixed-case) row must be rejected, not stored verbatim", merged)
 	}
-	if _, ok := merged["eng-team"]; ok {
-		t.Error("merged holds a lowercased key mergeRoleMaps never wrote — it must not silently canonicalize")
+	if len(shadowed) != 1 || shadowed[0] != "Eng-Team" {
+		t.Errorf("shadowed = %v, want [Eng-Team] (rejected rows are reported, not silently dropped)", shadowed)
+	}
+}
+
+// TestMergeRoleMapsRejectsInvalidRows table-tests every way a console row can
+// fail the canonical/valid contract mergeRoleMaps now enforces: each case
+// must be dropped into shadowed and contribute nothing to merged.
+func TestMergeRoleMapsRejectsInvalidRows(t *testing.T) {
+	cases := []struct {
+		name string
+		row  writoidc.RoleMapping
+	}{
+		{"empty value", writoidc.RoleMapping{Value: "", Role: writoidc.RoleAdmin}},
+		{"whitespace-only value", writoidc.RoleMapping{Value: " ", Role: writoidc.RoleAdmin}},
+		{"mixed-case (non-canonical) value", writoidc.RoleMapping{Value: "Eng-Team", Role: writoidc.RoleMember}},
+		{"invalid role", writoidc.RoleMapping{Value: "eng-team", Role: "Admin"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			merged, shadowed := writoidc.MergeRoleMapsForTest(nil, nil, []writoidc.RoleMapping{tc.row})
+			if len(merged) != 0 {
+				t.Errorf("merged = %v, want empty (row rejected)", merged)
+			}
+			if len(shadowed) != 1 || shadowed[0] != tc.row.Value {
+				t.Errorf("shadowed = %v, want [%q]", shadowed, tc.row.Value)
+			}
+		})
+	}
+}
+
+// TestMergeRoleMapsRejectedRowNeverFlipsArm closes the HIGH finding's other
+// half: an empty chart plus ONLY rejected console rows must leave merged
+// empty, so deriveRole stays on its arm-1 path (no role map: legacy allowlist
+// alone) rather than flipping to arm 2 (role map present, nothing matched) —
+// which would deny a login arm 1 would have allowed, whenever no DefaultRole
+// is configured.
+func TestMergeRoleMapsRejectedRowNeverFlipsArm(t *testing.T) {
+	rows := []writoidc.RoleMapping{
+		{Value: "", Role: writoidc.RoleAdmin},
+		{Value: "Bad-Case", Role: writoidc.RoleMember},
+		{Value: "eng-team", Role: "not-a-role"},
+	}
+	merged, _ := writoidc.MergeRoleMapsForTest(nil, nil, rows)
+	if len(merged) != 0 {
+		t.Fatalf("merged = %v, want empty — only-invalid rows must never flip deriveRole's arm", merged)
+	}
+
+	role, _, ok := writoidc.DeriveRoleForTest(nil, nil, "anyone@corp.example", merged, nil, "")
+	if !ok || role != writoidc.RoleAdmin {
+		t.Errorf("role = %q, ok = %v, want (%q, true) — arm 1 (no role map, no legacy allowlist) still applies", role, ok, writoidc.RoleAdmin)
 	}
 }
 
@@ -150,6 +202,46 @@ func TestMergeRoleMapsCanonicalRowMatchesMixedCaseClaim(t *testing.T) {
 	}
 }
 
+// TestDeriveRoleDedupesMapRowMatchAcrossClaims pins the MED dedup fix: a
+// value present in BOTH the roles claim and the groups claim (a real IdP
+// shape — Entra can populate an App Role into both) must produce exactly ONE
+// MatchSourceMapRow entry, not two, since PreviewRole's console preview
+// renders the Match list verbatim and a duplicate would read as two things
+// matching when only one claim value did.
+func TestDeriveRoleDedupesMapRowMatchAcrossClaims(t *testing.T) {
+	roleMap := map[string]string{"eng-team": writoidc.RoleMember}
+
+	role, matches, ok := writoidc.DeriveRoleForTest([]string{"eng-team"}, []string{"eng-team"}, "", roleMap, nil, "")
+	if !ok || role != writoidc.RoleMember {
+		t.Fatalf("role = %q, ok = %v, want (%q, true)", role, ok, writoidc.RoleMember)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("matches = %+v, want exactly one deduped MatchSourceMapRow entry", matches)
+	}
+}
+
+// TestDeriveRoleKeepsOperatorAllowlistAndMapRowDoubleEntry pins the OTHER
+// half of the dedup fix: an email that is BOTH on the operator allowlist AND
+// hits a map row (e.g. as the "email" value in the union deriveRole builds)
+// must still produce TWO Match entries — one per Source — because that is
+// genuinely distinct provenance, not a repeat of the same fact. Only same-
+// value-same-source duplicates get collapsed.
+func TestDeriveRoleKeepsOperatorAllowlistAndMapRowDoubleEntry(t *testing.T) {
+	roleMap := map[string]string{"ops@corp.example": writoidc.RoleMember}
+	legacyAdminEmails := []string{"ops@corp.example"}
+
+	role, matches, ok := writoidc.DeriveRoleForTest(nil, nil, "ops@corp.example", roleMap, legacyAdminEmails, "")
+	if !ok || role != writoidc.RoleAdmin {
+		t.Fatalf("role = %q, ok = %v, want (%q, true) (allowlist admin wins the member map row)", role, ok, writoidc.RoleAdmin)
+	}
+	if !hasMatchSource(matches, writoidc.MatchSourceOperatorAllowlist) || !hasMatchSource(matches, writoidc.MatchSourceMapRow) {
+		t.Fatalf("matches = %+v, want both an OperatorAllowlist and a MapRow entry for the same email", matches)
+	}
+	if len(matches) != 2 {
+		t.Errorf("matches = %+v, want exactly 2 (one per source, not deduped across sources)", matches)
+	}
+}
+
 // TestMergeRoleMapsPostureFlip pins the two transitions the console's
 // acknowledgement-guard UI depends on as PURE-FUNCTION facts: adding the
 // first row flips an empty merged map to non-empty, and deleting it flips
@@ -160,12 +252,17 @@ func TestMergeRoleMapsPostureFlip(t *testing.T) {
 		t.Fatalf("empty chart + no console rows: merged = %v, want empty", before)
 	}
 
-	after, _ := writoidc.MergeRoleMapsForTest(nil, nil, []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleMember}})
+	rows := []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleMember}}
+	after, _ := writoidc.MergeRoleMapsForTest(nil, nil, rows)
 	if len(after) == 0 {
 		t.Error("empty chart + first console row: merged is still empty, want non-empty")
 	}
 
-	deleted, _ := writoidc.MergeRoleMapsForTest(nil, nil, nil)
+	// Derive the post-delete input by slicing the row OUT of rows — re-running
+	// the identical nil,nil,nil call "before" already made (the old version of
+	// this test) proved nothing about deletion, only that two no-rows calls
+	// agree with each other.
+	deleted, _ := writoidc.MergeRoleMapsForTest(nil, nil, rows[:0])
 	if len(deleted) != 0 {
 		t.Errorf("deleting the only console row: merged = %v, want empty again", deleted)
 	}
@@ -286,6 +383,22 @@ func TestPreviewRoleErrorPropagation(t *testing.T) {
 // whole point.
 func TestPreviewRoleProvenance(t *testing.T) {
 	env := newIdPEnv(t)
+
+	t.Run("arm-1 operator allowlist (empty role map)", func(t *testing.T) {
+		// PreviewRole's arm-1 path (see deriveRole's precedence doc): an empty
+		// roleMap disables claim-based derivation entirely, so the operator
+		// allowlist must be what decides — and provenance must still name
+		// MatchSourceOperatorAllowlist, the SAME source arm 2 uses below, as
+		// the ONLY Match, one entry exactly.
+		auth := env.newRoleMappingAuth(t, nil, "", []string{"ops@corp.example"}, nil)
+		role, matched, ok, err := auth.PreviewRole(context.Background(), nil, nil, "ops@corp.example")
+		if err != nil || !ok || role != writoidc.RoleAdmin {
+			t.Fatalf("role = %q, ok = %v, err = %v, want (%q, true, nil)", role, ok, err, writoidc.RoleAdmin)
+		}
+		if len(matched) != 1 || matched[0].Source != writoidc.MatchSourceOperatorAllowlist {
+			t.Errorf("matched = %+v, want exactly one MatchSourceOperatorAllowlist entry", matched)
+		}
+	})
 
 	t.Run("operator email", func(t *testing.T) {
 		auth := env.newRoleMappingAuth(t, map[string]string{"eng-team": writoidc.RoleMember}, "", []string{"ops@corp.example"}, nil)
