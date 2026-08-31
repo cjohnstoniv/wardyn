@@ -38,12 +38,12 @@ describe("demo-videos", () => {
 
   // Coupling check: every step id an episode declares has to resolve
   // somewhere. Admin ids are checked against the REAL Getting Started step
-  // contract (steps.ts's STEP_LABEL) — "people" is unioned in because it is a
-  // Phase 5 addition not in STEP_LABEL yet. Member ids are checked against
-  // this file's own MEMBER_SECTION_IDS, because the member sections those ids
-  // name don't exist as code until Phase 5 either (see the comment on that
-  // const in demo-videos.ts).
-  const knownAdminStepIds = new Set<string>([...Object.keys(STEP_LABEL), "people"]);
+  // contract (steps.ts's STEP_LABEL). Member ids are checked against this
+  // file's own MEMBER_SECTION_IDS: the member sections those ids name are a
+  // separate namespace, not steps in the admin funnel (see the comment on that
+  // const in demo-videos.ts) — which is why episode 04 declares "workspaces"
+  // and 04b declares "workspace".
+  const knownAdminStepIds = new Set<string>(Object.keys(STEP_LABEL));
   const knownMemberStepIds = new Set<string>(MEMBER_SECTION_IDS);
 
   it("every episode's steps value is a real admin or member step id", () => {
