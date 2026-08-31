@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -229,6 +230,9 @@ func TestClosedEnumChecksMatchConstants(t *testing.T) {
 		// ad hoc in internal/api/base_images.go, so this literal list IS the
 		// closed set, not a derived one.
 		{"base_images", "kind", stringSet("registry", "custom", "byo")},
+		// 0051's role — a small, complete set with real Go constants (unlike
+		// capability_grants.capability above), so it gets a CHECK and this pin.
+		{"role_mappings", "role", stringSet(oidc.RoleAdmin, oidc.RoleMember)},
 	}
 	for _, c := range cases {
 		t.Run(c.table+"."+c.column, func(t *testing.T) {

@@ -44,6 +44,15 @@ func (rbacStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return types.SiteConfig{}, nil
 }
 
+// ListRoleMappings: GET /api/v1/access is in gatedRoutes below and — unlike
+// the write routes there, which all validate their body/params before
+// touching the store — actually reaches the store for an ADMIN caller (the
+// route has no id/body to fail on first), so this needs a real stub rather
+// than relying on rbacStore's embedded nil Store.
+func (rbacStore) ListRoleMappings(context.Context) ([]types.RoleMapping, error) {
+	return nil, nil
+}
+
 // rbacServer builds a server with OIDC configured (so the SSO branch of
 // humanOrAdminAuth is live), a secret store (so the secrets + harness-credential
 // routes mount), the harness's approval service (so GET /approvals answers) and
@@ -203,6 +212,15 @@ var gatedRoutes = []struct{ method, path string }{
 	// the LIST/GET stay reads (readRoutes), same split as secrets above.
 	{http.MethodPut, "/api/v1/integrations/i1"},
 	{http.MethodDelete, "/api/v1/integrations/i1"},
+	// 7. access / role mappings (migration 0051, Phase 2 lane A). All four
+	// routes are admin-only, including the two reads — unlike /permissions'
+	// GET, which is proven admin-only in authz_test.go's routeMatrix instead
+	// of here, this table's own GET entry needs rbacStore.ListRoleMappings
+	// stubbed above so the admin-passes probe actually reaches the handler.
+	{http.MethodGet, "/api/v1/access"},
+	{http.MethodPost, "/api/v1/access/mappings"},
+	{http.MethodDelete, "/api/v1/access/mappings/m1"},
+	{http.MethodPost, "/api/v1/access/preview"},
 }
 
 // readRoutes are the reads in those same clusters. A member keeps all of them —

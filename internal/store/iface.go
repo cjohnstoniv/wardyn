@@ -214,6 +214,27 @@ type Store interface {
 	// omits loses its row) and returns the stored result.
 	PutCapabilityEnforcement(ctx context.Context, enabled map[string]bool) (map[string]bool, error)
 
+	// Console-managed role mappings (migration 0051, store_role_mappings.go):
+	// the store half of internal/auth/oidc's RoleMappingSource, read once per
+	// login (via the cmd/wardynd adapter that bridges store -> oidc, mirroring
+	// SessionRevocations) and merged with the chart's WARDYN_OIDC_ROLE_MAP. ARE
+	// part of Store for the identical reason the capability methods above are:
+	// a store that cannot answer this runs on the OIDC login path, and a
+	// type-assert-and-degrade seam there would mean "this fake does not
+	// implement role mappings, therefore fall back to env-only", which is a
+	// silent WIDENING of who derives admin under WARDYN_OIDC_DEFAULT_ROLE=admin
+	// — not something a nil interface should be able to decide by omission.
+	//
+	// UpsertRoleMapping keys on the natural UNIQUE (value): re-adding an
+	// already-mapped value flips its role in place, returning the EXISTING
+	// row's id on a conflict (never the candidate's), the same contract
+	// UpsertCapabilityGrant follows.
+	UpsertRoleMapping(ctx context.Context, m types.RoleMapping) (types.RoleMapping, error)
+	DeleteRoleMapping(ctx context.Context, id uuid.UUID) error
+	// ListRoleMappings returns every row, oldest first — the console's People
+	// screen and the OIDC login-time merge's whole data need.
+	ListRoleMappings(ctx context.Context) ([]types.RoleMapping, error)
+
 	// Ping proves the store is actually reachable, not just constructed — the
 	// /readyz readiness probe's one call. A live TCP connect with no working
 	// query would otherwise read as healthy forever.

@@ -282,6 +282,17 @@ type Config struct {
 	// need the raw configured list for display (e.g. an admin-facing settings page),
 	// never to gate a request.
 	OperatorEmails []string
+	// AllowEmailMappings is WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS (Q7 adjudication,
+	// docs/design/people-access-prompt.md): the console People-step opt-in
+	// gate for an email-shaped (contains "@") role-mapping VALUE on
+	// POST /access/mappings. Default false refuses one with EMAIL_KEY_REFUSED
+	// (access.go) — an SSO/Entra deployment's default posture steers an admin
+	// to an App Role or group key instead. Belongs on api.Config, not
+	// oidc.Config: it gates a CONSOLE WRITE, not a boot-time role-derivation
+	// input, and env WARDYN_OIDC_ROLE_MAP's own email-keyed entries are
+	// UNAFFECTED either way (legacy, still boot-warned separately — see
+	// buildOptionalFeatures).
+	AllowEmailMappings bool
 	// MemberMounts is the operator/MDM-set posture for MEMBER-authored local_dir
 	// binds (WARDYN_MEMBER_WORKSPACE_ROOTS + _MAP + WARDYN_MEMBER_WRITABLE_ROOTS
 	// + _DENY, parsed at boot by runner.ParseMemberMountPolicy). The ZERO VALUE

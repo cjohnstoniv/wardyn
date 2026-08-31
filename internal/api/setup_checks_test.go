@@ -21,17 +21,22 @@ func TestSsoRBACCheck(t *testing.T) {
 		name              string
 		oidcConfigured    bool
 		roleMapConfigured bool
+		consoleRows       bool
 		wantOK            bool
 		wantStatus        string
 	}{
-		{"OIDC off: absent regardless of role map", false, true, false, ""},
-		{"OIDC off, map unset: still absent", false, false, false, ""},
-		{"OIDC on, map set: ok", true, true, true, "ok"},
-		{"OIDC on, map unset: warn", true, false, true, "warn"},
+		{"OIDC off: absent regardless of role map", false, true, false, false, ""},
+		{"OIDC off, everything unset: still absent", false, false, false, false, ""},
+		{"OIDC on, chart map set: ok", true, true, false, true, "ok"},
+		{"OIDC on, chart+console both unset: warn", true, false, false, true, "warn"},
+		// The widened case this signature exists for: no chart map, but the
+		// People step has at least one console row — still ok, not warn.
+		{"OIDC on, env unset + console rows: ok", true, false, true, true, "ok"},
+		{"OIDC on, chart AND console both set: still ok", true, true, true, true, "ok"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			chk, ok := ssoRBACCheck(tc.oidcConfigured, tc.roleMapConfigured)
+			chk, ok := ssoRBACCheck(tc.oidcConfigured, tc.roleMapConfigured, tc.consoleRows)
 			if ok != tc.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
 			}

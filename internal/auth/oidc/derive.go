@@ -272,6 +272,39 @@ func (a *Authenticator) HasOperatorEmails() bool {
 	return len(a.cfg.LegacyAdminEmails) > 0
 }
 
+// IsOperatorEmail reports whether v case-insensitively matches an entry on
+// Config.LegacyAdminEmails (WARDYN_OIDC_OPERATOR_EMAILS) — the console's
+// People page write boundary uses this to name the SAME shadow cause
+// mergeRoleMaps' operator-allowlist arm already enforces at login time
+// (collision_operator_allowlist, not a second, possibly-drifting rule): a
+// row a write would add is refused up front with the reason it would be
+// silently shadowed anyway, rather than accepted and only discovered inert
+// the next time someone signs in. Delegates to emailInList, the exact match
+// deriveRole's own allowlist check uses.
+func (a *Authenticator) IsOperatorEmail(v string) bool {
+	return emailInList(v, a.cfg.LegacyAdminEmails)
+}
+
+// PreviewRoleAgainst is PreviewRole's PURE twin: it runs the identical
+// mergeRoleMaps + deriveRole derivation against a CALLER-SUPPLIED candidate
+// rows slice instead of a real Config.RoleMappings read, so the console's
+// write-boundary lockout guard (POST/DELETE /access/mappings) can ask "would
+// the acting admin still derive admin AFTER this proposed write" by
+// constructing the candidate rows slice itself (the current store list, with
+// the one row added/removed) — without a second store round trip, and
+// without reimplementing merge/derive precedence at the API layer where it
+// could drift from what a REAL login would actually decide.
+//
+// No store read, no error return: rows is exactly what merged, this is
+// resolution over data already in hand. Compare PreviewRole, which reads
+// Config.RoleMappings itself and can fail on that read (err) — this method
+// never does, because it never reads anything.
+func (a *Authenticator) PreviewRoleAgainst(rows []RoleMapping, roles, groups []string, email string) (role string, ok bool) {
+	roleMap, _ := mergeRoleMaps(a.cfg.RoleMap, a.cfg.LegacyAdminEmails, rows)
+	role, _, ok = deriveRole(roles, groups, email, roleMap, a.cfg.LegacyAdminEmails, a.cfg.DefaultRole)
+	return role, ok
+}
+
 // deriveRole computes the Wardyn role for a signed-in human from the ID
 // token's roles/groups claims, their email, and the derivation config
 // (Config.RoleMap / Config.LegacyAdminEmails / Config.DefaultRole). ok is

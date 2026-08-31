@@ -475,6 +475,108 @@ func TestChartRoleMapCopiesNotTheLiveMap(t *testing.T) {
 	}
 }
 
+// ─── IsOperatorEmail ─────────────────────────────────────────────────────────
+
+// TestIsOperatorEmail pins the case-insensitive allowlist membership check
+// the console write boundary uses to name a collision — same match rule
+// emailInList already applies inside deriveRole, so the two can never
+// disagree about which emails are on the list.
+func TestIsOperatorEmail(t *testing.T) {
+	env := newIdPEnv(t)
+	auth := env.newRoleAuth(t, nil, "", []string{"Ops@Corp.Example"})
+
+	if !auth.IsOperatorEmail("ops@corp.example") {
+		t.Error("IsOperatorEmail(lowercased) = false, want true (case-insensitive match)")
+	}
+	if !auth.IsOperatorEmail("  Ops@Corp.Example  ") {
+		t.Error("IsOperatorEmail(padded, exact case) = false, want true (trimmed)")
+	}
+	if auth.IsOperatorEmail("someone-else@corp.example") {
+		t.Error("IsOperatorEmail(unlisted) = true, want false")
+	}
+	if auth.IsOperatorEmail("") {
+		t.Error("IsOperatorEmail(\"\") = true, want false")
+	}
+
+	unset := env.newRoleAuth(t, nil, "", nil)
+	if unset.IsOperatorEmail("ops@corp.example") {
+		t.Error("IsOperatorEmail with no LegacyAdminEmails configured = true, want false")
+	}
+}
+
+// ─── PreviewRoleAgainst ──────────────────────────────────────────────────────
+
+// TestPreviewRoleAgainstParityWithPreviewRole: PreviewRoleAgainst, handed the
+// exact rows a real Config.RoleMappings read would have returned, must derive
+// the SAME role PreviewRole (and a real callback) does — it is the same
+// mergeRoleMaps + deriveRole pipeline, just fed rows directly instead of
+// reading them.
+func TestPreviewRoleAgainstParityWithPreviewRole(t *testing.T) {
+	env := newIdPEnv(t)
+	rows := []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleMember}}
+	store := &fakeRoleMappingSource{rows: rows}
+	auth := env.newRoleMappingAuth(t, nil, "", nil, store)
+
+	wantRole, _, wantOK, err := auth.PreviewRole(context.Background(), nil, []string{"eng-team"}, "carol@corp.example")
+	if err != nil {
+		t.Fatalf("PreviewRole: %v", err)
+	}
+
+	gotRole, gotOK := auth.PreviewRoleAgainst(rows, nil, []string{"eng-team"}, "carol@corp.example")
+	if gotRole != wantRole || gotOK != wantOK {
+		t.Errorf("PreviewRoleAgainst = (%q, %v), want parity with PreviewRole (%q, %v)", gotRole, gotOK, wantRole, wantOK)
+	}
+}
+
+// TestPreviewRoleAgainstNoStoreRead: unlike PreviewRole, PreviewRoleAgainst
+// must never touch Config.RoleMappings — even one wired to always error, so
+// a candidate evaluation racing a real write never trips the same fail-closed
+// store guard PreviewRole/CallbackHandler apply to a REAL read.
+func TestPreviewRoleAgainstNoStoreRead(t *testing.T) {
+	env := newIdPEnv(t)
+	poisoned := &fakeRoleMappingSource{err: errors.New("must never be called")}
+	auth := env.newRoleMappingAuth(t, nil, "", nil, poisoned)
+
+	role, ok := auth.PreviewRoleAgainst(
+		[]writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleAdmin}},
+		nil, []string{"eng-team"}, "",
+	)
+	if !ok || role != writoidc.RoleAdmin {
+		t.Fatalf("role = %q, ok = %v, want (%q, true) derived purely from the passed-in rows", role, ok, writoidc.RoleAdmin)
+	}
+}
+
+// TestPreviewRoleAgainstLockoutScenario is the shape the console's
+// POST/DELETE /access/mappings lockout guard actually needs: given the
+// candidate rows AFTER a proposed write (here, a delete — the row that made
+// this admin an admin has been removed, but ANOTHER row survives so the
+// merged map stays non-empty — arm 2, not the "no role map at all" fallback
+// to admin arm 1 would take), does the acting admin still derive admin? This
+// is exactly "no" — the guard's whole reason to exist.
+func TestPreviewRoleAgainstLockoutScenario(t *testing.T) {
+	env := newIdPEnv(t)
+	auth := env.newRoleMappingAuth(t, nil, "", nil, nil)
+
+	before := []writoidc.RoleMapping{
+		{Value: "admins", Role: writoidc.RoleAdmin},
+		{Value: "other-team", Role: writoidc.RoleMember},
+	}
+	role, ok := auth.PreviewRoleAgainst(before, nil, []string{"admins"}, "admin@corp.example")
+	if !ok || role != writoidc.RoleAdmin {
+		t.Fatalf("before delete: role = %q, ok = %v, want (%q, true)", role, ok, writoidc.RoleAdmin)
+	}
+
+	// The candidate rows AFTER deleting the "admins" row — what the guard
+	// would build before actually performing the delete. "other-team"
+	// survives, so the merged map stays non-empty (arm 2) — this caller's
+	// "admins" group now matches nothing in it, and no DefaultRole is set.
+	after := []writoidc.RoleMapping{{Value: "other-team", Role: writoidc.RoleMember}}
+	role, ok = auth.PreviewRoleAgainst(after, nil, []string{"admins"}, "admin@corp.example")
+	if ok {
+		t.Fatalf("after delete: role = %q, ok = %v, want ok=false (this admin would no longer derive any role — the lockout the guard exists to catch)", role, ok)
+	}
+}
+
 func TestDefaultRoleAndHasOperatorEmailsAccessors(t *testing.T) {
 	env := newIdPEnv(t)
 
@@ -494,4 +596,3 @@ func TestDefaultRoleAndHasOperatorEmailsAccessors(t *testing.T) {
 		t.Error("HasOperatorEmails() = false, want true")
 	}
 }
-

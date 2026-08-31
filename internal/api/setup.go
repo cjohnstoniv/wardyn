@@ -638,9 +638,19 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		hostProxyCheck(hostProxy, plat.Containerized && !setup.HostProxySeeded()))
 
 	// sso_rbac / tls_cookie_posture: both OIDC-gated (mirror how every other
-	// conditional check gates on its own applicability).
+	// conditional check gates on its own applicability). consoleRows follows
+	// the SAME nil-Store guard the permissions_posture read below applies: a
+	// nil Store or a failed read leaves it false, the conservative direction
+	// — it surfaces the sso_rbac warning rather than silently hiding it
+	// behind a People-step row this call could not actually confirm exists.
 	oidcConfigured := s.cfg.OIDC != nil
-	if chk, ok := ssoRBACCheck(oidcConfigured, s.cfg.OIDCRoleMapConfigured); ok {
+	consoleRows := false
+	if oidcConfigured && s.cfg.Store != nil {
+		if rows, err := s.cfg.Store.ListRoleMappings(ctx); err == nil {
+			consoleRows = len(rows) > 0
+		}
+	}
+	if chk, ok := ssoRBACCheck(oidcConfigured, s.cfg.OIDCRoleMapConfigured, consoleRows); ok {
 		checks = append(checks, chk)
 	}
 	if chk, ok := tlsCookiePostureCheck(oidcConfigured, s.cfg.OIDCRedirectURL, s.cfg.OIDCSecureCookies); ok {

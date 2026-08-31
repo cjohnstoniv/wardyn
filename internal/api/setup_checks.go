@@ -408,26 +408,35 @@ func (s *Server) firstBrokeredRepoFromRuns(ctx context.Context) string {
 	return ""
 }
 
-// ssoRBACCheck warns when OIDC is configured but WARDYN_OIDC_ROLE_MAP is
-// unset: every signed-in human derives role "admin" (internal/auth/oidc's
-// deriveRole, upgrade-safe default) — fine for a single-operator deployment,
-// but silently grants admin to everyone the moment a second human signs in.
-// Only surfaced when OIDC is configured (mirrors bedrockProviderCheck's own
-// "worth showing at all" gate).
-func ssoRBACCheck(oidcConfigured, roleMapConfigured bool) (SetupCheck, bool) {
+// ssoRBACCheck warns when OIDC is configured but no role mapping resolves
+// role from claims — neither the chart's WARDYN_OIDC_ROLE_MAP nor a
+// console-managed row (migration 0051, the People step): every signed-in
+// human then derives role "admin" (internal/auth/oidc's deriveRole,
+// upgrade-safe default) — fine for a single-operator deployment, but
+// silently grants admin to everyone the moment a second human signs in.
+// consoleRows is whether the store currently holds at least one People-step
+// row (the same nil-Store guard setup.go's own read of it applies —
+// unreadable/absent reads as false, the conservative direction: it surfaces
+// the warning rather than hiding it). Only surfaced when OIDC is configured
+// (mirrors bedrockProviderCheck's own "worth showing at all" gate).
+//
+// Wording per docs/design/people-access-prompt.md §7.8 (transcribed
+// verbatim, not re-derived — that doc's reworded strings are the frozen
+// copy this check must carry).
+func ssoRBACCheck(oidcConfigured, roleMapConfigured, consoleRows bool) (SetupCheck, bool) {
 	if !oidcConfigured {
 		return SetupCheck{}, false
 	}
-	if roleMapConfigured {
+	if roleMapConfigured || consoleRows {
 		return SetupCheck{
 			ID: "sso_rbac", Label: "SSO role mapping", Status: "ok",
-			Detail: "WARDYN_OIDC_ROLE_MAP is set: signed-in humans are assigned admin/member from their IdP roles/groups/email.",
+			Detail: "Role mapping is configured — from WARDYN_OIDC_ROLE_MAP, the People step, or both — so signed-in humans are assigned admin/member from their IdP roles/groups/email.",
 		}, true
 	}
 	return SetupCheck{
 		ID: "sso_rbac", Label: "SSO role mapping", Status: "warn",
-		Detail: "WARDYN_OIDC_ROLE_MAP is not set: every SSO user is an admin.",
-		Fix:    `Set WARDYN_OIDC_ROLE_MAP (helm: env.WARDYN_OIDC_ROLE_MAP) to map IdP roles/groups/emails to "admin" or "member".`,
+		Detail: "No role mapping is configured — neither WARDYN_OIDC_ROLE_MAP in your chart nor a mapping added on the People step — so every SSO user is an admin, unless your operator allowlist already splits admins from members.",
+		Fix:    "Set WARDYN_OIDC_ROLE_MAP (helm: env.WARDYN_OIDC_ROLE_MAP), or add a mapping on the People step (Setup → People → Role mappings), to map IdP roles/groups/emails to \"admin\" or \"member\".",
 	}, true
 }
 

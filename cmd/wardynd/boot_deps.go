@@ -289,6 +289,12 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			// jti-level identity_revocations store which is a separate
 			// concern — see pgSessionRevocations' doc comment.
 			Revocations: &pgSessionRevocations{pool: pool},
+			// RoleMappings (Phase 2 lane A, migration 0051): the console's
+			// Getting Started -> People role-mapping store, merged with the
+			// chart's WARDYN_OIDC_ROLE_MAP at every login (see mergeRoleMaps).
+			// Wired unconditionally the same way Revocations is — pool is
+			// already required whenever OIDC boots at all.
+			RoleMappings: roleMappingsFor(pool),
 			// OnLogin (migration 0046): every successful login re-stamps
 			// role+role_checked_at on every ssh_public_keys row this principal
 			// owns — the bounded-stale re-check sshAuth's admin-override path

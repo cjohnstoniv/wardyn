@@ -76,22 +76,39 @@ func (s *Server) routes() chi.Router {
 			// MAINTENANCE HAZARD: With() SNAPSHOTS the group's middleware slice —
 			// this line must stay immediately after the group's last r.Use, or a
 			// later-added Use applies to r's routes but silently NOT to these.
-			// COUNT (re-verify with `grep -c 'operatorOnly\.' routes.go` — that
-			// grep counts mountAccountRoutes' 2 in this same file too — plus
-			// mountLibraryRoutes' own 5, rather than trusting this comment — it
-			// has gone stale before, W7-S1-1): 24 direct registrations below
-			// (0.7 moved PUT/DELETE /secrets off this group, see "Secret
-			// management" below) + mountLibraryRoutes' 5 (sources.go — GET
-			// /base-images/{id} is gone, DEADCODE-1) + mountAccountRoutes' 2
-			// (/tokens, /tokens/{id}) = 31. Five workspace routes (create/update/delete/scan/
-			// build) LEFT this group in 0048 for the owner-or-admin tier — the
-			// gate moved into their handlers, it was not dropped. NOT the whole admin
-			// surface: GET /metrics (outside /api/v1, its own explicit
-			// requireOperator — commit "absorb the operator tier") and the attach
-			// WebSocket's ticket-LESS fallback lane (ticketOrHumanAuth's own group
-			// below, admin-only; the ticket-bearing lane is owner-or-admin) are
-			// both gated too, via this SAME requireOperator, just not registered
-			// on this operatorOnly value.
+			// COUNT (re-verify with `grep -c 'operatorOnly\.' routes.go` — but
+			// that grep alone is NOT the whole count, and trusting it in
+			// isolation is exactly how the previous version of this comment went
+			// stale: it caught mountAccountRoutes' 2 registrations, below in
+			// this same file, but silently missed every addend registered
+			// through a DIFFERENTLY-NAMED chi.Router parameter or living in a
+			// DIFFERENT file — adminRoutes' `r` param (this file) and
+			// mountSetupMutationRoutes' `operatorOnly` param (a different file,
+			// so the same-file grep never reaches it) went entirely uncounted.
+			// Re-derive by hand, one addend at a time, rather than trusting any
+			// single number here — it has gone stale before (W7-S1-1) and this
+			// rewrite exists because it had, again, silently dropped two addends):
+			//    21 direct registrations in this function's body below (0.7 moved
+			//       PUT/DELETE /secrets off this group, see "Secret management" below)
+			//     2 mountAccountRoutes, below in this file (/tokens, /tokens/{id})
+			//     5 mountLibraryRoutes (sources.go — GET /base-images/{id} is
+			//       gone, DEADCODE-1)
+			//     2 adminRoutes, below in this file (audit/chain/verify,
+			//       admin/sandboxes/sweep)
+			//     4 mountSetupMutationRoutes (setup_onboarding.go) — 3 of the 4
+			//       are themselves conditional on s.cfg.Secrets != nil
+			//     4 mountAccessRoutes (access.go, Phase 2 lane A)
+			//   = 38 with every conditional route mounted (Secrets configured);
+			//     35 with Secrets unconfigured.
+			// Five workspace routes (create/update/delete/scan/build) LEFT this
+			// group in 0048 for the owner-or-admin tier — the gate moved into
+			// their handlers, it was not dropped. NOT the whole admin surface:
+			// GET /metrics (outside /api/v1, its own explicit requireOperator —
+			// commit "absorb the operator tier") and the attach WebSocket's
+			// ticket-LESS fallback lane (ticketOrHumanAuth's own group below,
+			// admin-only; the ticket-bearing lane is owner-or-admin) are both
+			// gated too, via this SAME requireOperator, just not registered on
+			// this operatorOnly value.
 			operatorOnly := r.With(s.requireOperator)
 			r.Post("/runs", s.handleCreateRun)
 			// Dry-run of the create-run resolution + gating: same resolveRunPolicy
@@ -375,6 +392,14 @@ func (s *Server) routes() chi.Router {
 			operatorOnly.Post("/permissions/grants", s.handleUpsertCapabilityGrant)
 			operatorOnly.Delete("/permissions/grants/{id}", s.handleDeleteCapabilityGrant)
 			operatorOnly.Put("/permissions/enforcement", s.handlePutCapabilityEnforcement)
+
+			// Access / role mappings (Phase 2 lane A, migration 0051): the
+			// console's Getting Started -> People editor over the store half of
+			// internal/auth/oidc's RoleMappingSource. All four routes are
+			// operatorOnly (access.go's mountAccessRoutes) — this bounds who
+			// derives admin at all, not a single member's capability set, so
+			// unlike /permissions there is no member-safe read to carve out.
+			s.mountAccessRoutes(operatorOnly)
 
 			// Recording replay: GET /api/v1/runs/{id}/recording/{id}. Owner-or-admin
 			// (item 4): recordingAuthorizer is the SAME ownership rule

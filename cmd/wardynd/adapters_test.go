@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -94,6 +95,35 @@ func TestApprovalRecorderIsMaskedFanout(t *testing.T) {
 	// the raw store recorder (which never masks).
 	if strings.Contains(inner.last.Target, secret) || strings.Contains(string(inner.last.Data), secret) {
 		t.Fatalf("approval audit not masked: target=%q data=%s", inner.last.Target, inner.last.Data)
+	}
+}
+
+// ─── role mappings: boot wiring (Phase 2 lane A) ──────────────────────────────
+
+// TestRoleMappingsFor_WiredWheneverPoolConfigured is the deps-builder wiring
+// assertion the task calls for: buildOptionalFeatures itself needs a live
+// OIDC discovery round trip to exercise (no precedent test does that in this
+// package — see connectAndMigrate's own WARDYN_TEST_PG-guarded test for the
+// closest analogue), so this pins the one-line decision roleMappingsFor makes
+// in isolation instead: given a configured pool, oidc.Config.RoleMappings is
+// wired non-nil, and to the pg-backed adapter specifically, not some other
+// value. A nil pool is never a case buildOptionalFeatures can reach — pool is
+// already required before OIDC's block runs (db.Connect happens first in
+// run()) — so there is no "pool absent" branch to assert here, unlike
+// sessionRevocationsFor's authn-nil guard (that function serves a SEPARATE
+// call site, api.Config.SessionRevocations, reached even when OIDC is off).
+func TestRoleMappingsFor_WiredWheneverPoolConfigured(t *testing.T) {
+	var pool pgxpool.Pool // never dialed; this test only proves the wiring, not a live query
+	rm := roleMappingsFor(&pool)
+	if rm == nil {
+		t.Fatal("roleMappingsFor returned nil; oidc.Config.RoleMappings would be unwired even though a pool was configured")
+	}
+	adapter, ok := rm.(*pgRoleMappings)
+	if !ok {
+		t.Fatalf("roleMappingsFor returned %T, want *pgRoleMappings", rm)
+	}
+	if adapter.pool != &pool {
+		t.Fatal("pgRoleMappings does not hold the configured pool")
 	}
 }
 

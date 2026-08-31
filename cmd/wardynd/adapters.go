@@ -161,6 +161,51 @@ func (r *pgSessionRevocations) upsertCutoff(ctx context.Context, sub string) err
 	return nil
 }
 
+var _ oidc.RoleMappingSource = (*pgRoleMappings)(nil)
+
+// roleMappingsFor returns the pg-backed console role-mapping source wired
+// into oidc.Config.RoleMappings — unconditional, the same reasoning
+// pgSessionRevocations gets wired directly (not through a nil-guarded
+// helper) at its own oidc.Config call site: pool is already required
+// whenever OIDC boots at all (Postgres is the one required dependency), so
+// this is never nil once OIDC is configured. Split out as its own tiny
+// function (rather than inlined at the oidc.Config literal, unlike
+// Revocations) so it is unit-testable without a live OIDC discovery round
+// trip — buildOptionalFeatures itself needs a real IdP to exercise.
+func roleMappingsFor(pool *pgxpool.Pool) oidc.RoleMappingSource {
+	return &pgRoleMappings{pool: pool}
+}
+
+// pgRoleMappings is the pg-backed oidc.RoleMappingSource (Phase 2 lane A): a
+// thin read of role_mappings (migration 0051), consulted once per login by
+// CallbackHandler/PreviewRole and merged with the chart's WARDYN_OIDC_ROLE_MAP
+// (see mergeRoleMaps). Distinct from pgSessionRevocations above — a different
+// table, a different concern (who gets which role vs. whose session is
+// still valid) — but the SAME store -> oidc bridge shape: a stateless
+// wrapper over the shared pool, constructed fresh per Config rather than
+// shared, because it holds no state of its own.
+type pgRoleMappings struct {
+	pool *pgxpool.Pool
+}
+
+// ListRoleMappings delegates to the store — this adapter exists only so
+// internal/auth/oidc, which must stay dependency-free of internal/types (see
+// oidc.RoleMapping's own doc comment), never imports internal/store either.
+// The conversion from types.RoleMapping (id/timestamps/provenance) to
+// oidc.RoleMapping (bare Value/Role) happens here, the one place both types
+// are in scope.
+func (r *pgRoleMappings) ListRoleMappings(ctx context.Context) ([]oidc.RoleMapping, error) {
+	rows, err := store.NewPG(r.pool).ListRoleMappings(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("wardynd: list role mappings: %w", err)
+	}
+	out := make([]oidc.RoleMapping, len(rows))
+	for i, m := range rows {
+		out[i] = oidc.RoleMapping{Value: m.Value, Role: m.Role}
+	}
+	return out, nil
+}
+
 // approvalStore satisfies the narrow approval.Store interface: the embedded
 // store.PG carries the four CRUD methods verbatim, and only Record is adapted.
 //

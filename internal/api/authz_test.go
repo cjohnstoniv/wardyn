@@ -123,7 +123,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// demoted or has left (migration 0045's stamp ceiling).
 	"GET /api/v1/tokens":                                 {class: classAdmin},
 	"DELETE /api/v1/tokens/{id}":                         {class: classAdmin},
-	"POST /api/v1/setup/onboarding-complete":                   {class: classAdmin},
+	"POST /api/v1/setup/onboarding-complete":             {class: classAdmin},
 	"POST /api/v1/setup/harness-login":                   {class: classAdmin},
 	"PUT /api/v1/setup/harness-credential/{provider}":    {class: classAdmin},
 	"DELETE /api/v1/setup/harness-credential/{provider}": {class: classAdmin},
@@ -155,7 +155,16 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/permissions/grants":                           {class: classAdmin},
 	"DELETE /api/v1/permissions/grants/{id}":                    {class: classAdmin},
 	"PUT /api/v1/permissions/enforcement":                       {class: classAdmin},
-	"POST /api/v1/sessions/revoke":                              {class: classAdmin},
+	// Access / role mappings (migration 0051, Phase 2 lane A): the console's
+	// Getting Started -> People editor over the store half of
+	// internal/auth/oidc's RoleMappingSource. Same admin-only posture as
+	// /permissions above — this bounds who derives admin at ALL, a bigger
+	// blast radius than a single capability.
+	"GET /api/v1/access":                  {class: classAdmin},
+	"POST /api/v1/access/mappings":        {class: classAdmin},
+	"DELETE /api/v1/access/mappings/{id}": {class: classAdmin},
+	"POST /api/v1/access/preview":         {class: classAdmin},
+	"POST /api/v1/sessions/revoke":        {class: classAdmin},
 	// The audit hash-chain sweep, unlike the two /audit READS below: its
 	// verdict counts every row in the deployment, which is whole-fleet audit
 	// volume — the disclosure that keeps /metrics admin-gated too.
@@ -1001,6 +1010,23 @@ func (s *authzStore) GetCapabilityEnforcement(context.Context) (map[string]bool,
 }
 func (s *authzStore) PutCapabilityEnforcement(_ context.Context, enabled map[string]bool) (map[string]bool, error) {
 	return enabled, nil
+}
+
+// ─── role mappings (migration 0051, Phase 2 lane A) ───────────────────────
+//
+// Same honest-empty-state posture as the capability grant stubs above: no
+// rows is exactly a freshly-upgraded deployment with nothing configured on
+// the People step, so /access's routes resolve without panicking and the
+// matrix's admin/member/unauthenticated boundary is what gets exercised, not
+// a hand-rolled fixture.
+func (s *authzStore) UpsertRoleMapping(_ context.Context, m types.RoleMapping) (types.RoleMapping, error) {
+	return m, nil
+}
+func (s *authzStore) DeleteRoleMapping(context.Context, uuid.UUID) error {
+	return store.ErrNotFound
+}
+func (s *authzStore) ListRoleMappings(context.Context) ([]types.RoleMapping, error) {
+	return nil, nil
 }
 
 // ─── in-memory ApprovalService fake, ownership-aware ──────────────────────

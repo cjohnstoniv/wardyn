@@ -373,6 +373,7 @@ func run() error {
 		// OIDC is unconfigured — sessionsRevocable's own nil-safe gate on both.
 		SessionRevocations:        sessionRevocationsFor(feats.authn, pool),
 		OperatorEmails:            splitCSV(*f.oidcOperatorEmails),
+		AllowEmailMappings:        *f.oidcAllowEmailMappings,
 		MemberMounts:              memberMounts,
 		ImageBuilder:              feats.imgBuilder,
 		AgentImages:               agentImages,
