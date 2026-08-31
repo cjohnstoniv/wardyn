@@ -151,6 +151,22 @@ Reuse the shipped chart and substrate; never hand-roll a manifest.
      email on it is still an additional `admin` match, so an existing
      deployment adopting App Roles keeps its current operators as admins with
      zero re-configuration.
+   - **`env.WARDYN_OIDC_ROLE_MAP` is the chart's BOOTSTRAP layer, not the only
+     place mappings get edited.** Once the install is up, an admin adds,
+     edits and removes further mappings live from the console's Getting
+     Started → People step (`GET`/`POST /access/mappings`, `DELETE
+     /access/mappings/{id}`) — no chart change or redeploy needed. The chart
+     map always wins a duplicate key against a console row; a console row
+     takes effect at that person's next sign-in, never retroactively. An
+     email-shaped console mapping is refused by default (steer to an App
+     Role or `groups` value instead, per the trap above) — opt in with
+     `env.WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS=true` only when this deployment
+     has no usable App Role/`groups` claim at all. Full semantics (the merged
+     table, the posture-flip and lockout guards, the preview panel):
+     [docs/OPERATIONS.md's "Who decides who gets in"](../../../docs/OPERATIONS.md#who-decides-who-gets-in-chart-vs-console-vs-idp).
+     A scripted, worked validation of this whole path against a real
+     (free-tier, throwaway) Entra tenant lives in `deploy/azure-entra-sso/` —
+     run it before trusting any of this on a tenant that matters.
 
 4. **Install / upgrade.**
    ```sh
@@ -196,3 +212,6 @@ Reuse the shipped chart and substrate; never hand-roll a manifest.
 | Runner never reaches `RUNNING` / pods stuck `Pending` | Often `k8s.runtimeClasses.CC2`/`.CC3` names a RuntimeClass that doesn't exist in the cluster yet, or the namespace lacks the Pod Security Standard level the substrate's pods need. | Confirm `kubectl get runtimeclass` lists the name you pinned; confirm the runs namespace isn't blocking the substrate's restricted `securityContext` (PSS `restricted` is what CI's own conformance namespace uses). |
 | wardynd crash-loops at boot with `unknown -runner "k8s" (want "none" or a registered substrate; the docker substrate requires a wardynd built with -tags docker)` | Misleading pre-fix headline (W27-S1-3) — ignore the `-tags docker` framing, it never applies here. The `k8s` substrate IS registered; its CONSTRUCTOR refused to start, most often the boot-time egress canary (`k8s: refusing to boot: ...`) or a missing `k8s.proxyImage`. | Read past the headline to the wrapped `-runner "k8s" failed to start: ...` cause; check the canary verdict (`k8s_egress_containment` rows above) and confirm `k8s.proxyImage` is set. |
 | SSH connection refused | Either the gateway was never turned on (`WARDYN_SSH_LISTEN` unset — `ssh.enabled=false` is the chart's own default, and NOTHING generates a host key until it's on), or a client is dialing the wrong port/Service. | Set `ssh.enabled=true` plus `ssh.advertiseHost`; confirm `/healthz`'s `ssh.enabled` reads `true`; if SSH is split onto its own Service (LoadBalancer, etc. — see the chart README), confirm that Service's `targetPort` is `ssh`, matching the Deployment's named containerPort. |
+| Role mapping added on the People step, but the user's access didn't change | Role derivation runs once, at login, and is stamped into the session cookie — a console row change is never applied to an already-signed-in session. | Tell the person to sign out and back in. Their next login re-derives the role against the now-current merged map. |
+| Sign-in redirects with **"your sign-in is too old to verify this change"** while adding/removing a People-step mapping | The acting admin's own session snapshot (`groups`) is nil (a pre-0.6 cookie) or was truncated at the 2048-byte cap, so the server can't re-derive whether THEY currently hold admin from it — refused rather than risk a false lockout claim either way. | Sign out and back in to refresh the snapshot, then retry the write. |
+| `POST /access/mappings` refused: **"Email mappings are disabled on this install"** | The value contains `@` and `env.WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` is unset (`false` is the chart default) — the console steers Entra deployments to an App Role or `groups` key by default. | Map an App Role or `groups` value instead (preferred), or set `env.WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS=true` if this deployment genuinely has no usable claim besides email. |

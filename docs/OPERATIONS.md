@@ -294,6 +294,58 @@ shared credential with no per-human identity to key a role off (the token
 *is* the admin), which is the documented ceiling of the whole gate
 (`requireOperator`/`isOperator`, `internal/api/http.go`), not an oversight.
 
+### Who decides who gets in: chart vs console vs IdP
+
+Three surfaces share this decision, and only one of them is live without a
+restart.
+
+| | IdP (Entra) | Chart / env (boot-time bootstrap) | Console (Getting Started → People, live) |
+|---|---|---|---|
+| **What lives here** | People and groups exist here; Entra App Roles and their assignment; the app registration's "Assignment required" switch | `WARDYN_OIDC_ISSUER`/client config; `WARDYN_OIDC_ROLE_MAP` (the bootstrap layer — always wins a duplicate key against a console row); `WARDYN_OIDC_OPERATOR_EMAILS` (top-precedence admin allowlist, also the boot posture floor); `WARDYN_OIDC_DEFAULT_ROLE`; `WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` | `/access` role mappings (`GET /access`, `POST /access/mappings`, `DELETE /access/mappings/{id}`), a **disjoint union** with the chart map — the console never edits `WARDYN_OIDC_ROLE_MAP` itself, only its own rows |
+| **Wins a collision** | "Assignment required" stops an unassigned user **before Wardyn's callback ever sees a `roles` claim** — a gate Wardyn cannot see through or override | The chart entry, always — a console write that would collide with a chart key or an operator-allowlist email is refused outright (400); a *later* helm upgrade that introduces one anyway leaves the existing console row inert with a "Shadowed" badge instead of silently dropping it | Nothing — a console row only ever fills a gap the chart and the allowlist leave open |
+| **Takes effect** | Immediately for Entra's own gate | At boot (a `wardynd` restart/upgrade) | At the affected human's **next sign-in** — canonicalized (trimmed, lowercased) on write; never retroactive, so a person already signed in keeps the role stamped into their current session cookie |
+| **Recovery path** | n/a | The admin bearer token — one shared credential with no per-human identity to demote, so it is the ONE caller the console's lockout guard (below) never binds | n/a — the console surface is the thing that *can* lock an admin out, not a way back from it |
+
+A few things that don't fit the grid:
+
+- **Boot posture is chart-only.** `validateOperatorPosture`
+  (`cmd/wardynd/boot_deps.go`) refuses to boot OIDC at all unless
+  `WARDYN_OIDC_OPERATOR_EMAILS` is set or `WARDYN_OIDC_ROLE_MAP` is non-empty
+  (override: `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST`) — **console rows do not
+  count toward this floor**: they live in the database, read once per login,
+  never at boot, so the chart alone has to already justify running OIDC on
+  this install.
+- **The two console writes that can flip everyone's default outcome** — adding
+  the first console row while the chart map is empty, or deleting the last
+  one — are refused (400) unless the request carries
+  `acknowledge_access_change=true`, and only when the write would actually
+  change what an unmatched, non-allowlisted human gets (computed from
+  `HasOperatorEmails()`/`DefaultRole()` on each side of the write, never a raw
+  row count — a stored row that is itself shadowed contributes nothing to
+  either side).
+- **The lockout guard** refuses a write that would leave the ACTING admin no
+  longer admin, checked against their own last-sign-in session snapshot —
+  never a live re-check, since a role is a stamped cookie, not a query. A
+  snapshot too stale to even reproduce the admin access they demonstrably
+  hold right now (a truncated or pre-0.6 cookie) gets a distinct refusal
+  telling them to sign in again, rather than a false lockout claim on data
+  that can't answer the question either way.
+- **The preview panel** (`POST /access/preview`) runs the identical
+  derivation a real login would, against pasted claims or the caller's own
+  session, so an admin can see "who would this row make an admin" without
+  waiting for that person to sign in — nothing it does is saved.
+- **The same claim values do double duty.** The `roles`/`groups` values a
+  role mapping matches are the exact same login-time snapshot a `/permissions`
+  capability grant's `subject_type=group` matches against (see "Subjects, and
+  the group snapshot's ceiling" below) — a role mapping and a capability
+  grant are two different levels reading one snapshot, not two systems that
+  happen to agree.
+- **Fail-closed on a wired store error.** If the console's role-mapping store
+  can't be read, a login in progress is **denied** (`auth_error=
+  role_check_unavailable`) rather than silently falling back to the
+  chart-only map — the same code the preview panel above surfaces when it
+  can't check a candidate row.
+
 **Deriving the role** (`WARDYN_OIDC_ROLE_MAP`, a CSV of `value=role` pairs,
 e.g. `Wardyn.Admin=admin,eng-team=member,alice@corp.com=admin`): each entry's
 `value` is matched case-insensitively against the ID token's `roles` claim

@@ -330,6 +330,38 @@ against an EXISTING OIDC-only install to turn on RBAC for the first time — it
 takes effect on each user's next login (a session signed before the role map
 existed carries no role and is never treated as authenticated).
 
+**`env.WARDYN_OIDC_ROLE_MAP` is the bootstrap layer, not the only editor.**
+Once the install is live, an admin adds, edits and removes further mappings
+without a redeploy from the console's Getting Started → People step (`GET`/
+`POST /access/mappings`, `DELETE /access/mappings/{id}`) — a console row can
+never override a chart key (the chart always wins a collision; a colliding
+console write is refused at write time, 400) and takes effect at the mapped
+person's next sign-in, never retroactively. An email-shaped console mapping
+is refused by default, the same posture an Entra deployment should already
+want; set `env.WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS=true` only when this
+deployment genuinely has no usable App Role or `groups` claim to key on
+instead. A full walkthrough of that surface — the merged table, the
+posture-flip and lockout guards, the preview panel — is
+[docs/OPERATIONS.md's "Who decides who gets in"](../../../docs/OPERATIONS.md#who-decides-who-gets-in-chart-vs-console-vs-idp).
+
+`deploy/azure-entra-sso/` is a scripted, worked validation of this entire
+path against a real (free-tier, throwaway) Entra tenant — tenant prep, app
+registration, three users exercising both the App Role and `groups`-claim
+mappings, and the two independent denial gates ("assignment required" on the
+Enterprise Application vs. Wardyn's own `no_role`). Run it end to end before
+trusting any of this against a tenant that matters.
+
+**Flipping `auth.adminToken.secretRef.name` on an install that started
+inline can delete your own recovery token.** `templates/secret.yaml` only
+renders the inline admin-token Secret while `secretRef.name` is empty and
+`auth.adminToken.value` is set; the moment an upgrade sets `secretRef.name`
+(e.g. `--set auth.adminToken.secretRef.name=wardyn-auth`), that condition
+goes false, the template stops rendering, and Helm deletes the Secret the
+Deployment's `secretKeyRef` still points at — `CreateContainerConfigError`,
+with no admin token left to sign in with. Create and populate the target
+Secret yourself (as in [Installation](#installation) above) **before** the
+upgrade that sets `secretRef.name`, never after.
+
 ## Kubernetes runner substrate (`k8s.enabled`)
 
 Off by default. Turning it on makes wardynd itself create/manage sandboxes as
