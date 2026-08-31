@@ -35,7 +35,7 @@ import {
   SectionCard,
   SectionLabel,
 } from "../../wardyn/primitives";
-import { MEMBER_GETTING_STARTED as T } from "../../wardyn/copy";
+import { EPISODES_COPY as EP, MEMBER_GETTING_STARTED as T } from "../../wardyn/copy";
 import { CC_META } from "../../wardyn/cc-meta";
 import { strongestAvailable } from "../../wardyn/default-confinement";
 import { useMemberLocalDirRoot } from "../../wardyn/operator-context";
@@ -45,7 +45,7 @@ import { runs as runsApi } from "../../../lib/api/runs";
 import { sshKeys as sshKeysApi } from "../../../lib/api/ssh-keys";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { MEMBER_WORKSPACE } from "../../../lib/permissions-copy";
-import { episodesFor, MEMBER_SECTION_IDS } from "../../../lib/demo-videos";
+import { EPISODES } from "../../../lib/demo-videos";
 import { EpisodeRow } from "./episode-card";
 import { YourModelKey } from "./your-model-key";
 import type { AgentRun, SetupStatus } from "../../../lib/types";
@@ -141,7 +141,11 @@ export function MemberGettingStarted() {
     ? strongestAvailable(status.runner.confinement_classes)
     : undefined;
 
-  const memberEpisodes = MEMBER_SECTION_IDS.flatMap((id) => episodesFor(id));
+  // Shape C (approved mock round 2026-08-31): the member's own path leads
+  // (every member-audience episode — which now includes 13, whose lesson is
+  // the member terminal), then the core "watch first" set.
+  const memberEpisodes = EPISODES.filter((e) => e.audience === "member");
+  const coreEpisodes = EPISODES.filter((e) => e.path === "core");
 
   return (
     <div className="mx-auto w-full max-w-[880px] px-6 py-8">
@@ -287,9 +291,19 @@ export function MemberGettingStarted() {
 
       {memberEpisodes.length > 0 && (
         <div className="mt-10">
-          <SectionLabel>Watch</SectionLabel>
+          <SectionLabel>{EP.MEMBER_YOUR_PATH}</SectionLabel>
           <div className="mt-2">
             {memberEpisodes.map((e) => (
+              <EpisodeRow key={e.id} episode={e} />
+            ))}
+          </div>
+        </div>
+      )}
+      {coreEpisodes.length > 0 && (
+        <div className="mt-6">
+          <SectionLabel>{EP.GROUP_CORE}</SectionLabel>
+          <div className="mt-2">
+            {coreEpisodes.map((e) => (
               <EpisodeRow key={e.id} episode={e} />
             ))}
           </div>

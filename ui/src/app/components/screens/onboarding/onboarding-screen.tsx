@@ -19,6 +19,7 @@ import { useRole } from "../../wardyn/operator-context";
 import { setup as api } from "../../../lib/api/setup";
 import { lsGet, lsSet } from "../../../lib/storage";
 import { markGateFired } from "../setup/setup-gate";
+import { deploymentMode } from "../../../lib/readiness";
 import type { SetupStatus } from "../../../lib/types";
 import { HowItWorksStrip, IntroBlurb } from "./intro";
 import { EpisodeList } from "./episode-card";
@@ -231,7 +232,7 @@ export function OnboardingScreen({
         the sidebar.
       </p>
 
-      <EpisodeList />
+      <EpisodeList mode={status && deploymentMode(status) === "multi-user" ? "multi" : "single"} />
     </div>
   );
 }

@@ -599,9 +599,16 @@ export const EPISODES_COPY = {
   // Derived from EPISODES (recorded count, summed minutes) — never hand-typed,
   // so a re-shoot that ships/reserves an episode can't leave this stale.
   SUMMARY: (recorded: number, minutes: number) => `${recorded} recorded · about ${minutes} minutes · streamed from GitHub on click`,
-  GROUP_ADMIN: "For admins",
-  GROUP_MEMBER: "For members",
-  GROUP_EVERYONE: "For everyone",
+  // Shape C grouping (approved mock round 2026-08-31): path-first groups, the
+  // install's own deployment leading, the other path collapsed.
+  GROUP_CORE: "Start here",
+  GROUP_DEPLOYMENT_SINGLE: "Your deployment — single-user",
+  GROUP_DEPLOYMENT_MULTI: "Your deployment — multi-user",
+  GROUP_ANY: "Running work — any deployment",
+  OTHER_PATH_SINGLE: (n: number) => `The single-user path — ${n} episodes`,
+  OTHER_PATH_MULTI: (n: number) => `The multi-user path — ${n} episodes`,
+  FOR_YOUR_MEMBERS: "For your members",
+  MEMBER_YOUR_PATH: "Your path",
 } as const;
 
 // People step (step-bodies.tsx's DeploymentStep) — canon per the approved mock.

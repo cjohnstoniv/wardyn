@@ -13,6 +13,7 @@ const shipped: Episode = {
   id: "01",
   title: "Why govern agents",
   audience: "everyone",
+  path: "core",
   tag: "v0.6.0",
   file: "wardyn-01-why-govern-agents.mp4",
   minutes: "5:51",
@@ -23,6 +24,7 @@ const reserved: Episode = {
   id: "02b",
   title: "Managed desktop",
   audience: "admin",
+  path: "single",
   tag: null,
   file: "wardyn-02b-managed-desktop.mp4",
   steps: [],
@@ -83,26 +85,48 @@ describe("StepEpisodes", () => {
   });
 });
 
-describe("EpisodeList", () => {
-  it("groups episodes by audience under the three headings, and derives the summary line from EPISODES", () => {
-    render(<EpisodeList />);
+describe("EpisodeList — Shape C path grouping (approved mock round 2026-08-31)", () => {
+  it("single mode: core leads, the single-user path is the deployment group, multi collapses", () => {
+    render(<EpisodeList mode="single" />);
     const { recorded, minutes } = catalogSummary(EPISODES);
     expect(screen.getByText("All episodes")).toBeInTheDocument();
     expect(
       screen.getByText(`${recorded} recorded · about ${minutes} minutes · streamed from GitHub on click`),
     ).toBeInTheDocument();
-    expect(screen.getByText("For admins")).toBeInTheDocument();
-    expect(screen.getByText("For members")).toBeInTheDocument();
-    expect(screen.getByText("For everyone")).toBeInTheDocument();
+    expect(screen.getByText("Start here")).toBeInTheDocument();
+    expect(screen.getByText("Your deployment — single-user")).toBeInTheDocument();
+    expect(screen.getByText("Running work — any deployment")).toBeInTheDocument();
+    expect(screen.queryByText("Your deployment — multi-user")).not.toBeInTheDocument();
+    // The other path stays reachable, collapsed, with an honest count.
+    const multiCount = EPISODES.filter((e) => e.path === "multi").length;
+    expect(screen.getByText(`The multi-user path — ${multiCount} episodes`)).toBeInTheDocument();
+    // Its rows are rendered inside the disclosure (native <details> keeps them
+    // in the DOM), and no member chips show in single mode.
+    expect(screen.getByText("One command to a cluster")).toBeInTheDocument();
+    expect(screen.queryByText("For your members")).not.toBeInTheDocument();
+  });
+
+  it("multi mode: the deployment group swaps, member-audience rows are chipped, single collapses", () => {
+    render(<EpisodeList mode="multi" />);
+    expect(screen.getByText("Your deployment — multi-user")).toBeInTheDocument();
+    expect(screen.queryByText("Your deployment — single-user")).not.toBeInTheDocument();
+    const singleCount = EPISODES.filter((e) => e.path === "single").length;
+    expect(screen.getByText(`The single-user path — ${singleCount} episodes`)).toBeInTheDocument();
+    // 04b and 13 are the multi path's member-audience episodes — an admin
+    // reading their own deployment group sees whose episodes those are.
+    const memberChips = screen.getAllByText("For your members");
+    expect(memberChips).toHaveLength(
+      EPISODES.filter((e) => e.path === "multi" && e.audience === "member").length,
+    );
   });
 });
 
 describe("catalogSummary", () => {
   it("counts only recorded (non-null tag) episodes and sums their minutes, rounded", () => {
     const fixture: Episode[] = [
-      { id: "a", title: "A", audience: "everyone", tag: "v1", file: "a.mp4", minutes: "1:30", steps: [] },
-      { id: "b", title: "B", audience: "everyone", tag: "v1", file: "b.mp4", minutes: "2:00", steps: [] },
-      { id: "c", title: "C", audience: "everyone", tag: null, file: "c.mp4", steps: [] },
+      { id: "a", title: "A", audience: "everyone", path: "core", tag: "v1", file: "a.mp4", minutes: "1:30", steps: [] },
+      { id: "b", title: "B", audience: "everyone", path: "core", tag: "v1", file: "b.mp4", minutes: "2:00", steps: [] },
+      { id: "c", title: "C", audience: "everyone", path: "core", tag: null, file: "c.mp4", steps: [] },
     ];
     // Negative control: the reserved (tag: null) episode is excluded from
     // both the recorded count and the minutes sum, even though it has no

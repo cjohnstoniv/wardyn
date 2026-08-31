@@ -27,6 +27,37 @@ describe("demo-videos", () => {
     expect(releasePageUrl("v0.6.0")).toBe("https://github.com/cjohnstoniv/wardyn/releases/tag/v0.6.0");
   });
 
+  // Shape C partition, frozen at the approved mock round (2026-08-31). The
+  // three audience flips ride inside it: 05 admin->everyone, 12
+  // everyone->admin, 13 everyone->member. A new episode must take a stance
+  // here on purpose, not inherit one silently.
+  it("pins every episode's (path, audience) to the approved Shape C partition", () => {
+    const partition = Object.fromEntries(EPISODES.map((e) => [e.id, `${e.path}/${e.audience}`]));
+    expect(partition).toEqual({
+      "01": "core/everyone",
+      "02": "single/admin",
+      "02b": "single/admin",
+      "02c": "multi/admin",
+      "03a": "core/everyone",
+      "03b": "core/everyone",
+      "03c": "core/everyone",
+      "03d": "core/everyone",
+      "04": "single/admin",
+      "04b": "multi/member",
+      "04c": "multi/admin",
+      "05": "core/everyone",
+      "06": "any/member",
+      "07": "any/member",
+      "08": "any/member",
+      "09": "core/everyone",
+      "10": "any/member",
+      "11": "any/everyone",
+      "12": "multi/admin",
+      "12b": "multi/admin",
+      "13": "multi/member",
+    });
+  });
+
   it("has unique episode ids", () => {
     const ids = EPISODES.map((e) => e.id);
     expect(new Set(ids).size).toBe(ids.length);

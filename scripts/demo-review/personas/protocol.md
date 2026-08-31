@@ -60,7 +60,13 @@ persona is the audience, not an auditor.
 2. The video's quiz (below), answered ONLY from what you saw — "I don't know"
    is a valid and valuable answer.
 3. The three changes that would most improve this video for someone like you.
-4. Your verdict, in your persona's own terms (each persona file defines it),
+4. Path fit (Shape C): the series is grouped by deployment path — Start here
+   (core: 01, 03a-d, 05, 09) · single-user path (02, 02b, 04) · multi-user
+   path (02c, 04b, 04c, 12, 12b, 13) · running work, any deployment (06, 07,
+   08, 10, 11) — with admin/member audiences inside a path. From YOUR seat: is
+   this episode filed where you would have looked for it? If not, name where
+   you'd expect it and why. "Yes, obviously" is a fine answer.
+5. Your verdict, in your persona's own terms (each persona file defines it),
    ending with your lane's PASS / FAIL (see "Verdict lanes").
 
 ## Per-video quiz

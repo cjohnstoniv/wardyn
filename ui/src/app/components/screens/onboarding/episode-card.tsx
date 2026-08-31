@@ -18,7 +18,7 @@ import { Chip, SectionLabel } from "../../wardyn/primitives";
 import { EPISODES_COPY as T } from "../../wardyn/copy";
 import { EPISODES, episodeUrl, episodesFor, releasePageUrl, type Episode } from "../../../lib/demo-videos";
 
-export function EpisodeRow({ episode }: { episode: Episode }) {
+export function EpisodeRow({ episode, chip }: { episode: Episode; chip?: string }) {
   const [open, setOpen] = React.useState(false);
   const [errored, setErrored] = React.useState(false);
   const url = episodeUrl(episode);
@@ -28,6 +28,7 @@ export function EpisodeRow({ episode }: { episode: Episode }) {
       <div className="flex items-center gap-2">
         <Play className="size-4 shrink-0 text-muted-foreground" aria-hidden />
         <span className="min-w-0 flex-1 truncate text-sm text-foreground">{episode.title}</span>
+        {chip && <Chip tone="info">{chip}</Chip>}
         {episode.minutes && <span className="shrink-0 text-xs text-muted-foreground">{episode.minutes}</span>}
         {episode.tag === null ? (
           <Chip tone="neutral">{T.NOT_RECORDED}</Chip>
@@ -89,11 +90,6 @@ export function StepEpisodes({ stepId }: { stepId: string }) {
   );
 }
 
-const AUDIENCE_GROUPS: { audience: Episode["audience"]; label: string }[] = [
-  { audience: "admin", label: T.GROUP_ADMIN },
-  { audience: "member", label: T.GROUP_MEMBER },
-  { audience: "everyone", label: T.GROUP_EVERYONE },
-];
 
 // Derived from EPISODES itself (never hand-typed) so a re-shoot that ships or
 // reserves an episode (RELEASING.md's "one sed") cannot leave the summary
@@ -108,27 +104,52 @@ export function catalogSummary(episodes: Episode[]): { recorded: number; minutes
   return { recorded, minutes: Math.round(totalSeconds / 60) };
 }
 
-export function EpisodeList() {
+// Shape C (approved mock round 2026-08-31): path-first groups. Core leads,
+// the install's own deployment path follows, path-agnostic "running work"
+// episodes next, and the OTHER deployment's path collapses behind a native
+// disclosure — the catalog stays complete without leading anyone down the
+// wrong install story. In the multi-user group, member-audience rows carry a
+// chip so an admin knows which episodes are for their members, not them.
+export function EpisodeList({ mode }: { mode: "single" | "multi" }) {
   const { recorded, minutes } = catalogSummary(EPISODES);
+  const byPath = (p: Episode["path"]) => EPISODES.filter((e) => e.path === p);
+  const other = byPath(mode === "single" ? "multi" : "single");
+  const groups: { key: string; label: string; rows: Episode[]; memberChips?: boolean }[] = [
+    { key: "core", label: T.GROUP_CORE, rows: byPath("core") },
+    mode === "single"
+      ? { key: "single", label: T.GROUP_DEPLOYMENT_SINGLE, rows: byPath("single") }
+      : { key: "multi", label: T.GROUP_DEPLOYMENT_MULTI, rows: byPath("multi"), memberChips: true },
+    { key: "any", label: T.GROUP_ANY, rows: byPath("any") },
+  ];
   return (
     <div className="mt-10">
       <h2 className="text-lg font-semibold text-foreground">{T.ALL_EPISODES_TITLE}</h2>
       <p className="mt-1 text-sm text-muted-foreground">{T.SUMMARY(recorded, minutes)}</p>
       <div className="mt-4 space-y-6">
-        {AUDIENCE_GROUPS.map((g) => {
-          const rows = EPISODES.filter((e) => e.audience === g.audience);
-          if (rows.length === 0) return null;
-          return (
-            <div key={g.audience}>
-              <SectionLabel>{g.label}</SectionLabel>
-              <div className="mt-2">
-                {rows.map((e) => (
-                  <EpisodeRow key={e.id} episode={e} />
-                ))}
-              </div>
+        {groups.map((g) => (
+          <div key={g.key}>
+            <SectionLabel>{g.label}</SectionLabel>
+            <div className="mt-2">
+              {g.rows.map((e) => (
+                <EpisodeRow
+                  key={e.id}
+                  episode={e}
+                  chip={g.memberChips && e.audience === "member" ? T.FOR_YOUR_MEMBERS : undefined}
+                />
+              ))}
             </div>
-          );
-        })}
+          </div>
+        ))}
+        <details>
+          <summary className="cursor-pointer text-sm text-muted-foreground">
+            {mode === "single" ? T.OTHER_PATH_MULTI(other.length) : T.OTHER_PATH_SINGLE(other.length)}
+          </summary>
+          <div className="mt-2">
+            {other.map((e) => (
+              <EpisodeRow key={e.id} episode={e} />
+            ))}
+          </div>
+        </details>
       </div>
     </div>
   );

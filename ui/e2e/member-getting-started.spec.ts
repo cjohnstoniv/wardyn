@@ -39,6 +39,22 @@ test.describe("member Getting Started (mocked /me role)", () => {
     await expect(page.getByText("Pick your barrier")).toHaveCount(0);
   });
 
+  test("the episode rail leads with the member's own path, then core (Shape C)", async ({
+    page,
+  }) => {
+    await gotoConsole(page);
+    await navToRoute(page, "/setup");
+    // Group labels, in order: "Your path" (every member-audience episode —
+    // including 13, whose lesson is the member terminal) then "Start here".
+    const labels = page.locator(".label-eyebrow", { hasText: /Your path|Start here/ });
+    await expect(labels).toHaveCount(2);
+    await expect(labels.nth(0)).toHaveText("Your path");
+    await expect(labels.nth(1)).toHaveText("Start here");
+    await expect(page.getByText("Your terminal, our cluster")).toBeVisible();
+    // The flipped core episode is in the member's Start-here set.
+    await expect(page.getByText("Your first policy")).toBeVisible();
+  });
+
   test("the account menu has no Demos entry", async ({ page }) => {
     await gotoConsole(page);
     await page.locator("header").getByRole("button").last().click();
