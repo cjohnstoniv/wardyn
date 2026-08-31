@@ -593,24 +593,39 @@ func TestClaudeSubscriptionStagingCheck_NoResidentClaudeHome(t *testing.T) {
 	}
 }
 
-// agentImageCheck: the shipped ghcr/compose-demo convention images are known
-// Node-only by construction => warn naming WARDYN_AGENT_IMAGES; any operator
-// override is assumed provisioned on purpose => info, not a red.
+// agentImageCheck: NEVER a warn. Both arms are info, and the row's whole job is
+// carrying the RIGHT MESSAGE — the convention arm names the toolchain limit and
+// how to lift it; the override arm names the harness and probe images.
+//
+// Both arms are info because the convention image is the SHIPPED DEFAULT: true
+// of every stock install, documented rather than misconfigured, and clearable
+// only by wiring an image a JS/Python operator never needs. Grading it warn
+// made the first-run gate (which redirects on warn) hold every stock install in
+// the funnel with no in-product way out. So severity cannot distinguish the two
+// arms any more — the assertions below are on the detail text, which is what an
+// operator actually reads.
 func TestAgentImageCheck(t *testing.T) {
 	// The ghcr fallback for claude-code resolves to agent-BASE since 0.7 (the
 	// catalog row's ImageKey was re-pointed because agent-claude-code is not
 	// published). agent-base carries node/npm/python3 but no Go, Java or Rust,
-	// so the warn must still fire — and must name the image the operator will
+	// so the row must still SAY so — and must name the image the operator will
 	// actually run, not the one that no longer resolves.
-	if chk := agentImageCheck(nil); chk.Status != "warn" || !strings.Contains(chk.Detail, "ghcr.io/cjohnstoniv/agent-base:") {
-		t.Errorf("nil images (ghcr fallback): status=%q detail=%q, want warn naming the ghcr agent-base ref", chk.Status, chk.Detail)
+	chk := agentImageCheck(nil)
+	if chk.Status != "info" || !strings.Contains(chk.Detail, "ghcr.io/cjohnstoniv/agent-base:") ||
+		!strings.Contains(chk.Detail, "limited toolchain") {
+		t.Errorf("nil images (ghcr fallback): status=%q detail=%q, want info naming the ghcr agent-base ref and its toolchain limit", chk.Status, chk.Detail)
 	}
-	// ...and the locally-built vendor image is still the limited one it always was.
-	if chk := agentImageCheck(map[string]string{"claude-code": "wardyn/agent-base:local"}); chk.Status != "warn" {
-		t.Errorf("locally-built agent-base: status=%q, want warn", chk.Status)
+	// An info row that dropped its Fix would leave a real limitation with no
+	// remedy — the reason this stayed a row at all rather than being deleted.
+	if !strings.Contains(chk.Fix, "WARDYN_AGENT_IMAGES") {
+		t.Errorf("convention image: Fix=%q, want it to name WARDYN_AGENT_IMAGES", chk.Fix)
 	}
-	if chk := agentImageCheck(map[string]string{"claude-code": "wardyn/agent-claude-code:local"}); chk.Status != "warn" {
-		t.Errorf("compose demo convention image: status=%q, want warn", chk.Status)
+	// ...and the locally-built vendor images are still the limited ones they always were.
+	for _, ref := range []string{"wardyn/agent-base:local", "wardyn/agent-claude-code:local"} {
+		chk := agentImageCheck(map[string]string{"claude-code": ref})
+		if chk.Status != "info" || !strings.Contains(chk.Detail, "limited toolchain") {
+			t.Errorf("%s: status=%q detail=%q, want info naming the toolchain limit", ref, chk.Status, chk.Detail)
+		}
 	}
 	if chk := agentImageCheck(map[string]string{"claude-code": "wardyn/agent-full:local"}); chk.Status != "info" {
 		t.Errorf("operator override image: status=%q, want info (not a red)", chk.Status)

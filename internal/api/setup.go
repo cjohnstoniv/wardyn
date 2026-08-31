@@ -425,8 +425,15 @@ func claudeSubscriptionStagingCheck(hasClaudeSub, blessed bool, loginVia string)
 func agentImageCheck(images map[string]string) SetupCheck {
 	ref := agentImage("claude-code", images)
 	if isConventionLimitedToolchainImage(ref) {
+		// INFO, not warn. This is the SHIPPED DEFAULT: it is true of every stock
+		// install, it is documented rather than misconfigured, and it clears only
+		// by building or wiring a multi-toolchain image that a JS/Python operator
+		// never needs. setup_checks.go reserves "info" for exactly that —
+		// permanent or purely optional — and the first-run gate (ui setup-gate.ts)
+		// redirects on warn, so grading this warn locked every stock install in
+		// the funnel with no in-product way out.
 		return SetupCheck{
-			ID: "agent_image", Label: "Agent image toolchains", Status: "warn",
+			ID: "agent_image", Label: "Agent image toolchains", Status: "info",
 			Detail: "The configured claude-code agent image (" + ref + ") is a shipped convention image with a " +
 				"limited toolchain — a Go, Rust or Java workspace will fail verify/record with exit 127 " +
 				"(toolchain not found).",
