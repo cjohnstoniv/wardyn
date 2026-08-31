@@ -550,3 +550,9 @@ Adjudicated by the owner 2026-08-31 via question round on the published mock art
 - **Q7 — owner ruling (supersedes both mocked options): email-keyed console mappings are refused by default.** An org opts in via startup/helm config — new env var `WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` (bool, default `false`, exposed like every other `WARDYN_OIDC_*` through the chart's generic `env:` map). When opted in, email rows carry the §7.2 warn badge. Rationale: with SSO/Entra the default posture must steer to `roles`/`groups` keys. New frozen string this ruling creates (rendered on a refused POST):
   `EMAIL_KEY_REFUSED`: "Email mappings are disabled on this install. Map an App Role or group instead, or opt in with `WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` in your chart." (env `WARDYN_OIDC_ROLE_MAP` email keys are unaffected — legacy, boot-warned.)
 - **Q8 — keep current behavior**: `WARDYN_OIDC_DEFAULT_ROLE` stays ignored at an empty merged map; the delete-guard copy states the real arm-1 outcome.
+
+### Post-adjudication canon additions (from the backend review round, same governance as §7)
+
+- `STALE_SNAPSHOT_ERROR`: "your sign-in is too old to verify this change — sign in again before changing role mappings." — rendered when the server cannot re-derive the acting admin's own role from their session snapshot (nil or truncated); distinct from `LOCKOUT_ERROR`, which now fires only when the snapshot derives admin before the change and non-admin after it.
+- The Defaults block renders the real operator-email addresses (`operator_emails` on GET /access), not a presence chip; `OPERATOR_EMAILS_EMPTY` unchanged for the empty case.
+- `EMAIL_KEY_BODY`'s email_verified clause renders only when `email_domains_configured` is false (the claim it makes is untrue on a deployment that sets `WARDYN_OIDC_EMAIL_DOMAINS`).
