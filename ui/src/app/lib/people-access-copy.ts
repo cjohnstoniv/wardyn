@@ -48,8 +48,17 @@ export const PEOPLE = {
   SHADOWED_OPERATOR_BODY:
     "This value is on your chart's WARDYN_OIDC_OPERATOR_EMAILS and always resolves to admin. The row is stored but has no effect until the allowlist entry or this row is removed.",
   EMAIL_KEY_BADGE: "Unverified claim",
-  EMAIL_KEY_BODY:
-    "This is an email-keyed mapping riding an unverified IdP claim (WARDYN_OIDC_EMAIL_DOMAINS is unset, so email_verified isn't enforced). Prefer an App Role or group instead.",
+  // Post-adjudication canon addition (backend review round): the
+  // email_verified clause only applies when WARDYN_OIDC_EMAIL_DOMAINS is
+  // UNSET (email_domains_configured=false on GET /access) — the claim is
+  // untrue on a deployment that sets it, so the clause is dropped rather than
+  // rendered false. The doc names the CONDITION, not this exact alternate
+  // wording; flagged in this campaign's report as the one string not given
+  // verbatim.
+  EMAIL_KEY_BODY: (emailDomainsConfigured: boolean) =>
+    emailDomainsConfigured
+      ? "This is an email-keyed mapping. Prefer an App Role or group instead."
+      : "This is an email-keyed mapping riding an unverified IdP claim (WARDYN_OIDC_EMAIL_DOMAINS is unset, so email_verified isn't enforced). Prefer an App Role or group instead.",
   ADD_TITLE: "Add a mapping",
   ADD_CTA: "Add mapping",
   FIELD_VALUE: "Value",
@@ -94,12 +103,10 @@ export const GUARD = {
   LAST_ROW_CONFIRM: "Delete mapping",
 } as const;
 
-// §7.4 — collision and lockout. COLLISION_ERROR_CHART/_OPERATOR are two
-// DISTINCT frozen strings; access.go's accessCollisionError today returns one
-// merged message naming both sources instead — see access-panel.tsx's
-// classifyWriteError for how the client reconstructs the split (cross-
-// referencing the submitted value against the chart rows GET /access already
-// returned), and this campaign's report for the flagged mismatch.
+// §7.4 — collision, lockout and the stale-snapshot refusal. Collision 400s
+// are STRUCTURED (access.go's accessCollisionBody: {error, cause, value}) as
+// of the backend review round (commit 544467ed) — COLLISION_ERROR_CHART/
+// _OPERATOR key directly off `cause`, no client-side reconstruction.
 export const ACCESS_ERROR = {
   COLLISION_ERROR_CHART: (value: string) =>
     `"${value}" is already mapped in your chart's WARDYN_OIDC_ROLE_MAP — the chart always wins, so a console row here would only ever be shadowed. Edit your chart values instead.`,
@@ -107,6 +114,14 @@ export const ACCESS_ERROR = {
     `"${value}" is already on your chart's operator allowlist (WARDYN_OIDC_OPERATOR_EMAILS) and always resolves to admin — a console row here would have no effect. Edit your chart values instead.`,
   LOCKOUT_ERROR:
     "This change would leave you without admin access, checked against your last sign-in — refused. The admin token is never bound by this check, so it stays your recovery path if you lock out any other way.",
+  // Post-adjudication canon addition (backend review round) — DISTINCT from
+  // LOCKOUT_ERROR: fires when the server can't even re-derive the acting
+  // admin's role from their (nil/truncated) session snapshot, so it can't
+  // tell whether the write is a real demotion at all. LOCKOUT_ERROR now fires
+  // only once the snapshot proves admin-before, non-admin-after. Access-
+  // panel.tsx matches the server's exact raw message (no `.includes`) to pick
+  // between the two.
+  STALE_SNAPSHOT_ERROR: "your sign-in is too old to verify this change — sign in again before changing role mappings.",
   // Q7 adjudication — byte-identical to access.go's accessEmailKeyRefused
   // const; kept here too so the component never renders the server's raw
   // string directly (see access-panel.tsx's classifyWriteError).

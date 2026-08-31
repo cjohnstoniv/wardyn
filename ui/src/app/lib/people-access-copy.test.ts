@@ -25,6 +25,18 @@ describe("people-access-copy — sentinel byte-exact pins", () => {
       "Email mappings are disabled on this install. Map an App Role or group instead, or opt in with WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS in your chart.",
     );
   });
+
+  // Post-adjudication canon addition (backend review round, commit
+  // 544467ed) — verbatim from the DOC's quoted string, which carries a
+  // trailing period the Go accessStaleSnapshot const itself does NOT (the
+  // component matches the server's raw message exactly, then renders THIS
+  // fuller frozen copy — same pattern LOCKOUT_ERROR already used).
+  it("pins ACCESS_ERROR.STALE_SNAPSHOT_ERROR verbatim, distinct from LOCKOUT_ERROR", () => {
+    expect(ACCESS_ERROR.STALE_SNAPSHOT_ERROR).toBe(
+      "your sign-in is too old to verify this change — sign in again before changing role mappings.",
+    );
+    expect(ACCESS_ERROR.STALE_SNAPSHOT_ERROR).not.toBe(ACCESS_ERROR.LOCKOUT_ERROR);
+  });
 });
 
 // §7.3's four worked examples (the ones that actually fire — admin→admin and

@@ -29,7 +29,7 @@ vi.mock("../../../lib/api/access", async () => {
 });
 
 import { HttpError } from "../../../lib/api/core";
-import { AccessPostureFlipRequiredError } from "../../../lib/api/access";
+import { AccessCollisionError, AccessPostureFlipRequiredError } from "../../../lib/api/access";
 import { ACCESS_ERROR, ACCESS_STATE, GUARD, PEOPLE, PREVIEW } from "../../../lib/people-access-copy";
 import type { AccessResponse } from "../../../lib/types";
 import { AccessPanel } from "./access-panel";
@@ -51,7 +51,9 @@ function baseAccess(over: Partial<AccessResponse> = {}): AccessResponse {
     ],
     default_role: "member",
     operator_emails_present: true,
+    operator_emails: ["ops@corp.example"],
     allow_email_mappings: false,
+    email_domains_configured: false,
     posture: { map_empty: false, before: "an admin", after: "sign in as a member", changes: true },
     ...over,
   };
@@ -174,6 +176,19 @@ describe("AccessPanel — merged table (Variant A)", () => {
     expect(screen.getByText(PEOPLE.EMAIL_KEY_BADGE)).toBeInTheDocument();
   });
 
+  // Post-adjudication canon addition: the email_verified clause only applies
+  // when WARDYN_OIDC_EMAIL_DOMAINS is unset.
+  it("EMAIL_KEY_BODY carries the email_verified clause when email_domains_configured is false", async () => {
+    renderPanel(baseAccess({ mappings: [emailRow], allow_email_mappings: true, email_domains_configured: false }));
+    await expectEventualBodyText(PEOPLE.EMAIL_KEY_BODY(false));
+  });
+
+  it("EMAIL_KEY_BODY drops the email_verified clause when email_domains_configured is true", async () => {
+    renderPanel(baseAccess({ mappings: [emailRow], allow_email_mappings: true, email_domains_configured: true }));
+    await expectEventualBodyText(PEOPLE.EMAIL_KEY_BODY(true));
+    expect(document.body.textContent).not.toContain("WARDYN_OIDC_EMAIL_DOMAINS");
+  });
+
   it("Defaults block: a set default role renders as a chip", () => {
     renderPanel(baseAccess({ default_role: "member" }));
     expect(within(screen.getByTestId("access-defaults")).getByText(PEOPLE.ROLE_MEMBER)).toBeInTheDocument();
@@ -185,8 +200,18 @@ describe("AccessPanel — merged table (Variant A)", () => {
   });
 
   it("Defaults block: no operator emails renders OPERATOR_EMAILS_EMPTY", () => {
-    renderPanel(baseAccess({ operator_emails_present: false }));
+    renderPanel(baseAccess({ operator_emails_present: false, operator_emails: [] }));
     expect(screen.getByText(PEOPLE.OPERATOR_EMAILS_EMPTY)).toBeInTheDocument();
+  });
+
+  // A-3 (backend review round): the Defaults block renders the REAL
+  // addresses now, not a presence-only chip.
+  it("Defaults block: operator emails render as the real addresses", () => {
+    renderPanel(baseAccess({ operator_emails: ["ops@corp.example", "sre@corp.example"] }));
+    const defaults = screen.getByTestId("access-defaults");
+    expect(within(defaults).getByText("ops@corp.example")).toBeInTheDocument();
+    expect(within(defaults).getByText("sre@corp.example")).toBeInTheDocument();
+    expect(within(defaults).queryByText(PEOPLE.OPERATOR_EMAILS_EMPTY)).not.toBeInTheDocument();
   });
 });
 
@@ -235,9 +260,16 @@ describe("AccessPanel — add mapping error classification", () => {
     ],
   });
 
-  it("a chart-collision 400 renders COLLISION_ERROR_CHART for a value the chart already maps", async () => {
+  // Collision 400s are STRUCTURED as of commit 544467ed
+  // ({error, cause, value}) — COLLISION_ERROR_CHART/_OPERATOR key directly
+  // off `cause`, no client-side value/chart-row cross-referencing.
+  it("cause='chart' renders COLLISION_ERROR_CHART", async () => {
     upsertMappingMock.mockRejectedValue(
-      new HttpError(400, 'value "wardyn.admin" is already set by your chart config (WARDYN_OIDC_ROLE_MAP or WARDYN_OIDC_OPERATOR_EMAILS) and cannot be overridden here'),
+      new AccessCollisionError(400, {
+        error: 'value "wardyn.admin" is already set by your chart config (WARDYN_OIDC_ROLE_MAP) and cannot be overridden here',
+        cause: "chart",
+        value: "Wardyn.Admin",
+      }),
     );
     renderPanel(chartAndConsole);
     await userEvent.type(screen.getByLabelText(PEOPLE.FIELD_VALUE), "Wardyn.Admin");
@@ -245,9 +277,13 @@ describe("AccessPanel — add mapping error classification", () => {
     await expectEventualBodyText(ACCESS_ERROR.COLLISION_ERROR_CHART("Wardyn.Admin"));
   });
 
-  it("the SAME server wording for a value NOT in the chart classifies as an operator-allowlist collision", async () => {
+  it("cause='operator_allowlist' renders COLLISION_ERROR_OPERATOR — same server error shape, different cause", async () => {
     upsertMappingMock.mockRejectedValue(
-      new HttpError(400, 'value "ops@corp.example" is already set by your chart config (WARDYN_OIDC_ROLE_MAP or WARDYN_OIDC_OPERATOR_EMAILS) and cannot be overridden here'),
+      new AccessCollisionError(400, {
+        error: 'value "ops@corp.example" is already set by your chart config (WARDYN_OIDC_OPERATOR_EMAILS) and cannot be overridden here',
+        cause: "operator_allowlist",
+        value: "ops@corp.example",
+      }),
     );
     renderPanel(chartAndConsole);
     await userEvent.type(screen.getByLabelText(PEOPLE.FIELD_VALUE), "ops@corp.example");
@@ -271,6 +307,21 @@ describe("AccessPanel — add mapping error classification", () => {
     await userEvent.type(screen.getByLabelText(PEOPLE.FIELD_VALUE), "*");
     await userEvent.click(screen.getByRole("button", { name: PEOPLE.ADD_CTA }));
     expect(await screen.findByText(ACCESS_ERROR.LOCKOUT_ERROR)).toBeInTheDocument();
+  });
+
+  // Post-adjudication canon addition: DISTINCT from LOCKOUT_ERROR — a
+  // truncated/pre-snapshot session cookie can't even re-derive the acting
+  // admin's CURRENT role, so it gets this refusal instead. Matched by EXACT
+  // server string (no `.includes`), never conflated with the lockout message.
+  it("a stale-snapshot 400 renders STALE_SNAPSHOT_ERROR, distinct from LOCKOUT_ERROR", async () => {
+    upsertMappingMock.mockRejectedValue(
+      new HttpError(400, "your sign-in is too old to verify this change — sign in again before changing role mappings"),
+    );
+    renderPanel(chartAndConsole);
+    await userEvent.type(screen.getByLabelText(PEOPLE.FIELD_VALUE), "*");
+    await userEvent.click(screen.getByRole("button", { name: PEOPLE.ADD_CTA }));
+    expect(await screen.findByText(ACCESS_ERROR.STALE_SNAPSHOT_ERROR)).toBeInTheDocument();
+    expect(screen.queryByText(ACCESS_ERROR.LOCKOUT_ERROR)).not.toBeInTheDocument();
   });
 
   it("a raw/unrecognized 400 falls back to the server's own message rather than fabricating a frozen string", async () => {
@@ -314,7 +365,12 @@ describe("AccessPanel — delete mapping", () => {
     expect(onReload).toHaveBeenCalled();
   });
 
-  it("deleting the LAST console row (chart empty, posture changes) shows the ack-guarded LAST_ROW dialog", async () => {
+  // map_empty is REAL merged-map emptiness (commit 544467ed) — it can diverge
+  // from a raw row count whenever a row is shadowed, so this panel no longer
+  // pre-guesses "is this the last row" client-side at all: EVERY delete goes
+  // straight to the API (ack=false first), and only a 400 carrying the
+  // structured posture-flip body switches the OPEN dialog into guard mode.
+  it("the FIRST delete attempt always sends ack=false — no client-side 'is this the last row' guess", async () => {
     deleteMappingMock.mockResolvedValue(undefined);
     renderPanel(
       baseAccess({
@@ -329,19 +385,47 @@ describe("AccessPanel — delete mapping", () => {
             created_at: "2026-08-28T00:00:00Z",
           },
         ],
-        posture: { map_empty: false, before: "an admin", after: "sign in as a member", changes: true },
       }),
     );
     await userEvent.click(screen.getByRole("button", { name: `${PEOPLE.DELETE} alice@corp.example` }));
-    expect(await screen.findByText(GUARD.LAST_ROW_TITLE)).toBeInTheDocument();
-    // Swapped relative to the add direction — LAST_ROW_BODY(posture.after, posture.before).
-    expect(screen.getByText(GUARD.LAST_ROW_BODY("sign in as a member", "an admin"))).toBeInTheDocument();
+    // Plain confirm shown up front — no ack checkbox — even though this IS
+    // literally the only console row (chart empty): the panel does not know
+    // whether deleting it actually flips the merged map until the server says so.
+    expect(screen.queryByText(GUARD.GUARD_ACK_LABEL)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /^Delete$/ }));
+    expect(deleteMappingMock).toHaveBeenCalledWith("only", false);
+  });
 
-    const confirm = screen.getByRole("button", { name: GUARD.LAST_ROW_CONFIRM });
+  it("a posture-flip 400 on delete switches the OPEN dialog into guard mode, using the error body's before/after", async () => {
+    deleteMappingMock.mockRejectedValueOnce(
+      new AccessPostureFlipRequiredError(400, {
+        error: "…",
+        required_acknowledgement: true,
+        before: "an admin",
+        after: "sign in as a member",
+      }),
+    );
+    deleteMappingMock.mockResolvedValueOnce(undefined);
+    const onReload = vi.fn();
+    // consoleRows.length === 2 here — NOT what a row-count heuristic would
+    // call "the last row" — proving the guard fires purely off the server's
+    // structured 400, never a client-side row count.
+    renderPanel(chartPlusTwoConsole(), "ready", onReload);
+
+    await userEvent.click(screen.getByRole("button", { name: `${PEOPLE.DELETE} alice@corp.example` }));
+    await userEvent.click(screen.getByRole("button", { name: /^Delete$/ }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(GUARD.LAST_ROW_TITLE)).toBeInTheDocument();
+    // Swapped relative to the add direction — LAST_ROW_BODY(error.after, error.before).
+    expect(within(dialog).getByText(GUARD.LAST_ROW_BODY("sign in as a member", "an admin"))).toBeInTheDocument();
+
+    const confirm = within(dialog).getByRole("button", { name: GUARD.LAST_ROW_CONFIRM });
     expect(confirm).toBeDisabled();
-    await userEvent.click(screen.getByLabelText(GUARD.GUARD_ACK_LABEL));
+    await userEvent.click(within(dialog).getByLabelText(GUARD.GUARD_ACK_LABEL));
     await userEvent.click(confirm);
-    expect(deleteMappingMock).toHaveBeenCalledWith("only", true);
+    expect(deleteMappingMock).toHaveBeenLastCalledWith("c1", true);
+    expect(onReload).toHaveBeenCalled();
   });
 
   it("a lockout 400 on delete renders LOCKOUT_ERROR INSIDE the still-open dialog, Delete stays enabled (§2.2 — post-attempt, not a client pre-check)", async () => {

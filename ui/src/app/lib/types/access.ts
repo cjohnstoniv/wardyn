@@ -31,6 +31,11 @@ export interface AccessMapping {
 // verbatim into GUARD.FIRST_ROW_BODY / GUARD.LAST_ROW_BODY (swapped for the
 // delete direction — see access-panel.tsx).
 export interface AccessPosture {
+  // REAL merged-map emptiness (chart + console rows, applying mergeRoleMaps'
+  // own collision/shadow rules) — NOT a raw row count. Can be TRUE even with
+  // console rows present (e.g. the only console row is entirely shadowed by
+  // the operator allowlist and so contributes nothing to the merged map).
+  // Never assume map_empty <=> mappings.filter(source==="console").length===0.
   map_empty: boolean;
   before: string;
   after: string;
@@ -41,7 +46,15 @@ export interface AccessResponse {
   mappings: AccessMapping[];
   default_role: string;
   operator_emails_present: boolean;
+  // The actual addresses (Config.OperatorEmails) — the Defaults block renders
+  // these directly; operator_emails_present stays for the guard-note logic
+  // that only needs presence.
+  operator_emails: string[];
   allow_email_mappings: boolean;
+  // Whether WARDYN_OIDC_EMAIL_DOMAINS is set — EMAIL_KEY_BODY's
+  // email_verified clause only applies when this is false (that claim is
+  // untrue once a domains list is configured).
+  email_domains_configured: boolean;
   posture: AccessPosture;
 }
 
@@ -64,6 +77,17 @@ export interface AccessPostureFlipBody {
   required_acknowledgement: boolean;
   before: string;
   after: string;
+}
+
+// The structured 400 body POST /access/mappings writes on a collision
+// (accessCollisionBody, access.go) — cause is the SAME "chart" |
+// "operator_allowlist" vocabulary accessMappingView.shadow_cause already
+// uses, so the client keys the two frozen §7.4 strings off it directly
+// instead of reconstructing which source collided.
+export interface AccessCollisionBody {
+  error: string;
+  cause: "chart" | "operator_allowlist";
+  value: string;
 }
 
 export interface AccessPreviewRequest {

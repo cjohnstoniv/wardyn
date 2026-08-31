@@ -24,7 +24,7 @@
 // useSiteConfigStep's own doc describes for CorpNetworkStep.
 import * as React from "react";
 import { AlertTriangle, Info, Loader2, RotateCw, ShieldOff } from "lucide-react";
-import { access as api, AccessPostureFlipRequiredError } from "../../../lib/api/access";
+import { access as api, AccessCollisionError, AccessPostureFlipRequiredError } from "../../../lib/api/access";
 import { getErrorMessage, relativeTime } from "../../../lib/format";
 import type { AccessMapping, AccessResponse, AccessRole } from "../../../lib/types";
 import { ACCESS_ERROR, ACCESS_STATE, GUARD, PEOPLE, PREVIEW } from "../../../lib/people-access-copy";
@@ -108,41 +108,45 @@ function plainDeleteBody(value: string): string {
 }
 
 // ------------------------------------------------------------
-// Write-error classification. access.go's plain 400s (collision/lockout/
-// email-refusal) carry no discriminator field — see classifyWriteError below
-// for how each is told apart, and lib/api/access.ts's AccessPostureFlipRequiredError
-// for the one guard 400 that DOES carry structured fields.
+// Write-error classification. Collision and posture-flip 400s are
+// STRUCTURED (AccessCollisionError / AccessPostureFlipRequiredError,
+// lib/api/access.ts) as of commit 544467ed — keyed directly off their typed
+// fields, no client-side reconstruction. Lockout and the stale-snapshot
+// refusal are still plain {"error":"..."} bodies, but both server strings
+// are now stable canon (docs/design/people-access-prompt.md's "Post-
+// adjudication canon additions") — matched EXACTLY, no `.includes`, so an
+// unrelated 400 can never be misclassified as one of these two.
 // ------------------------------------------------------------
 type WriteErrorKind =
   | { kind: "posture_flip"; before: string; after: string }
   | { kind: "email_refused" }
   | { kind: "lockout" }
+  | { kind: "stale_snapshot" }
   | { kind: "collision_chart"; value: string }
   | { kind: "collision_operator"; value: string }
   | { kind: "raw"; message: string };
 
-// FLAGGED API-SHAPE MISMATCH (see this campaign's report): access.go's
-// accessCollisionError returns ONE merged message naming both possible
-// collision sources, not the two distinct frozen strings §7.4 defines
-// (COLLISION_ERROR_CHART vs COLLISION_ERROR_OPERATOR). This reconstructs the
-// split client-side by checking whether the submitted value matches a CHART
-// row GET /access already returned (case-insensitive, matching
-// canonicalRoleMapValue's own lowering) — falling back to the operator-
-// allowlist wording only when the server's own message actually names a
-// collision at all, never guessing on an unrelated 400.
-function classifyWriteError(e: unknown, value: string, chartValues: string[]): WriteErrorKind {
+// The server's exact raw messages (access.go's accessLockoutErr) — distinct
+// from the FROZEN copy rendered for each (writeErrorNote below), same
+// pattern LOCKOUT_ERROR already used pre-canon: the shipped copy is fuller
+// than what the server actually says.
+const LOCKOUT_MESSAGE = "this change would remove your own admin access (checked against your last sign-in)";
+const STALE_SNAPSHOT_MESSAGE =
+  "your sign-in is too old to verify this change — sign in again before changing role mappings";
+
+function classifyWriteError(e: unknown): WriteErrorKind {
   if (e instanceof AccessPostureFlipRequiredError) {
     return { kind: "posture_flip", before: e.before, after: e.after };
   }
+  if (e instanceof AccessCollisionError) {
+    return e.cause === "chart"
+      ? { kind: "collision_chart", value: e.value }
+      : { kind: "collision_operator", value: e.value };
+  }
   const message = getErrorMessage(e);
   if (message === ACCESS_ERROR.EMAIL_KEY_REFUSED) return { kind: "email_refused" };
-  if (message.includes("would remove your own admin access")) return { kind: "lockout" };
-  if (message.includes("already set by your chart config")) {
-    const lower = value.trim().toLowerCase();
-    return chartValues.some((v) => v.toLowerCase() === lower)
-      ? { kind: "collision_chart", value }
-      : { kind: "collision_operator", value };
-  }
+  if (message === LOCKOUT_MESSAGE) return { kind: "lockout" };
+  if (message === STALE_SNAPSHOT_MESSAGE) return { kind: "stale_snapshot" };
   return { kind: "raw", message };
 }
 
@@ -152,6 +156,8 @@ function writeErrorNote(err: WriteErrorKind): React.ReactNode {
       return withMono(ACCESS_ERROR.EMAIL_KEY_REFUSED);
     case "lockout":
       return ACCESS_ERROR.LOCKOUT_ERROR;
+    case "stale_snapshot":
+      return ACCESS_ERROR.STALE_SNAPSHOT_ERROR;
     case "collision_chart":
       return withMono(ACCESS_ERROR.COLLISION_ERROR_CHART(err.value));
     case "collision_operator":
@@ -219,28 +225,19 @@ export function AccessPanel({
 // Role mappings table + add form + Defaults block
 // ------------------------------------------------------------
 function MappingsTable({ access, onReload }: { access: AccessResponse; onReload: () => void }) {
-  const chartRows = access.mappings.filter((m) => m.source === "chart");
-  const consoleRows = access.mappings.filter((m) => m.source === "console");
   const [toDelete, setToDelete] = React.useState<AccessMapping | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [dialogError, setDialogError] = React.useState<WriteErrorKind | null>(null);
   const [ack, setAck] = React.useState(false);
-  // Set only on the rare race where a delete 400s with the structured
-  // posture-flip body even though the pre-check below (isLastRow) said this
-  // wasn't the last row — another admin's write landed between this client's
-  // last GET /access and this attempt. Carries the SAME before/after shape as
-  // access.posture (arm1/arm2), not yet swapped for the delete direction —
-  // guardBeforeAfter below applies that swap uniformly for both sources.
+  // SERVER-AUTHORITATIVE, not a client pre-check (§2.2's own precedent, now
+  // extended to the reverse posture-flip guard too): map_empty is REAL
+  // merged-map emptiness, which can diverge from a raw row count whenever a
+  // row is shadowed (§2.1/commit 544467ed) — a client-side "is this the last
+  // row" guess can therefore be WRONG in either direction. Every delete goes
+  // straight to the API; only a 400 carrying the structured posture-flip body
+  // switches this dialog into guard mode, using ITS before/after.
   const [reactiveGuard, setReactiveGuard] = React.useState<{ before: string; after: string } | null>(null);
-
-  const isLastRow =
-    !!toDelete && chartRows.length === 0 && consoleRows.length === 1 && consoleRows[0].id === toDelete.id;
-  // Same before/after pair GET /access exposes (accessRolePosture) — the
-  // delete direction SWAPS the roles per §7.3's own note (LAST_ROW_BODY's
-  // {before} is the still-current non-empty-map outcome, i.e. posture.after;
-  // its {after} is the post-deletion empty-map outcome, i.e. posture.before).
-  const showDeleteGuard = (isLastRow && access.posture.changes) || !!reactiveGuard;
-  const guardSource = reactiveGuard ?? access.posture;
+  const showDeleteGuard = !!reactiveGuard;
 
   const openDelete = (m: AccessMapping) => {
     setToDelete(m);
@@ -263,8 +260,7 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
       closeDelete();
       onReload();
     } catch (e) {
-      const chartValues = chartRows.map((r) => r.value);
-      const classified = classifyWriteError(e, toDelete.value, chartValues);
+      const classified = classifyWriteError(e);
       if (classified.kind === "posture_flip") {
         setReactiveGuard({ before: classified.before, after: classified.after });
         setAck(false);
@@ -304,6 +300,7 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
                   key={`${m.source}:${m.id ?? m.value}`}
                   mapping={m}
                   allowEmailMappings={access.allow_email_mappings}
+                  emailDomainsConfigured={access.email_domains_configured}
                   onDelete={() => openDelete(m)}
                 />
               ))}
@@ -328,12 +325,17 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
           <dd className="col-span-2 -mt-0.5 text-xs text-muted-foreground">{withMono(PEOPLE.DEFAULT_ROLE_HINT)}</dd>
           <dt className="mt-2 text-muted-foreground">{PEOPLE.OPERATOR_EMAILS_LABEL}</dt>
           <dd className="mt-2 text-foreground">
-            {/* GET /access reports PRESENCE only (operator_emails_present), never the
-                addresses themselves — WARDYN_OIDC_OPERATOR_EMAILS values are never sent
-                to the client. Flagged in this campaign's report: the mock's inline
-                "ops@corp.example" is sample data the real endpoint can't reproduce. */}
-            {access.operator_emails_present ? (
-              <Chip tone="neutral">{PEOPLE.ROLE_ADMIN}</Chip>
+            {/* Real addresses (GET /access's operator_emails), per commit 544467ed —
+                operator_emails_present stays a separate field but isn't needed here
+                now that the list itself is on the wire. */}
+            {access.operator_emails.length > 0 ? (
+              <span className="flex flex-wrap gap-x-2 gap-y-1 font-mono text-xs">
+                {access.operator_emails.map((email) => (
+                  <Mono key={email} className="text-foreground">
+                    {email}
+                  </Mono>
+                ))}
+              </span>
             ) : (
               <span className="text-muted-foreground">{PEOPLE.OPERATOR_EMAILS_EMPTY}</span>
             )}
@@ -344,7 +346,7 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
         </dl>
       </div>
 
-      <AddMappingForm access={access} chartRows={chartRows} onReload={onReload} />
+      <AddMappingForm access={access} onReload={onReload} />
 
       <AlertDialog open={!!toDelete} onOpenChange={(o) => !o && closeDelete()}>
         <AlertDialogContent>
@@ -353,8 +355,8 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
               {showDeleteGuard ? GUARD.LAST_ROW_TITLE : plainDeleteTitle(toDelete?.value ?? "")}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {showDeleteGuard
-                ? GUARD.LAST_ROW_BODY(guardSource.after, guardSource.before)
+              {reactiveGuard
+                ? GUARD.LAST_ROW_BODY(reactiveGuard.after, reactiveGuard.before)
                 : toDelete
                   ? plainDeleteBody(toDelete.value)
                   : ""}
@@ -396,10 +398,12 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
 function MappingRow({
   mapping: m,
   allowEmailMappings,
+  emailDomainsConfigured,
   onDelete,
 }: {
   mapping: AccessMapping;
   allowEmailMappings: boolean;
+  emailDomainsConfigured: boolean;
   onDelete: () => void;
 }) {
   const isEmail = m.value.includes("@");
@@ -429,7 +433,9 @@ function MappingRow({
           <p className="mt-1 max-w-[52ch] text-meta text-muted-foreground">{withMono(PEOPLE.SHADOWED_OPERATOR_BODY)}</p>
         )}
         {showEmailBadge && (
-          <p className="mt-1 max-w-[52ch] text-meta text-muted-foreground">{withMono(PEOPLE.EMAIL_KEY_BODY)}</p>
+          <p className="mt-1 max-w-[52ch] text-meta text-muted-foreground">
+            {withMono(PEOPLE.EMAIL_KEY_BODY(emailDomainsConfigured))}
+          </p>
         )}
       </TableCell>
       <TableCell className="whitespace-nowrap text-muted-foreground">
@@ -454,11 +460,9 @@ function MappingRow({
 // ------------------------------------------------------------
 function AddMappingForm({
   access,
-  chartRows,
   onReload,
 }: {
   access: AccessResponse;
-  chartRows: AccessMapping[];
   onReload: () => void;
 }) {
   const [value, setValue] = React.useState("");
@@ -485,7 +489,7 @@ function AddMappingForm({
       setAck(false);
       onReload();
     } catch (e) {
-      const classified = classifyWriteError(e, value, chartRows.map((r) => r.value));
+      const classified = classifyWriteError(e);
       if (classified.kind === "posture_flip") {
         setGuardBeforeAfter({ before: classified.before, after: classified.after });
         setGuardOpen(true);

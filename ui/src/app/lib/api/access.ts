@@ -7,6 +7,7 @@
 // operatorOnly routes behind the acting surface. Mirrors internal/api/access.go;
 // modeled on lib/api/permissions.ts's shape.
 import type {
+  AccessCollisionBody,
   AccessPostureFlipBody,
   AccessPreviewRequest,
   AccessPreviewResponse,
@@ -23,30 +24,23 @@ export interface RoleMappingUpsert {
   created: boolean;
 }
 
-// Best-effort parse of a POST/DELETE 400 body as the structured posture-flip
-// shape (access.go's accessPostureFlipBody) — required_acknowledgement is the
-// discriminator; a plain {"error":"..."} (collision/lockout/email-refusal)
-// parses fine as JSON but never carries that field, so it falls through as
-// undefined rather than a wrongly-typed value.
-async function parsePostureFlip(res: Response): Promise<AccessPostureFlipBody | null> {
+// Best-effort parse of a POST/DELETE 400 body as JSON — a plain
+// {"error":"..."} (lockout/stale-snapshot/email-refusal) parses fine too, it
+// just carries none of the discriminator fields below.
+async function parseJsonBody(res: Response): Promise<Record<string, unknown> | null> {
   try {
-    const body = (await res.clone().json()) as Partial<AccessPostureFlipBody>;
-    return body.required_acknowledgement === true &&
-      typeof body.before === "string" &&
-      typeof body.after === "string"
-      ? (body as AccessPostureFlipBody)
-      : null;
+    return (await res.clone().json()) as Record<string, unknown>;
   } catch {
     return null;
   }
 }
 
 // Thrown instead of a plain HttpError when a write 400s carrying the
-// structured posture-flip body — carries before/after so access-panel.tsx can
-// render the SAME parameterized GUARD copy it shows pre-emptively (from GET
-// /access's own posture field), reactively, for the rare race where a second
-// admin's write changed the map between this client's last fetch and this
-// attempt.
+// structured posture-flip body (access.go's accessPostureFlipBody) — carries
+// before/after so access-panel.tsx can render the SAME parameterized GUARD
+// copy it shows pre-emptively (from GET /access's own posture field),
+// reactively, for the rare race where a second admin's write changed the map
+// between this client's last fetch and this attempt.
 export class AccessPostureFlipRequiredError extends HttpError {
   before: string;
   after: string;
@@ -58,10 +52,41 @@ export class AccessPostureFlipRequiredError extends HttpError {
   }
 }
 
+// Thrown when a write 400s carrying the structured collision body
+// (access.go's accessCollisionBody) — cause/value let access-panel.tsx key
+// the two frozen §7.4 strings directly instead of reconstructing which
+// source collided from prose.
+export class AccessCollisionError extends HttpError {
+  cause: "chart" | "operator_allowlist";
+  value: string;
+  constructor(status: number, body: AccessCollisionBody) {
+    super(status, body.error);
+    this.name = "AccessCollisionError";
+    this.cause = body.cause;
+    this.value = body.value;
+  }
+}
+
 async function throwAccessWriteError(res: Response): Promise<never> {
-  const flip = await parsePostureFlip(res);
-  if (flip) throw new AccessPostureFlipRequiredError(res.status, flip);
-  throw new HttpError(res.status, await errText(res));
+  const body = await parseJsonBody(res);
+  if (
+    body &&
+    body.required_acknowledgement === true &&
+    typeof body.before === "string" &&
+    typeof body.after === "string" &&
+    typeof body.error === "string"
+  ) {
+    throw new AccessPostureFlipRequiredError(res.status, body as unknown as AccessPostureFlipBody);
+  }
+  if (
+    body &&
+    (body.cause === "chart" || body.cause === "operator_allowlist") &&
+    typeof body.value === "string" &&
+    typeof body.error === "string"
+  ) {
+    throw new AccessCollisionError(res.status, body as unknown as AccessCollisionBody);
+  }
+  throw new HttpError(res.status, typeof body?.error === "string" ? body.error : await errText(res));
 }
 
 export const access = {
@@ -73,11 +98,11 @@ export const access = {
     return asJson<AccessResponse>(res);
   },
 
-  // POST /api/v1/access/mappings -> the saved row. A non-2xx response is
-  // thrown as HttpError with the RAW server message (errText) — the caller
-  // (access-panel.tsx) classifies it (posture-flip / email-refused /
-  // collision / lockout) since the response body carries no discriminator
-  // field for the plain-message cases.
+  // POST /api/v1/access/mappings -> the saved row. A non-2xx response throws
+  // AccessPostureFlipRequiredError or AccessCollisionError for the two
+  // structured shapes, else a plain HttpError carrying the server's message
+  // (lockout / stale-snapshot / email-refused) — the caller (access-panel.tsx)
+  // classifies those three by exact string match.
   async upsertMapping(input: RoleMappingWriteInput): Promise<RoleMappingUpsert> {
     const res = await wfetch("/access/mappings", { method: "POST", body: JSON.stringify(input) });
     if (!res.ok) await throwAccessWriteError(res);
