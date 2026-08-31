@@ -18,6 +18,7 @@ import { strongestAvailable } from "../../wardyn/default-confinement";
 import { useRole } from "../../wardyn/operator-context";
 import { setup as api } from "../../../lib/api/setup";
 import { lsGet, lsSet } from "../../../lib/storage";
+import { markGateFired } from "../setup/setup-gate";
 import type { SetupStatus } from "../../../lib/types";
 import { HowItWorksStrip, IntroBlurb } from "./intro";
 import { EpisodeList } from "./episode-card";
@@ -63,6 +64,16 @@ export function GettingStarted({
   // (b) the legacy fallback for a daemon too old to report the field.
   const [seen, setSeen] = React.useState(onboardingSeen());
   const installOnboarded = status?.onboarding_complete ?? false;
+  // Being IN the funnel satisfies the gate's purpose for this load. The gate's
+  // once-per-load flag otherwise arms only when a GATED route renders — but a
+  // load can start directly on /setup (a reload while onboarding, the SSO
+  // callback's return), which sits outside the gate's wrapper; without this,
+  // the first navigation out of such a load re-fires the gate and the funnel's
+  // own "Open Permissions" bounces back to step one. Landing here IS the
+  // forced redirect's destination, so arriving here arms it.
+  React.useEffect(() => {
+    markGateFired();
+  }, []);
   if (role === "member") {
     // No onDone: this is a page a member returns to, not a funnel step with
     // an exit action — the old MemberSetupNotice's "Go to Runs" button (and
