@@ -163,9 +163,10 @@ def speakable(text: str, initialisms: bool = True) -> str:
     # validated the same way (2026-08-24).
     _SAY = {"CI": "see eye", "CLI": "see ell eye", "API": "eh pee eye", "APIs": "eh pee eyes", "AI": "eh eye",
             "CC1": "see see one", "PAT": "pee eh tee", "PATs": "pee eh tees", "STS": "ess tee ess",
-            "SSH": "ess ess aitch", "TTL": "tee tee ell", "TLS": "tee ell ess", "npm": "en pee em"}
+            "SSH": "ess ess aitch", "TTL": "tee tee ell", "TLS": "tee ell ess", "npm": "en pee em",
+            "SSO": "ess ess oh", "OIDC": "oh eye dee see"}
     if initialisms:
-        out = re.sub(r"\b(CI|CLI|APIs|API|AI|CC1|PATs|PAT|STS|SSH|TTL|TLS|npm)\b", lambda m: _SAY[m.group(1)], out)
+        out = re.sub(r"\b(CI|CLI|APIs|API|AI|CC1|PATs|PAT|STS|SSH|SSO|OIDC|TTL|TLS|npm)\b", lambda m: _SAY[m.group(1)], out)
     # Numbers the captions spell as digits but mean as digit STRINGS: a file mode,
     # a port, the cloud-metadata address. Read as quantities they come out as
     # "four hundred forty-three" / "one hundred sixty-nine…" (checked against the
@@ -173,6 +174,8 @@ def speakable(text: str, initialisms: bool = True) -> str:
     if initialisms:
         out = re.sub(r"\b0400\b", "oh four oh oh", out)
         out = re.sub(r"\b443\b", "four four three", out)
+        out = re.sub(r"\b8280\b", "eight two eight oh", out)
+        out = re.sub(r"\b2322\b", "two three two two", out)
     # Lowercase identifier PARTS (ssh_key, cloud_sts, ttl_seconds, api_key) reach
     # the engine as bare words after the underscore split below; spell them too,
     # but never inside a hostname (ssh.github.com, api.anthropic.com).

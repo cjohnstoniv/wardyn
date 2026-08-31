@@ -13,10 +13,14 @@ demo cluster.
 # 1. The cluster (ports chosen to coexist with a compose stack on :8080)
 WARDYN_QUICKSTART_HTTP_PORT=8280 WARDYN_QUICKSTART_SSH_PORT=2322 make kind-quickstart
 
-# 2. Dex + the SSO overlay
+# 2. Dex + the SSO overlay (the default policy rides along, floored to CC1 —
+#    the baked default's CC2 floor would refuse every MEMBER run on this
+#    Fence-only cluster: members' inline policies are clamped to the default
+#    policy, the chart's own "confinement-floor trap")
 kubectl --context kind-wardyn-quickstart apply -f deploy/kind/sso/dex.yaml
 helm --kube-context kind-wardyn-quickstart upgrade wardyn deploy/helm/wardyn \
-  -n wardyn --reuse-values -f deploy/kind/sso/values.yaml
+  -n wardyn --reuse-values -f deploy/kind/sso/values.yaml \
+  --set-file defaultPolicy=deploy/kind/sso/default-policy.json
 
 # 3. The browser-facing issuer (split-horizon: the cluster reaches Dex by its
 #    Service; your browser reaches it here)

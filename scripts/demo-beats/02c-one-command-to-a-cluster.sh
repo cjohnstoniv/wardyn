@@ -85,29 +85,40 @@ preflight
 # Beat 1 — the one command
 # ---------------------------------------------------------------------------
 chapter "One command to a cluster" "From an empty host to a governed control plane"
-say "No Wardyn is running anywhere on this machine."
+say "No Wardyn is running anywhere on this machine. You need docker, kind, helm, kubectl — and this repo."
 say "One command. A real Kubernetes cluster, the chart, and the control plane."
 type_cmd "WARDYN_QUICKSTART_HTTP_PORT=${HTTP_PORT} WARDYN_QUICKSTART_SSH_PORT=${SSH_PORT} make kind-quickstart"
-say "That's the whole install. What you just watched build is disposable — and identical in shape to a production chart install."
+say "It built a cluster whose network plugin actually enforces network policy — if it did not, this install would refuse to boot rather than run your sandboxes unconfined."
+say "Then the chart: the control plane, its database, and the sandbox runner. Nothing pulled from a registry Wardyn owns — these are images this machine just built."
+say "That's the whole install. Disposable on purpose — one node, a database with no storage, a token passed on the command line. The chart is the production one; the shortcuts around it are not."
 
 # ---------------------------------------------------------------------------
 # Beat 2 — from a token to your people: the SSO overlay
 # ---------------------------------------------------------------------------
+# Captured OFF CAMERA and never printed (V13's rule: the token is never typed,
+# never echoed); the on-camera curl below references it only as ${TOKEN}.
+TOKEN="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get secret wardyn-auth -o jsonpath='{.data.admin-token}' 2>/dev/null | base64 -d 2>/dev/null || true)"
 say "Out of the box it trusts one admin token. A team install trusts an identity provider instead."
 type_cmd "kubectl --context ${CONTEXT} apply -f deploy/kind/sso/dex.yaml"
-type_cmd "helm --kube-context ${CONTEXT} upgrade wardyn deploy/helm/wardyn -n ${NAMESPACE} --reuse-values -f deploy/kind/sso/values.yaml"
+type_cmd "helm --kube-context ${CONTEXT} upgrade wardyn deploy/helm/wardyn -n ${NAMESPACE} --reuse-values -f deploy/kind/sso/values.yaml --set-file defaultPolicy=deploy/kind/sso/default-policy.json"
 type_cmd "kubectl --context ${CONTEXT} -n ${NAMESPACE} rollout status deploy/wardyn --timeout=180s"
-say "Same chart, re-rendered on OIDC. Who is an admin and who is a member is one role-map line in those values."
+type_cmd "grep OIDC_ROLE_MAP deploy/kind/sso/values.yaml"
+say "Same chart, re-rendered on OIDC. That one line is the whole role map — this address is an admin, that one is a member."
+say "The overlay also sets the default policy — the ceiling every member's own policy is clamped to — floored to the barrier this cluster actually enforces."
+type_cmd "curl -s -o /dev/null -w '%{http_code}\n' -H \"Authorization: Bearer \${TOKEN}\" http://127.0.0.1:${HTTP_PORT}/api/v1/runs"
+say "The token that worked a minute ago is dead. The chart re-rendered without it."
 
 # ---------------------------------------------------------------------------
 # Beat 3 — split horizon, one line
 # ---------------------------------------------------------------------------
 say "The cluster reaches the identity provider by its service name. Your browser needs its own road."
 type_cmd "kubectl --context ${CONTEXT} -n ${NAMESPACE} port-forward svc/wardyn-dex ${DEX_PORT}:5556 >/dev/null 2>&1 & echo \$! > '${PF_PID_FILE}'; sleep 2; echo forwarding :${DEX_PORT}"
+say "That is the split horizon: inside the cluster the identity provider is a service name; to your browser it is localhost. Same provider, two roads — and the issuer has to match on both."
 
 # ---------------------------------------------------------------------------
 # Beat 4 — proof before a browser opens
 # ---------------------------------------------------------------------------
 type_cmd "kubectl --context ${CONTEXT} -n ${NAMESPACE} get pods"
 say "Control plane, database, and the identity provider. All of it pods; none of it touched a browser yet."
+say "When you are done with all of it: make kind-down, and the cluster is gone."
 say "Now the console — localhost ${HTTP_PORT}. The first thing it does to an unfinished install is refuse to let you wander."

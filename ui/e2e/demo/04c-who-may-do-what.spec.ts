@@ -74,45 +74,88 @@ test("V04c act 2 — capabilities, enforced one at a time", async () => {
   await expect(page.getByRole("heading", { name: "Permissions" }).first()).toBeVisible({ timeout: 30_000 });
   await caption(page, "Each capability is granted — and enforced — on its own.");
   await beat(page, PACE.read);
-  await caption(page, "Until you enforce one, nothing about it changes: adopt the model at your own pace.");
+  await spotlight(page, page.getByText("Egress hosts").first());
+  await caption(page, "Egress hosts, for one: which destinations a member may approve on their own run. Unenforced, they can approve anything their run asks for. Enforced — only the hosts you granted them.");
+  await beat(page, PACE.read);
+  await beat(page, PACE.read);
+  await caption(page, "Until you enforce one, nothing about it changes — turn them on one capability at a time, at whatever pace your org can take.");
   await beat(page, PACE.read);
   await spotlight(page, page.getByText("Enforcement").first());
   await caption(page, "Enforcement is the switch that turns a written rule into a refused request.");
+  await beat(page, PACE.read);
+  await act(page, page.getByRole("switch", { name: /Enforcement Egress hosts/i }), "So throw it.");
+  await expect(page.getByRole("alertdialog")).toBeVisible({ timeout: 15_000 });
+  await caption(page, "And the product says the blast radius out loud: who this changes, before it changes anything.");
+  await beat(page, PACE.read);
+  await act(page, page.getByRole("alertdialog").getByRole("button", { name: "Enforce" }), "Enforced.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 });
 
 // ---------------------------------------------------------------------------
-// Act 3 — the same install, as a member
+// Act 3 — the same install, as a member: the boundary as a lived experience
 // ---------------------------------------------------------------------------
 test("V04c act 3 — the member's view of the same install", async () => {
-  test.setTimeout(300_000);
+  test.setTimeout(600_000);
   const page = stage();
 
-  // Sign out on camera; the role flip is the film.
-  await page.context().clearCookies();
+  // Sign out ON CAMERA (F33): the role flip is the film.
+  await page.locator("header").getByRole("button").last().click();
+  await act(page, page.getByRole("button", { name: "Sign out" }).or(page.getByRole("menuitem", { name: "Sign out" })).first(), "Now the other side of the map — signing out, and back in as somebody else.");
+  await page.waitForTimeout(1500);
   await page.goto("/");
-  await caption(page, "Now the other side of the map.");
   await dexSignIn("member@wardyn.local");
-  await page.waitForURL(/\/setup/, { timeout: 60_000 });
+  await page.waitForURL(/\/(setup|runs)/, { timeout: 60_000 });
 
   await expect(page.getByText("You're a member of this Wardyn")).toBeVisible({ timeout: 30_000 });
-  await caption(page, "A member lands on their own Getting Started — the ceiling is set; they run inside it.");
+  await caption(page, "A member lands on their own Getting Started. Both accounts came from the role map you saw applied — creating people is your identity provider's job; Wardyn only reads the map.");
+  await beat(page, PACE.read);
   await beat(page, PACE.read);
 
-  // The nav is the boundary made visible: no Policies, no Permissions, no Secrets.
   await spotlight(page, page.getByRole("navigation").first());
-  await caption(page, "Runs, approvals, workspaces. The configuring surfaces aren't hidden — they're not theirs.");
+  await caption(page, "Runs, approvals, workspaces. The console stops offering the rest — and the server stops answering for it, which is the half that actually holds.");
   await beat(page, PACE.read);
   await spotlight(page, null);
   await expect(page.getByRole("link", { name: /^Permissions/ })).toHaveCount(0);
   await expect(page.getByRole("link", { name: /^Policies/ })).toHaveCount(0);
 
-  // Typing the URL is not a workaround.
-  await page.goto("/permissions");
-  await expect(page.getByRole("heading", { name: "Permissions" })).toHaveCount(0, { timeout: 15_000 });
-  await caption(page, "And typing the address is not a workaround — refused, without pretending the page never existed less honestly than that.");
+  // The enforced capability, lived: the member's own run raises an approval
+  // they are no longer allowed to grant themselves.
+  await page.goto("/runs/new");
+  await page.getByRole("combobox", { name: "Title" }).fill("reach for the outside world");
+  await act(page, page.getByRole("radio", { name: /^Terminal/ }), "Their own run — a terminal, nothing mounted.");
+  await act(page, page.getByRole("button", { name: "Minimal" }), "Minimal policy: unlisted hosts raise an approval —");
+  const spec = page.getByRole("textbox", { name: "Spec (JSON)" });
+  await spec.fill(JSON.stringify({
+    allowed_domains: ["api.anthropic.com"],
+    first_use_approval: "deny_with_review",
+    min_confinement_class: "CC1",
+    auto_stop_after_sec: 3600,
+    eligible_grants: [],
+  }, null, 2));
+  await caption(page, "— floored to this cluster's Fence.");
   await beat(page, PACE.read);
+  await act(page, page.getByRole("radio", { name: /^Fence/ }), undefined);
+  await act(page, page.getByRole("button", { name: /^Launch/ }), "Launch it.");
+  const screen = page.locator(".xterm-screen").first();
+  await expect(screen).toBeVisible({ timeout: 240_000 });
+  await screen.click();
+  await page.keyboard.type("curl -sSI --max-time 5 https://example.com\n");
+
+  const row = page.getByTestId("live-approval-row").filter({ hasText: "example.com" }).first();
+  await expect(row).toBeVisible({ timeout: 300_000 });
+  await spotlight(page, row);
+  await caption(page, "The request is raised. Now their own queue — where members decide what they're empowered to.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
+  await page.goto("/approvals");
+  await expect(page.getByText("Not a host you're granted").first()).toBeVisible({ timeout: 60_000 });
+  await spotlight(page, page.getByText("Not a host you're granted").first());
+  await caption(page, "Egress hosts is enforced, and this member holds no grant — so the console says exactly that: not a host you're granted.");
+  await beat(page, PACE.read);
+  await caption(page, "The decision belongs to someone the map empowered.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
 
   await caption(page, "One install. Two roles. The map decides — and the map is yours.");
   await beat(page, PACE.read);
