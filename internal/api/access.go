@@ -13,9 +13,11 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,6 +40,17 @@ const accessDeniedRole = "denied"
 // value with Config.AllowEmailMappings unset. Byte-for-byte per the
 // adjudication; do not reword without updating that doc too.
 const accessEmailKeyRefused = "Email mappings are disabled on this install. Map an App Role or group instead, or opt in with WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS in your chart."
+
+// accessStaleSnapshot (A-1) is the lockout guard's OTHER refusal: a caller
+// whose login-time claim snapshot (oidcGroupsFromContext) cannot even
+// reproduce the admin role they demonstrably hold right now — because their
+// admin-granting group fell off the 2048-byte groups-snapshot truncation
+// (sessionGroups), or because their session cookie predates snapshots
+// entirely (Groups nil) — gets THIS message, never the lockout one: the
+// snapshot is too stale to answer "would this write remove your admin
+// access" at all, so refusing on ITS say-so would be a false lockout, not a
+// caught one.
+const accessStaleSnapshot = "your sign-in is too old to verify this change — sign in again before changing role mappings"
 
 // mountAccessRoutes registers the People-step access surface. ALL FOUR routes
 // are operatorOnly, including the two reads: unlike /permissions (a member
@@ -88,12 +101,21 @@ type accessResponse struct {
 	Mappings              []accessMappingView `json:"mappings"`
 	DefaultRole           string              `json:"default_role"`
 	OperatorEmailsPresent bool                `json:"operator_emails_present"`
+	// OperatorEmails (A-3) is the ADDRESSES themselves — api.Config.OperatorEmails,
+	// the same list fed into oidc.Config.LegacyAdminEmails at boot — so the
+	// console's Defaults block can render the addresses, not just the bool
+	// above (which stays for the guard-note logic that only needs presence).
+	OperatorEmails []string `json:"operator_emails"`
 	// AllowEmailMappings mirrors Config.AllowEmailMappings (Q7 adjudication) —
 	// the console derives email-ness of a row from "@" in its value itself
 	// (no new per-row field), and uses this alongside that to render the
 	// §7.2 warn badge / the opt-in state, matching what a write would accept.
-	AllowEmailMappings bool          `json:"allow_email_mappings"`
-	Posture            accessPosture `json:"posture"`
+	AllowEmailMappings bool `json:"allow_email_mappings"`
+	// EmailDomainsConfigured (A-4) reports whether WARDYN_OIDC_EMAIL_DOMAINS
+	// is set (oidc.Authenticator.HasEmailDomains) — the EMAIL_KEY badge copy
+	// depends on this, and the response otherwise cannot express it.
+	EmailDomainsConfigured bool          `json:"email_domains_configured"`
+	Posture                accessPosture `json:"posture"`
 }
 
 // accessRolePosture computes the arm-1-vs-arm-2 outcome deriveRole's own
@@ -174,15 +196,48 @@ func (s *Server) handleGetAccess(w http.ResponseWriter, r *http.Request) {
 	chart := s.cfg.OIDC.ChartRoleMap()
 	before, after, changes := accessRolePosture(s.cfg.OIDC)
 	writeJSON(w, http.StatusOK, accessResponse{
-		Mappings:              accessMappingsView(chart, rows, s.cfg.OIDC),
-		DefaultRole:           s.cfg.OIDC.DefaultRole(),
-		OperatorEmailsPresent: s.cfg.OIDC.HasOperatorEmails(),
-		AllowEmailMappings:    s.cfg.AllowEmailMappings,
+		Mappings:               accessMappingsView(chart, rows, s.cfg.OIDC),
+		DefaultRole:            s.cfg.OIDC.DefaultRole(),
+		OperatorEmailsPresent:  s.cfg.OIDC.HasOperatorEmails(),
+		OperatorEmails:         s.cfg.OperatorEmails,
+		AllowEmailMappings:     s.cfg.AllowEmailMappings,
+		EmailDomainsConfigured: s.cfg.OIDC.HasEmailDomains(),
 		Posture: accessPosture{
-			MapEmpty: len(chart) == 0 && len(rows) == 0,
+			// MapEmpty (A-5) is the REAL merged-map emptiness (chart + rows,
+			// with a shadowed row contributing nothing) — not a raw row
+			// count, which diverges whenever a stored row collides with the
+			// chart or the operator allowlist.
+			MapEmpty: s.cfg.OIDC.MergedMapEmpty(toOIDCRoleMappings(rows)),
 			Before:   before, After: after, Changes: changes,
 		},
 	})
+}
+
+// toOIDCRoleMappings converts store rows to the oidc package's own
+// RoleMapping shape — the input every derivation accessor
+// (PreviewRoleAgainst, MergedMapEmpty) takes, so a handler with a fresh
+// []types.RoleMapping read never has to hand-roll the per-field copy.
+func toOIDCRoleMappings(rows []types.RoleMapping) []oidc.RoleMapping {
+	out := make([]oidc.RoleMapping, len(rows))
+	for i, m := range rows {
+		out[i] = oidc.RoleMapping{Value: m.Value, Role: m.Role}
+	}
+	return out
+}
+
+// accessUnmatchedOutcome is the ONE derivation both write-guards and the GET
+// posture display use to ask "what role does an UNMATCHED signed-in human
+// get against rows" (A-5): PreviewRoleAgainst with no roles/groups/email,
+// mapped to accessDeniedRole on ok=false. Routing every caller through
+// mergeRoleMaps+deriveRole this way — rather than a hand-mirrored arm
+// computation keyed on raw row counts — means it can never diverge from what
+// a real login would decide, including when a stored row is shadowed.
+func (s *Server) accessUnmatchedOutcome(rows []oidc.RoleMapping) string {
+	role, ok := s.cfg.OIDC.PreviewRoleAgainst(rows, nil, nil, "")
+	if !ok {
+		return accessDeniedRole
+	}
+	return role
 }
 
 // ─── shared: canonicalization, candidate-map construction, guards ─────────
@@ -220,18 +275,44 @@ func canonicalRoleMapValue(value string) (string, error) {
 	return v, nil
 }
 
-// accessCollisionError reports the ONE reason a candidate value can never be
-// written as a console row: it already resolves through boot-time config
-// (the chart's WARDYN_OIDC_ROLE_MAP or the WARDYN_OIDC_OPERATOR_EMAILS
-// allowlist), which always wins the same collision at login (mergeRoleMaps).
-// Naming both sources in one message rather than two distinct ones: an admin
-// does not need to know WHICH boot-time source it is to know the fix is the
-// same either way (edit the chart, not the console).
-func accessCollisionError(value string, chart map[string]string, a *oidc.Authenticator) error {
-	if chart[value] != "" || a.IsOperatorEmail(value) {
-		return fmt.Errorf("value %q is already set by your chart config (WARDYN_OIDC_ROLE_MAP or WARDYN_OIDC_OPERATOR_EMAILS) and cannot be overridden here", value)
+// accessCollisionBody (A-2) is POST /access/mappings' collision 400: a
+// candidate value that already resolves through boot-time config always
+// wins the same collision at login (mergeRoleMaps), so the write is refused
+// — structured, keyed on Cause, reusing the exact "chart" | "operator_allowlist"
+// vocabulary accessMappingView.ShadowCause already freezes for GET /access,
+// rather than two hand-frozen prose strings a client would have to
+// substring-match to tell apart.
+type accessCollisionBody struct {
+	Error string `json:"error"`
+	Cause string `json:"cause"` // "chart" | "operator_allowlist"
+	Value string `json:"value"`
+}
+
+// accessCollisionCause reports WHICH boot-time source (if any) a candidate
+// value already collides with — "" means no collision. Chart is checked
+// first: a value can collide with both (a chart row happens to also be an
+// operator email), and the chart is the more specific, more actionable
+// source to name.
+func accessCollisionCause(value string, chart map[string]string, a *oidc.Authenticator) string {
+	if chart[value] != "" {
+		return "chart"
 	}
-	return nil
+	if a.IsOperatorEmail(value) {
+		return "operator_allowlist"
+	}
+	return ""
+}
+
+func writeAccessCollision(w http.ResponseWriter, value, cause string) {
+	source := "WARDYN_OIDC_ROLE_MAP"
+	if cause == "operator_allowlist" {
+		source = "WARDYN_OIDC_OPERATOR_EMAILS"
+	}
+	writeJSON(w, http.StatusBadRequest, accessCollisionBody{
+		Error: fmt.Sprintf("value %q is already set by your chart config (%s) and cannot be overridden here", value, source),
+		Cause: cause,
+		Value: value,
+	})
 }
 
 // accessCandidateRows builds the role-mapping set AS IT WOULD BE after a
@@ -271,13 +352,33 @@ func accessCandidateRows(existing []types.RoleMapping, id, value, role string) [
 // demote (see isOperator's own doc), and refusing them here would remove the
 // only remaining path to UNDO a bad mapping once every SSO admin has already
 // locked themselves out. That exemption IS the recovery path.
-func (s *Server) accessLockoutErr(r *http.Request, candidate []oidc.RoleMapping) error {
+//
+// A-1: the snapshot itself can be too stale to trust — an admin whose
+// admin-granting group fell off the 2048-byte groups-snapshot truncation
+// (sessionGroups), or whose cookie predates snapshots entirely (Groups nil),
+// would derive NON-admin against the snapshot regardless of what the write
+// does, which used to trip the lockout message on every write (false
+// positive). Fixed by checking roleBefore — the SAME snapshot run against
+// the EXISTING rows, before this write — first: only when roleBefore is
+// genuinely admin does a roleAfter that comes out non-admin mean the WRITE
+// caused the demotion (the real lockout); when roleBefore already isn't
+// admin, the snapshot cannot reproduce the admin access the caller
+// demonstrably holds (they got past requireOperator to reach this handler at
+// all), so it gets the distinct accessStaleSnapshot refusal instead — never
+// silently allowed, since a snapshot too stale to verify a NO-OP write is
+// too stale to verify a real demotion either.
+func (s *Server) accessLockoutErr(r *http.Request, existing []types.RoleMapping, candidate []oidc.RoleMapping) error {
 	sub := oidcHumanFromContext(r.Context())
 	if sub == "" {
 		return nil
 	}
-	role, ok := s.cfg.OIDC.PreviewRoleAgainst(candidate, nil, oidcGroupsFromContext(r.Context()), oidcEmailFromContext(r.Context()))
-	if !ok || role != oidc.RoleAdmin {
+	groups, email := oidcGroupsFromContext(r.Context()), oidcEmailFromContext(r.Context())
+	roleBefore, ok := s.cfg.OIDC.PreviewRoleAgainst(toOIDCRoleMappings(existing), nil, groups, email)
+	if !ok || roleBefore != oidc.RoleAdmin {
+		return errors.New(accessStaleSnapshot)
+	}
+	roleAfter, ok := s.cfg.OIDC.PreviewRoleAgainst(candidate, nil, groups, email)
+	if !ok || roleAfter != oidc.RoleAdmin {
 		return fmt.Errorf("this change would remove your own admin access (checked against your last sign-in)")
 	}
 	return nil
@@ -315,10 +416,11 @@ type roleMappingWriteRequest struct {
 // (store.UpsertRoleMapping), same 201-new/200-updated status split
 // handleUpsertCapabilityGrant uses. Four gates run, in order, before the
 // store is ever touched: shape/canonicalization, the chart/operator
-// collision, the Q7 email-mapping opt-in, and — only once the write is known
-// to be a genuinely new mapping, i.e. this is the deployment's FIRST console
-// row with an empty chart map — the posture-flip guard. The lockout guard
-// runs last, against the write's actual candidate outcome.
+// collision, the Q7 email-mapping opt-in, and the posture-flip guard —
+// which fires whenever this write actually moves the unmatched-human
+// outcome (accessUnmatchedOutcome over existing vs. candidate rows, A-5),
+// not merely on a first-console-row precondition. The lockout guard runs
+// last, against the write's actual candidate outcome.
 func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOIDC(w) {
 		return
@@ -337,8 +439,8 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	chart := s.cfg.OIDC.ChartRoleMap()
-	if cerr := accessCollisionError(value, chart, s.cfg.OIDC); cerr != nil {
-		writeError(w, http.StatusBadRequest, cerr.Error())
+	if cause := accessCollisionCause(value, chart, s.cfg.OIDC); cause != "" {
+		writeAccessCollision(w, value, cause)
 		return
 	}
 	// Q7 adjudication (docs/design/people-access-prompt.md): an email-shaped
@@ -361,20 +463,23 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "list role mappings: "+err.Error())
 		return
 	}
+	candidate := accessCandidateRows(existing, "", value, req.Role)
 
-	// POSTURE-FLIP GUARD: only reachable when the chart map is empty AND the
-	// store currently holds zero rows — any other state means the role map is
-	// ALREADY non-empty (arm 2 already applies), so this write cannot be the
-	// transition that flips arm.
-	if len(chart) == 0 && len(existing) == 0 && !req.AcknowledgeAccessChange {
-		if before, after, changes := accessRolePosture(s.cfg.OIDC); changes {
+	// POSTURE-FLIP GUARD (A-5): fires iff this write actually moves the
+	// unmatched-human outcome — derived from the REAL merged map via
+	// accessUnmatchedOutcome (existing rows vs. candidate rows), not a raw
+	// row-count precondition, which used to miss a flip whenever a stored
+	// row was shadowed (see accessUnmatchedOutcome's doc).
+	if !req.AcknowledgeAccessChange {
+		before := s.accessUnmatchedOutcome(toOIDCRoleMappings(existing))
+		after := s.accessUnmatchedOutcome(candidate)
+		if before != after {
 			writeAccessPostureFlip(w, before, after)
 			return
 		}
 	}
 
-	candidate := accessCandidateRows(existing, "", value, req.Role)
-	if lerr := s.accessLockoutErr(r, candidate); lerr != nil {
+	if lerr := s.accessLockoutErr(r, existing, candidate); lerr != nil {
 		writeError(w, http.StatusBadRequest, lerr.Error())
 		return
 	}
@@ -405,10 +510,10 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 
 // handleDeleteRoleMapping removes one console row by id. The lockout guard
 // runs against the candidate set with this row removed; the REVERSE
-// posture-flip guard fires only when deleting this row would take the
-// deployment's role map from non-empty back to empty (chart empty AND this
-// is the last console row) — the mirror image of the add-guard above,
-// swapping before/after because the arm transition runs the other direction.
+// posture-flip guard (A-5) fires whenever removing this row actually moves
+// the unmatched-human outcome — derived from the real merged map, the same
+// accessUnmatchedOutcome the add-side guard uses, not a hand-mirrored arm
+// computation keyed on chart/row counts.
 func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOIDC(w) {
 		return
@@ -422,32 +527,31 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "list role mappings: "+err.Error())
 		return
 	}
+	// The matched row, kept for the audit event below (A-6) — once deleted,
+	// the store can no longer say which value/role this id ever named.
+	var matched types.RoleMapping
+	for _, m := range existing {
+		if m.ID == id {
+			matched = m
+			break
+		}
+	}
+	candidate := accessCandidateRows(existing, id.String(), "", "")
 
-	chart := s.cfg.OIDC.ChartRoleMap()
-	isLastRow := len(chart) == 0 && len(existing) == 1 && existing[0].ID == id
-	acknowledge := r.URL.Query().Get("acknowledge_access_change") == "true"
-	if isLastRow && !acknowledge {
-		// Reverse of accessRolePosture: before is the arm-2 outcome this
-		// deployment is IN right now (the row about to be removed is the only
-		// thing keeping the role map non-empty), after is the arm-1 outcome it
-		// falls back to once the map is empty again.
-		defaultRole, hasOperatorEmails := s.cfg.OIDC.DefaultRole(), s.cfg.OIDC.HasOperatorEmails()
-		before := accessDeniedRole
-		if defaultRole != "" {
-			before = defaultRole
-		}
-		after := oidc.RoleAdmin
-		if hasOperatorEmails {
-			after = oidc.RoleMember
-		}
+	// acknowledge_access_change is a query param (this route's own
+	// natural-key delete has no body) — ParseBool over a bare == "true"
+	// (A-10) so "1"/"TRUE"/"T" also work, err (including absent) => false.
+	acknowledge, _ := strconv.ParseBool(r.URL.Query().Get("acknowledge_access_change"))
+	if !acknowledge {
+		before := s.accessUnmatchedOutcome(toOIDCRoleMappings(existing))
+		after := s.accessUnmatchedOutcome(candidate)
 		if before != after {
 			writeAccessPostureFlip(w, before, after)
 			return
 		}
 	}
 
-	candidate := accessCandidateRows(existing, id.String(), "", "")
-	if lerr := s.accessLockoutErr(r, candidate); lerr != nil {
+	if lerr := s.accessLockoutErr(r, existing, candidate); lerr != nil {
 		writeError(w, http.StatusBadRequest, lerr.Error())
 		return
 	}
@@ -460,7 +564,9 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"access.role_mapping.delete", id.String(), "success", nil))
+		"access.role_mapping.delete", id.String(), "success", mustJSON(map[string]any{
+			"value": matched.Value, "role": matched.Role,
+		})))
 	w.WriteHeader(http.StatusNoContent)
 }
 

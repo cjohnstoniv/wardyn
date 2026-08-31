@@ -596,3 +596,66 @@ func TestDefaultRoleAndHasOperatorEmailsAccessors(t *testing.T) {
 		t.Error("HasOperatorEmails() = false, want true")
 	}
 }
+
+// TestHasEmailDomainsAccessor: the console's EMAIL_KEY badge copy needs to
+// tell "no domains list configured" apart from "configured" (A-4) — pinned
+// against env.newAuth's own allowedDomains param, not newRoleAuth (which
+// deliberately omits domain restriction, see its doc comment).
+func TestHasEmailDomainsAccessor(t *testing.T) {
+	env := newIdPEnv(t)
+
+	unset := env.newAuth(t, nil)
+	if unset.HasEmailDomains() {
+		t.Error("HasEmailDomains() = true, want false (no AllowedEmailDomains configured)")
+	}
+
+	set := env.newAuth(t, []string{"corp.example"})
+	if !set.HasEmailDomains() {
+		t.Error("HasEmailDomains() = false, want true")
+	}
+}
+
+// TestMergedMapEmptyAccountsForShadowing (A-5): a stored row that collides
+// with the operator allowlist is SHADOWED (mergeRoleMaps drops it,
+// contributing nothing) — MergedMapEmpty must report the real merged-map
+// emptiness, not a raw row count, or the console's posture display and write
+// guards diverge from what deriveRole actually sees. A chart collision is
+// the contrasting case: the chart's OWN entry keeps the map non-empty
+// regardless of the shadowed row, so it can never produce the "merged empty,
+// len(rows)>0" state this fix is actually about.
+func TestMergedMapEmptyAccountsForShadowing(t *testing.T) {
+	env := newIdPEnv(t)
+
+	// Empty chart, zero rows: genuinely empty.
+	empty := env.newRoleAuth(t, nil, "", nil)
+	if !empty.MergedMapEmpty(nil) {
+		t.Error("MergedMapEmpty(nil) = false, want true (no chart, no rows)")
+	}
+
+	// One row that collides with a NON-EMPTY chart: shadowed, contributes
+	// nothing on its own — but the chart's OWN entry (chart always wins the
+	// collision, by construction) already keeps the merged map non-empty
+	// regardless. A chart collision can therefore never reproduce "merged
+	// empty, len(rows)==1" — only an operator-allowlist collision can (below,
+	// nothing about the allowlist ever enters the map itself).
+	shadowedByChart := env.newRoleAuth(t, map[string]string{"eng-team": writoidc.RoleAdmin}, "", nil)
+	rows := []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleMember}}
+	if shadowedByChart.MergedMapEmpty(rows) {
+		t.Error("MergedMapEmpty(rows) = true, want false (the chart's own entry keeps the map non-empty)")
+	}
+
+	// One row, but it collides with the operator allowlist: the map really
+	// IS empty — len(rows)==1 but MergedMapEmpty must report true, the exact
+	// divergence A-5 fixes (a raw row count would have said false here).
+	shadowedByAllowlist := env.newRoleAuth(t, nil, "", []string{"ops@corp.example"})
+	opsRow := []writoidc.RoleMapping{{Value: "ops@corp.example", Role: writoidc.RoleMember}}
+	if !shadowedByAllowlist.MergedMapEmpty(opsRow) {
+		t.Error("MergedMapEmpty(opsRow) = false, want true (the only row is shadowed by the operator allowlist)")
+	}
+
+	// A genuinely unshadowed row makes the map non-empty.
+	nonEmpty := env.newRoleAuth(t, nil, "", nil)
+	if nonEmpty.MergedMapEmpty([]writoidc.RoleMapping{{Value: "design-team", Role: writoidc.RoleMember}}) {
+		t.Error("MergedMapEmpty([design-team]) = true, want false (unshadowed row)")
+	}
+}

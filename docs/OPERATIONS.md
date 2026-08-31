@@ -277,10 +277,17 @@ carries an **admin** or **member** role, derived once at login
 cookie — a cookie signed before this existed (pre-0.5) decodes as no session,
 forcing a re-login that derives one fresh.
 
-| `WARDYN_OIDC_ROLE_MAP` | Signed-in humans | Admin token / local mode |
+| The merged map (chart `WARDYN_OIDC_ROLE_MAP` + console People-step rows) | Signed-in humans | Admin token / local mode |
 |---|---|---|
-| unset | listed in `WARDYN_OIDC_OPERATOR_EMAILS` → **admin**, others → **member**; all **admin** only when the allowlist is also unset (override-only under OIDC — the pre-0.5 behavior) | always **admin** |
-| set | mapped by `roles`/`groups`/email claim to **admin** or **member**; no match falls through to `WARDYN_OIDC_DEFAULT_ROLE`, or denies the login when that is also unset | always **admin** |
+| empty | listed in `WARDYN_OIDC_OPERATOR_EMAILS` → **admin**, others → **member**; all **admin** only when the allowlist is also unset (override-only under OIDC — the pre-0.5 behavior) | always **admin** |
+| non-empty | mapped by `roles`/`groups`/email claim to **admin** or **member**; no match falls through to `WARDYN_OIDC_DEFAULT_ROLE`, or denies the login when that is also unset | always **admin** |
+
+A console-added row keys on this exact same table: adding the deployment's
+*first* row (with the chart map also unset) or removing its *last* one moves
+the map from empty to non-empty or back, exactly like setting or clearing
+`WARDYN_OIDC_ROLE_MAP` itself — which is what `POST`/`DELETE /access/mappings`'
+posture-flip guard exists to warn an admin about before they trip it (see
+"Managing them" below).
 
 The admin token and local mode are **always admin** — both are a single
 shared credential with no per-human identity to key a role off (the token
@@ -694,6 +701,10 @@ there — that is the operator's own posture, not a switch that failed.
 | `POST /permissions/grants` | upsert one grant on its natural key (`201` new, `200` updated) |
 | `DELETE /permissions/grants/{id}` | remove one grant |
 | `PUT /permissions/enforcement` | replace the whole switch map — an omitted kind means *off* |
+| `GET /access` | the merged role-mapping table (chart + console rows, with collision/shadow provenance) plus the same before/after/changes posture the write guards below evaluate |
+| `POST /access/mappings` | upsert one console role mapping on its natural key (`value`) — `201` new, `200` updated; refused on a chart/operator-allowlist collision, an unmatched-outcome flip without `acknowledge_access_change`, or a write that would remove the caller's own admin access |
+| `DELETE /access/mappings/{id}` | remove one console role mapping — same flip/lockout guards as the write above |
+| `POST /access/preview` | dry-run `roles`/`groups`/email (or the caller's own session) through the SAME derivation a real login would use — no write |
 | `GET /me/capabilities` | member-safe: the caller's OWN grants, the switches, their session groups, and `groups_snapshot_stale` |
 
 `PUT /permissions/enforcement` replaces the **whole** map, so an omitted kind

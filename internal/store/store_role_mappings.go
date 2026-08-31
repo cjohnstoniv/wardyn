@@ -30,6 +30,11 @@ const roleMappingCols = `id, value, role, created_at, created_by`
 // EXISTING one, not m.ID — the caller needs the id the DELETE route will be
 // given, and an admin re-submitting the same value must not be handed an id
 // that names no row.
+//
+// A-9: the conflict path updates role only, deliberately NOT created_by —
+// creation provenance (who ADDED this mapping) stays with the original
+// creator across a later role flip by a different admin, the same way
+// created_at is untouched on conflict (no SET at all, so Postgres leaves it).
 func (s PG) UpsertRoleMapping(ctx context.Context, m types.RoleMapping) (types.RoleMapping, error) {
 	if m.ID == uuid.Nil {
 		m.ID = uuid.New()
@@ -38,7 +43,7 @@ func (s PG) UpsertRoleMapping(ctx context.Context, m types.RoleMapping) (types.R
 		INSERT INTO role_mappings (id, value, role, created_by)
 		VALUES ($1,$2,$3,$4)
 		ON CONFLICT (value) DO UPDATE
-			SET role = EXCLUDED.role, created_by = EXCLUDED.created_by
+			SET role = EXCLUDED.role
 		RETURNING ` + roleMappingCols
 	return scanRoleMapping(s.Pool.QueryRow(ctx, q, m.ID, m.Value, m.Role, m.CreatedBy))
 }

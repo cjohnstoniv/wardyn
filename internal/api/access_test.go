@@ -116,7 +116,10 @@ var accessTestHMACKey = []byte("access-test-hmac-key-32-bytes!!!")
 // newAccessAuth builds a real *oidc.Authenticator against a throwaway fake
 // discovery server. st, when non-nil, is wired as Config.RoleMappings via
 // accessOIDCBridge; nil leaves RoleMappings unset (env-only derivation).
-func newAccessAuth(t *testing.T, roleMap map[string]string, defaultRole string, legacyAdminEmails []string, st *roleMapStore) *oidc.Authenticator {
+// opts, when given, can tweak the Config before it is built — e.g. setting
+// AllowedEmailDomains (A-4's HasEmailDomains) without a new positional param
+// on every existing call site.
+func newAccessAuth(t *testing.T, roleMap map[string]string, defaultRole string, legacyAdminEmails []string, st *roleMapStore, opts ...func(*oidc.Config)) *oidc.Authenticator {
 	t.Helper()
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -133,7 +136,7 @@ func newAccessAuth(t *testing.T, roleMap map[string]string, defaultRole string, 
 	if st != nil {
 		mappings = accessOIDCBridge{st: st}
 	}
-	auth, err := oidc.New(context.Background(), oidc.Config{
+	cfg := oidc.Config{
 		IssuerURL:         httpSrv.URL,
 		ClientID:          "wardyn-client",
 		ClientSecret:      "secret",
@@ -142,7 +145,11 @@ func newAccessAuth(t *testing.T, roleMap map[string]string, defaultRole string, 
 		DefaultRole:       defaultRole,
 		LegacyAdminEmails: legacyAdminEmails,
 		RoleMappings:      mappings,
-	}, accessTestHMACKey)
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	auth, err := oidc.New(context.Background(), cfg, accessTestHMACKey)
 	if err != nil {
 		t.Fatalf("oidc.New: %v", err)
 	}
@@ -154,12 +161,14 @@ func newAccessAuth(t *testing.T, roleMap map[string]string, defaultRole string, 
 // ssoSession elsewhere in this package, which is keyed for the ZERO-VALUE
 // Authenticator every other test file uses). groups is the login-time claim
 // snapshot the lockout guard's PreviewRoleAgainst call reads back via
-// oidcGroupsFromContext.
+// oidcGroupsFromContext — NIL IS REPRESENTABLE here, deliberately not
+// coerced to []string{}: nil is a distinct, real state (a pre-0.6 cookie
+// that predates the groups snapshot field, or a group list truncated away
+// entirely, see sessionGroups' own "NEVER returns nil ... except" doc) that
+// A-1's stale-snapshot tests need to construct, not just the empty-snapshot
+// state a genuinely group-less human produces.
 func accessSession(t *testing.T, sub, email, role string, groups []string) *http.Cookie {
 	t.Helper()
-	if groups == nil {
-		groups = []string{}
-	}
 	payload, err := json.Marshal(oidc.Session{
 		Sub: sub, Email: email, Role: role, Expiry: time.Now().UTC().Add(time.Hour), Groups: groups,
 	})
@@ -273,6 +282,14 @@ func TestAccess_CollisionWithChart400(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "chart config") {
 		t.Errorf("body = %q, want it to name the chart source", w.Body.String())
 	}
+	// A-2: structured cause, not prose-only.
+	var body accessCollisionBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Cause != "chart" || body.Value != "eng-team" {
+		t.Errorf("body = %+v, want cause=chart value=eng-team", body)
+	}
 }
 
 func TestAccess_CollisionWithOperatorAllowlist400(t *testing.T) {
@@ -285,6 +302,14 @@ func TestAccess_CollisionWithOperatorAllowlist400(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "chart config") {
 		t.Errorf("body = %q, want it to name the chart source (allowlist collision)", w.Body.String())
+	}
+	// A-2: structured cause, distinct from the chart arm above.
+	var body accessCollisionBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Cause != "operator_allowlist" || body.Value != "ops@corp.example" {
+		t.Errorf("body = %+v, want cause=operator_allowlist value=ops@corp.example", body)
 	}
 }
 
@@ -380,6 +405,132 @@ func TestAccess_GetReflectsAllowEmailMappings(t *testing.T) {
 				t.Errorf("allow_email_mappings = %v, want %v", resp.AllowEmailMappings, allow)
 			}
 		})
+	}
+}
+
+// TestAccess_GetIncludesOperatorEmailAddresses (A-3): the Defaults block
+// needs the ADDRESSES themselves (api.Config.OperatorEmails), not just the
+// operator_emails_present bool the guard-note logic already had.
+func TestAccess_GetIncludesOperatorEmailAddresses(t *testing.T) {
+	auth := newAccessAuth(t, nil, "", []string{"ops@corp.example", "root@corp.example"}, nil)
+	cfg := baseTestConfig(newHarness(t), &roleMapStore{})
+	cfg.OIDC = auth
+	cfg.OperatorEmails = []string{"ops@corp.example", "root@corp.example"}
+	srv := New(cfg)
+
+	w := do(t, srv, http.MethodGet, "/api/v1/access", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp accessResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.OperatorEmailsPresent {
+		t.Error("operator_emails_present = false, want true")
+	}
+	want := []string{"ops@corp.example", "root@corp.example"}
+	if !slices.Equal(resp.OperatorEmails, want) {
+		t.Errorf("operator_emails = %v, want %v", resp.OperatorEmails, want)
+	}
+}
+
+// TestAccess_GetReflectsEmailDomainsConfigured (A-4): the EMAIL_KEY badge
+// copy needs to tell "no WARDYN_OIDC_EMAIL_DOMAINS" apart from "configured".
+func TestAccess_GetReflectsEmailDomainsConfigured(t *testing.T) {
+	for _, configured := range []bool{false, true} {
+		t.Run(fmt.Sprintf("configured=%v", configured), func(t *testing.T) {
+			var opts []func(*oidc.Config)
+			if configured {
+				opts = append(opts, func(c *oidc.Config) { c.AllowedEmailDomains = []string{"corp.example"} })
+			}
+			auth := newAccessAuth(t, nil, "", nil, nil, opts...)
+			srv := accessServer(t, auth, &roleMapStore{})
+
+			w := do(t, srv, http.MethodGet, "/api/v1/access", adminToken, "")
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+			}
+			var resp accessResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if resp.EmailDomainsConfigured != configured {
+				t.Errorf("email_domains_configured = %v, want %v", resp.EmailDomainsConfigured, configured)
+			}
+		})
+	}
+}
+
+// ─── A-5: guard matrix over a SHADOWED row (merged map, not raw counts) ────
+
+// TestAccess_ShadowedRowGuards: chart is EMPTY; the console's ONLY row
+// collides with the OPERATOR ALLOWLIST and is shadowed (mergeRoleMaps drops
+// it, contributing nothing) — the merged map is genuinely empty even though
+// len(existing)==1, the exact divergence A-5 fixes (chart[value]!="" would
+// always keep merged non-empty on its own, so a chart collision can never
+// reproduce "merged empty, len(existing)==1" — only an allowlist collision
+// can). Both the GET posture and the DELETE guard must key on the real
+// merged emptiness, not the raw row count.
+func TestAccess_ShadowedRowGuards(t *testing.T) {
+	auth := newAccessAuth(t, nil, "", []string{"ops@corp.example"}, nil)
+	shadowedID := uuid.New()
+	st := &roleMapStore{rows: []types.RoleMapping{{ID: shadowedID, Value: "ops@corp.example", Role: oidc.RoleAdmin}}}
+	srv := accessServer(t, auth, st)
+
+	// GET: map_empty must be TRUE (merged-effective) — under the OLD raw
+	// count (len(chart)==0 && len(rows)==0) it would read false, since
+	// len(rows)==1, even though this row contributes nothing to the map
+	// deriveRole actually looks values up in.
+	getResp := do(t, srv, http.MethodGet, "/api/v1/access", adminToken, "")
+	var resp accessResponse
+	if err := json.Unmarshal(getResp.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.Posture.MapEmpty {
+		t.Errorf("posture.map_empty = false, want true (the only console row is shadowed by the operator allowlist)")
+	}
+
+	// DELETE the shadowed row: removing it changes NOTHING about the merged
+	// map (it contributed nothing to begin with) — before==after, so no
+	// acknowledgement should be required. Under the OLD guard
+	// (len(chart)==0 && len(existing)==1 && existing[0].ID==id) this would
+	// have been misread as the last-row transition and demanded one.
+	w := do(t, srv, http.MethodDelete, "/api/v1/access/mappings/"+shadowedID.String(), adminToken, "")
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 (deleting a shadowed row changes nothing, no ack needed); body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestAccess_ShadowedRowGuard_AddGuardFiresOnRealFlip: the mirror case — the
+// existing console row is shadowed by the OPERATOR ALLOWLIST (not the
+// chart), so the merged map starts empty; adding an unshadowed row is the
+// real transition from arm 1 to arm 2 and MUST require acknowledgement even
+// though len(existing)==1 already before this write (old count-based guard
+// would have stayed silent here, since its precondition only fired when the
+// store held ZERO rows).
+func TestAccess_ShadowedRowGuard_AddGuardFiresOnRealFlip(t *testing.T) {
+	auth := newAccessAuth(t, nil, "", []string{"ops@corp.example"}, nil)
+	st := &roleMapStore{rows: []types.RoleMapping{
+		{ID: uuid.New(), Value: "ops@corp.example", Role: oidc.RoleMember}, // shadowed by the allowlist
+	}}
+	srv := accessServer(t, auth, st)
+
+	blocked := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"design-team","role":"member"}`)
+	if blocked.Code != http.StatusBadRequest {
+		t.Fatalf("without acknowledge: status = %d, want 400 (real arm flip, masked by the shadowed row under the old count-based guard); body=%s", blocked.Code, blocked.Body.String())
+	}
+	var flip accessPostureFlipBody
+	if err := json.Unmarshal(blocked.Body.Bytes(), &flip); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !flip.RequiredAcknowledgement {
+		t.Errorf("flip body = %+v, want required_acknowledgement=true", flip)
+	}
+
+	allowed := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"design-team","role":"member","acknowledge_access_change":true}`)
+	if allowed.Code != http.StatusCreated {
+		t.Fatalf("with acknowledge: status = %d, want 201; body=%s", allowed.Code, allowed.Body.String())
 	}
 }
 
@@ -610,6 +761,111 @@ func TestAccess_LockoutGuard_POST(t *testing.T) {
 	}
 }
 
+// ─── A-1: stale-snapshot guard, distinct from a genuine lockout ────────────
+
+// TestAccess_StaleSnapshot_NilGroupsNeverReadsAsLockout: an admin session
+// whose groups snapshot is nil (a pre-0.6 cookie, or a group that fell off
+// the 2048-byte truncation) cannot re-derive the admin access the caller
+// demonstrably holds — PreviewRoleAgainst against the snapshot alone comes
+// out non-admin regardless of the write. Before the fix this 400'd with the
+// LOCKOUT message on every such write (false positive); now it must get the
+// distinct accessStaleSnapshot refusal instead, and the row must survive.
+func TestAccess_StaleSnapshot_NilGroupsNeverReadsAsLockout(t *testing.T) {
+	auth := newAccessAuth(t, nil, "", nil, nil)
+	st := &roleMapStore{rows: []types.RoleMapping{
+		{ID: uuid.New(), Value: "admins", Role: oidc.RoleAdmin},
+		{ID: uuid.New(), Value: "other-team", Role: oidc.RoleMember},
+	}}
+	srv := accessServer(t, auth, st)
+	// The cookie's own Role is admin (a real prior login derived it), but its
+	// Groups snapshot is nil — accessSession now leaves nil representable
+	// rather than coercing it to []string{} (the test seam A-1 also fixes).
+	admin := accessSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin, nil)
+
+	// A genuinely flipping write (deletes the admin's own row) — would be
+	// the real lockout IF the snapshot could verify roleBefore.
+	w := doSSO(t, srv, http.MethodDelete, "/api/v1/access/mappings/"+st.rows[0].ID.String(), admin, "")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Error != accessStaleSnapshot {
+		t.Errorf("body.Error = %q, want the stale-snapshot message %q (never the lockout message)", body.Error, accessStaleSnapshot)
+	}
+	if strings.Contains(body.Error, "remove your own admin access") {
+		t.Errorf("body.Error = %q, must not read as the lockout refusal", body.Error)
+	}
+	if len(st.rows) != 2 {
+		t.Fatalf("blocked delete must not have removed anything; rows = %+v", st.rows)
+	}
+}
+
+// TestAccess_StaleSnapshot_NonFlippingWriteAlsoRefused: a stale-snapshot
+// admin's write that would not even touch their own admin row must STILL be
+// refused with accessStaleSnapshot, not silently allowed — the snapshot is
+// too stale to verify a no-op write exactly as it is too stale to verify a
+// real demotion (accessLockoutErr checks roleBefore first, unconditionally).
+func TestAccess_StaleSnapshot_NonFlippingWriteAlsoRefused(t *testing.T) {
+	auth := newAccessAuth(t, nil, "", nil, nil)
+	st := &roleMapStore{rows: []types.RoleMapping{
+		{ID: uuid.New(), Value: "admins", Role: oidc.RoleAdmin},
+		{ID: uuid.New(), Value: "other-team", Role: oidc.RoleMember},
+	}}
+	srv := accessServer(t, auth, st)
+	admin := accessSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin, nil)
+
+	// Adds an UNRELATED row — does not touch "admins" at all, and the map
+	// stays non-empty either way, so no posture-flip guard applies.
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/access/mappings", admin, `{"value":"design-team","role":"member"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (stale snapshot, even for a non-flipping write); body=%s", w.Code, w.Body.String())
+	}
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Error != accessStaleSnapshot {
+		t.Errorf("body.Error = %q, want %q", body.Error, accessStaleSnapshot)
+	}
+	if len(st.rows) != 2 {
+		t.Fatalf("blocked write must not have applied; rows = %+v", st.rows)
+	}
+}
+
+// TestAccess_LockoutGuard_GenuineLockoutStillRefused re-pins the SAME
+// scenario TestAccess_LockoutGuard_SSOAdminBlockedFromDemotingSelf already
+// covers (roleBefore IS admin, roleAfter is not) through the two-outcome
+// A-1 rewrite, naming explicitly that it is the LOCKOUT message, not the
+// stale-snapshot one, that fires when the snapshot genuinely can verify the
+// caller's admin access.
+func TestAccess_LockoutGuard_GenuineLockoutStillRefused(t *testing.T) {
+	auth := newAccessAuth(t, nil, "", nil, nil)
+	st := &roleMapStore{rows: []types.RoleMapping{
+		{ID: uuid.New(), Value: "admins", Role: oidc.RoleAdmin},
+		{ID: uuid.New(), Value: "other-team", Role: oidc.RoleMember},
+	}}
+	srv := accessServer(t, auth, st)
+	admin := accessSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin, []string{"admins"})
+
+	w := doSSO(t, srv, http.MethodDelete, "/api/v1/access/mappings/"+st.rows[0].ID.String(), admin, "")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !strings.Contains(body.Error, "remove your own admin access") {
+		t.Errorf("body.Error = %q, want the lockout message", body.Error)
+	}
+	if body.Error == accessStaleSnapshot {
+		t.Errorf("body.Error = %q, must not read as the stale-snapshot refusal (the snapshot DOES verify admin here)", body.Error)
+	}
+}
+
 // ─── GET /access shape ──────────────────────────────────────────────────────
 
 func TestAccess_GetShapeIncludesShadowedRow(t *testing.T) {
@@ -748,5 +1004,89 @@ func TestAccess_DeleteUnknownID404(t *testing.T) {
 	w := do(t, srv, http.MethodDelete, "/api/v1/access/mappings/"+uuid.NewString(), adminToken, "")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// ─── A-6: delete audit records WHICH mapping was removed ──────────────────
+
+// TestAccess_DeleteRecordsValueAndRoleInAudit: once a row is gone, the store
+// can no longer say what it named — the audit event must carry the matched
+// row's value/role at delete time, not just its (now-meaningless) id.
+func TestAccess_DeleteRecordsValueAndRoleInAudit(t *testing.T) {
+	auth := newAccessAuth(t, nil, "", nil, nil)
+	st := &roleMapStore{rows: []types.RoleMapping{
+		{ID: uuid.New(), Value: "eng-team", Role: oidc.RoleMember},
+		{ID: uuid.New(), Value: "other-team", Role: oidc.RoleMember}, // keeps the map non-empty either way
+	}}
+	h := newHarness(t)
+	cfg := baseTestConfig(h, st)
+	cfg.OIDC = auth
+	srv := New(cfg)
+
+	target := st.rows[0]
+	w := do(t, srv, http.MethodDelete, "/api/v1/access/mappings/"+target.ID.String(), adminToken, "")
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", w.Code, w.Body.String())
+	}
+
+	var found bool
+	for _, ev := range h.audit.events {
+		if ev.Action != "access.role_mapping.delete" {
+			continue
+		}
+		found = true
+		if ev.Target != target.ID.String() {
+			t.Errorf("audit target = %q, want %q", ev.Target, target.ID.String())
+		}
+		var data struct {
+			Value string `json:"value"`
+			Role  string `json:"role"`
+		}
+		if err := json.Unmarshal(ev.Data, &data); err != nil {
+			t.Fatalf("decode audit data: %v", err)
+		}
+		if data.Value != "eng-team" || data.Role != oidc.RoleMember {
+			t.Errorf("audit data = %+v, want value=eng-team role=member", data)
+		}
+	}
+	if !found {
+		t.Fatalf("no access.role_mapping.delete audit event recorded")
+	}
+}
+
+// ─── A-10: acknowledge_access_change via strconv.ParseBool ────────────────
+
+// TestAccess_DeleteAcknowledgeAcceptsParseBoolForms: the query param used to
+// accept only the literal "true" — strconv.ParseBool also takes "1"/"T"/
+// "TRUE", and a garbage value must still read as false (never error the
+// request), same as an absent param.
+func TestAccess_DeleteAcknowledgeAcceptsParseBoolForms(t *testing.T) {
+	// emails + no default: the reverse posture-flip guard fires on an
+	// unacknowledged delete of the deployment's only row, which is exactly
+	// what exercises ParseBool's non-"true" spellings below.
+	auth := newAccessAuth(t, nil, "", []string{"ops@corp.example"}, nil)
+	for _, ack := range []string{"1", "T", "TRUE"} {
+		t.Run(ack, func(t *testing.T) {
+			id := uuid.New()
+			st := &roleMapStore{rows: []types.RoleMapping{{ID: id, Value: "eng-team", Role: oidc.RoleMember}}}
+			srv := accessServer(t, auth, st)
+
+			w := do(t, srv, http.MethodDelete, "/api/v1/access/mappings/"+id.String()+"?acknowledge_access_change="+ack, adminToken, "")
+			if w.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want 204 (ack=%q accepted by ParseBool); body=%s", w.Code, ack, w.Body.String())
+			}
+		})
+	}
+
+	// A garbage value must read as false, not error the request.
+	id := uuid.New()
+	st := &roleMapStore{rows: []types.RoleMapping{{ID: id, Value: "eng-team", Role: oidc.RoleMember}}}
+	srv := accessServer(t, auth, st)
+	w := do(t, srv, http.MethodDelete, "/api/v1/access/mappings/"+id.String()+"?acknowledge_access_change=nonsense", adminToken, "")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (garbage ack value reads as false, guard still fires); body=%s", w.Code, w.Body.String())
+	}
+	if len(st.rows) != 1 {
+		t.Fatalf("blocked delete must not have removed the row; rows = %+v", st.rows)
 	}
 }

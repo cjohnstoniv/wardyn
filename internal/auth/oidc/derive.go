@@ -272,6 +272,27 @@ func (a *Authenticator) HasOperatorEmails() bool {
 	return len(a.cfg.LegacyAdminEmails) > 0
 }
 
+// HasEmailDomains reports whether Config.AllowedEmailDomains
+// (WARDYN_OIDC_EMAIL_DOMAINS) is non-empty — the console's People page
+// EMAIL_KEY badge copy depends on this: without a domains list configured,
+// email_verified is not enforced (see oidc.go's boot/callback warnings), a
+// distinction the response otherwise has no way to express.
+func (a *Authenticator) HasEmailDomains() bool {
+	return len(a.cfg.AllowedEmailDomains) > 0
+}
+
+// MergedMapEmpty reports whether the ACTUAL merged role map (chart plus the
+// given console rows, applying mergeRoleMaps' own collision/shadow rules) is
+// empty — the console's People page needs this instead of a raw row count
+// (len(chart)==0 && len(rows)==0), which diverges from the real map whenever
+// a stored row is shadowed by the chart or the operator allowlist and
+// therefore contributes nothing to what deriveRole actually looks values up
+// in.
+func (a *Authenticator) MergedMapEmpty(rows []RoleMapping) bool {
+	merged, _ := mergeRoleMaps(a.cfg.RoleMap, a.cfg.LegacyAdminEmails, rows)
+	return len(merged) == 0
+}
+
 // IsOperatorEmail reports whether v case-insensitively matches an entry on
 // Config.LegacyAdminEmails (WARDYN_OIDC_OPERATOR_EMAILS) — the console's
 // People page write boundary uses this to name the SAME shadow cause

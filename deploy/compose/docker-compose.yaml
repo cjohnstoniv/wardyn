@@ -335,6 +335,11 @@ services:
       # operator allowlist; default role catches unmatched signers-in.
       WARDYN_OIDC_ROLE_MAP: "${WARDYN_OIDC_ROLE_MAP:-}"
       WARDYN_OIDC_DEFAULT_ROLE: "${WARDYN_OIDC_DEFAULT_ROLE:-}"
+      # Opt-in for an email-shaped console People-step role mapping
+      # (POST /access/mappings only — WARDYN_OIDC_ROLE_MAP's own email-keyed
+      # entries are unaffected either way, see docs/ENV.md). Refused by
+      # default (EMAIL_KEY_REFUSED).
+      WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS: "${WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS:-}"
       # SSH gateway (docs/SSH.md). Empty WARDYN_SSH_LISTEN (the default) means
       # off — no listener, not even a generated host key — regardless of
       # whether the WARDYN_SSH_PORT mapping above is published. Set both to
