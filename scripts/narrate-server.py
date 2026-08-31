@@ -48,6 +48,11 @@ from pathlib import Path
 CACHE = Path(os.environ.get("WARDYN_NARRATE_CACHE", Path.home() / ".cache" / "wardyn-narrate" / "clips"))
 HOME = Path(os.environ.get("WARDYN_NARRATE_HOME", Path.home() / ".cache" / "wardyn-narrate"))
 KOKORO_MODEL = HOME / "kokoro-v1.0.onnx"
+# Per-clip filename counter for the myvoice engine's shared render directory.
+# Paired with the pid because ~/myvoice/renders/narrate is mounted into the
+# container and a rehearse can run beside a take: pid alone collides on the
+# second clip, the counter alone collides across processes.
+_counter = itertools.count()
 KOKORO_VOICES = HOME / "voices-v1.0.bin"
 PIPER_MODEL = Path(
     os.environ.get("WARDYN_NARRATE_PIPER_MODEL", Path.home() / "tester" / "voices" / "en_US-lessac-medium.onnx")
