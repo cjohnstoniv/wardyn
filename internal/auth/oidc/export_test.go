@@ -54,3 +54,17 @@ func NewRewriteTransportForTest(publicURL, internalURL string, base *http.Client
 func SetRevocationsForTest(a *Authenticator, r SessionRevocations) {
 	a.cfg.Revocations = r
 }
+
+// DeriveRoleForTest exposes deriveRole for direct table-testing of role
+// derivation precedence and Match provenance, without driving a signed ID
+// token through the whole callback for every case.
+func DeriveRoleForTest(rolesClaim, groupsClaim []string, email string, roleMap map[string]string, legacyAdminEmails []string, defaultRole string) (role string, matches []Match, ok bool) {
+	return deriveRole(rolesClaim, groupsClaim, email, roleMap, legacyAdminEmails, defaultRole)
+}
+
+// MergeRoleMapsForTest exposes mergeRoleMaps so the chart/console merge rules
+// (shadowing, disjoint union, posture-flip transitions) table-test as a pure
+// function, without a store or a signed ID token.
+func MergeRoleMapsForTest(chart map[string]string, legacyAdminEmails []string, rows []RoleMapping) (merged map[string]string, shadowed []string) {
+	return mergeRoleMaps(chart, legacyAdminEmails, rows)
+}
