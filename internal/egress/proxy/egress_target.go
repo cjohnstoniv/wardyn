@@ -105,14 +105,13 @@ func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, 
 	// policy had trusted it. Deny still beats allow (AllowsLiteralIP checks the
 	// deny lists first).
 	//
-	// This only ADDS an admission: a literal that is not exactly allowed falls
-	// through to p.vetHost below unchanged (including its own InternalHosts
-	// lift), so nothing reachable before becomes unreachable.
-	if ip := net.ParseIP(strings.TrimSuffix(strings.ToLower(host), ".")); ip != nil {
-		if kind, _ := isBlockedIP(ip); kind != blockNone &&
-			p.policy != nil && p.policy.AllowsLiteralIP(ip.String(), port) {
-			return net.JoinHostPort(ip.String(), strconv.Itoa(port)), ruleSourceEgressRedirect, nil
-		}
+	// This only ADDS an admission: a literal that is not an exactly-allowed
+	// blockPrivate address falls through to p.vetHost below unchanged (including
+	// its own InternalHosts lift), so nothing reachable before becomes
+	// unreachable — and a loopback/metadata/NAT64 literal is denied there even
+	// when allow-listed (trustsExactLiteralIP gates on blockPrivate only).
+	if ip := net.ParseIP(strings.TrimSuffix(strings.ToLower(host), ".")); ip != nil && p.trustsExactLiteralIP(ip, port) {
+		return net.JoinHostPort(ip.String(), strconv.Itoa(port)), ruleSourceEgressRedirect, nil
 	}
 	guard := p.vetHost(host)
 	if guard.Denied {
@@ -122,6 +121,20 @@ func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, 
 		ruleSource = ruleSourceInternalHost
 	}
 	return net.JoinHostPort(guard.IP.String(), strconv.Itoa(port)), ruleSource, nil
+}
+
+// trustsExactLiteralIP reports whether ip — a bare literal an agent or a
+// redirect named — may skip the SSRF guard because the operator declared that
+// EXACT address in an AllowedDomains entry. Only blockPrivate (RFC1918/ULA/
+// CGNAT) qualifies, the same ceiling SiteConfig.InternalHosts lifts (see
+// liftInternalHost): loopback, link-local/metadata, NAT64 and the other
+// reserved ranges are NEVER trusted even when explicitly allow-listed, so an
+// operator cannot hand the sandbox 169.254.169.254 by typing it into
+// allowed_domains. Deny still beats allow — AllowsLiteralIP checks the deny
+// lists first.
+func (p *Proxy) trustsExactLiteralIP(ip net.IP, port int) bool {
+	kind, _ := isBlockedIP(ip)
+	return kind == blockPrivate && p.policy != nil && p.policy.AllowsLiteralIP(ip.String(), port)
 }
 
 // bypassUpstream reports whether a dial to host must SKIP the corporate
@@ -134,10 +147,11 @@ func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, 
 // policy allow (evaluate() has already decided that). Nil/empty list => false
 // for every host, i.e. byte-identical to before the field existed.
 //
-// Consulted at exactly three sites, all keyed on the REAL destination host:
-// egressTarget (which hop resolves+vets), egressDialUpstream (the forwarding
-// transport's dial) and handleConnect (the opaque tunnel's dial). Those are
-// every place the upstream/direct choice is made.
+// Consulted at four sites, all keyed on the REAL destination host: egressTarget
+// (which hop resolves+vets), gatewayTarget (the brokered-LLM route), the
+// egressDial closure (the forwarding transport's dial) and handleConnect (the
+// opaque tunnel's dial). Those are every place the upstream/direct choice is
+// made.
 func (p *Proxy) bypassUpstream(host string) bool {
 	if len(p.noProxy) == 0 {
 		return false

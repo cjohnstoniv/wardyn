@@ -552,17 +552,19 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	//
 	// trustedLiteralIP is the ONE deliberate exception: a literal IP the
 	// operator explicitly typed into an EXACT AllowedDomains entry (e.g. an
-	// egress-redirect "To" target on RFC1918 space — see
-	// Policy.AllowsLiteralIP) carries no DNS-rebinding risk, since there is
+	// egress-redirect "To" target on RFC1918/CGNAT space — see
+	// trustsExactLiteralIP) carries no DNS-rebinding risk, since there is
 	// no hostname behind it to rebind. Set here, it also skips VetHost at
 	// step 4 below (which would otherwise re-derive and re-deny the same
 	// address) so the operator's own configured destination is actually
 	// reachable instead of always denied with "the customer's network is at
-	// fault" (W13-S1-3).
+	// fault" (W13-S1-3). Only blockPrivate qualifies: a declared loopback,
+	// link-local/metadata or NAT64 literal still hits the else and is denied —
+	// the operator cannot hand the sandbox 169.254.169.254 by allow-listing it.
 	var trustedLiteralIP net.IP
 	if ip := net.ParseIP(strings.TrimSuffix(strings.ToLower(host), ".")); ip != nil {
 		if kind, _ := isBlockedIP(ip); kind != blockNone {
-			if p.policy != nil && p.policy.AllowsLiteralIP(ip.String(), port) {
+			if p.trustsExactLiteralIP(ip, port) {
 				trustedLiteralIP = ip
 			} else {
 				log := decisionLog(req, egress.Deny, "builtin:private-ip")

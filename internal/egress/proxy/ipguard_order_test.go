@@ -81,3 +81,38 @@ func TestEvaluate_DeclaredLiteralIPRedirectTargetAllowed(t *testing.T) {
 		t.Fatalf("undeclared sibling IP: target must be empty on deny, got %q", target)
 	}
 }
+
+// The literal-IP exemption is scoped to blockPrivate (RFC1918/ULA/CGNAT), the
+// same ceiling SiteConfig.InternalHosts lifts. An operator who allow-lists a
+// loopback/link-local/metadata literal must NOT thereby hand the sandbox that
+// address — declaring 169.254.169.254 in allowed_domains is still denied, at
+// both the step-0 guard (evaluate) and the re-vet path (egressTarget). Without
+// this, a `kind != blockNone` gate trusted any declared blocked literal, so an
+// allowed_domains entry was an SSRF-to-metadata footgun (audit finding).
+func TestEvaluate_DeclaredMetadataLiteralStillDenied(t *testing.T) {
+	spec := types.RunPolicySpec{AllowedDomains: []string{
+		"169.254.169.254", // cloud metadata (blockLocal)
+		"127.0.0.1",       // loopback (blockLocal)
+		"10.40.2.11",      // RFC1918 (blockPrivate) — the one that MAY be trusted
+	}}
+	p, _ := newTestProxy(t, spec, "127.0.0.1:1", nil, nil)
+
+	for _, host := range []string{"169.254.169.254", "127.0.0.1"} {
+		decision, target, log := p.evaluate(context.Background(), host, 443, "GET", "/")
+		if decision != egress.Deny || log.RuleSource != "builtin:private-ip" {
+			t.Errorf("evaluate(%s): decision=%q rule=%q, want deny/builtin:private-ip even though declared", host, decision, log.RuleSource)
+		}
+		if target != "" {
+			t.Errorf("evaluate(%s): target must be empty on deny, got %q", host, target)
+		}
+		if _, _, err := p.egressTarget(host, 443); err == nil {
+			t.Errorf("egressTarget(%s): must refuse a declared metadata/loopback literal", host)
+		}
+	}
+
+	// The blockPrivate sibling in the same policy stays reachable — the fix
+	// narrows the exemption, it does not remove it.
+	if tgt, src, err := p.egressTarget("10.40.2.11", 8443); err != nil || tgt != "10.40.2.11:8443" || src != ruleSourceEgressRedirect {
+		t.Fatalf("egressTarget(10.40.2.11)=%q/%q/%v, want 10.40.2.11:8443/%q/nil", tgt, src, err, ruleSourceEgressRedirect)
+	}
+}
