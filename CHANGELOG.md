@@ -10,6 +10,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Governance profiles**: a named policy ceiling an admin can ASSIGN — to a person, to an SSO group, or to everyone — so a contractor group and a platform team can hold genuinely different limits on one install. Precedence is user over group over all, with a subject claim beating an email and priority then name breaking ties, so the answer never depends on the query plan. A profile REPLACES the site-wide default rather than composing with it, which is the only shape where reading a profile tells you what it permits; with no assignment, every resolution is exactly what it was before. A profile can only ever NARROW credential eligibility, and that bound is re-applied when the ceiling resolves, not just when it is saved, so a redeployed default that drops a pairing cannot leave a stale profile serving it. Denies are re-asserted inside dispatch, after the phases that add corporate hosts and credential injections — including the brokered git and PAT lanes, which never consulted the deny list before.
+- **A security-admin role**, and a console that can be delegated to it. A security admin governs the verdict — profiles, permissions, egress decisions, token inventory, audit verification — and deliberately does NOT reach into a run: it is never stamped on an SSH key or an attach ticket, and no capability grant can widen it. That separation is what makes the surface safe to hand out. Forty gated routes are classified in an exhaustive table that a test walks from both tiers.
+- Bedrock can be reached through a **VPC (PrivateLink) endpoint**: `WARDYN_BEDROCK_BASE_URL` points the data plane at a private endpoint, full model ARNs — including the `application-inference-profile` form — are documented as accepted model identifiers, and a private-endpoint hostname is now recognised as model traffic so the audit trail classifies the call an auditor will ask about. The endpoint is a boot flag rather than a runtime setting because in bearer mode it is the TLS-interception and credential-injection target.
+
 - A fresh install now **remembers being set up server-side**: finishing Getting Started records completion on the install itself (`POST /setup/onboarding-complete`, idempotent and audited), so a different browser — or a different admin — lands past the funnel too. Until then, every console access force-lands an admin in Getting Started (once per page load; the funnel's own affordances can still leave), while members are never gated. The old per-browser flag survives only as a fallback for older daemons.
 - The demo-video catalog groups by **deployment path**: core "Start here" episodes lead, the install's own path (single-user vs multi-user, read off the live install) follows, path-agnostic running-work episodes next, and the other deployment's path folds behind a disclosure. Member-audience episodes in the multi-user group carry a "For your members" chip, and the member Getting Started rail leads with "Your path".
 - Egress demo **"Denied, however you spell it"**: allow-all plus one `denied_domains` entry, then the trailing-dot spelling of the blocked host meeting the identical 403 — the deny-list dodge the proxy's host canonicalization closes — with the refusal's machine-readable reason headers (`X-Wardyn-Egress`, `-Reason`, `-Host`) on camera for the first time. Held-at-the-door's missed-window step now names the `approval-pending` value that distinguishes "wait, then retry" from a hard no.
@@ -264,6 +268,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- The AWS toolchain now trusts a corporate CA. AWS CLI v2 ships its own Python and its own certificate store and reads none of the four trust variables the sandbox already set, so on a TLS-inspecting network the one image built for the AWS CLI — and every intercepted Bedrock or STS call — failed certificate verification while the operating system's trust store was perfectly correct. The variable list had been written out twice, once per caller, and the two copies had already drifted; both now read one list.
+
 - The `agent-aws-sso` image now ships AWS's `THIRD_PARTY_LICENSES` attribution
   file at `/usr/share/doc/aws-cli/THIRD_PARTY_LICENSES`. The AWS CLI installer
   copies only its `dist/` tree, so every previously published tag of this image
@@ -512,6 +518,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   condition that would re-open it.
 
 ### Changed
+
+- **Everyone signs in once after upgrading.** The session cookie's format version is stamped, so cookies issued by an older daemon are re-derived rather than accepted. This is deliberate and it is one field's fault: the cookie now records whether a member's group list was truncated, and an absent bit would decode as "not truncated" — the exact wrong answer, since group membership decides which governance profile applies. API tokens carry the same marker from the moment they are minted.
 
 - The GPL corresponding-source offer (`deploy/images/THIRD-PARTY-GPL.md`) is
   regenerated against the 0.6.6 published digests, and offers owed for

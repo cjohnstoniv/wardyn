@@ -39,19 +39,19 @@ is *about* would record it in the one place already under suspicion.
 
 | Action | When | Data fields | Where | Stable? |
 |---|---|---|---|---|
-| `run.create` | A run row is created (`POST /runs`, or system-created for a follow-on workspace-step run) | `agent`, `repo`, `policy_id`, `confinement_class`, `jti`, `inline_policy`; conditional: `interactive_start`, `seed_auto_tools`, `task_mode`, `tool_approvals` | `internal/api/runs.go:267` | internal |
-| `run.dispatch` | Sandbox dispatch attempted or completed | `note`, `sandbox_ref` | `internal/api/runs_dispatch.go:145` | internal |
-| `run.build` | BYOI/devcontainer image build for a run | `byoi_base`, `devcontainer_repo`, `error`, `image` | `internal/api/runs_create.go:797` | internal |
+| `run.create` | A run row is created (`POST /runs`, or system-created for a follow-on workspace-step run) | `agent`, `repo`, `policy_id`, `confinement_class`, `jti`, `inline_policy`; conditional: `interactive_start`, `seed_auto_tools`, `task_mode`, `tool_approvals` | `internal/api/runs.go:248` | internal |
+| `run.dispatch` | Sandbox dispatch attempted or completed | `note`, `sandbox_ref` | `internal/api/runs_dispatch.go:163` | internal |
+| `run.build` | BYOI/devcontainer image build for a run | `byoi_base`, `devcontainer_repo`, `error`, `image` | `internal/api/runs_create.go:863` | internal |
 | `run.complete` | Run reaches a terminal state | `error`, `exit_code`, `panic`, `state` | `internal/api/runs_lifecycle.go:60` | internal |
 | `run.fail` | Run fails before the agent starts | `error`, `from` | `internal/api/runs_lifecycle.go:403` | internal |
 | `run.kill` | Operator or owner kills a run | (run state transition) | `internal/api/runs_lifecycle.go:539` | internal |
-| `run.exec` | Exec into a dispatched sandbox | `argv`, `error` | `internal/api/runs_dispatch.go:586` | internal |
+| `run.exec` | Exec into a dispatched sandbox | `argv`, `error` | `internal/api/runs_dispatch.go:614` | internal |
 | `run.files` | A workspace file-browse operation on a run fails | `error` | `internal/api/run_files.go:343` | internal |
-| `run.interactive` | `interactive_start` path taken | `note`, `sandbox_ref` | `internal/api/runs_dispatch.go:557` | internal |
+| `run.interactive` | `interactive_start` path taken | `note`, `sandbox_ref` | `internal/api/runs_dispatch.go:585` | internal |
 | `run.resources` | A run-resources query/update fails | `error` | `internal/api/run_resources.go:188` | internal |
-| `run.selftest` | Post-dispatch selftest gate (agent-image liveness check before a run is usable) | `confinement_class`, `detail`, `error`, `exit_code`, `fail_closed` | `internal/api/runs_dispatch.go:577` | internal |
+| `run.selftest` | Post-dispatch selftest gate (agent-image liveness check before a run is usable) | `confinement_class`, `detail`, `error`, `exit_code`, `fail_closed` | `internal/api/runs_dispatch.go:605` | internal |
 | `run.record.start` | A Record Mode session starts or fails to start | `allow_all_egress`, `confined`, `confinement`, `confinement_class`, `detail`, `label`, `mode`, `record_run_id` | `internal/api/record.go:314` | internal |
-| `run.record.synthesize` | Record→Promote profile synthesis | `allowed_domains`, `anomalies`, `eligible_grants` | `internal/api/profile.go:156` | internal |
+| `run.record.synthesize` | Record→Promote profile synthesis | `allowed_domains`, `anomalies`, `eligible_grants` | `internal/api/profile.go:169` | internal |
 | `run.revoke` | Credential/identity revoked on stop (API path), or the lifecycle reaper's revoke attempt fails | `runner_error`, `identity_error`, `broker_error` | `internal/api/runs_lifecycle.go:230`; reaper failure at `internal/lifecycle/lifecycle.go:368` | internal |
 | `run.autostop` | Idle-timeout autostop fires | `idle_for_sec`, `reason`, `threshold_sec` | `internal/lifecycle/lifecycle.go:346` | internal |
 | `run.reconcile` | The orphan-sandbox reconciler acts on a run at boot | (reconcile outcome) | `internal/api/reconcile.go:717` | internal |
@@ -59,46 +59,46 @@ is *about* would record it in the one place already under suspicion.
 | `sandbox.sweep_requested` | An OPERATOR triggered a sandbox sweep via `POST /api/v1/admin/sandboxes/sweep` — emitted on SUCCESS, recording who asked and how many were swept. Distinct from `sandbox.sweep`, which the primitive emits on failed teardown only. The boot pass runs the same primitive without this row, since nobody asked for it | `swept` | `internal/api/runs_lifecycle.go:605` | operator |
 | `sandbox.sweep` | `SweepTerminalSandboxes` (the callable sweep primitive over terminal runs with a live probed sandbox) FAILS to tear one down — emitted on failed teardown only, like its boot-time sibling | `sandbox_ref`, `teardown_error` | `internal/api/runs_lifecycle.go:268` (`stopSandboxOrAudit`, `internal/api/runs_lifecycle.go:195`) | internal |
 | `run.artifact.redirect` | Package-registry (artifact) redirect configured for a run | `detail`, `ecosystem`, `error`, `header`, `host`, `integration_id`, `port`, `secret_name` | `internal/api/artifact_redirect.go:231` | internal |
-| `run.policy.effective` | The effective (post-merge) policy snapshot is recorded at dispatch | (full policy snapshot) | `internal/api/runs_dispatch.go:421` | internal |
+| `run.policy.effective` | The effective (post-merge) policy snapshot is recorded at dispatch | (full policy snapshot) | `internal/api/runs_dispatch.go:449` | internal |
 | `run.upstream_proxy.resolve` | Upstream (corporate) proxy resolution for a run | `reason` | `internal/api/runs_dispatch_mounts.go:102` | internal |
 | `run.llm.bedrock` | Bedrock LLM credential/config wired into a run | `detail`, `hosts`, `mode`, `model`, `region` | `internal/api/runs_dispatch_llm.go:262` | internal |
-| `run.llm.subscription_inject` | Subscription OAuth proxy-side inject wired into a run (see `subscription-proxy-inject` — the operator's live OAuth is injected proxy-side, never resident in the sandbox) | `detail`, `host`, `source`, `tls_mitm` | `internal/api/runs_dispatch_llm.go:405` | internal |
-| `run.llm_inspection.secrets_resolve` | LLM egress content-inspection secret names resolved for a run | `missing`, `names`, `reason`, `resolved` | `internal/api/runs_dispatch.go:646` | internal |
+| `run.llm.subscription_inject` | Subscription OAuth proxy-side inject wired into a run (see `subscription-proxy-inject` — the operator's live OAuth is injected proxy-side, never resident in the sandbox) | `detail`, `host`, `source`, `tls_mitm` | `internal/api/runs_dispatch_llm.go:437` | internal |
+| `run.llm_inspection.secrets_resolve` | LLM egress content-inspection secret names resolved for a run | `missing`, `names`, `reason`, `resolved` | `internal/api/runs_dispatch.go:674` | internal |
 | `llm.scan.*` | An outbound LLM content-inspection pass completes for a run's egress — the literal suffix is `sc.Action` (`llm.scan.alert`, `llm.scan.block`, `llm.scan.skipped`, or `llm.scan.blind`, per `egress.ScanSummary.Action`); security-relevant, and deliberately CONTENT-FREE — `findings` carries detector names, field paths, offsets, counts and masked samples only, never the matched bytes | `channel`, `coverage`, `finding_count`, `findings`, `host`, `mode`, `scanned`, `skipped`, `skip_reason` | `internal/api/internal.go:135` (`recordLLMScanAudit`) | internal |
-| `run.env_secret.resolve` | One `env_secret` grant resolved store→sandbox env at dispatch (one event per grant). `outcome=failure` means the grant was SKIPPED — `reason` says why (unreadable scope, reserved secret name, no secret store, unresolvable secret, or a refusal to overwrite a platform-authored variable that is already set to a non-empty value) — and the variable is left ABSENT, never blank-set. Carries the variable name and the SECRET NAME only; the value is never logged, and is mask-registered for the run | `name`, `reason`, `secret_name` | `internal/api/runs_dispatch.go:747` | internal |
-| `run.git_pat.egress` | A `git_pat` grant adds egress domains at launch | `added_domains` | `internal/api/runs_create.go:767` | internal |
-| `run.git_pat.brokered_forge` | A `git_pat` grant is withheld at dispatch because the run is brokered for that forge — the git-broker route is its only route to it by name, so withholding the PAT is load-bearing, not belt-and-braces | `dropped_hosts`, `note` | `internal/api/runs_dispatch.go:181` (`auditBrokeredGrantDrop`, `internal/api/runs_dispatch_gitbroker.go:217`) | internal |
-| `run.site_config.egress` | Site-config-derived egress domains added at launch | `added_domains` | `internal/api/runs_create.go:758` | internal |
-| `run.ssh.egress` | SSH gateway egress domains added at launch | `added_domains` | `internal/api/runs_create.go:763` | internal |
-| `run.ssh.brokered_forge` | An `ssh_key` grant is withheld at dispatch for the same brokered-forge reason as `run.git_pat.brokered_forge` | `dropped_hosts`, `note` | `internal/api/runs_dispatch.go:176` (`auditBrokeredGrantDrop`, `internal/api/runs_dispatch_gitbroker.go:217`) | internal |
-| `run.ssh.unsupported_agent` | SSH-enabled run launched against an agent image without SSH support; the SSH host set is dropped | `dropped_hosts` | `internal/api/runs_create.go:676` | internal |
-| `run.workspace.clone_egress` | Workspace-clone egress domains added at launch | `added_domains` | `internal/api/runs_create.go:732` | internal |
+| `run.env_secret.resolve` | One `env_secret` grant resolved store→sandbox env at dispatch (one event per grant). `outcome=failure` means the grant was SKIPPED — `reason` says why (unreadable scope, reserved secret name, no secret store, unresolvable secret, or a refusal to overwrite a platform-authored variable that is already set to a non-empty value) — and the variable is left ABSENT, never blank-set. Carries the variable name and the SECRET NAME only; the value is never logged, and is mask-registered for the run | `name`, `reason`, `secret_name` | `internal/api/runs_dispatch.go:779` | internal |
+| `run.git_pat.egress` | A `git_pat` grant adds egress domains at launch | `added_domains` | `internal/api/runs_create.go:779` | internal |
+| `run.git_pat.brokered_forge` | A `git_pat` grant is withheld at dispatch because the run is brokered for that forge — the git-broker route is its only route to it by name, so withholding the PAT is load-bearing, not belt-and-braces | `dropped_hosts`, `note` | `internal/api/runs_dispatch.go:199` (`auditBrokeredGrantDrop`, `internal/api/runs_dispatch_gitbroker.go:217`) | internal |
+| `run.site_config.egress` | Site-config-derived egress domains added at launch | `added_domains` | `internal/api/runs_create.go:770` | internal |
+| `run.ssh.egress` | SSH gateway egress domains added at launch | `added_domains` | `internal/api/runs_create.go:775` | internal |
+| `run.ssh.brokered_forge` | An `ssh_key` grant is withheld at dispatch for the same brokered-forge reason as `run.git_pat.brokered_forge` | `dropped_hosts`, `note` | `internal/api/runs_dispatch.go:194` (`auditBrokeredGrantDrop`, `internal/api/runs_dispatch_gitbroker.go:217`) | internal |
+| `run.ssh.unsupported_agent` | SSH-enabled run launched against an agent image without SSH support; the SSH host set is dropped | `dropped_hosts` | `internal/api/runs_create.go:688` | internal |
+| `run.workspace.clone_egress` | Workspace-clone egress domains added at launch | `added_domains` | `internal/api/runs_create.go:744` | internal |
 | `run.workspace.collision` | Launch refused because the workspace is already in use by another run | `other_runs` | `internal/api/runs.go:73` | internal |
-| `run.workspace.creds` | Workspace-scoped integration credential resolved for a run | `integration_ref`, `type` | `internal/api/runs.go:215` | internal |
-| `run.workspace.egress` | Workspace-derived egress domains added at launch | `added_domains` | `internal/api/runs_create.go:715` | internal |
-| `run.workspace.requirement.egress` | A workspace-needs-scanner egress requirement is satisfied at launch | `added_domains`, `workspace_id` | `internal/api/runs_create.go:350` | internal |
+| `run.workspace.creds` | Workspace-scoped integration credential resolved for a run | `integration_ref`, `type` | `internal/api/runs.go:196` | internal |
+| `run.workspace.egress` | Workspace-derived egress domains added at launch | `added_domains` | `internal/api/runs_create.go:727` | internal |
+| `run.workspace.requirement.egress` | A workspace-needs-scanner egress requirement is satisfied at launch | `added_domains`, `workspace_id` | `internal/api/runs_create.go:362` | internal |
 | `run.workspace.requirement.integration` | A workspace-needs-scanner integration requirement is satisfied at launch | `header`, `injected_hosts`, `integration_id` | `internal/api/integrations_run.go:88` | internal |
-| `run.workspace.requirement.secret` | A workspace-needs-scanner secret requirement is satisfied at launch | `host`, `secret_name` | `internal/api/runs_create.go:412` | internal |
+| `run.workspace.requirement.secret` | A workspace-needs-scanner secret requirement is satisfied at launch | `host`, `secret_name` | `internal/api/runs_create.go:424` | internal |
 
 ## Workspaces & sources
 
 | Action | When | Data fields | Where | Stable? |
 |---|---|---|---|---|
-| `workspace.create` | `POST /workspaces` | `name`, `owned_by`, `sources` | `internal/api/workspaces.go:416` | internal |
-| `workspace.update` | `PUT /workspaces/{id}` | `image_changed`, `name`, `rescan_required`, `sources` | `internal/api/workspaces.go:542` | internal |
-| `workspace.delete` | `DELETE /workspaces/{id}` | — | `internal/api/workspaces.go:856` | internal |
-| `workspace.scan` | A workspace directory/repo scan (needs-scanner) runs | `detail`, `reason`, `scan_run_ids`, `sources`, `workspace_id` | `internal/api/workspace_run.go:725`, `internal/api/source_scan.go:288,329,346` | internal |
-| `workspace.record` | The "workspace record" onboarding-import run completes | `anomalies`, `domains`, `kernel_sensor_blind`, `minted_grants`, `mode`, `task` | `internal/api/workspace_run.go:902` | internal |
+| `workspace.create` | `POST /workspaces` | `name`, `owned_by`, `sources` | `internal/api/workspaces.go:438` | internal |
+| `workspace.update` | `PUT /workspaces/{id}` | `image_changed`, `name`, `rescan_required`, `sources` | `internal/api/workspaces.go:567` | internal |
+| `workspace.delete` | `DELETE /workspaces/{id}` | — | `internal/api/workspaces.go:881` | internal |
+| `workspace.scan` | A workspace directory/repo scan (needs-scanner) runs | `detail`, `reason`, `scan_run_ids`, `sources`, `workspace_id` | `internal/api/workspace_run.go:764`, `internal/api/source_scan.go:288,329,346` | internal |
+| `workspace.record` | The "workspace record" onboarding-import run completes | `anomalies`, `domains`, `kernel_sensor_blind`, `minted_grants`, `mode`, `task` | `internal/api/workspace_run.go:941` | internal |
 | `workspace.requirement.write` | An admin/member edits a workspace-needs requirement from the approval flow | (requirement diff) | `internal/api/approvals.go:990` | internal |
 | `workspace.requirements.write` | An admin/member replaces the workspace's whole requirements contract (`PUT /workspaces/{id}/requirements`) — distinct from the singular `workspace.requirement.write` above (a single-requirement edit from the approval flow); this is the map-wide replace | `count` | `internal/api/workspace_requirements.go:137` | internal |
 | `workspace.envcode.write` | The onboarding "env code" (devcontainer/setup snippet) is written for a workspace | `files`, `skipped`, `skipped_files`, `written_files` | `internal/api/workspace_envcode.go:70` | internal |
-| `workspace.egress.approve` | Operator/member approves a pending workspace egress decision (`always`/`session` scope write-back) | `domains`, `source` | `internal/api/approvals.go:904`, `internal/api/record.go:623` | internal |
-| `workspace.egress.deny` | Operator/member denies a workspace egress decision | `domains`, `source` | `internal/api/approvals.go:902`, `internal/api/workspaces.go:679` | internal |
-| `workspace.llm_cred.set` | An operator binds (or clears) the model/harness credential for a workspace/container (`PUT /workspaces/{id}/llm-cred`) | `integration_ref` | `internal/api/workspaces.go:708` | internal |
+| `workspace.egress.approve` | Operator/member approves a pending workspace egress decision (`always`/`session` scope write-back) | `domains`, `source` | `internal/api/approvals.go:885`, `internal/api/record.go:631` | internal |
+| `workspace.egress.deny` | Operator/member denies a workspace egress decision | `domains`, `source` | `internal/api/approvals.go:883`, `internal/api/workspaces.go:704` | internal |
+| `workspace.llm_cred.set` | An operator binds (or clears) the model/harness credential for a workspace/container (`PUT /workspaces/{id}/llm-cred`) | `integration_ref` | `internal/api/workspaces.go:733` | internal |
 | `workspace.reassign` | An admin returns a member-owned workspace to the operator, `owned_by=""` (`POST /workspaces/{id}/reassign`) — the offboarding path for a member who has left | `from_owner` (the departed member's principal; `""` when the row was already operator-owned) | `internal/api/workspace_owner.go:60` | internal |
 | `source.write` | A workspace source (dir/repo) is added or updated | `kind`, `locator`, `ref`, `writable` | `internal/api/sources.go:260` | internal |
 | `source.delete` | A workspace source is removed | `detached_from`, `forced` | `internal/api/sources.go:342` | internal |
-| `source.scan` | A single source's onboarding scan runs | `ai_advisor`, `ai_changed`, `confidence`, `detail`, `leak_findings`, `reason`, `scan_run_id`, `secret_reqs` | `internal/api/workspace_run.go:691`, `internal/api/source_scan.go:62` | internal |
+| `source.scan` | A single source's onboarding scan runs | `ai_advisor`, `ai_changed`, `confidence`, `detail`, `leak_findings`, `reason`, `scan_run_id`, `secret_reqs` | `internal/api/workspace_run.go:730`, `internal/api/source_scan.go:62` | internal |
 
 **`workspace_owner` — the cross-user marker on every workspace-scoped write.**
 Any event in this section whose target is a MEMBER-OWNED workspace
@@ -146,8 +146,8 @@ Data is unchanged.
 | `ssh.exec` | A command executed over the SSH gateway (argv + exit code only — no content) | `argv`, `error`, `exit` | `internal/api/sshgateway_channels.go:632`; documented `docs/SSH.md:441` | **stable** (documented) |
 | `ssh.sftp` | An sftp transfer over the SSH gateway (byte count only — no payload/filenames) | `bytes`, `error` | `internal/api/sshgateway_channels.go`; documented `docs/SSH.md:441` | **stable** (documented) |
 | `ssh.forward` | An `ssh -L` port-forward session | `bytes`, `error`, `port` | `internal/api/sshgateway_channels.go`; documented `docs/SSH.md:442` | **stable** (documented) |
-| `ssh_key.add` | A human registers an SSH public key (`POST /me/ssh-keys`) | `name` | `internal/api/sshkeys.go:144` | internal |
-| `ssh_key.delete` | A human removes a registered SSH public key | — | `internal/api/sshkeys.go:177` | internal |
+| `ssh_key.add` | A human registers an SSH public key (`POST /me/ssh-keys`) | `name` | `internal/api/sshkeys.go:151` | internal |
+| `ssh_key.delete` | A human removes a registered SSH public key | — | `internal/api/sshkeys.go:184` | internal |
 | `ui.auth` | A UI-sandbox relay session is authorized or denied | `app`, `host`, `port`, `reason` | `internal/api/uigateway.go:295` | internal |
 | `ui.open` | A UI-sandbox relay session is opened | `app`, `duration_sec`, `port` | `internal/api/uigateway.go:659` | internal |
 | `ui.close` | A UI-sandbox relay session closes | `app`, `duration_sec`, `port` | `internal/api/uigateway.go:664` | internal |
@@ -171,17 +171,17 @@ Data is unchanged.
 | `harness.credential.captured` | A harness login flow (Claude Code subscription, etc.) captures a credential | `captured`, `provider`, `source` | `internal/api/harnesscred.go:629`, `internal/api/ssotoken.go:113` | internal |
 | `harness.credential.disconnected` | A harness credential is disconnected | `captured`, `provider` | `internal/api/harnesscred.go:653` | internal |
 | `harness.login.started` | A harness SSO login flow starts | `egress`, `provider`, `sso_start_url` | `internal/api/harnesscred.go:472` | internal |
-| `token.create` | A signed-in human mints a per-user API token for themselves (`POST /me/tokens`). The actor is that human and `Target` is the token id — never the credential, which is returned once and stored only as a hash | `name`, `role` | `internal/api/apitokens.go:237` | internal |
-| `token.revoke` | A per-user API token is revoked, by its owner (`DELETE /me/tokens/{id}`) or by an admin revoking anyone's (`DELETE /tokens/{id}`). `principal` names the token's OWNER, which is the point on the admin lane: the actor is the admin, the subject is someone else  A bulk sweep via `POST /sessions/revoke` records only the aggregate `tokens_revoked` on its `session.revoke` row — no per-token event. | `name`, `principal` | `internal/api/apitokens.go:309` | internal |
+| `token.create` | A signed-in human mints a per-user API token for themselves (`POST /me/tokens`). The actor is that human and `Target` is the token id — never the credential, which is returned once and stored only as a hash | `name`, `role` | `internal/api/apitokens.go:252` | internal |
+| `token.revoke` | A per-user API token is revoked, by its owner (`DELETE /me/tokens/{id}`) or by an admin revoking anyone's (`DELETE /tokens/{id}`). `principal` names the token's OWNER, which is the point on the admin lane: the actor is the admin, the subject is someone else  A bulk sweep via `POST /sessions/revoke` records only the aggregate `tokens_revoked` on its `session.revoke` row — no per-token event. | `name`, `principal` | `internal/api/apitokens.go:324` | internal |
 | `session.revoke` | An admin revokes active OIDC console sessions — `target` is the revoked `sub`, or `*` for a revoke-all (`POST /api/v1/sessions/revoke`, D16). Also revokes every unrevoked per-user API token the target holds — a `wdn_` bearer is that human's session in another form, so "revoke a human now" covers both ("all" covers every token in the deployment); `tokens_revoked` counts THIS call only (a retry after a failure counts just the remainder), and outcome `failure` marks a partial application — sessions revoked, token sweep errored mid-way | `scope` (`sub` or `all`), `sub` (sub-scoped only), `tokens_revoked` | `internal/api/sessions.go:63,68,78,83` | internal |
 
 ## Policy, capability & authorization
 
 | Action | When | Data fields | Where | Stable? |
 |---|---|---|---|---|
-| `policy.create` | A named egress/run policy is created | `min_confinement_class`, `name` | `internal/api/policies.go:241` | internal |
-| `policy.update` | A named policy is updated | `min_confinement_class`, `name` | `internal/api/policies.go:276` | internal |
-| `policy.delete` | A named policy is deleted | — | `internal/api/policies.go:297` | internal |
+| `policy.create` | A named egress/run policy is created | `min_confinement_class`, `name` | `internal/api/policies.go:284` | internal |
+| `policy.update` | A named policy is updated | `min_confinement_class`, `name` | `internal/api/policies.go:319` | internal |
+| `policy.delete` | A named policy is deleted | — | `internal/api/policies.go:340` | internal |
 | `policy.inline` | A one-off (inline, unsaved) policy is used to launch a run | `eligible_grants`, `min_confinement_class`, `workspace_mounts` | `internal/api/inline_policy.go:147` | internal |
 | `capability.grant.created` | `POST /permissions/grants` (new) | `capability`, `effect`, `subject`, `subject_type`, `value` | `internal/api/permissions.go:167` | internal |
 | `capability.grant.updated` | `POST /permissions/grants` (upsert on existing key) | `capability`, `effect`, `subject`, `subject_type`, `value` | `internal/api/permissions.go:169` | internal |
@@ -190,7 +190,7 @@ Data is unchanged.
 | `access.role_mapping.write` | `POST /access/mappings` (Phase 2 lane A, migration `0051`, the People step): a console role mapping is added, or re-added over an existing value (upsert on the natural `value` key — 201 vs 200 tells the two apart, this action name does not) | `role`, `value` | `internal/api/access.go:537` | internal |
 | `access.role_mapping.delete` | `DELETE /access/mappings/{id}`. Records the DELETED row's `value`/`role` — captured from the matched row before the store delete, since the row (and its id-to-value mapping) is gone by the time the event is written | `role`, `value` | `internal/api/access.go:606` | internal |
 | `approval.second_human.bypass` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the decider was the `admin-token` principal, so the four-eyes rule was BYPASSED (break-glass). A shared token carries no per-human identity to compare against, so it is exempt by design — this event is what keeps that exemption from being silent, and sits beside the `actor_type=system` `approval.decide` the decision itself writes | `reason`, `switch` | `internal/api/approvals.go:488` (`requireSecondHuman`) | internal |
-| `authz.denied` | Every member denial that isn't a plain foreign-resource 404 — see `docs/OPERATIONS.md`'s "Every denial that isn't a 404" for the full `reason` vocabulary (`admin_surface`, `not_owner`, `byoi_member`, `capability_workspace`, `capability_egress_host`, `capability_secret`, `grant_pairing_not_eligible`, `second_human_required`) | `dropped`, `host`, `method`, `reason` | multiple sites; documented `docs/OPERATIONS.md:828-847` | **stable** (documented, closed `reason` enum) |
+| `authz.denied` | Every member denial that isn't a plain foreign-resource 404 — see `docs/OPERATIONS.md`'s "Every denial that isn't a 404" for the full `reason` vocabulary (`admin_surface`, `not_owner`, `byoi_member`, `capability_workspace`, `capability_egress_host`, `capability_secret`, `governance_profile`, `grant_pairing_not_eligible`, `second_human_required`) | `dropped`, `host`, `method`, `reason` | multiple sites; documented `docs/OPERATIONS.md:700-705` | **stable** (documented, closed `reason` enum) |
 | `auth.failed` | A public-API authentication attempt fails: an `adminAuth` 401 (admin token not configured, missing bearer, or a bearer that doesn't match), OR a presented OIDC session cookie was rejected (tampered/malformed or expired) — whichever reason is more specific wins when both apply on the same request. Actor is always `system` (`wardyn/adminAuth`; no verified caller identity exists at this point). Content-free: `reason` is a closed enum (`admin_token_not_configured`, `missing_bearer_token`, `invalid_admin_token`, `invalid_session`, `expired_session`, `revoked_session`, `session_revocation_unavailable` — the last two only when session revocation is wired), never a user-supplied string; the request path is `Target`, the TCP peer is `SourceIP`. Rate-bound (process-global token bucket, 1/sec with a burst of 5) so a scanner throwing 401s cannot flood the append-only log | `reason` | `internal/api/http.go` (`auditAuthFailed`); session-rejection reason from `internal/auth/oidc/oidc.go`'s `Middleware`/`SessionRejectedFromContext` | internal |
 | `egress.*` | The proxy reports an egress decision for a run — the literal suffix is the decision itself: `egress.allow`, `egress.deny`, or `egress.pending` (`egress.Decision`, `internal/egress/egress.go:27-31`). A synthetic `blind` scan decision emits only `llm.scan.blind`, never a duplicate `egress.allow` for the tunnel | `approval_id`, `host`, `method`, `path`, `port`, `rule_source` | `internal/api/internal.go:80` | internal |
 
@@ -220,10 +220,10 @@ it never blocks, and it is blind inside CC3/Kata microVM guests.
 | `integration.write` | An admin creates/updates an integration (secrets/egress/config/delivery) | `default_for`, `egress`, `header`, `kind` | `internal/api/setup_integrations.go:251` | internal |
 | `integration.delete` | An admin deletes an integration | `credentials`, `egress`, `kind` | `internal/api/setup_integrations.go:292` | internal |
 | `setup.onboarding.completed` | An operator finished (or deliberately left) the Getting Started funnel — stamps `SiteConfig.OnboardingCompletedAt`, the install-side fact the console's landing, welcome hero and setup gate read. Emitted once per install: the handler is idempotent and a later re-finish never moves the timestamp | `completed_at` | `internal/api/setup_onboarding.go:72` | internal |
-| `site_config.write` | `PUT /site-config` (full-document replace) | `egress_redirects_count`, `internal_hosts_count`, `scm_hosts_count`, `upstream_proxy_configured` | `internal/api/site_config.go:396` | internal |
-| `site_config.test_proxy` | The site-config "test upstream proxy" probe runs | `custom_target`, `elapsed_ms`, `intercepted`, `state`, `target_host` | `internal/api/site_config_probe.go:735` | internal |
-| `site_config.test_redirect` | The site-config "test egress redirect" probe runs | `elapsed_ms`, `from_host`, `state`, `to_host` | `internal/api/site_config_probe.go:812` | internal |
-| `site_config.test_probe` | An egress-redirect probe run's finalize step (via `finalizeRunTail`; `reclaimProbeRun`'s doc comment explains why the audited name must be this endpoint's own, never `run.compose`) | — | `internal/api/site_config_probe.go:605` | internal |
+| `site_config.write` | `PUT /site-config` (full-document replace) | `egress_redirects_count`, `internal_hosts_count`, `scm_hosts_count`, `upstream_proxy_configured` | `internal/api/site_config.go:428` | internal |
+| `site_config.test_proxy` | The site-config "test upstream proxy" probe runs | `custom_target`, `elapsed_ms`, `intercepted`, `state`, `target_host` | `internal/api/site_config_probe.go:791` | internal |
+| `site_config.test_redirect` | The site-config "test egress redirect" probe runs | `elapsed_ms`, `from_host`, `state`, `to_host` | `internal/api/site_config_probe.go:870` | internal |
+| `site_config.test_probe` | An egress-redirect probe run's finalize step (via `finalizeRunTail`; `reclaimProbeRun`'s doc comment explains why the audited name must be this endpoint's own, never `run.compose`) | — | `internal/api/site_config_probe.go:667` | internal |
 
 ## System/reaper sources (no HTTP caller)
 

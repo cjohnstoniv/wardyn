@@ -863,6 +863,20 @@ hiding them would repeat the failure mode we are designed to avoid.
     operator's own monitoring catch an unenforced-but-allowed cluster without an
     admin token.
 
+31. **Directory autocomplete grants the control plane read of the WHOLE
+    directory, and the daemon dials out to get it.** `WARDYN_DIRECTORY_PROVIDER=entra`
+    (§I) authenticates `internal/directory`'s connector as an application against
+    Microsoft Graph, which can enumerate every user and group in the tenant —
+    not a scoped slice — and makes wardynd itself reach
+    `login.microsoftonline.com:443` and `graph.microsoft.com:443`, outside the
+    egress sidecar and outside any run policy. Default OFF, consented by a tenant
+    admin in Entra rather than by Wardyn, exposed only on the `securityOps` tier
+    (`handleDirectorySearch`), cached 60s in memory and never persisted, and
+    retracted by unsetting one variable — but while it is on, a compromised
+    control plane reads the org chart, and per-search audit is deliberately
+    ABSENT (one row per keystroke would log every name an admin looked up), so
+    the audit trail records connector failures, not who was searched for.
+
 ### 5.1a LLM egress content inspection — the honest-claims contract
 
 The optional `llm_inspection` guardrail (residuals #1, #2) is a **visibility +

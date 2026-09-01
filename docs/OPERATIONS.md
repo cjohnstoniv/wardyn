@@ -398,7 +398,8 @@ migration `0050`)** are the second and third owned nouns after runs.
 - **A run resolves its owner's row, falling back to the operator's** — never
   another member's, even when an inline policy names it by hand. The upstream
   (corporate) proxy secret always stays resolved from the operator namespace:
-  under a configured upstream the sidecar skips the SSRF guard entirely, so a
+  under a configured upstream the sidecar skips the SSRF guard for every host it
+  proxies (all of them, minus `upstream_proxy_no_proxy`), so a
   member-substitutable value there would be a guard bypass, not a convenience.
 - **`?owner=<principal>` is admin-only** on `PUT`/`DELETE`/`GET /secrets` (an
   admin's cross-write lands in the NAMED member's namespace, never the
@@ -711,6 +712,7 @@ Every member denial that isn't a plain foreign-resource 404 is audited under
 | `capability_workspace` | `workspace_id`: a member named a workspace they aren't granted (`403`). Launching: an `inline_policy` `workspace_repos` entry for an ungranted workspace was dropped — the run still launches | ⛔ `403`, or 🟡 a drop |
 | `capability_egress_host` | deciding: the approval's host isn't granted (`403`). Launching: member-authored allowlist entries were dropped from an `inline_policy` — the run still launches | ⛔ `403`, or 🟡 a drop |
 | `capability_secret` | a member's `inline_policy` grant referenced a secret they aren't granted — dropped, not rejected | 🟡 drop |
+| `governance_profile` | the member's assigned governance profile refuses this run SHAPE — `task_mode=exec`, an interactive run, `seed_auto_tools`, or codex-cli under hold-deriving rules. A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
 | `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped | 🟡 drop |
 | `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | ⛔ `403` |
 
@@ -1134,6 +1136,44 @@ Basic credential in cleartext. Dispatch applies the same gate
 referenced via `upstream_proxy_secret_ref` carries the same restriction — store
 the plain `http://` proxy URL in the secret even when it embeds a credential.
 
+### Upstream proxy: the bypass list (`upstream_proxy_no_proxy`)
+
+With an upstream configured, **every** forward dial is `CONNECT`ed through it —
+and a corporate forward proxy will not `CONNECT` to an internal address. So on an
+estate whose endpoints are private (a VPC endpoint / PrivateLink, an in-cluster
+service, a corp mirror on RFC 6598) every one of them times out.
+`upstream_proxy_no_proxy` is the bypass — the operator-hop equivalent of the
+`NO_PROXY` the sandbox already honours internally, spelled the same way:
+
+```jsonc
+"upstream_proxy_url": "http://proxy.corp.internal:8080",
+"upstream_proxy_no_proxy": [
+  "vpce.amazonaws.com",     // host or domain suffix (a leading "." is fine)
+  "mirror.corp.internal",
+  "100.64.0.0/10"           // CIDR, matched against a literal-IP destination
+]
+```
+
+Wildcards are refused at write time: "bypass everything" is spelled by clearing
+`upstream_proxy_url`, not by one character in a list. An entry that is neither a
+CIDR nor a host is a 400 too, because the proxy drops what it cannot compile and
+a typo would otherwise mean "still proxied" — silently, at run time.
+
+**It changes which hop dials, and nothing else.** A bypassed dial falls straight
+through to the same unconditional private/reserved-IP guard an unproxied dial
+faces, and still needs its `allowed_domains` entry. So on a private-endpoint
+estate the bypass and `internal_hosts` are one configuration in two fields, and
+**neither works alone**:
+
+| | Without `internal_hosts` | With `internal_hosts` |
+|---|---|---|
+| **No bypass** | corp proxy takes the dial, cannot reach an internal address → timeout | same; the guard never even runs |
+| **Bypassed** | dialled directly, then refused `builtin:private-ip` | **reaches the endpoint** (`rule_source: site-config:internal-host`) |
+
+The bottom-left cell is the safety property, not a rough edge: bypassing a host
+never makes a private address reachable. A refusal there names its own cause in
+the `X-Wardyn-Egress-Detail` response header and points at `internal_hosts`.
+
 ### Corporate TLS-inspection root
 
 A TLS-inspecting upstream proxy — one that terminates and re-signs TLS with its
@@ -1216,6 +1256,18 @@ login` against the internal registry, an appliance client's own config), or a ru
 reaches an allowed, credentialed host that nothing in the sandbox asks for. The UI
 labels these rows `network only` so the gap stays visible.
 
+**A `to` that is a literal IP** — the normal shape of a private endpoint — is
+trusted as an egress target for the runs the redirect covers, on every path the
+proxy vets (the opaque tunnel, the TLS-terminated token-injection path, and the
+git/PAT brokers alike), and shows in the audit trail as `rule_source:
+site-config:egress-redirect` rather than a generic policy allow. The trust comes
+from the exact allowlist entry the substitution writes, so it is scoped to those
+runs and to that address; a run the redirect does not cover is refused, and a
+`denied_domains` entry still wins. `test-redirect` understands the shape too: it
+dials the `to` address while presenting the `from` hostname for TLS, because a
+private endpoint's certificate names the public host — probing the address
+directly failed verification and reported a correct configuration as broken.
+
 ### Internal hosts
 
 The proxy's unconditional private/loopback/link-local/metadata/CGNAT/NAT64 IP
@@ -1291,8 +1343,10 @@ policy's `allowed_domains` omits a configured gateway's host. **Behind a corpora
 upstream proxy, the gateway must be reachable FROM that upstream** — with
 `upstream_proxy_url`/`upstream_proxy_secret_ref` also configured, every forward
 dial (the gateway included) is CONNECTed through the corp proxy by the transport,
-never dialled directly; there is no per-target bypass (a documented ceiling — see
-the threat model).
+never dialled directly. A gateway the corp proxy cannot reach — an internal one,
+typically — is what `upstream_proxy_no_proxy` is for: list its host there and the
+gateway is dialled directly instead, then admitted by `internal_hosts` like any
+other internal address.
 
 **Scope: the api-key lane only.** A subscription or Wardyn-managed-token run
 still talks to `api.anthropic.com` directly — the published agent images
@@ -1476,6 +1530,53 @@ with the ambient-deny ack in place (`WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY`,
 additive only within the namespaced policy model and cannot override a
 platform-applied deny elsewhere. The probe's `warning` field and `timed_out`
 state are how you find out.
+
+### Directory autocomplete: the one path where the daemon dials out
+
+Everything above this line is **sandbox** egress — what a run may reach, brokered
+by the proxy sidecar. `WARDYN_DIRECTORY_PROVIDER=entra` opts into something
+different in kind, and it is written here so it is never discovered as a surprise
+in a firewall log: **wardynd itself** makes outbound HTTPS calls to
+`login.microsoftonline.com:443` (the app token) and `graph.microsoft.com:443`
+(the search), from the control-plane process. Not sandbox egress. Not proxied by
+the egress sidecar, not covered by a run policy's `allowed_domains`, and not
+subject to the proxy's IP guard. It is the same class as the daemon's existing
+server-side IdP calls — OIDC discovery, the token exchange, the JWKS fetch — and
+an egress-restricted control plane has to permit those two hosts explicitly or
+every search fails.
+
+**What enabling it grants, plainly: read of the WHOLE directory.** Not a scoped
+slice — the connector authenticates as an application and can enumerate users and
+groups tenant-wide (`User.Read.All` + `Group.Read.All`; App Roles too where
+`Application.Read.All` was consented). That is a real expansion of Wardyn's
+minimal-reach posture, so:
+
+- It is **default OFF.** Unset, there is no connector, no token, no Graph call,
+  and every "who" field is the free-text input it has always been.
+- The consent is performed by a **tenant admin in Entra**, never by Wardyn —
+  application permissions cannot be self-granted, and an operator who does not
+  want this simply does not consent.
+- **Who can read it through Wardyn:** `GET /api/v1/access/directory/search` is on
+  the `securityOps` tier — admins and security admins. A member gets 403. That
+  disclosure is deliberate and bounded: a security admin assigns governance to
+  these very people, and this is a read that changes nothing.
+- **What is retained: nothing.** Suggestions live in a 60-second in-memory LRU in
+  the daemon process and are never written to Postgres, never to the audit log.
+  Individual searches are deliberately **not** audited — one row per keystroke
+  would make the append-only log a record of every name an admin ever typed.
+  Connector **failures** are audited (`directory.search_failed`), with the
+  provider, the failing operation and the upstream status — never the query.
+- **Retracting it is one variable.** Unset `WARDYN_DIRECTORY_PROVIDER` and
+  restart: the connector is gone, the endpoint answers `503
+  {"code":"directory_unconfigured"}`, and the console degrades every picker back
+  to a plain text input with no error. Revoking the admin consent in Entra
+  retracts it from the other side.
+
+Credentials default to the OIDC app registration with the tenant derived from the
+issuer, so the common case is the one variable above. A **public** OIDC client
+(PKCE, no secret) and a deployment with no OIDC at all can both do neither, and
+either one is a **boot refusal** naming what to set rather than a 503 an admin
+discovers by typing — see `WARDYN_DIRECTORY_CLIENT_SECRET` in [ENV.md](ENV.md).
 
 ## Toolchain-fidelity environment
 

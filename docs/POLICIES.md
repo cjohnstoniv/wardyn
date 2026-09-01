@@ -110,8 +110,13 @@ to the same forge. The narrowed envelope is disclosed in the
 verdict on the host string the sandbox asked for (`evalHost`), so a `CONNECT` to
 a raw GitHub IP is a different key and none of these denies see it. Under
 the default posture that changes nothing — an unlisted host is `always_deny` —
-but under `allow_all_egress` a literal public IP is allowed (only private,
-loopback, link-local and metadata ranges are denied unconditionally), and under
+but under `allow_all_egress` a literal public IP is allowed (private, loopback,
+link-local and metadata ranges are denied regardless of policy — with one
+operator-authored exception: a private-range literal named EXACTLY in
+`allowed_domains`, which is what an `egress_redirects` `to` on a private endpoint
+adds for the runs it covers, is reachable and audited as
+`rule_source: site-config:egress-redirect`; a wildcard never qualifies and a deny
+still wins), and under
 `deny_with_review` / `wait_for_review` it becomes an approvable unknown. If you
 run a brokered policy with `allow_all_egress`, the broker route is the only
 *convenient* route, not the only one — it is what git itself uses, since a
