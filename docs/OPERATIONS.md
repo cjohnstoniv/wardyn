@@ -1390,6 +1390,58 @@ lets the brokered PAT reach it. A lifted decision's audit `rule_source` reads
 }
 ```
 
+### Bedrock on a private endpoint
+
+Two topologies, told apart by which hostname the endpoint's TLS certificate
+names. Get it wrong and the handshake fails on an SNI/cert mismatch — the SNI
+presented to the endpoint is the hostname the sandbox dialled (its own
+end-to-end TLS on a resident-credential run, or the proxy's re-dial on a
+bearer-injection run), and the dispatch-layer wiring cannot see a TLS failure.
+
+- **Private DNS enabled — a cert for the *public* host (the common shape).**
+  Leave `WARDYN_BEDROCK_BASE_URL` **unset**. The sandbox keeps dialling
+  `bedrock-runtime.<region>.amazonaws.com`, so the SNI stays the public host the
+  cert names; the estate's private resolver answers that name into 100.64.
+  Reach it by listing the public host in `upstream_proxy_no_proxy` (skip the
+  corp proxy) and in `internal_hosts` with a `100.64.0.0/10` cidr (lift the
+  guard). Nothing about the private address enters the TLS layer.
+- **A cert for the endpoint's own name.** Only when the endpoint's cert
+  actually covers its `…vpce.amazonaws.com` name (private DNS disabled, or a
+  cert issued for it) set `WARDYN_BEDROCK_BASE_URL` to that hostname — then SNI
+  and cert agree.
+
+Pointing `WARDYN_BEDROCK_BASE_URL` at the `vpce` hostname against a public-host
+cert is the trap: the sandbox presents the `vpce` name, the endpoint answers
+with the public-host cert, the handshake fails. The composed dispatch test
+proves the env vars propagate, not that TLS validates.
+
+**The control plane is a second service.** Profile-id and
+application-inference-profile models call `bedrock.<region>.amazonaws.com`
+(`ListInferenceProfiles`/`GetInferenceProfile`), which `WARDYN_BEDROCK_BASE_URL`
+deliberately does **not** re-point (a PrivateLink endpoint is per-service). On a
+fully-private estate that host also resolves into 100.64 and needs its **own**
+endpoint plus the same bypass + lift — list `bedrock.<region>.amazonaws.com`
+(or a shared `amazonaws.com` suffix) in both fields too, or a profile-id model
+fails on a control-plane call the data-plane override never touches.
+
+**A literal-IP data-plane host** needs a **CIDR** `upstream_proxy_no_proxy`
+entry — the suffix form matches hostnames only, and `internal_hosts` never
+admits a bare IP (an exact `allowed_domains` entry does, per the redirect
+literal-IP note above). Prefer the hostname shape.
+
+**`wardynd`'s own egress is a separate channel.** `upstream_proxy_no_proxy`,
+`internal_hosts` and `WARDYN_BEDROCK_BASE_URL` govern the **sandbox** proxy;
+`wardynd`'s own control-plane calls — OIDC discovery, JWKS, the Entra directory
+connector, STS for a SigV4 Bedrock run — go out over its process HTTP client,
+which carries no SSRF guard, so a private (100.64) issuer or Graph host is
+dialled directly and boots fine. What that client *does* honour is the
+process's own `HTTPS_PROXY`/`NO_PROXY` (the published images do not set them at
+runtime): if you run `wardynd` behind the corporate proxy, add the private
+issuer/Graph/STS ranges to the process `NO_PROXY`, or the corp proxy — which
+cannot reach an internal address — fails discovery at boot, and none of the
+site-config fields above can fix it. For a split-horizon issuer (public URL,
+internal resolution) use `WARDYN_OIDC_INTERNAL_ISSUER`.
+
 ### Internal model gateway
 
 Point every run's model calls at an internal endpoint instead of

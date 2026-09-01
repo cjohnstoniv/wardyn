@@ -278,6 +278,14 @@ func TestDispatch_BedrockAbsentCreds_FallsBackToAPIKeyPlaceholder(t *testing.T) 
 // is denied by default and should be), the data plane POINTED at it, and the model
 // named by full ARN. Miss any one and the failure looks like a different layer's
 // fault, which is exactly how the estate burned an evening.
+// This pins the ENV-VAR WIRING of the endpoint-hostname override path, not that
+// TLS validates: setting BedrockBaseURL to the vpce hostname is correct ONLY
+// when that endpoint's cert names the vpce host. The common private-DNS estate
+// serves a public-host cert and leaves BedrockBaseURL unset, routing the public
+// host through upstream_proxy_no_proxy + internal_hosts instead — see
+// OPERATIONS.md "Bedrock on a private endpoint". A dispatch-layer test cannot
+// see an SNI/cert mismatch (fakeRunner, no handshake), so that topology choice
+// is a docs concern, not a wiring one.
 func TestDispatch_BedrockPrivateEndpoint_Composed(t *testing.T) {
 	const (
 		vpceHost = "vpce-0abc123-bedrock-runtime.us-east-1.vpce.amazonaws.com"
