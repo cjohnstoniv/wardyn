@@ -80,6 +80,21 @@ wait_socket() {
   return 1
 }
 
+# Keep the take gradeable: record-demo.sh's per-id work dir (narration timeline,
+# drift fit, speedups, run ids) is wiped by the NEXT take of any id, which is how
+# the 13 staged 0.7 cuts ended up with ledger rows as their only evidence. Park
+# a copy beside the mp4 so verify-demo-take.sh can re-grade it later.
+archive_artifacts() {  # <mp4 path>
+  local work="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-${VIDEO}}" dst
+  dst="${1%.mp4}.artifacts"
+  mkdir -p "${dst}" || return 0
+  local f
+  for f in narration.json narration-ffwd.json narration-joined.json narration-terminal.json speedups.json demo-runs.json drift-fit.json; do
+    [[ -s "${work}/${f}" ]] && cp -f "${work}/${f}" "${dst}/" 2>/dev/null
+  done
+  rmdir "${dst}" 2>/dev/null || echo "ARTIFACTS ${dst}"
+}
+
 ledger() {  # <record rc> <verify> <artifact>
   [[ -s "${LEDGER}" ]] || printf '# Takes ledger\n\n## Attempt log (appended by scripts/take-chain.sh)\n\n| when (UTC) | id | attempt | record rc | verify | artifact |\n|---|---|---|---|---|---|\n' > "${LEDGER}"
   printf '| %s | %s | %s | %s | %s | %s |\n' \
@@ -112,6 +127,7 @@ while :; do
   fi
 
   if [[ "${rc}" -eq 0 ]]; then
+    archive_artifacts "${MP4}"
     WARDYN_DEMO_VIDEO="${VIDEO}" "${REPO_ROOT}/scripts/verify-demo-take.sh" "${MP4}"
     vrc=$?
     ledger "${rc}" "$([[ "${vrc}" -eq 0 ]] && echo PASS || echo FAIL)" "${MP4##*/}"
