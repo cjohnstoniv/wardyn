@@ -22,9 +22,10 @@
 // ============================ Kinds ============================
 
 // The closed set, in the order the admin screen renders them. Mirrors the Go
-// slice in internal/api/capabilities.go (A-B) — a fifth kind is a Go constant
-// plus a row here, no DDL.
-export const CAPABILITY_KINDS = ["egress_host", "secret", "workspace", "image"] as const;
+// slice in internal/api/capabilities.go (A-B) — a seventh kind is a Go constant
+// plus a row here, no DDL. `agent` and `integration` are 0.7's fifth and sixth,
+// added on exactly those terms.
+export const CAPABILITY_KINDS = ["egress_host", "secret", "workspace", "image", "agent", "integration"] as const;
 export type CapabilityKind = (typeof CAPABILITY_KINDS)[number];
 
 // Whether granting this kind takes power away from members ("narrows" — the
@@ -89,6 +90,35 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
     unenforced: "Members can't name their own base image at all. Runs use what the workspace carries.",
     enforced: "A member can name an image granted to them. Every other ref is still refused.",
     direction: "widens",
+  },
+  // ADDITION to §7.1 (0.7): the two kinds the org-controls round added, noted
+  // as an addition in docs/design/permissioning-prompt.md §7.1 exactly the way
+  // ENFORCE_OFF_TITLE is in §7.2. Governance's own §7.1 declares permissions
+  // copy referenced-never-re-frozen, so this file stays the one home for KIND
+  // rows and governance-prompt.md never grows a second.
+  agent: {
+    label: "Agents",
+    blurb: "Which agents a member may launch a run with.",
+    valueLabel: "Agent",
+    valueHint: "The exact agent id, spelled as --agent takes it. Use * for every agent.",
+    unenforced: "Members can launch a run with any agent this deployment carries.",
+    enforced:
+      "A member can only launch agents granted to them. A run naming another one is refused at launch, with the reason.",
+    direction: "narrows",
+  },
+  integration: {
+    label: "Model providers",
+    blurb: "Which model provider a member may name on a run of their own.",
+    valueLabel: "Integration",
+    valueHint: "The exact integration id. Use * for every integration.",
+    unenforced: "Members can name any model provider integration on a run they launch.",
+    // The doctrine, restated where it is most likely to be misread: this kind
+    // bounds the integration_id a MEMBER typed, and nothing else. A workspace's
+    // own binding and the site-wide default are admin-authored, and both keep
+    // applying to every run whatever the member holds.
+    enforced:
+      "A member can only name providers granted to them. A workspace's own provider and the site default still apply — a grant bounds what the member chose, never what an admin set up for them.",
+    direction: "narrows",
   },
 };
 

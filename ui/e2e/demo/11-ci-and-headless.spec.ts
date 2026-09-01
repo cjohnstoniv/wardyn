@@ -255,8 +255,9 @@ test("beat 6 — same trail, no human", async () => {
   await spotlight(page, null);
 
   // ── conclusion ───────────────────────────────────────────────────────────
-  // The series motif ("Run anything. Keep your keys.") belongs to V12 and is
-  // deliberately absent here — V02 through V11 never speak it.
+  // The series motif ("Sandboxed. Governed. Self-hosted. Free.") opens on V02's
+  // hero and closes the series on V12; it is deliberately absent here — V03
+  // through V11 never speak it.
   await caption(page, "A pipeline doesn't need a human to enforce a policy.");
   await beat(page, PACE.read);
   await caption(page, "The policy makes the decision.");

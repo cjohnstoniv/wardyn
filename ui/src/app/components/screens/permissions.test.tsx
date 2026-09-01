@@ -33,7 +33,7 @@ vi.mock("../../lib/api/permissions", () => ({
 const listRunsMock = vi.fn();
 vi.mock("../../lib/api/runs", () => ({ runs: { listRuns: () => listRunsMock() } }));
 
-import { KIND, PERM } from "../../lib/permissions-copy";
+import { CAPABILITY_KINDS, KIND, PERM } from "../../lib/permissions-copy";
 import type { CapabilityGrant } from "../../lib/types";
 import { PermissionsScreen } from "./permissions";
 import { OperatorProvider } from "../wardyn/operator-context";
@@ -69,7 +69,7 @@ beforeEach(() => {
   listRunsMock.mockReset().mockResolvedValue([]);
 });
 
-describe("PermissionsScreen — fresh install (four kinds off, zero grants)", () => {
+describe("PermissionsScreen — fresh install (every kind off, zero grants)", () => {
   it("states the default posture, the doctrine and the exemption", async () => {
     renderScreen();
     await screen.findByText(PERM.DEFAULT_POSTURE);
@@ -78,16 +78,19 @@ describe("PermissionsScreen — fresh install (four kinds off, zero grants)", ()
     expect(screen.getByText(PERM.LEAD)).toBeInTheDocument();
   });
 
-  it("renders all four kinds off, each with its unenforced consequence", async () => {
+  // DERIVED from CAPABILITY_KINDS, never a hand-listed set: the kind list is
+  // the contract, and a spec that re-typed it kept passing while the screen
+  // grew two kinds it never rendered (0.7's `agent`/`integration`).
+  it("renders every kind off, each with its unenforced consequence", async () => {
     renderScreen();
     await screen.findByText(PERM.DEFAULT_POSTURE);
-    for (const k of ["egress_host", "secret", "workspace", "image"] as const) {
+    for (const k of CAPABILITY_KINDS) {
       // The label also appears in the add form's capability picker, so this
       // asserts presence rather than uniqueness.
       expect(screen.getAllByText(KIND[k].label).length).toBeGreaterThan(0);
       expect(screen.getByText(KIND[k].unenforced)).toBeInTheDocument();
     }
-    expect(screen.getAllByText(PERM.CHIP_OFF)).toHaveLength(4);
+    expect(screen.getAllByText(PERM.CHIP_OFF)).toHaveLength(CAPABILITY_KINDS.length);
     expect(screen.queryByText(PERM.CHIP_ON)).toBeNull();
   });
 
@@ -154,13 +157,13 @@ describe("PermissionsScreen — enforcement confirms", () => {
     expect(within(dialog).getByText(PERM.ENFORCE_ON_BODY(2))).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: PERM.ENFORCE_CONFIRM }));
 
+    // The PUT carries EVERY kind, not just the one that flipped (the endpoint
+    // takes the whole map). Derived from CAPABILITY_KINDS so adding a kind
+    // cannot leave this asserting a stale, short body.
     await waitFor(() =>
-      expect(putEnforcementMock).toHaveBeenCalledWith({
-        egress_host: true,
-        secret: false,
-        workspace: false,
-        image: false,
-      }),
+      expect(putEnforcementMock).toHaveBeenCalledWith(
+        Object.fromEntries(CAPABILITY_KINDS.map((k) => [k, k === "egress_host"])),
+      ),
     );
   });
 

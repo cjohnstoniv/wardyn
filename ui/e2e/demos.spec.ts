@@ -35,7 +35,7 @@ const KEYLESS_DEMOS = [
 
 test.describe("Demo sandboxes", () => {
   test.beforeEach(async ({ page }) => {
-    // /setup renders the WELCOME hero ("Run anything. Keep your keys.") until
+    // /setup renders the WELCOME hero ("Sandboxed. Governed. Self-hosted. Free.") until
     // this flag is set — the funnel (and so any demo step) only replaces it
     // once the operator clicks "Get started" (onboarding-screen.tsx's
     // GettingStarted). Pre-seed it so a deep link lands on the demo, not the

@@ -28,6 +28,15 @@ vi.mock("../../../lib/api/access", async () => {
   };
 });
 
+// The Value field is a DirectoryCombobox (§I). These tests are the deployment
+// with NO directory configured — the common one — so the search reports
+// unconfigured (null) and the field is the plain text input it has always been.
+// The combobox's own behaviour is pinned in wardyn/directory-combobox.test.tsx.
+vi.mock("../../../lib/api/directory", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/api/directory")>("../../../lib/api/directory");
+  return { ...actual, directory: { search: async () => null } };
+});
+
 import { HttpError } from "../../../lib/api/core";
 import { AccessCollisionError, AccessPostureFlipRequiredError } from "../../../lib/api/access";
 import { ACCESS_ERROR, ACCESS_STATE, GUARD, PEOPLE, PREVIEW } from "../../../lib/people-access-copy";

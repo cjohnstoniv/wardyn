@@ -53,9 +53,21 @@ vi.mock("../../../lib/api/governance", async () => {
   };
 });
 
+// The Who field is a DirectoryCombobox (§I). It defaults here to the
+// deployment with NO directory configured (the search reports unconfigured →
+// null → the plain text input it has always been, no chrome); the one test
+// that wants suggestions overrides it. The combobox's own states are pinned in
+// wardyn/directory-combobox.test.tsx.
+const directorySearchMock = vi.fn();
+vi.mock("../../../lib/api/directory", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/api/directory")>("../../../lib/api/directory");
+  return { ...actual, directory: { search: (...a: unknown[]) => directorySearchMock(...a) } };
+});
+
 import { HttpError } from "../../../lib/api/core";
+import type { DirectoryEntry } from "../../../lib/api/directory";
 import type { GovernanceProfile, GovernanceSnapshot } from "../../../lib/api/governance";
-import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
+import { DIRECTORY, GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { ACCESS_STATE, PEOPLE, PREVIEW } from "../../../lib/people-access-copy";
 import { PERM } from "../../../lib/permissions-copy";
 import type { RunPolicySpec } from "../../../lib/types";
@@ -128,6 +140,8 @@ beforeEach(() => {
   deleteAssignmentMock.mockReset();
   previewGovernanceMock.mockReset();
   previewGovernanceMock.mockResolvedValue({});
+  directorySearchMock.mockReset();
+  directorySearchMock.mockResolvedValue(null);
 });
 
 describe("GovernanceScreen — states", () => {
@@ -383,6 +397,43 @@ describe("GovernanceScreen — assignments and the resolved preview", () => {
 
     await userEvent.click(within(dialog).getByRole("button", { name: PERM.REMOVE }));
     expect(deleteAssignmentMock).toHaveBeenCalledWith("a1");
+  });
+
+  // THE §I swap, end to end: the Who field is the same free-text box it was,
+  // and what a picked row puts in it — and therefore on the wire — is the
+  // CLAIM VALUE, never the display name. A group's `groups` claim carries the
+  // object id, so assigning "Platform Engineering" would bind nobody.
+  it("a picked suggestion assigns the claim value, not the name shown", async () => {
+    const GROUP: DirectoryEntry = {
+      display_name: "Platform Engineering",
+      claim_value: "8f3c1a2b-0000-4d1e-9f00-abcdef012345",
+      kind: "group",
+      detail: "group · 8f3c1a2b",
+    };
+    directorySearchMock.mockResolvedValue([GROUP]);
+    upsertAssignmentMock.mockResolvedValue(undefined);
+    renderScreen();
+    await screen.findByText(GOV.ASSIGN_TITLE);
+
+    const who = screen.getByRole("textbox", { name: PERM.FIELD_WHO });
+    await userEvent.type(who, "plat");
+    await userEvent.click(
+      await screen.findByRole("button", { name: DIRECTORY.SUGGEST_ROW(GROUP.display_name, GROUP.detail!) }),
+    );
+    expect(who).toHaveValue(GROUP.claim_value);
+    // The kind the segmented control names is the kind the search asked for.
+    expect(directorySearchMock).toHaveBeenCalledWith("plat", "group");
+
+    await userEvent.click(screen.getByRole("combobox")); // the profile Select
+    await userEvent.click(await screen.findByRole("option", { name: PLATFORM.name }));
+    await userEvent.click(screen.getByRole("button", { name: GOV.ADD_CTA }));
+
+    expect(upsertAssignmentMock).toHaveBeenCalledWith({
+      subject_type: "group",
+      subject: GROUP.claim_value,
+      profile_id: PLATFORM.id,
+      priority: 0,
+    });
   });
 
   it("the preview takes CLAIMS (the People step's own field) and names the matching row's tier", async () => {

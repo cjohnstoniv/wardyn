@@ -54,6 +54,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
 import { Textarea } from "../../ui/textarea";
 import { Mono } from "../../wardyn/code-block";
+import { DirectoryCombobox } from "../../wardyn/directory-combobox";
 import { Field } from "../../wardyn/form-primitives";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState } from "../../wardyn/states";
@@ -304,14 +305,17 @@ function AddAssignmentForm({
               disabled={disabled}
               options={SUBJECTS.map((s) => ({ value: s.value, label: s.label }))}
             />
+            {/* Free text with suggestions ON TOP, never instead of: the kind
+                the segmented control already names is the kind the search asks
+                for, and with no directory configured this is the same plain
+                input it has always been (§I). */}
             {subjectType !== "all" && (
-              <Input
-                aria-label={PERM.FIELD_WHO}
+              <DirectoryCombobox
+                label={PERM.FIELD_WHO}
                 value={subject}
-                onChange={(e) => setSubject(e.target.value)}
+                onChange={setSubject}
+                kind={subjectType}
                 disabled={disabled}
-                className="font-mono"
-                autoComplete="off"
               />
             )}
           </div>

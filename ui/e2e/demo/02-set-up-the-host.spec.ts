@@ -184,7 +184,7 @@ test("V02 act 2 — first light through secrets", async () => {
 
   // --- B2 · first light -----------------------------------------------------
   await page.goto("/");
-  const hero = page.getByRole("heading", { name: "Run anything. Keep your keys.", level: 1 });
+  const hero = page.getByRole("heading", { name: "Sandboxed. Governed. Self-hosted. Free.", level: 1 });
   if (!(await hero.isVisible().catch(() => false))) {
     await page.goto("/setup");
   }
@@ -197,7 +197,7 @@ test("V02 act 2 — first light through secrets", async () => {
   await spotlight(page, hero);
   await caption(page, "The whole idea is right at the top:");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Run anything. Keep your keys.");
+  await caption(page, "Sandboxed. Governed. Self-hosted. Free.");
   await beat(page, PACE.read);
   // The live host chips under the hero — the real SetupStatus, not a mock.
   await spotlight(page, page.getByText(/This host right now/i).locator("..").first());

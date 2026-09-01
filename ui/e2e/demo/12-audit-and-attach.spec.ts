@@ -460,11 +460,11 @@ test("beat 6 — the tape", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "And keep the receipts.");
   await beat(page, PACE.read);
-  // The motif closes the series (SV6). walkthrough.spec.ts act 6's last three
-  // lines, verbatim.
-  await caption(page, "Run anything.");
+  // The motif closes the series (SV6) — the same words walkthrough.spec.ts act
+  // 6 closes on, split across two beats so the four-part line lands as two.
+  await caption(page, "Sandboxed. Governed.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Keep your keys.");
+  await caption(page, "Self-hosted. Free.");
   await beat(page, PACE.chapter);
   await caption(page, "");
 });

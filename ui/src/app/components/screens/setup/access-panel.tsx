@@ -29,7 +29,6 @@ import { getErrorMessage, relativeTime } from "../../../lib/format";
 import type { AccessMapping, AccessResponse, AccessRole } from "../../../lib/types";
 import { ACCESS_ERROR, ACCESS_STATE, GUARD, PEOPLE, PREVIEW } from "../../../lib/people-access-copy";
 import { Button } from "../../ui/button";
-import { Input } from "../../ui/input";
 import { Textarea } from "../../ui/textarea";
 import {
   AlertDialog,
@@ -43,6 +42,7 @@ import {
 } from "../../ui/alert-dialog";
 import { cn } from "../../ui/utils";
 import { Field } from "../../wardyn/form-primitives";
+import { DirectoryCombobox } from "../../wardyn/directory-combobox";
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState } from "../../wardyn/states";
@@ -534,15 +534,13 @@ function AddMappingForm({
     <div className="border-t border-border px-6 py-5">
       <h3 className="text-sm font-medium text-foreground">{PEOPLE.ADD_TITLE}</h3>
       <div className="mt-4 grid gap-4 md:grid-cols-[1fr_auto_auto]">
+        {/* Kind-LESS, so the search is too ("any"): this one field takes an App
+            Role, a group or an email, and VALUE_HINT still says so. The GUID
+            landmine is worst exactly here — an Entra `groups` claim carries an
+            object id, and this is the field that has to match it — and with no
+            directory configured it stays the plain input it has always been. */}
         <Field label={PEOPLE.FIELD_VALUE} htmlFor="access-value" hint={PEOPLE.VALUE_HINT} required>
-          <Input
-            id="access-value"
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            className="font-mono"
-            autoComplete="off"
-            spellCheck={false}
-          />
+          <DirectoryCombobox id="access-value" value={value} onChange={setValue} />
         </Field>
         <Field label={PEOPLE.FIELD_ROLE}>
           <Segmented

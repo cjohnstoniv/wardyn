@@ -15,12 +15,16 @@
 import type { CapabilitySubjectType, RunPolicySpec } from "../types";
 import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
 
-// types.GovernanceLimits. BOTH are `omitempty` on the wire, so an unrestricted
+// types.GovernanceLimits. ALL are `omitempty` on the wire, so an unrestricted
 // profile arrives with the keys absent — optional here for the same reason,
 // and `!!limits.deny_x` is how every read is written.
 export interface GovernanceLimits {
   deny_task_mode_exec?: boolean;
   deny_interactive?: boolean;
+  // 0/absent is unlimited. Mirrored here so the editor's `{ ...limits }` spread
+  // round-trips a cap it does not yet draw; the control itself lands with the
+  // rest of the Governance UI.
+  max_concurrent_runs?: number;
 }
 
 // types.GovernanceProfile — one named, assignable ceiling.

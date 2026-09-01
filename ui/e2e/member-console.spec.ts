@@ -29,7 +29,7 @@ test.describe("member console — nav absence (mocked /me role)", () => {
     // member permissions screen at all, only the inline why-denied moments
     // below, so it must not appear here. Recordings is the admin evidence
     // trail and stays admin-only for the same reason Audit does.
-    for (const label of ["Policies", "Permissions", "Secrets", "Audit", "Recordings"] as const) {
+    for (const label of ["Policies", "Governance", "Permissions", "Secrets", "Audit", "Recordings"] as const) {
       await expect(sidebarLink(page, label)).toHaveCount(0);
     }
   });
@@ -46,9 +46,9 @@ test.describe("member console — nav absence (mocked /me role)", () => {
     await expect(menu.getByText("member", { exact: true })).toBeVisible();
   });
 
-  test("admin (unmocked, today's default): the full eight-item nav", async ({ page }) => {
+  test("admin (unmocked, today's default): the full nine-item nav", async ({ page }) => {
     await gotoConsole(page);
-    for (const label of ["Runs", "Approvals", "Workspaces", "Policies", "Permissions", "Secrets", "Audit", "Recordings"] as const) {
+    for (const label of ["Runs", "Approvals", "Workspaces", "Policies", "Governance", "Permissions", "Secrets", "Audit", "Recordings"] as const) {
       await expect(sidebarLink(page, label)).toBeVisible();
     }
   });

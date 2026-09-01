@@ -43,7 +43,7 @@ describe("OnboardingScreen (welcome hero)", () => {
 
   it("is ONE glanceable intro (hero + 5-node strip), not a 7-page tour", async () => {
     render(<OnboardingScreen onGetStarted={() => {}} />);
-    expect(screen.getByText("Run anything. Keep your keys.")).toBeInTheDocument();
+    expect(screen.getByText("Sandboxed. Governed. Self-hosted. Free.")).toBeInTheDocument();
     // the single how-it-works strip
     expect(screen.getByText("Behind a barrier")).toBeInTheDocument();
     expect(screen.getByText("Everything recorded")).toBeInTheDocument();
@@ -138,12 +138,12 @@ describe("GettingStarted (member direct navigation — B4 HIGH-4)", () => {
     );
     expect(await screen.findByText("Getting started")).toBeInTheDocument();
     expect(screen.getByText(/You're a member of this Wardyn/)).toBeInTheDocument();
-    expect(screen.queryByText("Run anything. Keep your keys.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Sandboxed. Governed. Self-hosted. Free.")).not.toBeInTheDocument();
   });
 
   it("an admin (or the fail-open default) still sees the welcome hero", async () => {
     render(<GettingStarted onDone={() => {}} />);
-    expect(screen.getByText("Run anything. Keep your keys.")).toBeInTheDocument();
+    expect(screen.getByText("Sandboxed. Governed. Self-hosted. Free.")).toBeInTheDocument();
     await screen.findByText(/Barrier:/);
   });
 });

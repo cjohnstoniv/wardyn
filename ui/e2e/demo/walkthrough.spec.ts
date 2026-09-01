@@ -86,7 +86,7 @@ test("act 1 — first light", async () => {
   // instead. Fall through to /setup rather than making every iteration of the
   // driver require a full stack reset. (The hero itself only needs an unset
   // wardyn-onboarding-seen, which a fresh browser profile always gives us.)
-  const hero = page.getByRole("heading", { name: "Run anything. Keep your keys.", level: 1 });
+  const hero = page.getByRole("heading", { name: "Sandboxed. Governed. Self-hosted. Free.", level: 1 });
   if (!(await hero.isVisible().catch(() => false))) {
     await page.goto("/setup");
   }
@@ -644,7 +644,7 @@ test("act 6 — the receipts", async () => {
   await act(page, page.getByRole("tab", { name: /Recording/ }), "And the session itself was recorded, so it can be replayed.");
   await beat(page, PACE.read + 1600);
 
-  await caption(page, "Run anything. Keep your keys.");
+  await caption(page, "Sandboxed. Governed. Self-hosted. Free.");
   await beat(page, PACE.chapter);
   await caption(page, "");
 });

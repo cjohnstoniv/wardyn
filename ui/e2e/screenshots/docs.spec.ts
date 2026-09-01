@@ -120,7 +120,7 @@ test.describe("Docs screenshots", () => {
     await page.addInitScript(() => {
       try {
         localStorage.setItem("wardyn-theme", "dark");
-        // /setup renders the WELCOME hero ("Run anything. Keep your keys.") until
+        // /setup renders the WELCOME hero ("Sandboxed. Governed. Self-hosted. Free.") until
         // this flag is set — the funnel only replaces it once the operator clicks
         // "Get started" (onboarding-screen.tsx GettingStarted). Pre-seeding it
         // lands the capture straight on the funnel.

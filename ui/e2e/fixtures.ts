@@ -51,6 +51,9 @@ export type NavLabel =
   | "Approvals"
   | "Workspaces"
   | "Policies"
+  // 0.7 — sits between Policies and Permissions (app-shell.tsx's NAV_ITEMS), so
+  // the three read as one narrowing sequence. Never in MEMBER_NAV_PATHS.
+  | "Governance"
   | "Permissions"
   | "Secrets"
   | "Audit"

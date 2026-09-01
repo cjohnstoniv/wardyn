@@ -273,6 +273,16 @@ export const MEMBER = {
     `governance profile "${name}": dropped ${kind} grant no longer within the deployment's eligible grants (${reason})`,
   DENIED_STALE_GROUPS:
     "groups_snapshot_stale: your group membership snapshot is missing or was truncated at sign-in, and this deployment assigns governance profiles by group — sign in again (or re-mint your API token) so your ceiling can be resolved",
+
+  // The two CAPABILITY refusals, which is why — alone in this group — they name
+  // no profile: they fire whether or not the caller has one. Both close a door a
+  // member could otherwise walk through AFTER the explicit check had already run
+  // (denyMemberSeededImage, runs_create_validate.go; handleCreateWorkspace,
+  // workspaces.go). The `{id}` below is a literal route segment, not a parameter.
+  DENIED_SEEDED_IMAGE: (image: string) =>
+    `image ${image} comes from your own workspace's base image and is not granted to you — ask an admin to grant the exact image ref, or launch with the agent's convention image`,
+  DENIED_WORKSPACE_LLM_CRED:
+    "llm_cred is operator-only — an admin binds a workspace's model/harness credential (PUT /workspaces/{id}/llm-cred); create your workspace without it and ask for the binding",
 } as const;
 
 // ==================== §7.8 — POSITIONING ====================================

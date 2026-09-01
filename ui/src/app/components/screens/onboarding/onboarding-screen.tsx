@@ -208,7 +208,7 @@ export function OnboardingScreen({
         <Shield className="size-6" aria-hidden />
       </span>
       <h1 className="mt-5 text-[2rem] font-semibold leading-tight tracking-tight text-foreground">
-        Run anything. Keep your keys.
+        Sandboxed. Governed. Self-hosted. Free.
       </h1>
       <p className="mt-3 max-w-[640px] text-base leading-relaxed text-muted-foreground">
         <IntroBlurb />

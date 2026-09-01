@@ -11,7 +11,7 @@ import { PEOPLE } from "./people-access-copy";
 
 // The mock round's whole value is that it stays CHECKABLE, so this suite does
 // not hand-retype a sample of the canon — it PARSES docs/design/
-// governance-prompt.md §7.2-§7.9 back out of the doc and compares all 85 keys.
+// governance-prompt.md §7.2-§7.9 back out of the doc and compares all 87 keys.
 // A swapped hyphen, a dropped ellipsis, a reworded clause, a new doc row or a
 // deleted one all fail here rather than shipping.
 //
@@ -147,6 +147,8 @@ const rendered: Record<string, string> = {
   "WARN_WORKSPACE_DENIED(host, name)": MEMBER.WARN_WORKSPACE_DENIED("{host}", "{name}"),
   "WARN_GRANT_DROPPED(name, kind, reason)": MEMBER.WARN_GRANT_DROPPED("{name}", "{kind}", "{reason}"),
   DENIED_STALE_GROUPS: MEMBER.DENIED_STALE_GROUPS,
+  "DENIED_SEEDED_IMAGE(image)": MEMBER.DENIED_SEEDED_IMAGE("{image}"),
+  DENIED_WORKSPACE_LLM_CRED: MEMBER.DENIED_WORKSPACE_LLM_CRED,
 
   // ---- §7.8 ----
   HERO_SLOGAN: POSITIONING.HERO_SLOGAN,
@@ -164,8 +166,8 @@ const rendered: Record<string, string> = {
 };
 
 describe("governance-copy — §7.2-§7.9 parsed out of the prompt doc", () => {
-  it("finds all 85 frozen keys in the doc", () => {
-    expect(doc.size).toBe(85);
+  it("finds all 87 frozen keys in the doc", () => {
+    expect(doc.size).toBe(87);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {
