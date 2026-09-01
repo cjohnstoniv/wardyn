@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -114,8 +115,37 @@ type accessResponse struct {
 	// EmailDomainsConfigured (A-4) reports whether WARDYN_OIDC_EMAIL_DOMAINS
 	// is set (oidc.Authenticator.HasEmailDomains) — the EMAIL_KEY badge copy
 	// depends on this, and the response otherwise cannot express it.
-	EmailDomainsConfigured bool          `json:"email_domains_configured"`
-	Posture                accessPosture `json:"posture"`
+	EmailDomainsConfigured bool `json:"email_domains_configured"`
+	// Issuer is the public OIDC issuer URL; Provider is a human-facing name
+	// derived from it (e.g. "Microsoft Entra ID") so the console's SSO chip
+	// names WHERE sign-in comes from, not just THAT it is SSO. Provider falls
+	// back to the issuer's host when the issuer isn't a recognized provider.
+	Issuer   string        `json:"issuer"`
+	Provider string        `json:"provider"`
+	Posture  accessPosture `json:"posture"`
+}
+
+// ssoProviderName derives a human-facing IdP name from an OIDC issuer URL,
+// falling back to the issuer's host so an unrecognized provider still names
+// itself rather than showing a bare "SSO".
+func ssoProviderName(issuer string) string {
+	u, err := url.Parse(issuer)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	host := strings.ToLower(u.Host)
+	switch {
+	case strings.Contains(host, "login.microsoftonline.com") || strings.Contains(host, "sts.windows.net"):
+		return "Microsoft Entra ID"
+	case strings.Contains(host, "accounts.google.com"):
+		return "Google"
+	case strings.Contains(host, "okta.com") || strings.Contains(host, "oktapreview.com"):
+		return "Okta"
+	case strings.Contains(host, "auth0.com"):
+		return "Auth0"
+	default:
+		return u.Host
+	}
 }
 
 // accessRolePosture computes the arm-1-vs-arm-2 outcome deriveRole's own
@@ -209,6 +239,8 @@ func (s *Server) handleGetAccess(w http.ResponseWriter, r *http.Request) {
 		OperatorEmails:         operatorEmails,
 		AllowEmailMappings:     s.cfg.AllowEmailMappings,
 		EmailDomainsConfigured: s.cfg.OIDC.HasEmailDomains(),
+		Issuer:                 s.cfg.OIDC.Issuer(),
+		Provider:               ssoProviderName(s.cfg.OIDC.Issuer()),
 		Posture: accessPosture{
 			// MapEmpty (A-5) is the REAL merged-map emptiness (chart + rows,
 			// with a shadowed row contributing nothing) — not a raw row

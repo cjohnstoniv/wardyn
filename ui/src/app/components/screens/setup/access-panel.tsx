@@ -31,7 +31,6 @@ import { ACCESS_ERROR, ACCESS_STATE, GUARD, PEOPLE, PREVIEW } from "../../../lib
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Textarea } from "../../ui/textarea";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -280,32 +279,19 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
         <Note>{PEOPLE.EFFECT_NOTE}</Note>
       </div>
 
-      <div className="mt-4">
+      <div className="mt-4 flex flex-col gap-2">
         {access.mappings.length === 0 ? (
           <EmptyState icon={ShieldOff} title={PEOPLE.EMPTY_TITLE} description={PEOPLE.EMPTY_BODY} />
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead>{PEOPLE.COL_VALUE}</TableHead>
-                <TableHead>{PEOPLE.COL_ROLE}</TableHead>
-                <TableHead>{PEOPLE.COL_SOURCE}</TableHead>
-                <TableHead>{PEOPLE.COL_ADDED}</TableHead>
-                <TableHead className="w-[80px]" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {access.mappings.map((m) => (
-                <MappingRow
-                  key={`${m.source}:${m.id ?? m.value}`}
-                  mapping={m}
-                  allowEmailMappings={access.allow_email_mappings}
-                  emailDomainsConfigured={access.email_domains_configured}
-                  onDelete={() => openDelete(m)}
-                />
-              ))}
-            </TableBody>
-          </Table>
+          access.mappings.map((m) => (
+            <MappingCard
+              key={`${m.source}:${m.id ?? m.value}`}
+              mapping={m}
+              allowEmailMappings={access.allow_email_mappings}
+              emailDomainsConfigured={access.email_domains_configured}
+              onDelete={() => openDelete(m)}
+            />
+          ))
         )}
       </div>
 
@@ -395,7 +381,12 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
   );
 }
 
-function MappingRow({
+// MappingCard — one role mapping, self-contained (approved redesign,
+// docs/design/people-access-mock/role-mappings-redesign.html): value + role on
+// the top line, source/badges + timestamp + delete on the next, the note (when
+// there is one) grouped INSIDE the card. Replaces the earlier table, whose
+// per-row notes had to float full-width between rows and misaligned the columns.
+function MappingCard({
   mapping: m,
   allowEmailMappings,
   emailDomainsConfigured,
@@ -408,47 +399,47 @@ function MappingRow({
 }) {
   const isEmail = m.value.includes("@");
   const showEmailBadge = m.source === "console" && isEmail && allowEmailMappings;
+  // Exactly one note ever applies to a mapping.
+  let note: React.ReactNode = null;
+  if (m.source === "chart") note = PEOPLE.CHART_HINT;
+  else if (m.shadowed && m.shadow_cause === "chart") note = withMono(PEOPLE.SHADOWED_BODY);
+  else if (m.shadowed && m.shadow_cause === "operator_allowlist") note = withMono(PEOPLE.SHADOWED_OPERATOR_BODY);
+  else if (showEmailBadge) note = withMono(PEOPLE.EMAIL_KEY_BODY(emailDomainsConfigured));
+  // Amber-tint a mapping that carries a caution (a shadowed row, or an
+  // unverified email key) so the whole card reads as "look here", not just its
+  // chip. Chart/plain console rows stay neutral.
+  const caution = m.shadowed || showEmailBadge;
   return (
-    <TableRow className={cn(m.shadowed && "bg-warning-subtle hover:bg-warning-subtle")}>
-      <TableCell>
-        <Mono className="text-foreground">{m.value}</Mono>
-      </TableCell>
-      <TableCell>
+    <div
+      className={cn(
+        "rounded-xl border p-4",
+        caution ? "border-warning/30 bg-warning-subtle" : "border-border bg-card",
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <Mono className="min-w-0 break-all text-foreground">{m.value}</Mono>
         <Chip tone="neutral">{m.role === "admin" ? PEOPLE.ROLE_ADMIN : PEOPLE.ROLE_MEMBER}</Chip>
-      </TableCell>
-      <TableCell>
-        <div className="flex flex-wrap items-center gap-2">
-          <Chip tone="neutral">{m.source === "chart" ? PEOPLE.SOURCE_CHART : PEOPLE.SOURCE_CONSOLE}</Chip>
-          {m.shadowed && m.shadow_cause === "chart" && <Chip tone="warning">{PEOPLE.SHADOWED_BADGE}</Chip>}
-          {m.shadowed && m.shadow_cause === "operator_allowlist" && (
-            <Chip tone="warning">{PEOPLE.SHADOWED_OPERATOR_BADGE}</Chip>
-          )}
-          {showEmailBadge && <Chip tone="warning">{PEOPLE.EMAIL_KEY_BADGE}</Chip>}
-        </div>
-        {m.source === "chart" && <p className="mt-1 text-meta text-muted-foreground">{PEOPLE.CHART_HINT}</p>}
-        {m.shadowed && m.shadow_cause === "chart" && (
-          <p className="mt-1 max-w-[52ch] text-meta text-muted-foreground">{withMono(PEOPLE.SHADOWED_BODY)}</p>
-        )}
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Chip tone="neutral">{m.source === "chart" ? PEOPLE.SOURCE_CHART : PEOPLE.SOURCE_CONSOLE}</Chip>
+        {m.shadowed && m.shadow_cause === "chart" && <Chip tone="warning">{PEOPLE.SHADOWED_BADGE}</Chip>}
         {m.shadowed && m.shadow_cause === "operator_allowlist" && (
-          <p className="mt-1 max-w-[52ch] text-meta text-muted-foreground">{withMono(PEOPLE.SHADOWED_OPERATOR_BODY)}</p>
+          <Chip tone="warning">{PEOPLE.SHADOWED_OPERATOR_BADGE}</Chip>
         )}
-        {showEmailBadge && (
-          <p className="mt-1 max-w-[52ch] text-meta text-muted-foreground">
-            {withMono(PEOPLE.EMAIL_KEY_BODY(emailDomainsConfigured))}
-          </p>
-        )}
-      </TableCell>
-      <TableCell className="whitespace-nowrap text-muted-foreground">
-        {m.source === "chart" ? PEOPLE.ADDED_CHART_NA : m.created_at ? relativeTime(m.created_at) : PEOPLE.ADDED_CHART_NA}
-      </TableCell>
-      <TableCell>
-        {m.source === "console" && (
-          <Button variant="ghost" size="sm" onClick={onDelete} aria-label={`${PEOPLE.DELETE} ${m.value}`}>
-            {PEOPLE.DELETE}
-          </Button>
-        )}
-      </TableCell>
-    </TableRow>
+        {showEmailBadge && <Chip tone="warning">{PEOPLE.EMAIL_KEY_BADGE}</Chip>}
+        <div className="ml-auto flex items-center gap-3">
+          <span className="whitespace-nowrap text-meta text-muted-foreground">
+            {m.source === "chart" ? PEOPLE.ADDED_CHART_NA : m.created_at ? relativeTime(m.created_at) : PEOPLE.ADDED_CHART_NA}
+          </span>
+          {m.source === "console" && (
+            <Button variant="ghost" size="sm" onClick={onDelete} aria-label={`${PEOPLE.DELETE} ${m.value}`}>
+              {PEOPLE.DELETE}
+            </Button>
+          )}
+        </div>
+      </div>
+      {note && <p className="mt-2 text-meta text-muted-foreground">{note}</p>}
+    </div>
   );
 }
 

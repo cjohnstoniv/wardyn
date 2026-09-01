@@ -347,7 +347,7 @@ export function DeploymentStep({
             {PT.MULTI_USER_ROLES_SUFFIX}
           </p>
           <Chip tone="success" dot>
-            {PT.MULTI_USER_SSO_CHIP}
+            {access?.provider ? `${PT.MULTI_USER_SSO_CHIP} · ${access.provider}` : PT.MULTI_USER_SSO_CHIP}
           </Chip>
         </div>
         <div className="my-3 border-t border-border" />

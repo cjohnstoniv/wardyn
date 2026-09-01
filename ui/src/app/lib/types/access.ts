@@ -55,6 +55,11 @@ export interface AccessResponse {
   // email_verified clause only applies when this is false (that claim is
   // untrue once a domains list is configured).
   email_domains_configured: boolean;
+  // issuer: public OIDC issuer URL; provider: human-facing IdP name derived
+  // from it server-side (e.g. "Microsoft Entra ID") — the SSO chip names WHERE
+  // sign-in comes from, not just THAT it is SSO.
+  issuer: string;
+  provider: string;
   posture: AccessPosture;
 }
 

@@ -1,0 +1,101 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+  Role-mappings redesign mock — the table-with-sub-row-notes reads badly
+  (ungrouped notes, sparse columns). This drops the table for a card list:
+  each mapping's value/role/source/note/delete stay visually grouped.
+  Static, tokens copied from people-access-mock/index.html. For owner review.
+-->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wardyn — Role mappings redesign</title>
+<style>
+:root{
+  --background:#0a0a0a; --foreground:#ededed; --card:#111111; --surface-2:#1f1f1f;
+  --muted-foreground:#a1a1a1; --border:#262626; --border-strong:#333;
+  --primary:#2dd4bf; --warning:#f59e0b; --warning-subtle:rgba(245,158,11,.12);
+  --neutral-chip:#27272a; --success:#10b981;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--background);color:var(--foreground);
+  font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;padding:32px;max-width:820px}
+h2{font-size:15px;margin:0 0 2px}
+.sub{color:var(--muted-foreground);font-size:13px;margin:0 0 16px}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12.5px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:8px}
+.card.shadow{background:var(--warning-subtle);border-color:rgba(245,158,11,.3)}
+.row1{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.val{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--foreground);word-break:break-all}
+.row2{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
+.spacer{flex:1}
+.added{color:var(--muted-foreground);font-size:12px;white-space:nowrap}
+.chip{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;font-size:12px;
+  background:var(--neutral-chip);color:var(--foreground);border:1px solid var(--border-strong)}
+.chip.role{font-weight:500}
+.chip.warn{background:var(--warning-subtle);color:var(--warning);border-color:rgba(245,158,11,.35)}
+.dot::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;display:inline-block}
+.note{color:var(--muted-foreground);font-size:12px;margin-top:8px;line-height:1.45}
+.del{background:none;border:1px solid var(--border-strong);color:var(--muted-foreground);
+  border-radius:8px;padding:4px 12px;font-size:12px;cursor:pointer}
+.del:hover{color:var(--foreground);border-color:var(--muted-foreground)}
+.readonly-hint{color:var(--muted-foreground);font-size:12px;margin-top:6px}
+.section-note{color:var(--muted-foreground);font-size:13px;margin:0 0 14px}
+.label{display:block;font-size:13px;margin:18px 0 8px;color:var(--foreground);font-weight:500}
+</style>
+</head>
+<body>
+<h2>Role mappings</h2>
+<p class="section-note">A value — an Entra App Role, a groups-claim entry, or an email — mapped to admin or member.</p>
+
+<!-- console email mapping: everything about it stays inside one card -->
+<div class="card shadow">
+  <div class="row1">
+    <span class="val">wardyn-outsider@cjohnstonivgmail.onmicrosoft.com</span>
+    <span class="chip role">Member</span>
+  </div>
+  <div class="row2">
+    <span class="chip">Console</span>
+    <span class="chip warn">Unverified claim</span>
+    <span class="spacer"></span>
+    <span class="added">46m ago</span>
+    <button class="del">Delete</button>
+  </div>
+  <p class="note">This is an email-keyed mapping riding an unverified IdP claim (<span class="mono">WARDYN_OIDC_EMAIL_DOMAINS</span> is unset, so <span class="mono">email_verified</span> isn't enforced). Prefer an App Role or group instead.</p>
+</div>
+
+<!-- chart-owned mapping: read-only, no delete -->
+<div class="card">
+  <div class="row1">
+    <span class="val">wardyn.admin</span>
+    <span class="chip role">Admin</span>
+  </div>
+  <div class="row2">
+    <span class="chip">From your chart</span>
+    <span class="spacer"></span>
+    <span class="added">—</span>
+  </div>
+  <p class="readonly-hint">Edit in your chart values.</p>
+</div>
+
+<!-- an example group mapping (GUID value) to show break-all + a normal console row -->
+<div class="card">
+  <div class="row1">
+    <span class="val">199026aa-f675-49ad-ad3b-94d2e58d128a</span>
+    <span class="chip role">Member</span>
+  </div>
+  <div class="row2">
+    <span class="chip">Console</span>
+    <span class="spacer"></span>
+    <span class="added">2d ago</span>
+    <button class="del">Delete</button>
+  </div>
+</div>
+
+<p style="color:var(--muted-foreground);font-size:12px;margin-top:20px;border-top:1px solid var(--border);padding-top:14px">
+  Card-per-mapping: value + role on top, source/badges + timestamp + delete on the next line, the note (only when there is one) grouped inside the card. No table columns to misalign, no full-width notes floating between rows.
+</p>
+</body>
+</html>

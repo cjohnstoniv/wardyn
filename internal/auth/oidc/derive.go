@@ -281,6 +281,14 @@ func (a *Authenticator) HasEmailDomains() bool {
 	return len(a.cfg.AllowedEmailDomains) > 0
 }
 
+// Issuer returns the PUBLIC OIDC issuer URL (Config.IssuerURL) — the console's
+// People page derives a human-facing provider name from it (e.g. an Entra
+// tenant issuer -> "Microsoft Entra ID") so the SSO chip names WHERE sign-in
+// comes from, not just THAT it is SSO.
+func (a *Authenticator) Issuer() string {
+	return a.cfg.IssuerURL
+}
+
 // MergedMapEmpty reports whether the ACTUAL merged role map (chart plus the
 // given console rows, applying mergeRoleMaps' own collision/shadow rules) is
 // empty — the console's People page needs this instead of a raw row count

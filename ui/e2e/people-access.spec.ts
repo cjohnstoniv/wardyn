@@ -42,6 +42,8 @@ function baseAccessBody(over: Record<string, unknown> = {}) {
     operator_emails: null,
     allow_email_mappings: false,
     email_domains_configured: false,
+    issuer: "https://login.microsoftonline.com/tenant/v2.0",
+    provider: "Microsoft Entra ID",
     posture: { map_empty: true, before: "an admin", after: "be denied", changes: true },
     ...over,
   };
@@ -94,6 +96,14 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
     expect(isInsideRail).toBe(true);
 
     await expect(page.getByRole("link", { name: "Open Permissions" })).toBeVisible();
+  });
+
+  // The SSO chip names the provider (GET /access's derived `provider`, from the
+  // OIDC issuer), not a bare "SSO" — so an admin sees WHERE sign-in comes from.
+  test("(a) the SSO chip names the provider from /access", async ({ page }) => {
+    await mockSsoStatus(page);
+    await gotoPeopleStep(page);
+    await expect(page.getByText(`SSO · ${baseAccessBody().provider}`)).toBeVisible();
   });
 
   // ---------------------------------------------------------------------
