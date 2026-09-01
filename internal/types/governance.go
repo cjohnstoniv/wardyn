@@ -31,12 +31,16 @@ import (
 //     (a human at the attach pane is the supervision), so a profile cannot
 //     express "supervised" through tool_rules on that lane either. This is the
 //     lever built for it.
+//   - MaxConcurrentRuns is the odd one out — a QUOTA, not a door. It bounds how
+//     many runs one member holds at once rather than what any single run may be,
+//     which is why its enforcement site answers 422 with no authz.denied while
+//     the two booleans answer 403 with one.
 //
-// A CLOSED struct with `omitempty` on both fields, not a map: the set is small,
+// A CLOSED struct with `omitempty` on every field, not a map: the set is small,
 // complete, and validated by the Go type itself, so migration 0052 puts no
 // CHECK on the limits column at all (the 0042 doctrine — one closed Go
 // definition, validated at the write boundary, zero DDL for the next member).
-// Both zero values mean "unrestricted", so a profile that omits limits behaves
+// EVERY zero value means "unrestricted", so a profile that omits limits behaves
 // exactly as one written before this struct had fields — the absent-row
 // back-compat rule applied one level down.
 type GovernanceLimits struct {
@@ -48,6 +52,11 @@ type GovernanceLimits struct {
 	// validation, so a raw "did the caller ask for interactive" read is evaded
 	// by leaving a field out.
 	DenyInteractive bool `json:"deny_interactive,omitempty"`
+	// MaxConcurrentRuns caps how many NON-TERMINAL runs a member under this
+	// profile may hold at once. 0 is unlimited — the same zero-value rule the
+	// two booleans follow, so limits authored before this field existed keep
+	// meaning what they meant.
+	MaxConcurrentRuns int `json:"max_concurrent_runs,omitempty"`
 }
 
 // GovernanceProfile is one named, assignable ceiling (migration 0052's

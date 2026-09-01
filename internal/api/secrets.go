@@ -22,6 +22,17 @@ import (
 // secretNameRE constrains secret names to a safe, predictable identifier set.
 var secretNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,126}[a-z0-9])?$`)
 
+// secretsMaxPerOwner bounds how many secrets one namespace may hold — the same
+// runaway-add guard apiTokenMaxPerPrincipal and sshMaxKeysPerPrincipal are, and
+// answered the same way (422, "remove one first", no audit event).
+//
+// 100 rather than those two's 20, because this namespace is DEPLOYMENT
+// INVENTORY, not one human's credentials: the operator's "" namespace holds
+// every provider key, every git/SSH credential and every integration-derived
+// row (the integration fold alone derives ~15), so a 20-cap would refuse a
+// live install the moment it upgraded.
+const secretsMaxPerOwner = 100
+
 // reservedSecretNames are platform-internal keys that must not be overwritten
 // or deleted through the API (they would brick identity/session handling), and
 // that the injection sink refuses to resolve as a stored value. The Wardyn-
@@ -186,6 +197,9 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("secret too short: must be at least %d bytes to be masked and scanned", secretmask.MinLen))
 		return
 	}
+	if !s.admitSecretCount(w, r, owner, name) {
+		return
+	}
 	if err := s.cfg.Secrets.For(owner).Put(r.Context(), name, []byte(body.Value)); err != nil {
 		writeError(w, http.StatusInternalServerError, "store secret: "+err.Error())
 		return
@@ -193,6 +207,29 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"secret.write", name, "success", secretOwnerAuditData(owner)))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// admitSecretCount is the secretsMaxPerOwner check, sited immediately before
+// the Put so nothing between them can change the count.
+//
+// AN OVERWRITE IS NEVER REFUSED, and that is the whole reason this is a
+// function rather than a `len(names) >= max` line. `Put` is both "add" and
+// "rotate": an operator sitting exactly at the cap must still be able to
+// replace an expiring key, and a cap that refused that would turn a soft guard
+// into an outage on the one day it matters most. Only a NEW name is capped.
+//
+// A List failure is fail-OPEN (admit): this bounds accidental growth, and
+// refusing every write because the count could not be taken would make a
+// transient store hiccup look like a permission problem. The Put below reports
+// a real store failure on its own.
+func (s *Server) admitSecretCount(w http.ResponseWriter, r *http.Request, owner, name string) bool {
+	names, err := s.cfg.Secrets.For(owner).List(r.Context())
+	if err != nil || len(names) < secretsMaxPerOwner || slices.Contains(names, name) {
+		return true
+	}
+	writeError(w, http.StatusUnprocessableEntity,
+		fmt.Sprintf("too many stored secrets (max %d) — delete one first", secretsMaxPerOwner))
+	return false
 }
 
 // handleDeleteSecret removes a named secret from the caller's own namespace,

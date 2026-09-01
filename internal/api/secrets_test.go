@@ -15,9 +15,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -358,6 +360,83 @@ func TestDeleteSecret_MemberBedrockNames_403(t *testing.T) {
 		admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
 		if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/"+bedrockAPIKeySecret, admin, ""); w.Code != http.StatusNoContent {
 			t.Fatalf("operator DELETE = %d, want 204: %s", w.Code, w.Body.String())
+		}
+	})
+}
+
+// TestSecretCountCap is secretsMaxPerOwner (PF-38): one namespace holds at most
+// 100 secrets, refused 422 like both sibling per-principal caps.
+//
+// The THIRD leg is the one the cap exists to get right. An OVERWRITE at the cap
+// must still succeed: `Put` is both "add" and "rotate", so a cap that counted
+// rows without asking whether this name is already one of them would refuse an
+// operator sitting at 100 the ability to replace an expiring key — a soft guard
+// turned into an outage on the one day it matters. Counterfactual: drop
+// admitSecretCount's slices.Contains and only that subtest goes red.
+func TestSecretCountCap(t *testing.T) {
+	const value = `{"value":"long-enough-to-be-masked-and-scanned"}`
+
+	// fill returns a store already holding n operator-namespace rows.
+	fill := func(n int) *memSecrets {
+		m := map[string][]byte{}
+		for i := range n {
+			m[fmt.Sprintf("seeded-%03d", i)] = []byte("long-enough-to-be-masked")
+		}
+		return &memSecrets{m: m}
+	}
+	admin := func(t *testing.T) *http.Cookie {
+		t.Helper()
+		return ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
+	}
+
+	t.Run("the 100th name is stored", func(t *testing.T) {
+		sec := fill(secretsMaxPerOwner - 1)
+		_, srv := secretsRBACServer(t, sec)
+		if w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/one-more", admin(t), value); w.Code != http.StatusNoContent {
+			t.Fatalf("PUT at %d rows = %d, want 204: %s", secretsMaxPerOwner-1, w.Code, w.Body.String())
+		}
+		if len(sec.m) != secretsMaxPerOwner {
+			t.Errorf("rows = %d, want %d", len(sec.m), secretsMaxPerOwner)
+		}
+	})
+
+	t.Run("the 101st is refused 422, and nothing is written", func(t *testing.T) {
+		sec := fill(secretsMaxPerOwner)
+		_, srv := secretsRBACServer(t, sec)
+		w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/one-too-many", admin(t), value)
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("PUT at the cap = %d, want 422: %s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "delete one first") {
+			t.Errorf("body = %s, want the sibling caps' remove-one-first shape", w.Body.String())
+		}
+		if _, ok := sec.m["one-too-many"]; ok {
+			t.Error("the refused name was stored anyway; the check must precede the Put")
+		}
+	})
+
+	t.Run("THE LEG: an overwrite AT the cap still rotates", func(t *testing.T) {
+		sec := fill(secretsMaxPerOwner)
+		_, srv := secretsRBACServer(t, sec)
+		w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/seeded-000", admin(t), `{"value":"rotated-value-long-enough"}`)
+		if w.Code != http.StatusNoContent {
+			t.Fatalf("overwrite at the cap = %d, want 204 — an operator at the cap must still be able to rotate a key: %s",
+				w.Code, w.Body.String())
+		}
+		if got := string(sec.m["seeded-000"]); got != "rotated-value-long-enough" {
+			t.Errorf("stored value = %q, want the rotated one", got)
+		}
+	})
+
+	t.Run("the cap is PER NAMESPACE, not deployment-wide", func(t *testing.T) {
+		// A member's own namespace is counted on its own rows: the operator
+		// sitting at the cap must not lock every member out of their first
+		// secret (For(owner).List is own-rows-only).
+		sec := fill(secretsMaxPerOwner)
+		_, srv := secretsRBACServer(t, sec)
+		alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+		if w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/mine", alice, value); w.Code != http.StatusNoContent {
+			t.Fatalf("member PUT with a FULL operator namespace = %d, want 204: %s", w.Code, w.Body.String())
 		}
 	})
 }

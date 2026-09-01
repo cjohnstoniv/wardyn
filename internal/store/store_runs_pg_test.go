@@ -646,3 +646,59 @@ func containsApproval(aps []types.ApprovalRequest, id uuid.UUID) bool {
 	}
 	return false
 }
+
+// TestPG_CountActiveRunsBy is the governance quota's one store read, against
+// REAL Postgres — the api-layer tests drive a fake, so nothing else proves the
+// `state = ANY($2)` binding works at all (a []string that did not bind as
+// text[] would count zero and make every cap silently unlimited).
+//
+// Isolated by a unique creator, so it asserts only on rows it created and is
+// safe against a shared DB.
+func TestPG_CountActiveRunsBy(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	me := "quota-" + uuid.NewString() + "@example.com"
+
+	count := func(t *testing.T, who string) int {
+		t.Helper()
+		n, err := pg.CountActiveRunsBy(ctx, who)
+		if err != nil {
+			t.Fatalf("count active runs: %v", err)
+		}
+		return n
+	}
+
+	if got := count(t, me); got != 0 {
+		t.Fatalf("a creator with no runs = %d, want 0", got)
+	}
+
+	// One row per state, so the partition is exercised end to end rather than
+	// on the two states a happy path happens to produce.
+	var wantActive int
+	for _, st := range []types.RunState{
+		types.RunPending, types.RunStarting, types.RunRunning, types.RunWaiting,
+		types.RunCompleted, types.RunFailed, types.RunKilled, types.RunStopped, types.RunArchived,
+	} {
+		r := newRun(st)
+		r.CreatedBy = me
+		persistRun(t, ctx, pool, r)
+		if !st.IsTerminal() {
+			wantActive++
+		}
+	}
+	if got := count(t, me); got != wantActive {
+		t.Errorf("active = %d, want %d — the non-terminal predicate and IsTerminal disagree in SQL", got, wantActive)
+	}
+
+	// Scoped to the creator: another human's active runs are not this one's.
+	other := newRun(types.RunRunning)
+	other.CreatedBy = "someone-else-" + uuid.NewString()
+	persistRun(t, ctx, pool, other)
+	if got := count(t, me); got != wantActive {
+		t.Errorf("active = %d after ANOTHER creator's run, want %d — the count is not creator-scoped", got, wantActive)
+	}
+	if got := count(t, other.CreatedBy); got != 1 {
+		t.Errorf("the other creator's active = %d, want 1", got)
+	}
+}

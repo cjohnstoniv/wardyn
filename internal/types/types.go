@@ -99,6 +99,20 @@ func (s RunState) IsTerminal() bool {
 	return false
 }
 
+// NonTerminalRunStates is IsTerminal's complement as a LIST, for the one caller
+// that needs the set as data rather than as a predicate: the concurrent-run
+// quota's SQL (store.CountActiveRunsBy).
+//
+// POSITIVE, never `NOT IN (terminal)`, and that direction is the safety. A
+// state added to the enum and forgotten here undercounts by one state — the
+// quota is merely looser than intended. Written as a negation, the same
+// oversight would count a newly-added TERMINAL state as active and wedge every
+// capped member at their limit forever, with no run they could stop to clear it.
+//
+// TestNonTerminalRunStatesPartitionTheEnum pins this against IsTerminal over
+// every constant scanned from this file, so the two cannot disagree.
+var NonTerminalRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWaiting}
+
 // ActorType distinguishes who performed an action in the audit stream.
 // This is the attribution field the incumbents lack.
 type ActorType string

@@ -14,13 +14,14 @@ import (
 
 // ─── the closed kind set ──────────────────────────────────────────────────────
 //
-// Four kinds, and this slice is the ONLY place the set is written down —
+// Six kinds, and this slice is the ONLY place the set is written down —
 // migration 0042 deliberately puts no CHECK on capability_grants.capability, so
-// a fifth kind is a constant here plus its enforcement call site, with no DDL.
-// The console's own list (ui/src/app/lib/permissions-copy.ts CAPABILITY_KINDS)
-// mirrors these ids and must not drift.
+// a seventh kind is a constant here plus its enforcement call site, with no DDL
+// (0.7 added the fifth and sixth on exactly those terms). The console's own
+// list (ui/src/app/lib/permissions-copy.ts CAPABILITY_KINDS) mirrors these ids
+// and must not drift.
 //
-// Three of the four NARROW what a member may already do; capImage WIDENS (a
+// Five of the six NARROW what a member may already do; capImage WIDENS (a
 // member cannot name a custom image at all today). Both directions resolve
 // through the same rules below — the difference lives at the enforcement seam,
 // not here.
@@ -42,16 +43,45 @@ const (
 	// admin-only — it executes attacker-authored build configuration, which is
 	// not a thing to hand out one row at a time.
 	capImage = "image"
+	// capAgent NARROWS: it bounds which agent/harness a member may launch —
+	// req.Agent, the member's own free-text choice, gated at denyMemberRequest.
+	// Values are the exact `--agent` string plus `*`.
+	//
+	// DELIBERATELY narrowing rather than widening, and the direction is decided
+	// by capGranted's own documented rule below: a WIDENING kind refuses on
+	// !enforced, which would refuse every member run on every deployment that
+	// has not enforced this kind — i.e. all of them on upgrade day. Launching an
+	// agent is something every member could already do, so it stays allowed
+	// until an admin enforces it.
+	//
+	// DELIBERATELY not constrained to the harness catalog either, here or at the
+	// grant write boundary: harnessByID documents a WARDYN_AGENT_IMAGES-only
+	// custom agent as supported, so a catalog check would make an operator's own
+	// entry unwriteable.
+	capAgent = "agent"
+	// capIntegration NARROWS: it bounds which AI-provider integration a member
+	// may name on a run — req.IntegrationID, and NOTHING ELSE.
+	//
+	// TIER 1 ONLY (PF-33). resolveRunIntegration has three tiers, and the other
+	// two — a workspace's own LLMCred pin (tier 2) and the operator's
+	// DefaultFor:agent_runs site default (tier 3) — are OPERATOR-authored. Gating
+	// them would contradict the doctrine rendered on the very screen this kind
+	// appears on ("a capability bounds what a member chose, never what an admin
+	// pre-authorized", permissions-copy.ts PERM.DOCTRINE) and would let one `all`
+	// deny row strip the site's model access deployment-wide. So the gate lives
+	// at denyMemberRequest, on the one member-authored input, and never inside
+	// resolveRunIntegration — which operator callers reach too.
+	capIntegration = "integration"
 )
 
 // capabilityKinds is the closed set, in the order the admin surface shows them.
-var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage}
+var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capIntegration}
 
-// validCapabilityKind reports whether kind is one of the four. The API write
+// validCapabilityKind reports whether kind is one of the six. The API write
 // boundary uses it in place of the CHECK the schema deliberately does not have.
 func validCapabilityKind(kind string) bool { return slices.Contains(capabilityKinds, kind) }
 
-// capWildcard matches every value of its kind. Spelled the same for all four so
+// capWildcard matches every value of its kind. Spelled the same for all six so
 // an admin does not have to learn a per-kind syntax for "all of them".
 const capWildcard = "*"
 
@@ -260,8 +290,10 @@ func (s *Server) capEnforced(ctx context.Context, kind string) (bool, error) {
 // deny gets bypassed by a port suffix.
 //
 // Every other kind is an exact, case-sensitive compare. A secret name, a
-// workspace uuid and an image ref are all identifiers where a near-miss must
-// not match; only egress hosts have a defensible subdomain semantics.
+// workspace uuid, an image ref, an agent id and an integration id are all
+// identifiers where a near-miss must not match; only egress hosts have a
+// defensible subdomain semantics. The two 0.7 kinds therefore need no arm of
+// their own — this default IS their matcher, exact plus the shared wildcard.
 func capValueMatches(kind, grantValue, want string) bool {
 	grantValue = strings.TrimSpace(grantValue)
 	if grantValue == capWildcard {

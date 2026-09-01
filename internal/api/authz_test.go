@@ -831,6 +831,20 @@ func (s *authzStore) ListRuns(context.Context) ([]types.AgentRun, error) {
 	return out, nil
 }
 
+// CountActiveRunsBy is real rather than a 0 stub so the governance quota reads
+// the same rows every other creator-scoped answer here does.
+func (s *authzStore) CountActiveRunsBy(_ context.Context, createdBy string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, r := range s.runs {
+		if r.CreatedBy == createdBy && !r.State.IsTerminal() {
+			n++
+		}
+	}
+	return n, nil
+}
+
 func (s *authzStore) ListRunsPageByCreator(_ context.Context, createdBy string, _ store.Page) ([]types.AgentRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -53,3 +53,40 @@ func TestTerminalRunStates_UIParity(t *testing.T) {
 		t.Errorf("UI TERMINAL_RUN_STATES lists %q, which is not a RunState constant", state)
 	}
 }
+
+// TestNonTerminalRunStatesPartitionTheEnum pins NonTerminalRunStates against
+// IsTerminal over EVERY RunState constant scanned from types.go — the same
+// source scan the UI-parity test above uses, so a state added to the enum and
+// forgotten in the list fails here rather than silently changing what the
+// concurrent-run quota counts.
+//
+// Both directions matter. A missing non-terminal state undercounts (the quota
+// is looser than authored); a terminal state that leaked into the list would
+// count an ENDED run as active and wedge every capped member at their limit
+// with no run left to stop.
+func TestNonTerminalRunStatesPartitionTheEnum(t *testing.T) {
+	src, err := os.ReadFile("types.go")
+	if err != nil {
+		t.Fatalf("read types.go: %v", err)
+	}
+	listed := map[RunState]bool{}
+	for _, s := range NonTerminalRunStates {
+		listed[s] = true
+	}
+	found := 0
+	for _, m := range regexp.MustCompile(`Run\w+\s+RunState\s*=\s*"(\w+)"`).FindAllStringSubmatch(string(src), -1) {
+		found++
+		s := RunState(m[1])
+		if want := !s.IsTerminal(); listed[s] != want {
+			t.Errorf("%s: NonTerminalRunStates lists it=%v, IsTerminal()=%v — the two disagree",
+				s, listed[s], s.IsTerminal())
+		}
+		delete(listed, s)
+	}
+	if found < 5 {
+		t.Fatalf("found only %d RunState constants in types.go; the scan regex is stale", found)
+	}
+	for s := range listed {
+		t.Errorf("NonTerminalRunStates lists %q, which is not a RunState constant", s)
+	}
+}

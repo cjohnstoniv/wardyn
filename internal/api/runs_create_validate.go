@@ -347,7 +347,7 @@ func interactiveToolApprovalsError(req createRunRequest) string {
 // immediately. An operator is exempt in one line at the top, so nothing below
 // ever costs them a store read.
 //
-// Three fields, three different answers:
+// Five fields, three different answers:
 //
 //   - devcontainer_repo is UNCONDITIONALLY operator-only, and is not a
 //     capability kind at all. It hands attacker-authored build configuration
@@ -358,11 +358,13 @@ func interactiveToolApprovalsError(req createRunRequest) string {
 //     its own comment). Same build path as devcontainer_repo, but a pinned ref
 //     an admin wrote down is a bounded thing; a repo whose contents change
 //     under them is not.
-//   - workspace NARROWS: launching against an onboarded workspace is something
-//     every member could already do, so it stays allowed until an admin
-//     enforces the kind. This gates req.WorkspaceID, the member's OWN choice —
-//     never the workspace a stored policy or a scan linkage brings in, which is
-//     admin-authored (the doctrine in OPERATIONS §Multi-user).
+//   - workspace, agent and integration_id all NARROW: each is something every
+//     member could already do, so each stays allowed until an admin enforces
+//     its kind (denyMemberCapability, capSeamAllowed). Each gates the member's
+//     OWN choice and nothing else — never the workspace a stored policy or a
+//     scan linkage brings in, never the workspace pin or site default
+//     resolveRunIntegration falls back to, all of which are admin-authored
+//     (the doctrine in OPERATIONS §Multi-user).
 //
 // A workspace's own base_image (seedRequestWorkspace, called AFTER this) is
 // deliberately NOT gated here: it is operator-authored config (the workspace was
@@ -402,16 +404,23 @@ func (s *Server) denyMemberRequest(w http.ResponseWriter, r *http.Request, req c
 					"or launch with the agent's convention image or an onboarded workspace's base image")
 		}
 	}
-	if req.WorkspaceID != nil {
-		allowed, err := s.capSeamAllowed(r.Context(), capWorkspace, req.WorkspaceID.String())
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "resolve capability: "+err.Error())
-			return governanceCeiling{}, true
-		}
-		if !allowed {
-			return governanceCeiling{}, s.denyMemberField(w, r, "runs.workspace", "capability_"+capWorkspace,
-				"you are not granted workspace "+req.WorkspaceID.String()+" — ask an admin for access, or launch without a workspace")
-		}
+	if req.WorkspaceID != nil && s.denyMemberCapability(w, r, capWorkspace, req.WorkspaceID.String(), "runs.workspace",
+		"you are not granted workspace "+req.WorkspaceID.String()+" — ask an admin for access, or launch without a workspace") {
+		return governanceCeiling{}, true
+	}
+	// An empty agent names nothing to bound — an exec run may legitimately omit
+	// it (agentRequirementError), and gating "" would refuse those on a kind
+	// that has nothing to say about them.
+	if req.Agent != "" && s.denyMemberCapability(w, r, capAgent, req.Agent, "runs.agent",
+		"you are not granted agent "+req.Agent+" — ask an admin to grant it, or launch one you hold") {
+		return governanceCeiling{}, true
+	}
+	// TIER 1 ONLY (PF-33, capIntegration's own comment): the run-explicit
+	// integration_id is the sole member-authored tier. A workspace's pin and the
+	// operator's site default fold on untouched.
+	if req.IntegrationID != "" && s.denyMemberCapability(w, r, capIntegration, req.IntegrationID, "runs.integration",
+		"you are not granted integration "+req.IntegrationID+" — ask an admin to grant it, or launch without integration_id") {
+		return governanceCeiling{}, true
 	}
 	ceiling, err := s.effectiveCeiling(r.Context())
 	if err != nil {
@@ -424,10 +433,31 @@ func (s *Server) denyMemberRequest(w http.ResponseWriter, r *http.Request, req c
 	return ceiling, false
 }
 
-// denyMemberGovernance is denyMemberRequest's governance half: the four request
-// SHAPES an assigned profile can refuse. Split out so denyMemberRequest's branch
-// count stays under the gocyclo gate, exactly as clampOperatorSwitches is split
-// out of Clamp.
+// denyMemberCapability is the NARROWING seam the request-level kinds share:
+// resolve, 500 on a store that cannot answer, and one refusal carrying the
+// kind's own `capability_<kind>` reason. Returns true when the caller must stop.
+//
+// One helper, not one block per kind, so the three narrowing gates cannot drift
+// apart on the thing that matters — capSeamAllowed, NEVER capGranted. Every kind
+// routed here is one a member could already use in 0.5, so an unenforced kind
+// must stay allowed; capGranted answers the opposite (widening) question and
+// refuses on !enforced, which is why capImage keeps its own call site above.
+func (s *Server) denyMemberCapability(w http.ResponseWriter, r *http.Request, kind, value, target, msg string) bool {
+	allowed, err := s.capSeamAllowed(r.Context(), kind, value)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "resolve capability: "+err.Error())
+		return true
+	}
+	if allowed {
+		return false
+	}
+	return s.denyMemberField(w, r, target, "capability_"+kind, msg)
+}
+
+// denyMemberGovernance is denyMemberRequest's governance half: the request
+// SHAPES an assigned profile can refuse, plus its one quota. Split out so
+// denyMemberRequest's branch count stays under the gocyclo gate, exactly as
+// clampOperatorSwitches is split out of Clamp.
 //
 // Every one keys on `ceiling.Profile != nil`, never on the ceiling's contents —
 // an UNASSIGNED member is byte-for-byte today here (PF-1's stated residual), and
@@ -457,6 +487,9 @@ func (s *Server) denyMemberGovernance(w http.ResponseWriter, r *http.Request, re
 		return s.denyMemberField(w, r, "runs.interactive", "governance_profile", fmt.Sprintf(
 			"interactive runs are not allowed by your governance profile %q, and a request with no task comes up interactive too. Launch with a task, and without `--interactive`.", name))
 	}
+	if s.denyMemberRunQuota(w, r, ceiling) {
+		return true
+	}
 	if !governanceHoldRules(ceiling) {
 		return false
 	}
@@ -478,6 +511,47 @@ func (s *Server) denyMemberGovernance(w http.ResponseWriter, r *http.Request, re
 			"codex-cli is not supported under your governance profile %q: its tool rules hold or deny, and codex-cli has no external tool-approval contract. Launch a different agent.", name))
 	}
 	return false
+}
+
+// denyMemberRunQuota is the third limit and the one that is NOT a refusal of a
+// request shape: MaxConcurrentRuns caps how many non-terminal runs one assigned
+// member may hold at once.
+//
+// 422 AND NO AUDIT, deliberately — the two shape limits above are 403s with an
+// authz.denied row because the caller asked for something they may not have;
+// this caller IS authorized and is simply at a quota. Both existing per-principal
+// caps say it exactly this way (apiTokenMaxPerPrincipal, sshMaxKeysPerPrincipal:
+// 422, "too many … — X one first", no audit event), and a quota that filled the
+// denial stream with authz.denied rows would make a busy member look like an
+// attacker.
+//
+// 0 (the zero value, and any negative) is UNLIMITED, matching the two booleans'
+// rule: a profile that omits limits behaves exactly as one written before this
+// field existed. ASSIGNED SUBJECTS ONLY — an unassigned member has no profile,
+// so there is no cap to read and no global default one to fall back to (PF-36:
+// the `all` assignment IS the opt-in for a deployment-wide cap).
+//
+// ponytail: count-then-create, so two simultaneous creates can both see N-1 and
+// both land. Accepted, exactly as the two 20-caps above accept it — the cap is a
+// runaway-loop guard, not a licence meter, and a transaction around create just
+// to make a soft cap exact is not worth the write path it would complicate.
+func (s *Server) denyMemberRunQuota(w http.ResponseWriter, r *http.Request, ceiling governanceCeiling) bool {
+	limit := ceiling.Limits.MaxConcurrentRuns
+	if limit <= 0 {
+		return false
+	}
+	active, err := s.cfg.Store.CountActiveRunsBy(r.Context(), principalFromRequest(r))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "count active runs: "+err.Error())
+		return true
+	}
+	if active < limit {
+		return false
+	}
+	writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(
+		"too many runs at once (max %d) — your governance profile %q caps how many runs you can have going, and %d are still active. Stop one first.",
+		limit, ceiling.Profile.Name, active))
+	return true
 }
 
 // denyMemberSeededImage closes G3 (PF-34, live since 0.6.0): a MEMBER-OWNED

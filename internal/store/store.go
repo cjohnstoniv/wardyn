@@ -92,6 +92,34 @@ func (s PG) ListRuns(ctx context.Context) ([]types.AgentRun, error) {
 	return s.ListRunsPage(ctx, Page{})
 }
 
+// CountActiveRunsBy counts createdBy's runs that have not ended yet — the
+// governance quota's one read (GovernanceLimits.MaxConcurrentRuns).
+//
+// The state predicate is a POSITIVE list (types.NonTerminalRunStates), not a
+// `NOT IN (terminal)`: a state added to the enum and forgotten there merely
+// undercounts, while the negated form would count a new TERMINAL state as
+// active and wedge a capped member at their limit with nothing to stop. That
+// list is pinned against RunState.IsTerminal by a test in internal/types.
+//
+// ponytail: no new index. agent_runs_created_by_idx (0001_init.sql:23) already
+// indexes the selective column; the state filter is a cheap check over the few
+// rows one member owns. A composite (created_by, state) index is the upgrade if
+// a deployment ever has a member with enough historical runs to notice.
+func (s PG) CountActiveRunsBy(ctx context.Context, createdBy string) (int, error) {
+	states := make([]string, 0, len(types.NonTerminalRunStates))
+	for _, st := range types.NonTerminalRunStates {
+		states = append(states, string(st))
+	}
+	var n int
+	if err := s.Pool.QueryRow(ctx,
+		`SELECT count(*) FROM agent_runs WHERE created_by = $1 AND state = ANY($2)`,
+		createdBy, states,
+	).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count active runs: %w", err)
+	}
+	return n, nil
+}
+
 // UpdateRunStateIf conditionally transitions a run from fromState to toState in
 // a single UPDATE ... WHERE id=$ AND state=$from, returning whether the update
 // applied. It is the optimistic guard the completion watcher uses: it only

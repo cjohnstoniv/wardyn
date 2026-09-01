@@ -647,3 +647,365 @@ func TestMemberWorkspaceLLMCredRefused(t *testing.T) {
 		t.Errorf("member create without llm_cred = %d, want 201: %s", w.Code, w.Body.String())
 	}
 }
+
+// ─── §K: the two 0.7 capability kinds (PF-32, PF-33) ──────────────────────────
+
+// govMemberSub is the member every §K test below launches as — the same
+// sub/group pair govSession stamps and capabilitySubjects resolves a `user`
+// grant against.
+const govMemberSub = "sub-walled"
+
+// capKindLaunch POSTs one run as govMemberSub against a fixture wired with cs.
+func capKindLaunch(t *testing.T, cs *capStore, body string) (*Server, *httptest.ResponseRecorder) {
+	t.Helper()
+	srv, _, _ := govEscapeFixture(t, cs)
+	return srv, doSSO(t, srv, http.MethodPost, "/api/v1/runs",
+		govSession(t, govMemberSub, []string{"eng"}, false), body)
+}
+
+// TestCapabilityAgentKind is PF-32: `agent` is a NARROWING kind, gated on
+// req.Agent at denyMemberRequest.
+//
+// The FIRST leg is why the kind narrows rather than widens. capGranted refuses
+// on !enforced, so a widening `agent` would 403 every member run on every
+// deployment that has not enforced the kind — i.e. all of them on upgrade day.
+// capSeamAllowed gives the absent-row answer instead, and that subtest is the
+// only thing standing between this feature and that outage.
+func TestCapabilityAgentKind(t *testing.T) {
+	const body = `{"agent":"claude-code","task":"t"}`
+	allow, deny := types.CapabilityAllow, types.CapabilityDeny
+
+	t.Run("UNENFORCED, no grant: 201 (the absent-row leg)", func(t *testing.T) {
+		_, w := capKindLaunch(t, &capStore{}, body)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create = %d, want 201 — an unenforced kind must behave byte-for-byte as 0.6 did: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("enforced, no grant: 403 capability_agent", func(t *testing.T) {
+		srv, w := capKindLaunch(t, &capStore{enf: map[string]bool{capAgent: true}}, body)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("create = %d, want 403: %s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "claude-code") {
+			t.Errorf("body = %s, want the refused agent named", w.Body.String())
+		}
+		if r := auditReasons(t, srv, "authz.denied"); !slices.Contains(r, "capability_agent") {
+			t.Errorf("authz.denied reasons = %v, want capability_agent", r)
+		}
+	})
+
+	t.Run("enforced, a * grant: 201", func(t *testing.T) {
+		_, w := capKindLaunch(t, &capStore{
+			enf:    map[string]bool{capAgent: true},
+			grants: []types.CapabilityGrant{grant(types.CapabilitySubjectUser, govMemberSub, capAgent, capWildcard, allow)},
+		}, body)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create = %d, want 201 — * covers every agent: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("deny beats an allow on the same person", func(t *testing.T) {
+		srv, w := capKindLaunch(t, &capStore{
+			enf: map[string]bool{capAgent: true},
+			grants: []types.CapabilityGrant{
+				grant(types.CapabilitySubjectUser, govMemberSub, capAgent, "claude-code", allow),
+				grant(types.CapabilitySubjectGroup, "eng", capAgent, "claude-code", deny),
+			},
+		}, body)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("create = %d, want 403 — a group deny must beat a user allow: %s", w.Code, w.Body.String())
+		}
+		if r := auditReasons(t, srv, "authz.denied"); !slices.Contains(r, "capability_agent") {
+			t.Errorf("authz.denied reasons = %v, want capability_agent", r)
+		}
+	})
+
+	t.Run("an exec run naming NO agent is not gated at all", func(t *testing.T) {
+		// agentRequirementError lets an exec run with an image omit `agent`;
+		// gating "" would refuse those on a kind with nothing to say about them.
+		_, w := capKindLaunch(t, &capStore{enf: map[string]bool{capAgent: true}},
+			`{"task":"echo hi","task_mode":"exec","workspaces":[]}`)
+		if w.Code == http.StatusForbidden {
+			t.Fatalf("an agent-less request was refused by the agent kind: %s", w.Body.String())
+		}
+	})
+}
+
+// ─── the integration kind, and the doctrine pin ───────────────────────────────
+
+// integStore is govEscapeStore plus the one read the integration tiers need:
+// the site config that holds the deployment's integration rows.
+type integStore struct {
+	*govEscapeStore
+	site types.SiteConfig
+}
+
+func (s *integStore) GetSiteConfig(context.Context) (types.SiteConfig, error) { return s.site, nil }
+
+func integFixture(t *testing.T, cs *capStore, rows []types.Integration, wss []types.Workspace) (*Server, *recRecorder) {
+	t.Helper()
+	h := newHarness(t)
+	st := &integStore{govEscapeStore: newGovEscapeStore(cs), site: types.SiteConfig{Integrations: rows}}
+	st.workspaces = wss
+	audit := &recRecorder{}
+	cfg := baseTestConfig(h, st)
+	cfg.Audit = audit
+	cfg.Broker = h.broker
+	cfg.Runner = &fakeRunner{}
+	// The integration names govCorpSecret, so it has to be STORED or
+	// applyIntegrationCreds falls back honestly and nothing folds — which would
+	// make the doctrine pin below pass for the wrong reason.
+	cfg.Secrets = &memSecrets{m: map[string][]byte{govCorpSecret: []byte("v")}}
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.DefaultPolicy = govDeployment()
+	return New(cfg), audit
+}
+
+// foldedIntegrationRef reads the run.workspace.creds audit event — the durable
+// record that a model-access binding actually folded into the run — and returns
+// the integration it named, or "" when nothing bound.
+func foldedIntegrationRef(t *testing.T, audit *recRecorder) string {
+	t.Helper()
+	for _, ev := range audit.events {
+		if ev.Action != "run.workspace.creds" {
+			continue
+		}
+		var d struct {
+			IntegrationRef string `json:"integration_ref"`
+		}
+		if err := json.Unmarshal(ev.Data, &d); err != nil {
+			t.Fatalf("unmarshal run.workspace.creds data: %v", err)
+		}
+		return d.IntegrationRef
+	}
+	return ""
+}
+
+// TestCapabilityIntegrationKind is PF-33: `integration` narrows TIER 1 — the
+// run-explicit integration_id, the one member-authored input — AND NOTHING ELSE.
+//
+// The last two subtests are THE DOCTRINE PIN, and they are the reason this kind
+// is safe to ship. resolveRunIntegration has three tiers; tiers 2 (a workspace's
+// own pin) and 3 (the operator's site default) are OPERATOR-authored. Gating
+// them would contradict PERM.DOCTRINE as rendered on the very screen this kind
+// appears on, and one `all` deny row would strip the deployment's model access
+// from every member at once. Without these two assertions a later "consistency"
+// refactor moves the check into resolveRunIntegration and nothing goes red.
+func TestCapabilityIntegrationKind(t *testing.T) {
+	const integID = "corp-anthropic"
+	allow, deny := types.CapabilityAllow, types.CapabilityDeny
+	enforced := func() map[string]bool { return map[string]bool{capIntegration: true} }
+	rows := func() []types.Integration { return []types.Integration{apiKeyIntegration(integID, govCorpSecret)} }
+	explicit := `{"agent":"claude-code","task":"t","integration_id":"` + integID + `"}`
+
+	launch := func(t *testing.T, cs *capStore, rows []types.Integration, wss []types.Workspace, body string) (*Server, *recRecorder, *httptest.ResponseRecorder) {
+		t.Helper()
+		srv, audit := integFixture(t, cs, rows, wss)
+		return srv, audit, doSSO(t, srv, http.MethodPost, "/api/v1/runs",
+			govSession(t, govMemberSub, []string{"eng"}, false), body)
+	}
+
+	t.Run("UNENFORCED, no grant: 201 (the absent-row leg)", func(t *testing.T) {
+		_, audit, w := launch(t, &capStore{}, rows(), nil, explicit)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+		}
+		if got := foldedIntegrationRef(t, audit); got != integID {
+			t.Errorf("folded integration = %q, want %q — the tier-1 pick must still bind", got, integID)
+		}
+	})
+
+	t.Run("enforced, no grant: 403 capability_integration", func(t *testing.T) {
+		srv, _, w := launch(t, &capStore{enf: enforced()}, rows(), nil, explicit)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("create = %d, want 403: %s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), integID) {
+			t.Errorf("body = %s, want the refused integration named", w.Body.String())
+		}
+		if r := auditReasons(t, srv, "authz.denied"); !slices.Contains(r, "capability_integration") {
+			t.Errorf("authz.denied reasons = %v, want capability_integration", r)
+		}
+	})
+
+	t.Run("enforced, a * grant: 201", func(t *testing.T) {
+		_, audit, w := launch(t, &capStore{
+			enf:    enforced(),
+			grants: []types.CapabilityGrant{grant(types.CapabilitySubjectUser, govMemberSub, capIntegration, capWildcard, allow)},
+		}, rows(), nil, explicit)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+		}
+		if got := foldedIntegrationRef(t, audit); got != integID {
+			t.Errorf("folded integration = %q, want %q", got, integID)
+		}
+	})
+
+	t.Run("deny beats an allow on the same person", func(t *testing.T) {
+		srv, _, w := launch(t, &capStore{
+			enf: enforced(),
+			grants: []types.CapabilityGrant{
+				grant(types.CapabilitySubjectUser, govMemberSub, capIntegration, integID, allow),
+				grant(types.CapabilitySubjectAll, "", capIntegration, integID, deny),
+			},
+		}, rows(), nil, explicit)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("create = %d, want 403 — an `all` deny must beat a user allow: %s", w.Code, w.Body.String())
+		}
+		if r := auditReasons(t, srv, "authz.denied"); !slices.Contains(r, "capability_integration") {
+			t.Errorf("authz.denied reasons = %v, want capability_integration", r)
+		}
+	})
+
+	// ---- THE DOCTRINE PIN ----
+
+	t.Run("DOCTRINE: a workspace's own pin (tier 2) still folds, with the kind enforced and NO grant", func(t *testing.T) {
+		ws := types.Workspace{
+			ID: uuid.New(), Name: "hello", Status: types.WorkspaceScanned,
+			Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: govWorkspaceRepo}},
+			LLMCred: &types.WorkspaceLLMCred{IntegrationRef: integID},
+		}
+		// An `all` DENY on top of the enforcement switch: the strongest row an
+		// admin can write, and it still must not reach an operator-authored pin.
+		_, audit, w := launch(t, &capStore{
+			enf:    enforced(),
+			grants: []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capIntegration, capWildcard, deny)},
+		}, rows(), []types.Workspace{ws},
+			`{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2",`+
+				`"allowed_domains":["api.anthropic.com"],"workspace_repos":[{"repo":"`+govWorkspaceRepo+`"}]}}`)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create = %d, want 201 — a workspace pin is OPERATOR consent, never the member's choice: %s", w.Code, w.Body.String())
+		}
+		if got := foldedIntegrationRef(t, audit); got != integID {
+			t.Fatalf("folded integration = %q, want %q — one `all` deny row just stripped a workspace's own model access", got, integID)
+		}
+	})
+
+	t.Run("DOCTRINE: the operator's site default (tier 3) still folds, with the kind enforced and NO grant", func(t *testing.T) {
+		def := apiKeyIntegration(integID, govCorpSecret)
+		def.DefaultFor = []string{"agent_runs"}
+		_, audit, w := launch(t, &capStore{
+			enf:    enforced(),
+			grants: []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capIntegration, capWildcard, deny)},
+		}, []types.Integration{def}, nil, `{"agent":"claude-code","task":"t"}`)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create = %d, want 201 — the site default is not a member's choice: %s", w.Code, w.Body.String())
+		}
+		if got := foldedIntegrationRef(t, audit); got != integID {
+			t.Fatalf("folded integration = %q, want %q — one `all` deny row just stripped the SITE DEFAULT deployment-wide", got, integID)
+		}
+	})
+}
+
+// ─── G5: the concurrent-run quota (PF-36) ─────────────────────────────────────
+
+// quotaStore is govEscapeStore plus CountActiveRunsBy, counting the runs this
+// fixture ACTUALLY created rather than returning a canned number — so the cap is
+// exercised end to end (create N, then be refused) instead of against a stub.
+type quotaStore struct {
+	*govEscapeStore
+	err error
+}
+
+func (s *quotaStore) CountActiveRunsBy(_ context.Context, createdBy string) (int, error) {
+	if s.err != nil {
+		return 0, s.err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for id, r := range s.runs {
+		if r.CreatedBy == createdBy && !s.states[id].IsTerminal() {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func quotaFixture(t *testing.T, cs *capStore) *Server {
+	t.Helper()
+	h := newHarness(t)
+	st := &quotaStore{govEscapeStore: newGovEscapeStore(cs)}
+	cfg := baseTestConfig(h, st)
+	cfg.Audit = &recRecorder{}
+	cfg.Broker = h.broker
+	cfg.Runner = &fakeRunner{}
+	cfg.Secrets = &memSecrets{m: map[string][]byte{govCorpSecret: []byte("v")}}
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.DefaultPolicy = govDeployment()
+	return New(cfg)
+}
+
+// TestGovernanceLimitsMaxConcurrentRuns is G5 (PF-36): the third limit, and the
+// only one that is a QUOTA rather than a refusal of a request shape.
+//
+// 422 AND NO authz.denied, deliberately — the caller IS authorized, they are at
+// a cap, and both existing per-principal caps (api tokens, ssh keys) answer
+// exactly this way without auditing. The unassigned leg is the absent-row
+// doctrine: there is no global default cap, so a member with no profile is
+// unlimited no matter how many runs they hold.
+func TestGovernanceLimitsMaxConcurrentRuns(t *testing.T) {
+	const body = `{"agent":"claude-code","task":"t"}`
+	member := func(t *testing.T) *http.Cookie {
+		t.Helper()
+		return govSession(t, govMemberSub, []string{"eng"}, false)
+	}
+
+	t.Run("N active under a cap of N: the N+1th is 422, unaudited", func(t *testing.T) {
+		srv := quotaFixture(t, assignedStore(limitsProfile("two-at-a-time",
+			types.GovernanceLimits{MaxConcurrentRuns: 2})))
+		for i := range 2 {
+			if w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t), body); w.Code != http.StatusCreated {
+				t.Fatalf("run %d = %d, want 201 — the cap is 2: %s", i+1, w.Code, w.Body.String())
+			}
+		}
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t), body)
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("the third run = %d, want 422: %s", w.Code, w.Body.String())
+		}
+		const want = `too many runs at once (max 2) — your governance profile "two-at-a-time" caps how many runs you can have going, and 2 are still active. Stop one first.`
+		if got := refusalBody(t, w); got != want {
+			t.Errorf("body  = %s\nwant: %s", got, want)
+		}
+		// A quota is not a denial: filling the authz.denied stream with rows for
+		// a busy member would make them look like an attacker. Neither 20-cap
+		// sibling audits, and neither does this.
+		if r := auditReasons(t, srv, "authz.denied"); len(r) != 0 {
+			t.Errorf("authz.denied reasons = %v, want none — a quota is not an authorization failure", r)
+		}
+	})
+
+	t.Run("an UNASSIGNED member is unlimited (no global default cap)", func(t *testing.T) {
+		// THE counterfactual: the identical request shape, three times over,
+		// with no assignment. A global default cap — or a limit read off
+		// Config.DefaultPolicy — would refuse the third here.
+		srv := quotaFixture(t, &capStore{})
+		for i := range 3 {
+			if w := doSSO(t, srv, http.MethodPost, "/api/v1/runs",
+				govSession(t, "sub-plain", []string{"eng"}, false), body); w.Code != http.StatusCreated {
+				t.Fatalf("run %d = %d, want 201 for an UNASSIGNED member: %s", i+1, w.Code, w.Body.String())
+			}
+		}
+	})
+
+	t.Run("0 is unlimited, matching the two booleans' zero value", func(t *testing.T) {
+		srv := quotaFixture(t, assignedStore(limitsProfile("uncapped", types.GovernanceLimits{})))
+		for i := range 3 {
+			if w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t), body); w.Code != http.StatusCreated {
+				t.Fatalf("run %d = %d, want 201 — an omitted cap is unlimited: %s", i+1, w.Code, w.Body.String())
+			}
+		}
+	})
+
+	t.Run("an OPERATOR is exempt, and never even reads the cap", func(t *testing.T) {
+		srv := quotaFixture(t, assignedStore(limitsProfile("everyone",
+			types.GovernanceLimits{MaxConcurrentRuns: 1})))
+		for i := range 3 {
+			if w := doSSO(t, srv, http.MethodPost, "/api/v1/runs",
+				ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), body); w.Code != http.StatusCreated {
+				t.Fatalf("admin run %d = %d, want 201: %s", i+1, w.Code, w.Body.String())
+			}
+		}
+	})
+}

@@ -28,6 +28,11 @@ type Store interface {
 	CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, error)
 	GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error)
 	ListRuns(ctx context.Context) ([]types.AgentRun, error)
+	// CountActiveRunsBy counts one creator's non-terminal runs — the
+	// governance quota's read (GovernanceLimits.MaxConcurrentRuns). Called
+	// ONLY when an assigned profile actually sets a cap, so a deployment with
+	// no governance assignments never reaches it.
+	CountActiveRunsBy(ctx context.Context, createdBy string) (int, error)
 	UpdateRunStateIf(ctx context.Context, id uuid.UUID, fromState, toState types.RunState) (bool, error)
 	UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, toState types.RunState, notAfter time.Time) (bool, error)
 	SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error
