@@ -427,6 +427,55 @@ func clampGitHubScope(proposed, ceiling json.RawMessage, warns *[]string) json.R
 	return b
 }
 
+// GitHubScopeWithin reports whether a PROPOSED github_token scope stays inside a
+// CEILING's, by the exact rules clampGitHubScope enforces above: the ceiling's
+// repo list is an ALLOWLIST (an empty one is deny-all, W23-S1-3), a permission
+// absent from the ceiling map is not grantable at any level (M6), and a present
+// one bounds the level by permRank.
+//
+// It lives HERE, beside the clamp it must agree with, and calls that clamp's own
+// permRank and toSet — because its caller is a comparator that ACCEPTS a scope
+// the clamp will later honor at mint. A second copy of these rules in the
+// caller's package drifts in exactly the direction that matters: accept there,
+// widen here. There is nothing to keep in sync because there is one copy.
+//
+// It differs from the clamp in one deliberate way: an UNDECODABLE scope is an
+// error, not an empty one. The clamp tolerates it because it intersects toward
+// empty (fail-closed); a comparator reading it as "no constraint" fails OPEN.
+func GitHubScopeWithin(proposed, ceiling json.RawMessage) error {
+	type ghScope struct {
+		Repos       []string          `json:"repos"`
+		Permissions map[string]string `json:"permissions"`
+	}
+	var p, c ghScope
+	if len(proposed) > 0 {
+		if err := json.Unmarshal(proposed, &p); err != nil {
+			return fmt.Errorf("github scope is not decodable: %w", err)
+		}
+	}
+	if len(ceiling) > 0 {
+		if err := json.Unmarshal(ceiling, &c); err != nil {
+			return fmt.Errorf("the deployment ceiling's github scope is not decodable: %w", err)
+		}
+	}
+	allowed := toSet(c.Repos)
+	for _, r := range p.Repos {
+		if !allowed[strings.ToLower(strings.TrimSpace(r))] {
+			return fmt.Errorf("github repo %q is outside the deployment ceiling's repo scope", r)
+		}
+	}
+	for perm, lvl := range p.Permissions {
+		cl, ok := c.Permissions[perm]
+		if !ok {
+			return fmt.Errorf("github permission %q is not in the deployment ceiling's permissions", perm)
+		}
+		if permRank(lvl) > permRank(cl) {
+			return fmt.Errorf("github permission %q at %q is above the deployment ceiling's %q", perm, lvl, cl)
+		}
+	}
+	return nil
+}
+
 func permRank(level string) int {
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "admin":
@@ -489,7 +538,6 @@ func clampOperatorSwitches(out *types.RunPolicySpec, ceiling types.RunPolicySpec
 	}
 	return warns
 }
-
 
 // toolStrictness orders the three effects so a clamp can take the stricter:
 // allow < hold < deny.

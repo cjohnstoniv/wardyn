@@ -36,6 +36,15 @@ export const PEOPLE = {
   COL_SOURCE: "Source",
   COL_ADDED: "Added",
   ROLE_ADMIN: "Admin",
+  // The 0.7 third tier, frozen in docs/design/governance-prompt.md §7.9 as
+  // DIRECTORY.ROLE_SECURITY_ADMIN. It lives HERE, next to ROLE_ADMIN/
+  // ROLE_MEMBER, because §7.9 says so in as many words ("one string for all
+  // three" — picker option, table chip, mapped-role label — "next to
+  // PEOPLE.ROLE_ADMIN / PEOPLE.ROLE_MEMBER, which is why it is title case").
+  // When Phase 6's governance-copy.ts transcribes §7.9's DIRECTORY block for
+  // the combobox, it re-exports this constant rather than retyping the
+  // string: two homes for one frozen label is how they drift.
+  ROLE_SECURITY_ADMIN: "Security admin",
   ROLE_MEMBER: "Member",
   SOURCE_CHART: "From your chart",
   SOURCE_CONSOLE: "Console",

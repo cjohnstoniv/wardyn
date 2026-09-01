@@ -361,7 +361,7 @@ that needs no member secret write at all:
 
 | Variable | Set by |
 |---|---|
-| `WARDYN_BEDROCK_MODEL` | the envelope (a cross-region inference-profile id or an application-inference-profile ARN — **not** a bare foundation-model id) |
+| `WARDYN_BEDROCK_MODEL` | the envelope (a cross-region inference-profile id, or a full `inference-profile` / `application-inference-profile` ARN — **not** a bare foundation-model id) |
 | `WARDYN_BEDROCK_REGION` | the envelope |
 | `bedrock-api-key` secret | the **operator**, once, via the admin token |
 

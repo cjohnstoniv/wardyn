@@ -704,7 +704,6 @@ func hasWarn(warns []string, substr string) bool {
 	return false
 }
 
-
 func TestClamp_ToolRulesNeverWiden(t *testing.T) {
 	ceiling := operatorCeiling(t)
 	ceiling.ToolRules = []types.ToolRule{{Tool: "WebFetch", Effect: types.ToolDeny}}

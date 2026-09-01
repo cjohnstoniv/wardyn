@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Integration tests for migration 0050 (per-principal secrets): a pre-0050
-// `secrets` row (bare `name` primary key) must land at owned_by='' once 0050
+// `secrets` row (bare `name` primary key) must land at owned_by=” once 0050
 // runs, TWO rows sharing a name under DIFFERENT owners must both be
 // admissible (the whole point of widening the primary key), and the primary
 // key must still refuse a genuine duplicate WITHIN one owner — the negative
@@ -47,7 +47,7 @@ func readSecretOwner(t *testing.T, pool *pgxpool.Pool, ownedBy, name string) (fo
 
 // TestMigration0050_PreExistingRowsOwnedByEmpty seeds a row shaped exactly as
 // every secret was before 0.7 (bare name, no owned_by column at all), applies
-// 0050, and asserts the row now reads owned_by='' -- operator-owned, i.e.
+// 0050, and asserts the row now reads owned_by=” -- operator-owned, i.e.
 // exactly today's behavior for every pre-0.7 secret.
 func TestMigration0050_PreExistingRowsOwnedByEmpty(t *testing.T) {
 	pool := databaseBefore(t, secretOwnedByMigration)

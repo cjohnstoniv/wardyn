@@ -111,6 +111,32 @@ func oidcGroupsFromContext(ctx context.Context) []string {
 	return g
 }
 
+// oidcGroupsTruncatedCtxKey carries the PF-26 truncation bit of that same
+// snapshot: sessionGroups sorts the group union and drops the
+// alphabetically-last entries once it hits the cookie byte cap, so a human in
+// enough groups holds a snapshot that is present, non-nil, and INCOMPLETE.
+//
+// A truncated snapshot is exactly as unanswerable as a nil one and every group
+// -scoped decision must treat it that way. It matters most at the governance
+// ceiling: a member whose walling group fell off the cap would resolve to the
+// DEPLOYMENT ceiling with no refusal and no audit line — the tier simply
+// evaporates. It rides beside the snapshot rather than inside it because the
+// snapshot's own type has no room for "and there were more".
+//
+// Published by BOTH auth branches through withHumanIdentity: the SSO branch
+// from the cookie's own bit, the api-token branch from the column stamped at
+// mint (a NULL there — a pre-0.7 token — counts as TRUE, fail-closed).
+type oidcGroupsTruncatedCtxKey struct{}
+
+func withOIDCGroupsTruncated(ctx context.Context, truncated bool) context.Context {
+	return context.WithValue(ctx, oidcGroupsTruncatedCtxKey{}, truncated)
+}
+
+func oidcGroupsTruncatedFromContext(ctx context.Context) bool {
+	t, _ := ctx.Value(oidcGroupsTruncatedCtxKey{}).(bool)
+	return t
+}
+
 // oidcExpiryCtxKey carries the same verified OIDC session's expiry, published
 // by humanOrAdminAuth next to the principal/email/role for the same reason
 // those keys exist: the auth middleware stays the single place that trusts the
@@ -127,23 +153,30 @@ func oidcExpiryFromContext(ctx context.Context) time.Time {
 	return t
 }
 
-// withHumanIdentity publishes the four keys that TOGETHER describe an
+// withHumanIdentity publishes the five keys that TOGETHER describe an
 // authenticated human: who they are (sub), the email an admin may have written
-// a grant against, the role isOperator gates on, and the group snapshot the
-// capability resolver matches. It exists so the SSO-session branch and the
-// api-token branch of humanOrAdminAuth cannot DRIFT: a fifth identity key added
-// to one path and forgotten on the other is exactly how a token would silently
-// resolve to a different permission set than the session that minted it — and
-// for a DENY grant, silently resolving to "no match" is a breach, not a
-// degradation. Both branches call this and nothing else.
+// a grant against, the role isOperator gates on, the group snapshot the
+// capability resolver matches, and whether that snapshot is COMPLETE. It exists
+// so the SSO-session branch and the api-token branch of humanOrAdminAuth cannot
+// DRIFT: a sixth identity key added to one path and forgotten on the other is
+// exactly how a token would silently resolve to a different permission set than
+// the session that minted it — and for a DENY grant, silently resolving to "no
+// match" is a breach, not a degradation. Both branches call this and nothing
+// else.
+//
+// groupsTruncated is a parameter rather than something derived from groups
+// because it CANNOT be derived: a truncated snapshot and a complete one are
+// both non-nil slices of plausible group names. Only the minting side knows,
+// which is why it is stamped into the cookie and into the token row.
 //
 // Session EXPIRY is deliberately NOT here. It is a property of a cookie, not of
 // an identity: an api token has no session to expire, so the key stays zero for
 // one and is set by the SSO branch alone (see oidcExpiryCtxKey).
-func withHumanIdentity(ctx context.Context, sub, email, role string, groups []string) context.Context {
+func withHumanIdentity(ctx context.Context, sub, email, role string, groups []string, groupsTruncated bool) context.Context {
 	ctx = withOIDCHuman(ctx, sub)
 	ctx = withOIDCEmail(ctx, email)
 	ctx = withOIDCRole(ctx, role)
+	ctx = withOIDCGroupsTruncated(ctx, groupsTruncated)
 	return withOIDCGroups(ctx, groups)
 }
 
@@ -342,11 +375,14 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			//
 			// The group snapshot rides along for the capability resolver, copied
 			// verbatim, nil included: nil is the pre-0.6-cookie signal, not an
-			// empty set (see oidcGroupsCtxKey).
+			// empty set (see oidcGroupsCtxKey). Its PF-26 truncation bit comes
+			// with it — a partial snapshot is as unanswerable as a nil one, and
+			// only the cookie knows which it is.
 			ctx := withHumanIdentity(r.Context(), sub,
 				oidc.EmailFromContext(r.Context()),
 				oidc.RoleFromContext(r.Context()),
-				oidc.GroupsFromContext(r.Context()))
+				oidc.GroupsFromContext(r.Context()),
+				oidc.GroupsTruncatedFromContext(r.Context()))
 			// The session expiry rides along so /me can warn ahead of it —
 			// W31-S1-7: there is no refresh, so the alternative is a silent 401
 			// that wipes mid-work console state back to the sign-in gate.
@@ -409,19 +445,96 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 	})
 }
 
-// isOperator reports whether the authenticated caller on ctx may perform
-// admin-only actions. See requireOperator for the rules. A caller with no
-// verified OIDC human on ctx (admin token, local mode, or OIDC not configured)
-// is always an admin — a single shared credential carries no per-human role to
-// demote. Otherwise the caller's role is authoritative and admin-only when it
-// is exactly oidc.RoleAdmin (fail closed on any other value, including an
-// unexpectedly empty one — B1's decodeSession already refuses to hand out a
-// session with an empty role, so this is defense-in-depth, not a real path).
+// isOperator reports whether the authenticated caller on ctx is a SUPER ADMIN
+// — exactly oidc.RoleAdmin. Since 0.7's third tier this is the NARROWER of two
+// named predicates, and the distinction is load-bearing:
+//
+//   - isOperator (here): binds credentials, writes the host, administers users,
+//     and REACHES RUNS ITS HOLDER DOES NOT OWN. It is what a role SNAPSHOT
+//     stamped on an SSH key or an attach ticket means (sshkeys.go,
+//     attach_ticket.go), which is why oidc.RoleSecurityAdmin is not "below"
+//     RoleAdmin on a ladder — it is beside it.
+//   - isSecurityOperator (below): admin OR security_admin — the security
+//     GOVERNANCE surfaces (approvals, audit, permissions, governance profiles).
+//
+// A predicate here is the tier's ONLY definition; nothing in this package may
+// re-derive either from a role comparison of its own. New admin surfaces
+// default to this stricter one (they register on the operatorOnly router
+// group), which is the safe direction for a migration.
+//
+// See requireOperator for the rules. A caller with no verified OIDC human on
+// ctx (admin token, local mode, or OIDC not configured) is always an admin — a
+// single shared credential carries no per-human role to demote. Otherwise the
+// caller's role is authoritative and admin-only when it is exactly
+// oidc.RoleAdmin (fail closed on any other value, including an unexpectedly
+// empty one — B1's decodeSession already refuses to hand out a session with an
+// empty role, so this is defense-in-depth, not a real path).
 func (s *Server) isOperator(ctx context.Context) bool {
 	if oidcHumanFromContext(ctx) == "" {
 		return true // admin token, local mode, or OIDC not configured: no session role to demote
 	}
 	return oidcRoleFromContext(ctx) == oidc.RoleAdmin
+}
+
+// isSecurityOperator reports whether the caller on ctx may perform SECURITY
+// GOVERNANCE actions: read/decide any approval, read the audit chain, write
+// permissions/capability grants, author governance profiles. True for
+// oidc.RoleAdmin (a super admin is a security admin too — the tiers overlap on
+// this surface, they merely do not nest on the run-reach one) and for
+// oidc.RoleSecurityAdmin.
+//
+// SAME no-OIDC-human arm as isOperator, deliberately: the admin token and local
+// mode are one shared credential with no human to demote, and the break-glass
+// recovery path both tiers already depend on. Any drift between the two arms
+// would mean an admin-token deployment could reach one tier and not the other.
+//
+// Ctx-only, and it stays that way: a future delegated/sub-org scope adds
+// isSecurityOperatorFor(ctx, scope) and redefines this one in terms of it, so
+// scope is never encoded in the role VALUE (which would make the role map a
+// tenancy language it cannot be).
+//
+// The in-handler seams that read THIS predicate rather than isOperator, and
+// why (approvals.go carries only same-line pointers — it sits two lines under
+// the file-size gate):
+//
+//   - approvals.go's list, authorizeMemberDecision and the
+//     decision_scope=always gate. The latter two are a LOCKSTEP PAIR: deciding
+//     an approval and persisting that decision are the same authority, one
+//     merely durable, and a tier that may decide but not record would re-decide
+//     the identical request forever. All three are authority over the VERDICT
+//     and never reach INTO a run — deciding writes a decision, it does not open
+//     a PTY, and the attach lanes still require oidc.RoleAdmin.
+//   - audit.go's query + export, runs_policy.go's run list, workspaces.go's
+//     workspace list, policies.go's four read-redaction sites, and helpers.go's
+//     ownsRunOrAdmin — each commented at its own site.
+func (s *Server) isSecurityOperator(ctx context.Context) bool {
+	if oidcHumanFromContext(ctx) == "" {
+		return true // same shared-credential arm as isOperator — see above
+	}
+	role := oidcRoleFromContext(ctx)
+	return role == oidc.RoleAdmin || role == oidc.RoleSecurityAdmin
+}
+
+// requireSecurityOperator is requireOperator's twin for the SECURITY
+// GOVERNANCE route family (the securityOps router group): admin OR
+// security_admin pass, a member gets the same 403 and the same authz.denied
+// audit shape, distinguished only by reason — "security_admin_surface" rather
+// than "admin_surface", so an operator reading the audit log can tell WHICH
+// tier a denial was measured against without correlating paths by hand.
+//
+// The 403 body is byte-identical to requireOperator's on purpose: a member
+// learns that they lack the role, never which of the two tiers a given route
+// sits on (that is a map of the deployment's admin surface).
+func (s *Server) requireSecurityOperator(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.isSecurityOperator(r.Context()) {
+			writeError(w, http.StatusForbidden, "requires admin role")
+			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+				"authz.denied", r.URL.Path, "denied", mustJSON(map[string]any{"reason": "security_admin_surface", "method": r.Method})))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // authFailedRatePerSec and authFailedBurst bound the auth.failed audit emit

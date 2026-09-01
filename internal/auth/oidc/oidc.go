@@ -39,11 +39,8 @@ package oidc
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -203,6 +200,11 @@ type SessionRevocations interface {
 // login rather than write one with an undefined role — and decodeSession
 // treats an empty Role (a pre-0.5 cookie, or a corrupt payload) as no session.
 type Session struct {
+	// V is the payload format version (SessionCodecVersion), stamped by
+	// encodeSession so no caller has to remember it. A payload carrying any
+	// other value — a pre-0.7 cookie's absent key decodes to 0 — is not a
+	// session.
+	V      int       `json:"v"`
 	Sub    string    `json:"sub"`
 	Email  string    `json:"email"`
 	Role   string    `json:"role"`
@@ -239,6 +241,22 @@ type Session struct {
 	// pre-0.6 cookie stays VALID and nobody is forced to re-login by an
 	// upgrade.
 	Groups []string `json:"groups"`
+	// GroupsTruncated reports that Groups is a PARTIAL snapshot — sessionGroups
+	// hit the maxSessionGroupsBytes cap and dropped the alphabetically-last
+	// entries (PF-26).
+	//
+	// It is an AUTHORIZATION INPUT, not telemetry. A member in enough groups
+	// loses the very group whose governance assignment walls them, and without
+	// this bit the ceiling resolver would answer "no group matched" and hand
+	// them the deployment ceiling — a silent widening with no refusal and no
+	// audit line. internal/api therefore treats a truncated snapshot exactly as
+	// it treats a missing one.
+	//
+	// omitempty is SAFE here only because SessionCodecVersion exists: false and
+	// "key absent" mean the same thing within one codec version, and a
+	// pre-0.7 cookie — where they would NOT mean the same thing — never
+	// decodes at all.
+	GroupsTruncated bool `json:"groups_truncated,omitempty"`
 }
 
 // Authenticator provides OIDC login, callback, logout, and session-check handlers.
@@ -576,13 +594,15 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	// tolerantly-decoded claims deriveRole just consumed — a claim malformed
 	// enough to contribute nothing to the role contributes nothing here either,
 	// and never fails the login.
+	groups, groupsTruncated := sessionGroups(rc.Roles, gc.Groups)
 	sess := Session{
-		Sub:      idToken.Subject,
-		Email:    claims.Email,
-		Role:     role,
-		Expiry:   idToken.Expiry,
-		IssuedAt: time.Now().UTC(), // D16: the cutoff SessionRevocations compares against
-		Groups:   sessionGroups(rc.Roles, gc.Groups),
+		Sub:             idToken.Subject,
+		Email:           claims.Email,
+		Role:            role,
+		Expiry:          idToken.Expiry,
+		IssuedAt:        time.Now().UTC(), // D16: the cutoff SessionRevocations compares against
+		Groups:          groups,
+		GroupsTruncated: groupsTruncated,
 	}
 	if sess.Expiry.IsZero() {
 		// Default to 1 hour if the IdP didn't set an expiry.
@@ -666,79 +686,6 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-// ─── session encoding ────────────────────────────────────────────────────────
-
-// encodeSession JSON-encodes the session, appends an HMAC-SHA256 tag, and
-// returns a signed HttpOnly SameSite=Lax cookie.
-func (a *Authenticator) encodeSession(sess Session) (*http.Cookie, error) {
-	payload, err := json.Marshal(sess)
-	if err != nil {
-		return nil, fmt.Errorf("oidc: marshal session: %w", err)
-	}
-	sig := sessionHMAC(a.hmacKey, payload)
-	// Encode as base64(payload) + "." + base64(sig).
-	encoded := base64.RawURLEncoding.EncodeToString(payload) +
-		"." +
-		base64.RawURLEncoding.EncodeToString(sig)
-
-	cookie := &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    encoded,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   a.cfg.SecureCookies, // true only under TLS (direct or terminated); false over plain HTTP
-		Expires:  sess.Expiry,
-	}
-	return cookie, nil
-}
-
-// decodeSession reads and verifies the session cookie from the request.
-// Returns ErrNoSession if the cookie is absent, ErrInvalidSession if tampered
-// or expired according to the signature.
-func (a *Authenticator) decodeSession(r *http.Request) (Session, error) {
-	c, err := r.Cookie(sessionCookieName)
-	if err != nil {
-		return Session{}, ErrNoSession
-	}
-	parts := strings.SplitN(c.Value, ".", 2)
-	if len(parts) != 2 {
-		return Session{}, ErrInvalidSession
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		return Session{}, ErrInvalidSession
-	}
-	sig, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return Session{}, ErrInvalidSession
-	}
-	expected := sessionHMAC(a.hmacKey, payload)
-	if !hmac.Equal(sig, expected) {
-		return Session{}, ErrInvalidSession
-	}
-	var sess Session
-	if err := json.Unmarshal(payload, &sess); err != nil {
-		return Session{}, ErrInvalidSession
-	}
-	if sess.Role == "" {
-		// Pre-0.5 cookie (the role field didn't exist yet) or a corrupt/empty
-		// payload: never treat an undefined role as authenticated. Middleware
-		// falls through on this exactly like any other invalid session,
-		// forcing a re-login where CallbackHandler derives and stamps a role
-		// fresh — never a 500.
-		return Session{}, ErrInvalidSession
-	}
-	return sess, nil
-}
-
-// sessionHMAC returns the HMAC-SHA256 of payload under key.
-func sessionHMAC(key, payload []byte) []byte {
-	h := hmac.New(sha256.New, key)
-	h.Write(payload)
-	return h.Sum(nil)
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

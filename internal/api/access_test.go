@@ -171,6 +171,9 @@ func newAccessAuth(t *testing.T, roleMap map[string]string, defaultRole string, 
 func accessSession(t *testing.T, sub, email, role string, groups []string) *http.Cookie {
 	t.Helper()
 	payload, err := json.Marshal(oidc.Session{
+		// Hand-rolled payload: stamp the codec version or decodeSession reads it
+		// as a pre-0.7 cookie and refuses it (see ssoSession in rbac_test.go).
+		V:   oidc.SessionCodecVersion,
 		Sub: sub, Email: email, Role: role, Expiry: time.Now().UTC().Add(time.Hour), Groups: groups,
 	})
 	if err != nil {
@@ -1117,5 +1120,91 @@ func TestAccess_DeleteAcknowledgeAcceptsParseBoolForms(t *testing.T) {
 	}
 	if len(st.rows) != 1 {
 		t.Fatalf("blocked delete must not have removed the row; rows = %+v", st.rows)
+	}
+}
+
+// ─── the third tier: security_admin (0.7 §B, migration 0053) ──────────────
+
+// TestAccess_SecurityAdminMappingPersists_PGBacked is the ONE test in this
+// file that cannot use roleMapStore, and that is the entire point: the bug it
+// pins lived exactly in the gap between the two halves. oidc.ValidRole was
+// widened to accept RoleSecurityAdmin while migration 0051's
+// `CHECK (role IN ('admin','member'))` still refused it, so this write passed
+// every in-handler gate — canonicalization, collision, email opt-in, posture
+// flip, lockout — and then 500'd at the INSERT. An in-memory double has no
+// CHECK to violate and reports 201 either way; only the real schema can tell
+// the two states apart. Guarded by WARDYN_TEST_PG (throwawayPGPool), which
+// applies the full migration chain including 0053.
+//
+// Chart map non-empty so the posture-flip guard is inert (nothing here is
+// about that guard), and adminToken so the lockout guard takes its
+// no-OIDC-human break-glass exemption — the same setup
+// TestAccess_ReAddFlipsRoleAndReturns200 uses, on a real store.
+func TestAccess_SecurityAdminMappingPersists_PGBacked(t *testing.T) {
+	pool := throwawayPGPool(t)
+	pg := store.NewPG(pool)
+
+	cfg := baseTestConfig(newHarness(t), pg)
+	cfg.OIDC = newAccessAuth(t, map[string]string{"chart-admin": oidc.RoleAdmin}, "", nil, nil)
+	srv := New(cfg)
+
+	w := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken,
+		`{"value":"sec-team","role":"security_admin"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s\n"+
+			"a 500 here means the role_mappings.role CHECK still refuses %q "+
+			"(migration 0053 missing or not applied) while oidc.ValidRole accepts it",
+			w.Code, w.Body.String(), oidc.RoleSecurityAdmin)
+	}
+
+	// The status alone would pass against a store that swallowed the role;
+	// read the row back through the SAME pg store to prove the value the
+	// CHECK had to admit is the value that landed.
+	rows, err := pg.ListRoleMappings(context.Background())
+	if err != nil {
+		t.Fatalf("list role mappings: %v", err)
+	}
+	var got *types.RoleMapping
+	for i := range rows {
+		if rows[i].Value == "sec-team" {
+			got = &rows[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("no sec-team row persisted; rows = %+v", rows)
+	}
+	if got.Role != oidc.RoleSecurityAdmin {
+		t.Errorf("persisted role = %q, want %q", got.Role, oidc.RoleSecurityAdmin)
+	}
+}
+
+// TestAccess_InvalidRoleNamesAllThreeRoles: the 400 an unrecognized role gets
+// must NAME the third tier. TestAccess_InvalidShapeRejected's "invalid role"
+// case already pins the STATUS; this pins the MESSAGE, which is what an
+// operator actually reads (and greps) when a write is refused — a two-role
+// message would tell them security_admin is not a role, which is now false.
+// Deliberately store-less-by-fake: this arm returns before the store is ever
+// touched, so it needs no PG.
+func TestAccess_InvalidRoleNamesAllThreeRoles(t *testing.T) {
+	auth := newAccessAuth(t, map[string]string{"chart-admin": oidc.RoleAdmin}, "", nil, nil)
+	st := &roleMapStore{}
+	srv := accessServer(t, auth, st)
+
+	w := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken,
+		`{"value":"eng-team","role":"securityadmin"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	for _, role := range []string{oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleMember} {
+		if !strings.Contains(body.Error, role) {
+			t.Errorf("error %q does not name role %q — all three valid roles must be listed", body.Error, role)
+		}
+	}
+	if len(st.rows) != 0 {
+		t.Errorf("a refused role must not reach the store; rows = %+v", st.rows)
 	}
 }

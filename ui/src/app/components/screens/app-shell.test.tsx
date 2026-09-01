@@ -10,14 +10,17 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { AppShell, MobileNav, TopBar, useFocusMode } from "./app-shell";
-import { useRoleResolved } from "../wardyn/operator-context";
+import { useRoleResolved, type Role } from "../wardyn/operator-context";
 import { ThemeProvider } from "../wardyn/theme-provider";
 import type { ConfinementClass } from "../../lib/types";
 
 // below md the desktop aside is hidden, so this Sheet-based hamburger is
 // the ONLY navigation. These pins fail if the drawer stops opening, drops nav
 // items, or loses its aria-expanded/Escape wiring.
-function renderMobileNav(role: "admin" | "member" = "admin") {
+// role is the full three-valued union since 0.7. operator/securityOperator
+// mirror the server's two predicates exactly: "admin" is both, "security_admin"
+// is only the second, "member" is neither.
+function renderMobileNav(role: Role = "admin") {
   return render(
     <MemoryRouter>
       <MobileNav
@@ -30,6 +33,7 @@ function renderMobileNav(role: "admin" | "member" = "admin") {
           method: "sso",
           resolved: true,
           operator: role === "admin",
+          securityOperator: role !== "member",
           role,
           sessionExpiresAt: null,
           memberLocalDirRoot: null,
@@ -435,7 +439,7 @@ describe("SidebarNav (member role — B3)", () => {
 // Phase 5: the account-menu Demos entry (TopBar, not SidebarNav — the
 // describe block above only drives the sidebar) is meaningless on a member's
 // own Getting Started, which has no /setup?step= deep link at all.
-function renderTopBar(role: "admin" | "member") {
+function renderTopBar(role: Role) {
   return render(
     <MemoryRouter>
       <ThemeProvider>
@@ -448,6 +452,7 @@ function renderTopBar(role: "admin" | "member") {
             method: "sso",
             resolved: true,
             operator: role === "admin",
+            securityOperator: role !== "member",
             role,
             sessionExpiresAt: null,
             memberLocalDirRoot: null,

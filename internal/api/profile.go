@@ -118,7 +118,20 @@ func (s *Server) handleSynthesizeProfile(w http.ResponseWriter, r *http.Request)
 	// see synthGitHubRepos), so widen this call's own ceiling copy to that set
 	// when the operator's ceiling itself sets none, or the new deny-all floor
 	// would strip access this synthesis already proved legitimate.
-	ceiling := widenCeilingRepoAllowlist(s.cfg.DefaultPolicy, synthGitHubRepos(synth))
+	//
+	// The base is the ACTING PRINCIPAL's ceiling (effectiveCeiling), not the
+	// deployment's. A synthesized profile is a PROPOSAL a human promotes into a
+	// stored policy, so grading it against a ceiling wider than the one its
+	// author actually runs under would hand them a green proposal their own
+	// next run then clamps away. The widenCeilingRepoAllowlist wrapper stays
+	// exactly where it was — it is about this synthesis's own already-proven
+	// repos and applies to whichever ceiling sits underneath it.
+	base, cerr := s.effectiveCeiling(ctx)
+	if cerr != nil {
+		writeCeilingError(w, cerr)
+		return
+	}
+	ceiling := widenCeilingRepoAllowlist(base.Spec, synthGitHubRepos(synth))
 	clamped, clampWarns := composer.Clamp(synth, ceiling)
 	if verr := validatePolicySpec(clamped); verr != nil {
 		writeError(w, http.StatusUnprocessableEntity, "synthesized profile invalid: "+verr.Error())

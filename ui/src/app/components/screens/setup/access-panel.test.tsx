@@ -217,6 +217,55 @@ describe("AccessPanel — merged table (Variant A)", () => {
   });
 });
 
+// The 0.7 third tier. The two-role ternary these replace labelled ANY
+// non-"admin" role "Member", so a security_admin mapping was rendered as the
+// least-privileged role on the very screen that assigns roles.
+describe("AccessPanel — the security_admin tier (§B, §7.9)", () => {
+  it("a security_admin mapping's chip reads ROLE_SECURITY_ADMIN, never ROLE_MEMBER", () => {
+    renderPanel(
+      baseAccess({
+        mappings: [
+          {
+            id: "c9",
+            value: "wardyn.securityadmin",
+            role: "security_admin",
+            source: "console",
+            shadowed: false,
+            shadow_cause: "",
+            created_at: "2026-09-01T00:00:00Z",
+          },
+        ],
+        // Unset so the Defaults block renders DEFAULT_ROLE_UNSET rather than
+        // its own "Member" chip — this test is about the MAPPING's chip, and
+        // the fixture's default_role would otherwise supply a second one.
+        default_role: "",
+      }),
+    );
+    // Both labels also appear as picker BUTTONS further down the panel, so
+    // filter those out — this asserts on the row's chip specifically.
+    const chip = (label: string) => screen.queryAllByText(label).filter((el) => el.tagName !== "BUTTON");
+    expect(chip(PEOPLE.ROLE_SECURITY_ADMIN)).toHaveLength(1);
+    expect(chip(PEOPLE.ROLE_MEMBER)).toHaveLength(0);
+  });
+
+  it("the role picker offers all three roles and posts the third one on the wire", async () => {
+    upsertMappingMock.mockResolvedValue({ mapping: { id: "new", value: "sec-team", role: "security_admin" }, created: true });
+    renderPanel(baseAccess({ posture: { map_empty: false, before: "an admin", after: "sign in as a member", changes: true } }));
+
+    await userEvent.type(screen.getByLabelText(PEOPLE.FIELD_VALUE), "sec-team");
+    await userEvent.click(screen.getByRole("button", { name: PEOPLE.ROLE_SECURITY_ADMIN }));
+    await userEvent.click(screen.getByRole("button", { name: PEOPLE.ADD_CTA }));
+
+    // The WIRE value, not the label — the picker's job is to send the string
+    // oidc.ValidRole and the role_mappings CHECK both accept.
+    expect(upsertMappingMock).toHaveBeenCalledWith({
+      value: "sec-team",
+      role: "security_admin",
+      acknowledge_access_change: undefined,
+    });
+  });
+});
+
 describe("AccessPanel — add mapping, posture guard (§2.1/§7.3)", () => {
   it("submits directly when the write would NOT flip posture (map already non-empty)", async () => {
     upsertMappingMock.mockResolvedValue({ mapping: { id: "new", value: "eng-team", role: "member" }, created: true });

@@ -232,7 +232,27 @@ func TestClosedEnumChecksMatchConstants(t *testing.T) {
 		{"base_images", "kind", stringSet("registry", "custom", "byo")},
 		// 0051's role — a small, complete set with real Go constants (unlike
 		// capability_grants.capability above), so it gets a CHECK and this pin.
-		{"role_mappings", "role", stringSet(oidc.RoleAdmin, oidc.RoleMember)},
+		// Pinned to the CONSTANTS oidc.ValidRole itself accepts, never a
+		// literal list: 0.7 added the third tier (RoleSecurityAdmin) and
+		// widened ValidRole for it, which left POST /access/mappings
+		// accepting a role 0051's CHECK still refused — a write that passed
+		// API validation and then 500'd at the database. 0053 widens the
+		// CHECK; naming the constants here is what makes a FOURTH role
+		// impossible to land on one side only.
+		{"role_mappings", "role", stringSet(oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleMember)},
+		// 0052's governance_assignments.subject_type — the SAME closed enum
+		// capability_grants.subject_type above carries, reused rather than
+		// re-enumerated (types.CapabilitySubjectType is the one Go definition
+		// for "who is this row written against"). Pinned here so a fourth
+		// subject type cannot land on one table's CHECK and not the other's,
+		// which is precisely the drift this test exists to catch — and note
+		// there is NO governance_profiles.limits pin: that column carries no
+		// CHECK at all, on the same "closed Go enum validated at the write
+		// boundary" doctrine 0042's capability column follows.
+		{"governance_assignments", "subject_type", stringSet(
+			string(types.CapabilitySubjectUser), string(types.CapabilitySubjectGroup),
+			string(types.CapabilitySubjectAll),
+		)},
 	}
 	for _, c := range cases {
 		t.Run(c.table+"."+c.column, func(t *testing.T) {

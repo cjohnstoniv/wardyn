@@ -77,6 +77,11 @@ export interface ShellMeta {
   // /me resolves and explicitly says otherwise — an unresolved or failed
   // fetch must never read as "viewer".
   operator: boolean;
+  // The SECOND server predicate (admin OR security_admin — /me's
+  // `security_operator`), gating the security-governance surfaces. Same
+  // fail-open default as `operator`, and deliberately a separate field: with
+  // three role values the two booleans are not complements of each other.
+  securityOperator: boolean;
   // The same B1-derived tier as `operator`, named directly (B3) — fail-open
   // "admin" for the identical three cases (unresolved /me, a failed fetch, an
   // unwrapped test). Kept alongside `operator` rather than replacing it: every
@@ -98,6 +103,7 @@ function useMeta(): ShellMeta {
     method: "",
     resolved: false,
     operator: true,
+    securityOperator: true,
     role: "admin",
     sessionExpiresAt: null,
     memberLocalDirRoot: null,
@@ -114,6 +120,9 @@ function useMeta(): ShellMeta {
           method: me?.method || "",
           resolved: true,
           operator: me?.operator ?? true,
+          // ?? true, not `?? me?.operator`: an older daemon that never sends
+          // this field must fail OPEN like every other identity signal here.
+          securityOperator: me?.security_operator ?? true,
           role: me?.role ?? "admin",
           sessionExpiresAt: me?.session_expires_at
             ? new Date(me.session_expires_at)
@@ -215,6 +224,11 @@ const NAV_ITEMS: NavItem[] = [
 // simply not offering it.
 const MEMBER_NAV_PATHS = new Set(["/runs", "/approvals", "/workspaces"]);
 function navItemsForRole(role: Role): NavItem[] {
+  // `!== "member"` and NOT `=== "admin"`, which is what makes this correct
+  // unchanged under the three-tier model: a SECURITY ADMIN gets the full nav
+  // (they reach approvals, audit, permissions and governance), and each of
+  // those screens gates its own writes on the right predicate. Hiding is
+  // cosmetic anyway — see the note above.
   if (role !== "member") return NAV_ITEMS;
   return NAV_ITEMS.filter((i) => MEMBER_NAV_PATHS.has(i.to));
 }
@@ -417,6 +431,7 @@ export function AppShell({
   return (
     <OperatorProvider
       operator={meta.operator}
+      securityOperator={meta.securityOperator}
       principal={meta.principal}
       memberLocalDirRoot={meta.memberLocalDirRoot}
     >

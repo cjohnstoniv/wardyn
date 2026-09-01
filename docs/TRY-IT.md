@@ -218,7 +218,9 @@ the real credential out of the sandbox *except* the Bedrock access-key path
   > resident path instead injects a short-lived, auto-rotating token.)
 - **AWS Bedrock** — operator-configured (not a per-run choice). Set
   `WARDYN_BEDROCK_REGION` + `WARDYN_BEDROCK_MODEL` (a cross-region *inference-profile*
-  id, not a bare model id) and add credentials to the secret store:
+  id, or the profile's full ARN — `arn:aws:bedrock:<region>:<acct>:inference-profile/<id>`
+  or `…:application-inference-profile/<id>`, which is how quota, logging and guardrails
+  attach to the profile; not a bare model id) and add credentials to the secret store:
   - `bedrock-api-key` (a Bedrock **bearer** token) → proxy-injected as
     `Authorization: Bearer` into `bedrock-runtime.*`, **never resident** (preferred).
   - or `aws-access-key-id` + `aws-secret-access-key` (+ optional `aws-session-token`)

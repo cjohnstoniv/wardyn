@@ -112,6 +112,11 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
                     <span className="inline-flex items-center gap-2">
                       <KeyRound className="size-3.5 text-cyan" />
                       {k.name || <span className="text-muted-foreground">(unnamed)</span>}
+                      {/* k.role is the KEY's stamped role, NOT the viewer's
+                          session role: it means exactly "this key reaches runs
+                          you do not own" and can only ever be admin or member
+                          (internal/api/sshkeys.go never stamps security_admin,
+                          deliberately). Unchanged by the three-tier model. */}
                       {k.role === "admin" && (
                         <Chip
                           tone="warning"

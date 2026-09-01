@@ -110,13 +110,19 @@ func servePage[T any](w http.ResponseWriter, page store.Page, pageFn func(store.
 
 // handleListRuns returns runs in reverse creation order, paginated by
 // ?limit=&offset= (see parseListPage). A member sees only runs they created
-// (store.RunsByCreatorPager); an admin sees every run, unchanged.
+// (store.RunsByCreatorPager); an admin — and a security admin — sees every run.
+//
+// isSecurityOperator, not isOperator: an approval or an audit line names a run
+// id, and a tier that can decide the one but cannot see the other is doing
+// incident response through a keyhole. LISTING a run is not REACHING it: the
+// attach lanes (ticket, UI gateway, SSH gateway) all still require
+// oidc.RoleAdmin, so this widens visibility and nothing else.
 func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 	page, ok := parseListPage(w, r, defaultListLimit)
 	if !ok {
 		return
 	}
-	if !s.isOperator(r.Context()) {
+	if !s.isSecurityOperator(r.Context()) {
 		creatorPager, capable := s.cfg.Store.(store.RunsByCreatorPager)
 		if !capable {
 			// Fail CLOSED (never fall back to the unscoped admin listing below —
@@ -208,18 +214,33 @@ func (s *Server) effectiveUIApps(ctx context.Context, runID uuid.UUID) ([]types.
 }
 
 // resolvePolicy returns the spec + policy id to attach. When policyID is nil it
-// returns the configured default with a nil id (the default is not a stored row).
-func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID) (types.RunPolicySpec, *uuid.UUID, error) {
-	// Clone before handing the spec out. cfg.DefaultPolicy is a process-global
-	// shared by every run; a shallow struct copy still shares its slice backing
-	// arrays, so a caller's `append` to AllowedDomains (unionAllowedDomains, the
+// returns the caller's own CEILING with a nil id (no stored row is involved).
+//
+// ceiling ARRIVES as a parameter rather than being resolved here, and that is
+// the whole reason it exists: this used to hand back Config.DefaultPolicy
+// unconditionally — the DEPLOYMENT's ceiling, not necessarily this principal's.
+// A member under a governance profile who authors no policy at all has to get
+// THEIR ceiling, and "no policy authored" is the most-travelled create path
+// there is, so leaving it on the site-wide spec would have made the feature
+// optional in practice. For an UNASSIGNED principal the ceiling IS
+// DefaultPolicy, so this is byte-for-byte today for them.
+//
+// The stored branch is deliberately untouched here: a stored row is
+// admin-authored content, and bounding it to the caller's ceiling needs the
+// full member pipeline rather than a spec swap — that is resolveRunPolicy's
+// job (PF-1/PF-23).
+func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID, ceiling governanceCeiling) (types.RunPolicySpec, *uuid.UUID, error) {
+	// Clone before handing the spec out. The ceiling is either cfg.DefaultPolicy
+	// — a process-global shared by every run — or a freshly-read profile row; a
+	// shallow struct copy of either still shares its slice backing arrays, so a
+	// caller's `append` to AllowedDomains (unionAllowedDomains, the
 	// SCM/workspace egress unions) wrote into the global's spare capacity — two
 	// concurrent create-runs then raced the same element, one run's egress domain
 	// replacing another's in the allowlist passed to its proxy sidecar, and any
 	// in-place edit (e.g. the preflight dry-run's grant filter) leaked into every
 	// subsequent run. Cloning at this single seam fixes every caller at once.
 	if policyID == nil {
-		return s.cfg.DefaultPolicy.Clone(), nil, nil
+		return ceiling.Spec.Clone(), nil, nil
 	}
 	p, err := s.cfg.Store.GetPolicy(ctx, *policyID)
 	if err != nil {
@@ -356,6 +377,12 @@ func principalFromRequest(r *http.Request) string {
 // (adminTokenPrincipal or a local-mode operator string) — an operator secret
 // must land in the "" namespace regardless of which string identifies that
 // particular operator caller.
+//
+// DELIBERATELY isOperator: this is NAMESPACE ISOLATION, not an admin surface.
+// A security admin owns their own secrets and their own workspaces like any
+// other principal — dropping them into the shared operator namespace would
+// hand them the deployer's credential material, which is precisely the reach
+// the three-tier split withholds (internal/auth/oidc's RoleSecurityAdmin).
 func (s *Server) secretOwnerFromRequest(r *http.Request) string {
 	if s.isOperator(r.Context()) {
 		return ""

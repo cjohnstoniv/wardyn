@@ -45,6 +45,14 @@ func decodePolicyRequest(w http.ResponseWriter, r *http.Request) (policyRequest,
 
 // handleListPolicies returns policies in reverse creation order, paginated by
 // ?limit=&offset= (see parseListPage).
+//
+// The four policy-READ redaction sites in this file (here x2, handleGetPolicy,
+// handleGetDefaultPolicy) all pass isSecurityOperator rather than isOperator:
+// a security admin authors governance profiles against these ceilings and
+// cannot do it against a redacted copy of them. Policy WRITES stay super-only
+// at the router — a stored policy is selectable CONTENT, and a security admin
+// who could author one could pair any operator secret with egress of their
+// choosing and simply select it.
 func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 	page, ok := parseListPage(w, r, defaultListLimit)
 	if !ok {
@@ -54,12 +62,12 @@ func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 	if pg, ok := s.cfg.Store.(store.Pager); ok {
 		pageFn = func(p store.Page) ([]types.RunPolicy, error) {
 			ps, err := pg.ListPoliciesPage(r.Context(), p)
-			return redactPoliciesForRead(ps, s.isOperator(r.Context())), err
+			return redactPoliciesForRead(ps, s.isSecurityOperator(r.Context())), err
 		}
 	}
 	servePage(w, page, pageFn, func() ([]types.RunPolicy, error) {
 		ps, err := s.cfg.Store.ListPolicies(r.Context())
-		return redactPoliciesForRead(ps, s.isOperator(r.Context())), err
+		return redactPoliciesForRead(ps, s.isSecurityOperator(r.Context())), err
 	})
 }
 
@@ -77,17 +85,52 @@ func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "get policy: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, redactPolicyForRead(p, s.isOperator(r.Context())))
+	writeJSON(w, http.StatusOK, redactPolicyForRead(p, s.isSecurityOperator(r.Context())))
 }
 
-// handleGetDefaultPolicy returns the control plane's configured default policy
-// spec — the ceiling every run created without a policy_id gets, and (per
-// composer.Clamp / inline_policy.go) the same ceiling a member's inline policy
-// is clamped against. W14-S1-6: previously unexposed by UI, CLI or API —
-// policies.tsx's own comment said so. Member-reachable like the other policy
-// reads (routes.go), since members are the ones actually clamped by it.
+// defaultPolicyResponse is GET /policies/default's body: the resolved ceiling
+// spec, EMBEDDED so the shape every existing consumer parses is unchanged, plus
+// the name of the governance profile it came from.
+//
+// governance_profile_name is ADDITIVE and omitted entirely for an unassigned
+// caller. "" would be a value the console then has to special-case, while an
+// absent key already decodes as "no profile" in the TS mirror. It exists
+// because the spec alone cannot answer the question a member actually has: the
+// New Run ceiling line and the Getting Started governance row both need to name
+// WHICH profile bounds them, and the name is the only handle an admin and a
+// member share.
+type defaultPolicyResponse struct {
+	types.RunPolicySpec
+	GovernanceProfileName string `json:"governance_profile_name,omitempty"`
+}
+
+// handleGetDefaultPolicy returns THE CALLER'S ceiling — the spec a run created
+// without a policy_id gets, and (per composer.Clamp / inline_policy.go) the
+// same ceiling their inline policy is clamped against. W14-S1-6: previously
+// unexposed by UI, CLI or API — policies.tsx's own comment said so.
+// Member-reachable like the other policy reads (routes.go), since members are
+// the ones actually clamped by it.
+//
+// ROUTED through effectiveCeiling, and this endpoint is a good part of why the
+// resolver is safe to have at all. Its own documentation defines it as "the
+// ceiling a member is clamped against", so the moment ceilings became
+// per-principal, answering with Config.DefaultPolicy made it a lie for exactly
+// the members under a profile. It is also what makes user-over-group precedence
+// defensible: the REAL ceiling is readable by the person it binds, rather than
+// being an inference only an admin can make.
 func (s *Server) handleGetDefaultPolicy(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, redactSpecForRead(s.cfg.DefaultPolicy, s.isOperator(r.Context())))
+	ceiling, err := s.effectiveCeiling(r.Context())
+	if err != nil {
+		writeCeilingError(w, err)
+		return
+	}
+	resp := defaultPolicyResponse{
+		RunPolicySpec: redactSpecForRead(ceiling.Spec, s.isSecurityOperator(r.Context())),
+	}
+	if ceiling.Profile != nil {
+		resp.GovernanceProfileName = ceiling.Profile.Name
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // redactPolicyForRead returns p with any llm_inspection.workspace_secret_values

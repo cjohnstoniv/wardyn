@@ -58,9 +58,26 @@ import (
 type routeClass string
 
 const (
-	// classAdmin: only the admin role (or the admin token / local mode
-	// ceiling) reaches the handler; a member is refused with 403.
+	// classAdmin: only the SUPER admin role (or the admin token / local mode
+	// ceiling) reaches the handler; a member AND a security_admin are both
+	// refused with 403. Since 0.7 that second refusal is half the class's
+	// meaning — see classSecurity.
 	classAdmin routeClass = "admin"
+	// classSecurity: the 0.7 SECOND admin tier (§B) — admin OR security_admin
+	// reaches the handler (routes.go's securityOps group,
+	// requireSecurityOperator), a member is refused with the BYTE-IDENTICAL
+	// 403 classAdmin writes. The two admin classes are NOT a ladder: every
+	// classAdmin route refuses a security_admin, so the split is only real if
+	// BOTH directions are probed, which TestSecurityAdminRouteTier does over
+	// this same table.
+	//
+	// 20 routes carry it: §B's 14 SEC of the 40 gated routes (sessions revoke ·
+	// workspace approved-/denied-egress + record + promote-egress ·
+	// site-config's two probes · permissions x4 · the two admin token twins ·
+	// audit chain verify) plus /governance's 6, which are new in 0.7 and
+	// outside that count. Everything else gated stays classAdmin — /policies
+	// writes and /access included, deliberately.
+	classSecurity routeClass = "security"
 	// classMember: any authenticated caller (admin or member) reaches the
 	// handler; unauthenticated is refused with 401. Some member-class routes
 	// SCOPE their response to the caller's own data internally (GET /runs,
@@ -116,62 +133,114 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /auth/callback": {class: classAnonymous},
 	"GET /auth/logout":   {class: classAnonymous},
 
-	// ── admin ──
-	"GET /metrics": {class: classAdmin},
-	// The admin twins of /me/tokens: the deployment-wide inventory names other
-	// humans, and revoke-any is the remediation path for a token whose owner was
-	// demoted or has left (migration 0045's stamp ceiling).
-	"GET /api/v1/tokens":                                 {class: classAdmin},
-	"DELETE /api/v1/tokens/{id}":                         {class: classAdmin},
+	// ── admin (SUPER only: a security_admin is refused here too) ──
+	"GET /metrics":                                       {class: classAdmin},
 	"POST /api/v1/setup/onboarding-complete":             {class: classAdmin},
 	"POST /api/v1/setup/harness-login":                   {class: classAdmin},
 	"PUT /api/v1/setup/harness-credential/{provider}":    {class: classAdmin},
 	"DELETE /api/v1/setup/harness-credential/{provider}": {class: classAdmin},
-	"POST /api/v1/policies":                              {class: classAdmin},
-	"PUT /api/v1/policies/{id}":                          {class: classAdmin},
-	"DELETE /api/v1/policies/{id}":                       {class: classAdmin},
-	"POST /api/v1/sources":                               {class: classAdmin},
-	"POST /api/v1/sources/{id}/scan":                     {class: classAdmin},
-	"DELETE /api/v1/sources/{id}":                        {class: classAdmin},
-	"POST /api/v1/base-images":                           {class: classAdmin},
-	"DELETE /api/v1/base-images/{id}":                    {class: classAdmin},
-	"PUT /api/v1/workspaces/{id}/approved-egress":        {class: classAdmin},
-	"PUT /api/v1/workspaces/{id}/denied-egress":          {class: classAdmin},
-	"PUT /api/v1/workspaces/{id}/llm-cred":               {class: classAdmin},
-	"PUT /api/v1/workspaces/{id}/requirements":           {class: classAdmin},
+	// The stored-policy WRITES stay SUPER even though /governance's profile
+	// authoring is classSecurity (§B, decided): a stored run_policy is
+	// selectable CONTENT, so a SEC write path here would re-open the credential
+	// mint through a side door — author a policy pairing an operator secret
+	// with attacker egress, then simply select it. The policy READS are
+	// classMember below (redacted for anyone outside the security tier).
+	"POST /api/v1/policies":        {class: classAdmin},
+	"PUT /api/v1/policies/{id}":    {class: classAdmin},
+	"DELETE /api/v1/policies/{id}": {class: classAdmin},
+	// Library sources + base images: supply-chain admission, SUPER.
+	"POST /api/v1/sources":            {class: classAdmin},
+	"POST /api/v1/sources/{id}/scan":  {class: classAdmin},
+	"DELETE /api/v1/sources/{id}":     {class: classAdmin},
+	"POST /api/v1/base-images":        {class: classAdmin},
+	"DELETE /api/v1/base-images/{id}": {class: classAdmin},
+	// The three workspace routes that BIND CREDENTIAL MATERIAL or WRITE THE
+	// HOST. Their egress-decision siblings (approved-/denied-egress, record,
+	// promote-egress) are classSecurity below — same handler file, same
+	// scopedWorkspaceWrite helper, different tier, decided at the router.
+	"PUT /api/v1/workspaces/{id}/llm-cred":     {class: classAdmin},
+	"PUT /api/v1/workspaces/{id}/requirements": {class: classAdmin},
 	// Offboarding (O6): admin-only, and gated by requireOperator rather than in
 	// the handler precisely so the member refusal is a CONSTANT 403 that never
 	// varies with whether the named workspace exists.
-	"POST /api/v1/workspaces/{id}/reassign":                     {class: classAdmin},
-	"POST /api/v1/workspaces/{id}/record":                       {class: classAdmin},
-	"POST /api/v1/workspaces/{id}/record/{task}/promote-egress": {class: classAdmin},
-	"POST /api/v1/workspaces/{id}/env-as-code/write":            {class: classAdmin},
-	"PUT /api/v1/site-config":                                   {class: classAdmin},
-	"POST /api/v1/site-config/test-proxy":                       {class: classAdmin},
-	"POST /api/v1/site-config/test-redirect":                    {class: classAdmin},
-	"PUT /api/v1/integrations/{id}":                             {class: classAdmin},
-	"DELETE /api/v1/integrations/{id}":                          {class: classAdmin},
-	"GET /api/v1/permissions":                                   {class: classAdmin},
-	"POST /api/v1/permissions/grants":                           {class: classAdmin},
-	"DELETE /api/v1/permissions/grants/{id}":                    {class: classAdmin},
-	"PUT /api/v1/permissions/enforcement":                       {class: classAdmin},
+	"POST /api/v1/workspaces/{id}/reassign":          {class: classAdmin},
+	"POST /api/v1/workspaces/{id}/env-as-code/write": {class: classAdmin},
+	// The PUT replaces the WHOLE site-config document, integration credential
+	// refs included — so it stays SUPER while its two non-mutating probes go
+	// classSecurity. A SEC-writable per-field subset needs per-field authz
+	// (phase 2), not a second gate on the same full-document write.
+	"PUT /api/v1/site-config":          {class: classAdmin},
+	"PUT /api/v1/integrations/{id}":    {class: classAdmin},
+	"DELETE /api/v1/integrations/{id}": {class: classAdmin},
 	// Access / role mappings (migration 0051, Phase 2 lane A): the console's
 	// Getting Started -> People editor over the store half of
-	// internal/auth/oidc's RoleMappingSource. Same admin-only posture as
-	// /permissions above — this bounds who derives admin at ALL, a bigger
-	// blast radius than a single capability.
+	// internal/auth/oidc's RoleMappingSource. SUPER-only, including BOTH reads,
+	// and the contrast with /permissions (classSecurity below) is the point: a
+	// security admin who could write role mappings would map themselves to
+	// admin, and the GET leaks the operator-email target list. This bounds who
+	// derives admin AT ALL, a bigger blast radius than any capability.
 	"GET /api/v1/access":                  {class: classAdmin},
 	"POST /api/v1/access/mappings":        {class: classAdmin},
 	"DELETE /api/v1/access/mappings/{id}": {class: classAdmin},
 	"POST /api/v1/access/preview":         {class: classAdmin},
-	"POST /api/v1/sessions/revoke":        {class: classAdmin},
-	// The audit hash-chain sweep, unlike the two /audit READS below: its
-	// verdict counts every row in the deployment, which is whole-fleet audit
-	// volume — the disclosure that keeps /metrics admin-gated too.
-	"GET /api/v1/audit/chain/verify": {class: classAdmin},
-	// Operator-triggered sandbox sweep. Admin: it tears down containers, and on
-	// m' the developer is explicitly not an operator.
+	// Operator-triggered sandbox sweep. SUPER: it TEARS DOWN containers —
+	// other people's live runs, mid-flight — which is reach INTO runs the
+	// caller does not own, the one axis the security tier never gets.
 	"POST /api/v1/admin/sandboxes/sweep": {class: classAdmin},
+
+	// ── security (0.7 §B: admin OR security_admin; a member still 403s) ──
+	// The admin twins of /me/tokens: the deployment-wide inventory names other
+	// humans, and revoke-any is the remediation path for a token whose owner was
+	// demoted or has left (migration 0045's stamp ceiling). Incident response,
+	// and neither hands the caller reach — the inventory returns metadata, the
+	// DELETE only subtracts.
+	"GET /api/v1/tokens":         {class: classSecurity},
+	"DELETE /api/v1/tokens/{id}": {class: classSecurity},
+	// The workspace EGRESS-DECISION lane. Deciding which hosts a workspace's
+	// runs may reach is the same authority as deciding an egress approval, and
+	// promote-egress is literally its bulk form.
+	"PUT /api/v1/workspaces/{id}/approved-egress":               {class: classSecurity},
+	"PUT /api/v1/workspaces/{id}/denied-egress":                 {class: classSecurity},
+	"POST /api/v1/workspaces/{id}/record":                       {class: classSecurity},
+	"POST /api/v1/workspaces/{id}/record/{task}/promote-egress": {class: classSecurity},
+	// Non-mutating: they launch a throwaway probe sandbox and answer "does the
+	// baseline this deployment already declares actually work" — evidence, not
+	// configuration. The PUT they probe stays classAdmin above.
+	"POST /api/v1/site-config/test-proxy":    {class: classSecurity},
+	"POST /api/v1/site-config/test-redirect": {class: classSecurity},
+	// The org allow/denylist primitive. Delegable ONLY because of the
+	// no-capability-reaches-admin invariant (capAllowed/capGranted
+	// short-circuit on isOperator alone) — pinned by
+	// TestCapabilityGrantsNeverReachTheAdminTier, without which handing this
+	// tier the grant table would be a self-promotion primitive.
+	"GET /api/v1/permissions":                {class: classSecurity},
+	"POST /api/v1/permissions/grants":        {class: classSecurity},
+	"DELETE /api/v1/permissions/grants/{id}": {class: classSecurity},
+	"PUT /api/v1/permissions/enforcement":    {class: classSecurity},
+	// Cutting a compromised human's live sessions: the time-critical half of
+	// incident response, and a revocation only ever SUBTRACTS reach.
+	"POST /api/v1/sessions/revoke": {class: classSecurity},
+	// The tamper-evidence verdict over the audit hash chain — the evidence this
+	// tier's whole job rests on (§F promises them "verify the audit chain" in
+	// words). Gated at all, unlike the two paginated /audit reads below, because
+	// the verdict counts every row in the deployment: whole-fleet audit VOLUME
+	// is the same disclosure that keeps /metrics admin-gated.
+	"GET /api/v1/audit/chain/verify": {class: classSecurity},
+
+	// Governance profiles (migration 0052) — classSecurity: profile authoring
+	// IS the security-admin duty (§A/§B reconciliation). These 6 registered on
+	// operatorOnly when they shipped, before the tier existed, and this is the
+	// widening they were waiting for. There is deliberately no member-safe read:
+	// a member learns their OWN effective ceiling from GET /policies/default,
+	// not from the whole assignment table. Authoring is not self-exemption —
+	// effectiveCeiling short-circuits on isOperator, so a security admin's own
+	// runs stay bound by whichever profile applies to them.
+	"GET /api/v1/governance":                     {class: classSecurity},
+	"POST /api/v1/governance/profiles":           {class: classSecurity},
+	"PUT /api/v1/governance/profiles/{id}":       {class: classSecurity},
+	"DELETE /api/v1/governance/profiles/{id}":    {class: classSecurity},
+	"POST /api/v1/governance/assignments":        {class: classSecurity},
+	"DELETE /api/v1/governance/assignments/{id}": {class: classSecurity},
 
 	// ── member (any authenticated human/token; internally scoped where the
 	// handler itself narrows the response — see the classMember doc) ──
@@ -282,6 +351,12 @@ var routeMatrix = map[string]classifiedRoute{
 	// re-check, covered by TestAttachWS_TicketRoleAuthorization instead —
 	// chi.Walk reports only ONE route here regardless, so both properties
 	// need pinning, just not both from this table.
+	//
+	// classAdmin and explicitly NOT classSecurity (§B): an interactive shell in
+	// a sandbox its holder does not own is the exact reach the security tier is
+	// defined not to have — the case that killed the tier-ladder design. The
+	// SUPER classification is load-bearing here, not incidental, which is why
+	// TestSecurityAdminRouteTier 403s a security_admin on this route.
 	"GET /api/v1/runs/{id}/attach": {class: classAdmin},
 
 	// ── internal (run-token / ground-truth-token bearer only) ──
@@ -346,11 +421,17 @@ func (fakeAuthzSessionRevocations) IsSessionRevoked(context.Context, string, tim
 func (fakeAuthzSessionRevocations) RevokeSub(context.Context, string) error { return nil }
 func (fakeAuthzSessionRevocations) RevokeAll(context.Context) error         { return nil }
 
-func TestAuthzMatrix(t *testing.T) {
+// newAuthzMatrixServer builds the MAXIMALLY-CONFIGURED server both matrix
+// tests walk — every conditional route mounted (OIDC, Secrets, RecordingStore,
+// SessionRevocations) — so chi.Walk sees the whole table and the "every
+// conditional route mounted" doctrine holds for TestSecurityAdminRouteTier
+// too. Shared rather than duplicated: a second copy of this config is exactly
+// where a conditional route silently goes unmounted and therefore unprobed.
+func newAuthzMatrixServer(t *testing.T) (*Server, *authzStore, *authzApprovals, *recording.FSStore) {
+	t.Helper()
 	ast := newAuthzStore()
 	aap := newAuthzApprovals(ast)
-	h := newHarness(t)
-	cfg := baseTestConfig(h, ast)
+	cfg := baseTestConfig(newHarness(t), ast)
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.Secrets = getErrStore{getErr: secretstore.ErrNotFound}
 	cfg.Approvals = aap
@@ -360,7 +441,11 @@ func TestAuthzMatrix(t *testing.T) {
 	}
 	cfg.RecordingStore = rs
 	cfg.SessionRevocations = fakeAuthzSessionRevocations{}
-	srv := New(cfg)
+	return New(cfg), ast, aap, rs
+}
+
+func TestAuthzMatrix(t *testing.T) {
+	srv, ast, aap, rs := newAuthzMatrixServer(t)
 
 	const memberSub = "sub-member"
 	const otherSub = "sub-other-member"
@@ -455,7 +540,12 @@ func TestAuthzMatrix(t *testing.T) {
 					t.Errorf("admin SSO session (wrong auth mode entirely): status = %d, want 401; body=%s", w.Code, w.Body.String())
 				}
 
-			case classAdmin:
+			// classAdmin and classSecurity are the SAME probe here — admin
+			// passes, a member 403s, anonymous 401s. What separates them is the
+			// security_admin axis, which this table cannot express in one
+			// credential per class; TestSecurityAdminRouteTier walks this same
+			// map and probes exactly that axis in BOTH directions.
+			case classAdmin, classSecurity:
 				p := buildPath(pattern, "x1")
 				assertNotBlocked(t, "admin", doSSO(t, srv, method, p, adminSess, body))
 				if w := doSSO(t, srv, method, p, memberSess, body); w.Code != http.StatusForbidden {
@@ -523,6 +613,82 @@ func TestAuthzMatrix(t *testing.T) {
 				t.Fatalf("route %q has no recognized class %q", key, rc.class)
 			}
 		})
+	}
+}
+
+// TestSecurityAdminRouteTier is the security-admin twin of
+// TestRequireOperator_OperatorPassesEveryGatedRoute (rbac_test.go), and the
+// ONE test that makes §B's 26 SUPER / 14 SEC split enforceable rather than
+// merely written down. It walks routeMatrix — the SAME table TestAuthzMatrix
+// proves exhaustive against chi.Walk, so a new gated route cannot join the
+// router without landing in one of these two arms — and probes the axis
+// TestAuthzMatrix structurally cannot: what a SECURITY_ADMIN session gets.
+//
+// Both directions are asserted, and both matter:
+//
+//   - classSecurity: a security_admin must NOT be blocked. Dropping one SEC
+//     re-registration in routes.go (registering it on operatorOnly again)
+//     turns that route's probe into a 403 and reddens this test — the
+//     counterfactual the split is worth having.
+//   - classAdmin: a security_admin MUST get 403. Without this half the tier
+//     could silently be widened into a ladder (security_admin ⊆ admin), which
+//     is precisely the shape §B refuses — a ladder stamps `admin` on their SSH
+//     key and hands them a shell in every developer's sandbox.
+//
+// A MEMBER is refused by both classes, asserted here too so the file reads as
+// one statement about the tier rather than two half-statements: the security
+// tier is a THIRD value, not "member with extras".
+//
+// Same probe doctrine as TestAuthzMatrix: a non-401/403 status is a pass (the
+// handler ran and answered on its own merits — a 4xx for the deliberately
+// bogus "x1" path id or the empty body is expected and irrelevant here).
+func TestSecurityAdminRouteTier(t *testing.T) {
+	srv, _, _, _ := newAuthzMatrixServer(t)
+	secSess := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
+	memberSess := ssoSession(t, "sub-member-tier", "member-tier@corp.example", oidc.RoleMember)
+
+	var sec, super int
+	for key, rc := range routeMatrix {
+		key, rc := key, rc
+		if rc.class != classAdmin && rc.class != classSecurity {
+			continue
+		}
+		method, pattern, ok := strings.Cut(key, " ")
+		if !ok {
+			t.Fatalf("malformed routeMatrix key %q", key)
+		}
+		t.Run(key, func(t *testing.T) {
+			body := bodyFor(method)
+			p := buildPath(pattern, "x1")
+			if rc.class == classSecurity {
+				assertNotBlocked(t, "security_admin", doSSO(t, srv, method, p, secSess, body))
+			} else if w := doSSO(t, srv, method, p, secSess, body); w.Code != http.StatusForbidden {
+				t.Errorf("security_admin on a SUPER route: status = %d, want 403 (the tiers do not nest); body=%s",
+					w.Code, w.Body.String())
+			}
+			// Both classes refuse a member, with the byte-identical body — a
+			// member must never learn WHICH admin tier a route sits on.
+			w := doSSO(t, srv, method, p, memberSess, body)
+			if w.Code != http.StatusForbidden {
+				t.Errorf("member on a %s route: status = %d, want 403; body=%s", rc.class, w.Code, w.Body.String())
+			} else if !strings.Contains(w.Body.String(), "requires admin role") {
+				t.Errorf("member 403 body = %q, want the tier-agnostic wording", w.Body.String())
+			}
+		})
+		if rc.class == classSecurity {
+			sec++
+		} else {
+			super++
+		}
+	}
+
+	// The split itself, pinned as a number: §B decided 14 SEC of the 40 gated
+	// routes, plus /governance's 6 (new in 0.7, outside that count) = 20, and
+	// 26 SUPER. A route silently reclassified in the table above would still
+	// pass every probe — it would just be enforcing the WRONG tier, exactly the
+	// drift the per-route loop cannot see.
+	if sec != 20 || super != 26 {
+		t.Errorf("tier split = %d security / %d admin, want 20 / 26 (§B's 14 SEC + governance's 6, and 26 SUPER)", sec, super)
 	}
 }
 
@@ -1027,6 +1193,46 @@ func (s *authzStore) DeleteRoleMapping(context.Context, uuid.UUID) error {
 }
 func (s *authzStore) ListRoleMappings(context.Context) ([]types.RoleMapping, error) {
 	return nil, nil
+}
+
+// ─── governance profiles (migration 0052) ─────────────────────────────────
+//
+// Same honest-empty-state posture as the two stub blocks above, and here it is
+// also the exact state the matrix wants: NO profile and NO assignment is the
+// deployment that has not adopted governance profiles, which by the
+// absent-row doctrine behaves byte-for-byte as it did before this feature
+// existed. So every route this matrix walks resolves as it always has, and the
+// only thing under test on the /governance rows is the authorization boundary.
+// ResolveGovernanceProfile returns ErrNotFound for the same reason — "no
+// assignment matched", which the resolver reads as the deployment ceiling.
+// The precedence matrix itself is a store-level test against a real Postgres
+// (internal/store/governance_pg_test.go), where rows can actually exist.
+func (s *authzStore) UpsertGovernanceProfile(_ context.Context, p types.GovernanceProfile) (types.GovernanceProfile, error) {
+	return p, nil
+}
+func (s *authzStore) GetGovernanceProfile(context.Context, uuid.UUID) (types.GovernanceProfile, error) {
+	return types.GovernanceProfile{}, store.ErrNotFound
+}
+func (s *authzStore) DeleteGovernanceProfile(context.Context, uuid.UUID) error {
+	return store.ErrNotFound
+}
+func (s *authzStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
+	return nil, nil
+}
+func (s *authzStore) UpsertGovernanceAssignment(_ context.Context, a types.GovernanceAssignment) (types.GovernanceAssignment, error) {
+	return a, nil
+}
+func (s *authzStore) DeleteGovernanceAssignment(context.Context, uuid.UUID) error {
+	return store.ErrNotFound
+}
+func (s *authzStore) ListGovernanceAssignments(context.Context) ([]types.GovernanceAssignment, error) {
+	return nil, nil
+}
+func (s *authzStore) ResolveGovernanceProfile(context.Context, []string, []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+	return nil, "", store.ErrNotFound
+}
+func (s *authzStore) HasGroupTierAssignments(context.Context) (bool, error) {
+	return false, nil
 }
 
 // ─── in-memory ApprovalService fake, ownership-aware ──────────────────────

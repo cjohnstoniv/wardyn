@@ -35,7 +35,15 @@ func EncodeRawSessionForTest(a *Authenticator, payload []byte) *http.Cookie {
 // dedupe / sort / byte-cap rules can be pinned directly, without driving a
 // signed ID token through the whole callback once per case.
 func SessionGroupsForTest(rolesClaim, groupsClaim []string) []string {
-	return sessionGroups(rolesClaim, groupsClaim)
+	g, _ := sessionGroups(rolesClaim, groupsClaim)
+	return g
+}
+
+// SessionGroupsTruncatedForTest exposes sessionGroups' PF-26 truncation bit —
+// the half that is an authorization input rather than a normalization result.
+func SessionGroupsTruncatedForTest(rolesClaim, groupsClaim []string) bool {
+	_, truncated := sessionGroups(rolesClaim, groupsClaim)
+	return truncated
 }
 
 // MaxSessionGroupsBytesForTest exposes the cookie byte budget.

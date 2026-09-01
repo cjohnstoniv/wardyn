@@ -66,7 +66,11 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if !s.isOperator(r.Context()) {
+	// isSecurityOperator, not isOperator: reading the org-wide audit log (and
+	// verifying its hash chain) is the security admin's job description — a
+	// tier that governs approvals and permissions without being able to read
+	// what happened is not a security tier at all.
+	if !s.isSecurityOperator(r.Context()) {
 		// Members: audit is scoped to ?run_id= of a run THEY created (item 2). No
 		// run_id, or a well-formed but unowned/unknown run_id, all collapse to
 		// the SAME empty result — /audit is a collection endpoint, so the
@@ -159,7 +163,10 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if !s.isOperator(r.Context()) {
+	// isSecurityOperator, not isOperator — same reason as handleQueryAudit
+	// above; the export must not be a narrower view of the same log than the
+	// query is, or the tier's evidence stops at the screen.
+	if !s.isSecurityOperator(r.Context()) {
 		owned := raw != ""
 		if owned {
 			run, gerr := s.cfg.Store.GetRun(r.Context(), runID)

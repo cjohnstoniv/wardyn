@@ -153,6 +153,13 @@ export function setupGateActive(
   },
   role: Role = "admin",
 ): boolean {
+  // DELIBERATELY `!== "admin"`, NOT `role === "member"`, now that role is
+  // three-valued: a SECURITY ADMIN must not be walled into the deployer's
+  // setup funnel. Every mutation the gate exists to drive (harness credential,
+  // integrations, the shared LLM credential) is super-admin-only server-side,
+  // so trapping a security admin there would strand them on a wizard whose
+  // every button 403s — and the server redacts that status for them anyway
+  // (internal/api/setup.go).
   if (role !== "admin") return false;
   if (status.unreachable) return false;
   // An install that has BEEN THROUGH onboarding is never walled in again —

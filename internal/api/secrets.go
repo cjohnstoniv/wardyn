@@ -290,7 +290,10 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 	if !s.isOperator(ctx) {
 		names, err = s.memberVisibleOperatorSecretNames(ctx)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "list secrets: "+err.Error())
+			// ceilingErrorStatus so an unanswerable group snapshot is the same
+			// 403 every other routed site gives, not a 500 that reads as an
+			// outage; a plain store failure still 500s.
+			writeError(w, ceilingErrorStatus(err), "list secrets: "+err.Error())
 			return
 		}
 	}
@@ -299,20 +302,32 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 
 // memberVisibleOperatorSecretNames is handleListSecrets' member-facing
 // `names`: the reserved-filtered OPERATOR secret names an eligible grant in
-// the operator's ceiling (s.cfg.DefaultPolicy.EligibleGrants) actually pairs
+// THIS CALLER'S ceiling actually pairs
 // with a host — storedSecretGrantPairing is the same extraction
 // filterMemberGrants uses to decide whether a MEMBER's own inline grant is
 // eligible-listed — narrowed further by the existing capSeamAllowed(capSecret,
 // …) gate once an operator enforces it. Ceiling-pairing is unconditional
 // (closes the name-enumeration gap regardless of enforcement); the capability
 // gate on top only ever narrows more.
+//
+// The caller's ceiling, not Config.DefaultPolicy's (effectiveCeiling): this
+// list is precisely "which operator secrets may I ask for", and a governance
+// profile that narrows a member's eligible grants has to narrow the menu with
+// it — otherwise the console offers names their own run would then drop, which
+// reads as a bug and teaches members to ignore the list. It uses the SAME
+// grant list filterMemberGrants enforces, so what is shown and what is
+// accepted cannot drift.
 func (s *Server) memberVisibleOperatorSecretNames(ctx context.Context) ([]string, error) {
+	ceiling, cerr := s.effectiveCeiling(ctx)
+	if cerr != nil {
+		return nil, cerr
+	}
 	all, err := reservedFilteredSecretNames(ctx, s.cfg.Secrets.For(""))
 	if err != nil {
 		return nil, err
 	}
 	paired := map[string]bool{}
-	for _, g := range s.cfg.DefaultPolicy.EligibleGrants {
+	for _, g := range ceiling.Spec.EligibleGrants {
 		_, secretRef, knownHostsRef, covered, derr := storedSecretGrantPairing(g)
 		if !covered || derr != nil {
 			continue

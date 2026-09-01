@@ -263,8 +263,9 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		}
 		hasRoleMap = len(roleMap) > 0
 		defaultRole := strings.TrimSpace(*f.oidcDefaultRole)
-		if defaultRole != "" && !oidc.ValidRole(defaultRole) {
-			return of, fmt.Errorf("invalid WARDYN_OIDC_DEFAULT_ROLE %q: want %q or %q", defaultRole, oidc.RoleAdmin, oidc.RoleMember)
+		if defaultRole != "" && !validDefaultRole(defaultRole) {
+			return of, fmt.Errorf("invalid WARDYN_OIDC_DEFAULT_ROLE %q: want %q or %q (%q is a MAPPED tier only — name the App Role, group or email that should hold it in WARDYN_OIDC_ROLE_MAP; it is refused as a fallthrough default)",
+				defaultRole, oidc.RoleAdmin, oidc.RoleMember, oidc.RoleSecurityAdmin)
 		}
 		// bootCtx (30s), not rootCtx: the ctx is used ONLY for the discovery
 		// HTTP round trip (go-oidc's Provider.Verifier fetches JWKS on a
@@ -361,6 +362,18 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 					break
 				}
 			}
+		}
+		// Third-tier posture: a chart map that grants security_admin but names
+		// no super admin at all. WARN, never a refusal — the admin token and
+		// local mode both pass every gate on the no-OIDC-human arm
+		// (internal/api's isOperator), so this deployment is administrable, and
+		// a chart map is edited by helm upgrade: refusing would break an
+		// upgrade for a posture that is merely unusual. Console-managed rows
+		// are NOT considered here and cannot be — they are read per login, not
+		// at boot — so this is honestly scoped to the CHART map, which is also
+		// the only source a helm operator can act on from a boot log.
+		if chartMapHasNoAdminPath(roleMap, splitCSV(*f.oidcOperatorEmails), defaultRole) {
+			slog.Warn("wardynd: WARDYN_OIDC_ROLE_MAP grants " + oidc.RoleSecurityAdmin + " but no admin: no admin-valued entry, no WARDYN_OIDC_OPERATOR_EMAILS, and WARDYN_OIDC_DEFAULT_ROLE is not admin — a security admin governs approvals/audit/permissions/governance profiles but never reaches another human's run, credentials or host config, so SSO alone cannot administer this deployment (the admin token and local mode still can; add an admin-valued map entry or the operator allowlist to fix it)")
 		}
 	}
 
@@ -509,6 +522,46 @@ func componentsInfo(f *bootFlags, runnerTarget string, recStore recording.Store)
 		"policy_engine": {Selected: "builtin"},
 		"sandbox":       {Selected: runnerTarget, Available: substrate.Names(), Source: sourceOf(*f.runnerSel, "none")},
 	}
+}
+
+// validDefaultRole reports whether role is admissible as
+// WARDYN_OIDC_DEFAULT_ROLE. STRICTER than oidc.ValidRole on exactly one value:
+// oidc.RoleSecurityAdmin is refused, and boot FAILS CLOSED on it.
+//
+// The default role is what a signed-in human falls through to when NOTHING in
+// the merged role map matched them — i.e. the tier granted by accident, to
+// everyone the operator never named. security_admin governs approvals, audit,
+// permissions/capability grants and governance profiles; handing that to the
+// unnamed population is the one configuration the tier's whole design (a
+// MAPPED tier only, no allowlist twin — see oidc.RoleSecurityAdmin) exists to
+// make unreachable. A deployment that wants a security admin names the App
+// Role, group or email that holds it.
+//
+// Refused rather than warned because the failure is silent otherwise: the
+// misconfiguration produces no error at any point, just a quietly over-powered
+// org, discovered at audit time.
+func validDefaultRole(role string) bool {
+	return oidc.ValidRole(role) && role != oidc.RoleSecurityAdmin
+}
+
+// chartMapHasNoAdminPath reports whether the chart role map grants
+// security_admin somewhere while offering NO route to the super-admin tier —
+// no admin row of its own, no operator allowlist, and no admin default role.
+// See its one caller for why that is a WARN and not a refusal.
+func chartMapHasNoAdminPath(roleMap map[string]string, operatorEmails []string, defaultRole string) bool {
+	if len(operatorEmails) > 0 || defaultRole == oidc.RoleAdmin {
+		return false
+	}
+	sec := false
+	for _, v := range roleMap {
+		if v == oidc.RoleAdmin {
+			return false
+		}
+		if v == oidc.RoleSecurityAdmin {
+			sec = true
+		}
+	}
+	return sec
 }
 
 // newSubscriptionProvider builds the resident-subscription token provider, or nil

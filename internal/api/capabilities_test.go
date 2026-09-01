@@ -19,16 +19,75 @@ import (
 
 // ─── the store double ─────────────────────────────────────────────────────────
 
+// noGovernanceStore is store.Store with the two governance-resolver reads
+// answered as "this deployment has no assignments": no profile matches, no
+// group-tier row exists. Embed it INSTEAD OF store.Store in any double whose
+// test path resolves a ceiling (effectiveCeiling now runs on every member
+// create, on GET /policies/default, and on the member secret listing).
+//
+// It has to embed store.Store rather than sit beside it: two embeds at the same
+// depth would both offer ResolveGovernanceProfile, the selector would be
+// ambiguous, and the double would silently stop implementing store.Store.
+//
+// Answering rather than panicking is the RIGHT default here — a nil-interface
+// panic is a useful signal for a method a test never meant to reach, but every
+// one of these doubles is modelling a 0.6-shaped deployment, and "no assignment
+// ⇒ Config.DefaultPolicy" is exactly what that deployment does.
+type noGovernanceStore struct{ store.Store }
+
+func (noGovernanceStore) ResolveGovernanceProfile(context.Context, []string, []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+	return nil, "", store.ErrNotFound
+}
+
+func (noGovernanceStore) HasGroupTierAssignments(context.Context) (bool, error) { return false, nil }
+
 // capStore holds grants and enforcement in memory. Its ListCapabilityGrantsFor
 // MIRRORS the SQL predicate (store_capabilities.go / its pg test) rather than
 // returning everything: subject fan-out is the store's job, and a fake that
 // ignored it would let the resolver look correct while handing one member
 // another member's grants.
+// It also answers the two governance-resolver reads, because effectiveCeiling
+// runs on the SAME member paths this double already backs (a member create
+// resolves a ceiling before it resolves a capability). The zero value is a
+// deployment with no governance assignments at all — ErrNotFound and no
+// group-tier rows — which is precisely "byte-for-byte 0.6" and is what keeps
+// every pre-existing test in this package meaning what it meant.
 type capStore struct {
 	store.Store
 	grants []types.CapabilityGrant
 	enf    map[string]bool
 	err    error
+
+	// govProfile, when set, is the profile the resolver returns for ANY caller
+	// — the store's own ORDER BY has its own pg test (TestPG_Resolve
+	// GovernanceProfile); what the api-side tests need to drive is the ANSWER.
+	govProfile *types.GovernanceProfile
+	// govTier is the tier that answer matched at. Load-bearing for the
+	// stale/truncated scoping: a user-tier winner is served, an all-tier one is
+	// refused when a group row exists.
+	govTier types.CapabilitySubjectType
+	// govHasGroupTier is HasGroupTierAssignments' answer — the gate that keeps
+	// the stale-snapshot 403 off deployments that never adopted group profiles.
+	govHasGroupTier bool
+	// govErr fails BOTH governance reads, for the never-fail-open arm.
+	govErr error
+}
+
+func (s *capStore) ResolveGovernanceProfile(_ context.Context, _, _ []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+	if s.govErr != nil {
+		return nil, "", s.govErr
+	}
+	if s.govProfile == nil {
+		return nil, "", store.ErrNotFound
+	}
+	return s.govProfile, s.govTier, nil
+}
+
+func (s *capStore) HasGroupTierAssignments(context.Context) (bool, error) {
+	if s.govErr != nil {
+		return false, s.govErr
+	}
+	return s.govHasGroupTier, nil
 }
 
 func (s *capStore) ListCapabilityGrantsFor(_ context.Context, users, groups []string) ([]types.CapabilityGrant, error) {

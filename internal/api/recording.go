@@ -30,6 +30,11 @@ func (s *Server) recordingAuthorizer(r *http.Request, runIDPrefix string) bool {
 	if err != nil {
 		return false
 	}
+	// DELIBERATELY isOperator (three-tier doctrine, internal/auth/oidc's
+	// RoleSecurityAdmin): a recording is a PRIVACY surface — a replay of
+	// someone's terminal with their agent's injected credentials on screen.
+	// Governing policy does not include watching people work, and this is the
+	// one place ownsRunOrAdmin's incident-response widening must NOT reach.
 	if s.isOperator(r.Context()) {
 		return true
 	}

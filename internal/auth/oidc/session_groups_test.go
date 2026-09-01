@@ -134,29 +134,106 @@ func sessionThroughMiddleware(t *testing.T, auth *writoidc.Authenticator, cookie
 	return sub, groups, authenticated
 }
 
-// TestPre06CookieStillAuthenticatesWithNilGroups is the upgrade-safety pin: a
-// cookie written by a 0.5 binary has NO "groups" key at all. It must still
-// authenticate — an upgrade that force-logs-out every signed-in human is not
-// something this field gets to cause — and it must read back as NIL, the
-// signal internal/api turns into groups_snapshot_stale rather than quietly
-// deciding this person belongs to no groups.
-func TestPre06CookieStillAuthenticatesWithNilGroups(t *testing.T) {
+// TestPreCodecBumpCookieReDerives is the PF-26 codec-bump pin, and it REPLACES
+// an earlier test that asserted the opposite (a pre-0.6 cookie keeps
+// authenticating). That contract could not survive the truncation bit, and the
+// reason is the whole argument for spending a forced re-login:
+//
+// GroupsTruncated has no tolerant decoding. An old payload carries no such key,
+// so it reads as false — "this snapshot is complete" — which is the FAIL-OPEN
+// answer. A human whose snapshot was already truncated at their last login
+// would hold a cookie asserting completeness, and internal/api would hand them
+// the deployment ceiling instead of the narrower governance profile their group
+// is assigned: a silent widening, with no refusal and no audit line, for
+// exactly the group-heavy directory the cap exists to serve. Nothing in the
+// payload distinguishes "old cookie" from "new cookie, not truncated", so the
+// payload gets a version and an old one is simply not a session.
+//
+// The cost is ONE extra login, once — the same re-login PF-12 already documents
+// — and it is bounded: Middleware falls through with no principal, the browser
+// is bounced to sign in, and CallbackHandler mints a current cookie.
+//
+// Counterfactual: drop the `sess.V != SessionCodecVersion` check in
+// decodeSession and this test fails on the first leg while the pre-bump cookie
+// silently decodes GroupsTruncated=false — the fail-open state the check exists
+// to make unreachable.
+func TestPreCodecBumpCookieReDerives(t *testing.T) {
 	env := newIdPEnv(t)
 	auth := env.newAuth(t, nil)
 
-	// Byte-for-byte a pre-0.6 payload: four keys, no "groups".
+	// Byte-for-byte a pre-0.7 payload: no "v" key, and no "groups" either (this
+	// is what a 0.5 binary actually wrote).
 	payload := []byte(fmt.Sprintf(`{"sub":"sub-legacy","email":"legacy@example.com","role":%q,"expiry":%q}`,
 		writoidc.RoleMember, time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)))
-	if strings.Contains(string(payload), "groups") {
-		t.Fatal("fixture is not a pre-0.6 payload")
+	if strings.Contains(string(payload), `"v"`) {
+		t.Fatal("fixture is not a pre-codec-bump payload")
 	}
 
-	sub, groups, ok := sessionThroughMiddleware(t, auth, writoidc.EncodeRawSessionForTest(auth, payload))
-	if !ok || sub != "sub-legacy" {
-		t.Fatalf("pre-0.6 cookie did not authenticate (sub=%q); the upgrade forces a re-login", sub)
+	sub, _, ok := sessionThroughMiddleware(t, auth, writoidc.EncodeRawSessionForTest(auth, payload))
+	if ok || sub != "" {
+		t.Fatalf("a pre-0.7 cookie authenticated (sub=%q) — its GroupsTruncated decodes as false, which is the fail-open reading", sub)
+	}
+
+	// A CURRENT-version payload that simply omits "groups" must still decode to
+	// NIL: the bump versions the payload, it does not collapse the nil-vs-empty
+	// distinction internal/api turns into groups_snapshot_stale.
+	current := []byte(fmt.Sprintf(`{"v":%d,"sub":"sub-current","email":"c@example.com","role":%q,"expiry":%q}`,
+		writoidc.SessionCodecVersion, writoidc.RoleMember,
+		time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)))
+	sub, groups, ok := sessionThroughMiddleware(t, auth, writoidc.EncodeRawSessionForTest(auth, current))
+	if !ok || sub != "sub-current" {
+		t.Fatalf("a current-version cookie did not authenticate (sub=%q)", sub)
 	}
 	if groups != nil {
-		t.Errorf("groups = %v, want nil — a pre-0.6 cookie must be distinguishable from `asked, none`", groups)
+		t.Errorf("groups = %v, want nil — an absent groups key must stay distinguishable from `asked, none`", groups)
+	}
+}
+
+// TestTruncationBitSurvivesTheCookie is the session leg of PF-26 end to end:
+// sessionGroups reports the drop, the bit encodes, and it comes back off the
+// cookie as an authorization input rather than being recomputed (it CANNOT be
+// recomputed — a truncated snapshot and a complete one are both just lists of
+// plausible group names).
+//
+// Counterfactual: leave GroupsTruncated off Session (or off
+// contextWithPrincipal) and the second leg reads false, which is the answer
+// that silently sheds a group-assigned governance profile.
+func TestTruncationBitSurvivesTheCookie(t *testing.T) {
+	claim := make([]string, 400)
+	for i := range claim {
+		claim[i] = fmt.Sprintf("group-%04d-with-a-realistically-long-name", i)
+	}
+	if !writoidc.SessionGroupsTruncatedForTest(nil, claim) {
+		t.Fatal("400 long group names did not trip the byte cap; the fixture proves nothing")
+	}
+	if writoidc.SessionGroupsTruncatedForTest(nil, []string{"eng", "platform"}) {
+		t.Error("two short groups reported as truncated — the bit would fire on every ordinary login")
+	}
+
+	env := newIdPEnv(t)
+	auth := env.newAuth(t, nil)
+	kept := writoidc.SessionGroupsForTest(nil, claim)
+	cookie, err := writoidc.EncodeSessionForTest(auth, writoidc.Session{
+		Sub: "sub-many-groups", Email: "many@example.com", Role: writoidc.RoleMember,
+		Expiry: time.Now().Add(time.Hour), Groups: kept, GroupsTruncated: true,
+	})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	var truncated bool
+	var authed bool
+	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		truncated = writoidc.GroupsTruncatedFromContext(r.Context())
+		authed = writoidc.PrincipalFromContext(r.Context()) != ""
+	})
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(cookie)
+	auth.Middleware(next).ServeHTTP(httptest.NewRecorder(), r)
+	if !authed {
+		t.Fatal("the truncated-snapshot session did not authenticate; truncation is a narrowing signal, not a rejection")
+	}
+	if !truncated {
+		t.Error("GroupsTruncatedFromContext = false for a cookie minted with the bit set — the snapshot reads as complete")
 	}
 }
 

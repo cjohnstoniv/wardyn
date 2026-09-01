@@ -17,7 +17,6 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
-	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -32,7 +31,7 @@ const (
 // method is nil (embedded interface), which is fine: the gated write handlers
 // all validate the body/params before they touch the store, so an operator
 // request in these tests stops at a 4xx without ever dereferencing it.
-type rbacStore struct{ store.Store }
+type rbacStore struct{ noGovernanceStore }
 
 func (rbacStore) ListPolicies(context.Context) ([]types.RunPolicy, error) {
 	return nil, nil
@@ -82,7 +81,15 @@ func rbacServer(t *testing.T, operatorEmails ...string) *Server {
 // /me and audit attribution.
 func ssoSession(t *testing.T, sub, email, role string) *http.Cookie {
 	t.Helper()
-	payload, err := json.Marshal(oidc.Session{Sub: sub, Email: email, Role: role, Expiry: time.Now().UTC().Add(time.Hour)})
+	// V is stamped explicitly because this helper hand-rolls the payload rather
+	// than going through oidc's own encodeSession: decodeSession refuses any
+	// other version outright (the PF-26 codec bump), so an unstamped cookie here
+	// would look like a pre-0.7 one and every SSO test would silently fall
+	// through to the admin-token path.
+	payload, err := json.Marshal(oidc.Session{
+		V: oidc.SessionCodecVersion, Sub: sub, Email: email, Role: role,
+		Expiry: time.Now().UTC().Add(time.Hour),
+	})
 	if err != nil {
 		t.Fatalf("marshal session: %v", err)
 	}
@@ -343,9 +350,16 @@ func TestMeReportsOperatorRole(t *testing.T) {
 	for _, tc := range []struct {
 		name, sub, email, sessionRole string
 		wantOperator                  bool
+		wantSecurityOperator          bool
 	}{
-		{"admin role is operator", "sub-op", "ops@corp.example", oidc.RoleAdmin, true},
-		{"member role is not operator", "sub-viewer", rbacViewer, oidc.RoleMember, false},
+		{"admin role is operator", "sub-op", "ops@corp.example", oidc.RoleAdmin, true, true},
+		{"member role is not operator", "sub-viewer", rbacViewer, oidc.RoleMember, false, false},
+		// 0.7's third tier, and the reason the second field exists: NOT an
+		// operator (the console must keep hiding the super-admin writes) while
+		// security_operator IS true (approvals/audit/permissions/governance are
+		// offered). A /me collapsing this session to "member" would contradict
+		// what the server actually enforces on those routes.
+		{"security_admin is the security tier only", secAdminSub, secAdminMail, oidc.RoleSecurityAdmin, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := doSSO(t, srv, http.MethodGet, "/api/v1/me", ssoSession(t, tc.sub, tc.email, tc.sessionRole), "")
@@ -353,11 +367,12 @@ func TestMeReportsOperatorRole(t *testing.T) {
 				t.Fatalf("GET /me = %d, want 200: %s", w.Code, w.Body.String())
 			}
 			var got struct {
-				Principal string `json:"principal"`
-				Method    string `json:"method"`
-				Role      string `json:"role"`
-				Email     string `json:"email"`
-				Operator  bool   `json:"operator"`
+				Principal        string `json:"principal"`
+				Method           string `json:"method"`
+				Role             string `json:"role"`
+				Email            string `json:"email"`
+				Operator         bool   `json:"operator"`
+				SecurityOperator bool   `json:"security_operator"`
 			}
 			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 				t.Fatalf("decode /me: %v (body %q)", err, w.Body.String())
@@ -365,16 +380,24 @@ func TestMeReportsOperatorRole(t *testing.T) {
 			if got.Operator != tc.wantOperator {
 				t.Fatalf("/me operator = %v, want %v (body %q)", got.Operator, tc.wantOperator, w.Body.String())
 			}
+			if got.SecurityOperator != tc.wantSecurityOperator {
+				t.Fatalf("/me security_operator = %v, want %v (body %q)", got.SecurityOperator, tc.wantSecurityOperator, w.Body.String())
+			}
 			if got.Role != tc.sessionRole {
 				t.Fatalf("/me role = %q, want %q (body %q)", got.Role, tc.sessionRole, w.Body.String())
 			}
 			if got.Email != tc.email {
 				t.Fatalf("/me email = %q, want %q (body %q)", got.Email, tc.email, w.Body.String())
 			}
-			// operator must always agree with role==admin — the console reads
-			// both, and they must never be able to disagree.
+			// Each boolean must agree with the role it names — the console reads
+			// all three, and they must never be able to disagree. They are NOT
+			// complements of each other now that role is three-valued: a
+			// security admin is neither an operator nor a member.
 			if (got.Role == oidc.RoleAdmin) != got.Operator {
 				t.Fatalf("/me role/operator disagree: role=%q operator=%v", got.Role, got.Operator)
+			}
+			if (got.Role == oidc.RoleAdmin || got.Role == oidc.RoleSecurityAdmin) != got.SecurityOperator {
+				t.Fatalf("/me role/security_operator disagree: role=%q security_operator=%v", got.Role, got.SecurityOperator)
 			}
 			// The two pre-existing fields must survive — the console reads them.
 			if got.Principal == "" || got.Method == "" {

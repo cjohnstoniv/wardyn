@@ -32,17 +32,24 @@ import (
 // A unique_violation (23505) on token_sha256 is ErrConflict: that is a raw
 // collision in a 256-bit random space, so in practice it means the caller
 // reused a token value rather than minting a fresh one.
+//
+// groups_truncated (migration 0052) rides in as a *bool and binds as SQL NULL
+// when nil — the same nil-is-its-own-state discipline marshalGroups keeps for
+// the snapshot itself. NULL means "minted before anything recorded this", and
+// its consumers read that as TRUNCATED, not as false. A plain bool here (or a
+// DEFAULT FALSE on the column) would assert "complete" for every legacy row:
+// fail OPEN, the exact thing the marker exists to prevent.
 func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (types.APIToken, error) {
 	groups, err := marshalGroups(t.Groups)
 	if err != nil {
 		return types.APIToken{}, err
 	}
 	const q = `
-		INSERT INTO api_tokens (id, principal, email, role, groups, name, token_sha256, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-		RETURNING id, principal, email, role, groups, name, created_at, last_used_at, revoked_at`
+		INSERT INTO api_tokens (id, principal, email, role, groups, groups_truncated, name, token_sha256, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		RETURNING id, principal, email, role, groups, groups_truncated, name, created_at, last_used_at, revoked_at`
 	out, err := scanAPIToken(s.Pool.QueryRow(ctx, q,
-		t.ID, t.Principal, t.Email, t.Role, groups, t.Name, hashToken(raw), t.CreatedAt))
+		t.ID, t.Principal, t.Email, t.Role, groups, t.GroupsTruncated, t.Name, hashToken(raw), t.CreatedAt))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -64,7 +71,7 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 // an oracle for "this token used to exist".
 func (s PG) GetAPITokenByRaw(ctx context.Context, raw string) (types.APIToken, error) {
 	const q = `
-		SELECT id, principal, email, role, groups, name, created_at, last_used_at, revoked_at
+		SELECT id, principal, email, role, groups, groups_truncated, name, created_at, last_used_at, revoked_at
 		FROM api_tokens WHERE token_sha256 = $1 AND revoked_at IS NULL`
 	return scanAPIToken(s.Pool.QueryRow(ctx, q, hashToken(raw)))
 }
@@ -91,7 +98,7 @@ func (s PG) TouchAPIToken(ctx context.Context, id uuid.UUID, now time.Time) erro
 // usable credential either way.
 func (s PG) ListAPITokensByPrincipal(ctx context.Context, principal string) ([]types.APIToken, error) {
 	const q = `
-		SELECT id, principal, email, role, groups, name, created_at, last_used_at, revoked_at
+		SELECT id, principal, email, role, groups, groups_truncated, name, created_at, last_used_at, revoked_at
 		FROM api_tokens WHERE principal = $1 ORDER BY created_at DESC`
 	return queryAPITokens(ctx, s, q, principal)
 }
@@ -101,7 +108,7 @@ func (s PG) ListAPITokensByPrincipal(ctx context.Context, principal string) ([]t
 // self-service list.
 func (s PG) ListAPITokens(ctx context.Context) ([]types.APIToken, error) {
 	const q = `
-		SELECT id, principal, email, role, groups, name, created_at, last_used_at, revoked_at
+		SELECT id, principal, email, role, groups, groups_truncated, name, created_at, last_used_at, revoked_at
 		FROM api_tokens ORDER BY created_at DESC`
 	return queryAPITokens(ctx, s, q)
 }
@@ -119,7 +126,7 @@ func (s PG) RevokeAPIToken(ctx context.Context, id uuid.UUID, principal string, 
 	const q = `
 		UPDATE api_tokens SET revoked_at = $2
 		WHERE id = $1 AND revoked_at IS NULL AND ($3 = '' OR principal = $3)
-		RETURNING id, principal, email, role, groups, name, created_at, last_used_at, revoked_at`
+		RETURNING id, principal, email, role, groups, groups_truncated, name, created_at, last_used_at, revoked_at`
 	return scanAPIToken(s.Pool.QueryRow(ctx, q, id, now, principal))
 }
 
@@ -162,7 +169,7 @@ func marshalGroups(groups []string) (any, error) {
 func scanAPIToken(row pgx.Row) (types.APIToken, error) {
 	var t types.APIToken
 	var groups []byte
-	err := row.Scan(&t.ID, &t.Principal, &t.Email, &t.Role, &groups, &t.Name,
+	err := row.Scan(&t.ID, &t.Principal, &t.Email, &t.Role, &groups, &t.GroupsTruncated, &t.Name,
 		&t.CreatedAt, &t.LastUsedAt, &t.RevokedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.APIToken{}, ErrNotFound

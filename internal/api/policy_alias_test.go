@@ -33,6 +33,15 @@ func defaultPolicyWithSpareCapacity() types.RunPolicySpec {
 	}
 }
 
+// rawDeploymentCeiling wraps the server's DefaultPolicy UNCLONED — deliberately
+// the sharpest input these aliasing tests can hand resolvePolicy, since only
+// resolvePolicy's own Clone can then keep the global out of the returned spec.
+// (effectiveCeiling clones on the way out too, so passing its result would let
+// this test pass even if resolvePolicy stopped cloning.)
+func rawDeploymentCeiling(srv *Server) governanceCeiling {
+	return governanceCeiling{Spec: srv.cfg.DefaultPolicy}
+}
+
 // TestResolvePolicy_DoesNotAliasDefaultPolicy pins the root cause: the returned
 // spec must share no backing array with the global, so a per-run append can
 // never be visible to another run.
@@ -42,11 +51,11 @@ func TestResolvePolicy_DoesNotAliasDefaultPolicy(t *testing.T) {
 	cfg.DefaultPolicy = defaultPolicyWithSpareCapacity()
 	srv := New(cfg)
 
-	specA, _, err := srv.resolvePolicy(context.Background(), nil)
+	specA, _, err := srv.resolvePolicy(context.Background(), nil, rawDeploymentCeiling(srv))
 	if err != nil {
 		t.Fatalf("resolvePolicy: %v", err)
 	}
-	specB, _, err := srv.resolvePolicy(context.Background(), nil)
+	specB, _, err := srv.resolvePolicy(context.Background(), nil, rawDeploymentCeiling(srv))
 	if err != nil {
 		t.Fatalf("resolvePolicy: %v", err)
 	}
@@ -97,7 +106,7 @@ func TestResolvePolicy_ConcurrentUnionNoRace(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			spec, _, err := srv.resolvePolicy(context.Background(), nil)
+			spec, _, err := srv.resolvePolicy(context.Background(), nil, rawDeploymentCeiling(srv))
 			if err != nil {
 				return
 			}

@@ -95,9 +95,23 @@ func GroupsFromContext(ctx context.Context) []string {
 	return g
 }
 
+// GroupsTruncatedFromContext reports whether the session's group snapshot is
+// PARTIAL — sessionGroups hit the cookie byte cap and dropped entries (see
+// Session.GroupsTruncated).
+//
+// A caller must treat true exactly as it treats a nil snapshot: the group
+// identity is not answerable, so no group-scoped decision can be made from it.
+// Reading it as "these are all their groups" is the silent tier evaporation
+// PF-26 names.
+func GroupsTruncatedFromContext(ctx context.Context) bool {
+	t, _ := ctx.Value(groupsTruncatedCtxKey{}).(bool)
+	return t
+}
+
 // contextWithPrincipal stores the verified session's sub, email, role, and
-// group snapshot on the context (read back via PrincipalFromContext /
-// EmailFromContext / RoleFromContext / GroupsFromContext).
+// group snapshot (with its truncation bit) on the context (read back via
+// PrincipalFromContext / EmailFromContext / RoleFromContext /
+// GroupsFromContext / GroupsTruncatedFromContext).
 //
 // Groups is stored even when nil, and that is not a wasted WithValue: a nil
 // value and an absent key both read back as nil, so this line costs nothing to
@@ -107,6 +121,7 @@ func contextWithPrincipal(ctx context.Context, sess Session) context.Context {
 	ctx = context.WithValue(ctx, principalCtxKey{}, sess.Sub)
 	ctx = context.WithValue(ctx, emailCtxKey{}, sess.Email)
 	ctx = context.WithValue(ctx, groupsCtxKey{}, sess.Groups)
+	ctx = context.WithValue(ctx, groupsTruncatedCtxKey{}, sess.GroupsTruncated)
 	ctx = context.WithValue(ctx, roleCtxKey{}, sess.Role)
 	return context.WithValue(ctx, expiryCtxKey{}, sess.Expiry)
 }
@@ -126,6 +141,10 @@ type roleCtxKey struct{}
 // groupsCtxKey is the context key for the session's login-time group snapshot.
 // Unexported: use GroupsFromContext.
 type groupsCtxKey struct{}
+
+// groupsTruncatedCtxKey is the context key for that snapshot's PF-26
+// truncation bit. Unexported: use GroupsTruncatedFromContext.
+type groupsTruncatedCtxKey struct{}
 
 // expiryCtxKey is the context key for the session's expiry.
 // Unexported: use ExpiryFromContext.

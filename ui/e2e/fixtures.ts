@@ -122,6 +122,30 @@ export async function mockMemberRole(page: Page): Promise<void> {
     const json = await response.json();
     json.role = "member";
     json.operator = false;
+    json.security_operator = false;
+    await route.fulfill({ response, json });
+  });
+}
+
+// Security-admin console (0.7's third tier) — the same splice technique and the
+// same harness ceiling as mockMemberRole above: the bearer-token backend is
+// always admin server-side, so this proves the RENDER behavior the tier drives,
+// never server-side authorization (that is pinned in Go — internal/api's
+// isSecurityOperator tests and authz_test.go's route matrix).
+//
+// The three fields together ARE the tier's contract, and the asymmetry is the
+// point: operator FALSE (the super-admin surfaces — secrets, LLM credential,
+// setup, workspace writes, run attach — stay hidden) with security_operator
+// TRUE (approvals, audit, permissions, governance profiles are offered). A
+// fixture setting both true would prove nothing this tier does not already
+// share with an admin.
+export async function mockSecurityAdminRole(page: Page): Promise<void> {
+  await page.route("**/api/v1/me", async (route) => {
+    const response = await route.fetch();
+    const json = await response.json();
+    json.role = "security_admin";
+    json.operator = false;
+    json.security_operator = true;
     await route.fulfill({ response, json });
   });
 }

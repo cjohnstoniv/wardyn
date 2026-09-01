@@ -39,22 +39,41 @@ const PrincipalContext = React.createContext<string>("");
 // at bind time is (member-role-desktop.md §c).
 const MemberLocalDirRootContext = React.createContext<string | null>(null);
 
+// Whether the signed-in caller holds the SECURITY-governance tier — admin OR
+// security_admin (GET /api/v1/me's `security_operator`, sourced from the same
+// isSecurityOperator predicate the server gates the securityOps routes with).
+// A SECOND context rather than a widened OperatorContext: the two tiers gate
+// different surfaces (see useSecurityOperator below), and collapsing them would
+// show a security admin controls the server then refuses.
+//
+// Default TRUE — the SAME fail-open rationale as OperatorContext above, for the
+// same three cases (unresolved /me, a failed fetch, a component with no
+// provider above it). Never "harden" this default to false either.
+const SecurityOperatorContext = React.createContext<boolean>(true);
+
 export function OperatorProvider({
   operator,
+  securityOperator = true,
   principal = "",
   memberLocalDirRoot = null,
   children,
 }: {
   operator: boolean;
+  // Optional, defaulting TRUE: every existing caller that passes only
+  // `operator` keeps today's fail-open behavior rather than silently becoming
+  // the restricted case.
+  securityOperator?: boolean;
   principal?: string;
   memberLocalDirRoot?: string | null;
   children: React.ReactNode;
 }) {
   return (
     <OperatorContext.Provider value={operator}>
-      <PrincipalContext.Provider value={principal}>
-        <MemberLocalDirRootContext.Provider value={memberLocalDirRoot}>{children}</MemberLocalDirRootContext.Provider>
-      </PrincipalContext.Provider>
+      <SecurityOperatorContext.Provider value={securityOperator}>
+        <PrincipalContext.Provider value={principal}>
+          <MemberLocalDirRootContext.Provider value={memberLocalDirRoot}>{children}</MemberLocalDirRootContext.Provider>
+        </PrincipalContext.Provider>
+      </SecurityOperatorContext.Provider>
     </OperatorContext.Provider>
   );
 }
@@ -64,12 +83,29 @@ export function useMemberLocalDirRoot(): string | null {
   return React.useContext(MemberLocalDirRootContext);
 }
 
-// Whether the signed-in caller may perform operator-only actions (secret
-// writes, policy/workspace CRUD, site-config, approval decisions, the managed
-// harness credential, sandbox attach). UX only — never the enforcement point;
-// the server's requireOperator middleware is what actually refuses a write.
+// Whether the signed-in caller may perform SUPER-admin-only actions (secret
+// writes, policy/workspace CRUD, site-config, the managed harness credential,
+// sandbox attach). UX only — never the enforcement point; the server's
+// requireOperator middleware is what actually refuses a write.
+//
+// Approval DECISIONS and the audit/permissions/governance surfaces are NOT on
+// this list since 0.7 — they moved to useSecurityOperator below.
 export function useOperator(): boolean {
   return React.useContext(OperatorContext);
+}
+
+// Whether the signed-in caller may perform SECURITY-GOVERNANCE actions:
+// decide/list approvals org-wide, read and verify the audit chain, write
+// permissions/capability grants, author governance profiles. True for an admin
+// too — the tiers overlap on this surface. UX only, never the enforcement
+// point; the server's requireSecurityOperator middleware is what refuses.
+//
+// Use this, NOT useOperator, for those surfaces; use useOperator for the ones
+// that stay super-admin (secret writes, the LLM credential, setup mutations,
+// workspace writes, run attach). The split mirrors the server's two predicates
+// exactly — see internal/api/http.go.
+export function useSecurityOperator(): boolean {
+  return React.useContext(SecurityOperatorContext);
 }
 
 // The signed-in principal — see PrincipalContext above.
@@ -77,11 +113,16 @@ export function usePrincipal(): string {
   return React.useContext(PrincipalContext);
 }
 
-// The B1/B2-derived Wardyn role (GET /api/v1/me's `role`) — "admin" or
-// "member". `operator` above stays the legacy boolean every existing gate
-// reads (member === !operator); Role is additive, for UX that needs the named
-// tier itself (nav filtering, the account-menu chip) rather than a yes/no.
-export type Role = "admin" | "member";
+// The B1/B2-derived Wardyn role (GET /api/v1/me's `role`) — "admin",
+// "security_admin" or "member". `operator` above stays the legacy boolean every
+// existing gate reads; Role is additive, for UX that needs the named tier
+// itself (nav filtering, the account-menu chip) rather than a yes/no.
+//
+// NOTE the two booleans are no longer complementary now that there are three
+// values: member === !operator is FALSE for a security admin. Gate on the
+// predicate that matches the surface (useOperator / useSecurityOperator), never
+// on a role comparison of your own.
+export type Role = "admin" | "security_admin" | "member";
 
 // Default "admin": the SAME fail-open rationale as OperatorContext above (an
 // unresolved /me, a failed fetch, or a component mounted with no

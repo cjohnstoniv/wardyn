@@ -114,11 +114,20 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		// hygiene signal — which tokens are dead and can be revoked — not an
 		// authorization input, so nothing downstream reads it.
 		_ = s.cfg.Store.TouchAPIToken(r.Context(), t.ID, s.cfg.Now().UTC())
-		// The SAME four keys the session branch publishes, through the SAME
+		// The SAME five keys the session branch publishes, through the SAME
 		// function, from the snapshot stamped when this token was minted. This is
 		// what makes ownership, RBAC and capability grants bind to the owning
 		// human with no token-specific code anywhere downstream.
-		ctx := withHumanIdentity(r.Context(), t.Principal, t.Email, t.Role, t.Groups)
+		//
+		// A NULL groups_truncated — a token minted before 0.7, when nothing
+		// recorded the bit — reads as TRUNCATED (PF-26). Its snapshot's
+		// completeness is genuinely unknown, and the fail-OPEN reading would let
+		// a legacy token shed a group-assigned governance profile the cookie lane
+		// already refuses to shed. The cost is one re-mint, and only on a
+		// deployment that actually assigns profiles to groups — the resolver's
+		// refusal is itself gated on a group-tier row existing at all.
+		ctx := withHumanIdentity(r.Context(), t.Principal, t.Email, t.Role, t.Groups,
+			t.GroupsTruncated == nil || *t.GroupsTruncated)
 		next.ServeHTTP(w, r.WithContext(withAPITokenID(ctx, t.ID)))
 	})
 }
@@ -189,24 +198,51 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	}
 	plaintext := apiTokenPrefix + hex.EncodeToString(raw)
 
-	// The identity SNAPSHOT. Role is normalized to exactly one of the two
-	// constants through isOperator — the same gate every admin-only route
-	// consults — so a token can never be stamped with a third value that
-	// isOperator would then read as "not admin" by accident rather than by
-	// decision. Email and groups are copied verbatim (groups nil included: nil
-	// and empty differ — see oidcGroupsCtxKey).
-	role := oidc.RoleMember
-	if s.isOperator(ctx) {
-		role = oidc.RoleAdmin
+	// The identity SNAPSHOT. Role is the caller's REAL session role, copied
+	// verbatim — NOT a two-valued isOperator re-derivation (PF-19). This token
+	// replays the human's WHOLE session identity through withHumanIdentity
+	// (see the middleware above), not merely their foreign-run reach, so
+	// collapsing a security_admin session to "member" here would make every
+	// security-governance route unreachable by API or CLI for exactly the
+	// persona whose surfaces ship API-first.
+	//
+	// SAFE, and not by accident: the three consumers that turn a stamped role
+	// into REACH INTO SOMEONE ELSE'S RUN all require == oidc.RoleAdmin
+	// (attach.go's ticket lane, uigateway.go, sshgateway.go), so a
+	// security_admin stamp grants precisely zero run reach. The SSH-key and
+	// attach-ticket stamps keep their never-stamp-anything-but-admin/member
+	// derivation for the mirror-image reason — there, the role field means
+	// foreign-run reach and nothing else.
+	//
+	// Fallback for a caller with no OIDC role on ctx: unreachable here (the
+	// no-verified-human refusal above returned already), but RoleMember is the
+	// fail-closed value if that ever changes.
+	role := oidcRoleFromContext(ctx)
+	if role == "" {
+		role = oidc.RoleMember
 	}
+	// The group snapshot's PF-26 completeness marker, stamped from the MINTING
+	// session's own bit (migration 0052's api_tokens.groups_truncated). The
+	// token replays this snapshot into the very same capabilitySubjects the
+	// ceiling resolver reads (apiTokenAuth above), so without the marker the
+	// token lane re-imports exactly the tier evaporation the cookie codec bump
+	// closed: a member in enough groups mints a token, the walling group is
+	// missing from the frozen snapshot, and every API/CLI call quietly resolves
+	// to the deployment ceiling.
+	//
+	// Addressed, because the column is three-valued: this row must be able to
+	// say "known complete" (false) distinctly from a pre-0.7 row's "nobody
+	// recorded it" (NULL). See types.APIToken.GroupsTruncated.
+	groupsTruncated := oidcGroupsTruncatedFromContext(ctx)
 	created, err := s.cfg.Store.CreateAPIToken(ctx, types.APIToken{
-		ID:        uuid.New(),
-		Principal: sub,
-		Email:     oidcEmailFromContext(ctx),
-		Role:      role,
-		Groups:    oidcGroupsFromContext(ctx),
-		Name:      name,
-		CreatedAt: s.cfg.Now().UTC(),
+		ID:              uuid.New(),
+		Principal:       sub,
+		Email:           oidcEmailFromContext(ctx),
+		Role:            role,
+		Groups:          oidcGroupsFromContext(ctx),
+		GroupsTruncated: &groupsTruncated,
+		Name:            name,
+		CreatedAt:       s.cfg.Now().UTC(),
 	}, plaintext)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "create api token: "+err.Error())

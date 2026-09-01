@@ -119,6 +119,33 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// EXPLICIT STRICT RE-CHECK, on top of getRunAuthorized. Since 0.7's third
+	// tier, ownsRunOrAdmin (which getRunAuthorized delegates to) passes a
+	// SECURITY ADMIN on any run — deliberately, for incident response. Minting
+	// is the one route under that predicate that is not inspect-or-stop: this
+	// ticket becomes a live interactive PTY inside a foreign sandbox, an
+	// authority the three-tier model reserves to the super admin
+	// (internal/auth/oidc's RoleSecurityAdmin doc).
+	//
+	// Without this, the mint would still be BLOCKED downstream — the ticket
+	// stamps oidc.RoleMember below (a security admin is not an operator here),
+	// and handleAttachWS re-checks owner-or-RoleAdmin on consume. That is an
+	// ACCIDENT of defense-in-depth, not a decision: it holds only while two
+	// other lines in two other files keep their current shape, and it fails as
+	// a bewildering WS-time error rather than a refusal at the surface that
+	// took the request. Refuse HERE, where the rule is legible and testable.
+	//
+	// 404, byte-identical to the foreign-member deny getRunAuthorized writes —
+	// same no-existence-oracle rule, so probing run ids through this route
+	// still learns nothing. Audited under its OWN reason, not "not_owner": an
+	// auditor should be able to see a security admin refused a foreign PTY
+	// without inferring it from the path.
+	if !s.isOperator(r.Context()) && run.CreatedBy != principalFromRequest(r) {
+		writeError(w, http.StatusNotFound, "run not found")
+		s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorTypeFromRequest(r), principalFromRequest(r),
+			"authz.denied", run.ID.String(), "denied", mustJSON(map[string]any{"reason": "attach_ticket_foreign_run"})))
+		return
+	}
 	// Same fail-closed gate as the WS itself: a ticket for a non-attachable run
 	// is useless, so refuse to mint one (clean 409 now beats a WS error later).
 	if run.State != types.RunRunning {
@@ -126,6 +153,12 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	at, principal := actorFromRequest(r)
+	// DELIBERATELY isOperator — this role field means exactly "reaches runs its
+	// holder does not own" (attach.go's == oidc.RoleAdmin consume check), never
+	// the minter's session tier, so a security admin's ticket stamps member.
+	// See the three-tier doctrine on internal/auth/oidc's RoleSecurityAdmin;
+	// the API-token stamp (apitokens.go) is the ONE snapshot site that moved,
+	// because a token carries a whole session identity rather than run reach.
 	role := oidc.RoleMember
 	if s.isOperator(r.Context()) {
 		role = oidc.RoleAdmin

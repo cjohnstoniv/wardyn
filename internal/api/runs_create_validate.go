@@ -288,6 +288,13 @@ func interactiveToolApprovalsError(req createRunRequest) string {
 // choice, and seedRequestWorkspace only ever sets req.Image when the caller left
 // it empty — so this check, run BEFORE that seeding, can never catch it.
 // Workspaces have no equivalent devcontainer_repo seed at all.
+//
+// DELIBERATELY isOperator (three-tier doctrine, internal/auth/oidc's
+// RoleSecurityAdmin): the security admin AUTHORS policy for others but RUNS
+// under the deployer's ceiling themselves. Exempting them here — and at the
+// inline-policy clamp (inline_policy.go), its lockstep twin — would let the
+// principal who writes the org's ceilings be the one principal none of them
+// bind, which is the self-exemption the whole tier is designed not to have.
 func (s *Server) denyMemberRequest(w http.ResponseWriter, r *http.Request, req createRunRequest) bool {
 	if s.isOperator(r.Context()) {
 		return false

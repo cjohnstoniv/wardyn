@@ -255,7 +255,12 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.isOperator(r.Context()) {
+	// isSecurityOperator, not isOperator: a governance profile is authored
+	// AGAINST workspaces and their egress, so a security admin must see the
+	// whole inventory to govern it. READ only — every workspace WRITE route
+	// (llm-cred, requirements, reassign, env-as-code, and ownsWorkspaceOrAdmin
+	// itself) stays on the super-admin predicate.
+	if !s.isSecurityOperator(r.Context()) {
 		principal := principalFromRequest(r)
 		var ownerPageFn func(store.Page) ([]types.Workspace, error)
 		if pg, ok := s.cfg.Store.(store.WorkspacesByOwnerPager); ok {

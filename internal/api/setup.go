@@ -718,6 +718,12 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),
 	}
+	// DELIBERATELY isOperator (three-tier doctrine, internal/auth/oidc's
+	// RoleSecurityAdmin): what this redaction drops is the DEPLOYER's funnel —
+	// the environment/credential checklist, resident-CLI login detection,
+	// secret names, runner detail — every row of it actionable only through a
+	// setup mutation, which stays super-only. A security admin sees the same
+	// summary a member does because there is nothing here they could act on.
 	if !s.isOperator(ctx) {
 		resp = redactSetupStatusForMember(resp)
 	}

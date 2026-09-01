@@ -88,7 +88,7 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.isOperator(r.Context()) {
+	if !s.isSecurityOperator(r.Context()) { // security tier sees the org-wide queue (http.go's isSecurityOperator)
 		if runID == uuid.Nil {
 			pager, capable := s.cfg.Approvals.(store.ApprovalsByRunCreatorPager)
 			if !capable {
@@ -389,7 +389,7 @@ func (s *Server) authorizeMemberDecision(w http.ResponseWriter, r *http.Request,
 		ap  types.ApprovalRequest
 		run types.AgentRun
 	)
-	if s.isOperator(r.Context()) {
+	if s.isSecurityOperator(r.Context()) { // security tier decides any kind on any run; LOCKSTEP pair, see http.go
 		return ap, run, false, true
 	}
 	var err error
@@ -601,7 +601,7 @@ func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap 
 	// approval exists, is egress_domain, and is on a run they own, so a 403
 	// discloses nothing they do not already know — while a 404 would read as
 	// "your own approval vanished". Do not "fix" this back.
-	if !s.isOperator(r.Context()) {
+	if !s.isSecurityOperator(r.Context()) { // LOCKSTEP with authorizeMemberDecision; see http.go
 		writeError(w, http.StatusForbidden, "decision_scope always is operator-only")
 		return uuid.Nil, false
 	}

@@ -102,6 +102,13 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 	// role_checked_at for every key the principal owns) or once
 	// role_checked_at exceeds WARDYN_SSH_ROLE_TTL (migration 0046), whichever
 	// comes first — never instantly, and never without one of those two.
+	//
+	// DELIBERATELY isOperator, and a security admin's key stamps member. This
+	// field means exactly "reaches runs its holder does not own"
+	// (sshgateway.go's == oidc.RoleAdmin check), not the registering session's
+	// tier — the asymmetry the three-tier model exists to express
+	// (internal/auth/oidc's RoleSecurityAdmin). A ladder here would put an
+	// interactive shell in every developer's sandbox.
 	role := oidc.RoleMember
 	if s.isOperator(r.Context()) {
 		role = oidc.RoleAdmin

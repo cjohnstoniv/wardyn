@@ -30,7 +30,7 @@ import (
 // what launch actually does):
 //   - inline_policy AND policy_id both set  => 400 (mutually exclusive).
 //   - inline_policy set                     => for a MEMBER caller (item 5),
-//     clamp to composer.Clamp(spec, DefaultPolicy) FIRST — an admin-authored
+//     clamp to composer.Clamp(spec, THEIR CEILING) FIRST — an admin-authored
 //     ceiling a member's own inline_policy can never exceed. An admin is
 //     UNCLAMPED (they ARE the ceiling-setting authority). Only THEN validate
 //     via validatePolicySpec (so runner.ValidateMount gates any inline mount)
@@ -40,14 +40,21 @@ import (
 //     policy.inline audit event is emitted — which therefore already
 //     reflects the clamped spec, not the raw member-submitted one.
 //   - else (policy_id set, or neither)      => the existing resolvePolicy path
-//     (stored row, else the configured default; NOT re-clamped — a stored
-//     policy or the default IS already admin-authored/the ceiling itself),
+//     (stored row, else the caller's own CEILING),
 //     THEN validateInlineSecretRefs against the resolved spec — same
 //     secret-existence check as the inline branch, including a 422 when the
 //     spec's grants exist but no secret store is configured. This is a
 //     deliberate behavior change (see CHANGELOG): a stored or default policy
 //     naming a missing/reserved secret now 422s at create instead of only
-//     failing later at first proxy injection or clone.
+//     failing later at first proxy injection or clone. A member who SELECTED a
+//     stored row runs the same three-stage member pipeline the inline branch
+//     does, when and only when a governance profile applies to them — see that
+//     branch for the scoping and for why a bare Clamp is not enough.
+//
+// THE CEILING IS RESOLVED ONCE, HERE, and is this PRINCIPAL's rather than the
+// deployment's (effectiveCeiling). For a member with no governance assignment
+// it IS Config.DefaultPolicy, so every path below is byte-for-byte today for
+// them; for an assigned member it is the profile an admin bound to them.
 //
 // dryRun suppresses the policy.inline audit write: a preflight preview is not an
 // inline-policy USE, and the audit feed is the system of record — orphan
@@ -55,9 +62,10 @@ import (
 // from real authorizations.
 //
 // The 4th return is L6's clamp-warning list (composer.Clamp's own "what did I
-// change" notes, plus the capability/grant drops) — non-nil only on the member
-// inline-policy branch, since that is the ONLY resolution path that ever
-// clamps. BOTH callers surface it: handlePreflightRun in Review, so a member
+// change" notes, plus the capability/grant drops, plus any grant a governance
+// profile can no longer serve after a DefaultPolicy redeploy) — non-nil on the
+// member branches, which are the only resolution paths that ever clamp. BOTH
+// callers surface it: handlePreflightRun in Review, so a member
 // sees WHY their inline_policy differs from what they typed before they
 // launch, and handleCreateRun on the 201, because the console launches without
 // preflighting and a silent narrowing is a run that quietly is not the run the
@@ -69,26 +77,44 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		return types.RunPolicySpec{}, nil, nil, false
 	}
 
+	// This principal's ceiling — resolved BEFORE either branch, because both
+	// need it and a create must never resolve two different ceilings for one
+	// request. A resolver failure is never fail-open: writeCeilingError 500s a
+	// store error and 403s an unanswerable group snapshot (see effectiveCeiling).
+	ceiling, ceilErr := s.effectiveCeiling(ctx)
+	if ceilErr != nil {
+		writeCeilingError(w, ceilErr)
+		return types.RunPolicySpec{}, nil, nil, false
+	}
+
 	// Inline path: validate structurally (same validator as a stored policy) then
 	// validate any inline secret references. On success attach with a nil id.
 	if req.InlinePolicy != nil {
 		// A member MAY author an inline_policy (item 5) — it is not refused,
-		// it is CLAMPED below to the operator's own DefaultPolicy ceiling, so
+		// it is CLAMPED below to the ceiling an admin set FOR THEM, so
 		// a member can never smuggle wider egress/grants/confinement than the
 		// operator already allows. An admin is the ceiling-setting authority
 		// and is left unclamped. (This supersedes the earlier operator-only
 		// SECMODEL-1 gate: a clamp bounds a member without blocking them.)
 		spec := *req.InlinePolicy
-		var clampWarnings []string
+		clampWarnings := append([]string(nil), ceiling.Warnings...)
+		// DELIBERATELY isOperator (three-tier doctrine, internal/auth/oidc's
+		// RoleSecurityAdmin), in lockstep with denyMemberRequest: a security
+		// admin's OWN run is clamped like anyone else's. They author the
+		// ceiling; they do not stand outside it.
 		if !s.isOperator(r.Context()) {
 			// Item 5: a member's inline_policy can never smuggle wider grants/
-			// egress/confinement than the operator's own DefaultPolicy allows.
+			// egress/confinement than THEIR ceiling allows — the governance
+			// profile an admin assigned them, or Config.DefaultPolicy when
+			// nobody assigned one.
 			// Clamped BEFORE validation/resolution — never the fully-resolved
 			// spec, which would strip the LATER admin-authored additions
 			// (workspace integration binding, ensureLLMGrant,
 			// applyRequiredSecretGrant, applyIntegrationRequirement) folded in
 			// by runs.go/preflight.go AFTER this function returns.
-			spec, clampWarnings = composer.Clamp(spec, s.cfg.DefaultPolicy)
+			var clamped []string
+			spec, clamped = composer.Clamp(spec, ceiling.Spec)
+			clampWarnings = append(clampWarnings, clamped...)
 			// composer.Clamp bounds egress/confinement/TTL and drops grant KINDS
 			// outside the ceiling, but NOT a stored-secret grant's SCOPE (which
 			// operator secret is paired with which host) — that stays member-
@@ -155,10 +181,10 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	}
 
 	// Stored/default path: resolve, then validate secret references the SAME way
-	// the inline branch does (one call, no duplicated logic — H1). Never
-	// clamped (a stored policy or the default IS already the ceiling), so no
-	// warnings to return here either.
-	spec, policyID, err := s.resolvePolicy(ctx, req.PolicyID)
+	// the inline branch does (one call, no duplicated logic — H1). The no-policy
+	// default is now the CALLER's ceiling rather than the deployment's
+	// (resolvePolicy), and a member-SELECTED stored row is bounded below.
+	spec, policyID, err := s.resolvePolicy(ctx, req.PolicyID, ceiling)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusBadRequest, "policy_id not found")
@@ -167,11 +193,67 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		writeError(w, http.StatusInternalServerError, "resolve policy: "+err.Error())
 		return types.RunPolicySpec{}, nil, nil, false
 	}
+	storedWarns := append([]string(nil), ceiling.Warnings...)
+	// PF-1, the central escape: a stored policy row is admin-authored CONTENT,
+	// but ANY signed-in caller may put one on their own run (policy_id is
+	// ungated, and it has to stay that way — gating it removes a legitimate
+	// feature and pushes members onto hand-authored inline specs). So a member
+	// selecting a wide row got a wide run, entirely past the clamp their own
+	// inline_policy would have hit. One rule falls out: member-selected content
+	// is bounded by the member's ceiling whether it arrived as a body or as a
+	// row id.
+	//
+	// SCOPED to policyID != nil && ceiling.Profile != nil, and both halves are
+	// load-bearing:
+	//
+	//   - policyID != nil: the no-policy default is already the ceiling itself
+	//     (resolvePolicy above), and clamping a spec against itself is at best a
+	//     no-op and at worst order-dependent — composer.Clamp is not a lattice
+	//     meet (PF-3).
+	//   - Profile != nil: the UNCONDITIONAL variant is deliberately not chosen.
+	//     Stored policies are routinely wider than a minimal DefaultPolicy, so
+	//     clamping every member's selection to it would shred deployments that
+	//     have never heard of this feature. The clamp fires exactly when an
+	//     admin has DECLARED this principal's ceiling. The residual is named and
+	//     accepted: an unassigned member still selects stored rows unclamped,
+	//     which is today's behaviour, and the deployment-wide opt-in is an
+	//     `all`-subject assignment.
+	//
+	// The FULL member pipeline, never Clamp alone: clampGrants passes same-kind
+	// grant pairings through VERBATIM, so a Clamp-only stored branch would hand
+	// a member every operator-secret pairing the row happened to carry — the
+	// "one rule whether body or row id" claim would be false at exactly the
+	// grant-bearing rows, which are the ones that matter.
+	if policyID != nil && ceiling.Profile != nil && !s.isOperator(r.Context()) {
+		var clamped []string
+		spec, clamped = composer.Clamp(spec, ceiling.Spec)
+		storedWarns = append(storedWarns, clamped...)
+		kept, grantWarns, code, gerr := s.filterMemberGrants(ctx, s.secretOwnerFromRequest(r), spec.AllowedDomains, spec.EligibleGrants)
+		if gerr != nil {
+			writeError(w, code, "invalid policy: "+gerr.Error())
+			return types.RunPolicySpec{}, nil, nil, false
+		}
+		spec.EligibleGrants = kept
+		storedWarns = append(storedWarns, grantWarns...)
+		drops := make([]capDrop, 0, len(grantWarns))
+		for _, gw := range grantWarns {
+			drops = append(drops, capDrop{reason: "grant_pairing_not_eligible", detail: gw})
+		}
+		capWarns, capDrops, nerr := s.narrowMemberInlinePolicy(ctx, s.secretOwnerFromRequest(r), &spec)
+		if nerr != nil {
+			writeError(w, http.StatusInternalServerError, "resolve capability: "+nerr.Error())
+			return types.RunPolicySpec{}, nil, nil, false
+		}
+		storedWarns = append(storedWarns, capWarns...)
+		if !dryRun {
+			s.auditMemberPolicyDrops(ctx, r, append(drops, capDrops...))
+		}
+	}
 	if code, err := s.validateInlineSecretRefs(ctx, s.secretOwnerFromRequest(r), spec); err != nil {
 		writeError(w, code, "invalid policy: "+err.Error())
 		return types.RunPolicySpec{}, nil, nil, false
 	}
-	return spec, policyID, nil, true
+	return spec, policyID, storedWarns, true
 }
 
 // capDrop is one thing a capability took away from a member's inline policy:
@@ -386,8 +468,25 @@ func (s *Server) auditMemberPolicyDrops(ctx context.Context, r *http.Request, dr
 // or, since the pairing switch closed, an UNKNOWN KIND — is a malformed request
 // → error (fail closed), never a silent drop. env_secret is admin-only and is
 // dropped for a member regardless of the ceiling; see the block below.
+//
+// The eligible-grant list it compares against is the CALLER's ceiling
+// (effectiveCeiling), not Config.DefaultPolicy: a governance profile narrows
+// which credential pairings its members may reuse, and reading the deployment
+// list here would have left that narrowing unenforced at the one seam where a
+// pairing actually becomes an injected credential. Resolved INSIDE rather than
+// threaded in from resolveRunPolicy — ponytail: that costs one extra indexed
+// read on the member create path (PF-13's accepted double resolution) and buys
+// a signature no caller, present or future, can pass the wrong ceiling to;
+// thread it through if a profile-load benchmark ever says to.
 func (s *Server) filterMemberGrants(ctx context.Context, owner string, allowedDomains []string, grants []types.GrantSpec) (kept []types.GrantSpec, warns []string, code int, err error) {
-	ceiling := s.cfg.DefaultPolicy.EligibleGrants
+	resolved, cerr := s.effectiveCeiling(ctx)
+	if cerr != nil {
+		// Fail CLOSED, and never by silently substituting the deployment list:
+		// an unknown ceiling cannot decide whether a pairing is eligible, and
+		// guessing here is the one direction that leaks a credential.
+		return nil, nil, ceilingErrorStatus(cerr), cerr
+	}
+	ceiling := resolved.Spec.EligibleGrants
 	for _, g := range grants {
 		host, secretRef, knownHostsRef, covered, derr := storedSecretGrantPairing(g)
 		if !covered {

@@ -789,17 +789,30 @@ type SSHPublicKey struct {
 // Token carries the PLAINTEXT credential and is populated on exactly one
 // response — the create call — and is never stored, listed or logged. Every
 // other path leaves it empty, and `omitempty` keeps it out of those bodies.
+// GroupsTruncated is that snapshot's PF-26 completeness marker (migration
+// 0052's api_tokens.groups_truncated), and it is THREE-VALUED on purpose:
+//
+//	true  — the snapshot was cut off by the cookie byte cap at mint.
+//	false — the snapshot is complete.
+//	nil   — UNKNOWN: a token minted before 0.7, when nothing recorded the bit.
+//
+// nil is NOT false. A pre-0.7 token's snapshot may well have been truncated,
+// and reading it as complete lets the holder silently shed a group-assigned
+// governance profile — the exact evaporation this marker closes. Consumers
+// treat nil as TRUNCATED (fail closed); the cost is one re-mint, and only on a
+// deployment that actually assigns profiles to groups.
 type APIToken struct {
-	ID         uuid.UUID  `json:"id"`
-	Principal  string     `json:"principal"`
-	Email      string     `json:"email,omitempty"`
-	Role       string     `json:"role"`
-	Groups     []string   `json:"groups,omitempty"`
-	Name       string     `json:"name"`
-	CreatedAt  time.Time  `json:"created_at"`
-	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
-	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
-	Token      string     `json:"token,omitempty"` // plaintext, create response ONLY
+	ID              uuid.UUID  `json:"id"`
+	Principal       string     `json:"principal"`
+	Email           string     `json:"email,omitempty"`
+	Role            string     `json:"role"`
+	Groups          []string   `json:"groups,omitempty"`
+	GroupsTruncated *bool      `json:"groups_truncated,omitempty"`
+	Name            string     `json:"name"`
+	CreatedAt       time.Time  `json:"created_at"`
+	LastUsedAt      *time.Time `json:"last_used_at,omitempty"`
+	RevokedAt       *time.Time `json:"revoked_at,omitempty"`
+	Token           string     `json:"token,omitempty"` // plaintext, create response ONLY
 }
 
 // CapabilitySubjectType names WHO a capability grant is written against

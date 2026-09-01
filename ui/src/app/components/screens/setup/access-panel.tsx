@@ -76,6 +76,32 @@ function withMono(text: string): React.ReactNode {
   );
 }
 
+// The chip/label form of a role, for every place this panel shows one. Takes
+// the WIRE string, not AccessRole: AccessMapping.role and
+// AccessResponse.default_role are plain strings on the wire (a chart row's
+// role is whatever WARDYN_OIDC_ROLE_MAP carries), so the union cannot be
+// relied on to have narrowed them.
+//
+// It exists because the two-role ternary this replaces read as
+// `role === "admin" ? Admin : Member` — which silently labelled a
+// security_admin row "Member", i.e. showed an admin-adjacent mapping as the
+// least-privileged one. An unrecognized value renders ITSELF rather than
+// falling through to a role it is not: showing the raw claim is honest, and
+// mislabelling a role on the access screen is the one thing this panel must
+// never do.
+function roleLabel(role: string): string {
+  switch (role) {
+    case "admin":
+      return PEOPLE.ROLE_ADMIN;
+    case "security_admin":
+      return PEOPLE.ROLE_SECURITY_ADMIN;
+    case "member":
+      return PEOPLE.ROLE_MEMBER;
+    default:
+      return role;
+  }
+}
+
 // A quiet inline note — the ONLY error surface this panel uses (F-11's lesson:
 // in-viewport, next to the control that raised it, never a toast that can
 // scroll out of frame). Mirrors permissions.tsx's own private Note.
@@ -302,7 +328,7 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
           <dd className="text-foreground">
             {access.default_role ? (
               <Chip tone="neutral">
-                {access.default_role === "admin" ? PEOPLE.ROLE_ADMIN : PEOPLE.ROLE_MEMBER}
+                {roleLabel(access.default_role)}
               </Chip>
             ) : (
               <span className="text-muted-foreground">{PEOPLE.DEFAULT_ROLE_UNSET}</span>
@@ -418,7 +444,7 @@ function MappingCard({
     >
       <div className="flex items-start justify-between gap-3">
         <Mono className="min-w-0 break-all text-foreground">{m.value}</Mono>
-        <Chip tone="neutral">{m.role === "admin" ? PEOPLE.ROLE_ADMIN : PEOPLE.ROLE_MEMBER}</Chip>
+        <Chip tone="neutral">{roleLabel(m.role)}</Chip>
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <Chip tone="neutral">{m.source === "chart" ? PEOPLE.SOURCE_CHART : PEOPLE.SOURCE_CONSOLE}</Chip>
@@ -523,7 +549,13 @@ function AddMappingForm({
             value={role}
             onChange={setRole}
             options={[
+              // Highest tier first, same order as AccessRole's own union and
+              // oidc's constant block. security_admin is offered here because
+              // a role mapping is the ONLY way a session ever reaches it —
+              // there is no operator-allowlist twin and it is refused as
+              // WARDYN_OIDC_DEFAULT_ROLE.
               { value: "admin", label: PEOPLE.ROLE_ADMIN },
+              { value: "security_admin", label: PEOPLE.ROLE_SECURITY_ADMIN },
               { value: "member", label: PEOPLE.ROLE_MEMBER },
             ]}
           />

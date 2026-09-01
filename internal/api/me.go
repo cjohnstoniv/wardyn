@@ -26,9 +26,19 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		method = "sso"
 	}
 	principal := principalFromRequest(r)
-	role := oidc.RoleAdmin
-	if !s.isOperator(r.Context()) {
-		role = oidc.RoleMember
+	// The REAL session role, not a two-valued re-derivation of it: since 0.7
+	// the tier set is three-valued (admin / security_admin / member) and
+	// collapsing it through isOperator here would report a security admin as a
+	// plain member — the console's own account chip, and every consumer of this
+	// field, would then contradict what the server actually enforces.
+	//
+	// oidc.RoleAdmin is the fallback for a caller with NO verified OIDC human
+	// (admin token, local mode, OIDC unconfigured), which is byte-identical to
+	// what this endpoint returned before: those callers have no session role,
+	// and isOperator's own no-human arm already calls them admins.
+	role := oidcRoleFromContext(r.Context())
+	if oidcHumanFromContext(r.Context()) == "" {
+		role = oidc.RoleAdmin
 	}
 	body := map[string]any{
 		"principal": principal,
@@ -38,7 +48,19 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// The SAME predicate operatorOnly gates every admin route with
 		// (isOperator, http.go) — never a second, driftable copy of the rule.
 		// Kept for the console, which already consumes it: operator == role==admin.
+		//
+		// DELIBERATELY NOT widened to include security_admin. Its ~20 UI
+		// consumers gate SUPER-admin writes (secrets, LLM credential, setup,
+		// workspace writes); widening it here would hand a security admin
+		// controls the server then refuses, which is the raw-403 discovery this
+		// field exists to prevent. security_operator below is the additive
+		// answer for the surfaces that DO move.
 		"operator": s.isOperator(r.Context()),
+		// The SAME predicate the securityOps group gates the security
+		// governance routes with (isSecurityOperator, http.go) — the same
+		// never-a-second-copy rule as "operator" directly above. True for an
+		// admin too: the tiers overlap on this surface.
+		"security_operator": s.isSecurityOperator(r.Context()),
 	}
 	// M3: the AddWorkspaceDialog root-constraint hint (member-role-desktop.md
 	// §DECISIONS O1, ui-batch2-mock.md's "New wire this mock assumes"). null for
@@ -46,8 +68,15 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	// with no configured root either way (RootsFor's own empty-means-unavailable
 	// contract). Presentational only — ValidateMemberMountSource, not this
 	// value, is what actually enforces the boundary at bind time.
+	//
+	// Keyed on !isOperator, NOT on role == RoleMember: the constraint follows
+	// the workspace-OWNERSHIP namespace (secretOwnerFromRequest, deliberately
+	// still isOperator — see runs_policy.go), so a SECURITY ADMIN's workspaces
+	// are owner-stamped like a member's and are clamped by the same roots. This
+	// is byte-identical for the two pre-0.7 tiers; without it the third tier
+	// would be silently clamped at bind time with no hint ever shown.
 	body["member_local_dir_root"] = nil
-	if role == oidc.RoleMember {
+	if !s.isOperator(r.Context()) {
 		body["member_local_dir_root"] = memberLocalDirRootLabel(s.cfg.MemberMounts.RootsFor(principal))
 	}
 	// W31-S1-7: an SSO session dies outright at this instant (no refresh) — the

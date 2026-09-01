@@ -235,6 +235,62 @@ type Store interface {
 	// screen and the OIDC login-time merge's whole data need.
 	ListRoleMappings(ctx context.Context) ([]types.RoleMapping, error)
 
+	// Governance profiles and their subject assignments (migration 0052,
+	// governance.go): the assignable ceiling that replaces Config.DefaultPolicy
+	// for a principal an admin has named. ARE part of Store, for the third time
+	// and the strongest instance of the same reason: ResolveGovernanceProfile
+	// runs on the REQUEST PATH of run creation, and a type-assert-and-degrade
+	// seam there would mean "this store does not implement governance,
+	// therefore use the DEPLOYMENT-WIDE ceiling" — which is a silent WIDENING
+	// back to exactly the floor an admin declared too loose for this principal.
+	// That is not a decision a nil interface gets to make by omission, so a
+	// store that cannot answer it is a COMPILE error.
+	//
+	// UpsertGovernanceProfile keys on the PRIMARY KEY (a fresh id inserts, an
+	// existing one updates in place, rename included) and returns ErrConflict
+	// when UNIQUE(name) rejects the write. DeleteGovernanceProfile returns
+	// ErrConflict when the profile is still ASSIGNED — the ON DELETE RESTRICT,
+	// which exists so deleting a profile can never silently widen its members.
+	UpsertGovernanceProfile(ctx context.Context, p types.GovernanceProfile) (types.GovernanceProfile, error)
+	GetGovernanceProfile(ctx context.Context, id uuid.UUID) (types.GovernanceProfile, error)
+	DeleteGovernanceProfile(ctx context.Context, id uuid.UUID) error
+	ListGovernanceProfiles(ctx context.Context) ([]types.GovernanceProfile, error)
+	// UpsertGovernanceAssignment keys on the natural UNIQUE (subject_type,
+	// subject): re-assigning a subject REPOINTS its one row, returning the
+	// EXISTING row's id on a conflict. ErrNotFound when profile_id names no
+	// profile (the FK rejects it).
+	UpsertGovernanceAssignment(ctx context.Context, a types.GovernanceAssignment) (types.GovernanceAssignment, error)
+	DeleteGovernanceAssignment(ctx context.Context, id uuid.UUID) error
+	ListGovernanceAssignments(ctx context.Context) ([]types.GovernanceAssignment, error)
+	// ResolveGovernanceProfile returns THE ONE profile that applies to a caller
+	// — user > group > all, sub over email within the user tier, then priority
+	// DESC and name ASC — as a single indexed read whose ORDER BY IS the whole
+	// precedence rule. ErrNotFound means "no assignment matched", which the
+	// caller reads as the deployment ceiling. userSubjects must arrive in the
+	// caller's own precedence order (capabilitySubjects' [sub, email]); the
+	// query encodes match POSITION, not identity kind.
+	//
+	// It also returns WHICH TIER matched, and that second value is load-bearing
+	// rather than informational: on a stale or truncated group snapshot the
+	// caller must resolve with NO groups, and it then has to tell a user-tier
+	// winner (serve it — an explicitly named principal is never locked out by a
+	// snapshot problem) from an all-tier winner (refuse — a group row could
+	// have outranked it). Those two are indistinguishable from the profile
+	// alone, including when both tiers name the SAME profile id, and
+	// re-deriving the tier in Go from the subjects would be a second copy of
+	// the ORDER BY above — the dual-matcher drift this file refuses elsewhere.
+	//
+	// The group-tier existence leg stays a SEPARATE read (below) and is not
+	// folded into this statement: the case that needs it most is the one where
+	// this query matches NOTHING, and a zero-row result carries no EXISTS
+	// column with it.
+	ResolveGovernanceProfile(ctx context.Context, userSubjects, groups []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error)
+	// HasGroupTierAssignments gates the stale/truncated group-snapshot refusal:
+	// with no group-tier row there is nothing an unknown group could have
+	// matched, so a nil or truncated snapshot must fall through rather than
+	// refuse (see the implementation).
+	HasGroupTierAssignments(ctx context.Context) (bool, error)
+
 	// Ping proves the store is actually reachable, not just constructed — the
 	// /readyz readiness probe's one call. A live TCP connect with no working
 	// query would otherwise read as healthy forever.

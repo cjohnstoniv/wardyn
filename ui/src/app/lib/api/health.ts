@@ -190,13 +190,20 @@ export const health = {
   // is refused on writes; see wardyn/operator-context.tsx for how the console
   // uses this to disable those controls instead of letting a viewer discover
   // the tier as a raw 403. `role` (B3) is the same B1-derived tier named
-  // directly ("admin"/"member" — admin === operator); `email` is the OIDC
-  // claim (empty outside SSO).
+  // directly — three-valued since 0.7 ("admin"/"security_admin"/"member");
+  // `email` is the OIDC claim (empty outside SSO).
+  //
+  // `security_operator` is the SECOND predicate (isSecurityOperator): admin OR
+  // security_admin, gating the security-governance surfaces (approvals, audit,
+  // permissions, governance profiles). `operator` deliberately stays
+  // super-admin-only — the two are NOT complementary now that role has three
+  // values, so gate each control on the one that matches its route.
   async whoami(): Promise<{
     principal: string;
     method: string;
     operator: boolean;
-    role: "admin" | "member";
+    security_operator: boolean;
+    role: "admin" | "security_admin" | "member";
     email: string;
     // ISO timestamp the SSO session dies at, with no refresh (W31-S1-7) —
     // present only for method:"sso". Absent for local/token auth, which has
@@ -216,7 +223,8 @@ export const health = {
         principal: string;
         method: string;
         operator: boolean;
-        role: "admin" | "member";
+        security_operator: boolean;
+        role: "admin" | "security_admin" | "member";
         email: string;
         session_expires_at?: string;
         member_local_dir_root?: string | null;

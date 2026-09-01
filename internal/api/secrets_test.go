@@ -98,7 +98,7 @@ func TestSecretOwnerFromRequest(t *testing.T) {
 		},
 		{
 			"wdn_ token, same sub+role as the SSO session above: the identical sub",
-			mkReq(withHumanIdentity(context.Background(), "sub-member-1", "m1@corp.example", oidc.RoleMember, nil), ""),
+			mkReq(withHumanIdentity(context.Background(), "sub-member-1", "m1@corp.example", oidc.RoleMember, nil, false), ""),
 			"sub-member-1",
 		},
 	}

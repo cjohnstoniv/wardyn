@@ -24,24 +24,78 @@ import (
 // ─── role derivation ─────────────────────────────────────────────────────────
 
 // Wardyn roles a session can carry. See Session.Role / Config.RoleMap.
+//
+// RoleSecurityAdmin is the THIRD tier (0.7): a principal who governs the
+// deployment's security posture — approvals, audit, permissions/capability
+// grants, governance profiles — WITHOUT the super admin's reach into other
+// people's runs, credentials or host configuration. It is NOT a rung on a
+// monotone ladder below RoleAdmin: internal/api keeps two named predicates
+// (isOperator = super only, isSecurityOperator = super OR security admin)
+// precisely because security_admin ⊄ admin at the role-SNAPSHOT stamp sites
+// (ssh keys, attach tickets), where RoleAdmin means the narrower, concrete
+// thing "this credential reaches runs its holder does not own". A ladder would
+// stamp admin on a security admin's SSH key — an interactive shell in every
+// developer's sandbox. See internal/api/http.go's isSecurityOperator.
+//
+// MAPPED TIER ONLY. security_admin is reachable through the merged role map
+// (chart WARDYN_OIDC_ROLE_MAP rows plus console-managed rows) and nothing
+// else: there is deliberately no WARDYN_OIDC_SECURITY_EMAILS twin of the
+// operator allowlist, and cmd/wardynd REFUSES it as WARDYN_OIDC_DEFAULT_ROLE
+// (a fallthrough tier is exactly the accident that should never grant it).
 const (
-	RoleAdmin  = "admin"
-	RoleMember = "member"
+	RoleAdmin         = "admin"
+	RoleSecurityAdmin = "security_admin"
+	RoleMember        = "member"
 )
 
 // ValidRole reports whether s is a recognized role value. Used to validate
-// WARDYN_OIDC_ROLE_MAP entries (ParseRoleMap) and WARDYN_OIDC_DEFAULT_ROLE
-// (cmd/wardynd, at boot) — both fail closed on a typo rather than letting a
-// garbage role value silently reach a session cookie.
+// WARDYN_OIDC_ROLE_MAP entries (ParseRoleMap), console role-mapping rows
+// (mergeRoleMaps, internal/api's /access write boundary) and
+// WARDYN_OIDC_DEFAULT_ROLE (cmd/wardynd, at boot) — all fail closed on a typo
+// rather than letting a garbage role value silently reach a session cookie.
+//
+// WARDYN_OIDC_DEFAULT_ROLE validates through validDefaultRole (cmd/wardynd),
+// which is STRICTER than this: it additionally refuses RoleSecurityAdmin.
 func ValidRole(s string) bool {
-	return s == RoleAdmin || s == RoleMember
+	return s == RoleAdmin || s == RoleSecurityAdmin || s == RoleMember
+}
+
+// roleRank orders the role values for deriveRole's highest-wins fold:
+//
+//	"" (no match) 0  <  member 1  <  security_admin 2  <  admin 3
+//
+// It is the GENERALIZATION of the pre-0.7 rule "any admin match wins over a
+// member match, no matter which claim produced it" — the same escalating-union
+// semantics, now over three tiers instead of two booleans. An unrecognized
+// value ranks 0, which is what keeps a garbage map entry from ever deciding an
+// outcome (it also never becomes a Match: deriveRole skips it before the fold).
+//
+// Deliberately unexported and used ONLY here. It is an ordering over the
+// DERIVATION inputs, not an authorization ladder: nothing in internal/api may
+// ask "is my rank ≥ admin's" — see the two-predicate doctrine on
+// RoleSecurityAdmin above, which exists precisely because that comparison is
+// false at the role-snapshot stamp sites.
+func roleRank(role string) int {
+	switch role {
+	case RoleAdmin:
+		return 3
+	case RoleSecurityAdmin:
+		return 2
+	case RoleMember:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // ParseRoleMap parses WARDYN_OIDC_ROLE_MAP: a comma-separated list of
 // "value=role" pairs, e.g.
 // "Wardyn.Admin=admin,eng-team=member,alice@corp.com=admin". value is matched
 // case-insensitively against an ID token's roles/groups claims or its email
-// (see deriveRole); role must be RoleAdmin or RoleMember. Empty/blank input
+// (see deriveRole); role must satisfy ValidRole — RoleAdmin, RoleSecurityAdmin
+// or RoleMember. This map is the ONLY way a session reaches RoleSecurityAdmin
+// (see that constant's doc): the chart carries it the moment ValidRole accepts
+// it, with no other boot knob to turn. Empty/blank input
 // returns a nil map (role derivation disabled — Config.RoleMap's empty
 // behavior) and no error; non-empty input that yields no usable entry (e.g.
 // "," or a single malformed pair) is an error, never a silent nil — nil means
@@ -63,7 +117,7 @@ func ParseRoleMap(csv string) (map[string]string, error) {
 			return nil, fmt.Errorf("malformed entry %q: want value=role", pair)
 		}
 		if !ValidRole(v) {
-			return nil, fmt.Errorf("entry %q: invalid role %q (want %q or %q)", pair, v, RoleAdmin, RoleMember)
+			return nil, fmt.Errorf("entry %q: invalid role %q (want %q, %q or %q)", pair, v, RoleAdmin, RoleSecurityAdmin, RoleMember)
 		}
 		// A non-ASCII key can NEVER match: deriveRole skips non-ASCII claim
 		// values before lookup (asciiOnly, the fold-escalation guard), so
@@ -351,12 +405,17 @@ func (a *Authenticator) PreviewRoleAgainst(rows []RoleMapping, roles, groups []s
 //     RoleAdmin (true pre-0.5) — so adopting WARDYN_OIDC_ROLE_MAP is opt-in and
 //     upgrade-safe, and so is running on only WARDYN_OIDC_OPERATOR_EMAILS.
 //  2. Otherwise, build the case-insensitive union of rolesClaim, groupsClaim,
-//     and email, and look each value up in roleMap. ANY match resolving to
-//     RoleAdmin wins over one resolving to RoleMember, no matter which claim
+//     and email, look each value up in roleMap, and keep the HIGHEST-RANKING
+//     match (roleRank: member < security_admin < admin), no matter which claim
 //     produced it. An email on legacyAdminEmails (WARDYN_OIDC_OPERATOR_EMAILS)
-//     counts as an additional RoleAdmin match — it wins even over a
-//     RoleMember entry the same email also hits.
+//     counts as an additional top-rank RoleAdmin match — it still wins over
+//     any map entry the same email also hits, security_admin included.
 //  3. If nothing matched at all: defaultRole if set, else deny.
+//
+// Arm 1 is UNTOUCHED by the security_admin tier and must stay that way: a
+// deployment with no role map has no way to express the third tier at all, so
+// nothing changes for it (the upgrade-safe absent-row doctrine). The allowlist
+// is an ADMIN allowlist; there is no security-admin twin of it.
 func deriveRole(rolesClaim, groupsClaim []string, email string, roleMap map[string]string, legacyAdminEmails []string, defaultRole string) (role string, matches []Match, ok bool) {
 	if len(roleMap) == 0 {
 		// No role map: claim-based derivation is disabled, but the legacy
@@ -375,9 +434,17 @@ func deriveRole(rolesClaim, groupsClaim []string, email string, roleMap map[stri
 		}
 		return RoleMember, nil, true
 	}
-	var admin, member bool
+	// best is the highest-ranking match found so far ("" = nothing yet). The
+	// fold replaced a pair of booleans when the third tier landed: two bools
+	// already encoded "admin beats member", and a third would have made the
+	// resolution switch a hand-ordered cascade that a FOURTH tier silently gets
+	// wrong. One ordering (roleRank), one comparison, one place to change.
+	best := ""
 	if emailInList(email, legacyAdminEmails) {
-		admin = true
+		// Top rank by construction, so no later map row can outrank it — the
+		// pre-0.7 "the allowlist wins even over a member entry the same email
+		// hits" rule, unchanged and now covering security_admin entries too.
+		best = RoleAdmin
 		matches = append(matches, Match{Value: email, Role: RoleAdmin, Source: MatchSourceOperatorAllowlist})
 	}
 	values := make([]string, 0, len(rolesClaim)+len(groupsClaim)+1)
@@ -403,26 +470,30 @@ func deriveRole(rolesClaim, groupsClaim []string, email string, roleMap map[stri
 			continue // fail closed: see asciiOnly
 		}
 		key := strings.ToLower(strings.TrimSpace(v))
-		switch roleMap[key] {
-		case RoleAdmin:
-			admin = true
-			if !seenMapRow[key] {
-				seenMapRow[key] = true
-				matches = append(matches, Match{Value: v, Role: RoleAdmin, Source: MatchSourceMapRow})
-			}
-		case RoleMember:
-			member = true
-			if !seenMapRow[key] {
-				seenMapRow[key] = true
-				matches = append(matches, Match{Value: v, Role: RoleMember, Source: MatchSourceMapRow})
-			}
+		mapped := roleMap[key]
+		// ValidRole, not "mapped != \"\"": an absent key and an unrecognized
+		// value must behave identically — neither contributes to the fold, and
+		// neither becomes a Match. This is the pre-0.7 switch's exhaustive-case
+		// behavior stated once instead of enumerated per tier (a value that
+		// survived ParseRoleMap/mergeRoleMaps is already valid; this is the
+		// defense-in-depth arm for a row that reached the map some other way).
+		if !ValidRole(mapped) {
+			continue
+		}
+		if roleRank(mapped) > roleRank(best) {
+			best = mapped
+		}
+		// Provenance records EVERY contributing value at ITS OWN role, not the
+		// winning one — PreviewRole's console preview shows the human why the
+		// outcome came out this way, which needs the losing matches too.
+		if !seenMapRow[key] {
+			seenMapRow[key] = true
+			matches = append(matches, Match{Value: v, Role: mapped, Source: MatchSourceMapRow})
 		}
 	}
 	switch {
-	case admin:
-		return RoleAdmin, matches, true
-	case member:
-		return RoleMember, matches, true
+	case best != "":
+		return best, matches, true
 	case defaultRole != "":
 		return defaultRole, []Match{{Role: defaultRole, Source: MatchSourceDefaultRole}}, true
 	default:
@@ -471,7 +542,15 @@ const maxSessionGroupsBytes = 2048
 // admin debugging "why does this grant not apply" gets a stable answer instead
 // of a coin flip. (Ordering is lexical, so a truncated human loses their
 // alphabetically-last groups — arbitrary, but arbitrary and REPEATABLE.)
-func sessionGroups(rolesClaim, groupsClaim []string) []string {
+//
+// The second return says whether anything was DROPPED, and it is not a
+// diagnostic — it is an authorization input (PF-26). A group-subject governance
+// assignment a member's ceiling depends on can fall off this cap, and the
+// resolver would then hand them the DEPLOYMENT ceiling with no refusal, no
+// audit and nothing to notice: the restrictive profile simply evaporates. So
+// the bit rides the session to internal/api's ceiling resolver, which treats a
+// truncated snapshot exactly as it treats a missing one.
+func sessionGroups(rolesClaim, groupsClaim []string) (groups []string, truncated bool) {
 	seen := make(map[string]bool, len(rolesClaim)+len(groupsClaim))
 	uniq := make([]string, 0, len(rolesClaim)+len(groupsClaim))
 	for _, v := range slices.Concat(rolesClaim, groupsClaim) {
@@ -497,7 +576,7 @@ func sessionGroups(rolesClaim, groupsClaim []string) []string {
 		used += cost
 		out = append(out, g)
 	}
-	return out
+	return out, len(out) < len(uniq)
 }
 
 // printableASCII reports whether every rune of s is a printable ASCII

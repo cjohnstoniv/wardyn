@@ -197,6 +197,12 @@ func (s *Server) getWorkspaceOr404(w http.ResponseWriter, r *http.Request, id uu
 // exactly as it is today. The empty-principal guard matters for the same
 // reason: a caller whose principal resolves to "" must never match an
 // operator-owned row's empty owned_by and inherit admin write.
+//
+// Deliberately isOperator, unlike its run twin ownsRunOrAdmin below — see the
+// three-tier doctrine (internal/auth/oidc's RoleSecurityAdmin): a workspace
+// write binds credentials and names host paths, which is the super admin's
+// tier. A security admin READS the inventory (handleListWorkspaces) to govern
+// it; they do not rewrite it.
 func (s *Server) ownsWorkspaceOrAdmin(r *http.Request, ws types.Workspace) bool {
 	if s.isOperator(r.Context()) {
 		return true
@@ -291,8 +297,18 @@ func (s *Server) getRunOr404(w http.ResponseWriter, r *http.Request, id uuid.UUI
 // site that needs the same decision without getRunAuthorized's specific
 // "run not found" wording (e.g. the approval decide path, which owns "approval
 // not found" instead).
+//
+// isSecurityOperator, not isOperator: KILLING a foreign run is incident
+// response, the security admin's most time-critical act, and inspecting the run
+// behind an approval or an audit line is the evidence a decision rests on.
+//
+// The ONE route under this predicate that is not merely inspect-or-stop is the
+// attach-ticket mint, which hands out an interactive shell in a foreign
+// sandbox — so handleAttachTicket carries its OWN explicit strict re-check
+// against isOperator (attach_ticket.go). That guard is load-bearing, not
+// belt-and-braces: without it this one-word change silently grants a PTY.
 func (s *Server) ownsRunOrAdmin(r *http.Request, run types.AgentRun) bool {
-	return s.isOperator(r.Context()) || run.CreatedBy == principalFromRequest(r)
+	return s.isSecurityOperator(r.Context()) || run.CreatedBy == principalFromRequest(r)
 }
 
 // getRunAuthorized loads a run and authorizes the caller as its owner or an

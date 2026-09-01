@@ -111,6 +111,14 @@ func capabilitySubjects(ctx context.Context) (users, groups []string, stale bool
 // blocker OPERATIONS already names for other state, and a stale permission
 // cache is a security bug rather than a slow page — add one only behind a
 // shared invalidation channel.
+//
+// DELIBERATELY isOperator, and capGranted below likewise — this is the
+// INVARIANT that makes handing /permissions to a security admin safe at all:
+// no capability kind, present or future, can ever widen the admin tier. A
+// security admin is capability-BOUNDED exactly like a member (they may
+// self-grant through /permissions, audited, and still reach nothing this
+// exemption would give them). See the three-tier doctrine on
+// internal/auth/oidc's RoleSecurityAdmin. A pinning test asserts it.
 func (s *Server) capAllowed(ctx context.Context, kind, value string) (bool, error) {
 	if !validCapabilityKind(kind) {
 		return false, fmt.Errorf("api: unknown capability kind %q", kind)

@@ -474,7 +474,7 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if !oidc.ValidRole(req.Role) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("role: invalid %q (want %q or %q)", req.Role, oidc.RoleAdmin, oidc.RoleMember))
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("role: invalid %q (want %q, %q or %q)", req.Role, oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleMember))
 		return
 	}
 	chart := s.cfg.OIDC.ChartRoleMap()
