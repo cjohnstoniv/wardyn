@@ -261,3 +261,119 @@ func TestDispatch_BedrockAbsentCreds_FallsBackToAPIKeyPlaceholder(t *testing.T) 
 		t.Errorf("Env[ANTHROPIC_API_KEY] = %q, want the proxy-injected sentinel (api-key fallback)", spec.Env["ANTHROPIC_API_KEY"])
 	}
 }
+
+// TestDispatch_BedrockPrivateEndpoint_Composed is the acceptance test an adopter
+// on a PrivateLink estate asked for, and it is the only place the four pieces are
+// proven to compose. Each has its own unit test — the bypass list
+// (site_config_noproxy_test.go), the internal-host lift
+// (internal_hosts_test.go), the base URL (bedrock_test.go), the hostname
+// classification (llm_routes_test.go) — and every one of them passes on a tree
+// where the ESTATE still does not work, because the estate needs all four at
+// once.
+//
+// The shape being pinned: every cloud endpoint resolves into RFC 6598 (100.64/10)
+// and IAM refuses the public path, so a run must reach Bedrock through a VPC
+// endpoint. That needs the corporate proxy to be SKIPPED for that destination (it
+// cannot route an internal address), the address guard to be LIFTED for it (6598
+// is denied by default and should be), the data plane POINTED at it, and the model
+// named by full ARN. Miss any one and the failure looks like a different layer's
+// fault, which is exactly how the estate burned an evening.
+func TestDispatch_BedrockPrivateEndpoint_Composed(t *testing.T) {
+	const (
+		vpceHost = "vpce-0abc123-bedrock-runtime.us-east-1.vpce.amazonaws.com"
+		vpceURL  = "https://" + vpceHost
+		// An application-inference-profile ARN: enterprises pin the PROFILE so
+		// quota, logging and guardrails attach to it rather than the bare model.
+		modelARN = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
+	)
+
+	fr := &fakeRunner{}
+	srv, _ := pgHarnessWithRunner(t, fr)
+
+	srv.cfg.BedrockRegion = "us-east-1"
+	srv.cfg.BedrockModel = modelARN
+	srv.cfg.BedrockBaseURL = vpceURL
+	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{
+		"corp-proxy-url":             []byte("http://proxy.corp:3128"),
+		bedrockAccessKeyIDSecret:     []byte("AKIATESTTESTTESTTEST"),
+		bedrockSecretAccessKeySecret: []byte("wJalrXUtnFEMItesttesttesttesttesttestKEY"),
+	}}
+
+	ctx := context.Background()
+	if _, err := srv.cfg.Store.PutSiteConfig(ctx, types.SiteConfig{
+		UpstreamProxySecretRef: "corp-proxy-url",
+		// Skip the corporate proxy for the VPC endpoint: it will not CONNECT to
+		// an internal address, so without this every private endpoint times out.
+		UpstreamProxyNoProxy: []string{".vpce.amazonaws.com"},
+		// ...and lift the address guard for exactly that suffix, scoped to the
+		// CGNAT range the endpoint resolves into. The bypass alone is not enough:
+		// a skipped destination is still vetted, which is the safety property.
+		InternalHosts: []types.InternalHost{
+			{HostSuffix: "vpce.amazonaws.com", CIDRs: []string{"100.64.0.0/10"}},
+		},
+	}); err != nil {
+		t.Fatalf("seed site config: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = srv.cfg.Store.PutSiteConfig(context.Background(), types.SiteConfig{})
+	})
+
+	// A policy that does NOT name the endpoint — the Bedrock lane self-allowlists
+	// its own data-plane host, so an operator must not have to paste it in.
+	const pol = `{"allowed_domains":["api.anthropic.com"],"min_confinement_class":"CC2"}`
+	body := `{"agent":"claude-code","repo":"acme/widgets","task":"do the thing","inline_policy":` + pol + `}`
+	w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("POST /runs = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	if fr.createCalls != 1 {
+		t.Fatalf("CreateSandbox calls = %d, want 1", fr.createCalls)
+	}
+	spec := fr.lastSpec
+
+	// 1. The harness and the AWS SDK are both pointed at the endpoint — two
+	// variables because the SigV4 modes route through the SDK, not the harness.
+	if spec.Env["ANTHROPIC_BEDROCK_BASE_URL"] != vpceURL {
+		t.Errorf("Env[ANTHROPIC_BEDROCK_BASE_URL] = %q, want %q", spec.Env["ANTHROPIC_BEDROCK_BASE_URL"], vpceURL)
+	}
+	if spec.Env["AWS_ENDPOINT_URL_BEDROCK_RUNTIME"] != vpceURL {
+		t.Errorf("Env[AWS_ENDPOINT_URL_BEDROCK_RUNTIME] = %q, want %q", spec.Env["AWS_ENDPOINT_URL_BEDROCK_RUNTIME"], vpceURL)
+	}
+	// NEVER the global one: it would re-point STS and SSO at the Bedrock endpoint.
+	if v, ok := spec.Env["AWS_ENDPOINT_URL"]; ok && v != "" {
+		t.Errorf("Env[AWS_ENDPOINT_URL] = %q, want unset — the global knob re-points STS and SSO too", v)
+	}
+
+	// 2. The ARN reaches the agent verbatim; nothing parses or rewrites it.
+	if spec.Env["ANTHROPIC_MODEL"] != modelARN {
+		t.Errorf("Env[ANTHROPIC_MODEL] = %q, want the ARN verbatim %q", spec.Env["ANTHROPIC_MODEL"], modelARN)
+	}
+
+	// 3. The endpoint is egress-allowed without the policy naming it.
+	if !slicesContains(spec.ProxyConfig.Policy.AllowedDomains, vpceHost) {
+		t.Errorf("Policy.AllowedDomains = %v, want it to carry %q (the Bedrock lane self-allowlists its data plane)", spec.ProxyConfig.Policy.AllowedDomains, vpceHost)
+	}
+
+	// 4 + 5. The two halves that make the address reachable at all, on the ONE
+	// ProxyConfig. Either alone leaves the estate broken, which is the point.
+	if !slicesContains(spec.ProxyConfig.UpstreamProxyNoProxy, ".vpce.amazonaws.com") {
+		t.Errorf("ProxyConfig.UpstreamProxyNoProxy = %v, want the vpce suffix — the corp proxy cannot route an internal address", spec.ProxyConfig.UpstreamProxyNoProxy)
+	}
+	if len(spec.ProxyConfig.InternalHosts) != 1 || spec.ProxyConfig.InternalHosts[0].HostSuffix != "vpce.amazonaws.com" {
+		t.Errorf("ProxyConfig.InternalHosts = %+v, want the declared vpce suffix — a bypassed dial is still vetted", spec.ProxyConfig.InternalHosts)
+	}
+	// The corporate proxy is still configured for everything else.
+	if spec.ProxyConfig.UpstreamProxyURL != "http://proxy.corp:3128" {
+		t.Errorf("ProxyConfig.UpstreamProxyURL = %q, want the corp proxy still set for non-bypassed hosts", spec.ProxyConfig.UpstreamProxyURL)
+	}
+}
+
+// slicesContains is a local helper so this file needs no import churn.
+func slicesContains(hay []string, needle string) bool {
+	for _, h := range hay {
+		if h == needle {
+			return true
+		}
+	}
+	return false
+}
