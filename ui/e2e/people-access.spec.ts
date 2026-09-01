@@ -102,6 +102,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
   // OIDC issuer), not a bare "SSO" — so an admin sees WHERE sign-in comes from.
   test("(a) the SSO chip names the provider from /access", async ({ page }) => {
     await mockSsoStatus(page);
+    await mockAccessGet(page, baseAccessBody());
     await gotoPeopleStep(page);
     await expect(page.getByText(`SSO · ${baseAccessBody().provider}`)).toBeVisible();
   });
