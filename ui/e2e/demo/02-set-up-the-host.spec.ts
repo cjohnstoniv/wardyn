@@ -16,7 +16,7 @@
  * it in assets/setup-replay.html (vendored asciinema-player, file://-safe)
  * at a speed that lands ~40s. Honest by construction: it is this machine's
  * own install, sped up, nothing cut. Act 2: first light and the funnel's
- * three essentials — barrier, network, and the model/secrets step, with a
+ * essentials — barrier, who signs in, network, and the model/secrets step, with a
  * STAND-IN key typed on camera (masked; never submitted; the real connection
  * happened off camera through the same flow, which the narration owns).
  * Act 3: the recap, then the workspace list as the handoff plays.
@@ -298,6 +298,18 @@ test("V02 act 2 — first light through secrets", async () => {
 
   await advance();
 
+  // --- B3b · people (0.7: the People step sits between barrier and network) --
+  await expect(page.getByRole("heading", { name: "Who can sign in", level: 2 })).toBeVisible({ timeout: 30_000 });
+  await spotlight(page, page.getByText(/^Just you\./));
+  await caption(page, "Who can sign in? Whoever holds the admin token. Here, that's just you.");
+  await beat(page, BEAT_SHORT);
+  await spotlight(page, page.getByText(/To add people, configure SSO/));
+  await caption(page, "Teams get SSO and roles; the recipe is in the operations doc.");
+  await beat(page, PACE.read);
+  await spotlight(page, null);
+
+  await advance();
+
   // --- B4 · network ---------------------------------------------------------
   await expect(page.getByRole("heading", { name: "Network", level: 2 })).toBeVisible({ timeout: 30_000 });
   await caption(page, "Next: the network.");
@@ -459,6 +471,8 @@ test("V02 act 3 — what you just saw", async () => {
   await caption(page, "One command installed Wardyn.");
   await beat(page, BEAT_SHORT);
   await caption(page, "We chose a sandbox.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "We saw who can sign in.");
   await beat(page, BEAT_SHORT);
   await caption(page, "We tested the network.");
   await beat(page, BEAT_SHORT);

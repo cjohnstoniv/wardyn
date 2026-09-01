@@ -98,7 +98,7 @@ test("act 1 — first light", async () => {
   await caption(page, "Every run gets its own identity, its own barrier, and no resident credentials.");
   await beat(page, PACE.read);
 
-  await act(page, page.getByRole("button", { name: /^Get started/ }), "Ten steps. Only two are gates — the barrier, and proving the network.");
+  await act(page, page.getByRole("button", { name: /^Get started/ }), "A guided walk. Only two steps are gates — the barrier, and proving the network.");
   await expect(page.getByText(/^Step 1 of/)).toBeVisible({ timeout: 30_000 });
 });
 
@@ -106,15 +106,21 @@ test("act 1 — first light", async () => {
 // Act 2 — essentials
 // ---------------------------------------------------------------------------
 
-test("act 2 — barrier, network, model", async () => {
+test("act 2 — barrier, people, network, model", async () => {
   test.setTimeout(300_000);
   const page = stage();
-  await chapter(page, "Essentials", "The barrier, the network path, the model");
+  await chapter(page, "Essentials", "The barrier, who signs in, the network path, the model");
 
   await expect(page.getByRole("heading", { name: "Pick your barrier", level: 2 })).toBeVisible({ timeout: 30_000 });
   await caption(page, "Fence, Wall, Vault — three strengths of isolation. Wardyn detects which this host can actually do.");
   await beat(page, PACE.read + 900);
   await advance("Taking the tier this machine reports as ready.");
+
+  // 0.7: the People step sits between barrier and network.
+  await expect(page.getByRole("heading", { name: "Who can sign in", level: 2 })).toBeVisible({ timeout: 30_000 });
+  await caption(page, "Who can sign in — on a single-user install, just you. Teams plug in SSO and roles.");
+  await beat(page, PACE.read + 900);
+  await advance();
 
   await expect(page.getByRole("heading", { name: "Network", level: 2 })).toBeVisible({ timeout: 30_000 });
   await caption(page, "Nothing downstream can be trusted until a sandbox can actually reach the network — so this step proves it.");
