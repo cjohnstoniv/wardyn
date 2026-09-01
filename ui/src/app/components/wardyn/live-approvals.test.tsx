@@ -371,7 +371,7 @@ describe("LiveApprovals", () => {
     it("a member CAN Approve/Deny an egress_domain row, and sees its scope caret", async () => {
       listApprovalsMock.mockResolvedValue([pending({ id: "e1", requested_scope: { host: "unlisted.example" } })]);
       render(
-        <OperatorProvider operator={false}>
+        <OperatorProvider operator={false} securityOperator={false}>
           <LiveApprovals runId="r1" />
         </OperatorProvider>,
       );
@@ -398,7 +398,7 @@ describe("LiveApprovals", () => {
         }),
       ]);
       render(
-        <OperatorProvider operator={false}>
+        <OperatorProvider operator={false} securityOperator={false}>
           <LiveApprovals runId="r1" />
         </OperatorProvider>,
       );
@@ -416,7 +416,7 @@ describe("LiveApprovals", () => {
         pending({ id: "t1", kind: "tool_call", requested_scope: { tool: "Bash", cmd: "rm -rf build" } }),
       ]);
       render(
-        <OperatorProvider operator={false}>
+        <OperatorProvider operator={false} securityOperator={false}>
           <LiveApprovals runId="r1" />
         </OperatorProvider>,
       );
@@ -431,7 +431,7 @@ describe("LiveApprovals", () => {
         pending({ id: "t1", kind: "tool_call", requested_scope: { tool: "Bash", cmd: "ls" } }),
       ]);
       render(
-        <OperatorProvider operator={false}>
+        <OperatorProvider operator={false} securityOperator={false}>
           <LiveApprovals runId="r1" />
         </OperatorProvider>,
       );

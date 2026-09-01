@@ -16,7 +16,7 @@ import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
 import { effectiveWorkspaceRequirements, type Workspace } from "../../../lib/types";
 import { DetailSectionCard } from "./section-card";
 import { HostList, type HostRow } from "./host-list";
-import { useOperator } from "../../wardyn/operator-context";
+import { useSecurityOperator } from "../../wardyn/operator-context";
 
 // Light, local parse — the same shape as the (retired) wizard's
 // parseRepoSource, kept here as the one place that still needs it: the host a
@@ -71,7 +71,12 @@ function hostRows(ws: Workspace): HostRow[] {
 }
 
 export function AllowedHostsCard({ ws, onWorkspaceUpdated }: { ws: Workspace; onWorkspaceUpdated: (w: Workspace) => void }) {
-  const operator = useOperator();
+  // useSecurityOperator, not useOperator (0.7 §B): PUT
+  // /workspaces/{id}/approved-egress registers on securityOps (routes.go:363)
+  // — deciding which hosts a workspace's runs may reach is a verdict, not a
+  // deployer act. Every OTHER workspace write (llm-cred, requirements,
+  // reassign, env-as-code, delete) stays on useOperator.
+  const securityOperator = useSecurityOperator();
   const rows = hostRows(ws);
   const [removing, setRemoving] = React.useState<string | null>(null);
 
@@ -105,7 +110,7 @@ export function AllowedHostsCard({ ws, onWorkspaceUpdated }: { ws: Workspace; on
       title={`Allowed hosts · ${rows.length}`}
       subtitle="Every run against this workspace may reach these. Nothing is here unless you approved it or a recording proved it was used."
     >
-      <HostList rows={rows} emptyText="Nothing approved yet." canRemove={!!operator} removing={removing} onRemove={(h) => void remove(h)} />
+      <HostList rows={rows} emptyText="Nothing approved yet." canRemove={!!securityOperator} removing={removing} onRemove={(h) => void remove(h)} />
     </DetailSectionCard>
   );
 }

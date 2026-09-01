@@ -42,8 +42,10 @@ import { useMemberLocalDirRoot } from "../../wardyn/operator-context";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { runs as runsApi } from "../../../lib/api/runs";
+import { policies as policiesApi } from "../../../lib/api/policies";
 import { sshKeys as sshKeysApi } from "../../../lib/api/ssh-keys";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
+import { MEMBER } from "../../../lib/governance-copy";
 import { MEMBER_WORKSPACE } from "../../../lib/permissions-copy";
 import { EPISODES } from "../../../lib/demo-videos";
 import { EpisodeRow } from "./episode-card";
@@ -95,6 +97,25 @@ export function MemberGettingStarted() {
       .then((r) => active && setOwnRuns(r))
       .catch(() => {
         /* fail-closed: leave ownRuns null (not done), write no flag */
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // The governance profile bounding THIS member, named by GET
+  // /policies/default. undefined for a member with no assignment (the key is
+  // omitted on the wire) and for a read that failed — either way §7.6's two
+  // moments do not render, which is the absent-row doctrine: no assignment, no
+  // chip, no line, today's card byte-for-byte.
+  const [governanceProfile, setGovernanceProfile] = React.useState<string | undefined>(undefined);
+  React.useEffect(() => {
+    let active = true;
+    policiesApi
+      .getDefaultPolicy()
+      .then((p) => active && setGovernanceProfile(p.governance_profile_name))
+      .catch(() => {
+        /* unknown stays unknown — never name a ceiling that could not be read */
       });
     return () => {
       active = false;
@@ -191,10 +212,23 @@ export function MemberGettingStarted() {
                 {status?.auth.mode === "sso" && (
                   <Chip tone="info">{T.SIGNIN_SSO_CHIP}</Chip>
                 )}
+                {/* §7.6, and neutral like BARRIER_CHIP beside it: which
+                    profile bounds you is a fact about this deployment, not a
+                    success or a risk. */}
+                {governanceProfile && (
+                  <Chip tone="neutral">{MEMBER.GS_CHIP(governanceProfile)}</Chip>
+                )}
               </div>
               <p className="mt-3 text-sm text-muted-foreground">
                 {T.SETUP_SUMMARY_HELPER}
               </p>
+              {/* The chip names the profile; this says what having one means.
+                  Both render only when there IS one. */}
+              {governanceProfile && (
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {MEMBER.GS_BODY(governanceProfile)}
+                </p>
+              )}
             </>
           )}
         </SectionCard>

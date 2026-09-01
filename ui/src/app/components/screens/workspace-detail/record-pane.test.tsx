@@ -72,7 +72,11 @@ function renderPane(
   hostClasses: ("CC1" | "CC2" | "CC3")[] | null = null,
 ) {
   return render(
-    <OperatorProvider operator={operator}>
+    // 0.7 §B: the pane moved to useSecurityOperator (record + promote-egress +
+    // approved-egress are all securityOps), so the fixture's `operator=false`
+    // viewer must be a MEMBER on both predicates — a security admin CAN drive
+    // this pane, which is the point of the move.
+    <OperatorProvider operator={operator} securityOperator={operator}>
       <RecordPane
         ws={ws(over)}
         notice={null}
@@ -740,9 +744,38 @@ describe("RecordPane — an orphaned verify:* session (no open sibling)", () => 
   });
 });
 
-// operatorOnly at the server for every control here (record/replay/approve-
+// securityOps at the server for every control here (record/replay/approve-
 // host/promote-egress) — a viewer must see them disabled, not enabled-then-403.
 describe("RecordPane — a viewer's controls are disabled", () => {
+  // 0.7 §B: and a SECURITY ADMIN (operator:false, security_operator:true) must
+  // see them ENABLED — POST /workspaces/{id}/record and .../promote-egress
+  // both register on securityOps (routes.go:388-389). Gating this pane on
+  // useOperator would show them a dead pane over routes the server honours.
+  it("leaves a security admin's controls live even though they are not a super admin", () => {
+    const recorded: RecordResult = { run_id: "r1", label: "build & test", mode: "interactive", status: "recorded" };
+    render(
+      <OperatorProvider operator={false} securityOperator={true}>
+        <RecordPane
+          ws={ws({ record_results: { "build-test": recorded } })}
+          notice={null}
+          launch={null}
+          busyTask={null}
+          modelReady={true}
+          hostClasses={null}
+          onRecord={noop}
+          onReplayConfined={noop}
+          onDoneRecording={noop}
+          onPromoteEgress={noop}
+          onApproveHosts={noop}
+          onOpenProfile={noop}
+        />
+      </OperatorProvider>,
+    );
+    expect(screen.getByLabelText(/session name/i)).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /^replay confined$/i })).not.toBeDisabled();
+    expect(screen.queryByText(/requires the admin role/i)).not.toBeInTheDocument();
+  });
+
   it("disables the New-session field, Start recording, and a session's Replay/Re-record buttons", () => {
     const recorded: RecordResult = { run_id: "r1", label: "build & test", mode: "interactive", status: "recorded" };
     renderPane({ record_results: { "build-test": recorded } }, {}, true, false);

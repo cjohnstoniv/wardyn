@@ -19,8 +19,16 @@ vi.mock("../../../lib/api/setup", () => ({
 vi.mock("../../../lib/api/health", () => ({
   health: { health: () => Promise.resolve({ confinement_classes: ["CC1"] }) },
 }));
+// getDefaultPolicy names the caller's governance profile for the rail's ceiling
+// section. The default answer carries no governance_profile_name — an
+// UNASSIGNED caller, which is what every case below except the ceiling one is.
+const getDefaultPolicyMock = vi.fn();
 vi.mock("../../../lib/api/policies", () => ({
-  policies: { listPolicies: () => Promise.resolve([]), createPolicy: vi.fn() },
+  policies: {
+    listPolicies: () => Promise.resolve([]),
+    createPolicy: vi.fn(),
+    getDefaultPolicy: (...a: unknown[]) => getDefaultPolicyMock(...a),
+  },
 }));
 // The screen navigates on launch and on Esc — spy on it rather than asserting
 // against a URL bar the MemoryRouter does not render.
@@ -48,6 +56,7 @@ vi.mock("../../../lib/api/workspaces", () => ({
 
 import { NewRunScreen } from "./new-run-screen";
 import { baseStatus } from "../../../lib/test-fixtures";
+import { GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -65,6 +74,7 @@ beforeEach(() => {
   preflightRunMock.mockReset();
   navigateMock.mockReset();
   createRunMock.mockReset().mockResolvedValue({ id: "run_1" });
+  getDefaultPolicyMock.mockReset().mockResolvedValue({ min_confinement_class: "CC1" });
 });
 
 // Regression: useWorkspaceList does NOT fetch on mount — each caller loads it
@@ -78,6 +88,39 @@ describe("NewRunScreen — an already-onboarded workspace is attachable", () => 
   it("loads the workspace list on mount", async () => {
     renderScreen();
     await waitFor(() => expect(listWorkspacesMock).toHaveBeenCalled());
+  });
+});
+
+// §7.6's first display moment. The name comes from GET /policies/default's
+// governance_profile_name — the resolver's own answer for THIS caller — so the
+// line names the profile that actually binds the run rather than inferring one
+// from the spec.
+describe("NewRunScreen — the rail names the governance ceiling", () => {
+  it("renders MEMBER.CEILING_PROFILE when a profile is assigned", async () => {
+    getDefaultPolicyMock.mockResolvedValue({
+      min_confinement_class: "CC1",
+      governance_profile_name: "walled",
+    });
+    renderScreen();
+    expect(await screen.findByText(MEMBER.CEILING_PROFILE("walled"))).toBeInTheDocument();
+    expect(screen.getByText(GOV.CEILING_TITLE)).toBeInTheDocument();
+  });
+
+  // No assignment, no section — the absent-row doctrine, so an unassigned
+  // member's rail is byte-for-byte what it was before this feature existed.
+  it("renders nothing at all for an unassigned caller", async () => {
+    renderScreen();
+    await screen.findByText(/No model provider is connected/);
+    expect(screen.queryByText(GOV.CEILING_TITLE)).not.toBeInTheDocument();
+  });
+
+  // A read that failed is UNKNOWN, never "no ceiling": naming none would be a
+  // claim manufactured from an absence.
+  it("names no ceiling when the read fails", async () => {
+    getDefaultPolicyMock.mockRejectedValue(new Error("boom"));
+    renderScreen();
+    await screen.findByText(/No model provider is connected/);
+    expect(screen.queryByText(GOV.CEILING_TITLE)).not.toBeInTheDocument();
   });
 });
 

@@ -46,7 +46,8 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Mono, YamlBlock } from "../wardyn/code-block";
-import { Chip, ConfinementChip, RiskBadge } from "../wardyn/primitives";
+import { Chip, ConfinementChip, OperatorOnlyHint, RiskBadge } from "../wardyn/primitives";
+import { useOperator } from "../wardyn/operator-context";
 import { ErrorState, TableSkeleton } from "../wardyn/states";
 import { RUN_MODE } from "../wardyn/copy";
 
@@ -180,6 +181,15 @@ function ProfileBody({
 }) {
   const { proposed, risk_assessment, overall_risk, observations, warnings } = proposal;
   const { run, inline_policy } = proposed;
+  // 0.7 §B: both save paths below POST /policies, which stays operatorOnly
+  // (routes.go:294) — stored run_policies are selectable CONTENT, and a
+  // security-tier write path there re-opens the PF-22 mint through a side
+  // door. The REVIEW itself (POST /runs/{id}/profile) is member-tier and stays
+  // open to them; this drawer became reachable by a security admin when
+  // record-pane.tsx moved to useSecurityOperator, so the gate belongs here,
+  // beside the call it actually guards, rather than on the button that opens
+  // the drawer.
+  const operator = useOperator();
 
   return (
     <div className="space-y-5 p-5">
@@ -287,13 +297,14 @@ function ProfileBody({
 
       {/* --- actions --- */}
       <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-4">
+        {!operator && <OperatorOnlyHint />}
         {suggestedName && onSaveAsIs && (
-          <Button onClick={onSaveAsIs} disabled={savingAsIs} data-testid="profile-save-as-is">
+          <Button onClick={onSaveAsIs} disabled={!operator || savingAsIs} data-testid="profile-save-as-is">
             {savingAsIs ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
             Save as is (<span className="font-mono">{suggestedName}</span>)
           </Button>
         )}
-        <Button variant={suggestedName ? "outline" : "default"} onClick={onSave}>
+        <Button variant={suggestedName ? "outline" : "default"} disabled={!operator} onClick={onSave}>
           <Save className="size-4" /> Save as{suggestedName ? " with a name…" : " policy"}
         </Button>
       </div>

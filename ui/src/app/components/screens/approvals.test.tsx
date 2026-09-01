@@ -144,7 +144,7 @@ describe("ApprovalsScreen — role-aware decide buttons", () => {
 
   it("viewer: Approve and Deny are disabled and the reason is visible — the queue itself still renders", async () => {
     render(
-      <OperatorProvider operator={false}>
+      <OperatorProvider operator={false} securityOperator={false}>
         <MemoryRouter>
           <ApprovalsScreen />
         </MemoryRouter>
@@ -169,7 +169,7 @@ describe("ApprovalsScreen — role-aware decide buttons", () => {
   it("member, egress_domain kind: Approve and Deny are LIVE (decide buttons live — prompt-v2)", async () => {
     mockPendingKind = "egress_domain";
     render(
-      <OperatorProvider operator={false}>
+      <OperatorProvider operator={false} securityOperator={false}>
         <MemoryRouter>
           <ApprovalsScreen />
         </MemoryRouter>
@@ -186,7 +186,7 @@ describe("ApprovalsScreen — role-aware decide buttons", () => {
   it("member, tool_call kind: still disabled — kind, not just ownership, gates the decision", async () => {
     mockPendingKind = "tool_call";
     render(
-      <OperatorProvider operator={false}>
+      <OperatorProvider operator={false} securityOperator={false}>
         <MemoryRouter>
           <ApprovalsScreen />
         </MemoryRouter>
@@ -195,6 +195,25 @@ describe("ApprovalsScreen — role-aware decide buttons", () => {
     expect(await screen.findByRole("button", { name: /^approve$/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^deny$/i })).toBeDisabled();
     expect(screen.getByText(/requires the admin role/i)).toBeInTheDocument();
+  });
+
+  // 0.7 §B: a SECURITY ADMIN (operator:false, security_operator:true) decides
+  // ANY kind on ANY run — authorizeMemberDecision early-returns for
+  // isSecurityOperator (approvals.go:392) BEFORE both the kind check and the
+  // egress_host capability leg. Gating this card on useOperator would refuse
+  // them a decision the server would have honoured.
+  it("security admin, tool_call kind: LIVE — the tier decides any kind, on any run", async () => {
+    mockPendingKind = "tool_call";
+    render(
+      <OperatorProvider operator={false} securityOperator={true}>
+        <MemoryRouter>
+          <ApprovalsScreen />
+        </MemoryRouter>
+      </OperatorProvider>,
+    );
+    expect(await screen.findByRole("button", { name: /^approve$/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /^deny$/i })).not.toBeDisabled();
+    expect(screen.queryByText(/requires the admin role/i)).not.toBeInTheDocument();
   });
 });
 
@@ -244,7 +263,7 @@ describe("ApprovalsScreen — egress host not granted (member)", () => {
 
   function renderMember() {
     return render(
-      <OperatorProvider operator={false}>
+      <OperatorProvider operator={false} securityOperator={false}>
         <RoleProvider role="member">
           <MemoryRouter>
             <ApprovalsScreen />

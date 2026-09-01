@@ -27,7 +27,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Field, OptionCard } from "../wardyn/form-primitives";
-import { useMemberLocalDirRoot, useRole } from "../wardyn/operator-context";
+import { useMemberLocalDirRoot, useOperator } from "../wardyn/operator-context";
 import { getErrorMessage } from "../../lib/format";
 import { MEMBER_WORKSPACE } from "../../lib/permissions-copy";
 import { workspaces as workspacesApi } from "../../lib/api/workspaces";
@@ -104,12 +104,23 @@ export function AddWorkspaceDialog({
   // M3 (0027f514): POST /workspaces is member-allowed now, so this dialog
   // carries no operator gate — only local_dir's root constraint below is
   // role-aware.
-  const role = useRole();
+  //
+  // 0.7 §B: this is `!operator`, NOT `role === "member"`. The constraint
+  // follows the workspace-OWNERSHIP namespace — secretOwnerFromRequest stays
+  // on isOperator deliberately — so a SECURITY ADMIN's workspaces are
+  // owner-stamped like a member's, get a real member_local_dir_root from /me
+  // (me.go keys it on !isOperator for exactly this reason), and are clamped by
+  // memberSourcesAllowed at authoring time and ValidateMemberMountSource at
+  // bind time. Byte-identical for the two pre-0.7 tiers (role === "member" ⟺
+  // !operator when the only roles are admin and member); without it the third
+  // tier is silently clamped with no hint ever shown.
+  const operator = useOperator();
+  const memberClamped = !operator;
   const memberLocalDirRoot = useMemberLocalDirRoot();
   // §DECISIONS O1: no per-member root AND no shared root ⇒ local_dir is
   // unavailable for this member. Presentational only — ValidateMemberMountSource
   // at bind time is the real enforcement (member-role-desktop.md §c).
-  const localDirUnavailable = role === "member" && memberLocalDirRoot === null;
+  const localDirUnavailable = memberClamped && memberLocalDirRoot === null;
 
   const [kind, setKind] = React.useState<SourceKind>("repo");
   const k8s = useK8sRunner();
@@ -160,12 +171,14 @@ export function AddWorkspaceDialog({
               type: "local_dir",
               path: sourceValue.trim(),
               target,
-              // The writable checkbox unmounts (not resets) for role==="member"
-              // — same condition as its render guard below — so a checked box
-              // from an earlier repo/ephemeral selection must not ride along
-              // into a member local_dir submit and 400 against a control the
-              // member can no longer even see.
-              writable: role === "member" ? undefined : writable || undefined,
+              // The writable checkbox unmounts (not resets) for a
+              // member-clamped caller — same condition as its render guard
+              // below — so a checked box from an earlier repo/ephemeral
+              // selection must not ride along into a clamped local_dir submit
+              // and 400 against a control the caller can no longer even see.
+              // (ValidateMemberMount refuses a writable member mount outright
+              // unless WARDYN_MEMBER_WRITABLE_ROOTS is set.)
+              writable: memberClamped ? undefined : writable || undefined,
             }
           : { type: "ephemeral", target, writable: writable || undefined };
     const base_image =
@@ -250,7 +263,7 @@ export function AddWorkspaceDialog({
               label="Path on this host"
               htmlFor="aw-source"
               hint={
-                role === "member" && memberLocalDirRoot
+                memberClamped && memberLocalDirRoot
                   ? MEMBER_WORKSPACE.ROOT_HINT(memberLocalDirRoot)
                   : "Mounted from this machine into the sandbox."
               }
@@ -335,9 +348,9 @@ export function AddWorkspaceDialog({
 
             {/* M3: no wire field exposes a per-member writable-roots grant yet
                 (§DECISIONS O3 default is no writable member mounts at all),
-                so a member local_dir mount stays read-only in this dialog —
-                the conservative branch until that field exists. */}
-            {!(role === "member" && kind === "local_dir") && (
+                so a member-clamped local_dir mount stays read-only in this
+                dialog — the conservative branch until that field exists. */}
+            {!(memberClamped && kind === "local_dir") && (
               <label htmlFor="aw-writable" className="flex items-center gap-2 text-xs text-foreground">
                 <Checkbox
                   id="aw-writable"

@@ -44,7 +44,16 @@ vi.mock("../../../lib/api/workspaces", () => ({
   },
 }));
 
+// The member's own ceiling, named by GET /policies/default. The default answer
+// carries no governance_profile_name — an UNASSIGNED member, which is what
+// every case below except the governance ones is.
+const getDefaultPolicyMock = vi.fn();
+vi.mock("../../../lib/api/policies", () => ({
+  policies: { getDefaultPolicy: (...a: unknown[]) => getDefaultPolicyMock(...a) },
+}));
+
 import { MemberGettingStarted } from "./member-getting-started";
+import { MEMBER } from "../../../lib/governance-copy";
 
 function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
   return baseStatus({
@@ -84,6 +93,29 @@ describe("MemberGettingStarted", () => {
     listRunsMock.mockReset().mockResolvedValue([]);
     listKeysMock.mockReset().mockResolvedValue([]);
     listWorkspacesMock.mockReset().mockResolvedValue([]);
+    getDefaultPolicyMock.mockReset().mockResolvedValue({ min_confinement_class: "CC1" });
+  });
+
+  // §7.6's second display moment: the chip names the profile, the line says
+  // what having one means. Both render ONLY when one is assigned — with no
+  // assignment there is no chip, no line and no placeholder, which is the
+  // absent-row doctrine the resolver itself follows.
+  it("names the assigned governance profile — chip and line together", async () => {
+    getDefaultPolicyMock.mockResolvedValue({
+      min_confinement_class: "CC1",
+      governance_profile_name: "walled",
+    });
+    renderPage();
+    expect(await screen.findByText(MEMBER.GS_CHIP("walled"))).toBeInTheDocument();
+    expect(screen.getByText(MEMBER.GS_BODY("walled"))).toBeInTheDocument();
+  });
+
+  it("an unassigned member gets neither", async () => {
+    renderPage();
+    await screen.findByRole("heading", { name: "What's set up for you" });
+    await waitFor(() => expect(getDefaultPolicyMock).toHaveBeenCalled());
+    expect(screen.queryByText(/^Governance · /)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Your runs are bounded by/)).not.toBeInTheDocument();
   });
 
   it("renders the six member sections and never the admin barrier picker", async () => {

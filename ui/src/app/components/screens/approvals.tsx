@@ -33,7 +33,7 @@ import { JsonBlock } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { ReasonDialog } from "../wardyn/reason-dialog";
-import { useOperator, useRole } from "../wardyn/operator-context";
+import { useOperator, useRole, useSecurityOperator } from "../wardyn/operator-context";
 import {
   APPROVAL_BANNER_LABEL,
   APPROVAL_KIND_LABEL,
@@ -254,6 +254,13 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // The caller's own capability set, for the ONE member moment on this screen:
   // an egress_domain approval whose host isn't granted to them. Fetched here,
   // not per card — the answer is the same for every row.
+  //
+  // DELIBERATELY still useOperator (0.7 §B): capAllowed/capGranted stay on
+  // isOperator (capabilities.go) — that is the invariant making /permissions
+  // safe to hand to the security tier, so a security admin is
+  // capability-BOUNDED exactly like a member and this set is real for them.
+  // The stale-groups banner below reads it for the same reason. Only the
+  // per-card DECISION gate moves to the security predicate.
   const operator = useOperator();
   const caps = useMyCapabilities(!operator);
   const [pendingItems, setPendingItems] = React.useState<ApprovalRequest[]>([]);
@@ -461,13 +468,21 @@ function PendingCard({
   // regardless of ownership — see canDecideApproval's doc for why. This list
   // is already scoped to rows the caller owns (or every row, for an admin),
   // so ownership itself needs no re-check here.
-  const operator = useOperator();
-  const kindDecidable = canDecideApproval(operator, item.kind);
+  // useSecurityOperator, not useOperator (0.7 §B): authorizeMemberDecision
+  // early-returns for isSecurityOperator (approvals.go:392) — the security
+  // tier decides ANY kind on ANY run, org-wide. Deciding a verdict is that
+  // tier's whole purpose; the caps fetch above stays on useOperator because
+  // capAllowed does (capabilities.go).
+  const securityOperator = useSecurityOperator();
+  const kindDecidable = canDecideApproval(securityOperator, item.kind);
   // The `egress_host` capability bounds which hosts a member may DECIDE on —
   // the authorizeMemberDecision seam (approvals.go). Advisory here: the server
   // refuses it anyway, this just says so before the click instead of after.
+  // Guarded on the security tier in the same ORDER the server checks: its
+  // early return happens BEFORE this capability leg, so a security admin is
+  // never bounded by it.
   const host = item.kind === "egress_domain" ? str(scope, "host", "domain") : undefined;
-  const hostUngranted = !!host && !capabilityAllowed(caps, "egress_host", host);
+  const hostUngranted = !securityOperator && !!host && !capabilityAllowed(caps, "egress_host", host);
   const canDecide = kindDecidable && !hostUngranted;
 
   return (

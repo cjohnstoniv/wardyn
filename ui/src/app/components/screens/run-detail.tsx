@@ -66,7 +66,7 @@ import { TerminalPlayer } from "../wardyn/terminal-player";
 import { AttachTerminal } from "../attach-terminal";
 import { LiveApprovals, isHeld } from "../wardyn/live-approvals";
 import { ReasonDialog } from "../wardyn/reason-dialog";
-import { useOperator, usePrincipal } from "../wardyn/operator-context";
+import { useOperator, usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import {
   OPERATOR_ONLY_REASON,
   RUN_COCKPIT,
@@ -444,10 +444,15 @@ function Cockpit({
   onGoAudit: () => void;
   onGoRecording: () => void;
 }) {
-  const operator = useOperator();
   const principal = usePrincipal();
+  // useSecurityOperator, not useOperator (0.7 §B): this banner says "you can't
+  // decide any of these", and authorizeMemberDecision (approvals.go:392)
+  // early-returns for the security tier — so a security admin can decide every
+  // one of them and must never be told otherwise. The SUPER-only surfaces on
+  // this page (attach, take-over) read useOperator in their own components.
+  const securityOperator = useSecurityOperator();
   const viewerBlocked =
-    pending.length > 0 && !operator && !pending.some((p) => canDecideApproval(false, p.kind));
+    pending.length > 0 && !securityOperator && !pending.some((p) => canDecideApproval(false, p.kind));
 
   // The terminal widget's contents. Unchanged from the fixed-rail cockpit: the
   // session, and directly beneath it the approval that is HOLDING the session —
@@ -666,7 +671,10 @@ function ApprovalsTab({
   approvals: ApprovalRequest[];
   onDecide: (id: string, action: "approve" | "deny", kind: ApprovalRequest["kind"]) => void;
 }) {
-  const operator = useOperator();
+  // useSecurityOperator (0.7 §B): the only thing this reads is
+  // canDecideApproval, which mirrors authorizeMemberDecision's early return
+  // for the security tier (approvals.go:392).
+  const securityOperator = useSecurityOperator();
   if (approvals.length === 0) {
     return (
       <div className="rounded-xl border border-border bg-card">
@@ -685,7 +693,7 @@ function ApprovalsTab({
         // Owner-scoped page (getRunAuthorized) — canDecideApproval only needs
         // the KIND question: egress_domain is a member act on an owned run,
         // credential/tool_call stay admin-only regardless (see its doc).
-        const canDecide = canDecideApproval(operator, a.kind);
+        const canDecide = canDecideApproval(securityOperator, a.kind);
         const scopeBadge = approvalScopeBadge(a);
         return (
           <div key={a.id} className="rounded-xl border border-border bg-card p-4">

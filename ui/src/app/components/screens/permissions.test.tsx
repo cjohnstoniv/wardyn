@@ -36,6 +36,7 @@ vi.mock("../../lib/api/runs", () => ({ runs: { listRuns: () => listRunsMock() } 
 import { KIND, PERM } from "../../lib/permissions-copy";
 import type { CapabilityGrant } from "../../lib/types";
 import { PermissionsScreen } from "./permissions";
+import { OperatorProvider } from "../wardyn/operator-context";
 
 function grant(over: Partial<CapabilityGrant> = {}): CapabilityGrant {
   return {
@@ -291,6 +292,32 @@ describe("PermissionsScreen — add a grant", () => {
       }),
     );
     expect(await screen.findByText(PERM.DUPLICATE)).toBeInTheDocument();
+  });
+});
+
+// 0.7 §B: all four /permissions routes register on securityOps
+// (routes.go's mountPermissionRoutes) — this IS the org allow/denylist
+// primitive, and it is safe to hand over because capAllowed/capGranted stay on
+// isOperator (capabilities.go), so no capability kind can widen the admin tier.
+describe("PermissionsScreen — the security tier writes grants", () => {
+  it("leaves Add grant live for a security admin, and dead for a plain member", async () => {
+    const asTier = (operator: boolean, securityOperator: boolean) =>
+      render(
+        <MemoryRouter>
+          <OperatorProvider operator={operator} securityOperator={securityOperator}>
+            <PermissionsScreen />
+          </OperatorProvider>
+        </MemoryRouter>,
+      );
+
+    // The Who field, not the Add button: the button also disables on an empty
+    // form (`!ready`), so it would pass for the wrong reason.
+    const sec = asTier(false, true);
+    expect(await sec.findByLabelText(PERM.FIELD_WHO)).not.toBeDisabled();
+    sec.unmount();
+
+    const member = asTier(false, false);
+    expect(await member.findByLabelText(PERM.FIELD_WHO)).toBeDisabled();
   });
 });
 

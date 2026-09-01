@@ -374,7 +374,17 @@ describe("MobileNav (below-md nav fallback)", () => {
     await user.click(trigger);
 
     expect(trigger).toHaveAttribute("aria-expanded", "true");
-    for (const label of ["Runs", "Approvals", "Workspaces", "Policies", "Permissions", "Secrets", "Audit", "Recordings"]) {
+    for (const label of [
+      "Runs",
+      "Approvals",
+      "Workspaces",
+      "Policies",
+      "Governance",
+      "Permissions",
+      "Secrets",
+      "Audit",
+      "Recordings",
+    ]) {
       expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
     }
   });
@@ -410,7 +420,9 @@ describe("SidebarNav (member role — B3)", () => {
     for (const label of ["Runs", "Approvals", "Workspaces"]) {
       expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
     }
-    for (const label of ["Policies", "Permissions", "Secrets", "Audit", "Recordings"]) {
+    // Governance joins this list in 0.7: MEMBER_NAV_PATHS is unchanged, a
+    // member never sees the item, and there is no member governance route.
+    for (const label of ["Policies", "Governance", "Permissions", "Secrets", "Audit", "Recordings"]) {
       expect(screen.queryByRole("link", { name: new RegExp(`^${label}`) })).toBeNull();
     }
   });
@@ -423,7 +435,19 @@ describe("SidebarNav (member role — B3)", () => {
     renderMobileNav("admin");
     await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
 
-    const labels = ["Runs", "Approvals", "Workspaces", "Policies", "Permissions", "Secrets", "Audit", "Recordings"];
+    // Governance sits BETWEEN Policies and Permissions (mock Q1) — the order is
+    // the contract this asserts, not an accident of the array.
+    const labels = [
+      "Runs",
+      "Approvals",
+      "Workspaces",
+      "Policies",
+      "Governance",
+      "Permissions",
+      "Secrets",
+      "Audit",
+      "Recordings",
+    ];
     for (const label of labels) {
       expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
     }

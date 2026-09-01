@@ -85,8 +85,16 @@ export function ruleSourceLabel(source: string): RuleSourceLabel | null {
   // says deny; this names WHY at the same weight as the builtin refusals.
   if (source.startsWith("policy:")) return { label: "Refused by policy", tone: "danger" };
   if (source.startsWith("approval:")) return { label: "Released by approval", tone: "neutral" };
-  // builtin:* is the proxy's own guard family (private-ip, dial-failed,
-  // upstream-proxy, …) — all refusals.
+  // builtin:private-ip is the address-range floor, and it is the one guard an
+  // operator reliably misreads: a private endpoint (a VPC endpoint, an internal
+  // gateway) refused here looks exactly like a policy or an entitlement gap, so
+  // the operator goes to their IAM team about a permission that is fine. Name
+  // the cause on the row — the rest of the family stays generic.
+  if (source === "builtin:private-ip") {
+    return { label: "Refused by a built-in address-range rule, not your policy", tone: "danger" };
+  }
+  // builtin:* is the proxy's own guard family (dial-failed, upstream-proxy, …)
+  // — all refusals.
   if (source.startsWith("builtin:")) return { label: "Refused by the built-in guard", tone: "danger" };
   // brokered:* is every proxy-side brokered lane (git, mint, approvals,
   // recording, scan-result, llm, sso-token, and git's :branch-ns-off suffix).

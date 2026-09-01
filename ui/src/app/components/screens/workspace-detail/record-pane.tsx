@@ -79,7 +79,7 @@ import { C } from "../../../lib/workspace-copy";
 // workspace-copy.ts's mock-sourced canon — this line has no mock counterpart.
 const VERIFY_APPROVE_LEARNS_HINT =
   "Approving a held request here also adds that host to this workspace's requirements — future runs won't ask again.";
-import { useOperator } from "../../wardyn/operator-context";
+import { useSecurityOperator } from "../../wardyn/operator-context";
 import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 
 export function RecordPane({
@@ -139,7 +139,15 @@ export function RecordPane({
   // Open the existing ProfileReview drawer on a record run (Save profile).
   onOpenProfile: (runId: string, suggestedName?: string) => void;
 }) {
-  const operator = useOperator();
+  // useSecurityOperator, not useOperator (0.7 §B): every route this pane
+  // drives is on securityOps — POST /workspaces/{id}/record and
+  // .../record/{task}/promote-egress (routes.go:388-389), and the
+  // approve-hosts path's PUT .../approved-egress (routes.go:363). Recording a
+  // workspace's real egress and promoting it into the allowlist IS the
+  // security tier's loop. The ONE control under this fieldset that reaches a
+  // super-only route is "Save profile", whose drawer POSTs /policies — gated
+  // separately in profile-review.tsx, where that call actually lives.
+  const securityOperator = useSecurityOperator();
   const sessions = recordSessions(ws);
   const orphans = orphanedVerifySessions(ws);
   // The record sandbox runs under the strongest class the host supports
@@ -161,12 +169,12 @@ export function RecordPane({
     // is operatorOnly server-side; a viewer would see them all enabled and
     // 403 on the first click. A native disabled fieldset gates the whole
     // subtree at once — same disabled:opacity-50 every Button here already
-    // carries — instead of threading `disabled={!operator}` through
+    // carries — instead of threading `disabled={!securityOperator}` through
     // SessionCard/RecordReviewCard/ConfinedReviewCard/NewSessionForm one by
     // one. The border/padding/min-width a bare <fieldset> adds are reset so
     // it stays visually identical to the plain <div> it replaces.
-    <fieldset disabled={!operator} className="m-0 min-w-0 border-0 p-0 space-y-4">
-      {!operator && <p className="text-xs text-muted-foreground">{OPERATOR_ONLY_REASON}</p>}
+    <fieldset disabled={!securityOperator} className="m-0 min-w-0 border-0 p-0 space-y-4">
+      {!securityOperator && <p className="text-xs text-muted-foreground">{OPERATOR_ONLY_REASON}</p>}
       {/* No "Sessions" label here — the DetailSectionCard wrapping this pane already
           titles it; repeating it would show the same word twice on the page. */}
       <Chip tone="info">Recommended · skippable</Chip>

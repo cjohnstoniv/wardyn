@@ -391,7 +391,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     const { OperatorProvider } = await import("../wardyn/operator-context");
     render(
       <MemoryRouter>
-        <OperatorProvider operator={false}>
+        <OperatorProvider operator={false} securityOperator={false}>
           <AuditScreen />
         </OperatorProvider>
       </MemoryRouter>,
@@ -399,6 +399,25 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
 
     expect(await screen.findByText(/admin-only/i)).toBeInTheDocument();
     expect(screen.queryByText(/the trail starts with your first run/i)).not.toBeInTheDocument();
+  });
+
+  // 0.7 §B: a SECURITY ADMIN (operator:false, security_operator:true) reaches
+  // the same org-wide feed an admin does — handleQueryAudit scopes it on
+  // isSecurityOperator (audit.go:73). Telling them the feed is "admin-only"
+  // would contradict what the server just answered.
+  it("does NOT tell a security admin the feed is admin-only — their feed is the org-wide one", async () => {
+    listAuditMock.mockResolvedValue([]);
+    const { OperatorProvider } = await import("../wardyn/operator-context");
+    render(
+      <MemoryRouter>
+        <OperatorProvider operator={false} securityOperator={true}>
+          <AuditScreen />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/the trail starts with your first run/i)).toBeInTheDocument();
+    expect(screen.queryByText(/admin-only/i)).not.toBeInTheDocument();
   });
 
   // W25-W25.2-3: the run filter is URL state. A member's only reachable trail

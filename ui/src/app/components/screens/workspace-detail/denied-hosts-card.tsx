@@ -18,10 +18,13 @@ import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
 import type { Workspace } from "../../../lib/types";
 import { DetailSectionCard } from "./section-card";
 import { HostList } from "./host-list";
-import { useOperator } from "../../wardyn/operator-context";
+import { useSecurityOperator } from "../../wardyn/operator-context";
 
 export function DeniedHostsCard({ ws, onWorkspaceUpdated }: { ws: Workspace; onWorkspaceUpdated: (w: Workspace) => void }) {
-  const operator = useOperator();
+  // useSecurityOperator, not useOperator (0.7 §B): PUT
+  // /workspaces/{id}/denied-egress registers on securityOps (routes.go:368),
+  // the deny half of the same verdict AllowedHostsCard writes.
+  const securityOperator = useSecurityOperator();
   const rows = React.useMemo(
     () => [...(ws.denied_egress ?? [])].sort().map((host) => ({ host, provenance: "denied for this workspace", removable: true })),
     [ws.denied_egress],
@@ -48,7 +51,7 @@ export function DeniedHostsCard({ ws, onWorkspaceUpdated }: { ws: Workspace; onW
       title={`Denied hosts · ${rows.length}`}
       subtitle="Every run against this workspace is permanently blocked from these — deny beats any allow. Removing one only lifts the block; it doesn't approve the host."
     >
-      <HostList rows={rows} emptyText="Nothing denied." canRemove={!!operator} removing={removing} onRemove={(h) => void remove(h)} />
+      <HostList rows={rows} emptyText="Nothing denied." canRemove={!!securityOperator} removing={removing} onRemove={(h) => void remove(h)} />
     </DetailSectionCard>
   );
 }

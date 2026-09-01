@@ -53,7 +53,7 @@ import { Mono } from "../wardyn/code-block";
 import { PageHeader } from "../wardyn/page-header";
 import { Chip } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
-import { useOperator, usePrincipal } from "../wardyn/operator-context";
+import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 
 // The audit actor a bare admin-bearer caller is recorded as (actorFromRequest,
 // internal/api/runs_policy.go) — a machine lane, never a member.
@@ -157,7 +157,14 @@ export function Segmented<T extends string>({
 }
 
 export function PermissionsScreen() {
-  const operator = useOperator();
+  // useSecurityOperator, not useOperator (0.7 §B): all four /permissions routes
+  // register on securityOps (routes.go's mountPermissionRoutes) — this IS the
+  // org allow/denylist primitive, and handing it to the security admin is safe
+  // because capAllowed/capGranted stay on isOperator (capabilities.go), so no
+  // capability kind can ever widen the admin tier. A security admin may write
+  // their own grants; they are audited, and they reach nothing that exemption
+  // would give them.
+  const securityOperator = useSecurityOperator();
   const [snap, setSnap] = React.useState<PermissionsSnapshot>({ grants: [], enforcement: {} });
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [confirm, setConfirm] = React.useState<{ kind: CapabilityKind; next: boolean } | null>(null);
@@ -241,7 +248,7 @@ export function PermissionsScreen() {
               kind={kind}
               enforced={!!snap.enforcement[kind]}
               grants={grantsFor(kind)}
-              disabled={!operator || status !== "ready"}
+              disabled={!securityOperator || status !== "ready"}
               onToggle={(next) => setConfirm({ kind, next })}
             />
           ))}
@@ -300,7 +307,7 @@ export function PermissionsScreen() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        disabled={!operator}
+                        disabled={!securityOperator}
                         onClick={() => setToRemove(g)}
                         aria-label={`${PERM.REMOVE} ${kindLabel(g.capability)} ${g.value}`}
                       >
@@ -315,7 +322,7 @@ export function PermissionsScreen() {
         </div>
       </section>
 
-      <AddGrantForm disabled={!operator} onAdded={load} />
+      <AddGrantForm disabled={!securityOperator} onAdded={load} />
 
       <section className="mt-6 rounded-xl border border-border bg-card px-6 py-5">
         <h2 className="text-sm font-medium text-foreground">{PERM.SNAPSHOT_TITLE}</h2>

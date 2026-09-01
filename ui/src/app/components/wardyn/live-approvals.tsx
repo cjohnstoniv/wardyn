@@ -40,7 +40,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dr
 import { cn } from "../ui/utils";
 import { Mono } from "./code-block";
 import { Chip, OperatorOnlyHint, SectionLabel } from "./primitives";
-import { useOperator } from "./operator-context";
+import { useSecurityOperator } from "./operator-context";
 import { attentionRank } from "./run-state-glyph";
 import {
   ALWAYS_NEEDS_WORKSPACE,
@@ -172,7 +172,12 @@ export function LiveApprovals({
   // the one gate for all three mount sites (run detail, demo screen, the
   // record-mode verify panel) — see approvals.tsx's PendingCard for the
   // queue-screen equivalent.
-  const operator = useOperator();
+  //
+  // useSecurityOperator, not useOperator (0.7 §B): authorizeMemberDecision
+  // early-returns for isSecurityOperator (approvals.go:392) and
+  // decision_scope=always is its lockstep pair (approvals.go:604), so the
+  // security tier decides any kind, on any run, at any scope.
+  const securityOperator = useSecurityOperator();
   const [pending, setPending] = React.useState<ApprovalRequest[]>([]);
   const [busy, setBusy] = React.useState<string | null>(null);
   // A misclick on Deny (any scope) can't silently poison a host the operator
@@ -318,7 +323,9 @@ export function LiveApprovals({
             canDecideApproval (a member CAN decide their own run's
             egress_domain rows), so this hint must not claim "admin only"
             over a strip the viewer can, in fact, act on. */}
-        {!operator && pending.some((a) => !canDecideApproval(operator, a.kind)) && <OperatorOnlyHint />}
+        {!securityOperator && pending.some((a) => !canDecideApproval(securityOperator, a.kind)) && (
+          <OperatorOnlyHint />
+        )}
       </div>
       {shown.map((a) => {
         const label = rowLabel(a);
@@ -358,7 +365,7 @@ export function LiveApprovals({
               size="sm"
               variant="outline"
               className="h-7 rounded-r-none border-r-0"
-              disabled={!canDecideApproval(operator, a.kind) || busy === a.id}
+              disabled={!canDecideApproval(securityOperator, a.kind) || busy === a.id}
               onClick={() => decide(a, true)}
             >
               {busy === a.id && decidingSpinner ? (
@@ -372,7 +379,7 @@ export function LiveApprovals({
               <ScopeMenu
                 verb="approve"
                 hasWorkspace={hasWorkspace}
-                operator={operator}
+                securityOperator={securityOperator}
                 triggerClassName="rounded-l-none"
                 onPick={(scope, until) => decide(a, true, scope, until)}
               />
@@ -381,7 +388,7 @@ export function LiveApprovals({
               size="sm"
               variant="outline"
               className="h-7 ml-1 rounded-r-none border-r-0"
-              disabled={!canDecideApproval(operator, a.kind) || busy === a.id}
+              disabled={!canDecideApproval(securityOperator, a.kind) || busy === a.id}
               onClick={() => setDenyTarget({ request: a, scope: "run" })}
             >
               {busy === a.id && decidingSpinner ? (
@@ -395,7 +402,7 @@ export function LiveApprovals({
               <ScopeMenu
                 verb="deny"
                 hasWorkspace={hasWorkspace}
-                operator={operator}
+                securityOperator={securityOperator}
                 triggerClassName="rounded-l-none"
                 onPick={(scope, until) => setDenyTarget({ request: a, scope, until })}
               />
@@ -474,13 +481,15 @@ const SCOPE_ITEM_CLS =
 function ScopeMenu({
   verb,
   hasWorkspace,
-  operator,
+  securityOperator,
   triggerClassName,
   onPick,
 }: {
   verb: "approve" | "deny";
   hasWorkspace: boolean;
-  operator: boolean;
+  // decision_scope=always is gated by isSecurityOperator (approvals.go:604),
+  // NOT isOperator — named for the predicate it actually carries.
+  securityOperator: boolean;
   triggerClassName?: string;
   onPick: (scope: ApprovalScope, until?: string) => void;
 }) {
@@ -496,8 +505,8 @@ function ScopeMenu({
   const [customUntil, setCustomUntil] = React.useState<string | null>(null);
   const labels = verb === "approve" ? APPROVAL_SCOPE_LABEL : DENY_SCOPE_LABEL;
   const hints = verb === "approve" ? APPROVAL_SCOPE_HINT : DENY_SCOPE_HINT;
-  const alwaysDisabled = !hasWorkspace || !operator;
-  const alwaysReason = !operator ? OPERATOR_ONLY_REASON : ALWAYS_NEEDS_WORKSPACE;
+  const alwaysDisabled = !hasWorkspace || !securityOperator;
+  const alwaysReason = !securityOperator ? OPERATOR_ONLY_REASON : ALWAYS_NEEDS_WORKSPACE;
 
   const pick = (scope: ApprovalScope, until?: string) => {
     setOpen(false);

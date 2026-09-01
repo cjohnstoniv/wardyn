@@ -150,6 +150,12 @@ export function NewRunScreen() {
   // has been in the field and left it empty — a red ring on an untouched form is
   // an accusation about something nobody has done yet.
   const [titleTouched, setTitleTouched] = React.useState(false);
+  // The governance profile bounding THIS caller, named by GET
+  // /policies/default. undefined for a caller with no assignment (the key is
+  // omitted on the wire) and for a read that failed — in both cases the rail's
+  // ceiling section simply does not render, which is the honest answer: never
+  // claim a ceiling that could not be read.
+  const [governanceProfile, setGovernanceProfile] = React.useState<string | undefined>(undefined);
 
   React.useEffect(() => {
     runsApi
@@ -179,6 +185,15 @@ export function NewRunScreen() {
       .then((ps) => setSavedPolicies(ps.map((p) => ({ id: p.id, name: p.name, spec: p.spec }))))
       .catch(() => {
         /* the Saved-policy lane simply offers nothing — never blocks a launch */
+      });
+  }, []);
+
+  React.useEffect(() => {
+    policiesApi
+      .getDefaultPolicy()
+      .then((p) => setGovernanceProfile(p.governance_profile_name))
+      .catch(() => {
+        /* unknown stays unknown — the rail names no ceiling it could not read */
       });
   }, []);
 
@@ -862,6 +877,7 @@ export function NewRunScreen() {
 
         {/* ── Right: the live rail, a fixed 320px ────────────────── */}
         <RunRail
+          governanceProfile={governanceProfile}
           savedPolicy={selectedPolicy}
           cc={cc}
           showModelWarning={isAgent && llmReady === false}

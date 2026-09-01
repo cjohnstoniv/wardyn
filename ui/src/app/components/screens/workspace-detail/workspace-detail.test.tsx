@@ -84,7 +84,11 @@ function RunsRouteProbe() {
 function renderDetail(id = "ws-1", operator = true) {
   return render(
     <MemoryRouter initialEntries={[`/workspaces/${id}`]}>
-      <OperatorProvider operator={operator}>
+      {/* 0.7 §B: the Sessions pane and both host cards moved to
+          useSecurityOperator, so this fixture's viewer must be a MEMBER on
+          both predicates; the workspace Delete/Rebuild controls it also
+          asserts stay on useOperator. */}
+      <OperatorProvider operator={operator} securityOperator={operator}>
         <Routes>
           <Route path="/workspaces/:id" element={<WorkspaceDetailScreen />} />
           <Route path="/workspaces" element={<div>back on the list</div>} />
@@ -361,5 +365,29 @@ describe("WorkspaceDetailScreen — a viewer's write controls are disabled", () 
     expect(screen.getByRole("button", { name: /re-record/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Remove registry.npmjs.org" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Remove evil.example.com" })).toBeDisabled();
+  });
+
+  // 0.7 §B: PUT .../approved-egress and .../denied-egress register on
+  // securityOps (routes.go:363,368) — a security admin decides which hosts a
+  // workspace's runs may reach. The workspace Delete button beside them stays
+  // super-only (ownsWorkspaceOrAdmin is still isOperator), so this asserts BOTH
+  // halves of the split on one render.
+  it("leaves the host-list removes live for a security admin, but not the workspace Delete", async () => {
+    getWorkspaceMock.mockResolvedValue(
+      ws({ approved_egress: ["registry.npmjs.org"], denied_egress: ["evil.example.com"] }),
+    );
+    render(
+      <MemoryRouter initialEntries={["/workspaces/ws-1"]}>
+        <OperatorProvider operator={false} securityOperator={true}>
+          <Routes>
+            <Route path="/workspaces/:id" element={<WorkspaceDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("button", { name: "Remove registry.npmjs.org" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove evil.example.com" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /delete this workspace/i })).toBeDisabled();
   });
 });

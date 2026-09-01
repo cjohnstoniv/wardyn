@@ -17,7 +17,13 @@ export function EmptyState({
 }: {
   icon: React.ElementType;
   title: string;
-  description?: string;
+  // ReactNode, not string: a frozen empty-state sentence may carry an env var
+  // or a wire literal that renders mono, and the mono span is applied at the
+  // CALL SITE (the withMono precedent) rather than baked into the copy. A
+  // `string` here was the one reason GOVERNANCE.EMPTY_BODY's
+  // WARDYN_DEFAULT_POLICY could not look like every other literal on the
+  // screen. Plain strings still pass unchanged — every other caller is one.
+  description?: React.ReactNode;
   action?: React.ReactNode;
   className?: string;
 }) {

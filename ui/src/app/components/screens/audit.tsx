@@ -48,7 +48,7 @@ import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/
 import { AuditDecision, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
 import { PageHeader } from "../wardyn/page-header";
 import { cn } from "../ui/utils";
-import { useOperator } from "../wardyn/operator-context";
+import { useSecurityOperator } from "../wardyn/operator-context";
 
 // Audit is append-only, so live-tailing is meaningful (unlike a poll on mutable
 // state). Kept modest — this is a background refresh, not a chat stream.
@@ -262,7 +262,12 @@ function groupByDay(events: AuditEvent[]): DayGroup[] {
 
 export function AuditScreen() {
   const navigate = useNavigate();
-  const operator = useOperator();
+  // useSecurityOperator, not useOperator (0.7 §B): handleQueryAudit and
+  // handleExportAudit scope the ORG-WIDE feed on isSecurityOperator
+  // (internal/api/audit.go:73,169), so a security admin reaches the same
+  // unfiltered trail an admin does — reading and verifying it is that tier's
+  // job. The "admin-only" empty state below is all this gates.
+  const securityOperator = useSecurityOperator();
   const [events, setEvents] = React.useState<AuditEvent[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [query, setQuery] = React.useState("");
@@ -492,7 +497,7 @@ export function AuditScreen() {
         </div>
       ) : filtered.length === 0 ? (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
-          {noFiltersActive && !operator ? (
+          {noFiltersActive && !securityOperator ? (
             // W25-W25.2-3: a member's global feed (no run_id) is ALWAYS empty —
             // handleQueryAudit scopes members to a run they own and requires
             // ?run_id= to do it (internal/api/audit.go). "The trail starts with

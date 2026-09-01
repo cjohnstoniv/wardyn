@@ -26,6 +26,7 @@ import {
   Moon,
   Play,
   Plus,
+  Scale,
   ScrollText,
   Settings,
   ShieldCheck,
@@ -38,6 +39,10 @@ import { Chip, ConfinementChip } from "../wardyn/primitives";
 import { useTheme } from "../wardyn/theme-provider";
 import { strongestAvailable } from "../wardyn/default-confinement";
 import { lastCheckedLabel } from "../../lib/readiness";
+// GOVERNANCE.TITLE is ONE string for two places — this nav label and the
+// screen's own heading — the way every other nav entry already works. There is
+// no second "Governance profiles" label (governance-prompt.md §7.2).
+import { GOVERNANCE } from "../../lib/governance-copy";
 import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../ui/sheet";
@@ -173,7 +178,7 @@ function initials(principal: string): string {
   return (s || base.slice(0, 2)).toUpperCase();
 }
 
-// Flat sidebar nav — eight items, no group headings (stage-1 redesign). Demos
+// Flat sidebar nav — nine items, no group headings (stage-1 redesign). Demos
 // and Settings are reachable from the account menu below rather than here.
 //
 // Recordings is BACK (mock M6). It left the sidebar on the theory that a deep
@@ -197,6 +202,12 @@ const NAV_ITEMS: NavItem[] = [
   },
   { to: "/workspaces", label: "Workspaces", icon: FolderOpen },
   { to: "/policies", label: "Policies", icon: UserCog },
+  // Governance (0.7) sits BETWEEN Policies and Permissions so the three read as
+  // one narrowing sequence: the deployment ceiling, the ceilings assigned over
+  // it, then the grants layered inside one (mock Q1). Not in MEMBER_NAV_PATHS —
+  // a member never sees it, and there is no member governance route; its own
+  // routes are securityOps server-side.
+  { to: "/governance", label: GOVERNANCE.TITLE, icon: Scale },
   // Permissioning (0.6 pillar 2) sits beside Policies: both answer "what is
   // allowed here", one for runs and one for the humans launching them. It is
   // admin-only — deliberately NOT in MEMBER_NAV_PATHS below, and every route

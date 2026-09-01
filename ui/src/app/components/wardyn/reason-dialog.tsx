@@ -20,7 +20,7 @@ import {
 } from "../ui/dialog";
 import { cn } from "../ui/utils";
 import { useDeferredBusy } from "../../lib/use-deferred-busy";
-import { useOperator } from "./operator-context";
+import { useSecurityOperator } from "./operator-context";
 import {
   ALWAYS_NEEDS_WORKSPACE,
   APPROVAL_SCOPE_HINT,
@@ -65,7 +65,11 @@ export function ReasonDialog({
   // body instead of a needless-but-harmless third argument.
   onSubmit: (reason: string, scope: ApprovalScope, until?: string) => Promise<boolean>;
 }) {
-  const operator = useOperator();
+  // useSecurityOperator, not useOperator (0.7 §B): decision_scope=always is
+  // gated by isSecurityOperator (approvals.go:604), in LOCKSTEP with
+  // authorizeMemberDecision — same power, same tier. This dialog's ONLY
+  // role-aware control is that scope.
+  const securityOperator = useSecurityOperator();
   const [reason, setReason] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const { disabled: submitDisabled, showSpinner } = useDeferredBusy(busy);
@@ -81,13 +85,14 @@ export function ReasonDialog({
 
   const approve = prompt?.action === "approve";
   const showScope = prompt?.kind === "egress_domain";
-  // Rule 6 (server-side, internal/api/approvals.go): always is operator-only,
-  // on top of the workspace gate above. Both surfaces that mount this dialog
-  // (approvals.tsx, run-detail.tsx) already know the caller's role via the
-  // same useOperator() hook — reading it here once, rather than threading it
-  // through as a prop, keeps both callers' code unchanged.
-  const alwaysDisabled = !hasWorkspace || !operator;
-  const alwaysReason = !operator ? OPERATOR_ONLY_REASON : ALWAYS_NEEDS_WORKSPACE;
+  // Rule 6 (server-side, internal/api/approvals.go): always is
+  // security-operator-only, on top of the workspace gate above. Both surfaces
+  // that mount this dialog (approvals.tsx, run-detail.tsx) already know the
+  // caller's tier via the same useSecurityOperator() hook — reading it here
+  // once, rather than threading it through as a prop, keeps both callers'
+  // code unchanged.
+  const alwaysDisabled = !hasWorkspace || !securityOperator;
+  const alwaysReason = !securityOperator ? OPERATOR_ONLY_REASON : ALWAYS_NEEDS_WORKSPACE;
   // Rule 2 (server-side): until demands an expiry. Mirrored here so the
   // confirm button can't submit a scope the server will 400.
   const untilMissing = scope === "until" && !until;

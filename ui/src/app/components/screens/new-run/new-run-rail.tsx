@@ -21,9 +21,17 @@ import type { ConfinementClass, PreflightResult, RunPolicySpec } from "../../../
 import { Button } from "../../ui/button";
 import { Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
+import { GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
 import { RailSection } from "./new-run-primitives";
 
 interface RunRailProps {
+  /**
+   * The governance profile bounding THIS caller, from GET /policies/default's
+   * governance_profile_name. Undefined for a caller with no assignment — the
+   * absent-row doctrine, and the section below simply does not render, so an
+   * unassigned member's rail is byte-for-byte what it was.
+   */
+  governanceProfile?: string;
   /** The stored policy this run launches by reference, when there is one. */
   savedPolicy?: { name: string; spec: RunPolicySpec };
   /** The barrier the run REQUESTS (a separate wire field from the spec floor). */
@@ -51,6 +59,7 @@ interface RunRailProps {
 }
 
 export function RunRail({
+  governanceProfile,
   savedPolicy,
   cc,
   showModelWarning,
@@ -67,6 +76,16 @@ export function RunRail({
       {/* Below lg the rail sits UNDER the form at full width, so its sections
           read across instead of stacking into a very tall column. */}
       <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-1">
+        {/* FIRST, above Policy, because it bounds everything under it — a
+            member's own spec AND a saved policy they pick are both clamped to
+            it. Frozen copy (§7.6), rendered only when a profile is actually
+            assigned. */}
+        {governanceProfile && (
+          <RailSection title={GOV.CEILING_TITLE}>
+            <p className="text-xs text-muted-foreground">{MEMBER.CEILING_PROFILE(governanceProfile)}</p>
+          </RailSection>
+        )}
+
         {savedPolicy && (
           <RailSection title="Policy">
             <p className="text-body font-medium text-foreground">{savedPolicy.name}</p>

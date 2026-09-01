@@ -77,6 +77,11 @@ const PoliciesScreen = React.lazy(() =>
     default: m.PoliciesScreen,
   })),
 );
+const GovernanceScreen = React.lazy(() =>
+  import("./components/screens/governance/governance-screen").then((m) => ({
+    default: m.GovernanceScreen,
+  })),
+);
 const PermissionsScreen = React.lazy(() =>
   import("./components/screens/permissions").then((m) => ({
     default: m.PermissionsScreen,
@@ -431,6 +436,18 @@ export default function App() {
               element={
                 <React.Suspense fallback={<RouteFallback />}>
                   <PoliciesScreen />
+                </React.Suspense>
+              }
+            />
+            {/* Between /policies and /permissions, the order the sidebar
+                reads (mock Q1). Gated server-side by the securityOps route
+                group; the screen itself gates its writes on
+                useSecurityOperator, and a member never sees the nav item. */}
+            <Route
+              path="/governance"
+              element={
+                <React.Suspense fallback={<RouteFallback />}>
+                  <GovernanceScreen />
                 </React.Suspense>
               }
             />

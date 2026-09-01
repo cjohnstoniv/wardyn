@@ -92,8 +92,11 @@ describe("ruleSourceLabel", () => {
       label: "Released by approval",
       tone: "neutral",
     });
+    // The address-range floor names its own cause: a refused private endpoint
+    // otherwise reads as a policy or an entitlement gap and sends the operator
+    // to their IAM team over a permission that was never the problem.
     expect(ruleSourceLabel("builtin:private-ip")).toEqual({
-      label: "Refused by the built-in guard",
+      label: "Refused by a built-in address-range rule, not your policy",
       tone: "danger",
     });
     expect(ruleSourceLabel("builtin:dial-failed")).toEqual({

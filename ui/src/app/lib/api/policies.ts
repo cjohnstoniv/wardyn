@@ -7,6 +7,17 @@
 import type { RunPolicy, RunPolicySpec } from "../types";
 import { asJson, errText, HttpError, unwrapList, wfetch, withLimit } from "./core";
 
+// GET /policies/default's body (internal/api/policies.go's
+// defaultPolicyResponse): the resolved ceiling spec, EMBEDDED so the shape
+// every existing consumer parses is unchanged, plus the name of the governance
+// profile it came from.
+//
+// governance_profile_name is ADDITIVE and OMITTED ENTIRELY for a caller with no
+// assignment — absent, never "". That is what lets the member surfaces follow
+// the absent-row doctrine: no profile ⇒ no chip, no line, no placeholder, and
+// today's screens byte for byte.
+export type DefaultPolicy = RunPolicySpec & { governance_profile_name?: string };
+
 export const policies = {
   // GET /api/v1/policies — all run policies (reverse creation order).
   async listPolicies(): Promise<RunPolicy[]> {
@@ -33,12 +44,13 @@ export const policies = {
     return asJson<RunPolicy>(res);
   },
 
-  // GET /api/v1/policies/default — the control plane's configured ceiling
-  // policy (applied to a run created without a policy_id; also the ceiling
-  // a member's inline policy is clamped against). W14-S1-6.
-  async getDefaultPolicy(): Promise<RunPolicySpec> {
+  // GET /api/v1/policies/default — THE CALLER'S ceiling: the spec a run created
+  // without a policy_id gets, and the ceiling their inline policy is clamped
+  // against. W14-S1-6; routed through effectiveCeiling since 0.7, so for a
+  // member under a governance profile this answers with THAT profile's spec.
+  async getDefaultPolicy(): Promise<DefaultPolicy> {
     const res = await wfetch("/policies/default", { method: "GET" });
-    return asJson<RunPolicySpec>(res);
+    return asJson<DefaultPolicy>(res);
   },
 
   // DELETE /api/v1/policies/{id} -> 204.
