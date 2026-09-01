@@ -1,0 +1,938 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wardyn — Governance profiles mock</title>
+<!--
+  Governance-profiles mock · static, for owner review.
+  Every visible PRODUCT string below is verbatim from
+  docs/design/governance-prompt.md §7 (the frozen table — source of truth; the
+  implementation later transcribes it into ui/src/app/lib/governance-copy.ts).
+  Strings marked in the prompt's §7.1 as REUSED canon come from
+  permissions-copy.ts / people-access-copy.ts / wardyn/copy.ts and are rendered
+  here unchanged — they are not re-frozen.
+
+  No build, no deps, no fetch — open the file. The only script is the people
+  mock's own light/dark toggle, carried over verbatim so both palettes are
+  reviewable here; the page starts in the light theme (:root) and the button
+  stamps data-theme. Tokens and CSS idioms copied verbatim from
+  docs/design/people-access-mock/index.html (itself copied from the
+  permissioning mock). Unlike the People step, teal IS in budget here: this is a
+  full screen, so CONSOLE-RULES §2's normal rule applies — exactly one `default`
+  (teal) button at a time, which is Assign at rest and Save profile while the
+  editor is open (the add form collapses for that span; see the editor state).
+
+  SCAFFOLD vs PRODUCT: the sticky bar, the `.tag` state labels, the `.varlabel`
+  variant strips and the HTML comments are REVIEW SCAFFOLDING — 11px uppercase,
+  muted, outside the `.frame`. Everything inside a `.frame` is the product.
+-->
+<style>
+:root{
+  --background:#ffffff; --foreground:#171717; --card:#ffffff; --surface-2:#f4f4f5;
+  --muted-foreground:#737373; --border:#e5e5e5; --border-strong:#d4d4d4;
+  --primary:#0f766e; --primary-fg:#ffffff;
+  --success:#047857; --success-subtle:rgba(4,120,87,.12); --warning:#92400e; --warning-subtle:rgba(245,158,11,.13);
+  --danger:#b91c1c; --danger-subtle:rgba(239,68,68,.13);
+  --info:#1d4ed8; --info-subtle:rgba(29,78,216,.13);
+  --neutral-subtle:rgba(115,115,115,.12);
+  --font-sans:"Inter",ui-sans-serif,system-ui,-apple-system,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+}
+html[data-theme="dark"]{
+  --background:#0a0a0a; --foreground:#ededed; --card:#111111; --surface-2:#1f1f1f;
+  --muted-foreground:#a3a3a3; --border:#262626; --border-strong:#333333;
+  --primary:#14b8a6; --primary-fg:#0a0a0a;
+  --success:#10b981; --success-subtle:rgba(16,185,129,.15); --warning:#f59e0b; --warning-subtle:rgba(245,158,11,.15);
+  --danger:#dc2626; --danger-subtle:rgba(220,38,38,.16);
+  --info:#3b82f6; --info-subtle:rgba(59,130,246,.16);
+  --neutral-subtle:rgba(163,163,163,.14);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--background);color:var(--foreground);
+  font-family:var(--font-sans);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+code,.mono{font-family:var(--font-mono);font-size:.8125rem}
+h1,h2,h3,h4{margin:0;font-weight:600;letter-spacing:-.01em}
+p{margin:0}
+a{color:var(--primary)}
+
+/* ---- mock page chrome (NOT part of the design — the review scaffold) ---- */
+.sheet{max-width:1120px;margin:0 auto;padding:32px 24px 96px}
+.mockbar{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;gap:12px;align-items:center;
+  padding:12px 24px;background:var(--card);border-bottom:1px solid var(--border)}
+.mockbar h1{font-size:15px}
+.mockbar .sub{font-size:12.5px;color:var(--muted-foreground)}
+.mockbar button{margin-left:auto;font:inherit;font-size:13px;padding:6px 12px;border-radius:8px;
+  border:1px solid var(--border-strong);background:var(--card);color:var(--foreground);cursor:pointer}
+.state{margin-top:44px}
+.state > .tag{display:flex;gap:10px;align-items:baseline;margin-bottom:10px;
+  font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted-foreground)}
+.state > .tag b{color:var(--foreground);font-size:13px;letter-spacing:0;text-transform:none}
+.frame{border:1px solid var(--border);border-radius:14px;background:var(--card);overflow:hidden}
+.frame > .pad{padding:22px 24px}
+/* scaffold-only strip labelling a Q variant (NOT part of the design being drawn) — same
+   typographic language as .tag/.mockbar so it reads as review scaffolding at a glance. */
+.varlabel{padding:8px 24px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted-foreground);background:var(--surface-2);border-top:1px solid var(--border)}
+.varlabel b{color:var(--foreground);letter-spacing:0;text-transform:none}
+
+/* ---- console primitives ---- */
+.lead{color:var(--muted-foreground);font-size:14px;margin-top:6px;max-width:74ch}
+.sectitle{font-size:14px;margin-top:0}
+.secsub{font-size:13px;color:var(--muted-foreground);margin-top:2px;max-width:82ch}
+hr.rule{border:0;border-top:1px solid var(--border);margin:0}
+
+.chip{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 9px;
+  font-size:11.5px;font-weight:500;white-space:nowrap;border:1px solid transparent}
+.chip.neutral{background:var(--neutral-subtle);color:var(--muted-foreground)}
+.chip.success{background:var(--success-subtle);color:var(--success)}
+.chip.warning{background:var(--warning-subtle);color:var(--warning)}
+.chip.danger{background:var(--danger-subtle);color:var(--danger)}
+.chip.info{background:var(--info-subtle);color:var(--info)}
+.dot{width:6px;height:6px;border-radius:999px;background:currentColor}
+
+.btn{font:inherit;font-size:13px;font-weight:500;padding:6px 13px;border-radius:8px;cursor:pointer;
+  border:1px solid var(--border-strong);background:var(--card);color:var(--foreground)}
+.btn.primary{background:var(--primary);color:var(--primary-fg);border-color:transparent}
+.btn.danger{background:var(--danger);color:#fff;border-color:transparent}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+.btn.sm{font-size:12px;padding:4px 10px}
+.btn.ghost{background:none;border-color:transparent;color:var(--muted-foreground)}
+a.btn{display:inline-block;text-decoration:none;color:var(--foreground)}
+.linkbtn{background:none;border:0;color:var(--muted-foreground);font:inherit;font-size:12.5px;
+  cursor:pointer;text-decoration:underline;text-underline-offset:2px;padding:0}
+.linkbtn.info{color:var(--info)}
+
+/* switch (limits) */
+.sw{position:relative;width:36px;height:20px;border-radius:999px;background:var(--border-strong);
+  flex:none;transition:background .12s}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:999px;
+  background:var(--card);transition:transform .12s}
+.sw.on{background:var(--primary)}
+.sw.on::after{transform:translateX(16px)}
+.swrow{display:flex;gap:12px;align-items:flex-start;padding:12px 0}
+.swrow + .swrow{border-top:1px solid var(--border)}
+.swrow .txt{min-width:0}
+.swrow .txt b{font-size:13px;font-weight:500}
+.swrow .txt p{font-size:12px;color:var(--muted-foreground);margin-top:2px;max-width:62ch}
+
+/* tables */
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead th{text-align:left;font-weight:500;font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--muted-foreground);padding:10px 24px;border-bottom:1px solid var(--border)}
+tbody td{padding:11px 24px;border-bottom:1px solid var(--border);vertical-align:top}
+tbody tr:last-child td{border-bottom:0}
+td .val{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+td .sub{font-size:11.5px;color:var(--muted-foreground);display:block;margin-top:3px;max-width:52ch}
+.right{text-align:right}
+.nm{font-weight:500}
+
+/* empty state */
+.empty{padding:34px 24px;text-align:center}
+.empty h4{font-size:13.5px}
+.empty p{font-size:12.5px;color:var(--muted-foreground);margin-top:5px;max-width:56ch;
+  margin-left:auto;margin-right:auto}
+
+/* forms */
+.form{display:grid;grid-template-columns:1fr 1fr auto;gap:14px 16px;padding:18px 24px;align-items:end}
+.form.four{grid-template-columns:1.5fr 1fr .55fr auto}
+.form .f{display:flex;flex-direction:column;gap:5px;min-width:0}
+.form label{font-size:12px;font-weight:500}
+.form .ctl{border:1px solid var(--border-strong);border-radius:8px;background:var(--background);
+  padding:7px 10px;font-size:13px;color:var(--foreground);min-height:34px;display:flex;align-items:center;
+  gap:8px}
+.form .ctl.ph{color:var(--muted-foreground)}
+.form .hint{font-size:11.5px;color:var(--muted-foreground);max-width:44ch}
+.seg{display:inline-flex;border:1px solid var(--border-strong);border-radius:8px;overflow:hidden}
+.seg span{padding:6px 11px;font-size:12.5px;color:var(--muted-foreground);border-left:1px solid var(--border);cursor:pointer}
+.seg span:first-child{border-left:0}
+.seg span.sel{background:var(--surface-2);color:var(--foreground);font-weight:500}
+
+/* dialog */
+.dlg{max-width:470px;margin:0 auto;border:1px solid var(--border);border-radius:14px;
+  background:var(--card);padding:20px 22px;box-shadow:0 12px 34px rgba(0,0,0,.22)}
+.dlg h3{font-size:15px}
+.dlg p{margin-top:9px;font-size:13px;color:var(--muted-foreground)}
+.dlg .row{margin-top:18px;display:flex;gap:10px;justify-content:flex-end}
+.dlgwrap{background:var(--surface-2);padding:28px 20px}
+.ack{margin-top:14px;display:flex;gap:8px;align-items:flex-start;font-size:12.5px;color:var(--foreground)}
+.ack input{margin-top:2px}
+
+/* the add-assignment form, collapsed while the profile editor is open */
+.collapsed{background:var(--surface-2);opacity:.55}
+
+/* notes */
+.note{margin-top:9px;display:flex;flex-direction:column;gap:4px;border-radius:9px;padding:9px 12px;
+  font-size:12.5px;max-width:82ch}
+.note b{font-size:12.5px;font-weight:600}
+.note.amber{background:var(--warning-subtle);color:var(--warning)}
+.note.red{background:var(--danger-subtle);color:var(--danger)}
+.note.plain{background:var(--surface-2);color:var(--muted-foreground)}
+.note.info{background:var(--info-subtle);color:var(--info)}
+
+/* spec editor stand-in — the embedded PolicyPanel, drawn as a frame, never redesigned */
+.spec{margin:0 24px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);
+  padding:12px 14px;font-family:var(--font-mono);font-size:12px;color:var(--muted-foreground);
+  white-space:pre;overflow-x:auto}
+.meter{display:flex;align-items:center;gap:9px;padding:12px 24px 0;font-size:12.5px}
+.bar{height:6px;width:150px;border-radius:999px;background:var(--border-strong);overflow:hidden;flex:none}
+.bar i{display:block;height:100%;width:62%;background:var(--warning)}
+
+/* combobox */
+.combo{position:relative}
+.pop{margin-top:6px;border:1px solid var(--border);border-radius:10px;background:var(--card);
+  box-shadow:0 12px 34px rgba(0,0,0,.22);overflow:hidden}
+.pop .r{display:flex;gap:8px;align-items:baseline;padding:8px 12px;font-size:13px;border-bottom:1px solid var(--border)}
+.pop .r:last-child{border-bottom:0}
+.pop .r .d{font-family:var(--font-mono);font-size:11.5px;color:var(--muted-foreground)}
+.pop .st{padding:8px 12px;font-size:12.5px;color:var(--muted-foreground)}
+
+/* toast (launch warnings) */
+.toast{max-width:430px;border:1px solid var(--border);border-radius:10px;background:var(--card);
+  box-shadow:0 12px 34px rgba(0,0,0,.22);padding:11px 13px}
+.toast b{font-size:13px;font-weight:500;display:block}
+.toast p{margin-top:3px;font-size:12.5px;color:var(--muted-foreground)}
+
+/* nav strip — the sidebar slot Q1 asks about */
+.navstrip{display:flex;flex-wrap:wrap;gap:6px;padding:14px 24px}
+.navstrip span{font-size:12.5px;padding:5px 11px;border-radius:8px;color:var(--muted-foreground)}
+.navstrip span.here{background:var(--surface-2);color:var(--foreground);font-weight:500;
+  box-shadow:inset 2px 0 0 var(--primary)}
+
+/* member surfaces */
+.card{border:1px solid var(--border);border-radius:14px;background:var(--card);padding:16px 18px}
+.chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
+.hero{padding:38px 24px}
+.hero h1{font-size:2rem;line-height:1.15;letter-spacing:-.02em}
+.hero .sq{display:inline-flex;width:44px;height:44px;border-radius:12px;background:rgba(20,184,166,.15);
+  align-items:center;justify-content:center;color:var(--primary);font-weight:600}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media (max-width:900px){.form,.form.four{grid-template-columns:1fr}.two{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="mockbar">
+  <div>
+    <h1>Governance profiles — mock, one round, three surfaces</h1>
+    <div class="sub">Product strings verbatim from <code>docs/design/governance-prompt.md</code> §7. Static: nothing here is wired.</div>
+  </div>
+  <button id="tt" type="button">Light / dark</button>
+</div>
+
+<div class="sheet">
+
+<!-- ===== STATE 1 ===== Governance console, populated: nav slot, profiles, assignments, preview -->
+<section class="state" style="margin-top:20px">
+  <div class="tag"><span>State 1</span><b>Governance — populated (security admin)</b></div>
+  <div class="frame">
+    <!-- Q1's slot, drawn: Policies -> Governance -> Permissions. Member nav is
+         unchanged (Runs / Approvals / Workspaces) and never carries this item. -->
+    <div class="navstrip">
+      <span>Runs</span><span>Approvals</span><span>Workspaces</span><span>Policies</span>
+      <span class="here">Governance</span><span>Permissions</span><span>Secrets</span>
+      <span>Audit</span><span>Recordings</span>
+    </div>
+    <hr class="rule">
+    <div class="pad">
+      <h2 style="font-size:19px">Governance</h2>
+      <p class="lead">Named ceilings, assigned to people and groups. An assigned profile replaces the deployment ceiling for its subjects; anyone with no assignment keeps the deployment ceiling.</p>
+    </div>
+    <hr class="rule">
+
+    <!-- profiles block -->
+    <div class="pad" style="padding-bottom:14px;display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:10px">
+      <div>
+        <h3 class="sectitle">Profiles</h3>
+        <p class="secsub">A profile is one ceiling: the policy every run under it is bounded by, plus the launch modes its subjects may not use at all.</p>
+      </div>
+      <button class="btn" type="button">New profile</button>
+    </div>
+    <table>
+      <thead><tr><th>Name</th><th>Assigned to</th><th>Limits</th><th>Grade</th><th>Updated</th><th></th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="nm">Greenfield contractors</span></td>
+          <td>2 subjects</td>
+          <td><span class="chip neutral">Deny exec runs</span></td>
+          <td><span class="chip warning"><i class="dot"></i>Guarded</span></td>
+          <td>3 days ago</td>
+          <td class="right"><button class="btn sm" type="button">Edit</button> <button class="btn sm" type="button">Delete</button></td>
+        </tr>
+        <tr>
+          <td><span class="nm">Platform</span></td>
+          <td>1 subject</td>
+          <td>None</td>
+          <td><span class="chip success"><i class="dot"></i>Safest</span></td>
+          <td>9 days ago</td>
+          <td class="right"><button class="btn sm" type="button">Edit</button> <button class="btn sm" type="button">Delete</button></td>
+        </tr>
+        <tr>
+          <td><span class="nm">Locked down</span></td>
+          <td>Not assigned</td>
+          <td><span class="chip neutral">Deny exec runs</span> <span class="chip neutral">Deny interactive runs</span></td>
+          <td><span class="chip success"><i class="dot"></i>Safest</span></td>
+          <td>an hour ago</td>
+          <td class="right"><button class="btn sm" type="button">Edit</button> <button class="btn sm" type="button">Delete</button></td>
+        </tr>
+      </tbody>
+    </table>
+    <hr class="rule">
+
+    <!-- assignments block -->
+    <div class="pad" style="padding-bottom:8px">
+      <h3 class="sectitle">Assignments</h3>
+      <p class="secsub">Who runs under which profile. One profile applies to a person — never two merged together.</p>
+      <div class="note plain">The most specific assignment wins: a person beats a group, and a group beats everyone. Within a person, the sign-in subject beats the email. Between groups, the higher priority wins, then the profile name.</div>
+    </div>
+    <table>
+      <thead><tr><th>Who</th><th>Profile</th><th>Priority</th><th>Added</th><th></th></tr></thead>
+      <tbody>
+        <tr>
+          <td><div class="val"><span class="chip neutral">Group</span><span class="mono">6b1f0e2a-9c33-4d51-a0d8-1f7c2e4b9a10</span></div></td>
+          <td>Greenfield contractors</td>
+          <td>20</td>
+          <td>3 days ago</td>
+          <td class="right"><button class="btn sm" type="button">Remove</button></td>
+        </tr>
+        <tr>
+          <td><div class="val"><span class="chip neutral">Group</span><span class="mono">Wardyn.Platform</span></div></td>
+          <td>Platform</td>
+          <td>10</td>
+          <td>9 days ago</td>
+          <td class="right"><button class="btn sm" type="button">Remove</button></td>
+        </tr>
+        <tr>
+          <td><div class="val"><span class="chip neutral">User</span><span class="mono">alice@corp.example</span></div></td>
+          <td>Greenfield contractors</td>
+          <td>—</td>
+          <td>2 hours ago</td>
+          <td class="right"><button class="btn sm" type="button">Remove</button></td>
+        </tr>
+      </tbody>
+    </table>
+    <hr class="rule">
+    <div class="pad" style="padding-bottom:0">
+      <h4 class="sectitle">Assign a profile</h4>
+      <!-- Two halves of one fact, and the subjects differ. An ASSIGNMENT is a row
+           the resolver re-reads every run, so it binds at the next RUN. A person's
+           GROUP MEMBERSHIP is read once at sign-in, so moving them between groups
+           binds at their next SIGN-IN — or, on an API token, its next mint. -->
+      <p class="secsub">Takes effect on their next run. A run already dispatched keeps the ceiling it started with.</p>
+      <p class="secsub" style="margin-top:4px">A change to someone's groups in your identity provider reaches Wardyn only when they next sign in, so they keep their current ceiling until then — or, for an API token, until it is re-minted.</p>
+    </div>
+    <div class="form four">
+      <div class="f">
+        <label>Who</label>
+        <div class="seg"><span>User</span><span class="sel">Group</span><span>Everyone signed in</span></div>
+        <!-- A placeholder is never a label (CONSOLE-RULES §8): the control is empty
+             and the accepted shape is a hint UNDER it. -->
+        <div class="ctl mono" style="margin-top:5px">&nbsp;</div>
+        <div class="hint">A group or app-role name exactly as your identity provider sends it in the token.</div>
+      </div>
+      <div class="f">
+        <label>Profile</label>
+        <div class="ctl ph">Pick a profile</div>
+      </div>
+      <div class="f">
+        <label>Priority</label>
+        <div class="ctl mono">10</div>
+        <div class="hint">Breaks ties between groups a person is in. Higher wins. It is ignored for a person and for everyone.</div>
+      </div>
+      <div class="f"><button class="btn primary" type="button">Assign</button></div>
+    </div>
+    <hr class="rule">
+
+    <!-- Resolved preview, Q2's RECOMMENDED shape: a claims dry run. There is no
+         server-side session row to read a live person's groups from (oidc.go's
+         "Session storage"; sessions.go's "no session row to delete"), so the field
+         takes claims and the answer speaks about the claims, never about a person.
+         Field label + hint are the People preview's own canon (PREVIEW.FIELD_CLAIMS
+         / _HINT), not a second frozen pair. -->
+    <div class="pad">
+      <h3 class="sectitle">Resolved profile</h3>
+      <p class="secsub">Paste the roles, groups, or email a person's token would carry, and see which profile would bind their runs.</p>
+      <div class="form" style="padding:14px 0 0">
+        <div class="f">
+          <label>Roles, groups, or email</label>
+          <div class="ctl mono" style="min-height:66px;align-items:flex-start;flex-direction:column;gap:2px">
+            <span>6b1f0e2a-9c33-4d51-a0d8-1f7c2e4b9a10</span><span>alice@corp.example</span>
+          </div>
+          <div class="hint">One value per line — an App Role, a group name, or an email address.</div>
+        </div>
+        <div class="f"><button class="btn" type="button">Resolve</button></div>
+      </div>
+      <div class="note plain" style="margin-top:14px">These claims resolve to "Greenfield contractors" — matched by a user assignment.</div>
+      <p class="secsub" style="margin-top:10px">Nothing here is saved.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 2 ===== Profile editor — existing profile, ceiling + limits + grade -->
+<section class="state">
+  <div class="tag"><span>State 2</span><b>Profile editor — embedded PolicyPanel, and the add form collapsed beneath it (one teal at a time)</b></div>
+  <div class="frame">
+    <div class="pad" style="padding-bottom:14px">
+      <h3 class="sectitle">Edit "Greenfield contractors"</h3>
+    </div>
+    <div class="form" style="padding-top:0;grid-template-columns:1fr">
+      <div class="f">
+        <label>Name</label>
+        <div class="ctl">Greenfield contractors</div>
+        <div class="hint" style="max-width:70ch">What this profile is called on the assignments below, and in the run of anyone assigned to it. Names are unique.</div>
+      </div>
+    </div>
+    <hr class="rule">
+    <div class="pad" style="padding-bottom:10px">
+      <h4 class="sectitle">Ceiling</h4>
+      <p class="secsub">Every run under this profile is bounded by this spec. A member's own policy is clamped to it, and so is a saved policy they pick.</p>
+    </div>
+    <!-- The embedded PolicyPanel instance="policies": its templates, JSON editor,
+         field help and SafetyMeter are existing canon and are NOT re-designed here.
+         This block stands in for that component. -->
+    <div class="spec">{
+  "allowed_domains": ["registry.npmjs.org", "pypi.org", "github.com"],
+  "denied_domains": ["*.corp.example"],
+  "min_confinement_class": "wall",
+  "tool_rules": ["*:allow"]
+}</div>
+    <div class="meter">
+      <span style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted-foreground)">Safety</span>
+      <span class="bar"><i></i></span>
+      <span class="chip warning"><i class="dot"></i>Guarded</span>
+      <span style="color:var(--muted-foreground)">Grades this ceiling as written — advisory, the same meter the policy editor shows.</span>
+    </div>
+    <div class="pad" style="padding-top:18px;padding-bottom:6px">
+      <h4 class="sectitle">Limits</h4>
+      <p class="secsub">Two launch modes route around tool approvals entirely, so the ceiling above cannot reach them. Deny them here instead.</p>
+    </div>
+    <div class="pad" style="padding-top:0">
+      <div class="swrow">
+        <span class="sw on" aria-hidden="true"></span>
+        <div class="txt">
+          <b>Deny exec runs</b>
+          <p><span class="mono">task_mode=exec</span> runs a command with no agent, so no tool rule is ever consulted.</p>
+        </div>
+      </div>
+      <div class="swrow">
+        <span class="sw" aria-hidden="true"></span>
+        <div class="txt">
+          <b>Deny interactive runs</b>
+          <p>An interactive run is supervised at the attach pane rather than by rules. A run with no task comes up interactive too, and is refused the same way.</p>
+        </div>
+      </div>
+    </div>
+    <hr class="rule">
+    <div class="pad" style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn ghost" type="button">Cancel</button>
+      <button class="btn primary" type="button">Save profile</button>
+    </div>
+    <hr class="rule">
+    <!-- While the editor above is open, the add-assignment form below it COLLAPSES to
+         this disabled summary row, taking its teal Assign with it — one `default`
+         button on the screen at a time (CONSOLE-RULES §6) without inventing a modal.
+         No new string: it is ADD_TITLE, disabled. Re-expands on Save or Cancel. -->
+    <div class="pad collapsed" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+      <h4 class="sectitle">Assign a profile</h4>
+      <button class="btn" type="button" disabled>Assign</button>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 3 ===== Profile editor — new, save failed -->
+<section class="state">
+  <div class="tag"><span>State 3</span><b>New profile — the save failed (server unreachable, not a refusal)</b></div>
+  <div class="frame">
+    <div class="pad" style="padding-bottom:14px"><h3 class="sectitle">New profile</h3></div>
+    <div class="form" style="padding-top:0;grid-template-columns:1fr">
+      <div class="f">
+        <label>Name</label>
+        <div class="ctl ph">Greenfield contractors</div>
+        <div class="hint" style="max-width:70ch">What this profile is called on the assignments below, and in the run of anyone assigned to it. Names are unique.</div>
+      </div>
+    </div>
+    <div class="pad" style="padding-top:0">
+      <div class="note red">Couldn't save this profile.</div>
+    </div>
+    <hr class="rule">
+    <div class="pad" style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn ghost" type="button">Cancel</button>
+      <button class="btn primary" type="button">Save profile</button>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 4 ===== Profiles empty -->
+<section class="state">
+  <div class="tag"><span>State 4</span><b>Empty — no profiles yet (the deployment ceiling still binds everyone)</b></div>
+  <div class="frame">
+    <div class="empty">
+      <h4>No profiles yet</h4>
+      <p>Everyone runs under the deployment ceiling from <span class="mono">WARDYN_DEFAULT_POLICY</span>. Add a profile to give a group its own.</p>
+      <!-- The empty state carries the action that fills it (CONSOLE-RULES §9), and
+           with nothing to assign yet that action IS the screen's one teal button. -->
+      <button class="btn primary" style="margin-top:14px" type="button">New profile</button>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 5 ===== Assignments empty — distinct from state 4 -->
+<section class="state">
+  <div class="tag"><span>State 5</span><b>Empty — profiles exist, none assigned (distinct from state 4)</b></div>
+  <div class="frame">
+    <div class="pad" style="padding-bottom:8px">
+      <h3 class="sectitle">Assignments</h3>
+      <p class="secsub">Who runs under which profile. One profile applies to a person — never two merged together.</p>
+    </div>
+    <div class="empty" style="padding-top:14px">
+      <h4>No assignments yet</h4>
+      <p>A profile with no assignment bounds nobody. Assign one to a group to start.</p>
+    </div>
+    <hr class="rule">
+    <div class="pad" style="padding-bottom:0">
+      <h4 class="sectitle">Assign a profile</h4>
+      <p class="secsub">Takes effect on their next run. A run already dispatched keeps the ceiling it started with.</p>
+      <p class="secsub" style="margin-top:4px">A change to someone's groups in your identity provider reaches Wardyn only when they next sign in, so they keep their current ceiling until then — or, for an API token, until it is re-minted.</p>
+    </div>
+    <div class="form four">
+      <div class="f">
+        <label>Who</label>
+        <div class="seg"><span>User</span><span class="sel">Group</span><span>Everyone signed in</span></div>
+        <div class="ctl mono" style="margin-top:5px">&nbsp;</div>
+        <div class="hint">A group or app-role name exactly as your identity provider sends it in the token.</div>
+      </div>
+      <div class="f">
+        <label>Profile</label>
+        <div class="ctl ph">Pick a profile</div>
+      </div>
+      <div class="f">
+        <label>Priority</label>
+        <div class="ctl mono">10</div>
+      </div>
+      <div class="f"><button class="btn primary" type="button">Assign</button></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 6 ===== Fetch-failed -->
+<section class="state">
+  <div class="tag"><span>State 6</span><b>Fetch-failed — distinct from empty; enforcement is unaffected</b></div>
+  <div class="frame">
+    <div class="empty">
+      <h4>Couldn't load governance profiles</h4>
+      <p>Something went wrong reaching the server. Profiles that are already assigned still bound every run — this list just can't show them right now.</p>
+      <button class="btn" style="margin-top:14px" type="button">Retry</button>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 7 ===== Write refusal — grants past the deployment ceiling (4 causes) -->
+<section class="state">
+  <div class="tag"><span>State 7</span><b>Refusal (400) — grants past the deployment ceiling, drawn POST-ATTEMPT with all four causes</b></div>
+  <div class="frame">
+    <div class="pad" style="padding-bottom:8px">
+      <h4 class="sectitle">Ceiling</h4>
+    </div>
+    <div class="spec">{
+  "eligible_grants": [
+    { "kind": "api_key", "secret": "stripe-live", "ttl_seconds": 0 }
+  ]
+}</div>
+    <div class="pad">
+      <!-- The console contributes the HEADING; the body is the server's own 400,
+           rendered verbatim (governanceGrantWithinCeiling via handleCreate...'s
+           "invalid ceiling: " prefix). One cause per attempt in the real product;
+           all four drawn together so the shipped clause set is reviewable at once.
+           Freezing four console clauses here would have meant specifying a
+           structured cause on the wire for copy polish — canon yields instead. -->
+      <div class="note red">
+        <b>These grants go past the deployment ceiling</b>
+        <span class="mono">invalid ceiling: eligible grant "api_key" pairing secret "stripe-live" with host "api.stripe.com" is not in the deployment ceiling (a profile may narrow the deployment's eligible grants, never add one)</span>
+      </div>
+      <div class="note red">
+        <b>These grants go past the deployment ceiling</b>
+        <span class="mono">invalid ceiling: eligible grant "api_key" strips requires_approval, which the deployment ceiling sets (a profile may force approval on, never off — without it the credential auto-mints at proxy boot)</span>
+      </div>
+      <div class="note red">
+        <b>These grants go past the deployment ceiling</b>
+        <span class="mono">invalid ceiling: eligible grant "api_key" ttl_seconds resolves to 3600s, above the deployment ceiling's 300s (0 means the 3600s default, so it is not a narrowing)</span>
+      </div>
+      <div class="note red">
+        <b>These grants go past the deployment ceiling</b>
+        <span class="mono">invalid ceiling: eligible grant "github_token" is not in the deployment ceiling's eligible grants (a profile may narrow the deployment's credential eligibility, never mint new eligibility)</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 8 ===== Delete — the plain confirm, and the RESTRICT refusal -->
+<section class="state">
+  <div class="tag"><span>State 8</span><b>Delete — three paths: unassigned confirms, visibly-assigned is pre-filled, the race is refused (409)</b></div>
+  <div class="frame">
+    <div class="varlabel"><b>Unassigned</b> — the only path that offers a live confirm</div>
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Delete "Locked down"?</h3>
+        <p>It isn't assigned to anyone, so nobody's ceiling changes.</p>
+        <div class="row"><button class="btn ghost" type="button">Cancel</button><button class="btn danger" type="button">Delete</button></div>
+      </div>
+    </div>
+    <!-- The profiles list already renders ASSIGNED_COUNT, so the client KNOWS this
+         one is assigned: it opens the dialog pre-filled with the refusal and the
+         confirm disabled rather than making the operator discover it by failing.
+         (The People-step lockout is post-attempt only because nothing client-side
+         can know whose session is acting — that rationale does not transfer here.) -->
+    <div class="varlabel"><b>Visibly assigned</b> — pre-filled from the count the list already shows; Delete disabled, nothing to attempt</div>
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Delete "Greenfield contractors"?</h3>
+        <div class="note red" style="max-width:none;margin-top:12px">
+          <b>This profile is still assigned</b>
+          <span>"Greenfield contractors" still has 2 assignments. Deleting it would widen those subjects back to the deployment ceiling without anyone deciding that — remove the assignments first.</span>
+        </div>
+        <div class="row"><button class="btn ghost" type="button">Cancel</button><button class="btn danger" type="button" disabled>Delete</button></div>
+      </div>
+    </div>
+    <!-- The 409 stays authoritative for what the count cannot see: another admin
+         assigned it a second ago. COUNT-FREE on this path, deliberately: the client
+         believed the count was zero, and the shipped 409 carries no n — inventing one
+         here would mean adding it to the wire for the sake of a sentence. So the
+         console's heading sits over the SERVER's message, post-attempt, Delete
+         still enabled. -->
+    <div class="varlabel"><b>The race</b> — client believed it unassigned; the server's 409 corrects it post-attempt, with no count</div>
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Delete "Platform"?</h3>
+        <p>It isn't assigned to anyone, so nobody's ceiling changes.</p>
+        <div class="note red" style="max-width:none;margin-top:12px">
+          <b>This profile is still assigned</b>
+          <span class="mono">this governance profile is still assigned — delete its assignments first (deleting it while assigned would silently widen everyone it bounds back to the deployment ceiling)</span>
+        </div>
+        <div class="row"><button class="btn ghost" type="button">Cancel</button><button class="btn danger" type="button">Delete</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 9 ===== Omission warning — Q6's two variants -->
+<section class="state">
+  <div class="tag"><span>State 9</span><b>Omission warnings (Q6) — the server's list under the console's heading, both variants</b></div>
+  <div class="frame">
+    <!-- governanceOmissionWarnings returns up to FIVE independent prose warnings on
+         Warnings[]; the console heads the list and renders each item verbatim, in the
+         response's order. All five drawn so the shipped set is reviewable at once —
+         a real write returns only the ones that fired. Never joined into one sentence,
+         which is why no composed OMISSION_BODY exists. -->
+    <div class="varlabel"><b>Variant A — recommended:</b> an inline list after a successful save; never blocks</div>
+    <div class="pad">
+      <div class="note amber">
+        <b>This profile narrows by omission</b>
+        <span class="mono">this profile omits 2 denied domain(s) the deployment default denies (*.corp.example, internal.corp.example) — members under it are NOT walled from them</span>
+        <span class="mono">this profile omits 1 allowed domain(s) the deployment default allows (pypi.org) — members under it lose access to them</span>
+        <span class="mono">this profile omits 1 eligible grant kind(s) the deployment default carries (api_key) — members under it cannot request those credentials</span>
+        <span class="mono">this profile's min_confinement_class "fence" is WEAKER than the deployment default's "wall"</span>
+        <span class="mono">this profile sets allow_all_egress while the deployment default does not — members under it reach any non-denied public host</span>
+      </div>
+    </div>
+    <div class="varlabel"><b>Variant B:</b> acknowledge before saving</div>
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>This profile narrows by omission</h3>
+        <p class="mono" style="font-size:12px">this profile omits 2 denied domain(s) the deployment default denies (*.corp.example, internal.corp.example) — members under it are NOT walled from them</p>
+        <p class="mono" style="font-size:12px">this profile sets allow_all_egress while the deployment default does not — members under it reach any non-denied public host</p>
+        <label class="ack"><input type="checkbox" disabled> I understand this profile takes these away.</label>
+        <div class="row"><button class="btn ghost" type="button">Cancel</button><button class="btn primary" type="button" disabled>Save profile</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 10 ===== Unassign confirm -->
+<section class="state">
+  <div class="tag"><span>State 10</span><b>Unassign — reversible, so Remove is outline, never destructive</b></div>
+  <div class="frame">
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Remove "Greenfield contractors" from alice@corp.example?</h3>
+        <p>Their next run is bounded by whatever else matches them, or by the deployment ceiling if nothing does.</p>
+        <div class="row"><button class="btn ghost" type="button">Cancel</button><button class="btn" type="button">Remove</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 11 ===== Resolved preview — every result arm (Q2 variant b, recommended) -->
+<section class="state">
+  <div class="tag"><span>State 11</span><b>Resolved profile (Q2 variant b, recommended) — every result arm</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h3 class="sectitle">Resolved profile</h3>
+      <p class="secsub">Paste the roles, groups, or email a person's token would carry, and see which profile would bind their runs.</p>
+      <div class="form" style="padding:14px 0 0">
+        <div class="f">
+          <label>Roles, groups, or email</label>
+          <div class="ctl mono" style="min-height:66px;align-items:flex-start;flex-direction:column;gap:2px">
+            <span>Wardyn.Platform</span><span>bob@corp.example</span>
+          </div>
+          <div class="hint">One value per line — an App Role, a group name, or an email address.</div>
+        </div>
+        <div class="f"><button class="btn" type="button">Resolve</button></div>
+      </div>
+      <div class="note plain">These claims resolve to "Platform" — matched by a group assignment.</div>
+      <div class="note plain">These claims resolve to the deployment ceiling — no assignment matches them.</div>
+      <div class="note red">Couldn't resolve this — try again.</div>
+      <p class="secsub" style="margin-top:10px">Nothing here is saved.</p>
+      <!-- Three arms, no stale arm: a truncated group snapshot is a fact about a
+           member's own cookie or API token, which no admin request can read, and it
+           surfaces where it bites — at that member's launch (state 18). -->
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 12 ===== Resolved preview — Q2's losing variant (a), name a principal -->
+<section class="state">
+  <div class="tag"><span>State 12</span><b>Resolved profile (Q2 variant a) — name a principal; drawn so its cost is visible</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h3 class="sectitle">Resolved profile</h3>
+      <!-- NO LEAD: PREVIEW_LEAD describes pasting claims, which this variant does not
+           do, and a lead of its own would be frozen copy for a variant that may not
+           ship — the same reason it borrows PERM.FIELD_WHO / PERM.HINT_USER for the
+           field instead of minting a pair. Its cost, drawn below: there is no
+           server-side session row, so a named principal resolves only against
+           user-tier assignments — the GROUP tier, which is what the feature is for,
+           has nothing to match against and falls through to the deployment ceiling,
+           indistinguishable from a genuine no-match. -->
+      <div class="form" style="padding:14px 0 0;grid-template-columns:1fr auto">
+        <div class="f">
+          <label>Who</label>
+          <div class="ctl mono">bob@corp.example</div>
+          <div class="hint">An email address or the sign-in subject id. Either one matches the same person.</div>
+        </div>
+        <div class="f"><button class="btn" type="button">Resolve</button></div>
+      </div>
+      <div class="note plain">These claims resolve to the deployment ceiling — no assignment matches them.</div>
+      <p class="secsub" style="margin-top:10px">Nothing here is saved.</p>
+    </div>
+    <div class="varlabel"><b>Why this variant loses:</b> bob is in Wardyn.Platform and really runs under "Platform" — the answer above is wrong, and nothing server-side can tell this variant so</div>
+  </div>
+</section>
+
+<!-- ===== STATE 13 ===== Directory combobox — live suggestions -->
+<section class="state">
+  <div class="tag"><span>State 13</span><b>Assignment subject field — directory configured (live suggestions, group chip, states)</b></div>
+  <div class="frame">
+    <div class="form four" style="padding-bottom:6px">
+      <div class="f combo">
+        <label>Who</label>
+        <div class="seg"><span>User</span><span class="sel">Group</span><span>Everyone signed in</span></div>
+        <div class="ctl mono" style="margin-top:5px">green</div>
+        <div class="pop">
+          <div class="r"><span>Greenfield Contractors — <span class="d">6b1f0e2a-9c33-4d51-a0d8-1f7c2e4b9a10</span></span></div>
+          <div class="r"><span>Greenfield Platform — <span class="d">0a44c8d1-5e77-42b0-9f3c-88d1e6a2b7c4</span></span></div>
+        </div>
+      </div>
+      <div class="f">
+        <label>Profile</label>
+        <div class="ctl ph">Pick a profile</div>
+      </div>
+      <div class="f">
+        <label>Priority</label>
+        <div class="ctl mono">20</div>
+      </div>
+      <div class="f"><button class="btn primary" type="button">Assign</button></div>
+    </div>
+    <div class="varlabel"><b>Picked a group</b> — the chip shows the name, the stored value is the object id</div>
+    <div class="form" style="padding-top:14px;grid-template-columns:1fr">
+      <div class="f">
+        <label>Who</label>
+        <div class="ctl"><span class="chip neutral">Group · Greenfield Contractors</span><span class="mono">6b1f0e2a-9c33-4d51-a0d8-1f7c2e4b9a10</span></div>
+        <div class="hint" style="max-width:70ch">Stored as the group's object id — the name is what your directory calls it today.</div>
+      </div>
+    </div>
+    <div class="varlabel"><b>The other three lookup states</b> — searching, no matches, lookup failed (Q7 decides which of these display)</div>
+    <div class="pad" style="padding-top:14px">
+      <div class="pop" style="max-width:430px">
+        <div class="st">Searching your directory…</div>
+      </div>
+      <div class="pop" style="max-width:430px;margin-top:10px">
+        <div class="st">No matches in your directory. Type the value yourself if you know it.</div>
+      </div>
+      <div class="note amber" style="max-width:430px">Couldn't check your directory — type the value yourself.</div>
+      <div class="note plain" style="max-width:430px">Type at least 2 characters to search your directory.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 14 ===== Directory combobox — absent mode -->
+<section class="state">
+  <div class="tag"><span>State 14</span><b>Same field, no directory configured — absent mode is SILENCE: the combobox IS the plain input</b></div>
+  <div class="frame">
+    <div class="form four" style="padding-bottom:18px">
+      <div class="f">
+        <label>Who</label>
+        <div class="seg"><span>User</span><span class="sel">Group</span><span>Everyone signed in</span></div>
+        <div class="ctl mono" style="margin-top:5px">&nbsp;</div>
+        <div class="hint">A group or app-role name exactly as your identity provider sends it in the token.</div>
+      </div>
+      <div class="f">
+        <label>Profile</label>
+        <div class="ctl ph">Pick a profile</div>
+      </div>
+      <div class="f">
+        <label>Priority</label>
+        <div class="ctl mono">10</div>
+      </div>
+      <div class="f"><button class="btn primary" type="button">Assign</button></div>
+    </div>
+    <!-- No error, no banner, no disabled state, no string at all: this is
+         byte-for-byte the free-text field that ships before the connector does —
+         identical to the state-1 field, hint below the control (CONSOLE-RULES §8). -->
+  </div>
+</section>
+
+<!-- ===== STATE 15 ===== Member — New Run, Policy card -->
+<section class="state">
+  <div class="tag"><span>State 15</span><b>Member · New Run — the Policy card gains ONE line; the panel itself is unchanged</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h3 class="sectitle">Policy</h3>
+      <div class="note info" style="margin-top:12px">Bounded by "Greenfield contractors", the governance profile your admin assigned you. Your policy is clamped to it.</div>
+      <div class="two" style="margin-top:14px">
+        <div class="card"><b style="font-size:13px">Reuse a saved policy</b><p class="secsub">One your operators already wrote and named.</p></div>
+        <div class="card" style="box-shadow:inset 0 0 0 1px var(--primary)"><b style="font-size:13px">Custom policy</b><p class="secsub">Start from a template and edit the spec for this run.</p></div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:14px">
+        <button class="btn" type="button">Preflight</button>
+        <span style="font-size:11.5px;color:var(--muted-foreground)">Checks the spec server-side and shows what would be clamped — before you launch.</span>
+      </div>
+    </div>
+    <!-- With NO profile assigned, the info line above is absent entirely: today's
+         card byte-for-byte, the same absent-row doctrine the resolver follows. -->
+  </div>
+</section>
+
+<!-- ===== STATE 16 ===== Member — Getting Started, the governance row -->
+<section class="state">
+  <div class="tag"><span>State 16</span><b>Member · Getting Started — one governance chip and one line, naming the profile</b></div>
+  <div class="frame">
+    <div class="pad">
+      <div class="card">
+        <h4 class="sectitle">What's set up for you</h4>
+        <p class="secsub">Your admin configured the barrier, network and shared credentials. Your runs inherit them.</p>
+        <div class="chips">
+          <span class="chip neutral">Barrier · Wall</span>
+          <span class="chip success">Model access · Provided by your admin</span>
+          <span class="chip info">Sign-in · SSO</span>
+          <span class="chip neutral">Governance · Greenfield contractors</span>
+        </div>
+        <p class="secsub" style="margin-top:10px">Your runs are bounded by "Greenfield contractors". What you can change is what it leaves open.</p>
+      </div>
+    </div>
+    <!-- Naming the profile is decided, not an open call: the member reads the same
+         name on every New Run (state 15) and in every refusal (state 17), so an
+         unnamed "managed" variant would only make two screens disagree. With no
+         profile assigned there is no chip and no line at all. -->
+  </div>
+</section>
+
+<!-- ===== STATE 17 ===== Member — the four launch refusals -->
+<section class="state">
+  <div class="tag"><span>State 17</span><b>Member · launch refusals (403) — composed server-side, rendered verbatim</b></div>
+  <div class="frame">
+    <div class="pad">
+      <div class="note red"><span class="mono">task_mode=exec</span> is not allowed by your governance profile "Greenfield contractors" — an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.</div>
+      <div class="note red">interactive runs are not allowed by your governance profile "Locked down", and a request with no task comes up interactive too. Launch with a task, and without <span class="mono">--interactive</span>.</div>
+      <div class="note red"><span class="mono">seed_auto_tools</span> is not allowed by your governance profile "Locked down": its tool rules hold or deny, and the pre-attach seed runs before any human is at the pane. Launch without it.</div>
+      <div class="note red">codex-cli is not supported under your governance profile "Locked down": its tool rules hold or deny, and codex-cli has no external tool-approval contract. Launch a different agent.</div>
+    </div>
+    <div class="varlabel"><b>Beside it, unchanged:</b> today's refusal of an EXPLICIT hold on codex-cli — a different refusal, still shipped</div>
+    <div class="pad" style="padding-top:14px">
+      <div class="note red">tool_approvals=hold is not supported for codex-cli (no external tool-approval contract)</div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 18 ===== Member — the three launch warnings, and the stale-groups refusal -->
+<section class="state">
+  <div class="tag"><span>State 18</span><b>Member · warnings ride the existing launch toast; the stale-groups refusal is a 403</b></div>
+  <div class="frame">
+    <div class="pad">
+      <div class="toast">
+        <b>Run launched with a warning</b>
+        <p>saved policy "Wide egress" was clamped to your governance profile "Greenfield contractors"</p>
+      </div>
+      <div class="toast" style="margin-top:12px">
+        <b>Run launched with a warning</b>
+        <p>workspace host "artifacts.corp.example" is denied by your governance profile "Greenfield contractors" — the run launches, but that host is refused at the proxy</p>
+      </div>
+      <!-- reintersectGovernanceGrants: a redeploy dropped the pairing from
+           WARDYN_DEFAULT_POLICY while a stored profile still named it. The grant is
+           dropped and the member told, rather than the run failed — one operator's
+           env edit must not become an outage. -->
+      <div class="toast" style="margin-top:12px">
+        <b>Run launched with a warning</b>
+        <p>governance profile "Greenfield contractors": dropped api_key grant no longer within the deployment's eligible grants (eligible grant "api_key" is not in the deployment ceiling's eligible grants (a profile may narrow the deployment's credential eligibility, never mint new eligibility))</p>
+      </div>
+      <!-- The shipped groupsSnapshotStaleMsg, verbatim: it names BOTH remedies, which
+           the console-voiced draft it replaced did not — "sign out and back in" is
+           useless to a token holder whose groups were stamped at mint. -->
+      <div class="note red" style="margin-top:16px">groups_snapshot_stale: your group membership snapshot is missing or was truncated at sign-in, and this deployment assigns governance profiles by group — sign in again (or re-mint your API token) so your ceiling can be resolved</div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 19 ===== Positioning (§H) — frozen here, shipped with the ripple -->
+<section class="state">
+  <div class="tag"><span>State 19</span><b>Positioning — the hero slogan and the setup-layout long form (frozen here, shipped later)</b></div>
+  <div class="frame">
+    <!-- The shield glyph and the intro paragraph under the hero are unchanged and
+         are not part of this round; only the h1 string swaps. -->
+    <div class="hero">
+      <span class="sq" aria-hidden="true"></span>
+      <h1 style="margin-top:18px">Sandboxed. Governed. Self-hosted. Free.</h1>
+    </div>
+    <div class="varlabel"><b>The long-form variant</b> — the setup layout's subtitle</div>
+    <!-- The "Getting started" heading is setup-layout.tsx:111, unchanged and not part
+         of this round; it is drawn only so the subtitle below it has its real context. -->
+    <div class="pad">
+      <h2 style="font-size:19px">Getting started</h2>
+      <p class="lead">Governed sandboxes for anything you run — on your own infrastructure, free.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 20 ===== The role picker's third option (§I / the SSO People step) -->
+<section class="state">
+  <div class="tag"><span>State 20</span><b>People step role picker — one new option label, frozen here, shipped with the tier</b></div>
+  <div class="frame">
+    <div class="form" style="padding-bottom:18px">
+      <div class="f">
+        <label>Value</label>
+        <div class="ctl mono ph">Wardyn.SecurityAdmin</div>
+      </div>
+      <div class="f">
+        <label>Role</label>
+        <div class="seg"><span>Admin</span><span>Member</span><span class="sel">Security admin</span></div>
+      </div>
+      <div class="f"><button class="btn" type="button">Add mapping</button></div>
+    </div>
+    <!-- Everything else on the People step is the SSO campaign's frozen canon and is
+         unchanged: only this option label is added. -->
+  </div>
+</section>
+
+</div>
+
+<script>
+document.getElementById("tt").addEventListener("click", function () {
+  var r = document.documentElement;
+  r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+});
+</script>
+</body>
+</html>
