@@ -840,15 +840,26 @@ td .sub{font-size:11.5px;color:var(--muted-foreground);display:block;margin-top:
   </div>
 </section>
 
-<!-- ===== STATE 17 ===== Member — the four launch refusals -->
+<!-- ===== STATE 17 ===== Member — every 403 a profile-bound member can meet -->
 <section class="state">
-  <div class="tag"><span>State 17</span><b>Member · launch refusals (403) — composed server-side, rendered verbatim</b></div>
+  <div class="tag"><span>State 17</span><b>Member · refusals (403) — composed server-side, rendered verbatim</b></div>
   <div class="frame">
+    <!-- The four GOVERNANCE-PROFILE refusals: each names the profile that raised it. -->
     <div class="pad">
       <div class="note red"><span class="mono">task_mode=exec</span> is not allowed by your governance profile "Greenfield contractors" — an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.</div>
       <div class="note red">interactive runs are not allowed by your governance profile "Locked down", and a request with no task comes up interactive too. Launch with a task, and without <span class="mono">--interactive</span>.</div>
       <div class="note red"><span class="mono">seed_auto_tools</span> is not allowed by your governance profile "Locked down": its tool rules hold or deny, and the pre-attach seed runs before any human is at the pane. Launch without it.</div>
       <div class="note red">codex-cli is not supported under your governance profile "Locked down": its tool rules hold or deny, and codex-cli has no external tool-approval contract. Launch a different agent.</div>
+    </div>
+    <!-- The two CAPABILITY refusals the enforcement lane shipped. They name NO
+         profile — they fire whether or not the caller has one, and there is no
+         name to interpolate. Different doors, same table (§7.7 is the complete
+         set): the first is run-create via a workspace's seeded base_image, the
+         second is workspace-CREATE, which is why it is not a launch refusal. -->
+    <div class="varlabel"><b>Capability refusals, same table</b> — no profile named, because none is involved</div>
+    <div class="pad" style="padding-top:14px">
+      <div class="note red">image ghcr.io/acme/toolchain:2026.08 comes from your own workspace's base image and is not granted to you — ask an admin to grant the exact image ref, or launch with the agent's convention image</div>
+      <div class="note red">llm_cred is operator-only — an admin binds a workspace's model/harness credential (PUT /workspaces/{id}/llm-cred); create your workspace without it and ask for the binding</div>
     </div>
     <div class="varlabel"><b>Beside it, unchanged:</b> today's refusal of an EXPLICIT hold on codex-cli — a different refusal, still shipped</div>
     <div class="pad" style="padding-top:14px">

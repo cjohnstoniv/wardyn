@@ -646,10 +646,12 @@ too.
 | `WARN_WORKSPACE_DENIED(host, name)` | workspace host "{host}" is denied by your governance profile "{name}" — the run launches, but that host is refused at the proxy |
 | `WARN_GRANT_DROPPED(name, kind, reason)` | governance profile "{name}": dropped {kind} grant no longer within the deployment's eligible grants ({reason}) |
 | `DENIED_STALE_GROUPS` | groups_snapshot_stale: your group membership snapshot is missing or was truncated at sign-in, and this deployment assigns governance profiles by group — sign in again (or re-mint your API token) so your ceiling can be resolved |
+| `DENIED_SEEDED_IMAGE(image)` | image {image} comes from your own workspace's base image and is not granted to you — ask an admin to grant the exact image ref, or launch with the agent's convention image |
+| `DENIED_WORKSPACE_LLM_CRED` | llm_cred is operator-only — an admin binds a workspace's model/harness credential (PUT /workspaces/{id}/llm-cred); create your workspace without it and ask for the binding |
 
-**This table is COMPLETE** (§5 #5): every string a member can be refused or warned with under a
-profile is here. Two of them are the enforcement lane's, adopted byte-exact rather than
-re-worded, because the shipped wording is the better wording:
+**This table is COMPLETE** (§5 #5): every string a member can be refused or warned with at a
+door this campaign touches is here. Four of them are the enforcement lane's, adopted byte-exact
+rather than re-worded, because the shipped wording is the better wording:
 
 - **`DENIED_STALE_GROUPS`** is `groupsSnapshotStaleMsg` (`internal/api/governance.go`) verbatim.
   It beats the console-voiced draft it replaces on the one thing that matters: it names **both**
@@ -660,6 +662,23 @@ re-worded, because the shipped wording is the better wording:
   (`internal/api/governance.go`), which fires when a redeploy removes a pairing from
   `WARDYN_DEFAULT_POLICY` that a stored profile still names: the grant is dropped rather than
   the run failed, and the member is told. It rides the same `warnings[]` list as the two above.
+- **`DENIED_SEEDED_IMAGE`** is `denyMemberSeededImage`'s refusal
+  (`internal/api/runs_create_validate.go`) verbatim — the **seeded-image door**, closing the gap
+  §1 names: a workspace's own `base_image` sets `req.Image` *after* `denyMemberRequest` has
+  already run, so the explicit `--image` branch could not catch it. Same target and reason
+  (`runs.image` / `byoi_member`) as that branch, because it is the same capability answered
+  about the same value; only the door differs, and the message says which one.
+- **`DENIED_WORKSPACE_LLM_CRED`** is `handleCreateWorkspace`'s refusal
+  (`internal/api/workspaces.go`) verbatim — a member naming an `llm_cred` binding on workspace
+  create is refused rather than silently dropped, on the same "a field accepted and thrown away
+  is worse than one refused" rule `interactiveToolApprovalsError` states. It names the operator
+  route to ask for, which is what makes it actionable.
+
+**Two of these name no profile, deliberately.** `DENIED_SEEDED_IMAGE` and
+`DENIED_WORKSPACE_LLM_CRED` are **capability** refusals, not governance-profile ones: they fire
+whether or not the caller has a profile, and there is no profile name to interpolate. They are
+in this table because §5 #5 makes it the complete set of what a member is refused with at these
+doors — an implementer must not "fix" them by adding a profile name they do not have.
 
 `DENIED_CODEX_HOLD` sits beside, and never replaces, the existing explicit-hold refusal
 (§7.1) — one refuses a hold the caller asked for, the other refuses a hold their profile
