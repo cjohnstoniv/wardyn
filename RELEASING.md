@@ -140,7 +140,7 @@ before step 3.
    host:
 
    ```sh
-   TAG=vX.Y.Z; SRC=/mnt/c/Users/Chaz/Videos; STAGE=$(mktemp -d)
+   TAG=vX.Y.Z; SRC=/path/to/recorded/takes; STAGE=$(mktemp -d)
    awk -F'|' '$6 ~ /PASS/ && $7 ~ /mp4/ {gsub(/ /,"",$3); gsub(/ /,"",$7); a[$3]=$7}
               END {for (id in a) print a[id]}' local/TAKES-LEDGER.md |
    while read -r f; do

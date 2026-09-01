@@ -40,8 +40,9 @@ Features are not done until they pass the conformance suite (`test/conformance`)
 
 - `go build` and `go vet` — both plain and `-tags docker`
 - Go unit suites with a coverage floor: `make cover-check` (enforces COVER_MIN=65 over the
-  UNION of both shipped builds — tagless + `-tags docker`),
-  `make test-report-docker` (fakeDocker), `make test-report-pg` (real Postgres)
+  UNION of all three shipped builds — tagless + `-tags docker` + `-tags k8s`),
+  `make test-report-docker` (fakeDocker), `make test-report-k8s`,
+  `make test-report-pg` (real Postgres)
 - Conformance tests: Docker + the driver-agnostic stub (blocking in CI), plus
   `conformance-k8s` for the Kubernetes runner
 - UI: `pnpm typecheck`, unit tests with coverage, `pnpm build`, and the Playwright e2e suite

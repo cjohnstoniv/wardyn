@@ -24,6 +24,11 @@ wizard — with its built-in demo steps — is the first-run path. Everything he
 | Swap a component (identity, secret store, recording, substrate) | [PLUGGABILITY.md](PLUGGABILITY.md) |
 | Design or review a console screen (color budget, type rungs, elevation, status glyphs) | [design/CONSOLE-RULES.md](design/CONSOLE-RULES.md) |
 | Understand the design, or contribute | [../ARCHITECTURE.md](../ARCHITECTURE.md), [../CONTRIBUTING.md](../CONTRIBUTING.md) |
+| Answer a vendor security questionnaire — what leaves the box, what never does | [DATA-FLOW.md](DATA-FLOW.md) |
+| Verify a release artifact (cosign signatures, SBOM attestations) | [VERIFY.md](VERIFY.md) |
+| Export or erase a run's data (GDPR-shaped requests) | [EXPORT.md](EXPORT.md) |
+| Look up an audit action's meaning and emit site | [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md) |
+| Record or re-record the demo video series | [DEMO-SCRIPT.md](DEMO-SCRIPT.md) |
 | Reason about agent risk in general — shared terminology and threat categories | [../threatmodel/AGENT-THREAT-MODEL.md](../threatmodel/AGENT-THREAT-MODEL.md) |
 | Know what Wardyn does *not* defend against | [../threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) |
 | See what is shipped vs. planned | [../ROADMAP.md](../ROADMAP.md), [../CHANGELOG.md](../CHANGELOG.md) |

@@ -217,7 +217,7 @@ ones — see [Default policy](#default-policy).
 
 **Upgrade note — `/readyz` is a 0.6-and-later endpoint.** The readiness probe
 targets `/readyz`. From 0.6.0 the chart's own default image serves it: an empty
-`image.tag` resolves to `.Chart.AppVersion`, now `0.6.0`, so a stock install
+`image.tag` resolves to `.Chart.AppVersion`, so a stock install
 needs nothing here. It still matters if you **pin an image at or below
 `0.5.0`** — those predate `/readyz`, so the probe 404s forever, the pod never
 becomes Ready, and the `rollout status` below hangs with no other symptom

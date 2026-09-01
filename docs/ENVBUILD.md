@@ -57,7 +57,7 @@ A build is two stages:
   agent-run-lib.sh, wardyn-rec, wardyn-git-helper — and a tools
   dir missing any of them fails the build closed (requiredTools /
   validateToolsDir in `internal/envbuild/builder.go`). Without this the built
-  image lacks Wardyn's binaries and the runner cannot drive it (H5). Build
+  image lacks Wardyn's binaries and the runner cannot drive it. Build
   returns this local tag.
 
 The same FINALIZE stage is exposed on its own as FinalizeBase — the

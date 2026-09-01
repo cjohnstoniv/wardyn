@@ -107,17 +107,17 @@ built-in demos need no model either — see
 
 ## What you get
 
-| Capability | What it does | Status | Detail |
-|---|---|---|---|
-| Governed runs | Per-run identity in a gatewayless sandbox, driven from a terminal-first cockpit | shipped | [ARCHITECTURE.md](ARCHITECTURE.md) |
-| Egress + approvals | Only path out is the proxy; an unlisted host can hold mid-flight — once, run, until, always | shipped | [POLICIES.md](docs/POLICIES.md) |
-| Record Mode | Run once open, get the minimal policy, replay confined | shipped | [TRY-IT.md](docs/TRY-IT.md) |
-| Workspaces & secrets | Mounts only what the workspace declares; secrets write-only, never readable back | shipped | [OPERATIONS.md](docs/OPERATIONS.md) |
-| Policies & confinement | One policy picks the barrier: Fence (runc), Wall (gVisor), Vault (Kata, experimental); a host that can't enforce it refuses. Right-size it — a read-only scan or an indexer does not need what an autonomous agent needs | shipped | [POLICIES.md](docs/POLICIES.md) |
-| Model access | Key, subscription or Bedrock injected proxy-side; the sandbox holds an inert sentinel | shipped | [TRY-IT.md](docs/TRY-IT.md) |
-| CI / headless | No UI, no human: the governed run's exit code becomes the pipeline's | shipped | [CI.md](docs/CI.md) |
-| Audit + attach | Three append-only streams a Postgres trigger won't let you rewrite; attach live from browser or SSH | shipped | [SSH.md](docs/SSH.md) |
-| UI sandbox gateway | Relay a declared loopback port (editor, dev server) to a browser over its own origin — a per-run origin is the documented production default | shipped | [UI-SANDBOXES.md](docs/UI-SANDBOXES.md) |
+| Capability | What it does | Detail |
+|---|---|---|
+| Governed runs | Per-run identity in a gatewayless sandbox, driven from a terminal-first cockpit | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| Egress + approvals | Only path out is the proxy; an unlisted host can hold mid-flight — once, run, until, always | [POLICIES.md](docs/POLICIES.md) |
+| Record Mode | Run once open, get the minimal policy, replay confined | [TRY-IT.md](docs/TRY-IT.md) |
+| Workspaces & secrets | Mounts only what the workspace declares; secrets write-only, never readable back | [OPERATIONS.md](docs/OPERATIONS.md) |
+| Policies & confinement | One policy picks the barrier: Fence (runc), Wall (gVisor), Vault (Kata, experimental); a host that can't enforce it refuses. Right-size it — a read-only scan or an indexer does not need what an autonomous agent needs | [POLICIES.md](docs/POLICIES.md) |
+| Model access | Key, subscription or Bedrock injected proxy-side; the sandbox holds an inert sentinel | [TRY-IT.md](docs/TRY-IT.md) |
+| CI / headless | No UI, no human: the governed run's exit code becomes the pipeline's | [CI.md](docs/CI.md) |
+| Audit + attach | Three append-only streams a Postgres trigger won't let you rewrite; attach live from browser or SSH | [SSH.md](docs/SSH.md) |
+| UI sandbox gateway | Relay a declared loopback port (editor, dev server) to a browser over its own origin — a per-run origin is the documented production default | [UI-SANDBOXES.md](docs/UI-SANDBOXES.md) |
 
 Everything else — env and policy reference, deployment, sample workspaces — is
 indexed in [docs/](docs/README.md).
@@ -239,9 +239,8 @@ L1 default-deny — see [ROADMAP.md](ROADMAP.md) and [CHANGELOG.md](CHANGELOG.md
 
 **Apache-2.0, and free for anyone to use for any purpose, commercial use
 included — at any scale, with no fee, no seat limit, no registration and no
-telemetry.** There is no paid edition, no `enterprise/` directory and no hosted
-backend: every control above is in this repo and runs on your infrastructure, or
-it doesn't run. There is also no CLA, which means no single party — including the
+telemetry.** There is no paid edition and no hosted backend: every control above
+is in this repo and runs on your infrastructure, or it doesn't run. There is also no CLA, which means no single party — including the
 maintainer — can relicense this project's accumulated work later.
 
 [`LICENSING.md`](LICENSING.md) is the one page to hand your legal team: the grant,

@@ -13,8 +13,7 @@ ping.
 
 This was not always true — 0.4.x shipped, then removed, a funnel-tracking
 beacon (`POST /api/v1/runs/compose/telemetry`; see `CHANGELOG.md`'s
-"Removed" entry for 0.4.4/0.4.5). The route now 404s and nothing calls it.
-`grep -rn 'beacon\|phone.home\|phone-home' internal/ cmd/` returns nothing,
+"Removed" entry for 0.4.4/0.4.5). The route now 404s and nothing calls it,
 and `internal/api/routes.go` has no telemetry endpoint. Every destination
 `wardynd` itself dials is one of the operator-configured integrations below —
 there is no hardcoded destination that isn't either a customer-supplied
@@ -26,7 +25,7 @@ The one telemetry source in the system that is *not* Wardyn's is the agent
 harness's own: Claude Code ships its own Datadog usage telemetry
 (`http-intake.logs.us5.datadoghq.com`), which egress policy sees and can
 gate like any other host — it is Anthropic's product behavior, not Wardyn's.
-Wardyn suppresses it by default inside the sandbox (D7); set
+Wardyn suppresses it by default inside the sandbox; set
 `WARDYN_ALLOW_AGENT_TELEMETRY=1` to let it through.
 
 ## Outbound destinations, by component
@@ -36,7 +35,7 @@ Wardyn suppresses it by default inside the sandbox (D7); set
 | **`wardyn-proxy`** (the **L2** egress gateway every sandboxed process's traffic transits) | Whatever host the run's policy allowlists — typically an LLM API (`api.anthropic.com`, `api.openai.com`, a Bedrock regional endpoint), a git host, or an operator-declared integration host | The operator, per-policy (`docs/POLICIES.md`) | The model-API and any other allowed egress for the run. This is the one channel the threat model names as an unavoidable data-exit path by design (`threatmodel/THREAT-MODEL.md` §5.1) — the proxy logs it, it does not silently hide it. |
 | **git broker** (`internal/broker`) | `github.com` / a GitHub Enterprise host, or `dev.azure.com` for Azure DevOps | The operator, via the configured SCM integration | Mints short-lived, scope-bound git credentials (installation tokens / PATs) — never a long-lived credential resident in the sandbox. |
 | **OIDC auth** (`internal/auth/oidc`) | The operator's own IdP issuer URL (`WARDYN_OIDC_ISSUER`) — in the bundled Docker Compose dev stack this is a local Dex sidecar the operator runs themselves, not a Wardyn-hosted service | The operator | Human SSO login; discovery + token exchange only. |
-| **Audit sinks** (`internal/audit/sinks`: `webhook.go`, `syslog.go`) | An operator-configured SIEM webhook URL or syslog endpoint (file sink is local-disk-only, no network) | The operator, opt-in per sink (off by default) | Streams the append-only audit log to the operator's own SIEM. Each event carries its hash-chain `prev_hash`/`row_hash` (migration `0047`), so what the SIEM holds off-box is a head hash Wardyn cannot later disown — that comparison, not anything in the database, is what detects a rewritten or truncated trail (`docs/OPERATIONS.md`). Delivery loss on that endpoint being unreachable is a tracked gap (register D2), not a claim of guaranteed delivery. |
+| **Audit sinks** (`internal/audit/sinks`: `webhook.go`, `syslog.go`) | An operator-configured SIEM webhook URL or syslog endpoint (file sink is local-disk-only, no network) | The operator, opt-in per sink (off by default) | Streams the append-only audit log to the operator's own SIEM. Each event carries its hash-chain `prev_hash`/`row_hash` (migration `0047`), so what the SIEM holds off-box is a head hash Wardyn cannot later disown — that comparison, not anything in the database, is what detects a rewritten or truncated trail (`docs/OPERATIONS.md`). Delivery loss on that endpoint being unreachable is a tracked gap, not a claim of guaranteed delivery. |
 | **Agent image pulls** (Docker daemon `docker pull`) | `ghcr.io/cjohnstoniv/agent-*` by default (Wardyn's own published OCI images — public, unauthenticated pulls, no data sent besides the standard registry protocol), or an operator-supplied registry via `WARDYN_AGENT_IMAGES` (`docs/ENV.md`) | Ships with a default; fully overridable by the operator | Pulls the agent runtime container image. No source code, secrets, or run data is part of this pull — it is a one-way image download. |
 | **Upstream corporate proxy** (optional, `docs/OPERATIONS.md`'s "upstream-proxy" section) | A URL the operator pastes in as a secret | The operator | Lets `wardyn-proxy` itself egress through a corporate forward proxy — this is the operator routing Wardyn's own egress through infrastructure *they* control, the reverse direction of a sub-processor relationship. |
 

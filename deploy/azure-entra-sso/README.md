@@ -123,10 +123,10 @@ WARDYN_QUICKSTART_SSH_PORT=2422 \
 deploy/kind/quickstart.sh
 ```
 
-`WARDYN_QUICKSTART_CLUSTER` is this lane's one line of `quickstart.sh` itself
+`WARDYN_QUICKSTART_CLUSTER` overrides one line of `quickstart.sh` itself
 (`CLUSTER="${WARDYN_QUICKSTART_CLUSTER:-wardyn-quickstart}"`) — a **named**
 cluster (`wardyn-entra`) so it never collides with, and is never mistaken
-for, the plain `wardyn-quickstart` cluster another lane may already have up.
+for, the plain `wardyn-quickstart` cluster you may already have up.
 
 **Ports 8480/2422 are deliberately not any port already spoken for
 elsewhere in this repo** — avoid re-using any of: `8080`, `8280`, `2322`,
@@ -178,7 +178,7 @@ cluster in `~/.kube/config` (a live demo cluster, a real cluster from another
 project) — this is the same shared-host discipline `docker ps` above is for,
 just at the k8s-context layer instead of the daemon layer.
 
-**The confinement-floor trap (F-10):** the chart's baked-in default policy
+**The confinement-floor trap:** the chart's baked-in default policy
 floors confinement at `CC2`, but this kind cluster registers no gVisor/Kata
 `RuntimeClass` (Fence/`CC1` only, same as the plain quickstart and the Dex
 overlay) — every **member** run would be refused at launch, clamped to a
@@ -207,7 +207,7 @@ back to admin.
 ## The walk
 
 Evidence checklist — log each numbered row (pass/fail, timestamp, one-line
-observation) to `local/sso-people/FINDINGS.md` as you go.
+observation) as you go.
 
 1. **Browse `http://localhost:8480` — never the `127.0.0.1` URL
    `quickstart.sh` prints.** OIDC state/PKCE cookies are host-scoped, and
@@ -296,23 +296,12 @@ observation) to `local/sso-people/FINDINGS.md` as you go.
 
 ## Playwright — what's automated vs. what this runbook is for
 
-`ui/e2e/entra/entra-live.spec.ts` exercises this same login flow against a
-real Entra tenant, but it is **env-gated** (`WARDYN_ENTRA_E2E=1` plus the
-tenant/app/user parameters this runbook produces) and **not part of `make
-ci`** — it drives Microsoft's own hosted login UI, an external dependency CI
-cannot depend on being stable, reachable, or unchanged run to run. The
-automated suite (`make ci`, `scripts/run-ui-e2e.sh`) carries Wardyn's own
-product behavior through seams and Go tests instead
-(`internal/auth/oidc/derive_test.go` et al.) — this runbook is what
-live-verifies the **IdP half** those seams stub out. The spec file itself is
-authored and lands with a later e2e-authoring phase, not this lane; this
-README documents its env-var contract now so that phase has something to
-implement against. Per the WRITE-ONLY scope of this lane, those two variable
-names are **not** added to `docs/ENV.md` — that's deferred with the spec:
-`WARDYN_ENTRA_E2E` et al. are consumed by the Playwright spec, not by
-`wardynd`, so documenting them there also needs an `envDocShellOnly` entry
-(`cmd/wardynd/envdoc_guard_test.go`), which belongs with the spec's own
-authoring phase, not this one.
+The live Entra login flow is **not part of `make ci`** — it drives
+Microsoft's own hosted login UI, an external dependency CI cannot depend on
+being stable, reachable, or unchanged run to run. The automated suite (`make
+ci`, `scripts/run-ui-e2e.sh`) carries Wardyn's own product behavior through
+seams and Go tests instead — this runbook is what live-verifies the **IdP
+half** those seams stub out.
 
 ## Teardown
 

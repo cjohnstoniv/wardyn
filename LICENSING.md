@@ -11,8 +11,8 @@ That means, explicitly:
 
 - **Free for individuals and free for enterprises**, at any scale. There are no
   seat limits, no node limits, no run limits, and no usage tiers.
-- **No fee, ever, for the software.** There is no paid edition, no `enterprise/`
-  directory, no open-core split, no feature held back behind a licence key. Every
+- **No fee, ever, for the software.** There is no paid edition, no open-core
+  split, no feature held back behind a licence key. Every
   control the project documents is in this repository and runs on your
   infrastructure, or it does not run.
 - **No registration, no activation, no phone-home.** The product contains no

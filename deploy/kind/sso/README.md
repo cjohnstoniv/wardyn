@@ -1,8 +1,8 @@
 # Multi-user (SSO) overlay for the kind quickstart
 
-Turns the single-command quickstart cluster into the multi-user install the
-"One command to a cluster" episode films: Dex as a demo identity provider with
-two static users, and the chart re-rendered on OIDC instead of the admin token.
+Turns the single-command quickstart cluster into a multi-user install: Dex as
+a demo identity provider with two static users, and the chart re-rendered on
+OIDC instead of the admin token.
 
 Everything here is demo-grade and public by design — the bcrypt literal is the
 word `password`, the client secret is a fixed demo string (the same pair

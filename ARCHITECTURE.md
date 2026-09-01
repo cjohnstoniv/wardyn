@@ -8,7 +8,7 @@
 identity, controls, and audit are the product; the sandbox is a pluggable
 commodity. Coding agents (Claude Code, Codex CLI, and successors) are the
 flagship use, so most of what follows is framed around them. Apache-2.0
-everything; no `enterprise/` directory; CNCF Sandbox is the governance target.
+everything; CNCF Sandbox is the governance target.
 
 > **Status markers.** Controls below are tagged **[shipped]** /
 > **[experimental]** / **[v0.5+ — planned]**, matching
@@ -209,7 +209,7 @@ forward-compatibility values; no transition produces them today.
    control-plane audit WRITES (identity mint/revoke, approval decide, broker
    mint/revoke) are still best-effort — the call site is fire-and-forget
    (`_ = rec.Record(...)`, not wrapped in the mint transaction), so a write can
-   still fail. What H9 changed: the shared recorder chain is now
+   still fail. What changed: the shared recorder chain is now
    `maskingRecorder → spoolingRecorder → auditRec`, and every audit writer
    (API, broker, identity, approvals, sweeper) shares it — so when the primary
    Postgres write fails, the (already-masked) event is spooled to a durable

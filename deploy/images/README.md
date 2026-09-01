@@ -334,16 +334,31 @@ short-circuits the pull when the image is already present, so no registry-auth
 wiring is needed. Pin a `@sha256:` digest to avoid mutable-tag drift between runs
 (digest refs are presence-checked by inspect, not the tag filter).
 
-**TLS-MITM trust per runtime:** the per-run proxy CA is delivered at
+**TLS-MITM trust per runtime.** The per-run proxy CA is delivered at
 `/tmp/wardyn/mitm-ca.pem` (bare CA) and `/tmp/wardyn/ca-bundle.pem` (system roots
-+ CA). Node clients trust it via `NODE_EXTRA_CA_CERTS`; OpenSSL-family clients
-(curl, Python `requests`, Ruby) via `SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE` /
-`CURL_CA_BUNDLE`, all set by dispatch. **Not covered:** JVM keystores and Deno
-(`DENO_CERT`) — a JVM/Deno toolchain in a BYOI image must trust the CA itself.
++ CA). "Install the CA" is one action PER TOOLCHAIN; dispatch sets all five
+(`installSandboxTrustedCA`, `internal/api/runs_dispatch_llm.go`). A **replaces**
+row must always name the COMBINED bundle — the bare CA there costs that runtime
+every public root.
+
+| Runtime | Variable | Dispatch sets | Adds to / replaces the trust store |
+| --- | --- | --- | --- |
+| Node | `NODE_EXTRA_CA_CERTS` | `mitm-ca.pem` (bare CA) | **adds** — Node keeps its bundled roots |
+| Python / OpenSSL | `SSL_CERT_FILE` | `ca-bundle.pem` | **replaces** |
+| Python `requests` | `REQUESTS_CA_BUNDLE` | `ca-bundle.pem` | **replaces** |
+| curl | `CURL_CA_BUNDLE` | `ca-bundle.pem` | **replaces** |
+| AWS CLI v2 | `AWS_CA_BUNDLE` | `ca-bundle.pem` | **replaces** — own Python + own CA store, reads none of the four above |
+| Java / JVM | none — `cacerts` keystore | nothing | **no variable reaches it** |
+
+**Java is not covered, and Wardyn does not do it for you:** the JVM trusts a
+`cacerts` keystore no environment variable reaches, so a Java toolchain in a
+custom image needs its own build-time `keytool -importcert` against that image's
+JDK. Deno (`DENO_CERT`) is likewise uncovered.
+
 When the operator sets `WARDYN_TRUSTED_CA_FILE` (docs/OPERATIONS.md § "Corporate
 TLS-inspection root"), its PEM rides the same `ca-bundle.pem` — appended even on
 a run with no per-run MITM CA of its own — so a BYOI base missing every system
-CA-bundle path loses OpenSSL-family public trust entirely once that knob is set.
+CA-bundle path loses public trust in every **replaces** row once that knob is set.
 
 **Containment holds regardless of image; two defense-in-depth caveats.** The
 wrap clears the base's ENTRYPOINT and overwrites its runner tools from the

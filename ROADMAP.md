@@ -292,7 +292,7 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
   silently deleting the setting, `make reset` naming the corporate baseline it
   is about to destroy, the default ceiling policy becoming viewable in UI, CLI
   and API, and a run of console fixes that stop surfaces claiming state they had
-  not checked. A fresh ponytail over-engineering audit ranked 26 cuts and
+  not checked. A fresh over-engineering audit ranked 26 cuts and
   applied the ones a provenance check did not overturn.
 - **What 0.6 deliberately did not ship.** The k8s substrate is still **not** at
   feature parity with Docker — BYOI/devcontainer builds, `local_dir` mounts,
@@ -446,7 +446,7 @@ shipped behavior; none is scheduled.
   shipped in v0.5, and the v0.5 k8s/SSH merge renumbered its own new
   migrations up past it (`0033_ssh_public_keys.sql`, `0034_attach_ticket_role.sql`)
   — and v0.6 took the numbers through `0043_ssh_key_role.sql`, so the eventual
-  drop migration needs a fresh number (`0044+`) whenever it's scheduled. That
+  drop migration needs a fresh number whenever it's scheduled. That
   floor moves with every release; read the migrations directory rather than
   this sentence. Nothing depends on it happening by any particular release; it's
   listed here so the stale "is 0032" comment in `0031_source_library.sql`
@@ -537,4 +537,4 @@ shipped behavior; none is scheduled.
   at overall feature parity with Docker yet even though it passes conformance
   (see [deploy/helm/wardyn/README.md](deploy/helm/wardyn/README.md)'s "Known
   gaps"); a new feature still owes both targets, or an honest, explicit skip.
-- **An `enterprise/` directory.** Apache-2.0 everything.
+- **A paid or open-core edition.** Apache-2.0 everything.
