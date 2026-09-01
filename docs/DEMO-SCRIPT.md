@@ -533,7 +533,7 @@ real diff.
 
 | Targets | |
 |---|---|
-| `heading` level 1 | **Run anything. Keep your keys.** |
+| `heading` level 1 | **Sandboxed. Governed. Self-hosted. Free.** |
 | `button` | **Get started — a few minutes** |
 | then | `Step 1 of …` |
 
@@ -613,7 +613,7 @@ recaps that run's audit trail and recording, not the proof run's.
 ### Act 6 — the receipts
 
 Tabs (role `tab`): **Audit**, then **Recording**. Closes on the caption
-*"Run anything. Keep your keys."*
+*"Sandboxed. Governed. Self-hosted. Free."*
 
 ## Funnel behaviours the driver has to model
 

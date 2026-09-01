@@ -536,7 +536,7 @@ hosts a workspace scan seeded, the model provider's own egress, and the grant
 `foldRunIntegration`/`applyWorkspaceRequirements` re-add at launch are all left
 untouched no matter what a member holds.
 
-**The four kinds** — a closed set, written down once in Go (`capabilityKinds`,
+**The six kinds** — a closed set, written down once in Go (`capabilityKinds`,
 `internal/api/capabilities.go`) rather than as a schema CHECK:
 
 | Kind | Value | Direction | What it bounds, and where |
@@ -545,9 +545,11 @@ untouched no matter what a member holds.
 | `secret` | exact secret name | narrows | which stored secret a member's own `inline_policy` grant may reference — both refs of an `ssh_key` grant, key and `known_hosts` — and which names `GET /secrets` lists back to them (`handleListSecrets`, `internal/api/secrets.go`) |
 | `workspace` | workspace uuid | narrows | which onboarded workspace a member may name on `POST /runs`/preflight (`denyMemberRequest`, `internal/api/runs_create_validate.go`) |
 | `image` | exact image ref | **widens** | which custom sandbox image a member may launch at all — without a grant, none (same seam) |
+| `agent` | exact `--agent` string | narrows | which agent/harness a member may launch (same seam). Deliberately NOT constrained to the harness catalog, at the gate or at the grant write: `WARDYN_AGENT_IMAGES` custom agents are supported, so a catalog check would make an operator's own entry unwriteable |
+| `integration` | exact integration id | narrows | which AI-provider integration a member may name on a run (`integration_id`, same seam) — and nothing else. **Tier 1 only**: a workspace's own `LLMCred` pin and your `DefaultFor: agent_runs` site default are operator-authored and are never gated, or one `all` deny row would strip the deployment's model access |
 
 `*` as a value matches everything of that kind, spelled the same way for all
-four. `egress_host` values are matched by `entryCoversAny`
+six. `egress_host` values are matched by `entryCoversAny`
 (`internal/api/artifact_redirect.go`) — the *same* matcher that decides whether
 one allowlist entry covers a host, deliberately not a second one, because two
 host matchers that disagree is how a deny gets bypassed by a port suffix. Every
@@ -581,8 +583,12 @@ fail-closed. A store error is never permission — the request answers `500`.
 **The widening kind reads the same rows the other way.** For `image`
 (`capGranted`) an unenforced kind is *refused*, not permitted, because 0.5 refused
 it too. Both directions obey "an upgrade with no configuration changes nothing".
-So `image` needs *both* the switch on and an exact-ref grant; the other three need
-only the absence of a deny until you enforce them.
+So `image` needs *both* the switch on and an exact-ref grant; the other five need
+only the absence of a deny until you enforce them. That rule is also why `agent`
+and `integration` narrow rather than widen: launching an agent, or naming a
+provider, is something every member could already do, so a widening kind would
+refuse every member run on every deployment that has not enforced it — i.e. all of
+them on upgrade day.
 
 **Default posture: an absent enforcement row is off.** A deployment upgraded from
 0.5 with no rows written behaves byte-for-byte as before. Turning `workspace` on
@@ -695,6 +701,50 @@ credential. Both `token.create` and `token.revoke` are audited
 ([`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md)); the revoke row names the token's
 owner.
 
+### Three roles, and who sets the walls
+
+**Super admin (the deployer).** Installs the chart, connects the IdP, and owns
+everything only the chart can say: the issuer and client, the boot role map
+(`WARDYN_OIDC_ROLE_MAP` — chart rows always win), the operator allowlist
+(`WARDYN_OIDC_OPERATOR_EMAILS` — also the boot posture floor), the default role,
+the deployment ceiling (`WARDYN_DEFAULT_POLICY`), trust roots, integrations, base
+images, and the People page (who gets in, and who else is an admin). The admin
+bearer token is the break-glass and remains exempt from every console lockout
+guard.
+
+**Security admin (`security_admin`).** A mapped tier — never a default, and never
+derivable from the operator allowlist; you create one by mapping an IdP App Role
+or group to `security_admin` in the role map (chart or People page). Security
+admins author and assign **governance profiles** (named ceilings bound to users or
+groups), write the org allow/denylists (capability grants), decide escalated
+approvals — egress, credential, tool — on anyone's run, revoke sessions and API
+tokens, and verify the audit chain. They cannot touch the People page,
+integrations, site-config writes, base images, or the deploy funnel — and they run
+under a governance profile themselves if one is assigned to them, since only
+`admin` is exempt from ceiling resolution. A profile can only make the deployer's
+stored credentials *less* available, never more — and a security admin widening
+their own egress is an audited act, visible in the log they cannot rewrite. No
+capability grant can widen anyone to admin; that invariant is what makes
+delegating `/permissions` safe.
+
+**User (member).** Signs in, runs agents inside the governance profile their group
+is assigned (or the deployment ceiling if none). The profile is enforced outside
+the sandbox: inline policies are clamped to it, saved policies are clamped to it
+on selection (for anyone a profile is assigned to), authoring no policy at all
+yields it, and its denied hosts are re-asserted when the run is dispatched — a
+denied host cannot receive an injected or brokered credential at all. What a
+member can change is what the profile leaves open; what they can ask for is an
+escalation on the Approvals page.
+
+**Governance profiles.** One profile per subject; when several match, the most
+specific wins (user beats group beats everyone; priority breaks group ties) — the
+Governance page shows the resolved answer, and `GET /policies/default` returns the
+ceiling that actually binds the caller. A profile replaces the deployment ceiling
+for its subjects; deleting one requires unassigning it first (never a silent
+widening). Stated honestly: profiles narrow by omission — a profile that omits
+secret grants revokes them for its subjects (the editor warns); a member's
+long-lived API token keeps the group snapshot it was minted with until re-minted.
+
 ### Every denial that isn't a 404
 
 (This section is the source of record for `authz.denied`'s `reason` values;
@@ -712,6 +762,8 @@ Every member denial that isn't a plain foreign-resource 404 is audited under
 | `capability_workspace` | `workspace_id`: a member named a workspace they aren't granted (`403`). Launching: an `inline_policy` `workspace_repos` entry for an ungranted workspace was dropped — the run still launches | ⛔ `403`, or 🟡 a drop |
 | `capability_egress_host` | deciding: the approval's host isn't granted (`403`). Launching: member-authored allowlist entries were dropped from an `inline_policy` — the run still launches | ⛔ `403`, or 🟡 a drop |
 | `capability_secret` | a member's `inline_policy` grant referenced a secret they aren't granted — dropped, not rejected | 🟡 drop |
+| `capability_agent` | `agent`: a member named an agent they aren't granted (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ `403` |
+| `capability_integration` | `integration_id`: a member named a model-provider integration they aren't granted (same seam). Tier 1 only — a workspace's own pin and the site default are never gated | ⛔ `403` |
 | `governance_profile` | the member's assigned governance profile refuses this run SHAPE — `task_mode=exec`, an interactive run, `seed_auto_tools`, or codex-cli under hold-deriving rules. A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
 | `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped | 🟡 drop |
 | `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | ⛔ `403` |
@@ -731,12 +783,14 @@ A 404 on a resource that genuinely doesn't exist stays silent by design. One
 exception: the `always`-scope 403 above returns before `decide()` reaches any
 audit call, so it is a bare 403 with no audit trail at all.
 
-**What's still not built.** No custom roles beyond admin/member — capabilities
-narrow (or widen) what a member may reach, they do not add a third role. Only the
-four kinds above are grantable; there is no general per-resource permission model
-(a run is still owner-or-admin only — no "read-only share" or "co-owner"
-concept), no tenant/org columns, no separation of duty among admins — every admin
-(and the admin token, always) can rewrite the policy that bounds them
+**What's still not built.** No custom roles: the tier set is the three fixed ones
+(admin, `security_admin`, member — see "Three roles, and who sets the walls"), and
+a capability grant only narrows or widens what a member may reach, it can never
+mint a tier. Only the six kinds above are grantable; there is no general
+per-resource permission model (a run is still owner-or-admin only — no "read-only
+share" or "co-owner" concept), no tenant/org columns, and no separation of duty
+among super admins — every admin (and the admin token, always) can rewrite the
+policy that bounds them
 (`threatmodel/THREAT-MODEL.md` residual #14, still open).
 
 The SSH gateway's admin override is a **bounded-stale stamp**, not a live role
@@ -1086,6 +1140,30 @@ managed-subscription fallback is not universal: a `codex-cli` run with a
 connected managed subscription and no integration gets no model access via this
 lane. Full transport precedence (subscription → Bedrock → api-key) once a run
 reaches dispatch: [TRY-IT.md](TRY-IT.md) → "Model auth: three ways".
+
+### What an admin can put a fence around
+
+Six things a member chooses on their own run each carry a permission on the
+Permissions page: the **hosts** they may add or approve, the **secrets** they may
+reference, the **workspaces** they may launch against, the **base images** they
+may name, the **agents** they may run, and the **model providers** they may name
+("Capabilities: what one member, or one group, may do" above has the kind table).
+Five of the six *narrow* — until you enforce one, members keep exactly the powers
+they had, and a deny bites even before you do; base images are the one that
+*widens*, so a grant is what makes an image nameable at all.
+
+A permission always bounds what the **member** chose and never what you
+pre-authorized, which is the whole answer to "can I fence a model provider": the
+`integration` kind gates the integration a member names on the run, and nothing
+else. The provider a workspace is pinned to and your site-wide `DefaultFor:
+agent_runs` default are yours, so they still reach every run, granted or not —
+gating them would let one `all` deny row strip the deployment's model access. What
+bounds those is the assigned governance profile's egress: its denied hosts are
+re-asserted at dispatch and withhold every credential lane that would reach one.
+
+Governance profiles also carry the limits that are not choices at all —
+`max_concurrent_runs`, and the two launch modes a profile can refuse outright —
+and, like every profile field, they bind only the people a profile is assigned to.
 
 ## Network: upstream proxy and egress redirects
 

@@ -19,6 +19,7 @@ wizard — with its built-in demo steps — is the first-run path. Everything he
 | Deploy to a Kubernetes cluster (Helm chart, quickstart, k8s runner substrate) | [../deploy/helm/wardyn/README.md](../deploy/helm/wardyn/README.md) |
 | Run a local daemon on each developer's managed laptop (MDM envelope, and its ceiling) | [DESKTOP.md](DESKTOP.md) + [../deploy/desktop/](../deploy/desktop/) |
 | Set up SSO (Entra ID / OIDC) and admin/member RBAC on a cluster install | [OPERATIONS.md](OPERATIONS.md#multi-user-who-can-change-what) + the `wardyn-k8s-setup` Claude Code skill |
+| Cap what one person or group may do — governance profiles, the security-admin tier, capability grants | [OPERATIONS.md](OPERATIONS.md#three-roles-and-who-sets-the-walls) |
 | Runnable sample workspaces, one per governance control | [../examples/](../examples/) |
 | See which exported functions have no test (`make test-gaps`) | [TEST-GAPS.md](TEST-GAPS.md) |
 | Swap a component (identity, secret store, recording, substrate) | [PLUGGABILITY.md](PLUGGABILITY.md) |

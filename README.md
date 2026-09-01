@@ -28,7 +28,7 @@ Pick by **who runs this box**. Everything here pulls cosign-signed, SBOM-atteste
 **Your own machine** — no SSO; the installer prints an admin token you paste once:
 
 ```sh
-curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.4/install.sh | sh
+curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.6/install.sh | sh
 ```
 
 Cosign-signed, not tip-of-`main` — only the script is pinned; it installs the newest release (`WARDYN_VERSION` overrides). Installs into `~/.wardyn`, opens Getting Started on <http://127.0.0.1:8080> as an **admin** (`WARDYN_HOME`, `WARDYN_PORT` override).

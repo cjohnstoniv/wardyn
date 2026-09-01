@@ -4,7 +4,7 @@
 #
 # install.sh — install Wardyn on this machine.
 #
-#   curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.4/install.sh | sh
+#   curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.6/install.sh | sh
 #
 # That URL is the cosign-signed release asset, covered by SHA256SUMS. Curling
 # this file from `main` also works, but nothing signs tip-of-main. README.md

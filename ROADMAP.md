@@ -19,6 +19,7 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
 | **v0.4** | Containerized setup as the default, credential CLI, YAML policies, container workspaces with their own model credentials, Bedrock SSO, and the corporate-network build/egress lanes (below) | **Shipped (pre-alpha)** |
 | **v0.5** | Kubernetes runner substrate + the Helm chart's first sandbox-capable deploy, conformance green on a real cluster, native SSH access into a run, real admin/member RBAC with owner scoping, signed+published release images (below) | **Shipped (pre-alpha)** — tagged `v0.5.0`, 2026-08-18 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.6** | **The enterprise-POC base: cloud deployment + real permissioning.** Capability grants (four kinds, per-kind enforcement switches, IdP groups), Kubernetes as the base deployment story (one-command kind quickstart, day-2 ops, `/readyz`), terminals beyond the browser (`wardyn ssh`, a kind-proven SSH lane, an admin override), governed UI sandboxes (a ticket-gated loopback relay + a code-server image), and the ground-truth counter fix (below) | **Shipped (pre-alpha)** — `v0.6.0` (see [CHANGELOG.md](CHANGELOG.md)); the release supersets `prep/v0.6` with the demo-video series. The daemon-free merge gate (`make ci`) is green at the release tip minus DCO sign-offs; `make test-e2e` carries 10 failures that reproduce on a pre-merge baseline on the same host — a pre-existing lane defect, not a 0.6 regression |
+| **v0.7** | **Governance an org can delegate, on hardware it owns.** Assignable governance profiles (a named ceiling bound to a person, a group, or everyone) and a `security_admin` tier that can be handed the verdict without being handed the deployment, the rest of enterprise desktop deployment (systemd installer, MDM-distributable packages, the member-mode envelope, a reachable SSH gateway, digest-pinned upgrades), per-tool policy, never-resident git PATs for non-GitHub forges, and the corporate-network last miles — TLS-inspection root, internal model gateway, PrivateLink Bedrock (below) | **Built, awaiting release** — unreleased; see [CHANGELOG.md](CHANGELOG.md)'s `[Unreleased]`. The macOS `.pkg`, the MDM vendor example and the real-Mac smoke run stay **operator-gated** and are not in it |
 
 ### What v0.4 shipped
 
@@ -300,44 +301,87 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
   v1.0 row, and both [`deploy/helm/wardyn/README.md`](deploy/helm/wardyn/README.md)
   and [docs/OPERATIONS.md](docs/OPERATIONS.md) keep the honest, code-checked
   "Kubernetes: known gaps" list rather than letting the cloud-base framing imply
-  parity. Of the two designed-but-unscheduled candidates from the 0.5 campaign,
-  one stays unscheduled — the sentinel-class PAT lane (proxy-injected git PATs,
-  never resident), which slots into 0.7/0.8 when scheduled, not before — and one
-  is now a named, dated decision rather than an open maybe: **C0, routing an
-  interactive run's tool approvals to the console the way autonomous `hold`
-  runs already do, was deferred to v0.7 and RESOLVED there — as a refusal, not
-  a build.** Upstream pins `claude`'s `--permission-prompt-tool` to
-  non-interactive use, and the hook-based alternative fails *open* on a timeout,
-  the wrong default for an approval gate. 0.7's spike found no mechanism that
-  fails closed for an interactive session, so there was nothing to build on.
-  Self-service value collapses anyway: the human deciding the prompt can already
-  attach to the run and answer it directly. What 0.7 shipped instead is the
+  parity. Both of the 0.5 campaign's designed-but-unscheduled candidates — the
+  sentinel-class PAT lane and **C0** — were taken up in 0.7 and are recorded
+  below.
+
+### What v0.7 shipped
+
+Built and awaiting release; [CHANGELOG.md](CHANGELOG.md)'s `[Unreleased]` section
+is the full list.
+
+- **Governance profiles — an assignable ceiling, not one deployment-wide
+  default.** A named policy ceiling an admin binds to a person, an SSO group, or
+  everyone, so a contractor group and a platform team hold genuinely different
+  limits on one install. Precedence is user over group over all (priority, then
+  name, breaking ties). A profile **replaces** the deployment default rather than
+  composing with it — the only shape where reading a profile tells you what it
+  permits — and with no assignment every resolution is byte-for-byte what it was.
+  A profile can only ever NARROW credential eligibility, and its denied hosts are
+  re-asserted inside dispatch, after the phases that add corporate hosts and
+  credential injections — including the brokered git and PAT lanes, which never
+  consulted the deny list before. See [docs/OPERATIONS.md](docs/OPERATIONS.md)'s
+  "Three roles, and who sets the walls".
+- **Two more capability kinds, and a quota.** `agent` and `integration` join the
+  grant table (both narrowing, so an upgrade with no rows written changes
+  nothing), bounding which harness a member may launch and which AI-provider
+  integration they may name on their own run — never the workspace pin or the site
+  default, which are yours. `max_concurrent_runs` joins a governance profile's
+  limits beside the two launch modes it can refuse.
+- **A second admin tier, and a console that can be delegated to it.**
+  `security_admin` governs the verdict — profiles, permissions, egress decisions,
+  token inventory, audit verification — and deliberately does **not** reach into a
+  run: it is never stamped on an SSH key or an attach ticket, and no capability
+  grant can widen it. A mapped tier only, never derivable from the operator
+  allowlist. That separation is what makes the surface safe to hand out.
+- **Enterprise desktop deployment — the rest of it.** The Linux/systemd installer
+  and uninstaller, an MDM-distributable `.deb`/`.rpm`/tarball built from a clean
+  tree, the member-mode (m′) envelope, the SSH gateway actually reachable on the
+  tier, digest-pinned images with a working upgrade path, and a browser desktop
+  (noVNC) as an image variant.
+- **Per-tool policy.** `tool_rules` makes an autonomous run no longer
+  all-or-nothing, with a console editor that refuses what the API would refuse, in
+  the same order, before the round trip.
+- **The sentinel-class PAT lane** (proxy-injected git PATs, never resident) — the
+  last designed-but-unscheduled candidate from the 0.5 campaign. A `git_pat` for a
+  non-GitHub forge is now minted proxy-side and injected on the outbound leg,
+  closing the asymmetry with `github_token`. It makes the credential
+  non-resident; it does not make it least-privilege, because Wardyn cannot narrow
+  a scope the operator issued.
+- **External clients drive a sandbox over the SSH gateway.** Scripted key
+  registration, readiness and target discovery (`wardyn ssh-key ensure`, `wardyn
+  run wait-ready --json`, `wardyn ssh --json`), plus a per-run git push-namespace
+  opt-out (`git_push_any_branch`), audited on every push that uses it.
+- **The corporate-network last miles.** A trusted TLS-inspection root
+  (`WARDYN_TRUSTED_CA_FILE`) picked up by the daemon, the proxy sidecar and every
+  sandbox; an internal model gateway for the api-key lane; declared internal
+  hostnames; and Bedrock reached through a VPC (PrivateLink) endpoint
+  (`WARDYN_BEDROCK_BASE_URL`).
+- **Members do more without an admin.** Their own secrets and their own model API
+  key (never reachable from anyone else's run), a member Getting Started of their
+  own, and an admin People step that writes role mappings live from the console —
+  guarded by a posture-flip acknowledgement and a refusal to remove the acting
+  admin's own access.
+- **C0 is RESOLVED, not deferred again** — as a refusal, not a build. The spike
+  found no mechanism that fails closed for an interactive session:
+  `wardyn-toolgate` routes only a NON-interactive run's tool calls to the approval
+  FSM, upstream pins `claude`'s `--permission-prompt-tool` to non-interactive use,
+  and the hook-based alternative fails *open* on a timeout — the wrong default for
+  an approval gate. Self-service value collapses anyway: the human deciding the
+  prompt can already attach to the run and answer it directly. What shipped is the
   honest half — `tool_approvals=hold` on an interactive run used to be accepted
   and silently discarded, and is now refused with a 400 naming the field.
+- **Still owed, and operator-gated.** The macOS `.pkg` (needs an Apple Developer
+  ID), the MDM vendor example (needs a tenant), and the owed real-Mac smoke run.
 
 ## Planned
 
 Everything below is **planned, unbuilt, and undated**. Where a seam exists but no
 implementation does, [docs/PLUGGABILITY.md](docs/PLUGGABILITY.md) says so per row.
 
-v0.7 → v0.8 is the remaining path to alpha: the same governance deployed to
-developer desktops (0.7), then the alpha RC (0.8). The cloud base and
-permissioning 0.6 owed are shipped, and 0.7's desktop work is built and awaiting
-release rather than planned.
-
-**C0 is RESOLVED, not deferred again.** The spike's answer: `wardyn-toolgate`
-already routes a NON-interactive run's tool calls to the approval FSM and fails
-closed, and no equivalent mechanism exists for an interactive session — the
-agent parks its own prompt in the attach pane. So there was nothing to build on.
-What 0.7 shipped instead is the honest half: `tool_approvals=hold` on an
-interactive run used to be accepted and silently discarded, and is now refused.
-
-**The sentinel-class PAT lane** (proxy-injected git PATs, never resident) — the
-last designed-but-unscheduled candidate from the 0.5 campaign — **shipped in
-0.7**. A `git_pat` for a non-GitHub forge is now minted proxy-side and injected
-on the outbound leg, closing the asymmetry with `github_token`. It makes the
-credential non-resident; it does not make it least-privilege, because Wardyn
-cannot narrow a scope the operator issued.
+v0.8 is the remaining path to alpha. The cloud base and permissioning 0.6 owed
+are shipped; 0.7's governance and desktop work is built and awaiting release
+(above), so what is left below is the alpha RC and beyond.
 
 **New for 0.8: posture-gated autonomy** — an org-defined rubric mapping a
 sandbox's containment posture (egress reach, secrets present, confinement class)
@@ -349,7 +393,6 @@ exist.
 
 | Milestone | Scope |
 |---|---|
-| **v0.7** | **Enterprise desktop deployment — the rest of it.** Built and awaiting release: the Linux/systemd installer and uninstaller, an MDM-distributable `.deb`/`.rpm`/tarball built from a clean tree, per-tool policy (`tool_rules`) so an autonomous run is no longer all-or-nothing, never-resident git PATs for non-GitHub forges, the member-mode (m′) envelope, the SSH gateway actually reachable on the tier, external ADE/IDE clients driving a sandbox over that same gateway (scripted key registration, readiness/target discovery, a per-run git push-namespace opt-out), digest-pinned images with a working upgrade path, a browser desktop (noVNC) as an image variant, and **C0**'s outcome — the interactive `tool_approvals` contradiction is now refused rather than silently discarded. Still owed and **operator-gated**: the macOS `.pkg` (needs an Apple Developer ID), the MDM vendor example (needs a tenant), and the owed real-Mac smoke run. See the release's CHANGELOG for the full list |
 | **v0.8** | **Alpha RC.** The follow-through on 0.6/0.7 — the remaining enterprise-deployment enhancements, tools, and pieces — and the **last planned release candidate before the alpha go-live** |
 | **v1.0** | SPIRE identity provider (the `identity.Provider` seam ships; the SPIRE impl does not) · OpenBao secret store (same, for `secretstore.Store`) · L3 MCP/tool gateway · arbitrary-domain L2 TLS interception (targeted LLM/registry MITM already ships, opt-in) · cloud STS federation · OTLP/OCSF SIEM sinks (file/webhook/syslog sinks already ship) · Docker/Compose L1 default-deny via nftables (the k8s target's L1 already ships — NetworkPolicy, boot-time-canary-enforced, blocking `169.254.169.254`; Docker/Compose still relies on L0 structural confinement alone) · HA completion — closing the still-open per-process blockers a second replica hits (chiefly the in-memory, fail-open secret-masking registry; see [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "One replica, by construction" for the exact list and what v0.5 already closed) · k8s substrate parity with Docker: BYOI/devcontainer builds, `local_dir` mounts, per-pod PIDs/disk enforcement, and a k8s ground-truth correlator (see [deploy/helm/wardyn/README.md](deploy/helm/wardyn/README.md)'s "Known gaps") · CC3/Vault (Kata) packaged and GA — experimental today · Cilium `toFQDNs` · signed action receipts (the hash chain itself ships — migration `0047`) · separation of duty on the control plane |
 | **v1.0 (git-token ref confinement)** | **Token-side** branch-namespace confinement for minted git tokens — the proxy-side push-ref check ships DEFAULT-ON (`agent-run` names the run branch `wardyn/<run-id>/work`; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts out) and binds the brokered App lane, but the installation token itself cannot self-restrict to a ref prefix. What now ships, opt-in: Wardyn reads a GitHub repository ruleset back (`VerifyRefRuleset`, `internal/broker/ruleset.go`), grades it on the setup checklist (never `fail`), and can refuse every `github_token` mint until one verifies (`WARDYN_GITHUB_REQUIRE_REF_RULESET`, default off). What's still not built: Wardyn never creates or holds the ruleset itself — that needs repo-admin access it deliberately does not request, so creating one stays a manual operator step (`docs/POLICIES.md`) — and the gate defaults off, so an operator who does neither still has an unbound token. `git_pat`/`ssh_key` remain outside any receive-pack parser regardless of the ruleset (`threatmodel/THREAT-MODEL.md` asset #4) |
