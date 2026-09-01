@@ -20,6 +20,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -211,9 +213,11 @@ const (
 // (narrow), so every row asks the same question in a different door: can a
 // member reach something the DEPLOYMENT allows but their own PROFILE does not?
 //
-// Rows 11-15 (artifact-redirect, brokered git/PAT lanes, barrier
-// self-approval, raw-IP, credential injection) belong to the dispatch
-// re-assertion phase, which is a later slice; they are not silently missing.
+// Rows 11, 12 and 15 sit in TestGovernanceProfileNonEscape_Dispatch below:
+// their enforcement point is the dispatch re-assertion phase, so they are
+// driven at dispatchRun with the ceiling already resolved onto dispatchParams,
+// which is the seam handleCreateRun fills. Rows 13 and 14 are create-time and
+// live here.
 func TestGovernanceProfileNonEscape(t *testing.T) {
 	profile := govProfile("walled")
 	profile.Ceiling.ToolRules = []types.ToolRule{{Tool: "Bash", Effect: types.ToolDeny}}
@@ -418,6 +422,50 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 		}
 	})
 
+	// Row 13 — PER-RUN BARRIER SELF-APPROVAL. wait_for_review parks an
+	// off-policy request at the door and asks a human; on a member's own run
+	// that human can be the member. The profile's answer is that the barrier
+	// is not a door they hold the key to: their posture is always_deny (never
+	// asks), and a host the profile DENIES is not approvable at any posture —
+	// deny wins ahead of the approval branch in the proxy's evaluator. Both
+	// halves have to be true on the same envelope, or "approve my own way out"
+	// survives as a two-step.
+	t.Run("row 13: the first-use barrier cannot be self-approved past a profile deny", func(t *testing.T) {
+		srv, st, audit := govEscapeFixture(t, assigned())
+		got := govCreateAndDispatch(t, srv, st, audit, member(t),
+			`{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2","first_use_approval":"wait_for_review",`+
+				`"allowed_domains":["api.anthropic.com","corp.internal"]}}`)
+		if got.FirstUseApproval != types.FirstUseAlwaysDeny {
+			t.Errorf("first_use_approval = %q — the member re-opened the approval door their profile closed", got.FirstUseApproval)
+		}
+		if !slices.Contains(got.DeniedDomains, "corp.internal") {
+			t.Errorf("denied_domains = %v — the walled host is approvable because the wall is gone", got.DeniedDomains)
+		}
+		if slices.Contains(got.AllowedDomains, "corp.internal") {
+			t.Errorf("allowed_domains = %v — the member allow-listed a host their profile denies", got.AllowedDomains)
+		}
+	})
+
+	// Row 14 — RAW IP. Name-keyed denies do not bind an IP literal (the caveat
+	// confineGitBrokerEgress and docs/POLICIES.md both carry), so the escape is
+	// to name the address instead of the host. What closes it is that an IP
+	// literal is reachable only two ways — an EXACT operator-authored allowlist
+	// entry (proxy.AllowsLiteralIP) or allow_all_egress — and the profile's
+	// clamp takes both away from the member in one step.
+	t.Run("row 14: a raw IP literal does not survive the clamp", func(t *testing.T) {
+		srv, st, audit := govEscapeFixture(t, assigned())
+		srv.cfg.DefaultPolicy.AllowAllEgress = true // only the PROFILE can drop it
+		got := govCreateAndDispatch(t, srv, st, audit, member(t),
+			`{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2","allow_all_egress":true,`+
+				`"allowed_domains":["api.anthropic.com","140.82.114.4"]}}`)
+		if slices.Contains(got.AllowedDomains, "140.82.114.4") {
+			t.Errorf("allowed_domains = %v — a member reached a literal address their profile never allow-listed", got.AllowedDomains)
+		}
+		if got.AllowAllEgress {
+			t.Error("allow_all_egress survived: every public address is reachable and the name-keyed walls are the only thing left")
+		}
+	})
+
 	// ─── row 16, BOTH legs ────────────────────────────────────────────────────
 	//
 	// The group tier can EVAPORATE. sessionGroups truncates the snapshot at the
@@ -478,6 +526,129 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 		srv.Handler().ServeHTTP(w, r)
 		if w.Code != http.StatusCreated {
 			t.Fatalf("create with a 0.7-stamped token = %d, want 201: %s", w.Code, w.Body.String())
+		}
+	})
+}
+
+// TestGovernanceProfileNonEscape_Dispatch is the escape table's DISPATCH half —
+// rows 11, 12 and 15, the three whose enforcement point is inside dispatchRun
+// rather than at create.
+//
+// These are the rows a create-time-only ceiling cannot answer, and that is the
+// entire reason the re-assertion phase exists. The artifact-redirect phase runs
+// INSIDE dispatch: it substitutes a corporate mirror into the run's allowlist
+// and authors a proxy-side token injection for it, minutes after the create
+// handler clamped the member's spec and returned 201. A profile that denied the
+// corporate estate at create time gets it handed back, with the operator's
+// registry credential on it, by a phase that runs later.
+//
+// Driven at dispatchRun with the ceiling already on dispatchParams —
+// runWalledDispatch's own doc explains the split: resolving the ceiling onto
+// those fields is the create handler's job, consuming them is this phase's, and
+// each half is pinned where it lives.
+func TestGovernanceProfileNonEscape_Dispatch(t *testing.T) {
+	walled := []string{govCorpDeny}
+
+	// Row 11 — ARTIFACT REDIRECT. The operator's corp mirror is added to this
+	// run's egress inside dispatch. The wall has to be re-asserted over the
+	// composed result, not the member's input.
+	t.Run("row 11: the artifact-redirect widening is re-denied", func(t *testing.T) {
+		envelope, _, _, _ := runWalledDispatch(t, walledDispatch{
+			deny: walled, site: govMirrorSite(),
+			policy: types.RunPolicySpec{
+				AllowedDomains:      []string{"api.anthropic.com", "registry.npmjs.org"},
+				MinConfinementClass: types.CC2,
+			},
+		})
+		if !slices.Contains(envelope.AllowedDomains, govCorpMirror) {
+			t.Fatalf("allowed_domains = %v — the redirect never fired, so this row proves nothing", envelope.AllowedDomains)
+		}
+		if !slices.Contains(envelope.DeniedDomains, govCorpDeny) {
+			t.Errorf("denied_domains = %v — dispatch added a corporate host this principal's profile walls off, and the wall did not follow it", envelope.DeniedDomains)
+		}
+	})
+
+	// Row 12 — BROKERED CREDENTIAL LANES (PF-1b). The subtle one, and the one a
+	// naive implementation misses entirely: the proxy's /wardyn/gh/ and
+	// /wardyn/git/ routes mint proxy-side and re-originate WITHOUT consulting
+	// denied_domains — confineGitBrokerEgress makes "denied at evalHost while
+	// broker traffic flows" the designed norm. So the deny-union alone leaves
+	// the credential flowing to precisely the corporate hosts a profile exists
+	// to wall off, and the only thing that binds them is dropping the lane.
+	t.Run("row 12a: a brokered git lane for a denied host is dropped", func(t *testing.T) {
+		grantID := uuid.New()
+		_, spec, _, _ := runWalledDispatch(t, walledDispatch{
+			deny: []string{"github.com"},
+			policy: types.RunPolicySpec{
+				AllowedDomains:      []string{"api.anthropic.com", "github.com"},
+				MinConfinementClass: types.CC2,
+			},
+			gitGrants: map[string]uuid.UUID{"octocat/hello-world": grantID},
+		})
+		if len(spec.ProxyConfig.GitGrants) != 0 {
+			t.Errorf("git broker grants = %v — the /wardyn/gh/ route still mints a GitHub App token for a forge this profile denies", spec.ProxyConfig.GitGrants)
+		}
+		// AND the env that names the grant, because the proxy's mint refusal
+		// (isBrokeredGitGrant) keys on a NON-EMPTY broker map: emptying the map
+		// without this would hand the sandbox back the resident-token lane the
+		// broker exists to close — a naive drop that OPENS a hole.
+		if id, ok := spec.Env["WARDYN_GITHUB_GRANT_ID"]; ok {
+			t.Errorf("WARDYN_GITHUB_GRANT_ID = %q survived the lane drop — the sandbox can POST the mint route and hold the token itself", id)
+		}
+		// The helper's own refusal must NOT be relaxed by the drop.
+		if spec.Env["WARDYN_GIT_BROKER_REPOS"] == "" {
+			t.Error("WARDYN_GIT_BROKER_REPOS was cleared — wardyn-git-helper stops refusing and falls back to another credential path")
+		}
+	})
+
+	t.Run("row 12b: a brokered PAT lane for a denied host is dropped, and only that host", func(t *testing.T) {
+		_, spec, _, _ := runWalledDispatch(t, walledDispatch{
+			deny: walled,
+			policy: types.RunPolicySpec{
+				AllowedDomains:      []string{"api.anthropic.com", "gitlab.com", "git.corp.example"},
+				MinConfinementClass: types.CC2,
+			},
+			patGrants: map[string]string{
+				"git.corp.example": uuid.NewString(), // walled
+				"gitlab.com":       uuid.NewString(), // not
+			},
+		})
+		if _, walled := spec.ProxyConfig.PATGrants["git.corp.example"]; walled {
+			t.Errorf("PAT broker grants = %v — the /wardyn/git/ route still mints the stored PAT for a host this profile denies", spec.ProxyConfig.PATGrants)
+		}
+		if _, kept := spec.ProxyConfig.PATGrants["gitlab.com"]; !kept {
+			t.Errorf("PAT broker grants = %v — an UNWALLED host lost its lane; the drop is per-host, not per-run", spec.ProxyConfig.PATGrants)
+		}
+	})
+
+	// Row 15 — CREDENTIAL INJECTION. Not just the ones dispatch authors: a
+	// caller-supplied injection for a walled host is dropped too, and it has to
+	// be, because buildInjector fails CLOSED on a rule whose host is denied
+	// (AllowedExactHost checks deny first) — the alternative to a disclosed drop
+	// is a proxy that refuses to boot and a run with no egress and no
+	// explanation.
+	t.Run("row 15: a credential injection onto a denied host is dropped", func(t *testing.T) {
+		_, spec, _, _ := runWalledDispatch(t, walledDispatch{
+			deny: walled,
+			policy: types.RunPolicySpec{
+				AllowedDomains:      []string{"api.anthropic.com", "api.corp.example"},
+				MinConfinementClass: types.CC2,
+			},
+			injections: []runner.InjectionGrant{
+				{GrantID: uuid.New(), Rule: egress.InjectionRule{
+					Host: "api.corp.example", Header: "Authorization", SecretName: govCorpSecret, Format: "Bearer %s",
+				}},
+				{GrantID: uuid.New(), Rule: egress.InjectionRule{
+					Host: "api.anthropic.com", Header: "Authorization", SecretName: govCorpSecret, Format: "Bearer %s",
+				}},
+			},
+		})
+		hosts := injectionHosts(spec)
+		if slices.Contains(hosts, "api.corp.example") {
+			t.Errorf("injection hosts = %v — an operator secret is presented on a host this principal's profile denies", hosts)
+		}
+		if !slices.Contains(hosts, "api.anthropic.com") {
+			t.Errorf("injection hosts = %v — an UNWALLED injection was dropped; the run loses its model credential", hosts)
 		}
 	})
 }

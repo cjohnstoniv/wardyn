@@ -11,6 +11,7 @@ package api
 
 import (
 	"fmt"
+	"log/slog"
 	"maps"
 	"net/http"
 	"net/netip"
@@ -204,6 +205,9 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 	if err := validateInternalHosts(cfg.InternalHosts); err != nil {
 		return err
 	}
+	if err := validateUpstreamProxyNoProxy(cfg.UpstreamProxyNoProxy); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -230,6 +234,36 @@ func validateInternalHosts(hosts []types.InternalHost) error {
 		}
 	}
 	return nil
+}
+
+// logWarnInternalHostsDeclared is the loud, unmissable log an internal-host
+// declaration earns: it is the ONLY operator override of the proxy's
+// unconditional private/reserved-IP SSRF guard, so the deployment's log must
+// name exactly which suffixes and ranges are lifted — an operator reading it
+// back later cannot be left to infer the guard's shape from a count. Mirrors
+// logWarnUnenforcedNetPolOptOut's contract (internal/runner/k8s/driver.go): the
+// declaration itself, then what it does and does not lift.
+//
+// A warn, not an acknowledgement flag (PF-46): the write is operator-only,
+// audited and Liftable-validated, and it grants no policy allow — the host must
+// still pass allowed_domains separately. No declarations => silent.
+func logWarnInternalHostsDeclared(hosts []types.InternalHost) {
+	if len(hosts) == 0 {
+		return
+	}
+	decls := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		scope := "the full RFC1918/ULA/CGNAT set"
+		if len(h.CIDRs) > 0 {
+			scope = strings.Join(h.CIDRs, ", ")
+		}
+		decls = append(decls, h.HostSuffix+" => "+scope)
+	}
+	slog.Warn("wardynd: site config declares INTERNAL HOSTS — the proxy's private/reserved-IP SSRF guard is LIFTED for these host suffixes, "+
+		"scoped to the ranges named: "+strings.Join(decls, "; ")+". Loopback, link-local, the cloud-metadata address, unspecified, multicast and "+
+		"NAT64-embedded addresses stay denied regardless of what is declared here, and a policy's allowed_domains must still allow the host separately — "+
+		"this lifts the built-in guard only. Remove the entry to restore the unconditional deny.",
+		slog.Int("internal_hosts_count", len(hosts)))
 }
 
 // foldLegacyArtifactOverrides folds a legacy request body's ArtifactOverrides
@@ -392,6 +426,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
 		return
 	}
+	logWarnInternalHostsDeclared(saved.InternalHosts)
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"site_config.write", "site_config", "success", mustJSON(map[string]any{
 			"upstream_proxy_configured": saved.UpstreamProxySecretRef != "" || saved.UpstreamProxyURL != "",

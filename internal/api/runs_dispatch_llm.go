@@ -262,7 +262,12 @@ func (s *Server) applyBedrockTransport(ctx context.Context, run types.AgentRun, 
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.bedrock",
 		run.ID.String(), "success", mustJSON(map[string]any{
 			"region": b.region, "model": b.model, "hosts": b.egressHosts,
-			"mode": mode, "detail": detail,
+			// The EFFECTIVE data-plane host — a WARDYN_BEDROCK_BASE_URL
+			// (PrivateLink) override's host, else the regional public one — so
+			// the record names where the call actually went rather than leaving
+			// an auditor to infer it from the region.
+			"endpoint": b.runtimeHost,
+			"mode":     mode, "detail": detail,
 		})))
 }
 

@@ -347,7 +347,7 @@ func (s *Server) applyIntegrationCreds(ctx context.Context, owner string, spec *
 		// would otherwise build a malformed "bedrock-runtime..amazonaws.com"
 		// double-dot host here — the real region is resolved later at dispatch.
 		if region != "" && !spec.AllowAllEgress {
-			unionAllowedDomains(spec, []string{bedrockRuntimeHost(region), bedrockControlHost(region)})
+			unionAllowedDomains(spec, []string{s.bedrockDataPlaneHost(region), bedrockControlHost(region)})
 		}
 		return integ.Kind, &types.WorkspaceBedrockRef{Region: region, Model: model}
 	default:

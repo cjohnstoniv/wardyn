@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 
@@ -82,6 +83,9 @@ func EffectiveConfinementFloor(policyMin, floor, cap types.ConfinementClass) typ
 //   - allowed_methods: empty means "all" (unlike allowed_domains' default-deny),
 //     so an empty proposal ADOPTS the ceiling's list when the ceiling sets one,
 //     and a non-empty proposal is intersected down to it;
+//   - ui_apps: intersected down to the ceiling's (name, port) pairs when the
+//     ceiling declares any, and untouched when it declares none — an empty
+//     proposal is the NARROWEST state for this field, so it never adopts;
 //   - resources: each of cpu/memory/pids/disk capped at the ceiling's when the
 //     ceiling sets one — an unset (zero) proposed field is the PERMISSIVE state
 //     here (filled in by the driver's own default later), so it is capped down
@@ -220,6 +224,8 @@ func Clamp(proposed, ceiling types.RunPolicySpec) (types.RunPolicySpec, []string
 		}
 	}
 
+	out.UIApps = clampUIApps(out.UIApps, ceiling.UIApps, &warns)
+
 	// Grants: drop unknown kinds, intersect github perms, cap TTL, force approval.
 	out.EligibleGrants = clampGrants(out.EligibleGrants, ceiling, &warns)
 
@@ -292,6 +298,42 @@ func Clamp(proposed, ceiling types.RunPolicySpec) (types.RunPolicySpec, []string
 	}
 
 	return out, warns
+}
+
+// clampUIApps bounds a proposal's UI apps. The ceiling's list is an ALLOWLIST of (name, port) pairs when it
+// sets one, and no opinion at all when it does not.
+//
+// The asymmetry is allowed_methods' above — a ceiling that sets the field
+// bounds the proposal, a silent ceiling leaves it — but the ADOPT half of that
+// arm deliberately does NOT carry over, and the difference is the field's own
+// empty semantics. An empty allowed_methods means "every method", so adopting
+// the ceiling's list narrows; an empty ui_apps means "this run has no UI apps"
+// (RunPolicySpec.UIApps' own doc), so adopting would HAND a run relay access it
+// never asked for — a widening, performed by the clamp, in the name of a
+// ceiling that was trying to bound it.
+//
+// Matched on name AND port. A UIApp reaches the gateway as a declared loopback
+// port it will relay to a browser, so keeping an entry by name alone would let
+// a proposal name the ceiling's app and point it at any port in the sandbox.
+// Path is the landing path only and is left as proposed.
+func clampUIApps(proposed, ceiling []types.UIApp, warns *[]string) []types.UIApp {
+	if len(ceiling) == 0 || len(proposed) == 0 {
+		return proposed
+	}
+	var kept []types.UIApp
+	var dropped []string
+	for _, a := range proposed {
+		if slices.ContainsFunc(ceiling, func(c types.UIApp) bool { return c.Name == a.Name && c.Port == a.Port }) {
+			kept = append(kept, a)
+			continue
+		}
+		dropped = append(dropped, fmt.Sprintf("%s:%d", a.Name, a.Port))
+	}
+	if len(dropped) == 0 {
+		return proposed
+	}
+	*warns = append(*warns, fmt.Sprintf("dropped %d ui_app(s) not in operator allowlist: %s", len(dropped), strings.Join(dropped, ",")))
+	return kept
 }
 
 // firstUseApprovalRank ranks FirstUseMode strictness — always_deny (never lets

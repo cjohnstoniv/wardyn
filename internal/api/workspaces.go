@@ -373,6 +373,24 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// secretOwnerFromRequest is the same "" when isOperator else principal
 	// rule, generalized (0.7) beyond its original secret-store name.
 	owner := s.secretOwnerFromRequest(r)
+	// G4 (PF-35): llm_cred is an OPERATOR field on a member-reachable door. The
+	// dedicated PUT /workspaces/{id}/llm-cred is operatorOnly (routes.go) — create
+	// was the one unguarded way in, and the binding it writes folds through
+	// resolveRunIntegration's TIER 2, which deliberately carries NO resident_host
+	// guard precisely because "a workspace pin is operator consent" (llmcred.go).
+	// A member-authored pin makes that sentence false.
+	//
+	// REFUSED, never silently dropped: "a field accepted and thrown away is worse
+	// than one refused" (interactiveToolApprovalsError) — a member who sees a 201
+	// believes the workspace is bound to the integration they named.
+	// owner != "" IS the member test (secretOwnerFromRequest is "" for an
+	// operator), so this is the same ownership stamp the line above reads.
+	if owner != "" && req.LLMCred != nil && req.LLMCred.IntegrationRef != "" {
+		s.denyMemberField(w, r, "workspaces.llm_cred", "admin_surface",
+			"llm_cred is operator-only — an admin binds a workspace's model/harness credential "+
+				"(PUT /workspaces/{id}/llm-cred); create your workspace without it and ask for the binding")
+		return
+	}
 	// A member's own local_dir sources must clear the member-safe mount gate
 	// (root allowlist + canonicalized real path + credential-dotfile deny +
 	// the writable allowlist). An operator's are unaffected.
@@ -459,8 +477,11 @@ func (s *Server) memberSourcesAllowed(r *http.Request, owner string, sources []t
 // (profile/image/status), the requirements contract, and the operator's
 // egress approvals are reset: all were reviewed against the OLD content and
 // must be re-earned. LLMCred is CREATE-ONLY (see workspaceRequest.LLMCred) and
-// is deliberately left untouched here. Returns 404 when unknown, 400 on an
-// invalid body/source.
+// is deliberately left untouched here — and since G4 (PF-35) create now REFUSES
+// a member-authored llm_cred outright, the field is operator-settable on exactly
+// one door (create) and operator-changeable on exactly one more (the operatorOnly
+// PUT /workspaces/{id}/llm-cred); this handler's silent ignore is unchanged.
+// Returns 404 when unknown, 400 on an invalid body/source.
 func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "workspace")
 	if !ok {

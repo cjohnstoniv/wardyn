@@ -158,8 +158,13 @@ type bedrockAuth struct {
 	// Authorization: Bearer header is injected proxy-side from bedrockAPIKeySecret,
 	// so the sandbox holds only a placeholder. When false (resident path), AWS SigV4
 	// creds are placed in env (SigV4 can't be proxy-injected).
-	bearer      bool
-	runtimeHost string // bedrock-runtime host (MITM+inject target in bearer mode)
+	bearer bool
+	// runtimeHost is the EFFECTIVE Bedrock data-plane host this run resolved
+	// (bedrockDataPlaneHost: the WARDYN_BEDROCK_BASE_URL override's host when
+	// set, else the regional public one). Audited by applyBedrockTransport in
+	// every mode; in bearer mode it is additionally the TLS-MITM and
+	// Authorization-injection target.
+	runtimeHost string
 	// awsMount selects the host-mode ~/.aws bind-mount path: the SDK resolves
 	// credentials (incl. auto-refreshing AWS SSO) from the read-only mount, so no
 	// static keys are stored and none are resident in env. awsMountSource is the
@@ -192,6 +197,25 @@ func bedrockRuntimeHost(region string) string {
 
 func bedrockControlHost(region string) string {
 	return fmt.Sprintf("bedrock.%s.amazonaws.com", region)
+}
+
+// bedrockDataPlaneHost is THE data-plane host every Bedrock consumer derives:
+// the operator's WARDYN_BEDROCK_BASE_URL override when set (a VPC/PrivateLink
+// endpoint), else the regional public host. It exists because four call sites
+// derive that host independently (resolveBedrockAuth's egress + MITM host, the
+// workspace-integration egress union in llmcred.go, the record-mode skip list
+// in record.go) — deriving it in one place is what makes the egress allowlist,
+// the MITM host, the bearer-injection scope and the record-mode skip list all
+// follow the override for free instead of four times.
+//
+// The CONTROL plane (bedrockControlHost) is deliberately NOT overridden: a
+// PrivateLink endpoint is per-SERVICE, and bedrock-runtime and bedrock are two
+// services. See Config.BedrockBaseURL for the PF-44 ceiling this implies.
+func (s *Server) bedrockDataPlaneHost(region string) string {
+	if h := gatewayHost(s.cfg.BedrockBaseURL); h != "" {
+		return h
+	}
+	return bedrockRuntimeHost(region)
 }
 
 // ssoEgressHosts are the AWS IAM Identity Center (SSO) endpoints the sandbox SDK
@@ -316,7 +340,7 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 		region == "" || model == "" || s.cfg.Secrets == nil {
 		return bedrockAuth{}
 	}
-	runtimeHost := bedrockRuntimeHost(region)
+	runtimeHost := s.bedrockDataPlaneHost(region)
 	hosts := []string{runtimeHost, bedrockControlHost(region)}
 	// Common Bedrock env: the on-switch, region, and model id. AWS_REGION is what
 	// claude-code reads; AWS_DEFAULT_REGION is the broader AWS-SDK fallback. The
@@ -325,17 +349,36 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 	// — NOT a bare foundation-model id (Bedrock silently rewrites those and can 403
 	// under an SCP). Operator-supplied; Wardyn does not validate the format.
 	base := func() map[string]string {
-		return map[string]string{
+		env := map[string]string{
 			"CLAUDE_CODE_USE_BEDROCK": "1",
 			"AWS_REGION":              region,
 			"AWS_DEFAULT_REGION":      region,
 			"ANTHROPIC_MODEL":         model,
 		}
+		// PrivateLink data-plane override, set ONLY when the operator configured
+		// one (absent = byte-identical to today). TWO variables because the four
+		// credential modes below split across two clients: claude-code reads the
+		// harness variable, while the three SigV4 modes route through the AWS SDK,
+		// which reads its own service-specific knob.
+		//
+		// NEVER the global AWS_ENDPOINT_URL (PF-45): that re-points EVERY AWS
+		// service this sandbox talks to — including STS and SSO, which the
+		// captured-SSO and ~/.aws-mount modes below use to exchange a token for
+		// role credentials. One service's private endpoint must not silently
+		// become every service's.
+		if s.cfg.BedrockBaseURL != "" {
+			env["ANTHROPIC_BEDROCK_BASE_URL"] = s.cfg.BedrockBaseURL
+			env["AWS_ENDPOINT_URL_BEDROCK_RUNTIME"] = s.cfg.BedrockBaseURL
+		}
+		return env
 	}
 	// ready return shared by every credential mode below: stamps the EFFECTIVE
-	// region/model so the audit names what this run used, not the global config.
+	// region/model so the audit names what this run used, not the global config,
+	// and the EFFECTIVE data-plane host so applyBedrockTransport's audit names
+	// where the call actually went (bearer mode additionally uses it as the
+	// TLS-MITM + Authorization-injection target).
 	ready := func(b bedrockAuth) bedrockAuth {
-		b.ready, b.region, b.model = true, region, model
+		b.ready, b.region, b.model, b.runtimeHost = true, region, model, runtimeHost
 		return b
 	}
 
@@ -351,7 +394,7 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 		// A non-empty sentinel so claude-code uses bearer auth (not SigV4); the proxy
 		// overwrites the Authorization header with the real token on the wire.
 		env["AWS_BEARER_TOKEN_BEDROCK"] = "wardyn-proxy-injected"
-		return ready(bedrockAuth{env: env, egressHosts: hosts, bearer: true, runtimeHost: runtimeHost})
+		return ready(bedrockAuth{env: env, egressHosts: hosts, bearer: true})
 	}
 
 	// CAPTURED AWS SSO CREDENTIAL: a container-login `aws sso login` captured an

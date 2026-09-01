@@ -110,6 +110,23 @@ type Config struct {
 	// TRANSPORTED here by the run's ProxyConfig (WARDYN_PROXY_CONFIG_JSON,
 	// internal/runner/docker/driver.go).
 	UpstreamProxyURL string `json:"upstream_proxy_url,omitempty"`
+	// UpstreamProxyNoProxy is the upstream's BYPASS list
+	// (SiteConfig.UpstreamProxyNoProxy, forwarded verbatim): host/domain
+	// suffixes and CIDRs this sidecar dials DIRECTLY instead of CONNECTing
+	// through UpstreamProxyURL. It is the operator-hop equivalent of the
+	// NO_PROXY the sandbox already honours internally, and it exists because a
+	// corporate forward proxy will not CONNECT to an internal address — so on a
+	// private-endpoint estate every private endpoint times out while the
+	// upstream takes every dial.
+	//
+	// It is a ROUTING list only: a bypassed dial falls through to the same
+	// unconditional private/reserved-IP guard an unproxied dial does, so it
+	// never makes a private address reachable on its own (InternalHosts above
+	// is the one lift, and the two compose), and it grants no policy allow.
+	// Control-plane authored, same trust boundary as TrustedCAPEM/
+	// InternalHosts — the sandbox cannot set it. Empty (the default) => every
+	// forward dial chains through the upstream, byte-identical to today.
+	UpstreamProxyNoProxy []string `json:"upstream_proxy_no_proxy,omitempty"`
 	// TrustedCAPEM is the OPERATOR's corporate CA bundle (WARDYN_TRUSTED_CA_FILE,
 	// wardynd's Config.TrustedCAPEM), forwarded verbatim per run so THIS
 	// sidecar's own outbound TLS (the forward/egress transport AND the
@@ -185,6 +202,17 @@ func (c *Config) applyDefaultsAndValidate() error {
 	// scheme/host/port. The live proxy re-parses it in NewServer.
 	if _, err := parseUpstreamProxy(c.UpstreamProxyURL); err != nil {
 		return fmt.Errorf("config: %w", err)
+	}
+	// Parse-check each bypass entry, same "validate at load, build for real in
+	// NewServer" split as the upstream proxy URL above. compileNoProxy DROPS an
+	// unparseable entry rather than widening the list, so without this a typo'd
+	// suffix would silently mean "still proxied" — the failure mode this whole
+	// field exists to end. The write-time validator (internal/api) rejects the
+	// same shapes, so a failure here means a config authored outside that path.
+	for i, e := range c.UpstreamProxyNoProxy {
+		if !ValidNoProxyEntry(e) {
+			return fmt.Errorf("config: upstream_proxy_no_proxy[%d]: %q is neither a CIDR nor a host/domain suffix", i, e)
+		}
 	}
 	// Validate (but do not retain) the trusted CA PEM, same shape as the
 	// upstream proxy URL above: fail fast on garbage. NewServer builds and

@@ -185,6 +185,13 @@ type ProxyConfig struct {
 	// this); empty => no lift, byte-identical to today. Threaded to the proxy
 	// via proxy.Config's identically-named field (BuildProxyConfig below).
 	InternalHosts []types.InternalHost
+	// UpstreamProxyNoProxy is SiteConfig.UpstreamProxyNoProxy, forwarded
+	// verbatim: the hosts, .domain suffixes and CIDRs whose dials skip the
+	// corporate upstream proxy and are made directly. It is a ROUTING decision
+	// only — a bypassed dial still faces the private-IP guard and the run's
+	// policy, which is why reaching a private endpoint also needs an
+	// InternalHosts declaration.
+	UpstreamProxyNoProxy []string
 	// LLMUpstreams maps a public vendor host to an operator-configured internal
 	// model gateway base URL (api.Config.LLMGateways, forwarded verbatim;
 	// WARDYN_ANTHROPIC_BASE_URL/WARDYN_OPENAI_BASE_URL). Control-plane-authored

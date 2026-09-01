@@ -53,7 +53,7 @@ func TestApplyWorkspaceRequirements_EmptyRequirementsIsNoOp(t *testing.T) {
 			srv := New(baseTestConfig(h, &workspaceStoreFake{ws: tc.ws}))
 			spec := types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}}
 			req := createRunRequest{Agent: "claude-code", WorkspaceID: &tc.ws.ID}
-			if _, code, err := srv.seedRequestWorkspace(ctx, &spec, &req); err != nil {
+			if _, _, code, err := srv.seedRequestWorkspace(ctx, &spec, &req); err != nil {
 				t.Fatalf("seed: %d %v", code, err)
 			}
 			wsRefs := srv.referencedWorkspaces(ctx, spec)
@@ -392,7 +392,7 @@ func TestWorkspaceRequirements_PreflightLaunchAgreement(t *testing.T) {
 	}
 	ctx := context.Background()
 	spec := *req.InlinePolicy
-	if _, code, err := h.srv.seedRequestWorkspace(ctx, &spec, &req); err != nil {
+	if _, _, code, err := h.srv.seedRequestWorkspace(ctx, &spec, &req); err != nil {
 		t.Fatalf("seed: %d %v", code, err)
 	}
 	wsRefs := h.srv.referencedWorkspaces(ctx, spec)

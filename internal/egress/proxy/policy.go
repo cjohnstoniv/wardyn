@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -382,6 +383,67 @@ func (p *Policy) AllowsLiteralIP(host string, port int) bool {
 	return ok
 }
 
+// egressHeaderDetail carries the CAUSE behind an address-range refusal, beside
+// the static rule_source egressHeaderReason already carries.
+//
+// It exists because "builtin:private-ip" names the RULE and never the reason it
+// fired, and those are two different questions with two different fixes: a
+// literal IP that no allowlist entry names is fixed in the policy (or by the
+// egress redirect that would add it); a HOSTNAME that resolves into private
+// space is fixed in site config, by declaring it under internal_hosts. An
+// operator who cannot tell those apart reads a correct private-endpoint
+// configuration as broken — the exact misdirection the private-endpoint work
+// exists to remove. The value is composed from a canonical net.IP string and
+// fixed sentences; it never echoes the requested hostname (X-Wardyn-Host
+// already carries that).
+const egressHeaderDetail = "X-Wardyn-Egress-Detail"
+
+// literalIPDenialDetail is egressHeaderDetail's value for a builtin:private-ip
+// refusal of host: which of the three causes fired, and the one place to fix
+// it. Returns "" when host is neither a literal IP nor a hostname (i.e. there
+// is nothing specific to say), so callers can skip the header.
+func literalIPDenialDetail(host string, port int, pol *Policy) string {
+	h := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	if h == "" {
+		return ""
+	}
+	ip := net.ParseIP(h)
+	if ip == nil {
+		return "this host resolves into a private/reserved address range, which the built-in guard denies regardless of policy; " +
+			"declare it in site config under internal_hosts (host_suffix plus the cidrs it may resolve into) to lift the guard for it"
+	}
+	if pol != nil {
+		if _, denied := pol.deniedExact[ip.String()]; denied {
+			return "literal IP " + ip.String() + " is on denied_domains, and a deny always beats an allow"
+		}
+		if _, denied := pol.deniedExactPort[hostPortKey(ip.String(), port)]; denied {
+			return "literal IP " + ip.String() + " is on denied_domains for this port, and a deny always beats an allow"
+		}
+	}
+	return "literal IP " + ip.String() + " is in a private/reserved range, so only an EXACT allowed_domains entry for that address can reach it — " +
+		"it is not listed; an egress_redirects \"to\" pointing at this address adds that entry automatically for the runs it covers"
+}
+
+// writeEgressDeny writes the 403 both forward paths (handlePlain,
+// handleConnect) give a DENIED request: the static refusal headers, plus — for
+// the one refusal an operator reliably misreads — the cause and where to fix
+// it. Every other refusal reason already says all there is to say, so its body
+// and headers stay byte-identical.
+//
+// It lives here rather than in proxy.go beside its two callers so it sits with
+// the rule it explains (and so proxy.go stays under the 1000-line split gate).
+func (p *Proxy) writeEgressDeny(w http.ResponseWriter, host string, port int, log *egress.DecisionLog) {
+	body := "egress denied by policy"
+	if decisionReason(log) == "builtin:private-ip" {
+		if detail := literalIPDenialDetail(host, port, p.policy); detail != "" {
+			w.Header().Set(egressHeaderDetail, detail)
+			body = "egress denied: " + detail
+		}
+	}
+	setEgressRefusalHeadersWithReason(w, egressRefusalDenied, host, decisionReason(log))
+	http.Error(w, body, http.StatusForbidden)
+}
+
 // IPGuardResult records the outcome of resolving + vetting a target host.
 type IPGuardResult struct {
 	// IP is the single vetted address to dial (no further DNS resolution).
@@ -493,9 +555,12 @@ const (
 // isBlockedIP reports whether ip is in an unconditionally-denied range:
 // loopback, link-local (incl. the 169.254.169.254 metadata address), multicast,
 // the unspecified address, RFC1918/ULA private space and the reserved ranges in
-// internal/ipguard. Denied regardless of policy — unlike the composer transport
-// (which spares loopback under its operator allowPrivate escape hatch), the
-// proxy denies loopback/link-local ALWAYS, which is exactly what the net.IP
+// internal/ipguard. Denied regardless of policy: the proxy denies
+// loopback/link-local ALWAYS — no operator setting lifts those, and
+// SiteConfig.InternalHosts (the one override that exists) cannot reach them,
+// because its CIDRs must lie inside ipguard.Liftable and that set never
+// intersects loopback, link-local or the metadata address. This is exactly what
+// the net.IP
 // predicates below give (they cover 127.0.0.0/8, ::1, 169.254.0.0/16, fe80::/10
 // and 0.0.0.0 / :: precisely, so no proxy-local CIDR table is needed on top).
 // IPv4-mapped IPv6 addresses are unwrapped so a "::ffff:127.0.0.1" cannot

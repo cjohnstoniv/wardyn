@@ -73,7 +73,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// BYOI/devcontainer_repo/ungranted-workspace request with the SAME 403
 	// create would, not preview a rosier checklist for a request that would be
 	// denied at launch.
-	if s.denyMemberRequest(w, r, req) {
+	if _, denied := s.denyMemberRequest(w, r, req); denied {
 		return
 	}
 	// Same eager integration_id check launch runs (decodeAndValidateCreateRun,
@@ -103,8 +103,17 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// (seedRequestWorkspace prepends it, so deriveSetupItems' workspace rows
 	// match launch). ephemeralDirs is launch-only (WARDYN_EPHEMERAL_DIRS at
 	// dispatch) — preflight dispatches nothing, so it's discarded here.
-	if _, code, err := s.seedRequestWorkspace(ctx, &spec, &req); err != nil {
+	_, seededImageOwner, code, err := s.seedRequestWorkspace(ctx, &spec, &req)
+	if err != nil {
 		writeError(w, code, "workspace_id: "+err.Error())
+		return
+	}
+	// Same G3 (PF-34) post-seed capability re-check launch runs (runs.go). The
+	// sibling the ticket forgets, and the one that matters for the wizard: without
+	// it Review previews a green checklist for a launch that will 403, which is
+	// exactly the "never preview a rosier picture than launch" rule this whole
+	// handler is written to.
+	if s.denyMemberSeededImage(w, r, seededImageOwner, req.Image) {
 		return
 	}
 	// Same base_image XOR + builder-wired re-check launch runs (runs.go).

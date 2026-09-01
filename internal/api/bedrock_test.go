@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -380,5 +382,107 @@ func TestSetupBedrock_SSOLaneMatchesLaunchGate(t *testing.T) {
 	}
 	if ba := dead.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil); ba.ready {
 		t.Fatal("resolveBedrockAuth: ready = true on an expired SSO blob with no other credential — fixture no longer models the launch gate")
+	}
+}
+
+// bedrockOverrideBaseURL / bedrockOverrideHost are the shared PrivateLink
+// fixture for the two override tests below: a VPC-endpoint base URL and the
+// bare host every Bedrock consumer must derive from it.
+const (
+	bedrockOverrideBaseURL = "https://vpce-0abc1234-bedrock-runtime.us-east-1.vpce.amazonaws.com"
+	bedrockOverrideHost    = "vpce-0abc1234-bedrock-runtime.us-east-1.vpce.amazonaws.com"
+)
+
+// TestResolveBedrockAuth_BaseURLOverride is §N item 2's contract: with
+// WARDYN_BEDROCK_BASE_URL set, the DATA plane moves to the operator's VPC
+// endpoint everywhere at once — the egress allow-list entry, the resolved
+// runtimeHost, and both sandbox endpoint variables — while the CONTROL plane
+// stays on the regional public host (a PrivateLink endpoint is per-SERVICE;
+// PF-44). The subtest that matters most is the last one: UNSET must be
+// byte-identical to today, since this knob exists for a minority of
+// deployments and must be invisible to everyone else.
+func TestResolveBedrockAuth_BaseURLOverride(t *testing.T) {
+	s := fullyConfiguredBedrockServer()
+	s.cfg.BedrockBaseURL = bedrockOverrideBaseURL
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil)
+	if !ba.ready {
+		t.Fatal("ready = false with a fully-configured Bedrock server plus a base-URL override; want true")
+	}
+	if ba.runtimeHost != bedrockOverrideHost {
+		t.Errorf("runtimeHost = %q, want the override host %q", ba.runtimeHost, bedrockOverrideHost)
+	}
+	if !domainAllowedExact(ba.egressHosts, bedrockOverrideHost) {
+		t.Errorf("egress hosts %v must carry the override host %q — without it the run cannot reach the VPC endpoint", ba.egressHosts, bedrockOverrideHost)
+	}
+	if domainAllowedExact(ba.egressHosts, bedrockRuntimeHost("us-east-1")) {
+		t.Errorf("egress hosts %v still carry the PUBLIC data-plane host; the override must REPLACE it, not add to it", ba.egressHosts)
+	}
+	// The control plane is deliberately NOT overridden (PF-44): claude-code
+	// still calls bedrock:GetInferenceProfile there, so dropping it 403s a
+	// profile-id model.
+	if !domainAllowedExact(ba.egressHosts, bedrockControlHost("us-east-1")) {
+		t.Errorf("egress hosts %v lost the regional CONTROL-plane host; only the data plane is overridden", ba.egressHosts)
+	}
+	// Both sandbox knobs, because the credential modes split across two clients:
+	// claude-code reads the harness var, the SigV4 modes read the AWS SDK's.
+	for _, k := range []string{"ANTHROPIC_BEDROCK_BASE_URL", "AWS_ENDPOINT_URL_BEDROCK_RUNTIME"} {
+		if ba.env[k] != bedrockOverrideBaseURL {
+			t.Errorf("env[%q] = %q, want the override base URL %q", k, ba.env[k], bedrockOverrideBaseURL)
+		}
+	}
+	// PF-45: the GLOBAL knob would re-point STS and SSO too, so it must never
+	// be set — this is the assertion that keeps a later "simplification" from
+	// collapsing the two service-specific vars into the one global one.
+	if v, ok := ba.env["AWS_ENDPOINT_URL"]; ok {
+		t.Errorf("env[AWS_ENDPOINT_URL] = %q; the GLOBAL AWS endpoint override must NEVER be set — it would re-point STS and SSO at the Bedrock endpoint too", v)
+	}
+
+	// The no-op counterfactual: unset must be byte-identical to today.
+	t.Run("unset is byte-identical", func(t *testing.T) {
+		plain := fullyConfiguredBedrockServer() // BedrockBaseURL is the zero value
+		pa := plain.resolveBedrockAuth(context.Background(), "claude-code", false, true, nil)
+		if pa.runtimeHost != bedrockRuntimeHost("us-east-1") {
+			t.Errorf("runtimeHost = %q, want the regional public host with no override set", pa.runtimeHost)
+		}
+		for _, k := range []string{"ANTHROPIC_BEDROCK_BASE_URL", "AWS_ENDPOINT_URL_BEDROCK_RUNTIME", "AWS_ENDPOINT_URL"} {
+			if v, ok := pa.env[k]; ok {
+				t.Errorf("env[%q] = %q with no override configured; want ABSENT (not empty-string) — every non-PrivateLink deployment must see today's env exactly", k, v)
+			}
+		}
+		if !domainAllowedExact(pa.egressHosts, bedrockRuntimeHost("us-east-1")) ||
+			!domainAllowedExact(pa.egressHosts, bedrockControlHost("us-east-1")) {
+			t.Errorf("egress hosts = %v, want the two regional public hosts unchanged", pa.egressHosts)
+		}
+	})
+}
+
+// TestResolveBedrockAuth_BaseURLOverride_Bearer is the override's highest-trust
+// leg and the reason this is a BOOT flag, never a SiteConfig field (PF-43): in
+// bearer mode the data-plane host IS the TLS-MITM target AND the scope of the
+// Authorization: Bearer injection, so the override moves BOTH. Asserted through
+// authorBedrockBearerInjection, the real author of both — not through the
+// resolved struct alone, which would prove only that one field changed.
+func TestResolveBedrockAuth_BaseURLOverride_Bearer(t *testing.T) {
+	s := fullyConfiguredBedrockServer()
+	s.cfg.BedrockBaseURL = bedrockOverrideBaseURL
+	s.cfg.Secrets.(*memSecrets).m[bedrockAPIKeySecret] = []byte("bedrock-bearer-token-xyz")
+	s.cfg.Store = vetoGrantStore{}
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil)
+	if !ba.ready || !ba.bearer {
+		t.Fatalf("ready=%v bearer=%v, want both true (bearer secret present)", ba.ready, ba.bearer)
+	}
+	injections, mitmHosts, ok := s.authorBedrockBearerInjection(context.Background(),
+		types.AgentRun{ID: uuid.New()}, llmTransport{bedrock: ba}, nil)
+	if !ok {
+		t.Fatal("authorBedrockBearerInjection failed; want ok")
+	}
+	if len(mitmHosts) != 1 || mitmHosts[0] != bedrockOverrideHost {
+		t.Errorf("MITM hosts = %v, want exactly the override host %q — MITM'ing the public host would terminate TLS for a host this run never dials", mitmHosts, bedrockOverrideHost)
+	}
+	if len(injections) != 1 {
+		t.Fatalf("injections = %d, want 1", len(injections))
+	}
+	if got := injections[0].Rule.Host; got != bedrockOverrideHost {
+		t.Errorf("injection scope host = %q, want the override host %q — a scope still naming the public host would refuse to inject the operator's token at the endpoint the run actually reaches", got, bedrockOverrideHost)
 	}
 }

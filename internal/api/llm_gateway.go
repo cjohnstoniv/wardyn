@@ -48,6 +48,35 @@ func ValidateLLMGateways(anthropicRaw, openaiRaw string) (map[string]string, err
 	return out, nil
 }
 
+// ValidateBedrockBaseURL validates WARDYN_BEDROCK_BASE_URL — the Bedrock
+// DATA-PLANE (bedrock-runtime) override that points a regulated deployment at
+// its VPC/PrivateLink endpoint — and returns the normalized base URL for
+// api.Config.BedrockBaseURL. Empty => ("", nil), byte-identical to today.
+//
+// It delegates to validateOneLLMGateway rather than growing a second rule set:
+// the seven rules are already exactly right here, including the floor that
+// refuses loopback/link-local/metadata/NAT64 while ALLOWING an RFC1918/CGNAT
+// literal — which is precisely what a PrivateLink endpoint resolves into.
+// Sharing them is also what keeps the two knobs from drifting.
+//
+// region supplies rule 5's "must not equal the public host" comparison
+// (bedrock-runtime.<region>.amazonaws.com). It is the deployment's GLOBAL
+// region: a workspace's per-run region override cannot be known at boot, and
+// pointing this at the public host of some other region is not an escape —
+// the value is the operator's own either way, and PF-44's ceiling already says
+// one data-plane host per deployment.
+func ValidateBedrockBaseURL(raw, region string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	norm, err := validateOneLLMGateway(bedrockRuntimeHost(region), raw)
+	if err != nil {
+		return "", fmt.Errorf("WARDYN_BEDROCK_BASE_URL: %w", err)
+	}
+	return norm, nil
+}
+
 // validateOneLLMGateway enforces the gateway URL's seven rules and returns its
 // normalized form (one trailing "/" trimmed; path prefix and port preserved
 // otherwise) for storage in api.Config.LLMGateways.

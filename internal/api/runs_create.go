@@ -83,16 +83,24 @@ const composerWorkspaceTarget = "/home/agent/work"
 // It deliberately does NOT set run.WorkspaceID: that column is the TRUSTED
 // run→workspace linkage the scan/verify/record uploads authorize on, so a user
 // run must never claim it.
-func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicySpec, req *createRunRequest) (ephemeralDirs []string, code int, err error) {
+//
+// seededImageOwner is the ownership half of G3's fix (PF-34, denyMemberSeededImage):
+// the OwnedBy of the workspace whose base_image just set req.Image, and "" in
+// every other case — including a member-owned workspace that set no image and an
+// operator-owned one that did. The callers' capability re-check keys on exactly
+// that emptiness, so returning the owner unconditionally would turn an
+// ownership-scoped guard into the unconditional variant PF-34 names as a
+// catastrophic regression.
+func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicySpec, req *createRunRequest) (ephemeralDirs []string, seededImageOwner string, code int, err error) {
 	if req.WorkspaceID == nil {
-		return nil, 0, nil
+		return nil, "", 0, nil
 	}
 	if s.cfg.Store == nil {
-		return nil, http.StatusUnprocessableEntity, fmt.Errorf("workspace_id requires a store, but none is configured")
+		return nil, "", http.StatusUnprocessableEntity, fmt.Errorf("workspace_id requires a store, but none is configured")
 	}
 	ws, gerr := s.cfg.Store.GetWorkspace(ctx, *req.WorkspaceID)
 	if gerr != nil {
-		return nil, http.StatusUnprocessableEntity, fmt.Errorf("workspace %s: %w", *req.WorkspaceID, gerr)
+		return nil, "", http.StatusUnprocessableEntity, fmt.Errorf("workspace %s: %w", *req.WorkspaceID, gerr)
 	}
 	var newMounts []types.WorkspaceMount
 	var newRepos []types.WorkspaceRepo
@@ -104,7 +112,7 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 		target := src.Target
 		if target != "" {
 			if verr := runner.ValidateTarget(target); verr != nil {
-				return nil, http.StatusUnprocessableEntity, fmt.Errorf("workspace %s source target: %w", ws.ID, verr)
+				return nil, "", http.StatusUnprocessableEntity, fmt.Errorf("workspace %s source target: %w", ws.ID, verr)
 			}
 		}
 		switch src.Type {
@@ -138,6 +146,7 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	// just means "no override", so only a real build choice sets req.Image.
 	if req.Image == "" && ws.BaseImage != nil && ws.BaseImage.Kind != "recommended" {
 		req.Image = ws.BaseImage.Image
+		seededImageOwner = ws.OwnedBy
 	}
 	// The seed mutated an ALREADY-validated spec, so re-run the one invariant it
 	// can break: the unique in-container target across workspace_mounts +
@@ -149,9 +158,9 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	// since clone-into-mounted-workspace is how the legacy default dest
 	// ~/work/<name> already behaves when ~/work is a mounted dir.
 	if verr := validatePolicyWorkspaces(*spec); verr != nil {
-		return nil, http.StatusUnprocessableEntity, fmt.Errorf("workspace %s conflicts with the policy: %w", ws.ID, verr)
+		return nil, "", http.StatusUnprocessableEntity, fmt.Errorf("workspace %s conflicts with the policy: %w", ws.ID, verr)
 	}
-	return ephemeralDirs, 0, nil
+	return ephemeralDirs, seededImageOwner, 0, nil
 }
 
 // requirementAuditEntry is one audit-worthy fact applyWorkspaceRequirements
@@ -770,6 +779,60 @@ func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *type
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.git_pat.egress",
 			runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
 	}
+}
+
+// warnCeilingDeniedWorkspaceEgress names, at CREATE time, every host an operator
+// APPROVED for a referenced workspace that the caller's own governance ceiling
+// denies.
+//
+// Both halves are legitimate and neither yields: unionWorkspaceEgress unions the
+// approval into the run's allowlist because an operator vetted that host for that
+// workspace, and the ceiling's deny beats every allow at the proxy. The run
+// launches and that one host is refused mid-run — which, without this, is a
+// support ticket rather than a sentence on the 201.
+//
+// WARN, NEVER REFUSE (PF-14's doctrine, and the same asymmetry the profile CRUD's
+// omission warnings take): the member did not author the workspace, cannot edit
+// the ceiling, and has nothing to correct — refusing would make an admin's two
+// independent decisions into a launch failure the member cannot resolve.
+//
+// Scoped to an ASSIGNED profile: the deployment ceiling's own denies are what
+// unionWorkspaceEgress has always run against, so warning about them would fire
+// on every run of every workspace on upgrade day and say nothing new.
+//
+// The verdict comes from ceilingDenies (runs_dispatch_ceiling.go) — the SAME
+// predicate the dispatch re-assertion decides credential lanes with, so the
+// sentence this warning promises a member and the enforcement they actually get
+// cannot drift apart. A second matcher here (a string compare, or a
+// freshly-compiled proxy policy) would disagree on exactly the entries that
+// matter: a wildcard, or a port qualifier.
+//
+// The ceiling is the one decodeAndValidateCreateRun already resolved for this
+// request, threaded rather than re-read: a warning composed against a DIFFERENT
+// ceiling than the run was gated under would name a profile that is not the one
+// bounding the run.
+func warnCeilingDeniedWorkspaceEgress(ceiling governanceCeiling, wsRefs []types.Workspace) []string {
+	if len(wsRefs) == 0 || ceiling.Profile == nil || len(ceiling.Spec.DeniedDomains) == 0 {
+		return nil
+	}
+	var warns []string
+	seen := map[string]bool{}
+	for _, ws := range wsRefs {
+		for _, host := range ws.ApprovedEgress {
+			h := strings.ToLower(strings.TrimSpace(host))
+			if h == "" || seen[h] {
+				continue
+			}
+			seen[h] = true
+			if !ceilingDenies(ceiling.Spec.DeniedDomains, h) {
+				continue
+			}
+			warns = append(warns, fmt.Sprintf(
+				"workspace host %q is denied by your governance profile %q — the run launches, but that host is refused at the proxy",
+				host, ceiling.Profile.Name))
+		}
+	}
+	return warns
 }
 
 // resolveCreateRunImage resolves the sandbox image. Default: the agent

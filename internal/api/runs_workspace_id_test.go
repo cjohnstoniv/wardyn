@@ -27,7 +27,7 @@ import (
 // image behind decodeAndValidateCreateRun's image/builder checks.
 func TestSeedRequestWorkspace(t *testing.T) {
 	h := newHarness(t)
-	seed := func(ws types.Workspace, spec *types.RunPolicySpec, req *createRunRequest) ([]string, int, error) {
+	seed := func(ws types.Workspace, spec *types.RunPolicySpec, req *createRunRequest) ([]string, string, int, error) {
 		return New(baseTestConfig(h, &workspaceStoreFake{ws: ws})).
 			seedRequestWorkspace(context.Background(), spec, req)
 	}
@@ -39,7 +39,7 @@ func TestSeedRequestWorkspace(t *testing.T) {
 	t.Run("local dir prepends a read-only mount", func(t *testing.T) {
 		spec := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: "/srv/from-policy", Target: "/home/agent/other"}}}
 		req := createRunRequest{Agent: "claude-code", WorkspaceID: &id}
-		if _, code, err := seed(localDirWS(id, "/srv/app"), &spec, &req); err != nil {
+		if _, _, code, err := seed(localDirWS(id, "/srv/app"), &spec, &req); err != nil {
 			t.Fatalf("seed: %d %v", code, err)
 		}
 		if got := spec.WorkspaceMounts[0]; got.Source != "/srv/app" || got.Target != composerWorkspaceTarget {
@@ -57,7 +57,7 @@ func TestSeedRequestWorkspace(t *testing.T) {
 		spec := types.RunPolicySpec{}
 		req := createRunRequest{Agent: "claude-code", WorkspaceID: &id}
 		repoWS := types.Workspace{ID: id, Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: "acme/widgets"}}}
-		if _, code, err := seed(repoWS, &spec, &req); err != nil {
+		if _, _, code, err := seed(repoWS, &spec, &req); err != nil {
 			t.Fatalf("seed: %d %v", code, err)
 		}
 		if len(spec.WorkspaceRepos) != 1 || spec.WorkspaceRepos[0].Repo != "acme/widgets" {
@@ -83,7 +83,7 @@ func TestSeedRequestWorkspace(t *testing.T) {
 			Sources:   []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
 			BaseImage: &types.WorkspaceBaseImage{Kind: "custom", Image: "ghcr.io/acme/base:1"},
 		}}))
-		if _, code, err := srv.seedRequestWorkspace(context.Background(), &spec, &req); err != nil {
+		if _, _, code, err := srv.seedRequestWorkspace(context.Background(), &spec, &req); err != nil {
 			t.Fatalf("seed: %d %v", code, err)
 		}
 		if req.Image != "ghcr.io/acme/base:1" {
@@ -118,7 +118,7 @@ func TestSeedRequestWorkspace(t *testing.T) {
 		// identical reason; New(...) is for tests that need its full wiring —
 		// e.g. a live runner/background reconciliation — which this does not.)
 		srv := &Server{}
-		dirs, code, err := srv.seedRequestWorkspace(context.Background(), &spec, &req)
+		dirs, _, code, err := srv.seedRequestWorkspace(context.Background(), &spec, &req)
 		if err != nil || code != 0 {
 			t.Fatalf("seed: %d %v, want a clean no-op", code, err)
 		}
@@ -142,7 +142,7 @@ func TestSeedRequestWorkspace(t *testing.T) {
 			{Type: types.WorkspaceSourceTypeRepo, Source: "acme/two"},
 			{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/scratch"},
 		}}
-		dirs, code, err := seed(ws, &spec, &req)
+		dirs, _, code, err := seed(ws, &spec, &req)
 		if err != nil {
 			t.Fatalf("seed: %d %v", code, err)
 		}
@@ -163,7 +163,7 @@ func TestSeedRequestWorkspace(t *testing.T) {
 		// The unique-target invariant must catch the seed's own output.
 		spec := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: "/srv/from-policy", Target: composerWorkspaceTarget}}}
 		req := createRunRequest{Agent: "claude-code", WorkspaceID: &id}
-		_, code, err := seed(localDirWS(id, "/srv/app"), &spec, &req)
+		_, _, code, err := seed(localDirWS(id, "/srv/app"), &spec, &req)
 		if err == nil || code != http.StatusUnprocessableEntity {
 			t.Fatalf("code = %d, err = %v; want 422 on the duplicate in-container target", code, err)
 		}

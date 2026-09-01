@@ -146,6 +146,40 @@ func TestValidateSiteConfig_InternalHosts_Rejects(t *testing.T) {
 	}
 }
 
+// TestValidateSiteConfig_InternalHosts_Accepts is the other half of the
+// validator's contract, and the half a refusal-only table cannot pin: a floor
+// that refused RFC1918 or CGNAT would refuse the whole feature (a PrivateLink
+// endpoint and an in-cluster service both live there), so the ACCEPT rows are
+// load-bearing. No CIDRs at all is valid too — it lifts the full Liftable set.
+//
+// The last subtest is the one worth having: `::ffff:10.0.0.0/104` is the
+// v6-mapped spelling of 10.0.0.0/8, and it is REFUSED. netip.Prefix.Contains
+// never matches a v4-mapped v6 address against a v4 prefix, so a v4-mapped
+// declaration falls outside Liftable and the validator fails CLOSED — the safe
+// direction, but previously unasserted, i.e. a normalization "fix" could
+// silently start widening the guard with nothing to catch it.
+func TestValidateSiteConfig_InternalHosts_Accepts(t *testing.T) {
+	good := [][]string{
+		nil,               // no CIDRs: lifts the full Liftable set
+		{"100.64.0.0/10"}, // CGNAT — what an AWS PrivateLink endpoint resolves into
+		{"10.40.0.0/16"},  // RFC1918 subset
+		{"fc00::/7"},      // IPv6 ULA, the whole range
+		{"10.40.0.0/16", "fd00::/8"},
+	}
+	for _, cidrs := range good {
+		t.Run(strings.Join(cidrs, ","), func(t *testing.T) {
+			if err := validateInternalHosts([]types.InternalHost{{HostSuffix: "corp.internal", CIDRs: cidrs}}); err != nil {
+				t.Fatalf("cidrs %v must be accepted (inside ipguard.Liftable): %v", cidrs, err)
+			}
+		})
+	}
+	t.Run("v4-mapped ::ffff:10.0.0.0/104 refused (fail closed)", func(t *testing.T) {
+		if err := validateInternalHosts([]types.InternalHost{{HostSuffix: "corp.internal", CIDRs: []string{"::ffff:10.0.0.0/104"}}}); err == nil {
+			t.Fatal("the v4-mapped spelling of 10.0.0.0/8 must be refused: Liftable holds v4 prefixes and netip never matches a v4-mapped v6 address against one, so accepting it would authorize a lift the guard cannot actually reason about")
+		}
+	})
+}
+
 // ─── handler tests ───────────────────────────────────────────────────────────
 
 // fakeSiteConfigStore is a minimal store.Store for the site-config handlers.

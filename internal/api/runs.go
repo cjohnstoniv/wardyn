@@ -84,7 +84,7 @@ func (s *Server) warnWorkspaceCollision(ctx context.Context, runID uuid.UUID, wo
 // API-only operation is allowed for v0).
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	req, reqCC, taskWarning, ok := s.decodeAndValidateCreateRun(w, r)
+	req, ceiling, reqCC, taskWarning, ok := s.decodeAndValidateCreateRun(w, r)
 	if !ok {
 		return
 	}
@@ -100,31 +100,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// workspace_id: seed the named onboarded workspace's sources onto the resolved
-	// spec (prepended, so it is the PRIMARY) before anything reads it. This is what
-	// lets a CLI/SDK caller launch against a workspace without hand-reproducing its
-	// exact source path in a policy file — see seedRequestWorkspace.
-	ephemeralDirs, code, seedErr := s.seedRequestWorkspace(ctx, &spec, &req)
-	if seedErr != nil {
-		writeError(w, code, "workspace_id: "+seedErr.Error())
-		return
-	}
-	// A workspace's base_image may have just set req.Image (seedRequestWorkspace):
-	// re-run the image/devcontainer_repo XOR + builder-wired check
-	// decodeAndValidateCreateRun already ran on an EXPLICIT --image, since that
-	// ran before workspace_id was resolved and would otherwise let a
-	// workspace's base_image bypass it entirely.
-	if msg := s.validateImageBuildRequest(req); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
-		return
-	}
-	// ONBOARDING GATE (un-bypassable): every user-workspace mount source and repo on
-	// the RESOLVED spec must be a pre-onboarded workspace. Runs over inline, stored,
-	// and default policies alike (this is the single chokepoint on the resolved
-	// spec), so a hand-authored stored policy cannot smuggle an arbitrary host path
-	// or repo. System credential mounts are exempt by target.
-	if code, err := s.validateWorkspaceSources(ctx, spec); err != nil {
-		writeError(w, code, "workspace: "+err.Error())
+	// Fold the named workspace onto the resolved spec, then re-run every check
+	// that seeding can invalidate. Writes its own error and stops on false.
+	ephemeralDirs, ok := s.seedAndAdmitWorkspace(ctx, w, r, &spec, &req)
+	if !ok {
 		return
 	}
 
@@ -286,6 +265,12 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// ADO SCM lanes) — never the LLM; see unionRunEgress.
 	s.unionRunEgress(ctx, runID, &spec, gw, wsRefs, req.Repo)
 
+	// …and say so when one of those operator-approved workspace hosts is walled
+	// off by the caller's own governance profile. The union above still happened
+	// and the deny still wins at the proxy: this is the sentence that keeps the
+	// mid-run refusal from arriving as a support ticket.
+	warnings = append(warnings, warnCeilingDeniedWorkspaceEgress(ceiling, wsRefs)...)
+
 	// CLIENT-DISCONNECT ISOLATION, same rationale as dispatchWithVerify's own
 	// detach — which sits AFTER this block and so never covered it. From here on the
 	// run row exists and MUST be driven to a terminal state or dispatched. An image
@@ -308,6 +293,14 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 	// Dispatch the sandbox if a runner is wired; otherwise stay PENDING.
 	if s.cfg.Runner != nil {
+		// The dispatch-time deny re-assertion's two inputs (runs_dispatch_ceiling.go).
+		// A create-time deny alone is not enough — the artifact-redirect phase INSIDE
+		// dispatch adds corporate hosts and authors token injections for them, AFTER
+		// this handler's clamp ran — so the profile's walls have to be re-asserted
+		// there. ceilingDispatchDenies owns the absent-row scoping (it answers
+		// (nil, "") for anyone with no assigned profile, operators included), so the
+		// doctrine is decided once, in one function, and not re-decided here.
+		ceilingDeny, ceilingProfile := ceilingDispatchDenies(ceiling)
 		s.dispatchRun(ctx, created, dispatchParams{
 			RunToken:           id.Token,
 			Image:              image,
@@ -325,6 +318,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			BedrockRef:         bedrockRef,
 			EphemeralDirs:      ephemeralDirs,
 			Toolchains:         runToolchainNeeds(wsRefs),
+			CeilingDeny:        ceilingDeny,
+			CeilingProfile:     ceilingProfile,
 			// The zero posture unless this run attaches a MEMBER-OWNED workspace, in
 			// which case the driver re-checks that member's own binds against these
 			// roots immediately before ContainerCreate (memberMountPosture,
@@ -336,6 +331,38 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
+}
+
+// seedAndAdmitWorkspace folds a named workspace onto the resolved spec and then
+// re-runs every admission check that seeding can invalidate. It writes its own
+// HTTP error and returns ok=false once it has responded.
+//
+// The ORDER is the whole point, and it is why these four live together rather
+// than inline among a dozen unrelated steps. Seeding can set req.Image from a
+// workspace's base_image, so the capability answer (G3/PF-34) and the
+// image/devcontainer XOR must both run AFTER it — an explicit --image was
+// already checked before workspace_id was even resolved, which is exactly the
+// gap a member-owned workspace used to walk through. The onboarding gate runs
+// LAST because it is the single chokepoint on the RESOLVED spec, which is what
+// makes it un-bypassable by a hand-authored stored policy.
+func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWriter, r *http.Request, spec *types.RunPolicySpec, req *createRunRequest) ([]string, bool) {
+	ephemeralDirs, seededImageOwner, code, seedErr := s.seedRequestWorkspace(ctx, spec, req)
+	if seedErr != nil {
+		writeError(w, code, "workspace_id: "+seedErr.Error())
+		return nil, false
+	}
+	if s.denyMemberSeededImage(w, r, seededImageOwner, req.Image) {
+		return nil, false
+	}
+	if msg := s.validateImageBuildRequest(*req); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return nil, false
+	}
+	if code, err := s.validateWorkspaceSources(ctx, *spec); err != nil {
+		writeError(w, code, "workspace: "+err.Error())
+		return nil, false
+	}
+	return ephemeralDirs, true
 }
 
 // grantChecker is the optional grant-gating surface implemented by the embedded

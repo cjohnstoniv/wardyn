@@ -3,21 +3,50 @@
 
 package proxy
 
-// Resolving a vetted forward-egress dial target: the corp-upstream branch,
-// the operator-declared internal-host SSRF-guard lift (SiteConfig.InternalHosts),
+// Resolving a vetted forward-egress dial target: the corp-upstream branch and
+// its operator-declared bypass list (SiteConfig.UpstreamProxyNoProxy), the
+// operator-declared internal-host SSRF-guard lift (SiteConfig.InternalHosts),
 // and the operator-configured internal model gateway's own per-request vet
 // (vetTrustedHost). Split out of proxy.go at the 1000-line gate — a real seam
 // (this is the ONE decision every forward-egress caller shares), not a size
 // dodge.
+//
+// THE COMPOSITION worth holding in one place: on a private-endpoint estate the
+// bypass and the lift are two halves of ONE working configuration and neither
+// alone suffices. Without the bypass the corp upstream takes the dial and
+// cannot CONNECT to an internal address (it times out); with the bypass the
+// dial is made locally, where the unconditional private/reserved-IP guard
+// denies RFC 6598 — and InternalHosts is what lifts THAT. Bypass routes,
+// InternalHosts admits.
 
 import (
 	"errors"
 	"fmt"
 	"net"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/ipguard"
+)
+
+const (
+	// ruleSourceInternalHost attributes an allow to the operator-declared
+	// SiteConfig.InternalHosts lift of the private/reserved-IP guard.
+	ruleSourceInternalHost = "site-config:internal-host"
+	// ruleSourceEgressRedirect attributes an allow to the operator-authored
+	// EXACT literal-IP allow entry that trusted a private/reserved address —
+	// the grant an egress redirect makes, so it is visible in the trail rather
+	// than reading as an ordinary policy:allowed.
+	//
+	// Honest about what it can and cannot tell apart: the proxy sees the
+	// compiled allowlist, not the site-config rows behind it, and
+	// substituteArtifactEgress (internal/api) is the only thing in the product
+	// that writes a literal IP into a run's allowed_domains — for exactly the
+	// runs a redirect is in scope for. An operator who hand-pastes the same
+	// literal into allowed_domains gets the same label, which is the same grant
+	// by hand.
+	ruleSourceEgressRedirect = "site-config:egress-redirect"
 )
 
 // egressTarget resolves host:port to the dial target a forward-egress call
@@ -44,24 +73,167 @@ import (
 // route — fixed by removing it.
 //
 // ruleSource is "" except "site-config:internal-host" when the address was
-// admitted only via the internal-host lift; only evaluate() consumes it — the
-// other three callers (serveMITMRequest, handleGitBroker, handleGitPATBroker)
-// discard it, unaffected.
+// admitted only via the internal-host lift, or "site-config:egress-redirect"
+// when a literal IP was admitted as an operator-authored exact allow entry;
+// only evaluate() consumes it — the other three callers (serveMITMRequest,
+// handleGitBroker, handleGitPATBroker) discard it, unaffected.
 func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, err error) {
 	// Upstream-first (a stated ceiling, least code): with a corporate upstream
-	// configured, EVERY forward dial is CONNECTed through it by the
-	// transport, not only by this branch. See egressDial/dialThroughUpstream.
-	if p.upstream != nil {
+	// configured, EVERY forward dial is CONNECTed through it by the transport,
+	// not only by this branch (see egressDial/dialThroughUpstream) — UNLESS the
+	// operator declared this destination on the upstream's bypass list, which is
+	// decided HERE, once, for every forward-egress caller.
+	//
+	// A bypassed host deliberately falls THROUGH to p.vetHost below, exactly as
+	// an unproxied dial does. That ordering is the safety property: the bypass
+	// changes which hop dials, never what the SSRF guard permits, so a bypassed
+	// host with no SiteConfig.InternalHosts declaration covering its address is
+	// still denied. The bypass also grants no policy allow — evaluate() already
+	// ran allow/deny/approval/method before reaching here.
+	if p.upstream != nil && !p.bypassUpstream(host) {
 		return net.JoinHostPort(host, strconv.Itoa(port)), "", nil
+	}
+	// A literal IP the operator explicitly allowed EXACTLY is trusted here for
+	// the same reason evaluate() step 0 trusts it — an egress-redirect "To" on
+	// RFC1918/CGNAT space (substituteArtifactEgress adds that host to
+	// allowed_domains for exactly the runs the redirect is in scope for) has no
+	// hostname behind it to rebind. Without this, the three callers that re-vet
+	// AFTER evaluate() already allowed the request — serveMITMRequest (the
+	// token-injecting redirect lane, i.e. the whole point of a corp mirror) and
+	// the two brokers — re-derived the same address and hard-denied it, so a
+	// redirect to a literal internal address 502'd with "vet failed" even though
+	// policy had trusted it. Deny still beats allow (AllowsLiteralIP checks the
+	// deny lists first).
+	//
+	// This only ADDS an admission: a literal that is not exactly allowed falls
+	// through to p.vetHost below unchanged (including its own InternalHosts
+	// lift), so nothing reachable before becomes unreachable.
+	if ip := net.ParseIP(strings.TrimSuffix(strings.ToLower(host), ".")); ip != nil {
+		if kind, _ := isBlockedIP(ip); kind != blockNone &&
+			p.policy != nil && p.policy.AllowsLiteralIP(ip.String(), port) {
+			return net.JoinHostPort(ip.String(), strconv.Itoa(port)), ruleSourceEgressRedirect, nil
+		}
 	}
 	guard := p.vetHost(host)
 	if guard.Denied {
 		return "", "", fmt.Errorf("host %q denied: %s", host, guard.Reason)
 	}
 	if guard.Lifted {
-		ruleSource = "site-config:internal-host"
+		ruleSource = ruleSourceInternalHost
 	}
 	return net.JoinHostPort(guard.IP.String(), strconv.Itoa(port)), ruleSource, nil
+}
+
+// bypassUpstream reports whether a dial to host must SKIP the corporate
+// upstream proxy and be made directly — SiteConfig.UpstreamProxyNoProxy, the
+// operator-hop equivalent of NO_PROXY. host may be a hostname (matched by label
+// suffix) or a literal IP (matched against a declared CIDR).
+//
+// It answers a ROUTING question only. It never lifts the private-IP SSRF guard
+// (a bypassed dial runs p.vetHost like any unproxied one) and never grants a
+// policy allow (evaluate() has already decided that). Nil/empty list => false
+// for every host, i.e. byte-identical to before the field existed.
+//
+// Consulted at exactly three sites, all keyed on the REAL destination host:
+// egressTarget (which hop resolves+vets), egressDialUpstream (the forwarding
+// transport's dial) and handleConnect (the opaque tunnel's dial). Those are
+// every place the upstream/direct choice is made.
+func (p *Proxy) bypassUpstream(host string) bool {
+	if len(p.noProxy) == 0 {
+		return false
+	}
+	h := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	if h == "" {
+		return false
+	}
+	ip := net.ParseIP(h)
+	for _, r := range p.noProxy {
+		if r.cidr != nil {
+			if ip != nil && r.cidr.Contains(ip) {
+				return true
+			}
+			continue
+		}
+		if h == r.suffix || strings.HasSuffix(h, "."+r.suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// noProxyRule is one compiled SiteConfig.UpstreamProxyNoProxy entry: either a
+// CIDR (matched against a literal-IP destination) or a lowercased host/domain
+// suffix (matched by label suffix, never mid-label). Exactly one is set.
+type noProxyRule struct {
+	suffix string
+	cidr   *net.IPNet
+}
+
+// normalizeNoProxyEntry is the ONE spelling rule for a bypass entry, shared by
+// the write-time validator (ValidNoProxyEntry, called from internal/api and
+// from Config.applyDefaultsAndValidate) and the compiler below, so the two can
+// never disagree about what an operator wrote. A leading "." — the NO_PROXY
+// spelling of a domain suffix — is stripped: ".corp.internal" and
+// "corp.internal" mean the same thing here, as they do in every NO_PROXY
+// implementation.
+func normalizeNoProxyEntry(raw string) string {
+	e := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(raw)), ".")
+	return strings.TrimPrefix(e, ".")
+}
+
+// noProxyHostRE is the charset a bypass HOST/domain-suffix entry must match. It
+// deliberately admits no "*": NO_PROXY's bypass-everything wildcard is spelled
+// here by clearing upstream_proxy_url, and one character must never be able to
+// un-chain an estate's whole egress.
+var noProxyHostRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$`)
+
+// ValidNoProxyEntry reports whether one SiteConfig.UpstreamProxyNoProxy entry
+// is a CIDR or a host/domain suffix this proxy will actually honour. Exported
+// because the write-time validator in internal/api must refuse exactly what
+// compileNoProxy would drop — a typo'd entry that silently means "still
+// proxied" is the failure mode the field exists to end.
+func ValidNoProxyEntry(raw string) bool {
+	e := normalizeNoProxyEntry(raw)
+	if e == "" {
+		return false
+	}
+	if _, _, err := net.ParseCIDR(e); err == nil {
+		return true
+	}
+	return noProxyHostRE.MatchString(e)
+}
+
+// noProxyStrings renders the COMPILED rules back for the boot log, so what is
+// logged is what is actually in force — never the raw config, which may hold a
+// dropped entry the operator then believes is bypassed.
+func noProxyStrings(rules []noProxyRule) []string {
+	out := make([]string, 0, len(rules))
+	for _, r := range rules {
+		if r.cidr != nil {
+			out = append(out, r.cidr.String())
+			continue
+		}
+		out = append(out, r.suffix)
+	}
+	return out
+}
+
+// compileNoProxy compiles the bypass list, dropping anything ValidNoProxyEntry
+// refuses rather than widening the list.
+func compileNoProxy(entries []string) []noProxyRule {
+	out := make([]noProxyRule, 0, len(entries))
+	for _, raw := range entries {
+		if !ValidNoProxyEntry(raw) {
+			continue
+		}
+		e := normalizeNoProxyEntry(raw)
+		if _, n, err := net.ParseCIDR(e); err == nil {
+			out = append(out, noProxyRule{cidr: n})
+			continue
+		}
+		out = append(out, noProxyRule{suffix: e})
+	}
+	return out
 }
 
 // llmUpstream reports the (host, port, prefix) a brokered LLM route should
@@ -90,8 +262,11 @@ var errGatewayVet = errors.New("proxy: configured gateway host refused")
 // resolve to vet); otherwise the gateway gets vetTrustedHost's relaxed
 // per-request resolve+pin — it is CONTROL-PLANE-authored (the operator typed
 // it at boot), so no InternalHosts declaration is needed for it.
+// The upstream bypass applies here too, for the same reason it applies to an
+// ordinary host: an internal model gateway a corp proxy cannot CONNECT to is
+// exactly the destination the operator declared on the bypass list.
 func (p *Proxy) gatewayTarget(host string, port int) (string, error) {
-	if p.upstream != nil {
+	if p.upstream != nil && !p.bypassUpstream(host) {
 		return net.JoinHostPort(host, strconv.Itoa(port)), nil
 	}
 	return p.vetTrustedHost(host, port)

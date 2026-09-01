@@ -112,7 +112,7 @@ func TestSeedRequestWorkspace_MigratedContainerShapeResolvesImage(t *testing.T) 
 	spec := &types.RunPolicySpec{}
 	req := &createRunRequest{Agent: "claude-code", WorkspaceID: &wsID}
 
-	ephemeralDirs, code, err := srv.seedRequestWorkspace(context.Background(), spec, req)
+	ephemeralDirs, _, code, err := srv.seedRequestWorkspace(context.Background(), spec, req)
 	if err != nil {
 		t.Fatalf("seed: %d %v", code, err)
 	}
@@ -145,7 +145,7 @@ func TestSeedRequestWorkspace_RecommendedBaseImageNeverOverridesImage(t *testing
 	spec := &types.RunPolicySpec{}
 	req := &createRunRequest{Agent: "claude-code", WorkspaceID: &wsID}
 
-	if _, code, err := srv.seedRequestWorkspace(context.Background(), spec, req); err != nil {
+	if _, _, code, err := srv.seedRequestWorkspace(context.Background(), spec, req); err != nil {
 		t.Fatalf("seed: %d %v", code, err)
 	}
 	if req.Image != "" {
@@ -177,7 +177,7 @@ func TestSeedRequestWorkspace_OnePolicyEntryPerSource(t *testing.T) {
 	spec := &types.RunPolicySpec{}
 	req := &createRunRequest{Agent: "claude-code", WorkspaceID: &wsID}
 
-	ephemeralDirs, code, err := srv.seedRequestWorkspace(context.Background(), spec, req)
+	ephemeralDirs, _, code, err := srv.seedRequestWorkspace(context.Background(), spec, req)
 	if err != nil {
 		t.Fatalf("seed: %d %v", code, err)
 	}

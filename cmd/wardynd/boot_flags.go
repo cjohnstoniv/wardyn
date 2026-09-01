@@ -121,6 +121,19 @@ type bootFlags struct {
 	// gated on (legacy, still boot-warned separately).
 	oidcAllowEmailMappings *bool
 
+	// Directory autocomplete (§I / PF-29), strictly OPT-IN. dirProvider empty is
+	// the whole feature off: no connector, no Graph reach, every "who" field
+	// stays free text. The other three are the DEDICATED app-registration
+	// override; unset, the credentials are derived from the OIDC ones above
+	// (tenant from the issuer), which is why the common case is one variable.
+	// resolveDirectoryConfig (boot_posture.go) resolves the pair and REFUSES
+	// boot when neither source can do client credentials — the connector itself
+	// can only 503 lazily at first search, which is not a refusal.
+	dirProvider *string
+	dirTenant   *string
+	dirClientID *string
+	dirSecret   *string
+
 	autoStopInterval *time.Duration
 
 	approvalExpiryInterval *time.Duration
@@ -136,8 +149,14 @@ type bootFlags struct {
 	requireOpSetEgress *bool
 	gitPATBroker       *string
 
-	bedrockRegion       *string
-	bedrockModel        *string
+	bedrockRegion *string
+	bedrockModel  *string
+	// bedrockBaseURL is WARDYN_BEDROCK_BASE_URL (see api.ValidateBedrockBaseURL):
+	// the Bedrock DATA-PLANE endpoint override that points a regulated
+	// deployment at its VPC/PrivateLink endpoint. Same posture class as
+	// anthropicBaseURL above — boot-time only, never a SiteConfig field, because
+	// in bearer mode it IS the TLS-MITM and Authorization-injection target.
+	bedrockBaseURL      *string
 	bedrockAWSDir       *string
 	bedrockAWSProfile   *string
 	bedrockAWSSSORegion *string
@@ -239,6 +258,11 @@ func parseBootFlags() *bootFlags {
 		oidcDefaultRole:         flagEnv("oidc-default-role", "WARDYN_OIDC_DEFAULT_ROLE", "", `role ("admin" or "member") assigned when -oidc-role-map is set but nothing in a signed-in human's roles/groups/email matched an entry. "security_admin" is REFUSED here (boot fails closed): it is a mapped tier only, never the tier every unnamed human falls through to — name its App Role/group in -oidc-role-map instead. Empty (the default) DENIES that login instead, naming WARDYN_OIDC_ROLE_MAP in the error page. Ignored when -oidc-role-map is empty`),
 		oidcAllowEmailMappings:  flagBool("oidc-allow-email-mappings", "WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS", false, "override: allow an email-shaped value (contains \"@\") on a console People-step role mapping (POST /access/mappings). Refused by default — an SSO/Entra deployment's default posture steers to an App Role or group key instead; env WARDYN_OIDC_ROLE_MAP email keys are unaffected either way (legacy, still boot-warned separately)"),
 
+		dirProvider: flagEnv("directory-provider", "WARDYN_DIRECTORY_PROVIDER", "", `identity-directory connector for the console's "who" autocomplete (governance assignment subject, People-step mapping value): "entra" (Microsoft Graph) or empty. Empty (the default) is the whole feature OFF — no directory read, every field stays free text. Enabling it grants wardynd READ OF THE WHOLE DIRECTORY (users + groups, App Roles when consented) and adds daemon-side outbound HTTPS to graph.microsoft.com:443 — see docs/OPERATIONS.md`),
+		dirTenant:   flagEnv("directory-tenant", "WARDYN_DIRECTORY_TENANT", "", "Entra tenant id/domain for the directory connector. Empty derives it from WARDYN_OIDC_ISSUER; set it with -directory-client-id/-directory-client-secret to use a DEDICATED least-privilege app registration instead of the OIDC one"),
+		dirClientID: flagEnv("directory-client-id", "WARDYN_DIRECTORY_CLIENT_ID", "", "client id of the dedicated directory app registration. Empty reuses WARDYN_OIDC_CLIENT_ID; all three of -directory-tenant/-client-id/-secret are set together or not at all"),
+		dirSecret:   flagEnv("directory-client-secret", "WARDYN_DIRECTORY_CLIENT_SECRET", "", "client secret of the dedicated directory app registration. Empty reuses WARDYN_OIDC_CLIENT_SECRET — which is REFUSED AT BOOT when that is itself empty (a PUBLIC OIDC client cannot do the client-credentials flow Graph needs)"),
+
 		autoStopInterval: flagDuration("autostop-interval", "WARDYN_AUTOSTOP_INTERVAL", time.Minute, "how often the lifecycle reaper scans for idle runs (0 disables)"),
 
 		approvalExpiryInterval: flagDuration("approval-expiry-interval", "WARDYN_APPROVAL_EXPIRY_INTERVAL", 10*time.Minute, "how often to sweep stale PENDING approvals (0 disables)"),
@@ -276,6 +300,7 @@ func parseBootFlags() *bootFlags {
 		// proxy-injected. See internal/api.Config.BedrockRegion/BedrockModel.
 		bedrockRegion:       flagEnv("bedrock-region", "WARDYN_BEDROCK_REGION", "", `optional: AWS region for the Amazon Bedrock Anthropic transport (e.g. "us-east-1"). Falls back to the standard AWS_REGION / AWS_DEFAULT_REGION when left empty. Requires -bedrock-model too, plus aws-access-key-id/aws-secret-access-key secrets. Empty (and no AWS_REGION) = Bedrock disabled.`),
 		bedrockModel:        flagEnv("bedrock-model", "WARDYN_BEDROCK_MODEL", "", `optional: Bedrock model id for claude-code — a cross-region inference-profile id (e.g. "us.anthropic.claude-sonnet-4-5-..."), or the profile's FULL ARN ("arn:aws:bedrock:<region>:<acct>:inference-profile/<id>" or ".../application-inference-profile/<id>", which is how quota, logging and guardrails attach to the profile rather than the bare model). Not a bare foundation-model id. Passed to the agent verbatim — Wardyn does not parse or validate the shape. Requires -bedrock-region too.`),
+		bedrockBaseURL:      flagEnv("bedrock-base-url", "WARDYN_BEDROCK_BASE_URL", "", `optional: Bedrock DATA-PLANE base URL (https://, an RFC1918/CGNAT literal allowed) re-pointing bedrock-runtime at a VPC/PrivateLink endpoint, so inference traffic never traverses the public internet. Empty (default) = the regional public host, byte-identical to today. It moves the egress allow-list entry, the bearer mode's TLS-MITM + Authorization-injection target, and the sandbox's ANTHROPIC_BEDROCK_BASE_URL / AWS_ENDPOINT_URL_BEDROCK_RUNTIME together. CEILING: ONE data-plane host per deployment — it wins for EVERY region, so a multi-region estate must not set it. The CONTROL plane (bedrock.<region>.amazonaws.com) is NOT overridden; pin an inference-profile ARN with -bedrock-model instead. A malformed value refuses boot.`),
 		bedrockAWSDir:       flagEnv("bedrock-aws-dir", "WARDYN_BEDROCK_AWS_DIR", "", `bind a host ~/.aws directory READ-ONLY into each Bedrock run so the AWS SDK resolves credentials itself. SSO/IAM-Identity-Center auto-refresh works only for sso-session profiles whose CACHED token is still valid (the read-only mount cannot write back a rotated token; legacy sso_start_url profiles need a periodic host 'aws sso login'). Works in compose too (mount it via the WARDYN_BEDROCK_AWS_DIR bind, same path host==container). Exposes the WHOLE ~/.aws to the untrusted sandbox — point it at ~/.aws only. Leave empty to use static aws-* secrets or a bedrock-api-key instead.`),
 		bedrockAWSProfile:   flagEnv("bedrock-aws-profile", "WARDYN_BEDROCK_AWS_PROFILE", "", `optional: AWS_PROFILE to select from the mounted ~/.aws (common with SSO). Falls back to the standard AWS_PROFILE when left empty. Only used with -bedrock-aws-dir.`),
 		bedrockAWSSSORegion: flagEnv("bedrock-aws-sso-region", "WARDYN_BEDROCK_AWS_SSO_REGION", "", `optional: AWS SSO region whose oidc.<r>/portal.sso.<r> endpoints the sandbox may reach to exchange an SSO token for role creds, and which endpoints the containerized 'aws sso login' may reach. Defaults to -bedrock-region.`),

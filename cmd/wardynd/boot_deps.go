@@ -20,6 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/directory"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -216,6 +217,10 @@ type optionalFeatures struct {
 	// ONLY when -ui-sandbox-listen is set — nil otherwise, the same
 	// never-mint-a-secret-for-a-disabled-feature discipline as sshHostKey.
 	uiSessionKey []byte
+	// dir is the §I directory connector, nil unless WARDYN_DIRECTORY_PROVIDER is
+	// set. nil is the ABSENT mode all the way down: the search endpoint answers
+	// its distinct 503 and every "who" field stays free text.
+	dir directory.Directory
 }
 
 // buildOptionalFeatures wires every optional subsystem from its flags. Extracted
@@ -338,43 +343,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 				"the console offers the 'Sign in with SSO' link and WARDYN_OIDC_OPERATOR_EMAILS is unset, so — absent a WARDYN_OIDC_ROLE_MAP — every SSO human would have the same power as the admin token — " +
 				"boot continues past this ONLY with WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST set (set the operator list instead to make everyone else a member)")
 		}
-		// Role-map posture (independent knob from the operator-emails split
-		// above; a later lane unifies the two — see internal/auth/oidc's
-		// deriveRole doc). With no roleMap, deriveRole derives roles from the
-		// WARDYN_OIDC_OPERATOR_EMAILS allowlist alone (listed = admin, everyone
-		// else = member); only when the allowlist is ALSO empty does every
-		// signed-in human become admin — and that case is the loud else-branch
-		// warning above, so here we only nudge an allowlist-split operator toward
-		// a role map for claim-based members.
-		if len(roleMap) == 0 {
-			if len(splitCSV(*f.oidcOperatorEmails)) > 0 {
-				slog.Warn("wardynd: no WARDYN_OIDC_ROLE_MAP set — roles come only from the WARDYN_OIDC_OPERATOR_EMAILS allowlist (listed = admin, everyone else = member); set a role map to derive admin/member from SSO roles/groups instead")
-			}
-		} else if len(splitCSV(*f.oidcEmailDomains)) == 0 {
-			// Same warning shape as the WARDYN_OIDC_OPERATOR_EMAILS one above
-			// (~:270), fired independently since either var can be set without
-			// the other: an email-keyed WARDYN_OIDC_ROLE_MAP entry is a SECOND
-			// email-keyed privilege source riding an unverified IdP claim —
-			// email_verified is enforced only when the domains list is set.
-			for k := range roleMap {
-				if strings.Contains(k, "@") {
-					slog.Warn("wardynd: WARDYN_OIDC_ROLE_MAP has an email-keyed entry but WARDYN_OIDC_EMAIL_DOMAINS is not set — email_verified is NOT enforced, so that role assignment rides an unverified IdP claim; prefer roles/groups keys (IdP-signed), or set the domains list too")
-					break
-				}
-			}
-		}
-		// Third-tier posture: a chart map that grants security_admin but names
-		// no super admin at all. WARN, never a refusal — the admin token and
-		// local mode both pass every gate on the no-OIDC-human arm
-		// (internal/api's isOperator), so this deployment is administrable, and
-		// a chart map is edited by helm upgrade: refusing would break an
-		// upgrade for a posture that is merely unusual. Console-managed rows
-		// are NOT considered here and cannot be — they are read per login, not
-		// at boot — so this is honestly scoped to the CHART map, which is also
-		// the only source a helm operator can act on from a boot log.
-		if chartMapHasNoAdminPath(roleMap, splitCSV(*f.oidcOperatorEmails), defaultRole) {
-			slog.Warn("wardynd: WARDYN_OIDC_ROLE_MAP grants " + oidc.RoleSecurityAdmin + " but no admin: no admin-valued entry, no WARDYN_OIDC_OPERATOR_EMAILS, and WARDYN_OIDC_DEFAULT_ROLE is not admin — a security admin governs approvals/audit/permissions/governance profiles but never reaches another human's run, credentials or host config, so SSO alone cannot administer this deployment (the admin token and local mode still can; add an admin-valued map entry or the operator allowlist to fix it)")
-		}
+		warnRoleMapPosture(roleMap, f, defaultRole)
 	}
 
 	// The second boot refusal (validateConfig, main.go, is the first): SSO
@@ -385,6 +354,15 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 	if err := validateOperatorPosture(of.authn != nil, splitCSV(*f.oidcOperatorEmails), *f.allowOIDCNoOperatorList, hasRoleMap); err != nil {
 		return of, err
 	}
+
+	// Directory autocomplete (§I / PF-29), opt-in. Its own function because the
+	// refusal-plus-construct-plus-announce shape is a unit, and buildOptionalFeatures
+	// is at the cyclomatic ceiling.
+	dir, derr := buildDirectoryConnector(f)
+	if derr != nil {
+		return of, derr
+	}
+	of.dir = dir
 
 	// Devcontainer image builder (optional; docker build tag only). When -envbuild
 	// is set but wardynd was not built with -tags docker, newEnvBuilder returns an
@@ -488,6 +466,60 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 	return of, nil
 }
 
+// warnRoleMapPosture emits the three non-fatal WARNINGs about how roles will be
+// derived from SSO. All three are warnings by design: each describes a posture
+// that is unusual rather than wrong, every one of them is administrable through
+// the admin token or local mode, and a chart map is edited by `helm upgrade` —
+// refusing would break an upgrade over a shape that merely deserves a second
+// look. Only the CHART map is considered, because console-managed rows are read
+// per login and do not exist at boot; that is also the only source a helm
+// operator can act on from a boot log.
+func warnRoleMapPosture(roleMap map[string]string, f *bootFlags, defaultRole string) {
+	// Role-map posture (independent knob from the operator-emails split
+	// above; a later lane unifies the two — see internal/auth/oidc's
+	// deriveRole doc). With no roleMap, deriveRole derives roles from the
+	// WARDYN_OIDC_OPERATOR_EMAILS allowlist alone (listed = admin, everyone
+	// else = member); only when the allowlist is ALSO empty does every
+	// signed-in human become admin — and that case is the loud else-branch
+	// warning above, so here we only nudge an allowlist-split operator toward
+	// a role map for claim-based members.
+	if len(roleMap) == 0 {
+		if len(splitCSV(*f.oidcOperatorEmails)) > 0 {
+			slog.Warn("wardynd: no WARDYN_OIDC_ROLE_MAP set — roles come only from the WARDYN_OIDC_OPERATOR_EMAILS allowlist (listed = admin, everyone else = member); set a role map to derive admin/member from SSO roles/groups instead")
+		}
+	} else if len(splitCSV(*f.oidcEmailDomains)) == 0 {
+		// Same warning shape as the WARDYN_OIDC_OPERATOR_EMAILS one above
+		// (~:270), fired independently since either var can be set without
+		// the other: an email-keyed WARDYN_OIDC_ROLE_MAP entry is a SECOND
+		// email-keyed privilege source riding an unverified IdP claim —
+		// email_verified is enforced only when the domains list is set.
+		for k := range roleMap {
+			if strings.Contains(k, "@") {
+				slog.Warn("wardynd: WARDYN_OIDC_ROLE_MAP has an email-keyed entry but WARDYN_OIDC_EMAIL_DOMAINS is not set — email_verified is NOT enforced, so that role assignment rides an unverified IdP claim; prefer roles/groups keys (IdP-signed), or set the domains list too")
+				break
+			}
+		}
+	}
+	// Third-tier posture: a chart map that grants security_admin but names
+	// no super admin at all. WARN, never a refusal — the admin token and
+	// local mode both pass every gate on the no-OIDC-human arm
+	// (internal/api's isOperator), so this deployment is administrable, and
+	// a chart map is edited by helm upgrade: refusing would break an
+	// upgrade for a posture that is merely unusual. Console-managed rows
+	// are NOT considered here and cannot be — they are read per login, not
+	// at boot — so this is honestly scoped to the CHART map, which is also
+	// the only source a helm operator can act on from a boot log.
+	if chartMapHasNoAdminPath(roleMap, splitCSV(*f.oidcOperatorEmails), defaultRole) {
+		slog.Warn("wardynd: WARDYN_OIDC_ROLE_MAP grants " + oidc.RoleSecurityAdmin +
+			" but no admin: no admin-valued entry, no WARDYN_OIDC_OPERATOR_EMAILS," +
+			" and WARDYN_OIDC_DEFAULT_ROLE is not admin — a security admin governs" +
+			" approvals/audit/permissions/governance profiles but never reaches another" +
+			" human's run, credentials or host config, so SSO alone cannot administer" +
+			" this deployment (the admin token and local mode still can; add an" +
+			" admin-valued map entry or the operator allowlist to fix it)")
+	}
+}
+
 // componentsInfo builds the pluggable-component selection advertised on
 // /healthz. "selected" is the ACTUAL running impl; "available" is what each
 // seam's registry has self-registered in THIS build (so a newly registered
@@ -584,4 +616,46 @@ func newSubscriptionProvider(postureOK bool) subscription.Provider {
 		return nil
 	}
 	return p
+}
+
+// buildDirectoryConnector resolves the §I directory config and, when the feature
+// is on, constructs the connector and announces the posture expansion. Returns a
+// nil Directory when WARDYN_DIRECTORY_PROVIDER is unset — off is a zero config and
+// a nil connector: no Graph reach, no new egress, no behaviour change anywhere.
+func buildDirectoryConnector(f *bootFlags) (directory.Directory, error) {
+	// Directory autocomplete (§I / PF-29), opt-in. The THIRD boot refusal, and
+	// it lives here for the same reason the second one does: the resolution
+	// depends on the OIDC flags this function has just consumed. Off (provider
+	// unset) it is a zero config and a nil connector — no Graph reach, no new
+	// egress, no behaviour change anywhere.
+	dirCfg, derr := resolveDirectoryConfig(*f.dirProvider, *f.dirTenant, *f.dirClientID, *f.dirSecret,
+		*f.oidcIssuer, *f.oidcClientID, *f.oidcClientSecret)
+	if derr != nil {
+		return nil, derr
+	}
+	if dirCfg.TenantID == "" {
+		return nil, nil
+	}
+	dir, err := directory.NewEntra(dirCfg)
+	if err != nil {
+		// Unreachable given resolveDirectoryConfig's own completeness check
+		// (NewEntra's only error is ErrUnconfigured, on an absent credential)
+		// — surfaced rather than dropped so a connector that grows a second
+		// error cannot silently disable itself.
+		return nil, fmt.Errorf("directory connector: %w", err)
+	}
+	// Log the ENABLE, matching the OIDC line above. There is deliberately no
+	// audit row for it: enabling is an env var read once at boot, with no
+	// recorder wired yet and no runtime toggle to audit — the audited
+	// directory event is the connector FAILURE, emitted per search from
+	// internal/api (see auditDirectoryFailure). Naming the whole-directory
+	// reach here is the point: it is a real posture expansion, and an
+	// operator reading boot logs should see it stated, not inferred.
+	slog.Info("wardynd: directory autocomplete enabled — wardynd may now READ THE WHOLE DIRECTORY "+
+		"(users + groups, App Roles when consented) over daemon-side outbound HTTPS to graph.microsoft.com:443; "+
+		"suggestions are cached in memory for 60s and never persisted. Unset WARDYN_DIRECTORY_PROVIDER to retract it",
+		slog.String("provider", directoryProviderEntra),
+		slog.Bool("dedicated_app", strings.TrimSpace(*f.dirClientID) != ""),
+	)
+	return dir, nil
 }

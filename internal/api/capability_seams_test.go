@@ -454,7 +454,7 @@ func TestInlinePolicy_PreflightDoesNotAudit(t *testing.T) {
 func denyRequest(t *testing.T, srv *Server, req createRunRequest) (bool, int) {
 	t.Helper()
 	w := httptest.NewRecorder()
-	denied := srv.denyMemberRequest(w, memberRequest(t), req)
+	_, denied := srv.denyMemberRequest(w, memberRequest(t), req)
 	return denied, w.Code
 }
 
@@ -731,7 +731,7 @@ func TestDenyMemberRequest_OperatorsAreExempt(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).
 		WithContext(withOIDCGroups(operatorCtx("sub-admin", "admin@corp.example", oidc.RoleAdmin), nil))
-	if denied := h.srv.denyMemberRequest(w, r, createRunRequest{Image: "ghcr.io/acme/agent:1", WorkspaceID: &ws}); denied {
+	if _, denied := h.srv.denyMemberRequest(w, r, createRunRequest{Image: "ghcr.io/acme/agent:1", WorkspaceID: &ws}); denied {
 		t.Fatalf("admin denied: %d %s", w.Code, w.Body.String())
 	}
 }

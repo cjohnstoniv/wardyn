@@ -226,6 +226,35 @@ type SiteConfig struct {
 	// a 400 telling the caller to use UpstreamProxySecretRef instead, which
 	// exists precisely for a proxy that DOES need an embedded credential.
 	UpstreamProxyURL string `json:"upstream_proxy_url,omitempty"`
+	// UpstreamProxyNoProxy is the corporate upstream proxy's BYPASS list: the
+	// destinations wardyn-proxy must dial DIRECTLY instead of CONNECTing through
+	// the upstream. It is the operator-hop equivalent of the NO_PROXY every
+	// sandbox already honours INSIDE itself, and it follows that convention's
+	// spelling so nothing new has to be learned: each entry is either
+	//
+	//   - a HOST or DOMAIN SUFFIX ("vpce.amazonaws.com", ".corp.internal",
+	//     "registry.corp.internal") matched by label suffix — the entry itself,
+	//     or any host ending in "."+entry, never a mid-label substring; or
+	//   - a CIDR ("100.64.0.0/10", "10.40.0.0/16") matched against a literal-IP
+	//     destination.
+	//
+	// It exists because a corporate forward proxy will not CONNECT to an
+	// internal address, so on a private-endpoint (PrivateLink) estate EVERY
+	// private endpoint times out while the upstream takes every dial. WHAT IT
+	// DOES NOT DO, and the reason it is safe: a bypassed dial falls through to
+	// the proxy's own unconditional private/reserved-IP SSRF guard exactly as an
+	// unproxied dial does, so bypassing a host does NOT make a private address
+	// reachable — InternalHosts (above) is still the one and only lift, and the
+	// two compose: the bypass routes the dial direct, InternalHosts lets that
+	// address through. It also grants no policy allow; allowed_domains/
+	// denied_domains decide reachability exactly as before.
+	//
+	// The NO_PROXY "*" wildcard is REFUSED at write time: "bypass everything" is
+	// spelled by clearing upstream_proxy_url, and accepting it here would let one
+	// character silently un-chain an estate's whole egress. Empty (the default)
+	// => every forward dial keeps chaining through the upstream, byte-identical
+	// to before this field existed.
+	UpstreamProxyNoProxy []string `json:"upstream_proxy_no_proxy,omitempty"`
 	// ArtifactOverrides maps an ecosystem ("npm"|"pip"|"cargo"|"maven"|"go"|
 	// "nuget") to its corporate artifact-registry redirect.
 	//

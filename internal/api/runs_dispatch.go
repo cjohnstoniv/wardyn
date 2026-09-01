@@ -68,6 +68,21 @@ type dispatchParams struct {
 	// sandbox just needs the directory to exist. Surfaced as
 	// WARDYN_EPHEMERAL_DIRS (comma-separated); nil/empty adds nothing.
 	EphemeralDirs []string
+	// CeilingDeny is the ACTING PRINCIPAL's governance-profile deny list —
+	// ceiling.Spec.DeniedDomains from effectiveCeiling, and ONLY when that
+	// resolve returned an ASSIGNED profile (ceiling.Profile != nil; use
+	// ceilingDispatchDenies, never hand-roll the test). NIL for everyone else:
+	// an unassigned member, an operator, and every scan/probe/harness lane with
+	// no member principal at all — which is what makes reassertCeilingDenies a
+	// provable no-op on a deployment that has never authored a profile.
+	//
+	// NEVER the run's own merged policy.DeniedDomains — see ceilingDenies for
+	// why a merged-list matcher would kill every broker lane on a deployment
+	// with no governance profile at all.
+	CeilingDeny []string
+	// CeilingProfile is that profile's NAME, for the run.ceiling.reassert audit
+	// event. Nothing branches on it.
+	CeilingProfile string
 	// ResolvedManaged, when non-nil, is filled in by dispatchRun with whether
 	// the ACTUAL resolved llmTransport used the Wardyn-managed subscription
 	// lane (llm.injectManaged — resolveLLMTransport's MANAGED subscription
@@ -105,11 +120,14 @@ type dispatchParams struct {
 // < 0) or the idle reaper will stop the idle sandbox.
 //
 // PHASE ORDER IS THE CONTRACT: the policy phases below narrow `policy` in
-// sequence, and confineGitBrokerEgress runs LAST so nothing above it can re-add
-// a broker-managed host; the ProxyConfig snapshot then captures that final
-// policy, and the run.policy.effective audit event discloses it. Keep new
-// phases inside this sequence, in the right place — a phase hoisted into a
-// caller silently loses the ordering guarantee.
+// sequence, and confineGitBrokerEgress runs LAST of the phases that touch the
+// ALLOWLIST so nothing above it can re-add a broker-managed host;
+// reassertCeilingDenies then runs after it (it only adds denies and only
+// removes credentials, so it cannot un-confine anything, and it has to sit
+// below every WIDENING phase — see its own ordering argument). The ProxyConfig
+// snapshot then captures that final policy, and the run.policy.effective audit
+// event discloses it. Keep new phases inside this sequence, in the right place
+// — a phase hoisted into a caller silently loses the ordering guarantee.
 //
 //nolint:funlen // Deliberate: one linear provision → CAS → compensate sequence whose phase ORDER is the security contract (see above). Each phase already lives in its own helper; splitting the sequence would hide the ordering behind a call graph and make it unauditable in one scope. Low branching — passes gocyclo/gocognit, just long.
 func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatchParams) {
@@ -308,6 +326,15 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 			slog.String("run_id", run.ID.String()), slog.Any("hosts", confined))
 	}
 
+	// GOVERNANCE CEILING RE-ASSERTION: union the acting principal's assigned
+	// profile's denies into the policy, drop every injection rule and BROKERED
+	// credential lane that reaches a denied host. Placed here, after
+	// confineGitBrokerEgress and after every widening phase above, because a
+	// create-time deny is defeated by those widenings — the artifact-redirect
+	// phase adds corp hosts AND authors token injections for them mid-dispatch.
+	// A no-op with no assigned profile. See reassertCeilingDenies.
+	s.reassertCeilingDenies(ctx, run, &policy, &injections, &p, sandboxEnv)
+
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
 	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.
 	mounts := buildRunMounts(policy, llm, p.MemberMounts)
@@ -385,7 +412,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 			// Operator-declared internal hostnames eligible for the proxy's
 			// private-IP-guard lift (site-config, read once above as siteCfg;
 			// nil on a GetSiteConfig error — fail safe, no lift).
-			InternalHosts: siteCfg.InternalHosts,
+			InternalHosts:        siteCfg.InternalHosts,
+			UpstreamProxyNoProxy: siteCfg.UpstreamProxyNoProxy,
 			// Operator-configured internal model gateway(s) — WARDYN_ANTHROPIC_
 			// BASE_URL/WARDYN_OPENAI_BASE_URL, validated at boot. Empty => every
 			// brokered LLM route dials the vendor host, byte-identical to today.

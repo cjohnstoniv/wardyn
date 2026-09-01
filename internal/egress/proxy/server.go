@@ -155,6 +155,19 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		}
 		slog.InfoContext(ctx, "wardyn-proxy: chaining egress through upstream proxy (private-IP guard relaxed for this hop; control-plane bypasses it)",
 			slog.String("upstream_addr", up.addr))
+		// Say LOUDLY and EXHAUSTIVELY what is NOT chained. A bypass is a routing
+		// exception to the "every forward dial goes through the corp proxy"
+		// ceiling the line above states, so the deployment's log must name the
+		// entries themselves — a count would leave an operator inferring the
+		// shape of an exception list. Also state what it does NOT do, because
+		// "bypass" reads like "exempt" and it is not: a bypassed dial still runs
+		// the private-IP guard and still needs its policy allow. Logged only
+		// with an upstream configured; the list is inert without one.
+		if noProxy := compileNoProxy(cfg.UpstreamProxyNoProxy); len(noProxy) > 0 {
+			slog.InfoContext(ctx, "wardyn-proxy: upstream proxy BYPASSED for declared destinations — dialed directly "+
+				"(still SSRF-guarded: a private address needs a site-config internal_hosts declaration; still policy-gated)",
+				slog.Any("bypass", noProxyStrings(noProxy)))
+		}
 	}
 
 	ap := newApprovalClient(cfg.ControlPlaneURL, ts, cfg.RunID, client)
@@ -188,6 +201,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		ControlPlaneURL: cfg.ControlPlaneURL,
 		RunToken:        ts,
 		Upstream:        up,
+		UpstreamNoProxy: cfg.UpstreamProxyNoProxy,
 		TLSClientConfig: tlsCfg,
 		InternalHosts:   cfg.InternalHosts,
 		LLMUpstreams:    cfg.LLMUpstreams,

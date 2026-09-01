@@ -61,7 +61,7 @@ func TestCreateRun_LegitimateTasksStillPass(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPost, "/api/v1/runs",
 				strings.NewReader(`{"agent":"claude-code","task":"`+task+`"}`))
 			w := httptest.NewRecorder()
-			_, _, _, ok := h.srv.decodeAndValidateCreateRun(w, r)
+			_, _, _, _, ok := h.srv.decodeAndValidateCreateRun(w, r)
 			if !ok {
 				t.Fatalf("task %q: decodeAndValidateCreateRun rejected a legitimate task (code %d): %s", task, w.Code, w.Body.String())
 			}
@@ -80,7 +80,7 @@ func TestDecodeAndValidateCreateRun_NoTaskCoercesInteractive(t *testing.T) {
 		strings.NewReader(`{"agent":"claude-code","repo":"acme/widgets"}`))
 	w := httptest.NewRecorder()
 
-	req, _, warning, ok := h.srv.decodeAndValidateCreateRun(w, r)
+	req, _, _, warning, ok := h.srv.decodeAndValidateCreateRun(w, r)
 	if !ok {
 		t.Fatalf("decode: unexpected failure, code=%d body=%s", w.Code, w.Body.String())
 	}
@@ -101,7 +101,7 @@ func TestDecodeAndValidateCreateRun_TaskPresentStaysNonInteractive(t *testing.T)
 		strings.NewReader(`{"agent":"claude-code","repo":"acme/widgets","task":"do the thing"}`))
 	w := httptest.NewRecorder()
 
-	req, _, warning, ok := h.srv.decodeAndValidateCreateRun(w, r)
+	req, _, _, warning, ok := h.srv.decodeAndValidateCreateRun(w, r)
 	if !ok {
 		t.Fatalf("decode: unexpected failure, code=%d body=%s", w.Code, w.Body.String())
 	}
@@ -122,7 +122,7 @@ func TestDecodeAndValidateCreateRun_ExplicitInteractiveNoWarning(t *testing.T) {
 		strings.NewReader(`{"agent":"claude-code","repo":"acme/widgets","interactive":true}`))
 	w := httptest.NewRecorder()
 
-	req, _, warning, ok := h.srv.decodeAndValidateCreateRun(w, r)
+	req, _, _, warning, ok := h.srv.decodeAndValidateCreateRun(w, r)
 	if !ok {
 		t.Fatalf("decode: unexpected failure, code=%d body=%s", w.Code, w.Body.String())
 	}
@@ -185,7 +185,7 @@ func TestCreateRun_NoTitleStillPasses(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs",
 		strings.NewReader(`{"agent":"claude-code","task":"echo hi"}`))
 	w := httptest.NewRecorder()
-	if _, _, _, ok := h.srv.decodeAndValidateCreateRun(w, r); !ok {
+	if _, _, _, _, ok := h.srv.decodeAndValidateCreateRun(w, r); !ok {
 		t.Fatalf("a run with no title was rejected (code %d): %s", w.Code, w.Body.String())
 	}
 }
@@ -202,7 +202,7 @@ func TestCreateRun_OverlongTitleIs400(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(body))
 			w := httptest.NewRecorder()
-			if _, _, _, ok := h.srv.decodeAndValidateCreateRun(w, r); ok {
+			if _, _, _, _, ok := h.srv.decodeAndValidateCreateRun(w, r); ok {
 				t.Fatalf("an over-long %s was accepted", name)
 			}
 			if w.Code != http.StatusBadRequest {

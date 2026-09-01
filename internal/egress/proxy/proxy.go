@@ -123,6 +123,13 @@ type Proxy struct {
 	// common, backward-compatible case). When set, forward egress is issued as
 	// CONNECT <real-host> to it; see upstream.go and dialThroughUpstream.
 	upstream *upstreamProxy
+	// noProxy is the compiled upstream BYPASS list (site-config
+	// UpstreamProxyNoProxy) — the destinations dialed DIRECTLY instead of
+	// through the corp upstream. Empty == every forward dial chains through the
+	// upstream (byte-identical to before this field existed). Consulted only via
+	// Proxy.bypassUpstream; it is a routing decision and never lifts the SSRF
+	// guard or grants a policy allow. See egress_target.go.
+	noProxy []noProxyRule
 
 	// internalHosts are the OPERATOR-DECLARED internal hostnames (site-config
 	// InternalHosts) eligible for vetHost's private-IP-guard lift — see
@@ -210,6 +217,13 @@ type Options struct {
 	// direct dial. NewServer parses it from Config.UpstreamProxyURL; tests may
 	// build one via parseUpstreamProxy.
 	Upstream *upstreamProxy
+	// UpstreamNoProxy is the operator's upstream BYPASS list
+	// (SiteConfig.UpstreamProxyNoProxy, forwarded verbatim): host/domain
+	// suffixes and CIDRs dialed DIRECTLY rather than CONNECTed through
+	// Upstream. Control-plane-authored, same trust boundary as InternalHosts —
+	// the sandbox cannot set it. Empty (the default) => no bypass. Ignored
+	// entirely when Upstream is nil. See Proxy.noProxy / Proxy.bypassUpstream.
+	UpstreamNoProxy []string
 	// InternalHosts are the operator-declared internal hostnames (site-config,
 	// CONTROL-PLANE-authored — the sandbox cannot set this) eligible for
 	// vetHost's private-IP-guard lift. Empty == no lift (byte-identical to
@@ -387,6 +401,7 @@ func newProxy(opts Options) *Proxy {
 		controlPlaneURL: strings.TrimRight(opts.ControlPlaneURL, "/"),
 		runToken:        opts.RunToken,
 		upstream:        opts.Upstream,
+		noProxy:         compileNoProxy(opts.UpstreamNoProxy),
 		internalHosts:   internalHosts,
 		localSubnets:    opts.LocalSubnets,
 		controlPlaneIP:  opts.ControlPlaneIP,
@@ -407,16 +422,30 @@ func newProxy(opts Options) *Proxy {
 		return p.dial(ctx, network, target)
 	}
 	// egressDial is directDial UNLESS an upstream corp proxy is configured, in
-	// which case EVERY forward-egress dial is chained through it via CONNECT. In
+	// which case a forward-egress dial is chained through it via CONNECT. In
 	// upstream mode the context value carries the REAL host:port (a hostname, set
 	// by evaluate() / serveMITMRequest) because the corp proxy — not us —
 	// resolves and dials it.
+	//
+	// addr is http.Transport's own dial address for the OUTBOUND request — i.e.
+	// the real destination host:port straight off outReq.URL (Transport.Proxy is
+	// nil here, so it is never the proxy's own address). It is the one thing in
+	// scope that still names the destination the way the OPERATOR declared it,
+	// before any resolve, so it — not the already-resolved context target — is
+	// what the bypass list is matched against. Without this the bypass would be
+	// decided in egressTarget and then silently undone here: the transport
+	// CONNECTs everything through the upstream independently of that branch.
 	egressDial := directDial
 	if p.upstream != nil {
-		egressDial = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		egressDial = func(ctx context.Context, network, addr string) (net.Conn, error) {
 			target, ok := ctx.Value(vettedIPKey{}).(string)
 			if !ok || target == "" {
 				return nil, errors.New("proxy: missing dial target")
+			}
+			if reqHost, _ := splitHostPort(addr, 443); p.bypassUpstream(reqHost) {
+				// Bypassed: dial the target egressTarget already resolved and
+				// vetted, exactly as directDial does (no re-resolution).
+				return p.dial(ctx, network, target)
 			}
 			host, port := splitHostPort(target, 443)
 			return p.dialThroughUpstream(ctx, host, port)
@@ -620,6 +649,13 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	if trustedLiteralIP != nil {
 		target := net.JoinHostPort(trustedLiteralIP.String(), strconv.Itoa(port))
 		log := p.allowLog(req, approvalID)
+		// Attribute the grant rather than leaving it as an ordinary
+		// policy:allowed — reaching a private/reserved address is the one allow
+		// an auditor most wants to see the REASON for. Same "an approval is the
+		// more specific fact" rule as the internal-host lift below.
+		if approvalID == uuid.Nil {
+			log.RuleSource = ruleSourceEgressRedirect
+		}
 		return egress.Allow, target, &log
 	}
 	target, ruleSource, terr := p.egressTarget(host, port)
@@ -669,8 +705,7 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		if log != nil {
 			p.sink.emit(*log)
 		}
-		setEgressRefusalHeadersWithReason(w, egressRefusalDenied, host, decisionReason(log))
-		http.Error(w, "egress denied by policy", http.StatusForbidden)
+		p.writeEgressDeny(w, host, port, log)
 		return
 	case egress.Pending:
 		if log != nil {
@@ -759,8 +794,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		if log != nil {
 			p.sink.emit(*log)
 		}
-		setEgressRefusalHeadersWithReason(w, egressRefusalDenied, host, decisionReason(log))
-		http.Error(w, "egress denied by policy", http.StatusForbidden)
+		p.writeEgressDeny(w, host, port, log)
 		return
 	case egress.Pending:
 		if log != nil {
@@ -827,12 +861,14 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Dial the destination: through the corp proxy (CONNECT <real-host>) when an
-	// upstream is configured, else directly to the vetted IP (no re-resolution).
+	// upstream is configured and this host is not on its bypass list, else
+	// directly to the vetted IP (no re-resolution). Same predicate, same real
+	// destination host, as egressTarget and egressDial.
 	var (
 		upstream net.Conn
 		err      error
 	)
-	if p.upstream != nil {
+	if p.upstream != nil && !p.bypassUpstream(host) {
 		upstream, err = p.dialThroughUpstream(r.Context(), host, port)
 	} else {
 		upstream, err = p.dial(r.Context(), "tcp", target)

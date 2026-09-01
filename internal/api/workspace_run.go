@@ -221,10 +221,41 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	if s.cfg.Runner == nil {
 		return types.AgentRun{}, false, fmt.Errorf("no runner configured")
 	}
+	// THE ACTING PRINCIPAL'S CEILING (PF-24), resolved FIRST — before the
+	// import-step CAS claim below, so a refusal costs no state and needs no
+	// abort().
+	//
+	// This lane builds its OWN spec and deliberately skips the member clamp:
+	// AllowAllEgress = !confined is Record Mode's learning posture (every host
+	// the task dials is captured), and its operator-credential injections are
+	// what make a confined replay authenticate the way a real run does. Both
+	// stay. What must NOT follow from them is that a profile-walled principal
+	// gets a server-authored, allow-all, credentialed sandbox they can attach
+	// to on demand — and POST /workspaces/{id}/record is a SECURITY-tier route
+	// (§B), so a security admin can open one. They are bounded by their own
+	// assigned profile like anyone else (effectiveCeiling short-circuits on
+	// isOperator, which a security admin fails, by design), so their ceiling's
+	// denies ride into dispatch and the re-assertion phase applies them there —
+	// the same phase and the same walls as their ordinary runs.
+	//
+	// Unwalled principals thread nothing: no assignment ⇒ no denies ⇒ Record
+	// Mode byte-for-byte unchanged, moat workflow intact.
 	// Detach from request cancellation before the durable launch work + image
 	// build: a client that walks away mid-build must not cancel it (dispatch's
 	// own WithoutCancel lands too late to protect the pre-dispatch work above it).
+	// The ceiling resolve below sits UNDER it — values are preserved, so the
+	// principal still resolves, and a client disconnect can no longer turn into
+	// a spurious ceiling failure.
 	ctx = context.WithoutCancel(ctx)
+	ceiling, cerr := s.effectiveCeiling(ctx)
+	if cerr != nil {
+		// FAIL CLOSED, the call effectiveCeiling's own doc makes: carrying on
+		// would silently substitute the deployment ceiling for a profile that
+		// may be far narrower — a widening caused by a database hiccup, on the
+		// one lane that hands out an open-egress sandbox.
+		return types.AgentRun{}, false, fmt.Errorf("resolve governance ceiling: %w", cerr)
+	}
+	ceilingDeny, ceilingProfile := ceilingDispatchDenies(ceiling)
 	caps, cerr := s.cfg.Runner.Capabilities(ctx)
 	if cerr != nil {
 		return types.AgentRun{}, false, fmt.Errorf("runner capabilities unavailable: %w", cerr)
@@ -463,6 +494,13 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		// path) — and even for a member's, it gates that workspace's OWN binds
 		// only, never the session's operator-staged credential mounts.
 		MemberMounts: s.memberMountPosture([]types.Workspace{ws}),
+		// The acting principal's own profile walls (resolved at the top of this
+		// function): dispatch's re-assertion phase unions these denies into the
+		// AllowAllEgress policy above — deny beats allow_all at the proxy — and
+		// drops every credential lane that reaches one. Empty for an unassigned
+		// principal or an operator, which is Record Mode's unchanged path.
+		CeilingDeny:    ceilingDeny,
+		CeilingProfile: ceilingProfile,
 		// W20-llm-transport-matrix-2: the pre-dispatch llmMode guess above
 		// cannot see the Wardyn-managed subscription lane at all — correct it
 		// below against what dispatch ACTUALLY resolved.

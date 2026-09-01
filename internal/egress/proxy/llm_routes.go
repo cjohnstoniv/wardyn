@@ -21,6 +21,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -451,8 +452,63 @@ func (p *Proxy) isLLMHost(host string) bool {
 	if _, ok := p.gatewayVendor[h]; ok {
 		return true
 	}
-	// AWS Bedrock runtime endpoints are regional.
-	return strings.HasPrefix(h, "bedrock-runtime.") || strings.HasPrefix(h, "bedrock.")
+	return isBedrockHost(h)
+}
+
+// awsRegionLabel matches an AWS region label (us-east-1, eu-west-3,
+// us-gov-west-1, ap-southeast-4). It starts with two LETTERS on purpose — that
+// is what separates a region from a virtual-hosted S3 label (s3,
+// s3-website-us-east-1, s3-us-west-2), which is customer-squattable inside
+// amazonaws.com; see isBedrockHost.
+var awsRegionLabel = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d+$`)
+
+// isBedrockHost reports whether h (already lowercased, trailing dot trimmed) is
+// an AWS Bedrock data-plane (bedrock-runtime) or control-plane (bedrock)
+// endpoint — the public regional form OR the PrivateLink/VPC-endpoint form
+// `vpce-<id>[-<az>].bedrock-runtime.<region>.vpce.amazonaws.com` (and the
+// hyphen-glued `vpce-<id>-bedrock-runtime.<region>.vpce.amazonaws.com`), which
+// CONTAINS but does not START WITH the service name — so the old prefix
+// matcher dropped private-endpoint model traffic out of isLLMHost's
+// opaque-tunnel coverage, the one call an auditor most wants to see.
+//
+// SECURITY (read before loosening): this is NOT a substring match. Every arm is
+// anchored on AWS-OWNED DNS an attacker cannot register — `<region>.amazonaws.com`
+// for the public form, `.vpce.amazonaws.com` for the private one — because
+// isLLMHost's true weight is in serveMITMRequest, where it picks the inspection
+// path for a tunnel that is ALREADY being TLS-terminated: an LLM classification
+// routes the body through inspectLLM (ChannelGeneric ⇒ unscanned) instead of
+// inspectForwardBody, which honours inspect_forward_egress. A host that could
+// talk its way in here would be an operator's corp artifact host silently
+// opting itself OUT of forward-body inspection. (It buys nothing else: the
+// CONNECT was allowed or denied by policy before isLLMHost is ever consulted,
+// and MITM eligibility is isMITMHost's exact-hostname allowlist, never this.)
+//
+// So `bedrock-runtime.evil.com`, `x-bedrock.attacker.net`,
+// `bedrock-runtime.us-east-1.amazonaws.com.evil.com` and the legacy S3
+// virtual-host `bedrock-runtime.s3.amazonaws.com` (bucket names ARE
+// attacker-chosen) all stay out — the first three fail the AWS suffix, the
+// last fails the region shape. Inside `.vpce.amazonaws.com` the service label
+// is assigned by AWS (a customer-hosted PrivateLink service is named
+// `vpce-svc-<hex>`), so a bedrock component there is genuinely Bedrock's.
+func isBedrockHost(h string) bool {
+	labels := strings.Split(h, ".")
+	bedrock := func(l string) bool { return l == "bedrock-runtime" || l == "bedrock" }
+	// Public: bedrock-runtime.<region>.amazonaws.com / bedrock.<region>.amazonaws.com.
+	if len(labels) == 4 && bedrock(labels[0]) &&
+		labels[2] == "amazonaws" && labels[3] == "com" && awsRegionLabel.MatchString(labels[1]) {
+		return true
+	}
+	// PrivateLink: the bedrock service rides a MIDDLE label (or the tail of the
+	// vpce label), under AWS's own vpce zone.
+	if !strings.HasSuffix(h, ".vpce.amazonaws.com") {
+		return false
+	}
+	for _, l := range labels {
+		if bedrock(l) || strings.HasSuffix(l, "-bedrock-runtime") || strings.HasSuffix(l, "-bedrock") {
+			return true
+		}
+	}
+	return false
 }
 
 // emitLLMDecision emits a decision log for an LLM route (port 443) carrying a

@@ -6,8 +6,11 @@ package main
 import (
 	"errors"
 	"fmt"
-	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
+	"net/url"
 	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/directory"
+	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
 )
 
 // Boot-time posture validators — refusals and warnings wardynd raises before
@@ -86,6 +89,126 @@ func validateOperatorPosture(oidcConfigured bool, operatorEmails []string, allow
 		"set WARDYN_OIDC_OPERATOR_EMAILS to the humans who may do that — everyone else becomes a member who reads their OWN runs and can launch runs — " +
 		"or set WARDYN_OIDC_ROLE_MAP for claim-based roles instead, " +
 		"or explicitly set WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true to override")
+}
+
+// directoryProviderEntra is the one connector §I/PF-29 ships. A value that is
+// neither this nor empty is a REFUSAL, not a silent disable: a typo'd
+// WARDYN_DIRECTORY_PROVIDER must not read as "feature off".
+const directoryProviderEntra = "entra"
+
+// resolveDirectoryConfig turns the four WARDYN_DIRECTORY_* vars plus the OIDC
+// ones into the connector's config, or refuses boot. It is the third fail-closed
+// posture rule in this file, and the reason it exists at all is that
+// internal/directory reads NO environment by design: NewEntra can only answer
+// ErrUnconfigured, which surfaces as a lazy 503 at the first keystroke — a
+// misconfiguration discovered by an admin typing into a combobox, not by the
+// operator who set the variable. PF-10 says a config that cannot work is refused
+// at boot, where the message can name what to set.
+//
+// Two credential sources, in order:
+//
+//  1. The DEDICATED app registration (WARDYN_DIRECTORY_TENANT,
+//     _CLIENT_ID, _CLIENT_SECRET). All three or none — a partial set is refused rather than
+//     silently falling back to the OIDC one, which would use credentials the
+//     operator did not mean to use.
+//  2. DEFAULT: the OIDC app registration, tenant derived from the issuer. This
+//     is the one-variable common case (WARDYN_DIRECTORY_PROVIDER=entra alone),
+//     and it needs the SAME app to carry admin-consented Graph application
+//     permissions — User.Read.All + Group.Read.All (Application.Read.All only if
+//     App Roles should appear).
+//
+// The two legs PF-29 names are both refusals here because neither can do the
+// client-credentials flow Graph requires: a PUBLIC OIDC client (PKCE, no secret)
+// and no OIDC configured at all (an admin-token/local deployment has no issuer
+// to derive a tenant from). A zero EntraConfig with a nil error means the
+// feature is OFF — the caller wires no Directory, and every "who" field stays
+// free text exactly as it behaves with this file unchanged.
+func resolveDirectoryConfig(provider, dirTenant, dirClientID, dirSecret, oidcIssuer, oidcClientID, oidcSecret string) (directory.EntraConfig, error) {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return directory.EntraConfig{}, nil
+	}
+	if !strings.EqualFold(provider, directoryProviderEntra) {
+		return directory.EntraConfig{}, fmt.Errorf("refusing to start: unknown WARDYN_DIRECTORY_PROVIDER %q — "+
+			"the only connector this build ships is %q (Okta/Google are later connectors behind the same interface); "+
+			"fix the value or unset it to leave directory autocomplete off", provider, directoryProviderEntra)
+	}
+
+	dirTenant, dirClientID = strings.TrimSpace(dirTenant), strings.TrimSpace(dirClientID)
+	// A DEDICATED registration is selected by naming ANY of its three vars —
+	// not by naming all three — so the partial case lands on the refusal below
+	// instead of quietly reusing the OIDC credentials.
+	if dirTenant != "" || dirClientID != "" || dirSecret != "" {
+		var missing []string
+		if dirTenant == "" {
+			missing = append(missing, "WARDYN_DIRECTORY_TENANT")
+		}
+		if dirClientID == "" {
+			missing = append(missing, "WARDYN_DIRECTORY_CLIENT_ID")
+		}
+		if dirSecret == "" {
+			missing = append(missing, "WARDYN_DIRECTORY_CLIENT_SECRET")
+		}
+		if len(missing) > 0 {
+			return directory.EntraConfig{}, fmt.Errorf("refusing to start: the dedicated directory app registration is half-configured — %s %s empty; "+
+				"set all three of WARDYN_DIRECTORY_TENANT/_CLIENT_ID/_CLIENT_SECRET, or unset all three to derive the credentials from the OIDC app registration instead",
+				strings.Join(missing, " and "), plural(len(missing), "is", "are"))
+		}
+		return directory.EntraConfig{TenantID: dirTenant, ClientID: dirClientID, ClientSecret: dirSecret}, nil
+	}
+
+	// Leg 2 of PF-29: nothing to derive from at all.
+	if strings.TrimSpace(oidcIssuer) == "" {
+		return directory.EntraConfig{}, errors.New("refusing to start: WARDYN_DIRECTORY_PROVIDER=" + directoryProviderEntra + " but no OIDC issuer is configured — " +
+			"the default credential path derives the tenant from WARDYN_OIDC_ISSUER and reuses WARDYN_OIDC_CLIENT_ID/_SECRET, and an admin-token or local-mode deployment has no IdP to derive either from; " +
+			"register a dedicated least-privilege app in the tenant (User.Read.All + Group.Read.All, admin-consented) and set WARDYN_DIRECTORY_TENANT/_CLIENT_ID/_CLIENT_SECRET, " +
+			"or unset WARDYN_DIRECTORY_PROVIDER to leave every \"who\" field as free text")
+	}
+	// Leg 1 of PF-29: a PUBLIC client (PKCE, no secret) — the documented,
+	// SUPPORTED OIDC shape (WARDYN_OIDC_CLIENT_SECRET is optional), which is
+	// exactly why this has to be caught: nothing else in boot would notice.
+	if strings.TrimSpace(oidcClientID) == "" || oidcSecret == "" {
+		return directory.EntraConfig{}, errors.New("refusing to start: WARDYN_DIRECTORY_PROVIDER=" + directoryProviderEntra + " but the OIDC app registration is a PUBLIC client (WARDYN_OIDC_CLIENT_SECRET is empty) — " +
+			"Microsoft Graph needs the client-credentials flow, which a public client cannot perform at all, so every autocomplete would fail at the first keystroke; " +
+			"register a dedicated least-privilege app in the tenant (User.Read.All + Group.Read.All, admin-consented) and set WARDYN_DIRECTORY_TENANT/_CLIENT_ID/_CLIENT_SECRET, " +
+			"or unset WARDYN_DIRECTORY_PROVIDER to leave every \"who\" field as free text")
+	}
+	tenant := entraTenantFromIssuer(oidcIssuer)
+	if tenant == "" {
+		return directory.EntraConfig{}, fmt.Errorf("refusing to start: WARDYN_DIRECTORY_PROVIDER=%s but no Entra tenant can be derived from WARDYN_OIDC_ISSUER %q — "+
+			"only a commercial-cloud Entra issuer carries one in its path (https://login.microsoftonline.com/<tenant>/v2.0, or the v1.0 https://sts.windows.net/<tenant>/), "+
+			"and the connector talks to graph.microsoft.com, which no sovereign cloud serves; "+
+			"set WARDYN_DIRECTORY_TENANT/_CLIENT_ID/_CLIENT_SECRET explicitly, or unset WARDYN_DIRECTORY_PROVIDER", directoryProviderEntra, oidcIssuer)
+	}
+	return directory.EntraConfig{TenantID: tenant, ClientID: strings.TrimSpace(oidcClientID), ClientSecret: oidcSecret}, nil
+}
+
+// entraTenantFromIssuer pulls the tenant id (or verified domain) out of an Entra
+// issuer URL — the first path segment of both the v2.0 and v1.0 issuer forms.
+// It returns "" for any other host ON PURPOSE: a Dex or Keycloak issuer also has
+// a first path segment, and treating it as a tenant would turn a refusable
+// misconfiguration into a runtime 502 against the wrong tenant id.
+func entraTenantFromIssuer(issuer string) string {
+	u, err := url.Parse(strings.TrimSpace(issuer))
+	if err != nil {
+		return ""
+	}
+	switch strings.ToLower(u.Hostname()) {
+	case "login.microsoftonline.com", "sts.windows.net":
+	default:
+		return ""
+	}
+	seg, _, _ := strings.Cut(strings.Trim(u.Path, "/"), "/")
+	return seg
+}
+
+// plural picks the verb form for a list length. ponytail: two words beat a
+// second fmt.Errorf branch for the same sentence.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // validateUISandboxConfig is the UI-sandbox gateway's boot-time fail-closed

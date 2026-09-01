@@ -274,7 +274,7 @@ func run() error {
 	// policy's allowed_domains does not list a configured gateway's host — the
 	// operator must add it, or every run under that policy 404s on its first
 	// model call once ensureLLMGrant/reconcileLLMAccess point at the gateway.
-	llmGateways, err := api.ValidateLLMGateways(*f.anthropicBaseURL, *f.openaiBaseURL)
+	llmGateways, bedrockBaseURL, err := validateModelEndpoints(f)
 	if err != nil {
 		return err
 	}
@@ -367,6 +367,10 @@ func run() error {
 		ControlPlaneURL:           *f.controlURL,
 		RecordingStore:            feats.recStore,
 		OIDC:                      feats.authn,
+		// §I: nil unless WARDYN_DIRECTORY_PROVIDER is set — the whole feature
+		// off, the search endpoint answering its distinct 503 and every "who"
+		// field staying free text.
+		Directory: feats.dir,
 		// D16: same store buildOptionalFeatures wired into oidc.Config.Revocations
 		// (the read side Middleware checks), given here to internal/api so the
 		// admin revoke-sessions endpoint has the write side. nil exactly when
@@ -380,6 +384,7 @@ func run() error {
 		AgentAnthropicModel:       *f.agentModel,
 		BedrockRegion:             *f.bedrockRegion,
 		BedrockModel:              *f.bedrockModel,
+		BedrockBaseURL:            bedrockBaseURL,
 		BedrockAWSConfigDir:       *f.bedrockAWSDir,
 		BedrockAWSProfile:         *f.bedrockAWSProfile,
 		BedrockAWSSSORegion:       *f.bedrockAWSSSORegion,
@@ -439,6 +444,30 @@ func run() error {
 
 	// Serve until signal/error, then drain: HTTP first, audit sinks last.
 	return serveAndShutdown(rootCtx, f, posture, srv.Handler(), idp.Name(), fan)
+}
+
+// validateModelEndpoints resolves and fail-closed-validates every operator knob
+// that moves where a model call actually goes: the two brokered api-key gateways
+// and the Bedrock data-plane override.
+//
+// Bedrock is deliberately NOT a member of ValidateLLMGateways' map. That map
+// means "broker this vendor's api-key lane through a reverse proxy" — its
+// consumers mint an api_key grant and serve the host over /wardyn/llm/*. Bedrock
+// is a CONNECT tunnel with SigV4, or MITM plus a bearer, so a key in that map
+// would have the proxy try to serve it over a route it does not speak. They are
+// validated together here because they answer one question, not because they
+// share a mechanism.
+func validateModelEndpoints(f *bootFlags) (map[string]string, string, error) {
+	llmGateways, err := api.ValidateLLMGateways(*f.anthropicBaseURL, *f.openaiBaseURL)
+	if err != nil {
+		return nil, "", err
+	}
+	// *f.bedrockRegion is already resolved (parseBootFlags folds in AWS_REGION).
+	bedrockBaseURL, err := api.ValidateBedrockBaseURL(*f.bedrockBaseURL, *f.bedrockRegion)
+	if err != nil {
+		return nil, "", err
+	}
+	return llmGateways, bedrockBaseURL, nil
 }
 
 // tlsPosture is the validated TLS/cookie posture derived from the resolved

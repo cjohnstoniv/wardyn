@@ -95,28 +95,29 @@ func (s *Server) routes() chi.Router {
 			// the split wrong, which no total can catch.
 			//
 			//                                        SUPER   SEC
-			//   direct registrations in this body       10     7
+			//   direct registrations in this body       10     8
 			//   mountPermissionRoutes  (this file)       0     4
 			//   mountAccountRoutes     (this file)       0     2
 			//   adminRoutes            (this file)       1     1
 			//   mountLibraryRoutes     (sources.go)      5     0
 			//   mountSetupMutationRoutes                 4     0
 			//   mountAccessRoutes      (access.go)       4     0
-			//   mountGovernanceRoutes  (governance.go)   0     6
+			//   mountGovernanceRoutes  (governance.go)   0     7
 			//                                        -----  ----
-			//                                           24    20
+			//                                           24    22
 			//
-			// The 7 SEC direct registrations below: POST /sessions/revoke ·
+			// The 8 SEC direct registrations below: POST /sessions/revoke ·
 			// workspace approved-egress + denied-egress + record +
-			// record/{task}/promote-egress · the two /site-config probes. The
-			// other 7 SEC live in this file's helpers: mountPermissionRoutes' 4
-			// (the /permissions family, extracted for funlen — see its doc),
-			// mountAccountRoutes' 2 (the admin token twins /tokens,
-			// /tokens/{id}) and adminRoutes' GET /audit/chain/verify (its
-			// sibling, the sandbox sweep, stays SUPER).
+			// record/{task}/promote-egress · the two /site-config probes · GET
+			// /access/directory/search (§I, new in 0.7 and outside §B's count,
+			// like /governance's 7). The other 7 SEC live in this file's
+			// helpers: mountPermissionRoutes' 4 (the /permissions family,
+			// extracted for funlen — see its doc), mountAccountRoutes' 2 (the
+			// admin token twins /tokens, /tokens/{id}) and adminRoutes' GET
+			// /audit/chain/verify (its sibling, the sandbox sweep, stays SUPER).
 			//
-			// = 44 group registrations with every conditional route mounted
-			// (Secrets configured); 41 with Secrets unconfigured — 3 of
+			// = 46 group registrations with every conditional route mounted
+			// (Secrets configured); 43 with Secrets unconfigured — 3 of
 			// mountSetupMutationRoutes' 4 are conditional on s.cfg.Secrets, and
 			// POST /sessions/revoke on s.cfg.SessionRevocations. 0.7 moved
 			// PUT/DELETE /secrets off these groups entirely (see "Secret
@@ -125,8 +126,9 @@ func (s *Server) routes() chi.Router {
 			// in 0048 — those gates moved INTO the handlers, they were not
 			// dropped.
 			//
-			// §B's 40 GATED ROUTES = these 24+20 MINUS mountGovernanceRoutes' 6
-			// (new in 0.7, outside the count) PLUS the two gated elsewhere, both
+			// §B's 40 GATED ROUTES = these 24+22 MINUS mountGovernanceRoutes' 7
+			// AND §I's directory search (both new in 0.7, outside the count)
+			// PLUS the two gated elsewhere, both
 			// SUPER: GET /metrics (outside /api/v1, its own explicit
 			// requireOperator — commit "absorb the operator tier") and the attach
 			// WebSocket's ticket-LESS fallback lane (ticketOrHumanAuth's own
@@ -478,11 +480,25 @@ func (s *Server) routes() chi.Router {
 			// GET leaks the operator-email target list. This is the one admin
 			// surface the tier must not be able to see or touch.
 			s.mountAccessRoutes(operatorOnly)
+			// Directory autocomplete (0.7 §I / PF-29): the read behind every
+			// "who" picker — the governance assignment subject and the
+			// People-step mapping value. securityOps, NOT the operatorOnly the
+			// four /access routes right above sit on, and the split is
+			// deliberate: those WRITE who derives admin, this one only READS
+			// the directory, and the security admin who authors assignments is
+			// exactly the person who needs to look up the group they are
+			// binding. It still discloses org structure (names, emails, group
+			// membership), which is why it is gated at all rather than sitting
+			// on r. Registered UNCONDITIONALLY — an unset connector answers a
+			// distinct 503 rather than vanishing, so the console can tell
+			// "not configured" from "no such route", and TestAuthzMatrix's
+			// every-conditional-route-mounted doctrine has nothing to arrange.
+			securityOps.Get("/access/directory/search", s.handleDirectorySearch)
 
 			// Governance profiles (0.7, migration 0052): named, ASSIGNABLE
 			// ceilings and the rows binding them to a user/group/everyone —
 			// what lets one deployment run two groups under two different
-			// policies instead of the single site-wide DefaultPolicy. Six
+			// policies instead of the single site-wide DefaultPolicy. Seven
 			// routes, all securityOps (governance.go's mountGovernanceRoutes):
 			// profile authoring IS the security-admin duty (§A/§B
 			// reconciliation), and this is the widening the family was
@@ -495,8 +511,11 @@ func (s *Server) routes() chi.Router {
 			// short-circuit keys on isOperator, so a security admin's own runs
 			// stay bound by whichever profile (or DefaultPolicy) applies to
 			// them. They author the ceiling; they do not stand outside it.
-			// These 6 are OUTSIDE §B's 40-gated-route count — new routes, born
-			// on this tier.
+			// The seventh is POST /governance/preview, the dry run: it takes
+			// claims and answers with the profile THE RESOLVER picks, so the
+			// console never re-implements the precedence rule in order to show
+			// it. These 7 are OUTSIDE §B's 40-gated-route count — new routes,
+			// born on this tier.
 			s.mountGovernanceRoutes(securityOps)
 
 			// Recording replay: GET /api/v1/runs/{id}/recording/{id}. Owner-or-admin

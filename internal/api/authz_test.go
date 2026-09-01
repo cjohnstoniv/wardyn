@@ -71,12 +71,12 @@ const (
 	// BOTH directions are probed, which TestSecurityAdminRouteTier does over
 	// this same table.
 	//
-	// 20 routes carry it: §B's 14 SEC of the 40 gated routes (sessions revoke ·
+	// 22 routes carry it: §B's 14 SEC of the 40 gated routes (sessions revoke ·
 	// workspace approved-/denied-egress + record + promote-egress ·
 	// site-config's two probes · permissions x4 · the two admin token twins ·
-	// audit chain verify) plus /governance's 6, which are new in 0.7 and
-	// outside that count. Everything else gated stays classAdmin — /policies
-	// writes and /access included, deliberately.
+	// audit chain verify) plus /governance's 7 and §I's directory search, all
+	// new in 0.7 and outside that count. Everything else gated stays classAdmin
+	// — /policies writes and /access included, deliberately.
 	classSecurity routeClass = "security"
 	// classMember: any authenticated caller (admin or member) reaches the
 	// handler; unauthenticated is refused with 401. Some member-class routes
@@ -228,19 +228,36 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/audit/chain/verify": {class: classSecurity},
 
 	// Governance profiles (migration 0052) — classSecurity: profile authoring
-	// IS the security-admin duty (§A/§B reconciliation). These 6 registered on
-	// operatorOnly when they shipped, before the tier existed, and this is the
-	// widening they were waiting for. There is deliberately no member-safe read:
-	// a member learns their OWN effective ceiling from GET /policies/default,
-	// not from the whole assignment table. Authoring is not self-exemption —
-	// effectiveCeiling short-circuits on isOperator, so a security admin's own
-	// runs stay bound by whichever profile applies to them.
+	// IS the security-admin duty (§A/§B reconciliation). Six of these registered
+	// on operatorOnly when they shipped, before the tier existed, and this is
+	// the widening they were waiting for. There is deliberately no member-safe
+	// read: a member learns their OWN effective ceiling from GET
+	// /policies/default, not from the whole assignment table. Authoring is not
+	// self-exemption — effectiveCeiling short-circuits on isOperator, so a
+	// security admin's own runs stay bound by whichever profile applies to them.
+	//
+	// The seventh, POST /governance/preview, was BORN on this tier. It is a
+	// READ that answers "which profile would bind these claims" by running
+	// Store.ResolveGovernanceProfile — the enforcement path's own call — and it
+	// is classSecurity for the reason the whole family is: the answer discloses
+	// how the org's ceilings are assigned. A member is refused here and reads
+	// their own ceiling from /policies/default instead, exactly as above.
 	"GET /api/v1/governance":                     {class: classSecurity},
 	"POST /api/v1/governance/profiles":           {class: classSecurity},
 	"PUT /api/v1/governance/profiles/{id}":       {class: classSecurity},
 	"DELETE /api/v1/governance/profiles/{id}":    {class: classSecurity},
 	"POST /api/v1/governance/assignments":        {class: classSecurity},
 	"DELETE /api/v1/governance/assignments/{id}": {class: classSecurity},
+	"POST /api/v1/governance/preview":            {class: classSecurity},
+	// Directory autocomplete (§I) — classSecurity, and the contrast with the
+	// four classAdmin /access routes above is the whole tier argument in one
+	// pair: those decide who DERIVES admin, this one only READS the directory
+	// so the security admin authoring an assignment can pick the group instead
+	// of hand-typing its object GUID. Gated at all (not on r) because it
+	// discloses org structure — names, emails, group membership — to whoever
+	// can call it. Registered unconditionally, so an unwired connector answers
+	// 503 here rather than disappearing from this walk.
+	"GET /api/v1/access/directory/search": {class: classSecurity},
 
 	// ── member (any authenticated human/token; internally scoped where the
 	// handler itself narrows the response — see the classMember doc) ──
@@ -683,12 +700,12 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	}
 
 	// The split itself, pinned as a number: §B decided 14 SEC of the 40 gated
-	// routes, plus /governance's 6 (new in 0.7, outside that count) = 20, and
-	// 26 SUPER. A route silently reclassified in the table above would still
-	// pass every probe — it would just be enforcing the WRONG tier, exactly the
-	// drift the per-route loop cannot see.
-	if sec != 20 || super != 26 {
-		t.Errorf("tier split = %d security / %d admin, want 20 / 26 (§B's 14 SEC + governance's 6, and 26 SUPER)", sec, super)
+	// routes, plus /governance's 7 and §I's directory search (all new in 0.7,
+	// outside that count) = 22, and 26 SUPER. A route silently reclassified in
+	// the table above would still pass every probe — it would just be enforcing
+	// the WRONG tier, exactly the drift the per-route loop cannot see.
+	if sec != 22 || super != 26 {
+		t.Errorf("tier split = %d security / %d admin, want 22 / 26 (§B's 14 SEC + governance's 7 + §I's directory search, and 26 SUPER)", sec, super)
 	}
 }
 

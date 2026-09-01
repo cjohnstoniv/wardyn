@@ -5,11 +5,17 @@
 // egress proxy's policy guard (internal/egress/proxy) and the composer transport
 // guard (internal/composer/backends/transport). MEMBERSHIP ONLY, by design: each
 // consumer keeps its own predicate around it because their semantics
-// deliberately differ — the proxy unconditionally denies loopback/link-local,
-// while the transport must keep loopback denied under its operator-only
-// allowPrivate escape hatch. Both reach for net.IP's own predicates first; this
-// package carries only what the stdlib does not (netip.Addr.IsPrivate covers
-// RFC1918 and the IPv6 ULA range, so those are NOT re-listed here).
+// deliberately differ. This package carries only what the stdlib does not
+// (netip.Addr.IsPrivate covers RFC1918 and the IPv6 ULA range, so those are NOT
+// re-listed in ReservedV4 — they ARE re-listed in Liftable, which is a different
+// job; see there).
+//
+// An earlier version of this comment described an "allowPrivate escape hatch"
+// belonging to the AI Run Composer's transport. That package was deleted, and
+// the stale sentence went on to cost a later design round a wrong conclusion —
+// it read as "no operator override exists", when the real override is
+// SiteConfig.InternalHosts (see Liftable below). Naming a dead consumer is
+// worse than naming none.
 package ipguard
 
 import (

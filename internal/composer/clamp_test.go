@@ -601,6 +601,65 @@ func TestClamp_AllowedMethods(t *testing.T) {
 	}
 }
 
+// TestClamp_UIApps is PF-17: ui_apps was the one RunPolicySpec field with a
+// WIDENING direction that Clamp did not touch at all — a member's inline_policy
+// could declare any (name, port) pair and the UI gateway would relay that
+// loopback port to a browser.
+//
+// It takes allowed_methods' CEILING asymmetry (set ⇒ bound, silent ⇒ leave) and
+// deliberately not its ADOPT half, which is what the last case pins: an empty
+// ui_apps means "this run has no UI apps", the narrowest state there is, so
+// adopting the ceiling's list would have the clamp hand out relay access nobody
+// asked for.
+func TestClamp_UIApps(t *testing.T) {
+	code := types.UIApp{Name: "code", Port: 8080}
+	ceiling := operatorCeiling(t)
+	ceiling.UIApps = []types.UIApp{code}
+
+	// A proposal naming the ceiling's app survives, path and all.
+	got, warns := Clamp(types.RunPolicySpec{UIApps: []types.UIApp{{Name: "code", Port: 8080, Path: "/ide"}}}, ceiling)
+	if len(got.UIApps) != 1 || got.UIApps[0].Path != "/ide" {
+		t.Errorf("ui_apps = %+v, want the ceiling-declared app kept with its own landing path", got.UIApps)
+	}
+	if hasWarn(warns, "ui_app") {
+		t.Errorf("unexpected ui_apps warning for an in-ceiling app: %v", warns)
+	}
+
+	// An app the ceiling never declared is dropped...
+	got, warns = Clamp(types.RunPolicySpec{UIApps: []types.UIApp{code, {Name: "shell", Port: 9999}}}, ceiling)
+	if len(got.UIApps) != 1 || got.UIApps[0].Name != "code" {
+		t.Errorf("ui_apps = %+v, want only the ceiling's app", got.UIApps)
+	}
+	if !hasWarn(warns, "dropped 1 ui_app") {
+		t.Errorf("expected a dropped-ui_app warning, got %v", warns)
+	}
+
+	// ...and so is the ceiling's own NAME pointed at a different port. Matching on
+	// the name alone would let a proposal borrow a blessed app's name and have the
+	// gateway relay any port in the sandbox — the widening this clamp exists for.
+	got, _ = Clamp(types.RunPolicySpec{UIApps: []types.UIApp{{Name: "code", Port: 9999}}}, ceiling)
+	if len(got.UIApps) != 0 {
+		t.Errorf("ui_apps = %+v — a ceiling app's NAME on a different port was relayed", got.UIApps)
+	}
+
+	// A SILENT ceiling is no opinion: the proposal is left exactly as authored, so
+	// a profile that says nothing about ui_apps does not break every run that
+	// declares one (the DefaultPolicy-ceiling member, i.e. every member today).
+	got, warns = Clamp(types.RunPolicySpec{UIApps: []types.UIApp{{Name: "shell", Port: 9999}}}, operatorCeiling(t))
+	if len(got.UIApps) != 1 || got.UIApps[0].Name != "shell" {
+		t.Errorf("ui_apps = %+v, want untouched under a ceiling with no opinion", got.UIApps)
+	}
+	if hasWarn(warns, "ui_app") {
+		t.Errorf("unexpected ui_apps warning with no ceiling opinion: %v", warns)
+	}
+
+	// An EMPTY proposal never adopts — the anti-case that separates this field
+	// from allowed_methods above.
+	if got, _ = Clamp(types.RunPolicySpec{}, ceiling); len(got.UIApps) != 0 {
+		t.Errorf("ui_apps = %+v — an empty proposal ADOPTED the ceiling's apps; empty means `no UI apps`, not `all of them`", got.UIApps)
+	}
+}
+
 // TestClamp_Resources is HIGH-2: each field caps at the ceiling's when the
 // ceiling sets one; an unset (<=0) proposed field is the PERMISSIVE state here
 // (filled in by the driver's own default later) and is capped down exactly like

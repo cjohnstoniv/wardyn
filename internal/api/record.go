@@ -312,6 +312,14 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 	if lerr != nil {
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
 			"run.record.start", id.String(), "failure", mustJSON(map[string]any{"task": key, "detail": lerr.Error()})))
+		// An unresolvable ceiling is a 403 naming its remedy, not a 500 —
+		// writeCeilingError is the ONE mapping, so this lane cannot answer
+		// differently from run-create for the same cause. Everything else keeps
+		// today's 500.
+		if errors.Is(lerr, errGroupsSnapshotStale) {
+			writeCeilingError(w, lerr)
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "launch record run: "+lerr.Error())
 		return
 	}
@@ -449,7 +457,7 @@ func (s *Server) workspaceModelProviderHosts(ctx context.Context, ws types.Works
 	if region == "" {
 		return nil
 	}
-	return []string{bedrockRuntimeHost(region), bedrockControlHost(region)}
+	return []string{s.bedrockDataPlaneHost(region), bedrockControlHost(region)}
 }
 
 // promotableHosts is every host a recording could ever offer up: observed

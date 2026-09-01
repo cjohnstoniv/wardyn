@@ -169,7 +169,7 @@ func (s *Server) sshServerConfig(signer ssh.Signer) *ssh.ServerConfig {
 
 // sshGatewayHealthz is /healthz's "ssh" field: nil (disabled) or the pane's
 // three discovery facts (enabled, advertise_addr, host_key_fingerprint) — see
-// server.go's handleHealthz.
+// healthz.go's handleHealthz.
 func (s *Server) sshGatewayHealthz() map[string]any {
 	if s.cfg.SSHListenAddr == "" || len(s.cfg.SSHHostKey) == 0 {
 		return nil

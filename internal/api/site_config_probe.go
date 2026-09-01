@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -207,9 +209,63 @@ fi
 //     an HTTP error (rather than refusing the connection outright) is not
 //     mistaken for a bypass.
 //  3. From correctly failed: the redirect is enforced end to end (reached).
-const redirectProbeScript = `curl -sS -f -o /dev/null --connect-timeout 5 --max-time 15 "$WARDYN_PROBE_TO_URL" || exit $?
+//
+// PROBE 1 HAS TWO SHAPES, and the second is why WARDYN_PROBE_TO_CONNECT exists.
+// A private-endpoint To is a LITERAL IP whose TLS certificate is scoped to the
+// PUBLIC (From) hostname -- that is the normal, correct shape of a VPC
+// endpoint, not a misconfiguration. Curling the IP directly presents the IP as
+// SNI and fails certificate verification (curl 60), so the probe reported a
+// CORRECT configuration as broken: a false negative whose verdict actively
+// discourages the one setup this feature exists for. When the caller supplies
+// WARDYN_PROBE_TO_CONNECT, probe 1 instead requests the FROM url with curl's
+// --connect-to, which dials the To address while keeping the From hostname for
+// SNI, Host and certificate validation -- exactly what the data path does, and
+// what the proxy sees is still CONNECT <to-address> (--connect-to instructs the
+// proxy too), so the policy leg of the test is unchanged. Empty (a hostname
+// To) leaves probe 1 byte-identical to before.
+//
+// Both sentinels keep their meaning: 250 is still probe 2's explicit bypass
+// exit (redirectProbeBypassCode) and 251 stays reserved for the proxy probe
+// (proxyProbeInterceptedCode); probe 1 still propagates curl's own code.
+const redirectProbeScript = `to() { curl -sS -f -o /dev/null --connect-timeout 5 --max-time 15 "$@"; }
+if [ -n "$WARDYN_PROBE_TO_CONNECT" ]; then
+  to --connect-to "$WARDYN_PROBE_TO_CONNECT" "$WARDYN_PROBE_TO_URL" || exit $?
+else
+  to "$WARDYN_PROBE_TO_URL" || exit $?
+fi
 curl -sS -f -o /dev/null --connect-timeout 5 --max-time 15 --noproxy '*' "$WARDYN_PROBE_FROM_URL" && exit 250
 exit 0`
+
+// redirectProbeTo decides HOW probe 1 dials this redirect: the URL to request
+// and the optional --connect-to swap (see redirectProbeScript).
+//
+// A hostname To keeps today's behavior exactly -- request To's own URL, no
+// swap. A LITERAL-IP To is dialed at that address while presenting From's
+// hostname, because that is the shape a private endpoint actually has and the
+// shape the data path already dials. The swap needs From's own authority to be
+// usable, so it is skipped when From has no host, and PORT1 is read off the URL
+// curl will actually request (not assumed 443) -- --connect-to only fires when
+// PORT1 matches, so an http:// From would otherwise silently fall back to
+// dialing the public host and report a false "blocked".
+func redirectProbeTo(red types.EgressRedirect, toHost, fromHost string) (toURL, connectTo string) {
+	toURL = probeTargetURL(red.To)
+	if fromHost == "" || net.ParseIP(toHost) == nil {
+		return toURL, ""
+	}
+	fromURL := probeTargetURL(red.From)
+	u, err := url.Parse(fromURL)
+	if err != nil || u.Hostname() == "" {
+		return toURL, ""
+	}
+	fromPort := u.Port()
+	if fromPort == "" {
+		fromPort = "443"
+		if u.Scheme == "http" {
+			fromPort = "80"
+		}
+	}
+	return fromURL, fmt.Sprintf("%s:%s:%s:%d", u.Hostname(), fromPort, toHost, redirectPort(red.To))
+}
 
 // curlExitDetail maps curl's own stable, documented exit codes to a SPECIFIC,
 // real cause -- never a generic "probe failed" string. Only the codes a
@@ -791,11 +847,13 @@ func (s *Server) handleTestSiteConfigRedirect(w http.ResponseWriter, r *http.Req
 
 	toHost := hostrules.HostOf(red.To)
 	fromHost := hostrules.HostOf(red.From)
+	toURL, connectTo := redirectProbeTo(red, toHost, fromHost)
 	actor := principalFromRequest(r)
 	runID, res, perr := s.runSiteConfigProbe(ctx, actor, redirectProbeScript,
 		[]string{toHost}, nil, map[string]string{
-			"WARDYN_PROBE_TO_URL":   probeTargetURL(red.To),
-			"WARDYN_PROBE_FROM_URL": probeTargetURL(red.From),
+			"WARDYN_PROBE_TO_URL":     toURL,
+			"WARDYN_PROBE_TO_CONNECT": connectTo,
+			"WARDYN_PROBE_FROM_URL":   probeTargetURL(red.From),
 		})
 	if perr != nil {
 		if errors.Is(perr, errProbeNoRunner) {
