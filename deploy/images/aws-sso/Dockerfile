@@ -125,6 +125,19 @@ RUN if [ -f /corp-ca/corp-ca.pem ]; then \
         cp /corp-ca/corp-ca.pem /usr/local/share/ca-certificates/corp-ca.crt && \
         update-ca-certificates; \
     fi
+# Point the AWS CLI at the OS trust store. It ships its OWN Python and its OWN
+# bundled CA store, so the update-ca-certificates above — and every var the
+# siblings set (NODE_EXTRA_CA_CERTS et al) — is invisible to it; this is the
+# one image whose entire purpose is the AWS CLI. Value is the OS bundle that
+# update-ca-certificates just refreshed to INCLUDE the staged corp CA, not
+# corp-ca.pem alone: AWS_CA_BUNDLE REPLACES the trust store rather than adding
+# to it, so the bare corp CA here would make the CLI distrust every public root.
+# A Dockerfile ENV cannot sit inside the RUN conditional above, and setting it
+# unconditionally is correct anyway — on a non-corp build the OS bundle is
+# simply the public roots, so the CLI behaves exactly as it did before.
+# (Runtime is separate and additive: dispatch sets AWS_CA_BUNDLE per run when
+# TLS is intercepted — installSandboxTrustedCA, internal/api/runs_dispatch_llm.go.)
+ENV AWS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 ARG HTTP_PROXY=
 ARG HTTPS_PROXY=
 ARG NO_PROXY=

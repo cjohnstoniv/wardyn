@@ -288,17 +288,49 @@ func (s *Server) provisionDispatchMITMCA(ctx context.Context, run types.AgentRun
 	// CA files live under /tmp/wardyn (any-uid-writable, works for images with
 	// arbitrary USER/HOME — the old /home/agent/.wardyn pin dangled for
 	// envbuilder/BYOI images whose HOME differs; precedent: mainProcCastDir).
-	// NODE_EXTRA_CA_CERTS is ADDITIVE (Node keeps its bundled roots), so it
-	// points at the bare CA. Everything OpenSSL-shaped REPLACES its trust store
-	// via these vars, so they point at the COMBINED bundle (system roots + the
-	// per-run CA) that install_mitm_ca/agentIdleScript assemble — the bare CA
-	// there would break verification of non-MITM'd CONNECT-tunneled hosts.
-	// JVM (keystore) and Deno (DENO_CERT) are documented as not covered.
-	sandboxEnv["NODE_EXTRA_CA_CERTS"] = "/tmp/wardyn/mitm-ca.pem"
-	sandboxEnv["SSL_CERT_FILE"] = "/tmp/wardyn/ca-bundle.pem"
-	sandboxEnv["REQUESTS_CA_BUNDLE"] = "/tmp/wardyn/ca-bundle.pem"
-	sandboxEnv["CURL_CA_BUNDLE"] = "/tmp/wardyn/ca-bundle.pem"
+	// WHICH variables, and why their values differ, is sandboxCATrustVars'
+	// business — this run's own CA is authoritative here, so nothing is spared.
+	setSandboxCATrustVars(sandboxEnv, false)
 	return certPEM, keyPEM, true
+}
+
+// sandboxCATrustVars is THE list of CA-trust variables a sandbox's toolchains
+// read, and the single place any of them is named. It exists because this list
+// was duplicated across the two callers here and drifted: AWS_CA_BUNDLE was
+// added to one and missed on the other, which left the sandbox's AWS CLI
+// distrusting Wardyn's OWN per-run interception CA on the Bedrock lane the
+// product drives itself. One list, two callers, nothing to keep in sync.
+//
+// "Install the CA" is one action PER TOOLCHAIN, and the values are not
+// interchangeable. NODE_EXTRA_CA_CERTS is ADDITIVE (Node keeps its bundled
+// roots) so it takes the BARE CA. Every other variable REPLACES its trust
+// store outright, so each takes the COMBINED bundle (system roots + the
+// per-run CA) that install_mitm_ca/agentIdleScript assemble — the bare CA
+// there would break verification of every non-MITM'd CONNECT-tunneled host.
+// AWS CLI v2 needs its own entry because it ships its own Python and its own
+// CA store and reads none of the other four. The JVM keystore and Deno's
+// DENO_CERT are covered by no variable at all and are documented as not
+// covered (deploy/images/README.md).
+func sandboxCATrustVars() map[string]string {
+	return map[string]string{
+		"NODE_EXTRA_CA_CERTS": "/tmp/wardyn/mitm-ca.pem",
+		"SSL_CERT_FILE":       "/tmp/wardyn/ca-bundle.pem",
+		"REQUESTS_CA_BUNDLE":  "/tmp/wardyn/ca-bundle.pem",
+		"CURL_CA_BUNDLE":      "/tmp/wardyn/ca-bundle.pem",
+		"AWS_CA_BUNDLE":       "/tmp/wardyn/ca-bundle.pem",
+	}
+}
+
+// setSandboxCATrustVars writes that list into sandboxEnv. onlyIfUnset leaves
+// any value already staged alone, which is what the corporate-CA append needs:
+// a MITM'd run's own /tmp/wardyn paths must never be clobbered.
+func setSandboxCATrustVars(sandboxEnv map[string]string, onlyIfUnset bool) {
+	for k, v := range sandboxCATrustVars() {
+		if onlyIfUnset && sandboxEnv[k] != "" {
+			continue
+		}
+		sandboxEnv[k] = v
+	}
 }
 
 // installSandboxTrustedCA appends the operator's corporate PEM
@@ -315,10 +347,16 @@ func (s *Server) provisionDispatchMITMCA(ctx context.Context, run types.AgentRun
 // here is additive to whatever provisionDispatchMITMCA staged for this run's
 // OWN per-run interception CA. On a run with NO Wardyn-side MITM (that block
 // above never ran), WARDYN_MITM_CA_PEM would otherwise be entirely absent and
-// install_mitm_ca would no-op, so this also SEEDS it plus the four bundle
-// vars OpenSSL-shaped clients need — but only when provisionDispatchMITMCA
+// install_mitm_ca would no-op, so this also SEEDS it plus the five bundle
+// vars the sandbox's toolchains need — but only when provisionDispatchMITMCA
 // has not already set them, so a MITM'd run's own /tmp/wardyn paths are never
 // touched here.
+//
+// FIVE, not four: "install the CA" is one action PER TOOLCHAIN, and AWS CLI v2
+// ships its OWN Python and its OWN CA store — it reads none of the other four.
+// Without AWS_CA_BUNDLE a MITM'd Bedrock/STS call still fails, in a lane the
+// product drives itself. deploy/images/README.md carries the per-toolchain
+// table; the JVM keystore is addressed by no variable at all.
 func installSandboxTrustedCA(corpPEM string, sandboxEnv map[string]string) {
 	if corpPEM == "" {
 		return
@@ -328,18 +366,7 @@ func installSandboxTrustedCA(corpPEM string, sandboxEnv map[string]string) {
 	} else {
 		sandboxEnv["WARDYN_MITM_CA_PEM"] = corpPEM
 	}
-	if sandboxEnv["NODE_EXTRA_CA_CERTS"] == "" {
-		sandboxEnv["NODE_EXTRA_CA_CERTS"] = "/tmp/wardyn/mitm-ca.pem"
-	}
-	if sandboxEnv["SSL_CERT_FILE"] == "" {
-		sandboxEnv["SSL_CERT_FILE"] = "/tmp/wardyn/ca-bundle.pem"
-	}
-	if sandboxEnv["REQUESTS_CA_BUNDLE"] == "" {
-		sandboxEnv["REQUESTS_CA_BUNDLE"] = "/tmp/wardyn/ca-bundle.pem"
-	}
-	if sandboxEnv["CURL_CA_BUNDLE"] == "" {
-		sandboxEnv["CURL_CA_BUNDLE"] = "/tmp/wardyn/ca-bundle.pem"
-	}
+	setSandboxCATrustVars(sandboxEnv, true)
 }
 
 // authorSubscriptionInjection authors the subscription/managed proxy-side

@@ -223,7 +223,7 @@ var curlExitDetail = map[int]string{
 	35: "TLS handshake failed",
 	52: "empty reply from the server",
 	56: "connection reset while receiving data",
-	60: "TLS certificate verification failed",
+	60: "TLS certificate verification failed — the host answered, but this client does not trust the CA that signed its certificate; on a TLS-intercepting corporate network point WARDYN_TRUSTED_CA_FILE at the middlebox CA bundle",
 }
 
 // curlFailureDetail reports the REAL, specific reason a probe curl failed.
