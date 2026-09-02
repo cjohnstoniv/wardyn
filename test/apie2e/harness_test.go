@@ -48,6 +48,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
+	"github.com/cjohnstoniv/wardyn/internal/identity/identitytest"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -367,7 +368,7 @@ func newHarness(t *testing.T, opts harnessOpts) *harness {
 	// control-plane audit events are queryable through GET /api/v1/audit.
 	rec := store.Recorder{Pool: pool}
 
-	idp, err := embedded.New(nil, trustDomain, embedded.NewMemRevocationStore(), rec)
+	idp, err := embedded.New(nil, trustDomain, identitytest.NewMemRevocationStore(), rec)
 	if err != nil {
 		t.Fatalf("embedded.New: %v", err)
 	}

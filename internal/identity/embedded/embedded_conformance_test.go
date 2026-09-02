@@ -20,7 +20,7 @@ func (noopRecorder) Record(context.Context, types.AuditEvent) error { return nil
 // The blessed default (embedded) must pass the shared identity conformance suite.
 func TestEmbedded_Conformance(t *testing.T) {
 	identitytest.RunConformance(t, func(t *testing.T) identity.Provider {
-		p, err := embedded.New(nil, "wardyn.local", embedded.NewMemRevocationStore(), noopRecorder{})
+		p, err := embedded.New(nil, "wardyn.local", identitytest.NewMemRevocationStore(), noopRecorder{})
 		if err != nil {
 			t.Fatalf("embedded.New: %v", err)
 		}

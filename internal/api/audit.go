@@ -20,6 +20,56 @@ import (
 // reads in bounded slices so a quarter of history is never buffered whole.
 const auditExportPageSize = 1000
 
+// auditScope resolves the run scope BOTH audit reads share and applies the
+// member gate identically to each. It returns (scope, ok): ok==false means the
+// response is already decided and the handler must simply return — either
+// auditScope wrote the 400 for a malformed run_id, or the caller's own
+// writeEmpty ran for the member collapse. scope is nil for the global feed and
+// &runID for one run's trail.
+//
+// The ORDER here is load-bearing and is the one both handlers spelled: the
+// run_id is parsed BEFORE the role is consulted, so a malformed run_id is a 400
+// regardless of who asks (an input-shape error, never an authz one).
+//
+// Members are then scoped to ?run_id= of a run THEY created (item 2). No
+// run_id, a well-formed but unowned run_id, and an unknown run_id ALL collapse
+// to the SAME empty success — /audit is a collection endpoint, so the
+// no-existence-oracle property here is an empty 200, never the 404 the
+// single-resource /runs/{id} routes use. writeEmpty is what "empty" looks like
+// in each caller's media type (a JSON [] for the query, a zero-line NDJSON body
+// for the export) and is the ONLY thing the two gates ever differed on.
+//
+// isSecurityOperator, not isOperator: reading the org-wide audit log (and
+// verifying its hash chain) is the security admin's job description — a tier
+// that governs approvals and permissions without being able to read what
+// happened is not a security tier at all.
+func (s *Server) auditScope(w http.ResponseWriter, r *http.Request, writeEmpty func()) (*uuid.UUID, bool) {
+	raw := r.URL.Query().Get("run_id")
+	var runID uuid.UUID
+	if raw != "" {
+		var err error
+		if runID, err = uuid.Parse(raw); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid run_id")
+			return nil, false
+		}
+	}
+	if !s.isSecurityOperator(r.Context()) {
+		owned := raw != ""
+		if owned {
+			run, gerr := s.cfg.Store.GetRun(r.Context(), runID)
+			owned = gerr == nil && run.CreatedBy == principalFromRequest(r)
+		}
+		if !owned {
+			writeEmpty()
+			return nil, false
+		}
+	}
+	if raw == "" {
+		return nil, true
+	}
+	return &runID, true
+}
+
 // handleQueryAudit returns audit events. The append-only audit log is the
 // system of record and is never gated. With no run_id it returns the global
 // SIEM-style feed (newest first across all runs) that the Audit view renders;
@@ -54,76 +104,43 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	raw := r.URL.Query().Get("run_id")
-	// Parsed once, up front, and shared by both the member gate below and the
-	// per-run branch further down — a malformed run_id 400s regardless of role
-	// (an input-shape error, never an authz one).
-	var runID uuid.UUID
-	if raw != "" {
-		var err error
-		if runID, err = uuid.Parse(raw); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid run_id")
-			return
-		}
-	}
-	// isSecurityOperator, not isOperator: reading the org-wide audit log (and
-	// verifying its hash chain) is the security admin's job description — a
-	// tier that governs approvals and permissions without being able to read
-	// what happened is not a security tier at all.
-	if !s.isSecurityOperator(r.Context()) {
-		// Members: audit is scoped to ?run_id= of a run THEY created (item 2). No
-		// run_id, or a well-formed but unowned/unknown run_id, all collapse to
-		// the SAME empty result — /audit is a collection endpoint, so the
-		// no-existence-oracle property here is an empty 200 list, never the 404
-		// the single-resource /runs/{id} routes use.
-		owned := raw != ""
-		if owned {
-			run, gerr := s.cfg.Store.GetRun(r.Context(), runID)
-			owned = gerr == nil && run.CreatedBy == principalFromRequest(r)
-		}
-		if !owned {
-			writeJSON(w, http.StatusOK, []types.AuditEvent{})
-			return
-		}
-	}
-	if raw == "" {
-		page, ok := parseListPage(w, r, auditGlobalDefaultLimit)
-		if !ok {
-			return
-		}
-		var pageFn func(store.Page) ([]types.AuditEvent, error)
-		if pager != nil {
-			pageFn = func(p store.Page) ([]types.AuditEvent, error) {
-				if filter.IsZero() {
-					return pager.QueryRecentAuditEventsPage(r.Context(), p)
-				}
-				return pager.QueryAuditEventsFilteredPage(r.Context(), nil, filter, p)
-			}
-		}
-		// The fetch-all fallback MUST apply the same predicate: filtering only on
-		// the pager path would answer a filtered request with unfiltered events.
-		servePage(w, page, pageFn, func() ([]types.AuditEvent, error) {
-			all, err := s.cfg.Store.QueryRecentAuditEvents(r.Context(), 0)
-			return filter.Keep(all), err
-		})
+	scope, ok := s.auditScope(w, r, func() { writeJSON(w, http.StatusOK, []types.AuditEvent{}) })
+	if !ok {
 		return
 	}
-	// runID was already parsed (and validated) above.
-	page, ok := parseListPage(w, r, auditPerRunDefaultLimit)
+	// The historical caps differ by shape: a run's whole trail is worth more
+	// rows than the org-wide feed's first screen.
+	limit := auditGlobalDefaultLimit
+	if scope != nil {
+		limit = auditPerRunDefaultLimit
+	}
+	page, ok := parseListPage(w, r, limit)
 	if !ok {
 		return
 	}
 	var pageFn func(store.Page) ([]types.AuditEvent, error)
 	if pager != nil {
 		pageFn = func(p store.Page) ([]types.AuditEvent, error) {
-			if filter.IsZero() {
-				return pager.QueryAuditEventsPage(r.Context(), runID, p)
+			switch {
+			case !filter.IsZero():
+				// One filtered query serves both shapes: scope is exactly the
+				// nil/&runID this argument already took.
+				return pager.QueryAuditEventsFilteredPage(r.Context(), scope, filter, p)
+			case scope == nil:
+				return pager.QueryRecentAuditEventsPage(r.Context(), p)
+			default:
+				return pager.QueryAuditEventsPage(r.Context(), *scope, p)
 			}
-			return pager.QueryAuditEventsFilteredPage(r.Context(), &runID, filter, p)
 		}
 	}
+	// The fetch-all fallback MUST apply the same predicate: filtering only on
+	// the pager path would answer a filtered request with unfiltered events.
 	servePage(w, page, pageFn, func() ([]types.AuditEvent, error) {
-		all, err := s.cfg.Store.QueryAuditEvents(r.Context(), runID, 0)
+		if scope == nil {
+			all, err := s.cfg.Store.QueryRecentAuditEvents(r.Context(), 0)
+			return filter.Keep(all), err
+		}
+		all, err := s.cfg.Store.QueryAuditEvents(r.Context(), *scope, 0)
 		return filter.Keep(all), err
 	})
 }
@@ -154,34 +171,11 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	raw := r.URL.Query().Get("run_id")
-	var runID uuid.UUID
-	if raw != "" {
-		var err error
-		if runID, err = uuid.Parse(raw); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid run_id")
-			return
-		}
-	}
-	// isSecurityOperator, not isOperator — same reason as handleQueryAudit
-	// above; the export must not be a narrower view of the same log than the
-	// query is, or the tier's evidence stops at the screen.
-	if !s.isSecurityOperator(r.Context()) {
-		owned := raw != ""
-		if owned {
-			run, gerr := s.cfg.Store.GetRun(r.Context(), runID)
-			owned = gerr == nil && run.CreatedBy == principalFromRequest(r)
-		}
-		if !owned {
-			// Empty export, no oracle: an unowned/absent run_id is a 200 with no
-			// lines, exactly as handleQueryAudit returns an empty list.
-			w.Header().Set("Content-Type", "application/x-ndjson")
-			return
-		}
-	}
-	var scope *uuid.UUID
-	if raw != "" {
-		scope = &runID
+	// Same gate as handleQueryAudit by construction, not by copy — see the
+	// member paragraph above, which auditScope is now the single home of.
+	scope, ok := s.auditScope(w, r, func() { w.Header().Set("Content-Type", "application/x-ndjson") })
+	if !ok {
+		return
 	}
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	enc := json.NewEncoder(w)

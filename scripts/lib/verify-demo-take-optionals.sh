@@ -2,14 +2,19 @@
 # Copyright 2025 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# The lettered optional sub-episodes' arms: 02b (desktop), 02c (cloud), 04b
-# (members), 04c (admin) and 12b (admin operations).
+# The lettered optional sub-episodes that still have NO lane: 02b (desktop) and
+# 04b (members). 02c, 04c and 12b shipped real arms of their own
+# (scripts/lib/verify-demo-take-{02c,04c,12b}.sh) and their stubs here died the
+# day those landed — this file sorts last in the caller's glob, the `declare -F`
+# guard below always saw the real definition first, and the stub could never be
+# reached again. Removed rather than left standing: a stub that cannot run reads
+# like a checked id that merely fails, which is the opposite of what it means.
 #
 # OUT OF LINE ON PURPOSE, like scripts/lib/verify-demo-take-03.sh:
-# scripts/verify-demo-take.sh sits a handful of lines under
-# scripts/check-file-size.sh's 1000-line threshold, so an inline arm breaks
-# `make lint`. Functions, never subshells — ok()/bad() increment counters in the
-# caller that must survive to the summary.
+# scripts/check-file-size.sh caps scripts/verify-demo-take.sh at 1000 lines and
+# it kept running into that, so an inline arm breaks `make lint`. Functions,
+# never subshells — ok()/bad() increment counters in the caller that must
+# survive to the summary.
 #
 # THESE STUBS FAIL BY DESIGN. Each episode's own lane (campaign §2 lanes 2.1-2.4)
 # replaces the body with rows read off the audit trail. Until then the arm exists
@@ -26,8 +31,8 @@ _vopt_stub() {
   head_ "Video ${id} · ${title}"
   work="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-${id}}"
   tl="${work}/narration.json"
-  # A terminal-lane optional (02c's console half aside, 12b's beats) has no
-  # browser timeline at all — same fallback the shared narration block makes.
+  # An optional filmed in the terminal lane has no browser timeline at all —
+  # same fallback the shared narration block makes.
   [[ -s "${tl}" ]] || tl="${work}/narration-terminal.json"
   if [[ -s "${tl}" ]]; then
     n=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("cues",[])))' "${tl}" 2>/dev/null || echo 0)
@@ -42,7 +47,4 @@ _vopt_stub() {
 # A lane's own scripts/lib/verify-demo-take-<id>.sh wins, whatever the glob order:
 # this file sorts last, so an unconditional definition here would shadow it.
 declare -F check_video_02b >/dev/null || check_video_02b() { _vopt_stub 02b "the desktop deck (desktop)"; }
-declare -F check_video_02c >/dev/null || check_video_02c() { _vopt_stub 02c "one command to a cluster (cloud)"; }
 declare -F check_video_04b >/dev/null || check_video_04b() { _vopt_stub 04b "a member's own workspace (members)"; }
-declare -F check_video_04c >/dev/null || check_video_04c() { _vopt_stub 04c "permissions — who may do what (admin)"; }
-declare -F check_video_12b >/dev/null || check_video_12b() { _vopt_stub 12b "admin operations (admin)"; }

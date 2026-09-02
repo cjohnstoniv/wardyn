@@ -19,6 +19,62 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// boundMemberSpec is THE member bounding pipeline — the three stages that turn
+// a spec a member chose into one an admin authorized, in the one order that is
+// correct:
+//
+//  1. composer.Clamp against the member's ceiling. It bounds egress,
+//     confinement and TTL and drops grant KINDS outside the ceiling, but NOT a
+//     stored-secret grant's SCOPE (which operator secret is paired with which
+//     host) — that stays member-authored, and on its own would be a
+//     secret-exfil primitive. Hence stage 2.
+//  2. filterMemberGrants drops any api_key/git_pat/ssh_key grant whose pairing
+//     the operator did not eligible-list. The run's own model-access grant is
+//     re-added at launch by foldRunIntegration (an operator integration) or
+//     applyWorkspaceRequirements (a workspace requirement).
+//  3. narrowMemberInlinePolicy bounds what survived to what THIS member
+//     personally holds: stage 1 is the OPERATOR's deployment-wide ceiling,
+//     stage 3 is this member's own capability grants. A pairing clears BOTH.
+//
+// Every drop is AUDITED, not merely warned: a warning alone left an operator
+// unable to tell that a member had tried to pair one of their secrets with a
+// host of the member's own choosing (the gap ROADMAP names). dryRun suppresses
+// that write for the same reason it suppresses policy.inline (see below).
+//
+// It is ONE function because the inline branch and the stored branch must bound
+// identically: "member-selected content is bounded by the member's ceiling
+// whether it arrived as a body or as a row id" (PF-1) is only true while both
+// run THIS, and two hand-copied pipelines could drift into a member smuggling
+// through one what the other refuses.
+//
+// errPrefix is the ONLY thing the two callers differ on, and it stays theirs —
+// naming the wrong input back at the caller is a worse error message, not a
+// smaller one. Returns ok==false when the response is already written.
+func (s *Server) boundMemberSpec(ctx context.Context, w http.ResponseWriter, r *http.Request, spec, ceilingSpec types.RunPolicySpec, errPrefix string, dryRun bool) (types.RunPolicySpec, []string, bool) {
+	spec, warns := composer.Clamp(spec, ceilingSpec)
+	kept, grantWarns, code, gerr := s.filterMemberGrants(ctx, s.secretOwnerFromRequest(r), spec.AllowedDomains, spec.EligibleGrants)
+	if gerr != nil {
+		writeError(w, code, errPrefix+gerr.Error())
+		return types.RunPolicySpec{}, nil, false
+	}
+	spec.EligibleGrants = kept
+	warns = append(warns, grantWarns...)
+	drops := make([]capDrop, 0, len(grantWarns))
+	for _, gw := range grantWarns {
+		drops = append(drops, capDrop{reason: "grant_pairing_not_eligible", detail: gw})
+	}
+	capWarns, capDrops, cerr := s.narrowMemberInlinePolicy(ctx, s.secretOwnerFromRequest(r), &spec)
+	if cerr != nil {
+		writeError(w, http.StatusInternalServerError, "resolve capability: "+cerr.Error())
+		return types.RunPolicySpec{}, nil, false
+	}
+	warns = append(warns, capWarns...)
+	if !dryRun {
+		s.auditMemberPolicyDrops(ctx, r, append(drops, capDrops...))
+	}
+	return spec, warns, true
+}
+
 // resolveRunPolicy resolves the RunPolicySpec + policy id to attach to a run,
 // from the create-run request. It is the inline-policy-aware replacement for the
 // bare resolvePolicy call: it owns the XOR check, the inline validation, and the
@@ -107,54 +163,18 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 			// egress/confinement than THEIR ceiling allows — the governance
 			// profile an admin assigned them, or Config.DefaultPolicy when
 			// nobody assigned one.
-			// Clamped BEFORE validation/resolution — never the fully-resolved
+			// Bounded BEFORE validation/resolution — never the fully-resolved
 			// spec, which would strip the LATER admin-authored additions
 			// (workspace integration binding, ensureLLMGrant,
 			// applyRequiredSecretGrant, applyIntegrationRequirement) folded in
 			// by runs.go/preflight.go AFTER this function returns.
-			var clamped []string
-			spec, clamped = composer.Clamp(spec, ceiling.Spec)
-			clampWarnings = append(clampWarnings, clamped...)
-			// composer.Clamp bounds egress/confinement/TTL and drops grant KINDS
-			// outside the ceiling, but NOT a stored-secret grant's SCOPE (which
-			// operator secret is paired with which host) — that stays member-
-			// authored and would be a secret-exfil primitive. Drop a member's
-			// api_key/git_pat/ssh_key grant whose pairing the operator did not
-			// eligible-list; the run's own model-access grant is re-added at
-			// launch by foldRunIntegration (an operator integration) or
-			// applyWorkspaceRequirements (a workspace requirement) below. See
-			// filterMemberGrants.
-			kept, grantWarns, code, gerr := s.filterMemberGrants(ctx, s.secretOwnerFromRequest(r), spec.AllowedDomains, spec.EligibleGrants)
-			if gerr != nil {
-				writeError(w, code, "invalid inline_policy: "+gerr.Error())
+			var warns []string
+			var bounded bool
+			spec, warns, bounded = s.boundMemberSpec(ctx, w, r, spec, ceiling.Spec, "invalid inline_policy: ", dryRun)
+			if !bounded {
 				return types.RunPolicySpec{}, nil, nil, false
 			}
-			spec.EligibleGrants = kept
-			clampWarnings = append(clampWarnings, grantWarns...)
-			// Every one of those drops is now AUDITED as well. It used to be a
-			// warning and nothing else, so an operator reading the stream could
-			// not tell that a member had tried to pair one of their secrets with
-			// a host of the member's own choosing (the gap ROADMAP names).
-			drops := make([]capDrop, 0, len(grantWarns))
-			for _, gw := range grantWarns {
-				drops = append(drops, capDrop{reason: "grant_pairing_not_eligible", detail: gw})
-			}
-			// 0.6 capabilities: the clamp above bounds the member to the
-			// OPERATOR's ceiling; this bounds what survived it to what THIS
-			// member personally holds.
-			capWarns, capDrops, cerr := s.narrowMemberInlinePolicy(ctx, s.secretOwnerFromRequest(r), &spec)
-			if cerr != nil {
-				writeError(w, http.StatusInternalServerError, "resolve capability: "+cerr.Error())
-				return types.RunPolicySpec{}, nil, nil, false
-			}
-			clampWarnings = append(clampWarnings, capWarns...)
-			// Skipped for a dry run for the SAME reason policy.inline is (see
-			// the doc comment): Review re-resolves on every edit, and a stream
-			// of denials for a policy nobody launched is indistinguishable from
-			// denials that actually bounded a run.
-			if !dryRun {
-				s.auditMemberPolicyDrops(ctx, r, append(drops, capDrops...))
-			}
+			clampWarnings = append(clampWarnings, warns...)
 		}
 		if err := validatePolicySpec(spec); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid inline_policy: "+err.Error())
@@ -225,29 +245,13 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	// "one rule whether body or row id" claim would be false at exactly the
 	// grant-bearing rows, which are the ones that matter.
 	if policyID != nil && ceiling.Profile != nil && !s.isOperator(r.Context()) {
-		var clamped []string
-		spec, clamped = composer.Clamp(spec, ceiling.Spec)
-		storedWarns = append(storedWarns, clamped...)
-		kept, grantWarns, code, gerr := s.filterMemberGrants(ctx, s.secretOwnerFromRequest(r), spec.AllowedDomains, spec.EligibleGrants)
-		if gerr != nil {
-			writeError(w, code, "invalid policy: "+gerr.Error())
+		var warns []string
+		var bounded bool
+		spec, warns, bounded = s.boundMemberSpec(ctx, w, r, spec, ceiling.Spec, "invalid policy: ", dryRun)
+		if !bounded {
 			return types.RunPolicySpec{}, nil, nil, false
 		}
-		spec.EligibleGrants = kept
-		storedWarns = append(storedWarns, grantWarns...)
-		drops := make([]capDrop, 0, len(grantWarns))
-		for _, gw := range grantWarns {
-			drops = append(drops, capDrop{reason: "grant_pairing_not_eligible", detail: gw})
-		}
-		capWarns, capDrops, nerr := s.narrowMemberInlinePolicy(ctx, s.secretOwnerFromRequest(r), &spec)
-		if nerr != nil {
-			writeError(w, http.StatusInternalServerError, "resolve capability: "+nerr.Error())
-			return types.RunPolicySpec{}, nil, nil, false
-		}
-		storedWarns = append(storedWarns, capWarns...)
-		if !dryRun {
-			s.auditMemberPolicyDrops(ctx, r, append(drops, capDrops...))
-		}
+		storedWarns = append(storedWarns, warns...)
 	}
 	if code, err := s.validateInlineSecretRefs(ctx, s.secretOwnerFromRequest(r), spec); err != nil {
 		writeError(w, code, "invalid policy: "+err.Error())

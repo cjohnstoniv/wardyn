@@ -440,3 +440,33 @@ func TestSecretCountCap(t *testing.T) {
 		}
 	})
 }
+
+// TestReservedSecret_HarnessBlobSealedByPattern pins the reason the managed
+// harness blob no longer needs a static reservedSecretNames row: reservedSecret's
+// wardyn-harness-<provider>-oauth PATTERN already covers it. The literal name is
+// spelled out on purpose — the entry it replaces was a literal, and this must
+// fail if the pattern is ever narrowed, independently of the harness catalog.
+func TestReservedSecret_HarnessBlobSealedByPattern(t *testing.T) {
+	const blob = "wardyn-harness-anthropic-oauth"
+	if reservedSecretNames[blob] {
+		t.Fatalf("%s is back in the static set — this test is meant to prove the PATTERN seals it", blob)
+	}
+	if blob != harnessCredSecretName("anthropic") {
+		t.Fatalf("harnessCredSecretName(\"anthropic\") = %q, want %q", harnessCredSecretName("anthropic"), blob)
+	}
+	// All three guards that build on reservedSecret must still refuse it: the
+	// generic secrets API (Put/Delete/List), the credential sinks, and the
+	// cross-package platform check cmd/wardynd asserts through.
+	if !reservedSecret(blob) {
+		t.Errorf("reservedSecret(%q) = false — the generic secrets API would list and clobber the managed OAuth blob", blob)
+	}
+	if !secretsAPIReserved(blob) {
+		t.Errorf("secretsAPIReserved(%q) = false", blob)
+	}
+	if !sinkReservedSecret(blob) {
+		t.Errorf("sinkReservedSecret(%q) = false — an api_key grant naming it would resolve the raw blob", blob)
+	}
+	if !ReservedPlatformSecret(blob) {
+		t.Errorf("ReservedPlatformSecret(%q) = false", blob)
+	}
+}

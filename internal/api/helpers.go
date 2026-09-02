@@ -301,14 +301,34 @@ func (s *Server) getRunOr404(w http.ResponseWriter, r *http.Request, id uuid.UUI
 // isSecurityOperator, not isOperator: KILLING a foreign run is incident
 // response, the security admin's most time-critical act, and inspecting the run
 // behind an approval or an audit line is the evidence a decision rests on.
+// INSPECT-OR-STOP is the whole of that arm's warrant — run_files, run_resources,
+// grants, kill, the approval/audit evidence reads.
 //
-// The ONE route under this predicate that is not merely inspect-or-stop is the
-// attach-ticket mint, which hands out an interactive shell in a foreign
-// sandbox — so handleAttachTicket carries its OWN explicit strict re-check
-// against isOperator (attach_ticket.go). That guard is load-bearing, not
-// belt-and-braces: without it this one-word change silently grants a PTY.
+// THE SPLIT, named once: two routes sit under the same owner-or-admin shape and
+// are NOT inspect-or-stop, so neither may use this predicate —
+//
+//   - the attach-ticket mint, which hands out an interactive shell in a foreign
+//     sandbox: handleAttachTicket carries its OWN explicit strict re-check
+//     against isOperator (attach_ticket.go). That guard is load-bearing, not
+//     belt-and-braces: without it this one-word change silently grants a PTY.
+//   - POST /runs/{id}/attach/takeover, which ENDS another human's live terminal
+//     and frees the writer slot on a sandbox holding that run's injected
+//     credentials: it authorizes on ownsRunOrSuperAdmin below.
 func (s *Server) ownsRunOrAdmin(r *http.Request, run types.AgentRun) bool {
 	return s.isSecurityOperator(r.Context()) || run.CreatedBy == principalFromRequest(r)
+}
+
+// ownsRunOrSuperAdmin is ownsRunOrAdmin's strict twin: the run's owner, or a
+// SUPER admin (isOperator) — never a security_admin.
+//
+// It exists for the one route that WRITES into a live PTY rather than reading or
+// stopping it (handleAttachTakeover). The security tier is refused an attach
+// ticket (attach_ticket.go), refused the cookie attach lane (ticketOrHumanAuth →
+// requireOperator) and stamped `member` on its SSH keys (sshkeys.go), so a tier
+// that can reach no terminal on a foreign run must not be able to END one on it
+// either: a take-over is a kick, and a kick is a write.
+func (s *Server) ownsRunOrSuperAdmin(r *http.Request, run types.AgentRun) bool {
+	return s.isOperator(r.Context()) || run.CreatedBy == principalFromRequest(r)
 }
 
 // getRunAuthorized loads a run and authorizes the caller as its owner or an
@@ -320,11 +340,22 @@ func (s *Server) ownsRunOrAdmin(r *http.Request, run types.AgentRun) bool {
 // oracle distinguishing "not yours" from "does not exist". Callers must return
 // immediately when ok is false.
 func (s *Server) getRunAuthorized(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.AgentRun, bool) {
+	return s.getRunAuthorizedBy(w, r, id, s.ownsRunOrAdmin)
+}
+
+// getRunAuthorizedBy is getRunAuthorized with the authorization PREDICATE
+// supplied, so the stricter take-over gate (ownsRunOrSuperAdmin) refuses through
+// the IDENTICAL response shape — the byte-identical 404 and the one not_owner
+// audit — instead of growing a second, subtly different denial path beside it.
+// Only the predicate differs between the two; everything a prober can observe is
+// the same.
+func (s *Server) getRunAuthorizedBy(w http.ResponseWriter, r *http.Request, id uuid.UUID,
+	allow func(*http.Request, types.AgentRun) bool) (types.AgentRun, bool) {
 	run, ok := s.getRunOr404(w, r, id)
 	if !ok {
 		return types.AgentRun{}, false
 	}
-	if s.ownsRunOrAdmin(r, run) {
+	if allow(r, run) {
 		return run, true
 	}
 	writeError(w, http.StatusNotFound, "run not found")

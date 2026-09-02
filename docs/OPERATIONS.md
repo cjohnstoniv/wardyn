@@ -116,6 +116,25 @@ in `TestPG_AuditAppendOnly_TriggerRejects` (`internal/store/store_pg_test.go`),
 so an operator with direct database access cannot rewrite or silently thin the
 trail through Wardyn's own schema.
 
+**Those triggers are re-checked on every boot**, because `schema_migrations`
+records a *filename*: once a migration has run, an owner who later `DROP`s or
+`DISABLE`s one of its triggers leaves a database every later start reports as
+fully migrated. `Migrate` now reads `pg_trigger` after the migration loop
+(`ensureAuditTriggers`, `internal/db/db.go`). A missing or disabled **hash-chain**
+trigger is RESTORED — its migrations are idempotent and replayable, and the boot
+log says so at ERROR, because rows written while it was gone are unchained and
+the verify sweep will name them. A missing or disabled **append-only** trigger
+makes `wardynd` REFUSE TO START: restoring it means replaying the initial schema,
+which is a far bigger blast radius than stopping and telling you. Either way the
+process no longer continues silently on a table whose guards are gone.
+
+A trigger you have hardened with `ALTER TABLE … ENABLE ALWAYS TRIGGER`
+(`tgenabled='A'`, so it fires even under `session_replication_role = replica` —
+the bypass the sweep otherwise only catches after the fact) is left **exactly as
+it is**: the boot check counts `'A'` as firing, never re-creates it as plain
+`'O'`, and never refuses over it. `'D'` (disabled) and `'R'` (replica-only, which
+does not fire for ordinary writes) are correctly read as not in force.
+
 Completeness survives an outage too. When a Postgres write fails, the event is
 not dropped: it is fsync'd, one JSON line at a time, to a local append-only spool
 (`WARDYN_AUDIT_SPOOL`, default `./data/audit-spool.jsonl`, empty to disable —
@@ -124,12 +143,64 @@ once the store recovers. The spool is per-process by design: the fallback for on
 pod's failed write, each `wardynd` draining its own back on recovery (see
 [One replica, by construction](#one-replica-by-construction)).
 
+**One line the store will never accept does not wedge the rest.** A rejection
+that cannot resolve — a `CHECK` violation, a payload a column type refuses, a
+hand-edited line, an event shape from another binary version — used to sit at the
+head of the spool and stop every event behind it from ever replaying, with no
+signal but a `wardyn_audit_spool_lines` gauge that stopped falling. After three
+consecutive rejections of the same line the drain now tries the lines *behind*
+it, and **only if the store accepts one** (proving it is up, and that the problem
+is that line) moves the rejected line to `<spool>.quarantine` — fsync'd there
+before it leaves the spool, verbatim, so the file is a valid JSONL spool you can
+move back onto the spool path once the cause is fixed. A store that is simply
+down accepts nothing, so nothing is ever quarantined during an outage. Each move
+logs at ERROR with the event's id and action and increments
+`wardyn_audit_spool_quarantined_total`: alert on it, because a spool that has
+drained back to 0 no longer implies the queryable trail is complete.
+
+**Two limits of that rule, stated.** First, the probe needs a line BEHIND the
+suspect to land, so two or more *adjacent* unacceptable lines still wedge — the
+second rejection in a pass is read as "the store is down", which is the right
+reading for every other cause of two rejections in a row and the price of never
+quarantining during an outage. A run like that is exactly what "an event shape
+from another binary version" produces. It is not silent: the held-back line is
+logged at WARN by event id every tick, which reads differently from the
+drain-deferred line an outage produces, and the spool gauge stays flat. With the
+store demonstrably up and that WARN repeating, triage the spool by hand — move
+the head lines to `<spool>.quarantine` yourself and let the rest drain.
+
+Second, one drain pass is deadline-bounded (15s, half the tick). The spool lock
+is held across the store call, so a call that never returns would otherwise stall
+every request whose own audit write falls back to the spool — reachable without
+any Wardyn bug since the chain trigger began taking the serializing lock: an
+external session that inserted into `audit_events` and left its transaction open
+holds it. A pass that times out replays nothing, counts nothing against any line
+(a store that never answered has rejected nothing), and retries on the next tick.
+
 ### The hash chain — what a rewritten row looks like
 
 The triggers above stop `UPDATE`/`DELETE`/`TRUNCATE` *through Wardyn's schema*,
 and the role split hardens that against the app role. Neither binds a **table
 owner or superuser**, who can `ALTER TABLE … DISABLE TRIGGER` and rewrite a row —
-the residual `0007_audit_least_privilege.sql` states plainly. Migration
+the residual `0007_audit_least_privilege.sql` states plainly. The role-split check
+that reports this posture at boot (`AuditDDLProtected`) counts THREE ways to
+bypass, not two: superuser, membership in the owner role, and the **`TRIGGER`
+privilege** on `audit_events`. The third is the quiet one — a role granted
+`TRIGGER` cannot drop the shipped guards, but it can add a BEFORE INSERT trigger
+of its own whose name sorts after `audit_events_chain` (same-event row triggers
+fire in name order) and overwrite `prev_hash`/`row_hash` on the way in, minting
+rows that hash to whatever it says while every shipped guard is still armed. So a
+deploy that grants `TRIGGER` back is reported as NOT protected.
+
+**The app role's grant set does not grow to keep the chain working.** `INSERT`
+and `SELECT` on `audit_events` is still the whole of it. The chain trigger
+allocates the row's `seq` itself (so position and chain link are one decision —
+see the serialization paragraph below), which is a privileged operation the
+identity default never was, so the trigger runs `SECURITY DEFINER` with a pinned
+`search_path` (`0057_audit_chain_security_definer.sql`): the sequence read
+happens as the *owner*, not as whoever inserted. Nothing is widened for the app
+role — a trigger function cannot be called directly — and a split-role deploy
+needs no new `GRANT`. Migration
 `0047_audit_hash_chain.sql` does not close that hole; it makes a single use of it
 **visible**. Every row written from `0047` onward carries two hex columns:
 
@@ -187,6 +258,27 @@ the fact by the same process that could have altered the rows prove nothing, and
 writing them would mean `UPDATE`-ing the append-only table. The chain starts at
 the first row inserted after the migration.
 
+**A hashless row is legacy only BELOW the chain.** `legacy` counts the unhashed
+PREFIX. A row with no `row_hash` that sits *after* the chain has started did not
+predate the migration — it was written with the chain trigger dropped, disabled,
+or bypassed — so the sweep reports it as the break, at its own `seq`, instead of
+counting it. Without that rule an actor who dropped the trigger could append rows
+the chain neither covered nor mentioned while `ok` stayed `true`. One blind spot
+remains, stated plainly: `seq` gaps *below* the first chained row (a rolled-back
+insert burns a `seq`) can still hold a hashless forgery that no rule here can
+tell from a legacy row — only your off-box copy can.
+
+**Every writer is serialized, including one that is not Wardyn.** The chain link
+and the row's `seq` are allocated together under one advisory lock held inside
+the insert trigger (`0056_audit_chain_serialize.sql`), so a direct `INSERT` from
+`psql`, a seed script or any future code path takes its place in line rather than
+reading the same head as a concurrent Wardyn write. Before that, two writers
+could chain to the same head and the sweep reported a **tamper that never
+happened** — permanently, per the latch above. The cost is honest: a session
+that holds a transaction open after inserting into `audit_events` blocks every
+other audit append until it commits or rolls back, so do not leave an interactive
+`psql` transaction sitting on that table.
+
 ### Retention, erasure and GDPR — a residual, not a solved problem
 
 The append-only guarantee above is unconditional: no time window, size cap, or
@@ -226,7 +318,10 @@ counter only moves on success — a dead store and an idle cluster otherwise scr
 identically: `wardyn_store_up` (1 when Postgres answers the same bounded ping
 `/readyz` makes) and `wardyn_audit_spool_lines` (audit events waiting in the local
 JSONL fallback spool — a value that never returns to 0 means the drain loop is not
-working). Scrape with any Prometheus `authorization` config carrying the admin
+working). Beside them, `wardyn_audit_spool_quarantined_total` counts events the
+store permanently refused and the drain moved aside (see the spool paragraph
+above): non-zero means the trail is missing those events even though the spool
+drained. Scrape with any Prometheus `authorization` config carrying the admin
 token. `/healthz` stays the liveness/component surface (identity, runner classes,
 eBPF ground-truth state); `/metrics` is the trend surface. Audit sinks
 (`WARDYN_AUDIT_SINKS`, [ENV.md](ENV.md)) are the event stream for SIEMs — metrics
@@ -851,11 +946,32 @@ carries no groups field at all and stays valid (no forced re-login); that state 
 reported distinctly as `groups_snapshot_stale` on `GET /me/capabilities`, because
 "can't tell yet" and "holds no groups" must not read the same.
 
-**Both of those cut the DENY direction too.** A group that fell off the 2048-byte
-cut — or a caller still holding a pre-0.6 cookie — has *none* of its rows
-evaluated, denies included, and with the kind unenforced that resolves as
-permitted. Signing in again fixes both. Where a deny has to bite regardless of
-session age or group count, write it against the **user** (either identity).
+**A DENY is never allowed to evaporate with the snapshot.** A group that fell off
+the 2048-byte cut — or a caller still holding a pre-0.6 cookie, or a pre-0.7 API
+token whose completeness was never recorded — has none of its group rows in the
+scan. For an ALLOW that costs the caller access, which is the safe direction. For
+a DENY it would hand back exactly what the row forbade, so the resolver
+(`capScan`, `internal/api/capabilities.go`) checks whether **any** group-subject
+deny row of that kind could cover the value, and refuses when one could — the
+same scoping the ceiling refusal gets: a deployment with no group deny rows
+behaves byte-for-byte as it did before. The refusal reads as an ordinary
+capability denial, with a server log line naming the unanswerable snapshot;
+signing in again (or re-minting the token) resolves it for good. Where a deny has
+to bite with no store read at all, write it against the **user** (either
+identity).
+
+**A third cause of a partial snapshot: the IdP's own overage.** Entra ID stops
+sending the `groups` (or `roles`) claim altogether once a human is in more groups
+than the token limit — **200** for a JWT, 150 for SAML — and sends a `_claim_names` /
+`_claim_sources` pointer to Microsoft Graph in its place. Wardyn does not
+dereference that pointer; it marks the snapshot **truncated** (`sessionGroups`,
+`internal/auth/oidc/derive.go`), which reads downstream exactly like a group that
+fell off the byte cap: the ceiling resolver treats it as unanswerable rather than
+as "asked, there were none". Without that, such a login would arrive
+complete-and-empty and quietly shed every group-tier grant and governance
+assignment. Where members legitimately sit in that many groups, prefer Entra App
+Roles (the much smaller `roles` claim) or user-subject grants — or configure the
+group claim to emit only the groups assigned to the application.
 
 **What a capability deliberately does not reach.** `always`-scope decisions stay
 operator-only even for a member granted the host — a grant must never promote a
@@ -1577,10 +1693,13 @@ git/PAT brokers alike), and shows in the audit trail as `rule_source:
 site-config:egress-redirect` rather than a generic policy allow. The trust comes
 from the exact allowlist entry the substitution writes, so it is scoped to those
 runs and to that address; a run the redirect does not cover is refused, and a
-`denied_domains` entry still wins. `test-redirect` understands the shape too: it
-dials the `to` address while presenting the `from` hostname for TLS, because a
-private endpoint's certificate names the public host — probing the address
-directly failed verification and reported a correct configuration as broken.
+`denied_domains` entry still wins. `test-redirect` understands the shape too
+(`redirectProbeTo`): it dials the `to` address while presenting the `from`
+hostname for TLS, because a private endpoint's certificate names the public host
+— probing the address directly failed verification and reported a correct
+configuration as broken. It speaks the protocol the stored `to` names, never the
+one `from` happens to be spelled with: only `to` knows whether the mirror serves
+TLS or cleartext on that port.
 
 ### Internal hosts
 
@@ -1866,7 +1985,7 @@ Both endpoints may also carry `warning` (below).
 |---|---|
 | 🟢 `reached` | The path works — proxy or mirror reachable, and for a redirect, the public host is correctly *blocked* when dialed directly. |
 | ⛔ `blocked` | Could not reach the proxy or the mirror. `detail` names the real cause — DNS failure, connection refused, TLS failure, timeout, or curl's own exit code — never a generic "failed". |
-| ⛔ `bypass` | **The one that looks fine but isn't.** The mirror answers, but the public host it's supposed to replace is *also* still reachable, directly, from a sandbox. The redirect is configured but not enforced: a run can silently pull from the internet instead of the mirror, and every other signal — the row is filled in, the mirror answers — looks exactly like a working redirect. `test-redirect` only. |
+| ⛔ `bypass` | **The one that looks fine but isn't.** The mirror answers, but the public host it's supposed to replace is *also* still reachable, directly, from a sandbox. The redirect is configured but not enforced: a run can silently pull from the internet instead of the mirror, and every other signal — the row is filled in, the mirror answers — looks exactly like a working redirect. "Reachable" means the public host **answered** — any HTTP status, a 403 included, or a TLS-level reply — not that the fetch succeeded: a host that answers `403` is one the confinement class did not block. `test-redirect` only. |
 | 🟡 `no_runner` | No runner is configured; there's nothing to launch a probe with. Not an error, and not a guess. |
 | 🟡 `not_run` | A runner IS configured, but the throwaway sandbox never got to running the probe — an image pull failure, or a confinement class this host can't enforce. Distinct from `blocked`: `blocked` means the probe DID run and observed a real network fact; `not_run` means nothing was learned either way. Setup's gate treats it the same as `no_runner` (unlocks Next with a neutral note, never a click-past). |
 | 🟡 `timed_out` | The probe sandbox started and the task launched, but the run never reported completion within the wait budget (90s) — provably **not** a network verdict, unlike `blocked`. `detail` names the sandbox agent's own observed status at the deadline and `WARDYN_CONTROL_PLANE_URL` to check. Usual cause: the run's recording upload hanging against an unreachable control plane — see "Recording upload path on Kubernetes" below. |
@@ -2252,7 +2371,10 @@ What it adds is three corrections to the compose recipe:
   persistence on sweeps the spool up too — neither needs restoring. Derived by
   design (`internal/api/auditspool.go`): the fallback for a failed Postgres write,
   draining back into the database. Postgres remains the source of truth for the
-  audit log on both substrates.
+  audit log on both substrates. The one file beside it that is NOT derived is
+  `<spool>.quarantine`: it holds events the store permanently refused, which are
+  by definition absent from the database, so keep it until you have re-fed or
+  triaged its lines.
 
 ### Restore: rehearse into a scratch database first
 

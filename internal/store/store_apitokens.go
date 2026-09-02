@@ -47,7 +47,7 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 	const q = `
 		INSERT INTO api_tokens (id, principal, email, role, groups, groups_truncated, name, token_sha256, created_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-		RETURNING id, principal, email, role, groups, groups_truncated, name, created_at, last_used_at, revoked_at`
+		RETURNING ` + apiTokenCols
 	out, err := scanAPIToken(s.Pool.QueryRow(ctx, q,
 		t.ID, t.Principal, t.Email, t.Role, groups, t.GroupsTruncated, t.Name, hashToken(raw), t.CreatedAt))
 	if err != nil {
@@ -71,7 +71,7 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 // an oracle for "this token used to exist".
 func (s PG) GetAPITokenByRaw(ctx context.Context, raw string) (types.APIToken, error) {
 	const q = `
-		SELECT id, principal, email, role, groups, groups_truncated, name, created_at, last_used_at, revoked_at
+		SELECT ` + apiTokenCols + `
 		FROM api_tokens WHERE token_sha256 = $1 AND revoked_at IS NULL`
 	return scanAPIToken(s.Pool.QueryRow(ctx, q, hashToken(raw)))
 }
@@ -98,7 +98,7 @@ func (s PG) TouchAPIToken(ctx context.Context, id uuid.UUID, now time.Time) erro
 // usable credential either way.
 func (s PG) ListAPITokensByPrincipal(ctx context.Context, principal string) ([]types.APIToken, error) {
 	const q = `
-		SELECT id, principal, email, role, groups, groups_truncated, name, created_at, last_used_at, revoked_at
+		SELECT ` + apiTokenCols + `
 		FROM api_tokens WHERE principal = $1 ORDER BY created_at DESC`
 	return queryAPITokens(ctx, s, q, principal)
 }
@@ -108,7 +108,7 @@ func (s PG) ListAPITokensByPrincipal(ctx context.Context, principal string) ([]t
 // self-service list.
 func (s PG) ListAPITokens(ctx context.Context) ([]types.APIToken, error) {
 	const q = `
-		SELECT id, principal, email, role, groups, groups_truncated, name, created_at, last_used_at, revoked_at
+		SELECT ` + apiTokenCols + `
 		FROM api_tokens ORDER BY created_at DESC`
 	return queryAPITokens(ctx, s, q)
 }
@@ -126,28 +126,16 @@ func (s PG) RevokeAPIToken(ctx context.Context, id uuid.UUID, principal string, 
 	const q = `
 		UPDATE api_tokens SET revoked_at = $2
 		WHERE id = $1 AND revoked_at IS NULL AND ($3 = '' OR principal = $3)
-		RETURNING id, principal, email, role, groups, groups_truncated, name, created_at, last_used_at, revoked_at`
+		RETURNING ` + apiTokenCols
 	return scanAPIToken(s.Pool.QueryRow(ctx, q, id, now, principal))
 }
 
+// queryAPITokens is the two token lists' shared read. collect (pagination.go)
+// already generalises the rows loop, INCLUDING the "empty, never nil" contract
+// this hand-rolled version re-derived with its own `out := []types.APIToken{}`
+// — the API renders these as `[]`, never `null`.
 func queryAPITokens(ctx context.Context, s PG, q string, args ...any) ([]types.APIToken, error) {
-	rows, err := s.Pool.Query(ctx, q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("store: list api tokens: %w", err)
-	}
-	defer rows.Close()
-	out := []types.APIToken{}
-	for rows.Next() {
-		t, err := scanAPIToken(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, t)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: list api tokens: %w", err)
-	}
-	return out, nil
+	return collect(ctx, s.Pool, "list", "api tokens", q, args, scanAPIToken)
 }
 
 // marshalGroups encodes the session's group snapshot for the nullable JSONB
@@ -165,6 +153,13 @@ func marshalGroups(groups []string) (any, error) {
 	}
 	return b, nil
 }
+
+// apiTokenCols is THE api_tokens READ column list, in scanAPIToken's order
+// (five pasted sites). The INSERT list stays spelled out on purpose: it names
+// token_sha256, which no read ever selects (the hash never leaves the row),
+// and omits last_used_at / revoked_at, which no insert sets. Those lists
+// differ in BOTH directions, so deriving one from the other would hide that.
+const apiTokenCols = `id, principal, email, role, groups, groups_truncated, name, created_at, last_used_at, revoked_at`
 
 func scanAPIToken(row pgx.Row) (types.APIToken, error) {
 	var t types.APIToken

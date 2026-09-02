@@ -35,14 +35,16 @@ func EncodeRawSessionForTest(a *Authenticator, payload []byte) *http.Cookie {
 // dedupe / sort / byte-cap rules can be pinned directly, without driving a
 // signed ID token through the whole callback once per case.
 func SessionGroupsForTest(rolesClaim, groupsClaim []string) []string {
-	g, _ := sessionGroups(rolesClaim, groupsClaim)
+	g, _ := sessionGroups(rolesClaim, groupsClaim, nil)
 	return g
 }
 
 // SessionGroupsTruncatedForTest exposes sessionGroups' PF-26 truncation bit —
 // the half that is an authorization input rather than a normalization result.
-func SessionGroupsTruncatedForTest(rolesClaim, groupsClaim []string) bool {
-	_, truncated := sessionGroups(rolesClaim, groupsClaim)
+// claimNames is the token's `_claim_names` object (nil for the byte-cap cases),
+// so the IdP-side overage rule pins without a signed token too.
+func SessionGroupsTruncatedForTest(rolesClaim, groupsClaim []string, claimNames map[string]any) bool {
+	_, truncated := sessionGroups(rolesClaim, groupsClaim, claimNames)
 	return truncated
 }
 

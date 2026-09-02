@@ -188,3 +188,31 @@ env_set() {
     printf '%s=%s\n' "${_es_key}" "${_es_val}" >> "${_es_file}"
   fi
 }
+
+# wardyn_ffmpeg — the ONE ffmpeg the demo pipeline uses, printed on stdout.
+# Returns 1 (printing nothing) when none is installed; each caller decides
+# whether that is fatal, exactly as its own copy did.
+#
+#   WARDYN_DEMO_FFMPEG  ->  ffmpeg.exe on PATH  ->  winget's Gyan.FFmpeg
+#
+# gdigrab is a Windows capture device, so the recorder needs the WINDOWS build,
+# and winget's Gyan.FFmpeg is a zip package: it appends to the WINDOWS PATH,
+# which a WSL shell only inherits at startup — so a freshly-installed ffmpeg
+# stays invisible here until you open a new shell. Resolve it directly rather
+# than making that the operator's problem. WARDYN_DEMO_FFMPEG overrides
+# everything; it is how a Linux ffmpeg is pressed into service on nights when
+# the ffmpeg.exe interop socket is flapping.
+#
+# record-demo.sh, verify-demo-take.sh and take-chain.sh each carried their own
+# copy of this ladder and verify's had DRIFTED: it ignored WARDYN_DEMO_FFMPEG
+# outright, so the override that ENCODED a take was not the binary that then
+# probed the artifact for its audio track and resolution.
+wardyn_ffmpeg() {
+  if [ -n "${WARDYN_DEMO_FFMPEG:-}" ]; then printf '%s' "${WARDYN_DEMO_FFMPEG}"; return 0; fi
+  if command -v ffmpeg.exe >/dev/null 2>&1; then command -v ffmpeg.exe; return 0; fi
+  local p
+  for p in /mnt/c/Users/*/AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg_*/ffmpeg-*/bin/ffmpeg.exe; do
+    [ -f "${p}" ] && { printf '%s' "${p}"; return 0; }
+  done
+  return 1
+}

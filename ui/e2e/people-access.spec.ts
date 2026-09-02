@@ -42,7 +42,6 @@ function baseAccessBody(over: Record<string, unknown> = {}) {
     operator_emails: null,
     allow_email_mappings: false,
     email_domains_configured: false,
-    issuer: "https://login.microsoftonline.com/tenant/v2.0",
     provider: "Microsoft Entra ID",
     posture: { map_empty: true, before: "an admin", after: "be denied", changes: true },
     ...over,

@@ -5,7 +5,8 @@
 # H-6): a take that dies mid-episode still leaves a narration.json, just a
 # short one — before these, a died-early 02/05/07 take could verify green on
 # the shared gates alone. Floors ~85% of the spec's static caption+act count
-# (02: 116, 05: 45, 07: 75 on 2026-08-24); recalibrate against the first real
+# (02: 120, 05: 51, 07: 70 after the 2026-09-01 dialog round, which deleted,
+# folded and split captions in all three); recalibrate against the first real
 # rehearsal the way the 03 arms were.
 _vfloor_cues() {
   local tl n
@@ -18,6 +19,6 @@ _vfloor_cues() {
     bad "no narration timeline at ${tl}"
   fi
 }
-check_video_floor_02() { head_ "Video 02"; _vfloor_cues 98; }
-check_video_floor_05() { head_ "Video 05"; _vfloor_cues 38; }
-check_video_floor_07() { head_ "Video 07"; _vfloor_cues 63; }
+check_video_floor_02() { head_ "Video 02"; _vfloor_cues 102; }
+check_video_floor_05() { head_ "Video 05"; _vfloor_cues 43; }
+check_video_floor_07() { head_ "Video 07"; _vfloor_cues 59; }

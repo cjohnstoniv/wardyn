@@ -301,3 +301,54 @@ func TestPG_DecideApprovalPersistsScope(t *testing.T) {
 		t.Fatalf("persisted decision_expires_at = %v, want %v", reread.DecisionExpiresAt, until.UTC())
 	}
 }
+
+// TestPG_EgressEditedAtMarksOnlyTheOperatorsListEdits pins the column the boot
+// heal reads, against the real statements. The Go-side fakes stamp it too, so
+// only a live server can prove the two agree — and getting it backwards is
+// silent both ways: stamping in AddWorkspaceEgressDecision makes the heal
+// suppress its own future re-applies, and NOT stamping in the PUTs re-opens the
+// resurrection of a host the operator removed (ReconcileWorkspaceEgressDecisions).
+func TestPG_EgressEditedAtMarksOnlyTheOperatorsListEdits(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	ws := newEgressWorkspace(t, pg, ctx)
+
+	if ws.EgressEditedAt != nil {
+		t.Fatalf("a fresh workspace claims an egress-list edit (%v) — NULL must mean 'never edited', or every pre-upgrade decision stops healing", ws.EgressEditedAt)
+	}
+
+	decided, err := pg.AddWorkspaceEgressDecision(ctx, ws.ID, "registry.npmjs.org", true, 64)
+	if err != nil {
+		t.Fatalf("approve always: %v", err)
+	}
+	if decided.EgressEditedAt != nil {
+		t.Errorf("a decision stamped egress_edited_at (%v) — a decision is not an operator override of itself", decided.EgressEditedAt)
+	}
+
+	edited, err := pg.SetWorkspaceApprovedEgress(ctx, ws.ID, nil)
+	if err != nil {
+		t.Fatalf("approved-egress PUT: %v", err)
+	}
+	if edited.EgressEditedAt == nil {
+		t.Fatal("the approved-egress PUT did not stamp egress_edited_at — the documented undo would be re-widened at the next boot")
+	}
+	first := *edited.EgressEditedAt
+
+	denied, err := pg.SetWorkspaceDeniedEgress(ctx, ws.ID, []string{"evil.example.com"})
+	if err != nil {
+		t.Fatalf("denied-egress PUT: %v", err)
+	}
+	if denied.EgressEditedAt == nil || denied.EgressEditedAt.Before(first) {
+		t.Errorf("the denied-egress PUT left the stamp at %v (was %v) — both operator PUTs move it forward", denied.EgressEditedAt, first)
+	}
+
+	// And a plain re-read carries it: this is the value the heal compares against.
+	got, err := pg.GetWorkspace(ctx, ws.ID)
+	if err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	if got.EgressEditedAt == nil || !got.EgressEditedAt.Equal(*denied.EgressEditedAt) {
+		t.Errorf("GetWorkspace returned egress_edited_at %v, want the written %v", got.EgressEditedAt, denied.EgressEditedAt)
+	}
+}

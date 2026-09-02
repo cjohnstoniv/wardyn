@@ -228,7 +228,7 @@ test("V07 beat 1 — an agent, and a hand on the wheel", async () => {
 
   // Agent task this time — and Interactive, which is the video.
   await act(page, page.getByRole("radio", { name: /Agent task/ }), "Agent task.");
-  await caption(page, "This is a Claude Code task.");
+  await caption(page, "This is a Claude Code task — Claude Code is the coding agent we'll be driving.");
   await beat(page, BEAT_SHORT);
   await act(page, page.getByRole("radio", { name: /^Interactive/ }), "Interactive.");
   await caption(page, "Interactive means the sandbox starts up and gives us a terminal.");
@@ -254,7 +254,7 @@ test("V07 beat 1 — an agent, and a hand on the wheel", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "And notice something important:");
   await beat(page, BEAT_SHORT);
-  await caption(page, "changing the mode doesn't change the blast radius.");
+  await caption(page, "changing the mode doesn't change what the run can reach or damage.");
   await beat(page, PACE.read);
   await caption(page, "The agent still gets the same workspace.");
   await beat(page, BEAT_SHORT + 400);
@@ -266,10 +266,10 @@ test("V07 beat 1 — an agent, and a hand on the wheel", async () => {
   // deny_with_review) — confined by construction, the same default the old
   // "Confined" radio asserted. Clicking the Minimal chip re-asserts it for
   // the camera in one click.
-  await act(page, page.getByRole("button", { name: "Minimal" }), "Confined.");
-  await caption(page, "And the network is still default-deny.");
+  await act(page, page.getByRole("button", { name: "Minimal" }), "Minimal — confined.");
+  await caption(page, "And the network is still default-deny — nothing out unless we list it.");
   await beat(page, PACE.read);
-  await caption(page, "The agent needs one model endpoint, so we'll allow one.");
+  await caption(page, "The agent needs to reach one address — its AI provider — so we'll allow exactly that one.");
   await beat(page, PACE.read);
   // DIALOG-STALE(old UI): "Add api.anthropic.com." narrated clicking the
   // deleted "Just the model provider" Network preset radio. The Minimal chip
@@ -350,29 +350,23 @@ test("V07 beat 3 — the decoy", async () => {
   // S3 hygiene: clear the sentinel-token ring HERE — left parked, it slices
   // the `cat` command line for the whole attacker-framing stretch below.
   await spotlight(page, null);
-  await caption(page, "So let's pretend we're the attacker.");
+  await caption(page, "So let's pretend we're the attacker: we compromise this container, find the credential, and steal it.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "We compromise this container.");
+  await caption(page, "What did we get? A decoy.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "We find the credential.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "And we steal it.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "What did we get?");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "A decoy.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "Anthropic has never seen it.");
+  await caption(page, "A value the provider never issued — later we'll try it from outside the sandbox and watch it rejected.");
   await beat(page, BEAT_SHORT);
   await caption(page, "The real credential stays outside the sandbox. The proxy attaches it at the boundary when it's needed.");
-  await beat(page, PACE.read);
-  await caption(page, "That means the proxy is also the point where the credential can be attached to the request.");
   await beat(page, PACE.read);
   await caption(page, "The sandbox never needs to hold the real key.");
   await beat(page, PACE.read);
   await caption(page, "And if an attacker wants the real one?");
   await beat(page, BEAT_SHORT);
-  await caption(page, "They have to get past the boundary itself.");
+  await caption(page, "They'd have to break out of the sandbox and into the proxy on the host — that's where the real key lives.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Or spend it from inside: against that one host, for this run, and no further.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "That's the limit — and the record shows every spend.");
   await beat(page, BEAT_SHORT);
   await caption(page, "That's why the barrier matters.");
   await beat(page, BEAT_SHORT + 400);
@@ -430,7 +424,7 @@ test("V07 beat 4 — drive the agent", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "The sandbox never held the key.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "That's the basic pattern. Now let's prove it with a secret of our own.");
+  await caption(page, "That's the basic pattern. Now watch the boundary catch something we didn't script — and see that same credential in the record.");
   await beat(page, BEAT_SHORT + 400);
 });
 
@@ -457,7 +451,7 @@ test("V07 beat 4b — the unscripted hold", async () => {
   await spotlight(page, telemetryRow);
   await caption(page, "And look at this.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "The tool just tried to contact another host.");
+  await caption(page, "We didn't script this: the tool just tried to contact another host on its own.");
   await beat(page, BEAT_SHORT);
   await caption(page, "It's not on our list.");
   await beat(page, BEAT_SHORT);
@@ -507,7 +501,7 @@ test("V07 beat 5 — on the record", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "Wardyn injected the credential at the boundary.");
   await beat(page, PACE.read);
-  await caption(page, "The sandbox isn't recorded as holding that credential — the real value never entered it.");
+  await caption(page, "The real value never entered the sandbox — and the record shows that.");
   await beat(page, PACE.read);
   await caption(page, "That's the distinction we're proving.");
   await beat(page, PACE.read + 400);

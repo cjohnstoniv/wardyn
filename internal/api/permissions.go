@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"unicode"
 
 	"github.com/google/uuid"
 
@@ -71,13 +72,13 @@ type grantWriteRequest struct {
 // this is the same cheap hygiene validateSiteConfig applies to URL/host
 // fields — not a full per-kind shape validator, which the plan leaves to the
 // closed kind set's own resolver-side matching (capValueMatches).
+//
+// unicode.IsControl covers C0 and DEL exactly as the hand-rolled loop did,
+// and ALSO the C1 range U+0080–U+009F — strictly tighter at every call site,
+// never looser. That is the stance repoFieldSafe already takes on C1
+// (repoclone_test.go rejects a NEL), so this brings the two into line.
 func controlCharFree(s string) bool {
-	for _, r := range s {
-		if r < 0x20 || r == 0x7f {
-			return false
-		}
-	}
-	return true
+	return !strings.ContainsFunc(s, unicode.IsControl)
 }
 
 // validateCapabilityGrant normalizes g in place (trims, lowercases the

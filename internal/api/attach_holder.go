@@ -25,6 +25,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -120,6 +121,49 @@ type attachHolder struct {
 // take-over and must stop writing AT EVICTION, not whenever its socket happens
 // to finish dying.
 func (h *attachHolder) canWrite() bool { return h != nil && !h.evicted.Load() }
+
+// attachWriteChunk bounds ONE Session.Write issued on a client's behalf, and so
+// is the granularity at which write authority is re-tested.
+//
+// THE BUG THIS BOUNDS: canWrite was read once per FRAME and the whole frame was
+// then handed to the sandbox. A web frame is one message up to attachReadLimit
+// (1 MiB — a paste, deliberately raised for exactly that), and the runner's
+// Write blocks under PTY back-pressure, so the window was "however long tmux
+// takes to drain the paste", not nanoseconds. A take-over decided and AUDITED
+// inside that window still had the displaced human's paste landing in the same
+// tmux session the new holder was told they own. 4 KiB is a pipe buffer's worth:
+// small enough that the residual after an eviction is one chunk, large enough
+// that a paste is not syscall-bound.
+const attachWriteChunk = 4 * 1024
+
+// writeGated writes p into sess in attachWriteChunk pieces, re-testing write
+// authority before EACH piece, and stops the instant this holder is evicted. It
+// is the ONE client->PTY write path both pumps use (attachPump and
+// sshShellPump), so the two transports sharing this registry cannot drift on the
+// gate the way their resize gates did.
+//
+// A nil holder is a read-only observer: nothing is written at all.
+//
+// CEILING: the chunk already handed to the sandbox cannot be recalled — a
+// take-over landing mid-chunk still delivers that chunk. Bounding the residual
+// to attachWriteChunk is the honest guarantee; making it exactly zero means
+// tearing the runner exec down at eviction (docker's hijacked write aborts on
+// Close), which also kills the displaced client's OUTPUT mid-frame.
+// ponytail: chunk loop, no queue and no writer goroutine — the upgrade path is
+// that exec teardown, if one chunk is ever one too many.
+func (h *attachHolder) writeGated(sess runner.Session, p []byte) error {
+	for len(p) > 0 {
+		if !h.canWrite() {
+			return nil // evicted, or an observer: drop the rest, server-side
+		}
+		n := min(len(p), attachWriteChunk)
+		if _, err := sess.Write(p[:n]); err != nil {
+			return err
+		}
+		p = p[n:]
+	}
+	return nil
+}
 
 func (h *attachHolder) setSize(cols, rows uint16) {
 	h.mu.Lock()
@@ -341,7 +385,12 @@ func (s *Server) handleAttachTakeover(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, ok := s.getRunAuthorized(w, r, id); !ok {
+	// ownsRunOrSuperAdmin, NOT ownsRunOrAdmin: this is the one /runs/{id} route
+	// that writes into a live sandbox instead of inspecting or stopping it, so
+	// the security tier — refused a ticket, refused the cookie attach lane,
+	// stamped `member` on its SSH keys — is refused here too, through the same
+	// byte-identical 404. See helpers.go's split.
+	if _, ok := s.getRunAuthorizedBy(w, r, id, s.ownsRunOrSuperAdmin); !ok {
 		return
 	}
 

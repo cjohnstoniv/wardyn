@@ -35,18 +35,16 @@ const secretsMaxPerOwner = 100
 
 // reservedSecretNames are platform-internal keys that must not be overwritten
 // or deleted through the API (they would brick identity/session handling), and
-// that the injection sink refuses to resolve as a stored value. The Wardyn-
-// managed harness OAuth blob lives here too: it is written/deleted ONLY via the
-// dedicated setup/harness-credential endpoints and injected ONLY via its
-// sentinel (types.ManagedOAuthSecret) through the managed provider — never as a
-// raw stored secret, and never listable/clobberable through the generic secrets
-// API. Keep in sync with harnessCredSecretName in harnesscred.go.
+// that the injection sink refuses to resolve as a stored value. Managed-harness
+// OAuth blobs are deliberately NOT listed: reservedSecret seals every name
+// harnessCredSecretName generates by PATTERN below (reservedSecret's own doc and
+// harnessCredSecretName in harnesscred.go carry that rationale), so there is no
+// list to keep in sync.
 var reservedSecretNames = map[string]bool{
-	"wardyn-signing-key":             true,
-	"wardyn-session-key":             true,
-	"wardyn-ssh-host-key":            true,
-	"wardyn-ui-session-key":          true,
-	"wardyn-harness-anthropic-oauth": true,
+	"wardyn-signing-key":    true,
+	"wardyn-session-key":    true,
+	"wardyn-ssh-host-key":   true,
+	"wardyn-ui-session-key": true,
 }
 
 // reservedSecret reports whether name is a platform-internal / managed-credential
@@ -124,14 +122,6 @@ func secretsAPIReserved(name string) bool {
 	return reservedSecret(name) || name == types.SubscriptionOAuthSecret || name == types.ManagedOAuthSecret
 }
 
-// identifierSecretNames hold non-credential IDENTIFIER values (not maskable
-// secret material) that are legitimately shorter than secretmask.MinLen — e.g.
-// a numeric GitHub App ID. They are exempt from the MinLen gate below; masking
-// a public app id would be meaningless, so silently dropping it is not a lie.
-var identifierSecretNames = map[string]bool{
-	"github-app-id": true,
-}
-
 type putSecretRequest struct {
 	Value string `json:"value"`
 }
@@ -190,9 +180,11 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 	// than secretmask.MinLen). Accepting it would falsely imply it gets masked and
 	// scanned; the operator must learn immediately instead. Reserved system keys
 	// (signing/session) never reach here — they are set internally, not via this
-	// user-facing Put, and are already rejected above. Identifier-style names
-	// (e.g. github-app-id, a short numeric App ID) are non-credential and exempt.
-	if !identifierSecretNames[name] && len(body.Value) < secretmask.MinLen {
+	// user-facing Put, and are already rejected above. secretGitHubAppID is the
+	// one EXEMPTION: a numeric GitHub App ID is a public identifier, not maskable
+	// credential material, so masking it would be meaningless and refusing it
+	// would break GitHub App setup via the wizard/CLI.
+	if name != secretGitHubAppID && len(body.Value) < secretmask.MinLen {
 		writeError(w, http.StatusBadRequest,
 			fmt.Sprintf("secret too short: must be at least %d bytes to be masked and scanned", secretmask.MinLen))
 		return

@@ -172,7 +172,7 @@ test("V03a act 2 — four ways the boundary holds", async () => {
   const page = stage();
 
   await chapter(page, "What it stops", "Every guardrail, proved on camera");
-  await caption(page, "Setup is one thing.");
+  await caption(page, "You've seen why.");
   await beat(page, BEAT_SHORT);
   await caption(page, "Now let's see the boundary actually work.");
   await beat(page, PACE.read);
@@ -186,12 +186,16 @@ test("V03a act 2 — four ways the boundary holds", async () => {
   await caption(page, "We'll walk the two boundaries around every run — where it can reach, and what it can hold.");
   await beat(page, PACE.read);
   // [OWNER SLOT — drafted]
-  await caption(page, "Start with the network. Four demos, each in its own sandbox — one for each thing that can happen to a host a run dials: denied, denied but it can ask, held for a decision, or walled off — somewhere nobody gets to say yes.");
+  await caption(page, "Start with the network. Four demos, each in its own sandbox — one for each thing that can happen when a run reaches for a website.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Denied. Denied, but it can ask. Held for a decision. Or walled off — somewhere nobody gets to say yes.");
   await beat(page, BEAT_SHORT);
   await caption(page, "And every decision is visible on screen.");
   await beat(page, PACE.read);
   // [OWNER SLOT — drafted]
-  await caption(page, "Everything here is typed by hand. Enforcement is at the proxy, outside the box — it sees the connection, not who opened it. An agent gets the same answers.");
+  await caption(page, "Everything here is typed by hand.");
+  await beat(page, PACE.read);
+  await caption(page, "Enforcement is at the proxy, outside the box: it sees the connection, not who opened it — so an agent gets the same answers; the optional detour shows one.");
   await beat(page, PACE.read);
 
   for (const demo of STOP_DEMOS) {
@@ -234,10 +238,10 @@ test("V03a act 2 — four ways the boundary holds", async () => {
     const policyCard = page.getByTestId(`demo-card-${demo.id}`);
     await policyCard.getByTestId(`demo-policy-${demo.id}`).scrollIntoViewIfNeeded().catch(() => {});
     if (demo.id === "sealed-box") {
-      await caption(page, "Before it runs, look at the policy — the whole contract for this run, four lines. You'll write one of these yourself in episode five; here, we're just reading.");
+      await caption(page, "Before it runs, look at the policy — the whole contract for this run, four lines. You'll write one yourself in 'Your first policy'; here, we're just reading.");
       await beat(page, PACE.read);
       await walkPolicyKey(page, policyCard, demo.id, "min_confinement_class",
-        "The barrier: Fence — the lightest of the three tiers from episode two; the policy calls it CC1. A container sharing your host's kernel, and everything you're about to see works on it, on purpose.");
+        "The barrier: Fence — the lightest tier from 'Set up the host'; the policy calls it CC1. A container sharing your host's kernel — and everything here works on it, on purpose.");
       await walkPolicyKey(page, policyCard, demo.id, "auto_stop_after_sec",
         "An idle stop: fifteen minutes with no terminal attached and no outbound call — local work doesn't keep it alive — and Wardyn tears the sandbox down, with the stop on the record. The number is yours to set.");
       await walkPolicyKey(page, policyCard, demo.id, "allowed_domains",
@@ -256,7 +260,7 @@ test("V03a act 2 — four ways the boundary holds", async () => {
       await walkPolicyKey(page, policyCard, demo.id, "allow_all_egress",
         "To reach for it, this policy throws the door open — allow all egress, switched on. Every public host is permitted, on purpose.",
         "And yet some destinations are still refused. The machine's own neighbors — the cloud metadata address, and every private, internal address — are refused underneath the policy: an allow-all switch never reaches them. And it's checked on where a name actually points, not on the name itself — so an ordinary-looking public address that secretly points inside your network is refused the same way.",
-        "The one exception is an address you wrote into the allowlist yourself — your own internal mirror, the way episode two's redirect does it. Never a wildcard, never an approval.",
+        "The one exception is an address you wrote into the allowlist yourself — your own internal mirror, like the redirect in 'Set up the host'. Never a wildcard, never an approval.",
         "Those are the lines that can't be crossed.");
     }
 
@@ -281,7 +285,7 @@ test("V03a act 2 — four ways the boundary holds", async () => {
       if (demo.approve && i === 1) {
         await decide(page, "Approve", "Approve it.", "example.com", demo.scope);
         if (demo.id === "fail-then-approve") {
-          await caption(page, "Now run the same command again.");
+          await caption(page, "Same command, second time — now that a person has decided.");
           await beat(page, BEAT_SHORT);
         }
       }
@@ -377,7 +381,7 @@ test("V03a act 2 — four ways the boundary holds", async () => {
       await beat(page, BEAT_SHORT);
       await caption(page, "And then there's the address you really don't want an arbitrary workload reaching:");
       await beat(page, PACE.read);
-      await caption(page, "the cloud metadata service.");
+      await caption(page, "the cloud metadata service — the address on screen, one-six-nine dot two-five-four.");
       await beat(page, BEAT_SHORT);
       await caption(page, "That's where a cloud machine's own credentials can live.");
       await beat(page, PACE.read);
@@ -398,11 +402,9 @@ test("V03a act 2 — four ways the boundary holds", async () => {
       );
       await centerInFrame(term);
       await spotlight(page, term);
-      await caption(page, "Here, the request doesn't even get a chance to connect.");
+      await caption(page, "Here, the request never leaves the machine's own neighborhood.");
       await beat(page, PACE.read);
-      await caption(page, "The proxy refuses it.");
-      await beat(page, BEAT_SHORT);
-      await caption(page, "The kernel has no route there either.");
+      await caption(page, "The proxy refuses it — and this policy has no 'ask' for it.");
       await beat(page, BEAT_SHORT);
       await spotlight(page, null);
 
@@ -473,7 +475,7 @@ test("V03a act 3 — a key of your own", async () => {
     DEMO_KEY_VALUE,
   );
   await spotlight(page, row);
-  await caption(page, "That's the last time anyone sees that value.");
+  await caption(page, "No screen, and no run, will show that value again.");
   await beat(page, PACE.read);
   await caption(page, "The two demos ahead use this key by name.");
   await beat(page, BEAT_SHORT);
@@ -519,7 +521,7 @@ test("V03a act 4 — write-only, proved from inside", async () => {
   // The policy is the sealed box again — and crucially, no eligible_grants. The
   // absence IS the point here, so ring the whole block rather than one line.
   await spotlight(page, card.getByTestId("demo-policy-write-only-by-design"));
-  await caption(page, "The policy is the same locked-down one as test one — empty allowlist, always deny — and there's no eligible grants section at all.");
+  await caption(page, "The policy is the same locked-down one as test one — no hosts allowed, always refuse. And it lists no secrets this run may use. None at all.");
   await beat(page, PACE.read);
   await caption(page, "Nothing was ever going to hand it our secret.");
   await beat(page, BEAT_SHORT);
@@ -565,10 +567,14 @@ test("V03a act 4 — write-only, proved from inside", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "Not 'forbidden'. Wardyn has no read-back route for that secret.");
   await beat(page, PACE.read);
-  await caption(page, "The run can't read it back — and neither can the operator through this store.");
+  await caption(page, "The run can't read it back.");
   await beat(page, PACE.read);
-  await caption(page, "Write-only isn't a permission you can escalate past. There simply isn't a read-back operation.");
+  await caption(page, "Neither can the operator — this store has no read-back route to call.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "Write-only isn't a permission you can escalate past — there is no read-back operation.");
   await beat(page, PACE.read + 400);
+  await caption(page, "What Wardyn can't promise: whoever owns the database owns the bytes.");
+  await beat(page, PACE.read);
   await spotlight(page, null);
   await act(page, card.getByRole("button", { name: "End demo" }));
 });
@@ -597,8 +603,14 @@ test("V03a act 5 — the key that never enters the box", async () => {
     "Not the secret itself. The value never appears in the policy, and never enters the box.",
     "And the breadth of that grant, plainly: for this run, anything in the box that dials that host gets the header. A capability as wide as the host you scoped it to — never the secret.");
   await caption(page,
-    "If something in this box is following instructions that aren't yours, this is what it buys: it can spend the key against that one host, for this one run. It can't take it, can't point it anywhere else, can't keep it. One host, one run — not one key, forever.");
+    "If something in this box is following instructions that aren't yours, this is what it buys:");
   await beat(page, PACE.read);
+  await caption(page, "it can spend the key against that one host, for this one run.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "It can't take it, can't point it anywhere else, can't keep it.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "One host, one run — not one key, forever.");
+  await beat(page, BEAT_SHORT);
   await spotlight(page, null);
 
   const screen = await startAndBoot(page, card, "key-never-in-the-box");
@@ -642,16 +654,16 @@ test("V03a act 5 — the key that never enters the box", async () => {
 
   await typeInTerminal(page, "curl -sSI http://example.com", card);
   await pollScreen(screen, /HTTP\/[\d.]+ 200/, "the allowed host never answered — expected a 200 through the proxy");
-  await caption(page, "And yet the request left with the credential attached.");
+  await caption(page, "And the request came back answered — but the reply alone can't tell us how.");
   await beat(page, PACE.read);
   await caption(
     page,
-    "The sandbox sent the request without the secret. The proxy attached the header before forwarding it.",
+    "The sandbox sent the request without the secret. On the way out, the proxy added the key to it — then forwarded it.",
   );
   await beat(page, PACE.read);
   await caption(
     page,
-    "The response can't prove where the credential came from. The audit record shows the proxy attached it.",
+    "The response can't prove where the credential came from. The record can — the row that says the proxy minted it for this run.",
   );
   await beat(page, PACE.read + 400);
 
@@ -687,13 +699,19 @@ test("V03a conclusion", async () => {
   await caption(page, "They were real requests, inside real sandboxes, under real policies.");
   await beat(page, PACE.read);
   // [OWNER SLOT — drafted]
-  await caption(page, "And every one of them ships in the repo — the docs' ten-minute try-it guide walks all of them, no keys needed. Run them yourself, on your own machine.");
+  await caption(page, "Every one of these demos comes with Wardyn — the ten-minute try-it guide, docs slash TRY-IT dot md, walks all of them, no keys needed.");
+  await beat(page, PACE.read);
+  await caption(page, "Run them on your own machine.");
   await beat(page, PACE.read);
   // [OWNER SLOT — drafted]
   await caption(page, "Three optional detours go deeper. The network, three more ways: a real coding agent in the box, a policy recorded from a run, and an approval that lasts one connection.");
   await beat(page, PACE.read);
   // [OWNER SLOT — drafted]
-  await caption(page, "Authorized, then issued: that key gated by an approval, then a Git token issued into a pipe, on demand, never stored. And the kinds that can't use a header — including the one credential that has to be written to a file, briefly; if you clone over SSH, that one is yours. Nothing later depends on them.");
+  await caption(page, "Authorized, then issued: that key gated by an approval, then a Git token issued into a pipe — on demand, never stored.");
+  await beat(page, PACE.read);
+  await caption(page, "And 'The kinds that can't use a header' — including the one credential that must touch a file, briefly. If you clone over SSH, that one is yours.");
+  await beat(page, PACE.read);
+  await caption(page, "Nothing later depends on them.");
   await beat(page, PACE.read);
   await caption(page, "And we're ready to give it some actual work.");
   await beat(page, PACE.read);

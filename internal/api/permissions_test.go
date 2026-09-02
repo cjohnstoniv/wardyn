@@ -122,6 +122,13 @@ func TestValidateCapabilityGrant(t *testing.T) {
 			g.SubjectType, g.Subject = types.CapabilitySubjectGroup, ""
 		}, "subject: required"},
 		{"control char in subject", func(g *types.CapabilityGrant) { g.Subject = "dev\x00@corp" }, "subject: invalid"},
+		// DEL and the C1 range are controls too. C1 is the arm the hand-rolled
+		// loop used to MISS (it only tested r < 0x20 || r == 0x7f);
+		// unicode.IsControl covers U+0080–U+009F, matching the stance
+		// repoFieldSafe already takes (repoclone_test.go rejects a NEL).
+		{"DEL in value", func(g *types.CapabilityGrant) { g.Value = "prod\x7fdb" }, "value: invalid"},
+		{"C1 control in value", func(g *types.CapabilityGrant) { g.Value = "prod\u0085db" }, "value: invalid"},
+		{"C1 control in subject", func(g *types.CapabilityGrant) { g.Subject = "dev\u009f@corp" }, "subject: invalid"},
 
 		// egress_host values are hosts, so they get the proxy's own entry
 		// shape check — the same one every allowed_domains ingest runs.

@@ -26,27 +26,17 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+# One resolver for the whole pipeline (record-demo.sh's ladder); this copy used
+# to prefer a plain `ffmpeg` on PATH over the Windows build the take was encoded
+# with. No package here, so the sibling dir goes on the path.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+from ffmpeg import _ffmpeg  # noqa: E402
+
 Span = tuple[int, int]
-
-
-# Same resolution as narrate-mux.py: gdigrab is a Windows device, so the take is
-# encoded by the Windows ffmpeg, which winget hides on the WINDOWS PATH.
-def find_ffmpeg(explicit: str | None) -> str:
-    if explicit:
-        return explicit
-    which = shutil.which("ffmpeg.exe") or shutil.which("ffmpeg")
-    if which:
-        return which
-    for p in Path("/mnt/c/Users").glob(
-        "*/AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg_*/ffmpeg-*/bin/ffmpeg.exe"
-    ):
-        return str(p)
-    raise SystemExit("demo-ffwd: no ffmpeg found (pass --ffmpeg)")
 
 
 def winpath(ffmpeg: str, p: str) -> str:
@@ -140,7 +130,7 @@ def main() -> int:
     if args.factor < 1:
         ap.error("--factor must be >= 1")
 
-    ffmpeg = find_ffmpeg(args.ffmpeg)
+    ffmpeg = _ffmpeg(args.ffmpeg)
     total = duration_ms(ffmpeg, args.video)
     if not total:
         print(f"demo-ffwd: cannot read a duration from {args.video}", file=sys.stderr)

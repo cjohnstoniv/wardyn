@@ -33,6 +33,28 @@ import (
 
 // ─── Workspace ───────────────────────────────────────────────────────────────
 
+// jsonOrNull is the one body the nullable-JSONB param helpers below share:
+// isEmpty ⇒ SQL NULL (never the literal JSON "null"), otherwise the marshalled
+// bytes. WHICH emptiness counts is the caller's to state, because it differs
+// per column — a nil-vs-empty distinction the store must round-trip is stated
+// as `v == nil`, one the column collapses as `len(v) == 0`. A marshal error is
+// unreachable for every concrete type routed through here (plain slices, maps
+// and structs) and folds to NULL, the fail-safe each helper documented for
+// itself. Helpers whose column is NOT NULL (workspaceSourcesParam,
+// workspaceAttachmentsParam, both fail-safe to '[]') and marshalGroups (whose
+// caller must see a marshal error, not a silently absent group snapshot) do
+// NOT route through here.
+func jsonOrNull[T any](v T, isEmpty bool) any {
+	if isEmpty {
+		return nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
 // workspaceProfileParam converts a (possibly empty) json.RawMessage into the
 // value pgx should bind for the nullable `profile` JSONB column: an empty
 // RawMessage inserts SQL NULL (not yet scanned) rather than the literal JSON
@@ -48,40 +70,19 @@ func workspaceProfileParam(p json.RawMessage) any {
 // workspaceApprovedParam serializes the operator-owned approved-egress list
 // for its JSONB column; empty ⇒ NULL.
 func workspaceApprovedParam(domains []string) any {
-	if len(domains) == 0 {
-		return nil
-	}
-	b, err := json.Marshal(domains)
-	if err != nil {
-		return nil // unreachable for []string; fail-safe to "nothing approved"
-	}
-	return b
+	return jsonOrNull(domains, len(domains) == 0)
 }
 
 // workspaceDeniedParam is workspaceApprovedParam's mirror for the
 // operator-owned denied-egress list; empty ⇒ NULL.
 func workspaceDeniedParam(domains []string) any {
-	if len(domains) == 0 {
-		return nil
-	}
-	b, err := json.Marshal(domains)
-	if err != nil {
-		return nil // unreachable for []string; fail-safe to "nothing denied"
-	}
-	return b
+	return jsonOrNull(domains, len(domains) == 0)
 }
 
 // workspaceLLMCredParam serializes the operator-owned model/harness cred binding
 // for its JSONB column; nil ⇒ NULL (no binding).
 func workspaceLLMCredParam(c *types.WorkspaceLLMCred) any {
-	if c == nil {
-		return nil
-	}
-	b, err := json.Marshal(c)
-	if err != nil {
-		return nil // fail-safe to "no binding"
-	}
-	return b
+	return jsonOrNull(c, c == nil)
 }
 
 // workspaceSourcesParam serializes a workspace's source composition for its
@@ -102,28 +103,14 @@ func workspaceSourcesParam(sources []types.WorkspaceSource) any {
 // workspaceBaseImageParam serializes a workspace's base-image choice for its
 // nullable base_image JSONB column; nil ⇒ NULL (no explicit choice recorded).
 func workspaceBaseImageParam(img *types.WorkspaceBaseImage) any {
-	if img == nil {
-		return nil
-	}
-	b, err := json.Marshal(img)
-	if err != nil {
-		return nil // fail-safe to "no base image recorded"
-	}
-	return b
+	return jsonOrNull(img, img == nil)
 }
 
 // workspaceRequirementsParam serializes a workspace's requirements contract
 // for its nullable requirements JSONB column; empty/nil ⇒ NULL, mirroring
 // workspaceApprovedParam.
 func workspaceRequirementsParam(reqs map[string]types.WorkspaceRequirement) any {
-	if len(reqs) == 0 {
-		return nil
-	}
-	b, err := json.Marshal(reqs)
-	if err != nil {
-		return nil // unreachable for this concrete type; fail-safe to "none declared"
-	}
-	return b
+	return jsonOrNull(reqs, len(reqs) == 0)
 }
 
 // workspaceAttachmentsParam marshals a workspace's attachments for storage.
@@ -151,7 +138,8 @@ func workspaceAttachmentsParam(atts []types.WorkspaceAttachment) []byte {
 // survive every composition edit.
 const wsCols = `id, name, sources, base_image, requirements, profile, image_ref, ` +
 	`built_profile_hash, approved_egress, active_run_id, status, created_at, updated_at, ` +
-	`record_results, llm_cred, attachments, base_image_id, denied_egress, owned_by`
+	`record_results, llm_cred, attachments, base_image_id, denied_egress, owned_by, ` +
+	`egress_edited_at`
 
 // CreateWorkspace inserts an onboarded workspace and returns the persisted
 // row. Profile is internal/workspacescan's opaque WorkspaceProfile blob (nil
@@ -159,7 +147,7 @@ const wsCols = `id, name, sources, base_image, requirements, profile, image_ref,
 func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Workspace, error) {
 	q := `
 		INSERT INTO workspaces (` + wsCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
 		RETURNING ` + wsCols
 	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx, q,
 		ws.ID, ws.Name, workspaceSourcesParam(ws.Sources), workspaceBaseImageParam(ws.BaseImage),
@@ -167,7 +155,7 @@ func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Work
 		ws.BuiltProfileHash, workspaceApprovedParam(ws.ApprovedEgress), ws.ActiveRunID,
 		string(ws.Status), ws.CreatedAt, ws.UpdatedAt, workspaceProfileParam(ws.RecordResults),
 		workspaceLLMCredParam(ws.LLMCred), workspaceAttachmentsParam(ws.Attachments), ws.BaseImageID,
-		workspaceDeniedParam(ws.DeniedEgress), ws.OwnedBy,
+		workspaceDeniedParam(ws.DeniedEgress), ws.OwnedBy, ws.EgressEditedAt,
 	))
 }
 
@@ -235,13 +223,22 @@ func (s PG) SetWorkspaceOwner(ctx context.Context, id uuid.UUID, owner string) (
 }
 
 // SetWorkspaceApprovedEgress replaces ONLY the operator-owned approved-egress
-// column (plus updated_at), returning the updated row. Scoped on purpose: an
-// approval must never clobber a concurrently-persisted scan (an async repo
-// scan's profile/status land via the full-column UpdateWorkspace, and a
-// read-modify-write here would silently revert them).
+// column (plus updated_at and egress_edited_at), returning the updated row.
+// Scoped on purpose: an approval must never clobber a concurrently-persisted
+// scan (an async repo scan's profile/status land via the full-column
+// UpdateWorkspace, and a read-modify-write here would silently revert them).
+//
+// egress_edited_at is what makes this the documented UNDO of an `always`
+// decision rather than a change the next restart reverses: it records that the
+// operator restated the list at this moment, and the boot heal
+// (ReconcileWorkspaceEgressDecisions) skips any decision older than it. It is
+// bumped even when domains is byte-identical to what is stored — "the operator
+// looked at this list and confirmed it" is the fact being recorded, and a
+// diff-conditional bump would make the heal depend on whether an idempotent
+// save changed anything.
 func (s PG) SetWorkspaceApprovedEgress(ctx context.Context, id uuid.UUID, domains []string) (types.Workspace, error) {
 	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
-		`UPDATE workspaces SET approved_egress=$1, updated_at=now() WHERE id=$2 RETURNING `+wsCols,
+		`UPDATE workspaces SET approved_egress=$1, egress_edited_at=now(), updated_at=now() WHERE id=$2 RETURNING `+wsCols,
 		workspaceApprovedParam(domains), id))
 }
 
@@ -343,10 +340,12 @@ func (s PG) AddWorkspaceEgressDecision(ctx context.Context, id uuid.UUID, host s
 // mirror of SetWorkspaceApprovedEgress, backing the Phase 4 revocation PUT.
 // Same anti-clobber discipline: a full-list replace can never clobber a
 // concurrently-persisted async scan. Pass the FULL desired list — like
-// SetWorkspaceApprovedEgress, this replaces rather than merges.
+// SetWorkspaceApprovedEgress, this replaces rather than merges, and it stamps
+// egress_edited_at for the same reason (see that method): removing a permanent
+// DENY is an operator override the boot heal must not undo at the next restart.
 func (s PG) SetWorkspaceDeniedEgress(ctx context.Context, id uuid.UUID, domains []string) (types.Workspace, error) {
 	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
-		`UPDATE workspaces SET denied_egress=$1, updated_at=now() WHERE id=$2 RETURNING `+wsCols,
+		`UPDATE workspaces SET denied_egress=$1, egress_edited_at=now(), updated_at=now() WHERE id=$2 RETURNING `+wsCols,
 		workspaceDeniedParam(domains), id))
 }
 
@@ -528,7 +527,7 @@ func scanWorkspace(row pgx.Row) (types.Workspace, error) {
 		&ws.ID, &ws.Name, &sourcesRaw, &baseImageRaw, &requirementsRaw,
 		&profileRaw, &ws.ImageRef, &ws.BuiltProfileHash, &approvedRaw, &ws.ActiveRunID,
 		&status, &ws.CreatedAt, &ws.UpdatedAt, &recordRaw, &llmCredRaw,
-		&attachmentsRaw, &ws.BaseImageID, &deniedRaw, &ws.OwnedBy,
+		&attachmentsRaw, &ws.BaseImageID, &deniedRaw, &ws.OwnedBy, &ws.EgressEditedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Workspace{}, ErrNotFound

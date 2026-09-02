@@ -529,6 +529,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- `GET /access` no longer carries `issuer`; `provider` is unchanged. The raw OIDC issuer URL was never read by the console — the human-facing IdP name it shows is derived from the issuer server-side and sent as `provider`.
+
 - **Everyone signs in once after upgrading.** The session cookie's format version is stamped, so cookies issued by an older daemon are re-derived rather than accepted. This is deliberate and it is one field's fault: the cookie now records whether a member's group list was truncated, and an absent bit would decode as "not truncated" — the exact wrong answer, since group membership decides which governance profile applies. API tokens carry the same marker from the moment they are minted.
 
 - The GPL corresponding-source offer (`deploy/images/THIRD-PARTY-GPL.md`) is
@@ -572,6 +574,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   run eligible for the operator's live subscription credential, and defaulting
   to `byoa`/`none` resolves to an image that does not exist (both 404 on the
   registry). Harness mode still requires an agent.
+
+### Removed
+
+- The root `GET /auth/logout` is gone. Signing out is `POST /api/v1/auth/logout` — what the console calls, and the only one that clears the session cookie. The root GET was the path that POST never reached (404) before that fix landed, and nothing has called it since: no console, CLI, doc, script or deployment referenced it. `GET /auth/login` and `GET /auth/callback` are unchanged.
 
 ## [0.6.6] — 2026-08-28
 

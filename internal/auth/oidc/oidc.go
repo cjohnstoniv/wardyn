@@ -262,7 +262,6 @@ type Session struct {
 // Authenticator provides OIDC login, callback, logout, and session-check handlers.
 type Authenticator struct {
 	cfg        Config
-	provider   *gooidc.Provider
 	oauth2     oauth2.Config
 	verifier   *gooidc.IDTokenVerifier
 	hmacKey    []byte
@@ -339,7 +338,6 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 
 	return &Authenticator{
 		cfg:        cfg,
-		provider:   provider,
 		oauth2:     oa,
 		verifier:   verifier,
 		hmacKey:    hmacKey,
@@ -351,16 +349,8 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 // random state and nonce, stores them in HttpOnly SameSite=Lax cookies, and
 // redirects the user to the IdP authorization endpoint.
 func (a *Authenticator) LoginHandler(w http.ResponseWriter, r *http.Request) {
-	state, err := randomToken()
-	if err != nil {
-		http.Error(w, "internal error generating state", http.StatusInternalServerError)
-		return
-	}
-	nonce, err := randomToken()
-	if err != nil {
-		http.Error(w, "internal error generating nonce", http.StatusInternalServerError)
-		return
-	}
+	state := randomToken()
+	nonce := randomToken()
 	// PKCE: code verifier (32 octets => the 43-char minimum RFC 7636 §4.1
 	// mandates; a shorter verifier is rejected by conformant IdPs).
 	codeVerifier := oauth2.GenerateVerifier()
@@ -510,6 +500,17 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 		Groups []string `json:"groups"`
 	}
 	_ = idToken.Claims(&gc)
+	// The distributed-claim pointer, decoded just as tolerantly and for the
+	// same fail-closed reason: when `_claim_names` names "groups" (or "roles"),
+	// the claim above is absent because the IdP OMITTED it — an overage — not
+	// because the human is in no groups. sessionGroups turns that into the
+	// truncation bit. map[string]any rather than map[string]string so a value
+	// shape this package does not read cannot fail the decode and hide the
+	// marker.
+	var dc struct {
+		ClaimNames map[string]any `json:"_claim_names"`
+	}
+	_ = idToken.Claims(&dc)
 
 	// (4) Domain check — fail closed.
 	if len(a.cfg.AllowedEmailDomains) > 0 {
@@ -593,8 +594,9 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	// (6) Create a Wardyn session. Groups is stamped from the SAME two
 	// tolerantly-decoded claims deriveRole just consumed — a claim malformed
 	// enough to contribute nothing to the role contributes nothing here either,
-	// and never fails the login.
-	groups, groupsTruncated := sessionGroups(rc.Roles, gc.Groups)
+	// and never fails the login. The `_claim_names` pointer rides along so an
+	// IdP-side overage stamps the snapshot partial instead of empty.
+	groups, groupsTruncated := sessionGroups(rc.Roles, gc.Groups, dc.ClaimNames)
 	sess := Session{
 		Sub:             idToken.Subject,
 		Email:           claims.Email,
@@ -691,12 +693,12 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 // randomToken generates a cryptographically-random 128-bit base64url string.
-func randomToken() (string, error) {
+// crypto/rand.Read never returns an error (go1.24+): it crashes the program
+// irrecoverably instead, so randomToken cannot fail.
+func randomToken() string {
 	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
+	rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 // emailDomainAllowed returns true if the email's domain (part after last '@')

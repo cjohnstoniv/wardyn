@@ -131,7 +131,6 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /readyz":        {class: classAnonymous},
 	"GET /auth/login":    {class: classAnonymous},
 	"GET /auth/callback": {class: classAnonymous},
-	"GET /auth/logout":   {class: classAnonymous},
 
 	// ── admin (SUPER only: a security_admin is refused here too) ──
 	"GET /metrics":                                       {class: classAdmin},
@@ -954,14 +953,35 @@ func (s *authzStore) ListWorkspaces(context.Context) ([]types.Workspace, error) 
 func (s *authzStore) UpdateWorkspace(context.Context, uuid.UUID, types.Workspace) (types.Workspace, error) {
 	return types.Workspace{}, store.ErrNotFound
 }
+
+// SetWorkspaceApprovedEgress / SetWorkspaceDeniedEgress mirror the PG
+// statements' SEMANTICS, EgressEditedAt included. That stamp is not bookkeeping:
+// it is the whole reason the documented undo (this PUT) survives a restart, so a
+// fake that replaced the list without it would keep every test green while
+// ReconcileWorkspaceEgressDecisions quietly resurrected removed hosts — the
+// exact defect the reconcile probes pin.
 func (s *authzStore) SetWorkspaceApprovedEgress(_ context.Context, id uuid.UUID, domains []string) (types.Workspace, error) {
+	return s.setWorkspaceEgressList(id, domains, true)
+}
+
+func (s *authzStore) SetWorkspaceDeniedEgress(_ context.Context, id uuid.UUID, domains []string) (types.Workspace, error) {
+	return s.setWorkspaceEgressList(id, domains, false)
+}
+
+func (s *authzStore) setWorkspaceEgressList(id uuid.UUID, domains []string, approved bool) (types.Workspace, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ws, ok := s.workspaces[id]
 	if !ok {
 		return types.Workspace{}, store.ErrNotFound
 	}
-	ws.ApprovedEgress = domains
+	if approved {
+		ws.ApprovedEgress = domains
+	} else {
+		ws.DeniedEgress = domains
+	}
+	at := time.Now().UTC()
+	ws.EgressEditedAt = &at
 	s.workspaces[id] = ws
 	return ws, nil
 }
@@ -993,9 +1013,6 @@ func (s *authzStore) AddWorkspaceEgressDecision(_ context.Context, id uuid.UUID,
 	*remove = slices.DeleteFunc(*remove, func(h string) bool { return h == host })
 	s.workspaces[id] = ws
 	return ws, nil
-}
-func (s *authzStore) SetWorkspaceDeniedEgress(context.Context, uuid.UUID, []string) (types.Workspace, error) {
-	return types.Workspace{}, store.ErrNotFound
 }
 func (s *authzStore) SetWorkspaceLLMCred(context.Context, uuid.UUID, *types.WorkspaceLLMCred) (types.Workspace, error) {
 	return types.Workspace{}, store.ErrNotFound
@@ -1052,9 +1069,6 @@ func (s *authzStore) GetSource(context.Context, uuid.UUID) (types.Source, error)
 func (s *authzStore) GetSourcesByIDs(context.Context, []uuid.UUID) (map[uuid.UUID]types.Source, error) {
 	return nil, nil
 }
-func (s *authzStore) GetBaseImagesByIDs(context.Context, []uuid.UUID) (map[uuid.UUID]types.BaseImageEntry, error) {
-	return nil, nil
-}
 func (s *authzStore) ListSources(context.Context) ([]types.Source, error) { return nil, nil }
 func (s *authzStore) UpdateSourceConfig(context.Context, uuid.UUID, string, map[string]types.WorkspaceRequirement) (types.Source, error) {
 	return types.Source{}, store.ErrNotFound
@@ -1080,9 +1094,6 @@ func (s *authzStore) UpsertBaseImage(_ context.Context, b types.BaseImageEntry) 
 }
 func (s *authzStore) UpdateBaseImageName(_ context.Context, id uuid.UUID, name string) (types.BaseImageEntry, error) {
 	return types.BaseImageEntry{ID: id, Name: name}, nil
-}
-func (s *authzStore) GetBaseImage(context.Context, uuid.UUID) (types.BaseImageEntry, error) {
-	return types.BaseImageEntry{}, store.ErrNotFound
 }
 func (s *authzStore) ListBaseImages(context.Context) ([]types.BaseImageEntry, error) { return nil, nil }
 func (s *authzStore) WorkspacesUsingBaseImage(context.Context, uuid.UUID) ([]string, error) {
@@ -1261,9 +1272,6 @@ func (s *authzStore) ListRoleMappings(context.Context) ([]types.RoleMapping, err
 // (internal/store/governance_pg_test.go), where rows can actually exist.
 func (s *authzStore) UpsertGovernanceProfile(_ context.Context, p types.GovernanceProfile) (types.GovernanceProfile, error) {
 	return p, nil
-}
-func (s *authzStore) GetGovernanceProfile(context.Context, uuid.UUID) (types.GovernanceProfile, error) {
-	return types.GovernanceProfile{}, store.ErrNotFound
 }
 func (s *authzStore) DeleteGovernanceProfile(context.Context, uuid.UUID) error {
 	return store.ErrNotFound
