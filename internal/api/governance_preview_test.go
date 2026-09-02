@@ -152,7 +152,7 @@ func resolveDirect(t *testing.T, pool *pgxpool.Pool, users, groups []string) gov
 	if err != nil {
 		t.Fatalf("direct resolve %v/%v: %v", users, groups, err)
 	}
-	return governancePreviewResponse{ProfileID: p.ID.String(), ProfileName: p.Name, MatchedTier: tier}
+	return governancePreviewResponse{ProfileID: p.ID, ProfileName: p.Name, MatchedTier: tier}
 }
 
 // TestGovernancePreview_AgreesWithTheResolver walks every rank of the ORDER BY
@@ -259,6 +259,27 @@ func TestGovernancePreview_NoMatchIsTheDeploymentCeiling(t *testing.T) {
 	}
 	if got := previewViaHTTP(t, srv, claims, claims); got != want {
 		t.Errorf("preview = %+v, want the empty object (no assignment matched)", got)
+	}
+
+	// The RAW body, not just the decoded struct: ProfileID is a uuid.UUID
+	// elided by `omitzero`, and the failure this guards against — shipping
+	// "00000000-0000-0000-0000-000000000000" — decodes straight back to the
+	// zero uuid, so the struct comparison above would pass right through it.
+	// An absent key is the whole contract here.
+	body, err := json.Marshal(governancePreviewRequest{UserSubjects: claims, Groups: claims})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	w := do(t, srv, http.MethodPost, "/api/v1/governance/preview", adminToken, string(body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var keys map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &keys); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(keys) != 0 {
+		t.Errorf("body = %s, want {} exactly (no profile_id, no zero uuid)", w.Body.String())
 	}
 }
 

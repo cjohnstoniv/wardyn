@@ -578,6 +578,17 @@ func TestAccess_InvalidShapeRejected(t *testing.T) {
 		{"whitespace-only value", `{"value":"   ","role":"member","acknowledge_access_change":true}`},
 		{"invalid role", `{"value":"eng-team","role":"superadmin","acknowledge_access_change":true}`},
 		{"non-ASCII value", `{"value":"café","role":"member","acknowledge_access_change":true}`},
+		// canonicalRoleMapValue's ASCII guard is oidc.ASCIIOnly, the SAME
+		// function the login path applies to claim values — these two arms pin
+		// the ones that distinguish a real ASCII test from a lazy one.
+		// U+017F (LATIN SMALL LETTER LONG S) survives ToLower unchanged and
+		// must stay refused: it case-folds onto ASCII "s", the escalating
+		// direction the guard exists for.
+		{"fold-escalating rune", `{"value":"roſs","role":"member","acknowledge_access_change":true}`},
+		// Invalid UTF-8 decodes to RuneError (U+FFFD), which is above ASCII —
+		// so a byte-level and a rune-level check agree here, and refusing is
+		// the fail-closed answer either way.
+		{"invalid UTF-8 value", `{"value":"\uFFFDeng","role":"member","acknowledge_access_change":true}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -949,6 +960,129 @@ func TestAccess_GetShapeIncludesShadowedRow(t *testing.T) {
 	}
 }
 
+// TestAccess_ShadowCauseChartWinsOverAllowlist pins the ONE rule the read path
+// (accessMappingsView) and the write path (POST /access/mappings, which refuses
+// on the same cause) must never disagree about: a value present in BOTH the
+// chart and the operator allowlist reports "chart", the more specific and more
+// actionable source. Both paths now go through accessCollisionCause, and this
+// is the arm that fold makes load-bearing — the other three arms are pinned by
+// TestAccess_GetShapeIncludesShadowedRow above.
+func TestAccess_ShadowCauseChartWinsOverAllowlist(t *testing.T) {
+	const both = "ops@corp.example"
+	auth := newAccessAuth(t, map[string]string{both: oidc.RoleMember}, oidc.RoleMember, []string{both}, nil)
+	st := &roleMapStore{rows: []types.RoleMapping{
+		{ID: uuid.New(), Value: both, Role: oidc.RoleAdmin, CreatedBy: "admin@corp.example", CreatedAt: time.Now().UTC()},
+	}}
+	srv := accessServer(t, auth, st)
+
+	w := do(t, srv, http.MethodGet, "/api/v1/access", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp accessResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var console *accessMappingView
+	for i, m := range resp.Mappings {
+		if m.Value == both && m.Source == "console" {
+			console = &resp.Mappings[i]
+		}
+	}
+	if console == nil {
+		t.Fatalf("no console row for %q in %+v", both, resp.Mappings)
+	}
+	if !console.Shadowed || console.ShadowCause != "chart" {
+		t.Errorf("row colliding with chart AND allowlist = %+v, want shadowed=true shadow_cause=chart (chart is checked first)", *console)
+	}
+}
+
+// TestAccess_CreatedAtKeyIsAbsentOnChartRows pins created_at's `omitzero`
+// elision at the RAW key level. A chart row has no creation time at all, and
+// the TS twin declares created_at OPTIONAL (ui/src/app/lib/types/access.ts:25)
+// — shipping a zero "0001-01-01T00:00:00Z" instead of omitting the key would
+// decode back to a zero time.Time and slip past any struct-level assertion,
+// while the console would render it as a real date.
+func TestAccess_CreatedAtKeyIsAbsentOnChartRows(t *testing.T) {
+	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleMember}, oidc.RoleMember, nil, nil)
+	stamp := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	st := &roleMapStore{rows: []types.RoleMapping{
+		{ID: uuid.New(), Value: "design-team", Role: oidc.RoleMember, CreatedBy: "admin@corp.example", CreatedAt: stamp},
+	}}
+	srv := accessServer(t, auth, st)
+
+	w := do(t, srv, http.MethodGet, "/api/v1/access", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var raw struct {
+		Mappings []map[string]any `json:"mappings"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var chart, console map[string]any
+	for _, m := range raw.Mappings {
+		switch m["source"] {
+		case "chart":
+			chart = m
+		case "console":
+			console = m
+		}
+	}
+	if chart == nil || console == nil {
+		t.Fatalf("want one chart row and one console row, got %v", raw.Mappings)
+	}
+	if _, ok := chart["created_at"]; ok {
+		t.Errorf("chart row = %v, want NO created_at key (a chart row has no creation time)", chart)
+	}
+	if got := console["created_at"]; got != stamp.Format(time.RFC3339Nano) {
+		t.Errorf("console created_at = %v, want %q", got, stamp.Format(time.RFC3339Nano))
+	}
+}
+
+// TestAccess_MappingsAreSortedByValueThenSource pins the order
+// accessMappingsView's doc comment promises ("sorted by value then source so
+// the response is deterministic across calls with the same underlying state").
+// Nothing asserted it before — every other shape test looks rows up by key,
+// which is order-blind — so the comparator could have been reordered or
+// dropped without a test noticing. The second key is load-bearing: "chart"
+// sorts before "console", so a shadowed console row always renders directly
+// beneath the chart row that shadows it.
+func TestAccess_MappingsAreSortedByValueThenSource(t *testing.T) {
+	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleMember}, oidc.RoleMember, nil, nil)
+	st := &roleMapStore{rows: []types.RoleMapping{
+		// Deliberately inserted out of order.
+		{ID: uuid.New(), Value: "eng-team", Role: oidc.RoleAdmin, CreatedBy: "a@corp.example", CreatedAt: time.Now().UTC()},
+		{ID: uuid.New(), Value: "design-team", Role: oidc.RoleMember, CreatedBy: "a@corp.example", CreatedAt: time.Now().UTC()},
+		{ID: uuid.New(), Value: "arch-team", Role: oidc.RoleMember, CreatedBy: "a@corp.example", CreatedAt: time.Now().UTC()},
+	}}
+	srv := accessServer(t, auth, st)
+
+	w := do(t, srv, http.MethodGet, "/api/v1/access", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp accessResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	type row struct{ value, source string }
+	got := make([]row, 0, len(resp.Mappings))
+	for _, m := range resp.Mappings {
+		got = append(got, row{m.Value, m.Source})
+	}
+	want := []row{
+		{"arch-team", "console"},
+		{"design-team", "console"},
+		{"eng-team", "chart"},   // chart before console on the same value
+		{"eng-team", "console"}, // the shadowed row, right beneath its shadower
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("mapping order = %v, want %v", got, want)
+	}
+}
+
 // ─── preview ────────────────────────────────────────────────────────────────
 
 func TestAccess_PreviewExplicitClaims(t *testing.T) {
@@ -966,8 +1100,58 @@ func TestAccess_PreviewExplicitClaims(t *testing.T) {
 	if !resp.OK || resp.Role != oidc.RoleMember || resp.Error != "" {
 		t.Errorf("preview = %+v, want ok=true role=member no error", resp)
 	}
-	if len(resp.Matched) != 1 || resp.Matched[0].Source != string(oidc.MatchSourceMapRow) {
+	if len(resp.Matched) != 1 || resp.Matched[0].Source != oidc.MatchSourceMapRow {
 		t.Errorf("matched = %+v, want one map_row match", resp.Matched)
+	}
+}
+
+// TestAccess_PreviewWireShape pins the RAW bytes of POST /access/preview's
+// matched[] now that it marshals oidc.Match directly instead of an api-local
+// twin: the three lowercase keys the TS twin declares
+// (ui/src/app/lib/types/access.ts:108-112) and, for a no-match preview, [] and
+// never null — the console reads matched.length, which throws on null.
+func TestAccess_PreviewWireShape(t *testing.T) {
+	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleMember}, "", nil, nil)
+	srv := accessServer(t, auth, &roleMapStore{})
+
+	w := do(t, srv, http.MethodPost, "/api/v1/access/preview", adminToken, `{"groups":["eng-team"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var raw struct {
+		Matched []map[string]any `json:"matched"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(raw.Matched) != 1 {
+		t.Fatalf("matched = %v, want exactly one entry; body=%s", raw.Matched, w.Body.String())
+	}
+	got := raw.Matched[0]
+	if len(got) != 3 {
+		t.Errorf("match object = %v, want exactly the 3 wire keys (a new exported field on oidc.Match must not leak onto this route)", got)
+	}
+	for _, k := range []string{"value", "role", "source"} {
+		if _, ok := got[k]; !ok {
+			t.Errorf("match object %v is missing key %q", got, k)
+		}
+	}
+	if got["source"] != string(oidc.MatchSourceMapRow) {
+		t.Errorf("source = %v, want %q as a plain string", got["source"], oidc.MatchSourceMapRow)
+	}
+
+	// No match at all: [] on the wire, never null. An EMPTY merged map is the
+	// arm that actually returns a nil slice from deriveRole (the empty-merged-map arm of deriveRole in derive.go),
+	// so this is the construction that would marshal null without the guard —
+	// a non-empty map falls through to the default_role match instead.
+	empty := newAccessAuth(t, nil, oidc.RoleMember, nil, nil)
+	esrv := accessServer(t, empty, &roleMapStore{})
+	ew := do(t, esrv, http.MethodPost, "/api/v1/access/preview", adminToken, `{"groups":["nobody"]}`)
+	if ew.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", ew.Code, ew.Body.String())
+	}
+	if !strings.Contains(ew.Body.String(), `"matched":[]`) {
+		t.Errorf("body = %s, want matched:[] (a nil slice would marshal to null and break matched.length)", ew.Body.String())
 	}
 }
 

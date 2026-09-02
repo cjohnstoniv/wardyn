@@ -58,6 +58,9 @@ const (
 	// deterministic and explainable ("App Roles first, then groups, then users,
 	// twenty in total") instead of an interleaving whose shape depends on how
 	// many hits each kind happened to return.
+	//
+	// Every search re-trims to this cap on the way out, single-kind ones
+	// included: $top is a request to the upstream, not a guarantee from it.
 	MaxResults = 20
 
 	// MinQueryLen is the shortest query a connector will send upstream. Below it
@@ -149,14 +152,5 @@ func searchAny(ctx context.Context, q string, per func(context.Context, string, 
 		}
 		out = append(out, got...)
 	}
-	return cap20(out), nil
-}
-
-// cap20 trims to the single global cap. Applied to single-kind searches too:
-// $top is a request to the upstream, not a guarantee from it.
-func cap20(in []Entry) []Entry {
-	if len(in) > MaxResults {
-		return in[:MaxResults]
-	}
-	return in
+	return out[:min(len(out), MaxResults)], nil
 }

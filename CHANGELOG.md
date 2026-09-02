@@ -529,6 +529,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- `GET /access` no longer carries `issuer`; `provider` is unchanged. The raw OIDC issuer URL was never read by the console — the human-facing IdP name it shows is derived from the issuer server-side and sent as `provider`.
+
 - **Everyone signs in once after upgrading.** The session cookie's format version is stamped, so cookies issued by an older daemon are re-derived rather than accepted. This is deliberate and it is one field's fault: the cookie now records whether a member's group list was truncated, and an absent bit would decode as "not truncated" — the exact wrong answer, since group membership decides which governance profile applies. API tokens carry the same marker from the moment they are minted.
 
 - The GPL corresponding-source offer (`deploy/images/THIRD-PARTY-GPL.md`) is
