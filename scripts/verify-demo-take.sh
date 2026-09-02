@@ -862,11 +862,26 @@ UNMAPPED_OK = {"CC2", "CC3", "URL", "YAML", "JSON", "HTTP", "OK", "ID"}
 KNOWN = _say_keys(sys.argv[2]) | UNMAPPED_OK
 # Emphasis-caps in captions are ordinary words the TTS reads fine — not initialisms.
 EMPHASIS = {"DO", "LEAVE", "NOT", "ALL", "IS", "ARE", "THE", "AND", "NEVER", "ONE", "EGRESS"}
-MAPPED_LIVE = ("watch it live", "live run", "live decision", "live strip", "held live", "caught it live",
-               "blocked live", "attacks live exactly here", "no keys live in the room", "keys live inside",
-               "keys don't live in the room",
-               # verb after a modal — G2P-verified /lɪv/ by default (2026-08-21), no _SUBS pin needed:
-               "credentials can live")
+def _subs_live_phrases(src):
+    """Every _SUBS source phrase that carries the heteronym — the narrator's own
+    pin list, so a phrase added there is known here without a second edit."""
+    try:
+        for n in ast.walk(ast.parse(open(src).read())):
+            if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "_SUBS" for t in n.targets):
+                out = set()
+                for el in n.value.elts:
+                    if isinstance(el, ast.Tuple) and el.elts and isinstance(el.elts[0], ast.Constant):
+                        phrase = str(el.elts[0].value).lower()
+                        if re.search(r"\blive\b", phrase):
+                            out.add(phrase)
+                return out
+    except Exception as e:
+        print(f"  pronunciation-watch: cannot read _SUBS from {src} ({e})")
+    return set()
+
+# Verb-after-a-modal phrases are G2P-verified /lɪv/ by default (2026-08-21) and
+# carry no _SUBS pin, so they are the only live phrases still kept by hand.
+MAPPED_LIVE = tuple(_subs_live_phrases(sys.argv[2])) + ("credentials can live",)
 warns = set()
 for x in c:
     t = x["text"]
