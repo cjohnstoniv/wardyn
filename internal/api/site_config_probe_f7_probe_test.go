@@ -36,6 +36,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -335,9 +336,14 @@ func TestF7_HTTPFrom_LiteralIPTo_EndToEndThroughScript(t *testing.T) {
 	if _, err := exec.LookPath("curl"); err != nil {
 		t.Skip("curl not on PATH")
 	}
-	var seen []string
+	var (
+		seenMu sync.Mutex // the handler runs on the server's goroutines; the reads below do not
+		seen   []string
+	)
 	fakeProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenMu.Lock()
 		seen = append(seen, r.Method+" "+r.Host+" "+r.RequestURI)
+		seenMu.Unlock()
 		w.WriteHeader(http.StatusForbidden) // whatever it asked for, refuse — we only care WHAT it asked for
 	}))
 	defer fakeProxy.Close()
@@ -358,10 +364,13 @@ func TestF7_HTTPFrom_LiteralIPTo_EndToEndThroughScript(t *testing.T) {
 		"no_proxy=", "NO_PROXY=",
 	)
 	_ = cmd.Run()
-	if len(seen) == 0 {
+	seenMu.Lock()
+	got := append([]string(nil), seen...)
+	seenMu.Unlock()
+	if len(got) == 0 {
 		t.Fatalf("curl never reached the stand-in proxy (toURL=%q connectTo=%q)", toURL, connectTo)
 	}
-	first := seen[0]
+	first := got[0]
 	if !strings.Contains(first, toHost) {
 		t.Fatalf("H-1 (expected red at fa910735): the proxy was asked for %q — the PUBLIC From host — not the stored To %q; "+
 			"the resulting 403 classifies as 'could not reach the mirror' (toURL=%q connectTo=%q)", first, toHost, toURL, connectTo)

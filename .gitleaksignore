@@ -108,3 +108,10 @@ acd1f1335dcca55adca4f2d815aa34948b99c2bc:ui/e2e/demo/03-what-it-stops.spec.ts:ge
 d54b6a15e2fc415235e8079a86fe50a76897b495:ui/e2e/demo/06-interactive-runs.spec.ts:generic-api-key:128
 # false positive: a migration FILENAME (0050_secret_owned_by.sql) matched generic-api-key (deployments campaign, 6c commit 1)
 c7d58c0efb6876879fc8a2e83729cc12c151dd93:internal/store/store_secret_migration_pg_test.go:generic-api-key:22
+# false positives: the install.sh trust probe's FIXTURE tokens (48-hex admin tokens / a stub age key)
+# in scripts/test-install-sh-trust.sh — red pin 00783ffa, its cherry-pick 23e216c1, review pass 05f5383b
+00783ffad6f9d212c041f6390e08efb97c74e4cf:scripts/test-install-sh-trust.sh:generic-api-key:192
+23e216c1feedf44e33fbf76b2b523f54714ec0a4:scripts/test-install-sh-trust.sh:generic-api-key:192
+05f5383ba439e0722d111946d90f0f79146508c3:scripts/test-install-sh-trust.sh:generic-api-key:284
+# false positive: a fake AWS access key id in the k8s SecretEnv test fixture (F9, lane/v0.7-d4)
+c9a5f79ea091ced42f46f019867a970ce41dc4ac:internal/runner/k8s/sandbox_test.go:aws-access-token:816

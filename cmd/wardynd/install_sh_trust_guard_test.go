@@ -118,7 +118,7 @@ func TestInstallSh_ComposeFetchIsVerified(t *testing.T) {
 		t.Fatal("install.sh no longer fetches deploy/compose/docker-compose.yaml — update this guard")
 	}
 	after := src[fetch:]
-	if !regexp.MustCompile(`docker-compose\.yaml[\s\S]{0,1200}(SHA256SUMS|sha256sum|shasum)[\s\S]{0,400}die "`).MatchString(after) {
+	if !regexp.MustCompile(`docker-compose\.yaml(?:[\s\S]{0,600}){2}(SHA256SUMS|sha256sum|shasum)[\s\S]{0,400}die "`).MatchString(after) {
 		t.Errorf("install.sh fetches the compose file and never checks it against SHA256SUMS/a digest with a fail-closed die")
 	}
 }

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
 # F10-install-trust-path probe — stub-driven END-TO-END execution of the root
 # install.sh (no docker, no network, no root). The daemon and the network are
 # stubs on a private PATH (docker, curl), so the script's own control flow is
