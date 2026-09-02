@@ -34,7 +34,6 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -144,11 +143,7 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	dst := w.Header()
-	copyHeader(dst, resp.Header)
-	removeHopByHop(dst)
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	relay(w, resp)
 }
 
 // patToken mints the PAT server-side, returning it with the git username the
@@ -159,7 +154,7 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 // wants "oauth2", and an operator override rides the grant. An EMPTY username
 // is the one value that fails on every forge, so it is never sent.
 func (p *Proxy) patToken(ctx context.Context, g PATGrant) (token, username string, err error) {
-	tok, user, _, status, body, err := p.callMintGitFull(ctx, g.GrantID)
+	tok, user, _, status, body, err := p.callMintGit(ctx, g.GrantID)
 	if err != nil {
 		return "", "", err
 	}
