@@ -79,6 +79,36 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	if !s.isOperator(r.Context()) {
 		body["member_local_dir_root"] = memberLocalDirRootLabel(s.cfg.MemberMounts.RootsFor(principal))
 	}
+	// The caller's USER DRIVE (0.7, migration 0054), nil-means-none — the same
+	// convention member_local_dir_root above uses, so the console's "you have
+	// none" state needs no sentinel value to special-case.
+	//
+	// DELIBERATELY NOT keyed on !isOperator, unlike the root hint directly
+	// above, and the difference is the whole shape of the feature: a workspace
+	// root bounds a MEMBER's authoring, while a drive is allocated to a
+	// PRINCIPAL. A security admin's own drive resolves exactly like a member's,
+	// and so does an SSO admin's. An operator with no per-human identity (admin
+	// token, local mode) still gets nil, because the resolver itself refuses to
+	// name a home for a caller who has no subject — not because of their tier.
+	//
+	// A nil map value marshals as JSON null, but a nil *meUserDrive stored in an
+	// `any` does not — it becomes a typed nil that encoding/json still renders
+	// as null. Assigned through the typed local so that stays true by
+	// construction rather than by luck.
+	body["user_drive"] = nil
+	if ud := s.resolveMeUserDrive(r); ud != nil {
+		body["user_drive"] = ud
+	}
+	// The DOOR, as a SIBLING of the allocation rather than a field inside it
+	// (owner ruling at the mock gate): the profile name when this caller's
+	// governance profile denies mounting a drive, "" when it does not.
+	//
+	// Two keys because there are FOUR states and one key can only carry three.
+	// A member with no allocation and a shut door is a real state, and it is the
+	// one where the obvious advice — "ask an admin for an allocation" — is
+	// wrong. Always PRESENT (never omitted), so an older daemon's missing key is
+	// distinguishable from an open door.
+	body["user_drive_denied_by_profile"] = s.userDriveDeniedByProfile(r)
 	// W31-S1-7: an SSO session dies outright at this instant (no refresh) — the
 	// console polls this and warns ahead of it, rather than the human learning
 	// about it from a sudden 401 that wipes mid-work state back to the gate.

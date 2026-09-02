@@ -21,8 +21,9 @@ import (
 //
 // The distinction is load-bearing. RunPolicySpec describes what a sandbox may
 // reach once it is running, and every field of it is enforced OUTSIDE the
-// sandbox by the proxy. These two booleans instead refuse a run SHAPE before it
-// exists, because each names a way to route AROUND the tool gate entirely:
+// sandbox by the proxy. The booleans instead refuse a run SHAPE before it
+// exists, because each names a way to route AROUND the tool gate entirely, or
+// (DenyUserDrive) a way for a run to leave state behind it:
 //
 //   - DenyTaskModeExec: task_mode=exec runs a bare command with no agent and no
 //     toolgate in the loop, so no tool_rules ceiling can bind it. A profile that
@@ -31,10 +32,14 @@ import (
 //     (a human at the attach pane is the supervision), so a profile cannot
 //     express "supervised" through tool_rules on that lane either. This is the
 //     lever built for it.
+//   - DenyUserDrive: a user drive is a tree that OUTLIVES the run, so a member
+//     who may mount one can persist anything the sandbox produced past the
+//     sandbox's own lifetime. No tool_rules ceiling describes that, because the
+//     escape is the storage, not the tool.
 //   - MaxConcurrentRuns is the odd one out — a QUOTA, not a door. It bounds how
 //     many runs one member holds at once rather than what any single run may be,
 //     which is why its enforcement site answers 422 with no authz.denied while
-//     the two booleans answer 403 with one.
+//     the booleans answer 403 with one.
 //
 // A CLOSED struct with `omitempty` on every field, not a map: the set is small,
 // complete, and validated by the Go type itself, so migration 0052 puts no
@@ -57,6 +62,22 @@ type GovernanceLimits struct {
 	// two booleans follow, so limits authored before this field existed keep
 	// meaning what they meant.
 	MaxConcurrentRuns int `json:"max_concurrent_runs,omitempty"`
+	// DenyUserDrive refuses a USER DRIVE mount for a member under this profile:
+	// their run may not carry drive.enabled at all, whatever an admin has
+	// allocated them.
+	//
+	// A DOOR, NOT A QUOTA, which is why it is a bool beside the other two
+	// rather than a size beside MaxConcurrentRuns. A drive is a writable tree
+	// that OUTLIVES the run — the one piece of state an agent can leave behind
+	// — so "how big" is the wrong question for a ceiling to ask; "may this
+	// principal persist anything at all" is the right one, and it is the same
+	// shape as the two refusals above (403 with an authz.denied row, not a 422
+	// quota answer).
+	//
+	// Zero means unrestricted, like every other field here: a profile written
+	// before drives existed keeps meaning exactly what it meant, and a
+	// deployment that never allocates a drive is unaffected either way.
+	DenyUserDrive bool `json:"deny_user_drive,omitempty"`
 }
 
 // GovernanceProfile is one named, assignable ceiling (migration 0052's
