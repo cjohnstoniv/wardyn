@@ -136,11 +136,11 @@ func (s *FileSink) rotate() error {
 		if i-1 == 0 {
 			newer = s.cfg.Path
 		}
-		// If .N slot is already occupied, remove it first so Rename is atomic.
-		if _, err := os.Lstat(older); err == nil {
-			if i == s.cfg.Keep {
-				_ = os.Remove(older)
-			}
+		// The .Keep slot falls off the end: drop it before anything shifts into
+		// it. No Lstat first — os.Remove reports an absent path by returning an
+		// error, which is exactly the error this discards.
+		if i == s.cfg.Keep {
+			_ = os.Remove(older)
 		}
 		if _, err := os.Lstat(newer); err == nil {
 			_ = os.Rename(newer, older)

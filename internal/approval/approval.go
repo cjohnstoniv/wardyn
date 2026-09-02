@@ -131,8 +131,6 @@ func Decide(ctx context.Context, st Store, id uuid.UUID, decidedByType types.Act
 		return types.ApprovalRequest{}, fmt.Errorf("approval: decide: %w", err)
 	}
 
-	outcome := "success"
-	action := "approval.decide"
 	data := map[string]any{
 		"approval_id": id,
 		"decision":    string(decision.State),
@@ -165,9 +163,9 @@ func Decide(ctx context.Context, st Store, id uuid.UUID, decidedByType types.Act
 		RunID:     &result.RunID,
 		ActorType: decidedByType,
 		Actor:     decision.DecidedBy,
-		Action:    action,
+		Action:    "approval.decide",
 		Target:    id.String(),
-		Outcome:   outcome,
+		Outcome:   "success",
 		Data:      json.RawMessage(auditData),
 	}
 	// FIX #5: the audit log is the system of record — do NOT silently swallow a

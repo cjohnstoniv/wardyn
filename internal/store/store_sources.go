@@ -59,13 +59,7 @@ func scanSource(row pgx.Row) (types.Source, error) {
 // by the explicit-requirements writers below and the scan-seed fill (seed and a
 // source's own requirements are the same concrete type).
 func sourceRequirementsParam(m map[string]types.WorkspaceRequirement) []byte {
-	if m == nil {
-		return nil
-	}
-	b, err := json.Marshal(m)
-	if err != nil {
-		return nil // unreachable for this concrete type; fail-safe to "none"
-	}
+	b, _ := jsonOrNull(m, m == nil).([]byte)
 	return b
 }
 
@@ -270,6 +264,41 @@ func (s PG) ClearSourceActiveRun(ctx context.Context, id, runID uuid.UUID) error
 	return nil
 }
 
+// sourceScanRebuild is the provenance-aware requirements REBUILD both writers
+// below apply, named once because it is the half that must never drift between
+// them: $4 is the scan seed. NULL (a failed scan) leaves the contract
+// untouched; otherwise the seed replaces the scan_seeded subset outright — so a
+// name a rescan no longer finds is DROPPED — while every non-scan_seeded row an
+// operator set survives, because jsonb_object_agg gathers those and the seed is
+// concatenated onto their LEFT. $4 is the seed in both queries so this fragment
+// reads identically either way.
+const sourceScanRebuild = `requirements = CASE WHEN $4::jsonb IS NULL THEN requirements ELSE $4::jsonb || COALESCE(
+		    (SELECT jsonb_object_agg(k, v) FROM jsonb_each(COALESCE(requirements,'{}'::jsonb)) e(k,v)
+		      WHERE e.v->>'provenance' IS DISTINCT FROM 'scan_seeded'), '{}'::jsonb) END`
+
+// The two scan-result writes: ONE static literal per path, selected in Go
+// rather than by interpolating the fence into SQL — the same rule
+// qAddApprovedEgressDecision / qAddDeniedEgressDecision keep, and for the same
+// reason: each stays a single auditable query a reader can grep whole.
+//
+// The fence differs TWICE, which is why these are not one query with an
+// optional clause: the fenced write is gated on the claim ($5) and also
+// RELEASES it (active_run_id=NULL), while the unfenced path never claimed a
+// slot, so it has no claim to check and must not clear one it never took.
+const qSetSourceScanResultFenced = `
+		UPDATE sources
+		SET profile=$1, status=$2, ` + sourceScanRebuild + `,
+		    active_run_id=NULL, updated_at=now()
+		WHERE id=$3 AND active_run_id=$5
+		RETURNING ` + sourceCols
+
+const qSetSourceScanResultUnfenced = `
+		UPDATE sources
+		SET profile=$1, status=$2, ` + sourceScanRebuild + `,
+		    updated_at=now()
+		WHERE id=$3
+		RETURNING ` + sourceCols
+
 // SetSourceScanResult persists a scan outcome FENCED on the claiming run:
 // only the run that holds active_run_id may write, so a stale upload from a
 // superseded run can never clobber a fresher result. `seed` is the scan's
@@ -283,15 +312,8 @@ func (s PG) ClearSourceActiveRun(ctx context.Context, id, runID uuid.UUID) error
 // EMPTY seed (a rescan that legitimately finds nothing) still rebuilds: it
 // marshals to '{}', not NULL — see sourceRequirementsParam.
 func (s PG) SetSourceScanResult(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus, runID uuid.UUID, seed map[string]types.WorkspaceRequirement) (types.Source, error) {
-	return scanSource(s.Pool.QueryRow(ctx, `
-		UPDATE sources
-		SET profile=$1, status=$2, requirements = CASE WHEN $5::jsonb IS NULL THEN requirements ELSE $5::jsonb || COALESCE(
-		    (SELECT jsonb_object_agg(k, v) FROM jsonb_each(COALESCE(requirements,'{}'::jsonb)) e(k,v)
-		      WHERE e.v->>'provenance' IS DISTINCT FROM 'scan_seeded'), '{}'::jsonb) END,
-		    active_run_id=NULL, updated_at=now()
-		WHERE id=$3 AND active_run_id=$4
-		RETURNING `+sourceCols,
-		profile, string(status), id, runID, sourceRequirementsParam(seed)))
+	return scanSource(s.Pool.QueryRow(ctx, qSetSourceScanResultFenced,
+		profile, string(status), id, sourceRequirementsParam(seed), runID))
 }
 
 // SetSourceScanResultUnfenced persists a SYNCHRONOUS (inline local_dir) scan,
@@ -301,13 +323,7 @@ func (s PG) SetSourceScanResult(ctx context.Context, id uuid.UUID, profile []byt
 // scan_seeded subset; non-scan_seeded rows still win; NULL seed (failed scan)
 // leaves the contract untouched.
 func (s PG) SetSourceScanResultUnfenced(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus, seed map[string]types.WorkspaceRequirement) (types.Source, error) {
-	return scanSource(s.Pool.QueryRow(ctx, `
-		UPDATE sources
-		SET profile=$1, status=$2, requirements = CASE WHEN $4::jsonb IS NULL THEN requirements ELSE $4::jsonb || COALESCE(
-		    (SELECT jsonb_object_agg(k, v) FROM jsonb_each(COALESCE(requirements,'{}'::jsonb)) e(k,v)
-		      WHERE e.v->>'provenance' IS DISTINCT FROM 'scan_seeded'), '{}'::jsonb) END,
-		    updated_at=now()
-		WHERE id=$3 RETURNING `+sourceCols,
+	return scanSource(s.Pool.QueryRow(ctx, qSetSourceScanResultUnfenced,
 		profile, string(status), id, sourceRequirementsParam(seed)))
 }
 
@@ -372,11 +388,17 @@ func (s PG) UpdateBaseImageName(ctx context.Context, id uuid.UUID, name string) 
 		name, id))
 }
 
-// GetBaseImage returns the catalog row for id, or ErrNotFound.
+// GetBaseImage returns the catalog row for id, or ErrNotFound. NOT on the Store
+// interface: no handler reads one image by id (the console lists them), so
+// requiring it of every implementation bought nothing. Kept as a PG method
+// because store_hydrate_pg_test.go round-trips through it.
 func (s PG) GetBaseImage(ctx context.Context, id uuid.UUID) (types.BaseImageEntry, error) {
 	return scanBaseImage(s.Pool.QueryRow(ctx, `SELECT `+baseImageCols+` FROM base_images WHERE id=$1`, id))
 }
 
+// GetBaseImagesByIDs is hydrateAll's own batched read, not a Store-interface
+// method: its only caller is inside this package.
+//
 // GetBaseImagesByIDs returns the base images for ids in ONE query, keyed by
 // id — hydrateAll's bulk read, mirroring GetSourcesByIDs. Missing ids are
 // simply absent from the map (a dangling base_image_id contributes nothing;
