@@ -168,6 +168,20 @@ export function buildSpec(
   if (state.integrationId) {
     run.integration_id = state.integrationId;
   }
+  // The member's USER DRIVE, requested as a bare FLAG — nothing here names a
+  // drive, a path or a directory (CreateRunRequest.Drive): the server resolves
+  // what is allocated to the authenticated caller, so this can only ever ask
+  // for storage that caller was already granted.
+  //
+  // Emitted ONLY when the checkbox is on. An absent `drive` is "mount
+  // nothing", byte for byte the body every run sent before the field existed,
+  // so a run that never touched the control is unchanged on the wire. And
+  // read_only rides along only when this run NARROWS a writable allocation:
+  // read_only:false cannot widen one — the server refuses it as an attempt to
+  // — so `false` is never sent.
+  if (state.driveEnabled) {
+    run.drive = state.driveReadOnly ? { enabled: true, read_only: true } : { enabled: true };
+  }
 
   // --- onboarded workspace selections -> workspace_mounts[] / workspace_repos[]
   // ---

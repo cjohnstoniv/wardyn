@@ -62,4 +62,34 @@ describe("runs api — composition-model fields reach the wire", () => {
     expect("workspaces" in body).toBe(false);
     expect("integration_id" in body).toBe(false);
   });
+
+  // The member's user drive is the newest field on this whitelist, and the one
+  // where being dropped costs the most: the member ticks "Mount my drive", the
+  // run launches without it, and an hour of the agent's output goes into a
+  // container layer that is deleted at teardown. Pinned on BOTH paths — a
+  // preflight that predicts a driveless launch for a run that will carry one
+  // (or the reverse) is the same class of lie as the dropped field itself.
+  const withDrive = { ...input, drive: { enabled: true, read_only: true } };
+
+  it("createRun forwards drive, read_only and all", async () => {
+    await runs.createRun(withDrive);
+    expect(sentBody().drive).toEqual({ enabled: true, read_only: true });
+  });
+
+  it("preflightRun sends the same drive, so Review predicts what launch mounts", async () => {
+    await runs.preflightRun(withDrive);
+    expect(sentBody().drive).toEqual({ enabled: true, read_only: true });
+  });
+
+  it("forwards a drive with no read_only verbatim — the field is never invented", async () => {
+    await runs.createRun({ ...input, drive: { enabled: true } });
+    const body = sentBody();
+    expect(body.drive).toEqual({ enabled: true });
+    expect("read_only" in body.drive).toBe(false);
+  });
+
+  it("omits drive entirely for a run that never asked — byte for byte a pre-0.7 body", async () => {
+    await runs.createRun({ agent: "claude-code", repo: "acme/payments", task: "t" });
+    expect("drive" in sentBody()).toBe(false);
+  });
 });

@@ -52,8 +52,17 @@ vi.mock("../../../lib/api/policies", () => ({
   policies: { getDefaultPolicy: (...a: unknown[]) => getDefaultPolicyMock(...a) },
 }));
 
+// GET /me answers the drive chip and the Workspace card's drive sentence. The
+// default answer carries no user_drive — a member with none, which is what
+// every case below except the drive ones is.
+const whoamiMock = vi.fn();
+vi.mock("../../../lib/api/health", () => ({
+  health: { whoami: (...a: unknown[]) => whoamiMock(...a) },
+}));
+
 import { MemberGettingStarted } from "./member-getting-started";
 import { MEMBER } from "../../../lib/governance-copy";
+import { DRIVES, DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 
 function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
   return baseStatus({
@@ -94,6 +103,16 @@ describe("MemberGettingStarted", () => {
     listKeysMock.mockReset().mockResolvedValue([]);
     listWorkspacesMock.mockReset().mockResolvedValue([]);
     getDefaultPolicyMock.mockReset().mockResolvedValue({ min_confinement_class: "CC1" });
+    whoamiMock.mockReset().mockResolvedValue({
+      principal: "alice@corp.example",
+      method: "sso",
+      operator: false,
+      security_operator: false,
+      role: "member",
+      email: "alice@corp.example",
+      user_drive: null,
+      user_drive_denied_by_profile: "",
+    });
   });
 
   // §7.6's second display moment: the chip names the profile, the line says
@@ -253,5 +272,94 @@ describe("MemberGettingStarted", () => {
       screen.queryByText("Model access · Your key"),
     ).not.toBeInTheDocument();
     expect(listSecretsMineMock).toHaveBeenCalledTimes(3);
+  });
+  // §7.6's Getting Started moments, both keyed on /me.user_drive alone: with
+  // no allocation there is no chip and no sentence, which is today's page.
+  it("names the allocated drive — chip and the not-a-workspace sentence together", async () => {
+    whoamiMock.mockResolvedValue({
+      principal: "alice@corp.example",
+      method: "sso",
+      operator: false,
+      security_operator: false,
+      role: "member",
+      email: "alice@corp.example",
+      user_drive: {
+        name: "Scratch",
+        backend: "k8s_pvc",
+        size_mib: 16384,
+        writable: true,
+        enforcement: "request",
+      },
+      user_drive_denied_by_profile: "",
+    });
+    renderPage();
+    expect(
+      await screen.findByText(DM.GS_DRIVE_CHIP("Scratch", DRIVES.SIZE_GIB(16), DRIVES.MODE_RW_INLINE)),
+    ).toBeInTheDocument();
+    expect(screen.getByText(DM.GS_DRIVE_BODY)).toBeInTheDocument();
+  });
+
+  it("takes the _NOSIZE twin for a share with no allocation shown", async () => {
+    whoamiMock.mockResolvedValue({
+      principal: "alice@corp.example",
+      method: "sso",
+      operator: false,
+      security_operator: false,
+      role: "member",
+      email: "alice@corp.example",
+      user_drive: {
+        name: "Corporate homes",
+        backend: "k8s_pvc_static",
+        writable: false,
+        enforcement: "external",
+      },
+      user_drive_denied_by_profile: "",
+    });
+    renderPage();
+    expect(
+      await screen.findByText(DM.GS_DRIVE_CHIP_NOSIZE("Corporate homes", DRIVES.MODE_RO_INLINE)),
+    ).toBeInTheDocument();
+  });
+
+  // Paused wins over the size and the mode: an allocation an admin disabled
+  // mounts nothing next run, so naming its size would describe storage this
+  // member cannot reach.
+  it("says Paused instead of a size and a mode", async () => {
+    whoamiMock.mockResolvedValue({
+      principal: "alice@corp.example",
+      method: "sso",
+      operator: false,
+      security_operator: false,
+      role: "member",
+      email: "alice@corp.example",
+      user_drive: {
+        name: "Scratch",
+        backend: "docker_volume",
+        size_mib: 16384,
+        writable: true,
+        enforcement: "none",
+        paused: true,
+      },
+      user_drive_denied_by_profile: "",
+    });
+    renderPage();
+    expect(await screen.findByText(DM.GS_DRIVE_CHIP_PAUSED("Scratch"))).toBeInTheDocument();
+    expect(
+      screen.queryByText(DM.GS_DRIVE_CHIP("Scratch", DRIVES.SIZE_GIB(16), DRIVES.MODE_RW_INLINE)),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows no chip and no sentence with nothing allocated — today's page", async () => {
+    // The governance chip is the settle anchor: it appears only once the
+    // async reads have flushed, so the two absences below are a resolved
+    // state rather than a race with the /me read.
+    getDefaultPolicyMock.mockResolvedValue({
+      min_confinement_class: "CC1",
+      governance_profile_name: "walled",
+    });
+    renderPage();
+    expect(await screen.findByText(MEMBER.GS_CHIP("walled"))).toBeInTheDocument();
+    expect(screen.queryByText(DM.GS_DRIVE_BODY)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Drive · /)).not.toBeInTheDocument();
   });
 });
