@@ -43,7 +43,7 @@ V02C_DEX_PODS="$(kubectl --context "${V02C_CTX}" -n "${V02C_NS}" get pods -l app
 #    timeline spoke them, which the shared floors cannot (they count, not match).
 V02C_TL="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-02c}/narration.json"
 if [[ -s "${V02C_TL}" ]]; then
-  grep -q "scheduled by the cluster" "${V02C_TL}" && ok "narration reaches the pod claim (demo 1 ran)" \
+  grep -q "there is its pod" "${V02C_TL}" && ok "narration reaches the pod claim (demo 1 ran)" \
     || bad "narration timeline never speaks the pod line — act 4's first demo did not roll"
   grep -q "trailing dot" "${V02C_TL}" && ok "narration reaches the trailing-dot dodge (demo 2 ran)" \
     || bad "narration timeline never speaks the dodge line — act 4's second demo did not roll"

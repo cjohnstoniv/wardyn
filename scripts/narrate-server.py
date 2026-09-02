@@ -85,14 +85,23 @@ _SUBS = [
     ("held live", "held lyve", True),
     ("caught it live", "caught it lyve", True),
     ("blocked live", "blocked lyve", True),
+    # dialog round 2026-09-01: new adjective phrases the rewrite introduced.
+    ("live credential", "lyve credential", True),
+    ("live session", "lyve session", True),
+    ("watched this one live", "watched this one lyve", True),
+    ("audit trail, live", "audit trail, lyve", True),
     # ...and the VERB sense (/lɪv/) where the scripts use it:
     ("attacks live exactly here", "attacks liv exactly here", True),
     ("no keys live in the room", "no keys liv in the room", True),
     ("keys live inside", "keys liv inside", True),
     ("keys don't live in the room", "keys don't liv in the room", True),
+    ("run can live", "run can liv", True),
+    ("cloud credentials live", "cloud credentials liv", True),
     # "record" the VERB (/rɪˈkɔːɹd/) where espeak would stress it as the noun:
     ("Only record work you trust", "Only ruh-cord work you trust", True),
     ("You can't record what a policy", "You can't ruh-cord what a policy", True),
+    ("going to record", "going to ruh-cord", True),
+    ("Record it.", "Ruh-cord it.", True),
     # "live" the VERB in the 03 split's owner line, and the ADJECTIVE in 03d's
     # "the live GitHub API" — both senses in one round, so both are pinned.
     ("credentials can live", "credentials can liv", True),
@@ -103,6 +112,9 @@ _SUBS = [
     ("read it back", "reed it back", True),
     # 03c's audit-panel line reads the panel upward — imperative /riːd/ again.
     ("so read it upward", "so reed it upward", True),
+    ("never read it", "never reed it", True),
+    ("reads back", "reeds back", True),
+    ("Read which gate refused", "Reed which gate refused", True),
     # "use" the VERB (/juːz/) where espeak guesses the noun — validated against
     # the venv phonemizer 2026-08-24 ("yooz" → /juːz/). NOTE: the r2 adjudication's
     # H1 pin ("first-use approval" → "first yoos approval") was REJECTED by that
@@ -110,12 +122,23 @@ _SUBS = [
     # phonemizes to /juːz/ — the exact inversion it meant to prevent.
     ("use it, not have it", "yooz it, not have it", True),
     ("demos ahead use this key", "demos ahead yooz this key", True),
+    ("can still use it", "can still yooz it", True),
+    ("allowed to use", "allowed to yooz", True),
     # The colon in the header name is inaudible; a comma lands the pause (r2 H3).
     ("Authorization: Bearer", "Authorization, Bearer", False),
     # The quote marks around 'forbidden' are inaudible; a comma lands the beat.
     ("Not 'forbidden'.", "Not, forbidden.", False),
+    # 09's honesty line quotes two phrases; the curly quotes are inaudible, so
+    # commas land the same beat (same treatment as "Not 'forbidden'." above).
+    ("that \u201cnone observed\u201d means \u201cnone happened.\u201d",
+     "that, none observed, means, none happened.", False),
     # "PyPI" reads as "pie-pie" bare:
     ("PyPI", "pie pee eye", True),
+    # Product/tool names and one dotted identifier the captions speak aloud.
+    ("gVisor", "gee visor", True),
+    ("kubectl", "cube control", True),
+    ("Apache-2.0", "Apache two point oh", True),
+    ("authz.denied", "auth-zee denied", True),
     # The owner's script uses three-dot trailing ellipses ("useful...") — read
     # as a breath, not dots. Must precede nothing (plain literal).
     ("...", ", ", False),
@@ -124,6 +147,8 @@ _SUBS = [
     ("http-intake.logs.us5.datadoghq.com", "the Datadog telemetry endpoint", True),
     ("169.254.169.254", "1 6 9 dot 2 5 4 dot 1 6 9 dot 2 5 4", True),
     ("192.168.1.1", "1 9 2 dot 1 6 8 dot 1 dot 1", True),
+    # ".org" alone leaves "files.pythonhosted" as one mangled token.
+    ("files.pythonhosted.org", "the python-hosted download host", True),
     # Generic last: without these a bare "example.com" reads as one mangled token.
     (".com", " dot com", True),
     (".org", " dot org", True),
@@ -164,9 +189,10 @@ def speakable(text: str, initialisms: bool = True) -> str:
     _SAY = {"CI": "see eye", "CLI": "see ell eye", "API": "eh pee eye", "APIs": "eh pee eyes", "AI": "eh eye",
             "CC1": "see see one", "PAT": "pee eh tee", "PATs": "pee eh tees", "STS": "ess tee ess",
             "SSH": "ess ess aitch", "TTL": "tee tee ell", "TLS": "tee ell ess", "npm": "en pee em",
-            "SSO": "ess ess oh", "OIDC": "oh eye dee see"}
+            "SSO": "ess ess oh", "OIDC": "oh eye dee see",
+            "MCP": "em see pee", "MCPs": "em see pees"}
     if initialisms:
-        out = re.sub(r"\b(CI|CLI|APIs|API|AI|CC1|PATs|PAT|STS|SSH|SSO|OIDC|TTL|TLS|npm)\b", lambda m: _SAY[m.group(1)], out)
+        out = re.sub(r"\b(CI|CLI|APIs|API|AI|CC1|PATs|PAT|MCPs|MCP|STS|SSH|SSO|OIDC|TTL|TLS|npm)\b", lambda m: _SAY[m.group(1)], out)
     # Numbers the captions spell as digits but mean as digit STRINGS: a file mode,
     # a port, the cloud-metadata address. Read as quantities they come out as
     # "four hundred forty-three" / "one hundred sixty-nine…" (checked against the

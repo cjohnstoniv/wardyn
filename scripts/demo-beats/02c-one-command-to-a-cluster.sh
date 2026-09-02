@@ -85,12 +85,14 @@ preflight
 # Beat 1 — the one command
 # ---------------------------------------------------------------------------
 chapter "One command to a cluster" "From an empty host to a governed control plane"
-say "No Wardyn is running anywhere on this machine. You need docker, kind, helm, kubectl — and this repo."
+say "No Wardyn is running here yet. You need the usual cluster tools — Docker, kind, helm, kubectl — and this repo."
 say "One command. A real Kubernetes cluster, the chart, and the control plane."
 type_cmd "WARDYN_QUICKSTART_HTTP_PORT=${HTTP_PORT} WARDYN_QUICKSTART_SSH_PORT=${SSH_PORT} make kind-quickstart"
-say "It built a cluster whose network plugin actually enforces network policy — if it did not, this install would refuse to boot rather than run your sandboxes unconfined."
+say "It built a cluster and ran a canary that proves the network plugin enforces policy — that verdict is the line above."
+say "If the canary failed, the install would refuse to boot rather than run sandboxes unconfined."
 say "Then the chart: the control plane, its database, and the sandbox runner. Nothing pulled from a registry Wardyn owns — these are images this machine just built."
-say "That's the whole install. Disposable on purpose — one node, a database with no storage, a token passed on the command line. The chart is the production one; the shortcuts around it are not."
+say "That's the whole install — one node, a database with no storage, a token on the command line. Disposable on purpose."
+say "The chart is the production one; the shortcuts around it are not."
 
 # ---------------------------------------------------------------------------
 # Beat 2 — from a token to your people: the SSO overlay
@@ -103,8 +105,9 @@ type_cmd "kubectl --context ${CONTEXT} apply -f deploy/kind/sso/dex.yaml"
 type_cmd "helm --kube-context ${CONTEXT} upgrade wardyn deploy/helm/wardyn -n ${NAMESPACE} --reuse-values -f deploy/kind/sso/values.yaml --set-file defaultPolicy=deploy/kind/sso/default-policy.json"
 type_cmd "kubectl --context ${CONTEXT} -n ${NAMESPACE} rollout status deploy/wardyn --timeout=180s"
 type_cmd "grep OIDC_ROLE_MAP deploy/kind/sso/values.yaml"
-say "Same chart, re-rendered on OIDC. That one line is the whole role map — this address is an admin, that one is a member."
-say "The overlay also sets the default policy — the ceiling every member's own policy is clamped to — floored to the barrier this cluster actually enforces."
+say "Same chart, now trusting the company login — OIDC. That one line is the whole role map: this address is an admin, that one is a member."
+say "The overlay also sets a default policy: the most any member's run may be allowed."
+say "Nobody's rules can be looser than this — and never weaker than the barrier this cluster enforces."
 type_cmd "curl -s -o /dev/null -w '%{http_code}\n' -H \"Authorization: Bearer \${TOKEN}\" http://127.0.0.1:${HTTP_PORT}/api/v1/runs"
 say "The token that worked a minute ago is dead. The chart re-rendered without it."
 
@@ -113,7 +116,8 @@ say "The token that worked a minute ago is dead. The chart re-rendered without i
 # ---------------------------------------------------------------------------
 say "The cluster reaches the identity provider by its service name. Your browser needs its own road."
 type_cmd "kubectl --context ${CONTEXT} -n ${NAMESPACE} port-forward svc/wardyn-dex ${DEX_PORT}:5556 >/dev/null 2>&1 & echo \$! > '${PF_PID_FILE}'; sleep 2; echo forwarding :${DEX_PORT}"
-say "That is the split horizon: inside the cluster the identity provider is a service name; to your browser it is localhost. Same provider, two roads — and the issuer has to match on both."
+say "Inside the cluster the identity provider is a service name; to your browser it is localhost. Same provider, two roads."
+say "The name it signs tokens with has to match on both."
 
 # ---------------------------------------------------------------------------
 # Beat 4 — proof before a browser opens

@@ -51,7 +51,7 @@ test("V04c act 1 — the map: who signs in, and as what", async () => {
 
   await dexSignIn("admin@wardyn.local");
   await page.waitForURL(/\/(runs|setup)/, { timeout: 60_000 });
-  await caption(page, "Signed in as the admin — the role map in the chart's values decided that.");
+  await caption(page, "We sign in as the admin. Who is an admin was decided by a role map in the install's config — one line per person.");
   await beat(page, PACE.read);
 
   await page.goto("/setup?step=people");
@@ -75,17 +75,21 @@ test("V04c act 2 — capabilities, enforced one at a time", async () => {
   await caption(page, "Each capability is granted — and enforced — on its own.");
   await beat(page, PACE.read);
   await spotlight(page, page.getByText("Egress hosts").first());
-  await caption(page, "Egress hosts, for one: which destinations a member may approve on their own run. Unenforced, they can approve anything their run asks for. Enforced — only the hosts you granted them.");
+  await caption(page, "Egress hosts, for one: which destinations a member may approve on their own run.");
+  await beat(page, PACE.read);
+  await caption(page, "Unenforced, they can approve anything their run asks for. Enforced — only the hosts you granted them.");
   await beat(page, PACE.read);
   await beat(page, PACE.read);
-  await caption(page, "Until you enforce one, nothing about it changes — turn them on one capability at a time, at whatever pace your org can take.");
+  await caption(page, "And unenforced is the default.");
+  await beat(page, PACE.read);
+  await caption(page, "Turn them on one capability at a time, at whatever pace your organization can take.");
   await beat(page, PACE.read);
   await spotlight(page, page.getByText("Enforcement").first());
   await caption(page, "Enforcement is the switch that turns a written rule into a refused request.");
   await beat(page, PACE.read);
   await act(page, page.getByRole("switch", { name: /Enforcement Egress hosts/i }), "So throw it.");
   await expect(page.getByRole("alertdialog")).toBeVisible({ timeout: 15_000 });
-  await caption(page, "And the product says the blast radius out loud: who this changes, before it changes anything.");
+  await caption(page, "And the product says who this changes, before it changes anything.");
   await beat(page, PACE.read);
   await act(page, page.getByRole("alertdialog").getByRole("button", { name: "Enforce" }), "Enforced.");
   await beat(page, PACE.read);
@@ -108,12 +112,16 @@ test("V04c act 3 — the member's view of the same install", async () => {
   await page.waitForURL(/\/(setup|runs)/, { timeout: 60_000 });
 
   await expect(page.getByText("You're a member of this Wardyn")).toBeVisible({ timeout: 30_000 });
-  await caption(page, "A member lands on their own Getting Started. Both accounts came from the role map you saw applied — creating people is your identity provider's job; Wardyn only reads the map.");
+  await caption(page, "A member lands on their own Getting Started.");
+  await beat(page, PACE.read);
+  await caption(page, "Both accounts come from the install's role map — creating people is your identity provider's job; Wardyn only reads the map.");
   await beat(page, PACE.read);
   await beat(page, PACE.read);
 
   await spotlight(page, page.getByRole("navigation").first());
-  await caption(page, "Runs, approvals, workspaces. The console stops offering the rest — and the server stops answering for it, which is the half that actually holds.");
+  await caption(page, "Runs, approvals, workspaces. The console stops offering the rest.");
+  await beat(page, PACE.read);
+  await caption(page, "Hiding a link isn't authorization, though — the refusal that matters is the server's, on every one of those calls. That's the half that actually holds.");
   await beat(page, PACE.read);
   await spotlight(page, null);
   await expect(page.getByRole("link", { name: /^Permissions/ })).toHaveCount(0);
@@ -124,7 +132,7 @@ test("V04c act 3 — the member's view of the same install", async () => {
   await page.goto("/runs/new");
   await page.getByRole("combobox", { name: "Title" }).fill("reach for the outside world");
   await act(page, page.getByRole("radio", { name: /^Terminal/ }), "Their own run — a terminal, nothing mounted.");
-  await act(page, page.getByRole("button", { name: "Minimal" }), "Minimal policy: unlisted hosts raise an approval —");
+  await act(page, page.getByRole("button", { name: "Minimal" }), "Minimal policy: unlisted hosts raise an approval.");
   const spec = page.getByRole("textbox", { name: "Spec (JSON)" });
   await spec.fill(JSON.stringify({
     allowed_domains: ["api.anthropic.com"],
@@ -133,7 +141,7 @@ test("V04c act 3 — the member's view of the same install", async () => {
     auto_stop_after_sec: 3600,
     eligible_grants: [],
   }, null, 2));
-  await caption(page, "— floored to this cluster's Fence.");
+  await caption(page, "And lowered to Fence — the one barrier this cluster has. The floor is the member's to set; the admin's ceiling still caps it.");
   await beat(page, PACE.read);
   await act(page, page.getByRole("radio", { name: /^Fence/ }), undefined);
   await act(page, page.getByRole("button", { name: /^Launch/ }), "Launch it.");
@@ -153,10 +161,12 @@ test("V04c act 3 — the member's view of the same install", async () => {
   await spotlight(page, page.getByText("Not a host you're granted").first());
   await caption(page, "Egress hosts is enforced, and this member holds no grant — so the console says exactly that: not a host you're granted.");
   await beat(page, PACE.read);
-  await caption(page, "The decision belongs to someone the map empowered.");
+  await caption(page, "The decision belongs to someone the map empowered — you'll watch that hand-off in 'Admin operations'.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 
   await caption(page, "One install. Two roles. The map decides — and the map is yours.");
+  await beat(page, PACE.read);
+  await caption(page, "Next on the core path: 'Your first policy'.");
   await beat(page, PACE.read);
 });

@@ -242,8 +242,10 @@ test("A1 — the panel and its templates", async () => {
   await beat(page, PACE.read);
   await caption(
     page,
-    "Wardyn checks it before it stores it — a policy that couldn't run doesn't get to sit there looking like it would.",
+    "Wardyn checks it before it stores it — put in a barrier this machine can't provide, and it refuses to save.",
   );
+  await beat(page, PACE.read);
+  await caption(page, "A policy that couldn't run doesn't get to sit there looking like it would.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 
@@ -269,8 +271,10 @@ test("A1 — the panel and its templates", async () => {
   }
   await caption(
     page,
-    "And you don't start from a blank page. Minimal. Model provider only. Package registries. A CI baseline. Or allow-all, if you'd rather observe first and tighten later.",
+    "And you don't start from a blank page: Minimal. Just the AI provider. Package download sites. A baseline for build pipelines.",
   );
+  await beat(page, PACE.read);
+  await caption(page, "Or allow-all — though if you'd rather observe first, that's what recording is for.");
   await beat(page, PACE.read);
 
   // Click one that VISIBLY rewrites the document (Package registries = eleven
@@ -342,7 +346,7 @@ test("A2 — the safety meter", async () => {
   await specBox.fill((await specBox.inputValue()).replace('"CC3"', '"CC1"'));
   await expect(meter, "dropping the floor to CC1 did not read Elevated").toHaveAttribute("data-safety", "Elevated");
   await spotlight(page, meter);
-  await caption(page, "Drop to the weakest barrier, and the rating moves toward Elevated.");
+  await caption(page, "Drop to the weakest barrier, and the rating moves toward Elevated — elevated risk, one step from the bottom.");
   await beat(page, PACE.read);
 
   // Allow-all template -> Weakest (allow-all egress + never-reap = two highs).
@@ -394,7 +398,7 @@ test("A3 — the confinement floor", async () => {
   const firstUse = railEntry("first_use_approval");
   await centerInFrame(firstUse);
   await spotlight(page, firstUse);
-  await caption(page, "This setting controls that behavior.");
+  await caption(page, "This setting — first-use approval — controls what happens to anything not on the list: it has to ask.");
   await beat(page, PACE.read);
   const floorField = railEntry("min_confinement_class");
   await centerInFrame(floorField);
@@ -419,7 +423,7 @@ test("A3 — the confinement floor", async () => {
   // Fence/Wall/Vault in full, so this is the callback plus the one thing 02
   // could not say — here the pick is saved WITH the policy.
   await spotlight(page, floorField);
-  await caption(page, "You've already met Fence, Wall, and Vault, and the same capability check applies here.");
+  await caption(page, "Fence, Wall, and Vault — the three barriers — and the same 'can this machine do it' check applies here.");
   await beat(page, PACE.read);
   await caption(
     page,
@@ -460,7 +464,7 @@ test("A4 — save, then reuse", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "And now this policy has an identity.");
   await beat(page, PACE.read);
-  await caption(page, "Every run that uses it can point back to the exact rules that governed it.");
+  await caption(page, "Every run that uses it will point back to these exact rules — you'll see that on the next run.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
   // [OWNER SLOT — drafted] 0.6's Policies page grew the ceiling counterpart to
@@ -469,8 +473,12 @@ test("A4 — save, then reuse", async () => {
   // is a collapsed <details>, so the click opens its YAML on camera.
   const ceiling = page.getByText("Default (ceiling) policy", { exact: false }).first();
   await centerInFrame(ceiling);
-  await act(page, ceiling, "One more rail, new here: the default ceiling policy.");
-  await caption(page, "A run created with no policy falls back to it — and a member's inline policy is clamped beneath it.");
+  await act(page, ceiling, "One more thing on this page, for teams: a default policy that caps what anyone's run may do — the ceiling every other policy sits under.");
+  await caption(page, "On a single-user install you can ignore it.");
+  await beat(page, PACE.read);
+  await caption(page, "A run created with no policy falls back to it.");
+  await beat(page, PACE.read);
+  await caption(page, "On a team install it is also the ceiling: no one's own policy may be looser than this.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 
@@ -525,7 +533,7 @@ test("A4 — save, then reuse", async () => {
   const fenceRadio = barrier.getByRole("radio", { name: "Fence" });
   await centerInFrame(fenceRadio);
   await spotlight(page, fenceRadio);
-  await caption(page, "Now we'll deliberately choose a barrier below the policy's minimum.");
+  await caption(page, "Now we'll try to pick a barrier below the policy's minimum.");
   await beat(page, PACE.read);
   await expect(
     fenceRadio,
@@ -538,11 +546,13 @@ test("A4 — save, then reuse", async () => {
   const floorReason = page.getByText(`Fence is below the policy's floor (${POLICY_FLOOR_LABEL}).`);
   await expect(floorReason, "the Seg disables Fence without saying why — the floor is enforced but not explained").toBeVisible();
   await spotlight(page, floorReason);
-  await caption(page, "And Wardyn refuses to start it.");
+  await caption(page, "And the console won't let us pick it — Fence is below the policy's floor, and it says why.");
+  await beat(page, PACE.read);
+  await caption(page, "The control plane enforces the same rule on launch.");
   await beat(page, PACE.read);
   await caption(page, "The policy requires a stronger floor.");
   await beat(page, PACE.read);
-  await caption(page, "So the control plane says no.");
+  await caption(page, "So Wardyn says no.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 

@@ -69,7 +69,9 @@ test("V12b act 1 — grant them the host", async () => {
   await page.waitForURL(/\/(runs|setup)/, { timeout: 60_000 });
   await page.goto("/permissions");
   await expect(page.getByRole("heading", { name: "Permissions" }).first()).toBeVisible({ timeout: 30_000 });
-  await caption(page, "Egress hosts is enforced — so before anything else, grant the member the host their work needs.");
+  await caption(page, "This install enforces Egress hosts — a member may only decide hosts an admin granted them.");
+  await beat(page, PACE.read);
+  await caption(page, "So before anything else, grant the member the host their work needs.");
   await beat(page, PACE.read);
   await page.getByRole("textbox", { name: "Who" }).fill("member@wardyn.local");
   await page.getByRole("combobox", { name: "Capability" }).selectOption({ label: "Egress hosts" }).catch(async () => {
@@ -78,14 +80,16 @@ test("V12b act 1 — grant them the host", async () => {
     await page.getByRole("option", { name: "Egress hosts" }).click();
   });
   await page.getByRole("textbox", { name: "Host" }).fill("example.com");
-  await act(page, page.getByRole("button", { name: "Add grant" }).first(), "Granted: this member may decide example.com on their own runs. Almost.");
+  await act(page, page.getByRole("button", { name: "Add grant" }).first(), "Granted: this member may decide example.com on their own runs — with one more rule on top.");
   // The row is the proof the grant landed — without this a silently failed
   // add turns act 3's four-eyes refusal into an ungranted-host chip instead.
   await expect(
     page.getByText("member@wardyn.local").first(),
   ).toBeVisible({ timeout: 15_000 });
   await beat(page, PACE.read);
-  await caption(page, "Because this deployment also opted into four-eyes: one line in the chart, default off.");
+  await caption(page, "Because this deployment also turned on four-eyes — two people, never one, on every approval; nobody may approve their own run's egress.");
+  await beat(page, PACE.read);
+  await caption(page, "One line in the chart, default off.");
   await beat(page, PACE.read);
 });
 
@@ -109,7 +113,7 @@ test("V12b act 2 — a member's run asks for the outside world", async () => {
   await beat(page, PACE.read);
   await page.getByRole("combobox", { name: "Title" }).fill("reach for the outside world");
   await act(page, page.getByRole("radio", { name: /^Terminal/ }), "No agent needed — a shell is enough to meet the boundary.");
-  await act(page, page.getByRole("button", { name: "Minimal" }), "Minimal policy: unlisted hosts raise an approval —");
+  await act(page, page.getByRole("button", { name: "Minimal" }), "A member's own run — a terminal, nothing mounted, the Minimal policy.");
   // Minimal ships a CC2 floor; this demo cluster's one barrier is the Fence.
   // The one-line edit is itself the lesson: the floor is the member's to
   // RAISE, never to sneak under the admin's ceiling.
@@ -121,7 +125,7 @@ test("V12b act 2 — a member's run asks for the outside world", async () => {
     auto_stop_after_sec: 3600,
     eligible_grants: [],
   }, null, 2));
-  await caption(page, "— floored to this cluster's Fence.");
+  await caption(page, "And lowered to Fence — the one barrier this cluster has.");
   await beat(page, PACE.read);
   await act(page, page.getByRole("radio", { name: /^Fence/ }), undefined);
   await act(page, page.getByRole("button", { name: /^Launch/ }), "Launch it interactive.");
@@ -132,7 +136,7 @@ test("V12b act 2 — a member's run asks for the outside world", async () => {
   await expect(screen).toBeVisible({ timeout: 240_000 });
   await screen.click();
   await page.keyboard.type(`curl -sSI --max-time 5 https://${HOST}\n`);
-  await caption(page, "Denied — and raised for review, by name.");
+  await caption(page, "The member dials the granted host. Denied — and raised for review, by name.");
   await beat(page, PACE.read);
 });
 
@@ -164,7 +168,7 @@ test("V12b act 3 — your run, therefore not your call", async () => {
   await caption(page, "Refused — you created this run, so someone else approves or denies its egress.");
   await beat(page, PACE.read);
   await spotlight(page, null);
-  await caption(page, "Not a permissions gap. A guarantee: no one self-approves their own agent's reach.");
+  await caption(page, "Not a permissions gap. A guarantee: the person who created the run never approves its reach — admin or member.");
   await beat(page, PACE.read);
 });
 
@@ -215,5 +219,7 @@ test("V12b act 5 — the trail holds both halves", async () => {
   await beat(page, PACE.read);
   await spotlight(page, null);
   await caption(page, "Four eyes, one switch, receipts for both.");
+  await beat(page, PACE.read);
+  await caption(page, "Last stop: 'Your terminal, our cluster'.");
   await beat(page, PACE.read);
 });

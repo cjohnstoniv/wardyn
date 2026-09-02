@@ -178,7 +178,7 @@ test("beat 5 — the pipeline's run, on the board", async () => {
   // would look perfect.
   await expect(headline).toHaveCount(1);
 
-  await caption(page, "Now let's look at that same run in the console.");
+  await caption(page, "Now the first run — the green one, the one that exited zero — in the console.");
   await spotlight(page, headline);
   // The payoff of the whole terminal half, asserted where it is claimed: the
   // badge renders runStateMeta's TITLE-CASE label ("Completed"), not the wire
@@ -240,13 +240,9 @@ test("beat 6 — same trail, no human", async () => {
   const appendOnly = page.getByText(/Append-only · \d+ events? for this run/).first();
   await expect(appendOnly).toBeVisible({ timeout: 30_000 });
   await spotlight(page, appendOnly);
-  await caption(page, "There's the append-only trail.");
+  await caption(page, "There's the trail — append-only: lines are added, never changed and never removed.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Created.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "Executed.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "Completed.");
+  await caption(page, "Created. Ran. Completed.");
   await beat(page, BEAT_SHORT);
   await caption(page, "Nobody watched this one live.");
   await beat(page, BEAT_SHORT);
@@ -279,15 +275,15 @@ test("beat 6 — same trail, no human", async () => {
   // local/light-episodes-dialog-flags.md.
   await caption(
     page,
-    "And if it reaches for something off the list, there's no approval step to wait for. The policy fails closed, and the pipeline gets that failure as its result.",
+    "And anything off the list has nobody to ask — the door stays shut.",
   );
+  await beat(page, PACE.read);
+  await caption(page, "There's the row in the record, and the build goes red.");
   await beat(page, PACE.read);
   await caption(page, "Governance that doesn't require somebody to stay awake.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Next, we're going to look at the record itself.");
+  await caption(page, "Next: who may step into a live run, and the record itself.");
   await beat(page, PACE.read);
-  await caption(page, "And ask the final question:");
-  await beat(page, BEAT_SHORT);
   await caption(page, "Can we actually prove what happened?");
   await beat(page, PACE.read + 400);
   await caption(page, "");

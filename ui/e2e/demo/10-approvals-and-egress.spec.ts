@@ -366,7 +366,7 @@ test("beats 0-5 — the wait-for-review hold, and the scope ladder", async () =>
     })
     .toBe("object");
 
-  await chapter(page, "Approval scopes", "How far should one “yes” reach?");
+  await chapter(page, "Approvals and egress", "How far should one yes reach?");
 
   // ---- B0 · Start ---------------------------------------------------------
   // The catalog stacks every demo on one page, so `demo-card-<id>` is a real
@@ -387,7 +387,7 @@ test("beats 0-5 — the wait-for-review hold, and the scope ladder", async () =>
   });
 
   await spotlight(page, card);
-  await caption(page, "An agent reaches for a host that's not on the allowlist.");
+  await caption(page, "A run reaches for a host that isn't on the list of hosts it may reach.");
   await beat(page, PACE.read);
   await caption(page, "We know what happens next.");
   await beat(page, PACE.read);
@@ -472,7 +472,7 @@ test("beats 0-5 — the wait-for-review hold, and the scope ladder", async () =>
   // "waiting, not failing", so keeping the two it paraphrases would stutter.
   // "Nothing has left the sandbox." stays: it is the only line here that says
   // something the callback does not, and it rides the held row's own ring.
-  await caption(page, "Same as episode three — it's waiting, not failing.");
+  await caption(page, "Same as in 'What it stops' — it's waiting, not failing.");
   await beat(page, PACE.read);
   {
     const r = await headerUp;
@@ -501,7 +501,7 @@ test("beats 0-5 — the wait-for-review hold, and the scope ladder", async () =>
   // P8 (dialog review, owner-ratified 2026-08-23): the ladder on screen starts
   // at Once, so calling "this run" the SIMPLEST contradicted the picture. One
   // caption, and it claims reach-for-it-most instead of simplest.
-  await caption(page, "The one you'll reach for most is: just this run.");
+  await caption(page, "The simplest one: just this run.");
   await beat(page, BEAT_SHORT);
   await caption(page, "It works for this run, and then it disappears.");
   await beat(page, PACE.read);
@@ -539,11 +539,11 @@ test("beats 0-5 — the wait-for-review hold, and the scope ladder", async () =>
   await beat(page, PACE.read);
   await caption(page, "No retry.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "It was never refused.");
+  await caption(page, "This policy holds instead of refusing — the request waited at the door, and the wait ended with a yes. No retry needed.");
   await beat(page, PACE.read + 600);
 
   // ---- B3 · Unwanted host -------------------------------------------------
-  // Silent: the owner's next SAY-ON-CLICK ("Open the scope menu.") is the
+  // Silent: the owner's next SAY-ON-CLICK ("Open the scope menu…") is the
   // first spoken line of this beat — typing the second host is unnarrated.
   await typeInTerminal(page, REACH_TELEMETRY, card);
   const telemetryRow = card.getByTestId("live-approval-row").filter({ hasText: TELEMETRY_HOST });
@@ -562,7 +562,7 @@ test("beats 0-5 — the wait-for-review hold, and the scope ladder", async () =>
   // /approve/i query elsewhere in the suite would match two buttons. DOM order
   // is Approve, Approve-caret, Deny, Deny-caret — .first() is Approve's, the
   // same disambiguation e2e/approvals.spec.ts and funnel.ts's decide() use.
-  await act(page, telemetryRow.getByRole("button", { name: "More options" }).first(), "Open the scope menu.");
+  await act(page, telemetryRow.getByRole("button", { name: "More options" }).first(), "Open the scope menu — here's the ladder.");
   // Radix portals the menu content, so it is NOT a descendant of the row — and
   // scoping to the open menu (rather than the page) keeps /^Once/ from also
   // matching the "Once, or for good" card sitting further down this catalog.
@@ -574,8 +574,6 @@ test("beats 0-5 — the wait-for-review hold, and the scope ladder", async () =>
   const alwaysOption = menu.getByRole("button", { name: /^Always\b/ });
 
   // FAST TOUR — just naming the four rungs, ring flying between them.
-  await caption(page, "And here's the ladder.");
-  await beat(page, PACE.read);
   await spotlight(page, onceBtn);
   await caption(page, "Once.");
   await beat(page, BEAT_SHORT);
@@ -615,7 +613,9 @@ test("beats 0-5 — the wait-for-review hold, and the scope ladder", async () =>
   await act(page, menu.getByRole("button", { name: "← Back" }));
 
   await spotlight(page, alwaysOption);
-  await caption(page, "And Always saves the decision to the workspace.");
+  await caption(page, "And Always would save it to a workspace — greyed out here, because this demo run has none.");
+  await caption(page, "We'll do that one for real in a minute.");
+  await beat(page, PACE.read);
   // THE PAYOFF of this beat, and the setup for beat 6's contrast. A REAL
   // disabled attribute, not aria-disabled (ScopeMenu renders plain <button>s
   // precisely so this is true). Unnarrated (not in the owner's script), but
@@ -654,7 +654,9 @@ test("beats 0-5 — the wait-for-review hold, and the scope ladder", async () =>
   await spotlight(page, card.locator(".xterm-screen").first());
   await caption(page, "Nobody answered.");
   await beat(page, PACE.read);
-  await caption(page, "So it fails closed.");
+  await caption(page, "Nobody answered inside the window — thirty seconds here — so the door stays shut: nothing was let through.");
+  await beat(page, PACE.read);
+  await caption(page, "And the waiting row should close with it.");
   await beat(page, PACE.read);
   await caption(page, "The request was never granted.");
   await beat(page, PACE.read + 400);
@@ -714,7 +716,7 @@ test("beats 0-5 — the wait-for-review hold, and the scope ladder", async () =>
     60_000,
     `no egress.deny for ${TELEMETRY_HOST} reached the demo's audit panel`,
   );
-  await caption(page, "And that refusal becomes part of the record.");
+  await caption(page, "And that refusal is a row in the record — with its own scope.");
   await beat(page, PACE.read + 600);
   await spotlight(page, null);
 
@@ -735,7 +737,7 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
   // ---- B6 · Always, real workspace ---------------------------------------
   // "New run" lives in the app shell's top bar, so it is reachable from /demos
   // without a detour through the Runs board.
-  await act(page, page.getByRole("button", { name: "New run" }), "Create a new run using the real workspace.");
+  await act(page, page.getByRole("button", { name: "New run" }), "The demo cards have no workspace, so Always was greyed out. Create a new run on our real workspace, where Always is allowed.");
   await expect(page).toHaveURL(/\/runs\/new/, { timeout: 30_000 });
 
   const titleBox = page.getByLabel("Title");
@@ -836,7 +838,7 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
   );
   await caption(page, "Now we'll save the decision to this workspace.");
   await beat(page, PACE.read + 400);
-  await caption(page, "It holds until you remove it.");
+  await caption(page, "It holds until someone removes it from the workspace — and that removal is a row too.");
   await beat(page, BEAT_SHORT);
 
   // `always` is the whole point of the video. It is only clickable because THIS
@@ -976,7 +978,7 @@ test("beat 8 — a new run, and nothing to click", async () => {
   await beat(page, PACE.read);
   await caption(page, "Next, we're removing the human entirely.");
   await beat(page, PACE.read);
-  await caption(page, "Because a CI pipeline can't click Approve.");
+  await caption(page, "Because a CI pipeline — an automated build with nobody watching — can't click Approve.");
   await beat(page, PACE.read + 400);
   await silentCard(page, "Next — 11: CI & headless");
 });

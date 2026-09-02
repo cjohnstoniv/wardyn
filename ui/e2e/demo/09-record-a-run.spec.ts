@@ -415,7 +415,7 @@ test("cold open + B1 — the card that learns", async () => {
   // just filmed exactly that. Recording is the answer to NOT knowing, and saying
   // so is what stops this episode reading as a retraction of the last one.
   // Owner-ratified ordinal (restructure): the policy episode is 05 now.
-  await caption(page, "Episode five turned rules we already knew into a reusable policy.");
+  await caption(page, "'Your first policy' turned rules we already knew into a reusable policy.");
   await beat(page, PACE.read);
   await caption(page, "Most of the time, you don't know everything the job will need.");
   await beat(page, BEAT_SHORT);
@@ -450,10 +450,8 @@ test("cold open + B1 — the card that learns", async () => {
   await spotlight(page, cardHeader);
   await caption(page, "This is where the policy gets learned.");
   await beat(page, PACE.read);
-  await caption(page, "Not from a developer's memory.");
+  await caption(page, "Not from a developer's memory — from the run itself.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "From the run itself.");
-  await beat(page, PACE.read + 400);
   await spotlight(page, null);
 });
 
@@ -519,7 +517,7 @@ test("B2 — start a recorded session", async () => {
   await beat(page, PACE.read);
   await caption(page, "We're observing the job before we constrain it.");
   await beat(page, PACE.read);
-  await caption(page, "That makes this a privileged operation, and the product says so right on the screen.");
+  await caption(page, "That's a powerful thing to do — and the screen says so: open recording, everything allowed while it learns.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
@@ -534,7 +532,9 @@ test("B2 — start a recorded session", async () => {
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
-  await caption(page, "While we're recording, ordinary policy stops blocking — only the hard walls stay.");
+  await caption(page, "While we're recording, ordinary policy stops blocking.");
+  await beat(page, PACE.read);
+  await caption(page, "The walls nobody can approve — the cloud metadata address, private addresses — stay up.");
   await beat(page, PACE.read);
   await caption(page, "Every host the job reaches is captured at the proxy.");
   await beat(page, PACE.read + 600);
@@ -557,7 +557,7 @@ test("B3 — honest small work", async () => {
   // edit that shortens B2 knows what it is spending.
   await caption(page, "Let's give it a small piece of real work.");
   await beat(page, PACE.read);
-  await caption(page, "A Git identity.");
+  await caption(page, "Tell Git who we are — a name and email, so commits have an author. Then install one library.");
   await beat(page, BEAT_SHORT);
   await typeInTerminal(page, GIT_IDENTITY_CMD, card);
   await caption(page, "Then one ordinary package install — something simple that can still reveal more than one host.");
@@ -689,7 +689,7 @@ test("B4 — evidence becomes policy", async () => {
   const page = stage();
   const card = page.getByTestId(`session-${SESSION_KEY}`);
 
-  await act(page, card.getByRole("button", { name: "Save session profile" }), "Save session profile.");
+  await act(page, card.getByRole("button", { name: "Save session profile" }), "Save what it observed.");
 
   // Two locators for one drawer, deliberately. `sheet` scopes content while it
   // is the only dialog on screen; `sheetTitle` is a TEXT locator, and it is the
@@ -744,7 +744,7 @@ test("B4 — evidence becomes policy", async () => {
   // (deploy/compose/README.md). Ring the whole Observations block while the
   // kernel counters are named — the egress domains above are inside it too.
   await spotlight(page, observations);
-  await caption(page, "The kernel counters tell us what this particular barrier can see.");
+  await caption(page, "Wardyn can also count what the operating system's core saw — the second sensor — and this barrier lets it see only part.");
   await beat(page, PACE.read);
   await caption(
     page,
@@ -768,8 +768,10 @@ test("B4 — evidence becomes policy", async () => {
   await caption(page, "Wardyn also looks at credentials.");
   await beat(page, PACE.read);
   await spotlight(page, warningsBullet);
-  await caption(page, "If a credential was used but isn't eligible for policy, it doesn't simply turn that observation into a new grant.");
+  await caption(page, "Wardyn also watched which keys the job used.");
   await beat(page, PACE.read + 400);
+  await caption(page, "It won't quietly turn 'the job used a key' into 'the job may always use that key' — a person decides that.");
+  await beat(page, PACE.read);
   await caption(page, "The result is a policy that reflects the work without blindly widening access.");
   await beat(page, PACE.read);
   await spotlight(page, null);
@@ -788,9 +790,9 @@ test("B4 — evidence becomes policy", async () => {
   // label instead of behind a second click.
   const saveAsIsBtn = sheet.getByTestId("profile-save-as-is");
   await expect(saveAsIsBtn).toContainText(POLICY_NAME);
-  await act(page, saveAsIsBtn, "Save as policy.");
+  await act(page, saveAsIsBtn, "Now turn that into a policy.");
   await expect(sheetTitle).toBeHidden({ timeout: 30_000 });
-  await caption(page, "And allow-all stays off.");
+  await caption(page, "The allow-all switch — which would skip the allowlist entirely — stays off.");
   await beat(page, PACE.read);
   await caption(page, "Anything we didn't observe has to ask.");
   await beat(page, PACE.read);
@@ -1079,7 +1081,7 @@ test("B6 — the unseen host, and the one we skipped", async () => {
   await expect
     .poll(async () => /ERROR:|timed out/i.test(await screen.innerText()), { timeout: 90_000 })
     .toBe(true);
-  await caption(page, "Nobody answers, and the install gives up.");
+  await caption(page, "Nobody answers, pip's own timeout runs out, and the install gives up — the request never got through.");
   await beat(page, PACE.read + 400);
 
   await act(page, card.getByRole("button", { name: "Done", exact: true }));
@@ -1158,7 +1160,7 @@ test("B7 — approve the miss, run it again", async () => {
   const screen = card.locator(".xterm-screen").first();
   const caught = card.getByTestId("verify-session-blocked");
 
-  await caption(page, "So we missed one.");
+  await caption(page, "So the allowlist was missing one — and the replay caught it.");
   await beat(page, PACE.read);
 
   // THE DEFAULTS ARE THE BEAT. Asserted before they are narrated, because the
@@ -1179,7 +1181,9 @@ test("B7 — approve the miss, run it again", async () => {
   // asserts above are exactly that — so "only the first one is offered back"
   // was false to the screen. What is actually true is the DEFAULT: the held
   // host arrives checked, the denied one arrives unchecked.
-  await caption(page, "Both come back to us — but only the genuine dependency comes pre-checked.");
+  await caption(page, "Both come back to us. The one that was held comes pre-checked — because it was held, not because it is safe.");
+  await beat(page, PACE.read);
+  await caption(page, "Read the name before you approve.");
   await beat(page, PACE.read);
   await caption(page, "The denied host stays unchecked.");
   await beat(page, BEAT_SHORT);
@@ -1204,7 +1208,7 @@ test("B7 — approve the miss, run it again", async () => {
   await expect(confirm, `${UNSEEN_HOST} reached the approval confirm — the selection leaked the villain`).not.toContainText(
     UNSEEN_HOST,
   );
-  await act(page, confirm.getByRole("button", { name: "Approve host" }), "Run it again.");
+  await act(page, confirm.getByRole("button", { name: "Approve host" }), "Run it again — same command.");
 
   // FAST-FORWARD, for B5's reason: requestApproveHosts chains the requirements
   // PUT into doRecord(label, true), and that POST dispatches synchronously —
@@ -1233,8 +1237,6 @@ test("B7 — approve the miss, run it again", async () => {
   // "Replayed clean" unreachable. This replay exists to answer one question —
   // is the approved set now enough for the work? — so it runs only the work.
   await beat(page, PACE.read);
-  await caption(page, "Same command.");
-  await beat(page, BEAT_SHORT);
   await typeInTerminal(page, CONFINED_INSTALL_CMD, card);
   await expect
     .poll(async () => (await screen.innerText()).includes(`Successfully installed ${PKG}-`), { timeout: 120_000 })
@@ -1299,16 +1301,8 @@ test("B7 — approve the miss, run it again", async () => {
   await spotlight(page, null);
 
   await spotlight(page, review);
-  await caption(page, "That's the whole loop.");
+  await caption(page, "That's the whole loop: watch the job, capture what it uses, turn that into policy, run it confined.");
   await beat(page, PACE.read);
-  await caption(page, "Watch the job.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "Capture what it actually uses.");
-  await beat(page, PACE.read);
-  await caption(page, "Turn that evidence into policy.");
-  await beat(page, PACE.read);
-  await caption(page, "Then run it confined.");
-  await beat(page, PACE.read + 400);
   // The fifth step, added with the beat that films it: the summary used to list
   // four and the video now shows five.
   await caption(page, "If replay catches something the job genuinely needed, approve only that dependency and replay again — until the run comes back clean.");
@@ -1323,11 +1317,11 @@ test("B7 — approve the miss, run it again", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "Enforce it from then on.");
   await beat(page, PACE.read);
-  await caption(page, "Next, we tackle the question that comes after every approval:");
+  await caption(page, "Next — 'Approvals and egress'. After every yes:");
   await beat(page, PACE.read);
   await caption(page, "How long should that yes last?");
   await beat(page, PACE.read + 400);
-  await silentCard(page, "Next — 10: Approval scopes");
+  await silentCard(page, "Next — 10: Approvals and egress");
 });
 
 /**

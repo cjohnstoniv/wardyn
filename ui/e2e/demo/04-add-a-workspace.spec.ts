@@ -186,7 +186,7 @@ test("V04 beat 1 — the blast radius", async () => {
   await expect(heading).toBeVisible({ timeout: 30_000 });
 
   await chapter(page, "Add a workspace", "The one directory a run may touch");
-  await caption(page, "In episode two, we turned this machine into a governed one.");
+  await caption(page, "Last time, we turned a machine into a governed one.");
   await beat(page, PACE.read);
   await caption(page, "But there was still nothing for an agent to work on.");
   await beat(page, PACE.read);
@@ -200,7 +200,7 @@ test("V04 beat 1 — the blast radius", async () => {
   await spotlight(page, page.getByText("No workspaces yet").locator(".."));
   await caption(page, "Right now, that list is empty.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Which means the blast radius is empty too.");
+  await caption(page, "Which means there's nothing a run could touch or damage yet — the blast radius is empty too.");
   await beat(page, BEAT_SHORT);
   await caption(page, "No workspace attached?");
   await beat(page, BEAT_SHORT);
@@ -242,9 +242,9 @@ test("V04 beat 2 — onboard the project", async () => {
   // inside, as the git card's footer admits.
   // S3: ring the Repository card while these three stanzas describe it.
   await spotlight(page, dlg.getByRole("button", { name: "Repository" }));
-  await caption(page, "A repository can be cloned using the Git credential we configured during setup.");
+  await caption(page, "A project can be copied down from GitHub with a Git credential you store in Secrets — we'll add one in a moment.");
   await beat(page, PACE.read);
-  await caption(page, "And with the GitHub App, the sandbox doesn't need to talk to GitHub directly.");
+  await caption(page, "And with the GitHub App lane — described here, not run on this install — the proxy talks to GitHub for the sandbox; that one's in the credentials detour.");
   await beat(page, PACE.read);
   await caption(page, "The proxy handles that connection and keeps the credential outside the sandbox.");
   await beat(page, PACE.read);
@@ -265,7 +265,7 @@ test("V04 beat 2 — onboard the project", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "This directory is available to the run.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Everything above it isn't.");
+  await caption(page, "Everything above it isn't — your first run will show that from inside.");
   await beat(page, BEAT_SHORT + 400);
   await spotlight(page, null);
 
@@ -291,7 +291,7 @@ test("V04 beat 2 — onboard the project", async () => {
   // S3: one ring per card, moved as each is named — not one ring parked on
   // the whole group while three cards are walked in turn (persona round 1).
   await spotlight(page, dlg.getByRole("button", { name: /Standard sandbox image/ }));
-  await caption(page, "Which image should the sandbox use?");
+  await caption(page, "Which image — the ready-made box the sandbox starts from — should it use?");
   await beat(page, BEAT_SHORT);
   await caption(page, "The standard image works for most projects.");
   await beat(page, BEAT_SHORT);
@@ -299,7 +299,7 @@ test("V04 beat 2 — onboard the project", async () => {
   // dialog.tsx) — BuildDevcontainer consumes the repo's .devcontainer/
   // devcontainer.json unmodified (docs/ENVBUILD.md).
   await spotlight(page, dlg.getByRole("button", { name: /devcontainer\.json/ }));
-  await caption(page, "A project with a standard devcontainer can bring its own environment.");
+  await caption(page, "Or, if the project comes with its own setup file — a devcontainer — the sandbox can use that.");
   await beat(page, PACE.read);
   await spotlight(page, dlg.getByRole("button", { name: /Pinned image ref/ }));
   await caption(page, "Or you can pin an exact image if you need something specific.");
@@ -323,7 +323,7 @@ test("V04 beat 2 — onboard the project", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "A workspace starts read-only.");
   await beat(page, BEAT_SHORT);
-  await act(page, writable, "For this project, we're going to allow writes.");
+  await act(page, writable, "For this project, we're going to allow writes — the runs ahead will edit files here.");
   await expect(writable).toBeChecked();
   await caption(page, "That's a deliberate decision.");
   await beat(page, BEAT_SHORT);
@@ -339,7 +339,7 @@ test("V04 beat 2 — onboard the project", async () => {
   await expect(page).toHaveURL(/\/workspaces\/[0-9a-f-]{8,}/i, { timeout: 30_000 });
   await caption(page, "And that's it.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "No waiting for a scan or another setup process.");
+  await caption(page, "No build step and nothing to wait for — the workspace is usable now.");
   await beat(page, PACE.read);
   await caption(page, "The workspace is ready.");
   await beat(page, BEAT_SHORT + 400);
@@ -365,7 +365,9 @@ test("V04 beat 3 — what it remembers", async () => {
   // By testid, not text: f6bf20c5 made the banner tier-derived, so its wording
   // differs across tiers while the testid holds.
   await spotlight(page, page.getByTestId("record-open-egress-banner"));
-  await caption(page, "This warning is showing us what Record Mode looks like.");
+  await caption(page, "This orange banner is what a recording session looks like — recording runs wide open, and the screen says so.");
+  await beat(page, PACE.read);
+  await caption(page, "'Record a run' is the whole episode on it.");
   await beat(page, PACE.read);
   await caption(page, "We'll spend an entire episode on that.");
   await beat(page, BEAT_SHORT);
@@ -382,7 +384,7 @@ test("V04 beat 3 — what it remembers", async () => {
   await spotlight(page, allowedHeading);
   await caption(page, "The network starts with an empty memory too.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Nothing has been earned yet.");
+  await caption(page, "Nothing yet. A host earns its place here by being approved, or proven by a recording.");
   await beat(page, BEAT_SHORT);
   await caption(page, "When a host is approved, or proven through a recording, that decision can become part of this workspace.");
   await beat(page, PACE.read);
@@ -397,7 +399,7 @@ test("V04 beat 3 — what it remembers", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "Denied hosts stay denied.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "A deny beats an allow.");
+  await caption(page, "A deny beats an allow — you'll watch a denied host stay denied in 'Record a run'.");
   await beat(page, BEAT_SHORT + 400);
   await spotlight(page, null);
 });
@@ -419,14 +421,10 @@ test("V04 beat 4 — write-only secrets", async () => {
   // Verified against internal/api/secrets.go (S1): the store hides only
   // wardyn-signing-key/wardyn-session-key, so what is on screen today is the
   // one secret setup minted — exactly what the line says.
-  await caption(page, "The host already has one here — the SSH host key Wardyn created during setup.");
+  await caption(page, "There's already one here: the SSH key Wardyn made for itself during setup, so you can attach to runs later. Leave it alone.");
   await beat(page, PACE.read);
-  await caption(page, "The important rule is simple:");
+  await caption(page, "The important rule is simple: secrets go in, and they don't come back out.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Secrets can go in.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "They don't come back out.");
-  await beat(page, BEAT_SHORT + 400);
 
   await act(page, page.getByRole("button", { name: "Add secret", exact: true }), "Add secret.");
   const dlg = page.getByRole("dialog");
@@ -435,10 +433,8 @@ test("V04 beat 4 — write-only secrets", async () => {
   const nameBox = dlg.getByLabel("Name");
   await spotlight(page, nameBox);
   await nameBox.fill(SECRET_NAME);
-  await caption(page, "The name is the handle.");
+  await caption(page, "The name is the handle — runs ask for it by name, never by value.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Runs ask for a secret by name, never by its value.");
-  await beat(page, PACE.read);
 
   // The Value field masks at entry (secrets.tsx's -webkit-text-security +
   // reveal toggle, added 2026-08-23 after this take showed the plaintext) —
@@ -479,7 +475,7 @@ test("V04 beat 4 — write-only secrets", async () => {
   const menu = page.getByRole("menu");
   await expect(menu.getByRole("menuitem", { name: /Rotate/ })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: /Delete/ })).toBeVisible();
-  await caption(page, "We can rotate it.");
+  await caption(page, "We can rotate it — replace it with a new value.");
   await beat(page, BEAT_SHORT);
   await caption(page, "We can delete it.");
   await beat(page, BEAT_SHORT);
@@ -489,7 +485,7 @@ test("V04 beat 4 — write-only secrets", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "The value was never even displayed — masked from the moment we typed it.");
   await beat(page, PACE.read);
-  await caption(page, "From here on, even the person who created it can't ask Wardyn to show it again.");
+  await caption(page, "From here on, this console will never show it again — and 'What it stops' shows the run can't fetch it either.");
   await beat(page, PACE.read + 400);
   await page.keyboard.press("Escape");
   await spotlight(page, null);
@@ -504,7 +500,7 @@ test("V04 conclusion", async () => {
   test.setTimeout(60_000);
   const page = stage();
 
-  await chapter(page, "What you just saw", "A workspace on the record, and a secret nobody can read");
+  await chapter(page, "What you just saw", "A workspace on the record, and a secret no run can read");
   // S1: the recap describes the workspace — return to the list instead of
   // leaving the Secrets table underneath the words (persona round 1).
   await page.goto("/workspaces");
@@ -523,8 +519,10 @@ test("V04 conclusion", async () => {
   await beat(page, BEAT_SHORT);
   // DIALOG-NEW-BEAT (A19; re-pointed for the restructure — after the workspace
   // comes the POLICY episode, not the run). Drafted; see the seam flags.
-  await caption(page, "Next, we write the rules this workspace runs under. Your first policy.");
+  await caption(page, "Next, we write the rules this workspace runs under: 'Your first policy'.");
   await beat(page, BEAT_SHORT + 400);
+  await caption(page, "The member and permission episodes in between are for team installs.");
+  await beat(page, PACE.read);
   await caption(page, "");
   await silentCard(page, "Next — 05: Your first policy");
 });
