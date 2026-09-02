@@ -11,11 +11,10 @@
 // names this as the moment to stop duplicating them, and one import beats a
 // third set of ten lines. They are pure presentation with no governance copy in
 // them.
-import * as React from "react";
 import { DRIVES } from "../../../lib/user-drives-copy";
 import { driveSizeLabel } from "../../../lib/user-drives-display";
 import type { StorageEnforcement } from "../../../lib/api/drives";
-import { Mono } from "../../wardyn/code-block";
+import { makeMono } from "../../wardyn/code-block";
 
 export { Note, noteClass, question } from "../governance/display";
 
@@ -28,21 +27,7 @@ export { Note, noteClass, question } from "../governance/display";
 // so this is the ONE place that decides which substrings get the span. A DRIVE
 // NAME is never here: §7 renders it inside double quotes because it is a
 // human-chosen label, not a literal.
-const MONO_TERMS = ["WARDYN_USER_DRIVE_HOST_ROOTS", "/home/agent/drive", "disk_mib", ". _ -"];
-const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
-const MONO_RE = new RegExp(`(${MONO_TERMS.map(escape).join("|")})`, "g");
-
-export function withMono(text: string): React.ReactNode {
-  return text.split(MONO_RE).map((part, i) =>
-    MONO_TERMS.includes(part) ? (
-      <Mono key={i} className="text-inherit">
-        {part}
-      </Mono>
-    ) : (
-      <React.Fragment key={i}>{part}</React.Fragment>
-    ),
-  );
-}
+export const withMono = makeMono(["WARDYN_USER_DRIVE_HOST_ROOTS", "/home/agent/drive", "disk_mib", ". _ -"]);
 
 // The admin's spelling of a size: THE one size helper (lib/user-drives-display
 // .ts's driveSizeLabel, §5 #10 — never lib/format.ts's fmtBytes), with the
