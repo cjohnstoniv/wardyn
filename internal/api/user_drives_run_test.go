@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -27,6 +29,16 @@ import (
 func driveRunServer(st *driveStore, runnerTarget string) (*Server, *recRecorder) {
 	audit := &recRecorder{}
 	return New(Config{Store: st, Audit: audit, RunnerTarget: runnerTarget}), audit
+}
+
+// driveShareServer is driveRunServer for the host_path arm: the same seam with
+// the boot-parsed env ceiling (WARDYN_USER_DRIVE_HOST_ROOTS) wired, which is
+// the deployment fact driveShareIsBindable re-checks and the row cannot carry.
+// Nil roots is the deployment that has un-set the variable since the drive was
+// authored.
+func driveShareServer(st *driveStore, roots []string) (*Server, *recRecorder) {
+	audit := &recRecorder{}
+	return New(Config{Store: st, Audit: audit, RunnerTarget: "docker", UserDriveHostRoots: roots}), audit
 }
 
 // driveRunRequest is a create-run request carrying the drive flag. readOnly nil
@@ -238,6 +250,163 @@ func TestSeedRequestDrive422Matrix(t *testing.T) {
 	})
 }
 
+// TestSeedRequestDriveShareIsBindableAtMountTime walks the two facts a
+// host_path mount depends on that the ROW CANNOT CARRY, and therefore has to be
+// re-established at the moment of the mount rather than trusted from authoring
+// time.
+//
+// Both were previously unchecked here, and both fail in the direction that
+// loses work rather than the direction that refuses it:
+//
+//   - THE CEILING. handleUpsertUserDrive applied WARDYN_USER_DRIVE_HOST_ROOTS
+//     when this row was written, but the variable is boot state and the share
+//     is the host's — an operator narrowing the roots, or un-setting them, or
+//     the share going away, all leave a stored drive this deployment no longer
+//     allows binding into OTHER PEOPLE's sandboxes. Trusting the row would let
+//     whoever authored one hold the ceiling open across every later boot.
+//   - THE DIRECTORY. Wardyn never mkdir's on a share, and a bind mount of a
+//     missing source is one of the few places Docker HELPFULLY CREATES IT: an
+//     empty root-owned directory appears on the operator's share, the run
+//     launches green, and the member's work goes somewhere no admin allocated.
+func TestSeedRequestDriveShareIsBindableAtMountTime(t *testing.T) {
+	// The share as the operator mounted it, with exactly one member's home in
+	// it: <root>/bob exists, and this member's claim derives `bob`.
+	newShare := func(t *testing.T) (root string, st *driveStore) {
+		t.Helper()
+		root = t.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, "bob"), 0o755); err != nil {
+			t.Fatalf("mkdir home: %v", err)
+		}
+		d := driveFixture(func(d *types.UserDrive) {
+			d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateSub, root
+			d.Writable = true
+		})
+		return root, &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+	}
+	// The claim `bob` names the directory that exists; every arm below uses it,
+	// so the only thing that differs between them is the fact under test.
+	shareCtx := func() context.Context {
+		return withOIDCGroups(operatorCtx("bob", "bob@corp.example", oidc.RoleMember), nil)
+	}
+
+	t.Run("the home directory is there and the drive mounts", func(t *testing.T) {
+		// The positive control: without it, every refusal below would also pass
+		// on a seam that simply refused host_path drives outright.
+		root, st := newShare(t)
+		srv, rec := driveShareServer(st, []string{root})
+		mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, shareCtx())
+		if !ok || mount == nil {
+			t.Fatalf("a bindable share was refused: %d %s", w.Code, w.Body.String())
+		}
+		if mount.ObjectName != filepath.Join(root, "bob") {
+			t.Errorf("object_name = %q, want this member's subdirectory of the share", mount.ObjectName)
+		}
+		if len(rec.events) != 0 {
+			t.Errorf("audit = %v, want nothing for a mount that succeeded", driveAuditActions(rec))
+		}
+	})
+
+	t.Run("a missing home directory is REFUSED_HOME_MISSING", func(t *testing.T) {
+		root, st := newShare(t)
+		// The same share, a member whose directory nobody created — the
+		// offboarding-in-reverse case: allocated in Wardyn, absent on the NAS.
+		srv, rec := driveShareServer(st, []string{root})
+		ctx := withOIDCGroups(operatorCtx("carol", "carol@corp.example", oidc.RoleMember), nil)
+		mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
+		if ok || mount != nil {
+			t.Fatalf("mount = %+v; want a refusal rather than a directory Docker would create", mount)
+		}
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("code = %d, want 422: %s", w.Code, w.Body.String())
+		}
+		// The frozen §7.7 sentence, byte-exact, naming the HOME — never the
+		// host path, which is the operator's filesystem layout and is not a
+		// member's to read (GET /drives ships a boolean for the same reason).
+		const want = "drive: directory carol does not exist on the share — ask an admin to create it"
+		if got := refusalBody(t, w); got != want {
+			t.Errorf("body  = %q\nwant BYTE-EXACT: %q", got, want)
+		}
+		if strings.Contains(w.Body.String(), root) {
+			t.Errorf("body = %q leaks the operator's host path to a member", w.Body.String())
+		}
+		if len(rec.events) != 0 {
+			t.Errorf("audit = %v, want NO audit — the caller is authorized and there is simply nothing to mount",
+				driveAuditActions(rec))
+		}
+	})
+
+	t.Run("a home that is a FILE is refused too", func(t *testing.T) {
+		// Binding a regular file at the drive target is not a drive, and the
+		// sentence the member needs is the same one.
+		root, st := newShare(t)
+		if err := os.WriteFile(filepath.Join(root, "dave"), []byte("not a directory"), 0o600); err != nil {
+			t.Fatalf("write file: %v", err)
+		}
+		srv, _ := driveShareServer(st, []string{root})
+		ctx := withOIDCGroups(operatorCtx("dave", "dave@corp.example", oidc.RoleMember), nil)
+		_, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
+		if ok || w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("code = %d, ok = %v; want 422", w.Code, ok)
+		}
+		if got := refusalBody(t, w); !strings.HasSuffix(got, "does not exist on the share — ask an admin to create it") {
+			t.Errorf("body = %q, want the missing-directory sentence", got)
+		}
+	})
+
+	t.Run("the env ceiling is UNSET since the drive was authored", func(t *testing.T) {
+		// The row is still perfectly valid and the directory is still there.
+		// What changed is the deployment, and a stale row must not survive it.
+		_, st := newShare(t)
+		srv, rec := driveShareServer(st, nil)
+		mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, shareCtx())
+		if ok || mount != nil {
+			t.Fatalf("mount = %+v; a deployment with no roots must mount no share", mount)
+		}
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("code = %d, want 422: %s", w.Code, w.Body.String())
+		}
+		// REFUSED_BACKEND's shape, not a fifth refusal: from the member's side
+		// "the roots moved" and "this deployment dispatches elsewhere" are one
+		// fact, and the parenthesised reason is the admin's diagnosis.
+		got := refusalBody(t, w)
+		if !strings.HasPrefix(got, "drive: this deployment cannot mount your drive (") {
+			t.Errorf("body = %q, want the REFUSED_BACKEND shape", got)
+		}
+		if !strings.Contains(got, "WARDYN_USER_DRIVE_HOST_ROOTS") {
+			t.Errorf("body = %q, want it to name the ceiling an admin has to set", got)
+		}
+		if len(rec.events) != 0 {
+			t.Errorf("audit = %v, want NO audit", driveAuditActions(rec))
+		}
+	})
+
+	t.Run("the root MOVED OUT of the ceiling", func(t *testing.T) {
+		// The variable is still set; it just no longer covers this row's root.
+		_, st := newShare(t)
+		srv, _ := driveShareServer(st, []string{t.TempDir()})
+		_, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, shareCtx())
+		if ok || w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("code = %d, ok = %v; want 422 for a root outside the roots", w.Code, ok)
+		}
+		if got := refusalBody(t, w); !strings.HasPrefix(got, "drive: this deployment cannot mount your drive (") {
+			t.Errorf("body = %q, want the REFUSED_BACKEND shape", got)
+		}
+	})
+
+	t.Run("a MANAGED backend is not stat'd", func(t *testing.T) {
+		// The check is host_path's alone: a docker_volume is created on first
+		// use, and stat'ing a volume name as a path would refuse every one of
+		// them on a deployment that sets no roots at all.
+		d := driveFixture(nil)
+		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+		srv, _ := driveShareServer(st, nil)
+		mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, shareCtx())
+		if !ok || mount == nil {
+			t.Fatalf("a managed drive was refused by the share check: %d %s", w.Code, w.Body.String())
+		}
+	})
+}
+
 // TestSeedRequestDriveMountShape pins what the runner is handed: the reserved
 // target as the SYMBOL (never a re-typed literal), the derived object name, and
 // the enforcement vocabulary that says what the size actually means.
@@ -255,12 +424,18 @@ func TestSeedRequestDriveMountShape(t *testing.T) {
 		t.Fatalf("DriveHomeName: %v", err)
 	}
 	want := types.DriveMount{
+		DriveID: d.ID,
 		Backend: types.DriveBackendDockerVolume, ObjectName: types.DriveObjectName(*d, home),
 		HomeName: home, Target: runner.DriveTarget, ReadOnly: true, SizeMiB: 10240,
 		Enforcement: types.StorageEnforcementNone,
 	}
 	if *mount != want {
 		t.Errorf("mount = %+v\nwant %+v", *mount, want)
+	}
+	// The DRIVE's id, not the grant's: labels and reclaim sweeps group by the
+	// drive, and an object name is per-principal so it cannot answer that.
+	if mount.DriveID != d.ID {
+		t.Errorf("drive_id = %s, want the drive row's %s", mount.DriveID, d.ID)
 	}
 	// The honesty vocabulary is not decoration: a Docker named volume has NO
 	// byte cap, and reporting anything but `none` would let a console render an
@@ -619,20 +794,16 @@ func TestDriveRefusalsAreTheFrozenMemberCopy(t *testing.T) {
 			if w.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("code = %d, want 422: %s", w.Code, w.Body.String())
 			}
-			got := refusalBody(t, w)
-			if tc.name == "REFUSED_HOME_INVALID" {
-				// The wrapped cause rides in brackets for the log; the frozen
-				// sentence is what opens the body.
-				if !strings.HasPrefix(got, tc.want) {
-					t.Fatalf("body  = %q\nwant it to OPEN with the frozen sentence: %q", got, tc.want)
-				}
-				if strings.Contains(got, "drive_unmountable") {
-					t.Errorf("body = %q leaks the sentinel's name to the member", got)
-				}
-				return
-			}
-			if got != tc.want {
+			// EVERY arm is byte-exact, REFUSED_HOME_INVALID included. It used
+			// to carry the derivation's own error in trailing brackets, which
+			// made this one refusal the only one whose shipped bytes were not
+			// the frozen sentence — the cause now goes to the log, where the
+			// operator who has to act on it looks.
+			if got := refusalBody(t, w); got != tc.want {
 				t.Errorf("body  = %q\nwant BYTE-EXACT: %q", got, tc.want)
+			}
+			if strings.Contains(w.Body.String(), "drive_unmountable") {
+				t.Errorf("body = %q leaks the sentinel's name to the member", w.Body.String())
 			}
 		})
 	}

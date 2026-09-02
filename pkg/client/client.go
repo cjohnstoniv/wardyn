@@ -307,11 +307,18 @@ type DriveSelection struct {
 	// given a run without it — asking for storage and not getting it is how
 	// work is lost.
 	Enabled bool `json:"enabled"`
-	// ReadOnly, when set, NARROWS this run's mount — true forces read-only even
-	// on a writable allocation; false is a NO-OP, never a widening. Nil leaves
-	// the resolved allocation's own posture in effect. Exactly the semantics
-	// WorkspaceSelection.ReadOnly carries, and for the same reason: a run-level
-	// option may only ever narrow what an admin already granted.
+	// ReadOnly, when set, NARROWS this run's mount: true forces read-only even
+	// on a writable allocation. Nil leaves the resolved allocation's own posture
+	// in effect.
+	//
+	// FALSE IS NOT A NO-OP EVERYWHERE, and the difference matters to a caller
+	// scripting a run: against a READ-ONLY allocation it is REFUSED (422) and
+	// never silently honoured — a run the caller believes is writable would only
+	// reveal itself when the work failed to persist. On a WRITABLE allocation it
+	// is a no-op, since that is the posture already in force.
+	//
+	// The same direction WorkspaceSelection.ReadOnly enforces, and for the same
+	// reason: a run-level option may only ever narrow what an admin granted.
 	ReadOnly *bool `json:"read_only,omitempty"`
 }
 

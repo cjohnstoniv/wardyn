@@ -305,8 +305,10 @@ type UserDriveGrant struct {
 	// opposite of the isolation binding a per-user subdirectory buys.
 	HomeOverride string `json:"home_override,omitempty"`
 	// Enabled is the admin's off switch that keeps the row (and its overrides)
-	// intact. A disabled grant is excluded by the resolver's own WHERE, so it
-	// can never be the row that wins and then refuses.
+	// intact. A disabled row is IN the resolver's query and can win its tier:
+	// the winner's bit is what folds to ResolvedDrive.Paused, so an admin
+	// turning one off tells that member "your allocation is paused" instead of
+	// silently dropping them through to the wider row beneath it.
 	Enabled   bool      `json:"enabled"`
 	CreatedAt time.Time `json:"created_at"`
 	CreatedBy string    `json:"created_by,omitempty"`
@@ -376,6 +378,11 @@ type ResolvedDrive struct {
 // validateWorkspaceSources, primaryWorkspacePath and the k8s blanket host-bind
 // refusal from each needing a drive exemption.
 type DriveMount struct {
+	// DriveID is the user_drives row this mount came from. Labels and reclaim
+	// sweeps group by it: an object name is per-PRINCIPAL, so it cannot answer
+	// "every object this drive allocated" — the question an offboarding sweep
+	// and a `kubectl get pvc -l` both ask.
+	DriveID uuid.UUID    `json:"drive_id"`
 	Backend DriveBackend `json:"backend"`
 	// ObjectName is what the substrate is asked for: a Docker volume name, a
 	// PVC name, or the absolute host path of this principal's subdirectory.
@@ -409,16 +416,62 @@ type UserDriveHostRootCheck func(hostRoot string) error
 
 // ─── derivation ───────────────────────────────────────────────────────────────
 
-// driveHomeSegmentRe is the ONE shape a home name may take: a single path
-// segment that is also a legal DNS-1123 label and a legal Docker volume-name
-// component, so one string can be a subdirectory, a volume suffix and a PVC
-// suffix without a per-backend dialect.
+// driveHomeSegmentRe is the shape a home name may take on a DOCKER backend: a
+// single path segment that is also a legal Docker volume-name component, so
+// one string can be both a subdirectory of a share and the suffix of a named
+// volume.
+//
+// It is NOT a DNS-1123 name and never was — `_` is not legal in one, and a
+// trailing `-` or `.` is not either. That claim used to sit on this comment
+// and was the bug driveHomeSegmentK8sRe below exists to close: a k8s drive
+// whose home came through here would validate and then be rejected by the
+// apiserver at bind time, on somebody's run.
 //
 // The leading character is [a-z0-9] specifically to exclude a LEADING DOT: a
 // dotfile home would put a drive inside the credential deny class the member
 // mount rules already refuse by segment, and "..", the traversal, is excluded
 // by the same clause.
 var driveHomeSegmentRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
+
+// driveHomeSegmentK8sRe is the same segment on a KUBERNETES backend, where it
+// is concatenated into a PVC NAME (DriveObjectName) and must therefore be a
+// DNS-1123 subdomain: lowercase alphanumerics, `-` and `.` in the middle only,
+// and at most 63 characters. The `{0,61}` middle plus the two anchored
+// alphanumerics is that 63 written as the regex rather than as a second length
+// check something could forget.
+//
+// THE MOTIVATING CASE IS NOT HYPOTHETICAL: an Entra `sub` is base64url and
+// routinely carries `_`, so a `k8s_pvc` drive templated on `sub` passes the
+// Docker rule, is stored, and then fails at bind time for every member it
+// allocates. Refusing it in DriveHomeName makes that a resolve-time
+// REFUSED_HOME_INVALID naming the claim an admin has to override, at the
+// moment the admin previews the allocation, instead of a cluster error inside
+// somebody's run.
+var driveHomeSegmentK8sRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]{0,61}[a-z0-9])?$`)
+
+// driveHomeSegmentOK reports whether seg is a legal home name for backend b,
+// picking the rule from the substrate that has to hold the name.
+//
+// The ".." clause is the one thing the k8s regex above cannot say: consecutive
+// dots are not a legal DNS-1123 subdomain (each dot-separated label must be
+// non-empty), and the same two characters are the path traversal a share's
+// subdirectory bind must never carry. One check, both reasons.
+func driveHomeSegmentOK(b DriveBackend, seg string) bool {
+	if b.RunnerTarget() != "k8s" {
+		return driveHomeSegmentRe.MatchString(seg)
+	}
+	return driveHomeSegmentK8sRe.MatchString(seg) && !strings.Contains(seg, "..")
+}
+
+// driveHomeSegmentRule renders b's rule for the error message that refuses a
+// name — the pattern itself, so an admin reading a refusal sees the shape they
+// have to satisfy rather than a prose paraphrase of it that can drift.
+func driveHomeSegmentRule(b DriveBackend) string {
+	if b.RunnerTarget() != "k8s" {
+		return driveHomeSegmentRe.String()
+	}
+	return driveHomeSegmentK8sRe.String() + " (a DNS-1123 subdomain: it becomes part of a PVC name)"
+}
 
 // driveHomeHashLen is how many hex characters of the sha256 a `hash` home
 // carries. 20 hex = 80 bits, which is collision-free for any plausible member
@@ -453,8 +506,14 @@ const driveHomeHashLen = 20
 // group one home, and re-pointing a grant would move a member's data.
 func DriveHomeName(d UserDrive, subject, override string) (string, error) {
 	if seg := strings.ToLower(strings.TrimSpace(override)); seg != "" {
-		if !driveHomeSegmentRe.MatchString(seg) {
-			return "", fmt.Errorf("home_override %q is not a valid home name (%s)", override, driveHomeSegmentRe)
+		// Re-checked against THIS drive's backend rule, not just the write
+		// boundary's: ValidateUserDriveGrant holds only the grant row and
+		// cannot see which substrate the drive it points at lands on, so an
+		// override legal for Docker can be stored against a k8s drive. An
+		// admin's fact about a filesystem still cannot out-vote what the
+		// apiserver will accept.
+		if !driveHomeSegmentOK(d.Backend, seg) {
+			return "", fmt.Errorf("home_override %q is not a valid home name (%s)", override, driveHomeSegmentRule(d.Backend))
 		}
 		return seg, nil
 	}
@@ -462,6 +521,9 @@ func DriveHomeName(d UserDrive, subject, override string) (string, error) {
 	if subject == "" {
 		return "", fmt.Errorf("no subject to derive a home name from")
 	}
+	// `d-` + hex satisfies BOTH backend rules by construction — no `_`, no dot,
+	// no trailing `-`, 22 characters — which is why it is checked against
+	// neither and why it is the only template a MANAGED backend should use.
 	if d.HomeTemplate == HomeTemplateHash || d.HomeTemplate == "" {
 		sum := sha256.Sum256([]byte(d.ID.String() + "\n" + subject))
 		return "d-" + hex.EncodeToString(sum[:])[:driveHomeHashLen], nil
@@ -477,9 +539,9 @@ func DriveHomeName(d UserDrive, subject, override string) (string, error) {
 		}
 		seg = seg[:at]
 	}
-	if !driveHomeSegmentRe.MatchString(seg) {
+	if !driveHomeSegmentOK(d.Backend, seg) {
 		return "", fmt.Errorf("home_template %q derived %q, which is not a valid home name (%s)",
-			d.HomeTemplate, seg, driveHomeSegmentRe)
+			d.HomeTemplate, seg, driveHomeSegmentRule(d.Backend))
 	}
 	return seg, nil
 }
@@ -696,6 +758,11 @@ func ValidateUserDriveGrant(g *UserDriveGrant) error {
 		return fmt.Errorf("home_override is accepted on a %s-tier allocation only — a group cannot share one directory",
 			CapabilitySubjectUser)
 	}
+	// The DOCKER rule, and deliberately the looser of the two: this row holds a
+	// drive_id, not the drive, so the backend that will have to hold the name
+	// is not knowable here. DriveHomeName re-checks against the real backend at
+	// resolve time — the same shape ValidateUserDrive takes with the host-root
+	// ceiling it also cannot see.
 	if !driveHomeSegmentRe.MatchString(g.HomeOverride) {
 		return fmt.Errorf("home_override: %q is not a valid home name (%s)", g.HomeOverride, driveHomeSegmentRe)
 	}

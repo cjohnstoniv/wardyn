@@ -210,21 +210,22 @@ func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant) (t
 	return out, nil
 }
 
-// DeleteUserDriveGrant removes one grant by id, ErrNotFound when no row
-// matched. De-allocating is the SUPPORTED way to take a drive away — the
+// DeleteUserDriveGrant removes one grant by id AND RETURNS IT, ErrNotFound when
+// no row matched. De-allocating is the SUPPORTED way to take a drive away — the
 // deliberate act the RESTRICT on the drive delete exists to force — and it
 // removes only the BINDING: nothing in the control plane deletes the volume,
 // the claim or the directory (reclaim is a declared intent executed by a
 // documented operator command).
-func (s PG) DeleteUserDriveGrant(ctx context.Context, id uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM user_drive_grants WHERE id = $1`, id)
-	if err != nil {
-		return fmt.Errorf("store: delete user drive grant: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+//
+// RETURNING rather than a bare Exec, because the ONE caller has to describe
+// what it just removed in an audit row and the row is gone by then. The
+// alternative it replaced was a full ListUserDriveGrants scan taken beforehand:
+// every allocation in the deployment loaded to describe one, and a second read
+// that could disagree with the row the DELETE actually took. The same shape
+// UpsertUserDriveGrant above already uses, over the same shared column list.
+func (s PG) DeleteUserDriveGrant(ctx context.Context, id uuid.UUID) (types.UserDriveGrant, error) {
+	const q = `DELETE FROM user_drive_grants WHERE id = $1 RETURNING ` + userDriveGrantCols
+	return scanUserDriveGrant(s.Pool.QueryRow(ctx, q, id))
 }
 
 // ListUserDriveGrants returns every grant in the order the resolver itself

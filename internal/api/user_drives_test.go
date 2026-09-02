@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,11 +31,20 @@ import (
 // did not model them would let a handler's 409 arms go untested — which is
 // exactly the arm that keeps a delete from silently un-allocating people.
 type driveCRUDStore struct {
-	store.Store
+	// noGovernanceStore rather than a bare store.Store, for the reason
+	// driveStore embeds it too: the two RESOLVER reads (ResolveUserDrive,
+	// HasGroupTierDriveGrants) already have one "this deployment has adopted
+	// neither" answer, and a double that re-typed them here would be a second
+	// copy of it free to drift. The CRUD handlers under test do not resolve —
+	// the preview one does.
+	noGovernanceStore
 	drives map[uuid.UUID]types.UserDrive
 	grants map[uuid.UUID]types.UserDriveGrant
 	// listErr fails the two list reads, for GET /drives' 500 arms and for the
-	// best-effort audit/count lookups that must NOT turn into 500s.
+	// grant-count lookup that must NOT turn into a 500. The grant-delete audit
+	// row is deliberately NOT among them any more: it is written from the
+	// DELETE's own RETURNING row, and TestDeleteUserDriveGrantAuditsTheReclaimIntent
+	// sets this to prove the scan is gone.
 	listErr error
 }
 
@@ -105,12 +115,13 @@ func (s *driveCRUDStore) UpsertUserDriveGrant(_ context.Context, g types.UserDri
 	return g, nil
 }
 
-func (s *driveCRUDStore) DeleteUserDriveGrant(_ context.Context, id uuid.UUID) error {
-	if _, ok := s.grants[id]; !ok {
-		return store.ErrNotFound
+func (s *driveCRUDStore) DeleteUserDriveGrant(_ context.Context, id uuid.UUID) (types.UserDriveGrant, error) {
+	g, ok := s.grants[id]
+	if !ok {
+		return types.UserDriveGrant{}, store.ErrNotFound
 	}
 	delete(s.grants, id)
-	return nil
+	return g, nil // the RETURNING clause: the row that was actually removed
 }
 
 func (s *driveCRUDStore) ListUserDriveGrants(context.Context) ([]types.UserDriveGrant, error) {
@@ -123,13 +134,6 @@ func (s *driveCRUDStore) ListUserDriveGrants(context.Context) ([]types.UserDrive
 	}
 	return out, nil
 }
-
-func (s *driveCRUDStore) ResolveUserDrive(context.Context, []string, []string) (
-	*types.UserDrive, *types.UserDriveGrant, types.CapabilitySubjectType, error) {
-	return nil, nil, "", store.ErrNotFound
-}
-
-func (s *driveCRUDStore) HasGroupTierDriveGrants(context.Context) (bool, error) { return false, nil }
 
 // ─── the handler harness ──────────────────────────────────────────────────────
 
@@ -531,6 +535,23 @@ func TestDeleteUserDriveGrantAuditsTheReclaimIntent(t *testing.T) {
 	if data["reclaim"] != string(types.DriveReclaimDelete) || data["subject"] != "bob" {
 		t.Errorf("drive.grant.delete data = %v, want the subject and the drive's reclaim intent", data)
 	}
+
+	// AND the row is written from the DELETE's own RETURNING row, not from a
+	// scan taken beside it: with every list read failing, the audit row is still
+	// complete. The scan it replaced loaded EVERY allocation in the deployment
+	// to describe one, and could describe a row a concurrent write had changed.
+	st.grants[g.ID] = g
+	st.listErr = errors.New("pg: connection refused")
+	w = driveCall(t, srv.handleDeleteUserDriveGrant, http.MethodDelete, "/api/v1/drives/grants/"+g.ID.String(),
+		"", map[string]string{"id": g.ID.String()})
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("delete with the list read failing = %d, want 204: %s", w.Code, w.Body.String())
+	}
+	if data := driveAuditData(t, rec, "drive.grant.delete"); data["subject"] != "bob" ||
+		data["reclaim"] != string(types.DriveReclaimDelete) {
+		t.Errorf("drive.grant.delete data = %v, want the deleted row's own fields", data)
+	}
+	st.listErr = nil
 
 	w = driveCall(t, srv.handleDeleteUserDriveGrant, http.MethodDelete, "/api/v1/drives/grants/"+g.ID.String(),
 		"", map[string]string{"id": g.ID.String()})

@@ -61,7 +61,7 @@ func seedUserDriveGrant(t *testing.T, st store.PG, g types.UserDriveGrant) types
 	if err != nil {
 		t.Fatalf("seed grant %+v: %v", g, err)
 	}
-	t.Cleanup(func() { _ = st.DeleteUserDriveGrant(ctx, saved.ID) })
+	t.Cleanup(func() { _, _ = st.DeleteUserDriveGrant(ctx, saved.ID) })
 	return saved
 }
 
@@ -77,7 +77,7 @@ func seedDisabledUserDriveGrant(t *testing.T, st store.PG, g types.UserDriveGran
 	if err != nil {
 		t.Fatalf("seed disabled grant %+v: %v", g, err)
 	}
-	t.Cleanup(func() { _ = st.DeleteUserDriveGrant(ctx, saved.ID) })
+	t.Cleanup(func() { _, _ = st.DeleteUserDriveGrant(ctx, saved.ID) })
 	return saved
 }
 
@@ -199,8 +199,14 @@ func TestPG_UserDrive_DeleteRestrictedWhileGranted(t *testing.T) {
 	}
 	// De-allocate, then the same delete must succeed — the refusal is about the
 	// binding, not about the drive.
-	if err := st.DeleteUserDriveGrant(ctx, g.ID); err != nil {
+	// The DELETE hands back the row it removed — the audit row for this action
+	// is written from it, and the row is gone by then.
+	gone, err := st.DeleteUserDriveGrant(ctx, g.ID)
+	if err != nil {
 		t.Fatalf("delete grant: %v", err)
+	}
+	if gone.ID != g.ID || gone.Subject != g.Subject || gone.DriveID != g.DriveID {
+		t.Errorf("DELETE RETURNING = %+v, want the row it removed (%+v)", gone, g)
 	}
 	if err := st.DeleteUserDrive(ctx, d.ID); err != nil {
 		t.Errorf("delete an UNALLOCATED drive: err = %v, want nil", err)
@@ -286,7 +292,7 @@ func TestPG_UserDriveGrant_NaturalKeyUpsert(t *testing.T) {
 	}); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("grant naming an unknown drive: err = %v, want ErrNotFound", err)
 	}
-	if err := st.DeleteUserDriveGrant(ctx, uuid.New()); !errors.Is(err, store.ErrNotFound) {
+	if _, err := st.DeleteUserDriveGrant(ctx, uuid.New()); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("delete unknown grant id: err = %v, want ErrNotFound", err)
 	}
 }
@@ -534,7 +540,7 @@ func TestPG_HasGroupTierDriveGrants(t *testing.T) {
 	if !withGroup {
 		t.Error("HasGroupTierDriveGrants = false with a group-tier row present, want true")
 	}
-	if err := st.DeleteUserDriveGrant(ctx, group.ID); err != nil {
+	if _, err := st.DeleteUserDriveGrant(ctx, group.ID); err != nil {
 		t.Fatalf("delete group grant: %v", err)
 	}
 	// The shared substrate may legitimately carry another test's group row, so
