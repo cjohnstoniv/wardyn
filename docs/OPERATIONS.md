@@ -339,6 +339,9 @@ refused.
 | `devcontainer_repo` on a run (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ admin only, never grantable |
 | a custom sandbox `image` | 🟡 admin by default; the one power a capability grant can hand a member ("Capabilities") |
 | a member's own onboarded-workspace base image | 🟢 never gated — operator-authored at onboarding, not the member's free-text choice |
+| the `/drives` routes — registering a **user drive**, allocating it to people or groups, previewing whose drive resolves (`mountUserDriveRoutes`, `internal/api/user_drives.go`) | ⛔ admin only, deliberately NOT the security-admin tier: a drive names a host path (`host_root`) or a cluster storage class, and "never the host" is the line between the two admin tiers |
+| the user-drive **door** — `DenyUserDrive` on a governance profile (`internal/types/governance.go`) | 🟡 security admin too, through `/governance` — a limit on a profile, not a drive; it refuses the mount, it does not deallocate anything |
+| mounting YOUR OWN drive on a run (`drive.enabled`) | 🟢 the person, per run — read-only unless their allocation says otherwise, and the run flag may only narrow that, never widen it |
 | `POST /runs`, `POST /runs/{id}/kill` | 🟢 any signed-in human — using the product is a member act |
 
 **Ownership scoping — real, not just admin-vs-everyone.** A member reaches their
@@ -379,6 +382,24 @@ migration `0050`)** are the second and third owned nouns after runs.
   member's ids never fails halfway. The row's `local_dir` sources stop being
   member-authored, so the member root and dotfile gates no longer bound them —
   they become ordinary operator mounts. Treat it like creating the workspace.
+- **Offboarding a USER DRIVE is two halves, and only one of them is a product
+  action.** Deleting the allocation (`DELETE /drives/grants/{id}`, admin-only,
+  audited `drive.grant.delete`) stops the mount at that person's next run and
+  **deletes no data** — which is why the audit row carries the drive's declared
+  `reclaim` intent (`retain` or `delete`), so the log records what the operator
+  was told to do about the directory this allocation was the last pointer to.
+  What is left behind is one object per person: a Docker named volume, or a
+  subdirectory of the share the operator mounted host-side, or a
+  PersistentVolumeClaim — each carrying the drive row's **id** and the person's
+  home name as labels, so a departed member's objects stay findable after the
+  row that named them is gone. Reclaiming it is a deliberate operator command,
+  one per substrate, and Wardyn holds no `delete` verb that could do it by
+  accident: the recipes are "User drives on Docker" and "User drives on
+  Kubernetes" in this document, and are not repeated here. `POST /drives/preview`
+  prints the exact object name for a principal, so nobody recomputes a hashed
+  directory name by hand. Deleting the **drive row** itself is a `409` while any
+  allocation still points at it (`ON DELETE RESTRICT`), so the deallocation is
+  always its own audited event and offboarding can never silently widen anything.
 - **Secret write/delete moved from admin-only to self-service.** Any signed-in
   human may `PUT`/`DELETE /secrets/{name}` their OWN row
   (`secretOwnerFromRequest`: `""` for an operator, their own principal for a
@@ -2733,6 +2754,19 @@ driver, not a guess:
   per-container writable-storage quota is wired up yet, so a requested disk cap
   is accepted, not enforced, and logged (`internal/runner/k8s/sandbox.go`). A
   cluster-level `ephemeral-storage` request/limit is the closest mitigation.
+  **The honest wording for a size Wardyn does not enforce is now settled, and
+  `DiskMiB` should adopt it.** User drives introduced an `enforcement`
+  vocabulary — `types.StorageEnforcement`, one of `filesystem` (a quota binds
+  it), `request` (a volume request; the storage class decides), `external`
+  (somebody else's quota binds it) or `none` — and one frozen sentence the
+  console and the docs both render verbatim:
+
+  > Wardyn never enforces a drive's size itself. On Kubernetes the size is the volume request and the storage class decides whether it binds — block disks do, network-share provisioners do not. On Docker a managed drive has no byte cap, the same gap disk_mib has. A share is bounded by its own quota. The size you see is the allocation, not a guarantee.
+
+  That sentence names this gap by its policy field, on purpose. A drive is
+  `request` on a managed claim and `external` on a share; `disk_mib` is `none`
+  on both substrates today, and the two will converge on the one vocabulary
+  rather than on two ways of saying "accepted, not enforced".
 - 🟡 **No k8s ground-truth correlator.** The Tetragon host-sensor → ground-truth
   pipeline (`cmd/wardynd/gt_rotator.go`, `wardyn-tetragon-ingest`, the
   `groundtruth` Compose profile) has no k8s-substrate equivalent — it is not
