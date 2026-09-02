@@ -183,8 +183,6 @@ test("V03c act 1 — authorized, not issued", async () => {
   await spotlight(page, auditRows);
   await caption(page, "Three asks, three decisions on the record.");
   await beat(page, PACE.read);
-  await caption(page, "And the mint's own row beside them: refused pending approval, authorized once, then spent.");
-  await beat(page, PACE.read);
   await caption(page, "Three rows, newest on top. Bottom: refused, pending approval. Middle: authorized once. Top: refused again — spent. One approval, one use.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);

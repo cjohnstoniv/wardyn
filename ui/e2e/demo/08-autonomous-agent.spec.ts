@@ -361,7 +361,7 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   await caption(page, "We're not sitting here feeding it additional instructions while it runs.");
   await beat(page, PACE.read);
   await caption(page, "It gets the workspace, the policy, and the job.");
-  await beat(page, BEAT_SHORT);
+  await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
   // --- B3 Workspace -------------------------------------------------------
@@ -375,7 +375,7 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   await act(page, page.getByRole("combobox").filter({ hasText: "Ephemeral scratch" }), "Attach the workspace.");
   await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE_NAME, "i") }).first());
   await caption(page, "Same workspace as before — real code, writable because we granted it.");
-  await beat(page, BEAT_SHORT);
+  await beat(page, PACE.read + 400);
 
   // --- B4 Confinement -----------------------------------------------------
   //

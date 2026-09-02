@@ -451,7 +451,7 @@ test("cold open + B1 — the card that learns", async () => {
   await caption(page, "This is where the policy gets learned.");
   await beat(page, PACE.read);
   await caption(page, "Not from a developer's memory — from the run itself.");
-  await beat(page, BEAT_SHORT);
+  await beat(page, PACE.read + 400);
   await spotlight(page, null);
 });
 
@@ -764,9 +764,6 @@ test("B4 — evidence becomes policy", async () => {
   await expect(grants).toContainText("none");
   const warningsBullet = sheet.getByText("Warnings", { exact: true }).locator("xpath=..").locator("li").first();
   await expect(warningsBullet).toBeVisible({ timeout: 30_000 });
-  await spotlight(page, grants);
-  await caption(page, "Wardyn also looks at credentials.");
-  await beat(page, PACE.read);
   await spotlight(page, warningsBullet);
   await caption(page, "Wardyn also watched which keys the job used.");
   await beat(page, PACE.read + 400);
@@ -1247,7 +1244,7 @@ test("B7 — approve the miss, run it again", async () => {
     card.getByTestId("live-approvals-idle"),
     "a host was still being held in the clean replay — the approval from the guided click did not land",
   ).toBeVisible();
-  await caption(page, "Nothing to approve.");
+  await caption(page, "Nothing to approve — the list was enough.");
   await beat(page, PACE.read);
 
   await act(page, card.getByRole("button", { name: "Done", exact: true }));
@@ -1302,7 +1299,7 @@ test("B7 — approve the miss, run it again", async () => {
 
   await spotlight(page, review);
   await caption(page, "That's the whole loop: watch the job, capture what it uses, turn that into policy, run it confined.");
-  await beat(page, PACE.read);
+  await beat(page, PACE.read + 400);
   // The fifth step, added with the beat that films it: the summary used to list
   // four and the video now shows five.
   await caption(page, "If replay catches something the job genuinely needed, approve only that dependency and replay again — until the run comes back clean.");

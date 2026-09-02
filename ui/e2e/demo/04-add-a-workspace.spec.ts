@@ -242,7 +242,7 @@ test("V04 beat 2 — onboard the project", async () => {
   // inside, as the git card's footer admits.
   // S3: ring the Repository card while these three stanzas describe it.
   await spotlight(page, dlg.getByRole("button", { name: "Repository" }));
-  await caption(page, "A project can be copied down from GitHub with a Git credential you store in Secrets — we'll add one in a moment.");
+  await caption(page, "A project can be copied down from GitHub with a Git credential you store in Secrets — we'll add a secret of our own in a moment.");
   await beat(page, PACE.read);
   await caption(page, "And with the GitHub App lane — described here, not run on this install — the proxy talks to GitHub for the sandbox; that one's in the credentials detour.");
   await beat(page, PACE.read);
@@ -369,8 +369,6 @@ test("V04 beat 3 — what it remembers", async () => {
   await beat(page, PACE.read);
   await caption(page, "'Record a run' is the whole episode on it.");
   await beat(page, PACE.read);
-  await caption(page, "We'll spend an entire episode on that.");
-  await beat(page, BEAT_SHORT);
   await caption(page, "For now, the important part is that nothing is being recorded yet.");
   await beat(page, PACE.read);
   await spotlight(page, null);
@@ -424,7 +422,7 @@ test("V04 beat 4 — write-only secrets", async () => {
   await caption(page, "There's already one here: the SSH key Wardyn made for itself during setup, so you can attach to runs later. Leave it alone.");
   await beat(page, PACE.read);
   await caption(page, "The important rule is simple: secrets go in, and they don't come back out.");
-  await beat(page, BEAT_SHORT);
+  await beat(page, BEAT_SHORT + 400);
 
   await act(page, page.getByRole("button", { name: "Add secret", exact: true }), "Add secret.");
   const dlg = page.getByRole("dialog");
@@ -434,7 +432,7 @@ test("V04 beat 4 — write-only secrets", async () => {
   await spotlight(page, nameBox);
   await nameBox.fill(SECRET_NAME);
   await caption(page, "The name is the handle — runs ask for it by name, never by value.");
-  await beat(page, BEAT_SHORT);
+  await beat(page, PACE.read);
 
   // The Value field masks at entry (secrets.tsx's -webkit-text-security +
   // reveal toggle, added 2026-08-23 after this take showed the plaintext) —

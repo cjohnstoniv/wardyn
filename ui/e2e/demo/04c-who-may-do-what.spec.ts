@@ -121,7 +121,7 @@ test("V04c act 3 — the member's view of the same install", async () => {
   await spotlight(page, page.getByRole("navigation").first());
   await caption(page, "Runs, approvals, workspaces. The console stops offering the rest.");
   await beat(page, PACE.read);
-  await caption(page, "Hiding a link isn't authorization, though — the refusal that matters is the server's, on every one of those calls. That's the half that actually holds.");
+  await caption(page, "Hiding a link isn't authorization, though — the server has to refuse those calls too. You'll watch one of its refusals land on the record in 'Admin operations'.");
   await beat(page, PACE.read);
   await spotlight(page, null);
   await expect(page.getByRole("link", { name: /^Permissions/ })).toHaveCount(0);

@@ -506,7 +506,7 @@ drive() {
   # this is the frame where it lands (the owner's key accepted, the run's own
   # shell on screen). One line names it. Drafted; see
   # local/light-episodes-dialog-flags.md.
-  say "This is attach — stepping into the live session. Nothing about the run's rules changes because you are in it."
+  say "This is attach — stepping into the live session."
   # KEEP-VERIFY: both clauses below check against the SSH lane's actual
   # implementation (internal/api/sshgateway.go: "ssh <run-id>@<advertise-host>
   # lands in the same tmux session and masked live recorder the web terminal
@@ -562,7 +562,7 @@ drive() {
     || die "the foreign key was not refused — check it is registered under ${FOREIGN_PRINCIPAL} and the run is owned by ${PRINCIPAL}"
   say "Refused."
   say "The run belongs to the person who created it."
-  say "There's no administrator backdoor through SSH — an admin's key is refused the same way."
+  say "There's no administrator backdoor through SSH."
   say "That's intentional."
   say "An administrator can still stop the run and inspect its records."
   say "But attaching to somebody else's interactive session isn't an override."

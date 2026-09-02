@@ -135,7 +135,7 @@ test("act 2 — barrier, people, network, model", async () => {
   await advance();
 
   await expect(page.getByRole("heading", { name: "Secrets", level: 2 })).toBeVisible({ timeout: 30_000 });
-  await caption(page, "We connected the AI provider off camera — one terminal command, shown in 'Set up the host'.");
+  await caption(page, "We connected the AI provider off camera — one terminal command; 'Set up the host' does the same step in the console.");
   await beat(page, PACE.read + 900);
   await caption(page, "Wardyn keeps that token outside the sandbox, encrypted with a key this host holds.");
   await beat(page, PACE.read);
@@ -562,10 +562,8 @@ test("act 5 — a real run", async () => {
     await spotlight(page, null);
   }
 
-  await caption(page, "Next it probes the cloud-metadata address — where cloud credentials live. There is no route off the box for it at all.");
+  await caption(page, "Next it probes the cloud-metadata address — where cloud credentials live. The proxy refuses it underneath the policy; nothing to approve.");
   await beat(page, PACE.read + 1400);
-  await caption(page, "No approval was raised for it, because no approval could have granted it.");
-  await beat(page, PACE.read + 900);
 
   // Terminal state, whichever it is — a denial must not brick the run.
   // RunStateBadge renders TITLE CASE labels from runStateMeta ("Completed",

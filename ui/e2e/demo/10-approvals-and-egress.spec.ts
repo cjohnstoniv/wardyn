@@ -537,8 +537,6 @@ test("beats 0-5 — the wait-for-review hold, and the scope ladder", async () =>
   }
   await caption(page, "The request that was already waiting completes.");
   await beat(page, PACE.read);
-  await caption(page, "No retry.");
-  await beat(page, BEAT_SHORT);
   await caption(page, "This policy holds instead of refusing — the request waited at the door, and the wait ended with a yes. No retry needed.");
   await beat(page, PACE.read + 600);
 
@@ -655,8 +653,6 @@ test("beats 0-5 — the wait-for-review hold, and the scope ladder", async () =>
   await caption(page, "Nobody answered.");
   await beat(page, PACE.read);
   await caption(page, "Nobody answered inside the window — thirty seconds here — so the door stays shut: nothing was let through.");
-  await beat(page, PACE.read);
-  await caption(page, "And the waiting row should close with it.");
   await beat(page, PACE.read);
   await caption(page, "The request was never granted.");
   await beat(page, PACE.read + 400);

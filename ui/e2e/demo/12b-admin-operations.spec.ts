@@ -168,7 +168,7 @@ test("V12b act 3 — your run, therefore not your call", async () => {
   await caption(page, "Refused — you created this run, so someone else approves or denies its egress.");
   await beat(page, PACE.read);
   await spotlight(page, null);
-  await caption(page, "Not a permissions gap. A guarantee: the person who created the run never approves its reach — admin or member.");
+  await caption(page, "Not a permissions gap. A guarantee: the person who created the run never approves its reach.");
   await beat(page, PACE.read);
 });
 

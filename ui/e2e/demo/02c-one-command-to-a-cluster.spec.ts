@@ -163,7 +163,7 @@ test("V02c act 4 — two demos, two pods, one boundary", async () => {
   // Demo 1 — the sealed box: default-deny, no prompt, no wait.
   const sealed = await openEpisode(page, "sealed-box", "The sealed box");
   const screen1 = await startAndBoot(page, sealed, "sealed-box");
-  await caption(page, "Same terminal as every other episode — and there is its pod, on the cluster you watched build.");
+  await caption(page, "Same terminal as every other episode — underneath, this one is a pod on the cluster you watched build.");
   await beat(page, PACE.read);
   await screen1.click();
   await page.keyboard.type("curl -sSI https://example.com\n");

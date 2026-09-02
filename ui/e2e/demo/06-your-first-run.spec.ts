@@ -471,7 +471,7 @@ test("V06 beat 3 — launch, walk away", async () => {
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: 60_000 });
   await caption(page, "Once it's launched, the envelope is set.");
   await beat(page, PACE.read);
-  await caption(page, "Once it's launched, only a decision at the boundary — an approval or a deny — can widen what this run may reach. You'll watch one later.");
+  await caption(page, "From here, only an approval at the boundary can widen what this run may reach; a deny keeps it shut. You'll watch one later.");
   await beat(page, PACE.read);
 
   // SCREEN: Run terminal/replay.
@@ -599,7 +599,7 @@ test("V06 beat 4 — the receipts", async () => {
   // old CI-baseline CC1) — re-confirm the sensor is blind at that tier.
   await caption(page, "Wardyn can also watch a run from the operating system's core — a second witness outside the sandbox.");
   await beat(page, PACE.read);
-  await caption(page, "On this barrier that witness is off, and the screen says so.");
+  await caption(page, "On this barrier that witness is off.");
   await beat(page, PACE.read);
   await caption(page, "We'll come back to that in 'Audit and attach'.");
   await beat(page, PACE.read);

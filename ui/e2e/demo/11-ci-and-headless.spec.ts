@@ -275,10 +275,8 @@ test("beat 6 — same trail, no human", async () => {
   // local/light-episodes-dialog-flags.md.
   await caption(
     page,
-    "And anything off the list has nobody to ask — the door stays shut.",
+    "And anything off the list has nobody to ask — the door stays shut, and the build goes red.",
   );
-  await beat(page, PACE.read);
-  await caption(page, "There's the row in the record, and the build goes red.");
   await beat(page, PACE.read);
   await caption(page, "Governance that doesn't require somebody to stay awake.");
   await beat(page, BEAT_SHORT);

@@ -137,6 +137,8 @@ _SUBS = [
     # Product/tool names and one dotted identifier the captions speak aloud.
     ("gVisor", "gee visor", True),
     ("kubectl", "cube control", True),
+    ("ci-run.sh", "see eye run dot ess aitch", True),
+    ("TRY-IT dot md", "try it dot em dee", True),
     ("Apache-2.0", "Apache two point oh", True),
     ("authz.denied", "auth-zee denied", True),
     # The owner's script uses three-dot trailing ellipses ("useful...") — read

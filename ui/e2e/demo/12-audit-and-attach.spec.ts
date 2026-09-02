@@ -304,8 +304,7 @@ test("beat 5 — name the streams", async () => {
     "the ground-truth chip reads neither 'unavailable' nor 'degraded' — this take is on a stack with the eBPF sensor LIVE, and the line about the sensor being dark is false on camera",
   ).toBeVisible({ timeout: AUDIT_SETTLES });
   await spotlight(page, groundTruth);
-  await caption(page, "On this machine that second witness is switched off — an opt-in sensor — so Wardyn says unavailable instead of pretending.");
-  await caption(page, "Where it's on, you get a second log alongside Wardyn's own.");
+  await caption(page, "On this machine that second witness is switched off — an opt-in sensor — so the chip says so instead of pretending.");
   await beat(page, PACE.read);
   // The "opt-in sensor" hint lives in the chip's native `title` tooltip, which
   // the browser draws as BROWSER chrome — Playwright's recordVideo captures page
@@ -313,8 +312,6 @@ test("beat 5 — name the streams", async () => {
   // hover. The hover is kept because it is what a presenter does and costs
   // nothing; the caption is what actually carries the point.
   await groundTruth.hover();
-  await beat(page, PACE.read);
-  await caption(page, "And Wardyn tells us that instead of pretending otherwise.");
   await beat(page, PACE.read);
   // KEEP-VERIFY: "a second witness alongside Wardyn's own log" — re-check
   // against the sensor docs before the take. Support today:
@@ -328,7 +325,9 @@ test("beat 5 — name the streams", async () => {
   // had already called the kernel "an independent witness" — so it now says
   // witness twice on purpose and names the other stream in the series' own
   // words.
-  await caption(page, "Where the sensor is available — a Wall or Vault run with it switched on, which this machine doesn't have — that second witness runs alongside Wardyn's own log.");
+  await caption(page, "Where the sensor is available — a host that switched it on, which this one hasn't — that second witness runs alongside Wardyn's own log.");
+  await beat(page, PACE.read);
+  await caption(page, "A Vault run hides its guest from it — and Wardyn logs that blindness as its own row.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 });
