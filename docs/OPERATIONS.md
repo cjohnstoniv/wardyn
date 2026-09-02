@@ -2203,6 +2203,78 @@ recipe, including the wildcard Ingress, in
 [docs/UI-SANDBOXES.md §4](UI-SANDBOXES.md#4-deployment) and the chart section
 linked above.
 
+### User drives on Kubernetes
+
+A **user drive** is per-person storage a run mounts at `/home/agent/drive`. On
+this substrate it is always a PersistentVolumeClaim — a pod cannot bind a host
+path, and Pod Security Standards forbids `hostPath` at Baseline and Restricted
+alike, so no drive backend offers one.
+
+**Two backends, two lifecycles.** A **managed** drive (`k8s_pvc`) is one claim
+per person, named `wardyn-drive-<drive>-<home>`, created by wardynd on the first
+run that mounts it — `accessModes: [ReadWriteOnce]`, the allocation as
+`resources.requests.storage`, and the drive's own storage class when it has one
+(empty = the cluster default). A **share** (`k8s_pvc_static`) is a claim an admin
+provisioned — typically over an NFS/SMB export — and wardynd only ever looks it
+up by name. A missing one fails the run with *"your drive's volume is not
+provisioned on this cluster"* rather than being invented as an empty volume where
+somebody's files were meant to be.
+
+**RBAC is two verbs.** `userDrives.enabled=true` adds exactly
+`persistentvolumeclaims: ["get","create"]` to the namespaced runner Role
+(`deploy/helm/wardyn/templates/rbac.yaml`): `get` because a claim is always
+resolved by name first, and is all a share ever needs; `create` for a managed
+drive's first use. Leave it on for **any** drive at all. With it off, a `k8s_pvc`
+run fails at dispatch and the run's failure hint names the switch — that hint is
+the runner's error verbatim, so a 403 from the apiserver reads as a sentence an
+operator can act on, not as an RBAC stack trace.
+
+**Backup.** A drive is *not* in `pg_dump` — the database holds the drive rows and
+the allocations, never the bytes. Back the volumes up the way the cluster already
+backs up claims: a `VolumeSnapshotClass` snapshot per claim, or
+`kubectl -n <ns> cp <pod>:/home/agent/drive <dest>` from a pod that mounts one. A
+share is backed up by whoever owns the export, not by Wardyn.
+
+**Offboarding — the reclaim command.** Deleting the allocation in the console is
+the product-side half and it deletes no data. Reclaiming the storage is one
+deliberate operator command, and Wardyn holds no `delete` verb that could do it
+by accident:
+
+```sh
+kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive>-<home>
+```
+
+The drive's `when a person leaves` column records the intent (`retain` or
+`delete`) so the log says what the operator was told to do; the console's drive
+preview prints that exact object name for a person, so nobody recomputes a home
+segment by hand. The claim carries `wardyn.managed`, `wardyn.drive` (the drive's id, so a rename
+does not orphan it) and `wardyn.home` labels — the same pair the Docker driver
+stamps on a managed volume — and, deliberately, **no `wardyn.run-id`**, so the
+per-run teardown sweep (a `DeleteCollection` selecting on exactly that label)
+cannot reach it.
+
+**Ownership, and where fsGroup stops working.** A pod with a drive carries
+`fsGroup: 1000` (the uid every agent image runs as) with
+`fsGroupChangePolicy: OnRootMismatch` — `Always` would recursively chown a large
+drive on every single run. The kubelet applies fsGroup for CSI drivers that
+declare `ReadWriteOnceWithFSType` volume ownership, i.e. block storage: the
+managed case is correct by construction. It does **not** apply to an NFS-type
+volume. A static share is owned by whatever its export says, so map it there — a
+Wardyn-dedicated export with `all_squash,anonuid=1000,anongid=1000`, or per-user
+`0700` subdirectories — and expect a read-only mount where an existing corporate
+home is owned by a different uid.
+
+**Size is an allocation, not a limit**, and the product says so in one frozen
+sentence: *"Wardyn never enforces a drive's size itself. On Kubernetes the size
+is the volume request and the storage class decides whether it binds — block
+disks do, network-share provisioners do not. On Docker a managed drive has no
+byte cap, the same gap `disk_mib` has. A share is bounded by its own quota. The
+size you see is the allocation, not a guarantee."* That is the `enforcement`
+vocabulary this feature introduces (`filesystem` / `request` / `external` /
+`none`): a managed claim is `request`, a share is `external`. It is the same
+honesty the `DiskMiB` gap below is written with, and the two will converge on one
+vocabulary.
+
 ## One replica, by construction
 
 `replicas` is not a scaling knob and it is not modesty — **the pin is a safety

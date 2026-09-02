@@ -175,9 +175,13 @@ func (s *Server) driveMountFor(w http.ResponseWriter, req createRunRequest,
 		readOnly = readOnly || *req.Drive.ReadOnly
 	}
 	return &types.DriveMount{
+		DriveID:    resolved.Drive.ID,
 		Backend:    resolved.Drive.Backend,
 		ObjectName: resolved.ObjectName,
-		HomeName:   resolved.HomeName,
+		// The provisioner a managed claim asks for, carried so the k8s substrate
+		// never has to read the drive row it was resolved from.
+		StorageClass: resolved.Drive.StorageClass,
+		HomeName:     resolved.HomeName,
 		// The reserved constant, carried rather than assumed, so the path the
 		// runner binds at and the path validateWorkspaceSources/validatePolicySpec
 		// refuse to let anyone else name are the SAME symbol.

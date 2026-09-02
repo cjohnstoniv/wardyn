@@ -55,6 +55,19 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if d.cfg.ProxyImage == "" {
 		return runner.Sandbox{}, errProxyImageUnset
 	}
+	// The user drive comes LAST in preflight because it is the only step here
+	// that writes: everything that can fail for free has already failed by now,
+	// so a refused drive leaves the namespace exactly as it found it. The claim
+	// this may create outlives the run on purpose and carries no wardyn.run-id
+	// label, so the rollback below (teardownByRunID selects on exactly that
+	// label) cannot reach it — a later failure must never delete the person's
+	// storage. It is spec.Drive, not a spec.Mounts entry, which is why the
+	// blanket host-bind refusal above needs no drive exemption.
+	if spec.Drive != nil {
+		if err := ensureDrivePVC(ctx, d.clientset, ns, spec.Drive); err != nil {
+			return runner.Sandbox{}, err
+		}
+	}
 
 	// fail tears down everything CreateSandbox may have created so far via
 	// teardownByRunID — the SAME wait-before-netpol-drop guard StopSandbox/
@@ -221,6 +234,14 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 				Resources:       resourceRequirements(spec.Resources),
 			}},
 		},
+	}
+	// The drive, and ONLY on a pod that has one: a drive-less agent pod keeps the
+	// nil pod-level SecurityContext it has always had, so nothing about the pods
+	// this substrate already produces changes shape.
+	if spec.Drive != nil {
+		agentPod.Spec.Volumes = []corev1.Volume{driveVolume(spec.Drive)}
+		agentPod.Spec.SecurityContext = drivePodSecurityContext()
+		agentPod.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{driveVolumeMount(spec.Drive)}
 	}
 	if runtimeClassName != "" {
 		agentPod.Spec.RuntimeClassName = &runtimeClassName

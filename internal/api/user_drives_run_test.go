@@ -255,9 +255,12 @@ func TestSeedRequestDriveMountShape(t *testing.T) {
 		t.Fatalf("DriveHomeName: %v", err)
 	}
 	want := types.DriveMount{
+		DriveID: d.ID,
 		Backend: types.DriveBackendDockerVolume, ObjectName: types.DriveObjectName(*d, home),
 		HomeName: home, Target: runner.DriveTarget, ReadOnly: true, SizeMiB: 10240,
 		Enforcement: types.StorageEnforcementNone,
+		// StorageClass stays empty: a Docker volume has no such concept, and a
+		// substrate that sees one on this backend is looking at a bad row.
 	}
 	if *mount != want {
 		t.Errorf("mount = %+v\nwant %+v", *mount, want)

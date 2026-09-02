@@ -376,12 +376,23 @@ type ResolvedDrive struct {
 // validateWorkspaceSources, primaryWorkspacePath and the k8s blanket host-bind
 // refusal from each needing a drive exemption.
 type DriveMount struct {
+	// DriveID is the user_drives row this mount came from, carried for LABELS
+	// and for the audit row an operator reads back — never for a decision, since
+	// which drive won is the resolver's answer and is already made. A label keyed
+	// on the id survives a rename; the object name, which folds the drive's slug,
+	// does not.
+	DriveID uuid.UUID    `json:"drive_id"`
 	Backend DriveBackend `json:"backend"`
 	// ObjectName is what the substrate is asked for: a Docker volume name, a
 	// PVC name, or the absolute host path of this principal's subdirectory.
 	// Derived once by the resolver (DriveObjectName) so no runner re-computes a
 	// hash.
 	ObjectName string `json:"object_name"`
+	// StorageClass is the provisioner a managed k8s_pvc claim asks for; "" means
+	// the cluster default, and it is meaningless on every other backend. Carried
+	// here because a substrate never reads the database — the resolver hands it
+	// everything a mount needs (UserDrive.StorageClass).
+	StorageClass string `json:"storage_class,omitempty"`
 	// HomeName is the per-user segment ObjectName was built from, carried for
 	// labels and for the audit row an operator reads when reclaiming.
 	HomeName string `json:"home_name"`

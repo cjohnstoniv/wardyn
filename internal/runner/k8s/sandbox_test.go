@@ -609,3 +609,193 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// TestCreateSandbox_DriveShapesTheAgentPod covers the pod half of the user
+// drive: the claim is ensured BEFORE the agent pod exists, and the pod carries
+// the volume, the mount at the reserved target, and the fsGroup that makes a
+// freshly provisioned block volume writable by uid 1000.
+func TestCreateSandbox_DriveShapesTheAgentPod(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.7")
+	installAgentRunningReactor(t, cs)
+	cs.ClearActions()
+
+	spec := testSandboxSpec()
+	spec.Drive = testDriveMount()
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+
+	// Ordering: the claim must exist before the pod that mounts it, or the pod
+	// comes up stuck on a volume the scheduler cannot bind.
+	var order []string
+	for _, a := range cs.Actions() {
+		if a.GetVerb() != "create" {
+			continue
+		}
+		if r := a.GetResource().Resource; r == "persistentvolumeclaims" || r == "pods" {
+			order = append(order, r)
+		}
+	}
+	if len(order) == 0 || order[0] != "persistentvolumeclaims" {
+		t.Errorf("create order = %v, want the claim created before any pod", order)
+	}
+
+	pod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent pod: %v", err)
+	}
+	if len(pod.Spec.Volumes) != 1 {
+		t.Fatalf("agent pod volumes = %v, want exactly the drive", pod.Spec.Volumes)
+	}
+	vol := pod.Spec.Volumes[0]
+	if vol.Name != driveVolumeName || vol.PersistentVolumeClaim == nil {
+		t.Fatalf("agent pod volume = %+v, want a %q persistentVolumeClaim volume", vol, driveVolumeName)
+	}
+	if vol.PersistentVolumeClaim.ClaimName != spec.Drive.ObjectName {
+		t.Errorf("claimName = %q, want %q", vol.PersistentVolumeClaim.ClaimName, spec.Drive.ObjectName)
+	}
+	// PSS Restricted admits persistentVolumeClaim and forbids hostPath; no drive
+	// backend on this substrate offers one, and none may ever be added here.
+	if vol.HostPath != nil {
+		t.Error("agent pod carries a hostPath volume — forbidden by Pod Security Standards Baseline and Restricted alike")
+	}
+	wantMount := corev1.VolumeMount{Name: driveVolumeName, MountPath: runner.DriveTarget, ReadOnly: false}
+	if got := pod.Spec.Containers[0].VolumeMounts; len(got) != 1 || got[0] != wantMount {
+		t.Errorf("main container mounts = %+v, want [%+v]", got, wantMount)
+	}
+	sc := pod.Spec.SecurityContext
+	if sc == nil || sc.FSGroup == nil || *sc.FSGroup != driveFSGroup {
+		t.Fatalf("pod securityContext = %+v, want FSGroup %d", sc, driveFSGroup)
+	}
+	if sc.FSGroupChangePolicy == nil || *sc.FSGroupChangePolicy != corev1.FSGroupChangeOnRootMismatch {
+		t.Errorf("fsGroupChangePolicy = %v, want OnRootMismatch (an Always recursive chown of a large drive is a minutes-long pod start)", sc.FSGroupChangePolicy)
+	}
+
+	// Negative control: a drive-less run's pod is byte-identical to what this
+	// substrate produced before drives existed — no volume, no mount, and above
+	// all no pod-level security context.
+	spec2 := testSandboxSpec()
+	sb2, err := d.CreateSandbox(context.Background(), spec2)
+	if err != nil {
+		t.Fatalf("CreateSandbox (drive-less): %v", err)
+	}
+	pod2, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb2.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent pod (drive-less): %v", err)
+	}
+	if len(pod2.Spec.Volumes) != 0 || len(pod2.Spec.Containers[0].VolumeMounts) != 0 {
+		t.Errorf("drive-less pod carries volumes %v / mounts %v, want none", pod2.Spec.Volumes, pod2.Spec.Containers[0].VolumeMounts)
+	}
+	if pod2.Spec.SecurityContext != nil {
+		t.Errorf("drive-less pod securityContext = %+v, want nil (hardening on this substrate is container-level)", pod2.Spec.SecurityContext)
+	}
+}
+
+// TestCreateSandbox_DriveReadOnlyOnBothHalves pins the two flags that must
+// agree: the volume's and the mount's. A read-only allocation that comes up
+// writable because only one half carried the flag is a widening.
+func TestCreateSandbox_DriveReadOnlyOnBothHalves(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.7")
+	installAgentRunningReactor(t, cs)
+
+	spec := testSandboxSpec()
+	spec.Drive = testDriveMount()
+	spec.Drive.ReadOnly = true
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	pod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent pod: %v", err)
+	}
+	if !pod.Spec.Volumes[0].PersistentVolumeClaim.ReadOnly {
+		t.Error("volume readOnly = false for a read-only allocation")
+	}
+	if !pod.Spec.Containers[0].VolumeMounts[0].ReadOnly {
+		t.Error("volumeMount readOnly = false for a read-only allocation")
+	}
+}
+
+// TestCreateSandbox_DriveSurvivesTeardown is the other half of "no run label":
+// the run's whole sweep runs and the person's storage is still there. The
+// selector assertion is the load-bearing one — the fake's DeleteCollection
+// support does not filter by label, so the proof that the sweep CANNOT reach
+// the claim is that the claim carries no key the selector names, and that no
+// delete verb is ever issued against a claim at all (the chart grants none).
+func TestCreateSandbox_DriveSurvivesTeardown(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.7")
+	installAgentRunningReactor(t, cs)
+
+	spec := testSandboxSpec()
+	spec.Drive = testDriveMount()
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	cs.ClearActions()
+	if err := d.KillSandbox(context.Background(), sb.Ref); err != nil {
+		t.Fatalf("KillSandbox: %v", err)
+	}
+	assertRunObjectsGone(t, cs, spec.RunID)
+
+	pvc, err := cs.CoreV1().PersistentVolumeClaims(testNamespace).Get(context.Background(), spec.Drive.ObjectName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("the drive's claim did not survive teardown: %v", err)
+	}
+	selector := labelRun + "=" + spec.RunID.String()
+	if _, ok := pvc.Labels[labelRun]; ok {
+		t.Errorf("claim labels %v are selectable by teardown's %q", pvc.Labels, selector)
+	}
+	for _, a := range cs.Actions() {
+		if a.GetResource().Resource == "persistentvolumeclaims" && strings.HasPrefix(a.GetVerb(), "delete") {
+			t.Errorf("teardown issued %q against a claim; the chart grants no delete verb — reclaim is an operator command", a.GetVerb())
+		}
+	}
+}
+
+// TestCreateSandbox_DriveRefusalCreatesNothing pins the drive check's place in
+// preflight: a share whose claim an admin never provisioned fails the run before
+// a Secret, a NetworkPolicy or a pod exists, so there is nothing to roll back.
+func TestCreateSandbox_DriveRefusalCreatesNothing(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	cs.ClearActions()
+
+	spec := testSandboxSpec()
+	spec.Drive = testDriveMount()
+	spec.Drive.Backend = types.DriveBackendK8sPVCStatic
+
+	if _, err := d.CreateSandbox(context.Background(), spec); !errors.Is(err, errDriveClaimNotProvisioned) {
+		t.Fatalf("err = %v, want errors.Is(err, errDriveClaimNotProvisioned)", err)
+	}
+	for _, a := range cs.Actions() {
+		if a.GetVerb() == "create" {
+			t.Errorf("a refused drive still created %s", a.GetResource().Resource)
+		}
+	}
+}
+
+// TestCreateSandbox_MountsStayRefusedWithADrive proves the two fields never
+// merged: the blanket host-bind refusal still fires with a drive present, and it
+// fires BEFORE the drive is provisioned.
+func TestCreateSandbox_MountsStayRefusedWithADrive(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	cs.ClearActions()
+
+	spec := testSandboxSpec()
+	spec.Drive = testDriveMount()
+	spec.Mounts = []runner.Mount{{Source: "/home/op/work", Target: "/work"}}
+
+	if _, err := d.CreateSandbox(context.Background(), spec); !errors.Is(err, errMountsUnsupported) {
+		t.Fatalf("err = %v, want errors.Is(err, errMountsUnsupported)", err)
+	}
+	for _, a := range cs.Actions() {
+		if a.GetVerb() == "create" {
+			t.Errorf("a refused mount still created %s", a.GetResource().Resource)
+		}
+	}
+}

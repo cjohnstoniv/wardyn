@@ -376,6 +376,39 @@ persistence:
   size: 5Gi
   storageClass: ""
 
+# User drives: per-person storage a run can mount at /home/agent/drive. This
+# switch is ONLY the RBAC half — it adds `persistentvolumeclaims: get, create`
+# to the k8s-runner Role (templates/rbac.yaml). The drives themselves are
+# registered and allocated in the console, not here; nothing in this block
+# creates one.
+#
+# Two Kubernetes backends, both claim-based (a pod may not bind a host path, and
+# Pod Security Standards forbids hostPath at Baseline and Restricted alike):
+#   k8s_pvc         managed — wardynd creates one claim per person, named
+#                   wardyn-drive-<drive>-<home>, on first use. Needs `create`.
+#   k8s_pvc_static  share — an admin provisions the claim (typically an NFS/SMB
+#                   export) and wardynd only looks it up. Needs `get` only, so
+#                   leave this on for ANY drive at all; a missing claim fails the
+#                   run rather than being invented as an empty volume.
+#
+# Off => a k8s_pvc drive's run fails at dispatch with a hint naming this switch.
+# Wardyn holds no `delete` verb: reclaiming a departed person's claim is an
+# operator command (see this chart's README and docs/OPERATIONS.md).
+#
+# On size, quoted verbatim from the product's own words, because it is the one
+# thing an allocation is routinely mistaken for:
+#   "Wardyn never enforces a drive's size itself. On Kubernetes the size is the
+#   volume request and the storage class decides whether it binds — block disks
+#   do, network-share provisioners do not. On Docker a managed drive has no byte
+#   cap, the same gap `disk_mib` has. A share is bounded by its own quota. The
+#   size you see is the allocation, not a guarantee."
+userDrives:
+  enabled: false
+  # Documentation only. A drive's real storage class is a per-drive field in the
+  # console (it is what the claim requests); this is here so an install's values
+  # can record which class the platform expects drives to use. Nothing renders it.
+  storageClass: ""
+
 nodeSelector: {}
 affinity: {}
 tolerations: []

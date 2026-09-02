@@ -40,6 +40,30 @@ var errNetworkPolicyUnenforced = errors.New("k8s: NetworkPolicy is not enforced 
 // bind mount reaches the daemon host).
 var errMountsUnsupported = errors.New("k8s: host bind mounts are not supported on this substrate; use a repo workspace or proxy-side credential injection instead")
 
+// errDriveClaimNotProvisioned is ensureDrivePVC's refusal of a SHARE drive
+// (k8s_pvc_static) whose claim does not exist in the runs namespace. wardynd
+// deliberately does not create it: that claim is an admin's pre-provisioned
+// handle on a real corporate share, and creating an empty one under the same
+// name would hand the member a blank volume where their files should be. The
+// wording is what an operator reads back, because a CreateSandbox error becomes
+// the run's failure hint verbatim (dispatchRun's failAndRevoke, internal/api).
+var errDriveClaimNotProvisioned = errors.New("your drive's volume is not provisioned on this cluster; ask an administrator to create the claim (or check the drive's directory-name template)")
+
+// errDrivePVCForbidden is ensureDrivePVC's refusal when the apiserver answers a
+// managed claim's Create with a 403 — the wardynd ServiceAccount was never
+// granted `persistentvolumeclaims: [get, create]` in the runs namespace. It
+// names the switch that grants them, so the failure hint carries its own remedy
+// instead of an opaque RBAC message.
+var errDrivePVCForbidden = errors.New("this deployment may not create per-person volumes: grant the wardynd ServiceAccount `persistentvolumeclaims: get, create` in the runs namespace (Helm chart: userDrives.enabled=true)")
+
+// errDriveBackendUnsupported is ensureDrivePVC's refusal of a drive whose
+// backend belongs to another substrate (a Docker volume, a host path). The
+// control plane already refuses such a drive at run create — driveMountFor
+// compares the backend's RunnerTarget against the deployment's — so reaching
+// here is a bug, and the fail-closed answer is an error rather than a run that
+// silently comes up with no drive at all.
+var errDriveBackendUnsupported = errors.New("k8s: this drive's backend is not a Kubernetes one and cannot be mounted on this substrate")
+
 // errSecondExec is returned when Exec is called twice against the same ref.
 // Kubernetes ephemeral containers are ADD-ONLY (a pod's ephemeral-container
 // list can only grow), so a second Exec cannot be honoured the way docker's
