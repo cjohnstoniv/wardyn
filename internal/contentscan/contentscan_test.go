@@ -754,6 +754,14 @@ func TestNilEngineSafe(t *testing.T) {
 // yields for every OpenAI content shape, so the shared string-or-blocks walker
 // (walkTextOrBlocks, also used by the Anthropic extractor) can never yield
 // FEWER spans or different field paths than the OpenAI-only walker it replaced.
+//
+// That superset claim is now LITERALLY true, and the last two rows are what make
+// it so. The OpenAI-only walker read `text` off every part without ever
+// consulting `type`, so a part typed tool_use/tool_result that ALSO carried a
+// text field was scanned by it — and a type-switched walkBlock silently stopped
+// scanning it. walkBlock yields `.text` ahead of its type switch, so it is
+// covered again; the mismatched-sibling row is the boundary of that promise
+// (a text field that isn't a string fails the whole block's decode, spans none).
 func TestExtractOpenAIChat_ContentShapes(t *testing.T) {
 	cases := []struct {
 		name string
@@ -820,6 +828,28 @@ func TestExtractOpenAIChat_ContentShapes(t *testing.T) {
 			name: "block-shaped part inside an OpenAI content array is still scanned",
 			body: `{"messages":[{"role":"user","content":[{"type":"tool_result","content":"inner"}]}]}`,
 			want: []Span{{FieldPath: "messages[0].content[0].content", Text: "inner"}},
+		},
+		{
+			// The row the superset claim used to be false for: a typed block
+			// carrying a STRAY text sibling. The OpenAI-only walker read it
+			// (type-blind); a walkBlock that only yielded .text under `case
+			// "text"` dropped it. Both the text and the tool_use input must land.
+			name: "a tool_use part's stray text field is scanned alongside its input",
+			body: `{"messages":[{"role":"user","content":[{"type":"tool_use","text":"stray","input":{"pw":"v"}}]}]}`,
+			want: []Span{
+				{FieldPath: "messages[0].content[0].text", Text: "stray"},
+				{FieldPath: "messages[0].content[0].input.pw", Text: "v"},
+			},
+		},
+		{
+			// The boundary of that promise, and a deliberate NON-goal: `text`
+			// spelled as a number fails the header decode for the WHOLE block, so
+			// nothing in it is scanned — not the text, not a sibling. Hoisting the
+			// text yield above the type switch does not (and must not) change that:
+			// the block never decodes far enough to reach either.
+			name: "a mismatched text sibling drops the whole block",
+			body: `{"messages":[{"role":"user","content":[{"type":"text","text":42}]}]}`,
+			want: nil,
 		},
 	}
 	for _, tc := range cases {
