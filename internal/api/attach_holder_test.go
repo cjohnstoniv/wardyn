@@ -836,3 +836,119 @@ func TestSSHAttachHolder_SecondIsReadOnly(t *testing.T) {
 		t.Fatalf("the read-only ssh client's teardown disturbed the holder: %+v", got)
 	}
 }
+
+// TestAttachTakeover_OwnerOrSuperAdminOnly is the take-over PREDICATE table
+// (ownsRunOrSuperAdmin, helpers.go). Take-over is the one /runs/{id} route that
+// WRITES into a live sandbox rather than inspecting or stopping it, so it does
+// NOT ride ownsRunOrAdmin's isSecurityOperator arm: a security_admin is refused
+// the same byte-identical 404 a non-owning member gets — never a 403, which
+// would confirm the run exists — and the refusal displaces nobody and audits no
+// take-over. The security tier is refused an attach ticket, refused the cookie
+// attach lane and stamped `member` on its SSH keys; a tier that can reach no
+// terminal on a foreign run must not be able to end one on it either.
+func TestAttachTakeover_OwnerOrSuperAdminOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		session func(*testing.T) *http.Cookie
+		want    int
+	}{
+		{"owner", func(t *testing.T) *http.Cookie {
+			return ssoSession(t, holderOwner, holderOwner, oidc.RoleMember)
+		}, http.StatusOK},
+		{"super admin", func(t *testing.T) *http.Cookie {
+			return ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
+		}, http.StatusOK},
+		{"security admin", func(t *testing.T) *http.Cookie {
+			return ssoSession(t, "sub-sec", "sec@corp.example", oidc.RoleSecurityAdmin)
+		}, http.StatusNotFound},
+		{"member, not the owner", func(t *testing.T) *http.Cookie {
+			return ssoSession(t, "sub-mallory", "mallory@corp.example", oidc.RoleMember)
+		}, http.StatusNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _, _, audit, run := holderTestServer(t)
+			displaced := make(chan string, 1)
+			held := &attachHolder{
+				principal: holderOwner, source: attachSourceWeb, since: time.Now(),
+				displace: func(reason string) { displaced <- reason },
+			}
+			readOnly, release := srv.registerAttachHolder(run.ID, held)
+			if readOnly {
+				t.Fatal("could not seed the holder")
+			}
+			defer release()
+
+			w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/"+run.ID.String()+"/attach/takeover", tc.session(t), "")
+			if w.Code != tc.want {
+				t.Fatalf("takeover: code = %d, want %d; body = %s", w.Code, tc.want, w.Body.String())
+			}
+			ev := findAudit(audit.snapshot(), run.ID, "session.takeover", "success")
+			if tc.want == http.StatusOK {
+				if ev == nil {
+					t.Error("an accepted take-over was not audited")
+				}
+				if !held.evicted.Load() {
+					t.Error("an accepted take-over left the holder's write authority intact")
+				}
+				return
+			}
+			// Refused: the byte-identical 404 (no existence oracle), nobody
+			// displaced, nothing audited as a take-over.
+			if !strings.Contains(w.Body.String(), "run not found") {
+				t.Errorf("refusal body = %s, want the byte-identical run-not-found 404", w.Body.String())
+			}
+			if ev != nil {
+				t.Errorf("a refused take-over was audited as a success: %s", ev.Data)
+			}
+			if held.evicted.Load() || srv.attachHolderFor(run.ID) != held {
+				t.Error("a refused take-over still evicted the holder")
+			}
+			if len(displaced) != 0 {
+				t.Error("a refused take-over still displaced the holder's session")
+			}
+			if ev := findAudit(audit.snapshot(), run.ID, "authz.denied", "denied"); ev == nil {
+				t.Error("a refused take-over on a run that EXISTS emitted no authz.denied audit")
+			}
+		})
+	}
+}
+
+// TestAttachWS_EvictionStopsAPasteMidFlight pins writeGated (attach_holder.go):
+// a paste bigger than attachWriteChunk that is INSIDE the write path when a
+// take-over lands stops at the next chunk boundary instead of finishing into
+// the shared tmux session the new holder was just told they own. The residual
+// is one chunk — the bytes already handed to the sandbox cannot be recalled —
+// and that bound is the assertion: before the per-chunk re-check the whole
+// 1 MiB-capable frame landed, after the take-over was decided AND audited.
+func TestAttachWS_EvictionStopsAPasteMidFlight(t *testing.T) {
+	srv, gr, _, run := f5Server(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	c := dialAttach(t, ts, srv, run.ID, holderOwner, "")
+	readAttachMode(t, c)
+	go drainClient(c)
+	waitFor(t, "the holder's session to open", func() bool { return gr.session(0) != nil })
+	sess := gr.session(0)
+
+	paste := bytes.Repeat([]byte("p"), 3*attachWriteChunk)
+	wsWrite(t, c, websocket.MessageBinary, paste)
+	if got := len(waitEntered(t, sess, "the paste's first chunk")); got != attachWriteChunk {
+		t.Fatalf("first write = %d bytes, want one attachWriteChunk (%d): the frame is not being chunked", got, attachWriteChunk)
+	}
+	if srv.evictAttachHolder(run.ID) == nil {
+		t.Fatal("nothing to evict")
+	}
+	close(sess.release)
+	wsPing(t, c) // barrier: the pump is back at c.Read, so the paste is settled
+
+	got := sess.deliveredStrings()
+	if len(got) != 1 || len(got[0]) != attachWriteChunk {
+		sizes := make([]int, 0, len(got))
+		for _, d := range got {
+			sizes = append(sizes, len(d))
+		}
+		t.Errorf("delivered chunk sizes = %v (total %d), want exactly one %d-byte chunk: the rest of the paste "+
+			"must be dropped at the chunk boundary once the take-over is decided", sizes, len(paste), attachWriteChunk)
+	}
+}
