@@ -69,6 +69,13 @@ type AuditSpool struct {
 // docs/OPERATIONS.md promises the trail "becomes complete again automatically".
 const spoolPoisonAttempts = 3
 
+// spoolDrainDeadline bounds ONE Drain pass, and with it how long the spool lock
+// can be held. Half the 30-second drain tick (auditSpoolDrainInterval,
+// server.go), so a pass that is getting nowhere has released the lock well
+// before the next tick starts one, and the events it did not reach are simply
+// retried then.
+const spoolDrainDeadline = 15 * time.Second
+
 // errSpoolLineQuarantined is what Drain returns after moving a line aside. It
 // is an ERROR and not a silent success on purpose — a quarantine means the
 // queryable trail is now permanently missing an event that the spool holds, and
@@ -158,6 +165,15 @@ func (a *AuditSpool) endsUnterminated() bool {
 // and carries on with the lines behind it, returning errSpoolLineQuarantined so
 // the move is never silent.
 //
+// KNOWN LIMIT: two or more ADJACENT unacceptable lines still wedge, because the
+// second rejection in a pass is read as "the store is down" — which is the right
+// reading for every other cause of two rejections in a row, and the price of
+// never quarantining during an outage. A run like that is what "an event shape
+// from another binary version" produces, so it is not hypothetical. It is not
+// silent: the suspect is logged by event id every tick (above), which reads
+// differently from StartDrain's store-still-failing line, and the spool gauge
+// stays flat. The manual remedy is in docs/OPERATIONS.md.
+//
 // rec MUST be a raw durable recorder (e.g. store.Recorder) — NOT the spooling
 // chain: Drain holds the spool lock across the whole operation, so a recorder that
 // re-entered Append on failure would deadlock. Holding the lock also makes it safe
@@ -202,6 +218,16 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 	drop := make([]bool, len(lines))
 	replayed := 0 // real events landed in the store (bounds the batch, logged)
 	var replayErr error
+	// The whole pass is bounded, because a.mu is held across every Record and a
+	// blocked Record blocks the SPOOL, not just the drain: every request whose
+	// own audit write fails then queues on Append behind it. Since migration
+	// 0056 that is reachable without any Wardyn code misbehaving — an external
+	// session that inserted into audit_events and left its transaction open
+	// holds the chain lock, so the store call waits on it indefinitely. One idle
+	// psql transaction must not become a process-wide stall. A deadline on the
+	// PASS rather than per record keeps the bound independent of batch size.
+	passCtx, cancelPass := context.WithTimeout(ctx, spoolDrainDeadline)
+	defer cancelPass()
 	// suspect is a line the store has now rejected spoolPoisonAttempts times
 	// running. It is held back rather than quarantined outright: a store that is
 	// DOWN rejects every line, and the only way to tell that apart from a line
@@ -228,8 +254,16 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 			drop[i] = true
 			continue
 		}
-		if err := rec.Record(ctx, ev); err != nil {
+		if err := rec.Record(passCtx, ev); err != nil {
 			replayErr = err
+			// A timeout is NOT a rejection: the store never answered, so this
+			// line has proved nothing about itself and must not earn a strike
+			// toward quarantine. Checked on the context rather than the error
+			// shape, so a driver that wraps or reformats the cause cannot turn a
+			// slow store into a poison verdict.
+			if passCtx.Err() != nil {
+				break
+			}
 			// A second rejection in the same pass answers the question the
 			// probe was asking: the store is refusing more than one line, so it
 			// is down (or degraded), not poisoned by this one. Nothing moves.
@@ -249,6 +283,22 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 			// and the suspect is the problem.
 			provenUp = true
 		}
+	}
+	if suspectIdx >= 0 && !provenUp {
+		// The pass ended without the store accepting anything behind the
+		// suspect, so it stays. Logged DISTINCTLY, because StartDrain's own
+		// "store still failing" line tells the wrong story here: this shape is
+		// also what a RUN of adjacent unacceptable lines looks like (the second
+		// one breaks the pass before anything can prove the store is up), and
+		// that run is the documented limit of the poison probe — an operator
+		// seeing this line every tick with a live store should read the
+		// quarantine paragraph in docs/OPERATIONS.md and triage the spool by
+		// hand.
+		slog.WarnContext(ctx, "wardynd: audit spool line held back after repeated store rejection; nothing behind it has landed yet, so it is not yet provably unacceptable",
+			slog.String("event_id", suspect.ID.String()),
+			slog.String("action", suspect.Action),
+			slog.Int("attempts", a.poisonHits),
+			slog.Any("err", replayErr))
 	}
 	if suspectIdx >= 0 && provenUp {
 		// Only ever reached when something was actually blocked behind it. A

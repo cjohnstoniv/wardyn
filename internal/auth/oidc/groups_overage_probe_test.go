@@ -3,9 +3,10 @@
 
 // F2-sso-to-ceiling PROBE 3 — destination: internal/auth/oidc/groups_overage_probe_test.go
 //
-// *** EXPECTED TO FAIL ON THE CURRENT TREE — this probe encodes hypothesis H1
-// *** of local/review-0.7/deep/F2-sso-to-ceiling.md. A failure here is the
-// *** finding, not a broken probe.
+// *** GREEN PIN. This started as the probe for hypothesis H1 of
+// *** local/review-0.7/deep/F2-sso-to-ceiling.md, red on the RC; the fix landed
+// *** and it is now a REGRESSION pin, unchanged. A failure here means the
+// *** overage marker stopped reaching sessionGroups.
 //
 // INVARIANT UNDER TEST: a login whose ID token carries an IdP-side GROUPS
 // OVERAGE marker instead of the groups themselves (Entra ID emits

@@ -195,7 +195,7 @@ func TestPG_ProbeF11_AuditDDLProtected(t *testing.T) {
 			t.Fatalf("AuditDDLProtected(app pool + TRIGGER): %v", err)
 		}
 		if got {
-			t.Errorf("KNOWN GAP (F11 H4): the app role now holds TRIGGER on audit_events (it may CREATE a BEFORE INSERT trigger that " +
+			t.Errorf("REGRESSION (F11 H4): the app role now holds TRIGGER on audit_events (it may CREATE a BEFORE INSERT trigger that " +
 				"fires after audit_events_chain — alphabetical order — and overwrite NEW.row_hash/prev_hash), yet AuditDDLProtected still " +
 				"reports protected; the check reads ownership/superuser only, never has_table_privilege(..., 'TRIGGER')")
 		}
@@ -209,7 +209,8 @@ func TestPG_ProbeF11_AuditDDLProtected(t *testing.T) {
 // reads pg_trigger — so the trigger stays gone across restarts and every row
 // written from then on is unchained (which H1 shows the sweep never reports).
 // The desired property asserted here — the next Migrate (or boot) restores or
-// at least refuses without the trigger — does not hold, so expected RED. The
+// at least refuses without the trigger — did not hold on the RC; it does now
+// (ensureAuditTriggers), so this is a GREEN regression pin. The
 // trigger is put back afterwards by re-executing 0047 (idempotent DDL).
 func TestPG_ProbeF11_DroppedChainTriggerIsRestoredByMigrate(t *testing.T) {
 	pool := pgPool(t)
@@ -258,7 +259,7 @@ func TestPG_ProbeF11_DroppedChainTriggerIsRestoredByMigrate(t *testing.T) {
 		t.Fatalf("Migrate after DROP TRIGGER: %v", err)
 	}
 	if !triggerPresent() {
-		t.Fatalf("KNOWN GAP (F11 H2): a dropped audit_events_chain trigger is NOT restored by the next Migrate — 0047 is recorded in " +
+		t.Fatalf("REGRESSION (F11 H2): a dropped audit_events_chain trigger is NOT restored by the next Migrate — it is recorded in " +
 			"schema_migrations and skipped — and nothing at boot inspects pg_trigger; every row written from now on is unchained")
 	}
 }

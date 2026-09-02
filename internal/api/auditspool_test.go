@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -356,5 +357,87 @@ func TestAuditSpoolQuarantinedLineIsKeptOnDisk(t *testing.T) {
 	}
 	if kept.ID != poison.ID {
 		t.Errorf("quarantined event id = %s, want the rejected event %s", kept.ID, poison.ID)
+	}
+}
+
+// blockingRecorder blocks in Record until its ctx is done for ONE action and
+// serves every other event normally — the store call that waits forever on the
+// audit-chain advisory lock because an external session inserted into
+// audit_events and left its transaction open (possible since migration 0056,
+// which made the trigger take that lock) while the rest of the store is fine.
+type blockingRecorder struct {
+	fakeRecorder
+	block   string
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (r *blockingRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
+	if ev.Action != r.block {
+		return r.fakeRecorder.Record(ctx, ev)
+	}
+	r.once.Do(func() { close(r.entered) })
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// TestAuditSpoolDrainIsBoundedAndDoesNotStrike pins both halves of the bound.
+//
+// BOUNDED: Drain holds a.mu across every Record, so a Record that never returns
+// does not merely stall the drain — every request whose own audit write failed
+// queues on Append behind it, and one idle psql transaction becomes a
+// process-wide stall. The pass carries a deadline (spoolDrainDeadline, or the
+// caller's own if it is shorter — which is the path this test drives, so the
+// suite does not wait out the real 15s).
+//
+// AND NOT A STRIKE: a store that never ANSWERED has proved nothing about the
+// line it was given, so a timeout must not count toward quarantine. The fixture
+// makes that discriminating — the blocked line has a perfectly good line behind
+// it, so if a timeout earned strikes, the third pass would promote the blocked
+// line to suspect, replay the good one, take that as proof the store is up, and
+// quarantine an event the store never rejected.
+func TestAuditSpoolDrainIsBoundedAndDoesNotStrike(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit-spool.jsonl")
+	sp, err := NewAuditSpool(path)
+	if err != nil {
+		t.Fatalf("NewAuditSpool: %v", err)
+	}
+	for _, action := range []string{"blocked", "good"} {
+		if err := sp.Append(newTestEvent(action)); err != nil {
+			t.Fatalf("append %s: %v", action, err)
+		}
+	}
+
+	rec := &blockingRecorder{block: "blocked", entered: make(chan struct{})}
+	for i := 0; i < spoolPoisonAttempts; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		done := make(chan error, 1)
+		go func() { _, derr := sp.Drain(ctx, rec, 100); done <- derr }()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatalf("pass %d: a Drain whose store call never returned reported success", i)
+			}
+		case <-time.After(10 * time.Second):
+			cancel()
+			t.Fatal("Drain outlived its context by 10s; the spool lock is held for an unbounded time and Append is starved behind it")
+		}
+		cancel()
+	}
+	select {
+	case <-rec.entered:
+	case <-time.After(time.Second):
+		t.Fatal("the blocking recorder was never reached; the fixture proves nothing")
+	}
+
+	if got := sp.Quarantined(); got != 0 {
+		t.Errorf("Quarantined = %d after %d stalled passes; a store that never ANSWERED rejected nothing, and a good event behind the stalled one must not turn that into proof",
+			got, spoolPoisonAttempts)
+	}
+	if _, err := os.Stat(path + ".quarantine"); !os.IsNotExist(err) {
+		t.Errorf("a quarantine file exists after nothing but timeouts (stat err = %v); want none", err)
+	}
+	if got := spoolLineCount(t, path); got != 2 {
+		t.Errorf("spool holds %d lines, want both events still there", got)
 	}
 }

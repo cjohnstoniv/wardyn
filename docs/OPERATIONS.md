@@ -158,6 +158,25 @@ logs at ERROR with the event's id and action and increments
 `wardyn_audit_spool_quarantined_total`: alert on it, because a spool that has
 drained back to 0 no longer implies the queryable trail is complete.
 
+**Two limits of that rule, stated.** First, the probe needs a line BEHIND the
+suspect to land, so two or more *adjacent* unacceptable lines still wedge — the
+second rejection in a pass is read as "the store is down", which is the right
+reading for every other cause of two rejections in a row and the price of never
+quarantining during an outage. A run like that is exactly what "an event shape
+from another binary version" produces. It is not silent: the held-back line is
+logged at WARN by event id every tick, which reads differently from the
+drain-deferred line an outage produces, and the spool gauge stays flat. With the
+store demonstrably up and that WARN repeating, triage the spool by hand — move
+the head lines to `<spool>.quarantine` yourself and let the rest drain.
+
+Second, one drain pass is deadline-bounded (15s, half the tick). The spool lock
+is held across the store call, so a call that never returns would otherwise stall
+every request whose own audit write falls back to the spool — reachable without
+any Wardyn bug since the chain trigger began taking the serializing lock: an
+external session that inserted into `audit_events` and left its transaction open
+holds it. A pass that times out replays nothing, counts nothing against any line
+(a store that never answered has rejected nothing), and retries on the next tick.
+
 ### The hash chain — what a rewritten row looks like
 
 The triggers above stop `UPDATE`/`DELETE`/`TRUNCATE` *through Wardyn's schema*,
@@ -707,7 +726,7 @@ identity).
 
 **A third cause of a partial snapshot: the IdP's own overage.** Entra ID stops
 sending the `groups` (or `roles`) claim altogether once a human is in more groups
-than the token limit — 150 for a JWT — and sends a `_claim_names` /
+than the token limit — **200** for a JWT, 150 for SAML — and sends a `_claim_names` /
 `_claim_sources` pointer to Microsoft Graph in its place. Wardyn does not
 dereference that pointer; it marks the snapshot **truncated** (`sessionGroups`,
 `internal/auth/oidc/derive.go`), which reads downstream exactly like a group that

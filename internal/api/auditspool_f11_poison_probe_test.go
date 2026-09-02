@@ -11,8 +11,8 @@
 // human edited): every event behind it is never replayed, forever, and the
 // only signal is wardyn_audit_spool_lines never returning to 0.
 //
-// No Postgres needed. Expected result on feat/v0.7-profiles @ fa910735: RED —
-// that is the finding, not a broken probe.
+// No Postgres needed. Red on feat/v0.7-profiles @ fa910735; GREEN since Drain
+// gained the poison probe + quarantine. A failure here is a REGRESSION.
 package api
 
 import (
@@ -60,7 +60,7 @@ func TestProbeF11_SpoolPoisonLineDoesNotWedgeLaterLines(t *testing.T) {
 		t.Errorf("Drain reported no error although one line can never be replayed")
 	}
 	if got := rec.count(); got != 2 {
-		t.Fatalf("KNOWN GAP (F11 H7): after 3 drain ticks only %d of the 2 GOOD events reached the store; a permanently-rejected "+
+		t.Fatalf("REGRESSION (F11 H7): after 3 drain ticks only %d of the 2 GOOD events reached the store; a permanently-rejected "+
 			"spool line at the head of the file blocks every line behind it forever (spool lines left: %d). "+
 			"docs/OPERATIONS.md promises the trail 'becomes complete again automatically'.", got, spoolLineCount(t, path))
 	}

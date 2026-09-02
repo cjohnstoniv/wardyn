@@ -38,7 +38,8 @@
 //     refusal (PF-25). These keep "fail closed" from passing as "lane broken".
 //
 // A SECOND test (TestPG_APIToken_TruncatedSnapshot_CapabilityDenyEvaporates)
-// is EXPECTED RED on fa910735: it documents hypothesis H2 of the trace — the
+// was red on fa910735 and is GREEN since the capScan fix; it pinned hypothesis
+// H2 of the trace — the
 // capability-grant resolver (Server.capScan in capabilities.go) ignores the
 // truncation bit, so a group DENY grant whose group fell off the cookie cap
 // silently stops matching for that token. Green there means H2 was fixed.
@@ -250,8 +251,8 @@ func TestPG_APIToken_TruncatedSnapshot(t *testing.T) {
 	}
 }
 
-// TestPG_APIToken_TruncatedSnapshot_CapabilityDenyEvaporates — EXPECTED RED on
-// fa910735 (trace hypothesis H2). The governance resolver treats a truncated
+// TestPG_APIToken_TruncatedSnapshot_CapabilityDenyEvaporates — GREEN PIN (was
+// red on fa910735; trace hypothesis H2, fixed). The governance resolver treats a truncated
 // snapshot as unanswerable (effectiveCeiling in governance.go); the CAPABILITY
 // resolver does not (capScan in capabilities.go discards `stale` and never
 // reads the truncation bit). A group DENY grant written against the group that

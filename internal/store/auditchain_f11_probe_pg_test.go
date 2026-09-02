@@ -16,14 +16,14 @@
 // Every probe restores the table before it returns: audit_events is shared by
 // every test in the package and "a break is permanent" (docs/OPERATIONS.md).
 //
-// Expected result on feat/v0.7-profiles @ fa910735:
+// ALL FOUR ARE GREEN PINS NOW. Two were red on feat/v0.7-profiles @ fa910735,
+// which is what they were written to prove; both fixes have landed and the
+// assertions are unchanged, so a red here is a REGRESSION, not a finding:
 //
-//	TestPG_ProbeF11_RewrittenRowReportsExactSeq        GREEN (pins the claim)
-//	TestPG_ProbeF11_SplicedOutRowReportsSuccessorSeq   GREEN (pins the claim)
-//	TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean RED   (hypothesis H1: unchained post-genesis rows verify clean)
-//	TestPG_ProbeF11_UnlockedWriterDoesNotForkChain     RED   (hypothesis H5: a lock-skipping writer yields a permanent false tamper verdict)
-//
-// A RED result on the last two is the finding, not a broken probe.
+//	TestPG_ProbeF11_RewrittenRowReportsExactSeq        pins the tamper claim
+//	TestPG_ProbeF11_SplicedOutRowReportsSuccessorSeq   pins the splice claim
+//	TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean was H1 (unchained post-genesis rows verified clean); auditChainWalk rule 3
+//	TestPG_ProbeF11_UnlockedWriterDoesNotForkChain     was H5 (a lock-skipping writer forked the chain); migration 0056 + 0057
 package store_test
 
 import (
@@ -284,7 +284,8 @@ func TestPG_ProbeF11_SplicedOutRowReportsSuccessorSeq(t *testing.T) {
 // trigger's head lookup skips NULL rows, so the chain simply steps over the
 // forged row and verifies clean. The desired property asserted here — legacy
 // rows are a PREFIX; a NULL-hash row with seq > first_seq is a finding — does
-// not hold on this tree, so this probe is expected RED.
+// did not hold on the RC; rule 3 in auditChainWalk delivers it now, so this is
+// a GREEN regression pin.
 func TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean(t *testing.T) {
 	pool := runsPGPool(t)
 	requireTriggerBypass(t, pool)
@@ -310,7 +311,7 @@ func TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean(t *testing.T) {
 
 	st := sweep(t, pool)
 	if st.OK {
-		t.Fatalf("KNOWN GAP (F11 H1): an UNCHAINED row at seq=%d, written after genesis (first_seq=%d, head_seq=%d), verified CLEAN — "+
+		t.Fatalf("REGRESSION (F11 H1): an UNCHAINED row at seq=%d, written after genesis (first_seq=%d, head_seq=%d), verified CLEAN — "+
 			"it is bucketed as legacy=%d instead of reported. A dropped or disabled audit_events_chain trigger therefore makes "+
 			"every later row invisible to the sweep while ok stays true.", fSeq, st.FirstSeq, st.HeadSeq, st.Legacy)
 	}
