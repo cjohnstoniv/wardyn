@@ -51,12 +51,7 @@ func (f *Fanout) Name() string { return "fanout" }
 // If every child returns an error Emit returns the last error seen; if at
 // least one child succeeds Emit returns nil.
 func (f *Fanout) Emit(ctx context.Context, ev types.AuditEvent) error {
-	type result struct {
-		name string
-		err  error
-	}
-
-	results := make(chan result, len(f.children))
+	results := make(chan error, len(f.children))
 
 	for _, cs := range f.children {
 		cs := cs // capture
@@ -77,16 +72,15 @@ func (f *Fanout) Emit(ctx context.Context, ev types.AuditEvent) error {
 					slog.Int64("drops", cs.drops.Load()),
 					slog.Any("err", err))
 			}
-			results <- result{name: cs.sink.Name(), err: err}
+			results <- err
 		}()
 	}
 
 	var lastErr error
 	failures := 0
 	for range f.children {
-		r := <-results
-		if r.err != nil {
-			lastErr = r.err
+		if err := <-results; err != nil {
+			lastErr = err
 			failures++
 		}
 	}
@@ -166,11 +160,16 @@ func (f *Fanout) Close() error {
 	return firstErr
 }
 
-// panicErr converts a recovered panic value to an error string.
+// panicErr converts a recovered panic value to an error: one that is already an
+// error is returned as-is, anything else is wrapped with its %v rendering.
+//
+// The assertion is on error itself. The local `interface{ Error() string }` this
+// used to declare IS error — same method, same set — so nothing could satisfy
+// the one and not the other, and the second `e.(error)` it then performed could
+// never fail. One assertion says what two did.
 func panicErr(v any) error {
-	type stringer interface{ Error() string }
-	if e, ok := v.(stringer); ok {
-		return e.(error)
+	if e, ok := v.(error); ok {
+		return e
 	}
 	return fmt.Errorf("panic: %v", v)
 }
