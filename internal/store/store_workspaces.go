@@ -151,7 +151,8 @@ func workspaceAttachmentsParam(atts []types.WorkspaceAttachment) []byte {
 // survive every composition edit.
 const wsCols = `id, name, sources, base_image, requirements, profile, image_ref, ` +
 	`built_profile_hash, approved_egress, active_run_id, status, created_at, updated_at, ` +
-	`record_results, llm_cred, attachments, base_image_id, denied_egress, owned_by`
+	`record_results, llm_cred, attachments, base_image_id, denied_egress, owned_by, ` +
+	`egress_edited_at`
 
 // CreateWorkspace inserts an onboarded workspace and returns the persisted
 // row. Profile is internal/workspacescan's opaque WorkspaceProfile blob (nil
@@ -159,7 +160,7 @@ const wsCols = `id, name, sources, base_image, requirements, profile, image_ref,
 func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Workspace, error) {
 	q := `
 		INSERT INTO workspaces (` + wsCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
 		RETURNING ` + wsCols
 	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx, q,
 		ws.ID, ws.Name, workspaceSourcesParam(ws.Sources), workspaceBaseImageParam(ws.BaseImage),
@@ -167,7 +168,7 @@ func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Work
 		ws.BuiltProfileHash, workspaceApprovedParam(ws.ApprovedEgress), ws.ActiveRunID,
 		string(ws.Status), ws.CreatedAt, ws.UpdatedAt, workspaceProfileParam(ws.RecordResults),
 		workspaceLLMCredParam(ws.LLMCred), workspaceAttachmentsParam(ws.Attachments), ws.BaseImageID,
-		workspaceDeniedParam(ws.DeniedEgress), ws.OwnedBy,
+		workspaceDeniedParam(ws.DeniedEgress), ws.OwnedBy, ws.EgressEditedAt,
 	))
 }
 
@@ -235,13 +236,22 @@ func (s PG) SetWorkspaceOwner(ctx context.Context, id uuid.UUID, owner string) (
 }
 
 // SetWorkspaceApprovedEgress replaces ONLY the operator-owned approved-egress
-// column (plus updated_at), returning the updated row. Scoped on purpose: an
-// approval must never clobber a concurrently-persisted scan (an async repo
-// scan's profile/status land via the full-column UpdateWorkspace, and a
-// read-modify-write here would silently revert them).
+// column (plus updated_at and egress_edited_at), returning the updated row.
+// Scoped on purpose: an approval must never clobber a concurrently-persisted
+// scan (an async repo scan's profile/status land via the full-column
+// UpdateWorkspace, and a read-modify-write here would silently revert them).
+//
+// egress_edited_at is what makes this the documented UNDO of an `always`
+// decision rather than a change the next restart reverses: it records that the
+// operator restated the list at this moment, and the boot heal
+// (ReconcileWorkspaceEgressDecisions) skips any decision older than it. It is
+// bumped even when domains is byte-identical to what is stored — "the operator
+// looked at this list and confirmed it" is the fact being recorded, and a
+// diff-conditional bump would make the heal depend on whether an idempotent
+// save changed anything.
 func (s PG) SetWorkspaceApprovedEgress(ctx context.Context, id uuid.UUID, domains []string) (types.Workspace, error) {
 	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
-		`UPDATE workspaces SET approved_egress=$1, updated_at=now() WHERE id=$2 RETURNING `+wsCols,
+		`UPDATE workspaces SET approved_egress=$1, egress_edited_at=now(), updated_at=now() WHERE id=$2 RETURNING `+wsCols,
 		workspaceApprovedParam(domains), id))
 }
 
@@ -343,10 +353,12 @@ func (s PG) AddWorkspaceEgressDecision(ctx context.Context, id uuid.UUID, host s
 // mirror of SetWorkspaceApprovedEgress, backing the Phase 4 revocation PUT.
 // Same anti-clobber discipline: a full-list replace can never clobber a
 // concurrently-persisted async scan. Pass the FULL desired list — like
-// SetWorkspaceApprovedEgress, this replaces rather than merges.
+// SetWorkspaceApprovedEgress, this replaces rather than merges, and it stamps
+// egress_edited_at for the same reason (see that method): removing a permanent
+// DENY is an operator override the boot heal must not undo at the next restart.
 func (s PG) SetWorkspaceDeniedEgress(ctx context.Context, id uuid.UUID, domains []string) (types.Workspace, error) {
 	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
-		`UPDATE workspaces SET denied_egress=$1, updated_at=now() WHERE id=$2 RETURNING `+wsCols,
+		`UPDATE workspaces SET denied_egress=$1, egress_edited_at=now(), updated_at=now() WHERE id=$2 RETURNING `+wsCols,
 		workspaceDeniedParam(domains), id))
 }
 
@@ -528,7 +540,7 @@ func scanWorkspace(row pgx.Row) (types.Workspace, error) {
 		&ws.ID, &ws.Name, &sourcesRaw, &baseImageRaw, &requirementsRaw,
 		&profileRaw, &ws.ImageRef, &ws.BuiltProfileHash, &approvedRaw, &ws.ActiveRunID,
 		&status, &ws.CreatedAt, &ws.UpdatedAt, &recordRaw, &llmCredRaw,
-		&attachmentsRaw, &ws.BaseImageID, &deniedRaw, &ws.OwnedBy,
+		&attachmentsRaw, &ws.BaseImageID, &deniedRaw, &ws.OwnedBy, &ws.EgressEditedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Workspace{}, ErrNotFound

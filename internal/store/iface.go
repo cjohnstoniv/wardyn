@@ -54,16 +54,24 @@ type Store interface {
 	GetWorkspace(ctx context.Context, id uuid.UUID) (types.Workspace, error)
 	ListWorkspaces(ctx context.Context) ([]types.Workspace, error)
 	UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspace) (types.Workspace, error)
+	// SetWorkspaceApprovedEgress replaces the operator-owned approved-egress
+	// list and stamps Workspace.EgressEditedAt: this PUT is the documented undo
+	// for an `always` decision, and that stamp is what stops
+	// ReconcileWorkspaceEgressDecisions putting a removed host back at the next
+	// boot. An implementation that skips it re-opens that resurrection.
 	SetWorkspaceApprovedEgress(ctx context.Context, id uuid.UUID, domains []string) (types.Workspace, error)
 	// AddWorkspaceEgressDecision records one `always`-scoped egress decision:
 	// on allow, host is added to approved_egress (capped at maxApprovedEgress,
 	// deduped) and removed from denied_egress; on deny the mirror. Returns
 	// ErrConflict (not ErrNotFound) when id exists but the cap refused the
-	// write. See store.go for the full contract.
+	// write. It does NOT stamp EgressEditedAt — a decision is not an operator
+	// override of itself, and stamping here would make the boot heal suppress
+	// its own future re-applies. See store.go for the full contract.
 	AddWorkspaceEgressDecision(ctx context.Context, id uuid.UUID, host string, allow bool, maxApprovedEgress int) (types.Workspace, error)
 	// SetWorkspaceDeniedEgress is SetWorkspaceApprovedEgress's mirror for the
 	// operator-owned denied-egress list (Phase 4 revocation PUT): pass the
-	// FULL desired list, replacing rather than merging.
+	// FULL desired list, replacing rather than merging, and stamp
+	// EgressEditedAt for the same reason.
 	SetWorkspaceDeniedEgress(ctx context.Context, id uuid.UUID, domains []string) (types.Workspace, error)
 	SetWorkspaceLLMCred(ctx context.Context, id uuid.UUID, cred *types.WorkspaceLLMCred) (types.Workspace, error)
 	// SetWorkspaceOwner replaces ONLY the owned_by column (plus updated_at).
