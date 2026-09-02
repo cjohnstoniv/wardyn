@@ -141,16 +141,30 @@ func TryAdvisoryLock(ctx context.Context, pool *pgxpool.Pool, key int64) (releas
 // UNABLE to bypass the audit_events append-only triggers via DDL — i.e. it is
 // neither a superuser nor a MEMBER of the table's owner role (membership, not
 // just direct ownership: a role GRANTed the owner role inherits DROP TRIGGER /
-// ALTER ... DISABLE TRIGGER rights). The N4 role-separation only protects the
-// append-only guarantee when this is true, so the two-DSN deploy must be
-// VERIFIED here rather than assumed (honesty: never log a protection claim
-// stronger than the enforcing role setup). Fails safe: any ambiguity (missing
-// table, error) reports NOT protected.
+// ALTER ... DISABLE TRIGGER rights) AND it does not hold the TRIGGER privilege
+// on the table. The N4 role-separation only protects the append-only guarantee
+// when this is true, so the two-DSN deploy must be VERIFIED here rather than
+// assumed (honesty: never log a protection claim stronger than the enforcing
+// role setup). Fails safe: any ambiguity (missing table, error) reports NOT
+// protected.
+//
+// THE TRIGGER PRIVILEGE IS PART OF THE CLAIM, and it is the least obvious third
+// of it. A role that is neither owner nor superuser but holds
+// GRANT TRIGGER ON audit_events cannot drop the shipped triggers — it can do
+// something quieter: CREATE its own BEFORE INSERT trigger. Postgres fires
+// same-event row triggers in NAME order, so one named after audit_events_chain
+// runs last and overwrites NEW.prev_hash/NEW.row_hash on the way in, minting
+// rows that hash to whatever it says while every shipped guard stays armed and
+// every catalog check still finds them. 0007_audit_least_privilege.sql revokes
+// TRIGGER from PUBLIC precisely because of that, but a deploy is free to grant
+// it back, so the claim has to be checked and not inferred.
 func AuditDDLProtected(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
 	var canBypass bool
 	err := pool.QueryRow(ctx, `
 		SELECT COALESCE(
-			bool_or(r.rolsuper OR pg_has_role(current_user, c.relowner, 'MEMBER')),
+			bool_or(r.rolsuper
+			        OR pg_has_role(current_user, c.relowner, 'MEMBER')
+			        OR has_table_privilege(current_user, c.oid, 'TRIGGER')),
 			true)
 		FROM pg_class c
 		JOIN pg_roles r ON r.rolname = current_user
@@ -252,6 +266,132 @@ func migrateOn(ctx context.Context, db migrationExecutor) error {
 			return err
 		}
 		slog.InfoContext(ctx, "db: applied migration", slog.String("file", name), slog.Duration("elapsed", time.Since(start)))
+	}
+	return ensureAuditTriggers(ctx, db)
+}
+
+// auditChainTrigger is the BEFORE INSERT trigger that hash-chains audit_events
+// (0047, redefined by 0056). auditAppendOnlyTriggers are the two that make the
+// table append-only (0001, 0004).
+const auditChainTrigger = "audit_events_chain"
+
+var auditAppendOnlyTriggers = []string{"audit_events_no_update", "audit_events_no_truncate"}
+
+// ensureAuditTriggers is the boot-time answer to "the migration ran once, years
+// of restarts ago". schema_migrations records a FILENAME, so an owner or
+// superuser who DROPs (or DISABLEs) one of the audit_events triggers leaves a
+// database that every later Migrate happily reports as fully migrated: the
+// catalog no longer matches the schema the migrations describe, and nothing
+// looked. Every row written after that is unchained — and an unchained row is
+// exactly what the verify sweep now names as a break, so the two halves of this
+// hole close together.
+//
+// The chain trigger is RESTORED rather than refused: it is defined by
+// idempotent DROP-IF-EXISTS/CREATE migrations that can simply be replayed, and a
+// wardynd that refuses to boot leaves the deployment with no audit log at all —
+// worse than one that puts the trigger back and says so loudly. The append-only
+// triggers are only CHECKED: they are defined by 0001, the whole initial schema,
+// and replaying that at boot to fix one trigger is a far bigger blast radius
+// than refusing. Either way the process does not continue silently, which is the
+// property that was missing.
+//
+// A missing audit_events table is not this function's business (an empty
+// database mid-bootstrap has none yet); it reports protected-by-absence and
+// leaves the rest of the boot to say so.
+func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
+	present, err := auditTriggerNames(ctx, db)
+	if err != nil {
+		return err
+	}
+	if present == nil { // no audit_events table at all
+		return nil
+	}
+	if !present[auditChainTrigger] {
+		slog.ErrorContext(ctx, "db: the audit_events hash-chain trigger is missing or disabled; restoring it — rows written since it went away are UNCHAINED and the verify sweep will report them",
+			slog.String("trigger", auditChainTrigger))
+		if err := replayTriggerMigrations(ctx, db, auditChainTrigger); err != nil {
+			return err
+		}
+		if present, err = auditTriggerNames(ctx, db); err != nil {
+			return err
+		}
+		if !present[auditChainTrigger] {
+			return fmt.Errorf("db: %s trigger is missing and could not be restored; refusing to run with an unchained audit log", auditChainTrigger)
+		}
+		slog.WarnContext(ctx, "db: audit_events hash-chain trigger restored", slog.String("trigger", auditChainTrigger))
+	}
+	for _, name := range auditAppendOnlyTriggers {
+		if !present[name] {
+			return fmt.Errorf("db: %s trigger is missing or disabled on audit_events; the append-only guarantee is not in force, and restoring it means replaying the initial schema — refusing to start", name)
+		}
+	}
+	return nil
+}
+
+// auditTriggerNames returns the ENABLED ("O") row/statement triggers on
+// audit_events, or nil when the table does not exist. Disabled is treated as
+// absent on purpose: ALTER TABLE ... DISABLE TRIGGER leaves the catalog row in
+// place, so a check that only asked whether the trigger EXISTS would pass on a
+// table where it never fires.
+func auditTriggerNames(ctx context.Context, db migrationExecutor) (map[string]bool, error) {
+	var exists bool
+	if err := db.QueryRow(ctx, `SELECT to_regclass('audit_events') IS NOT NULL`).Scan(&exists); err != nil {
+		return nil, fmt.Errorf("db: look up audit_events: %w", err)
+	}
+	if !exists {
+		return nil, nil
+	}
+	var names []string
+	if err := db.QueryRow(ctx, `
+		SELECT COALESCE(array_agg(tgname::text), ARRAY[]::text[])
+		FROM pg_trigger
+		WHERE tgrelid = 'audit_events'::regclass AND NOT tgisinternal AND tgenabled = 'O'`,
+	).Scan(&names); err != nil {
+		return nil, fmt.Errorf("db: read audit_events triggers: %w", err)
+	}
+	out := make(map[string]bool, len(names))
+	for _, n := range names {
+		out[n] = true
+	}
+	return out, nil
+}
+
+// replayTriggerMigrations re-executes every embedded migration that defines
+// trigger, in filename order, WITHOUT touching schema_migrations: those rows
+// still describe what was applied and when, and a restore is not a new
+// migration. Discovered by content rather than listed, so a later migration
+// that redefines the trigger is replayed too — replaying only the original
+// would reinstate a superseded definition (0047's unserialized chain function,
+// which 0056 replaced).
+func replayTriggerMigrations(ctx context.Context, db migrationExecutor, trigger string) error {
+	entries, err := migrationFS.ReadDir("migrations")
+	if err != nil {
+		return fmt.Errorf("db: read migrations dir: %w", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
+			continue
+		}
+		body, err := migrationFS.ReadFile("migrations/" + e.Name())
+		if err != nil {
+			return fmt.Errorf("db: read migration %s: %w", e.Name(), err)
+		}
+		if strings.Contains(string(body), "TRIGGER "+trigger) {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		data, err := migrationFS.ReadFile("migrations/" + name)
+		if err != nil {
+			return fmt.Errorf("db: read migration %s: %w", name, err)
+		}
+		if _, err := db.Exec(ctx, string(data)); err != nil {
+			return fmt.Errorf("db: replay %s to restore trigger %s: %w", name, trigger, err)
+		}
+		slog.InfoContext(ctx, "db: replayed migration to restore an audit trigger",
+			slog.String("file", name), slog.String("trigger", trigger))
 	}
 	return nil
 }

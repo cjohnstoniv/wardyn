@@ -116,6 +116,18 @@ in `TestPG_AuditAppendOnly_TriggerRejects` (`internal/store/store_pg_test.go`),
 so an operator with direct database access cannot rewrite or silently thin the
 trail through Wardyn's own schema.
 
+**Those triggers are re-checked on every boot**, because `schema_migrations`
+records a *filename*: once a migration has run, an owner who later `DROP`s or
+`DISABLE`s one of its triggers leaves a database every later start reports as
+fully migrated. `Migrate` now reads `pg_trigger` after the migration loop
+(`ensureAuditTriggers`, `internal/db/db.go`). A missing or disabled **hash-chain**
+trigger is RESTORED — its migrations are idempotent and replayable, and the boot
+log says so at ERROR, because rows written while it was gone are unchained and
+the verify sweep will name them. A missing or disabled **append-only** trigger
+makes `wardynd` REFUSE TO START: restoring it means replaying the initial schema,
+which is a far bigger blast radius than stopping and telling you. Either way the
+process no longer continues silently on a table whose guards are gone.
+
 Completeness survives an outage too. When a Postgres write fails, the event is
 not dropped: it is fsync'd, one JSON line at a time, to a local append-only spool
 (`WARDYN_AUDIT_SPOOL`, default `./data/audit-spool.jsonl`, empty to disable —
@@ -144,7 +156,15 @@ drained back to 0 no longer implies the queryable trail is complete.
 The triggers above stop `UPDATE`/`DELETE`/`TRUNCATE` *through Wardyn's schema*,
 and the role split hardens that against the app role. Neither binds a **table
 owner or superuser**, who can `ALTER TABLE … DISABLE TRIGGER` and rewrite a row —
-the residual `0007_audit_least_privilege.sql` states plainly. Migration
+the residual `0007_audit_least_privilege.sql` states plainly. The role-split check
+that reports this posture at boot (`AuditDDLProtected`) counts THREE ways to
+bypass, not two: superuser, membership in the owner role, and the **`TRIGGER`
+privilege** on `audit_events`. The third is the quiet one — a role granted
+`TRIGGER` cannot drop the shipped guards, but it can add a BEFORE INSERT trigger
+of its own whose name sorts after `audit_events_chain` (same-event row triggers
+fire in name order) and overwrite `prev_hash`/`row_hash` on the way in, minting
+rows that hash to whatever it says while every shipped guard is still armed. So a
+deploy that grants `TRIGGER` back is reported as NOT protected. Migration
 `0047_audit_hash_chain.sql` does not close that hole; it makes a single use of it
 **visible**. Every row written from `0047` onward carries two hex columns:
 
