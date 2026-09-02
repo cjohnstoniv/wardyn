@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
@@ -25,6 +26,14 @@ import (
 // sftpServerPath is the sandbox binary the sftp subsystem execs — the
 // documented BYOI image contract (docs/SSH.md).
 const sftpServerPath = "/usr/lib/openssh/sftp-server"
+
+// sshDisplaceGrace is how long a displaced SSH client gets to accept the
+// take-over reason on its stderr before the pump is cancelled anyway (see the
+// displace closure in bridgeSSHShell). A draining client takes microseconds; a
+// client that is not draining is precisely the one that must not hold the
+// evicted session open. Well under the take-over's own visible budget, so the
+// operator who clicked never waits on it.
+const sshDisplaceGrace = time.Second
 
 // sshExecStreamUnsupportedMsg is what every ExecStream consumer in this file
 // reports on runner.ErrExecStreamUnsupported: a clean channel error, never a
@@ -464,11 +473,25 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 		displace: func(reason string) {
 			// The SSH lane's equivalent of the WebSocket close frame: a line on
 			// the channel's stderr, which ssh(1) prints to the operator's own
-			// terminal, THEN the pump cancel that ends the session. On a
+			// terminal, and the pump cancel that ends the session. On a
 			// goroutine so a client that has stopped reading its window cannot
 			// wedge the take-over HTTP request behind a blocked write.
+			//
+			// THE CANCEL IS THE ACT; the line is a courtesy, so the cancel is on
+			// a TIMER the write cannot outlive. x/crypto's WriteExtended blocks
+			// on the channel's remote window with no context and no deadline, so
+			// a displaced client that stopped reading (a suspended ssh(1)) used
+			// to park this goroutine forever: cancel never ran, and the evicted
+			// pump kept its exec (a tmux client on the SHARED session), its
+			// TouchRun keepalive (the idle reaper never fires) and one of the
+			// run's four channel slots until the TCP connection died. Write
+			// authority was already revoked, so what leaked was the session, not
+			// a second writer — which is exactly why the courtesy may wait a
+			// little and the teardown may not.
 			go func() {
+				late := time.AfterFunc(sshDisplaceGrace, cancel)
 				_, _ = fmt.Fprintln(channel.Stderr(), "wardyn: "+reason)
+				late.Stop()
 				cancel()
 			}()
 		},
@@ -561,12 +584,12 @@ func (s *Server) sshShellPump(ctx context.Context, channel ssh.Channel, sess run
 		for {
 			n, rerr := channel.Read(buf)
 			if n > 0 {
-				if holder.canWrite() {
-					if _, werr := sess.Write(buf[:n]); werr != nil {
-						reasonCh <- "session write failed"
-						cancel()
-						return
-					}
+				// Same eviction-aware write path as the web pump — one gate for
+				// both transports (attach_holder.go writeGated).
+				if werr := holder.writeGated(sess, buf[:n]); werr != nil {
+					reasonCh <- "session write failed"
+					cancel()
+					return
 				}
 			}
 			if rerr != nil {
@@ -585,8 +608,15 @@ func (s *Server) sshShellPump(ctx context.Context, channel ssh.Channel, sess run
 				if !ok {
 					return
 				}
-				if holder == nil {
-					continue // observer: never resize the holder's shared tmux window
+				// canWrite, not `holder == nil`: an observer never resizes the
+				// holder's shared tmux window, and neither does a holder whose
+				// authority a take-over already revoked. Gating on nil alone let
+				// an EVICTED ssh client keep resizing the window under the new
+				// holder until its channel died — the web twin (attach.go's
+				// resize branch) has always gated on canWrite; this was the
+				// asymmetry.
+				if !holder.canWrite() {
+					continue
 				}
 				cols, rows := uint16(m.Columns), uint16(m.Rows)
 				_ = sess.Resize(ctx, cols, rows)

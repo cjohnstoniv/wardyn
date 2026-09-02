@@ -445,13 +445,14 @@ func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.
 				}
 			case websocket.MessageBinary:
 				// Raw PTY input (keystrokes) — dropped entirely for a read-only
-				// observer (holder == nil).
-				if holder.canWrite() {
-					if _, werr := sess.Write(data); werr != nil {
-						reasonCh <- "session write failed"
-						cancel()
-						return
-					}
+				// observer (holder == nil), and cut short MID-FRAME the moment a
+				// take-over evicts this holder: writeGated re-tests authority per
+				// chunk, so a 1 MiB paste in flight when the eviction lands stops
+				// there instead of finishing into the new holder's session.
+				if werr := holder.writeGated(sess, data); werr != nil {
+					reasonCh <- "session write failed"
+					cancel()
+					return
 				}
 			}
 		}
