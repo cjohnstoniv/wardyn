@@ -1141,7 +1141,7 @@ func TestAccess_PreviewWireShape(t *testing.T) {
 	}
 
 	// No match at all: [] on the wire, never null. An EMPTY merged map is the
-	// arm that actually returns a nil slice from deriveRole (derive.go:503),
+	// arm that actually returns a nil slice from deriveRole (the empty-merged-map arm of deriveRole in derive.go),
 	// so this is the construction that would marshal null without the guard —
 	// a non-empty map falls through to the default_role match instead.
 	empty := newAccessAuth(t, nil, oidc.RoleMember, nil, nil)
