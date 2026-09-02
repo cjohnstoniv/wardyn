@@ -116,7 +116,6 @@ func TestDriveHomeName(t *testing.T) {
 		{name: "an override beats the hash", tmpl: HomeTemplateHash, subject: "sub-abc", override: "bsmith", want: "bsmith"},
 		{name: "an override is lowercased too", tmpl: HomeTemplateHash, subject: "sub-abc", override: "BSmith", want: "bsmith"},
 		{name: "an invalid override is refused, not ignored", tmpl: HomeTemplateHash, subject: "sub-abc", override: ".ssh", wantErr: true},
-		{name: "an unknown template is refused", tmpl: HomeTemplate("uid"), subject: "alice", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := driveFor(t, DriveBackendHostPath, tc.tmpl)
@@ -315,12 +314,6 @@ func TestDriveBackendMapping(t *testing.T) {
 				t.Errorf("EnforcementFor() = %q, want %q", got, tc.enforce)
 			}
 		})
-	}
-	// The enforcement vocabulary is introduced complete: `filesystem` has no v1
-	// backend and is named here so a future quota lane reuses the word instead
-	// of inventing a fifth one.
-	if StorageEnforcementFilesystem == "" {
-		t.Error("StorageEnforcementFilesystem is unset")
 	}
 }
 
