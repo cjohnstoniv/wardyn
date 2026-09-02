@@ -241,7 +241,7 @@ test("V03a act 2 — four ways the boundary holds", async () => {
       await caption(page, "Before it runs, look at the policy — the whole contract for this run, four lines. You'll write one yourself in 'Your first policy'; here, we're just reading.");
       await beat(page, PACE.read);
       await walkPolicyKey(page, policyCard, demo.id, "min_confinement_class",
-        "The barrier: Fence — the lightest of the three tiers from 'Set up the host'; the policy calls it CC1. A container sharing your host's kernel, and everything you're about to see works on it, on purpose.");
+        "The barrier: Fence — the lightest tier from 'Set up the host'; the policy calls it CC1. A container sharing your host's kernel — and everything here works on it, on purpose.");
       await walkPolicyKey(page, policyCard, demo.id, "auto_stop_after_sec",
         "An idle stop: fifteen minutes with no terminal attached and no outbound call — local work doesn't keep it alive — and Wardyn tears the sandbox down, with the stop on the record. The number is yours to set.");
       await walkPolicyKey(page, policyCard, demo.id, "allowed_domains",
@@ -260,7 +260,7 @@ test("V03a act 2 — four ways the boundary holds", async () => {
       await walkPolicyKey(page, policyCard, demo.id, "allow_all_egress",
         "To reach for it, this policy throws the door open — allow all egress, switched on. Every public host is permitted, on purpose.",
         "And yet some destinations are still refused. The machine's own neighbors — the cloud metadata address, and every private, internal address — are refused underneath the policy: an allow-all switch never reaches them. And it's checked on where a name actually points, not on the name itself — so an ordinary-looking public address that secretly points inside your network is refused the same way.",
-        "The one exception is an address you wrote into the allowlist yourself — your own internal mirror, the way 'Set up the host' redirect tab does it. Never a wildcard, never an approval.",
+        "The one exception is an address you wrote into the allowlist yourself — your own internal mirror, like the redirect in 'Set up the host'. Never a wildcard, never an approval.",
         "Those are the lines that can't be crossed.");
     }
 

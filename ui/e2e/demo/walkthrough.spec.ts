@@ -135,7 +135,7 @@ test("act 2 — barrier, people, network, model", async () => {
   await advance();
 
   await expect(page.getByRole("heading", { name: "Secrets", level: 2 })).toBeVisible({ timeout: 30_000 });
-  await caption(page, "We connected the AI provider off camera — one terminal command; 'Set up the host' does the same step in the console.");
+  await caption(page, "We connected the AI provider off camera — one terminal command; 'Set up the host' walks the same step in the console.");
   await beat(page, PACE.read + 900);
   await caption(page, "Wardyn keeps that token outside the sandbox, encrypted with a key this host holds.");
   await beat(page, PACE.read);
@@ -562,8 +562,12 @@ test("act 5 — a real run", async () => {
     await spotlight(page, null);
   }
 
-  await caption(page, "Next it probes the cloud-metadata address — where cloud credentials live. The proxy refuses it underneath the policy; nothing to approve.");
-  await beat(page, PACE.read + 1400);
+  if (SHELL_ACT5) {
+    // Only the model-free variant probes the metadata address (task.ts); the
+    // agent take reaches example.com alone, so it has nothing to narrate here.
+    await caption(page, "Next it probes the cloud-metadata address — where cloud credentials live. The proxy refuses it underneath the policy; nothing to approve.");
+    await beat(page, PACE.read + 1400);
+  }
 
   // Terminal state, whichever it is — a denial must not brick the run.
   // RunStateBadge renders TITLE CASE labels from runStateMeta ("Completed",
@@ -652,8 +656,10 @@ test("act 6 — the receipts", async () => {
   await beat(page, PACE.read + 1600);
   await caption(page, "The allow, the request that stopped and waited, my approval — all of it on the record, lines added and never changed.");
   await beat(page, PACE.read + 1400);
-  await caption(page, "And the metadata probe's refusal is here too, from the proxy — there was never a connection to approve.");
-  await beat(page, PACE.read);
+  if (SHELL_ACT5) {
+    await caption(page, "And the metadata probe's refusal is here too, from the proxy — there was never a connection to approve.");
+    await beat(page, PACE.read);
+  }
 
   await act(page, page.getByRole("tab", { name: /Recording/ }), "And the session itself was recorded, so it can be replayed.");
   await beat(page, PACE.read + 1600);

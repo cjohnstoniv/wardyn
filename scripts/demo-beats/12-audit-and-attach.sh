@@ -562,10 +562,9 @@ drive() {
     || die "the foreign key was not refused — check it is registered under ${FOREIGN_PRINCIPAL} and the run is owned by ${PRINCIPAL}"
   say "Refused."
   say "The run belongs to the person who created it."
-  say "There's no administrator backdoor through SSH."
+  say "A member's key stops here. An admin's key can still reach the run — and that attach is written to the record as an override, never quietly."
   say "That's intentional."
   say "An administrator can still stop the run and inspect its records."
-  say "But attaching to somebody else's interactive session isn't an override."
   # THE MONEY ROW. "not the run owner" is the registered-but-foreign branch; a
   # key that was never registered logs "unregistered key" instead and the whole
   # finale is then about the wrong refusal (SV13).

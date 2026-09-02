@@ -327,7 +327,7 @@ test("beat 5 — name the streams", async () => {
   // words.
   await caption(page, "Where the sensor is available — a host that switched it on, which this one hasn't — that second witness runs alongside Wardyn's own log.");
   await beat(page, PACE.read);
-  await caption(page, "A Vault run hides its guest from it — and Wardyn logs that blindness as its own row.");
+  await caption(page, "A Vault run hides its guest from it — and Wardyn logs that blindness as its own row. This run isn't Vault, so there's none here.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 });
