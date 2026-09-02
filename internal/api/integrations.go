@@ -46,9 +46,8 @@ type capEnv struct {
 	// this, bedrockCaps read "available" off region+model alone, so a
 	// wizard-completed Bedrock integration with zero credentials of any kind
 	// still showed model_api/tool:claude-code/wardyn_features as available —
-	// three surfaces (GET /integrations, SetupStatus.Integrations,
-	// WardynFeaturesBackend's boot composer derivation) believing a run that
-	// would silently get no Bedrock transport at all.
+	// both surfaces (GET /integrations, SetupStatus.Integrations) believing a
+	// run that would silently get no Bedrock transport at all.
 	BedrockCredentialPresent bool
 }
 
@@ -229,8 +228,7 @@ func subscriptionCaps(in types.Integration, env capEnv) []Capability {
 	// connected (PLATFORM-API-4): without this gate the cell read "available"
 	// for a lane that is not — the exact drift bedrockCaps below refuses to
 	// tell — because tool:claude-code (right below) already needs the SAME
-	// managed-blob signal to leave needs_setup, and WardynFeaturesBackend
-	// selects on this cell alone.
+	// managed-blob signal to leave needs_setup.
 	features := Capability{ID: "wardyn_features", State: CapAvailable, Residency: residency}
 	switch {
 	case lane == "resident_host":
@@ -701,11 +699,10 @@ func gitHostRows(secretNames map[string]bool, scmHosts []string, stored map[stri
 	return rows
 }
 
-// Integration WRITES (validation) + the run/composer resolution ladder built
-// ON TOP of effectiveIntegrations/capabilitiesFor above live in
-// integrations_write.go (split out once this file crossed the 1000-line
-// gate): knownIntegrationTypes, genericIntegrationCategories,
-// validateIntegrationWrite (setup_integrations.go's write endpoints),
+// Integration WRITES (validation) + the run resolution ladder built ON TOP of
+// effectiveIntegrations/capabilitiesFor above live in integrations_write.go
+// (split out once this file crossed the 1000-line gate):
+// knownIntegrationTypes, genericIntegrationCategories, validateIntegrationWrite
+// (setup_integrations.go's write endpoints),
 // resolveIntegrationRef/defaultAgentRunsIntegration (llmcred.go's run-time
-// resolution ladder), WardynFeaturesBackend (cmd/wardynd/composer.go's
-// composer-registry boot derivation).
+// resolution ladder).
