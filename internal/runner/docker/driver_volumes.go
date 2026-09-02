@@ -145,11 +145,23 @@ func ensureDriveVolume(ctx context.Context, cli dockerAPI, drive *types.DriveMou
 		// over the top of whatever it could not read.
 		return fmt.Errorf("docker: inspect user drive volume %q: %w", name, err)
 	}
+	// An empty label value is OMITTED rather than written blank: the adoption
+	// checks read an absent label as "this volume predates the label / was
+	// restored by hand", so writing "" would mint a value that means nothing
+	// and reads in `docker volume inspect` like a fact.
+	labels := map[string]string{
+		labelManaged:   "true",
+		labelDrive:     drive.DriveID.String(),
+		labelDriveHome: drive.HomeName,
+	}
+	if drive.SubjectHash != "" {
+		labels[labelDriveSubject] = drive.SubjectHash
+	}
 	created, err := cli.VolumeCreate(ctx, client.VolumeCreateOptions{
 		Name:   name,
 		Driver: driveVolumeDriver,
 		// NO DriverOpts. Ever. See driveVolumeDriver.
-		Labels: driveVolumeLabels(drive),
+		Labels: labels,
 	})
 	if err != nil {
 		return fmt.Errorf("docker: create user drive volume %q: %w", name, err)
@@ -167,27 +179,6 @@ func ensureDriveVolume(ctx context.Context, cli dockerAPI, drive *types.DriveMou
 	// an adoption rule that held on the inspect path and not on the create path
 	// would be a rule with a documented window.
 	return driveVolumeAdoptable(created.Volume, name, drive)
-}
-
-// driveVolumeLabels is the label set every managed drive volume carries, in one
-// place so the volume the driver CREATES and the volume it will later agree to
-// adopt are described by the same three keys.
-//
-// A label whose value is empty is OMITTED rather than written blank: the
-// adoption checks read an absent label as "this volume predates the label /
-// was restored by hand" and an empty one as the same thing, so writing "" would
-// mint a value that means nothing and reads in `docker volume inspect` like a
-// fact.
-func driveVolumeLabels(drive *types.DriveMount) map[string]string {
-	labels := map[string]string{
-		labelManaged:   "true",
-		labelDrive:     drive.DriveID.String(),
-		labelDriveHome: drive.HomeName,
-	}
-	if drive.SubjectHash != "" {
-		labels[labelDriveSubject] = drive.SubjectHash
-	}
-	return labels
 }
 
 // driveVolumeAdoptable reports whether v — a volume that already answers to
