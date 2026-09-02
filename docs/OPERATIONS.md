@@ -2655,7 +2655,9 @@ with the drive` when a console size and a pod's actual volume do not match.
 the run outright: a pod mounting a claim under deletion never schedules, and
 re-creating it under the same name would undo the reclaim somebody is in the
 middle of. So does a claim whose IDENTITY labels are not this run's — a managed
-claim whose `wardyn.drive` or `wardyn.home` names a different pair, or a share
+claim whose `wardyn.drive` or `wardyn.home` names a different pair, or whose
+`wardyn.subject` names a different person (that third label is checked only when
+it is PRESENT, so claims stamped before it existed still mount), or a share
 whose claim turns out to carry `wardyn.managed=true` (i.e. it is one person's
 managed drive, not an admin's share). That one is the collision the object name
 cannot rule out: `wardyn-drive-<drive-slug>-<home>` joins two variable-width
