@@ -93,9 +93,11 @@ test("act 1 — first light", async () => {
   await expect(hero).toBeVisible({ timeout: 60_000 });
 
   await chapter(page, "Wardyn", "A governed sandbox, from nothing, in one command");
-  await caption(page, "One command brought this up. No account, no cloud — it is all on this machine.");
+  await caption(page, "Wardyn puts an AI coding agent in a box you control — this is what it looks like.");
   await beat(page, PACE.read);
-  await caption(page, "Every run gets its own identity, its own barrier, and no resident credentials.");
+  await caption(page, "One command — make setup — brought it up: no account, no cloud, all on this machine.");
+  await beat(page, PACE.read);
+  await caption(page, "Every run gets its own identity, its own barrier — and no live credential left inside it.");
   await beat(page, PACE.read);
 
   await act(page, page.getByRole("button", { name: /^Get started/ }), "A guided walk. Only two steps are gates — the barrier, and proving the network.");
@@ -112,7 +114,7 @@ test("act 2 — barrier, people, network, model", async () => {
   await chapter(page, "Essentials", "The barrier, who signs in, the network path, the model");
 
   await expect(page.getByRole("heading", { name: "Pick your barrier", level: 2 })).toBeVisible({ timeout: 30_000 });
-  await caption(page, "Fence, Wall, Vault — three strengths of isolation. Wardyn detects which this host can actually do.");
+  await caption(page, "Fence, Wall, Vault — a container, a filtered kernel, a full virtual machine. Wardyn detects which this host can actually do.");
   await beat(page, PACE.read + 900);
   await advance("Taking the tier this machine reports as ready.");
 
@@ -133,8 +135,12 @@ test("act 2 — barrier, people, network, model", async () => {
   await advance();
 
   await expect(page.getByRole("heading", { name: "Secrets", level: 2 })).toBeVisible({ timeout: 30_000 });
-  await caption(page, "The model was connected from the terminal a moment ago — the token is encrypted at rest and injected by the proxy.");
+  await caption(page, "We connected the AI provider off camera — one terminal command; 'Set up the host' walks the same step in the console.");
   await beat(page, PACE.read + 900);
+  await caption(page, "Wardyn keeps that token outside the sandbox, encrypted with a key this host holds.");
+  await beat(page, PACE.read);
+  await caption(page, "And it adds the token to requests on the way out.");
+  await beat(page, PACE.read);
   await caption(page, "It never enters the sandbox. The agent will reach Anthropic without ever holding the credential.");
   await beat(page, PACE.read);
   await advance();
@@ -225,7 +231,7 @@ test("act 3 — the guardrail demos", async () => {
       await typeInTerminal(page, demo.cmds[0]);
       await caption(
         page,
-        "Same command, one more time. Once already spent itself on the last connection — refused again, and a fresh approval appears.",
+        "Same command again. That approval was scoped to one connection — it's spent — so it's refused again, and a fresh approval appears.",
       );
       await expect(page.getByTestId("live-approval-row").filter({ hasText: "example.com" })).toBeVisible({
         timeout: APPROVAL_APPEARS,
@@ -262,8 +268,10 @@ test("act 3 — the guardrail demos", async () => {
         /HTTP\/1\.1 403|Failed to connect to 169\.254\.169\.254|curl: \(\d+\)/,
         { timeout: 60_000 },
       );
-      await caption(page, "Egress was wide open — and these two never even got a connection. There is no route off the box for them.");
+      await caption(page, "Outbound traffic was wide open — and two addresses still couldn't be reached at all: the cloud-metadata address, and the private range.");
       await beat(page, PACE.read + 1200);
+      await caption(page, "No one could even say yes. The proxy refuses them underneath the policy — no approval could ever grant them.");
+      await beat(page, PACE.read);
     }
 
     // The decisions are on the record before we move on. Deliberately skipped
@@ -302,7 +310,7 @@ test("act 4 — onboard a workspace", async () => {
   // films an actual creation. (A full `make record-demo` resets the stack and
   // never needs this; iterating with --no-reset does.)
   await clearWorkspace();
-  await caption(page, "A workspace is a repo or a directory a run is allowed to attach. Nothing is mounted that you did not onboard.");
+  await caption(page, "A workspace is a repo or a directory a run is allowed to attach. Nothing is mounted that you did not add here.");
   await beat(page, PACE.read + 600);
 
   // The step's trigger is state-dependent (step-bodies.tsx): an empty install
@@ -364,7 +372,7 @@ test("act 5 — a real run", async () => {
   const page = stage();
   await chapter(page, "A real run", "Actual work, under the same boundary");
 
-  await act(page, page.getByRole("button", { name: "New run" }), "Now a real agent, on that workspace, doing real work.");
+  await act(page, page.getByRole("button", { name: "New run" }), "Now real work, on that workspace.");
   await expect(page).toHaveURL(/\/runs\/new/, { timeout: 30_000 });
 
   await caption(page, "One page. Everything the run is allowed to do is spelled out on the right as you build it.");
@@ -499,7 +507,7 @@ test("act 5 — a real run", async () => {
   await beat(page, PACE.read);
   await spotlight(page, null);
 
-  await caption(page, "That is the entire blast radius of this run, declared before it starts.");
+  await caption(page, "That's everything this run can reach or change — declared before it starts.");
   await beat(page, PACE.read + 800);
   await act(page, page.getByRole("button", { name: "Launch run" }));
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: 60_000 });
@@ -532,7 +540,7 @@ test("act 5 — a real run", async () => {
   );
   await caption(
     page,
-    "Approved — and with Always, not just This run. It's saved to the workspace itself, so it outlives this run too. The run gets through.",
+    "Approved with Always — so it's saved to the workspace and outlives this run. The run gets through.",
   );
   await beat(page, PACE.read + 1200);
 
@@ -548,16 +556,18 @@ test("act 5 — a real run", async () => {
     await spotlight(page, telemetryRow.first());
     await caption(
       page,
-      "And that other row is the agent's own telemetry endpoint, reaching out on its own. Nobody asked for it, it is not on the list — so it stays refused until I say otherwise.",
+      "And that other row is the agent's own tool phoning home. Nobody asked for it, it's not on the list — so it waits until I decide.",
     );
     await beat(page, PACE.read + 900);
     await spotlight(page, null);
   }
 
-  await caption(page, "Next it probes the cloud-metadata address — where cloud credentials live. There is no route off the box for it at all.");
-  await beat(page, PACE.read + 1400);
-  await caption(page, "No approval was raised for it, because no approval could have granted it.");
-  await beat(page, PACE.read + 900);
+  if (SHELL_ACT5) {
+    // Only the model-free variant probes the metadata address (task.ts); the
+    // agent take reaches example.com alone, so it has nothing to narrate here.
+    await caption(page, "Next it probes the cloud-metadata address — where cloud credentials live. The proxy refuses it underneath the policy; nothing to approve.");
+    await beat(page, PACE.read + 1400);
+  }
 
   // Terminal state, whichever it is — a denial must not brick the run.
   // RunStateBadge renders TITLE CASE labels from runStateMeta ("Completed",
@@ -572,7 +582,7 @@ test("act 5 — a real run", async () => {
   // a brand-new run that starts with the held host already open — no hold,
   // no approval, nothing to click. "Approved" is a claim; this is the receipt.
   // -------------------------------------------------------------------------
-  await caption(page, "That approval was Always, not just This run — it's saved to the workspace itself. Here's the receipt.");
+  await caption(page, "Here's the receipt for that Always — saved on the workspace.");
   await beat(page, PACE.read + 900);
 
   await act(page, page.getByRole("link", { name: "Workspaces" }));
@@ -642,10 +652,14 @@ test("act 6 — the receipts", async () => {
   const page = stage();
   await chapter(page, "The receipts", "Everything above, on the record");
 
-  await act(page, page.getByRole("tab", { name: /Audit/ }), "Every decision, attributed: the human, the agent, the system.");
+  await act(page, page.getByRole("tab", { name: /Audit/ }), "Every decision, attributed: the operator, the agent, the system.");
   await beat(page, PACE.read + 1600);
-  await caption(page, "The allow, the request that stopped and waited, my approval — all of it, append-only. The metadata probe is not even here: it never got a connection to log.");
+  await caption(page, "The allow, the request that stopped and waited, my approval — all of it on the record, lines added and never changed.");
   await beat(page, PACE.read + 1400);
+  if (SHELL_ACT5) {
+    await caption(page, "And the metadata probe's refusal is here too, from the proxy — there was never a connection to approve.");
+    await beat(page, PACE.read);
+  }
 
   await act(page, page.getByRole("tab", { name: /Recording/ }), "And the session itself was recorded, so it can be replayed.");
   await beat(page, PACE.read + 1600);

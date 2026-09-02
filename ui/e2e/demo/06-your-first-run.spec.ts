@@ -354,7 +354,7 @@ test("V06 beat 2 — the envelope, by reference", async () => {
   //     happens." / "We can hold it for approval." / "We can deny it, but let it
   //     ask." / "Or we can deny it silently.") — the stored policy already fixed
   //     the mode (deny_with_review); the run does not re-choose it
-  await caption(page, "Last episode, we wrote our first policy and saved it as first-policy.");
+  await caption(page, "In 'Your first policy', we saved our rules as first-policy.");
   await beat(page, PACE.read);
   await caption(page, "This run doesn't need a new policy — it can reuse first-policy.");
   await beat(page, PACE.read);
@@ -418,7 +418,7 @@ test("V06 beat 2 — the envelope, by reference", async () => {
   // resolves the STORED spec and shows the enforced-barrier chip. Replaces the
   // old drafted "two things side by side…" line, which described a two-column UI
   // the panel never rendered.
-  await caption(page, "It resolves that policy and shows the barrier this run will actually use.");
+  await caption(page, "It reads that policy and shows the barrier this run will actually use.");
   await beat(page, PACE.read);
   // An operator's own saved spec is not clamped, so this reads "No adjustments."
   // Asserted BEFORE it is spoken — a stack that clamped something must not be
@@ -471,7 +471,7 @@ test("V06 beat 3 — launch, walk away", async () => {
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: 60_000 });
   await caption(page, "Once it's launched, the envelope is set.");
   await beat(page, PACE.read);
-  await caption(page, "Only a decision at the boundary can change what this run is allowed to do.");
+  await caption(page, "From here, only an approval at the boundary can widen what this run may reach; a deny keeps it shut. You'll watch one later.");
   await beat(page, PACE.read);
 
   // SCREEN: Run terminal/replay.
@@ -563,7 +563,7 @@ test("V06 beat 4 — the receipts", async () => {
   ).toBe(true);
   await caption(page, "And here's the file it created.");
   await beat(page, PACE.read);
-  await caption(page, "That file is inside the workspace we mounted — not somewhere else on the host.");
+  await caption(page, "That file is inside the workspace we attached — the path says so.");
   await beat(page, PACE.read);
 
   // 3. wardynd's own allow row — the run's ONE egress line even though the
@@ -573,26 +573,18 @@ test("V06 beat 4 — the receipts", async () => {
   // teaching that "allowed" and "reached" are different things.
   const egressPanel = page.getByRole("heading", { name: "Egress" }).locator("xpath=ancestor::section[1]");
   await spotlight(page, egressPanel);
-  await caption(page, "And there's one internal network entry here.");
+  await caption(page, "Look at Egress. One entry — and the run reached no internet host at all.");
   await beat(page, PACE.read);
-  await caption(page, "That's Wardyn's own control channel.");
+  await caption(page, "That one row is the sandbox talking back to Wardyn — its control channel, not the internet.");
   await beat(page, PACE.read);
-  await caption(page, "Internal control traffic — not internet access.");
-  await beat(page, PACE.read);
-  await caption(page, "It's not the open internet.");
+  await caption(page, "The host on the row is Wardyn's own address.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 
   // 4. The audit trail: create → exec → complete, nobody watching.
-  await act(page, page.getByRole("tab", { name: "Audit" }), "Open Audit.");
-  await caption(page, "Now we get the receipts.");
-  await beat(page, PACE.read);
+  await act(page, page.getByRole("tab", { name: "Audit" }), "Open Audit — the receipts.");
   await expect(page.getByText(/run\.create|Created the run/i).first()).toBeVisible({ timeout: 30_000 });
-  await caption(page, "The run was created.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "The command executed.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "The run completed.");
+  await caption(page, "The run was created, the command executed, the run completed.");
   await beat(page, BEAT_SHORT);
   await caption(page, "Those events are recorded as they happen.");
   await beat(page, PACE.read);
@@ -605,9 +597,11 @@ test("V06 beat 4 — the receipts", async () => {
   // (series ruling S4: don't outrun what the screen shows). NOTE: first-policy
   // floors at CC2/Wall, so this run enforces AT LEAST Wall (higher than the
   // old CI-baseline CC1) — re-confirm the sensor is blind at that tier.
-  await caption(page, "On this barrier, the kernel sensor can't give us a complete picture.");
+  await caption(page, "Wardyn can also watch a run from the operating system's core — a second witness outside the sandbox.");
   await beat(page, PACE.read);
-  await caption(page, "We'll come back to that in episode twelve.");
+  await caption(page, "On this barrier that witness is off.");
+  await beat(page, PACE.read);
+  await caption(page, "We'll come back to that in 'Audit and attach'.");
   await beat(page, PACE.read);
 });
 
