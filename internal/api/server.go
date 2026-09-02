@@ -232,8 +232,8 @@ type Config struct {
 	// GET /api/v1/runs/{id}/recording/{id} (admin-gated) and accepts uploads
 	// via PUT /api/v1/runs/{id}/recording (run-token auth).
 	RecordingStore recording.Store
-	// OIDC, when set, enables human SSO: it mounts /auth/login,/auth/callback,
-	// /auth/logout and composes oidc.Middleware in front of the admin-gated API
+	// OIDC, when set, enables human SSO: it mounts /auth/login,/auth/callback
+	// and composes oidc.Middleware in front of the admin-gated API
 	// so a valid session cookie OR the admin bearer token authenticates a caller.
 	// The admin token still works for the CLI when OIDC is configured.
 	OIDC *oidc.Authenticator

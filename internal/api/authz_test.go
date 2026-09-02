@@ -131,7 +131,6 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /readyz":        {class: classAnonymous},
 	"GET /auth/login":    {class: classAnonymous},
 	"GET /auth/callback": {class: classAnonymous},
-	"GET /auth/logout":   {class: classAnonymous},
 
 	// ── admin (SUPER only: a security_admin is refused here too) ──
 	"GET /metrics":                                       {class: classAdmin},

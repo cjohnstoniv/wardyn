@@ -45,12 +45,12 @@ func (s *Server) routes() chi.Router {
 	// volumes (run counts, approval decisions) about every OTHER user's runs.
 	r.With(s.humanOrAdminAuth, s.requireOperator).Get("/metrics", s.handleMetrics)
 
-	// Human SSO (OIDC): login/callback/logout. Mounted only when configured.
-	// These are unauthenticated by design (they bootstrap the session).
+	// Human SSO (OIDC): login/callback. Mounted only when configured. These are
+	// unauthenticated by design (they bootstrap the session). Sign-OUT is not
+	// here: it is POST /api/v1/auth/logout below, inside humanOrAdminAuth.
 	if s.cfg.OIDC != nil {
 		r.Get("/auth/login", s.cfg.OIDC.LoginHandler)
 		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandler)
-		r.Get("/auth/logout", s.cfg.OIDC.LogoutHandler)
 	}
 
 	r.Route("/api/v1", func(r chi.Router) {
