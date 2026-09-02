@@ -62,12 +62,9 @@ func (s PG) Ping(ctx context.Context) error {
 // CreateRun inserts a new run and returns the persisted row.
 func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, error) {
 	const q = `
-		INSERT INTO agent_runs
-			(id, created_at, updated_at, created_by, agent, repo, task,
-			 policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids)
+		INSERT INTO agent_runs (` + runInsertCols + `)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
-		RETURNING id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, failure_hint`
+		RETURNING ` + runCols
 
 	row := s.Pool.QueryRow(ctx, q,
 		r.ID, r.CreatedAt, r.UpdatedAt, r.CreatedBy, r.Agent, r.Repo, r.Task,
@@ -81,8 +78,7 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 // GetRun returns the run for id, or ErrNotFound.
 func (s PG) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
 	const q = `
-		SELECT id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, failure_hint
+		SELECT ` + runCols + `
 		FROM agent_runs WHERE id = $1`
 	return scanRun(s.Pool.QueryRow(ctx, q, id))
 }
@@ -219,11 +215,20 @@ func (s PG) TouchRun(ctx context.Context, id uuid.UUID) error {
 	return s.execRun(ctx, "touch run", `UPDATE agent_runs SET updated_at=now() WHERE id=$1`, id)
 }
 
-// scanRun is the ONE reader for every agent_runs column list in this package
-// (CreateRun's RETURNING, GetRun, ListRunsPage, ListRunsPageByCreator,
-// ClaimStaleRunWatchers). New columns are APPENDED to the end of all of them
-// and to the end of this Scan — appending is the only edit that cannot
-// silently transpose two same-typed columns past the compiler.
+// runInsertCols / runCols are THE agent_runs column lists, in scanRun's order,
+// pasted at six sites until now. The read list is the write list PLUS
+// failure_hint — a concatenation, so the one column written by a scoped UPDATE
+// (SetRunFailureHint) rather than by CreateRun is visible as exactly that, and
+// a column appended to runInsertCols reaches both lists at once.
+const runInsertCols = `id, created_at, updated_at, created_by, agent, repo, task, policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids`
+const runCols = runInsertCols + `, failure_hint`
+
+// scanRun is the ONE reader for runCols, which is now the ONE spelling of the
+// agent_runs column list. A new column is APPENDED to runInsertCols (or to
+// runCols alone when a scoped UPDATE rather than CreateRun writes it) and to
+// the end of this Scan — appending is still the only edit that cannot silently
+// transpose two same-typed columns past the compiler, but there is no longer a
+// set of pasted copies to keep in step by hand.
 func scanRun(row pgx.Row) (types.AgentRun, error) {
 	var r types.AgentRun
 	var cc, state string
@@ -380,12 +385,9 @@ func (s PG) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.
 	// ApprovalRequest reflects those defaults rather than the Go zero value
 	// of a field that was never assigned.
 	const q = `
-		INSERT INTO approvals
-			(id, run_id, grant_id, kind, requested_scope, state, requested_at,
-			 decided_at, decided_by, minted_jti, reason)
+		INSERT INTO approvals (` + approvalInsertCols + `)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-		RETURNING id, run_id, grant_id, kind, requested_scope, state, requested_at,
-			decided_at, decided_by, minted_jti, reason, decision_scope, decision_expires_at`
+		RETURNING ` + approvalCols
 	out, err := scanApproval(s.Pool.QueryRow(ctx, q,
 		a.ID, a.RunID, a.GrantID, string(a.Kind), scopeJSON, string(a.State), a.RequestedAt,
 		a.DecidedAt, a.DecidedBy, a.MintedJTI, a.Reason,
@@ -407,8 +409,7 @@ func (s PG) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.
 // GetApproval returns the approval for id, or ErrNotFound.
 func (s PG) GetApproval(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error) {
 	const q = `
-		SELECT id, run_id, grant_id, kind, requested_scope, state, requested_at,
-			decided_at, decided_by, minted_jti, reason, decision_scope, decision_expires_at
+		SELECT ` + approvalCols + `
 		FROM approvals WHERE id = $1`
 	return scanApproval(s.Pool.QueryRow(ctx, q, id))
 }
@@ -432,8 +433,7 @@ func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, decision types.App
 		UPDATE approvals
 		SET state=$1, decided_at=$2, decided_by=$3, reason=$4, decision_scope=$5, decision_expires_at=$6
 		WHERE id=$7 AND state='PENDING'
-		RETURNING id, run_id, grant_id, kind, requested_scope, state, requested_at,
-			decided_at, decided_by, minted_jti, reason, decision_scope, decision_expires_at`
+		RETURNING ` + approvalCols
 	a, err := scanApproval(s.Pool.QueryRow(ctx, q,
 		string(decision.State), now, decision.DecidedBy, decision.Reason,
 		string(decision.Scope), decision.ExpiresAt, id,
@@ -451,12 +451,21 @@ func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, decision types.App
 	return a, err
 }
 
-// scanApproval is the ONE reader for every approvals column list in this
-// package (CreateApproval's RETURNING, GetApproval, DecideApproval's
-// RETURNING, ListApprovalsPage, ListApprovalsPageByRunCreator). New columns
-// are APPENDED to the end of all of them and to the end of this Scan —
-// appending is the only edit that cannot silently transpose two same-typed
-// columns past the compiler.
+// approvalInsertCols / approvalCols are THE approvals column lists, in
+// scanApproval's order (five pasted sites). Same shape as agent_runs: the read
+// list adds the two columns a raise does not set. decision_scope /
+// decision_expires_at carry their SQL DEFAULTs, which is precisely "no decision
+// recorded", and RETURNING names them so the caller sees those rather than the
+// Go zero value of a field never assigned.
+const approvalInsertCols = `id, run_id, grant_id, kind, requested_scope, state, requested_at, decided_at, decided_by, minted_jti, reason`
+const approvalCols = approvalInsertCols + `, decision_scope, decision_expires_at`
+
+// scanApproval is the ONE reader for approvalCols, which is now the ONE
+// spelling of the approvals column list. A new column is APPENDED to
+// approvalInsertCols (or to approvalCols alone when only a decision writes it)
+// and to the end of this Scan — appending is still the only edit that cannot
+// silently transpose two same-typed columns past the compiler, but there is no
+// longer a set of pasted copies to keep in step by hand.
 func scanApproval(row pgx.Row) (types.ApprovalRequest, error) {
 	var a types.ApprovalRequest
 	var kind, state, decisionScope string
@@ -510,7 +519,7 @@ func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEv
 	// into a string. Empty string and NULL both mean "nothing before this row".
 	const q = `
 		INSERT INTO audit_events
-			(id, time, run_id, actor_type, actor, action, target, outcome, source_ip, data)
+			(` + auditCols + `)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		RETURNING COALESCE(prev_hash,''), COALESCE(row_hash,'')`
 	if err := tx.QueryRow(ctx, q,
@@ -551,7 +560,7 @@ func (s PG) QueryRecentAuditEvents(ctx context.Context, limit int) ([]types.Audi
 // health state (so the stream reports healthy only while beats are arriving).
 func (s PG) LatestAuditEventByAction(ctx context.Context, action string) (types.AuditEvent, error) {
 	const q = `
-		SELECT id, time, run_id, actor_type, actor, action, target, outcome, source_ip, data
+		SELECT ` + auditCols + `
 		FROM audit_events WHERE action=$1 ORDER BY seq DESC LIMIT 1`
 	ev, err := scanAuditEvent(s.Pool.QueryRow(ctx, q, action))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -562,6 +571,13 @@ func (s PG) LatestAuditEventByAction(ctx context.Context, action string) (types.
 	}
 	return ev, nil
 }
+
+// auditCols is THE audit_events column list, in scanAuditEvent's order, shared
+// by the insert and every read here. internal/broker keeps its own copy — it
+// writes this table through its own pool and does not import this package. Not
+// used by auditchain.go's audit_row_hash() call: that is the chain function's
+// ARGUMENT order (prev_hash first), fixed by the migration, not a column list.
+const auditCols = `id, time, run_id, actor_type, actor, action, target, outcome, source_ip, data`
 
 func scanAuditEvent(row pgx.Row) (types.AuditEvent, error) {
 	var ev types.AuditEvent
