@@ -152,8 +152,16 @@ func assertProxyArtifactScmBedrockComposition(t *testing.T, spec runner.SandboxS
 	if spec.Env["AWS_REGION"] != "us-east-1" {
 		t.Errorf("Env[AWS_REGION] = %q, want us-east-1", spec.Env["AWS_REGION"])
 	}
-	if spec.Env["AWS_ACCESS_KEY_ID"] != "AKIATESTTESTTESTTEST" {
-		t.Errorf("Env[AWS_ACCESS_KEY_ID] = %q, want the resident test key", spec.Env["AWS_ACCESS_KEY_ID"])
+	// The resident SigV4 keys are the CREDENTIAL half of the environment, so
+	// they ride SecretEnv, not Env: splitSecretEnv moves every key the Bedrock
+	// lane reports out of the map a k8s pod spec would carry inline. Asserting
+	// both sides here is the point — a regression that put the key back in Env
+	// is exactly the API-readable leak the split closed.
+	if spec.SecretEnv["AWS_ACCESS_KEY_ID"] != "AKIATESTTESTTESTTEST" {
+		t.Errorf("SecretEnv[AWS_ACCESS_KEY_ID] = %q, want the resident test key", spec.SecretEnv["AWS_ACCESS_KEY_ID"])
+	}
+	if _, inEnv := spec.Env["AWS_ACCESS_KEY_ID"]; inEnv {
+		t.Error("Env[AWS_ACCESS_KEY_ID] is set: a credential must leave Env for SecretEnv")
 	}
 
 	// 2 + 3 TOGETHER — the specific merge-conflict-resolution assertion: the
