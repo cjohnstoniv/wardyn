@@ -28,6 +28,8 @@
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}" || exit 1
+# shellcheck source=lib/common.sh
+. "${REPO_ROOT}/scripts/lib/common.sh"   # wardyn_ffmpeg
 
 VIDEO=""
 TERMINAL_SCRIPT=""
@@ -53,7 +55,10 @@ done
 [[ -n "${VIDEO}" ]] || { echo "usage: scripts/take-chain.sh --video <id> [--terminal-script <path>] [--reset]" >&2; exit 2; }
 [[ -n "${TERMINAL_SCRIPT}" ]] && REC_ARGS+=(--terminal-script "${TERMINAL_SCRIPT}")
 
-FF="${WARDYN_DEMO_FFMPEG:-$(command -v ffmpeg.exe 2>/dev/null || ls /mnt/c/Users/*/AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg_*/ffmpeg-*/bin/ffmpeg.exe 2>/dev/null | head -1)}"
+# The take's OWN ffmpeg — the probe below has to ask the exact binary
+# record-demo.sh will encode with, or a socket it clears is one that binary dies
+# on. Same resolver, one place: wardyn_ffmpeg in scripts/lib/common.sh.
+FF="$(wardyn_ffmpeg)"
 [[ -n "${FF}" ]] || { echo "no Windows ffmpeg — winget.exe install Gyan.FFmpeg (or set WARDYN_DEMO_FFMPEG)" >&2; exit 1; }
 
 # Where the finished mp4 lands — resolved INSIDE the loop, through the live
