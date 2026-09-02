@@ -51,7 +51,9 @@ A **drive** is persistent storage your admin registers once and allocates to
 you, to a group you are in, or to everyone. It is not a workspace — you do not
 onboard it, it holds no repo, and it is not something you can add yourself. It
 mounts at `/home/agent/drive`, and it is yours alone: a run sees **your own
-directory** inside the drive, never the drive's root and never anyone else's.
+directory** inside the drive, never the drive's root, and Wardyn binds nothing
+named for anyone else — what your share's administrator does above that directory
+is theirs (the threat model's residual #33).
 `GET /me` carries `user_drive` (`null` when none is allocated to you) and is the
 ground truth for what you have.
 
@@ -87,11 +89,11 @@ resolves your drive the same way, in a dry run too:
 
 - `drive: no user drive is allocated to you — ask an admin for an allocation`
 - `drive: your allocation is paused by an admin`
-- `drive: your allocation is read-only; read_only:false cannot widen it`
+- ``drive: your allocation is read-only; `read_only:false` cannot widen it``
 - `drive: directory <yours> does not exist on the share — ask an admin to create it` — a share drive only; Wardyn never invents a directory inside somebody's NAS.
-- `drive: your <claim> cannot name a directory (lowercase letters and digits, then . _ -, up to 63 characters) — ask an admin to set your directory name`
+- ``drive: your <claim> cannot name a directory (lowercase letters and digits, then `. _ -`, up to 63 characters) — ask an admin to set your directory name`` (on a Kubernetes deployment the rule is stricter: no `_`, and it may not end in `-` or `.`)
 - `drive: this deployment cannot mount your drive (<why>)` — the drive is real; this deployment's runner cannot bind it.
-- `mounting a user drive is not allowed by your governance profile "<name>". Launch without drive.` — the one **403** of the set, and the only one that is audited. Before you launch, the console shows it where the checkbox would be, as `Your governance profile "<name>" does not allow mounting a drive.`
+- ``mounting a user drive is not allowed by your governance profile "<name>". Launch without `drive`.`` — the one **403** of the set, and the only one that is audited. Before you launch, the console shows it where the checkbox would be, as `Your governance profile "<name>" does not allow mounting a drive.`
 
 The first six are **422s** and none of them is audited: you were authorized and
 simply had nothing to mount. `/home/agent/drive` is also reserved — a policy

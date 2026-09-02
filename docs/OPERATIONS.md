@@ -485,16 +485,20 @@ migration `0050`)** are the second and third owned nouns after runs.
   was told to do about the directory this allocation was the last pointer to.
   What is left behind is one object per person: a Docker named volume, or a
   subdirectory of the share the operator mounted host-side, or a
-  PersistentVolumeClaim — each carrying the drive row's **id** and the person's
-  home name as labels, so a departed member's objects stay findable after the
-  row that named them is gone. Reclaiming it is a deliberate operator command,
-  one per substrate, and Wardyn holds no `delete` verb that could do it by
-  accident: the recipes are "User drives on Docker" and "User drives on
-  Kubernetes" in this document, and are not repeated here. `POST /drives/preview`
-  prints the exact object name for a principal, so nobody recomputes a hashed
-  directory name by hand. Deleting the **drive row** itself is a `409` while any
-  allocation still points at it (`ON DELETE RESTRICT`), so the deallocation is
-  always its own audited event and offboarding can never silently widen anything.
+  PersistentVolumeClaim. A **managed** object (`docker_volume`, `k8s_pvc`)
+  carries the drive row's **id** and the person's home name as labels, so a
+  departed member's objects stay findable after the row is gone; a share's
+  subdirectory and a static claim carry nothing — `POST /drives/preview` is how
+  you name those. Reclaiming it is a deliberate operator command, one per
+  substrate, and Wardyn holds no `delete` verb that could do it by accident: the
+  recipes are "User drives on Docker" and "User drives on Kubernetes" in this
+  document, and are not repeated here. `POST /drives/preview` prints the object
+  name for a principal — paste the sign-in subject FIRST: on a `hash`/`sub` drive
+  the name keys on the first claim, and the API's `home_subject` says which claim
+  it used (the console does not yet show it). Deleting the **drive row** itself
+  is a `409` while any allocation still points at it (`ON DELETE RESTRICT`), so
+  the deallocation is always its own audited event and offboarding can never
+  silently widen anything.
 - **Secret write/delete moved from admin-only to self-service.** Any signed-in
   human may `PUT`/`DELETE /secrets/{name}` their OWN row
   (`secretOwnerFromRequest`: `""` for an operator, their own principal for a
@@ -649,15 +653,18 @@ bytes.
 
 **`docker_volume` — Wardyn allocates.** A per-person named volume
 (`wardyn-drive-<home>`), created on first use with the `local` driver and
-mounted at the reserved target. Nothing to configure. It carries three labels:
-`wardyn.drive` = the **drive row's id** (the object name is per *person*, so the
-id is the only thing that groups a drive's volumes together), `wardyn.home` =
-that person's directory name, and `wardyn.subject` = a **digest** of the person
+mounted at the reserved target. Nothing to configure. It carries four labels:
+`wardyn.managed=true`; `wardyn.drive` = the **drive row's id** (the object name
+is per *person*, so the id is the only thing that groups a drive's volumes
+together); `wardyn.home` = that person's directory name; and
+`wardyn.subject` = a **digest** of the person
 themselves (never their claim — see the restore note below). Reclaim is a
 command, not a button:
 
 - one person: `docker volume rm wardyn-drive-<home>` — `POST /drives/preview`
-  prints the exact object name for a principal so you need not compute it;
+  prints the object name for a principal — paste the sign-in subject FIRST: on a
+  `hash`/`sub` drive the name keys on the first claim, and the API's
+  `home_subject` says which claim it used (the console does not yet show it);
 - one drive, everybody: `docker volume ls --filter label=wardyn.drive=<drive id>`
   lists every volume that drive allocated.
 
@@ -686,7 +693,7 @@ whose home names collided would otherwise hand one member the other's storage.
 A volume restored with **no** `wardyn.drive` label at all still mounts (that is
 the fall-back this path is for, and every volume created before the label
 carried an id has none) — it just no longer answers
-`docker volume ls --filter label=wardyn.home=<home>`.
+`docker volume ls --filter label=wardyn.drive=<drive id>`.
 
 Wardyn also stamps **`wardyn.subject`**, a digest of the person the volume was
 allocated to — never their sign-in claim, because `docker volume inspect` echoes
@@ -694,10 +701,10 @@ labels to anyone who can reach the daemon. It is the discriminator `wardyn.drive
 cannot be: a volume name carries only the *home*, so one drive whose home
 template folded two people onto one directory would produce one volume that
 *both* their allocations agree belongs to this drive. Wardyn refuses to mount a
-volume stamped for a different person. There is no way to compute the digest by
-hand for a restore, and none is needed: **leave `wardyn.subject` off** the
-`docker volume create` above and the volume mounts, exactly as a label-less
-`wardyn.drive` does.
+volume stamped for a different person. You need not compute the digest for a
+restore (it is a truncated sha256 of the sign-in subject): **leave
+`wardyn.subject` off** the `docker volume create` above and the volume mounts,
+exactly as a label-less `wardyn.drive` does.
 
 **`host_path` — you already mount the share.** Wardyn binds **one person's
 subdirectory** of a tree the *operator* mounted host-side. Wardyn never performs
@@ -734,8 +741,9 @@ the share mount, never holds a share credential, and never creates a volume with
    unique. On a share that is a tree you own and can inspect: use `sub`, or a
    per-person home override, where it can happen. On a **managed** drive there
    is nothing to inspect, so `email_local` is **refused outright** — a
-   `docker_volume` or `k8s_pvc` drive registered with it answers `400
-   home_template "email_local" is not allowed on a managed backend`. Wardyn
+   `docker_volume` or `k8s_pvc` drive registered with it answers a `400`
+   beginning `invalid drive: home_template "email_local" is not allowed on a
+   managed backend` and going on to name the two templates that do work. Wardyn
    names a managed object after the home and nothing else, so those two people
    would be allocated one volume, with write access to each other's files
    whenever the drive is writable; use `hash` (the default) or `sub`. A row
@@ -814,8 +822,11 @@ ownership by Docker's copy-up. Isolation between people is the **bind of the
 subdirectory**, never the uid: a run sees its own home and has no path to the
 root or to anyone else's. NFS `AUTH_SYS` trusts the client's uid, which is why
 the export above is Wardyn-dedicated and squashed rather than a corporate home
-tree. An existing corporate home directory owned by a per-user uid is supported
-**read-only where readable, and refused otherwise**.
+tree. Existing corporate home directories owned by per-user uids are supported
+read-only where uid 1000 can read them; where it cannot, Wardyn does **not**
+refuse — the directory only has to EXIST for wardynd's own uid
+(`driveShareIsBindable`), so the mount succeeds and the agent sees permission
+denied at first access.
 
 A **BYOI** image is your own to get right on this one point: a custom base that
 never creates `/home/agent/drive` gets a root-owned one from the daemon at mount
@@ -2569,8 +2580,10 @@ path, and Pod Security Standards forbids `hostPath` at Baseline and Restricted
 alike, so no drive backend offers one.
 
 **Two backends, two lifecycles.** A **managed** drive (`k8s_pvc`) is one claim
-per person, named `wardyn-drive-<drive>-<home>`, created by wardynd on the first
-run that mounts it — `accessModes: [ReadWriteOnce]`, the allocation as
+per person, named `wardyn-drive-<drive-slug>-<home>` (`<drive-slug>` = the
+drive's name lowercased, every run of characters outside `a-z0-9` folded to one
+`-`, at most 40 characters), created by wardynd on the first run that mounts
+it — `accessModes: [ReadWriteOnce]`, the allocation as
 `resources.requests.storage`, and the drive's own storage class when it has one
 (empty = the cluster default). A **share** (`k8s_pvc_static`) is a claim an admin
 provisioned — typically over an NFS/SMB export — and wardynd only ever looks it
@@ -2604,8 +2617,9 @@ member's report of a failed run joins to the full text without anybody having
 been handed the runs namespace or the runner's ServiceAccount name.
 
 **Renaming a drive orphans its claims, and Wardyn will not clean that up.** A
-claim's name folds the drive's NAME into a slug (`wardyn-drive-<drive>-<home>`),
-so renaming a drive in the console changes the name every FUTURE claim is
+claim's name folds the drive's NAME into a slug
+(`wardyn-drive-<drive-slug>-<home>`), so renaming a drive in the console changes
+the name every FUTURE claim is
 created under. The claims already provisioned keep their old names, keep the
 member data in them, and are never looked up again — the next run for each
 person provisions a fresh, empty claim under the new name. Nothing deletes the
@@ -2617,9 +2631,10 @@ rather than its name precisely so the orphans stay findable:
 kubectl -n <runsNamespace> get pvc -l wardyn.drive=<drive-id>
 ```
 
-Everything that comes back under a name that is not `wardyn-drive-<new-slug>-*`
-predates the rename. Move the data (`kubectl cp`, or a snapshot restore into the
-new claim) and reclaim the old claim with the `delete pvc` above. The cheap
+Everything that comes back under a name that is not
+`wardyn-drive-<new drive-slug>-*` predates the rename. Move the data (`kubectl
+cp`, or a snapshot restore into the new claim) and reclaim the old claim with
+the `delete pvc` above. The cheap
 alternative is not renaming a drive that has claims.
 
 **The console does not warn about this**, and in 0.7 it does not refuse it
@@ -2643,8 +2658,9 @@ middle of. So does a claim whose IDENTITY labels are not this run's — a manage
 claim whose `wardyn.drive` or `wardyn.home` names a different pair, or a share
 whose claim turns out to carry `wardyn.managed=true` (i.e. it is one person's
 managed drive, not an admin's share). That one is the collision the object name
-cannot rule out: `wardyn-drive-<slug>-<home>` joins two variable-width fields
-with the separator both of them admit, so drive `eng` + home `us-bob` and drive
+cannot rule out: `wardyn-drive-<drive-slug>-<home>` joins two variable-width
+fields with the separator both of them admit, so drive `eng` + home `us-bob` and
+drive
 `eng-us` + home `bob` resolve to the same claim name. Wardyn holds no `delete`
 verb and cannot repair the collision, so it refuses the run rather than mount
 one member's private drive inside another member's agent. The fix is to rename
@@ -2660,11 +2676,19 @@ loser looks — a reclaim landing mid-dispatch — the run is refused with *"you
 drive's volume claim was deleted while your run was starting"*, and starting it
 again is the whole remedy: nothing re-creates a claim somebody is reclaiming.
 
+**Restoring a managed claim by hand: it must carry the labels.** Unlike Docker, a
+label-less claim is FOREIGN here (`driveClaimIdentity`): a claim you create
+yourself under a member's name — from a snapshot, or to move data after a
+rename — needs `wardyn.managed=true`, `wardyn.drive=<drive-id>` and
+`wardyn.home=<home>` (leave `wardyn.subject` off), or every run on it fails as
+*"belongs to a different drive or a different person"*.
+
 **`ReadWriteOnce` binds a claim to one node.** A managed drive is provisioned
 RWO, so a person's second concurrent run schedules onto the node their first run
-landed on — or stays Pending until that run ends. The pod's failure reads
-`0/N nodes are available: pod has unbound immediate PersistentVolumeClaims` or a
-volume-node-affinity conflict, and wardynd surfaces the scheduler's own
+landed on — or stays Pending and fails at the dispatch wait timeout with the
+message below. The pod's failure reads `0/N nodes are available: pod has unbound
+immediate PersistentVolumeClaims` or a volume-node-affinity conflict, and wardynd
+surfaces the scheduler's own
 `PodScheduled` message in the run's failure hint rather than a bare timeout. The
 same message is what a claim that never bound at all produces — a storage class
 with no provisioner, or no default class on the cluster for a drive that names
@@ -2685,13 +2709,15 @@ deliberate operator command, and Wardyn holds no `delete` verb that could do it
 by accident:
 
 ```sh
-kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive>-<home>
+kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
 ```
 
 The drive's `when a person leaves` column records the intent (`retain` or
 `delete`) so the log says what the operator was told to do; the console's drive
-preview prints that exact object name for a person, so nobody recomputes a home
-segment by hand. The claim carries `wardyn.managed`, `wardyn.drive` (the drive's
+preview prints the object name for a principal — paste the sign-in subject
+FIRST: on a `hash`/`sub` drive the name keys on the first claim, and the API's
+`home_subject` says which claim it used (the console does not yet show it). The
+claim carries `wardyn.managed`, `wardyn.drive` (the drive's
 row **id**, not its name, so the claims a rename orphans stay findable with the
 `get pvc -l wardyn.drive=<drive-id>` above) and `wardyn.home` labels — the same
 pair the Docker driver stamps on a managed volume — and, deliberately, **no

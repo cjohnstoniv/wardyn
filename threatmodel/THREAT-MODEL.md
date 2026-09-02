@@ -423,8 +423,11 @@ in `LIMIT 1` (`PG.ResolveUserDrive`, `internal/store/user_drives.go`) over a
 grant table with `UNIQUE (subject_type, subject)`. **One principal resolves to
 exactly one object**: allocating to a subject that already has one REPLACES that
 row rather than adding a second, and where several tiers match a caller
-(`user` > `group` > `all`) the precedence picks one — so no path exists on which
-a run mounts two drives, two people's storage, or one person's twice. A truncated group snapshot does not fall through to a wider
+(`user` > `group` > `all`) the precedence picks one — so no path exists IN THE
+RESOLVER on which a run mounts two drives or one person's twice; a share's
+directory layout is not the resolver's (`email_local` folds two addresses onto
+one home — see "User drives on Docker" step 2 — and #33/#35 say what a host-side
+link can do). A truncated group snapshot does not fall through to a wider
 `all`-tier row — with group-tier allocations present the run is refused
 (`HasGroupTierDriveGrants`, `driveWithUnusableGroups`), the same fail-closed shape
 ceiling resolution already takes.
@@ -444,13 +447,18 @@ refused to every authored mount target, workspace source and clone destination
 (`ValidateAuthoredTarget`, `internal/runner/mount.go`), so no policy can land on
 — or shadow — somebody's storage.
 
-**The resolver decides; the driver validates its own inputs.** That split is the
-boundary. The API half derives the object (never the caller), and the runner half
-re-checks the object it was handed as the last thing before the sandbox is
+**The resolver decides; the driver validates its own inputs.** (Kubernetes pins
+`Target == runner.DriveTarget` in `validateDriveMount`; Docker's `driveMount`
+checks the allowed-prefix rule only — `driveMountFor` is the single writer of
+that field today.) That split is the boundary. The API half derives the object
+(never the caller), and the runner half re-checks the object it was handed as
+the last thing before the sandbox is
 created, because a share directory can be repointed between the write and the
 run. On Docker (`Driver.driveMount`) a drive runs the ordinary bind deny matrix
-(`ValidateMount`/`ValidateMountSource`) and, for a `host_path` drive, the
-deployment's ceiling on the symlink-RESOLVED real path
+(`ValidateTarget` on every backend; for `host_path`, `ValidateMountSource` inside
+`UserDriveMountSourceCheck` — `ValidateMount` itself is deliberately not run a
+second time) and, for a `host_path` drive, the deployment's ceiling on the
+symlink-RESOLVED real path
 (`UserDriveMountSourceCheck`) — plus two refusals a drive alone needs: a source
 that resolves to the configured ROOT rather than a subdirectory (that would bind
 everyone's home into one sandbox), and a source whose resolved directory NAME is
@@ -495,7 +503,8 @@ wardynd can do on its own (`ensureDrivePVC`, `internal/runner/k8s/drives.go`).
 The claim carries the drive row's id and the person's home as labels and,
 deliberately, no `wardyn.run-id`, so the per-run teardown sweep cannot reach it;
 a claim whose identity labels are not this run's, or one already Terminating, is
-a refused run rather than a mount (`driveClaimIdentity`).
+a refused run rather than a mount (`driveClaimIdentity`); a label-less claim is
+foreign — the opposite of Docker's restore gesture.
 
 **What is on the log.** `drive.write`, `drive.delete`, `drive.grant.write` and
 `drive.grant.delete` cover every authoring act; `run.drive.mount` records the
@@ -520,7 +529,12 @@ is reclaimed by an operator command. Separately, **one person's concurrent runs
 share one drive**: two agents writing the same directory can corrupt each
 other's lock files, v1 mounts it anyway, and no warning fires — the existing
 collision warning keys on the run's workspace path, which a drive deliberately
-does not set, so a drive-aware warning waits on run-row persistence.
+does not set, so a drive-aware warning waits on run-row persistence. And the
+admin preview and the member preflight are honest about the ALLOCATION only: the
+preview skips the door, the stale-snapshot arm and `driveMountFor`, and neither
+touches the substrate — a claim the cluster cannot bind (the stock chart's
+missing PVC rule, a class with no provisioner) is discovered at dispatch, after
+the row is written.
 
 ---
 
@@ -1066,7 +1080,10 @@ hiding them would repeat the failure mode we are designed to avoid.
     squashed to that uid with `0700` per-person directories, not a corporate
     home tree; an SMB service account's reach is likewise the blast radius of a
     host compromise. Existing corporate homes owned by per-user uids are
-    supported read-only where readable and refused otherwise. Kerberos,
+    supported read-only where uid 1000 can read them; where it cannot, Wardyn
+    does NOT refuse — the directory only has to EXIST for wardynd's own uid
+    (`driveShareIsBindable`), so the mount succeeds and the agent sees permission
+    denied at first access. Kerberos,
     `multiuser` SMB and per-user uids are deferred with their migration cost
     named (a uid-agnostic rebuild of all five agent images, `userns-remap`
     interactions, and the credential-staging binds re-owned per run).
@@ -1101,10 +1118,17 @@ hiding them would repeat the failure mode we are designed to avoid.
     as this process can look, immediately before `ContainerCreate`, but validate
     and create remain two operations and a host-root attacker can race the
     window. The blast radius is bounded the same two ways: the roots are
-    operator/MDM-set so the race can only be aimed WITHIN the declared roots,
-    and the deny-list matches the post-`EvalSymlinks` real path so a won race
-    landing on a credential directory is still refused. The race is not
-    deterministically testable and no test claims to cover it.
+    operator/MDM-set so the race can only be aimed WITHIN the declared roots —
+    and "within the roots" means the deployment's root LIST, not this drive's
+    `host_root`: `UserDriveMountSourceCheck` accepts a resolved path under ANY
+    configured root and `Driver.driveMount` asserts only the directory's NAME, so
+    with two roots a home in one drive replaced host-side by a link into another
+    drive's root passes when the names agree and binds the other drive's tree.
+    Per-drive containment (the resolved path under THIS drive's resolved
+    `host_root`) is the 0.7.1 fix; until then, one `host_path` drive per
+    configured root. And the deny-list matches the post-`EvalSymlinks` real path
+    so a won race landing on a credential directory is still refused. The race is
+    not deterministically testable and no test claims to cover it.
 
 36. **A drive's SIZE is an allocation Wardyn never enforces, on any substrate.**
     Published in the product's own frozen words, rendered verbatim by the
@@ -1143,7 +1167,12 @@ hiding them would repeat the failure mode we are designed to avoid.
     until then a drive rename is an operator action with a runbook rather than a
     label edit. Docker is unaffected: a managed volume's name is
     `wardyn-drive-<home>` and folds no drive name, so a rename orphans nothing
-    there.
+    there. Rename is the visible case of a wider gap: `PUT /drives/{id}` accepts
+    EVERY field change on an allocated drive without a warning — a
+    `home_template` change hands each member a fresh, empty object at their next
+    run (the old ones findable by `wardyn.drive` on managed backends only), and a
+    `host_root` change binds a different tree under the same names. The
+    409-unless-confirmed above covers these too.
 
 ### 5.1a LLM egress content inspection — the honest-claims contract
 
