@@ -39,8 +39,6 @@ func newSidecarDetector(url string, client *http.Client) *sidecarDetector {
 	return &sidecarDetector{url: url, client: client}
 }
 
-func (d *sidecarDetector) Name() string { return "sidecar" }
-
 type sidecarRequest struct {
 	Text      string `json:"text"`
 	FieldPath string `json:"field_path"`
