@@ -205,7 +205,8 @@ func (s *Server) driveMountFor(w http.ResponseWriter, req createRunRequest,
 //
 // It runs for host_path ONLY. Every other backend is either an object Wardyn
 // creates on first use (docker_volume, k8s_pvc) or a claim the k8s driver reads
-// and refuses by name (k8s_pvc_static, REFUSED_CLAIM_MISSING — D4's).
+// and refuses by name (k8s_pvc_static — the driver's own bind failure, which is
+// why no console string is frozen for it).
 //
 // ─── (1) THE ENV CEILING, RE-CHECKED ───────────────────────────────────────
 //

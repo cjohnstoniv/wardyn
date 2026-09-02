@@ -48,7 +48,7 @@ import {
   AlertDialogTitle,
 } from "../ui/alert-dialog";
 import { cn } from "../ui/utils";
-import { Field } from "../wardyn/form-primitives";
+import { Field, Switch } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
 import { PageHeader } from "../wardyn/page-header";
 import { Chip } from "../wardyn/primitives";
@@ -61,13 +61,20 @@ const ADMIN_TOKEN_PRINCIPAL = "admin-token";
 
 // The subject-type segments, in the order the add form offers them, paired with
 // the hint each one puts under the Who field.
-const SUBJECTS: { value: CapabilitySubjectType; label: string; hint: string }[] = [
+//
+// Exported, with SUBJECT_LABEL and subjectText below, for the SAME reason
+// Segmented is: the governance assignments block and the drive allocations
+// block author a subject with this exact vocabulary, and three copies of it is
+// how a capability grant, a profile assignment and an allocation start
+// disagreeing about what "Everyone signed in" means. ONE home, beside the
+// control that renders it.
+export const SUBJECTS: { value: CapabilitySubjectType; label: string; hint: string }[] = [
   { value: "user", label: PERM.SUBJECT_USER, hint: PERM.HINT_USER },
   { value: "group", label: PERM.SUBJECT_GROUP, hint: PERM.HINT_GROUP },
   { value: "all", label: PERM.SUBJECT_ALL, hint: PERM.HINT_ALL },
 ];
 
-const SUBJECT_LABEL: Record<CapabilitySubjectType, string> = {
+export const SUBJECT_LABEL: Record<CapabilitySubjectType, string> = {
   user: PERM.SUBJECT_USER,
   group: PERM.SUBJECT_GROUP,
   all: PERM.SUBJECT_ALL,
@@ -80,8 +87,10 @@ function kindLabel(capability: string): string {
   return KIND[capability as CapabilityKind]?.label ?? capability;
 }
 
-// Who a row names, for the remove confirmation.
-function subjectText(g: CapabilityGrant): string {
+// Who a row names, for the remove/unassign confirmations. Structural on
+// purpose: a capability grant, a governance assignment and a drive allocation
+// are three different rows that all carry this one pair.
+export function subjectText(g: { subject_type: CapabilitySubjectType; subject: string }): string {
   return g.subject_type === "all" ? PERM.SUBJECT_ALL : g.subject;
 }
 
@@ -407,50 +416,10 @@ function KindRow({
       <Switch
         checked={enforced}
         disabled={disabled}
-        onCheckedChange={onToggle}
-        aria-label={`${PERM.ENFORCEMENT_TITLE} ${copy.label}`}
+        onChange={onToggle}
+        label={`${PERM.ENFORCEMENT_TITLE} ${copy.label}`}
       />
     </div>
-  );
-}
-
-// ponytail: a local switch, not a restored ui/switch.tsx. cb351ba9 dropped that
-// primitive AND its @radix-ui/react-switch dependency as never-imported — true
-// when it landed, and this lane is now its ONE consumer. A native button with
-// role="switch" is the same accessible contract the tests assert, in ten lines
-// and no dependency, following the same aria-checked pattern Seg/RadioCard use.
-function Switch({
-  checked,
-  disabled,
-  onCheckedChange,
-  "aria-label": ariaLabel,
-}: {
-  checked: boolean;
-  disabled?: boolean;
-  onCheckedChange: (next: boolean) => void;
-  "aria-label": string;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={ariaLabel}
-      disabled={disabled}
-      onClick={() => onCheckedChange(!checked)}
-      className={cn(
-        "inline-flex h-[1.15rem] w-8 shrink-0 items-center rounded-full border border-transparent p-[1px] transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
-        checked ? "bg-primary" : "bg-muted",
-      )}
-    >
-      <span
-        aria-hidden="true"
-        className={cn(
-          "pointer-events-none block size-4 rounded-full bg-card shadow-sm transition-transform",
-          checked ? "translate-x-[calc(100%-2px)]" : "translate-x-0",
-        )}
-      />
-    </button>
   );
 }
 

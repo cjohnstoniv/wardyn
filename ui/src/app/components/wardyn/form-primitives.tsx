@@ -89,3 +89,56 @@ export function OptionCard({
     </button>
   );
 }
+
+// A two-state switch. Hoisted here from governance/profile-editor.tsx's
+// LimitRow the day a third screen wanted one — which is what that file's own
+// note said to do — so the governance limits, the drive editor's Writable, the
+// allocation form's Enabled and /permissions' per-kind enforcement are all the
+// SAME control, not four copies of twenty lines.
+//
+// It replaces no @radix-ui/react-switch: cb351ba9 dropped ui/switch.tsx AND
+// that dependency as never-imported, and a native button with role="switch" is
+// the same accessible contract the suites assert, in ten lines and no
+// dependency, following the aria-checked pattern Segmented and OptionCard use.
+//
+// role="switch" is load-bearing beyond semantics: it is what keeps a checked
+// switch (which paints bg-primary) out of the "exactly one teal BUTTON per
+// screen" counts that both the unit and e2e suites run.
+export function Switch({
+  checked,
+  onChange,
+  disabled,
+  /** The switch's accessible name — the field's own label, never new copy. */
+  label,
+  className,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  disabled?: boolean;
+  label: string;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "inline-flex h-[1.15rem] w-8 shrink-0 items-center rounded-full border border-transparent p-[1px] transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+        checked ? "bg-primary" : "bg-muted",
+        className,
+      )}
+    >
+      <span
+        aria-hidden="true"
+        className={cn(
+          "pointer-events-none block size-4 rounded-full bg-card shadow-sm transition-transform",
+          checked ? "translate-x-[calc(100%-2px)]" : "translate-x-0",
+        )}
+      />
+    </button>
+  );
+}

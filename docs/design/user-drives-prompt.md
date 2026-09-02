@@ -230,10 +230,11 @@ unchanged.
   `NR_HINT` (name, size, mode) and one mode sentence (`NR_RW_NOTE` / `NR_RO_NOTE`); when the
   allocation is writable, `NR_READONLY_TOGGLE` beside it. The drive is **orthogonal to the
   workspace**: it renders whatever the Select says, including "Ephemeral scratch", and it is
-  never a fourth `OptionCard` in the Add-workspace dialog. Three client-knowable reasons ride
-  the selection as one line, the Workspace card's own rule: no allocation (`NR_NONE`), paused
-  (`NR_PAUSED`), and the door (`NR_DENIED`). With `/me.user_drive` null **and** no door, there
-  is no checkbox and no line — today's card byte-for-byte, the absent-row doctrine.
+  never a fourth `OptionCard` in the Add-workspace dialog. Two client-knowable reasons ride
+  the selection as one line, the Workspace card's own rule: paused (`NR_PAUSED`) and the door
+  (`NR_DENIED`). With `/me.user_drive` null **and** no door, there is no checkbox and no line —
+  today's card byte-for-byte, the absent-row doctrine — so **no-allocation is not a reason line
+  at all**: it is the absent row, and a sentence for it would have no state left to render in.
 - **The door needs one bit on the wire.** `GET /policies/default` carries the profile's
   *name* only, and `DESIGN.md` §5.1's `/me.user_drive` shape carries no door — so `NR_DENIED`
   is drawable client-side only if `/me.user_drive` also carries `denied_by_profile` (the
@@ -245,7 +246,7 @@ unchanged.
   a paused allocation shows `GS_DRIVE_CHIP_PAUSED`. One sentence in the **"Add your workspace"**
   card (`GS_DRIVE_BODY`) says a drive is not a workspace — placed there because that card is where
   the two get conflated (`DESIGN.md` §5.4).
-- **Refusals** — the nine server messages in §7.7, rendered verbatim on the launch path.
+- **Refusals** — the eight server messages in §7.7, rendered verbatim on the launch path.
   Backend-unavailable is **post-attempt only**: nothing client-side can know whether the cluster
   will let the runner create a claim.
 
@@ -726,7 +727,6 @@ SUPER only.
 | `NR_RW_NOTE` | What a run writes there persists to your next run. |
 | `NR_RO_NOTE` | A run can read it and never change it. |
 | `NR_READONLY_TOGGLE` | Mount read-only for this run |
-| `NR_NONE` | No drive is allocated to you. |
 | `NR_PAUSED` | Your drive is paused by your admin. |
 | `NR_DENIED(profile)` | Your governance profile "{profile}" does not allow mounting a drive. |
 | `GS_DRIVE_CHIP(name, size, mode)` | Drive · {name}, {size}, {mode} |
@@ -742,8 +742,11 @@ run, so the sentence never promises persistence a read-only mount cannot give. `
 `NR_READONLY_TOGGLE` is on. `size_mib = 0`
 selects the `_NOSIZE` twin rather than rendering `SIZE_NONE` inside a member's sentence.
 `NR_READONLY_TOGGLE` renders only when the allocation is writable and defaults **off** (Q5).
-The three reason lines render **in place of** the checkbox: an unmountable drive is not a
-disabled checkbox with a tooltip, it is one sentence where the checkbox would be. `GS_DRIVE_CHIP`
+The two reason lines render **in place of** the checkbox: an unmountable drive is not a
+disabled checkbox with a tooltip, it is one sentence where the checkbox would be. There is no
+third: no-allocation-and-no-door is the absent row (§2.5), and the launch-path answer to that
+same condition is a SERVER string (`REFUSED_NO_GRANT`, §7.7) — a reply to an attempt, not a
+caption on an offer nobody was made. `GS_DRIVE_CHIP`
 follows `BARRIER_CHIP`'s `Label · value` shape (Q2) and sits beside `MEMBER.GS_CHIP`, the
 governance chip, in the same row. `GS_DRIVE_BODY` renders in the "Add your workspace" card,
 after `WORKSPACE_BODY`, only when `/me.user_drive` is non-null.
@@ -757,20 +760,27 @@ after `WORKSPACE_BODY`, only when `/me.user_drive` is non-null.
 | `REFUSED_PAUSED` | drive: your allocation is paused by an admin |
 | `REFUSED_HOME_INVALID(claim)` | drive: your {claim} cannot name a directory (lowercase letters and digits, then `. _ -`, up to 63 characters) — ask an admin to set your directory name |
 | `REFUSED_HOME_MISSING(name)` | drive: directory `{name}` does not exist on the share — ask an admin to create it |
-| `REFUSED_CLAIM_MISSING(name)` | drive: volume claim `{name}` is not provisioned on this cluster — ask an admin to create it |
 | `REFUSED_WRITABLE` | drive: your allocation is read-only; `read_only:false` cannot widen it |
 | `REFUSED_BACKEND(reason)` | drive: this deployment cannot mount your drive ({reason}) |
-| `REFUSED_TARGET_RESERVED` | workspace_mounts: target `/home/agent/drive` is reserved for the user drive |
+| `REFUSED_TARGET_RESERVED` | workspace_mounts[0]: target `/home/agent/drive` is reserved for the user drive |
 
 **This table is COMPLETE** (§5 #4): every string a member can be refused with at a door this
 feature adds is here. `DENIED_DRIVE` is the one **403** (audited `authz.denied`,
 reason `governance_profile`, target `runs.drive` — `denyMemberDrive` beside
-`denyMemberRunQuota`); the seven `REFUSED_*` are **422s with no audit** (`seedRequestDrive`, run
-create and preflight both). `REFUSED_TARGET_RESERVED` is the **400** `validatePolicySpec`'s
+`denyMemberRunQuota`); the six `REFUSED_*` are **422s with no audit** (`seedRequestDrive`, run
+create and preflight both). **Nothing here names an unprovisioned `k8s_pvc_static` claim**: no
+door this feature adds can see that condition — the row is valid and the allocation resolves;
+the claim's absence is discovered by the k8s driver at *dispatch* — so a frozen sentence for it
+would be a string no code path can emit. `REFUSED_TARGET_RESERVED` is the **400** `validatePolicySpec`'s
 unique-target arm raises when a policy or workspace source names the reserved target — it is
 met by whoever writes the policy, member or admin, and it belongs here because it is a door
-this feature adds. `{reason}` in `REFUSED_BACKEND` is the runner's own prose (on Kubernetes,
-the apiserver's refusal naming `k8s.userDrives.enabled`); `{claim}` in `REFUSED_HOME_INVALID` is
+this feature adds. Its `[0]` is the **mount's position**, not a literal: every mount error is
+prefixed `workspace_mounts[i]` (`workspace_repos[i]` for a repo), and the frozen string spells
+the first mount's, so the canon equals the server's bytes. `{reason}` in `REFUSED_BACKEND` is **`driveMountFor`'s own prose**
+(`internal/api/user_drives_run.go`): the backend/runner mismatch — *it is a "{backend}" drive and
+this deployment dispatches to "{target}"* — or, for a share, `driveShareIsBindable`'s host-root
+error. It is **not** an apiserver refusal; the console never asks the cluster and nothing on this
+path relays one. `{claim}` in `REFUSED_HOME_INVALID` is
 the template's claim name (`sub`, `email_local`). `MEMBER.DENIED_STALE_GROUPS` (§7.1)
 is reused verbatim for the truncated-snapshot case and is not re-frozen.
 
@@ -799,7 +809,7 @@ admin who hovers, and nothing else on the run page names it.
   mode sentence, toggle and reason line (§7.6); `wizard-spec.ts` emits `run.drive`.
 - **Member Getting Started** — the chip and the sentence (§7.6); `lib/api/health.ts`'s `/me`
   type gains `user_drive`.
-- **Run create + preflight** — the nine server strings (§7.7) beside the gates that raise them;
+- **Run create + preflight** — the eight server strings (§7.7) beside the gates that raise them;
   `/me.user_drive.denied_by_profile` (Q6).
 - **Run rail** — `RAIL_*` (§7.8), with run-row persistence in 0.7.1.
 - **`docs/OPERATIONS.md` known gaps, `docs/MEMBERS.md` "Your drive"** — `HONESTY` verbatim; the

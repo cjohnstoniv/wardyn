@@ -60,6 +60,12 @@ vi.mock("../../../lib/api/workspaces", () => ({
 vi.mock("../../../lib/api/policies", () => ({
   policies: { listPolicies: () => Promise.resolve([]), createPolicy: vi.fn() },
 }));
+// The Workspaces step's user-drives card summarises GET /drives (SUPER-only,
+// and this suite runs on the operator-context's fail-open default).
+const getDrivesMock = vi.fn();
+vi.mock("../../../lib/api/drives", () => ({
+  drives: { getDrives: (...a: unknown[]) => getDrivesMock(...a) },
+}));
 vi.mock("../../../lib/api/runs", () => ({
   // The demo step's useDemoRuns calls getRun (reload re-attach) + killRun (end) in
   // addition to createRun; stub all three so the lazily-loaded step mounts cleanly.
@@ -81,6 +87,7 @@ import { SetupScreen, setupDismissed, dismissSetup } from "./setup-screen";
 import { DEMOS } from "../demos/demo-catalog";
 import { getDefaultCc } from "../../wardyn/default-confinement";
 import { baseStatus as sharedBaseStatus } from "../../../lib/test-fixtures";
+import { DRIVES } from "../../../lib/user-drives-copy";
 
 // The Integrations step embeds IntegrationsScreen, and its own "Manage in
 // Integrations" link both call useNavigate() — every render needs a Router
@@ -137,6 +144,9 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // independent one both GET on mount (unconfigured zero value by default).
     getSiteConfigMock.mockReset().mockResolvedValue({});
     putSiteConfigMock.mockReset().mockResolvedValue(undefined);
+    getDrivesMock
+      .mockReset()
+      .mockResolvedValue({ drives: [], grants: [], host_roots_configured: false, runner_target: "docker" });
     // no_runner (this suite mocks no real sandbox runner) is the honest,
     // non-blocking default — see clearCorpNetworkGate for why that's the
     // right fixture for walkthroughs that aren't testing the gate itself.
@@ -271,6 +281,11 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // your work: the one workspace step (AddWorkspaceDialog + a simple list).
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByText(/never a raw host path/i)).toBeInTheDocument(); // workspaces
+    // …and the user-drives card under that list — persistent storage is not a
+    // workspace and gets no step of its own, so this card is the ONLY place the
+    // funnel mentions it. Same component as Settings' fifth card.
+    expect(await screen.findByTestId("user-drives-card")).toBeInTheDocument();
+    expect(screen.getByText(DRIVES.CARD_EMPTY)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     // review step — the consolidated readiness rollup + the checks that used to

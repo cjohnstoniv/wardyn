@@ -681,6 +681,20 @@ func TestDriveTargetIsReservedFromAuthoring(t *testing.T) {
 			}
 		})
 	}
+	// The refusal is FROZEN COPY, so pin the bytes and not just the word:
+	// DRIVE_MEMBER.REFUSED_TARGET_RESERVED (ui/src/app/lib/user-drives-copy.ts,
+	// docs/design/user-drives-prompt.md §7.7) is what the console renders, and a
+	// Contains("reserved") check above would pass on any rewording of it. The
+	// [0] is the MOUNT'S POSITION — validatePolicySpec prefixes every mount
+	// error with its index — so the canon spells the first mount's.
+	const canonReservedTarget = "workspace_mounts[0]: target /home/agent/drive is reserved for the user drive"
+	if err := validatePolicySpec(types.RunPolicySpec{
+		MinConfinementClass: types.CC1,
+		WorkspaceMounts:     []types.WorkspaceMount{{Source: "/srv/data", Target: runner.DriveTarget}},
+	}); err == nil || err.Error() != canonReservedTarget {
+		t.Errorf("err = %v, want the frozen canon %q", err, canonReservedTarget)
+	}
+
 	// The positive control: a NEIGHBOURING path under the same allowed prefix
 	// is untouched, so the refusal is the reserved subtree and not /home/agent.
 	if msg := validateWorkspaceSource(types.WorkspaceSource{

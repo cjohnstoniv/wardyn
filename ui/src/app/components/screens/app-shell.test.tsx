@@ -10,8 +10,9 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { AppShell, MobileNav, TopBar, useFocusMode } from "./app-shell";
-import { useRoleResolved, type Role } from "../wardyn/operator-context";
+import { useRoleResolved, useUserDrive, type Role } from "../wardyn/operator-context";
 import { ThemeProvider } from "../wardyn/theme-provider";
+import { baseMeDrive } from "../../lib/test-fixtures";
 import type { ConfinementClass } from "../../lib/types";
 
 // below md the desktop aside is hidden, so this Sheet-based hamburger is
@@ -37,6 +38,8 @@ function renderMobileNav(role: Role = "admin") {
           role,
           sessionExpiresAt: null,
           memberLocalDirRoot: null,
+          userDrive: null,
+          userDriveDeniedByProfile: "",
         }}
       />
     </MemoryRouter>,
@@ -480,6 +483,8 @@ function renderTopBar(role: Role) {
             role,
             sessionExpiresAt: null,
             memberLocalDirRoot: null,
+            userDrive: null,
+            userDriveDeniedByProfile: "",
           }}
           pendingApprovals={0}
           attentionCount={0}
@@ -549,5 +554,101 @@ describe("AppShell (roleResolved after a failed /me)", () => {
     // constant true (which would defeat the member/admin race the gate closes).
     expect(screen.getByTestId("probe")).toHaveTextContent("pending");
     await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("resolved"));
+  });
+});
+
+// 0.7 — the shell's ONE GET /me is what fills UserDriveContext: New Run and the
+// member Getting Started page read the caller's drive off the context and issue
+// no fetch of their own. That seam had only e2e coverage, and a component test
+// cannot see it: workspace-card.test.tsx renders the block perfectly from props
+// the shell might never actually hand it. Pinned here, at the one place the
+// wire body becomes the context value.
+describe("AppShell — /me's drive bits reach UserDriveContext", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function DriveProbe() {
+    const { drive, deniedByProfile } = useUserDrive();
+    return <span data-testid="drive-probe">{JSON.stringify({ drive, deniedByProfile })}</span>;
+  }
+
+  function renderShellWithMe(me: Record<string, unknown>) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: RequestInfo | URL) => {
+        const u = String(url);
+        if (u.endsWith("/healthz")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ trust_domain: "wardyn.local", identity_provider: "embedded" }),
+          });
+        }
+        if (u.endsWith("/api/v1/me")) return Promise.resolve({ ok: true, json: async () => me });
+        return Promise.resolve({ ok: true, json: async () => ({}) });
+      }) as unknown as typeof fetch,
+    );
+    return render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <Routes>
+            <Route
+              element={<AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />}
+            >
+              <Route index element={<DriveProbe />} />
+            </Route>
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("hands the allocation down verbatim once /me resolves", async () => {
+    const drive = baseMeDrive();
+    renderShellWithMe({
+      principal: "alice@corp.example",
+      method: "sso",
+      operator: false,
+      role: "member",
+      user_drive: drive,
+      user_drive_denied_by_profile: "",
+    });
+
+    // Negative control: the fail-CLOSED seed is what paints first, so a green
+    // assertion below cannot be a constant.
+    expect(screen.getByTestId("drive-probe")).toHaveTextContent(
+      JSON.stringify({ drive: null, deniedByProfile: "" }),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("drive-probe")).toHaveTextContent(
+        JSON.stringify({ drive, deniedByProfile: "" }),
+      ),
+    );
+  });
+
+  it("carries the door as a SIBLING of the allocation, not a property of it", async () => {
+    renderShellWithMe({
+      principal: "alice@corp.example",
+      method: "sso",
+      operator: false,
+      role: "member",
+      user_drive: null,
+      user_drive_denied_by_profile: "Greenfield contractors",
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("drive-probe")).toHaveTextContent(
+        JSON.stringify({ drive: null, deniedByProfile: "Greenfield contractors" }),
+      ),
+    );
+  });
+
+  it("stays at no-allocation-and-no-door for a pre-0.7 daemon that sends neither field", async () => {
+    renderShellWithMe({ principal: "alice@corp.example", method: "sso", operator: false, role: "member" });
+
+    // Let /me land before reading the probe, so this is the RESOLVED value and
+    // not the seed it happens to equal.
+    await screen.findByText("No barrier");
+    expect(screen.getByTestId("drive-probe")).toHaveTextContent(
+      JSON.stringify({ drive: null, deniedByProfile: "" }),
+    );
   });
 });

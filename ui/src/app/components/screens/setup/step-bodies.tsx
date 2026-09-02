@@ -33,6 +33,7 @@ import { toast } from "sonner";
 import type { SetupStepId, StepBadge } from "./steps";
 import { statusTone, statusWord } from "../../../lib/workspace-status";
 import { AccessPanel, type AccessLoadState } from "./access-panel";
+import { UserDrivesCard } from "./user-drives-card";
 import type { AccessResponse } from "../../../lib/types";
 
 // ------------------------------------------------------------
@@ -276,6 +277,11 @@ export function WorkspacesStep({
           </Button>
         </>
       )}
+
+      {/* Persistent storage is not a workspace and gets no step of its own
+          (nothing later in the funnel fails without one) — it gets this card,
+          under the list, SUPER-only. Same component as Settings' fifth card. */}
+      <UserDrivesCard />
 
       {addOpen && (
         <AddWorkspaceDialog
