@@ -96,12 +96,11 @@ func TestDriveHomeName(t *testing.T) {
 		// email_local on something that is not an email is the "never a guess"
 		// rule: taking the whole string would name a directory nobody granted.
 		{name: "email_local refuses a non-email claim", tmpl: HomeTemplateEmailLocal, subject: "sub-abc", wantErr: true},
-		// The literal consequence of the segment rule: an address carries an @,
-		// which is not a legal segment character, so this template only fits a
-		// claim that is already segment-shaped. The remedy is email_local or a
-		// per-user home override, and a refusal says so.
-		{name: "email refuses an address with an @", tmpl: HomeTemplateEmail, subject: "alice@corp.example", wantErr: true},
-		{name: "email accepts an already-segment-shaped claim", tmpl: HomeTemplateEmail, subject: "alice", want: "alice"},
+		// There is no whole-email template to test: an address carries an @,
+		// which is not a legal segment character, so such a template could only
+		// resolve for a claim that was not an address. email_local above is the
+		// corporate-home case it looked like it served.
+		{name: "an unknown template is refused, never guessed", tmpl: HomeTemplate("email"), subject: "alice", wantErr: true},
 		// A LEADING DOT is the dotfile class the member-mount rules refuse by
 		// segment; ".." is the traversal, excluded by the same clause.
 		{name: "a leading dot is refused", tmpl: HomeTemplateSub, subject: ".ssh", wantErr: true},
@@ -270,8 +269,29 @@ func TestValidateUserDrive(t *testing.T) {
 			}),
 			target: "k8s", wantErr: true},
 		{name: "a provisioning pvc may carry one",
-			drive:  ok(func(d *UserDrive) { d.Backend, d.StorageClass = DriveBackendK8sPVC, "fast" }),
+			drive: ok(func(d *UserDrive) {
+				d.Backend, d.StorageClass, d.SizeMiB = DriveBackendK8sPVC, "fast", 10240
+			}),
 			target: "k8s"},
+		// THE ONE BACKEND WHERE SIZE IS NOT A DISPLAY VALUE. A k8s_pvc drive's
+		// size becomes resources.requests.storage, and a claim requesting zero
+		// bytes is rejected by the apiserver — so the value every other backend
+		// reads as "no allocation shown" is, here, a row whose every member's run
+		// fails at bind time on the cluster.
+		{name: "a provisioning pvc with no size is refused",
+			drive:  ok(func(d *UserDrive) { d.Backend = DriveBackendK8sPVC }),
+			target: "k8s", wantErr: true},
+		// …and the refusal is scoped to that ONE backend: 0 stays legal
+		// everywhere else, where it honestly means "no allocation shown".
+		{name: "zero is fine on a docker volume", drive: ok(func(*UserDrive) {}), target: "docker"},
+		{name: "zero is fine on a static pvc",
+			drive:  ok(func(d *UserDrive) { d.Backend, d.HomeTemplate = DriveBackendK8sPVCStatic, HomeTemplateSub }),
+			target: "k8s"},
+		{name: "zero is fine on a share",
+			drive: ok(func(d *UserDrive) {
+				d.Backend, d.HomeTemplate, d.HostRoot = DriveBackendHostPath, HomeTemplateSub, "/srv/homes"
+			}),
+			target: "docker"},
 		{name: "a share cannot be hashed",
 			drive: ok(func(d *UserDrive) {
 				d.Backend, d.HomeTemplate, d.HostRoot = DriveBackendHostPath, HomeTemplateHash, "/srv/homes"

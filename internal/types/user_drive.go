@@ -131,26 +131,27 @@ const (
 	HomeTemplateHash HomeTemplate = "hash"
 	// HomeTemplateSub uses the sign-in subject claim verbatim.
 	HomeTemplateSub HomeTemplate = "sub"
-	// HomeTemplateEmail uses the email claim verbatim. NOTE the consequence of
-	// the segment rule below: an address containing "@" cannot be a home name,
-	// so this template is only usable where the claim is already segment-shaped
-	// — otherwise the resolution is a refusal, never a guess, and the remedy is
-	// email_local or a per-user home override.
-	HomeTemplateEmail HomeTemplate = "email"
 	// HomeTemplateEmailLocal uses the part of the email claim before the "@" —
 	// the usual shape of a corporate home directory (alice@corp -> alice).
+	//
+	// THERE IS DELIBERATELY NO WHOLE-EMAIL TEMPLATE. An address carries an "@",
+	// which driveHomeSegmentRe excludes and a DNS-1123 label could not hold
+	// either, so such a template could only ever RESOLVE for a claim that was
+	// not an address — a value that validates and then refuses every real
+	// caller is a dead enum member, not an option. The corporate case it looked
+	// like it served (a home directory named by the person's username) is
+	// exactly this template; a home named anything else is a per-user
+	// home_override on that person's grant.
 	HomeTemplateEmailLocal HomeTemplate = "email_local"
 )
 
 // HomeTemplates is the closed set in admin-surface order.
-var HomeTemplates = []HomeTemplate{
-	HomeTemplateHash, HomeTemplateSub, HomeTemplateEmail, HomeTemplateEmailLocal,
-}
+var HomeTemplates = []HomeTemplate{HomeTemplateHash, HomeTemplateSub, HomeTemplateEmailLocal}
 
-// Valid reports whether t is one of the four templates.
+// Valid reports whether t is one of the three templates.
 func (t HomeTemplate) Valid() bool {
 	switch t {
-	case HomeTemplateHash, HomeTemplateSub, HomeTemplateEmail, HomeTemplateEmailLocal:
+	case HomeTemplateHash, HomeTemplateSub, HomeTemplateEmailLocal:
 		return true
 	default:
 		return false
@@ -258,7 +259,9 @@ type UserDrive struct {
 	StorageClass string       `json:"storage_class,omitempty"`
 	HomeTemplate HomeTemplate `json:"home_template"`
 	// SizeMiB is the ALLOCATION, not a guarantee — see StorageEnforcement. 0
-	// means "no allocation shown"; for k8s_pvc it is the PVC request.
+	// means "no allocation shown" on every backend but k8s_pvc, where the value
+	// IS the PVC's resources.requests.storage and 0 is therefore refused at the
+	// write boundary rather than stored as a claim no cluster would bind.
 	SizeMiB   int          `json:"size_mib,omitempty"`
 	Writable  bool         `json:"writable,omitempty"`
 	Reclaim   DriveReclaim `json:"reclaim"`
@@ -345,6 +348,45 @@ type ResolvedDrive struct {
 	Enforcement StorageEnforcement `json:"enforcement"`
 }
 
+// DriveMount is the RESOLVED answer the runner acts on: one principal's drive,
+// folded with their grant's overrides and narrowed by their run request, in the
+// shape a substrate can execute without re-reading a row or re-deriving a name.
+//
+// It is a SEPARATE type from ResolvedDrive on purpose. ResolvedDrive is the
+// admin-facing answer ("who gets what, and why") and carries the whole drive
+// and grant rows; this is the run-facing one and carries only what a mount
+// needs. Handing the runner the grant row would put an admin's authoring
+// fields — priority, subject, the override tri-state — inside the sandbox
+// wiring, where nothing may branch on them and a later field could.
+//
+// ReadOnly rather than Writable, and the inversion is deliberate: every mount
+// type the substrates already speak (runner.Mount, a k8s VolumeMount, a Docker
+// mount) says ReadOnly, and a field that flips sense at the boundary is how a
+// narrowing becomes a widening in a refactor.
+//
+// It does NOT ride RunPolicySpec.WorkspaceMounts. A drive is per-PRINCIPAL and
+// a workspace mount is per-ROW; keeping them apart is what keeps composer.Clamp,
+// validateWorkspaceSources, primaryWorkspacePath and the k8s blanket host-bind
+// refusal from each needing a drive exemption.
+type DriveMount struct {
+	Backend DriveBackend `json:"backend"`
+	// ObjectName is what the substrate is asked for: a Docker volume name, a
+	// PVC name, or the absolute host path of this principal's subdirectory.
+	// Derived once by the resolver (DriveObjectName) so no runner re-computes a
+	// hash.
+	ObjectName string `json:"object_name"`
+	// HomeName is the per-user segment ObjectName was built from, carried for
+	// labels and for the audit row an operator reads when reclaiming.
+	HomeName string `json:"home_name"`
+	// Target is the reserved in-container path (runner.DriveTarget). Carried
+	// rather than assumed so a runner never hard-codes the string, and so the
+	// reserved-target refusal and the mount agree by construction.
+	Target      string             `json:"target"`
+	ReadOnly    bool               `json:"read_only,omitempty"`
+	SizeMiB     int                `json:"size_mib,omitempty"`
+	Enforcement StorageEnforcement `json:"enforcement"`
+}
+
 // UserDriveHostRootCheck is the signature of the deployment's ENV CEILING over
 // admin-authored host_path drives (WARDYN_USER_DRIVE_HOST_ROOTS), returning nil
 // when hostRoot is inside an allowed root.
@@ -388,8 +430,8 @@ const driveHomeHashLen = 20
 //  2. hash — `d-` + the first 20 hex of sha256(drive id + "\n" + subject). The
 //     drive id is in the digest so one member's two drives never collide, and
 //     the "\n" separator keeps a concatenation from being ambiguous.
-//  3. sub / email / email_local — the CLAIM, lowercased, and email_local
-//     truncated at the first "@".
+//  3. sub / email_local — the CLAIM, lowercased, and email_local truncated at
+//     the first "@".
 //
 // EVERY non-hash path is then checked against driveHomeSegmentRe and an
 // unusable claim is an ERROR, NEVER A GUESS. Guessing here is not a cosmetic
@@ -399,10 +441,9 @@ const driveHomeHashLen = 20
 //
 // `subject` is the identity the home is derived FROM, and the caller selects it
 // because only the caller holds the labelled claims: the caller's stable
-// primary subject for `hash` and `sub`, the email claim for `email` and
-// `email_local`. It is never the GRANT's subject — a group grant's subject
-// would give an entire group one home, and re-pointing a grant would move a
-// member's data.
+// primary subject for `hash` and `sub`, the email claim for `email_local`. It
+// is never the GRANT's subject — a group grant's subject would give an entire
+// group one home, and re-pointing a grant would move a member's data.
 func DriveHomeName(d UserDrive, subject, override string) (string, error) {
 	if seg := strings.ToLower(strings.TrimSpace(override)); seg != "" {
 		if !driveHomeSegmentRe.MatchString(seg) {
@@ -527,9 +568,8 @@ func ValidateUserDrive(d *UserDrive, runnerTarget string) error {
 	if !d.Backend.Valid() {
 		return fmt.Errorf("backend: invalid %q", d.Backend)
 	}
-	if target := d.Backend.RunnerTarget(); target != runnerTarget {
-		return fmt.Errorf("backend %q needs a %q runner; this deployment dispatches to %q",
-			d.Backend, target, runnerTarget)
+	if d.Backend.RunnerTarget() != runnerTarget {
+		return fmt.Errorf("backend %q cannot be mounted by this deployment's runner (%s)", d.Backend, runnerTarget)
 	}
 	if err := validateDriveHostRoot(d); err != nil {
 		return err
@@ -553,11 +593,19 @@ func ValidateUserDrive(d *UserDrive, runnerTarget string) error {
 	// would name a directory that does not exist and Wardyn does not create
 	// one: a missing home on a share is a refusal, not a mkdir.
 	if d.Backend.Kind() == DriveKindShare && d.HomeTemplate == HomeTemplateHash {
-		return fmt.Errorf("home_template: a %q drive is named by the share, so it needs a claim template, not %q",
-			d.Backend, HomeTemplateHash)
+		return fmt.Errorf("home_template %q is not allowed on a share backend — a share's directories are named by "+
+			"your directory, so pick %s or %s", HomeTemplateHash, HomeTemplateSub, HomeTemplateEmailLocal)
 	}
 	if d.SizeMiB < 0 {
 		return fmt.Errorf("size_mib: must not be negative")
+	}
+	// A k8s_pvc drive is the ONE backend where the size is not a display value:
+	// it becomes the PVC's resources.requests.storage, and a claim requesting
+	// zero bytes is rejected by the apiserver. So 0 — which every other backend
+	// reads as "no allocation shown" — is a row whose every member's run would
+	// fail at bind time on the cluster, and it is refused at authoring instead.
+	if d.Backend == DriveBackendK8sPVC && d.SizeMiB <= 0 {
+		return fmt.Errorf("size_mib must be above 0 for a %s drive — it is the volume request", DriveBackendK8sPVC)
 	}
 	if d.Reclaim == "" {
 		d.Reclaim = DriveReclaimRetain
@@ -638,7 +686,8 @@ func ValidateUserDriveGrant(g *UserDriveGrant) error {
 	// member of that group the SAME directory — the isolation a per-user
 	// subdirectory buys, removed by a field that reads like a convenience.
 	if g.SubjectType != CapabilitySubjectUser {
-		return fmt.Errorf("home_override: only a %q grant names one person's directory", CapabilitySubjectUser)
+		return fmt.Errorf("home_override is accepted on a %s-tier allocation only — a group cannot share one directory",
+			CapabilitySubjectUser)
 	}
 	if !driveHomeSegmentRe.MatchString(g.HomeOverride) {
 		return fmt.Errorf("home_override: %q is not a valid home name (%s)", g.HomeOverride, driveHomeSegmentRe)

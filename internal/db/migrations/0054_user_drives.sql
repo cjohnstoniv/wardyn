@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS user_drives (
     backend       TEXT NOT NULL CHECK (backend IN ('docker_volume', 'host_path', 'k8s_pvc', 'k8s_pvc_static')),
     host_root     TEXT NOT NULL DEFAULT '',
     storage_class TEXT NOT NULL DEFAULT '',
-    home_template TEXT NOT NULL DEFAULT 'hash' CHECK (home_template IN ('hash', 'sub', 'email', 'email_local')),
+    home_template TEXT NOT NULL DEFAULT 'hash' CHECK (home_template IN ('hash', 'sub', 'email_local')),
     size_mib      INT NOT NULL DEFAULT 0,
     writable      BOOLEAN NOT NULL DEFAULT false,
     reclaim       TEXT NOT NULL DEFAULT 'retain' CHECK (reclaim IN ('retain', 'delete')),

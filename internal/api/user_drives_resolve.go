@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -56,7 +57,13 @@ func writeDriveError(w http.ResponseWriter, err error) {
 	case errors.Is(err, errGroupsSnapshotStale):
 		writeError(w, http.StatusForbidden, groupsSnapshotStaleMsg)
 	case errors.Is(err, errDriveUnmountable):
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		// The sentinel's own name is stripped: what is left is the frozen
+		// MEMBER sentence (docs/design/user-drives-prompt.md's DRIVE_MEMBER
+		// table), and the console renders a server refusal verbatim. The
+		// sentinel exists to be matched with errors.Is by the callers above, not
+		// to be read by the human this refuses.
+		writeError(w, http.StatusUnprocessableEntity,
+			strings.TrimPrefix(err.Error(), errDriveUnmountable.Error()+": "))
 	default:
 		writeError(w, http.StatusInternalServerError, "resolve user drive: "+err.Error())
 	}
@@ -208,7 +215,13 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 	}
 	home, err := types.DriveHomeName(*d, driveHomeSubject(d.HomeTemplate, users), override)
 	if err != nil {
-		return nil, fmt.Errorf("%w: drive %q: %v", errDriveUnmountable, d.Name, err)
+		// The frozen member sentence, not the derivation's own error: what this
+		// member needs is which of their claims could not name a directory and
+		// who can fix it, and types.DriveHomeName's message names a template and
+		// a regex instead. The cause is still the wrapped error's, for the log.
+		return nil, fmt.Errorf("%w: drive: your %s cannot name a directory "+
+			"(lowercase letters and digits, then `. _ -`, up to 63 characters) — "+
+			"ask an admin to set your directory name [%v]", errDriveUnmountable, d.HomeTemplate, err)
 	}
 	size := d.SizeMiB
 	if g.SizeMiBOverride > 0 {
@@ -250,7 +263,7 @@ func driveHomeSubject(tmpl types.HomeTemplate, users []string) string {
 		return ""
 	}
 	switch tmpl {
-	case types.HomeTemplateEmail, types.HomeTemplateEmailLocal:
+	case types.HomeTemplateEmailLocal:
 		return users[len(users)-1]
 	default:
 		return users[0]

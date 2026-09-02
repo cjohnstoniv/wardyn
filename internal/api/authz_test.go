@@ -249,6 +249,26 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/governance/assignments":        {class: classSecurity},
 	"DELETE /api/v1/governance/assignments/{id}": {class: classSecurity},
 	"POST /api/v1/governance/preview":            {class: classSecurity},
+	// User drives (migration 0054) — classAdmin, and the contrast with the
+	// seven /governance rows directly above is the tier line in one pair. A
+	// drive names a HOST PATH (host_root) or a cluster storage class, and
+	// "never the host" is precisely what separates SUPER from securityOps; a
+	// security admin's authority over drives is the DenyUserDrive door in the
+	// profile editor, which they already reach through /governance. A member is
+	// refused on all seven and learns about their OWN drive from /me.user_drive
+	// instead — the same "your own answer, never the whole table" split the
+	// governance rows draw against /policies/default.
+	//
+	// The preview route is SUPER for the same reason its family is: it answers
+	// with an OBJECT NAME on a host path or a cluster, which is the offboarding
+	// runbook's input and not a member's business.
+	"GET /api/v1/drives":                {class: classAdmin},
+	"POST /api/v1/drives":               {class: classAdmin},
+	"PUT /api/v1/drives/{id}":           {class: classAdmin},
+	"DELETE /api/v1/drives/{id}":        {class: classAdmin},
+	"POST /api/v1/drives/grants":        {class: classAdmin},
+	"DELETE /api/v1/drives/grants/{id}": {class: classAdmin},
+	"POST /api/v1/drives/preview":       {class: classAdmin},
 	// Directory autocomplete (§I) — classSecurity, and the contrast with the
 	// four classAdmin /access routes above is the whole tier argument in one
 	// pair: those decide who DERIVES admin, this one only READS the directory
@@ -701,11 +721,12 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 
 	// The split itself, pinned as a number: §B decided 14 SEC of the 40 gated
 	// routes, plus /governance's 7 and §I's directory search (all new in 0.7,
-	// outside that count) = 22, and 26 SUPER. A route silently reclassified in
-	// the table above would still pass every probe — it would just be enforcing
-	// the WRONG tier, exactly the drift the per-route loop cannot see.
-	if sec != 22 || super != 26 {
-		t.Errorf("tier split = %d security / %d admin, want 22 / 26 (§B's 14 SEC + governance's 7 + §I's directory search, and 26 SUPER)", sec, super)
+	// outside that count) = 22, and 26 SUPER — plus /drives' 7, also new in 0.7
+	// and born SUPER, = 33. A route silently reclassified in the table above
+	// would still pass every probe — it would just be enforcing the WRONG tier,
+	// exactly the drift the per-route loop cannot see.
+	if sec != 22 || super != 33 {
+		t.Errorf("tier split = %d security / %d admin, want 22 / 33 (§B's 14 SEC + governance's 7 + §I's directory search, and 26 SUPER + /drives' 7)", sec, super)
 	}
 }
 

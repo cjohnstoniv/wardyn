@@ -83,6 +83,19 @@ type dispatchParams struct {
 	// CeilingProfile is that profile's NAME, for the run.ceiling.reassert audit
 	// event. Nothing branches on it.
 	CeilingProfile string
+	// Drive is the acting principal's USER DRIVE, resolved and narrowed at
+	// create time by seedRequestDrive (migration 0054). NIL for every run that
+	// did not ask for one — which is every run on a deployment that has
+	// allocated no drives, and every scan/probe/harness lane, none of which
+	// carries a member principal to resolve a drive for.
+	//
+	// A CREATE-TIME SNAPSHOT by necessity, not by preference: resolution keys on
+	// capabilitySubjects (the caller's OIDC sub/email/groups) and the run row
+	// carries only CreatedBy, so there is nothing here to re-resolve from —
+	// exactly the constraint CeilingDeny above is a snapshot for. dispatchRun
+	// runs inline in the create request, so the snapshot has no staleness window
+	// to be stale in. See user_drives_run.go.
+	Drive *types.DriveMount
 	// ResolvedManaged, when non-nil, is filled in by dispatchRun with whether
 	// the ACTUAL resolved llmTransport used the Wardyn-managed subscription
 	// lane (llm.injectManaged — resolveLLMTransport's MANAGED subscription

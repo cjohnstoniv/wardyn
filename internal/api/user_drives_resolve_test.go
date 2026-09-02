@@ -21,16 +21,22 @@ import (
 
 // ─── the store double ─────────────────────────────────────────────────────────
 
-// driveStore answers the two user-drive resolver reads and nothing else. It
-// EMBEDS store.Store rather than sitting beside it for noGovernanceStore's
-// reason: two embeds at the same depth would make the selector ambiguous and
-// the double would silently stop implementing store.Store.
+// driveStore answers the two user-drive resolver reads over an otherwise
+// empty deployment. It EMBEDS rather than sitting beside store.Store for
+// noGovernanceStore's own reason: two embeds at the same depth would make the
+// selector ambiguous and the double would silently stop implementing
+// store.Store.
 //
 // The zero value is a deployment that has allocated NO drives — ErrNotFound and
 // no group-tier rows — which is "byte for byte before this feature", and is
 // what every case that is not about a match starts from.
 type driveStore struct {
-	store.Store
+	// noGovernanceStore rather than a bare store.Store: /me resolves the
+	// caller's CEILING beside their drive (the denied_by_profile field), so a
+	// double that answered only the drive reads would panic on the governance
+	// ones. Its own two drive methods below shadow noGovernanceStore's at depth
+	// 0, so there is no ambiguity and no second answer.
+	noGovernanceStore
 	drive        *types.UserDrive
 	grant        *types.UserDriveGrant
 	tier         types.CapabilitySubjectType
@@ -339,10 +345,13 @@ func TestResolveUserDrive(t *testing.T) {
 		// the point: a fabricated segment lands one member in another's
 		// directory, or outside the drive entirely.
 		d := driveFixture(func(d *types.UserDrive) {
-			d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateEmail, "/srv/homes"
+			d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateEmailLocal, "/srv/homes"
 		})
 		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
-		_, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		// A caller carrying a sub and NO email claim: email_local has nothing to
+		// truncate, so the home cannot be derived at all.
+		noEmail := withOIDCGroups(operatorCtx("sub-drive-bob", "", oidc.RoleMember), []string{"eng"})
+		_, err := driveServer(st).resolveUserDrive(noEmail)
 		if !errors.Is(err, errDriveUnmountable) {
 			t.Fatalf("err = %v, want errDriveUnmountable", err)
 		}
@@ -367,7 +376,6 @@ func TestDriveHomeSubject(t *testing.T) {
 	}{
 		{types.HomeTemplateHash, "sub-abc"},
 		{types.HomeTemplateSub, "sub-abc"},
-		{types.HomeTemplateEmail, "alice@corp.example"},
 		{types.HomeTemplateEmailLocal, "alice@corp.example"},
 	} {
 		if got := driveHomeSubject(tc.tmpl, users); got != tc.want {
