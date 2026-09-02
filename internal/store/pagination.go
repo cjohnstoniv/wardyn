@@ -112,8 +112,7 @@ var _ RunsByCreatorPager = PG{}
 // scan is fine; add one if a member's run list ever gets slow.
 func (s PG) ListRunsPageByCreator(ctx context.Context, createdBy string, p Page) ([]types.AgentRun, error) {
 	q, args := p.appendTo(`
-		SELECT id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, failure_hint
+		SELECT `+runCols+`
 		FROM agent_runs WHERE created_by = $1 ORDER BY created_at DESC`, []any{createdBy})
 	return collect(ctx, s.Pool, "list", "runs by creator", q, args, scanRun)
 }
@@ -161,8 +160,7 @@ func (s PG) ListApprovalsPageByRunCreator(ctx context.Context, createdBy string,
 // agent_runs_created_at_idx (0020) makes the ORDER BY + LIMIT an index scan.
 func (s PG) ListRunsPage(ctx context.Context, p Page) ([]types.AgentRun, error) {
 	q, args := p.appendTo(`
-		SELECT id, created_at, updated_at, created_by, agent, repo, task,
-			policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, failure_hint
+		SELECT `+runCols+`
 		FROM agent_runs ORDER BY created_at DESC`, nil)
 	return collect(ctx, s.Pool, "list", "runs", q, args, scanRun)
 }
@@ -225,8 +223,7 @@ func (s PG) ListWorkspacesPageForOwner(ctx context.Context, owner string, p Page
 // which serves both the WHERE and the ORDER BY without a sort.
 func (s PG) ListApprovalsPage(ctx context.Context, stateFilter types.ApprovalState, p Page) ([]types.ApprovalRequest, error) {
 	q := `
-		SELECT id, run_id, grant_id, kind, requested_scope, state, requested_at,
-			decided_at, decided_by, minted_jti, reason, decision_scope, decision_expires_at
+		SELECT ` + approvalCols + `
 		FROM approvals`
 	var args []any
 	if stateFilter != "" {
@@ -245,7 +242,7 @@ func (s PG) ListApprovalsPage(ctx context.Context, stateFilter types.ApprovalSta
 // caller pages to the newest events with ?offset=.
 func (s PG) QueryAuditEventsPage(ctx context.Context, runID uuid.UUID, p Page) ([]types.AuditEvent, error) {
 	q, args := p.appendTo(`
-		SELECT id, time, run_id, actor_type, actor, action, target, outcome, source_ip, data
+		SELECT `+auditCols+`
 		FROM audit_events WHERE run_id=$1 ORDER BY seq ASC`, []any{runID})
 	return collect(ctx, s.Pool, "query", "audit events", q, args, scanAuditEvent)
 }
@@ -255,7 +252,7 @@ func (s PG) QueryAuditEventsPage(ctx context.Context, runID uuid.UUID, p Page) (
 // index-scan-backward with no added index (see 0020's audit note).
 func (s PG) QueryRecentAuditEventsPage(ctx context.Context, p Page) ([]types.AuditEvent, error) {
 	q, args := p.appendTo(`
-		SELECT id, time, run_id, actor_type, actor, action, target, outcome, source_ip, data
+		SELECT `+auditCols+`
 		FROM audit_events ORDER BY seq DESC`, nil)
 	return collect(ctx, s.Pool, "query", "recent audit events", q, args, scanAuditEvent)
 }

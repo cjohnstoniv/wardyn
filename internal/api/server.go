@@ -6,27 +6,10 @@
 // only through the runner.Runner interface, and to identity/secrets/broker only
 // through their contract interfaces. Every security decision fails closed.
 //
-// Route map (see the REST contract in the architecture brief):
-//
-//	Public (admin bearer):
-//	  POST /api/v1/runs ; GET /api/v1/runs ; GET /api/v1/runs/{id}
-//	  GET  /api/v1/runs/{id}/grants
-//	  POST /api/v1/runs/{id}/kill
-//	  GET  /api/v1/runs/{id}/attach   (WebSocket: interactive PTY)
-//	  GET  /api/v1/approvals?state=&run_id= ; POST /api/v1/approvals/{id}/approve|deny
-//	  GET  /api/v1/audit?run_id=&since=&until=&action=&action_prefix=&actor_type=&outcome=
-//	  POST /api/v1/policies ; GET /api/v1/policies ; GET /api/v1/policies/{id}
-//	  PUT  /api/v1/policies/{id} ; DELETE /api/v1/policies/{id}
-//	  GET  /metrics                   (Prometheus text exposition)
-//	Anonymous:
-//	  GET  /healthz
-//	  GET  /readyz
-//	Internal (run-token bearer, identity.Provider.Verify aud="wardyn-internal"):
-//	  POST /api/v1/internal/decisions
-//	  POST /api/v1/internal/approvals ; GET /api/v1/internal/approvals/{id}
-//	  POST /api/v1/internal/credentials/mint
-//	Ground-truth (host-sensor bearer, identity.Provider.Verify aud="wardyn-groundtruth"):
-//	  POST /api/v1/internal/groundtruth   (eBPF/Tetragon kernel-event batch)
+// Routes: see routes.go for the table. The authoritative, always-current
+// classification of every one of them — which role gate each sits behind — is
+// authz_test.go's chi.Walk-enumerated matrix, which cannot go stale because it
+// walks the router itself.
 package api
 
 import (
@@ -249,8 +232,8 @@ type Config struct {
 	// GET /api/v1/runs/{id}/recording/{id} (admin-gated) and accepts uploads
 	// via PUT /api/v1/runs/{id}/recording (run-token auth).
 	RecordingStore recording.Store
-	// OIDC, when set, enables human SSO: it mounts /auth/login,/auth/callback,
-	// /auth/logout and composes oidc.Middleware in front of the admin-gated API
+	// OIDC, when set, enables human SSO: it mounts /auth/login,/auth/callback
+	// and composes oidc.Middleware in front of the admin-gated API
 	// so a valid session cookie OR the admin bearer token authenticates a caller.
 	// The admin token still works for the CLI when OIDC is configured.
 	OIDC *oidc.Authenticator

@@ -387,3 +387,38 @@ func TestIntegrationFold_SecretsOrderDeterministic(t *testing.T) {
 		}
 	}
 }
+
+// TestIntegrationFold_BedrockLaneFoldDoesNotMutateCaller pins the reason the
+// lane rename copies the config map at all: foldLegacyIntegration is a READ-time
+// migration, and a stored row may be folded more than once, so renaming "lane"
+// to "auth_lane" in place would edit the caller's own map and make the second
+// fold see a row with no lane to rename.
+//
+// Nothing pinned this before — deleting the copy outright left every test in
+// this package green — so the swap to maps.Clone brings the assertion with it.
+// It calls foldLegacyIntegration directly: the fixture above decodes fresh maps
+// from JSON per fold, which is exactly the case where aliasing cannot show up.
+func TestIntegrationFold_BedrockLaneFoldDoesNotMutateCaller(t *testing.T) {
+	cfg := map[string]any{"lane": "auto", "region": "eu-central-1"}
+	row := legacyIntegrationJSON{
+		ID: "acme-bedrock", Name: "AWS Bedrock",
+		Category: "ai_provider", Type: IntegrationKindBedrock, Config: cfg,
+	}
+
+	got := foldLegacyIntegration(row)
+	if lane, _ := got.Config["auth_lane"].(string); lane != "auto" {
+		t.Fatalf("folded config = %+v, want auth_lane=auto", got.Config)
+	}
+
+	if _, ok := cfg["lane"]; !ok {
+		t.Error("the caller's map lost its legacy lane key: the fold mutated it")
+	}
+	if _, ok := cfg["auth_lane"]; ok {
+		t.Error("the caller's map gained auth_lane: the fold mutated it")
+	}
+	// Folding the SAME row again must produce the same answer — the property
+	// the copy exists to make true.
+	if again := foldLegacyIntegration(row); again.Config["auth_lane"] != "auto" {
+		t.Errorf("second fold of the same row = %+v, want auth_lane=auto", again.Config)
+	}
+}

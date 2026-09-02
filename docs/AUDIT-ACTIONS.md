@@ -167,7 +167,7 @@ Data is unchanged.
 | `identity.mint` | A per-run SPIFFE identity (JWT-SVID) is minted | — | `internal/identity/embedded/embedded.go:187` | internal |
 | `identity.renew` | A run's identity JWT is renewed | `expires_at`, `prev_jti`, `reason`, `run_state` | `internal/api/internal.go:698` | internal |
 | `identity.revoke` | A run's identity is revoked at teardown | — | `internal/identity/embedded/embedded.go:263` | internal |
-| `approval.decide` | A human decides a pending approval (approve/deny, any scope) | `approval_id`, `decision`, `reason` | `internal/approval/approval.go:135` | internal |
+| `approval.decide` | A human decides a pending approval (approve/deny, any scope) | `approval_id`, `decision`, `reason` | `internal/approval/approval.go:166` | internal |
 | `approval.expire` | The approval sweeper expires an undecided approval past its TTL | — | `internal/approval/approval.go:238` | internal |
 | `harness.credential.captured` | A harness login flow (Claude Code subscription, etc.) captures a credential | `captured`, `provider`, `source` | `internal/api/harnesscred.go:629`, `internal/api/ssotoken.go:113` | internal |
 | `harness.credential.disconnected` | A harness credential is disconnected | `captured`, `provider` | `internal/api/harnesscred.go:653` | internal |
@@ -183,7 +183,7 @@ Data is unchanged.
 | `policy.create` | A named egress/run policy is created | `min_confinement_class`, `name` | `internal/api/policies.go:284` | internal |
 | `policy.update` | A named policy is updated | `min_confinement_class`, `name` | `internal/api/policies.go:319` | internal |
 | `policy.delete` | A named policy is deleted | — | `internal/api/policies.go:340` | internal |
-| `policy.inline` | A one-off (inline, unsaved) policy is used to launch a run | `eligible_grants`, `min_confinement_class`, `workspace_mounts` | `internal/api/inline_policy.go:147` | internal |
+| `policy.inline` | A one-off (inline, unsaved) policy is used to launch a run | `eligible_grants`, `min_confinement_class`, `workspace_mounts` | `internal/api/inline_policy.go:194` | internal |
 | `capability.grant.created` | `POST /permissions/grants` (new) | `capability`, `effect`, `subject`, `subject_type`, `value` | `internal/api/permissions.go:167` | internal |
 | `capability.grant.updated` | `POST /permissions/grants` (upsert on existing key) | `capability`, `effect`, `subject`, `subject_type`, `value` | `internal/api/permissions.go:169` | internal |
 | `capability.grant.deleted` | `DELETE /permissions/grants/{id}` | — | `internal/api/permissions.go:199` | internal |

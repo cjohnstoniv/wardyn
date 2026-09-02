@@ -14,8 +14,7 @@ import (
 // role/ownership gate each route sits behind. Split out of server.go (which
 // owns Config/Server/New/New's small helpers) so the route TABLE — the thing
 // most likely to be read/audited/extended — stays a single, self-contained
-// file. See server.go's package doc comment for the route map summary and
-// internal/api/authz_test.go's chi.Walk-enumerated matrix for the
+// file. See internal/api/authz_test.go's chi.Walk-enumerated matrix for the
 // authoritative, always-current classification of every route below.
 func (s *Server) routes() chi.Router {
 	r := chi.NewRouter()
@@ -46,12 +45,12 @@ func (s *Server) routes() chi.Router {
 	// volumes (run counts, approval decisions) about every OTHER user's runs.
 	r.With(s.humanOrAdminAuth, s.requireOperator).Get("/metrics", s.handleMetrics)
 
-	// Human SSO (OIDC): login/callback/logout. Mounted only when configured.
-	// These are unauthenticated by design (they bootstrap the session).
+	// Human SSO (OIDC): login/callback. Mounted only when configured. These are
+	// unauthenticated by design (they bootstrap the session). Sign-OUT is not
+	// here: it is POST /api/v1/auth/logout below, inside humanOrAdminAuth.
 	if s.cfg.OIDC != nil {
 		r.Get("/auth/login", s.cfg.OIDC.LoginHandler)
 		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandler)
-		r.Get("/auth/logout", s.cfg.OIDC.LogoutHandler)
 	}
 
 	r.Route("/api/v1", func(r chi.Router) {

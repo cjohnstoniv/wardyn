@@ -6,13 +6,38 @@ package sinks
 
 import (
 	"context"
+	"log/syslog"
 	"net"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 )
+
+// syslogAvailable reports whether a local syslog socket exists, so the tests
+// below skip rather than fail on a platform without one (CI containers, macOS
+// without syslogd). It lived in syslog.go, whose own comment said "used only in
+// tests" while it shipped inside wardynd; this is where its only two callers
+// are.
+//
+// ONE arm, not one per GOOS: the linux and darwin branches it replaces were
+// byte-identical dials of the local socket, and every other platform has none
+// to find.
+func syslogAvailable() bool {
+	switch runtime.GOOS {
+	case "linux", "darwin":
+		w, err := syslog.Dial("", "", syslog.LOG_INFO|syslog.LOG_DAEMON, "wardyn-test")
+		if err != nil {
+			return false
+		}
+		_ = w.Close()
+		return true
+	default:
+		return false
+	}
+}
 
 // TestSyslogSink_Construction verifies that NewSyslogSink can connect to the
 // local syslog daemon when one is available. The test is skipped gracefully on

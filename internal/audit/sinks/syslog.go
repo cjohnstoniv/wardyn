@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"log/slog"
 	"log/syslog"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -223,28 +222,4 @@ func (s *SyslogSink) Close() error {
 	}
 	s.wg.Wait()
 	return s.w.Close()
-}
-
-// syslogAvailable returns true when a local syslog socket exists.
-// Used only in tests to skip gracefully on platforms without local syslog.
-func syslogAvailable() bool {
-	switch runtime.GOOS {
-	case "linux":
-		// /dev/log is the conventional Linux local socket.
-		w, err := syslog.Dial("", "", syslog.LOG_INFO|syslog.LOG_DAEMON, "wardyn-test")
-		if err != nil {
-			return false
-		}
-		_ = w.Close()
-		return true
-	case "darwin":
-		w, err := syslog.Dial("", "", syslog.LOG_INFO|syslog.LOG_DAEMON, "wardyn-test")
-		if err != nil {
-			return false
-		}
-		_ = w.Close()
-		return true
-	default:
-		return false
-	}
 }

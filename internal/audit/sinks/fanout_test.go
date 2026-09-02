@@ -220,3 +220,67 @@ func TestFanout_DropsByName(t *testing.T) {
 		t.Errorf("DropsByName[syslog] = %d, want 1 (synchronous Emit-error drop not counted)", got["syslog"])
 	}
 }
+
+// panicSink panics from Emit with a caller-chosen value — the branch panicErr
+// exists for, and the one nothing in this package exercised before.
+type panicSink struct {
+	name string
+	with any
+}
+
+var _ audit.Sink = (*panicSink)(nil)
+
+func (p *panicSink) Name() string { return p.name }
+func (p *panicSink) Emit(context.Context, types.AuditEvent) error {
+	panic(p.with)
+}
+
+// TestFanout_RecoversChildPanic pins the recover path end to end: a child that
+// PANICS is isolated exactly like one that returns an error — the siblings
+// still receive, the drop is counted, and a lone panicking child turns the
+// panic into Emit's returned error rather than taking the process down.
+//
+// Both panicErr branches are covered, because they are the whole of it: a panic
+// carrying an error surfaces as THAT error (errors.Is finds it), and a panic
+// carrying anything else is wrapped with its %v rendering.
+func TestFanout_RecoversChildPanic(t *testing.T) {
+	t.Parallel()
+
+	sentinel := errors.New("child exploded")
+	ctx := context.Background()
+
+	t.Run("panic is isolated from siblings", func(t *testing.T) {
+		bad := &panicSink{name: "bad", with: "boom"}
+		good := &countSink{name: "good"}
+		f := sinks.NewFanout(bad, good)
+
+		if err := f.Emit(ctx, makeEvent("panic.isolated")); err != nil {
+			t.Errorf("Emit: got error %v; want nil (good sibling succeeded)", err)
+		}
+		if got := good.count.Load(); got != 1 {
+			t.Errorf("good sink received %d events, want 1", got)
+		}
+		if drops := f.Drops("bad"); drops != 1 {
+			t.Errorf("panicking sink drops: got %d, want 1", drops)
+		}
+	})
+
+	t.Run("panic with a non-error is wrapped", func(t *testing.T) {
+		f := sinks.NewFanout(&panicSink{name: "only", with: "boom"})
+		err := f.Emit(ctx, makeEvent("panic.string"))
+		if err == nil {
+			t.Fatal("Emit: got nil; want the recovered panic as an error")
+		}
+		if err.Error() != "panic: boom" {
+			t.Errorf("Emit error = %q, want %q", err.Error(), "panic: boom")
+		}
+	})
+
+	t.Run("panic with an error surfaces that error", func(t *testing.T) {
+		f := sinks.NewFanout(&panicSink{name: "only", with: sentinel})
+		err := f.Emit(ctx, makeEvent("panic.error"))
+		if !errors.Is(err, sentinel) {
+			t.Errorf("Emit error = %v, want the panicked error itself (%v)", err, sentinel)
+		}
+	})
+}

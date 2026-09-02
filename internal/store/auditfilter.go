@@ -129,7 +129,7 @@ func (f AuditFilter) where(args []any) ([]string, []any) {
 // query index-scans the pkey backward and filters, which is what the caps are for.
 func (s PG) QueryAuditEventsFilteredPage(ctx context.Context, runID *uuid.UUID, f AuditFilter, p Page) ([]types.AuditEvent, error) {
 	q := `
-		SELECT id, time, run_id, actor_type, actor, action, target, outcome, source_ip, data
+		SELECT ` + auditCols + `
 		FROM audit_events`
 	var args []any
 	var clauses []string

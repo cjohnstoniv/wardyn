@@ -105,7 +105,6 @@ type Store interface {
 	UpsertSource(ctx context.Context, src types.Source) (types.Source, error)
 	GetSource(ctx context.Context, id uuid.UUID) (types.Source, error)
 	GetSourcesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]types.Source, error)
-	GetBaseImagesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]types.BaseImageEntry, error)
 	ListSources(ctx context.Context) ([]types.Source, error)
 	UpdateSourceConfig(ctx context.Context, id uuid.UUID, name string, reqs map[string]types.WorkspaceRequirement) (types.Source, error)
 	WorkspacesAttaching(ctx context.Context, id uuid.UUID) ([]string, error)
@@ -123,7 +122,6 @@ type Store interface {
 	// counterpart to UpdateSourceConfig above, deliberately NOT folded into
 	// UpsertBaseImage's identity-hit dedupe. See both doc comments.
 	UpdateBaseImageName(ctx context.Context, id uuid.UUID, name string) (types.BaseImageEntry, error)
-	GetBaseImage(ctx context.Context, id uuid.UUID) (types.BaseImageEntry, error)
 	ListBaseImages(ctx context.Context) ([]types.BaseImageEntry, error)
 	WorkspacesUsingBaseImage(ctx context.Context, id uuid.UUID) ([]string, error)
 	DeleteBaseImage(ctx context.Context, id uuid.UUID, detach bool) error
@@ -265,7 +263,6 @@ type Store interface {
 	// ErrConflict when the profile is still ASSIGNED — the ON DELETE RESTRICT,
 	// which exists so deleting a profile can never silently widen its members.
 	UpsertGovernanceProfile(ctx context.Context, p types.GovernanceProfile) (types.GovernanceProfile, error)
-	GetGovernanceProfile(ctx context.Context, id uuid.UUID) (types.GovernanceProfile, error)
 	DeleteGovernanceProfile(ctx context.Context, id uuid.UUID) error
 	ListGovernanceProfiles(ctx context.Context) ([]types.GovernanceProfile, error)
 	// UpsertGovernanceAssignment keys on the natural UNIQUE (subject_type,
