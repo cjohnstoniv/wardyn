@@ -388,11 +388,17 @@ func (s PG) UpdateBaseImageName(ctx context.Context, id uuid.UUID, name string) 
 		name, id))
 }
 
-// GetBaseImage returns the catalog row for id, or ErrNotFound.
+// GetBaseImage returns the catalog row for id, or ErrNotFound. NOT on the Store
+// interface: no handler reads one image by id (the console lists them), so
+// requiring it of every implementation bought nothing. Kept as a PG method
+// because store_hydrate_pg_test.go round-trips through it.
 func (s PG) GetBaseImage(ctx context.Context, id uuid.UUID) (types.BaseImageEntry, error) {
 	return scanBaseImage(s.Pool.QueryRow(ctx, `SELECT `+baseImageCols+` FROM base_images WHERE id=$1`, id))
 }
 
+// GetBaseImagesByIDs is hydrateAll's own batched read, not a Store-interface
+// method: its only caller is inside this package.
+//
 // GetBaseImagesByIDs returns the base images for ids in ONE query, keyed by
 // id — hydrateAll's bulk read, mirroring GetSourcesByIDs. Missing ids are
 // simply absent from the map (a dangling base_image_id contributes nothing;

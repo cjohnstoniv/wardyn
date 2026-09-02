@@ -1069,9 +1069,6 @@ func (s *authzStore) GetSource(context.Context, uuid.UUID) (types.Source, error)
 func (s *authzStore) GetSourcesByIDs(context.Context, []uuid.UUID) (map[uuid.UUID]types.Source, error) {
 	return nil, nil
 }
-func (s *authzStore) GetBaseImagesByIDs(context.Context, []uuid.UUID) (map[uuid.UUID]types.BaseImageEntry, error) {
-	return nil, nil
-}
 func (s *authzStore) ListSources(context.Context) ([]types.Source, error) { return nil, nil }
 func (s *authzStore) UpdateSourceConfig(context.Context, uuid.UUID, string, map[string]types.WorkspaceRequirement) (types.Source, error) {
 	return types.Source{}, store.ErrNotFound
@@ -1097,9 +1094,6 @@ func (s *authzStore) UpsertBaseImage(_ context.Context, b types.BaseImageEntry) 
 }
 func (s *authzStore) UpdateBaseImageName(_ context.Context, id uuid.UUID, name string) (types.BaseImageEntry, error) {
 	return types.BaseImageEntry{ID: id, Name: name}, nil
-}
-func (s *authzStore) GetBaseImage(context.Context, uuid.UUID) (types.BaseImageEntry, error) {
-	return types.BaseImageEntry{}, store.ErrNotFound
 }
 func (s *authzStore) ListBaseImages(context.Context) ([]types.BaseImageEntry, error) { return nil, nil }
 func (s *authzStore) WorkspacesUsingBaseImage(context.Context, uuid.UUID) ([]string, error) {
@@ -1278,9 +1272,6 @@ func (s *authzStore) ListRoleMappings(context.Context) ([]types.RoleMapping, err
 // (internal/store/governance_pg_test.go), where rows can actually exist.
 func (s *authzStore) UpsertGovernanceProfile(_ context.Context, p types.GovernanceProfile) (types.GovernanceProfile, error) {
 	return p, nil
-}
-func (s *authzStore) GetGovernanceProfile(context.Context, uuid.UUID) (types.GovernanceProfile, error) {
-	return types.GovernanceProfile{}, store.ErrNotFound
 }
 func (s *authzStore) DeleteGovernanceProfile(context.Context, uuid.UUID) error {
 	return store.ErrNotFound
