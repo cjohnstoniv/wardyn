@@ -30,6 +30,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 )
@@ -335,13 +336,18 @@ type UserDriveListItem struct {
 // Writable is already folded (grant override over drive default) but NOT yet
 // narrowed by the run request — a request may only narrow, and that fold
 // belongs to the run-create seam that has the request in hand.
+//
+// NO json tags: this type crosses no wire. The preview and /me each compose
+// their own response struct from it, deliberately — Grant is a whole admin
+// grant row, and a struct that looks marshal-ready is a struct somebody
+// marshals.
 type ResolvedDrive struct {
-	Drive UserDrive             `json:"drive"`
-	Grant UserDriveGrant        `json:"grant"`
-	Tier  CapabilitySubjectType `json:"tier"`
+	Drive UserDrive
+	Grant UserDriveGrant
+	Tier  CapabilitySubjectType
 	// HomeName is the per-user segment: the subdirectory of a share, or the
 	// suffix of a managed object's name.
-	HomeName string `json:"home_name"`
+	HomeName string
 	// SubjectHash fingerprints the principal HomeName was derived FROM
 	// (DriveSubjectHash), which the home itself cannot answer for: a managed
 	// object's name carries the home and nothing else, so two principals whose
@@ -351,17 +357,17 @@ type ResolvedDrive struct {
 	SubjectHash string `json:"subject_hash,omitempty"`
 	// ObjectName is what the runner asks the substrate for — a volume name, a
 	// PVC name, or an absolute host path.
-	ObjectName  string             `json:"object_name"`
-	SizeMiB     int                `json:"size_mib,omitempty"`
-	Writable    bool               `json:"writable,omitempty"`
-	Enforcement StorageEnforcement `json:"enforcement"`
+	ObjectName  string
+	SizeMiB     int
+	Writable    bool
+	Enforcement StorageEnforcement
 	// Paused is set when the grant that WON is disabled: Drive and Grant are
 	// that row, the size and mode folds still ran, nothing is derived (no
 	// HomeName, no ObjectName) and nothing may be mounted. A paused row wins
 	// its tier rather than falling through to the wider row beneath it
 	// (DESIGN §2.2), so an admin turning one off cannot silently hand that
 	// member the everyone drive instead.
-	Paused bool `json:"paused,omitempty"`
+	Paused bool
 }
 
 // DriveMount is the RESOLVED answer the runner acts on: one principal's drive,
@@ -414,7 +420,7 @@ type DriveMount struct {
 	// A digest, never the claim: a Docker label is echoed by `docker volume
 	// inspect` to anybody who can reach the daemon, so the subject itself must
 	// not be written there.
-	SubjectHash string `json:"subject_hash,omitempty"`
+	SubjectHash string
 	// Target is the reserved in-container path (runner.DriveTarget). Carried
 	// rather than assumed so a runner never hard-codes the string, and so the
 	// reserved-target refusal and the mount agree by construction.
@@ -847,11 +853,10 @@ func ValidateUserDriveGrant(g *UserDriveGrant) error {
 // driveTextIsClean reports whether s carries no control characters — the same
 // field hygiene the capability-grant and governance-assignment writes apply,
 // restated here because this package must not import internal/api.
+//
+// unicode.IsControl covers C0 and DEL exactly as the hand-rolled loop did, and
+// ALSO the C1 range U+0080-U+009F — strictly tighter at every call site, never
+// looser. Same expression, same stance as internal/api's controlCharFree.
 func driveTextIsClean(s string) bool {
-	for _, r := range s {
-		if r < 0x20 || r == 0x7f {
-			return false
-		}
-	}
-	return true
+	return !strings.ContainsFunc(s, unicode.IsControl)
 }

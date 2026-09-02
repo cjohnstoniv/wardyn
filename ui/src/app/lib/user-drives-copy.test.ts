@@ -72,157 +72,35 @@ const PLURALISED = ["ALLOCATED_COUNT(n)", "DELETE_RESTRICT_BODY(name, n)", "CARD
 // their own test against the doc cell with {n} substituted.
 const SIZE_HELPERS = ["SIZE_MIB(n)", "SIZE_GIB(n)"];
 
-// Every other key, rendered from the module exactly as the doc spells it
-// (backticks stripped, per the mono rule above).
-const rendered: Record<string, string> = {
-  // ---- §7.2 ----
-  TITLE: DRIVES.TITLE,
-  LEAD: DRIVES.LEAD,
-  DRIVES_TITLE: DRIVES.DRIVES_TITLE,
-  DRIVES_LEAD: DRIVES.DRIVES_LEAD,
-  COL_NAME: DRIVES.COL_NAME,
-  COL_BACKEND: DRIVES.COL_BACKEND,
-  COL_SIZE: DRIVES.COL_SIZE,
-  COL_MODE: DRIVES.COL_MODE,
-  COL_RECLAIM: DRIVES.COL_RECLAIM,
-  COL_ALLOCATED: DRIVES.COL_ALLOCATED,
-  NEW_CTA: DRIVES.NEW_CTA,
-  EDIT: DRIVES.EDIT,
-  DELETE: DRIVES.DELETE,
-  KIND_MANAGED: DRIVES.KIND_MANAGED,
-  KIND_SHARE: DRIVES.KIND_SHARE,
-  ALLOCATED_NONE: DRIVES.ALLOCATED_NONE,
-  MODE_RO: DRIVES.MODE_RO,
-  MODE_RW: DRIVES.MODE_RW,
-  MODE_RO_INLINE: DRIVES.MODE_RO_INLINE,
-  MODE_RW_INLINE: DRIVES.MODE_RW_INLINE,
-  SIZE_NONE: DRIVES.SIZE_NONE,
-  EMPTY_TITLE: DRIVES.EMPTY_TITLE,
-  EMPTY_BODY: DRIVES.EMPTY_BODY,
-  EDITOR_TITLE_NEW: DRIVES.EDITOR_TITLE_NEW,
-  "EDITOR_TITLE_EDIT(name)": DRIVES.EDITOR_TITLE_EDIT("{name}"),
-  FIELD_NAME: DRIVES.FIELD_NAME,
-  NAME_HINT: DRIVES.NAME_HINT,
-  FIELD_BACKEND: DRIVES.FIELD_BACKEND,
-  BACKEND_HINT: DRIVES.BACKEND_HINT,
-  BACKEND_DOCKER_VOLUME: DRIVES.BACKEND_DOCKER_VOLUME,
-  BACKEND_HOST_PATH: DRIVES.BACKEND_HOST_PATH,
-  BACKEND_K8S_PVC: DRIVES.BACKEND_K8S_PVC,
-  BACKEND_K8S_PVC_STATIC: DRIVES.BACKEND_K8S_PVC_STATIC,
-  BACKEND_UNAVAILABLE_DOCKER_ROOTS: DRIVES.BACKEND_UNAVAILABLE_DOCKER_ROOTS,
-  FIELD_HOST_ROOT: DRIVES.FIELD_HOST_ROOT,
-  HOST_ROOT_HINT: DRIVES.HOST_ROOT_HINT,
-  FIELD_STORAGE_CLASS: DRIVES.FIELD_STORAGE_CLASS,
-  STORAGE_CLASS_HINT: DRIVES.STORAGE_CLASS_HINT,
-  FIELD_HOME: DRIVES.FIELD_HOME,
-  HOME_HINT: DRIVES.HOME_HINT,
-  HOME_HASH: DRIVES.HOME_HASH,
-  HOME_HASH_HINT: DRIVES.HOME_HASH_HINT,
-  HOME_SUB: DRIVES.HOME_SUB,
-  HOME_SUB_HINT: DRIVES.HOME_SUB_HINT,
-  HOME_EMAIL_LOCAL: DRIVES.HOME_EMAIL_LOCAL,
-  HOME_EMAIL_LOCAL_HINT: DRIVES.HOME_EMAIL_LOCAL_HINT,
-  HOME_RULE: DRIVES.HOME_RULE,
-  FIELD_SIZE: DRIVES.FIELD_SIZE,
-  SIZE_HINT: DRIVES.SIZE_HINT,
-  SIZE_HINT_REQUIRED: DRIVES.SIZE_HINT_REQUIRED,
-  FIELD_WRITABLE: DRIVES.FIELD_WRITABLE,
-  WRITABLE_HINT: DRIVES.WRITABLE_HINT,
-  FIELD_RECLAIM: DRIVES.FIELD_RECLAIM,
-  RECLAIM_RETAIN: DRIVES.RECLAIM_RETAIN,
-  RECLAIM_DELETE: DRIVES.RECLAIM_DELETE,
-  RECLAIM_HINT: DRIVES.RECLAIM_HINT,
-  SAVE_CTA: DRIVES.SAVE_CTA,
-  SAVE_ERROR: DRIVES.SAVE_ERROR,
-  SAVE_REFUSED_TITLE: DRIVES.SAVE_REFUSED_TITLE,
-  ENFORCEMENT_FILESYSTEM: DRIVES.ENFORCEMENT_FILESYSTEM,
-  ENFORCEMENT_REQUEST: DRIVES.ENFORCEMENT_REQUEST,
-  ENFORCEMENT_EXTERNAL: DRIVES.ENFORCEMENT_EXTERNAL,
-  ENFORCEMENT_NONE: DRIVES.ENFORCEMENT_NONE,
-  HONESTY: DRIVES.HONESTY,
+// Every other key is rendered FROM THE DOC's own key cell rather than from a
+// hand-typed table: `EDITOR_TITLE_EDIT(name)` is split into the module symbol
+// and its argument names, and the value is called with "{name}" so it must
+// reproduce the doc cell character for character. That kills the third copy of
+// the key list (doc row, module, and — until now — this file) and is strictly
+// stronger than the map it replaces: a module key with NO doc row now fails
+// too, which a hand-written map by construction could never notice.
+const NAMESPACES: Record<string, unknown>[] = [DRIVES, DRIVE_MEMBER, DRIVE_RUN];
 
-  // ---- §7.3 ----
-  ALLOC_TITLE: DRIVES.ALLOC_TITLE,
-  ALLOC_LEAD: DRIVES.ALLOC_LEAD,
-  PRECEDENCE: DRIVES.PRECEDENCE,
-  EFFECT_NOTE: DRIVES.EFFECT_NOTE,
-  SIGNIN_NOTE: DRIVES.SIGNIN_NOTE,
-  ADD_TITLE: DRIVES.ADD_TITLE,
-  ADD_CTA: DRIVES.ADD_CTA,
-  FIELD_DRIVE: DRIVES.FIELD_DRIVE,
-  DRIVE_PLACEHOLDER: DRIVES.DRIVE_PLACEHOLDER,
-  FIELD_SIZE_OVERRIDE: DRIVES.FIELD_SIZE_OVERRIDE,
-  SIZE_OVERRIDE_HINT: DRIVES.SIZE_OVERRIDE_HINT,
-  FIELD_WRITABLE_OVERRIDE: DRIVES.FIELD_WRITABLE_OVERRIDE,
-  WRITABLE_OVERRIDE_INHERIT: DRIVES.WRITABLE_OVERRIDE_INHERIT,
-  WRITABLE_OVERRIDE_HINT: DRIVES.WRITABLE_OVERRIDE_HINT,
-  FIELD_HOME_OVERRIDE: DRIVES.FIELD_HOME_OVERRIDE,
-  HOME_OVERRIDE_HINT: DRIVES.HOME_OVERRIDE_HINT,
-  HOME_OVERRIDE_NA: DRIVES.HOME_OVERRIDE_NA,
-  FIELD_ENABLED: DRIVES.FIELD_ENABLED,
-  ENABLED_HINT: DRIVES.ENABLED_HINT,
-  COL_DRIVE: DRIVES.COL_DRIVE,
-  COL_OVERRIDES: DRIVES.COL_OVERRIDES,
-  OVERRIDES_NONE: DRIVES.OVERRIDES_NONE,
-  "OVERRIDE_SIZE(size)": DRIVES.OVERRIDE_SIZE("{size}"),
-  "OVERRIDE_HOME(name)": DRIVES.OVERRIDE_HOME("{name}"),
-  PAUSED_CHIP: DRIVES.PAUSED_CHIP,
-  ALLOC_REPLACED: DRIVES.ALLOC_REPLACED,
-  "REMOVE_CONFIRM(who, name)": DRIVES.REMOVE_CONFIRM("{who}", "{name}"),
-  EMPTY_ALLOC_TITLE: DRIVES.EMPTY_ALLOC_TITLE,
-  EMPTY_ALLOC_BODY: DRIVES.EMPTY_ALLOC_BODY,
-  PREVIEW_TITLE: DRIVES.PREVIEW_TITLE,
-  PREVIEW_LEAD: DRIVES.PREVIEW_LEAD,
-  PREVIEW_CTA: DRIVES.PREVIEW_CTA,
-  PREVIEW_NONE: DRIVES.PREVIEW_NONE,
-  "PREVIEW_RESULT(drive, tier)": DRIVES.PREVIEW_RESULT("{drive}", "{tier}"),
-  PREVIEW_TIER_USER: DRIVES.PREVIEW_TIER_USER,
-  PREVIEW_TIER_GROUP: DRIVES.PREVIEW_TIER_GROUP,
-  PREVIEW_TIER_ALL: DRIVES.PREVIEW_TIER_ALL,
-  PREVIEW_OBJECT_LABEL: DRIVES.PREVIEW_OBJECT_LABEL,
-  PREVIEW_OBJECT_HINT: DRIVES.PREVIEW_OBJECT_HINT,
-  PREVIEW_ENFORCEMENT_LABEL: DRIVES.PREVIEW_ENFORCEMENT_LABEL,
+/** `EDITOR_TITLE_EDIT(name)` -> ["EDITOR_TITLE_EDIT", ["name"]]. */
+function splitKey(docKey: string): [string, string[]] {
+  const m = /^([A-Z0-9_]+)\((.*)\)$/.exec(docKey);
+  return m ? [m[1], m[2].split(",").map((a) => a.trim())] : [docKey, []];
+}
 
-  // ---- §7.4 ----
-  "DELETE_CONFIRM(name)": DRIVES.DELETE_CONFIRM("{name}"),
-  DELETE_RESTRICT_TITLE: DRIVES.DELETE_RESTRICT_TITLE,
-  FETCH_FAILED_TITLE: DRIVES.FETCH_FAILED_TITLE,
-  FETCH_FAILED_BODY: DRIVES.FETCH_FAILED_BODY,
+// ONE lookup across the three namespaces is safe because none of their keys
+// collide (118 / 20 / 2); the completeness test below is what keeps that true.
+function render(docKey: string): string {
+  const [name, args] = splitKey(docKey);
+  const ns = NAMESPACES.find((n) => name in n);
+  if (!ns) throw new Error(`${docKey}: no such key in DRIVES / DRIVE_MEMBER / DRIVE_RUN`);
+  const value = ns[name];
+  return typeof value === "function" ? (value as (...a: string[]) => string)(...args.map((a) => `{${a}}`)) : String(value);
+}
 
-  // ---- §7.5 ----
-  CARD_LEAD: DRIVES.CARD_LEAD,
-  CARD_EMPTY: DRIVES.CARD_EMPTY,
-  "CARD_SUMMARY(drives, allocations)": DRIVES.CARD_SUMMARY("{drives}", "{allocations}"),
-  CARD_OPEN: DRIVES.CARD_OPEN,
-
-  // ---- §7.6 ----
-  NR_CHECKBOX: DRIVE_MEMBER.NR_CHECKBOX,
-  "NR_HINT(name, size, mode)": DRIVE_MEMBER.NR_HINT("{name}", "{size}", "{mode}"),
-  "NR_HINT_NOSIZE(name, mode)": DRIVE_MEMBER.NR_HINT_NOSIZE("{name}", "{mode}"),
-  NR_RW_NOTE: DRIVE_MEMBER.NR_RW_NOTE,
-  NR_RO_NOTE: DRIVE_MEMBER.NR_RO_NOTE,
-  NR_READONLY_TOGGLE: DRIVE_MEMBER.NR_READONLY_TOGGLE,
-  NR_PAUSED: DRIVE_MEMBER.NR_PAUSED,
-  "NR_DENIED(profile)": DRIVE_MEMBER.NR_DENIED("{profile}"),
-  "GS_DRIVE_CHIP(name, size, mode)": DRIVE_MEMBER.GS_DRIVE_CHIP("{name}", "{size}", "{mode}"),
-  "GS_DRIVE_CHIP_NOSIZE(name, mode)": DRIVE_MEMBER.GS_DRIVE_CHIP_NOSIZE("{name}", "{mode}"),
-  "GS_DRIVE_CHIP_PAUSED(name)": DRIVE_MEMBER.GS_DRIVE_CHIP_PAUSED("{name}"),
-  GS_DRIVE_BODY: DRIVE_MEMBER.GS_DRIVE_BODY,
-
-  // ---- §7.7 ----
-  "DENIED_DRIVE(name)": DRIVE_MEMBER.DENIED_DRIVE("{name}"),
-  REFUSED_NO_GRANT: DRIVE_MEMBER.REFUSED_NO_GRANT,
-  REFUSED_PAUSED: DRIVE_MEMBER.REFUSED_PAUSED,
-  "REFUSED_HOME_INVALID(claim)": DRIVE_MEMBER.REFUSED_HOME_INVALID("{claim}"),
-  "REFUSED_HOME_MISSING(name)": DRIVE_MEMBER.REFUSED_HOME_MISSING("{name}"),
-  REFUSED_WRITABLE: DRIVE_MEMBER.REFUSED_WRITABLE,
-  "REFUSED_BACKEND(reason)": DRIVE_MEMBER.REFUSED_BACKEND("{reason}"),
-  REFUSED_TARGET_RESERVED: DRIVE_MEMBER.REFUSED_TARGET_RESERVED,
-
-  // ---- §7.8 ----
-  RAIL_LABEL: DRIVE_RUN.RAIL_LABEL,
-  "RAIL_VALUE(name, mode)": DRIVE_RUN.RAIL_VALUE("{name}", "{mode}"),
-};
+// The six keys that cannot go through the placeholder path get their own tests
+// below (§5 #9, #10).
+const EXCLUDED = [...PLURALISED, ...SIZE_HELPERS];
+const RENDERABLE = [...doc.keys()].filter((k) => !EXCLUDED.includes(k));
 
 describe("user-drives-copy — §7.2-§7.8 parsed out of the prompt doc", () => {
   it("finds all 140 frozen keys in the doc", () => {
@@ -230,12 +108,16 @@ describe("user-drives-copy — §7.2-§7.8 parsed out of the prompt doc", () => 
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {
-    const covered = [...Object.keys(rendered), ...PLURALISED, ...SIZE_HELPERS].sort();
-    expect(covered).toEqual([...doc.keys()].sort());
+    // BOTH directions, which is what the hand-typed map could only half do:
+    // every doc row resolves to a module symbol, and every module symbol has a
+    // doc row. A key added to the module and forgotten in §7 fails here.
+    const docNames = [...doc.keys()].map((k) => splitKey(k)[0]).sort();
+    const moduleNames = NAMESPACES.flatMap((n) => Object.keys(n)).sort();
+    expect(moduleNames).toEqual(docNames);
   });
 
-  it.each(Object.keys(rendered))("%s is byte-exact", (key) => {
-    expect(rendered[key]).toBe(doc.get(key));
+  it.each(RENDERABLE)("%s is byte-exact", (key) => {
+    expect(render(key)).toBe(doc.get(key));
   });
 
   // The four inline-pluralised keys (§5 #9). The doc cell spells BOTH arms

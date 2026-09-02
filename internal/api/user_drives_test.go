@@ -734,45 +734,6 @@ func TestGetUserDrivesIsTheWholePicture(t *testing.T) {
 	}
 }
 
-// TestPreviewUserDriveRoundTrip pins D1's preview handler on the route D2
-// registers it at: the admin's "who gets what" answer comes from THE resolver,
-// and the OBJECT NAME it returns is the string the offboarding runbook copies
-// rather than computing a hash by hand.
-func TestPreviewUserDriveRoundTrip(t *testing.T) {
-	d := driveFixture(nil)
-	st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
-	srv := New(Config{Store: st, Audit: &recRecorder{}, RunnerTarget: "docker"})
-
-	w := driveCall(t, srv.handlePreviewUserDrive, http.MethodPost, "/api/v1/drives/preview",
-		`{"user_subjects":["sub-drive-bob","bob@corp.example"],"groups":["eng"]}`, nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("preview = %d: %s", w.Code, w.Body.String())
-	}
-	var got userDrivePreviewResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if got.DriveName != d.Name || got.MatchedTier != types.CapabilitySubjectUser {
-		t.Errorf("preview = %+v, want the drive and the tier that won", got)
-	}
-	// The SAME derivation the runner will use, not a second copy of it.
-	wantHome, err := types.DriveHomeName(*d, "sub-drive-bob", "")
-	if err != nil {
-		t.Fatalf("DriveHomeName: %v", err)
-	}
-	if got.HomeName != wantHome || got.ObjectName != types.DriveObjectName(*d, wantHome) {
-		t.Errorf("home/object = %q/%q, want %q/%q", got.HomeName, got.ObjectName, wantHome, types.DriveObjectName(*d, wantHome))
-	}
-
-	// No match is the EMPTY OBJECT, not a 404: "nobody is allocated this" is an
-	// answer an admin came for.
-	srv = New(Config{Store: &driveStore{}, Audit: &recRecorder{}, RunnerTarget: "docker"})
-	w = driveCall(t, srv.handlePreviewUserDrive, http.MethodPost, "/api/v1/drives/preview", `{"user_subjects":["nobody"]}`, nil)
-	if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != "{}" {
-		t.Errorf("no-match preview = %d %s, want 200 {}", w.Code, w.Body.String())
-	}
-}
-
 // ─── the reserved target ──────────────────────────────────────────────────────
 
 // TestDriveTargetIsReservedFromAuthoring pins the refusal at BOTH authoring

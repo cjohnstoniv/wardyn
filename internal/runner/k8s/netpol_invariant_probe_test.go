@@ -5,7 +5,7 @@
 
 // The k8s substrate's CONFINEMENT invariant, pinned end to end against a fake
 // clientset: what a run's NetworkPolicies actually admit, and what its Secret
-// actually holds. Four properties, each of which fails open in a way no other
+// actually holds. Three properties, each of which fails open in a way no other
 // test in this package would notice.
 //
 //  1. The agent's egress peer set is EXACTLY this run's proxy pod on the proxy
@@ -20,9 +20,12 @@
 //     half of the agent's own environment (SandboxSpec.SecretEnv), which
 //     secretEnvVars must deliver by reference — a pod spec is readable by any
 //     principal holding pods/get in the runs namespace.
-//  4. The boot-time canary refuses construction when the CNI does not enforce
-//     NetworkPolicy, never advertises NetworkPolicy under the opt-out, and
-//     refuses an indeterminate verdict even WITH the opt-out.
+//
+// The boot-time canary's three verdicts (refuse when the CNI does not enforce,
+// never advertise NetworkPolicy under the opt-out, refuse an indeterminate
+// verdict even with it) are NOT here: canary_test.go owns them one verdict per
+// test, and this file's fourth property was a fourth run of those same
+// reactors — the exception that made the sentence above untrue.
 //
 // Property 3's control-plane premise — that dispatch reports its credential
 // keys so splitSecretEnv can move them off SandboxSpec.Env — is pinned on the
@@ -31,14 +34,12 @@
 // the whole leak path; alone, each would pass over a break in the other half.
 //
 // Built on this package's own helpers (newTestDriver, probeCreate,
-// installProxyIPReactor, installAgentRunningReactor, testSandboxSpec,
-// installCanaryReactor, installStuckCanaryReactor, testRestConfig,
-// assertCanaryCleanedUp), so it needs no cluster and no Postgres.
+// installProxyIPReactor, installAgentRunningReactor, testSandboxSpec), so it
+// needs no cluster and no Postgres.
 package k8s
 
 import (
 	"context"
-	"errors"
 	"maps"
 	"strings"
 	"testing"
@@ -321,61 +322,6 @@ func TestProbe_F9_ProxySecretsLiveOnlyInTheSecret(t *testing.T) {
 	if agentPod.Spec.AutomountServiceAccountToken == nil || *agentPod.Spec.AutomountServiceAccountToken {
 		t.Error("agent pod automounts a ServiceAccount token")
 	}
-}
-
-// TestProbe_F9_CanaryRefusesWhenCNIReportsUnenforced pins the boot gate: a
-// deny-all canary that still connects (phase B exit 0) must refuse
-// construction without the opt-out, must never advertise NetworkPolicy with
-// it, and an indeterminate canary must refuse even WITH the opt-out.
-func TestProbe_F9_CanaryRefusesWhenCNIReportsUnenforced(t *testing.T) {
-	base := Config{Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test"}
-
-	cs := fake.NewClientset()
-	installCanaryReactor(t, cs, true) // phase A 0, phase B 0 => unenforced
-	d, err := newWithClient(context.Background(), cs, testRestConfig(), base)
-	if err == nil || d != nil {
-		t.Fatalf("newWithClient on an unenforcing CNI: driver=%v err=%v, want nil driver + error", d, err)
-	}
-	if !errors.Is(err, errNetworkPolicyUnenforced) {
-		t.Errorf("err = %v, want errors.Is(err, errNetworkPolicyUnenforced)", err)
-	}
-	assertCanaryCleanedUp(t, cs)
-
-	cs2 := fake.NewClientset()
-	installCanaryReactor(t, cs2, true)
-	optOut := base
-	optOut.AllowUnenforcedNetPol = true
-	d2, err := newWithClient(context.Background(), cs2, testRestConfig(), optOut)
-	if err != nil {
-		t.Fatalf("newWithClient with opt-out: %v", err)
-	}
-	cls, err := d2.Classes(context.Background())
-	if err != nil {
-		t.Fatalf("Classes: %v", err)
-	}
-	if cls.NetworkPolicy || cls.NetworkPolicyAcknowledged || cls.StructuralEgress {
-		t.Errorf("opted-out substrate advertises NetworkPolicy=%v Acknowledged=%v StructuralEgress=%v, want all false", cls.NetworkPolicy, cls.NetworkPolicyAcknowledged, cls.StructuralEgress)
-	}
-	if !d2.netPolOptedOut || d2.netPolEnforced {
-		t.Errorf("driver state optedOut=%v enforced=%v, want true/false", d2.netPolOptedOut, d2.netPolEnforced)
-	}
-
-	cs3 := fake.NewClientset()
-	installStuckCanaryReactor(t, cs3) // never Running => indeterminate
-	if _, err := newWithClient(context.Background(), cs3, testRestConfig(), optOut); err == nil || !errors.Is(err, errCanaryIndeterminate) {
-		t.Errorf("indeterminate canary with opt-out: err = %v, want errors.Is(err, errCanaryIndeterminate)", err)
-	}
-
-	cs4 := fake.NewClientset()
-	installCanaryReactor(t, cs4, false) // enforced
-	d4, err := newWithClient(context.Background(), cs4, testRestConfig(), base)
-	if err != nil {
-		t.Fatalf("newWithClient enforced: %v", err)
-	}
-	if !d4.netPolEnforced {
-		t.Error("enforced canary did not set netPolEnforced")
-	}
-	assertCanaryCleanedUp(t, cs4)
 }
 
 // TestProbe_F9_H1_AgentEnvSecretsAreAPIReadable is property 3's agent half: a

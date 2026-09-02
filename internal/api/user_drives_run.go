@@ -63,6 +63,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -114,10 +115,11 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 	return s.driveMountFor(w, req, *resolved)
 }
 
-// denyMemberDrive is the DOOR: a governance profile's DenyUserDrive refusing
-// the mount outright. 403 with an authz.denied row, target `runs.drive`, reason
-// `governance_profile` — the denyMemberField shape the two other profile
-// refusals take, and no new value in the closed reason enum.
+// driveDoorProfile names the governance profile whose DenyUserDrive DOOR is
+// shut for this caller, or "" when the door is open. ONE predicate, read by
+// the enforcement path (denyMemberDrive's 403) and the display path
+// (userDriveDeniedByProfile, the /me field) alike: this is an authz rule, and
+// two spellings of one authz rule is one place a widening can hide.
 //
 // KEYED ON ceiling.Profile != nil, the scoping rule every limit in
 // denyMemberGovernance follows: an UNASSIGNED member has no profile, so there
@@ -129,14 +131,30 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 // operator exemption is the kind of property that should be readable at the
 // site it applies to rather than inferred from a caller three files away. An
 // operator's drive still RESOLVES; only the door does not apply to them.
+func (s *Server) driveDoorProfile(ctx context.Context, ceiling governanceCeiling) (string, bool) {
+	if s.isOperator(ctx) || ceiling.Profile == nil || !ceiling.Limits.DenyUserDrive {
+		return "", false
+	}
+	// The DECISION is the bool, never the name: a profile row's name is TEXT NOT
+	// NULL UNIQUE with no non-empty CHECK, so returning the name alone made a
+	// blank-named profile with DenyUserDrive set read as "no door" and fail OPEN
+	// at the enforcement site. The name is display only.
+	return ceiling.Profile.Name, true
+}
+
+// denyMemberDrive is the DOOR at the enforcement site: 403 with an authz.denied
+// row, target `runs.drive`, reason `governance_profile` — the denyMemberField
+// shape the two other profile refusals take, and no new value in the closed
+// reason enum.
 func (s *Server) denyMemberDrive(w http.ResponseWriter, r *http.Request, ceiling governanceCeiling) bool {
-	if s.isOperator(r.Context()) || ceiling.Profile == nil || !ceiling.Limits.DenyUserDrive {
+	profile, shut := s.driveDoorProfile(r.Context(), ceiling)
+	if !shut {
 		return false
 	}
 	// The mock round's frozen member copy, reproduced byte-exact: the console
 	// never rewords a server refusal, so this line is where that string ships.
 	return s.denyMemberField(w, r, "runs.drive", "governance_profile", fmt.Sprintf(
-		"mounting a user drive is not allowed by your governance profile %q. Launch without `drive`.", ceiling.Profile.Name))
+		"mounting a user drive is not allowed by your governance profile %q. Launch without `drive`.", profile))
 }
 
 // driveMountFor folds a resolved drive and the run request into the mount, or

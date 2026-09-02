@@ -431,7 +431,7 @@ func existingDriveClaim(drive *types.DriveMount) *corev1.PersistentVolumeClaim {
 	return claim
 }
 
-// TestEnsureDrivePVC_RefusesANameTheApiserverWould covers the driver's OWN
+// TestEnsureDrivePVC_RefusesAMountTheApiserverWould covers the driver's OWN
 // validation of the mount it is handed. The control plane refuses a non-DNS-1123
 // home on a Kubernetes backend, and this driver does not trust it to: the name
 // crosses a process boundary, and a driver that trusts its input has no
@@ -441,25 +441,28 @@ func existingDriveClaim(drive *types.DriveMount) *corev1.PersistentVolumeClaim {
 // The underscore case is the motivating one and is not hypothetical: an Entra
 // `sub` is base64url and routinely carries `_`, which is legal in a Docker
 // volume name and illegal in a claim's.
-func TestEnsureDrivePVC_RefusesANameTheApiserverWould(t *testing.T) {
+func TestEnsureDrivePVC_RefusesAMountTheApiserverWould(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		shape func(*types.DriveMount)
+		want  error
 	}{
-		{"underscore, the Entra sub case", func(d *types.DriveMount) { d.ObjectName = "wardyn-drive-research-d_9f3a1c" }},
-		{"trailing dash", func(d *types.DriveMount) { d.ObjectName = "wardyn-drive-research-" }},
-		{"uppercase", func(d *types.DriveMount) { d.ObjectName = "Wardyn-Drive-Research" }},
-		{"empty", func(d *types.DriveMount) { d.ObjectName = "" }},
-		{"consecutive dots", func(d *types.DriveMount) { d.ObjectName = "wardyn-drive-research..d" }},
+		{"underscore, the Entra sub case", func(d *types.DriveMount) { d.ObjectName = "wardyn-drive-research-d_9f3a1c" }, errDriveNameInvalid},
+		{"trailing dash", func(d *types.DriveMount) { d.ObjectName = "wardyn-drive-research-" }, errDriveNameInvalid},
+		{"uppercase", func(d *types.DriveMount) { d.ObjectName = "Wardyn-Drive-Research" }, errDriveNameInvalid},
+		{"empty", func(d *types.DriveMount) { d.ObjectName = "" }, errDriveNameInvalid},
+		{"consecutive dots", func(d *types.DriveMount) { d.ObjectName = "wardyn-drive-research..d" }, errDriveNameInvalid},
 		// A legal object name whose HOME is not a legal LABEL VALUE. The two
 		// alphabets differ, so the home gets its own check rather than riding
 		// the object name's.
-		{"home too long for a label value", func(d *types.DriveMount) { d.HomeName = strings.Repeat("a", 64) }},
-		{"home cannot open a label value", func(d *types.DriveMount) { d.HomeName = "-bsmith" }},
+		{"home too long for a label value", func(d *types.DriveMount) { d.HomeName = strings.Repeat("a", 64) }, errDriveNameInvalid},
+		{"home cannot open a label value", func(d *types.DriveMount) { d.HomeName = "-bsmith" }, errDriveNameInvalid},
 		// The API refuses a zero allocation on a managed drive; so does this,
 		// because a zero request is not a claim any storage class will bind.
-		{"zero allocation on a managed drive", func(d *types.DriveMount) { d.SizeMiB = 0 }},
-		{"negative allocation", func(d *types.DriveMount) { d.SizeMiB = -1 }},
+		// Its OWN sentinel: errDriveNameInvalid's member-facing words name the
+		// directory-name field, and no value in that field produces this.
+		{"zero allocation on a managed drive", func(d *types.DriveMount) { d.SizeMiB = 0 }, errDriveAllocationInvalid},
+		{"negative allocation", func(d *types.DriveMount) { d.SizeMiB = -1 }, errDriveAllocationInvalid},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cs := fake.NewClientset()
@@ -467,8 +470,8 @@ func TestEnsureDrivePVC_RefusesANameTheApiserverWould(t *testing.T) {
 			tc.shape(drive)
 
 			err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
-			if !errors.Is(err, errDriveNameInvalid) {
-				t.Fatalf("err = %v, want errors.Is(err, errDriveNameInvalid)", err)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v, want errors.Is(err, %v)", err, tc.want)
 			}
 			if n := len(cs.Actions()); n != 0 {
 				t.Errorf("issued %d API calls, want none — an illegal name is this driver's refusal to make, not the apiserver's", n)

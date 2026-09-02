@@ -247,12 +247,19 @@ func (s PG) ListUserDriveGrants(ctx context.Context) ([]types.UserDriveGrant, er
 }
 
 // userDriveTierOrder ranks the three subject tiers MOST SPECIFIC FIRST —
-// user > group > all. Written once, as SQL, and shared by the resolver and the
-// console listing so the two can never disagree about what "most specific"
-// means. Deliberately a SEPARATE constant from governanceTierOrder despite the
-// identical text: these two are the same RULE over different tables, and
-// sharing the string would make a future per-table divergence look like a typo
-// in a shared const rather than the deliberate change it would have to be.
+// user > group > all. Written once, as SQL, and spliced into BOTH the resolver
+// and the console listing so the two can never disagree about what "most
+// specific" means. Deliberately a SEPARATE constant from governanceTierOrder
+// despite the identical text: these two are the same RULE over different
+// tables, and sharing the string would make a future per-table divergence look
+// like a typo in a shared const rather than the deliberate change it would have
+// to be.
+//
+// subject_type is deliberately UNQUALIFIED so the one string works in the
+// resolver's JOIN as well as the single-table listing. That is safe because
+// user_drives has no subject_type column (migration 0054) — the only other
+// table in that JOIN. A migration that added one would make this ambiguous, and
+// Postgres would say so loudly rather than silently re-rank.
 const userDriveTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' THEN 1 ELSE 2 END`
 
 // ResolveUserDrive returns THE ONE drive that applies to a caller, the grant
@@ -323,7 +330,7 @@ func (s PG) ResolveUserDrive(ctx context.Context, userSubjects, groups []string)
 		   OR (g.subject_type = 'user'  AND g.subject = ANY($1::text[]))
 		   OR (g.subject_type = 'group' AND g.subject = ANY($2::text[])))
 		ORDER BY
-			CASE g.subject_type WHEN 'user' THEN 0 WHEN 'group' THEN 1 ELSE 2 END,
+			` + userDriveTierOrder + `,
 			CASE g.subject_type WHEN 'user'
 				THEN COALESCE(array_position($1::text[], g.subject), 2147483647)
 				ELSE 0 END,

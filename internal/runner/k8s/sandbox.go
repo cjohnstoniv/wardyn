@@ -98,13 +98,12 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 	secretData := map[string][]byte{proxyConfigSecretKey: proxyJSON}
 	// The AGENT's credential-bearing environment rides the SAME per-run Secret,
-	// one entry per variable, for exactly the reason stated above: an inline
-	// EnvVar.Value on the agent pod is readable by any principal with pods/get
-	// in this namespace, and dispatch puts real stored-secret values (env_secret
-	// grants) and resident cloud credentials in there. secretEnvVars gives the
-	// agent container a secretKeyRef to each of these instead. One Secret, not a
-	// second one: teardown already sweeps it by the run-id label, and a separate
-	// object would be one more thing the rollback path has to get right.
+	// one entry per variable, for the reason stated above and on
+	// runner.SandboxSpec.SecretEnv; secretEnvVars gives the agent container a
+	// secretKeyRef to each of these instead of an inline EnvVar.Value. One
+	// Secret, not a second one: teardown already sweeps it by the run-id label,
+	// and a separate object would be one more thing the rollback path has to
+	// get right.
 	for k, v := range spec.SecretEnv {
 		secretData[secretEnvDataKey(k)] = []byte(v)
 	}

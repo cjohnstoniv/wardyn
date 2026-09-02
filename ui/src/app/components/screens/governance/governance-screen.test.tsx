@@ -19,8 +19,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { expectNoOwnCopy } from "../../../lib/test-fixtures";
 
 // The SafetyMeter (one per profile row, plus the editor's) debounces a
 // POST /policies/grade. Stub it so no test touches the network.
@@ -513,41 +512,14 @@ describe("GovernanceScreen — assignments and the resolved preview", () => {
 // modules §7.1 defers to — so a quoted or bare prose string in this source is a
 // canon break, not a style question.
 describe("Governance components render no copy of their own", () => {
-  const FILES = ["governance-screen.tsx", "profile-editor.tsx", "assignments.tsx", "display.tsx"];
-
-  // Vite rewrites import.meta.url to a root-relative URL, so resolve from the
-  // vitest project root (ui/) instead.
-  const DIR = "src/app/components/screens/governance";
-  const source = (f: string) => readFileSync(join(process.cwd(), DIR, f), "utf8");
-
-  // Comments explain, they do not render; className, cn() class lists and
-  // data-testid are machinery. Everything left is a candidate for the eye.
-  const strip = (src: string) =>
-    src
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "")
-      .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
-      .replace(/className=(\{[^{}]*\}|"[^"]*")/g, "")
-      .replace(/\bcn\([^()]*\)/g, "")
-      .replace(/data-testid="[^"]*"/g, "");
-
-  // Two words of prose is the signal: import paths, wire keys and CSS tokens
-  // are single words or hyphenated, and a rendered sentence is not.
-  const PROSE = /[A-Za-z]{2,}\s+[A-Za-z]{2,}/;
-
-  it.each(FILES)("%s holds no quoted product prose", (f) => {
-    const quoted = [...strip(source(f)).matchAll(/"([^"\n]*)"|'([^'\n]*)'/g)]
-      .map((m) => m[1] ?? m[2])
-      .filter((s) => PROSE.test(s));
-    expect(quoted).toEqual([]);
-  });
-
-  it.each(FILES)("%s holds no bare JSX text node either", (f) => {
-    const bare = [...strip(source(f)).matchAll(/>([^<>{}\n]{4,})</g)]
-      .map((m) => m[1].trim())
-      .filter((s) => PROSE.test(s));
-    expect(bare).toEqual([]);
-  });
+  // The vitest project root (ui/) is the resolve base: vite rewrites
+  // import.meta.url to a root-relative URL.
+  expectNoOwnCopy("src/app/components/screens/governance", [
+    "governance-screen.tsx",
+    "profile-editor.tsx",
+    "assignments.tsx",
+    "display.tsx",
+  ]);
 });
 
 describe("GovernanceScreen — the write gate", () => {

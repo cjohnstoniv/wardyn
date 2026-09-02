@@ -89,12 +89,9 @@ type dispatchParams struct {
 	// allocated no drives, and every scan/probe/harness lane, none of which
 	// carries a member principal to resolve a drive for.
 	//
-	// A CREATE-TIME SNAPSHOT by necessity, not by preference: resolution keys on
-	// capabilitySubjects (the caller's OIDC sub/email/groups) and the run row
-	// carries only CreatedBy, so there is nothing here to re-resolve from —
-	// exactly the constraint CeilingDeny above is a snapshot for. dispatchRun
-	// runs inline in the create request, so the snapshot has no staleness window
-	// to be stale in. See user_drives_run.go.
+	// A CREATE-TIME SNAPSHOT by necessity, not by preference — the same
+	// constraint CeilingDeny above is a snapshot for; the argument is written
+	// once, in user_drives_run.go's package doc.
 	Drive *types.DriveMount
 	// ResolvedManaged, when non-nil, is filled in by dispatchRun with whether
 	// the ACTUAL resolved llmTransport used the Wardyn-managed subscription
@@ -381,11 +378,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 		Image:            image,
 		ConfinementClass: run.ConfinementClass,
 		Env:              sandboxEnv,
-		// The credential half: a driver must deliver these WITHOUT publishing the
-		// value in its own readable object model — on k8s that means the per-run
-		// Secret + secretKeyRef, never an inline pod-spec EnvVar. Nil for a run
-		// with no env_secret grant and no resident Bedrock credential, which is
-		// most of them. See SandboxSpec.SecretEnv.
+		// The credential half (SandboxSpec.SecretEnv states the driver
+		// obligations). Nil for a run with no env_secret grant and no resident
+		// Bedrock credential, which is most of them.
 		SecretEnv: secretEnv,
 		Mounts:    mounts,
 		Drive:     p.Drive,

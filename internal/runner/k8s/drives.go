@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -122,7 +123,7 @@ func validateDriveMount(drive *types.DriveMount) error {
 	}
 	if drive.Backend == types.DriveBackendK8sPVC && drive.SizeMiB <= 0 {
 		return fmt.Errorf("k8s: drive: a managed drive's allocation is its volume request and %d MiB cannot be requested: %w",
-			drive.SizeMiB, errDriveNameInvalid)
+			drive.SizeMiB, errDriveAllocationInvalid)
 	}
 	if drive.Target != runner.DriveTarget {
 		return fmt.Errorf("k8s: drive: %q is not the reserved drive target %q: %w",
@@ -178,7 +179,7 @@ func driveClaimDrift(claim *corev1.PersistentVolumeClaim, drive *types.DriveMoun
 	if got := claim.Spec.Resources.Requests[corev1.ResourceStorage]; got.Value() != wantBytes {
 		drift = append(drift, fmt.Sprintf("request is %s, the drive's allocation is %d MiB", got.String(), drive.SizeMiB))
 	}
-	if !hasAccessMode(claim.Spec.AccessModes, corev1.ReadWriteOnce) {
+	if !slices.Contains(claim.Spec.AccessModes, corev1.ReadWriteOnce) {
 		drift = append(drift, fmt.Sprintf("access modes are %v, a managed drive is provisioned ReadWriteOnce", claim.Spec.AccessModes))
 	}
 	return drift
@@ -237,16 +238,6 @@ func driveClaimIdentity(claim *corev1.PersistentVolumeClaim, drive *types.DriveM
 // so the create path and the comparison path can never disagree about what the
 // drive asked for.
 func driveRequestBytes(drive *types.DriveMount) int64 { return int64(drive.SizeMiB) * 1024 * 1024 }
-
-// hasAccessMode reports whether modes contains want.
-func hasAccessMode(modes []corev1.PersistentVolumeAccessMode, want corev1.PersistentVolumeAccessMode) bool {
-	for _, m := range modes {
-		if m == want {
-			return true
-		}
-	}
-	return false
-}
 
 // ensureDrivePVC makes the run's PersistentVolumeClaim exist, and is the only
 // place this substrate provisions storage.

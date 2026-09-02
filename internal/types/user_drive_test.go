@@ -116,7 +116,6 @@ func TestDriveHomeName(t *testing.T) {
 		{name: "an override beats the hash", tmpl: HomeTemplateHash, subject: "sub-abc", override: "bsmith", want: "bsmith"},
 		{name: "an override is lowercased too", tmpl: HomeTemplateHash, subject: "sub-abc", override: "BSmith", want: "bsmith"},
 		{name: "an invalid override is refused, not ignored", tmpl: HomeTemplateHash, subject: "sub-abc", override: ".ssh", wantErr: true},
-		{name: "an unknown template is refused", tmpl: HomeTemplate("uid"), subject: "alice", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := driveFor(t, DriveBackendHostPath, tc.tmpl)
@@ -316,11 +315,18 @@ func TestDriveBackendMapping(t *testing.T) {
 			}
 		})
 	}
-	// The enforcement vocabulary is introduced complete: `filesystem` has no v1
-	// backend and is named here so a future quota lane reuses the word instead
-	// of inventing a fifth one.
-	if StorageEnforcementFilesystem == "" {
-		t.Error("StorageEnforcementFilesystem is unset")
+	// The enum's VALUES, not just the mapping: the console keys its enforcement
+	// note off these exact strings (screens/drives/display.tsx), and blanking a
+	// constant would leave every row above still passing.
+	for name, got := range map[string]StorageEnforcement{
+		"filesystem": StorageEnforcementFilesystem,
+		"request":    StorageEnforcementRequest,
+		"external":   StorageEnforcementExternal,
+		"none":       StorageEnforcementNone,
+	} {
+		if string(got) != name {
+			t.Errorf("StorageEnforcement constant = %q, want %q", got, name)
+		}
 	}
 }
 

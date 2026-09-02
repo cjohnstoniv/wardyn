@@ -244,14 +244,12 @@ func envVars(env map[string]string) []corev1.EnvVar {
 func secretEnvDataKey(name string) string { return "env." + name }
 
 // secretEnvVars converts a CREDENTIAL-BEARING env map
-// (runner.SandboxSpec.SecretEnv) into EnvVars that carry only a REFERENCE to
-// the per-run Secret. That is the whole difference from envVars above, and the
-// reason the spec splits the two: a secretKeyRef resolves in the kubelet, so
-// the value never enters the Pod spec that pods/get returns — the same reason
-// the proxy's WARDYN_PROXY_CONFIG_JSON has always travelled this way (see
-// CreateSandbox's Secret step). The container still sees an ordinary
-// environment variable under its own name, so nothing in the sandbox changes.
-// Sorted by key for a deterministic pod spec, like envVars.
+// (runner.SandboxSpec.SecretEnv, which states why the spec splits the two) into
+// EnvVars that carry only a REFERENCE to the per-run Secret. That is the whole
+// difference from envVars above: a secretKeyRef resolves in the kubelet, so the
+// value never enters the Pod spec that pods/get returns. The container still
+// sees an ordinary environment variable under its own name, so nothing in the
+// sandbox changes. Sorted by key for a deterministic pod spec, like envVars.
 func secretEnvVars(runID uuid.UUID, secretEnv map[string]string) []corev1.EnvVar {
 	if len(secretEnv) == 0 {
 		return nil

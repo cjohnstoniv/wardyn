@@ -88,13 +88,23 @@ const (
 )
 
 // errDriveNameInvalid is validateDriveMount's refusal of a mount whose resolved
-// object name cannot name a PersistentVolumeClaim, whose home name cannot be a
-// label value, or whose managed allocation is zero. The driver validates its own
-// inputs rather than trusting the resolver that derived them: names cross a
-// process boundary (an older control plane, an operator's own API call, a future
-// backend), and a driver that trusts its input has no fail-closed path left —
-// only the apiserver's own 422, mid-dispatch, as somebody's run failure hint.
+// object name cannot name a PersistentVolumeClaim, or whose home name cannot be
+// a label value. The driver validates its own inputs rather than trusting the
+// resolver that derived them: names cross a process boundary (an older control
+// plane, an operator's own API call, a future backend), and a driver that trusts
+// its input has no fail-closed path left — only the apiserver's own 422,
+// mid-dispatch, as somebody's run failure hint.
 var errDriveNameInvalid = errors.New("this drive cannot be mounted on Kubernetes: the directory name it resolves to is not a legal object name (ask an administrator to set your directory name on the allocation)")
+
+// errDriveAllocationInvalid is validateDriveMount's refusal of a MANAGED mount
+// whose allocation is not a size a claim can request.
+//
+// Its own sentinel rather than errDriveNameInvalid's, for the reason
+// errDriveTargetInvalid has one: that message sends the reader to the
+// allocation's DIRECTORY NAME field, and no value in that field produces this
+// refusal — the size does. A member told to fix the wrong field asks for the
+// wrong change.
+var errDriveAllocationInvalid = errors.New("this drive cannot be mounted on Kubernetes: its allocation is not a size a volume claim can request (ask an administrator to set the size on the allocation)")
 
 // errDriveTargetInvalid is validateDriveMount's refusal of a mount whose Target
 // is not runner.DriveTarget, the one in-container path a drive may ever bind at.

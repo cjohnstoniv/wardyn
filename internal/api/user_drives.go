@@ -27,10 +27,8 @@
 //     place that can tell "the client said false" from "the client said
 //     nothing" — see userDriveGrantRequest.Enabled.
 //
-// EVERY ROUTE IS SUPER-ONLY (routes.go). A drive names host paths and storage
-// classes, which is the "never the host" line the operator tier exists to hold;
-// a security admin reaches drives only through the DenyUserDrive door in the
-// profile editor, which is already theirs.
+// EVERY ROUTE IS SUPER-ONLY, not securityOps; the tier argument is written at
+// the mountUserDriveRoutes call that decides it (routes.go).
 package api
 
 import (
@@ -575,21 +573,22 @@ func (s *Server) resolveMeUserDrive(r *http.Request) *meUserDrive {
 // an allocation would not help them, and a field folded into user_drive could
 // not have said so.
 //
-// The SAME predicate denyMemberDrive enforces with, keyed the same two ways: an
-// operator is exempt (the door does not apply to them, so it is never reported
-// as shut), and an unassigned member has no profile to carry a door. A ceiling
-// that cannot be resolved reports "" for resolveMeUserDrive's own reason — /me
-// is a display read, and the ENFORCEMENT path answers the same failure with a
-// refusal.
+// It reads driveDoorProfile — the SAME predicate denyMemberDrive enforces with,
+// whose keying (operator exempt, unassigned member has no door) is documented
+// there. A ceiling that cannot be resolved reports "" for resolveMeUserDrive's
+// own reason — /me is a display read, and the ENFORCEMENT path answers the same
+// failure with a refusal. The operator short-circuit stays HERE too, ahead of
+// the resolve: a display read must not cost an operator a ceiling round-trip.
 func (s *Server) userDriveDeniedByProfile(r *http.Request) string {
 	if s.isOperator(r.Context()) {
 		return ""
 	}
 	ceiling, err := s.effectiveCeiling(r.Context())
-	if err != nil || ceiling.Profile == nil || !ceiling.Limits.DenyUserDrive {
+	if err != nil {
 		return ""
 	}
-	return ceiling.Profile.Name
+	name, _ := s.driveDoorProfile(r.Context(), ceiling)
+	return name
 }
 
 // driveRefusal composes a 422 body in the frozen member voice: lowercase

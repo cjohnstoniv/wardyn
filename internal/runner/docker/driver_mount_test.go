@@ -438,21 +438,14 @@ func TestCreateSandbox_DeniedDriveMountsRejected(t *testing.T) {
 	}
 }
 
-// TestCreateSandbox_DriveTargetIsValidatedNotAuthored pins the ValidateTarget /
-// ValidateAuthoredTarget split from the driver's side: the drive's own mount
-// must pass (runner.DriveTarget is a legal place to put something), while a
-// drive whose target was corrupted to somewhere illegal is still refused.
-// Running ValidateAuthoredTarget here instead would make the drive fail its own
-// validation, since that function exists to reserve this exact path from
-// everybody else.
+// TestCreateSandbox_DriveTargetIsValidatedNotAuthored is the DRIVER's side of
+// the ValidateTarget / ValidateAuthoredTarget split: a drive whose target was
+// corrupted to somewhere illegal is still refused at CreateSandbox. The split
+// itself — the drive's own target passes ValidateTarget and is refused to
+// authors — is walked over three targets by
+// TestValidateAuthoredTargetReservesTheDriveTarget, in the package that owns
+// both functions; restating it here would be a second, weaker copy.
 func TestCreateSandbox_DriveTargetIsValidatedNotAuthored(t *testing.T) {
-	if err := runner.ValidateTarget(runner.DriveTarget); err != nil {
-		t.Fatalf("runner.ValidateTarget(%q) must pass — the drive mounts there: %v", runner.DriveTarget, err)
-	}
-	if err := runner.ValidateAuthoredTarget(runner.DriveTarget); err == nil {
-		t.Fatalf("runner.ValidateAuthoredTarget(%q) must refuse — the target is reserved from authors", runner.DriveTarget)
-	}
-
 	drive := dockerVolumeDrive()
 	drive.Target = "/usr/local"
 	if _, _, err := createWithDrive(t, drive, nil); err == nil {
