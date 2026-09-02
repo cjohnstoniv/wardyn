@@ -24,9 +24,11 @@ Four legs per episode:
   (b) a route the episode is filmed on changed — page.goto() AND the
       toHaveURL/waitForURL receipts, the spec's own and its helpers' (openEpisode
       and openDemo navigate for FIVE episodes, and that navigation is not in the
-      spec file at all) — matched against App.tsx's <Route> table and then the
-      screen module's whole transitive import closure, because on-camera strings
-      live in shared files (live-approvals.tsx, app-shell.tsx, new-run-rail.tsx);
+      spec file at all), literal or `${origin}/path` (11 films a SECOND stack
+      and spells every URL that way) — matched against App.tsx's <Route> table
+      and then the screen module's whole transitive import closure, because
+      on-camera strings live in shared files (live-approvals.tsx, app-shell.tsx,
+      new-run-rail.tsx);
   (c) the app SHELL changed — every episode renders inside it, so this leg fires
       for any episode whose closure includes stage.ts/overlay.ts (all of them),
       not just the ones with a literal goto;
@@ -49,27 +51,45 @@ STR = r'"((?:[^"\\]|\\.)*)"'
 LBL = re.compile(r'(?:name:\s*|getByText\(\s*|getByLabel\(\s*)' + STR)
 # Both quotings. A backtick template is cut at its first ${…} — `/runs/${id}`
 # arrives as "/runs/", and route_for() reads that trailing slash as the :id
-# segment. Cutting at ? and # drops query/hash the same way it always did.
-GOTO = re.compile(r'page\.goto\(\s*["`]([^"`?#$]*)')
+# segment. Cutting at ? and # drops query/hash the same way it always did. ONE
+# leading ${origin} is stepped over first: 11 films a SECOND stack and spells
+# every URL `${CI_STACK}/runs…`, so cutting at the ${ left it an empty path and
+# no visited route at all.
+GOTO = re.compile(r'page\.goto\(\s*["`](?:\$\{\w+\})?([^"`?#$]*)')
 # The OTHER receipt that an episode is on a route: it navigates by clicking and
-# then asserts where it landed. Regex literals only (a template one carries no
-# literal prefix worth having).
-URLPAT = re.compile(r'(?:toHaveURL|waitForURL)\(\s*/((?:[^/\\\n]|\\.)+)/')
+# then asserts where it landed. Two spellings, one capture group each — a regex
+# literal, whose literal prefix url_prefix() reads, and the `${origin}/path`
+# template (11's `${CI_STACK}/runs/${run.id}`), cut exactly as GOTO cuts one.
+URLPAT = re.compile(
+    r'(?:toHaveURL|waitForURL)\(\s*(?:'
+    r'/((?:[^/\\\n]|\\.)+)/'      # /\/runs\/[0-9a-f-]{8,}/i
+    r'|`\$\{\w+\}([^`?#$]*)'      # `${CI_STACK}/runs/${run.id}`
+    r')'
+)
 IMPORT = re.compile(r'(?:from\s*|import\()\s*"((?:\.{1,2}|@)/[^"]+)"')
 STATIC_IMPORT = re.compile(r'from\s*"((?:\.{1,2}|@)/[^"]+)"')
 # The e2e side also drives non-code assets it never imports: 01 loads its deck
 # with new URL("./assets/primer.html", import.meta.url).
 E2E_IMPORT = re.compile(r'(?:from\s*|import\(|new URL\()\s*["`]((?:\.{1,2}|@)/[^"`]+)["`]')
-# Data/dynamic labels that never exist verbatim in ui/src.
+# Asserted labels ui/src never spells verbatim, and what to grade them on
+# instead. A composed label keeps the FIXED FRAGMENT of its template, so renaming
+# the template still refuses the take — a bare skip meant `exit {exitCode}` could
+# become anything and 11 would still roll. "" is the only free pass, for a string
+# the DATA supplies (a principal, a speed radio, an audit action id) that ui/src
+# has no receipt for at all.
 ALLOW = {
-    "1 domain allowed", "2x speed", "4x speed", "authz.denied", "member@wardyn.local",
+    "2x speed": "", "4x speed": "", "authz.denied": "", "member@wardyn.local": "",
     # Composed at render time — `Allowed hosts · ${rows.length}`, `exit {exitCode}`,
-    # `Promoted — ${n} still need(s) approval` — or sentence-cased out of a lowercase
-    # verb table (audit.tsx's ACTION_VERB says "injected the subscription credential
-    # at the proxy"). All four used to pass this gate only because a *.test.tsx
-    # fixture spelled them out in full, which grep_ui no longer reads.
-    "Allowed hosts · 1", "exit 0", "Promoted — 1 still needs approval",
-    "Injected the subscription credential at the proxy",
+    # `Promoted — ${n} still need(s) approval`, `${n} domain(s) allowed` — or
+    # sentence-cased out of a lowercase verb table (audit.tsx's ACTION_VERB says
+    # "injected the subscription credential at the proxy"). All five used to pass
+    # this gate only because a *.test.tsx fixture spelled them out in full, which
+    # grep_ui no longer reads.
+    "Allowed hosts · 1": "Allowed hosts ·",
+    "exit 0": "exit {",
+    "Promoted — 1 still needs approval": "still need",
+    "Injected the subscription credential at the proxy": "injected the subscription credential",
+    "1 domain allowed": "} allowed",
 }
 
 
@@ -134,7 +154,12 @@ def url_prefix(rx: str) -> str:
         if c == "\\":
             i += 1
             if i < len(rx):
-                out.append(rx[i])
+                n = rx[i]
+                if n in "?#":        # escaped query/hash — the path ended, as GOTO reads it
+                    return "".join(out)
+                if n in "dwsbDWSB":  # \d \w \s \b: a class or an anchor, never a literal
+                    break
+                out.append(n)
                 i += 1
             continue
         if c in "?*+{":       # a quantifier makes the char BEFORE it optional
@@ -155,7 +180,9 @@ def navs(rel: str) -> set[str]:
     if rel not in _NAV:
         p = ROOT / rel
         src = p.read_text(errors="ignore") if p.is_file() else ""
-        found = set(GOTO.findall(src)) | {url_prefix(r) for r in URLPAT.findall(src)}
+        found = set(GOTO.findall(src))
+        for rx, tpl in URLPAT.findall(src):
+            found.add(url_prefix(rx) if rx else tpl)
         _NAV[rel] = {g for g in found if g.startswith("/")}
     return _NAV[rel]
 
@@ -174,13 +201,23 @@ def route_for(goto: str, routes):
 
 
 def labels_of(src: str):
-    return {m for m in LBL.findall(src) if len(m) >= 3} - ALLOW
+    return {m for m in LBL.findall(src) if len(m) >= 3}
+
+
+def needle(label: str):
+    """What ui/src must still contain for this asserted label: the label itself,
+    or a composed one's fixed fragment. None = the data supplies it and there is
+    nothing in ui/src to look for."""
+    return ALLOW.get(label, label) or None
 
 
 def grep_ui(label: str) -> bool:
+    n = needle(label)
+    if n is None:
+        return True
     # --exclude the unit tests: a label kept alive only by a *.test.tsx fixture
     # is gone from the product, and the camera would film its absence.
-    return subprocess.run(["grep", "-rqF", "--exclude=*.test.*", "--", label, str(UI)]).returncode == 0
+    return subprocess.run(["grep", "-rqF", "--exclude=*.test.*", "--", n, str(UI)]).returncode == 0
 
 
 def episodes() -> dict[str, list[pathlib.Path]]:
@@ -258,10 +295,18 @@ def impact(base: str) -> int:
             for lab in labels_of(src):
                 if not grep_ui(lab):
                     why.add(f"asserted label GONE from ui/src: {lab!r}")
-                else:
-                    for f, t in txt.items():
-                        if lab in t:
-                            why.add(f"on-camera label {lab!r} is in the diff of {f}")
+                    continue
+                n = needle(lab)
+                if n is None:
+                    continue
+                # Word-bounded: unanchored, the asserted label 'Name' matched
+                # every className in the hunk and sent five episodes back to the
+                # camera for a styling change. grep_ui stays a substring test —
+                # there the question is presence, not identity.
+                pat = re.compile(r'(?<!\w)' + re.escape(n) + r'(?!\w)')
+                for f, t in txt.items():
+                    if pat.search(t):
+                        why.add(f"on-camera label {lab!r} is in the diff of {f}")
             if canon and gotos:
                 why.add(f"a canon copy module changed: {', '.join(canon[:3])}")
         if why:
@@ -293,7 +338,16 @@ def main(argv: list[str]) -> int:
     i = sub.add_parser("impact", help="the episodes a diff puts back in front of the camera")
     i.add_argument("--base", default=DEFAULT_BASE, help=f"git ref to diff against (default {DEFAULT_BASE})")
     a = ap.parse_args(argv)
-    return check(a.id) if a.cmd == "check" else impact(a.base)
+    if a.cmd == "check":
+        # take-chain.sh reads rc 1 as REFUSE, and an uncaught exception exits 1
+        # too — an unreadable spec would block a take that is probably fine. rc 2
+        # is the honest answer: could not judge.
+        try:
+            return check(a.id)
+        except Exception as e:
+            print(f"{a.id}: could not judge — {type(e).__name__}: {e}", file=sys.stderr)
+            return 2
+    return impact(a.base)
 
 
 if __name__ == "__main__":

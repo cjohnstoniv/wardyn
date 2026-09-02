@@ -100,8 +100,9 @@ archive_artifacts() {  # <mp4 path>
     [[ -s "${work}/${f}" ]] && cp -f "${work}/${f}" "${dst}/" 2>/dev/null
   done
   # 12's handoff does NOT live in the per-id work dir: both lanes resolve the one
-  # fixed path below, and verify-demo-take.sh's 12 arm (check_video_10) reads it
-  # from there. Without it a re-grade of an archived 12 has no run id at all.
+  # fixed path below, which the next take of any id overwrites. check_video_10
+  # reads WARDYN_DEMO_WORK_DIR first, so this copy is what a re-grade with
+  # WARDYN_DEMO_WORK_DIR=<take>.artifacts finds. Without it: no run id at all.
   [[ "${VIDEO}" == "12" && -s "${REPO_ROOT}/ui/test-results/demo-video/v10-run-id.txt" ]] &&
     cp -f "${REPO_ROOT}/ui/test-results/demo-video/v10-run-id.txt" "${dst}/" 2>/dev/null
   # An empty archive used to be removed in silence, so "the work dir was already
@@ -130,11 +131,16 @@ attempt=0
 #   rc 1 = REFUSE: the take would film a lie
 #   rc 2 = the tool could not judge (unknown id, two specs) — noted, not fatal,
 #          because a new episode's lane must still be able to roll.
+# ANY OTHER rc is the gate failing to RUN — no python3 (127), a crash — and that
+# is "could not judge" too. Only rc 1 is a refusal; treating a broken gate as one
+# would ground the camera over a tool, not over the take.
 python3 "${REPO_ROOT}/scripts/demo-rerecord-impact.py" check "${VIDEO}"
 case $? in
+  0) ;;
   1) echo "LABEL_GATE_FAILED ${VIDEO} — the spec asserts labels ui/src no longer has; fix the spec or the app, do not roll"
      ledger "not run" "label-gate"; exit 1 ;;
   2) echo "LABEL_GATE_SKIPPED ${VIDEO} — the label gate could not judge this id; rolling anyway" ;;
+  *) echo "LABEL_GATE_SKIPPED ${VIDEO} — gate rc=$? (it could not run); rolling anyway" ;;
 esac
 
 while :; do

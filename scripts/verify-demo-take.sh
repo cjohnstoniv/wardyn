@@ -650,9 +650,12 @@ check_video_10() {
 head_ "Video 10 · the run the terminals attacked"
 V10_API="http://localhost:${WARDYN_UP_PORT:-8080}"
 # The handoff the beat script writes and the browser spec reads (both resolve
-# this one fixed path) — the same "two lanes agree via the file the take wrote"
-# rule 09's ci-artifacts/run.json follows.
-V10_HANDOFF="${REPO_ROOT}/ui/test-results/demo-video/v10-run-id.txt"
+# the one fixed path below) — the same "two lanes agree via the file the take
+# wrote" rule 09's ci-artifacts/run.json follows. take-chain.sh parks a COPY
+# beside the mp4, so a re-grade with WARDYN_DEMO_WORK_DIR=<take>.artifacts reads
+# the archived id and the fixed path stays the live take's answer.
+V10_HANDOFF="${WARDYN_DEMO_WORK_DIR:-}/v10-run-id.txt"
+[[ -s "${V10_HANDOFF}" ]] || V10_HANDOFF="${REPO_ROOT}/ui/test-results/demo-video/v10-run-id.txt"
 V10_RUN="${WARDYN_DEMO_RUN_ID:-}"
 [[ -z "${V10_RUN}" && -s "${V10_HANDOFF}" ]] && V10_RUN="$(tr -d '[:space:]' <"${V10_HANDOFF}")"
 if [[ -z "${V10_RUN}" ]]; then
@@ -796,10 +799,7 @@ case "${WARDYN_DEMO_VIDEO:-}" in
   03d) check_video_03d ;;
   02|05|07) "check_video_floor_${WARDYN_DEMO_VIDEO}" ;;   # cue floors (H-6); content arms still owed
   02b|02c|04b|04c|12b) "check_video_${WARDYN_DEMO_VIDEO}" ;;  # optionals: stubs that FAIL until their lane ships rows
-  # "00.." stays: episode 00 is real in the series, its arm just lands in a later
-  # lane of this campaign. Naming a range this script cannot yet check is the
-  # correct promise here — the arm is owed, not absent by design.
-  *) head_ "Video ${WARDYN_DEMO_VIDEO}"; bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 00..13 or a lettered sub-episode such as 03a, or unset for the walkthrough" ;;
+  *) head_ "Video ${WARDYN_DEMO_VIDEO}"; bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 01..13 or a lettered sub-episode such as 03a, or unset for the walkthrough" ;;
 esac
 
 # --- shared: every take, every video -----------------------------------------
