@@ -91,8 +91,10 @@ CREATE TABLE IF NOT EXISTS user_drives (
 -- writable_override is NULLABLE and NULL IS NOT false: NULL means "use the
 -- drive's posture", while an explicit false is an admin saying "this subject
 -- reads only" on a writable drive. A NOT NULL DEFAULT false would have made
--- every unset override silently read-only, and an override may only ever NARROW
--- the drive's own posture at run time.
+-- every unset override silently read-only. The narrowing rule is the RUN
+-- REQUEST's, not this column's: a request may only ever narrow the resolved
+-- posture, while an override is the admin's own call and may widen or narrow
+-- the drive's default.
 --
 -- UNIQUE(subject_type, subject) is the natural key and exactly what the CRUD
 -- upsert needs: re-allocating a subject REPOINTS its one row instead of

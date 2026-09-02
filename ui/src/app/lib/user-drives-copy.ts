@@ -398,7 +398,11 @@ export const DRIVE_MEMBER = {
   // {reason} is the runner's own prose (on Kubernetes, the apiserver's
   // refusal naming k8s.userDrives.enabled).
   REFUSED_BACKEND: (reason: string) => `drive: this deployment cannot mount your drive (${reason})`,
-  REFUSED_TARGET_RESERVED: "workspace_mounts: target /home/agent/drive is reserved for the user drive",
+  // [0] is the MOUNT'S POSITION, not a literal: validatePolicySpec prefixes
+  // every mount error with workspace_mounts[i] (workspace_repos[i] for a
+  // repo), so the canon spells the first mount's index and the string below
+  // is the server's bytes for it.
+  REFUSED_TARGET_RESERVED: "workspace_mounts[0]: target /home/agent/drive is reserved for the user drive",
 } as const;
 
 // ==================== §7.8 — DRIVE_RUN ======================================

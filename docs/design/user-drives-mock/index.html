@@ -924,7 +924,7 @@ dl.rail dd.plain{font-family:var(--font-sans)}
       <div class="note red">drive: volume claim <span class="mono">wardyn-drive-corporate-homes-bsmith</span> is not provisioned on this cluster — ask an admin to create it</div>
       <div class="note red">drive: your allocation is read-only; <span class="mono">read_only:false</span> cannot widen it</div>
       <div class="note red">drive: this deployment cannot mount your drive (the runner may not create volume claims — k8s.userDrives.enabled is off)</div>
-      <div class="note red">workspace_mounts: target <span class="mono">/home/agent/drive</span> is reserved for the user drive</div>
+      <div class="note red">workspace_mounts[0]: target <span class="mono">/home/agent/drive</span> is reserved for the user drive</div>
     </div>
     <div class="varlabel"><b>Beside them, reused:</b> the governance round's stale-snapshot refusal, when group-tier allocations exist and the snapshot is truncated</div>
     <div class="pad" style="padding-top:14px">
