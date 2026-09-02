@@ -70,6 +70,21 @@ type Config struct {
 	// instead of refusing. OFF by default — an untrusted sandbox must not run
 	// uncapped. Set only on a trusted host (WARDYN_ALLOW_UNENFORCEABLE_CAPS=1).
 	AllowUnenforceableCaps bool
+	// UserDriveHostRoots is the deployment's WARDYN_USER_DRIVE_HOST_ROOTS
+	// ceiling over host_path USER DRIVES, parsed once at boot
+	// (runner.ParseUserDriveHostRoots) and handed to the substrate constructor,
+	// so the driver's bind-time re-check and the API's authoring-time check are
+	// the same operator-set list.
+	//
+	// It is DRIVER CONFIG rather than a SandboxSpec field — the opposite of
+	// MemberMountRoots, deliberately. Member roots are resolved PER PRINCIPAL
+	// (a `_MAP` entry replaces the shared list for one member), so only the
+	// control plane knows which roots bound a given run. A drive's ceiling is
+	// per DEPLOYMENT: it says where this daemon's operator has mounted shares,
+	// which is a fact about the host wardynd runs on, not about whose run this
+	// is. Empty — the zero value, and the default — refuses every host_path
+	// drive, which is the whole posture (see runner.UserDriveHostRootCheck).
+	UserDriveHostRoots []string
 }
 
 // RecordingMountTarget is where RecordingMount appears inside the agent
@@ -217,24 +232,12 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 	}, nil
 }
 
-// errDriveUnsupported names the gap between the control plane resolving a
-// member's drive (migration 0054) and this driver being able to mount it.
-// D3 removes this: the Docker mount path lands on its own lane.
-var errDriveUnsupported = errors.New("user drive: this runner does not mount drives yet")
-
 // CreateSandbox provisions the per-run network, the wardyn-proxy sidecar, and
 // the agent container with L0 confinement. Order matters for fail-closed
 // teardown: anything created before an error is rolled back.
 //
 //nolint:funlen // Deliberate: a single linear container-assembly sequence (network → proxy sidecar → hardening → mounts → sandbox container) whose teardown-on-failure compensations must stay in one scope to be verifiably complete; low branching (passes gocyclo/gocognit), just long.
 func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
-	// D3 removes this. A spec carrying a resolved drive is refused before ANY
-	// Docker call, for the reason seedRequestDrive refuses an unmountable one:
-	// a member who asked for storage must never silently get a run without it.
-	if spec.Drive != nil {
-		return runner.Sandbox{}, fmt.Errorf("docker: %w (%q, backend %s)",
-			errDriveUnsupported, spec.Drive.ObjectName, spec.Drive.Backend)
-	}
 	infoRes, err := d.cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return runner.Sandbox{}, fmt.Errorf("docker: info: %w", err)
@@ -458,7 +461,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// DNS (required under gVisor; harmless under runc). This is the ONLY host entry
 	// the agent gets — NOT host.docker.internal, which stays proxy-only.
 	agentHost.ExtraHosts = append(agentHost.ExtraHosts, "wardyn-proxy:"+proxyIP)
-	agentMounts, err := d.agentMounts(spec.Mounts, spec.MemberMountRoots)
+	agentMounts, err := d.agentMounts(ctx, spec)
 	if err != nil {
 		return fail(err)
 	}

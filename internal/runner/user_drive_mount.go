@@ -35,10 +35,19 @@ import (
 // exactly as WARDYN_MEMBER_WORKSPACE_ROOTS does: a ceiling the operator
 // mistyped must not silently become a ceiling that bounds a different tree.
 //
-// A root of "/" or the daemon's own $HOME is permitted but WARNED about, the
-// same allow-and-warn posture MemberMountPolicy.bootWarnings takes — with such
-// a root the ceiling bounds essentially nothing, which an operator may have
-// chosen deliberately and should still be told.
+// Two root values are permitted but WARNED about, the same allow-and-warn
+// posture MemberMountPolicy.bootWarnings takes — and they are warned about for
+// OPPOSITE reasons, which is why they do not share a sentence:
+//
+//   - the daemon's own $HOME is far too WIDE: every dotfile tree that home
+//     holds becomes a place a drive may be authored over, and its per-person
+//     subdirectories are bound into other people's sandboxes.
+//   - "/" is DEAD, not wide. withinAnyRoot matches `real == root` or `real`
+//     under `root + "/"`, and for the root "/" that second form is the prefix
+//     "//", which no cleaned absolute path has — so a ceiling of "/" matches
+//     nothing at all and refuses EVERY host_path drive. It reads like "allow
+//     anywhere" and behaves like "allow nothing", so the warning has to say
+//     which.
 func ParseUserDriveHostRoots(raw string) (roots []string, warnings []string, err error) {
 	roots, err = parseRootList("WARDYN_USER_DRIVE_HOST_ROOTS", raw)
 	if err != nil {
@@ -46,12 +55,16 @@ func ParseUserDriveHostRoots(raw string) (roots []string, warnings []string, err
 	}
 	home := filepath.Clean(strings.TrimSpace(os.Getenv("HOME")))
 	for _, r := range roots {
-		if r != "/" && !(home != "" && home != "." && r == home) {
-			continue
+		switch {
+		case r == "/":
+			warnings = append(warnings, fmt.Sprintf(
+				"WARDYN_USER_DRIVE_HOST_ROOTS contains %q, which matches NOTHING: a root of \"/\" bounds only the literal path \"/\", "+
+					"so every host_path drive under it is refused rather than allowed; point it at the mount point of the share instead", r))
+		case home != "" && home != "." && r == home:
+			warnings = append(warnings, fmt.Sprintf(
+				"WARDYN_USER_DRIVE_HOST_ROOTS contains %q, this daemon's own home directory — a host-path drive could then be authored over "+
+					"anything in it, and its per-person subdirectories are bound into other people's sandboxes; point it at the mount point of the share instead", r))
 		}
-		warnings = append(warnings, fmt.Sprintf(
-			"WARDYN_USER_DRIVE_HOST_ROOTS contains %q — a host-path drive could then be authored anywhere on this host, "+
-				"and its per-person subdirectories are bound into other people's sandboxes; point it at the mount point of the share instead", r))
 	}
 	return roots, warnings, nil
 }
@@ -92,6 +105,18 @@ func UserDriveHostRootCheck(roots []string) func(hostRoot string) error {
 		if err != nil {
 			return fmt.Errorf("host_root %q could not be resolved on this host (a drive's host root must be a directory that exists here): %w", hostRoot, err)
 		}
+		// The member rule's DOTFILE deny-list, on the RESOLVED path — the same
+		// segments ValidateMemberMountSource refuses (.ssh, .aws, .claude, .kube,
+		// .config/gh, …). ValidateMountSource above denies whole system trees; it
+		// says nothing about a credential directory inside an ordinary home, and
+		// a share whose mount point is one — or a symlink that lands in one — is
+		// exactly the shape THREAT-MODEL's host_path residual claims is bounded
+		// by "the dotfile deny-list matches the real path". Without this the
+		// claim was true of member mounts only.
+		if seg := deniedMemberSegment(real); seg != "" {
+			return fmt.Errorf("host_root %q resolves to %q, which is or traverses %q — a credential directory is never a drive's host root",
+				hostRoot, real, seg)
+		}
 		if !withinAnyRoot(real, roots) {
 			// The frozen wording (docs/design/user-drives-prompt.md's
 			// server-composed table), naming the RESOLVED path too when it
@@ -105,5 +130,59 @@ func UserDriveHostRootCheck(roots []string) func(hostRoot string) error {
 				"a drive may bind only a subdirectory of a root this deployment allows", hostRoot, strings.Join(roots, ", "))
 		}
 		return nil
+	}
+}
+
+// UserDriveMountSourceCheck is the DRIVER-side check over the path a host_path
+// drive is actually BOUND from — this principal's subdirectory — as opposed to
+// the host_root an admin authored, which UserDriveHostRootCheck decides about.
+//
+// It is that check plus ONE rule that only makes sense for a bind: the resolved
+// source must be a STRICT SUBDIRECTORY of a root, never a root itself. An
+// authored host_root legitimately IS a root (the ordinary shape: the ceiling
+// names the share's mount point and so does the drive), so the equality arm
+// cannot live inside the shared check without refusing every correct drive. But
+// a MOUNT whose source resolved to the root would bind the whole share —
+// everybody's home directory — into one member's sandbox, which is the single
+// outcome the per-person subdirectory model exists to prevent. That can only
+// arrive through a bug (a home name that resolved to "." or "", a symlink from
+// a home back to its parent), and a bug is precisely what a last-thing-before-
+// ContainerCreate check is for.
+//
+// Composed rather than restated so the driver and the API write boundary cannot
+// drift on what the deny-list, the unset-roots refusal, or "inside a root" mean.
+//
+// IT RETURNS THE RESOLVED REAL PATH, not just nil/error, and the caller is
+// expected to keep asserting about it. This function's whole job is symlink
+// resolution, so handing back the answer is what stops the ONE caller that has
+// to say more about it — the Docker driver, which knows whose home the bind is
+// supposed to be — from resolving the same path a second time and reasoning
+// about a value this one never saw. On an error the string is "": there is no
+// resolved path to speak of, and a caller that ignored the error must not find
+// a plausible-looking one in its place.
+func UserDriveMountSourceCheck(roots []string) func(source string) (string, error) {
+	within := UserDriveHostRootCheck(roots)
+	return func(source string) (string, error) {
+		if err := within(source); err != nil {
+			return "", err
+		}
+		real, err := filepath.EvalSymlinks(filepath.Clean(source))
+		if err != nil {
+			// Unreachable in practice — `within` already resolved this path and
+			// fails closed when it cannot — but a resolve that started working
+			// and then stopped must not fall through to a bind.
+			return "", fmt.Errorf("user drive source %q could not be resolved on this host: %w", source, err)
+		}
+		for _, root := range roots {
+			r := filepath.Clean(root)
+			if resolved, rerr := filepath.EvalSymlinks(r); rerr == nil {
+				r = resolved
+			}
+			if real == r {
+				return "", fmt.Errorf("user drive source %q resolves to %q, which IS the configured root — a drive binds one person's "+
+					"subdirectory of a share, never the share itself (every other person's home is under it)", source, real)
+			}
+		}
+		return real, nil
 	}
 }

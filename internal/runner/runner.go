@@ -148,6 +148,44 @@ type Mount struct {
 	// Set by internal/api dispatch from the run's member-owned workspaces
 	// (memberMountPosture); false — the operator default — everywhere else.
 	MemberAuthored bool `json:"member_authored,omitempty"`
+	// DriveAuthored marks the ONE bind a driver synthesizes from
+	// SandboxSpec.Drive: the host_path user drive's per-person subdirectory.
+	//
+	// IT IS A LABEL, NEVER A GATE — unlike MemberAuthored, which selects which
+	// of a mixed slice of binds the member roots apply to. A drive arrives on
+	// its OWN field (SandboxSpec.Drive), so the driver already knows it is
+	// looking at a drive; the deployment's WARDYN_USER_DRIVE_HOST_ROOTS ceiling
+	// (UserDriveHostRootCheck) therefore runs on EVERY host_path drive
+	// unconditionally, and no check anywhere may be written as `if
+	// m.DriveAuthored`. One was, and it was fail-OPEN by shape: the flag's only
+	// false state is a refactor that stops stamping it, so the check would
+	// vanish exactly when the code around it changed.
+	//
+	// IT NEVER LEAVES THE DRIVER, and never reaches a wire. SandboxSpec.Drive is
+	// a types.DriveMount rather than a Mount precisely so the composer clamp, the
+	// workspace-source allow-list and the k8s blanket host-bind refusal never see
+	// a drive — which also means dispatch puts no Mount carrying this flag into
+	// spec.Mounts, and nothing that serializes a SandboxSpec ever observes it.
+	// The Docker driver builds a local Mount from the DriveMount so the bind
+	// passes through the same value shape every other bind does, stamps this on
+	// it, and converts it to the runtime's own mount type in the next statement.
+	// The json tag is the struct's shape, not a claim that this field is
+	// transmitted; `omitempty` plus "never set outside the driver" means it is
+	// absent from every spec that is.
+	//
+	// So it is DOCUMENTATION IN THE TYPE, kept deliberately (user-drives DESIGN
+	// §3.1(5) and §11 Q3, owner default: a bool, converted to a Kind enum at the
+	// third authoring class). `git grep -n DriveAuthored` is the whole audit: the
+	// declaration, the one assignment, and prose. If a gate ever reads it, that
+	// grep is where the fail-open shows up.
+	//
+	// TWO FLAGS, NOT A Kind ENUM, and this comment is the trigger to change
+	// that: N=2 is below the consolidation threshold and MemberAuthored is
+	// security-critical code, so a THIRD authoring class — anything that adds a
+	// `*Authored bool` beside these two — is the point at which both become one
+	// `Kind` field with a closed set of values, rather than three booleans whose
+	// illegal combinations are only prevented by everyone remembering.
+	DriveAuthored bool `json:"drive_authored,omitempty"`
 }
 
 type ProxyConfig struct {

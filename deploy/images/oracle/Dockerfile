@@ -85,9 +85,11 @@ RUN apk add --no-cache curl ca-certificates python3 git
 
 # Create user `agent` (uid 1000, /home/agent, work /home/agent/work) to satisfy
 # the sandbox contract. alpine's adduser/addgroup (no useradd) create it cleanly.
+# /home/agent/drive is the reserved user-drive mount point, created owned by agent
+# for the copy-up reason the base image's Dockerfile states in full.
 RUN addgroup -g 1000 agent \
  && adduser -D -u 1000 -G agent -h /home/agent agent \
- && mkdir -p /home/agent/work \
+ && mkdir -p /home/agent/work /home/agent/drive \
  && chown -R agent:agent /home/agent
 
 # The session recorder the driver wraps the agent argv with. No asciinema in this

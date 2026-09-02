@@ -426,13 +426,22 @@ func TestSeedRequestDriveMountShape(t *testing.T) {
 	want := types.DriveMount{
 		DriveID: d.ID,
 		Backend: types.DriveBackendDockerVolume, ObjectName: types.DriveObjectName(*d, home),
-		HomeName: home, Target: runner.DriveTarget, ReadOnly: true, SizeMiB: 10240,
+		HomeName: home, SubjectHash: types.DriveSubjectHash("sub-drive-bob"),
+		Target: runner.DriveTarget, ReadOnly: true, SizeMiB: 10240,
 		Enforcement: types.StorageEnforcementNone,
 		// StorageClass stays empty: a Docker volume has no such concept, and a
 		// substrate that sees one on this backend is looking at a bad row.
 	}
 	if *mount != want {
 		t.Errorf("mount = %+v\nwant %+v", *mount, want)
+	}
+	// The PRINCIPAL's fingerprint, carried from the resolver rather than
+	// re-derived here: an object name is per-HOME, so this is the only value
+	// that can tell two principals apart once a template has folded them onto
+	// one home, and the driver stamps it on the volume it allocates. A DIGEST,
+	// so the label `docker volume inspect` echoes carries no claim.
+	if mount.SubjectHash == "" || strings.Contains(mount.SubjectHash, "sub-drive-bob") {
+		t.Errorf("subject hash = %q, want a digest of the claim the home came from", mount.SubjectHash)
 	}
 	// The DRIVE's id, not the grant's: labels and reclaim sweeps group by the
 	// drive, and an object name is per-principal so it cannot answer that.

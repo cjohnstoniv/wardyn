@@ -72,7 +72,13 @@ var envDocShellOnly = map[string]bool{
 	// never by Go. Documented in ENV.md's "Compose / scripts" + "Setup / operator
 	// scripts" sections.
 	"WARDYN_CI_TOOLS_DIR": true, "WARDYN_DOCKER_SOCK": true, "WARDYN_WORKSPACES_ROOT": true,
-	"WARDYN_SETUP_MODE": true, "WARDYN_SUBSCRIPTION_TOKEN": true, "WARDYN_STAGE_CLAUDE": true,
+	// The compose-side, SINGULAR sibling of WARDYN_USER_DRIVE_HOST_ROOTS (which
+	// Go does read): docker-compose.yaml binds this one host tree read-only at
+	// the same path inside the wardynd container so the drive ceiling's
+	// EvalSymlinks can run there. A mount mapping, never a ceiling — nothing in
+	// Go reads it, by design.
+	"WARDYN_USER_DRIVE_HOST_ROOT": true,
+	"WARDYN_SETUP_MODE":           true, "WARDYN_SUBSCRIPTION_TOKEN": true, "WARDYN_STAGE_CLAUDE": true,
 	"WARDYN_IMPORT_AWS": true, "WARDYN_IMPORT_SCM": true, "WARDYN_FORCE_RESET": true,
 	"WARDYN_DEFAULT_POLICY_AUTO": true,
 	// The desktop tier's MDM-managed directory: docker-compose.yaml bind-mounts

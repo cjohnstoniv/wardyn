@@ -380,6 +380,73 @@ func TestResolveUserDrive(t *testing.T) {
 		}
 	})
 
+	t.Run("a MANAGED drive templated on the email local part is unmountable", func(t *testing.T) {
+		// The write boundary refuses this pair (types.ValidateUserDrive); this is
+		// the second half of that rule, repeated exactly as the home-override
+		// tier gate is, because a row written by an older binary — or by hand —
+		// would otherwise resolve two principals whose addresses share a local
+		// part onto ONE volume. The driver cannot catch that either: the object
+		// IS labelled with this drive, so its id check matches.
+		d := driveFixture(func(d *types.UserDrive) { d.HomeTemplate = types.HomeTemplateEmailLocal })
+		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		if !errors.Is(err, errDriveUnmountable) {
+			t.Fatalf("resolve = %+v, err = %v; want errDriveUnmountable", got, err)
+		}
+		// REFUSED_BACKEND's frozen shape, whose parenthesised half is where the
+		// diagnosis goes — never a new member sentence.
+		if !strings.Contains(err.Error(), "drive: this deployment cannot mount your drive (") {
+			t.Errorf("err = %v, want the frozen REFUSED_BACKEND shape", err)
+		}
+		w := httptest.NewRecorder()
+		writeDriveError(w, err)
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Errorf("writeDriveError = %d, want 422", w.Code)
+		}
+	})
+
+	t.Run("a SHARE templated on the email local part still resolves", func(t *testing.T) {
+		// The scoping half: a share's directories are named by whoever owns the
+		// share, and email_local is the corporate shape the template exists for.
+		d := driveFixture(func(d *types.UserDrive) {
+			d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateEmailLocal, "/srv/homes"
+		})
+		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		if got.HomeName != "bob" || got.ObjectName != "/srv/homes/bob" {
+			t.Errorf("home/object = %q/%q, want the email local part's", got.HomeName, got.ObjectName)
+		}
+	})
+
+	t.Run("the subject fingerprint rides the resolved answer", func(t *testing.T) {
+		// The value the driver stamps on a managed object. It is derived from the
+		// SAME claim the home was — driveHomeSubject's positional pick, never
+		// users[0] a second time — because the whole point is that it
+		// discriminates principals the home name cannot.
+		d := driveFixture(nil)
+		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		if want := types.DriveSubjectHash("sub-drive-bob"); got.SubjectHash != want {
+			t.Errorf("subject hash = %q, want the digest of the claim the home came from (%q)", got.SubjectHash, want)
+		}
+		// A PAUSED row derives nothing, the fingerprint included: there is no
+		// object to stamp, and a digest beside a mount that will not happen is a
+		// value a later reader could take for one that did.
+		paused, err := driveServer(pausedDriveStore(nil)).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		if err != nil {
+			t.Fatalf("resolve paused: %v", err)
+		}
+		if paused.SubjectHash != "" {
+			t.Errorf("a paused allocation carries a subject hash %q — nothing is derived for a row that mounts nothing", paused.SubjectHash)
+		}
+	})
+
 	// ─── a paused allocation is TOLD, not resolved to nothing ─────────────────
 
 	t.Run("a DISABLED winner resolves to PAUSED, not to nothing", func(t *testing.T) {
@@ -521,8 +588,12 @@ func previewDriveHTTP(t *testing.T, srv *Server, users, groups []string) *httpte
 // offboarding command rather than compute from a hash by hand.
 func TestPreviewUserDrive(t *testing.T) {
 	t.Run("a match is answered with the object name", func(t *testing.T) {
+		// A STATIC PVC, because `email_local` is a SHARE template: a managed
+		// backend names its object after the home alone, so the write boundary
+		// and the resolver both refuse that pair now (two people whose addresses
+		// share a local part would be allocated one object).
 		d := driveFixture(func(d *types.UserDrive) {
-			d.Name, d.Backend, d.HomeTemplate = "Corp NAS", types.DriveBackendK8sPVC, types.HomeTemplateEmailLocal
+			d.Name, d.Backend, d.HomeTemplate = "Corp NAS", types.DriveBackendK8sPVCStatic, types.HomeTemplateEmailLocal
 		})
 		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
 		w := previewDriveHTTP(t, driveServer(st), []string{"sub-abc", "Alice@Corp.Example"}, []string{"Eng"})
@@ -545,7 +616,31 @@ func TestPreviewUserDrive(t *testing.T) {
 		if got.DriveName != "Corp NAS" || got.MatchedTier != types.CapabilitySubjectUser {
 			t.Errorf("drive/tier = %q/%q, want the winning row's", got.DriveName, got.MatchedTier)
 		}
-		// A PVC's size is a REQUEST, and only a block storage class binds it.
+		// A STATIC PVC's size is bound by whatever provisioned it, never by
+		// Wardyn — the field is carried through the preview verbatim so the
+		// number beside it is not read as a cap Wardyn enforces.
+		if got.Enforcement != types.StorageEnforcementExternal {
+			t.Errorf("enforcement = %q, want %q", got.Enforcement, types.StorageEnforcementExternal)
+		}
+	})
+
+	// A PROVISIONING PVC's size IS a request the cluster acts on, and it is the
+	// one enforcement value that differs from what the object holding it does —
+	// so it is previewed on its own drive rather than folded into the row above,
+	// where `email_local` is now refused.
+	t.Run("a managed pvc previews its size as a REQUEST", func(t *testing.T) {
+		d := driveFixture(func(d *types.UserDrive) {
+			d.Name, d.Backend, d.HomeTemplate = "Cluster", types.DriveBackendK8sPVC, types.HomeTemplateHash
+		})
+		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+		w := previewDriveHTTP(t, driveServer(st), []string{"sub-abc", "alice@corp.example"}, nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		var got userDrivePreviewResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v (body=%s)", err, w.Body.String())
+		}
 		if got.Enforcement != types.StorageEnforcementRequest {
 			t.Errorf("enforcement = %q, want %q", got.Enforcement, types.StorageEnforcementRequest)
 		}
