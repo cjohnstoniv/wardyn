@@ -89,11 +89,11 @@ resolves your drive the same way, in a dry run too:
 
 - `drive: no user drive is allocated to you — ask an admin for an allocation`
 - `drive: your allocation is paused by an admin`
-- ``drive: your allocation is read-only; `read_only:false` cannot widen it``
+- `drive: your allocation is read-only; read_only:false cannot widen it`
 - `drive: directory <yours> does not exist on the share — ask an admin to create it` — a share drive only; Wardyn never invents a directory inside somebody's NAS.
-- ``drive: your <claim> cannot name a directory (lowercase letters and digits, then `. _ -`, up to 63 characters) — ask an admin to set your directory name`` (on a Kubernetes deployment the rule is stricter: no `_`, and it may not end in `-` or `.`)
+- `drive: your <claim> cannot name a directory (lowercase letters and digits, then . _ -, up to 63 characters) — ask an admin to set your directory name` — on a **Kubernetes** deployment the rule is stricter and the refusal says so, appending `(on a Kubernetes deployment the rule is stricter: no _, and it may not end in - or .)`: a directory name there becomes part of a volume-claim name.
 - `drive: this deployment cannot mount your drive (<why>)` — the drive is real; this deployment's runner cannot bind it.
-- ``mounting a user drive is not allowed by your governance profile "<name>". Launch without `drive`.`` — the one **403** of the set, and the only one that is audited. Before you launch, the console shows it where the checkbox would be, as `Your governance profile "<name>" does not allow mounting a drive.`
+- `mounting a user drive is not allowed by your governance profile "<name>". Launch without drive.` — the one **403** of the set, and the only one that is audited. Before you launch, the console shows it where the checkbox would be, as `Your governance profile "<name>" does not allow mounting a drive.`
 
 The first six are **422s** and none of them is audited: you were authorized and
 simply had nothing to mount. `/home/agent/drive` is also reserved — a policy

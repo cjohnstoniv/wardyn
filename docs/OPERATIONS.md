@@ -761,12 +761,18 @@ the share mount, never holds a share credential, and never creates a volume with
    driver re-checks the **symlink-resolved real path** against these roots as
    the last thing before the container is created, so a home directory replaced
    by a symlink out of the share after the drive was registered is refused at
-   run time too — and it now also checks that the resolved directory is still
-   **named after the person it resolved for**, which is what catches a home
-   replaced by a link to the home *next to it* (inside the roots, so the ceiling
-   alone would allow it). A home symlinked onto a second export still works, as
-   long as that export is also a configured root and the directory keeps its
-   name.
+   run time too — and it adds two checks the ceiling cannot make, because every
+   other drive's tree and every sibling home are inside it as well. The resolved
+   directory must be **inside this drive's own `host_root`**, which catches a
+   home replaced by a link into *another* `host_path` drive's root (a ceiling
+   naming both roots allows either tree, so it cannot tell one drive's from the
+   other's); and it must still be **named after the person it resolved for**,
+   which catches a home replaced by a link to the home *next to it*. A home
+   symlinked deeper inside its own drive's root — homes filed under a year or a
+   department — still works, as long as the directory keeps its name; a home
+   symlinked onto a *second export* no longer does, even when that export is
+   also a configured root. Give the drive the root its homes actually live
+   under, or register a second drive for the second export.
 
    **Two `host_path` drives may not nest.** Registering a drive whose
    `host_root` is inside — or contains — another `host_path` drive's `host_root`

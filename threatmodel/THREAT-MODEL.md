@@ -459,11 +459,20 @@ run. On Docker (`Driver.driveMount`) a drive runs the ordinary bind deny matrix
 `UserDriveMountSourceCheck` — `ValidateMount` itself is deliberately not run a
 second time) and, for a `host_path` drive, the deployment's ceiling on the
 symlink-RESOLVED real path
-(`UserDriveMountSourceCheck`) — plus two refusals a drive alone needs: a source
+(`UserDriveMountSourceCheck`) — plus three refusals a drive alone needs: a source
 that resolves to the configured ROOT rather than a subdirectory (that would bind
-everyone's home into one sandbox), and a source whose resolved directory NAME is
-not the home the resolver derived (the sibling-symlink case: alice's directory
-replaced host-side by a link to bob's).
+everyone's home into one sandbox); a source that resolves OUTSIDE THIS DRIVE'S
+OWN `host_root`, carried on the mount and asserted by
+`UserDriveHomeWithinItsRoot` (the deployment ceiling is the operator's outer
+bound over every drive at once, so on a deployment with two share drives it
+cannot tell one drive's tree from the other's — a home replaced by a link to the
+same-named home under the OTHER drive's root satisfies it, and an absent
+`host_root` on a share mount is a refusal rather than a skip); and a source whose
+resolved directory NAME is not the home the resolver derived (the
+sibling-symlink case: alice's directory replaced host-side by a link to bob's).
+The target is pinned to `runner.DriveTarget` on BOTH substrates
+(`errDriveTargetInvalid` in each driver), so a drive can never be mounted over
+the credential staging directory or the workspace.
 
 **`host_path` drives sit under a fail-closed env ceiling, not a database one.** A
 drive's `host_root` is authored in the DB by an admin and its subdirectories are
@@ -511,6 +520,10 @@ foreign — the opposite of Docker's restore gesture.
 attachment itself at dispatch (actor `system`, after `CreateSandbox` returns, so
 a success row means the object really was bound) with the backend, the object,
 the mode and the `enforcement` value — vocabulary in `docs/AUDIT-ACTIONS.md`.
+The row's rendered `Target` is masked to `<drive>/<home>` for a `host_path`
+drive, because a run's creator can read their own run's rows and a share's
+object name is an absolute path on the operator's filesystem; the exact object
+stays in the payload, which the run page does not render.
 Nothing logs the drive's contents, and the preview endpoint is not audited, for
 the reason its governance twin is not: it saves nothing and answers only about
 claims the caller pasted.

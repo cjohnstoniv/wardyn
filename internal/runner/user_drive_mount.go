@@ -35,7 +35,7 @@ import (
 // exactly as WARDYN_MEMBER_WORKSPACE_ROOTS does: a ceiling the operator
 // mistyped must not silently become a ceiling that bounds a different tree.
 //
-// Two root values are permitted but WARNED about, the same allow-and-warn
+// THREE root values are permitted but WARNED about, the same allow-and-warn
 // posture MemberMountPolicy.bootWarnings takes — and they are warned about for
 // OPPOSITE reasons, which is why they do not share a sentence:
 //
@@ -48,6 +48,23 @@ import (
 //     nothing at all and refuses EVERY host_path drive. It reads like "allow
 //     anywhere" and behaves like "allow nothing", so the warning has to say
 //     which.
+//   - A root UNDER A DENIED BIND PREFIX is dead in exactly the same way, and
+//     was the silent one (F13 H2). UserDriveHostRootCheck runs
+//     ValidateMountSource BEFORE it ever compares against the roots, so a
+//     ceiling of /dev/shm, a share mounted under /var/run, or a relocated
+//     Docker data-root under /var/lib/docker parses clean here and then refuses
+//     every drive authored inside it — the operator learning from a 422 on a
+//     form they believed was right rather than from the boot line that could
+//     have told them. Same "matches NOTHING" wording as "/", because it is the
+//     same outcome; the deny-list's own sentence is carried through so the
+//     operator reads WHICH prefix bit.
+//
+// The deny-list runs LEXICALLY here, on the value as configured, and does not
+// resolve symlinks: boot is not the place to touch a share that may not be
+// mounted yet, and a root that resolves INTO a denied tree is still caught —
+// by UserDriveHostRootCheck, which re-runs the same list on the real path at
+// authoring and at bind time. This warning is about the value the operator can
+// read back out of their own unit file.
 func ParseUserDriveHostRoots(raw string) (roots []string, warnings []string, err error) {
 	roots, err = parseRootList("WARDYN_USER_DRIVE_HOST_ROOTS", raw)
 	if err != nil {
@@ -55,11 +72,15 @@ func ParseUserDriveHostRoots(raw string) (roots []string, warnings []string, err
 	}
 	home := filepath.Clean(strings.TrimSpace(os.Getenv("HOME")))
 	for _, r := range roots {
-		switch {
+		switch derr := deniedSource(r); {
 		case r == "/":
 			warnings = append(warnings, fmt.Sprintf(
 				"WARDYN_USER_DRIVE_HOST_ROOTS contains %q, which matches NOTHING: a root of \"/\" bounds only the literal path \"/\", "+
 					"so every host_path drive under it is refused rather than allowed; point it at the mount point of the share instead", r))
+		case derr != nil:
+			warnings = append(warnings, fmt.Sprintf(
+				"WARDYN_USER_DRIVE_HOST_ROOTS contains %q, which matches NOTHING: %s, so every host_path drive authored inside it is "+
+					"refused at the write boundary and at bind time; point it at the mount point of the share instead", r, derr))
 		case home != "" && home != "." && r == home:
 			warnings = append(warnings, fmt.Sprintf(
 				"WARDYN_USER_DRIVE_HOST_ROOTS contains %q, this daemon's own home directory — a host-path drive could then be authored over "+
@@ -185,4 +206,60 @@ func UserDriveMountSourceCheck(roots []string) func(source string) (string, erro
 		}
 		return real, nil
 	}
+}
+
+// UserDriveHomeWithinItsRoot asserts that real — the symlink-RESOLVED directory
+// a host_path drive is about to be bound from — is a STRICT SUBDIRECTORY of
+// hostRoot, THIS drive's own root, resolved the same way.
+//
+// ─── WHY THE DEPLOYMENT CEILING IS NOT ENOUGH ──────────────────────────────
+//
+// UserDriveMountSourceCheck bounds the bind to the union of every root in
+// WARDYN_USER_DRIVE_HOST_ROOTS, which is the OPERATOR's outer bound and stays
+// exactly that. It cannot say which of those roots this particular drive was
+// authored against, because it is not given the drive. So on a deployment with
+// two share drives — ceiling `/srv/a,/srv/b`, drive A rooted at /srv/a, drive B
+// at /srv/b — a home under A replaced host-side by a link to the SAME-NAMED
+// home under B satisfies every check the driver had: it is inside a configured
+// root, it is not a root, it traverses no denied prefix, and its base name is
+// still this principal's home. And it binds drive B's tree.
+//
+// The per-drive root closes it, and the two bounds are kept BOTH rather than
+// collapsed into one: the ceiling is the operator's (env/MDM-set, a console
+// compromise cannot widen it) and the root is the row's (admin-authored, and
+// therefore not allowed to be the outer bound). A drive must satisfy both.
+//
+// ─── FAIL CLOSED ON AN ABSENT ROOT ─────────────────────────────────────────
+//
+// An empty hostRoot is a REFUSAL, not a skip. types.DriveMount.HostRoot is set
+// from the resolved row for every host_path drive, so "" means the mount was
+// built by something that does not know about this field — an older control
+// plane, a hand-written -spec for the standalone runner — and the one thing
+// that must not happen then is the pre-fix behaviour silently returning.
+//
+// STRICT, so a source that resolved TO the root is refused here as well as by
+// UserDriveMountSourceCheck: binding a share's root hands one member every
+// other member's home, and a check that is only stated once is a check a
+// refactor can drop.
+func UserDriveHomeWithinItsRoot(hostRoot, real string) error {
+	if strings.TrimSpace(hostRoot) == "" {
+		return fmt.Errorf("user drive source %q carries no host_root to be contained by — a share drive's own root is what "+
+			"bounds it to one drive's tree, and the deployment ceiling alone would allow another drive's", real)
+	}
+	root := filepath.Clean(hostRoot)
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return fmt.Errorf("user drive host_root %q could not be resolved on this host (a share's root must be a directory that exists here): %w", hostRoot, err)
+	}
+	root = resolved
+	if real == root {
+		return fmt.Errorf("user drive source resolves to %q, which IS this drive's host_root — a drive binds one person's "+
+			"subdirectory of a share, never the share itself (every other person's home is under it)", real)
+	}
+	if !withinAnyRoot(real, []string{root}) {
+		return fmt.Errorf("user drive source resolves to %q, which is outside this drive's host_root %q — the deployment's "+
+			"ceiling allows that tree for SOME drive, but a home replaced by a link into another drive's root would bind "+
+			"that drive's directory instead of this one's", real, root)
+	}
+	return nil
 }

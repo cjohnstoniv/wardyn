@@ -7,6 +7,7 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -235,10 +236,17 @@ func driveHostRoot(t *testing.T) (root, home string) {
 
 // hostPathDrive is a resolved SHARE drive whose ObjectName is the per-person
 // subdirectory the resolver already derived (<host_root>/<home>).
+//
+// HostRoot is that derivation run backwards, so every row below carries the
+// root the resolver would have carried: driveMountFor copies UserDrive.HostRoot
+// onto the mount, and the driver bounds the bind to THAT root rather than to
+// the union of the deployment's ceiling. A test that wants a different root (a
+// drive whose home was linked into another drive's tree) sets it explicitly.
 func hostPathDrive(objectName string) *types.DriveMount {
 	return &types.DriveMount{
 		Backend:     types.DriveBackendHostPath,
 		ObjectName:  objectName,
+		HostRoot:    filepath.Dir(objectName),
 		HomeName:    "alice",
 		Target:      runner.DriveTarget,
 		ReadOnly:    true,
@@ -306,14 +314,16 @@ func TestCreateSandbox_WritableHostPathDriveIsNotForcedRecursive(t *testing.T) {
 // TestCreateSandbox_HostPathDriveHomeMustResolveToThisPrincipal is the SIBLING
 // SYMLINK. Everything the composed source check asserts is satisfied by a home
 // replaced host-side with a link to the home NEXT TO IT: it is inside the
-// deployment's roots, it is not the root itself, it traverses no denied prefix
-// and no dotfile. And it binds bob's directory into alice's sandbox — read-write
-// whenever her allocation is writable.
+// deployment's roots, inside this drive's own root, not a root itself, and it
+// traverses no denied prefix and no dotfile. And it binds bob's directory into
+// alice's sandbox — read-write whenever her allocation is writable.
 //
-// The assertion the driver adds is on the resolved directory's NAME, which is
-// what keeps the legitimate cross-volume layout working: the second sub-test is
-// a corporate share spreading homes across exports (`<root>/alice ->
-// /mnt/nas2/alice`), which is ordinary and must still bind.
+// The assertion the driver adds is on the resolved directory's NAME, and the
+// second sub-test is what keeps it from being a whole-path rule: a share may
+// arrange its homes below the root (`<root>/alice -> <root>/2024/alice`) and
+// that must still bind. What the name rule cannot catch — a link that LEAVES
+// this drive's tree for another drive's — is
+// TestCreateSandbox_HostPathDriveStaysInsideItsOwnDriveRoot's subject.
 func TestCreateSandbox_HostPathDriveHomeMustResolveToThisPrincipal(t *testing.T) {
 	t.Run("sibling-symlink-refused", func(t *testing.T) {
 		root, _ := driveHostRoot(t)
@@ -342,31 +352,128 @@ func TestCreateSandbox_HostPathDriveHomeMustResolveToThisPrincipal(t *testing.T)
 		}
 	})
 
-	// A home symlinked ACROSS volumes keeps its own name, and the second volume
-	// is a configured root — the ordinary corporate layout, and it must bind.
-	t.Run("cross-volume-symlink-allowed", func(t *testing.T) {
+	// A home symlinked DEEPER INSIDE this drive's own root keeps its own name
+	// and stays in this drive's tree — an ordinary share layout (homes filed
+	// under a year, a department, a snapshot generation), and it must bind.
+	t.Run("symlink-within-the-same-root-allowed", func(t *testing.T) {
 		root, _ := driveHostRoot(t)
-		nas2, err := filepath.EvalSymlinks(t.TempDir())
-		if err != nil {
-			t.Fatalf("resolve tempdir: %v", err)
-		}
-		if err := os.MkdirAll(filepath.Join(nas2, "alice"), 0o700); err != nil {
+		if err := os.MkdirAll(filepath.Join(root, "2024", "alice"), 0o700); err != nil {
 			t.Fatalf("mkdir: %v", err)
 		}
 		linked := filepath.Join(root, "alice2")
-		if err := os.Symlink(filepath.Join(nas2, "alice"), linked); err != nil {
+		if err := os.Symlink(filepath.Join(root, "2024", "alice"), linked); err != nil {
 			t.Skipf("symlink unsupported here: %v", err)
 		}
 		drive := hostPathDrive(linked)
 		// The home the RESOLVER derived is what the resolved directory must be
-		// named — "alice" here, since that is the directory on the second export.
+		// named — "alice" here, since that is the directory the link lands on.
 		drive.HomeName = "alice"
-		_, mounts, err := createWithDrive(t, drive, []string{root, nas2})
+		_, mounts, err := createWithDrive(t, drive, []string{root})
 		if err != nil {
-			t.Fatalf("a home symlinked onto a second configured root was refused: %v", err)
+			t.Fatalf("a home symlinked deeper inside its own drive's root was refused: %v", err)
 		}
 		if m := findMount(mounts, runner.DriveTarget); m == nil || m.Source != linked {
 			t.Errorf("drive mount = %+v, want a bind of the resolver's own path %q", m, linked)
+		}
+	})
+}
+
+// TestCreateSandbox_HostPathDriveStaysInsideItsOwnDriveRoot is the two-drive
+// deployment, and the hole the deployment ceiling alone could not close.
+//
+// WARDYN_USER_DRIVE_HOST_ROOTS is the OPERATOR's outer bound over every drive
+// at once, so with two share drives — one rooted at /srv/a, one at /srv/b, both
+// inside the ceiling — it cannot tell one drive's tree from the other's. A home
+// under A replaced host-side by a link to the SAME-NAMED home under B satisfies
+// every check the driver used to have: inside a configured root, not a root, no
+// denied segment, and `filepath.Base` still says "alice". It bound drive B's
+// directory — another person's whenever B names "alice" for somebody else.
+//
+// The mount now carries the drive's own host_root and the driver asserts the
+// resolved path is a strict subdirectory of THAT root. The ceiling stays as the
+// outer bound (an admin-authored row must not be able to name a tree the
+// operator never allowed), so both are asserted, and the sub-tests below are
+// each half of that pair plus the fail-closed arm for a mount that carries no
+// root at all.
+func TestCreateSandbox_HostPathDriveStaysInsideItsOwnDriveRoot(t *testing.T) {
+	// Two roots, both configured — the deployment ceiling is satisfied for
+	// either tree, which is exactly why it cannot be the whole check.
+	twoRoots := func(t *testing.T) (rootA, rootB string) {
+		t.Helper()
+		base, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatalf("resolve tempdir: %v", err)
+		}
+		rootA, rootB = filepath.Join(base, "a"), filepath.Join(base, "b")
+		for _, dir := range []string{filepath.Join(rootA, "alice"), filepath.Join(rootB, "alice")} {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+		}
+		return rootA, rootB
+	}
+
+	t.Run("a home linked into ANOTHER drive's root is refused", func(t *testing.T) {
+		rootA, rootB := twoRoots(t)
+		// alice's home on drive A, replaced host-side by a link to the home of
+		// the same name on drive B's root.
+		linked := filepath.Join(rootA, "alice-linked")
+		if err := os.Symlink(filepath.Join(rootB, "alice"), linked); err != nil {
+			t.Skipf("symlink unsupported here: %v", err)
+		}
+		drive := hostPathDrive(linked)
+		drive.HostRoot = rootA // the row an admin authored: drive A
+		drive.HomeName = "alice"
+
+		f, _, err := createWithDrive(t, drive, []string{rootA, rootB})
+		if err == nil {
+			t.Fatal("a home linked into the OTHER drive's root was bound — that is another drive's tree in this member's sandbox")
+		}
+		if !strings.Contains(err.Error(), "denied user drive") {
+			t.Errorf("error should identify the denied drive, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), rootA) {
+			t.Errorf("the refusal should name the drive's own host_root, got: %v", err)
+		}
+		if f.containers[agentContainerName(testSpec().RunID)] != nil {
+			t.Error("agent container exists after the refusal — the check must precede ContainerCreate")
+		}
+	})
+
+	// The control, and the reason the check is a strict-subdirectory rule rather
+	// than an equality one: the ordinary drive on the same two-root deployment
+	// still binds.
+	t.Run("the ordinary home under its own root still binds", func(t *testing.T) {
+		rootA, rootB := twoRoots(t)
+		home := filepath.Join(rootA, "alice")
+		_, mounts, err := createWithDrive(t, hostPathDrive(home), []string{rootA, rootB})
+		if err != nil {
+			t.Fatalf("an ordinary in-root home was refused: %v", err)
+		}
+		if m := findMount(mounts, runner.DriveTarget); m == nil || m.Source != home {
+			t.Errorf("drive mount = %+v, want a bind of %q", m, home)
+		}
+	})
+
+	// FAIL CLOSED on a mount that carries no host_root. "" means this DriveMount
+	// was built by something that does not know the field — an older control
+	// plane, a hand-written -spec for the standalone runner — and falling
+	// through would be the pre-fix behaviour reappearing exactly where nobody
+	// would look for it. The ceiling is deliberately satisfied here, so the row
+	// is a statement about the drive's own root and nothing else.
+	t.Run("a share mount with no host_root is refused", func(t *testing.T) {
+		root, home := driveHostRoot(t)
+		drive := hostPathDrive(home)
+		drive.HostRoot = ""
+		f, _, err := createWithDrive(t, drive, []string{root})
+		if err == nil {
+			t.Fatal("a share drive carrying no host_root was bound — an absent per-drive bound must refuse, never skip")
+		}
+		if !strings.Contains(err.Error(), "host_root") {
+			t.Errorf("the refusal should name the missing field, got: %v", err)
+		}
+		if f.containers[agentContainerName(testSpec().RunID)] != nil {
+			t.Error("agent container exists after the refusal")
 		}
 	})
 }
@@ -438,19 +545,62 @@ func TestCreateSandbox_DeniedDriveMountsRejected(t *testing.T) {
 	}
 }
 
-// TestCreateSandbox_DriveTargetIsValidatedNotAuthored is the DRIVER's side of
-// the ValidateTarget / ValidateAuthoredTarget split: a drive whose target was
-// corrupted to somewhere illegal is still refused at CreateSandbox. The split
-// itself — the drive's own target passes ValidateTarget and is refused to
-// authors — is walked over three targets by
+// TestCreateSandbox_DriveTargetIsPinnedToTheReservedPath is the DRIVER's side
+// of the reserved-target rule, and the parity fix for it: this driver used to
+// run runner.ValidateTarget alone, which asks only "is this a legal place for a
+// mount" — and /home/agent, /home/agent/.claude and /work all are. The k8s
+// driver has refused anything but runner.DriveTarget since D4
+// (validateDriveMount, errDriveTargetInvalid), so one rule had two answers
+// depending on the substrate.
+//
+// The rows are not interchangeable: /home/agent/.claude shadows the injected
+// credential directory with a member-owned volume that SURVIVES the run,
+// /home/agent shadows the whole home, /work the workspace. /usr/local is the
+// fourth and the one ValidateTarget already caught — kept here so both checks
+// are pinned in one place rather than in two tests that could drift.
+//
+// Nothing in the control plane produces any of them (driveMountFor copies the
+// constant); the reachable inputs are a control-plane bug and the standalone
+// runner's -spec JSON, which is exactly what a driver-side check is for. The
+// OTHER half of the split — that the drive's own target passes ValidateTarget
+// and is refused to AUTHORS — is walked by
 // TestValidateAuthoredTargetReservesTheDriveTarget, in the package that owns
 // both functions; restating it here would be a second, weaker copy.
-func TestCreateSandbox_DriveTargetIsValidatedNotAuthored(t *testing.T) {
-	drive := dockerVolumeDrive()
-	drive.Target = "/usr/local"
-	if _, _, err := createWithDrive(t, drive, nil); err == nil {
-		t.Fatal("a drive targeting a system path must FAIL CLOSED, got nil")
+func TestCreateSandbox_DriveTargetIsPinnedToTheReservedPath(t *testing.T) {
+	for _, tgt := range []string{"/home/agent", "/home/agent/.claude", "/work", "/usr/local"} {
+		t.Run(tgt, func(t *testing.T) {
+			drive := dockerVolumeDrive()
+			drive.Target = tgt
+			f, mounts, err := createWithDrive(t, drive, nil)
+			if err == nil {
+				t.Fatalf("a drive addressed to %q was mounted (%+v); only %q may back a drive",
+					tgt, findMount(mounts, tgt), runner.DriveTarget)
+			}
+			if !errors.Is(err, errDriveTargetInvalid) {
+				t.Errorf("error = %v, want the errDriveTargetInvalid sentinel the k8s driver also raises", err)
+			}
+			// BEFORE any call to the daemon: a refused drive must not have left a
+			// persistent volume behind, since nothing in the tree ever removes one.
+			if f.volumeCreates != 0 {
+				t.Errorf("VolumeCreate calls = %d, want 0 — the refusal must precede any daemon call", f.volumeCreates)
+			}
+			if f.containers[agentContainerName(testSpec().RunID)] != nil {
+				t.Error("agent container exists after the refusal")
+			}
+		})
 	}
+
+	// The control: the reserved path itself still binds, so the pin above is a
+	// refusal of everything else rather than of everything.
+	t.Run(runner.DriveTarget, func(t *testing.T) {
+		_, mounts, err := createWithDrive(t, dockerVolumeDrive(), nil)
+		if err != nil {
+			t.Fatalf("the reserved target was refused: %v", err)
+		}
+		if findMount(mounts, runner.DriveTarget) == nil {
+			t.Errorf("no mount at %s; mounts=%+v", runner.DriveTarget, mounts)
+		}
+	})
 }
 
 // TestDriveMount_HostPathCeilingIsUnconditional is the pin the old

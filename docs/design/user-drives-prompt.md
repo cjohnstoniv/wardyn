@@ -520,6 +520,14 @@ does not freeze a second wording:
 | Size required for a managed claim (400) | `validateUserDrive` | size_mib must be above 0 for a k8s_pvc drive — it is the volume request |
 | Delete while allocated (409) | `handleDeleteUserDrive` | this drive is still allocated — remove its allocations first (deleting it while allocated would leave those subjects with a mount that names nothing) |
 | Home override on a non-user row (400) | `validateUserDriveGrant` | home_override is accepted on a user-tier allocation only — a group cannot share one directory |
+| Stricter home rule on a Kubernetes backend (**suffix**, 422) | `DriveHomeStricterRuleClause`, appended by `newResolvedDrive` after `REFUSED_HOME_INVALID` | (on a Kubernetes deployment the rule is stricter: no _, and it may not end in - or .) |
+
+The last row is a **suffix, not a rewording**. `REFUSED_HOME_INVALID` (§7.7) is frozen and
+describes `driveHomeSegmentRe`, the DOCKER rule; a `k8s_pvc`/`k8s_pvc_static` home must satisfy
+`driveHomeSegmentK8sRe`, which also forbids `_` and a trailing `-`/`.` — and that gap is the
+motivating case, since an Entra `sub` is base64url and routinely carries `_`. The frozen sentence
+still ships byte-for-byte on every deployment; a Kubernetes one appends the clause its own regex
+enforces, which is what this table's rule is for.
 
 The 409 body **carries no count and must not grow one**: `DELETE_RESTRICT_BODY` (§7.4) is the
 client-side pre-fill and names the count the list already shows; on the race path the client

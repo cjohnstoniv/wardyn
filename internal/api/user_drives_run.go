@@ -132,7 +132,22 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 // site it applies to rather than inferred from a caller three files away. An
 // operator's drive still RESOLVES; only the door does not apply to them.
 func (s *Server) driveDoorProfile(ctx context.Context, ceiling governanceCeiling) (string, bool) {
-	if s.isOperator(ctx) || ceiling.Profile == nil || !ceiling.Limits.DenyUserDrive {
+	if s.isOperator(ctx) {
+		return "", false
+	}
+	return driveDoorShut(ceiling)
+}
+
+// driveDoorShut is the door WITHOUT the caller: does THIS ceiling deny mounting
+// a drive, and under which profile's name.
+//
+// Split out because the admin PREVIEW asks the same question about somebody
+// else — it resolves the ceiling for the CLAIMS an admin typed, where the
+// caller's own operator status is not the question and would answer "open" for
+// every previewed principal. Two spellings of one authz rule is one place a
+// widening can hide, so the rule stays here and only the exemption moves.
+func driveDoorShut(ceiling governanceCeiling) (string, bool) {
+	if ceiling.Profile == nil || !ceiling.Limits.DenyUserDrive {
 		return "", false
 	}
 	// The DECISION is the bool, never the name: a profile row's name is TEXT NOT
@@ -140,6 +155,20 @@ func (s *Server) driveDoorProfile(ctx context.Context, ceiling governanceCeiling
 	// blank-named profile with DenyUserDrive set read as "no door" and fail OPEN
 	// at the enforcement site. The name is display only.
 	return ceiling.Profile.Name, true
+}
+
+// driveDeniedByProfileMsg is the door's frozen member sentence
+// (DRIVE_MEMBER.DENIED_DRIVE), composed once because two surfaces ship it: the
+// enforcement 403 below and the admin preview, which answers a claim set the
+// door would refuse with the same bytes rather than a paraphrase.
+//
+// NO BACKTICKS. §7's header note makes a backticked substring in the canon a
+// MONO SPAN the console applies at display time, never characters on the wire —
+// the rule ValidateAuthoredTarget's reserved-target refusal already follows, and
+// the canon module (ui/src/app/lib/user-drives-copy.ts) carries none. The wire
+// bytes are the canon's bytes; the console renders `drive` as mono itself.
+func driveDeniedByProfileMsg(profile string) string {
+	return fmt.Sprintf("mounting a user drive is not allowed by your governance profile %q. Launch without drive.", profile)
 }
 
 // denyMemberDrive is the DOOR at the enforcement site: 403 with an authz.denied
@@ -153,15 +182,14 @@ func (s *Server) denyMemberDrive(w http.ResponseWriter, r *http.Request, ceiling
 	}
 	// The mock round's frozen member copy, reproduced byte-exact: the console
 	// never rewords a server refusal, so this line is where that string ships.
-	return s.denyMemberField(w, r, "runs.drive", "governance_profile", fmt.Sprintf(
-		"mounting a user drive is not allowed by your governance profile %q. Launch without `drive`.", profile))
+	return s.denyMemberField(w, r, "runs.drive", "governance_profile", driveDeniedByProfileMsg(profile))
 }
 
-// driveMountFor folds a resolved drive and the run request into the mount, or
-// writes the 422 that says why it cannot.
-//
-// TWO REFUSALS, and both are the same class: the caller is authorized, the
-// allocation exists, and this particular RUN cannot have it.
+// driveIsMountableHere is the pair of refusals that are about the DEPLOYMENT
+// and this allocation, with no run request in them — which is exactly why they
+// live apart from driveMountFor: the admin PREVIEW has to answer them too, and
+// a preview that skipped them told an admin a drive was allocated and working
+// right up until the member ticked the box.
 //
 //  1. BACKEND UNAVAILABLE HERE. A drive's backend names exactly one substrate
 //     (types.DriveBackend.RunnerTarget), and the write boundary already refuses
@@ -172,29 +200,41 @@ func (s *Server) denyMemberDrive(w http.ResponseWriter, r *http.Request, ceiling
 //
 //  2. THE SHARE IS NOT THERE (host_path only — see driveShareIsBindable).
 //
-//  3. WIDENING. read_only:false against a read-only allocation is refused
-//     rather than ignored, and that is the choice worth naming: silently
-//     honouring the allocation would launch a run the member believes is
-//     writable, and they would find out when their work failed to persist. The
-//     narrow direction (read_only:true on a writable allocation) is always
-//     honoured — that is what NARROW-ONLY means, and it matches
-//     WorkspaceSelection.ReadOnly exactly.
-func (s *Server) driveMountFor(w http.ResponseWriter, req createRunRequest,
-	resolved types.ResolvedDrive) (*types.DriveMount, bool) {
+// It writes its own 422 and returns false once it has.
+func (s *Server) driveIsMountableHere(w http.ResponseWriter, resolved types.ResolvedDrive) bool {
 	if target := resolved.Drive.Backend.RunnerTarget(); target != s.cfg.RunnerTarget {
 		writeError(w, http.StatusUnprocessableEntity, driveRefusal(fmt.Sprintf(
 			"this deployment cannot mount your drive (it is a %q drive and this deployment dispatches to %q)",
 			resolved.Drive.Backend, s.cfg.RunnerTarget)))
-		return nil, false
+		return false
 	}
-	if !s.driveShareIsBindable(w, resolved) {
+	return s.driveShareIsBindable(w, resolved)
+}
+
+// driveMountFor folds a resolved drive and the run request into the mount, or
+// writes the 422 that says why it cannot.
+//
+// THREE REFUSALS, and all are the same class: the caller is authorized, the
+// allocation exists, and this particular RUN cannot have it. The first two are
+// driveIsMountableHere's, shared with the preview; the third is this seam's
+// alone, because only it holds a request.
+//
+//	WIDENING. read_only:false against a read-only allocation is refused rather
+//	than ignored, and that is the choice worth naming: silently honouring the
+//	allocation would launch a run the member believes is writable, and they
+//	would find out when their work failed to persist. The narrow direction
+//	(read_only:true on a writable allocation) is always honoured — that is what
+//	NARROW-ONLY means, and it matches WorkspaceSelection.ReadOnly exactly.
+func (s *Server) driveMountFor(w http.ResponseWriter, req createRunRequest,
+	resolved types.ResolvedDrive) (*types.DriveMount, bool) {
+	if !s.driveIsMountableHere(w, resolved) {
 		return nil, false
 	}
 	readOnly := !resolved.Writable
 	if req.Drive.ReadOnly != nil {
 		if !*req.Drive.ReadOnly && readOnly {
 			writeError(w, http.StatusUnprocessableEntity,
-				driveRefusal("your allocation is read-only; `read_only:false` cannot widen it"))
+				driveRefusal("your allocation is read-only; read_only:false cannot widen it"))
 			return nil, false
 		}
 		readOnly = readOnly || *req.Drive.ReadOnly
@@ -206,6 +246,18 @@ func (s *Server) driveMountFor(w http.ResponseWriter, req createRunRequest,
 		DriveID:    resolved.Drive.ID,
 		Backend:    resolved.Drive.Backend,
 		ObjectName: resolved.ObjectName,
+		// THIS drive's own share root, so the Docker driver can bound the bind to
+		// the tree this row was authored against and not merely to the union of
+		// every root the deployment allows. Copied verbatim from the resolved row
+		// — the driver must never re-join a root and a home, and the two bounds
+		// (the operator's env ceiling, this drive's root) are deliberately both
+		// asserted there. Empty for every non-host_path backend, which has no
+		// host tree; the driver treats an empty one on a share as a refusal.
+		HostRoot: resolved.Drive.HostRoot,
+		// The drive's human name, for the run.drive.mount audit row's Target
+		// ("<drive>/<home>" on a share) — the member reads which drive and which
+		// directory, and the absolute host path stays in the payload's `object`.
+		DriveName: resolved.Drive.Name,
 		// The provisioner a managed claim asks for, carried so the k8s substrate
 		// never has to read the drive row it was resolved from.
 		StorageClass: resolved.Drive.StorageClass,
@@ -285,9 +337,12 @@ func (s *Server) driveShareIsBindable(w http.ResponseWriter, resolved types.Reso
 	// note makes a backticked substring a MONO SPAN the console applies, never
 	// characters in the string — so a PLACEHOLDER the doc backticks ships bare
 	// (this one, and it is what DRIVE_MEMBER.REFUSED_HOME_MISSING carries),
-	// while a placeholder the doc QUOTES ships %q (DENIED_DRIVE's profile name)
-	// and a backticked LITERAL keeps its backticks (REFUSED_WRITABLE's
-	// `read_only:false`, REFUSED_HOME_INVALID's `. _ -`).
+	// while a placeholder the doc QUOTES ships %q (DENIED_DRIVE's profile name).
+	// A backticked LITERAL ships bare for the SAME reason: the canon module
+	// carries no backtick anywhere, so REFUSED_WRITABLE's read_only:false and
+	// REFUSED_HOME_INVALID's `. _ -` are wire text here and mono on screen. Three
+	// refusals used to type them and shipped literal backticks a member read as
+	// punctuation.
 	if st, err := os.Stat(resolved.ObjectName); err != nil || !st.IsDir() {
 		writeError(w, http.StatusUnprocessableEntity, driveRefusal(fmt.Sprintf(
 			"directory %s does not exist on the share — ask an admin to create it", resolved.HomeName)))

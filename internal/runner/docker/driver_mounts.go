@@ -153,9 +153,11 @@ func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec) ([]mo
 //     WARDYN_USER_DRIVE_HOST_ROOTS ceiling on the symlink-resolved real path,
 //     fail-closed — the same two-layer shape a member mount has, for the same
 //     reason: the row was validated when an admin wrote it, and a symlink that
-//     was benign then can be re-pointed before this run. Plus the one thing the
-//     ceiling cannot say, because a SIBLING home is inside the roots too: the
-//     resolved directory must still be NAMED after this principal's home.
+//     was benign then can be re-pointed before this run. Plus the two things the
+//     deployment ceiling cannot say, because every other drive's tree and every
+//     sibling home are inside it too: the resolved path must be inside THIS
+//     drive's own host_root (runner.UserDriveHomeWithinItsRoot), and must still
+//     be NAMED after this principal's home.
 //
 // ONE PATH, NO FLAG. Both checks run for every drive that reaches the matching
 // arm — there is no provenance flag deciding whether the ceiling applies, and
@@ -172,11 +174,31 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount) ([]mou
 	if drive == nil {
 		return nil, nil
 	}
-	// EVERY backend, before the switch: the in-container target is a place a
-	// mount can land whatever backs it. ValidateTarget — never
+	// EVERY backend, before the switch and before ANY call to the daemon: a
+	// drive binds at the RESERVED path or it does not bind. The k8s driver has
+	// said exactly this since D4 (validateDriveMount's errDriveTargetInvalid);
+	// this one said only "somewhere legal", so a DriveMount addressed to
+	// /home/agent/.claude, /home/agent or /work mounted the member's persistent
+	// volume ON TOP of the credential staging directory, their home, or the
+	// workspace. Equality, not a prefix rule: the reservation is one path.
+	//
+	// Nothing in the control plane can reach this today — driveMountFor copies
+	// the constant — and that is precisely the argument for the check rather
+	// than against it. The reachable inputs are a future control-plane bug and
+	// the standalone runner's -spec JSON (cmd/wardyn-runner), neither of which
+	// has a validating boundary of its own.
+	if drive.Target != runner.DriveTarget {
+		return nil, fmt.Errorf("docker: denied user drive %q -> %q: %w (%q)",
+			drive.ObjectName, drive.Target, errDriveTargetInvalid, runner.DriveTarget)
+	}
+	// And the reserved path is still checked as a PATH. ValidateTarget — never
 	// ValidateAuthoredTarget, which refuses runner.DriveTarget by design: the
 	// reserved-target rule exists to stop a HUMAN naming this path, and this
 	// mount is the one thing the reservation is FOR.
+	//
+	// After the equality above it is an assertion about the CONSTANT, not about
+	// the caller: if runner.DriveTarget were ever edited to a path no mount may
+	// land at, this driver refuses instead of binding a member's storage there.
 	if err := runner.ValidateTarget(drive.Target); err != nil {
 		return nil, fmt.Errorf("docker: denied user drive %q -> %q: %w", drive.ObjectName, drive.Target, err)
 	}
@@ -237,19 +259,46 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount) ([]mou
 		if err != nil {
 			return nil, fmt.Errorf("docker: denied user drive mount %q -> %q: %w", m.Source, m.Target, err)
 		}
-		// AND THE RESOLVED PATH MUST STILL BE THIS PERSON'S HOME. Everything
-		// above bounds the real path to the deployment's roots and refuses the
-		// root itself — but a SIBLING is inside those roots too, so a home
-		// directory replaced host-side by a symlink to the home NEXT TO IT
-		// (`alice -> ../bob`) satisfies every check and binds bob's directory
-		// into alice's sandbox, read-write when her allocation is writable.
+		// AND INSIDE THIS DRIVE'S OWN ROOT, not merely inside SOME configured
+		// one. The ceiling above is the OPERATOR's outer bound over every drive
+		// at once, so it cannot tell one share drive's tree from another's: with
+		// a ceiling of `/srv/a,/srv/b` and two drives rooted at each, a home
+		// under A replaced host-side by a link to the same-named home under B
+		// passes every check above — inside a root, not a root, no denied
+		// segment — and the base-name rule below passes too, because the name is
+		// still this principal's. It binds drive B's directory.
 		//
-		// The assertion is on the BASE NAME rather than on the whole path, and
-		// that is what keeps the legitimate case working: a corporate share
-		// routinely spreads homes across volumes, so `<root>/alice ->
-		// /mnt/nas2/alice` is an ordinary layout and passes here (the roots
-		// ceiling is what says whether /mnt/nas2 is allowed at all). What cannot
-		// pass is a resolved directory named after somebody else.
+		// BOTH BOUNDS, deliberately, and they are not the same statement: the
+		// ceiling is env/MDM-set, so a console compromise cannot widen it and it
+		// is what stops an admin-authored row from naming a tree the operator
+		// never allowed; the drive's host_root is a database row, so it can only
+		// ever NARROW inside that ceiling. Dropping either one leaves a real
+		// hole — dropping the ceiling puts the outer bound in the product's own
+		// table, dropping the root lets one drive's members reach another's.
+		//
+		// An ABSENT host_root on a share is a refusal, not a skip (the arm lives
+		// in runner.UserDriveHomeWithinItsRoot): "" means this mount was built by
+		// something that does not carry the field, and falling through would be
+		// the pre-fix behaviour reappearing exactly where it cannot be seen.
+		if err := runner.UserDriveHomeWithinItsRoot(drive.HostRoot, real); err != nil {
+			return nil, fmt.Errorf("docker: denied user drive mount %q -> %q: %w", m.Source, m.Target, err)
+		}
+		// AND THE RESOLVED PATH MUST STILL BE THIS PERSON'S HOME. The two rules
+		// catch different substitutions: the root check refuses a link that
+		// LEAVES this drive's tree, and this one refuses a link that stays inside
+		// it and lands on somebody ELSE's home (`alice -> ../bob`, which satisfies
+		// every containment rule there is and binds bob's directory into alice's
+		// sandbox, read-write when her allocation is writable).
+		//
+		// The assertion is on the BASE NAME rather than on the whole path,
+		// because a share may legitimately arrange homes below its root in
+		// subdirectories (`<root>/alice -> <root>/2024/alice`); what cannot pass
+		// is a resolved directory named after somebody else. A home symlinked
+		// onto a DIFFERENT export is no longer supported here even when that
+		// export is a configured root — that is the cross-drive shape above, and
+		// the layout it served (one drive's homes spread over two mount points)
+		// is expressed by giving the drive the root its homes actually live
+		// under.
 		if filepath.Base(real) != drive.HomeName {
 			return nil, fmt.Errorf("docker: denied user drive mount %q -> %q: it resolves to %q, whose directory name is not "+
 				"this principal's home %q — a home replaced by a link to a sibling would bind another person's directory",

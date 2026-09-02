@@ -109,10 +109,18 @@ func TestSeedRequestDriveDoorIs403WithAudit(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("code = %d, want 403: %s", w.Code, w.Body.String())
 	}
-	// The mock round's frozen member copy, byte-exact.
-	const want = "mounting a user drive is not allowed by your governance profile \"contractors\". Launch without `drive`."
+	// The mock round's frozen member copy, byte-exact — and NO BACKTICKS. The
+	// canon module (ui/src/app/lib/user-drives-copy.ts) carries none anywhere:
+	// §7's header note makes a backticked substring in the doc a MONO SPAN the
+	// console applies at display time, never characters on the wire. This
+	// refusal used to ship "Launch without `drive`." and members read the
+	// backticks as punctuation.
+	const want = "mounting a user drive is not allowed by your governance profile \"contractors\". Launch without drive."
 	if got := refusalBody(t, w); got != want {
 		t.Errorf("body  = %s\nwant BYTE-EXACT: %s", got, want)
+	}
+	if strings.Contains(refusalBody(t, w), "`") {
+		t.Errorf("the refusal ships a literal backtick: %s", refusalBody(t, w))
 	}
 	if r := auditReasons(t, srv, "authz.denied"); !slices.Contains(r, "governance_profile") {
 		t.Errorf("authz.denied reasons = %v, want a governance_profile row", r)
@@ -219,7 +227,7 @@ func TestSeedRequestDrive422Matrix(t *testing.T) {
 				drive: driveFixture(nil), tier: types.CapabilitySubjectUser,
 			},
 			runnerTarget: "docker", req: driveRunRequest(true, boolPtr(false)),
-			want: "drive: your allocation is read-only; `read_only:false` cannot widen it",
+			want: "drive: your allocation is read-only; read_only:false cannot widen it",
 		},
 		{
 			// The HOME DERIVATION cannot answer: email_local with no email
@@ -236,7 +244,31 @@ func TestSeedRequestDrive422Matrix(t *testing.T) {
 			},
 			runnerTarget: "docker", req: driveRunRequest(true, nil), ctx: noEmailCtx,
 			want: "drive: your email_local cannot name a directory " +
-				"(lowercase letters and digits, then `. _ -`, up to 63 characters) — ask an admin to set your directory name",
+				"(lowercase letters and digits, then . _ -, up to 63 characters) — ask an admin to set your directory name",
+		},
+		{
+			// The SAME door on KUBERNETES, where the frozen sentence is not the
+			// whole rule: it describes driveHomeSegmentRe (the Docker rule), while
+			// a k8s home must satisfy driveHomeSegmentK8sRe, which also forbids
+			// `_` and a trailing `-`/`.`. The motivating case is exactly this one
+			// — an Entra `sub` is base64url and routinely carries `_` — and the
+			// member was being told the character that refused them was allowed.
+			//
+			// The canon is frozen, so it is not reworded: the substrate's clause
+			// is APPENDED after it (types.DriveHomeStricterRuleClause), which is
+			// why this row is byte-exact on the canon sentence AND on the suffix.
+			name: "the home name breaks the stricter Kubernetes rule",
+			store: &driveStore{
+				drive: driveFixture(func(d *types.UserDrive) {
+					d.Backend, d.HomeTemplate, d.SizeMiB = types.DriveBackendK8sPVC, types.HomeTemplateSub, 10240
+				}),
+				tier: types.CapabilitySubjectUser,
+			},
+			runnerTarget: "k8s", req: driveRunRequest(true, nil),
+			ctx: withOIDCGroups(operatorCtx("sub_drive_bob", "bob@corp.example", oidc.RoleMember), []string{"eng"}),
+			want: "drive: your sub cannot name a directory " +
+				"(lowercase letters and digits, then . _ -, up to 63 characters) — ask an admin to set your directory name " +
+				"(on a Kubernetes deployment the rule is stricter: no _, and it may not end in - or .)",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -471,11 +503,15 @@ func TestSeedRequestDriveMountShape(t *testing.T) {
 	want := types.DriveMount{
 		DriveID: d.ID,
 		Backend: types.DriveBackendDockerVolume, ObjectName: types.DriveObjectName(*d, home),
-		HomeName: home, SubjectHash: types.DriveSubjectHash("sub-drive-bob"),
+		DriveName: d.Name,
+		HomeName:  home, SubjectHash: types.DriveSubjectHash("sub-drive-bob"),
 		Target: runner.DriveTarget, ReadOnly: true, SizeMiB: 10240,
 		Enforcement: types.StorageEnforcementNone,
 		// StorageClass stays empty: a Docker volume has no such concept, and a
 		// substrate that sees one on this backend is looking at a bad row.
+		// HostRoot stays empty for the same reason: a managed volume has no host
+		// tree, so there is nothing for the driver to bound it against — the
+		// per-drive root check runs on the host_path arm only.
 	}
 	if *mount != want {
 		t.Errorf("mount = %+v\nwant %+v", *mount, want)
@@ -498,6 +534,46 @@ func TestSeedRequestDriveMountShape(t *testing.T) {
 	// allocation as a limit.
 	if mount.Enforcement != types.StorageEnforcementNone {
 		t.Errorf("enforcement = %q for a docker volume, want none", mount.Enforcement)
+	}
+}
+
+// TestSeedRequestDriveMountCarriesTheDrivesOwnRoot is the API half of the
+// per-drive containment fix: a SHARE mount carries the drive row's own
+// host_root, because the driver bounds the bind to THAT tree and not merely to
+// the union of WARDYN_USER_DRIVE_HOST_ROOTS — with two share drives inside one
+// ceiling, the ceiling cannot tell one drive's tree from the other's.
+//
+// Copied from the resolved row, never re-derived: the driver must not join a
+// root and a home a second time, and a mount whose root and object name came
+// from two different derivations is the drift the whole carry-it-forward shape
+// exists to prevent. The drive's NAME rides along for the audit row's Target.
+func TestSeedRequestDriveMountCarriesTheDrivesOwnRoot(t *testing.T) {
+	dir := t.TempDir()
+	d := driveFixture(func(d *types.UserDrive) {
+		d.Name, d.Backend, d.HomeTemplate, d.HostRoot = "Corp NAS", types.DriveBackendHostPath, types.HomeTemplateSub, dir
+	})
+	st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+	srv, _ := driveRunServer(st, "docker")
+	srv.cfg.UserDriveHostRoots = []string{dir}
+	if err := os.MkdirAll(filepath.Join(dir, "sub-drive-bob"), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, driveMemberCtx(nil, false))
+	if !ok || mount == nil {
+		t.Fatalf("seed refused: %d %s", w.Code, w.Body.String())
+	}
+	if mount.HostRoot != d.HostRoot {
+		t.Errorf("host_root = %q, want the drive row's own %q — the deployment ceiling bounds every drive at once and "+
+			"cannot say which tree THIS one was authored against", mount.HostRoot, d.HostRoot)
+	}
+	// And the object name really is inside it, so the driver's strict-subdir
+	// assertion is a statement about a pair the resolver derived together.
+	if filepath.Dir(mount.ObjectName) != mount.HostRoot {
+		t.Errorf("object %q is not directly under host_root %q", mount.ObjectName, mount.HostRoot)
+	}
+	if mount.DriveName != d.Name {
+		t.Errorf("drive_name = %q, want the drive's own %q (the audit row's Target is built from it)", mount.DriveName, d.Name)
 	}
 }
 

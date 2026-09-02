@@ -402,6 +402,27 @@ type DriveMount struct {
 	// Derived once by the resolver (DriveObjectName) so no runner re-computes a
 	// hash.
 	ObjectName string `json:"object_name"`
+	// HostRoot is THIS drive's own share root (UserDrive.HostRoot), carried on a
+	// host_path mount so the driver can assert the bind stays inside the tree
+	// this drive was authored against. Empty on every other backend, which has
+	// no host tree at all.
+	//
+	// It does not replace the deployment's WARDYN_USER_DRIVE_HOST_ROOTS ceiling
+	// and is not redundant with it. The ceiling is the OPERATOR's outer bound
+	// over every drive at once, so on a deployment with two share drives it
+	// cannot tell one drive's tree from the other's: a home replaced host-side
+	// by a link to the same-named home under the OTHER drive's root is inside
+	// the ceiling, is not a root, and still carries this principal's name. Only
+	// the drive's own root refuses that — and only the ceiling stops an
+	// admin-authored row from naming a tree the operator never allowed. The
+	// driver asserts BOTH (runner.UserDriveHomeWithinItsRoot).
+	HostRoot string `json:"host_root,omitempty"`
+	// DriveName is the drive object's human name (UserDrive.Name), carried for
+	// the AUDIT row alone: run.drive.mount's Target is "<drive>/<home>" on a
+	// share, so the member reading their own run's rows learns which drive and
+	// which directory without being handed the operator's absolute host path —
+	// which stays in the payload's `object`, where an operator reads it.
+	DriveName string `json:"drive_name,omitempty"`
 	// StorageClass is the provisioner a managed k8s_pvc claim asks for; "" means
 	// the cluster default, and it is meaningless on every other backend. Carried
 	// here because a substrate never reads the database — the resolver hands it
@@ -500,6 +521,33 @@ func driveHomeSegmentRule(b DriveBackend) string {
 		return driveHomeSegmentRe.String()
 	}
 	return driveHomeSegmentK8sRe.String() + " (a DNS-1123 subdomain: it becomes part of a PVC name)"
+}
+
+// DriveHomeStricterRuleClause is the same difference said to a MEMBER: the extra
+// sentence a backend's home rule needs beyond the frozen refusal, or "" when the
+// frozen sentence is already the whole rule.
+//
+// The frozen sentence (DRIVE_MEMBER.REFUSED_HOME_INVALID) describes
+// driveHomeSegmentRe — "lowercase letters and digits, then . _ -, up to 63
+// characters" — which is the DOCKER rule. On a Kubernetes backend
+// driveHomeSegmentK8sRe is strictly narrower, and the gap is exactly the
+// motivating case: an Entra `sub` is base64url and routinely carries `_`, so the
+// member whose k8s drive is templated on `sub` was told the character that
+// refused them was allowed, and asked their admin for nothing.
+//
+// A SERVER-COMPOSED SUFFIX rather than a reworded canon (§7.1's "composed by
+// the server — rendered verbatim, never keyed" class): the frozen table is one
+// sentence per door and it is frozen, so the substrate's own extra clause is
+// appended AFTER it. The canon sentence still ships byte-for-byte on every
+// deployment, and a k8s deployment adds the clause its regex actually enforces.
+//
+// It lives HERE, beside the two regexes, because it is prose about them: a copy
+// in the API layer would be a third statement of a rule that already has two.
+func DriveHomeStricterRuleClause(b DriveBackend) string {
+	if b.RunnerTarget() != "k8s" {
+		return ""
+	}
+	return "(on a Kubernetes deployment the rule is stricter: no _, and it may not end in - or .)"
 }
 
 // driveHomeHashLen is how many hex characters of the sha256 a `hash` home

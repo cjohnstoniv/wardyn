@@ -127,6 +127,23 @@ export interface UserDrivePreview {
   writable?: boolean;
   enforcement?: StorageEnforcement;
   paused?: boolean;
+  // WHICH of the submitted claims the directory name was derived from — the
+  // server's positional pick (the sign-in subject first, the email last) made
+  // visible. The request cannot LABEL a claim: the console sends one kind-less
+  // box, so an admin who pasted only an address against a `hash` or `sub` drive
+  // gets a perfectly well-formed object name that NO RUN WILL EVER MOUNT.
+  // Absent on a paused row, where nothing is derived at all.
+  home_subject?: string;
+  // A server-composed hint about the REQUEST — not a refusal, and deliberately
+  // NOT one of §7's frozen strings: those are the member's doors, and this is an
+  // admin's typo. Rendered verbatim, under its own heading, when it is present.
+  //
+  // NOT RENDERED YET, and that is the point of typing it. Both keys have been on
+  // the wire since the endpoint shipped and the console silently dropped them;
+  // the type is where the gap becomes visible to the mock round that owns where
+  // they belong on the "Who gets what" panel. A surface arrives through a mock
+  // round, never through a type (CONSOLE-RULES §12).
+  warning?: string;
 }
 
 // DriveBackend.Kind() — managed (Wardyn allocates the object) vs share (it

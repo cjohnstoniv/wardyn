@@ -9,6 +9,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -50,6 +52,25 @@ type driveStore struct {
 	// nilAnswer is the OTHER shape "no grant matched" can arrive in: nil rows
 	// with a nil error, rather than ErrNotFound.
 	nilAnswer bool
+	// profile is the governance profile the DOOR resolves for these claims —
+	// nil (noGovernanceStore's ErrNotFound) is a deployment that has authored
+	// none, which is every case that is not about the door.
+	profile *types.GovernanceProfile
+}
+
+// ResolveGovernanceProfile shadows noGovernanceStore's so a case can shut the
+// DRIVE DOOR for the claims under test. The preview resolves the ceiling for
+// the previewed principal, not for the admin asking, so this is the only way to
+// state "this person's profile forbids a drive".
+func (s *driveStore) ResolveGovernanceProfile(_ context.Context, _, _ []string) (
+	*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+	if s.err != nil {
+		return nil, "", s.err
+	}
+	if s.profile == nil {
+		return nil, "", store.ErrNotFound
+	}
+	return s.profile, types.CapabilitySubjectUser, nil
 }
 
 func (s *driveStore) ResolveUserDrive(_ context.Context, _, groups []string) (
@@ -114,12 +135,42 @@ func pausedDriveStore(mut func(*types.UserDrive)) *driveStore {
 }
 
 // driveServer builds a Server over st (nil for the no-store arm).
-func driveServer(st *driveStore) *Server {
-	cfg := Config{}
+func driveServer(st *driveStore) *Server { return driveServerOn(st, "docker") }
+
+// driveServerOn is the same with the deployment's runner target named, which
+// the PREVIEW now needs: it runs driveIsMountableHere, so a k8s-backed drive
+// previewed on a server that dispatches to "docker" is refused exactly as a
+// launch would refuse it. The resolver tests below call resolveUserDrive
+// directly and never reach that gate, so "docker" is the harmless default.
+func driveServerOn(st *driveStore, runnerTarget string) *Server {
+	cfg := Config{RunnerTarget: runnerTarget}
 	if st != nil {
 		cfg.Store = st
 	}
 	return &Server{cfg: cfg}
+}
+
+// drivePreviewShareServer is driveServerOn for a host_path fixture. The preview now
+// runs driveIsMountableHere, and a SHARE has to actually be bindable: a real
+// root the deployment's ceiling allows, and the per-person directories that
+// really exist under it. Rewriting the fixture's HostRoot here rather than
+// spelling a temp path at every call site keeps the drive fixtures readable and
+// keeps the two facts (the ceiling, the directory) in one place.
+func drivePreviewShareServer(t *testing.T, st *driveStore, homes ...string) *Server {
+	t.Helper()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve tempdir: %v", err)
+	}
+	for _, h := range homes {
+		if err := os.MkdirAll(filepath.Join(root, h), 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+	st.drive.HostRoot = root
+	srv := driveServerOn(st, "docker")
+	srv.cfg.UserDriveHostRoots = []string{root}
+	return srv
 }
 
 // driveMemberCtx is what humanOrAdminAuth publishes for a signed-in MEMBER:
@@ -596,7 +647,7 @@ func TestPreviewUserDrive(t *testing.T) {
 			d.Name, d.Backend, d.HomeTemplate = "Corp NAS", types.DriveBackendK8sPVCStatic, types.HomeTemplateEmailLocal
 		})
 		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
-		w := previewDriveHTTP(t, driveServer(st), []string{"sub-abc", "Alice@Corp.Example"}, []string{"Eng"})
+		w := previewDriveHTTP(t, driveServerOn(st, "k8s"), []string{"sub-abc", "Alice@Corp.Example"}, []string{"Eng"})
 		if w.Code != http.StatusOK {
 			t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
 		}
@@ -645,7 +696,7 @@ func TestPreviewUserDrive(t *testing.T) {
 			d.Name, d.Backend, d.HomeTemplate = "Cluster", types.DriveBackendK8sPVC, types.HomeTemplateHash
 		})
 		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
-		w := previewDriveHTTP(t, driveServer(st), []string{"sub-abc", "alice@corp.example"}, nil)
+		w := previewDriveHTTP(t, driveServerOn(st, "k8s"), []string{"sub-abc", "alice@corp.example"}, []string{"eng"})
 		if w.Code != http.StatusOK {
 			t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
 		}
@@ -788,7 +839,11 @@ func TestPreviewUserDrive(t *testing.T) {
 					}
 				})
 				st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
-				w := previewDriveHTTP(t, driveServer(st), tc.users, nil)
+				srv := driveServer(st)
+				if backend == types.DriveBackendHostPath {
+					srv = drivePreviewShareServer(t, st, tc.want[:strings.IndexAny(tc.want+"@", "@")])
+				}
+				w := previewDriveHTTP(t, srv, tc.users, nil)
 				if w.Code != http.StatusOK {
 					t.Fatalf("code = %d: %s", w.Code, w.Body.String())
 				}
@@ -850,7 +905,7 @@ func TestPreviewUserDrive(t *testing.T) {
 		})
 		est := &driveStore{drive: ed, grant: grantFixture(ed.ID, nil), tier: types.CapabilitySubjectUser}
 		got = userDrivePreviewResponse{}
-		w = previewDriveHTTP(t, driveServer(est), []string{"alice@corp.example"}, nil)
+		w = previewDriveHTTP(t, drivePreviewShareServer(t, est, "alice"), []string{"alice@corp.example"}, nil)
 		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 			t.Fatalf("email_local: decode: %v (body=%s)", err, w.Body.String())
 		}
@@ -901,6 +956,130 @@ func TestPreviewUserDrive(t *testing.T) {
 		driveServer(&driveStore{}).handlePreviewUserDrive(w, r)
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("code = %d, want 400 — the preview takes claims, and a caller naming a drive is asking a different question", w.Code)
+		}
+	})
+}
+
+// TestPreviewUserDriveAnswersTheSameRefusalAsLaunch is the preview-IS-enforcement
+// pin. The endpoint used to be resolveUserDriveFor alone — the store read and
+// the fold — with three of the launch path's gates living above and below it,
+// so a claim set that WOULD be refused at launch previewed green and the member
+// found out by ticking the box.
+//
+// Every arm below asserts the LAUNCH's status and the LAUNCH's bytes, because
+// an admin diagnosing "why can't Bob mount his drive" should read the sentence
+// Bob reads rather than a paraphrase they then have to match to a ticket.
+func TestPreviewUserDriveAnswersTheSameRefusalAsLaunch(t *testing.T) {
+	// THE DOOR, resolved for the PREVIEWED claims. The caller here is always an
+	// operator (every /drives route is SUPER), so asking about the caller —
+	// which is what the launch path's driveDoorProfile does — would answer
+	// "open" for every previewed principal and the preview would go on saying
+	// "this person mounts their drive" about somebody whose profile forbids it.
+	t.Run("a profile that denies the drive is the launch's own 403", func(t *testing.T) {
+		d := driveFixture(nil)
+		st := &driveStore{
+			drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser,
+			profile: &types.GovernanceProfile{
+				ID: uuid.New(), Name: "contractors",
+				Limits: types.GovernanceLimits{DenyUserDrive: true},
+			},
+		}
+		w := previewDriveHTTP(t, driveServer(st), []string{"sub-abc"}, []string{"eng"})
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("code = %d, want 403; body=%s", w.Code, w.Body.String())
+		}
+		const want = "mounting a user drive is not allowed by your governance profile \"contractors\". Launch without drive."
+		if got := refusalBody(t, w); got != want {
+			t.Errorf("body = %q\nwant the LAUNCH's own bytes: %q", got, want)
+		}
+	})
+
+	// The control: the same allocation with the door OPEN previews as before, so
+	// the arm above is a statement about DenyUserDrive rather than about every
+	// deployment that has authored a profile.
+	t.Run("an open profile changes nothing", func(t *testing.T) {
+		d := driveFixture(nil)
+		st := &driveStore{
+			drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser,
+			profile: &types.GovernanceProfile{ID: uuid.New(), Name: "engineering"},
+		}
+		w := previewDriveHTTP(t, driveServer(st), []string{"sub-abc"}, []string{"eng"})
+		if w.Code != http.StatusOK {
+			t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	// THE SHARE THAT IS NOT THERE — the input TOP RISK 5 was written around: a
+	// host_path drive whose /srv/homes/bob does not exist previewed as
+	// "\"nas\" via the user allocation" with an object name an admin could copy,
+	// and Bob's tick answered REFUSED_HOME_MISSING.
+	t.Run("a share whose directory is missing is the launch's own 422", func(t *testing.T) {
+		d := driveFixture(func(d *types.UserDrive) {
+			d.Name, d.Backend, d.HomeTemplate = "nas", types.DriveBackendHostPath, types.HomeTemplateSub
+		})
+		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+		// A real, allowed root — with nobody's home under it.
+		srv := drivePreviewShareServer(t, st)
+		w := previewDriveHTTP(t, srv, []string{"bob"}, []string{"eng"})
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("code = %d, want 422; body=%s", w.Code, w.Body.String())
+		}
+		const want = "drive: directory bob does not exist on the share — ask an admin to create it"
+		if got := refusalBody(t, w); got != want {
+			t.Errorf("body = %q\nwant the LAUNCH's own bytes: %q", got, want)
+		}
+		// And the positive control on the SAME server: the directory exists, so
+		// the refusal is about the home rather than about share drives.
+		if err := os.MkdirAll(filepath.Join(srv.cfg.UserDriveHostRoots[0], "bob"), 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if w := previewDriveHTTP(t, srv, []string{"bob"}, []string{"eng"}); w.Code != http.StatusOK {
+			t.Fatalf("code = %d, want 200 once the home is there; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	// THE BACKEND THIS DEPLOYMENT CANNOT MOUNT. A row valid when it was written
+	// and not now (the deployment re-pointed WARDYN_RUNNER) is the same 422 at
+	// launch, and previewing it green would send an admin looking at the
+	// allocation instead of at the deployment.
+	t.Run("a backend this deployment cannot mount is the launch's own 422", func(t *testing.T) {
+		d := driveFixture(func(d *types.UserDrive) {
+			d.Backend, d.HomeTemplate, d.SizeMiB = types.DriveBackendK8sPVC, types.HomeTemplateHash, 10240
+		})
+		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+		w := previewDriveHTTP(t, driveServerOn(st, "docker"), []string{"sub-abc"}, []string{"eng"})
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("code = %d, want 422; body=%s", w.Code, w.Body.String())
+		}
+		if got := refusalBody(t, w); !strings.HasPrefix(got, "drive: this deployment cannot mount your drive") {
+			t.Errorf("body = %q, want the launch's REFUSED_BACKEND shape", got)
+		}
+	})
+
+	// THE UNANSWERABLE GROUP TIER. A request carrying no `groups` has not
+	// evaluated the group tier, which is the condition a nil snapshot creates at
+	// launch — and answering it from the `all` row is how an admin gets a
+	// confident preview of a drive no run will mount. The console always sends
+	// both lists (previewClaims splits one box into both), so this arm answers
+	// the hand-made request.
+	t.Run("a claim set with no groups takes the unusable-groups arm", func(t *testing.T) {
+		st := &driveStore{
+			drive: driveFixture(nil), tier: types.CapabilitySubjectAll,
+			hasGroupTier: true, userTierOnly: true,
+		}
+		st.grant = grantFixture(st.drive.ID, nil)
+		w := previewDriveHTTP(t, driveServer(st), []string{"sub-abc"}, nil)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("code = %d, want the launch's 403; body=%s", w.Code, w.Body.String())
+		}
+		if got := refusalBody(t, w); got != groupsSnapshotStaleMsg {
+			t.Errorf("body = %q, want the launch's own %q", got, groupsSnapshotStaleMsg)
+		}
+		// The SAME deployment, with the groups supplied: answered. The arm is
+		// about a request that cannot evaluate the tier, not about deployments
+		// that allocate by group.
+		if w := previewDriveHTTP(t, driveServer(st), []string{"sub-abc"}, []string{"eng"}); w.Code != http.StatusOK {
+			t.Fatalf("code = %d, want 200 once the groups are supplied; body=%s", w.Code, w.Body.String())
 		}
 	})
 }
