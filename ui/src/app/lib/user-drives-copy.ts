@@ -17,7 +17,7 @@
 // their own.
 //
 // user-drives-copy.test.ts PARSES §7.2-§7.8's tables back out of the prompt
-// doc and compares all 142 keys below against them, so a swapped hyphen, a
+// doc and compares all 140 keys below against them, so a swapped hyphen, a
 // dropped ellipsis or a new doc row fails a gate instead of shipping.
 //
 // Backtick-mono rule (§7 header note): a backticked substring inside a frozen
@@ -108,7 +108,7 @@ export { ACCESS_STATE, PEOPLE, PREVIEW } from "./people-access-copy";
 //   - home override on a non-user row (400, validateUserDriveGrant) —
 //     home_override is accepted on a user-tier allocation only.
 //
-// DRIVE_MEMBER below is the one place that shape is inverted: §7.7's nine
+// DRIVE_MEMBER below is the one place that shape is inverted: §7.7's eight
 // strings are server-composed too, but §7 froze them as canon keys, so they
 // are transcribed here as the wording the Go side must emit — the same
 // belt-and-braces governance-copy.ts's MEMBER already uses for its own §7.7.
@@ -334,7 +334,7 @@ export const DRIVES = {
 // at that one import site (member-getting-started.tsx), so the module
 // exports no name governance-copy.ts already exports.
 //
-// §7.7's nine are SERVER-COMPOSED: writeError bodies the console renders
+// §7.7's eight are SERVER-COMPOSED: writeError bodies the console renders
 // verbatim off the wire, following the in-tree convention — a
 // lowercase-opening clause naming the wire field or the thing refused — not a
 // console-styled sentence (§7 header note; Hard canon #4). They are frozen
@@ -342,7 +342,7 @@ export const DRIVES = {
 // governance-copy.ts's own MEMBER uses for ITS §7.7 (DENIED_TASK_MODE_EXEC
 // etc.): the shape is server-composed, but §7 froze it as canon keys, so it
 // is transcribed rather than left absent. DENIED_STALE_GROUPS is NOT among
-// these nine — MEMBER.DENIED_STALE_GROUPS (governance-copy.ts) is reused
+// these eight — MEMBER.DENIED_STALE_GROUPS (governance-copy.ts) is reused
 // verbatim for the truncated-snapshot case and is not re-frozen here (§7.1,
 // §7.7).
 export const DRIVE_MEMBER = {
@@ -361,10 +361,18 @@ export const DRIVE_MEMBER = {
   NR_RO_NOTE: "A run can read it and never change it.",
   // Renders only when the allocation is writable and defaults OFF (Q5).
   NR_READONLY_TOGGLE: "Mount read-only for this run",
-  // The three reason lines render IN PLACE OF the checkbox: an unmountable
-  // drive is not a disabled checkbox with a tooltip, it is one sentence where
-  // the checkbox would be.
-  NR_NONE: "No drive is allocated to you.",
+  // The two reason lines render IN PLACE OF the checkbox: an unmountable drive
+  // is not a disabled checkbox with a tooltip, it is one sentence where the
+  // checkbox would be.
+  //
+  // There is NO "no drive is allocated to you" line, and its absence is the
+  // rule rather than an omission: §2.5 ends "with /me.user_drive null AND no
+  // door, there is no checkbox and no line — today's card byte-for-byte".
+  // A caller with no allocation and no door is exactly that caller, so the
+  // sentence had no state left to render in; workspace-card.tsx returns null
+  // there. The launch-path answer to the same condition is a SERVER string
+  // (REFUSED_NO_GRANT below), which is a different thing: it is the reply to an
+  // attempt, not a caption on an offer nobody was made.
   NR_PAUSED: "Your drive is paused by your admin.",
   NR_DENIED: (profile: string) => `Your governance profile "${profile}" does not allow mounting a drive.`,
   GS_DRIVE_CHIP: (name: string, size: string, mode: string) => `Drive · ${name}, ${size}, ${mode}`,
@@ -378,7 +386,7 @@ export const DRIVE_MEMBER = {
   // ---- §7.7 refusals (server-composed) ----
   // DENIED_DRIVE is the one 403 (audited authz.denied, reason
   // governance_profile, target runs.drive — denyMemberDrive beside
-  // denyMemberRunQuota); the seven REFUSED_NO_GRANT..REFUSED_BACKEND keys are
+  // denyMemberRunQuota); the six REFUSED_NO_GRANT..REFUSED_BACKEND keys are
   // 422s with no audit (seedRequestDrive, run create and preflight both).
   // REFUSED_TARGET_RESERVED is the 400 validatePolicySpec's unique-target arm
   // raises when a policy or workspace source names the reserved target — met
@@ -386,6 +394,12 @@ export const DRIVE_MEMBER = {
   // because it is a door this feature adds. This table is COMPLETE (§5 #4):
   // every string a member can be refused with at a door this feature adds is
   // here.
+  //
+  // NOTHING here names an unprovisioned k8s_pvc_static claim. No door this
+  // feature adds can see that condition — the row is valid, the allocation
+  // resolves, and the claim's absence is discovered by the k8s driver at
+  // DISPATCH — so a frozen sentence for it would be a string no code path can
+  // emit, which is the one thing a canon table must not carry.
   DENIED_DRIVE: (name: string) => `mounting a user drive is not allowed by your governance profile "${name}". Launch without drive.`,
   REFUSED_NO_GRANT: "drive: no user drive is allocated to you — ask an admin for an allocation",
   REFUSED_PAUSED: "drive: your allocation is paused by an admin",
@@ -393,10 +407,12 @@ export const DRIVE_MEMBER = {
   REFUSED_HOME_INVALID: (claim: string) =>
     `drive: your ${claim} cannot name a directory (lowercase letters and digits, then . _ -, up to 63 characters) — ask an admin to set your directory name`,
   REFUSED_HOME_MISSING: (name: string) => `drive: directory ${name} does not exist on the share — ask an admin to create it`,
-  REFUSED_CLAIM_MISSING: (name: string) => `drive: volume claim ${name} is not provisioned on this cluster — ask an admin to create it`,
   REFUSED_WRITABLE: "drive: your allocation is read-only; read_only:false cannot widen it",
-  // {reason} is the runner's own prose (on Kubernetes, the apiserver's
-  // refusal naming k8s.userDrives.enabled).
+  // {reason} is driveMountFor's own prose, composed in internal/api/
+  // user_drives_run.go — the backend/runner mismatch ("it is a %q drive and
+  // this deployment dispatches to %q") or, for a share, driveShareIsBindable's
+  // host-root error. It is NOT an apiserver refusal: the console never asks the
+  // cluster, and nothing on this path relays one.
   REFUSED_BACKEND: (reason: string) => `drive: this deployment cannot mount your drive (${reason})`,
   // [0] is the MOUNT'S POSITION, not a literal: validatePolicySpec prefixes
   // every mount error with workspace_mounts[i] (workspace_repos[i] for a

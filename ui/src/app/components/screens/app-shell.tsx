@@ -101,8 +101,11 @@ export interface ShellMeta {
   // 0.7 — the caller's own allocation and the profile door beside it, the same
   // /me body every other field here comes from. New Run and the member Getting
   // Started page read them off the context rather than issuing a second and a
-  // third GET /me of their own; same fail-closed default as memberLocalDirRoot
-  // (see operator-context.tsx's UserDriveContext).
+  // third GET /me of their own; same fail-closed default as memberLocalDirRoot.
+  // The trade that buys is FRESHNESS PER PAGE LOAD, not per navigation — a
+  // member paused mid-session keeps the offer until they reload and learns at
+  // launch, which is the direction of error this feature can afford (see
+  // operator-context.tsx's UserDriveContext for the whole argument).
   userDrive: MeUserDrive | null;
   userDriveDeniedByProfile: string;
 }

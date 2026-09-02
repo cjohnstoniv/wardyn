@@ -160,10 +160,15 @@ describe("WorkspaceCard — the governance door", () => {
     expect(screen.queryByText(DM.NR_CHECKBOX)).toBeNull();
   });
 
-  it("names it with NO allocation too — never the no-allocation advice", () => {
+  // With no allocation AND no door there is no line at all (the absent row
+  // above), so a line here can only have come from the door — and there is no
+  // no-allocation caption left to rule out: §7.6 froze none, because that
+  // state has nothing to render in. The launch-path answer to it is the
+  // server's REFUSED_NO_GRANT, which is a reply to an attempt.
+  it("names it with NO allocation too — the door, and only the door", () => {
     renderCard({ drive: null, deniedBy: profile });
+    expect(screen.getAllByTestId("nr-drive-reason")).toHaveLength(1);
     expect(screen.getByTestId("nr-drive-reason")).toHaveTextContent(DM.NR_DENIED(profile));
-    expect(screen.queryByText(DM.NR_NONE)).toBeNull();
   });
 
   it("outranks a paused allocation — one reason, not two", () => {
