@@ -90,8 +90,9 @@ const (
 	// reasonHostCLIOptIn is the canon note for the host-CLI lane's Wardyn-features
 	// cell — kept in sync with ui/src/app/lib/integrations.ts's CAPS.sub hostCli
 	// note, not the (stale) mock: nothing in the console switches this lane on,
-	// it's off by default here at the server, and only a WARDYN_COMPOSER_CONFIG
-	// change flips it.
+	// and nothing at the server flips it either — the resident_host cell is
+	// unconditionally CapOff (the WARDYN_COMPOSER_CONFIG switch went with the
+	// composer).
 	reasonHostCLIOptIn = "Off for this lane — no switch in this console turns it on."
 )
 
