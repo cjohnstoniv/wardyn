@@ -87,6 +87,7 @@ _SUBS = [
     ("blocked live", "blocked lyve", True),
     # dialog round 2026-09-01: new adjective phrases the rewrite introduced.
     ("live credential", "lyve credential", True),
+    ("live github api", "lyve GitHub API", True),
     ("live session", "lyve session", True),
     ("watched this one live", "watched this one lyve", True),
     ("audit trail, live", "audit trail, lyve", True),
