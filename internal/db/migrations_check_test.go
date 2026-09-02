@@ -193,6 +193,35 @@ func workspaceStatusValues() map[string]bool {
 	)
 }
 
+// driveBackendValues, homeTemplateValues and driveReclaimValues are 0054's
+// three closed sets, derived from the exported slices in internal/types rather
+// than re-listed here: a fifth backend (or template, or reclaim intent) added
+// to the Go side without widening the migration's CHECK fails this test, which
+// is the whole point of the pin.
+func driveBackendValues() map[string]bool {
+	out := map[string]bool{}
+	for _, b := range types.DriveBackends {
+		out[string(b)] = true
+	}
+	return out
+}
+
+func homeTemplateValues() map[string]bool {
+	out := map[string]bool{}
+	for _, t := range types.HomeTemplates {
+		out[string(t)] = true
+	}
+	return out
+}
+
+func driveReclaimValues() map[string]bool {
+	out := map[string]bool{}
+	for _, r := range types.DriveReclaims {
+		out[string(r)] = true
+	}
+	return out
+}
+
 // closedEnumCheck is one Go-const-vs-DB-CHECK parity case beyond
 // agent_runs.state: a table.column whose CHECK the DB enforces against a
 // small closed set the Go side also defines. Adding a value on one side
@@ -250,6 +279,29 @@ func TestClosedEnumChecksMatchConstants(t *testing.T) {
 		// CHECK at all, on the same "closed Go enum validated at the write
 		// boundary" doctrine 0042's capability column follows.
 		{"governance_assignments", "subject_type", stringSet(
+			string(types.CapabilitySubjectUser), string(types.CapabilitySubjectGroup),
+			string(types.CapabilitySubjectAll),
+		)},
+		// 0054's three user_drives enums, each pinned to the Go set the write
+		// boundary validates against (types.DriveBackend.Valid,
+		// HomeTemplate.Valid, DriveReclaim.Valid) rather than to a literal
+		// list. Every one of the three decides something a drifted CHECK would
+		// turn into a 500 on an admin surface the console offers — the exact
+		// half-open window 0053 closed for role_mappings.role.
+		//
+		// backend is the sharpest of them: it decides which RUNNER can mount a
+		// drive and whether Wardyn ALLOCATES the object or refuses because one
+		// is missing, so a fifth backend landing in Go without the CHECK is a
+		// write that passes validation and is refused by Postgres immediately
+		// after.
+		{"user_drives", "backend", driveBackendValues()},
+		{"user_drives", "home_template", homeTemplateValues()},
+		{"user_drives", "reclaim", driveReclaimValues()},
+		// user_drive_grants.subject_type is the SAME closed enum the two tables
+		// above carry, reused rather than re-enumerated — one Go definition for
+		// "who is this row written against". Pinned here so a fourth subject
+		// type cannot land on two tables' CHECKs and not the third's.
+		{"user_drive_grants", "subject_type", stringSet(
 			string(types.CapabilitySubjectUser), string(types.CapabilitySubjectGroup),
 			string(types.CapabilitySubjectAll),
 		)},

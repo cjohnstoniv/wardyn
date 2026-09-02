@@ -73,7 +73,8 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// BYOI/devcontainer_repo/ungranted-workspace request with the SAME 403
 	// create would, not preview a rosier checklist for a request that would be
 	// denied at launch.
-	if _, denied := s.denyMemberRequest(w, r, req); denied {
+	ceiling, denied := s.denyMemberRequest(w, r, req)
+	if denied {
 		return
 	}
 	// Same eager integration_id check launch runs (decodeAndValidateCreateRun,
@@ -126,6 +127,16 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// mount source or repo 422s here exactly as it would at create.
 	if code, err := s.validateWorkspaceSources(ctx, spec); err != nil {
 		writeError(w, code, "workspace: "+err.Error())
+		return
+	}
+
+	// Same USER DRIVE resolution launch runs, in the same place in the order
+	// (runs.go). The mount itself is launch-only — preflight dispatches nothing
+	// — but the REFUSALS are the point: a member who ticked "mount my drive" and
+	// has no allocation, or whose profile shuts the door, must read that on
+	// Review rather than discover it at launch. Discarding the mount and keeping
+	// the gate is exactly what this handler does with ephemeralDirs above.
+	if _, ok := s.seedRequestDrive(w, r, req, ceiling); !ok {
 		return
 	}
 

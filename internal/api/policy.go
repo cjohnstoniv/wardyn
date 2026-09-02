@@ -447,11 +447,15 @@ func validatePolicyWorkspaces(spec types.RunPolicySpec) error {
 	// PURE structural check (no store access).
 	seenTargets := make(map[string]bool, len(spec.WorkspaceMounts)+len(spec.WorkspaceRepos))
 	for i, wm := range spec.WorkspaceMounts {
-		if err := runner.ValidateMount(runner.Mount{
-			Source:   wm.Source,
-			Target:   wm.Target,
-			ReadOnly: wm.ReadOnlyOrDefault(),
-		}); err != nil {
+		if err := runner.ValidateMountSource(wm.Source); err != nil {
+			return fmt.Errorf("workspace_mounts[%d]: %w", i, err)
+		}
+		// ValidateMount decomposed into its two halves so the TARGET half is the
+		// AUTHORED one (runner.ValidateAuthoredTarget): identical to what
+		// ValidateMount enforced, plus the reserved user-drive target. The drive
+		// mounts at that path itself and is not authored here, so a policy naming
+		// it would either shadow a member's storage or be shadowed by it.
+		if err := runner.ValidateAuthoredTarget(wm.Target); err != nil {
 			return fmt.Errorf("workspace_mounts[%d]: %w", i, err)
 		}
 		if seenTargets[wm.Target] {
@@ -465,7 +469,7 @@ func validatePolicyWorkspaces(spec types.RunPolicySpec) error {
 			// by a LATER wave (WARDYN_REPOS); nothing to collide-check here yet.
 			continue
 		}
-		if err := runner.ValidateTarget(wr.Target); err != nil {
+		if err := runner.ValidateAuthoredTarget(wr.Target); err != nil {
 			return fmt.Errorf("workspace_repos[%d]: %w", i, err)
 		}
 		if seenTargets[wr.Target] {

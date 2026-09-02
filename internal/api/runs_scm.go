@@ -163,7 +163,7 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) string {
 			}
 			dest = workRoot + "/" + name
 		}
-		if !repoFieldSafe(dest) || runner.ValidateTarget(dest) != nil {
+		if !repoFieldSafe(dest) || runner.ValidateAuthoredTarget(dest) != nil {
 			return
 		}
 		if seenDest[dest] {

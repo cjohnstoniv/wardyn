@@ -8,8 +8,9 @@
 // (e.g. ESC "[" with the parameter bytes never arriving) emits that write as a
 // complete, well-formed asciicast "o" event — nothing withheld, nothing
 // dropped, every line valid JSON, reassembled bytes == input. The only bytes
-// CastWriter may hold back are an INCOMPLETE UTF-8 RUNE (asciicast.go:97-107);
-// ESC is ASCII, so the incompleteTailLen scan (:137-148) must return 0 for it.
+// CastWriter may hold back are an INCOMPLETE UTF-8 RUNE (CastWriter.Write's
+// DecodeLastRune arm in asciicast.go); ESC is ASCII, so the incompleteTailLen
+// scan must return 0 for it.
 //
 // Fails if: incompleteTailLen starts treating ESC/CSI as a rune lead byte; Write
 // stops emitting when DecodeLastRune reports RuneError on an ASCII tail; the
@@ -84,8 +85,9 @@ func TestProbeF4_CastWriter_MidEscapeSequenceTailIsFlushed(t *testing.T) {
 			if n != len(tc.last) {
 				t.Fatalf("Write 2 accepted %d bytes, want %d", n, len(tc.last))
 			}
-			// No Flush/Close exists (asciicast.go:40-44): whatever is in buf NOW is
-			// the persisted audit tail. The ESC-terminated write must already be there.
+			// No Flush/Close exists (see CastWriter's doc comment in asciicast.go):
+			// whatever is in buf NOW is the persisted audit tail. The
+			// ESC-terminated write must already be there.
 			payloads := castLines(t, buf.String())
 			if len(payloads) != 2 {
 				t.Fatalf("got %d event lines, want 2 (the mid-escape write was withheld or split):\n%s", len(payloads), buf.String())
@@ -107,12 +109,12 @@ func TestProbeF4_CastWriter_MidEscapeSequenceTailIsFlushed(t *testing.T) {
 }
 
 // TestProbeF4_CastWriter_MidRuneTailDoesNotCorruptPrecedingEvents pins the
-// DOCUMENTED residual (asciicast.go:40-44): a final write ending in a lone UTF-8
-// lead byte drops THAT byte (there is no Flush), but everything before it must
-// still be a complete, valid event and the cast must still end on a line
-// boundary. If a Flush is ever added this test still passes (it asserts the
-// prefix, not the drop); if the pending logic ever starts corrupting the line
-// BEFORE the lead byte, it fails.
+// DOCUMENTED residual (CastWriter's doc comment in asciicast.go): a final
+// write ending in a lone UTF-8 lead byte drops THAT byte (there is no Flush),
+// but everything before it must still be a complete, valid event and the cast
+// must still end on a line boundary. If a Flush is ever added this test still
+// passes (it asserts the prefix, not the drop); if the pending logic ever starts
+// corrupting the line BEFORE the lead byte, it fails.
 func TestProbeF4_CastWriter_MidRuneTailDoesNotCorruptPrecedingEvents(t *testing.T) {
 	var buf bytes.Buffer
 	cw := NewCastWriter(&buf, 80, 24, time.Now())
@@ -135,6 +137,6 @@ func TestProbeF4_CastWriter_MidRuneTailDoesNotCorruptPrecedingEvents(t *testing.
 	}
 	// Explicitly record the residual so a reviewer sees it in -v output.
 	if len(got) == len("box: "+esc+"[0m") {
-		t.Logf("RESIDUAL (asciicast.go:40-44): trailing lone lead byte 0x%02x dropped at end-of-stream; no Flush exists", rune3[0])
+		t.Logf("RESIDUAL (CastWriter's documented no-Flush contract): trailing lone lead byte 0x%02x dropped at end-of-stream; no Flush exists", rune3[0])
 	}
 }

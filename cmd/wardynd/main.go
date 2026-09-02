@@ -37,7 +37,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
-	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
@@ -327,13 +326,9 @@ func run() error {
 	// matching the LocalMode unspecified-bind warn precedent — refusing it would
 	// be safer, warning is what the surrounding code already does for a posture
 	// the operator may have chosen deliberately.
-	memberMounts, memberWarns, err := runner.ParseMemberMountPolicy(
-		*f.memberRoots, *f.memberRootsMap, *f.memberWritableRoots, *f.memberWritableDeny)
+	memberMounts, driveHostRoots, err := parseMountCeilings(f)
 	if err != nil {
 		return err
-	}
-	for _, warn := range memberWarns {
-		slog.Warn("wardynd: member workspace roots are dangerously wide — " + warn)
 	}
 
 	srv := api.New(api.Config{
@@ -379,6 +374,7 @@ func run() error {
 		OperatorEmails:            splitCSV(*f.oidcOperatorEmails),
 		AllowEmailMappings:        *f.oidcAllowEmailMappings,
 		MemberMounts:              memberMounts,
+		UserDriveHostRoots:        driveHostRoots,
 		ImageBuilder:              feats.imgBuilder,
 		AgentImages:               agentImages,
 		AgentAnthropicModel:       *f.agentModel,

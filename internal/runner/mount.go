@@ -49,6 +49,52 @@ import (
 // inside the sandbox (e.g. over /usr, /bin, /etc).
 var allowedTargetPrefixes = []string{"/home/agent", "/work", "/workspace"}
 
+// DriveTarget is the RESERVED in-container path a user drive mounts at. It sits
+// under /home/agent, so it is already an allowed target prefix — reserving it
+// is what stops an authored workspace mount, workspace repo or workspace source
+// from landing on the same path and quietly shadowing (or being shadowed by)
+// the member's own persistent storage.
+//
+// Reserved rather than merely first-come: the two are authored by different
+// people at different times (an admin writes a policy, an admin allocates a
+// drive, a member ticks a checkbox at run time), so a collision would surface
+// as one of them silently disappearing inside a running sandbox rather than as
+// a refusal anybody could act on.
+const DriveTarget = "/home/agent/drive"
+
+// ValidateAuthoredTarget is ValidateTarget PLUS the reserved-target rule, and
+// it is what every AUTHORED in-container target goes through — a policy's
+// workspace_mounts/workspace_repos entry, a workspace source's target, and the
+// re-validation of a stored source's target when a run seeds it.
+//
+// The split from ValidateTarget is the boundary it names, not a stricter mood:
+// ValidateTarget answers "is this a legal place to put something in the
+// sandbox", which the drive's own mount must still pass, while this one answers
+// "may a HUMAN name this place", which the drive's own mount is exactly the
+// exception to. Folding the reserved rule into ValidateTarget would make the
+// drive fail its own validation.
+func ValidateAuthoredTarget(tgt string) error {
+	if err := ValidateTarget(tgt); err != nil {
+		return err
+	}
+	if targetReservedForDrive(tgt) {
+		// The frozen refusal (docs/design/user-drives-prompt.md's DRIVE_MEMBER
+		// table, REFUSED_TARGET_RESERVED). The caller adds the field prefix its
+		// own convention already carries (workspace_mounts[i], workspace_repos[i]).
+		return fmt.Errorf("target `%s` is reserved for the user drive", DriveTarget)
+	}
+	return nil
+}
+
+// targetReservedForDrive reports whether tgt IS the reserved drive target or
+// nests under it. UNDER it counts: a mount at /home/agent/drive/shared would be
+// bound inside a tree the drive owns, which either shadows the member's data or
+// is shadowed by it depending on mount order — an ambiguity a refusal is
+// cheaper than.
+func targetReservedForDrive(tgt string) bool {
+	return tgt == DriveTarget || strings.HasPrefix(tgt, DriveTarget+"/")
+}
+
 // deniedSourcePrefixes are host paths a bind-mount Source may neither equal nor
 // live under (checked after path.Clean). Each is a path whose exposure to the
 // sandbox would hand it host-level control.

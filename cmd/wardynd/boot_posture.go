@@ -6,10 +6,12 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/directory"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
 )
 
@@ -310,4 +312,41 @@ func subscriptionInjectPosture(runnerTarget string, oidcConfigured, localMode, a
 		"(WARDYN_LOCAL_MODE). This daemon serves an authenticated multi-user API, so a shared " +
 		"subscription credential would serve other people's runs. Use an API key or Bedrock — or, " +
 		"for a demo box that is genuinely single-user, set WARDYN_ALLOW_SHARED_SUBSCRIPTION=true"
+}
+
+// parseMountCeilings parses the TWO operator/MDM-set mount ceilings at boot and
+// logs their posture warnings: what a MEMBER may bind from their own machine
+// (WARDYN_MEMBER_WORKSPACE_ROOTS + its three siblings) and where an ADMIN may
+// point a host_path USER DRIVE (WARDYN_USER_DRIVE_HOST_ROOTS).
+//
+// Together rather than inline, and together rather than apart, because they are
+// one posture with two scopes and share every rule: parsed at BOOT so a
+// malformed value fails closed here instead of at somebody's first onboarding
+// or first run; unset means the narrow answer (a member mounts no host
+// directory; no host_path drive may be registered at all); and a root at "/" or
+// the daemon's own $HOME is permitted but WARNED about — refusing would be
+// safer, warning is what the surrounding boot code already does for a posture
+// the operator may have chosen deliberately.
+//
+// The drive ceiling is the same rule ONE LEVEL UP: a drive's host_root is
+// authored in the DATABASE by an admin and its per-person subdirectories are
+// bound into OTHER PEOPLE's sandboxes, so the allowlist over it has to live
+// where a console compromise cannot reach it.
+func parseMountCeilings(f *bootFlags) (runner.MemberMountPolicy, []string, error) {
+	memberMounts, memberWarns, err := runner.ParseMemberMountPolicy(
+		*f.memberRoots, *f.memberRootsMap, *f.memberWritableRoots, *f.memberWritableDeny)
+	if err != nil {
+		return runner.MemberMountPolicy{}, nil, err
+	}
+	for _, warn := range memberWarns {
+		slog.Warn("wardynd: member workspace roots are dangerously wide — " + warn)
+	}
+	driveHostRoots, driveWarns, err := runner.ParseUserDriveHostRoots(*f.userDriveHostRoots)
+	if err != nil {
+		return runner.MemberMountPolicy{}, nil, err
+	}
+	for _, warn := range driveWarns {
+		slog.Warn("wardynd: user drive host roots are dangerously wide — " + warn)
+	}
+	return memberMounts, driveHostRoots, nil
 }

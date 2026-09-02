@@ -49,7 +49,8 @@ func TestF2_TruncatedSnapshotRefusesNotWidens(t *testing.T) {
 		{
 			// The load-bearing row: the SURVIVING half of the snapshot would
 			// match a group row. Serving it would make the answer depend on
-			// alphabetical luck (governance.go:607-615) — must refuse.
+			// alphabetical luck (effectiveCeiling's truncated arm in
+			// governance.go) — must refuse.
 			name:   "truncated, a surviving group matches a GROUP row, group tier exists",
 			groups: []string{"a-team"}, truncated: true,
 			st:      &capStore{govProfile: govProfile("a-team-walled"), govTier: types.CapabilitySubjectGroup, govHasGroupTier: true},
