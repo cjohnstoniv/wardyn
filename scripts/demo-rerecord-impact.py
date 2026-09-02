@@ -136,9 +136,10 @@ def route_modules():
                 routes[path] = mods[comp]
                 break
     # "/" is FirstRunLanding, defined in App.tsx itself (a <Navigate> to /runs or
-    # /setup); the alternation receipts (/\/(runs|setup)/) and page.goto("/")
-    # resolve here instead of being dropped.
-    routes.setdefault("/", APP)
+    # /setup), so it is deliberately NOT keyed: keying it to App.tsx would make
+    # every page.goto("/") inherit the whole lazy-import closure. The alternation
+    # receipts (/\/(runs|setup)/) resolve to "/" and are dropped for the same
+    # reason; every episode that can land on /setup also has a literal /setup.
     return routes
 
 
