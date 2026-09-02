@@ -298,6 +298,17 @@ func TestUserDriveWriteRefusals(t *testing.T) {
 			want:  http.StatusBadRequest, msg: "is not allowed on a share backend",
 		},
 		{
+			// THE MIRROR IMAGE, and the security half of the pair. A MANAGED
+			// object is named by the HOME alone, so two people whose addresses
+			// share the part before the "@" are allocated ONE volume — invisible
+			// from this surface, since both allocations preview a perfectly
+			// well-formed object name, and invisible to the driver too, since the
+			// object carries this same drive's id.
+			name: "a managed drive templated on the email local part is a 400",
+			body: `{"name":"vol","backend":"docker_volume","home_template":"email_local"}`,
+			want: http.StatusBadRequest, msg: "is not allowed on a managed backend",
+		},
+		{
 			// The k8s size rule reaches the API surface too: a claim requesting
 			// zero bytes is rejected by the apiserver, so this deployment refuses
 			// it at authoring instead of at every member's bind.
@@ -350,6 +361,123 @@ func TestHostPathDriveInsideRootsIsAccepted(t *testing.T) {
 	if w := driveCall(t, srv.handleCreateUserDrive, http.MethodPost, "/api/v1/drives", body, nil); w.Code != http.StatusCreated {
 		t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
 	}
+}
+
+// TestNestedHostRootDrivesAreRefused is the gate that has to read the other
+// ROWS, and the hole it closes belongs to a MEMBER rather than to an admin's
+// typo.
+//
+// Drive A is rooted at the share's mount point and gives alice a WRITABLE home
+// under it. Drive B is then rooted INSIDE that home. Every check above passes —
+// B's root is in the ceiling, exists, is not a credential directory — and B's
+// whole tree is now a directory alice can rewrite from inside a run, so she can
+// point B's members wherever she likes. The reverse direction is the same fact
+// authored in the other order.
+//
+// Equal roots stay legal: that is "one share, two allocations with different
+// home templates", and neither drive's members can move a root that is not
+// inside anybody's home.
+func TestNestedHostRootDrivesAreRefused(t *testing.T) {
+	root := t.TempDir()
+	shares := filepath.Join(root, "shares")
+	nested := filepath.Join(shares, "alice", "team")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	sibling := filepath.Join(root, "other-shares")
+	if err := os.MkdirAll(sibling, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	body := func(name, hostRoot string) string {
+		return `{"name":"` + name + `","backend":"host_path","home_template":"sub","host_root":"` + hostRoot + `"}`
+	}
+	// The FIRST drive, which every case below is authored against.
+	seed := func(t *testing.T) (*driveCRUDStore, *Server) {
+		t.Helper()
+		st := newDriveCRUDStore()
+		srv, _ := driveAdminServer(st, []string{root})
+		if w := driveCall(t, srv.handleCreateUserDrive, http.MethodPost, "/api/v1/drives", body("Shares", shares), nil); w.Code != http.StatusCreated {
+			t.Fatalf("seed create = %d: %s", w.Code, w.Body.String())
+		}
+		return st, srv
+	}
+
+	t.Run("a descendant root is refused, naming the other drive", func(t *testing.T) {
+		_, srv := seed(t)
+		w := driveCall(t, srv.handleCreateUserDrive, http.MethodPost, "/api/v1/drives", body("Team", nested), nil)
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("code = %d, want 422: %s", w.Code, w.Body.String())
+		}
+		for _, want := range []string{"Shares", shares, "separate trees"} {
+			if !strings.Contains(w.Body.String(), want) {
+				t.Errorf("body = %s, want it to name %q", w.Body.String(), want)
+			}
+		}
+	})
+
+	t.Run("an ancestor root is refused too", func(t *testing.T) {
+		// Authored in the other order: the new drive CONTAINS the stored one, so
+		// this drive's members would be the ones doing the redirecting.
+		_, srv := seed(t)
+		w := driveCall(t, srv.handleCreateUserDrive, http.MethodPost, "/api/v1/drives", body("Everything", root), nil)
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("code = %d, want 422: %s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "Shares") {
+			t.Errorf("body = %s, want it to name the drive it collides with", w.Body.String())
+		}
+	})
+
+	t.Run("a sibling root is fine", func(t *testing.T) {
+		_, srv := seed(t)
+		if w := driveCall(t, srv.handleCreateUserDrive, http.MethodPost, "/api/v1/drives", body("Other", sibling), nil); w.Code != http.StatusCreated {
+			t.Fatalf("a sibling tree was refused = %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("the SAME root is fine", func(t *testing.T) {
+		// Two drives on one share with different home templates is the ordinary
+		// shape, and nesting is a containment question rather than a naming one.
+		_, srv := seed(t)
+		if w := driveCall(t, srv.handleCreateUserDrive, http.MethodPost, "/api/v1/drives", body("Shares by email", shares), nil); w.Code != http.StatusCreated {
+			t.Fatalf("a second drive on the SAME root was refused = %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("a drive is not its own ancestor", func(t *testing.T) {
+		// A PUT that re-saves a row unchanged must not start refusing itself.
+		st, srv := seed(t)
+		var id uuid.UUID
+		for k := range st.drives {
+			id = k
+		}
+		w := driveCall(t, srv.handleUpdateUserDrive, http.MethodPut, "/api/v1/drives/"+id.String(),
+			body("Shares", shares), map[string]string{"id": id.String()})
+		if w.Code != http.StatusOK {
+			t.Fatalf("re-saving a drive over itself = %d, want 200: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("a MANAGED drive is unaffected", func(t *testing.T) {
+		// The gate is host_path-only: a managed drive has no host tree, so there
+		// is nothing for it to nest inside.
+		_, srv := seed(t)
+		if w := driveCall(t, srv.handleCreateUserDrive, http.MethodPost, "/api/v1/drives", driveCreateBody, nil); w.Code != http.StatusCreated {
+			t.Fatalf("a managed drive was caught by the nesting gate = %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("a store failure is a 500, never a pass", func(t *testing.T) {
+		// A list that failed cannot say the tree is clear, and treating it as
+		// clear is how the check silently stops biting on exactly the deployment
+		// whose database is unhappy.
+		st, srv := seed(t)
+		st.listErr = errors.New("boom")
+		w := driveCall(t, srv.handleCreateUserDrive, http.MethodPost, "/api/v1/drives", body("Team", nested), nil)
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("code = %d, want 500: %s", w.Code, w.Body.String())
+		}
+	})
 }
 
 // TestUserDriveNameConflictIs409 pins UNIQUE(name) as a caller-fixable 409

@@ -26,7 +26,7 @@ func TestBuildRunnerFromFlags_DockerNotCompiledInFailsClosed(t *testing.T) {
 	if names := substrate.Names(); len(names) != 0 {
 		t.Fatalf("tagless build must register no substrates, have %v", names)
 	}
-	r, _, err := buildRunnerFromFlags(rrFlags("docker"), nil)
+	r, _, err := buildRunnerFromFlags(rrFlags("docker"), nil, nil)
 	if err == nil {
 		t.Fatalf("want fail-closed error for -runner docker in a tagless build, got runner %T", r)
 	}

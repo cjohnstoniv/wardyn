@@ -218,6 +218,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 			"Drop the github_token grant to push with your own PAT instead")
 	applyRepoCloneEnv(sandboxEnv, run, policy)
 	applyEphemeralDirsEnv(sandboxEnv, p.EphemeralDirs)
+	applyUserDriveEnv(sandboxEnv, p.Drive)
 	// Caller-supplied non-secret env (p.ExtraEnv): the AWS harness login's
 	// pre-login WARDYN_AWS_SSO_CONFIG_B64, or the site-config probe's own
 	// settings — the same "only a discriminator + non-secret payload changes;
@@ -487,6 +488,20 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
 		return
 	}
+
+	// USER DRIVE ATTACHED — a no-op for the runs (most of them) that carry
+	// none. See auditDriveMount.
+	//
+	// AFTER CreateSandbox, not beside the spec that carries the drive: the
+	// driver has the last word on whether the drive is actually bound (the
+	// host-root ceiling and the bind deny-list are re-run there, on the
+	// symlink-resolved real path, as the last thing before the container is
+	// created). Emitted before that decision, a `success` row claimed a mount
+	// that the very next event — `run.create` `failure` — contradicted. Nothing
+	// downstream of here can refuse the drive, so this row is now true when it
+	// is written.
+	s.auditDriveMount(ctx, run.ID, p.Drive)
+
 	// HOLD the run's watcher lease for the rest of dispatch — starting the moment
 	// there is a sandbox to watch and BEFORE SetSandboxRef publishes its ref, so a
 	// run whose sandbox_ref is set is ALWAYS backed by a fresh lease while its

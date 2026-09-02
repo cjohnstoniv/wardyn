@@ -165,11 +165,16 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source strin
 // into the orchestrator so lifecycle routing — and therefore the kill switch —
 // survives a control-plane restart; nil keeps the in-memory-only behavior.
 //
+// driveHostRoots is the boot-parsed WARDYN_USER_DRIVE_HOST_ROOTS ceiling
+// (parseMountCeilings), passed in rather than re-parsed here so the substrate's
+// bind-time check and internal/api's authoring-time check are literally the
+// same slice — and so the "dangerously wide root" warning is emitted once.
+//
 // The one exception to "the target IS the resolved substrate" is
 // -runner-target (WARDYN_RUNNER_TARGET) with no runner configured: see the
 // branch below. It cannot make this daemon dispatch — the runner stays nil —
 // and it is ignored the moment a real substrate resolves.
-func buildRunnerFromFlags(f *bootFlags, refs orchestrator.RefStore) (runner.Runner, string, error) {
+func buildRunnerFromFlags(f *bootFlags, refs orchestrator.RefStore, driveHostRoots []string) (runner.Runner, string, error) {
 	confRuntimes, err := parseConfinementMap(*f.confinementMap)
 	if err != nil {
 		return nil, "", err
@@ -197,6 +202,7 @@ func buildRunnerFromFlags(f *bootFlags, refs orchestrator.RefStore) (runner.Runn
 	sub, err := substrate.New(*f.runnerSel, substrate.Deps{
 		ProxyImage:          *f.proxyImage,
 		ConfinementRuntimes: confRuntimes,
+		UserDriveHostRoots:  driveHostRoots,
 	})
 	if err != nil {
 		// W27-S1-3: discriminate WHY substrate.New failed before printing the

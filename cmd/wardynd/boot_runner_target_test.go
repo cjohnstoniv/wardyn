@@ -4,8 +4,11 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 )
 
 // The gap this flag closes: a daemon booted with -runner none resolves the
@@ -30,7 +33,7 @@ func TestBuildRunnerFromFlags_RunnerTargetOverride(t *testing.T) {
 
 	// 1. No runner, no override: byte-identical to before the flag existed.
 	t.Run("none without an override stays none", func(t *testing.T) {
-		r, target, err := buildRunnerFromFlags(rrFlags("none"), nil)
+		r, target, err := buildRunnerFromFlags(rrFlags("none"), nil, nil)
 		if err != nil || r != nil || target != "none" {
 			t.Fatalf("got (%T, %q, %v), want (nil, \"none\", nil)", r, target, err)
 		}
@@ -40,7 +43,7 @@ func TestBuildRunnerFromFlags_RunnerTargetOverride(t *testing.T) {
 	//    the runner is STILL nil — registration widened, dispatch untouched.
 	for _, want := range knownRunnerTargets() {
 		t.Run("none with override "+want, func(t *testing.T) {
-			r, target, err := buildRunnerFromFlags(withOverride("none", want), nil)
+			r, target, err := buildRunnerFromFlags(withOverride("none", want), nil, nil)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -55,13 +58,13 @@ func TestBuildRunnerFromFlags_RunnerTargetOverride(t *testing.T) {
 	// Surrounding whitespace is the shape a compose/env passthrough produces;
 	// an all-blank value is the unset default, not a refusal.
 	t.Run("none with a whitespace-padded override", func(t *testing.T) {
-		_, target, err := buildRunnerFromFlags(withOverride("none", "  docker\n"), nil)
+		_, target, err := buildRunnerFromFlags(withOverride("none", "  docker\n"), nil, nil)
 		if err != nil || target != "docker" {
 			t.Fatalf("got (%q, %v), want (\"docker\", nil)", target, err)
 		}
 	})
 	t.Run("none with a blank override is the unset default", func(t *testing.T) {
-		_, target, err := buildRunnerFromFlags(withOverride("none", "   "), nil)
+		_, target, err := buildRunnerFromFlags(withOverride("none", "   "), nil, nil)
 		if err != nil || target != "none" {
 			t.Fatalf("got (%q, %v), want (\"none\", nil)", target, err)
 		}
@@ -69,14 +72,28 @@ func TestBuildRunnerFromFlags_RunnerTargetOverride(t *testing.T) {
 
 	// 3. A CONFIGURED runner ignores the override entirely: the resolved
 	//    substrate's own name is the only truthful target, so the override is
-	//    not even consulted. This package's tagless test build registers no
-	//    substrate (runner_registry_nodocker_test.go), so -runner docker fails
-	//    at the registry — and the assertion is that the override neither
-	//    rescues that failure nor becomes the target. The positive half (a
-	//    resolved substrate keeps its own name) is
-	//    TestBuildRunnerFromFlags_DockerEnabled under -tags docker.
+	//    not even consulted. Which half of that is observable depends on the
+	//    build, so this branches on the registry rather than on a build tag —
+	//    the package is gated in BOTH flavors (tagless via `go test`, docker
+	//    via `go test -tags docker`) and this leg must hold in each. With
+	//    "docker" registered, -runner docker resolves and the target is
+	//    "docker", never the "k8s" override; without it (the tagless build,
+	//    runner_registry_nodocker_test.go) the registry miss is the refusal,
+	//    and the override neither rescues it nor becomes the target.
 	t.Run("a configured runner ignores the override", func(t *testing.T) {
-		_, target, err := buildRunnerFromFlags(withOverride("docker", "k8s"), nil)
+		r, target, err := buildRunnerFromFlags(withOverride("docker", "k8s"), nil, nil)
+		if slices.Contains(substrate.Names(), "docker") {
+			if err != nil {
+				t.Fatalf("unexpected error resolving the registered docker substrate: %v", err)
+			}
+			if r == nil {
+				t.Error("runner = nil: -runner docker resolved, so the daemon must dispatch")
+			}
+			if target != "docker" {
+				t.Errorf("target = %q, want \"docker\": the override was consulted for a configured runner", target)
+			}
+			return
+		}
 		if err == nil {
 			t.Fatal("want the registry-miss refusal; the override must not rescue an unresolvable -runner")
 		}
@@ -91,7 +108,7 @@ func TestBuildRunnerFromFlags_RunnerTargetOverride(t *testing.T) {
 	// 4. An unknown override fails boot CLOSED, naming the flag and the set.
 	for _, bad := range []string{"docker,k8s", "none", "kubernetes", "DOCKER"} {
 		t.Run("unknown override "+bad, func(t *testing.T) {
-			_, _, err := buildRunnerFromFlags(withOverride("none", bad), nil)
+			_, _, err := buildRunnerFromFlags(withOverride("none", bad), nil, nil)
 			if err == nil {
 				t.Fatalf("-runner-target %q was accepted; an unmatchable target must refuse at boot", bad)
 			}
