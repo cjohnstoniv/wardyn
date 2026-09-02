@@ -383,8 +383,7 @@ var ClosedIntegrationKinds = map[string]bool{
 // "want one of: …" half of a rejected write's error. Sorted so the message is
 // deterministic across map iterations.
 func ClosedIntegrationKindList() []string {
-	out := slices.Sorted(maps.Keys(ClosedIntegrationKinds))
-	return out
+	return slices.Sorted(maps.Keys(ClosedIntegrationKinds))
 }
 
 // AIProviderKind reports whether kind is one of the five AI provider flavors —

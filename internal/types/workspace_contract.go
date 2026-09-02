@@ -190,7 +190,12 @@ func FoldWorkspaceContract(
 		if !found {
 			continue // rule 1: dangling reference contributes nothing
 		}
-		for _, key := range sortedRequirementKeys(src.Requirements) {
+		// Sorted for a deterministic contribution order. Note what actually
+		// carries that today: `out` is a MAP, mergeRequirement is commutative
+		// (both fields are monotone joins), and one source's keys are distinct,
+		// so the result is byte-equal either way. The sort is what keeps the
+		// goldens byte-exact if any of those three ever stops holding.
+		for _, key := range slices.Sorted(maps.Keys(src.Requirements)) {
 			row := src.Requirements[key]
 			switch att.Overrides[key] {
 			case OverrideOff:
@@ -234,11 +239,4 @@ func mergeRequirement(a, b WorkspaceRequirement) WorkspaceRequirement {
 		out.Provenance = "scan_seeded"
 	}
 	return out
-}
-
-// sortedRequirementKeys gives the fold a deterministic contribution order so
-// equal inputs always produce byte-equal marshalled output (the goldens
-// compare bytes).
-func sortedRequirementKeys(m map[string]WorkspaceRequirement) []string {
-	return slices.Sorted(maps.Keys(m))
 }
