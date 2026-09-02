@@ -58,7 +58,7 @@ type Provider struct {
 	signKey     *ecdsa.PrivateKey
 	trustDomain spiffeid.TrustDomain
 	signer      jose.Signer
-	revocations RevocationStore
+	revocations identity.RevocationStore
 	rec         audit.Recorder
 	now         func() time.Time // overridable in tests
 }
@@ -67,8 +67,8 @@ var _ identity.Provider = (*Provider)(nil)
 
 // New constructs the embedded provider. If signKey is nil a fresh ECDSA P-256
 // key is generated. trustDomain may be empty (defaults to DefaultTrustDomain).
-// The RevocationStore and audit.Recorder are required.
-func New(signKey *ecdsa.PrivateKey, trustDomain string, revocations RevocationStore, rec audit.Recorder) (*Provider, error) {
+// The identity.RevocationStore and audit.Recorder are required.
+func New(signKey *ecdsa.PrivateKey, trustDomain string, revocations identity.RevocationStore, rec audit.Recorder) (*Provider, error) {
 	if revocations == nil {
 		return nil, errors.New("embedded identity: revocation store is required")
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -60,7 +61,7 @@ func (erroringStore) IsRevoked(context.Context, string, uuid.UUID) (bool, error)
 func (erroringStore) RevokeRun(context.Context, uuid.UUID) error         { return nil }
 func (erroringStore) RevokeJTI(context.Context, string, uuid.UUID) error { return nil }
 
-func newProvider(t *testing.T, store RevocationStore, rec *recordingRecorder) *Provider {
+func newProvider(t *testing.T, store identity.RevocationStore, rec *recordingRecorder) *Provider {
 	t.Helper()
 	p, err := New(nil, "", store, rec)
 	if err != nil {

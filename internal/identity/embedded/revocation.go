@@ -8,19 +8,9 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-
-	"github.com/cjohnstoniv/wardyn/internal/identity"
 )
 
-// RevocationStore is the embedded provider's revocation contract. It aliases
-// identity.RevocationStore (the generic kill-switch denylist) so the identity
-// seam's Deps can carry it without importing this package. The pg-backed
-// implementation lives in the control plane; MemRevocationStore (below) is the
-// in-memory one for tests. All reads fail closed at the call site (Verify treats
-// any IsRevoked error as revoked).
-type RevocationStore = identity.RevocationStore
-
-// MemRevocationStore is an in-memory RevocationStore for tests.
+// MemRevocationStore is an in-memory identity.RevocationStore for tests.
 type MemRevocationStore struct {
 	mu         sync.RWMutex
 	revokedJTI map[string]struct{}
