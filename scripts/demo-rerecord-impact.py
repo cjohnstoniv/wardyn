@@ -4,29 +4,73 @@
 
 """Which demo episodes does a diff put back in front of the camera?
 
-  scripts/demo-rerecord-impact.py [--base REF]      # episodes to re-record since REF (default hardening-base)
-  scripts/demo-rerecord-impact.py --check 02        # pre-take gate: every label the spec asserts exists in ui/src
+  scripts/demo-rerecord-impact.py impact [--base REF]   # episodes to re-record since REF (default hardening-base)
+  scripts/demo-rerecord-impact.py check 02              # pre-take gate: every label the spec asserts exists in ui/src
 
-Three legs per spec under ui/e2e/demo/: (a) the spec or its scripts/demo-beats
-lane changed; (b) a page.goto() route's screen module — or ANYTHING in that
-module's transitive import closure — changed (on-camera strings live in shared
-files: live-approvals.tsx, app-shell.tsx, new-run-rail.tsx); (c) an asserted
-label (getByRole name / getByText / getByLabel) lives in a changed file, or is
-gone from ui/src altogether (a hard break; --check refuses to roll on it).
+(`--check 02` and a bare `--base REF` are the older spellings and still work;
+scripts/take-chain.sh calls `check <id>` before every take.)
+
+An EPISODE is any id with a browser spec (ui/e2e/demo/*.spec.ts) or a terminal
+beats lane (scripts/demo-beats/*.sh) — 13 is terminal-only and has no spec, so
+seeding the set from the specs alone made it invisible to this tool.
+
+Four legs per episode:
+
+  (a) the episode's own words changed — anything in the spec's ui/e2e/demo/
+      import closure (the spec, overlay.ts, stage.ts, funnel.ts, demos.ts,
+      narrator.ts, task.ts, sweep.ts, 01's assets/primer.html), its
+      scripts/demo-beats lane, or scripts/demo-typist.sh (the terminal
+      narrator every beats lane sources);
+  (b) a route the episode is filmed on changed — page.goto() AND the
+      toHaveURL/waitForURL receipts, the spec's own and its helpers' (openEpisode
+      and openDemo navigate for FIVE episodes, and that navigation is not in the
+      spec file at all) — matched against App.tsx's <Route> table and then the
+      screen module's whole transitive import closure, because on-camera strings
+      live in shared files (live-approvals.tsx, app-shell.tsx, new-run-rail.tsx);
+  (c) the app SHELL changed — every episode renders inside it, so this leg fires
+      for any episode whose closure includes stage.ts/overlay.ts (all of them),
+      not just the ones with a literal goto;
+  (d) an asserted label (getByRole name / getByText / getByLabel) lives in a
+      changed file, or is gone from ui/src altogether — a hard break, which
+      `check` refuses to roll on.
+
 Backend-only, test-only, grader-only and catalog-only changes never trigger.
 """
-import glob, os, pathlib, re, subprocess, sys
+import argparse, glob, os, pathlib, re, subprocess, sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 UI = ROOT / "ui/src"
 APP = UI / "app/App.tsx"
+E2E = ROOT / "ui/e2e/demo"
+BEATS = ROOT / "scripts/demo-beats"
+TYPIST = "scripts/demo-typist.sh"   # sourced by every beats lane
+DEFAULT_BASE = "hardening-base"
 STR = r'"((?:[^"\\]|\\.)*)"'
 LBL = re.compile(r'(?:name:\s*|getByText\(\s*|getByLabel\(\s*)' + STR)
-GOTO = re.compile(r'page\.goto\(\s*"([^"?#]*)')
+# Both quotings. A backtick template is cut at its first ${…} — `/runs/${id}`
+# arrives as "/runs/", and route_for() reads that trailing slash as the :id
+# segment. Cutting at ? and # drops query/hash the same way it always did.
+GOTO = re.compile(r'page\.goto\(\s*["`]([^"`?#$]*)')
+# The OTHER receipt that an episode is on a route: it navigates by clicking and
+# then asserts where it landed. Regex literals only (a template one carries no
+# literal prefix worth having).
+URLPAT = re.compile(r'(?:toHaveURL|waitForURL)\(\s*/((?:[^/\\\n]|\\.)+)/')
 IMPORT = re.compile(r'(?:from\s*|import\()\s*"((?:\.{1,2}|@)/[^"]+)"')
 STATIC_IMPORT = re.compile(r'from\s*"((?:\.{1,2}|@)/[^"]+)"')
+# The e2e side also drives non-code assets it never imports: 01 loads its deck
+# with new URL("./assets/primer.html", import.meta.url).
+E2E_IMPORT = re.compile(r'(?:from\s*|import\(|new URL\()\s*["`]((?:\.{1,2}|@)/[^"`]+)["`]')
 # Data/dynamic labels that never exist verbatim in ui/src.
-ALLOW = {"1 domain allowed", "2x speed", "4x speed", "authz.denied", "member@wardyn.local"}
+ALLOW = {
+    "1 domain allowed", "2x speed", "4x speed", "authz.denied", "member@wardyn.local",
+    # Composed at render time — `Allowed hosts · ${rows.length}`, `exit {exitCode}`,
+    # `Promoted — ${n} still need(s) approval` — or sentence-cased out of a lowercase
+    # verb table (audit.tsx's ACTION_VERB says "injected the subscription credential
+    # at the proxy"). All four used to pass this gate only because a *.test.tsx
+    # fixture spelled them out in full, which grep_ui no longer reads.
+    "Allowed hosts · 1", "exit 0", "Promoted — 1 still needs approval",
+    "Injected the subscription credential at the proxy",
+}
 
 
 def resolve(spec_from: pathlib.Path, target: str):
@@ -49,6 +93,11 @@ def closure(entry: pathlib.Path, pattern=IMPORT):
             if r and r not in seen:
                 todo.append(r)
     return {str(p.relative_to(ROOT)) for p in seen}
+
+
+def e2e_closure(spec: pathlib.Path):
+    """The spec plus every ui/e2e/demo/ helper and asset it reaches."""
+    return {f for f in closure(spec, E2E_IMPORT) if f.startswith("ui/e2e/demo/")}
 
 
 def route_modules():
@@ -76,13 +125,51 @@ def shell_closure():
     return closure(APP, STATIC_IMPORT)
 
 
+def url_prefix(rx: str) -> str:
+    r"""The literal path prefix of a URL-assertion regex: \/runs\/[0-9a-f-]{8,} -> /runs/."""
+    out: list[str] = []
+    i = 0
+    while i < len(rx):
+        c = rx[i]
+        if c == "\\":
+            i += 1
+            if i < len(rx):
+                out.append(rx[i])
+                i += 1
+            continue
+        if c in "?*+{":       # a quantifier makes the char BEFORE it optional
+            return "".join(out[:-1])
+        if c in "[(|^$.":
+            break
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+_NAV: dict[str, set[str]] = {}
+
+
+def navs(rel: str) -> set[str]:
+    """Every route path this ONE file navigates to or asserts. Cached: the shared
+    helpers are in nineteen closures and their gotos are read once."""
+    if rel not in _NAV:
+        p = ROOT / rel
+        src = p.read_text(errors="ignore") if p.is_file() else ""
+        found = set(GOTO.findall(src)) | {url_prefix(r) for r in URLPAT.findall(src)}
+        _NAV[rel] = {g for g in found if g.startswith("/")}
+    return _NAV[rel]
+
+
 def route_for(goto: str, routes):
     if goto in routes:
         return routes[goto]
-    for path, mod in routes.items():           # /runs/:id style
-        pat = "^" + re.sub(r":\w+", r"[^/]+", path) + "$"
-        if re.match(pat, goto):
-            return mod
+    # A template literal cut at its ${…} ends in "/" — read the missing tail as
+    # one path segment so /runs/ finds /runs/:id.
+    for g in (goto, goto + "_") if goto.endswith("/") else (goto,):
+        for path, mod in routes.items():           # /runs/:id style
+            pat = "^" + re.sub(r":\w+", r"[^/]+", path) + "$"
+            if re.match(pat, g):
+                return mod
     return None
 
 
@@ -91,15 +178,40 @@ def labels_of(src: str):
 
 
 def grep_ui(label: str) -> bool:
-    return subprocess.run(["grep", "-rqF", "--", label, str(UI)]).returncode == 0
+    # --exclude the unit tests: a label kept alive only by a *.test.tsx fixture
+    # is gone from the product, and the camera would film its absence.
+    return subprocess.run(["grep", "-rqF", "--exclude=*.test.*", "--", label, str(UI)]).returncode == 0
+
+
+def episodes() -> dict[str, list[pathlib.Path]]:
+    """id -> its browser spec(s). Seeded from the beats lanes TOO, so a
+    terminal-only episode (13) is an episode here and not a silent hole."""
+    eps: dict[str, list[pathlib.Path]] = {}
+    for b in sorted(glob.glob(str(BEATS / "*.sh"))):
+        eps.setdefault(pathlib.Path(b).name.split("-")[0], [])
+    for s in sorted(glob.glob(str(E2E / "*.spec.ts"))):
+        eps.setdefault(pathlib.Path(s).name[: -len(".spec.ts")].split("-")[0], []).append(pathlib.Path(s))
+    return eps
+
+
+def beats_of(eid: str) -> list[str]:
+    return [os.path.relpath(b, ROOT) for b in sorted(glob.glob(str(BEATS / f"{eid}-*.sh")))]
 
 
 def check(eid: str) -> int:
-    specs = glob.glob(str(ROOT / f"ui/e2e/demo/{eid}-*.spec.ts")) or glob.glob(str(ROOT / f"ui/e2e/demo/{eid}.spec.ts"))
+    eps = episodes()
+    if eid not in eps:
+        print(f"{eid}: unknown episode — no ui/e2e/demo/{eid}-*.spec.ts and no scripts/demo-beats/{eid}-*.sh", file=sys.stderr)
+        return 2
+    specs = eps[eid]
+    if not specs:
+        # 13 films a terminal, not a browser: there are no asserted labels to gate.
+        print(f"{eid}\tok: no spec (terminal-only) — {', '.join(beats_of(eid)) or 'beats lane only'}")
+        return 0
     if len(specs) != 1:
         print(f"{eid}: expected one spec, found {len(specs)}", file=sys.stderr)
         return 2
-    missing = sorted(l for l in labels_of(pathlib.Path(specs[0]).read_text()) if not grep_ui(l))
+    missing = sorted(l for l in labels_of(specs[0].read_text()) if not grep_ui(l))
     for l in missing:
         print(f"{eid}\tLABEL GONE from ui/src: {l!r}")
     print(f"{eid}\t{'REFUSE' if missing else 'ok'}: {len(missing)} asserted label(s) missing")
@@ -117,35 +229,41 @@ def impact(base: str) -> int:
     txt = {f: hunks(f) for f in ui}
     routes = route_modules()
     shell = shell_closure()
+    canon = sorted(f for f in ui if f.startswith("ui/src/app/lib/") and f.endswith("-copy.ts"))
     out = {}
-    for spec in sorted(glob.glob(str(ROOT / "ui/e2e/demo/*.spec.ts"))):
-        rel = os.path.relpath(spec, ROOT)
-        eid = pathlib.Path(spec).name[: -len(".spec.ts")].split("-")[0]
-        src = pathlib.Path(spec).read_text()
+    for eid, specs in sorted(episodes().items()):
         why = set()
-        if rel in changed:
-            why.add("spec/narration edited")
-        if any(os.path.relpath(b, ROOT) in changed for b in glob.glob(str(ROOT / f"scripts/demo-beats/{eid}-*.sh"))):
+        beats = beats_of(eid)
+        if any(b in changed for b in beats):
             why.add("terminal beats edited")
-        gotos = set(GOTO.findall(src))
-        if gotos and (shell & ui):
-            why.add(f"app shell changed: {', '.join(sorted(shell & ui)[:3])}")
-        for r in gotos:
-            mod = route_for(r, routes)
-            if mod is None:
-                continue
-            hit = closure(mod) & ui
-            if hit:
-                why.add(f"visits {r}: changed {', '.join(sorted(hit)[:3])}{'…' if len(hit) > 3 else ''}")
-        for lab in labels_of(src):
-            if not grep_ui(lab):
-                why.add(f"asserted label GONE from ui/src: {lab!r}")
-            else:
-                for f, t in txt.items():
-                    if lab in t:
-                        why.add(f"on-camera label {lab!r} is in the diff of {f}")
-        if any(f.startswith("ui/src/app/lib/") and "copy" in f for f in ui) and GOTO.search(src):
-            why.add("a canon copy module changed")
+        if beats and TYPIST in changed:
+            why.add(f"{TYPIST} edited — the terminal narrator every beats lane sources")
+        for spec in specs:
+            src = spec.read_text()
+            clos = e2e_closure(spec)
+            edited = sorted(clos & changed)
+            if edited:
+                why.add(f"spec/narration edited: {', '.join(edited[:3])}{'…' if len(edited) > 3 else ''}")
+            # The shell frames every episode, filmed goto or not.
+            if clos & {"ui/e2e/demo/stage.ts", "ui/e2e/demo/overlay.ts"} and (shell & ui):
+                why.add(f"app shell changed: {', '.join(sorted(shell & ui)[:3])}")
+            gotos = set().union(*(navs(f) for f in clos)) if clos else set()
+            for r in sorted(gotos):
+                mod = route_for(r, routes)
+                if mod is None:
+                    continue
+                hit = closure(mod) & ui
+                if hit:
+                    why.add(f"visits {r}: changed {', '.join(sorted(hit)[:3])}{'…' if len(hit) > 3 else ''}")
+            for lab in labels_of(src):
+                if not grep_ui(lab):
+                    why.add(f"asserted label GONE from ui/src: {lab!r}")
+                else:
+                    for f, t in txt.items():
+                        if lab in t:
+                            why.add(f"on-camera label {lab!r} is in the diff of {f}")
+            if canon and gotos:
+                why.add(f"a canon copy module changed: {', '.join(canon[:3])}")
         if why:
             out[eid] = why
     for eid in sorted(out):
@@ -154,8 +272,29 @@ def impact(base: str) -> int:
     return 0
 
 
+def main(argv: list[str]) -> int:
+    # The old spellings, kept because take-chain.sh, the Makefile and a year of
+    # notes all use them: `--check <id>` and a bare `--base <ref>`.
+    if argv[:1] == ["--check"]:
+        argv = ["check", *argv[1:]]
+    elif argv[:1] == ["--base"]:
+        argv = ["impact", *argv]
+    elif not argv:
+        argv = ["impact"]
+
+    ap = argparse.ArgumentParser(
+        description="Which demo episodes does a diff put back in front of the camera?",
+        epilog=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    c = sub.add_parser("check", help="pre-take label gate for ONE episode (rc 1 = refuse the take, rc 2 = no such episode)")
+    c.add_argument("id", help="episode id, e.g. 02, 03a, 13, walkthrough")
+    i = sub.add_parser("impact", help="the episodes a diff puts back in front of the camera")
+    i.add_argument("--base", default=DEFAULT_BASE, help=f"git ref to diff against (default {DEFAULT_BASE})")
+    a = ap.parse_args(argv)
+    return check(a.id) if a.cmd == "check" else impact(a.base)
+
+
 if __name__ == "__main__":
-    a = sys.argv[1:]
-    if a[:1] == ["--check"]:
-        sys.exit(check(a[1]))
-    sys.exit(impact(a[1] if a[:1] == ["--base"] else "hardening-base"))
+    sys.exit(main(sys.argv[1:]))

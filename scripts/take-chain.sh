@@ -94,10 +94,23 @@ archive_artifacts() {  # <mp4 path>
   dst="${1%.mp4}.artifacts"
   mkdir -p "${dst}" || return 0
   local f
-  for f in narration.json narration-ffwd.json narration-joined.json narration-terminal.json speedups.json demo-runs.json drift-fit.json; do
+  # v13-run-id.txt is 13's handoff (verify-demo-take-13.sh reads it out of this
+  # same work dir) — it was being wiped with the rest of the dir by the next take.
+  for f in narration.json narration-ffwd.json narration-joined.json narration-terminal.json speedups.json demo-runs.json drift-fit.json v13-run-id.txt; do
     [[ -s "${work}/${f}" ]] && cp -f "${work}/${f}" "${dst}/" 2>/dev/null
   done
-  rmdir "${dst}" 2>/dev/null || echo "ARTIFACTS ${dst}"
+  # 12's handoff does NOT live in the per-id work dir: both lanes resolve the one
+  # fixed path below, and verify-demo-take.sh's 12 arm (check_video_10) reads it
+  # from there. Without it a re-grade of an archived 12 has no run id at all.
+  [[ "${VIDEO}" == "12" && -s "${REPO_ROOT}/ui/test-results/demo-video/v10-run-id.txt" ]] &&
+    cp -f "${REPO_ROOT}/ui/test-results/demo-video/v10-run-id.txt" "${dst}/" 2>/dev/null
+  # An empty archive used to be removed in silence, so "the work dir was already
+  # wiped" and "this take had nothing to park" looked identical afterwards.
+  if rmdir "${dst}" 2>/dev/null; then
+    echo "NO_ARTIFACTS ${work}"
+  else
+    echo "ARTIFACTS ${dst}"
+  fi
 }
 
 ledger() {  # <record rc> <verify> <artifact>
@@ -107,6 +120,23 @@ ledger() {  # <record rc> <verify> <artifact>
 }
 
 attempt=0
+
+# THE LABEL GATE. A spec that asserts a label ui/src no longer renders cannot
+# pass verify, but it fails after the socket wait, the record and the encode —
+# hours of camera time to learn something a grep knew before we started. Runs
+# BEFORE wait_socket for exactly that reason.
+#   rc 0 = every asserted label is still in the product (or the episode is
+#          terminal-only and has none)
+#   rc 1 = REFUSE: the take would film a lie
+#   rc 2 = the tool could not judge (unknown id, two specs) — noted, not fatal,
+#          because a new episode's lane must still be able to roll.
+python3 "${REPO_ROOT}/scripts/demo-rerecord-impact.py" check "${VIDEO}"
+case $? in
+  1) echo "LABEL_GATE_FAILED ${VIDEO} — the spec asserts labels ui/src no longer has; fix the spec or the app, do not roll"
+     ledger "not run" "label-gate"; exit 1 ;;
+  2) echo "LABEL_GATE_SKIPPED ${VIDEO} — the label gate could not judge this id; rolling anyway" ;;
+esac
+
 while :; do
   attempt=$((attempt + 1))
   echo "=== take ${VIDEO} attempt ${attempt}: waiting for a live interop socket $(date +%T) ==="

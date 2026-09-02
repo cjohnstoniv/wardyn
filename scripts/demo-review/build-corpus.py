@@ -71,8 +71,18 @@ from ffmpeg import _ffmpeg  # noqa: E402
 COLS_X_SHEETS = 66  # keep in step with tile-sheets.py --per-sheet x --max-sheets
 
 
-def winpath(p: Path) -> str:
-    return subprocess.run(["wslpath", "-w", str(p)], capture_output=True, text=True, check=True).stdout.strip()
+def winpath(ffmpeg: str, p: Path) -> str:
+    """ffmpeg.exe cannot read /home/... — hand it a Windows path.
+
+    Keyed on the RESOLVED binary, exactly as narrate-mux.py / demo-ffwd.py /
+    demo-drift.py do it: a Linux ffmpeg (which _ffmpeg()'s ladder now reaches)
+    fails on every \\wsl.localhost UNC spelling, and check=True made a box with
+    no wslpath at all die here instead of just using the native path.
+    """
+    if not ffmpeg.endswith(".exe"):
+        return str(p)
+    out = subprocess.run(["wslpath", "-w", str(p)], capture_output=True, text=True)
+    return out.stdout.strip() or str(p)
 
 
 def main() -> int:
@@ -127,13 +137,13 @@ def main() -> int:
         shots = [s for s in shots if id(s) not in drop]
 
     ff = _ffmpeg()
-    vwin = winpath(video)
+    vwin = winpath(ff, video)
     kept = 0
     for t, name, _ in sorted(shots):
         out = outdir / f"t{t:07.1f}_{name}.png"
         r = subprocess.run(
             [ff, "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{t:.2f}", "-i", vwin,
-             "-frames:v", "1", winpath(out)],
+             "-frames:v", "1", winpath(ff, out)],
             capture_output=True, text=True,
         )
         if r.returncode == 0 and out.is_file() and out.stat().st_size > 0:

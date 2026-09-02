@@ -25,7 +25,9 @@
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}" || exit 1
-. "${REPO_ROOT}/scripts/lib/common.sh" 2>/dev/null || true
+# NOT best-effort: wardyn_ffmpeg (the artifact check at the bottom) comes from
+# here, so a common.sh that fails to load must be loud, not silently skipped.
+. "${REPO_ROOT}/scripts/lib/common.sh"
 # Per-episode arms live out of line — scripts/check-file-size.sh caps every
 # scripts/*.sh at 1000 lines and this file kept running into it, so an inline arm
 # breaks `make lint`. Globbed: a new episode's lane drops a lib in, adds only its
@@ -40,6 +42,10 @@ PASS=0; FAIL=0
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; PASS=$((PASS+1)); }
 bad()  { printf '  \033[31m✗\033[0m %s\n' "$*"; FAIL=$((FAIL+1)); }
 head_() { printf '\n\033[1;35m── %s\033[0m\n' "$*"; }
+# The source above is unguarded now; this is the receipt that it worked. A verify
+# that reaches the artifact check without wardyn_ffmpeg reports "no audio" over a
+# take that has audio.
+command -v wardyn_ffmpeg >/dev/null || bad "scripts/lib/common.sh did not load — wardyn_ffmpeg is missing"
 
 # The autonomous episode's checks (new 08 — the legacy walkthrough's act 5), exactly as this script has
 # always run them, now behind a name so the dispatch below can pick them.
@@ -790,6 +796,9 @@ case "${WARDYN_DEMO_VIDEO:-}" in
   03d) check_video_03d ;;
   02|05|07) "check_video_floor_${WARDYN_DEMO_VIDEO}" ;;   # cue floors (H-6); content arms still owed
   02b|02c|04b|04c|12b) "check_video_${WARDYN_DEMO_VIDEO}" ;;  # optionals: stubs that FAIL until their lane ships rows
+  # "00.." stays: episode 00 is real in the series, its arm just lands in a later
+  # lane of this campaign. Naming a range this script cannot yet check is the
+  # correct promise here — the arm is owed, not absent by design.
   *) head_ "Video ${WARDYN_DEMO_VIDEO}"; bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 00..13 or a lettered sub-episode such as 03a, or unset for the walkthrough" ;;
 esac
 
