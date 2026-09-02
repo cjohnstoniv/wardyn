@@ -497,7 +497,7 @@ and Pod Security Standards forbids `hostPath` at Baseline and Restricted alike:
 
 | Backend | What wardynd does | Verb it needs |
 |---|---|---|
-| `k8s_pvc` (managed) | looks the claim up by name, creates it on first use as `wardyn-drive-<drive>-<home>` with `accessModes: [ReadWriteOnce]` and the allocation as `requests.storage` | `get` + `create` |
+| `k8s_pvc` (managed) | looks the claim up by name, creates it on first use as `wardyn-drive-<drive-slug>-<home>` with `accessModes: [ReadWriteOnce]` and the allocation as `requests.storage` | `get` + `create` |
 | `k8s_pvc_static` (share) | looks the claim up by name; a missing one fails the run | `get` |
 
 `userDrives.enabled=true` adds exactly `persistentvolumeclaims: ["get","create"]`
@@ -511,12 +511,14 @@ cannot select it. Reclaiming a departed person's storage is an operator command,
 run once, deliberately:
 
 ```sh
-kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive>-<home>
+kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
 ```
 
-The console's drive preview prints that exact object name for a person, so the
-home segment never has to be recomputed by hand. There is no `list` or `watch`
-either — the name is derived, never searched for.
+The console's drive preview prints the object name for a principal — paste the
+sign-in subject FIRST: on a `hash`/`sub` drive the name keys on the first claim,
+and the API's `home_subject` says which claim it used (the console does not yet
+show it). There is no `list` or `watch` either — the name is derived, never
+searched for.
 
 **Ownership.** A pod with a drive gets `fsGroup: 1000` (a GROUP id — it happens
 to equal the uid every agent image runs as, but this field can never make a
@@ -531,7 +533,7 @@ subdirectories).
 is routinely mistaken for a limit: *"Wardyn never enforces a drive's size itself.
 On Kubernetes the size is the volume request and the storage class decides
 whether it binds — block disks do, network-share provisioners do not. On Docker a
-managed drive has no byte cap, the same gap `disk_mib` has. A share is bounded by
+managed drive has no byte cap, the same gap disk_mib has. A share is bounded by
 its own quota. The size you see is the allocation, not a guarantee."*
 
 Day-2 detail — backup, offboarding, the per-drive storage class — is in

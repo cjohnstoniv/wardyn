@@ -272,9 +272,9 @@ unchanged.
 ### 2.7 Canon frozen here, shipped later
 
 - **The run rail's drive line (§7.8).** The `IdentityWidget` is fed from the run row, and
-  `DESIGN.md` §6.1 THREAT-MODEL §4.6 ("concurrent runs share one drive") puts drive persistence on the run row in 0.7.1. The line is
-  frozen now so the rail does not get a second copy round; it renders when the run row carries a
-  drive, and until then it does not exist.
+  THREAT-MODEL §4.6 ("concurrent runs share one drive") puts drive persistence on the run row
+  in 0.7.1. The line is frozen now so the rail does not get a second copy round; it renders
+  when the run row carries a drive, and until then it does not exist.
 - **The `enforcement` vocabulary.** `types.StorageEnforcement` — `filesystem`, `request`,
   `external`, `none` — is introduced by this feature and adopted by `docs/OPERATIONS.md`'s
   known-gaps section and, later, the two `DiskMiB` warn sites. The four glosses (§7.2) are
@@ -903,9 +903,10 @@ Departures from `DESIGN.md` §4.3's draft tables, each with the reason; the mode
    those two cannot coexist. State 2 draws a Kubernetes deployment (`k8s_pvc_static` share,
    read-only, beside `k8s_pvc` managed, writable) and a scaffold-labelled Docker variant of the
    same table (`host_path` + `docker_volume`) so all four backend chips are reviewable.
-2. **The run rail line has no data in v1.** `IdentityWidget` reads the run row, and residual
-   #36 puts drive persistence on the run row in 0.7.1. The line is frozen (§7.8) under "canon
-   frozen here, shipped later", the governance round's own device, and drawn as such.
+2. **The run rail line has no data in v1.** `IdentityWidget` reads the run row, and
+   THREAT-MODEL §4.6 ("concurrent runs share one drive") puts drive persistence on the run
+   row in 0.7.1. The line is frozen (§7.8) under "canon frozen here, shipped later", the
+   governance round's own device, and drawn as such.
 3. **`NR_DENIED` needs a wire bit `DESIGN.md` §5.1 does not carry.** `GET /policies/default`
    ships the profile name only; the door is knowable client-side only with a `/me` field — a
    sibling `user_drive_denied_by_profile` so `user_drive` stays nil-means-no-allocation (Q6 a′). Drawn pre-filled on that assumption, and post-attempt
