@@ -59,13 +59,7 @@ func scanSource(row pgx.Row) (types.Source, error) {
 // by the explicit-requirements writers below and the scan-seed fill (seed and a
 // source's own requirements are the same concrete type).
 func sourceRequirementsParam(m map[string]types.WorkspaceRequirement) []byte {
-	if m == nil {
-		return nil
-	}
-	b, err := json.Marshal(m)
-	if err != nil {
-		return nil // unreachable for this concrete type; fail-safe to "none"
-	}
+	b, _ := jsonOrNull(m, m == nil).([]byte)
 	return b
 }
 

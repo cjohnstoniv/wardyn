@@ -33,6 +33,28 @@ import (
 
 // ─── Workspace ───────────────────────────────────────────────────────────────
 
+// jsonOrNull is the one body the nullable-JSONB param helpers below share:
+// isEmpty ⇒ SQL NULL (never the literal JSON "null"), otherwise the marshalled
+// bytes. WHICH emptiness counts is the caller's to state, because it differs
+// per column — a nil-vs-empty distinction the store must round-trip is stated
+// as `v == nil`, one the column collapses as `len(v) == 0`. A marshal error is
+// unreachable for every concrete type routed through here (plain slices, maps
+// and structs) and folds to NULL, the fail-safe each helper documented for
+// itself. Helpers whose column is NOT NULL (workspaceSourcesParam,
+// workspaceAttachmentsParam, both fail-safe to '[]') and marshalGroups (whose
+// caller must see a marshal error, not a silently absent group snapshot) do
+// NOT route through here.
+func jsonOrNull[T any](v T, isEmpty bool) any {
+	if isEmpty {
+		return nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
 // workspaceProfileParam converts a (possibly empty) json.RawMessage into the
 // value pgx should bind for the nullable `profile` JSONB column: an empty
 // RawMessage inserts SQL NULL (not yet scanned) rather than the literal JSON
@@ -48,40 +70,19 @@ func workspaceProfileParam(p json.RawMessage) any {
 // workspaceApprovedParam serializes the operator-owned approved-egress list
 // for its JSONB column; empty ⇒ NULL.
 func workspaceApprovedParam(domains []string) any {
-	if len(domains) == 0 {
-		return nil
-	}
-	b, err := json.Marshal(domains)
-	if err != nil {
-		return nil // unreachable for []string; fail-safe to "nothing approved"
-	}
-	return b
+	return jsonOrNull(domains, len(domains) == 0)
 }
 
 // workspaceDeniedParam is workspaceApprovedParam's mirror for the
 // operator-owned denied-egress list; empty ⇒ NULL.
 func workspaceDeniedParam(domains []string) any {
-	if len(domains) == 0 {
-		return nil
-	}
-	b, err := json.Marshal(domains)
-	if err != nil {
-		return nil // unreachable for []string; fail-safe to "nothing denied"
-	}
-	return b
+	return jsonOrNull(domains, len(domains) == 0)
 }
 
 // workspaceLLMCredParam serializes the operator-owned model/harness cred binding
 // for its JSONB column; nil ⇒ NULL (no binding).
 func workspaceLLMCredParam(c *types.WorkspaceLLMCred) any {
-	if c == nil {
-		return nil
-	}
-	b, err := json.Marshal(c)
-	if err != nil {
-		return nil // fail-safe to "no binding"
-	}
-	return b
+	return jsonOrNull(c, c == nil)
 }
 
 // workspaceSourcesParam serializes a workspace's source composition for its
@@ -102,28 +103,14 @@ func workspaceSourcesParam(sources []types.WorkspaceSource) any {
 // workspaceBaseImageParam serializes a workspace's base-image choice for its
 // nullable base_image JSONB column; nil ⇒ NULL (no explicit choice recorded).
 func workspaceBaseImageParam(img *types.WorkspaceBaseImage) any {
-	if img == nil {
-		return nil
-	}
-	b, err := json.Marshal(img)
-	if err != nil {
-		return nil // fail-safe to "no base image recorded"
-	}
-	return b
+	return jsonOrNull(img, img == nil)
 }
 
 // workspaceRequirementsParam serializes a workspace's requirements contract
 // for its nullable requirements JSONB column; empty/nil ⇒ NULL, mirroring
 // workspaceApprovedParam.
 func workspaceRequirementsParam(reqs map[string]types.WorkspaceRequirement) any {
-	if len(reqs) == 0 {
-		return nil
-	}
-	b, err := json.Marshal(reqs)
-	if err != nil {
-		return nil // unreachable for this concrete type; fail-safe to "none declared"
-	}
-	return b
+	return jsonOrNull(reqs, len(reqs) == 0)
 }
 
 // workspaceAttachmentsParam marshals a workspace's attachments for storage.
