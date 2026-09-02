@@ -376,6 +376,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 		ConfinementClass: run.ConfinementClass,
 		Env:              sandboxEnv,
 		Mounts:           mounts,
+		Drive:            p.Drive,
 		// nil for an operator run (the driver then behaves exactly as it does
 		// today); non-nil marks a member-owned-workspace run whose MEMBER-AUTHORED
 		// binds (stamped above by buildRunMounts) the driver re-checks against
