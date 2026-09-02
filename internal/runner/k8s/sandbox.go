@@ -7,6 +7,7 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -254,11 +255,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 	// The drive, and ONLY on a pod that has one: a drive-less agent pod keeps the
 	// nil pod-level SecurityContext it has always had, so nothing about the pods
-	// this substrate already produces changes shape.
+	// this substrate already produces changes shape. applyDriveToPod appends
+	// rather than assigns — see its doc comment.
 	if spec.Drive != nil {
-		agentPod.Spec.Volumes = []corev1.Volume{driveVolume(spec.Drive)}
-		agentPod.Spec.SecurityContext = drivePodSecurityContext()
-		agentPod.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{driveVolumeMount(spec.Drive)}
+		applyDriveToPod(&agentPod.Spec, spec.Drive)
 	}
 	if runtimeClassName != "" {
 		agentPod.Spec.RuntimeClassName = &runtimeClassName
@@ -292,12 +292,27 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 // prior run) has likely already pulled onto this node — a first pull of an
 // arbitrary, possibly large agent image needs the same generous budget the
 // canary itself gets.
+//
+// ON TIMEOUT it says WHY the pod never started, which is the whole point of the
+// lastPod capture below. A pod that never leaves Pending has no container status
+// at all, so every check inside the poll is looking at an empty list and the
+// caller used to get "context deadline exceeded" and nothing else. The most
+// common cause on a drive-mounting deployment is exactly the one that reads
+// worst: the claim never bound, and the scheduler said so, in the PodScheduled
+// condition, for the whole timeout — "0/3 nodes are available: pod has unbound
+// immediate PersistentVolumeClaims". Reading it back turns a blind wait into the
+// sentence an operator can act on.
 func (d *Driver) waitContainerRunning(ctx context.Context, podName, containerName string) error {
-	return wait.PollUntilContextTimeout(ctx, k8sPollInterval, canaryWaitTimeout, true, func(pollCtx context.Context) (bool, error) {
+	// The last pod the poll actually observed. Captured rather than re-fetched
+	// after the fact: a re-fetch on a dead context returns nothing at all, which
+	// is precisely the state the enrichment exists for.
+	var lastPod *corev1.Pod
+	err := wait.PollUntilContextTimeout(ctx, k8sPollInterval, canaryWaitTimeout, true, func(pollCtx context.Context) (bool, error) {
 		pod, gerr := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(pollCtx, podName, metav1.GetOptions{})
 		if gerr != nil {
 			return false, gerr
 		}
+		lastPod = pod
 		for _, cs := range pod.Status.ContainerStatuses {
 			if cs.Name != containerName {
 				continue
@@ -321,6 +336,40 @@ func (d *Driver) waitContainerRunning(ctx context.Context, podName, containerNam
 		}
 		return false, nil
 	})
+	// Only a TIMEOUT is enriched. The two errors the poll returns itself
+	// (terminated, terminally waiting) already name their cause, and a Get
+	// failure is about the apiserver, not the pod.
+	if errors.Is(err, context.DeadlineExceeded) {
+		if why := podStuckReason(lastPod); why != "" {
+			return fmt.Errorf("%w (%s)", err, why)
+		}
+	}
+	return err
+}
+
+// podStuckReason renders why a pod that never started is where it is, from the
+// last status the poll saw. "" when the pod looks fine or was never observed —
+// the caller then reports the bare timeout rather than a fabricated cause.
+//
+// PodScheduled=False is read FIRST and is the one that matters here: it is where
+// the scheduler writes "pod has unbound immediate PersistentVolumeClaims", the
+// message a drive whose claim never bound produces, and the reason a
+// ReadWriteOnce claim already attached to a pod on another node produces too
+// (docs/OPERATIONS.md, "User drives on Kubernetes"). Both are storage facts an
+// operator can act on and neither appears anywhere else in the pod's status.
+func podStuckReason(pod *corev1.Pod) string {
+	if pod == nil {
+		return ""
+	}
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse {
+			return strings.TrimSpace(fmt.Sprintf("pod is unscheduled — %s: %s", c.Reason, c.Message))
+		}
+	}
+	if pod.Status.Phase == corev1.PodPending {
+		return "pod is still Pending with no container status"
+	}
+	return ""
 }
 
 // resolveRuntimeClassName is CreateSandbox's fail-closed enforcement

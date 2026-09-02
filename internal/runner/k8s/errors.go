@@ -49,12 +49,43 @@ var errMountsUnsupported = errors.New("k8s: host bind mounts are not supported o
 // the run's failure hint verbatim (dispatchRun's failAndRevoke, internal/api).
 var errDriveClaimNotProvisioned = errors.New("your drive's volume is not provisioned on this cluster; ask an administrator to create the claim (or check the drive's directory-name template)")
 
-// errDrivePVCForbidden is ensureDrivePVC's refusal when the apiserver answers a
-// managed claim's Create with a 403 — the wardynd ServiceAccount was never
-// granted `persistentvolumeclaims: [get, create]` in the runs namespace. It
-// names the switch that grants them, so the failure hint carries its own remedy
-// instead of an opaque RBAC message.
-var errDrivePVCForbidden = errors.New("this deployment may not create per-person volumes: grant the wardynd ServiceAccount `persistentvolumeclaims: get, create` in the runs namespace (Helm chart: userDrives.enabled=true)")
+// errDrivePVCForbidden is ensureDrivePVC's refusal when the apiserver answers
+// EITHER the claim's Get or its Create with a 403.
+//
+// Both arms map here, and the Get one is the failure a DEFAULT deployment
+// actually meets: userDrives.enabled is off out of the box, so the runner Role
+// carries no persistentvolumeclaims rule at all and the LOOKUP — the one call
+// even an admin-provisioned share makes — is what gets refused first. Left
+// unmapped it surfaced the apiserver's own "cannot get resource" text, which
+// names no switch an operator could flip.
+//
+// A 403 has a second cause worth naming in the same sentence, because the two
+// are indistinguishable by status code and take opposite remedies: a namespace
+// ResourceQuota refusing the claim also answers 403. The apiserver's own message
+// is interpolated ahead of this text at both call sites, so the sentence tells
+// the reader which half of it to act on.
+var errDrivePVCForbidden = errors.New(
+	"this deployment may not create or read per-person volumes: grant the wardynd ServiceAccount " +
+		"`persistentvolumeclaims: get, create` in the runs namespace (Helm chart: userDrives.enabled=true) " +
+		"— unless the apiserver's message above says `exceeded quota`, in which case a ResourceQuota in " +
+		"that namespace refused the claim and RBAC is not the problem")
+
+// errDriveNameInvalid is validateDriveMount's refusal of a mount whose resolved
+// object name cannot name a PersistentVolumeClaim, whose home name cannot be a
+// label value, or whose managed allocation is zero. The driver validates its own
+// inputs rather than trusting the resolver that derived them: names cross a
+// process boundary (an older control plane, an operator's own API call, a future
+// backend), and a driver that trusts its input has no fail-closed path left —
+// only the apiserver's own 422, mid-dispatch, as somebody's run failure hint.
+var errDriveNameInvalid = errors.New("this drive cannot be mounted on Kubernetes: the directory name it resolves to is not a legal object name (ask an administrator to set your directory name on the allocation)")
+
+// errDriveClaimTerminating is reuseDriveClaim's refusal of an existing claim
+// that is being deleted. A finalizer-pinned claim admits no new pod, so reusing
+// it would hang the run until the dispatch timeout with no readable cause; and
+// re-creating it under the same name would undo the reclaim an operator is
+// deliberately performing, handing the member an empty volume where their files
+// were. Neither is a choice a driver may make silently.
+var errDriveClaimTerminating = errors.New("your drive's volume claim is being deleted and cannot be mounted; wait for the deletion to finish, or ask an administrator whether it should have been deleted at all")
 
 // errDriveBackendUnsupported is ensureDrivePVC's refusal of a drive whose
 // backend belongs to another substrate (a Docker volume, a host path). The

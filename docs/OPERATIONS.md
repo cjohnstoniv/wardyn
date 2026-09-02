@@ -2224,10 +2224,60 @@ somebody's files were meant to be.
 `persistentvolumeclaims: ["get","create"]` to the namespaced runner Role
 (`deploy/helm/wardyn/templates/rbac.yaml`): `get` because a claim is always
 resolved by name first, and is all a share ever needs; `create` for a managed
-drive's first use. Leave it on for **any** drive at all. With it off, a `k8s_pvc`
-run fails at dispatch and the run's failure hint names the switch — that hint is
-the runner's error verbatim, so a 403 from the apiserver reads as a sentence an
-operator can act on, not as an RBAC stack trace.
+drive's first use. Leave it on for **any** drive at all. With it off, EVERY
+drive's run fails at dispatch — the lookup is the first call a drive makes and a
+share makes no other — and the run's failure hint names the switch. Both the Get
+and the Create map their 403 onto that one sentence, because the apiserver's own
+"cannot get resource" text names nothing an operator can flip. The same sentence
+also names the other cause of a 403, which no status code distinguishes: a
+namespace `ResourceQuota` refusing the claim. The apiserver's message is printed
+ahead of it, so `exceeded quota` in that text means the quota, not RBAC.
+
+**Renaming a drive orphans its claims, and Wardyn will not clean that up.** A
+claim's name folds the drive's NAME into a slug (`wardyn-drive-<drive>-<home>`),
+so renaming a drive in the console changes the name every FUTURE claim is
+created under. The claims already provisioned keep their old names, keep the
+member data in them, and are never looked up again — the next run for each
+person provisions a fresh, empty claim under the new name. Nothing deletes the
+old ones, on purpose: Wardyn holds no `delete` verb, and a rename must never be
+able to destroy storage. The `wardyn.drive` label carries the drive's row **id**
+rather than its name precisely so the orphans stay findable:
+
+```sh
+kubectl -n <runsNamespace> get pvc -l wardyn.drive=<drive-id>
+```
+
+Everything that comes back under a name that is not `wardyn-drive-<new-slug>-*`
+predates the rename. Move the data (`kubectl cp`, or a snapshot restore into the
+new claim) and reclaim the old claim with the `delete pvc` above. The cheap
+alternative is not renaming a drive that has claims.
+
+**An existing claim is reused as it is, and drift is logged rather than
+enforced.** A managed claim is looked up by name and mounted whatever its spec
+says. If it disagrees with the drive row — a different storage class, a
+different `requests.storage`, an access mode that is not `ReadWriteOnce`, or a
+`wardyn.drive` label naming another drive — wardynd logs one warning naming the
+claim and every disagreement, and mounts it anyway. That is deliberate: the
+claim is the member's data, a PVC request cannot be shrunk, and refusing the run
+would mean an admin editing an allocation in the console breaks every existing
+member's runs. Grep the daemon log for `disagrees with the drive` when a console
+size and a pod's actual volume do not match. The single exception is a claim
+that is **Terminating**: that one fails the run outright, because a pod
+mounting a claim under deletion never schedules and re-creating it under the
+same name would undo the reclaim somebody is in the middle of.
+
+**`ReadWriteOnce` binds a claim to one node.** A managed drive is provisioned
+RWO, so a person's second concurrent run schedules onto the node their first run
+landed on — or stays Pending until that run ends. The pod's failure reads
+`0/N nodes are available: pod has unbound immediate PersistentVolumeClaims` or a
+volume-node-affinity conflict, and wardynd surfaces the scheduler's own
+`PodScheduled` message in the run's failure hint rather than a bare timeout. The
+same message is what a claim that never bound at all produces — a storage class
+with no provisioner, or no default class on the cluster for a drive that names
+none. If members routinely run several sandboxes at once, provision the drive's
+class as `ReadWriteMany` storage and pre-create the claims as a
+`k8s_pvc_static` share; Wardyn's managed backend does not offer RWX, because a
+concurrently-written shared home is a data-loss shape, not a feature.
 
 **Backup.** A drive is *not* in `pg_dump` — the database holds the drive rows and
 the allocations, never the bytes. Back the volumes up the way the cluster already
@@ -2254,7 +2304,7 @@ per-run teardown sweep (a `DeleteCollection` selecting on exactly that label)
 cannot reach it.
 
 **Ownership, and where fsGroup stops working.** A pod with a drive carries
-`fsGroup: 1000` (the uid every agent image runs as) with
+`fsGroup: 1000` (a GROUP id — it happens to equal the uid every agent image runs as, but this field can never make a volume user-owned) with
 `fsGroupChangePolicy: OnRootMismatch` — `Always` would recursively chown a large
 drive on every single run. The kubelet applies fsGroup for CSI drivers that
 declare `ReadWriteOnceWithFSType` volume ownership, i.e. block storage: the

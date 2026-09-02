@@ -770,7 +770,7 @@ create and preflight both). `REFUSED_TARGET_RESERVED` is the **400** `validatePo
 unique-target arm raises when a policy or workspace source names the reserved target — it is
 met by whoever writes the policy, member or admin, and it belongs here because it is a door
 this feature adds. `{reason}` in `REFUSED_BACKEND` is the runner's own prose (on Kubernetes,
-the apiserver's refusal naming `k8s.userDrives.enabled`); `{claim}` in `REFUSED_HOME_INVALID` is
+the apiserver's refusal naming `userDrives.enabled`, the chart's actual key); `{claim}` in `REFUSED_HOME_INVALID` is
 the template's claim name (`sub`, `email_local`). `MEMBER.DENIED_STALE_GROUPS` (§7.1)
 is reused verbatim for the truncated-snapshot case and is not re-frozen.
 

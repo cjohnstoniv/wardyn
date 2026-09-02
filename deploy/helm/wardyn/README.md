@@ -502,8 +502,8 @@ and Pod Security Standards forbids `hostPath` at Baseline and Restricted alike:
 
 `userDrives.enabled=true` adds exactly `persistentvolumeclaims: ["get","create"]`
 to the namespaced Role. Leave it on for **any** drive at all: a static share
-needs `get`. Off, a `k8s_pvc` drive's run fails at dispatch with a hint naming
-this switch.
+needs `get`, and with the rule absent the LOOKUP is what the apiserver refuses
+first. Off, any drive's run fails at dispatch with a hint naming this switch.
 
 **There is no `delete` verb, on purpose.** A drive outlives every run that mounts
 it, and the claim carries no `wardyn.run-id` label, so the per-run teardown sweep
@@ -865,8 +865,9 @@ See `values.yaml` for all options. Key settings:
   [Kubernetes runner substrate](#kubernetes-runner-substrate-k8senabled) above.
 - `userDrives.enabled`: adds `persistentvolumeclaims: get, create` to the
   k8s-runner Role so runs can mount per-person storage, off by default — see
-  [User drives](#user-drives-userdrivesenabled) above. `userDrives.storageClass`
-  is documentation only: a drive's real class is a per-drive field in the console.
+  [User drives](#user-drives-userdrivesenabled) above. It is the only key in the
+  block: a drive's storage class is a per-drive field in the console, not a chart
+  value.
 - `ssh.*`: SSH access into a running sandbox, off by default — see
   [Split SSH exposure](#split-ssh-exposure) above.
 - `replicas`: **leave at 1 — the chart refuses anything higher.** A render with

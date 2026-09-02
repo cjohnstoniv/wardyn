@@ -11,10 +11,12 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -161,9 +163,7 @@ func TestEnsureDrivePVC_ManagedOmitsAnEmptyStorageClass(t *testing.T) {
 // two claims for one person).
 func TestEnsureDrivePVC_ManagedReusesAnExistingClaim(t *testing.T) {
 	drive := testDriveMount()
-	cs := fake.NewClientset(&corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{Name: drive.ObjectName, Namespace: testNamespace},
-	})
+	cs := fake.NewClientset(existingDriveClaim(drive))
 
 	if err := ensureDrivePVC(context.Background(), cs, testNamespace, drive); err != nil {
 		t.Fatalf("ensureDrivePVC: %v", err)
@@ -323,5 +323,308 @@ func TestExec_EphemeralContainerMountsTheDrive(t *testing.T) {
 	}
 	if got := pod2.Spec.EphemeralContainers[0].VolumeMounts; len(got) != 0 {
 		t.Errorf("drive-less exec container mounts = %v, want none", got)
+	}
+}
+
+// existingDriveClaim is the claim ensureDrivePVC would itself have created for
+// drive — the shape a REUSE must find in the namespace with nothing to say about
+// it. Built from the drive rather than written out, so a drift assertion that
+// mutates one field is unambiguously about that field.
+func existingDriveClaim(drive *types.DriveMount) *corev1.PersistentVolumeClaim {
+	claim := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      drive.ObjectName,
+			Namespace: testNamespace,
+			Labels: map[string]string{
+				labelManaged:   "true",
+				labelDrive:     drive.DriveID.String(),
+				labelDriveHome: drive.HomeName,
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: *resource.NewQuantity(driveRequestBytes(drive), resource.BinarySI)},
+			},
+		},
+	}
+	if drive.StorageClass != "" {
+		class := drive.StorageClass
+		claim.Spec.StorageClassName = &class
+	}
+	return claim
+}
+
+// TestEnsureDrivePVC_RefusesANameTheApiserverWould covers the driver's OWN
+// validation of the mount it is handed. The control plane refuses a non-DNS-1123
+// home on a Kubernetes backend, and this driver does not trust it to: the name
+// crosses a process boundary, and a driver that trusts its input has no
+// fail-closed path left — only a 422 from the apiserver, mid-dispatch, as
+// somebody's run failure hint.
+//
+// The underscore case is the motivating one and is not hypothetical: an Entra
+// `sub` is base64url and routinely carries `_`, which is legal in a Docker
+// volume name and illegal in a claim's.
+func TestEnsureDrivePVC_RefusesANameTheApiserverWould(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		shape func(*types.DriveMount)
+	}{
+		{"underscore, the Entra sub case", func(d *types.DriveMount) { d.ObjectName = "wardyn-drive-research-d_9f3a1c" }},
+		{"trailing dash", func(d *types.DriveMount) { d.ObjectName = "wardyn-drive-research-" }},
+		{"uppercase", func(d *types.DriveMount) { d.ObjectName = "Wardyn-Drive-Research" }},
+		{"empty", func(d *types.DriveMount) { d.ObjectName = "" }},
+		{"consecutive dots", func(d *types.DriveMount) { d.ObjectName = "wardyn-drive-research..d" }},
+		// A legal object name whose HOME is not a legal LABEL VALUE. The two
+		// alphabets differ, so the home gets its own check rather than riding
+		// the object name's.
+		{"home too long for a label value", func(d *types.DriveMount) { d.HomeName = strings.Repeat("a", 64) }},
+		{"home cannot open a label value", func(d *types.DriveMount) { d.HomeName = "-bsmith" }},
+		// The API refuses a zero allocation on a managed drive; so does this,
+		// because a zero request is not a claim any storage class will bind.
+		{"zero allocation on a managed drive", func(d *types.DriveMount) { d.SizeMiB = 0 }},
+		{"negative allocation", func(d *types.DriveMount) { d.SizeMiB = -1 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := fake.NewClientset()
+			drive := testDriveMount()
+			tc.shape(drive)
+
+			err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
+			if !errors.Is(err, errDriveNameInvalid) {
+				t.Fatalf("err = %v, want errors.Is(err, errDriveNameInvalid)", err)
+			}
+			if n := len(cs.Actions()); n != 0 {
+				t.Errorf("issued %d API calls, want none — an illegal name is this driver's refusal to make, not the apiserver's", n)
+			}
+		})
+	}
+}
+
+// TestEnsureDrivePVC_ShareNeedsNoAllocation is the negative control for the size
+// guard above: a static share's claim is never created, its size is a display
+// value (StorageEnforcementExternal), and a zero there must not refuse the run.
+func TestEnsureDrivePVC_ShareNeedsNoAllocation(t *testing.T) {
+	drive := testDriveMount()
+	drive.Backend = types.DriveBackendK8sPVCStatic
+	drive.Enforcement = types.StorageEnforcementExternal
+	drive.SizeMiB = 0
+	cs := fake.NewClientset(&corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: drive.ObjectName, Namespace: testNamespace},
+	})
+
+	if err := ensureDrivePVC(context.Background(), cs, testNamespace, drive); err != nil {
+		t.Fatalf("ensureDrivePVC: %v, want a share with no allocation to mount", err)
+	}
+}
+
+// TestEnsureDrivePVC_ForbiddenLookupNamesTheSwitch is the DEFAULT deployment's
+// failure and the one the review found unmapped: userDrives.enabled is off out
+// of the box, so the Role has no persistentvolumeclaims rule at all and the
+// LOOKUP is refused — before any Create the old code was the only mapper of.
+// Unmapped it surfaced the apiserver's own "cannot get resource" text, which
+// names no switch an operator could flip.
+func TestEnsureDrivePVC_ForbiddenLookupNamesTheSwitch(t *testing.T) {
+	for _, backend := range []types.DriveBackend{types.DriveBackendK8sPVC, types.DriveBackendK8sPVCStatic} {
+		t.Run(string(backend), func(t *testing.T) {
+			cs := fake.NewClientset()
+			drive := testDriveMount()
+			drive.Backend = backend
+			cs.PrependReactor("get", "persistentvolumeclaims", func(clienttesting.Action) (bool, runtime.Object, error) {
+				return true, nil, apierrors.NewForbidden(
+					schema.GroupResource{Resource: "persistentvolumeclaims"}, drive.ObjectName,
+					errors.New(`persistentvolumeclaims is forbidden: User "system:serviceaccount:wardyn:wardyn" cannot get resource`))
+			})
+
+			err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
+			if !errors.Is(err, errDrivePVCForbidden) {
+				t.Fatalf("err = %v, want errors.Is(err, errDrivePVCForbidden)", err)
+			}
+			for _, want := range []string{"persistentvolumeclaims", "userDrives.enabled"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("err = %q, want it to name %q", err.Error(), want)
+				}
+			}
+			if verbs := countPVCVerbs(cs); verbs["create"] != 0 {
+				t.Errorf("claim verbs = %v, want no create after a refused lookup", verbs)
+			}
+		})
+	}
+}
+
+// TestEnsureDrivePVC_ForbiddenCarriesTheApiserverQuotaText pins the OTHER cause
+// of a 403, which no status code distinguishes from the RBAC one and which takes
+// the opposite remedy: a namespace ResourceQuota. The apiserver's own message is
+// interpolated ahead of the sentinel's text so the operator can tell which half
+// of the sentence applies to them.
+func TestEnsureDrivePVC_ForbiddenCarriesTheApiserverQuotaText(t *testing.T) {
+	cs := fake.NewClientset()
+	drive := testDriveMount()
+	cs.PrependReactor("create", "persistentvolumeclaims", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Resource: "persistentvolumeclaims"}, drive.ObjectName,
+			errors.New("exceeded quota: storage-quota, requested: requests.storage=10Gi, used: requests.storage=95Gi, limited: requests.storage=100Gi"))
+	})
+
+	err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
+	if !errors.Is(err, errDrivePVCForbidden) {
+		t.Fatalf("err = %v, want errors.Is(err, errDrivePVCForbidden)", err)
+	}
+	if got := err.Error(); !strings.Contains(got, "exceeded quota") || !strings.Contains(got, "ResourceQuota") {
+		t.Errorf("err = %q, want the apiserver's quota text AND the sentence that tells the reader it is a quota, not RBAC", got)
+	}
+}
+
+// TestEnsureDrivePVC_RefusesATerminatingClaim is the one existing-claim state
+// that cannot be a warning. A finalizer-pinned claim admits no new pod, so
+// reusing it hangs the run until the dispatch timeout with no readable cause;
+// and re-creating it under the same name would undo the reclaim an operator is
+// in the middle of, handing the member an empty volume where their files were.
+func TestEnsureDrivePVC_RefusesATerminatingClaim(t *testing.T) {
+	drive := testDriveMount()
+	claim := existingDriveClaim(drive)
+	deleted := metav1.NewTime(time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC))
+	claim.DeletionTimestamp = &deleted
+	claim.Finalizers = []string{"kubernetes.io/pvc-protection"}
+	cs := fake.NewClientset(claim)
+
+	err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
+	if !errors.Is(err, errDriveClaimTerminating) {
+		t.Fatalf("err = %v, want errors.Is(err, errDriveClaimTerminating)", err)
+	}
+	if verbs := countPVCVerbs(cs); verbs["create"] != 0 {
+		t.Errorf("claim verbs = %v, want no create over a claim somebody is deliberately deleting", verbs)
+	}
+	if got := err.Error(); !strings.Contains(got, drive.ObjectName) {
+		t.Errorf("err = %q, want it to name the claim", got)
+	}
+}
+
+// TestDriveClaimDrift covers the SILENT-REUSE finding: an existing claim whose
+// spec disagrees with the drive it was resolved from is mounted anyway (the
+// claim is the member's data, and a PVC request cannot be shrunk), but the
+// disagreement is named rather than swallowed.
+func TestDriveClaimDrift(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		shape func(*corev1.PersistentVolumeClaim)
+		want  string
+	}{
+		{"a foreign storage class", func(c *corev1.PersistentVolumeClaim) {
+			other := "slow-nfs"
+			c.Spec.StorageClassName = &other
+		}, "storage class"},
+		{"no storage class at all", func(c *corev1.PersistentVolumeClaim) {
+			c.Spec.StorageClassName = nil
+		}, "storage class"},
+		{"a smaller request", func(c *corev1.PersistentVolumeClaim) {
+			c.Spec.Resources.Requests[corev1.ResourceStorage] = *resource.NewQuantity(1024*1024*1024, resource.BinarySI)
+		}, "request is"},
+		{"an access mode a managed drive never provisions", func(c *corev1.PersistentVolumeClaim) {
+			c.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}
+		}, "access modes"},
+		{"another drive's claim under this name", func(c *corev1.PersistentVolumeClaim) {
+			c.Labels[labelDrive] = uuid.NewString()
+		}, labelDrive},
+		{"a claim predating the labels", func(c *corev1.PersistentVolumeClaim) {
+			c.Labels = nil
+		}, labelDrive},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			drive := testDriveMount()
+			claim := existingDriveClaim(drive)
+			tc.shape(claim)
+
+			drift := driveClaimDrift(claim, drive)
+			if len(drift) != 1 || !strings.Contains(drift[0], tc.want) {
+				t.Fatalf("drift = %v, want exactly one entry naming %q", drift, tc.want)
+			}
+			// Drift is a warning, never a refusal: the run still gets its data.
+			cs := fake.NewClientset(claim)
+			if err := ensureDrivePVC(context.Background(), cs, testNamespace, drive); err != nil {
+				t.Errorf("ensureDrivePVC: %v, want a drifted claim mounted with a warning, not refused", err)
+			}
+		})
+	}
+}
+
+// TestDriveClaimDrift_CleanClaimAndShare pins the two silences: the claim this
+// driver would itself have created says nothing, and a static share is never
+// compared at all — its class, size and labels are facts about an admin's
+// storage, not drift from anything Wardyn asserted.
+func TestDriveClaimDrift_CleanClaimAndShare(t *testing.T) {
+	drive := testDriveMount()
+	if drift := driveClaimDrift(existingDriveClaim(drive), drive); len(drift) != 0 {
+		t.Errorf("drift = %v on the claim ensureDrivePVC would itself create, want none", drift)
+	}
+	// The cluster-default case: the drive names no class, so the class the
+	// default resolved to is not drift.
+	defaulted := testDriveMount()
+	defaulted.StorageClass = ""
+	claim := existingDriveClaim(defaulted)
+	resolved := "whatever-the-cluster-default-is"
+	claim.Spec.StorageClassName = &resolved
+	if drift := driveClaimDrift(claim, defaulted); len(drift) != 0 {
+		t.Errorf("drift = %v, want none: an empty class means the cluster default, not a class named \"\"", drift)
+	}
+
+	share := testDriveMount()
+	share.Backend = types.DriveBackendK8sPVCStatic
+	share.Enforcement = types.StorageEnforcementExternal
+	foreign := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: share.ObjectName, Namespace: testNamespace},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+		},
+	}
+	if drift := driveClaimDrift(foreign, share); drift != nil {
+		t.Errorf("drift = %v on a static share, want none — the claim is the admin's object", drift)
+	}
+}
+
+// TestApplyDriveToPod_AppendsRatherThanAssigns is the coexistence pin. Nothing
+// else puts a Volume, a VolumeMount or a pod-level SecurityContext on the agent
+// pod today, so an assignment is correct right now and silently wrong the first
+// time anything does — and an assignment does not fail a test on that day, it
+// drops the other half. This test builds the pod that day produces.
+func TestApplyDriveToPod_AppendsRatherThanAssigns(t *testing.T) {
+	drive := testDriveMount()
+	existingMount := corev1.VolumeMount{Name: "member-work", MountPath: "/work"}
+	nonRoot := true
+	spec := &corev1.PodSpec{
+		Volumes: []corev1.Volume{{
+			Name:         "member-work",
+			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+		}},
+		SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: &nonRoot},
+		Containers: []corev1.Container{
+			{Name: mainContainerName, VolumeMounts: []corev1.VolumeMount{existingMount}},
+			{Name: "sidecar"},
+		},
+	}
+
+	applyDriveToPod(spec, drive)
+
+	if len(spec.Volumes) != 2 || spec.Volumes[0].Name != "member-work" || spec.Volumes[1].Name != driveVolumeName {
+		t.Fatalf("volumes = %+v, want the pre-existing one AND the drive", spec.Volumes)
+	}
+	mounts := spec.Containers[0].VolumeMounts
+	wantDrive := corev1.VolumeMount{Name: driveVolumeName, MountPath: runner.DriveTarget, ReadOnly: false}
+	if len(mounts) != 2 || mounts[0] != existingMount || mounts[1] != wantDrive {
+		t.Fatalf("main container mounts = %+v, want [%+v %+v]", mounts, existingMount, wantDrive)
+	}
+	// By NAME, not by index: a sidecar is not where the agent's drive goes.
+	if got := spec.Containers[1].VolumeMounts; len(got) != 0 {
+		t.Errorf("sidecar mounts = %+v, want none", got)
+	}
+	sc := spec.SecurityContext
+	if sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot {
+		t.Error("pod securityContext lost RunAsNonRoot — the drive SET two fields, it must not replace the struct")
+	}
+	if sc.FSGroup == nil || *sc.FSGroup != driveFSGroup {
+		t.Errorf("fsGroup = %v, want %d", sc.FSGroup, driveFSGroup)
+	}
+	if sc.FSGroupChangePolicy == nil || *sc.FSGroupChangePolicy != corev1.FSGroupChangeOnRootMismatch {
+		t.Errorf("fsGroupChangePolicy = %v, want OnRootMismatch", sc.FSGroupChangePolicy)
 	}
 }

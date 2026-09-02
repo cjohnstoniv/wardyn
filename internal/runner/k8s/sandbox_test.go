@@ -907,3 +907,103 @@ func TestCreateSandbox_SecretEnvRidesTheRunSecret(t *testing.T) {
 		t.Errorf("run Secret data keys = %v, want only %q on a run with no SecretEnv", sec2.Data, proxyConfigSecretKey)
 	}
 }
+
+// TestPodStuckReason covers the sentence a pod that never started produces.
+//
+// The motivating case is the drive one: a claim that never bound leaves the pod
+// Pending with NO container status at all, so every check inside
+// waitContainerRunning's poll is reading an empty list and the caller used to
+// get "context deadline exceeded" and nothing else. The scheduler had been
+// saying why for the whole three minutes, in the one place nothing looked.
+func TestPodStuckReason(t *testing.T) {
+	unbound := "0/3 nodes are available: pod has unbound immediate PersistentVolumeClaims. preemption: 0/3 nodes are available"
+	for _, tc := range []struct {
+		name string
+		pod  *corev1.Pod
+		want string
+	}{
+		{"never observed at all", nil, ""},
+		{
+			"the claim never bound",
+			&corev1.Pod{Status: corev1.PodStatus{
+				Phase: corev1.PodPending,
+				Conditions: []corev1.PodCondition{{
+					Type: corev1.PodScheduled, Status: corev1.ConditionFalse,
+					Reason: "Unschedulable", Message: unbound,
+				}},
+			}},
+			unbound,
+		},
+		{
+			"a ReadWriteOnce claim already attached elsewhere",
+			&corev1.Pod{Status: corev1.PodStatus{
+				Phase: corev1.PodPending,
+				Conditions: []corev1.PodCondition{{
+					Type: corev1.PodScheduled, Status: corev1.ConditionFalse,
+					Reason: "Unschedulable", Message: "node(s) had volume node affinity conflict",
+				}},
+			}},
+			"volume node affinity conflict",
+		},
+		{
+			"scheduled but pending, with nothing else said",
+			&corev1.Pod{Status: corev1.PodStatus{
+				Phase:      corev1.PodPending,
+				Conditions: []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionTrue}},
+			}},
+			"still Pending",
+		},
+		// The negative control: a Running pod fabricates no cause. A timeout on
+		// one of these is about something else entirely and must say so by
+		// staying silent.
+		{"running", &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodRunning}}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := podStuckReason(tc.pod)
+			if tc.want == "" {
+				if got != "" {
+					t.Fatalf("podStuckReason = %q, want no fabricated cause", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tc.want) {
+				t.Fatalf("podStuckReason = %q, want it to carry %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestWaitContainerRunning_TimeoutNamesTheUnboundClaim is the other half: the
+// enrichment actually reaches the caller, and therefore the run's failure hint.
+// The deadline comes from the CALLER's context so the test does not sit through
+// canaryWaitTimeout; the code path is identical either way.
+func TestWaitContainerRunning_TimeoutNamesTheUnboundClaim(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	unbound := "0/3 nodes are available: pod has unbound immediate PersistentVolumeClaims"
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "wardyn-agent-stuck", Namespace: testNamespace},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			Conditions: []corev1.PodCondition{{
+				Type: corev1.PodScheduled, Status: corev1.ConditionFalse,
+				Reason: "Unschedulable", Message: unbound,
+			}},
+		},
+	}
+	if _, err := cs.CoreV1().Pods(testNamespace).Create(context.Background(), pod, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed pod: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := d.waitContainerRunning(ctx, pod.Name, mainContainerName)
+	if err == nil {
+		t.Fatal("waitContainerRunning: want a timeout on a pod that never starts")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want it to still wrap context.DeadlineExceeded", err)
+	}
+	if !strings.Contains(err.Error(), unbound) {
+		t.Errorf("err = %q, want the scheduler's own reason — a bare deadline names nothing an operator can act on", err)
+	}
+}

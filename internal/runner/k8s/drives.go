@@ -8,11 +8,14 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -23,10 +26,6 @@ import (
 // on its own field (SandboxSpec.Drive), which is exactly why CreateSandbox's
 // blanket refusal of spec.Mounts (errMountsUnsupported) needs no drive
 // exemption: the two can never be confused for one another.
-//
-// PSS Restricted admits `persistentVolumeClaim` as a volume type; it forbids
-// `hostPath` under Baseline and Restricted alike. No drive backend on this
-// substrate offers a host path, so nothing here has to refuse one.
 const (
 	// driveVolumeName ties the agent pod's Volume to the VolumeMount on its main
 	// container and on the ephemeral exec container Exec adds. Static, with no
@@ -49,13 +48,130 @@ const (
 	labelDrive     = "wardyn.drive"
 	labelDriveHome = "wardyn.home"
 
-	// driveFSGroup is the agent uid/gid every wardyn agent image runs as
-	// (agentSecurityContext pins RunAsUser to the same 1000). Set as the pod's
-	// FSGroup so the kubelet group-owns a freshly provisioned volume's root for
-	// the agent — otherwise a block volume comes up root-owned and the agent
-	// cannot write to its own drive.
+	// driveFSGroup is the GROUP id the kubelet group-owns a freshly provisioned
+	// volume's root with. It is 1000 because that is the gid every wardyn agent
+	// image runs as — agentSecurityContext pins RunAsUser to the same number, and
+	// the two being equal is a property of the images, not a fact about fsGroup:
+	// this field is a GID and can never make a volume user-owned. Without it a
+	// block volume comes up root-owned and the agent cannot write to its own
+	// drive.
 	driveFSGroup int64 = 1000
 )
+
+// validateDriveMount is the driver's OWN contract over the mount it is handed,
+// re-derived from scratch and deliberately not delegated to the control plane
+// that produced it.
+//
+// The control plane does validate — the API refuses a home name that is not a
+// DNS-1123 subdomain on a Kubernetes backend, and refuses a managed drive whose
+// allocation is zero. This is not a duplicate of that check, it is the reason a
+// driver can fail closed at all. The names cross a process boundary: the
+// resolver that derived this one may be an older release than the driver
+// binding it, an operator's own API call may have written the row, and a future
+// backend may derive an object name some other way. A driver that TRUSTS its
+// input has no failure mode left except the apiserver's — a 422 on somebody's
+// run, mid-dispatch, whose field-path prose becomes the run's failure hint.
+//
+// Each rule is the property one specific API object needs:
+//
+//   - ObjectName becomes the PersistentVolumeClaim's NAME, which the apiserver
+//     validates as a DNS-1123 subdomain. An Entra `sub` carries `_`, which is
+//     legal in a Docker volume name and illegal here — the exact shape that
+//     validated upstream and then failed at bind time.
+//   - HomeName is stamped as a LABEL VALUE (labelDriveHome), a different and
+//     narrower alphabet than an object name, so it gets its own check rather
+//     than riding the first one.
+//   - SizeMiB is the managed claim's `requests.storage`, and a zero request is
+//     not a claim the apiserver will bind. A share never asks for storage at
+//     all, so the rule is scoped to the backend that does.
+func validateDriveMount(drive *types.DriveMount) error {
+	if msgs := validation.IsDNS1123Subdomain(drive.ObjectName); len(msgs) > 0 {
+		return fmt.Errorf("k8s: drive: %q cannot name a volume claim (%s): %w",
+			drive.ObjectName, strings.Join(msgs, "; "), errDriveNameInvalid)
+	}
+	if msgs := validation.IsValidLabelValue(drive.HomeName); len(msgs) > 0 {
+		return fmt.Errorf("k8s: drive: home name %q cannot be a %s label value (%s): %w",
+			drive.HomeName, labelDriveHome, strings.Join(msgs, "; "), errDriveNameInvalid)
+	}
+	if drive.Backend == types.DriveBackendK8sPVC && drive.SizeMiB <= 0 {
+		return fmt.Errorf("k8s: drive: a managed drive's allocation is its volume request and %d MiB cannot be requested: %w",
+			drive.SizeMiB, errDriveNameInvalid)
+	}
+	return nil
+}
+
+// driveClaimDrift lists every way an EXISTING claim disagrees with the drive the
+// resolver says it belongs to. Empty means the claim is the one this drive
+// would have created.
+//
+// It WARNS rather than refusing, and that split is the decision worth naming.
+// The claim is the member's data. Refusing the run on a size change would mean
+// an admin editing the allocation in the console breaks every existing member's
+// runs — and a PVC's request cannot be shrunk anyway, so honouring the new
+// number is not on the table either. What an operator actually needs is to KNOW
+// the two disagree, in a line they can grep, before somebody asks why a drive
+// shows 20 GiB in the console and 10 GiB in the pod. The one disagreement that
+// is NOT a warning is a Terminating claim (see ensureDrivePVC): that one does
+// not surprise an operator later, it hangs the pod now.
+//
+// Scoped to the MANAGED backend on purpose. A static share's claim is an
+// admin's object: its class, its size and its labels are facts about their
+// storage, not drift from anything Wardyn asserted, and the drive row's size is
+// a display value there (StorageEnforcementExternal).
+//
+// Returning the descriptions instead of logging them keeps the comparison
+// itself testable without a log handler in the way.
+func driveClaimDrift(claim *corev1.PersistentVolumeClaim, drive *types.DriveMount) []string {
+	if drive.Backend != types.DriveBackendK8sPVC {
+		return nil
+	}
+	var drift []string
+	// Only when the drive names a class. An empty StorageClass means "the
+	// cluster default", and a bound claim reports whatever class the default
+	// resolved TO — comparing "" against that would report drift on every
+	// correctly-provisioned claim on every cluster with a default class.
+	if drive.StorageClass != "" {
+		got := ""
+		if claim.Spec.StorageClassName != nil {
+			got = *claim.Spec.StorageClassName
+		}
+		if got != drive.StorageClass {
+			drift = append(drift, fmt.Sprintf("storage class is %q, the drive asks for %q", got, drive.StorageClass))
+		}
+	}
+	wantBytes := driveRequestBytes(drive)
+	if got := claim.Spec.Resources.Requests[corev1.ResourceStorage]; got.Value() != wantBytes {
+		drift = append(drift, fmt.Sprintf("request is %s, the drive's allocation is %d MiB", got.String(), drive.SizeMiB))
+	}
+	if !hasAccessMode(claim.Spec.AccessModes, corev1.ReadWriteOnce) {
+		drift = append(drift, fmt.Sprintf("access modes are %v, a managed drive is provisioned ReadWriteOnce", claim.Spec.AccessModes))
+	}
+	// A claim under this drive's object name that carries somebody else's drive
+	// id — or none at all — was not created by this drive. It is still mounted
+	// (refusing would strand every claim written before the label existed), but
+	// it is the drift an operator most wants to hear about: two drives whose
+	// slugs fold to the same fragment resolve to one object name.
+	if got := claim.Labels[labelDrive]; got != drive.DriveID.String() {
+		drift = append(drift, fmt.Sprintf("%s label is %q, this drive's row id is %q", labelDrive, got, drive.DriveID))
+	}
+	return drift
+}
+
+// driveRequestBytes is the allocation in bytes: <SizeMiB>Mi, which is what the
+// claim asks for and what a drifted claim is compared against. One expression,
+// so the create path and the comparison path can never disagree about what the
+// drive asked for.
+func driveRequestBytes(drive *types.DriveMount) int64 { return int64(drive.SizeMiB) * 1024 * 1024 }
+
+// hasAccessMode reports whether modes contains want.
+func hasAccessMode(modes []corev1.PersistentVolumeAccessMode, want corev1.PersistentVolumeAccessMode) bool {
+	for _, m := range modes {
+		if m == want {
+			return true
+		}
+	}
+	return false
+}
 
 // ensureDrivePVC makes the run's PersistentVolumeClaim exist, and is the only
 // place this substrate provisions storage.
@@ -87,22 +203,34 @@ func ensureDrivePVC(ctx context.Context, client kubernetes.Interface, ns string,
 		return fmt.Errorf("k8s: drive %q is a %q drive, which this substrate cannot mount: %w",
 			drive.ObjectName, drive.Backend, errDriveBackendUnsupported)
 	}
+	// Before anything is asked of the cluster: an illegal name is this driver's
+	// refusal to make, not the apiserver's to make for it.
+	if err := validateDriveMount(drive); err != nil {
+		return err
+	}
 
-	_, err := client.CoreV1().PersistentVolumeClaims(ns).Get(ctx, drive.ObjectName, metav1.GetOptions{})
+	existing, err := client.CoreV1().PersistentVolumeClaims(ns).Get(ctx, drive.ObjectName, metav1.GetOptions{})
 	switch {
 	case err == nil:
-		return nil
+		return reuseDriveClaim(existing, drive)
+	case apierrors.IsForbidden(err):
+		// The DEFAULT deployment's failure. userDrives.enabled is off out of the
+		// box, so the Role carries no persistentvolumeclaims rule at all and the
+		// very first thing a drive does — the lookup, which even a static share
+		// needs — is refused. Mapped to the same sentinel the Create arm uses
+		// because the remedy is identical and because the raw apiserver text
+		// ("cannot get resource ... in the namespace") names no switch an
+		// operator could flip.
+		return fmt.Errorf("k8s: drive: looking up claim %q in namespace %q was refused by the apiserver (%v): %w",
+			drive.ObjectName, ns, err, errDrivePVCForbidden)
 	case !apierrors.IsNotFound(err):
 		return fmt.Errorf("k8s: drive: look up claim %q: %w", drive.ObjectName, err)
 	case drive.Backend == types.DriveBackendK8sPVCStatic:
 		return fmt.Errorf("k8s: drive: claim %q is absent from namespace %q: %w", drive.ObjectName, ns, errDriveClaimNotProvisioned)
 	}
 
-	// HomeName is used raw, and that is a guarantee rather than a hope: the API
-	// refuses a home that is not a DNS-1123 subdomain of at most 63 characters
-	// before a run ever reaches a driver, which makes ObjectName a legal object
-	// name and HomeName a legal label value by construction. Nothing here
-	// re-derives or re-shapes either.
+	// ObjectName and HomeName are used raw, and validateDriveMount above is what
+	// makes that safe rather than the upstream promise that they would be.
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      drive.ObjectName,
@@ -121,7 +249,7 @@ func ensureDrivePVC(ctx context.Context, client kubernetes.Interface, ns string,
 				// any spelling of it anyway — 10240Mi comes back as 10Gi). It is
 				// a REQUEST: whether it binds is the storage class's answer, not
 				// Wardyn's. See StorageEnforcement, and the honesty sentence.
-				Requests: corev1.ResourceList{corev1.ResourceStorage: *resource.NewQuantity(int64(drive.SizeMiB)*1024*1024, resource.BinarySI)},
+				Requests: corev1.ResourceList{corev1.ResourceStorage: *resource.NewQuantity(driveRequestBytes(drive), resource.BinarySI)},
 			},
 		},
 	}
@@ -145,13 +273,78 @@ func ensureDrivePVC(ctx context.Context, client kubernetes.Interface, ns string,
 	return nil
 }
 
-// driveVolume is the agent pod's claim reference. ReadOnly is set on the volume
-// AND on every VolumeMount: the volume-level flag is what the kubelet passes to
-// the mount, and the mount-level flag is what a reader of the pod spec (and an
-// admission policy) sees — disagreeing halves are how a read-only allocation
-// comes up writable.
-func driveVolume(drive *types.DriveMount) corev1.Volume {
-	return corev1.Volume{
+// reuseDriveClaim decides whether a claim that already exists may back this run.
+//
+// TERMINATING IS A REFUSAL, and it is the one existing-claim state that cannot
+// be a warning. A claim with a DeletionTimestamp is finalizer-pinned until the
+// last pod using it goes away; a NEW pod mounting it is never admitted (the
+// apiserver refuses a pod referencing a terminating claim, and where it does
+// not, the scheduler leaves it Pending forever). Reusing it would turn one
+// operator's `kubectl delete pvc` into a run that hangs until the dispatch
+// timeout with no readable cause. Recreating it is worse: the name is the same,
+// so the claim an operator is deliberately reclaiming would come back under
+// them, and the run would mount an empty volume where the member's files were.
+//
+// Everything else is a WARNING — see driveClaimDrift for why the member's data
+// wins over Wardyn's opinion of its shape.
+func reuseDriveClaim(claim *corev1.PersistentVolumeClaim, drive *types.DriveMount) error {
+	if claim.DeletionTimestamp != nil {
+		return fmt.Errorf("k8s: drive: claim %q is Terminating (deleted at %s): %w",
+			claim.Name, claim.DeletionTimestamp.UTC().Format("2006-01-02T15:04:05Z"), errDriveClaimTerminating)
+	}
+	if drift := driveClaimDrift(claim, drive); len(drift) > 0 {
+		slog.Warn("wardynd: k8s substrate: mounting an existing drive claim whose spec disagrees with the drive it was resolved from",
+			slog.String("claim", claim.Name),
+			slog.String("drive_id", drive.DriveID.String()),
+			slog.String("home", drive.HomeName),
+			slog.String("drift", strings.Join(drift, "; ")))
+	}
+	return nil
+}
+
+// applyDriveToPod attaches the run's drive to the agent pod: the claim as a
+// Volume, the mount at the RESERVED target the control plane carried on the
+// mount (runner.DriveTarget — never a literal re-typed here, so the path a
+// policy or workspace source is refused for naming and the path this binds at
+// are the same string by construction), and the one pod-level SecurityContext
+// this substrate ever sets.
+//
+// APPEND AND SET, NEVER ASSIGN OVER, on all three. This is the only code in the
+// package that gives the agent pod a Volume, a VolumeMount or a pod-level
+// SecurityContext today — so a wholesale assignment is correct right now and
+// silently wrong the first time anything else adds one (a projected token
+// volume, a recording volume, a second security field). An assignment does not
+// fail a test when that day comes; it drops the other half and the pod comes up
+// missing something nobody was watching. The mount goes on the MAIN container
+// by name rather than by index for the same reason.
+//
+// ReadOnly is set on the Volume AND on the VolumeMount: the volume-level flag is
+// what the kubelet passes to the mount, and the mount-level flag is what a
+// reader of the pod spec (and an admission policy) sees — disagreeing halves are
+// how a read-only allocation comes up writable.
+//
+// FSGroupChangePolicy OnRootMismatch, not Always: a recursive chown of a large
+// existing drive on every single run is how a pod start goes from seconds to
+// minutes, and the root's own ownership already answers the question. The
+// kubelet applies fsGroup for CSI drivers that declare ReadWriteOnceWithFSType
+// volume ownership — i.e. block storage, the managed k8s_pvc case. It does NOT
+// apply it to an NFS-type volume: a k8s_pvc_static share is owned by whatever
+// its export says, and the recipe for that is the export's own uid/gid mapping
+// (docs/OPERATIONS.md, "User drives on Kubernetes"), not this field.
+//
+// PSS Restricted admits `persistentVolumeClaim` as a volume type; it forbids
+// `hostPath` under Baseline and Restricted alike. No drive backend on this
+// substrate offers a host path, so nothing here has to refuse one.
+//
+// GVISOR (the CC2/CC3 RuntimeClasses resolveRuntimeClassName pins): a
+// network-backed volume under runsc wants `directfs` OFF, and that is a property
+// of the RUNTIME HANDLER this pod's RuntimeClassName names — a node-level
+// runsc flag an operator sets, which no field of a pod spec can express. Nothing
+// here tries to; the recipe lives beside the share recipes in docs/OPERATIONS.md.
+// It is named at this function because this is the only place in the tree where
+// a drive volume and a RuntimeClass meet.
+func applyDriveToPod(spec *corev1.PodSpec, drive *types.DriveMount) {
+	spec.Volumes = append(spec.Volumes, corev1.Volume{
 		Name: driveVolumeName,
 		VolumeSource: corev1.VolumeSource{
 			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
@@ -159,33 +352,17 @@ func driveVolume(drive *types.DriveMount) corev1.Volume {
 				ReadOnly:  drive.ReadOnly,
 			},
 		},
+	})
+	mount := corev1.VolumeMount{Name: driveVolumeName, MountPath: drive.Target, ReadOnly: drive.ReadOnly}
+	for i := range spec.Containers {
+		if spec.Containers[i].Name == mainContainerName {
+			spec.Containers[i].VolumeMounts = append(spec.Containers[i].VolumeMounts, mount)
+		}
 	}
-}
-
-// driveVolumeMount mounts the drive at the RESERVED target the control plane
-// carried on the mount (runner.DriveTarget) — never a literal re-typed here, so
-// the path a policy or workspace source is refused for naming and the path this
-// binds at are the same string by construction.
-func driveVolumeMount(drive *types.DriveMount) corev1.VolumeMount {
-	return corev1.VolumeMount{Name: driveVolumeName, MountPath: drive.Target, ReadOnly: drive.ReadOnly}
-}
-
-// drivePodSecurityContext is the ONE pod-level security context this substrate
-// sets, and only on a pod that actually has a drive (a drive-less pod keeps the
-// nil it has always had — every other hardening decision here is container-level
-// on purpose, see baseSecurityContext).
-//
-// FSGroupChangePolicy OnRootMismatch, not Always: a recursive chown of a large
-// existing drive on every single run is how a pod start goes from seconds to
-// minutes, and the root's own ownership already answers the question.
-//
-// The kubelet applies fsGroup for CSI drivers that declare
-// ReadWriteOnceWithFSType volume ownership — i.e. block storage, the managed
-// k8s_pvc case. It does NOT apply it to an NFS-type volume: a k8s_pvc_static
-// share is owned by whatever its export says, and the recipe for that is the
-// export's own uid/gid mapping (docs/OPERATIONS.md, "User drives on
-// Kubernetes"), not this field.
-func drivePodSecurityContext() *corev1.PodSecurityContext {
+	if spec.SecurityContext == nil {
+		spec.SecurityContext = &corev1.PodSecurityContext{}
+	}
 	policy := corev1.FSGroupChangeOnRootMismatch
-	return &corev1.PodSecurityContext{FSGroup: int64Ptr(driveFSGroup), FSGroupChangePolicy: &policy}
+	spec.SecurityContext.FSGroup = int64Ptr(driveFSGroup)
+	spec.SecurityContext.FSGroupChangePolicy = &policy
 }
