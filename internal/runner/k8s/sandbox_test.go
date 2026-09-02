@@ -115,51 +115,6 @@ func TestCreateSandbox_RejectsMounts(t *testing.T) {
 	}
 }
 
-// TestCreateSandbox_RejectsAUserDrive pins the OTHER preflight chokepoint: a
-// spec carrying a resolved user drive (migration 0054) is refused before
-// anything is created, because this driver has no PVC volume/volumeMount code
-// path yet.
-//
-// It is the fail-closed half of seedRequestDrive's refusal matrix. That seam
-// refuses a run whose drive cannot be mounted precisely so a member who asked
-// for storage never silently gets a run without it; a driver that took the
-// spec and dropped the field would lose the same work from the other end. The
-// assertion that NOTHING was created is the load-bearing half — a refusal
-// after the Secret exists is a leak, not a guard.
-//
-// D4 replaces this test with the real mount's coverage.
-func TestCreateSandbox_RejectsAUserDrive(t *testing.T) {
-	d, cs := newTestDriver(t, Config{})
-	cs.ClearActions()
-
-	spec := testSandboxSpec()
-	spec.Drive = &types.DriveMount{
-		Backend:    types.DriveBackendK8sPVC,
-		ObjectName: "wardyn-drive-corp-nas-d-0123456789abcdef0123",
-		HomeName:   "d-0123456789abcdef0123",
-		Target:     runner.DriveTarget,
-		SizeMiB:    10240,
-	}
-
-	_, err := d.CreateSandbox(context.Background(), spec)
-	if err == nil {
-		t.Fatal("CreateSandbox: want an error refusing the drive, got nil")
-	}
-	if !errors.Is(err, errDriveUnsupported) {
-		t.Errorf("err = %v, want errors.Is(err, errDriveUnsupported)", err)
-	}
-	// The gap is NAMED, not implied: an operator reading this in a run's failure
-	// has to learn that the substrate is the limitation, not their allocation.
-	if !strings.Contains(err.Error(), "does not mount drives yet") {
-		t.Errorf("err = %v, want it to name the gap", err)
-	}
-	for _, a := range cs.Actions() {
-		if a.GetVerb() == "create" {
-			t.Errorf("CreateSandbox refused the drive but still created %s %s", a.GetVerb(), a.GetResource().Resource)
-		}
-	}
-}
-
 // TestCreateSandbox_OrderAndRef covers the required creation order — BOTH
 // NetworkPolicies before any pod exists, proxy pod before agent pod — and
 // that the returned Sandbox.Ref is the agent pod name.
@@ -653,4 +608,478 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// TestCreateSandbox_DriveShapesTheAgentPod covers the pod half of the user
+// drive: the claim is ensured BEFORE the agent pod exists, and the pod carries
+// the volume, the mount at the reserved target, and the fsGroup that makes a
+// freshly provisioned block volume writable by uid 1000.
+func TestCreateSandbox_DriveShapesTheAgentPod(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.7")
+	installAgentRunningReactor(t, cs)
+	cs.ClearActions()
+
+	spec := testSandboxSpec()
+	spec.Drive = testDriveMount()
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+
+	// Ordering: the claim must exist before the pod that mounts it, or the pod
+	// comes up stuck on a volume the scheduler cannot bind.
+	var order []string
+	for _, a := range cs.Actions() {
+		if a.GetVerb() != "create" {
+			continue
+		}
+		if r := a.GetResource().Resource; r == "persistentvolumeclaims" || r == "pods" {
+			order = append(order, r)
+		}
+	}
+	if len(order) == 0 || order[0] != "persistentvolumeclaims" {
+		t.Errorf("create order = %v, want the claim created before any pod", order)
+	}
+
+	pod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent pod: %v", err)
+	}
+	if len(pod.Spec.Volumes) != 1 {
+		t.Fatalf("agent pod volumes = %v, want exactly the drive", pod.Spec.Volumes)
+	}
+	vol := pod.Spec.Volumes[0]
+	if vol.Name != driveVolumeName || vol.PersistentVolumeClaim == nil {
+		t.Fatalf("agent pod volume = %+v, want a %q persistentVolumeClaim volume", vol, driveVolumeName)
+	}
+	if vol.PersistentVolumeClaim.ClaimName != spec.Drive.ObjectName {
+		t.Errorf("claimName = %q, want %q", vol.PersistentVolumeClaim.ClaimName, spec.Drive.ObjectName)
+	}
+	// PSS Restricted admits persistentVolumeClaim and forbids hostPath; no drive
+	// backend on this substrate offers one, and none may ever be added here.
+	if vol.HostPath != nil {
+		t.Error("agent pod carries a hostPath volume — forbidden by Pod Security Standards Baseline and Restricted alike")
+	}
+	wantMount := corev1.VolumeMount{Name: driveVolumeName, MountPath: runner.DriveTarget, ReadOnly: false}
+	if got := pod.Spec.Containers[0].VolumeMounts; len(got) != 1 || got[0] != wantMount {
+		t.Errorf("main container mounts = %+v, want [%+v]", got, wantMount)
+	}
+	sc := pod.Spec.SecurityContext
+	if sc == nil || sc.FSGroup == nil || *sc.FSGroup != driveFSGroup {
+		t.Fatalf("pod securityContext = %+v, want FSGroup %d", sc, driveFSGroup)
+	}
+	if sc.FSGroupChangePolicy == nil || *sc.FSGroupChangePolicy != corev1.FSGroupChangeOnRootMismatch {
+		t.Errorf("fsGroupChangePolicy = %v, want OnRootMismatch (an Always recursive chown of a large drive is a minutes-long pod start)", sc.FSGroupChangePolicy)
+	}
+
+	// Negative control: a drive-less run's pod is byte-identical to what this
+	// substrate produced before drives existed — no volume, no mount, and above
+	// all no pod-level security context.
+	spec2 := testSandboxSpec()
+	sb2, err := d.CreateSandbox(context.Background(), spec2)
+	if err != nil {
+		t.Fatalf("CreateSandbox (drive-less): %v", err)
+	}
+	pod2, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb2.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent pod (drive-less): %v", err)
+	}
+	if len(pod2.Spec.Volumes) != 0 || len(pod2.Spec.Containers[0].VolumeMounts) != 0 {
+		t.Errorf("drive-less pod carries volumes %v / mounts %v, want none", pod2.Spec.Volumes, pod2.Spec.Containers[0].VolumeMounts)
+	}
+	if pod2.Spec.SecurityContext != nil {
+		t.Errorf("drive-less pod securityContext = %+v, want nil (hardening on this substrate is container-level)", pod2.Spec.SecurityContext)
+	}
+}
+
+// TestCreateSandbox_DriveAsksGvisorForDirectfsOff pins the one pod field that
+// exists because of the RUNTIME rather than the storage.
+//
+// gVisor's directfs donates a file descriptor per mount point to the sandbox
+// and operates on it directly, which a network-backed export (the share case)
+// does not reliably support. gVisor takes the override per MOUNT, from an
+// annotation keyed by the volume's own name, so a drive pod under a runsc
+// RuntimeClass carries it and nothing else does. The negative controls are the
+// point: a CC1 pod has no RuntimeClass at all, and a Vault-tier microVM handler
+// is not runsc — stamping either would be a request to a runtime that never
+// reads it.
+func TestCreateSandbox_DriveAsksGvisorForDirectfsOff(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		class   types.ConfinementClass
+		handler string
+		want    bool
+	}{
+		{"CC2 gVisor", types.CC2, "runsc", true},
+		{"CC3 microVM", types.CC3, "kata-qemu", false},
+		{"CC1, no RuntimeClass", types.CC1, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{}
+			if tc.handler != "" {
+				cfg.ConfinementRuntimes = map[types.ConfinementClass]string{tc.class: "pinned"}
+			}
+			d, cs := newTestDriver(t, cfg)
+			if tc.handler != "" {
+				mustCreateRuntimeClass(t, cs, "pinned", tc.handler)
+			}
+			installProxyIPReactor(t, cs, "10.244.0.11")
+			installAgentRunningReactor(t, cs)
+
+			spec := testSandboxSpec()
+			spec.ConfinementClass = tc.class
+			spec.Drive = testDriveMount()
+			sb, err := d.CreateSandbox(context.Background(), spec)
+			if err != nil {
+				t.Fatalf("CreateSandbox: %v", err)
+			}
+			pod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
+			if err != nil {
+				t.Fatalf("get agent pod: %v", err)
+			}
+			got, present := pod.Annotations[driveDirectfsAnnotation]
+			if present != tc.want {
+				t.Fatalf("%s present = %v (annotations %v), want %v", driveDirectfsAnnotation, present, pod.Annotations, tc.want)
+			}
+			if tc.want && got != "off" {
+				t.Errorf("%s = %q, want %q", driveDirectfsAnnotation, got, "off")
+			}
+		})
+	}
+
+	// A drive-LESS gVisor run stamps nothing: the annotation names the drive
+	// volume, and a pod with no such mount would carry a dangling request.
+	d, cs := newTestDriver(t, Config{ConfinementRuntimes: map[types.ConfinementClass]string{types.CC2: "pinned"}})
+	mustCreateRuntimeClass(t, cs, "pinned", "runsc")
+	installProxyIPReactor(t, cs, "10.244.0.12")
+	installAgentRunningReactor(t, cs)
+	spec := testSandboxSpec()
+	spec.ConfinementClass = types.CC2
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox (drive-less): %v", err)
+	}
+	pod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent pod (drive-less): %v", err)
+	}
+	if _, present := pod.Annotations[driveDirectfsAnnotation]; present {
+		t.Errorf("drive-less gVisor pod carries %s (%v), want none", driveDirectfsAnnotation, pod.Annotations)
+	}
+}
+
+// TestCreateSandbox_DriveReadOnlyOnBothHalves pins the two flags that must
+// agree: the volume's and the mount's. A read-only allocation that comes up
+// writable because only one half carried the flag is a widening.
+func TestCreateSandbox_DriveReadOnlyOnBothHalves(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.7")
+	installAgentRunningReactor(t, cs)
+
+	spec := testSandboxSpec()
+	spec.Drive = testDriveMount()
+	spec.Drive.ReadOnly = true
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	pod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent pod: %v", err)
+	}
+	if !pod.Spec.Volumes[0].PersistentVolumeClaim.ReadOnly {
+		t.Error("volume readOnly = false for a read-only allocation")
+	}
+	if !pod.Spec.Containers[0].VolumeMounts[0].ReadOnly {
+		t.Error("volumeMount readOnly = false for a read-only allocation")
+	}
+}
+
+// TestCreateSandbox_DriveSurvivesTeardown is the other half of "no run label":
+// the run's whole sweep runs and the person's storage is still there. The
+// selector assertion is the load-bearing one — the fake's DeleteCollection
+// support does not filter by label, so the proof that the sweep CANNOT reach
+// the claim is that the claim carries no key the selector names, and that no
+// delete verb is ever issued against a claim at all (the chart grants none).
+func TestCreateSandbox_DriveSurvivesTeardown(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.7")
+	installAgentRunningReactor(t, cs)
+
+	spec := testSandboxSpec()
+	spec.Drive = testDriveMount()
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	cs.ClearActions()
+	if err := d.KillSandbox(context.Background(), sb.Ref); err != nil {
+		t.Fatalf("KillSandbox: %v", err)
+	}
+	assertRunObjectsGone(t, cs, spec.RunID)
+
+	pvc, err := cs.CoreV1().PersistentVolumeClaims(testNamespace).Get(context.Background(), spec.Drive.ObjectName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("the drive's claim did not survive teardown: %v", err)
+	}
+	selector := labelRun + "=" + spec.RunID.String()
+	if _, ok := pvc.Labels[labelRun]; ok {
+		t.Errorf("claim labels %v are selectable by teardown's %q", pvc.Labels, selector)
+	}
+	for _, a := range cs.Actions() {
+		if a.GetResource().Resource == "persistentvolumeclaims" && strings.HasPrefix(a.GetVerb(), "delete") {
+			t.Errorf("teardown issued %q against a claim; the chart grants no delete verb — reclaim is an operator command", a.GetVerb())
+		}
+	}
+}
+
+// TestCreateSandbox_DriveRefusalCreatesNothing pins the drive check's place in
+// preflight: a share whose claim an admin never provisioned fails the run before
+// a Secret, a NetworkPolicy or a pod exists, so there is nothing to roll back.
+func TestCreateSandbox_DriveRefusalCreatesNothing(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	cs.ClearActions()
+
+	spec := testSandboxSpec()
+	spec.Drive = testDriveMount()
+	spec.Drive.Backend = types.DriveBackendK8sPVCStatic
+
+	if _, err := d.CreateSandbox(context.Background(), spec); !errors.Is(err, errDriveClaimNotProvisioned) {
+		t.Fatalf("err = %v, want errors.Is(err, errDriveClaimNotProvisioned)", err)
+	}
+	for _, a := range cs.Actions() {
+		if a.GetVerb() == "create" {
+			t.Errorf("a refused drive still created %s", a.GetResource().Resource)
+		}
+	}
+}
+
+// TestCreateSandbox_MountsStayRefusedWithADrive proves the two fields never
+// merged: the blanket host-bind refusal still fires with a drive present, and it
+// fires BEFORE the drive is provisioned.
+func TestCreateSandbox_MountsStayRefusedWithADrive(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	cs.ClearActions()
+
+	spec := testSandboxSpec()
+	spec.Drive = testDriveMount()
+	spec.Mounts = []runner.Mount{{Source: "/home/op/work", Target: "/work"}}
+
+	if _, err := d.CreateSandbox(context.Background(), spec); !errors.Is(err, errMountsUnsupported) {
+		t.Fatalf("err = %v, want errors.Is(err, errMountsUnsupported)", err)
+	}
+	for _, a := range cs.Actions() {
+		if a.GetVerb() == "create" {
+			t.Errorf("a refused mount still created %s", a.GetResource().Resource)
+		}
+	}
+}
+
+// TestCreateSandbox_SecretEnvRidesTheRunSecret is the F9-H1 fix at the driver
+// seam: the two halves of a run's environment are delivered by two DIFFERENT
+// mechanisms, and only one of them is readable off the Pod spec.
+//
+// spec.Env is platform configuration and stays inline (an operator debugging a
+// run with `kubectl get pod -o yaml` needs to see it). spec.SecretEnv is
+// credential material — resolveEnvSecretGrants' stored-secret values, the
+// resident Bedrock keys — and reaches the container as a ValueFrom.SecretKeyRef
+// into the per-run Secret, so `pods/get` in the runs namespace yields the
+// variable's NAME and nothing else. Both halves must arrive under their own
+// names: this is a change of carrier, not of contents.
+func TestCreateSandbox_SecretEnvRidesTheRunSecret(t *testing.T) {
+	const tokenVal = "ghp_live_stored_secret_9f2c"
+	const awsVal = "ASIAWARDYNPROBEKEY42"
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.7")
+	installAgentRunningReactor(t, cs)
+
+	spec := testSandboxSpec()
+	spec.Env["WARDYN_REPO_SLUG"] = "acme/widgets" // non-secret: dispatch's own config
+	spec.SecretEnv = map[string]string{"CORP_API_TOKEN": tokenVal, "AWS_ACCESS_KEY_ID": awsVal}
+
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	agentPod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent pod: %v", err)
+	}
+	sec, err := cs.CoreV1().Secrets(testNamespace).Get(context.Background(), secretName(spec.RunID), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get run secret: %v", err)
+	}
+
+	byName := map[string]corev1.EnvVar{}
+	for _, e := range agentPod.Spec.Containers[0].Env {
+		byName[e.Name] = e
+	}
+	// Non-secret half: unchanged, inline, exactly as before the split.
+	for _, k := range []string{"HTTP_PROXY", "WARDYN_REPO_SLUG"} {
+		e, ok := byName[k]
+		if !ok || e.Value != spec.Env[k] || e.ValueFrom != nil {
+			t.Errorf("agent pod %s = %+v, want the inline value %q (non-secret env must stay readable in the pod spec)", k, e, spec.Env[k])
+		}
+	}
+	// Credential half: name present, value absent, Secret carries it.
+	for k, want := range map[string]string{"CORP_API_TOKEN": tokenVal, "AWS_ACCESS_KEY_ID": awsVal} {
+		e, ok := byName[k]
+		if !ok {
+			t.Errorf("agent pod has no %s env: the credential never reached the sandbox", k)
+			continue
+		}
+		if e.Value != "" {
+			t.Errorf("agent pod %s carries an inline Value %q — API-readable via pods/get", k, e.Value)
+		}
+		if e.ValueFrom == nil || e.ValueFrom.SecretKeyRef == nil ||
+			e.ValueFrom.SecretKeyRef.Name != secretName(spec.RunID) || e.ValueFrom.SecretKeyRef.Key != secretEnvDataKey(k) {
+			t.Errorf("agent pod %s ValueFrom = %+v, want secretKeyRef{%s/%s}", k, e.ValueFrom, secretName(spec.RunID), secretEnvDataKey(k))
+		}
+		if string(sec.Data[secretEnvDataKey(k)]) != want {
+			t.Errorf("run Secret key %s = %q, want %q", secretEnvDataKey(k), sec.Data[secretEnvDataKey(k)], want)
+		}
+	}
+	// The proxy's own config still shares the Secret, undisturbed, and no
+	// credential value appears anywhere in EITHER pod spec.
+	if len(sec.Data[proxyConfigSecretKey]) == 0 {
+		t.Error("run Secret lost its proxy config: the agent env entries must not displace it")
+	}
+	proxyPod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), proxyPodName(spec.RunID), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get proxy pod: %v", err)
+	}
+	for _, pod := range []*corev1.Pod{agentPod, proxyPod} {
+		for _, c := range pod.Spec.Containers {
+			for _, e := range c.Env {
+				if strings.Contains(e.Value, tokenVal) || strings.Contains(e.Value, awsVal) {
+					t.Errorf("pod %s container %s env %s carries a credential inline: %q", pod.Name, c.Name, e.Name, e.Value)
+				}
+			}
+		}
+	}
+
+	// Negative control: a run with no credential env is byte-identical to one
+	// that predates the split — no extra Secret keys, no ValueFrom env at all.
+	spec2 := testSandboxSpec()
+	sb2, err := d.CreateSandbox(context.Background(), spec2)
+	if err != nil {
+		t.Fatalf("CreateSandbox (no SecretEnv): %v", err)
+	}
+	agentPod2, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb2.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent pod (no SecretEnv): %v", err)
+	}
+	for _, e := range agentPod2.Spec.Containers[0].Env {
+		if e.ValueFrom != nil {
+			t.Errorf("agent pod env %s has a ValueFrom on a run with no SecretEnv: %+v", e.Name, e.ValueFrom)
+		}
+	}
+	sec2, err := cs.CoreV1().Secrets(testNamespace).Get(context.Background(), secretName(spec2.RunID), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get run secret (no SecretEnv): %v", err)
+	}
+	if len(sec2.Data) != 1 {
+		t.Errorf("run Secret data keys = %v, want only %q on a run with no SecretEnv", sec2.Data, proxyConfigSecretKey)
+	}
+}
+
+// TestPodStuckReason covers the sentence a pod that never started produces.
+//
+// The motivating case is the drive one: a claim that never bound leaves the pod
+// Pending with NO container status at all, so every check inside
+// waitContainerRunning's poll is reading an empty list and the caller used to
+// get "context deadline exceeded" and nothing else. The scheduler had been
+// saying why for the whole three minutes, in the one place nothing looked.
+func TestPodStuckReason(t *testing.T) {
+	unbound := "0/3 nodes are available: pod has unbound immediate PersistentVolumeClaims. preemption: 0/3 nodes are available"
+	for _, tc := range []struct {
+		name string
+		pod  *corev1.Pod
+		want string
+	}{
+		{"never observed at all", nil, ""},
+		{
+			"the claim never bound",
+			&corev1.Pod{Status: corev1.PodStatus{
+				Phase: corev1.PodPending,
+				Conditions: []corev1.PodCondition{{
+					Type: corev1.PodScheduled, Status: corev1.ConditionFalse,
+					Reason: "Unschedulable", Message: unbound,
+				}},
+			}},
+			unbound,
+		},
+		{
+			"a ReadWriteOnce claim already attached elsewhere",
+			&corev1.Pod{Status: corev1.PodStatus{
+				Phase: corev1.PodPending,
+				Conditions: []corev1.PodCondition{{
+					Type: corev1.PodScheduled, Status: corev1.ConditionFalse,
+					Reason: "Unschedulable", Message: "node(s) had volume node affinity conflict",
+				}},
+			}},
+			"volume node affinity conflict",
+		},
+		{
+			"scheduled but pending, with nothing else said",
+			&corev1.Pod{Status: corev1.PodStatus{
+				Phase:      corev1.PodPending,
+				Conditions: []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionTrue}},
+			}},
+			"still Pending",
+		},
+		// The negative control: a Running pod fabricates no cause. A timeout on
+		// one of these is about something else entirely and must say so by
+		// staying silent.
+		{"running", &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodRunning}}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := podStuckReason(tc.pod)
+			if tc.want == "" {
+				if got != "" {
+					t.Fatalf("podStuckReason = %q, want no fabricated cause", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tc.want) {
+				t.Fatalf("podStuckReason = %q, want it to carry %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestWaitContainerRunning_TimeoutNamesTheUnboundClaim is the other half: the
+// enrichment actually reaches the caller, and therefore the run's failure hint.
+// The deadline comes from the CALLER's context so the test does not sit through
+// canaryWaitTimeout; the code path is identical either way.
+func TestWaitContainerRunning_TimeoutNamesTheUnboundClaim(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	unbound := "0/3 nodes are available: pod has unbound immediate PersistentVolumeClaims"
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "wardyn-agent-stuck", Namespace: testNamespace},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			Conditions: []corev1.PodCondition{{
+				Type: corev1.PodScheduled, Status: corev1.ConditionFalse,
+				Reason: "Unschedulable", Message: unbound,
+			}},
+		},
+	}
+	if _, err := cs.CoreV1().Pods(testNamespace).Create(context.Background(), pod, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed pod: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := d.waitContainerRunning(ctx, pod.Name, mainContainerName)
+	if err == nil {
+		t.Fatal("waitContainerRunning: want a timeout on a pod that never starts")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want it to still wrap context.DeadlineExceeded", err)
+	}
+	if !strings.Contains(err.Error(), unbound) {
+		t.Errorf("err = %q, want the scheduler's own reason — a bare deadline names nothing an operator can act on", err)
+	}
 }

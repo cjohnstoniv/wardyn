@@ -24,6 +24,9 @@ canary,driver}.go. In particular:
   - runtimeclasses: get ONLY (cluster-scoped, below) — driver.go's
     runtimeClassHandler resolves a RuntimeClass by NAME (Get); nothing in
     this substrate lists them.
+  - persistentvolumeclaims: get + create, and ONLY when userDrives.enabled —
+    drives.go's ensureDrivePVC. Absent from a stock install: a deployment that
+    allocates no user drive never touches a claim.
 
 Namespaced (Role+RoleBinding, in runsNamespace|release namespace): every
 per-sandbox object the substrate creates/tears down (pods, ephemeral
@@ -47,6 +50,14 @@ rather this chart not manage it. `default dict` + `hasKey`, not
 through to true.
 */}}
 {{- $rbac := .Values.k8s.rbac | default dict -}}
+{{/*
+Same shape for userDrives: a `helm upgrade --reuse-values` from a release that
+PREDATES this block hands the templates a values map with no userDrives key at
+all, and a bare .Values.userDrives.enabled would kill that upgrade at render
+with a nil pointer (the failure mode the Makefile's own predates-the-0.6-blocks
+render exists to catch). `| default dict` makes an absent block read as off.
+*/}}
+{{- $userDrives := .Values.userDrives | default dict -}}
 {{- if or (not (hasKey $rbac "create")) $rbac.create -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -71,6 +82,23 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
     verbs: ["create", "delete", "deletecollection"]
+{{- if $userDrives.enabled }}
+  # User drives (drives.go's ensureDrivePVC), each verb justified:
+  #   get    — a drive's claim is looked up BY NAME before anything else, and a
+  #            k8s_pvc_static (share) drive is ONLY ever looked up: an admin
+  #            provisioned that claim, so a missing one fails the run instead of
+  #            being invented as an empty volume.
+  #   create — a k8s_pvc (managed) drive provisions one claim per person, once,
+  #            on the first run that mounts it.
+  # NOT granted, deliberately:
+  #   delete/deletecollection — a drive outlives every run that mounts it.
+  #            Reclaiming a departed person's claim is an operator command (see
+  #            this chart's README), never something wardynd can do on its own.
+  #   list/watch — nothing enumerates claims; the name is derived, not searched.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "create"]
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

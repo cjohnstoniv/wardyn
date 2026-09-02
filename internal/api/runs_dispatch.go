@@ -369,15 +369,26 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	// p.ExtraEnv and resolveLLMTransport's auth vars) so its refusal to overwrite
 	// an already-set variable covers every platform-authored key, not just the
 	// ones written above it. See resolveEnvSecretGrants.
-	s.resolveEnvSecretGrants(ctx, run, policy, sandboxEnv)
+	secretEnvKeys := s.resolveEnvSecretGrants(ctx, run, policy, sandboxEnv)
+
+	// Split the composed environment into its non-secret and credential-bearing
+	// halves — after EVERY writer above, so the "already set" guards each of them
+	// runs saw the whole map. See splitSecretEnv (it moves, never copies).
+	secretEnv := splitSecretEnv(sandboxEnv, append(secretEnvKeys, llm.secretEnvKeys...))
 
 	spec := runner.SandboxSpec{
 		RunID:            run.ID,
 		Image:            image,
 		ConfinementClass: run.ConfinementClass,
 		Env:              sandboxEnv,
-		Mounts:           mounts,
-		Drive:            p.Drive,
+		// The credential half: a driver must deliver these WITHOUT publishing the
+		// value in its own readable object model — on k8s that means the per-run
+		// Secret + secretKeyRef, never an inline pod-spec EnvVar. Nil for a run
+		// with no env_secret grant and no resident Bedrock credential, which is
+		// most of them. See SandboxSpec.SecretEnv.
+		SecretEnv: secretEnv,
+		Mounts:    mounts,
+		Drive:     p.Drive,
 		// nil for an operator run (the driver then behaves exactly as it does
 		// today); non-nil marks a member-owned-workspace run whose MEMBER-AUTHORED
 		// binds (stamped above by buildRunMounts) the driver re-checks against
@@ -770,7 +781,12 @@ const envAllowMemberEnvSecret = "WARDYN_ALLOW_MEMBER_ENV_SECRET"
 // all of it, not just the part written so far. Non-empty, not merely present:
 // an empty value carries no configuration to protect, and treating it as
 // occupied would make a placeholder key unfillable for no gain.
-func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, sandboxEnv map[string]string) {
+// It REPORTS the variable names it actually filled, because those values are
+// credential material and must not ride a substrate's readable object model:
+// splitSecretEnv moves them onto SandboxSpec.SecretEnv, which the k8s driver
+// delivers via secretKeyRef rather than inline in the agent Pod spec.
+func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, sandboxEnv map[string]string) []string {
+	var resolvedNames []string
 	for _, g := range policy.EligibleGrants {
 		if g.Kind != types.GrantEnvSecret {
 			continue
@@ -795,6 +811,7 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 				skip = "secret could not be resolved"
 			} else {
 				sandboxEnv[name] = string(val)
+				resolvedNames = append(resolvedNames, name)
 				if s.cfg.MaskRegistry != nil {
 					s.cfg.MaskRegistry.Add(run.ID, val)
 				}
@@ -808,6 +825,7 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.env_secret.resolve",
 			run.ID.String(), outcome, mustJSON(data)))
 	}
+	return resolvedNames
 }
 
 // auditablePolicy returns a Clone of policy safe to write to the append-only

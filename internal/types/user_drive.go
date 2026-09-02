@@ -396,6 +396,11 @@ type DriveMount struct {
 	// Derived once by the resolver (DriveObjectName) so no runner re-computes a
 	// hash.
 	ObjectName string `json:"object_name"`
+	// StorageClass is the provisioner a managed k8s_pvc claim asks for; "" means
+	// the cluster default, and it is meaningless on every other backend. Carried
+	// here because a substrate never reads the database — the resolver hands it
+	// everything a mount needs (UserDrive.StorageClass).
+	StorageClass string `json:"storage_class,omitempty"`
 	// HomeName is the per-user segment ObjectName was built from, carried for
 	// labels and for the audit row an operator reads when reclaiming.
 	HomeName string `json:"home_name"`

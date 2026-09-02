@@ -2418,6 +2418,201 @@ recipe, including the wildcard Ingress, in
 [docs/UI-SANDBOXES.md §4](UI-SANDBOXES.md#4-deployment) and the chart section
 linked above.
 
+### User drives on Kubernetes
+
+A **user drive** is per-person storage a run mounts at `/home/agent/drive`. On
+this substrate it is always a PersistentVolumeClaim — a pod cannot bind a host
+path, and Pod Security Standards forbids `hostPath` at Baseline and Restricted
+alike, so no drive backend offers one.
+
+**Two backends, two lifecycles.** A **managed** drive (`k8s_pvc`) is one claim
+per person, named `wardyn-drive-<drive>-<home>`, created by wardynd on the first
+run that mounts it — `accessModes: [ReadWriteOnce]`, the allocation as
+`resources.requests.storage`, and the drive's own storage class when it has one
+(empty = the cluster default). A **share** (`k8s_pvc_static`) is a claim an admin
+provisioned — typically over an NFS/SMB export — and wardynd only ever looks it
+up by name. A missing one fails the run with *"your drive's volume is not
+provisioned on this cluster"* rather than being invented as an empty volume where
+somebody's files were meant to be.
+
+**RBAC is two verbs.** `userDrives.enabled=true` adds exactly
+`persistentvolumeclaims: ["get","create"]` to the namespaced runner Role
+(`deploy/helm/wardyn/templates/rbac.yaml`): `get` because a claim is always
+resolved by name first, and is all a share ever needs; `create` for a managed
+drive's first use. Leave it on for **any** drive at all. With it off, EVERY
+drive's run fails at dispatch — the lookup is the first call a drive makes and a
+share makes no other — and the run's failure hint names the switch. Both the Get
+and the Create map their 403 onto that one refusal, because the apiserver's own
+"cannot get resource" text names nothing an operator can flip. A 403 has a second
+cause that no status code distinguishes from the first and that takes the
+opposite remedy — a namespace `ResourceQuota` refusing the claim — so wardynd
+picks which of the two the hint names, on the `exceeded quota` substring the
+quota admission plugin always emits. A hint naming `ResourceQuota` means the
+quota, and RBAC is not the problem.
+
+**The failure hint does not quote the apiserver, and the daemon log does.** A raw
+403 reads `User "system:serviceaccount:<ns>:<sa>" cannot get resource ...`, and a
+run's failure hint is read by the member whose run failed — so the hint carries
+the claim name and one remedy, and nothing that names this cluster. The
+apiserver's own sentence goes to the daemon log instead, with the verb, the
+claim, the namespace, the drive id and the refusal verbatim; grep it for `the
+apiserver refused a drive claim`. The claim name appears in both halves, so a
+member's report of a failed run joins to the full text without anybody having
+been handed the runs namespace or the runner's ServiceAccount name.
+
+**Renaming a drive orphans its claims, and Wardyn will not clean that up.** A
+claim's name folds the drive's NAME into a slug (`wardyn-drive-<drive>-<home>`),
+so renaming a drive in the console changes the name every FUTURE claim is
+created under. The claims already provisioned keep their old names, keep the
+member data in them, and are never looked up again — the next run for each
+person provisions a fresh, empty claim under the new name. Nothing deletes the
+old ones, on purpose: Wardyn holds no `delete` verb, and a rename must never be
+able to destroy storage. The `wardyn.drive` label carries the drive's row **id**
+rather than its name precisely so the orphans stay findable:
+
+```sh
+kubectl -n <runsNamespace> get pvc -l wardyn.drive=<drive-id>
+```
+
+Everything that comes back under a name that is not `wardyn-drive-<new-slug>-*`
+predates the rename. Move the data (`kubectl cp`, or a snapshot restore into the
+new claim) and reclaim the old claim with the `delete pvc` above. The cheap
+alternative is not renaming a drive that has claims.
+
+**The console does not warn about this**, and in 0.7 it does not refuse it
+either: a rename with grants attached is accepted like any other edit. Treat the
+rename field as an operator action with a runbook, not a label edit.
+
+**An existing claim's SHAPE is reused as it is, and logged rather than
+enforced.** A managed claim is looked up by name and mounted whatever its spec
+says. If its shape disagrees with the drive row — a different storage class, a
+different `requests.storage`, an access mode that is not `ReadWriteOnce` —
+wardynd logs one warning naming the claim and every disagreement, and mounts it
+anyway. That is deliberate: the claim is the member's data, a PVC request cannot
+be shrunk, and refusing the run would mean an admin editing an allocation in the
+console breaks every existing member's runs. Grep the daemon log for `disagrees
+with the drive` when a console size and a pod's actual volume do not match.
+
+**Two states are refusals, not warnings.** A claim that is **Terminating** fails
+the run outright: a pod mounting a claim under deletion never schedules, and
+re-creating it under the same name would undo the reclaim somebody is in the
+middle of. So does a claim whose IDENTITY labels are not this run's — a managed
+claim whose `wardyn.drive` or `wardyn.home` names a different pair, or a share
+whose claim turns out to carry `wardyn.managed=true` (i.e. it is one person's
+managed drive, not an admin's share). That one is the collision the object name
+cannot rule out: `wardyn-drive-<slug>-<home>` joins two variable-width fields
+with the separator both of them admit, so drive `eng` + home `us-bob` and drive
+`eng-us` + home `bob` resolve to the same claim name. Wardyn holds no `delete`
+verb and cannot repair the collision, so it refuses the run rather than mount
+one member's private drive inside another member's agent. The fix is to rename
+one of the two drives (see the rename caveat above) or to give the colliding
+people distinct home names.
+
+Both refusals also cover the loser of a create race. Two first runs can collide
+inside the lookup→create window, and the loser's create comes back
+`AlreadyExists`; it re-reads the claim that won rather than mounting on the
+strength of the name, so the identity and Terminating answers are the same ones,
+one moment later. If the winning claim has been deleted again by the time the
+loser looks — a reclaim landing mid-dispatch — the run is refused with *"your
+drive's volume claim was deleted while your run was starting"*, and starting it
+again is the whole remedy: nothing re-creates a claim somebody is reclaiming.
+
+**`ReadWriteOnce` binds a claim to one node.** A managed drive is provisioned
+RWO, so a person's second concurrent run schedules onto the node their first run
+landed on — or stays Pending until that run ends. The pod's failure reads
+`0/N nodes are available: pod has unbound immediate PersistentVolumeClaims` or a
+volume-node-affinity conflict, and wardynd surfaces the scheduler's own
+`PodScheduled` message in the run's failure hint rather than a bare timeout. The
+same message is what a claim that never bound at all produces — a storage class
+with no provisioner, or no default class on the cluster for a drive that names
+none. If members routinely run several sandboxes at once, provision the drive's
+class as `ReadWriteMany` storage and pre-create the claims as a
+`k8s_pvc_static` share; Wardyn's managed backend does not offer RWX, because a
+concurrently-written shared home is a data-loss shape, not a feature.
+
+**Backup.** A drive is *not* in `pg_dump` — the database holds the drive rows and
+the allocations, never the bytes. Back the volumes up the way the cluster already
+backs up claims: a `VolumeSnapshotClass` snapshot per claim, or
+`kubectl -n <ns> cp <pod>:/home/agent/drive <dest>` from a pod that mounts one. A
+share is backed up by whoever owns the export, not by Wardyn.
+
+**Offboarding — the reclaim command.** Deleting the allocation in the console is
+the product-side half and it deletes no data. Reclaiming the storage is one
+deliberate operator command, and Wardyn holds no `delete` verb that could do it
+by accident:
+
+```sh
+kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive>-<home>
+```
+
+The drive's `when a person leaves` column records the intent (`retain` or
+`delete`) so the log says what the operator was told to do; the console's drive
+preview prints that exact object name for a person, so nobody recomputes a home
+segment by hand. The claim carries `wardyn.managed`, `wardyn.drive` (the drive's
+row **id**, not its name, so the claims a rename orphans stay findable with the
+`get pvc -l wardyn.drive=<drive-id>` above) and `wardyn.home` labels — the same
+pair the Docker driver stamps on a managed volume — and, deliberately, **no
+`wardyn.run-id`**, so the per-run teardown sweep (a `DeleteCollection` selecting
+on exactly that label) cannot reach it. That pair is also what the driver checks
+before it mounts anything: see the two refusals above.
+
+**Ownership, and where fsGroup stops working.** A pod with a drive carries
+`fsGroup: 1000` (a GROUP id — it happens to equal the uid every agent image runs as, but this field can never make a volume user-owned) with
+`fsGroupChangePolicy: OnRootMismatch` — `Always` would recursively chown a large
+drive on every single run. The kubelet applies fsGroup for CSI drivers that
+declare `ReadWriteOnceWithFSType` volume ownership, i.e. block storage: the
+managed case is correct by construction. It does **not** apply to an NFS-type
+volume. A static share is owned by whatever its export says, so map it there — a
+Wardyn-dedicated export with `all_squash,anonuid=1000,anongid=1000`, or per-user
+`0700` subdirectories — and expect a read-only mount where an existing corporate
+home is owned by a different uid.
+
+**gVisor wants `directfs` off for a drive, and the annotation is a request.**
+The Wall (CC2) and Vault (CC3) tiers run the agent pod under a RuntimeClass; when
+its handler is `runsc`, gVisor's `directfs` has the gofer donate a file
+descriptor per mount point to the sandbox, which then operates on the file
+directly. That is right for a block PVC and wrong for a network-backed export —
+a `k8s_pvc_static` share over NFS/SMB. gVisor takes the override **per mount**,
+from a pod annotation keyed by the volume's own name, and wardynd stamps it on
+every drive pod whose resolved handler is `runsc`:
+
+```yaml
+dev.gvisor.spec.mount.drive.directfs: "off"
+```
+
+containerd only forwards it when the node's runsc runtime section allows the
+prefix, so on a cluster whose `/etc/containerd/config.toml` does not carry
+
+```toml
+pod_annotations = ["dev.gvisor.*"]
+```
+
+the annotation is inert and the node-level setting is the one that applies:
+`--directfs=false` in the runsc shim's own config (`/etc/containerd/runsc.toml`,
+or the `runtimeArgs` a node image bakes in). Either is fine; the annotation is
+per-pod and the flag is per-node. See
+[gVisor's containerd configuration guide](https://gvisor.dev/docs/user_guide/containerd/configuration/).
+
+The companion caveat is CACHING, and it cuts the other way. runsc serves bind
+mounts `shared` by default (`--file-access-mounts=shared`), revalidating against
+the host because it cannot assume exclusive access. An operator who has set
+`--file-access-mounts=exclusive` for throughput must **not** do so on nodes that
+run drive pods over a share other writers touch: exclusive mode caches
+aggressively, and a file another writer changes is not seen. A managed
+(`k8s_pvc`) drive is exclusive to its pod by construction and is unaffected. See
+[gVisor's filesystem guide](https://gvisor.dev/docs/user_guide/filesystem/).
+
+**Size is an allocation, not a limit**, and the product says so in one frozen
+sentence: *"Wardyn never enforces a drive's size itself. On Kubernetes the size
+is the volume request and the storage class decides whether it binds — block
+disks do, network-share provisioners do not. On Docker a managed drive has no
+byte cap, the same gap `disk_mib` has. A share is bounded by its own quota. The
+size you see is the allocation, not a guarantee."* That is the `enforcement`
+vocabulary this feature introduces (`filesystem` / `request` / `external` /
+`none`): a managed claim is `request`, a share is `external`. It is the same
+honesty the `DiskMiB` gap below is written with, and the two will converge on one
+vocabulary.
+
 ## One replica, by construction
 
 `replicas` is not a scaling knob and it is not modesty — **the pin is a safety

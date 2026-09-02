@@ -425,6 +425,14 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		idleCmd = []string{"agent-run", "--idle"}
 	}
 	env := envSlice(spec.Env)
+	// SandboxSpec.SecretEnv rides plain container env HERE, and that is the
+	// honest posture on this substrate rather than an oversight: the k8s driver
+	// must route it through a Secret because a Pod spec is readable by anyone
+	// holding pods/get in the namespace, whereas a docker container's config is
+	// reachable only through the daemon socket — the same root-equivalent trust
+	// boundary proxyEnv already documents for the run token. Concatenation needs
+	// no dedup: dispatch's splitSecretEnv keeps the two maps disjoint.
+	env = append(env, envSlice(spec.SecretEnv)...)
 	if d.cfg.Record {
 		// The one in-sandbox signal that session recording is configured.
 		// boot_seed_rec_wrap (agent-run-lib.sh) keys its wardyn-rec wrap on this

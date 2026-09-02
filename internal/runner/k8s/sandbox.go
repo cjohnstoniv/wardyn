@@ -7,6 +7,7 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -42,19 +43,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if len(spec.Mounts) > 0 {
 		return runner.Sandbox{}, fmt.Errorf("k8s: sandbox mounts are not supported (requested %d): %w", len(spec.Mounts), errMountsUnsupported)
 	}
-	// A resolved drive this driver cannot bind is a REFUSAL, never a quiet
-	// driveless launch. seedRequestDrive refuses every run whose drive is
-	// unmountable precisely so a member who ticked "mount my drive" never gets
-	// a run without one; a runner that accepted the spec and then ignored the
-	// field would reopen that silent data loss from the other end — an hour of
-	// work written into a pod filesystem deleted at teardown.
-	//
-	// D4 removes this and binds the PVC here instead.
-	if spec.Drive != nil {
-		return runner.Sandbox{}, fmt.Errorf("k8s: %w (%q, backend %s)",
-			errDriveUnsupported, spec.Drive.ObjectName, spec.Drive.Backend)
-	}
-	runtimeClassName, err := d.resolveRuntimeClassName(ctx, spec.ConfinementClass)
+	runtimeClassName, runtimeHandler, err := d.resolveRuntimeClassName(ctx, spec.ConfinementClass)
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
@@ -66,6 +55,19 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 	if d.cfg.ProxyImage == "" {
 		return runner.Sandbox{}, errProxyImageUnset
+	}
+	// The user drive comes LAST in preflight because it is the only step here
+	// that writes: everything that can fail for free has already failed by now,
+	// so a refused drive leaves the namespace exactly as it found it. The claim
+	// this may create outlives the run on purpose and carries no wardyn.run-id
+	// label, so the rollback below (teardownByRunID selects on exactly that
+	// label) cannot reach it — a later failure must never delete the person's
+	// storage. It is spec.Drive, not a spec.Mounts entry, which is why the
+	// blanket host-bind refusal above needs no drive exemption.
+	if spec.Drive != nil {
+		if err := ensureDrivePVC(ctx, d.clientset, ns, spec.Drive); err != nil {
+			return runner.Sandbox{}, err
+		}
 	}
 
 	// fail tears down everything CreateSandbox may have created so far via
@@ -94,6 +96,18 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err != nil {
 		return runner.Sandbox{}, fmt.Errorf("k8s: build proxy config: %w", err)
 	}
+	secretData := map[string][]byte{proxyConfigSecretKey: proxyJSON}
+	// The AGENT's credential-bearing environment rides the SAME per-run Secret,
+	// one entry per variable, for exactly the reason stated above: an inline
+	// EnvVar.Value on the agent pod is readable by any principal with pods/get
+	// in this namespace, and dispatch puts real stored-secret values (env_secret
+	// grants) and resident cloud credentials in there. secretEnvVars gives the
+	// agent container a secretKeyRef to each of these instead. One Secret, not a
+	// second one: teardown already sweeps it by the run-id label, and a separate
+	// object would be one more thing the rollback path has to get right.
+	for k, v := range spec.SecretEnv {
+		secretData[secretEnvDataKey(k)] = []byte(v)
+	}
 	sec := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName(spec.RunID),
@@ -101,7 +115,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			Labels:    wardynLabels(spec.RunID, componentProxy, spec.Labels),
 		},
 		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{proxyConfigSecretKey: proxyJSON},
+		Data: secretData,
 	}
 	if _, err := d.clientset.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
 		return runner.Sandbox{}, fmt.Errorf("k8s: create proxy config secret: %w", err)
@@ -225,14 +239,26 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			DNSPolicy: corev1.DNSNone,
 			DNSConfig: &corev1.PodDNSConfig{Nameservers: []string{"127.0.0.1"}},
 			Containers: []corev1.Container{{
-				Name:            mainContainerName,
-				Image:           spec.Image,
-				Command:         idleCmd,
-				Env:             envVars(spec.Env),
+				Name:    mainContainerName,
+				Image:   spec.Image,
+				Command: idleCmd,
+				// Non-secret env inline, credential-bearing env as a secretKeyRef
+				// into the run Secret above — never inline, whatever it holds. Exec
+				// copies this whole slice onto the ephemeral container it adds, so
+				// the reference (and therefore the non-exposure) carries over there
+				// by construction rather than by a second call site staying in step.
+				Env:             append(envVars(spec.Env), secretEnvVars(spec.RunID, spec.SecretEnv)...),
 				SecurityContext: agentSecurityContext(),
 				Resources:       resourceRequirements(spec.Resources),
 			}},
 		},
+	}
+	// The drive, and ONLY on a pod that has one: a drive-less agent pod keeps the
+	// nil pod-level SecurityContext it has always had, so nothing about the pods
+	// this substrate already produces changes shape. applyDriveToPod appends
+	// rather than assigns — see its doc comment.
+	if spec.Drive != nil {
+		applyDriveToPod(agentPod, spec.Drive, runtimeHandler)
 	}
 	if runtimeClassName != "" {
 		agentPod.Spec.RuntimeClassName = &runtimeClassName
@@ -266,12 +292,27 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 // prior run) has likely already pulled onto this node — a first pull of an
 // arbitrary, possibly large agent image needs the same generous budget the
 // canary itself gets.
+//
+// ON TIMEOUT it says WHY the pod never started, which is the whole point of the
+// lastPod capture below. A pod that never leaves Pending has no container status
+// at all, so every check inside the poll is looking at an empty list and the
+// caller used to get "context deadline exceeded" and nothing else. The most
+// common cause on a drive-mounting deployment is exactly the one that reads
+// worst: the claim never bound, and the scheduler said so, in the PodScheduled
+// condition, for the whole timeout — "0/3 nodes are available: pod has unbound
+// immediate PersistentVolumeClaims". Reading it back turns a blind wait into the
+// sentence an operator can act on.
 func (d *Driver) waitContainerRunning(ctx context.Context, podName, containerName string) error {
-	return wait.PollUntilContextTimeout(ctx, k8sPollInterval, canaryWaitTimeout, true, func(pollCtx context.Context) (bool, error) {
+	// The last pod the poll actually observed. Captured rather than re-fetched
+	// after the fact: a re-fetch on a dead context returns nothing at all, which
+	// is precisely the state the enrichment exists for.
+	var lastPod *corev1.Pod
+	err := wait.PollUntilContextTimeout(ctx, k8sPollInterval, canaryWaitTimeout, true, func(pollCtx context.Context) (bool, error) {
 		pod, gerr := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(pollCtx, podName, metav1.GetOptions{})
 		if gerr != nil {
 			return false, gerr
 		}
+		lastPod = pod
 		for _, cs := range pod.Status.ContainerStatuses {
 			if cs.Name != containerName {
 				continue
@@ -295,6 +336,40 @@ func (d *Driver) waitContainerRunning(ctx context.Context, podName, containerNam
 		}
 		return false, nil
 	})
+	// Only a TIMEOUT is enriched. The two errors the poll returns itself
+	// (terminated, terminally waiting) already name their cause, and a Get
+	// failure is about the apiserver, not the pod.
+	if errors.Is(err, context.DeadlineExceeded) {
+		if why := podStuckReason(lastPod); why != "" {
+			return fmt.Errorf("%w (%s)", err, why)
+		}
+	}
+	return err
+}
+
+// podStuckReason renders why a pod that never started is where it is, from the
+// last status the poll saw. "" when the pod looks fine or was never observed —
+// the caller then reports the bare timeout rather than a fabricated cause.
+//
+// PodScheduled=False is read FIRST and is the one that matters here: it is where
+// the scheduler writes "pod has unbound immediate PersistentVolumeClaims", the
+// message a drive whose claim never bound produces, and the reason a
+// ReadWriteOnce claim already attached to a pod on another node produces too
+// (docs/OPERATIONS.md, "User drives on Kubernetes"). Both are storage facts an
+// operator can act on and neither appears anywhere else in the pod's status.
+func podStuckReason(pod *corev1.Pod) string {
+	if pod == nil {
+		return ""
+	}
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse {
+			return strings.TrimSpace(fmt.Sprintf("pod is unscheduled — %s: %s", c.Reason, c.Message))
+		}
+	}
+	if pod.Status.Phase == corev1.PodPending {
+		return "pod is still Pending with no container status"
+	}
+	return ""
 }
 
 // resolveRuntimeClassName is CreateSandbox's fail-closed enforcement
@@ -303,44 +378,53 @@ func (d *Driver) waitContainerRunning(ctx context.Context, podName, containerNam
 // ConfinementRuntimes's doc — a k8s RuntimeClass object name carries no
 // platform convention Wardyn could safely guess) resolving to a RuntimeClass
 // that exists and clears the class's floor guard. Never silently downgrade.
-func (d *Driver) resolveRuntimeClassName(ctx context.Context, class types.ConfinementClass) (string, error) {
+//
+// It returns the resolved .Handler alongside the object NAME because the two
+// answer different questions and only one of them is guessable from the other:
+// the name is what the pod spec carries, the handler is what names the runtime
+// FAMILY (see handlerRunscPrefix). applyDriveToPod needs the family to decide
+// whether this pod gets gVisor's per-mount directfs annotation, and resolving
+// it a second time there would be a second RuntimeClasses Get per run — and a
+// second place for the two answers to drift. Empty handler for CC1, which pins
+// no RuntimeClass at all.
+func (d *Driver) resolveRuntimeClassName(ctx context.Context, class types.ConfinementClass) (name, handler string, err error) {
 	switch class {
 	case "", types.CC1:
-		return "", nil
+		return "", "", nil
 	case types.CC2:
 		name := d.cfg.ConfinementRuntimes[types.CC2]
 		if name == "" {
-			return "", fmt.Errorf("the Wall tier (CC2) requires a RuntimeClass pinned via WARDYN_CONFINEMENT_MAP (CC2=<RuntimeClass name>); none is configured: %w", errRuntimeClassUnavailable)
+			return "", "", fmt.Errorf("the Wall tier (CC2) requires a RuntimeClass pinned via WARDYN_CONFINEMENT_MAP (CC2=<RuntimeClass name>); none is configured: %w", errRuntimeClassUnavailable)
 		}
 		handler, err := d.runtimeClassHandler(ctx, name)
 		if err != nil {
-			return "", fmt.Errorf("k8s: CC2 RuntimeClass %q: %w", name, err)
+			return "", "", fmt.Errorf("k8s: CC2 RuntimeClass %q: %w", name, err)
 		}
 		if handler == "" {
-			return "", fmt.Errorf("the Wall tier (CC2) pins RuntimeClass %q, which does not exist on this cluster: %w", name, errRuntimeClassUnavailable)
+			return "", "", fmt.Errorf("the Wall tier (CC2) pins RuntimeClass %q, which does not exist on this cluster: %w", name, errRuntimeClassUnavailable)
 		}
 		if !strings.HasPrefix(handler, handlerRunscPrefix) {
-			return "", fmt.Errorf("the Wall tier (CC2) pins RuntimeClass %q (handler %q), which does not deliver gVisor (%s) isolation; refusing to downgrade: %w", name, handler, handlerRunscPrefix, errRuntimeClassUnavailable)
+			return "", "", fmt.Errorf("the Wall tier (CC2) pins RuntimeClass %q (handler %q), which does not deliver gVisor (%s) isolation; refusing to downgrade: %w", name, handler, handlerRunscPrefix, errRuntimeClassUnavailable)
 		}
-		return name, nil
+		return name, handler, nil
 	case types.CC3:
 		name := d.cfg.ConfinementRuntimes[types.CC3]
 		if name == "" {
-			return "", fmt.Errorf("the Vault tier (CC3) requires a RuntimeClass pinned via WARDYN_CONFINEMENT_MAP (CC3=<RuntimeClass name>); none is configured: %w", errRuntimeClassUnavailable)
+			return "", "", fmt.Errorf("the Vault tier (CC3) requires a RuntimeClass pinned via WARDYN_CONFINEMENT_MAP (CC3=<RuntimeClass name>); none is configured: %w", errRuntimeClassUnavailable)
 		}
 		handler, err := d.runtimeClassHandler(ctx, name)
 		if err != nil {
-			return "", fmt.Errorf("k8s: CC3 RuntimeClass %q: %w", name, err)
+			return "", "", fmt.Errorf("k8s: CC3 RuntimeClass %q: %w", name, err)
 		}
 		if handler == "" {
-			return "", fmt.Errorf("the Vault tier (CC3) pins RuntimeClass %q, which does not exist on this cluster: %w", name, errRuntimeClassUnavailable)
+			return "", "", fmt.Errorf("the Vault tier (CC3) pins RuntimeClass %q, which does not exist on this cluster: %w", name, errRuntimeClassUnavailable)
 		}
 		if runner.IsKnownNonVaultRuntime(handler) {
-			return "", fmt.Errorf("the Vault tier (CC3) pins RuntimeClass %q (handler %q), a known shared-kernel/userspace-kernel runtime that does not deliver KVM microVM isolation; refusing to downgrade: %w", name, handler, errRuntimeClassUnavailable)
+			return "", "", fmt.Errorf("the Vault tier (CC3) pins RuntimeClass %q (handler %q), a known shared-kernel/userspace-kernel runtime that does not deliver KVM microVM isolation; refusing to downgrade: %w", name, handler, errRuntimeClassUnavailable)
 		}
-		return name, nil
+		return name, handler, nil
 	default:
-		return "", fmt.Errorf("k8s: unknown confinement class %q: %w", class, errRuntimeClassUnavailable)
+		return "", "", fmt.Errorf("k8s: unknown confinement class %q: %w", class, errRuntimeClassUnavailable)
 	}
 }
 

@@ -188,7 +188,10 @@ func (s *Server) driveMountFor(w http.ResponseWriter, req createRunRequest,
 		DriveID:    resolved.Drive.ID,
 		Backend:    resolved.Drive.Backend,
 		ObjectName: resolved.ObjectName,
-		HomeName:   resolved.HomeName,
+		// The provisioner a managed claim asks for, carried so the k8s substrate
+		// never has to read the drive row it was resolved from.
+		StorageClass: resolved.Drive.StorageClass,
+		HomeName:     resolved.HomeName,
 		// The resolver's fingerprint of the principal the home was derived from,
 		// carried verbatim rather than recomputed. This seam holds the request
 		// and the folded allocation, never the claims — and a second derivation

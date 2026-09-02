@@ -58,11 +58,19 @@ func userDriveGrantDest(g *types.UserDriveGrant) []any {
 // RENAMING A DRIVE MOVES A PVC's NAME, and that is a documented consequence
 // rather than a bug this store can fix: types.DriveObjectName folds the name
 // into a k8s claim name, so a renamed drive's members bind a claim that does
-// not exist yet and a managed drive provisions a fresh empty one. The admin
-// surface says so at the write; the alternative — a second immutable slug
-// column — buys stability for the one field an admin most needs to be able to
-// correct, and the operator runbook for a rename is `kubectl get pvc` plus the
-// preview endpoint, which prints the exact object name for a principal.
+// not exist yet and a managed drive provisions a fresh empty one. The alternative
+// — a second immutable slug column — buys stability for the one field an admin
+// most needs to be able to correct, and the operator runbook for a rename is
+// `kubectl get pvc -l wardyn.drive=<id>` (the label carries the row id, so the
+// orphans stay findable) plus the preview endpoint, which prints the exact
+// object name for a principal. docs/OPERATIONS.md, "User drives on Kubernetes",
+// is that runbook.
+//
+// THE CONSOLE DOES NOT WARN, and handleUpdateUserDrive renames unconditionally
+// even when the drive has grants. Saying otherwise here would be the comment
+// asserting a guard nothing implements. Warning at the write needs a new
+// user-visible string, which the frozen copy module makes a design change
+// rather than a code one — filed, not invented.
 //
 // Returns ErrConflict when UNIQUE(name) rejects the write — a new drive taking
 // a taken name, or a rename onto another row's name. The caller maps that to
