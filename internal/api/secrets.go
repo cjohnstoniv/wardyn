@@ -122,14 +122,6 @@ func secretsAPIReserved(name string) bool {
 	return reservedSecret(name) || name == types.SubscriptionOAuthSecret || name == types.ManagedOAuthSecret
 }
 
-// identifierSecretNames hold non-credential IDENTIFIER values (not maskable
-// secret material) that are legitimately shorter than secretmask.MinLen — e.g.
-// a numeric GitHub App ID. They are exempt from the MinLen gate below; masking
-// a public app id would be meaningless, so silently dropping it is not a lie.
-var identifierSecretNames = map[string]bool{
-	"github-app-id": true,
-}
-
 type putSecretRequest struct {
 	Value string `json:"value"`
 }
@@ -188,9 +180,11 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 	// than secretmask.MinLen). Accepting it would falsely imply it gets masked and
 	// scanned; the operator must learn immediately instead. Reserved system keys
 	// (signing/session) never reach here — they are set internally, not via this
-	// user-facing Put, and are already rejected above. Identifier-style names
-	// (e.g. github-app-id, a short numeric App ID) are non-credential and exempt.
-	if !identifierSecretNames[name] && len(body.Value) < secretmask.MinLen {
+	// user-facing Put, and are already rejected above. secretGitHubAppID is the
+	// one EXEMPTION: a numeric GitHub App ID is a public identifier, not maskable
+	// credential material, so masking it would be meaningless and refusing it
+	// would break GitHub App setup via the wizard/CLI.
+	if name != secretGitHubAppID && len(body.Value) < secretmask.MinLen {
 		writeError(w, http.StatusBadRequest,
 			fmt.Sprintf("secret too short: must be at least %d bytes to be masked and scanned", secretmask.MinLen))
 		return
