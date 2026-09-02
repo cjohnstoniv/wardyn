@@ -264,6 +264,41 @@ func (s PG) ClearSourceActiveRun(ctx context.Context, id, runID uuid.UUID) error
 	return nil
 }
 
+// sourceScanRebuild is the provenance-aware requirements REBUILD both writers
+// below apply, named once because it is the half that must never drift between
+// them: $4 is the scan seed. NULL (a failed scan) leaves the contract
+// untouched; otherwise the seed replaces the scan_seeded subset outright — so a
+// name a rescan no longer finds is DROPPED — while every non-scan_seeded row an
+// operator set survives, because jsonb_object_agg gathers those and the seed is
+// concatenated onto their LEFT. $4 is the seed in both queries so this fragment
+// reads identically either way.
+const sourceScanRebuild = `requirements = CASE WHEN $4::jsonb IS NULL THEN requirements ELSE $4::jsonb || COALESCE(
+		    (SELECT jsonb_object_agg(k, v) FROM jsonb_each(COALESCE(requirements,'{}'::jsonb)) e(k,v)
+		      WHERE e.v->>'provenance' IS DISTINCT FROM 'scan_seeded'), '{}'::jsonb) END`
+
+// The two scan-result writes: ONE static literal per path, selected in Go
+// rather than by interpolating the fence into SQL — the same rule
+// qAddApprovedEgressDecision / qAddDeniedEgressDecision keep, and for the same
+// reason: each stays a single auditable query a reader can grep whole.
+//
+// The fence differs TWICE, which is why these are not one query with an
+// optional clause: the fenced write is gated on the claim ($5) and also
+// RELEASES it (active_run_id=NULL), while the unfenced path never claimed a
+// slot, so it has no claim to check and must not clear one it never took.
+const qSetSourceScanResultFenced = `
+		UPDATE sources
+		SET profile=$1, status=$2, ` + sourceScanRebuild + `,
+		    active_run_id=NULL, updated_at=now()
+		WHERE id=$3 AND active_run_id=$5
+		RETURNING ` + sourceCols
+
+const qSetSourceScanResultUnfenced = `
+		UPDATE sources
+		SET profile=$1, status=$2, ` + sourceScanRebuild + `,
+		    updated_at=now()
+		WHERE id=$3
+		RETURNING ` + sourceCols
+
 // SetSourceScanResult persists a scan outcome FENCED on the claiming run:
 // only the run that holds active_run_id may write, so a stale upload from a
 // superseded run can never clobber a fresher result. `seed` is the scan's
@@ -277,15 +312,8 @@ func (s PG) ClearSourceActiveRun(ctx context.Context, id, runID uuid.UUID) error
 // EMPTY seed (a rescan that legitimately finds nothing) still rebuilds: it
 // marshals to '{}', not NULL — see sourceRequirementsParam.
 func (s PG) SetSourceScanResult(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus, runID uuid.UUID, seed map[string]types.WorkspaceRequirement) (types.Source, error) {
-	return scanSource(s.Pool.QueryRow(ctx, `
-		UPDATE sources
-		SET profile=$1, status=$2, requirements = CASE WHEN $5::jsonb IS NULL THEN requirements ELSE $5::jsonb || COALESCE(
-		    (SELECT jsonb_object_agg(k, v) FROM jsonb_each(COALESCE(requirements,'{}'::jsonb)) e(k,v)
-		      WHERE e.v->>'provenance' IS DISTINCT FROM 'scan_seeded'), '{}'::jsonb) END,
-		    active_run_id=NULL, updated_at=now()
-		WHERE id=$3 AND active_run_id=$4
-		RETURNING `+sourceCols,
-		profile, string(status), id, runID, sourceRequirementsParam(seed)))
+	return scanSource(s.Pool.QueryRow(ctx, qSetSourceScanResultFenced,
+		profile, string(status), id, sourceRequirementsParam(seed), runID))
 }
 
 // SetSourceScanResultUnfenced persists a SYNCHRONOUS (inline local_dir) scan,
@@ -295,13 +323,7 @@ func (s PG) SetSourceScanResult(ctx context.Context, id uuid.UUID, profile []byt
 // scan_seeded subset; non-scan_seeded rows still win; NULL seed (failed scan)
 // leaves the contract untouched.
 func (s PG) SetSourceScanResultUnfenced(ctx context.Context, id uuid.UUID, profile []byte, status types.WorkspaceStatus, seed map[string]types.WorkspaceRequirement) (types.Source, error) {
-	return scanSource(s.Pool.QueryRow(ctx, `
-		UPDATE sources
-		SET profile=$1, status=$2, requirements = CASE WHEN $4::jsonb IS NULL THEN requirements ELSE $4::jsonb || COALESCE(
-		    (SELECT jsonb_object_agg(k, v) FROM jsonb_each(COALESCE(requirements,'{}'::jsonb)) e(k,v)
-		      WHERE e.v->>'provenance' IS DISTINCT FROM 'scan_seeded'), '{}'::jsonb) END,
-		    updated_at=now()
-		WHERE id=$3 RETURNING `+sourceCols,
+	return scanSource(s.Pool.QueryRow(ctx, qSetSourceScanResultUnfenced,
 		profile, string(status), id, sourceRequirementsParam(seed)))
 }
 
