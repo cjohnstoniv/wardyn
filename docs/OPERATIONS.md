@@ -538,6 +538,17 @@ configure. Reclaim is a command, not a button:
 `docker volume rm wardyn-drive-<home>` — `POST /drives/preview` prints the exact
 object name for a principal so you need not compute it.
 
+**Restoring one by hand: re-create it with its labels, and with no `--opt`.**
+Wardyn reuses a volume that already answers to the name, but only when it has
+Wardyn's own shape — the `local` driver and **no driver options** — and refuses
+to mount anything else rather than adopt it. That refusal is deliberate: a
+volume an operator precreated with `--opt type=cifs --opt o=…,password=…` would
+otherwise become somebody's drive, on a share credential Wardyn never chose. So
+a restore is `docker volume create --label wardyn.drive=wardyn-drive-<home>
+--label wardyn.home=<home> wardyn-drive-<home>`, then copy the data in; a volume
+restored without its labels still mounts but no longer answers
+`docker volume ls --filter label=wardyn.home=<home>`.
+
 **`host_path` — you already mount the share.** Wardyn binds **one person's
 subdirectory** of a tree the *operator* mounted host-side. Wardyn never performs
 the share mount, never holds a share credential, and never creates a volume with
@@ -593,24 +604,42 @@ services:
       - /srv/wardyn-drives:/srv/wardyn-drives:ro
 ```
 
-Read-only is enough for wardynd: it stats the tree and never writes to it. The
-sandbox's own mode comes from the allocation, not from this line. A
-`docker_volume` drive needs none of this — there is no host path to see.
+Read-only is enough for wardynd: it stats the tree and never writes to it. It
+does need **search (`x`) permission down to the person's directory**, though,
+because the bind-time ceiling check resolves symlinks in *wardynd's own
+process* — so a CIFS mount table line like the `dir_mode=0700,uid=1000` one
+above works when wardynd runs as root or as uid 1000, and otherwise needs
+`dir_mode=0750,gid=<wardynd's gid>` (or the equivalent NFS export mode). A
+share wardynd cannot traverse fails every drive on it closed, with a "could not
+be resolved" refusal at run create. The sandbox's own mode comes from the
+allocation, not from this line. A `docker_volume` drive needs none of this —
+there is no host path to see.
 
 **Why every sandbox is uid 1000, and what that buys.** Every agent image is
-`USER agent` (uid 1000) and both images pre-create `/home/agent/drive` owned by
-agent, so a fresh managed volume inherits that ownership by Docker's copy-up.
-Isolation between people is the **bind of the subdirectory**, never the uid: a
-run sees its own home and has no path to the root or to anyone else's. NFS
-`AUTH_SYS` trusts the client's uid, which is why the export above is
-Wardyn-dedicated and squashed rather than a corporate home tree. An existing
-corporate home directory owned by a per-user uid is supported **read-only where
-readable, and refused otherwise**.
+`USER agent` (uid 1000), and every agent image pre-creates `/home/agent/drive`
+owned by agent — the ones built on a public base do it themselves, the ones
+built on a sibling image inherit it — so a fresh managed volume inherits that
+ownership by Docker's copy-up. Isolation between people is the **bind of the
+subdirectory**, never the uid: a run sees its own home and has no path to the
+root or to anyone else's. NFS `AUTH_SYS` trusts the client's uid, which is why
+the export above is Wardyn-dedicated and squashed rather than a corporate home
+tree. An existing corporate home directory owned by a per-user uid is supported
+**read-only where readable, and refused otherwise**.
 
-**gVisor (CC2): turn `directfs` off.** A bind of a network-backed filesystem
-through `runsc` wants direct host-FD access disabled. This is a **daemon**
-setting, not a Wardyn one — add it to the runtime in `/etc/docker/daemon.json`
-and restart the daemon:
+A **BYOI** image is your own to get right on this one point: a custom base that
+never creates `/home/agent/drive` gets a root-owned one from the daemon at mount
+time, so a drive you allocated writable is unwritable by uid 1000 on its first
+run. `deploy/images/README.md`'s image contract states the one line that fixes
+it; wardynd will not chown volume state to compensate.
+
+**gVisor (CC2): if a share bind misbehaves under `runsc`, turn `directfs`
+off.** Wardyn does not claim this is required — `runsc`'s own filesystem
+guidance ([gvisor.dev](https://gvisor.dev/docs/user_guide/filesystem/)) is the
+reference, and whether a given network-backed mount needs direct host-FD access
+disabled depends on the share. If a `host_path` drive reads or writes wrongly
+under CC2 and works under CC1, this is the first thing to try. It is a
+**daemon** setting, not a Wardyn one — add it to the runtime in
+`/etc/docker/daemon.json` and restart the daemon:
 
 ```json
 { "runtimes": { "runsc": { "path": "/usr/local/bin/runsc", "runtimeArgs": ["--directfs=false"] } } }

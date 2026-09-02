@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -147,22 +148,81 @@ func TestEnsureDriveVolume_IdempotentByName(t *testing.T) {
 	}
 }
 
-// TestEnsureDriveVolume_NoOpForOtherBackends: only docker_volume allocates. A
-// host_path drive is a bind of a tree the operator already mounted, and Wardyn
-// never mkdirs on a share.
-func TestEnsureDriveVolume_NoOpForOtherBackends(t *testing.T) {
-	f := newFakeDocker()
-	for _, backend := range []types.DriveBackend{types.DriveBackendHostPath, types.DriveBackendK8sPVC, types.DriveBackendK8sPVCStatic} {
-		drive := &types.DriveMount{Backend: backend, ObjectName: "obj", HomeName: "alice", Target: runner.DriveTarget}
-		if err := ensureDriveVolume(context.Background(), f, drive); err != nil {
-			t.Errorf("ensureDriveVolume(%s): %v", backend, err)
-		}
+// TestEnsureDriveVolume_AdoptsOnlyWardynsOwnShape is the credential guardrail's
+// second half. The first half is "Wardyn never CREATES a volume with driver
+// options"; this is "Wardyn never MOUNTS one it did not create". The two are
+// separable, and only asserting the first left the gap: `docker volume create
+// --opt type=cifs --opt o=…,password=… wardyn-drive-alice` is a supported
+// operator gesture, and an inspect-hit arm that returned nil on any name match
+// would bind that share — password and all — into whichever member resolves to
+// that object name.
+//
+// A matching volume (local driver, no options) is still REUSED, which is the
+// ordinary second-run path and must not become a refusal.
+func TestEnsureDriveVolume_AdoptsOnlyWardynsOwnShape(t *testing.T) {
+	seed := func(opts client.VolumeCreateOptions) *fakeDocker {
+		f := newFakeDocker()
+		f.volumes["wardyn-drive-alice"] = opts
+		return f
 	}
-	if err := ensureDriveVolume(context.Background(), f, nil); err != nil {
-		t.Errorf("ensureDriveVolume(nil): %v", err)
+
+	t.Run("foreign-driver", func(t *testing.T) {
+		f := seed(client.VolumeCreateOptions{Name: "wardyn-drive-alice", Driver: "some-csi-plugin"})
+		err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive())
+		if err == nil {
+			t.Fatal("a same-named volume on a FOREIGN driver must be refused, not adopted as a managed drive")
+		}
+		if !strings.Contains(err.Error(), "some-csi-plugin") {
+			t.Errorf("the refusal should name the driver it found, got: %v", err)
+		}
+	})
+
+	t.Run("options-bearing", func(t *testing.T) {
+		// The dangerous one: the local driver, but carrying share options. The
+		// password is deliberately NOT asserted on — the point is that Wardyn
+		// refuses before it can ever mount it.
+		f := seed(client.VolumeCreateOptions{
+			Name:       "wardyn-drive-alice",
+			Driver:     "local",
+			DriverOpts: map[string]string{"type": "cifs", "device": "//nas.corp/share", "o": "username=svc,password=hunter2"},
+		})
+		if err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err == nil {
+			t.Fatal("a same-named volume carrying DRIVER OPTIONS must be refused — adopting it would mount an operator's share on a credential Wardyn never chose")
+		}
+	})
+
+	t.Run("wardyn-shaped-is-reused", func(t *testing.T) {
+		f := seed(client.VolumeCreateOptions{
+			Name:   "wardyn-drive-alice",
+			Driver: "local",
+			Labels: map[string]string{labelManaged: "true", labelDrive: "wardyn-drive-alice", labelDriveHome: "alice"},
+		})
+		if err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err != nil {
+			t.Fatalf("a Wardyn-shaped volume must be REUSED, not refused: %v", err)
+		}
+		if f.volumeCreates != 0 {
+			t.Errorf("reuse made %d VolumeCreate calls, want 0", f.volumeCreates)
+		}
+	})
+}
+
+// TestCreateSandbox_HostPathDriveAllocatesNothing: only docker_volume allocates.
+// A host_path drive is a bind of a tree the operator already mounted, and Wardyn
+// never mkdirs on a share — asserted through the real dispatch path rather than
+// against a backend guard inside ensureDriveVolume, which its single caller
+// (driveMount's docker_volume arm) makes unreachable.
+func TestCreateSandbox_HostPathDriveAllocatesNothing(t *testing.T) {
+	root, home := driveHostRoot(t)
+	f, mounts, err := createWithDrive(t, hostPathDrive(home), []string{root})
+	if err != nil {
+		t.Fatalf("CreateSandbox with an in-root host_path drive: %v", err)
 	}
 	if f.volumeCreates != 0 {
-		t.Errorf("non-docker_volume backends made %d VolumeCreate calls, want 0", f.volumeCreates)
+		t.Errorf("a host_path drive made %d VolumeCreate calls, want 0", f.volumeCreates)
+	}
+	// (the bind's source/mode are asserted by TestCreateSandbox_HostPathDriveApplied)
+	if m := findMount(mounts, runner.DriveTarget); m != nil && m.Type != mount.TypeBind {
+		t.Errorf("host_path drive mount Type = %q, want %q — a share is bound, never allocated", m.Type, mount.TypeBind)
 	}
 }
 

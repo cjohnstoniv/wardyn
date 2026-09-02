@@ -411,6 +411,11 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drive *types.DriveMount) {
 // drive to this sandbox. Silent when no drive was attached — an audit action
 // that fires on every run is noise an operator learns to skip past.
 //
+// Called AFTER CreateSandbox has returned, never beside the spec assembly: the
+// driver re-runs the drive's ceiling and deny matrix at bind time and can still
+// refuse, so an earlier emit wrote `success` for a mount the next event
+// (run.create failure) contradicted. See the call site in runs_dispatch.go.
+//
 // Its own event rather than a field on the run's policy snapshot, because the
 // drive is the ONE thing in a run's spec that OUTLIVES the run: "which run
 // mounted whose storage, in which mode" is a question asked months later about
@@ -418,9 +423,10 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drive *types.DriveMount) {
 // is recorded is dispatch's own resolution of that flag into an object.
 //
 // `object` is the storage object (a Docker volume name, or the host
-// subdirectory of a share) and `drive` the per-person home segment: both
-// admin-facing, and neither is ever surfaced to the member, whose request
-// carried a flag and never a path. `enforcement` is what actually binds the
+// subdirectory of a share) and `drive` the per-person HOME SEGMENT — not the
+// drive object's name, which is what the same key carries on the drive.grant.*
+// rows (userDriveGrantAuditData). Both are admin-facing, and neither is ever
+// surfaced to the member, whose request carried a flag and never a path. `enforcement` is what actually binds the
 // drive's bytes (types.StorageEnforcement), logged beside the mount so a size
 // read back in a later dispute carries its caveat instead of reading as a
 // promise. Five fields, matching docs/AUDIT-ACTIONS.md exactly.

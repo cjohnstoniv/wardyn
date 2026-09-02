@@ -56,8 +56,8 @@ import (
 //     storage, appended LAST by driveMount below. It arrives as a
 //     types.DriveMount rather than as an entry in specMounts — see
 //     SandboxSpec.Drive — so nothing above has to learn about it, and a
-//     host_path drive is converted to a runner.Mount here purely so it runs the
-//     SAME ValidateMount deny matrix every other host bind does.
+//     host_path drive runs the SAME source deny matrix every other host bind
+//     does, by way of the roots ceiling that composes it (driveMount).
 func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec) ([]mount.Mount, error) {
 	specMounts, memberRoots := spec.Mounts, spec.MemberMountRoots
 	var mounts []mount.Mount
@@ -121,16 +121,20 @@ func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec) ([]mo
 //
 //   - docker_volume (MANAGED): a per-person named volume, created on first use
 //     (ensureDriveVolume, driver_volumes.go) and mounted as mount.TypeVolume.
-//     There is no host path, so the bind deny-list has nothing to deny;
-//     ValidateTarget still runs, because the in-container target is still a
-//     place a mount can land.
+//     There is no host path, so the bind deny-list has nothing to deny.
 //   - host_path (SHARE): a bind of THIS PERSON's subdirectory of a tree the
 //     OPERATOR mounted host-side (fstab/systemd `mount.cifs -o credentials=…`
-//     or nfs). It runs the full runner.ValidateMount deny matrix AND the
-//     deployment's WARDYN_USER_DRIVE_HOST_ROOTS ceiling on the symlink-resolved
-//     real path, fail-closed — the same two-layer shape a member mount has, for
-//     the same reason: the row was validated when an admin wrote it, and a
-//     symlink that was benign then can be re-pointed before this run.
+//     or nfs). It runs runner.UserDriveHostRootCheck, which is the host bind
+//     deny-list (ValidateMountSource) AND the deployment's
+//     WARDYN_USER_DRIVE_HOST_ROOTS ceiling on the symlink-resolved real path,
+//     fail-closed — the same two-layer shape a member mount has, for the same
+//     reason: the row was validated when an admin wrote it, and a symlink that
+//     was benign then can be re-pointed before this run.
+//
+// ONE PATH, NO FLAG. Both checks run for every drive that reaches the matching
+// arm — there is no provenance flag deciding whether the ceiling applies, and
+// there must never be one: a gate whose only false state is "somebody stopped
+// setting the stamp" fails OPEN when that refactor lands.
 //
 // A KUBERNETES BACKEND IS AN ERROR, NEVER A SKIP. types.ValidateUserDrive
 // refuses a k8s backend on a Docker deployment at the write boundary, so a
@@ -142,17 +146,20 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount) ([]mou
 	if drive == nil {
 		return nil, nil
 	}
+	// EVERY backend, before the switch: the in-container target is a place a
+	// mount can land whatever backs it. ValidateTarget — never
+	// ValidateAuthoredTarget, which refuses runner.DriveTarget by design: the
+	// reserved-target rule exists to stop a HUMAN naming this path, and this
+	// mount is the one thing the reservation is FOR.
+	if err := runner.ValidateTarget(drive.Target); err != nil {
+		return nil, fmt.Errorf("docker: denied user drive %q -> %q: %w", drive.ObjectName, drive.Target, err)
+	}
 	switch drive.Backend {
 	case types.DriveBackendDockerVolume:
-		// Target only: a named volume is Docker-managed, not a host path (the
-		// same split ValidateMountSource/ValidateTarget already make for the
-		// recording mount). ValidateTarget — never ValidateAuthoredTarget,
-		// which refuses runner.DriveTarget by design: the reserved-target rule
-		// exists to stop a HUMAN naming this path, and this mount is the one
-		// thing the reservation is FOR.
-		if err := runner.ValidateTarget(drive.Target); err != nil {
-			return nil, fmt.Errorf("docker: denied user drive %q -> %q: %w", drive.ObjectName, drive.Target, err)
-		}
+		// Target only, checked above: a named volume is Docker-managed, not a
+		// host path, so the source half has nothing to deny (the same split
+		// ValidateMountSource/ValidateTarget already make for the recording
+		// mount).
 		if err := ensureDriveVolume(ctx, d.cli, drive); err != nil {
 			return nil, err
 		}
@@ -164,19 +171,35 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount) ([]mou
 		}}, nil
 
 	case types.DriveBackendHostPath:
-		m := driveHostMount(drive)
-		if err := runner.ValidateMount(m); err != nil {
-			return nil, fmt.Errorf("docker: denied user drive mount %q -> %q: %w", m.Source, m.Target, err)
+		// The SHARE bind, converted here — the one place it happens, and the
+		// whole reason runner.Mount.DriveAuthored exists. The stamp is a
+		// PROVENANCE LABEL on the wire and NOTHING GATES ON IT: the ceiling
+		// below runs on every host_path drive unconditionally. Gating it on the
+		// stamp read as defence but was fail-OPEN by shape — the flag's only
+		// false state is a refactor that drops the stamp, and the failure mode
+		// of that refactor would be a share bound with NO ceiling at all.
+		m := runner.Mount{
+			// The resolver's already-derived <host_root>/<home>. The driver does
+			// NOT re-join a root and a home name: deriving a path twice, in two
+			// packages, from two copies of the rules is how the second copy ends
+			// up pointing somewhere the first would have refused.
+			Source:        drive.ObjectName,
+			Target:        drive.Target,
+			ReadOnly:      drive.ReadOnly,
+			DriveAuthored: true,
 		}
-		// Keyed on the SAME shape the member gate uses one loop up
-		// (`memberRoots != nil && m.MemberAuthored`), so the two provenance
-		// gates read identically and a later pass that folds them into one
-		// loop inherits a working drive check rather than having to rediscover
-		// which mounts the drive roots bound.
-		if m.DriveAuthored {
-			if err := runner.UserDriveHostRootCheck(d.cfg.UserDriveHostRoots)(m.Source); err != nil {
-				return nil, fmt.Errorf("docker: denied user drive mount %q -> %q: %w", m.Source, m.Target, err)
-			}
+		// ONE call, not two: UserDriveHostRootCheck runs runner.ValidateMountSource
+		// itself (the full host bind deny-list) before resolving symlinks and
+		// asserting the real path is inside the deployment's roots, so calling
+		// runner.ValidateMount here as well would run the source half twice and
+		// leave two places for the matrix to drift apart.
+		//
+		// UNSET ROOTS REFUSE EVERY host_path DRIVE, and that arm lives inside
+		// runner.UserDriveHostRootCheck rather than as a `len(roots) > 0` test
+		// here, so the driver and the API write boundary cannot drift on what
+		// "the operator has not said where" means.
+		if err := runner.UserDriveHostRootCheck(d.cfg.UserDriveHostRoots)(m.Source); err != nil {
+			return nil, fmt.Errorf("docker: denied user drive mount %q -> %q: %w", m.Source, m.Target, err)
 		}
 		return []mount.Mount{{
 			Type:     mount.TypeBind,
@@ -189,31 +212,5 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount) ([]mou
 		return nil, fmt.Errorf("docker: user drive %q has backend %q, which this runner cannot mount "+
 			"(the docker runner mounts %q and %q; a Kubernetes-backed drive belongs to a Kubernetes deployment)",
 			drive.ObjectName, drive.Backend, types.DriveBackendDockerVolume, types.DriveBackendHostPath)
-	}
-}
-
-// driveHostMount converts a SHARE (host_path) drive into the runner.Mount the
-// deny matrix and the roots ceiling run on — the whole reason
-// runner.Mount.DriveAuthored exists, and the one place the conversion happens.
-//
-// Pure and separate so the stamping is assertable on its own: a drive that
-// reached ContainerCreate without DriveAuthored set would sail past the roots
-// gate, which is the failure this function's own test exists to catch.
-//
-// The Source is the resolver's already-derived <host_root>/<home>. The driver
-// does NOT re-join a root and a home name: deriving a path twice, in two
-// packages, from two copies of the rules is how the second copy ends up
-// pointing somewhere the first would have refused.
-//
-// UNSET ROOTS REFUSE EVERY host_path DRIVE, and that arm lives inside
-// runner.UserDriveHostRootCheck rather than as a `len(roots) > 0` test at the
-// call site, so the driver and the API write boundary cannot drift on what
-// "the operator has not said where" means.
-func driveHostMount(drive *types.DriveMount) runner.Mount {
-	return runner.Mount{
-		Source:        drive.ObjectName,
-		Target:        drive.Target,
-		ReadOnly:      drive.ReadOnly,
-		DriveAuthored: true,
 	}
 }

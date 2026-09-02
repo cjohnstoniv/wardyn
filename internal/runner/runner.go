@@ -125,17 +125,22 @@ type Mount struct {
 	MemberAuthored bool `json:"member_authored,omitempty"`
 	// DriveAuthored marks the ONE bind a driver synthesizes from
 	// SandboxSpec.Drive: the host_path user drive's per-person subdirectory.
-	// Only these are re-checked against the deployment's
-	// WARDYN_USER_DRIVE_HOST_ROOTS ceiling (UserDriveHostRootCheck) at bind
-	// time, for the reason MemberAuthored has its own gate — the roots bound
-	// what an ADMIN may point a drive at and nothing else, and the same spec
-	// carries Wardyn-authored credential binds that live under no drive root.
+	//
+	// IT IS A LABEL, NEVER A GATE — unlike MemberAuthored, which selects which
+	// of a mixed slice of binds the member roots apply to. A drive arrives on
+	// its OWN field (SandboxSpec.Drive), so the driver already knows it is
+	// looking at a drive; the deployment's WARDYN_USER_DRIVE_HOST_ROOTS ceiling
+	// (UserDriveHostRootCheck) therefore runs on EVERY host_path drive
+	// unconditionally, and no check anywhere may be written as `if
+	// m.DriveAuthored`. One was, and it was fail-OPEN by shape: the flag's only
+	// false state is a refactor that stops stamping it, so the check would
+	// vanish exactly when the code around it changed.
 	//
 	// It is set by the DRIVER, not by dispatch: SandboxSpec.Drive is a
 	// types.DriveMount rather than a Mount precisely so the composer clamp, the
 	// workspace-source allow-list and the k8s blanket host-bind refusal never
 	// see a drive; the Docker driver converts it to a Mount internally so the
-	// deny matrix can run on the host path.
+	// bind's provenance is on the wire beside every other mount's.
 	//
 	// TWO FLAGS, NOT A Kind ENUM, and this comment is the trigger to change
 	// that: N=2 is below the consolidation threshold and MemberAuthored is

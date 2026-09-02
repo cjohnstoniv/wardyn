@@ -204,8 +204,7 @@ ARG NPM_VERSION=11.19.0
 RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
  && npm install -g "npm@${NPM_VERSION}" \
  && npm --version
-# Host-staged native binary (opt-in, gitignored). The README.md decoy makes the
-# COPY succeed when the corp-bin glob matches nothing (the npm default path).
+
 # /home/agent/drive is the RESERVED mount point for a user drive (runner.DriveTarget).
 # It is created here, owned by agent, EVEN THOUGH nothing mounts it on most runs:
 # Docker's copy-up gives a fresh named volume the uid/gid of the image directory it

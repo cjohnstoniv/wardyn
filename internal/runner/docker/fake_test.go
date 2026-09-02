@@ -437,6 +437,11 @@ func (f *fakeDocker) VolumeInspect(ctx context.Context, volumeID string, _ clien
 		Name:   opts.Name,
 		Driver: opts.Driver,
 		Labels: opts.Labels,
+		// DriverOpts is what a `docker volume create --opt type=cifs …` volume
+		// carries, and it is how a test seeds one the driver must REFUSE to
+		// adopt (ensureDriveVolume's inspect-hit arm) — so the fake has to
+		// echo it back the way a real daemon does.
+		Options: opts.DriverOpts,
 	}}, nil
 }
 

@@ -28,11 +28,13 @@ import (
 //
 // OWNERSHIP IS THE IMAGE'S JOB, NOT wardynd's. A fresh named volume mounted
 // over a directory that exists in the image inherits that directory's contents
-// AND its uid/gid (Docker's copy-up). Both agent images therefore `mkdir -p
-// /home/agent/drive` owned by agent (uid 1000) — see deploy/images/base and
-// deploy/images/oracle — so the first run against a new drive lands on a
-// directory the agent can write. wardynd never chowns anything, never runs a
-// privileged helper, and never needs to know the uid.
+// AND its uid/gid (Docker's copy-up). EVERY agent image therefore `mkdir -p
+// /home/agent/drive` owned by agent (uid 1000) — the ones that build on a
+// public base do it themselves, the ones that build on a sibling inherit it,
+// and cmd/wardynd's TestAgentImagesPreCreateDriveDir holds the whole set to it
+// — so the first run against a new drive lands on a directory the agent can
+// write. wardynd never chowns anything, never runs a privileged helper, and
+// never needs to know the uid.
 
 const (
 	// driveVolumeDriver is the volume driver every managed drive is created
@@ -92,10 +94,12 @@ const (
 // exactly what the NEXT run for that person expects to find. Deleting it on a
 // rollback would be a data-loss path that a transient image pull failure could
 // trigger.
+//
+// A drive is docker_volume BY CONSTRUCTION here: driveMount calls this from
+// inside its `case types.DriveBackendDockerVolume` arm and nothing else calls
+// it, so there is no nil/backend guard to fall through — a second one would be
+// a branch no input can reach, and a test of it would assert nothing.
 func ensureDriveVolume(ctx context.Context, cli dockerAPI, drive *types.DriveMount) error {
-	if drive == nil || drive.Backend != types.DriveBackendDockerVolume {
-		return nil
-	}
 	name := drive.ObjectName
 	if name == "" {
 		// Fail closed. An empty object name would make VolumeCreate allocate an
@@ -103,7 +107,25 @@ func ensureDriveVolume(ctx context.Context, cli dockerAPI, drive *types.DriveMou
 		// member's drive nor findable by any reclaim command.
 		return fmt.Errorf("docker: user drive has no object name (backend %s)", drive.Backend)
 	}
-	if _, err := cli.VolumeInspect(ctx, name, client.VolumeInspectOptions{}); err == nil {
+	if res, err := cli.VolumeInspect(ctx, name, client.VolumeInspectOptions{}); err == nil {
+		// A NAME COLLISION IS NOT AN ADOPTION. The volume that already answers
+		// to this name was not necessarily created by the block below: an
+		// operator can precreate one by hand, and `docker volume create --opt
+		// type=cifs --opt o=username=…,password=…` is the documented way to do
+		// it. Mounting that into a member's sandbox because the names happened
+		// to match would hand the drive whatever share those options point at,
+		// on a credential Wardyn never chose and cannot see — the exact outcome
+		// driveVolumeDriver's no-DriverOpts rule exists to prevent, arrived at
+		// through the back door. So adopt only WARDYN's OWN SHAPE: the local
+		// driver, and no driver options at all.
+		//
+		// when DriveMount.DriveID lands: also refuse Labels[labelDrive] != drive id
+		if v := res.Volume; v.Driver != driveVolumeDriver || len(v.Options) != 0 {
+			return fmt.Errorf("docker: volume %q already exists with driver %q and %d driver option(s), which is not a Wardyn-managed drive "+
+				"(a managed drive is always driver %q with no options — a precreated share volume must never be adopted as one); "+
+				"rename or remove it, or point this drive at a host_path backend",
+				name, v.Driver, len(v.Options), driveVolumeDriver)
+		}
 		return nil
 	} else if !isNotFound(err) {
 		// Any error other than "no such volume" is fail-closed: a daemon that

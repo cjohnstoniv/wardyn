@@ -342,25 +342,41 @@ func TestCreateSandbox_DriveTargetIsValidatedNotAuthored(t *testing.T) {
 	}
 }
 
-// TestDriveHostMount_StampsDriveAuthored is the pin on the conversion itself.
-// A share drive that reached ContainerCreate as a runner.Mount WITHOUT
-// DriveAuthored set would still pass ValidateMount and would then skip the
-// deployment's host-root ceiling entirely — a silent widening of exactly the
-// gate the flag exists to trigger. Nothing else in the tree sets it, so this is
-// the only place that can go wrong.
-func TestDriveHostMount_StampsDriveAuthored(t *testing.T) {
-	drive := hostPathDrive("/srv/wardyn-drives/alice")
-	m := driveHostMount(drive)
-	if !m.DriveAuthored {
-		t.Error("driveHostMount did not stamp DriveAuthored — the host-root ceiling would be skipped")
+// TestDriveMount_HostPathCeilingIsUnconditional is the pin the old
+// driveHostMount stamp test used to be, moved onto the function that now does
+// the conversion (driveMount, its single caller).
+//
+// The stamp test asserted that a share drive reached ContainerCreate carrying
+// runner.Mount.DriveAuthored, because the roots ceiling was written `if
+// m.DriveAuthored` — fail-OPEN by shape, since the flag's only false state is a
+// refactor that stops setting it. The ceiling is now unconditional, so the
+// property worth pinning is the ceiling itself: the SAME call that binds an
+// in-root share refuses when the deployment named no roots, with nothing in
+// between that could turn it off. The happy-path half also carries the old
+// test's other assertions — source, target and mode arrive verbatim from the
+// resolver, never re-derived here.
+func TestDriveMount_HostPathCeilingIsUnconditional(t *testing.T) {
+	root, home := driveHostRoot(t)
+	drive := hostPathDrive(home)
+
+	d := newWithClient(newFakeDocker(), Config{ProxyImage: "wardyn-proxy:dev", UserDriveHostRoots: []string{root}})
+	got, err := d.driveMount(context.Background(), drive)
+	if err != nil {
+		t.Fatalf("driveMount for an in-root share: %v", err)
 	}
-	if m.MemberAuthored {
-		t.Error("driveHostMount stamped MemberAuthored — a drive is admin-authored; the member gate's roots do not bound it")
+	if len(got) != 1 {
+		t.Fatalf("driveMount returned %d mounts, want exactly 1: %+v", len(got), got)
 	}
-	if m.Source != drive.ObjectName {
-		t.Errorf("Source = %q, want the resolver's already-derived object name %q (never re-joined here)", m.Source, drive.ObjectName)
+	if got[0].Type != mount.TypeBind || got[0].Source != drive.ObjectName || got[0].Target != drive.Target || got[0].ReadOnly != drive.ReadOnly {
+		t.Errorf("driveMount(%+v) = %+v, want a bind carrying the resolver's object name, target and mode verbatim", *drive, got[0])
 	}
-	if m.Target != runner.DriveTarget || m.ReadOnly != drive.ReadOnly {
-		t.Errorf("driveHostMount(%+v) = %+v, want the target and mode carried through verbatim", *drive, m)
+
+	// The SAME drive, on a deployment that configured no roots: refused. No
+	// flag, provenance stamp or backend detail sits between the two calls.
+	unset := newWithClient(newFakeDocker(), Config{ProxyImage: "wardyn-proxy:dev"})
+	if _, err := unset.driveMount(context.Background(), drive); err == nil {
+		t.Error("driveMount bound a share on a deployment with no WARDYN_USER_DRIVE_HOST_ROOTS — the ceiling must run unconditionally")
+	} else if !strings.Contains(err.Error(), "denied user drive") {
+		t.Errorf("the refusal should identify the denied drive, got: %v", err)
 	}
 }

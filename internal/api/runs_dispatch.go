@@ -446,10 +446,6 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 		},
 	}
 
-	// USER DRIVE ATTACHED — recorded beside the spec that carries it, and a
-	// no-op for the runs (most of them) that carry none. See auditDriveMount.
-	s.auditDriveMount(ctx, run.ID, p.Drive)
-
 	// AUTHORIZATION ENVELOPE — the append-only answer to "what was this agent
 	// actually allowed to do?". The run row cannot answer it: agent_runs.policy_id
 	// has no FK and no spec column, run_policies.spec is overwritten in place, and
@@ -492,6 +488,20 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
 		return
 	}
+
+	// USER DRIVE ATTACHED — a no-op for the runs (most of them) that carry
+	// none. See auditDriveMount.
+	//
+	// AFTER CreateSandbox, not beside the spec that carries the drive: the
+	// driver has the last word on whether the drive is actually bound (the
+	// host-root ceiling and the bind deny-list are re-run there, on the
+	// symlink-resolved real path, as the last thing before the container is
+	// created). Emitted before that decision, a `success` row claimed a mount
+	// that the very next event — `run.create` `failure` — contradicted. Nothing
+	// downstream of here can refuse the drive, so this row is now true when it
+	// is written.
+	s.auditDriveMount(ctx, run.ID, p.Drive)
+
 	// HOLD the run's watcher lease for the rest of dispatch — starting the moment
 	// there is a sandbox to watch and BEFORE SetSandboxRef publishes its ref, so a
 	// run whose sandbox_ref is set is ALWAYS backed by a fresh lease while its
