@@ -262,7 +262,6 @@ type Session struct {
 // Authenticator provides OIDC login, callback, logout, and session-check handlers.
 type Authenticator struct {
 	cfg        Config
-	provider   *gooidc.Provider
 	oauth2     oauth2.Config
 	verifier   *gooidc.IDTokenVerifier
 	hmacKey    []byte
@@ -339,7 +338,6 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 
 	return &Authenticator{
 		cfg:        cfg,
-		provider:   provider,
 		oauth2:     oa,
 		verifier:   verifier,
 		hmacKey:    hmacKey,
@@ -351,16 +349,8 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 // random state and nonce, stores them in HttpOnly SameSite=Lax cookies, and
 // redirects the user to the IdP authorization endpoint.
 func (a *Authenticator) LoginHandler(w http.ResponseWriter, r *http.Request) {
-	state, err := randomToken()
-	if err != nil {
-		http.Error(w, "internal error generating state", http.StatusInternalServerError)
-		return
-	}
-	nonce, err := randomToken()
-	if err != nil {
-		http.Error(w, "internal error generating nonce", http.StatusInternalServerError)
-		return
-	}
+	state := randomToken()
+	nonce := randomToken()
 	// PKCE: code verifier (32 octets => the 43-char minimum RFC 7636 §4.1
 	// mandates; a shorter verifier is rejected by conformant IdPs).
 	codeVerifier := oauth2.GenerateVerifier()
@@ -703,12 +693,12 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 // randomToken generates a cryptographically-random 128-bit base64url string.
-func randomToken() (string, error) {
+// crypto/rand.Read never returns an error (go1.24+): it crashes the program
+// irrecoverably instead, so randomToken cannot fail.
+func randomToken() string {
 	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
+	rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 // emailDomainAllowed returns true if the email's domain (part after last '@')

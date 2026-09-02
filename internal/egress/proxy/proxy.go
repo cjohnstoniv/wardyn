@@ -558,9 +558,11 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	// step 4 below (which would otherwise re-derive and re-deny the same
 	// address) so the operator's own configured destination is actually
 	// reachable instead of always denied with "the customer's network is at
-	// fault" (W13-S1-3). Only blockPrivate qualifies: a declared loopback,
-	// link-local/metadata or NAT64 literal still hits the else and is denied —
-	// the operator cannot hand the sandbox 169.254.169.254 by allow-listing it.
+	// fault" (W13-S1-3). Only blockPrivate OFF the proxy's own subnets and
+	// control-plane host qualifies: a declared loopback, link-local/metadata or
+	// NAT64 literal — or one of the sidecar's own docker-network neighbours —
+	// still hits the else and is denied, so the operator can hand the sandbox
+	// neither 169.254.169.254 nor the control plane by allow-listing it.
 	var trustedLiteralIP net.IP
 	if ip := net.ParseIP(strings.TrimSuffix(strings.ToLower(host), ".")); ip != nil {
 		if kind, _ := isBlockedIP(ip); kind != blockNone {

@@ -68,10 +68,27 @@ func TestRedirectProbeTo(t *testing.T) {
 			wantConnectTo: "pypi.org:443:100.64.5.7:8443",
 		},
 		{
-			name:          "an http From matches on port 80, not an assumed 443",
+			// From's SCHEME is never borrowed: --connect-to decides the
+			// connection, the URL decides the protocol spoken inside it, and only
+			// To knows which protocol the mirror serves. PORT1 follows the
+			// requested URL's scheme for the same reason -- it is what curl
+			// matches the swap on.
+			name:          "an http From still asks for To's https, and matches on 443",
 			red:           types.EgressRedirect{From: "http://mirror.example.com", To: "https://10.40.1.5"},
-			wantURL:       "http://mirror.example.com",
-			wantConnectTo: "mirror.example.com:80:10.40.1.5:443",
+			wantURL:       "https://mirror.example.com",
+			wantConnectTo: "mirror.example.com:443:10.40.1.5:443",
+		},
+		{
+			name:          "a plain-http To is spoken as http, and matches on 80",
+			red:           types.EgressRedirect{From: "https://mirror.example.com/simple", To: "http://10.40.1.5:8080"},
+			wantURL:       "http://mirror.example.com/simple",
+			wantConnectTo: "mirror.example.com:80:10.40.1.5:8080",
+		},
+		{
+			name:          "From's EXPLICIT port is PORT1, never the scheme default",
+			red:           types.EgressRedirect{From: "registry.corp.example:8443", To: "https://10.40.1.5"},
+			wantURL:       "https://registry.corp.example:8443",
+			wantConnectTo: "registry.corp.example:8443:10.40.1.5:443",
 		},
 		{
 			name:    "no usable From host: no swap rather than a guess",

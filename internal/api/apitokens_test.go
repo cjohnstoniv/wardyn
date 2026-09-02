@@ -34,7 +34,11 @@ import (
 // not hash to a stored row is refused" is a property this double can actually
 // express rather than one it fakes away.
 type tokenMemStore struct {
-	store.Store
+	// noGovernanceStore rather than a bare store.Store: these tests drive GET
+	// /me through the real router, which now resolves the caller's user drive as
+	// well as their ceiling, and the empty-deployment answer is exactly what an
+	// api-token test means to model.
+	noGovernanceStore
 	mu      sync.Mutex
 	byID    map[uuid.UUID]types.APIToken
 	byHash  map[string]uuid.UUID

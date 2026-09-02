@@ -1383,10 +1383,13 @@ git/PAT brokers alike), and shows in the audit trail as `rule_source:
 site-config:egress-redirect` rather than a generic policy allow. The trust comes
 from the exact allowlist entry the substitution writes, so it is scoped to those
 runs and to that address; a run the redirect does not cover is refused, and a
-`denied_domains` entry still wins. `test-redirect` understands the shape too: it
-dials the `to` address while presenting the `from` hostname for TLS, because a
-private endpoint's certificate names the public host — probing the address
-directly failed verification and reported a correct configuration as broken.
+`denied_domains` entry still wins. `test-redirect` understands the shape too
+(`redirectProbeTo`): it dials the `to` address while presenting the `from`
+hostname for TLS, because a private endpoint's certificate names the public host
+— probing the address directly failed verification and reported a correct
+configuration as broken. It speaks the protocol the stored `to` names, never the
+one `from` happens to be spelled with: only `to` knows whether the mirror serves
+TLS or cleartext on that port.
 
 ### Internal hosts
 
@@ -1672,7 +1675,7 @@ Both endpoints may also carry `warning` (below).
 |---|---|
 | 🟢 `reached` | The path works — proxy or mirror reachable, and for a redirect, the public host is correctly *blocked* when dialed directly. |
 | ⛔ `blocked` | Could not reach the proxy or the mirror. `detail` names the real cause — DNS failure, connection refused, TLS failure, timeout, or curl's own exit code — never a generic "failed". |
-| ⛔ `bypass` | **The one that looks fine but isn't.** The mirror answers, but the public host it's supposed to replace is *also* still reachable, directly, from a sandbox. The redirect is configured but not enforced: a run can silently pull from the internet instead of the mirror, and every other signal — the row is filled in, the mirror answers — looks exactly like a working redirect. `test-redirect` only. |
+| ⛔ `bypass` | **The one that looks fine but isn't.** The mirror answers, but the public host it's supposed to replace is *also* still reachable, directly, from a sandbox. The redirect is configured but not enforced: a run can silently pull from the internet instead of the mirror, and every other signal — the row is filled in, the mirror answers — looks exactly like a working redirect. "Reachable" means the public host **answered** — any HTTP status, a 403 included, or a TLS-level reply — not that the fetch succeeded: a host that answers `403` is one the confinement class did not block. `test-redirect` only. |
 | 🟡 `no_runner` | No runner is configured; there's nothing to launch a probe with. Not an error, and not a guess. |
 | 🟡 `not_run` | A runner IS configured, but the throwaway sandbox never got to running the probe — an image pull failure, or a confinement class this host can't enforce. Distinct from `blocked`: `blocked` means the probe DID run and observed a real network fact; `not_run` means nothing was learned either way. Setup's gate treats it the same as `no_runner` (unlocks Next with a neutral note, never a click-past). |
 | 🟡 `timed_out` | The probe sandbox started and the task launched, but the run never reported completion within the wait budget (90s) — provably **not** a network verdict, unlike `blocked`. `detail` names the sandbox agent's own observed status at the deadline and `WARDYN_CONTROL_PLANE_URL` to check. Usual cause: the run's recording upload hanging against an unreachable control plane — see "Recording upload path on Kubernetes" below. |

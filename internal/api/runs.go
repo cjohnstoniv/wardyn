@@ -107,6 +107,17 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve the run's USER DRIVE, AFTER the onboarding gate above: the drive
+	// is per-principal and never appears in the spec, so it deliberately does
+	// not pass through validateWorkspaceSources — but it must not be able to
+	// answer BEFORE the un-bypassable gate either. Writes its own 403/422 and
+	// stops on false. nil for the overwhelming majority of runs (no `drive`
+	// flag), which is a provable no-op: no store read at all.
+	driveMount, ok := s.seedRequestDrive(w, r, req, ceiling)
+	if !ok {
+		return
+	}
+
 	// Fold the run's model-access binding AND each referenced workspace's
 	// requirements contract into the spec BEFORE the confinement floor + risk
 	// grade read it (SPINE-2/SPINE-6). The deterministic CC3 blast-radius floor is
@@ -216,37 +227,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// from egress; an un-granted github repo is denied).
 	gw.augmentGitBrokerGrants(req.Repo, spec.WorkspaceRepos)
 
-	createAuditData := map[string]any{
-		"agent": req.Agent, "repo": req.Repo, "policy_id": policyID,
-		"confinement_class": enforced, "jti": id.JTI,
-		"inline_policy": req.InlinePolicy != nil,
-	}
-	if req.TaskMode == "exec" {
-		// The run row doesn't store task_mode (request-scoped), so the audit
-		// event is the provenance record that this run ran a plain command.
-		createAuditData["task_mode"] = req.TaskMode
-	}
-	if req.Interactive && req.InteractiveStart != "" {
-		// Same reason as task_mode above: interactive_start is request-scoped, so
-		// the audit event is the only record that this sandbox opened straight
-		// into the agent CLI rather than a bare shell.
-		createAuditData["interactive_start"] = req.InteractiveStart
-	}
-	if req.Interactive && req.SeedAutoTools {
-		// SeedAutoTools is request-scoped like interactive_start above; only
-		// meaningful alongside a non-empty Task (the boot seed) — recorded
-		// whenever requested regardless, since dispatch's own `interactive &&`
-		// gate is what makes it structurally inert otherwise.
-		createAuditData["seed_auto_tools"] = req.SeedAutoTools
-	}
-	if req.ToolApprovals != "" {
-		// Request-scoped like task_mode: this is the only record that an
-		// autonomous run's tool calls were routed to Wardyn approvals instead of
-		// running unsupervised.
-		createAuditData["tool_approvals"] = req.ToolApprovals
-	}
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
-		runID.String(), "success", mustJSON(createAuditData)))
+		runID.String(), "success", mustJSON(createRunAuditData(req, policyID, enforced, id.JTI))))
 
 	// Model-resolution fail-fast (AGT4-2): a non-interactive harness run whose agent
 	// needs a model but has NO resolvable credential boots and 404s on its FIRST model
@@ -320,6 +302,13 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			Toolchains:         runToolchainNeeds(wsRefs),
 			CeilingDeny:        ceilingDeny,
 			CeilingProfile:     ceilingProfile,
+			// The member's own persistent storage, already resolved and narrowed
+			// at create (seedRequestDrive) — nil unless this run asked for it.
+			// Carried here rather than re-resolved inside dispatch for the reason
+			// CeilingDeny is: resolution keys on the caller's OIDC claims, which
+			// the run row does not hold, so dispatch has no identity to resolve
+			// FROM. See user_drives_run.go's own note.
+			Drive: driveMount,
 			// The zero posture unless this run attaches a MEMBER-OWNED workspace, in
 			// which case the driver re-checks that member's own binds against these
 			// roots immediately before ContainerCreate (memberMountPosture,
@@ -363,6 +352,46 @@ func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWrite
 		return nil, false
 	}
 	return ephemeralDirs, true
+}
+
+// createRunAuditData assembles the run.create event's payload.
+//
+// Extracted from handleCreateRun rather than inlined, and the reason is the
+// same for all four conditional fields below: NONE of them is stored on the run
+// row, so this event is their ONLY provenance record — which makes the payload
+// a contract worth reading in one scope instead of a block interleaved with the
+// dispatch sequence.
+func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced types.ConfinementClass, jti string) map[string]any {
+	data := map[string]any{
+		"agent": req.Agent, "repo": req.Repo, "policy_id": policyID,
+		"confinement_class": enforced, "jti": jti,
+		"inline_policy": req.InlinePolicy != nil,
+	}
+	if req.TaskMode == "exec" {
+		// The run row doesn't store task_mode (request-scoped), so the audit
+		// event is the provenance record that this run ran a plain command.
+		data["task_mode"] = req.TaskMode
+	}
+	if req.Interactive && req.InteractiveStart != "" {
+		// Same reason as task_mode above: interactive_start is request-scoped, so
+		// the audit event is the only record that this sandbox opened straight
+		// into the agent CLI rather than a bare shell.
+		data["interactive_start"] = req.InteractiveStart
+	}
+	if req.Interactive && req.SeedAutoTools {
+		// SeedAutoTools is request-scoped like interactive_start above; only
+		// meaningful alongside a non-empty Task (the boot seed) — recorded
+		// whenever requested regardless, since dispatch's own `interactive &&`
+		// gate is what makes it structurally inert otherwise.
+		data["seed_auto_tools"] = req.SeedAutoTools
+	}
+	if req.ToolApprovals != "" {
+		// Request-scoped like task_mode: this is the only record that an
+		// autonomous run's tool calls were routed to Wardyn approvals instead of
+		// running unsupervised.
+		data["tool_approvals"] = req.ToolApprovals
+	}
+	return data
 }
 
 // grantChecker is the optional grant-gating surface implemented by the embedded

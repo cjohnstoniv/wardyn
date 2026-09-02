@@ -13,11 +13,12 @@
 package api
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -81,14 +82,14 @@ func (s *Server) requireOIDC(w http.ResponseWriter) bool {
 // ─── GET /access ───────────────────────────────────────────────────────────
 
 type accessMappingView struct {
-	ID          string     `json:"id,omitempty"`
-	Value       string     `json:"value"`
-	Role        string     `json:"role"`
-	Source      string     `json:"source"` // "chart" | "console"
-	Shadowed    bool       `json:"shadowed"`
-	ShadowCause string     `json:"shadow_cause"` // "" | "chart" | "operator_allowlist"
-	CreatedAt   *time.Time `json:"created_at,omitempty"`
-	CreatedBy   string     `json:"created_by,omitempty"`
+	ID          string    `json:"id,omitempty"`
+	Value       string    `json:"value"`
+	Role        string    `json:"role"`
+	Source      string    `json:"source"` // "chart" | "console"
+	Shadowed    bool      `json:"shadowed"`
+	ShadowCause string    `json:"shadow_cause"` // "" | "chart" | "operator_allowlist"
+	CreatedAt   time.Time `json:"created_at,omitzero"`
+	CreatedBy   string    `json:"created_by,omitempty"`
 }
 
 type accessPosture struct {
@@ -116,11 +117,12 @@ type accessResponse struct {
 	// is set (oidc.Authenticator.HasEmailDomains) — the EMAIL_KEY badge copy
 	// depends on this, and the response otherwise cannot express it.
 	EmailDomainsConfigured bool `json:"email_domains_configured"`
-	// Issuer is the public OIDC issuer URL; Provider is a human-facing name
-	// derived from it (e.g. "Microsoft Entra ID") so the console's SSO chip
-	// names WHERE sign-in comes from, not just THAT it is SSO. Provider falls
-	// back to the issuer's host when the issuer isn't a recognized provider.
-	Issuer   string        `json:"issuer"`
+	// Provider is a human-facing IdP name derived SERVER-SIDE from the OIDC
+	// issuer URL (e.g. "Microsoft Entra ID") so the console's SSO chip names
+	// WHERE sign-in comes from, not just THAT it is SSO; it falls back to the
+	// issuer's host when the issuer isn't a recognized provider. The raw
+	// issuer URL is deliberately NOT on the wire — the console never rendered
+	// it, and deriving the name here keeps one implementation of that mapping.
 	Provider string        `json:"provider"`
 	Posture  accessPosture `json:"posture"`
 }
@@ -174,9 +176,11 @@ func accessRolePosture(a *oidc.Authenticator) (before, after string, changes boo
 // rules mergeRoleMaps applies at login (chart collision, then the operator
 // allowlist) — mergeRoleMaps itself is unexported, so this replicates its
 // rule ORDER using the two accessors oidc exports for exactly this purpose
-// (ChartRoleMap, IsOperatorEmail). A chart row is never shadowed — the chart
-// always wins a collision, by construction. Sorted by value then source so
-// the response is deterministic across calls with the same underlying state.
+// (ChartRoleMap, IsOperatorEmail), through the one accessCollisionCause the
+// write path refuses on: read and write must never disagree about which
+// source shadows a value. A chart row is never shadowed — the chart always
+// wins a collision, by construction. Sorted by value then source so the
+// response is deterministic across calls with the same underlying state.
 func accessMappingsView(chart map[string]string, rows []types.RoleMapping, a *oidc.Authenticator) []accessMappingView {
 	out := make([]accessMappingView, 0, len(chart)+len(rows))
 	for value, role := range chart {
@@ -185,25 +189,15 @@ func accessMappingsView(chart map[string]string, rows []types.RoleMapping, a *oi
 	for _, m := range rows {
 		mv := accessMappingView{
 			ID: m.ID.String(), Value: m.Value, Role: m.Role, Source: "console",
-			CreatedBy: m.CreatedBy,
+			CreatedBy: m.CreatedBy, CreatedAt: m.CreatedAt,
 		}
-		if !m.CreatedAt.IsZero() {
-			createdAt := m.CreatedAt
-			mv.CreatedAt = &createdAt
-		}
-		switch {
-		case chart[m.Value] != "":
-			mv.Shadowed, mv.ShadowCause = true, "chart"
-		case a.IsOperatorEmail(m.Value):
-			mv.Shadowed, mv.ShadowCause = true, "operator_allowlist"
+		if cause := accessCollisionCause(m.Value, chart, a); cause != "" {
+			mv.Shadowed, mv.ShadowCause = true, cause
 		}
 		out = append(out, mv)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Value != out[j].Value {
-			return out[i].Value < out[j].Value
-		}
-		return out[i].Source < out[j].Source
+	slices.SortFunc(out, func(a, b accessMappingView) int {
+		return cmp.Or(strings.Compare(a.Value, b.Value), strings.Compare(a.Source, b.Source))
 	})
 	return out
 }
@@ -239,7 +233,6 @@ func (s *Server) handleGetAccess(w http.ResponseWriter, r *http.Request) {
 		OperatorEmails:         operatorEmails,
 		AllowEmailMappings:     s.cfg.AllowEmailMappings,
 		EmailDomainsConfigured: s.cfg.OIDC.HasEmailDomains(),
-		Issuer:                 s.cfg.OIDC.Issuer(),
 		Provider:               ssoProviderName(s.cfg.OIDC.Issuer()),
 		Posture: accessPosture{
 			// MapEmpty (A-5) is the REAL merged-map emptiness (chart + rows,
@@ -281,22 +274,10 @@ func (s *Server) accessUnmatchedOutcome(rows []oidc.RoleMapping) string {
 
 // ─── shared: canonicalization, candidate-map construction, guards ─────────
 
-// isASCII reports whether s contains no byte above ASCII — the same
-// byte-level test internal/auth/oidc's asciiOnly applies (a multi-byte UTF-8
-// rune's bytes are all >= 0x80, so this agrees with a rune-level check).
-func isASCII(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] > 0x7f {
-			return false
-		}
-	}
-	return true
-}
-
 // canonicalRoleMapValue trims+lowers value and validates it against EXACTLY
 // the contract mergeRoleMaps enforces on a console row (RoleMapping's own doc
 // comment): non-empty, ASCII (matching is ASCII-only — a non-ASCII value can
-// never match a claim, see oidc's asciiOnly), and free of control characters
+// never match a claim, see oidc.ASCIIOnly), and free of control characters
 // (the same hygiene validateCapabilityGrant applies to its own Value field —
 // an empty/control-char value stored raw would be either a dead key or,
 // worse for whitespace, one that matches ANY empty/whitespace claim).
@@ -308,7 +289,7 @@ func canonicalRoleMapValue(value string) (string, error) {
 	if len(v) > maxCapabilityGrantFieldLen || !controlCharFree(v) {
 		return "", fmt.Errorf("value: invalid")
 	}
-	if !isASCII(v) {
+	if !oidc.ASCIIOnly(v) {
 		return "", fmt.Errorf("value: must be ASCII — matching is ASCII-only, a non-ASCII value can never match a claim")
 	}
 	return v, nil
@@ -618,17 +599,11 @@ type accessPreviewRequest struct {
 	UseSession bool     `json:"use_session,omitempty"`
 }
 
-type accessPreviewMatch struct {
-	Value  string `json:"value"`
-	Role   string `json:"role"`
-	Source string `json:"source"`
-}
-
 type accessPreviewResponse struct {
-	Role    string               `json:"role"`
-	OK      bool                 `json:"ok"`
-	Matched []accessPreviewMatch `json:"matched"`
-	Error   string               `json:"error,omitempty"`
+	Role    string       `json:"role"`
+	OK      bool         `json:"ok"`
+	Matched []oidc.Match `json:"matched"`
+	Error   string       `json:"error,omitempty"`
 }
 
 // handlePreviewRole runs the SAME derivation a real login would (PreviewRole,
@@ -657,12 +632,14 @@ func (s *Server) handlePreviewRole(w http.ResponseWriter, r *http.Request) {
 
 	role, matched, ok, err := s.cfg.OIDC.PreviewRole(r.Context(), roles, groups, email)
 	if err != nil {
-		writeJSON(w, http.StatusOK, accessPreviewResponse{Matched: []accessPreviewMatch{}, Error: "role_check_unavailable"})
+		writeJSON(w, http.StatusOK, accessPreviewResponse{Matched: []oidc.Match{}, Error: "role_check_unavailable"})
 		return
 	}
-	out := make([]accessPreviewMatch, len(matched))
-	for i, m := range matched {
-		out[i] = accessPreviewMatch{Value: m.Value, Role: m.Role, Source: string(m.Source)}
+	// A nil slice marshals to JSON null, but the field is typed
+	// AccessPreviewMatch[] on the wire and the console reads its .length — so
+	// a no-match preview must still send [], never null.
+	if matched == nil {
+		matched = []oidc.Match{}
 	}
-	writeJSON(w, http.StatusOK, accessPreviewResponse{Role: role, OK: ok, Matched: out})
+	writeJSON(w, http.StatusOK, accessPreviewResponse{Role: role, OK: ok, Matched: matched})
 }

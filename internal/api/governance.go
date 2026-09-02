@@ -407,11 +407,11 @@ type governancePreviewRequest struct {
 // absent key already decodes as "no profile" in the TS mirror, while "" would
 // be a value the console then has to special-case.
 //
-// ProfileID is a string rather than uuid.UUID because uuid.UUID is an ARRAY
-// type and `omitempty` never elides one — the nil uuid would ship as
-// "00000000-…" on exactly the answer that has no profile.
+// ProfileID uses `omitzero`, not `omitempty`: uuid.UUID is an ARRAY type, and
+// omitempty never elides one — the nil uuid would ship as "00000000-…" on
+// exactly the answer that has no profile.
 type governancePreviewResponse struct {
-	ProfileID   string                      `json:"profile_id,omitempty"`
+	ProfileID   uuid.UUID                   `json:"profile_id,omitzero"`
 	ProfileName string                      `json:"profile_name,omitempty"`
 	MatchedTier types.CapabilitySubjectType `json:"matched_tier,omitempty"`
 }
@@ -463,7 +463,7 @@ func (s *Server) handlePreviewGovernanceProfile(w http.ResponseWriter, r *http.R
 		return
 	}
 	writeJSON(w, http.StatusOK, governancePreviewResponse{
-		ProfileID: p.ID.String(), ProfileName: p.Name, MatchedTier: tier,
+		ProfileID: p.ID, ProfileName: p.Name, MatchedTier: tier,
 	})
 }
 

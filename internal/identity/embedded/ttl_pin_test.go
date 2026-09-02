@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/identity/identitytest"
 )
 
 // TestRenewU070_TokenTTLStaysShortAndExpiredIsRefused pins the invariant the
@@ -34,7 +36,7 @@ func TestRenewU070_TokenTTLStaysShortAndExpiredIsRefused(t *testing.T) {
 
 	ctx := context.Background()
 	base := time.Now()
-	p, err := New(nil, "wardyn.local", NewMemRevocationStore(), &recordingRecorder{})
+	p, err := New(nil, "wardyn.local", identitytest.NewMemRevocationStore(), &recordingRecorder{})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

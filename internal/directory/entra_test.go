@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -100,7 +101,6 @@ func (f *fakeGraph) dir(t *testing.T) *entraDirectory {
 		TenantID:     "tenant-guid",
 		ClientID:     "client-guid",
 		ClientSecret: "s3cret",
-		HTTPClient:   f.srv.Client(),
 	}, f.srv.URL+"/token", f.srv.URL+"/v1.0")
 	if err != nil {
 		t.Fatalf("newEntra: %v", err)
@@ -234,6 +234,32 @@ func TestEntryMappingClaimValueIsTheContract(t *testing.T) {
 	}
 }
 
+// TestSingleKindSearchReTrimsToTheCap pins the defensive re-trim on the
+// SINGLE-kind paths. $top is a request to the upstream, not a guarantee from
+// it (see MaxResults) — this fake ignores $top entirely and hands back
+// everything it has, which is exactly the case the cap exists for. The
+// any-mode global cap below is a different path (searchAny); without this,
+// the three single-kind returns had no test at all.
+func TestSingleKindSearchReTrimsToTheCap(t *testing.T) {
+	f := newFakeGraph(t)
+	for i := range MaxResults + 5 {
+		f.users = append(f.users, graphUser{DisplayName: fmt.Sprintf("wardyn user %d", i), Mail: fmt.Sprintf("u%d@corp.com", i)})
+	}
+	d := f.dir(t)
+
+	got, err := d.Search(context.Background(), "wardyn", KindUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != MaxResults {
+		t.Fatalf("len = %d, want %d — the connector must re-trim what the upstream over-returns", len(got), MaxResults)
+	}
+	// $top was still asked for, even though the upstream ignored it.
+	if rec := f.lastUsers.Load(); rec == nil || rec.query.Get("$top") != strconv.Itoa(MaxResults) {
+		t.Errorf("$top was not requested as %d", MaxResults)
+	}
+}
+
 // --- any-mode: fixed order approle -> group -> user, ONE global cap of 20.
 
 func TestAnyModeFixedOrderAndGlobalCap(t *testing.T) {
@@ -318,7 +344,7 @@ func TestTokenFailureIsAProviderError(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":"invalid_client"}`))
 	}))
 	t.Cleanup(srv.Close)
-	dd, err := newEntra(EntraConfig{TenantID: "t", ClientID: "c", ClientSecret: "s", HTTPClient: srv.Client()}, srv.URL, f.srv.URL+"/v1.0")
+	dd, err := newEntra(EntraConfig{TenantID: "t", ClientID: "c", ClientSecret: "s"}, srv.URL, f.srv.URL+"/v1.0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,22 +453,24 @@ func TestCacheDoesNotCacheFailures(t *testing.T) {
 	}
 }
 
-func TestCacheEvictsLeastRecentlyUsed(t *testing.T) {
+// The cache's contract is the BOUND, not the eviction order: a keystroke-per-
+// request surface must never grow without limit. Which key survives a flush is
+// deliberately unspecified (every entry expires within cacheTTL anyway).
+func TestCacheNeverExceedsItsBound(t *testing.T) {
 	c := newTTLCache(2, cacheTTL)
-	c.put("a", []Entry{{ClaimValue: "a"}})
-	c.put("b", []Entry{{ClaimValue: "b"}})
-	if _, ok := c.get("a"); !ok { // "a" becomes most-recently-used
-		t.Fatal("a evicted early")
+	for _, k := range []string{"a", "b", "c", "d", "e"} {
+		c.put(k, []Entry{{ClaimValue: k}})
+		if len(c.m) > 2 {
+			t.Fatalf("after put(%q) the cache holds %d entries, want at most 2", k, len(c.m))
+		}
 	}
-	c.put("c", []Entry{{ClaimValue: "c"}})
-	if _, ok := c.get("b"); ok {
-		t.Error("b survived; the least-recently-used entry should have been evicted")
+	if _, ok := c.get("e"); !ok {
+		t.Error("the most recent put must be served from the cache")
 	}
-	if _, ok := c.get("a"); !ok {
-		t.Error("a was evicted despite being recently used")
-	}
-	if c.ll.Len() != 2 || len(c.m) != 2 {
-		t.Errorf("cache size = list %d / map %d, want 2 (list and map must stay in step)", c.ll.Len(), len(c.m))
+	// Re-putting a live key updates in place; it never trips the bound.
+	c.put("e", []Entry{{ClaimValue: "e2"}})
+	if got, _ := c.get("e"); len(got) != 1 || got[0].ClaimValue != "e2" {
+		t.Errorf("re-put e = %+v, want the fresh value", got)
 	}
 }
 

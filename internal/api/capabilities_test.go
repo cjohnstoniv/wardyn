@@ -19,11 +19,14 @@ import (
 
 // ─── the store double ─────────────────────────────────────────────────────────
 
-// noGovernanceStore is store.Store with the two governance-resolver reads
-// answered as "this deployment has no assignments": no profile matches, no
-// group-tier row exists. Embed it INSTEAD OF store.Store in any double whose
-// test path resolves a ceiling (effectiveCeiling now runs on every member
-// create, on GET /policies/default, and on the member secret listing).
+// noGovernanceStore is store.Store with the two governance-resolver reads AND
+// the two user-drive-resolver reads answered as "this deployment has adopted
+// neither": no profile matches, no group-tier assignment, no drive is allocated
+// and no group-tier grant exists. Embed it INSTEAD OF store.Store in any double
+// whose test path resolves a ceiling (effectiveCeiling now runs on every member
+// create, on GET /policies/default, and on the member secret listing) or a
+// drive (resolveUserDrive runs on GET /me and on any create-run request
+// carrying the drive flag).
 //
 // It has to embed store.Store rather than sit beside it: two embeds at the same
 // depth would both offer ResolveGovernanceProfile, the selector would be
@@ -40,6 +43,13 @@ func (noGovernanceStore) ResolveGovernanceProfile(context.Context, []string, []s
 }
 
 func (noGovernanceStore) HasGroupTierAssignments(context.Context) (bool, error) { return false, nil }
+
+func (noGovernanceStore) ResolveUserDrive(context.Context, []string, []string) (
+	*types.UserDrive, *types.UserDriveGrant, types.CapabilitySubjectType, error) {
+	return nil, nil, "", store.ErrNotFound
+}
+
+func (noGovernanceStore) HasGroupTierDriveGrants(context.Context) (bool, error) { return false, nil }
 
 // capStore holds grants and enforcement in memory. Its ListCapabilityGrantsFor
 // MIRRORS the SQL predicate (store_capabilities.go / its pg test) rather than
@@ -71,6 +81,35 @@ type capStore struct {
 	govHasGroupTier bool
 	// govErr fails BOTH governance reads, for the never-fail-open arm.
 	govErr error
+
+	// The user-drive resolver's reads, the same four-field shape the governance
+	// ones above take and for the same reason: the store's own ORDER BY has its
+	// own pg test, and what an api-side test needs to drive is the ANSWER. The
+	// ZERO VALUE is a deployment that has allocated no drives — ErrNotFound, no
+	// group-tier rows — so every pre-existing test keeps meaning what it meant.
+	drive             *types.UserDrive
+	driveGrant        *types.UserDriveGrant
+	driveTier         types.CapabilitySubjectType
+	driveHasGroupTier bool
+	driveErr          error
+}
+
+func (s *capStore) ResolveUserDrive(context.Context, []string, []string) (
+	*types.UserDrive, *types.UserDriveGrant, types.CapabilitySubjectType, error) {
+	if s.driveErr != nil {
+		return nil, nil, "", s.driveErr
+	}
+	if s.drive == nil {
+		return nil, nil, "", store.ErrNotFound
+	}
+	return s.drive, s.driveGrant, s.driveTier, nil
+}
+
+func (s *capStore) HasGroupTierDriveGrants(context.Context) (bool, error) {
+	if s.driveErr != nil {
+		return false, s.driveErr
+	}
+	return s.driveHasGroupTier, nil
 }
 
 func (s *capStore) ResolveGovernanceProfile(_ context.Context, _, _ []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {

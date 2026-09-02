@@ -85,6 +85,15 @@ type SandboxSpec struct {
 	// EXACTLY what it does today: the member gate is purely additive and can
 	// never narrow an operator mount. See member_mount.go for the threat model.
 	MemberMountRoots []string
+	// Drive is the acting principal's USER DRIVE (migration 0054), already
+	// resolved, folded and narrowed by the control plane — nil for every run
+	// that did not ask for one. It is NOT a Mount: it never rides
+	// RunPolicySpec.WorkspaceMounts, the composer clamp never sees it, and the
+	// request that produced it carried a flag rather than a path (the operator-
+	// controlled-only mounts guardrail). Drivers mount ObjectName at Target
+	// (DriveTarget) with the given mode; the Docker driver still converts it to
+	// a Mount internally so the deny matrix runs on the host path.
+	Drive *types.DriveMount
 	// Interactive marks a run that comes up idle for `wardyn attach` (no task is
 	// exec'd). Drivers use it to prepare the workspace on the idle main process —
 	// e.g. clone the repo into ~/work — so the attach shell isn't empty. A non-
