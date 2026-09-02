@@ -17,6 +17,8 @@ import (
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/identity/identitytest"
+
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -78,18 +80,18 @@ func TestNew(t *testing.T) {
 		}
 	})
 	t.Run("nil recorder rejected", func(t *testing.T) {
-		if _, err := New(nil, "", NewMemRevocationStore(), nil); err == nil {
+		if _, err := New(nil, "", identitytest.NewMemRevocationStore(), nil); err == nil {
 			t.Fatal("expected error for nil recorder")
 		}
 	})
 	t.Run("non-P256 key rejected", func(t *testing.T) {
 		k, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-		if _, err := New(k, "", NewMemRevocationStore(), rec); err == nil {
+		if _, err := New(k, "", identitytest.NewMemRevocationStore(), rec); err == nil {
 			t.Fatal("expected error for non-P256 key")
 		}
 	})
 	t.Run("defaults trust domain", func(t *testing.T) {
-		p := newProvider(t, NewMemRevocationStore(), rec)
+		p := newProvider(t, identitytest.NewMemRevocationStore(), rec)
 		if p.trustDomain.String() != DefaultTrustDomain {
 			t.Fatalf("trust domain = %q, want %q", p.trustDomain.String(), DefaultTrustDomain)
 		}
@@ -101,7 +103,7 @@ func TestNew(t *testing.T) {
 
 func TestMintVerifyRoundtrip(t *testing.T) {
 	rec := &recordingRecorder{}
-	store := NewMemRevocationStore()
+	store := identitytest.NewMemRevocationStore()
 	p := newProvider(t, store, rec)
 	ctx := context.Background()
 
@@ -158,7 +160,7 @@ func TestMintVerifyRoundtrip(t *testing.T) {
 }
 
 func TestSponsorDefaultsToSub(t *testing.T) {
-	p := newProvider(t, NewMemRevocationStore(), &recordingRecorder{})
+	p := newProvider(t, identitytest.NewMemRevocationStore(), &recordingRecorder{})
 	ctx := context.Background()
 	id, err := p.MintRunIdentity(ctx, uuid.New(), "alice@example.com", "", testAudience)
 	if err != nil {
@@ -174,7 +176,7 @@ func TestSponsorDefaultsToSub(t *testing.T) {
 }
 
 func TestMintInputValidation(t *testing.T) {
-	p := newProvider(t, NewMemRevocationStore(), &recordingRecorder{})
+	p := newProvider(t, identitytest.NewMemRevocationStore(), &recordingRecorder{})
 	ctx := context.Background()
 	if _, err := p.MintRunIdentity(ctx, uuid.New(), "", "", testAudience); err == nil {
 		t.Fatal("expected error for empty humanSub")
@@ -188,7 +190,7 @@ func TestVerifyFailures(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("expired token", func(t *testing.T) {
-		p := newProvider(t, NewMemRevocationStore(), &recordingRecorder{})
+		p := newProvider(t, identitytest.NewMemRevocationStore(), &recordingRecorder{})
 		// Mint as if it were 2h ago so exp is in the past (beyond leeway).
 		p.now = func() time.Time { return time.Now().Add(-2 * time.Hour) }
 		id, err := p.MintRunIdentity(ctx, uuid.New(), "alice", "", testAudience)
@@ -202,7 +204,7 @@ func TestVerifyFailures(t *testing.T) {
 	})
 
 	t.Run("wrong audience", func(t *testing.T) {
-		p := newProvider(t, NewMemRevocationStore(), &recordingRecorder{})
+		p := newProvider(t, identitytest.NewMemRevocationStore(), &recordingRecorder{})
 		id, err := p.MintRunIdentity(ctx, uuid.New(), "alice", "", testAudience)
 		if err != nil {
 			t.Fatalf("mint: %v", err)
@@ -213,7 +215,7 @@ func TestVerifyFailures(t *testing.T) {
 	})
 
 	t.Run("empty expected audience rejected", func(t *testing.T) {
-		p := newProvider(t, NewMemRevocationStore(), &recordingRecorder{})
+		p := newProvider(t, identitytest.NewMemRevocationStore(), &recordingRecorder{})
 		id, _ := p.MintRunIdentity(ctx, uuid.New(), "alice", "", testAudience)
 		if _, err := p.Verify(ctx, id.Token, ""); err == nil {
 			t.Fatal("expected error for empty expected audience")
@@ -221,7 +223,7 @@ func TestVerifyFailures(t *testing.T) {
 	})
 
 	t.Run("wrong signing key", func(t *testing.T) {
-		store := NewMemRevocationStore()
+		store := identitytest.NewMemRevocationStore()
 		p1 := newProvider(t, store, &recordingRecorder{})
 		p2 := newProvider(t, store, &recordingRecorder{}) // different key
 		id, err := p1.MintRunIdentity(ctx, uuid.New(), "alice", "", testAudience)
@@ -234,7 +236,7 @@ func TestVerifyFailures(t *testing.T) {
 	})
 
 	t.Run("garbage token", func(t *testing.T) {
-		p := newProvider(t, NewMemRevocationStore(), &recordingRecorder{})
+		p := newProvider(t, identitytest.NewMemRevocationStore(), &recordingRecorder{})
 		if _, err := p.Verify(ctx, "not-a-jwt", testAudience); err == nil {
 			t.Fatal("expected parse failure")
 		}
@@ -243,7 +245,7 @@ func TestVerifyFailures(t *testing.T) {
 
 func TestVerifyRevokedJTI(t *testing.T) {
 	ctx := context.Background()
-	store := NewMemRevocationStore()
+	store := identitytest.NewMemRevocationStore()
 	p := newProvider(t, store, &recordingRecorder{})
 
 	runID := uuid.New()
@@ -265,7 +267,7 @@ func TestVerifyRevokedJTI(t *testing.T) {
 
 func TestRevokeRunCascade(t *testing.T) {
 	ctx := context.Background()
-	store := NewMemRevocationStore()
+	store := identitytest.NewMemRevocationStore()
 	rec := &recordingRecorder{}
 	p := newProvider(t, store, rec)
 
@@ -297,7 +299,7 @@ func TestRevokeRunCascade(t *testing.T) {
 func TestVerifyFailsClosedOnStoreError(t *testing.T) {
 	ctx := context.Background()
 	// Mint with a good store, verify with an erroring store: must fail closed.
-	good := NewMemRevocationStore()
+	good := identitytest.NewMemRevocationStore()
 	p := newProvider(t, good, &recordingRecorder{})
 	id, err := p.MintRunIdentity(ctx, uuid.New(), "alice", "", testAudience)
 	if err != nil {
@@ -312,7 +314,7 @@ func TestVerifyFailsClosedOnStoreError(t *testing.T) {
 }
 
 func TestCheckGrantsCloudSTSRefusal(t *testing.T) {
-	p := newProvider(t, NewMemRevocationStore(), &recordingRecorder{})
+	p := newProvider(t, identitytest.NewMemRevocationStore(), &recordingRecorder{})
 
 	cases := []struct {
 		name    string
@@ -341,7 +343,7 @@ func TestCheckGrantsCloudSTSRefusal(t *testing.T) {
 
 func TestVerifyRejectsForeignTrustDomain(t *testing.T) {
 	ctx := context.Background()
-	store := NewMemRevocationStore()
+	store := identitytest.NewMemRevocationStore()
 	rec := &recordingRecorder{}
 	// Provider A (wardyn.local) mints; provider B (other.example) shares the
 	// signing key but a different trust domain — the act SPIFFE ID must be
@@ -364,7 +366,7 @@ func TestVerifyRejectsForeignTrustDomain(t *testing.T) {
 // is observability-only: a failing recorder logs loudly but must NOT fail the op.
 func TestAuditWriteFailureIsBestEffort(t *testing.T) {
 	ctx := context.Background()
-	p, err := New(nil, "", NewMemRevocationStore(), erroringRecorder{})
+	p, err := New(nil, "", identitytest.NewMemRevocationStore(), erroringRecorder{})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

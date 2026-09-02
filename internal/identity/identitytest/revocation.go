@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package embedded
+package identitytest
 
 import (
 	"context"
@@ -10,7 +10,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// MemRevocationStore is an in-memory identity.RevocationStore for tests.
+// MemRevocationStore is an in-memory identity.RevocationStore for tests. It
+// lives here, beside the conformance suite, rather than in the embedded
+// provider: every caller is a _test.go, so keeping it in a production package
+// compiled a test double into wardynd.
 type MemRevocationStore struct {
 	mu         sync.RWMutex
 	revokedJTI map[string]struct{}
