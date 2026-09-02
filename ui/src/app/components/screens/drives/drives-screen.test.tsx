@@ -22,8 +22,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { expectNoOwnCopy } from "../../../lib/test-fixtures";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
@@ -780,34 +779,12 @@ describe("DrivesScreen — the write gate", () => {
 // modules §7.1 defers to — so a quoted or bare prose string in this source is a
 // canon break, not a style question.
 describe("Drives components render no copy of their own", () => {
-  const FILES = ["drives-screen.tsx", "drive-editor.tsx", "allocations.tsx", "display.tsx"];
-  const DIR = "src/app/components/screens/drives";
-  const source = (f: string) => readFileSync(join(process.cwd(), DIR, f), "utf8");
-
-  const strip = (src: string) =>
-    src
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "")
-      .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
-      .replace(/className=(\{[^{}]*\}|"[^"]*")/g, "")
-      .replace(/\bcn\([^()]*\)/g, "")
-      .replace(/data-testid="[^"]*"/g, "");
-
-  const PROSE = /[A-Za-z]{2,}\s+[A-Za-z]{2,}/;
-
-  it.each(FILES)("%s holds no quoted product prose", (f) => {
-    const quoted = [...strip(source(f)).matchAll(/"([^"\n]*)"|'([^'\n]*)'/g)]
-      .map((m) => m[1] ?? m[2])
-      .filter((s) => PROSE.test(s));
-    expect(quoted).toEqual([]);
-  });
-
-  it.each(FILES)("%s holds no bare JSX text node either", (f) => {
-    const bare = [...strip(source(f)).matchAll(/>([^<>{}\n]{4,})</g)]
-      .map((m) => m[1].trim())
-      .filter((s) => PROSE.test(s));
-    expect(bare).toEqual([]);
-  });
+  expectNoOwnCopy("src/app/components/screens/drives", [
+    "drives-screen.tsx",
+    "drive-editor.tsx",
+    "allocations.tsx",
+    "display.tsx",
+  ]);
 });
 
 // SIZE_MIB / SIZE_GIB / SIZE_NONE through the ONE helper (§5 #10) — never
