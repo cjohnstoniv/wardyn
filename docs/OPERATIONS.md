@@ -2627,7 +2627,7 @@ aggressively, and a file another writer changes is not seen. A managed
 sentence: *"Wardyn never enforces a drive's size itself. On Kubernetes the size
 is the volume request and the storage class decides whether it binds — block
 disks do, network-share provisioners do not. On Docker a managed drive has no
-byte cap, the same gap `disk_mib` has. A share is bounded by its own quota. The
+byte cap, the same gap disk_mib has. A share is bounded by its own quota. The
 size you see is the allocation, not a guarantee."* That is the `enforcement`
 vocabulary this feature introduces (`filesystem` / `request` / `external` /
 `none`): a managed claim is `request`, a share is `external`. It is the same
