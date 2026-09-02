@@ -181,13 +181,10 @@ func buildRunnerFromFlags(f *bootFlags, refs orchestrator.RefStore, driveHostRoo
 	}
 	if sel := *f.runnerSel; sel == "none" || sel == "" {
 		slog.Info("wardynd: no runner selected; runs stay PENDING (headless API-only)")
-		// WARDYN_RUNNER_TARGET, honoured ONLY here — a configured runner's own
-		// substrate name is the only truthful target, so the override is never
-		// consulted below. Without it a runner-less daemon resolves "none",
-		// which no drive backend can name, and types.ValidateUserDrive refuses
-		// every backend with a 400: the Playwright backend could not register a
-		// drive by any route. Fail closed on an unknown value rather than
-		// advertising a target no stored object could ever match.
+		// WARDYN_RUNNER_TARGET, honoured ONLY here (bootFlags.runnerTargetOverride
+		// says why it exists and why a configured runner ignores it), and failing
+		// boot closed on an unknown value rather than advertising a target no
+		// stored object could ever match.
 		if t := strings.TrimSpace(*f.runnerTargetOverride); t != "" {
 			if !slices.Contains(knownRunnerTargets(), t) {
 				return nil, "", fmt.Errorf("unknown -runner-target %q (want one of %s): it names the substrate STORED objects validate against while -runner is \"none\", and is for test harnesses only",
