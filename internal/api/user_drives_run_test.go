@@ -154,24 +154,38 @@ func TestSeedRequestDriveOperatorSkipsTheDoor(t *testing.T) {
 // authorization event. Each one must answer 422 and write NO audit row: the
 // caller is authorized and simply has nothing to mount, and filling the denial
 // stream with those rows is how a real denial stops standing out.
+//
+// It is ALSO where the frozen member copy is pinned. A row carrying `want` is
+// compared for EQUALITY, not containment: the console never rewords a server
+// refusal, so these strings are where the mock round's frozen table actually
+// ships, and a substring assertion would pass on a body that had grown an
+// internal prefix in front of the sentence — exactly the drift a member reads
+// as gibberish. A row carrying `msg` instead composes its tail at runtime (the
+// backend/runner mismatch names both), so containment is all there is to assert.
 func TestSeedRequestDrive422Matrix(t *testing.T) {
-	writableDrive := func() *types.UserDrive {
-		return driveFixture(func(d *types.UserDrive) { d.Writable = true })
-	}
+	// A caller with a sub and NO email claim, so email_local has nothing to
+	// truncate. Only the home-derivation row needs it.
+	noEmailCtx := withOIDCGroups(operatorCtx("sub-drive-bob", "", oidc.RoleMember), nil)
 	for _, tc := range []struct {
 		name         string
 		store        *driveStore
 		runnerTarget string
 		req          createRunRequest
-		msg          string
+		// msg is the refusal's opening; want is the whole frozen sentence,
+		// byte-for-byte. Exactly one of the two per row.
+		msg  string
+		want string
+		// ctx overrides the ordinary member caller for the rows that need a
+		// particular claim set.
+		ctx context.Context
 	}{
 		{
 			// Asking for storage and silently not getting it is how work is
 			// lost, so an absent allocation refuses the run rather than
 			// launching it driveless.
 			name: "no grant resolves", store: &driveStore{}, runnerTarget: "docker",
-			req: driveRunRequest(true, nil),
-			msg: "drive: no user drive is allocated to you",
+			req:  driveRunRequest(true, nil),
+			want: "drive: no user drive is allocated to you — ask an admin for an allocation",
 		},
 		{
 			// A row that was valid when written and is not now: the deployment
@@ -194,7 +208,7 @@ func TestSeedRequestDrive422Matrix(t *testing.T) {
 			// for the thing that admin had just turned off.
 			name: "the allocation is paused", store: pausedDriveStore(nil),
 			runnerTarget: "docker", req: driveRunRequest(true, nil),
-			msg: "drive: your allocation is paused by an admin",
+			want: "drive: your allocation is paused by an admin",
 		},
 		{
 			// WIDENING. Honouring the allocation silently would launch a run the
@@ -205,23 +219,54 @@ func TestSeedRequestDrive422Matrix(t *testing.T) {
 				drive: driveFixture(nil), tier: types.CapabilitySubjectUser,
 			},
 			runnerTarget: "docker", req: driveRunRequest(true, boolPtr(false)),
-			msg: "drive: your allocation is read-only",
+			want: "drive: your allocation is read-only; `read_only:false` cannot widen it",
+		},
+		{
+			// The HOME DERIVATION cannot answer: email_local with no email
+			// claim. Byte-exact like the rest — this refusal used to carry the
+			// derivation's own error in trailing brackets, which made it the one
+			// whose shipped bytes were not the frozen sentence; the cause now
+			// goes to the log, where the operator who has to act on it looks.
+			name: "the home name cannot be derived",
+			store: &driveStore{
+				drive: driveFixture(func(d *types.UserDrive) {
+					d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateEmailLocal, "/srv/homes"
+				}),
+				tier: types.CapabilitySubjectUser,
+			},
+			runnerTarget: "docker", req: driveRunRequest(true, nil), ctx: noEmailCtx,
+			want: "drive: your email_local cannot name a directory " +
+				"(lowercase letters and digits, then `. _ -`, up to 63 characters) — ask an admin to set your directory name",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.store.drive != nil && tc.store.grant == nil {
 				tc.store.grant = grantFixture(tc.store.drive.ID, nil)
 			}
+			ctx := tc.ctx
+			if ctx == nil {
+				ctx = driveMemberCtx([]string{"eng"}, false)
+			}
 			srv, rec := driveRunServer(tc.store, tc.runnerTarget)
-			mount, ok, w := driveSeed(t, srv, tc.req, governanceCeiling{}, driveMemberCtx([]string{"eng"}, false))
+			mount, ok, w := driveSeed(t, srv, tc.req, governanceCeiling{}, ctx)
 			if ok || mount != nil {
 				t.Fatalf("mount = %+v, ok = %v; want a refusal", mount, ok)
 			}
 			if w.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("code = %d, want 422: %s", w.Code, w.Body.String())
 			}
-			if got := refusalBody(t, w); !strings.HasPrefix(got, tc.msg) {
+			got := refusalBody(t, w)
+			if tc.want != "" {
+				if got != tc.want {
+					t.Errorf("body  = %q\nwant BYTE-EXACT: %q", got, tc.want)
+				}
+			} else if !strings.HasPrefix(got, tc.msg) {
 				t.Errorf("body = %q, want it to open %q", got, tc.msg)
+			}
+			// The sentinel's own name must never reach the member:
+			// errDriveUnmountable exists for errors.Is, not for reading.
+			if strings.Contains(w.Body.String(), "drive_unmountable") {
+				t.Errorf("body = %q leaks the sentinel's name to the member", w.Body.String())
 			}
 			if len(rec.events) != 0 {
 				t.Errorf("audit = %v, want NO audit — the caller is authorized and simply has nothing to mount", driveAuditActions(rec))
@@ -233,7 +278,7 @@ func TestSeedRequestDrive422Matrix(t *testing.T) {
 	// allocation is the positive control that proves the refusal above is about
 	// widening rather than about writable drives being broken.
 	t.Run("read_only:true NARROWS a writable allocation", func(t *testing.T) {
-		d := writableDrive()
+		d := driveFixture(func(d *types.UserDrive) { d.Writable = true })
 		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
 		srv, _ := driveRunServer(st, "docker")
 		mount, ok, w := driveSeed(t, srv, driveRunRequest(true, boolPtr(true)), governanceCeiling{}, driveMemberCtx(nil, false))
@@ -742,80 +787,4 @@ func TestPreflightAnswersTheSameDriveRefusalAsCreate(t *testing.T) {
 			t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
 		}
 	})
-}
-
-// ─── the frozen refusal copy ──────────────────────────────────────────────────
-
-// TestDriveRefusalsAreTheFrozenMemberCopy compares every member-facing refusal
-// this seam can raise against the mock round's frozen table for EQUALITY, not
-// containment. The console never rewords a server refusal, so these strings are
-// where that copy actually ships — a substring assertion would pass on a body
-// that had grown an internal prefix in front of the sentence, which is exactly
-// the drift a member reads as gibberish.
-func TestDriveRefusalsAreTheFrozenMemberCopy(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		store *driveStore
-		req   createRunRequest
-		want  string
-	}{
-		{
-			name: "REFUSED_NO_GRANT", store: &driveStore{}, req: driveRunRequest(true, nil),
-			want: "drive: no user drive is allocated to you — ask an admin for an allocation",
-		},
-		{
-			name: "REFUSED_PAUSED", store: pausedDriveStore(nil), req: driveRunRequest(true, nil),
-			want: "drive: your allocation is paused by an admin",
-		},
-		{
-			name: "REFUSED_WRITABLE",
-			store: &driveStore{
-				drive: driveFixture(nil), tier: types.CapabilitySubjectUser,
-			},
-			req:  driveRunRequest(true, boolPtr(false)),
-			want: "drive: your allocation is read-only; `read_only:false` cannot widen it",
-		},
-		{
-			// REFUSED_HOME_INVALID. The sentinel's own name must not reach the
-			// member: errDriveUnmountable exists for errors.Is, not for reading.
-			name: "REFUSED_HOME_INVALID",
-			store: &driveStore{
-				drive: driveFixture(func(d *types.UserDrive) {
-					d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateEmailLocal, "/srv/homes"
-				}),
-				tier: types.CapabilitySubjectUser,
-			},
-			req: driveRunRequest(true, nil),
-			want: "drive: your email_local cannot name a directory " +
-				"(lowercase letters and digits, then `. _ -`, up to 63 characters) — ask an admin to set your directory name",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if tc.store.drive != nil && tc.store.grant == nil {
-				tc.store.grant = grantFixture(tc.store.drive.ID, nil)
-			}
-			srv, _ := driveRunServer(tc.store, "docker")
-			// A caller with a sub and NO email claim, so email_local has nothing
-			// to truncate; harmless for the other two cases.
-			ctx := withOIDCGroups(operatorCtx("sub-drive-bob", "", oidc.RoleMember), nil)
-			_, ok, w := driveSeed(t, srv, tc.req, governanceCeiling{}, ctx)
-			if ok {
-				t.Fatalf("expected a refusal, got a mount")
-			}
-			if w.Code != http.StatusUnprocessableEntity {
-				t.Fatalf("code = %d, want 422: %s", w.Code, w.Body.String())
-			}
-			// EVERY arm is byte-exact, REFUSED_HOME_INVALID included. It used
-			// to carry the derivation's own error in trailing brackets, which
-			// made this one refusal the only one whose shipped bytes were not
-			// the frozen sentence — the cause now goes to the log, where the
-			// operator who has to act on it looks.
-			if got := refusalBody(t, w); got != tc.want {
-				t.Errorf("body  = %q\nwant BYTE-EXACT: %q", got, tc.want)
-			}
-			if strings.Contains(w.Body.String(), "drive_unmountable") {
-				t.Errorf("body = %q leaks the sentinel's name to the member", w.Body.String())
-			}
-		})
-	}
 }
