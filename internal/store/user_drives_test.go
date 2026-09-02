@@ -65,6 +65,22 @@ func seedUserDriveGrant(t *testing.T, st store.PG, g types.UserDriveGrant) types
 	return saved
 }
 
+// seedDisabledUserDriveGrant persists a PAUSED grant — the one shape
+// seedUserDriveGrant deliberately cannot write, because it forces Enabled on so
+// that no precedence case is ever decided by a zero value. Cleanup is
+// registered the same way.
+func seedDisabledUserDriveGrant(t *testing.T, st store.PG, g types.UserDriveGrant) types.UserDriveGrant {
+	t.Helper()
+	ctx := context.Background()
+	g.Enabled = false
+	saved, err := st.UpsertUserDriveGrant(ctx, g)
+	if err != nil {
+		t.Fatalf("seed disabled grant %+v: %v", g, err)
+	}
+	t.Cleanup(func() { _ = st.DeleteUserDriveGrant(ctx, saved.ID) })
+	return saved
+}
+
 // TestPG_UserDrive_UpsertRoundTrip pins the id-keyed upsert contract: a fresh id
 // INSERTs, the same id UPDATEs in place (rename included, which has to work
 // because ON DELETE RESTRICT makes delete-and-recreate impossible for an
@@ -414,22 +430,67 @@ func TestPG_ResolveUserDrive(t *testing.T) {
 		}
 	})
 
-	t.Run("a disabled grant is excluded, not merely skipped", func(t *testing.T) {
-		// THE arm that has to be in the WHERE. A disabled row that could still
-		// WIN would shadow the lower-tier grant that should apply, so toggling
-		// one off would take away a drive the admin never touched instead of
-		// falling back to the everyone row.
+	t.Run("a disabled grant that wins its tier yields paused, never the wider row", func(t *testing.T) {
+		// THE rule (DESIGN §2.2), and it is the fail-closed direction. Excluding
+		// the row in the WHERE reads tidier and silently WIDENS: Bob's paused
+		// user-tier allocation would fall through to the everyone row, handing
+		// him a drive no admin decided he should have, at whatever mode that row
+		// carries — and his only signal would be a mount that appeared rather
+		// than an allocation that stopped. So the disabled row WINS, comes back
+		// with Enabled false, and the API renders "paused".
 		user := "off-" + uniq
 		off := seedUserDrive(t, st, "aaa-disabled-"+uniq)
-		g, err := st.UpsertUserDriveGrant(ctx, types.UserDriveGrant{
-			SubjectType: types.CapabilitySubjectUser, Subject: user, DriveID: off.ID, Enabled: false,
+		g := seedDisabledUserDriveGrant(t, st, types.UserDriveGrant{
+			SubjectType: types.CapabilitySubjectUser, Subject: user, DriveID: off.ID,
+			SizeMiBOverride: 512,
 		})
+		d, got, tier, err := st.ResolveUserDrive(ctx, []string{user}, nil)
 		if err != nil {
-			t.Fatalf("seed disabled grant: %v", err)
+			t.Fatalf("resolve: %v", err)
 		}
-		t.Cleanup(func() { _ = st.DeleteUserDriveGrant(ctx, g.ID) })
-		if got := resolveName(t, []string{user}, nil); got != dAll.Name {
-			t.Errorf("resolve = %q, want the 'all' row's %q — a disabled user grant must not win and then refuse", got, dAll.Name)
+		if d.ID != off.ID {
+			t.Errorf("resolve = %q, want the PAUSED user row's %q — falling through to the 'all' row's %q is the widening this rule forbids",
+				d.Name, off.Name, dAll.Name)
+		}
+		// The enabled bit is the whole answer: with it lost in transit the
+		// caller mounts a drive an admin turned off.
+		if got.Enabled {
+			t.Error("the winning grant came back ENABLED; the paused row is indistinguishable from a live one")
+		}
+		// The GRANT comes back whole, overrides included — what the member is
+		// shown is the allocation that is paused, and reading the drive's own
+		// size where the grant overrode it would name a different one.
+		if got.ID != g.ID || got.SizeMiBOverride != 512 {
+			t.Errorf("grant = %+v, want the disabled row %s with its overrides intact", got, g.ID)
+		}
+		if tier != types.CapabilitySubjectUser {
+			t.Errorf("tier = %q, want %q", tier, types.CapabilitySubjectUser)
+		}
+	})
+
+	t.Run("precedence among disabled rows is the same precedence", func(t *testing.T) {
+		// One read means one ORDER BY, so a member paused at two tiers is told
+		// about the row that would have won either way — not whichever one the
+		// plan returned first. Asserted because "the enabled bit does not enter
+		// the ranking" is exactly the property a future WHERE or a CASE in the
+		// ORDER BY would quietly break.
+		user := "paused-prec-" + uniq
+		group := "paused-prec-grp-" + uniq
+		// The GROUP row is handed both of the other levers — priority 1000 and
+		// the alphabetically-first name — so a win for the user row is the tier
+		// rule and nothing else.
+		userDrive := seedUserDrive(t, st, "zzz-paused-user-"+uniq)
+		groupDrive := seedUserDrive(t, st, "aaa-paused-group-"+uniq)
+		seedDisabledUserDriveGrant(t, st, types.UserDriveGrant{
+			SubjectType: types.CapabilitySubjectGroup, Subject: group, DriveID: groupDrive.ID,
+			Priority: 1000,
+		})
+		seedDisabledUserDriveGrant(t, st, types.UserDriveGrant{
+			SubjectType: types.CapabilitySubjectUser, Subject: user, DriveID: userDrive.ID,
+		})
+		if got := resolveName(t, []string{user}, []string{group}); got != userDrive.Name {
+			t.Errorf("resolve = %q, want the user row's %q (user > group, against priority 1000 and name ASC)",
+				got, userDrive.Name)
 		}
 	})
 

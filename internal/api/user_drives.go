@@ -467,6 +467,9 @@ type meUserDrive struct {
 	Writable    bool                     `json:"writable"`
 	Enforcement types.StorageEnforcement `json:"enforcement"`
 	HomeName    string                   `json:"home_name,omitempty"`
+	// Paused: allocated, disabled by an admin — the chip says so and the New Run
+	// card renders the paused line where the checkbox would be.
+	Paused bool `json:"paused,omitempty"`
 }
 
 // resolveMeUserDrive answers the /me.user_drive field, or nil.
@@ -490,6 +493,7 @@ func (s *Server) resolveMeUserDrive(r *http.Request) *meUserDrive {
 		Writable:    resolved.Writable,
 		Enforcement: resolved.Enforcement,
 		HomeName:    resolved.HomeName,
+		Paused:      resolved.Paused,
 	}
 }
 

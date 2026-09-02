@@ -101,6 +101,18 @@ func grantFixture(driveID uuid.UUID, mut func(*types.UserDriveGrant)) *types.Use
 	return g
 }
 
+// pausedDriveStore is the deployment where the caller's allocation WINS and is
+// DISABLED — the one answer the resolver now has to tell apart from a mountable
+// one, and it differs from the mounted fixture in exactly one column. The grant
+// is grantFixture's disabled twin, so the two doubles cannot drift.
+func pausedDriveStore(mut func(*types.UserDrive)) *driveStore {
+	d := driveFixture(mut)
+	return &driveStore{
+		drive: d, tier: types.CapabilitySubjectUser,
+		grant: grantFixture(d.ID, func(g *types.UserDriveGrant) { g.Enabled = false }),
+	}
+}
+
 // driveServer builds a Server over st (nil for the no-store arm).
 func driveServer(st *driveStore) *Server {
 	cfg := Config{}
@@ -210,6 +222,12 @@ func TestResolveUserDrive(t *testing.T) {
 		}
 		if got.Tier != types.CapabilitySubjectUser || got.Grant.ID == uuid.Nil {
 			t.Errorf("resolved = tier %q / grant %s, want the winning row carried through", got.Tier, got.Grant.ID)
+		}
+		// The other side of the one column that now decides: an ENABLED winner
+		// is mounted, and the paused branch is not something a live allocation
+		// can fall into.
+		if got.Paused {
+			t.Error("an enabled grant resolved as PAUSED")
 		}
 	})
 
@@ -361,6 +379,94 @@ func TestResolveUserDrive(t *testing.T) {
 			t.Errorf("writeDriveError(unmountable) = %d, want 422 — the caller is authorized, there is simply nothing to mount", w.Code)
 		}
 	})
+
+	// ─── a paused allocation is TOLD, not resolved to nothing ─────────────────
+
+	t.Run("a DISABLED winner resolves to PAUSED, not to nothing", func(t *testing.T) {
+		// Before this arm the store's WHERE excluded the row, so a member whose
+		// allocation an admin paused was told "no user drive is allocated to
+		// you" — sent to their admin for what that admin had just turned off —
+		// and the frozen NR_PAUSED / REFUSED_PAUSED copy was unreachable.
+		//
+		// NOTHING IS DERIVED, and that is the fold worth naming: a paused drive
+		// mounts nothing, so a home name (and the object name built from it)
+		// would be a directory no consumer ever asks for — and a derivation
+		// that FAILED would answer a paused member with the wrong refusal
+		// entirely, a 422 about a claim that cannot name a directory.
+		yes := true
+		d := driveFixture(func(d *types.UserDrive) {
+			d.Backend, d.HomeTemplate = types.DriveBackendK8sPVC, types.HomeTemplateHash
+		})
+		g := grantFixture(d.ID, func(g *types.UserDriveGrant) {
+			g.Enabled = false
+			g.SizeMiBOverride, g.WritableOverride, g.HomeOverride = 512, &yes, "bsmith"
+		})
+		st := &driveStore{drive: d, grant: g, tier: types.CapabilitySubjectUser}
+		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		if got == nil || !got.Paused {
+			t.Fatalf("resolved = %+v, want the paused allocation", got)
+		}
+		if got.Drive.ID != d.ID || got.Grant.ID != g.ID || got.Tier != types.CapabilitySubjectUser {
+			t.Errorf("resolved = drive %s / grant %s / tier %q, want the disabled row carried through",
+				got.Drive.ID, got.Grant.ID, got.Tier)
+		}
+		// The size and mode folds STILL run: the member is shown what is
+		// paused, and reading the drive's own 10240 where the grant says 512
+		// would name a different allocation than the one that is off.
+		if got.SizeMiB != 512 || !got.Writable {
+			t.Errorf("size/writable = %d/%v, want the grant's 512 and its writable override", got.SizeMiB, got.Writable)
+		}
+		if got.Enforcement != types.StorageEnforcementRequest {
+			t.Errorf("enforcement = %q, want %q — a paused PVC's size means exactly what it always meant",
+				got.Enforcement, types.StorageEnforcementRequest)
+		}
+		if got.HomeName != "" || got.ObjectName != "" {
+			t.Errorf("home/object = %q/%q, want both EMPTY — a paused drive mounts nothing, and the grant's home override must not derive one",
+				got.HomeName, got.ObjectName)
+		}
+	})
+
+	t.Run("a paused home that could NOT be derived is still paused, not unmountable", func(t *testing.T) {
+		// The ordering inside the fold, asserted rather than assumed: the same
+		// drive and claims answer errDriveUnmountable when the grant is
+		// enabled (the sub-test above), so a paused row reaching the derivation
+		// would answer a 422 about a directory name for an allocation that was
+		// never going to mount — the wrong sentence, and one no admin can act
+		// on by fixing what it names.
+		d := driveFixture(func(d *types.UserDrive) {
+			d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateEmailLocal, "/srv/homes"
+		})
+		st := &driveStore{drive: d, tier: types.CapabilitySubjectUser,
+			grant: grantFixture(d.ID, func(g *types.UserDriveGrant) { g.Enabled = false })}
+		noEmail := withOIDCGroups(operatorCtx("sub-drive-bob", "", oidc.RoleMember), []string{"eng"})
+		got, err := driveServer(st).resolveUserDrive(noEmail)
+		if err != nil {
+			t.Fatalf("resolve = %v, want the paused answer rather than an unmountable refusal", err)
+		}
+		if got == nil || !got.Paused {
+			t.Fatalf("resolved = %+v, want the paused allocation", got)
+		}
+	})
+
+	t.Run("a paused USER row is fully determined despite an unusable snapshot", func(t *testing.T) {
+		// user > group > all, so a named principal's answer does not depend on
+		// their groups — and PAUSED is an answer. Refusing 403 here would lock
+		// exactly the people an admin took the trouble to name out of being
+		// told why their drive stopped, on the deployment shape (a group-tier
+		// grant exists) where the refusal otherwise fires.
+		st := pausedDriveStore(nil)
+		st.hasGroupTier, st.userTierOnly = true, true
+		got, err := driveServer(st).resolveUserDrive(driveMemberCtx(nil, false))
+		if err != nil {
+			t.Fatalf("resolve with an unusable snapshot: %v", err)
+		}
+		if got == nil || !got.Paused {
+			t.Fatalf("resolved = %+v, want the paused allocation served", got)
+		}
+	})
 }
 
 // TestDriveHomeSubject pins the ONE selection types.DriveHomeName cannot make:
@@ -452,6 +558,33 @@ func TestPreviewUserDrive(t *testing.T) {
 		}
 		if got := strings.TrimSpace(w.Body.String()); got != "{}" {
 			t.Errorf("body = %s, want {} — an absent grant is a RESULT, not a failure", got)
+		}
+	})
+
+	t.Run("a PAUSED allocation renders paused, with nothing derived", func(t *testing.T) {
+		// The admin's answer to "why does Bob say he has no drive": the row IS
+		// allocated and it is off. home_name/object_name are ABSENT rather than
+		// empty — nothing mounts, so there is no object to paste into an
+		// offboarding command, and omitempty is what says so.
+		st := pausedDriveStore(func(d *types.UserDrive) { d.Name = "Corp NAS" })
+		w := previewDriveHTTP(t, driveServer(st), []string{"sub-abc", "alice@corp.example"}, nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		var body map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v (body=%s)", err, w.Body.String())
+		}
+		if body["paused"] != true {
+			t.Errorf("paused = %v, want true (body=%s)", body["paused"], w.Body.String())
+		}
+		if body["drive_name"] != "Corp NAS" || body["matched_tier"] != string(types.CapabilitySubjectUser) {
+			t.Errorf("drive/tier = %v/%v, want the paused row's", body["drive_name"], body["matched_tier"])
+		}
+		for _, k := range []string{"home_name", "object_name"} {
+			if _, ok := body[k]; ok {
+				t.Errorf("%s = %v is present; a paused drive derives no name", k, body[k])
+			}
 		}
 	})
 

@@ -105,6 +105,11 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 			driveRefusal("no user drive is allocated to you — ask an admin for an allocation"))
 		return nil, false
 	}
+	if resolved.Paused {
+		writeError(w, http.StatusUnprocessableEntity,
+			driveRefusal("your allocation is paused by an admin"))
+		return nil, false
+	}
 	return s.driveMountFor(w, req, *resolved)
 }
 

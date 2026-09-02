@@ -346,6 +346,13 @@ type ResolvedDrive struct {
 	SizeMiB     int                `json:"size_mib,omitempty"`
 	Writable    bool               `json:"writable,omitempty"`
 	Enforcement StorageEnforcement `json:"enforcement"`
+	// Paused is set when the grant that WON is disabled: Drive and Grant are
+	// that row, the size and mode folds still ran, nothing is derived (no
+	// HomeName, no ObjectName) and nothing may be mounted. A paused row wins
+	// its tier rather than falling through to the wider row beneath it
+	// (DESIGN §2.2), so an admin turning one off cannot silently hand that
+	// member the everyone drive instead.
+	Paused bool `json:"paused,omitempty"`
 }
 
 // DriveMount is the RESOLVED answer the runner acts on: one principal's drive,

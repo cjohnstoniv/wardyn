@@ -176,6 +176,15 @@ func TestSeedRequestDrive422Matrix(t *testing.T) {
 			msg: "drive: this deployment cannot mount your drive",
 		},
 		{
+			// A paused allocation IS an answer. The disabled row used to be
+			// excluded from the resolution outright, so this member read "no
+			// user drive is allocated to you" and went to their admin to ask
+			// for the thing that admin had just turned off.
+			name: "the allocation is paused", store: pausedDriveStore(nil),
+			runnerTarget: "docker", req: driveRunRequest(true, nil),
+			msg: "drive: your allocation is paused by an admin",
+		},
+		{
 			// WIDENING. Honouring the allocation silently would launch a run the
 			// member believes is writable, and they find out when their work
 			// fails to persist.
@@ -389,6 +398,33 @@ func TestMeUserDrive(t *testing.T) {
 		}
 	})
 
+	t.Run("a PAUSED allocation is reported as paused, not as absent", func(t *testing.T) {
+		// The state that had no representation on the wire before: the drive
+		// exists, an admin turned it off, and the console renders NR_PAUSED
+		// where the checkbox would be. Reported as null instead, the member
+		// would be told to ask for an allocation they already have.
+		srv, _ := driveRunServer(pausedDriveStore(nil), "docker")
+		ud, denied := meDriveBody(t, srv, driveMemberCtx(nil, false))
+		if ud == nil {
+			t.Fatal("user_drive = null for a paused allocation")
+		}
+		if ud["paused"] != true {
+			t.Errorf("paused = %v, want true", ud["paused"])
+		}
+		// ABSENT, not empty: nothing mounts, so there is no directory to name.
+		if _, ok := ud["home_name"]; ok {
+			t.Errorf("home_name = %v is present; a paused drive derives no directory", ud["home_name"])
+		}
+		if ud["name"] != "Corp NAS" {
+			t.Errorf("name = %v, want the paused drive's", ud["name"])
+		}
+		// A pause is not a door: the sibling key answers a different question
+		// and this member's profile has not shut anything.
+		if denied != "" {
+			t.Errorf("user_drive_denied_by_profile = %q, want empty", denied)
+		}
+	})
+
 	t.Run("a shut door is reported as denied, not as absent", func(t *testing.T) {
 		// The whole reason the field exists: "you have none" and "you have one
 		// you may not use" both render as no mount, and only ONE of them is
@@ -540,6 +576,10 @@ func TestDriveRefusalsAreTheFrozenMemberCopy(t *testing.T) {
 		{
 			name: "REFUSED_NO_GRANT", store: &driveStore{}, req: driveRunRequest(true, nil),
 			want: "drive: no user drive is allocated to you — ask an admin for an allocation",
+		},
+		{
+			name: "REFUSED_PAUSED", store: pausedDriveStore(nil), req: driveRunRequest(true, nil),
+			want: "drive: your allocation is paused by an admin",
 		},
 		{
 			name: "REFUSED_WRITABLE",

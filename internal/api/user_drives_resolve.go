@@ -120,7 +120,10 @@ func (s *Server) resolveUserDrive(ctx context.Context) (*types.ResolvedDrive, er
 // including the ones that have never allocated a drive:
 //
 //   - A USER-TIER row matched. user > group > all, so an explicitly named
-//     principal's drive is FULLY determined whatever their groups are.
+//     principal's drive is FULLY determined whatever their groups are —
+//     INCLUDING when that row is paused, which is an answer and not an absence:
+//     no group-tier grant can outrank it, so nothing the snapshot is hiding
+//     could change it.
 //   - NO GROUP-TIER GRANT EXISTS AT ALL. Nothing an unknown group could have
 //     matched, so nothing a nil snapshot could be hiding.
 //
@@ -182,17 +185,28 @@ func (s *Server) resolveUserDriveFor(ctx context.Context, users, groups []string
 }
 
 // newResolvedDrive folds one winning (drive, grant) pair into everything a
-// runner or a preview needs. Three folds, each of which could have gone the
+// runner or a preview needs. Four folds, each of which could have gone the
 // other way:
+//
+//   - A DISABLED WINNER IS PAUSED, and it returns before anything is derived.
+//     The store hands back the row that won its tier whether or not it is
+//     enabled (DESIGN §2.2), so this is the single place that tells the two
+//     apart — and a paused drive mounts nothing, which makes a home name a
+//     directory no consumer will ever ask for. Deriving one anyway is worse
+//     than useless: DriveHomeName can FAIL, and a failure here would answer a
+//     paused member with the wrong refusal entirely (422 "your claim cannot
+//     name a directory") for a drive that was never going to mount.
 //
 //   - HOME OVERRIDE applies on the USER TIER ONLY. types.ValidateUserDriveGrant
 //     already refuses to store one on a group or all row; the tier gate is
 //     repeated here because a row written by an older binary — or by hand —
 //     would otherwise hand an entire group ONE directory, which is precisely
 //     the isolation the per-user subdirectory buys.
+//
 //   - SIZE is the override when the admin set one, else the drive's. 0 means
 //     "unset" on both, so a grant that never mentions size inherits rather than
 //     zeroing the allocation.
+//
 //   - WRITABLE is the override when present, else the drive's — a COALESCE, not
 //     an intersection, because both values are admin-authored and the grant is
 //     the more specific statement of the two. The narrowing rule applies one
@@ -209,6 +223,27 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 	if d == nil || g == nil {
 		return nil, nil
 	}
+	size := d.SizeMiB
+	if g.SizeMiBOverride > 0 {
+		size = g.SizeMiBOverride
+	}
+	writable := d.Writable
+	if g.WritableOverride != nil {
+		writable = *g.WritableOverride
+	}
+	resolved := &types.ResolvedDrive{
+		Drive: *d, Grant: *g, Tier: tier,
+		SizeMiB:     size,
+		Writable:    writable,
+		Enforcement: types.EnforcementFor(d.Backend),
+	}
+	// The size and mode folds run for a paused row too: what the member is
+	// shown is the allocation that is off, and reading the drive's own size
+	// where the grant overrode it would name a different one.
+	if !g.Enabled {
+		resolved.Paused = true
+		return resolved, nil
+	}
 	override := ""
 	if tier == types.CapabilitySubjectUser {
 		override = g.HomeOverride
@@ -223,22 +258,9 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 			"(lowercase letters and digits, then `. _ -`, up to 63 characters) — "+
 			"ask an admin to set your directory name [%v]", errDriveUnmountable, d.HomeTemplate, err)
 	}
-	size := d.SizeMiB
-	if g.SizeMiBOverride > 0 {
-		size = g.SizeMiBOverride
-	}
-	writable := d.Writable
-	if g.WritableOverride != nil {
-		writable = *g.WritableOverride
-	}
-	return &types.ResolvedDrive{
-		Drive: *d, Grant: *g, Tier: tier,
-		HomeName:    home,
-		ObjectName:  types.DriveObjectName(*d, home),
-		SizeMiB:     size,
-		Writable:    writable,
-		Enforcement: types.EnforcementFor(d.Backend),
-	}, nil
+	resolved.HomeName = home
+	resolved.ObjectName = types.DriveObjectName(*d, home)
+	return resolved, nil
 }
 
 // driveHomeSubject picks WHICH of the caller's identities the drive's home
@@ -290,6 +312,9 @@ type userDrivePreviewResponse struct {
 	SizeMiB     int                         `json:"size_mib,omitempty"`
 	Writable    bool                        `json:"writable,omitempty"`
 	Enforcement types.StorageEnforcement    `json:"enforcement,omitempty"`
+	// Paused: the matched allocation is disabled, so nothing above it is derived
+	// and nothing would mount.
+	Paused bool `json:"paused,omitempty"`
 }
 
 // handlePreviewUserDrive answers "which drive would a principal carrying these
@@ -353,5 +378,6 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 		SizeMiB:     resolved.SizeMiB,
 		Writable:    resolved.Writable,
 		Enforcement: resolved.Enforcement,
+		Paused:      resolved.Paused,
 	})
 }

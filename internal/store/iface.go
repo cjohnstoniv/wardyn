@@ -329,9 +329,11 @@ type Store interface {
 	// group > all, sub over email within the user tier, then priority DESC and
 	// the drive's name ASC — as a single indexed read whose ORDER BY IS the
 	// whole precedence rule, the same one ResolveGovernanceProfile carries.
-	// DISABLED grants are excluded by the query itself, so a toggled-off row
-	// can never win and then refuse. ErrNotFound means "no grant matched",
-	// which the caller reads as "this principal has no drive".
+	// DISABLED grants are IN the query: one that wins its tier comes back with
+	// Enabled false, which the caller renders as PAUSED rather than falling
+	// through to the wider row beneath it (DESIGN §2.2 — a pause must never
+	// widen a member onto a drive no admin chose for them). ErrNotFound means
+	// "no grant matched at all", which the caller reads as "no drive".
 	//
 	// It returns the winning GRANT beside the drive because every override the
 	// resolution needs (size, writable, home) is a column on the binding row —
