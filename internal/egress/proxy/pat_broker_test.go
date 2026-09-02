@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -60,23 +59,17 @@ func newPATBrokerProxy(t *testing.T, grants map[string]PATGrant, upstreamAddr st
 // row in the decision log. The credential is proxy-side throughout: the sandbox
 // spoke cleartext HTTP to its own sidecar and never held the PAT.
 //
-// KNOWN DEFECT, and the reason writing this test was worth it: today the lane
-// never reaches any of that. handlePATBroker hands validGitRest the FULL
-// upstream path with its leading slash ("/org/repo.git/info/refs"), but
-// validGitRest is the GitHub lane's helper and matches only the bare smart-HTTP
-// tail ("info/refs") — parseGitBrokerPath strips <org>/<repo> for it, while
-// parsePATBrokerPath cannot, because a forge repo path is arbitrarily deep
-// (gitlab subgroups, "o/p/_git/r" on Azure DevOps). So EVERY well-formed clone
-// of a granted host 403s "unsupported git request" before the mint, and the
-// whole git_pat broker is dead on the data path (agent-run-lib.sh's insteadOf
-// rewrite produces exactly this shape). It fails CLOSED, so nothing is exposed —
-// the PAT is simply never brokered. Fixing it means matching the verb at the
-// TAIL of rest, which changes what the credentialed broker will forward, so it
-// is a deliberate change with its own review, not a drive-by in a test lane.
-//
-// The skip below is therefore SELF-ARMING: it fires only on that exact refusal,
-// so the day the tail-match lands this test starts asserting the real contract
-// with nobody having to remember to re-enable it.
+// This lane had no end-to-end test until this one, and writing it found the
+// lane dead: handlePATBroker handed validGitRest the FULL upstream path with
+// its leading slash ("/org/repo.git/info/refs"), but validGitRest is the GitHub
+// lane's helper and matches only the bare smart-HTTP tail ("info/refs") —
+// parseGitBrokerPath strips <org>/<repo> for it, while parsePATBrokerPath
+// cannot, because a forge repo path is arbitrarily deep (gitlab subgroups,
+// "o/p/_git/r" on Azure DevOps). Every well-formed clone of a granted host 403'd
+// before the mint, and agent-run-lib.sh's insteadOf rewrite produces exactly
+// that shape. It failed CLOSED — the PAT was simply never brokered — and the
+// lane now takes the verb from the last segment, with refs discovery's two
+// segments as the one exception.
 func TestPATBrokerClonesGrantedHost(t *testing.T) {
 	up := newPATBrokerUpstream(t, "T", "oauth2")
 	p, sink := newPATBrokerProxy(t,
@@ -88,12 +81,6 @@ func TestPATBrokerClonesGrantedHost(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer SANDBOX-SMUGGLED")
 	p.ServeHTTP(rec, req)
 
-	if rec.Code == http.StatusForbidden && strings.Contains(rec.Body.String(), "unsupported git request") {
-		t.Skip("KNOWN DEFECT: handlePATBroker passes validGitRest the full path " +
-			"(\"/org/repo.git/info/refs\"), which only matches the bare tail (\"info/refs\"), " +
-			"so every granted clone 403s before the mint and the git_pat broker never brokers. " +
-			"Fix = match the smart-HTTP verb at the tail of rest; this test then arms itself.")
-	}
 	if rec.Code != http.StatusOK {
 		t.Fatalf("info/refs status = %d body=%q", rec.Code, rec.Body.String())
 	}

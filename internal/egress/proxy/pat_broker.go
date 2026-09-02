@@ -88,7 +88,16 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// Same smart-HTTP surface the GitHub lane admits: refs discovery and the two
 	// pack endpoints, nothing else. A broker that forwarded arbitrary paths would
 	// be a credentialed proxy to the whole forge — the REST API included.
-	if !validGitRest(r.Method, rest, r.URL.Query().Get("service")) {
+	//
+	// The GitHub lane hands validGitRest a bare tail because parseGitBrokerPath
+	// strips <org>/<repo> for it. A forge path is arbitrarily deep, so this lane
+	// takes the last segment instead — the ONE exception being refs discovery,
+	// whose two segments are the whole surface it must match.
+	verb := rest[strings.LastIndex(rest, "/")+1:]
+	if strings.HasSuffix(rest, "/info/refs") {
+		verb = "info/refs"
+	}
+	if !validGitRest(r.Method, verb, r.URL.Query().Get("service")) {
 		p.emitLocalDecision(r, egress.Deny, ruleSourcePATDenied, nil)
 		http.Error(w, "unsupported git request", http.StatusForbidden)
 		return
