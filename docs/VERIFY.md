@@ -97,16 +97,38 @@ cosign verify-blob \
   SHA256SUMS
 ```
 
-One thing `SHA256SUMS` does **not** cover: the one-line installer fetches
-`deploy/compose/docker-compose.yaml` from the release tag over TLS and installs
-it with no digest check — the CLI binary it puts on your PATH is verified against
-this signed list and the images are cosign-verified, but the compose file is not
-a signed release asset, so it is short by design, left at
-`~/.wardyn/docker-compose.yaml` for you to read, and published as an accepted
-risk (`threatmodel/THREAT-MODEL.md` §5, residual 32) rather than quietly
-verified.
+## 6. What the one-line installer checks — and what it leaves to you
 
-## 6. If your scanner flags GO-2026-5932
+`install.sh` is not a shorter way to run the steps above. It makes exactly one
+integrity check — the first bullet — and even that one is **same-origin**:
+
+- **The CLI binary** it puts on your PATH is hashed (`sha256_hex`) against a
+  `SHA256SUMS` fetched from the *same* `releases/download/<tag>/` base as the
+  binary itself, and `install_cli` dies on a mismatch rather than installing it
+  unverified. That catches a truncated download or the wrong asset. It cannot
+  catch a tampered release, which would serve a matching `SHA256SUMS` — and the
+  installer never fetches `SHA256SUMS.sig` or `SHA256SUMS.pem`. The `cosign
+  verify-blob` in step 5 is **yours** to run; nothing in the installer runs
+  cosign.
+- **The images** are pulled by *tag* (`docker compose pull`). They are
+  cosign-verifi**able** — that is step 1 — and the installer verifies none of
+  them. On a fresh install the first foreign code to execute on your machine is
+  in fact the `wardynd` image's `-gen-age-key` entrypoint, which the installer
+  runs to mint your secret-store key *before* `docker compose up`.
+- **The compose file** — `deploy/compose/docker-compose.yaml`, which decides
+  which images run, which ports publish on which interface, whether
+  `WARDYN_LOCAL_MODE` is on, and what is bind-mounted — is fetched from the
+  release tag over TLS with **no digest check at all**, because it is not among
+  the signed release assets. It is short by design and stays at
+  `~/.wardyn/docker-compose.yaml` for you to read.
+
+None of that is hidden: it is published as an accepted risk
+(`threatmodel/THREAT-MODEL.md` §5, residual 32) rather than quietly verified.
+`curl … | sh` is a decision to trust this project's release origin for one
+command. Steps 1-5 are how you check afterwards that it deserved it, and every
+artifact the installer fetched is still on disk to check *against*.
+
+## 7. If your scanner flags GO-2026-5932
 
 It will, and it is a false positive that we have written down rather than
 suppressed. `golang.org/x/crypto/openpgp` is unmaintained with no fix available,

@@ -44,10 +44,16 @@ func readInstallSh(t *testing.T) string {
 //   - the second `docker run` failing -> sha256("") -> a public constant.
 //
 // Both are closed by install.sh's mint_admin_token: sha256_hex carries the
-// shasum fallback for BOTH hashing sites, and the mint is checked on its own
-// line before it is hashed. This guard pins the shape, not the implementation —
-// a derivation that needs no hashing binary at all (a `-gen-admin-token` flag,
-// say) satisfies it too.
+// shasum fallback for BOTH hashing sites, and mint_age_key checks the mint on
+// its own line before anything hashes it.
+//
+// The `shasum -a 256` requirement below is deliberately literal. sha256_hex's
+// else-branch is the ONLY line that runs on a mac, and until T2 of
+// scripts/test-install-sh-trust.sh was given a real mac-shaped PATH nothing
+// executed it — the branch could have been deleted and every gate stayed green.
+// A derivation that needs no hashing binary at all (a `-gen-admin-token` flag,
+// say) is still welcome; it just has to update this guard on the way in, which
+// is the point of pinning it.
 func TestInstallSh_AdminTokenDerivationFailsClosed(t *testing.T) {
 	src := readInstallSh(t)
 	tokLine := regexp.MustCompile(`(?m)^\s*TOKEN=\$\(.*$`).FindString(src)
@@ -56,6 +62,9 @@ func TestInstallSh_AdminTokenDerivationFailsClosed(t *testing.T) {
 	}
 	if strings.Contains(tokLine, "sha256sum") && !strings.Contains(tokLine, "shasum") {
 		t.Errorf("install.sh's admin-token line depends on `sha256sum` with no `shasum` fallback (sha256_hex, which install_cli's SHA256SUMS check uses, has one): on macOS TOKEN is empty and compose falls through to demo-admin-token\n  %s", strings.TrimSpace(tokLine))
+	}
+	if !strings.Contains(src, "shasum -a 256") {
+		t.Error("install.sh has no `shasum -a 256` fallback anywhere: macOS ships no GNU coreutils, so every hashing site — the admin-token mint and install_cli's SHA256SUMS check — silently produces nothing there")
 	}
 	// A non-empty guard must sit on TOKEN the way install.sh guards KEY.
 	guard := regexp.MustCompile(`\[\s+-n\s+"\$\{?TOKEN\}?"\s+\]\s*\|\|\s*die`)
@@ -68,9 +77,16 @@ func TestInstallSh_AdminTokenDerivationFailsClosed(t *testing.T) {
 // token. `cat > .env` and the upgrade path's env_set `> .env.tmp && mv` both
 // created the file under the caller's umask and only chmod 600 afterwards; on a
 // multi-user host that window is enough to read both. install.sh now sets
-// `umask 077` around the whole .env block (restoring OLD_UMASK after it, so
-// install_cli's PATH directories keep their normal modes) and keeps the chmod
-// for a file an older install created 0644.
+// `umask 077` around the whole .env block, restoring OLD_UMASK after it so
+// install_cli's PATH directories keep their normal modes.
+//
+// Both `chmod 600 .env` calls are GONE, and their absence is the point: under
+// that umask neither could do anything but re-assert the mode the file already
+// had, while their presence made T4 look satisfied by a chmod. An .env an older
+// install created 0644 is still fixed — the upgrade branch rewrites the file
+// through `.env.tmp` + `mv`, and that tmp is born 0600. T4 and T5 of
+// scripts/test-install-sh-trust.sh assert the resulting mode with a
+// record-only chmod stub in place.
 func TestInstallSh_EnvWrittenUnderRestrictiveUmask(t *testing.T) {
 	src := readInstallSh(t)
 	firstWrite := strings.Index(src, "cat > .env")
@@ -88,9 +104,10 @@ func TestInstallSh_EnvWrittenUnderRestrictiveUmask(t *testing.T) {
 // gets bind-mounted (the docker socket) — is fetched from a MUTABLE tag ref
 // over raw.githubusercontent and is not among the cosign-signed release assets
 // (release.yml's checksums + cosign-sign-blob steps). For 0.7 that is a
-// PUBLISHED accepted risk — docs/VERIFY.md "5. Verify the release assets" and
-// threatmodel/THREAT-MODEL.md §5 residual 32 — so this skips. Once a digest
-// exists it pins that install.sh consults it and dies on a mismatch.
+// PUBLISHED accepted risk — docs/VERIFY.md "6. What the one-line installer
+// checks — and what it leaves to you" and threatmodel/THREAT-MODEL.md §5
+// residual 32 — so this skips. Once a digest exists it pins that install.sh
+// consults it and dies on a mismatch.
 func TestInstallSh_ComposeFetchIsVerified(t *testing.T) {
 	if os.Getenv("F10_EXPECT_COMPOSE_INTEGRITY") != "1" {
 		t.Skip("accepted risk until deploy/compose/docker-compose.yaml is covered by SHA256SUMS or a pinned digest (docs/VERIFY.md; THREAT-MODEL §5 residual 32); set F10_EXPECT_COMPOSE_INTEGRITY=1 to enforce")

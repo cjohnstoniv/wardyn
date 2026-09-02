@@ -6,13 +6,15 @@
 #
 #   curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.6/install.sh | sh
 #
-# That URL is the cosign-signed release asset, covered by SHA256SUMS. Curling
-# this file from `main` also works, but nothing signs tip-of-main. README.md
-# carries the same URL; RELEASING.md step 1b sweeps the version in both.
+# That URL is a release asset covered by the signed SHA256SUMS. Curling this
+# file from `main` also works, but nothing signs tip-of-main. README.md carries
+# the same URL; RELEASING.md step 1b sweeps the version in both.
 #
-# Pulls the published, cosign-signed images (docs/VERIFY.md) and starts the
-# containerized control plane. No clone, no build, no toolchain — Docker is the
-# only requirement.
+# Pulls the published images BY TAG and starts the containerized control plane.
+# No clone, no build, no toolchain — Docker is the only requirement. Read
+# docs/VERIFY.md §6 before you decide to trust this: those images are
+# cosign-verifiABLE, and this script runs no cosign — piping it to sh is a
+# decision to trust the release origin for one command.
 #
 # Deploying to Kubernetes instead? That path needs no clone either:
 #   helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version <ver>
@@ -40,6 +42,9 @@ die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 # route through here: install_cli's SHA256SUMS check, which already knew that,
 # and mint_admin_token, which did not — and so minted an EMPTY admin token on
 # every mac, which compose then substitutes with its published demo token.
+# T2 of scripts/test-install-sh-trust.sh runs this whole script on a MAC-SHAPED
+# PATH (no `sha256sum` anywhere on it), so the fallback below is executed there,
+# not merely read.
 sha256_hex() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$@"
@@ -48,17 +53,30 @@ sha256_hex() {
   fi | awk '{print $1}'
 }
 
-# mint_admin_token — a 48-hex admin token, derived from a key minted for this
-# purpose alone (never from the store key in .env). The mint is checked on its
-# OWN line before it is hashed: POSIX sh has no pipefail, so `set -e` cannot see
-# a docker failure inside a pipeline, and hashing the empty stdin it leaves
-# behind would install sha256("")[0:48] — a public constant — as this box's
-# admin credential.
+# mint_age_key WHAT — one `AGE-SECRET-KEY-…` line minted by the wardynd image,
+# or die. BOTH mints route through here: the secret-store key written to .env,
+# and the INDEPENDENT key mint_admin_token hashes (the admin token is never
+# derived from the store key). The mint is checked on its OWN line before
+# anything consumes it: POSIX sh has no pipefail, so `set -e` cannot see a
+# docker failure inside a pipeline, and the empty stdin such a failure leaves
+# behind would be hashed into sha256("")[0:48] — a public constant — and
+# installed as this box's admin credential.
+mint_age_key() {
+  minted=$(docker run --rm "${IMG}" -gen-age-key 2>/dev/null \
+           | grep -E '^AGE-SECRET-KEY-' | head -1 || true)
+  [ -n "$minted" ] || die "could not mint $1 from ${IMG}"
+  printf '%s' "$minted"
+}
+
+# mint_admin_token — a 48-hex admin token. The non-empty guard lives HERE, not
+# at each call site: `TOKEN=$(mint_admin_token)` is a plain assignment, so a
+# `die` inside the substitution surfaces as a non-zero status that the caller's
+# `set -e` acts on, and one guard cannot drift out of step with the other.
 mint_admin_token() {
-  mint_key=$(docker run --rm "ghcr.io/${REPO%/*}/wardynd:${SEMVER}" -gen-age-key 2>/dev/null \
-             | grep -E '^AGE-SECRET-KEY-' | head -1 || true)
-  [ -n "$mint_key" ] || die "could not mint an admin token from ghcr.io/${REPO%/*}/wardynd:${SEMVER}"
-  printf '%s' "$mint_key" | sha256_hex | cut -c1-48
+  mint_key=$(mint_age_key "an admin token")
+  TOKEN=$(printf '%s' "$mint_key" | sha256_hex | cut -c1-48)
+  [ -n "$TOKEN" ] || die "could not derive this install's admin token"
+  printf '%s' "$TOKEN"
 }
 
 command -v docker >/dev/null 2>&1 || die "docker is required — https://docs.docker.com/get-docker/"
@@ -82,6 +100,10 @@ if [ -z "$VERSION" ]; then
 fi
 case "$VERSION" in v*) ;; *) VERSION="v$VERSION" ;; esac
 SEMVER="${VERSION#v}"
+# The wardynd image is named four times — two mints, the fresh .env, the upgrade
+# rewrite — and a version-pin that disagreed with itself across them is exactly
+# the class of bug the upgrade path already shipped once. Name it once.
+IMG="ghcr.io/${REPO%/*}/wardynd:${SEMVER}"
 say "Installing Wardyn ${VERSION} into ${HOME_DIR}"
 
 # Container names are ${WARDYN_NS:-wardyn}-*, so a stack already running from a
@@ -108,19 +130,24 @@ curl -fsSL "https://raw.githubusercontent.com/${REPO}/${VERSION}/deploy/compose/
 
 # .env holds WARDYN_AGE_KEY — the master key for every secret on this box — and
 # the admin token. Born 0600, rather than chmod'd 0600 a moment after it is
-# written: on a shared host that window is enough to read both. Restored below
-# so install_cli's PATH directories keep their normal modes; the chmod stays,
-# for a file some older install created 0644.
+# written: on a shared host that window is enough to read both. OLD_UMASK is
+# restored below so install_cli's PATH directories keep their normal modes.
+#
+# There is no `chmod 600 .env` any more, on either branch: under `umask 077`
+# both were dead code that could only ever re-assert the mode the file already
+# had. An .env some older install created 0644 is not left behind by dropping
+# them — the upgrade branch rewrites the file through `.env.tmp` + `mv`, and
+# that tmp is born 0600 under this same umask. T4 of
+# scripts/test-install-sh-trust.sh runs under `umask 022` with a RECORD-ONLY
+# chmod stub and asserts the final mode is 600, so a chmod could not be what
+# produced it.
 OLD_UMASK=$(umask)
 umask 077
 if [ ! -f .env ]; then
   say "Minting this install's secret-store key"
   # Same mechanism the repo's own installers use. The key never leaves this box.
-  KEY=$(docker run --rm "ghcr.io/${REPO%/*}/wardynd:${SEMVER}" -gen-age-key 2>/dev/null \
-        | grep -E '^AGE-SECRET-KEY-' | head -1 || true)
-  [ -n "$KEY" ] || die "could not mint an age key from ghcr.io/${REPO%/*}/wardynd:${SEMVER}"
+  KEY=$(mint_age_key "an age key")
   TOKEN=$(mint_admin_token)
-  [ -n "$TOKEN" ] || die "could not derive this install's admin token"
 
   cat > .env <<EOF
 # Generated by install.sh for Wardyn ${VERSION}. Safe to edit.
@@ -142,11 +169,10 @@ WARDYN_SSH_ADVERTISE=127.0.0.1:${WARDYN_SSH_PORT:-2222}
 # so the listener would have nothing to serve. See docs/UI-SANDBOXES.md.
 # WARDYN_UI_SANDBOX_LISTEN=:8081
 # Published images — this install pulls, it never builds.
-WARDYN_WARDYND_IMAGE=ghcr.io/${REPO%/*}/wardynd:${SEMVER}
+WARDYN_WARDYND_IMAGE=${IMG}
 WARDYN_PROXY_IMAGE=ghcr.io/${REPO%/*}/wardyn-proxy:${SEMVER}
 WARDYN_AGENT_IMAGES={"claude-code":"ghcr.io/${REPO%/*}/agent-base:${SEMVER}","codex-cli":"ghcr.io/${REPO%/*}/agent-codex-cli:${SEMVER}","aws-sso":"ghcr.io/${REPO%/*}/agent-aws-sso:${SEMVER}"}
 EOF
-  chmod 600 .env
 else
   # UPGRADE PATH. This used to be the whole story — "reusing the existing .env" —
   # and that was a trap. Re-running the installer at a NEW tag overwrites
@@ -170,25 +196,47 @@ else
   # The header names a version too; leaving it stale makes the file lie about
   # what it pins.
   awk -v v="${VERSION}" 'NR==1 && /^# Generated by install.sh for Wardyn / {print "# Generated by install.sh for Wardyn " v ". Safe to edit."; next} {print}' .env > .env.tmp && mv .env.tmp .env
-  env_set WARDYN_WARDYND_IMAGE "ghcr.io/${REPO%/*}/wardynd:${SEMVER}"
+  env_set WARDYN_WARDYND_IMAGE "${IMG}"
   env_set WARDYN_PROXY_IMAGE "ghcr.io/${REPO%/*}/wardyn-proxy:${SEMVER}"
   env_set WARDYN_AGENT_IMAGES "{\"claude-code\":\"ghcr.io/${REPO%/*}/agent-base:${SEMVER}\",\"codex-cli\":\"ghcr.io/${REPO%/*}/agent-codex-cli:${SEMVER}\",\"aws-sso\":\"ghcr.io/${REPO%/*}/agent-aws-sso:${SEMVER}\"}"
   # Listeners are additive: an install from before they existed has neither, and
   # without them the published ports stay inert.
   grep -qE '^WARDYN_SSH_LISTEN=' .env || printf 'WARDYN_SSH_LISTEN=:2222\n' >> .env
   grep -qE '^WARDYN_SSH_ADVERTISE=' .env || printf 'WARDYN_SSH_ADVERTISE=127.0.0.1:%s\n' "${WARDYN_SSH_PORT:-2222}" >> .env
+  # An .env with no store key cannot decrypt one secret this box has already
+  # written, and compose would start wardynd against an empty WARDYN_AGE_KEY.
+  # Minting a fresh key here would be WORSE than stopping — it would silently
+  # orphan every existing secret behind a key that never encrypted them — so
+  # this is the one upgrade condition the installer refuses instead of fixing.
+  grep -qE '^WARDYN_AGE_KEY=AGE-SECRET-KEY-' .env || die "${HOME_DIR}/.env has no WARDYN_AGE_KEY=AGE-SECRET-KEY-… line.
+  Minting a new one here would orphan every secret already stored on this box.
+  Restore that line from your backup, or move ${HOME_DIR}/.env aside to start
+  over (every stored secret then becomes unrecoverable)."
   # An install that landed an EMPTY admin token — 0.6.x on a host with no
   # sha256sum, or a docker run that failed mid-pipeline — carried it forward
   # through every later upgrade in silence, and the compose file substitutes its
   # PUBLISHED demo token for an empty value. Re-mint, and say so: this is the
   # credential the closing banner tells the operator to go and read.
-  if ! grep -qE '^WARDYN_ADMIN_TOKEN=.' .env; then
-    say "The existing WARDYN_ADMIN_TOKEN is empty — minting a new one"
-    TOKEN=$(mint_admin_token)
-    [ -n "$TOKEN" ] || die "could not derive this install's admin token"
-    env_set WARDYN_ADMIN_TOKEN "${TOKEN}"
-  fi
-  chmod 600 .env
+  #
+  # Read the VALUE, rather than asking `grep -qE '^WARDYN_ADMIN_TOKEN=.'` whether
+  # SOME character follows the `=`: that predicate is satisfied by `=""`, by
+  # `=''`, by a single space, and by both placeholders an operator is most likely
+  # to have copied in — compose's published `demo-admin-token` and a `change-me`
+  # — so each of those was carried forward as though it were a credential. Strip
+  # the surrounding whitespace, then ONE layer of matching quotes (the `\1`
+  # back-reference is what keeps `"x'` from being unquoted), then whitespace the
+  # quotes were hiding.
+  cur_token=$(sed -n 's/^WARDYN_ADMIN_TOKEN=//p' .env | tail -1 \
+              | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+                    -e 's/^\(["'\'']\)\(.*\)\1$/\2/' \
+                    -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  case "${cur_token}" in
+    ''|demo-admin-token|change-me)
+      say "The existing WARDYN_ADMIN_TOKEN is empty or a placeholder — minting a new one"
+      TOKEN=$(mint_admin_token)
+      env_set WARDYN_ADMIN_TOKEN "${TOKEN}"
+      ;;
+  esac
 fi
 umask "${OLD_UMASK}"
 
@@ -203,8 +251,13 @@ docker compose up -d --no-build
 # The CLI. Without it this install has NO host binary at all: the only command
 # path is `docker compose exec`, which is in-container and root-only, so
 # `wardyn ssh <run-id>` — the whole point of the SSH listener above — has no
-# client on the machine that just enabled it. Release assets are per os/arch and
-# covered by the cosign-signed SHA256SUMS, so verify before installing.
+# client on the machine that just enabled it.
+#
+# Release assets are per os/arch and listed in SHA256SUMS, so hash-check before
+# installing. Be honest about the strength of that check: SHA256SUMS is fetched
+# from the SAME release base as the binary, and this script does not read
+# SHA256SUMS.sig/.pem. It defeats a corrupted or swapped asset, not a tampered
+# release. The signature check is the operator's, in docs/VERIFY.md §5.
 install_cli() {
   os=$(uname -s | tr '[:upper:]' '[:lower:]')
   case "$(uname -m)" in
