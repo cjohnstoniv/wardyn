@@ -2252,19 +2252,34 @@ predates the rename. Move the data (`kubectl cp`, or a snapshot restore into the
 new claim) and reclaim the old claim with the `delete pvc` above. The cheap
 alternative is not renaming a drive that has claims.
 
-**An existing claim is reused as it is, and drift is logged rather than
+**The console does not warn about this**, and in 0.7 it does not refuse it
+either: a rename with grants attached is accepted like any other edit. Treat the
+rename field as an operator action with a runbook, not a label edit.
+
+**An existing claim's SHAPE is reused as it is, and logged rather than
 enforced.** A managed claim is looked up by name and mounted whatever its spec
-says. If it disagrees with the drive row — a different storage class, a
-different `requests.storage`, an access mode that is not `ReadWriteOnce`, or a
-`wardyn.drive` label naming another drive — wardynd logs one warning naming the
-claim and every disagreement, and mounts it anyway. That is deliberate: the
-claim is the member's data, a PVC request cannot be shrunk, and refusing the run
-would mean an admin editing an allocation in the console breaks every existing
-member's runs. Grep the daemon log for `disagrees with the drive` when a console
-size and a pod's actual volume do not match. The single exception is a claim
-that is **Terminating**: that one fails the run outright, because a pod
-mounting a claim under deletion never schedules and re-creating it under the
-same name would undo the reclaim somebody is in the middle of.
+says. If its shape disagrees with the drive row — a different storage class, a
+different `requests.storage`, an access mode that is not `ReadWriteOnce` —
+wardynd logs one warning naming the claim and every disagreement, and mounts it
+anyway. That is deliberate: the claim is the member's data, a PVC request cannot
+be shrunk, and refusing the run would mean an admin editing an allocation in the
+console breaks every existing member's runs. Grep the daemon log for `disagrees
+with the drive` when a console size and a pod's actual volume do not match.
+
+**Two states are refusals, not warnings.** A claim that is **Terminating** fails
+the run outright: a pod mounting a claim under deletion never schedules, and
+re-creating it under the same name would undo the reclaim somebody is in the
+middle of. So does a claim whose IDENTITY labels are not this run's — a managed
+claim whose `wardyn.drive` or `wardyn.home` names a different pair, or a share
+whose claim turns out to carry `wardyn.managed=true` (i.e. it is one person's
+managed drive, not an admin's share). That one is the collision the object name
+cannot rule out: `wardyn-drive-<slug>-<home>` joins two variable-width fields
+with the separator both of them admit, so drive `eng` + home `us-bob` and drive
+`eng-us` + home `bob` resolve to the same claim name. Wardyn holds no `delete`
+verb and cannot repair the collision, so it refuses the run rather than mount
+one member's private drive inside another member's agent. The fix is to rename
+one of the two drives (see the rename caveat above) or to give the colliding
+people distinct home names.
 
 **`ReadWriteOnce` binds a claim to one node.** A managed drive is provisioned
 RWO, so a person's second concurrent run schedules onto the node their first run
@@ -2297,11 +2312,13 @@ kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive>-<home>
 The drive's `when a person leaves` column records the intent (`retain` or
 `delete`) so the log says what the operator was told to do; the console's drive
 preview prints that exact object name for a person, so nobody recomputes a home
-segment by hand. The claim carries `wardyn.managed`, `wardyn.drive` (the drive's id, so a rename
-does not orphan it) and `wardyn.home` labels — the same pair the Docker driver
-stamps on a managed volume — and, deliberately, **no `wardyn.run-id`**, so the
-per-run teardown sweep (a `DeleteCollection` selecting on exactly that label)
-cannot reach it.
+segment by hand. The claim carries `wardyn.managed`, `wardyn.drive` (the drive's
+row **id**, not its name, so the claims a rename orphans stay findable with the
+`get pvc -l wardyn.drive=<drive-id>` above) and `wardyn.home` labels — the same
+pair the Docker driver stamps on a managed volume — and, deliberately, **no
+`wardyn.run-id`**, so the per-run teardown sweep (a `DeleteCollection` selecting
+on exactly that label) cannot reach it. That pair is also what the driver checks
+before it mounts anything: see the two refusals above.
 
 **Ownership, and where fsGroup stops working.** A pod with a drive carries
 `fsGroup: 1000` (a GROUP id — it happens to equal the uid every agent image runs as, but this field can never make a volume user-owned) with
@@ -2313,6 +2330,41 @@ volume. A static share is owned by whatever its export says, so map it there —
 Wardyn-dedicated export with `all_squash,anonuid=1000,anongid=1000`, or per-user
 `0700` subdirectories — and expect a read-only mount where an existing corporate
 home is owned by a different uid.
+
+**gVisor wants `directfs` off for a drive, and the annotation is a request.**
+The Wall (CC2) and Vault (CC3) tiers run the agent pod under a RuntimeClass; when
+its handler is `runsc`, gVisor's `directfs` has the gofer donate a file
+descriptor per mount point to the sandbox, which then operates on the file
+directly. That is right for a block PVC and wrong for a network-backed export —
+a `k8s_pvc_static` share over NFS/SMB. gVisor takes the override **per mount**,
+from a pod annotation keyed by the volume's own name, and wardynd stamps it on
+every drive pod whose resolved handler is `runsc`:
+
+```yaml
+dev.gvisor.spec.mount.drive.directfs: "off"
+```
+
+containerd only forwards it when the node's runsc runtime section allows the
+prefix, so on a cluster whose `/etc/containerd/config.toml` does not carry
+
+```toml
+pod_annotations = ["dev.gvisor.*"]
+```
+
+the annotation is inert and the node-level setting is the one that applies:
+`--directfs=false` in the runsc shim's own config (`/etc/containerd/runsc.toml`,
+or the `runtimeArgs` a node image bakes in). Either is fine; the annotation is
+per-pod and the flag is per-node. See
+[gVisor's containerd configuration guide](https://gvisor.dev/docs/user_guide/containerd/configuration/).
+
+The companion caveat is CACHING, and it cuts the other way. runsc serves bind
+mounts `shared` by default (`--file-access-mounts=shared`), revalidating against
+the host because it cannot assume exclusive access. An operator who has set
+`--file-access-mounts=exclusive` for throughput must **not** do so on nodes that
+run drive pods over a share other writers touch: exclusive mode caches
+aggressively, and a file another writer changes is not seen. A managed
+(`k8s_pvc`) drive is exclusive to its pod by construction and is unaffected. See
+[gVisor's filesystem guide](https://gvisor.dev/docs/user_guide/filesystem/).
 
 **Size is an allocation, not a limit**, and the product says so in one frozen
 sentence: *"Wardyn never enforces a drive's size itself. On Kubernetes the size

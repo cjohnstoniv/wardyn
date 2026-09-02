@@ -518,12 +518,14 @@ The console's drive preview prints that exact object name for a person, so the
 home segment never has to be recomputed by hand. There is no `list` or `watch`
 either — the name is derived, never searched for.
 
-**Ownership.** A pod with a drive gets `fsGroup: 1000` (the uid every agent image
-runs as) with `fsGroupChangePolicy: OnRootMismatch`. The kubelet applies fsGroup
-to CSI drivers that declare `ReadWriteOnceWithFSType` volume ownership — block
-storage, i.e. the managed case. It does **not** apply to an NFS-type volume: a
-static share is owned by whatever its export says, so map it there
-(`all_squash,anonuid=1000,anongid=1000`, or per-user `0700` subdirectories).
+**Ownership.** A pod with a drive gets `fsGroup: 1000` (a GROUP id — it happens
+to equal the uid every agent image runs as, but this field can never make a
+volume user-owned) with `fsGroupChangePolicy: OnRootMismatch`. The kubelet
+applies fsGroup to CSI drivers that declare `ReadWriteOnceWithFSType` volume
+ownership — block storage, i.e. the managed case. It does **not** apply to an
+NFS-type volume: a static share is owned by whatever its export says, so map it
+there (`all_squash,anonuid=1000,anongid=1000`, or per-user `0700`
+subdirectories).
 
 **On size**, quoted verbatim from the product's own words, because an allocation
 is routinely mistaken for a limit: *"Wardyn never enforces a drive's size itself.

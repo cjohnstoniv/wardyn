@@ -693,6 +693,82 @@ func TestCreateSandbox_DriveShapesTheAgentPod(t *testing.T) {
 	}
 }
 
+// TestCreateSandbox_DriveAsksGvisorForDirectfsOff pins the one pod field that
+// exists because of the RUNTIME rather than the storage.
+//
+// gVisor's directfs donates a file descriptor per mount point to the sandbox
+// and operates on it directly, which a network-backed export (the share case)
+// does not reliably support. gVisor takes the override per MOUNT, from an
+// annotation keyed by the volume's own name, so a drive pod under a runsc
+// RuntimeClass carries it and nothing else does. The negative controls are the
+// point: a CC1 pod has no RuntimeClass at all, and a Vault-tier microVM handler
+// is not runsc — stamping either would be a request to a runtime that never
+// reads it.
+func TestCreateSandbox_DriveAsksGvisorForDirectfsOff(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		class   types.ConfinementClass
+		handler string
+		want    bool
+	}{
+		{"CC2 gVisor", types.CC2, "runsc", true},
+		{"CC3 microVM", types.CC3, "kata-qemu", false},
+		{"CC1, no RuntimeClass", types.CC1, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{}
+			if tc.handler != "" {
+				cfg.ConfinementRuntimes = map[types.ConfinementClass]string{tc.class: "pinned"}
+			}
+			d, cs := newTestDriver(t, cfg)
+			if tc.handler != "" {
+				mustCreateRuntimeClass(t, cs, "pinned", tc.handler)
+			}
+			installProxyIPReactor(t, cs, "10.244.0.11")
+			installAgentRunningReactor(t, cs)
+
+			spec := testSandboxSpec()
+			spec.ConfinementClass = tc.class
+			spec.Drive = testDriveMount()
+			sb, err := d.CreateSandbox(context.Background(), spec)
+			if err != nil {
+				t.Fatalf("CreateSandbox: %v", err)
+			}
+			pod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
+			if err != nil {
+				t.Fatalf("get agent pod: %v", err)
+			}
+			got, present := pod.Annotations[driveDirectfsAnnotation]
+			if present != tc.want {
+				t.Fatalf("%s present = %v (annotations %v), want %v", driveDirectfsAnnotation, present, pod.Annotations, tc.want)
+			}
+			if tc.want && got != "off" {
+				t.Errorf("%s = %q, want %q", driveDirectfsAnnotation, got, "off")
+			}
+		})
+	}
+
+	// A drive-LESS gVisor run stamps nothing: the annotation names the drive
+	// volume, and a pod with no such mount would carry a dangling request.
+	d, cs := newTestDriver(t, Config{ConfinementRuntimes: map[types.ConfinementClass]string{types.CC2: "pinned"}})
+	mustCreateRuntimeClass(t, cs, "pinned", "runsc")
+	installProxyIPReactor(t, cs, "10.244.0.12")
+	installAgentRunningReactor(t, cs)
+	spec := testSandboxSpec()
+	spec.ConfinementClass = types.CC2
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox (drive-less): %v", err)
+	}
+	pod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent pod (drive-less): %v", err)
+	}
+	if _, present := pod.Annotations[driveDirectfsAnnotation]; present {
+		t.Errorf("drive-less gVisor pod carries %s (%v), want none", driveDirectfsAnnotation, pod.Annotations)
+	}
+}
+
 // TestCreateSandbox_DriveReadOnlyOnBothHalves pins the two flags that must
 // agree: the volume's and the mount's. A read-only allocation that comes up
 // writable because only one half carried the flag is a widening.

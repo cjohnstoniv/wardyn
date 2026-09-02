@@ -87,6 +87,23 @@ var errDriveNameInvalid = errors.New("this drive cannot be mounted on Kubernetes
 // were. Neither is a choice a driver may make silently.
 var errDriveClaimTerminating = errors.New("your drive's volume claim is being deleted and cannot be mounted; wait for the deletion to finish, or ask an administrator whether it should have been deleted at all")
 
+// errDriveClaimForeign is reuseDriveClaim's refusal of an existing claim whose
+// IDENTITY labels say it is not this member's storage: a managed claim whose
+// wardyn.drive or wardyn.home names a different (drive, home) pair, or a share
+// whose object turns out to be a wardyn.managed claim this driver provisioned
+// for one person.
+//
+// The object NAME cannot decide this, which is why the labels have to.
+// types.DriveObjectName joins two variable-width fields with the separator both
+// of them admit (`wardyn-drive-<slug>-<home>`, and a slug folds case), so the
+// pair ("eng", "us-bob") and the pair ("eng-us", "bob") resolve to one claim
+// name; a rename does the same thing over time, moving a second person's home
+// under a name a first person already holds. Wardyn holds no `delete` verb and
+// cannot repair either collision, so the only fail-closed answer is to refuse
+// the run — mounting the claim would put one member's private drive at the
+// drive target inside another member's agent.
+var errDriveClaimForeign = errors.New("your drive's volume claim belongs to a different drive or a different person and will not be mounted; ask an administrator to check the drive's name and directory-name template (two drives whose names differ only in where a dash falls can resolve to the same claim)")
+
 // errDriveBackendUnsupported is ensureDrivePVC's refusal of a drive whose
 // backend belongs to another substrate (a Docker volume, a host path). The
 // control plane already refuses such a drive at run create — driveMountFor

@@ -33,6 +33,14 @@ const (
 	// most one claim.
 	driveVolumeName = "drive"
 
+	// driveDirectfsAnnotation asks gVisor to serve THIS volume with directfs
+	// off. gVisor keys the option by the mount's name, so the key is
+	// driveVolumeName's — built from the same constant rather than re-typed, or
+	// renaming the volume would silently leave the annotation pointing at a
+	// mount that no longer exists. Stamped by applyDriveToPod on runsc pods
+	// only; see its doc for what the annotation does and does not guarantee.
+	driveDirectfsAnnotation = "dev.gvisor.spec.mount." + driveVolumeName + ".directfs"
+
 	// labelDrive marks a claim as belonging to one drive ROW (by id, so a rename
 	// does not orphan the label the way the object name's slug would), and
 	// labelDriveHome to one person's home within it. Byte-for-byte the pair the
@@ -40,6 +48,11 @@ const (
 	// the same on either substrate — the same argument naming.go's label
 	// vocabulary makes for the run/component/managed keys, and the reason
 	// neither key takes a "/" prefix.
+	//
+	// The pair is not merely descriptive: it is the ONLY evidence that a claim
+	// found under a member's object name is that member's storage, and
+	// driveClaimIdentity refuses the run when either disagrees. An object name
+	// cannot answer that question — see errDriveClaimForeign.
 	//
 	// There is deliberately NO wardyn.run-id label here. A drive outlives every
 	// run that mounts it, and teardownByRunID sweeps by exactly that selector:
@@ -104,20 +117,24 @@ func validateDriveMount(drive *types.DriveMount) error {
 // resolver says it belongs to. Empty means the claim is the one this drive
 // would have created.
 //
-// It WARNS rather than refusing, and that split is the decision worth naming.
-// The claim is the member's data. Refusing the run on a size change would mean
-// an admin editing the allocation in the console breaks every existing member's
-// runs — and a PVC's request cannot be shrunk anyway, so honouring the new
-// number is not on the table either. What an operator actually needs is to KNOW
-// the two disagree, in a line they can grep, before somebody asks why a drive
-// shows 20 GiB in the console and 10 GiB in the pod. The one disagreement that
-// is NOT a warning is a Terminating claim (see ensureDrivePVC): that one does
-// not surprise an operator later, it hangs the pod now.
+// Everything it lists is a SHAPE disagreement, and shape is what may be warned
+// about, because the claim is the member's data. Refusing the run on a size
+// change would mean an admin editing the allocation in the console breaks every
+// existing member's runs — and a PVC's request cannot be shrunk anyway (the
+// Role holds no patch verb either), so honouring the new number is not on the
+// table. What an operator actually needs is to KNOW the two disagree, in a line
+// they can grep, before somebody asks why a drive shows 20 GiB in the console
+// and 10 GiB in the pod.
+//
+// IDENTITY is deliberately NOT here. "Whose claim is this?" is not a shape
+// question and has no warn-and-continue answer: see reuseDriveClaim, which
+// refuses on it (errDriveClaimForeign) before this function is ever called, as
+// it does for a Terminating claim.
 //
 // Scoped to the MANAGED backend on purpose. A static share's claim is an
-// admin's object: its class, its size and its labels are facts about their
-// storage, not drift from anything Wardyn asserted, and the drive row's size is
-// a display value there (StorageEnforcementExternal).
+// admin's object: its class and its size are facts about their storage, not
+// drift from anything Wardyn asserted, and the drive row's size is a display
+// value there (StorageEnforcementExternal).
 //
 // Returning the descriptions instead of logging them keeps the comparison
 // itself testable without a log handler in the way.
@@ -146,15 +163,48 @@ func driveClaimDrift(claim *corev1.PersistentVolumeClaim, drive *types.DriveMoun
 	if !hasAccessMode(claim.Spec.AccessModes, corev1.ReadWriteOnce) {
 		drift = append(drift, fmt.Sprintf("access modes are %v, a managed drive is provisioned ReadWriteOnce", claim.Spec.AccessModes))
 	}
-	// A claim under this drive's object name that carries somebody else's drive
-	// id — or none at all — was not created by this drive. It is still mounted
-	// (refusing would strand every claim written before the label existed), but
-	// it is the drift an operator most wants to hear about: two drives whose
-	// slugs fold to the same fragment resolve to one object name.
-	if got := claim.Labels[labelDrive]; got != drive.DriveID.String() {
-		drift = append(drift, fmt.Sprintf("%s label is %q, this drive's row id is %q", labelDrive, got, drive.DriveID))
-	}
 	return drift
+}
+
+// driveClaimIdentity answers the one question about an existing claim that has
+// no warn-and-continue answer: is this object the storage this member's drive
+// names, or somebody else's?
+//
+// The claim's own labels are the only evidence available, because the NAME
+// cannot supply it — see errDriveClaimForeign for the two ways one name comes
+// to cover two (drive, home) pairs. Both are stamped at create (ensureDrivePVC)
+// and both are compared, because either alone is satisfiable by the wrong
+// object: one drive's two members share a wardyn.drive value, and two drives'
+// same-named homes share a wardyn.home value.
+//
+// A LABEL-LESS claim is foreign too. Every claim this driver has ever created
+// carries all three labels, so an unlabelled object under a member's claim name
+// is an admin's own object (or another tool's) that happens to collide — not an
+// older Wardyn claim to be adopted.
+//
+// The share arm is the mirror image. A k8s_pvc_static claim is an admin's
+// pre-provisioned handle and carries none of Wardyn's labels; one that carries
+// wardyn.managed=true is a MANAGED claim this driver provisioned for ONE person,
+// under the very name an admin has now pointed a whole share at. Mounting it
+// would hand every member of that share one member's private drive.
+func driveClaimIdentity(claim *corev1.PersistentVolumeClaim, drive *types.DriveMount) error {
+	switch drive.Backend {
+	case types.DriveBackendK8sPVC:
+		if got := claim.Labels[labelDrive]; got != drive.DriveID.String() {
+			return fmt.Errorf("k8s: drive: claim %q carries %s=%q, this drive's row id is %q: %w",
+				claim.Name, labelDrive, got, drive.DriveID, errDriveClaimForeign)
+		}
+		if got := claim.Labels[labelDriveHome]; got != drive.HomeName {
+			return fmt.Errorf("k8s: drive: claim %q carries %s=%q, this run's home is %q: %w",
+				claim.Name, labelDriveHome, got, drive.HomeName, errDriveClaimForeign)
+		}
+	case types.DriveBackendK8sPVCStatic:
+		if claim.Labels[labelManaged] == "true" {
+			return fmt.Errorf("k8s: drive: claim %q is a %s=true claim wardynd provisioned as one person's managed drive, not an administrator's share: %w",
+				claim.Name, labelManaged, errDriveClaimForeign)
+		}
+	}
+	return nil
 }
 
 // driveRequestBytes is the allocation in bytes: <SizeMiB>Mi, which is what the
@@ -274,9 +324,16 @@ func ensureDrivePVC(ctx context.Context, client kubernetes.Interface, ns string,
 }
 
 // reuseDriveClaim decides whether a claim that already exists may back this run.
+// Two states refuse it and everything else is a warning.
 //
-// TERMINATING IS A REFUSAL, and it is the one existing-claim state that cannot
-// be a warning. A claim with a DeletionTimestamp is finalizer-pinned until the
+// IDENTITY IS A REFUSAL, and it is checked FIRST because it is the only one of
+// the three whose wrong answer hands one member another member's files. See
+// driveClaimIdentity for what the labels decide and errDriveClaimForeign for why
+// the object name cannot.
+//
+// TERMINATING IS A REFUSAL, the one existing-claim state that cannot be a
+// warning even for a claim that IS this member's. A claim with a
+// DeletionTimestamp is finalizer-pinned until the
 // last pod using it goes away; a NEW pod mounting it is never admitted (the
 // apiserver refuses a pod referencing a terminating claim, and where it does
 // not, the scheduler leaves it Pending forever). Reusing it would turn one
@@ -285,9 +342,12 @@ func ensureDrivePVC(ctx context.Context, client kubernetes.Interface, ns string,
 // so the claim an operator is deliberately reclaiming would come back under
 // them, and the run would mount an empty volume where the member's files were.
 //
-// Everything else is a WARNING — see driveClaimDrift for why the member's data
-// wins over Wardyn's opinion of its shape.
+// Everything else — every SHAPE disagreement — is a WARNING; see driveClaimDrift
+// for why the member's data wins over Wardyn's opinion of its shape.
 func reuseDriveClaim(claim *corev1.PersistentVolumeClaim, drive *types.DriveMount) error {
+	if err := driveClaimIdentity(claim, drive); err != nil {
+		return err
+	}
 	if claim.DeletionTimestamp != nil {
 		return fmt.Errorf("k8s: drive: claim %q is Terminating (deleted at %s): %w",
 			claim.Name, claim.DeletionTimestamp.UTC().Format("2006-01-02T15:04:05Z"), errDriveClaimTerminating)
@@ -306,17 +366,19 @@ func reuseDriveClaim(claim *corev1.PersistentVolumeClaim, drive *types.DriveMoun
 // Volume, the mount at the RESERVED target the control plane carried on the
 // mount (runner.DriveTarget — never a literal re-typed here, so the path a
 // policy or workspace source is refused for naming and the path this binds at
-// are the same string by construction), and the one pod-level SecurityContext
-// this substrate ever sets.
+// are the same string by construction), the one pod-level SecurityContext this
+// substrate ever sets, and — on a gVisor pod only — the per-mount directfs
+// annotation below.
 //
-// APPEND AND SET, NEVER ASSIGN OVER, on all three. This is the only code in the
-// package that gives the agent pod a Volume, a VolumeMount or a pod-level
-// SecurityContext today — so a wholesale assignment is correct right now and
-// silently wrong the first time anything else adds one (a projected token
-// volume, a recording volume, a second security field). An assignment does not
-// fail a test when that day comes; it drops the other half and the pod comes up
-// missing something nobody was watching. The mount goes on the MAIN container
-// by name rather than by index for the same reason.
+// APPEND AND SET, NEVER ASSIGN OVER, on all four. This is the only code in the
+// package that gives the agent pod a Volume, a VolumeMount, a pod-level
+// SecurityContext or an annotation today — so a wholesale assignment is correct
+// right now and silently wrong the first time anything else adds one (a
+// projected token volume, a recording volume, a second security field, a
+// checksum annotation). An assignment does not fail a test when that day comes;
+// it drops the other half and the pod comes up missing something nobody was
+// watching. The mount goes on the MAIN container by name rather than by index
+// for the same reason.
 //
 // ReadOnly is set on the Volume AND on the VolumeMount: the volume-level flag is
 // what the kubelet passes to the mount, and the mount-level flag is what a
@@ -337,13 +399,33 @@ func reuseDriveClaim(claim *corev1.PersistentVolumeClaim, drive *types.DriveMoun
 // substrate offers a host path, so nothing here has to refuse one.
 //
 // GVISOR (the CC2/CC3 RuntimeClasses resolveRuntimeClassName pins): a
-// network-backed volume under runsc wants `directfs` OFF, and that is a property
-// of the RUNTIME HANDLER this pod's RuntimeClassName names — a node-level
-// runsc flag an operator sets, which no field of a pod spec can express. Nothing
-// here tries to; the recipe lives beside the share recipes in docs/OPERATIONS.md.
-// It is named at this function because this is the only place in the tree where
-// a drive volume and a RuntimeClass meet.
-func applyDriveToPod(spec *corev1.PodSpec, drive *types.DriveMount) {
+// network-backed volume under runsc wants `directfs` OFF — the gofer donates a
+// file descriptor per mount point and the sandbox then operates on it directly,
+// which a 9p/NFS-backed export does not reliably support. gVisor takes that per
+// MOUNT, from a pod annotation keyed by the volume's own name
+// (`dev.gvisor.spec.mount.<NAME>.directfs: "off"`), so this function stamps it
+// on exactly the pods that need it and no others: a drive pod whose resolved
+// RuntimeClass handler is runsc. runtimeHandler is "" for every other pod, which
+// is why the parameter exists at all — it is the RuntimeClass's .Handler, not
+// its object name, that names the runtime family (see handlerRunscPrefix).
+//
+// It is a REQUEST, not an enforcement, and OPERATIONS says so: containerd only
+// forwards the annotation when the node's runsc runtime config lists
+// `pod_annotations = ["dev.gvisor.*"]`, and the node-level `--directfs=false`
+// is the setting that does not depend on that. Both recipes, plus the
+// `--file-access-mounts` caching caveat a share other writers touch needs, are
+// in docs/OPERATIONS.md "User drives on Kubernetes".
+//
+// It is stamped at this function because this is the only place in the tree
+// where a drive volume and a RuntimeClass meet.
+func applyDriveToPod(pod *corev1.Pod, drive *types.DriveMount, runtimeHandler string) {
+	if strings.HasPrefix(runtimeHandler, handlerRunscPrefix) {
+		if pod.Annotations == nil {
+			pod.Annotations = map[string]string{}
+		}
+		pod.Annotations[driveDirectfsAnnotation] = "off"
+	}
+	spec := &pod.Spec
 	spec.Volumes = append(spec.Volumes, corev1.Volume{
 		Name: driveVolumeName,
 		VolumeSource: corev1.VolumeSource{

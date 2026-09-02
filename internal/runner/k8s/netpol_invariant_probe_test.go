@@ -3,20 +3,37 @@
 
 //go:build k8s
 
-// F9 probe — intended destination: internal/runner/k8s/netpol_invariant_probe_test.go
+// The k8s substrate's CONFINEMENT invariant, pinned end to end against a fake
+// clientset: what a run's NetworkPolicies actually admit, and what its Secret
+// actually holds. Four properties, each of which fails open in a way no other
+// test in this package would notice.
 //
-// Fake-clientset probes for the k8s runner's NetworkPolicy + Secret invariant
-// (see local/review-0.7/deep/F9-k8s-netpol-secrets.md). Reuses this package's
-// existing _test.go helpers (newTestDriver, installProxyIPReactor,
-// installAgentRunningReactor, testSandboxSpec, installCanaryReactor,
-// installStuckCanaryReactor, testRestConfig, assertCanaryCleanedUp).
+//  1. The agent's egress peer set is EXACTLY this run's proxy pod on the proxy
+//     port — no DNS peer, no 0.0.0.0/0, no namespaceSelector — and the policy's
+//     selector still selects the agent even when spec.Labels tries to override
+//     the reserved keys wardynLabels stamps.
+//  2. The proxy admits ingress from exactly this run's agent selector, and every
+//     egress peer is an ipBlock that excludes the cloud-metadata address.
+//  3. The run token and the MITM CA private key reach the per-run Secret and
+//     nothing else: the proxy consumes them via secretKeyRef, and no inline
+//     EnvVar.Value on either pod carries the material. Same for the credential
+//     half of the agent's own environment (SandboxSpec.SecretEnv), which
+//     secretEnvVars must deliver by reference — a pod spec is readable by any
+//     principal holding pods/get in the runs namespace.
+//  4. The boot-time canary refuses construction when the CNI does not enforce
+//     NetworkPolicy, never advertises NetworkPolicy under the opt-out, and
+//     refuses an indeterminate verdict even WITH the opt-out.
 //
-// Run (no PG, no cluster):
+// Property 3's control-plane premise — that dispatch reports its credential
+// keys so splitSecretEnv can move them off SandboxSpec.Env — is pinned on the
+// other side of the seam by internal/api's TestDispatchEnvSplit_CredentialsLeaveEnv
+// and TestDispatchEnvSplit_BedrockCredentialsLeaveEnv. Together the three cover
+// the whole leak path; alone, each would pass over a break in the other half.
 //
-//	cp local/review-0.7/deep/F9-k8s-netpol-secrets/netpol_invariant_probe_test.go internal/runner/k8s/
-//	nice -n 10 GOMAXPROCS=8 go test -tags k8s -count=1 -p 1 -run 'TestProbe_F9_(AgentNetPol|ProxyNetPol|ProxySecrets|Canary)' ./internal/runner/k8s/
-//	nice -n 10 GOMAXPROCS=8 go test -tags k8s -count=1 -p 1 -run 'TestProbe_F9_H1_' ./internal/runner/k8s/   # EXPECTED RED today
-//	rm internal/runner/k8s/netpol_invariant_probe_test.go
+// Built on this package's own helpers (newTestDriver, probeCreate,
+// installProxyIPReactor, installAgentRunningReactor, testSandboxSpec,
+// installCanaryReactor, installStuckCanaryReactor, testRestConfig,
+// assertCanaryCleanedUp), so it needs no cluster and no Postgres.
 package k8s
 
 import (
@@ -361,25 +378,20 @@ func TestProbe_F9_CanaryRefusesWhenCNIReportsUnenforced(t *testing.T) {
 	assertCanaryCleanedUp(t, cs4)
 }
 
-// TestProbe_F9_H1_AgentEnvSecretsAreAPIReadable_EXPECTED_RED documents
-// hypothesis H1 of the F9 trace: a value dispatch resolves for an env_secret
-// grant (internal/api/runs_dispatch.go's resolveEnvSecretGrants, with a REAL
-// stored secret) must not land as an inline, API-readable Value on the agent
-// pod spec.
+// TestProbe_F9_H1_AgentEnvSecretsAreAPIReadable is property 3's agent half: a
+// value dispatch resolved for an env_secret grant (resolveEnvSecretGrants, with
+// a REAL stored secret) must not land as an inline, API-readable Value on the
+// agent pod spec.
 //
-// The FIXTURE moved from spec.Env to spec.SecretEnv when the fix landed, and
-// only the fixture: the assertion below is byte-for-byte the one that caught
-// H1. It had to move because the H1 fix is a change to the SEAM the probe was
-// driving — runner.SandboxSpec now has two env halves, and
-// resolveEnvSecretGrants' values ride SecretEnv, so writing them to Env would
-// be exercising a shape dispatch can no longer produce. That premise is not
-// merely assumed here: internal/api's TestDispatchEnvSplit_CredentialsLeaveEnv
-// pins that the credential lanes populate SecretEnv and leave Env clean, so
-// this probe plus that one still cover the whole leak path end to end.
+// The FIXTURE writes SandboxSpec.SecretEnv rather than Env because that is the
+// only shape dispatch can now produce — splitSecretEnv moves the credential half
+// there before a spec reaches any driver — while the assertion below is
+// byte-for-byte the one that caught the original leak.
 //
-// The probe is also STRICTER than it was: a driver that simply dropped the
-// variable would have passed the original loop, and now fails.
-func TestProbe_F9_H1_AgentEnvSecretsAreAPIReadable_EXPECTED_RED(t *testing.T) {
+// It is STRICTER than a pure absence check: the variable must also still REACH
+// the agent, by reference. A driver that silently dropped it would satisfy the
+// no-inline-value loop while breaking every env_secret grant on this substrate.
+func TestProbe_F9_H1_AgentEnvSecretsAreAPIReadable(t *testing.T) {
 	const secretVal = "ghp_probe_env_secret_value_1234567890"
 	_, cs, spec, sb := probeCreate(t, func(s *runner.SandboxSpec) {
 		// shape of resolveEnvSecretGrants' sandboxEnv[name] = string(val), after

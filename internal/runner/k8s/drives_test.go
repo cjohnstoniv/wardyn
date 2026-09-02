@@ -500,10 +500,131 @@ func TestEnsureDrivePVC_RefusesATerminatingClaim(t *testing.T) {
 	}
 }
 
+// TestEnsureDrivePVC_RefusesAClaimThatIsNotThisMembers is the fail-closed half
+// of reuse, and the one whose wrong answer is a data breach rather than a
+// confusing log line: a claim found under a member's object name is mounted
+// ONLY when its own labels say it is that member's storage.
+//
+// The name cannot decide it. `wardyn-drive-<slug>-<home>` joins two
+// variable-width fields with the separator both of them admit, so the ambiguous
+// pair below — drive "eng" with home "us-bob", and drive "eng-us" with home
+// "bob" — resolves to ONE claim name; the home-only case is the same collision
+// arriving through a rename or a changed home template. Wardyn holds no delete
+// verb and cannot repair either, so a refused run is the whole remedy the
+// driver has.
+func TestEnsureDrivePVC_RefusesAClaimThatIsNotThisMembers(t *testing.T) {
+	// The ambiguous pair, written out once: two DIFFERENT drive rows whose
+	// (slug, home) pairs fold to the same object name.
+	const collidingName = "wardyn-drive-eng-us-bob"
+	otherDriveID := uuid.MustParse("11111111-2222-3333-4444-555555555555")
+
+	for _, tc := range []struct {
+		name  string
+		drive func() *types.DriveMount
+		claim func(*types.DriveMount) *corev1.PersistentVolumeClaim
+		want  string
+	}{
+		{
+			// This run belongs to drive "eng" / home "us-bob"; the claim already in
+			// the namespace was provisioned for drive "eng-us" / home "bob".
+			name: "the ambiguous pair: another drive's claim under one name",
+			drive: func() *types.DriveMount {
+				d := testDriveMount()
+				d.ObjectName, d.HomeName = collidingName, "us-bob"
+				return d
+			},
+			claim: func(d *types.DriveMount) *corev1.PersistentVolumeClaim {
+				other := testDriveMount()
+				other.DriveID, other.ObjectName, other.HomeName = otherDriveID, collidingName, "bob"
+				return existingDriveClaim(other)
+			},
+			want: labelDrive,
+		},
+		{
+			// Same drive row, different person: the rename/home-template case,
+			// which the drive-id label alone cannot catch.
+			name:  "the home-only mismatch: this drive, another person's home",
+			drive: func() *types.DriveMount { return testDriveMount() },
+			claim: func(d *types.DriveMount) *corev1.PersistentVolumeClaim {
+				other := testDriveMount()
+				other.HomeName = "d-0000aa"
+				claim := existingDriveClaim(other)
+				claim.Name = d.ObjectName
+				return claim
+			},
+			want: labelDriveHome,
+		},
+		{
+			// A claim carrying none of the three labels was never created by this
+			// driver — every claim it has ever written stamps all three.
+			name:  "an unlabelled object under a member's claim name",
+			drive: func() *types.DriveMount { return testDriveMount() },
+			claim: func(d *types.DriveMount) *corev1.PersistentVolumeClaim {
+				claim := existingDriveClaim(d)
+				claim.Labels = nil
+				return claim
+			},
+			want: labelDrive,
+		},
+		{
+			// A SHARE must never resolve to a managed claim: an admin pointing a
+			// share at that name would hand every member of it one person's drive.
+			name: "a share whose claim is somebody's managed drive",
+			drive: func() *types.DriveMount {
+				d := testDriveMount()
+				d.Backend = types.DriveBackendK8sPVCStatic
+				d.Enforcement = types.StorageEnforcementExternal
+				return d
+			},
+			claim: func(d *types.DriveMount) *corev1.PersistentVolumeClaim {
+				managed := testDriveMount()
+				return existingDriveClaim(managed) // carries wardyn.managed=true
+			},
+			want: labelManaged,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			drive := tc.drive()
+			cs := fake.NewClientset(tc.claim(drive))
+
+			err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
+			if !errors.Is(err, errDriveClaimForeign) {
+				t.Fatalf("err = %v, want errors.Is(err, errDriveClaimForeign)", err)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %q, want it to name the label that decided it (%s)", err.Error(), tc.want)
+			}
+			// Never a create: the claim under that name is somebody's data and
+			// the driver holds no verb that could move it aside.
+			if verbs := countPVCVerbs(cs); verbs["create"] != 0 {
+				t.Errorf("claim verbs = %v, want no create over a claim this drive does not own", verbs)
+			}
+		})
+	}
+
+	// Negative control, and the reason the share arm is scoped to wardyn.managed
+	// rather than to "has any label": an admin's own claim carries labels of
+	// their own, and a share must still mount over them.
+	share := testDriveMount()
+	share.Backend = types.DriveBackendK8sPVCStatic
+	share.Enforcement = types.StorageEnforcementExternal
+	admins := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{
+		Name: share.ObjectName, Namespace: testNamespace,
+		Labels: map[string]string{"app.kubernetes.io/managed-by": "corp-storage", "team": "eng"},
+	}}
+	if err := ensureDrivePVC(context.Background(), fake.NewClientset(admins), testNamespace, share); err != nil {
+		t.Errorf("ensureDrivePVC over an administrator's own labelled share: %v, want it mounted", err)
+	}
+}
+
 // TestDriveClaimDrift covers the SILENT-REUSE finding: an existing claim whose
-// spec disagrees with the drive it was resolved from is mounted anyway (the
+// SHAPE disagrees with the drive it was resolved from is mounted anyway (the
 // claim is the member's data, and a PVC request cannot be shrunk), but the
 // disagreement is named rather than swallowed.
+//
+// Every case here therefore also asserts the run still succeeds. The identity
+// labels are NOT a shape and are not here: they refuse, and
+// TestEnsureDrivePVC_RefusesAClaimThatIsNotThisMembers owns them.
 func TestDriveClaimDrift(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -523,12 +644,6 @@ func TestDriveClaimDrift(t *testing.T) {
 		{"an access mode a managed drive never provisions", func(c *corev1.PersistentVolumeClaim) {
 			c.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}
 		}, "access modes"},
-		{"another drive's claim under this name", func(c *corev1.PersistentVolumeClaim) {
-			c.Labels[labelDrive] = uuid.NewString()
-		}, labelDrive},
-		{"a claim predating the labels", func(c *corev1.PersistentVolumeClaim) {
-			c.Labels = nil
-		}, labelDrive},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			drive := testDriveMount()
@@ -549,8 +664,8 @@ func TestDriveClaimDrift(t *testing.T) {
 }
 
 // TestDriveClaimDrift_CleanClaimAndShare pins the two silences: the claim this
-// driver would itself have created says nothing, and a static share is never
-// compared at all — its class, size and labels are facts about an admin's
+// driver would itself have created says nothing, and a static share's SHAPE is
+// never compared at all — its class and size are facts about an admin's
 // storage, not drift from anything Wardyn asserted.
 func TestDriveClaimDrift_CleanClaimAndShare(t *testing.T) {
 	drive := testDriveMount()
@@ -591,20 +706,32 @@ func TestApplyDriveToPod_AppendsRatherThanAssigns(t *testing.T) {
 	drive := testDriveMount()
 	existingMount := corev1.VolumeMount{Name: "member-work", MountPath: "/work"}
 	nonRoot := true
-	spec := &corev1.PodSpec{
-		Volumes: []corev1.Volume{{
-			Name:         "member-work",
-			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
-		}},
-		SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: &nonRoot},
-		Containers: []corev1.Container{
-			{Name: mainContainerName, VolumeMounts: []corev1.VolumeMount{existingMount}},
-			{Name: "sidecar"},
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"checksum/policy": "abc123"}},
+		Spec: corev1.PodSpec{
+			Volumes: []corev1.Volume{{
+				Name:         "member-work",
+				VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+			}},
+			SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: &nonRoot},
+			Containers: []corev1.Container{
+				{Name: mainContainerName, VolumeMounts: []corev1.VolumeMount{existingMount}},
+				{Name: "sidecar"},
+			},
 		},
 	}
 
-	applyDriveToPod(spec, drive)
+	applyDriveToPod(pod, drive, "runsc")
+	spec := &pod.Spec
 
+	// The gVisor annotation is SET, not assigned over: a pod already carrying an
+	// annotation keeps it (the fourth field of the append-never-assign rule).
+	if got := pod.Annotations[driveDirectfsAnnotation]; got != "off" {
+		t.Errorf("%s = %q, want %q on a runsc pod", driveDirectfsAnnotation, got, "off")
+	}
+	if got := pod.Annotations["checksum/policy"]; got != "abc123" {
+		t.Errorf("pre-existing annotation = %q, want it untouched — the drive SET one key, it must not replace the map", got)
+	}
 	if len(spec.Volumes) != 2 || spec.Volumes[0].Name != "member-work" || spec.Volumes[1].Name != driveVolumeName {
 		t.Fatalf("volumes = %+v, want the pre-existing one AND the drive", spec.Volumes)
 	}
@@ -626,5 +753,14 @@ func TestApplyDriveToPod_AppendsRatherThanAssigns(t *testing.T) {
 	}
 	if sc.FSGroupChangePolicy == nil || *sc.FSGroupChangePolicy != corev1.FSGroupChangeOnRootMismatch {
 		t.Errorf("fsGroupChangePolicy = %v, want OnRootMismatch", sc.FSGroupChangePolicy)
+	}
+
+	// A pod that is NOT a gVisor pod gets no annotation map invented for it: the
+	// annotation is a runsc-only request, and a nil map is the shape every
+	// drive pod had before it existed.
+	plain := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: mainContainerName}}}}
+	applyDriveToPod(plain, drive, "")
+	if plain.Annotations != nil {
+		t.Errorf("annotations = %v on a pod with no RuntimeClass, want nil", plain.Annotations)
 	}
 }

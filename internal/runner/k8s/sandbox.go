@@ -43,7 +43,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if len(spec.Mounts) > 0 {
 		return runner.Sandbox{}, fmt.Errorf("k8s: sandbox mounts are not supported (requested %d): %w", len(spec.Mounts), errMountsUnsupported)
 	}
-	runtimeClassName, err := d.resolveRuntimeClassName(ctx, spec.ConfinementClass)
+	runtimeClassName, runtimeHandler, err := d.resolveRuntimeClassName(ctx, spec.ConfinementClass)
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
@@ -258,7 +258,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// this substrate already produces changes shape. applyDriveToPod appends
 	// rather than assigns — see its doc comment.
 	if spec.Drive != nil {
-		applyDriveToPod(&agentPod.Spec, spec.Drive)
+		applyDriveToPod(agentPod, spec.Drive, runtimeHandler)
 	}
 	if runtimeClassName != "" {
 		agentPod.Spec.RuntimeClassName = &runtimeClassName
@@ -378,44 +378,53 @@ func podStuckReason(pod *corev1.Pod) string {
 // ConfinementRuntimes's doc — a k8s RuntimeClass object name carries no
 // platform convention Wardyn could safely guess) resolving to a RuntimeClass
 // that exists and clears the class's floor guard. Never silently downgrade.
-func (d *Driver) resolveRuntimeClassName(ctx context.Context, class types.ConfinementClass) (string, error) {
+//
+// It returns the resolved .Handler alongside the object NAME because the two
+// answer different questions and only one of them is guessable from the other:
+// the name is what the pod spec carries, the handler is what names the runtime
+// FAMILY (see handlerRunscPrefix). applyDriveToPod needs the family to decide
+// whether this pod gets gVisor's per-mount directfs annotation, and resolving
+// it a second time there would be a second RuntimeClasses Get per run — and a
+// second place for the two answers to drift. Empty handler for CC1, which pins
+// no RuntimeClass at all.
+func (d *Driver) resolveRuntimeClassName(ctx context.Context, class types.ConfinementClass) (name, handler string, err error) {
 	switch class {
 	case "", types.CC1:
-		return "", nil
+		return "", "", nil
 	case types.CC2:
 		name := d.cfg.ConfinementRuntimes[types.CC2]
 		if name == "" {
-			return "", fmt.Errorf("the Wall tier (CC2) requires a RuntimeClass pinned via WARDYN_CONFINEMENT_MAP (CC2=<RuntimeClass name>); none is configured: %w", errRuntimeClassUnavailable)
+			return "", "", fmt.Errorf("the Wall tier (CC2) requires a RuntimeClass pinned via WARDYN_CONFINEMENT_MAP (CC2=<RuntimeClass name>); none is configured: %w", errRuntimeClassUnavailable)
 		}
 		handler, err := d.runtimeClassHandler(ctx, name)
 		if err != nil {
-			return "", fmt.Errorf("k8s: CC2 RuntimeClass %q: %w", name, err)
+			return "", "", fmt.Errorf("k8s: CC2 RuntimeClass %q: %w", name, err)
 		}
 		if handler == "" {
-			return "", fmt.Errorf("the Wall tier (CC2) pins RuntimeClass %q, which does not exist on this cluster: %w", name, errRuntimeClassUnavailable)
+			return "", "", fmt.Errorf("the Wall tier (CC2) pins RuntimeClass %q, which does not exist on this cluster: %w", name, errRuntimeClassUnavailable)
 		}
 		if !strings.HasPrefix(handler, handlerRunscPrefix) {
-			return "", fmt.Errorf("the Wall tier (CC2) pins RuntimeClass %q (handler %q), which does not deliver gVisor (%s) isolation; refusing to downgrade: %w", name, handler, handlerRunscPrefix, errRuntimeClassUnavailable)
+			return "", "", fmt.Errorf("the Wall tier (CC2) pins RuntimeClass %q (handler %q), which does not deliver gVisor (%s) isolation; refusing to downgrade: %w", name, handler, handlerRunscPrefix, errRuntimeClassUnavailable)
 		}
-		return name, nil
+		return name, handler, nil
 	case types.CC3:
 		name := d.cfg.ConfinementRuntimes[types.CC3]
 		if name == "" {
-			return "", fmt.Errorf("the Vault tier (CC3) requires a RuntimeClass pinned via WARDYN_CONFINEMENT_MAP (CC3=<RuntimeClass name>); none is configured: %w", errRuntimeClassUnavailable)
+			return "", "", fmt.Errorf("the Vault tier (CC3) requires a RuntimeClass pinned via WARDYN_CONFINEMENT_MAP (CC3=<RuntimeClass name>); none is configured: %w", errRuntimeClassUnavailable)
 		}
 		handler, err := d.runtimeClassHandler(ctx, name)
 		if err != nil {
-			return "", fmt.Errorf("k8s: CC3 RuntimeClass %q: %w", name, err)
+			return "", "", fmt.Errorf("k8s: CC3 RuntimeClass %q: %w", name, err)
 		}
 		if handler == "" {
-			return "", fmt.Errorf("the Vault tier (CC3) pins RuntimeClass %q, which does not exist on this cluster: %w", name, errRuntimeClassUnavailable)
+			return "", "", fmt.Errorf("the Vault tier (CC3) pins RuntimeClass %q, which does not exist on this cluster: %w", name, errRuntimeClassUnavailable)
 		}
 		if runner.IsKnownNonVaultRuntime(handler) {
-			return "", fmt.Errorf("the Vault tier (CC3) pins RuntimeClass %q (handler %q), a known shared-kernel/userspace-kernel runtime that does not deliver KVM microVM isolation; refusing to downgrade: %w", name, handler, errRuntimeClassUnavailable)
+			return "", "", fmt.Errorf("the Vault tier (CC3) pins RuntimeClass %q (handler %q), a known shared-kernel/userspace-kernel runtime that does not deliver KVM microVM isolation; refusing to downgrade: %w", name, handler, errRuntimeClassUnavailable)
 		}
-		return name, nil
+		return name, handler, nil
 	default:
-		return "", fmt.Errorf("k8s: unknown confinement class %q: %w", class, errRuntimeClassUnavailable)
+		return "", "", fmt.Errorf("k8s: unknown confinement class %q: %w", class, errRuntimeClassUnavailable)
 	}
 }
 
