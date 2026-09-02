@@ -164,15 +164,18 @@ const (
 // one that decided the outcome — so a caller (CallbackHandler's audit log,
 // PreviewRole's console preview) can show WHY a role came out the way it did,
 // not just which role won.
+//
+// The json tags are POST /access/preview's wire shape: internal/api returns
+// this type directly rather than copying it into a twin that could drift.
 type Match struct {
 	// Value is the claim/email value that matched, exactly as the ID token
 	// or email carried it — matching itself is case-insensitive (deriveRole
 	// lowers before lookup) but Value is not lowered, so a preview can show
 	// the human the literal claim that hit. Empty for a MatchSourceDefaultRole
 	// match, which was not driven by any claim value at all.
-	Value  string
-	Role   string
-	Source MatchSource
+	Value  string      `json:"value"`
+	Role   string      `json:"role"`
+	Source MatchSource `json:"source"`
 }
 
 // RoleMapping is one console-managed (Getting Started → People) value=>role

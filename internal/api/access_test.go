@@ -1014,8 +1014,58 @@ func TestAccess_PreviewExplicitClaims(t *testing.T) {
 	if !resp.OK || resp.Role != oidc.RoleMember || resp.Error != "" {
 		t.Errorf("preview = %+v, want ok=true role=member no error", resp)
 	}
-	if len(resp.Matched) != 1 || resp.Matched[0].Source != string(oidc.MatchSourceMapRow) {
+	if len(resp.Matched) != 1 || resp.Matched[0].Source != oidc.MatchSourceMapRow {
 		t.Errorf("matched = %+v, want one map_row match", resp.Matched)
+	}
+}
+
+// TestAccess_PreviewWireShape pins the RAW bytes of POST /access/preview's
+// matched[] now that it marshals oidc.Match directly instead of an api-local
+// twin: the three lowercase keys the TS twin declares
+// (ui/src/app/lib/types/access.ts:108-112) and, for a no-match preview, [] and
+// never null — the console reads matched.length, which throws on null.
+func TestAccess_PreviewWireShape(t *testing.T) {
+	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleMember}, "", nil, nil)
+	srv := accessServer(t, auth, &roleMapStore{})
+
+	w := do(t, srv, http.MethodPost, "/api/v1/access/preview", adminToken, `{"groups":["eng-team"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var raw struct {
+		Matched []map[string]any `json:"matched"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(raw.Matched) != 1 {
+		t.Fatalf("matched = %v, want exactly one entry; body=%s", raw.Matched, w.Body.String())
+	}
+	got := raw.Matched[0]
+	if len(got) != 3 {
+		t.Errorf("match object = %v, want exactly the 3 wire keys (a new exported field on oidc.Match must not leak onto this route)", got)
+	}
+	for _, k := range []string{"value", "role", "source"} {
+		if _, ok := got[k]; !ok {
+			t.Errorf("match object %v is missing key %q", got, k)
+		}
+	}
+	if got["source"] != string(oidc.MatchSourceMapRow) {
+		t.Errorf("source = %v, want %q as a plain string", got["source"], oidc.MatchSourceMapRow)
+	}
+
+	// No match at all: [] on the wire, never null. An EMPTY merged map is the
+	// arm that actually returns a nil slice from deriveRole (derive.go:503),
+	// so this is the construction that would marshal null without the guard —
+	// a non-empty map falls through to the default_role match instead.
+	empty := newAccessAuth(t, nil, oidc.RoleMember, nil, nil)
+	esrv := accessServer(t, empty, &roleMapStore{})
+	ew := do(t, esrv, http.MethodPost, "/api/v1/access/preview", adminToken, `{"groups":["nobody"]}`)
+	if ew.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", ew.Code, ew.Body.String())
+	}
+	if !strings.Contains(ew.Body.String(), `"matched":[]`) {
+		t.Errorf("body = %s, want matched:[] (a nil slice would marshal to null and break matched.length)", ew.Body.String())
 	}
 }
 

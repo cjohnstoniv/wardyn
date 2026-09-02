@@ -605,17 +605,11 @@ type accessPreviewRequest struct {
 	UseSession bool     `json:"use_session,omitempty"`
 }
 
-type accessPreviewMatch struct {
-	Value  string `json:"value"`
-	Role   string `json:"role"`
-	Source string `json:"source"`
-}
-
 type accessPreviewResponse struct {
-	Role    string               `json:"role"`
-	OK      bool                 `json:"ok"`
-	Matched []accessPreviewMatch `json:"matched"`
-	Error   string               `json:"error,omitempty"`
+	Role    string       `json:"role"`
+	OK      bool         `json:"ok"`
+	Matched []oidc.Match `json:"matched"`
+	Error   string       `json:"error,omitempty"`
 }
 
 // handlePreviewRole runs the SAME derivation a real login would (PreviewRole,
@@ -644,12 +638,14 @@ func (s *Server) handlePreviewRole(w http.ResponseWriter, r *http.Request) {
 
 	role, matched, ok, err := s.cfg.OIDC.PreviewRole(r.Context(), roles, groups, email)
 	if err != nil {
-		writeJSON(w, http.StatusOK, accessPreviewResponse{Matched: []accessPreviewMatch{}, Error: "role_check_unavailable"})
+		writeJSON(w, http.StatusOK, accessPreviewResponse{Matched: []oidc.Match{}, Error: "role_check_unavailable"})
 		return
 	}
-	out := make([]accessPreviewMatch, len(matched))
-	for i, m := range matched {
-		out[i] = accessPreviewMatch{Value: m.Value, Role: m.Role, Source: string(m.Source)}
+	// A nil slice marshals to JSON null, but the field is typed
+	// AccessPreviewMatch[] on the wire and the console reads its .length — so
+	// a no-match preview must still send [], never null.
+	if matched == nil {
+		matched = []oidc.Match{}
 	}
-	writeJSON(w, http.StatusOK, accessPreviewResponse{Role: role, OK: ok, Matched: out})
+	writeJSON(w, http.StatusOK, accessPreviewResponse{Role: role, OK: ok, Matched: matched})
 }
