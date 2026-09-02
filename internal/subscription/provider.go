@@ -61,9 +61,6 @@ type Config struct {
 	// ClaudeBin is the resident CLI used to delegate a refresh. Empty defaults
 	// to "claude" (resolved against PATH).
 	ClaudeBin string
-	// RefreshMargin / RefreshTimeout override the defaults above (0 = default).
-	RefreshMargin  time.Duration
-	RefreshTimeout time.Duration
 	// Now is overridable in tests; defaults to time.Now.
 	Now func() time.Time
 }
@@ -92,19 +89,11 @@ func New(cfg Config) (Provider, error) {
 	if bin == "" {
 		bin = "claude"
 	}
-	margin := cfg.RefreshMargin
-	if margin <= 0 {
-		margin = defaultRefreshMargin
-	}
-	to := cfg.RefreshTimeout
-	if to <= 0 {
-		to = defaultRefreshTimeout
-	}
 	now := cfg.Now
 	if now == nil {
 		now = time.Now
 	}
-	return &provider{credPath: credPath, claudeBin: bin, margin: margin, refreshTO: to, now: now}, nil
+	return &provider{credPath: credPath, claudeBin: bin, margin: defaultRefreshMargin, refreshTO: defaultRefreshTimeout, now: now}, nil
 }
 
 // Current returns the live subscription access token. It piggybacks on the

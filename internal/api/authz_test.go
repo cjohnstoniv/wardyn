@@ -954,14 +954,35 @@ func (s *authzStore) ListWorkspaces(context.Context) ([]types.Workspace, error) 
 func (s *authzStore) UpdateWorkspace(context.Context, uuid.UUID, types.Workspace) (types.Workspace, error) {
 	return types.Workspace{}, store.ErrNotFound
 }
+
+// SetWorkspaceApprovedEgress / SetWorkspaceDeniedEgress mirror the PG
+// statements' SEMANTICS, EgressEditedAt included. That stamp is not bookkeeping:
+// it is the whole reason the documented undo (this PUT) survives a restart, so a
+// fake that replaced the list without it would keep every test green while
+// ReconcileWorkspaceEgressDecisions quietly resurrected removed hosts — the
+// exact defect the reconcile probes pin.
 func (s *authzStore) SetWorkspaceApprovedEgress(_ context.Context, id uuid.UUID, domains []string) (types.Workspace, error) {
+	return s.setWorkspaceEgressList(id, domains, true)
+}
+
+func (s *authzStore) SetWorkspaceDeniedEgress(_ context.Context, id uuid.UUID, domains []string) (types.Workspace, error) {
+	return s.setWorkspaceEgressList(id, domains, false)
+}
+
+func (s *authzStore) setWorkspaceEgressList(id uuid.UUID, domains []string, approved bool) (types.Workspace, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ws, ok := s.workspaces[id]
 	if !ok {
 		return types.Workspace{}, store.ErrNotFound
 	}
-	ws.ApprovedEgress = domains
+	if approved {
+		ws.ApprovedEgress = domains
+	} else {
+		ws.DeniedEgress = domains
+	}
+	at := time.Now().UTC()
+	ws.EgressEditedAt = &at
 	s.workspaces[id] = ws
 	return ws, nil
 }
@@ -993,9 +1014,6 @@ func (s *authzStore) AddWorkspaceEgressDecision(_ context.Context, id uuid.UUID,
 	*remove = slices.DeleteFunc(*remove, func(h string) bool { return h == host })
 	s.workspaces[id] = ws
 	return ws, nil
-}
-func (s *authzStore) SetWorkspaceDeniedEgress(context.Context, uuid.UUID, []string) (types.Workspace, error) {
-	return types.Workspace{}, store.ErrNotFound
 }
 func (s *authzStore) SetWorkspaceLLMCred(context.Context, uuid.UUID, *types.WorkspaceLLMCred) (types.Workspace, error) {
 	return types.Workspace{}, store.ErrNotFound

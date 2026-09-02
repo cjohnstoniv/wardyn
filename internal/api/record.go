@@ -27,9 +27,11 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	neturl "net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -419,6 +421,57 @@ func (s *Server) promoteSkipHosts(ctx context.Context, ws types.Workspace) map[s
 	return skip
 }
 
+// skipCovers reports whether any skip ENTRY names or covers host.
+//
+// The entries are kept VERBATIM — a ceiling's "*.anthropic.com" (the spelling
+// llmcred.go documents), the broker's "*.githubusercontent.com", an operator's
+// "corp.example:443" or deny row — so the match is entryCoversAny's, the
+// package's one wildcard/port rule (artifact_redirect.go), not the map lookup
+// this used to be. An exact lookup silently offered api.anthropic.com and
+// raw.githubusercontent.com for promotion under precisely the wildcard entries
+// that make them plumbing, writing harness/broker-dead rows as `required`.
+func skipCovers(skipHost map[string]struct{}, host string) bool {
+	drop := map[string]bool{host: true}
+	for entry := range skipHost {
+		if entryCoversAny(entry, drop) {
+			return true
+		}
+	}
+	return false
+}
+
+// promoteEntryReject names why a recorded ENTRY may not be promoted from AT
+// ALL, or "" when it may — the whole-entry half of the pre-promotion filter
+// (promotableHosts is the per-host half). Both refusals are about the EVIDENCE,
+// not the host: a partial or a borrowed-authority observation set must not
+// become a durable contract, whichever hosts it happens to name.
+func promoteEntryReject(taskKey string, res RecordTaskResult) string {
+	if res.Status != recordStatusRecorded {
+		return "recording is " + res.Status + " — only a captured (recorded) task can be promoted"
+	}
+	if res.Confined || strings.HasPrefix(taskKey, recordVerifyKeyPrefix) {
+		// A CONFINED replay is not a recording: its allows include hosts
+		// released by a live first-use approval (rule_source approval:<id>),
+		// and learnVerifyEgress deliberately refuses to durably learn a
+		// once/until-scoped one (approvals.go). Promoting the verify entry
+		// launders exactly those ephemeral releases into permanent
+		// `required · operator_set` rows through a second door.
+		return "this task is a confined verify replay, not a recording — its allowed hosts can include " +
+			"one-off approvals that are deliberately never learned durably. Promote from the open " +
+			"recording it replays instead."
+	}
+	if slices.Contains(res.Caveats, captureAuditTruncatedNote) {
+		// The capture hit maxCaptureAuditEvents, so the observed set is the
+		// first N events, not the need. Promoting it writes a partial contract
+		// the operator reads as complete, and the next confined replay Catches
+		// everything the truncation hid.
+		return "this capture reached the audit-event ceiling, so its observed set is incomplete — " +
+			"promoting it would record a partial need as the whole one. Re-record the session " +
+			"(shorter, or split into tasks) before promoting."
+	}
+	return ""
+}
+
 // integrationRequirementHosts returns the hosts every REQUIRED integration:
 // row in ws's effective contract opens (requiredIntegrationIDs,
 // workspace_run.go) — used by promoteSkipHosts so a record session never
@@ -473,15 +526,84 @@ func promotableHosts(obs *recordmode.Observations, selfHost string, skipHost map
 		if selfHost != "" && host == selfHost {
 			continue
 		}
-		if _, skip := skipHost[host]; skip {
+		if skipCovers(skipHost, host) {
+			continue // plumbing, or a host the operator permanently denies
+		}
+		if net.ParseIP(host) != nil {
+			// An IP LITERAL, refused here rather than by shape:
+			// hostrules.ValidApprovedHost's regex accepts dotted digits, so a
+			// public literal reached under allow-all used to become an
+			// `egress:93.184.216.34 required` row. A literal names no service —
+			// it cannot be re-verified, it drifts the moment the address is
+			// reassigned, and the private/metadata ranges are deny-only at the
+			// proxy anyway. The operator can still add one by hand on the
+			// approve lane, where it is their explicit act, not a promotion's
+			// silent by-product.
 			continue
 		}
 		if !hostrules.ValidApprovedHost(host) {
-			continue // e.g. an IP literal or junk — the approve lane wouldn't take it either
+			continue // junk shape — the approve lane wouldn't take it either
 		}
 		promotable[host] = struct{}{}
 	}
 	return promotable
+}
+
+// promotableRecordHosts is the pre-promotion FILTER: the hosts this request may
+// write as `egress:<host> · required · operator_set`, or a refusal reason naming
+// why none may be (the caller answers 422 with it).
+//
+// Entry gate first (promoteEntryReject), then the per-host one (promotableHosts)
+// over a skip set assembled here rather than in promoteSkipHosts, because that
+// set is ALLOW-SHAPED and shared with approveAlwaysRejects (approvals.go) —
+// only the two additions below are promotion-specific.
+func (s *Server) promotableRecordHosts(r *http.Request, ws types.Workspace, taskKey string,
+	res RecordTaskResult) (map[string]struct{}, string) {
+	if why := promoteEntryReject(taskKey, res); why != "" {
+		return nil, why
+	}
+	// The control plane itself shows up in every capture (the sandbox's brokered
+	// result upload is a real, logged egress.allow) — but that is Wardyn's own
+	// plumbing, not a task need. Never offer it: a direct allowlist entry would
+	// let future confined sandboxes reach the API surface beyond the proxy's
+	// brokered routes.
+	selfHost := controlPlaneHost(s.cfg.ControlPlaneURL)
+	if selfHost == "" {
+		// FAIL CLOSED. That exclusion is the ONLY thing keeping Wardyn's own API
+		// off a workspace's permanent allowlist, and with no configured name
+		// there is nothing to compare a captured host against — the guard
+		// silently becomes inert, which is the one way a "never promotable"
+		// invariant is violated by a zero value. ControlPlaneURL has a default
+		// (boot_flags.go), so reaching here means the deployment un-set it.
+		return nil, "the control plane's own address is not configured, so the guard that keeps Wardyn's API " +
+			"off this workspace's allowlist cannot be evaluated — set WARDYN_CONTROL_PLANE_URL and retry"
+	}
+	skipHost := s.promoteSkipHosts(r.Context(), ws)
+	// FALLBACK, and only ever a WIDENING of that exclusion: a deployment is often
+	// dialled by a name other than the configured one (host.docker.internal, the
+	// in-cluster service name, an ingress host), and an exact match sees none of
+	// them. The name THIS request arrived on is one more name for "us". It does
+	// NOT substitute for the configured value — the guard above still refuses an
+	// unset one — because a Host header is client-supplied and says nothing about
+	// what the SANDBOX dialled, and the bind address (":8080"/0.0.0.0) carries no
+	// name at all. Adding it can only ever REMOVE a host from the promotable set,
+	// so a spoofed Host suppresses a promotion; it can never cause one.
+	if h := egressEntryHost(r.Host); hostrules.ValidApprovedHost(h) {
+		skipHost[h] = struct{}{}
+	}
+	// The operator's deny·always list (PUT /workspaces/{id}/denied-egress). Here
+	// and not in promoteSkipHosts: an approve·always whose whole point is to clear
+	// a stale deny must still be accepted on that shared allow-shaped path. For
+	// promotion the rule is the opposite one — record at T0 (allowed), deny·always
+	// X at T1, promote at T2 would write `egress:X required` beside
+	// DeniedEgress=[X]. Deny beats allow at the proxy, so nothing is widened; what
+	// is written is a contract "declaring a need it can never satisfy", exactly
+	// what denyAlwaysReject's M1 rule refuses from the other direction — and every
+	// later confined replay would Catch X forever.
+	for _, d := range ws.DeniedEgress {
+		skipHost[strings.ToLower(strings.TrimSpace(d))] = struct{}{}
+	}
+	return promotableHosts(res.Observations, selfHost, skipHost), ""
 }
 
 func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Request) {
@@ -507,20 +629,16 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusUnprocessableEntity, "task has no captured recording to promote from")
 		return
 	}
-	if res.Status != recordStatusRecorded {
-		writeError(w, http.StatusUnprocessableEntity, "recording is "+res.Status+" — only a captured (recorded) task can be promoted")
+	// ONE pre-promotion filter, in one hop: may this ENTRY be promoted from at
+	// all, and if so which of its hosts. Every rule inside exists for the same
+	// reason — a promotion is durable policy authored from observed traffic, so
+	// evidence that is incomplete, borrowed, plumbing, contradicted or shapeless
+	// must not reach the contract.
+	promotable, reject := s.promotableRecordHosts(r, ws, taskKey, res)
+	if reject != "" {
+		writeError(w, http.StatusUnprocessableEntity, reject)
 		return
 	}
-
-	// The control plane itself shows up in every capture (the sandbox's
-	// brokered result upload is a real, logged egress.allow) — but that's
-	// Wardyn's own plumbing, not a task need. Never offer it for promotion:
-	// a direct allowlist entry would let future confined sandboxes reach the
-	// API surface beyond the proxy's brokered routes.
-	selfHost := controlPlaneHost(s.cfg.ControlPlaneURL)
-	skipHost := s.promoteSkipHosts(r.Context(), ws)
-
-	promotable := promotableHosts(res.Observations, selfHost, skipHost)
 
 	// wantHosts is what THIS request actually promotes: the full promotable
 	// set, unless the operator narrowed it to a validated subset.

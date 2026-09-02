@@ -202,13 +202,34 @@ fi
 //  2. To succeeded: try From again, but with --noproxy '*' -- a DIRECT dial
 //     that bypasses wardyn-proxy's policy entirely, so this tests whether the
 //     confinement class's OWN network setup (not the proxy's allowlist)
-//     structurally blocks the public host. Success here means the redirect is
+//     structurally blocks the public host. Reaching it means the redirect is
 //     configured but not enforced (bypass); the script exits the reserved
 //     sentinel explicitly (see redirectProbeBypassCode) -- never a
-//     passed-through curl code. -f here too, so a public host answering with
-//     an HTTP error (rather than refusing the connection outright) is not
-//     mistaken for a bypass.
-//  3. From correctly failed: the redirect is enforced end to end (reached).
+//     passed-through curl code.
+//  3. From could not be reached: the redirect is enforced end to end (reached).
+//
+// PROBE 2 CLASSIFIES, IT DOES NOT JUST TEST FOR SUCCESS, and that is the whole
+// difference between the two questions it can be asked. "Did the fetch
+// succeed?" and "did the public host answer?" are not the same question, and
+// only the second one is about enforcement. -f collapsed them: it turns a 403
+// into a curl failure, so a public host that ANSWERED -- proving the
+// confinement class does not block it -- fell through to exit 0 and was
+// reported as "correctly blocked when dialed directly". A network that is wide
+// open scored as enforced, which is the one verdict an operator must never be
+// handed wrongly. So probe 2 drops -f and reads two things instead:
+//
+//   - %{http_code} with exit 0: the host answered at the HTTP layer, whatever
+//     the status. 403, 404, 500 -- all of them are answers, all of them are
+//     bypass.
+//   - the post-connect curl codes 35 (TLS handshake), 52 (empty reply), 56
+//     (reset while receiving) and 60 (certificate verification). Each is
+//     reachable ONLY after connect() succeeded against the public host, so each
+//     is proof the class let the connection out; a middlebox that intercepts
+//     the direct dial is still a dial that left the sandbox. Bypass.
+//
+// Everything else -- 6 (DNS), 7 (refused/unreachable), 28 (timeout, the DROP
+// rule's signature) and any other code -- is a dial that never reached the
+// host, which is what enforcement looks like: exit 0, reported as reached.
 //
 // PROBE 1 HAS TWO SHAPES, and the second is why WARDYN_PROBE_TO_CONNECT exists.
 // A private-endpoint To is a LITERAL IP whose TLS certificate is scoped to the
@@ -233,7 +254,10 @@ if [ -n "$WARDYN_PROBE_TO_CONNECT" ]; then
 else
   to "$WARDYN_PROBE_TO_URL" || exit $?
 fi
-curl -sS -f -o /dev/null --connect-timeout 5 --max-time 15 --noproxy '*' "$WARDYN_PROBE_FROM_URL" && exit 250
+code=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 15 --noproxy '*' "$WARDYN_PROBE_FROM_URL")
+rc=$?
+[ "$rc" -eq 0 ] && [ "$code" != "000" ] && exit 250
+case "$rc" in 35|52|56|60) exit 250 ;; esac
 exit 0`
 
 // redirectProbeTo decides HOW probe 1 dials this redirect: the URL to request
@@ -245,26 +269,39 @@ exit 0`
 // shape the data path already dials. The swap needs From's own authority to be
 // usable, so it is skipped when From has no host, and PORT1 is read off the URL
 // curl will actually request (not assumed 443) -- --connect-to only fires when
-// PORT1 matches, so an http:// From would otherwise silently fall back to
-// dialing the public host and report a false "blocked".
+// PORT1 matches, so a mismatched port would silently fall back to dialing the
+// public host and report a false "blocked".
+//
+// THE REQUESTED URL BORROWS FROM'S AUTHORITY, NEVER ITS SCHEME. --connect-to
+// decides the CONNECTION; the URL still decides which application protocol curl
+// speaks inside it. Built from From's whole URL, an `http://` From made the
+// probe speak cleartext into the mirror's TLS port, and an `https://` From made
+// it speak TLS into a plain-http mirror -- either way a protocol the STORED To
+// does not serve, and a verdict about the mirror derived from a conversation the
+// mirror could never have. The scheme therefore comes from To (which is also
+// what redirectPort's port belongs to) and only the host, port and path come
+// from From, which is all the SNI/Host/certificate half of the swap needs.
 func redirectProbeTo(red types.EgressRedirect, toHost, fromHost string) (toURL, connectTo string) {
 	toURL = probeTargetURL(red.To)
 	if fromHost == "" || net.ParseIP(toHost) == nil {
 		return toURL, ""
 	}
-	fromURL := probeTargetURL(red.From)
-	u, err := url.Parse(fromURL)
-	if err != nil || u.Hostname() == "" {
+	to, terr := url.Parse(toURL)
+	u, err := url.Parse(probeTargetURL(red.From))
+	if terr != nil || err != nil || u.Hostname() == "" {
 		return toURL, ""
 	}
+	u.Scheme = to.Scheme
 	fromPort := u.Port()
 	if fromPort == "" {
+		// The default port of the scheme curl will REQUEST -- To's, now that the
+		// URL carries it -- because that is the PORT1 --connect-to matches on.
 		fromPort = "443"
 		if u.Scheme == "http" {
 			fromPort = "80"
 		}
 	}
-	return fromURL, fmt.Sprintf("%s:%s:%s:%d", u.Hostname(), fromPort, toHost, redirectPort(red.To))
+	return u.String(), fmt.Sprintf("%s:%s:%s:%d", u.Hostname(), fromPort, toHost, redirectPort(red.To))
 }
 
 // curlExitDetail maps curl's own stable, documented exit codes to a SPECIFIC,

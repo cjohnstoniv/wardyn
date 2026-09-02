@@ -109,7 +109,9 @@ func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, 
 	// blockPrivate address falls through to p.vetHost below unchanged (including
 	// its own InternalHosts lift), so nothing reachable before becomes
 	// unreachable — and a loopback/metadata/NAT64 literal is denied there even
-	// when allow-listed (trustsExactLiteralIP gates on blockPrivate only).
+	// when allow-listed, as is one on this proxy's own subnet or its
+	// control-plane host (trustsExactLiteralIP gates on blockPrivate AND
+	// onOwnSubnetOrControlPlane, the same pair liftInternalHost gates on).
 	if ip := net.ParseIP(strings.TrimSuffix(strings.ToLower(host), ".")); ip != nil && p.trustsExactLiteralIP(ip, port) {
 		return net.JoinHostPort(ip.String(), strconv.Itoa(port)), ruleSourceEgressRedirect, nil
 	}
@@ -132,9 +134,20 @@ func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, 
 // operator cannot hand the sandbox 169.254.169.254 by typing it into
 // allowed_domains. Deny still beats allow — AllowsLiteralIP checks the deny
 // lists first.
+//
+// onOwnSubnetOrControlPlane is refused HERE for the same reason liftInternalHost
+// refuses it: this is the SECOND admin-authored exception to the IP guard, and
+// an exception that stopped at "is it private?" would hand a run the proxy's own
+// docker-network neighbours (Postgres/Dex/registry) — the exact reach the
+// InternalHosts lift was written to withhold. The two exceptions are authored by
+// the same admin through the same site-config document, so they share the
+// ceiling; without this a literal `to` on the sidecar's own subnet (or an
+// allowed_domains entry naming the control-plane address) was trusted straight
+// through while the hostname spelling of the very same address was denied.
 func (p *Proxy) trustsExactLiteralIP(ip net.IP, port int) bool {
 	kind, _ := isBlockedIP(ip)
-	return kind == blockPrivate && p.policy != nil && p.policy.AllowsLiteralIP(ip.String(), port)
+	return kind == blockPrivate && !p.onOwnSubnetOrControlPlane(ip) &&
+		p.policy != nil && p.policy.AllowsLiteralIP(ip.String(), port)
 }
 
 // bypassUpstream reports whether a dial to host must SKIP the corporate
