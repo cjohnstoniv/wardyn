@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -230,6 +231,32 @@ func TestEntryMappingClaimValueIsTheContract(t *testing.T) {
 	}
 	if len(roles) != 1 || roles[0].ClaimValue != "Wardyn.Admin" {
 		t.Fatalf("roles = %+v, want only the enabled, valued role matching the query", roles)
+	}
+}
+
+// TestSingleKindSearchReTrimsToTheCap pins the defensive re-trim on the
+// SINGLE-kind paths. $top is a request to the upstream, not a guarantee from
+// it (see MaxResults) — this fake ignores $top entirely and hands back
+// everything it has, which is exactly the case the cap exists for. The
+// any-mode global cap below is a different path (searchAny); without this,
+// the three single-kind returns had no test at all.
+func TestSingleKindSearchReTrimsToTheCap(t *testing.T) {
+	f := newFakeGraph(t)
+	for i := range MaxResults + 5 {
+		f.users = append(f.users, graphUser{DisplayName: fmt.Sprintf("wardyn user %d", i), Mail: fmt.Sprintf("u%d@corp.com", i)})
+	}
+	d := f.dir(t)
+
+	got, err := d.Search(context.Background(), "wardyn", KindUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != MaxResults {
+		t.Fatalf("len = %d, want %d — the connector must re-trim what the upstream over-returns", len(got), MaxResults)
+	}
+	// $top was still asked for, even though the upstream ignored it.
+	if rec := f.lastUsers.Load(); rec == nil || rec.query.Get("$top") != strconv.Itoa(MaxResults) {
+		t.Errorf("$top was not requested as %d", MaxResults)
 	}
 }
 

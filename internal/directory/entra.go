@@ -225,7 +225,7 @@ func (d *entraDirectory) searchUsers(ctx context.Context, q string) ([]Entry, er
 		}
 		out = append(out, Entry{DisplayName: name, ClaimValue: claim, Kind: KindUser, Detail: detail})
 	}
-	return cap20(out), nil
+	return out[:min(len(out), MaxResults)], nil
 }
 
 type graphGroup struct {
@@ -264,10 +264,10 @@ func (d *entraDirectory) searchGroups(ctx context.Context, q string) ([]Entry, e
 			DisplayName: name,
 			ClaimValue:  g.ID,
 			Kind:        KindGroup,
-			Detail:      "group · " + guidPrefix(g.ID),
+			Detail:      "group · " + g.ID[:min(8, len(g.ID))],
 		})
 	}
-	return cap20(out), nil
+	return out[:min(len(out), MaxResults)], nil
 }
 
 type graphAppRole struct {
@@ -332,7 +332,7 @@ func (d *entraDirectory) searchAppRoles(ctx context.Context, q string) ([]Entry,
 			})
 		}
 	}
-	return cap20(out), nil
+	return out[:min(len(out), MaxResults)], nil
 }
 
 func (d *entraDirectory) markAppRolesDenied(pe *ProviderError) {
@@ -411,13 +411,6 @@ func searchTerm(q string) string {
 
 // odataQuote escapes a single quote for an OData string literal by doubling it.
 func odataQuote(s string) string { return strings.ReplaceAll(s, "'", "''") }
-
-func guidPrefix(id string) string {
-	if len(id) > 8 {
-		return id[:8]
-	}
-	return id
-}
 
 // --- cache ---------------------------------------------------------------
 
