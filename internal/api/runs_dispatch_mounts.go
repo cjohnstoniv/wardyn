@@ -381,3 +381,37 @@ func applyEphemeralDirsEnv(sandboxEnv map[string]string, dirs []string) {
 	}
 	sandboxEnv["WARDYN_EPHEMERAL_DIRS"] = strings.Join(dirs, ",")
 }
+
+// splitSecretEnv moves the CREDENTIAL-BEARING keys out of the composed sandbox
+// env into the second map runner.SandboxSpec.SecretEnv carries — the half a
+// driver must deliver without writing the value into its own (readable) object
+// model. Only two lanes ever name a key here: resolveEnvSecretGrants (env_secret
+// grant values) and applyBedrockTransport (resident SigV4 / captured-SSO
+// credentials); both report their names rather than having them re-derived, so
+// the classification cannot drift from the write.
+//
+// Dispatch composes ONE env map and splits it once, at the end, so every
+// "is this variable already set?" refusal along the way (resolveEnvSecretGrants'
+// own overwrite guard, setSandboxCATrustVars' onlyIfUnset) still sees the whole
+// environment rather than half of it.
+//
+// MOVE, not copy: a key left in both maps would reach a k8s Pod spec twice —
+// once as a secretKeyRef and once INLINE — and the inline copy is exactly the
+// API-readable leak the split exists to close. A named key that is absent (a
+// grant that resolved and was later dropped) is simply skipped; nil is returned
+// when nothing is credential-bearing, so an ordinary run's spec is unchanged.
+func splitSecretEnv(sandboxEnv map[string]string, keys []string) map[string]string {
+	secretEnv := map[string]string{}
+	for _, k := range keys {
+		v, ok := sandboxEnv[k]
+		if !ok {
+			continue
+		}
+		secretEnv[k] = v
+		delete(sandboxEnv, k)
+	}
+	if len(secretEnv) == 0 {
+		return nil
+	}
+	return secretEnv
+}

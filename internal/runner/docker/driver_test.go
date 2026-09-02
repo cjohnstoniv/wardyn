@@ -597,6 +597,55 @@ func TestCreateSandbox_RefIsDeterministicNameNotDaemonID(t *testing.T) {
 	}
 }
 
+// TestCreateSandbox_SecretEnvReachesContainerEnv pins the docker half of the
+// F9-H1 split. runner.SandboxSpec grew a SecretEnv map so the k8s driver can
+// route credential material through the per-run Secret instead of an
+// API-readable Pod spec; on docker the honest answer is that no such split is
+// needed — a container's config is reachable only through the daemon socket,
+// i.e. by a principal already root-equivalent on this host (the same boundary
+// proxyEnv documents for the run token). So SecretEnv rides plain container
+// env HERE, and the property worth pinning is that it still ARRIVES: a driver
+// that read only spec.Env after the split would silently strip every
+// env_secret grant and every resident Bedrock credential from docker runs,
+// which no k8s test could catch.
+func TestCreateSandbox_SecretEnvReachesContainerEnv(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newTestDriver(f)
+
+	spec := testSpec() // Env: {"FOO": "bar"}
+	spec.SecretEnv = map[string]string{"CORP_API_TOKEN": "ghp_live_stored_secret_9f2c"}
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	c, ok := f.containers[sb.Ref]
+	if !ok {
+		t.Fatalf("no container recorded for ref %q", sb.Ref)
+	}
+	want := map[string]bool{"FOO=bar": false, "CORP_API_TOKEN=ghp_live_stored_secret_9f2c": false}
+	seen := 0
+	for _, e := range c.cfg.Env {
+		if _, tracked := want[e]; tracked {
+			want[e] = true
+		}
+		if strings.HasPrefix(e, "CORP_API_TOKEN=") {
+			seen++
+		}
+	}
+	for e, found := range want {
+		if !found {
+			t.Errorf("agent container env is missing %q: got %v", e, c.cfg.Env)
+		}
+	}
+	// Exactly once: Env and SecretEnv are disjoint by dispatch contract, so the
+	// driver concatenates without dedup and a duplicate would mean the contract
+	// broke rather than the driver.
+	if seen != 1 {
+		t.Errorf("CORP_API_TOKEN appears %d times in the container env, want exactly 1: %v", seen, c.cfg.Env)
+	}
+}
+
 func TestStatus_Mapping(t *testing.T) {
 	f := newFakeDocker()
 	f.images["busybox:latest"] = true

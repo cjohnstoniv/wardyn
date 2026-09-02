@@ -49,6 +49,13 @@ type llmTransport struct {
 	// injectBedrockBearer: Bedrock in BEARER mode — proxy-side token injection
 	// into bedrock-runtime (never-resident), the only inspectable Bedrock path.
 	injectBedrockBearer bool
+	// secretEnvKeys are the sandboxEnv variables applyBedrockTransport filled
+	// with REAL credential material — the resident SigV4 keys, or the captured
+	// AWS SSO blob. Nil for every never-resident mode (bearer, ~/.aws mount) and
+	// for every non-Bedrock transport, whose env holds only placeholders. Read
+	// by dispatch's splitSecretEnv, which moves them onto SandboxSpec.SecretEnv
+	// so a substrate does not have to publish them in a readable pod spec.
+	secretEnvKeys []string
 }
 
 // isModelRun reports whether a dispatch actually invokes the model. Two run
@@ -195,7 +202,7 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 		sandboxEnv["CLAUDE_CONFIG_DIR"] = "/home/agent/.claude-run"
 		sandboxEnv["WARDYN_CLAUDE_MANAGED_B64"] = managedSentinelCredsB64()
 	} else if t.bedrockReady {
-		s.applyBedrockTransport(ctx, run, t.bedrock, policy, sandboxEnv)
+		t.secretEnvKeys = s.applyBedrockTransport(ctx, run, t.bedrock, policy, sandboxEnv)
 	} else {
 		sandboxEnv["ANTHROPIC_API_KEY"] = "wardyn-proxy-injected"
 	}
@@ -226,7 +233,7 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 // policy allow-list, and audits which of the four modes (bearer / sso-inject /
 // aws-dir-mount / resident) credentials the run. Extracted verbatim from
 // resolveLLMTransport's t.bedrockReady branch.
-func (s *Server) applyBedrockTransport(ctx context.Context, run types.AgentRun, b bedrockAuth, policy *types.RunPolicySpec, sandboxEnv map[string]string) {
+func (s *Server) applyBedrockTransport(ctx context.Context, run types.AgentRun, b bedrockAuth, policy *types.RunPolicySpec, sandboxEnv map[string]string) []string {
 	for k, v := range b.env {
 		sandboxEnv[k] = v
 	}
@@ -234,6 +241,25 @@ func (s *Server) applyBedrockTransport(ctx context.Context, run types.AgentRun, 
 	// `agent-run --selftest` echo. Bearer mode holds only a placeholder and the
 	// ~/.aws-mount mode holds no keys in env at all (the SDK reads the mount), so
 	// neither has anything secret to mask here.
+	//
+	// secretEnvKeys names the SAME variables, decided by the SAME condition and
+	// in the same place, so the two answers to "which of these is a credential?"
+	// cannot drift: what is worth masking out of a recording is exactly what is
+	// worth keeping out of an API-readable pod spec (SandboxSpec.SecretEnv).
+	// AWS_SESSION_TOKEN is conditional because a long-lived key pair has none;
+	// the SSO blob is a separate mode whose env carries no SigV4 key at all, but
+	// whose base64 payload IS the captured access/refresh token.
+	var secretEnvKeys []string
+	if !b.bearer && !b.awsMount {
+		for _, k := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"} {
+			if b.env[k] != "" {
+				secretEnvKeys = append(secretEnvKeys, k)
+			}
+		}
+	}
+	if b.ssoInject && b.env[awsSSOConfigEnvVar] != "" {
+		secretEnvKeys = append(secretEnvKeys, awsSSOConfigEnvVar)
+	}
 	if s.cfg.MaskRegistry != nil && !b.bearer && !b.awsMount {
 		s.cfg.MaskRegistry.Add(run.ID, []byte(b.env["AWS_ACCESS_KEY_ID"]))
 		s.cfg.MaskRegistry.Add(run.ID, []byte(b.env["AWS_SECRET_ACCESS_KEY"]))
@@ -269,6 +295,7 @@ func (s *Server) applyBedrockTransport(ctx context.Context, run types.AgentRun, 
 			"endpoint": b.runtimeHost,
 			"mode":     mode, "detail": detail,
 		})))
+	return secretEnvKeys
 }
 
 // provisionDispatchMITMCA provisions the per-run TLS-MITM CA when any consumer

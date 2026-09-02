@@ -799,3 +799,111 @@ func TestCreateSandbox_MountsStayRefusedWithADrive(t *testing.T) {
 		}
 	}
 }
+
+// TestCreateSandbox_SecretEnvRidesTheRunSecret is the F9-H1 fix at the driver
+// seam: the two halves of a run's environment are delivered by two DIFFERENT
+// mechanisms, and only one of them is readable off the Pod spec.
+//
+// spec.Env is platform configuration and stays inline (an operator debugging a
+// run with `kubectl get pod -o yaml` needs to see it). spec.SecretEnv is
+// credential material — resolveEnvSecretGrants' stored-secret values, the
+// resident Bedrock keys — and reaches the container as a ValueFrom.SecretKeyRef
+// into the per-run Secret, so `pods/get` in the runs namespace yields the
+// variable's NAME and nothing else. Both halves must arrive under their own
+// names: this is a change of carrier, not of contents.
+func TestCreateSandbox_SecretEnvRidesTheRunSecret(t *testing.T) {
+	const tokenVal = "ghp_live_stored_secret_9f2c"
+	const awsVal = "ASIAWARDYNPROBEKEY42"
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.7")
+	installAgentRunningReactor(t, cs)
+
+	spec := testSandboxSpec()
+	spec.Env["WARDYN_REPO_SLUG"] = "acme/widgets" // non-secret: dispatch's own config
+	spec.SecretEnv = map[string]string{"CORP_API_TOKEN": tokenVal, "AWS_ACCESS_KEY_ID": awsVal}
+
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	agentPod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent pod: %v", err)
+	}
+	sec, err := cs.CoreV1().Secrets(testNamespace).Get(context.Background(), secretName(spec.RunID), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get run secret: %v", err)
+	}
+
+	byName := map[string]corev1.EnvVar{}
+	for _, e := range agentPod.Spec.Containers[0].Env {
+		byName[e.Name] = e
+	}
+	// Non-secret half: unchanged, inline, exactly as before the split.
+	for _, k := range []string{"HTTP_PROXY", "WARDYN_REPO_SLUG"} {
+		e, ok := byName[k]
+		if !ok || e.Value != spec.Env[k] || e.ValueFrom != nil {
+			t.Errorf("agent pod %s = %+v, want the inline value %q (non-secret env must stay readable in the pod spec)", k, e, spec.Env[k])
+		}
+	}
+	// Credential half: name present, value absent, Secret carries it.
+	for k, want := range map[string]string{"CORP_API_TOKEN": tokenVal, "AWS_ACCESS_KEY_ID": awsVal} {
+		e, ok := byName[k]
+		if !ok {
+			t.Errorf("agent pod has no %s env: the credential never reached the sandbox", k)
+			continue
+		}
+		if e.Value != "" {
+			t.Errorf("agent pod %s carries an inline Value %q — API-readable via pods/get", k, e.Value)
+		}
+		if e.ValueFrom == nil || e.ValueFrom.SecretKeyRef == nil ||
+			e.ValueFrom.SecretKeyRef.Name != secretName(spec.RunID) || e.ValueFrom.SecretKeyRef.Key != secretEnvDataKey(k) {
+			t.Errorf("agent pod %s ValueFrom = %+v, want secretKeyRef{%s/%s}", k, e.ValueFrom, secretName(spec.RunID), secretEnvDataKey(k))
+		}
+		if string(sec.Data[secretEnvDataKey(k)]) != want {
+			t.Errorf("run Secret key %s = %q, want %q", secretEnvDataKey(k), sec.Data[secretEnvDataKey(k)], want)
+		}
+	}
+	// The proxy's own config still shares the Secret, undisturbed, and no
+	// credential value appears anywhere in EITHER pod spec.
+	if len(sec.Data[proxyConfigSecretKey]) == 0 {
+		t.Error("run Secret lost its proxy config: the agent env entries must not displace it")
+	}
+	proxyPod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), proxyPodName(spec.RunID), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get proxy pod: %v", err)
+	}
+	for _, pod := range []*corev1.Pod{agentPod, proxyPod} {
+		for _, c := range pod.Spec.Containers {
+			for _, e := range c.Env {
+				if strings.Contains(e.Value, tokenVal) || strings.Contains(e.Value, awsVal) {
+					t.Errorf("pod %s container %s env %s carries a credential inline: %q", pod.Name, c.Name, e.Name, e.Value)
+				}
+			}
+		}
+	}
+
+	// Negative control: a run with no credential env is byte-identical to one
+	// that predates the split — no extra Secret keys, no ValueFrom env at all.
+	spec2 := testSandboxSpec()
+	sb2, err := d.CreateSandbox(context.Background(), spec2)
+	if err != nil {
+		t.Fatalf("CreateSandbox (no SecretEnv): %v", err)
+	}
+	agentPod2, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb2.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent pod (no SecretEnv): %v", err)
+	}
+	for _, e := range agentPod2.Spec.Containers[0].Env {
+		if e.ValueFrom != nil {
+			t.Errorf("agent pod env %s has a ValueFrom on a run with no SecretEnv: %+v", e.Name, e.ValueFrom)
+		}
+	}
+	sec2, err := cs.CoreV1().Secrets(testNamespace).Get(context.Background(), secretName(spec2.RunID), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get run secret (no SecretEnv): %v", err)
+	}
+	if len(sec2.Data) != 1 {
+		t.Errorf("run Secret data keys = %v, want only %q on a run with no SecretEnv", sec2.Data, proxyConfigSecretKey)
+	}
+}

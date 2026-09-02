@@ -54,9 +54,34 @@ type SandboxSpec struct {
 	RunID            uuid.UUID
 	Image            string // resolved agent/workspace OCI image
 	ConfinementClass types.ConfinementClass
-	// Env is non-secret environment. Secrets NEVER pass through here —
-	// they are injected proxy-side or resolved late via the broker.
+	// Env is non-secret environment: every value here is safe to read straight
+	// off the substrate's own object model (a docker container config, a k8s
+	// Pod spec — which any principal with pods/get can read). Credential
+	// material NEVER passes through here; it rides SecretEnv.
 	Env map[string]string
+	// SecretEnv is CREDENTIAL-BEARING environment — the same name=value shape as
+	// Env, delivered to the agent under the same names — split out because a
+	// substrate must be able to deliver it WITHOUT writing the value anywhere an
+	// ordinary reader of that substrate can see it. Two dispatch lanes populate
+	// it (internal/api's resolveEnvSecretGrants, for env_secret grant VALUES,
+	// and applyBedrockTransport, for the resident AWS SigV4 keys / the captured
+	// AWS SSO blob); every other variable a run gets is platform configuration
+	// and stays in Env.
+	//
+	// DISJOINT from Env by construction — dispatch's splitSecretEnv MOVES a key
+	// from one map to the other, never copies — so a driver may concatenate the
+	// two without deduplicating, and no value is ever delivered twice.
+	//
+	// Driver obligations differ because the exposure differs. The k8s driver
+	// MUST route these through the per-run Secret via ValueFrom.SecretKeyRef:
+	// an inline EnvVar.Value is readable by anyone holding pods/get in the runs
+	// namespace, which is the entire reason this field exists (the same reason
+	// the proxy config already travels as a Secret rather than inline). The
+	// docker driver passes them as ordinary container env: a container's config
+	// is readable only through the daemon socket, i.e. by a principal already
+	// root-equivalent on that host — the trust boundary docker's proxyEnv
+	// already documents for the run token.
+	SecretEnv map[string]string
 	// ProxyConfig wires the L0 path: the sandbox's only egress is the
 	// wardyn-proxy sidecar identified here.
 	ProxyConfig ProxyConfig

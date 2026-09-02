@@ -95,6 +95,18 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err != nil {
 		return runner.Sandbox{}, fmt.Errorf("k8s: build proxy config: %w", err)
 	}
+	secretData := map[string][]byte{proxyConfigSecretKey: proxyJSON}
+	// The AGENT's credential-bearing environment rides the SAME per-run Secret,
+	// one entry per variable, for exactly the reason stated above: an inline
+	// EnvVar.Value on the agent pod is readable by any principal with pods/get
+	// in this namespace, and dispatch puts real stored-secret values (env_secret
+	// grants) and resident cloud credentials in there. secretEnvVars gives the
+	// agent container a secretKeyRef to each of these instead. One Secret, not a
+	// second one: teardown already sweeps it by the run-id label, and a separate
+	// object would be one more thing the rollback path has to get right.
+	for k, v := range spec.SecretEnv {
+		secretData[secretEnvDataKey(k)] = []byte(v)
+	}
 	sec := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName(spec.RunID),
@@ -102,7 +114,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			Labels:    wardynLabels(spec.RunID, componentProxy, spec.Labels),
 		},
 		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{proxyConfigSecretKey: proxyJSON},
+		Data: secretData,
 	}
 	if _, err := d.clientset.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
 		return runner.Sandbox{}, fmt.Errorf("k8s: create proxy config secret: %w", err)
@@ -226,10 +238,15 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			DNSPolicy: corev1.DNSNone,
 			DNSConfig: &corev1.PodDNSConfig{Nameservers: []string{"127.0.0.1"}},
 			Containers: []corev1.Container{{
-				Name:            mainContainerName,
-				Image:           spec.Image,
-				Command:         idleCmd,
-				Env:             envVars(spec.Env),
+				Name:    mainContainerName,
+				Image:   spec.Image,
+				Command: idleCmd,
+				// Non-secret env inline, credential-bearing env as a secretKeyRef
+				// into the run Secret above — never inline, whatever it holds. Exec
+				// copies this whole slice onto the ephemeral container it adds, so
+				// the reference (and therefore the non-exposure) carries over there
+				// by construction rather than by a second call site staying in step.
+				Env:             append(envVars(spec.Env), secretEnvVars(spec.RunID, spec.SecretEnv)...),
 				SecurityContext: agentSecurityContext(),
 				Resources:       resourceRequirements(spec.Resources),
 			}},

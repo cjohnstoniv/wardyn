@@ -137,3 +137,74 @@ func TestResolveEnvSecretGrants(t *testing.T) {
 		t.Fatalf("ANTHROPIC_BASE_URL = %q, want the platform value — a grant must not override platform-authored env", env2["ANTHROPIC_BASE_URL"])
 	}
 }
+
+// TestDispatchEnvSplit_CredentialsLeaveEnv pins the control-plane half of the
+// F9-H1 fix — the premise every substrate then relies on.
+//
+// runner.SandboxSpec's Env is documented non-secret and drivers treat it that
+// way (the k8s driver writes it inline into a Pod spec, readable by anyone with
+// pods/get). resolveEnvSecretGrants breaks that contract by design: it puts a
+// REAL stored secret under a variable name. The fix is not to stop resolving it
+// but to REPORT it, so splitSecretEnv can move it to SandboxSpec.SecretEnv,
+// which drivers must deliver without publishing the value.
+//
+// Two properties, both load-bearing: the credential lands in exactly one map,
+// and it is the secret one. A copy left behind in Env would be the original
+// leak with an extra secretKeyRef beside it.
+func TestDispatchEnvSplit_CredentialsLeaveEnv(t *testing.T) {
+	h, sec := newSecretsHarness(t)
+	if err := sec.Put(context.Background(), "corp-token", []byte("s3cr3t-value")); err != nil {
+		t.Fatal(err)
+	}
+	reg := secretmask.NewRegistry()
+	h.srv.cfg.MaskRegistry = reg
+	run := types.AgentRun{ID: uuid.New()}
+
+	sandboxEnv := map[string]string{"WARDYN_TASK_MODE": "exec", "HTTP_PROXY": "http://wardyn-proxy:3128"}
+	policy := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{
+		envSecretGrant("CORP_API_TOKEN", "corp-token"),
+		envSecretGrant("GONE_TOKEN", "no-such-secret"),
+	}}
+	names := h.srv.resolveEnvSecretGrants(context.Background(), run, policy, sandboxEnv)
+
+	// Only the grants that actually RESOLVED are named: a skipped grant set no
+	// variable, and naming it would move a platform value out of Env.
+	if len(names) != 1 || names[0] != "CORP_API_TOKEN" {
+		t.Fatalf("resolveEnvSecretGrants returned %v, want exactly [CORP_API_TOKEN]", names)
+	}
+
+	secretEnv := splitSecretEnv(sandboxEnv, names)
+	if secretEnv["CORP_API_TOKEN"] != "s3cr3t-value" {
+		t.Errorf("SecretEnv[CORP_API_TOKEN] = %q, want the resolved secret value", secretEnv["CORP_API_TOKEN"])
+	}
+	if v, still := sandboxEnv["CORP_API_TOKEN"]; still {
+		t.Errorf("Env still carries CORP_API_TOKEN = %q after the split — a driver would publish it inline", v)
+	}
+	// Platform configuration is untouched: the split moves credentials out, it
+	// does not move configuration in.
+	if sandboxEnv["WARDYN_TASK_MODE"] != "exec" || sandboxEnv["HTTP_PROXY"] != "http://wardyn-proxy:3128" {
+		t.Errorf("non-secret env was disturbed by the split: %v", sandboxEnv)
+	}
+	if _, moved := secretEnv["HTTP_PROXY"]; moved {
+		t.Errorf("SecretEnv swept up a non-secret variable: %v", secretEnv)
+	}
+
+	// The drift guard, and the reason this test is worth more than the two
+	// assertions above: whatever dispatch thought was worth MASKING out of a
+	// recording is exactly what must not sit inline in a pod spec. A future
+	// credential lane that forgets to report its keys fails here without anyone
+	// having to remember this file exists.
+	for k, v := range sandboxEnv {
+		for _, masked := range reg.Snapshot(run.ID) {
+			if len(masked) > 0 && strings.Contains(v, string(masked)) {
+				t.Errorf("Env[%s] carries a mask-registered credential: a lane wrote it without naming it for splitSecretEnv", k)
+			}
+		}
+	}
+
+	// A run with no credential grant produces a nil SecretEnv, so its spec is
+	// byte-identical to one composed before the split existed.
+	if got := splitSecretEnv(map[string]string{"HTTP_PROXY": "x"}, nil); got != nil {
+		t.Errorf("splitSecretEnv with no credential keys = %v, want nil", got)
+	}
+}
