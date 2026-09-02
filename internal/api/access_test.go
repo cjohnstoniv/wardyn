@@ -578,6 +578,17 @@ func TestAccess_InvalidShapeRejected(t *testing.T) {
 		{"whitespace-only value", `{"value":"   ","role":"member","acknowledge_access_change":true}`},
 		{"invalid role", `{"value":"eng-team","role":"superadmin","acknowledge_access_change":true}`},
 		{"non-ASCII value", `{"value":"café","role":"member","acknowledge_access_change":true}`},
+		// canonicalRoleMapValue's ASCII guard is oidc.ASCIIOnly, the SAME
+		// function the login path applies to claim values — these two arms pin
+		// the ones that distinguish a real ASCII test from a lazy one.
+		// U+017F (LATIN SMALL LETTER LONG S) survives ToLower unchanged and
+		// must stay refused: it case-folds onto ASCII "s", the escalating
+		// direction the guard exists for.
+		{"fold-escalating rune", `{"value":"roſs","role":"member","acknowledge_access_change":true}`},
+		// Invalid UTF-8 decodes to RuneError (U+FFFD), which is above ASCII —
+		// so a byte-level and a rune-level check agree here, and refusing is
+		// the fail-closed answer either way.
+		{"invalid UTF-8 value", `{"value":"\uFFFDeng","role":"member","acknowledge_access_change":true}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

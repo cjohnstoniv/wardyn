@@ -937,7 +937,7 @@ func TestCallbackScalarGroupsClaimMapSetContributesNothing(t *testing.T) {
 // ─── TestParseRoleMap ─────────────────────────────────────────────────────────
 //
 // M2/M3/L8: non-empty input that yields no usable entry, a non-ASCII key
-// (can never match — see asciiOnly), and a duplicate key must all be parse
+// (can never match — see ASCIIOnly), and a duplicate key must all be parse
 // errors, never a silent "close enough" map.
 
 func TestParseRoleMap(t *testing.T) {
@@ -960,7 +960,7 @@ func TestParseRoleMap(t *testing.T) {
 		// M2: non-empty input, but every entry is blank — must error, not
 		// silently return nil (which deriveRole reads as "everyone is admin").
 		{"all-blank input is an error, not silently unset", ",,,", nil, true},
-		// M3: a non-ASCII key can never match a claim (deriveRole's asciiOnly
+		// M3: a non-ASCII key can never match a claim (deriveRole's ASCIIOnly
 		// guard skips non-ASCII claim values before lookup) — a silent dead
 		// entry that inverts intent under WARDYN_OIDC_DEFAULT_ROLE=admin.
 		{"non-ASCII key can never match", "roſs@corp.example=admin", nil, true},

@@ -280,22 +280,10 @@ func (s *Server) accessUnmatchedOutcome(rows []oidc.RoleMapping) string {
 
 // ─── shared: canonicalization, candidate-map construction, guards ─────────
 
-// isASCII reports whether s contains no byte above ASCII — the same
-// byte-level test internal/auth/oidc's asciiOnly applies (a multi-byte UTF-8
-// rune's bytes are all >= 0x80, so this agrees with a rune-level check).
-func isASCII(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] > 0x7f {
-			return false
-		}
-	}
-	return true
-}
-
 // canonicalRoleMapValue trims+lowers value and validates it against EXACTLY
 // the contract mergeRoleMaps enforces on a console row (RoleMapping's own doc
 // comment): non-empty, ASCII (matching is ASCII-only — a non-ASCII value can
-// never match a claim, see oidc's asciiOnly), and free of control characters
+// never match a claim, see oidc.ASCIIOnly), and free of control characters
 // (the same hygiene validateCapabilityGrant applies to its own Value field —
 // an empty/control-char value stored raw would be either a dead key or,
 // worse for whitespace, one that matches ANY empty/whitespace claim).
@@ -307,7 +295,7 @@ func canonicalRoleMapValue(value string) (string, error) {
 	if len(v) > maxCapabilityGrantFieldLen || !controlCharFree(v) {
 		return "", fmt.Errorf("value: invalid")
 	}
-	if !isASCII(v) {
+	if !oidc.ASCIIOnly(v) {
 		return "", fmt.Errorf("value: must be ASCII — matching is ASCII-only, a non-ASCII value can never match a claim")
 	}
 	return v, nil

@@ -37,7 +37,7 @@ func TestSessionGroupsNormalizes(t *testing.T) {
 
 // TestSessionGroupsDropsUnmatchableClaims: a grant subject is an
 // operator-typed ASCII string, and Unicode case folding lets a crafted claim
-// fold ONTO one (the same escalation asciiOnly guards in deriveRole). A claim
+// fold ONTO one (the same escalation ASCIIOnly guards in deriveRole). A claim
 // that could never be written down as a grant subject is dropped rather than
 // carried into the cookie where it can only ever surprise someone.
 func TestSessionGroupsDropsUnmatchableClaims(t *testing.T) {

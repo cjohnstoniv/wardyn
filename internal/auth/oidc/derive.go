@@ -120,12 +120,12 @@ func ParseRoleMap(csv string) (map[string]string, error) {
 			return nil, fmt.Errorf("entry %q: invalid role %q (want %q, %q or %q)", pair, v, RoleAdmin, RoleSecurityAdmin, RoleMember)
 		}
 		// A non-ASCII key can NEVER match: deriveRole skips non-ASCII claim
-		// values before lookup (asciiOnly, the fold-escalation guard), so
+		// values before lookup (ASCIIOnly, the fold-escalation guard), so
 		// this would silently be a dead entry — worse, one that INVERTS
 		// intent under WARDYN_OIDC_DEFAULT_ROLE=admin, where the operator
 		// meant to name this value out for a lesser role but it can never
 		// match and every such login instead gets the default.
-		if !asciiOnly(k) {
+		if !ASCIIOnly(k) {
 			return nil, fmt.Errorf("entry %q: non-ASCII value can never match (matching is ASCII-only)", pair)
 		}
 		key := strings.ToLower(k)
@@ -183,7 +183,7 @@ type Match struct {
 // non-ASCII, mixed case) or an invalid Role is DROPPED AND LOGGED (via
 // mergeRoleMaps' shadowed return), never stored verbatim — an empty/
 // whitespace Value would otherwise match ANY empty/whitespace claim
-// (asciiOnly("") is true) and an invalid Role would be a dead key that still
+// (ASCIIOnly("") is true) and an invalid Role would be a dead key that still
 // changes deriveRole's arm. A canonical, valid row is still stored under
 // Value exactly as given, the same way ParseRoleMap's chart keys are already
 // lowercase by the time deriveRole looks one up.
@@ -246,13 +246,13 @@ func mergeRoleMaps(chart map[string]string, legacyAdminEmails []string, rows []R
 		// non-ASCII, or not already lowercase) or an invalid Role is dropped
 		// here, not stored as a dead-or-dangerous key. An empty/whitespace
 		// Value would match ANY empty/whitespace claim in deriveRole's loop
-		// (asciiOnly("") is true) — an admin escalation if Role is admin. An
+		// (ASCIIOnly("") is true) — an admin escalation if Role is admin. An
 		// invalid Role can never resolve to RoleAdmin/RoleMember in
 		// deriveRole's switch, but its mere presence still flips roleMap from
 		// empty to non-empty, moving deriveRole from its no-role-map arm
 		// (legacy allowlist alone) to its role-map-present arm — denying
 		// every login that arm 1 would have allowed, with no DefaultRole set.
-		if row.Value == "" || row.Value != strings.ToLower(strings.TrimSpace(row.Value)) || !asciiOnly(row.Value) || !ValidRole(row.Role) {
+		if row.Value == "" || row.Value != strings.ToLower(strings.TrimSpace(row.Value)) || !ASCIIOnly(row.Value) || !ValidRole(row.Role) {
 			shadowed = append(shadowed, row.Value)
 			continue
 		}
@@ -466,8 +466,8 @@ func deriveRole(rolesClaim, groupsClaim []string, email string, roleMap map[stri
 	// repeat of the same fact.
 	seenMapRow := make(map[string]bool, len(values))
 	for _, v := range values {
-		if !asciiOnly(v) {
-			continue // fail closed: see asciiOnly
+		if !ASCIIOnly(v) {
+			continue // fail closed: see ASCIIOnly
 		}
 		key := strings.ToLower(strings.TrimSpace(v))
 		mapped := roleMap[key]
@@ -532,7 +532,7 @@ const maxSessionGroupsBytes = 2048
 // is reserved for "this cookie predates 0.6" (see Session.Groups).
 //
 // Printable-ASCII only, for the same reason deriveRole's loop skips non-ASCII
-// claim values (asciiOnly): a grant subject is an operator-authored ASCII
+// claim values (ASCIIOnly): a grant subject is an operator-authored ASCII
 // string, and Unicode case folding lets a crafted claim fold ONTO one. Control
 // characters are dropped with the rest — they cannot appear in a real group
 // name, and excluding them keeps the byte budget below exact.
@@ -580,7 +580,7 @@ func sessionGroups(rolesClaim, groupsClaim []string) (groups []string, truncated
 }
 
 // printableASCII reports whether every rune of s is a printable ASCII
-// character (U+0020..U+007E). Stricter than asciiOnly — see sessionGroups.
+// character (U+0020..U+007E). Stricter than ASCIIOnly — see sessionGroups.
 func printableASCII(s string) bool {
 	return strings.IndexFunc(s, func(r rune) bool { return r < ' ' || r > '~' }) < 0
 }
@@ -593,7 +593,7 @@ func printableASCII(s string) bool {
 // own lookup (deriveRole's loop) already trims its values.
 func emailInList(email string, list []string) bool {
 	email = strings.TrimSpace(email)
-	if email == "" || !asciiOnly(email) {
+	if email == "" || !ASCIIOnly(email) {
 		return false
 	}
 	for _, e := range list {
@@ -604,7 +604,12 @@ func emailInList(email string, list []string) bool {
 	return false
 }
 
-// asciiOnly reports whether s contains no rune above ASCII. Case-insensitive
+// ASCIIOnly reports whether s contains no rune above ASCII. It is exported for
+// internal/api, whose console-managed role-map writes must refuse exactly what
+// this package refuses at login — one implementation, so the write surface and
+// the match surface can never disagree about what "ASCII" means.
+//
+// Case-insensitive
 // matching (ToLower/EqualFold) does Unicode case folding, under which e.g.
 // "roſs" (U+017F) or a KELVIN SIGN "k" (U+212A) MATCHES an ASCII string — the
 // escalating direction (same fold-escalation guard as internal/api's
@@ -612,6 +617,6 @@ func emailInList(email string, list []string) bool {
 // operator-authored ASCII allowlists — WARDYN_OIDC_ROLE_MAP and
 // WARDYN_OIDC_OPERATOR_EMAILS — that a crafted non-ASCII claim must never
 // fold onto).
-func asciiOnly(s string) bool {
+func ASCIIOnly(s string) bool {
 	return strings.IndexFunc(s, func(r rune) bool { return r > unicode.MaxASCII }) < 0
 }
