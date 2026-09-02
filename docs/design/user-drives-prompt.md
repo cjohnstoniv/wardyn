@@ -484,7 +484,7 @@ that every product string rendered in the mock has a key somewhere.
 | `GOV.PRIORITY_NA` | `governance-copy.ts` | — |
 | `GOV.PREVIEW_NOT_SAVED` | `governance-copy.ts` | Nothing here is saved. |
 | `GOV.PREVIEW_RESULT_UNKNOWN` | `governance-copy.ts` | Couldn't resolve this — try again. |
-| `GOV.LIMITS_TITLE` / `GOV.LIMITS_LEAD` | `governance-copy.ts` | Limits / Two launch modes route around tool approvals entirely, so the ceiling above cannot reach them. Deny them here instead. |
+| `GOV.LIMITS_TITLE` / `GOV.LIMITS_LEAD` | `governance-copy.ts` | Limits / Some of what a run can do routes around the ceiling entirely. Deny it here instead. |
 | `GOV.LIMIT_EXEC_LABEL` / `GOV.LIMIT_INTERACTIVE_LABEL` | `governance-copy.ts` | Deny exec runs / Deny interactive runs |
 | **`GOV.LIMIT_DRIVE_LABEL`** | `governance-prompt.md` §7.2 (appended this round) → `governance-copy.ts` | Deny mounting a user drive |
 | **`GOV.LIMIT_DRIVE_HINT`** | `governance-prompt.md` §7.2 (appended this round) → `governance-copy.ts` | A run under this profile cannot mount the person's drive, even when one is allocated to them. |
@@ -872,7 +872,11 @@ fifth refusal beyond `DESIGN.md` §2.6's four and needs your word.
 
 ### Owner answers
 
-(empty — Q4–Q7 above; Q1–Q3 decided by rule)
+Owner, 2026-09-01 (this session): **mock approved as drawn.** Q4 → **(b) reword**, applied in this
+round as an owner-gated copy change (`GOV.LIMITS_LEAD` in `governance-prompt.md` §7.2 and
+`governance-copy.ts`; `governance.spec.ts` updated if it asserts the lead). Q5 → (a) off. Q6 →
+(a′) sibling `/me.user_drive_denied_by_profile`. Q7 → **(a) the new 400**; `SIZE_HINT_REQUIRED`
+stands. Q1–Q3 decided by rule.
 
 ### Round notes (author, 2026-09-01)
 

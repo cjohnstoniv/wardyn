@@ -498,7 +498,7 @@ time) and one must be able to change without the other.
 | `CEILING_TITLE` | Ceiling |
 | `CEILING_LEAD` | Every run under this profile is bounded by this spec. A member's own policy is clamped to it, and so is a saved policy they pick. |
 | `LIMITS_TITLE` | Limits |
-| `LIMITS_LEAD` | Two launch modes route around tool approvals entirely, so the ceiling above cannot reach them. Deny them here instead. |
+| `LIMITS_LEAD` | Some of what a run can do routes around the ceiling entirely. Deny it here instead. |
 | `LIMIT_EXEC_LABEL` | Deny exec runs |
 | `LIMIT_EXEC_HINT` | `task_mode=exec` runs a command with no agent, so no tool rule is ever consulted. |
 | `LIMIT_INTERACTIVE_LABEL` | Deny interactive runs |
