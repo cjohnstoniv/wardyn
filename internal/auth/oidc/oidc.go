@@ -262,7 +262,6 @@ type Session struct {
 // Authenticator provides OIDC login, callback, logout, and session-check handlers.
 type Authenticator struct {
 	cfg        Config
-	provider   *gooidc.Provider
 	oauth2     oauth2.Config
 	verifier   *gooidc.IDTokenVerifier
 	hmacKey    []byte
@@ -339,7 +338,6 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 
 	return &Authenticator{
 		cfg:        cfg,
-		provider:   provider,
 		oauth2:     oa,
 		verifier:   verifier,
 		hmacKey:    hmacKey,
