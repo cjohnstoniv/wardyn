@@ -100,7 +100,6 @@ func (f *fakeGraph) dir(t *testing.T) *entraDirectory {
 		TenantID:     "tenant-guid",
 		ClientID:     "client-guid",
 		ClientSecret: "s3cret",
-		HTTPClient:   f.srv.Client(),
 	}, f.srv.URL+"/token", f.srv.URL+"/v1.0")
 	if err != nil {
 		t.Fatalf("newEntra: %v", err)
@@ -318,7 +317,7 @@ func TestTokenFailureIsAProviderError(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":"invalid_client"}`))
 	}))
 	t.Cleanup(srv.Close)
-	dd, err := newEntra(EntraConfig{TenantID: "t", ClientID: "c", ClientSecret: "s", HTTPClient: srv.Client()}, srv.URL, f.srv.URL+"/v1.0")
+	dd, err := newEntra(EntraConfig{TenantID: "t", ClientID: "c", ClientSecret: "s"}, srv.URL, f.srv.URL+"/v1.0")
 	if err != nil {
 		t.Fatal(err)
 	}

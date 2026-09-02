@@ -64,9 +64,6 @@ type EntraConfig struct {
 	TenantID     string
 	ClientID     string
 	ClientSecret string
-	// HTTPClient is used for both the token endpoint and Graph. nil ⇒ a default
-	// client with httpTimeout.
-	HTTPClient *http.Client
 }
 
 type entraDirectory struct {
@@ -103,17 +100,10 @@ func newEntra(cfg EntraConfig, tokenURL, graphBase string) (Directory, error) {
 	if strings.TrimSpace(cfg.TenantID) == "" || strings.TrimSpace(cfg.ClientID) == "" || cfg.ClientSecret == "" {
 		return nil, ErrUnconfigured
 	}
-	hc := cfg.HTTPClient
-	if hc == nil {
-		hc = &http.Client{Timeout: httpTimeout}
-	} else if hc.Timeout == 0 {
-		// The token source runs on a detached context (below), so a caller
-		// client with no Timeout would let a hung token endpoint stall every
-		// search forever — copy, don't mutate the caller's client.
-		c := *hc
-		c.Timeout = httpTimeout
-		hc = &c
-	}
+	// The token source runs on a detached context (below), so the Timeout is
+	// the only thing bounding a hung token endpoint — the connector owns its
+	// client so that bound can never be absent.
+	hc := &http.Client{Timeout: httpTimeout}
 
 	// The token source is built once, over a DETACHED context carrying our HTTP
 	// client. Binding it to a request context instead would let one cancelled
