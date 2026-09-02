@@ -130,24 +130,12 @@ func (s PG) RevokeAPIToken(ctx context.Context, id uuid.UUID, principal string, 
 	return scanAPIToken(s.Pool.QueryRow(ctx, q, id, now, principal))
 }
 
+// queryAPITokens is the two token lists' shared read. collect (pagination.go)
+// already generalises the rows loop, INCLUDING the "empty, never nil" contract
+// this hand-rolled version re-derived with its own `out := []types.APIToken{}`
+// — the API renders these as `[]`, never `null`.
 func queryAPITokens(ctx context.Context, s PG, q string, args ...any) ([]types.APIToken, error) {
-	rows, err := s.Pool.Query(ctx, q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("store: list api tokens: %w", err)
-	}
-	defer rows.Close()
-	out := []types.APIToken{}
-	for rows.Next() {
-		t, err := scanAPIToken(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, t)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: list api tokens: %w", err)
-	}
-	return out, nil
+	return collect(ctx, s.Pool, "list", "api tokens", q, args, scanAPIToken)
 }
 
 // marshalGroups encodes the session's group snapshot for the nullable JSONB
