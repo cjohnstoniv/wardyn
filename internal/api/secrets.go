@@ -35,18 +35,16 @@ const secretsMaxPerOwner = 100
 
 // reservedSecretNames are platform-internal keys that must not be overwritten
 // or deleted through the API (they would brick identity/session handling), and
-// that the injection sink refuses to resolve as a stored value. The Wardyn-
-// managed harness OAuth blob lives here too: it is written/deleted ONLY via the
-// dedicated setup/harness-credential endpoints and injected ONLY via its
-// sentinel (types.ManagedOAuthSecret) through the managed provider — never as a
-// raw stored secret, and never listable/clobberable through the generic secrets
-// API. Keep in sync with harnessCredSecretName in harnesscred.go.
+// that the injection sink refuses to resolve as a stored value. Managed-harness
+// OAuth blobs are deliberately NOT listed: reservedSecret seals every name
+// harnessCredSecretName generates by PATTERN below (reservedSecret's own doc and
+// harnessCredSecretName in harnesscred.go carry that rationale), so there is no
+// list to keep in sync.
 var reservedSecretNames = map[string]bool{
-	"wardyn-signing-key":             true,
-	"wardyn-session-key":             true,
-	"wardyn-ssh-host-key":            true,
-	"wardyn-ui-session-key":          true,
-	"wardyn-harness-anthropic-oauth": true,
+	"wardyn-signing-key":    true,
+	"wardyn-session-key":    true,
+	"wardyn-ssh-host-key":   true,
+	"wardyn-ui-session-key": true,
 }
 
 // reservedSecret reports whether name is a platform-internal / managed-credential
