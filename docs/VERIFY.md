@@ -97,6 +97,15 @@ cosign verify-blob \
   SHA256SUMS
 ```
 
+One thing `SHA256SUMS` does **not** cover: the one-line installer fetches
+`deploy/compose/docker-compose.yaml` from the release tag over TLS and installs
+it with no digest check — the CLI binary it puts on your PATH is verified against
+this signed list and the images are cosign-verified, but the compose file is not
+a signed release asset, so it is short by design, left at
+`~/.wardyn/docker-compose.yaml` for you to read, and published as an accepted
+risk (`threatmodel/THREAT-MODEL.md` §5, residual 32) rather than quietly
+verified.
+
 ## 6. If your scanner flags GO-2026-5932
 
 It will, and it is a false positive that we have written down rather than

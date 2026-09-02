@@ -877,6 +877,24 @@ hiding them would repeat the failure mode we are designed to avoid.
     ABSENT (one row per keystroke would log every name an admin looked up), so
     the audit trail records connector failures, not who was searched for.
 
+32. **The one-line installer fetches the compose definition over TLS with no
+    digest.** `install.sh` pulls `deploy/compose/docker-compose.yaml` from the
+    release tag on `raw.githubusercontent.com` and writes it into
+    `${WARDYN_HOME}` unverified — and that file decides which images run, which
+    ports publish on which interface, whether `WARDYN_LOCAL_MODE` is on, and what
+    is bind-mounted. Everything else the installer places IS verified: the CLI
+    binary against the cosign-signed `SHA256SUMS`, fail-closed (`install_cli`
+    dies on a mismatch rather than installing it), and the images by cosign
+    (`docs/VERIFY.md`). The compose file is simply not among the signed release
+    assets, so its integrity rests on TLS and on GitHub serving the tag honestly.
+    Accepted for 0.7 on one honest ground: the file is short, plain YAML, and
+    stays on disk at `${WARDYN_HOME}/docker-compose.yaml` where the operator can
+    read it — though the installer's own `docker compose up -d --no-build` runs
+    it before anyone has, so only later `up`s are reviewed ones. The fix is a
+    `SHA256SUMS` row for it; `TestInstallSh_ComposeFetchIsVerified` and T6 of
+    `scripts/test-install-sh-trust.sh` are written and enforce it the moment
+    `F10_EXPECT_COMPOSE_INTEGRITY=1` is set.
+
 ### 5.1a LLM egress content inspection — the honest-claims contract
 
 The optional `llm_inspection` guardrail (residuals #1, #2) is a **visibility +

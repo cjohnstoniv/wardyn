@@ -4,10 +4,10 @@
 # touches (docker, curl, chmod, sha256sum) is a stub on a private PATH, so the
 # script's own control flow is what runs.
 #
-# Promoted to scripts/ (its intended destination) so it is trackable: /local/ is
-# gitignored (.gitignore:64). NOT yet wired into the Makefile `test-scripts`
-# target next to scripts/test-install-sh.sh (Makefile:437) — T2..T5 fail on this
-# tree by design, so wiring it in would red the gate; wire it once they are fixed.
+# Wired into `make test-scripts` beside scripts/test-install-sh.sh, which is the
+# text-only half of the same coverage. cmd/wardynd/install_sh_trust_guard_test.go
+# pins the SHAPE of the fixes below in Go; this file proves they hold when the
+# script actually runs.
 #
 # Run (read-only — no docker, no network, no writes outside mktemp):
 #   bash scripts/test-install-sh-trust.sh
@@ -15,14 +15,15 @@
 # Exit 0 = every invariant held. Exit 1 = at least one FAILED. Each case is a
 # separately-named invariant; the summary line at the end lists which fell.
 #
-# Expected TODAY (hardening-base 80538b10 / feat/v0.7-profiles fa910735):
+# Expected:
 #   T1 PASS   happy path mints a 48-hex admin token and an AGE key
-#   T2 FAIL   host without `sha256sum` (macOS default) -> empty admin token   (H1)
-#   T3 FAIL   second `docker run … -gen-age-key` fails -> sha256("") token    (H2)
-#   T4 FAIL   .env is created world-readable before chmod 600                (H6)
-#   T5 FAIL   upgrade path keeps a pre-existing EMPTY admin token            (H16)
-#   T6 SKIP   tampered compose file is installed (accepted-risk unless
-#             F10_EXPECT_COMPOSE_INTEGRITY=1, then FAIL)                     (H3)
+#   T2 PASS   host without `sha256sum` (macOS default) still gets a token    (H1)
+#   T3 PASS   second `docker run … -gen-age-key` fails -> refuses to guess   (H2)
+#   T4 PASS   .env is 0600 the moment it exists                             (H6)
+#   T5 PASS   upgrade re-mints a pre-existing EMPTY admin token             (H16)
+#   T6 SKIP   tampered compose file is installed — a PUBLISHED accepted risk
+#             (docs/VERIFY.md; THREAT-MODEL §5 residual 32). Set
+#             F10_EXPECT_COMPOSE_INTEGRITY=1 to enforce once a digest exists. (H3)
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -139,11 +140,16 @@ if run_install "${d}/bin" "${d}/home"; then
 else fail "${t}" "install.sh exited $? — $(tail -3 "${d}/home/install.out" | tr '\n' ' ')"; fi
 
 # ── T2: host without sha256sum (macOS default) ─────────────────────────────
-# install.sh:188-189 has a shasum fallback for the CLI checksum; install.sh:89
-# (the ADMIN TOKEN) does not. sh has no pipefail, so the pipeline's status is
-# `cut`'s (0) and set -e never fires: TOKEN="" lands in .env, and the compose
-# file's `${WARDYN_ADMIN_TOKEN:-demo-admin-token}` (docker-compose.yaml:205)
-# substitutes the PUBLISHED demo token for an empty value.
+# install_cli's CLI checksum had a shasum fallback; the ADMIN TOKEN derivation
+# did not. sh has no pipefail, so the pipeline's status was `cut`'s (0) and
+# set -e never fired: TOKEN="" landed in .env, and the compose file's
+# `${WARDYN_ADMIN_TOKEN:-demo-admin-token}` substitutes the PUBLISHED demo token
+# for an empty value. Both sites now route through install.sh's sha256_hex.
+#
+# NOTE the stub below emulates "no sha256sum" as a sha256sum on PATH that exits
+# 127, which `command -v` still finds — so here install.sh takes the fail-closed
+# branch. On a real mac no such file exists, `command -v` fails, and shasum
+# mints the token. Either outcome passes; a silent empty token is the defect.
 t="T2 admin token is minted on a host with no sha256sum (macOS)"
 d="${WORK}/t2"; make_stubs "${d}/bin" no-sha256sum; mkdir -p "${d}/home"
 if run_install "${d}/bin" "${d}/home"; then
@@ -156,9 +162,10 @@ else
 fi
 
 # ── T3: the second -gen-age-key run fails ──────────────────────────────────
-# install.sh:88 dies when the FIRST run yields no key; install.sh:89 has no such
-# guard, so a transient docker failure on the SECOND run hashes an empty
-# stdin: the token becomes the first 48 hex of sha256(""), a public constant.
+# install.sh dies when the FIRST `-gen-age-key` run yields no key; the token
+# derivation had no such guard, so a transient docker failure on the SECOND run
+# hashed an empty stdin and the token became the first 48 hex of sha256("") — a
+# public constant. mint_admin_token now checks the mint before hashing it.
 t="T3 admin token is never sha256(\"\") when the second docker run fails"
 d="${WORK}/t3"; make_stubs "${d}/bin" default; mkdir -p "${d}/home"; : > "${d}/bin/state/fail-second-run"
 if run_install "${d}/bin" "${d}/home"; then
@@ -169,11 +176,11 @@ if run_install "${d}/bin" "${d}/home"; then
 else pass "${t} (script refused instead)"; fi
 
 # ── T4: .env must never exist world-readable ───────────────────────────────
-# install.sh:91 `cat > .env` runs under the caller's umask (022 by default),
-# then install.sh:115 chmod 600. The file holds WARDYN_AGE_KEY (the secret
-# store master key) and WARDYN_ADMIN_TOKEN for that window. The upgrade path's
-# `> .env.tmp && mv` (install.sh:130-131,138) has the same shape. Fix shape:
-# `umask 077` before the first write (or `(umask 077; cat > .env)`).
+# `cat > .env` ran under the caller's umask (022 by default) and was chmod 600
+# only afterwards. The file holds WARDYN_AGE_KEY (the secret-store master key)
+# and WARDYN_ADMIN_TOKEN for that window, and the upgrade path's env_set
+# `> .env.tmp && mv` had the same shape. install.sh now sets `umask 077` around
+# the whole .env block and restores OLD_UMASK after it.
 t="T4 .env is 0600 at creation (umask 077), not only after a later chmod"
 d="${WORK}/t4"; make_stubs "${d}/bin" default; mkdir -p "${d}/home"
 ( umask 022; run_install "${d}/bin" "${d}/home" ) || true
@@ -182,9 +189,9 @@ if [ "${before}" = "600" ]; then pass "${t}"
 else fail "${t}" ".env mode before install.sh's own chmod was ${before}"; fi
 
 # ── T5: upgrade path must not carry an EMPTY admin token forward ───────────
-# install.sh:117-147 rewrites only the version-derived lines. A box that
-# installed under T2/T3 stays on the empty/constant token across every
-# upgrade, and the "Upgrading" banner says nothing.
+# The upgrade branch rewrites only the version-derived lines, so a box that
+# installed under T2/T3 stayed on the empty token across every upgrade and the
+# "Upgrading" banner said nothing. It now re-mints an empty one and says so.
 t="T5 upgrade path refuses or re-mints an empty WARDYN_ADMIN_TOKEN"
 d="${WORK}/t5"; make_stubs "${d}/bin" default; mkdir -p "${d}/home/.wardyn"
 cat > "${d}/home/.wardyn/.env" <<EOF
@@ -200,15 +207,17 @@ if run_install "${d}/bin" "${d}/home"; then
 else pass "${t} (script refused instead)"; fi
 
 # ── T6: tampered compose definition ────────────────────────────────────────
-# install.sh:80 fetches deploy/compose/docker-compose.yaml from a MUTABLE tag
-# ref over raw.githubusercontent with no digest/SHA256SUMS check; the file is
-# not among the cosign-signed release assets (release.yml:444-452,477-478).
-# Once a digest is introduced (SHA256SUMS row for docker-compose.yaml, or a
-# pinned sha256 in install.sh), this case asserts the fetch fails closed.
+# install.sh fetches deploy/compose/docker-compose.yaml from a MUTABLE tag ref
+# over raw.githubusercontent with no digest/SHA256SUMS check; the file is not
+# among the cosign-signed release assets (release.yml's checksums +
+# cosign-sign-blob steps). Accepted and published for 0.7 — docs/VERIFY.md and
+# THREAT-MODEL §5 residual 32. Once a digest is introduced (a SHA256SUMS row for
+# docker-compose.yaml, or a pinned sha256 in install.sh), this case asserts the
+# fetch fails closed.
 t="T6 tampered compose file is refused (digest/SHA256SUMS mismatch)"
 d="${WORK}/t6"; make_stubs "${d}/bin" default; mkdir -p "${d}/home"; : > "${d}/bin/state/tamper-compose"
 if [ "${F10_EXPECT_COMPOSE_INTEGRITY:-0}" != "1" ]; then
-  skip "${t}" "ACCEPTED RISK until a digest exists (see ACCEPTED-RISK-compose-fetch.md); set F10_EXPECT_COMPOSE_INTEGRITY=1 to enforce"
+  skip "${t}" "ACCEPTED RISK until a digest exists (docs/VERIFY.md; THREAT-MODEL §5 residual 32); set F10_EXPECT_COMPOSE_INTEGRITY=1 to enforce"
 elif run_install "${d}/bin" "${d}/home"; then
   fail "${t}" "install.sh accepted a compose file naming evil/wardynd:latest on 0.0.0.0 with WARDYN_LOCAL_MODE=true"
 else

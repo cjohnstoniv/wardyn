@@ -434,6 +434,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-compose-ns-registry-port.sh
 	./scripts/test-desktop-profile.sh
 	./scripts/test-image-pins.sh
+	./scripts/test-install-sh-trust.sh
 	./scripts/test-install-sh.sh
 	./scripts/test-narrate-speakable.sh
 	./scripts/test-repo-scan-ok.sh
