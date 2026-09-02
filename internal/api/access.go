@@ -117,11 +117,12 @@ type accessResponse struct {
 	// is set (oidc.Authenticator.HasEmailDomains) — the EMAIL_KEY badge copy
 	// depends on this, and the response otherwise cannot express it.
 	EmailDomainsConfigured bool `json:"email_domains_configured"`
-	// Issuer is the public OIDC issuer URL; Provider is a human-facing name
-	// derived from it (e.g. "Microsoft Entra ID") so the console's SSO chip
-	// names WHERE sign-in comes from, not just THAT it is SSO. Provider falls
-	// back to the issuer's host when the issuer isn't a recognized provider.
-	Issuer   string        `json:"issuer"`
+	// Provider is a human-facing IdP name derived SERVER-SIDE from the OIDC
+	// issuer URL (e.g. "Microsoft Entra ID") so the console's SSO chip names
+	// WHERE sign-in comes from, not just THAT it is SSO; it falls back to the
+	// issuer's host when the issuer isn't a recognized provider. The raw
+	// issuer URL is deliberately NOT on the wire — the console never rendered
+	// it, and deriving the name here keeps one implementation of that mapping.
 	Provider string        `json:"provider"`
 	Posture  accessPosture `json:"posture"`
 }
@@ -232,7 +233,6 @@ func (s *Server) handleGetAccess(w http.ResponseWriter, r *http.Request) {
 		OperatorEmails:         operatorEmails,
 		AllowEmailMappings:     s.cfg.AllowEmailMappings,
 		EmailDomainsConfigured: s.cfg.OIDC.HasEmailDomains(),
-		Issuer:                 s.cfg.OIDC.Issuer(),
 		Provider:               ssoProviderName(s.cfg.OIDC.Issuer()),
 		Posture: accessPosture{
 			// MapEmpty (A-5) is the REAL merged-map emptiness (chart + rows,
