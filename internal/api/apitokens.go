@@ -192,10 +192,9 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
-		writeError(w, http.StatusInternalServerError, "generate api token: "+err.Error())
-		return
-	}
+	// crypto/rand.Read never returns an error (go1.24+): it crashes the program
+	// irrecoverably instead, so there is no failure path to serve a 500 on.
+	rand.Read(raw)
 	plaintext := apiTokenPrefix + hex.EncodeToString(raw)
 
 	// The identity SNAPSHOT. Role is the caller's REAL session role, copied

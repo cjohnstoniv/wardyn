@@ -290,6 +290,20 @@ type Config struct {
 	// mounts on a member-OWNED workspace; an operator's mounts are never
 	// narrowed by it. See internal/runner/member_mount.go.
 	MemberMounts runner.MemberMountPolicy
+	// UserDriveHostRoots is the operator/MDM-set ceiling over admin-authored
+	// host_path USER DRIVES (WARDYN_USER_DRIVE_HOST_ROOTS, parsed at boot by
+	// runner.ParseUserDriveHostRoots). The ZERO VALUE — the default — means NO
+	// host_path drive may be authored at all, the same fail-closed posture
+	// MemberMounts takes above and for the same reason: a drive's host root is
+	// authored in the database and bound into OTHER PEOPLE's sandboxes, so its
+	// ceiling has to live where a console compromise cannot reach it.
+	//
+	// A []string rather than the types.UserDriveHostRootCheck closure because
+	// GET /drives has to report whether a ceiling is CONFIGURED (so the console
+	// can disable the host_path option with the reason rather than offering a
+	// save that 422s), which a func value cannot answer. The closure is built
+	// from it at the write boundary — see Server.userDriveHostRootCheck.
+	UserDriveHostRoots []string
 	// ImageBuilder, when set, builds a per-run sandbox image from the
 	// devcontainer_repo in a create-run request. Nil disables devcontainer
 	// builds (the request degrades to the convention image).

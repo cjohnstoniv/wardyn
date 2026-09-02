@@ -15,6 +15,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
+	"github.com/cjohnstoniv/wardyn/internal/identity/identitytest"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -105,7 +106,7 @@ func pgHarnessWithRunner(t *testing.T, r runner.Runner) (*Server, *pgxpool.Pool)
 	t.Cleanup(pool.Close)
 
 	audit := &recRecorder{}
-	idp, err := embedded.New(nil, "wardyn.local", embedded.NewMemRevocationStore(), audit)
+	idp, err := embedded.New(nil, "wardyn.local", identitytest.NewMemRevocationStore(), audit)
 	if err != nil {
 		t.Fatalf("embedded.New: %v", err)
 	}

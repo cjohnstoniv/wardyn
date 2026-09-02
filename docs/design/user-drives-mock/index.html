@@ -1,0 +1,1061 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wardyn — User drives mock</title>
+<!--
+  User-drives mock · static, for owner review.
+  Every visible PRODUCT string below is verbatim from
+  docs/design/user-drives-prompt.md §7 (the frozen tables — source of truth; the
+  implementation later transcribes §7.2-§7.8 into ui/src/app/lib/user-drives-copy.ts).
+  Strings marked in the prompt's §7.1 as REUSED canon come from
+  permissions-copy.ts / people-access-copy.ts / governance-copy.ts / wardyn/copy.ts
+  and are rendered here unchanged — they are not re-frozen. The two door strings
+  (state 6) are governance-prompt.md §7.2's, appended in this round.
+
+  No build, no deps, no fetch — open the file. The only script is the light/dark
+  toggle carried over from the governance mock; the page starts in the light
+  theme (:root) and the button stamps data-theme. Tokens and CSS idioms copied
+  verbatim from docs/design/governance-mock/index.html. Teal IS in budget on
+  /drives (a full screen): exactly one `default` (teal) button at a time —
+  Allocate at rest, New drive in the empty state, Save drive while the editor is
+  open (the allocation form collapses for that span; state 3). The setup card and
+  the Settings card carry zero teal (state 9).
+
+  SCAFFOLD vs PRODUCT: the sticky bar, the `.tag` state labels, the `.varlabel`
+  variant strips and the HTML comments are REVIEW SCAFFOLDING — 11px uppercase,
+  muted, outside the `.frame`. Everything inside a `.frame` is the product.
+-->
+<style>
+:root{
+  --background:#ffffff; --foreground:#171717; --card:#ffffff; --surface-2:#f4f4f5;
+  --muted-foreground:#737373; --border:#e5e5e5; --border-strong:#d4d4d4;
+  --primary:#0f766e; --primary-fg:#ffffff;
+  --success:#047857; --success-subtle:rgba(4,120,87,.12); --warning:#92400e; --warning-subtle:rgba(245,158,11,.13);
+  --danger:#b91c1c; --danger-subtle:rgba(239,68,68,.13);
+  --info:#1d4ed8; --info-subtle:rgba(29,78,216,.13);
+  --neutral-subtle:rgba(115,115,115,.12);
+  --font-sans:"Inter",ui-sans-serif,system-ui,-apple-system,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+}
+html[data-theme="dark"]{
+  --background:#0a0a0a; --foreground:#ededed; --card:#111111; --surface-2:#1f1f1f;
+  --muted-foreground:#a3a3a3; --border:#262626; --border-strong:#333333;
+  --primary:#14b8a6; --primary-fg:#0a0a0a;
+  --success:#10b981; --success-subtle:rgba(16,185,129,.15); --warning:#f59e0b; --warning-subtle:rgba(245,158,11,.15);
+  --danger:#dc2626; --danger-subtle:rgba(220,38,38,.16);
+  --info:#3b82f6; --info-subtle:rgba(59,130,246,.16);
+  --neutral-subtle:rgba(163,163,163,.14);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--background);color:var(--foreground);
+  font-family:var(--font-sans);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+code,.mono{font-family:var(--font-mono);font-size:.8125rem}
+h1,h2,h3,h4{margin:0;font-weight:600;letter-spacing:-.01em}
+p{margin:0}
+a{color:var(--primary)}
+
+/* ---- mock page chrome (NOT part of the design — the review scaffold) ---- */
+.sheet{max-width:1120px;margin:0 auto;padding:32px 24px 96px}
+.mockbar{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;gap:12px;align-items:center;
+  padding:12px 24px;background:var(--card);border-bottom:1px solid var(--border)}
+.mockbar h1{font-size:15px}
+.mockbar .sub{font-size:12.5px;color:var(--muted-foreground)}
+.mockbar button{margin-left:auto;font:inherit;font-size:13px;padding:6px 12px;border-radius:8px;
+  border:1px solid var(--border-strong);background:var(--card);color:var(--foreground);cursor:pointer}
+.state{margin-top:44px}
+.state > .tag{display:flex;gap:10px;align-items:baseline;margin-bottom:10px;
+  font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted-foreground)}
+.state > .tag b{color:var(--foreground);font-size:13px;letter-spacing:0;text-transform:none}
+.frame{border:1px solid var(--border);border-radius:14px;background:var(--card);overflow:hidden}
+.frame > .pad{padding:22px 24px}
+.varlabel{padding:8px 24px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted-foreground);background:var(--surface-2);border-top:1px solid var(--border)}
+.varlabel b{color:var(--foreground);letter-spacing:0;text-transform:none}
+
+/* ---- console primitives ---- */
+.lead{color:var(--muted-foreground);font-size:14px;margin-top:6px;max-width:74ch}
+.sectitle{font-size:14px;margin-top:0}
+.secsub{font-size:13px;color:var(--muted-foreground);margin-top:2px;max-width:82ch}
+hr.rule{border:0;border-top:1px solid var(--border);margin:0}
+
+.chip{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 9px;
+  font-size:11.5px;font-weight:500;white-space:nowrap;border:1px solid transparent}
+.chip.neutral{background:var(--neutral-subtle);color:var(--muted-foreground)}
+.chip.success{background:var(--success-subtle);color:var(--success)}
+.chip.warning{background:var(--warning-subtle);color:var(--warning)}
+.chip.danger{background:var(--danger-subtle);color:var(--danger)}
+.chip.info{background:var(--info-subtle);color:var(--info)}
+.dot{width:6px;height:6px;border-radius:999px;background:currentColor}
+
+.btn{font:inherit;font-size:13px;font-weight:500;padding:6px 13px;border-radius:8px;cursor:pointer;
+  border:1px solid var(--border-strong);background:var(--card);color:var(--foreground)}
+.btn.primary{background:var(--primary);color:var(--primary-fg);border-color:transparent}
+.btn.danger{background:var(--danger);color:#fff;border-color:transparent}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+.btn.sm{font-size:12px;padding:4px 10px}
+.btn.ghost{background:none;border-color:transparent;color:var(--muted-foreground)}
+a.btn{display:inline-block;text-decoration:none;color:var(--foreground)}
+
+/* switch */
+.sw{position:relative;width:36px;height:20px;border-radius:999px;background:var(--border-strong);
+  flex:none;transition:background .12s}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:999px;
+  background:var(--card);transition:transform .12s}
+.sw.on{background:var(--primary)}
+.sw.on::after{transform:translateX(16px)}
+.swrow{display:flex;gap:12px;align-items:flex-start;padding:12px 0}
+.swrow + .swrow{border-top:1px solid var(--border)}
+.swrow .txt{min-width:0}
+.swrow .txt b{font-size:13px;font-weight:500}
+.swrow .txt p{font-size:12px;color:var(--muted-foreground);margin-top:2px;max-width:62ch}
+
+/* checkbox + radio (member card, editor) */
+.cb{display:flex;gap:9px;align-items:flex-start;font-size:13px}
+.cb .box{width:15px;height:15px;border-radius:4px;border:1px solid var(--border-strong);flex:none;margin-top:3px;
+  background:var(--card)}
+.cb .box.on{background:var(--primary);border-color:transparent}
+.cb .box.on::after{content:"";display:block;width:4px;height:8px;border:solid var(--primary-fg);border-width:0 2px 2px 0;
+  transform:translate(4.5px,1.5px) rotate(45deg)}
+.cb .txt{min-width:0}
+.cb .txt p{font-size:12px;color:var(--muted-foreground);margin-top:2px;max-width:62ch}
+.radio{display:flex;flex-direction:column;gap:6px;font-size:13px}
+.radio span{display:flex;gap:8px;align-items:center}
+.radio i{width:14px;height:14px;border-radius:999px;border:1px solid var(--border-strong);flex:none}
+.radio i.on{border:4px solid var(--primary)}
+
+/* tables */
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead th{text-align:left;font-weight:500;font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--muted-foreground);padding:10px 24px;border-bottom:1px solid var(--border)}
+tbody td{padding:11px 24px;border-bottom:1px solid var(--border);vertical-align:top}
+tbody tr:last-child td{border-bottom:0}
+td .val{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+td .sub{font-size:11.5px;color:var(--muted-foreground);display:block;margin-top:3px;max-width:52ch}
+.right{text-align:right}
+.nm{font-weight:500}
+
+/* empty state */
+.empty{padding:34px 24px;text-align:center}
+.empty h4{font-size:13.5px}
+.empty p{font-size:12.5px;color:var(--muted-foreground);margin-top:5px;max-width:56ch;
+  margin-left:auto;margin-right:auto}
+
+/* forms */
+.form{display:grid;grid-template-columns:1fr 1fr auto;gap:14px 16px;padding:18px 24px;align-items:end}
+.form.four{grid-template-columns:1.5fr 1fr .55fr auto}
+.form.one{grid-template-columns:1fr}
+.form.two{grid-template-columns:1fr 1fr}
+.form .f{display:flex;flex-direction:column;gap:5px;min-width:0}
+.form label{font-size:12px;font-weight:500}
+.form .ctl{border:1px solid var(--border-strong);border-radius:8px;background:var(--background);
+  padding:7px 10px;font-size:13px;color:var(--foreground);min-height:34px;display:flex;align-items:center;
+  gap:8px}
+.form .ctl.ph{color:var(--muted-foreground)}
+.form .ctl.off{opacity:.5;background:var(--surface-2)}
+.form .hint{font-size:11.5px;color:var(--muted-foreground);max-width:44ch}
+.form .hint.wide{max-width:70ch}
+.seg{display:inline-flex;border:1px solid var(--border-strong);border-radius:8px;overflow:hidden}
+.seg span{padding:6px 11px;font-size:12.5px;color:var(--muted-foreground);border-left:1px solid var(--border);cursor:pointer}
+.seg span:first-child{border-left:0}
+.seg span.sel{background:var(--surface-2);color:var(--foreground);font-weight:500}
+.opts{border:1px solid var(--border);border-radius:10px;background:var(--card);overflow:hidden;font-size:13px}
+.opts .o{padding:8px 12px;border-bottom:1px solid var(--border)}
+.opts .o:last-child{border-bottom:0}
+.opts .o.sel{background:var(--surface-2);font-weight:500}
+.opts .o.off{color:var(--muted-foreground);opacity:.6}
+.opts .o .why{display:block;font-size:11.5px;font-weight:400;opacity:1;margin-top:2px;color:var(--muted-foreground)}
+
+/* dialog */
+.dlg{max-width:470px;margin:0 auto;border:1px solid var(--border);border-radius:14px;
+  background:var(--card);padding:20px 22px;box-shadow:0 12px 34px rgba(0,0,0,.22)}
+.dlg h3{font-size:15px}
+.dlg p{margin-top:9px;font-size:13px;color:var(--muted-foreground)}
+.dlg .row{margin-top:18px;display:flex;gap:10px;justify-content:flex-end}
+.dlgwrap{background:var(--surface-2);padding:28px 20px}
+
+/* the allocation form, collapsed while the drive editor is open */
+.collapsed{background:var(--surface-2);opacity:.55}
+
+/* notes */
+.note{margin-top:9px;display:flex;flex-direction:column;gap:4px;border-radius:9px;padding:9px 12px;
+  font-size:12.5px;max-width:82ch}
+.note b{font-size:12.5px;font-weight:600}
+.note.amber{background:var(--warning-subtle);color:var(--warning)}
+.note.red{background:var(--danger-subtle);color:var(--danger)}
+.note.plain{background:var(--surface-2);color:var(--muted-foreground)}
+.note.info{background:var(--info-subtle);color:var(--info)}
+
+/* preview result dl, and the run rail dl */
+dl.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:10px 0 0;font-size:12.5px}
+dl.kv dt{color:var(--muted-foreground)}
+dl.kv dd{margin:0;min-width:0}
+dl.kv dd .sub{display:block;font-size:11.5px;color:var(--muted-foreground);margin-top:2px}
+dl.rail{grid-template-columns:auto 1fr;font-size:12px}
+dl.rail dd{text-align:right;font-family:var(--font-mono)}
+dl.rail dd.plain{font-family:var(--font-sans)}
+
+/* page header (Workspaces / Settings) */
+.ph{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:12px}
+.ph h2{font-size:19px}
+.ph .acts{display:flex;gap:8px;align-items:center}
+
+/* cards (member surfaces, settings) */
+.card{border:1px solid var(--border);border-radius:14px;background:var(--card);padding:16px 18px}
+.chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
+.linkrow{margin-top:12px;display:flex;align-items:center;justify-content:space-between;gap:10px;
+  border:1px solid var(--border);border-radius:10px;padding:8px 12px;cursor:pointer}
+.linkrow b{display:block;font-size:13px;font-weight:500}
+.linkrow span{display:block;font-size:11px;color:var(--muted-foreground)}
+.linkrow .chev{color:var(--muted-foreground);font-size:14px}
+.wsrow{display:flex;align-items:center;gap:12px;border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-size:13px}
+.wsrow .m{font-family:var(--font-mono);font-size:11.5px;color:var(--muted-foreground);display:block}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media (max-width:900px){.form,.form.four,.form.two{grid-template-columns:1fr}.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="mockbar">
+  <div>
+    <h1>User drives — mock, one round, four surfaces</h1>
+    <div class="sub">Product strings verbatim from <code>docs/design/user-drives-prompt.md</code> §7. Static: nothing here is wired.</div>
+  </div>
+  <button id="tt" type="button">Light / dark</button>
+</div>
+
+<div class="sheet">
+
+<!-- ===== STATE 1 ===== Entry point + /drives empty -->
+<section class="state" style="margin-top:20px">
+  <div class="tag"><span>State 1</span><b>Entry from the Workspaces header, and /drives empty (SUPER)</b></div>
+  <div class="frame">
+    <!-- The Workspaces header is existing canon (workspaces.tsx); it gains ONE outline
+         button, TITLE, beside its teal Add workspace. No nav item exists for /drives. -->
+    <div class="pad ph">
+      <div>
+        <h2>Workspaces</h2>
+        <p class="lead">A repo or directory a run can attach. Runs can only attach what's listed here.</p>
+      </div>
+      <div class="acts"><button class="btn" type="button">User drives</button><button class="btn primary" type="button">Add workspace</button></div>
+    </div>
+    <div class="varlabel"><b>→ /drives</b> — the screen itself, empty</div>
+    <div class="pad ph">
+      <div>
+        <h2>User drives</h2>
+        <p class="lead">Persistent storage a run can mount at <span class="mono">/home/agent/drive</span>. An admin registers a drive and allocates it to people or groups; each person gets their own directory in it, and chooses per run whether to mount it.</p>
+      </div>
+    </div>
+    <hr class="rule">
+    <div class="empty">
+      <h4>No drives yet</h4>
+      <p>Runs keep nothing between them today. Register a drive to give people a directory that persists.</p>
+      <!-- The empty state carries the action that fills it (CONSOLE-RULES §9), and with
+           nothing to allocate yet that action IS the screen's one teal button. -->
+      <button class="btn primary" style="margin-top:14px" type="button">New drive</button>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 2 ===== /drives populated (Kubernetes deployment) -->
+<section class="state">
+  <div class="tag"><span>State 2</span><b>/drives — populated: two drives (a share, read-only; a managed volume, writable), allocations, preview</b></div>
+  <div class="frame">
+    <div class="pad ph">
+      <div>
+        <h2>User drives</h2>
+        <p class="lead">Persistent storage a run can mount at <span class="mono">/home/agent/drive</span>. An admin registers a drive and allocates it to people or groups; each person gets their own directory in it, and chooses per run whether to mount it.</p>
+      </div>
+    </div>
+    <hr class="rule">
+
+    <!-- drives block. A backend must match the runner (DESIGN §2.3), so ONE deployment
+         shows two backends, never four: this frame is a Kubernetes deployment. The
+         Docker pair is the variant strip below. -->
+    <div class="pad" style="padding-bottom:14px;display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:10px">
+      <div>
+        <h3 class="sectitle">Drives</h3>
+        <p class="secsub">A drive is one place storage comes from: a share your platform already mounts, or a volume Wardyn creates per person.</p>
+      </div>
+      <button class="btn" type="button">New drive</button>
+    </div>
+    <table>
+      <thead><tr><th>Name</th><th>Backend</th><th>Size</th><th>Mode</th><th>When a person leaves</th><th>Allocated to</th><th></th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="nm">Corporate homes</span></td>
+          <td><div class="val"><span class="chip neutral">Share</span><span class="mono">k8s_pvc_static</span></div></td>
+          <td>No allocation shown<span class="sub">Size bounded by the share's own quota</span></td>
+          <td><span class="chip neutral">Read-only</span></td>
+          <td>Keep their directory</td>
+          <td>2 subjects</td>
+          <td class="right"><button class="btn sm" type="button">Edit</button> <button class="btn sm" type="button">Delete</button></td>
+        </tr>
+        <tr>
+          <td><span class="nm">Scratch</span></td>
+          <td><div class="val"><span class="chip neutral">Managed</span><span class="mono">k8s_pvc</span></div></td>
+          <td>8 GiB<span class="sub">Size requested; the storage class decides</span></td>
+          <td><span class="chip warning">Writable</span></td>
+          <td>Delete their directory</td>
+          <td>1 subject</td>
+          <td class="right"><button class="btn sm" type="button">Edit</button> <button class="btn sm" type="button">Delete</button></td>
+        </tr>
+      </tbody>
+    </table>
+    <!-- HONESTY, once, as the plain note under the table (Q1 recommended). Every size
+         cell above already carries its ENFORCEMENT_* gloss as a sub-line. -->
+    <div class="pad" style="padding-top:12px;padding-bottom:16px">
+      <div class="note plain" style="margin-top:0">Wardyn never enforces a drive's size itself. On Kubernetes the size is the volume request and the storage class decides whether it binds — block disks do, network-share provisioners do not. On Docker a managed drive has no byte cap, the same gap <span class="mono">disk_mib</span> has. A share is bounded by its own quota. The size you see is the allocation, not a guarantee.</div>
+    </div>
+    <hr class="rule">
+
+    <!-- allocations block -->
+    <div class="pad" style="padding-bottom:8px">
+      <h3 class="sectitle">Allocations</h3>
+      <p class="secsub">Who gets a drive. A person's own row beats their group's; a group's beats everyone's. One drive per person.</p>
+      <div class="note plain">The most specific allocation wins: a person beats a group, and a group beats everyone. Within a person, the sign-in subject beats the email. Between groups, the higher priority wins, then the drive name.</div>
+    </div>
+    <table>
+      <thead><tr><th>Who</th><th>Drive</th><th>Priority</th><th>Overrides</th><th>Added</th><th></th></tr></thead>
+      <tbody>
+        <tr>
+          <td><div class="val"><span class="chip neutral">User</span><span class="mono">bob@corp.example</span></div></td>
+          <td>Corporate homes</td>
+          <td>—</td>
+          <td><div class="val"><span class="chip neutral">Directory · <span class="mono">bsmith</span></span><span class="chip warning">Writable</span></div></td>
+          <td>2 hours ago</td>
+          <td class="right"><button class="btn sm" type="button">Remove</button></td>
+        </tr>
+        <tr>
+          <td><div class="val"><span class="chip neutral">Group</span><span class="mono">Wardyn.Platform</span></div></td>
+          <td>Scratch</td>
+          <td>10</td>
+          <td><div class="val"><span class="chip neutral">Size · 16 GiB</span></div></td>
+          <td>3 days ago</td>
+          <td class="right"><button class="btn sm" type="button">Remove</button></td>
+        </tr>
+        <tr>
+          <td><div class="val"><span class="chip neutral">Everyone signed in</span></div></td>
+          <td>Corporate homes</td>
+          <td>—</td>
+          <td>None</td>
+          <td>9 days ago</td>
+          <td class="right"><button class="btn sm" type="button">Remove</button></td>
+        </tr>
+      </tbody>
+    </table>
+    <hr class="rule">
+    <div class="pad" style="padding-bottom:0">
+      <h4 class="sectitle">Allocate a drive</h4>
+      <!-- Two halves of one fact (the governance round's lesson): an ALLOCATION binds at the
+           next RUN; a person's GROUP MEMBERSHIP is read at sign-in, so a group's allocation
+           reaches them at their next SIGN-IN — or, on an API token, its next mint. -->
+      <p class="secsub">Takes effect on their next run. A run already dispatched keeps what it mounted.</p>
+      <p class="secsub" style="margin-top:4px">A change to someone's groups in your identity provider reaches Wardyn only when they next sign in, so a group's allocation reaches them then — or, for an API token, when it is re-minted.</p>
+    </div>
+    <div class="form four" style="padding-bottom:6px">
+      <div class="f">
+        <label>Who</label>
+        <div class="seg"><span>User</span><span class="sel">Group</span><span>Everyone signed in</span></div>
+        <!-- The DirectoryCombobox when a connector is configured; absent mode is silence —
+             this IS the plain input. Hint under the control (CONSOLE-RULES §8). -->
+        <div class="ctl mono" style="margin-top:5px">&nbsp;</div>
+        <div class="hint">A group or app-role name exactly as your identity provider sends it in the token.</div>
+      </div>
+      <div class="f">
+        <label>Drive</label>
+        <div class="ctl ph">Choose a drive</div>
+      </div>
+      <div class="f">
+        <label>Priority</label>
+        <div class="ctl mono">10</div>
+        <div class="hint">Breaks ties between groups a person is in. Higher wins. It is ignored for a person and for everyone.</div>
+      </div>
+      <div class="f"><button class="btn primary" type="button">Allocate</button></div>
+    </div>
+    <div class="form four" style="padding-top:0;grid-template-columns:1fr 1fr 1fr auto">
+      <div class="f">
+        <label>Size override (MiB)</label>
+        <div class="ctl mono">&nbsp;</div>
+        <div class="hint">Empty or 0 keeps the drive's size.</div>
+      </div>
+      <div class="f">
+        <label>Writable</label>
+        <div class="seg"><span class="sel">Same as the drive</span><span>Writable</span><span>Read-only</span></div>
+        <div class="hint">Same as the drive, or set it for this subject alone. A run can narrow the result to read-only, never widen it.</div>
+      </div>
+      <div class="f">
+        <label>Directory name</label>
+        <!-- Group tier selected above: the field is disabled and HOME_OVERRIDE_NA replaces
+             its hint. On a User row it is enabled with HOME_OVERRIDE_HINT (state 4). -->
+        <div class="ctl mono off">&nbsp;</div>
+        <div class="hint">Only a person's own allocation can name a directory.</div>
+      </div>
+      <div class="f">
+        <label>Enabled</label>
+        <div style="display:flex;align-items:center;gap:10px;min-height:34px"><span class="sw on" aria-hidden="true"></span></div>
+        <div class="hint">Off pauses the drive for this subject without deleting anything.</div>
+      </div>
+    </div>
+    <hr class="rule">
+
+    <!-- preview: the same claims dry run the governance console ships, over the drive
+         resolver. Field label + hint are PREVIEW.FIELD_CLAIMS / _HINT; footer is
+         GOV.PREVIEW_NOT_SAVED. Nothing here is re-frozen. -->
+    <div class="pad">
+      <h3 class="sectitle">Who gets what</h3>
+      <p class="secsub">Paste the roles, groups, or email a person's token would carry, and see which drive and directory they would mount.</p>
+      <div class="form" style="padding:14px 0 0">
+        <div class="f">
+          <label>Roles, groups, or email</label>
+          <div class="ctl mono" style="min-height:66px;align-items:flex-start;flex-direction:column;gap:2px">
+            <span>Wardyn.Platform</span><span>alice@corp.example</span>
+          </div>
+          <div class="hint">One value per line — an App Role, a group name, or an email address.</div>
+        </div>
+        <div class="f"><button class="btn" type="button">Preview</button></div>
+      </div>
+      <div class="note plain" style="margin-top:14px;max-width:none">
+        <b>"Scratch" via the group allocation</b>
+        <dl class="kv">
+          <dt>Directory name</dt><dd class="mono">d-3f9a1c7e2b64d0a5e8c1</dd>
+          <dt>Storage object</dt><dd><span class="mono">wardyn-drive-scratch-d-3f9a1c7e2b64d0a5e8c1</span><span class="sub">What the reclaim command names — copy it when someone leaves.</span></dd>
+          <dt>Size</dt><dd>16 GiB</dd>
+          <dt>Mode</dt><dd><span class="chip warning">Writable</span></dd>
+          <dt>Enforcement</dt><dd>Size requested; the storage class decides</dd>
+        </dl>
+      </div>
+      <p class="secsub" style="margin-top:10px">Nothing here is saved.</p>
+    </div>
+
+    <!-- The four ENFORCEMENT_* glosses, drawn together so the vocabulary is reviewable
+         as a set. `filesystem` is frozen for a value no v1 drive backend yields (§2.7):
+         the chip map must be total, and the writable-layer cap reuses it later. -->
+    <div class="varlabel"><b>The size sub-line's four glosses</b> — one per <span class="mono">enforcement</span> value; the first is reserved for a later adopter, none of the four backends yields it</div>
+    <div class="pad" style="padding-top:12px;padding-bottom:16px;display:flex;flex-wrap:wrap;gap:8px">
+      <span class="chip neutral">Size enforced by the filesystem</span>
+      <span class="chip neutral">Size requested; the storage class decides</span>
+      <span class="chip neutral">Size bounded by the share's own quota</span>
+      <span class="chip neutral">Size shown, not enforced</span>
+    </div>
+
+    <!-- The Docker pair, same table shape, drawn so all four backend chips are
+         reviewable. A deployment is one runner; this strip is the OTHER runner. -->
+    <div class="varlabel"><b>Same table on a Docker deployment</b> — the other two backends, and a drive allocated to nobody</div>
+    <table>
+      <thead><tr><th>Name</th><th>Backend</th><th>Size</th><th>Mode</th><th>When a person leaves</th><th>Allocated to</th><th></th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="nm">Team NAS</span></td>
+          <td><div class="val"><span class="chip neutral">Share</span><span class="mono">host_path</span></div></td>
+          <td>No allocation shown<span class="sub">Size bounded by the share's own quota</span></td>
+          <td><span class="chip neutral">Read-only</span></td>
+          <td>Keep their directory</td>
+          <td>1 subject</td>
+          <td class="right"><button class="btn sm" type="button">Edit</button> <button class="btn sm" type="button">Delete</button></td>
+        </tr>
+        <tr>
+          <td><span class="nm">Workbench</span></td>
+          <td><div class="val"><span class="chip neutral">Managed</span><span class="mono">docker_volume</span></div></td>
+          <td>4 GiB<span class="sub">Size shown, not enforced</span></td>
+          <td><span class="chip warning">Writable</span></td>
+          <td>Delete their directory</td>
+          <td>Allocated to nobody</td>
+          <td class="right"><button class="btn sm" type="button">Edit</button> <button class="btn sm" type="button">Delete</button></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ===== STATE 3 ===== Drive editor — with a refusal, the form collapsed beneath -->
+<section class="state">
+  <div class="tag"><span>State 3</span><b>Drive editor (Docker, a share) — the host-root refusal post-attempt; the allocation form collapsed beneath (one teal at a time)</b></div>
+  <div class="frame">
+    <div class="pad" style="padding-bottom:14px">
+      <h3 class="sectitle">Edit "Team NAS"</h3>
+    </div>
+    <div class="form two" style="padding-top:0">
+      <div class="f">
+        <label>Name</label>
+        <div class="ctl">Team NAS</div>
+        <div class="hint wide">What this drive is called on the allocations below and in a member's run. Names are unique.</div>
+      </div>
+      <div class="f">
+        <label>Backend</label>
+        <!-- Q3 recommended: only this runner's two backends are offered. -->
+        <div class="opts">
+          <div class="o">Wardyn-managed volume (this Docker host)</div>
+          <div class="o sel">Share mounted on this host</div>
+        </div>
+        <div class="hint wide">Only the backends this deployment's runner can mount are offered.</div>
+      </div>
+      <div class="f">
+        <label>Host root</label>
+        <div class="ctl mono">/mnt/nas/homes</div>
+        <div class="hint wide">The mounted share's root on this host, under one of <span class="mono">WARDYN_USER_DRIVE_HOST_ROOTS</span>. Each person's directory is a subdirectory of it; only that subdirectory is ever mounted into a run.</div>
+      </div>
+      <div class="f">
+        <label>Directory name</label>
+        <!-- A share names its own homes: the derived option is disabled for share backends,
+             and HOME_HINT says why. HOME_RULE renders under every option. -->
+        <div class="opts">
+          <div class="o off">Derived (stable id)<span class="why">A short id derived from the drive and the person. It never collides and says nothing about who it is — Preview below finds a person's directory.</span></div>
+          <div class="o">Sign-in subject<span class="why">The subject id your identity provider sends, lowercased. Stable, but rarely what a share already calls a person.</span></div>
+          <div class="o sel">Email, before the @<span class="why">The part before the @, lowercased — the usual shape of a corporate home directory.</span></div>
+        </div>
+        <div class="hint wide">How each person's directory is named inside the drive. A share uses the name your directory already has; a managed drive can use a derived id.</div>
+        <div class="hint wide">A directory name is lowercase letters and digits, then any of <span class="mono">. _ -</span>, up to 63 characters. A person whose claim cannot name one is refused at their run, never guessed.</div>
+      </div>
+      <div class="f">
+        <label>Size (MiB)</label>
+        <div class="ctl mono">0</div>
+        <div class="hint wide">The allocation shown to each person, and on Kubernetes the volume request. 0 shows no allocation. Override it per person below.</div>
+      </div>
+      <div class="f">
+        <label>Writable</label>
+        <div style="display:flex;align-items:center;gap:10px;min-height:34px"><span class="sw" aria-hidden="true"></span></div>
+        <div class="hint wide">Off by default. A writable drive is where a run's changes persist — and what a compromised run could alter.</div>
+      </div>
+      <div class="f">
+        <label>When a person leaves</label>
+        <div class="radio"><span><i class="on"></i>Keep their directory</span><span><i></i>Delete their directory</span></div>
+        <div class="hint wide">Recorded here, carried out by you: removing an allocation below never deletes data. Preview prints the exact object to remove.</div>
+      </div>
+    </div>
+    <div class="pad" style="padding-top:0">
+      <!-- The console contributes the HEADING; the body is the server's own 400, verbatim
+           (validateUserDrive). The roots are an env-borne ceiling the console cannot read,
+           so this is post-attempt only. -->
+      <div class="note red" style="max-width:none">
+        <b>This drive can't be saved as written</b>
+        <span><span class="mono">host_root</span> "/mnt/nas/homes" is not inside <span class="mono">WARDYN_USER_DRIVE_HOST_ROOTS</span> (<span class="mono">/srv/nas</span>) — a drive may bind only a subdirectory of a root this deployment allows</span>
+      </div>
+      <!-- The other env-borne refusal on the same field: a root inside the allowed list but
+           under the deny list every host bind obeys. Post-attempt only, same heading. -->
+      <div class="note red" style="max-width:none;margin-top:10px">
+        <b>This drive can't be saved as written</b>
+        <span><span class="mono">host_root</span> "/srv/nas/etc" is under a denied prefix (<span class="mono">/etc</span>) — the same deny list every host bind obeys</span>
+      </div>
+    </div>
+    <hr class="rule">
+    <div class="pad" style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn ghost" type="button">Cancel</button>
+      <button class="btn primary" type="button">Save drive</button>
+    </div>
+    <hr class="rule">
+    <!-- While the editor is open, the allocation form COLLAPSES to this disabled summary
+         row, taking its teal Allocate with it — one `default` button at a time. -->
+    <div class="pad collapsed" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+      <h4 class="sectitle">Allocate a drive</h4>
+      <button class="btn" type="button" disabled>Allocate</button>
+    </div>
+
+    <div class="varlabel"><b>Backend, Docker with no roots set</b> — the share option disabled with its reason, never offered and refused</div>
+    <div class="form two" style="padding-bottom:18px">
+      <div class="f">
+        <label>Backend</label>
+        <div class="opts">
+          <div class="o sel">Wardyn-managed volume (this Docker host)</div>
+          <div class="o off">Share mounted on this host<span class="why">Not available: this deployment sets no <span class="mono">WARDYN_USER_DRIVE_HOST_ROOTS</span>, so no host path may back a drive.</span></div>
+        </div>
+        <div class="hint wide">Only the backends this deployment's runner can mount are offered.</div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>Backend, Kubernetes</b> — the other pair, and the managed claim's storage class; the API-path 400s beneath</div>
+    <div class="form two" style="padding-bottom:6px">
+      <div class="f">
+        <label>Backend</label>
+        <div class="opts">
+          <div class="o sel">Wardyn-managed volume (a storage class)</div>
+          <div class="o">Share provisioned by your platform (a pre-created volume claim per person)</div>
+        </div>
+        <div class="hint wide">Only the backends this deployment's runner can mount are offered.</div>
+      </div>
+      <div class="f">
+        <label>Storage class</label>
+        <div class="ctl mono ph">&nbsp;</div>
+        <div class="hint wide">Leave empty for the cluster default. A block storage class enforces the size; a network-share provisioner does not.</div>
+      </div>
+      <div class="f">
+        <label>Size (MiB)</label>
+        <div class="ctl mono">8192</div>
+        <div class="hint wide">The allocation shown to each person, and the volume request Kubernetes makes. Required — a claim cannot request zero. Override it per person below.</div>
+      </div>
+    </div>
+    <div class="pad" style="padding-top:0">
+      <!-- The refusals the console AVOIDS by offering the runner's pair and by disabling
+           the derived name on a share — met on the API path (wardyn drive apply, 0.7.1).
+           Server text, verbatim; one per attempt in the product. -->
+      <div class="note red" style="max-width:none"><b>This drive can't be saved as written</b><span><span class="mono">backend</span> "<span class="mono">k8s_pvc</span>" cannot be mounted by this deployment's runner (docker)</span></div>
+      <div class="note red" style="max-width:none"><b>This drive can't be saved as written</b><span><span class="mono">home_template</span> "<span class="mono">hash</span>" is not allowed on a share backend — a share's directories are named by your directory, so pick <span class="mono">sub</span> or <span class="mono">email_local</span></span></div>
+      <div class="note red" style="max-width:none"><b>This drive can't be saved as written</b><span><span class="mono">size_mib</span> must be above 0 for a <span class="mono">k8s_pvc</span> drive — it is the volume request</span></div>
+      <div class="note red" style="max-width:none">Couldn't save this drive.</div>
+    </div>
+
+    <div class="varlabel"><b>Q1's losing variant</b> — HONESTY under the Size field, at the moment of typing</div>
+    <div class="form one" style="padding-bottom:18px">
+      <div class="f">
+        <label>Size (MiB)</label>
+        <div class="ctl mono">4096</div>
+        <div class="hint wide">The allocation shown to each person, and on Kubernetes the volume request. 0 shows no allocation. Override it per person below.</div>
+        <div class="hint wide">Wardyn never enforces a drive's size itself. On Kubernetes the size is the volume request and the storage class decides whether it binds — block disks do, network-share provisioners do not. On Docker a managed drive has no byte cap, the same gap <span class="mono">disk_mib</span> has. A share is bounded by its own quota. The size you see is the allocation, not a guarantee.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 4 ===== Allocations — user/group/all rows, the add form on a user row, remove, replaced, empty, and the delete 409 -->
+<section class="state">
+  <div class="tag"><span>State 4</span><b>Allocations — the three tiers, a user-row add form, Remove, a replaced row, the empty state, and Delete's three paths (409)</b></div>
+  <div class="frame">
+    <table>
+      <thead><tr><th>Who</th><th>Drive</th><th>Priority</th><th>Overrides</th><th>Added</th><th></th></tr></thead>
+      <tbody>
+        <tr>
+          <td><div class="val"><span class="chip neutral">User</span><span class="mono">bob@corp.example</span></div></td>
+          <td>Team NAS</td>
+          <td>—</td>
+          <td><div class="val"><span class="chip neutral">Directory · <span class="mono">bsmith</span></span><span class="chip warning">Writable</span></div></td>
+          <td>2 hours ago</td>
+          <td class="right"><button class="btn sm" type="button">Remove</button></td>
+        </tr>
+        <tr>
+          <td><div class="val"><span class="chip neutral">User</span><span class="mono">carol@corp.example</span></div></td>
+          <td>Team NAS</td>
+          <td>—</td>
+          <td><div class="val"><span class="chip neutral">Paused</span></div></td>
+          <td>a day ago</td>
+          <td class="right"><button class="btn sm" type="button">Remove</button></td>
+        </tr>
+        <tr>
+          <td><div class="val"><span class="chip neutral">Group</span><span class="mono">6b1f0e2a-9c33-4d51-a0d8-1f7c2e4b9a10</span></div></td>
+          <td>Team NAS</td>
+          <td>20</td>
+          <td><div class="val"><span class="chip neutral">Size · 512 MiB</span><span class="chip neutral">Read-only</span></div></td>
+          <td>3 days ago</td>
+          <td class="right"><button class="btn sm" type="button">Remove</button></td>
+        </tr>
+        <tr>
+          <td><div class="val"><span class="chip neutral">Everyone signed in</span></div></td>
+          <td>Team NAS</td>
+          <td>—</td>
+          <td>None</td>
+          <td>9 days ago</td>
+          <td class="right"><button class="btn sm" type="button">Remove</button></td>
+        </tr>
+      </tbody>
+    </table>
+    <hr class="rule">
+    <div class="varlabel"><b>Add form on a User row</b> — the directory name is enabled here, and only here</div>
+    <div class="form four" style="padding-bottom:6px">
+      <div class="f">
+        <label>Who</label>
+        <div class="seg"><span class="sel">User</span><span>Group</span><span>Everyone signed in</span></div>
+        <div class="ctl mono" style="margin-top:5px">bob@corp.example</div>
+        <div class="hint">An email address or the sign-in subject id. Either one matches the same person.</div>
+      </div>
+      <div class="f">
+        <label>Drive</label>
+        <div class="ctl">Team NAS</div>
+      </div>
+      <div class="f">
+        <label>Priority</label>
+        <div class="ctl mono off">&nbsp;</div>
+        <div class="hint">Breaks ties between groups a person is in. Higher wins. It is ignored for a person and for everyone.</div>
+      </div>
+      <div class="f"><button class="btn primary" type="button">Allocate</button></div>
+    </div>
+    <div class="form four" style="padding-top:0;grid-template-columns:1fr 1fr 1fr auto">
+      <div class="f">
+        <label>Size override (MiB)</label>
+        <div class="ctl mono">&nbsp;</div>
+        <div class="hint">Empty or 0 keeps the drive's size.</div>
+      </div>
+      <div class="f">
+        <label>Writable</label>
+        <div class="seg"><span>Same as the drive</span><span class="sel">Writable</span><span>Read-only</span></div>
+        <div class="hint">Same as the drive, or set it for this subject alone. A run can narrow the result to read-only, never widen it.</div>
+      </div>
+      <div class="f">
+        <label>Directory name</label>
+        <div class="ctl mono">bsmith</div>
+        <div class="hint">For one person only: the exact directory name inside the drive, when it differs from the drive's rule.</div>
+      </div>
+      <div class="f">
+        <label>Enabled</label>
+        <div style="display:flex;align-items:center;gap:10px;min-height:34px"><span class="sw on" aria-hidden="true"></span></div>
+        <div class="hint">Off pauses the drive for this subject without deleting anything.</div>
+      </div>
+    </div>
+    <div class="pad" style="padding-top:0">
+      <!-- Upsert on the natural key repointed an existing row: an inline plain note, not a
+           toast — it is worth reading twice. -->
+      <div class="note plain">This subject already had an allocation — it was replaced.</div>
+    </div>
+
+    <div class="varlabel"><b>Remove</b> — reversible and deletes nothing, so Remove is outline, never destructive</div>
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Remove "Team NAS" from bob@corp.example?</h3>
+        <p>Their next run mounts whatever else matches them, or nothing. Nothing on the drive is deleted — the directory stays until you reclaim it.</p>
+        <div class="row"><button class="btn ghost" type="button">Cancel</button><button class="btn" type="button">Remove</button></div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>Empty</b> — drives exist, none allocated (distinct from state 1)</div>
+    <div class="pad" style="padding-bottom:8px">
+      <h3 class="sectitle">Allocations</h3>
+      <p class="secsub">Who gets a drive. A person's own row beats their group's; a group's beats everyone's. One drive per person.</p>
+    </div>
+    <div class="empty" style="padding-top:14px">
+      <h4>No allocations yet</h4>
+      <p>A drive with no allocation is mounted by nobody. Allocate one to a group to start.</p>
+    </div>
+
+    <div class="varlabel"><b>Delete — unallocated</b> — the only path that offers a live confirm</div>
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Delete "Workbench"?</h3>
+        <p>It is allocated to nobody, so no run loses a mount. Anything already stored in it stays where it is.</p>
+        <div class="row"><button class="btn ghost" type="button">Cancel</button><button class="btn danger" type="button">Delete</button></div>
+      </div>
+    </div>
+    <!-- The drives table already renders ALLOCATED_COUNT, so the client KNOWS this one is
+         allocated: pre-filled, confirm disabled, nothing to attempt. -->
+    <div class="varlabel"><b>Delete — visibly allocated</b> — pre-filled from the count the list shows; Delete disabled</div>
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Delete "Team NAS"?</h3>
+        <div class="note red" style="max-width:none;margin-top:12px">
+          <b>This drive is still allocated</b>
+          <span>"Team NAS" is still allocated to 4 subjects. Remove those allocations first. Deleting the row never deletes data — their directories stay until you reclaim them.</span>
+        </div>
+        <div class="row"><button class="btn ghost" type="button">Cancel</button><button class="btn danger" type="button" disabled>Delete</button></div>
+      </div>
+    </div>
+    <!-- The 409 stays authoritative for what the count cannot see. COUNT-FREE on this
+         path: the client believed the count was zero and the wire carries no n. -->
+    <div class="varlabel"><b>Delete — the race</b> — client believed it unallocated; the server's 409 corrects it post-attempt, with no count</div>
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Delete "Workbench"?</h3>
+        <p>It is allocated to nobody, so no run loses a mount. Anything already stored in it stays where it is.</p>
+        <div class="note red" style="max-width:none;margin-top:12px">
+          <b>This drive is still allocated</b>
+          <span>this drive is still allocated — remove its allocations first (deleting it while allocated would leave those subjects with a mount that names nothing)</span>
+        </div>
+        <div class="row"><button class="btn ghost" type="button">Cancel</button><button class="btn danger" type="button">Delete</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 5 ===== Preview — every result arm -->
+<section class="state">
+  <div class="tag"><span>State 5</span><b>Who gets what — answered (a user allocation with a directory override), no allocation, couldn't preview</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h3 class="sectitle">Who gets what</h3>
+      <p class="secsub">Paste the roles, groups, or email a person's token would carry, and see which drive and directory they would mount.</p>
+      <div class="form" style="padding:14px 0 0">
+        <div class="f">
+          <label>Roles, groups, or email</label>
+          <div class="ctl mono" style="min-height:66px;align-items:flex-start;flex-direction:column;gap:2px">
+            <span>6b1f0e2a-9c33-4d51-a0d8-1f7c2e4b9a10</span><span>bob@corp.example</span>
+          </div>
+          <div class="hint">One value per line — an App Role, a group name, or an email address.</div>
+        </div>
+        <div class="f"><button class="btn" type="button">Preview</button></div>
+      </div>
+      <!-- bob is in the group too; the user row wins (PRECEDENCE), and its directory
+           override names the share's real home. The object name is the host path — this
+           is what the offboarding command needs, and the only place it renders. -->
+      <div class="note plain" style="margin-top:14px;max-width:none">
+        <b>"Team NAS" via the user allocation</b>
+        <dl class="kv">
+          <dt>Directory name</dt><dd class="mono">bsmith</dd>
+          <dt>Storage object</dt><dd><span class="mono">/srv/nas/homes/bsmith</span><span class="sub">What the reclaim command names — copy it when someone leaves.</span></dd>
+          <dt>Size</dt><dd>No allocation shown</dd>
+          <dt>Mode</dt><dd><span class="chip warning">Writable</span></dd>
+          <dt>Enforcement</dt><dd>Size bounded by the share's own quota</dd>
+        </dl>
+      </div>
+      <div class="note plain">No drive is allocated to these claims.</div>
+      <div class="note red">Couldn't resolve this — try again.</div>
+      <p class="secsub" style="margin-top:10px">Nothing here is saved.</p>
+      <!-- Three arms, no stale arm and no "cluster may refuse" arm: the preview payload
+           carries no warning field (DESIGN §2.5); a truncated snapshot and a refused claim
+           both surface at the member's own launch (state 7). -->
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 6 ===== Profile editor — the third LimitRow (the door) -->
+<section class="state">
+  <div class="tag"><span>State 6</span><b>Governance profile editor · Limits — the third row is the door (security admin); its chip in the profiles table</b></div>
+  <div class="frame">
+    <!-- GOV.LIMITS_TITLE / LIMITS_LEAD and the first two rows are governance canon,
+         unchanged (Q4 leaves the lead as shipped). The third row's two strings are
+         governance-prompt.md §7.2's, appended this round, rendered from GOV.*. -->
+    <div class="pad" style="padding-bottom:6px">
+      <h4 class="sectitle">Limits</h4>
+      <p class="secsub">Two launch modes route around tool approvals entirely, so the ceiling above cannot reach them. Deny them here instead.</p>
+    </div>
+    <div class="pad" style="padding-top:0">
+      <div class="swrow">
+        <span class="sw on" aria-hidden="true"></span>
+        <div class="txt">
+          <b>Deny exec runs</b>
+          <p><span class="mono">task_mode=exec</span> runs a command with no agent, so no tool rule is ever consulted.</p>
+        </div>
+      </div>
+      <div class="swrow">
+        <span class="sw" aria-hidden="true"></span>
+        <div class="txt">
+          <b>Deny interactive runs</b>
+          <p>An interactive run is supervised at the attach pane rather than by rules. A run with no task comes up interactive too, and is refused the same way.</p>
+        </div>
+      </div>
+      <div class="swrow">
+        <span class="sw on" aria-hidden="true"></span>
+        <div class="txt">
+          <b>Deny mounting a user drive</b>
+          <p>A run under this profile cannot mount the person's drive, even when one is allocated to them.</p>
+        </div>
+      </div>
+    </div>
+    <hr class="rule">
+    <div class="pad" style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn ghost" type="button">Cancel</button>
+      <button class="btn primary" type="button">Save profile</button>
+    </div>
+    <div class="varlabel"><b>The profiles table's Limits column</b> — the third chip beside the other two</div>
+    <table>
+      <thead><tr><th>Name</th><th>Assigned to</th><th>Limits</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="nm">Greenfield contractors</span></td>
+          <td>2 subjects</td>
+          <td><span class="chip neutral">Deny exec runs</span> <span class="chip neutral">Deny mounting a user drive</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ===== STATE 7 ===== Member — New Run, the Workspace card -->
+<section class="state">
+  <div class="tag"><span>State 7</span><b>Member · New Run, Workspace card — the checkbox, and every reason it is not one</b></div>
+  <div class="frame">
+    <!-- The Select, its placeholder and the ghost Add workspace are today's card
+         byte-for-byte. The drive block sits UNDER the Select and is orthogonal to it: it
+         renders the same whatever the Select says, including Ephemeral scratch. -->
+    <div class="varlabel" style="border-top:0"><b>7a — allocated, writable</b> — checkbox, hint, the writable sentence, and the read-only toggle (off by default, Q5)</div>
+    <div class="pad">
+      <h3 class="sectitle">Workspace</h3>
+      <div class="form one" style="padding:12px 0 0">
+        <div class="f"><div class="ctl ph">Ephemeral scratch — no repo</div></div>
+      </div>
+      <div class="cb" style="margin-top:14px">
+        <span class="box on" aria-hidden="true"></span>
+        <div class="txt">
+          <b style="font-size:13px;font-weight:500">Mount my drive</b>
+          <p>"Scratch" at <span class="mono">/home/agent/drive</span> — 16 GiB, writable. What a run writes there persists to your next run.</p>
+        </div>
+      </div>
+      <div class="cb" style="margin-top:10px;margin-left:24px">
+        <span class="box" aria-hidden="true"></span>
+        <div class="txt"><b style="font-size:13px;font-weight:400">Mount read-only for this run</b></div>
+      </div>
+      <button class="btn ghost sm" style="margin-top:10px;padding-left:4px" type="button">+ Add workspace</button>
+    </div>
+
+    <div class="varlabel"><b>7b — same allocation, toggle on</b> — the mode sentence flips; nothing promises persistence a read-only mount cannot give</div>
+    <div class="pad">
+      <div class="cb">
+        <span class="box on" aria-hidden="true"></span>
+        <div class="txt">
+          <b style="font-size:13px;font-weight:500">Mount my drive</b>
+          <p>"Scratch" at <span class="mono">/home/agent/drive</span> — 16 GiB, read-only. A run can read it and never change it.</p>
+        </div>
+      </div>
+      <div class="cb" style="margin-top:10px;margin-left:24px">
+        <span class="box on" aria-hidden="true"></span>
+        <div class="txt"><b style="font-size:13px;font-weight:400">Mount read-only for this run</b></div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>7c — allocated, read-only</b> — no toggle; a share with no allocation shown uses the _NOSIZE twin</div>
+    <div class="pad">
+      <div class="cb">
+        <span class="box" aria-hidden="true"></span>
+        <div class="txt">
+          <b style="font-size:13px;font-weight:500">Mount my drive</b>
+          <p>"Corporate homes" at <span class="mono">/home/agent/drive</span> — read-only. A run can read it and never change it.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- The three client-knowable reasons render IN PLACE of the checkbox, one line each,
+         the Workspace card's own rule (the reason rides the selection). -->
+    <div class="varlabel"><b>7d — no allocation</b> (422 at launch if requested anyway) · <b>7e — paused</b> (422) · <b>7f — the door</b> (403; drawn from /me.user_drive.denied_by_profile, Q6)</div>
+    <div class="pad" style="display:flex;flex-direction:column;gap:12px">
+      <p class="secsub" style="margin:0">No drive is allocated to you.</p>
+      <p class="secsub" style="margin:0">Your drive is paused by your admin.</p>
+      <p class="secsub" style="margin:0">Your governance profile "Greenfield contractors" does not allow mounting a drive.</p>
+    </div>
+    <!-- With /me.user_drive null AND no door: no checkbox, no line — today's card. -->
+
+    <div class="varlabel"><b>7g — refused at launch</b> — composed server-side, rendered verbatim; backend-unavailable is knowable HERE only</div>
+    <div class="pad">
+      <!-- The one 403 (audited), then the 422s (not audited), then the policy-side 400. -->
+      <div class="note red" style="margin-top:0">mounting a user drive is not allowed by your governance profile "Greenfield contractors". Launch without <span class="mono">drive</span>.</div>
+      <div class="note red">drive: no user drive is allocated to you — ask an admin for an allocation</div>
+      <div class="note red">drive: your allocation is paused by an admin</div>
+      <div class="note red">drive: your email_local cannot name a directory (lowercase letters and digits, then <span class="mono">. _ -</span>, up to 63 characters) — ask an admin to set your directory name</div>
+      <div class="note red">drive: directory <span class="mono">bsmith</span> does not exist on the share — ask an admin to create it</div>
+      <div class="note red">drive: volume claim <span class="mono">wardyn-drive-corporate-homes-bsmith</span> is not provisioned on this cluster — ask an admin to create it</div>
+      <div class="note red">drive: your allocation is read-only; <span class="mono">read_only:false</span> cannot widen it</div>
+      <div class="note red">drive: this deployment cannot mount your drive (the runner may not create volume claims — k8s.userDrives.enabled is off)</div>
+      <div class="note red">workspace_mounts: target <span class="mono">/home/agent/drive</span> is reserved for the user drive</div>
+    </div>
+    <div class="varlabel"><b>Beside them, reused:</b> the governance round's stale-snapshot refusal, when group-tier allocations exist and the snapshot is truncated</div>
+    <div class="pad" style="padding-top:14px">
+      <div class="note red" style="margin-top:0">groups_snapshot_stale: your group membership snapshot is missing or was truncated at sign-in, and this deployment assigns governance profiles by group — sign in again (or re-mint your API token) so your ceiling can be resolved</div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 8 ===== Member — Getting Started -->
+<section class="state">
+  <div class="tag"><span>State 8</span><b>Member · Getting Started — the drive chip in the summary row; one sentence in the Workspace card</b></div>
+  <div class="frame">
+    <div class="pad">
+      <div class="card">
+        <h4 class="sectitle">What's set up for you</h4>
+        <div class="chips">
+          <span class="chip neutral">Barrier · Wall</span>
+          <span class="chip success">Model access · Provided by your admin</span>
+          <span class="chip info">Sign-in · SSO</span>
+          <span class="chip neutral">Governance · Greenfield contractors</span>
+          <span class="chip neutral">Drive · Scratch, 16 GiB, writable</span>
+        </div>
+        <p class="secsub" style="margin-top:10px">Your admin configured the barrier, network and shared credentials. Your runs inherit them.</p>
+        <p class="secsub" style="margin-top:4px">Your runs are bounded by "Greenfield contractors". What you can change is what it leaves open.</p>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h4 class="sectitle">Add your workspace</h4>
+        <p class="secsub" style="margin-top:6px">A repo or directory a run can attach. Runs can only attach what is listed here.</p>
+        <!-- GS_BODY: placed in THIS card because this is where a drive and a workspace get
+             conflated. Rendered only when /me.user_drive is non-null. -->
+        <p class="secsub" style="margin-top:4px">Your drive is not a workspace: mount it from New run alongside whatever you attach. It is yours alone — a run sees only your directory.</p>
+        <button class="btn" style="margin-top:12px" type="button">Add workspace</button>
+      </div>
+    </div>
+    <div class="varlabel"><b>Chip variants</b> — no allocation shown (the _NOSIZE twin); paused; and Q2's losing variant</div>
+    <div class="pad" style="padding-top:14px">
+      <div class="chips" style="margin-top:0">
+        <span class="chip neutral">Drive · Corporate homes, read-only</span>
+        <span class="chip neutral">Drive · Scratch · Paused</span>
+      </div>
+      <div class="chips">
+        <span class="chip neutral">Your drive — "Scratch", 16 GiB</span>
+      </div>
+    </div>
+    <!-- With /me.user_drive null there is no chip and no sentence — today's page. -->
+  </div>
+</section>
+
+<!-- ===== STATE 9 ===== The card — setup workspaces step, and Settings -->
+<section class="state">
+  <div class="tag"><span>State 9</span><b>The card, one component in two homes — the setup Workspaces step (under the list) and Settings; populated and empty; zero teal</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h2 style="font-size:19px">Onboard a workspace</h2>
+      <div class="wsrow" style="margin-top:14px"><span style="min-width:0;flex:1"><b style="font-size:13px;font-weight:500">payments-api</b><span class="m">github.com/acme/payments-api</span></span><span class="chip success"><i class="dot"></i>Ready</span></div>
+      <button class="btn sm" style="margin-top:10px" type="button">+ Add workspace</button>
+      <!-- The card. Title is TITLE; summary counts ALLOCATIONS, never people (a group row is
+           one row and Wardyn holds no directory read). The action is a two-line link
+           button into /drives — summary + link, no second write. -->
+      <div class="card" style="margin-top:18px">
+        <h4 class="sectitle">User drives</h4>
+        <p class="secsub" style="margin-top:6px">Persistent storage people can mount into a run — separate from any workspace.</p>
+        <div class="linkrow"><span><b>Manage drives</b><span>2 drives · 4 allocations</span></span><span class="chev">›</span></div>
+      </div>
+    </div>
+    <div class="varlabel"><b>Settings</b> — the same card as a fifth section, after Host</div>
+    <div class="pad">
+      <h2 style="font-size:19px">Settings</h2>
+      <div class="card" style="margin-top:14px">
+        <h4 class="sectitle">Host</h4>
+        <p class="secsub" style="margin-top:6px">The barriers this machine can build, and what every run inherits by default.</p>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h4 class="sectitle">User drives</h4>
+        <p class="secsub" style="margin-top:6px">Persistent storage people can mount into a run — separate from any workspace.</p>
+        <div class="linkrow"><span><b>Manage drives</b><span>2 drives · 4 allocations</span></span><span class="chev">›</span></div>
+      </div>
+    </div>
+    <div class="varlabel"><b>Empty</b> — same card, nothing registered; the link still goes to /drives, where the teal New drive lives</div>
+    <div class="pad">
+      <div class="card">
+        <h4 class="sectitle">User drives</h4>
+        <p class="secsub" style="margin-top:6px">Persistent storage people can mount into a run — separate from any workspace.</p>
+        <div class="linkrow"><span><b>Manage drives</b><span>No drives yet.</span></span><span class="chev">›</span></div>
+      </div>
+    </div>
+    <!-- A security admin sees no card and no header button: /drives is SUPER in v1 and
+         there is nothing for them to act on. -->
+  </div>
+</section>
+
+<!-- ===== STATE 10 ===== Fetch-failed -->
+<section class="state">
+  <div class="tag"><span>State 10</span><b>Fetch-failed — distinct from empty; allocations keep binding runs</b></div>
+  <div class="frame">
+    <div class="empty">
+      <h4>Couldn't load user drives</h4>
+      <p>Something went wrong reaching the server. Allocations that already exist still bind every run — this list just can't show them right now.</p>
+      <button class="btn" style="margin-top:14px" type="button">Retry</button>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 11 ===== The run rail line — frozen here, shipped with run-row persistence -->
+<section class="state">
+  <div class="tag"><span>State 11</span><b>Run rail · Identity — the Drive row (frozen here, shipped when the run row carries a drive, 0.7.1)</b></div>
+  <div class="frame">
+    <div class="pad" style="max-width:420px">
+      <h4 class="sectitle">Identity</h4>
+      <!-- The rest of the dl is identity.tsx's, unchanged; only the Drive pair is new. The
+           name is quoted, never mono; the dd's title carries the object name. -->
+      <dl class="kv rail">
+        <dt>Run</dt><dd>run_01j8x4k2m9</dd>
+        <dt>Image</dt><dd>ghcr.io/wardyn/agent-claude:0.7</dd>
+        <dt>Policy</dt><dd>greenfield-default</dd>
+        <dt>Runner</dt><dd>k8s</dd>
+        <dt>Sandbox</dt><dd>wardyn-run-01j8x4k2m9</dd>
+        <dt>Drive</dt><dd class="plain" title="wardyn-drive-scratch-d-3f9a1c7e2b64d0a5e8c1">"Scratch" · Writable</dd>
+        <dt>Started</dt><dd class="plain">2026-09-01 14:02 · alice@corp.example</dd>
+      </dl>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<script>
+document.getElementById("tt").addEventListener("click", function () {
+  var r = document.documentElement;
+  r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+});
+</script>
+</body>
+</html>

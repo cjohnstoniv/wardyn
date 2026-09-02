@@ -7,13 +7,14 @@
 // waitPollInterval; the scripted server is self-contained so it can COUNT how
 // many times GET /runs/{id}/files was polled.
 //
-// Invariant pinned: waitForRunReady (cmd/wardyn/run_wait_ready.go:86) must
+// Invariant pinned: waitForRunReady (cmd/wardyn/run_wait_ready.go) must
 // NOT spin on a permanent 4xx from GET /api/v1/runs/{id}/files. A 403 (and a
-// 401 / 404) is classified permanent by filesErrIsPermanent (:153-167): the
-// loop returns at once with "cannot read its workspace", never exit 124, and
+// 401 / 404) is classified permanent by filesErrIsPermanent: the loop returns
+// at once with "cannot read its workspace", never exit 124, and
 // never issues a second /files poll. Fails if: filesErrIsPermanent starts
-// treating 403 as transient, the switch at :118-131 drops the permanent arm,
-// or the SDK stops surfacing *sdk.APIError for non-2xx (pkg/client/client.go:823-826).
+// treating 403 as transient, waitForRunReady's RunFiles switch drops the
+// permanent arm, or the SDK stops surfacing *sdk.APIError for non-2xx
+// (Client.do in pkg/client/client.go).
 package main
 
 import (
@@ -128,9 +129,10 @@ func TestProbeF4_WaitReady_403DoesNotSpin(t *testing.T) {
 }
 
 // TestProbeF4_WaitReady_409StillWaits is the control: the ONE 4xx that is
-// legitimately transient (409 = no sandbox yet, run_files.go:239-241) must keep
-// polling. Without this control a "fix" that fails fast on EVERY 4xx would
-// pass the test above while breaking the command's whole purpose.
+// legitimately transient (409 = no sandbox yet, the empty-SandboxRef arm of
+// handleRunFiles in internal/api/run_files.go) must keep polling. Without this
+// control a "fix" that fails fast on EVERY 4xx would pass the test above while
+// breaking the command's whole purpose.
 func TestProbeF4_WaitReady_409StillWaits(t *testing.T) {
 	prev := waitPollInterval
 	waitPollInterval = time.Millisecond

@@ -265,7 +265,7 @@ masks raw PTY bytes and is unaffected.
   registered pre-restart and whose cast uploads post-restart hits the identical
   empty-snapshot fail-open at `replicas: 1`.
 
-### 4.2 The unconditional IP guard, and its one admin-authored exception
+### 4.2 The unconditional IP guard, and its two admin-authored exceptions
 
 A literal-IP target is denied before policy or approval run (`evaluate` step 0,
 `internal/egress/proxy/proxy.go`), and every direct-dialed hostname is re-vetted
@@ -276,15 +276,27 @@ policy verdict — a host `allow_all_egress` would pass is still denied when it
 resolves into one of those ranges. The guard lives in the proxy's code, not the
 network topology, so unlike L0 it does not depend on gatewaylessness.
 
-**The one admin-authored exception** is `SiteConfig.InternalHosts`
+**The first admin-authored exception** is `SiteConfig.InternalHosts`
 (`vetHostLift`/`Proxy.vetHost`): it lifts the RFC1918/ULA/CGNAT slice ONLY —
 never loopback/link-local/metadata/multicast/NAT64 — for a declared hostname,
 scoped to declared CIDRs, and never for an address on the proxy's own interface
-subnets or its resolved control-plane host. On Docker that excludes the
-`wardyn-internal` neighbours (Postgres/Dex/registry); on Kubernetes those are
-ClusterIP Services off the pod's own interface, so there the declared `cidrs` are
-the bound (`docs/OPERATIONS.md` § Internal hosts). The metadata address stays
-unreachable regardless of what an operator declares.
+subnets or its resolved control-plane host (`Proxy.onOwnSubnetOrControlPlane`).
+On Docker that excludes the `wardyn-internal` neighbours (Postgres/Dex/registry);
+on Kubernetes those are ClusterIP Services off the pod's own interface, so there
+the declared `cidrs` are the bound (`docs/OPERATIONS.md` § Internal hosts). The
+metadata address stays unreachable regardless of what an operator declares.
+
+**The second** is the literal-IP trust an `EgressRedirect` whose `to` is a bare
+address rides on (`Proxy.trustsExactLiteralIP`, consulted by `evaluate` step 0
+and `Proxy.egressTarget`): the address `substituteArtifactEgress` writes into the
+covered runs' `allowed_domains` is dialed without the post-resolution re-check,
+because a literal has no hostname behind it to rebind. It is bounded the same way
+and by the same predicates as the first — `blockPrivate` only, so no
+loopback/link-local/metadata/NAT64 literal is ever trusted however it is
+allow-listed, and never an address on the proxy's own subnets or its
+control-plane host — and it is narrower in one respect: it admits only the EXACT
+address an operator typed, never a range. `denied_domains` still wins over both
+(`RunPolicy.AllowsLiteralIP` checks the deny lists first).
 
 The internal model gateway (residual #29) is NOT a second exception: its relaxed
 per-request vet (`Proxy.vetTrustedHost`, reached only via `Proxy.gatewayTarget`)
@@ -876,6 +888,41 @@ hiding them would repeat the failure mode we are designed to avoid.
     control plane reads the org chart, and per-search audit is deliberately
     ABSENT (one row per keystroke would log every name an admin looked up), so
     the audit trail records connector failures, not who was searched for.
+
+32. **The one-line installer trusts the release ORIGIN: the compose definition
+    has no digest, and every other check it makes is same-origin.** `install.sh`
+    pulls `deploy/compose/docker-compose.yaml` from the release tag on
+    `raw.githubusercontent.com` and writes it into `${WARDYN_HOME}` unverified —
+    and that file decides which images run, which ports publish on which
+    interface, whether `WARDYN_LOCAL_MODE` is on, and what is bind-mounted. An
+    earlier wording of this residual said everything else the installer places
+    *is* verified. That overclaimed, in three places:
+    - The CLI binary is hash-checked, and fail-closed (`install_cli` computes
+      `sha256_hex` and dies on a mismatch rather than installing it) — but
+      against a `SHA256SUMS` fetched from the SAME
+      `releases/download/${VERSION}` base as the binary. That defeats a
+      corrupted or swapped asset, not a tampered release, which would serve a
+      matching list. `install_cli` never fetches `SHA256SUMS.sig` or
+      `SHA256SUMS.pem`: the `cosign verify-blob` in `docs/VERIFY.md` §5 is the
+      OPERATOR's manual step, and the installer runs no cosign at all.
+    - The images are pulled by TAG (`docker compose pull`, and `mint_age_key`'s
+      `docker run … -gen-age-key` before it). They are cosign-verifi**able** by
+      the operator (`docs/VERIFY.md` §1); the installer verifies none of them.
+    - So on a fresh install the FIRST foreign code to execute on the box is the
+      wardynd image's `-gen-age-key` entrypoint, which `mint_age_key` runs to
+      mint the secret-store key — before `docker compose up -d --no-build`, and
+      before the operator has read the compose file or anything else.
+
+    Accepted for 0.7 on one honest ground, stated as what it is: `curl … | sh`
+    is a decision to trust this project's release origin for one command, and
+    this installer does not pretend to be more than that. What it fetches stays
+    on disk — `${WARDYN_HOME}/docker-compose.yaml` is short plain YAML, and
+    `docs/VERIFY.md` §6 says plainly which checks are the operator's to run
+    against it afterwards. The fix is a `SHA256SUMS` row for the compose file
+    plus a signature check the installer performs itself;
+    `TestInstallSh_ComposeFetchIsVerified` and T6 of
+    `scripts/test-install-sh-trust.sh` are written and enforce the first of
+    those the moment `F10_EXPECT_COMPOSE_INTEGRITY=1` is set.
 
 ### 5.1a LLM egress content inspection — the honest-claims contract
 

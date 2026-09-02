@@ -517,6 +517,24 @@ func (s *Server) routes() chi.Router {
 			// born on this tier.
 			s.mountGovernanceRoutes(securityOps)
 
+			// User drives (0.7, migration 0054): the storage an admin registers
+			// and allocates, and the per-run flag a member mounts theirs with.
+			// Seven routes, all operatorOnly — SUPER, NOT the securityOps tier
+			// the /governance family right above sits on, and the contrast is
+			// the tier line itself. A drive names a HOST PATH (host_root) or a
+			// cluster storage class, and "never the host" is exactly what
+			// separates the two admin tiers; a security admin's authority over
+			// drives is the DenyUserDrive door in the profile editor, which is
+			// already theirs through /governance. Widening the grant + preview
+			// routes to securityOps is a one-line move plus matrix rows once the
+			// tier's own review settles — the safe direction, taken later.
+			//
+			// Registered UNCONDITIONALLY (mountUserDriveRoutes' own doc), so
+			// TestAuthzMatrix's every-conditional-route-mounted doctrine has
+			// nothing to arrange. These 7 are OUTSIDE §B's 40-gated-route count
+			// — new routes, born on this tier.
+			s.mountUserDriveRoutes(operatorOnly)
+
 			// Recording replay: GET /api/v1/runs/{id}/recording/{id}. Owner-or-admin
 			// (item 4): recordingAuthorizer is the SAME ownership rule
 			// getRunAuthorized enforces, applied INSIDE the handler (the outer {id}

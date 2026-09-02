@@ -310,6 +310,21 @@ type Workspace struct {
 	// deny the moment content changed — a deny needs no re-review against new
 	// content.
 	DeniedEgress []string `json:"denied_egress,omitempty"`
+	// EgressEditedAt is when an operator last REPLACED one of the two lists
+	// above through the approved-egress/denied-egress PUTs — the documented
+	// undo for an `always` decision. Nil on a workspace whose lists have only
+	// ever been written by decisions (or never written at all).
+	//
+	// It exists for exactly one reader, the boot heal
+	// (ReconcileWorkspaceEgressDecisions), which re-applies decided `always`
+	// approvals and would otherwise put back a host the operator had just
+	// removed: the approval row still says APPROVED/always forever, so without
+	// a "the operator has spoken more recently than that" mark the undo is
+	// re-widened at every restart. Stamped ONLY by those two scoped setters —
+	// never by AddWorkspaceEgressDecision (a decision is not an override of
+	// itself) and never by UpdateWorkspace (a composition edit restates every
+	// column, so stamping there would suppress the heal for unrelated edits).
+	EgressEditedAt *time.Time `json:"egress_edited_at,omitempty"`
 	// ActiveRunID is the in-flight scan/record run for this workspace, so the
 	// import panel can poll "is my step still running" without scanning all
 	// runs. Nil when no import step is executing.

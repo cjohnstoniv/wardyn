@@ -17,6 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
+	"github.com/cjohnstoniv/wardyn/internal/identity/identitytest"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
@@ -126,7 +127,7 @@ type harness struct {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	audit := &recRecorder{}
-	idp, err := embedded.New(nil, "wardyn.local", embedded.NewMemRevocationStore(), audit)
+	idp, err := embedded.New(nil, "wardyn.local", identitytest.NewMemRevocationStore(), audit)
 	if err != nil {
 		t.Fatalf("embedded.New: %v", err)
 	}
@@ -556,7 +557,7 @@ func TestInternalMintRequiresSPIRE(t *testing.T) {
 
 func mustIDP(t *testing.T) *embedded.Provider {
 	t.Helper()
-	idp, err := embedded.New(nil, "wardyn.local", embedded.NewMemRevocationStore(), &recRecorder{})
+	idp, err := embedded.New(nil, "wardyn.local", identitytest.NewMemRevocationStore(), &recRecorder{})
 	if err != nil {
 		t.Fatalf("embedded.New: %v", err)
 	}

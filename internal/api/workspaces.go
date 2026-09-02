@@ -158,8 +158,10 @@ func legacyWorkspaceSource(req workspaceRequest) (types.WorkspaceSource, *types.
 // chosen later, per-attach); repo reuses repoFieldSafe + repoCloneURL
 // (runs.go), the same pair that gates AgentRun.Repo today; ephemeral has no
 // host/repo value to check. An optional Target is validated via
-// runner.ValidateTarget for every type, since it becomes an in-container
-// mount/clone/scratch-dir path once a run attaches this workspace.
+// runner.ValidateAuthoredTarget for every type, since it becomes an
+// in-container mount/clone/scratch-dir path once a run attaches this workspace
+// — the AUTHORED variant, so a source can no more name the reserved user-drive
+// target than a policy mount can.
 func validateWorkspaceSource(src types.WorkspaceSource) string {
 	switch src.Type {
 	case types.WorkspaceSourceTypeLocalDir:
@@ -185,7 +187,7 @@ func validateWorkspaceSource(src types.WorkspaceSource) string {
 		return `type must be "local_dir", "repo", or "ephemeral"`
 	}
 	if src.Target != "" {
-		if err := runner.ValidateTarget(src.Target); err != nil {
+		if err := runner.ValidateAuthoredTarget(src.Target); err != nil {
 			return "invalid target: " + err.Error()
 		}
 	}

@@ -42,6 +42,18 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if len(spec.Mounts) > 0 {
 		return runner.Sandbox{}, fmt.Errorf("k8s: sandbox mounts are not supported (requested %d): %w", len(spec.Mounts), errMountsUnsupported)
 	}
+	// A resolved drive this driver cannot bind is a REFUSAL, never a quiet
+	// driveless launch. seedRequestDrive refuses every run whose drive is
+	// unmountable precisely so a member who ticked "mount my drive" never gets
+	// a run without one; a runner that accepted the spec and then ignored the
+	// field would reopen that silent data loss from the other end — an hour of
+	// work written into a pod filesystem deleted at teardown.
+	//
+	// D4 removes this and binds the PVC here instead.
+	if spec.Drive != nil {
+		return runner.Sandbox{}, fmt.Errorf("k8s: %w (%q, backend %s)",
+			errDriveUnsupported, spec.Drive.ObjectName, spec.Drive.Backend)
+	}
 	runtimeClassName, err := d.resolveRuntimeClassName(ctx, spec.ConfinementClass)
 	if err != nil {
 		return runner.Sandbox{}, err

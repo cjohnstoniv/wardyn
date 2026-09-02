@@ -217,12 +217,24 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 	}, nil
 }
 
+// errDriveUnsupported names the gap between the control plane resolving a
+// member's drive (migration 0054) and this driver being able to mount it.
+// D3 removes this: the Docker mount path lands on its own lane.
+var errDriveUnsupported = errors.New("user drive: this runner does not mount drives yet")
+
 // CreateSandbox provisions the per-run network, the wardyn-proxy sidecar, and
 // the agent container with L0 confinement. Order matters for fail-closed
 // teardown: anything created before an error is rolled back.
 //
 //nolint:funlen // Deliberate: a single linear container-assembly sequence (network → proxy sidecar → hardening → mounts → sandbox container) whose teardown-on-failure compensations must stay in one scope to be verifiably complete; low branching (passes gocyclo/gocognit), just long.
 func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
+	// D3 removes this. A spec carrying a resolved drive is refused before ANY
+	// Docker call, for the reason seedRequestDrive refuses an unmountable one:
+	// a member who asked for storage must never silently get a run without it.
+	if spec.Drive != nil {
+		return runner.Sandbox{}, fmt.Errorf("docker: %w (%q, backend %s)",
+			errDriveUnsupported, spec.Drive.ObjectName, spec.Drive.Backend)
+	}
 	infoRes, err := d.cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return runner.Sandbox{}, fmt.Errorf("docker: info: %w", err)

@@ -8,7 +8,7 @@
 // signed ID token, no IdP.
 //
 // INVARIANT UNDER TEST: role precedence across the THREE config sources and the
-// IdP's claims is exactly (derive.go:400-418, 238-275):
+// IdP's claims is exactly (deriveRole and mergeRoleMaps in derive.go):
 //
 //	source:  operator allowlist  >  chart WARDYN_OIDC_ROLE_MAP  >  console rows
 //	         (a console row can never override a chart key or an allowlisted
@@ -160,10 +160,11 @@ func TestF2_RoleMapPrecedence_ChartOverConsoleOverClaims(t *testing.T) {
 	}
 }
 
-// TestF2_RoleMapArm1_NoMapMeansAllowlistOnly pins arm 1 (derive.go:420-436):
-// with an EMPTY merged map the allowlist alone splits admin/member, and with
-// neither source EVERY human is admin — the posture under which no ceiling ever
-// binds anyone (effectiveCeiling short-circuits on isOperator).
+// TestF2_RoleMapArm1_NoMapMeansAllowlistOnly pins arm 1 (deriveRole's
+// empty-roleMap branch in derive.go): with an EMPTY merged map the allowlist
+// alone splits admin/member, and with neither source EVERY human is admin —
+// the posture under which no ceiling ever binds anyone (effectiveCeiling
+// short-circuits on isOperator).
 func TestF2_RoleMapArm1_NoMapMeansAllowlistOnly(t *testing.T) {
 	merged, _ := writoidc.MergeRoleMapsForTest(nil, []string{"ops@corp.example"}, nil)
 	if len(merged) != 0 {
@@ -177,6 +178,6 @@ func TestF2_RoleMapArm1_NoMapMeansAllowlistOnly(t *testing.T) {
 	}
 	// The dangerous posture, stated so a reviewer sees it: no map, no allowlist.
 	if role, _, ok := writoidc.DeriveRoleForTest(nil, nil, "anyone@anywhere.example", nil, nil, ""); !ok || role != writoidc.RoleAdmin {
-		t.Errorf("no map, no allowlist = (%q,%v); derive.go:429-431 says everyone is admin — if this changed, cmd/wardynd's validateOperatorPosture and the docs must change with it", role, ok)
+		t.Errorf("no map, no allowlist = (%q,%v); deriveRole's empty-legacyAdminEmails branch says everyone is admin — if this changed, cmd/wardynd's validateOperatorPosture and the docs must change with it", role, ok)
 	}
 }
