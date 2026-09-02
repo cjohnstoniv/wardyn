@@ -189,6 +189,12 @@ func (s *Server) driveMountFor(w http.ResponseWriter, req createRunRequest,
 		Backend:    resolved.Drive.Backend,
 		ObjectName: resolved.ObjectName,
 		HomeName:   resolved.HomeName,
+		// The resolver's fingerprint of the principal the home was derived from,
+		// carried verbatim rather than recomputed. This seam holds the request
+		// and the folded allocation, never the claims — and a second derivation
+		// from a differently-picked claim is precisely the drift the label the
+		// driver stamps from it exists to catch.
+		SubjectHash: resolved.SubjectHash,
 		// The reserved constant, carried rather than assumed, so the path the
 		// runner binds at and the path validateWorkspaceSources/validatePolicySpec
 		// refuse to let anyone else name are the SAME symbol.

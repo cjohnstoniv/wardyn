@@ -245,11 +245,36 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 		resolved.Paused = true
 		return resolved, nil
 	}
+	// THE MANAGED/`email_local` REFUSAL, REPEATED — and repeated for the same
+	// reason the home-override tier gate below is, on a row written by an older
+	// binary or by hand. A managed object is named by the HOME alone, so under
+	// `email_local` two principals whose addresses share the part before the "@"
+	// resolve to ONE volume or PVC, and the driver's own collision check cannot
+	// see it (the object IS labelled with this drive). Deriving the home anyway
+	// would hand the second principal the first one's storage.
+	//
+	// It runs BEFORE the derivation, not after: the home it would derive is
+	// exactly the colliding one, and a check downstream of it would be reasoning
+	// about a value it had already accepted.
+	if d.Backend.Kind() == types.DriveKindManaged && d.HomeTemplate == types.HomeTemplateEmailLocal {
+		slog.Warn("wardynd: user drive: a managed drive is templated on the email local part, which cannot name one object per person",
+			slog.String("drive", d.Name), slog.String("backend", string(d.Backend)),
+			slog.String("home_template", string(d.HomeTemplate)))
+		// REFUSED_BACKEND's frozen shape, whose parenthesised half is where the
+		// admin's diagnosis goes — the same reuse driveShareIsBindable makes for
+		// the roots ceiling, and the same honest reading: from the member's side
+		// "the roots moved" and "this row could not be authored today" are one
+		// fact, which is that this deployment cannot mount their drive.
+		return nil, fmt.Errorf("%w: drive: this deployment cannot mount your drive "+
+			"(its directory name comes from your email address, which cannot name one %s object per person — "+
+			"ask an admin to change how this drive names directories)", errDriveUnmountable, d.Backend)
+	}
 	override := ""
 	if tier == types.CapabilitySubjectUser {
 		override = g.HomeOverride
 	}
-	home, err := types.DriveHomeName(*d, driveHomeSubject(d.HomeTemplate, users), override)
+	subject := driveHomeSubject(d.HomeTemplate, users)
+	home, err := types.DriveHomeName(*d, subject, override)
 	if err != nil {
 		// The BODY is the frozen member sentence and NOTHING ELSE. What this
 		// member needs is which of their claims could not name a directory and
@@ -267,6 +292,12 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 	}
 	resolved.HomeName = home
 	resolved.ObjectName = types.DriveObjectName(*d, home)
+	// The fingerprint of the principal the home was derived FROM, which the home
+	// cannot answer for once a template or an override has folded two subjects
+	// onto one segment. Derived from the SAME subject DriveHomeName was handed —
+	// never from users[0] again — so the label the driver stamps and the object
+	// it stamps it on were decided by one claim.
+	resolved.SubjectHash = types.DriveSubjectHash(subject)
 	return resolved, nil
 }
 

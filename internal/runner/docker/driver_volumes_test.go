@@ -23,6 +23,12 @@ import (
 // volume" from "some other drive's volume that took the same name".
 var driveRowID = uuid.MustParse("11111111-2222-3333-4444-555555555555")
 
+// driveSubject is the principal every managed drive in this file resolved for.
+// The fingerprint the driver stamps is DERIVED from it rather than written as a
+// literal, so this file and the resolver cannot disagree about what
+// types.DriveSubjectHash produces.
+const driveSubject = "alice@corp.example"
+
 // dockerVolumeDrive is a resolved MANAGED user drive, in the shape the control
 // plane hands the driver (types.DriveMount — never a runner.Mount).
 func dockerVolumeDrive() *types.DriveMount {
@@ -31,6 +37,7 @@ func dockerVolumeDrive() *types.DriveMount {
 		Backend:     types.DriveBackendDockerVolume,
 		ObjectName:  "wardyn-drive-alice",
 		HomeName:    "alice",
+		SubjectHash: types.DriveSubjectHash(driveSubject),
 		Target:      runner.DriveTarget,
 		ReadOnly:    true,
 		Enforcement: types.StorageEnforcementNone,
@@ -100,6 +107,19 @@ func TestDriveVolume_CreatedWithLabelsAndNoOptions(t *testing.T) {
 	}
 	if opts.Labels[labelDriveHome] != "alice" {
 		t.Errorf("label %s = %q, want %q", labelDriveHome, opts.Labels[labelDriveHome], "alice")
+	}
+	// The PRINCIPAL's fingerprint — the discriminator neither the name nor the
+	// drive id can supply, since a home template can fold two people onto one
+	// home INSIDE one drive.
+	if got, want := opts.Labels[labelDriveSubject], types.DriveSubjectHash(driveSubject); got != want {
+		t.Errorf("label %s = %q, want the subject digest %q", labelDriveSubject, got, want)
+	}
+	// And it is a DIGEST: `docker volume inspect` echoes labels to anyone who can
+	// reach the daemon, so the claim itself must never appear.
+	for k, v := range opts.Labels {
+		if strings.Contains(v, driveSubject) || strings.Contains(v, "@") {
+			t.Errorf("label %s = %q carries the subject claim — a label is echoed by `docker volume inspect`", k, v)
+		}
 	}
 	if _, has := opts.Labels[labelRun]; has {
 		t.Errorf("drive volume carries a %s label (%v) — teardown reaps by that label and would delete the member's storage", labelRun, opts.Labels)
@@ -225,17 +245,66 @@ func TestEnsureDriveVolume_AdoptsOnlyWardynsOwnShape(t *testing.T) {
 		}
 	})
 
+	// ANOTHER PRINCIPAL's volume, on the SAME drive — the case the id check
+	// above cannot see, because the id matches. One `email_local` drive derives
+	// one home for alice@corp.example and alice@acquired.example, so both
+	// allocations resolve to `wardyn-drive-alice` labelled with this same drive.
+	// The write boundary and the resolver both refuse that pair now; this is the
+	// third layer, at the object, for a volume created before either did.
+	t.Run("another-principals-subject", func(t *testing.T) {
+		f := seed(client.VolumeCreateOptions{
+			Name:   "wardyn-drive-alice",
+			Driver: "local",
+			Labels: map[string]string{
+				labelManaged: "true", labelDrive: driveRowID.String(), labelDriveHome: "alice",
+				labelDriveSubject: types.DriveSubjectHash("alice@acquired.example"),
+			},
+		})
+		err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive())
+		if err == nil {
+			t.Fatal("a volume allocated to ANOTHER principal was adopted — that is one person's files handed to another")
+		}
+		if !strings.Contains(err.Error(), labelDriveSubject) {
+			t.Errorf("the refusal should name the label that disagreed, got: %v", err)
+		}
+		// The digest is a person's fingerprint and must not be copied into an
+		// error string an operator will paste into a ticket.
+		for _, digest := range []string{types.DriveSubjectHash("alice@acquired.example"), types.DriveSubjectHash(driveSubject)} {
+			if strings.Contains(err.Error(), digest) {
+				t.Errorf("the refusal reproduces a subject digest, which is a fingerprint of a person: %v", err)
+			}
+		}
+	})
+
 	t.Run("wardyn-shaped-is-reused", func(t *testing.T) {
 		f := seed(client.VolumeCreateOptions{
 			Name:   "wardyn-drive-alice",
 			Driver: "local",
-			Labels: map[string]string{labelManaged: "true", labelDrive: driveRowID.String(), labelDriveHome: "alice"},
+			Labels: map[string]string{
+				labelManaged: "true", labelDrive: driveRowID.String(), labelDriveHome: "alice",
+				labelDriveSubject: types.DriveSubjectHash(driveSubject),
+			},
 		})
 		if err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err != nil {
 			t.Fatalf("a Wardyn-shaped volume must be REUSED, not refused: %v", err)
 		}
 		if f.volumeCreates != 0 {
 			t.Errorf("reuse made %d VolumeCreate calls, want 0", f.volumeCreates)
+		}
+	})
+
+	// A volume with the drive's labels but NO subject label is still adopted —
+	// the same restore path the label-less arm below covers, and every volume
+	// created before wardyn.subject existed. Refusing here would make this
+	// release an outage for every deployment that already has a managed drive.
+	t.Run("subject-label-less-is-adopted", func(t *testing.T) {
+		f := seed(client.VolumeCreateOptions{
+			Name:   "wardyn-drive-alice",
+			Driver: "local",
+			Labels: map[string]string{labelManaged: "true", labelDrive: driveRowID.String(), labelDriveHome: "alice"},
+		})
+		if err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err != nil {
+			t.Fatalf("a volume predating the subject label must still be adopted: %v", err)
 		}
 	})
 
@@ -249,6 +318,75 @@ func TestEnsureDriveVolume_AdoptsOnlyWardynsOwnShape(t *testing.T) {
 		f := seed(client.VolumeCreateOptions{Name: "wardyn-drive-alice", Driver: "local"})
 		if err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err != nil {
 			t.Fatalf("a label-less Wardyn-shaped volume must be adopted (the hand-restore path): %v", err)
+		}
+	})
+}
+
+// TestEnsureDriveVolume_CreateThenVerify is the FIRST-RUN RACE, and it is the
+// one window every check above had.
+//
+// Two colliding drives start their first run at the same moment. Both inspect,
+// both see 404, both create. Docker's VolumeCreate against a name that already
+// resolves SUCCEEDS and hands back the EXISTING volume — its driver, its options
+// and its labels — applying none of the ones it was given. So the loser's create
+// looked identical to the winner's, and every refusal lived in the inspect arm it
+// legitimately never reached: it adopted, once, silently, and only on the first
+// run (every later run inspects and refuses, which is what made this so easy to
+// miss).
+//
+// The fake models the race exactly: the volume EXISTS, and inspect answers
+// not-found for it.
+func TestEnsureDriveVolume_CreateThenVerify(t *testing.T) {
+	seedRaced := func(labels map[string]string, driver string, opts map[string]string) *fakeDocker {
+		f := newFakeDocker()
+		f.volumes["wardyn-drive-alice"] = client.VolumeCreateOptions{
+			Name: "wardyn-drive-alice", Driver: driver, Labels: labels, DriverOpts: opts,
+		}
+		f.volumeInspectMissesExisting = true
+		return f
+	}
+
+	t.Run("another-drives-volume", func(t *testing.T) {
+		other := uuid.MustParse("99999999-8888-7777-6666-555555555555")
+		f := seedRaced(map[string]string{labelManaged: "true", labelDrive: other.String(), labelDriveHome: "alice"}, "local", nil)
+		err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive())
+		if err == nil {
+			t.Fatal("a create that lost the race adopted ANOTHER drive's volume — the create's result must run the same checks the inspect does")
+		}
+		if !strings.Contains(err.Error(), other.String()) {
+			t.Errorf("the refusal should name the drive it found, got: %v", err)
+		}
+	})
+
+	t.Run("another-principals-volume", func(t *testing.T) {
+		f := seedRaced(map[string]string{
+			labelManaged: "true", labelDrive: driveRowID.String(), labelDriveHome: "alice",
+			labelDriveSubject: types.DriveSubjectHash("alice@acquired.example"),
+		}, "local", nil)
+		if err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err == nil {
+			t.Fatal("a create that lost the race adopted ANOTHER principal's volume")
+		}
+	})
+
+	// The credential guardrail through the same window: an operator's precreated
+	// `--opt type=cifs` volume must not become somebody's drive because a create
+	// arrived a moment after it.
+	t.Run("options-bearing", func(t *testing.T) {
+		f := seedRaced(nil, "local", map[string]string{"type": "cifs", "o": "username=svc,password=hunter2"})
+		if err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err == nil {
+			t.Fatal("a create that lost the race adopted an OPTIONS-BEARING volume — the share credential guardrail has a first-run hole")
+		}
+	})
+
+	// The positive control: the create that WON applies its own options, so the
+	// verify passes and the ordinary first run is untouched.
+	t.Run("the-winner-is-unaffected", func(t *testing.T) {
+		f := newFakeDocker()
+		if err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err != nil {
+			t.Fatalf("an uncontended first run was refused by its own create: %v", err)
+		}
+		if f.volumeCreates != 1 {
+			t.Errorf("made %d VolumeCreate calls, want 1", f.volumeCreates)
 		}
 	})
 }

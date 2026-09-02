@@ -154,7 +154,7 @@ func (s *Server) userDriveHostRootCheck() types.UserDriveHostRootCheck {
 // returning the HTTP status and message the caller answers with (0, "" on
 // success) and the validated row.
 //
-// THREE GATES IN ORDER, and the order is the argument:
+// FOUR GATES IN ORDER, and the order is the argument:
 //
 //  1. Strict decoding (decodeStrictMsg, which is also where the 1 MiB body cap
 //     rides — an unknown field is a typo that must not silently widen
@@ -168,6 +168,10 @@ func (s *Server) userDriveHostRootCheck() types.UserDriveHostRootCheck {
 //     well-formed and it is the DEPLOYMENT that cannot accept it. The
 //     distinction is the one denyMemberRunQuota draws: a 400 says "you wrote
 //     this wrong", a 422 says "there is nothing here to write it into".
+//  4. NESTING against the other stored host_path roots (driveHostRootNesting)
+//     — a 422 for the same reason as 3, and LAST because it is the only gate
+//     that reads the database: a row that is malformed or outside the ceiling
+//     must be refused without a store round-trip.
 func (s *Server) decodeUserDriveRequest(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.UserDrive, int, string) {
 	var req userDriveRequest
 	if msg := decodeStrictMsg(w, r, &req); msg != "" {
@@ -192,8 +196,71 @@ func (s *Server) decodeUserDriveRequest(w http.ResponseWriter, r *http.Request, 
 		if err := s.userDriveHostRootCheck()(d.HostRoot); err != nil {
 			return types.UserDrive{}, http.StatusUnprocessableEntity, "invalid drive: " + err.Error()
 		}
+		if code, msg := s.driveHostRootNesting(r, d); msg != "" {
+			return types.UserDrive{}, code, msg
+		}
 	}
 	return d, 0, ""
+}
+
+// driveHostRootNesting is the FOURTH gate, and the only one that has to look at
+// the other ROWS: a host_path drive whose host_root sits inside — or contains —
+// another host_path drive's host_root is refused, 422, naming the other drive.
+//
+// THE HOLE IT CLOSES IS A MEMBER'S, NOT AN ADMIN'S TYPO. Drive A is rooted at
+// /srv/shares and gives alice a WRITABLE home at /srv/shares/alice. Drive B is
+// then rooted at /srv/shares/alice/team. Nothing above notices: B's root is
+// inside the deployment's ceiling, exists, is not a credential directory and is
+// an ordinary path. But its whole tree is a directory alice can write from
+// INSIDE a run — so she can replace `team`, or any segment under it, with a
+// link, and B's members are bound wherever she points them. The driver's
+// resolved-real-path checks bound where that can aim (the ceiling, and now the
+// member's own home name) but they cannot make the layout supportable: two
+// drives sharing a tree means one drive's members author the other drive's
+// storage.
+//
+// STRICT nesting only. Two drives on the SAME root are left alone: that is the
+// ordinary "one share, two allocations with different home templates" shape, and
+// neither drive's members can move the other's root, because the root is not
+// inside anybody's home. Equal roots are a naming question; nested roots are a
+// containment one.
+//
+// LEXICAL, on the already-cleaned stored strings. The symlink half belongs to
+// UserDriveHostRootCheck, which resolved both roots against the deployment's
+// ceiling when each was written and does it again at bind time; what THIS gate
+// owns is the relationship between two rows, which is exactly what the rows say.
+//
+// ONE STORE READ, on the drive-write path only — a handful of calls in a
+// deployment's lifetime, and the same list the console already loads on every
+// visit to the screen.
+func (s *Server) driveHostRootNesting(r *http.Request, d types.UserDrive) (int, string) {
+	drives, err := s.cfg.Store.ListUserDrives(r.Context())
+	if err != nil {
+		// 500, never "no other drives": a list that failed cannot say the tree is
+		// clear, and treating it as clear is how the check silently stops biting
+		// on exactly the deployment whose database is unhappy.
+		return http.StatusInternalServerError, "list user drives: " + err.Error()
+	}
+	for _, other := range drives {
+		// A row is not its own ancestor: a PUT that re-saves a drive unchanged
+		// must not start refusing itself.
+		if other.ID == d.ID || other.Backend != types.DriveBackendHostPath || other.HostRoot == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(d.HostRoot, other.HostRoot+"/"):
+			return http.StatusUnprocessableEntity, fmt.Sprintf(
+				"invalid drive: host_root %q is inside drive %q's host_root %q — that tree holds directories the other drive's "+
+					"members can write from inside a run, so they could redirect this one; give the two drives separate trees",
+				d.HostRoot, other.Name, other.HostRoot)
+		case strings.HasPrefix(other.HostRoot, d.HostRoot+"/"):
+			return http.StatusUnprocessableEntity, fmt.Sprintf(
+				"invalid drive: host_root %q contains drive %q's host_root %q — this drive's members could redirect that one "+
+					"from inside a run; give the two drives separate trees",
+				d.HostRoot, other.Name, other.HostRoot)
+		}
+	}
+	return 0, ""
 }
 
 // writeUserDrive is the shared body of POST and PUT: decode, validate against

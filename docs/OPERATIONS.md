@@ -533,10 +533,12 @@ bytes.
 
 **`docker_volume` — Wardyn allocates.** A per-person named volume
 (`wardyn-drive-<home>`), created on first use with the `local` driver and
-mounted at the reserved target. Nothing to configure. It carries two labels:
+mounted at the reserved target. Nothing to configure. It carries three labels:
 `wardyn.drive` = the **drive row's id** (the object name is per *person*, so the
-id is the only thing that groups a drive's volumes together) and `wardyn.home` =
-that person's directory name. Reclaim is a command, not a button:
+id is the only thing that groups a drive's volumes together), `wardyn.home` =
+that person's directory name, and `wardyn.subject` = a **digest** of the person
+themselves (never their claim — see the restore note below). Reclaim is a
+command, not a button:
 
 - one person: `docker volume rm wardyn-drive-<home>` — `POST /drives/preview`
   prints the exact object name for a principal so you need not compute it;
@@ -570,6 +572,17 @@ the fall-back this path is for, and every volume created before the label
 carried an id has none) — it just no longer answers
 `docker volume ls --filter label=wardyn.home=<home>`.
 
+Wardyn also stamps **`wardyn.subject`**, a digest of the person the volume was
+allocated to — never their sign-in claim, because `docker volume inspect` echoes
+labels to anyone who can reach the daemon. It is the discriminator `wardyn.drive`
+cannot be: a volume name carries only the *home*, so one drive whose home
+template folded two people onto one directory would produce one volume that
+*both* their allocations agree belongs to this drive. Wardyn refuses to mount a
+volume stamped for a different person. There is no way to compute the digest by
+hand for a restore, and none is needed: **leave `wardyn.subject` off** the
+`docker volume create` above and the volume mounts, exactly as a label-less
+`wardyn.drive` does.
+
 **`host_path` — you already mount the share.** Wardyn binds **one person's
 subdirectory** of a tree the *operator* mounted host-side. Wardyn never performs
 the share mount, never holds a share credential, and never creates a volume with
@@ -602,7 +615,18 @@ the share mount, never holds a share credential, and never creates a volume with
 
    Two people whose email addresses share the part before the `@` resolve to the
    **same** home under `email_local` — the segment is validated, not proven
-   unique. Use `sub`, or a per-person home override, where that can happen.
+   unique. On a share that is a tree you own and can inspect: use `sub`, or a
+   per-person home override, where it can happen. On a **managed** drive there
+   is nothing to inspect, so `email_local` is **refused outright** — a
+   `docker_volume` or `k8s_pvc` drive registered with it answers `400
+   home_template "email_local" is not allowed on a managed backend`. Wardyn
+   names a managed object after the home and nothing else, so those two people
+   would be allocated one volume, with write access to each other's files
+   whenever the drive is writable; use `hash` (the default) or `sub`. A row
+   written before this rule is refused at *run* time too (`drive: this
+   deployment cannot mount your drive (…)`), and every managed volume carries a
+   `wardyn.subject` label — a digest of the principal, never the claim — that
+   the driver refuses to mount for anybody else.
 
 3. **Set the ceiling**: `WARDYN_USER_DRIVE_HOST_ROOTS=/srv/wardyn-drives`
    ([ENV.md](ENV.md)). Unset means **no `host_path` drive may be registered at
@@ -613,7 +637,19 @@ the share mount, never holds a share credential, and never creates a volume with
    driver re-checks the **symlink-resolved real path** against these roots as
    the last thing before the container is created, so a home directory replaced
    by a symlink out of the share after the drive was registered is refused at
-   run time too.
+   run time too — and it now also checks that the resolved directory is still
+   **named after the person it resolved for**, which is what catches a home
+   replaced by a link to the home *next to it* (inside the roots, so the ceiling
+   alone would allow it). A home symlinked onto a second export still works, as
+   long as that export is also a configured root and the directory keeps its
+   name.
+
+   **Two `host_path` drives may not nest.** Registering a drive whose
+   `host_root` is inside — or contains — another `host_path` drive's `host_root`
+   answers `422`, naming the other drive. Drives on the *same* root are fine
+   (one share, two allocations with different home templates), and so are
+   sibling trees; what is refused is one drive rooted inside a tree whose
+   directories another drive's members can rewrite from inside a run.
 
 **On the Compose stack, wardynd must be able to SEE the root — set two
 variables.** The bind's source is resolved by the host daemon (wardynd's

@@ -151,18 +151,27 @@ func UserDriveHostRootCheck(roots []string) func(hostRoot string) error {
 //
 // Composed rather than restated so the driver and the API write boundary cannot
 // drift on what the deny-list, the unset-roots refusal, or "inside a root" mean.
-func UserDriveMountSourceCheck(roots []string) func(source string) error {
+//
+// IT RETURNS THE RESOLVED REAL PATH, not just nil/error, and the caller is
+// expected to keep asserting about it. This function's whole job is symlink
+// resolution, so handing back the answer is what stops the ONE caller that has
+// to say more about it — the Docker driver, which knows whose home the bind is
+// supposed to be — from resolving the same path a second time and reasoning
+// about a value this one never saw. On an error the string is "": there is no
+// resolved path to speak of, and a caller that ignored the error must not find
+// a plausible-looking one in its place.
+func UserDriveMountSourceCheck(roots []string) func(source string) (string, error) {
 	within := UserDriveHostRootCheck(roots)
-	return func(source string) error {
+	return func(source string) (string, error) {
 		if err := within(source); err != nil {
-			return err
+			return "", err
 		}
 		real, err := filepath.EvalSymlinks(filepath.Clean(source))
 		if err != nil {
 			// Unreachable in practice — `within` already resolved this path and
 			// fails closed when it cannot — but a resolve that started working
 			// and then stopped must not fall through to a bind.
-			return fmt.Errorf("user drive source %q could not be resolved on this host: %w", source, err)
+			return "", fmt.Errorf("user drive source %q could not be resolved on this host: %w", source, err)
 		}
 		for _, root := range roots {
 			r := filepath.Clean(root)
@@ -170,10 +179,10 @@ func UserDriveMountSourceCheck(roots []string) func(source string) error {
 				r = resolved
 			}
 			if real == r {
-				return fmt.Errorf("user drive source %q resolves to %q, which IS the configured root — a drive binds one person's "+
+				return "", fmt.Errorf("user drive source %q resolves to %q, which IS the configured root — a drive binds one person's "+
 					"subdirectory of a share, never the share itself (every other person's home is under it)", source, real)
 			}
 		}
-		return nil
+		return real, nil
 	}
 }

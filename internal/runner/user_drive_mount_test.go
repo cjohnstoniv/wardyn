@@ -171,11 +171,25 @@ func TestUserDriveMountSourceCheck(t *testing.T) {
 	}
 	roots := []string{root}
 
-	if err := UserDriveMountSourceCheck(roots)(home); err != nil {
+	real, err := UserDriveMountSourceCheck(roots)(home)
+	if err != nil {
 		t.Fatalf("a person's subdirectory of the root was refused: %v", err)
 	}
-	if err := UserDriveMountSourceCheck(roots)(root); err == nil {
+	// The RESOLVED path comes back, not merely a nil error. The driver has one
+	// more thing to say about it — is this directory still named after THIS
+	// principal — and resolving it a second time there would let the driver
+	// reason about a path this check never saw.
+	want, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatalf("resolve home: %v", err)
+	}
+	if real != want {
+		t.Errorf("resolved path = %q, want the symlink-resolved source %q", real, want)
+	}
+	if got, err := UserDriveMountSourceCheck(roots)(root); err == nil {
 		t.Error("the ROOT itself was accepted as a bind source — that binds every other person's home into this sandbox")
+	} else if got != "" {
+		t.Errorf("a refused source returned the path %q — a caller that ignored the error must not find a plausible one in its place", got)
 	}
 	// The same path is FINE as an authored host_root, which is why the equality
 	// rule cannot live in the shared check.
@@ -183,10 +197,31 @@ func TestUserDriveMountSourceCheck(t *testing.T) {
 		t.Errorf("the root was refused as an authored host_root, which is the ordinary shape: %v", err)
 	}
 	// And the composed half still refuses: unset roots, and the deny-lists.
-	if err := UserDriveMountSourceCheck(nil)(home); err == nil {
+	if _, err := UserDriveMountSourceCheck(nil)(home); err == nil {
 		t.Error("unset roots accepted a bind source — the fail-closed default must survive composition")
 	}
-	if err := UserDriveMountSourceCheck([]string{"/"})("/etc/wardyn-drives"); err == nil {
+	if _, err := UserDriveMountSourceCheck([]string{"/"})("/etc/wardyn-drives"); err == nil {
 		t.Error("the host bind deny-list did not run through the composed check")
+	}
+	// A SYMLINKED home resolves and is accepted here, and the resolved path is
+	// what comes back — the cross-volume layout (`<root>/bob` -> a directory on
+	// a second export the ceiling also names) is ordinary, and the sibling case
+	// this enables the driver to catch is refused one layer up, where the home
+	// NAME is known.
+	second := t.TempDir()
+	elsewhere := filepath.Join(second, "bob")
+	if err := os.MkdirAll(elsewhere, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	link := filepath.Join(root, "bob")
+	if err := os.Symlink(elsewhere, link); err != nil {
+		t.Skipf("symlink unsupported here: %v", err)
+	}
+	got, err := UserDriveMountSourceCheck([]string{root, second})(link)
+	if err != nil {
+		t.Fatalf("a home symlinked onto a second configured root was refused: %v", err)
+	}
+	if wantElsewhere, _ := filepath.EvalSymlinks(elsewhere); got != wantElsewhere {
+		t.Errorf("resolved path = %q, want the link's target %q", got, wantElsewhere)
 	}
 }

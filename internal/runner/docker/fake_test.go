@@ -130,6 +130,12 @@ type fakeDocker struct {
 	// "the daemon cannot say whether it exists" arm, which must fail closed
 	// rather than create over the top of it.
 	failVolumeInspect bool
+	// volumeInspectMissesExisting makes VolumeInspect answer NOT-FOUND for a
+	// volume this fake actually holds — the FIRST-RUN RACE, and the only way to
+	// reach ensureDriveVolume's create-then-verify arm: two colliding drives
+	// both probe before either creates, so the loser's inspect legitimately saw
+	// nothing and its VolumeCreate is then handed the winner's volume.
+	volumeInspectMissesExisting bool
 	// failVolumeCreate makes VolumeCreate fail (quota, driver refusal).
 	failVolumeCreate bool
 }
@@ -430,7 +436,7 @@ func (f *fakeDocker) VolumeInspect(ctx context.Context, volumeID string, _ clien
 		return client.VolumeInspectResult{}, fmt.Errorf("daemon: connection reset")
 	}
 	opts, ok := f.volumes[volumeID]
-	if !ok {
+	if !ok || f.volumeInspectMissesExisting {
 		return client.VolumeInspectResult{}, fakeNotFound{msg: "no such volume: " + volumeID}
 	}
 	return client.VolumeInspectResult{Volume: volume.Volume{
@@ -447,12 +453,23 @@ func (f *fakeDocker) VolumeInspect(ctx context.Context, volumeID string, _ clien
 
 // VolumeCreate records the full options the driver asked for — name, driver,
 // labels and (the one that must always be empty) DriverOpts.
+//
+// A create against a name this fake ALREADY HOLDS succeeds and returns the
+// EXISTING volume, applying none of the options it was handed — which is what a
+// real daemon does, and is the whole reason ensureDriveVolume verifies the
+// create's result rather than trusting it. Without this the loser of a first-run
+// race would look here exactly like the winner.
 func (f *fakeDocker) VolumeCreate(ctx context.Context, opts client.VolumeCreateOptions) (client.VolumeCreateResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.volumeCreates++
 	if f.failVolumeCreate {
 		return client.VolumeCreateResult{}, fmt.Errorf("daemon: create volume: quota exceeded")
+	}
+	if existing, ok := f.volumes[opts.Name]; ok {
+		return client.VolumeCreateResult{Volume: volume.Volume{
+			Name: existing.Name, Driver: existing.Driver, Labels: existing.Labels, Options: existing.DriverOpts,
+		}}, nil
 	}
 	f.volumes[opts.Name] = opts
 	return client.VolumeCreateResult{Volume: volume.Volume{Name: opts.Name, Driver: opts.Driver, Labels: opts.Labels}}, nil
