@@ -7,6 +7,8 @@ package docker
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -14,6 +16,7 @@ import (
 	"github.com/moby/moby/api/types/mount"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // helper: run CreateSandbox with the given mounts and return the agent's applied
@@ -185,6 +188,16 @@ func TestCreateSandbox_DeniedMountsRejected(t *testing.T) {
 		{"empty-source", runner.Mount{Source: "", Target: "/work/x"}},
 		{"bad-target-prefix", runner.Mount{Source: "/home/u/repo", Target: "/etc"}},
 		{"bad-target-usr", runner.Mount{Source: "/home/u/repo", Target: "/usr/local"}},
+		// THE RESERVED TARGET, arriving from a STORED POLICY ROW. validatePolicySpec
+		// refuses it at authoring — but only since the reservation existed, and a
+		// row written before that is exactly what this defense-in-depth re-check
+		// is for. The driver's half used to be runner.ValidateMount, whose
+		// ValidateTarget does not carry the reservation, so the bind landed INSIDE
+		// the member's drive: nesting over a rw bind makes runc mkdir the
+		// intermediate directories in the share, and whichever mount lands second
+		// shadows the other.
+		{"reserved-drive-target", runner.Mount{Source: "/home/u/repo", Target: runner.DriveTarget}},
+		{"reserved-drive-target-nested", runner.Mount{Source: "/home/u/repo", Target: runner.DriveTarget + "/shared"}},
 		{"relative-target", runner.Mount{Source: "/home/u/repo", Target: "work"}},
 		{"empty-target", runner.Mount{Source: "/home/u/repo", Target: ""}},
 	}
@@ -198,5 +211,290 @@ func TestCreateSandbox_DeniedMountsRejected(t *testing.T) {
 				t.Errorf("error should identify the denied mount, got: %v", err)
 			}
 		})
+	}
+}
+
+// ─── USER DRIVES (host_path): the same deny matrix, one object up ─────────────
+
+// driveHostRoot makes a real, symlink-resolved root with this person's home
+// directory under it — the shape a host_path drive actually has (the OPERATOR
+// mounted the share at the root; Wardyn binds one subdirectory of it).
+func driveHostRoot(t *testing.T) (root, home string) {
+	t.Helper()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve tempdir: %v", err)
+	}
+	root = filepath.Join(base, "shares")
+	home = filepath.Join(root, "alice")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	return root, home
+}
+
+// hostPathDrive is a resolved SHARE drive whose ObjectName is the per-person
+// subdirectory the resolver already derived (<host_root>/<home>).
+func hostPathDrive(objectName string) *types.DriveMount {
+	return &types.DriveMount{
+		Backend:     types.DriveBackendHostPath,
+		ObjectName:  objectName,
+		HomeName:    "alice",
+		Target:      runner.DriveTarget,
+		ReadOnly:    true,
+		Enforcement: types.StorageEnforcementExternal,
+	}
+}
+
+// TestCreateSandbox_HostPathDriveApplied is the happy path: a real subdirectory
+// of a configured root is bound at the reserved target, read-only.
+func TestCreateSandbox_HostPathDriveApplied(t *testing.T) {
+	root, home := driveHostRoot(t)
+	_, mounts, err := createWithDrive(t, hostPathDrive(home), []string{root})
+	if err != nil {
+		t.Fatalf("CreateSandbox with an in-root host_path drive: %v", err)
+	}
+	m := findMount(mounts, runner.DriveTarget)
+	if m == nil {
+		t.Fatalf("drive not mounted at %s; mounts=%+v", runner.DriveTarget, mounts)
+	}
+	if m.Type != mount.TypeBind {
+		t.Errorf("host_path drive mount Type = %q, want %q", m.Type, mount.TypeBind)
+	}
+	if m.Source != home {
+		t.Errorf("drive mount Source = %q, want %q (only the person's subdir is ever bound, never the root)", m.Source, home)
+	}
+	if !m.ReadOnly {
+		t.Error("drive mount ReadOnly = false, want true")
+	}
+	// AND read-only RECURSIVELY, or not at all. A bind's `ro` only reaches
+	// submounts from Linux 5.12; below that the kernel silently leaves every
+	// submount under the source WRITABLE — and a share's per-person home is
+	// exactly where a submount turns up (an autofs home, a second export mounted
+	// under the first). ReadOnlyForceRecursive makes the daemon refuse rather
+	// than hand back that half-honoured mount.
+	if m.BindOptions == nil || !m.BindOptions.ReadOnlyForceRecursive {
+		t.Errorf("drive mount BindOptions = %+v, want ReadOnlyForceRecursive on a read-only share bind — "+
+			"without it an old kernel binds the submounts read-WRITE and says nothing", m.BindOptions)
+	}
+}
+
+// TestCreateSandbox_WritableHostPathDriveIsNotForcedRecursive is the other half
+// of the row above: the flag is a claim about a READ-ONLY mount, and a writable
+// allocation has none to make. Setting it unconditionally would ask the daemon
+// to prove a property this bind does not have.
+func TestCreateSandbox_WritableHostPathDriveIsNotForcedRecursive(t *testing.T) {
+	root, home := driveHostRoot(t)
+	drive := hostPathDrive(home)
+	drive.ReadOnly = false
+	_, mounts, err := createWithDrive(t, drive, []string{root})
+	if err != nil {
+		t.Fatalf("CreateSandbox with a writable host_path drive: %v", err)
+	}
+	m := findMount(mounts, runner.DriveTarget)
+	if m == nil {
+		t.Fatalf("drive not mounted; mounts=%+v", mounts)
+	}
+	if m.ReadOnly {
+		t.Error("drive mount ReadOnly = true, want false (the allocation is writable)")
+	}
+	if m.BindOptions != nil && m.BindOptions.ReadOnlyForceRecursive {
+		t.Error("a WRITABLE bind carries ReadOnlyForceRecursive — the flag is a read-only claim")
+	}
+}
+
+// TestCreateSandbox_HostPathDriveHomeMustResolveToThisPrincipal is the SIBLING
+// SYMLINK. Everything the composed source check asserts is satisfied by a home
+// replaced host-side with a link to the home NEXT TO IT: it is inside the
+// deployment's roots, it is not the root itself, it traverses no denied prefix
+// and no dotfile. And it binds bob's directory into alice's sandbox — read-write
+// whenever her allocation is writable.
+//
+// The assertion the driver adds is on the resolved directory's NAME, which is
+// what keeps the legitimate cross-volume layout working: the second sub-test is
+// a corporate share spreading homes across exports (`<root>/alice ->
+// /mnt/nas2/alice`), which is ordinary and must still bind.
+func TestCreateSandbox_HostPathDriveHomeMustResolveToThisPrincipal(t *testing.T) {
+	t.Run("sibling-symlink-refused", func(t *testing.T) {
+		root, _ := driveHostRoot(t)
+		if err := os.MkdirAll(filepath.Join(root, "bob"), 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		// alice's home, replaced host-side by a link to bob's.
+		alice := filepath.Join(root, "alice-linked")
+		if err := os.Symlink(filepath.Join(root, "bob"), alice); err != nil {
+			t.Skipf("symlink unsupported here: %v", err)
+		}
+		drive := hostPathDrive(alice)
+		drive.HomeName = "alice-linked"
+		f, _, err := createWithDrive(t, drive, []string{root})
+		if err == nil {
+			t.Fatal("a home symlinked to a SIBLING home was bound — that is another person's directory in this sandbox")
+		}
+		if !strings.Contains(err.Error(), "denied user drive") {
+			t.Errorf("error should identify the denied drive, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "alice-linked") {
+			t.Errorf("the refusal should name the home it expected, got: %v", err)
+		}
+		if f.containers[agentContainerName(testSpec().RunID)] != nil {
+			t.Error("agent container exists after the refusal — the check must precede ContainerCreate")
+		}
+	})
+
+	// A home symlinked ACROSS volumes keeps its own name, and the second volume
+	// is a configured root — the ordinary corporate layout, and it must bind.
+	t.Run("cross-volume-symlink-allowed", func(t *testing.T) {
+		root, _ := driveHostRoot(t)
+		nas2, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatalf("resolve tempdir: %v", err)
+		}
+		if err := os.MkdirAll(filepath.Join(nas2, "alice"), 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		linked := filepath.Join(root, "alice2")
+		if err := os.Symlink(filepath.Join(nas2, "alice"), linked); err != nil {
+			t.Skipf("symlink unsupported here: %v", err)
+		}
+		drive := hostPathDrive(linked)
+		// The home the RESOLVER derived is what the resolved directory must be
+		// named — "alice" here, since that is the directory on the second export.
+		drive.HomeName = "alice"
+		_, mounts, err := createWithDrive(t, drive, []string{root, nas2})
+		if err != nil {
+			t.Fatalf("a home symlinked onto a second configured root was refused: %v", err)
+		}
+		if m := findMount(mounts, runner.DriveTarget); m == nil || m.Source != linked {
+			t.Errorf("drive mount = %+v, want a bind of the resolver's own path %q", m, linked)
+		}
+	})
+}
+
+// TestCreateSandbox_DeniedDriveMountsRejected extends the workspace deny matrix
+// above to the ONE bind the driver synthesizes itself
+// (runner.Mount.DriveAuthored). Each row FAILS CreateSandbox closed, so no
+// agent container ever exists:
+//
+//   - the deny-list rows prove the drive runs runner.ValidateMount verbatim —
+//     it is not a privileged path that skips the matrix because an admin
+//     authored it;
+//   - the roots rows prove the deployment's WARDYN_USER_DRIVE_HOST_ROOTS
+//     ceiling is re-asserted HERE, on the symlink-RESOLVED real path, as the
+//     last thing before ContainerCreate — a share directory replaced by a
+//     symlink out of the root after the drive row was written is caught at bind
+//     time, not merely at authoring time;
+//   - the unset-roots row proves the fail-closed default: a daemon whose
+//     wardynd was never told where shares are mounted refuses every host_path
+//     drive rather than binding one on trust.
+func TestCreateSandbox_DeniedDriveMountsRejected(t *testing.T) {
+	root, home := driveHostRoot(t)
+
+	// A symlink INSIDE the root pointing at a directory outside it: lexically
+	// in-root, really not.
+	outside := filepath.Join(filepath.Dir(root), "elsewhere")
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	escaping := filepath.Join(root, "escape")
+	if err := os.Symlink(outside, escaping); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	cases := []struct {
+		name  string
+		src   string
+		roots []string
+	}{
+		{"under-etc", "/etc/wardyn-drives/alice", []string{"/etc/wardyn-drives"}},
+		{"socket-basename", filepath.Join(root, "docker.sock"), []string{root}},
+		{"containerd-socket-basename", filepath.Join(root, "containerd.sock"), []string{root}},
+		{"symlink-escapes-root", escaping, []string{root}},
+		{"outside-the-roots", home, []string{filepath.Join(filepath.Dir(root), "other-share")}},
+		{"no-roots-configured", home, nil},
+		// The source IS the root: lexically fine, inside the ceiling, and it
+		// would bind the WHOLE share — every other person's home — into this one
+		// member's sandbox. Only a bug can produce it (a home that resolved to
+		// "." or "", a symlink from a home back to its parent), which is exactly
+		// what a last-thing-before-ContainerCreate check is for.
+		{"source-is-the-root", root, []string{root}},
+		{"traversal-source", root + "/../alice", []string{root}},
+		{"relative-source", "shares/alice", []string{root}},
+		{"missing-directory", filepath.Join(root, "no-such-home"), []string{root}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, _, err := createWithDrive(t, hostPathDrive(tc.src), tc.roots)
+			if err == nil {
+				t.Fatalf("CreateSandbox with denied drive source %q should FAIL CLOSED, got nil error", tc.src)
+			}
+			if !strings.Contains(err.Error(), "denied user drive") {
+				t.Errorf("error should identify the denied drive, got: %v", err)
+			}
+			if f.containers[agentContainerName(testSpec().RunID)] != nil {
+				t.Error("agent container exists after the refusal — the check must precede ContainerCreate")
+			}
+		})
+	}
+}
+
+// TestCreateSandbox_DriveTargetIsValidatedNotAuthored pins the ValidateTarget /
+// ValidateAuthoredTarget split from the driver's side: the drive's own mount
+// must pass (runner.DriveTarget is a legal place to put something), while a
+// drive whose target was corrupted to somewhere illegal is still refused.
+// Running ValidateAuthoredTarget here instead would make the drive fail its own
+// validation, since that function exists to reserve this exact path from
+// everybody else.
+func TestCreateSandbox_DriveTargetIsValidatedNotAuthored(t *testing.T) {
+	if err := runner.ValidateTarget(runner.DriveTarget); err != nil {
+		t.Fatalf("runner.ValidateTarget(%q) must pass — the drive mounts there: %v", runner.DriveTarget, err)
+	}
+	if err := runner.ValidateAuthoredTarget(runner.DriveTarget); err == nil {
+		t.Fatalf("runner.ValidateAuthoredTarget(%q) must refuse — the target is reserved from authors", runner.DriveTarget)
+	}
+
+	drive := dockerVolumeDrive()
+	drive.Target = "/usr/local"
+	if _, _, err := createWithDrive(t, drive, nil); err == nil {
+		t.Fatal("a drive targeting a system path must FAIL CLOSED, got nil")
+	}
+}
+
+// TestDriveMount_HostPathCeilingIsUnconditional is the pin the old
+// driveHostMount stamp test used to be, moved onto the function that now does
+// the conversion (driveMount, its single caller).
+//
+// The stamp test asserted that a share drive reached ContainerCreate carrying
+// runner.Mount.DriveAuthored, because the roots ceiling was written `if
+// m.DriveAuthored` — fail-OPEN by shape, since the flag's only false state is a
+// refactor that stops setting it. The ceiling is now unconditional, so the
+// property worth pinning is the ceiling itself: the SAME call that binds an
+// in-root share refuses when the deployment named no roots, with nothing in
+// between that could turn it off. The happy-path half also carries the old
+// test's other assertions — source, target and mode arrive verbatim from the
+// resolver, never re-derived here.
+func TestDriveMount_HostPathCeilingIsUnconditional(t *testing.T) {
+	root, home := driveHostRoot(t)
+	drive := hostPathDrive(home)
+
+	d := newWithClient(newFakeDocker(), Config{ProxyImage: "wardyn-proxy:dev", UserDriveHostRoots: []string{root}})
+	got, err := d.driveMount(context.Background(), drive)
+	if err != nil {
+		t.Fatalf("driveMount for an in-root share: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("driveMount returned %d mounts, want exactly 1: %+v", len(got), got)
+	}
+	if got[0].Type != mount.TypeBind || got[0].Source != drive.ObjectName || got[0].Target != drive.Target || got[0].ReadOnly != drive.ReadOnly {
+		t.Errorf("driveMount(%+v) = %+v, want a bind carrying the resolver's object name, target and mode verbatim", *drive, got[0])
+	}
+
+	// The SAME drive, on a deployment that configured no roots: refused. No
+	// flag, provenance stamp or backend detail sits between the two calls.
+	unset := newWithClient(newFakeDocker(), Config{ProxyImage: "wardyn-proxy:dev"})
+	if _, err := unset.driveMount(context.Background(), drive); err == nil {
+		t.Error("driveMount bound a share on a deployment with no WARDYN_USER_DRIVE_HOST_ROOTS — the ceiling must run unconditionally")
+	} else if !strings.Contains(err.Error(), "denied user drive") {
+		t.Errorf("the refusal should identify the denied drive, got: %v", err)
 	}
 }

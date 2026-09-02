@@ -231,6 +231,21 @@ services:
       # directory plainly exists on the host. Empty = no root mounted (the
       # default), which the error message also states rather than implies.
       WARDYN_WORKSPACES_ROOT: "${WARDYN_WORKSPACES_ROOT:-}"
+      # USER DRIVES of backend host_path: the deployment's fail-closed ceiling
+      # over the host trees an admin may register a drive inside (CSV of
+      # absolute paths — see docs/ENV.md). Unset (the default) means no
+      # host_path drive may be registered at all; Wardyn-managed docker_volume
+      # drives need nothing here.
+      #
+      # Forwarded because a containerised wardyn RESOLVES SYMLINKS in its own
+      # process and fails closed on a path it cannot stat, so the tree has to be
+      # visible inside this container too — which is the volumes-side
+      # WARDYN_USER_DRIVE_HOST_ROOT bind below, in the same same-path read-only
+      # shape WARDYN_WORKSPACES_ROOT uses. That bind carries ONE root (compose
+      # cannot expand a CSV into volume lines); a deployment whose ceiling names
+      # several adds a volume line per root by hand. See docs/OPERATIONS.md
+      # "User drives on Docker".
+      WARDYN_USER_DRIVE_HOST_ROOTS: "${WARDYN_USER_DRIVE_HOST_ROOTS:-}"
       WARDYN_PROXY_IMAGE: "${WARDYN_PROXY_IMAGE:-wardyn/wardyn-proxy:local}"
       WARDYN_CONTROL_PLANE_URL: "http://wardynd:8080"
       # Devcontainer image builds — ON by default on the compose stack: the
@@ -450,6 +465,28 @@ services:
       # until an operator opts in by naming a root, rather than silently exposing
       # anything.
       - ${WARDYN_WORKSPACES_ROOT:-/var/empty/wardyn-no-workspaces-root}:${WARDYN_WORKSPACES_ROOT:-/var/empty/wardyn-no-workspaces-root}:ro
+      # User-drive host root (WARDYN_USER_DRIVE_HOST_ROOT) — READ-ONLY, mounted at
+      # the SAME path inside the container, exactly like the workspaces root above
+      # and for the same reason: the sandbox bind's Source is resolved by the HOST
+      # dockerd (DooD siblings), but the drive's CEILING check runs IN wardynd's
+      # own process — it resolves symlinks and fails closed on a path it cannot
+      # stat — so a host_path drive is refused from a sealed wardynd unless the
+      # share is visible in here too. Read-only is enough: wardynd stats the tree
+      # and never writes to it (it does need search/`x` down to each person's
+      # directory — see docs/OPERATIONS.md).
+      #
+      # SINGULAR ON PURPOSE, and NOT the ceiling: the ceiling is the CSV
+      # WARDYN_USER_DRIVE_HOST_ROOTS in the environment block above, and compose
+      # cannot expand a CSV into volume lines. This is the one-root convenience
+      # that covers the ordinary deployment (one share, one mount point); a
+      # ceiling naming several roots needs one more line here per extra root,
+      # copied from this one. Set both, to the same path, e.g.
+      #     WARDYN_USER_DRIVE_HOST_ROOT=/srv/wardyn-drives
+      #     WARDYN_USER_DRIVE_HOST_ROOTS=/srv/wardyn-drives
+      # Default is a harmless empty path, so an unset var still composes and
+      # host_path drives simply stay unavailable (the same opt-in posture the
+      # workspaces root takes).
+      - ${WARDYN_USER_DRIVE_HOST_ROOT:-/var/empty/wardyn-no-user-drive-root}:${WARDYN_USER_DRIVE_HOST_ROOT:-/var/empty/wardyn-no-user-drive-root}:ro
       # Bedrock ~/.aws (WARDYN_BEDROCK_AWS_DIR) — READ-ONLY, mounted at the SAME path
       # inside the container so the host path resolves identically on both sides: the
       # sandbox bind Source is resolved by the HOST dockerd (DooD siblings), and

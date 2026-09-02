@@ -272,7 +272,7 @@ unchanged.
 ### 2.7 Canon frozen here, shipped later
 
 - **The run rail's drive line (§7.8).** The `IdentityWidget` is fed from the run row, and
-  `DESIGN.md` §6.1 residual #36 puts drive persistence on the run row in 0.7.1. The line is
+  `DESIGN.md` §6.1 THREAT-MODEL §4.6 ("concurrent runs share one drive") puts drive persistence on the run row in 0.7.1. The line is
   frozen now so the rail does not get a second copy round; it renders when the run row carries a
   drive, and until then it does not exist.
 - **The `enforcement` vocabulary.** `types.StorageEnforcement` — `filesystem`, `request`,
@@ -301,7 +301,7 @@ unchanged.
 - **No policy field.** The flag is on the run request; `POLICIES.md` gains only the reserved
   target note.
 - **No CLI.** `wardyn drive get|apply` is 0.7.1.
-- **No collision warning** for one person's concurrent runs on one drive (residual #36).
+- **No collision warning** for one person's concurrent runs on one drive (THREAT-MODEL §4.6 ("concurrent runs share one drive")).
 - **No change to `/governance` beyond the third row**, and no change to the Limits lead
   (Q4 — a copy change, owner-gated, not this round's).
 - **No re-record** of the demo videos; 04d and the 12b beat arrive with the feature.

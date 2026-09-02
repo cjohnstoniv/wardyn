@@ -215,9 +215,11 @@ func proxyResources() corev1.ResourceRequirements {
 	return corev1.ResourceRequirements{Requests: list, Limits: list}
 }
 
-// envVars converts a non-secret env map (runner.SandboxSpec.Env) to k8s
-// EnvVar form, mirroring docker's envSlice. Secrets never pass here
-// (invariant 1) — the spec contract forbids it. Sorted by key for a
+// envVars converts a NON-SECRET env map (runner.SandboxSpec.Env) to k8s
+// EnvVar form, mirroring docker's envSlice: an inline Value, which is part of
+// the Pod spec and therefore readable by anyone with pods/get in this
+// namespace. Credential material must never reach this function — it rides
+// runner.SandboxSpec.SecretEnv and secretEnvVars below. Sorted by key for a
 // deterministic pod spec (map iteration order is not).
 func envVars(env map[string]string) []corev1.EnvVar {
 	if len(env) == 0 {
@@ -227,6 +229,42 @@ func envVars(env map[string]string) []corev1.EnvVar {
 	out := make([]corev1.EnvVar, 0, len(env))
 	for _, k := range keys {
 		out = append(out, corev1.EnvVar{Name: k, Value: env[k]})
+	}
+	return out
+}
+
+// secretEnvDataKey is the per-run Secret data key one SecretEnv variable's
+// value is stored under. Prefixed so it can never collide with
+// proxyConfigSecretKey (the proxy config JSON sharing that Secret) whatever a
+// future dispatch lane decides to name a variable. Legal Secret data keys are
+// [-._a-zA-Z0-9]+, a superset of the [A-Z_][A-Z0-9_]* env-var names
+// internal/api's validEnvVarName admits, so a name that reaches here is
+// already a legal key — and one that somehow is not fails the Secret create
+// closed rather than silently dropping a credential.
+func secretEnvDataKey(name string) string { return "env." + name }
+
+// secretEnvVars converts a CREDENTIAL-BEARING env map
+// (runner.SandboxSpec.SecretEnv) into EnvVars that carry only a REFERENCE to
+// the per-run Secret. That is the whole difference from envVars above, and the
+// reason the spec splits the two: a secretKeyRef resolves in the kubelet, so
+// the value never enters the Pod spec that pods/get returns — the same reason
+// the proxy's WARDYN_PROXY_CONFIG_JSON has always travelled this way (see
+// CreateSandbox's Secret step). The container still sees an ordinary
+// environment variable under its own name, so nothing in the sandbox changes.
+// Sorted by key for a deterministic pod spec, like envVars.
+func secretEnvVars(runID uuid.UUID, secretEnv map[string]string) []corev1.EnvVar {
+	if len(secretEnv) == 0 {
+		return nil
+	}
+	keys := slices.Sorted(maps.Keys(secretEnv))
+	out := make([]corev1.EnvVar, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, corev1.EnvVar{Name: k, ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: secretName(runID)},
+				Key:                  secretEnvDataKey(k),
+			},
+		}})
 	}
 	return out
 }

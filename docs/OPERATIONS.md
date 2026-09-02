@@ -545,6 +545,221 @@ the sandbox except `wardyn-proxy`, and the session is still recorded. A governan
 control, not a containment boundary against the operator holding the laptop. Full
 accounting: [docs/DESKTOP.md](DESKTOP.md) "Tamper posture, stated honestly".
 
+### User drives on Docker
+
+A **user drive** is persistent storage an admin registers once and allocates to
+people or groups; a member mounts theirs per run at `/home/agent/drive`. On a
+Docker deployment there are two backends, and the difference is who owns the
+bytes.
+
+**`docker_volume` — Wardyn allocates.** A per-person named volume
+(`wardyn-drive-<home>`), created on first use with the `local` driver and
+mounted at the reserved target. Nothing to configure. It carries three labels:
+`wardyn.drive` = the **drive row's id** (the object name is per *person*, so the
+id is the only thing that groups a drive's volumes together), `wardyn.home` =
+that person's directory name, and `wardyn.subject` = a **digest** of the person
+themselves (never their claim — see the restore note below). Reclaim is a
+command, not a button:
+
+- one person: `docker volume rm wardyn-drive-<home>` — `POST /drives/preview`
+  prints the exact object name for a principal so you need not compute it;
+- one drive, everybody: `docker volume ls --filter label=wardyn.drive=<drive id>`
+  lists every volume that drive allocated.
+
+**Restoring one by hand: re-create it with its labels, and with no `--opt`.**
+Wardyn reuses a volume that already answers to the name, but only when it has
+Wardyn's own shape — the `local` driver and **no driver options** — and refuses
+to mount anything else rather than adopt it. That refusal is deliberate: a
+volume an operator precreated with `--opt type=cifs --opt o=…,password=…` would
+otherwise become somebody's drive, on a share credential Wardyn never chose. So
+a restore is
+
+```
+docker volume create \
+  --label wardyn.managed=true \
+  --label wardyn.drive=<drive id> \
+  --label wardyn.home=<home> \
+  wardyn-drive-<home>
+```
+
+then copy the data in. `wardyn.drive` carries the **drive row's id** (the `id`
+on `GET /api/v1/drives`, and the `Target` of that drive's `drive.write` audit
+row), not the volume's name — the id is what groups every person's object under
+the drive that allocated them. Get it wrong and Wardyn **refuses** the volume
+rather than adopting it: a label naming a *different* drive is how two drives
+whose home names collided would otherwise hand one member the other's storage.
+A volume restored with **no** `wardyn.drive` label at all still mounts (that is
+the fall-back this path is for, and every volume created before the label
+carried an id has none) — it just no longer answers
+`docker volume ls --filter label=wardyn.home=<home>`.
+
+Wardyn also stamps **`wardyn.subject`**, a digest of the person the volume was
+allocated to — never their sign-in claim, because `docker volume inspect` echoes
+labels to anyone who can reach the daemon. It is the discriminator `wardyn.drive`
+cannot be: a volume name carries only the *home*, so one drive whose home
+template folded two people onto one directory would produce one volume that
+*both* their allocations agree belongs to this drive. Wardyn refuses to mount a
+volume stamped for a different person. There is no way to compute the digest by
+hand for a restore, and none is needed: **leave `wardyn.subject` off** the
+`docker volume create` above and the volume mounts, exactly as a label-less
+`wardyn.drive` does.
+
+**`host_path` — you already mount the share.** Wardyn binds **one person's
+subdirectory** of a tree the *operator* mounted host-side. Wardyn never performs
+the share mount, never holds a share credential, and never creates a volume with
+`--opt type=cifs`: those options are stored with the volume and echoed by
+`docker volume inspect` to anyone who can reach the daemon. The recipe:
+
+1. **Mount the share on the host**, in `fstab` or a systemd mount unit:
+
+   ```
+   # SMB — the credential is a root-owned 0600 file, never a mount option in a table
+   //nas.corp/wardyn-drives /srv/wardyn-drives cifs credentials=/etc/wardyn/smb.cred,uid=1000,gid=1000,file_mode=0600,dir_mode=0700,vers=3.1.1 0 0
+   # or Kerberos instead of a service account: replace credentials= with sec=krb5
+   # NFS — export it Wardyn-dedicated and squashed to the sandbox uid
+   nas.corp:/export/wardyn-drives /srv/wardyn-drives nfs4 rw,hard,_netdev 0 0
+   ```
+
+   The matching NFS export line, on the NAS:
+   `/export/wardyn-drives 10.0.0.0/8(rw,all_squash,anonuid=1000,anongid=1000)`.
+
+2. **Make one `0700` subdirectory per person** under the mount point, named the
+   way the drive's home template resolves. There are three templates —
+   `hash` (a digest of the drive id and the subject), `sub` (the sign-in subject
+   claim verbatim) and `email_local` (the part of the email claim before the
+   `@`, the usual shape of a corporate home) — and a **share** drive may only
+   use `sub` or `email_local`: a hash would name a directory nobody created.
+   Per person, a grant's *home override* pins any other name. Wardyn does **not**
+   `mkdir` on a share — a missing home is a `422` at run create ("directory
+   `<home>` does not exist on the share — ask an admin to create it"), not a
+   directory Wardyn invents inside somebody's NAS.
+
+   Two people whose email addresses share the part before the `@` resolve to the
+   **same** home under `email_local` — the segment is validated, not proven
+   unique. On a share that is a tree you own and can inspect: use `sub`, or a
+   per-person home override, where it can happen. On a **managed** drive there
+   is nothing to inspect, so `email_local` is **refused outright** — a
+   `docker_volume` or `k8s_pvc` drive registered with it answers `400
+   home_template "email_local" is not allowed on a managed backend`. Wardyn
+   names a managed object after the home and nothing else, so those two people
+   would be allocated one volume, with write access to each other's files
+   whenever the drive is writable; use `hash` (the default) or `sub`. A row
+   written before this rule is refused at *run* time too (`drive: this
+   deployment cannot mount your drive (…)`), and every managed volume carries a
+   `wardyn.subject` label — a digest of the principal, never the claim — that
+   the driver refuses to mount for anybody else.
+
+3. **Set the ceiling**: `WARDYN_USER_DRIVE_HOST_ROOTS=/srv/wardyn-drives`
+   ([ENV.md](ENV.md)). Unset means **no `host_path` drive may be registered at
+   all** — the same fail-closed posture `WARDYN_MEMBER_WORKSPACE_ROOTS` takes,
+   one level up: a drive's `host_root` is authored in the database by an admin
+   and its subdirectories are bound into *other people's* sandboxes, so the
+   allowlist over it lives where a console compromise cannot reach it. The
+   driver re-checks the **symlink-resolved real path** against these roots as
+   the last thing before the container is created, so a home directory replaced
+   by a symlink out of the share after the drive was registered is refused at
+   run time too — and it now also checks that the resolved directory is still
+   **named after the person it resolved for**, which is what catches a home
+   replaced by a link to the home *next to it* (inside the roots, so the ceiling
+   alone would allow it). A home symlinked onto a second export still works, as
+   long as that export is also a configured root and the directory keeps its
+   name.
+
+   **Two `host_path` drives may not nest.** Registering a drive whose
+   `host_root` is inside — or contains — another `host_path` drive's `host_root`
+   answers `422`, naming the other drive. Drives on the *same* root are fine
+   (one share, two allocations with different home templates), and so are
+   sibling trees; what is refused is one drive rooted inside a tree whose
+   directories another drive's members can rewrite from inside a run.
+
+**On the Compose stack, wardynd must be able to SEE the root — set two
+variables.** The bind's source is resolved by the host daemon (wardynd's
+sandboxes are sibling containers), but the ceiling check resolves symlinks and
+fails closed on a path it cannot stat, so a `host_path` drive registered from a
+containerised wardynd is refused unless the share is visible inside it too.
+`docker-compose.yaml` carries both halves already — nothing to hand-edit:
+
+```
+WARDYN_USER_DRIVE_HOST_ROOTS=/srv/wardyn-drives   # the ceiling wardynd enforces
+WARDYN_USER_DRIVE_HOST_ROOT=/srv/wardyn-drives    # compose binds this one, RO, same path
+```
+
+in `deploy/compose/.env` (or the environment `docker compose` is run with).
+Unset, both default to nothing exposed — the same opt-in posture
+`WARDYN_WORKSPACES_ROOT` and `WARDYN_MEMBER_WORKSPACE_ROOTS` take.
+
+**One root on Compose.** The ceiling is a CSV and may name several roots;
+the bind is singular, because compose cannot expand a CSV into volume lines. A
+deployment whose ceiling names more than one root adds one more volume line per
+extra root in `deploy/compose/docker-compose.yaml`, copied from the
+`WARDYN_USER_DRIVE_HOST_ROOT` line — or runs wardynd on the host, or on
+Kubernetes, where no bind is involved and the ceiling is the only thing to set.
+
+Read-only is enough for wardynd: it stats the tree and never writes to it. It
+does need **search (`x`) permission down to the person's directory**, though,
+because the bind-time ceiling check resolves symlinks in *wardynd's own
+process* — so a CIFS mount table line like the `dir_mode=0700,uid=1000` one
+above works when wardynd runs as root or as uid 1000, and otherwise needs
+`dir_mode=0750,gid=<wardynd's gid>` (or the equivalent NFS export mode). A
+share wardynd cannot traverse fails every drive on it closed at run create —
+with `drive: this deployment cannot mount your drive (host_root … could not be
+resolved on this host …)` when the **root itself** is what wardynd cannot
+resolve, and with `drive: directory <home> does not exist on the share — ask an
+admin to create it` when the root resolves but the person's directory does not
+stat (a home that was never created, and a home behind a directory whose
+permissions hide it, are the same sentence). The sandbox's own mode comes from
+the allocation, not from this line. A `docker_volume` drive needs none of this —
+there is no host path to see.
+
+**Why every sandbox is uid 1000, and what that buys.** Every agent image is
+`USER agent` (uid 1000), and every agent image pre-creates `/home/agent/drive`
+owned by agent — the ones built on a public base do it themselves, the ones
+built on a sibling image inherit it — so a fresh managed volume inherits that
+ownership by Docker's copy-up. Isolation between people is the **bind of the
+subdirectory**, never the uid: a run sees its own home and has no path to the
+root or to anyone else's. NFS `AUTH_SYS` trusts the client's uid, which is why
+the export above is Wardyn-dedicated and squashed rather than a corporate home
+tree. An existing corporate home directory owned by a per-user uid is supported
+**read-only where readable, and refused otherwise**.
+
+A **BYOI** image is your own to get right on this one point: a custom base that
+never creates `/home/agent/drive` gets a root-owned one from the daemon at mount
+time, so a drive you allocated writable is unwritable by uid 1000 on its first
+run. `deploy/images/README.md`'s image contract states the one line that fixes
+it; wardynd will not chown volume state to compensate.
+
+**gVisor (CC2): if a share bind misbehaves under `runsc`, turn `directfs`
+off.** Wardyn does not claim this is required — `runsc`'s own filesystem
+guidance ([gvisor.dev](https://gvisor.dev/docs/user_guide/filesystem/)) is the
+reference, and whether a given network-backed mount needs direct host-FD access
+disabled depends on the share. If a `host_path` drive reads or writes wrongly
+under CC2 and works under CC1, this is the first thing to try. It is a
+**daemon** setting, not a Wardyn one — add it to the runtime in
+`/etc/docker/daemon.json` and restart the daemon:
+
+```json
+{ "runtimes": { "runsc": { "path": "/usr/local/bin/runsc", "runtimeArgs": ["--directfs=false"] } } }
+```
+
+CC1 (`runc`) and CC3 (Kata) need nothing. Wardyn's own runsc tweaks are
+unchanged: this is an operator recipe, and the product does not rewrite your
+daemon config.
+
+**What a drive's SIZE means here.** Quoted verbatim, and the same sentence the
+console renders:
+
+> Wardyn never enforces a drive's size itself. On Kubernetes the size is the
+> volume request and the storage class decides whether it binds — block disks
+> do, network-share provisioners do not. On Docker a managed drive has no byte
+> cap, the same gap `disk_mib` has. A share is bounded by its own quota. The
+> size you see is the allocation, not a guarantee.
+
+Concretely on Docker: a `docker_volume` drive reports `enforcement: none` —
+`--storage-opt size` caps only a container's writable layer, never a volume, and
+an XFS project quota needs `CAP_SYS_ADMIN` the control plane must not hold. A
+`host_path` drive reports `enforcement: external`: the NAS's own quota binds it,
+and Wardyn displays the allocation.
+
 ### Capabilities: what one member, or one group, may do
 
 The role split above is deployment-wide. A **capability grant** is per-human: a
@@ -2223,6 +2438,201 @@ run its own origin, with an enter on any other host refused outright. Full
 recipe, including the wildcard Ingress, in
 [docs/UI-SANDBOXES.md §4](UI-SANDBOXES.md#4-deployment) and the chart section
 linked above.
+
+### User drives on Kubernetes
+
+A **user drive** is per-person storage a run mounts at `/home/agent/drive`. On
+this substrate it is always a PersistentVolumeClaim — a pod cannot bind a host
+path, and Pod Security Standards forbids `hostPath` at Baseline and Restricted
+alike, so no drive backend offers one.
+
+**Two backends, two lifecycles.** A **managed** drive (`k8s_pvc`) is one claim
+per person, named `wardyn-drive-<drive>-<home>`, created by wardynd on the first
+run that mounts it — `accessModes: [ReadWriteOnce]`, the allocation as
+`resources.requests.storage`, and the drive's own storage class when it has one
+(empty = the cluster default). A **share** (`k8s_pvc_static`) is a claim an admin
+provisioned — typically over an NFS/SMB export — and wardynd only ever looks it
+up by name. A missing one fails the run with *"your drive's volume is not
+provisioned on this cluster"* rather than being invented as an empty volume where
+somebody's files were meant to be.
+
+**RBAC is two verbs.** `userDrives.enabled=true` adds exactly
+`persistentvolumeclaims: ["get","create"]` to the namespaced runner Role
+(`deploy/helm/wardyn/templates/rbac.yaml`): `get` because a claim is always
+resolved by name first, and is all a share ever needs; `create` for a managed
+drive's first use. Leave it on for **any** drive at all. With it off, EVERY
+drive's run fails at dispatch — the lookup is the first call a drive makes and a
+share makes no other — and the run's failure hint names the switch. Both the Get
+and the Create map their 403 onto that one refusal, because the apiserver's own
+"cannot get resource" text names nothing an operator can flip. A 403 has a second
+cause that no status code distinguishes from the first and that takes the
+opposite remedy — a namespace `ResourceQuota` refusing the claim — so wardynd
+picks which of the two the hint names, on the `exceeded quota` substring the
+quota admission plugin always emits. A hint naming `ResourceQuota` means the
+quota, and RBAC is not the problem.
+
+**The failure hint does not quote the apiserver, and the daemon log does.** A raw
+403 reads `User "system:serviceaccount:<ns>:<sa>" cannot get resource ...`, and a
+run's failure hint is read by the member whose run failed — so the hint carries
+the claim name and one remedy, and nothing that names this cluster. The
+apiserver's own sentence goes to the daemon log instead, with the verb, the
+claim, the namespace, the drive id and the refusal verbatim; grep it for `the
+apiserver refused a drive claim`. The claim name appears in both halves, so a
+member's report of a failed run joins to the full text without anybody having
+been handed the runs namespace or the runner's ServiceAccount name.
+
+**Renaming a drive orphans its claims, and Wardyn will not clean that up.** A
+claim's name folds the drive's NAME into a slug (`wardyn-drive-<drive>-<home>`),
+so renaming a drive in the console changes the name every FUTURE claim is
+created under. The claims already provisioned keep their old names, keep the
+member data in them, and are never looked up again — the next run for each
+person provisions a fresh, empty claim under the new name. Nothing deletes the
+old ones, on purpose: Wardyn holds no `delete` verb, and a rename must never be
+able to destroy storage. The `wardyn.drive` label carries the drive's row **id**
+rather than its name precisely so the orphans stay findable:
+
+```sh
+kubectl -n <runsNamespace> get pvc -l wardyn.drive=<drive-id>
+```
+
+Everything that comes back under a name that is not `wardyn-drive-<new-slug>-*`
+predates the rename. Move the data (`kubectl cp`, or a snapshot restore into the
+new claim) and reclaim the old claim with the `delete pvc` above. The cheap
+alternative is not renaming a drive that has claims.
+
+**The console does not warn about this**, and in 0.7 it does not refuse it
+either: a rename with grants attached is accepted like any other edit. Treat the
+rename field as an operator action with a runbook, not a label edit.
+
+**An existing claim's SHAPE is reused as it is, and logged rather than
+enforced.** A managed claim is looked up by name and mounted whatever its spec
+says. If its shape disagrees with the drive row — a different storage class, a
+different `requests.storage`, an access mode that is not `ReadWriteOnce` —
+wardynd logs one warning naming the claim and every disagreement, and mounts it
+anyway. That is deliberate: the claim is the member's data, a PVC request cannot
+be shrunk, and refusing the run would mean an admin editing an allocation in the
+console breaks every existing member's runs. Grep the daemon log for `disagrees
+with the drive` when a console size and a pod's actual volume do not match.
+
+**Two states are refusals, not warnings.** A claim that is **Terminating** fails
+the run outright: a pod mounting a claim under deletion never schedules, and
+re-creating it under the same name would undo the reclaim somebody is in the
+middle of. So does a claim whose IDENTITY labels are not this run's — a managed
+claim whose `wardyn.drive` or `wardyn.home` names a different pair, or a share
+whose claim turns out to carry `wardyn.managed=true` (i.e. it is one person's
+managed drive, not an admin's share). That one is the collision the object name
+cannot rule out: `wardyn-drive-<slug>-<home>` joins two variable-width fields
+with the separator both of them admit, so drive `eng` + home `us-bob` and drive
+`eng-us` + home `bob` resolve to the same claim name. Wardyn holds no `delete`
+verb and cannot repair the collision, so it refuses the run rather than mount
+one member's private drive inside another member's agent. The fix is to rename
+one of the two drives (see the rename caveat above) or to give the colliding
+people distinct home names.
+
+Both refusals also cover the loser of a create race. Two first runs can collide
+inside the lookup→create window, and the loser's create comes back
+`AlreadyExists`; it re-reads the claim that won rather than mounting on the
+strength of the name, so the identity and Terminating answers are the same ones,
+one moment later. If the winning claim has been deleted again by the time the
+loser looks — a reclaim landing mid-dispatch — the run is refused with *"your
+drive's volume claim was deleted while your run was starting"*, and starting it
+again is the whole remedy: nothing re-creates a claim somebody is reclaiming.
+
+**`ReadWriteOnce` binds a claim to one node.** A managed drive is provisioned
+RWO, so a person's second concurrent run schedules onto the node their first run
+landed on — or stays Pending until that run ends. The pod's failure reads
+`0/N nodes are available: pod has unbound immediate PersistentVolumeClaims` or a
+volume-node-affinity conflict, and wardynd surfaces the scheduler's own
+`PodScheduled` message in the run's failure hint rather than a bare timeout. The
+same message is what a claim that never bound at all produces — a storage class
+with no provisioner, or no default class on the cluster for a drive that names
+none. If members routinely run several sandboxes at once, provision the drive's
+class as `ReadWriteMany` storage and pre-create the claims as a
+`k8s_pvc_static` share; Wardyn's managed backend does not offer RWX, because a
+concurrently-written shared home is a data-loss shape, not a feature.
+
+**Backup.** A drive is *not* in `pg_dump` — the database holds the drive rows and
+the allocations, never the bytes. Back the volumes up the way the cluster already
+backs up claims: a `VolumeSnapshotClass` snapshot per claim, or
+`kubectl -n <ns> cp <pod>:/home/agent/drive <dest>` from a pod that mounts one. A
+share is backed up by whoever owns the export, not by Wardyn.
+
+**Offboarding — the reclaim command.** Deleting the allocation in the console is
+the product-side half and it deletes no data. Reclaiming the storage is one
+deliberate operator command, and Wardyn holds no `delete` verb that could do it
+by accident:
+
+```sh
+kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive>-<home>
+```
+
+The drive's `when a person leaves` column records the intent (`retain` or
+`delete`) so the log says what the operator was told to do; the console's drive
+preview prints that exact object name for a person, so nobody recomputes a home
+segment by hand. The claim carries `wardyn.managed`, `wardyn.drive` (the drive's
+row **id**, not its name, so the claims a rename orphans stay findable with the
+`get pvc -l wardyn.drive=<drive-id>` above) and `wardyn.home` labels — the same
+pair the Docker driver stamps on a managed volume — and, deliberately, **no
+`wardyn.run-id`**, so the per-run teardown sweep (a `DeleteCollection` selecting
+on exactly that label) cannot reach it. That pair is also what the driver checks
+before it mounts anything: see the two refusals above.
+
+**Ownership, and where fsGroup stops working.** A pod with a drive carries
+`fsGroup: 1000` (a GROUP id — it happens to equal the uid every agent image runs as, but this field can never make a volume user-owned) with
+`fsGroupChangePolicy: OnRootMismatch` — `Always` would recursively chown a large
+drive on every single run. The kubelet applies fsGroup for CSI drivers that
+declare `ReadWriteOnceWithFSType` volume ownership, i.e. block storage: the
+managed case is correct by construction. It does **not** apply to an NFS-type
+volume. A static share is owned by whatever its export says, so map it there — a
+Wardyn-dedicated export with `all_squash,anonuid=1000,anongid=1000`, or per-user
+`0700` subdirectories — and expect a read-only mount where an existing corporate
+home is owned by a different uid.
+
+**gVisor wants `directfs` off for a drive, and the annotation is a request.**
+The Wall (CC2) and Vault (CC3) tiers run the agent pod under a RuntimeClass; when
+its handler is `runsc`, gVisor's `directfs` has the gofer donate a file
+descriptor per mount point to the sandbox, which then operates on the file
+directly. That is right for a block PVC and wrong for a network-backed export —
+a `k8s_pvc_static` share over NFS/SMB. gVisor takes the override **per mount**,
+from a pod annotation keyed by the volume's own name, and wardynd stamps it on
+every drive pod whose resolved handler is `runsc`:
+
+```yaml
+dev.gvisor.spec.mount.drive.directfs: "off"
+```
+
+containerd only forwards it when the node's runsc runtime section allows the
+prefix, so on a cluster whose `/etc/containerd/config.toml` does not carry
+
+```toml
+pod_annotations = ["dev.gvisor.*"]
+```
+
+the annotation is inert and the node-level setting is the one that applies:
+`--directfs=false` in the runsc shim's own config (`/etc/containerd/runsc.toml`,
+or the `runtimeArgs` a node image bakes in). Either is fine; the annotation is
+per-pod and the flag is per-node. See
+[gVisor's containerd configuration guide](https://gvisor.dev/docs/user_guide/containerd/configuration/).
+
+The companion caveat is CACHING, and it cuts the other way. runsc serves bind
+mounts `shared` by default (`--file-access-mounts=shared`), revalidating against
+the host because it cannot assume exclusive access. An operator who has set
+`--file-access-mounts=exclusive` for throughput must **not** do so on nodes that
+run drive pods over a share other writers touch: exclusive mode caches
+aggressively, and a file another writer changes is not seen. A managed
+(`k8s_pvc`) drive is exclusive to its pod by construction and is unaffected. See
+[gVisor's filesystem guide](https://gvisor.dev/docs/user_guide/filesystem/).
+
+**Size is an allocation, not a limit**, and the product says so in one frozen
+sentence: *"Wardyn never enforces a drive's size itself. On Kubernetes the size
+is the volume request and the storage class decides whether it binds — block
+disks do, network-share provisioners do not. On Docker a managed drive has no
+byte cap, the same gap `disk_mib` has. A share is bounded by its own quota. The
+size you see is the allocation, not a guarantee."* That is the `enforcement`
+vocabulary this feature introduces (`filesystem` / `request` / `external` /
+`none`): a managed claim is `request`, a share is `external`. It is the same
+honesty the `DiskMiB` gap below is written with, and the two will converge on one
+vocabulary.
 
 ## One replica, by construction
 
