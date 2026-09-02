@@ -503,6 +503,8 @@ time) and one must be able to change without the other.
 | `LIMIT_EXEC_HINT` | `task_mode=exec` runs a command with no agent, so no tool rule is ever consulted. |
 | `LIMIT_INTERACTIVE_LABEL` | Deny interactive runs |
 | `LIMIT_INTERACTIVE_HINT` | An interactive run is supervised at the attach pane rather than by rules. A run with no task comes up interactive too, and is refused the same way. |
+| `LIMIT_DRIVE_LABEL` | Deny mounting a user drive |
+| `LIMIT_DRIVE_HINT` | A run under this profile cannot mount the person's drive, even when one is allocated to them. |
 | `GRADE_NOTE` | Grades this ceiling as written — advisory, the same meter the policy editor shows. |
 | `SAVE` | Save profile |
 | `SAVE_ERROR` | Couldn't save this profile. |

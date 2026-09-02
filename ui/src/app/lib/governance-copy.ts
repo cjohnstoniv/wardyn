@@ -132,6 +132,9 @@ export const GOVERNANCE = {
     "An interactive run is supervised at the attach pane rather than by rules. A run with no task comes up interactive too, and is refused the same way.",
   GRADE_NOTE: "Grades this ceiling as written — advisory, the same meter the policy editor shows.",
   SAVE: "Save profile",
+  LIMIT_DRIVE_LABEL: "Deny mounting a user drive",
+  LIMIT_DRIVE_HINT:
+    "A run under this profile cannot mount the person's drive, even when one is allocated to them.",
   SAVE_ERROR: "Couldn't save this profile.",
 
   // ---- §7.3 assignments and the resolved preview ----
