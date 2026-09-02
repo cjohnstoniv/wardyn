@@ -6,7 +6,67 @@
 // Health/liveness, session (logout/whoami), and the operator-wide site config.
 // The small "server & session" surface the shell always needs.
 import type { SiteConfig } from "../types";
+import type { DriveBackend, StorageEnforcement } from "./drives";
 import { asJson, wfetch } from "./core";
+
+// GET /me's `user_drive` (0.7, migration 0054) — what this caller would mount
+// if they asked for it on their next run, or null when they would mount
+// nothing. Mirrors internal/api/user_drives.go's meUserDrive 1:1, omitempty
+// included: an absent size_mib is "no allocation shown" (the copy module's
+// _NOSIZE twins), an absent paused is false.
+//
+// It carries NO DOOR FIELD, deliberately: the door is a property of the
+// caller's PROFILE, not of the allocation, and rides beside it as
+// Me.user_drive_denied_by_profile. Folding them would make the two states the
+// member surfaces exist to tell apart — "denied AND unallocated" vs "simply
+// unallocated" — inexpressible.
+export interface MeUserDrive {
+  name: string;
+  // The registry's own two unions (api/drives.ts), not a second spelling of
+  // them: /me answers with the very backend and enforcement the /drives screen
+  // registered, so a fifth backend added there must not typecheck here until
+  // this surface has been thought about.
+  backend: DriveBackend;
+  /** Omitted (or 0) means no allocation is shown, never "zero bytes". */
+  size_mib?: number;
+  writable: boolean;
+  enforcement: StorageEnforcement;
+  home_name?: string;
+  /** Allocated, then disabled by an admin. Omitted when false. */
+  paused?: boolean;
+}
+
+// GET /me — see whoami() below for where each field comes from. ONE
+// declaration rather than the two identical inline literals this used to
+// carry: a field added to the promise type and forgotten in the response cast
+// is a field the console silently cannot read.
+export interface Me {
+  principal: string;
+  method: string;
+  operator: boolean;
+  security_operator: boolean;
+  role: "admin" | "security_admin" | "member";
+  email: string;
+  // ISO timestamp the SSO session dies at, with no refresh (W31-S1-7) —
+  // present only for method:"sso". Absent for local/token auth, which has no
+  // session to expire.
+  session_expires_at?: string;
+  // M3 — presentational label of this member's WARDYN_MEMBER_WORKSPACE_ROOTS
+  // /_MAP constraint (e.g. "/home/agent-projects"). null/absent when no root
+  // applies (member-role-desktop.md §DECISIONS O1). Never a value to trust —
+  // AddWorkspaceDialog shows it as a hint; ValidateMemberMountSource enforces.
+  member_local_dir_root?: string | null;
+  // The caller's own user drive, null-means-no-allocation — see MeUserDrive.
+  // Absent on a pre-0.7 daemon, which reads the same as "none".
+  user_drive?: MeUserDrive | null;
+  // THE DOOR: the governance profile's NAME when its DenyUserDrive limit
+  // refuses this caller a drive, "" when it does not. Always present on a 0.7
+  // daemon (never omitted), so an absent key is an older server rather than an
+  // open door. Non-empty is the whole bit — and it renders even when
+  // user_drive is null, the state where "ask an admin for an allocation" is
+  // the wrong advice.
+  user_drive_denied_by_profile?: string;
+}
 
 // Result of a real throwaway-sandbox probe (test-proxy / test-redirect) —
 // never a cached or inferred verdict (T.TEST_STANDING). "bypass" is the
@@ -198,37 +258,14 @@ export const health = {
   // permissions, governance profiles). `operator` deliberately stays
   // super-admin-only — the two are NOT complementary now that role has three
   // values, so gate each control on the one that matches its route.
-  async whoami(): Promise<{
-    principal: string;
-    method: string;
-    operator: boolean;
-    security_operator: boolean;
-    role: "admin" | "security_admin" | "member";
-    email: string;
-    // ISO timestamp the SSO session dies at, with no refresh (W31-S1-7) —
-    // present only for method:"sso". Absent for local/token auth, which has
-    // no session to expire.
-    session_expires_at?: string;
-    // M3 — presentational label of this member's WARDYN_MEMBER_WORKSPACE_ROOTS
-    // /_MAP constraint (e.g. "under /home/agent-projects"). null/absent when
-    // no root applies to this member (member-role-desktop.md §DECISIONS O1).
-    // Never sent as a value to trust — AddWorkspaceDialog shows it as a hint;
-    // ValidateMemberMountSource enforces at bind time.
-    member_local_dir_root?: string | null;
-  } | null> {
+  // `user_drive` / `user_drive_denied_by_profile` are the 0.7 member-drive
+  // pair — see MeUserDrive above for why the door is a sibling field and not
+  // a property of the allocation.
+  async whoami(): Promise<Me | null> {
     try {
       const res = await wfetch("/me", { method: "GET" });
       if (!res.ok) return null;
-      return (await res.json()) as {
-        principal: string;
-        method: string;
-        operator: boolean;
-        security_operator: boolean;
-        role: "admin" | "security_admin" | "member";
-        email: string;
-        session_expires_at?: string;
-        member_local_dir_root?: string | null;
-      };
+      return (await res.json()) as Me;
     } catch {
       return null;
     }

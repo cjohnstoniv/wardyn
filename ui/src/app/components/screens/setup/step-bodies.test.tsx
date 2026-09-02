@@ -14,7 +14,7 @@
 // setup/corp-network-step.test.tsx. SourcesStep/ImagesStep went the same way
 // when sources-library.tsx/image-catalog.tsx were deleted.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { SetupStatus } from "../../../lib/types";
@@ -52,6 +52,11 @@ vi.mock("../../../lib/api/workspaces", () => ({
     createWorkspace: (...a: unknown[]) => createWorkspaceMock(...a),
   },
 }));
+// The Workspaces step's user-drives card summarises GET /drives.
+const getDrivesMock = vi.fn();
+vi.mock("../../../lib/api/drives", () => ({
+  drives: { getDrives: (...a: unknown[]) => getDrivesMock(...a) },
+}));
 vi.mock("../../../lib/api/policies", () => ({
   policies: { listPolicies: () => Promise.resolve([]), createPolicy: vi.fn() },
 }));
@@ -62,6 +67,7 @@ vi.mock("../../../lib/api/runs", () => ({
 import { ReviewStep, WorkspacesStep } from "./step-bodies";
 import { deriveReadiness } from "../../../lib/readiness";
 import { baseStatus as sharedBaseStatus } from "../../../lib/test-fixtures";
+import { OperatorProvider } from "../../wardyn/operator-context";
 import type { Workspace } from "../../../lib/types";
 
 // This suite's own pin is its `checks` array (gvisor/loopback/kvm/platform_wsl).
@@ -107,6 +113,36 @@ describe("step-bodies.tsx — smoke", () => {
     getSiteConfigMock.mockReset().mockResolvedValue({});
     putSiteConfigMock.mockReset().mockResolvedValue(undefined);
     createWorkspaceMock.mockReset();
+    getDrivesMock
+      .mockReset()
+      .mockResolvedValue({ drives: [], grants: [], host_roots_configured: false, runner_target: "docker" });
+  });
+
+  // Persistent storage is not a workspace and gets no step of its own, so this
+  // card under the list is the only place the funnel mentions it — the SAME
+  // component Settings draws as its fifth card. SUPER-only, and the gate is the
+  // provider's, not a guess: a security admin gets no card and the step asks
+  // GET /drives nothing.
+  it("WorkspacesStep carries the user-drives card, and only for the SUPER tier", async () => {
+    render(
+      <MemoryRouter>
+        <WorkspacesStep workspaces={[]} loading={false} onReload={vi.fn()} />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByTestId("user-drives-card")).toBeInTheDocument();
+
+    cleanup();
+    getDrivesMock.mockClear();
+    render(
+      <MemoryRouter>
+        <OperatorProvider operator={false} securityOperator>
+          <WorkspacesStep workspaces={[]} loading={false} onReload={vi.fn()} />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("No workspaces onboarded yet.")).toBeInTheDocument();
+    expect(screen.queryByTestId("user-drives-card")).toBeNull();
+    expect(getDrivesMock).not.toHaveBeenCalled();
   });
 
   // sources-library.tsx/image-catalog.tsx are gone — SourcesStep/ImagesStep

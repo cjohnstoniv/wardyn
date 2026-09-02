@@ -38,14 +38,17 @@ import {
 import { EPISODES_COPY as EP, MEMBER_GETTING_STARTED as T } from "../../wardyn/copy";
 import { CC_META } from "../../wardyn/cc-meta";
 import { strongestAvailable } from "../../wardyn/default-confinement";
-import { useMemberLocalDirRoot } from "../../wardyn/operator-context";
+import { useMemberLocalDirRoot, useUserDrive } from "../../wardyn/operator-context";
 import { setup as setupApi } from "../../../lib/api/setup";
+import type { MeUserDrive } from "../../../lib/api/health";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { policies as policiesApi } from "../../../lib/api/policies";
 import { sshKeys as sshKeysApi } from "../../../lib/api/ssh-keys";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { MEMBER } from "../../../lib/governance-copy";
+import { DRIVE_MEMBER } from "../../../lib/user-drives-copy";
+import { driveModeWord, driveSizeLabel } from "../../../lib/user-drives-display";
 import { MEMBER_WORKSPACE } from "../../../lib/permissions-copy";
 import { EPISODES } from "../../../lib/demo-videos";
 import { EpisodeRow } from "./episode-card";
@@ -121,6 +124,16 @@ export function MemberGettingStarted() {
       active = false;
     };
   }, []);
+
+  // This member's own drive (nil-means-no-allocation), off the shell's ONE GET
+  // /me rather than a second one of this page's own — see
+  // operator-context.tsx's UserDriveContext. null for a member with none, for
+  // an older daemon, and for a read that failed: all three render as today's
+  // page, no chip and no sentence. §7.6's drive moments here are the
+  // allocation's own, so the door (deniedByProfile) is deliberately NOT read:
+  // nothing on this page offers a mount, so there is nothing for it to refuse.
+  // It renders where the offer is, on the New Run card.
+  const { drive: userDrive } = useUserDrive();
 
   const [sshKeyCount, setSshKeyCount] = React.useState<number | null>(null);
   React.useEffect(() => {
@@ -218,6 +231,11 @@ export function MemberGettingStarted() {
                 {governanceProfile && (
                   <Chip tone="neutral">{MEMBER.GS_CHIP(governanceProfile)}</Chip>
                 )}
+                {/* §7.6, and neutral for the same reason as the two before
+                    it: which drive is allocated to you is a fact about this
+                    deployment, not a success. Absent when nothing is
+                    allocated — no chip, no placeholder. */}
+                {userDrive && <Chip tone="neutral">{driveChipLabel(userDrive)}</Chip>}
               </div>
               <p className="mt-3 text-sm text-muted-foreground">
                 {T.SETUP_SUMMARY_HELPER}
@@ -239,6 +257,13 @@ export function MemberGettingStarted() {
           right={workspaceDone ? <DoneChip /> : undefined}
         >
           <p className="text-sm text-muted-foreground">{T.WORKSPACE_BODY}</p>
+          {/* Placed in THIS card because this is the one place a drive and a
+              workspace get conflated: the sentence says a drive is not one.
+              Only when there IS a drive — with none there is nothing to
+              distinguish it from. */}
+          {userDrive && (
+            <p className="mt-1 text-sm text-muted-foreground">{DRIVE_MEMBER.GS_DRIVE_BODY}</p>
+          )}
           <p className="mt-1 text-sm text-muted-foreground">
             {memberLocalDirHint(memberLocalDirRoot)}
           </p>
@@ -353,4 +378,18 @@ function memberLocalDirHint(root: string | null): string {
   return root
     ? MEMBER_WORKSPACE.ROOT_HINT(root)
     : MEMBER_WORKSPACE.LOCAL_DIR_UNAVAILABLE_BODY;
+}
+
+// §7.6's chip, in BARRIER_CHIP's own `Label · value` shape. Paused wins over
+// the size and the mode: an allocation an admin has disabled mounts nothing
+// next run, so naming its size would describe storage this member cannot
+// reach. size_mib = 0 takes the _NOSIZE twin rather than putting "No
+// allocation shown" inside a member's sentence.
+function driveChipLabel(drive: MeUserDrive): string {
+  if (drive.paused) return DRIVE_MEMBER.GS_DRIVE_CHIP_PAUSED(drive.name);
+  const mode = driveModeWord(drive.writable);
+  const size = driveSizeLabel(drive.size_mib);
+  return size
+    ? DRIVE_MEMBER.GS_DRIVE_CHIP(drive.name, size, mode)
+    : DRIVE_MEMBER.GS_DRIVE_CHIP_NOSIZE(drive.name, mode);
 }

@@ -38,6 +38,7 @@ vi.mock("sonner", () => ({
 import { WorkspacesScreen, sourceSubLine, workspaceImage } from "./workspaces";
 import { WorkspaceLLMCredDialog } from "./workspace-llm-cred";
 import { OperatorProvider, RoleProvider } from "../wardyn/operator-context";
+import { DRIVES } from "../../lib/user-drives-copy";
 
 function renderScreen() {
   return render(
@@ -342,5 +343,36 @@ describe("WorkspaceLLMCredDialog", () => {
     const workspace = ws({}, { llm_cred: { integration_ref: "ai-gone" } });
     render(<WorkspaceLLMCredDialog workspace={workspace} onOpenChange={vi.fn()} onSaved={vi.fn()} />);
     expect(await screen.findByRole("radio", { name: /ai-gone \(not in the Integrations list\)/i })).toBeChecked();
+  });
+});
+
+// The /drives door (0.7 user drives, prompt §6). This screen has no nav item to
+// offer and neither does /drives, so the header's outline button IS the entry
+// point — and it is SUPER-only, because a member and a security admin have
+// nothing to act on there.
+describe("WorkspacesScreen — the User drives door", () => {
+  beforeEach(() => {
+    listWorkspacesMock.mockReset().mockResolvedValue([ws({}, { status: "scanned" })]);
+  });
+
+  it("an operator gets it beside Add workspace, outline — the teal stays on Add workspace", async () => {
+    renderScreen();
+    const door = await screen.findByRole("button", { name: DRIVES.TITLE });
+    expect(door.className.split(/\s+/)).not.toContain("bg-primary");
+    expect(screen.getByRole("button", { name: /add workspace/i }).className.split(/\s+/)).toContain("bg-primary");
+  });
+
+  it("a member never sees it — /drives is SUPER and the entry points say so", async () => {
+    render(
+      <OperatorProvider operator={false}>
+        <RoleProvider role="member">
+          <MemoryRouter>
+            <WorkspacesScreen />
+          </MemoryRouter>
+        </RoleProvider>
+      </OperatorProvider>,
+    );
+    await screen.findByRole("button", { name: /add workspace/i });
+    expect(screen.queryByRole("button", { name: DRIVES.TITLE })).not.toBeInTheDocument();
   });
 });

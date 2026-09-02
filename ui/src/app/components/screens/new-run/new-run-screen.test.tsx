@@ -53,17 +53,64 @@ const listWorkspacesMock = vi.fn();
 vi.mock("../../../lib/api/workspaces", () => ({
   workspaces: { listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a) },
 }));
+// A MEMBER's console asks GET /me/capabilities (useMyCapabilities is gated on
+// !operator), so the member cases below need that hook answered. Only the hook
+// is replaced — capabilityAllowed stays the real matcher, since it is what
+// decides whether the selected workspace is annotated as ungranted.
+const myCapabilitiesMock = vi.fn();
+vi.mock("../../../lib/capabilities", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/capabilities")>(
+    "../../../lib/capabilities",
+  );
+  return { ...actual, useMyCapabilities: (...a: unknown[]) => myCapabilitiesMock(...a) };
+});
 
 import { NewRunScreen } from "./new-run-screen";
-import { baseStatus } from "../../../lib/test-fixtures";
+import type { Me } from "../../../lib/api/health";
+import { baseMe, baseMeDrive, baseStatus } from "../../../lib/test-fixtures";
+import { OperatorProvider } from "../../wardyn/operator-context";
 import { GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
+import { DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
-function renderScreen() {
+// The Workspace card's drive block reads the shell's ONE GET /me off the
+// context (operator-context's UserDriveContext), not a fetch of its own — so a
+// case states its /me body here, exactly as app-shell hands it down. The
+// default carries NEITHER /me drive bit: no allocation and no door, which is
+// what every case below except the drive ones is, and which must render as
+// today's card.
+//
+// `operator` stays TRUE — the context's own fail-open default, which this suite
+// has always run on. It gates useMyCapabilities, not the drive.
+function renderScreen(me: Me = baseMe()) {
   return render(
     <MemoryRouter>
-      <NewRunScreen />
+      <OperatorProvider
+        operator
+        userDrive={me.user_drive}
+        userDriveDeniedByProfile={me.user_drive_denied_by_profile}
+      >
+        <NewRunScreen />
+      </OperatorProvider>
+    </MemoryRouter>,
+  );
+}
+
+// The same screen for the tier that actually MOUNTS a drive. `operator={false}`
+// is not cosmetic here: it is what turns useMyCapabilities on, so the member
+// path runs code no admin case above reaches.
+function renderAsMember(me: Me = baseMe()) {
+  return render(
+    <MemoryRouter>
+      <OperatorProvider
+        operator={false}
+        securityOperator={false}
+        userDrive={me.user_drive}
+        userDriveDeniedByProfile={me.user_drive_denied_by_profile}
+      >
+        <NewRunScreen />
+      </OperatorProvider>
     </MemoryRouter>,
   );
 }
@@ -75,6 +122,9 @@ beforeEach(() => {
   navigateMock.mockReset();
   createRunMock.mockReset().mockResolvedValue({ id: "run_1" });
   getDefaultPolicyMock.mockReset().mockResolvedValue({ min_confinement_class: "CC1" });
+  // null is what the real hook returns for an admin (exempt) and for a set that
+  // has not loaded — the answer every admin case above has always run on.
+  myCapabilitiesMock.mockReset().mockReturnValue(null);
 });
 
 // Regression: useWorkspaceList does NOT fetch on mount — each caller loads it
@@ -468,5 +518,85 @@ describe("NewRunScreen — the title's error state", () => {
 
     await user.type(title, "Refund flow");
     expect(title).not.toHaveAttribute("aria-invalid");
+  });
+});
+
+// The card's own render matrix lives in workspace-card.test.tsx. What is
+// pinned HERE is the seam between them: that this screen reads /me, hands both
+// bits to the card, and puts what the member ticked on the wire. A block that
+// renders perfectly from props it is never given is the failure a component
+// test cannot see.
+describe("NewRunScreen — the member's drive reaches the wire", () => {
+  const withDrive = baseMe({ user_drive: baseMeDrive() });
+
+  it("sends drive {enabled, read_only} for a ticked box and a narrowed mount", async () => {
+    renderScreen(withDrive);
+    await user.click(await screen.findByLabelText(DM.NR_CHECKBOX));
+    await user.click(screen.getByLabelText(DM.NR_READONLY_TOGGLE));
+    await user.type(screen.getByLabelText("Title"), "Refund flow");
+    await user.click(screen.getByRole("button", { name: /Launch run/ }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalled());
+    expect(createRunMock.mock.calls[0][0].drive).toEqual({ enabled: true, read_only: true });
+  });
+
+  it("sends no drive at all when the member never ticks it", async () => {
+    renderScreen(withDrive);
+    // The offer is on screen — this is a declined offer, not a missing one.
+    expect(await screen.findByLabelText(DM.NR_CHECKBOX)).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Title"), "Refund flow");
+    await user.click(screen.getByRole("button", { name: /Launch run/ }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalled());
+    expect(createRunMock.mock.calls[0][0].drive).toBeUndefined();
+  });
+
+  // §5 #4: every string a member is refused with is composed SERVER-SIDE and
+  // rendered verbatim. The screen's existing launch-error path already does
+  // that for every 4xx, so the drive refusals need no rendering of their own —
+  // and this pins that they get none: a console that re-composed the 422 would
+  // tell the member a different story than the audit row does.
+  it("renders a drive refusal verbatim, off the wire, with nothing added", async () => {
+    createRunMock.mockRejectedValue(new Error(DM.REFUSED_WRITABLE));
+    renderScreen(withDrive);
+    await user.click(await screen.findByLabelText(DM.NR_CHECKBOX));
+    await user.type(screen.getByLabelText("Title"), "Refund flow");
+    await user.click(screen.getByRole("button", { name: /Launch run/ }));
+    expect(await screen.findByText(DM.REFUSED_WRITABLE)).toBeInTheDocument();
+  });
+
+  // The door bit is a SIBLING of the allocation on the wire, and this is the
+  // state that proves why: no drive to name, and a refusal that must still be
+  // drawn before the member spends a launch discovering it.
+  it("draws the door with no allocation at all", async () => {
+    renderScreen(baseMe({ user_drive_denied_by_profile: "Greenfield contractors" }));
+    expect(
+      await screen.findByText(DM.NR_DENIED("Greenfield contractors")),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText(DM.NR_CHECKBOX)).toBeNull();
+  });
+
+  // Every case above runs on the context's fail-OPEN operator default, so until
+  // now the MOUNTING tier was never rendered in vitest at all — a member, whose
+  // console additionally resolves GET /me/capabilities. That flag gates real
+  // code (useMyCapabilities' effect, and capabilityAllowed over a non-null set
+  // in the same card the drive block lives in), and a drive offer that only
+  // survives the admin default would ship green.
+  it("offers the drive to a MEMBER — the tier that actually mounts one", async () => {
+    myCapabilitiesMock.mockReturnValue({
+      grants: [],
+      enforcement: { workspace: false },
+      session_groups: [],
+      groups_snapshot_stale: false,
+    });
+    renderAsMember(withDrive);
+
+    expect(await screen.findByLabelText(DM.NR_CHECKBOX)).toBeInTheDocument();
+    expect(screen.getByLabelText(DM.NR_READONLY_TOGGLE)).toBeInTheDocument();
+    await user.click(screen.getByLabelText(DM.NR_CHECKBOX));
+    await user.type(screen.getByLabelText("Title"), "Refund flow");
+    await user.click(screen.getByRole("button", { name: /Launch run/ }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalled());
+    // read_only is ABSENT, not false: the member did not narrow this run, and
+    // the wizard sends the narrowing only when it is asked for.
+    expect(createRunMock.mock.calls[0][0].drive).toEqual({ enabled: true });
   });
 });

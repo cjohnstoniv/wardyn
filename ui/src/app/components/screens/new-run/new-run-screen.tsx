@@ -27,7 +27,7 @@
 // and NAMED on screen, never merged behind the operator's back.
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Plus } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 import type { AgentRun, ConfinementClass, PreflightResult, RunPolicySpec, Workspace } from "../../../lib/types";
 import { Link } from "react-router-dom";
@@ -40,10 +40,8 @@ import { health as healthApi } from "../../../lib/api/health";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { hasLlmPath } from "../../../lib/readiness";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
-import { capabilityAllowed, useMyCapabilities } from "../../../lib/capabilities";
-import { DENIED } from "../../../lib/permissions-copy";
+import { useMyCapabilities } from "../../../lib/capabilities";
 import { getErrorMessage } from "../../../lib/format";
-import { statusWord } from "../../../lib/workspace-status";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
@@ -53,12 +51,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Field } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
-import { useOperator } from "../../wardyn/operator-context";
+import { useOperator, useUserDrive } from "../../wardyn/operator-context";
 import { CC_META } from "../../wardyn/cc-meta";
 import { RUN_MODE } from "../../wardyn/copy";
 import { getDefaultCc, resolveDefaultCc } from "../../wardyn/default-confinement";
 import { PolicyPanel, POLICY_TEMPLATES, parseSpec, toolRulesSummary } from "../../wardyn/policy-panel";
 import { AddWorkspaceDialog } from "../add-workspace-dialog";
+import { WorkspaceCard } from "./workspace-card";
 import { buildSpec, mergeRunSelections } from "./wizard-spec";
 import { agentLabel, initialWizardState, primaryWorkspaceId, type WizardState } from "./wizard-types";
 import { surfaceRunWarnings } from "./run-warnings";
@@ -156,6 +155,14 @@ export function NewRunScreen() {
   // ceiling section simply does not render, which is the honest answer: never
   // claim a ceiling that could not be read.
   const [governanceProfile, setGovernanceProfile] = React.useState<string | undefined>(undefined);
+  // The Workspace card's drive block: this caller's allocation (nil-means-none)
+  // and the door beside it ("" means open), read off the shell's ONE GET /me
+  // rather than a second one of this screen's own — app-shell's useMeta already
+  // holds that body and hands it down (operator-context.tsx's UserDriveContext,
+  // the same seam member_local_dir_root rides). With no provider above, on an
+  // older daemon, or after a failed read it is null/"" — which renders as
+  // today's card, the same honest answer the server's own resolver gives.
+  const { drive: userDrive, deniedByProfile: driveDeniedBy } = useUserDrive();
 
   React.useEffect(() => {
     runsApi
@@ -266,12 +273,6 @@ export function NewRunScreen() {
     useSaved && state.selectedPolicyId
       ? savedPolicies.find((p) => p.id === state.selectedPolicyId)
       : undefined;
-  // Whether the workspace this run is aimed at is one the caller may launch
-  // against. Advisory — denyMemberRequest is the real gate.
-  const pickedWorkspaceId = state.workspaces[0]?.workspaceId;
-  const selectedWorkspaceUngranted =
-    !!pickedWorkspaceId && !capabilityAllowed(caps, "workspace", pickedWorkspaceId);
-
   // The screen's ONE validation rule. Deliberately a local derivation rather
   // than a shared validator: it answers "can this button be pressed", which is
   // this screen's question, and a second general-purpose answer living
@@ -695,48 +696,18 @@ export function NewRunScreen() {
             </div>
           </SectionCard>
 
-          <SectionCard title="Workspace">
-            <Select
-              value={state.workspaces[0]?.workspaceId ?? "__none__"}
-              onValueChange={(v) =>
-                patch({ workspaces: v === "__none__" ? [] : [{ workspaceId: v, enabledOptional: [] }] })
-              }
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Ephemeral scratch — no repo" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none__">Ephemeral scratch — no repo</SelectItem>
-                {workspaces.map((w: Workspace) => (
-                  <SelectItem key={w.id} value={w.id}>
-                    {w.name}
-                    {statusWord(w.status) === "Import failed" && (
-                      <span className="text-danger"> — import failed</span>
-                    )}
-                    {!capabilityAllowed(caps, "workspace", w.id) && (
-                      <Chip tone="neutral">{DENIED.WORKSPACE_CHIP}</Chip>
-                    )}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {/* The reason rides the SELECTION, not each row: a Radix item's
-                content is what the closed trigger renders, so a per-row
-                paragraph would end up inside the trigger. The chip above
-                annotates every ungranted row; this says what it costs. */}
-            {selectedWorkspaceUngranted && (
-              <p className="mt-2 text-xs text-muted-foreground">{DENIED.WORKSPACE_BODY}</p>
-            )}
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="mt-2 px-1"
-              onClick={() => setAddWsOpen(true)}
-            >
-              <Plus className="size-4" /> Add workspace
-            </Button>
-          </SectionCard>
+          {/* The Select, the ungranted-selection reason and the member's own
+              drive block — see workspace-card.tsx for why the drive lives
+              under the Select rather than in the Add-workspace dialog. */}
+          <WorkspaceCard
+            state={state}
+            patch={patch}
+            workspaces={workspaces}
+            caps={caps}
+            onAddWorkspace={() => setAddWsOpen(true)}
+            drive={userDrive}
+            driveDeniedBy={driveDeniedBy}
+          />
 
           <SectionCard title="Policy">
             <div className="space-y-4">
