@@ -47,8 +47,19 @@ const MemberLocalDirRootContext = React.createContext<string | null>(null);
 // They ride the shell's ONE /me read for the same reason
 // MemberLocalDirRootContext does: New Run and the member Getting Started page
 // each want them, app-shell's useMeta already holds the whole body, and two
-// more GET /me round trips per navigation buy nothing — the values cannot
-// differ between the three reads.
+// more GET /me round trips per navigation buy nothing the shell's read has not
+// already bought.
+//
+// THE TRADE, named rather than assumed: one read per PAGE LOAD, not per
+// navigation. Inside a mount the consumers cannot disagree — they read one
+// object — but that object AGES. An admin who pauses a member's allocation
+// mid-session leaves that member still looking at the checkbox until they
+// reload, and the console never learns otherwise on its own. That is the cheap
+// direction of the error and the reason it is accepted: the offer is UX, the
+// resolver re-decides at dispatch, and the member is told by the door
+// (DRIVE_MEMBER.REFUSED_PAUSED, user-drives-prompt.md §7.7) rather than by a
+// checkbox that quietly disappeared. §2.6's member row is that list of states,
+// launch refusal included.
 //
 // Fail-CLOSED, unlike the tier defaults above: null / "" is "no allocation and
 // no door", which is exactly what an unresolved /me, a failed read and a

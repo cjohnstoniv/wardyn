@@ -53,6 +53,17 @@ const listWorkspacesMock = vi.fn();
 vi.mock("../../../lib/api/workspaces", () => ({
   workspaces: { listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a) },
 }));
+// A MEMBER's console asks GET /me/capabilities (useMyCapabilities is gated on
+// !operator), so the member cases below need that hook answered. Only the hook
+// is replaced — capabilityAllowed stays the real matcher, since it is what
+// decides whether the selected workspace is annotated as ungranted.
+const myCapabilitiesMock = vi.fn();
+vi.mock("../../../lib/capabilities", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/capabilities")>(
+    "../../../lib/capabilities",
+  );
+  return { ...actual, useMyCapabilities: (...a: unknown[]) => myCapabilitiesMock(...a) };
+});
 
 import { NewRunScreen } from "./new-run-screen";
 import type { Me } from "../../../lib/api/health";
@@ -86,6 +97,24 @@ function renderScreen(me: Me = baseMe()) {
   );
 }
 
+// The same screen for the tier that actually MOUNTS a drive. `operator={false}`
+// is not cosmetic here: it is what turns useMyCapabilities on, so the member
+// path runs code no admin case above reaches.
+function renderAsMember(me: Me = baseMe()) {
+  return render(
+    <MemoryRouter>
+      <OperatorProvider
+        operator={false}
+        securityOperator={false}
+        userDrive={me.user_drive}
+        userDriveDeniedByProfile={me.user_drive_denied_by_profile}
+      >
+        <NewRunScreen />
+      </OperatorProvider>
+    </MemoryRouter>,
+  );
+}
+
 beforeEach(() => {
   getSetupStatusMock.mockReset().mockResolvedValue(baseStatus());
   listWorkspacesMock.mockReset().mockResolvedValue([]);
@@ -93,6 +122,9 @@ beforeEach(() => {
   navigateMock.mockReset();
   createRunMock.mockReset().mockResolvedValue({ id: "run_1" });
   getDefaultPolicyMock.mockReset().mockResolvedValue({ min_confinement_class: "CC1" });
+  // null is what the real hook returns for an admin (exempt) and for a set that
+  // has not loaded — the answer every admin case above has always run on.
+  myCapabilitiesMock.mockReset().mockReturnValue(null);
 });
 
 // Regression: useWorkspaceList does NOT fetch on mount — each caller loads it
@@ -540,5 +572,31 @@ describe("NewRunScreen — the member's drive reaches the wire", () => {
       await screen.findByText(DM.NR_DENIED("Greenfield contractors")),
     ).toBeInTheDocument();
     expect(screen.queryByLabelText(DM.NR_CHECKBOX)).toBeNull();
+  });
+
+  // Every case above runs on the context's fail-OPEN operator default, so until
+  // now the MOUNTING tier was never rendered in vitest at all — a member, whose
+  // console additionally resolves GET /me/capabilities. That flag gates real
+  // code (useMyCapabilities' effect, and capabilityAllowed over a non-null set
+  // in the same card the drive block lives in), and a drive offer that only
+  // survives the admin default would ship green.
+  it("offers the drive to a MEMBER — the tier that actually mounts one", async () => {
+    myCapabilitiesMock.mockReturnValue({
+      grants: [],
+      enforcement: { workspace: false },
+      session_groups: [],
+      groups_snapshot_stale: false,
+    });
+    renderAsMember(withDrive);
+
+    expect(await screen.findByLabelText(DM.NR_CHECKBOX)).toBeInTheDocument();
+    expect(screen.getByLabelText(DM.NR_READONLY_TOGGLE)).toBeInTheDocument();
+    await user.click(screen.getByLabelText(DM.NR_CHECKBOX));
+    await user.type(screen.getByLabelText("Title"), "Refund flow");
+    await user.click(screen.getByRole("button", { name: /Launch run/ }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalled());
+    // read_only is ABSENT, not false: the member did not narrow this run, and
+    // the wizard sends the narrowing only when it is asked for.
+    expect(createRunMock.mock.calls[0][0].drive).toEqual({ enabled: true });
   });
 });

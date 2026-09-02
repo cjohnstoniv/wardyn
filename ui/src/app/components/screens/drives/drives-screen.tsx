@@ -7,7 +7,10 @@
 // mount at /home/agent/drive, and who gets it. SUPER-only, with NO nav item:
 // it is reached from the Workspaces header's outline button, the setup
 // Workspaces step's card and the Settings card, all three of which render for
-// an operator only (docs/design/user-drives-prompt.md §5 #7, §6).
+// an operator only (docs/design/user-drives-prompt.md §5 #7, §6). Nothing
+// LINKS a security admin here — but a URL is a URL, and GET /drives is
+// operatorOnly, so their READ is a 403. That is a tier refusal, not a transport
+// failure, and the screen answers it as one (see `status`).
 //
 // EVERY user-visible string here comes from user-drives-copy.ts (§7, frozen)
 // plus the subject/priority/preview vocabulary already frozen in
@@ -56,7 +59,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { Mono } from "../../wardyn/code-block";
 import { useOperator } from "../../wardyn/operator-context";
 import { PageHeader } from "../../wardyn/page-header";
-import { Chip } from "../../wardyn/primitives";
+import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
 import { AllocationsBlock } from "./allocations";
 import { DriveEditor } from "./drive-editor";
@@ -71,7 +74,7 @@ export function DrivesScreen() {
   // middleware is what refuses a write.
   const operator = useOperator();
   const [snap, setSnap] = React.useState<UserDrivesSnapshot>(EMPTY);
-  const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
+  const [status, setStatus] = React.useState<"loading" | "error" | "forbidden" | "ready">("loading");
   // null = closed; {drive: null} = a new drive; {drive: d} = editing d.
   const [editing, setEditing] = React.useState<{ drive: UserDriveListItem | null } | null>(null);
   const [toDelete, setToDelete] = React.useState<UserDriveListItem | null>(null);
@@ -88,7 +91,11 @@ export function DrivesScreen() {
         setSnap(s);
         setStatus("ready");
       })
-      .catch(() => setStatus("error"));
+      // A 403 is the TIER, not the network: GET /drives is operatorOnly, so a
+      // security admin who typed this URL is refused the read itself. Rendering
+      // FETCH_FAILED_* there would call an authorization answer a server
+      // hiccup, and offer a Retry that returns the same 403 forever.
+      .catch((e) => setStatus(e instanceof HttpError && e.status === 403 ? "forbidden" : "error"));
   }, []);
   React.useEffect(load, [load]);
 
@@ -120,12 +127,13 @@ export function DrivesScreen() {
 
   const editorOpen = editing !== null;
   const noDrives = status === "ready" && snap.drives.length === 0;
-  // The screen's single `default` button, derived in one place so two can never
-  // co-occur (CONSOLE-RULES §6, prompt §4). Only the `new` arm is READ here —
-  // the other two are held by components below (the editor's Save, the
-  // allocation form's Allocate), and naming all three is what makes the
-  // invariant checkable at a glance rather than spread across three files.
-  const teal: "save" | "new" | "allocate" = editorOpen ? "save" : noDrives ? "new" : "allocate";
+  // The screen's ONE `default` button (CONSOLE-RULES §6, prompt §4). This file
+  // decides exactly one of the three arms — the empty state's New drive — so
+  // exactly one bit is derived here. The other two are held where they render
+  // and cannot co-occur with this one: the editor's Save exists only while the
+  // editor is open, and the allocation form's Allocate only once there are
+  // drives to allocate, which is the negation of `noDrives`.
+  const newIsTeal = noDrives && !editorOpen;
 
   const deleteCount = toDelete?.grant_count ?? 0;
   const [deleteHead, deleteBody] = question(toDelete ? DRIVES.DELETE_CONFIRM(toDelete.name) : "");
@@ -134,7 +142,16 @@ export function DrivesScreen() {
     <div className="mx-auto max-w-[1120px] px-6 py-6">
       <PageHeader title={DRIVES.TITLE} description={withMono(DRIVES.LEAD)} />
 
-      {status === "error" ? (
+      {status === "forbidden" ? (
+        /* The tier, said as a tier: OPERATOR_ONLY_REASON, the same sentence
+           every other operator-only control carries, and no Retry — retrying a
+           403 returns a 403. Mock state 9's note and §5 #7 hide the card and
+           both entry points from this caller; this is what is left when they
+           arrive at the URL anyway. */
+        <div className="mt-6">
+          <OperatorOnlyHint />
+        </div>
+      ) : status === "error" ? (
         <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
           {/* Distinct from empty, and it says so: allocations that already exist
               keep binding every run — this list just cannot show them. */}
@@ -176,7 +193,7 @@ export function DrivesScreen() {
                   description={DRIVES.EMPTY_BODY}
                   action={
                     <Button
-                      variant={teal === "new" ? "default" : "outline"}
+                      variant={newIsTeal ? "default" : "outline"}
                       disabled={!operator || editorOpen}
                       onClick={() => openEditor(null)}
                     >

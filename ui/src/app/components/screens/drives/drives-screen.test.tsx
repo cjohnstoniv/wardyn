@@ -64,6 +64,7 @@ import { HttpError } from "../../../lib/api/core";
 import type { UserDriveListItem, UserDrivesSnapshot } from "../../../lib/api/drives";
 import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { ACCESS_STATE, DRIVES, PEOPLE, PERM, PREVIEW } from "../../../lib/user-drives-copy";
+import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { DrivesScreen } from "./drives-screen";
 import { question, sizeText } from "./display";
@@ -354,6 +355,10 @@ describe("DrivesScreen — the editor offers only this runner's backends (Q3)", 
     // Verbatim: the server names the path and the roots, which no frozen
     // sentence could — the roots are an env-borne ceiling the console cannot read.
     expect(screen.getByText(body)).toBeInTheDocument();
+    // …and PLAIN. It is prose that quotes wire facts, not a literal, so monoing
+    // the whole sentence would claim otherwise — and a <Mono> regression is
+    // invisible to an assertion that only checks the words.
+    expect(screen.getByText(body).className).not.toContain("font-mono");
     expect(screen.getByTestId("drives-drive-editor")).toBeInTheDocument();
 
     updateDriveMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
@@ -408,6 +413,8 @@ describe("DrivesScreen — delete: the pre-fill and the race are different refus
 
     expect(await within(dialog).findByText(DRIVES.DELETE_RESTRICT_TITLE)).toBeInTheDocument();
     expect(within(dialog).getByText(conflict)).toBeInTheDocument();
+    // Same rule as the save refusal: the server's own sentence, PLAIN.
+    expect(within(dialog).getByText(conflict).className).not.toContain("font-mono");
     // COUNT-FREE: the client believed the count was zero and the shipped 409
     // carries no n, so the count-bearing body must NOT appear on this path.
     expect(within(dialog).queryByText(DRIVES.DELETE_RESTRICT_BODY(LOOSE.name, 0))).not.toBeInTheDocument();
@@ -707,6 +714,12 @@ describe("DrivesScreen — the write gate", () => {
   it("a caller without the SUPER tier gets every write control disabled", async () => {
     // OperatorProvider defaults operator TRUE (fail-open), so the restricted
     // case is the one worth pinning: it must come from the provider.
+    //
+    // A FIXTURE SPLICE, and it claims no more than that. GET /drives is
+    // operatorOnly, so no REAL caller both reads this snapshot and lacks the
+    // tier — what is pinned here is the wiring, that every write control takes
+    // its `disabled` from the provider rather than from a local default. What a
+    // real security admin actually meets is the next test.
     getDrivesMock.mockResolvedValue(snapshot());
     render(
       <OperatorProvider operator={false} securityOperator={false}>
@@ -719,6 +732,46 @@ describe("DrivesScreen — the write gate", () => {
     expect(screen.getByRole("button", { name: `${DRIVES.EDIT} ${HOMES.name}` })).toBeDisabled();
     expect(screen.getByRole("button", { name: `${DRIVES.DELETE} ${HOMES.name}` })).toBeDisabled();
     expect(screen.getByRole("button", { name: DRIVES.ADD_CTA })).toBeDisabled();
+  });
+
+  // The real one. /drives is operatorOnly and there is no nav item, no card and
+  // no header button for this tier (mock state 9's note, §5 #7) — but a URL is
+  // a URL, and the READ itself 403s. Answering that with FETCH_FAILED_* would
+  // call an authorization answer a network fault and offer a Retry that returns
+  // the same 403 forever, so the 403 gets the tier's own sentence instead: the
+  // one every operator-only control already carries.
+  it("a security admin's 403 read is the TIER refusal, not the transport one", async () => {
+    getDrivesMock.mockRejectedValue(new HttpError(403, "forbidden"));
+    render(
+      <OperatorProvider operator={false} securityOperator={true}>
+        <DrivesScreen />
+      </OperatorProvider>,
+    );
+
+    expect(await screen.findByText(OPERATOR_ONLY_REASON)).toBeInTheDocument();
+    // The page still names itself: an admin who reached the URL is told where
+    // they are, not dropped onto a bare sentence.
+    expect(screen.getByText(DRIVES.TITLE)).toBeInTheDocument();
+    // NOT the transport copy, and no Retry — neither is true of a 403.
+    expect(screen.queryByText(DRIVES.FETCH_FAILED_TITLE)).toBeNull();
+    expect(screen.queryByText(DRIVES.FETCH_FAILED_BODY)).toBeNull();
+    expect(screen.queryByRole("button", { name: ACCESS_STATE.FETCH_FAILED_RETRY })).toBeNull();
+    // …and no registry at all: the refusal is of the READ, so there is nothing
+    // behind it to show.
+    expect(screen.queryByText(DRIVES.DRIVES_TITLE)).toBeNull();
+    expect(screen.queryByRole("button", { name: DRIVES.NEW_CTA })).toBeNull();
+  });
+
+  // The other side of the same split: a transport failure is STILL the
+  // transport failure. Splitting the catch must not swallow the state that was
+  // already there.
+  it("a non-403 read failure keeps FETCH_FAILED and its Retry", async () => {
+    getDrivesMock.mockRejectedValue(new HttpError(500, "boom"));
+    render(<DrivesScreen />);
+
+    expect(await screen.findByText(DRIVES.FETCH_FAILED_TITLE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: ACCESS_STATE.FETCH_FAILED_RETRY })).toBeInTheDocument();
+    expect(screen.queryByText(OPERATOR_ONLY_REASON)).toBeNull();
   });
 });
 
