@@ -81,14 +81,14 @@ func (s *Server) requireOIDC(w http.ResponseWriter) bool {
 // ─── GET /access ───────────────────────────────────────────────────────────
 
 type accessMappingView struct {
-	ID          string     `json:"id,omitempty"`
-	Value       string     `json:"value"`
-	Role        string     `json:"role"`
-	Source      string     `json:"source"` // "chart" | "console"
-	Shadowed    bool       `json:"shadowed"`
-	ShadowCause string     `json:"shadow_cause"` // "" | "chart" | "operator_allowlist"
-	CreatedAt   *time.Time `json:"created_at,omitempty"`
-	CreatedBy   string     `json:"created_by,omitempty"`
+	ID          string    `json:"id,omitempty"`
+	Value       string    `json:"value"`
+	Role        string    `json:"role"`
+	Source      string    `json:"source"` // "chart" | "console"
+	Shadowed    bool      `json:"shadowed"`
+	ShadowCause string    `json:"shadow_cause"` // "" | "chart" | "operator_allowlist"
+	CreatedAt   time.Time `json:"created_at,omitzero"`
+	CreatedBy   string    `json:"created_by,omitempty"`
 }
 
 type accessPosture struct {
@@ -187,11 +187,7 @@ func accessMappingsView(chart map[string]string, rows []types.RoleMapping, a *oi
 	for _, m := range rows {
 		mv := accessMappingView{
 			ID: m.ID.String(), Value: m.Value, Role: m.Role, Source: "console",
-			CreatedBy: m.CreatedBy,
-		}
-		if !m.CreatedAt.IsZero() {
-			createdAt := m.CreatedAt
-			mv.CreatedAt = &createdAt
+			CreatedBy: m.CreatedBy, CreatedAt: m.CreatedAt,
 		}
 		if cause := accessCollisionCause(m.Value, chart, a); cause != "" {
 			mv.Shadowed, mv.ShadowCause = true, cause

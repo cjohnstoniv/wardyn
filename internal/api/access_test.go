@@ -997,6 +997,50 @@ func TestAccess_ShadowCauseChartWinsOverAllowlist(t *testing.T) {
 	}
 }
 
+// TestAccess_CreatedAtKeyIsAbsentOnChartRows pins created_at's `omitzero`
+// elision at the RAW key level. A chart row has no creation time at all, and
+// the TS twin declares created_at OPTIONAL (ui/src/app/lib/types/access.ts:25)
+// — shipping a zero "0001-01-01T00:00:00Z" instead of omitting the key would
+// decode back to a zero time.Time and slip past any struct-level assertion,
+// while the console would render it as a real date.
+func TestAccess_CreatedAtKeyIsAbsentOnChartRows(t *testing.T) {
+	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleMember}, oidc.RoleMember, nil, nil)
+	stamp := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	st := &roleMapStore{rows: []types.RoleMapping{
+		{ID: uuid.New(), Value: "design-team", Role: oidc.RoleMember, CreatedBy: "admin@corp.example", CreatedAt: stamp},
+	}}
+	srv := accessServer(t, auth, st)
+
+	w := do(t, srv, http.MethodGet, "/api/v1/access", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var raw struct {
+		Mappings []map[string]any `json:"mappings"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var chart, console map[string]any
+	for _, m := range raw.Mappings {
+		switch m["source"] {
+		case "chart":
+			chart = m
+		case "console":
+			console = m
+		}
+	}
+	if chart == nil || console == nil {
+		t.Fatalf("want one chart row and one console row, got %v", raw.Mappings)
+	}
+	if _, ok := chart["created_at"]; ok {
+		t.Errorf("chart row = %v, want NO created_at key (a chart row has no creation time)", chart)
+	}
+	if got := console["created_at"]; got != stamp.Format(time.RFC3339Nano) {
+		t.Errorf("console created_at = %v, want %q", got, stamp.Format(time.RFC3339Nano))
+	}
+}
+
 // ─── preview ────────────────────────────────────────────────────────────────
 
 func TestAccess_PreviewExplicitClaims(t *testing.T) {
