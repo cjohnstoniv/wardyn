@@ -127,7 +127,11 @@ func extractOpenAIChat(body []byte, yield func(Span)) error {
 		return fmt.Errorf("contentscan: parse openai message: %w", err)
 	}
 	prefix := fmt.Sprintf("messages[%d]", n-1)
-	walkOpenAIContent(m.Content, prefix+".content", yield)
+	// Content is the same string-or-blocks shape walkTextOrBlocks already walks
+	// for Anthropic: a JSON string, or an array whose text parts yield
+	// `<path>[i].text`. Sharing it also scans an OpenAI part spelled as a
+	// tool_result/tool_use block -- never less than the OpenAI-only walker did.
+	walkTextOrBlocks(m.Content, prefix+".content", yield)
 	for i, tc := range m.ToolCalls {
 		args := tc.Function.Arguments
 		if args == "" {
@@ -143,35 +147,6 @@ func extractOpenAIChat(body []byte, yield func(Span)) error {
 		}
 	}
 	return nil
-}
-
-// walkOpenAIContent handles an OpenAI message content that is a string or an
-// array of parts (text parts yielded; image_url/other parts skipped).
-func walkOpenAIContent(raw json.RawMessage, path string, yield func(Span)) {
-	raw = bytes.TrimSpace(raw)
-	if len(raw) == 0 {
-		return
-	}
-	switch raw[0] {
-	case '"':
-		var s string
-		if json.Unmarshal(raw, &s) == nil && s != "" {
-			yield(Span{FieldPath: path, Text: s})
-		}
-	case '[':
-		var parts []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}
-		if json.Unmarshal(raw, &parts) != nil {
-			return
-		}
-		for i, p := range parts {
-			if p.Text != "" {
-				yield(Span{FieldPath: fmt.Sprintf("%s[%d].text", path, i), Text: p.Text})
-			}
-		}
-	}
 }
 
 // extractAnthropicMessages yields the text the agent is sending THIS turn: the

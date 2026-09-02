@@ -749,3 +749,93 @@ func TestNilEngineSafe(t *testing.T) {
 	}
 	_ = out
 }
+
+// TestExtractOpenAIChat_ContentShapes pins the exact spans extractOpenAIChat
+// yields for every OpenAI content shape, so the shared string-or-blocks walker
+// (walkTextOrBlocks, also used by the Anthropic extractor) can never yield
+// FEWER spans or different field paths than the OpenAI-only walker it replaced.
+func TestExtractOpenAIChat_ContentShapes(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want []Span
+	}{
+		{
+			name: "content is a string",
+			body: `{"messages":[{"role":"user","content":"plain text"}]}`,
+			want: []Span{{FieldPath: "messages[0].content", Text: "plain text"}},
+		},
+		{
+			name: "content is an empty string",
+			body: `{"messages":[{"role":"user","content":""}]}`,
+			want: nil,
+		},
+		{
+			name: "content missing",
+			body: `{"messages":[{"role":"user"}]}`,
+			want: nil,
+		},
+		{
+			name: "array of text parts",
+			body: `{"messages":[{"role":"user","content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}]}`,
+			want: []Span{
+				{FieldPath: "messages[0].content[0].text", Text: "a"},
+				{FieldPath: "messages[0].content[1].text", Text: "b"},
+			},
+		},
+		{
+			name: "image_url part carries no scannable text",
+			body: `{"messages":[{"role":"user","content":[{"type":"text","text":"a"},` +
+				`{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}]}]}`,
+			want: []Span{{FieldPath: "messages[0].content[0].text", Text: "a"}},
+		},
+		{
+			name: "empty text part is skipped",
+			body: `{"messages":[{"role":"user","content":[{"type":"text","text":""},{"type":"text","text":"b"}]}]}`,
+			want: []Span{{FieldPath: "messages[0].content[1].text", Text: "b"}},
+		},
+		{
+			name: "unknown part type still yields a stray text field",
+			body: `{"messages":[{"role":"user","content":[{"type":"input_text","text":"c"}]}]}`,
+			want: []Span{{FieldPath: "messages[0].content[0].text", Text: "c"}},
+		},
+		{
+			name: "only the LAST message is scanned",
+			body: `{"messages":[{"role":"user","content":"older"},{"role":"user","content":"newest"}]}`,
+			want: []Span{{FieldPath: "messages[1].content", Text: "newest"}},
+		},
+		{
+			name: "tool_call arguments are walked as JSON leaves",
+			body: `{"messages":[{"role":"assistant","tool_calls":[{"function":{"arguments":"{\"pw\":\"v\"}"}}]}]}`,
+			want: []Span{{FieldPath: "messages[0].tool_calls[0].function.arguments.pw", Text: "v"}},
+		},
+		{
+			name: "non-JSON tool_call arguments are scanned verbatim",
+			body: `{"messages":[{"role":"assistant","tool_calls":[{"function":{"arguments":"not json"}}]}]}`,
+			want: []Span{{FieldPath: "messages[0].tool_calls[0].function.arguments", Text: "not json"}},
+		},
+		{
+			// Superset over the OpenAI-only walker, which yielded NOTHING for a
+			// content array it could not unmarshal into []{type,text}.
+			name: "block-shaped part inside an OpenAI content array is still scanned",
+			body: `{"messages":[{"role":"user","content":[{"type":"tool_result","content":"inner"}]}]}`,
+			want: []Span{{FieldPath: "messages[0].content[0].content", Text: "inner"}},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []Span
+			if err := extractOpenAIChat([]byte(tc.body), func(s Span) { got = append(got, s) }); err != nil {
+				t.Fatalf("extractOpenAIChat: %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("spans = %+v, want %+v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("span[%d] = %+v, want %+v", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
