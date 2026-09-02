@@ -115,6 +115,51 @@ func TestCreateSandbox_RejectsMounts(t *testing.T) {
 	}
 }
 
+// TestCreateSandbox_RejectsAUserDrive pins the OTHER preflight chokepoint: a
+// spec carrying a resolved user drive (migration 0054) is refused before
+// anything is created, because this driver has no PVC volume/volumeMount code
+// path yet.
+//
+// It is the fail-closed half of seedRequestDrive's refusal matrix. That seam
+// refuses a run whose drive cannot be mounted precisely so a member who asked
+// for storage never silently gets a run without it; a driver that took the
+// spec and dropped the field would lose the same work from the other end. The
+// assertion that NOTHING was created is the load-bearing half — a refusal
+// after the Secret exists is a leak, not a guard.
+//
+// D4 replaces this test with the real mount's coverage.
+func TestCreateSandbox_RejectsAUserDrive(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	cs.ClearActions()
+
+	spec := testSandboxSpec()
+	spec.Drive = &types.DriveMount{
+		Backend:    types.DriveBackendK8sPVC,
+		ObjectName: "wardyn-drive-corp-nas-d-0123456789abcdef0123",
+		HomeName:   "d-0123456789abcdef0123",
+		Target:     runner.DriveTarget,
+		SizeMiB:    10240,
+	}
+
+	_, err := d.CreateSandbox(context.Background(), spec)
+	if err == nil {
+		t.Fatal("CreateSandbox: want an error refusing the drive, got nil")
+	}
+	if !errors.Is(err, errDriveUnsupported) {
+		t.Errorf("err = %v, want errors.Is(err, errDriveUnsupported)", err)
+	}
+	// The gap is NAMED, not implied: an operator reading this in a run's failure
+	// has to learn that the substrate is the limitation, not their allocation.
+	if !strings.Contains(err.Error(), "does not mount drives yet") {
+		t.Errorf("err = %v, want it to name the gap", err)
+	}
+	for _, a := range cs.Actions() {
+		if a.GetVerb() == "create" {
+			t.Errorf("CreateSandbox refused the drive but still created %s %s", a.GetVerb(), a.GetResource().Resource)
+		}
+	}
+}
+
 // TestCreateSandbox_OrderAndRef covers the required creation order — BOTH
 // NetworkPolicies before any pod exists, proxy pod before agent pod — and
 // that the returned Sandbox.Ref is the agent pod name.

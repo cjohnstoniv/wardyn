@@ -8,13 +8,14 @@
 //
 // INVARIANT UNDER TEST: the TIER value ResolveGovernanceProfile returns is the
 // matched row's subject_type — the value internal/api's ceilingWithUnusableGroups
-// (governance.go:648) trusts to tell "serve" from "refuse" on a truncated
-// snapshot. TestPG_ResolveGovernanceProfile discards the tier on every case
-// (governance_pg_test.go:281), and internal/api's precedence test drives it
-// through a FAKE store (capStore.govTier), so nothing today pins that the real
-// SQL returns the right tier. It also pins the truncated-shape call (groups nil)
-// end to end against real rows: user > group > all, and an all-tier answer on
-// groups=nil is reported AS all (so the api layer refuses it).
+// (internal/api/governance.go) trusts to tell "serve" from "refuse" on a
+// truncated snapshot. TestPG_ResolveGovernanceProfile discards the tier on every
+// case (its resolveName helper in governance_pg_test.go), and internal/api's
+// precedence test drives it through a FAKE store (capStore.govTier), so nothing
+// today pins that the real SQL returns the right tier. It also pins the
+// truncated-shape call (groups nil) end to end against real rows: user > group
+// > all, and an all-tier answer on groups=nil is reported AS all (so the api
+// layer refuses it).
 //
 // Run (needs Postgres; the DSN is whatever the coordinator's test-pg uses):
 //
@@ -103,8 +104,9 @@ func TestF2_ResolveGovernanceProfile_TierIsTheMatchedRow(t *testing.T) {
 	})
 
 	t.Run("subject case: an UNFOLDED user row never matches the folded sub the api sends", func(t *testing.T) {
-		// capabilitySubjects lowercases the sub (capabilities.go:106) and
-		// validateGovernanceAssignment lowercases the subject (governance.go:285);
+		// capabilitySubjects lowercases the sub (internal/api/capabilities.go) and
+		// validateGovernanceAssignment lowercases the subject
+		// (internal/api/governance.go);
 		// the store itself stores what it is given. If a row bypassed the api
 		// boundary with an upper-case subject it must be INERT, never matched
 		// by a folded caller — and the folded row must match. Two rows, one
