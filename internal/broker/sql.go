@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -48,6 +47,18 @@ func (b *Broker) loadGrant(ctx context.Context, grantID uuid.UUID) (types.GrantS
 	return spec, runID, nil
 }
 
+// selectLiveCredentialApproval is the ONE spelling of ensureApproval's lookup:
+// the newest non-EXPIRED credential approval for a grant. The pre-insert read
+// and the post-insert re-select both run it, so a narrowing of the predicate
+// (the EXPIRED filter was one) can never land on a single copy — the drift the
+// expired-approval fix had to repair in two places by hand.
+const selectLiveCredentialApproval = `
+	SELECT id, state, requested_scope, minted_jti, reason
+	  FROM approvals
+	 WHERE grant_id = $1 AND kind = 'credential' AND state <> 'EXPIRED'
+	 ORDER BY requested_at DESC
+	 LIMIT 1`
+
 // ensureApproval finds the credential approval for a grant or creates a PENDING
 // one (requested_scope = the grant spec scope — exactly what the approver will
 // see). It returns the current approval state. Concurrency: migration
@@ -57,14 +68,14 @@ func (b *Broker) loadGrant(ctx context.Context, grantID uuid.UUID) (types.GrantS
 // NOTHING; a racing double-insert loses harmlessly and the re-select returns
 // the single winner.
 //
-// EXPIRED rows are SKIPPED by both selects (W19-W19c-2) — the re-select carries
-// the filter too, so the winner it returns is a PENDING row by predicate rather
-// than by relying on requested_at ordering to sort the swept row below it. The
-// approval sweeper (approval.ExpireStale) ages out every stale PENDING
-// approval, including this one; without the filter the next mint attempt
-// re-found that EXPIRED row forever, MintForGrant mapped it to
-// ErrApprovalDenied, and the run was permanently wedged with no PENDING request
-// left for a human to decide. An expiry is a sweep nobody decided
+// EXPIRED rows are SKIPPED by the lookup (W19-W19c-2), which the pre-insert read
+// and the post-insert re-select run as ONE const, so the winner it returns is a
+// PENDING row by predicate rather than by relying on requested_at ordering to
+// sort the swept row below it. The approval sweeper (approval.ExpireStale) ages
+// out every stale PENDING approval, including this one; without the filter the
+// next mint attempt re-found that EXPIRED row forever, MintForGrant mapped it
+// to ErrApprovalDenied, and the run was permanently wedged with no PENDING
+// request left for a human to decide. An expiry is a sweep nobody decided
 // (types.ApprovalDecision), so re-raising a fresh PENDING is the honest
 // recovery. DENIED is a real human decision and stays terminal — it is
 // deliberately NOT skipped.
@@ -81,15 +92,8 @@ func (b *Broker) ensureApproval(ctx context.Context, grantID, runID uuid.UUID, s
 	}()
 
 	var ap types.ApprovalRequest
-	var decidedAt *time.Time
-	err = tx.QueryRow(ctx,
-		`SELECT id, state, requested_scope, minted_jti, reason
-		   FROM approvals
-		  WHERE grant_id = $1 AND kind = 'credential' AND state <> 'EXPIRED'
-		  ORDER BY requested_at DESC
-		  LIMIT 1`, grantID).
+	err = tx.QueryRow(ctx, selectLiveCredentialApproval, grantID).
 		Scan(&ap.ID, &ap.State, &ap.RequestedScope, &ap.MintedJTI, &ap.Reason)
-	_ = decidedAt
 	switch {
 	case err == nil:
 		ap.RunID = runID
@@ -111,12 +115,7 @@ func (b *Broker) ensureApproval(ctx context.Context, grantID, runID uuid.UUID, s
 			newID, runID, grantID, []byte(spec.Scope)); err != nil {
 			return types.ApprovalRequest{}, fmt.Errorf("broker: insert approval: %w", err)
 		}
-		err = tx.QueryRow(ctx,
-			`SELECT id, state, requested_scope, minted_jti, reason
-			   FROM approvals
-			  WHERE grant_id = $1 AND kind = 'credential' AND state <> 'EXPIRED'
-			  ORDER BY requested_at DESC
-			  LIMIT 1`, grantID).
+		err = tx.QueryRow(ctx, selectLiveCredentialApproval, grantID).
 			Scan(&ap.ID, &ap.State, &ap.RequestedScope, &ap.MintedJTI, &ap.Reason)
 		if err != nil {
 			return types.ApprovalRequest{}, fmt.Errorf("broker: re-select approval after insert: %w", err)
