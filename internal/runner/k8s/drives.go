@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -97,6 +98,13 @@ const (
 //   - SizeMiB is the managed claim's `requests.storage`, and a zero request is
 //     not a claim the apiserver will bind. A share never asks for storage at
 //     all, so the rule is scoped to the backend that does.
+//   - Target becomes the agent pod's VolumeMount.MountPath, and is the one
+//     field here that is not a name at all: it arrives already decided
+//     (runner.DriveTarget, which the resolver copies rather than derives) and
+//     nobody authors it. It is checked anyway, because it is the only field on
+//     this struct whose wrong value mounts the member's storage ON TOP of
+//     something else in the sandbox rather than merely failing — see
+//     errDriveTargetInvalid.
 func validateDriveMount(drive *types.DriveMount) error {
 	if msgs := validation.IsDNS1123Subdomain(drive.ObjectName); len(msgs) > 0 {
 		return fmt.Errorf("k8s: drive: %q cannot name a volume claim (%s): %w",
@@ -109,6 +117,10 @@ func validateDriveMount(drive *types.DriveMount) error {
 	if drive.Backend == types.DriveBackendK8sPVC && drive.SizeMiB <= 0 {
 		return fmt.Errorf("k8s: drive: a managed drive's allocation is its volume request and %d MiB cannot be requested: %w",
 			drive.SizeMiB, errDriveNameInvalid)
+	}
+	if drive.Target != runner.DriveTarget {
+		return fmt.Errorf("k8s: drive: %q is not the reserved drive target %q: %w",
+			drive.Target, runner.DriveTarget, errDriveTargetInvalid)
 	}
 	return nil
 }
@@ -228,7 +240,9 @@ func hasAccessMode(modes []corev1.PersistentVolumeAccessMode, want corev1.Persis
 //
 //   - k8s_pvc (managed): Get by name, Create on NotFound. Idempotent by name, so
 //     a member's second run reuses the first run's claim instead of racing
-//     another one into the namespace.
+//     another one into the namespace. A Create that comes back AlreadyExists is
+//     a LOST race and not a success — the claim that won it is somebody's, and
+//     WHOSE is a question only a re-read answers: see reuseRaceWinnerClaim.
 //   - k8s_pvc_static (share): Get only. An admin provisioned that claim; a
 //     missing one is a refusal, never a silently-created empty volume standing
 //     in for the corporate home a member expected to find.
@@ -267,12 +281,11 @@ func ensureDrivePVC(ctx context.Context, client kubernetes.Interface, ns string,
 		// The DEFAULT deployment's failure. userDrives.enabled is off out of the
 		// box, so the Role carries no persistentvolumeclaims rule at all and the
 		// very first thing a drive does — the lookup, which even a static share
-		// needs — is refused. Mapped to the same sentinel the Create arm uses
-		// because the remedy is identical and because the raw apiserver text
-		// ("cannot get resource ... in the namespace") names no switch an
-		// operator could flip.
-		return fmt.Errorf("k8s: drive: looking up claim %q in namespace %q was refused by the apiserver (%v): %w",
-			drive.ObjectName, ns, err, errDrivePVCForbidden)
+		// needs — is refused. Mapped to the same sentinel the Create arm uses,
+		// through the same scrub, because the raw apiserver text ("cannot get
+		// resource ... in the namespace") names no switch an operator could flip
+		// and names two things a member should never be handed.
+		return refuseForbiddenDriveClaim("get", ns, drive, err)
 	case !apierrors.IsNotFound(err):
 		return fmt.Errorf("k8s: drive: look up claim %q: %w", drive.ObjectName, err)
 	case drive.Backend == types.DriveBackendK8sPVCStatic:
@@ -310,17 +323,104 @@ func ensureDrivePVC(ctx context.Context, client kubernetes.Interface, ns string,
 	if _, cerr := client.CoreV1().PersistentVolumeClaims(ns).Create(ctx, pvc, metav1.CreateOptions{}); cerr != nil {
 		switch {
 		case apierrors.IsAlreadyExists(cerr):
-			// Lost the Get→Create race with this same person's other run. The
-			// claim exists, which is all this function promises.
-			return nil
+			return reuseRaceWinnerClaim(ctx, client, ns, drive)
 		case apierrors.IsForbidden(cerr):
-			return fmt.Errorf("k8s: drive: creating claim %q in namespace %q was refused by the apiserver (%v): %w",
-				drive.ObjectName, ns, cerr, errDrivePVCForbidden)
+			return refuseForbiddenDriveClaim("create", ns, drive, cerr)
 		default:
 			return fmt.Errorf("k8s: drive: create claim %q: %w", drive.ObjectName, cerr)
 		}
 	}
 	return nil
+}
+
+// reuseRaceWinnerClaim decides whether the claim that WON a Get→Create race may
+// back this run — the arm an AlreadyExists lands in, and the one place in this
+// file where "the object exists" is deliberately NOT good enough.
+//
+// The loser of the race has learned one fact: a claim now sits under its
+// object name. It has learned nothing about WHOSE. Two DIFFERENT first runs can
+// reach this line over the same name, because the name folds two variable-width
+// fields with a separator both admit — drive "eng" with home "us-bob" and drive
+// "eng-us" with home "bob" both resolve to wardyn-drive-eng-us-bob (see
+// errDriveClaimForeign). Both Get→NotFound inside the window, both Create, one
+// wins; a loser that treated AlreadyExists as success would mount the winner's
+// storage at the drive target inside its own member's agent — the exact
+// cross-mount reuseDriveClaim exists to refuse, arriving through the one door
+// that used to skip it. The same window swallows a Terminating claim: an
+// operator's `kubectl delete pvc` between the Get and the Create leaves a
+// finalizer-pinned object whose AlreadyExists reads identical from here.
+//
+// So the loser goes back and READS what it lost to, then hands it to
+// reuseDriveClaim — identity first, Terminating second, drift warned — exactly
+// as though its own Get had found it. Neither refusal is one this function may
+// make on its own evidence; both are ones reuseDriveClaim already knows how to
+// make on the claim's.
+//
+// It does NOT retry the Create. This driver holds `get` and `create` and
+// nothing else: it cannot delete the object in its way, and a second Create
+// would answer AlreadyExists again or resurrect a claim an operator is
+// reclaiming.
+func reuseRaceWinnerClaim(ctx context.Context, client kubernetes.Interface, ns string, drive *types.DriveMount) error {
+	winner, err := client.CoreV1().PersistentVolumeClaims(ns).Get(ctx, drive.ObjectName, metav1.GetOptions{})
+	switch {
+	case err == nil:
+		return reuseDriveClaim(winner, drive)
+	case apierrors.IsNotFound(err):
+		// Present for the Create and gone for the read: a reclaim landing
+		// mid-dispatch. Refused rather than re-created — see errDriveClaimVanished.
+		return fmt.Errorf("k8s: drive: claim %q existed when this run tried to create it and was gone a moment later: %w",
+			drive.ObjectName, errDriveClaimVanished)
+	case apierrors.IsForbidden(err):
+		// Routed through the same scrub as every other 403 on a claim: the raw
+		// text names the ServiceAccount, and a re-read is no more entitled to
+		// hand a member that than the first read was.
+		return refuseForbiddenDriveClaim("get", ns, drive, err)
+	default:
+		return fmt.Errorf("k8s: drive: re-read claim %q after losing the race to create it: %w", drive.ObjectName, err)
+	}
+}
+
+// refuseForbiddenDriveClaim is the ONE place a 403 on a drive claim becomes an
+// error somebody reads, and it splits the audience in two on purpose.
+//
+// The OPERATOR gets the raw apiserver refusal, in a log line with the claim,
+// the namespace and the drive it belongs to — everything needed to tell an
+// absent RBAC rule from a full ResourceQuota, and nothing has been taken away
+// from them.
+//
+// The MEMBER gets the claim name and one remedy. What they must not get is the
+// apiserver's own sentence: a CreateSandbox error is the run's failure hint
+// verbatim, and that sentence carries `system:serviceaccount:<ns>:<sa>` — the
+// runs namespace and the runner's ServiceAccount, handed to every member whose
+// run happens to fail. The claim name is in both halves, which is what lets an
+// operator join a member's screenshot to the log line without the member ever
+// having held the cluster's names.
+//
+// The verb ("get"/"create") is the operator's only clue to WHICH rule is
+// missing when only one of the two is granted, so it rides the log line rather
+// than the message.
+func refuseForbiddenDriveClaim(verb, ns string, drive *types.DriveMount, err error) error {
+	slog.Error("wardynd: k8s substrate: the apiserver refused a drive claim",
+		slog.String("verb", verb),
+		slog.String("claim", drive.ObjectName),
+		slog.String("namespace", ns),
+		slog.String("drive_id", drive.DriveID.String()),
+		slog.String("home", drive.HomeName),
+		slog.String("error", err.Error()))
+	return fmt.Errorf("k8s: drive: %w (claim %q) — %s", errDrivePVCForbidden, drive.ObjectName, drivePVCForbiddenRemedy(err))
+}
+
+// drivePVCForbiddenRemedy picks the ONE of the two 403 causes to tell the reader
+// about, on the same evidence a reader of the raw text would have used: the
+// quota admission plugin's message always carries `exceeded quota`, and an RBAC
+// refusal never does. Wrong-way round it is still safe — an operator whose quota
+// is full and who is told about RBAC finds the rule already granted, and the log
+// line has the real text either way.
+func drivePVCForbiddenRemedy(err error) string {
+	if strings.Contains(err.Error(), "exceeded quota") {
+		return driveForbiddenQuota
+	}
+	return driveForbiddenRBAC
 }
 
 // reuseDriveClaim decides whether a claim that already exists may back this run.

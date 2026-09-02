@@ -213,25 +213,100 @@ func TestEnsureDrivePVC_ForbiddenNamesTheSwitch(t *testing.T) {
 	if !errors.Is(err, errDrivePVCForbidden) {
 		t.Fatalf("err = %v, want errors.Is(err, errDrivePVCForbidden)", err)
 	}
-	for _, want := range []string{"persistentvolumeclaims", "userDrives.enabled"} {
+	for _, want := range []string{drive.ObjectName, "persistentvolumeclaims", "userDrives.enabled"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("err = %q, want it to name %q", err.Error(), want)
 		}
 	}
+	assertRefusalKeepsClusterNamesToItself(t, err)
 }
 
-// TestEnsureDrivePVC_ToleratesAnAlreadyExistsRace covers the Get→Create window two
-// concurrent runs of the SAME person share: the loser of the race gets
-// AlreadyExists, and the claim existing is all this function ever promised.
+// TestEnsureDrivePVC_ToleratesAnAlreadyExistsRace covers the Get→Create window,
+// and the thing the loser of that race may NOT conclude from an AlreadyExists:
+// that the claim now under its object name is its own member's.
+//
+// Two DIFFERENT first runs reach the Create over one name, because the name
+// folds two variable-width fields with a separator both admit — drive "eng" with
+// home "us-bob" and drive "eng-us" with home "bob" both resolve to
+// wardyn-drive-eng-us-bob. Both Get→NotFound inside the window, both Create, one
+// wins; a loser that read AlreadyExists as success would mount the winner's
+// storage inside its own member's agent, through the one door that skipped
+// reuseDriveClaim's identity check. So the loser re-reads and goes through
+// exactly that check — which is what the FOREIGN row here proves, and what the
+// same-identity row proves it did not break.
 func TestEnsureDrivePVC_ToleratesAnAlreadyExistsRace(t *testing.T) {
-	cs := fake.NewClientset()
-	drive := testDriveMount()
-	cs.PrependReactor("create", "persistentvolumeclaims", func(clienttesting.Action) (bool, runtime.Object, error) {
-		return true, nil, apierrors.NewAlreadyExists(schema.GroupResource{Resource: "persistentvolumeclaims"}, drive.ObjectName)
-	})
+	for _, tc := range []struct {
+		name string
+		// winner is the claim the race is lost TO, or nil when the winner is
+		// gone by the time the loser looks (an operator's reclaim landing
+		// between the Create and the re-read).
+		winner func(*types.DriveMount) *corev1.PersistentVolumeClaim
+		wantIs error
+	}{
+		{
+			// The tolerated case, and the reason this arm is not simply a refusal:
+			// one person's two concurrent first runs.
+			name:   "the winner is this same person's other run",
+			winner: func(d *types.DriveMount) *corev1.PersistentVolumeClaim { return existingDriveClaim(d) },
+		},
+		{
+			// The ambiguous pair, colliding inside the window rather than across
+			// runs: this run is drive "eng" / home "us-bob", the winner was
+			// created for drive "eng-us" / home "bob".
+			name: "the winner is the ambiguous pair's other drive",
+			winner: func(d *types.DriveMount) *corev1.PersistentVolumeClaim {
+				other := testDriveMount()
+				other.DriveID = uuid.MustParse("11111111-2222-3333-4444-555555555555")
+				other.HomeName = "bob"
+				claim := existingDriveClaim(other)
+				claim.Name = d.ObjectName
+				return claim
+			},
+			wantIs: errDriveClaimForeign,
+		},
+		{
+			// Present for the Create, gone for the read. Never re-created: that
+			// would be the recreate-under-a-reclaim errDriveClaimTerminating
+			// refuses, one moment later.
+			name:   "the winner is gone again by the time the loser reads it",
+			winner: func(*types.DriveMount) *corev1.PersistentVolumeClaim { return nil },
+			wantIs: errDriveClaimVanished,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			drive := testDriveMount()
+			var seed []runtime.Object
+			if winner := tc.winner(drive); winner != nil {
+				seed = append(seed, winner)
+			}
+			cs := fake.NewClientset(seed...)
+			// The window itself: the FIRST lookup misses even though the winner
+			// is already in the tracker, so the create is attempted; every later
+			// lookup falls through to the tracker and sees what actually won.
+			gets := 0
+			cs.PrependReactor("get", "persistentvolumeclaims", func(clienttesting.Action) (bool, runtime.Object, error) {
+				if gets++; gets == 1 {
+					return true, nil, apierrors.NewNotFound(schema.GroupResource{Resource: "persistentvolumeclaims"}, drive.ObjectName)
+				}
+				return false, nil, nil
+			})
+			cs.PrependReactor("create", "persistentvolumeclaims", func(clienttesting.Action) (bool, runtime.Object, error) {
+				return true, nil, apierrors.NewAlreadyExists(schema.GroupResource{Resource: "persistentvolumeclaims"}, drive.ObjectName)
+			})
 
-	if err := ensureDrivePVC(context.Background(), cs, testNamespace, drive); err != nil {
-		t.Fatalf("ensureDrivePVC: %v, want a lost create race to be tolerated", err)
+			err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
+			switch {
+			case tc.wantIs == nil && err != nil:
+				t.Fatalf("ensureDrivePVC: %v, want a race lost to this member's OWN claim to be tolerated", err)
+			case tc.wantIs != nil && !errors.Is(err, tc.wantIs):
+				t.Fatalf("err = %v, want errors.Is(err, %v) — the claim that won the race is not this run's to mount", err, tc.wantIs)
+			}
+			// The proof that the fix is the RE-READ and not a re-worded return:
+			// two gets, one per side of the window.
+			if verbs := countPVCVerbs(cs); verbs["get"] != 2 || verbs["create"] != 1 {
+				t.Errorf("claim verbs = %v, want the lost create race to re-read the claim it lost to (get=2, create=1)", verbs)
+			}
+		})
 	}
 }
 
@@ -401,6 +476,44 @@ func TestEnsureDrivePVC_RefusesANameTheApiserverWould(t *testing.T) {
 	}
 }
 
+// TestEnsureDrivePVC_RefusesAMountAwayFromTheDriveTarget covers the field on
+// this struct that nobody authors and that therefore nobody was checking: the
+// mount's Target, which becomes the agent pod's VolumeMount.MountPath.
+//
+// Every other rule in validateDriveMount refuses a mount that would FAIL. This
+// one refuses a mount that would SUCCEED at the wrong place: a drive is
+// persistent and survives the run, so landing it on /home/agent/.claude puts a
+// writable, member-owned, cross-run volume over the injected credential
+// directory, and landing it on / puts one over the image. The control plane
+// copies runner.DriveTarget rather than deriving it, so the only way either
+// value arrives is a change nobody meant to make — which is the case a refusal
+// is for.
+func TestEnsureDrivePVC_RefusesAMountAwayFromTheDriveTarget(t *testing.T) {
+	for _, target := range []string{
+		"/home/agent/.claude", // over the injected credentials
+		"/",                   // over the image
+		"/home/agent/drive/",  // the reserved path, differently spelled: not equal is not equal
+		"",
+	} {
+		t.Run(target, func(t *testing.T) {
+			cs := fake.NewClientset()
+			drive := testDriveMount()
+			drive.Target = target
+
+			err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
+			if !errors.Is(err, errDriveTargetInvalid) {
+				t.Fatalf("err = %v, want errors.Is(err, errDriveTargetInvalid)", err)
+			}
+			if !strings.Contains(err.Error(), runner.DriveTarget) {
+				t.Errorf("err = %q, want it to name the one path a drive may bind at", err.Error())
+			}
+			if n := len(cs.Actions()); n != 0 {
+				t.Errorf("issued %d API calls, want none — the target is wrong before anything is asked of the cluster", n)
+			}
+		})
+	}
+}
+
 // TestEnsureDrivePVC_ShareNeedsNoAllocation is the negative control for the size
 // guard above: a static share's claim is never created, its size is a display
 // value (StorageEnforcementExternal), and a zero there must not refuse the run.
@@ -415,6 +528,21 @@ func TestEnsureDrivePVC_ShareNeedsNoAllocation(t *testing.T) {
 
 	if err := ensureDrivePVC(context.Background(), cs, testNamespace, drive); err != nil {
 		t.Fatalf("ensureDrivePVC: %v, want a share with no allocation to mount", err)
+	}
+}
+
+// assertRefusalKeepsClusterNamesToItself is the assertion every 403 arm shares.
+// A CreateSandbox error becomes the run's failure hint verbatim and is read by
+// the MEMBER whose run failed, so the apiserver's own refusal — which spells
+// `system:serviceaccount:<namespace>:<name>` — may not survive into it. The
+// operator loses nothing: refuseForbiddenDriveClaim slogs the raw text with the
+// claim name that is in both halves.
+func assertRefusalKeepsClusterNamesToItself(t *testing.T, err error) {
+	t.Helper()
+	for _, leaked := range []string{"system:serviceaccount", testNamespace, "cannot get resource", "cannot create resource"} {
+		if strings.Contains(err.Error(), leaked) {
+			t.Errorf("err = %q, want it NOT to carry %q — the run's failure hint is member-visible", err.Error(), leaked)
+		}
 	}
 }
 
@@ -440,10 +568,14 @@ func TestEnsureDrivePVC_ForbiddenLookupNamesTheSwitch(t *testing.T) {
 			if !errors.Is(err, errDrivePVCForbidden) {
 				t.Fatalf("err = %v, want errors.Is(err, errDrivePVCForbidden)", err)
 			}
-			for _, want := range []string{"persistentvolumeclaims", "userDrives.enabled"} {
+			for _, want := range []string{drive.ObjectName, "persistentvolumeclaims", "userDrives.enabled"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("err = %q, want it to name %q", err.Error(), want)
 				}
+			}
+			assertRefusalKeepsClusterNamesToItself(t, err)
+			if strings.Contains(err.Error(), "ResourceQuota") {
+				t.Errorf("err = %q, want ONE remedy: an RBAC 403 must not also hand the reader the quota one", err.Error())
 			}
 			if verbs := countPVCVerbs(cs); verbs["create"] != 0 {
 				t.Errorf("claim verbs = %v, want no create after a refused lookup", verbs)
@@ -454,9 +586,14 @@ func TestEnsureDrivePVC_ForbiddenLookupNamesTheSwitch(t *testing.T) {
 
 // TestEnsureDrivePVC_ForbiddenCarriesTheApiserverQuotaText pins the OTHER cause
 // of a 403, which no status code distinguishes from the RBAC one and which takes
-// the opposite remedy: a namespace ResourceQuota. The apiserver's own message is
-// interpolated ahead of the sentinel's text so the operator can tell which half
-// of the sentence applies to them.
+// the opposite remedy: a namespace ResourceQuota.
+//
+// The apiserver's message used to be interpolated ahead of a sentinel that
+// carried BOTH remedies, leaving the reader to pick — which meant the raw 403
+// had to be shown, and a raw 403 spells the runs namespace and the runner's
+// ServiceAccount to whichever member's run failed. The driver picks instead, on
+// the same substring the reader would have used, and this is the test that the
+// picking still works with the evidence no longer on display.
 func TestEnsureDrivePVC_ForbiddenCarriesTheApiserverQuotaText(t *testing.T) {
 	cs := fake.NewClientset()
 	drive := testDriveMount()
@@ -470,9 +607,16 @@ func TestEnsureDrivePVC_ForbiddenCarriesTheApiserverQuotaText(t *testing.T) {
 	if !errors.Is(err, errDrivePVCForbidden) {
 		t.Fatalf("err = %v, want errors.Is(err, errDrivePVCForbidden)", err)
 	}
-	if got := err.Error(); !strings.Contains(got, "exceeded quota") || !strings.Contains(got, "ResourceQuota") {
-		t.Errorf("err = %q, want the apiserver's quota text AND the sentence that tells the reader it is a quota, not RBAC", got)
+	got := err.Error()
+	if !strings.Contains(got, "ResourceQuota") || !strings.Contains(got, drive.ObjectName) {
+		t.Errorf("err = %q, want the claim name and the sentence that tells the reader it is a quota, not RBAC", got)
 	}
+	// ONE remedy, not two: the whole point of choosing is that the reader is not
+	// handed the RBAC instruction for a problem RBAC will not fix.
+	if strings.Contains(got, "userDrives.enabled") {
+		t.Errorf("err = %q, want the quota remedy ALONE — the chart switch is not this reader's move", got)
+	}
+	assertRefusalKeepsClusterNamesToItself(t, err)
 }
 
 // TestEnsureDrivePVC_RefusesATerminatingClaim is the one existing-claim state

@@ -2227,11 +2227,23 @@ resolved by name first, and is all a share ever needs; `create` for a managed
 drive's first use. Leave it on for **any** drive at all. With it off, EVERY
 drive's run fails at dispatch — the lookup is the first call a drive makes and a
 share makes no other — and the run's failure hint names the switch. Both the Get
-and the Create map their 403 onto that one sentence, because the apiserver's own
-"cannot get resource" text names nothing an operator can flip. The same sentence
-also names the other cause of a 403, which no status code distinguishes: a
-namespace `ResourceQuota` refusing the claim. The apiserver's message is printed
-ahead of it, so `exceeded quota` in that text means the quota, not RBAC.
+and the Create map their 403 onto that one refusal, because the apiserver's own
+"cannot get resource" text names nothing an operator can flip. A 403 has a second
+cause that no status code distinguishes from the first and that takes the
+opposite remedy — a namespace `ResourceQuota` refusing the claim — so wardynd
+picks which of the two the hint names, on the `exceeded quota` substring the
+quota admission plugin always emits. A hint naming `ResourceQuota` means the
+quota, and RBAC is not the problem.
+
+**The failure hint does not quote the apiserver, and the daemon log does.** A raw
+403 reads `User "system:serviceaccount:<ns>:<sa>" cannot get resource ...`, and a
+run's failure hint is read by the member whose run failed — so the hint carries
+the claim name and one remedy, and nothing that names this cluster. The
+apiserver's own sentence goes to the daemon log instead, with the verb, the
+claim, the namespace, the drive id and the refusal verbatim; grep it for `the
+apiserver refused a drive claim`. The claim name appears in both halves, so a
+member's report of a failed run joins to the full text without anybody having
+been handed the runs namespace or the runner's ServiceAccount name.
 
 **Renaming a drive orphans its claims, and Wardyn will not clean that up.** A
 claim's name folds the drive's NAME into a slug (`wardyn-drive-<drive>-<home>`),
@@ -2280,6 +2292,15 @@ verb and cannot repair the collision, so it refuses the run rather than mount
 one member's private drive inside another member's agent. The fix is to rename
 one of the two drives (see the rename caveat above) or to give the colliding
 people distinct home names.
+
+Both refusals also cover the loser of a create race. Two first runs can collide
+inside the lookup→create window, and the loser's create comes back
+`AlreadyExists`; it re-reads the claim that won rather than mounting on the
+strength of the name, so the identity and Terminating answers are the same ones,
+one moment later. If the winning claim has been deleted again by the time the
+loser looks — a reclaim landing mid-dispatch — the run is refused with *"your
+drive's volume claim was deleted while your run was starting"*, and starting it
+again is the whole remedy: nothing re-creates a claim somebody is reclaiming.
 
 **`ReadWriteOnce` binds a claim to one node.** A managed drive is provisioned
 RWO, so a person's second concurrent run schedules onto the node their first run
