@@ -1266,6 +1266,45 @@ func (s *authzStore) HasGroupTierAssignments(context.Context) (bool, error) {
 	return false, nil
 }
 
+// ─── user drives (migration 0054) ─────────────────────────────────────────
+//
+// Same honest-empty-state posture as the governance block above, and here it is
+// also the exact state the matrix wants: NO drive and NO grant is the
+// deployment that has not adopted user drives, which by the absent-row doctrine
+// mounts nothing — byte for byte the behaviour before the feature existed. So
+// every route this matrix walks resolves as it always has, and the only thing
+// under test on a /drives row is the authorization boundary. The precedence
+// table itself is a store-level test against a real Postgres
+// (internal/store/user_drives_test.go), where rows can actually exist.
+func (s *authzStore) UpsertUserDrive(_ context.Context, d types.UserDrive) (types.UserDrive, error) {
+	return d, nil
+}
+func (s *authzStore) GetUserDrive(context.Context, uuid.UUID) (types.UserDrive, error) {
+	return types.UserDrive{}, store.ErrNotFound
+}
+func (s *authzStore) DeleteUserDrive(context.Context, uuid.UUID) error {
+	return store.ErrNotFound
+}
+func (s *authzStore) ListUserDrives(context.Context) ([]types.UserDriveListItem, error) {
+	return nil, nil
+}
+func (s *authzStore) UpsertUserDriveGrant(_ context.Context, g types.UserDriveGrant) (types.UserDriveGrant, error) {
+	return g, nil
+}
+func (s *authzStore) DeleteUserDriveGrant(context.Context, uuid.UUID) error {
+	return store.ErrNotFound
+}
+func (s *authzStore) ListUserDriveGrants(context.Context) ([]types.UserDriveGrant, error) {
+	return nil, nil
+}
+func (s *authzStore) ResolveUserDrive(context.Context, []string, []string) (
+	*types.UserDrive, *types.UserDriveGrant, types.CapabilitySubjectType, error) {
+	return nil, nil, "", store.ErrNotFound
+}
+func (s *authzStore) HasGroupTierDriveGrants(context.Context) (bool, error) {
+	return false, nil
+}
+
 // ─── in-memory ApprovalService fake, ownership-aware ──────────────────────
 
 // authzApprovals is a minimal approval FSM backed by an in-memory map, PLUS

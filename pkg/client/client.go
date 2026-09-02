@@ -289,6 +289,30 @@ type CreateRunRequest struct {
 	// corporate-network id — those apply operator-wide already, and are never
 	// run-selectable) is a 400.
 	IntegrationID string `json:"integration_id,omitempty"`
+	// Drive opts this run into the member's USER DRIVE — the per-user storage
+	// an admin allocated them. Nil (the default) mounts nothing, byte for byte
+	// today. Nothing here names a path or a drive: the server resolves which
+	// drive belongs to the authenticated caller and derives their home from
+	// their own identity, so this flag can only ever ask for the storage the
+	// caller was already granted.
+	Drive *DriveSelection `json:"drive,omitempty"`
+}
+
+// DriveSelection is the per-run user-drive option set. See
+// CreateRunRequest.Drive.
+type DriveSelection struct {
+	// Enabled asks for the caller's drive to be mounted. False (and an absent
+	// Drive) mounts nothing. A caller with no drive allocated, or one whose
+	// governance profile carries DenyUserDrive, is refused rather than silently
+	// given a run without it — asking for storage and not getting it is how
+	// work is lost.
+	Enabled bool `json:"enabled"`
+	// ReadOnly, when set, NARROWS this run's mount — true forces read-only even
+	// on a writable allocation; false is a NO-OP, never a widening. Nil leaves
+	// the resolved allocation's own posture in effect. Exactly the semantics
+	// WorkspaceSelection.ReadOnly carries, and for the same reason: a run-level
+	// option may only ever narrow what an admin already granted.
+	ReadOnly *bool `json:"read_only,omitempty"`
 }
 
 // WorkspaceSelection is one per-run option set for an attached workspace. See
