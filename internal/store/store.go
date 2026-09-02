@@ -160,14 +160,17 @@ func (s PG) UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, t
 	return tag.RowsAffected() > 0, nil
 }
 
-// SetSandboxRef records the runner reference (container ID / pod name).
-func (s PG) SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error {
-	tag, err := s.Pool.Exec(ctx,
-		`UPDATE agent_runs SET sandbox_ref=$1, updated_at=now() WHERE id=$2`,
-		ref, id,
-	)
+// execRun is the one body the scoped single-column agent_runs writers below
+// share: Exec, wrap a driver error as "store: <verb>", and translate "no row
+// matched" into ErrNotFound. verb is exactly the error text each writer used to
+// spell for itself, so the wrapped message a caller matches on is unchanged.
+// UpdateRunStateIf/UpdateRunStateIfIdle deliberately do NOT route through here:
+// zero rows affected is a legitimate no-op for a guarded transition, not a
+// missing row.
+func (s PG) execRun(ctx context.Context, verb, query string, args ...any) error {
+	tag, err := s.Pool.Exec(ctx, query, args...)
 	if err != nil {
-		return fmt.Errorf("store: set sandbox ref: %w", err)
+		return fmt.Errorf("store: %s: %w", verb, err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
@@ -175,21 +178,18 @@ func (s PG) SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error {
 	return nil
 }
 
+// SetSandboxRef records the runner reference (container ID / pod name).
+func (s PG) SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error {
+	return s.execRun(ctx, "set sandbox ref",
+		`UPDATE agent_runs SET sandbox_ref=$1, updated_at=now() WHERE id=$2`, ref, id)
+}
+
 // SetRunImage scoped-writes ONLY the resolved-image provenance column. Called
 // once after image resolution (the image is resolved after the row is
 // inserted, so this is a scoped update, not a CreateRun column).
 func (s PG) SetRunImage(ctx context.Context, id uuid.UUID, image string) error {
-	tag, err := s.Pool.Exec(ctx,
-		`UPDATE agent_runs SET image=$1, updated_at=now() WHERE id=$2`,
-		image, id,
-	)
-	if err != nil {
-		return fmt.Errorf("store: set run image: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.execRun(ctx, "set run image",
+		`UPDATE agent_runs SET image=$1, updated_at=now() WHERE id=$2`, image, id)
 }
 
 // SetRunAgentExecID scoped-writes ONLY the agent_exec_id column. Called once
@@ -197,17 +197,8 @@ func (s PG) SetRunImage(ctx context.Context, id uuid.UUID, image string) error {
 // this is a scoped update, not a CreateRun column value). The crash reconciler
 // reads it to observe agent liveness across a restart.
 func (s PG) SetRunAgentExecID(ctx context.Context, id uuid.UUID, execID string) error {
-	tag, err := s.Pool.Exec(ctx,
-		`UPDATE agent_runs SET agent_exec_id=$1, updated_at=now() WHERE id=$2`,
-		execID, id,
-	)
-	if err != nil {
-		return fmt.Errorf("store: set run agent exec id: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.execRun(ctx, "set run agent exec id",
+		`UPDATE agent_runs SET agent_exec_id=$1, updated_at=now() WHERE id=$2`, execID, id)
 }
 
 // SetRunFailureHint scoped-writes ONLY the failure_hint column — the one-line
@@ -216,17 +207,8 @@ func (s PG) SetRunAgentExecID(ctx context.Context, id uuid.UUID, execID string) 
 // (failAndRevoke), after the row exists, so it is a scoped update, not a
 // CreateRun value. Best-effort at the call site; ErrNotFound when no row matched.
 func (s PG) SetRunFailureHint(ctx context.Context, id uuid.UUID, hint string) error {
-	tag, err := s.Pool.Exec(ctx,
-		`UPDATE agent_runs SET failure_hint=$1, updated_at=now() WHERE id=$2`,
-		hint, id,
-	)
-	if err != nil {
-		return fmt.Errorf("store: set run failure hint: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.execRun(ctx, "set run failure hint",
+		`UPDATE agent_runs SET failure_hint=$1, updated_at=now() WHERE id=$2`, hint, id)
 }
 
 // TouchRun bumps a run's updated_at to now() without changing any other field.
@@ -234,14 +216,7 @@ func (s PG) SetRunFailureHint(ctx context.Context, id uuid.UUID, hint string) er
 // reaper (which measures idleness by agent_runs.updated_at) does not stop a run
 // that a human is actively attached to. Returns ErrNotFound when no row matched.
 func (s PG) TouchRun(ctx context.Context, id uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET updated_at=now() WHERE id=$1`, id)
-	if err != nil {
-		return fmt.Errorf("store: touch run: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.execRun(ctx, "touch run", `UPDATE agent_runs SET updated_at=now() WHERE id=$1`, id)
 }
 
 // scanRun is the ONE reader for every agent_runs column list in this package
