@@ -121,7 +121,10 @@ export function DrivesScreen() {
   const editorOpen = editing !== null;
   const noDrives = status === "ready" && snap.drives.length === 0;
   // The screen's single `default` button, derived in one place so two can never
-  // co-occur (CONSOLE-RULES §6, prompt §4).
+  // co-occur (CONSOLE-RULES §6, prompt §4). Only the `new` arm is READ here —
+  // the other two are held by components below (the editor's Save, the
+  // allocation form's Allocate), and naming all three is what makes the
+  // invariant checkable at a glance rather than spread across three files.
   const teal: "save" | "new" | "allocate" = editorOpen ? "save" : noDrives ? "new" : "allocate";
 
   const deleteCount = toDelete?.grant_count ?? 0;
@@ -280,10 +283,13 @@ export function DrivesScreen() {
             )}
           </section>
 
-          {/* Only once the read has landed: "No allocations yet" over an
-              unloaded snapshot is a confident empty state that is a false
-              claim. The drives card above holds the skeleton for both. */}
-          {status === "ready" && (
+          {/* Only once the read has landed AND there is something to allocate:
+              "No allocations yet" over an unloaded snapshot is a confident
+              empty state that is a false claim, and over a registry with no
+              drives it is an answer to a question nobody can ask yet (mock
+              state 1 is the header and the empty state, nothing else). The
+              drives card above holds the skeleton for both. */}
+          {status === "ready" && snap.drives.length > 0 && (
             <AllocationsBlock
               drives={snap.drives}
               grants={snap.grants}
@@ -318,7 +324,10 @@ export function DrivesScreen() {
           {deleteError && (
             <Note tone="red" role="alert">
               {deleteError.title && <b className="font-semibold">{deleteError.title}</b>}
-              <Mono className="text-inherit">{deleteError.message}</Mono>
+              {/* The server's own sentence, PLAIN: it is prose that quotes a
+                  wire fact, not a literal, and monoing the whole of it would
+                  claim otherwise. */}
+              <span>{deleteError.message}</span>
             </Note>
           )}
           <AlertDialogFooter>

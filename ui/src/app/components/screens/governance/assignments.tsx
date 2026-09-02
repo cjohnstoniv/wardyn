@@ -59,23 +59,8 @@ import { DirectoryCombobox } from "../../wardyn/directory-combobox";
 import { Field } from "../../wardyn/form-primitives";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState } from "../../wardyn/states";
-import { Segmented } from "../permissions";
+import { SUBJECTS, SUBJECT_LABEL, Segmented, subjectText } from "../permissions";
 import { Note, question } from "./display";
-
-// The subject vocabulary is permissions-copy.ts's, never a second copy of it
-// (§5 #6): a governance assignment and a capability grant must not disagree
-// about what "Everyone signed in" means.
-const SUBJECTS: { value: CapabilitySubjectType; label: string; hint: string }[] = [
-  { value: "user", label: PERM.SUBJECT_USER, hint: PERM.HINT_USER },
-  { value: "group", label: PERM.SUBJECT_GROUP, hint: PERM.HINT_GROUP },
-  { value: "all", label: PERM.SUBJECT_ALL, hint: PERM.HINT_ALL },
-];
-
-const SUBJECT_LABEL: Record<CapabilitySubjectType, string> = {
-  user: PERM.SUBJECT_USER,
-  group: PERM.SUBJECT_GROUP,
-  all: PERM.SUBJECT_ALL,
-};
 
 // What PREVIEW_RESULT's {matched} says — the matching row named in the table's
 // own vocabulary (§7.3).
@@ -84,10 +69,6 @@ const MATCHED_LABEL: Record<CapabilitySubjectType, string> = {
   group: GOV.MATCHED_GROUP,
   all: GOV.MATCHED_ALL,
 };
-
-// Who a row names, for the unassign confirmation.
-const subjectText = (a: GovernanceAssignment): string =>
-  a.subject_type === "all" ? PERM.SUBJECT_ALL : a.subject;
 
 export function AssignmentsBlock({
   snapshot,

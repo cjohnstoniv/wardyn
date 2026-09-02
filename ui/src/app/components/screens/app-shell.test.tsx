@@ -37,6 +37,8 @@ function renderMobileNav(role: Role = "admin") {
           role,
           sessionExpiresAt: null,
           memberLocalDirRoot: null,
+          userDrive: null,
+          userDriveDeniedByProfile: "",
         }}
       />
     </MemoryRouter>,
@@ -480,6 +482,8 @@ function renderTopBar(role: Role) {
             role,
             sessionExpiresAt: null,
             memberLocalDirRoot: null,
+            userDrive: null,
+            userDriveDeniedByProfile: "",
           }}
           pendingApprovals={0}
           attentionCount={0}

@@ -8,7 +8,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { SetupStatus, AgentRun } from "../../../lib/types";
-import { baseStatus } from "../../../lib/test-fixtures";
+import { baseMe, baseMeDrive, baseStatus } from "../../../lib/test-fixtures";
 
 const getSetupStatusMock = vi.fn();
 vi.mock("../../../lib/api/setup", () => ({
@@ -52,15 +52,9 @@ vi.mock("../../../lib/api/policies", () => ({
   policies: { getDefaultPolicy: (...a: unknown[]) => getDefaultPolicyMock(...a) },
 }));
 
-// GET /me answers the drive chip and the Workspace card's drive sentence. The
-// default answer carries no user_drive — a member with none, which is what
-// every case below except the drive ones is.
-const whoamiMock = vi.fn();
-vi.mock("../../../lib/api/health", () => ({
-  health: { whoami: (...a: unknown[]) => whoamiMock(...a) },
-}));
-
 import { MemberGettingStarted } from "./member-getting-started";
+import type { Me } from "../../../lib/api/health";
+import { OperatorProvider } from "../../wardyn/operator-context";
 import { MEMBER } from "../../../lib/governance-copy";
 import { DRIVES, DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 
@@ -78,10 +72,20 @@ function run(id: string): AgentRun {
   return { id, created_at: "", updated_at: "" } as AgentRun;
 }
 
-function renderPage() {
+// The page reads its drive off the shell's ONE GET /me (operator-context's
+// UserDriveContext), not a fetch of its own — so a case states its /me body
+// here, exactly as app-shell hands it down.
+function renderPage(me: Me = baseMe()) {
   return render(
     <MemoryRouter>
-      <MemberGettingStarted />
+      <OperatorProvider
+        operator={false}
+        securityOperator={false}
+        userDrive={me.user_drive}
+        userDriveDeniedByProfile={me.user_drive_denied_by_profile}
+      >
+        <MemberGettingStarted />
+      </OperatorProvider>
     </MemoryRouter>,
   );
 }
@@ -103,16 +107,6 @@ describe("MemberGettingStarted", () => {
     listKeysMock.mockReset().mockResolvedValue([]);
     listWorkspacesMock.mockReset().mockResolvedValue([]);
     getDefaultPolicyMock.mockReset().mockResolvedValue({ min_confinement_class: "CC1" });
-    whoamiMock.mockReset().mockResolvedValue({
-      principal: "alice@corp.example",
-      method: "sso",
-      operator: false,
-      security_operator: false,
-      role: "member",
-      email: "alice@corp.example",
-      user_drive: null,
-      user_drive_denied_by_profile: "",
-    });
   });
 
   // §7.6's second display moment: the chip names the profile, the line says
@@ -276,23 +270,7 @@ describe("MemberGettingStarted", () => {
   // §7.6's Getting Started moments, both keyed on /me.user_drive alone: with
   // no allocation there is no chip and no sentence, which is today's page.
   it("names the allocated drive — chip and the not-a-workspace sentence together", async () => {
-    whoamiMock.mockResolvedValue({
-      principal: "alice@corp.example",
-      method: "sso",
-      operator: false,
-      security_operator: false,
-      role: "member",
-      email: "alice@corp.example",
-      user_drive: {
-        name: "Scratch",
-        backend: "k8s_pvc",
-        size_mib: 16384,
-        writable: true,
-        enforcement: "request",
-      },
-      user_drive_denied_by_profile: "",
-    });
-    renderPage();
+    renderPage(baseMe({ user_drive: baseMeDrive() }));
     expect(
       await screen.findByText(DM.GS_DRIVE_CHIP("Scratch", DRIVES.SIZE_GIB(16), DRIVES.MODE_RW_INLINE)),
     ).toBeInTheDocument();
@@ -300,22 +278,17 @@ describe("MemberGettingStarted", () => {
   });
 
   it("takes the _NOSIZE twin for a share with no allocation shown", async () => {
-    whoamiMock.mockResolvedValue({
-      principal: "alice@corp.example",
-      method: "sso",
-      operator: false,
-      security_operator: false,
-      role: "member",
-      email: "alice@corp.example",
-      user_drive: {
-        name: "Corporate homes",
-        backend: "k8s_pvc_static",
-        writable: false,
-        enforcement: "external",
-      },
-      user_drive_denied_by_profile: "",
-    });
-    renderPage();
+    renderPage(
+      baseMe({
+        user_drive: baseMeDrive({
+          name: "Corporate homes",
+          backend: "k8s_pvc_static",
+          size_mib: undefined,
+          writable: false,
+          enforcement: "external",
+        }),
+      }),
+    );
     expect(
       await screen.findByText(DM.GS_DRIVE_CHIP_NOSIZE("Corporate homes", DRIVES.MODE_RO_INLINE)),
     ).toBeInTheDocument();
@@ -325,24 +298,9 @@ describe("MemberGettingStarted", () => {
   // mounts nothing next run, so naming its size would describe storage this
   // member cannot reach.
   it("says Paused instead of a size and a mode", async () => {
-    whoamiMock.mockResolvedValue({
-      principal: "alice@corp.example",
-      method: "sso",
-      operator: false,
-      security_operator: false,
-      role: "member",
-      email: "alice@corp.example",
-      user_drive: {
-        name: "Scratch",
-        backend: "docker_volume",
-        size_mib: 16384,
-        writable: true,
-        enforcement: "none",
-        paused: true,
-      },
-      user_drive_denied_by_profile: "",
-    });
-    renderPage();
+    renderPage(
+      baseMe({ user_drive: baseMeDrive({ backend: "docker_volume", enforcement: "none", paused: true }) }),
+    );
     expect(await screen.findByText(DM.GS_DRIVE_CHIP_PAUSED("Scratch"))).toBeInTheDocument();
     expect(
       screen.queryByText(DM.GS_DRIVE_CHIP("Scratch", DRIVES.SIZE_GIB(16), DRIVES.MODE_RW_INLINE)),

@@ -163,6 +163,13 @@ describe("DrivesScreen — states", () => {
     // …and only one New drive button exists at all — the section header's is
     // dropped rather than duplicating the empty state's.
     expect(screen.getAllByRole("button", { name: DRIVES.NEW_CTA })).toHaveLength(1);
+    // Mock state 1 is the header and this empty state — nothing else. The whole
+    // allocations block is absent: with no drive registered there is nothing to
+    // allocate, so "No allocations yet" would answer a question this admin
+    // cannot ask yet, and the form under it would offer an empty Drive select.
+    expect(screen.queryByText(DRIVES.ALLOC_TITLE)).toBeNull();
+    expect(screen.queryByText(DRIVES.EMPTY_ALLOC_TITLE)).toBeNull();
+    expect(screen.queryByText(DRIVES.PREVIEW_TITLE)).toBeNull();
   });
 
   it("populated: the kind chip over the wire backend, the size with its gloss, the mode and the count", async () => {
@@ -214,10 +221,19 @@ describe("DrivesScreen — states", () => {
     expect(await screen.findByText(HOMES.name)).toBeInTheDocument();
   });
 
-  it("drives but no allocations is its own state", async () => {
+  it("drives but no allocations is its own state — and the preview still answers", async () => {
     renderScreen(snapshot({ grants: [] }));
     expect(await screen.findByText(DRIVES.EMPTY_ALLOC_TITLE)).toBeInTheDocument();
     expect(screen.getByText(DRIVES.EMPTY_ALLOC_BODY)).toBeInTheDocument();
+
+    // The server's {} → PREVIEW_NONE is the honest answer here, and the one an
+    // admin checking their work came for: the button is never gated on there
+    // being rows to match, only on there being claims to ask about.
+    await userEvent.type(screen.getByLabelText(PREVIEW.FIELD_CLAIMS), "wardyn.platform");
+    const ask = screen.getByRole("button", { name: DRIVES.PREVIEW_CTA });
+    expect(ask).not.toBeDisabled();
+    await userEvent.click(ask);
+    expect(await screen.findByText(DRIVES.PREVIEW_NONE)).toBeInTheDocument();
   });
 
   it("at rest the ONE teal is Allocate — New drive and Edit are not", async () => {
@@ -434,7 +450,11 @@ describe("DrivesScreen — allocations", () => {
     );
     await screen.findByText("bob@corp.example");
     expect(screen.getByText(GOV.PRIORITY_NA)).toBeInTheDocument();
-    expect(screen.getByText(DRIVES.OVERRIDE_HOME("bsmith"))).toBeInTheDocument();
+    // The chip's label around a MONO directory name — the name is a literal
+    // path segment the resolver matches byte for byte, not part of the label.
+    const home = screen.getByText("bsmith");
+    expect(home.className).toContain("font-mono");
+    expect(home.parentElement).toHaveTextContent(DRIVES.OVERRIDE_HOME("bsmith"));
     // A writable override renders in the mode's own chip vocabulary.
     expect(screen.getAllByText(DRIVES.MODE_RW).length).toBeGreaterThan(1);
   });
@@ -516,6 +536,90 @@ describe("DrivesScreen — allocations", () => {
     expect(confirm.className).not.toContain("bg-danger");
     await userEvent.click(confirm);
     expect(deleteGrantMock).toHaveBeenCalledWith("g1");
+  });
+});
+
+// What the form actually PUTS on the wire, arm by arm. The rendering above
+// proves the controls exist; this proves each one reaches upsertGrant as the
+// server's own field, because these five bodies are not interchangeable:
+// writable_override is a *bool whose absence is a THIRD state, enabled=false is
+// a pause rather than a delete, and home_override/size_mib_override are refused
+// outright off the user tier.
+describe("DrivesScreen — the allocation form's wire shapes", () => {
+  // The body every arm below differs from by one key: the group tier, the
+  // Scratch drive, and nothing overridden.
+  const base = {
+    subject_type: "group",
+    subject: "wardyn.platform",
+    drive_id: SCRATCH.id,
+    priority: 0,
+    size_mib_override: 0,
+    home_override: "",
+    enabled: true,
+  };
+
+  // Name a subject and pick a drive — the two fields Allocate is gated on.
+  const fill = async (who = "wardyn.platform") => {
+    await screen.findByText(DRIVES.ALLOC_TITLE);
+    await userEvent.type(screen.getByRole("textbox", { name: PERM.FIELD_WHO }), who);
+    await userEvent.click(screen.getByRole("combobox"));
+    await userEvent.click(await screen.findByRole("option", { name: SCRATCH.name }));
+  };
+  const allocate = () => userEvent.click(screen.getByRole("button", { name: DRIVES.ADD_CTA }));
+
+  beforeEach(() => upsertGrantMock.mockResolvedValue({ grant: {}, replaced: false }));
+
+  it("inherit sends NO writable_override key at all — an absent *bool is the third state", async () => {
+    renderScreen();
+    await fill();
+    await allocate();
+    expect(upsertGrantMock).toHaveBeenCalledWith(base);
+    expect(upsertGrantMock.mock.calls[0][0]).not.toHaveProperty("writable_override");
+  });
+
+  it("Writable sends writable_override: true", async () => {
+    renderScreen();
+    await fill();
+    await userEvent.click(screen.getByRole("button", { name: DRIVES.MODE_RW }));
+    await allocate();
+    expect(upsertGrantMock).toHaveBeenCalledWith({ ...base, writable_override: true });
+  });
+
+  it("Read-only sends writable_override: false — never the absent key", async () => {
+    renderScreen();
+    await fill();
+    await userEvent.click(screen.getByRole("button", { name: DRIVES.MODE_RO }));
+    await allocate();
+    expect(upsertGrantMock).toHaveBeenCalledWith({ ...base, writable_override: false });
+  });
+
+  it("the Enabled switch off sends enabled: false — a pause, not a removal", async () => {
+    renderScreen();
+    await fill();
+    await userEvent.click(screen.getByRole("switch", { name: DRIVES.FIELD_ENABLED }));
+    await allocate();
+    expect(upsertGrantMock).toHaveBeenCalledWith({ ...base, enabled: false });
+    expect(deleteGrantMock).not.toHaveBeenCalled();
+  });
+
+  it("a user-tier row carries its directory name and its size override", async () => {
+    renderScreen();
+    await screen.findByText(DRIVES.ALLOC_TITLE);
+    // The tier first: home_override is accepted on a user row only, and the
+    // field is disabled until this click.
+    await userEvent.click(screen.getByRole("button", { name: PERM.SUBJECT_USER }));
+    await fill("bob@corp.example");
+    await userEvent.type(screen.getByLabelText(DRIVES.FIELD_HOME_OVERRIDE), "bsmith");
+    await userEvent.type(screen.getByLabelText(DRIVES.FIELD_SIZE_OVERRIDE), "4096");
+    await allocate();
+
+    expect(upsertGrantMock).toHaveBeenCalledWith({
+      ...base,
+      subject_type: "user",
+      subject: "bob@corp.example",
+      size_mib_override: 4096,
+      home_override: "bsmith",
+    });
   });
 });
 

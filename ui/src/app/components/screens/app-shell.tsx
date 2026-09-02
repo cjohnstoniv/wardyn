@@ -60,7 +60,7 @@ import {
   RoleProvider,
   type Role,
 } from "../wardyn/operator-context";
-import { health as api } from "../../lib/api/health";
+import { health as api, type MeUserDrive } from "../../lib/api/health";
 import type { ConfinementClass } from "../../lib/types";
 // The run wizard reaches the workspaces + secrets screens and their dialogs, so
 // importing it eagerly pulled all of that into the entry chunk even though the
@@ -98,6 +98,13 @@ export interface ShellMeta {
   // M3 — see operator-context.tsx's MemberLocalDirRootContext. null until /me
   // resolves and stays null (fail-closed: unavailable) if it never does.
   memberLocalDirRoot: string | null;
+  // 0.7 — the caller's own allocation and the profile door beside it, the same
+  // /me body every other field here comes from. New Run and the member Getting
+  // Started page read them off the context rather than issuing a second and a
+  // third GET /me of their own; same fail-closed default as memberLocalDirRoot
+  // (see operator-context.tsx's UserDriveContext).
+  userDrive: MeUserDrive | null;
+  userDriveDeniedByProfile: string;
 }
 
 function useMeta(): ShellMeta {
@@ -112,6 +119,8 @@ function useMeta(): ShellMeta {
     role: "admin",
     sessionExpiresAt: null,
     memberLocalDirRoot: null,
+    userDrive: null,
+    userDriveDeniedByProfile: "",
   });
   React.useEffect(() => {
     let alive = true;
@@ -133,6 +142,8 @@ function useMeta(): ShellMeta {
             ? new Date(me.session_expires_at)
             : null,
           memberLocalDirRoot: me?.member_local_dir_root ?? null,
+          userDrive: me?.user_drive ?? null,
+          userDriveDeniedByProfile: me?.user_drive_denied_by_profile ?? "",
         });
       })
       .catch(() => {
@@ -445,6 +456,8 @@ export function AppShell({
       securityOperator={meta.securityOperator}
       principal={meta.principal}
       memberLocalDirRoot={meta.memberLocalDirRoot}
+      userDrive={meta.userDrive}
+      userDriveDeniedByProfile={meta.userDriveDeniedByProfile}
     >
       <RoleProvider role={meta.role} roleResolved={meta.resolved}>
         <FocusContext.Provider value={focusValue}>

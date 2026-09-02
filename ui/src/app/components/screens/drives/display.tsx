@@ -14,10 +14,10 @@
 import * as React from "react";
 import { DRIVES } from "../../../lib/user-drives-copy";
 import { driveSizeLabel } from "../../../lib/user-drives-display";
-import type { DriveBackend, StorageEnforcement } from "../../../lib/api/drives";
+import type { StorageEnforcement } from "../../../lib/api/drives";
 import { Mono } from "../../wardyn/code-block";
 
-export { Note, noteClass, question, type NoteTone } from "../governance/display";
+export { Note, noteClass, question } from "../governance/display";
 
 // Backtick-mono rendering (user-drives-prompt.md §7 header rule): a backticked
 // substring inside a frozen string is the mount target, an env var or a wire
@@ -64,15 +64,6 @@ const GLOSS: Record<StorageEnforcement, string> = {
 
 export const enforcementGloss = (e: StorageEnforcement | undefined): string =>
   GLOSS[e ?? "none"] ?? DRIVES.ENFORCEMENT_NONE;
-
-// The editor's four long select-option labels — the ONLY place they render; a
-// table cell shows the kind chip over the backend's wire value instead.
-export const BACKEND_LABEL: Record<DriveBackend, string> = {
-  docker_volume: DRIVES.BACKEND_DOCKER_VOLUME,
-  host_path: DRIVES.BACKEND_HOST_PATH,
-  k8s_pvc: DRIVES.BACKEND_K8S_PVC,
-  k8s_pvc_static: DRIVES.BACKEND_K8S_PVC_STATIC,
-};
 
 // Mode is a fact-chip with a WORD, never colour alone. Writable is amber
 // because it is a widened blast radius (the same reason /permissions paints an

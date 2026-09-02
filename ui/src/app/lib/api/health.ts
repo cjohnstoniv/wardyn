@@ -6,6 +6,7 @@
 // Health/liveness, session (logout/whoami), and the operator-wide site config.
 // The small "server & session" surface the shell always needs.
 import type { SiteConfig } from "../types";
+import type { DriveBackend, StorageEnforcement } from "./drives";
 import { asJson, wfetch } from "./core";
 
 // GET /me's `user_drive` (0.7, migration 0054) — what this caller would mount
@@ -21,11 +22,15 @@ import { asJson, wfetch } from "./core";
 // unallocated" — inexpressible.
 export interface MeUserDrive {
   name: string;
-  backend: "docker_volume" | "host_path" | "k8s_pvc" | "k8s_pvc_static";
+  // The registry's own two unions (api/drives.ts), not a second spelling of
+  // them: /me answers with the very backend and enforcement the /drives screen
+  // registered, so a fifth backend added there must not typecheck here until
+  // this surface has been thought about.
+  backend: DriveBackend;
   /** Omitted (or 0) means no allocation is shown, never "zero bytes". */
   size_mib?: number;
   writable: boolean;
-  enforcement: "filesystem" | "request" | "external" | "none";
+  enforcement: StorageEnforcement;
   home_name?: string;
   /** Allocated, then disabled by an admin. Omitted when false. */
   paused?: boolean;

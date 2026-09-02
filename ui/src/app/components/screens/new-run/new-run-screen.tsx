@@ -36,7 +36,6 @@ import { SectionCard, Seg } from "./new-run-primitives";
 import { RunRail } from "./new-run-rail";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { policies as policiesApi } from "../../../lib/api/policies";
-import type { Me } from "../../../lib/api/health";
 import { health as healthApi } from "../../../lib/api/health";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { hasLlmPath } from "../../../lib/readiness";
@@ -52,7 +51,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Field } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
-import { useOperator } from "../../wardyn/operator-context";
+import { useOperator, useUserDrive } from "../../wardyn/operator-context";
 import { CC_META } from "../../wardyn/cc-meta";
 import { RUN_MODE } from "../../wardyn/copy";
 import { getDefaultCc, resolveDefaultCc } from "../../wardyn/default-confinement";
@@ -156,22 +155,14 @@ export function NewRunScreen() {
   // ceiling section simply does not render, which is the honest answer: never
   // claim a ceiling that could not be read.
   const [governanceProfile, setGovernanceProfile] = React.useState<string | undefined>(undefined);
-  // GET /me, for the Workspace card's drive block: the caller's allocation
-  // (`user_drive`, nil-means-none) and the door beside it
-  // (`user_drive_denied_by_profile`, "" means open). null until it resolves —
-  // and on an older daemon or a failed read it STAYS null, which renders as
-  // today's card. That is the honest answer, and the same one the server's own
-  // resolver gives: /me answers every failure with no drive rather than a
-  // guess, and the launch path re-decides for real.
-  const [me, setMe] = React.useState<Me | null>(null);
-  React.useEffect(() => {
-    let alive = true;
-    // whoami() swallows its own failures into null — never blocks the screen.
-    healthApi.whoami().then((m) => alive && setMe(m));
-    return () => {
-      alive = false;
-    };
-  }, []);
+  // The Workspace card's drive block: this caller's allocation (nil-means-none)
+  // and the door beside it ("" means open), read off the shell's ONE GET /me
+  // rather than a second one of this screen's own — app-shell's useMeta already
+  // holds that body and hands it down (operator-context.tsx's UserDriveContext,
+  // the same seam member_local_dir_root rides). With no provider above, on an
+  // older daemon, or after a failed read it is null/"" — which renders as
+  // today's card, the same honest answer the server's own resolver gives.
+  const { drive: userDrive, deniedByProfile: driveDeniedBy } = useUserDrive();
 
   React.useEffect(() => {
     runsApi
@@ -714,8 +705,8 @@ export function NewRunScreen() {
             workspaces={workspaces}
             caps={caps}
             onAddWorkspace={() => setAddWsOpen(true)}
-            drive={me?.user_drive ?? null}
-            driveDeniedBy={me?.user_drive_denied_by_profile ?? ""}
+            drive={userDrive}
+            driveDeniedBy={driveDeniedBy}
           />
 
           <SectionCard title="Policy">

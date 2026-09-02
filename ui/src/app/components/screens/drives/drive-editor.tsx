@@ -41,13 +41,22 @@ import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
 import { Label } from "../../ui/label";
-import { Mono } from "../../wardyn/code-block";
 import { Field, OptionCard, Switch } from "../../wardyn/form-primitives";
-import { BACKEND_LABEL, Note, withMono } from "./display";
+import { Note, withMono } from "./display";
 
 // The three templates in admin-surface order (types.HomeTemplates). There is no
 // whole-email option: an address carries an "@", which no directory segment can
 // hold, so it would validate and then refuse every real caller.
+// The four long select-option labels — this editor is the ONLY place they
+// render; a table cell shows the kind chip over the backend's wire value
+// instead. It lived in display.tsx until this stayed its one consumer.
+const BACKEND_LABEL: Record<DriveBackend, string> = {
+  docker_volume: DRIVES.BACKEND_DOCKER_VOLUME,
+  host_path: DRIVES.BACKEND_HOST_PATH,
+  k8s_pvc: DRIVES.BACKEND_K8S_PVC,
+  k8s_pvc_static: DRIVES.BACKEND_K8S_PVC_STATIC,
+};
+
 const HOME_OPTIONS: { value: HomeTemplate; label: string; hint: string }[] = [
   { value: "hash", label: DRIVES.HOME_HASH, hint: DRIVES.HOME_HASH_HINT },
   { value: "sub", label: DRIVES.HOME_SUB, hint: DRIVES.HOME_SUB_HINT },
@@ -276,9 +285,12 @@ export function DriveEditor({
       {error && (
         <Note tone="red" role="alert">
           {error.title && <b className="font-semibold">{error.title}</b>}
-          {/* The server's own prose, verbatim — mono because it names a path, an
-              env var, a wire value or a deny prefix. */}
-          <Mono className="text-inherit">{error.message}</Mono>
+          {/* The server's own prose, verbatim and PLAIN. It is a sentence that
+              happens to quote a path, an env var and a wire value — monoing the
+              whole of it says the sentence is a literal, which it is not, and
+              the terms inside it are already set off by the server's own
+              quotes and parentheses. */}
+          <span>{error.message}</span>
         </Note>
       )}
 

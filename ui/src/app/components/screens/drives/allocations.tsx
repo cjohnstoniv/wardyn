@@ -64,23 +64,8 @@ import { DirectoryCombobox } from "../../wardyn/directory-combobox";
 import { Field, Switch } from "../../wardyn/form-primitives";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState } from "../../wardyn/states";
-import { Segmented } from "../permissions";
+import { SUBJECTS, SUBJECT_LABEL, Segmented, subjectText } from "../permissions";
 import { Note, enforcementGloss, modeText, modeTone, question, sizeText } from "./display";
-
-// The subject vocabulary is permissions-copy.ts's, never a second copy of it
-// (§5 #6): an allocation and a capability grant must not disagree about what
-// "Everyone signed in" means.
-const SUBJECTS: { value: CapabilitySubjectType; label: string; hint: string }[] = [
-  { value: "user", label: PERM.SUBJECT_USER, hint: PERM.HINT_USER },
-  { value: "group", label: PERM.SUBJECT_GROUP, hint: PERM.HINT_GROUP },
-  { value: "all", label: PERM.SUBJECT_ALL, hint: PERM.HINT_ALL },
-];
-
-const SUBJECT_LABEL: Record<CapabilitySubjectType, string> = {
-  user: PERM.SUBJECT_USER,
-  group: PERM.SUBJECT_GROUP,
-  all: PERM.SUBJECT_ALL,
-};
 
 // PREVIEW_RESULT's {tier}, frozen in §7.3's table rather than in prose.
 const TIER_LABEL: Record<CapabilitySubjectType, string> = {
@@ -97,9 +82,6 @@ const WRITABLE_CHOICES: { value: WritableChoice; label: string }[] = [
   { value: "rw", label: DRIVES.MODE_RW },
   { value: "ro", label: DRIVES.MODE_RO },
 ];
-
-const subjectText = (g: UserDriveGrant): string =>
-  g.subject_type === "all" ? PERM.SUBJECT_ALL : g.subject;
 
 export function AllocationsBlock({
   drives,
@@ -210,7 +192,6 @@ export function AllocationsBlock({
           <AddAllocationForm
             drives={drives}
             disabled={disabled}
-            teal={drives.length > 0}
             replaced={replaced}
             onAdded={(wasReplaced) => {
               setReplaced(wasReplaced);
@@ -220,7 +201,7 @@ export function AllocationsBlock({
         )}
       </section>
 
-      <DrivePreview hasGrants={grants.length > 0} />
+      <DrivePreview />
 
       <AlertDialog open={!!toRemove} onOpenChange={(o) => !o && setToRemove(null)}>
         <AlertDialogContent>
@@ -269,8 +250,14 @@ function Overrides({ grant: g }: { grant: UserDriveGrant }) {
   }
   if (g.home_override) {
     chips.push(
+      // The chip's label around a MONO directory name: the name is a literal
+      // path segment the resolver matches byte for byte, so it is set the way
+      // every other wire value on this screen is. Composed from the frozen
+      // template's own text (OVERRIDE_HOME with an empty name) rather than a
+      // second spelling of it.
       <Chip key="home" tone="neutral">
-        {DRIVES.OVERRIDE_HOME(g.home_override)}
+        {DRIVES.OVERRIDE_HOME("")}
+        <Mono className="text-inherit">{g.home_override}</Mono>
       </Chip>,
     );
   }
@@ -285,19 +272,18 @@ function Overrides({ grant: g }: { grant: UserDriveGrant }) {
   return <span className="flex flex-wrap items-center gap-1.5">{chips}</span>;
 }
 
-// The add form. Its Allocate is the screen's `default` button at rest — unless
-// there is no drive to allocate yet, in which case the drives empty state's New
-// drive carries the teal instead (`teal`).
+// The add form. Its Allocate IS the screen's `default` button at rest: this
+// whole block renders only once a drive exists to allocate (drives-screen.tsx),
+// so the case the teal had to be handed back for — an empty registry, where the
+// drives empty state's New drive carries it — never reaches this form.
 function AddAllocationForm({
   drives,
   disabled,
-  teal,
   replaced,
   onAdded,
 }: {
   drives: UserDriveListItem[];
   disabled: boolean;
-  teal: boolean;
   /** The last upsert repointed an existing row (a 200, not a 201). */
   replaced: boolean;
   onAdded: (replaced: boolean) => void;
@@ -443,7 +429,7 @@ function AddAllocationForm({
       {replaced && <Note>{DRIVES.ALLOC_REPLACED}</Note>}
 
       <div className="mt-4">
-        <Button variant={teal ? "default" : "outline"} onClick={submit} disabled={disabled || saving || !ready}>
+        <Button onClick={submit} disabled={disabled || saving || !ready}>
           {saving ? <Loader2 className="size-4 animate-spin" /> : null}
           {DRIVES.ADD_CTA}
         </Button>
@@ -458,7 +444,12 @@ function AddAllocationForm({
 // resolveUserDriveFor every real run makes, and prints the exact OBJECT NAME
 // the offboarding command needs. This is the only surface that renders that
 // name; no member-facing string ever does.
-function DrivePreview({ hasGrants }: { hasGrants: boolean }) {
+//
+// It never gates itself on there being allocations to match. With none, the
+// server answers {} and PREVIEW_NONE says "no drive is allocated to these
+// claims" — which is the true answer, and the one an admin checking their work
+// came here for. A disabled button would have withheld it.
+function DrivePreview() {
   const [claims, setClaims] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [result, setResult] = React.useState<{ answer: UserDrivePreview } | { error: true } | null>(null);
@@ -491,7 +482,7 @@ function DrivePreview({ hasGrants }: { hasGrants: boolean }) {
           />
         </Field>
         <div className="flex items-start">
-          <Button variant="outline" onClick={run} disabled={busy || !claims.trim() || !hasGrants}>
+          <Button variant="outline" onClick={run} disabled={busy || !claims.trim()}>
             {busy ? <Loader2 className="size-4 animate-spin" /> : null}
             {DRIVES.PREVIEW_CTA}
           </Button>

@@ -3,16 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Settings — four cards, reached from the account menu (not the nav). This is
+// Settings — five cards, reached from the account menu (not the nav). This is
 // the single home for "what is connected and how is this host set up", and it
 // replaces /integrations entirely: the old page shipped an operator-
 // extensibility framework (seven closed kinds plus a generic escape hatch, a
 // probe system, an adopt/derive lifecycle) as the answer to two questions most
 // operators answer once.
 //
-// Host · Model provider · Git host · Your SSH keys.
+// Host · Model provider · Git host · Your SSH keys · Drives (last, §6's "fifth card").
 //
-// Two of the four are components shared verbatim with the Getting Started
+// Two of them are components shared verbatim with the Getting Started
 // funnel (connection-cards.tsx) and one is the barrier picker shared with its
 // Environment step (EnvironmentStep) — so Settings and the tour cannot drift.
 //
@@ -169,12 +169,14 @@ export function SettingsScreen() {
           <HostCard status={status} siteConfig={siteConfig} onRecheck={load} />
           <ModelProviderCard status={status} siteConfig={siteConfig} onChanged={load} />
           <GitHostCard status={status} siteConfig={siteConfig} onChanged={load} />
-          {/* The fifth card — the SAME component the setup funnel's Workspaces
-              step renders, summarising and linking exactly as the Corporate
-              proxy disclosure above does. SUPER-only; it renders nothing for
-              anyone else. */}
-          <UserDrivesCard />
           <SshKeysPane heading="h3" />
+          {/* The FIFTH card, and so the last one (user-drives-prompt.md §6) —
+              the SAME component the setup funnel's Workspaces step renders,
+              summarising and linking exactly as the Corporate proxy disclosure
+              above does. SUPER-only; it renders nothing for anyone else, which
+              is why the position is pinned in the suite rather than left to
+              read off the source. */}
+          <UserDrivesCard />
         </div>
       )}
     </div>

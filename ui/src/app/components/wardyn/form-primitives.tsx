@@ -92,9 +92,14 @@ export function OptionCard({
 
 // A two-state switch. Hoisted here from governance/profile-editor.tsx's
 // LimitRow the day a third screen wanted one — which is what that file's own
-// note said to do — so the drive editor's Writable and the allocation form's
-// Enabled are the SAME control the governance limits are, not a third copy of
-// twenty lines.
+// note said to do — so the governance limits, the drive editor's Writable, the
+// allocation form's Enabled and /permissions' per-kind enforcement are all the
+// SAME control, not four copies of twenty lines.
+//
+// It replaces no @radix-ui/react-switch: cb351ba9 dropped ui/switch.tsx AND
+// that dependency as never-imported, and a native button with role="switch" is
+// the same accessible contract the suites assert, in ten lines and no
+// dependency, following the aria-checked pattern Segmented and OptionCard use.
 //
 // role="switch" is load-bearing beyond semantics: it is what keeps a checked
 // switch (which paints bg-primary) out of the "exactly one teal BUTTON per

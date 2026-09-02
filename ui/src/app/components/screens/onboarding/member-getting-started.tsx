@@ -38,10 +38,9 @@ import {
 import { EPISODES_COPY as EP, MEMBER_GETTING_STARTED as T } from "../../wardyn/copy";
 import { CC_META } from "../../wardyn/cc-meta";
 import { strongestAvailable } from "../../wardyn/default-confinement";
-import { useMemberLocalDirRoot } from "../../wardyn/operator-context";
+import { useMemberLocalDirRoot, useUserDrive } from "../../wardyn/operator-context";
 import { setup as setupApi } from "../../../lib/api/setup";
 import type { MeUserDrive } from "../../../lib/api/health";
-import { health as healthApi } from "../../../lib/api/health";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { policies as policiesApi } from "../../../lib/api/policies";
@@ -126,22 +125,15 @@ export function MemberGettingStarted() {
     };
   }, []);
 
-  // This member's own drive, from GET /me (nil-means-no-allocation). null for
-  // a member with none, for an older daemon, and for a read that failed — all
-  // three render as today's page: no chip, no sentence. §7.6's drive moments
-  // are the allocation's own, so the door
-  // (/me.user_drive_denied_by_profile) is deliberately NOT read here: nothing
-  // on this page offers a mount, so there is nothing for it to refuse. It
-  // renders where the offer is, on the New Run card.
-  const [userDrive, setUserDrive] = React.useState<MeUserDrive | null>(null);
-  React.useEffect(() => {
-    let active = true;
-    // whoami() swallows its own failures into null — never blocks the page.
-    healthApi.whoami().then((me) => active && setUserDrive(me?.user_drive ?? null));
-    return () => {
-      active = false;
-    };
-  }, []);
+  // This member's own drive (nil-means-no-allocation), off the shell's ONE GET
+  // /me rather than a second one of this page's own — see
+  // operator-context.tsx's UserDriveContext. null for a member with none, for
+  // an older daemon, and for a read that failed: all three render as today's
+  // page, no chip and no sentence. §7.6's drive moments here are the
+  // allocation's own, so the door (deniedByProfile) is deliberately NOT read:
+  // nothing on this page offers a mount, so there is nothing for it to refuse.
+  // It renders where the offer is, on the New Run card.
+  const { drive: userDrive } = useUserDrive();
 
   const [sshKeyCount, setSshKeyCount] = React.useState<number | null>(null);
   React.useEffect(() => {

@@ -16,16 +16,8 @@ const getSetupStatusMock = vi.fn();
 vi.mock("../../../lib/api/setup", () => ({
   setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
 }));
-// whoami answers the Workspace card's drive block. The default answer carries
-// NEITHER /me bit — a member with no allocation and no door, which is what
-// every case below except the drive ones is, and which must render as today's
-// card.
-const whoamiMock = vi.fn();
 vi.mock("../../../lib/api/health", () => ({
-  health: {
-    health: () => Promise.resolve({ confinement_classes: ["CC1"] }),
-    whoami: (...a: unknown[]) => whoamiMock(...a),
-  },
+  health: { health: () => Promise.resolve({ confinement_classes: ["CC1"] }) },
 }));
 // getDefaultPolicy names the caller's governance profile for the rail's ceiling
 // section. The default answer carries no governance_profile_name — an
@@ -63,16 +55,33 @@ vi.mock("../../../lib/api/workspaces", () => ({
 }));
 
 import { NewRunScreen } from "./new-run-screen";
-import { baseStatus } from "../../../lib/test-fixtures";
+import type { Me } from "../../../lib/api/health";
+import { baseMe, baseMeDrive, baseStatus } from "../../../lib/test-fixtures";
+import { OperatorProvider } from "../../wardyn/operator-context";
 import { GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
 import { DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
-function renderScreen() {
+// The Workspace card's drive block reads the shell's ONE GET /me off the
+// context (operator-context's UserDriveContext), not a fetch of its own — so a
+// case states its /me body here, exactly as app-shell hands it down. The
+// default carries NEITHER /me drive bit: no allocation and no door, which is
+// what every case below except the drive ones is, and which must render as
+// today's card.
+//
+// `operator` stays TRUE — the context's own fail-open default, which this suite
+// has always run on. It gates useMyCapabilities, not the drive.
+function renderScreen(me: Me = baseMe()) {
   return render(
     <MemoryRouter>
-      <NewRunScreen />
+      <OperatorProvider
+        operator
+        userDrive={me.user_drive}
+        userDriveDeniedByProfile={me.user_drive_denied_by_profile}
+      >
+        <NewRunScreen />
+      </OperatorProvider>
     </MemoryRouter>,
   );
 }
@@ -84,16 +93,6 @@ beforeEach(() => {
   navigateMock.mockReset();
   createRunMock.mockReset().mockResolvedValue({ id: "run_1" });
   getDefaultPolicyMock.mockReset().mockResolvedValue({ min_confinement_class: "CC1" });
-  whoamiMock.mockReset().mockResolvedValue({
-    principal: "alice@corp.example",
-    method: "sso",
-    operator: false,
-    security_operator: false,
-    role: "member",
-    email: "alice@corp.example",
-    user_drive: null,
-    user_drive_denied_by_profile: "",
-  });
 });
 
 // Regression: useWorkspaceList does NOT fetch on mount — each caller loads it
@@ -496,26 +495,10 @@ describe("NewRunScreen — the title's error state", () => {
 // renders perfectly from props it is never given is the failure a component
 // test cannot see.
 describe("NewRunScreen — the member's drive reaches the wire", () => {
-  const withDrive = {
-    principal: "alice@corp.example",
-    method: "sso",
-    operator: false,
-    security_operator: false,
-    role: "member",
-    email: "alice@corp.example",
-    user_drive: {
-      name: "Scratch",
-      backend: "k8s_pvc",
-      size_mib: 16384,
-      writable: true,
-      enforcement: "request",
-    },
-    user_drive_denied_by_profile: "",
-  };
+  const withDrive = baseMe({ user_drive: baseMeDrive() });
 
   it("sends drive {enabled, read_only} for a ticked box and a narrowed mount", async () => {
-    whoamiMock.mockResolvedValue(withDrive);
-    renderScreen();
+    renderScreen(withDrive);
     await user.click(await screen.findByLabelText(DM.NR_CHECKBOX));
     await user.click(screen.getByLabelText(DM.NR_READONLY_TOGGLE));
     await user.type(screen.getByLabelText("Title"), "Refund flow");
@@ -525,8 +508,7 @@ describe("NewRunScreen — the member's drive reaches the wire", () => {
   });
 
   it("sends no drive at all when the member never ticks it", async () => {
-    whoamiMock.mockResolvedValue(withDrive);
-    renderScreen();
+    renderScreen(withDrive);
     // The offer is on screen — this is a declined offer, not a missing one.
     expect(await screen.findByLabelText(DM.NR_CHECKBOX)).toBeInTheDocument();
     await user.type(screen.getByLabelText("Title"), "Refund flow");
@@ -541,9 +523,8 @@ describe("NewRunScreen — the member's drive reaches the wire", () => {
   // and this pins that they get none: a console that re-composed the 422 would
   // tell the member a different story than the audit row does.
   it("renders a drive refusal verbatim, off the wire, with nothing added", async () => {
-    whoamiMock.mockResolvedValue(withDrive);
     createRunMock.mockRejectedValue(new Error(DM.REFUSED_WRITABLE));
-    renderScreen();
+    renderScreen(withDrive);
     await user.click(await screen.findByLabelText(DM.NR_CHECKBOX));
     await user.type(screen.getByLabelText("Title"), "Refund flow");
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
@@ -554,12 +535,7 @@ describe("NewRunScreen — the member's drive reaches the wire", () => {
   // state that proves why: no drive to name, and a refusal that must still be
   // drawn before the member spends a launch discovering it.
   it("draws the door with no allocation at all", async () => {
-    whoamiMock.mockResolvedValue({
-      ...withDrive,
-      user_drive: null,
-      user_drive_denied_by_profile: "Greenfield contractors",
-    });
-    renderScreen();
+    renderScreen(baseMe({ user_drive_denied_by_profile: "Greenfield contractors" }));
     expect(
       await screen.findByText(DM.NR_DENIED("Greenfield contractors")),
     ).toBeInTheDocument();
