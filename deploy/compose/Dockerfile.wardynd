@@ -33,7 +33,7 @@ ARG UI_STAGE=ui-build
 # stage runs NATIVELY on the builder even for a linux/arm64 target — no QEMU,
 # no emulated pnpm. Same reason applies to every other stage in this file that
 # carries the flag.
-FROM --platform=$BUILDPLATFORM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS ui-build
+FROM --platform=$BUILDPLATFORM node:26-bookworm-slim@sha256:367679cf9792759492a486e4aa4b421764d71a9546a6dae8aab81a99eb797b3e AS ui-build
 WORKDIR /ui
 
 # Corporate build support (no-ops on an OSS build): stage the optional corp CA so
@@ -80,7 +80,7 @@ RUN pnpm build
 # ui/dist is un-ignored in .dockerignore ONLY so this COPY can see it; the build
 # fails loudly (empty COPY) if you selected this stage without building the UI
 # first, rather than shipping a stale bundle silently.
-FROM --platform=$BUILDPLATFORM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc AS ui-prebuilt
+FROM --platform=$BUILDPLATFORM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS ui-prebuilt
 WORKDIR /ui
 COPY ui/dist ./dist
 RUN test -f ./dist/index.html || { echo "UI_STAGE=ui-prebuilt but ui/dist/index.html is absent — run 'make ui' on the host first"; exit 1; }
@@ -91,7 +91,7 @@ FROM ${UI_STAGE} AS ui
 # Stage 2: build the Go binaries. Runs on the BUILDER's arch and CROSS-COMPILES
 # to $TARGETARCH below — every binary here is pure Go (CGO_ENABLED=0), so a
 # linux/arm64 image needs no QEMU for the compile, only Go's own GOARCH.
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine@sha256:26402d86be3d72e6a9410afa0108f03529f51f0c1b5eb7f503d0bc44cc7857ac AS builder
 
 WORKDIR /build
 
@@ -148,7 +148,7 @@ RUN CGO_ENABLED=0 GOOS=${HOST_GOOS} GOARCH=${HOST_GOARCH} go build -o /out/wardy
 # Runtime stage: resolves to $TARGETPLATFORM (no --platform pin) and runs NO
 # commands — every instruction below is COPY or ENV — so a linux/arm64 build of
 # this image needs no QEMU at all, only the arm64 child of this pinned index.
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:aef9602f8710ec12bde19d593fed1f76c708531bb7aba205110f1029786ead7b
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 
 # Apache-2.0 s4(a) requires a copy of the Licence to accompany the distribution and
 # s4(d) requires the NOTICE contents to be carried. Publishing an image IS
