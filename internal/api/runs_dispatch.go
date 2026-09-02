@@ -146,10 +146,8 @@ type dispatchParams struct {
 func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatchParams) {
 	// Only the values a phase below REBINDS get a local alias; everything else is
 	// read straight off p (the named-field struct is already self-documenting).
-	image := p.Image
 	policy := p.Policy // local copy; the phases below mutate policy.AllowedDomains
 	injections := p.Injections
-	interactive := p.Interactive
 
 	// Client-disconnect isolation: dispatch is invoked synchronously from the
 	// create-run handler, so a client disconnect cancels ctx mid-flight — which would
@@ -203,7 +201,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	// a credential and is not getting it, so say why — same shape as the codex-cli
 	// drop (applySSHLaneWarnings, runs_create.go), minus the response warning,
 	// which dispatch has no caller to return one to.
-	droppedSSH, droppedPAT := applyDispatchModeEnv(sandboxEnv, run, interactive, p.TaskMode, p.InteractiveStart, p.SeedAutoTools, p.ToolApprovals, p.FirstGitHubGrantID, p.GitPATGrants, p.SSHGrants, p.GitGrants, p.PATBroker)
+	droppedSSH, droppedPAT := applyDispatchModeEnv(sandboxEnv, run, p)
 	s.auditBrokeredGrantDrop(ctx, run.ID, "ssh_key", "run.ssh.brokered_forge", droppedSSH,
 		"this run is brokered for a repo on this forge, so the git-broker route is its only route to it BY NAME "+
 			"(confineGitBrokerEgress denies the forge and its SSH endpoint). Withholding the key is load-bearing, not "+
@@ -269,7 +267,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	// Bedrock > api-key gateway): sets the sandbox auth env (+ the codex-cli
 	// OpenAI gateway route), may widen policy egress for Bedrock, and reports
 	// which proxy-side injections / TLS-MITM this run needs.
-	llm := s.resolveLLMTransport(ctx, run, &policy, sandboxEnv, injections, interactive, p.TaskMode, proxyURL, p.BedrockRef)
+	llm := s.resolveLLMTransport(ctx, run, &policy, sandboxEnv, injections, p.Interactive, p.TaskMode, proxyURL, p.BedrockRef)
 	if p.ResolvedManaged != nil {
 		*p.ResolvedManaged = llm.injectManaged
 	}
@@ -372,7 +370,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 
 	spec := runner.SandboxSpec{
 		RunID:            run.ID,
-		Image:            image,
+		Image:            p.Image,
 		ConfinementClass: run.ConfinementClass,
 		Env:              sandboxEnv,
 		Mounts:           mounts,
@@ -385,7 +383,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 		// Interactive runs come up idle for `wardyn attach`; the driver prepares the
 		// workspace (clones the repo into ~/work) on the idle process so the attach
 		// shell isn't empty. A non-interactive run's task exec does this itself.
-		Interactive: interactive,
+		Interactive: p.Interactive,
 		ProxyConfig: runner.ProxyConfig{
 			RunToken:        p.RunToken,
 			ControlPlaneURL: s.cfg.ControlPlaneURL,
@@ -549,7 +547,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	s.metrics.sandboxLaunched(s.cfg.Now().Sub(run.CreatedAt))
 
 	// INTERACTIVE vs task exec vs BYOI selftest — see startAgentOrIdle.
-	s.startAgentOrIdle(ctx, run, sb.Ref, image, interactive)
+	s.startAgentOrIdle(ctx, run, sb.Ref, p.Image, p.Interactive)
 }
 
 // startAgentOrIdle is dispatch's final phase, after the run is RUNNING.
@@ -566,7 +564,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 // for an interactive/login box, warn-only (a login box legitimately lacks repo
 // wiring and the human sees the shell regardless). Keyed off the wardyn-byoi/
 // image tag so convention/devcontainer runs are unaffected. Extracted verbatim
-// from dispatchWithVerify.
+// from dispatchRun.
 //
 // mainProcessExecID is the agent_exec_id persisted when Runner.Exec succeeds
 // with an EMPTY id ("", nil) — an EXEC-LESS substrate (krun runtime; see

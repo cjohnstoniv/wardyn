@@ -241,11 +241,7 @@ func (s *Server) applyBedrockTransport(ctx context.Context, run types.AgentRun, 
 			s.cfg.MaskRegistry.Add(run.ID, []byte(tok))
 		}
 	}
-	for _, h := range b.egressHosts {
-		if !domainAllowedExact(policy.AllowedDomains, h) {
-			policy.AllowedDomains = append(policy.AllowedDomains, h)
-		}
-	}
+	unionAllowedDomains(policy, b.egressHosts)
 	detail := "resident AWS SigV4 credentials in sandbox env (SigV4 request signing can't be proxy-injected like a static api key); IAM least-privilege scoping is the operator's responsibility"
 	mode := "resident"
 	switch {
@@ -279,7 +275,7 @@ func (s *Server) applyBedrockTransport(ctx context.Context, run types.AgentRun, 
 // NODE_EXTRA_CA_CERTS (additive for Node clients like Claude Code). On failure
 // it marks the run FAILED (CAS from STARTING so a concurrent kill's KILLED
 // state is preserved), audits, and returns ok=false — the dispatch must stop.
-// Extracted verbatim from dispatchWithVerify.
+// Extracted verbatim from dispatchRun.
 func (s *Server) provisionDispatchMITMCA(ctx context.Context, run types.AgentRun, sandboxEnv map[string]string) (certPEM, keyPEM string, ok bool) {
 	pemCert, pemKey, caErr := generateRunCA(time.Now())
 	if caErr != nil {
@@ -385,7 +381,7 @@ func installSandboxTrustedCA(corpPEM string, sandboxEnv map[string]string) {
 // construction (managed requires !subscription). Returns the updated injections
 // slice; ok=false means the grant write failed, the run was marked FAILED
 // (CAS from STARTING), and dispatch must stop. Extracted verbatim from
-// dispatchWithVerify.
+// dispatchRun.
 func (s *Server) authorSubscriptionInjection(ctx context.Context, run types.AgentRun, t llmTransport, policy *types.RunPolicySpec, injections []runner.InjectionGrant) ([]runner.InjectionGrant, bool) {
 	const anthropicAPIHost = "api.anthropic.com"
 	sentinelName := subscriptionOAuthSecret
@@ -431,9 +427,7 @@ func (s *Server) authorSubscriptionInjection(ctx context.Context, run types.Agen
 	if rule, derr := injectionRuleFromScope(subScope); derr == nil {
 		injections = append(injections, runner.InjectionGrant{GrantID: subGrantID, Rule: rule})
 	}
-	if !domainAllowedExact(policy.AllowedDomains, anthropicAPIHost) {
-		policy.AllowedDomains = append(policy.AllowedDomains, anthropicAPIHost)
-	}
+	unionAllowedDomains(policy, []string{anthropicAPIHost})
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.subscription_inject",
 		run.ID.String(), "success", mustJSON(map[string]any{
 			"host": anthropicAPIHost, "tls_mitm": true, "source": injectSource, "detail": detail,
@@ -450,7 +444,7 @@ func (s *Server) authorSubscriptionInjection(ctx context.Context, run types.Agen
 // sandbox holds only the placeholder bearer. Returns the updated injections and
 // the MITM host list; ok=false means the grant write failed, the run was marked
 // FAILED (CAS from STARTING), and dispatch must stop. Extracted verbatim from
-// dispatchWithVerify.
+// dispatchRun.
 func (s *Server) authorBedrockBearerInjection(ctx context.Context, run types.AgentRun, t llmTransport, injections []runner.InjectionGrant) ([]runner.InjectionGrant, []string, bool) {
 	mitmHosts := []string{t.bedrock.runtimeHost}
 	beScope, _ := json.Marshal(map[string]string{
@@ -495,7 +489,7 @@ func llmInspectMITMEnabled(policy *types.RunPolicySpec) bool {
 // silently exempting opaque Bedrock. The default (require_inspectable_llm=false)
 // instead degrades visibly rather than failing. Returns false when the run was
 // marked FAILED (CAS from STARTING so a concurrent kill's KILLED is not
-// clobbered) and dispatch must stop. Extracted verbatim from dispatchWithVerify.
+// clobbered) and dispatch must stop. Extracted verbatim from dispatchRun.
 func (s *Server) enforceInspectableLLM(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, llm llmTransport) bool {
 	li := policy.LLMInspection
 	if li == nil || !li.RequireInspectableLLM || li.Mode == "" || strings.EqualFold(li.Mode, "off") {

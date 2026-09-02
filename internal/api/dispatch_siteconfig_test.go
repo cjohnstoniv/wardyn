@@ -13,7 +13,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// This file validates the SINGLE composition site (dispatchWithVerify in
+// This file validates the SINGLE composition site (dispatchRun in
 // runs.go) that a recent 4-lane merge assembled by hand: operator upstream
 // proxy (site-config), artifact-registry redirect (site-config), SCM host
 // union (site-config), and Bedrock auth (Server Config + secrets) must all
@@ -29,7 +29,7 @@ import (
 // WARDYN_TEST_PG) rather than reinventing either.
 
 // TestDispatch_SiteConfigComposition_ProxyArtifactScmBedrock drives a real
-// POST /api/v1/runs -> handleCreateRun -> dispatch -> dispatchWithVerify and
+// POST /api/v1/runs -> handleCreateRun -> dispatch -> dispatchRun and
 // asserts the composed runner.SandboxSpec the fakeRunner captured.
 func TestDispatch_SiteConfigComposition_ProxyArtifactScmBedrock(t *testing.T) {
 	fr := &fakeRunner{}
