@@ -12,12 +12,14 @@
 // `_claim_names: {"groups": "src1"}` + `_claim_sources` and OMITS `groups`
 // when the user is in more groups than the token limit — 150 for JWTs) must
 // stamp GroupsTruncated=true, so internal/api's ceiling resolver treats the
-// snapshot as unanswerable (governance.go:607) rather than as "asked, there
-// were none" and hands the member the deployment ceiling.
+// snapshot as unanswerable (effectiveCeiling in internal/api/governance.go)
+// rather than as "asked, there were none" and hands the member the deployment
+// ceiling.
 //
-// Today (oidc.go:509-512, derive.go:553-579) the absent `groups` decodes to
-// nil, sessionGroups returns (empty non-nil, truncated=false), and the walled
-// group has evaporated exactly the way PF-26 closed for the cookie byte cap.
+// Today (CallbackHandler's groups-claim decode in oidc.go, then sessionGroups
+// in derive.go) the absent `groups` decodes to nil, sessionGroups returns
+// (empty non-nil, truncated=false), and the walled group has evaporated exactly
+// the way PF-26 closed for the cookie byte cap.
 //
 // Run:
 //
@@ -45,7 +47,7 @@ import (
 // idpEnv.buildIDTokenRawClaim can carry only ONE extra claim, and a token with
 // "_claim_names" but no matching "_claim_sources" entry is rejected outright by
 // go-oidc's verifier ("oidc: source does not exist",
-// go-oidc/v3@v3.20.0/oidc/verify.go:216-218) — a 401 before any Wardyn code
+// IDTokenVerifier.Verify in go-oidc/v3@v3.20.0) — a 401 before any Wardyn code
 // runs, which would make this probe fail for a reason that has nothing to do
 // with the invariant. A real Entra overage token always sends both.
 func f2BuildOverageIDToken(t *testing.T, e *idpEnv, sub, email string) string {
@@ -87,7 +89,7 @@ func TestF2_GroupsOverageMarkerStampsTruncated(t *testing.T) {
 	}
 	// doCallback's Session omits the truncation bit, so read it off the minted
 	// cookie through Middleware exactly as internal/api's humanOrAdminAuth does
-	// (http.go:385 -> oidc.GroupsTruncatedFromContext).
+	// (humanOrAdminAuth in http.go -> oidc.GroupsTruncatedFromContext).
 	var sessCookie *http.Cookie
 	for _, c := range w.Result().Cookies() {
 		if c.Name == "wardyn_session" {

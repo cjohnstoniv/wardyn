@@ -5,7 +5,7 @@
 //
 // INTENDED DESTINATION: internal/api/apitokens_truncated_pg_test.go (package api).
 // Copy the file there unchanged; it reuses this package's existing test helpers
-// (throwawayPGPool — injection_owner_pg_test.go:37; newHarness/baseTestConfig/do
+// (throwawayPGPool — injection_owner_pg_test.go; newHarness/baseTestConfig/do
 // — api_test.go; govSession — governance_nonescape_test.go; mintToken —
 // apitokens_test.go). Guarded by WARDYN_TEST_PG; skipped cleanly when unset.
 //
@@ -39,7 +39,7 @@
 //
 // A SECOND test (TestPG_APIToken_TruncatedSnapshot_CapabilityDenyEvaporates)
 // is EXPECTED RED on fa910735: it documents hypothesis H2 of the trace — the
-// capability-grant resolver (capScan, capabilities.go:223) ignores the
+// capability-grant resolver (Server.capScan in capabilities.go) ignores the
 // truncation bit, so a group DENY grant whose group fell off the cookie cap
 // silently stops matching for that token. Green there means H2 was fixed.
 package api
@@ -68,8 +68,8 @@ const (
 	truncProbeGroupKept = "a-team"
 	// truncProbeGroupWalled is the group the governance assignment (and the
 	// deny grant) is written against. Alphabetically LAST on purpose: it is the
-	// entry sessionGroups (derive.go:564-579) drops first, i.e. the realistic
-	// shape of "the walling group fell off the snapshot".
+	// entry sessionGroups (internal/auth/oidc/derive.go) drops first, i.e. the
+	// realistic shape of "the walling group fell off the snapshot".
 	truncProbeGroupWalled = "zz-walled"
 	truncProbeSub         = "sub-trunc-probe"
 )
@@ -93,7 +93,8 @@ func truncProbeServer(t *testing.T) (*Server, store.PG, *pgxpool.Pool) {
 
 // truncProbeSeedGroupProfile writes one profile and binds it to
 // truncProbeGroupWalled at the GROUP tier — the deployment shape the refusal
-// is gated on (HasGroupTierAssignments, governance.go:652).
+// is gated on (ceilingWithUnusableGroups's HasGroupTierAssignments call in
+// governance.go).
 func truncProbeSeedGroupProfile(t *testing.T, pg store.PG) types.GovernanceProfile {
 	t.Helper()
 	ctx := context.Background()
@@ -163,14 +164,14 @@ func TestPG_APIToken_TruncatedSnapshot(t *testing.T) {
 	truncSess := govSession(t, truncProbeSub, []string{truncProbeGroupKept}, true)
 	truncRaw, created := mintToken(t, srv, truncSess, "ci-truncated")
 	if created.GroupsTruncated == nil || !*created.GroupsTruncated {
-		t.Fatalf("mint response groups_truncated = %v, want true — handleCreateAPIToken (apitokens.go:236-243) did not stamp the session's bit", created.GroupsTruncated)
+		t.Fatalf("mint response groups_truncated = %v, want true — handleCreateAPIToken (apitokens.go) did not stamp the session's bit", created.GroupsTruncated)
 	}
 	var col *bool
 	if err := pool.QueryRow(ctx, `SELECT groups_truncated FROM api_tokens WHERE id = $1`, created.ID).Scan(&col); err != nil {
 		t.Fatalf("read groups_truncated: %v", err)
 	}
 	if col == nil || !*col {
-		t.Fatalf("api_tokens.groups_truncated = %v, want TRUE — the store (store_apitokens.go:48-52) lost the marker", col)
+		t.Fatalf("api_tokens.groups_truncated = %v, want TRUE — the store (PG.CreateAPIToken in store_apitokens.go) lost the marker", col)
 	}
 
 	// ── phase 2: PF-21 scoping — no group-tier row, truncated is served ─────
@@ -184,13 +185,14 @@ func TestPG_APIToken_TruncatedSnapshot(t *testing.T) {
 	profile := truncProbeSeedGroupProfile(t, pg)
 	code, body, _ := truncProbeCeiling(t, srv, truncRaw)
 	if code != http.StatusForbidden {
-		t.Fatalf("truncated token with a group-tier row present: code=%d body=%s; want 403 — the tier evaporated (governance.go:607/656)", code, body)
+		t.Fatalf("truncated token with a group-tier row present: code=%d body=%s; want 403 — the tier evaporated (effectiveCeiling / ceilingWithUnusableGroups in governance.go)", code, body)
 	}
 	if !strings.Contains(body, "groups_snapshot_stale") {
 		t.Errorf("403 body does not name the condition: %s", body)
 	}
 	// The same refusal must reach a run create, the lane that actually spends
-	// the ceiling (runs_create_validate.go:425). No Runner is wired, so a
+	// the ceiling (denyMemberRequest in runs_create_validate.go). No Runner is
+	// wired, so a
 	// non-403 here means the ceiling resolved and the create went on to fail
 	// LATER for an unrelated reason — which is exactly the widening.
 	if w := do(t, srv, http.MethodPost, "/api/v1/runs", truncRaw, `{"agent":"claude-code","task":"t"}`); w.Code != http.StatusForbidden {
@@ -204,10 +206,10 @@ func TestPG_APIToken_TruncatedSnapshot(t *testing.T) {
 		t.Fatalf("lookup legacy row: %v", err)
 	}
 	if legacy.GroupsTruncated != nil {
-		t.Fatalf("legacy row GroupsTruncated = %v, want nil — the store collapsed NULL into a bool (three-valued contract, types.go:835-846)", *legacy.GroupsTruncated)
+		t.Fatalf("legacy row GroupsTruncated = %v, want nil — the store collapsed NULL into a bool (three-valued contract, APIToken.GroupsTruncated in internal/types/types.go)", *legacy.GroupsTruncated)
 	}
 	if code, body, _ := truncProbeCeiling(t, srv, legacyRaw); code != http.StatusForbidden || !strings.Contains(body, "groups_snapshot_stale") {
-		t.Fatalf("legacy NULL-marker token: code=%d body=%s; want 403 groups_snapshot_stale — NULL read as false (apitokens.go:129-130)", code, body)
+		t.Fatalf("legacy NULL-marker token: code=%d body=%s; want 403 groups_snapshot_stale — NULL read as false (Server.apiTokenAuth in apitokens.go)", code, body)
 	}
 	// A legacy row whose snapshot DOES contain the walled group is refused too:
 	// NULL means unknown, and unknown is not answered by a lucky snapshot.
@@ -250,15 +252,18 @@ func TestPG_APIToken_TruncatedSnapshot(t *testing.T) {
 
 // TestPG_APIToken_TruncatedSnapshot_CapabilityDenyEvaporates — EXPECTED RED on
 // fa910735 (trace hypothesis H2). The governance resolver treats a truncated
-// snapshot as unanswerable (governance.go:607); the CAPABILITY resolver does
-// not (capabilities.go:223 discards `stale` and never reads the truncation
-// bit). A group DENY grant written against the group that fell off the cap
-// therefore matches nothing for this token, and the seam answers "allowed".
+// snapshot as unanswerable (effectiveCeiling in governance.go); the CAPABILITY
+// resolver does not (capScan in capabilities.go discards `stale` and never
+// reads the truncation bit). A group DENY grant written against the group that
+// fell off the cap therefore matches nothing for this token, and the seam
+// answers "allowed".
 //
 // The seam under test is capAllowed itself, reached through the real
-// apiTokenAuth context — the same path approvals.go:430 (member decides an
-// egress approval), inline_policy.go:298/350 and secrets.go:384 take. None of
-// those seams is preceded by an effectiveCeiling call, so on a deployment with
+// apiTokenAuth context — the same path authorizeMemberDecision in approvals.go
+// (member decides an egress approval), narrowMemberInlinePolicy in
+// inline_policy.go and memberVisibleOperatorSecretNames in secrets.go take.
+// None of those seams is preceded by an effectiveCeiling call, so on a
+// deployment with
 // group DENY grants but no group governance assignments there is no 403
 // anywhere.
 func TestPG_APIToken_TruncatedSnapshot_CapabilityDenyEvaporates(t *testing.T) {
@@ -299,12 +304,13 @@ func TestPG_APIToken_TruncatedSnapshot_CapabilityDenyEvaporates(t *testing.T) {
 	truncRaw, _ := mintToken(t, srv, govSession(t, truncProbeSub, []string{truncProbeGroupKept}, true), "trunc")
 	ok, err := srv.capAllowed(capture(truncRaw), capEgressHost, deniedHost)
 	if err == nil && ok {
-		t.Fatalf("H2 CONFIRMED: truncated snapshot capAllowed(%s) = true — the group DENY grant on %q evaporated because capScan (capabilities.go:223) never reads the truncation bit", deniedHost, truncProbeGroupWalled)
+		t.Fatalf("H2 CONFIRMED: truncated snapshot capAllowed(%s) = true — the group DENY grant on %q evaporated because capScan (capabilities.go) never reads the truncation bit", deniedHost, truncProbeGroupWalled)
 	}
 
 	// And the NULL-marker (0.6-era) token: same question, same expectation.
 	// (Seeded through the store with a nil marker — the API cannot mint one;
-	// nil binds as SQL NULL, store_apitokens.go:36-41.)
+	// nil binds as SQL NULL — see PG.CreateAPIToken's doc comment in
+	// store_apitokens.go.)
 	legacyRaw := apiTokenPrefix + "legacy-" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	if _, err := pg.CreateAPIToken(ctx, types.APIToken{
 		ID: uuid.New(), Principal: truncProbeSub, Email: truncProbeSub + "@corp.example",
