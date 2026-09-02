@@ -903,9 +903,11 @@ func (b *Broker) auditMint(ctx context.Context, caller *identity.Claims, grantID
 // prev_hash/row_hash are NOT written here: migration 0047's BEFORE INSERT
 // trigger fills them for every insert path, including this one. What this path
 // DOES owe the chain is the serializing lock — it must be taken before the
-// INSERT statement, on this same tx, so the seq identity default and the
-// trigger's head read happen under it (db.AuditChainLockKey explains why the
-// trigger cannot take it itself). Taken here, as late in the mint tx as
+// INSERT statement, on this same tx, so this writer's seq allocation and head
+// read cannot interleave with another's. Since migration 0056 the trigger takes
+// the same lock and allocates seq under it, so an out-of-tree writer cannot fork
+// the chain either; advisory locks are re-entrant within a transaction, so
+// taking it here still costs nothing (db.AuditChainLockKey). Taken here, as late in the mint tx as
 // possible, so the chain lock is always acquired AFTER this tx's grant/approval
 // row locks and can never invert a lock order with a concurrent mint.
 func insertAuditEventTx(ctx context.Context, tx Querier, ev types.AuditEvent) error {

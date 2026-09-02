@@ -331,7 +331,7 @@ func TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean(t *testing.T) {
 //
 // The invariant is that an un-serialized writer cannot fork the chain — which
 // is only deliverable by SERIALIZING it: the chain link and the seq must be
-// allocated under one lock (migration 0055 moves both into the trigger). The
+// allocated under one lock (migration 0056 moves both into the trigger). The
 // probe therefore runs the locked writer CONCURRENTLY and lets the unlocked one
 // commit while it waits, and asserts the strong form: the locked row chains
 // ONTO the unlocked row and the sweep is clean.

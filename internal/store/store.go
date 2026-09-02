@@ -515,9 +515,12 @@ func scanApproval(row pgx.Row) (types.ApprovalRequest, error) {
 // up holding a head hash Wardyn cannot later disown.
 //
 // It runs in a transaction for ONE reason: pg_advisory_xact_lock must be held
-// across the INSERT so the identity default (seq) and 0047's head read happen
-// under the same lock, keeping seq order and chain order identical. See
-// db.AuditChainLockKey.
+// across the INSERT, so this caller's seq allocation and head read cannot
+// interleave with another writer's — keeping seq order and chain order
+// identical. Since migration 0056 the trigger takes the same lock and allocates
+// seq under it (the identity default's value is discarded), which is what binds
+// writers this package knows nothing about; the lock here is re-entrant within
+// the transaction and costs nothing. See db.AuditChainLockKey.
 func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEvent) error {
 	dataJSON, err := json.Marshal(ev.Data)
 	if err != nil {

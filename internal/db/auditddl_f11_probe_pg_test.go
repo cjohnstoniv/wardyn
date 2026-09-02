@@ -86,8 +86,14 @@ func TestPG_ProbeF11_AuditDDLProtected(t *testing.T) {
 		}
 	})
 	must(`GRANT USAGE ON SCHEMA public TO ` + role)
+	// EXACTLY the documented deploy posture and nothing more: INSERT+SELECT on
+	// audit_events (0007_audit_least_privilege.sql, cmd/wardynd's boot check).
+	// No sequence grant — this role once held USAGE ON ALL SEQUENCES here, which
+	// hid the whole of review finding A1: 0056 allocated seq with an ordinary
+	// nextval() call as the INVOKER, so the real documented role got "permission
+	// denied for sequence" on every audit insert while this probe stayed green.
+	// The append subtest below is the pin for 0057's SECURITY DEFINER remedy.
 	must(`GRANT SELECT, INSERT ON audit_events TO ` + role)
-	must(`GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO ` + role)
 
 	u.User = url.UserPassword(role, pw)
 	app, err := Connect(ctx, u.String())
@@ -119,10 +125,12 @@ func TestPG_ProbeF11_AuditDDLProtected(t *testing.T) {
 		if err := tx.QueryRow(ctx, `INSERT INTO audit_events (id, actor_type, actor, action, outcome)
 			VALUES (gen_random_uuid(), 'system', 'f11-app-role', 'test.ddl.probe', 'success')
 			RETURNING COALESCE(row_hash,'')`).Scan(&rowHash); err != nil {
-			t.Fatalf("INSERT as app role: %v (INSERT+SELECT+sequence USAGE should be enough)", err)
+			t.Fatalf("INSERT as the documented app role: %v — INSERT+SELECT on audit_events is the whole grant set "+
+				"0007 and the boot check describe, so anything the chain trigger needs beyond it (0056 allocates seq "+
+				"inside the trigger) must run as the DEFINER, not the invoker (0057)", err)
 		}
 		if rowHash == "" {
-			t.Fatal("row inserted by the app role has no row_hash; the 0047 trigger did not run for it")
+			t.Fatal("row inserted by the app role has no row_hash; the chain trigger did not run for it")
 		}
 		if err := tx.Commit(ctx); err != nil {
 			t.Fatalf("commit: %v", err)
