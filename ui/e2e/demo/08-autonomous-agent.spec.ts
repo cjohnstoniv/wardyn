@@ -360,11 +360,7 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "We're not sitting here feeding it additional instructions while it runs.");
   await beat(page, PACE.read);
-  await caption(page, "It gets the workspace.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "It gets the policy.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "And it gets the job.");
+  await caption(page, "It gets the workspace, the policy, and the job.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
@@ -378,11 +374,7 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   // an unnamed combobox is a real a11y gap, not just a test inconvenience.
   await act(page, page.getByRole("combobox").filter({ hasText: "Ephemeral scratch" }), "Attach the workspace.");
   await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE_NAME, "i") }).first());
-  await caption(page, "Same workspace as before.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "Real code.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "Writable because we granted it.");
+  await caption(page, "Same workspace as before — real code, writable because we granted it.");
   await beat(page, PACE.read + 400);
 
   // --- B4 Confinement -----------------------------------------------------
@@ -394,10 +386,8 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   // construction, the same default the old "Confined" radio asserted. The
   // click below is still for the camera, same as the old one: it re-asserts
   // the Minimal chip rather than changing anything.
-  await act(page, page.getByRole("button", { name: "Minimal" }), "Confined.");
-  await caption(page, "Network starts closed.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "We'll give it the destinations it needs and let everything else ask.");
+  await act(page, page.getByRole("button", { name: "Minimal" }), "Confined — the network starts closed.");
+  await caption(page, "We'll give it the one destination it needs and let everything else ask.");
   await beat(page, PACE.read + 400);
 
   // --- B5 Network -----------------------------------------------------
@@ -427,7 +417,7 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   // and ties it back to 05's spec beat. See local/light-episodes-dialog-flags.md.
   await caption(page, "Save the spec.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "That spec is the contract — the same kind of spec we read end to end in episode five.");
+  await caption(page, "That spec is the contract — the same four lines we read in 'What it stops'.");
   await beat(page, BEAT_SHORT);
 
   // --- B6 The rail is the contract ----------------------------------------
@@ -580,7 +570,7 @@ test("V08 beats 7-9 — launch, held at the boundary, files changed", async () =
   // held-at-the-boundary in full. This is the second telling, so it is a
   // callback, not a re-explanation. The lines around it carry unique content
   // (WHY it stopped, and that nothing left) and stay.
-  await caption(page, "Same as episode three — it's waiting, not failing.");
+  await caption(page, "Same as in 'What it stops' — it's waiting, not failing.");
   await beat(page, PACE.read);
   await caption(page, "Nothing has gone out.");
   await beat(page, BEAT_SHORT + 400);
@@ -621,7 +611,7 @@ test("V08 beats 7-9 — launch, held at the boundary, files changed", async () =
   if (await telemetryRow.getByText("waiting").count()) {
     await caption(page, "And here's another request we didn't script.");
     await beat(page, PACE.read);
-    await caption(page, "The tool's own telemetry.");
+    await caption(page, "The tool's own telemetry — its usage pings.");
     await beat(page, BEAT_SHORT);
     await caption(page, "It's not on the list.");
     await beat(page, BEAT_SHORT);
@@ -688,7 +678,7 @@ test("V08 beats 7-9 — launch, held at the boundary, files changed", async () =
   await caption(page, "The model calls were recorded.");
   await beat(page, BEAT_SHORT);
   await spotlight(page, null);
-  await caption(page, "And when the run finishes, we can see exactly what it touched.");
+  await caption(page, "And when the run finishes, we can see the files it changed.");
   await beat(page, PACE.read + 400);
 
   // --- B9 Files changed ---------------------------------------------------
@@ -846,7 +836,7 @@ test("V08 beat 9b — the run kept its own tape", async () => {
   // keystroke" is an overclaim the run mode itself contradicts.
   await caption(page, "There's another useful piece here.");
   await beat(page, PACE.read);
-  await caption(page, "The run keeps its own terminal recording.");
+  await caption(page, "There was no terminal for us to drive — but the agent's own session was recorded, and here is the tape.");
   await beat(page, PACE.read);
   await caption(page, "So supervision doesn't have to mean sitting here for the entire job.");
   await beat(page, PACE.read + 400);
@@ -908,7 +898,7 @@ test("V08 beat 10 — borrowed, never held", async () => {
     ? { Authorization: `Bearer ${process.env.WARDYN_DEMO_TOKEN}` }
     : undefined;
 
-  await caption(page, "And let's close the loop on something from episode four.");
+  await caption(page, "And let's close the loop on the secret we stored when we added the workspace.");
   await beat(page, PACE.read);
   await caption(page, "A run can borrow a secret without owning it.");
   await beat(page, PACE.read + 400);
@@ -953,10 +943,14 @@ test("V08 beat 10 — borrowed, never held", async () => {
   expect(proofRunId.length > 0, "proof-run create returned no id").toBe(true);
 
   await page.goto(`/runs/${proofRunId}`);
-  await caption(page, "This autonomous run gets access to one credential.");
+  await caption(page, "Here's a second run — a one-line command, made for this proof — whose policy lists one secret it may use, by name.");
   await beat(page, PACE.read);
-  await caption(page, "But what it receives is a short-lived value created by the broker.");
+  await caption(page, "Let's look at what it actually received.");
+  await beat(page, PACE.read);
+  await caption(page, "But what it receives is a stand-in, made by Wardyn's credential broker — the part that hands out keys on a run's behalf, outside the box.");
   await beat(page, PACE.read + 400);
+  await caption(page, "Not the secret you stored.");
+  await beat(page, PACE.read);
   await expect(page.getByText(/Running|Completed/).first()).toBeVisible({ timeout: 180_000 });
 
   // Vault carried the agent run above; this one quietly downgrades to Fence —
@@ -980,7 +974,7 @@ test("V08 beat 10 — borrowed, never held", async () => {
   const requirementRow = page.getByText(new RegExp(PROOF_SECRET)).first();
   await expect(requirementRow).toBeVisible({ timeout: 30_000 });
   await spotlight(page, requirementRow);
-  await caption(page, "The audit tells us who received it, why, when, and under what scope.");
+  await caption(page, "The audit row names the run that received it, the grant that allowed it, and when.");
   await beat(page, PACE.read);
   await caption(page, "But the value itself never appears in the shell.");
   await beat(page, PACE.read + 400);
@@ -1007,7 +1001,7 @@ test("V08 beat 10 — borrowed, never held", async () => {
   await search.click();
   await spotlight(page, null);
   await page.keyboard.type(PROOF_CANARY, { delay: 40 });
-  await caption(page, "We can search for the credential we watched go in earlier.");
+  await caption(page, "We can search the audit for the secret's value — the one we stored back in 'Add a workspace'.");
   await beat(page, PACE.read);
   await expect(page.getByText("No events match these filters.")).toBeVisible({ timeout: 15_000 });
   await expect(page.locator("body")).not.toContainText(PROOF_CANARY);
@@ -1041,7 +1035,7 @@ test("V08 beat 10 — borrowed, never held", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "A real agent.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Two decisions at the boundary — one allowed, one denied.");
+  await caption(page, "Decisions at the boundary — a person said yes to one host, and anything else stayed shut.");
   await beat(page, PACE.read);
   await caption(page, "Real changes on disk.");
   await beat(page, BEAT_SHORT);
@@ -1049,9 +1043,9 @@ test("V08 beat 10 — borrowed, never held", async () => {
   await beat(page, PACE.read);
   await caption(page, "The next question is obvious:");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Do we really want to configure all of that every single time?");
+  await caption(page, "Do we really want to guess all of that every single time?");
   await beat(page, PACE.read);
-  await caption(page, "Or can we write the rules once?");
+  await caption(page, "Or can we let one watched run tell us what the rules should be? Next: 'Record a run'.");
   await beat(page, PACE.read + 400);
   await caption(page, "");
   await silentCard(page, "Next — 09: Record a run");

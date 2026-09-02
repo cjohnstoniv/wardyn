@@ -21,6 +21,11 @@ import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
 export interface GovernanceLimits {
   deny_task_mode_exec?: boolean;
   deny_interactive?: boolean;
+  // types.GovernanceLimits.DenyUserDrive (0.7 user drives) — the door the
+  // profile editor's third LimitRow writes. A run under this profile mounts no
+  // user drive even when one is allocated to the person; denyMemberDrive's 403
+  // is what enforces it, and this is only what the editor authors.
+  deny_user_drive?: boolean;
   // 0/absent is unlimited. Mirrored here so the editor's `{ ...limits }` spread
   // round-trips a cap it does not yet draw; the control itself lands with the
   // rest of the Governance UI.
@@ -94,6 +99,29 @@ export interface GovernanceAssignmentInput {
 export interface GovernancePreviewInput {
   user_subjects: string[];
   groups: string[];
+}
+
+// One kind-LESS claims textarea onto the two typed wire lists both previews
+// take — the governance one and the user-drive one, which post the identical
+// body and are folded by the identical server-side normalizer.
+//
+// The ONE thing decided here is ORDER, never precedence. The user tier's
+// tie-break is POSITION in user_subjects (the resolver's array_position) and
+// the enforcement path builds it sign-in-subject first, email second
+// (capabilitySubjects) — so an "@" line sorts last and a preview agrees with
+// what actually binds the member. The drive resolver reads the same order
+// positionally to pick which claim an `email_local` home is named from. Array
+// .prototype.sort is stable, so every other line keeps the order it was typed
+// in. The ranking itself stays in SQL.
+export function previewClaims(claims: string): GovernancePreviewInput {
+  const lines = claims
+    .split("\n")
+    .map((c) => c.trim())
+    .filter(Boolean);
+  return {
+    user_subjects: [...lines].sort((a, b) => Number(a.includes("@")) - Number(b.includes("@"))),
+    groups: lines,
+  };
 }
 
 // governancePreviewResponse: which profile would bind a principal carrying

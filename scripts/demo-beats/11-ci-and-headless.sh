@@ -134,13 +134,12 @@ fail() { printf '\n\033[1;31m[09] %s\033[0m\n' "$*" >&2; exit 1; }
 rm -rf "${ART_DIR}" >/dev/null 2>&1
 
 narration_zero
-chapter "CI and headless" "The same governance, unattended"
+chapter "CI and headless" "Automated builds, no screen and no person — the same governance, unattended"
 
 # ── COLD OPEN ───────────────────────────────────────────────────────────────
 say "So far, a human has been available to make the decision."
 say "CI doesn't have that luxury."
-say "A pipeline has no hands."
-say "So the policy has to make the decision for it."
+say "So the policy decides for it."
 say "And instead of a human clicking a button, the pipeline gets a result."
 # P9 (dialog review, owner-ratified 2026-08-23): "verdict" belongs to episode
 # 09's replay chips now — dropped from both lanes of this episode.
@@ -163,8 +162,8 @@ say "what gets denied,"
 say "what happens to anything unexpected,"
 say "how long the run can live,"
 say "and what level of confinement is required."
-say "The floor is Fence."
-say "That's common for CI runners because they don't always have the virtualization support needed for stronger isolation."
+say "The minimum barrier — the floor — is Fence: a container, sharing the runner's kernel with every other job on that machine."
+say "That's common for CI runners: they often can't run the virtual-machine barrier, so Fence is what you get."
 say "And for unattended work, an unexpected request can't sit around waiting for somebody who isn't there."
 say "It fails."
 
@@ -185,9 +184,10 @@ fi
 # OS-assigned ephemeral port, right for a real CI host, useless for a browser
 # beat) and compose binds 127.0.0.1:${WARDYN_UP_PORT}:8080.
 say "A pipeline also needs to be able to start from scratch."
-say "So one job can stand up a temporary Wardyn environment just for the build."
+say "One script does it: ci-run.sh."
+say "The variables in front of it are the task, the image, the policy file, and where to put the artifacts — every one is listed in the docs."
 say "When the job is done, it goes away."
-say "If you already have Wardyn running somewhere, the CLI can talk to that instance instead."
+say "If you already have Wardyn running somewhere, the command-line tool can talk to that one instead."
 say "This is a normal shell command."
 say "No agent."
 say "No key."
@@ -201,7 +201,8 @@ say "And an agent job follows the same model."
 # extra say beat. Three says in, three says out — the typist's budget for this
 # stretch is unchanged, and the trio still reads pipeline → Wardyn → workload.
 say "The pipeline names the secret the run is allowed to use."
-say "Wardyn injects it at the boundary — the pipeline never handles the value."
+say "Wardyn injects it at the boundary. For a from-scratch stack the pipeline seeds the value once, at stack start — the workload never holds it."
+say "Point ci-run.sh at an existing Wardyn and the pipeline never handles the value at all."
 say "The workload doesn't have to carry the credential itself."
 
 # SPOKEN IN FRONT OF THE COMMAND, NOT BEHIND IT. type_cmd blocks for the whole
@@ -230,7 +231,7 @@ CI_RC="${TYPIST_RC}"
 # being filmed, not be expanded by this one.
 type_cmd 'echo $?'
 say "This one completed successfully."
-say "Zero."
+say "Zero — the code for success."
 
 # ── B3b · The red build ──────────────────────────────────────────────────────
 # The proof-of-thesis beat: nothing bad has been stopped on camera yet. A
@@ -248,16 +249,14 @@ say "No reviewer."
 say "No approval screen."
 say "No waiting."
 say "The policy makes the decision immediately."
-say "The build goes red."
+say "The exit code is non-zero. In a pipeline, that's the build going red."
 
 # ── B4 · Receipts ───────────────────────────────────────────────────────────
 type_cmd "ls ${ART_DIR}/"
-say "And the pipeline gets artifacts back."
-say "The run."
-say "The log."
-say "And the audit trail."
+say "And the pipeline gets its files back: the run, the log, and the audit trail."
 type_cmd "jq .state ${ART_DIR}/run.json"
-say "The run says completed."
+say "Back to the first run — the green one. Its record says completed: it finished."
+say "The refused request is what turned the other build red."
 type_cmd "jq '.[-3:]' ${ART_DIR}/audit.json"
 say "And the final audit entries show the same lifecycle we've seen in the browser:"
 say "execution,"

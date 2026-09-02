@@ -107,7 +107,7 @@ test("V02 act 1 — the install, on camera", async () => {
 
   // --- B0 · chapter ---------------------------------------------------------
   await silentChapter(page, "Set up the host", "Episode two — from a bare machine to a governed one");
-  await caption(page, "In episode one, we asked why agents need to be governed.");
+  await caption(page, "Last time, we asked why agents need to be governed.");
   await beat(page, PACE.read);
   await caption(page, "Now let's build the machine that governs them.");
   await beat(page, BEAT_SHORT);
@@ -116,15 +116,18 @@ test("V02 act 1 — the install, on camera", async () => {
   await clearChapter(page);
 
   // --- B1 · the install -----------------------------------------------------
-  // Build the player paused at a speed that lands the whole cast in ~40s —
-  // long enough for the five over-playback stanzas, short enough to hold.
+  // Build the player paused at a speed that lands the whole cast in ~25s —
+  // tuned so the cast ends within ~2s of the last over-playback stanza (the
+  // five that run from "The command builds the sandbox templates…" through
+  // "…the last thing we'll do without the guardrails"). Rehearse and retune
+  // the target until __castEnded lands just after that final beat.
   const info = (await page.evaluate(
     ([cast, target]) =>
       (window as unknown as { __loadCast: (c: string, t: number) => { durationS: number; speed: number } }).__loadCast(
         cast as string,
         target as number,
       ),
-    [castText, 40],
+    [castText, 25],
   )) as { durationS: number; speed: number };
 
   await caption(page, "This is the real setup, on this machine.");
@@ -135,7 +138,9 @@ test("V02 act 1 — the install, on camera", async () => {
   await caption(page, "That's it.");
   await beat(page, BEAT_SHORT);
   await spotlight(page, page.locator("#pre"));
-  await caption(page, "The machine needs Docker, the Wardyn repo, and a normal user account.");
+  await caption(page, "The machine needs Docker, a clone of the Wardyn repo, and a user that can talk to Docker — which, on this host, is root-equivalent.");
+  await beat(page, PACE.read);
+  await caption(page, "That's the one trust the install asks for.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#chip"));
   await caption(page, "Everything you're seeing here is a real shell recording. It's just sped up so you don't have to watch downloads in real time.");
@@ -144,15 +149,15 @@ test("V02 act 1 — the install, on camera", async () => {
 
   // Roll the replay; the install commentary plays over it.
   await page.evaluate(() => (window as unknown as { __play: () => void }).__play());
-  await caption(page, "The command builds the sandbox images and starts Wardyn's control plane.");
+  await caption(page, "The command builds the sandbox templates and starts the part of Wardyn that runs everything else — the control plane.");
   await beat(page, PACE.read);
   await caption(page, "And there's an important detail here.");
   await beat(page, BEAT_SHORT);
   await caption(page, "This is an install.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Which means we're running code we haven't personally inspected, just like we talked about in episode one.");
+  await caption(page, "Which means we're running code we haven't personally inspected — exactly the problem the primer opened with.");
   await beat(page, PACE.read);
-  await caption(page, "So this is the last step in the process that we're doing without the guardrails in place.");
+  await caption(page, "This install runs code we haven't inspected — the last thing we'll do without the guardrails.");
   await beat(page, PACE.read);
 
   // Let the replay finish — the tail prints the console address.
@@ -195,8 +200,6 @@ test("V02 act 2 — first light through secrets", async () => {
   await caption(page, "Wardyn.");
   await beat(page, BEAT_SHORT);
   await spotlight(page, hero);
-  await caption(page, "The whole idea is right at the top:");
-  await beat(page, BEAT_SHORT);
   await caption(page, "Sandboxed. Governed. Self-hosted. Free.");
   await beat(page, PACE.read);
   // The live host chips under the hero — the real SetupStatus, not a mock.
@@ -215,7 +218,7 @@ test("V02 act 2 — first light through secrets", async () => {
   await expect(page.getByRole("heading", { name: "Pick your barrier", level: 2 })).toBeVisible({ timeout: 30_000 });
   await caption(page, "First, we need somewhere for the agent to work.");
   await beat(page, PACE.read);
-  await caption(page, "Think back to episode one.");
+  await caption(page, "Think back to the locked room.");
   await beat(page, BEAT_SHORT);
   await caption(page, "We called that room a sandbox.");
   await beat(page, BEAT_SHORT);
@@ -232,7 +235,7 @@ test("V02 act 2 — first light through secrets", async () => {
   await spotlight(page, tiers.getByRole("radio", { name: /Fence/ }));
   await caption(page, "Fence is the simplest.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "It's a container, so the agent gets its own filesystem and environment, while sharing the host's kernel.");
+  await caption(page, "It's a container: the agent gets its own files and environment, but shares the kernel — the core of the operating system — with the host.");
   await beat(page, PACE.read);
   await caption(page, "It's fast.");
   await beat(page, BEAT_SHORT);
@@ -261,8 +264,6 @@ test("V02 act 2 — first light through secrets", async () => {
 
   // The permanent "Doesn't stop:" row — a real <tr> (environment-step.tsx).
   await spotlight(page, page.getByText("Doesn't stop:", { exact: true }).locator("xpath=ancestor::tr[1]"));
-  await caption(page, "And here's a detail I really like about this screen.");
-  await beat(page, BEAT_SHORT);
   await caption(page, "Wardyn doesn't just tell you what each barrier protects.");
   await beat(page, BEAT_SHORT);
   await caption(page, "It tells you what it doesn't.");
@@ -275,7 +276,7 @@ test("V02 act 2 — first light through secrets", async () => {
   await spotlight(page, tiers);
   await caption(page, "Wardyn checks what this machine can actually support.");
   await beat(page, PACE.read);
-  await caption(page, "On this machine, all three options are available.");
+  await caption(page, "On this machine, all three are offered — and Fence is the one we'll pick.");
   await beat(page, BEAT_SHORT);
   await caption(page, "On another machine, one of them might be disabled.");
   await beat(page, BEAT_SHORT);
@@ -301,10 +302,12 @@ test("V02 act 2 — first light through secrets", async () => {
   // --- B3b · people (0.7: the People step sits between barrier and network) --
   await expect(page.getByRole("heading", { name: "Who can sign in", level: 2 })).toBeVisible({ timeout: 30_000 });
   await spotlight(page, page.getByText(/^Just you\./));
-  await caption(page, "Who can sign in? Whoever holds the admin token. Here, that's just you.");
+  await caption(page, "Who can sign in? Whoever holds the admin token the install just printed — one bearer secret, on this machine. Here, that's just you.");
   await beat(page, BEAT_SHORT);
   await spotlight(page, page.getByText(/To add people, configure SSO/));
-  await caption(page, "Teams get SSO and roles; the recipe is in the operations doc.");
+  await caption(page, "Teams sign in through their company login instead — SSO — with admin and member roles.");
+  await beat(page, PACE.read);
+  await caption(page, "That setup is the 'One command to a cluster' episode.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 
@@ -328,7 +331,9 @@ test("V02 act 2 — first light through secrets", async () => {
   await spotlight(page, reached);
   await caption(page, "Here, the host itself can reach the internet directly.");
   await beat(page, PACE.read);
-  await caption(page, "That's the host's path, not the run's. A confined run still doesn't get open internet.");
+  await caption(page, "That probe proves the road exists from this machine.");
+  await beat(page, PACE.read);
+  await caption(page, "A run inside the sandbox still starts with no internet at all — it reaches only what its policy allows. The next episode proves that.");
   await beat(page, PACE.read);
   await caption(page, "So we know what a run will actually have available.");
   await beat(page, PACE.read);
@@ -360,13 +365,15 @@ test("V02 act 2 — first light through secrets", async () => {
   await caption(page, "A corporate proxy goes in the Host proxy tab.");
   await beat(page, PACE.read);
   await act(page, page.getByRole("tab", { name: /Egress redirection/ }), "Egress redirection is the other tab.");
-  await caption(page, "This is where a public endpoint gets mapped to your internal one.");
+  await caption(page, "This tab is for companies that keep their own copy of the package sites.");
   await beat(page, PACE.read);
   await spotlight(page, page.getByLabel("From", { exact: true }).first());
   await caption(page, "A run reaches for the public name, and the proxy redirects it to yours.");
   await beat(page, PACE.read);
   await spotlight(page, page.getByLabel(/Token secret name/).first());
-  await caption(page, "If your mirror needs a token, the proxy injects it at fetch time.");
+  await caption(page, "If your internal copy needs a password, you name the secret here — and the proxy adds it on the way out; the sandbox never has it.");
+  await beat(page, PACE.read);
+  await caption(page, "You'll see that mechanism in the next episode.");
   await beat(page, PACE.read);
   await caption(page, "The sandbox never holds it.");
   await beat(page, BEAT_SHORT + 400);
@@ -390,7 +397,7 @@ test("V02 act 2 — first light through secrets", async () => {
   // stand-in in one clause (series rule S7); the real connection was made off
   // camera through this same flow before the take.
   const keyLane = page.getByRole("radio", { name: /API key/ });
-  await act(page, keyLane, "For the recording, we're using a stand-in.");
+  await act(page, keyLane, "For the recording, we're using a stand-in key — we'll prove what happens to a real one when we run an agent.");
   const keyField = page.locator('input[type="password"]').first();
   await expect(keyField, "the API-key lane's masked input — if this fails the lane's field markup changed").toBeVisible({
     timeout: 15_000,
@@ -402,7 +409,7 @@ test("V02 act 2 — first light through secrets", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "The key is masked as soon as it's entered.");
   await beat(page, PACE.read);
-  await caption(page, "And the workload itself doesn't get handed the key.");
+  await caption(page, "And the workload itself won't be handed the key — you'll watch that proven from inside a sandbox.");
   await beat(page, PACE.read);
   await caption(page, "Wardyn keeps it — outside the workload.");
   await beat(page, BEAT_SHORT);
@@ -438,9 +445,11 @@ test("V02 act 2 — first light through secrets", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "Some credentials can be used without ever entering the sandbox.");
   await beat(page, PACE.read);
-  await caption(page, "Others have to enter temporarily — for example, to perform a clone.");
+  await caption(page, "Others have to enter for a moment — for example, to copy a project down from GitHub.");
   await beat(page, PACE.read);
-  await caption(page, "In those cases, Wardyn tracks what happened and removes the credential afterward.");
+  await caption(page, "In those cases, Wardyn records the issue and removes the credential right after the clone.");
+  await beat(page, PACE.read);
+  await caption(page, "The removal itself is not a row in the record — the credential detour shows the window.");
   await beat(page, PACE.read);
   await caption(page, "And where possible, the credential stays outside the sandbox entirely.");
   await beat(page, PACE.read);
@@ -496,7 +505,9 @@ test("V02 act 3 — what you just saw", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "Next, we're going to stop being polite.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "We're going to see what the boundary actually stops.");
+  await caption(page, "Next: what the boundary actually stops.");
+  await beat(page, PACE.read);
+  await caption(page, "If your Wardyn runs on a managed desktop or a cluster, watch that setup episode first.");
   await beat(page, PACE.read);
 
   await silentChapter(page, "Next — 03a: What it stops", "");

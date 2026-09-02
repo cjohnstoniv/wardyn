@@ -52,13 +52,13 @@ test("V02c act 1 — sign in, and the install refuses to let you wander", async 
   await chapter(page, "Now the console", "First sign-in, and a funnel that will not be skipped");
 
   // The token box is gone — this install trusts the identity provider now.
-  await caption(page, "No token — you just watched it stop working. This install trusts your identity provider now.");
+  await caption(page, "Sign in again. The sign-in page has changed — no token box; this install trusts your identity provider now.");
   await beat(page, PACE.read);
   await act(page, page.getByRole("link", { name: "Sign in with SSO" }).or(page.getByRole("button", { name: "Sign in with SSO" })).first(), "One click — the role map decides who is an admin.");
 
   // Dex's demo login form. Filmed, not hidden: this is the multi-user story.
   await page.locator('input[type="password"]').waitFor({ timeout: 30_000 });
-  await caption(page, "This form is not Wardyn. It is Dex, on its own address — the identity provider does the asking, and Wardyn never sees this password.");
+  await caption(page, "This form is not Wardyn — look at the address: it is the identity provider's. It does the asking; Wardyn never sees this password.");
   await page.locator('input[type="text"], input[name="login"]').first().fill(ADMIN_EMAIL);
   await page.locator('input[type="password"]').fill(ADMIN_PASSWORD);
   await beat(page, PACE.read);
@@ -91,7 +91,9 @@ test("V02c act 2 — the essentials, on a cluster", async () => {
   // Environment: the substrate is the cluster the terminal half just built.
   await expect(page.getByRole("heading", { name: "Pick your barrier" })).toBeVisible({ timeout: 60_000 });
   await spotlight(page, page.getByText(/Runner/i).first());
-  await caption(page, "Read off the live install: the runner is Kubernetes, so a run here is a pod. And the row beneath it is the canary that proves this cluster's network policy is actually enforced.");
+  await caption(page, "The runner is Kubernetes, so every run here is a pod — a small box the cluster schedules.");
+  await beat(page, PACE.read);
+  await caption(page, "And the row beneath it is the canary: the cluster's network policy is enforced, and this install checked.");
   await beat(page, PACE.read);
   await spotlight(page, null);
   await advance("Environment settled — next, who can sign in.");
@@ -110,7 +112,7 @@ test("V02c act 2 — the essentials, on a cluster", async () => {
   // (steps.ts corpNetworkGate) requires a real probe before Next unlocks;
   // on this cluster that probe is a pod launched just to try the network.
   await expect(page.getByRole("heading", { name: /^Network$/ }).first()).toBeVisible({ timeout: 30_000 });
-  await caption(page, "Whatever this step learns about the network is what every sandbox inherits — so the install checks it for real, rather than asking you.");
+  await caption(page, "Every sandbox inherits what this step learns about the network. So the install tests it for real instead of asking you.");
   await beat(page, PACE.read);
   await act(page, page.getByRole("button", { name: /^test connectivity$/i }), "The proof is a live probe — a sandbox launched just to try the network.");
   // advance()'s own Next-enabled wait (120s) is the probe wait: the gate
@@ -141,7 +143,7 @@ test("V02c act 3 — finish setup, and the doors open", async () => {
   await caption(page, "Review is the install's own readiness, grouped and honest.");
   await beat(page, PACE.read);
 
-  await act(page, page.getByRole("button", { name: "Finish setup" }), "One click, and the install itself is marked set up — server-side, so a different browser and a different person land past the funnel too.");
+  await act(page, page.getByRole("button", { name: "Finish setup" }), "One click, and the install is marked set up — server-side, so the next browser lands past the funnel too.");
   await page.waitForURL((u) => !/\/setup/.test(u.pathname), { timeout: 30_000 }).catch(() => {});
   await page.goto("/");
   await expect(page).toHaveURL(/\/runs/, { timeout: 30_000 });
@@ -161,16 +163,16 @@ test("V02c act 4 — two demos, two pods, one boundary", async () => {
   // Demo 1 — the sealed box: default-deny, no prompt, no wait.
   const sealed = await openEpisode(page, "sealed-box", "The sealed box");
   const screen1 = await startAndBoot(page, sealed, "sealed-box");
-  await caption(page, "Same terminal as every other episode — but this one is a pod, scheduled by the cluster you watched build.");
+  await caption(page, "Same terminal as every other episode — underneath, this one is a pod on the cluster you watched build.");
   await beat(page, PACE.read);
   await screen1.click();
   await page.keyboard.type("curl -sSI https://example.com\n");
   await pollScreen(screen1, /403|CONNECT tunnel failed/i, "the sealed box refuses the tunnel");
-  await caption(page, "Refused at the proxy. No prompt, no wait — this policy never asks.");
+  await caption(page, "Ask for an ordinary website, with an empty allowlist. Refused at the proxy — no prompt, no wait; this policy never asks.");
   await beat(page, PACE.read);
   await expect(sealed.getByTestId("demo-audit-panel")).toContainText(/example\.com/, { timeout: 30_000 });
   await spotlight(page, sealed.getByTestId("demo-audit-panel"));
-  await caption(page, "And there is the record: the proxy's own row for the host it refused, and why.");
+  await caption(page, "And there is the record: the proxy's own row for the host it refused — policy denied.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 
@@ -188,16 +190,20 @@ test("V02c act 4 — two demos, two pods, one boundary", async () => {
   await beat(page, PACE.read);
   await page.keyboard.type("curl -sSI --max-time 5 https://example.com.\n");
   await pollScreen(screen2, /403|CONNECT tunnel failed/i, "the trailing-dot spelling meets the same 403");
-  await caption(page, "Now the dodge: a trailing dot is a legal spelling of the same host, and it used to slip past naive deny-lists. Refused identically — the proxy canonicalizes the name before it matches anything.");
+  await caption(page, "Now the dodge: a trailing dot is a legal spelling of the same host — it used to slip past naive deny-lists.");
+  await beat(page, PACE.read);
+  await caption(page, "Refused identically. Wardyn checks the real name, not the spelling you typed.");
   await beat(page, PACE.read);
   await expect(dodge.getByTestId("demo-audit-panel")).toContainText(/example\.com/, { timeout: 30_000 });
   await spotlight(page, dodge.getByTestId("demo-audit-panel"));
-  await caption(page, "And the record names the reason: policy denied, against the canonical host — not the spelling that was typed.");
+  await caption(page, "And the record names the reason: policy denied — and it names the real host, not the spelling we typed.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 
   await caption(page, "Install. Identity. A funnel that will not be skipped. And a boundary that holds.");
   await beat(page, PACE.read);
-  await caption(page, "Permissions, members, and operations each get their own episode from here.");
+  await caption(page, "Next on the core path: what the boundary actually stops.");
+  await beat(page, PACE.read);
+  await caption(page, "Who may do what, a member's own workspace, and admin operations each get their own episode later.");
   await beat(page, PACE.read);
 });

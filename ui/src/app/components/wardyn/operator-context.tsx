@@ -4,6 +4,7 @@
  */
 
 import * as React from "react";
+import type { MeUserDrive } from "../../lib/api/health";
 
 // Whether the signed-in caller holds the operator role (see GET /api/v1/me's
 // `operator` field, sourced from the same isOperator predicate the server
@@ -39,6 +40,42 @@ const PrincipalContext = React.createContext<string>("");
 // at bind time is (member-role-desktop.md §c).
 const MemberLocalDirRootContext = React.createContext<string | null>(null);
 
+// 0.7 — the caller's OWN user drive and the profile door beside it, both from
+// GET /me (see lib/api/health.ts's MeUserDrive for why the door is a sibling
+// field rather than a property of the allocation).
+//
+// They ride the shell's ONE /me read for the same reason
+// MemberLocalDirRootContext does: New Run and the member Getting Started page
+// each want them, app-shell's useMeta already holds the whole body, and two
+// more GET /me round trips per navigation buy nothing the shell's read has not
+// already bought.
+//
+// THE TRADE, named rather than assumed: one read per PAGE LOAD, not per
+// navigation. Inside a mount the consumers cannot disagree — they read one
+// object — but that object AGES. An admin who pauses a member's allocation
+// mid-session leaves that member still looking at the checkbox until they
+// reload, and the console never learns otherwise on its own. That is the cheap
+// direction of the error and the reason it is accepted: the offer is UX, the
+// resolver re-decides at dispatch, and the member is told by the door
+// (DRIVE_MEMBER.REFUSED_PAUSED, user-drives-prompt.md §7.7) rather than by a
+// checkbox that quietly disappeared. §2.6's member row is that list of states,
+// launch refusal included.
+//
+// Fail-CLOSED, unlike the tier defaults above: null / "" is "no allocation and
+// no door", which is exactly what an unresolved /me, a failed read and a
+// pre-0.7 daemon all honestly mean. The server re-decides at launch either
+// way, so an offer withheld here costs a member nothing but a page refresh,
+// while an offer INVENTED here is a mount the launch would refuse.
+export interface UserDriveMeta {
+  drive: MeUserDrive | null;
+  /** The governance profile's NAME when its DenyUserDrive limit refuses this
+   *  caller a drive; "" when it does not. */
+  deniedByProfile: string;
+}
+
+const NO_USER_DRIVE: UserDriveMeta = { drive: null, deniedByProfile: "" };
+const UserDriveContext = React.createContext<UserDriveMeta>(NO_USER_DRIVE);
+
 // Whether the signed-in caller holds the SECURITY-governance tier — admin OR
 // security_admin (GET /api/v1/me's `security_operator`, sourced from the same
 // isSecurityOperator predicate the server gates the securityOps routes with).
@@ -56,6 +93,8 @@ export function OperatorProvider({
   securityOperator = true,
   principal = "",
   memberLocalDirRoot = null,
+  userDrive = null,
+  userDriveDeniedByProfile = "",
   children,
 }: {
   operator: boolean;
@@ -65,13 +104,24 @@ export function OperatorProvider({
   securityOperator?: boolean;
   principal?: string;
   memberLocalDirRoot?: string | null;
+  userDrive?: MeUserDrive | null;
+  userDriveDeniedByProfile?: string;
   children: React.ReactNode;
 }) {
+  // Memoised: the two /me fields are a fresh object literal on every shell
+  // render otherwise, which would re-render every drive consumer on each
+  // heartbeat tick for a value that never changed.
+  const drive = React.useMemo<UserDriveMeta>(
+    () => ({ drive: userDrive ?? null, deniedByProfile: userDriveDeniedByProfile }),
+    [userDrive, userDriveDeniedByProfile],
+  );
   return (
     <OperatorContext.Provider value={operator}>
       <SecurityOperatorContext.Provider value={securityOperator}>
         <PrincipalContext.Provider value={principal}>
-          <MemberLocalDirRootContext.Provider value={memberLocalDirRoot}>{children}</MemberLocalDirRootContext.Provider>
+          <MemberLocalDirRootContext.Provider value={memberLocalDirRoot}>
+            <UserDriveContext.Provider value={drive}>{children}</UserDriveContext.Provider>
+          </MemberLocalDirRootContext.Provider>
         </PrincipalContext.Provider>
       </SecurityOperatorContext.Provider>
     </OperatorContext.Provider>
@@ -81,6 +131,13 @@ export function OperatorProvider({
 // The member's local_dir root constraint label — see MemberLocalDirRootContext above.
 export function useMemberLocalDirRoot(): string | null {
   return React.useContext(MemberLocalDirRootContext);
+}
+
+// This caller's own drive and the profile door beside it — see
+// UserDriveContext above. UX only: the launch path re-resolves both server-side
+// and is what actually refuses or mounts.
+export function useUserDrive(): UserDriveMeta {
+  return React.useContext(UserDriveContext);
 }
 
 // Whether the signed-in caller may perform SUPER-admin-only actions (secret

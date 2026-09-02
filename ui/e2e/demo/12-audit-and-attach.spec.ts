@@ -164,7 +164,7 @@ test("beat 4 — the trail", async () => {
   // below filters a window that has actually loaded.
   await expect(page.getByText(/^\d+ events?$/)).toBeVisible({ timeout: AUDIT_SETTLES });
 
-  await caption(page, "Now let's look at the other half of the system.");
+  await caption(page, "Now the receipts — the record of everything you just watched.");
   await beat(page, BEAT_SHORT);
   await caption(page, "The record.");
   await beat(page, BEAT_SHORT);
@@ -234,7 +234,7 @@ test("beat 4 — the trail", async () => {
   // affordance — a row's only click target is its run-id chip, which re-scopes
   // the whole list to that run rather than opening this one event. Spoken here
   // as narration over the spotlight rather than an invented click.
-  await caption(page, "Open the human event.");
+  await caption(page, "Here is the human event.");
   await spotlight(page, refused);
   await beat(page, BEAT_SHORT);
   // P10a (dialog review, owner-ratified 2026-08-23): "the refused key" arrived
@@ -249,9 +249,9 @@ test("beat 4 — the trail", async () => {
   // predicate but is never rendered in the row; only the fingerprint (target)
   // is genuinely on screen, so that half is true of the data but not
   // independently provable from the picture the way the fingerprint half is.
-  await caption(page, "Here's a key Wardyn refused — the fingerprint, and the identity it belonged to.");
+  await caption(page, "Here's a key Wardyn refused — its fingerprint, on the row.");
   await beat(page, PACE.read);
-  await caption(page, "The credential itself isn't exposed.");
+  await caption(page, "The key itself is never stored here — only its fingerprint.");
   await beat(page, BEAT_SHORT);
   await caption(page, "The decision is.");
   await beat(page, BEAT_SHORT + 400);
@@ -275,7 +275,7 @@ test("beat 5 — name the streams", async () => {
   await spotlight(page, live);
   await caption(page, "The terminal recording.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "And, where supported, the kernel's own view of what happened.");
+  await caption(page, "And, where supported, a second witness — the machine's own core, watching process and file events.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 
@@ -304,15 +304,14 @@ test("beat 5 — name the streams", async () => {
     "the ground-truth chip reads neither 'unavailable' nor 'degraded' — this take is on a stack with the eBPF sensor LIVE, and the line about the sensor being dark is false on camera",
   ).toBeVisible({ timeout: AUDIT_SETTLES });
   await spotlight(page, groundTruth);
-  await caption(page, "On this machine, that sensor isn't enabled for this barrier.");
+  await caption(page, "On this machine that second witness is switched off — an opt-in sensor — so the chip says so instead of pretending.");
+  await beat(page, PACE.read);
   // The "opt-in sensor" hint lives in the chip's native `title` tooltip, which
   // the browser draws as BROWSER chrome — Playwright's recordVideo captures page
   // content only, so the tooltip never lands in the file no matter how long we
   // hover. The hover is kept because it is what a presenter does and costs
   // nothing; the caption is what actually carries the point.
   await groundTruth.hover();
-  await beat(page, PACE.read);
-  await caption(page, "And Wardyn tells us that instead of pretending otherwise.");
   await beat(page, PACE.read);
   // KEEP-VERIFY: "a second witness alongside Wardyn's own log" — re-check
   // against the sensor docs before the take. Support today:
@@ -326,7 +325,9 @@ test("beat 5 — name the streams", async () => {
   // had already called the kernel "an independent witness" — so it now says
   // witness twice on purpose and names the other stream in the series' own
   // words.
-  await caption(page, "Where the sensor is available, you get a second witness alongside Wardyn's own log.");
+  await caption(page, "Where the sensor is available — a host that switched it on, which this one hasn't — that second witness runs alongside Wardyn's own log.");
+  await beat(page, PACE.read);
+  await caption(page, "A Vault run hides its guest from it — and Wardyn logs that blindness as its own row. This run isn't Vault, so there's none here.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 });
@@ -418,8 +419,6 @@ test("beat 6 — the tape", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "It's the session itself.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Secrets are masked.");
-  await beat(page, BEAT_SHORT);
   await caption(page, "And the record ties everything together:");
   await beat(page, PACE.read);
   await caption(page, "the policy that governed the run,");
@@ -439,14 +438,15 @@ test("beat 6 — the tape", async () => {
   // file" — has no line left in the owner's script. The tape section now runs
   // straight into the closing motif, so the navigate/search/assert for that
   // detour is cut along with its captions rather than left to play silently.
-  await caption(page, "That's the whole series.");
+  await caption(page, "That's the core of the series.");
   await beat(page, BEAT_SHORT);
-  // FACTUAL FIX (dialog review, A18): the owner's line said "Ten episodes."
-  // and the series reorder made it twelve. Corrected in place under the one
-  // exception the review allows on an approved line — a claim the reorder made
-  // false — and flagged for ratification in
-  // local/dialog-review-adjudication.md. NOT a rewording.
-  await caption(page, "Twelve episodes.");
+  await caption(page, "Admins: 'Admin operations' is next. On a cluster: 'Your terminal, our cluster'.");
+  await beat(page, BEAT_SHORT);
+  // FACTUAL FIX (dialog round, E12-12): the owner's line said "Ten episodes.",
+  // the reorder made it twelve, and the catalog now carries 13 numbered
+  // episodes plus lettered detours with 00 in front — so no count is right on
+  // camera for long. The line stops counting instead.
+  await caption(page, "One series.");
   await beat(page, BEAT_SHORT);
   await caption(page, "One idea.");
   await beat(page, BEAT_SHORT);

@@ -25,26 +25,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-
-def find_ffmpeg(explicit: str | None) -> str:
-    if explicit:
-        return explicit
-    which = shutil.which("ffmpeg.exe") or shutil.which("ffmpeg")
-    if which:
-        return which
-    # gdigrab is a Windows device, so record-demo.sh installs the Windows build;
-    # find it the same way (winget's zip package edits the WINDOWS PATH, which a
-    # WSL shell only inherits at startup).
-    for p in Path("/mnt/c/Users").glob(
-        "*/AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg_*/ffmpeg-*/bin/ffmpeg.exe"
-    ):
-        return str(p)
-    raise SystemExit("narrate-mux: no ffmpeg found (pass --ffmpeg)")
+# One resolver for the whole pipeline (record-demo.sh's ladder); this copy used
+# to prefer a plain `ffmpeg` on PATH over the Windows build the take was encoded
+# with. No package here, so the sibling dir goes on the path.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+from ffmpeg import _ffmpeg  # noqa: E402
 
 
 def winpath(ffmpeg: str, p: str) -> str:
@@ -65,7 +54,7 @@ def main() -> int:
     ap.add_argument("--drift-fit", help="demo-drift.py --emit-fit JSON: lay cues on the picture's own clock")
     args = ap.parse_args()
 
-    ffmpeg = find_ffmpeg(args.ffmpeg)
+    ffmpeg = _ffmpeg(args.ffmpeg)
     cues = json.loads(Path(args.timeline).read_text()).get("cues", [])
     cues = [c for c in cues if Path(c["file"]).exists()]
     if not cues:

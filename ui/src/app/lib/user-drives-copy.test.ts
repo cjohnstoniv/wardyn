@@ -13,7 +13,7 @@ import { DRIVE_MEMBER, DRIVE_RUN, DRIVES } from "./user-drives-copy";
 
 // The mock round's whole value is that it stays CHECKABLE, so this suite does
 // not hand-retype a sample of the canon — it PARSES docs/design/
-// user-drives-prompt.md §7.2-§7.8 back out of the doc and compares all 142
+// user-drives-prompt.md §7.2-§7.8 back out of the doc and compares all 140
 // keys. A swapped hyphen, a dropped ellipsis, a reworded clause, a new doc
 // row or a deleted one all fail here rather than shipping.
 //
@@ -202,7 +202,6 @@ const rendered: Record<string, string> = {
   NR_RW_NOTE: DRIVE_MEMBER.NR_RW_NOTE,
   NR_RO_NOTE: DRIVE_MEMBER.NR_RO_NOTE,
   NR_READONLY_TOGGLE: DRIVE_MEMBER.NR_READONLY_TOGGLE,
-  NR_NONE: DRIVE_MEMBER.NR_NONE,
   NR_PAUSED: DRIVE_MEMBER.NR_PAUSED,
   "NR_DENIED(profile)": DRIVE_MEMBER.NR_DENIED("{profile}"),
   "GS_DRIVE_CHIP(name, size, mode)": DRIVE_MEMBER.GS_DRIVE_CHIP("{name}", "{size}", "{mode}"),
@@ -216,7 +215,6 @@ const rendered: Record<string, string> = {
   REFUSED_PAUSED: DRIVE_MEMBER.REFUSED_PAUSED,
   "REFUSED_HOME_INVALID(claim)": DRIVE_MEMBER.REFUSED_HOME_INVALID("{claim}"),
   "REFUSED_HOME_MISSING(name)": DRIVE_MEMBER.REFUSED_HOME_MISSING("{name}"),
-  "REFUSED_CLAIM_MISSING(name)": DRIVE_MEMBER.REFUSED_CLAIM_MISSING("{name}"),
   REFUSED_WRITABLE: DRIVE_MEMBER.REFUSED_WRITABLE,
   "REFUSED_BACKEND(reason)": DRIVE_MEMBER.REFUSED_BACKEND("{reason}"),
   REFUSED_TARGET_RESERVED: DRIVE_MEMBER.REFUSED_TARGET_RESERVED,
@@ -227,8 +225,8 @@ const rendered: Record<string, string> = {
 };
 
 describe("user-drives-copy — §7.2-§7.8 parsed out of the prompt doc", () => {
-  it("finds all 142 frozen keys in the doc", () => {
-    expect(doc.size).toBe(142);
+  it("finds all 140 frozen keys in the doc", () => {
+    expect(doc.size).toBe(140);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {

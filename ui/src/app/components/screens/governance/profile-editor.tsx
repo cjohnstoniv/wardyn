@@ -24,9 +24,8 @@ import { PEOPLE } from "../../../lib/people-access-copy";
 import type { RunPolicySpec } from "../../../lib/types";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
-import { cn } from "../../ui/utils";
 import { Mono } from "../../wardyn/code-block";
-import { Field } from "../../wardyn/form-primitives";
+import { Field, Switch } from "../../wardyn/form-primitives";
 import { POLICY_TEMPLATES, PolicyPanel, parseSpec } from "../../wardyn/policy-panel";
 import { Note, withMono } from "./display";
 
@@ -135,6 +134,17 @@ export function ProfileEditor({
           disabled={disabled}
           onChange={(v) => setLimits((l) => ({ ...l, deny_interactive: v }))}
         />
+        {/* The user-drive door (0.7 user drives, §5 #5). Its two strings live
+            in governance-prompt.md §7.2 and governance-copy.ts, never in the
+            drives module: the security admin's authority over drives is this
+            row and nothing else, /drives itself being SUPER. */}
+        <LimitRow
+          label={GOV.LIMIT_DRIVE_LABEL}
+          hint={GOV.LIMIT_DRIVE_HINT}
+          checked={!!limits.deny_user_drive}
+          disabled={disabled}
+          onChange={(v) => setLimits((l) => ({ ...l, deny_user_drive: v }))}
+        />
       </section>
 
       {error && (
@@ -164,11 +174,10 @@ export function ProfileEditor({
 // One limit: the switch, its label, and the sentence saying why a ceiling
 // cannot reach that launch mode.
 //
-// ponytail: a local `role="switch"` button, the same ten-line shape
-// permissions.tsx's KindRow uses — NOT a shared primitive and NOT a restored
-// @radix-ui/react-switch. Hoist the two into wardyn/form-primitives the day a
-// third screen needs one; two copies of ten lines is cheaper than a primitive
-// nobody else asks for.
+// The switch itself moved to wardyn/form-primitives.tsx when the drives editor
+// became the third screen to want one — which is what the note that stood here
+// said to do. This row is still local: it is the LIMITS layout (switch beside a
+// label and a sentence), not a form field, and nothing else renders that shape.
 function LimitRow({
   label,
   hint,
@@ -184,26 +193,7 @@ function LimitRow({
 }) {
   return (
     <div className="mt-3 flex items-start gap-3 border-t border-border pt-3 first-of-type:border-t-0">
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        aria-label={label}
-        disabled={disabled}
-        onClick={() => onChange(!checked)}
-        className={cn(
-          "mt-0.5 inline-flex h-[1.15rem] w-8 shrink-0 items-center rounded-full border border-transparent p-[1px] transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
-          checked ? "bg-primary" : "bg-muted",
-        )}
-      >
-        <span
-          aria-hidden="true"
-          className={cn(
-            "pointer-events-none block size-4 rounded-full bg-card shadow-sm transition-transform",
-            checked ? "translate-x-[calc(100%-2px)]" : "translate-x-0",
-          )}
-        />
-      </button>
+      <Switch checked={checked} onChange={onChange} disabled={disabled} label={label} className="mt-0.5" />
       <div className="min-w-0">
         <p className="text-body font-medium text-foreground">{label}</p>
         <p className="mt-0.5 max-w-[62ch] text-xs text-muted-foreground">{hint}</p>

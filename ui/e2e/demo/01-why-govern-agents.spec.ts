@@ -112,7 +112,7 @@ test("V01 — why govern agents (the primer)", async () => {
   await caption(page, "You build something. More scripts run.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#t-ci"));
-  await caption(page, "Your CI pipeline runs tests, builds releases, and sometimes deploys straight to production.");
+  await caption(page, "Your automated build pipeline — CI — runs tests, builds releases, and sometimes deploys straight to production.");
   await beat(page, PACE.read);
   await spotlight(page, null);
   await caption(page, "And depending on how things are set up, that code can have access to the same machine, files, credentials, and network that your own software can reach.");
@@ -121,7 +121,7 @@ test("V01 — why govern agents (the primer)", async () => {
   await beat(page, BEAT_SHORT);
   await unhide(page, "s1-supply");
   await spotlight(page, page.locator("#s1-supply"));
-  await caption(page, "Supply-chain attacks have been exploiting this for years.");
+  await caption(page, "Supply-chain attacks — bad code hiding inside packages you install — have been exploiting this for years.");
   await beat(page, PACE.read);
   await caption(page, "The difference is that most of us don't actually watch what that code is doing, especially code that isn't ours.");
   await beat(page, PACE.read);
@@ -151,6 +151,8 @@ test("V01 — why govern agents (the primer)", async () => {
   await spotlight(page, page.locator("#agent-caps > div").nth(3));
   await caption(page, "It can call APIs.");
   await beat(page, BEAT_SHORT);
+  await caption(page, "It can call tools over MCP.");
+  await beat(page, BEAT_SHORT);
   await unhide(page, "s2-access");
   await spotlight(page, page.locator("#s2-access"));
   await caption(page, "And most importantly, it often does those things as you.");
@@ -170,11 +172,13 @@ test("V01 — why govern agents (the primer)", async () => {
   await beat(page, PACE.read);
   await caption(page, "And sometimes those instructions aren't even coming from you.");
   await beat(page, PACE.read);
-  await caption(page, "A dependency can contain them.");
+  await caption(page, "A package your code pulls in can contain them.");
   await beat(page, BEAT_SHORT);
   await caption(page, "A web page can contain them.");
   await beat(page, BEAT_SHORT);
   await caption(page, "A file the agent reads can contain them.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "A tool's response can contain them — whether that tool speaks MCP, a command line, or an API.");
   await beat(page, BEAT_SHORT);
   await caption(page, "Those instructions can come from places you never meant to trust.");
   await beat(page, PACE.read);
@@ -184,12 +188,18 @@ test("V01 — why govern agents (the primer)", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "And suddenly, those same hands are following someone else's instructions.");
   await beat(page, PACE.read);
+  await caption(page, "MCP isn't a new kind of risk.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "An MCP tool is no more — and no less — likely to carry an injection than a CLI tool or an API the same agent already reaches.");
+  await beat(page, BEAT_SHORT);
+  await caption(page, "The risk isn't the protocol. It's what those hands can touch.");
+  await beat(page, BEAT_SHORT);
   await spotlight(page, null);
 
   // --- S3 · the exhibit -------------------------------------------------------
   await show(page, "s3");
   await spotlight(page, page.locator("#exhibit"));
-  await caption(page, "Here's a real frame from this series.");
+  await caption(page, "Here's a real frame from later in this series — watch the panel on the right.");
   await beat(page, BEAT_SHORT);
   await caption(page, "This is an AI coding agent doing an ordinary job.");
   await beat(page, PACE.read);
@@ -198,7 +208,7 @@ test("V01 — why govern agents (the primer)", async () => {
   await caption(page, "traffic trying to leave the machine.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#exhibit-pending"));
-  await caption(page, "The agent's own tooling was sending usage information to a third-party telemetry service.");
+  await caption(page, "The agent's own tooling tried to phone home — usage stats to a third-party telemetry host, the one in that row.");
   await beat(page, PACE.read);
   await caption(page, "Nothing dramatic happened.");
   await beat(page, BEAT_SHORT);
@@ -208,20 +218,20 @@ test("V01 — why govern agents (the primer)", async () => {
   await beat(page, PACE.read);
   await caption(page, "And that's exactly why this matters.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Because at the network boundary, an ordinary telemetry request and a malicious request can look remarkably similar.");
+  await caption(page, "Because at the door out of the machine, an ordinary 'phone home' and a malicious upload look remarkably similar.");
   await beat(page, PACE.read);
   await caption(page, "They're both traffic leaving the machine.");
   await beat(page, PACE.read);
-  await caption(page, "The difference is what you're allowing through the door.");
+  await caption(page, "The difference is what you choose to let out.");
   await beat(page, PACE.read);
   await caption(page, "In this case, the destination wasn't on the allowed list.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#exhibit-quote"));
-  await caption(page, "So instead of silently letting it through, the request was held.");
+  await caption(page, "So instead of silently letting it through, something stood at the door and held the request — paused, nothing sent yet. We'll name that something in a minute.");
   await beat(page, PACE.read);
   await caption(page, "Now a human can decide.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "And that's the real problem we're trying to solve:");
+  await caption(page, "That hold is the outcome we want. And that's the real problem we're trying to solve:");
   await beat(page, BEAT_SHORT);
   await caption(page, "How do you give an agent enough access to be useful...");
   await beat(page, BEAT_SHORT);
@@ -290,9 +300,9 @@ test("V01 — why govern agents (the primer)", async () => {
   await spotlight(page, page.locator("#d-proxy"));
   await caption(page, "That door is the proxy.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "The proxy sits outside the sandbox and controls access to the things the agent needs.");
+  await caption(page, "The proxy sits outside the sandbox — the box's only way out — and controls access to the things the agent needs.");
   await beat(page, PACE.read);
-  await caption(page, "So the agent doesn't get handed the keys.");
+  await caption(page, "So the agent never holds the credentials. When a request needs one, the proxy adds it on the way out.");
   await beat(page, BEAT_SHORT);
   await caption(page, "It gets a controlled path to use them.");
   await beat(page, PACE.read);
@@ -317,7 +327,7 @@ test("V01 — why govern agents (the primer)", async () => {
   await caption(page, "Watch it.");
   await beat(page, BEAT_SHORT);
   await spotlight(page, page.locator("#steps > .card").nth(0));
-  await caption(page, "Run the job once in a controlled environment.");
+  await caption(page, "Run the job once, watched — wide open, so only work you trust.");
   await beat(page, PACE.read);
   await caption(page, "Let it do the work.");
   await beat(page, BEAT_SHORT);
@@ -347,7 +357,7 @@ test("V01 — why govern agents (the primer)", async () => {
   await beat(page, PACE.read);
   await unhide(page, "s6-ep9");
   await spotlight(page, page.locator("#s6-ep9"));
-  await caption(page, "That's how one safe, watched run becomes a policy you can actually keep.");
+  await caption(page, "That's how one watched run becomes a policy you can actually keep.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 
@@ -362,8 +372,10 @@ test("V01 — why govern agents (the primer)", async () => {
   await caption(page, "This is Wardyn.");
   await beat(page, BEAT_SHORT);
   await spotlight(page, page.locator("#oss-line"));
-  await caption(page, "It's open source, runs on your own machine, and we're going to prove each part on camera.");
+  await caption(page, "It's open source and runs on your own machine.");
   await beat(page, PACE.read);
+  await caption(page, "And we're going to prove each part on camera.");
+  await beat(page, BEAT_SHORT);
   // Round-2 dialog review (Lane C, applied on plan approval): the old close
   // counted the episodes and then sent a viewer straight to episode three —
   // a shortcut past the two episodes that build the machine that episode
@@ -374,7 +386,7 @@ test("V01 — why govern agents (the primer)", async () => {
   await caption(page, "We'll build that from the ground up, one step at a time.");
   await beat(page, PACE.read);
   await spotlight(page, page.locator("#next"));
-  await caption(page, "Next, we start at the beginning: setting up the host.");
+  await caption(page, "Next, we set up the host — pick the setup episode for your install: one machine, a managed desktop, or a cluster.");
   await beat(page, BEAT_SHORT);
   await caption(page, "One command.");
   await beat(page, BEAT_SHORT);

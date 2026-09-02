@@ -579,3 +579,46 @@ describe("question — the confirm split", () => {
     expect(head.endsWith("?")).toBe(true);
   });
 });
+
+// The user-drive DOOR (0.7 user drives, mock state 6). Its two strings are
+// governance canon — GOV.LIMIT_DRIVE_LABEL / _HINT, appended to
+// governance-prompt.md §7.2 — and the drives module never carries a copy: the
+// security admin's whole authority over drives is this switch, /drives itself
+// being SUPER.
+describe("GovernanceScreen — the third limit is the user-drive door", () => {
+  it("the editor's Limits section has three rows, and the third writes deny_user_drive", async () => {
+    updateProfileMock.mockResolvedValue({ profile: GREENFIELD, warnings: [] });
+    renderScreen();
+    await screen.findByText(GREENFIELD.name);
+    await userEvent.click(screen.getByRole("button", { name: `${GOV.EDIT} ${GREENFIELD.name}` }));
+
+    const editor = await screen.findByTestId("governance-profile-editor");
+    expect(within(editor).getAllByRole("switch")).toHaveLength(3);
+    const door = within(editor).getByRole("switch", { name: GOV.LIMIT_DRIVE_LABEL });
+    expect(door).toHaveAttribute("aria-checked", "false");
+    expect(within(editor).getByText(GOV.LIMIT_DRIVE_HINT)).toBeInTheDocument();
+
+    await userEvent.click(door);
+    await userEvent.click(within(editor).getByRole("button", { name: GOV.SAVE }));
+
+    expect(updateProfileMock).toHaveBeenCalledWith(
+      GREENFIELD.id,
+      expect.objectContaining({ limits: { deny_user_drive: true } }),
+    );
+  });
+
+  it("a profile with the door shut carries its chip in the Limits column, beside the other two", async () => {
+    renderScreen(
+      snapshot({
+        profiles: [profile({ limits: { deny_task_mode_exec: true, deny_user_drive: true } }), PLATFORM],
+      }),
+    );
+    await screen.findByText(GREENFIELD.name);
+    const limits = within(screen.getAllByRole("table")[0]);
+    expect(limits.getByText(GOV.LIMIT_EXEC_LABEL)).toBeInTheDocument();
+    expect(limits.getByText(GOV.LIMIT_DRIVE_LABEL)).toBeInTheDocument();
+    // …and a profile with no limits still reads LIMITS_NONE, which the third
+    // flag must not have quietly turned into "one limit set".
+    expect(limits.getByText(GOV.LIMITS_NONE)).toBeInTheDocument();
+  });
+});

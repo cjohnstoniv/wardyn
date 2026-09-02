@@ -38,6 +38,12 @@ import sys
 from bisect import bisect_left
 from pathlib import Path
 
+# One resolver for the whole pipeline (record-demo.sh's ladder) — this script
+# and three siblings each carried a drifted copy. No package here, so the
+# sibling dir goes on the path.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+from ffmpeg import _ffmpeg  # noqa: E402
+
 # The caption pill, in a 1920x1080 frame. overlay.ts pins .cap to
 # `bottom: 44px` with 20px/1.4 text and 14px padding, so it occupies y 980-1036;
 # the text is centre-aligned on x=960. A centre strip is enough to see the ink
@@ -48,26 +54,6 @@ SAMPLE_FPS = 10
 # A cue counts as "found" when a caption change lands this close to where the
 # fitted mapping puts it. Half the sample step plus slack for the 0.3s fade.
 TOL_S = 0.45
-
-
-def find_ffmpeg(explicit: str | None) -> str:
-    """Same resolution record-demo.sh does — gdigrab needs the Windows build."""
-    if explicit:
-        return explicit
-    from shutil import which
-
-    if w := which("ffmpeg.exe"):
-        return w
-    hits = sorted(
-        Path("/mnt/c/Users").glob(
-            "*/AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg_*/ffmpeg-*/bin/ffmpeg.exe"
-        )
-    )
-    if hits:
-        return str(hits[0])
-    if w := which("ffmpeg"):
-        return w
-    raise SystemExit("demo-drift: no ffmpeg found (pass --ffmpeg)")
 
 
 def winpath(ffmpeg: str, p: str) -> str:
@@ -192,7 +178,7 @@ def main() -> int:
     if not args.video:
         ap.error("--video is required")
 
-    ffmpeg = find_ffmpeg(args.ffmpeg)
+    ffmpeg = _ffmpeg(args.ffmpeg)
 
     if args.strip is not None:
         out = f"{Path(args.video).stem}-strip-{args.strip:.0f}.png"

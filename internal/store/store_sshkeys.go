@@ -22,9 +22,9 @@ import (
 // table means someone already registered that exact key material.
 func (s PG) AddSSHKey(ctx context.Context, k types.SSHPublicKey) (types.SSHPublicKey, error) {
 	const q = `
-		INSERT INTO ssh_public_keys (fingerprint, principal, name, public_key, role, role_checked_at, created_at)
+		INSERT INTO ssh_public_keys (` + sshKeyCols + `)
 		VALUES ($1,$2,$3,$4,$5,$6,$7)
-		RETURNING fingerprint, principal, name, public_key, role, role_checked_at, created_at`
+		RETURNING ` + sshKeyCols
 	out, err := scanSSHKey(s.Pool.QueryRow(ctx, q, k.Fingerprint, k.Principal, k.Name, k.PublicKey, k.Role, k.RoleCheckedAt, k.CreatedAt))
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -40,7 +40,7 @@ func (s PG) AddSSHKey(ctx context.Context, k types.SSHPublicKey) (types.SSHPubli
 // first — the self-service GET /me/ssh-keys list.
 func (s PG) ListSSHKeysByPrincipal(ctx context.Context, principal string) ([]types.SSHPublicKey, error) {
 	const q = `
-		SELECT fingerprint, principal, name, public_key, role, role_checked_at, created_at
+		SELECT ` + sshKeyCols + `
 		FROM ssh_public_keys WHERE principal = $1 ORDER BY created_at DESC`
 	return collect(ctx, s.Pool, "list", "ssh keys", q, []any{principal}, scanSSHKey)
 }
@@ -52,7 +52,7 @@ func (s PG) ListSSHKeysByPrincipal(ctx context.Context, principal string) ([]typ
 // this call is what authenticates them. Returns ErrNotFound when unregistered.
 func (s PG) GetSSHKeyByFingerprint(ctx context.Context, fingerprint string) (types.SSHPublicKey, error) {
 	const q = `
-		SELECT fingerprint, principal, name, public_key, role, role_checked_at, created_at
+		SELECT ` + sshKeyCols + `
 		FROM ssh_public_keys WHERE fingerprint = $1`
 	return scanSSHKey(s.Pool.QueryRow(ctx, q, fingerprint))
 }
@@ -93,6 +93,11 @@ func (s PG) DeleteSSHKey(ctx context.Context, fingerprint, principal string) err
 	}
 	return nil
 }
+
+// sshKeyCols is THE ssh_public_keys column list, in scanSSHKey's order (four
+// pasted sites). One list, not two: every column is written at registration,
+// and RefreshSSHKeyRoles updates two in place rather than adding any.
+const sshKeyCols = `fingerprint, principal, name, public_key, role, role_checked_at, created_at`
 
 func scanSSHKey(row pgx.Row) (types.SSHPublicKey, error) {
 	var k types.SSHPublicKey

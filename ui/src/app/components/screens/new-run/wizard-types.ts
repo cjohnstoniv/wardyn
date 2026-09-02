@@ -213,6 +213,18 @@ export interface WizardState {
   saveAsProfile: boolean;
   profileName: string;
 
+  // --- The member's own user drive (0.7) ---
+  // Mount the caller's allocated drive at /home/agent/drive for this run. OFF
+  // by default and never a path: the request carries a flag, the server
+  // resolves which drive belongs to the caller (internal/api/user_drives_run.go).
+  // Orthogonal to `workspaces` above — a drive is not a workspace.
+  driveEnabled: boolean;
+  // NARROW this run's mount to read-only even though the allocation is
+  // writable. Off by default (Q5). Meaningless without driveEnabled, and
+  // `false` is never emitted: read_only:false cannot widen an allocation, and
+  // the server refuses it as an attempt to.
+  driveReadOnly: boolean;
+
   // --- Step 1: basics — Bring Your Own Image ---
   // A user-supplied base image ref. When set, the backend wraps it with the
   // runner tools before use (see CreateRunInput.image). "" = the convention image.
@@ -284,6 +296,12 @@ export function initialWizardState(defaultCc: ConfinementClass = "CC1"): WizardS
 
     saveAsProfile: false,
     profileName: "",
+
+    // A run mounts nothing unless the member ticks the box — the same default
+    // every run has had, and the only safe one: an unasked-for mount is
+    // storage nobody chose to expose to an agent.
+    driveEnabled: false,
+    driveReadOnly: false,
 
     image: "",
   };
@@ -520,6 +538,9 @@ export type CreateRunInputWithComposition = CreateRunInput & {
   // Safe from double-mounting precisely because there is no mount/repo to
   // duplicate — never set when buildSpec already emitted workspace_mounts/repos.
   workspace_id?: string;
+  // The member's user-drive request — pkg/client.DriveSelection 1:1. Absent
+  // (the overwhelmingly common case) mounts nothing.
+  drive?: { enabled: boolean; read_only?: boolean };
 };
 
 // buildSpec (the state -> canonical wire-contract composer) and

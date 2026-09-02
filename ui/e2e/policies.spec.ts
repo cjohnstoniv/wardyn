@@ -4,6 +4,7 @@
  */
 
 import { test, expect, gotoConsole, navTo } from "./fixtures";
+import { DRIVE_MEMBER } from "../src/app/lib/user-drives-copy";
 import type { Page } from "@playwright/test";
 
 // Run this file's tests SERIALLY. They share one backend and the policy table is
@@ -441,5 +442,55 @@ test("create form surfaces the server-side error for an unknown spec key (strict
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(editorDialog(page)).toBeHidden();
+  await expect(policyRow(page, name)).toHaveCount(0);
+});
+
+// The reserved user-drive target (0.7). A policy may not name /home/agent/drive
+// as a mount target: the member's own drive mounts there, and the two are
+// authored by different people at different times — an admin writes the policy,
+// an admin allocates the drive, a member ticks a checkbox at run time — so a
+// collision would surface as one of them silently disappearing inside a running
+// sandbox rather than as a refusal anybody could act on.
+//
+// The expected text IS the frozen canon (DRIVE_MEMBER.REFUSED_TARGET_RESERVED,
+// user-drives-prompt.md §7.7) — asserted as a string, byte for byte, with no
+// regex softening in between. It can be, because the canon spells exactly what
+// the wire carries: runner.ValidateAuthoredTarget composes the sentence and the
+// caller prefixes the field index its own convention already adds, so the canon
+// entry spells `workspace_mounts[0]` too, and the path is PLAIN — a mono span
+// is a display concern the console applies, never bytes baked into the string
+// (internal/runner/mount.go:76, ui/src/app/lib/user-drives-copy.ts's backtick
+// rule). A message that drifts from canon in either direction fails here.
+//
+// Substring, because the handler prefixes its own "invalid policy spec: " —
+// that prefix is the API's, shared by every spec refusal, and is pinned by the
+// sibling cases above rather than folded into this feature's canon.
+
+test("create form surfaces the reserved user-drive target refusal (HTTP 400)", async ({ page }) => {
+  const name = uniqueName("reservedtarget");
+  // A structurally valid mount whose SOURCE passes the bind-mount deny-list —
+  // so the only thing wrong with it is the target, and the refusal names it.
+  const reservedSpec = JSON.stringify(
+    {
+      allowed_domains: [],
+      first_use_approval: true,
+      min_confinement_class: "CC2",
+      workspace_mounts: [{ source: "/home/me/projects/payments", target: "/home/agent/drive" }],
+    },
+    null,
+    2,
+  );
+  await openCreate(page);
+  await fillEditor(page, name, reservedSpec);
+  const dialog = editorDialog(page);
+  await dialog.getByRole("button", { name: "Create policy" }).click();
+
+  // validatePolicySpec routes every AUTHORED target through
+  // runner.ValidateAuthoredTarget, and its message is surfaced verbatim.
+  await expect(dialog.getByText(DRIVE_MEMBER.REFUSED_TARGET_RESERVED)).toBeVisible();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(editorDialog(page)).toBeHidden();
+  // Nothing persisted: the policy table is untouched.
   await expect(policyRow(page, name)).toHaveCount(0);
 });

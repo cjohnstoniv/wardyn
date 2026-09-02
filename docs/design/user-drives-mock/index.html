@@ -903,17 +903,19 @@ dl.rail dd.plain{font-family:var(--font-sans)}
       </div>
     </div>
 
-    <!-- The three client-knowable reasons render IN PLACE of the checkbox, one line each,
-         the Workspace card's own rule (the reason rides the selection). -->
-    <div class="varlabel"><b>7d — no allocation</b> (422 at launch if requested anyway) · <b>7e — paused</b> (422) · <b>7f — the door</b> (403; drawn from /me.user_drive.denied_by_profile, Q6)</div>
+    <!-- The two client-knowable reasons render IN PLACE of the checkbox, one line each,
+         the Workspace card's own rule (the reason rides the selection). There is no third:
+         no allocation AND no door is the ABSENT ROW — nothing at all, not a sentence. -->
+    <div class="varlabel"><b>7d — paused</b> (422) · <b>7e — the door</b> (403; drawn from /me.user_drive.denied_by_profile, Q6)</div>
     <div class="pad" style="display:flex;flex-direction:column;gap:12px">
-      <p class="secsub" style="margin:0">No drive is allocated to you.</p>
       <p class="secsub" style="margin:0">Your drive is paused by your admin.</p>
       <p class="secsub" style="margin:0">Your governance profile "Greenfield contractors" does not allow mounting a drive.</p>
     </div>
-    <!-- With /me.user_drive null AND no door: no checkbox, no line — today's card. -->
+    <!-- With /me.user_drive null AND no door: no checkbox, no line — today's card, drawn
+         nowhere here because it is byte-for-byte the card that already ships. The launch-path
+         answer to that same condition is the SERVER's REFUSED_NO_GRANT, drawn in 7f. -->
 
-    <div class="varlabel"><b>7g — refused at launch</b> — composed server-side, rendered verbatim; backend-unavailable is knowable HERE only</div>
+    <div class="varlabel"><b>7f — refused at launch</b> — composed server-side, rendered verbatim; backend-unavailable is knowable HERE only</div>
     <div class="pad">
       <!-- The one 403 (audited), then the 422s (not audited), then the policy-side 400. -->
       <div class="note red" style="margin-top:0">mounting a user drive is not allowed by your governance profile "Greenfield contractors". Launch without <span class="mono">drive</span>.</div>
@@ -921,10 +923,9 @@ dl.rail dd.plain{font-family:var(--font-sans)}
       <div class="note red">drive: your allocation is paused by an admin</div>
       <div class="note red">drive: your email_local cannot name a directory (lowercase letters and digits, then <span class="mono">. _ -</span>, up to 63 characters) — ask an admin to set your directory name</div>
       <div class="note red">drive: directory <span class="mono">bsmith</span> does not exist on the share — ask an admin to create it</div>
-      <div class="note red">drive: volume claim <span class="mono">wardyn-drive-corporate-homes-bsmith</span> is not provisioned on this cluster — ask an admin to create it</div>
       <div class="note red">drive: your allocation is read-only; <span class="mono">read_only:false</span> cannot widen it</div>
-      <div class="note red">drive: this deployment cannot mount your drive (the runner may not create volume claims — k8s.userDrives.enabled is off)</div>
-      <div class="note red">workspace_mounts: target <span class="mono">/home/agent/drive</span> is reserved for the user drive</div>
+      <div class="note red">drive: this deployment cannot mount your drive (it is a "k8s_pvc" drive and this deployment dispatches to "docker")</div>
+      <div class="note red">workspace_mounts[0]: target <span class="mono">/home/agent/drive</span> is reserved for the user drive</div>
     </div>
     <div class="varlabel"><b>Beside them, reused:</b> the governance round's stale-snapshot refusal, when group-tier allocations exist and the snapshot is truncated</div>
     <div class="pad" style="padding-top:14px">

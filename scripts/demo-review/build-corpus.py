@@ -48,33 +48,41 @@ Writes into OUTDIR:
 Frame budget: 66 — six-up across tile-sheets.py's eleven sheets. Gap frames are never dropped; mid-cue frames thin
 first, then +0.8s frames, both evenly — same policy R1 used on V01.
 
-Extraction uses the Windows ffmpeg (this box has no Linux one — same resolve
-as record-demo.sh), one -ss seek per frame, written to the WSL path directly.
+Extraction uses the pipeline's own ffmpeg (scripts/lib/ffmpeg.py — record-demo.sh's
+ladder, Windows build first), one -ss seek per frame, written to the WSL path
+directly.
 """
 
 from __future__ import annotations
 
-import glob
 import json
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+# One resolver for the whole pipeline (record-demo.sh's ladder); this copy had
+# no override at all, so a box without the winget install could not build a
+# corpus even with an ffmpeg sitting on PATH. No package here, so the lib dir
+# goes on the path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+from ffmpeg import _ffmpeg  # noqa: E402
+
 COLS_X_SHEETS = 66  # keep in step with tile-sheets.py --per-sheet x --max-sheets
 
 
-def ffmpeg_exe() -> str:
-    p = shutil.which("ffmpeg.exe")
-    if p:
-        return p
-    for c in glob.glob("/mnt/c/Users/*/AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg_*/ffmpeg-*/bin/ffmpeg.exe"):
-        return c
-    sys.exit("no ffmpeg.exe found (winget.exe install Gyan.FFmpeg)")
+def winpath(ffmpeg: str, p: Path) -> str:
+    """ffmpeg.exe cannot read /home/... — hand it a Windows path.
 
-
-def winpath(p: Path) -> str:
-    return subprocess.run(["wslpath", "-w", str(p)], capture_output=True, text=True, check=True).stdout.strip()
+    Keyed on the RESOLVED binary, exactly as narrate-mux.py / demo-ffwd.py /
+    demo-drift.py do it: a Linux ffmpeg (which _ffmpeg()'s ladder now reaches)
+    fails on every \\wsl.localhost UNC spelling, and check=True made a box with
+    no wslpath at all die here instead of just using the native path.
+    """
+    if not ffmpeg.endswith(".exe"):
+        return str(p)
+    out = subprocess.run(["wslpath", "-w", str(p)], capture_output=True, text=True)
+    return out.stdout.strip() or str(p)
 
 
 def main() -> int:
@@ -128,14 +136,14 @@ def main() -> int:
         drop = {id(s) for s in pool[1 :: max(1, len(pool) // excess)][:excess]}
         shots = [s for s in shots if id(s) not in drop]
 
-    ff = ffmpeg_exe()
-    vwin = winpath(video)
+    ff = _ffmpeg()
+    vwin = winpath(ff, video)
     kept = 0
     for t, name, _ in sorted(shots):
         out = outdir / f"t{t:07.1f}_{name}.png"
         r = subprocess.run(
             [ff, "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{t:.2f}", "-i", vwin,
-             "-frames:v", "1", winpath(out)],
+             "-frames:v", "1", winpath(ff, out)],
             capture_output=True, text=True,
         )
         if r.returncode == 0 and out.is_file() and out.stat().st_size > 0:

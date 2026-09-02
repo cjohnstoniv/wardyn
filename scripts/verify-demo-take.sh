@@ -25,10 +25,14 @@
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}" || exit 1
-. "${REPO_ROOT}/scripts/lib/common.sh" 2>/dev/null || true
-# Per-episode arms live out of line — this file is within ~20 lines of
-# scripts/check-file-size.sh's 1000-line threshold, so an inline arm breaks
-# `make lint`. Globbed: a new episode's lane drops a lib in, adds only its arm.
+# NOT best-effort: wardyn_ffmpeg (the artifact check at the bottom) comes from
+# here, so a common.sh that fails to load must be loud, not silently skipped.
+. "${REPO_ROOT}/scripts/lib/common.sh"
+# Per-episode arms live out of line — scripts/check-file-size.sh caps every
+# scripts/*.sh at 1000 lines and this file kept running into it, so an inline arm
+# breaks `make lint`. Globbed: a new episode's lane drops a lib in, adds only its
+# arm. (Retiring the dead 08 arm bought ~130 lines of that budget back; spend it
+# on a NEW lib, not on inlining.)
 for _f in "${REPO_ROOT}"/scripts/lib/verify-demo-take-*.sh; do [[ "${_f}" == *_test.sh ]] || . "${_f}"; done
 command -v wardyn_pick_docker_host >/dev/null 2>&1 && wardyn_pick_docker_host
 
@@ -38,6 +42,10 @@ PASS=0; FAIL=0
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; PASS=$((PASS+1)); }
 bad()  { printf '  \033[31m✗\033[0m %s\n' "$*"; FAIL=$((FAIL+1)); }
 head_() { printf '\n\033[1;35m── %s\033[0m\n' "$*"; }
+# The source above is unguarded now; this is the receipt that it worked. A verify
+# that reaches the artifact check without wardyn_ffmpeg reports "no audio" over a
+# take that has audio.
+command -v wardyn_ffmpeg >/dev/null || bad "scripts/lib/common.sh did not load — wardyn_ffmpeg is missing"
 
 # The autonomous episode's checks (new 08 — the legacy walkthrough's act 5), exactly as this script has
 # always run them, now behind a name so the dispatch below can pick them.
@@ -509,138 +517,15 @@ PYEOF
 fi
 }
 
-# --- (old) video 08: policies & confinement -------------------------------------
-# RETIRING, no longer dispatched (Workstream C renumber, 2026-08-24): this
-# content folds into the new episode 05 and case key "08" now means the
-# autonomous-agent episode (check_video_02, above). Kept for whoever writes
-# 05's real checks to borrow assertions from.
-# The take authors ONE policy (`nightly-triage`) by PASTING a prepared CC1 spec
-# over the editor's CC2-floored starter, then launches a shell run BY REFERENCE
-# to it. Three ways that goes green while filming a lie, and each gets a check:
-#   - the paste silently failed and the STARTER spec was saved (CC2, one host),
-#     so the narrator describes a policy that is not the one on screen;
-#   - the run shipped `inline_policy` instead of `policy_id` (the radio-vs-
-#     payload bug this campaign fixed), so the Identity widget's Policy row is
-#     someone else's id — or absent;
-#   - the run never actually ran, so "every run after it, already governed" is
-#     narrated over a sandbox that failed to start.
-# Deliberately NOT checked here: which barrier the run got. That is the host's
-# answer, not the video's claim (the policy floors at CC1 and the wizard picks
-# the strongest tier available), and the spec asserts it against /healthz.
-check_video_08_policies() {
-head_ "Video 08 · the policy"
-V08_API="http://localhost:${WARDYN_UP_PORT:-8080}"
-V08_POLICY="${WARDYN_DEMO_V08_POLICY:-nightly-triage}"
-V08_TITLE="${WARDYN_DEMO_V08_TITLE:-Nightly triage, governed by policy}"
-V08_POLJ=$(curl -fsS "${V08_API}/api/v1/policies" 2>/dev/null || echo '[]')
-# A temp file, NOT a pipe: `| while read` runs in a subshell and ok()/bad()
-# would increment counters that vanish — the bug class this script exists for.
-python3 - "$V08_POLJ" "$V08_POLICY" <<'PYEOF' > /tmp/_demo_v08.$$ 2>/dev/null
-import sys, json
-try: d = json.loads(sys.argv[1])
-except Exception: d = []
-pols = d if isinstance(d, list) else d.get("items") or d.get("policies") or []
-name = sys.argv[2]
-p = next((x for x in pols if (x or {}).get("name") == name), None)
-print("V08_POL_EXISTS", bool(p))
-print("V08_POL_ID", (p or {}).get("id") or "-")
-spec = (p or {}).get("spec") or {}
-# The four fields the narrator says out loud, in the order the SAY lines say
-# them. allowed_domains is compared as a SET: the server is free to sort it.
-print("V08_POL_HOSTS", sorted(spec.get("allowed_domains") or []) == ["github.com", "npmjs.org"])
-print("V08_POL_HOLD", (spec.get("first_use_approval") or "") == "wait_for_review")
-# The STARTER_SPEC trap (policies.tsx): its floor is ALSO CC2 now (the spec's
-# own floor moved CC1->CC2 so B4 can film a real floor refusal), so this field
-# alone can no longer catch a failed paste — V08_POL_HOSTS (two domains vs the
-# starter's one) is what still would. CC2 here just confirms the saved floor
-# matches what B2 pasted.
-print("V08_POL_FLOOR", (spec.get("min_confinement_class") or ""))
-# -1, not 0, when there is no policy at all: an absent row must never read as
-# "no grants" and score a PASS on a take that never created anything.
-print("V08_POL_GRANTS", len(spec.get("eligible_grants") or []) if p else -1)
-PYEOF
-V08_POL_ID="-"
-while read -r k v; do
-  case "$k" in
-    V08_POL_EXISTS) [[ "$v" == True ]] && ok "policy '${V08_POLICY}' exists" || bad "no '${V08_POLICY}' policy — beat 2's Create never landed" ;;
-    V08_POL_ID)     V08_POL_ID="$v" ;;
-    V08_POL_HOSTS)  [[ "$v" == True ]] && ok "two allowed hosts (github.com, npmjs.org)" || bad "allowed_domains is not the pasted pair — the spec on camera is not the spec that saved" ;;
-    V08_POL_HOLD)   [[ "$v" == True ]] && ok "first_use_approval=wait_for_review (unlisted hosts are HELD)" || bad "first_use_approval is not wait_for_review — 'held for your approval' is false" ;;
-    V08_POL_FLOOR)  [[ "$v" == CC2 ]] && ok "barrier floor CC2 (Wall) — the pasted spec's own floor" || bad "min_confinement_class=${v}, want CC2 — the saved policy does not match what B2 pasted" ;;
-    V08_POL_GRANTS) case "$v" in
-                      0)  ok "no credential grants" ;;
-                      -1) bad "no policy to read grants from" ;;
-                      *)  bad "the policy carries ${v} grant(s) — the take authored more than it described" ;;
-                    esac ;;
-  esac
-done < /tmp/_demo_v08.$$
-rm -f /tmp/_demo_v08.$$
-
-head_ "Video 08 · the run that referenced it"
-V08_RUNS=$(curl -fsS "${V08_API}/api/v1/runs" 2>/dev/null || echo '[]')
-python3 - "$V08_RUNS" "$V08_TITLE" "$V08_POL_ID" <<'PYEOF' > /tmp/_demo_v08b.$$ 2>/dev/null
-import sys, json
-try: d = json.loads(sys.argv[1])
-except Exception: d = []
-rs = d if isinstance(d, list) else d.get("items") or d.get("runs") or []
-title, pol = sys.argv[2], sys.argv[3]
-m = [r for r in rs if (r.get("title") or "").strip() == title]
-r = m[0] if m else None
-print("V08_RUN_ID", (r or {}).get("id") or "-")
-# policy_id is omitempty on the wire (types.go AgentRun) — absent means the run
-# shipped an inline_policy instead, which is the radio-vs-payload bug in the
-# direction that matters: the video claims it launched BY REFERENCE.
-print("V08_RUN_POLICY", ((r or {}).get("policy_id") or "-") == pol and pol != "-")
-print("V08_RUN_POLICY_SAW", (r or {}).get("policy_id") or "(none)")
-print("V08_RUN_STATE", (r or {}).get("state") or "MISSING")
-PYEOF
-V08_RUN="-"
-while read -r k v; do
-  case "$k" in
-    V08_RUN_ID)         V08_RUN="$v"
-                        [[ "$v" == "-" ]] && bad "no run titled '${V08_TITLE}' — beat 4 never launched" || ok "run ${v}" ;;
-    V08_RUN_POLICY)     [[ "$v" == True ]] && ok "the run carries policy_id=${V08_POL_ID}" || bad "the run's policy_id is not '${V08_POLICY}' — it did not launch by reference" ;;
-    V08_RUN_POLICY_SAW) printf '    run.policy_id: %s (policy row: %s)\n' "$v" "${V08_POL_ID}" ;;
-    V08_RUN_STATE)      case "$v" in
-                          COMPLETED)                    ok "run COMPLETED" ;;
-                          STOPPED|ARCHIVED|FAILED|KILLED) bad "run reached ${v}, not COMPLETED — the take narrates a governed run that worked" ;;
-                          *)                            bad "run state=${v} — it never reached a terminal state on camera" ;;
-                        esac ;;
-  esac
-done < /tmp/_demo_v08b.$$
-rm -f /tmp/_demo_v08b.$$
-
-head_ "Video 08 · the run's own audit trail"
-if [[ "${V08_RUN}" == "-" ]]; then
-  printf '    (no run to audit)\n'
-else
-  V08_AUD=$(curl -fsS "${V08_API}/api/v1/audit?run_id=${V08_RUN}&limit=1000" 2>/dev/null || echo '[]')
-  python3 - "$V08_AUD" <<'PYEOF' > /tmp/_demo_v08c.$$ 2>/dev/null
-import sys, json
-try: d = json.loads(sys.argv[1])
-except Exception: d = []
-ev = d if isinstance(d, list) else d.get("events") or d.get("items") or []
-acts = [e.get("action") for e in ev]
-# The two rows every governed launch writes (runs.go handleCreateRun,
-# runs_dispatch.go). A run row with no audit behind it would mean the trail the
-# whole product sells did not record the one launch this video is about.
-print("V08_AUD_CREATE", "run.create" in acts)
-print("V08_AUD_DISPATCH", "run.exec" in acts)
-# No spaces in the payload: the reader below is `read -r k v`, which would
-# otherwise keep only the first word of a multi-element list.
-print("V08_AUD_FAILED", json.dumps(sorted({
-    e.get("action") for e in ev if e.get("outcome") == "failure"}), separators=(",", ":")))
-PYEOF
-  while read -r k v; do
-    case "$k" in
-      V08_AUD_CREATE)   [[ "$v" == True ]] && ok "run.create is on the audit trail" || bad "no run.create for ${V08_RUN} — the launch left no record" ;;
-      V08_AUD_DISPATCH) [[ "$v" == True ]] && ok "run.exec is on the audit trail" || bad "no run.exec for ${V08_RUN} — the sandbox was never scheduled" ;;
-      V08_AUD_FAILED)   [[ "$v" == "[]" ]] || printf '    note: failure-outcome rows present: %s\n' "$v" ;;
-    esac
-  done < /tmp/_demo_v08c.$$
-  rm -f /tmp/_demo_v08c.$$
-fi
-}
+# The old video-08 policies-and-confinement arm (check_video_08_policies, 132
+# lines) is DELETED here, not commented out. It stopped being dispatched at the
+# 2026-08-24 renumber — case key "08" became the autonomous episode and routes to
+# check_video_02 — and it was kept "for whoever writes 05's real checks to borrow
+# from". Nobody did, in the year of takes since, and it cost this file 13% of the
+# 1000-line budget that scripts/check-file-size.sh enforces: that ceiling is why
+# the per-episode arms live in scripts/lib/verify-demo-take-*.sh at all. Its
+# assertions are in git (`git log -S check_video_08_policies`) if 05's lane wants
+# them; a dead copy in the working tree only reads as live code.
 
 # Video 09 · the CI take. THE ARTIFACTS ARE THE EVIDENCE, NOT THE STACK. Every
 # other check in this file interrogates the live :8080 console, because that
@@ -674,7 +559,7 @@ if [[ -s "${V09_OUT}/run.log" ]]; then
 fi
 
 # A temp file, NOT a pipe: `| while read` runs in a subshell and ok()/bad()
-# would increment counters that vanish (see check_video_08_policies).
+# would increment counters that vanish — the bug class this script exists for.
 python3 - "${V09_OUT}/run.json" "${V09_OUT}/audit.json" "${V09_TASK}" <<'PYEOF' > /tmp/_demo_v09.$$ 2>/dev/null
 import sys, json
 def load(p):
@@ -765,9 +650,17 @@ check_video_10() {
 head_ "Video 10 · the run the terminals attacked"
 V10_API="http://localhost:${WARDYN_UP_PORT:-8080}"
 # The handoff the beat script writes and the browser spec reads (both resolve
-# this one fixed path) — the same "two lanes agree via the file the take wrote"
-# rule 09's ci-artifacts/run.json follows.
-V10_HANDOFF="${REPO_ROOT}/ui/test-results/demo-video/v10-run-id.txt"
+# the one fixed path below) — the same "two lanes agree via the file the take
+# wrote" rule 09's ci-artifacts/run.json follows. take-chain.sh parks a COPY
+# beside the mp4, so a re-grade with WARDYN_DEMO_WORK_DIR=<take>.artifacts reads
+# the archived id and the fixed path stays the live take's answer.
+# No cross-fallback: an archive that lacks the handoff must fail the re-grade
+# below, never read the live path (whatever the most recent 12 take wrote).
+if [[ -n "${WARDYN_DEMO_WORK_DIR:-}" ]]; then
+  V10_HANDOFF="${WARDYN_DEMO_WORK_DIR}/v10-run-id.txt"
+else
+  V10_HANDOFF="${REPO_ROOT}/ui/test-results/demo-video/v10-run-id.txt"
+fi
 V10_RUN="${WARDYN_DEMO_RUN_ID:-}"
 [[ -z "${V10_RUN}" && -s "${V10_HANDOFF}" ]] && V10_RUN="$(tr -d '[:space:]' <"${V10_HANDOFF}")"
 if [[ -z "${V10_RUN}" ]]; then
@@ -905,11 +798,6 @@ case "${WARDYN_DEMO_VIDEO:-}" in
   11) check_video_09 ;;
   12) check_video_10 ;;
   13) check_video_13 ;;
-  # check_video_08_policies (the old policies-and-confinement checks) is no
-  # longer dispatched: that content retires into the new episode 05
-  # (the retired policies episode — now local/episode-06-firstrun-proposal.md — carried it in the
-  # meantime). Left defined, unused, for whoever writes 05's real checks to
-  # borrow from.
   03a) check_video_03a ;;
   03b) check_video_03b ;;
   03c) check_video_03c ;;
@@ -935,8 +823,8 @@ if [[ -n "${WARDYN_DEMO_VIDEO:-}" ]] && ! compgen -G "${REPO_ROOT}/ui/e2e/demo/$
   TL="${TL%/narration.json}/narration-terminal.json"
 fi
 if [[ -s "${TL}" ]]; then
-  python3 - "${TL}" <<'PY'
-import json, sys
+  python3 - "${TL}" "${REPO_ROOT}/scripts/narrate-server.py" <<'PY'
+import ast, json, sys
 d = json.load(open(sys.argv[1])); c = d.get("cues", [])
 # The mux slides sub-1500ms collisions (narrate-mux.py's CLAMP_MS — the
 # accounting-bias class); only a bigger one ships as two voices at once, so
@@ -952,15 +840,48 @@ print(f"  cues: {len(c)}   speech: {sum(x['durMs'] for x in c)/1000:.0f}s   hard
 # caption speaks that has NO mapping there yet, so the gap is seen before a
 # viewer hears it. Warnings, not failures: a human decides the pronunciation.
 import re
-# Keep equal to narrate-server.py's _SAY plus what Kokoro reads right unmapped (PAT/STS/TTL joined _SAY 2026-08-24; "npm" is lowercase and never matches the regex).
-KNOWN = {"CI", "CLI", "API", "APIS", "AI", "CC1", "CC2", "CC3", "TLS", "SSH", "PAT", "STS", "TTL", "URL", "YAML", "JSON", "HTTP", "OK", "ID"}
+# The mapped half is READ OFF narrate-server.py, not restated here: this list
+# was maintained twice and drifted twice (the comment that used to sit here
+# admitted it), so a lane adding a mapping there had to remember to add it here
+# or watch the verifier warn about the word it had just fixed. _SAY is a LOCAL
+# inside speakable(), and the module reaches for kokoro/onnx on its engine path,
+# so the literal is parsed with ast rather than imported. A parse that fails
+# only widens the warnings — this watch never fails a take.
+def _say_keys(src):
+    try:
+        for n in ast.walk(ast.parse(open(src).read())):
+            if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "_SAY" for t in n.targets):
+                return {k.value.rstrip("s").upper() for k in n.value.keys}
+    except Exception as e:
+        print(f"  pronunciation-watch: cannot read _SAY from {src} ({e})")
+    return set()
+
+# The other half: initialisms Kokoro already reads right with NO mapping, which
+# is why they are absent from _SAY. This is the only list still kept by hand.
+UNMAPPED_OK = {"CC2", "CC3", "URL", "YAML", "JSON", "HTTP", "OK", "ID"}
+KNOWN = _say_keys(sys.argv[2]) | UNMAPPED_OK
 # Emphasis-caps in captions are ordinary words the TTS reads fine — not initialisms.
 EMPHASIS = {"DO", "LEAVE", "NOT", "ALL", "IS", "ARE", "THE", "AND", "NEVER", "ONE", "EGRESS"}
-MAPPED_LIVE = ("watch it live", "live run", "live decision", "live strip", "held live", "caught it live",
-               "blocked live", "attacks live exactly here", "no keys live in the room", "keys live inside",
-               "keys don't live in the room",
-               # verb after a modal — G2P-verified /lɪv/ by default (2026-08-21), no _SUBS pin needed:
-               "credentials can live")
+def _subs_live_phrases(src):
+    """Every _SUBS source phrase that carries the heteronym — the narrator's own
+    pin list, so a phrase added there is known here without a second edit."""
+    try:
+        for n in ast.walk(ast.parse(open(src).read())):
+            if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "_SUBS" for t in n.targets):
+                out = set()
+                for el in n.value.elts:
+                    if isinstance(el, ast.Tuple) and el.elts and isinstance(el.elts[0], ast.Constant):
+                        phrase = str(el.elts[0].value).lower()
+                        if re.search(r"\blive\b", phrase):
+                            out.add(phrase)
+                return out
+    except Exception as e:
+        print(f"  pronunciation-watch: cannot read _SUBS from {src} ({e})")
+    return set()
+
+# Verb-after-a-modal phrases are G2P-verified /lɪv/ by default (2026-08-21) and
+# carry no _SUBS pin, so they are the only live phrases still kept by hand.
+MAPPED_LIVE = tuple(_subs_live_phrases(sys.argv[2])) + ("credentials can live",)
 warns = set()
 for x in c:
     t = x["text"]
@@ -986,8 +907,19 @@ fi
 
 head_ "The artifact"
 if [[ -n "${VIDEO}" && -s "${VIDEO}" ]]; then
-  FF="$(command -v ffmpeg.exe || ls /mnt/c/Users/*/AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg_*/ffmpeg-*/bin/ffmpeg.exe 2>/dev/null | head -1)"
-  INFO=$("${FF}" -hide_banner -i "$(wslpath -w "${VIDEO}" 2>/dev/null || echo "${VIDEO}")" 2>&1)
+  # The recorder's own resolver (wardyn_ffmpeg, scripts/lib/common.sh). This
+  # copy used to skip WARDYN_DEMO_FFMPEG, so on the interop-flap nights that
+  # override exists for, the take was ENCODED by one binary and probed by
+  # another — or by none at all.
+  FF="$(wardyn_ffmpeg)"
+  # ffmpeg.exe needs the Windows spelling; a Linux ffmpeg — reachable here for
+  # the first time now that the override is honoured — needs the native path
+  # (\\wsl.localhost UNC form fails every open). record-demo.sh's ffpath().
+  case "${FF}" in
+    *.exe) FF_VIDEO="$(wslpath -w "${VIDEO}" 2>/dev/null || echo "${VIDEO}")" ;;
+    *)     FF_VIDEO="${VIDEO}" ;;
+  esac
+  INFO=$("${FF}" -hide_banner -i "${FF_VIDEO}" 2>&1)
   printf '%s\n' "${INFO}" | grep -E 'Duration|Stream #' | sed 's/^/    /'
   grep -q 'Audio:' <<<"${INFO}" && ok "has an audio track" || bad "NO AUDIO — narration never made it in"
   grep -q '1920x1080' <<<"${INFO}" && ok "1920x1080" || bad "unexpected resolution"

@@ -8,7 +8,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { SetupStatus, AgentRun } from "../../../lib/types";
-import { baseStatus } from "../../../lib/test-fixtures";
+import { baseMe, baseMeDrive, baseStatus } from "../../../lib/test-fixtures";
 
 const getSetupStatusMock = vi.fn();
 vi.mock("../../../lib/api/setup", () => ({
@@ -53,7 +53,10 @@ vi.mock("../../../lib/api/policies", () => ({
 }));
 
 import { MemberGettingStarted } from "./member-getting-started";
+import type { Me } from "../../../lib/api/health";
+import { OperatorProvider } from "../../wardyn/operator-context";
 import { MEMBER } from "../../../lib/governance-copy";
+import { DRIVES, DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 
 function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
   return baseStatus({
@@ -69,10 +72,20 @@ function run(id: string): AgentRun {
   return { id, created_at: "", updated_at: "" } as AgentRun;
 }
 
-function renderPage() {
+// The page reads its drive off the shell's ONE GET /me (operator-context's
+// UserDriveContext), not a fetch of its own — so a case states its /me body
+// here, exactly as app-shell hands it down.
+function renderPage(me: Me = baseMe()) {
   return render(
     <MemoryRouter>
-      <MemberGettingStarted />
+      <OperatorProvider
+        operator={false}
+        securityOperator={false}
+        userDrive={me.user_drive}
+        userDriveDeniedByProfile={me.user_drive_denied_by_profile}
+      >
+        <MemberGettingStarted />
+      </OperatorProvider>
     </MemoryRouter>,
   );
 }
@@ -253,5 +266,58 @@ describe("MemberGettingStarted", () => {
       screen.queryByText("Model access · Your key"),
     ).not.toBeInTheDocument();
     expect(listSecretsMineMock).toHaveBeenCalledTimes(3);
+  });
+  // §7.6's Getting Started moments, both keyed on /me.user_drive alone: with
+  // no allocation there is no chip and no sentence, which is today's page.
+  it("names the allocated drive — chip and the not-a-workspace sentence together", async () => {
+    renderPage(baseMe({ user_drive: baseMeDrive() }));
+    expect(
+      await screen.findByText(DM.GS_DRIVE_CHIP("Scratch", DRIVES.SIZE_GIB(16), DRIVES.MODE_RW_INLINE)),
+    ).toBeInTheDocument();
+    expect(screen.getByText(DM.GS_DRIVE_BODY)).toBeInTheDocument();
+  });
+
+  it("takes the _NOSIZE twin for a share with no allocation shown", async () => {
+    renderPage(
+      baseMe({
+        user_drive: baseMeDrive({
+          name: "Corporate homes",
+          backend: "k8s_pvc_static",
+          size_mib: undefined,
+          writable: false,
+          enforcement: "external",
+        }),
+      }),
+    );
+    expect(
+      await screen.findByText(DM.GS_DRIVE_CHIP_NOSIZE("Corporate homes", DRIVES.MODE_RO_INLINE)),
+    ).toBeInTheDocument();
+  });
+
+  // Paused wins over the size and the mode: an allocation an admin disabled
+  // mounts nothing next run, so naming its size would describe storage this
+  // member cannot reach.
+  it("says Paused instead of a size and a mode", async () => {
+    renderPage(
+      baseMe({ user_drive: baseMeDrive({ backend: "docker_volume", enforcement: "none", paused: true }) }),
+    );
+    expect(await screen.findByText(DM.GS_DRIVE_CHIP_PAUSED("Scratch"))).toBeInTheDocument();
+    expect(
+      screen.queryByText(DM.GS_DRIVE_CHIP("Scratch", DRIVES.SIZE_GIB(16), DRIVES.MODE_RW_INLINE)),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows no chip and no sentence with nothing allocated — today's page", async () => {
+    // The governance chip is the settle anchor: it appears only once the
+    // async reads have flushed, so the two absences below are a resolved
+    // state rather than a race with the /me read.
+    getDefaultPolicyMock.mockResolvedValue({
+      min_confinement_class: "CC1",
+      governance_profile_name: "walled",
+    });
+    renderPage();
+    expect(await screen.findByText(MEMBER.GS_CHIP("walled"))).toBeInTheDocument();
+    expect(screen.queryByText(DM.GS_DRIVE_BODY)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Drive · /)).not.toBeInTheDocument();
   });
 });

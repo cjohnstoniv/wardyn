@@ -109,3 +109,98 @@ describe("health.testProxy(url?)", () => {
     expect(JSON.parse(init!.body as string)).toEqual({ url: "https://intranet.example.com" });
   });
 });
+
+// /me's 0.7 user-drive pair. The two fields are INDEPENDENT on the wire
+// (internal/api/me.go writes them as siblings) because there are four states
+// and one field carries three — so the round-trip has to prove both survive,
+// including the one a folded field could not express: a shut door with no
+// allocation, where "ask an admin for an allocation" is the wrong advice.
+describe("health.whoami() — the user-drive pair", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  const meBody = (extra: Record<string, unknown>) => ({
+    principal: "alice@corp.example",
+    method: "sso",
+    operator: false,
+    security_operator: false,
+    role: "member",
+    email: "alice@corp.example",
+    ...extra,
+  });
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const answer = (body: unknown) =>
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+  it("reads an allocation whole", async () => {
+    answer(
+      meBody({
+        user_drive: {
+          name: "Scratch",
+          backend: "k8s_pvc",
+          size_mib: 16384,
+          writable: true,
+          enforcement: "request",
+          home_name: "d-3f9a1c7e",
+        },
+        user_drive_denied_by_profile: "",
+      }),
+    );
+    const me = await health.whoami();
+    expect(me?.user_drive).toEqual({
+      name: "Scratch",
+      backend: "k8s_pvc",
+      size_mib: 16384,
+      writable: true,
+      enforcement: "request",
+      home_name: "d-3f9a1c7e",
+    });
+    expect(me?.user_drive_denied_by_profile).toBe("");
+  });
+
+  it("reads a paused allocation as an allocation, not as nothing", async () => {
+    answer(
+      meBody({
+        user_drive: {
+          name: "Scratch",
+          backend: "docker_volume",
+          writable: true,
+          enforcement: "none",
+          paused: true,
+        },
+        user_drive_denied_by_profile: "",
+      }),
+    );
+    const me = await health.whoami();
+    expect(me?.user_drive?.paused).toBe(true);
+    // omitempty: no size on the wire is "no allocation shown", never 0 bytes.
+    expect(me?.user_drive?.size_mib).toBeUndefined();
+  });
+
+  it("carries a shut door with NO allocation — the state a folded field could not express", async () => {
+    answer(meBody({ user_drive: null, user_drive_denied_by_profile: "Greenfield contractors" }));
+    const me = await health.whoami();
+    expect(me?.user_drive).toBeNull();
+    expect(me?.user_drive_denied_by_profile).toBe("Greenfield contractors");
+  });
+
+  it("leaves both absent on a pre-0.7 daemon — undefined, not a guessed default", async () => {
+    answer(meBody({}));
+    const me = await health.whoami();
+    expect(me?.user_drive).toBeUndefined();
+    expect(me?.user_drive_denied_by_profile).toBeUndefined();
+  });
+});

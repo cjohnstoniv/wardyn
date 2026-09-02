@@ -28,6 +28,8 @@
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}" || exit 1
+# shellcheck source=lib/common.sh
+. "${REPO_ROOT}/scripts/lib/common.sh"   # wardyn_ffmpeg
 
 VIDEO=""
 TERMINAL_SCRIPT=""
@@ -53,7 +55,10 @@ done
 [[ -n "${VIDEO}" ]] || { echo "usage: scripts/take-chain.sh --video <id> [--terminal-script <path>] [--reset]" >&2; exit 2; }
 [[ -n "${TERMINAL_SCRIPT}" ]] && REC_ARGS+=(--terminal-script "${TERMINAL_SCRIPT}")
 
-FF="${WARDYN_DEMO_FFMPEG:-$(command -v ffmpeg.exe 2>/dev/null || ls /mnt/c/Users/*/AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg_*/ffmpeg-*/bin/ffmpeg.exe 2>/dev/null | head -1)}"
+# The take's OWN ffmpeg — the probe below has to ask the exact binary
+# record-demo.sh will encode with, or a socket it clears is one that binary dies
+# on. Same resolver, one place: wardyn_ffmpeg in scripts/lib/common.sh.
+FF="$(wardyn_ffmpeg)"
 [[ -n "${FF}" ]] || { echo "no Windows ffmpeg — winget.exe install Gyan.FFmpeg (or set WARDYN_DEMO_FFMPEG)" >&2; exit 1; }
 
 # Where the finished mp4 lands — resolved INSIDE the loop, through the live
@@ -80,6 +85,35 @@ wait_socket() {
   return 1
 }
 
+# Keep the take gradeable: record-demo.sh's per-id work dir (narration timeline,
+# drift fit, speedups, run ids) is wiped by the NEXT take of any id, which is how
+# the 13 staged 0.7 cuts ended up with ledger rows as their only evidence. Park
+# a copy beside the mp4 so verify-demo-take.sh can re-grade it later.
+archive_artifacts() {  # <mp4 path>
+  local work="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-${VIDEO}}" dst
+  dst="${1%.mp4}.artifacts"
+  mkdir -p "${dst}" || return 0
+  local f
+  # v13-run-id.txt is 13's handoff (verify-demo-take-13.sh reads it out of this
+  # same work dir) — it was being wiped with the rest of the dir by the next take.
+  for f in narration.json narration-ffwd.json narration-joined.json narration-terminal.json speedups.json demo-runs.json drift-fit.json v13-run-id.txt; do
+    [[ -s "${work}/${f}" ]] && cp -f "${work}/${f}" "${dst}/" 2>/dev/null
+  done
+  # 12's handoff does NOT live in the per-id work dir: both lanes resolve the one
+  # fixed path below, which the next take of any id overwrites. check_video_10
+  # reads WARDYN_DEMO_WORK_DIR first, so this copy is what a re-grade with
+  # WARDYN_DEMO_WORK_DIR=<take>.artifacts finds. Without it: no run id at all.
+  [[ "${VIDEO}" == "12" && -s "${REPO_ROOT}/ui/test-results/demo-video/v10-run-id.txt" ]] &&
+    cp -f "${REPO_ROOT}/ui/test-results/demo-video/v10-run-id.txt" "${dst}/" 2>/dev/null
+  # An empty archive used to be removed in silence, so "the work dir was already
+  # wiped" and "this take had nothing to park" looked identical afterwards.
+  if rmdir "${dst}" 2>/dev/null; then
+    echo "NO_ARTIFACTS ${work}"
+  else
+    echo "ARTIFACTS ${dst}"
+  fi
+}
+
 ledger() {  # <record rc> <verify> <artifact>
   [[ -s "${LEDGER}" ]] || printf '# Takes ledger\n\n## Attempt log (appended by scripts/take-chain.sh)\n\n| when (UTC) | id | attempt | record rc | verify | artifact |\n|---|---|---|---|---|---|\n' > "${LEDGER}"
   printf '| %s | %s | %s | %s | %s | %s |\n' \
@@ -87,6 +121,30 @@ ledger() {  # <record rc> <verify> <artifact>
 }
 
 attempt=0
+
+# THE LABEL GATE. A spec that asserts a label ui/src no longer renders cannot
+# pass verify, but it fails after the socket wait, the record and the encode —
+# hours of camera time to learn something a grep knew before we started. Runs
+# BEFORE wait_socket for exactly that reason.
+#   rc 0 = every asserted label is still in the product (or the episode is
+#          terminal-only and has none)
+#   rc 1 = REFUSE: the take would film a lie
+#   rc 2 = the tool could not judge (unknown id, two specs) — noted, not fatal,
+#          because a new episode's lane must still be able to roll.
+# ANY OTHER rc is the gate failing to RUN — no python3 (127), a crash — and that
+# is "could not judge" too. Only rc 1 is a refusal; treating a broken gate as one
+# would ground the camera over a tool, not over the take.
+python3 "${REPO_ROOT}/scripts/demo-rerecord-impact.py" check "${VIDEO}"
+case $? in
+  0) ;;
+  1) echo "LABEL_GATE_FAILED ${VIDEO} — the spec asserts labels ui/src no longer has; fix the spec or the app, do not roll"
+     ledger "not run" "label-gate"; exit 1 ;;
+  2) echo "LABEL_GATE_SKIPPED ${VIDEO} — the label gate could not judge this id; rolling anyway"
+     ledger "not run" "label-gate-skipped rc=2" ;;
+  *) rc=$?; echo "LABEL_GATE_SKIPPED ${VIDEO} — gate rc=${rc} (it could not run); rolling anyway"
+     ledger "not run" "label-gate-skipped rc=${rc}" ;;
+esac
+
 while :; do
   attempt=$((attempt + 1))
   echo "=== take ${VIDEO} attempt ${attempt}: waiting for a live interop socket $(date +%T) ==="
@@ -112,6 +170,7 @@ while :; do
   fi
 
   if [[ "${rc}" -eq 0 ]]; then
+    archive_artifacts "${MP4}"
     WARDYN_DEMO_VIDEO="${VIDEO}" "${REPO_ROOT}/scripts/verify-demo-take.sh" "${MP4}"
     vrc=$?
     ledger "${rc}" "$([[ "${vrc}" -eq 0 ]] && echo PASS || echo FAIL)" "${MP4##*/}"

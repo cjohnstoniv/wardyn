@@ -479,11 +479,12 @@ drive() {
 
   # --- B1 · the owner attaches --------------------------------------------
   say "Let's start with access to the run itself."
-  say "These are the public keys registered with Wardyn."
+  say "These are the public keys Wardyn will accept — the door keys people registered."
+  say "You register yours once, from the console's Settings."
   say "No passwords."
   say "Just registered keys."
   say "My key was registered during setup."
-  say "And that's its fingerprint."
+  say "And that's its fingerprint — the short string you match a key against."
   pane_type "${P_OWNER}" "${cmd_owner}"
   # First connect against an empty known_hosts: the client stops and prints the
   # host key. preflight already proved that key is the one /healthz discloses —
@@ -505,7 +506,7 @@ drive() {
   # this is the frame where it lands (the owner's key accepted, the run's own
   # shell on screen). One line names it. Drafted; see
   # local/light-episodes-dialog-flags.md.
-  say "This is attach — stepping into the live session without loosening a single rule."
+  say "This is attach — stepping into the live session."
   # KEEP-VERIFY: both clauses below check against the SSH lane's actual
   # implementation (internal/api/sshgateway.go: "ssh <run-id>@<advertise-host>
   # lands in the same tmux session and masked live recorder the web terminal
@@ -513,7 +514,7 @@ drive() {
   # shell reaches from either door crosses the same proxy/egress policy) —
   # re-check before the take.
   say "The connection is brokered by Wardyn."
-  say "There isn't an SSH daemon sitting inside the sandbox waiting for connections."
+  say "Nothing inside the sandbox is listening for logins — you connected to Wardyn's gateway, and it brokered you in."
   say "The browser terminal and this shell are two ways of driving the same run."
   pane_type "${P_OWNER}" "hostname && whoami"
   pane_settle "${P_OWNER}" 2 60 || true
@@ -541,7 +542,7 @@ drive() {
   # over from the run page" (internal/api/sshgateway_channels.go).
   pane_text "${P_OBS}" | grep -qF "${PRINCIPAL}" \
     || die "the read-only notice does not name the holder's principal (${PRINCIPAL})"
-  say "Wardyn allows the second session to observe the run."
+  say "Wardyn lets the second session in read-only — it can watch, not type — and it says whose session it is."
   # One session: what is typed on the left lands on the right.
   pane_type "${P_OWNER}" "echo same session"
   pane_wait "${P_OBS}" 'same session' 30 \
@@ -555,19 +556,15 @@ drive() {
   beat 900
 
   # --- B3 · the refusal ----------------------------------------------------
-  say "Now let's change one thing."
-  say "Different person."
-  say "Same run."
-  say "Same command."
+  say "Now one change: a different person — a key registered to a different account — same run, same command."
   pane_type "${P_STRANGER}" "${cmd}"
   pane_wait "${P_STRANGER}" 'Permission denied \(publickey\)' 60 \
     || die "the foreign key was not refused — check it is registered under ${FOREIGN_PRINCIPAL} and the run is owned by ${PRINCIPAL}"
   say "Refused."
   say "The run belongs to the person who created it."
-  say "There's no administrator backdoor through SSH."
+  say "A member's key stops here. An admin's key can still reach the run — and that attach is written to the record as an override, never quietly."
   say "That's intentional."
   say "An administrator can still stop the run and inspect its records."
-  say "But attaching to somebody else's interactive session isn't an override."
   # THE MONEY ROW. "not the run owner" is the registered-but-foreign branch; a
   # key that was never registered logs "unregistered key" instead and the whole
   # finale is then about the wrong refusal (SV13).
@@ -584,7 +581,7 @@ drive() {
   # never from inside one of the three panes above. VERIFIED LIVE: this
   # endpoint answers a bad bearer with 401.
   # Owner-ratified ordinal (restructure): the decoy/SENTINEL beat is episode 07.
-  say "And now let's finish the loop from episode seven."
+  say "And now let's finish the decoy story from 'Interactive runs'."
   say "We stole the decoy credential from inside the sandbox."
   say "Let's try using it from outside."
   type_cmd "curl -s -o /dev/null -w '%{http_code}\n' https://api.anthropic.com/v1/models -H 'authorization: Bearer sk-ant-oat01-wardyn-inert-sentinel-proxy-injects-the-live-token'"

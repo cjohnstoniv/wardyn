@@ -398,8 +398,7 @@ var ClosedIntegrationKinds = map[string]bool{
 // "want one of: …" half of a rejected write's error. Sorted so the message is
 // deterministic across map iterations.
 func ClosedIntegrationKindList() []string {
-	out := slices.Sorted(maps.Keys(ClosedIntegrationKinds))
-	return out
+	return slices.Sorted(maps.Keys(ClosedIntegrationKinds))
 }
 
 // AIProviderKind reports whether kind is one of the five AI provider flavors —
@@ -672,7 +671,10 @@ func foldLegacyIntegration(l legacyIntegrationJSON) Integration {
 	cfg := l.Config
 	if kind == IntegrationKindBedrock {
 		if lane, ok := cfg["lane"]; ok {
-			cfg = cloneAnyMap(cfg)
+			// Shallow, so the fold never mutates the caller's map. maps.Clone
+			// returns nil for a nil map where the hand-rolled copy returned an
+			// empty one; unreachable here, since cfg holds "lane".
+			cfg = maps.Clone(cfg)
 			delete(cfg, "lane")
 			cfg["auth_lane"] = lane
 		}
@@ -700,15 +702,6 @@ func foldLegacyIntegration(l legacyIntegrationJSON) Integration {
 		CreatedAt: l.CreatedAt, UpdatedAt: l.UpdatedAt,
 		legacyTopology: l.Category == "artifact_mirror" || l.Category == "host_proxy",
 	}
-}
-
-// cloneAnyMap shallow-copies m so the fold never mutates a caller's map.
-func cloneAnyMap(m map[string]any) map[string]any {
-	out := make(map[string]any, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
-	return out
 }
 
 // IntegrationList is SiteConfig's integrations slice with the read-time

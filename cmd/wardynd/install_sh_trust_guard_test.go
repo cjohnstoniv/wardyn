@@ -118,7 +118,13 @@ func TestInstallSh_ComposeFetchIsVerified(t *testing.T) {
 		t.Fatal("install.sh no longer fetches deploy/compose/docker-compose.yaml — update this guard")
 	}
 	after := src[fetch:]
-	if !regexp.MustCompile(`docker-compose\.yaml[\s\S]{0,1200}(SHA256SUMS|sha256sum|shasum)[\s\S]{0,400}die "`).MatchString(after) {
+	// Go's regexp caps a repeat count at 1000, so the window is cut in code:
+	// the checksum must sit within 1200 bytes of the compose fetch, and its
+	// fail-closed die within 400 bytes of the checksum.
+	if len(after) > 1600 {
+		after = after[:1600]
+	}
+	if !regexp.MustCompile(`docker-compose\.yaml[\s\S]*?(SHA256SUMS|sha256sum|shasum)[\s\S]{0,400}die "`).MatchString(after) {
 		t.Errorf("install.sh fetches the compose file and never checks it against SHA256SUMS/a digest with a fail-closed die")
 	}
 }

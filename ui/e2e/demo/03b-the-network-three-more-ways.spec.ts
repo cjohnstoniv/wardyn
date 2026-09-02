@@ -101,7 +101,11 @@ test("V03b act 1 — the agent in the box", async () => {
   // [OWNER SLOT — drafted] The detour's own opener: 03a's viewer arrives here
   // having seen the quartet, so this says what the three are and that they run
   // in full rather than being named in passing.
-  await caption(page, "In the core you watched four things happen to a host. Here are three more network demos — a real coding agent boxed in, a policy recorded from a run, and an approval that lasts one connection. Each gets a full episode later, on real work; this is the mechanism on its own.");
+  await caption(page, "In the core you watched four things happen to a host.");
+  await beat(page, PACE.read);
+  await caption(page, "Here are three more — a real coding agent boxed in, a policy recorded from a run, and an approval that lasts one connection.");
+  await beat(page, PACE.read);
+  await caption(page, "Each gets a full episode later on real work; this is the mechanism on its own.");
   await beat(page, PACE.read);
 
   await spotlight(page, page.getByTestId("demo-policy-agent-in-the-box"));
@@ -128,7 +132,9 @@ test("V03b act 1 — the agent in the box", async () => {
   await caption(page, "Attach the terminal — a shell inside this run — and hand it a one-shot task: write a short file explaining what a governed sandbox is.");
   await beat(page, BEAT_SHORT);
   await typeInTerminal(page, agentCmd, card);
-  await caption(page, "It signs in with the model you connected in episode two — the proxy adds that credential on the way out. No copy ever lands in the box.");
+  await caption(page, "It signs in with the model you connected during setup — the proxy adds that credential on the way out.");
+  await beat(page, PACE.read);
+  await caption(page, "We'll open the box and look for the key in 'Interactive runs'.");
   await beat(page, PACE.read);
   // The agent's thinking is dead air on camera; compress it. The span ends when
   // the honest proof lands: the FILE, not the audit (an out-of-quota agent still
@@ -144,7 +150,9 @@ test("V03b act 1 — the agent in the box", async () => {
   const offlist = await pillCmd(card, 1);
   await typeInTerminal(page, offlist, card);
   await pollScreen(screen, /\b(403|refused|Could not resolve|Failed to connect)\b/i, "example.com was not refused inside the agent box");
-  await caption(page, "Now, in the agent's own box, we dial an ordinary host off the allowlist — refused, exactly as in the four tests. The boundary doesn't care whether an agent or a person is typing.");
+  await caption(page, "Now, in the agent's own box, dial an ordinary host off the list — refused, exactly as in the four tests.");
+  await beat(page, PACE.read);
+  await caption(page, "The boundary doesn't care whether an agent or a person is typing.");
   await beat(page, PACE.read);
 
   // Step 3 — the record.
@@ -224,7 +232,7 @@ test("V03b act 2 — record a policy", async () => {
   await spotlight(page, proposed);
   await caption(page, "Wardyn reads back exactly what it reached, and proposes the allowlist that would have let it through.");
   await beat(page, PACE.read);
-  await caption(page, "Approve it, and the next run is confined to only that. Episode nine drives this on a real workspace.");
+  await caption(page, "Approve it, and the next run is confined to only that. 'Record a run' drives this on a real workspace.");
   await beat(page, PACE.read);
   await spotlight(page, null);
   // Close the sheet — saving the policy is episode nine's beat, not this showcase's.
@@ -240,7 +248,9 @@ test("V03b act 3 — once, or for good", async () => {
   await spotlight(page, page.getByTestId("demo-policy-once-or-for-good"));
   await caption(page, "The last one is about how long an approval lasts.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "Every approval so far stuck for the rest of its run — that's the default scope. The scope called Once is narrower.");
+  await caption(page, "Until now, a yes lasted for the rest of the run — that's the default.");
+  await beat(page, PACE.read);
+  await caption(page, "An approval can also last for just one connection. That's the scope called Once.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 
@@ -254,7 +264,7 @@ test("V03b act 3 — once, or for good", async () => {
   const first = await pillCmd(card, 0);
   await typeInTerminal(page, first, card);
   await pollScreen(screen, /\b(403|refused)\b/i, "the first request was not refused — deny_with_review should hold it");
-  await caption(page, "Refused — and an approval appears below the terminal.");
+  await caption(page, "Dial the host once more, with the approval scoped to a single connection. Refused — and an approval appears below the terminal.");
   await beat(page, PACE.read);
 
   // Grant it ONCE — via the split button's caret, not a plain Approve.
@@ -282,7 +292,7 @@ test("V03b act 3 — once, or for good", async () => {
   ).toBeVisible({ timeout: 60_000 });
   await caption(page, "Run it again and it's refused all over again — a brand-new approval.");
   await beat(page, PACE.read);
-  await caption(page, "Nothing lingered by accident. One connection, not the run. Episode ten walks all four scopes.");
+  await caption(page, "Nothing lingered by accident. One connection, not the run. 'Approvals and egress' walks every scope there is.");
   await beat(page, PACE.read);
 
   await act(page, card.getByRole("button", { name: "End demo" }));
@@ -297,7 +307,9 @@ test("V03b conclusion", async () => {
 
   await chapter(page, "Back to the main path", "");
   // [OWNER SLOT — drafted]
-  await caption(page, "That's the network, complete — four ways in the core, three more here. Back on the main path: episode four gives a run something real to work on. A workspace.");
+  await caption(page, "That's the network, complete — four ways in the core, three more here.");
+  await beat(page, PACE.read);
+  await caption(page, "Back on the main path: a workspace, something real for a run to work on.");
   await beat(page, PACE.read);
   await caption(page, "");
   await silentCard(page, "Next — 04: Add a workspace");

@@ -34,6 +34,7 @@ import { PageHeader } from "../wardyn/page-header";
 import { AddWorkspaceDialog } from "./add-workspace-dialog";
 import { llmCredLabel, llmCredTone } from "./workspace-llm-cred";
 import { MEMBER_WORKSPACE } from "../../lib/permissions-copy";
+import { DRIVES } from "../../lib/user-drives-copy";
 import { useOperator, useRole } from "../wardyn/operator-context";
 
 // Icon + label for the three onboardable kinds. "ephemeral" is scratch space
@@ -123,9 +124,20 @@ export function WorkspacesScreen() {
         title="Workspaces"
         description={description}
         actions={
-          <Button onClick={() => setAddOpen(true)}>
-            <Plus className="size-4" /> Add workspace
-          </Button>
+          <>
+            {/* The one door to /drives from a nav-less screen (user-drives §6).
+                `outline`: the teal stays on Add workspace, and a drive is
+                allocated rather than onboarded. SUPER only — a member and a
+                security admin have nothing to act on there. */}
+            {operator && (
+              <Button variant="outline" onClick={() => navigate("/drives")}>
+                {DRIVES.TITLE}
+              </Button>
+            )}
+            <Button onClick={() => setAddOpen(true)}>
+              <Plus className="size-4" /> Add workspace
+            </Button>
+          </>
         }
       />
 

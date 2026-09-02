@@ -88,6 +88,9 @@ const fullInput: WireInput & { workspaces: NonNullable<WireInput["workspaces"]> 
   workspaces: [{ workspace_id: "ws-1", enabled_optional: ["egress:api.stripe.com"], read_only: true }],
   workspace_id: "22222222-2222-2222-2222-222222222222",
   integration_id: "anthropic_api_key",
+  // The member's drive request (D5): forwarded verbatim by runWireBody — a
+  // path never rides here, only {enabled, read_only}.
+  drive: { enabled: true, read_only: false },
 };
 
 // The wire keys runWireBody is expected to emit for fullInput, and the exact
@@ -111,6 +114,9 @@ const expectedWire: Record<string, unknown> = {
   workspaces: fullInput.workspaces,
   workspace_id: "22222222-2222-2222-2222-222222222222",
   integration_id: "anthropic_api_key",
+  // The member's drive request (D5): forwarded verbatim by runWireBody — a
+  // path never rides here, only {enabled, read_only}.
+  drive: { enabled: true, read_only: false },
 };
 
 // Go DTO JSON tags the console NEVER sends (CLI-only — cmd/wardyn/commands.go:96-103).

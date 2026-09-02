@@ -575,6 +575,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   to `byoa`/`none` resolves to an image that does not exist (both 404 on the
   registry). Harness mode still requires an agent.
 
+### Removed
+
+- The root `GET /auth/logout` is gone. Signing out is `POST /api/v1/auth/logout` — what the console calls, and the only one that clears the session cookie. The root GET was the path that POST never reached (404) before that fix landed, and nothing has called it since: no console, CLI, doc, script or deployment referenced it. `GET /auth/login` and `GET /auth/callback` are unchanged.
+
 ## [0.6.6] — 2026-08-28
 
 A follow-up to 0.6.5 for the `k8s` runner: on a cluster where the runs namespace cannot reach the

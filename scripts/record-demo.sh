@@ -262,23 +262,13 @@ if [[ ( "${DO_TERMINAL}" == 1 || -n "${TERMINAL_SCRIPT}" ) && -z "${DISPLAY:-}" 
   die "no DISPLAY — the terminal lane grabs the desktop. Under WSL that means WSLg."
 fi
 
-# gdigrab is a Windows capture device, so the encoder has to be the Windows
-# ffmpeg. winget's Gyan.FFmpeg is a zip package: it appends to the WINDOWS PATH,
-# and a WSL shell only inherits that at startup — so a freshly-installed ffmpeg
-# stays invisible here until you open a new shell. Resolve it directly rather
-# than making that the operator's problem.
-resolve_ffmpeg() {
-  if [[ -n "${WARDYN_DEMO_FFMPEG:-}" ]]; then printf '%s' "${WARDYN_DEMO_FFMPEG}"; return; fi
-  if command -v ffmpeg.exe >/dev/null 2>&1; then command -v ffmpeg.exe; return; fi
-  local p
-  for p in /mnt/c/Users/*/AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg_*/ffmpeg-*/bin/ffmpeg.exe; do
-    [[ -f "${p}" ]] && { printf '%s' "${p}"; return; }
-  done
-}
-
 FFMPEG=""
 if [[ "${DO_RECORD}" == 1 ]]; then  # needed for the join/transcode either way
-  FFMPEG="$(resolve_ffmpeg)"
+  # wardyn_ffmpeg (scripts/lib/common.sh) is this ladder, sourced above: the
+  # WARDYN_DEMO_FFMPEG override, then ffmpeg.exe on PATH, then winget's hidden
+  # Gyan.FFmpeg. verify-demo-take.sh and take-chain.sh now read the same one, so
+  # the binary that ENCODES a take is the binary that probes it.
+  FFMPEG="$(wardyn_ffmpeg)"
   [[ -n "${FFMPEG}" ]] \
     || die "no Windows ffmpeg found. Install it once with:  winget.exe install Gyan.FFmpeg   (or point WARDYN_DEMO_FFMPEG at ffmpeg.exe)"
   # gdigrab and libx264 are both build options — a stripped ffmpeg would fail
