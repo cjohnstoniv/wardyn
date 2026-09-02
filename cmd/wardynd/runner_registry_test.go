@@ -18,11 +18,15 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 )
 
+// rrFlags is the minimum bootFlags buildRunnerFromFlags and componentsInfo
+// dereference. runnerTargetOverride is empty here — the unset default, i.e. no
+// override — and boot_runner_target_test.go sets it on its own flags.
 func rrFlags(runnerSel string) *bootFlags {
 	sel, cmap, img := runnerSel, "", "wardyn-proxy:test"
 	id, sec, rec := "embedded", "pg", "pg" // the defaults; componentsInfo derefs them
+	target := ""
 	return &bootFlags{
-		runnerSel: &sel, confinementMap: &cmap, proxyImage: &img,
+		runnerSel: &sel, runnerTargetOverride: &target, confinementMap: &cmap, proxyImage: &img,
 		identitySel: &id, secretStoreSel: &sec, recordingSel: &rec,
 	}
 }

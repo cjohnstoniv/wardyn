@@ -397,12 +397,13 @@ func (s *Server) handleDeleteUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	// Captured BEFORE the delete and best-effort: the row is gone by the time
-	// the event is written, and a lookup failure must not turn a good delete
-	// into a 500. The store's own ErrNotFound below stays the one decision about
-	// whether this allocation exists — this read never makes that call.
-	data := s.userDriveGrantAuditData(r, id)
-	err := s.cfg.Store.DeleteUserDriveGrant(r.Context(), id)
+	// The DELETE hands back the row it removed, so the audit row is written from
+	// the thing that was actually deleted rather than from a read taken beside
+	// it. It used to be the latter — a ListUserDriveGrants scan for one id,
+	// taken BEFORE the delete — and that shape had to load every allocation in
+	// the deployment to describe one, and could describe a row a concurrent
+	// write had since changed.
+	deleted, err := s.cfg.Store.DeleteUserDriveGrant(r.Context(), id)
 	if notFoundIf(w, err, "user drive allocation") {
 		return
 	}
@@ -411,34 +412,30 @@ func (s *Server) handleDeleteUserDriveGrant(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"drive.grant.delete", id.String(), "success", data))
+		"drive.grant.delete", id.String(), "success", s.userDriveGrantAuditData(r, deleted)))
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // userDriveGrantAuditData renders the deleted allocation's subject and its
-// drive's reclaim intent for the audit row above, or nil when either read
-// fails.
-func (s *Server) userDriveGrantAuditData(r *http.Request, id uuid.UUID) []byte {
-	grants, err := s.cfg.Store.ListUserDriveGrants(r.Context())
-	if err != nil {
-		return nil
+// drive's reclaim intent for the audit row above.
+//
+// GetUserDrive is still read here, and stays: `reclaim` is the field that makes
+// this row worth writing — it is what tells the offboarding runbook whether the
+// directory this binding was the last pointer to should be kept or reclaimed —
+// and it lives on the DRIVE, which the deleted grant only names by id. The read
+// is best-effort: it happens after the delete succeeded, and a lookup failure
+// must degrade the row's detail rather than turn a good delete into a 500.
+func (s *Server) userDriveGrantAuditData(r *http.Request, g types.UserDriveGrant) []byte {
+	out := map[string]any{
+		"subject_type": g.SubjectType,
+		"subject":      g.Subject,
+		"drive_id":     g.DriveID,
 	}
-	for _, g := range grants {
-		if g.ID != id {
-			continue
-		}
-		out := map[string]any{
-			"subject_type": g.SubjectType,
-			"subject":      g.Subject,
-			"drive_id":     g.DriveID,
-		}
-		if d, derr := s.cfg.Store.GetUserDrive(r.Context(), g.DriveID); derr == nil {
-			out["drive"] = d.Name
-			out["reclaim"] = d.Reclaim
-		}
-		return mustJSON(out)
+	if d, err := s.cfg.Store.GetUserDrive(r.Context(), g.DriveID); err == nil {
+		out["drive"] = d.Name
+		out["reclaim"] = d.Reclaim
 	}
-	return nil
+	return mustJSON(out)
 }
 
 // ─── /me ───────────────────────────────────────────────────────────────────
@@ -467,6 +464,9 @@ type meUserDrive struct {
 	Writable    bool                     `json:"writable"`
 	Enforcement types.StorageEnforcement `json:"enforcement"`
 	HomeName    string                   `json:"home_name,omitempty"`
+	// Paused: allocated, disabled by an admin — the chip says so and the New Run
+	// card renders the paused line where the checkbox would be.
+	Paused bool `json:"paused,omitempty"`
 }
 
 // resolveMeUserDrive answers the /me.user_drive field, or nil.
@@ -490,6 +490,7 @@ func (s *Server) resolveMeUserDrive(r *http.Request) *meUserDrive {
 		Writable:    resolved.Writable,
 		Enforcement: resolved.Enforcement,
 		HomeName:    resolved.HomeName,
+		Paused:      resolved.Paused,
 	}
 }
 
@@ -522,25 +523,6 @@ func (s *Server) userDriveDeniedByProfile(r *http.Request) string {
 		return ""
 	}
 	return ceiling.Profile.Name
-}
-
-// driveDisplaySize renders a drive's allocation for a server-composed sentence
-// ("2048 MiB", or "no allocation shown" for 0). Server-side because the two
-// refusals that quote it are writeError bodies, and the console never rewords a
-// server refusal.
-func driveDisplaySize(sizeMiB int) string {
-	if sizeMiB <= 0 {
-		return "no allocation shown"
-	}
-	return fmt.Sprintf("%d MiB", sizeMiB)
-}
-
-// driveModeWord renders read-only/writable for the same sentences.
-func driveModeWord(readOnly bool) string {
-	if readOnly {
-		return "read-only"
-	}
-	return "writable"
 }
 
 // driveRefusal composes a 422 body in the frozen member voice: lowercase

@@ -210,21 +210,22 @@ func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant) (t
 	return out, nil
 }
 
-// DeleteUserDriveGrant removes one grant by id, ErrNotFound when no row
-// matched. De-allocating is the SUPPORTED way to take a drive away — the
+// DeleteUserDriveGrant removes one grant by id AND RETURNS IT, ErrNotFound when
+// no row matched. De-allocating is the SUPPORTED way to take a drive away — the
 // deliberate act the RESTRICT on the drive delete exists to force — and it
 // removes only the BINDING: nothing in the control plane deletes the volume,
 // the claim or the directory (reclaim is a declared intent executed by a
 // documented operator command).
-func (s PG) DeleteUserDriveGrant(ctx context.Context, id uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM user_drive_grants WHERE id = $1`, id)
-	if err != nil {
-		return fmt.Errorf("store: delete user drive grant: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+//
+// RETURNING rather than a bare Exec, because the ONE caller has to describe
+// what it just removed in an audit row and the row is gone by then. The
+// alternative it replaced was a full ListUserDriveGrants scan taken beforehand:
+// every allocation in the deployment loaded to describe one, and a second read
+// that could disagree with the row the DELETE actually took. The same shape
+// UpsertUserDriveGrant above already uses, over the same shared column list.
+func (s PG) DeleteUserDriveGrant(ctx context.Context, id uuid.UUID) (types.UserDriveGrant, error) {
+	const q = `DELETE FROM user_drive_grants WHERE id = $1 RETURNING ` + userDriveGrantCols
+	return scanUserDriveGrant(s.Pool.QueryRow(ctx, q, id))
 }
 
 // ListUserDriveGrants returns every grant in the order the resolver itself
@@ -274,10 +275,16 @@ const userDriveTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' TH
 //     tier. Without it two same-priority rows make LIMIT 1 depend on the plan,
 //     and "why did Bob get the other drive today" has no answer.
 //
-// DISABLED GRANTS ARE EXCLUDED BY THE WHERE, not skipped by the caller: a
-// disabled row that could still WIN would shadow the lower-tier grant that
-// should have applied, so an admin toggling one off would silently take away a
-// drive they never touched instead of falling back to it.
+// DISABLED GRANTS ARE IN THE QUERY, and the winner's own `enabled` decides
+// PAUSED vs MOUNTED — a disabled row that wins its tier yields paused, never
+// the wider row beneath it (DESIGN §2.2: turning Bob's row off cannot silently
+// hand him the group's writable drive). Excluding them in the WHERE instead
+// reads tidier and is the widening this must not do: the pause would fall
+// through to whatever `all`-tier row exists, which is a drive no admin decided
+// this member should have — and it would do so silently, because the member's
+// only signal is a mount that appeared rather than an allocation that stopped.
+// So there is ONE read, its ORDER BY is the whole precedence rule, and the
+// caller reads g.Enabled to tell the two answers apart.
 //
 // The tier comes back as the winning grant's own subject_type rather than a
 // separately selected column — this resolver returns the grant itself, so
@@ -304,8 +311,7 @@ func (s PG) ResolveUserDrive(ctx context.Context, userSubjects, groups []string)
 			g.created_at, g.created_by
 		FROM user_drive_grants g
 		JOIN user_drives d ON d.id = g.drive_id
-		WHERE g.enabled
-		  AND (g.subject_type = 'all'
+		WHERE (g.subject_type = 'all'
 		   OR (g.subject_type = 'user'  AND g.subject = ANY($1::text[]))
 		   OR (g.subject_type = 'group' AND g.subject = ANY($2::text[])))
 		ORDER BY

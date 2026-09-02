@@ -760,7 +760,7 @@ after `WORKSPACE_BODY`, only when `/me.user_drive` is non-null.
 | `REFUSED_CLAIM_MISSING(name)` | drive: volume claim `{name}` is not provisioned on this cluster — ask an admin to create it |
 | `REFUSED_WRITABLE` | drive: your allocation is read-only; `read_only:false` cannot widen it |
 | `REFUSED_BACKEND(reason)` | drive: this deployment cannot mount your drive ({reason}) |
-| `REFUSED_TARGET_RESERVED` | workspace_mounts: target `/home/agent/drive` is reserved for the user drive |
+| `REFUSED_TARGET_RESERVED` | workspace_mounts[0]: target `/home/agent/drive` is reserved for the user drive |
 
 **This table is COMPLETE** (§5 #4): every string a member can be refused with at a door this
 feature adds is here. `DENIED_DRIVE` is the one **403** (audited `authz.denied`,
@@ -769,7 +769,9 @@ reason `governance_profile`, target `runs.drive` — `denyMemberDrive` beside
 create and preflight both). `REFUSED_TARGET_RESERVED` is the **400** `validatePolicySpec`'s
 unique-target arm raises when a policy or workspace source names the reserved target — it is
 met by whoever writes the policy, member or admin, and it belongs here because it is a door
-this feature adds. `{reason}` in `REFUSED_BACKEND` is the runner's own prose (on Kubernetes,
+this feature adds. Its `[0]` is the **mount's position**, not a literal: every mount error is
+prefixed `workspace_mounts[i]` (`workspace_repos[i]` for a repo), and the frozen string spells
+the first mount's, so the canon equals the server's bytes. `{reason}` in `REFUSED_BACKEND` is the runner's own prose (on Kubernetes,
 the apiserver's refusal naming `k8s.userDrives.enabled`); `{claim}` in `REFUSED_HOME_INVALID` is
 the template's claim name (`sub`, `email_local`). `MEMBER.DENIED_STALE_GROUPS` (§7.1)
 is reused verbatim for the truncated-snapshot case and is not re-frozen.

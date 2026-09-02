@@ -80,8 +80,14 @@ func ValidateAuthoredTarget(tgt string) error {
 	if targetReservedForDrive(tgt) {
 		// The frozen refusal (docs/design/user-drives-prompt.md's DRIVE_MEMBER
 		// table, REFUSED_TARGET_RESERVED). The caller adds the field prefix its
-		// own convention already carries (workspace_mounts[i], workspace_repos[i]).
-		return fmt.Errorf("target `%s` is reserved for the user drive", DriveTarget)
+		// own convention already carries (workspace_mounts[i], workspace_repos[i]),
+		// so the canon entry spells the index too.
+		//
+		// The path is PLAIN, not backticked: a mono span is a display concern the
+		// console applies, never bytes baked into the string (the canon module's
+		// backtick rule, ui/src/app/lib/user-drives-copy.ts). With the backticks
+		// in, the wire bytes and the canon could not be the same string.
+		return fmt.Errorf("target %s is reserved for the user drive", DriveTarget)
 	}
 	return nil
 }

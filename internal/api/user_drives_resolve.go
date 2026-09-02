@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -120,7 +121,10 @@ func (s *Server) resolveUserDrive(ctx context.Context) (*types.ResolvedDrive, er
 // including the ones that have never allocated a drive:
 //
 //   - A USER-TIER row matched. user > group > all, so an explicitly named
-//     principal's drive is FULLY determined whatever their groups are.
+//     principal's drive is FULLY determined whatever their groups are —
+//     INCLUDING when that row is paused, which is an answer and not an absence:
+//     no group-tier grant can outrank it, so nothing the snapshot is hiding
+//     could change it.
 //   - NO GROUP-TIER GRANT EXISTS AT ALL. Nothing an unknown group could have
 //     matched, so nothing a nil snapshot could be hiding.
 //
@@ -182,17 +186,28 @@ func (s *Server) resolveUserDriveFor(ctx context.Context, users, groups []string
 }
 
 // newResolvedDrive folds one winning (drive, grant) pair into everything a
-// runner or a preview needs. Three folds, each of which could have gone the
+// runner or a preview needs. Four folds, each of which could have gone the
 // other way:
+//
+//   - A DISABLED WINNER IS PAUSED, and it returns before anything is derived.
+//     The store hands back the row that won its tier whether or not it is
+//     enabled (DESIGN §2.2), so this is the single place that tells the two
+//     apart — and a paused drive mounts nothing, which makes a home name a
+//     directory no consumer will ever ask for. Deriving one anyway is worse
+//     than useless: DriveHomeName can FAIL, and a failure here would answer a
+//     paused member with the wrong refusal entirely (422 "your claim cannot
+//     name a directory") for a drive that was never going to mount.
 //
 //   - HOME OVERRIDE applies on the USER TIER ONLY. types.ValidateUserDriveGrant
 //     already refuses to store one on a group or all row; the tier gate is
 //     repeated here because a row written by an older binary — or by hand —
 //     would otherwise hand an entire group ONE directory, which is precisely
 //     the isolation the per-user subdirectory buys.
+//
 //   - SIZE is the override when the admin set one, else the drive's. 0 means
 //     "unset" on both, so a grant that never mentions size inherits rather than
 //     zeroing the allocation.
+//
 //   - WRITABLE is the override when present, else the drive's — a COALESCE, not
 //     an intersection, because both values are admin-authored and the grant is
 //     the more specific statement of the two. The narrowing rule applies one
@@ -209,20 +224,6 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 	if d == nil || g == nil {
 		return nil, nil
 	}
-	override := ""
-	if tier == types.CapabilitySubjectUser {
-		override = g.HomeOverride
-	}
-	home, err := types.DriveHomeName(*d, driveHomeSubject(d.HomeTemplate, users), override)
-	if err != nil {
-		// The frozen member sentence, not the derivation's own error: what this
-		// member needs is which of their claims could not name a directory and
-		// who can fix it, and types.DriveHomeName's message names a template and
-		// a regex instead. The cause is still the wrapped error's, for the log.
-		return nil, fmt.Errorf("%w: drive: your %s cannot name a directory "+
-			"(lowercase letters and digits, then `. _ -`, up to 63 characters) — "+
-			"ask an admin to set your directory name [%v]", errDriveUnmountable, d.HomeTemplate, err)
-	}
 	size := d.SizeMiB
 	if g.SizeMiBOverride > 0 {
 		size = g.SizeMiBOverride
@@ -231,14 +232,42 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 	if g.WritableOverride != nil {
 		writable = *g.WritableOverride
 	}
-	return &types.ResolvedDrive{
+	resolved := &types.ResolvedDrive{
 		Drive: *d, Grant: *g, Tier: tier,
-		HomeName:    home,
-		ObjectName:  types.DriveObjectName(*d, home),
 		SizeMiB:     size,
 		Writable:    writable,
 		Enforcement: types.EnforcementFor(d.Backend),
-	}, nil
+	}
+	// The size and mode folds run for a paused row too: what the member is
+	// shown is the allocation that is off, and reading the drive's own size
+	// where the grant overrode it would name a different one.
+	if !g.Enabled {
+		resolved.Paused = true
+		return resolved, nil
+	}
+	override := ""
+	if tier == types.CapabilitySubjectUser {
+		override = g.HomeOverride
+	}
+	home, err := types.DriveHomeName(*d, driveHomeSubject(d.HomeTemplate, users), override)
+	if err != nil {
+		// The BODY is the frozen member sentence and NOTHING ELSE. What this
+		// member needs is which of their claims could not name a directory and
+		// who can fix it; types.DriveHomeName's own message names a template and
+		// a regex, which is an operator's diagnostic and reads to a member as
+		// gibberish appended to the sentence that was meant for them. So it goes
+		// to the LOG, where the operator who has to act on it already looks —
+		// and the member's 422 stays byte-identical to the mock.
+		slog.Warn("wardynd: user drive: a home name could not be derived for this principal",
+			slog.String("drive", d.Name), slog.String("backend", string(d.Backend)),
+			slog.String("home_template", string(d.HomeTemplate)), slog.String("err", err.Error()))
+		return nil, fmt.Errorf("%w: drive: your %s cannot name a directory "+
+			"(lowercase letters and digits, then `. _ -`, up to 63 characters) — "+
+			"ask an admin to set your directory name", errDriveUnmountable, d.HomeTemplate)
+	}
+	resolved.HomeName = home
+	resolved.ObjectName = types.DriveObjectName(*d, home)
+	return resolved, nil
 }
 
 // driveHomeSubject picks WHICH of the caller's identities the drive's home
@@ -290,6 +319,48 @@ type userDrivePreviewResponse struct {
 	SizeMiB     int                         `json:"size_mib,omitempty"`
 	Writable    bool                        `json:"writable,omitempty"`
 	Enforcement types.StorageEnforcement    `json:"enforcement,omitempty"`
+	// Paused: the matched allocation is disabled, so nothing above it is derived
+	// and nothing would mount.
+	Paused bool `json:"paused,omitempty"`
+	// HomeSubject is WHICH of the submitted claims the home above was derived
+	// from — driveHomeSubject's positional pick, made visible.
+	//
+	// It exists because this endpoint's request cannot label a claim: the
+	// console sends one kind-less box, and the resolver reads position (the
+	// caller's stable subject first, their email last). So an admin who pasted
+	// only an address against a `hash` or `sub` drive gets a perfectly
+	// well-formed object name that NO RUN WILL EVER MOUNT — derived from the
+	// address, where the run derives from the sign-in subject. Naming the claim
+	// the answer keys on is what makes that visible instead of confidently
+	// wrong. Absent on a paused row, where nothing is derived at all.
+	HomeSubject string `json:"home_subject,omitempty"`
+	// Warning is a SERVER-composed hint about the REQUEST, not a refusal and not
+	// canon: the preview is a typing surface, and the shape above is the mistake
+	// it is easiest to make and hardest to notice. It is deliberately NOT one of
+	// §7's frozen strings — those are the member's doors, and this is an
+	// admin's typo — so the console may render it verbatim without a new key.
+	Warning string `json:"warning,omitempty"`
+}
+
+// drivePreviewWarning is the one request-shape hint the preview offers: the
+// answer keys on the SIGN-IN SUBJECT and the admin appears to have pasted an
+// address first.
+//
+// Keyed on `hash`/`sub` only, because those are the two templates
+// driveHomeSubject answers with users[0]; `email_local` reads the LAST claim,
+// so an address-first preview is exactly right for it and a warning there would
+// train an admin to ignore the field.
+//
+// It looks at the claim's SHAPE, which the resolver itself refuses to do — and
+// that difference is the point rather than an inconsistency. A shape guess
+// inside the resolver would be a second opinion about identity competing with
+// the ordering it ranks by; a shape guess on an advisory string competes with
+// nothing. It never changes the answer above it.
+func drivePreviewWarning(tmpl types.HomeTemplate, users []string) string {
+	if tmpl == types.HomeTemplateEmailLocal || len(users) == 0 || !strings.Contains(users[0], "@") {
+		return ""
+	}
+	return "the directory name keys on the sign-in subject; paste it first"
 }
 
 // handlePreviewUserDrive answers "which drive would a principal carrying these
@@ -331,6 +402,21 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
+	// A claims-less preview is a 400 about the REQUEST, and it must not be
+	// allowed to fall through: the resolver's step 2 answers "no subjects, no
+	// drive", which would render here as the empty object — "nobody is
+	// allocated this" — for a question nobody actually asked. Groups alone
+	// cannot be previewed either, because a home name is derived from a USER
+	// claim and a group-tier match with no claim to name a directory after has
+	// no object name to show.
+	//
+	// The ADMIN's voice, not §7.7's: these refusals are the member's doors, and
+	// answering an admin's empty form with one would put a member-facing
+	// sentence on a screen no member can reach.
+	if len(users) == 0 {
+		writeError(w, http.StatusBadRequest, "user_subjects: at least one claim is needed to derive the directory name")
+		return
+	}
 	groups, msg := normalizeGovernancePreviewClaims(req.Groups, "groups")
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
@@ -345,6 +431,14 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, userDrivePreviewResponse{})
 		return
 	}
+	// The SAME positional pick newResolvedDrive made, read back rather than
+	// re-derived — a second copy of driveHomeSubject's rule here would be the
+	// preview drifting from enforcement in the one field that exists to say
+	// what enforcement did.
+	homeSubject := driveHomeSubject(resolved.Drive.HomeTemplate, users)
+	if resolved.Paused {
+		homeSubject = ""
+	}
 	writeJSON(w, http.StatusOK, userDrivePreviewResponse{
 		DriveName:   resolved.Drive.Name,
 		MatchedTier: resolved.Tier,
@@ -353,5 +447,8 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 		SizeMiB:     resolved.SizeMiB,
 		Writable:    resolved.Writable,
 		Enforcement: resolved.Enforcement,
+		Paused:      resolved.Paused,
+		HomeSubject: homeSubject,
+		Warning:     drivePreviewWarning(resolved.Drive.HomeTemplate, users),
 	})
 }

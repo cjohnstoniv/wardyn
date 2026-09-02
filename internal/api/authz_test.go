@@ -1312,8 +1312,8 @@ func (s *authzStore) ListUserDrives(context.Context) ([]types.UserDriveListItem,
 func (s *authzStore) UpsertUserDriveGrant(_ context.Context, g types.UserDriveGrant) (types.UserDriveGrant, error) {
 	return g, nil
 }
-func (s *authzStore) DeleteUserDriveGrant(context.Context, uuid.UUID) error {
-	return store.ErrNotFound
+func (s *authzStore) DeleteUserDriveGrant(context.Context, uuid.UUID) (types.UserDriveGrant, error) {
+	return types.UserDriveGrant{}, store.ErrNotFound
 }
 func (s *authzStore) ListUserDriveGrants(context.Context) ([]types.UserDriveGrant, error) {
 	return nil, nil

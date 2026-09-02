@@ -65,6 +65,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"os"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -103,6 +104,11 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 	if resolved == nil {
 		writeError(w, http.StatusUnprocessableEntity,
 			driveRefusal("no user drive is allocated to you — ask an admin for an allocation"))
+		return nil, false
+	}
+	if resolved.Paused {
+		writeError(w, http.StatusUnprocessableEntity,
+			driveRefusal("your allocation is paused by an admin"))
 		return nil, false
 	}
 	return s.driveMountFor(w, req, *resolved)
@@ -145,7 +151,10 @@ func (s *Server) denyMemberDrive(w http.ResponseWriter, r *http.Request, ceiling
 //     valid when written and is not now, i.e. a deployment that re-pointed
 //     WARDYN_RUNNER. Re-checked rather than trusted because a stale row must
 //     not become a mount attempt the driver has no code path for.
-//  2. WIDENING. read_only:false against a read-only allocation is refused
+//
+//  2. THE SHARE IS NOT THERE (host_path only — see driveShareIsBindable).
+//
+//  3. WIDENING. read_only:false against a read-only allocation is refused
 //     rather than ignored, and that is the choice worth naming: silently
 //     honouring the allocation would launch a run the member believes is
 //     writable, and they would find out when their work failed to persist. The
@@ -160,6 +169,9 @@ func (s *Server) driveMountFor(w http.ResponseWriter, req createRunRequest,
 			resolved.Drive.Backend, s.cfg.RunnerTarget)))
 		return nil, false
 	}
+	if !s.driveShareIsBindable(w, resolved) {
+		return nil, false
+	}
 	readOnly := !resolved.Writable
 	if req.Drive.ReadOnly != nil {
 		if !*req.Drive.ReadOnly && readOnly {
@@ -170,6 +182,10 @@ func (s *Server) driveMountFor(w http.ResponseWriter, req createRunRequest,
 		readOnly = readOnly || *req.Drive.ReadOnly
 	}
 	return &types.DriveMount{
+		// The row's id, carried so a driver's labels and an offboarding sweep
+		// can group by the DRIVE. ObjectName cannot answer that: it is
+		// per-principal by construction.
+		DriveID:    resolved.Drive.ID,
 		Backend:    resolved.Drive.Backend,
 		ObjectName: resolved.ObjectName,
 		HomeName:   resolved.HomeName,
@@ -181,4 +197,73 @@ func (s *Server) driveMountFor(w http.ResponseWriter, req createRunRequest,
 		SizeMiB:     resolved.SizeMiB,
 		Enforcement: resolved.Enforcement,
 	}, true
+}
+
+// driveShareIsBindable is driveMountFor's host_path arm: the two facts a share
+// bind depends on that the ROW CANNOT CARRY, re-established at the moment of
+// the mount. It writes its own 422 and returns false once it has.
+//
+// It runs for host_path ONLY. Every other backend is either an object Wardyn
+// creates on first use (docker_volume, k8s_pvc) or a claim the k8s driver reads
+// and refuses by name (k8s_pvc_static, REFUSED_CLAIM_MISSING — D4's).
+//
+// ─── (1) THE ENV CEILING, RE-CHECKED ───────────────────────────────────────
+//
+// handleUpsertUserDrive already applied UserDriveHostRootCheck when this row
+// was authored, and that is exactly why it has to run again: the check is over
+// WARDYN_USER_DRIVE_HOST_ROOTS and the host filesystem, and neither is in the
+// row. A restart with the variable unset, an operator narrowing the roots, or
+// the share itself going away all leave a stored drive whose host_root the
+// deployment no longer allows — and this is a path bound into OTHER PEOPLE's
+// sandboxes. Trusting the row would let the last admin who authored one hold
+// the ceiling open across every later boot.
+//
+// The refusal takes the REFUSED_BACKEND shape rather than a new one, and that
+// is the honest reading: from the member's side "the roots moved" and "this
+// deployment dispatches elsewhere" are one fact — this deployment cannot mount
+// their drive — and the parenthesised reason is where the admin's diagnosis
+// goes.
+//
+// ─── (2) THE DIRECTORY MUST EXIST, AND BE ONE ──────────────────────────────
+//
+// WARDYN NEVER mkdir's ON A SHARE (DESIGN §3): the tree belongs to whoever owns
+// the share, its permissions and quota are theirs, and a control plane that
+// created directories there would be authoring on a filesystem it does not own.
+// So a missing home is a REFUSAL — and it has to be raised here rather than
+// left to the driver, because a bind mount of a non-existent source is one of
+// the few places Docker HELPFULLY CREATES IT: an empty root-owned directory
+// appears on the operator's share, the run launches, and the member's work goes
+// somewhere no admin allocated.
+//
+// A NON-DIRECTORY is the same refusal for the same reason: binding a regular
+// file at the drive target is not a drive, and the sentence a member needs
+// ("that directory is not there") is true of both.
+//
+// ponytail: one os.Stat, on a path already derived, on the create path only.
+func (s *Server) driveShareIsBindable(w http.ResponseWriter, resolved types.ResolvedDrive) bool {
+	if resolved.Drive.Backend != types.DriveBackendHostPath {
+		return true
+	}
+	if err := s.userDriveHostRootCheck()(resolved.Drive.HostRoot); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, driveRefusal(fmt.Sprintf(
+			"this deployment cannot mount your drive (%s)", err)))
+		return false
+	}
+	// The HOME name, never the resolved path: the member is told which
+	// directory is missing, and the operator's filesystem layout stays where
+	// GET /drives already keeps it (a boolean, not the roots).
+	//
+	// %s AND NOT %q, and the doc's backticks are not typed here. §7's header
+	// note makes a backticked substring a MONO SPAN the console applies, never
+	// characters in the string — so a PLACEHOLDER the doc backticks ships bare
+	// (this one, and it is what DRIVE_MEMBER.REFUSED_HOME_MISSING carries),
+	// while a placeholder the doc QUOTES ships %q (DENIED_DRIVE's profile name)
+	// and a backticked LITERAL keeps its backticks (REFUSED_WRITABLE's
+	// `read_only:false`, REFUSED_HOME_INVALID's `. _ -`).
+	if st, err := os.Stat(resolved.ObjectName); err != nil || !st.IsDir() {
+		writeError(w, http.StatusUnprocessableEntity, driveRefusal(fmt.Sprintf(
+			"directory %s does not exist on the share — ask an admin to create it", resolved.HomeName)))
+		return false
+	}
+	return true
 }
