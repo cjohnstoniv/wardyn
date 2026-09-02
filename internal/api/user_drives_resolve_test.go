@@ -616,6 +616,18 @@ func TestPreviewUserDrive(t *testing.T) {
 		if got.DriveName != "Corp NAS" || got.MatchedTier != types.CapabilitySubjectUser {
 			t.Errorf("drive/tier = %q/%q, want the winning row's", got.DriveName, got.MatchedTier)
 		}
+		// And the two literals above are the TYPES PACKAGE's own derivation,
+		// not a second copy of it: this is the tie that keeps the preview and
+		// the runner (TestSeedRequestDriveMountShape asserts the same pair on
+		// the enforcement path) reading one function.
+		wantHome, err := types.DriveHomeName(*d, "Alice@Corp.Example", "")
+		if err != nil {
+			t.Fatalf("DriveHomeName: %v", err)
+		}
+		if got.HomeName != wantHome || got.ObjectName != types.DriveObjectName(*d, wantHome) {
+			t.Errorf("home/object = %q/%q, want the derivation's %q/%q",
+				got.HomeName, got.ObjectName, wantHome, types.DriveObjectName(*d, wantHome))
+		}
 		// A STATIC PVC's size is bound by whatever provisioned it, never by
 		// Wardyn — the field is carried through the preview verbatim so the
 		// number beside it is not read as a cap Wardyn enforces.
