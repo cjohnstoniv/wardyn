@@ -218,6 +218,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 			"Drop the github_token grant to push with your own PAT instead")
 	applyRepoCloneEnv(sandboxEnv, run, policy)
 	applyEphemeralDirsEnv(sandboxEnv, p.EphemeralDirs)
+	applyUserDriveEnv(sandboxEnv, p.Drive)
 	// Caller-supplied non-secret env (p.ExtraEnv): the AWS harness login's
 	// pre-login WARDYN_AWS_SSO_CONFIG_B64, or the site-config probe's own
 	// settings — the same "only a discriminator + non-secret payload changes;
@@ -444,6 +445,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 			"wardyn.agent": run.Agent,
 		},
 	}
+
+	// USER DRIVE ATTACHED — recorded beside the spec that carries it, and a
+	// no-op for the runs (most of them) that carry none. See auditDriveMount.
+	s.auditDriveMount(ctx, run.ID, p.Drive)
 
 	// AUTHORIZATION ENVELOPE — the append-only answer to "what was this agent
 	// actually allowed to do?". The run row cannot answer it: agent_runs.policy_id

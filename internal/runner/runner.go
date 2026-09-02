@@ -123,6 +123,27 @@ type Mount struct {
 	// Set by internal/api dispatch from the run's member-owned workspaces
 	// (memberMountPosture); false — the operator default — everywhere else.
 	MemberAuthored bool `json:"member_authored,omitempty"`
+	// DriveAuthored marks the ONE bind a driver synthesizes from
+	// SandboxSpec.Drive: the host_path user drive's per-person subdirectory.
+	// Only these are re-checked against the deployment's
+	// WARDYN_USER_DRIVE_HOST_ROOTS ceiling (UserDriveHostRootCheck) at bind
+	// time, for the reason MemberAuthored has its own gate — the roots bound
+	// what an ADMIN may point a drive at and nothing else, and the same spec
+	// carries Wardyn-authored credential binds that live under no drive root.
+	//
+	// It is set by the DRIVER, not by dispatch: SandboxSpec.Drive is a
+	// types.DriveMount rather than a Mount precisely so the composer clamp, the
+	// workspace-source allow-list and the k8s blanket host-bind refusal never
+	// see a drive; the Docker driver converts it to a Mount internally so the
+	// deny matrix can run on the host path.
+	//
+	// TWO FLAGS, NOT A Kind ENUM, and this comment is the trigger to change
+	// that: N=2 is below the consolidation threshold and MemberAuthored is
+	// security-critical code, so a THIRD authoring class — anything that adds a
+	// `*Authored bool` beside these two — is the point at which both become one
+	// `Kind` field with a closed set of values, rather than three booleans whose
+	// illegal combinations are only prevented by everyone remembering.
+	DriveAuthored bool `json:"drive_authored,omitempty"`
 }
 
 type ProxyConfig struct {

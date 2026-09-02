@@ -70,6 +70,21 @@ type Config struct {
 	// instead of refusing. OFF by default — an untrusted sandbox must not run
 	// uncapped. Set only on a trusted host (WARDYN_ALLOW_UNENFORCEABLE_CAPS=1).
 	AllowUnenforceableCaps bool
+	// UserDriveHostRoots is the deployment's WARDYN_USER_DRIVE_HOST_ROOTS
+	// ceiling over host_path USER DRIVES, parsed once at boot
+	// (runner.ParseUserDriveHostRoots) and handed to the substrate constructor,
+	// so the driver's bind-time re-check and the API's authoring-time check are
+	// the same operator-set list.
+	//
+	// It is DRIVER CONFIG rather than a SandboxSpec field — the opposite of
+	// MemberMountRoots, deliberately. Member roots are resolved PER PRINCIPAL
+	// (a `_MAP` entry replaces the shared list for one member), so only the
+	// control plane knows which roots bound a given run. A drive's ceiling is
+	// per DEPLOYMENT: it says where this daemon's operator has mounted shares,
+	// which is a fact about the host wardynd runs on, not about whose run this
+	// is. Empty — the zero value, and the default — refuses every host_path
+	// drive, which is the whole posture (see runner.UserDriveHostRootCheck).
+	UserDriveHostRoots []string
 }
 
 // RecordingMountTarget is where RecordingMount appears inside the agent
@@ -438,7 +453,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// DNS (required under gVisor; harmless under runc). This is the ONLY host entry
 	// the agent gets — NOT host.docker.internal, which stays proxy-only.
 	agentHost.ExtraHosts = append(agentHost.ExtraHosts, "wardyn-proxy:"+proxyIP)
-	agentMounts, err := d.agentMounts(spec.Mounts, spec.MemberMountRoots)
+	agentMounts, err := d.agentMounts(ctx, spec)
 	if err != nil {
 		return fail(err)
 	}

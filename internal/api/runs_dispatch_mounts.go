@@ -381,3 +381,73 @@ func applyEphemeralDirsEnv(sandboxEnv map[string]string, dirs []string) {
 	}
 	sandboxEnv["WARDYN_EPHEMERAL_DIRS"] = strings.Join(dirs, ",")
 }
+
+// applyUserDriveEnv announces the mounted USER DRIVE to the sandbox as
+// "<target>:ro" or "<target>:rw" — the one in-sandbox signal that a run has
+// persistent storage and whether it may write to it. No-op for the runs that
+// carry no drive, which is most of them.
+//
+// It is an ANNOUNCEMENT, never the mechanism: the mount itself is made by the
+// driver from SandboxSpec.Drive, so an agent that ignores this variable still
+// gets the drive, and one that fabricates it still gets nothing. That split is
+// what lets it be non-secret env (invariant 1) beside WARDYN_EPHEMERAL_DIRS —
+// and it is why the value names the in-container target and the mode and
+// nothing else: the object name, the host path and the drive's name are
+// admin-facing, and a member's own run must not be able to read back the
+// storage object it was allocated.
+//
+// The mode suffix is `ro`/`rw` rather than a boolean because that is what the
+// mount reads as everywhere else a human sees one (`docker inspect`, `mount`,
+// the console's own chip), and a variable an agent is expected to print in a
+// startup banner should not need a translation table.
+func applyUserDriveEnv(sandboxEnv map[string]string, drive *types.DriveMount) {
+	if drive == nil {
+		return
+	}
+	sandboxEnv["WARDYN_USER_DRIVE"] = drive.Target + ":" + driveAuditMode(drive.ReadOnly)
+}
+
+// auditDriveMount records run.drive.mount: dispatch attached a member's user
+// drive to this sandbox. Silent when no drive was attached — an audit action
+// that fires on every run is noise an operator learns to skip past.
+//
+// Its own event rather than a field on the run's policy snapshot, because the
+// drive is the ONE thing in a run's spec that OUTLIVES the run: "which run
+// mounted whose storage, in which mode" is a question asked months later about
+// data that is still there. Actor SYSTEM — a member ticked a checkbox, and what
+// is recorded is dispatch's own resolution of that flag into an object.
+//
+// `object` is the storage object (a Docker volume name, or the host
+// subdirectory of a share) and `drive` the per-person home segment: both
+// admin-facing, and neither is ever surfaced to the member, whose request
+// carried a flag and never a path. `enforcement` is what actually binds the
+// drive's bytes (types.StorageEnforcement), logged beside the mount so a size
+// read back in a later dispute carries its caveat instead of reading as a
+// promise. Five fields, matching docs/AUDIT-ACTIONS.md exactly.
+//
+// The nil test lives HERE rather than at the assembly site for a mechanical
+// reason worth stating: dispatchRun sits at its gocyclo ceiling, so one more
+// branch there is a lint failure. It belongs with the payload anyway.
+func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, drive *types.DriveMount) {
+	if drive == nil {
+		return
+	}
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.drive.mount",
+		runID.String(), "success", mustJSON(map[string]any{
+			"backend":     drive.Backend,
+			"drive":       drive.HomeName,
+			"enforcement": drive.Enforcement,
+			"mode":        driveAuditMode(drive.ReadOnly),
+			"object":      drive.ObjectName,
+		})))
+}
+
+// driveAuditMode renders a drive's mode as the SAME two words the sandbox env
+// (applyUserDriveEnv), the run.drive.mount audit row and the console chip all
+// use — one vocabulary, so a log line and a screenshot of the same run agree.
+func driveAuditMode(readOnly bool) string {
+	if readOnly {
+		return "ro"
+	}
+	return "rw"
+}

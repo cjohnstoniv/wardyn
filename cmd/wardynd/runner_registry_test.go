@@ -30,7 +30,7 @@ func rrFlags(runnerSel string) *bootFlags {
 // -runner none (and "") stays a nil runner with target "none", no registry hit.
 func TestBuildRunnerFromFlags_None(t *testing.T) {
 	for _, sel := range []string{"none", ""} {
-		r, target, err := buildRunnerFromFlags(rrFlags(sel), nil)
+		r, target, err := buildRunnerFromFlags(rrFlags(sel), nil, nil)
 		if err != nil {
 			t.Fatalf("-runner %q: unexpected error: %v", sel, err)
 		}
@@ -45,7 +45,7 @@ func TestBuildRunnerFromFlags_None(t *testing.T) {
 
 // An unknown -runner FAILS CLOSED with the registry-miss error naming the flag.
 func TestBuildRunnerFromFlags_UnknownFailsClosed(t *testing.T) {
-	r, _, err := buildRunnerFromFlags(rrFlags("bogus"), nil)
+	r, _, err := buildRunnerFromFlags(rrFlags("bogus"), nil, nil)
 	if err == nil {
 		t.Fatalf("want error for -runner bogus, got runner %T", r)
 	}

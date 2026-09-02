@@ -524,6 +524,117 @@ the sandbox except `wardyn-proxy`, and the session is still recorded. A governan
 control, not a containment boundary against the operator holding the laptop. Full
 accounting: [docs/DESKTOP.md](DESKTOP.md) "Tamper posture, stated honestly".
 
+### User drives on Docker
+
+A **user drive** is persistent storage an admin registers once and allocates to
+people or groups; a member mounts theirs per run at `/home/agent/drive`. On a
+Docker deployment there are two backends, and the difference is who owns the
+bytes.
+
+**`docker_volume` — Wardyn allocates.** A per-person named volume
+(`wardyn-drive-<home>`), created on first use with the `local` driver, labelled
+`wardyn.drive` / `wardyn.home`, and mounted at the reserved target. Nothing to
+configure. Reclaim is a command, not a button:
+`docker volume rm wardyn-drive-<home>` — `POST /drives/preview` prints the exact
+object name for a principal so you need not compute it.
+
+**`host_path` — you already mount the share.** Wardyn binds **one person's
+subdirectory** of a tree the *operator* mounted host-side. Wardyn never performs
+the share mount, never holds a share credential, and never creates a volume with
+`--opt type=cifs`: those options are stored with the volume and echoed by
+`docker volume inspect` to anyone who can reach the daemon. The recipe:
+
+1. **Mount the share on the host**, in `fstab` or a systemd mount unit:
+
+   ```
+   # SMB — the credential is a root-owned 0600 file, never a mount option in a table
+   //nas.corp/wardyn-drives /srv/wardyn-drives cifs credentials=/etc/wardyn/smb.cred,uid=1000,gid=1000,file_mode=0600,dir_mode=0700,vers=3.1.1 0 0
+   # or Kerberos instead of a service account: replace credentials= with sec=krb5
+   # NFS — export it Wardyn-dedicated and squashed to the sandbox uid
+   nas.corp:/export/wardyn-drives /srv/wardyn-drives nfs4 rw,hard,_netdev 0 0
+   ```
+
+   The matching NFS export line, on the NAS:
+   `/export/wardyn-drives 10.0.0.0/8(rw,all_squash,anonuid=1000,anongid=1000)`.
+
+2. **Make one `0700` subdirectory per person** under the mount point, named the
+   way the drive's home template resolves (`{username}`, `{sub}`, …). Wardyn does
+   **not** `mkdir` on a share — a missing home is a `422` at run create, not a
+   directory Wardyn invents inside somebody's NAS.
+
+3. **Set the ceiling**: `WARDYN_USER_DRIVE_HOST_ROOTS=/srv/wardyn-drives`
+   ([ENV.md](ENV.md)). Unset means **no `host_path` drive may be registered at
+   all** — the same fail-closed posture `WARDYN_MEMBER_WORKSPACE_ROOTS` takes,
+   one level up: a drive's `host_root` is authored in the database by an admin
+   and its subdirectories are bound into *other people's* sandboxes, so the
+   allowlist over it lives where a console compromise cannot reach it. The
+   driver re-checks the **symlink-resolved real path** against these roots as
+   the last thing before the container is created, so a home directory replaced
+   by a symlink out of the share after the drive was registered is refused at
+   run time too.
+
+**On the Compose stack, wardynd must be able to SEE the root.** The bind's
+source is resolved by the host daemon (wardynd's sandboxes are sibling
+containers), but the ceiling check resolves symlinks and fails closed on a path
+it cannot stat — so a `host_path` drive registered from a containerised wardynd
+is refused unless the share is visible inside it too. `docker-compose.yaml`
+forwards no roots variable and mounts no share by default (deliberately: the
+same posture `WARDYN_MEMBER_WORKSPACE_ROOTS` has — nothing is exposed until an
+operator names it). Add both, read-only and at the **same path** on each side,
+the way `WARDYN_WORKSPACES_ROOT` and `WARDYN_BEDROCK_AWS_DIR` already are — one
+volume line per configured root:
+
+```yaml
+services:
+  wardynd:
+    environment:
+      WARDYN_USER_DRIVE_HOST_ROOTS: "/srv/wardyn-drives"
+    volumes:
+      - /srv/wardyn-drives:/srv/wardyn-drives:ro
+```
+
+Read-only is enough for wardynd: it stats the tree and never writes to it. The
+sandbox's own mode comes from the allocation, not from this line. A
+`docker_volume` drive needs none of this — there is no host path to see.
+
+**Why every sandbox is uid 1000, and what that buys.** Every agent image is
+`USER agent` (uid 1000) and both images pre-create `/home/agent/drive` owned by
+agent, so a fresh managed volume inherits that ownership by Docker's copy-up.
+Isolation between people is the **bind of the subdirectory**, never the uid: a
+run sees its own home and has no path to the root or to anyone else's. NFS
+`AUTH_SYS` trusts the client's uid, which is why the export above is
+Wardyn-dedicated and squashed rather than a corporate home tree. An existing
+corporate home directory owned by a per-user uid is supported **read-only where
+readable, and refused otherwise**.
+
+**gVisor (CC2): turn `directfs` off.** A bind of a network-backed filesystem
+through `runsc` wants direct host-FD access disabled. This is a **daemon**
+setting, not a Wardyn one — add it to the runtime in `/etc/docker/daemon.json`
+and restart the daemon:
+
+```json
+{ "runtimes": { "runsc": { "path": "/usr/local/bin/runsc", "runtimeArgs": ["--directfs=false"] } } }
+```
+
+CC1 (`runc`) and CC3 (Kata) need nothing. Wardyn's own runsc tweaks are
+unchanged: this is an operator recipe, and the product does not rewrite your
+daemon config.
+
+**What a drive's SIZE means here.** Quoted verbatim, and the same sentence the
+console renders:
+
+> Wardyn never enforces a drive's size itself. On Kubernetes the size is the
+> volume request and the storage class decides whether it binds — block disks
+> do, network-share provisioners do not. On Docker a managed drive has no byte
+> cap, the same gap `disk_mib` has. A share is bounded by its own quota. The
+> size you see is the allocation, not a guarantee.
+
+Concretely on Docker: a `docker_volume` drive reports `enforcement: none` —
+`--storage-opt size` caps only a container's writable layer, never a volume, and
+an XFS project quota needs `CAP_SYS_ADMIN` the control plane must not hold. A
+`host_path` drive reports `enforcement: external`: the NAS's own quota binds it,
+and Wardyn displays the allocation.
+
 ### Capabilities: what one member, or one group, may do
 
 The role split above is deployment-wide. A **capability grant** is per-human: a

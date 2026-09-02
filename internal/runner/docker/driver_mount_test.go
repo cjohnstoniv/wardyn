@@ -7,6 +7,8 @@ package docker
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -14,6 +16,7 @@ import (
 	"github.com/moby/moby/api/types/mount"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // helper: run CreateSandbox with the given mounts and return the agent's applied
@@ -198,5 +201,166 @@ func TestCreateSandbox_DeniedMountsRejected(t *testing.T) {
 				t.Errorf("error should identify the denied mount, got: %v", err)
 			}
 		})
+	}
+}
+
+// ─── USER DRIVES (host_path): the same deny matrix, one object up ─────────────
+
+// driveHostRoot makes a real, symlink-resolved root with this person's home
+// directory under it — the shape a host_path drive actually has (the OPERATOR
+// mounted the share at the root; Wardyn binds one subdirectory of it).
+func driveHostRoot(t *testing.T) (root, home string) {
+	t.Helper()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve tempdir: %v", err)
+	}
+	root = filepath.Join(base, "shares")
+	home = filepath.Join(root, "alice")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	return root, home
+}
+
+// hostPathDrive is a resolved SHARE drive whose ObjectName is the per-person
+// subdirectory the resolver already derived (<host_root>/<home>).
+func hostPathDrive(objectName string) *types.DriveMount {
+	return &types.DriveMount{
+		Backend:     types.DriveBackendHostPath,
+		ObjectName:  objectName,
+		HomeName:    "alice",
+		Target:      runner.DriveTarget,
+		ReadOnly:    true,
+		Enforcement: types.StorageEnforcementExternal,
+	}
+}
+
+// TestCreateSandbox_HostPathDriveApplied is the happy path: a real subdirectory
+// of a configured root is bound at the reserved target, read-only.
+func TestCreateSandbox_HostPathDriveApplied(t *testing.T) {
+	root, home := driveHostRoot(t)
+	_, mounts, err := createWithDrive(t, hostPathDrive(home), []string{root})
+	if err != nil {
+		t.Fatalf("CreateSandbox with an in-root host_path drive: %v", err)
+	}
+	m := findMount(mounts, runner.DriveTarget)
+	if m == nil {
+		t.Fatalf("drive not mounted at %s; mounts=%+v", runner.DriveTarget, mounts)
+	}
+	if m.Type != mount.TypeBind {
+		t.Errorf("host_path drive mount Type = %q, want %q", m.Type, mount.TypeBind)
+	}
+	if m.Source != home {
+		t.Errorf("drive mount Source = %q, want %q (only the person's subdir is ever bound, never the root)", m.Source, home)
+	}
+	if !m.ReadOnly {
+		t.Error("drive mount ReadOnly = false, want true")
+	}
+}
+
+// TestCreateSandbox_DeniedDriveMountsRejected extends the workspace deny matrix
+// above to the ONE bind the driver synthesizes itself
+// (runner.Mount.DriveAuthored). Each row FAILS CreateSandbox closed, so no
+// agent container ever exists:
+//
+//   - the deny-list rows prove the drive runs runner.ValidateMount verbatim —
+//     it is not a privileged path that skips the matrix because an admin
+//     authored it;
+//   - the roots rows prove the deployment's WARDYN_USER_DRIVE_HOST_ROOTS
+//     ceiling is re-asserted HERE, on the symlink-RESOLVED real path, as the
+//     last thing before ContainerCreate — a share directory replaced by a
+//     symlink out of the root after the drive row was written is caught at bind
+//     time, not merely at authoring time;
+//   - the unset-roots row proves the fail-closed default: a daemon whose
+//     wardynd was never told where shares are mounted refuses every host_path
+//     drive rather than binding one on trust.
+func TestCreateSandbox_DeniedDriveMountsRejected(t *testing.T) {
+	root, home := driveHostRoot(t)
+
+	// A symlink INSIDE the root pointing at a directory outside it: lexically
+	// in-root, really not.
+	outside := filepath.Join(filepath.Dir(root), "elsewhere")
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	escaping := filepath.Join(root, "escape")
+	if err := os.Symlink(outside, escaping); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	cases := []struct {
+		name  string
+		src   string
+		roots []string
+	}{
+		{"under-etc", "/etc/wardyn-drives/alice", []string{"/etc/wardyn-drives"}},
+		{"socket-basename", filepath.Join(root, "docker.sock"), []string{root}},
+		{"containerd-socket-basename", filepath.Join(root, "containerd.sock"), []string{root}},
+		{"symlink-escapes-root", escaping, []string{root}},
+		{"outside-the-roots", home, []string{filepath.Join(filepath.Dir(root), "other-share")}},
+		{"no-roots-configured", home, nil},
+		{"traversal-source", root + "/../alice", []string{root}},
+		{"relative-source", "shares/alice", []string{root}},
+		{"missing-directory", filepath.Join(root, "no-such-home"), []string{root}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, _, err := createWithDrive(t, hostPathDrive(tc.src), tc.roots)
+			if err == nil {
+				t.Fatalf("CreateSandbox with denied drive source %q should FAIL CLOSED, got nil error", tc.src)
+			}
+			if !strings.Contains(err.Error(), "denied user drive") {
+				t.Errorf("error should identify the denied drive, got: %v", err)
+			}
+			if f.containers[agentContainerName(testSpec().RunID)] != nil {
+				t.Error("agent container exists after the refusal — the check must precede ContainerCreate")
+			}
+		})
+	}
+}
+
+// TestCreateSandbox_DriveTargetIsValidatedNotAuthored pins the ValidateTarget /
+// ValidateAuthoredTarget split from the driver's side: the drive's own mount
+// must pass (runner.DriveTarget is a legal place to put something), while a
+// drive whose target was corrupted to somewhere illegal is still refused.
+// Running ValidateAuthoredTarget here instead would make the drive fail its own
+// validation, since that function exists to reserve this exact path from
+// everybody else.
+func TestCreateSandbox_DriveTargetIsValidatedNotAuthored(t *testing.T) {
+	if err := runner.ValidateTarget(runner.DriveTarget); err != nil {
+		t.Fatalf("runner.ValidateTarget(%q) must pass — the drive mounts there: %v", runner.DriveTarget, err)
+	}
+	if err := runner.ValidateAuthoredTarget(runner.DriveTarget); err == nil {
+		t.Fatalf("runner.ValidateAuthoredTarget(%q) must refuse — the target is reserved from authors", runner.DriveTarget)
+	}
+
+	drive := dockerVolumeDrive()
+	drive.Target = "/usr/local"
+	if _, _, err := createWithDrive(t, drive, nil); err == nil {
+		t.Fatal("a drive targeting a system path must FAIL CLOSED, got nil")
+	}
+}
+
+// TestDriveHostMount_StampsDriveAuthored is the pin on the conversion itself.
+// A share drive that reached ContainerCreate as a runner.Mount WITHOUT
+// DriveAuthored set would still pass ValidateMount and would then skip the
+// deployment's host-root ceiling entirely — a silent widening of exactly the
+// gate the flag exists to trigger. Nothing else in the tree sets it, so this is
+// the only place that can go wrong.
+func TestDriveHostMount_StampsDriveAuthored(t *testing.T) {
+	drive := hostPathDrive("/srv/wardyn-drives/alice")
+	m := driveHostMount(drive)
+	if !m.DriveAuthored {
+		t.Error("driveHostMount did not stamp DriveAuthored — the host-root ceiling would be skipped")
+	}
+	if m.MemberAuthored {
+		t.Error("driveHostMount stamped MemberAuthored — a drive is admin-authored; the member gate's roots do not bound it")
+	}
+	if m.Source != drive.ObjectName {
+		t.Errorf("Source = %q, want the resolver's already-derived object name %q (never re-joined here)", m.Source, drive.ObjectName)
+	}
+	if m.Target != runner.DriveTarget || m.ReadOnly != drive.ReadOnly {
+		t.Errorf("driveHostMount(%+v) = %+v, want the target and mode carried through verbatim", *drive, m)
 	}
 }
