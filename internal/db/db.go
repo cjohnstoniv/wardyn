@@ -328,11 +328,22 @@ func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
 	return nil
 }
 
-// auditTriggerNames returns the ENABLED ("O") row/statement triggers on
-// audit_events, or nil when the table does not exist. Disabled is treated as
-// absent on purpose: ALTER TABLE ... DISABLE TRIGGER leaves the catalog row in
-// place, so a check that only asked whether the trigger EXISTS would pass on a
-// table where it never fires.
+// auditTriggerNames returns the FIRING row/statement triggers on audit_events,
+// or nil when the table does not exist. Disabled is treated as absent on
+// purpose: ALTER TABLE ... DISABLE TRIGGER leaves the catalog row in place, so a
+// check that only asked whether the trigger EXISTS would pass on a table where
+// it never fires.
+//
+// Firing is tgenabled 'O' (origin, the shipped state) OR 'A' (ALWAYS). 'A' is a
+// HARDENING, not a deviation: an ALWAYS trigger fires even under
+// session_replication_role = replica, which is exactly the bypass the sweep's
+// rule 3 exists to catch after the fact (store.auditChainWalk) — an operator who
+// applies it is closing that hole at the source. Reading 'A' as absent would
+// have made the next boot log the chain trigger as missing, DROP and re-create
+// it as plain 'O' (silently reverting the hardening), and an ALWAYS append-only
+// trigger would have made Migrate refuse the boot outright — bricking the
+// upgrade of the most careful deployments. 'D' (disabled) and 'R' (replica-only,
+// which does NOT fire for ordinary writes) stay absent, correctly.
 func auditTriggerNames(ctx context.Context, db migrationExecutor) (map[string]bool, error) {
 	var exists bool
 	if err := db.QueryRow(ctx, `SELECT to_regclass('audit_events') IS NOT NULL`).Scan(&exists); err != nil {
@@ -345,7 +356,7 @@ func auditTriggerNames(ctx context.Context, db migrationExecutor) (map[string]bo
 	if err := db.QueryRow(ctx, `
 		SELECT COALESCE(array_agg(tgname::text), ARRAY[]::text[])
 		FROM pg_trigger
-		WHERE tgrelid = 'audit_events'::regclass AND NOT tgisinternal AND tgenabled = 'O'`,
+		WHERE tgrelid = 'audit_events'::regclass AND NOT tgisinternal AND tgenabled IN ('O', 'A')`,
 	).Scan(&names); err != nil {
 		return nil, fmt.Errorf("db: read audit_events triggers: %w", err)
 	}

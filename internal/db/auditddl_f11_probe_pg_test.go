@@ -182,8 +182,8 @@ func TestPG_ProbeF11_AuditDDLProtected(t *testing.T) {
 		if err := pool.QueryRow(ctx, `SELECT tgenabled FROM pg_trigger WHERE tgname = 'audit_events_no_update' AND tgrelid = 'audit_events'::regclass`).Scan(&enabled); err != nil {
 			t.Fatalf("read trigger state: %v", err)
 		}
-		if enabled != "O" {
-			t.Errorf("audit_events_no_update tgenabled = %q after the probe, want 'O'", enabled)
+		if enabled != "O" && enabled != "A" {
+			t.Errorf("audit_events_no_update tgenabled = %q after the probe, want 'O' (shipped) or 'A' (hardened) — the app role disabled it", enabled)
 		}
 	})
 
@@ -218,7 +218,9 @@ func TestPG_ProbeF11_DroppedChainTriggerIsRestoredByMigrate(t *testing.T) {
 	triggerPresent := func() bool {
 		t.Helper()
 		var n int
-		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_trigger WHERE tgname = 'audit_events_chain' AND tgrelid = 'audit_events'::regclass AND tgenabled = 'O'`).Scan(&n); err != nil {
+		// Mirrors ensureAuditTriggers' predicate (db.go auditTriggerNames):
+		// 'O' or 'A', because ALWAYS is a hardening and not a missing trigger.
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_trigger WHERE tgname = 'audit_events_chain' AND tgrelid = 'audit_events'::regclass AND tgenabled IN ('O', 'A')`).Scan(&n); err != nil {
 			t.Fatalf("read pg_trigger: %v", err)
 		}
 		return n == 1

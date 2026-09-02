@@ -128,6 +128,13 @@ makes `wardynd` REFUSE TO START: restoring it means replaying the initial schema
 which is a far bigger blast radius than stopping and telling you. Either way the
 process no longer continues silently on a table whose guards are gone.
 
+A trigger you have hardened with `ALTER TABLE … ENABLE ALWAYS TRIGGER`
+(`tgenabled='A'`, so it fires even under `session_replication_role = replica` —
+the bypass the sweep otherwise only catches after the fact) is left **exactly as
+it is**: the boot check counts `'A'` as firing, never re-creates it as plain
+`'O'`, and never refuses over it. `'D'` (disabled) and `'R'` (replica-only, which
+does not fire for ordinary writes) are correctly read as not in force.
+
 Completeness survives an outage too. When a Postgres write fails, the event is
 not dropped: it is fsync'd, one JSON line at a time, to a local append-only spool
 (`WARDYN_AUDIT_SPOOL`, default `./data/audit-spool.jsonl`, empty to disable —
