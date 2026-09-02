@@ -174,9 +174,11 @@ func accessRolePosture(a *oidc.Authenticator) (before, after string, changes boo
 // rules mergeRoleMaps applies at login (chart collision, then the operator
 // allowlist) — mergeRoleMaps itself is unexported, so this replicates its
 // rule ORDER using the two accessors oidc exports for exactly this purpose
-// (ChartRoleMap, IsOperatorEmail). A chart row is never shadowed — the chart
-// always wins a collision, by construction. Sorted by value then source so
-// the response is deterministic across calls with the same underlying state.
+// (ChartRoleMap, IsOperatorEmail), through the one accessCollisionCause the
+// write path refuses on: read and write must never disagree about which
+// source shadows a value. A chart row is never shadowed — the chart always
+// wins a collision, by construction. Sorted by value then source so the
+// response is deterministic across calls with the same underlying state.
 func accessMappingsView(chart map[string]string, rows []types.RoleMapping, a *oidc.Authenticator) []accessMappingView {
 	out := make([]accessMappingView, 0, len(chart)+len(rows))
 	for value, role := range chart {
@@ -191,11 +193,8 @@ func accessMappingsView(chart map[string]string, rows []types.RoleMapping, a *oi
 			createdAt := m.CreatedAt
 			mv.CreatedAt = &createdAt
 		}
-		switch {
-		case chart[m.Value] != "":
-			mv.Shadowed, mv.ShadowCause = true, "chart"
-		case a.IsOperatorEmail(m.Value):
-			mv.Shadowed, mv.ShadowCause = true, "operator_allowlist"
+		if cause := accessCollisionCause(m.Value, chart, a); cause != "" {
+			mv.Shadowed, mv.ShadowCause = true, cause
 		}
 		out = append(out, mv)
 	}

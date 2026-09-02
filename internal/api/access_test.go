@@ -949,6 +949,43 @@ func TestAccess_GetShapeIncludesShadowedRow(t *testing.T) {
 	}
 }
 
+// TestAccess_ShadowCauseChartWinsOverAllowlist pins the ONE rule the read path
+// (accessMappingsView) and the write path (POST /access/mappings, which refuses
+// on the same cause) must never disagree about: a value present in BOTH the
+// chart and the operator allowlist reports "chart", the more specific and more
+// actionable source. Both paths now go through accessCollisionCause, and this
+// is the arm that fold makes load-bearing — the other three arms are pinned by
+// TestAccess_GetShapeIncludesShadowedRow above.
+func TestAccess_ShadowCauseChartWinsOverAllowlist(t *testing.T) {
+	const both = "ops@corp.example"
+	auth := newAccessAuth(t, map[string]string{both: oidc.RoleMember}, oidc.RoleMember, []string{both}, nil)
+	st := &roleMapStore{rows: []types.RoleMapping{
+		{ID: uuid.New(), Value: both, Role: oidc.RoleAdmin, CreatedBy: "admin@corp.example", CreatedAt: time.Now().UTC()},
+	}}
+	srv := accessServer(t, auth, st)
+
+	w := do(t, srv, http.MethodGet, "/api/v1/access", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp accessResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var console *accessMappingView
+	for i, m := range resp.Mappings {
+		if m.Value == both && m.Source == "console" {
+			console = &resp.Mappings[i]
+		}
+	}
+	if console == nil {
+		t.Fatalf("no console row for %q in %+v", both, resp.Mappings)
+	}
+	if !console.Shadowed || console.ShadowCause != "chart" {
+		t.Errorf("row colliding with chart AND allowlist = %+v, want shadowed=true shadow_cause=chart (chart is checked first)", *console)
+	}
+}
+
 // ─── preview ────────────────────────────────────────────────────────────────
 
 func TestAccess_PreviewExplicitClaims(t *testing.T) {
