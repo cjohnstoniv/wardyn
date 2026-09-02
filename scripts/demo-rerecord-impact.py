@@ -307,7 +307,14 @@ def impact(base: str) -> int:
                 # every className in the hunk and sent five episodes back to the
                 # camera for a styling change. grep_ui stays a substring test —
                 # there the question is presence, not identity.
-                pat = re.compile(r'(?<!\w)' + re.escape(n) + r'(?!\w)')
+                # Word-bound only the edges that ARE word characters: a fragment
+                # like `} still need` starts at a brace whose neighbour is always
+                # a word character (`length}`), and one like `exit {exitCode}` ends
+                # at a brace — bounding those edges could never match.
+                pat = re.compile(
+                    (r'(?<!\w)' if re.match(r'\w', n[0]) else '')
+                    + re.escape(n)
+                    + (r'(?!\w)' if re.match(r'\w', n[-1]) else ''))
                 for f, t in txt.items():
                     if pat.search(t):
                         why.add(f"on-camera label {lab!r} is in the diff of {f}")
