@@ -30,42 +30,38 @@ import type { Page } from "@playwright/test";
 // here retypes a sentence: a copy change must break this spec rather than let
 // the screen drift away from docs/design/user-drives-prompt.md §7.
 //
-// THE HARNESS CEILING, AND WHY HALF THIS FILE IS GUARDED
-// -----------------------------------------------------
-// scripts/e2e-backend.sh boots wardynd with `-runner none`, and
-// buildRunnerFromFlags (cmd/wardynd/boot_deps.go:171) hard-codes
-// RunnerTarget = "none" for that selection — there is no flag or env that sets
-// the target independently of `-runner` (the only knob is -runner /
-// WARDYN_RUNNER). types.ValidateUserDrive then requires
-// backend.RunnerTarget() == cfg.RunnerTarget, so on THIS deployment every one
-// of the four backends is refused and POST /api/v1/drives answers 400 for all
-// of them. Verified live against :8288:
+// WHAT THIS DEPLOYMENT CAN AND CANNOT MOUNT
+// ----------------------------------------
+// scripts/e2e-backend.sh boots wardynd with `-runner none` — it dispatches
+// nothing — but with WARDYN_RUNNER_TARGET=docker, the test-harness override
+// that moves the REGISTRATION boundary alone (cmd/wardynd/boot_flags.go, and
+// its own boot_runner_target_test.go). So GET /api/v1/drives answers
+// runner_target "docker", types.ValidateUserDrive accepts the two backends
+// DriveBackend.RunnerTarget() calls docker — `docker_volume` and `host_path` —
+// and the whole authoring walk is real here: a drive is registered, allocated,
+// previewed and deleted through the API and the browser, against the daemon.
 //
-//   GET  /api/v1/drives -> {"drives":[],"grants":[],
-//                           "host_roots_configured":false,"runner_target":"none"}
-//   POST /api/v1/drives -> 400 invalid drive: backend "docker_volume" cannot be
-//                          mounted by this deployment's runner (none)
+// Two ceilings remain, and both are ASSERTED rather than assumed:
 //
-// No drive row can exist here by ANY route — API or browser — and everything
-// downstream of one (an allocation, the resolver's preview, /me.user_drive)
-// is unreachable with it. So this file splits in two:
+//   THE K8S PAIR IS UNMOUNTABLE. `k8s_pvc` / `k8s_pvc_static` name the other
+//   target, so validateUserDrive answers 400 for them. The editor never offers
+//   them (backendsFor), which is why the runner-mismatch refusal is pinned on
+//   the WIRE below rather than through the picker — exactly where drive-editor
+//   .tsx says it stays: "the 400 stays on the API path, where `wardyn drive
+//   apply` will meet it".
 //
-//   1. What a runner-less deployment CAN prove, driven for real and unmocked:
-//      the screen over an empty registry, the editor offering no backend and
-//      rendering the SERVER's own refusal verbatim, the three roles' entry
-//      points, the governance door (profiles ARE writable here), the member's
-//      absent-drive arm, and — the strongest leg — a member ticking the
-//      checkbox and the REAL server answering the frozen REFUSED_NO_GRANT,
-//      which is itself proof the console put `drive` on the wire.
+//   NO WARDYN_USER_DRIVE_HOST_ROOTS. The harness sets none, so
+//   host_roots_configured is false and `host_path` is OFFERED WITH ITS REASON
+//   and disabled. Every test that touches that option reads the flag off the
+//   wire and asserts the arm this deployment is actually in, so a harness that
+//   grows roots stays green for the right reason.
 //
-//   2. The authoring walk, which needs a drive to exist: allocation, the
-//      delete refusal, the resolved preview and the backend picker's two
-//      offered options. Guarded by skipUnlessMountable(), which reads the
-//      SERVER's own runner_target — so the day the harness boots with a
-//      mounting target these run UNMODIFIED against the real daemon, seeding
-//      through the API exactly as governance.spec.ts does. They SKIP today,
-//      naming the cause. They are the one part of this file the current gate
-//      does not execute.
+// The authoring walk still carries skipUnlessMountable() — it reads the
+// SERVER's own runner_target, so the file needs no edit if the harness moves
+// again. But a guard that skips is a guard that can hide a dozen tests, which
+// is exactly what happened here before 814c20f6: THE FIRST TEST IN THIS FILE
+// ASSERTS THE TARGET, so a daemon booted without the override is one red test
+// rather than eight silent skips.
 //
 // What is spliced, and why, in each place:
 //
@@ -74,14 +70,15 @@ import type { Page } from "@playwright/test";
 //   Go (the operatorOnly route group, authz_test.go). fixtures.ts's own
 //   documented ceiling, not a shortcut taken here.
 //
-//   /me.user_drive. A member's allocation cannot exist on this backend (see
-//   above), so the three display moments are spliced onto the REAL /me
-//   response — route.fetch() + patch + refulfill, the technique
-//   fixtures.ts's mockMemberRole documents, so the shape around it stays
-//   genuine. The ABSENT arm needs no splice and is asserted unmocked, because
-//   the real backend genuinely answers user_drive:null for this caller. The
-//   resolver that fills the field is pinned server-side
-//   (internal/api/user_drives_test.go, internal/types/user_drive_test.go).
+//   /me.user_drive. A member's allocation is resolved from an OIDC session's
+//   claims, and this harness authenticates by bearer token, so the three
+//   display moments are spliced onto the REAL /me response — route.fetch() +
+//   patch + refulfill, the technique fixtures.ts's mockMemberRole documents,
+//   so the shape around it stays genuine. The ABSENT arm needs no splice and
+//   is asserted unmocked, because the real backend genuinely answers
+//   user_drive:null for this caller. The resolver that fills the field is
+//   pinned server-side (internal/api/user_drives_test.go,
+//   internal/types/user_drive_test.go).
 //
 // SERIAL IS PER-BLOCK, not per-file. Only two blocks below build state across
 // their own tests — the governance door (a profile one test writes and the
@@ -129,14 +126,13 @@ const tealActions = (page: Page) => page.locator("main").locator('button.bg-prim
 const drivesTable = (page: Page) => page.getByRole("table").first();
 const allocationsTable = (page: Page) => page.getByRole("table").nth(1);
 
-// The editor's four long option labels; on a runner-less deployment NONE of
-// them is offered, which is what the refusal block asserts.
-const BACKEND_LABELS = [
-  DRIVES.BACKEND_DOCKER_VOLUME,
-  DRIVES.BACKEND_HOST_PATH,
-  DRIVES.BACKEND_K8S_PVC,
-  DRIVES.BACKEND_K8S_PVC_STATIC,
-];
+// The editor's four long option labels, split the way DriveBackend.RunnerTarget()
+// splits them: ONE deployment is offered its own pair and never the other's
+// (drive-editor.tsx's backendsFor). The picker assertion below reads the target
+// off the wire and expects exactly one of these two lists.
+const DOCKER_BACKENDS: string[] = [DRIVES.BACKEND_DOCKER_VOLUME, DRIVES.BACKEND_HOST_PATH];
+const K8S_BACKENDS: string[] = [DRIVES.BACKEND_K8S_PVC, DRIVES.BACKEND_K8S_PVC_STATIC];
+const BACKEND_LABELS = [...DOCKER_BACKENDS, ...K8S_BACKENDS];
 
 // Reach /drives the way the product does: it has NO nav item, and the
 // Workspaces header's outline button is the one door from a nav-bearing
@@ -150,17 +146,26 @@ async function gotoDrives(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { name: DRIVES.TITLE, level: 1 })).toBeVisible();
 }
 
-// Skip a test that needs a drive to EXIST. Reads the deployment's own answer
-// rather than a hard-coded flag, so this file needs no edit the day the
-// harness boots with a mounting runner target — see the header.
-async function skipUnlessMountable(page: Page): Promise<void> {
+// The two substrates DriveBackend.RunnerTarget() can name. Anything else —
+// "none", the value `-runner none` resolves without the override, above all —
+// refuses every backend at validateUserDrive, and no drive can exist.
+const MOUNTABLE_TARGETS = ["docker", "k8s"];
+
+// The deployment's own answer, read off the wire rather than hard-coded, so
+// nothing in this file needs an edit the day the harness moves substrate.
+async function snapshot(page: Page): Promise<{ runner_target: string; host_roots_configured: boolean }> {
   const res = await page.request.get("/api/v1/drives", { headers: auth });
   expect(res.status(), "GET /api/v1/drives should answer for the admin bearer").toBe(200);
-  const target = ((await res.json()) as { runner_target?: string }).runner_target ?? "";
-  // The two substrates DriveBackend.RunnerTarget() can name. Anything else —
-  // "none" above all — refuses every backend at validateUserDrive.
+  return (await res.json()) as { runner_target: string; host_roots_configured: boolean };
+}
+
+// Skip a test that needs a drive to EXIST. It passes on this harness — see the
+// header — and the first test asserts the target, so this can never again go
+// back to hiding the walk behind a dozen quiet skips.
+async function skipUnlessMountable(page: Page): Promise<void> {
+  const { runner_target: target } = await snapshot(page);
   test.skip(
-    target !== "docker" && target !== "k8s",
+    !MOUNTABLE_TARGETS.includes(target),
     `this deployment's runner_target is "${target}", so validateUserDrive refuses every backend and no drive can be created — boot the e2e daemon with a mounting runner target to run the authoring walk`,
   );
 }
@@ -203,7 +208,19 @@ async function watchLaunch(page: Page): Promise<{ body: LaunchBody | null }> {
 // ---------------------------------------------------------------------------
 
 test.describe("drives — an empty registry says what it is, not what went wrong", () => {
-  test("the screen's standing surface: both empty states, the two notes, and ONE teal", async ({ page }) => {
+  test("the empty registry is the header and its empty state — no allocations, no preview, ONE teal", async ({
+    page,
+  }) => {
+    // THE HARNESS ASSERTION (see the header). The authoring walk below is
+    // guarded by skipUnlessMountable, and a daemon booted without
+    // WARDYN_RUNNER_TARGET turns that guard into eight silent skips. Asserting
+    // the target in the file's FIRST test makes that regression one red line.
+    const { runner_target: target } = await snapshot(page);
+    expect(
+      MOUNTABLE_TARGETS,
+      `runner_target is "${target}": scripts/e2e-backend.sh must boot wardynd with WARDYN_RUNNER_TARGET, or no drive can be registered and this file's authoring walk silently skips`,
+    ).toContain(target);
+
     await gotoDrives(page);
 
     // Rendered through withMono (the mount target is a literal), so the string
@@ -219,39 +236,35 @@ test.describe("drives — an empty registry says what it is, not what went wrong
     await expect(page.getByText(DRIVES.EMPTY_BODY)).toBeVisible();
     await expect(page.getByText(DRIVES.FETCH_FAILED_TITLE)).toHaveCount(0);
 
-    // The second empty state, and the standing facts that outlive it.
-    await expect(page.getByText(DRIVES.EMPTY_ALLOC_TITLE)).toBeVisible();
-    await expect(page.getByText(DRIVES.EMPTY_ALLOC_BODY)).toBeVisible();
-    await expect(page.getByText(DRIVES.PRECEDENCE)).toBeVisible();
-    // Two halves of ONE fact, and they render together: an allocation binds at
-    // the next RUN, a group membership only at the next SIGN-IN.
-    await expect(page.getByText(DRIVES.EFFECT_NOTE)).toBeVisible();
-    await expect(page.getByText(DRIVES.SIGNIN_NOTE)).toBeVisible();
+    // AND NOTHING ELSE. Mock state 1 is the header and this empty state: the
+    // allocations block gates on a drive existing (drives-screen.tsx), because
+    // "No allocations yet" over a registry with no drives is a confident answer
+    // to a question nobody can ask yet, and the preview travels with it. Every
+    // string that block owns is absent here, not merely empty.
+    for (const gone of [
+      DRIVES.ALLOC_TITLE,
+      DRIVES.ALLOC_LEAD,
+      DRIVES.PRECEDENCE,
+      DRIVES.EMPTY_ALLOC_TITLE,
+      DRIVES.EMPTY_ALLOC_BODY,
+      DRIVES.ADD_TITLE,
+      DRIVES.EFFECT_NOTE,
+      DRIVES.SIGNIN_NOTE,
+      DRIVES.PREVIEW_TITLE,
+      DRIVES.PREVIEW_LEAD,
+      PREVIEW.FIELD_CLAIMS_HINT,
+      GOV.PREVIEW_NOT_SAVED,
+    ]) {
+      // Substring, not exact: an absence assertion that only holds for the
+      // whole-element form would pass on a screen that split the sentence.
+      await expect(page.getByText(gone)).toHaveCount(0);
+    }
+    await expect(page.locator("#drive-preview-claims")).toHaveCount(0);
 
     // ONE teal, and with no drives it is the empty state's own New drive —
-    // never the allocation form's Allocate, which has no drive to bind.
+    // never the allocation form's Allocate, which does not exist yet.
     await expect(tealActions(page)).toHaveCount(1);
     await expect(page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true })).toHaveClass(/bg-primary/);
-  });
-
-  test("the preview is offered but parked: nothing is allocated, so there is nothing to resolve", async ({
-    page,
-  }) => {
-    await gotoDrives(page);
-
-    await expect(page.getByText(DRIVES.PREVIEW_TITLE, { exact: true })).toBeVisible();
-    await expect(page.getByText(DRIVES.PREVIEW_LEAD)).toBeVisible();
-    // The People step's own field and hint, verbatim — one accepted shape.
-    await expect(page.getByText(PREVIEW.FIELD_CLAIMS, { exact: true })).toBeVisible();
-    await expect(page.getByText(PREVIEW.FIELD_CLAIMS_HINT)).toBeVisible();
-    // The footer is governance's, reused rather than re-frozen (§7.1).
-    await expect(page.getByText(GOV.PREVIEW_NOT_SAVED)).toBeVisible();
-
-    // Disabled rather than offered-and-answered-with-nothing: with no
-    // allocation every answer would be PREVIEW_NONE, which teaches nothing.
-    await expect(page.getByRole("button", { name: DRIVES.PREVIEW_CTA, exact: true })).toBeDisabled();
-    await page.locator("#drive-preview-claims").fill("eng-contractors");
-    await expect(page.getByRole("button", { name: DRIVES.PREVIEW_CTA, exact: true })).toBeDisabled();
   });
 
   test("the deployment facts the console cannot derive come off the wire", async ({ page }) => {
@@ -272,11 +285,12 @@ test.describe("drives — an empty registry says what it is, not what went wrong
 });
 
 // ---------------------------------------------------------------------------
-// 2. The editor over that same deployment — the refusal is the SERVER's.
+// 2. The editor over an empty registry — it offers this runner's backends and
+//    nothing else, and every refusal it renders is the SERVER's.
 // ---------------------------------------------------------------------------
 
-test.describe("drives — the editor refuses what this deployment cannot mount", () => {
-  test("it opens IN PLACE, and the allocation form collapses and takes its teal with it", async ({ page }) => {
+test.describe("drives — the editor offers what this deployment can mount, and only that", () => {
+  test("it opens IN PLACE, under the list it edits — and Save is the screen's one teal", async ({ page }) => {
     await gotoDrives(page);
     await page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true }).click();
 
@@ -294,44 +308,61 @@ test.describe("drives — the editor refuses what this deployment cannot mount",
     await expect(editor.getByText(DRIVES.WRITABLE_HINT)).toBeVisible();
     await expect(editor.getByText(DRIVES.RECLAIM_HINT)).toBeVisible();
 
-    // The collapse: a disabled summary row where the add form was — DISABLED,
-    // not removed (§7's "a busy control is disabled, not removed").
-    await expect(page.getByTestId("drives-add-allocation-collapsed")).toBeVisible();
-    const allocate = page.getByRole("button", { name: DRIVES.ADD_CTA, exact: true });
-    await expect(allocate).toBeDisabled();
-    await expect(allocate).not.toHaveClass(/bg-primary/);
+    // With no drives there is no allocations block to collapse — the block
+    // gates on a drive existing, so opening the editor cannot summon one. The
+    // collapse itself is pinned in the authoring walk, where a drive exists.
+    await expect(page.getByTestId("drives-add-allocation-collapsed")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: DRIVES.ADD_CTA, exact: true })).toHaveCount(0);
 
-    // ONE default-weight action on the surface, and it is Save drive.
+    // ONE default-weight action on the surface, and it is Save drive — the
+    // empty state's own New drive hands its teal over for exactly this span.
     await expect(tealActions(page)).toHaveCount(1);
     await expect(page.getByRole("button", { name: DRIVES.SAVE_CTA, exact: true })).toHaveClass(/bg-primary/);
+    await expect(page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true })).not.toHaveClass(/bg-primary/);
     // Save waits for the one field that has no default.
     await expect(page.getByRole("button", { name: DRIVES.SAVE_CTA, exact: true })).toBeDisabled();
 
     await page.getByRole("button", { name: PEOPLE.CANCEL, exact: true }).click();
     await expect(page.getByTestId("drives-drive-editor")).toHaveCount(0);
-    await expect(page.getByTestId("drives-add-allocation-collapsed")).toHaveCount(0);
   });
 
-  test("a runner that mounts nothing is offered NO backend — not a picker whose every save 400s", async ({
+  test("the picker is this runner's two backends — never the other target's, and never one it cannot bind", async ({
     page,
   }) => {
+    const { runner_target: target, host_roots_configured: roots } = await snapshot(page);
     await gotoDrives(page);
     await page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true }).click();
     const editor = page.getByTestId("drives-drive-editor");
 
     // backendsFor() answers with the pair THIS runner can mount and nothing
-    // else, so an unrecognised target offers none rather than guessing a pair
-    // whose every save would be refused. On a docker deployment this is where
-    // the k8s pair's absence is asserted; here the whole set is absent, which
-    // is the same rule with a stronger input.
+    // else, so the picker never shows a pair whose every save would meet a 400
+    // (Q3). The offered/absent split is derived from the wire, not hard-coded:
+    // the SAME inversion of DriveBackend.RunnerTarget() the console makes.
     await expect(editor.getByText(DRIVES.FIELD_BACKEND, { exact: true })).toBeVisible();
+    const offered = target === "k8s" ? K8S_BACKENDS : DOCKER_BACKENDS;
     for (const label of BACKEND_LABELS) {
-      await expect(editor.getByRole("button", { name: label })).toHaveCount(0);
+      await expect(editor.getByRole("button", { name: label })).toHaveCount(offered.includes(label) ? 1 : 0);
     }
-    // …and with no backend chosen, neither of the backend-specific fields is
-    // drawn: they follow the selection, not the screen.
+
+    // A share this deployment cannot bind is OFFERED WITH ITS REASON, never
+    // offered and refused: with no WARDYN_USER_DRIVE_HOST_ROOTS set, the option
+    // is disabled and the reason IS its hint.
+    if (target === "docker") {
+      const share = editor.getByRole("button", { name: DRIVES.BACKEND_HOST_PATH });
+      if (roots) {
+        await expect(share).toBeEnabled();
+        await expect(editor.getByText(DRIVES.BACKEND_UNAVAILABLE_DOCKER_ROOTS)).toHaveCount(0);
+      } else {
+        await expect(share).toBeDisabled();
+        await expect(editor.getByText(DRIVES.BACKEND_UNAVAILABLE_DOCKER_ROOTS)).toBeVisible();
+      }
+    }
+
+    // The backend-specific fields follow the SELECTION, not the screen: the
+    // editor opens on the first offered backend, and neither of the other two
+    // backends' fields is drawn beside it.
+    await expect(page.locator("#drive-storage-class")).toHaveCount(target === "k8s" ? 1 : 0);
     await expect(page.locator("#drive-host-root")).toHaveCount(0);
-    await expect(page.locator("#drive-storage-class")).toHaveCount(0);
   });
 
   test("Save renders the SERVER's own refusal under the console's heading, and writes nothing", async ({
@@ -341,15 +372,25 @@ test.describe("drives — the editor refuses what this deployment cannot mount",
     await page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true }).click();
     const editor = page.getByTestId("drives-drive-editor");
 
-    await page.locator("#drive-name").fill("refused-by-the-runner");
+    // A name of nothing but punctuation. The backend/runner mismatch cannot be
+    // AUTHORED here — the picker offers only backends this runner can mount,
+    // which is the point of the test above — so the refusal exercised through
+    // the editor is one it can actually meet: driveSlug() empties this name,
+    // and a drive whose slug names no storage object is refused at the write.
+    // What is pinned is the RENDERING contract, and it is the same for every
+    // 400 the server composes.
+    await page.locator("#drive-name").fill("---");
     await expect(page.getByRole("button", { name: DRIVES.SAVE_CTA, exact: true })).toBeEnabled();
     await page.getByRole("button", { name: DRIVES.SAVE_CTA, exact: true }).click();
 
-    // The heading is the console's; the body is the SERVER's prose, which
-    // names the backend AND the runner — both of which a frozen sentence would
-    // have had to drop (§7.1's "deliberately absent" table).
+    // The heading is the console's; the body is the SERVER's prose, which names
+    // the field and the reason — both of which a frozen sentence would have had
+    // to drop (§7.1's "deliberately absent" table). PLAIN, not mono: it is
+    // prose that quotes a wire fact, not a literal.
     await expect(editor.getByText(DRIVES.SAVE_REFUSED_TITLE)).toBeVisible();
-    await expect(editor.getByText(/cannot be mounted by this deployment's runner/)).toBeVisible();
+    const refusal = editor.getByText(/must contain at least one letter or digit/);
+    await expect(refusal).toBeVisible();
+    await expect(refusal).not.toHaveClass(/font-mono/);
     // SAVE_ERROR is the unreachable-server arm, not a refusal — a 400 must
     // never render it.
     await expect(editor.getByText(DRIVES.SAVE_ERROR)).toHaveCount(0);
@@ -361,15 +402,27 @@ test.describe("drives — the editor refuses what this deployment cannot mount",
     await expect(page.getByText(DRIVES.EMPTY_TITLE)).toBeVisible();
   });
 
-  test("the same refusal on the WIRE, so the status and the message itself are pinned", async ({ page }) => {
+  test("the OTHER target's backend is refused on the WIRE, where `wardyn drive apply` meets it", async ({
+    page,
+  }) => {
+    const { runner_target: target } = await snapshot(page);
+    // The pair this runner CANNOT mount, named on the API path the picker
+    // deliberately does not offer. Otherwise a valid row — a share names its
+    // homes from a claim, so `sub`, not `hash` — which makes the backend the
+    // only thing wrong with it.
+    const foreign = target === "k8s" ? "docker_volume" : "k8s_pvc_static";
     const res = await page.request.post("/api/v1/drives", {
       headers: auth,
-      data: { name: "refused-on-the-wire", backend: "docker_volume", home_template: "hash", reclaim: "retain" },
+      data: { name: "refused-on-the-wire", backend: foreign, home_template: "sub", reclaim: "retain" },
     });
     // A statement about THIS deployment's substrate, so a 400 at the write
     // rather than a 422 on somebody's run three days later.
     expect(res.status()).toBe(400);
-    expect((await res.json()).error).toMatch(/cannot be mounted by this deployment's runner/);
+    const { error } = await res.json();
+    expect(error).toMatch(/cannot be mounted by this deployment's runner/);
+    // It names the runner it could not be mounted by — the half of the sentence
+    // that tells an admin which deployment they are on.
+    expect(error).toContain(`(${target})`);
 
     // And the registry is still empty — the refusal is not a partial write.
     const snap = await (await page.request.get("/api/v1/drives", { headers: auth })).json();
@@ -479,6 +532,13 @@ test.describe("drives — the registry is SUPER's, and it has no nav item for an
     // Reaching /drives directly renders the screen with its writes DISABLED —
     // the app's pattern for a tier-gated surface is a parked control, not a
     // refusal page (the same shape /governance uses for a non-securityOperator).
+    //
+    // THIS SHAPE IS THE FIXTURE'S, NOT THE PRODUCT'S: /me is spliced while the
+    // bearer stays the admin's, so GET /drives answers 200 and the screen
+    // renders populated-but-parked. A real security admin's GET is operatorOnly
+    // and answers 403, which today renders FETCH_FAILED — a transport sentence
+    // for a tier refusal.
+    // TODO(uifix2): re-pin to the 403 → OPERATOR_ONLY_REASON shape once the console fix merges
     await navToRoute(page, "/drives");
     await expect(page.getByRole("heading", { name: DRIVES.TITLE, level: 1 })).toBeVisible();
     await expect(page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true })).toBeDisabled();
@@ -767,6 +827,69 @@ test.describe("drives — the admin's authoring walk (needs a runner that can mo
     // It was a real write.
     await page.reload();
     await expect(drivesTable(page).getByRole("cell", { name: NAME, exact: true })).toBeVisible();
+  });
+
+  test("with a drive to allocate, the add form takes the teal — and hands it back to the editor", async ({
+    page,
+  }) => {
+    await gotoDrives(page);
+
+    // At rest the allocations block is drawn, and ITS Allocate is the screen's
+    // one default-weight action: the drives table's New drive is `outline`
+    // beside it.
+    await expect(page.getByText(DRIVES.ALLOC_TITLE, { exact: true })).toBeVisible();
+    await expect(page.getByText(DRIVES.PRECEDENCE)).toBeVisible();
+    // Two halves of ONE fact, and they render together: an allocation binds at
+    // the next RUN, a group membership only at the next SIGN-IN.
+    await expect(page.getByText(DRIVES.EFFECT_NOTE)).toBeVisible();
+    await expect(page.getByText(DRIVES.SIGNIN_NOTE)).toBeVisible();
+    await expect(page.getByText(DRIVES.EMPTY_ALLOC_TITLE)).toBeVisible();
+    await expect(page.getByText(DRIVES.EMPTY_ALLOC_BODY)).toBeVisible();
+    await expect(tealActions(page)).toHaveCount(1);
+    await expect(page.getByRole("button", { name: DRIVES.ADD_CTA, exact: true })).toHaveClass(/bg-primary/);
+
+    // Open the editor and the form COLLAPSES to its disabled summary row —
+    // disabled, not removed (§7's "a busy control is disabled, not removed") —
+    // and the teal moves to Save for exactly that span.
+    await page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true }).click();
+    await expect(page.getByTestId("drives-add-allocation-collapsed")).toBeVisible();
+    const allocate = page.getByRole("button", { name: DRIVES.ADD_CTA, exact: true });
+    await expect(allocate).toBeDisabled();
+    await expect(allocate).not.toHaveClass(/bg-primary/);
+    await expect(tealActions(page)).toHaveCount(1);
+    await expect(page.getByRole("button", { name: DRIVES.SAVE_CTA, exact: true })).toHaveClass(/bg-primary/);
+
+    // …and hands it back on cancel. Nothing was written.
+    await page.getByRole("button", { name: PEOPLE.CANCEL, exact: true }).click();
+    await expect(page.getByTestId("drives-add-allocation-collapsed")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: DRIVES.ADD_CTA, exact: true })).toHaveClass(/bg-primary/);
+    await expect(drivesTable(page).getByRole("row")).toHaveCount(2);
+  });
+
+  test("the preview is OFFERED with nothing allocated, and answers the honest none", async ({ page }) => {
+    await gotoDrives(page);
+
+    await expect(page.getByText(DRIVES.PREVIEW_TITLE, { exact: true })).toBeVisible();
+    await expect(page.getByText(DRIVES.PREVIEW_LEAD)).toBeVisible();
+    // The People step's own field and hint, verbatim — one accepted shape.
+    await expect(page.getByText(PREVIEW.FIELD_CLAIMS, { exact: true })).toBeVisible();
+    await expect(page.getByText(PREVIEW.FIELD_CLAIMS_HINT)).toBeVisible();
+    // The footer is governance's, reused rather than re-frozen (§7.1).
+    await expect(page.getByText(GOV.PREVIEW_NOT_SAVED)).toBeVisible();
+
+    // Parked on EMPTY CLAIMS only — there is nothing to resolve without them.
+    const preview = page.getByRole("button", { name: DRIVES.PREVIEW_CTA, exact: true });
+    await expect(preview).toBeDisabled();
+
+    // With claims it is LIVE even though nothing is allocated: the server's
+    // honest "no drive is allocated to these claims" is the answer an admin
+    // checking their work came here for, and withholding it behind a disabled
+    // button would have taught them nothing.
+    await page.locator("#drive-preview-claims").fill("eng-contractors");
+    await expect(preview).toBeEnabled();
+    await preview.click();
+    await expect(page.getByText(DRIVES.PREVIEW_NONE)).toBeVisible();
+    await expect(page.getByTestId("drives-preview-result")).toHaveCount(0);
   });
 
   test("the editor reopens on the SAVED drive, and a rename persists", async ({ page }) => {

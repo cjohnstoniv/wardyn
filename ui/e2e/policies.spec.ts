@@ -452,18 +452,19 @@ test("create form surfaces the server-side error for an unknown spec key (strict
 // collision would surface as one of them silently disappearing inside a running
 // sandbox rather than as a refusal anybody could act on.
 //
-// The expected text is derived from the FROZEN canon
-// (DRIVE_MEMBER.REFUSED_TARGET_RESERVED, user-drives-prompt.md §7.7) rather
-// than retyped. The shipped 400 differs from canon in two presentational ways
-// the caller's own convention adds — the field INDEX (workspace_mounts[0]) and
-// backticks around the path — so both are made optional here; the sentence
-// itself must match the canon word for word.
-const RESERVED_TARGET_400 = new RegExp(
-  DRIVE_MEMBER.REFUSED_TARGET_RESERVED.replace("workspace_mounts:", "workspace_mounts\\[\\d+\\]:").replace(
-    "/home/agent/drive",
-    "`?/home/agent/drive`?",
-  ),
-);
+// The expected text IS the frozen canon (DRIVE_MEMBER.REFUSED_TARGET_RESERVED,
+// user-drives-prompt.md §7.7) — asserted as a string, byte for byte, with no
+// regex softening in between. It can be, because the canon spells exactly what
+// the wire carries: runner.ValidateAuthoredTarget composes the sentence and the
+// caller prefixes the field index its own convention already adds, so the canon
+// entry spells `workspace_mounts[0]` too, and the path is PLAIN — a mono span
+// is a display concern the console applies, never bytes baked into the string
+// (internal/runner/mount.go:76, ui/src/app/lib/user-drives-copy.ts's backtick
+// rule). A message that drifts from canon in either direction fails here.
+//
+// Substring, because the handler prefixes its own "invalid policy spec: " —
+// that prefix is the API's, shared by every spec refusal, and is pinned by the
+// sibling cases above rather than folded into this feature's canon.
 
 test("create form surfaces the reserved user-drive target refusal (HTTP 400)", async ({ page }) => {
   const name = uniqueName("reservedtarget");
@@ -486,7 +487,7 @@ test("create form surfaces the reserved user-drive target refusal (HTTP 400)", a
 
   // validatePolicySpec routes every AUTHORED target through
   // runner.ValidateAuthoredTarget, and its message is surfaced verbatim.
-  await expect(dialog.getByText(RESERVED_TARGET_400)).toBeVisible();
+  await expect(dialog.getByText(DRIVE_MEMBER.REFUSED_TARGET_RESERVED)).toBeVisible();
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(editorDialog(page)).toBeHidden();
