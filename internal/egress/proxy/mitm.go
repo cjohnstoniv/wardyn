@@ -74,6 +74,16 @@ func newCertAuthority(certPEM, keyPEM []byte) (*certAuthority, error) {
 // leafFor returns (minting + caching on first use) a leaf certificate for host
 // signed by the CA, so a sandbox that trusts the CA accepts the proxy's
 // termination of TLS to host.
+//
+// host may be a LITERAL IP, and then the SAN has to be an IP SAN: crypto/x509's
+// VerifyHostname (like OpenSSL/curl and Node) matches an IP target ONLY against
+// IPAddresses, so a leaf carrying "10.40.2.11" as a DNSName is rejected with
+// "doesn't contain any IP SANs". That is not a corner case -- a private-endpoint
+// mirror named by an EgressRedirect To is a literal IP by construction and
+// isMITMHost admits it for token injection (substituteArtifactEgress writes the
+// address onto mitmHosts), so a DNS-only leaf left the token-injection lane for
+// such a mirror dead on the data path while test-redirect -- which never
+// MITMs -- still reported the redirect as reached.
 func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 	host = strings.TrimSuffix(strings.ToLower(host), ".")
 	a.mu.Lock()
@@ -95,11 +105,19 @@ func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
 		Subject:      pkix.Name{CommonName: host},
-		DNSNames:     []string{host},
 		NotBefore:    now.Add(-1 * time.Hour),
 		NotAfter:     now.Add(leafCertTTL),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	// Exactly one SAN kind, chosen by what the CONNECT host actually is: an IP
+	// SAN for a literal (the only SAN a client verifying an IP target consults),
+	// a DNS SAN otherwise. Never both -- a hostname is never a valid IP SAN, and
+	// an IP spelled as a DNSName is the bug this branch exists to prevent.
+	if ip := net.ParseIP(host); ip != nil {
+		tmpl.IPAddresses = []net.IP{ip}
+	} else {
+		tmpl.DNSNames = []string{host}
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, a.caCert, &key.PublicKey, a.caKey)
 	if err != nil {

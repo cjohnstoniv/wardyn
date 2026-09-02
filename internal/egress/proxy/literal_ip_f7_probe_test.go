@@ -33,14 +33,15 @@ import (
 )
 
 // TestF7_LeafForLiteralIP_VerifiesAsIPSAN: a token-carrying redirect whose To
-// is a literal IP puts "10.40.2.11:443" on mitmHosts (artifact_redirect.go:281)
-// and handleConnect TLS-terminates the sandbox's CONNECT 10.40.2.11:443 with
-// leafFor("10.40.2.11") (proxy.go:822-829 -> mitm.go:236-242 -> :77). leafFor
-// mints DNSNames=[host] only (mitm.go:98) — no IPAddresses SAN — so every
-// sandbox TLS client (Go, OpenSSL/curl, Node) rejects the leaf for an IP
-// target. The token-injection lane for a literal-IP mirror is therefore dead
-// on the data path, while test-redirect (which never MITMs: grants nil,
-// site_config_probe.go:852) reports "reached".
+// is a literal IP puts "10.40.2.11:443" on mitmHosts (planArtifactRedirect in
+// artifact_redirect.go) and handleConnect TLS-terminates the sandbox's
+// CONNECT 10.40.2.11:443 with leafFor("10.40.2.11") (Proxy.handleConnect ->
+// Proxy.mitmConnect -> certAuthority.leafFor). leafFor mints DNSNames=[host]
+// only — no IPAddresses SAN — so every sandbox TLS client (Go, OpenSSL/curl,
+// Node) rejects the leaf for an IP target. The token-injection lane for a
+// literal-IP mirror is therefore dead on the data path, while test-redirect
+// (which never MITMs: grants nil, handleTestSiteConfigRedirect in
+// site_config_probe.go) reports "reached".
 func TestF7_LeafForLiteralIP_VerifiesAsIPSAN(t *testing.T) {
 	certPEM, keyPEM := genTestCA(t)
 	ca, err := newCertAuthority(certPEM, keyPEM)
@@ -65,11 +66,11 @@ func TestF7_LeafForLiteralIP_VerifiesAsIPSAN(t *testing.T) {
 
 // TestF7_LiteralIPTrust_RefusesOwnSubnetAndControlPlane: the InternalHosts
 // lift refuses an address on the proxy's own interface subnets or its
-// control-plane host (liftInternalHost, egress_target.go:359 ->
-// onOwnSubnetOrControlPlane :385) so a declaration can never reach the
-// sidecar's docker-network neighbours (postgres/dex/registry). The literal-IP
-// trust — evaluate step 0 (proxy.go:565-573) and egressTarget's literal branch
-// (egress_target.go:113-115) — consults only isBlockedIP + AllowsLiteralIP and
+// control-plane host (liftInternalHost -> onOwnSubnetOrControlPlane, both in
+// egress_target.go) so a declaration can never reach the sidecar's
+// docker-network neighbours (postgres/dex/registry). The literal-IP
+// trust — Proxy.evaluate's literal-IP step 0 and egressTarget's literal branch
+// (trustsExactLiteralIP) — consults only isBlockedIP + AllowsLiteralIP and
 // never that exclusion. An exact allowlist entry for a neighbour's address
 // (the shape an egress-redirect To writes via substituteArtifactEgress, or
 // the probe run's []string{toHost}) is trusted straight through.

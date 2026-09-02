@@ -85,9 +85,10 @@ func f1SeedApproval(f *scopeFixture, runID uuid.UUID, kind types.ApprovalKind) u
 // must never gain the host, and a FUTURE run of W' must not inherit it through
 // unionWorkspaceEgress (the only path a persisted `always` reaches a proxy).
 //
-// approvals.go:638 (target := primaryWorkspace(run)) and :690-699 (the
-// tie-break) are the lines under test; runs.go:167 is where WorkspaceIDs is
-// stamped and workspace_egress.go:58 is where a future run reads it back.
+// resolveAlwaysTarget's `target := primaryWorkspace(run)` and primaryWorkspace's
+// tie-break (both in approvals.go) are the code under test; handleCreateRun
+// (runs.go) is where WorkspaceIDs is stamped and unionWorkspaceEgress
+// (workspace_egress.go) is where a future run reads it back.
 func TestF1_AlwaysTargetsPrimaryWorkspaceOnly(t *testing.T) {
 	type shape struct {
 		name string
@@ -159,7 +160,8 @@ func TestF1_AlwaysTargetsPrimaryWorkspaceOnly(t *testing.T) {
 
 				// FUTURE-RUN HALF: what a fresh run of each workspace would inherit.
 				// unionWorkspaceEgress is the single reader of ApprovedEgress /
-				// DeniedEgress on the run-create path (runs_create.go:726).
+				// DeniedEgress on the run-create path (unionRunEgress in
+				// runs_create.go).
 				wsW, _ := f.store.GetWorkspace(t.Context(), w)
 				wsWp, _ := f.store.GetWorkspace(t.Context(), wp)
 				var specWp types.RunPolicySpec
@@ -211,9 +213,10 @@ func f1Do(t *testing.T, f *scopeFixture, c f1Caller, path, body string) *httptes
 
 // f1Want is the decide-authz matrix in ONE readable function: who may decide
 // what, on whose run, at which scope. It is the executable form of
-// approvals.go:387-445 (member gate), :392 (security tier passes every kind on
-// every run), :604 (`always` is operator-only) and http.go:510-516
-// (isSecurityOperator's no-OIDC-human arm = admin token).
+// authorizeMemberDecision (the member gate, whose security-tier arm passes
+// every kind on every run) and resolveAlwaysTarget (`always` is operator-only),
+// both in approvals.go, plus isSecurityOperator in http.go (its no-OIDC-human
+// arm = admin token).
 func f1Want(c f1Caller, kind types.ApprovalKind, ownRun bool, scope types.ApprovalScope) int {
 	switch c.tier {
 	case "anonymous":
@@ -331,7 +334,7 @@ func f1SeedDecidedAlways(f *scopeFixture, state types.ApprovalState, decidedAt t
 // Sequence an operator can produce in two clicks: deny·always H (t1), then,
 // having changed their mind, approve·always H (t2 > t1). The live write-backs
 // leave the workspace with H on approved_egress and off denied_egress. The boot
-// heal (ReconcileWorkspaceEgressDecisions, approvals.go:718-754) then walks
+// heal (ReconcileWorkspaceEgressDecisions in approvals.go) then walks
 // states in the fixed order [APPROVED, DENIED] — never by decided_at — so the
 // OLDER deny is applied LAST and silently reverses the operator's newest
 // decision on every restart, with no audit event.
@@ -362,13 +365,14 @@ func TestF1_ReconcileDoesNotReverseNewerDecision(t *testing.T) {
 
 // TestF1_ReconcileDoesNotResurrectRemovedHost — EXPECTED RED on fa910735 (H3).
 //
-// approvals.go:636-637 promises an `always` is "reversible via the
+// resolveAlwaysTarget (approvals.go) promises an `always` is "reversible via the
 // denied-egress/approved-egress PUTs". An operator who approve·always'd H and
 // later removed it through PUT /workspaces/{id}/approved-egress (the documented
-// undo, workspaces.go:626-672) gets H back on the allowlist at the next boot:
-// the approval row still says APPROVED/always and reconcile re-applies it
-// (approvals.go:747). That is a durable, fail-OPEN widening of a workspace the
-// operator explicitly narrowed, and nothing audits it.
+// undo, handleSetApprovedEgress in workspaces.go) gets H back on the allowlist
+// at the next boot: the approval row still says APPROVED/always and reconcile
+// re-applies it (in ReconcileWorkspaceEgressDecisions). That is a durable,
+// fail-OPEN widening of a workspace the operator explicitly narrowed, and
+// nothing audits it.
 func TestF1_ReconcileDoesNotResurrectRemovedHost(t *testing.T) {
 	f := newScopeFixture(t)
 	ws := f1SeedWorkspace(f, "ws-undo", f.memberID)

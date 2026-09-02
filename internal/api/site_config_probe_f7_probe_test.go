@@ -151,7 +151,7 @@ func f7ToScheme(to string) string {
 
 // TestF7_RedirectProbeTo_Probe1DialsOnlyTheStoredTo is the table the lane
 // asked for. Inputs are fed through the REAL hostrules.HostOf (the handler's
-// own extraction, site_config_probe.go:848-850) — not the test-local
+// own extraction, in handleTestSiteConfigRedirect) — not the test-local
 // hostOfForTest copy in site_config_noproxy_test.go, which skips the
 // ValidApprovedHost gate and therefore cannot see what the handler sees.
 func TestF7_RedirectProbeTo_Probe1DialsOnlyTheStoredTo(t *testing.T) {
@@ -193,14 +193,12 @@ func TestF7_RedirectProbeTo_Probe1DialsOnlyTheStoredTo(t *testing.T) {
 			red:  types.EgressRedirect{From: "", To: "https://100.64.5.7"},
 		},
 		{
-			name:         "http:// From with literal-IP To — the swap does reach the stored To, but curl then speaks cleartext http into its TLS port",
-			red:          types.EgressRedirect{From: "http://mirror.example.com", To: "https://10.40.1.5"},
-			wantRedToday: "H-1",
+			name: "http:// From with literal-IP To — the swap reaches the stored To and curl speaks To's TLS, not From's cleartext",
+			red:  types.EgressRedirect{From: "http://mirror.example.com", To: "https://10.40.1.5"},
 		},
 		{
-			name:         "plain-http To (http://IP:8080) — the swap keeps From's https scheme against a plain-http port",
-			red:          types.EgressRedirect{From: "pypi.org", To: "http://10.40.2.11:8080"},
-			wantRedToday: "H-4",
+			name: "plain-http To (http://IP:8080) — the swap speaks To's cleartext, not From's implied https",
+			red:  types.EgressRedirect{From: "pypi.org", To: "http://10.40.2.11:8080"},
 		},
 	}
 	for _, c := range cases {
@@ -253,7 +251,7 @@ func TestF7_RedirectProbeTo_Probe1DialsOnlyTheStoredTo(t *testing.T) {
 
 // TestF7_IPv6LiteralTo_IsRefusedAtWriteOrBracketed pins the IPv6 half of the
 // literal-IP question. Today hostrules.HostOf cannot represent an IPv6
-// literal at all (the '[' and ':' fail ValidApprovedHost, hostrules.go:137-160),
+// literal at all (the '[' and ':' fail hostrules.ValidApprovedHost),
 // so validateSiteConfig refuses every IPv6 To and redirectProbeTo is never
 // reached with one. If that gate is ever loosened, the swap MUST bracket HOST2
 // (curl's --connect-to syntax) and the run's allowlist entry must be a
@@ -292,7 +290,8 @@ func TestF7_IPv6LiteralTo_IsRefusedAtWriteOrBracketed(t *testing.T) {
 // public host and got a well-formed reply, which is the definition of "the
 // confinement class does not structurally block From". The script must exit
 // the bypass sentinel (250), never 0 ("From is correctly blocked when dialed
-// directly (redirect enforced)", site_config_probe_classify.go:220-226).
+// directly (redirect enforced)", classifyRedirectProbe's exit-0 arm in
+// site_config_probe_classify.go).
 //
 // Expected RED at fa910735 (H-2): probe 2's `-f` turns the 403 into a curl
 // failure, the `&& exit 250` is skipped, and the script exits 0.

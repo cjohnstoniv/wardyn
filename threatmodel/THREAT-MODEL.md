@@ -265,7 +265,7 @@ masks raw PTY bytes and is unaffected.
   registered pre-restart and whose cast uploads post-restart hits the identical
   empty-snapshot fail-open at `replicas: 1`.
 
-### 4.2 The unconditional IP guard, and its one admin-authored exception
+### 4.2 The unconditional IP guard, and its two admin-authored exceptions
 
 A literal-IP target is denied before policy or approval run (`evaluate` step 0,
 `internal/egress/proxy/proxy.go`), and every direct-dialed hostname is re-vetted
@@ -276,15 +276,27 @@ policy verdict — a host `allow_all_egress` would pass is still denied when it
 resolves into one of those ranges. The guard lives in the proxy's code, not the
 network topology, so unlike L0 it does not depend on gatewaylessness.
 
-**The one admin-authored exception** is `SiteConfig.InternalHosts`
+**The first admin-authored exception** is `SiteConfig.InternalHosts`
 (`vetHostLift`/`Proxy.vetHost`): it lifts the RFC1918/ULA/CGNAT slice ONLY —
 never loopback/link-local/metadata/multicast/NAT64 — for a declared hostname,
 scoped to declared CIDRs, and never for an address on the proxy's own interface
-subnets or its resolved control-plane host. On Docker that excludes the
-`wardyn-internal` neighbours (Postgres/Dex/registry); on Kubernetes those are
-ClusterIP Services off the pod's own interface, so there the declared `cidrs` are
-the bound (`docs/OPERATIONS.md` § Internal hosts). The metadata address stays
-unreachable regardless of what an operator declares.
+subnets or its resolved control-plane host (`Proxy.onOwnSubnetOrControlPlane`).
+On Docker that excludes the `wardyn-internal` neighbours (Postgres/Dex/registry);
+on Kubernetes those are ClusterIP Services off the pod's own interface, so there
+the declared `cidrs` are the bound (`docs/OPERATIONS.md` § Internal hosts). The
+metadata address stays unreachable regardless of what an operator declares.
+
+**The second** is the literal-IP trust an `EgressRedirect` whose `to` is a bare
+address rides on (`Proxy.trustsExactLiteralIP`, consulted by `evaluate` step 0
+and `Proxy.egressTarget`): the address `substituteArtifactEgress` writes into the
+covered runs' `allowed_domains` is dialed without the post-resolution re-check,
+because a literal has no hostname behind it to rebind. It is bounded the same way
+and by the same predicates as the first — `blockPrivate` only, so no
+loopback/link-local/metadata/NAT64 literal is ever trusted however it is
+allow-listed, and never an address on the proxy's own subnets or its
+control-plane host — and it is narrower in one respect: it admits only the EXACT
+address an operator typed, never a range. `denied_domains` still wins over both
+(`RunPolicy.AllowsLiteralIP` checks the deny lists first).
 
 The internal model gateway (residual #29) is NOT a second exception: its relaxed
 per-request vet (`Proxy.vetTrustedHost`, reached only via `Proxy.gatewayTarget`)
