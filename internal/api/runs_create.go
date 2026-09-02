@@ -106,12 +106,12 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	var newRepos []types.WorkspaceRepo
 	for _, src := range ws.Sources {
 		// The stored target becomes an in-container mount/clone/scratch target
-		// here, so re-validate it against the same deny-list runner.ValidateTarget
-		// applies at onboarding — a row written before that check existed must not
+		// here, so re-validate it against the same deny-list
+		// runner.ValidateAuthoredTarget applies at onboarding — a row written before that check existed must not
 		// ride straight past the gate onto a system path (e.g. /home/agent/.claude).
 		target := src.Target
 		if target != "" {
-			if verr := runner.ValidateTarget(target); verr != nil {
+			if verr := runner.ValidateAuthoredTarget(target); verr != nil {
 				return nil, "", http.StatusUnprocessableEntity, fmt.Errorf("workspace %s source target: %w", ws.ID, verr)
 			}
 		}

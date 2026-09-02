@@ -58,15 +58,22 @@ type bootFlags struct {
 	memberRootsMap      *string
 	memberWritableRoots *string
 	memberWritableDeny  *string
-	uiDir               *string
-	runnerSel           *string
-	identitySel         *string
-	secretStoreSel      *string
-	recordingSel        *string
-	confinementMap      *string
-	trustDomain         *string
-	controlURL          *string
-	policyPath          *string
+	// userDriveHostRoots is the SAME class of knob one level up: where an ADMIN
+	// may point a host_path user drive, whose per-person subdirectories Wardyn
+	// then binds into OTHER PEOPLE's sandboxes. Parsed by
+	// runner.ParseUserDriveHostRoots — same CSV shape, same refuse-boot on a
+	// malformed entry, same WARN on a root so wide it bounds nothing — and
+	// unset means no host_path drive may be authored at all.
+	userDriveHostRoots *string
+	uiDir              *string
+	runnerSel          *string
+	identitySel        *string
+	secretStoreSel     *string
+	recordingSel       *string
+	confinementMap     *string
+	trustDomain        *string
+	controlURL         *string
+	policyPath         *string
 	// trustedCAFile is WARDYN_TRUSTED_CA_FILE (see trusted_ca.go): a PATH to a
 	// PEM bundle of additional roots a corporate TLS-inspecting middlebox signs
 	// with. Same shape as policyPath above (a path read once at boot, not a
@@ -219,6 +226,7 @@ func parseBootFlags() *bootFlags {
 		memberRootsMap:          flagEnv("member-workspace-roots-map", "WARDYN_MEMBER_WORKSPACE_ROOTS_MAP", "", `optional per-member override of -member-workspace-roots, as JSON {"<principal>": ["/abs/root", ...]} keyed by OIDC sub or email. A principal with an entry uses ONLY that entry — per-member REPLACES the shared list (it exists to narrow, so a union would make adding a row widen). An empty list for a principal means that member mounts nothing.`),
 		memberWritableRoots:     flagEnv("member-writable-roots", "WARDYN_MEMBER_WRITABLE_ROOTS", "", "comma-separated absolute host directories where a MEMBER may mark their own mount WRITABLE. Empty (the default) = no writable member mounts at all; a member's mounts are read-only. Operators keep their unrestricted per-source writable opt-in."),
 		memberWritableDeny:      flagEnv("member-writable-deny", "WARDYN_MEMBER_WRITABLE_DENY", "", "comma-separated absolute host directories carved OUT of -member-writable-roots. Deny WINS over allow, so a subtree inside a writable root can be pinned read-only for members."),
+		userDriveHostRoots:      flagEnv("user-drive-host-roots", "WARDYN_USER_DRIVE_HOST_ROOTS", "", "comma-separated absolute host directories a USER DRIVE of backend host_path may be registered inside — typically the mount point of an NFS/SMB share the operator mounted host-side. A drive's host_root is allowed only if its CANONICALIZED real path is inside one of these (symlink-resolved, the bind-mount deny-list applied, must exist on this host), and only that person's SUBDIRECTORY is ever bound into a run. Empty (the default) = no host_path drive may be registered at all; Wardyn-managed volume drives are unaffected. Point it at the share's mount point, NEVER $HOME or /."),
 		uiDir:                   flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
 		runnerSel:               flagEnv("runner", "WARDYN_RUNNER", "none", `runner substrate: "none" or a registered confinement substrate ("docker" in -tags docker builds)`),
 		identitySel:             flagEnv("identity", "WARDYN_IDENTITY", "embedded", `identity provider (pluggable seam): "embedded" (default)`),

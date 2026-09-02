@@ -46,6 +46,12 @@ func TestRequestDTOs_ZeroValueOmitOptionals(t *testing.T) {
 		// override the contract's own resolved default instead of leaving it
 		// alone (ReadOnly's whole point is nil == "no narrowing").
 		{"WorkspaceSelection", client.WorkspaceSelection{}, []string{"workspace_id"}},
+		// The mirror for a user drive: `enabled` is ALWAYS on the wire (a drive
+		// selection that says nothing is not a selection), and ReadOnly must be
+		// omitempty for exactly WorkspaceSelection.ReadOnly's reason — nil means
+		// "no narrowing", and posting `"read_only":null` would be a value the
+		// server has to special-case instead of an absence it can ignore.
+		{"DriveSelection", client.DriveSelection{}, []string{"enabled"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b, err := json.Marshal(tc.req)

@@ -889,6 +889,41 @@ hiding them would repeat the failure mode we are designed to avoid.
     ABSENT (one row per keystroke would log every name an admin looked up), so
     the audit trail records connector failures, not who was searched for.
 
+32. **The one-line installer trusts the release ORIGIN: the compose definition
+    has no digest, and every other check it makes is same-origin.** `install.sh`
+    pulls `deploy/compose/docker-compose.yaml` from the release tag on
+    `raw.githubusercontent.com` and writes it into `${WARDYN_HOME}` unverified —
+    and that file decides which images run, which ports publish on which
+    interface, whether `WARDYN_LOCAL_MODE` is on, and what is bind-mounted. An
+    earlier wording of this residual said everything else the installer places
+    *is* verified. That overclaimed, in three places:
+    - The CLI binary is hash-checked, and fail-closed (`install_cli` computes
+      `sha256_hex` and dies on a mismatch rather than installing it) — but
+      against a `SHA256SUMS` fetched from the SAME
+      `releases/download/${VERSION}` base as the binary. That defeats a
+      corrupted or swapped asset, not a tampered release, which would serve a
+      matching list. `install_cli` never fetches `SHA256SUMS.sig` or
+      `SHA256SUMS.pem`: the `cosign verify-blob` in `docs/VERIFY.md` §5 is the
+      OPERATOR's manual step, and the installer runs no cosign at all.
+    - The images are pulled by TAG (`docker compose pull`, and `mint_age_key`'s
+      `docker run … -gen-age-key` before it). They are cosign-verifi**able** by
+      the operator (`docs/VERIFY.md` §1); the installer verifies none of them.
+    - So on a fresh install the FIRST foreign code to execute on the box is the
+      wardynd image's `-gen-age-key` entrypoint, which `mint_age_key` runs to
+      mint the secret-store key — before `docker compose up -d --no-build`, and
+      before the operator has read the compose file or anything else.
+
+    Accepted for 0.7 on one honest ground, stated as what it is: `curl … | sh`
+    is a decision to trust this project's release origin for one command, and
+    this installer does not pretend to be more than that. What it fetches stays
+    on disk — `${WARDYN_HOME}/docker-compose.yaml` is short plain YAML, and
+    `docs/VERIFY.md` §6 says plainly which checks are the operator's to run
+    against it afterwards. The fix is a `SHA256SUMS` row for the compose file
+    plus a signature check the installer performs itself;
+    `TestInstallSh_ComposeFetchIsVerified` and T6 of
+    `scripts/test-install-sh-trust.sh` are written and enforce the first of
+    those the moment `F10_EXPECT_COMPOSE_INTEGRITY=1` is set.
+
 ### 5.1a LLM egress content inspection — the honest-claims contract
 
 The optional `llm_inspection` guardrail (residuals #1, #2) is a **visibility +

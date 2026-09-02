@@ -304,6 +304,64 @@ type Store interface {
 	// refuse (see the implementation).
 	HasGroupTierAssignments(ctx context.Context) (bool, error)
 
+	// User drives and their subject grants (migration 0054, user_drives.go):
+	// the admin-registered per-user storage a member may mount into a run, and
+	// the rows allocating one to a user, a group, or everyone. ARE part of
+	// Store, for the same reason the governance resolver is: ResolveUserDrive
+	// runs on the REQUEST PATH of run creation, and a type-assert-and-degrade
+	// seam there would mean "this store does not implement drives, therefore
+	// mount nothing" — which is a silent failure of a member's data to appear
+	// rather than a refusal they can act on. A store that cannot answer it is a
+	// COMPILE error.
+	//
+	// UpsertUserDrive keys on the PRIMARY KEY (a fresh id inserts, an existing
+	// one updates in place, rename included) and returns ErrConflict when
+	// UNIQUE(name) rejects the write. DeleteUserDrive returns ErrConflict when
+	// the drive is still ALLOCATED — the ON DELETE RESTRICT, which exists so
+	// deleting a drive can never orphan the directories its grants named.
+	UpsertUserDrive(ctx context.Context, d types.UserDrive) (types.UserDrive, error)
+	GetUserDrive(ctx context.Context, id uuid.UUID) (types.UserDrive, error)
+	DeleteUserDrive(ctx context.Context, id uuid.UUID) error
+	// ListUserDrives returns every drive by name WITH its grant count — the
+	// count is what makes the console's delete affordance honest, since a
+	// drive with grants answers 409.
+	ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, error)
+	// UpsertUserDriveGrant keys on the natural UNIQUE (subject_type, subject):
+	// re-allocating a subject REPOINTS its one row, returning the EXISTING
+	// row's id on a conflict. ErrNotFound when drive_id names no drive (the FK
+	// rejects it).
+	UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant) (types.UserDriveGrant, error)
+	// DeleteUserDriveGrant RETURNS the row it removed (ErrNotFound when none
+	// matched): the delete's own audit row has to name the subject that was
+	// de-allocated, and by then it is gone.
+	DeleteUserDriveGrant(ctx context.Context, id uuid.UUID) (types.UserDriveGrant, error)
+	ListUserDriveGrants(ctx context.Context) ([]types.UserDriveGrant, error)
+	// ResolveUserDrive returns THE ONE drive that applies to a caller — user >
+	// group > all, sub over email within the user tier, then priority DESC and
+	// the drive's name ASC — as a single indexed read whose ORDER BY IS the
+	// whole precedence rule, the same one ResolveGovernanceProfile carries.
+	// DISABLED grants are IN the query: one that wins its tier comes back with
+	// Enabled false, which the caller renders as PAUSED rather than falling
+	// through to the wider row beneath it (DESIGN §2.2 — a pause must never
+	// widen a member onto a drive no admin chose for them). ErrNotFound means
+	// "no grant matched at all", which the caller reads as "no drive".
+	//
+	// It returns the winning GRANT beside the drive because every override the
+	// resolution needs (size, writable, home) is a column on the binding row —
+	// and the tier it returns is that grant's own subject_type, so unlike the
+	// governance resolver there is nothing here that can disagree with the row
+	// it came from. The tier is still load-bearing: on a stale or truncated
+	// group snapshot the caller must resolve with NO groups and then tell a
+	// user-tier winner (serve it) from an all-tier one (refuse — a group row
+	// could have outranked it).
+	ResolveUserDrive(ctx context.Context, userSubjects, groups []string) (
+		*types.UserDrive, *types.UserDriveGrant, types.CapabilitySubjectType, error)
+	// HasGroupTierDriveGrants gates the stale/truncated group-snapshot refusal:
+	// with no group-tier row there is nothing an unknown group could have
+	// matched, so a nil or truncated snapshot must fall through rather than
+	// refuse (see the implementation).
+	HasGroupTierDriveGrants(ctx context.Context) (bool, error)
+
 	// Ping proves the store is actually reachable, not just constructed — the
 	// /readyz readiness probe's one call. A live TCP connect with no working
 	// query would otherwise read as healthy forever.

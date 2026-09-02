@@ -24,12 +24,12 @@
 //      REFUSED (403) on run B's live relay path — even though run B exists, is
 //      RUNNING, and declares the same app. This is the server-side backstop for
 //      the browser's path-scoped cookie: handleUIRelay's `sess.Run != runID`
-//      guard (internal/api/uigateway.go:403). If that guard regresses, one run's
+//      guard (internal/api/uigateway.go). If that guard regresses, one run's
 //      session reaches another run's sandbox and the test FAILS.
 //   2. Cookie-tossing outbound: a sandbox response whose Set-Cookie uses a
 //      wardyn_* name (here wardyn_ui_sess, an authentication-attack cookie) is
 //      DROPPED before it reaches the operator's browser, while the app's own
-//      cookie survives — uiStripOutbound (internal/api/uigateway.go:526). If the
+//      cookie survives — uiStripOutbound (internal/api/uigateway.go). If the
 //      strip regresses, the sandbox can overwrite the relay session cookie and
 //      the test FAILS.
 

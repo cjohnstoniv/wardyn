@@ -3,29 +3,29 @@
 
 // PROBE (F4-run-wait-upload-audit, probe b2 + b3).
 // Intended destination: internal/api/recording_tail_probe_test.go (package api).
-// Reuses decodeCastOutput (attach_recording_test.go:316), errReader
-// (recording_upload_test.go:224) and recRecorder / adminToken from the
+// Reuses decodeCastOutput (attach_recording_test.go), errReader
+// (recording_upload_test.go) and recRecorder / adminToken from the
 // package's existing tests. No PG, no build tags.
 //
 // Invariant pinned, on BOTH recording sinks:
 //
-//	b2  Upload path (recording.go:160-212 buildMaskingBody): with a registered
+//	b2  Upload path (buildMaskingBody in recording.go): with a registered
 //	    secret (so the MaskingWriter pipe branch is taken), a body whose LAST
 //	    bytes end mid-escape-sequence and carry no trailing newline reaches
 //	    SaveCast byte-for-byte — the (maxLen-1)-byte retained tail
-//	    (secretmask.go:307-313) is flushed by mw.Close() (recording.go:197,
-//	    secretmask.go:332-341) and arrives BEFORE the clean EOF. Fails if the
-//	    copy goroutine stops calling Close, if Close stops flushing, or if
-//	    CloseWithError is stamped before the flush lands.
+//	    MaskingWriter.Write holds back is flushed by mw.Close()
+//	    (MaskingWriter.Close in internal/secretmask) and arrives BEFORE the
+//	    clean EOF. Fails if the copy goroutine stops calling Close, if Close
+//	    stops flushing, or if CloseWithError is stamped before the flush lands.
 //
-//	b3  Live attach path (attach.go:549-608 newSessionRecorder): a session whose
+//	b3  Live attach path (newSessionRecorder in attach.go): a session whose
 //	    final PTY write ends in an escape prefix that is ALSO a strict prefix of
-//	    a registered secret is withheld by pendingTailLen (attach.go:691-712)
-//	    and must be emitted by finish's flushLocked (attach.go:576-577,
-//	    :676-683) — the cast must contain the escape bytes, decode as valid
-//	    JSON lines, and must NOT contain the secret. Fails if finish stops
-//	    flushing, if flushLocked drops the tail, or if the flushed tail is
-//	    appended outside a well-formed event line.
+//	    a registered secret is withheld by pendingTailLen and must be emitted
+//	    by finish's liveMaskWriter.flushLocked (both in attach.go) — the cast
+//	    must contain the escape bytes, decode as valid JSON lines, and must NOT
+//	    contain the secret. Fails if finish stops flushing, if flushLocked drops
+//	    the tail, or if the flushed tail is appended outside a well-formed
+//	    event line.
 package api
 
 import (
@@ -89,9 +89,9 @@ func TestProbeF4_BuildMaskingBody_MidEscapeTailReachesStoreVerbatim(t *testing.T
 
 // TestProbeF4_BuildMaskingBody_TailFlushBeforeError pins the ordering the
 // handler depends on: when the SOURCE errors (MaxBytesError shape), the
-// retained tail is still flushed first (recording.go:197 runs before :199),
-// and the reader sees the error — never a clean EOF that would let a truncated
-// cast be audited as `recording.upload success`.
+// retained tail is still flushed first (in buildMaskingBody, mw.Close() runs
+// before pw.CloseWithError), and the reader sees the error — never a clean EOF
+// that would let a truncated cast be audited as `recording.upload success`.
 func TestProbeF4_BuildMaskingBody_TailFlushBeforeError(t *testing.T) {
 	runID := uuid.New()
 	reg := secretmask.NewRegistry()
@@ -119,7 +119,8 @@ func TestProbeF4_SessionRecorder_MidEscapeTailWithheldThenFlushed(t *testing.T) 
 	runID := uuid.New()
 	// The secret STARTS with the escape prefix the session ends on, so the final
 	// ESC "[0m" is a strict prefix of a registered secret and pendingTailLen
-	// withholds it (attach.go:691-712). Only finish's flushLocked can emit it.
+	// withholds it (pendingTailLen in attach.go). Only finish's
+	// liveMaskWriter.flushLocked can emit it.
 	escPrefix := probeESC + "[0m"
 	secret := escPrefix + "TOKEN-super-secret-value-9876"
 	reg := secretmask.NewRegistry()
