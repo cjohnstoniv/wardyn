@@ -61,6 +61,13 @@ type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
   workspace_id?: string;
   // Explicit model-access override — tier 1 of the server's resolution chain.
   integration_id?: string;
+  // The member's per-run USER DRIVE opt-in (pkg/client.DriveSelection).
+  // Nothing here names a drive or a path: the server resolves which drive
+  // belongs to the authenticated caller and derives their directory from their
+  // own identity, so this flag can only ever ask for storage already granted.
+  // read_only NARROWS a writable allocation; false is a no-op the server
+  // refuses as a widening, so buildSpec omits it rather than sending it.
+  drive?: { enabled: boolean; read_only?: boolean };
 };
 
 // The ONE projection from wizard input to the POST /runs wire body. createRun
@@ -112,6 +119,12 @@ function runWireBody(input: RunWireInput): Record<string, unknown> {
   if (input.workspaces?.length) body.workspaces = input.workspaces;
   if (input.workspace_id) body.workspace_id = input.workspace_id;
   if (input.integration_id) body.integration_id = input.integration_id;
+  // The member's drive request. Forwarded VERBATIM rather than re-derived: an
+  // absent `drive` is "mount nothing", byte for byte what every run sent
+  // before the field existed, and buildSpec is the one place that decides
+  // whether the member asked for it. A whitelist that re-decided would be the
+  // second answer to that question.
+  if (input.drive) body.drive = input.drive;
   return body;
 }
 

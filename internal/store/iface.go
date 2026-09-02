@@ -323,7 +323,10 @@ type Store interface {
 	// row's id on a conflict. ErrNotFound when drive_id names no drive (the FK
 	// rejects it).
 	UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant) (types.UserDriveGrant, error)
-	DeleteUserDriveGrant(ctx context.Context, id uuid.UUID) error
+	// DeleteUserDriveGrant RETURNS the row it removed (ErrNotFound when none
+	// matched): the delete's own audit row has to name the subject that was
+	// de-allocated, and by then it is gone.
+	DeleteUserDriveGrant(ctx context.Context, id uuid.UUID) (types.UserDriveGrant, error)
 	ListUserDriveGrants(ctx context.Context) ([]types.UserDriveGrant, error)
 	// ResolveUserDrive returns THE ONE drive that applies to a caller — user >
 	// group > all, sub over email within the user tier, then priority DESC and

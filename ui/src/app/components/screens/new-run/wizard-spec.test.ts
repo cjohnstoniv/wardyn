@@ -791,3 +791,35 @@ describe("mergeRunSelections — the authored spec wins, the selections are adde
     expect(spec.workspace_mounts).toEqual(added.mounts);
   });
 });
+
+// The member's user drive. The whole contract is what buildSpec DOESN'T emit:
+// a run that never ticked the box must produce the byte-identical body it
+// produced before the field existed, and `read_only: false` must never be sent
+// — the server refuses it as an attempt to widen a read-only allocation, so
+// sending it would turn a member's untouched toggle into a refused launch.
+describe("buildSpec — drive", () => {
+  it("emits nothing at all when the box is unticked", () => {
+    const { run } = buildSpec(initialWizardState());
+    expect(run.drive).toBeUndefined();
+    expect("drive" in run).toBe(false);
+  });
+
+  it("emits {enabled:true} and no read_only when the toggle is off", () => {
+    const { run } = buildSpec({ ...initialWizardState(), driveEnabled: true });
+    expect(run.drive).toEqual({ enabled: true });
+  });
+
+  it("adds read_only:true only when the run narrows the mount", () => {
+    const { run } = buildSpec({
+      ...initialWizardState(),
+      driveEnabled: true,
+      driveReadOnly: true,
+    });
+    expect(run.drive).toEqual({ enabled: true, read_only: true });
+  });
+
+  it("never emits a drive for a narrowing with no mount asked for", () => {
+    const { run } = buildSpec({ ...initialWizardState(), driveReadOnly: true });
+    expect(run.drive).toBeUndefined();
+  });
+});

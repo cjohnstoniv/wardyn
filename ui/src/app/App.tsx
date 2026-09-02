@@ -82,6 +82,14 @@ const GovernanceScreen = React.lazy(() =>
     default: m.GovernanceScreen,
   })),
 );
+// The admin's drive registry. No nav item and no member path: it is reached
+// from the Workspaces header's outline button, the setup Workspaces step's card
+// and the Settings card, each of which renders for an operator only.
+const DrivesScreen = React.lazy(() =>
+  import("./components/screens/drives/drives-screen").then((m) => ({
+    default: m.DrivesScreen,
+  })),
+);
 const PermissionsScreen = React.lazy(() =>
   import("./components/screens/permissions").then((m) => ({
     default: m.PermissionsScreen,
@@ -448,6 +456,17 @@ export default function App() {
               element={
                 <React.Suspense fallback={<RouteFallback />}>
                   <GovernanceScreen />
+                </React.Suspense>
+              }
+            />
+            {/* SUPER, gated server-side by the operatorOnly route group; the
+                screen itself gates its writes on useOperator, and no nav entry
+                or entry point exists for a member or a security admin. */}
+            <Route
+              path="/drives"
+              element={
+                <React.Suspense fallback={<RouteFallback />}>
+                  <DrivesScreen />
                 </React.Suspense>
               }
             />

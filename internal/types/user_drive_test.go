@@ -138,6 +138,84 @@ func TestDriveHomeName(t *testing.T) {
 	}
 }
 
+// TestDriveHomeNameIsDNS1123OnKubernetes pins the split this derivation grew
+// once the same segment had to be a PVC name: a Kubernetes home is a DNS-1123
+// subdomain, a Docker home is a volume-name component, and they are NOT the
+// same alphabet.
+//
+// THE MOTIVATING CASE IS THE FIRST ROW. An Entra `sub` is base64url and
+// routinely carries `_`, which is legal in a Docker volume name and illegal in
+// a DNS-1123 name. Before the split, a `k8s_pvc` + `sub` drive validated at the
+// write boundary, was stored, and then failed at BIND time — on somebody's run,
+// as an apiserver error naming a claim they never typed. Refusing it here makes
+// it a resolve-time refusal an admin sees on the preview, naming the claim they
+// have to write a home_override for.
+func TestDriveHomeNameIsDNS1123OnKubernetes(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		subject  string
+		override string
+		docker   bool // does the DOCKER rule accept it?
+		k8s      bool // does the KUBERNETES rule?
+	}{
+		// The Entra shape, and the whole reason for the split.
+		{name: "an underscore in a sub", subject: "aBc_dEf-123", docker: true, k8s: false},
+		{name: "a trailing dash", subject: "alice-", docker: true, k8s: false},
+		{name: "a trailing dot", subject: "alice.", docker: true, k8s: false},
+		{name: "consecutive dots", subject: "a..b", docker: true, k8s: false},
+		// What BOTH accept: the ordinary corporate username, dotted or not.
+		{name: "a plain username", subject: "alice", docker: true, k8s: true},
+		{name: "a dotted username", subject: "alice.smith", docker: true, k8s: true},
+		{name: "an inner dash", subject: "alice-smith", docker: true, k8s: true},
+		{name: "63 characters", subject: strings.Repeat("a", 63), docker: true, k8s: true},
+		{name: "64 characters", subject: strings.Repeat("a", 64), docker: false, k8s: false},
+		// The override is an admin's fact about a filesystem, and it is still
+		// not allowed to name something the apiserver will reject: the grant row
+		// holds a drive_id, not a backend, so this is the only place that check
+		// can run.
+		{name: "an underscore in an override", subject: "alice", override: "b_smith", docker: true, k8s: false},
+		{name: "a plain override", subject: "alice", override: "bsmith", docker: true, k8s: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// host_path and k8s_pvc_static are the two SHARE backends, one per
+			// substrate, so the template is legal on both and the only thing
+			// that differs between the two arms is the alphabet.
+			for _, arm := range []struct {
+				backend DriveBackend
+				want    bool
+			}{
+				{DriveBackendHostPath, tc.docker},
+				{DriveBackendK8sPVCStatic, tc.k8s},
+			} {
+				d := driveFor(t, arm.backend, HomeTemplateSub)
+				got, err := DriveHomeName(d, tc.subject, tc.override)
+				if arm.want && err != nil {
+					t.Errorf("%s: DriveHomeName(%q, %q) = %v, want it accepted", arm.backend, tc.subject, tc.override, err)
+				}
+				if !arm.want && err == nil {
+					t.Errorf("%s: DriveHomeName(%q, %q) = %q, want a refusal — this name cannot hold on that substrate",
+						arm.backend, tc.subject, tc.override, got)
+				}
+			}
+		})
+	}
+
+	// `hash` derives a safe segment on BOTH rules, always: it is the only
+	// template a MANAGED backend may use, so a k8s_pvc drive must never be able
+	// to reach the refusal above through it.
+	t.Run("hash is safe on both substrates", func(t *testing.T) {
+		for _, b := range []DriveBackend{DriveBackendDockerVolume, DriveBackendK8sPVC} {
+			home, err := DriveHomeName(driveFor(t, b, HomeTemplateHash), "aBc_dEf-123", "")
+			if err != nil {
+				t.Fatalf("%s: hash home: %v", b, err)
+			}
+			if !driveHomeSegmentOK(b, home) {
+				t.Errorf("%s: hash home %q is not a legal segment on its own backend", b, home)
+			}
+		}
+	})
+}
+
 // TestDriveObjectName pins what the runner asks the substrate for. The PVC form
 // carries the drive's slug and the volume form does not, and an operator
 // reading `kubectl get pvc` has no other way to tell two drives apart.

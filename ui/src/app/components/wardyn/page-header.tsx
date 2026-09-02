@@ -12,7 +12,11 @@ export function PageHeader({
   as: Heading = "h1",
 }: {
   title: string;
-  description?: string;
+  // ReactNode, not string: a frozen page lead may carry a mount target or an
+  // env var that renders mono, and the mono span is applied at the CALL SITE
+  // (the withMono precedent EmptyState.description already follows) rather than
+  // baked into the copy. Plain strings still pass unchanged.
+  description?: React.ReactNode;
   actions?: React.ReactNode;
   /** Heading level. Defaults to h1 — the page's own title. A pane rendered
    *  INSIDE another page (SshKeysPane on /settings) passes "h3" so the document

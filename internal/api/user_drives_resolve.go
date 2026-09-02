@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -250,13 +251,19 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 	}
 	home, err := types.DriveHomeName(*d, driveHomeSubject(d.HomeTemplate, users), override)
 	if err != nil {
-		// The frozen member sentence, not the derivation's own error: what this
+		// The BODY is the frozen member sentence and NOTHING ELSE. What this
 		// member needs is which of their claims could not name a directory and
-		// who can fix it, and types.DriveHomeName's message names a template and
-		// a regex instead. The cause is still the wrapped error's, for the log.
+		// who can fix it; types.DriveHomeName's own message names a template and
+		// a regex, which is an operator's diagnostic and reads to a member as
+		// gibberish appended to the sentence that was meant for them. So it goes
+		// to the LOG, where the operator who has to act on it already looks —
+		// and the member's 422 stays byte-identical to the mock.
+		slog.Warn("wardynd: user drive: a home name could not be derived for this principal",
+			slog.String("drive", d.Name), slog.String("backend", string(d.Backend)),
+			slog.String("home_template", string(d.HomeTemplate)), slog.String("err", err.Error()))
 		return nil, fmt.Errorf("%w: drive: your %s cannot name a directory "+
 			"(lowercase letters and digits, then `. _ -`, up to 63 characters) — "+
-			"ask an admin to set your directory name [%v]", errDriveUnmountable, d.HomeTemplate, err)
+			"ask an admin to set your directory name", errDriveUnmountable, d.HomeTemplate)
 	}
 	resolved.HomeName = home
 	resolved.ObjectName = types.DriveObjectName(*d, home)
@@ -315,6 +322,45 @@ type userDrivePreviewResponse struct {
 	// Paused: the matched allocation is disabled, so nothing above it is derived
 	// and nothing would mount.
 	Paused bool `json:"paused,omitempty"`
+	// HomeSubject is WHICH of the submitted claims the home above was derived
+	// from — driveHomeSubject's positional pick, made visible.
+	//
+	// It exists because this endpoint's request cannot label a claim: the
+	// console sends one kind-less box, and the resolver reads position (the
+	// caller's stable subject first, their email last). So an admin who pasted
+	// only an address against a `hash` or `sub` drive gets a perfectly
+	// well-formed object name that NO RUN WILL EVER MOUNT — derived from the
+	// address, where the run derives from the sign-in subject. Naming the claim
+	// the answer keys on is what makes that visible instead of confidently
+	// wrong. Absent on a paused row, where nothing is derived at all.
+	HomeSubject string `json:"home_subject,omitempty"`
+	// Warning is a SERVER-composed hint about the REQUEST, not a refusal and not
+	// canon: the preview is a typing surface, and the shape above is the mistake
+	// it is easiest to make and hardest to notice. It is deliberately NOT one of
+	// §7's frozen strings — those are the member's doors, and this is an
+	// admin's typo — so the console may render it verbatim without a new key.
+	Warning string `json:"warning,omitempty"`
+}
+
+// drivePreviewWarning is the one request-shape hint the preview offers: the
+// answer keys on the SIGN-IN SUBJECT and the admin appears to have pasted an
+// address first.
+//
+// Keyed on `hash`/`sub` only, because those are the two templates
+// driveHomeSubject answers with users[0]; `email_local` reads the LAST claim,
+// so an address-first preview is exactly right for it and a warning there would
+// train an admin to ignore the field.
+//
+// It looks at the claim's SHAPE, which the resolver itself refuses to do — and
+// that difference is the point rather than an inconsistency. A shape guess
+// inside the resolver would be a second opinion about identity competing with
+// the ordering it ranks by; a shape guess on an advisory string competes with
+// nothing. It never changes the answer above it.
+func drivePreviewWarning(tmpl types.HomeTemplate, users []string) string {
+	if tmpl == types.HomeTemplateEmailLocal || len(users) == 0 || !strings.Contains(users[0], "@") {
+		return ""
+	}
+	return "the directory name keys on the sign-in subject; paste it first"
 }
 
 // handlePreviewUserDrive answers "which drive would a principal carrying these
@@ -356,6 +402,21 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
+	// A claims-less preview is a 400 about the REQUEST, and it must not be
+	// allowed to fall through: the resolver's step 2 answers "no subjects, no
+	// drive", which would render here as the empty object — "nobody is
+	// allocated this" — for a question nobody actually asked. Groups alone
+	// cannot be previewed either, because a home name is derived from a USER
+	// claim and a group-tier match with no claim to name a directory after has
+	// no object name to show.
+	//
+	// The ADMIN's voice, not §7.7's: these refusals are the member's doors, and
+	// answering an admin's empty form with one would put a member-facing
+	// sentence on a screen no member can reach.
+	if len(users) == 0 {
+		writeError(w, http.StatusBadRequest, "user_subjects: at least one claim is needed to derive the directory name")
+		return
+	}
 	groups, msg := normalizeGovernancePreviewClaims(req.Groups, "groups")
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
@@ -370,6 +431,14 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, userDrivePreviewResponse{})
 		return
 	}
+	// The SAME positional pick newResolvedDrive made, read back rather than
+	// re-derived — a second copy of driveHomeSubject's rule here would be the
+	// preview drifting from enforcement in the one field that exists to say
+	// what enforcement did.
+	homeSubject := driveHomeSubject(resolved.Drive.HomeTemplate, users)
+	if resolved.Paused {
+		homeSubject = ""
+	}
 	writeJSON(w, http.StatusOK, userDrivePreviewResponse{
 		DriveName:   resolved.Drive.Name,
 		MatchedTier: resolved.Tier,
@@ -379,5 +448,7 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 		Writable:    resolved.Writable,
 		Enforcement: resolved.Enforcement,
 		Paused:      resolved.Paused,
+		HomeSubject: homeSubject,
+		Warning:     drivePreviewWarning(resolved.Drive.HomeTemplate, users),
 	})
 }

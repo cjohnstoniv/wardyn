@@ -237,11 +237,17 @@ export function GovernanceScreen() {
                           <TableCell>{n === 0 ? GOV.ASSIGNED_NONE : GOV.ASSIGNED_COUNT(n)}</TableCell>
                           <TableCell>
                             <span className="flex flex-wrap items-center gap-1.5">
-                              {!p.limits.deny_task_mode_exec && !p.limits.deny_interactive && GOV.LIMITS_NONE}
+                              {!p.limits.deny_task_mode_exec &&
+                                !p.limits.deny_interactive &&
+                                !p.limits.deny_user_drive &&
+                                GOV.LIMITS_NONE}
                               {p.limits.deny_task_mode_exec && <Chip tone="neutral">{GOV.LIMIT_EXEC_LABEL}</Chip>}
                               {p.limits.deny_interactive && (
                                 <Chip tone="neutral">{GOV.LIMIT_INTERACTIVE_LABEL}</Chip>
                               )}
+                              {/* The user-drive door's chip, beside the other
+                                  two (user-drives mock, state 6). */}
+                              {p.limits.deny_user_drive && <Chip tone="neutral">{GOV.LIMIT_DRIVE_LABEL}</Chip>}
                             </span>
                           </TableCell>
                           <TableCell>

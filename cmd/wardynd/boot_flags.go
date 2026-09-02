@@ -67,13 +67,24 @@ type bootFlags struct {
 	userDriveHostRoots *string
 	uiDir              *string
 	runnerSel          *string
-	identitySel        *string
-	secretStoreSel     *string
-	recordingSel       *string
-	confinementMap     *string
-	trustDomain        *string
-	controlURL         *string
-	policyPath         *string
+	// runnerTargetOverride is WARDYN_RUNNER_TARGET, and it is a TEST-HARNESS
+	// knob: the substrate name STORED objects validate against while -runner is
+	// "none". A runner-less daemon resolves the target "none", which no drive
+	// backend can name (types.DriveBackend.RunnerTarget answers "docker" or
+	// "k8s"), so types.ValidateUserDrive refuses EVERY backend and the
+	// Playwright backend (scripts/e2e-backend.sh) cannot register a drive by any
+	// route. It moves the REGISTRATION boundary only: the runner is still nil,
+	// so nothing is dispatched and every run still stays PENDING. Ignored
+	// whenever a runner IS configured — there the resolved substrate's own name
+	// is the only truthful target. Unknown value = boot refusal, not a guess.
+	runnerTargetOverride *string
+	identitySel          *string
+	secretStoreSel       *string
+	recordingSel         *string
+	confinementMap       *string
+	trustDomain          *string
+	controlURL           *string
+	policyPath           *string
 	// trustedCAFile is WARDYN_TRUSTED_CA_FILE (see trusted_ca.go): a PATH to a
 	// PEM bundle of additional roots a corporate TLS-inspecting middlebox signs
 	// with. Same shape as policyPath above (a path read once at boot, not a
@@ -229,6 +240,7 @@ func parseBootFlags() *bootFlags {
 		userDriveHostRoots:      flagEnv("user-drive-host-roots", "WARDYN_USER_DRIVE_HOST_ROOTS", "", "comma-separated absolute host directories a USER DRIVE of backend host_path may be registered inside — typically the mount point of an NFS/SMB share the operator mounted host-side. A drive's host_root is allowed only if its CANONICALIZED real path is inside one of these (symlink-resolved, the bind-mount deny-list applied, must exist on this host), and only that person's SUBDIRECTORY is ever bound into a run. Empty (the default) = no host_path drive may be registered at all; Wardyn-managed volume drives are unaffected. Point it at the share's mount point, NEVER $HOME or /."),
 		uiDir:                   flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
 		runnerSel:               flagEnv("runner", "WARDYN_RUNNER", "none", `runner substrate: "none" or a registered confinement substrate ("docker" in -tags docker builds)`),
+		runnerTargetOverride:    flagEnv("runner-target", "WARDYN_RUNNER_TARGET", "", `substrate name STORED objects validate against when -runner is "none" ("docker" or "k8s"); TEST HARNESSES ONLY — it changes what may be REGISTERED (a user drive names the backend one target can mount), never what is dispatched, and is IGNORED whenever a runner is configured. Empty (the default) resolves the target "none", which refuses every drive backend`),
 		identitySel:             flagEnv("identity", "WARDYN_IDENTITY", "embedded", `identity provider (pluggable seam): "embedded" (default)`),
 		secretStoreSel:          flagEnv("secret-store", "WARDYN_SECRET_STORE", "pg", `secret store (pluggable seam): "pg" (default)`),
 		recordingSel:            flagEnv("recording-store", "WARDYN_RECORDING_STORE", "pg", `recording store (pluggable seam): "pg" (default; Postgres-backed, visible to every replica) or "fs" (legacy per-pod on-disk store)`),
