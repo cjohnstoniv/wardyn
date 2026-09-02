@@ -86,11 +86,18 @@ const SecretRekeyLockKey int64 = 0x5741524459_524B59 // ASCII "WARDYRKY"
 // -scoped pg_advisory_xact_lock, never the session-scoped form: it is released
 // by the commit that makes the new row visible, so the next writer's head read
 // cannot miss it, and no code path can leak it by forgetting a release.
-// It must be taken BEFORE the INSERT statement, on the inserting transaction —
-// not inside 0047's BEFORE INSERT trigger, where the identity default has
-// already assigned seq and two racing writers could invert chain order against
-// seq order. Both in-tree insert paths do this: store.InsertAuditEvent and the
-// broker's insertAuditEventTx.
+// SINCE 0056_audit_chain_serialize.sql THE TRIGGER TAKES IT TOO, and that is
+// what binds writers this package does not know about. 0047 could not: the
+// identity default had already assigned seq by the time a BEFORE INSERT trigger
+// ran, so two racing writers could take the lock there in the opposite order to
+// their seq allocation and invert chain order against seq order. 0056 removes
+// that objection by allocating seq inside the trigger, under this lock, so
+// position and chain link are decided together.
+// Both in-tree insert paths still take it BEFORE their INSERT statement, on the
+// inserting transaction (store.InsertAuditEvent and the broker's
+// insertAuditEventTx): advisory locks are re-entrant within a transaction, so
+// the trigger's acquisition is free for them, and holding it across the whole
+// statement is what it always was.
 // ponytail: ONE lock for the whole chain, so audit appends are globally
 // serialized. That IS the feature (a chain has exactly one head), and audit
 // write volume is nowhere near a contention regime. If it ever is, the upgrade

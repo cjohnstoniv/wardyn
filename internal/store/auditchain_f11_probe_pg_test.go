@@ -38,6 +38,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -320,15 +321,27 @@ func TestPG_ProbeF11_UnchainedRowAfterGenesisIsNotClean(t *testing.T) {
 
 // TestPG_ProbeF11_UnlockedWriterDoesNotForkChain — hypothesis H5.
 //
-// 0047's trigger deliberately does NOT take the serializing lock; the two
-// in-tree writers do (store.InsertAuditEvent, broker.insertAuditEventTx). Any
-// OTHER writer — psql, scripts/e2e-backend.sh's seed INSERT, the db package's
-// own insertAuditEvent test helper, a future code path — reads the same head
-// as a concurrent locked writer and both rows chain to it: a fork. The sweep
-// then reports TAMPERING (rule 2) at the locked writer's row although no row
-// was ever altered, and per docs/OPERATIONS.md that verdict is permanent.
-// Deterministic: the unlocked INSERT is held open in its own transaction while
-// the locked writer commits. Expected RED on this tree.
+// Any writer that is not one of the two in-tree ones (store.InsertAuditEvent,
+// the broker's insertAuditEventTx) — psql, scripts/e2e-backend.sh's seed
+// INSERT, the db package's own insertAuditEvent test helper, a future code path
+// — used to read the same chain head as a concurrent locked writer, so both
+// rows chained to it: a fork. The sweep then reported TAMPERING (rule 2) at the
+// LOCKED writer's row although no row was ever altered, and per
+// docs/OPERATIONS.md that verdict is permanent.
+//
+// The invariant is that an un-serialized writer cannot fork the chain — which
+// is only deliverable by SERIALIZING it: the chain link and the seq must be
+// allocated under one lock (migration 0055 moves both into the trigger). The
+// probe therefore runs the locked writer CONCURRENTLY and lets the unlocked one
+// commit while it waits, and asserts the strong form: the locked row chains
+// ONTO the unlocked row and the sweep is clean.
+//
+// It cannot be written the other way round. Holding the unlocked writer's
+// transaction open ACROSS a synchronous store.InsertAuditEvent call — the shape
+// this probe had while it was red — self-deadlocks under any implementation
+// that actually serializes: the locked writer waits for a transaction that only
+// commits after it returns. Measured, not assumed: with the lock in the trigger
+// that shape hangs in store.InsertAuditEvent until the go test timeout kills it.
 func TestPG_ProbeF11_UnlockedWriterDoesNotForkChain(t *testing.T) {
 	pool := runsPGPool(t)
 	requireTriggerBypass(t, pool) // only for the cleanup delete
@@ -336,7 +349,8 @@ func TestPG_ProbeF11_UnlockedWriterDoesNotForkChain(t *testing.T) {
 
 	appendChained(t, pool, "f11-fork-head")
 
-	// Writer R: direct INSERT, no pg_advisory_xact_lock, transaction left open.
+	// Writer R: direct INSERT, no caller-side pg_advisory_xact_lock, in a
+	// transaction held open while the locked writer starts.
 	rawTx, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin raw tx: %v", err)
@@ -347,35 +361,88 @@ func TestPG_ProbeF11_UnlockedWriterDoesNotForkChain(t *testing.T) {
 		VALUES ($1, 'system', 'f11-unlocked-writer', 'test.chain.fork', 'success')`, rawID); err != nil {
 		t.Fatalf("raw insert: %v", err)
 	}
-	t.Cleanup(func() {
-		// Removing the lock-skipping row re-links the locked row to the head it
-		// actually read, so the shared table verifies clean again.
-		if err := withTriggersOff(ctx, pool, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `DELETE FROM audit_events WHERE id = $1`, rawID)
-			return err
-		}); err != nil {
-			t.Errorf("remove unlocked row: %v", err)
-		}
-	})
 
-	// Writer L: the real path, lock held, commits while R is still open.
+	// Writer L: the real path, started while R is still open. It must WAIT for
+	// R instead of reading the same head.
 	locked := types.AuditEvent{
 		ID: uuid.New(), Time: time.Now().UTC(), ActorType: types.ActorSystem,
 		Actor: "f11-locked-writer", Action: "test.chain.fork", Outcome: "success",
 	}
-	if err := store.InsertAuditEvent(ctx, pool, &locked); err != nil {
-		t.Fatalf("locked insert: %v", err)
-	}
+	done := make(chan error, 1)
+	go func() { done <- store.InsertAuditEvent(ctx, pool, &locked) }()
+
+	// Wait for L to be BLOCKED on the chain lock rather than sleeping a guessed
+	// interval. On an unserialized tree nothing ever blocks, so the wait falls
+	// through after its deadline and the assertions below report the fork.
+	blocked := waitForBlockedChainWriter(t, pool, 10*time.Second)
+
+	t.Cleanup(func() {
+		// Both rows are this test's own tail. They are removed together: with
+		// the chain serialized the locked row chains ONTO the unlocked one, so
+		// deleting only the unlocked row would leave a genuine break behind for
+		// every later sweep in the package. Truncating the tail verifies clean
+		// (auditchain_test.go pins that as a non-promise).
+		if err := withTriggersOff(ctx, pool, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `DELETE FROM audit_events WHERE id = ANY($1)`,
+				[]uuid.UUID{rawID, locked.ID})
+			return err
+		}); err != nil {
+			t.Errorf("remove probe rows: %v", err)
+		}
+	})
+
 	if err := rawTx.Commit(ctx); err != nil {
 		t.Fatalf("commit raw tx: %v", err)
 	}
+	if err := <-done; err != nil {
+		t.Fatalf("locked insert: %v", err)
+	}
+	if !blocked {
+		t.Errorf("the locked writer never waited for the unlocked one: audit_events inserts are not serialized in the database, "+
+			"so any writer that skips %#x forks the chain", db.AuditChainLockKey)
+	}
+
 	rSeq := auditSeq(t, pool, rawID)
 	lSeq := auditSeq(t, pool, locked.ID)
-
-	st := sweep(t, pool)
-	if !st.OK {
-		t.Fatalf("KNOWN GAP (F11 H5): ONE writer that skipped pg_advisory_xact_lock (seq=%d) forked the chain; the sweep reports tampering at "+
-			"seq=%d (%q) although no row was altered — and docs/OPERATIONS.md says a break is permanent (locked row seq=%d, prev=%s).",
-			rSeq, st.BrokenSeq, st.Reason, lSeq, locked.PrevHash)
+	if rSeq >= lSeq {
+		t.Errorf("seq order = unlocked %d, locked %d; the row that inserted FIRST must hold the lower seq", rSeq, lSeq)
 	}
+	var rHash string
+	if err := pool.QueryRow(ctx, `SELECT row_hash FROM audit_events WHERE id = $1`, rawID).Scan(&rHash); err != nil {
+		t.Fatalf("read unlocked row_hash: %v", err)
+	}
+	if locked.PrevHash != rHash {
+		t.Errorf("locked row (seq=%d) chained to %q, want the unlocked row's hash %q (seq=%d) — both rows chained to the same head, "+
+			"which is the fork that makes the sweep report a tamper that never happened", lSeq, locked.PrevHash, rHash, rSeq)
+	}
+	if st := sweep(t, pool); !st.OK {
+		t.Fatalf("F11 H5: an unlocked writer (seq=%d) overlapping the locked one (seq=%d) made the sweep report %q at seq=%d, "+
+			"although no row was altered — and docs/OPERATIONS.md says a break is permanent", rSeq, lSeq, st.Reason, st.BrokenSeq)
+	}
+}
+
+// waitForBlockedChainWriter polls pg_locks until some backend is WAITING on the
+// audit-chain advisory lock, and reports whether that ever happened. The
+// advisory key is split across (classid, objid) exactly as pg_locks exposes it:
+// the high 32 bits and the low 32 bits of db.AuditChainLockKey.
+func waitForBlockedChainWriter(t *testing.T, pool *pgxpool.Pool, within time.Duration) bool {
+	t.Helper()
+	ctx := context.Background()
+	classid := uint32(uint64(db.AuditChainLockKey) >> 32)
+	objid := uint32(uint64(db.AuditChainLockKey) & 0xFFFFFFFF)
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		var n int
+		if err := pool.QueryRow(ctx, `
+			SELECT count(*) FROM pg_locks
+			 WHERE locktype = 'advisory' AND NOT granted
+			   AND classid = $1 AND objid = $2`, classid, objid).Scan(&n); err != nil {
+			t.Fatalf("poll pg_locks: %v", err)
+		}
+		if n > 0 {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return false
 }

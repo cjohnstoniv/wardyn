@@ -25,6 +25,8 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -220,16 +222,25 @@ func TestPG_ProbeF11_DroppedChainTriggerIsRestoredByMigrate(t *testing.T) {
 		t.Skipf("cannot DROP TRIGGER as this role (%v); the probe needs table ownership", err)
 	}
 	t.Cleanup(func() {
-		sql, err := migrationFS.ReadFile("migrations/0047_audit_hash_chain.sql")
-		if err != nil {
-			t.Errorf("read 0047: %v", err)
-			return
-		}
-		if _, err := pool.Exec(ctx, string(sql)); err != nil {
-			t.Errorf("re-apply 0047 to restore the trigger: %v", err)
+		// EVERY migration that defines the chain trigger, in order — not 0047
+		// alone. 0056 redefines audit_events_chain() to serialize inserts, so
+		// re-applying only 0047 would put the trigger back attached to the
+		// SUPERSEDED function and silently un-serialize the shared database for
+		// every later test in the run (the store package's chain probes run
+		// against this same database).
+		for _, name := range chainMigrationFiles(t) {
+			sql, err := migrationFS.ReadFile("migrations/" + name)
+			if err != nil {
+				t.Errorf("read %s: %v", name, err)
+				return
+			}
+			if _, err := pool.Exec(ctx, string(sql)); err != nil {
+				t.Errorf("re-apply %s to restore the trigger: %v", name, err)
+				return
+			}
 		}
 		if !triggerPresent() {
-			t.Errorf("audit_events_chain trigger is STILL missing after re-applying 0047 — later chain tests in this run will see unchained rows")
+			t.Errorf("audit_events_chain trigger is STILL missing after re-applying the chain migrations — later chain tests in this run will see unchained rows")
 		}
 	})
 
@@ -240,4 +251,31 @@ func TestPG_ProbeF11_DroppedChainTriggerIsRestoredByMigrate(t *testing.T) {
 		t.Fatalf("KNOWN GAP (F11 H2): a dropped audit_events_chain trigger is NOT restored by the next Migrate — 0047 is recorded in " +
 			"schema_migrations and skipped — and nothing at boot inspects pg_trigger; every row written from now on is unchained")
 	}
+}
+
+// chainMigrationFiles returns, in filename order, every migration that mentions
+// the chain trigger — the set a restore has to replay to put the CURRENT
+// definition back. Discovered rather than listed so a later migration that
+// touches the trigger is picked up without editing this probe.
+func chainMigrationFiles(t *testing.T) []string {
+	t.Helper()
+	entries, err := migrationFS.ReadDir("migrations")
+	if err != nil {
+		t.Fatalf("read migrations dir: %v", err)
+	}
+	var out []string
+	for _, e := range entries {
+		body, err := migrationFS.ReadFile("migrations/" + e.Name())
+		if err != nil {
+			t.Fatalf("read %s: %v", e.Name(), err)
+		}
+		if strings.Contains(string(body), "TRIGGER audit_events_chain") {
+			out = append(out, e.Name())
+		}
+	}
+	sort.Strings(out)
+	if len(out) == 0 {
+		t.Fatal("no migration defines the audit_events_chain trigger")
+	}
+	return out
 }

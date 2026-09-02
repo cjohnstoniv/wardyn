@@ -187,6 +187,27 @@ the fact by the same process that could have altered the rows prove nothing, and
 writing them would mean `UPDATE`-ing the append-only table. The chain starts at
 the first row inserted after the migration.
 
+**A hashless row is legacy only BELOW the chain.** `legacy` counts the unhashed
+PREFIX. A row with no `row_hash` that sits *after* the chain has started did not
+predate the migration — it was written with the chain trigger dropped, disabled,
+or bypassed — so the sweep reports it as the break, at its own `seq`, instead of
+counting it. Without that rule an actor who dropped the trigger could append rows
+the chain neither covered nor mentioned while `ok` stayed `true`. One blind spot
+remains, stated plainly: `seq` gaps *below* the first chained row (a rolled-back
+insert burns a `seq`) can still hold a hashless forgery that no rule here can
+tell from a legacy row — only your off-box copy can.
+
+**Every writer is serialized, including one that is not Wardyn.** The chain link
+and the row's `seq` are allocated together under one advisory lock held inside
+the insert trigger (`0056_audit_chain_serialize.sql`), so a direct `INSERT` from
+`psql`, a seed script or any future code path takes its place in line rather than
+reading the same head as a concurrent Wardyn write. Before that, two writers
+could chain to the same head and the sweep reported a **tamper that never
+happened** — permanently, per the latch above. The cost is honest: a session
+that holds a transaction open after inserting into `audit_events` blocks every
+other audit append until it commits or rolls back, so do not leave an interactive
+`psql` transaction sitting on that table.
+
 ### Retention, erasure and GDPR — a residual, not a solved problem
 
 The append-only guarantee above is unconditional: no time window, size cap, or
