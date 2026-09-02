@@ -86,10 +86,10 @@ ALLOW = {
     # this gate only because a *.test.tsx fixture spelled them out in full, which
     # grep_ui no longer reads.
     "Allowed hosts · 1": "Allowed hosts ·",
-    "exit 0": "exit {",
-    "Promoted — 1 still needs approval": "still need",
+    "exit 0": "exit {exitCode}",
+    "Promoted — 1 still needs approval": "} still need",
     "Injected the subscription credential at the proxy": "injected the subscription credential",
-    "1 domain allowed": "} allowed",
+    "1 domain allowed": "} domain",
 }
 
 
@@ -135,6 +135,10 @@ def route_modules():
             if comp in mods and mods[comp]:
                 routes[path] = mods[comp]
                 break
+    # "/" is FirstRunLanding, defined in App.tsx itself (a <Navigate> to /runs or
+    # /setup); the alternation receipts (/\/(runs|setup)/) and page.goto("/")
+    # resolve here instead of being dropped.
+    routes.setdefault("/", APP)
     return routes
 
 

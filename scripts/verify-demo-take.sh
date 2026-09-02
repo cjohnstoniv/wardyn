@@ -654,8 +654,13 @@ V10_API="http://localhost:${WARDYN_UP_PORT:-8080}"
 # wrote" rule 09's ci-artifacts/run.json follows. take-chain.sh parks a COPY
 # beside the mp4, so a re-grade with WARDYN_DEMO_WORK_DIR=<take>.artifacts reads
 # the archived id and the fixed path stays the live take's answer.
-V10_HANDOFF="${WARDYN_DEMO_WORK_DIR:-}/v10-run-id.txt"
-[[ -s "${V10_HANDOFF}" ]] || V10_HANDOFF="${REPO_ROOT}/ui/test-results/demo-video/v10-run-id.txt"
+# No cross-fallback: an archive that lacks the handoff must fail the re-grade
+# below, never read the live path (whatever the most recent 12 take wrote).
+if [[ -n "${WARDYN_DEMO_WORK_DIR:-}" ]]; then
+  V10_HANDOFF="${WARDYN_DEMO_WORK_DIR}/v10-run-id.txt"
+else
+  V10_HANDOFF="${REPO_ROOT}/ui/test-results/demo-video/v10-run-id.txt"
+fi
 V10_RUN="${WARDYN_DEMO_RUN_ID:-}"
 [[ -z "${V10_RUN}" && -s "${V10_HANDOFF}" ]] && V10_RUN="$(tr -d '[:space:]' <"${V10_HANDOFF}")"
 if [[ -z "${V10_RUN}" ]]; then

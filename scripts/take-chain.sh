@@ -139,8 +139,10 @@ case $? in
   0) ;;
   1) echo "LABEL_GATE_FAILED ${VIDEO} — the spec asserts labels ui/src no longer has; fix the spec or the app, do not roll"
      ledger "not run" "label-gate"; exit 1 ;;
-  2) echo "LABEL_GATE_SKIPPED ${VIDEO} — the label gate could not judge this id; rolling anyway" ;;
-  *) echo "LABEL_GATE_SKIPPED ${VIDEO} — gate rc=$? (it could not run); rolling anyway" ;;
+  2) echo "LABEL_GATE_SKIPPED ${VIDEO} — the label gate could not judge this id; rolling anyway"
+     ledger "not run" "label-gate-skipped rc=2" ;;
+  *) rc=$?; echo "LABEL_GATE_SKIPPED ${VIDEO} — gate rc=${rc} (it could not run); rolling anyway"
+     ledger "not run" "label-gate-skipped rc=${rc}" ;;
 esac
 
 while :; do
