@@ -18,10 +18,19 @@ import (
 // not carry the path.
 const driveDir = "/home/agent/drive"
 
-// wardynBaseFROM matches the final stage of an image that is built ON another
-// image in this directory — `FROM wardyn/agent-<name>:<tag>`. Those images
-// inherit the drive directory from their parent and must not re-create it.
-var wardynBaseFROM = regexp.MustCompile(`(?m)^FROM\s+(?:--\S+\s+)*wardyn/agent-([a-z0-9-]+):`)
+// wardynSiblingRef matches a base that is another image in this directory —
+// `wardyn/agent-<name>:<tag>`. Those images inherit the drive directory from
+// their parent and must not re-create it.
+var wardynSiblingRef = regexp.MustCompile(`^wardyn/agent-([a-z0-9-]+):`)
+
+// dockerStage is one build stage: the image (or earlier stage) its FROM names,
+// the `AS <alias>` it answers to, and the instructions between this FROM and
+// the next.
+type dockerStage struct {
+	base   string
+	alias  string
+	instrs []string
+}
 
 // TestAgentImagesPreCreateDriveDir asserts that EVERY image under
 // deploy/images ends up with /home/agent/drive present and owned by agent —
@@ -42,6 +51,17 @@ var wardynBaseFROM = regexp.MustCompile(`(?m)^FROM\s+(?:--\S+\s+)*wardyn/agent-(
 // and `aws-sso` each created `/home/agent/work` alone, which is the drift this
 // test exists to make loud. deploy/images/README.md's image contract §5 and
 // "Adding a new agent image" step 5 are the prose half.
+//
+// IT IS THE FINAL STAGE THAT SHIPS, so the walk starts there and follows only
+// that stage's own ancestry. A multi-stage Dockerfile's builder stages are
+// thrown away: a `mkdir /home/agent/drive` in one of them creates a directory
+// in a layer no container ever runs, and reading every stage's instructions as
+// one bag (which this guard used to do) let such a line satisfy a runtime stage
+// that has none. The same applies to the FROM chain — an earlier
+// `FROM wardyn/agent-base:local AS tools` says nothing about a final stage
+// built on debian, so the parent hop is taken from the FINAL stage's base only,
+// resolving an alias to the stage it names before treating a ref as a sibling
+// image.
 func TestAgentImagesPreCreateDriveDir(t *testing.T) {
 	root := repoRoot(t)
 	dir := filepath.Join(root, "deploy", "images")
@@ -50,10 +70,8 @@ func TestAgentImagesPreCreateDriveDir(t *testing.T) {
 		t.Fatalf("read deploy/images: %v", err)
 	}
 
-	// image name -> its Dockerfile, joined into logical instructions.
-	images := map[string][]string{}
-	// image name -> the sibling image its final stage is built FROM ("" = none).
-	parent := map[string]string{}
+	// image name -> its build stages, in file order (the last is what ships).
+	images := map[string][]dockerStage{}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -62,11 +80,11 @@ func TestAgentImagesPreCreateDriveDir(t *testing.T) {
 		if rerr != nil {
 			continue // common/ and any other non-image directory
 		}
-		images[e.Name()] = dockerfileInstructions(string(raw))
-		if m := wardynBaseFROM.FindAllStringSubmatch(string(raw), -1); len(m) > 0 {
-			// The LAST such FROM is the final (runtime) stage's base.
-			parent[e.Name()] = m[len(m)-1][1]
+		stages := dockerfileStages(string(raw))
+		if len(stages) == 0 {
+			t.Fatalf("%s/Dockerfile parsed to zero stages — the FROM scan regressed", e.Name())
 		}
+		images[e.Name()] = stages
 	}
 
 	// Vacuity guards: a parse that silently found nothing would pass forever.
@@ -78,38 +96,101 @@ func TestAgentImagesPreCreateDriveDir(t *testing.T) {
 			t.Fatalf("image %q not found under deploy/images (found %v) — if it was renamed or removed, re-derive this guard", must, sortedKeys(images))
 		}
 	}
-	if len(parent) == 0 {
-		t.Fatal("no image resolved a `FROM wardyn/agent-…` parent — the FROM-chain parse regressed, and a derived image missing the drive dir would no longer be traced to the ancestor that creates it")
+	derived := 0
+	total := 0
+	for _, stages := range images {
+		total += len(stages)
+		if wardynSiblingRef.MatchString(stages[len(stages)-1].base) {
+			derived++
+		}
+	}
+	if derived == 0 {
+		t.Fatal("no image's FINAL stage is built `FROM wardyn/agent-…` — the FROM-chain parse regressed, and a derived image missing the drive dir would no longer be traced to the ancestor that creates it")
+	}
+	if total <= len(images) {
+		t.Fatalf("every image parsed to a single stage (%d stages over %d images) — the stage split regressed, and a builder-stage mkdir would satisfy a runtime stage again", total, len(images))
 	}
 
 	for _, name := range sortedKeys(images) {
 		t.Run(name, func(t *testing.T) {
-			// Walk the FROM chain until an ancestor creates the directory.
-			// Bounded by the number of images, so a cycle cannot hang the test.
-			for cur, hops := name, 0; hops <= len(images); hops++ {
-				instrs, ok := images[cur]
-				if !ok {
-					t.Fatalf("%s: FROM chain names wardyn/agent-%s, which has no Dockerfile under deploy/images", name, cur)
-				}
-				if mk := driveMkdirInstruction(instrs); mk != "" {
+			// Walk from the FINAL stage up its own ancestry — an earlier stage
+			// only when this one's FROM names it, a sibling image only when this
+			// one's FROM is that image. Bounded by the total number of stages, so
+			// a cycle cannot hang the test.
+			cur, stages, idx := name, images[name], len(images[name])-1
+			for hops := 0; hops <= total; hops++ {
+				st := stages[idx]
+				if mk := driveMkdirInstruction(st.instrs); mk != "" {
 					if !strings.Contains(mk, "chown -R agent:agent /home/agent") {
 						t.Errorf("%s: %s is created but the SAME instruction does not chown it to agent:\n\t%s\n"+
 							"A root-owned drive root is EACCES for uid 1000 the first time a managed drive is mounted over it.", cur, driveDir, mk)
 					}
 					return
 				}
-				next, ok := parent[cur]
-				if !ok {
-					t.Errorf("%s: no stage creates %s and it is not built FROM a sibling image that does.\n"+
-						"Add it to the image's `mkdir -p /home/agent/work` line (owned by agent, same RUN as the chown): a managed\n"+
-						"docker_volume drive mounted here would otherwise get a ROOT-owned volume root and be unwritable by uid 1000.", name, driveDir)
-					return
+				// An alias of an EARLIER stage in this same file. Only earlier —
+				// a FROM can never name a stage declared below it.
+				if i := stageByAlias(stages, st.base); i >= 0 && i < idx {
+					idx = i
+					continue
 				}
-				cur = next
+				if m := wardynSiblingRef.FindStringSubmatch(st.base); m != nil {
+					next, ok := images[m[1]]
+					if !ok {
+						t.Fatalf("%s: FROM chain names %s, which has no Dockerfile under deploy/images", name, st.base)
+					}
+					cur, stages, idx = m[1], next, len(next)-1
+					continue
+				}
+				t.Errorf("%s: the stage that SHIPS (built FROM %s) does not create %s, and neither does any stage or image it is built on.\n"+
+					"Add it to that stage's `mkdir -p /home/agent/work` line (owned by agent, same RUN as the chown): a managed\n"+
+					"docker_volume drive mounted here would otherwise get a ROOT-owned volume root and be unwritable by uid 1000.\n"+
+					"A mkdir in a BUILDER stage does not count — that layer is thrown away.", name, st.base, driveDir)
+				return
 			}
 			t.Errorf("%s: FROM chain did not terminate — a cycle among deploy/images Dockerfiles?", name)
 		})
 	}
+}
+
+// dockerfileStages splits a Dockerfile into its stages: each FROM starts one,
+// and the instructions after it belong to it. ARG lines before the first FROM
+// are global and belong to no stage, so they are dropped.
+func dockerfileStages(src string) []dockerStage {
+	var out []dockerStage
+	for _, in := range dockerfileInstructions(src) {
+		fields := strings.Fields(in)
+		if len(fields) < 2 || !strings.EqualFold(fields[0], "FROM") {
+			if len(out) > 0 {
+				last := &out[len(out)-1]
+				last.instrs = append(last.instrs, in)
+			}
+			continue
+		}
+		st := dockerStage{}
+		rest := fields[1:]
+		for len(rest) > 0 && strings.HasPrefix(rest[0], "--") { // --platform=…
+			rest = rest[1:]
+		}
+		if len(rest) == 0 {
+			continue
+		}
+		st.base = strings.ToLower(rest[0])
+		if len(rest) >= 3 && strings.EqualFold(rest[1], "AS") {
+			st.alias = strings.ToLower(rest[2])
+		}
+		out = append(out, st)
+	}
+	return out
+}
+
+// stageByAlias returns the index of the stage answering to ref, or -1.
+func stageByAlias(stages []dockerStage, ref string) int {
+	for i, st := range stages {
+		if st.alias != "" && st.alias == ref {
+			return i
+		}
+	}
+	return -1
 }
 
 // dockerfileInstructions joins backslash-continued lines into one string per
@@ -150,11 +231,52 @@ func driveMkdirInstruction(instrs []string) string {
 
 // sortedKeys returns a map's keys in a stable order, so subtest names and
 // failure messages do not shuffle between runs.
-func sortedKeys(m map[string][]string) []string {
+func sortedKeys(m map[string][]dockerStage) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
 	}
 	sort.Strings(out)
 	return out
+}
+
+// TestDockerfileStages_ABuilderStageDoesNotCountForTheRuntimeStage is the
+// counterfactual for the walk above, on a Dockerfile no image in the tree has —
+// and the exact shape that used to pass wrongly. Reading every instruction as
+// one bag found the builder's mkdir; taking the LAST `FROM wardyn/agent-…`
+// found the builder's parent. Both answers describe a layer that is thrown
+// away, while the image that actually ships has a root-owned /home/agent/drive.
+func TestDockerfileStages_ABuilderStageDoesNotCountForTheRuntimeStage(t *testing.T) {
+	const src = `
+FROM wardyn/agent-base:local AS tools
+RUN mkdir -p /home/agent/work /home/agent/drive \
+ && chown -R agent:agent /home/agent
+FROM debian:bookworm-slim
+COPY --from=tools /usr/local/bin/thing /usr/local/bin/thing
+RUN mkdir -p /home/agent/work && chown -R agent:agent /home/agent
+`
+	stages := dockerfileStages(src)
+	if len(stages) != 2 {
+		t.Fatalf("parsed %d stages, want 2: %+v", len(stages), stages)
+	}
+	if stages[0].alias != "tools" || stages[0].base != "wardyn/agent-base:local" {
+		t.Errorf("builder stage = %+v, want base wardyn/agent-base:local AS tools", stages[0])
+	}
+	final := stages[len(stages)-1]
+	if final.base != "debian:bookworm-slim" {
+		t.Errorf("final stage base = %q, want the EXTERNAL base — the last `FROM wardyn/agent-…` is not the final stage", final.base)
+	}
+	if mk := driveMkdirInstruction(final.instrs); mk != "" {
+		t.Errorf("the final stage was credited with %q, which belongs to the builder stage", mk)
+	}
+	if mk := driveMkdirInstruction(stages[0].instrs); mk == "" {
+		t.Error("the builder stage's own mkdir went missing — the split dropped instructions")
+	}
+	if i := stageByAlias(stages, final.base); i != -1 {
+		t.Errorf("the external base resolved to in-file stage %d — an alias lookup must not match an image reference", i)
+	}
+	// And a --platform flag on the FROM does not become the base.
+	if got := dockerfileStages("FROM --platform=$BUILDPLATFORM golang:1.27 AS builder\nRUN true\n"); len(got) != 1 || got[0].base != "golang:1.27" || got[0].alias != "builder" {
+		t.Errorf("--platform FROM parsed as %+v, want base golang:1.27 alias builder", got)
+	}
 }

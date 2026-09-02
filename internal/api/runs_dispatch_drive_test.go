@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -38,7 +39,13 @@ func dispatchDrive(readOnly bool) *types.DriveMount {
 // the SandboxSpec the runner received plus the audit trail.
 func runDriveDispatch(t *testing.T, drive *types.DriveMount) (runner.SandboxSpec, []types.AuditEvent) {
 	t.Helper()
-	fr := &fakeRunner{}
+	return runDriveDispatchWith(t, &fakeRunner{}, drive)
+}
+
+// runDriveDispatchWith is the same, on a caller-supplied runner — so a test can
+// make CreateSandbox fail.
+func runDriveDispatchWith(t *testing.T, fr *fakeRunner, drive *types.DriveMount) (runner.SandboxSpec, []types.AuditEvent) {
+	t.Helper()
 	srv, _, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	run.Task = "" // no agent exec / completion watcher: this is about composition
 	srv.dispatchRun(context.Background(), run, dispatchParams{
@@ -81,6 +88,15 @@ func TestDispatch_DriveReachesSpecEnvAndAudit(t *testing.T) {
 	if ev.ActorType != types.ActorSystem {
 		t.Errorf("run.drive.mount actor = %q, want %q — a member ticked a checkbox, dispatch resolved it into an object",
 			ev.ActorType, types.ActorSystem)
+	}
+	// THE ROW'S ONE RENDERED DETAIL. The console's Audit tab draws a row from
+	// time, actor, action and Target and reads nothing out of Data, so a Target
+	// set to the run id (which the event already carries) leaves the object name
+	// on no screen at all — and "which storage did this run mount" is the whole
+	// question this action exists to answer.
+	if ev.Target != drive.ObjectName {
+		t.Errorf("run.drive.mount target = %q, want the storage object %q — the run id is already on the event, and the Audit tab renders nothing from data",
+			ev.Target, drive.ObjectName)
 	}
 	var data map[string]any
 	if err := json.Unmarshal(ev.Data, &data); err != nil {
@@ -163,5 +179,36 @@ func TestApplyUserDriveEnv(t *testing.T) {
 		if strings.Contains(env["WARDYN_USER_DRIVE"], leak) {
 			t.Errorf("WARDYN_USER_DRIVE = %q leaks the admin-facing %q", env["WARDYN_USER_DRIVE"], leak)
 		}
+	}
+}
+
+// TestDispatch_DriveIsNotAuditedWhenTheSandboxFails pins the ORDER the emit
+// site's comment argues for, which nothing else held: run.drive.mount is
+// written AFTER CreateSandbox returns, never beside the spec that carries the
+// drive.
+//
+// The driver has the last word on whether a drive is actually bound — it re-runs
+// the host-root ceiling and the bind deny-list on the symlink-resolved real
+// path as the last thing before the container is created, and a share
+// re-pointed since the drive row was written is refused THERE. Emitted earlier,
+// the feed carried a `success` row for a mount that the very next event
+// contradicted, and an operator reading back "which run mounted whose storage"
+// months later would have believed the row rather than the run.
+//
+// Two assertions, both load-bearing: no mount row at all, and the run.create
+// failure that says why.
+func TestDispatch_DriveIsNotAuditedWhenTheSandboxFails(t *testing.T) {
+	fr := &fakeRunner{createErr: errors.New("denied user drive mount: outside every configured root")}
+	spec, events := runDriveDispatchWith(t, fr, dispatchDrive(false))
+
+	if spec.Drive == nil {
+		t.Fatal("the drive never reached SandboxSpec — this test would then pass for the wrong reason")
+	}
+	if ev := findAudit(events, spec.RunID, "run.drive.mount", "success"); ev != nil {
+		t.Errorf("a run whose CreateSandbox FAILED audited run.drive.mount: %s\n"+
+			"The row must be emitted after CreateSandbox returns — the driver can still refuse the drive, and a success row here is a claim the next event contradicts.", ev.Data)
+	}
+	if ev := findAudit(events, spec.RunID, "run.create", "failure"); ev == nil {
+		t.Errorf("no run.create failure row; events=%s", auditDump(events, spec.RunID))
 	}
 }

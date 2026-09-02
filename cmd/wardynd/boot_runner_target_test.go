@@ -4,8 +4,11 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 )
 
 // The gap this flag closes: a daemon booted with -runner none resolves the
@@ -69,14 +72,28 @@ func TestBuildRunnerFromFlags_RunnerTargetOverride(t *testing.T) {
 
 	// 3. A CONFIGURED runner ignores the override entirely: the resolved
 	//    substrate's own name is the only truthful target, so the override is
-	//    not even consulted. This package's tagless test build registers no
-	//    substrate (runner_registry_nodocker_test.go), so -runner docker fails
-	//    at the registry — and the assertion is that the override neither
-	//    rescues that failure nor becomes the target. The positive half (a
-	//    resolved substrate keeps its own name) is
-	//    TestBuildRunnerFromFlags_DockerEnabled under -tags docker.
+	//    not even consulted. Which half of that is observable depends on the
+	//    build, so this branches on the registry rather than on a build tag —
+	//    the package is gated in BOTH flavors (tagless via `go test`, docker
+	//    via `go test -tags docker`) and this leg must hold in each. With
+	//    "docker" registered, -runner docker resolves and the target is
+	//    "docker", never the "k8s" override; without it (the tagless build,
+	//    runner_registry_nodocker_test.go) the registry miss is the refusal,
+	//    and the override neither rescues it nor becomes the target.
 	t.Run("a configured runner ignores the override", func(t *testing.T) {
-		_, target, err := buildRunnerFromFlags(withOverride("docker", "k8s"), nil, nil)
+		r, target, err := buildRunnerFromFlags(withOverride("docker", "k8s"), nil, nil)
+		if slices.Contains(substrate.Names(), "docker") {
+			if err != nil {
+				t.Fatalf("unexpected error resolving the registered docker substrate: %v", err)
+			}
+			if r == nil {
+				t.Error("runner = nil: -runner docker resolved, so the daemon must dispatch")
+			}
+			if target != "docker" {
+				t.Errorf("target = %q, want \"docker\": the override was consulted for a configured runner", target)
+			}
+			return
+		}
 		if err == nil {
 			t.Fatal("want the registry-miss refusal; the override must not rescue an unresolvable -runner")
 		}

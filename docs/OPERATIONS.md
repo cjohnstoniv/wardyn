@@ -532,11 +532,16 @@ Docker deployment there are two backends, and the difference is who owns the
 bytes.
 
 **`docker_volume` — Wardyn allocates.** A per-person named volume
-(`wardyn-drive-<home>`), created on first use with the `local` driver, labelled
-`wardyn.drive` / `wardyn.home`, and mounted at the reserved target. Nothing to
-configure. Reclaim is a command, not a button:
-`docker volume rm wardyn-drive-<home>` — `POST /drives/preview` prints the exact
-object name for a principal so you need not compute it.
+(`wardyn-drive-<home>`), created on first use with the `local` driver and
+mounted at the reserved target. Nothing to configure. It carries two labels:
+`wardyn.drive` = the **drive row's id** (the object name is per *person*, so the
+id is the only thing that groups a drive's volumes together) and `wardyn.home` =
+that person's directory name. Reclaim is a command, not a button:
+
+- one person: `docker volume rm wardyn-drive-<home>` — `POST /drives/preview`
+  prints the exact object name for a principal so you need not compute it;
+- one drive, everybody: `docker volume ls --filter label=wardyn.drive=<drive id>`
+  lists every volume that drive allocated.
 
 **Restoring one by hand: re-create it with its labels, and with no `--opt`.**
 Wardyn reuses a volume that already answers to the name, but only when it has
@@ -544,9 +549,25 @@ Wardyn's own shape — the `local` driver and **no driver options** — and refu
 to mount anything else rather than adopt it. That refusal is deliberate: a
 volume an operator precreated with `--opt type=cifs --opt o=…,password=…` would
 otherwise become somebody's drive, on a share credential Wardyn never chose. So
-a restore is `docker volume create --label wardyn.drive=wardyn-drive-<home>
---label wardyn.home=<home> wardyn-drive-<home>`, then copy the data in; a volume
-restored without its labels still mounts but no longer answers
+a restore is
+
+```
+docker volume create \
+  --label wardyn.managed=true \
+  --label wardyn.drive=<drive id> \
+  --label wardyn.home=<home> \
+  wardyn-drive-<home>
+```
+
+then copy the data in. `wardyn.drive` carries the **drive row's id** (the `id`
+on `GET /api/v1/drives`, and the `Target` of that drive's `drive.write` audit
+row), not the volume's name — the id is what groups every person's object under
+the drive that allocated them. Get it wrong and Wardyn **refuses** the volume
+rather than adopting it: a label naming a *different* drive is how two drives
+whose home names collided would otherwise hand one member the other's storage.
+A volume restored with **no** `wardyn.drive` label at all still mounts (that is
+the fall-back this path is for, and every volume created before the label
+carried an id has none) — it just no longer answers
 `docker volume ls --filter label=wardyn.home=<home>`.
 
 **`host_path` — you already mount the share.** Wardyn binds **one person's
@@ -569,9 +590,19 @@ the share mount, never holds a share credential, and never creates a volume with
    `/export/wardyn-drives 10.0.0.0/8(rw,all_squash,anonuid=1000,anongid=1000)`.
 
 2. **Make one `0700` subdirectory per person** under the mount point, named the
-   way the drive's home template resolves (`{username}`, `{sub}`, …). Wardyn does
-   **not** `mkdir` on a share — a missing home is a `422` at run create, not a
+   way the drive's home template resolves. There are three templates —
+   `hash` (a digest of the drive id and the subject), `sub` (the sign-in subject
+   claim verbatim) and `email_local` (the part of the email claim before the
+   `@`, the usual shape of a corporate home) — and a **share** drive may only
+   use `sub` or `email_local`: a hash would name a directory nobody created.
+   Per person, a grant's *home override* pins any other name. Wardyn does **not**
+   `mkdir` on a share — a missing home is a `422` at run create ("directory
+   `<home>` does not exist on the share — ask an admin to create it"), not a
    directory Wardyn invents inside somebody's NAS.
+
+   Two people whose email addresses share the part before the `@` resolve to the
+   **same** home under `email_local` — the segment is validated, not proven
+   unique. Use `sub`, or a per-person home override, where that can happen.
 
 3. **Set the ceiling**: `WARDYN_USER_DRIVE_HOST_ROOTS=/srv/wardyn-drives`
    ([ENV.md](ENV.md)). Unset means **no `host_path` drive may be registered at
@@ -584,25 +615,28 @@ the share mount, never holds a share credential, and never creates a volume with
    by a symlink out of the share after the drive was registered is refused at
    run time too.
 
-**On the Compose stack, wardynd must be able to SEE the root.** The bind's
-source is resolved by the host daemon (wardynd's sandboxes are sibling
-containers), but the ceiling check resolves symlinks and fails closed on a path
-it cannot stat — so a `host_path` drive registered from a containerised wardynd
-is refused unless the share is visible inside it too. `docker-compose.yaml`
-forwards no roots variable and mounts no share by default (deliberately: the
-same posture `WARDYN_MEMBER_WORKSPACE_ROOTS` has — nothing is exposed until an
-operator names it). Add both, read-only and at the **same path** on each side,
-the way `WARDYN_WORKSPACES_ROOT` and `WARDYN_BEDROCK_AWS_DIR` already are — one
-volume line per configured root:
+**On the Compose stack, wardynd must be able to SEE the root — set two
+variables.** The bind's source is resolved by the host daemon (wardynd's
+sandboxes are sibling containers), but the ceiling check resolves symlinks and
+fails closed on a path it cannot stat, so a `host_path` drive registered from a
+containerised wardynd is refused unless the share is visible inside it too.
+`docker-compose.yaml` carries both halves already — nothing to hand-edit:
 
-```yaml
-services:
-  wardynd:
-    environment:
-      WARDYN_USER_DRIVE_HOST_ROOTS: "/srv/wardyn-drives"
-    volumes:
-      - /srv/wardyn-drives:/srv/wardyn-drives:ro
 ```
+WARDYN_USER_DRIVE_HOST_ROOTS=/srv/wardyn-drives   # the ceiling wardynd enforces
+WARDYN_USER_DRIVE_HOST_ROOT=/srv/wardyn-drives    # compose binds this one, RO, same path
+```
+
+in `deploy/compose/.env` (or the environment `docker compose` is run with).
+Unset, both default to nothing exposed — the same opt-in posture
+`WARDYN_WORKSPACES_ROOT` and `WARDYN_MEMBER_WORKSPACE_ROOTS` take.
+
+**One root on Compose.** The ceiling is a CSV and may name several roots;
+the bind is singular, because compose cannot expand a CSV into volume lines. A
+deployment whose ceiling names more than one root adds one more volume line per
+extra root in `deploy/compose/docker-compose.yaml`, copied from the
+`WARDYN_USER_DRIVE_HOST_ROOT` line — or runs wardynd on the host, or on
+Kubernetes, where no bind is involved and the ceiling is the only thing to set.
 
 Read-only is enough for wardynd: it stats the tree and never writes to it. It
 does need **search (`x`) permission down to the person's directory**, though,
@@ -610,9 +644,14 @@ because the bind-time ceiling check resolves symlinks in *wardynd's own
 process* — so a CIFS mount table line like the `dir_mode=0700,uid=1000` one
 above works when wardynd runs as root or as uid 1000, and otherwise needs
 `dir_mode=0750,gid=<wardynd's gid>` (or the equivalent NFS export mode). A
-share wardynd cannot traverse fails every drive on it closed, with a "could not
-be resolved" refusal at run create. The sandbox's own mode comes from the
-allocation, not from this line. A `docker_volume` drive needs none of this —
+share wardynd cannot traverse fails every drive on it closed at run create —
+with `drive: this deployment cannot mount your drive (host_root … could not be
+resolved on this host …)` when the **root itself** is what wardynd cannot
+resolve, and with `drive: directory <home> does not exist on the share — ask an
+admin to create it` when the root resolves but the person's directory does not
+stat (a home that was never created, and a home behind a directory whose
+permissions hide it, are the same sentence). The sandbox's own mode comes from
+the allocation, not from this line. A `docker_volume` drive needs none of this —
 there is no host path to see.
 
 **Why every sandbox is uid 1000, and what that buys.** Every agent image is

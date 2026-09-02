@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
 
@@ -17,10 +18,16 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// driveRowID is the user_drives row every managed drive in this file belongs
+// to — the value wardyn.drive carries, so a test can tell "this drive's
+// volume" from "some other drive's volume that took the same name".
+var driveRowID = uuid.MustParse("11111111-2222-3333-4444-555555555555")
+
 // dockerVolumeDrive is a resolved MANAGED user drive, in the shape the control
 // plane hands the driver (types.DriveMount — never a runner.Mount).
 func dockerVolumeDrive() *types.DriveMount {
 	return &types.DriveMount{
+		DriveID:     driveRowID,
 		Backend:     types.DriveBackendDockerVolume,
 		ObjectName:  "wardyn-drive-alice",
 		HomeName:    "alice",
@@ -84,8 +91,12 @@ func TestDriveVolume_CreatedWithLabelsAndNoOptions(t *testing.T) {
 	if len(opts.DriverOpts) != 0 {
 		t.Errorf("volume DriverOpts = %v, want none — driver options are how a CIFS/NFS password leaks into `docker volume inspect`", opts.DriverOpts)
 	}
-	if opts.Labels[labelDrive] != "wardyn-drive-alice" {
-		t.Errorf("label %s = %q, want the drive's object name", labelDrive, opts.Labels[labelDrive])
+	// The DRIVE ROW's id, never the volume's own name: the name is what the
+	// volume already answers to, and only the id groups every principal's
+	// object under the drive that allocated them (DESIGN §3.2).
+	if opts.Labels[labelDrive] != driveRowID.String() {
+		t.Errorf("label %s = %q, want the drive row's id %q — the object name is not a discriminator, it is the volume's own name",
+			labelDrive, opts.Labels[labelDrive], driveRowID)
 	}
 	if opts.Labels[labelDriveHome] != "alice" {
 		t.Errorf("label %s = %q, want %q", labelDriveHome, opts.Labels[labelDriveHome], "alice")
@@ -191,17 +202,53 @@ func TestEnsureDriveVolume_AdoptsOnlyWardynsOwnShape(t *testing.T) {
 		}
 	})
 
+	// A DIFFERENT DRIVE's volume, Wardyn-shaped in every other way. Object names
+	// are per-PRINCIPAL (DriveObjectName), so two drives whose home templates
+	// collide resolve to one name — and adopting on the name alone would hand
+	// this member the other drive's storage, plus a place to write into it when
+	// the allocation is writable.
+	t.Run("another-drives-id", func(t *testing.T) {
+		other := uuid.MustParse("99999999-8888-7777-6666-555555555555")
+		f := seed(client.VolumeCreateOptions{
+			Name:   "wardyn-drive-alice",
+			Driver: "local",
+			Labels: map[string]string{labelManaged: "true", labelDrive: other.String(), labelDriveHome: "alice"},
+		})
+		err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive())
+		if err == nil {
+			t.Fatal("a volume labelled with ANOTHER drive's id must be refused, not adopted")
+		}
+		for _, want := range []string{other.String(), driveRowID.String()} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal should name both ids so an admin can tell which drives collided, missing %q in: %v", want, err)
+			}
+		}
+	})
+
 	t.Run("wardyn-shaped-is-reused", func(t *testing.T) {
 		f := seed(client.VolumeCreateOptions{
 			Name:   "wardyn-drive-alice",
 			Driver: "local",
-			Labels: map[string]string{labelManaged: "true", labelDrive: "wardyn-drive-alice", labelDriveHome: "alice"},
+			Labels: map[string]string{labelManaged: "true", labelDrive: driveRowID.String(), labelDriveHome: "alice"},
 		})
 		if err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err != nil {
 			t.Fatalf("a Wardyn-shaped volume must be REUSED, not refused: %v", err)
 		}
 		if f.volumeCreates != 0 {
 			t.Errorf("reuse made %d VolumeCreate calls, want 0", f.volumeCreates)
+		}
+	})
+
+	// A LABEL-LESS volume is still adopted, and that is the documented restore
+	// path: `docker volume create` + copy the data back leaves no labels unless
+	// the operator passes them, and every volume created before wardyn.drive
+	// carried an id has none. Refusing here would turn a restore-from-backup
+	// into an outage; the refusal above is for a label that names a DIFFERENT
+	// drive, which is a collision, not an absence.
+	t.Run("label-less-is-adopted", func(t *testing.T) {
+		f := seed(client.VolumeCreateOptions{Name: "wardyn-drive-alice", Driver: "local"})
+		if err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive()); err != nil {
+			t.Fatalf("a label-less Wardyn-shaped volume must be adopted (the hand-restore path): %v", err)
 		}
 	})
 }

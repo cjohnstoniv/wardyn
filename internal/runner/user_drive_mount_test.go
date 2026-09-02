@@ -40,8 +40,7 @@ func TestParseUserDriveHostRoots(t *testing.T) {
 
 	t.Run("a root at / WARNs but is permitted", func(t *testing.T) {
 		// Allow-and-warn is MemberMountPolicy.bootWarnings' own posture: the
-		// operator may have chosen it deliberately, and should still be told the
-		// ceiling now bounds essentially nothing.
+		// operator may have chosen it deliberately, and should still be told.
 		roots, warns, err := ParseUserDriveHostRoots("/,/srv/homes")
 		if err != nil {
 			t.Fatalf("err = %v, want permitted", err)
@@ -51,6 +50,18 @@ func TestParseUserDriveHostRoots(t *testing.T) {
 		}
 		if !strings.Contains(warns[0], "WARDYN_USER_DRIVE_HOST_ROOTS") {
 			t.Errorf("warning = %q, want the var named", warns[0])
+		}
+		// AND it must say the RIGHT thing. "/" reads like "allow anywhere" and
+		// behaves like "allow nothing": withinAnyRoot matches `real == root` or
+		// `real` under `root + "/"`, which for "/" is the prefix "//" that no
+		// cleaned absolute path has. An operator told the ceiling is "too wide"
+		// would go looking for the drive it wrongly allowed instead of for the
+		// drive it silently refused.
+		if !strings.Contains(warns[0], "NOTHING") {
+			t.Errorf("warning = %q, want it to say a root of \"/\" matches nothing — it is DEAD, not wide", warns[0])
+		}
+		if err := UserDriveHostRootCheck([]string{"/"})("/srv/homes"); err == nil {
+			t.Error("a ceiling of \"/\" accepted a host root — the warning claims it matches nothing, so this is the claim itself")
 		}
 	})
 }
@@ -85,6 +96,21 @@ func TestUserDriveHostRootCheck(t *testing.T) {
 	// /etc is inside no legitimate share.
 	if err := UserDriveHostRootCheck([]string{"/"})("/etc"); err == nil {
 		t.Error("/etc was accepted as a drive host root under a wide-open ceiling")
+	}
+
+	// The DOTFILE deny-list runs on the resolved path too: a share whose mount
+	// point is (or traverses) a credential directory is never a drive's host
+	// root. ValidateMountSource denies whole system trees and says nothing about
+	// a .ssh inside an ordinary home, so without this the threat model's "the
+	// dotfile deny-list matches the real path" was true of member mounts only.
+	cred := filepath.Join(root, "homes", ".ssh")
+	if err := os.MkdirAll(cred, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := check(cred); err == nil {
+		t.Error("a host root inside .ssh was accepted — the credential deny-list must run on a drive's root too")
+	} else if !strings.Contains(err.Error(), ".ssh") {
+		t.Errorf("the refusal should name the offending segment, got: %v", err)
 	}
 
 	// A SYMLINK inside the ceiling pointing OUT of it is refused, which is the
@@ -124,5 +150,43 @@ func TestValidateAuthoredTargetReservesTheDriveTarget(t *testing.T) {
 	// And it still enforces everything ValidateTarget does.
 	if err := ValidateAuthoredTarget("/usr/local"); err == nil {
 		t.Error("a target outside every allowed prefix was accepted")
+	}
+}
+
+// TestUserDriveMountSourceCheck is the DRIVER-side half: everything the
+// authoring ceiling asserts, plus the one rule that only applies to a bind —
+// the source must be a STRICT SUBDIRECTORY of a root.
+//
+// The split is the point. An authored host_root legitimately IS a root (the
+// ordinary shape: the ceiling names the share's mount point and so does the
+// drive), so folding the equality refusal into UserDriveHostRootCheck would
+// refuse every correct drive. A MOUNT resolving to the root is a different
+// thing entirely: it would bind the whole share — every other person's home —
+// into one member's sandbox.
+func TestUserDriveMountSourceCheck(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "alice")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	roots := []string{root}
+
+	if err := UserDriveMountSourceCheck(roots)(home); err != nil {
+		t.Fatalf("a person's subdirectory of the root was refused: %v", err)
+	}
+	if err := UserDriveMountSourceCheck(roots)(root); err == nil {
+		t.Error("the ROOT itself was accepted as a bind source — that binds every other person's home into this sandbox")
+	}
+	// The same path is FINE as an authored host_root, which is why the equality
+	// rule cannot live in the shared check.
+	if err := UserDriveHostRootCheck(roots)(root); err != nil {
+		t.Errorf("the root was refused as an authored host_root, which is the ordinary shape: %v", err)
+	}
+	// And the composed half still refuses: unset roots, and the deny-lists.
+	if err := UserDriveMountSourceCheck(nil)(home); err == nil {
+		t.Error("unset roots accepted a bind source — the fail-closed default must survive composition")
+	}
+	if err := UserDriveMountSourceCheck([]string{"/"})("/etc/wardyn-drives"); err == nil {
+		t.Error("the host bind deny-list did not run through the composed check")
 	}
 }

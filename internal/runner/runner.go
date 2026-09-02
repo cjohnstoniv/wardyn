@@ -136,11 +136,23 @@ type Mount struct {
 	// false state is a refactor that stops stamping it, so the check would
 	// vanish exactly when the code around it changed.
 	//
-	// It is set by the DRIVER, not by dispatch: SandboxSpec.Drive is a
-	// types.DriveMount rather than a Mount precisely so the composer clamp, the
-	// workspace-source allow-list and the k8s blanket host-bind refusal never
-	// see a drive; the Docker driver converts it to a Mount internally so the
-	// bind's provenance is on the wire beside every other mount's.
+	// IT NEVER LEAVES THE DRIVER, and never reaches a wire. SandboxSpec.Drive is
+	// a types.DriveMount rather than a Mount precisely so the composer clamp, the
+	// workspace-source allow-list and the k8s blanket host-bind refusal never see
+	// a drive — which also means dispatch puts no Mount carrying this flag into
+	// spec.Mounts, and nothing that serializes a SandboxSpec ever observes it.
+	// The Docker driver builds a local Mount from the DriveMount so the bind
+	// passes through the same value shape every other bind does, stamps this on
+	// it, and converts it to the runtime's own mount type in the next statement.
+	// The json tag is the struct's shape, not a claim that this field is
+	// transmitted; `omitempty` plus "never set outside the driver" means it is
+	// absent from every spec that is.
+	//
+	// So it is DOCUMENTATION IN THE TYPE, kept deliberately (user-drives DESIGN
+	// §3.1(5) and §11 Q3, owner default: a bool, converted to a Kind enum at the
+	// third authoring class). `git grep -n DriveAuthored` is the whole audit: the
+	// declaration, the one assignment, and prose. If a gate ever reads it, that
+	// grep is where the fail-open shows up.
 	//
 	// TWO FLAGS, NOT A Kind ENUM, and this comment is the trigger to change
 	// that: N=2 is below the consolidation threshold and MemberAuthored is

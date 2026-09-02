@@ -422,14 +422,26 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drive *types.DriveMount) {
 // data that is still there. Actor SYSTEM — a member ticked a checkbox, and what
 // is recorded is dispatch's own resolution of that flag into an object.
 //
-// `object` is the storage object (a Docker volume name, or the host
-// subdirectory of a share) and `drive` the per-person HOME SEGMENT — not the
-// drive object's name, which is what the same key carries on the drive.grant.*
-// rows (userDriveGrantAuditData). Both are admin-facing, and neither is ever
-// surfaced to the member, whose request carried a flag and never a path. `enforcement` is what actually binds the
-// drive's bytes (types.StorageEnforcement), logged beside the mount so a size
-// read back in a later dispute carries its caveat instead of reading as a
-// promise. Five fields, matching docs/AUDIT-ACTIONS.md exactly.
+// TARGET IS THE STORAGE OBJECT, not the run id — the run is already named by
+// the event's own run id, so spending the target on it a second time made the
+// row's one rendered detail redundant. The console's Audit tab renders a row as
+// time, actor, action and `target`, and nothing at all from `data`
+// (`AuditTab`), so the object name reaches a screen only from here: an operator
+// (or the member, reading their own run's rows through GET /audit?run_id=) sees
+// WHICH volume or share directory this run was handed, which is the whole
+// question the row exists to answer months later.
+//
+// `object` repeats it in the payload, where the other four fields live, and
+// `drive` is the per-person HOME SEGMENT — not the drive object's name, which
+// is what the same key carries on the drive.grant.* rows
+// (userDriveGrantAuditData). Both are admin-facing in the sense that they name
+// storage rather than a request: neither ever enters the sandbox env, which
+// carries the target and the mode and nothing else (applyUserDriveEnv), so an
+// agent cannot read back the object it was allocated even though the human
+// whose run it is can. `enforcement` is what actually binds the drive's bytes
+// (types.StorageEnforcement), logged beside the mount so a size read back in a
+// later dispute carries its caveat instead of reading as a promise. Five
+// fields, matching docs/AUDIT-ACTIONS.md exactly.
 //
 // The nil test lives HERE rather than at the assembly site for a mechanical
 // reason worth stating: dispatchRun sits at its gocyclo ceiling, so one more
@@ -439,7 +451,7 @@ func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, drive *ty
 		return
 	}
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.drive.mount",
-		runID.String(), "success", mustJSON(map[string]any{
+		drive.ObjectName, "success", mustJSON(map[string]any{
 			"backend":     drive.Backend,
 			"drive":       drive.HomeName,
 			"enforcement": drive.Enforcement,
@@ -449,8 +461,14 @@ func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, drive *ty
 }
 
 // driveAuditMode renders a drive's mode as the SAME two words the sandbox env
-// (applyUserDriveEnv), the run.drive.mount audit row and the console chip all
-// use — one vocabulary, so a log line and a screenshot of the same run agree.
+// (applyUserDriveEnv) and the run.drive.mount audit row use — one vocabulary
+// for the machine-facing surfaces, so a log line and a run's env agree.
+//
+// NOT the console, which is a HUMAN surface and says "Read-only"/"Writable"
+// (MODE_RO/MODE_RW in ui/src/app/lib/user-drives-copy.ts, frozen copy). Those
+// two vocabularies are deliberately different and must not be reconciled: `ro`
+// is what a mount reads as in `docker inspect` and in `mount`, and a chip in a
+// table is prose.
 func driveAuditMode(readOnly bool) string {
 	if readOnly {
 		return "ro"

@@ -300,6 +300,12 @@ func TestCreateSandbox_DeniedDriveMountsRejected(t *testing.T) {
 		{"symlink-escapes-root", escaping, []string{root}},
 		{"outside-the-roots", home, []string{filepath.Join(filepath.Dir(root), "other-share")}},
 		{"no-roots-configured", home, nil},
+		// The source IS the root: lexically fine, inside the ceiling, and it
+		// would bind the WHOLE share — every other person's home — into this one
+		// member's sandbox. Only a bug can produce it (a home that resolved to
+		// "." or "", a symlink from a home back to its parent), which is exactly
+		// what a last-thing-before-ContainerCreate check is for.
+		{"source-is-the-root", root, []string{root}},
 		{"traversal-source", root + "/../alice", []string{root}},
 		{"relative-source", "shares/alice", []string{root}},
 		{"missing-directory", filepath.Join(root, "no-such-home"), []string{root}},

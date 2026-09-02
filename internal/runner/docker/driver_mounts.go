@@ -173,11 +173,13 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount) ([]mou
 	case types.DriveBackendHostPath:
 		// The SHARE bind, converted here — the one place it happens, and the
 		// whole reason runner.Mount.DriveAuthored exists. The stamp is a
-		// PROVENANCE LABEL on the wire and NOTHING GATES ON IT: the ceiling
-		// below runs on every host_path drive unconditionally. Gating it on the
-		// stamp read as defence but was fail-OPEN by shape — the flag's only
-		// false state is a refactor that drops the stamp, and the failure mode
-		// of that refactor would be a share bound with NO ceiling at all.
+		// DRIVER-LOCAL PROVENANCE LABEL: this Mount never enters spec.Mounts and
+		// is converted to the runtime's own mount type three statements down, so
+		// nothing serializes it and NOTHING GATES ON IT — the ceiling below runs
+		// on every host_path drive unconditionally. Gating it on the stamp read
+		// as defence but was fail-OPEN by shape: the flag's only false state is a
+		// refactor that drops the stamp, and the failure mode of that refactor
+		// would be a share bound with NO ceiling at all.
 		m := runner.Mount{
 			// The resolver's already-derived <host_root>/<home>. The driver does
 			// NOT re-join a root and a home name: deriving a path twice, in two
@@ -188,17 +190,24 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount) ([]mou
 			ReadOnly:      drive.ReadOnly,
 			DriveAuthored: true,
 		}
-		// ONE call, not two: UserDriveHostRootCheck runs runner.ValidateMountSource
-		// itself (the full host bind deny-list) before resolving symlinks and
-		// asserting the real path is inside the deployment's roots, so calling
-		// runner.ValidateMount here as well would run the source half twice and
-		// leave two places for the matrix to drift apart.
+		// ONE call, not two: UserDriveMountSourceCheck runs
+		// runner.ValidateMountSource itself (the full host bind deny-list) and
+		// the dotfile deny-list before resolving symlinks and asserting the real
+		// path is inside the deployment's roots, so calling runner.ValidateMount
+		// here as well would run the source half twice and leave two places for
+		// the matrix to drift apart.
+		//
+		// The MOUNT check, not the authoring one, and the difference is a single
+		// rule: a bind's source must be a STRICT SUBDIRECTORY of a root, while an
+		// authored host_root legitimately IS one. A source that resolved to the
+		// root would bind the whole share — everybody's home — into this one
+		// member's sandbox.
 		//
 		// UNSET ROOTS REFUSE EVERY host_path DRIVE, and that arm lives inside
-		// runner.UserDriveHostRootCheck rather than as a `len(roots) > 0` test
-		// here, so the driver and the API write boundary cannot drift on what
-		// "the operator has not said where" means.
-		if err := runner.UserDriveHostRootCheck(d.cfg.UserDriveHostRoots)(m.Source); err != nil {
+		// runner.UserDriveHostRootCheck (which this composes) rather than as a
+		// `len(roots) > 0` test here, so the driver and the API write boundary
+		// cannot drift on what "the operator has not said where" means.
+		if err := runner.UserDriveMountSourceCheck(d.cfg.UserDriveHostRoots)(m.Source); err != nil {
 			return nil, fmt.Errorf("docker: denied user drive mount %q -> %q: %w", m.Source, m.Target, err)
 		}
 		return []mount.Mount{{

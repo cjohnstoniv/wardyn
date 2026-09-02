@@ -63,14 +63,15 @@ const (
 	// with the run that happened to mount it — taking the member's persistent
 	// storage with it. A drive object outlives every run by definition.
 	//
-	// labelDrive carries the drive's OBJECT NAME (types.DriveMount.ObjectName),
-	// which for this backend is the volume's own name. The drive ROW's uuid
-	// would be the stronger discriminator — two managed drives whose home
-	// templates collide resolve to one volume name — but DriveMount is the
-	// run-facing type and deliberately carries only what a mount needs, so it
-	// has no id to stamp. Adding types.DriveMount.DriveID and setting it here
-	// is the change to make when a reclaim sweep needs to group volumes by
-	// drive row; the label KEY is already the one that grouping wants.
+	// labelDrive carries the DRIVE ROW's uuid (types.DriveMount.DriveID), the
+	// value DESIGN §3.2 specifies (`wardyn.drive=<id>`) — deliberately NOT the
+	// volume's own name, which the volume already answers to and which a label
+	// would only restate. The id is the discriminator that answers the question
+	// a reclaim or offboarding sweep actually asks — "every object THIS drive
+	// allocated" — across principals whose object names have nothing in common;
+	// and it is the one value that can tell two managed drives apart when their
+	// home templates collide onto a single volume name, which is exactly the
+	// case the inspect-hit arm below refuses.
 	labelDrive     = "wardyn.drive"
 	labelDriveHome = "wardyn.home"
 )
@@ -118,13 +119,31 @@ func ensureDriveVolume(ctx context.Context, cli dockerAPI, drive *types.DriveMou
 		// driveVolumeDriver's no-DriverOpts rule exists to prevent, arrived at
 		// through the back door. So adopt only WARDYN's OWN SHAPE: the local
 		// driver, and no driver options at all.
-		//
-		// when DriveMount.DriveID lands: also refuse Labels[labelDrive] != drive id
 		if v := res.Volume; v.Driver != driveVolumeDriver || len(v.Options) != 0 {
 			return fmt.Errorf("docker: volume %q already exists with driver %q and %d driver option(s), which is not a Wardyn-managed drive "+
 				"(a managed drive is always driver %q with no options — a precreated share volume must never be adopted as one); "+
 				"rename or remove it, or point this drive at a host_path backend",
 				name, v.Driver, len(v.Options), driveVolumeDriver)
+		}
+		// AND, when the volume says which drive it belongs to, it must say THIS
+		// one. Two managed drives whose home templates collide resolve to a
+		// single volume name (DriveObjectName is per-principal, not per-drive),
+		// and without this the second drive would silently adopt the first
+		// drive's storage — one person's allocation quietly handed a different
+		// drive's contents and, if that drive is writable, a place to write into
+		// it.
+		//
+		// PRESENT-AND-DIFFERENT ONLY. A volume with NO wardyn.drive label is
+		// still adopted, deliberately: restoring one by hand is a documented
+		// operator gesture (docs/OPERATIONS.md "User drives on Docker"), the
+		// labels are a convenience for `docker volume ls --filter`, and every
+		// volume created before this label carried an id has none. Refusing a
+		// label-less volume would turn a restore-from-backup into an outage.
+		if got := res.Volume.Labels[labelDrive]; got != "" && got != drive.DriveID.String() {
+			return fmt.Errorf("docker: volume %q is labelled %s=%s and this drive is %s — two drives resolved to one object name, "+
+				"and adopting it would hand this member another drive's storage; give one of the drives a home_override for this "+
+				"principal, or remove the stale volume",
+				name, labelDrive, got, drive.DriveID)
 		}
 		return nil
 	} else if !isNotFound(err) {
@@ -139,7 +158,7 @@ func ensureDriveVolume(ctx context.Context, cli dockerAPI, drive *types.DriveMou
 		// NO DriverOpts. Ever. See driveVolumeDriver.
 		Labels: map[string]string{
 			labelManaged:   "true",
-			labelDrive:     name,
+			labelDrive:     drive.DriveID.String(),
 			labelDriveHome: drive.HomeName,
 		},
 	}); err != nil {
