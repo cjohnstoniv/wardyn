@@ -49,7 +49,11 @@ var ecosystemPublicURL = map[string]string{
 }
 
 // shellSafeSiteString is the injection-safety half every persisted site-config
-// string must pass, in ONE place: non-empty, bounded, no control characters or
+// string reaches this file through — with one documented exception, the bare
+// host, which validSiteHost short-circuits ahead of this gate and which
+// hostrules.ValidApprovedHost then bounds more tightly than this does
+// (^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$ after TrimSpace, so a control
+// character never survives it either). In ONE place: non-empty, bounded, no control characters or
 // DEL, and none of the shell/XML metacharacters hostrules.EmitArtifactConfig
 // interpolates verbatim into .npmrc/pip.conf/.cargo/config.toml/settings.xml/
 // NuGet.Config/GOPROXY (its doc names validateSiteConfig as the gate it relies
@@ -105,9 +109,11 @@ func validSecretRef(ref string) bool {
 // From (substituteArtifactEgress only ever needs its HOST; the ecosystem's
 // whole public-host table, not From, drives what gets dropped — see
 // substituteArtifactEgress's doc) or either field of a network-only row. Three
-// shapes are accepted, all sharing the SAME shellSafeSiteString gate: a full
-// http(s) URL (validSiteURL), a bare host (validSiteHost), or a bare host with
-// a path/port and no scheme (e.g.
+// shapes are accepted: a full http(s) URL (validSiteURL) and a bare host with a
+// path/port and no scheme share the shellSafeSiteString gate; a bare host
+// (validSiteHost) short-circuits above it and is bounded instead by
+// hostrules.ValidApprovedHost's stricter character class. The third shape is
+// (e.g.
 // "registry.corp.internal/ghcr-remote" or "10.40.2.11:8443") — the realistic
 // shape for a redirect that is a destination, not a browsable URL. An
 // Ecosystem row's To is NEVER validated by this: it is interpolated as a real

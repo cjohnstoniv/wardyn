@@ -126,8 +126,8 @@ func TestValidateSiteConfig(t *testing.T) {
 }
 
 // TestShellSafeSiteString_IsTheOneInjectionGate pins the property
-// shellSafeSiteString exists to make structural: every site-config string
-// validator refuses the SAME control characters, DEL, shell/XML
+// shellSafeSiteString exists to make structural: every site-config string that
+// reaches this gate is refused on the SAME control characters, DEL, shell/XML
 // metacharacters and over-long inputs — including validSiteURLOrHost's third
 // shape (a bare host with a port/path and no scheme), which no scheme or host
 // check rejects on its own and which TestValidateSiteConfig never exercised
