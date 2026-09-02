@@ -13,11 +13,12 @@
 package api
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -194,11 +195,8 @@ func accessMappingsView(chart map[string]string, rows []types.RoleMapping, a *oi
 		}
 		out = append(out, mv)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Value != out[j].Value {
-			return out[i].Value < out[j].Value
-		}
-		return out[i].Source < out[j].Source
+	slices.SortFunc(out, func(a, b accessMappingView) int {
+		return cmp.Or(strings.Compare(a.Value, b.Value), strings.Compare(a.Source, b.Source))
 	})
 	return out
 }

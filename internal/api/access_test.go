@@ -1041,6 +1041,48 @@ func TestAccess_CreatedAtKeyIsAbsentOnChartRows(t *testing.T) {
 	}
 }
 
+// TestAccess_MappingsAreSortedByValueThenSource pins the order
+// accessMappingsView's doc comment promises ("sorted by value then source so
+// the response is deterministic across calls with the same underlying state").
+// Nothing asserted it before — every other shape test looks rows up by key,
+// which is order-blind — so the comparator could have been reordered or
+// dropped without a test noticing. The second key is load-bearing: "chart"
+// sorts before "console", so a shadowed console row always renders directly
+// beneath the chart row that shadows it.
+func TestAccess_MappingsAreSortedByValueThenSource(t *testing.T) {
+	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleMember}, oidc.RoleMember, nil, nil)
+	st := &roleMapStore{rows: []types.RoleMapping{
+		// Deliberately inserted out of order.
+		{ID: uuid.New(), Value: "eng-team", Role: oidc.RoleAdmin, CreatedBy: "a@corp.example", CreatedAt: time.Now().UTC()},
+		{ID: uuid.New(), Value: "design-team", Role: oidc.RoleMember, CreatedBy: "a@corp.example", CreatedAt: time.Now().UTC()},
+		{ID: uuid.New(), Value: "arch-team", Role: oidc.RoleMember, CreatedBy: "a@corp.example", CreatedAt: time.Now().UTC()},
+	}}
+	srv := accessServer(t, auth, st)
+
+	w := do(t, srv, http.MethodGet, "/api/v1/access", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp accessResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	type row struct{ value, source string }
+	got := make([]row, 0, len(resp.Mappings))
+	for _, m := range resp.Mappings {
+		got = append(got, row{m.Value, m.Source})
+	}
+	want := []row{
+		{"arch-team", "console"},
+		{"design-team", "console"},
+		{"eng-team", "chart"},   // chart before console on the same value
+		{"eng-team", "console"}, // the shadowed row, right beneath its shadower
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("mapping order = %v, want %v", got, want)
+	}
+}
+
 // ─── preview ────────────────────────────────────────────────────────────────
 
 func TestAccess_PreviewExplicitClaims(t *testing.T) {
