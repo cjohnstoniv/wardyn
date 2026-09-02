@@ -14,8 +14,7 @@ import (
 // role/ownership gate each route sits behind. Split out of server.go (which
 // owns Config/Server/New/New's small helpers) so the route TABLE — the thing
 // most likely to be read/audited/extended — stays a single, self-contained
-// file. See server.go's package doc comment for the route map summary and
-// internal/api/authz_test.go's chi.Walk-enumerated matrix for the
+// file. See internal/api/authz_test.go's chi.Walk-enumerated matrix for the
 // authoritative, always-current classification of every route below.
 func (s *Server) routes() chi.Router {
 	r := chi.NewRouter()
