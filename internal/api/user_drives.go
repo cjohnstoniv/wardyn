@@ -402,13 +402,33 @@ const driveRehomeConfirm = "rehome"
 // is the state these fields are corrected in most often — a row authored a
 // minute ago.
 //
-// ONE STORE READ, on the drive-write path only, and it is ListUserDrives because
-// that read carries the existing row AND its grant count together; a GetUserDrive
-// plus a grant scan would be two reads for one question. A read that FAILS is a
-// 500 and never "no grants": a list that could not answer cannot say a drive is
-// unallocated, and treating it as unallocated is how a gate silently stops
-// biting on exactly the deployment whose database is unhappy — the ordering rule
-// driveHostRootNesting states for the same reason.
+// ONE STORE READ IN THIS GATE — not one on the write path. It is ListUserDrives
+// because that read carries the existing row AND its grant count together, where
+// a GetUserDrive plus a grant scan would be two reads for one question; but on a
+// host_path write driveHostRootNesting has already listed, so that path costs
+// two. Kept as two rather than threaded through both gates from writeUserDrive:
+// a gate that takes its rows as an argument fails closed only while every caller
+// remembers to read them, and these two run on different conditions (nesting on
+// host_path alone, this one on every write). The cost is a handful of list reads
+// across a deployment's lifetime, on the query the console already issues on
+// every visit to the screen.
+//
+// A read that FAILS is a 500 and never "no grants": a list that could not answer
+// cannot say a drive is unallocated, and treating it as unallocated is how a
+// gate silently stops biting on exactly the deployment whose database is
+// unhappy — the ordering rule driveHostRootNesting states for the same reason.
+//
+// WEAKER THAN THE DELETE 409 IT TAKES ITS STATUS FROM, and that is worth stating
+// rather than implying. handleDeleteUserDrive's 409 is enforced by POSTGRES (ON
+// DELETE RESTRICT on user_drive_grants.drive_id), so it has no window at all.
+// This one is application-level, between a read and an UNCONDITIONAL
+// UpsertUserDrive: a grant created after the list and before the write is
+// re-homed silently, exactly as it was before this gate existed. Closing that
+// needs the read and the write in ONE transaction, and the Store interface
+// exposes finished operations rather than a tx handle — to PG and to every test
+// double alike — so the real fix is a database-level one and it is 0.7.1. What
+// the gate does close is the case that actually happens: an admin editing a
+// drive that people are already allocated on.
 func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (int, string) {
 	drives, err := s.cfg.Store.ListUserDrives(r.Context())
 	if err != nil {
@@ -434,10 +454,18 @@ func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (int, stri
 	if before.GrantCount > 1 {
 		them = "them"
 	}
+	// NAMES AN ACTION ITS READER CAN TAKE. The console has no confirm affordance
+	// — updateDrive PUTs /drives/{id} with no query and the editor renders any
+	// HttpError under SAVE_REFUSED_TITLE — so "re-send with ?confirm=rehome"
+	// read, on the one screen that raises this, as a button an admin could not
+	// find. It says what changes, how many allocations move, and that confirming
+	// is an API act. The console affordance is a mock round's (CONSOLE-RULES
+	// §12): a confirm dialog is new UI and new copy, and the frozen module has
+	// neither.
 	return http.StatusConflict, fmt.Sprintf(
 		"this drive is allocated to %s and this change re-homes %s: %s. Every allocated person's storage object is derived from "+
 			"these fields, so their next run mounts a different object and the one holding their work is left behind with nothing "+
-			"in Wardyn naming it. Re-send with ?confirm=%s if that is what you mean.",
+			"in Wardyn naming it. Confirming is an API action, not a console one: re-send as PUT /drives/{id}?confirm=%s.",
 		pluralDriveSubjects(before.GrantCount), them, strings.Join(changes, ", "), driveRehomeConfirm)
 }
 

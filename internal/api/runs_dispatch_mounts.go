@@ -464,16 +464,22 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drive *types.DriveMount) {
 //
 // WHICH storage it names depends on WHO can read the row, and that is
 // driveAuditTarget's whole subject: a member reads their own run's rows through
-// GET /audit?run_id=, so a share's absolute host path in the target would hand
-// them the operator's filesystem layout — the exact thing driveShareIsBindable
-// refuses to put in a refusal and applyUserDriveEnv refuses to put in the
-// sandbox. A share's target is therefore "<drive>/<home>"; a managed object's
-// name is Wardyn's own and stays verbatim.
+// GET /audit?run_id=, so a share's absolute host path ANYWHERE ON THIS ROW would
+// hand them the operator's filesystem layout — the exact thing
+// driveShareIsBindable refuses to put in a refusal and applyUserDriveEnv refuses
+// to put in the sandbox. A share's target is therefore "<drive>/<home>"; a
+// managed object's name is Wardyn's own and stays verbatim.
 //
-// `object` keeps the real object in the payload, for the OPERATOR: the reclaim
-// command needs the exact name, and the payload is not rendered on the member's
-// run page. `drive` is the per-person HOME SEGMENT — not the drive object's
-// name, which is what the same key carries on the drive.grant.* rows
+// `object` CARRIES THE SAME NAME, and the reason is that "anywhere on this row"
+// is the whole claim: masking the Target while the payload still spelled
+// <host_root>/<home> moved the operator's filesystem layout one field over,
+// inside the same row GET /audit?run_id= hands the run's creator whole. So a
+// share's `object` is "<drive>/<home>" as well, and the operator reads the root
+// from GET /drives — operator-only, and it already shows it — rather than from a
+// member-readable audit row. A MANAGED object is untouched on both fields: its
+// name is Wardyn's own and discloses nothing about the host. `drive` is the
+// per-person HOME SEGMENT — not the drive object's name, which is what the same
+// key carries on the drive.grant.* rows
 // (userDriveGrantAuditData). Neither ever enters the sandbox env, which carries
 // the target and the mode and nothing else (applyUserDriveEnv), so an agent
 // cannot read back the object it was allocated. `enforcement` is what actually
@@ -494,7 +500,7 @@ func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, drive *ty
 			"drive":       drive.HomeName,
 			"enforcement": drive.Enforcement,
 			"mode":        driveAuditMode(drive.ReadOnly),
-			"object":      drive.ObjectName,
+			"object":      driveAuditTarget(drive),
 		})))
 }
 
@@ -516,8 +522,10 @@ func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, drive *ty
 // operator's filesystem layout stays where GET /drives already keeps it"), and
 // applyUserDriveEnv carries the target and the mode and nothing else. So a
 // share's target is "<drive>/<home>" — which drive, whose directory — and the
-// absolute path stays in the payload's `object`, where an operator's reclaim
-// command reads it and the run page does not render it.
+// absolute path is on the row NOWHERE, `object` included (auditDriveMount calls
+// this for that field too): a payload the same reader can fetch is not a place
+// to keep it. The operator reads the root from GET /drives, which is
+// operator-only and already carries it.
 //
 // A mount that carries no DriveName (an older control plane, a hand-written
 // -spec) falls back to the home alone rather than to the object: the fallback

@@ -872,8 +872,14 @@ func TestUpdateAllocatedUserDriveRefusesASilentRehome(t *testing.T) {
 			if !strings.Contains(body, "2 subjects") {
 				t.Errorf("body = %q, want it to count the allocations it would re-home", body)
 			}
-			if !strings.Contains(body, "confirm=rehome") {
-				t.Errorf("body = %q, want the way to say you mean it", body)
+			// THE REMEDY HAS TO BE ONE ITS READER CAN CARRY OUT. The console
+			// PUTs /drives/{id} with no query and renders this body under
+			// SAVE_REFUSED_TITLE, so "re-send with ?confirm=rehome" read as a
+			// button an admin could not find. Byte-exact, because the whole
+			// finding was the wording.
+			const remedy = "Confirming is an API action, not a console one: re-send as PUT /drives/{id}?confirm=rehome."
+			if !strings.Contains(body, remedy) {
+				t.Errorf("body = %q, want it to end with %q", body, remedy)
 			}
 			// And NOTHING was written: a refused write must leave the row alone,
 			// or the guard would only be telling an admin about a change it had
@@ -943,7 +949,12 @@ func TestUpdateAllocatedUserDriveRefusesASilentRehome(t *testing.T) {
 	t.Run("an unreadable grant count is a 500, never a quiet re-home", func(t *testing.T) {
 		st, srv, d := stored(t)
 		st.listErr = context.DeadlineExceeded
-		if w := put(t, srv, d.ID, share("nas", "email_local", homes), ""); w.Code != http.StatusInternalServerError {
+		// A docker_volume BODY, deliberately: driveHostRootNesting lists too and
+		// runs FIRST, so a host_path body would answer the identical 500 from the
+		// other gate and this sub-test would pass without the re-home guard's
+		// fail-closed arm ever running. Only a non-share write reaches it alone.
+		body := `{"name":"nas","backend":"docker_volume","home_template":"sub","size_mib":10240}`
+		if w := put(t, srv, d.ID, body, ""); w.Code != http.StatusInternalServerError {
 			t.Fatalf("PUT with an unreadable list = %d, want 500: %s", w.Code, w.Body.String())
 		}
 		if got := st.drives[d.ID]; got != d {

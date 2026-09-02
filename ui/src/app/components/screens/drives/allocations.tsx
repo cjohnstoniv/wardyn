@@ -33,6 +33,7 @@
 import * as React from "react";
 import { Loader2, Users } from "lucide-react";
 import { toast } from "sonner";
+import { HttpError } from "../../../lib/api/core";
 import { previewClaims } from "../../../lib/api/governance";
 import {
   drives as api,
@@ -442,14 +443,22 @@ function AddAllocationForm({ drives, onChanged }: { drives: UserDriveListItem[];
 function DrivePreview() {
   const [claims, setClaims] = React.useState("");
   const [busy, setBusy] = React.useState(false);
-  const [result, setResult] = React.useState<{ answer: UserDrivePreview } | { error: true } | null>(null);
+  const [result, setResult] = React.useState<{ answer: UserDrivePreview } | { error: string } | null>(null);
 
   const run = async () => {
     setBusy(true);
     try {
       setResult({ answer: await api.previewDrive(previewClaims(claims)) });
-    } catch {
-      setResult({ error: true });
+    } catch (e) {
+      // The SAME thing the drive editor does with a refused save. The preview
+      // runs the launch path's own gates now — the governance door's 403, the
+      // backend this deployment cannot mount, the home that is not on the share
+      // — and each answers in the launch's own words. Collapsing all of them
+      // into "couldn't resolve this" threw away the one answer the admin opened
+      // the panel for. The console contributes no string: the server's sentence
+      // renders verbatim, and the canon line stays as the fallback for a
+      // failure that carried no body at all.
+      setResult({ error: e instanceof HttpError ? e.message : GOV.PREVIEW_RESULT_UNKNOWN });
     } finally {
       setBusy(false);
     }
@@ -480,7 +489,7 @@ function DrivePreview() {
       </div>
       {result &&
         ("error" in result ? (
-          <Note tone="red">{GOV.PREVIEW_RESULT_UNKNOWN}</Note>
+          <Note tone="red">{result.error}</Note>
         ) : result.answer.drive_name && result.answer.matched_tier ? (
           <PreviewResult answer={result.answer} />
         ) : (

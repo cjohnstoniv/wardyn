@@ -423,6 +423,7 @@ func TestCreateSandbox_HostPathDriveStaysInsideItsOwnDriveRoot(t *testing.T) {
 		}
 		drive := hostPathDrive(linked)
 		drive.HostRoot = rootA // the row an admin authored: drive A
+		drive.DriveName = "nas"
 		drive.HomeName = "alice"
 
 		f, _, err := createWithDrive(t, drive, []string{rootA, rootB})
@@ -432,8 +433,21 @@ func TestCreateSandbox_HostPathDriveStaysInsideItsOwnDriveRoot(t *testing.T) {
 		if !strings.Contains(err.Error(), "denied user drive") {
 			t.Errorf("error should identify the denied drive, got: %v", err)
 		}
-		if !strings.Contains(err.Error(), rootA) {
-			t.Errorf("the refusal should name the drive's own host_root, got: %v", err)
+		// NAMES THE DRIVE AND THE DIRECTORY, NEVER THE PATHS. Every driver
+		// refusal becomes the run's failure_hint, which the run's CREATOR reads,
+		// and both roots plus the bind source are the operator's filesystem
+		// layout — the same disclosure driveAuditTarget masks off the audit row
+		// and applyUserDriveEnv keeps out of the sandbox. The operator gets them
+		// from the slog line UserDriveHomeWithinItsRoot writes beside this.
+		for _, leak := range []string{rootA, rootB, linked, drive.ObjectName} {
+			if strings.Contains(err.Error(), leak) {
+				t.Errorf("refusal = %q leaks the host path %q to the run's creator", err, leak)
+			}
+		}
+		for _, want := range []string{`drive "nas"`, `directory "alice"`} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("refusal = %q, want it to name %s", err, want)
+			}
 		}
 		if f.containers[agentContainerName(testSpec().RunID)] != nil {
 			t.Error("agent container exists after the refusal — the check must precede ContainerCreate")

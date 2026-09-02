@@ -21,9 +21,12 @@ package runner
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // ParseUserDriveHostRoots parses WARDYN_USER_DRIVE_HOST_ROOTS — a CSV of
@@ -241,25 +244,67 @@ func UserDriveMountSourceCheck(roots []string) func(source string) (string, erro
 // UserDriveMountSourceCheck: binding a share's root hands one member every
 // other member's home, and a check that is only stated once is a check a
 // refactor can drop.
-func UserDriveHomeWithinItsRoot(hostRoot, real string) error {
-	if strings.TrimSpace(hostRoot) == "" {
-		return fmt.Errorf("user drive source %q carries no host_root to be contained by — a share drive's own root is what "+
-			"bounds it to one drive's tree, and the deployment ceiling alone would allow another drive's", real)
+//
+// ─── THE REFUSAL NAMES THE DRIVE, THE LOG NAMES THE PATHS ───────────────────
+//
+// Every driver refusal on this path becomes the run's failure_hint, which the
+// run's CREATOR reads — the same reader driveShareIsBindable already refuses to
+// hand the resolved path, applyUserDriveEnv refuses to hand the object name, and
+// driveAuditTarget masks the audit row for. So the returned error names the
+// DRIVE and the DIRECTORY and nothing else (driveSubject), the shape
+// driveVolumeAdoptable already uses when it declines to reproduce a subject
+// digest, and the host_root, the resolved real path and the underlying resolve
+// error go to slog, where the operator reads them. Field NAMES are kept
+// (host_root) — a field name is not a value.
+//
+// A mount that cannot even name its drive falls back to the directory alone: the
+// fallback for "I cannot name the drive" must not be "then disclose the path".
+func UserDriveHomeWithinItsRoot(drive *types.DriveMount, real string) error {
+	if drive == nil {
+		return fmt.Errorf("user drive: this mount carries no drive to be contained by")
 	}
-	root := filepath.Clean(hostRoot)
+	who := driveSubject(drive)
+	if strings.TrimSpace(drive.HostRoot) == "" {
+		slog.Warn("wardyn: user drive: a share mount carried no host_root, so it could not be bounded to its own drive's tree",
+			slog.String("drive", drive.DriveName), slog.String("home", drive.HomeName), slog.String("real_path", real))
+		return fmt.Errorf("user drive: %s carries no host_root to be contained by — a share drive's own root is what "+
+			"bounds it to one drive's tree, and the deployment ceiling alone would allow another drive's", who)
+	}
+	root := filepath.Clean(drive.HostRoot)
 	resolved, err := filepath.EvalSymlinks(root)
 	if err != nil {
-		return fmt.Errorf("user drive host_root %q could not be resolved on this host (a share's root must be a directory that exists here): %w", hostRoot, err)
+		slog.Warn("wardyn: user drive: this drive's host_root could not be resolved on this host",
+			slog.String("drive", drive.DriveName), slog.String("home", drive.HomeName),
+			slog.String("host_root", drive.HostRoot), slog.String("err", err.Error()))
+		return fmt.Errorf("user drive: %s cannot be bound — this drive's host_root is not a directory that exists on this "+
+			"host, so there is nothing to contain it", who)
 	}
 	root = resolved
 	if real == root {
-		return fmt.Errorf("user drive source resolves to %q, which IS this drive's host_root — a drive binds one person's "+
-			"subdirectory of a share, never the share itself (every other person's home is under it)", real)
+		slog.Warn("wardyn: user drive: the bind source resolved to this drive's own host_root",
+			slog.String("drive", drive.DriveName), slog.String("home", drive.HomeName),
+			slog.String("host_root", root), slog.String("real_path", real))
+		return fmt.Errorf("user drive: %s resolves to this drive's host_root itself — a drive binds one person's "+
+			"subdirectory of a share, never the share itself (every other person's home is under it)", who)
 	}
 	if !withinAnyRoot(real, []string{root}) {
-		return fmt.Errorf("user drive source resolves to %q, which is outside this drive's host_root %q — the deployment's "+
-			"ceiling allows that tree for SOME drive, but a home replaced by a link into another drive's root would bind "+
-			"that drive's directory instead of this one's", real, root)
+		slog.Warn("wardyn: user drive: the bind source resolved outside this drive's own host_root",
+			slog.String("drive", drive.DriveName), slog.String("home", drive.HomeName),
+			slog.String("host_root", root), slog.String("real_path", real))
+		return fmt.Errorf("user drive: %s resolves outside this drive's own host_root — the deployment's ceiling allows "+
+			"that tree for SOME drive, but a home replaced by a link into another drive's root would bind that drive's "+
+			"directory instead of this one's", who)
 	}
 	return nil
+}
+
+// driveSubject names a mount the way a member-facing refusal may: which drive,
+// whose directory, and no path. A mount carrying no drive name (an older control
+// plane, a hand-written -spec) names the directory alone — never the object,
+// which on a share IS the operator's absolute path.
+func driveSubject(drive *types.DriveMount) string {
+	if drive.DriveName == "" {
+		return fmt.Sprintf("directory %q", drive.HomeName)
+	}
+	return fmt.Sprintf("drive %q, directory %q", drive.DriveName, drive.HomeName)
 }

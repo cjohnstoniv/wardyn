@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // TestParseUserDriveHostRoots pins the boot posture: refuse a malformed
@@ -277,6 +279,14 @@ func TestUserDriveMountSourceCheck(t *testing.T) {
 // ceiling both trees are equally allowed and the ceiling cannot tell which
 // drive this bind belongs to.
 func TestUserDriveHomeWithinItsRoot(t *testing.T) {
+	// The check takes the MOUNT now, not two paths: its refusal names the drive
+	// and the directory and never a path, so it needs the names.
+	within := func(hostRoot, real string) error {
+		return UserDriveHomeWithinItsRoot(&types.DriveMount{
+			Backend: types.DriveBackendHostPath, ObjectName: real,
+			HostRoot: hostRoot, DriveName: "nas", HomeName: "alice",
+		}, real)
+	}
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")
 	rootB := filepath.Join(base, "b")
@@ -289,38 +299,67 @@ func TestUserDriveHomeWithinItsRoot(t *testing.T) {
 	// The ordinary shape, and one nested deeper: a strict subdirectory at any
 	// depth is inside this drive's tree.
 	for _, real := range []string{filepath.Join(rootA, "alice"), filepath.Join(rootA, "alice", "docs")} {
-		if err := UserDriveHomeWithinItsRoot(rootA, real); err != nil {
+		if err := within(rootA, real); err != nil {
 			t.Errorf("a home inside its own drive's root was refused: %v", err)
 		}
 	}
 	// The whole point: rootB is a perfectly legal tree for SOME drive, and the
 	// deployment ceiling says so. It is not this drive's.
-	if err := UserDriveHomeWithinItsRoot(rootA, filepath.Join(rootB, "alice")); err == nil {
-		t.Error("a home resolving into ANOTHER drive's root was accepted — that binds the other drive's directory")
+	crossDrive := within(rootA, filepath.Join(rootB, "alice"))
+	if crossDrive == nil {
+		t.Fatal("a home resolving into ANOTHER drive's root was accepted — that binds the other drive's directory")
+	}
+	// AND THE REFUSAL IS MEMBER-SAFE. Every driver refusal on this path becomes
+	// the run's failure_hint, read by the run's CREATOR — so the message names
+	// the drive and the directory (driveVolumeAdoptable's shape) and neither the
+	// drive's root nor the resolved real path. The operator reads those from the
+	// log line beside it.
+	for _, leak := range []string{rootA, rootB, filepath.Join(rootB, "alice")} {
+		if strings.Contains(crossDrive.Error(), leak) {
+			t.Errorf("refusal = %q leaks the host path %q to the run's creator", crossDrive, leak)
+		}
+	}
+	for _, want := range []string{`drive "nas"`, `directory "alice"`} {
+		if !strings.Contains(crossDrive.Error(), want) {
+			t.Errorf("refusal = %q, want it to name %s", crossDrive, want)
+		}
+	}
+	// A mount that cannot name its drive names the DIRECTORY alone — never the
+	// object, which on a share is the absolute path.
+	anon := UserDriveHomeWithinItsRoot(&types.DriveMount{
+		Backend: types.DriveBackendHostPath, ObjectName: filepath.Join(rootB, "alice"),
+		HostRoot: rootA, HomeName: "alice",
+	}, filepath.Join(rootB, "alice"))
+	if anon == nil || !strings.Contains(anon.Error(), `directory "alice"`) || strings.Contains(anon.Error(), rootB) {
+		t.Errorf("nameless-drive refusal = %v, want the directory alone and no path", anon)
+	}
+	// A nil mount is a refusal too, not a nil-deref.
+	if err := UserDriveHomeWithinItsRoot(nil, filepath.Join(rootA, "alice")); err == nil {
+		t.Error("a nil drive was accepted — an absent mount cannot be contained by anything")
 	}
 	// STRICT: the root itself would bind every other person's home, and the rule
 	// is stated here as well as in UserDriveMountSourceCheck so a refactor
 	// cannot drop the only copy.
-	if err := UserDriveHomeWithinItsRoot(rootA, rootA); err == nil {
+	if err := within(rootA, rootA); err == nil {
 		t.Error("the drive's own root was accepted as a bind source — a drive binds one person's subdirectory, never the share")
 	}
 	// Separator-anchored, so a sibling tree whose name merely starts with the
 	// root's is outside it.
-	if err := UserDriveHomeWithinItsRoot(rootA, rootA+"2"); err == nil {
+	if err := within(rootA, rootA+"2"); err == nil {
 		t.Errorf("%q was treated as inside %q — the prefix match must be separator-anchored", rootA+"2", rootA)
 	}
 	// FAIL CLOSED on an absent root: "" means the mount was built by something
 	// that does not carry the field, and falling through would be the pre-fix
 	// behaviour reappearing where nobody would look for it.
 	for _, missing := range []string{"", "   "} {
-		if err := UserDriveHomeWithinItsRoot(missing, filepath.Join(rootA, "alice")); err == nil {
+		if err := within(missing, filepath.Join(rootA, "alice")); err == nil {
 			t.Errorf("an empty host_root (%q) was accepted — an absent per-drive bound must refuse, never skip", missing)
 		}
 	}
 	// And on a root that cannot be resolved on this host, for the reason
 	// UserDriveHostRootCheck fails closed on the same thing: a bound that cannot
 	// be evaluated is not a bound.
-	if err := UserDriveHomeWithinItsRoot(filepath.Join(base, "no-such-root"), filepath.Join(rootA, "alice")); err == nil {
+	if err := within(filepath.Join(base, "no-such-root"), filepath.Join(rootA, "alice")); err == nil {
 		t.Error("an unresolvable host_root was accepted")
 	}
 	// A root reached through a SYMLINK still bounds: both sides are resolved, so
@@ -333,7 +372,7 @@ func TestUserDriveHomeWithinItsRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve home: %v", err)
 	}
-	if err := UserDriveHomeWithinItsRoot(linkedRoot, realHome); err != nil {
+	if err := within(linkedRoot, realHome); err != nil {
 		t.Errorf("a host_root reached through a symlink refused its own home: %v", err)
 	}
 }

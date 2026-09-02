@@ -519,6 +519,7 @@ does not freeze a second wording:
 | Template invalid for a share (400) | `validateUserDrive` | home_template "hash" is not allowed on a share backend — a share's directories are named by your directory, so pick sub or email_local |
 | Size required for a managed claim (400) | `validateUserDrive` | size_mib must be above 0 for a k8s_pvc drive — it is the volume request |
 | Delete while allocated (409) | `handleDeleteUserDrive` | this drive is still allocated — remove its allocations first (deleting it while allocated would leave those subjects with a mount that names nothing) |
+| Identity-affecting PUT on an allocated drive (409) | `driveRehomeGuard` | this drive is allocated to {n subjects} and this change re-homes {them}: {backend "host_path" → "docker_volume", …}. Every allocated person's storage object is derived from these fields, so their next run mounts a different object and the one holding their work is left behind with nothing in Wardyn naming it. Confirming is an API action, not a console one: re-send as PUT /drives/{id}?confirm=rehome. |
 | Home override on a non-user row (400) | `validateUserDriveGrant` | home_override is accepted on a user-tier allocation only — a group cannot share one directory |
 | Stricter home rule on a Kubernetes backend (**suffix**, 422) | `DriveHomeStricterRuleClause`, appended by `newResolvedDrive` after `REFUSED_HOME_INVALID` | (on a Kubernetes deployment the rule is stricter: no _, and it may not end in - or .) |
 
@@ -532,6 +533,16 @@ enforces, which is what this table's rule is for.
 The 409 body **carries no count and must not grow one**: `DELETE_RESTRICT_BODY` (§7.4) is the
 client-side pre-fill and names the count the list already shows; on the race path the client
 believed the count was zero and renders the wire text.
+
+The **re-home 409** is the second row that names a count, and it names its own: nothing on the
+client can pre-fill it, because which of the four identity columns a PUT changes is only known
+once the stored row and the submitted one are compared. It ends by naming an **API** action on
+purpose. The console has no confirm affordance — `updateDrive` PUTs `/drives/{id}` with no query
+and the editor renders any `HttpError` under `DRIVES.SAVE_REFUSED_TITLE` (§7.4) — so a remedy
+phrased as "re-send with `?confirm=rehome`" reads, on the one screen that raises it, as a button
+an admin cannot find. A confirm dialog is new UI and new copy: **FILED for a mock round**
+(CONSOLE-RULES §12), not invented here. Until it exists the sentence must keep saying that
+confirming happens through the API.
 
 ### 7.2 `DRIVES` — the drives block
 
@@ -787,7 +798,12 @@ prefixed `workspace_mounts[i]` (`workspace_repos[i]` for a repo), and the frozen
 the first mount's, so the canon equals the server's bytes. `{reason}` in `REFUSED_BACKEND` is **`driveMountFor`'s own prose**
 (`internal/api/user_drives_run.go`): the backend/runner mismatch — *it is a "{backend}" drive and
 this deployment dispatches to "{target}"* — or, for a share, `driveShareIsBindable`'s host-root
-error. It is **not** an apiserver refusal; the console never asks the cluster and nothing on this
+arm, *drive "{name}" is on a share this deployment does not allow — ask an admin*. That arm is
+**path-free by rule**: `UserDriveHostRootCheck`'s own error spells the drive's `host_root` and the
+whole `WARDYN_USER_DRIVE_HOST_ROOTS` list, and this body is read by a MEMBER, so the diagnosis
+goes to `slog` for the operator and the member gets the drive's name and who to ask — the same
+line `REFUSED_HOME_MISSING`, `applyUserDriveEnv` and the `run.drive.mount` target already hold.
+It is **not** an apiserver refusal; the console never asks the cluster and nothing on this
 path relays one. `{claim}` in `REFUSED_HOME_INVALID` is
 the template's claim name (`sub`, `email_local`). `MEMBER.DENIED_STALE_GROUPS` (§7.1)
 is reused verbatim for the truncated-snapshot case and is not re-frozen.

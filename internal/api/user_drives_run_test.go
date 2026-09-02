@@ -433,7 +433,7 @@ func TestSeedRequestDriveShareIsBindableAtMountTime(t *testing.T) {
 	t.Run("the env ceiling is UNSET since the drive was authored", func(t *testing.T) {
 		// The row is still perfectly valid and the directory is still there.
 		// What changed is the deployment, and a stale row must not survive it.
-		_, st := newShare(t)
+		root, st := newShare(t)
 		srv, rec := driveShareServer(st, nil)
 		mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, shareCtx())
 		if ok || mount != nil {
@@ -444,13 +444,23 @@ func TestSeedRequestDriveShareIsBindableAtMountTime(t *testing.T) {
 		}
 		// REFUSED_BACKEND's shape, not a fifth refusal: from the member's side
 		// "the roots moved" and "this deployment dispatches elsewhere" are one
-		// fact, and the parenthesised reason is the admin's diagnosis.
+		// fact.
 		got := refusalBody(t, w)
 		if !strings.HasPrefix(got, "drive: this deployment cannot mount your drive (") {
 			t.Errorf("body = %q, want the REFUSED_BACKEND shape", got)
 		}
-		if !strings.Contains(got, "WARDYN_USER_DRIVE_HOST_ROOTS") {
-			t.Errorf("body = %q, want it to name the ceiling an admin has to set", got)
+		// AND THE DIAGNOSIS IS NOT IN IT. UserDriveHostRootCheck's error spells
+		// the drive's host_root and the whole ceiling list, and this body goes to
+		// a MEMBER — the same reader the missing-home arm, applyUserDriveEnv and
+		// driveAuditTarget all keep the operator's filesystem layout from. The
+		// roots go to slog; the member gets the drive's name and who to ask.
+		for _, leak := range []string{"WARDYN_USER_DRIVE_HOST_ROOTS", root} {
+			if strings.Contains(got, leak) {
+				t.Errorf("body = %q discloses %q to the member", got, leak)
+			}
+		}
+		if !strings.Contains(got, `drive "Corp NAS" is on a share this deployment does not allow — ask an admin`) {
+			t.Errorf("body = %q, want it to name the drive and who fixes it", got)
 		}
 		if len(rec.events) != 0 {
 			t.Errorf("audit = %v, want NO audit", driveAuditActions(rec))
@@ -459,14 +469,22 @@ func TestSeedRequestDriveShareIsBindableAtMountTime(t *testing.T) {
 
 	t.Run("the root MOVED OUT of the ceiling", func(t *testing.T) {
 		// The variable is still set; it just no longer covers this row's root.
-		_, st := newShare(t)
-		srv, _ := driveShareServer(st, []string{t.TempDir()})
+		root, st := newShare(t)
+		allowed := t.TempDir()
+		srv, _ := driveShareServer(st, []string{allowed})
 		_, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, shareCtx())
 		if ok || w.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("code = %d, ok = %v; want 422 for a root outside the roots", w.Code, ok)
 		}
-		if got := refusalBody(t, w); !strings.HasPrefix(got, "drive: this deployment cannot mount your drive (") {
+		got := refusalBody(t, w)
+		if !strings.HasPrefix(got, "drive: this deployment cannot mount your drive (") {
 			t.Errorf("body = %q, want the REFUSED_BACKEND shape", got)
+		}
+		// Neither the row's root nor the roots it is being measured against.
+		for _, leak := range []string{root, allowed} {
+			if strings.Contains(got, leak) {
+				t.Errorf("body = %q discloses the host path %q to the member", got, leak)
+			}
 		}
 	})
 

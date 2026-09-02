@@ -107,9 +107,11 @@ func TestDispatch_DriveReachesSpecEnvAndAudit(t *testing.T) {
 	if strings.Contains(ev.Target, drive.HostRoot) {
 		t.Errorf("run.drive.mount target = %q leaks the share's host root %q to the member", ev.Target, drive.HostRoot)
 	}
-	// …and the OPERATOR still gets the exact object, in the payload, because a
-	// reclaim command needs the real name and `data` is not rendered on the run
-	// page. Asserted here beside the masking so the pair cannot drift apart.
+	// …AND THE PAYLOAD IS NOT A SIDE DOOR. Masking the Target while `object`
+	// still spelled the absolute path moved the operator's layout one field over
+	// inside the SAME row: GET /audit?run_id= hands the creator the whole event,
+	// data included, so `object` carries the masked name too. The operator reads
+	// the root from GET /drives, which is operator-only and already shows it.
 	var data map[string]any
 	if err := json.Unmarshal(ev.Data, &data); err != nil {
 		t.Fatalf("run.drive.mount payload is not an object: %v (%s)", err, ev.Data)
@@ -119,7 +121,7 @@ func TestDispatch_DriveReachesSpecEnvAndAudit(t *testing.T) {
 		"drive":       "alice",
 		"enforcement": "external",
 		"mode":        "ro",
-		"object":      "/srv/wardyn-drives/alice",
+		"object":      "nas/alice",
 	}
 	for k, v := range want {
 		if data[k] != v {
@@ -130,6 +132,11 @@ func TestDispatch_DriveReachesSpecEnvAndAudit(t *testing.T) {
 		if _, ok := want[k]; !ok {
 			t.Errorf("run.drive.mount payload carries an undocumented field %q — docs/AUDIT-ACTIONS.md lists five", k)
 		}
+	}
+	// The whole row, not one field of it: nothing a member can fetch may spell
+	// the share's root.
+	if strings.Contains(string(ev.Data), drive.HostRoot) {
+		t.Errorf("run.drive.mount payload = %s leaks the share's host root %q to the member", ev.Data, drive.HostRoot)
 	}
 }
 
@@ -245,5 +252,15 @@ func TestDispatch_ManagedDriveAuditsTheObjectName(t *testing.T) {
 	if ev.Target != "wardyn-drive-alice" {
 		t.Errorf("run.drive.mount target = %q, want the managed object's own name — it names no host path, so there is "+
 			"nothing to mask and the operator's reclaim command reads it straight off the row", ev.Target)
+	}
+	// And the payload's `object` is UNCHANGED on this arm — the masking is the
+	// share's alone, so a managed row still hands the reclaim command the exact
+	// volume name.
+	var data map[string]any
+	if err := json.Unmarshal(ev.Data, &data); err != nil {
+		t.Fatalf("run.drive.mount payload is not an object: %v (%s)", err, ev.Data)
+	}
+	if data["object"] != "wardyn-drive-alice" {
+		t.Errorf("run.drive.mount payload[object] = %v, want the managed object verbatim (full payload: %s)", data["object"], ev.Data)
 	}
 }

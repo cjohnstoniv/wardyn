@@ -280,8 +280,24 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount) ([]mou
 		// in runner.UserDriveHomeWithinItsRoot): "" means this mount was built by
 		// something that does not carry the field, and falling through would be
 		// the pre-fix behaviour reappearing exactly where it cannot be seen.
-		if err := runner.UserDriveHomeWithinItsRoot(drive.HostRoot, real); err != nil {
-			return nil, fmt.Errorf("docker: denied user drive mount %q -> %q: %w", m.Source, m.Target, err)
+		//
+		// AT CHECK TIME, which is a residual and not a caveat. What both bounds
+		// assert is the SYMLINK-RESOLVED path; what goes to ContainerCreate three
+		// statements down is m.Source, the LEXICAL <host_root>/<home>, which the
+		// daemon resolves again for itself. A host-side attacker who re-points
+		// the home between this check and that create binds whatever the second
+		// resolve finds — THREAT-MODEL residual #25's TOCTOU, inherited
+		// identically by drives (#35 says so). The check is placed as late as
+		// this process can look, immediately before ContainerCreate, and
+		// validate-then-create remains two operations: nothing here closes that
+		// window and no test claims to.
+		//
+		// The wrapper names the TARGET, never m.Source, and the refusal it wraps
+		// names the drive and the directory: this error becomes the run's
+		// failure_hint, and m.Source is the operator's absolute path. The paths
+		// are in the log, where UserDriveHomeWithinItsRoot slogs them.
+		if err := runner.UserDriveHomeWithinItsRoot(drive, real); err != nil {
+			return nil, fmt.Errorf("docker: denied user drive mount -> %q: %w", m.Target, err)
 		}
 		// AND THE RESOLVED PATH MUST STILL BE THIS PERSON'S HOME. The two rules
 		// catch different substitutions: the root check refuses a link that

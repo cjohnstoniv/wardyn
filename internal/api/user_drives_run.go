@@ -65,6 +65,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 
@@ -301,8 +302,15 @@ func (s *Server) driveMountFor(w http.ResponseWriter, req createRunRequest,
 // The refusal takes the REFUSED_BACKEND shape rather than a new one, and that
 // is the honest reading: from the member's side "the roots moved" and "this
 // deployment dispatches elsewhere" are one fact — this deployment cannot mount
-// their drive — and the parenthesised reason is where the admin's diagnosis
-// goes.
+// their drive.
+//
+// THE DIAGNOSIS GOES TO THE LOG, NOT INTO THE 422. UserDriveHostRootCheck's own
+// error spells the host_root and the whole WARDYN_USER_DRIVE_HOST_ROOTS list,
+// and this body is read by a MEMBER — the same reader the missing-home arm
+// below, applyUserDriveEnv and driveAuditTarget all decline to hand the
+// operator's filesystem layout. So the parenthesised half names the drive and
+// says who can fix it, and the roots reach the operator through slog, where the
+// admin diagnosing a stale row is actually looking.
 //
 // ─── (2) THE DIRECTORY MUST EXIST, AND BE ONE ──────────────────────────────
 //
@@ -325,8 +333,12 @@ func (s *Server) driveShareIsBindable(w http.ResponseWriter, resolved types.Reso
 		return true
 	}
 	if err := s.userDriveHostRootCheck()(resolved.Drive.HostRoot); err != nil {
+		slog.Warn("wardynd: user drive: a stored share drive's host_root is no longer allowed by this deployment",
+			slog.String("drive", resolved.Drive.Name), slog.String("host_root", resolved.Drive.HostRoot),
+			slog.Any("host_roots", s.cfg.UserDriveHostRoots), slog.String("err", err.Error()))
 		writeError(w, http.StatusUnprocessableEntity, driveRefusal(fmt.Sprintf(
-			"this deployment cannot mount your drive (%s)", err)))
+			"this deployment cannot mount your drive (drive %q is on a share this deployment does not allow — ask an admin)",
+			resolved.Drive.Name)))
 		return false
 	}
 	// The HOME name, never the resolved path: the member is told which
