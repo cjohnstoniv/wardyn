@@ -4,6 +4,7 @@
  */
 
 import { test, expect, gotoConsole, navTo } from "./fixtures";
+import { DRIVE_MEMBER } from "../src/app/lib/user-drives-copy";
 import type { Page } from "@playwright/test";
 
 // Run this file's tests SERIALLY. They share one backend and the policy table is
@@ -441,5 +442,54 @@ test("create form surfaces the server-side error for an unknown spec key (strict
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(editorDialog(page)).toBeHidden();
+  await expect(policyRow(page, name)).toHaveCount(0);
+});
+
+// The reserved user-drive target (0.7). A policy may not name /home/agent/drive
+// as a mount target: the member's own drive mounts there, and the two are
+// authored by different people at different times — an admin writes the policy,
+// an admin allocates the drive, a member ticks a checkbox at run time — so a
+// collision would surface as one of them silently disappearing inside a running
+// sandbox rather than as a refusal anybody could act on.
+//
+// The expected text is derived from the FROZEN canon
+// (DRIVE_MEMBER.REFUSED_TARGET_RESERVED, user-drives-prompt.md §7.7) rather
+// than retyped. The shipped 400 differs from canon in two presentational ways
+// the caller's own convention adds — the field INDEX (workspace_mounts[0]) and
+// backticks around the path — so both are made optional here; the sentence
+// itself must match the canon word for word.
+const RESERVED_TARGET_400 = new RegExp(
+  DRIVE_MEMBER.REFUSED_TARGET_RESERVED.replace("workspace_mounts:", "workspace_mounts\\[\\d+\\]:").replace(
+    "/home/agent/drive",
+    "`?/home/agent/drive`?",
+  ),
+);
+
+test("create form surfaces the reserved user-drive target refusal (HTTP 400)", async ({ page }) => {
+  const name = uniqueName("reservedtarget");
+  // A structurally valid mount whose SOURCE passes the bind-mount deny-list —
+  // so the only thing wrong with it is the target, and the refusal names it.
+  const reservedSpec = JSON.stringify(
+    {
+      allowed_domains: [],
+      first_use_approval: true,
+      min_confinement_class: "CC2",
+      workspace_mounts: [{ source: "/home/me/projects/payments", target: "/home/agent/drive" }],
+    },
+    null,
+    2,
+  );
+  await openCreate(page);
+  await fillEditor(page, name, reservedSpec);
+  const dialog = editorDialog(page);
+  await dialog.getByRole("button", { name: "Create policy" }).click();
+
+  // validatePolicySpec routes every AUTHORED target through
+  // runner.ValidateAuthoredTarget, and its message is surfaced verbatim.
+  await expect(dialog.getByText(RESERVED_TARGET_400)).toBeVisible();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(editorDialog(page)).toBeHidden();
+  // Nothing persisted: the policy table is untouched.
   await expect(policyRow(page, name)).toHaveCount(0);
 });
