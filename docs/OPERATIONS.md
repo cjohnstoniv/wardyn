@@ -621,6 +621,19 @@ evaluated, denies included, and with the kind unenforced that resolves as
 permitted. Signing in again fixes both. Where a deny has to bite regardless of
 session age or group count, write it against the **user** (either identity).
 
+**A third cause of a partial snapshot: the IdP's own overage.** Entra ID stops
+sending the `groups` (or `roles`) claim altogether once a human is in more groups
+than the token limit — 150 for a JWT — and sends a `_claim_names` /
+`_claim_sources` pointer to Microsoft Graph in its place. Wardyn does not
+dereference that pointer; it marks the snapshot **truncated** (`sessionGroups`,
+`internal/auth/oidc/derive.go`), which reads downstream exactly like a group that
+fell off the byte cap: the ceiling resolver treats it as unanswerable rather than
+as "asked, there were none". Without that, such a login would arrive
+complete-and-empty and quietly shed every group-tier grant and governance
+assignment. Where members legitimately sit in that many groups, prefer Entra App
+Roles (the much smaller `roles` claim) or user-subject grants — or configure the
+group claim to emit only the groups assigned to the application.
+
 **What a capability deliberately does not reach.** `always`-scope decisions stay
 operator-only even for a member granted the host — a grant must never promote a
 member's decision into durable workspace config. `GET /workspaces` is not
