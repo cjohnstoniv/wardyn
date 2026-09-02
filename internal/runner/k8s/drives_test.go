@@ -431,7 +431,7 @@ func existingDriveClaim(drive *types.DriveMount) *corev1.PersistentVolumeClaim {
 	return claim
 }
 
-// TestEnsureDrivePVC_RefusesANameTheApiserverWould covers the driver's OWN
+// TestEnsureDrivePVC_RefusesAMountTheApiserverWould covers the driver's OWN
 // validation of the mount it is handed. The control plane refuses a non-DNS-1123
 // home on a Kubernetes backend, and this driver does not trust it to: the name
 // crosses a process boundary, and a driver that trusts its input has no
@@ -441,7 +441,7 @@ func existingDriveClaim(drive *types.DriveMount) *corev1.PersistentVolumeClaim {
 // The underscore case is the motivating one and is not hypothetical: an Entra
 // `sub` is base64url and routinely carries `_`, which is legal in a Docker
 // volume name and illegal in a claim's.
-func TestEnsureDrivePVC_RefusesANameTheApiserverWould(t *testing.T) {
+func TestEnsureDrivePVC_RefusesAMountTheApiserverWould(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		shape func(*types.DriveMount)

@@ -354,7 +354,7 @@ type ResolvedDrive struct {
 	// template collapses onto one home produce one object name and no way to
 	// tell them apart. Carried here so the runner can stamp it on the object it
 	// allocates and refuse one stamped for somebody else.
-	SubjectHash string
+	SubjectHash string `json:"subject_hash,omitempty"`
 	// ObjectName is what the runner asks the substrate for — a volume name, a
 	// PVC name, or an absolute host path.
 	ObjectName  string

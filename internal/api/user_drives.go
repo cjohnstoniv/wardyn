@@ -587,7 +587,8 @@ func (s *Server) userDriveDeniedByProfile(r *http.Request) string {
 	if err != nil {
 		return ""
 	}
-	return s.driveDoorProfile(r.Context(), ceiling)
+	name, _ := s.driveDoorProfile(r.Context(), ceiling)
+	return name
 }
 
 // driveRefusal composes a 422 body in the frozen member voice: lowercase

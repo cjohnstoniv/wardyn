@@ -315,6 +315,19 @@ func TestDriveBackendMapping(t *testing.T) {
 			}
 		})
 	}
+	// The enum's VALUES, not just the mapping: the console keys its enforcement
+	// note off these exact strings (screens/drives/display.tsx), and blanking a
+	// constant would leave every row above still passing.
+	for name, got := range map[string]StorageEnforcement{
+		"filesystem": StorageEnforcementFilesystem,
+		"request":    StorageEnforcementRequest,
+		"external":   StorageEnforcementExternal,
+		"none":       StorageEnforcementNone,
+	} {
+		if string(got) != name {
+			t.Errorf("StorageEnforcement constant = %q, want %q", got, name)
+		}
+	}
 }
 
 // TestValidateUserDrive is the write-boundary matrix. Two arms are the reason

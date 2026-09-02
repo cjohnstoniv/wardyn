@@ -131,11 +131,15 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 // operator exemption is the kind of property that should be readable at the
 // site it applies to rather than inferred from a caller three files away. An
 // operator's drive still RESOLVES; only the door does not apply to them.
-func (s *Server) driveDoorProfile(ctx context.Context, ceiling governanceCeiling) string {
+func (s *Server) driveDoorProfile(ctx context.Context, ceiling governanceCeiling) (string, bool) {
 	if s.isOperator(ctx) || ceiling.Profile == nil || !ceiling.Limits.DenyUserDrive {
-		return ""
+		return "", false
 	}
-	return ceiling.Profile.Name
+	// The DECISION is the bool, never the name: a profile row's name is TEXT NOT
+	// NULL UNIQUE with no non-empty CHECK, so returning the name alone made a
+	// blank-named profile with DenyUserDrive set read as "no door" and fail OPEN
+	// at the enforcement site. The name is display only.
+	return ceiling.Profile.Name, true
 }
 
 // denyMemberDrive is the DOOR at the enforcement site: 403 with an authz.denied
@@ -143,8 +147,8 @@ func (s *Server) driveDoorProfile(ctx context.Context, ceiling governanceCeiling
 // shape the two other profile refusals take, and no new value in the closed
 // reason enum.
 func (s *Server) denyMemberDrive(w http.ResponseWriter, r *http.Request, ceiling governanceCeiling) bool {
-	profile := s.driveDoorProfile(r.Context(), ceiling)
-	if profile == "" {
+	profile, shut := s.driveDoorProfile(r.Context(), ceiling)
+	if !shut {
 		return false
 	}
 	// The mock round's frozen member copy, reproduced byte-exact: the console
