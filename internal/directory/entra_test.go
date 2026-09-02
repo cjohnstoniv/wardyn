@@ -427,22 +427,24 @@ func TestCacheDoesNotCacheFailures(t *testing.T) {
 	}
 }
 
-func TestCacheEvictsLeastRecentlyUsed(t *testing.T) {
+// The cache's contract is the BOUND, not the eviction order: a keystroke-per-
+// request surface must never grow without limit. Which key survives a flush is
+// deliberately unspecified (every entry expires within cacheTTL anyway).
+func TestCacheNeverExceedsItsBound(t *testing.T) {
 	c := newTTLCache(2, cacheTTL)
-	c.put("a", []Entry{{ClaimValue: "a"}})
-	c.put("b", []Entry{{ClaimValue: "b"}})
-	if _, ok := c.get("a"); !ok { // "a" becomes most-recently-used
-		t.Fatal("a evicted early")
+	for _, k := range []string{"a", "b", "c", "d", "e"} {
+		c.put(k, []Entry{{ClaimValue: k}})
+		if len(c.m) > 2 {
+			t.Fatalf("after put(%q) the cache holds %d entries, want at most 2", k, len(c.m))
+		}
 	}
-	c.put("c", []Entry{{ClaimValue: "c"}})
-	if _, ok := c.get("b"); ok {
-		t.Error("b survived; the least-recently-used entry should have been evicted")
+	if _, ok := c.get("e"); !ok {
+		t.Error("the most recent put must be served from the cache")
 	}
-	if _, ok := c.get("a"); !ok {
-		t.Error("a was evicted despite being recently used")
-	}
-	if c.ll.Len() != 2 || len(c.m) != 2 {
-		t.Errorf("cache size = list %d / map %d, want 2 (list and map must stay in step)", c.ll.Len(), len(c.m))
+	// Re-putting a live key updates in place; it never trips the bound.
+	c.put("e", []Entry{{ClaimValue: "e2"}})
+	if got, _ := c.get("e"); len(got) != 1 || got[0].ClaimValue != "e2" {
+		t.Errorf("re-put e = %+v, want the fresh value", got)
 	}
 }
 

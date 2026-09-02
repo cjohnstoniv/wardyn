@@ -4,7 +4,6 @@
 package directory
 
 import (
-	"container/list"
 	"context"
 	"encoding/json"
 	"errors"
@@ -432,50 +431,43 @@ func guidPrefix(id string) string {
 
 // --- cache ---------------------------------------------------------------
 
-// ttlCache is a bounded LRU with a per-entry TTL: an entry is served only while
-// fresh, and the least-recently-used entry is evicted once the map is full.
-// Both bounds matter — the TTL keeps suggestions from going stale across a
-// directory change, the size keeps a keystroke-per-request surface from growing
-// without limit.
+// ttlCache is a bounded cache with a per-entry TTL: an entry is served only
+// while fresh, and the map is flushed wholesale once it is full. Both bounds
+// matter — the TTL keeps suggestions from going stale across a directory
+// change, the size keeps a keystroke-per-request surface from growing without
+// limit.
+//
+// ponytail: the ceiling is the bound, not the eviction ORDER. At 256 entries /
+// 60 s every entry expires within a minute anyway, so flush-at-bound is
+// indistinguishable from LRU here and costs no bookkeeping.
 type ttlCache struct {
 	mu  sync.Mutex
 	max int
 	ttl time.Duration
-	ll  *list.List // front = most recently used
-	m   map[string]*list.Element
+	m   map[string]cacheItem
 	now func() time.Time // overridable in tests
 }
 
 type cacheItem struct {
-	key     string
 	entries []Entry
 	expires time.Time
 }
 
 func newTTLCache(max int, ttl time.Duration) *ttlCache {
-	return &ttlCache{
-		max: max,
-		ttl: ttl,
-		ll:  list.New(),
-		m:   make(map[string]*list.Element, max),
-		now: time.Now,
-	}
+	return &ttlCache{max: max, ttl: ttl, m: make(map[string]cacheItem, max), now: time.Now}
 }
 
 func (c *ttlCache) get(key string) ([]Entry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	el, ok := c.m[key]
+	it, ok := c.m[key]
 	if !ok {
 		return nil, false
 	}
-	it := el.Value.(*cacheItem)
 	if !c.now().Before(it.expires) {
-		c.ll.Remove(el)
 		delete(c.m, key)
 		return nil, false
 	}
-	c.ll.MoveToFront(el)
 	// Defensive copy: the cache's slice must never be shared with callers —
 	// an in-place sort/append by a future caller would be a cross-request race.
 	return append([]Entry(nil), it.entries...), true
@@ -484,17 +476,8 @@ func (c *ttlCache) get(key string) ([]Entry, bool) {
 func (c *ttlCache) put(key string, entries []Entry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	exp := c.now().Add(c.ttl)
-	if el, ok := c.m[key]; ok {
-		it := el.Value.(*cacheItem)
-		it.entries, it.expires = entries, exp
-		c.ll.MoveToFront(el)
-		return
+	if _, ok := c.m[key]; !ok && len(c.m) >= c.max {
+		clear(c.m)
 	}
-	c.m[key] = c.ll.PushFront(&cacheItem{key: key, entries: entries, expires: exp})
-	for c.ll.Len() > c.max {
-		back := c.ll.Back()
-		c.ll.Remove(back)
-		delete(c.m, back.Value.(*cacheItem).key)
-	}
+	c.m[key] = cacheItem{entries: entries, expires: c.now().Add(c.ttl)}
 }
