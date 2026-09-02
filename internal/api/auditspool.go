@@ -6,7 +6,10 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -38,7 +41,41 @@ type AuditSpool struct {
 	// an ENOSPC/partial write, dropped rather than replayed (D30). Surfaced on
 	// /metrics so a corruption episode is visible, not just logged.
 	tornDrops atomic.Int64
+	// quarantined counts lines moved aside because the store rejected them
+	// spoolPoisonAttempts times running (see Drain). Surfaced on /metrics: the
+	// spool draining back to 0 must not be the same signal as the spool being
+	// COMPLETE, and after a quarantine those two differ.
+	quarantined atomic.Int64
+	// poisonKey/poisonHits track consecutive rejections of ONE line, keyed by
+	// its exact bytes: a store that is DOWN fails every line and must keep
+	// retrying forever, while a line the store will NEVER accept fails
+	// identically every time. Counting per-line is what tells those apart
+	// without asking the caller to classify a driver error. Reset implicitly —
+	// a different head line replaces the key. Both are guarded by mu (only
+	// Drain touches them), not atomics: they are read and written as a pair.
+	poisonKey  [sha256.Size]byte
+	poisonHits int
 }
+
+// spoolPoisonAttempts is how many consecutive Drain attempts one line gets
+// before Drain stops taking its word for it and PROBES the lines behind it (see
+// Drain). It is not on its own a licence to quarantine: the probe has to find
+// the store accepting a later line first.
+//
+// Not 1: a single rejection is more likely a store that is down or a momentary
+// deadlock than a line that can never land, and reordering the replay on that
+// evidence would be gratuitous. Not 100: every attempt after the first
+// re-proves the same rejection while the events BEHIND it wait, and
+// docs/OPERATIONS.md promises the trail "becomes complete again automatically".
+const spoolPoisonAttempts = 3
+
+// errSpoolLineQuarantined is what Drain returns after moving a line aside. It
+// is an ERROR and not a silent success on purpose — a quarantine means the
+// queryable trail is now permanently missing an event that the spool holds, and
+// that must reach the operator through the same channel a failing drain does —
+// but StartDrain tells it apart from a still-failing store, because the right
+// response to it is to keep draining rather than to back off.
+var errSpoolLineQuarantined = errors.New("audit spool line quarantined")
 
 // NewAuditSpool opens (creating if needed) an append-only JSONL spool at path.
 // The parent directory is created too (MkdirAll, so an already-existing one is
@@ -105,9 +142,21 @@ func (a *AuditSpool) endsUnterminated() bool {
 
 // Drain replays up to batch spooled events into rec (the DURABLE store recorder)
 // and removes exactly those it confirmed, leaving the rest for the next call. It
-// returns the number of events replayed. On the first replay error it stops and
-// keeps every not-yet-confirmed line on disk (including the one that failed), so a
+// returns the number of events replayed. On a replay error it stops and keeps
+// every not-yet-confirmed line on disk (including the one that failed), so a
 // still-down store just leaves the spool untouched to retry later.
+//
+// EXCEPT for a line the store will never accept. Stopping at the first error is
+// right for an outage and wrong for a rejection that cannot resolve — a CHECK
+// violation, a payload a column type refuses, a hand-edited line, an event shape
+// from another binary version. That line sat at the head of the file and every
+// event behind it was replayed never, while the only symptom was a
+// wardyn_audit_spool_lines gauge that stopped falling; docs/OPERATIONS.md
+// meanwhile promises the trail "becomes complete again automatically". After
+// spoolPoisonAttempts consecutive rejections of the SAME line, Drain therefore
+// moves it to the quarantine sidecar (fsynced there before it leaves the spool)
+// and carries on with the lines behind it, returning errSpoolLineQuarantined so
+// the move is never silent.
 //
 // rec MUST be a raw durable recorder (e.g. store.Recorder) — NOT the spooling
 // chain: Drain holds the spool lock across the whole operation, so a recorder that
@@ -146,15 +195,25 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 	}
 	lines := bytes.Split(bytes.TrimRight(buf, "\n"), []byte{'\n'})
 
-	consumed := 0 // lines to remove from the file (recorded, empty, or corrupt)
+	// drop marks the lines this pass removes from the file: recorded, empty,
+	// corrupt, or quarantined. It is a per-line mark rather than the prefix
+	// count it used to be, because the poison probe below can record a line
+	// while an EARLIER one stays behind (that is the whole point of it).
+	drop := make([]bool, len(lines))
 	replayed := 0 // real events landed in the store (bounds the batch, logged)
 	var replayErr error
-	for _, line := range lines {
+	// suspect is a line the store has now rejected spoolPoisonAttempts times
+	// running. It is held back rather than quarantined outright: a store that is
+	// DOWN rejects every line, and the only way to tell that apart from a line
+	// the store will never accept is to try the lines BEHIND it and see.
+	suspectIdx, provenUp := -1, false
+	var suspect types.AuditEvent
+	for i, line := range lines {
 		if replayed >= batch {
 			break
 		}
 		if len(bytes.TrimSpace(line)) == 0 {
-			consumed++
+			drop[i] = true
 			continue
 		}
 		var ev types.AuditEvent
@@ -166,32 +225,61 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 			// torn fragment itself, never the good event written after it.
 			a.tornDrops.Add(1)
 			slog.WarnContext(ctx, "wardynd: dropping unparseable audit spool line", slog.Any("err", err))
-			consumed++
+			drop[i] = true
 			continue
 		}
 		if err := rec.Record(ctx, ev); err != nil {
 			replayErr = err
-			break
+			// A second rejection in the same pass answers the question the
+			// probe was asking: the store is refusing more than one line, so it
+			// is down (or degraded), not poisoned by this one. Nothing moves.
+			if suspectIdx >= 0 {
+				break
+			}
+			if a.strikeLine(line) < spoolPoisonAttempts {
+				break
+			}
+			suspectIdx, suspect = i, ev
+			continue
 		}
-		consumed++
+		drop[i] = true
 		replayed++
+		if suspectIdx >= 0 {
+			// The store just accepted a line from BEHIND the suspect: it is up,
+			// and the suspect is the problem.
+			provenUp = true
+		}
+	}
+	if suspectIdx >= 0 && provenUp {
+		// Only ever reached when something was actually blocked behind it. A
+		// suspect at the very END of the spool blocks nothing, cannot be proven
+		// against a live store, and is simply retried next tick.
+		if qerr := a.quarantineLine(ctx, lines[suspectIdx], suspect, replayErr); qerr != nil {
+			// Moving it aside failed (read-only or full disk). Leaving it in
+			// place is the only honest option left: the alternative is dropping
+			// an audit event to unblock the queue.
+			replayErr = qerr
+		} else {
+			drop[suspectIdx] = true
+			replayErr = errSpoolLineQuarantined
+		}
 	}
 
+	keep := make([][]byte, 0, len(lines))
+	consumed := 0
+	for i, line := range lines {
+		if drop[i] {
+			consumed++
+			continue
+		}
+		keep = append(keep, line)
+	}
 	if consumed == 0 {
 		return 0, replayErr
 	}
-	// Rewrite the file to only the undrained remainder — CRASH-SAFELY. A naive
-	// Truncate(0)+Write leaves a window where a crash between the two loses every
-	// not-yet-replayed line (data LOSS, worse than the at-least-once ceiling and
-	// contrary to C1 'never silently lost'). Instead write the remainder to a temp
-	// file, fsync it, and atomically rename it over the spool: a crash at any point
-	// leaves EITHER the old full file OR the complete remainder on disk, never a
-	// half-written one. Duplicate re-replay of an already-recorded event is already
-	// permitted (at-least-once), so recovering the old file is safe.
-	remaining := lines[consumed:]
 	var out []byte
-	if len(remaining) > 0 {
-		out = append(bytes.Join(remaining, []byte{'\n'}), '\n')
+	if len(keep) > 0 {
+		out = append(bytes.Join(keep, []byte{'\n'}), '\n')
 	}
 	tmp := a.path + ".tmp"
 	tf, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
@@ -221,6 +309,81 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 	_ = a.f.Close()
 	a.f = nf
 	return replayed, replayErr
+}
+
+// strikeLine records one more consecutive rejection of exactly this line and
+// returns the running count. A line different from the last rejected one resets
+// the counter to 1: whatever was being retried has drained, been quarantined,
+// or been overtaken, so its strikes no longer describe this one. Keyed by the line's digest rather than the
+// event id, because the id is caller-supplied and two lines with one id (an
+// at-least-once re-append) are still two lines to the store.
+//
+// Caller must hold a.mu (Drain does).
+func (a *AuditSpool) strikeLine(line []byte) int {
+	key := sha256.Sum256(line)
+	if key != a.poisonKey {
+		a.poisonKey, a.poisonHits = key, 0
+	}
+	a.poisonHits++
+	return a.poisonHits
+}
+
+// quarantineLine appends line verbatim to the sidecar quarantine file and
+// fsyncs it BEFORE Drain consumes it from the spool, so the event exists in two
+// places at once rather than in none at any instant. Verbatim, because the file
+// is then a valid JSONL spool an operator can move back onto the spool path once
+// the cause is fixed; the reason lives in the log line and the /metrics counter,
+// not smuggled into the payload.
+//
+// Deliberately NOT recorded as an audit event through rec: the store just
+// refused a write from this very spool, and an integrity report written into the
+// log it is about — through the path that is failing — is the worst of both. The
+// operator-facing signals are the WARN below, wardyn_audit_spool_quarantined_total,
+// and the file itself.
+//
+// Caller must hold a.mu (Drain does).
+func (a *AuditSpool) quarantineLine(ctx context.Context, line []byte, ev types.AuditEvent, cause error) error {
+	qf, err := os.OpenFile(a.quarantinePath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return fmt.Errorf("open audit spool quarantine: %w", err)
+	}
+	if _, err := qf.Write(append(append([]byte{}, line...), '\n')); err != nil {
+		qf.Close()
+		return fmt.Errorf("write audit spool quarantine: %w", err)
+	}
+	if err := qf.Sync(); err != nil {
+		qf.Close()
+		return fmt.Errorf("sync audit spool quarantine: %w", err)
+	}
+	if err := qf.Close(); err != nil {
+		return fmt.Errorf("close audit spool quarantine: %w", err)
+	}
+	a.quarantined.Add(1)
+	// The event's identifying fields, never its data payload: this line is
+	// already being written to a file, and a log is not the place to widen who
+	// can read an audit event's contents.
+	slog.ErrorContext(ctx, "wardynd: audit spool line quarantined after repeated store rejection; the queryable trail is missing this event until it is re-fed",
+		slog.String("quarantine_file", a.quarantinePath()),
+		slog.String("event_id", ev.ID.String()),
+		slog.String("action", ev.Action),
+		slog.Int("attempts", a.poisonHits),
+		slog.Any("err", cause))
+	return nil
+}
+
+// quarantinePath is the sidecar the spool moves rejected lines to. Beside the
+// spool on purpose: same directory, same 0600, same operator.
+func (a *AuditSpool) quarantinePath() string { return a.path + ".quarantine" }
+
+// Quarantined reports how many lines have been moved aside as permanently
+// rejected. A nil spool reports 0. Served as the
+// wardyn_audit_spool_quarantined_total counter on /metrics — the signal that
+// "the spool drained" no longer implies "the trail is complete".
+func (a *AuditSpool) Quarantined() int64 {
+	if a == nil {
+		return 0
+	}
+	return a.quarantined.Load()
 }
 
 // Lines reports how many events are sitting in the spool right now — the audit
@@ -278,6 +441,13 @@ func (a *AuditSpool) StartDrain(ctx context.Context, rec audit.Recorder, interva
 			for {
 				n, err := a.Drain(ctx, rec, batch)
 				total += n
+				if errors.Is(err, errSpoolLineQuarantined) {
+					// quarantineLine already logged what was moved aside. The
+					// head of the spool advanced, so keep draining this tick
+					// instead of making every line behind it wait an interval
+					// per poison line.
+					continue
+				}
 				if err != nil {
 					slog.WarnContext(ctx, "wardynd: audit spool drain deferred (store still failing)",
 						slog.Int("drained", total), slog.Any("err", err))

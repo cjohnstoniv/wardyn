@@ -6,6 +6,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -261,5 +262,99 @@ func TestAuditSpoolAppendRecoversTornTail(t *testing.T) {
 	}
 	if lc := spoolLineCount(t, path); lc != 0 {
 		t.Fatalf("spool not empty after drain: %d lines", lc)
+	}
+}
+
+// TestAuditSpoolDownStoreIsNeverQuarantined is the counterweight to the poison
+// probe, and the one that decides whether the quarantine is safe to ship. A
+// store that is DOWN rejects the head line exactly the way a poison line does,
+// so a rule that only counted rejections would move perfectly good events aside
+// during a database restart — destroying, in the name of unblocking the queue,
+// the events the C1 spool exists to preserve. Drain therefore quarantines only
+// after the store has ACCEPTED a line from behind the suspect (Drain's poison
+// probe), which a down store never does.
+//
+// Ten drain ticks, far past spoolPoisonAttempts: nothing is quarantined,
+// nothing is dropped, and everything replays once the store heals.
+func TestAuditSpoolDownStoreIsNeverQuarantined(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit-spool.jsonl")
+	sp, err := NewAuditSpool(path)
+	if err != nil {
+		t.Fatalf("NewAuditSpool: %v", err)
+	}
+	for _, action := range []string{"one", "two", "three"} {
+		if err := sp.Append(newTestEvent(action)); err != nil {
+			t.Fatalf("append %s: %v", action, err)
+		}
+	}
+
+	rec := &fakeRecorder{fail: true}
+	for i := 0; i < 10; i++ {
+		if n, err := sp.Drain(context.Background(), rec, 100); n != 0 || err == nil {
+			t.Fatalf("tick %d: Drain = %d, %v; want 0 replayed and the store error", i, n, err)
+		}
+	}
+	if got := sp.Quarantined(); got != 0 {
+		t.Errorf("Quarantined = %d after 10 ticks against a DOWN store; want 0 — a store outage must never move an event aside", got)
+	}
+	if _, err := os.Stat(path + ".quarantine"); !os.IsNotExist(err) {
+		t.Errorf("a quarantine file exists after a pure outage (stat err = %v); want none", err)
+	}
+	if got := spoolLineCount(t, path); got != 3 {
+		t.Fatalf("spool holds %d lines after the outage, want all 3 still there", got)
+	}
+
+	rec.mu.Lock()
+	rec.fail = false
+	rec.mu.Unlock()
+	if _, err := sp.Drain(context.Background(), rec, 100); err != nil {
+		t.Fatalf("Drain after heal: %v", err)
+	}
+	if got := rec.count(); got != 3 {
+		t.Errorf("replayed %d events after the store healed, want all 3", got)
+	}
+}
+
+// TestAuditSpoolQuarantinedLineIsKeptOnDisk pins the other half of the poison
+// fix: the blocked lines move on, and the rejected event is not DESTROYED to
+// achieve it. It lands verbatim in the sidecar file — a valid JSONL spool an
+// operator can move back once the cause is fixed — and the counter behind
+// wardyn_audit_spool_quarantined_total says one event is missing from the
+// queryable trail, which a spool that has drained back to 0 otherwise hides.
+func TestAuditSpoolQuarantinedLineIsKeptOnDisk(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit-spool.jsonl")
+	sp, err := NewAuditSpool(path)
+	if err != nil {
+		t.Fatalf("NewAuditSpool: %v", err)
+	}
+	poison := newTestEvent("poison")
+	for _, ev := range []types.AuditEvent{poison, newTestEvent("good")} {
+		if err := sp.Append(ev); err != nil {
+			t.Fatalf("append %s: %v", ev.Action, err)
+		}
+	}
+
+	rec := &rejectingRecorder{reject: "poison"}
+	for i := 0; i < spoolPoisonAttempts; i++ {
+		if _, err := sp.Drain(context.Background(), rec, 100); err == nil {
+			t.Fatalf("tick %d: Drain reported no error although one line is permanently rejected", i)
+		}
+	}
+	if got := spoolLineCount(t, path); got != 0 {
+		t.Errorf("spool still holds %d lines; the quarantine did not unblock it", got)
+	}
+	if got := sp.Quarantined(); got != 1 {
+		t.Errorf("Quarantined = %d, want 1 — /metrics is the only place a drained-but-incomplete trail shows", got)
+	}
+	buf, err := os.ReadFile(path + ".quarantine")
+	if err != nil {
+		t.Fatalf("read quarantine file: %v", err)
+	}
+	var kept types.AuditEvent
+	if err := json.Unmarshal(bytes.TrimRight(buf, "\n"), &kept); err != nil {
+		t.Fatalf("quarantine file is not the verbatim JSONL line an operator can re-feed: %v (%q)", err, buf)
+	}
+	if kept.ID != poison.ID {
+		t.Errorf("quarantined event id = %s, want the rejected event %s", kept.ID, poison.ID)
 	}
 }

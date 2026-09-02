@@ -124,6 +124,21 @@ once the store recovers. The spool is per-process by design: the fallback for on
 pod's failed write, each `wardynd` draining its own back on recovery (see
 [One replica, by construction](#one-replica-by-construction)).
 
+**One line the store will never accept does not wedge the rest.** A rejection
+that cannot resolve — a `CHECK` violation, a payload a column type refuses, a
+hand-edited line, an event shape from another binary version — used to sit at the
+head of the spool and stop every event behind it from ever replaying, with no
+signal but a `wardyn_audit_spool_lines` gauge that stopped falling. After three
+consecutive rejections of the same line the drain now tries the lines *behind*
+it, and **only if the store accepts one** (proving it is up, and that the problem
+is that line) moves the rejected line to `<spool>.quarantine` — fsync'd there
+before it leaves the spool, verbatim, so the file is a valid JSONL spool you can
+move back onto the spool path once the cause is fixed. A store that is simply
+down accepts nothing, so nothing is ever quarantined during an outage. Each move
+logs at ERROR with the event's id and action and increments
+`wardyn_audit_spool_quarantined_total`: alert on it, because a spool that has
+drained back to 0 no longer implies the queryable trail is complete.
+
 ### The hash chain — what a rewritten row looks like
 
 The triggers above stop `UPDATE`/`DELETE`/`TRUNCATE` *through Wardyn's schema*,
@@ -247,7 +262,10 @@ counter only moves on success — a dead store and an idle cluster otherwise scr
 identically: `wardyn_store_up` (1 when Postgres answers the same bounded ping
 `/readyz` makes) and `wardyn_audit_spool_lines` (audit events waiting in the local
 JSONL fallback spool — a value that never returns to 0 means the drain loop is not
-working). Scrape with any Prometheus `authorization` config carrying the admin
+working). Beside them, `wardyn_audit_spool_quarantined_total` counts events the
+store permanently refused and the drain moved aside (see the spool paragraph
+above): non-zero means the trail is missing those events even though the spool
+drained. Scrape with any Prometheus `authorization` config carrying the admin
 token. `/healthz` stays the liveness/component surface (identity, runner classes,
 eBPF ground-truth state); `/metrics` is the trend surface. Audit sinks
 (`WARDYN_AUDIT_SINKS`, [ENV.md](ENV.md)) are the event stream for SIEMs — metrics
@@ -2061,7 +2079,10 @@ What it adds is three corrections to the compose recipe:
   persistence on sweeps the spool up too — neither needs restoring. Derived by
   design (`internal/api/auditspool.go`): the fallback for a failed Postgres write,
   draining back into the database. Postgres remains the source of truth for the
-  audit log on both substrates.
+  audit log on both substrates. The one file beside it that is NOT derived is
+  `<spool>.quarantine`: it holds events the store permanently refused, which are
+  by definition absent from the database, so keep it until you have re-fed or
+  triaged its lines.
 
 ### Restore: rehearse into a scratch database first
 

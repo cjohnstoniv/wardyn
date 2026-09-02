@@ -154,6 +154,8 @@ func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
 		"# TYPE wardyn_audit_spool_lines gauge\nwardyn_audit_spool_lines %d\n", s.cfg.AuditSpool.Lines())
 	fmt.Fprintf(w, "# HELP wardyn_audit_spool_torn_total Spool lines dropped as unparseable (a torn tail from an ENOSPC/partial write).\n"+
 		"# TYPE wardyn_audit_spool_torn_total counter\nwardyn_audit_spool_torn_total %d\n", s.cfg.AuditSpool.TornDrops())
+	fmt.Fprintf(w, "# HELP wardyn_audit_spool_quarantined_total Spool lines moved aside after the store rejected them repeatedly; each one is an event missing from the queryable trail until it is re-fed.\n"+
+		"# TYPE wardyn_audit_spool_quarantined_total counter\nwardyn_audit_spool_quarantined_total %d\n", s.cfg.AuditSpool.Quarantined())
 	s.writeSinkDrops(w)
 }
 
