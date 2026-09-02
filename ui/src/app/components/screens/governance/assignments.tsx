@@ -28,6 +28,7 @@ import { Loader2, Users } from "lucide-react";
 import { toast } from "sonner";
 import {
   governance as api,
+  previewClaims,
   type GovernanceAssignment,
   type GovernancePreview,
   type GovernanceProfile,
@@ -87,28 +88,6 @@ const MATCHED_LABEL: Record<CapabilitySubjectType, string> = {
 // Who a row names, for the unassign confirmation.
 const subjectText = (a: GovernanceAssignment): string =>
   a.subject_type === "all" ? PERM.SUBJECT_ALL : a.subject;
-
-// The claims box is kind-LESS — one textarea, the People step's own field — so
-// a typed line may be a sign-in subject, an email or a group and nothing here
-// can tell. Every line therefore goes to BOTH wire lists and the SERVER offers
-// each to both tiers; its answer names the tier that matched, which is what
-// PREVIEW_RESULT renders. Exactly the shape access-panel.tsx already posts to
-// /access/preview ({roles: lines, groups: lines}).
-//
-// ponytail: the ONE thing decided here is ORDER, never precedence. The user
-// tier's tie-break is POSITION in this list (the resolver's array_position),
-// and the enforcement path builds it sign-in-subject first, email second
-// (capabilitySubjects) — so an "@" line sorts last and the preview agrees with
-// what actually binds the member. Array.prototype.sort is stable, so every
-// other line keeps the order it was typed in. The ranking itself stays in SQL.
-const claimLines = (claims: string): string[] =>
-  claims
-    .split("\n")
-    .map((c) => c.trim())
-    .filter(Boolean);
-
-const subjectOrder = (lines: string[]): string[] =>
-  [...lines].sort((a, b) => Number(a.includes("@")) - Number(b.includes("@")));
 
 export function AssignmentsBlock({
   snapshot,
@@ -377,8 +356,9 @@ function ResolvedPreview({ snapshot }: { snapshot: GovernanceSnapshot }) {
   const run = async () => {
     setBusy(true);
     try {
-      const lines = claimLines(claims);
-      setResult({ answer: await api.previewGovernance({ user_subjects: subjectOrder(lines), groups: lines }) });
+      // The kind-less textarea onto the two wire lists — one implementation,
+      // shared with the drives preview (lib/api/governance.ts's previewClaims).
+      setResult({ answer: await api.previewGovernance(previewClaims(claims)) });
     } catch {
       setResult({ error: true });
     } finally {

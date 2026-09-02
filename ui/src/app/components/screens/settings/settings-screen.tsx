@@ -36,6 +36,7 @@ import { EnvironmentStep } from "../setup/environment-step";
 import { isProxyConfigured } from "../setup/corp-network-proxy";
 import { SshKeysPane } from "../ssh-keys";
 import { ModelProviderCard, GitHostCard } from "./connection-cards";
+import { UserDrivesCard } from "../setup/user-drives-card";
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -168,6 +169,11 @@ export function SettingsScreen() {
           <HostCard status={status} siteConfig={siteConfig} onRecheck={load} />
           <ModelProviderCard status={status} siteConfig={siteConfig} onChanged={load} />
           <GitHostCard status={status} siteConfig={siteConfig} onChanged={load} />
+          {/* The fifth card — the SAME component the setup funnel's Workspaces
+              step renders, summarising and linking exactly as the Corporate
+              proxy disclosure above does. SUPER-only; it renders nothing for
+              anyone else. */}
+          <UserDrivesCard />
           <SshKeysPane heading="h3" />
         </div>
       )}
