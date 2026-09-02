@@ -500,6 +500,17 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 		Groups []string `json:"groups"`
 	}
 	_ = idToken.Claims(&gc)
+	// The distributed-claim pointer, decoded just as tolerantly and for the
+	// same fail-closed reason: when `_claim_names` names "groups" (or "roles"),
+	// the claim above is absent because the IdP OMITTED it — an overage — not
+	// because the human is in no groups. sessionGroups turns that into the
+	// truncation bit. map[string]any rather than map[string]string so a value
+	// shape this package does not read cannot fail the decode and hide the
+	// marker.
+	var dc struct {
+		ClaimNames map[string]any `json:"_claim_names"`
+	}
+	_ = idToken.Claims(&dc)
 
 	// (4) Domain check — fail closed.
 	if len(a.cfg.AllowedEmailDomains) > 0 {
@@ -583,8 +594,9 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	// (6) Create a Wardyn session. Groups is stamped from the SAME two
 	// tolerantly-decoded claims deriveRole just consumed — a claim malformed
 	// enough to contribute nothing to the role contributes nothing here either,
-	// and never fails the login.
-	groups, groupsTruncated := sessionGroups(rc.Roles, gc.Groups)
+	// and never fails the login. The `_claim_names` pointer rides along so an
+	// IdP-side overage stamps the snapshot partial instead of empty.
+	groups, groupsTruncated := sessionGroups(rc.Roles, gc.Groups, dc.ClaimNames)
 	sess := Session{
 		Sub:             idToken.Subject,
 		Email:           claims.Email,

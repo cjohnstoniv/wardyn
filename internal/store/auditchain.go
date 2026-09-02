@@ -11,8 +11,11 @@ import (
 // lockAuditChainSQL serializes appends to the audit_events hash chain. It is
 // shared by store.InsertAuditEvent and (verbatim, since that package cannot
 // import this one) the broker's insertAuditEventTx — the two in-tree paths that
-// INSERT into audit_events. See db.AuditChainLockKey for why the lock lives at
-// the caller instead of inside migration 0047's trigger.
+// INSERT into audit_events. Since migration 0056 the trigger takes the same
+// lock (that is what binds writers outside this repo); these callers keep
+// taking it first because advisory locks are re-entrant within a transaction
+// and holding it across the whole statement costs nothing. See
+// db.AuditChainLockKey.
 const lockAuditChainSQL = `SELECT pg_advisory_xact_lock($1)`
 
 // AuditChainStatus is one verification sweep's verdict (migration 0047).
@@ -29,9 +32,11 @@ type AuditChainStatus struct {
 	OK bool `json:"ok"`
 	// Checked is how many chained rows the sweep walked.
 	Checked int64 `json:"checked"`
-	// Legacy is how many rows carry NO hash at all — rows that predate
-	// migration 0047. They are outside the chain by design and are never a
-	// failure; a non-zero value on an upgraded deployment is expected.
+	// Legacy is how many rows carry NO hash at all AND sit BELOW the first
+	// chained row — the pre-migration-0047 prefix. They are outside the chain
+	// by design and are never a failure; a non-zero value on an upgraded
+	// deployment is expected. A hashless row ABOVE that prefix is NOT legacy
+	// and is not counted here: it is a break (see auditChainWalk.step).
 	Legacy int64 `json:"legacy"`
 	// FirstSeq/HeadSeq bound the chained range (both 0 when Checked is 0).
 	FirstSeq int64 `json:"first_seq"`
@@ -71,6 +76,9 @@ type auditChainLink struct {
 	prev, row  string
 	want       string
 	prevIsNull bool
+	// unchained is a row with NO row_hash: either a pre-0047 legacy row (only
+	// ever BELOW the chain) or a row written while the chain trigger was gone.
+	unchained bool
 }
 
 // auditChainWalk applies the two chain rules to links fed to it oldest-first.
@@ -82,6 +90,20 @@ type auditChainLink struct {
 //     the very first chained row may have none — catches a DELETED or REORDERED
 //     row, which rule 1 alone cannot see, since splicing one row out leaves
 //     both neighbours internally consistent.
+//  3. HASHLESS ROWS ARE A PREFIX. A row with no row_hash is legacy only while
+//     no chained row has been seen yet; one that appears AFTER the chain has
+//     started is a break naming that row's seq. Without this rule the sweep
+//     stepped over every hashless row (the old query filtered them out and the
+//     count bucketed them as "legacy"), so an actor who DROPPED or DISABLED
+//     migration 0047's trigger — or inserted in replica mode — could append
+//     rows that the chain neither covers nor reports, while ok stayed true.
+//     The trigger's own head lookup skips them too, so the chain simply
+//     stepped over the forged row and closed back up behind it.
+//
+// Rule 3's blind spot, stated: seq GAPS below the first chained row (burned by
+// rolled-back inserts, 0047's "seq is not hashed") can still hold a hashless
+// forgery that is indistinguishable from a legacy row. Nothing in the row
+// itself dates it; only an off-box copy of the log can.
 //
 // step reports false once the chain is broken; the caller stops there, because
 // every row after an edit mismatches by construction.
@@ -95,6 +117,17 @@ func newAuditChainWalk() *auditChainWalk {
 }
 
 func (w *auditChainWalk) step(l auditChainLink) bool {
+	if l.unchained {
+		// Rule 3. Before the first chained row this is the legacy prefix; after
+		// it, the row was written with the chain trigger off.
+		if w.st.Checked == 0 {
+			w.st.Legacy++
+			return true
+		}
+		w.fail(l.seq, "row carries no hash although the chain had already started "+
+			"(it was written with the chain trigger dropped, disabled, or bypassed)")
+		return false
+	}
 	if w.st.Checked == 0 {
 		w.st.FirstSeq = l.seq
 	}
@@ -124,22 +157,20 @@ func (w *auditChainWalk) fail(seq int64, reason string) {
 // Rows are STREAMED, not buffered: an audit log is unbounded, and this is the
 // one query in the package that reads all of it.
 func (s PG) VerifyAuditChain(ctx context.Context) (AuditChainStatus, error) {
-	var legacy int64
-	if err := s.Pool.QueryRow(ctx,
-		`SELECT count(*) FROM audit_events WHERE row_hash IS NULL`,
-	).Scan(&legacy); err != nil {
-		return AuditChainStatus{}, fmt.Errorf("store: count pre-chain audit rows: %w", err)
-	}
-
+	// EVERY row, hashless ones included, in seq order — rule 3 is a statement
+	// about where the hashless rows SIT, so the walk has to see them in place.
+	// (This also retires the separate `count(*) WHERE row_hash IS NULL` query:
+	// Legacy is now counted by the same pass that decides the verdict, so the
+	// two can no longer describe different instants under concurrent writes.)
 	const q = `
 		SELECT seq,
+		       row_hash IS NULL,
 		       prev_hash IS NULL,
 		       COALESCE(prev_hash,''),
-		       row_hash,
-		       audit_row_hash(prev_hash, id, time, run_id, actor_type, actor,
-		                      action, target, outcome, source_ip, data)
+		       COALESCE(row_hash,''),
+		       COALESCE(audit_row_hash(prev_hash, id, time, run_id, actor_type, actor,
+		                               action, target, outcome, source_ip, data), '')
 		FROM audit_events
-		WHERE row_hash IS NOT NULL
 		ORDER BY seq`
 	rows, err := s.Pool.Query(ctx, q)
 	if err != nil {
@@ -150,7 +181,7 @@ func (s PG) VerifyAuditChain(ctx context.Context) (AuditChainStatus, error) {
 	w := newAuditChainWalk()
 	for rows.Next() {
 		var l auditChainLink
-		if err := rows.Scan(&l.seq, &l.prevIsNull, &l.prev, &l.row, &l.want); err != nil {
+		if err := rows.Scan(&l.seq, &l.unchained, &l.prevIsNull, &l.prev, &l.row, &l.want); err != nil {
 			return AuditChainStatus{}, fmt.Errorf("store: scan audit chain row: %w", err)
 		}
 		if !w.step(l) {
@@ -163,6 +194,5 @@ func (s PG) VerifyAuditChain(ctx context.Context) (AuditChainStatus, error) {
 	if err := rows.Err(); err != nil && w.st.OK {
 		return AuditChainStatus{}, fmt.Errorf("store: iterate audit chain: %w", err)
 	}
-	w.st.Legacy = legacy
 	return w.st, nil
 }

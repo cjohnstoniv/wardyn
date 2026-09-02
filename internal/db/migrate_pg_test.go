@@ -311,3 +311,128 @@ func TestAuditEventsAppendOnlyEnforcedLive(t *testing.T) {
 		}
 	})
 }
+
+// auditTriggerEnabled reports whether one audit_events trigger exists AND fires
+// — tgenabled 'O' (origin) or 'A' (ALWAYS), the two states ensureAuditTriggers
+// accepts. It MIRRORS that predicate, so it has to move with it.
+func auditTriggerEnabled(t *testing.T, pool *pgxpool.Pool, name string) bool {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM pg_trigger
+		 WHERE tgname = $1 AND tgrelid = 'audit_events'::regclass AND tgenabled IN ('O', 'A')`, name).Scan(&n); err != nil {
+		t.Fatalf("read pg_trigger %s: %v", name, err)
+	}
+	return n == 1
+}
+
+// TestMigrateRestoresADisabledChainTrigger covers the half of F11 H2 that the
+// DROP probe does not: ALTER TABLE ... DISABLE TRIGGER leaves the catalog row in
+// place, so a check that only asked "does it exist" would pass on a table where
+// the chain never fires — the quietest version of the same hole, and the one an
+// owner reaches for because it looks reversible.
+func TestMigrateRestoresADisabledChainTrigger(t *testing.T) {
+	pool := pgPool(t)
+	ctx := context.Background()
+	if !auditTriggerEnabled(t, pool, auditChainTrigger) {
+		t.Fatal("precondition: the chain trigger is not enabled before the test ran")
+	}
+	if _, err := pool.Exec(ctx, `ALTER TABLE audit_events DISABLE TRIGGER `+auditChainTrigger); err != nil {
+		t.Skipf("cannot DISABLE TRIGGER as this role (%v); the test needs table ownership", err)
+	}
+	t.Cleanup(func() {
+		// Belt and braces: Migrate below is what should have re-enabled it, but
+		// a failure here must not leave the shared table writing unchained rows
+		// for every later test in the run.
+		if !auditTriggerEnabled(t, pool, auditChainTrigger) {
+			if _, err := pool.Exec(ctx, `ALTER TABLE audit_events ENABLE TRIGGER `+auditChainTrigger); err != nil {
+				t.Errorf("re-enable %s: %v", auditChainTrigger, err)
+			}
+		}
+	})
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate with a disabled chain trigger: %v", err)
+	}
+	if !auditTriggerEnabled(t, pool, auditChainTrigger) {
+		t.Error("a DISABLED chain trigger survived Migrate; every row written from now on is unchained and the sweep will report it")
+	}
+}
+
+// TestMigrateRefusesWithoutTheAppendOnlyTrigger pins the other arm of
+// ensureAuditTriggers. The chain trigger is restored because its migrations are
+// replayable; the append-only trigger is defined by 0001 (the whole initial
+// schema), so replaying it at boot to fix one trigger is a bigger blast radius
+// than refusing — but the process must NOT continue silently either, which is
+// what it used to do.
+func TestMigrateRefusesWithoutTheAppendOnlyTrigger(t *testing.T) {
+	pool := pgPool(t)
+	ctx := context.Background()
+	const name = "audit_events_no_update"
+	if _, err := pool.Exec(ctx, `ALTER TABLE audit_events DISABLE TRIGGER `+name); err != nil {
+		t.Skipf("cannot DISABLE TRIGGER as this role (%v); the test needs table ownership", err)
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(ctx, `ALTER TABLE audit_events ENABLE TRIGGER `+name); err != nil {
+			t.Errorf("re-enable %s: %v — the shared audit_events table is left writable", name, err)
+		}
+	})
+	err := Migrate(ctx, pool)
+	if err == nil {
+		t.Fatalf("Migrate returned nil with %s disabled; the append-only guarantee is not in force and the boot said nothing", name)
+	}
+	if !strings.Contains(err.Error(), name) {
+		t.Errorf("Migrate error = %q; it must name the missing trigger so an operator knows what to restore", err)
+	}
+}
+
+// auditTriggerState returns one audit_events trigger's raw tgenabled letter.
+func auditTriggerState(t *testing.T, pool *pgxpool.Pool, name string) string {
+	t.Helper()
+	var state string
+	if err := pool.QueryRow(context.Background(), `
+		SELECT tgenabled FROM pg_trigger
+		 WHERE tgname = $1 AND tgrelid = 'audit_events'::regclass`, name).Scan(&state); err != nil {
+		t.Fatalf("read tgenabled %s: %v", name, err)
+	}
+	return state
+}
+
+// TestMigrateLeavesAnAlwaysTriggerAlone pins the hardening case that the
+// existence check must not punish. ALTER TABLE ... ENABLE ALWAYS TRIGGER sets
+// tgenabled='A', which makes the trigger fire even under
+// session_replication_role = replica — precisely the bypass the verify sweep's
+// rule 3 catches only after the fact, closed here at the source. A boot check
+// that read 'A' as "missing or disabled" would DROP and re-create the trigger as
+// plain 'O', silently reverting the operator's hardening; the same reading on an
+// append-only trigger would refuse the boot and brick the upgrade of the most
+// careful deployment on the fleet.
+//
+// Both trigger classes are covered, because they take different arms of
+// ensureAuditTriggers: the chain trigger's arm restores, the append-only arm
+// refuses.
+func TestMigrateLeavesAnAlwaysTriggerAlone(t *testing.T) {
+	pool := pgPool(t)
+	ctx := context.Background()
+	for _, name := range append([]string{auditChainTrigger}, auditAppendOnlyTriggers...) {
+		t.Run(name, func(t *testing.T) {
+			if _, err := pool.Exec(ctx, `ALTER TABLE audit_events ENABLE ALWAYS TRIGGER `+name); err != nil {
+				t.Skipf("cannot ENABLE ALWAYS as this role (%v); the test needs table ownership", err)
+			}
+			t.Cleanup(func() {
+				// Back to the shipped state for every later test in the run.
+				if _, err := pool.Exec(ctx, `ALTER TABLE audit_events ENABLE TRIGGER `+name); err != nil {
+					t.Errorf("restore %s to 'O': %v", name, err)
+				}
+			})
+			if got := auditTriggerState(t, pool, name); got != "A" {
+				t.Fatalf("precondition: tgenabled = %q after ENABLE ALWAYS, want 'A'", got)
+			}
+			if err := Migrate(ctx, pool); err != nil {
+				t.Fatalf("Migrate with %s set to ALWAYS: %v — a hardened trigger must not refuse the boot", name, err)
+			}
+			if got := auditTriggerState(t, pool, name); got != "A" {
+				t.Errorf("tgenabled = %q after Migrate, want 'A' — the boot check reverted an operator's ENABLE ALWAYS hardening", got)
+			}
+		})
+	}
+}

@@ -203,10 +203,10 @@ func TestTruncationBitSurvivesTheCookie(t *testing.T) {
 	for i := range claim {
 		claim[i] = fmt.Sprintf("group-%04d-with-a-realistically-long-name", i)
 	}
-	if !writoidc.SessionGroupsTruncatedForTest(nil, claim) {
+	if !writoidc.SessionGroupsTruncatedForTest(nil, claim, nil) {
 		t.Fatal("400 long group names did not trip the byte cap; the fixture proves nothing")
 	}
-	if writoidc.SessionGroupsTruncatedForTest(nil, []string{"eng", "platform"}) {
+	if writoidc.SessionGroupsTruncatedForTest(nil, []string{"eng", "platform"}, nil) {
 		t.Error("two short groups reported as truncated — the bit would fire on every ordinary login")
 	}
 

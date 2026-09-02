@@ -546,14 +546,27 @@ const maxSessionGroupsBytes = 2048
 // of a coin flip. (Ordering is lexical, so a truncated human loses their
 // alphabetically-last groups — arbitrary, but arbitrary and REPEATABLE.)
 //
-// The second return says whether anything was DROPPED, and it is not a
+// The second return says whether the snapshot is PARTIAL, and it is not a
 // diagnostic — it is an authorization input (PF-26). A group-subject governance
 // assignment a member's ceiling depends on can fall off this cap, and the
 // resolver would then hand them the DEPLOYMENT ceiling with no refusal, no
 // audit and nothing to notice: the restrictive profile simply evaporates. So
 // the bit rides the session to internal/api's ceiling resolver, which treats a
 // truncated snapshot exactly as it treats a missing one.
-func sessionGroups(rolesClaim, groupsClaim []string) (groups []string, truncated bool) {
+//
+// claimNames is the ID token's `_claim_names` object (OIDC Core distributed
+// claims; nil when the token carries none), and it is the SECOND way this
+// snapshot can be partial — the IdP-side one, which no byte cap here can see.
+// Entra ID stops emitting `groups` (or `roles`) entirely once the human is in
+// more than the token limit and sends a `_claim_names`/`_claim_sources`
+// pointer to Microsoft Graph instead. The claim then decodes to nil, which is
+// byte-for-byte the same as "asked, there were none" — so without this input
+// an overage login reads COMPLETE-AND-EMPTY and evaporates exactly the walled
+// member's group-tier assignment that the cap branch below was closed for.
+// Wardyn does not dereference the pointer (that is a Graph call with its own
+// credential and egress, at login latency); it fails closed instead and marks
+// the snapshot partial, which is what "unanswerable" already means downstream.
+func sessionGroups(rolesClaim, groupsClaim []string, claimNames map[string]any) (groups []string, truncated bool) {
 	seen := make(map[string]bool, len(rolesClaim)+len(groupsClaim))
 	uniq := make([]string, 0, len(rolesClaim)+len(groupsClaim))
 	for _, v := range slices.Concat(rolesClaim, groupsClaim) {
@@ -578,6 +591,15 @@ func sessionGroups(rolesClaim, groupsClaim []string) (groups []string, truncated
 		}
 		used += cost
 		out = append(out, g)
+	}
+	// Either kind of partial snapshot — dropped at the byte cap here, or never
+	// sent by the IdP (overage) — stamps the same bit. Both claims sessionGroups
+	// unions are checked: an App Roles overage hides a `roles`-derived group
+	// identity just as completely as a `groups` one.
+	for _, claim := range []string{"groups", "roles"} {
+		if _, overage := claimNames[claim]; overage {
+			return out, true
+		}
 	}
 	return out, len(out) < len(uniq)
 }

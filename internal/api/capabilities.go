@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 
@@ -97,10 +98,20 @@ const capWildcard = "*"
 // DENY written against either identity also hits.
 //
 // groups is nil for a pre-0.6 cookie (the snapshot predates the field) and
-// empty when the IdP sent nothing usable. stale reports the former: the caller
-// has a session but no answerable group identity, so their group grants cannot
-// be evaluated until they log in again. Callers surface that; they must not
-// silently treat it as "no groups".
+// empty when the IdP sent nothing usable. stale reports that the group half is
+// UNANSWERABLE, which is two shapes and not one: the nil snapshot above, and a
+// snapshot that is present but PARTIAL — sessionGroups dropped entries at the
+// cookie byte cap, or the IdP never sent the claim at all (an Entra groups
+// overage), or the row is a pre-0.7 API token whose completeness was never
+// recorded (Server.apiTokenAuth reads a NULL marker as truncated). Either way
+// the caller's group grants cannot be evaluated in full until they sign in
+// again or re-mint. Callers surface that; they must not silently treat it as
+// "no groups" — that is the reading that lets a group DENY evaporate.
+//
+// The returned groups stay the PARTIAL list rather than being blanked: a row
+// that matches one of them is a real match, and for the deny direction seeing
+// more is strictly safer. It is the rows that are MISSING that stale is for
+// (capScan's unresolvable-deny check).
 func capabilitySubjects(ctx context.Context) (users, groups []string, stale bool) {
 	if sub := oidcHumanFromContext(ctx); sub != "" {
 		users = append(users, strings.ToLower(sub))
@@ -109,7 +120,7 @@ func capabilitySubjects(ctx context.Context) (users, groups []string, stale bool
 		users = append(users, email)
 	}
 	groups = oidcGroupsFromContext(ctx)
-	return users, groups, groups == nil
+	return users, groups, groups == nil || oidcGroupsTruncatedFromContext(ctx)
 }
 
 // capAllowed answers "may this caller use `kind` at `value`". Precedence, in
@@ -219,8 +230,19 @@ func (s *Server) capGranted(ctx context.Context, kind, value string) (bool, erro
 // a DENY and/or an ALLOW matched. The single place a stored row is compared
 // against a request, so the narrowing and widening answers can never disagree
 // about what a row covers.
+//
+// AN UNANSWERABLE GROUP SNAPSHOT IS NOT "NO GROUP ROWS" (PF-26, the capability
+// half). capabilitySubjects' stale bit says the group list this scan matched
+// against is missing or partial, so a group DENY the caller actually holds may
+// simply not be in `grants` — and every seam above reads a clean scan as
+// permission. effectiveCeiling (governance.go) already refuses on exactly this
+// input; without the same treatment here, a member whose walling group fell off
+// the cap keeps reaching the denied host, and on a deployment with group deny
+// rows but no group-tier ASSIGNMENTS there is no ceiling refusal anywhere to
+// catch it. So when the snapshot is unanswerable and a group deny row COULD
+// cover this value, the scan reports the deny it cannot rule out.
 func (s *Server) capScan(ctx context.Context, kind, value string) (deny, allow bool, err error) {
-	users, groups, _ := capabilitySubjects(ctx)
+	users, groups, stale := capabilitySubjects(ctx)
 	grants, err := s.cfg.Store.ListCapabilityGrantsFor(ctx, users, groups)
 	if err != nil {
 		return false, false, fmt.Errorf("api: resolve capability %q: %w", kind, err)
@@ -239,7 +261,56 @@ func (s *Server) capScan(ctx context.Context, kind, value string) (deny, allow b
 			allow = true
 		}
 	}
+	if stale {
+		unresolved, uerr := s.capUnresolvableGroupDeny(ctx, kind, value)
+		if uerr != nil {
+			return false, false, uerr
+		}
+		if unresolved {
+			// Logged, not audited: the seam that asked writes its own
+			// authz.denied with the reason it knows, and this line is what
+			// tells an operator the refusal was about COMPLETENESS rather than
+			// a row naming this human. Value is left out — a secret name or a
+			// workspace id is the seam's to log, not the resolver's.
+			slog.Warn("api: capability refused because the caller's group snapshot is unanswerable and a group deny grant of this kind exists",
+				"capability", kind, "principal", oidcHumanFromContext(ctx))
+			return true, false, nil
+		}
+	}
 	return false, allow, nil
+}
+
+// capUnresolvableGroupDeny reports whether ANY group-subject DENY row of this
+// kind could cover value. It is asked only when capabilitySubjects says the
+// caller's group snapshot is unanswerable, and it is what keeps that refusal
+// SCOPED — the same scoping ceilingWithUnusableGroups gets from
+// HasGroupTierAssignments (governance.go). A blanket refusal on every stale
+// snapshot would deny every pre-0.6 cookie and every pre-0.7 API token on every
+// deployment, including the overwhelming majority that hold no group deny rows
+// at all, and "an upgrade with no configuration changes nothing" is the rule
+// this whole file is built on.
+//
+// ALLOW rows deliberately need no equivalent: a group allow the scan cannot see
+// costs the caller access (capAllowed falls through to the enforcement switch,
+// capGranted refuses outright), which is the fail-CLOSED direction already.
+//
+// ponytail: the whole (small) grant table, read only on the stale path, and
+// only for the kind/value in hand. The per-subject index cannot serve this
+// question — the point is precisely the rows whose subject is NOT in the
+// caller's snapshot — so a narrower query would be a new store method for a
+// path that a correctly signed-in caller never takes.
+func (s *Server) capUnresolvableGroupDeny(ctx context.Context, kind, value string) (bool, error) {
+	grants, err := s.cfg.Store.ListCapabilityGrants(ctx)
+	if err != nil {
+		return false, fmt.Errorf("api: resolve capability %q: %w", kind, err)
+	}
+	for _, g := range grants {
+		if g.SubjectType == types.CapabilitySubjectGroup && g.Effect == types.CapabilityDeny &&
+			g.Capability == kind && capValueOverlaps(kind, g.Value, value) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // capSeamAllowed is capAllowed AT AN ENFORCEMENT SEAM — same answer, plus the
