@@ -35,6 +35,14 @@ func (s *memberBoundStore) HasGroupTierAssignments(context.Context) (bool, error
 func (s *memberBoundStore) GetPolicy(context.Context, uuid.UUID) (types.RunPolicy, error) {
 	return s.policy, nil
 }
+
+// ListCapabilityGrants is what capScan consults on a stale group snapshot to ask
+// whether any group DENY row could cover the value; this fixture holds none, so
+// both branches keep answering from ListCapabilityGrantsFor exactly as before.
+func (s *memberBoundStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+
 func (s *memberBoundStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
