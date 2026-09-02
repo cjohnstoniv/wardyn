@@ -16,6 +16,7 @@ import {
 } from "./fixtures";
 import { DRIVES, DRIVE_MEMBER, PEOPLE, PERM, PREVIEW } from "../src/app/lib/user-drives-copy";
 import { GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
+import { OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
 import type { MeUserDrive } from "../src/app/lib/api/health";
 import type { Page } from "@playwright/test";
 
@@ -529,25 +530,26 @@ test.describe("drives — the registry is SUPER's, and it has no nav item for an
     await navToRoute(page, "/settings");
     await expect(page.getByTestId("user-drives-card")).toHaveCount(0);
 
-    // Reaching /drives directly renders the screen with its writes DISABLED —
-    // the app's pattern for a tier-gated surface is a parked control, not a
-    // refusal page (the same shape /governance uses for a non-securityOperator).
-    //
-    // THIS SHAPE IS THE FIXTURE'S, NOT THE PRODUCT'S: /me is spliced while the
-    // bearer stays the admin's, so GET /drives answers 200 and the screen
-    // renders populated-but-parked. A real security admin's GET is operatorOnly
-    // and answers 403, which today renders FETCH_FAILED — a transport sentence
-    // for a tier refusal.
-    // TODO(uifix2): re-pin to the 403 → OPERATOR_ONLY_REASON shape once the console fix merges
+    // Reaching /drives directly: GET /drives is operatorOnly, so a real
+    // security admin's read answers 403 — and the screen renders that as the
+    // TIER refusal (PageHeader + OperatorOnlyHint), never as the transport
+    // sentence with a Retry that would 403 forever. The role splice above
+    // leaves the bearer the admin's, so the 403 is routed here to be the real
+    // server's shape, not a fixture's.
+    await page.route("**/api/v1/drives", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({
+        status: 403,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "forbidden" }),
+      });
+    });
     await navToRoute(page, "/drives");
     await expect(page.getByRole("heading", { name: DRIVES.TITLE, level: 1 })).toBeVisible();
-    await expect(page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true })).toBeDisabled();
-    // The surface still has exactly ONE default-weight action — the teal is a
-    // property of the SCREEN's shape (drives-screen.tsx's `teal`), not of the
-    // viewer's tier — and for this tier it is parked. Asserting zero teals here
-    // would be asserting a different screen.
-    await expect(tealActions(page)).toHaveCount(1);
-    await expect(tealActions(page)).toBeDisabled();
+    await expect(page.getByText(OPERATOR_ONLY_REASON)).toBeVisible();
+    await expect(page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true })).toHaveCount(0);
+    await expect(page.getByText(DRIVES.FETCH_FAILED_TITLE)).toHaveCount(0);
+    await expect(tealActions(page)).toHaveCount(0);
   });
 
   test("a member is offered neither door either", async ({ page }) => {
@@ -581,9 +583,8 @@ test.describe("drives — what the member is told at New run", () => {
     await expect(page.getByTestId("nr-drive")).toHaveCount(0);
     await expect(page.getByTestId("nr-drive-reason")).toHaveCount(0);
     await expect(page.getByText(DRIVE_MEMBER.NR_CHECKBOX)).toHaveCount(0);
-    // Not even the "ask an admin" line: with no door shut there is nothing to
-    // explain, and NR_NONE is a reason, not a placeholder.
-    await expect(page.getByText(DRIVE_MEMBER.NR_NONE)).toHaveCount(0);
+    // Not even an "ask an admin" line: with no door shut there is nothing to
+    // explain (§2.5's absent-row rule — the canon has no string for it).
   });
 
   test("a WRITABLE allocation: the checkbox, its sentence, and the narrowing toggle", async ({ page }) => {
@@ -765,7 +766,6 @@ test.describe("drives — an admin's New run says none of the member's sentences
       DRIVE_MEMBER.NR_RW_NOTE,
       DRIVE_MEMBER.NR_RO_NOTE,
       DRIVE_MEMBER.NR_PAUSED,
-      DRIVE_MEMBER.NR_NONE,
     ]) {
       await expect(page.getByText(s)).toHaveCount(0);
     }
