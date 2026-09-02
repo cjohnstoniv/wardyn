@@ -61,6 +61,12 @@ const (
 	// person's storage.
 	labelDrive     = "wardyn.drive"
 	labelDriveHome = "wardyn.home"
+	// labelDriveSubject is the resolver's fingerprint of the PERSON the home was
+	// derived from (types.DriveSubjectHash) — a digest, never the claim. It is
+	// the label that tells two principals apart when a non-injective home
+	// template folds them onto one home; absent on claims stamped before it
+	// existed, which is why its compare is guarded on presence.
+	labelDriveSubject = "wardyn.subject"
 
 	// driveFSGroup is the GROUP id the kubelet group-owns a freshly provisioned
 	// volume's root with. It is 1000 because that is the gid every wardyn agent
@@ -210,6 +216,13 @@ func driveClaimIdentity(claim *corev1.PersistentVolumeClaim, drive *types.DriveM
 			return fmt.Errorf("k8s: drive: claim %q carries %s=%q, this run's home is %q: %w",
 				claim.Name, labelDriveHome, got, drive.HomeName, errDriveClaimForeign)
 		}
+		if got := claim.Labels[labelDriveSubject]; got != "" && got != drive.SubjectHash {
+			// Presence-guarded on purpose: every claim this driver stamped before
+			// the label existed would otherwise turn foreign on upgrade and orphan
+			// every member's drive.
+			return fmt.Errorf("k8s: drive: claim %q carries %s=%q, this run's subject hashes to %q: %w",
+				claim.Name, labelDriveSubject, got, drive.SubjectHash, errDriveClaimForeign)
+		}
 	case types.DriveBackendK8sPVCStatic:
 		if claim.Labels[labelManaged] == "true" {
 			return fmt.Errorf("k8s: drive: claim %q is a %s=true claim wardynd provisioned as one person's managed drive, not an administrator's share: %w",
@@ -299,9 +312,10 @@ func ensureDrivePVC(ctx context.Context, client kubernetes.Interface, ns string,
 			Name:      drive.ObjectName,
 			Namespace: ns,
 			Labels: map[string]string{
-				labelManaged:   "true",
-				labelDrive:     drive.DriveID.String(),
-				labelDriveHome: drive.HomeName,
+				labelManaged:      "true",
+				labelDrive:        drive.DriveID.String(),
+				labelDriveHome:    drive.HomeName,
+				labelDriveSubject: drive.SubjectHash,
 			},
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{

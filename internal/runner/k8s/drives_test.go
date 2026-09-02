@@ -411,9 +411,10 @@ func existingDriveClaim(drive *types.DriveMount) *corev1.PersistentVolumeClaim {
 			Name:      drive.ObjectName,
 			Namespace: testNamespace,
 			Labels: map[string]string{
-				labelManaged:   "true",
-				labelDrive:     drive.DriveID.String(),
-				labelDriveHome: drive.HomeName,
+				labelManaged:      "true",
+				labelDrive:        drive.DriveID.String(),
+				labelDriveHome:    drive.HomeName,
+				labelDriveSubject: drive.SubjectHash,
 			},
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
@@ -907,4 +908,45 @@ func TestApplyDriveToPod_AppendsRatherThanAssigns(t *testing.T) {
 	if plain.Annotations != nil {
 		t.Errorf("annotations = %v on a pod with no RuntimeClass, want nil", plain.Annotations)
 	}
+}
+
+// TestEnsureDrivePVC_RefusesAClaimStampedForAnotherPerson is the third identity
+// label: when a home template folds two principals onto ONE home (email_local
+// on two domains), drive id and home both match and only the subject digest
+// the resolver carried can tell the claims apart. A claim stamped before the
+// label existed carries none and still mounts — the guard is on presence, so
+// an upgrade never turns every member's drive foreign.
+func TestEnsureDrivePVC_RefusesAClaimStampedForAnotherPerson(t *testing.T) {
+	t.Run("another person's digest is refused before any create", func(t *testing.T) {
+		drive := testDriveMount()
+		drive.SubjectHash = "1111111111111111aaaa"
+		claim := existingDriveClaim(drive)
+		claim.Labels[labelDriveSubject] = "2222222222222222bbbb"
+		cs := fake.NewClientset(claim)
+
+		err := ensureDrivePVC(context.Background(), cs, testNamespace, drive)
+		if !errors.Is(err, errDriveClaimForeign) {
+			t.Fatalf("err = %v, want errors.Is(err, errDriveClaimForeign)", err)
+		}
+		if verbs := countPVCVerbs(cs); verbs["create"] != 0 {
+			t.Errorf("claim verbs = %v, want no create over somebody else's claim", verbs)
+		}
+		if got := err.Error(); !strings.Contains(got, labelDriveSubject) {
+			t.Errorf("err = %q, want it to name the deciding label", got)
+		}
+	})
+	t.Run("a claim stamped before the label existed still mounts", func(t *testing.T) {
+		drive := testDriveMount()
+		drive.SubjectHash = "1111111111111111aaaa"
+		claim := existingDriveClaim(drive)
+		delete(claim.Labels, labelDriveSubject)
+		cs := fake.NewClientset(claim)
+
+		if err := ensureDrivePVC(context.Background(), cs, testNamespace, drive); err != nil {
+			t.Fatalf("ensureDrivePVC: %v, want a pre-label claim to be reused", err)
+		}
+		if verbs := countPVCVerbs(cs); verbs["create"] != 0 {
+			t.Errorf("claim verbs = %v, want reuse, not create", verbs)
+		}
+	})
 }
