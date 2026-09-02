@@ -94,6 +94,8 @@ const rendered: Record<string, string> = {
   LIMIT_INTERACTIVE_HINT: GOVERNANCE.LIMIT_INTERACTIVE_HINT,
   GRADE_NOTE: GOVERNANCE.GRADE_NOTE,
   SAVE: GOVERNANCE.SAVE,
+  LIMIT_DRIVE_LABEL: GOVERNANCE.LIMIT_DRIVE_LABEL,
+  LIMIT_DRIVE_HINT: GOVERNANCE.LIMIT_DRIVE_HINT,
   SAVE_ERROR: GOVERNANCE.SAVE_ERROR,
 
   // ---- §7.3 ----
@@ -166,8 +168,8 @@ const rendered: Record<string, string> = {
 };
 
 describe("governance-copy — §7.2-§7.9 parsed out of the prompt doc", () => {
-  it("finds all 87 frozen keys in the doc", () => {
-    expect(doc.size).toBe(87);
+  it("finds all 89 frozen keys in the doc", () => {
+    expect(doc.size).toBe(89);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {

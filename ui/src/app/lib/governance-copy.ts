@@ -124,7 +124,7 @@ export const GOVERNANCE = {
     "Every run under this profile is bounded by this spec. A member's own policy is clamped to it, and so is a saved policy they pick.",
   LIMITS_TITLE: "Limits",
   LIMITS_LEAD:
-    "Two launch modes route around tool approvals entirely, so the ceiling above cannot reach them. Deny them here instead.",
+    "Some of what a run can do routes around the ceiling entirely. Deny it here instead.",
   LIMIT_EXEC_LABEL: "Deny exec runs",
   LIMIT_EXEC_HINT: "task_mode=exec runs a command with no agent, so no tool rule is ever consulted.",
   LIMIT_INTERACTIVE_LABEL: "Deny interactive runs",
@@ -132,6 +132,9 @@ export const GOVERNANCE = {
     "An interactive run is supervised at the attach pane rather than by rules. A run with no task comes up interactive too, and is refused the same way.",
   GRADE_NOTE: "Grades this ceiling as written — advisory, the same meter the policy editor shows.",
   SAVE: "Save profile",
+  LIMIT_DRIVE_LABEL: "Deny mounting a user drive",
+  LIMIT_DRIVE_HINT:
+    "A run under this profile cannot mount the person's drive, even when one is allocated to them.",
   SAVE_ERROR: "Couldn't save this profile.",
 
   // ---- §7.3 assignments and the resolved preview ----
