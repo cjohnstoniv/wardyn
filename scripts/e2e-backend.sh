@@ -153,7 +153,12 @@ cmd_up() {
   log "Resetting ${PG_DBNAME} schema for deterministic fixtures"
   psql_e2e -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" >/dev/null 2>&1 || true
   log "Starting wardynd (runner=none) on ${ADDR} → ${BASE_URL}, DB ${PG_DBNAME}"
+  # WARDYN_RUNNER_TARGET: -runner none resolves the target "none", which no user
+  # drive backend can name, so without it the API refuses EVERY drive with a 400
+  # and the drives screen has nothing to exercise. Registration only — this
+  # daemon still dispatches nothing.
   WARDYN_PG_DSN="${DSN}" WARDYN_ADMIN_TOKEN="${TOKEN}" WARDYN_AGE_KEY="${AGE_KEY}" \
+    WARDYN_RUNNER_TARGET=docker \
     "${BIN_DIR}/wardynd" \
       -runner none \
       -listen "${ADDR}" \
