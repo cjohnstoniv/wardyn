@@ -459,11 +459,20 @@ run. On Docker (`Driver.driveMount`) a drive runs the ordinary bind deny matrix
 `UserDriveMountSourceCheck` — `ValidateMount` itself is deliberately not run a
 second time) and, for a `host_path` drive, the deployment's ceiling on the
 symlink-RESOLVED real path
-(`UserDriveMountSourceCheck`) — plus two refusals a drive alone needs: a source
+(`UserDriveMountSourceCheck`) — plus three refusals a drive alone needs: a source
 that resolves to the configured ROOT rather than a subdirectory (that would bind
-everyone's home into one sandbox), and a source whose resolved directory NAME is
-not the home the resolver derived (the sibling-symlink case: alice's directory
-replaced host-side by a link to bob's).
+everyone's home into one sandbox); a source that resolves OUTSIDE THIS DRIVE'S
+OWN `host_root`, carried on the mount and asserted by
+`UserDriveHomeWithinItsRoot` (the deployment ceiling is the operator's outer
+bound over every drive at once, so on a deployment with two share drives it
+cannot tell one drive's tree from the other's — a home replaced by a link to the
+same-named home under the OTHER drive's root satisfies it, and an absent
+`host_root` on a share mount is a refusal rather than a skip); and a source whose
+resolved directory NAME is not the home the resolver derived (the
+sibling-symlink case: alice's directory replaced host-side by a link to bob's).
+The target is pinned to `runner.DriveTarget` on BOTH substrates
+(`errDriveTargetInvalid` in each driver), so a drive can never be mounted over
+the credential staging directory or the workspace.
 
 **`host_path` drives sit under a fail-closed env ceiling, not a database one.** A
 drive's `host_root` is authored in the DB by an admin and its subdirectories are
@@ -511,6 +520,10 @@ foreign — the opposite of Docker's restore gesture.
 attachment itself at dispatch (actor `system`, after `CreateSandbox` returns, so
 a success row means the object really was bound) with the backend, the object,
 the mode and the `enforcement` value — vocabulary in `docs/AUDIT-ACTIONS.md`.
+The row's rendered `Target` is masked to `<drive>/<home>` for a `host_path`
+drive, because a run's creator can read their own run's rows and a share's
+object name is an absolute path on the operator's filesystem; the exact object
+stays in the payload, which the run page does not render.
 Nothing logs the drive's contents, and the preview endpoint is not audited, for
 the reason its governance twin is not: it saves nothing and answers only about
 claims the caller pasted.
@@ -1114,21 +1127,27 @@ hiding them would repeat the failure mode we are designed to avoid.
     credential directory — or a symlink that lands in one — is refused at
     authoring and again at bind time, and the claim residual #25 makes about
     member mounts is now true of drives. It closes nothing beyond that: a drive
-    inherits residual #25's TOCTOU **identically** — the resolve happens as late
-    as this process can look, immediately before `ContainerCreate`, but validate
-    and create remain two operations and a host-root attacker can race the
-    window. The blast radius is bounded the same two ways: the roots are
-    operator/MDM-set so the race can only be aimed WITHIN the declared roots —
-    and "within the roots" means the deployment's root LIST, not this drive's
-    `host_root`: `UserDriveMountSourceCheck` accepts a resolved path under ANY
-    configured root and `Driver.driveMount` asserts only the directory's NAME, so
-    with two roots a home in one drive replaced host-side by a link into another
-    drive's root passes when the names agree and binds the other drive's tree.
-    Per-drive containment (the resolved path under THIS drive's resolved
-    `host_root`) is the 0.7.1 fix; until then, one `host_path` drive per
-    configured root. And the deny-list matches the post-`EvalSymlinks` real path
-    so a won race landing on a credential directory is still refused. The race is
-    not deterministically testable and no test claims to cover it.
+    inherits residual #25's TOCTOU **identically**. The blast radius is bounded
+    two ways. The roots are operator/MDM-set, so the race can only be aimed
+    WITHIN the declared roots. And containment is **PER DRIVE**, evaluated at
+    CHECK TIME: `runner.UserDriveHomeWithinItsRoot` asserts the symlink-resolved
+    source is a strict subdirectory of THIS drive's own `host_root` — carried
+    onto the mount from the resolved row, and an absent one is a refusal rather
+    than a skip — on top of `UserDriveMountSourceCheck`'s ceiling over the whole
+    root LIST and the base-name rule. So a home in one drive replaced host-side
+    by a link into another drive's root is refused even when both roots are
+    configured, and a deployment may run as many `host_path` drives inside a root
+    as its layout needs.
+
+    **What is left is the window, not the rule.** Every one of those checks runs
+    on the `EvalSymlinks`-resolved path, and what is handed to `ContainerCreate`
+    is still the LEXICAL `<host_root>/<home>` source, which the daemon resolves
+    again for itself — validate and create remain two operations, so a host-root
+    attacker who re-points the home in between binds whatever that second resolve
+    finds. The check is placed as late as this process can look, immediately
+    before the create, and the deny-list matches the post-`EvalSymlinks` real
+    path, so a won race landing on a credential directory is still refused. The
+    race is not deterministically testable and no test claims to cover it.
 
 36. **A drive's SIZE is an allocation Wardyn never enforces, on any substrate.**
     Published in the product's own frozen words, rendered verbatim by the
@@ -1160,19 +1179,22 @@ hiding them would repeat the failure mode we are designed to avoid.
     reclaim is documented: the claims carry the drive row's **id** rather than
     its name precisely so a label selector still finds them, and
     `docs/OPERATIONS.md` "User drives on Kubernetes" carries the `get pvc -l`
-    and `delete pvc` recipe to move the data and reclaim the object. **Not
-    closed in 0.7:** neither the console nor the API refuses or warns on a
-    rename that has grants (`internal/api/user_drives.go`) — a
-    409-unless-confirmed needs a new frozen refusal string, so it is 0.7.1, and
-    until then a drive rename is an operator action with a runbook rather than a
-    label edit. Docker is unaffected: a managed volume's name is
+    and `delete pvc` recipe to move the data and reclaim the object. **The API
+    no longer performs it quietly:** a rename — like any change to `backend`,
+    `home_template` or `host_root` — on a drive that already has grants is a
+    **409** naming what changes and how many allocations move, unless the request
+    carries `?confirm=rehome` (`driveRehomeGuard`). What is NOT closed is the
+    console: it has no confirm affordance, so an admin who means the rename
+    carries it out through the API, and the runbook above is still how the
+    orphaned claims are reclaimed afterwards. Docker is unaffected: a managed volume's name is
     `wardyn-drive-<home>` and folds no drive name, so a rename orphans nothing
     there. Rename is the visible case of a wider gap: `PUT /drives/{id}` accepts
     EVERY field change on an allocated drive without a warning — a
     `home_template` change hands each member a fresh, empty object at their next
     run (the old ones findable by `wardyn.drive` on managed backends only), and a
-    `host_root` change binds a different tree under the same names. The
-    409-unless-confirmed above covers these too.
+    `host_root` change binds a different tree under the same names. The 409 above
+    covers all four columns, so the gap that remains is the console's, not the
+    API's.
 
 ### 5.1a LLM egress content inspection — the honest-claims contract
 

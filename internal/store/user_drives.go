@@ -66,11 +66,14 @@ func userDriveGrantDest(g *types.UserDriveGrant) []any {
 // object name for a principal. docs/OPERATIONS.md, "User drives on Kubernetes",
 // is that runbook.
 //
-// THE CONSOLE DOES NOT WARN, and handleUpdateUserDrive renames unconditionally
-// even when the drive has grants. Saying otherwise here would be the comment
-// asserting a guard nothing implements. Warning at the write needs a new
-// user-visible string, which the frozen copy module makes a design change
-// rather than a code one — filed, not invented.
+// THE HANDLER NO LONGER WRITES THAT UNCONDITIONALLY. An identity-affecting PUT
+// on a drive that already has grants — backend, home_template, host_root or
+// name, the four columns every allocated person's storage object is derived
+// from — is refused 409 by driveRehomeGuard unless the request carries
+// ?confirm=rehome. This statement stays unconditional and must: the gate belongs
+// at the API boundary, where the request that asked for it is, and a store that
+// re-read the grants on every write would be a second, quieter copy of a rule
+// that already has one.
 //
 // Returns ErrConflict when UNIQUE(name) rejects the write — a new drive taking
 // a taken name, or a rename onto another row's name. The caller maps that to

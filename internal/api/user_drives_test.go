@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -791,4 +792,173 @@ func TestDriveTargetIsReservedFromAuthoring(t *testing.T) {
 	}); msg != "" {
 		t.Errorf("neighbouring target refused: %q — the reservation must be the subtree, not a prefix match", msg)
 	}
+}
+
+// TestUpdateAllocatedUserDriveRefusesASilentRehome is the second half of the
+// "never silently un-allocate" rule the delete 409 already carries.
+//
+// UpsertUserDrive writes every column in place, so a PUT that changed
+// `home_template` on a drive with grants answered 200 and re-homed every one of
+// them: their next run mounts a different object, and the one holding their
+// work is orphaned with nothing in the product naming it. The change is still
+// available — an admin sometimes means it, and the FK denies them
+// delete-and-recreate — but it has to be asked for.
+func TestUpdateAllocatedUserDriveRefusesASilentRehome(t *testing.T) {
+	// Two REAL roots inside the ceiling: the env check resolves a host_root on
+	// this host and fails closed on one that is not there, so a share fixture
+	// has to name directories that exist.
+	base := t.TempDir()
+	homes, other := filepath.Join(base, "homes"), filepath.Join(base, "other")
+	for _, dir := range []string{homes, other} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+
+	// The stored row every case starts from: a share, allocated to two subjects.
+	stored := func(t *testing.T) (*driveCRUDStore, *Server, types.UserDrive) {
+		t.Helper()
+		st := newDriveCRUDStore()
+		srv, _ := driveAdminServer(st, []string{homes, other})
+		d := *driveFixture(func(d *types.UserDrive) {
+			d.Name, d.Backend, d.HomeTemplate, d.HostRoot, d.SizeMiB =
+				"nas", types.DriveBackendHostPath, types.HomeTemplateSub, homes, 10240
+		})
+		st.drives[d.ID] = d
+		for _, subject := range []string{"alice", "bob"} {
+			st.grants[uuid.New()] = types.UserDriveGrant{
+				ID: uuid.New(), SubjectType: types.CapabilitySubjectUser, Subject: subject, DriveID: d.ID, Enabled: true,
+			}
+		}
+		return st, srv, d
+	}
+	// share is the stored body with one field replaced, so each row below states
+	// exactly the column it edits and nothing else.
+	share := func(name, tmpl, root string) string {
+		return fmt.Sprintf(`{"name":%q,"backend":"host_path","home_template":%q,"host_root":%q,"size_mib":10240}`, name, tmpl, root)
+	}
+	put := func(t *testing.T, srv *Server, id uuid.UUID, body, query string) *httptest.ResponseRecorder {
+		t.Helper()
+		return driveCall(t, srv.handleUpdateUserDrive, http.MethodPut,
+			"/api/v1/drives/"+id.String()+query, body, map[string]string{"id": id.String()})
+	}
+
+	// Each of the FOUR identity columns, one at a time. They are not one rule
+	// with four spellings: backend moves everyone onto a different substrate,
+	// home_template re-derives every home, host_root binds the same names
+	// against a different tree, and name re-homes every k8s claim.
+	for _, tc := range []struct {
+		field string
+		body  string
+		names string
+	}{
+		{"backend", `{"name":"nas","backend":"docker_volume","home_template":"sub","size_mib":10240}`, `backend "host_path" → "docker_volume"`},
+		{"home_template", share("nas", "email_local", homes), `home_template "sub" → "email_local"`},
+		{"host_root", share("nas", "sub", other), fmt.Sprintf("host_root %q → %q", homes, other)},
+		{"name", share("nas2", "sub", homes), `name "nas" → "nas2"`},
+	} {
+		t.Run(tc.field+" on an allocated drive is a 409", func(t *testing.T) {
+			st, srv, d := stored(t)
+			w := put(t, srv, d.ID, tc.body, "")
+			if w.Code != http.StatusConflict {
+				t.Fatalf("PUT = %d, want 409: %s", w.Code, w.Body.String())
+			}
+			body := refusalBody(t, w)
+			// The refusal has to carry BOTH halves an admin decides on: what
+			// changes, and how many allocations move.
+			if !strings.Contains(body, tc.names) {
+				t.Errorf("body = %q, want it to name the change %q", body, tc.names)
+			}
+			if !strings.Contains(body, "2 subjects") {
+				t.Errorf("body = %q, want it to count the allocations it would re-home", body)
+			}
+			// THE REMEDY HAS TO BE ONE ITS READER CAN CARRY OUT. The console
+			// PUTs /drives/{id} with no query and renders this body under
+			// SAVE_REFUSED_TITLE, so "re-send with ?confirm=rehome" read as a
+			// button an admin could not find. Byte-exact, because the whole
+			// finding was the wording.
+			const remedy = "Confirming is an API action, not a console one: re-send as PUT /drives/{id}?confirm=rehome."
+			if !strings.Contains(body, remedy) {
+				t.Errorf("body = %q, want it to end with %q", body, remedy)
+			}
+			// And NOTHING was written: a refused write must leave the row alone,
+			// or the guard would only be telling an admin about a change it had
+			// already made.
+			if got := st.drives[d.ID]; got != d {
+				t.Errorf("stored row = %+v, want it untouched by a refused PUT", got)
+			}
+		})
+
+		t.Run(tc.field+" with ?confirm=rehome is allowed", func(t *testing.T) {
+			st, srv, d := stored(t)
+			if w := put(t, srv, d.ID, tc.body, "?confirm=rehome"); w.Code != http.StatusOK {
+				t.Fatalf("confirmed PUT = %d, want 200: %s", w.Code, w.Body.String())
+			}
+			if st.drives[d.ID] == d {
+				t.Error("the confirmed change did not land — the guard is a confirmation, not a wall")
+			}
+		})
+
+		t.Run(tc.field+" on an UNALLOCATED drive is allowed", func(t *testing.T) {
+			st, srv, d := stored(t)
+			st.grants = map[uuid.UUID]types.UserDriveGrant{}
+			if w := put(t, srv, d.ID, tc.body, ""); w.Code != http.StatusOK {
+				t.Fatalf("PUT with no grants = %d, want 200: %s", w.Code, w.Body.String())
+			}
+		})
+	}
+
+	// The CONTROL, and it is what keeps the guard from being "PUT is refused on
+	// an allocated drive": size, mode and reclaim re-home nobody — the object
+	// name does not depend on them — so they are untouched by the gate.
+	t.Run("a non-identity change on an allocated drive is unaffected", func(t *testing.T) {
+		st, srv, d := stored(t)
+		body := fmt.Sprintf(`{"name":"nas","backend":"host_path","home_template":"sub","host_root":%q,`+
+			`"size_mib":20480,"writable":true,"reclaim":"delete"}`, homes)
+		if w := put(t, srv, d.ID, body, ""); w.Code != http.StatusOK {
+			t.Fatalf("PUT = %d, want 200 — size, mode and reclaim name no storage object: %s", w.Code, w.Body.String())
+		}
+		if got := st.drives[d.ID]; got.SizeMiB != 20480 || !got.Writable || got.Reclaim != types.DriveReclaimDelete {
+			t.Errorf("stored row = %+v, want the non-identity edit landed", got)
+		}
+	})
+
+	// A PUT that re-saves the row UNCHANGED is not a re-homing either, which is
+	// the shape a console's "save" button produces when nothing was edited.
+	t.Run("an unchanged re-save is unaffected", func(t *testing.T) {
+		_, srv, d := stored(t)
+		if w := put(t, srv, d.ID, share("nas", "sub", homes), ""); w.Code != http.StatusOK {
+			t.Fatalf("unchanged re-save = %d, want 200: %s", w.Code, w.Body.String())
+		}
+	})
+
+	// A PUT naming an id NO row holds still creates it (PUT means put): there is
+	// nothing to re-home, so the guard must not turn the create-by-PUT path into
+	// a 409.
+	t.Run("a PUT that creates is unaffected", func(t *testing.T) {
+		_, srv, _ := stored(t)
+		id := uuid.New()
+		if w := put(t, srv, id, driveCreateBody, ""); w.Code != http.StatusOK {
+			t.Fatalf("PUT of an absent id = %d, want 200: %s", w.Code, w.Body.String())
+		}
+	})
+
+	// FAIL CLOSED on an unreadable list: a read that could not answer cannot say
+	// a drive is unallocated, and treating it as unallocated is how the gate
+	// stops biting on exactly the deployment whose database is unhappy.
+	t.Run("an unreadable grant count is a 500, never a quiet re-home", func(t *testing.T) {
+		st, srv, d := stored(t)
+		st.listErr = context.DeadlineExceeded
+		// A docker_volume BODY, deliberately: driveHostRootNesting lists too and
+		// runs FIRST, so a host_path body would answer the identical 500 from the
+		// other gate and this sub-test would pass without the re-home guard's
+		// fail-closed arm ever running. Only a non-share write reaches it alone.
+		body := `{"name":"nas","backend":"docker_volume","home_template":"sub","size_mib":10240}`
+		if w := put(t, srv, d.ID, body, ""); w.Code != http.StatusInternalServerError {
+			t.Fatalf("PUT with an unreadable list = %d, want 500: %s", w.Code, w.Body.String())
+		}
+		if got := st.drives[d.ID]; got != d {
+			t.Errorf("stored row = %+v, want it untouched", got)
+		}
+	})
 }

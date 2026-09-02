@@ -27,6 +27,8 @@ func dispatchDrive(readOnly bool) *types.DriveMount {
 	return &types.DriveMount{
 		Backend:     types.DriveBackendHostPath,
 		ObjectName:  "/srv/wardyn-drives/alice",
+		HostRoot:    "/srv/wardyn-drives",
+		DriveName:   "nas",
 		HomeName:    "alice",
 		Target:      runner.DriveTarget,
 		ReadOnly:    readOnly,
@@ -89,15 +91,27 @@ func TestDispatch_DriveReachesSpecEnvAndAudit(t *testing.T) {
 		t.Errorf("run.drive.mount actor = %q, want %q — a member ticked a checkbox, dispatch resolved it into an object",
 			ev.ActorType, types.ActorSystem)
 	}
-	// THE ROW'S ONE RENDERED DETAIL. The console's Audit tab draws a row from
-	// time, actor, action and Target and reads nothing out of Data, so a Target
-	// set to the run id (which the event already carries) leaves the object name
-	// on no screen at all — and "which storage did this run mount" is the whole
-	// question this action exists to answer.
-	if ev.Target != drive.ObjectName {
-		t.Errorf("run.drive.mount target = %q, want the storage object %q — the run id is already on the event, and the Audit tab renders nothing from data",
-			ev.Target, drive.ObjectName)
+	// THE ROW'S ONE RENDERED DETAIL, and the one field whose reader is not the
+	// operator. The console's Audit tab draws a row from time, actor, action and
+	// Target and reads nothing out of Data, and auditScope lets a run's CREATOR
+	// read their own run's rows — so for a SHARE the target used to hand the
+	// member `/srv/wardyn-drives/alice`, the operator's filesystem layout, on
+	// their own run page. Two sites in this same tree refuse to disclose exactly
+	// that to exactly that reader (driveShareIsBindable names the home, never the
+	// resolved path; applyUserDriveEnv carries the target and the mode and
+	// nothing else), so the target names the DRIVE and the DIRECTORY instead.
+	if ev.Target != "nas/alice" {
+		t.Errorf("run.drive.mount target = %q, want \"nas/alice\" — a share's absolute host path is the operator's layout, "+
+			"and the member reads this row", ev.Target)
 	}
+	if strings.Contains(ev.Target, drive.HostRoot) {
+		t.Errorf("run.drive.mount target = %q leaks the share's host root %q to the member", ev.Target, drive.HostRoot)
+	}
+	// …AND THE PAYLOAD IS NOT A SIDE DOOR. Masking the Target while `object`
+	// still spelled the absolute path moved the operator's layout one field over
+	// inside the SAME row: GET /audit?run_id= hands the creator the whole event,
+	// data included, so `object` carries the masked name too. The operator reads
+	// the root from GET /drives, which is operator-only and already shows it.
 	var data map[string]any
 	if err := json.Unmarshal(ev.Data, &data); err != nil {
 		t.Fatalf("run.drive.mount payload is not an object: %v (%s)", err, ev.Data)
@@ -107,7 +121,7 @@ func TestDispatch_DriveReachesSpecEnvAndAudit(t *testing.T) {
 		"drive":       "alice",
 		"enforcement": "external",
 		"mode":        "ro",
-		"object":      "/srv/wardyn-drives/alice",
+		"object":      "nas/alice",
 	}
 	for k, v := range want {
 		if data[k] != v {
@@ -118,6 +132,11 @@ func TestDispatch_DriveReachesSpecEnvAndAudit(t *testing.T) {
 		if _, ok := want[k]; !ok {
 			t.Errorf("run.drive.mount payload carries an undocumented field %q — docs/AUDIT-ACTIONS.md lists five", k)
 		}
+	}
+	// The whole row, not one field of it: nothing a member can fetch may spell
+	// the share's root.
+	if strings.Contains(string(ev.Data), drive.HostRoot) {
+		t.Errorf("run.drive.mount payload = %s leaks the share's host root %q to the member", ev.Data, drive.HostRoot)
 	}
 }
 
@@ -210,5 +229,38 @@ func TestDispatch_DriveIsNotAuditedWhenTheSandboxFails(t *testing.T) {
 	}
 	if ev := findAudit(events, spec.RunID, "run.create", "failure"); ev == nil {
 		t.Errorf("no run.create failure row; events=%s", auditDump(events, spec.RunID))
+	}
+}
+
+// TestDispatch_ManagedDriveAuditsTheObjectName is the other half of the target
+// ruling, and the reason it is a ruling rather than a blanket mask: a MANAGED
+// object's name is Wardyn's own (`wardyn-drive-<home>` on Docker,
+// `wardyn-drive-<slug>-<home>` on Kubernetes). It says which volume or claim
+// this run was handed, it is the exact string an operator's reclaim command
+// takes, and it discloses nothing about the host — so it goes on the row
+// verbatim, and only a share's absolute host path is masked.
+func TestDispatch_ManagedDriveAuditsTheObjectName(t *testing.T) {
+	drive := dispatchDrive(true)
+	drive.Backend, drive.ObjectName, drive.HostRoot = types.DriveBackendDockerVolume, "wardyn-drive-alice", ""
+	drive.Enforcement = types.StorageEnforcementNone
+	spec, events := runDriveDispatch(t, drive)
+
+	ev := findAudit(events, spec.RunID, "run.drive.mount", "success")
+	if ev == nil {
+		t.Fatalf("dispatch recorded no run.drive.mount; events=%s", auditDump(events, spec.RunID))
+	}
+	if ev.Target != "wardyn-drive-alice" {
+		t.Errorf("run.drive.mount target = %q, want the managed object's own name — it names no host path, so there is "+
+			"nothing to mask and the operator's reclaim command reads it straight off the row", ev.Target)
+	}
+	// And the payload's `object` is UNCHANGED on this arm — the masking is the
+	// share's alone, so a managed row still hands the reclaim command the exact
+	// volume name.
+	var data map[string]any
+	if err := json.Unmarshal(ev.Data, &data); err != nil {
+		t.Fatalf("run.drive.mount payload is not an object: %v (%s)", err, ev.Data)
+	}
+	if data["object"] != "wardyn-drive-alice" {
+		t.Errorf("run.drive.mount payload[object] = %v, want the managed object verbatim (full payload: %s)", data["object"], ev.Data)
 	}
 }

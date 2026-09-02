@@ -456,26 +456,36 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drive *types.DriveMount) {
 // data that is still there. Actor SYSTEM — a member ticked a checkbox, and what
 // is recorded is dispatch's own resolution of that flag into an object.
 //
-// TARGET IS THE STORAGE OBJECT, not the run id — the run is already named by
-// the event's own run id, so spending the target on it a second time made the
-// row's one rendered detail redundant. The console's Audit tab renders a row as
-// time, actor, action and `target`, and nothing at all from `data`
-// (`AuditTab`), so the object name reaches a screen only from here: an operator
-// (or the member, reading their own run's rows through GET /audit?run_id=) sees
-// WHICH volume or share directory this run was handed, which is the whole
-// question the row exists to answer months later.
+// TARGET NAMES THE STORAGE, not the run id — the run is already named by the
+// event's own run id, so spending the target on it a second time made the row's
+// one rendered detail redundant. The console's Audit tab renders a row as time,
+// actor, action and `target`, and nothing at all from `data` (`AuditTab`), so
+// this is the only place the storage reaches a screen.
 //
-// `object` repeats it in the payload, where the other four fields live, and
-// `drive` is the per-person HOME SEGMENT — not the drive object's name, which
-// is what the same key carries on the drive.grant.* rows
-// (userDriveGrantAuditData). Both are admin-facing in the sense that they name
-// storage rather than a request: neither ever enters the sandbox env, which
-// carries the target and the mode and nothing else (applyUserDriveEnv), so an
-// agent cannot read back the object it was allocated even though the human
-// whose run it is can. `enforcement` is what actually binds the drive's bytes
-// (types.StorageEnforcement), logged beside the mount so a size read back in a
-// later dispute carries its caveat instead of reading as a promise. Five
-// fields, matching docs/AUDIT-ACTIONS.md exactly.
+// WHICH storage it names depends on WHO can read the row, and that is
+// driveAuditTarget's whole subject: a member reads their own run's rows through
+// GET /audit?run_id=, so a share's absolute host path ANYWHERE ON THIS ROW would
+// hand them the operator's filesystem layout — the exact thing
+// driveShareIsBindable refuses to put in a refusal and applyUserDriveEnv refuses
+// to put in the sandbox. A share's target is therefore "<drive>/<home>"; a
+// managed object's name is Wardyn's own and stays verbatim.
+//
+// `object` CARRIES THE SAME NAME, and the reason is that "anywhere on this row"
+// is the whole claim: masking the Target while the payload still spelled
+// <host_root>/<home> moved the operator's filesystem layout one field over,
+// inside the same row GET /audit?run_id= hands the run's creator whole. So a
+// share's `object` is "<drive>/<home>" as well, and the operator reads the root
+// from GET /drives — operator-only, and it already shows it — rather than from a
+// member-readable audit row. A MANAGED object is untouched on both fields: its
+// name is Wardyn's own and discloses nothing about the host. `drive` is the
+// per-person HOME SEGMENT — not the drive object's name, which is what the same
+// key carries on the drive.grant.* rows
+// (userDriveGrantAuditData). Neither ever enters the sandbox env, which carries
+// the target and the mode and nothing else (applyUserDriveEnv), so an agent
+// cannot read back the object it was allocated. `enforcement` is what actually
+// binds the drive's bytes (types.StorageEnforcement), logged beside the mount so
+// a size read back in a later dispute carries its caveat instead of reading as a
+// promise. Five fields, matching docs/AUDIT-ACTIONS.md exactly.
 //
 // The nil test lives HERE rather than at the assembly site for a mechanical
 // reason worth stating: dispatchRun sits at its gocyclo ceiling, so one more
@@ -485,13 +495,49 @@ func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, drive *ty
 		return
 	}
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.drive.mount",
-		drive.ObjectName, "success", mustJSON(map[string]any{
+		driveAuditTarget(drive), "success", mustJSON(map[string]any{
 			"backend":     drive.Backend,
 			"drive":       drive.HomeName,
 			"enforcement": drive.Enforcement,
 			"mode":        driveAuditMode(drive.ReadOnly),
-			"object":      drive.ObjectName,
+			"object":      driveAuditTarget(drive),
 		})))
+}
+
+// driveAuditTarget is what run.drive.mount's Target names, and it differs by
+// backend because the row's READER differs from the reader every other field on
+// it was written for.
+//
+// A member can read their own run's rows (auditScope lets the run's creator
+// through GET /audit?run_id=), and the console's Audit tab renders `target` and
+// nothing from `data`. For a MANAGED object that is exactly right: the name is
+// Wardyn's own — `wardyn-drive-<home>`, `wardyn-drive-<slug>-<home>` — it says
+// which volume or claim the run was handed, and it discloses nothing about the
+// host.
+//
+// For a SHARE the object name is `<host_root>/<home>`, an absolute path on the
+// operator's filesystem, and putting it on the member's own run page
+// contradicted two rules the same tree already states for the same reader:
+// driveShareIsBindable names the HOME and never the resolved path ("the
+// operator's filesystem layout stays where GET /drives already keeps it"), and
+// applyUserDriveEnv carries the target and the mode and nothing else. So a
+// share's target is "<drive>/<home>" — which drive, whose directory — and the
+// absolute path is on the row NOWHERE, `object` included (auditDriveMount calls
+// this for that field too): a payload the same reader can fetch is not a place
+// to keep it. The operator reads the root from GET /drives, which is
+// operator-only and already carries it.
+//
+// A mount that carries no DriveName (an older control plane, a hand-written
+// -spec) falls back to the home alone rather than to the object: the fallback
+// for "I cannot name the drive" must not be "then disclose the path".
+func driveAuditTarget(drive *types.DriveMount) string {
+	if drive.Backend != types.DriveBackendHostPath {
+		return drive.ObjectName
+	}
+	if drive.DriveName == "" {
+		return drive.HomeName
+	}
+	return drive.DriveName + "/" + drive.HomeName
 }
 
 // driveAuditMode renders a drive's mode as the SAME two words the sandbox env

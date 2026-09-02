@@ -286,9 +286,22 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 		slog.Warn("wardynd: user drive: a home name could not be derived for this principal",
 			slog.String("drive", d.Name), slog.String("backend", string(d.Backend)),
 			slog.String("home_template", string(d.HomeTemplate)), slog.String("err", err.Error()))
-		return nil, fmt.Errorf("%w: drive: your %s cannot name a directory "+
-			"(lowercase letters and digits, then `. _ -`, up to 63 characters) — "+
-			"ask an admin to set your directory name", errDriveUnmountable, d.HomeTemplate)
+		// The FROZEN sentence first, byte-for-byte, then the substrate's own
+		// clause when the substrate is stricter than the sentence describes.
+		//
+		// The canon describes driveHomeSegmentRe, which is the DOCKER rule; a
+		// k8s backend enforces driveHomeSegmentK8sRe, which also forbids `_` and
+		// a trailing `-`/`.`. The motivating case is not hypothetical — an Entra
+		// `sub` is base64url and routinely carries `_` — and the member was being
+		// told the character that refused them was allowed, so they asked their
+		// admin for nothing. The canon is frozen, so it is not reworded; the
+		// clause is APPENDED (types.DriveHomeStricterRuleClause, which lives
+		// beside the regex it describes), the §7.1 server-composed class.
+		return nil, fmt.Errorf("%w: %s", errDriveUnmountable,
+			strings.TrimSpace(fmt.Sprintf("drive: your %s cannot name a directory "+
+				"(lowercase letters and digits, then . _ -, up to 63 characters) — "+
+				"ask an admin to set your directory name %s",
+				d.HomeTemplate, types.DriveHomeStricterRuleClause(d.Backend))))
 	}
 	resolved.HomeName = home
 	resolved.ObjectName = types.DriveObjectName(*d, home)
@@ -421,6 +434,39 @@ func drivePreviewWarning(tmpl types.HomeTemplate, users []string) string {
 // because that IS the answer the admin needs (their template does not fit this
 // person's claims); only a real store failure is a 500.
 //
+// ─── THE RESOLVER IS NOT THE WHOLE ENFORCEMENT PATH ────────────────────────
+//
+// It used to be only resolveUserDriveFor, which is the store read and the fold
+// — and three of the launch path's gates lived above and below it, so a claim
+// set that WOULD be refused at launch previewed green. Each is now run here, in
+// the enforcement path's own order and with the enforcement path's own words:
+//
+//  1. THE DOOR, resolved for the PREVIEWED claims rather than for the admin
+//     doing the previewing (driveDoorShut over ResolveGovernanceProfile).
+//     seedRequestDrive runs it FIRST, before the resolver, so a 403 beats a
+//     500 or a 422; so does this.
+//  2. THE UNANSWERABLE GROUP TIER. A request that carries no `groups` at all
+//     has not evaluated the group tier, which is the same condition a nil
+//     snapshot creates at launch — and answering it from the `all` row is how
+//     an admin gets a confident preview of a drive no run will mount. So the
+//     no-groups form takes driveWithUnusableGroups, the identical function:
+//     a user-tier row is fully determined and served (paused included), a
+//     deployment with no group-tier grants is served, and anything else is the
+//     403 the launch gives. The console always sends both lists (previewClaims
+//     splits one box into both), so this arm answers the hand-made request.
+//  3. WOULD IT ACTUALLY BIND HERE (driveIsMountableHere): the backend/runner
+//     mismatch and, for a share, driveShareIsBindable's ceiling re-check and
+//     the home's existence. The share arm is what TOP RISK 5 was about — a
+//     drive whose /srv/homes/bob does not exist previewed as "nas via the user
+//     allocation" and 422'd the moment Bob ticked the box.
+//
+// The NARROWING arm of driveMountFor has no counterpart and is deliberately
+// absent: it folds a run request's read_only, and a preview has no run request.
+//
+// STILL NOT AUDITED. Running the door here does not make this an authorization
+// event: nothing is minted and nothing changes, and denyMemberDrive's
+// authz.denied row is about a member's own attempt to launch.
+//
 // Routing is D2's (SUPER-only, beside the /drives CRUD family); this handler is
 // deliberately complete so that registration is one line.
 func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) {
@@ -453,13 +499,26 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	resolved, err := s.resolveUserDriveFor(r.Context(), users, groups)
+	// (1) The door, for the claims that were TYPED — the launch path's first
+	// gate, in the launch path's own words.
+	if !s.drivePreviewDoorIsOpen(w, r, users, groups) {
+		return
+	}
+	// (2) The resolver, taking the unusable-groups arm when the request cannot
+	// answer the group tier at all.
+	resolved, err := s.previewResolveUserDrive(r.Context(), users, groups)
 	if err != nil {
 		writeDriveError(w, err)
 		return
 	}
 	if resolved == nil {
 		writeJSON(w, http.StatusOK, userDrivePreviewResponse{})
+		return
+	}
+	// (3) And would it bind here. Skipped for a PAUSED row, where nothing above
+	// it was derived — there is no object name to stat and nothing would mount
+	// anyway, which is the answer the response already carries.
+	if !resolved.Paused && !s.driveIsMountableHere(w, *resolved) {
 		return
 	}
 	// The SAME positional pick newResolvedDrive made, read back rather than
@@ -482,4 +541,76 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 		HomeSubject: homeSubject,
 		Warning:     drivePreviewWarning(resolved.Drive.HomeTemplate, users),
 	})
+}
+
+// drivePreviewDoorIsOpen runs the profile DOOR against the claims an admin
+// typed, writing the launch path's own 403 and returning false once it has.
+//
+// The door at launch keys on the CALLER (denyMemberDrive → driveDoorProfile,
+// which exempts an operator). Here the caller is always an operator — every
+// /drives route is SUPER — so asking about them would answer "open" for every
+// previewed principal and the preview would keep saying "this person mounts
+// their drive" about somebody whose profile forbids it. So the ceiling is
+// resolved for the PREVIEWED claims and only the shared predicate
+// (driveDoorShut) is asked.
+//
+// SAME BYTES as the launch refusal (driveDeniedByProfileMsg): an admin checking
+// why a member cannot mount a drive should read the sentence that member reads,
+// not a paraphrase they then have to match up with a support ticket.
+//
+// A store failure is a 500 and never "the door is open" — ceilingFromProfile's
+// own ordering rule, reused rather than restated: a resolve that failed also
+// returns a nil profile, and treating that as no-door would fail open on
+// exactly the deployment whose database is unhappy.
+func (s *Server) drivePreviewDoorIsOpen(w http.ResponseWriter, r *http.Request, users, groups []string) bool {
+	// A build with no store holds no profiles, so there is no door — the same
+	// short-circuit resolveUserDrive's step 1 makes, and it has to be here too
+	// because this gate runs BEFORE the resolver.
+	if s.cfg.Store == nil {
+		return true
+	}
+	p, _, err := s.cfg.Store.ResolveGovernanceProfile(r.Context(), users, groups)
+	ceiling, err := s.ceilingFromProfile(p, err, governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone()})
+	if err != nil {
+		writeCeilingError(w, err)
+		return false
+	}
+	if name, shut := driveDoorShut(ceiling); shut {
+		writeError(w, http.StatusForbidden, driveDeniedByProfileMsg(name))
+		return false
+	}
+	return true
+}
+
+// previewResolveUserDrive is the preview's entrance to the resolver, and the
+// one place it differs from resolveUserDrive: the enforcement path decides
+// "can this caller's group tier be evaluated" from their SNAPSHOT, and a
+// preview has no snapshot — it has the two lists an admin typed.
+//
+// An empty `groups` is therefore the preview's version of an unusable snapshot:
+// the group tier was not evaluated, so a group-tier grant could outrank
+// whatever the user and `all` tiers matched. driveWithUnusableGroups is the
+// identical function the launch path takes, with the identical scoping — a
+// user-tier row settles the question whatever the groups are (paused included),
+// a deployment with no group-tier grants has nothing to hide, and anything else
+// is the 403 rather than a guess decided by alphabetical luck.
+//
+// It is NOT the same as "this person is in no groups". A caller who really is
+// in none sends `groups: []` and gets the refusal — which is the honest answer
+// to a request that cannot tell the two apart, and the console never sends it
+// (previewClaims splits one box into both lists, so an admin who typed anything
+// has typed groups too).
+func (s *Server) previewResolveUserDrive(ctx context.Context, users, groups []string) (*types.ResolvedDrive, error) {
+	// The nil-store guard resolveUserDriveFor already keeps, repeated for the
+	// arm below it: driveWithUnusableGroups is written for the enforcement path,
+	// where resolveUserDrive has already short-circuited a store-less build, and
+	// the ~30 nil-store doubles in this package must not start panicking because
+	// the preview grew a second entrance to it.
+	if s.cfg.Store == nil {
+		return nil, nil
+	}
+	if len(groups) == 0 {
+		return s.driveWithUnusableGroups(ctx, users)
+	}
+	return s.resolveUserDriveFor(ctx, users, groups)
 }
