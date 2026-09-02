@@ -184,9 +184,15 @@ func (s PG) ListGovernanceAssignments(ctx context.Context) ([]types.GovernanceAs
 }
 
 // governanceTierOrder ranks the three subject tiers MOST SPECIFIC FIRST —
-// user > group > all. Written once, as SQL, and shared by the resolver and the
-// console listing so the two can never disagree about what "most specific"
-// means.
+// user > group > all. Written once, as SQL, and spliced into BOTH the resolver
+// and the console listing so the two can never disagree about what "most
+// specific" means.
+//
+// subject_type is deliberately UNQUALIFIED so the one string works in the
+// resolver's JOIN as well as the single-table listing. That is safe because
+// governance_profiles has no subject_type column (migration 0052) — the only
+// other table in that JOIN. A migration that added one would make this
+// ambiguous, and Postgres would say so loudly rather than silently re-rank.
 const governanceTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' THEN 1 ELSE 2 END`
 
 // ResolveGovernanceProfile returns THE ONE profile that applies to a caller, or
@@ -236,7 +242,7 @@ func (s PG) ResolveGovernanceProfile(ctx context.Context, userSubjects, groups [
 		   OR (a.subject_type = 'user'  AND a.subject = ANY($1::text[]))
 		   OR (a.subject_type = 'group' AND a.subject = ANY($2::text[]))
 		ORDER BY
-			CASE a.subject_type WHEN 'user' THEN 0 WHEN 'group' THEN 1 ELSE 2 END,
+			` + governanceTierOrder + `,
 			CASE a.subject_type WHEN 'user'
 				THEN COALESCE(array_position($1::text[], a.subject), 2147483647)
 				ELSE 0 END,

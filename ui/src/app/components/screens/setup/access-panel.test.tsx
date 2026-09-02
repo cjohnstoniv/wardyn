@@ -63,7 +63,6 @@ function baseAccess(over: Partial<AccessResponse> = {}): AccessResponse {
     operator_emails: ["ops@corp.example"],
     allow_email_mappings: false,
     email_domains_configured: false,
-    issuer: "https://login.microsoftonline.com/tenant/v2.0",
     provider: "Microsoft Entra ID",
     posture: { map_empty: false, before: "an admin", after: "sign in as a member", changes: true },
     ...over,
