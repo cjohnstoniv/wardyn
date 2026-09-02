@@ -615,11 +615,19 @@ carries no groups field at all and stays valid (no forced re-login); that state 
 reported distinctly as `groups_snapshot_stale` on `GET /me/capabilities`, because
 "can't tell yet" and "holds no groups" must not read the same.
 
-**Both of those cut the DENY direction too.** A group that fell off the 2048-byte
-cut — or a caller still holding a pre-0.6 cookie — has *none* of its rows
-evaluated, denies included, and with the kind unenforced that resolves as
-permitted. Signing in again fixes both. Where a deny has to bite regardless of
-session age or group count, write it against the **user** (either identity).
+**A DENY is never allowed to evaporate with the snapshot.** A group that fell off
+the 2048-byte cut — or a caller still holding a pre-0.6 cookie, or a pre-0.7 API
+token whose completeness was never recorded — has none of its group rows in the
+scan. For an ALLOW that costs the caller access, which is the safe direction. For
+a DENY it would hand back exactly what the row forbade, so the resolver
+(`capScan`, `internal/api/capabilities.go`) checks whether **any** group-subject
+deny row of that kind could cover the value, and refuses when one could — the
+same scoping the ceiling refusal gets: a deployment with no group deny rows
+behaves byte-for-byte as it did before. The refusal reads as an ordinary
+capability denial, with a server log line naming the unanswerable snapshot;
+signing in again (or re-minting the token) resolves it for good. Where a deny has
+to bite with no store read at all, write it against the **user** (either
+identity).
 
 **A third cause of a partial snapshot: the IdP's own overage.** Entra ID stops
 sending the `groups` (or `roles`) claim altogether once a human is in more groups

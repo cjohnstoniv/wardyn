@@ -90,6 +90,18 @@ func (s *capStore) HasGroupTierAssignments(context.Context) (bool, error) {
 	return s.govHasGroupTier, nil
 }
 
+// ListCapabilityGrants is the WHOLE fake table — the admin listing, and the
+// read capScan's unresolvable-group-deny check makes when the caller's group
+// snapshot is unanswerable. Embedding store.Store makes an unimplemented
+// method a nil-pointer panic rather than a silent answer, which is why this
+// one is spelled out here rather than left to the embed.
+func (s *capStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return slices.Clone(s.grants), nil
+}
+
 func (s *capStore) ListCapabilityGrantsFor(_ context.Context, users, groups []string) ([]types.CapabilityGrant, error) {
 	if s.err != nil {
 		return nil, s.err

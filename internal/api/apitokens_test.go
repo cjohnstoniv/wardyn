@@ -183,7 +183,14 @@ func TestAPITokenAuth_ContextParityWithSession(t *testing.T) {
 		Email:     tokenMemberMail,
 		Role:      oidc.RoleMember,
 		Groups:    []string{"eng", "oncall"},
-		Name:      "ci",
+		// A 0.7 mint RECORDS completeness (handleCreateAPIToken stamps the bit);
+		// leaving this nil would make the fixture a pre-0.7 row, which
+		// Server.apiTokenAuth reads as truncated by contract and
+		// capabilitySubjects then reports stale — a different fixture than the
+		// session-parity this test is about (the NULL-marker row has its own
+		// pin, TestPG_APIToken_TruncatedSnapshot).
+		GroupsTruncated: new(bool),
+		Name:            "ci",
 	}
 	const raw = apiTokenPrefix + "parity"
 	if _, err := st.CreateAPIToken(context.Background(), row, raw); err != nil {
