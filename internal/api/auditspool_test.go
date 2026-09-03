@@ -158,8 +158,21 @@ func TestAuditSpoolDrainBounded(t *testing.T) {
 	if err != nil || got != 2 {
 		t.Fatalf("first drain: got=%d err=%v, want 2,nil", got, err)
 	}
-	if lc := spoolLineCount(t, path); lc != 3 {
-		t.Fatalf("after first drain: %d lines, want 3", lc)
+	// The BACKLOG is what shrinks per pass, and Lines() is the number operators
+	// and /metrics read. This used to assert the on-disk line count instead,
+	// which pinned the MECHANISM (a whole-file rewrite every pass) rather than
+	// the contract -- and that mechanism is what made clearing a backlog of N
+	// cost O(N^2) in fsynced writes. Drain now retires a pass by advancing a
+	// byte offset and reclaims the space when the reclaim pays for itself, so
+	// the file can legitimately still hold the replayed prefix here. What must
+	// stay true is asserted instead, and it is more than was asserted before:
+	// the backlog falls every pass, the file never GROWS during a drain, and
+	// both reach 0 when the spool is empty.
+	if n := sp.Lines(); n != 3 {
+		t.Fatalf("after first drain: backlog %d, want 3", n)
+	}
+	if lc := spoolLineCount(t, path); lc > 5 {
+		t.Fatalf("after first drain: spool file grew to %d lines, want <= 5", lc)
 	}
 
 	got, _ = sp.Drain(context.Background(), rec, 2)
@@ -175,6 +188,9 @@ func TestAuditSpoolDrainBounded(t *testing.T) {
 	}
 	if lc := spoolLineCount(t, path); lc != 0 {
 		t.Fatalf("spool not empty: %d lines", lc)
+	}
+	if n := sp.Lines(); n != 0 {
+		t.Fatalf("backlog gauge is %d after the spool drained, want 0", n)
 	}
 }
 

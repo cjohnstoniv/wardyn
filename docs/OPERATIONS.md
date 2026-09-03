@@ -176,7 +176,10 @@ move back onto the spool path once the cause is fixed. A store that is simply
 down accepts nothing, so nothing is ever quarantined during an outage. Each move
 logs at ERROR with the event's id and action and increments
 `wardyn_audit_spool_quarantined_total`: alert on it, because a spool that has
-drained back to 0 no longer implies the queryable trail is complete.
+drained back to 0 no longer implies the queryable trail is complete. The counter
+is **re-read from the sidecar at startup**, so it survives a restart the way the
+condition it reports does — a deploy or a crash loop does not clear the alert
+while the events are still sitting in `<spool>.quarantine`.
 
 **Two limits of that rule, stated.** First, the probe needs a line BEHIND the
 suspect to land, so two or more *adjacent* unacceptable lines still wedge — the
@@ -196,6 +199,26 @@ any Wardyn bug since the chain trigger began taking the serializing lock: an
 external session that inserted into `audit_events` and left its transaction open
 holds it. A pass that times out replays nothing, counts nothing against any line
 (a store that never answered has rejected nothing), and retries on the next tick.
+**Scraping `/metrics` is not one of the things that lock stalls**: the spool
+gauges are served from counters, not from a read of the spool file, so a scrape
+answers in constant time while a pass is stuck on a blocked store. It has to —
+those gauges are how you see the outage, and a scrape that waited on the drain
+lost the whole response, `wardyn_store_up` included, once per tick for as long
+as the condition lasted.
+
+**Recovering a backlog costs what the backlog costs.** A pass replays a bounded
+batch and retires it by advancing a read offset; the file is physically compacted
+only once the replayed prefix is at least as large as what is left, so each
+compaction halves it and a full drain writes at most about twice the backlog
+rather than once per batch. The consequence to know is that mid-drain the spool
+FILE can still hold lines that have already reached the store — `wc -l` on it is
+not the backlog, `wardyn_audit_spool_lines` is — and that an unclean stop
+mid-recovery can replay the not-yet-reclaimed prefix, which the trail records as
+duplicate events with the same `id`. The spool has always been at-least-once for
+this reason (a crash between the store write and the trim); this widens that
+window in exchange for not fsyncing the whole backlog once per batch onto the
+volume the database is recovering on. Duplicates are the benign direction: `seq`
+still identifies every row, and each one verifies.
 
 ### The hash chain — what a rewritten row looks like
 
@@ -360,7 +383,8 @@ counter only moves on success — a dead store and an idle cluster otherwise scr
 identically: `wardyn_store_up` (1 when Postgres answers the same bounded ping
 `/readyz` makes) and `wardyn_audit_spool_lines` (audit events waiting in the local
 JSONL fallback spool — a value that never returns to 0 means the drain loop is not
-working). Beside them, `wardyn_audit_spool_quarantined_total` counts events the
+working; it is the count of events still to replay, which mid-drain can be lower
+than the line count of the file on disk). Beside them, `wardyn_audit_spool_quarantined_total` counts events the
 store permanently refused and the drain moved aside (see the spool paragraph
 above): non-zero means the trail is missing those events even though the spool
 drained. Scrape with any Prometheus `authorization` config carrying the admin
