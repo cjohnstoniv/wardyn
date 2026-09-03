@@ -54,10 +54,30 @@ const (
 // WARDYN_OIDC_DEFAULT_ROLE (cmd/wardynd, at boot) — all fail closed on a typo
 // rather than letting a garbage role value silently reach a session cookie.
 //
+// Roles is the closed set, in rank order, and it is the ONE place the set is
+// written down. ValidRole is implemented over it and the DDL parity guard
+// (internal/db's TestClosedEnumChecksMatchConstants, role_mappings.role) reads
+// it, so a fourth role cannot land on one side alone in EITHER direction. It
+// used to be typed out a third time in that guard, which left it blind in the
+// Go-widens-first direction — and that is the direction of the incident 0053
+// documents: ValidRole accepted security_admin while 0051's CHECK still refused
+// it, so POST /access/mappings passed validation and then 500'd at the database.
+// The sibling user_drives enums already derive from types.DriveBackends and
+// friends for exactly this reason; this is the surface that did not.
+//
+// A slice rather than a map so the order is stable for callers that render it;
+// membership goes through ValidRole.
+var Roles = []string{RoleAdmin, RoleSecurityAdmin, RoleMember}
+
 // WARDYN_OIDC_DEFAULT_ROLE validates through validDefaultRole (cmd/wardynd),
 // which is STRICTER than this: it additionally refuses RoleSecurityAdmin.
 func ValidRole(s string) bool {
-	return s == RoleAdmin || s == RoleSecurityAdmin || s == RoleMember
+	for _, r := range Roles {
+		if s == r {
+			return true
+		}
+	}
+	return false
 }
 
 // roleRank orders the role values for deriveRole's highest-wins fold:
