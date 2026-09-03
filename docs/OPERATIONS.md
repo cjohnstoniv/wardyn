@@ -143,6 +143,19 @@ once the store recovers. The spool is per-process by design: the fallback for on
 pod's failed write, each `wardynd` draining its own back on recovery (see
 [One replica, by construction](#one-replica-by-construction)).
 
+**What the drain does not restore: the off-box hash series.** The chain hashes
+are filled by the Postgres write itself (`RETURNING`, `store.InsertAuditEvent`),
+so an event whose write failed fans out to the sinks with **no** `prev_hash` or
+`row_hash` on it at all — both fields are `omitempty`, so they are simply absent
+— and the drain replays it through the RAW store recorder, deliberately not
+through the sink fanout (a replay into a still-down store has to be retryable,
+not re-spooled), so it is never streamed a second time. The queryable trail heals
+completely; the SIEM's head-hash series does not. Across an outage window a SIEM
+holds those events unchained, and the rows they become are chained when the drain
+replays them, interleaved with whatever else is being written then — so reconcile
+that window with `GET /audit/chain/verify` and the `wardyn_audit_spool_lines`
+gauge, not with the sink stream.
+
 **One line the store will never accept does not wedge the rest.** A rejection
 that cannot resolve — a `CHECK` violation, a payload a column type refuses, a
 hand-edited line, an event shape from another binary version — used to sit at the
@@ -223,9 +236,13 @@ as an exact `seq` and a reason.
 who can rewrite one row can usually rewrite every row after it and re-chain the
 lot; a re-chained tail verifies perfectly clean, and truncating the newest rows
 leaves a shorter, valid chain. The defence against both is **off-box**: every
-event on an audit sink stream (`WARDYN_AUDIT_SINKS`) carries its
-`prev_hash`/`row_hash`, so a SIEM holds head hashes Wardyn cannot later disown —
-that comparison, not the sweep, is the control. Signed receipts (a key the
+event **whose Postgres write succeeded** carries its `prev_hash`/`row_hash` onto
+the audit sink stream (`WARDYN_AUDIT_SINKS`), so a SIEM holds head hashes Wardyn
+cannot later disown — that comparison, not the sweep, is the control. The
+qualifier is load-bearing, because the hashes are computed by the write itself:
+an event written while Postgres is down still reaches your sinks, but unchained,
+and the drain does not re-stream it — see "Completeness survives an outage too"
+above. Signed receipts (a key the
 database role cannot reach) are the next rung and are **not built**.
 
 **Verifying.** Operator-invoked, never automatic:
