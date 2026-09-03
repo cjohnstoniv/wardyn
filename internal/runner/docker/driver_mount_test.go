@@ -559,6 +559,53 @@ func TestCreateSandbox_DeniedDriveMountsRejected(t *testing.T) {
 	}
 }
 
+// TestCreateSandbox_ReservedSpecMountIsRefusedBeforeTheDriveIsAllocated is the
+// ORDER inside agentMounts, which the deny matrix above states nothing about.
+//
+// resolvePolicy hands dispatch a STORED spec verbatim — validatePolicySpec runs
+// for inline specs only — so a workspace_mounts row written before the target
+// was reserved reaches this driver and is refused here, which is fail-closed
+// and correct. The question this pins is WHERE in the sequence. Spec mounts are
+// validated before the drive is appended, so the refusal lands before
+// ensureDriveVolume: a run that fails on a legacy policy row must not leave a
+// persistent, member-owned volume behind, and nothing in this package removes
+// one (there is no VolumeRemove call anywhere in it, and CreateSandbox's
+// rollback deliberately skips drive volumes so a retry finds the member's
+// files). Reordered, every failed run on such a deployment would allocate
+// storage nobody ever reclaims.
+//
+// Asserted with AND without a drive on the same run, so the refusal is a
+// property of the spec mount rather than of the pair.
+func TestCreateSandbox_ReservedSpecMountIsRefusedBeforeTheDriveIsAllocated(t *testing.T) {
+	src, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve tempdir: %v", err)
+	}
+	for _, withDrive := range []bool{true, false} {
+		t.Run(map[bool]string{true: "with a drive", false: "without a drive"}[withDrive], func(t *testing.T) {
+			f := newFakeDocker()
+			f.images["busybox:latest"] = true
+			d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev"})
+			spec := testSpec()
+			spec.Mounts = []runner.Mount{{Source: src, Target: runner.DriveTarget + "/shared"}}
+			if withDrive {
+				spec.Drive = dockerVolumeDrive()
+			}
+			_, err := d.CreateSandbox(context.Background(), spec)
+			if err == nil || !strings.Contains(err.Error(), "reserved") {
+				t.Fatalf("CreateSandbox = %v, want the reserved-target refusal", err)
+			}
+			if f.containers[agentContainerName(spec.RunID)] != nil {
+				t.Error("agent container exists after the refusal")
+			}
+			if f.volumeCreates != 0 {
+				t.Errorf("VolumeCreate calls = %d, want 0 — the refusal must precede the drive allocation, "+
+					"or a failed run leaves a volume nothing in this package can remove", f.volumeCreates)
+			}
+		})
+	}
+}
+
 // TestCreateSandbox_DriveTargetIsPinnedToTheReservedPath is the DRIVER's side
 // of the reserved-target rule, and the parity fix for it: this driver used to
 // run runner.ValidateTarget alone, which asks only "is this a legal place for a

@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -216,6 +218,38 @@ func TestSeedRequestDrive422Matrix(t *testing.T) {
 			// for the thing that admin had just turned off.
 			name: "the allocation is paused", store: pausedDriveStore(nil),
 			runnerTarget: "docker", req: driveRunRequest(true, nil),
+			want: "drive: your allocation is paused by an admin",
+		},
+		{
+			// PAUSED IS STILL THE ANSWER when the deployment ALSO allocates by
+			// group. The stale-snapshot refusal keys on the same
+			// HasGroupTierDriveGrants read, so a resolver that consulted it
+			// before the paused fold would answer this member 403 "sign in
+			// again" for an allocation an admin simply switched off — the wrong
+			// sentence, and a remedy that cannot work.
+			name: "the allocation is paused on a deployment with group-tier grants",
+			store: func() *driveStore {
+				st := pausedDriveStore(nil)
+				st.hasGroupTier = true
+				return st
+			}(),
+			runnerTarget: "docker", req: driveRunRequest(true, nil),
+			want: "drive: your allocation is paused by an admin",
+		},
+		{
+			// The same row through the door the 403 actually comes out of: an
+			// unusable group snapshot AND group-tier grants present. user >
+			// group > all means nothing the snapshot hid could outrank this
+			// member's own paused row, so the answer is fully determined and it
+			// is 422 paused, not 403.
+			name: "the allocation is paused under a truncated snapshot",
+			store: func() *driveStore {
+				st := pausedDriveStore(nil)
+				st.hasGroupTier, st.userTierOnly = true, true
+				return st
+			}(),
+			runnerTarget: "docker", req: driveRunRequest(true, nil),
+			ctx:  driveMemberCtx([]string{"a-team"}, true),
 			want: "drive: your allocation is paused by an admin",
 		},
 		{
@@ -610,20 +644,116 @@ func TestSeedRequestDriveFailsClosedOnAStoreError(t *testing.T) {
 // TestSeedRequestDriveTruncatedGroupsIs403 pins the third shape: the group
 // snapshot is unreadable AND a group-tier grant exists, so any answer would be
 // a guess and the only wrong guess is the widening one.
+//
+// BOTH shapes the store can say it in, because they are refused by different
+// halves of driveWithUnusableGroups and only one of them is an absence:
+//
+//   - NOTHING MATCHES on user subjects alone (ErrNotFound), so the refusal is
+//     reached from a "no drive" the resolver must not simply pass on; and
+//   - THE EVERYONE ROW MATCHES, so the resolver holds a real, well-formed
+//     answer and has to throw it away. That is the reachable half on a real
+//     deployment — an `all`-tier row is what gets written first, group rows
+//     arrive later — and serving it hands the member the everyone drive, at
+//     whatever mode it carries, in place of the group drive an admin gave them.
 func TestSeedRequestDriveTruncatedGroupsIs403(t *testing.T) {
-	st := &driveStore{hasGroupTier: true, userTierOnly: true}
-	srv, rec := driveRunServer(st, "docker")
-	_, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, driveMemberCtx([]string{"eng"}, true))
-	if ok || w.Code != http.StatusForbidden {
-		t.Fatalf("code = %d, ok = %v; want 403: %s", w.Code, ok, w.Body.String())
+	for name, st := range map[string]*driveStore{
+		"nothing matches on user subjects alone": {hasGroupTier: true, userTierOnly: true},
+		"the everyone row matches": func() *driveStore {
+			d := driveFixture(func(d *types.UserDrive) { d.Writable = true })
+			return &driveStore{
+				drive: d,
+				grant: grantFixture(d.ID, func(g *types.UserDriveGrant) {
+					g.SubjectType, g.Subject = types.CapabilitySubjectAll, ""
+				}),
+				tier: types.CapabilitySubjectAll, hasGroupTier: true,
+			}
+		}(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv, rec := driveRunServer(st, "docker")
+			mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, driveMemberCtx([]string{"eng"}, true))
+			if ok || mount != nil || w.Code != http.StatusForbidden {
+				t.Fatalf("code = %d, ok = %v, mount = %+v; want 403 and no mount: %s", w.Code, ok, mount, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), "groups_snapshot_stale") {
+				t.Errorf("body = %s, want the stale-snapshot refusal naming its remedy", w.Body.String())
+			}
+			// Not an authz.denied: this is "we cannot tell", not "you may not".
+			if len(rec.events) != 0 {
+				t.Errorf("audit = %v, want none", driveAuditActions(rec))
+			}
+		})
 	}
-	if !strings.Contains(w.Body.String(), "groups_snapshot_stale") {
-		t.Errorf("body = %s, want the stale-snapshot refusal naming its remedy", w.Body.String())
-	}
-	// Not an authz.denied: this is "we cannot tell", not "you may not".
-	if len(rec.events) != 0 {
-		t.Errorf("audit = %v, want none", driveAuditActions(rec))
-	}
+}
+
+// TestSeedRequestDriveDoorPrecedesTheResolver pins the ORDER inside
+// seedRequestDrive, and the SCOPING of denyMemberDrive — two properties the
+// door's own test cannot state, because it runs on a store that answers.
+//
+// The order is load-bearing in the direction that produces the RIGHT sentence.
+// A member whose profile forbids drives gets one answer — 403, "your profile
+// does not allow this" — whatever the store happens to be doing, and it never
+// depends on whether their allocation resolves, is missing, or is behind a
+// database that is down. Resolving first would make the refusal they read a
+// function of somebody else's outage: a 500 on a bad day, a 422 "no drive is
+// allocated to you" on an ordinary one, and a support ticket asking an admin
+// for an allocation that would change nothing.
+//
+// The operator exemption is the same seam from the other side and is
+// TestSeedRequestDriveOperatorSkipsTheDoor's subject; it is not restated here.
+func TestSeedRequestDriveDoorPrecedesTheResolver(t *testing.T) {
+	const denied = "mounting a user drive is not allowed by your governance profile \"contractors\". Launch without drive."
+
+	t.Run("a shut door beats a FAILING store: 403, not 500", func(t *testing.T) {
+		// The store double fails BOTH reads, so a 403 here is proof the door
+		// answered before either one was issued.
+		srv, rec := driveRunServer(&driveStore{err: context.DeadlineExceeded}, "docker")
+		_, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), deniedCeiling(), driveMemberCtx(nil, false))
+		if ok || w.Code != http.StatusForbidden {
+			t.Fatalf("code = %d, ok = %v; want 403 from the door before any store read: %s", w.Code, ok, w.Body.String())
+		}
+		if body := refusalBody(t, w); body != denied {
+			t.Errorf("body = %q\nwant %q", body, denied)
+		}
+		// And it is still the ONE authorization event, with its reason: a
+		// refusal that skipped the store must not also skip the row that says
+		// somebody was told no.
+		if len(rec.events) != 1 {
+			t.Fatalf("audit = %v, want exactly the authz.denied row", driveAuditActions(rec))
+		}
+		ev := rec.events[0]
+		if ev.Action != "authz.denied" || ev.Target != "runs.drive" || ev.Outcome != "denied" {
+			t.Errorf("audit row = %+v, want authz.denied at runs.drive, outcome denied", ev)
+		}
+		var data map[string]any
+		if err := json.Unmarshal(ev.Data, &data); err != nil || data["reason"] != "governance_profile" {
+			t.Errorf("audit data = %s (%v), want reason=governance_profile", ev.Data, err)
+		}
+	})
+
+	t.Run("a shut door beats 'no allocation': 403, not 422", func(t *testing.T) {
+		srv, _ := driveRunServer(&driveStore{}, "docker")
+		_, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), deniedCeiling(), driveMemberCtx(nil, false))
+		if ok || w.Code != http.StatusForbidden {
+			t.Fatalf("code = %d, ok = %v; want 403 — the door does not depend on whether anything resolves", w.Code, ok)
+		}
+	})
+
+	t.Run("the deny bit without an assigned profile is not a door", func(t *testing.T) {
+		// effectiveCeiling cannot produce this shape (Limits ride the profile),
+		// so the arm exists to pin the Profile != nil scoping against a future
+		// caller that assembles a ceiling by hand — a door with no profile to
+		// name would refuse with an empty quotation and no remedy.
+		srv, rec := driveRunServer(&driveStore{}, "docker")
+		ceiling := governanceCeiling{Limits: types.GovernanceLimits{DenyUserDrive: true}}
+		_, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), ceiling, driveMemberCtx(nil, false))
+		if ok || w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("code = %d, ok = %v; want the resolver's 422 (no grant), not a door", w.Code, ok)
+		}
+		if len(rec.events) != 0 {
+			t.Errorf("audit = %v, want none — a denial nobody was assigned is not an authorization event", driveAuditActions(rec))
+		}
+	})
 }
 
 // TestRevokingAGrantStopsTheNextRunMounting is the revoke pin. Resolution runs
@@ -881,4 +1011,168 @@ func TestPreflightAnswersTheSameDriveRefusalAsCreate(t *testing.T) {
 			t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
 		}
 	})
+}
+
+// TestSeedRequestDriveReadOnlyFold walks the mode decision as the fold it
+// actually is — three inputs, eighteen cells — rather than as the handful of
+// rows TestSeedRequestDrive422Matrix samples from it.
+//
+// The three inputs come from three different people and are read in one place:
+// the DRIVE's writable column (an admin, when they authored the drive), the
+// GRANT's writable_override (an admin, when they allocated it to this person),
+// and the REQUEST's read_only (the member, at launch). The rule is that the
+// grant COALESCEs over the drive and the request may only NARROW — and both
+// halves are load-bearing in a direction a sampled test cannot see:
+//
+//   - an override that only ever widened, or a COALESCE that read the drive
+//     where the grant said otherwise, is invisible in the cells where the two
+//     already agree, which is most of them; and
+//   - `read_only: false` is the field a client sends by DEFAULT if it
+//     serialises the whole struct, so the widening arm has to refuse rather
+//     than shrug — and it must refuse ONLY where the allocation is read-only,
+//     or every writable drive becomes unusable from that same client.
+//
+// The expected value is computed from the same rule rather than tabulated, so
+// the test states the rule; a table of eighteen literal answers would only
+// state today's behaviour.
+func TestSeedRequestDriveReadOnlyFold(t *testing.T) {
+	const widen = "drive: your allocation is read-only; read_only:false cannot widen it"
+	label := func(b *bool) string {
+		switch {
+		case b == nil:
+			return "unset"
+		case *b:
+			return "true"
+		default:
+			return "false"
+		}
+	}
+	tri := []*bool{nil, boolPtr(false), boolPtr(true)}
+	for _, driveWritable := range []bool{false, true} {
+		for _, override := range tri {
+			for _, requested := range tri {
+				// The allocation's own posture: the grant's override where it has
+				// one, the drive's column otherwise.
+				writable := driveWritable
+				if override != nil {
+					writable = *override
+				}
+				readOnly, widening := !writable, false
+				if requested != nil {
+					widening = !*requested && !writable
+					readOnly = readOnly || *requested
+				}
+				name := "drive.writable=" + label(&driveWritable) + "/override=" + label(override) + "/read_only=" + label(requested)
+				t.Run(name, func(t *testing.T) {
+					d := driveFixture(func(d *types.UserDrive) { d.Writable = driveWritable })
+					st := &driveStore{
+						drive: d, tier: types.CapabilitySubjectUser,
+						grant: grantFixture(d.ID, func(g *types.UserDriveGrant) { g.WritableOverride = override }),
+					}
+					srv, rec := driveRunServer(st, "docker")
+					mount, ok, w := driveSeed(t, srv, driveRunRequest(true, requested), governanceCeiling{}, driveMemberCtx(nil, false))
+					if widening {
+						if ok || mount != nil || w.Code != http.StatusUnprocessableEntity {
+							t.Fatalf("code = %d, ok = %v, mount = %+v; want the widening 422", w.Code, ok, mount)
+						}
+						if body := refusalBody(t, w); body != widen {
+							t.Errorf("body = %q\nwant BYTE-EXACT: %q", body, widen)
+						}
+						if len(rec.events) != 0 {
+							t.Errorf("audit = %v, want none — asking for more than you have is not a denial", driveAuditActions(rec))
+						}
+						return
+					}
+					if !ok || mount == nil {
+						t.Fatalf("refused: %d %s", w.Code, w.Body.String())
+					}
+					if mount.ReadOnly != readOnly {
+						t.Errorf("mount.ReadOnly = %v, want %v", mount.ReadOnly, readOnly)
+					}
+				})
+			}
+		}
+	}
+}
+
+// TestUnusableGroupSnapshotRefusesTheLaunchWhileMeStaysQuiet walks the
+// stale-snapshot refusal through the REAL router — create, preflight and /me
+// on one session — because the three answers are produced by three different
+// call sites and only the router puts them side by side the way a member's
+// browser does.
+//
+// It is also where the ASYMMETRY is written down rather than discovered.
+// resolveMeUserDrive and userDriveDeniedByProfile map every failure to null and
+// "": a display read must not 500 the console shell over a drive card. So this
+// member's console shows "no drive, open door" while their launch answers 403
+// with the one remedy that works — and the /me assertions below are the
+// intended posture, not an oversight, kept here so a change to either half is
+// a deliberate one rather than a surprise found by a member.
+func TestUnusableGroupSnapshotRefusesTheLaunchWhileMeStaysQuiet(t *testing.T) {
+	d := driveFixture(func(d *types.UserDrive) { d.Writable = true })
+	cs := &capStore{
+		drive: d,
+		driveGrant: grantFixture(d.ID, func(g *types.UserDriveGrant) {
+			g.SubjectType, g.Subject = types.CapabilitySubjectAll, ""
+		}),
+		driveTier: types.CapabilitySubjectAll, driveHasGroupTier: true,
+	}
+	srv, _, audit := govEscapeFixture(t, cs)
+	srv.cfg.RunnerTarget = "docker"
+	const body = `{"agent":"claude-code","task":"t","drive":{"enabled":true}}`
+
+	truncated := govSession(t, "sub-f13", []string{"eng"}, true)
+	create := doSSO(t, srv, http.MethodPost, "/api/v1/runs", truncated, body)
+	preflight := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", truncated, body)
+	if create.Code != http.StatusForbidden || preflight.Code != http.StatusForbidden {
+		t.Fatalf("create = %d, preflight = %d; want 403 on both\ncreate: %s\npreflight: %s",
+			create.Code, preflight.Code, create.Body.String(), preflight.Body.String())
+	}
+	// Byte-identical, because preflight exists to answer what a launch WOULD
+	// say: a paraphrase there sends a member to support with a sentence no
+	// operator can find.
+	if got, want := refusalBody(t, preflight), refusalBody(t, create); got != want || !strings.Contains(got, "groups_snapshot_stale") {
+		t.Errorf("preflight = %q\ncreate    = %q\nwant identical stale-snapshot refusals", got, want)
+	}
+
+	me := doSSO(t, srv, http.MethodGet, "/api/v1/me", truncated, "")
+	if me.Code != http.StatusOK {
+		t.Fatalf("/me = %d: %s", me.Code, me.Body.String())
+	}
+	var meBody map[string]any
+	if err := json.Unmarshal(me.Body.Bytes(), &meBody); err != nil {
+		t.Fatalf("decode /me: %v", err)
+	}
+	if meBody["user_drive"] != nil {
+		t.Errorf("/me.user_drive = %v under a truncated snapshot, want null — a display read swallows the refusal by design", meBody["user_drive"])
+	}
+	if meBody["user_drive_denied_by_profile"] != "" {
+		t.Errorf("/me.user_drive_denied_by_profile = %v, want empty — the door is open; it is the SNAPSHOT that is unreadable", meBody["user_drive_denied_by_profile"])
+	}
+
+	// The control, and the proof the 403 is about the snapshot rather than
+	// about this allocation: the same member, the same everyone row, a COMPLETE
+	// snapshot — the run is created and the mount is on the audit feed.
+	complete := govSession(t, "sub-f13", []string{"eng"}, false)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", complete, body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create with a complete snapshot = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	var run struct {
+		ID uuid.UUID `json:"id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &run); err != nil {
+		t.Fatalf("decode run: %v", err)
+	}
+	ev := findAudit(audit.events, run.ID, "run.drive.mount", "success")
+	if ev == nil {
+		t.Fatalf("no run.drive.mount for the complete-snapshot launch; events=%s", auditDump(audit.events, run.ID))
+	}
+	home, err := types.DriveHomeName(*d, "sub-f13", "")
+	if err != nil {
+		t.Fatalf("DriveHomeName: %v", err)
+	}
+	if want := types.DriveObjectName(*d, home); ev.Target != want {
+		t.Errorf("run.drive.mount target = %q, want the managed object %q", ev.Target, want)
+	}
 }

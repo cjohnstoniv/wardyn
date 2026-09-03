@@ -322,6 +322,99 @@ func TestEnsureDriveVolume_AdoptsOnlyWardynsOwnShape(t *testing.T) {
 	})
 }
 
+// driveLabelState is one label's three states on an existing volume: not
+// written at all (a restore, or a volume older than the label), written with
+// this drive's/principal's value, and written with somebody else's. Absent and
+// Other are the two that read alike from a distance and mean opposite things —
+// absence is adopted, disagreement is refused — which is the whole reason the
+// fold below enumerates them rather than sampling.
+type driveLabelState int
+
+const (
+	driveLabelAbsent driveLabelState = iota
+	driveLabelSame
+	driveLabelOther
+)
+
+func (s driveLabelState) String() string { return [...]string{"absent", "same", "other"}[s] }
+
+// TestEnsureDriveVolume_AdoptionRulesComposeOnBothArms closes the two
+// hand-written tables above — TestEnsureDriveVolume_AdoptsOnlyWardynsOwnShape
+// (the inspect hit) and TestEnsureDriveVolume_CreateThenVerify (the create that
+// lost the race) — over every combination of the four things driveVolumeAdoptable
+// looks at, through both doors.
+//
+// Two properties neither named table can state on its own:
+//
+//   - THE RULES ARE A CONJUNCTION. Each named case varies one dimension against
+//     an otherwise-clean volume, so nothing pins what happens when two disagree
+//     at once — and "refuse if the driver is foreign OR an option is set OR a
+//     label names somebody else" is a rule a refactor can turn into an
+//     any-two-of-three without failing a single case above.
+//   - THE TWO DOORS ASK THE SAME QUESTION. The create arm is a SECOND entry
+//     into the same decision, reached only on a first run that lost a race, and
+//     the named table for it covers three shapes out of nine. A door that
+//     diverged would diverge exactly where nobody looks: once, on a first run,
+//     under contention.
+//
+// The verb count is asserted per cell for the same reason: an adoption is a
+// reuse, so the inspect arm must never create, and the race arm must create
+// exactly once and never twice.
+func TestEnsureDriveVolume_AdoptionRulesComposeOnBothArms(t *testing.T) {
+	const name = "wardyn-drive-alice"
+	otherDrive := uuid.MustParse("99999999-8888-7777-6666-555555555555")
+	label := func(s driveLabelState, same, other string) (string, bool) {
+		switch s {
+		case driveLabelSame:
+			return same, true
+		case driveLabelOther:
+			return other, true
+		}
+		return "", false
+	}
+	for _, raced := range []bool{false, true} {
+		for _, driver := range []string{"local", "some-csi-plugin"} {
+			for _, opts := range []map[string]string{nil, {"type": "cifs", "o": "username=svc,password=hunter2"}} {
+				for _, drive := range []driveLabelState{driveLabelAbsent, driveLabelSame, driveLabelOther} {
+					for _, subject := range []driveLabelState{driveLabelAbsent, driveLabelSame, driveLabelOther} {
+						// Wardyn's own shape, and nobody else's label: the local
+						// driver, no options, and no label naming another drive or
+						// another principal. An ABSENT label is not a disagreement.
+						wantAdopt := driver == "local" && len(opts) == 0 &&
+							drive != driveLabelOther && subject != driveLabelOther
+						labels := map[string]string{labelManaged: "true", labelDriveHome: "alice"}
+						if v, ok := label(drive, driveRowID.String(), otherDrive.String()); ok {
+							labels[labelDrive] = v
+						}
+						if v, ok := label(subject, types.DriveSubjectHash(driveSubject), types.DriveSubjectHash("alice@acquired.example")); ok {
+							labels[labelDriveSubject] = v
+						}
+						arm := map[bool]string{false: "inspect-hit", true: "create-race"}[raced]
+						optName := map[bool]string{false: "none", true: "cifs"}[len(opts) > 0]
+						t.Run(arm+"/driver="+driver+"/opts="+optName+"/drive="+drive.String()+"/subject="+subject.String(), func(t *testing.T) {
+							f := newFakeDocker()
+							f.volumes[name] = client.VolumeCreateOptions{Name: name, Driver: driver, Labels: labels, DriverOpts: opts}
+							// The race, modelled exactly: the volume EXISTS and the
+							// first inspect misses it, so the create is attempted and
+							// comes back against somebody else's volume.
+							f.volumeInspectMissesExisting = raced
+
+							err := ensureDriveVolume(context.Background(), f, dockerVolumeDrive())
+							if (err == nil) != wantAdopt {
+								t.Errorf("ensureDriveVolume = %v, want adopt=%v", err, wantAdopt)
+							}
+							wantCreates := map[bool]int{false: 0, true: 1}[raced]
+							if f.volumeCreates != wantCreates {
+								t.Errorf("VolumeCreate calls = %d, want %d — an existing volume is inspected, never re-created", f.volumeCreates, wantCreates)
+							}
+						})
+					}
+				}
+			}
+		}
+	}
+}
+
 // TestEnsureDriveVolume_CreateThenVerify is the FIRST-RUN RACE, and it is the
 // one window every check above had.
 //

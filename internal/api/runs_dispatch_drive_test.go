@@ -7,9 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -182,6 +186,13 @@ func TestDispatch_NoDriveIsSilent(t *testing.T) {
 // host path and human name are admin-facing — the member's own request carried
 // a flag, never a path, and the sandbox env must not hand back what the request
 // was not allowed to name.
+//
+// Walked over EVERY backend, and over every admin-facing field a DriveMount
+// carries, because the value is built by formatting and the tempting change is
+// always the same one: adding the object to the string so an agent can "see
+// where it is". A managed backend's object name is Wardyn's own and looks
+// harmless; a share's IS the operator's absolute host path, and the four
+// backends share one line of code.
 func TestApplyUserDriveEnv(t *testing.T) {
 	env := map[string]string{}
 	applyUserDriveEnv(env, nil)
@@ -197,6 +208,110 @@ func TestApplyUserDriveEnv(t *testing.T) {
 	for _, leak := range []string{drive.ObjectName, drive.HomeName} {
 		if strings.Contains(env["WARDYN_USER_DRIVE"], leak) {
 			t.Errorf("WARDYN_USER_DRIVE = %q leaks the admin-facing %q", env["WARDYN_USER_DRIVE"], leak)
+		}
+	}
+
+	for _, backend := range types.DriveBackends {
+		d := &types.DriveMount{
+			DriveID: uuid.New(), Backend: backend, ObjectName: "object-for-" + string(backend),
+			StorageClass: "fast-block", DriveName: "nas", HomeName: "alice-home",
+			SubjectHash: "0123456789abcdef0123", Target: runner.DriveTarget,
+			ReadOnly: backend == types.DriveBackendHostPath, SizeMiB: 10,
+			Enforcement: types.EnforcementFor(backend),
+		}
+		// A pre-existing key, so "adds exactly one" is a statement about this
+		// function rather than about the map it was handed.
+		got := map[string]string{"KEEP": "1"}
+		applyUserDriveEnv(got, d)
+		if len(got) != 2 {
+			t.Errorf("%s: env = %v, want exactly one drive key beside KEEP", backend, got)
+			continue
+		}
+		mode := "rw"
+		if d.ReadOnly {
+			mode = "ro"
+		}
+		value := got["WARDYN_USER_DRIVE"]
+		if want := runner.DriveTarget + ":" + mode; value != want {
+			t.Errorf("%s: WARDYN_USER_DRIVE = %q, want %q", backend, value, want)
+		}
+		for _, leak := range []string{d.ObjectName, d.HomeName, d.DriveName, d.DriveID.String(), d.StorageClass, d.SubjectHash} {
+			if strings.Contains(value, leak) {
+				t.Errorf("%s: WARDYN_USER_DRIVE = %q carries the admin-facing %q", backend, value, leak)
+			}
+		}
+	}
+
+	// And through the whole composition, which is the only place the claim
+	// "nothing else in the sandbox names the drive" can actually be made: the
+	// composed env is assembled from several sources, and the credential half
+	// (SecretEnv) is a second map with its own writers.
+	spec, _ := runDriveDispatch(t, dispatchDrive(false))
+	share := dispatchDrive(false)
+	keys := 0
+	for k, v := range spec.Env {
+		if strings.Contains(strings.ToUpper(k), "DRIVE") {
+			keys++
+		}
+		if strings.Contains(v, share.HostRoot) {
+			t.Errorf("composed env %s = %q carries the share's host root", k, v)
+		}
+	}
+	if keys != 1 {
+		t.Errorf("composed env has %d drive-related keys, want exactly WARDYN_USER_DRIVE: %v", keys, spec.Env)
+	}
+	for k, v := range spec.SecretEnv {
+		if strings.Contains(strings.ToUpper(k), "DRIVE") || strings.Contains(v, share.HostRoot) {
+			t.Errorf("secret env carries the drive (%s)", k)
+		}
+	}
+}
+
+// TestDispatch_TheMemberCannotReadTheShareHostPathFromTheirOwnRun closes the
+// loop the masking exists for. TestDispatch_DriveReachesSpecEnvAndAudit pins
+// the row dispatch WRITES; this pins the row a member READS, through the
+// handler and the scope gate that let them.
+//
+// The two are separable, and that gap is where the disclosure lived: auditScope
+// hands a run's CREATOR every row of their own run, whole — Target and Data
+// both — so masking the Target while `object` still spelled the absolute path
+// moved the operator's filesystem layout one field over inside the same
+// response. The event here is the REAL one dispatch emitted rather than a
+// hand-written fixture, so the handler and the emitter cannot drift apart
+// without this failing.
+func TestDispatch_TheMemberCannotReadTheShareHostPathFromTheirOwnRun(t *testing.T) {
+	const memberSub = "sub-drive-member"
+	drive := dispatchDrive(true)
+	spec, events := runDriveDispatch(t, drive)
+	ev := findAudit(events, spec.RunID, "run.drive.mount", "success")
+	if ev == nil {
+		t.Fatalf("dispatch recorded no run.drive.mount; events=%s", auditDump(events, spec.RunID))
+	}
+
+	h := newHarness(t)
+	st := &auditScopeStore{runs: map[uuid.UUID]types.AgentRun{spec.RunID: {ID: spec.RunID, CreatedBy: memberSub}}}
+	st.auditByRun = map[uuid.UUID][]types.AuditEvent{spec.RunID: {*ev}}
+	cfg := baseTestConfig(h, st)
+	cfg.OIDC = &oidc.Authenticator{}
+	srv := New(cfg)
+
+	member := ssoSession(t, memberSub, "alice@corp.example", oidc.RoleMember)
+	w := doSSO(t, srv, http.MethodGet, "/api/v1/audit?run_id="+spec.RunID.String(), member, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /audit as the run's creator = %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	// The row really is there — otherwise every assertion below passes on an
+	// empty page.
+	if !strings.Contains(body, "run.drive.mount") {
+		t.Fatalf("the member's own run's mount row is missing: %s", body)
+	}
+	if !strings.Contains(body, "nas/alice") {
+		t.Errorf("the row does not name the drive and the directory: %s", body)
+	}
+	for _, leak := range []string{drive.HostRoot, drive.ObjectName} {
+		if strings.Contains(body, leak) {
+			t.Errorf("the member read back %q from their own run's audit trail: %s", leak, body)
 		}
 	}
 }
