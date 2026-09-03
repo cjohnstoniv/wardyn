@@ -158,6 +158,19 @@ func TestCreateSandbox_RejectsAUserDrive(t *testing.T) {
 			t.Errorf("CreateSandbox refused the drive but still created %s %s", a.GetVerb(), a.GetResource().Resource)
 		}
 	}
+
+	// THE DECLARATION MUST AGREE WITH THE BEHAVIOUR. The control plane refuses a
+	// drive-carrying run by reading this flag, so a stub that refuses while the
+	// flag says "yes" is the run that previews green and dies here. D4 deletes
+	// the refusal above and sets this true in the SAME change; whichever half
+	// lands alone fails this.
+	support, err := d.Classes(context.Background())
+	if err != nil {
+		t.Fatalf("Classes: %v", err)
+	}
+	if support.UserDrives {
+		t.Error("Classes reports UserDrives=true while CreateSandbox still refuses every drive")
+	}
 }
 
 // TestCreateSandbox_OrderAndRef covers the required creation order — BOTH

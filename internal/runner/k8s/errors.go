@@ -63,6 +63,11 @@ var errBYOIUnsupported = errors.New("k8s: BYOI (wardyn-byoi/ images) is docker-o
 // fail-closed sentinel.
 var errTeardownUnresolved = errors.New("k8s: teardown could not resolve run id from the sandbox's wardyn.run-id label; sibling proxy/netpols/secret may be orphaned")
 
+// D4 flips Capabilities' UserDrives field in the SAME change that deletes this
+// stub: the control plane reads that field to refuse a drive-carrying request
+// at create and at preflight, so a stub removed without the flag (or a flag set
+// without the mount) is a run that previews green and fails at dispatch.
+//
 // errDriveUnsupported is CreateSandbox's preflight rejection of a spec that
 // carries a user drive (migration 0054): this driver has no PVC volume/
 // volumeMount code path yet, so a run that ASKED for storage would otherwise

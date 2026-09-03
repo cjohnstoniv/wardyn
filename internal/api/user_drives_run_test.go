@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -807,4 +808,104 @@ func TestDriveRefusalsAreTheFrozenMemberCopy(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ─── the runner-capability gate ───────────────────────────────────────────────
+
+// driveCapsRunner is fakeRunner with ONE thing replaced: what Capabilities
+// declares about drives, and whether the call works at all.
+type driveCapsRunner struct {
+	*fakeRunner
+	drives bool
+	err    error
+}
+
+func (r driveCapsRunner) Capabilities(ctx context.Context) (runner.Capabilities, error) {
+	if r.err != nil {
+		return runner.Capabilities{}, r.err
+	}
+	caps, err := r.fakeRunner.Capabilities(ctx)
+	caps.UserDrives = r.drives
+	return caps, err
+}
+
+// TestSeedRequestDriveGatesOnRunnerCapability pins the gate that makes the
+// control plane and the runner agree about drives.
+//
+// WHICH SIDE WAS LYING. Both drivers refuse a spec carrying a drive, and both
+// say why in the same words the control plane uses — "a member who asked for
+// storage must never silently get a run without it". They are truthfully
+// reporting a capability they do not have; dispatch was right. The control
+// plane was the liar: its only substrate question was the BACKEND-vs-TARGET
+// string match, which a docker_volume drive on a Docker deployment passes, so
+// preflight previewed green, create answered 201, and dispatch then failed the
+// run. seedRequestDrive's own doc calls that "the one thing the preflight
+// handler exists not to do".
+//
+// Fixing driveMountFor fixes BOTH doors at once, because preflight and create
+// share it — which is why the gate lives there and not in either handler.
+func TestSeedRequestDriveGatesOnRunnerCapability(t *testing.T) {
+	drive := driveFixture(nil) // docker_volume, on a docker deployment: it PASSES the target check
+	st := &driveStore{drive: drive, grant: grantFixture(drive.ID, nil), tier: types.CapabilitySubjectUser}
+	ctx := driveMemberCtx(nil, false)
+
+	serverWith := func(rn runner.Runner) *Server {
+		return New(Config{Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", Runner: rn})
+	}
+
+	t.Run("a runner that cannot mount drives refuses the run", func(t *testing.T) {
+		srv := serverWith(driveCapsRunner{fakeRunner: &fakeRunner{}, drives: false})
+		mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
+		if ok || mount != nil {
+			t.Fatalf("ok/mount = %v/%+v, want a refusal — this run would fail at dispatch", ok, mount)
+		}
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("code = %d, want 422 (the same shape every unmountable allocation gets): %s",
+				w.Code, w.Body.String())
+		}
+		// The member must learn the SUBSTRATE is the limit, not their
+		// allocation — they have one, and it is fine. It reuses
+		// REFUSED_BACKEND's frozen sentence rather than adding a string to a
+		// table §7.7 declares COMPLETE, so the frozen half is asserted too.
+		body := w.Body.String()
+		if !strings.Contains(body, "this deployment cannot mount your drive") {
+			t.Errorf("body = %s, want REFUSED_BACKEND's frozen sentence", body)
+		}
+		if !strings.Contains(body, "does not mount drives yet") {
+			t.Errorf("body = %s, want the reason to echo the driver's own error", body)
+		}
+	})
+
+	t.Run("a runner that can mount drives is unaffected", func(t *testing.T) {
+		srv := serverWith(driveCapsRunner{fakeRunner: &fakeRunner{}, drives: true})
+		mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
+		if !ok || mount == nil {
+			t.Fatalf("ok/mount = %v/%+v, want the mount; body=%s", ok, mount, w.Body.String())
+		}
+		if mount.Target != runner.DriveTarget {
+			t.Errorf("target = %q, want %q", mount.Target, runner.DriveTarget)
+		}
+	})
+
+	// "Cannot" and "cannot tell" are different answers, the same split
+	// resolveEnforcedConfinement draws for the confinement gate.
+	t.Run("an unreadable capability is a 503, not a silent admit", func(t *testing.T) {
+		srv := serverWith(driveCapsRunner{fakeRunner: &fakeRunner{}, err: errors.New("docker: no such host")})
+		mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
+		if ok || mount != nil {
+			t.Fatalf("ok/mount = %v/%+v, want a refusal when the capability cannot be read", ok, mount)
+		}
+		if w.Code != http.StatusServiceUnavailable {
+			t.Errorf("code = %d, want 503: %s", w.Code, w.Body.String())
+		}
+	})
+
+	// SCOPED TO A WIRED RUNNER, as the confinement gate is: with no runner
+	// there is no dispatch to disagree with, so there is no promise to break.
+	t.Run("no runner wired leaves the seam alone", func(t *testing.T) {
+		srv, _ := driveRunServer(st, "docker")
+		if _, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx); !ok {
+			t.Fatalf("ok = false with no runner wired: %s", w.Body.String())
+		}
+	})
 }

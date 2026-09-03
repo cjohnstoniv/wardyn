@@ -63,6 +63,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -111,7 +112,7 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 			driveRefusal("your allocation is paused by an admin"))
 		return nil, false
 	}
-	return s.driveMountFor(w, req, *resolved)
+	return s.driveMountFor(r.Context(), w, req, *resolved)
 }
 
 // denyMemberDrive is the DOOR: a governance profile's DenyUserDrive refusing
@@ -142,8 +143,30 @@ func (s *Server) denyMemberDrive(w http.ResponseWriter, r *http.Request, ceiling
 // driveMountFor folds a resolved drive and the run request into the mount, or
 // writes the 422 that says why it cannot.
 //
-// TWO REFUSALS, and both are the same class: the caller is authorized, the
-// allocation exists, and this particular RUN cannot have it.
+// THE REFUSALS ARE ALL ONE CLASS: the caller is authorized, the allocation
+// exists, and this particular RUN cannot have it.
+//
+//  0. THE RUNNER CANNOT BIND A DRIVE AT ALL. runner.Capabilities.UserDrives is
+//     the declaration, and it is checked here for the reason
+//     resolveEnforcedConfinement checks ConfinementClasses in the same request:
+//     the control plane must refuse to schedule a run demanding more than the
+//     driver declares. Without it the only substrate question asked was the
+//     BACKEND-vs-TARGET string match below — which a docker_volume drive on a
+//     Docker deployment passes — so a run was admitted, answered 201, and then
+//     failed at dispatch against a driver that refuses every spec.Drive.
+//
+//     IT IS CHECKED FIRST because it is the dominant fact: a mis-targeted
+//     backend is a row an admin can re-author, while this one no request can
+//     satisfy on this build, and it stays true after the other is fixed. A
+//     Capabilities error is a 503 and not a 422 — the same split
+//     resolveEnforcedConfinement draws between "cannot" and "cannot tell".
+//
+//     IT ADDS NO MEMBER STRING: it reuses REFUSED_BACKEND, whose frozen
+//     sentence is already parameterized on the reason, so the table §7.7
+//     declares COMPLETE stays complete.
+//
+//     SCOPED TO A WIRED RUNNER, as that sibling gate is: with no runner there
+//     is no dispatch to disagree with, so there is no promise to break.
 //
 //  1. BACKEND UNAVAILABLE HERE. A drive's backend names exactly one substrate
 //     (types.DriveBackend.RunnerTarget), and the write boundary already refuses
@@ -161,8 +184,25 @@ func (s *Server) denyMemberDrive(w http.ResponseWriter, r *http.Request, ceiling
 //     narrow direction (read_only:true on a writable allocation) is always
 //     honoured — that is what NARROW-ONLY means, and it matches
 //     WorkspaceSelection.ReadOnly exactly.
-func (s *Server) driveMountFor(w http.ResponseWriter, req createRunRequest,
+func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, req createRunRequest,
 	resolved types.ResolvedDrive) (*types.DriveMount, bool) {
+	if s.cfg.Runner != nil {
+		caps, cerr := s.cfg.Runner.Capabilities(ctx)
+		if cerr != nil {
+			writeError(w, http.StatusServiceUnavailable, "runner capabilities unavailable: "+cerr.Error())
+			return nil, false
+		}
+		if !caps.UserDrives {
+			// REFUSED_BACKEND's frozen sentence with a second reason, NOT a new
+			// string: §7.7 declares that table COMPLETE, and the key is already
+			// parameterized on the reason ("this deployment cannot mount your
+			// drive ({reason})"). The reason echoes the driver's own error, so
+			// the member's refusal and the log say the same thing.
+			writeError(w, http.StatusUnprocessableEntity, driveRefusal(fmt.Sprintf(
+				"this deployment cannot mount your drive (its runner %q does not mount drives yet)", caps.Driver)))
+			return nil, false
+		}
+	}
 	if target := resolved.Drive.Backend.RunnerTarget(); target != s.cfg.RunnerTarget {
 		writeError(w, http.StatusUnprocessableEntity, driveRefusal(fmt.Sprintf(
 			"this deployment cannot mount your drive (it is a %q drive and this deployment dispatches to %q)",

@@ -220,6 +220,12 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 // errDriveUnsupported names the gap between the control plane resolving a
 // member's drive (migration 0054) and this driver being able to mount it.
 // D3 removes this: the Docker mount path lands on its own lane.
+//
+// IT IS DECLARED, NOT ONLY RAISED: Capabilities reports UserDrives false while
+// this stub stands, so the control plane refuses a drive-carrying request at
+// create and at preflight instead of admitting one that dies here. D3 flips
+// that field in the SAME change that deletes this stub — the two are one fact
+// and drift between them is a run that previews green and fails at dispatch.
 var errDriveUnsupported = errors.New("user drive: this runner does not mount drives yet")
 
 // CreateSandbox provisions the per-run network, the wardyn-proxy sidecar, and

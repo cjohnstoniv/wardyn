@@ -47,4 +47,17 @@ func TestCreateSandbox_RejectsAUserDrive(t *testing.T) {
 	if got := f.containers[agentContainerName(spec.RunID)]; got != nil {
 		t.Errorf("an agent container was created despite the refusal: %+v", got)
 	}
+
+	// THE DECLARATION MUST AGREE WITH THE BEHAVIOUR. The control plane refuses a
+	// drive-carrying run by reading this flag, so a stub that refuses while the
+	// flag says "yes" is the run that previews green and dies here — the exact
+	// shape the gate closes. D3 deletes the refusal above and sets this true in
+	// the SAME change; whichever half lands alone fails this.
+	cs, err := d.Classes(context.Background())
+	if err != nil {
+		t.Fatalf("Classes: %v", err)
+	}
+	if cs.UserDrives {
+		t.Error("Classes reports UserDrives=true while CreateSandbox still refuses every drive")
+	}
 }
