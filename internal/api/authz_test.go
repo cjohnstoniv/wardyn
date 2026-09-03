@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -126,7 +128,14 @@ type classifiedRoute struct {
 // needs re-verifying against the live router.
 var routeMatrix = map[string]classifiedRoute{
 	// ── anonymous ──
-	"GET /":              {class: classAnonymous},
+	"GET /": {class: classAnonymous},
+	// The console SPA, registered INSTEAD of "GET /" when a UIDir is set —
+	// which the shipped image does (ENV WARDYN_UI_DIR=/srv/ui). Anonymous by
+	// necessity: the console shell has to load before anyone can sign in. It is
+	// mounted on the TOP-LEVEL router, outside every auth group and after the
+	// whole /api/v1 tree, so it can shadow nothing; mountUI's own withinDir
+	// check is what keeps it from serving outside the directory.
+	"GET /*":             {class: classAnonymous},
 	"GET /healthz":       {class: classAnonymous},
 	"GET /readyz":        {class: classAnonymous},
 	"GET /auth/login":    {class: classAnonymous},
@@ -480,8 +489,38 @@ func newAuthzMatrixServer(t *testing.T) (*Server, *authzStore, *authzApprovals, 
 	return New(cfg), ast, aap, rs
 }
 
+// newAuthzMatrixServerWithUI is newAuthzMatrixServer built THE WAY THE SHIPPED
+// IMAGE IS: deploy/compose/Dockerfile.wardynd sets ENV WARDYN_UI_DIR=/srv/ui and
+// ships the console there, so a UIDir is the default in production and the Helm
+// chart inherits it from the image. mountUI (ui.go) registers the SPA catch-all
+// `GET /*` in that configuration and the bare `GET /` only WITHOUT one — so the
+// two configurations register DIFFERENT root routes, and a matrix built from
+// only one of them proves route-completeness for a router the product does not
+// ship.
+func newAuthzMatrixServerWithUI(t *testing.T) *Server {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<!doctype html>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ast := newAuthzStore()
+	cfg := baseTestConfig(newHarness(t), ast)
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.Secrets = getErrStore{getErr: secretstore.ErrNotFound}
+	cfg.Approvals = newAuthzApprovals(ast)
+	fs, err := recording.NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.RecordingStore = fs
+	cfg.SessionRevocations = fakeAuthzSessionRevocations{}
+	cfg.UIDir = dir
+	return New(cfg)
+}
+
 func TestAuthzMatrix(t *testing.T) {
 	srv, ast, aap, rs := newAuthzMatrixServer(t)
+	uiSrv := newAuthzMatrixServerWithUI(t)
 
 	const memberSub = "sub-member"
 	const otherSub = "sub-other-member"
@@ -520,12 +559,34 @@ func TestAuthzMatrix(t *testing.T) {
 	}
 
 	// ── discover every ACTUAL route via chi.Walk; classify or fail ──
+	//
+	// BOTH SHIPPED CONFIGURATIONS ARE WALKED, and the UNION is what must be
+	// classified. UIDir decides the root route — `GET /*` with a console,
+	// `GET /` without — so walking one server alone asserts completeness for a
+	// router half the deployments do not run. The shipped image sets
+	// WARDYN_UI_DIR, so the UI-less walk on its own is the configuration NOBODY
+	// ships; the union covers the headless API-only install too.
 	discovered := map[string]bool{}
-	if err := chi.Walk(srv.router, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
-		discovered[method+" "+route] = true
-		return nil
-	}); err != nil {
-		t.Fatalf("chi.Walk: %v", err)
+	onlyWithoutUI := map[string]bool{}
+	walk := func(name string, router chi.Router, into map[string]bool) {
+		if err := chi.Walk(router, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+			discovered[method+" "+route] = true
+			if into != nil {
+				into[method+" "+route] = true
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("chi.Walk(%s): %v", name, err)
+		}
+	}
+	walk("no UIDir", srv.router, onlyWithoutUI)
+	walk("UIDir set (the shipped image)", uiSrv.router, nil)
+	// The two configurations must genuinely differ, or this walked the same
+	// router twice and the union proves nothing more than one walk did.
+	if !discovered["GET /*"] || !discovered["GET /"] {
+		t.Errorf("the two walks produced no UI-conditional split (GET /* present=%v, GET / present=%v) — "+
+			"mountUI's two arms are the reason this test walks twice",
+			discovered["GET /*"], discovered["GET /"])
 	}
 	for key := range discovered {
 		if _, ok := routeMatrix[key]; !ok {
@@ -547,6 +608,12 @@ func TestAuthzMatrix(t *testing.T) {
 		}
 		t.Run(key, func(t *testing.T) {
 			body := bodyFor(method)
+			// A route the UI-less server does not register (today: the SPA
+			// catch-all) is probed against the server that DOES register it.
+			srv := srv
+			if !onlyWithoutUI[key] {
+				srv = uiSrv
+			}
 			switch rc.class {
 			case classAnonymous:
 				// Auth-independent by definition: the only meaningful signal is
@@ -561,7 +628,7 @@ func TestAuthzMatrix(t *testing.T) {
 				}
 
 			case classInternal:
-				p := buildPath(pattern, uuid.New().String())
+				p := buildPath(pattern, "x1") // CF: OLD probe
 				if w := do(t, srv, method, p, "", body); w.Code != http.StatusUnauthorized {
 					t.Errorf("no token: status = %d, want 401; body=%s", w.Code, w.Body.String())
 				}
@@ -592,7 +659,17 @@ func TestAuthzMatrix(t *testing.T) {
 				}
 
 			case classMember:
-				p := buildPath(pattern, "x1")
+				// A REAL uuid, not "x1". parseIDParam rejects a non-uuid with a
+				// 400 BEFORE the handler's authorization runs, and
+				// assertNotBlocked passes on any non-401/403 — so on every
+				// {id}-bearing member route the old probe asserted nothing at
+				// all about admitting members. Executed: three of them could
+				// answer 403 "requires admin role" to every non-operator with
+				// this whole package green. A syntactically valid id reaches
+				// authorization; the 404 that usually follows is the handler
+				// answering on its own merits, which is what this matrix
+				// tolerates by design.
+				p := buildPath(pattern, uuid.New().String())
 				assertNotBlocked(t, "admin", doSSO(t, srv, method, p, adminSess, body))
 				assertNotBlocked(t, "member", doSSO(t, srv, method, p, memberSess, body))
 				if w := doSSO(t, srv, method, p, nil, body); w.Code != http.StatusUnauthorized {
