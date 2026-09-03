@@ -104,6 +104,63 @@ const SecretRekeyLockKey int64 = 0x5741524459_524B59 // ASCII "WARDYRKY"
 // is per-partition chains with a key per partition, not a finer lock over one.
 const AuditChainLockKey int64 = 0x5741524459_434841 // ASCII "WARDYCHA"
 
+// AuditChainLockTimeout bounds how long ANY writer waits for AuditChainLockKey
+// before giving up. Since 0056 the trigger takes that lock on every insert into
+// audit_events, including inserts from outside this repo, so one transaction
+// that inserted an audit row and stayed open holds up every audit write in the
+// process - and that is reachable with no Wardyn bug at all: an operator's psql
+// session, a seed script, a paused migration tool. AuditSpool.Drain already
+// bounds its side of this at 15s per pass ("one idle psql transaction must not
+// become a process-wide stall"); the SYNCHRONOUS side had no bound of any kind.
+// A request-path audit write took the lock on the raw request context, against a
+// server with lock_timeout = 0 and statement_timeout = 0 and an http.Server that
+// deliberately sets no WriteTimeout, so it waited forever - pinning a request
+// goroutine and a pool connection each time. With pool_max_conns at the
+// documented minimum of 3, a handful of stuck audit writes exhausts the pool and
+// every other query in the process starts blocking behind them.
+//
+// BOTH DIRECTIONS OF THE CHOICE, because a bound on a synchronous path can fail
+// either way. Too short and a healthy-but-loaded deployment refuses audit writes
+// it could have completed; too long and the request path stalls exactly when the
+// database is already in trouble. 5s is chosen against measured shapes rather
+// than taste: a legitimate wait here is other audit writers queueing, each
+// holding the lock for one nextval, one indexed head read, one sha256 and one
+// insert - low single-digit milliseconds - so 5s absorbs a queue in the
+// thousands before it ever refuses a write that would have completed. It is also
+// deliberately well UNDER the drain's 15s pass bound, so the request path yields
+// before the background drain does, which is the right order: the drain is the
+// thing built to absorb a backlog.
+//
+// WHAT HAPPENS TO THE WRITE THAT LOSES THE RACE decides whether this is a fix or
+// a relocation of the failure, so it is stated here. On the request path, the
+// error travels back through spoolingRecorder, which fsyncs the event to the
+// local spool and logs AUDIT WRITE FAILED; the drain replays it once the lock
+// clears. The event is not dropped - it takes exactly the degraded path C1 built
+// for a failed durable write. On the broker's mint transaction the audit insert
+// is in the same tx as the credential, so a timeout refuses the MINT: no
+// credential is issued that could not be audited, which is the fail-closed
+// direction a governance tool wants, and is what that path already did for every
+// other audit failure.
+//
+// lock_timeout rather than a context deadline, verified rather than assumed: it
+// fires ONLY on a lock wait, never on a slow-but-progressing statement (so the
+// "too short" direction cannot abort work that was making progress), it is
+// enforced server-side, SET LOCAL scopes it to the transaction so nothing leaks
+// onto a pooled connection, and it reports the distinguishable SQLSTATE 55P03.
+// Measured on Postgres 17: it bounds the explicit pg_advisory_xact_lock AND the
+// trigger's own acquisition during an ordinary INSERT, so it also covers a
+// writer that never takes the lock explicitly.
+var AuditChainLockTimeout = 5 * time.Second
+
+// AuditChainLockTimeoutSQL is the statement that applies AuditChainLockTimeout
+// to the current transaction. SET takes no bind parameters, so the value is
+// formatted in - it is an integer from the variable above, never caller input.
+// SET LOCAL, so it reverts at commit or rollback and the pooled connection is
+// handed back exactly as it was found.
+func AuditChainLockTimeoutSQL() string {
+	return fmt.Sprintf("SET LOCAL lock_timeout = '%dms'", AuditChainLockTimeout.Milliseconds())
+}
+
 // TryAdvisoryLock takes session-level advisory lock key on a connection borrowed
 // from pool WITHOUT waiting, reporting ok=false when another session already
 // holds it. Call the returned release (deferred) to unlock and hand the
@@ -151,23 +208,54 @@ func TryAdvisoryLock(ctx context.Context, pool *pgxpool.Pool, key int64) (releas
 // THE TRIGGER PRIVILEGE IS PART OF THE CLAIM, and it is the least obvious third
 // of it. A role that is neither owner nor superuser but holds
 // GRANT TRIGGER ON audit_events cannot drop the shipped triggers — it can do
-// something quieter: CREATE its own BEFORE INSERT trigger. Postgres fires
-// same-event row triggers in NAME order, so one named after audit_events_chain
-// runs last and overwrites NEW.prev_hash/NEW.row_hash on the way in, minting
-// rows that hash to whatever it says while every shipped guard stays armed and
-// every catalog check still finds them. 0007_audit_least_privilege.sql revokes
+// something quieter: CREATE its own row-level BEFORE INSERT trigger, which is
+// handed NEW and whose changes are what Postgres stores — so it can rewrite any
+// field, choose prev_hash/row_hash, or drop the row entirely, minting records
+// that say whatever it wants while every shipped guard stays armed and every
+// catalog check still finds them. Name order is NOT what makes that work: a
+// trigger sorting after audit_events_chain (same-event row triggers fire in name
+// order) runs last and can overwrite the hashes directly, but one sorting BEFORE
+// it is easier still — it rewrites NEW and the shipped chain trigger then hashes
+// the forgery for it. ensureAuditTriggers refuses the boot over either, keyed on
+// the trigger's SHAPE rather than its name; this function is the PREVENTIVE half
+// and only asks whether the privilege to create one is held.
+// 0007_audit_least_privilege.sql revokes
 // TRIGGER from PUBLIC precisely because of that, but a deploy is free to grant
 // it back, so the claim has to be checked and not inferred.
+//
+// ALL THREE LEGS TEST MEMBERSHIP, not a role attribute. The superuser leg asks
+// whether current_user is a member of ANY role with rolsuper — not whether
+// current_user itself has rolsuper. Reading the attribute off the current_user
+// row missed the ordinary managed-Postgres shape (GRANT some admin role TO the
+// app role): that role has rolsuper = false, is not a member of the table's
+// owner, and holds no TRIGGER privilege, so it was reported PROTECTED while it
+// could SET ROLE to a superuser and ALTER TABLE ... DISABLE TRIGGER. pg_has_role
+// with 'MEMBER' is what makes this honest: 'MEMBER' is the right to SET ROLE, so
+// it follows the grant chain to any depth AND ignores INHERIT — a NOINHERIT role
+// that can still SET ROLE is caught. A role is a member of itself, so a directly
+// superuser role is reported exactly as it was before.
+//
+// WHAT THIS DELIBERATELY DOES NOT MODEL, stated so the next reader does not
+// widen it by guesswork. Membership in pg_write_all_data is NOT a bypass and is
+// NOT tested for: it confers INSERT/UPDATE/DELETE rights, but the append-only
+// triggers still fire and raise — measured in the probe beside this function,
+// not assumed. Roles that own the HOST rather than the guard —
+// pg_execute_server_program, pg_write_server_files — can escalate to superuser
+// by documented PostgreSQL behaviour and are still reported protected here. The
+// predicate stays a closed, catalog-derived test (rolsuper) rather than a list
+// of role names that rots with every Postgres release: once the database host is
+// compromised, no claim Wardyn makes about that database survives anyway.
 func AuditDDLProtected(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
 	var canBypass bool
 	err := pool.QueryRow(ctx, `
 		SELECT COALESCE(
-			bool_or(r.rolsuper
+			bool_or(EXISTS (SELECT 1 FROM pg_roles s
+			                 WHERE s.rolsuper
+			                   AND pg_has_role(current_user, s.oid, 'MEMBER'))
 			        OR pg_has_role(current_user, c.relowner, 'MEMBER')
 			        OR has_table_privilege(current_user, c.oid, 'TRIGGER')),
 			true)
 		FROM pg_class c
-		JOIN pg_roles r ON r.rolname = current_user
 		WHERE c.relname = 'audit_events' AND c.relkind = 'r'`,
 	).Scan(&canBypass)
 	if err != nil {
@@ -229,6 +317,17 @@ func migrateOn(ctx context.Context, db migrationExecutor) error {
 		return fmt.Errorf("db: ensure schema_migrations: %w", err)
 	}
 
+	// Read the operator's ENABLE ALWAYS hardening BEFORE anything runs. Every
+	// migration that (re)defines an audit trigger does so with DROP TRIGGER IF
+	// EXISTS + CREATE TRIGGER, and CREATE TRIGGER always yields tgenabled='O' —
+	// so the loop below, and the trigger-restore replay inside
+	// ensureAuditTriggers, both silently revert 'A' back to 'O'. This is the
+	// WRITE side of the invariant auditTriggerNames states on the READ side.
+	hardened, err := auditAlwaysTriggers(ctx, db)
+	if err != nil {
+		return err
+	}
+
 	entries, err := migrationFS.ReadDir("migrations")
 	if err != nil {
 		return fmt.Errorf("db: read migrations dir: %w", err)
@@ -267,7 +366,84 @@ func migrateOn(ctx context.Context, db migrationExecutor) error {
 		}
 		slog.InfoContext(ctx, "db: applied migration", slog.String("file", name), slog.Duration("elapsed", time.Since(start)))
 	}
-	return ensureAuditTriggers(ctx, db)
+	if err := ensureAuditTriggers(ctx, db); err != nil {
+		return err
+	}
+	// AFTER ensureAuditTriggers, not just after the loop: its restore path
+	// replays the trigger-defining migrations, which re-creates the trigger as
+	// plain 'O' for exactly the same reason the loop does.
+	restoreAlwaysTriggers(ctx, db, hardened)
+	return nil
+}
+
+// auditAlwaysTriggers returns the audit_events triggers an operator has hardened
+// with ALTER TABLE ... ENABLE ALWAYS TRIGGER (pg_trigger.tgenabled = 'A'), or
+// nil when the table does not exist yet (a database mid-bootstrap has none).
+func auditAlwaysTriggers(ctx context.Context, db migrationExecutor) ([]string, error) {
+	var exists bool
+	if err := db.QueryRow(ctx, `SELECT to_regclass('audit_events') IS NOT NULL`).Scan(&exists); err != nil {
+		return nil, fmt.Errorf("db: look up audit_events: %w", err)
+	}
+	if !exists {
+		return nil, nil
+	}
+	var names []string
+	if err := db.QueryRow(ctx, `
+		SELECT COALESCE(array_agg(tgname::text ORDER BY tgname), ARRAY[]::text[])
+		FROM pg_trigger
+		WHERE tgrelid = 'audit_events'::regclass AND NOT tgisinternal AND tgenabled = 'A'`,
+	).Scan(&names); err != nil {
+		return nil, fmt.Errorf("db: read hardened audit_events triggers: %w", err)
+	}
+	return names, nil
+}
+
+// restoreAlwaysTriggers re-applies ENABLE ALWAYS to each trigger in want that is
+// no longer 'A'. docs/OPERATIONS.md promises a hardened trigger is left "exactly
+// as it is"; auditTriggerNames keeps that promise on the READ side by counting
+// 'A' as firing, and this keeps it on the WRITE side, for the whole of Migrate.
+// Without it the promise held only for a database with nothing left to apply:
+// a 0.6.x deployment that had hardened the chain trigger lost the hardening the
+// moment it upgraded, with nothing logged, and the next boot then read the
+// resulting 'O' as the normal shipped state.
+//
+// Idempotent, and deliberately narrow: it re-reads the catalog and issues the
+// ALTER only for a trigger that WAS 'A' and is not any more, so a run with
+// nothing pending — or on a deployment that never hardened anything — touches
+// nothing at all. A trigger nobody hardened is never promoted to 'A' by this.
+//
+// A failure is logged, not returned. Refusing the boot would not save the
+// hardening: the migrations have already been applied and re-recorded, so the
+// NEXT boot's capture reads the reverted 'O' and has nothing left to restore.
+// An ERROR line naming the exact statement to re-run is the honest outcome, and
+// it keeps the "never continue silently" property that ensureAuditTriggers has.
+func restoreAlwaysTriggers(ctx context.Context, db migrationExecutor, want []string) {
+	if len(want) == 0 {
+		return
+	}
+	still, err := auditAlwaysTriggers(ctx, db)
+	if err != nil {
+		slog.ErrorContext(ctx, "db: cannot tell whether the migration loop reverted an ENABLE ALWAYS audit trigger; re-check pg_trigger.tgenabled by hand",
+			slog.Any("error", err), slog.Any("hardened_before", want))
+		return
+	}
+	always := make(map[string]bool, len(still))
+	for _, n := range still {
+		always[n] = true
+	}
+	for _, name := range want {
+		if always[name] {
+			continue // untouched by this run; nothing to re-apply
+		}
+		stmt := `ALTER TABLE audit_events ENABLE ALWAYS TRIGGER ` + pgx.Identifier{name}.Sanitize()
+		if _, err := db.Exec(ctx, stmt); err != nil {
+			slog.ErrorContext(ctx, "db: a migration reverted this trigger's ENABLE ALWAYS hardening and it could NOT be re-applied; it now fires only for ordinary writes, not under session_replication_role = replica — re-apply it by hand",
+				slog.String("trigger", name), slog.String("statement", stmt), slog.Any("error", err))
+			continue
+		}
+		slog.WarnContext(ctx, "db: re-applied the ENABLE ALWAYS hardening a migration reverted on an audit_events trigger",
+			slog.String("trigger", name))
+	}
 }
 
 // auditChainTrigger is the BEFORE INSERT trigger that hash-chains audit_events
@@ -325,7 +501,76 @@ func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
 			return fmt.Errorf("db: %s trigger is missing or disabled on audit_events; the append-only guarantee is not in force, and restoring it means replaying the initial schema — refusing to start", name)
 		}
 	}
+	// The shipped guards being armed is not the same as nothing ELSE being
+	// armed beside them. auditTriggerNames already read the complete list.
+	tamperCapable, other, err := auditForeignTriggers(ctx, db)
+	if err != nil {
+		return err
+	}
+	if len(other) > 0 {
+		slog.ErrorContext(ctx, "db: trigger(s) on audit_events that Wardyn does not ship; they cannot rewrite a row on the way in (only a row-level BEFORE INSERT trigger can) but nothing else in the system reports them — confirm they are yours",
+			slog.Any("triggers", other))
+	}
+	if len(tamperCapable) > 0 {
+		return fmt.Errorf("db: row-level BEFORE INSERT trigger(s) on audit_events that Wardyn does not ship (%s); such a trigger sees NEW and its changes are what Postgres stores, so it can rewrite or drop any audit row on the way in while every shipped guard stays armed and the verify sweep still reports clean — refusing to start", strings.Join(tamperCapable, ", "))
+	}
 	return nil
+}
+
+// auditForeignTriggers returns the FIRING, non-internal triggers on audit_events
+// that Wardyn does not ship, split into the two classes that matter. Returns
+// nothing when the table does not exist.
+//
+// tamperCapable is the class that defeats the whole audit design: a ROW-level
+// BEFORE INSERT trigger. It is handed NEW and whatever it returns is what
+// Postgres stores, so it can rewrite any field, choose prev_hash/row_hash, or
+// RETURN NULL to make the event vanish — and the row it leaves behind is
+// internally consistent, so store.VerifyAuditChain reports the log clean. This
+// was measured, not assumed: with such a trigger installed, an event submitted
+// through store.InsertAuditEvent as actor=X outcome=denied was stored as
+// actor=Y outcome=success, InsertAuditEvent returned nil, this boot check
+// returned nil, and the sweep returned ok=true.
+//
+// NAME ORDER IS NOT THE TEST, and reasoning that it is would have left the
+// easier attack open. AuditDDLProtected's doc comment and docs/OPERATIONS.md
+// both describe this bypass as a trigger sorting AFTER audit_events_chain
+// (same-event row triggers fire in name order, so it runs last and overwrites
+// the hashes). That is one way to do it. A trigger sorting BEFORE the chain
+// trigger is strictly easier: it rewrites NEW and the SHIPPED chain trigger
+// then hashes the forgery for it — no name trick, no hash call. Both were
+// executed; both left the sweep reporting ok=true. So every foreign row-level
+// BEFORE INSERT trigger is refused, whatever it is called.
+//
+// other is every remaining foreign trigger — AFTER, statement-level, or bound
+// to another event. None of them can alter the stored row, so they are reported
+// rather than refused: a deployment may legitimately hang a replication or
+// notify trigger off this table, and bricking that boot would be a worse
+// failure than naming it.
+func auditForeignTriggers(ctx context.Context, db migrationExecutor) (tamperCapable, other []string, err error) {
+	var exists bool
+	if err := db.QueryRow(ctx, `SELECT to_regclass('audit_events') IS NOT NULL`).Scan(&exists); err != nil {
+		return nil, nil, fmt.Errorf("db: look up audit_events: %w", err)
+	}
+	if !exists {
+		return nil, nil, nil
+	}
+	shipped := append([]string{auditChainTrigger}, auditAppendOnlyTriggers...)
+	// pg_trigger.tgtype is the bitmask from Postgres's own trigger.h:
+	// 1 = FOR EACH ROW, 2 = BEFORE, 4 = INSERT. So (tgtype & 3) = 3 is a
+	// row-level BEFORE trigger and (tgtype & 4) <> 0 means it fires on INSERT.
+	const rowBeforeInsert = `(tgtype & 3) = 3 AND (tgtype & 4) <> 0`
+	if err := db.QueryRow(ctx, `
+		SELECT COALESCE(array_agg(tgname::text ORDER BY tgname) FILTER (WHERE `+rowBeforeInsert+`), ARRAY[]::text[]),
+		       COALESCE(array_agg(tgname::text ORDER BY tgname) FILTER (WHERE NOT (`+rowBeforeInsert+`)), ARRAY[]::text[])
+		FROM pg_trigger
+		WHERE tgrelid = 'audit_events'::regclass
+		  AND NOT tgisinternal
+		  AND tgenabled IN ('O', 'A')
+		  AND tgname <> ALL($1)`, shipped,
+	).Scan(&tamperCapable, &other); err != nil {
+		return nil, nil, fmt.Errorf("db: read foreign audit_events triggers: %w", err)
+	}
+	return tamperCapable, other, nil
 }
 
 // auditTriggerNames returns the FIRING row/statement triggers on audit_events,
@@ -344,6 +589,13 @@ func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
 // trigger would have made Migrate refuse the boot outright — bricking the
 // upgrade of the most careful deployments. 'D' (disabled) and 'R' (replica-only,
 // which does NOT fire for ordinary writes) stay absent, correctly.
+//
+// This is only the READ half of what 'A' means. Reading it as firing is not
+// enough on its own: every migration that (re)defines an audit trigger ends in
+// CREATE TRIGGER, which always yields 'O', so the migration loop reverted the
+// hardening this function is careful not to punish. restoreAlwaysTriggers is the
+// WRITE half, and the two must keep agreeing — 'A' is a hardening to be
+// preserved, never a deviation to be normalised.
 func auditTriggerNames(ctx context.Context, db migrationExecutor) (map[string]bool, error) {
 	var exists bool
 	if err := db.QueryRow(ctx, `SELECT to_regclass('audit_events') IS NOT NULL`).Scan(&exists); err != nil {
@@ -375,24 +627,10 @@ func auditTriggerNames(ctx context.Context, db migrationExecutor) (map[string]bo
 // would reinstate a superseded definition (0047's unserialized chain function,
 // which 0056 replaced).
 func replayTriggerMigrations(ctx context.Context, db migrationExecutor, trigger string) error {
-	entries, err := migrationFS.ReadDir("migrations")
+	names, err := triggerMigrationFiles(trigger)
 	if err != nil {
-		return fmt.Errorf("db: read migrations dir: %w", err)
+		return err
 	}
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
-			continue
-		}
-		body, err := migrationFS.ReadFile("migrations/" + e.Name())
-		if err != nil {
-			return fmt.Errorf("db: read migration %s: %w", e.Name(), err)
-		}
-		if strings.Contains(string(body), "TRIGGER "+trigger) {
-			names = append(names, e.Name())
-		}
-	}
-	sort.Strings(names)
 	for _, name := range names {
 		data, err := migrationFS.ReadFile("migrations/" + name)
 		if err != nil {
@@ -405,6 +643,41 @@ func replayTriggerMigrations(ctx context.Context, db migrationExecutor, trigger 
 			slog.String("file", name), slog.String("trigger", trigger))
 	}
 	return nil
+}
+
+// triggerMigrationFiles returns, in apply order, the embedded migrations whose
+// text defines trigger — the REPLAY SET that replayTriggerMigrations re-executes
+// verbatim, against a database where all of them are already applied and none is
+// re-recorded in schema_migrations.
+//
+// Exists as its own function so the guard that keeps those files idempotent is
+// derived from the SAME predicate the replay uses instead of restating it. A
+// test that re-implemented the rule would be right until the day the rule
+// changed, and the failure that day is a boot refusing on exactly the database
+// whose audit trigger already went missing — the case the replay exists to
+// rescue. Content-derived rather than listed for the same reason
+// replayTriggerMigrations was: a later migration that redefines the trigger
+// joins the set on its own, and 0058 did.
+func triggerMigrationFiles(trigger string) ([]string, error) {
+	entries, err := migrationFS.ReadDir("migrations")
+	if err != nil {
+		return nil, fmt.Errorf("db: read migrations dir: %w", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
+			continue
+		}
+		body, err := migrationFS.ReadFile("migrations/" + e.Name())
+		if err != nil {
+			return nil, fmt.Errorf("db: read migration %s: %w", e.Name(), err)
+		}
+		if strings.Contains(string(body), "TRIGGER "+trigger) {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 func isMigrationApplied(ctx context.Context, db migrationExecutor, filename string) (bool, error) {

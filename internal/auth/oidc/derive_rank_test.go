@@ -195,7 +195,16 @@ func TestParseRoleMapAcceptsSecurityAdmin(t *testing.T) {
 // console /access write boundary both gate on ValidRole, so a fourth value
 // slipping in here would reach a session cookie.
 func TestValidRoleAcceptsExactlyThree(t *testing.T) {
-	for _, ok := range []string{oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleMember} {
+	// Derived from oidc.Roles, not re-typed: the whole point of exporting the
+	// set is that adding a fourth role changes ONE list, and every guard that
+	// depends on it moves with it rather than agreeing by coincidence.
+	if len(oidc.Roles) != 3 {
+		t.Fatalf("oidc.Roles has %d entries (%v); a role added or removed here must be reckoned with at every "+
+			"surface that gates on the closed set — the role_mappings.role CHECK (internal/db's "+
+			"TestClosedEnumChecksMatchConstants derives from this slice), roleRank's ordering, and "+
+			"validDefaultRole's stricter refusal in cmd/wardynd", len(oidc.Roles), oidc.Roles)
+	}
+	for _, ok := range oidc.Roles {
 		if !oidc.ValidRole(ok) {
 			t.Fatalf("ValidRole(%q) = false", ok)
 		}

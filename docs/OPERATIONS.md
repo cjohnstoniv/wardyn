@@ -149,12 +149,32 @@ makes `wardynd` REFUSE TO START: restoring it means replaying the initial schema
 which is a far bigger blast radius than stopping and telling you. Either way the
 process no longer continues silently on a table whose guards are gone.
 
+The same read also asks what ELSE is armed on that table, because the shipped
+guards being present is not the same as nothing standing beside them. A
+**row-level `BEFORE INSERT` trigger Wardyn does not ship** makes `wardynd`
+REFUSE TO START, whatever it is called: such a trigger is handed `NEW` and
+whatever it returns is what Postgres stores, so it can rewrite any field, choose
+`prev_hash`/`row_hash`, or `RETURN NULL` to make the event vanish — and the row
+it leaves behind is internally consistent, so the verify sweep below reports the
+log **clean**. Any other unexpected trigger (`AFTER`, statement-level, or bound
+to another event) cannot alter the stored row, so it is named in the boot log at
+ERROR rather than refused — a deployment may legitimately hang a replication or
+notify trigger off this table.
+
 A trigger you have hardened with `ALTER TABLE … ENABLE ALWAYS TRIGGER`
 (`tgenabled='A'`, so it fires even under `session_replication_role = replica` —
 the bypass the sweep otherwise only catches after the fact) is left **exactly as
-it is**: the boot check counts `'A'` as firing, never re-creates it as plain
-`'O'`, and never refuses over it. `'D'` (disabled) and `'R'` (replica-only, which
-does not fire for ordinary writes) are correctly read as not in force.
+it is**, and that holds across an upgrade, not just across a restart. The boot
+check counts `'A'` as firing, never re-creates it as plain `'O'`, and never
+refuses over it. `Migrate` reads which triggers are hardened *before* it applies
+anything and re-applies `ENABLE ALWAYS` to any the run reverted: every migration
+that redefines an audit trigger ends in `CREATE TRIGGER`, which always yields
+`'O'`, so without that the 0.7 upgrade would have quietly stripped the hardening
+off a 0.6.x deployment that had installed it. The restore is narrow — a trigger
+you never hardened is never promoted to `'A'` on your behalf — and if it cannot
+be re-applied the boot log says so at ERROR and names the statement to run.
+`'D'` (disabled) and `'R'` (replica-only, which does not fire for ordinary
+writes) are correctly read as not in force.
 
 Completeness survives an outage too. When a Postgres write fails, the event is
 not dropped: it is fsync'd, one JSON line at a time, to a local append-only spool
@@ -190,7 +210,10 @@ move back onto the spool path once the cause is fixed. A store that is simply
 down accepts nothing, so nothing is ever quarantined during an outage. Each move
 logs at ERROR with the event's id and action and increments
 `wardyn_audit_spool_quarantined_total`: alert on it, because a spool that has
-drained back to 0 no longer implies the queryable trail is complete.
+drained back to 0 no longer implies the queryable trail is complete. The counter
+is **re-read from the sidecar at startup**, so it survives a restart the way the
+condition it reports does — a deploy or a crash loop does not clear the alert
+while the events are still sitting in `<spool>.quarantine`.
 
 **Two limits of that rule, stated.** First, the probe needs a line BEHIND the
 suspect to land, so two or more *adjacent* unacceptable lines still wedge — the
@@ -210,6 +233,50 @@ any Wardyn bug since the chain trigger began taking the serializing lock: an
 external session that inserted into `audit_events` and left its transaction open
 holds it. A pass that times out replays nothing, counts nothing against any line
 (a store that never answered has rejected nothing), and retries on the next tick.
+**The synchronous side is bounded too, at 5 seconds** (`db.AuditChainLockTimeout`).
+Since `0056` the chain trigger takes that lock on *every* insert into
+`audit_events`, so one transaction that inserted an audit row and stayed open
+holds up every audit write in the process — and nothing in Wardyn has to
+misbehave for that: a psql session, a seed script, a paused migration tool will
+do. A request-path audit write that cannot get the lock within 5s **fails, and
+the event goes to the local spool** to be replayed when the lock clears — the
+same degraded path a store outage uses, not a dropped event. The one exception is
+a **credential mint**, whose audit row shares the mint's transaction: there the
+timeout refuses the mint, because a credential that could not be audited is not
+one to issue. The bound is `lock_timeout`, set `LOCAL` on the audit transaction,
+so it fires only while WAITING for the lock — a slow-but-progressing insert is
+never aborted by it — and it is deliberately shorter than the drain's 15s pass,
+so the request path yields before the background drain does.
+
+**Set the two server-side timeouts** on the database Wardyn uses. Wardyn bounds
+its own waits, but the *holder* is the actual problem, and only Postgres can end
+it: `idle_in_transaction_session_timeout` (a few minutes) reaps the stray open
+transaction that causes this, and `statement_timeout` bounds anything else that
+runs away. Neither is set by default (`SHOW idle_in_transaction_session_timeout`
+returns `0` on a stock server), and Wardyn does not set them for you — they are
+cluster policy, and a value that suits your maintenance jobs is not one Wardyn
+can guess.
+
+**Scraping `/metrics` is not one of the things that lock stalls**: the spool
+gauges are served from counters, not from a read of the spool file, so a scrape
+answers in constant time while a pass is stuck on a blocked store. It has to —
+those gauges are how you see the outage, and a scrape that waited on the drain
+lost the whole response, `wardyn_store_up` included, once per tick for as long
+as the condition lasted.
+
+**Recovering a backlog costs what the backlog costs.** A pass replays a bounded
+batch and retires it by advancing a read offset; the file is physically compacted
+only once the replayed prefix is at least as large as what is left, so each
+compaction halves it and a full drain writes at most about twice the backlog
+rather than once per batch. The consequence to know is that mid-drain the spool
+FILE can still hold lines that have already reached the store — `wc -l` on it is
+not the backlog, `wardyn_audit_spool_lines` is — and that an unclean stop
+mid-recovery can replay the not-yet-reclaimed prefix, which the trail records as
+duplicate events with the same `id`. The spool has always been at-least-once for
+this reason (a crash between the store write and the trim); this widens that
+window in exchange for not fsyncing the whole backlog once per batch onto the
+volume the database is recovering on. Duplicates are the benign direction: `seq`
+still identifies every row, and each one verifies.
 
 ### The hash chain — what a rewritten row looks like
 
@@ -218,23 +285,45 @@ and the role split hardens that against the app role. Neither binds a **table
 owner or superuser**, who can `ALTER TABLE … DISABLE TRIGGER` and rewrite a row —
 the residual `0007_audit_least_privilege.sql` states plainly. The role-split check
 that reports this posture at boot (`AuditDDLProtected`) counts THREE ways to
-bypass, not two: superuser, membership in the owner role, and the **`TRIGGER`
-privilege** on `audit_events`. The third is the quiet one — a role granted
-`TRIGGER` cannot drop the shipped guards, but it can add a BEFORE INSERT trigger
-of its own whose name sorts after `audit_events_chain` (same-event row triggers
-fire in name order) and overwrite `prev_hash`/`row_hash` on the way in, minting
-rows that hash to whatever it says while every shipped guard is still armed. So a
-deploy that grants `TRIGGER` back is reported as NOT protected.
+bypass, not two: membership in a superuser role, membership in the owner role,
+and the **`TRIGGER` privilege** on `audit_events`. All three are **membership**
+tests, not attribute lookups — `GRANT some_admin_role TO app_role`, the ordinary
+managed-Postgres migration shape, leaves `app_role` with `rolsuper = false` while
+it can still `SET ROLE` and `ALTER TABLE … DISABLE TRIGGER`, and the chain is
+followed to any depth whether or not the role `INHERIT`s. Membership in
+`pg_write_all_data` is deliberately **not** counted: it confers
+`INSERT`/`UPDATE`/`DELETE`, but the append-only guard is a trigger rather than a
+privilege and still refuses both — counting it would understate the posture just
+as badly as missing a superuser overstates it. The third is the quiet one — a role granted
+`TRIGGER` cannot drop the shipped guards, but it can add a row-level BEFORE
+INSERT trigger of its own and rewrite the row on the way in, minting records that
+say whatever it likes while every shipped guard is still armed. Name order is
+**not** what makes that work: a trigger sorting *after* `audit_events_chain`
+(same-event row triggers fire in name order) runs last and can overwrite
+`prev_hash`/`row_hash` directly, but one sorting *before* it is easier still —
+it rewrites `NEW` and the shipped chain trigger then hashes the forgery for it.
+Either way the stored row is self-consistent and the verify sweep reports clean,
+which is why the boot check now refuses to start over ANY foreign row-level
+BEFORE INSERT trigger on this table. So a deploy that grants `TRIGGER` back is
+reported as NOT protected.
 
 **The app role's grant set does not grow to keep the chain working.** `INSERT`
 and `SELECT` on `audit_events` is still the whole of it. The chain trigger
 allocates the row's `seq` itself (so position and chain link are one decision —
 see the serialization paragraph below), which is a privileged operation the
-identity default never was, so the trigger runs `SECURITY DEFINER` with a pinned
-`search_path` (`0057_audit_chain_security_definer.sql`): the sequence read
-happens as the *owner*, not as whoever inserted. Nothing is widened for the app
-role — a trigger function cannot be called directly — and a split-role deploy
-needs no new `GRANT`. Migration
+identity default never was, so the trigger runs `SECURITY DEFINER`
+(`0057_audit_chain_security_definer.sql`): the sequence read happens as the
+*owner*, not as whoever inserted. Nothing is widened for the app role — a trigger
+function cannot be called directly — and a split-role deploy needs no new
+`GRANT`. Because it runs with elevated rights it resolves no name through a
+search_path it does not control: every table and function it touches is
+**schema-qualified to the schema Wardyn was migrated into**, read from the
+catalog when the migration applies, and its pinned `search_path` ends in
+`pg_temp` so the session temporary schema is searched last rather than first
+(`0058_audit_chain_schema_qualified.sql`). That is what keeps the chain working
+on an install whose objects are not in `public`, and what stops a caller
+shadowing `audit_events` with a temp table of their own to choose their row's
+`prev_hash`. Migration
 `0047_audit_hash_chain.sql` does not close that hole; it makes a single use of it
 **visible**. Every row written from `0047` onward carries two hex columns:
 
@@ -283,6 +372,17 @@ chained row. Run it from cron and alert on `ok: false`: a broken chain answers
 **200** with `ok: false`, `broken_seq` and `reason` (the sweep succeeded; it
 found something), while `5xx` means the sweep could not run. `head_hash` is the
 value to diff against your SIEM's copy.
+
+**One sweep at a time.** The audit log cannot be pruned, so this is the endpoint
+whose cost only ever rises — and a retrying client or an overlapping cron would
+otherwise turn one operator action into several full re-hash passes, each holding
+a database connection. A request that arrives while a sweep is running is
+refused with **429** and a `Retry-After`; it is not queued. Point your cron at a
+single caller and let a 429 mean "the answer you want is already being
+computed". There is deliberately no server-side time limit on a sweep — a fixed
+one would cap how large a log can be verified at all — so the bound is your
+client's: the sweep is walked in pages and stops between them when the caller
+goes away.
 
 **A break is permanent.** The sweep stops at the first broken row and the log is
 append-only, so every later sweep reports that same `broken_seq` forever — no
@@ -374,7 +474,8 @@ counter only moves on success — a dead store and an idle cluster otherwise scr
 identically: `wardyn_store_up` (1 when Postgres answers the same bounded ping
 `/readyz` makes) and `wardyn_audit_spool_lines` (audit events waiting in the local
 JSONL fallback spool — a value that never returns to 0 means the drain loop is not
-working). Beside them, `wardyn_audit_spool_quarantined_total` counts events the
+working; it is the count of events still to replay, which mid-drain can be lower
+than the line count of the file on disk). Beside them, `wardyn_audit_spool_quarantined_total` counts events the
 store permanently refused and the drain moved aside (see the spool paragraph
 above): non-zero means the trail is missing those events even though the spool
 drained. Scrape with any Prometheus `authorization` config carrying the admin
