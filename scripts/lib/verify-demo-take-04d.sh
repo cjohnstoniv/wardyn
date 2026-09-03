@@ -157,11 +157,18 @@ rm -f /tmp/_demo_v04d.$$
 
 head_ "Video 04d · the narration"
 if [[ -s "${V04D_TL}" ]]; then
-  # 68 captions + 1 spoken chapter card; the floor is the script's own (§5 arm
-  # 13). Two silent cards speak nothing and are not counted.
+  # 68 captions + 1 spoken chapter card = 69. Two silent cards speak nothing and
+  # are not counted.
+  #
+  # 62, RAISED FROM the script's 55 (§5 arm 13). Act 5 is 8 of those 69 lines,
+  # so a floor of 55 clears with the entire close missing — and the close is
+  # where this episode's own headline claim lands. 62 is 69 less the act-5
+  # block, so a take that stops at C57 fails here instead of grading green on
+  # four acts of a five-act episode; it is still ~90% of the total, the margin
+  # the 00/02/05/07 floors use.
   V04D_CUES="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("cues",[])))' "${V04D_TL}" 2>/dev/null || echo 0)"
-  [[ "${V04D_CUES}" -ge 55 ]] && ok "the episode spoke ${V04D_CUES} lines (floor 55)" \
-    || bad "only ${V04D_CUES} narration cues — the take died mid-act (floor 55)"
+  [[ "${V04D_CUES}" -ge 62 ]] && ok "the episode spoke ${V04D_CUES} lines (floor 62)" \
+    || bad "only ${V04D_CUES} narration cues — the take died before the close (floor 62)"
   # Pixels are not gradeable; a silent or died-early take is. Each line below is
   # spoken ONLY after its pollScreen matched, so its presence in the timeline is
   # the receipt that the shell really answered.
@@ -189,6 +196,15 @@ if [[ -s "${V04D_TL}" ]]; then
   grep -q "never enforces a drive's size itself" "${V04D_TL}" \
     && ok "the frozen honesty sentence is on the soundtrack, verbatim" \
     || bad "the honesty sentence is missing or reworded — the size claim shipped without its caveat"
+  # 14 · ACT 5, THE OFFBOARDING CLOSE. Every arm above reads act 1, 3 or 4, so
+  # without this one the reclaim beat — the episode's own headline claim, and
+  # the only place it says what the release does NOT do — could be absent from
+  # a green take. C64 is the last spoken line of the claim (C65 is the hand-off
+  # to 05), and it lands after the preview, the hint and the silent command
+  # card, so its presence is the receipt that the whole close filmed.
+  grep -q "It hands you the name and stands aside" "${V04D_TL}" \
+    && ok "narration reaches the reclaim close (C64) — act 5 filmed to its claim" \
+    || bad "narration never reaches 'It hands you the name and stands aside' — act 5 was cut, and the offboarding claim this episode is titled for never landed"
 else
   bad "no narration timeline at ${V04D_TL} — the take recorded silent or not at all"
 fi

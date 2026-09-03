@@ -28,9 +28,10 @@
  * onto that workspace. It never uses episode 04's `slugify` workspace nor
  * episode 10's `egress-lab` — both of those assert counts THEIR takes earned,
  * and a shared workspace is how two videos end up fighting over one permanent
- * grant. The close DELETES both nouns on camera; afterAll deletes them again,
- * best-effort, so a take that died mid-episode still leaves the stack clean for
- * the next one.
+ * grant. The close DELETES both nouns on camera; afterAll sweeps whichever of
+ * the two the close did NOT reach, so a take that died mid-episode still leaves
+ * the stack clean for the next one WITHOUT writing the audit row the grader
+ * reads as the close's own beat (see teardown()).
  *
  * WHAT IT LEAVES BEHIND. Finished runs. `meet-wardyn`'s three runs (the
  * terminal run, the recording, the confined replay) stay on the Runs board for
@@ -92,12 +93,28 @@ test.describe.configure({ mode: "serial" });
 // This episode's nouns. Deliberately LOCAL, not in task.ts — see the header.
 // ---------------------------------------------------------------------------
 
-/** The workspace act 1 creates on camera, and the close deletes on camera. */
-const WORKSPACE = "meet-wardyn";
-
-/** Its host directory: EMPTY, under the workspaces root, recreated every take. */
+/** The workspace directory: EMPTY, under the workspaces root, recreated every
+ *  take. Overridable, because a box whose $HOME is not where the demo tree
+ *  lives still has to be able to shoot this episode. */
 const WORKSPACE_PATH =
   process.env.WARDYN_DEMO_MEET_WORKSPACE || `${process.env.HOME}/wardyn-demo/meet-wardyn`;
+
+/**
+ * The workspace act 1 creates on camera, and the close deletes on camera.
+ *
+ * DERIVED FROM THE PATH, never a second literal: beat 1.12's whole claim is
+ * that the Name field auto-fills from the directory's basename
+ * (add-workspace-dialog.tsx's deriveName), and act 1 asserts exactly that —
+ * `expect(nameField).toHaveValue(WORKSPACE)`. Held as its own constant, that
+ * assertion silently made WARDYN_DEMO_MEET_WORKSPACE an override with exactly
+ * one legal value: any path whose last segment was not `meet-wardyn` failed the
+ * take on a comparison that is supposed to be about the PRODUCT. Deriving it
+ * the same way the dialog does keeps the override honest and leaves the
+ * assertion pointed where it belongs. The trailing-slash strip mirrors
+ * baseNameFrom's own (add-workspace-dialog.tsx:44-48) so a path spelled with
+ * one still derives a name rather than an empty string.
+ */
+const WORKSPACE = WORKSPACE_PATH.replace(/\/+$/, "").split("/").pop()!;
 
 /** Act 2's run. Title is the only required field on the Terminal lane. */
 const RUN_TITLE = "Meet Wardyn";
@@ -207,7 +224,34 @@ async function resetFixtures(page: Page): Promise<void> {
 }
 
 /**
- * The teardown the close already performs on camera, run again as a net.
+ * Did the CLOSE delete this noun on camera?
+ *
+ * Set the moment each on-camera delete is confirmed by the screen, and read by
+ * teardown() below, which skips whichever DELETE has already been filmed.
+ *
+ * WHY THE FLAGS EXIST AT ALL. The close's whole claim is "Nothing here
+ * outlives your say-so", and the grader's evidence for it is the
+ * `workspace.delete` / `secret.delete` audit rows. afterAll issued the
+ * identical two DELETEs unconditionally, which wrote the identical two rows —
+ * so a take that died at the `Delete this workspace` click produced exactly
+ * the trail of a finished one, and graded green on a beat the camera never
+ * saw. With these, a row exists only because the beat ran.
+ *
+ * ONE PER NOUN, not one for the close: the two deletes are separated by a
+ * navigation to /secrets, and a take that dies between them must still have
+ * its second noun swept or the next take opens on a leftover row.
+ *
+ * The net is still not a lie detector — a take dying between the two beats
+ * leaves the second row to afterAll — so the grader ALSO greps the narration
+ * for C70, the last line of the close, which no teardown can speak. See
+ * scripts/lib/verify-demo-take-00.sh's narration block.
+ */
+let closeDeletedWorkspace = false;
+let closeDeletedSecret = false;
+
+/**
+ * The teardown the close already performs on camera, run again as a net for
+ * whichever nouns the close did NOT reach.
  *
  * A take that dies in act 3 leaves a workspace row carrying an `always` grant
  * and a secret nobody deleted, and the NEXT take of this episode would then
@@ -217,25 +261,32 @@ async function resetFixtures(page: Page): Promise<void> {
  * a teardown that throws would fail a take that has already finished filming.
  */
 async function teardown(): Promise<void> {
+  // Nothing left to sweep: the close filmed both deletes, and re-issuing them
+  // would only write a second pair of rows over the beat's own.
+  if (closeDeletedWorkspace && closeDeletedSecret) return;
   // PLAIN fetch, not page.request, and sweep.ts's shape: afterAll hooks run in
   // DECLARATION order, and stage.ts's — declared first, because importing it is
   // how a spec gets the rig — is the one that closes the context. By the time
   // this runs the page may already be gone, so the teardown must not need one.
   const api = `${process.env.WARDYN_DEMO_BASE_URL || "http://localhost:8080"}/api/v1`;
   const headers = { "content-type": "application/json", ...(apiHeaders() ?? {}) };
-  const res = await fetch(`${api}/workspaces`, { headers }).catch(() => null);
-  if (res?.ok) {
-    const body = (await res.json().catch(() => null)) as unknown;
-    const items = (
-      Array.isArray(body) ? body : ((body as { items?: unknown })?.items ?? [])
-    ) as { id?: string; name?: string }[];
-    for (const w of Array.isArray(items) ? items : []) {
-      if (w?.id && w.name === WORKSPACE) {
-        await fetch(`${api}/workspaces/${w.id}`, { method: "DELETE", headers }).catch(() => {});
+  if (!closeDeletedWorkspace) {
+    const res = await fetch(`${api}/workspaces`, { headers }).catch(() => null);
+    if (res?.ok) {
+      const body = (await res.json().catch(() => null)) as unknown;
+      const items = (
+        Array.isArray(body) ? body : ((body as { items?: unknown })?.items ?? [])
+      ) as { id?: string; name?: string }[];
+      for (const w of Array.isArray(items) ? items : []) {
+        if (w?.id && w.name === WORKSPACE) {
+          await fetch(`${api}/workspaces/${w.id}`, { method: "DELETE", headers }).catch(() => {});
+        }
       }
     }
   }
-  await fetch(`${api}/secrets/${encodeURIComponent(SECRET_NAME)}`, { method: "DELETE", headers }).catch(() => {});
+  if (!closeDeletedSecret) {
+    await fetch(`${api}/secrets/${encodeURIComponent(SECRET_NAME)}`, { method: "DELETE", headers }).catch(() => {});
+  }
 }
 
 /**
@@ -670,7 +721,16 @@ test("V00 act 3 — secrets stay secret", async () => {
   // echoes what was typed — so unlike 03a's demo-card probe this cannot assert
   // the name is absent. The zero IS that assertion, from the shell's own mouth;
   // what stays checkable here is the VALUE, which must appear nowhere.
-  await pollScreen(screen, /^0$/m, "the environment probe never printed a count");
+  //
+  // `/^\s*0\s*$/m`, not `/^0$/m`: pollScreen reads the xterm's innerText, whose
+  // rows carry whatever padding the renderer leaves on them, and this is the
+  // only ANCHORED screen regex in the suite — every other one matches a
+  // substring, so none of them has ever had to care. A bare `^0$` needs the
+  // count to be the row's only character; the tolerant form still refuses a
+  // "10" or a "0 files", which is all the anchors are here for.
+  // REHEARSAL: if the count row does not match, print the innerText once and
+  // pin the regex to what this image's shell actually leaves on the line.
+  await pollScreen(screen, /^\s*0\s*$/m, "the environment probe never printed a count");
   await assertSentinelAbsent(page, "the run's terminal, after the environment probe");
   await caption(page, "Zero. The run never received it."); // C43a
   await beat(page, BEAT_SHORT);
@@ -950,7 +1010,17 @@ test("V00 act 4 — record a policy", async () => {
   // and 0 means the deny never landed.
   const caught = card.getByTestId("verify-session-blocked");
   await expect(caught).toContainText(VILLAIN_HOST);
-  await expect(caught).toContainText("blocked");
+  // THE PER-HOST CHIP, exact-matched — not `toContainText("blocked")`, which
+  // could not fail: the section's own trailing paragraph ends "otherwise leave
+  // it blocked" (record-pane.tsx:931-935), so the word is on screen whatever
+  // the replay found. The chip beside the host is the thing that carries the
+  // fact, and it reads "blocked" only for a DENIED attempt — a held-but-
+  // undecided one renders "pending approval" (record-pane.tsx:916-918), which
+  // is the state C64 must not be spoken over.
+  await expect(
+    caught.getByText("blocked", { exact: true }),
+    `${VILLAIN_HOST} is listed but not chipped 'blocked' — the deny did not reach the confined replay's verdict`,
+  ).toBeVisible();
   await centerInFrame(caught);
   await spotlight(page, caught);
   await expect(
@@ -981,6 +1051,9 @@ test("V00 close", async () => {
   await expect(wsConfirm).toContainText(WORKSPACE);
   await act(page, wsConfirm.getByRole("button", { name: /^Delete workspace$/ }));
   await expect(page).toHaveURL(/\/workspaces$/, { timeout: 30_000 });
+  // The screen confirmed it, so the `workspace.delete` row the grader reads is
+  // THIS beat's. afterAll must not write a second one over it (see the flags).
+  closeDeletedWorkspace = true;
 
   await page.goto("/secrets");
   const row = page.getByRole("row", { name: new RegExp(SECRET_NAME) });
@@ -991,6 +1064,9 @@ test("V00 close", async () => {
   await expect(secConfirm).toContainText(SECRET_NAME);
   await act(page, secConfirm.getByRole("button", { name: /^Delete secret$/ }));
   await expect(page.getByRole("row", { name: new RegExp(SECRET_NAME) })).toHaveCount(0, { timeout: 30_000 });
+  // Same reason as the workspace above: the row is gone from the screen, so the
+  // `secret.delete` the grader reads is this beat's.
+  closeDeletedSecret = true;
   await assertSentinelAbsent(page, "Secrets screen, after the secret is deleted");
 
   // The frozen positioning string, imported rather than retyped

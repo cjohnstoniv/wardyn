@@ -41,11 +41,18 @@
  *      REFUSED_BACKEND naming the flag:
  *        helm --kube-context kind-wardyn-quickstart upgrade wardyn \
  *          deploy/helm/wardyn -n wardyn --reuse-values \
- *          --set k8s.userDrives.enabled=true \
+ *          --set userDrives.enabled=true \
  *        && kubectl --context kind-wardyn-quickstart -n wardyn \
  *          rollout status deploy/wardyn
  *      C8 names the flag's EFFECT ("this cluster's chart lets Wardyn ask it for
  *      disks"), never the flag.
+ *      THE KEY IS TOP-LEVEL. 04d-script.md §5 #2 spells it
+ *      `k8s.userDrives.enabled`, and this file carried that spelling too; the
+ *      chart reads `.Values.userDrives` (values.yaml:411, rbac.yaml:60, and
+ *      the Makefile's own render gates at :541,567-568). A `--set
+ *      k8s.userDrives.enabled=true` upgrade SUCCEEDS and sets a key nothing
+ *      reads, so the flip silently does not happen and 3.11 dies six minutes
+ *      into the take. Owner ledger: the script's §5 #2 needs the same fix.
  *   3. NO user_drives / user_drive_grants rows, so beat 1.4 films the real
  *      empty state.
  *   4. SINGLE-NODE kind. Its default `standard` class is rancher.io/local-path
@@ -56,6 +63,12 @@
  *      IGNORES requests.storage, which is exactly what C18b's "here, it does
  *      not" and the frozen C20 rely on.
  *   5. WARDYN_DEMO_SKIP_MODEL=1 — nothing here calls a model.
+ *
+ * 2 AND 4 ARE THE TWO THAT COST A WHOLE TAKE, and were documented here and
+ * enforced nowhere. Both are invisible until minutes in — the flip is only
+ * needed at DISPATCH, so acts 1-2 film clean and 3.11 dies; a multi-node kind
+ * survives all the way to run B's mount. The beforeAll preflight below turns
+ * both into a refusal in the first seconds, before a frame is shot.
  *
  * NO SWEEP, and that is deliberate: 04c does not sweep either (the cluster is
  * one take old), and sweepStaleState() would deny the member's undecided
@@ -75,6 +88,7 @@
  * than let the film drift away from docs/design/user-drives-prompt.md §7.
  */
 
+import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -112,6 +126,19 @@ test.describe.configure({ mode: "serial" });
 const ADMIN = "admin@wardyn.local";
 /** 04c's own member literal. */
 const MEMBER = "member@wardyn.local";
+
+/** The cluster this episode is shot on. Same names and same defaults the
+ *  grader uses (scripts/lib/verify-demo-take-04d.sh), so an operator who
+ *  overrode one for the take does not have to remember a second spelling. */
+const CLUSTER_CONTEXT = process.env.WARDYN_V04D_CONTEXT || "kind-wardyn-quickstart";
+const CLUSTER_NAMESPACE = process.env.WARDYN_V04D_NAMESPACE || "wardyn";
+
+/** The chart flip, verbatim from this file's header — printed by the preflight
+ *  so a refusal hands back the command that fixes it rather than a diagnosis. */
+const CHART_FLIP =
+  `helm --kube-context ${CLUSTER_CONTEXT} upgrade wardyn deploy/helm/wardyn ` +
+  `-n ${CLUSTER_NAMESPACE} --reuse-values --set userDrives.enabled=true ` +
+  `&& kubectl --context ${CLUSTER_CONTEXT} -n ${CLUSTER_NAMESPACE} rollout status deploy/wardyn`;
 
 /** A single lowercase word, so the PVC slug is unambiguous and TTS reads it
  *  cleanly. Collides with nothing in 00 / 04c / 12b. */
@@ -227,6 +254,124 @@ function writeHandoff(): void {
 function runIdFrom(url: string): string {
   return url.match(/\/runs\/([0-9a-f-]{8,})/i)?.[1] ?? "";
 }
+
+// ---------------------------------------------------------------------------
+// The preflight — the two staged preconditions, asserted instead of documented
+// ---------------------------------------------------------------------------
+
+/**
+ * One `kubectl` read against the take's cluster, trimmed — or "" if kubectl is
+ * not on PATH, the context is unknown, or the read is refused.
+ *
+ * NEVER throws. Whether a blank answer is fatal is the preflight's decision,
+ * arm by arm, and two of the three arms below treat it differently.
+ *
+ * The cluster is read the same way the grader reads it
+ * (scripts/lib/verify-demo-take-04d.sh's own kubectl/--context calls): nothing
+ * the browser can reach exposes a node list or a Role, so the page context is
+ * not an option for either.
+ */
+function kubectlOut(...args: string[]): string {
+  try {
+    return execFileSync("kubectl", ["--context", CLUSTER_CONTEXT, ...args], {
+      encoding: "utf8",
+      timeout: 30_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return "";
+  }
+}
+
+/** The cluster's admin bearer, out of the install's own Secret — the same
+ *  source and the same fallbacks the grader uses. "" when none is reachable. */
+function clusterAdminToken(): string {
+  const env = process.env.WARDYN_ADMIN_TOKEN || process.env.WARDYN_DEMO_TOKEN;
+  if (env) return env;
+  const b64 = kubectlOut("-n", CLUSTER_NAMESPACE, "get", "secret", "wardyn-auth", "-o", "jsonpath={.data.admin-token}");
+  return b64 ? Buffer.from(b64, "base64").toString("utf8").trim() : "";
+}
+
+/**
+ * Refuse the take NOW if either of the two expensive preconditions is missing.
+ *
+ * Both were in the header and in nothing else, and both fail LATE: the chart
+ * flip is only consulted at dispatch, so acts 1-2 film clean and beat 3.11
+ * dies six minutes in as a REFUSED_BACKEND; a multi-node kind survives further
+ * still, all the way to run B's mount, where ReadWriteOnce declines to
+ * reattach and the read-back — which IS this episode — has nothing to show.
+ *
+ * Registered AFTER stage.ts's own beforeAll (import order), so stage() is
+ * assigned by the time this runs, and re-guarded on WARDYN_DEMO for the same
+ * reason 00's hook is: a file-level test.skip must not be the only thing
+ * standing between a stray `pnpm e2e` and someone's cluster.
+ */
+test.beforeAll(async () => {
+  if (!process.env.WARDYN_DEMO) return;
+  const token = clusterAdminToken();
+
+  // 1 · THE DRIVES SURFACE ANSWERS. The cheapest proof that this is a build
+  // with the drives API, reachable at the base URL the take is pointed at,
+  // and that the caller can read it — which is act 1's very first screen. It
+  // does NOT prove the chart flip (that is arm 3): GET /drives reads the
+  // database, and the flip only widens the runner's Role in the cluster.
+  const res = await stage().request.get("/api/v1/drives", {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
+  expect(
+    res.ok(),
+    `GET /api/v1/drives answered ${res.status()} on ${process.env.WARDYN_DEMO_BASE_URL || "http://localhost:8080"}` +
+      ` — act 1 opens on that screen. A 401/403 means no admin bearer reached it (export WARDYN_ADMIN_TOKEN, or let this` +
+      ` spec read Secret wardyn-auth from ${CLUSTER_CONTEXT}/${CLUSTER_NAMESPACE}); a 404 means this is not a build with` +
+      ` user drives; a connection error means the take is pointed at the wrong stack.`,
+  ).toBe(true);
+
+  // 2 · SINGLE-NODE (header §4). kind's default `standard` class is
+  // rancher.io/local-path with WaitForFirstConsumer: the claim binds to
+  // whichever node schedules run A's pod, and on a second node run B's
+  // ReadWriteOnce mount never reattaches.
+  //
+  // Read from kubectl, because no page-reachable route lists nodes. When
+  // kubectl cannot answer, the operator may attest with WARDYN_V04D_NODES —
+  // and if neither is available this arm FAILS rather than passing on
+  // silence, which is the whole bug it exists for.
+  const nodes = kubectlOut("get", "nodes", "-o", "jsonpath={.items[*].metadata.name}");
+  const nodeCount = nodes ? nodes.split(/\s+/).filter(Boolean).length : Number(process.env.WARDYN_V04D_NODES ?? NaN);
+  expect(
+    Number.isFinite(nodeCount) && nodeCount > 0,
+    `could not count the nodes of ${CLUSTER_CONTEXT}: kubectl answered nothing and WARDYN_V04D_NODES is unset.` +
+      ` Run \`kubectl --context ${CLUSTER_CONTEXT} get nodes\` and set WARDYN_V04D_NODES to the count — a multi-node` +
+      ` cluster loses run B's read-back, and that beat is the episode.`,
+  ).toBe(true);
+  expect(
+    nodeCount,
+    `${CLUSTER_CONTEXT} has ${nodeCount} nodes; 04d needs ONE. local-path binds the claim to the node that scheduled` +
+      ` run A, so on a second node run B's ReadWriteOnce mount will not reattach and the read-back at 4.6 — the whole` +
+      ` point of the episode — cannot film. Rebuild the cluster single-node before the take.`,
+  ).toBe(1);
+
+  // 3 · THE CHART FLIP (header §2). The flag is only consulted at DISPATCH, so
+  // nothing before beat 3.11 notices it is off.
+  //
+  // Asserted on POSITIVE EVIDENCE OF ABSENCE only: if the namespace's Roles
+  // read back at all and none of them carries persistentvolumeclaims, the flip
+  // is off. A blank read (no kubectl, no permission, or RBAC provisioned
+  // out-of-band with k8s.rbac.create=false) skips this arm rather than failing
+  // a correct cluster on a read the spec was never entitled to.
+  const roles = kubectlOut("-n", CLUSTER_NAMESPACE, "get", "roles", "-o", "jsonpath={.items[*].rules[*].resources}");
+  if (roles) {
+    expect(
+      roles.includes("persistentvolumeclaims"),
+      `no Role in ${CLUSTER_CONTEXT}/${CLUSTER_NAMESPACE} grants persistentvolumeclaims, so the runner cannot ask for` +
+        ` a disk and beat 3.11 will die as a REFUSED_BACKEND six minutes into the take. Throw the chart flip first:\n` +
+        `  ${CHART_FLIP}`,
+    ).toBe(true);
+  } else {
+    console.warn(
+      `V04d: could not read Roles in ${CLUSTER_NAMESPACE} — the chart flip is unverified. If 3.11 refuses, run:\n  ${CHART_FLIP}`,
+    );
+  }
+});
 
 /**
  * The member's terminal-run recipe, up to (but not including) the drive
@@ -604,6 +749,17 @@ test("V04d act 3 — the member writes a note, and ends the run", async () => {
   await expect(mount).toBeChecked();
   // The path IS in the hint, under the checkbox: NR_HINT is
   // `"{name}" at /home/agent/drive — {size}, {mode}.`
+  //
+  // REHEARSAL PIN — ONE RING, NOT TWO. NR_HINT and NR_RW_NOTE are two
+  // sentences inside ONE <p> (workspace-card.tsx:119-126), so `hint` and
+  // `rwNote` below resolve to the SAME element and C42 and C43 spotlight an
+  // identical rectangle. The beat table reads as two rings; the film has one,
+  // held across both lines. That is correct and expected — do not chase it as
+  // a missed ring in the first take's review, and do not "fix" it by ringing
+  // the whole nr-drive block for one of them (a wider ring on the second beat
+  // reads as the spotlight losing its place). Splitting the copy into two
+  // elements is a ui/src change and is deliberately NOT made here: the mock
+  // round owns it, as a 0.7.1 item.
   const hint = driveBlock.getByText(DRIVE_MEMBER.NR_HINT(DRIVE_NAME, SIZE, DRIVES.MODE_RW_INLINE));
   await expect(hint).toBeVisible();
   await spotlight(page, hint);
@@ -719,7 +875,14 @@ test("V04d act 4 — a brand-new sandbox, and the same directory", async () => {
   );
 
   // The hint's {mode} and the sentence under it flip TOGETHER with the toggle,
-  // so neither promises persistence a read-only mount cannot give.
+  // so neither promises persistence a read-only mount cannot give — literally
+  // together: they are one <p> (workspace-card.tsx:119-126).
+  //
+  // REHEARSAL PIN — ONE RING, NOT TWO, the C42/C43 note again. C49's ring
+  // sits on the read-only toggle (act()'s own), and C50 rings the paragraph;
+  // but a reviewer reading the beat table for act 4 should expect the hint and
+  // the read-only sentence to light up as a single rectangle, exactly as they
+  // did at C42/C43.
   const roHint = driveBlock.getByText(DRIVE_MEMBER.NR_HINT(DRIVE_NAME, SIZE, DRIVES.MODE_RO_INLINE));
   await expect(roHint).toBeVisible();
   const roNote = driveBlock.getByText(DRIVE_MEMBER.NR_RO_NOTE);

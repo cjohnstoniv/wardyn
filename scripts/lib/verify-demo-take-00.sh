@@ -80,7 +80,12 @@ while read -r k v extra; do
     V00_ALWAYS_WRITTEN) [[ "$v" == True ]] && ok "${V00_REACH} written onto ${V00_WS} by an approval (source approval:…)" || bad "${V00_REACH} never reached ${V00_WS}'s allowlist — act 2's 'Always' did not persist, so beat 2.18's receipt is not real" ;;
     V00_PROMOTED)      [[ "$v" == True ]] && ok "${V00_JOB} promoted onto ${V00_WS} from the recording (source record:…)" || bad "${V00_JOB} was never promoted — act 4's 'Approve 1 observed host' did not land" ;;
     V00_GRANTED)       printf '    allowlist writes: %s\n' "$v" ;;
-    V00_TORN_DOWN)     [[ "$v" == True ]] && ok "${V00_WS} deleted on camera — the close's own promise" || bad "no workspace.delete for ${V00_WS} — the take ended before its teardown, and 'nothing here outlives your say-so' went unproven" ;;
+    # NOT "on camera", deliberately. The spec keeps a best-effort afterAll net
+    # (00-meet-wardyn.spec.ts's teardown()), and a take that filmed only ONE of
+    # its two deletes still lets that net write the other's row — so this arm
+    # can tell that the ROW exists and no more. That the close actually filmed
+    # is the C70 arm's job, in the narration block at the bottom.
+    V00_TORN_DOWN)     [[ "$v" == True ]] && ok "${V00_WS} was deleted (workspace.delete)" || bad "no workspace.delete for ${V00_WS} — neither the close nor its teardown net removed it, and 'nothing here outlives your say-so' went unproven" ;;
   esac
   : "${extra:-}"
 done < /tmp/_demo_v00.$$
@@ -146,17 +151,33 @@ while read -r k v; do
   case "$k" in
     V00_SECRET_WRITTEN) [[ "$v" == True ]] && ok "${V00_SECRET} stored on camera (secret.write)" || bad "no secret.write for ${V00_SECRET} — act 3's save never landed" ;;
     V00_SECRET_READ)    [[ "$v" == False ]] && ok "no secret.read for ${V00_SECRET} — nothing read that value back" || bad "A secret.read ROW EXISTS for ${V00_SECRET} — 'no screen and no run can read it back' is false" ;;
-    V00_SECRET_DELETED) [[ "$v" == True ]] && ok "${V00_SECRET} deleted on camera — the close's own promise" || bad "no secret.delete for ${V00_SECRET} — the take ended before its teardown" ;;
+    # NOT "on camera", for the same reason V00_TORN_DOWN is not — see there.
+    V00_SECRET_DELETED) [[ "$v" == True ]] && ok "${V00_SECRET} was deleted (secret.delete)" || bad "no secret.delete for ${V00_SECRET} — neither the close nor its teardown net removed it" ;;
   esac
 done < /tmp/_demo_v00c.$$
 rm -f /tmp/_demo_v00c.$$
 
 # A write-only store that logged the value would be the leak this episode
 # spends a whole act denying. Read across the whole feed, not one action.
+#
+# THE FEED IS ASSERTED BEFORE THE GREP, and that is the whole point of the two
+# steps: `curl … || echo '[]'` hands a down stack, a wrong port and a 500 the
+# same body a clean feed's grep misses on, so "the canary appears nowhere"
+# would otherwise be this arm's verdict on a stack that answered nothing at
+# all — a green leak check over no evidence.
 V00_AUD=$(curl -fsS "${V00_API}/api/v1/audit?limit=1000" 2>/dev/null || echo '[]')
-grep -q "${V00_CANARY}" <<<"${V00_AUD}" \
-  && bad "THE CANARY VALUE APPEARS IN THE AUDIT TRAIL — the secret leaked into the record" \
-  || ok "the canary value appears nowhere in the audit trail"
+V00_AUD_N="$(python3 -c 'import json,sys
+try: d = json.loads(sys.argv[1])
+except Exception: d = []
+ev = d if isinstance(d, list) else d.get("events") or d.get("items") or []
+print(len(ev))' "${V00_AUD}" 2>/dev/null || echo 0)"
+if [[ "${V00_AUD_N:-0}" -le 0 ]]; then
+  bad "the audit feed came back empty — the leak check proved nothing (is the stack up on ${V00_API}?)"
+elif grep -q "${V00_CANARY}" <<<"${V00_AUD}"; then
+  bad "THE CANARY VALUE APPEARS IN THE AUDIT TRAIL — the secret leaked into the record"
+else
+  ok "the canary value appears nowhere in the audit trail (${V00_AUD_N} rows read)"
+fi
 
 head_ "Video 00 · the narration"
 V00_TL="${WARDYN_DEMO_WORK_DIR:-${REPO_ROOT}/ui/test-results/demo-video-00}/narration.json"
@@ -178,6 +199,23 @@ if [[ -s "${V00_TL}" ]]; then
   grep -q "Caught one" "${V00_TL}" \
     && ok "narration reaches the confined replay's verdict (act 4 filmed to the end)" \
     || bad "narration never reaches 'Caught one' — act 4's payoff did not film"
+  # THE CLOSE, AND WHY THE AUDIT ROWS CANNOT STAND IN FOR IT. The spec's
+  # afterAll issues the same two DELETEs the close does and writes the same
+  # two rows, so a take that died at the `Delete this workspace` click grades
+  # green on workspace.delete/secret.delete alone — and still clears the 65-cue
+  # floor, because 68 of the 77 lines are already spoken by then. These two
+  # arms are the ones the net cannot satisfy.
+  #
+  # C65a is the line the close OPENS on, ahead of the delete click.
+  grep -q "Nothing here outlives your say-so" "${V00_TL}" \
+    && ok "narration reaches the close's own promise (C65a)" \
+    || bad "narration never reaches 'Nothing here outlives your say-so' — the take ended before its close, and the two delete rows are the afterAll net's, not the episode's"
+  # C70 is the LAST line before the outro and lands after BOTH on-camera
+  # deletes, so its presence is the only thing here that says the teardown
+  # beats really filmed.
+  grep -q "open source, Apache-2.0" "${V00_TL}" \
+    && ok "narration reaches the fourth word (C70) — both teardown beats filmed" \
+    || bad "narration never reaches 'open source, Apache-2.0' — the close was cut short, so 'deleted on camera' is not something this take can claim"
 else
   bad "no narration timeline at ${V00_TL} — the take recorded silent or not at all"
 fi
