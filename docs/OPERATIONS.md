@@ -2069,6 +2069,79 @@ nothing crashed and nothing logged. Pin the probe back for such an image with
 Postgres reads healthy again). CI does not catch this — `helm-install-test` and
 the kind quickstart both build `wardynd` from source.
 
+### Splitting the migrator and app roles (`WARDYN_PG_MIGRATE_DSN`)
+
+Single-DSN mode logs a NOTICE at every boot: wardynd's own role owns
+`audit_events`, so `DROP TRIGGER`, `ALTER TABLE … DISABLE TRIGGER` and
+`DROP TABLE` bypass the append-only guard. `WARDYN_PG_MIGRATE_DSN` is the fix —
+migrations run as an owner/migrator role, wardynd connects as a non-owner app
+role — and this is how to adopt it on a database that already exists.
+
+**Which role becomes which is the whole procedure, and it only works one way.**
+The role you have TODAY already owns every table, function and trigger, so it
+becomes the **migrator**. The role you create is the **app** role. Doing it the
+other way round — pointing `WARDYN_PG_MIGRATE_DSN` at a fresh "migrator" that
+owns nothing — fails on the first migration that touches an existing object,
+because PostgreSQL requires ownership for `ALTER TABLE` and for
+`CREATE OR REPLACE FUNCTION`. That is not hypothetical on a 0.6 → 0.7 upgrade:
+`0048`, `0050`, `0053` and `0055` are `ALTER TABLE` on pre-existing tables
+(`0050` also drops and re-adds a primary key), and `0056`/`0057` replace the
+chain function `0047` created. The failure is at least loud and fail-closed —
+each migration runs in its own transaction and `db.Migrate` returns the error, so
+wardynd refuses to boot rather than half-applying — but it is a permission error
+with no way forward except giving the migrator ownership.
+
+Run this as the role you have today, the one in `WARDYN_PG_DSN`:
+
+```sql
+-- 1. The new LEAST-PRIVILEGE app role. Migrations create no roles by design
+--    (0007_audit_least_privilege.sql: "deploy/infra territory").
+CREATE ROLE wardyn_app LOGIN PASSWORD '…';
+GRANT USAGE ON SCHEMA public TO wardyn_app;
+
+-- 2. Full DML everywhere it needs it …
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO wardyn_app;
+
+-- 3. … except audit_events, which is INSERT + SELECT and nothing else. This is
+--    the point of the split: no UPDATE, no DELETE, no TRUNCATE — and no TRIGGER,
+--    which would let the app role add its own BEFORE INSERT trigger that fires
+--    after the shipped one (name order) and overwrite the hashes on the way in.
+REVOKE UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES ON audit_events FROM wardyn_app;
+
+-- 4. Every FUTURE migration creates its tables as the MIGRATOR, and a new table
+--    grants the app role nothing. Without this line the next upgrade boots an
+--    app role that cannot read its own new tables.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO wardyn_app;
+```
+
+Then set **`WARDYN_PG_MIGRATE_DSN` to the DSN you were already using** and point
+`WARDYN_PG_DSN` at `wardyn_app`, and restart. Do **not** grant `wardyn_app`
+membership in the owner role and do not make it a superuser: either one hands
+back every privilege the split just removed, and the boot check below is written
+to catch exactly that.
+
+**wardynd verifies the claim rather than asserting it.** On the next boot it
+queries whether the app role is a superuser, a member of `audit_events`' owner,
+or holds `TRIGGER` on it (`db.AuditDDLProtected`), and logs one of two lines:
+
+- `migrations applied via WARDYN_PG_MIGRATE_DSN … app role is a verified
+  non-owner of audit_events — the append-only guard is DDL-protected`
+- `WARDYN_PG_MIGRATE_DSN is set but the app role … still owns audit_events or is
+  a superuser — DDL protection is NOT in effect`
+
+The second line means the split did not take; the deployment is no worse off than
+single-DSN mode, and no better.
+
+**Why an INSERT+SELECT-only role can write to a hash-chained table at all.** The
+chain trigger function is `SECURITY DEFINER` and runs as its owner — the
+migrator, which also owns `audit_events` — so allocating `seq` and reading the
+chain head are the owner's acts, not the caller's (`0057`). Before that, a split
+deployment upgrading past `0056` hit `permission denied for sequence
+audit_events_seq_seq` on **every** audit insert, which pushed every write to the
+spool and refused every credential mint. Keep the migrator as the owner of both
+the table and that function; that pairing is what makes the posture work.
+
 ## Kubernetes: day-2
 
 The four sections above — backup, restore, the age key, upgrades — are written
