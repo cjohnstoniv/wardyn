@@ -331,16 +331,16 @@ carry no per-run detail.
 
 The API authenticates with **either** an OIDC session (human SSO) **or** the
 admin bearer token; local mode skips both on a loopback-only bind. That is
-authentication. Authorization is a real two-role model: every OIDC session
-carries an **admin** or **member** role, derived once at login
-(`internal/auth/oidc`'s `deriveRole`) and stamped into the signed session
+authentication. Authorization is a real three-role model: every OIDC session
+carries an **admin**, **`security_admin`** or **member** role, derived once at
+login (`internal/auth/oidc`'s `deriveRole`) and stamped into the signed session
 cookie — a cookie signed before this existed (pre-0.5) decodes as no session,
 forcing a re-login that derives one fresh.
 
 | The merged map (chart `WARDYN_OIDC_ROLE_MAP` + console People-step rows) | Signed-in humans | Admin token / local mode |
 |---|---|---|
 | empty | listed in `WARDYN_OIDC_OPERATOR_EMAILS` → **admin**, others → **member**; all **admin** only when the allowlist is also unset (override-only under OIDC — the pre-0.5 behavior) | always **admin** |
-| non-empty | mapped by `roles`/`groups`/email claim to **admin** or **member**; no match falls through to `WARDYN_OIDC_DEFAULT_ROLE`, or denies the login when that is also unset | always **admin** |
+| non-empty | mapped by `roles`/`groups`/email claim to **admin**, **`security_admin`** or **member**; no match falls through to `WARDYN_OIDC_DEFAULT_ROLE` (which takes `admin`/`member` only), or denies the login when that is also unset | always **admin** |
 
 A console-added row keys on this exact same table: adding the deployment's
 *first* row (with the chart map also unset) or removing its *last* one moves the
@@ -405,12 +405,18 @@ A few things that don't fit the grid:
 [ENV.md](ENV.md)): each `value` is matched case-insensitively against the ID
 token's `roles` claim (an Entra App Role — the priority path; app-registration
 walkthrough in `.claude/skills/wardyn-k8s-setup`), its `groups` claim, or the
-signed-in email. **Any match resolving to `admin` wins** over one resolving to
-`member`, whichever claim produced it. `WARDYN_OIDC_OPERATOR_EMAILS` is **not
+signed-in email. Matches fold **highest wins** over three ranks — `member` <
+`security_admin` < `admin` — whichever claim produced them (`roleRank`,
+`internal/auth/oidc/derive.go`): a human matching a `security_admin` row and a
+`member` row is a security admin; one matching an `admin` row anywhere is an
+admin, exactly as before 0.7. `WARDYN_OIDC_OPERATOR_EMAILS` is **not
 replaced**: an email on it is still an *additional* `admin` match
 (`LegacyAdminEmails`), so a deployment adopting the role map keeps its current
 operators with zero re-configuration. `WARDYN_OIDC_DEFAULT_ROLE`
-(`admin`/`member`, unset = deny) covers everyone the map doesn't name.
+(`admin`/`member`, unset = deny) covers everyone the map doesn't name —
+`security_admin` is **refused** there and fails boot (`validDefaultRole`,
+`cmd/wardynd/boot_deps.go`): the role map is the only way to reach that tier, so
+it is never the tier granted by fallthrough to everyone nobody named.
 
 Both are validated at **boot**, not at first use: a malformed entry (invalid role
 value, non-ASCII key — matching is ASCII-only, so it could never match —
@@ -422,14 +428,23 @@ nothing in a valid map, with no default role set, is denied at login instead
 ("no Wardyn role assigned").
 
 **What admin-only still means** — the writes with the widest blast radius stay
-gated on the role being exactly `admin` (`requireOperator`). Status icons in the
-tables throughout this document: 🟢 open/works · 🟡 partial or narrowed · ⛔
-refused.
+gated on the role being exactly `admin` (`requireOperator`). Since 0.7 a SECOND
+gate covers part of that surface: `requireSecurityOperator` — admin **or**
+`security_admin` — the tier that holds authority over the verdict and over the
+org's ceilings, and never reaches into a run, onto credential material, or onto
+the host. The two tiers overlap and deliberately do not nest: every gated route
+names exactly one of them, and `internal/api/authz_test.go`'s route matrix is
+the authoritative per-route classification (it fails on any route it cannot
+classify). Status icons in the tables throughout this document: 🟢 open/works ·
+🟡 partial or narrowed · ⛔ refused.
 
 | Surface | Gate |
 |---|---|
-| managed harness credential; policy create/update/delete; `PUT /site-config` + its connectivity probes; `GET /metrics`; the permissioning routes below | ⛔ admin only |
-| the `/workspaces` routes that WIDEN AN EGRESS CEILING, BIND CREDENTIAL MATERIAL or WRITE THE HOST — `approved-egress`, `denied-egress`, `llm-cred`, `requirements`, `record` + `promote-egress`, `env-as-code/write`, `reassign` | ⛔ admin only |
+| managed harness credential; policy create/update/delete; `PUT /site-config` (a full-document replace, integration credential refs included); `GET /metrics`; the `/access` role-mapping routes below — they bound who derives admin at all | ⛔ admin only |
+| the `/workspaces` routes that BIND CREDENTIAL MATERIAL or WRITE THE HOST — `llm-cred`, `requirements`, `env-as-code/write` — plus `reassign` (user administration) | ⛔ admin only |
+| the `/workspaces` routes that DECIDE AN EGRESS CEILING — `approved-egress`, `denied-egress`, `record` + `promote-egress`: deciding which hosts a workspace's runs may reach is the same authority as deciding an egress approval, and `promote-egress` is that decision in bulk | ⛔ admin or `security_admin` |
+| the two `/site-config` connectivity probes (`POST /site-config/test-proxy`, `/test-redirect`) — non-mutating, and the evidence half of the security admin's job — and the `/permissions` routes below | ⛔ admin or `security_admin` |
+| the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, the `/governance` profile and assignment routes, `GET /access/directory/search` | ⛔ admin or `security_admin` |
 | workspace CRUD/scan/build | 🟡 owner-or-admin since 0.6 ("Workspace ownership") |
 | `devcontainer_repo` on a run (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ admin only, never grantable |
 | a custom sandbox `image` | 🟡 admin by default; the one power a capability grant can hand a member ("Capabilities") |
@@ -575,11 +590,13 @@ approved before v0.6 leases anything.
 **An `egress_domain` decision's *scope* adds a second, narrower gate — and one of
 the four scopes is gated on ROLE, not ownership.** A member who owns the run may
 choose `once`, `run`, or `until`; each stays inside that run's own proxy cache.
-`always` is **operator-only regardless of run ownership** (`decide()` rule 6,
-same file): it writes a durable entry onto the run's workspace (`approved_egress`
-on approve, `denied_egress` on deny) — the SAME two columns the
-`approved-egress`/`denied-egress` routes write, both already `operatorOnly`, so
-without this gate a member could reach them through the approval queue. The
+`always` is **admin or `security_admin`, regardless of run ownership**
+(`decide()` rule 6, same file; the check is `isSecurityOperator`, in LOCKSTEP
+with `authorizeMemberDecision`): it writes a durable entry onto the run's
+workspace (`approved_egress` on approve, `denied_egress` on deny) — the SAME two
+columns the `approved-egress`/`denied-egress` routes write, and those routes sit
+on that same `securityOps` tier, so the gate keeps the approval queue from being
+a way around them for anyone below it. The
 refusal is a `403`, not the ownership checks' `404`: the caller has already proven
 the approval exists, is `egress_domain`, and is theirs. It is checked before the
 run is confirmed to reference a workspace at all — authorization before
@@ -738,7 +755,7 @@ Roles (the much smaller `roles` claim) or user-subject grants — or configure t
 group claim to emit only the groups assigned to the application.
 
 **What a capability deliberately does not reach.** `always`-scope decisions stay
-operator-only even for a member granted the host — a grant must never promote a
+on the admin-or-`security_admin` gate even for a member granted the host — a grant must never promote a
 member's decision into durable workspace config. `GET /workspaces` is not
 narrowed: visibility is not capability, the launch gate is what refuses. Machine
 lanes (`/internal/*`, ground-truth ingest, attach tickets) are untouched. And
@@ -746,7 +763,9 @@ where the operator ceiling sets `allow_all_egress` the allowlist is not the gate
 at all, so `egress_host` narrowing does nothing there — the operator's own
 posture, not a switch that failed.
 
-**Managing them** (all `operatorOnly` except the last):
+**Managing them** (the four `/permissions` rows are `securityOps` — admin or
+`security_admin`; the `/access` rows are `operatorOnly`; `GET /me/capabilities`
+is member-safe):
 
 | Route | Does |
 |---|---|
