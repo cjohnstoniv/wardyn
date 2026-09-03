@@ -685,7 +685,7 @@ migration `0050`)** are the second and third owned nouns after runs.
   substrate, and Wardyn holds no `delete` verb that could do it by accident: the
   recipes are "User drives on Docker" and "User drives on Kubernetes" in this
   document, and are not repeated here. `POST /drives/preview` prints the object
-  name for a principal — paste the sign-in subject FIRST: on a `hash`/`sub` drive
+  name for a principal — paste the sign-in subject FIRST: on a `hash` drive
   the name keys on the first claim, and the API's `home_subject` says which claim
   it used (the console does not yet show it). Deleting the **drive row** itself
   is a `409` while any allocation still points at it (`ON DELETE RESTRICT`), so
@@ -862,7 +862,7 @@ command, not a button:
 
 - one person: `docker volume rm wardyn-drive-<home>` — `POST /drives/preview`
   prints the object name for a principal — paste the sign-in subject FIRST: on a
-  `hash`/`sub` drive the name keys on the first claim, and the API's
+  `hash` drive the name keys on the first claim, and the API's
   `home_subject` says which claim it used (the console does not yet show it);
 - one drive, everybody: `docker volume ls --filter label=wardyn.drive=<drive id>`
   lists every volume that drive allocated.
@@ -3182,7 +3182,7 @@ kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
 The drive's `when a person leaves` column records the intent (`retain` or
 `delete`) so the log says what the operator was told to do; the console's drive
 preview prints the object name for a principal — paste the sign-in subject
-FIRST: on a `hash`/`sub` drive the name keys on the first claim, and the API's
+FIRST: on a `hash` drive the name keys on the first claim, and the API's
 `home_subject` says which claim it used (the console does not yet show it). The
 claim carries `wardyn.managed`, `wardyn.drive` (the drive's
 row **id**, not its name, so the claims a rename orphans stay findable with the
