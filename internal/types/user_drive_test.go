@@ -432,8 +432,23 @@ func TestValidateUserDrive(t *testing.T) {
 			drive: ok(func(d *UserDrive) {
 				d.Backend, d.HomeTemplate, d.SizeMiB = DriveBackendK8sPVC, HomeTemplateEmailLocal, 10240
 			}), target: "k8s", wantErr: true},
-		{name: "a managed volume templated on sub is accepted",
-			drive: ok(func(d *UserDrive) { d.HomeTemplate = HomeTemplateSub }), target: "docker"},
+		// `sub` was accepted here until 2026-09-03. It answered the COLLISION
+		// question (a sub is unique) but not the EXPOSURE one: the home segment is
+		// concatenated into the object name, which `docker volume ls` shows without
+		// the inspect a label needs — so the subject was refused in the less exposed
+		// place (DriveSubjectHash's label rule) and permitted in the more exposed one.
+		{name: "a managed volume cannot be templated on sub — the object name shows it",
+			drive: ok(func(d *UserDrive) { d.HomeTemplate = HomeTemplateSub }), target: "docker", wantErr: true},
+		{name: "a managed pvc cannot be templated on sub either",
+			drive: ok(func(d *UserDrive) {
+				d.Backend, d.HomeTemplate, d.SizeMiB = DriveBackendK8sPVC, HomeTemplateSub, 10240
+			}), target: "k8s", wantErr: true},
+		{name: "a managed volume on the hash template is still accepted (the not-everything-is-refused control)",
+			drive: ok(func(d *UserDrive) { d.HomeTemplate = HomeTemplateHash }), target: "docker"},
+		{name: "a share may still be templated on sub",
+			drive: ok(func(d *UserDrive) {
+				d.Backend, d.HomeTemplate, d.HostRoot = DriveBackendHostPath, HomeTemplateSub, "/srv/homes"
+			}), target: "docker"},
 		// …and the refusal is scoped to MANAGED. A share's directories are named
 		// by whoever owns the share, and `email_local` is the corporate shape the
 		// template exists for.

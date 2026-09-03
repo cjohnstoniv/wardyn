@@ -992,7 +992,14 @@ func TestUpdateAllocatedUserDriveRefusesASilentRehome(t *testing.T) {
 		body  string
 		names string
 	}{
-		{"backend", `{"name":"nas","backend":"docker_volume","home_template":"sub","size_mib":10240}`, `backend "host_path" → "docker_volume"`},
+		// backend is the ONE column that cannot move alone: since 2026-09-03 a
+		// managed backend accepts only the `hash` template (the home segment is
+		// concatenated into an object name `docker volume ls` prints, so a
+		// subject-bearing template is refused there exactly as it is in a label).
+		// So host_path+sub -> docker_volume necessarily carries the template with
+		// it; sending backend alone is now a 400 for a different and correct
+		// reason, and would never reach the re-home conflict this case exists for.
+		{"backend", `{"name":"nas","backend":"docker_volume","home_template":"hash","size_mib":10240}`, `backend "host_path" → "docker_volume"`},
 		{"home_template", share("nas", "email_local", homes), `home_template "sub" → "email_local"`},
 		{"host_root", share("nas", "sub", other), fmt.Sprintf("host_root %q → %q", homes, other)},
 		{"name", share("nas2", "sub", homes), `name "nas" → "nas2"`},
@@ -1093,7 +1100,9 @@ func TestUpdateAllocatedUserDriveRefusesASilentRehome(t *testing.T) {
 		// runs FIRST, so a host_path body would answer the identical 500 from the
 		// other gate and this sub-test would pass without the re-home guard's
 		// fail-closed arm ever running. Only a non-share write reaches it alone.
-		body := `{"name":"nas","backend":"docker_volume","home_template":"sub","size_mib":10240}`
+		// `hash` because a managed backend accepts no other template since
+		// 2026-09-03; the point here is only that the body is NON-SHARE.
+		body := `{"name":"nas","backend":"docker_volume","home_template":"hash","size_mib":10240}`
 		if w := put(t, srv, d.ID, body, ""); w.Code != http.StatusInternalServerError {
 			t.Fatalf("PUT with an unreadable list = %d, want 500: %s", w.Code, w.Body.String())
 		}
