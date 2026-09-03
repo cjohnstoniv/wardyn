@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -511,7 +512,18 @@ type governanceCeiling struct {
 // cookie byte cap truncated), a group-tier assignment exists that might apply
 // to them, and no user-tier row settles the question. Serving them ANY ceiling
 // would be a guess, and the only wrong guess is the widening one.
-var errGroupsSnapshotStale = errors.New("groups_snapshot_stale")
+//
+// ITS Error() TEXT IS THE FULL MESSAGE, not the bare sentinel, and that is the
+// fix rather than a flourish: governance.go names ONE mapping for a resolver
+// failure (writeCeilingError below) "so a resolver failure cannot answer 403 at
+// one site and 500 at the next for the same cause" — but a site that takes only
+// the STATUS half via ceilingErrorStatus and composes its own body from
+// err.Error() bypassed that rule and shipped a 403 saying nothing but
+// "groups_snapshot_stale". The remedy is one the human can actually perform, and
+// the alternative is a support ticket. Attaching it to the VALUE means every
+// site that prints the error carries the remedy, including sites written later,
+// instead of each one having to remember the rule.
+var errGroupsSnapshotStale = errors.New(groupsSnapshotStaleMsg)
 
 // groupsSnapshotStaleMsg is what the caller reads. It names the remedy, because
 // the remedy is one the human can actually perform and the alternative is a
@@ -530,6 +542,9 @@ const groupsSnapshotStaleMsg = "groups_snapshot_stale: your group membership sna
 // which is a widening triggered by a database hiccup.
 func writeCeilingError(w http.ResponseWriter, err error) {
 	if errors.Is(err, errGroupsSnapshotStale) {
+		// Identical to err.Error() now that the sentinel carries the message;
+		// spelled out because THIS is the site that defines what the body is,
+		// and a reader should not have to chase the sentinel to find out.
 		writeError(w, http.StatusForbidden, groupsSnapshotStaleMsg)
 		return
 	}
@@ -581,17 +596,54 @@ func ceilingErrorStatus(err error) int {
 //     read fresh per request rather than a process global, so the corruption
 //     would be intermittent instead of merely wrong.
 //
-// ponytail: no cache, matching capAllowed's own note. One indexed read per
-// resolve; a stale ceiling is a security bug, not a slow page.
+// ponytail: no cache ACROSS REQUESTS, matching capAllowed's own note — a stale
+// ceiling is a security bug, not a slow page. Within ONE request it is memoized
+// (see the memo below), which is a different claim: the request is the unit the
+// answer must be consistent over.
 //
-// ponytail: a member CREATE resolves this more than once (denyMemberRequest and
-// resolveRunPolicy each ask, and filterMemberGrants asks again inside the
-// second). That is PF-13, accepted deliberately: the reads are indexed and
-// small, and the alternative — threading a resolved ceiling through eight
-// call sites and their ~40 existing tests — buys latency at the cost of the
-// one property that matters here, which is that no site can forget to ask.
-// Thread it through when a profile-load benchmark says to, not before.
+// That memo replaced "PF-13's accepted double resolution", which defended the
+// repeated reads on latency grounds — "the alternative buys latency at the cost
+// of the one property that matters here, which is that no site can forget to
+// ask". The premise was wrong in two ways. Latency was never the cost that
+// mattered: three independent, untransacted reads per member create
+// (denyMemberGovernance, resolveRunPolicy, filterMemberGrants) plus dispatch's
+// fourth can return DIFFERENT ANSWERS if a security admin narrows a profile
+// mid-request, and resolveRunPolicy asserts the opposite in words ("a create
+// must never resolve two different ceilings for one request"). And the property
+// is not lost: every site still asks — the memo just answers.
 func (s *Server) effectiveCeiling(ctx context.Context) (governanceCeiling, error) {
+	// ONE CEILING PER REQUEST. The memo is checked first and filled on the way
+	// out, so every site in one request sees the SAME answer — which is what
+	// "a create must never resolve two different ceilings for one request"
+	// (resolveRunPolicy) claimed and nothing implemented. A member create alone
+	// took THREE independent, uncached, untransacted reads (denyMemberGovernance
+	// -> resolveRunPolicy -> filterMemberGrants) and dispatch a fourth, so a
+	// security admin narrowing a profile mid-flight — the incident-response
+	// action — could land a run whose egress was clamped under the PRE-narrowing
+	// ceiling while its grants were filtered under the post-narrowing one.
+	//
+	// It preserves the property the repeated reads were defended for ("no site
+	// can forget to ask"): every site still asks. It just asks the memo first.
+	//
+	// NOT A CACHE ACROSS REQUESTS, which is the HA blocker effectiveCeiling's own
+	// note names: the memo lives on the request context, so it dies with the
+	// request and the next one resolves afresh. A background caller (reconcile,
+	// the boot heal) carries no memo and resolves normally.
+	if memo := ceilingMemoFromContext(ctx); memo != nil {
+		if c, err, done := memo.get(); done {
+			return c, err
+		}
+		c, err := s.resolveEffectiveCeiling(ctx)
+		memo.put(c, err)
+		return c, err
+	}
+	return s.resolveEffectiveCeiling(ctx)
+}
+
+// resolveEffectiveCeiling is effectiveCeiling's uncached body — the resolution
+// order its doc comment describes. Split out so the memo above wraps it exactly
+// once and no call site can reach the raw resolve by accident.
+func (s *Server) resolveEffectiveCeiling(ctx context.Context) (governanceCeiling, error) {
 	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone()}
 	if s.isOperator(ctx) || s.cfg.Store == nil {
 		return deployment, nil
@@ -811,4 +863,59 @@ func missingGrantKinds(have, want []types.GrantSpec) []string {
 		}
 	}
 	return kinds
+}
+
+// ─── the per-request ceiling memo ────────────────────────────────────────────
+
+// ceilingMemoKey carries the per-request ceiling memo. A pointer holder rather
+// than the value itself, because context.WithValue cannot be written to after
+// the fact and the memo has to be FILLED by whichever site asks first.
+type ceilingMemoKey struct{}
+
+// ceilingMemo is one request's resolved ceiling, resolved at most once.
+//
+// It stores the ERROR too, deliberately: a resolver failure must be answered
+// identically by every site in the request. Re-resolving after a failure could
+// SUCCEED on the retry and hand a later site a ceiling the earlier one refused
+// on — which is the disagreement this exists to remove, in its most dangerous
+// direction (a refusal followed by a pass).
+//
+// Guarded by a mutex because a single request can fan out (dispatch runs inline
+// but on a WithoutCancel copy that shares these values), and a memo that raced
+// would reintroduce exactly the divergence it removes.
+type ceilingMemo struct {
+	mu    sync.Mutex
+	done  bool
+	value governanceCeiling
+	err   error
+}
+
+func (m *ceilingMemo) get() (governanceCeiling, error, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.value, m.err, m.done
+}
+
+func (m *ceilingMemo) put(c governanceCeiling, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.done {
+		m.value, m.err, m.done = c, err, true
+	}
+}
+
+// withCeilingMemo installs an empty memo. Called once per authenticated request
+// by the auth middleware, which is the only place that sees every routed call
+// exactly once.
+func withCeilingMemo(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ceilingMemoKey{}, &ceilingMemo{})
+}
+
+// ceilingMemoFromContext returns the request's memo, or nil for a caller that
+// has none (a background job, or a unit test driving a resolver directly). A nil
+// memo means "resolve normally", so absence is the pre-memo behaviour rather
+// than a failure.
+func ceilingMemoFromContext(ctx context.Context) *ceilingMemo {
+	m, _ := ctx.Value(ceilingMemoKey{}).(*ceilingMemo)
+	return m
 }
