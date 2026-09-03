@@ -53,6 +53,52 @@ var errDriveUnmountable = errors.New("drive_unmountable")
 // states: a store failure means the answer is unknown, and carrying on with the
 // zero value would silently mean "you have no drive" for a member who does —
 // mounting nothing where an admin allocated something.
+// driveUnavailableReason names WHY /me could not answer for a caller's drive, in
+// the one shape a wire field may carry it: a closed token, never a sentence.
+//
+// IT IS writeDriveError'S SWITCH, in the same order and over the same sentinels,
+// because the two answer ONE question at two doors. writeDriveError is what a
+// member meets when they launch; this is what /me says before they try. A
+// deployment where those two disagree is one where the console shows a member a
+// state the launch path does not have, which is the whole defect this exists to
+// close — so they are written adjacent and a new arm in one is a missing arm in
+// the other rather than a silent divergence.
+//
+// The tokens are for a CLIENT to branch on, not for a human to read. The
+// sentence a member gets is still the server-composed one writeDriveError
+// writes at the door that refuses them.
+func driveUnavailableReason(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, errGroupsSnapshotStale):
+		return driveUnavailableGroups
+	case errors.Is(err, errDriveUnmountable):
+		return driveUnavailableUnmountable
+	default:
+		return driveUnavailableUnknown
+	}
+}
+
+// The closed reason set. `user_drive_unavailable` carries exactly one of these,
+// and "" is the ordinary answer: /me could answer, and user_drive says what it
+// answered (an allocation, or null for none).
+const (
+	// driveUnavailableGroups: the caller's group snapshot cannot answer the
+	// group tier, so an allocation may exist and be invisible. 403 at launch.
+	driveUnavailableGroups = "groups_snapshot_stale"
+	// driveUnavailableUnmountable: an allocation EXISTS and cannot be mounted —
+	// a home name that cannot name a directory, a share that is not there. 422
+	// at launch, and the one state whose remedy is an admin's, not the member's.
+	driveUnavailableUnmountable = "unmountable"
+	// driveUnavailableUnknown: the allocation could not be READ. 500 at launch.
+	driveUnavailableUnknown = "unavailable"
+	// driveUnavailableGovernance: the caller's CEILING could not be resolved, so
+	// whether the door is open is unknown. Distinct from the three above because
+	// nothing is wrong with the allocation — what is unknown is permission.
+	driveUnavailableGovernance = "governance_unavailable"
+)
+
 func writeDriveError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errGroupsSnapshotStale):

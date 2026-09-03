@@ -762,10 +762,21 @@ type meUserDrive struct {
 // ENFORCEMENT path (seedRequestDrive) makes the opposite choice for the same
 // error, and must: mounting nothing where an admin allocated something is a
 // data loss, while showing nothing for a moment is a refresh.
-func (s *Server) resolveMeUserDrive(r *http.Request) *meUserDrive {
+// WHAT WAS WRONG WAS NOT THE nil — IT WAS THAT nil WAS THE WHOLE ANSWER. Three
+// distinct states the launch path refuses with 403, 422 and 500 all arrived here
+// as the SAME `{"user_drive":null}` a genuinely unallocated member gets, and the
+// console renders that as no drive affordance at all — so a member could never
+// reach the refusal naming their remedy, and an admin-fixable home name looked
+// exactly like "you have no allocation". The reason string is the second half of
+// the answer, on the wire, so a client can tell them apart: the same argument
+// the door already won as its own sibling key.
+func (s *Server) resolveMeUserDrive(r *http.Request) (*meUserDrive, string) {
 	resolved, err := s.resolveUserDrive(r.Context())
-	if err != nil || resolved == nil {
-		return nil
+	if err != nil {
+		return nil, driveUnavailableReason(err)
+	}
+	if resolved == nil {
+		return nil, "" // answered, and the answer is "no allocation"
 	}
 	return &meUserDrive{
 		Name:        resolved.Drive.Name,
@@ -775,7 +786,7 @@ func (s *Server) resolveMeUserDrive(r *http.Request) *meUserDrive {
 		Enforcement: resolved.Enforcement,
 		HomeName:    resolved.HomeName,
 		Paused:      resolved.Paused,
-	}
+	}, ""
 }
 
 // userDriveDeniedByProfile names the profile whose DenyUserDrive door is shut
@@ -798,16 +809,23 @@ func (s *Server) resolveMeUserDrive(r *http.Request) *meUserDrive {
 // own reason — /me is a display read, and the ENFORCEMENT path answers the same
 // failure with a refusal. The operator short-circuit stays HERE too, ahead of
 // the resolve: a display read must not cost an operator a ceiling round-trip.
-func (s *Server) userDriveDeniedByProfile(r *http.Request) string {
+func (s *Server) userDriveDeniedByProfile(r *http.Request) (name string, unresolved bool) {
 	if s.isOperator(r.Context()) {
-		return ""
+		return "", false
 	}
 	ceiling, err := s.effectiveCeiling(r.Context())
 	if err != nil {
-		return ""
+		// UNKNOWN IS NOT OPEN. "" on this key is an affirmative promise that no
+		// profile shuts the door, and serving it for a ceiling that could not be
+		// resolved answers an unknown question permissively — the exact thing
+		// writeCeilingError refuses to do at the enforcement door, where this
+		// same outage refuses the run. Shipped beside a fully populated
+		// user_drive it made /me promise a mountable, writable drive for a
+		// create the server would then refuse.
+		return "", true
 	}
-	name, _ := s.driveDoorProfile(r.Context(), ceiling)
-	return name
+	name, _ = s.driveDoorProfile(r.Context(), ceiling)
+	return name, false
 }
 
 // driveRefusal composes a 422 body in the frozen member voice: lowercase

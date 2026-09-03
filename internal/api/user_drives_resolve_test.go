@@ -45,6 +45,15 @@ type driveStore struct {
 	hasGroupTier bool
 	// err fails BOTH reads, for the never-fail-quiet arm.
 	err error
+	// driveErr fails the DRIVE read ALONE, leaving the ceiling answerable.
+	//
+	// It exists because `err` deliberately fails both, and a caller that reads
+	// the drive AND the door — /me does — then cannot tell which half failed:
+	// every state arrives as "the governance read broke" and the drive-side
+	// states are unreachable from any fixture. That is the same coupling that
+	// makes a real defect invisible, so the double grows the seam rather than
+	// the assertion being weakened to match it.
+	driveErr error
 	// userTierOnly models the enforcement shape the stale branch produces: the
 	// resolver is called a second time with NO groups, and a group-tier answer
 	// must not come back from it.
@@ -77,6 +86,9 @@ func (s *driveStore) ResolveUserDrive(_ context.Context, _, groups []string) (
 	*types.UserDrive, *types.UserDriveGrant, types.CapabilitySubjectType, error) {
 	if s.err != nil {
 		return nil, nil, "", s.err
+	}
+	if s.driveErr != nil {
+		return nil, nil, "", s.driveErr
 	}
 	if s.nilAnswer {
 		return nil, nil, "", nil
