@@ -19,7 +19,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -439,31 +438,18 @@ func TestMigrateLeavesAnAlwaysTriggerAlone(t *testing.T) {
 }
 
 // chainTriggerMigrations returns the migration filenames that define the chain
-// trigger — the same content predicate replayTriggerMigrations uses, so the
-// test cannot drift from the set the production code replays.
+// trigger. It calls the PRODUCTION helper rather than restating its predicate,
+// so this test and the boot-time replay can never disagree about which files
+// the set contains.
 func chainTriggerMigrations(t *testing.T) []string {
 	t.Helper()
-	entries, err := migrationFS.ReadDir("migrations")
+	names, err := triggerMigrationFiles(auditChainTrigger)
 	if err != nil {
-		t.Fatalf("read migrations dir: %v", err)
-	}
-	var names []string
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
-			continue
-		}
-		body, err := migrationFS.ReadFile("migrations/" + e.Name())
-		if err != nil {
-			t.Fatalf("read migration %s: %v", e.Name(), err)
-		}
-		if strings.Contains(string(body), "TRIGGER "+auditChainTrigger) {
-			names = append(names, e.Name())
-		}
+		t.Fatalf("triggerMigrationFiles: %v", err)
 	}
 	if len(names) == 0 {
 		t.Fatal("no migration defines the chain trigger")
 	}
-	sort.Strings(names)
 	return names
 }
 

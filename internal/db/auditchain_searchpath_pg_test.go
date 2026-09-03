@@ -213,3 +213,57 @@ func TestPG_ChainTriggerIgnoresAShadowingTempTable(t *testing.T) {
 		t.Fatalf("commit: %v", err)
 	}
 }
+
+// TestPG_ReplayingTheTriggerMigrationsIsIdempotent asserts the PROPERTY the
+// text markers only stand in for: that every file in the boot-time replay set
+// actually survives being re-executed against a database where it is already
+// applied. The marker guard in db_test.go runs without Postgres and catches the
+// common way to break this; only running the real statements catches the rest
+// (a bare CREATE INDEX, a non-replaceable object, an ALTER that is not
+// re-runnable).
+//
+// It calls replayTriggerMigrations directly, which is what ensureAuditTriggers
+// does when it finds the chain trigger missing — and it does so TWICE, because
+// a boot-restore that only works once is not a restore. Its own schema, so no
+// lane's audit_events is dropped and re-created underneath it.
+func TestPG_ReplayingTheTriggerMigrationsIsIdempotent(t *testing.T) {
+	pool, schema := probeSchemaPool(t)
+	ctx := context.Background()
+
+	names, err := triggerMigrationFiles(auditChainTrigger)
+	if err != nil {
+		t.Fatalf("triggerMigrationFiles: %v", err)
+	}
+	t.Logf("replay set: %v", names)
+
+	for pass := 1; pass <= 2; pass++ {
+		if err := replayTriggerMigrations(ctx, pool, auditChainTrigger); err != nil {
+			t.Fatalf("replay pass %d over %v failed: %v\n"+
+				"the boot-time restore re-executes these files verbatim against a database where they are ALREADY "+
+				"applied; a non-idempotent one turns the rescue path into a refused boot on exactly the database "+
+				"whose audit trigger went missing", pass, names, err)
+		}
+	}
+
+	// The replay must leave a WORKING chain, not merely exit zero: the trigger
+	// attached, firing, and still linking rows.
+	var firstHash string
+	if err := pool.QueryRow(ctx, `INSERT INTO audit_events (id, actor_type, actor, action, outcome)
+		VALUES (gen_random_uuid(), 'system', 'replay-probe', 'test.replay.1', 'success')
+		RETURNING COALESCE(row_hash, '')`).Scan(&firstHash); err != nil {
+		t.Fatalf("append after replay in %s: %v", schema, err)
+	}
+	if firstHash == "" {
+		t.Fatal("a row appended after the replay carries no row_hash; the restored trigger is not chaining")
+	}
+	var secondPrev string
+	if err := pool.QueryRow(ctx, `INSERT INTO audit_events (id, actor_type, actor, action, outcome)
+		VALUES (gen_random_uuid(), 'system', 'replay-probe', 'test.replay.2', 'success')
+		RETURNING COALESCE(prev_hash, '')`).Scan(&secondPrev); err != nil {
+		t.Fatalf("second append after replay: %v", err)
+	}
+	if secondPrev != firstHash {
+		t.Errorf("prev_hash after the replay is %q, want the preceding row's %q — the replay restored a trigger "+
+			"that runs but does not link", secondPrev, firstHash)
+	}
+}

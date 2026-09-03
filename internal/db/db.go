@@ -570,24 +570,10 @@ func auditTriggerNames(ctx context.Context, db migrationExecutor) (map[string]bo
 // would reinstate a superseded definition (0047's unserialized chain function,
 // which 0056 replaced).
 func replayTriggerMigrations(ctx context.Context, db migrationExecutor, trigger string) error {
-	entries, err := migrationFS.ReadDir("migrations")
+	names, err := triggerMigrationFiles(trigger)
 	if err != nil {
-		return fmt.Errorf("db: read migrations dir: %w", err)
+		return err
 	}
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
-			continue
-		}
-		body, err := migrationFS.ReadFile("migrations/" + e.Name())
-		if err != nil {
-			return fmt.Errorf("db: read migration %s: %w", e.Name(), err)
-		}
-		if strings.Contains(string(body), "TRIGGER "+trigger) {
-			names = append(names, e.Name())
-		}
-	}
-	sort.Strings(names)
 	for _, name := range names {
 		data, err := migrationFS.ReadFile("migrations/" + name)
 		if err != nil {
@@ -600,6 +586,41 @@ func replayTriggerMigrations(ctx context.Context, db migrationExecutor, trigger 
 			slog.String("file", name), slog.String("trigger", trigger))
 	}
 	return nil
+}
+
+// triggerMigrationFiles returns, in apply order, the embedded migrations whose
+// text defines trigger — the REPLAY SET that replayTriggerMigrations re-executes
+// verbatim, against a database where all of them are already applied and none is
+// re-recorded in schema_migrations.
+//
+// Exists as its own function so the guard that keeps those files idempotent is
+// derived from the SAME predicate the replay uses instead of restating it. A
+// test that re-implemented the rule would be right until the day the rule
+// changed, and the failure that day is a boot refusing on exactly the database
+// whose audit trigger already went missing — the case the replay exists to
+// rescue. Content-derived rather than listed for the same reason
+// replayTriggerMigrations was: a later migration that redefines the trigger
+// joins the set on its own, and 0058 did.
+func triggerMigrationFiles(trigger string) ([]string, error) {
+	entries, err := migrationFS.ReadDir("migrations")
+	if err != nil {
+		return nil, fmt.Errorf("db: read migrations dir: %w", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
+			continue
+		}
+		body, err := migrationFS.ReadFile("migrations/" + e.Name())
+		if err != nil {
+			return nil, fmt.Errorf("db: read migration %s: %w", e.Name(), err)
+		}
+		if strings.Contains(string(body), "TRIGGER "+trigger) {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 func isMigrationApplied(ctx context.Context, db migrationExecutor, filename string) (bool, error) {
