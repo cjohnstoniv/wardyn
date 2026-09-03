@@ -131,9 +131,11 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// halves (foldRunIntegration; applyWorkspaceRequirements returns its events) —
 	// the audit is recorded once the run id is minted, below.
 	wsRefs := s.referencedWorkspaces(ctx, spec)
-	// Caller-scoped presence map, shared by the requirements fold and the warning below.
-	present := s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(r))
-	foldInteg, foldKind, bedrockRef := s.foldRunIntegration(ctx, s.secretOwnerFromRequest(r), &spec, req, wsRefs)
+	// Caller-scoped secret namespace, resolved once: the presence map and the
+	// integration fold must read the SAME one. Shared with the warning below.
+	secretOwner := s.secretOwnerFromRequest(r)
+	present := s.presentSecretNamesFor(ctx, secretOwner)
+	foldInteg, foldKind, bedrockRef := s.foldRunIntegration(ctx, secretOwner, &spec, req, wsRefs)
 	reqEvents := s.applyWorkspaceRequirementsFor(ctx, present, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
 
 	// The primary host workspace directory this run will operate in (if any), used
@@ -175,7 +177,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		RunnerTarget:     s.cfg.RunnerTarget,
 		Interactive:      req.Interactive,
 		WorkspacePath:    workspacePath,
-		WorkspaceIDs:     workspaceIDsOf(wsRefs), // resolved at :142, same spec as WorkspacePath above
+		WorkspaceIDs:     workspaceIDsOf(wsRefs), // referencedWorkspaces above, same spec as WorkspacePath
 		AutoStopAfterSec: spec.AutoStopAfterSec,
 	}
 	created, err := s.cfg.Store.CreateRun(ctx, run)
@@ -253,7 +255,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// mid-run refusal from arriving as a support ticket.
 	warnings = append(warnings, warnCeilingDeniedWorkspaceEgress(ceiling, wsRefs)...)
 
-	// CLIENT-DISCONNECT ISOLATION, same rationale as dispatchWithVerify's own
+	// CLIENT-DISCONNECT ISOLATION, same rationale as dispatchRun's own
 	// detach — which sits AFTER this block and so never covered it. From here on the
 	// run row exists and MUST be driven to a terminal state or dispatched. An image
 	// build is a multi-minute docker pull+build that honours cancellation, so a

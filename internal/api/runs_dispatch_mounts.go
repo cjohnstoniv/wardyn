@@ -38,7 +38,7 @@ import (
 // (resolveBedrockAuth) — host mode auto-detects it, the compose stack opts in via
 // the WARDYN_BEDROCK_AWS_DIR bind; it is env-driven with no host/compose branch.
 // A single-user / self-hosted choice, not for a shared multi-tenant service.
-// Extracted verbatim from dispatchWithVerify.
+// Extracted verbatim from dispatchRun.
 //
 // member is the run's member-mount posture (memberMountPosture, workspace_refs.go).
 // Its Sources decide which binds carry runner.Mount.MemberAuthored — the flag the
@@ -97,7 +97,7 @@ func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member memberM
 // new one. Fail SAFE: neither field configured, an unresolvable secret, or a
 // non-http URL (from either source) all return "" (direct egress, today's
 // behavior) plus an audit event; none of them fail the run or crash dispatch.
-// Extracted verbatim from dispatchWithVerify.
+// Extracted verbatim from dispatchRun.
 func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, siteCfg types.SiteConfig, siteCfgErr error) string {
 	if siteCfgErr != nil {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
@@ -140,13 +140,13 @@ func envEnabled(v string) bool {
 	}
 }
 
-// buildBaseSandboxEnv assembles dispatchWithVerify's baseline non-secret sandbox
+// buildBaseSandboxEnv assembles dispatchRun's baseline non-secret sandbox
 // env (invariant 1: the run token never appears here): proxy routing, the
 // toolchain-fidelity env the run's workspaces actually need (needs — Go's
 // tempdir/cache redirect, the JVM proxy sysprops Maven/Gradle need because
 // they ignore HTTP(S)_PROXY; nil needs = no workspace context, full set), and
 // git commit attribution carrying the sub/act delegation chain. Every later
-// phase in dispatchWithVerify only adds to this map, never removes from it.
+// phase in dispatchRun only adds to this map, never removes from it.
 func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNeeds) map[string]string {
 	env := map[string]string{
 		"WARDYN_RUN_ID":    run.ID.String(),
@@ -239,20 +239,26 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 // Returns the ssh_key and git_pat grant hosts it withheld because the run is
 // BROKERED for that forge (dropBrokeredGrants) — both nil in the ordinary case.
 // The caller warns and audits each; neither must ever be silent.
-func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, interactive bool, taskMode, interactiveStart string, seedAutoTools bool, toolApprovals string, firstGitHubGrantID *uuid.UUID, gitPATGrants, sshGrants map[string]string, gitGrants map[string]uuid.UUID, patBroker bool) (droppedSSH, droppedPAT []string) {
+//
+// Takes dispatchParams whole rather than the twelve values it reads: the
+// positional form put GitPATGrants and SSHGrants — adjacent map[string]string
+// arguments carrying DIFFERENT credential families — side by side at every
+// call site, re-opening one layer down the exact swap hazard dispatchParams
+// itself exists to close (see its doc).
+func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p dispatchParams) (droppedSSH, droppedPAT []string) {
 	// Governed repo SCAN run: after cloning, the entrypoint runs wardyn-scan (which
 	// walks ~/work and PUTs ScanFacts to the brokered scan-results route) INSTEAD of
 	// the agent. A non-nil WorkspaceID marks a scan run — UNLESS the run is
 	// interactive (an interactive workspace-linked run is Record Mode, a
 	// human-driven sandbox, never a scan); no agent CLI / model call happens on a
 	// scan.
-	if (run.WorkspaceID != nil || run.SourceID != nil) && !interactive {
+	if (run.WorkspaceID != nil || run.SourceID != nil) && !p.Interactive {
 		sandboxEnv["WARDYN_SCAN_ONLY"] = "1"
 	}
 	// exec task mode (BYOA/CI lane): agent-run runs the task as a plain shell
 	// command instead of the agent harness. Only the discriminator rides env —
 	// everything above/below (clone, grants, egress, recording) is identical.
-	if taskMode == "exec" {
+	if p.TaskMode == "exec" {
 		sandboxEnv["WARDYN_TASK_MODE"] = "exec"
 	}
 	// interactive_start=agent: the attach shell opens IN the image's agent CLI
@@ -262,7 +268,7 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, inte
 	// than in a doc comment, so "ignored for a non-interactive run" is
 	// structurally true: a batch run can never carry this env no matter what
 	// the request said.
-	if interactive && interactiveStart == "agent" {
+	if p.Interactive && p.InteractiveStart == "agent" {
 		sandboxEnv["WARDYN_INTERACTIVE_START"] = "agent"
 	}
 	// Boot seed (Part A1): an interactive run's Task, when non-empty, is no
@@ -277,10 +283,10 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, inte
 	// without this guard they would boot-seed `claude "workspace record"` into
 	// what is supposed to be a plain record-mode sandbox, and the login box
 	// would boot-seed over its own login flow.
-	if interactive && !reservedRunTasks[run.Task] {
+	if p.Interactive && !reservedRunTasks[run.Task] {
 		if seed := strings.TrimSpace(run.Task); seed != "" {
 			sandboxEnv["WARDYN_INTERACTIVE_SEED"] = run.Task
-			if seedAutoTools {
+			if p.SeedAutoTools {
 				sandboxEnv["WARDYN_SEED_AUTO_TOOLS"] = "1"
 			}
 		}
@@ -293,11 +299,11 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, inte
 	// InteractiveStart above is gated on `interactive`: an interactive run's
 	// supervised-seed posture is SeedAutoTools's job, so this can't ride one no
 	// matter what the request said.
-	if !interactive && toolApprovals == "hold" {
+	if !p.Interactive && p.ToolApprovals == "hold" {
 		sandboxEnv["WARDYN_TOOL_APPROVALS"] = "hold"
 	}
-	if firstGitHubGrantID != nil {
-		sandboxEnv["WARDYN_GITHUB_GRANT_ID"] = firstGitHubGrantID.String()
+	if p.FirstGitHubGrantID != nil {
+		sandboxEnv["WARDYN_GITHUB_GRANT_ID"] = p.FirstGitHubGrantID.String()
 	}
 	// The repos this run is BROKERED for — the SAME map confineGitBrokerEgress
 	// keys on, so the sandbox's answer to "is my GitHub access brokered?" cannot
@@ -308,8 +314,8 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, inte
 	// declared anywhere is NOT brokered — no route, no deny — and keeps the
 	// helper as its credential path, unchanged. Non-secret: repo names only,
 	// space-separated canonical "<org>/<repo>", sorted for a stable env value.
-	if len(gitGrants) > 0 {
-		repos := slices.Sorted(maps.Keys(gitGrants))
+	if len(p.GitGrants) > 0 {
+		repos := slices.Sorted(maps.Keys(p.GitGrants))
 		sandboxEnv["WARDYN_GIT_BROKER_REPOS"] = strings.Join(repos, " ")
 	}
 	// git_pat grants: surface the {host: grant_id} map so the git-credential
@@ -317,7 +323,7 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, inte
 	// (grant ids, not the PAT); the value is returned only through the brokered mint.
 	// A PAT for a BROKERED forge is withheld for the same reason the ssh_key is —
 	// see dropBrokeredGrants.
-	gitPATGrants, droppedPAT = dropBrokeredGrants(gitPATGrants, gitGrants, brokeredForgeHost)
+	gitPATGrants, droppedPAT := dropBrokeredGrants(p.GitPATGrants, p.GitGrants, brokeredForgeHost)
 	// THE POINT OF THE PAT BROKER, and the half that is easy to leave out: when
 	// the never-resident lane is on, the grant ids must NOT reach the sandbox.
 	// Leaving them here would let the in-sandbox credential helper mint the PAT
@@ -327,7 +333,7 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, inte
 	// agent-run learns which hosts to route through the broker from
 	// WARDYN_GIT_PAT_BROKER_HOSTS below, which carries HOST NAMES ONLY and no
 	// grant id, so it cannot be used to mint anything.
-	if patBroker && len(gitPATGrants) > 0 {
+	if p.PATBroker && len(gitPATGrants) > 0 {
 		hosts := slices.Sorted(maps.Keys(gitPATGrants))
 		sandboxEnv["WARDYN_GIT_PAT_BROKER_HOSTS"] = strings.Join(hosts, " ")
 		gitPATGrants = nil
@@ -342,7 +348,7 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, inte
 	// so the key is written to a 0400 file and wiped after the clone). Non-secret
 	// (grant ids, not the key); the key material is returned only via the brokered
 	// mint and never touches env. See GrantSSHKey.
-	sshGrants, droppedSSH = dropBrokeredGrants(sshGrants, gitGrants, brokeredForgeSSHHost)
+	sshGrants, droppedSSH := dropBrokeredGrants(p.SSHGrants, p.GitGrants, brokeredForgeSSHHost)
 	if len(sshGrants) > 0 {
 		if b, merr := json.Marshal(sshGrants); merr == nil {
 			sandboxEnv["WARDYN_SSH_GRANTS"] = string(b)
@@ -354,7 +360,7 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, inte
 // applyRepoCloneEnv surfaces the repo(s) to clone (the legacy single run.Repo
 // plus each onboarded WorkspaceRepo on the resolved policy) as sandbox env the
 // agent-run launcher reads before running the agent — non-secret; invariant 1
-// preserved. Extracted verbatim from dispatchWithVerify — pure map mutation, no
+// preserved. Extracted verbatim from dispatchRun — pure map mutation, no
 // branch here changes control flow. See buildRepoRecords for the validation
 // (repoFieldSafe, allowed-prefix targets, dedup) it relies on.
 func applyRepoCloneEnv(sandboxEnv map[string]string, run types.AgentRun, policy types.RunPolicySpec) {

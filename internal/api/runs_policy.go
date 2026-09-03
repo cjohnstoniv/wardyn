@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -318,12 +319,7 @@ func agentImageForKey(agent, key string, images map[string]string) string {
 // rather than a floating ":latest" that a later release re-points under a
 // version-pinned fleet's feet. ":latest" is the last resort only when the build
 // carries no version string.
-func agentImageTag(v string) string {
-	if v == "" {
-		return "latest"
-	}
-	return v
-}
+func agentImageTag(v string) string { return cmp.Or(v, "latest") }
 
 // primaryWorkspacePath returns the run's first local host workspace mount source
 // (the directory the agent operates in), or "" for a git-clone / ephemeral run.
