@@ -22,6 +22,7 @@ import (
 type countingCapStore struct {
 	store.Store
 	forCalls, fullCalls, enfCalls atomic.Int64
+	groupDenyCalls                atomic.Int64
 	grants                        []types.CapabilityGrant
 	enf                           map[string]bool
 	workspaces                    []types.Workspace
@@ -57,6 +58,26 @@ func (c *countingCapStore) ListCapabilityGrants(context.Context) ([]types.Capabi
 	c.fullCalls.Add(1)
 	return c.grants, nil
 }
+
+// ListGroupDenyGrants is the read capUnresolvableGroupDeny makes on the stale
+// path. It replaced the whole-table ListCapabilityGrants above, which used to
+// cost O(grant table) per checked value on the path EVERY pre-0.7 API token
+// takes; the predicate here mirrors the SQL exactly (group + deny + this kind)
+// so this double cannot be the reason the two agree.
+//
+// Counted, and counted into total(): the stale path's third read is still a
+// read, and leaving it out would let a per-VALUE resolution of it slip past the
+// flatness law below — the very growth that law exists to forbid.
+func (c *countingCapStore) ListGroupDenyGrants(_ context.Context, capability string) ([]types.CapabilityGrant, error) {
+	c.groupDenyCalls.Add(1)
+	var out []types.CapabilityGrant
+	for _, g := range c.grants {
+		if g.SubjectType == types.CapabilitySubjectGroup && g.Effect == types.CapabilityDeny && g.Capability == capability {
+			out = append(out, g)
+		}
+	}
+	return out, nil
+}
 func (c *countingCapStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
 	c.enfCalls.Add(1)
 	return c.enf, nil
@@ -65,7 +86,7 @@ func (c *countingCapStore) ListWorkspaces(context.Context) ([]types.Workspace, e
 	return c.workspaces, nil
 }
 func (c *countingCapStore) total() int64 {
-	return c.forCalls.Load() + c.fullCalls.Load() + c.enfCalls.Load()
+	return c.forCalls.Load() + c.fullCalls.Load() + c.enfCalls.Load() + c.groupDenyCalls.Load()
 }
 
 // TestCapBatch_StoreReadsAreFlatInCallerInput is the pin for the growth law.
@@ -108,7 +129,7 @@ func TestCapBatch_StoreReadsAreFlatInCallerInput(t *testing.T) {
 	for _, c := range []struct {
 		name  string
 		stale bool
-		want  int64 // GrantsFor + Enforcement, plus the full-table read when stale
+		want  int64 // GrantsFor + Enforcement, plus the group-deny read when stale
 	}{
 		{"answerable snapshot", false, 2},
 		{"stale snapshot", true, 3},

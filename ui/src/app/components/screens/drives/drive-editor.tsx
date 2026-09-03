@@ -42,6 +42,7 @@ import { Input } from "../../ui/input";
 import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
 import { Label } from "../../ui/label";
 import { Field, OptionCard, Switch } from "../../wardyn/form-primitives";
+import { useOperator } from "../../wardyn/operator-context";
 import { Note, withMono } from "./display";
 
 // The three templates in admin-surface order (types.HomeTemplates). There is no
@@ -72,7 +73,6 @@ export function DriveEditor({
   drive,
   runnerTarget,
   hostRootsConfigured,
-  disabled,
   onCancel,
   onSaved,
 }: {
@@ -82,10 +82,12 @@ export function DriveEditor({
   runnerTarget: string;
   /** GET /drives's host_roots_configured — whether a host path may back a drive at all. */
   hostRootsConfigured: boolean;
-  disabled: boolean;
   onCancel: () => void;
   onSaved: () => void;
 }) {
+  // The tier gate off the context this editor already sits inside, not drilled
+  // from the screen — the same read the sibling UserDrivesCard makes.
+  const disabled = !useOperator();
   const offered = backendsFor(runnerTarget);
   const [name, setName] = React.useState(drive?.name ?? "");
   const [backend, setBackend] = React.useState<DriveBackend>(drive?.backend ?? offered[0] ?? "docker_volume");
@@ -101,15 +103,22 @@ export function DriveEditor({
   const [error, setError] = React.useState<{ title?: string; message: string } | null>(null);
 
   const managed = isManagedBackend(backend);
+  // The rule runs BOTH ways, and until 2026-09-03 only one way was gated here.
   // A share's directories are named by the corporation's own directory, so the
-  // derived id cannot name one — disabled here, refused on the API path.
-  const homeDisabled = (t: HomeTemplate) => t === "hash" && !managed;
-  // Selecting a share while `hash` is chosen would author exactly the row the
-  // server refuses, so the choice moves with the backend rather than waiting to
-  // be refused.
+  // derived id cannot name one. A MANAGED drive is the mirror: its home segment
+  // is concatenated into the object name that `docker volume ls` and `kubectl
+  // get pvc` print, so a subject-bearing template would publish the principal
+  // there — refused on the API path for `email_local` all along, and for `sub`
+  // since 2026-09-03. Offering a choice the server always refuses is a menu that
+  // 400s, so both directions are disabled here.
+  const homeDisabled = (t: HomeTemplate) => (managed ? t !== "hash" : t === "hash");
+  // Selecting a backend while an incompatible template is chosen would author
+  // exactly the row the server refuses, so the choice moves with the backend
+  // rather than waiting to be refused.
   const pickBackend = (b: DriveBackend) => {
     setBackend(b);
     if (!isManagedBackend(b) && home === "hash") setHome("sub");
+    if (isManagedBackend(b) && home !== "hash") setHome("hash");
   };
 
   const save = async () => {

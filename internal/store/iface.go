@@ -176,6 +176,12 @@ type Store interface {
 	GetSSHKeyByFingerprint(ctx context.Context, fingerprint string) (types.SSHPublicKey, error)
 	DeleteSSHKey(ctx context.Context, fingerprint, principal string) error
 	RefreshSSHKeyRoles(ctx context.Context, principal, role string, checkedAt time.Time) error
+	// RefreshAPITokenRoles re-stamps role on every unrevoked api_tokens row a
+	// principal holds. Fired from the SAME OnLogin hook as RefreshSSHKeyRoles,
+	// because both credentials freeze a role at issue time and neither had any
+	// way to learn about a demotion. See the implementation for why it does not
+	// touch groups, and for the ceiling it does NOT remove.
+	RefreshAPITokenRoles(ctx context.Context, principal, role string) error
 
 	// Per-user API tokens (migration 0045, self-service via /api/v1/me/tokens
 	// and admin-wide via /api/v1/tokens). These ARE part of Store for the same
@@ -213,6 +219,13 @@ type Store interface {
 	UpsertCapabilityGrant(ctx context.Context, g types.CapabilityGrant) (types.CapabilityGrant, error)
 	DeleteCapabilityGrant(ctx context.Context, id uuid.UUID) error
 	ListCapabilityGrants(ctx context.Context) ([]types.CapabilityGrant, error)
+	// ListGroupDenyGrants returns the group-subject DENY rows of one kind — the
+	// only rows the unresolvable-group-deny refusal can match. Separate from
+	// ListCapabilityGrants because that refusal is on the request path of every
+	// caller with an unanswerable group snapshot (every pre-0.7 API token), and
+	// answering it with the whole table made an authorization check cost scale
+	// with the table's size. See the implementation.
+	ListGroupDenyGrants(ctx context.Context, capability string) ([]types.CapabilityGrant, error)
 	// ListCapabilityGrantsFor returns the grants that could apply to one caller:
 	// the `all` rows plus the `user` rows naming any of users (sub AND email)
 	// plus the `group` rows naming any of groups. Not filtered by capability —
@@ -326,7 +339,10 @@ type Store interface {
 	// UpsertUserDriveGrant keys on the natural UNIQUE (subject_type, subject):
 	// re-allocating a subject REPOINTS its one row, returning the EXISTING
 	// row's id on a conflict. ErrNotFound when drive_id names no drive (the FK
-	// rejects it).
+	// rejects it). ErrConflict when ANOTHER subject already holds this drive
+	// with the same home_override — a directory name is one person's, which is
+	// why a group row may not carry one, and on a managed drive it is the last
+	// way left to point two people at one object Wardyn creates.
 	UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant) (types.UserDriveGrant, error)
 	// DeleteUserDriveGrant RETURNS the row it removed (ErrNotFound when none
 	// matched): the delete's own audit row has to name the subject that was

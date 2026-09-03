@@ -24,8 +24,8 @@ func TestPATBroker_WithholdsGrantsFromTheSandbox(t *testing.T) {
 
 	t.Run("broker ON: the sandbox gets hosts, never grant ids", func(t *testing.T) {
 		env := map[string]string{}
-		applyDispatchModeEnv(env, run, false, "exec", "", false, "", nil,
-			map[string]string{"gitlab.com": pat["gitlab.com"]}, nil, nil, true)
+		applyDispatchModeEnv(env, run, dispatchParams{TaskMode: "exec", PATBroker: true,
+			GitPATGrants: map[string]string{"gitlab.com": pat["gitlab.com"]}})
 
 		if got, ok := env["WARDYN_GIT_PAT_GRANTS"]; ok {
 			t.Errorf("WARDYN_GIT_PAT_GRANTS = %q — with the broker on the grant ids must be WITHHELD, or the in-sandbox helper mints the PAT anyway and it is resident despite the broker", got)
@@ -44,8 +44,8 @@ func TestPATBroker_WithholdsGrantsFromTheSandbox(t *testing.T) {
 
 	t.Run("broker OFF: pre-0.7 behaviour, unchanged", func(t *testing.T) {
 		env := map[string]string{}
-		applyDispatchModeEnv(env, run, false, "exec", "", false, "", nil,
-			map[string]string{"gitlab.com": pat["gitlab.com"]}, nil, nil, false)
+		applyDispatchModeEnv(env, run, dispatchParams{TaskMode: "exec",
+			GitPATGrants: map[string]string{"gitlab.com": pat["gitlab.com"]}})
 
 		if env["WARDYN_GIT_PAT_GRANTS"] == "" {
 			t.Error("with the broker off the grant ids must still reach the sandbox — that is what the escape hatch preserves")
@@ -58,7 +58,7 @@ func TestPATBroker_WithholdsGrantsFromTheSandbox(t *testing.T) {
 	t.Run("no PAT grants: neither variable appears either way", func(t *testing.T) {
 		for _, on := range []bool{true, false} {
 			env := map[string]string{}
-			applyDispatchModeEnv(env, run, false, "exec", "", false, "", nil, nil, nil, nil, on)
+			applyDispatchModeEnv(env, run, dispatchParams{TaskMode: "exec", PATBroker: on})
 			if _, ok := env["WARDYN_GIT_PAT_BROKER_HOSTS"]; ok {
 				t.Errorf("broker=%v: a run with no PAT grants must not get a broker host list", on)
 			}

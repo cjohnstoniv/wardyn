@@ -93,50 +93,39 @@ func (s *Server) routes() chi.Router {
 			// moved between the two groups leaves the TOTAL unchanged and only
 			// the split wrong, which no total can catch.
 			//
-			//                                        SUPER   SEC
-			//   direct registrations in this body       10     8
-			//   mountPermissionRoutes  (this file)       0     4
-			//   mountAccountRoutes     (this file)       0     2
-			//   adminRoutes            (this file)       1     1
-			//   mountLibraryRoutes     (sources.go)      5     0
-			//   mountSetupMutationRoutes                 4     0
-			//   mountAccessRoutes      (access.go)       4     0
-			//   mountGovernanceRoutes  (governance.go)   0     7
-			//                                        -----  ----
-			//                                           24    22
+			// WHERE THE GATED ROUTES ARE REGISTERED. This is a map, not a
+			// census: which addend a route lives in is the thing no test can
+			// tell you, and it is stable. The COUNTS are not, and they are
+			// deliberately absent — this comment carried hand-summed totals for
+			// three revisions and was wrong in two of them, most recently
+			// because another lane re-tiered a route the same day. A number
+			// restated here is a second account of something a test already
+			// asserts, and the two drift silently.
 			//
-			// The 8 SEC direct registrations below: POST /sessions/revoke ·
-			// workspace approved-egress + denied-egress + record +
-			// record/{task}/promote-egress · the two /site-config probes · GET
-			// /access/directory/search (§I, new in 0.7 and outside §B's count,
-			// like /governance's 7). The other 7 SEC live in this file's
-			// helpers: mountPermissionRoutes' 4 (the /permissions family,
-			// extracted for funlen — see its doc), mountAccountRoutes' 2 (the
-			// admin token twins /tokens, /tokens/{id}) and adminRoutes' GET
-			// /audit/chain/verify (its sibling, the sandbox sweep, stays SUPER).
+			//   direct registrations in this body   (both groups)
+			//   mountPermissionRoutes  (this file)  securityOps
+			//   mountAccountRoutes     (this file)  securityOps
+			//   adminRoutes            (this file)  one per group
+			//   mountLibraryRoutes     (sources.go) operatorOnly (+ member reads on r)
+			//   mountSetupMutationRoutes            operatorOnly
+			//   mountAccessRoutes      (access.go)  operatorOnly
+			//   mountGovernanceRoutes  (governance.go) — CALLED WITH securityOps,
+			//       despite naming its parameter operatorOnly; read the call site
+			//   mountUserDriveRoutes   (user_drives.go) operatorOnly
 			//
-			// = 46 group registrations with every conditional route mounted
-			// (Secrets configured); 43 with Secrets unconfigured — 3 of
-			// mountSetupMutationRoutes' 4 are conditional on s.cfg.Secrets, and
-			// POST /sessions/revoke on s.cfg.SessionRevocations. 0.7 moved
-			// PUT/DELETE /secrets off these groups entirely (see "Secret
-			// management" below), and five workspace routes
-			// (create/update/delete/scan/build) LEFT for the owner-or-admin tier
-			// in 0048 — those gates moved INTO the handlers, they were not
-			// dropped.
+			// Re-derive by hand ONE ADDEND AT A TIME if you need to (W7-S1-1): a
+			// same-file grep silently misses every addend registered through a
+			// differently-named chi.Router parameter or living in another file,
+			// which is how mountUserDriveRoutes went unlisted here for a release.
 			//
-			// §B's 40 GATED ROUTES = these 24+22 MINUS mountGovernanceRoutes' 7
-			// AND §I's directory search (both new in 0.7, outside the count)
-			// PLUS the two gated elsewhere, both
-			// SUPER: GET /metrics (outside /api/v1, its own explicit
-			// requireOperator — commit "absorb the operator tier") and the attach
-			// WebSocket's ticket-LESS fallback lane (ticketOrHumanAuth's own
-			// group below; an interactive shell in a foreign sandbox is the
-			// ladder-killing case, and the ticket-BEARING lane is
-			// owner-or-admin). 26 SUPER / 14 SEC. The authoritative per-route
-			// classification is authz_test.go's chi.Walk matrix, which fails on
-			// any route it cannot classify — this comment is the derivation,
-			// that table is the enforcement.
+			// FOR THE ACTUAL NUMBERS, READ THE TEST. authz_test.go's chi.Walk
+			// matrix fails on any route it cannot classify, and
+			// TestSecurityAdminRouteTier asserts the security/admin split as a
+			// number — so a re-tiering reddens there, where it is enforced,
+			// instead of quietly disagreeing with prose here. §B's own subset
+			// (which deliberately excludes the 0.7 mounts) is a SMALLER pair
+			// than the matrix total; if you are checking a tier boundary, the
+			// matrix pair is the one you want, and the test is where it lives.
 			operatorOnly := r.With(s.requireOperator)
 			// securityOps is the SECOND admin tier (0.7, §B): admin OR
 			// security_admin, via requireSecurityOperator / isSecurityOperator
@@ -147,6 +136,14 @@ func (s *Server) routes() chi.Router {
 			// hold the org allow/denylist, revoke a human's session or another
 			// human's API token, promote a workspace's observed egress, author
 			// governance profiles.
+			//
+			// "a human's" INCLUDES A SUPER ADMIN'S, and the revoke route's
+			// {"all":true} arm is deployment-wide — see handleRevokeSessions
+			// (sessions.go) for why that is the tier working rather than a hole,
+			// and TestSecurityAdminRevokesSuperAdmin for the pin. Stated here
+			// because "only ever SUBTRACTS reach" is the justification that put
+			// the route on this group, and a reader is entitled to know it was
+			// measured against a target in the tier ABOVE, not just a member.
 			//
 			// NOT a rung below operatorOnly on a ladder — the two tiers overlap
 			// on this surface and deliberately do not nest. A security admin's

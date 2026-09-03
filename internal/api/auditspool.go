@@ -45,7 +45,27 @@ type AuditSpool struct {
 	// spoolPoisonAttempts times running (see Drain). Surfaced on /metrics: the
 	// spool draining back to 0 must not be the same signal as the spool being
 	// COMPLETE, and after a quarantine those two differ.
+	//
+	// SEEDED FROM THE SIDECAR at NewAuditSpool, because the condition it reports
+	// is PERSISTENT ON DISK while a process-local counter is not. Any restart
+	// after a quarantine - a deploy, a crash loop, a pod reschedule - returned
+	// it to 0 while the sidecar still held the missing events, and /metrics then
+	// showed a completely healthy audit surface over a trail that is
+	// permanently incomplete.
 	quarantined atomic.Int64
+	// lines is the number of un-replayed events in the spool: the
+	// wardyn_audit_spool_lines gauge. An atomic maintained by Append and Drain
+	// rather than a per-scrape recount of the file, because /metrics must not
+	// queue behind a drain pass - see Lines().
+	lines atomic.Int64
+	// consumed is the byte offset of the first un-replayed line: everything
+	// before it is already in the durable store and is waiting only to be
+	// reclaimed. Drain advances it instead of rewriting the whole file on every
+	// pass - see the compaction rule in Drain. Guarded by mu.
+	consumed int64
+	// windowBase is the file offset the current Drain window was read from.
+	// Guarded by mu.
+	windowBase int64
 	// poisonKey/poisonHits track consecutive rejections of ONE line, keyed by
 	// its exact bytes: a store that is DOWN fails every line and must keep
 	// retrying forever, while a line the store will NEVER accept fails
@@ -76,6 +96,13 @@ const spoolPoisonAttempts = 3
 // retried then.
 const spoolDrainDeadline = 15 * time.Second
 
+// spoolReadWindow bounds how many bytes ONE Drain pass reads. A pass replays at
+// most `batch` events, so reading the WHOLE file to find them made a pass cost
+// O(backlog) rather than O(batch) - and since clearing a backlog of N takes
+// ceil(N/batch) passes, the recovery the spool exists to perform cost O(N^2).
+// 1 MiB holds several thousand audit lines, far more than any sane batch.
+const spoolReadWindow = 1 << 20
+
 // errSpoolLineQuarantined is what Drain returns after moving a line aside. It
 // is an ERROR and not a silent success on purpose — a quarantine means the
 // queryable trail is now permanently missing an event that the spool holds, and
@@ -99,7 +126,31 @@ func NewAuditSpool(path string) (*AuditSpool, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &AuditSpool{f: f, path: path}, nil
+	a := &AuditSpool{f: f, path: path}
+	// Both counters describe state that is ON DISK and outlives this process, so
+	// both are read back from it rather than started at zero. For the backlog
+	// that is merely correct; for the quarantine it is the whole point - a
+	// restart used to clear the only scrape-surface signal that the queryable
+	// trail is permanently incomplete, while the sidecar holding the missing
+	// events sat untouched beside the spool.
+	a.lines.Store(countSpoolLines(path))
+	a.quarantined.Store(countSpoolLines(a.quarantinePath()))
+	return a, nil
+}
+
+// countSpoolLines counts the JSONL lines in path, 0 for a missing or unreadable
+// one. Same line semantics as Drain: a trailing newline is a terminator, and a
+// torn tail with no newline is still a line.
+func countSpoolLines(path string) int64 {
+	buf, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	trimmed := bytes.TrimRight(buf, "\n")
+	if len(bytes.TrimSpace(trimmed)) == 0 {
+		return 0
+	}
+	return int64(bytes.Count(trimmed, []byte{'\n'}) + 1)
 }
 
 // Append writes one event as a single JSON line and fsyncs it, so a crash right
@@ -127,7 +178,13 @@ func (a *AuditSpool) Append(ev types.AuditEvent) error {
 	if _, err := a.f.Write(payload); err != nil {
 		return err
 	}
-	return a.f.Sync()
+	if err := a.f.Sync(); err != nil {
+		return err
+	}
+	// Exactly one line either way: a torn fragment was ALREADY counted as a line
+	// (a tail with no newline is a line), and the separator only terminates it.
+	a.lines.Add(1)
+	return nil
 }
 
 // endsUnterminated reports whether the spool's last on-disk byte is not '\n' —
@@ -202,14 +259,22 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	buf, err := os.ReadFile(a.path)
+	fi, err := os.Stat(a.path)
 	if err != nil {
 		return 0, err
 	}
-	if len(bytes.TrimSpace(buf)) == 0 {
+	size := fi.Size()
+	if a.consumed >= size {
+		// Everything on disk is already in the store; reclaim it and stop.
+		return 0, a.reclaimAll(size)
+	}
+	lines, ends, chunkLen, err := a.readWindow(size)
+	if err != nil {
+		return 0, err
+	}
+	if len(lines) == 0 {
 		return 0, nil
 	}
-	lines := bytes.Split(bytes.TrimRight(buf, "\n"), []byte{'\n'})
 
 	// drop marks the lines this pass removes from the file: recorded, empty,
 	// corrupt, or quarantined. It is a per-line mark rather than the prefix
@@ -315,50 +380,177 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 		}
 	}
 
-	keep := make([][]byte, 0, len(lines))
-	consumed := 0
-	for i, line := range lines {
+	// The drop set is a PREFIX in every ordinary pass: the loop stops at the
+	// first line the store would not take, so everything it dropped lies in
+	// front of everything it kept. That is what lets a pass retire its work by
+	// advancing a byte offset instead of rewriting the file. The one exception
+	// is a blank or torn line sitting BEHIND a held-back poison suspect - real,
+	// but rare - and it falls through to the rewrite below.
+	prefix, dropped := 0, 0
+	for i := range lines {
 		if drop[i] {
-			consumed++
-			continue
+			dropped++
+			if prefix == i {
+				prefix = i + 1
+			}
 		}
-		keep = append(keep, line)
 	}
-	if consumed == 0 {
-		return 0, replayErr
+	if dropped == 0 {
+		return replayed, replayErr
 	}
+	a.lines.Add(-int64(dropped))
+	if dropped == prefix {
+		a.consumed += ends[prefix-1]
+		// COMPACT ONLY WHEN THE RECLAIM PAYS FOR ITSELF: once the consumed
+		// prefix is at least as big as what is left, a rewrite halves the file,
+		// so the rewrites over a whole backlog sum to at most 2N instead of the
+		// N^2/(2*batch) that rewriting every pass cost (measured: 159x write
+		// amplification at 64k spooled events, and the fsyncs land on the same
+		// volume as the database that has just come back). Reaching the end
+		// always reclaims, so an emptied spool still reads 0 on disk.
+		if a.consumed >= size {
+			return replayed, errors.Join(replayErr, a.reclaimAll(size))
+		}
+		if a.consumed*2 < size {
+			return replayed, replayErr
+		}
+	}
+	keep := make([][]byte, 0, len(lines))
+	for i, line := range lines {
+		if !drop[i] {
+			keep = append(keep, line)
+		}
+	}
+	return replayed, errors.Join(replayErr, a.compact(keep, a.consumedBase()+chunkLen, size))
+}
+
+// consumedBase is the file offset the current window was read from.
+func (a *AuditSpool) consumedBase() int64 { return a.windowBase }
+
+// readWindow reads at most spoolReadWindow bytes of un-replayed spool, splits
+// it into whole lines, and returns those lines, the offset just past each one
+// (relative to the window start) and the window's byte length. A window that
+// does not reach EOF is cut back to its last newline, so a line is never split
+// across passes; the remainder is simply the next pass's problem.
+//
+// Caller must hold a.mu.
+func (a *AuditSpool) readWindow(size int64) ([][]byte, []int64, int64, error) {
+	a.windowBase = a.consumed
+	end := size
+	if size-a.consumed > spoolReadWindow {
+		end = a.consumed + spoolReadWindow
+	}
+	f, err := os.Open(a.path)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	defer f.Close()
+	buf := make([]byte, end-a.consumed)
+	if _, err := f.ReadAt(buf, a.consumed); err != nil {
+		return nil, nil, 0, err
+	}
+	if end < size {
+		i := bytes.LastIndexByte(buf, '\n')
+		if i < 0 {
+			// One line longer than the window. Take the whole remainder rather
+			// than making no progress for ever.
+			buf = make([]byte, size-a.consumed)
+			if _, err := f.ReadAt(buf, a.consumed); err != nil {
+				return nil, nil, 0, err
+			}
+			end = size
+		} else {
+			buf = buf[:i+1]
+		}
+	}
+	var lines [][]byte
+	var ends []int64
+	start := 0
+	for i := 0; i < len(buf); i++ {
+		if buf[i] == '\n' {
+			lines = append(lines, buf[start:i])
+			ends = append(ends, int64(i+1))
+			start = i + 1
+		}
+	}
+	if start < len(buf) { // torn tail: only reachable at EOF, and still a line
+		lines = append(lines, buf[start:])
+		ends = append(ends, int64(len(buf)))
+	}
+	return lines, ends, int64(len(buf)), nil
+}
+
+// reclaimAll empties a fully-drained spool in place. No temp file, no rename,
+// so the fd stays valid and the common case costs one truncate.
+//
+// Caller must hold a.mu.
+func (a *AuditSpool) reclaimAll(size int64) error {
+	a.consumed = 0
+	if size == 0 {
+		return nil
+	}
+	return os.Truncate(a.path, 0)
+}
+
+// compact rewrites the spool as head (the kept lines of the processed window)
+// followed by the raw bytes from tailStart to size, dropping the consumed
+// prefix. Atomic via rename.
+//
+// THE NEW FD IS OPENED ON THE TEMP FILE BEFORE THE RENAME and swapped in after
+// it, so there is no window in which a.f points at an inode the rename has
+// already unlinked. Reopening the path AFTER the rename left one: a failure
+// there (fd exhaustion, most likely under exactly the load that produced the
+// backlog) returned with a.f still on the unlinked inode, and every later
+// Append then wrote and fsynced into a file with no directory entry and
+// returned nil - so spoolingRecorder logged nothing, Lines() read the new file
+// and reported 0, and the runbook's "the gauge is back to 0" meant the events
+// were gone. That inverted C1, the invariant this whole file exists to hold,
+// into silent loss behind a healthy-looking gauge. Opening first removes the
+// failure mode instead of handling it: nothing between the rename and the swap
+// can fail. O_RDWR, not O_WRONLY, so endsUnterminated's ReadAt probe keeps
+// working on the new fd - the torn-tail separator silently stopped being
+// applied after the first compaction when the reopen used O_WRONLY.
+//
+// Caller must hold a.mu.
+func (a *AuditSpool) compact(head [][]byte, tailStart, size int64) error {
 	var out []byte
-	if len(keep) > 0 {
-		out = append(bytes.Join(keep, []byte{'\n'}), '\n')
+	if len(head) > 0 {
+		out = append(bytes.Join(head, []byte{'\n'}), '\n')
+	}
+	if tailStart < size {
+		tail := make([]byte, size-tailStart)
+		rf, err := os.Open(a.path)
+		if err != nil {
+			return err
+		}
+		_, err = rf.ReadAt(tail, tailStart)
+		rf.Close()
+		if err != nil {
+			return err
+		}
+		out = append(out, tail...)
 	}
 	tmp := a.path + ".tmp"
-	tf, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	tf, err := os.OpenFile(tmp, os.O_CREATE|os.O_RDWR|os.O_TRUNC|os.O_APPEND, 0o600)
 	if err != nil {
-		return replayed, err
+		return err
 	}
 	if _, err := tf.Write(out); err != nil {
 		tf.Close()
-		return replayed, err
+		return err
 	}
 	if err := tf.Sync(); err != nil {
 		tf.Close()
-		return replayed, err
-	}
-	if err := tf.Close(); err != nil {
-		return replayed, err
+		return err
 	}
 	if err := os.Rename(tmp, a.path); err != nil {
-		return replayed, err
-	}
-	// The old fd still points at the renamed-away inode; reopen O_APPEND on the new
-	// file so subsequent Appends land in the spool operators actually read.
-	nf, err := os.OpenFile(a.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return replayed, err
+		tf.Close()
+		return err
 	}
 	_ = a.f.Close()
-	a.f = nf
-	return replayed, replayErr
+	a.f = tf
+	a.consumed = 0
+	return nil
 }
 
 // strikeLine records one more consecutive rejection of exactly this line and
@@ -444,25 +636,31 @@ func (a *AuditSpool) Quarantined() int64 {
 // disabled) reports 0, and so does an unreadable file — this is an observability
 // gauge, not a correctness path.
 //
-// ponytail: re-reads and counts the file per call, O(spool size). The spool is
-// empty in steady state and /metrics is scraped, not hot-looped; track a counter
-// alongside f only if a long outage ever makes this show up in a profile.
+// TAKES NO LOCK, ON PURPOSE, and this is the reason the count is an atomic
+// rather than a re-read of the file. Drain holds a.mu across every rec.Record,
+// bounded only by spoolDrainDeadline, and a blocked store is exactly when this
+// gauge is worth reading: an external session that inserted into audit_events
+// and left its transaction open holds the chain lock, so the pass runs the full
+// 15 seconds. A Lines() that waited on that mutex blocked the whole /metrics
+// handler with it - past Prometheus' 10s default scrape_timeout, so the scrape
+// was cancelled and the ENTIRE response was lost, wardyn_store_up and the run
+// counters included, once per tick for as long as the outage lasted. The two
+// gauges docs/OPERATIONS.md names for telling a dead store from an idle cluster
+// disappeared during precisely the event they exist to report.
+//
+// Reading an atomic instead makes the scrape O(1) and structurally free of the
+// drain: no shared memory beyond the counter is touched, so there is nothing to
+// race on. The count can be momentarily stale against the file (an Append that
+// has fsynced but not yet incremented), which is what a gauge is for.
 func (a *AuditSpool) Lines() int {
 	if a == nil {
 		return 0
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	buf, err := os.ReadFile(a.path)
-	if err != nil {
+	n := a.lines.Load()
+	if n < 0 {
 		return 0
 	}
-	// Same line semantics as Drain: trailing newline is a terminator, not a line.
-	trimmed := bytes.TrimRight(buf, "\n")
-	if len(bytes.TrimSpace(trimmed)) == 0 {
-		return 0
-	}
-	return bytes.Count(trimmed, []byte{'\n'}) + 1
+	return int(n)
 }
 
 // TornDrops reports how many spool lines Drain has dropped as unparseable (a

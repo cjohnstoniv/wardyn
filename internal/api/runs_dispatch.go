@@ -31,11 +31,24 @@ type dispatchParams struct {
 	Policy             types.RunPolicySpec  // egress/resource policy (dispatchRun mutates a local copy)
 	FirstGitHubGrantID *uuid.UUID           // surfaced as WARDYN_GITHUB_GRANT_ID; nil when no GitHub grant
 	GitGrants          map[string]uuid.UUID // git-broker allowlist {"<org>/<repo>": grant_id}; proxy-side only
-	// The never-resident git_pat posture is deliberately NOT a field here: it is
-	// a DEPLOYMENT-wide operator escape hatch (Config.DisableGitPATBroker,
-	// WARDYN_GIT_PAT_BROKER), so dispatchRun derives it once rather than every
-	// lane remembering to pass it. It used to be an optional field, and no
-	// production caller set it — see dispatchRun's derivation for what that cost.
+	// PATBroker reports whether the never-resident git_pat lane is on: the PAT is
+	// minted PROXY-SIDE and no grant id reaches the sandbox env.
+	//
+	// SET BY dispatchRun, NEVER BY A CALLER — it overwrites whatever arrives here
+	// from Config.DisableGitPATBroker (WARDYN_GIT_PAT_BROKER), because the
+	// posture is a DEPLOYMENT-wide operator escape hatch rather than a per-run
+	// choice. It lives on the struct only because applyDispatchModeEnv takes the
+	// whole parameter object; a value a lane sets is ignored.
+	//
+	// That overwrite IS the fix. This was an ordinary optional field, and no
+	// production literal ever set it, so every real dispatch ran with it false:
+	// patBrokerGrants returned nil, ProxyConfig.PATGrants stayed empty, and
+	// WARDYN_GIT_PAT_GRANTS rode into the sandbox — the pre-0.7 resident posture
+	// docs/ENV.md and docs/POLICIES.md say only `off` restores, while
+	// Config.DisableGitPATBroker was read by nothing at all. A per-lane opt-in
+	// that defaults to the weaker posture is a control whose default is "off by
+	// omission", and the omission is invisible.
+	PATBroker        bool
 	GitPATGrants     map[string]string          // {host: grant_id} for non-GitHub PAT hosts
 	SSHGrants        map[string]string          // {host: grant_id} for SSH clone hosts
 	Injections       []runner.InjectionGrant    // proxy-side credential injections
@@ -153,10 +166,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	}
 	// Only the values a phase below REBINDS get a local alias; everything else is
 	// read straight off p (the named-field struct is already self-documenting).
-	image := p.Image
 	policy := p.Policy // local copy; the phases below mutate policy.AllowedDomains
 	injections := p.Injections
-	interactive := p.Interactive
 
 	// Client-disconnect isolation: dispatch is invoked synchronously from the
 	// create-run handler, so a client disconnect cancels ctx mid-flight — which would
@@ -210,21 +221,17 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// a credential and is not getting it, so say why — same shape as the codex-cli
 	// drop (applySSHLaneWarnings, runs_create.go), minus the response warning,
 	// which dispatch has no caller to return one to.
-	// THE NEVER-RESIDENT git_pat LANE, derived from the deployment's own flag
-	// rather than taken from the caller. It was a dispatchParams field that NO
-	// production literal ever set, so every real dispatch ran with it false:
-	// patBrokerGrants returned nil, ProxyConfig.PATGrants stayed empty, and
-	// applyDispatchModeEnv left WARDYN_GIT_PAT_GRANTS in the sandbox env — i.e.
-	// exactly the pre-0.7 resident posture docs/ENV.md and docs/POLICIES.md say
-	// only `WARDYN_GIT_PAT_BROKER=off` restores. Config.DisableGitPATBroker, the
-	// field the flag resolves into, was read by nothing at all. The promise was
-	// documented in three places and delivered in none.
+	// THE NEVER-RESIDENT git_pat LANE, derived from the deployment's own flag and
+	// stamped onto p before the call rather than taken from whatever a lane
+	// happened to pass. See PATBroker's field doc for what the caller-supplied
+	// version cost: a documented security posture that no code path delivered.
 	//
-	// Derived HERE, once, for the reason the ceiling argument above is required:
-	// a per-lane opt-in that defaults to the weaker posture is a control whose
-	// default is "off by omission", and the omission is invisible.
-	patBroker := !s.cfg.DisableGitPATBroker
-	droppedSSH, droppedPAT := applyDispatchModeEnv(sandboxEnv, run, interactive, p.TaskMode, p.InteractiveStart, p.SeedAutoTools, p.ToolApprovals, p.FirstGitHubGrantID, p.GitPATGrants, p.SSHGrants, p.GitGrants, patBroker)
+	// Assigning through p rather than a local is what the RC's parameter-object
+	// refactor of applyDispatchModeEnv asks for, and it is also the stronger
+	// shape: one authoritative write, read by both the env half below and the
+	// ProxyConfig half further down, with no second variable to fall out of step.
+	p.PATBroker = !s.cfg.DisableGitPATBroker
+	droppedSSH, droppedPAT := applyDispatchModeEnv(sandboxEnv, run, p)
 	s.auditBrokeredGrantDrop(ctx, run.ID, "ssh_key", "run.ssh.brokered_forge", droppedSSH,
 		"this run is brokered for a repo on this forge, so the git-broker route is its only route to it BY NAME "+
 			"(confineGitBrokerEgress denies the forge and its SSH endpoint). Withholding the key is load-bearing, not "+
@@ -239,6 +246,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			"Drop the github_token grant to push with your own PAT instead")
 	applyRepoCloneEnv(sandboxEnv, run, policy)
 	applyEphemeralDirsEnv(sandboxEnv, p.EphemeralDirs)
+	applyUserDriveEnv(sandboxEnv, p.Drive)
 	// Caller-supplied non-secret env (p.ExtraEnv): the AWS harness login's
 	// pre-login WARDYN_AWS_SSO_CONFIG_B64, or the site-config probe's own
 	// settings — the same "only a discriminator + non-secret payload changes;
@@ -290,7 +298,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// Bedrock > api-key gateway): sets the sandbox auth env (+ the codex-cli
 	// OpenAI gateway route), may widen policy egress for Bedrock, and reports
 	// which proxy-side injections / TLS-MITM this run needs.
-	llm := s.resolveLLMTransport(ctx, run, &policy, sandboxEnv, injections, interactive, p.TaskMode, proxyURL, p.BedrockRef)
+	llm := s.resolveLLMTransport(ctx, run, &policy, sandboxEnv, injections, p.Interactive, p.TaskMode, proxyURL, p.BedrockRef)
 	if p.ResolvedManaged != nil {
 		*p.ResolvedManaged = llm.injectManaged
 	}
@@ -389,15 +397,24 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// p.ExtraEnv and resolveLLMTransport's auth vars) so its refusal to overwrite
 	// an already-set variable covers every platform-authored key, not just the
 	// ones written above it. See resolveEnvSecretGrants.
-	s.resolveEnvSecretGrants(ctx, run, policy, sandboxEnv)
+	secretEnvKeys := s.resolveEnvSecretGrants(ctx, run, policy, sandboxEnv)
+
+	// Split the composed environment into its non-secret and credential-bearing
+	// halves — after EVERY writer above, so the "already set" guards each of them
+	// runs saw the whole map. See splitSecretEnv (it moves, never copies).
+	secretEnv := splitSecretEnv(sandboxEnv, append(secretEnvKeys, llm.secretEnvKeys...))
 
 	spec := runner.SandboxSpec{
 		RunID:            run.ID,
-		Image:            image,
+		Image:            p.Image,
 		ConfinementClass: run.ConfinementClass,
 		Env:              sandboxEnv,
-		Mounts:           mounts,
-		Drive:            p.Drive,
+		// The credential half (SandboxSpec.SecretEnv states the driver
+		// obligations). Nil for a run with no env_secret grant and no resident
+		// Bedrock credential, which is most of them.
+		SecretEnv: secretEnv,
+		Mounts:    mounts,
+		Drive:     p.Drive,
 		// nil for an operator run (the driver then behaves exactly as it does
 		// today); non-nil marks a member-owned-workspace run whose MEMBER-AUTHORED
 		// binds (stamped above by buildRunMounts) the driver re-checks against
@@ -406,7 +423,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// Interactive runs come up idle for `wardyn attach`; the driver prepares the
 		// workspace (clones the repo into ~/work) on the idle process so the attach
 		// shell isn't empty. A non-interactive run's task exec does this itself.
-		Interactive: interactive,
+		Interactive: p.Interactive,
 		ProxyConfig: runner.ProxyConfig{
 			RunToken:        p.RunToken,
 			ControlPlaneURL: s.cfg.ControlPlaneURL,
@@ -437,7 +454,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// hosts, minting the stored PAT proxy-side so it never enters the
 			// sandbox. Empty when the lane is off, which makes the route 403 —
 			// the same state as a run with no PAT grants at all.
-			PATGrants: patBrokerGrants(p.GitPATGrants, patBroker),
+			PATGrants: patBrokerGrants(p.GitPATGrants, p.PATBroker),
 			// Resolved above from site-config.UpstreamProxySecretRef; "" when
 			// unconfigured or unresolvable (direct dial, backward-compatible).
 			UpstreamProxyURL: upstreamProxyURL,
@@ -508,6 +525,20 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
 		return
 	}
+
+	// USER DRIVE ATTACHED — a no-op for the runs (most of them) that carry
+	// none. See auditDriveMount.
+	//
+	// AFTER CreateSandbox, not beside the spec that carries the drive: the
+	// driver has the last word on whether the drive is actually bound (the
+	// host-root ceiling and the bind deny-list are re-run there, on the
+	// symlink-resolved real path, as the last thing before the container is
+	// created). Emitted before that decision, a `success` row claimed a mount
+	// that the very next event — `run.create` `failure` — contradicted. Nothing
+	// downstream of here can refuse the drive, so this row is now true when it
+	// is written.
+	s.auditDriveMount(ctx, run.ID, p.Drive)
+
 	// HOLD the run's watcher lease for the rest of dispatch — starting the moment
 	// there is a sandbox to watch and BEFORE SetSandboxRef publishes its ref, so a
 	// run whose sandbox_ref is set is ALWAYS backed by a fresh lease while its
@@ -570,7 +601,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.metrics.sandboxLaunched(s.cfg.Now().Sub(run.CreatedAt))
 
 	// INTERACTIVE vs task exec vs BYOI selftest — see startAgentOrIdle.
-	s.startAgentOrIdle(ctx, run, sb.Ref, image, interactive)
+	s.startAgentOrIdle(ctx, run, sb.Ref, p.Image, p.Interactive)
 }
 
 // startAgentOrIdle is dispatch's final phase, after the run is RUNNING.
@@ -587,7 +618,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 // for an interactive/login box, warn-only (a login box legitimately lacks repo
 // wiring and the human sees the shell regardless). Keyed off the wardyn-byoi/
 // image tag so convention/devcontainer runs are unaffected. Extracted verbatim
-// from dispatchWithVerify.
+// from dispatchRun.
 //
 // mainProcessExecID is the agent_exec_id persisted when Runner.Exec succeeds
 // with an EMPTY id ("", nil) — an EXEC-LESS substrate (krun runtime; see
@@ -678,141 +709,6 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 		// where "" already means "use container Status" — the sentinel only
 		// matters for a value that gets persisted and re-read after a restart.
 		s.startCompletionWatcher(run.ID, ref, execID)
-	}
-}
-
-// resolveLLMInspectionSecrets resolves the llm_inspection detection corpus
-// store->proxy AT DISPATCH: WorkspaceSecretNames (the field a policy is
-// actually allowed to author — see types.LLMInspectionSpec, validatePolicySpec
-// refuses a raw value on any write) is looked up in the secret store and
-// appended to WorkspaceSecretValues on THIS dispatch's local policy copy only
-// — never a stored/ceiling spec, never re-read, never logged (the
-// run.policy.effective audit above redacts it to a count).
-//
-// Belt-and-braces (W12-A-2): every resolved value is ALSO registered with the
-// run's mask registry, so a verbatim leak into PTY capture, a session
-// recording, or any OTHER audit event's Data/Target is scrubbed the same way
-// any other run secret is (cmd/wardynd's maskingRecorder) — not merely kept
-// out of this one event.
-//
-// Fail-open per name: a name that no longer resolves (deleted secret, no
-// store configured) is skipped and audited by NAME only (never a value), and
-// dispatch continues — this is a detection guardrail, not an access-control
-// gate (types.LLMInspectionSpec's own doc: "a guardrail + visibility layer,
-// NOT exfiltration prevention").
-func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec) {
-	li := policy.LLMInspection
-	if li == nil || len(li.WorkspaceSecretNames) == 0 {
-		return
-	}
-	if s.cfg.Secrets == nil {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm_inspection.secrets_resolve",
-			run.ID.String(), "failure", mustJSON(map[string]any{
-				"reason": "no secret store configured", "names": li.WorkspaceSecretNames,
-			})))
-		return
-	}
-	var resolved, missing int
-	// run.CreatedBy: the run's own owner's row wins, falling back to the
-	// operator's (secretOwnerFromRequest.stamped rows never collide with an
-	// operator's own run identity string — see injection.go's Get for the
-	// same reasoning).
-	for _, name := range li.WorkspaceSecretNames {
-		val, err := s.cfg.Secrets.For(run.CreatedBy).Get(ctx, name)
-		if err != nil || len(val) == 0 {
-			missing++
-			continue
-		}
-		resolved++
-		li.WorkspaceSecretValues = append(li.WorkspaceSecretValues, string(val))
-		if s.cfg.MaskRegistry != nil {
-			s.cfg.MaskRegistry.Add(run.ID, val)
-		}
-	}
-	outcome := "success"
-	if missing > 0 {
-		outcome = "failure"
-	}
-	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm_inspection.secrets_resolve",
-		run.ID.String(), outcome, mustJSON(map[string]any{
-			"resolved": resolved, "missing": missing, "names": li.WorkspaceSecretNames,
-		})))
-}
-
-// envAllowMemberEnvSecret opts a deployment IN to letting MEMBERS hold
-// env_secret grants. DEFAULT CLOSED: unset means a member's env_secret grant is
-// dropped by filterMemberGrants even when the operator's ceiling lists the exact
-// (name, secret) pairing. An operator's own runs are unaffected — the ceiling
-// authority is never clamped by its own ceiling.
-const envAllowMemberEnvSecret = "WARDYN_ALLOW_MEMBER_ENV_SECRET"
-
-// resolveEnvSecretGrants resolves this run's env_secret grants store->sandbox
-// env at dispatch: each grant's scope names a stored secret and the variable to
-// put its VALUE under (envSecretScopeFields). This is the whole delivery
-// mechanism for the kind — there is no mint, no approval and no broker
-// involvement (mintKind refuses env_secret outright), which is why the closest
-// precedent is resolveLLMInspectionSecrets and not any of the git lanes.
-//
-// Every resolved value is registered with the run's mask registry, so a verbatim
-// leak into PTY capture, a session recording, or any audit event's Data is
-// scrubbed like any other run secret. Values NEVER enter the audit stream: the
-// events below carry the variable name and the secret NAME only.
-//
-// FAIL-CLOSED PER GRANT, deliberately the opposite of resolveLLMInspectionSecrets'
-// fail-open: that one feeds a detection corpus, where a missing entry costs
-// detection coverage; this one delivers a credential the task needs, where a
-// silently absent variable surfaces as an unauthenticated API call the agent
-// then reports as a task failure. So a grant is SKIPPED and audited (never
-// substituted, never blank-set) when its scope is unreadable, its secret is
-// reserved, the store is missing or the value is gone.
-//
-// It also refuses to OVERWRITE a variable dispatch already set to a NON-EMPTY
-// value. Everything in sandboxEnv by this point is platform-authored (the
-// harness's own WARDYN_*, the LLM transport's ANTHROPIC_*, artifact-redirect
-// config, p.ExtraEnv), and a grant that could replace one would be a config
-// override wearing a credential's clothes — the WARDYN_ prefix is already
-// refused at write time, and this closes the rest of the set without having to
-// enumerate it. Runs LAST in dispatch's env composition so "already set" means
-// all of it, not just the part written so far. Non-empty, not merely present:
-// an empty value carries no configuration to protect, and treating it as
-// occupied would make a placeholder key unfillable for no gain.
-func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, sandboxEnv map[string]string) {
-	for _, g := range policy.EligibleGrants {
-		if g.Kind != types.GrantEnvSecret {
-			continue
-		}
-		name, secretName, err := envSecretScopeFields(g.Scope)
-		skip := ""
-		switch {
-		case err != nil:
-			skip = "scope invalid: " + err.Error()
-		case sinkReservedSecret(secretName):
-			skip = "references a reserved platform-internal secret name"
-		case s.cfg.Secrets == nil:
-			skip = "no secret store configured"
-		case sandboxEnv[name] != "":
-			skip = "the sandbox env already sets this variable; a grant may not override platform-authored env"
-		}
-		if skip == "" {
-			// run.CreatedBy: same owner-then-operator-fallback rule as
-			// resolveLLMInspectionSecrets above.
-			val, gerr := s.cfg.Secrets.For(run.CreatedBy).Get(ctx, secretName)
-			if gerr != nil || len(val) == 0 {
-				skip = "secret could not be resolved"
-			} else {
-				sandboxEnv[name] = string(val)
-				if s.cfg.MaskRegistry != nil {
-					s.cfg.MaskRegistry.Add(run.ID, val)
-				}
-			}
-		}
-		data := map[string]any{"name": name, "secret_name": secretName}
-		outcome := "success"
-		if skip != "" {
-			outcome, data["reason"] = "failure", skip
-		}
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.env_secret.resolve",
-			run.ID.String(), outcome, mustJSON(data)))
 	}
 }
 

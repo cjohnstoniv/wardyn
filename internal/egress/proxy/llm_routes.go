@@ -96,7 +96,7 @@ func joinLLMPath(prefix, rest string) string {
 func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host string, port int, rest string, channel contentscan.Channel) {
 	hdr, ok := p.inject.headerFor(host)
 	if !ok {
-		p.emitLLMDecision(r, host, egress.Deny, ruleSourceLLM, nil)
+		p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLM, nil)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = fmt.Fprintf(w, `{"wardyn":"no_llm_credential","detail":"no LLM credential is brokered for %s"}`, host)
@@ -119,7 +119,7 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 		if errors.Is(err, errGatewayVet) {
 			source = "builtin:dial-failed"
 		}
-		p.emitLLMDecision(r, host, egress.Deny, source, nil)
+		p.emitLLMDecision(r, host, port, egress.Deny, source, nil)
 		p.httpError(w, "llm upstream vet failed", err, http.StatusBadGateway)
 		return
 	}
@@ -129,7 +129,7 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 	// returns blocked=true. Otherwise it returns the body to forward and a
 	// content-free scan summary to attach (non-nil only when there is something
 	// to report — a clean turn stays quiet).
-	bodyReader, scanSummary, blocked := p.inspectLLM(w, r, host, rest, channel)
+	bodyReader, scanSummary, blocked := p.inspectLLM(w, r, host, port, rest, channel)
 	if blocked {
 		return
 	}
@@ -163,7 +163,7 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		context.WithValue(r.Context(), vettedIPKey{}, target),
 		r.Method, upstreamURL, bodyReader)
 	if err != nil {
-		p.emitLLMDecision(r, host, egress.Deny, ruleSource, nil)
+		p.emitLLMDecision(r, host, port, egress.Deny, ruleSource, nil)
 		p.httpError(w, "build llm request", err, http.StatusBadGateway)
 		return
 	}
@@ -185,18 +185,14 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 	// summary) instead.
 	resp, err := p.transport.RoundTrip(outReq)
 	if err != nil {
-		p.emitLLMDecision(r, host, egress.Deny, "builtin:dial-failed", scanSummary)
+		p.emitLLMDecision(r, host, port, egress.Deny, "builtin:dial-failed", scanSummary)
 		p.httpError(w, "llm upstream error", err, http.StatusBadGateway)
 		return
 	}
-	p.emitLLMDecision(r, host, egress.Allow, ruleSource, scanSummary)
+	p.emitLLMDecision(r, host, port, egress.Allow, ruleSource, scanSummary)
 	defer func() { _ = resp.Body.Close() }()
 
-	dst := w.Header()
-	copyHeader(dst, resp.Header)
-	removeHopByHop(dst)
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	relay(w, resp)
 }
 
 // coverageInspectable / coverageOpaque describe whether the LLM transport for a
@@ -251,7 +247,7 @@ func scanSummaryFrom(res contentscan.Result, serr error, eng *contentscan.Engine
 // chat/completions (OpenAI) are scanned; other prompt-bearing subpaths are
 // honestly marked uninspected (never silently allowed); non-prompt paths stream
 // through quietly. host names the upstream for honest per-host decision logging.
-func (p *Proxy) inspectLLM(w http.ResponseWriter, r *http.Request, host, rest string, channel contentscan.Channel) (io.Reader, *egress.ScanSummary, bool) {
+func (p *Proxy) inspectLLM(w http.ResponseWriter, r *http.Request, host string, port int, rest string, channel contentscan.Channel) (io.Reader, *egress.ScanSummary, bool) {
 	if p.scanner == nil || p.scanner.Mode() == contentscan.ModeOff {
 		return r.Body, nil, false
 	}
@@ -259,14 +255,14 @@ func (p *Proxy) inspectLLM(w http.ResponseWriter, r *http.Request, host, rest st
 	case scanMessages:
 		return p.scanBufferedBody(w, r, channel, "read llm body",
 			func(d egress.Decision, ruleSource string, scan *egress.ScanSummary) {
-				p.emitLLMDecision(r, host, d, ruleSource, scan)
+				p.emitLLMDecision(r, host, port, d, ruleSource, scan)
 			})
 	case scanOpaque:
 		// Prompt-bearing subpath we cannot parse yet (e.g. /v1/messages/batches,
 		// OpenAI /v1/responses): emit an HONEST uninspected-channel skip rather
 		// than a silent allow, and refuse it under fail-closed blocking.
 		if p.scanner.BlocksOnError() {
-			p.emitLLMDecision(r, host, egress.Deny, ruleSourceLLMBlocked, p.skipSummary("block", "uninspected_channel", channel))
+			p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLMBlocked, p.skipSummary("block", "uninspected_channel", channel))
 			writeScanBlocked(w, 0, nil, "uninspected_channel")
 			return nil, nil, true
 		}
@@ -294,7 +290,7 @@ func hasScannableBody(r *http.Request) bool {
 func (p *Proxy) inspectForwardBody(w http.ResponseWriter, r *http.Request, host string, port int) (io.Reader, *egress.ScanSummary, bool) {
 	return p.scanBufferedBody(w, r, contentscan.ChannelGeneric, "read body",
 		func(d egress.Decision, ruleSource string, scan *egress.ScanSummary) {
-			p.emitLLMDecisionPort(r, host, port, d, ruleSource, scan)
+			p.emitLLMDecision(r, host, port, d, ruleSource, scan)
 		})
 }
 
@@ -353,8 +349,7 @@ func categoriesOf(findings []contentscan.Finding) []string {
 	for _, f := range findings {
 		set[string(f.Category)] = struct{}{}
 	}
-	out := slices.Sorted(maps.Keys(set))
-	return out
+	return slices.Sorted(maps.Keys(set))
 }
 
 // writeScanBlocked returns the 403 the sandbox client sees when a request is
@@ -511,16 +506,12 @@ func isBedrockHost(h string) bool {
 	return false
 }
 
-// emitLLMDecision emits a decision log for an LLM route (port 443) carrying a
-// content-free scan summary. host is the upstream model host.
-func (p *Proxy) emitLLMDecision(r *http.Request, host string, decision egress.Decision, ruleSource string, scan *egress.ScanSummary) {
-	p.emitLLMDecisionPort(r, host, 443, decision, ruleSource, scan)
-}
-
-// emitLLMDecisionPort is emitLLMDecision with an explicit port — used by the
-// generic forward path, where a connector may be on port 80 or a custom port and
-// recording 443 would be dishonest.
-func (p *Proxy) emitLLMDecisionPort(r *http.Request, host string, port int, decision egress.Decision, ruleSource string, scan *egress.ScanSummary) {
+// emitLLMDecision emits a decision log for an LLM or MITM route carrying a
+// content-free scan summary. host is the upstream model host; port is the REAL
+// destination port — a gateway on :8443 or an artifact mirror MITM'd on its
+// configured port must not be recorded as 443 (docs/AUDIT-ACTIONS.md lists
+// `port` as an egress.* detail field, and a wrong one is a dishonest row).
+func (p *Proxy) emitLLMDecision(r *http.Request, host string, port int, decision egress.Decision, ruleSource string, scan *egress.ScanSummary) {
 	if p.sink == nil {
 		return
 	}

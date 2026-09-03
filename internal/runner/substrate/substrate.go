@@ -77,6 +77,20 @@ type ClassSupport struct {
 	NetworkPolicyAcknowledged bool
 	// SessionRecording reports wardyn-rec PTY recording support.
 	SessionRecording bool
+	// UserDrives reports whether this substrate can BIND a member's user drive
+	// (migration 0054) into the sandbox — runner.SandboxSpec.Drive.
+	//
+	// FALSE IS THE FAIL-CLOSED DEFAULT AND IT IS LOAD-BEARING: a substrate that
+	// says nothing declares no drive support, and the control plane then
+	// refuses a drive-carrying run instead of admitting one this substrate
+	// rejects at CreateSandbox. Never overclaim, exactly as Classes must not.
+	//
+	// THE ORCHESTRATOR AGGREGATES THIS AS A CONJUNCTION, NOT A UNION — see its
+	// Capabilities. Every other flag here is OR-merged because it describes a
+	// control SOME substrate can enforce for a run routed to it; this one is
+	// consulted BEFORE routing, so one substrate that cannot bind a drive makes
+	// the deployment unable to promise one.
+	UserDrives bool
 }
 
 // Substrate is runner.Runner's lifecycle contract for ONE confinement substrate,

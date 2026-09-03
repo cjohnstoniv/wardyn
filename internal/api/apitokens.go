@@ -27,6 +27,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -106,6 +107,22 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 			return
 		}
 		if err != nil {
+			// VISIBLE SERVER-SIDE, because this 500s an entire authentication
+			// lane — every CI job and script holding a wdn_ token — and the
+			// only other evidence is a client complaint. writeError does not
+			// log, no audit row is written (there is no authenticated principal
+			// to attribute one to), and wardyn_store_up keeps scraping 1: that
+			// gauge answers a PING, which a pool passes while one table denies
+			// a read or one statement times out. A health signal that stays
+			// green through the outage it appears to cover argues AGAINST the
+			// operator's own evidence, so the honest fix is to say what the
+			// gauge asserts and give this lane its own series.
+			//
+			// ERROR level by internal/audit/sink.go's own rule: a lost event is
+			// an ERROR-level fact an operator can alert on.
+			slog.ErrorContext(r.Context(), "api: api-token lookup failed; this request could not be authenticated",
+				"error", err, "path", r.URL.Path)
+			s.metrics.authStoreErrorInc()
 			writeError(w, http.StatusInternalServerError, "api token lookup failed")
 			return
 		}
@@ -272,8 +289,9 @@ func (s *Server) handleListAPITokens(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleListAllAPITokens is GET /api/v1/tokens: every token in the deployment.
-// operatorOnly (routes.go) — this is the admin inventory that makes revoke-any
-// usable, and it names other humans, so it is not a member surface.
+// securityOps (routes.go) — admin OR security_admin. Token inventory is
+// authority over the verdict, not reach into a run, which is the line that puts
+// a route on that tier; it names other humans, so it is not a member surface.
 func (s *Server) handleListAllAPITokens(w http.ResponseWriter, r *http.Request) {
 	tokens, err := s.cfg.Store.ListAPITokens(r.Context())
 	if err != nil {
@@ -292,9 +310,17 @@ func (s *Server) handleRevokeAPIToken(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAdminRevokeAPIToken is DELETE /api/v1/tokens/{id}: revoke ANYONE's
-// token. operatorOnly (routes.go). This is the remediation path for the stamp
+// token. securityOps (routes.go) — admin OR security_admin, its twin above.
+// A revocation only ever SUBTRACTS reach, which is why it sits on the security
+// tier rather than the admin one, and it reaches a SUPER admin's tokens too
+// (see handleRevokeSessions for that argument in full). This is the remediation
+// path for the stamp
 // ceiling migration 0045 documents — a demoted admin's outstanding tokens keep
-// the role they were minted under until they are revoked here — and for a token
+// the role they were minted under until their owner's next login re-stamps it
+// (store.RefreshAPITokenRoles, fired from the same OnLogin hook that has
+// refreshed SSH keys since 0.6) or until they are revoked here. This route is
+// the path that takes effect IMMEDIATELY, and the only one that helps for an
+// owner who never signs in again — and for a token
 // whose owner has left.
 func (s *Server) handleAdminRevokeAPIToken(w http.ResponseWriter, r *http.Request) {
 	s.revokeAPIToken(w, r, "")

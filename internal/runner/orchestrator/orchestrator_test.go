@@ -25,6 +25,7 @@ type fakeSubstrate struct {
 	resolved   map[types.ConfinementClass]string
 	structural bool
 	recording  bool
+	drives     bool
 	refPrefix  string
 
 	mu                            sync.Mutex
@@ -42,6 +43,7 @@ func (f *fakeSubstrate) Classes(context.Context) (substrate.ClassSupport, error)
 		Resolved:         f.resolved,
 		StructuralEgress: f.structural,
 		SessionRecording: f.recording,
+		UserDrives:       f.drives,
 	}, nil
 }
 
@@ -312,5 +314,61 @@ func TestOrchestrator_ClassesCachedWithinTTL(t *testing.T) {
 	}
 	if n := oci.classesCalls.Load(); n != 2 {
 		t.Fatalf("after TTL: Classes probed %d times, want 2", n)
+	}
+}
+
+// TestCapabilitiesUserDrivesIsAConjunction pins the ONE flag this aggregate
+// does not union, and the reason is which side of ROUTING it is read on.
+//
+// Every other flag describes a control that must hold for the run routed to
+// that substrate, and CreateSandbox routes by confinement class — so a union is
+// right for them. A drive request is refused BEFORE routing, so a union here
+// would let a deployment with one drive-capable substrate promise a mount to a
+// run the orchestrator then hands to one that cannot bind it: the "previewed
+// green, failed at dispatch" shape the flag exists to close.
+//
+// It is not hypothetical. Today both substrates report false. D3 lands the
+// Docker mount and D4 lands the Kubernetes one, so between them exactly this
+// mixed deployment exists.
+func TestCapabilitiesUserDrivesIsAConjunction(t *testing.T) {
+	ctx := context.Background()
+	sub := func(name string, drives bool) *fakeSubstrate {
+		return &fakeSubstrate{name: name, classes: []types.ConfinementClass{types.CC1}, drives: drives}
+	}
+
+	for _, tc := range []struct {
+		name string
+		subs []*fakeSubstrate
+		want bool
+	}{
+		{name: "every substrate can bind", subs: []*fakeSubstrate{sub("a", true), sub("b", true)}, want: true},
+		{name: "one cannot, so the deployment cannot", subs: []*fakeSubstrate{sub("a", true), sub("b", false)}, want: false},
+		{name: "order does not matter", subs: []*fakeSubstrate{sub("a", false), sub("b", true)}, want: false},
+		{name: "none can", subs: []*fakeSubstrate{sub("a", false)}, want: false},
+		{name: "a single capable substrate can", subs: []*fakeSubstrate{sub("a", true)}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var subs []substrate.Substrate
+			for _, s := range tc.subs {
+				subs = append(subs, s)
+			}
+			caps, err := New(subs...).Capabilities(ctx)
+			if err != nil {
+				t.Fatalf("Capabilities: %v", err)
+			}
+			if caps.UserDrives != tc.want {
+				t.Errorf("UserDrives = %v, want %v", caps.UserDrives, tc.want)
+			}
+		})
+	}
+
+	// With nothing wired there is nothing to bind, so the flag must not read
+	// true out of an empty conjunction.
+	caps, err := New().Capabilities(ctx)
+	if err != nil {
+		t.Fatalf("Capabilities (no substrates): %v", err)
+	}
+	if caps.UserDrives {
+		t.Error("UserDrives = true with no substrates wired")
 	}
 }

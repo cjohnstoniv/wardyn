@@ -226,10 +226,15 @@ RUN set -eu; \
 # Rename it to `agent` and relocate the home directory to /home/agent so the
 # sandbox contract (USER agent, uid 1000, home /home/agent, work /home/agent/work)
 # is satisfied without creating a second uid-1000 user (which useradd rejects).
+# /home/agent/drive is the RESERVED user-drive mount point (runner.DriveTarget),
+# created here owned by agent for the copy-up reason deploy/images/base/Dockerfile
+# states in full: a fresh managed volume inherits the uid/gid of the image directory
+# it is mounted over, so without it a docker_volume drive's root is root-owned and a
+# writable managed drive is read-only in practice for uid 1000.
 RUN usermod  -l agent node \
  && usermod  -d /home/agent -m agent \
  && groupmod -n agent node \
- && mkdir -p /home/agent/work \
+ && mkdir -p /home/agent/work /home/agent/drive \
  && chown -R agent:agent /home/agent
 
 # Copy the statically-linked binaries from the build stage.

@@ -171,23 +171,38 @@ type Config struct {
 // SPIFFE-style identity_revocations denylist, which this package never
 // touches.
 type SessionRevocations interface {
-	// IsSessionRevoked reports whether a session for sub, issued at issuedAt,
-	// must be treated as revoked — because of a revoke targeting exactly sub,
-	// or the reserved "" (global revoke-all) sub, whichever cutoff is later.
+	// IsSessionRevoked reports whether a session for this human, issued at
+	// issuedAt, must be treated as revoked — because of a revoke targeting
+	// EITHER of their identities, or the reserved "" (global revoke-all) sub,
+	// whichever cutoff is later.
 	// issuedAt.IsZero() (a pre-D16 cookie with no iat) is always revoked once
 	// ANY matching cutoff exists: an old session predating this feature has
 	// no reliable issued-at to compare, so it fails closed the moment revoke
 	// is used for the first time against it, rather than staying immune.
 	//
+	// BOTH IDENTITIES, for the reason every other user-addressing surface in
+	// the product already takes: an admin naming a human "shouldn't have to
+	// guess which the IdP made authoritative" (docs/OPERATIONS.md on a
+	// subject_type=user capability grant, which matches the sub OR the email;
+	// capabilitySubjects in internal/api offers both the same way). Revocation
+	// was the one such surface keyed on sub ALONE, and on any IdP where the two
+	// differ — Entra, where sub is an opaque per-app identifier — a revoke
+	// naming the email stamped a cutoff that matched nobody: 204, an audited
+	// success, and a compromised human still signed in. sub is compared
+	// EXACTLY (an OIDC sub is opaque and case-sensitive); email is compared
+	// case-insensitively, since that is how humans type one.
+	//
 	// ponytail: Middleware calls this on every authenticated request with no
-	// in-process cache — one extra indexed point-lookup per request against
-	// the store wardynd already requires (Postgres). Add a short-TTL
-	// in-memory cache keyed on sub if that round trip ever shows up in
-	// latency; a POC-scale deployment's request volume doesn't justify one
-	// yet, and a cache is one more place revocation could go stale.
-	IsSessionRevoked(ctx context.Context, sub string, issuedAt time.Time) (bool, error)
+	// in-process cache — one extra lookup per request against the store
+	// wardynd already requires (Postgres), over a table holding one row per
+	// revoked principal plus the global one. Add a short-TTL in-memory cache
+	// keyed on sub if that round trip ever shows up in latency; a POC-scale
+	// deployment's request volume doesn't justify one yet, and a cache is one
+	// more place revocation could go stale.
+	IsSessionRevoked(ctx context.Context, sub, email string, issuedAt time.Time) (bool, error)
 	// RevokeSub invalidates every CURRENT session for sub, effective now —
-	// a targeted "log this one person out everywhere".
+	// a targeted "log this one person out everywhere". sub is whichever
+	// identity the caller named; IsSessionRevoked matches it against both.
 	RevokeSub(ctx context.Context, sub string) error
 	// RevokeAll invalidates every CURRENT session for every principal,
 	// effective now — the incident-response "log everyone out" lever.
@@ -578,6 +593,22 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 		redirectAuthError(w, r, authErrorNoRole)
 		return
 	}
+	// The overage half of role derivation. deriveRole is a pure function of the
+	// claims it was HANDED, and on an overage the claim the role map is keyed on
+	// is simply not in the token — so its "nothing matched, take the default"
+	// is an absence of evidence, not a fact. Denying here rather than inside
+	// deriveRole keeps that function pure and puts the refusal beside every
+	// other login denial, and it is the same fail-closed choice
+	// authErrorRoleCheckUnavailable already makes when the role-mapping store
+	// cannot be read: an unanswerable input never widens a session.
+	if overageWidensRole(dc.ClaimNames, role, matches) {
+		slog.Warn("oidc: login denied — the IdP omitted a claim role derivation depends on (overage) and the default role would widen this session",
+			"sub", idToken.Subject, "default_role", a.cfg.DefaultRole,
+			"env", "WARDYN_OIDC_DEFAULT_ROLE", "claim_names", claimNamesKeys(dc.ClaimNames))
+		clearCookie(w, sessionCookieName)
+		redirectAuthError(w, r, authErrorClaimsOverage)
+		return
+	}
 	if len(matches) > 0 {
 		slog.Debug("oidc: role derivation matched", "sub", idToken.Subject, "role", role, "matches", matches)
 	}
@@ -648,7 +679,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 				// (nil Revocations => unset changes nothing, the same rule
 				// every other optional Config field follows).
 				if a.cfg.Revocations != nil {
-					revoked, rerr := a.cfg.Revocations.IsSessionRevoked(r.Context(), sess.Sub, sess.IssuedAt)
+					revoked, rerr := a.cfg.Revocations.IsSessionRevoked(r.Context(), sess.Sub, sess.Email, sess.IssuedAt)
 					if rerr != nil {
 						// Fail CLOSED: a store error must never look
 						// indistinguishable from "not revoked" on a security
@@ -767,6 +798,16 @@ const (
 	// env-only WARDYN_OIDC_ROLE_MAP, which could WIDEN access under
 	// WARDYN_OIDC_DEFAULT_ROLE=admin.
 	authErrorRoleCheckUnavailable = "role_check_unavailable"
+	// authErrorClaimsOverage: the IdP declined to send the `groups` (or
+	// `roles`) claim because the human is in more groups than its token limit
+	// (an Entra overage, signalled by `_claim_names`), and WARDYN_OIDC_DEFAULT_ROLE
+	// would then have handed them a role WIDER than the narrowest tier on the
+	// strength of a claim nobody read. Distinct from authErrorNoRole's
+	// "checked, and nothing matched": here nothing was checkable. The remedy is
+	// the operator's — carry the tier on Entra App Roles (the much smaller
+	// `roles` claim), map the human's email directly, or stop defaulting
+	// unmatched humans to admin — so retrying will not clear it.
+	authErrorClaimsOverage = "claims_overage"
 	// authErrorOIDCTransient (D12): the token exchange kept failing with a
 	// network timeout or a 5xx from the IdP after retryExchange's retries —
 	// the IdP is having a bad moment, not the deployment being misconfigured.

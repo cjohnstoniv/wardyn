@@ -259,9 +259,23 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	}
 	// isSecurityOperator, not isOperator: a governance profile is authored
 	// AGAINST workspaces and their egress, so a security admin must see the
-	// whole inventory to govern it. READ only — every workspace WRITE route
-	// (llm-cred, requirements, reassign, env-as-code, and ownsWorkspaceOrAdmin
-	// itself) stays on the super-admin predicate.
+	// whole inventory to govern it.
+	//
+	// THIS COMMENT USED TO SAY "READ only — every workspace WRITE route ...
+	// stays on the super-admin predicate", and that was false of the routes it
+	// was describing. The egress-decision lane — approved-egress,
+	// denied-egress, record/{task}/promote-egress — is securityOps by design
+	// (routes.go), so the tier reading this inventory can also REWRITE the
+	// egress of anything in it. The old sentence omitted exactly the writes the
+	// tier actually has, which is worse than saying nothing: a reader deciding
+	// who to trust with RoleSecurityAdmin would have concluded the opposite.
+	//
+	// What is true: this tier reads the whole inventory (here), reads any row
+	// in it (getWorkspaceReadable, via ownsWorkspaceOrSecurityAdmin) and writes
+	// the EGRESS DECISION on any row — and nothing else. Every other workspace
+	// write (llm-cred, requirements, reassign, env-as-code/write, record,
+	// update, delete) stays on the super-admin predicate, through
+	// getWorkspaceAuthorized and ownsWorkspaceOrAdmin.
 	if !s.isSecurityOperator(r.Context()) {
 		principal := principalFromRequest(r)
 		var ownerPageFn func(store.Page) ([]types.Workspace, error)

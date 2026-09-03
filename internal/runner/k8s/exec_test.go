@@ -400,3 +400,65 @@ func TestAgentStatus_ExecAddedButNotYetStarted_MustNotReadTerminal(t *testing.T)
 			"and tear its sandbox down (docker returns an ambiguity ERROR for the same window, GAP-RECONCILE-1)", st)
 	}
 }
+
+// TestExec_EphemeralContainerInheritsSecretKeyRefEnv is the OTHER half of the
+// F9-H1 fix, and the half a driver is most likely to get wrong: the agent's
+// real work runs in the ephemeral exec container, not the idle main one, so a
+// credential that reached only the main container would break every env_secret
+// grant — and one that reached the ephemeral container as an inline Value
+// would put it straight back in the API-readable pod spec the fix just cleared.
+//
+// Exec copies main.Env verbatim, so the reference travels rather than the
+// value. This test drives the FULL CreateSandbox -> Exec path (not a fixture
+// pod) precisely so it fails if the two ever stop agreeing about the carrier.
+func TestExec_EphemeralContainerInheritsSecretKeyRefEnv(t *testing.T) {
+	const tokenVal = "ghp_live_stored_secret_9f2c"
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.7")
+	installAgentRunningReactor(t, cs)
+
+	spec := testSandboxSpec()
+	spec.SecretEnv = map[string]string{"CORP_API_TOKEN": tokenVal}
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	if _, err := d.Exec(context.Background(), sb.Ref, []string{"agent-run", "do the task"}); err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+
+	pod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if len(pod.Spec.EphemeralContainers) != 1 {
+		t.Fatalf("EphemeralContainers = %d, want 1", len(pod.Spec.EphemeralContainers))
+	}
+	ec := pod.Spec.EphemeralContainers[0]
+	var got *corev1.EnvVar
+	for _, e := range ec.Env {
+		if e.Name == "CORP_API_TOKEN" {
+			got = &e
+		}
+		if e.Value == tokenVal {
+			t.Errorf("ephemeral container env %s carries the credential INLINE (API-readable via pods/get): %q", e.Name, e.Value)
+		}
+	}
+	if got == nil {
+		t.Fatalf("ephemeral container has no CORP_API_TOKEN: the agent process would run without its granted credential: %+v", ec.Env)
+	}
+	if got.ValueFrom == nil || got.ValueFrom.SecretKeyRef == nil ||
+		got.ValueFrom.SecretKeyRef.Name != secretName(spec.RunID) || got.ValueFrom.SecretKeyRef.Key != secretEnvDataKey("CORP_API_TOKEN") {
+		t.Errorf("ephemeral container CORP_API_TOKEN ValueFrom = %+v, want secretKeyRef{%s/%s} — the same reference the main container holds",
+			got.ValueFrom, secretName(spec.RunID), secretEnvDataKey("CORP_API_TOKEN"))
+	}
+	// Parity, stated as parity: whatever the main container got, the ephemeral
+	// one got, so neither can drift into a different carrier on its own.
+	main, ok := findContainer(pod.Spec.Containers, mainContainerName)
+	if !ok {
+		t.Fatal("agent pod lost its main container")
+	}
+	if len(ec.Env) != len(main.Env) {
+		t.Errorf("ephemeral env (%d entries) and main env (%d entries) diverged: %+v vs %+v", len(ec.Env), len(main.Env), ec.Env, main.Env)
+	}
+}

@@ -151,9 +151,8 @@ func TestCapabilitiesFor(t *testing.T) {
 		},
 		{
 			// PLATFORM-API-4: with no managed token connected, wardyn_features
-			// must NOT read "available" — WardynFeaturesBackend selects on
-			// exactly this cell, and the sibling tool:claude-code cell right
-			// above already reports the identical gap.
+			// must NOT read "available" — the sibling tool:claude-code cell
+			// right above already reports the identical gap.
 			name: "subscription: managed lane, no blob connected",
 			in:   types.Integration{Kind: "anthropic_subscription", Config: map[string]any{"lane": "managed"}},
 			env:  capEnv{ManagedBlobPresent: func(string) bool { return false }},

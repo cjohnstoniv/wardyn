@@ -21,6 +21,7 @@ import (
 	"github.com/moby/moby/api/types/jsonstream"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/api/types/volume"
 	"github.com/moby/moby/client"
 )
 
@@ -115,6 +116,28 @@ type fakeDocker struct {
 	// instant-EOF stub. nil (the default) preserves every existing test's
 	// behavior unchanged.
 	execAttachConn net.Conn
+
+	// volumes are the named volumes the daemon holds (name -> the create
+	// options it was made with, so a test can assert the driver and labels a
+	// user drive's volume carries). Pre-seed an entry to model a volume that
+	// already exists.
+	volumes map[string]client.VolumeCreateOptions
+	// volumeCreates counts VolumeCreate calls, so a test can prove the SECOND
+	// run against one drive creates nothing (idempotence is the contract, not
+	// merely the observable end state).
+	volumeCreates int
+	// failVolumeInspect makes VolumeInspect return a NON-not-found error — the
+	// "the daemon cannot say whether it exists" arm, which must fail closed
+	// rather than create over the top of it.
+	failVolumeInspect bool
+	// volumeInspectMissesExisting makes VolumeInspect answer NOT-FOUND for a
+	// volume this fake actually holds — the FIRST-RUN RACE, and the only way to
+	// reach ensureDriveVolume's create-then-verify arm: two colliding drives
+	// both probe before either creates, so the loser's inspect legitimately saw
+	// nothing and its VolumeCreate is then handed the winner's volume.
+	volumeInspectMissesExisting bool
+	// failVolumeCreate makes VolumeCreate fail (quota, driver refusal).
+	failVolumeCreate bool
 }
 
 func newFakeDocker() *fakeDocker {
@@ -123,6 +146,7 @@ func newFakeDocker() *fakeDocker {
 		images:     map[string]bool{},
 		networks:   map[string]client.NetworkCreateOptions{},
 		containers: map[string]*createdContainer{},
+		volumes:    map[string]client.VolumeCreateOptions{},
 	}
 }
 
@@ -399,6 +423,56 @@ func (f *fakeDocker) ExecResize(ctx context.Context, execID string, opts client.
 	o := opts
 	f.lastResize = &o
 	return client.ExecResizeResult{}, nil
+}
+
+// VolumeInspect answers the driver's existence probe for a MANAGED user drive's
+// named volume: a not-found error (the Docker-shaped one isNotFound classifies)
+// for a volume this fake does not hold, and the create options it was made with
+// for one it does.
+func (f *fakeDocker) VolumeInspect(ctx context.Context, volumeID string, _ client.VolumeInspectOptions) (client.VolumeInspectResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failVolumeInspect {
+		return client.VolumeInspectResult{}, fmt.Errorf("daemon: connection reset")
+	}
+	opts, ok := f.volumes[volumeID]
+	if !ok || f.volumeInspectMissesExisting {
+		return client.VolumeInspectResult{}, fakeNotFound{msg: "no such volume: " + volumeID}
+	}
+	return client.VolumeInspectResult{Volume: volume.Volume{
+		Name:   opts.Name,
+		Driver: opts.Driver,
+		Labels: opts.Labels,
+		// DriverOpts is what a `docker volume create --opt type=cifs …` volume
+		// carries, and it is how a test seeds one the driver must REFUSE to
+		// adopt (ensureDriveVolume's inspect-hit arm) — so the fake has to
+		// echo it back the way a real daemon does.
+		Options: opts.DriverOpts,
+	}}, nil
+}
+
+// VolumeCreate records the full options the driver asked for — name, driver,
+// labels and (the one that must always be empty) DriverOpts.
+//
+// A create against a name this fake ALREADY HOLDS succeeds and returns the
+// EXISTING volume, applying none of the options it was handed — which is what a
+// real daemon does, and is the whole reason ensureDriveVolume verifies the
+// create's result rather than trusting it. Without this the loser of a first-run
+// race would look here exactly like the winner.
+func (f *fakeDocker) VolumeCreate(ctx context.Context, opts client.VolumeCreateOptions) (client.VolumeCreateResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.volumeCreates++
+	if f.failVolumeCreate {
+		return client.VolumeCreateResult{}, fmt.Errorf("daemon: create volume: quota exceeded")
+	}
+	if existing, ok := f.volumes[opts.Name]; ok {
+		return client.VolumeCreateResult{Volume: volume.Volume{
+			Name: existing.Name, Driver: existing.Driver, Labels: existing.Labels, Options: existing.DriverOpts,
+		}}, nil
+	}
+	f.volumes[opts.Name] = opts
+	return client.VolumeCreateResult{Volume: volume.Volume{Name: opts.Name, Driver: opts.Driver, Labels: opts.Labels}}, nil
 }
 
 // fakeConn is a net.Conn whose reads return EOF immediately, so the Exec

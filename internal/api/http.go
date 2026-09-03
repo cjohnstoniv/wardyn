@@ -631,6 +631,16 @@ func (s *Server) adminAuth(next http.Handler) http.Handler {
 // distinguished from an attacker sharing it.
 func (s *Server) auditAuthFailed(r *http.Request, reason string) {
 	if !s.authFailedLimiter.allow(s.cfg.Now()) {
+		// COUNTED, NOT JUST DROPPED. The limiter caps the audit trail at ~1
+		// row/sec, so past the burst the trail stops describing the volume it
+		// is bounding: a credential-stuffing run and a handful of typos look
+		// identical in the audit log, and the attack looks QUIETER the harder
+		// it is pushed. This counter is what carries the real rate — a flat
+		// auth.failed row count with this series climbing is the signal, and it
+		// is a series precisely so it can be alerted on rather than grepped
+		// for. Same treatment the spool's torn/quarantined drops already get
+		// (metrics.go): a discarded event is a countable fact.
+		s.metrics.authFailedSuppressedInc()
 		return
 	}
 	if sr := oidc.SessionRejectedFromContext(r.Context()); sr != "" {

@@ -38,6 +38,10 @@ func (s *flakyCeilingStore) HasGroupTierAssignments(context.Context) (bool, erro
 func (s *flakyCeilingStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
+
+func (s *flakyCeilingStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
 func (s *flakyCeilingStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }

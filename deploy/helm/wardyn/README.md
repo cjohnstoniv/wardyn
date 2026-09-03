@@ -484,7 +484,60 @@ driver tries websocket first; secrets and networkpolicies
 create/delete/deletecollection — deliberately **no** get/list on either,
 wardynd never reads one back); the cluster-scoped ClusterRole covers
 `runtimeclasses` get only (RuntimeClass is never namespaced, and the driver
-only ever resolves one by name).
+only ever resolves one by name). One rule is conditional:
+`persistentvolumeclaims` get+create, rendered only with `userDrives.enabled` —
+see [User drives](#user-drives-userdrivesenabled) below.
+
+### User drives (`userDrives.enabled`)
+
+A **user drive** is per-person storage a run mounts at `/home/agent/drive`. An
+admin registers a drive and allocates it in the console; a member ticks a box on
+a run. Two Kubernetes backends, both claim-based — a pod cannot bind a host path,
+and Pod Security Standards forbids `hostPath` at Baseline and Restricted alike:
+
+| Backend | What wardynd does | Verb it needs |
+|---|---|---|
+| `k8s_pvc` (managed) | looks the claim up by name, creates it on first use as `wardyn-drive-<drive-slug>-<home>` with `accessModes: [ReadWriteOnce]` and the allocation as `requests.storage` | `get` + `create` |
+| `k8s_pvc_static` (share) | looks the claim up by name; a missing one fails the run | `get` |
+
+`userDrives.enabled=true` adds exactly `persistentvolumeclaims: ["get","create"]`
+to the namespaced Role. Leave it on for **any** drive at all: a static share
+needs `get`, and with the rule absent the LOOKUP is what the apiserver refuses
+first. Off, any drive's run fails at dispatch with a hint naming this switch.
+
+**There is no `delete` verb, on purpose.** A drive outlives every run that mounts
+it, and the claim carries no `wardyn.run-id` label, so the per-run teardown sweep
+cannot select it. Reclaiming a departed person's storage is an operator command,
+run once, deliberately:
+
+```sh
+kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
+```
+
+The console's drive preview prints the object name for a principal — paste the
+sign-in subject FIRST: on a `hash`/`sub` drive the name keys on the first claim,
+and the API's `home_subject` says which claim it used (the console does not yet
+show it). There is no `list` or `watch` either — the name is derived, never
+searched for.
+
+**Ownership.** A pod with a drive gets `fsGroup: 1000` (a GROUP id — it happens
+to equal the uid every agent image runs as, but this field can never make a
+volume user-owned) with `fsGroupChangePolicy: OnRootMismatch`. The kubelet
+applies fsGroup to CSI drivers that declare `ReadWriteOnceWithFSType` volume
+ownership — block storage, i.e. the managed case. It does **not** apply to an
+NFS-type volume: a static share is owned by whatever its export says, so map it
+there (`all_squash,anonuid=1000,anongid=1000`, or per-user `0700`
+subdirectories).
+
+**On size**, quoted verbatim from the product's own words, because an allocation
+is routinely mistaken for a limit: *"Wardyn never enforces a drive's size itself.
+On Kubernetes the size is the volume request and the storage class decides
+whether it binds — block disks do, network-share provisioners do not. On Docker a
+managed drive has no byte cap, the same gap disk_mib has. A share is bounded by
+its own quota. The size you see is the allocation, not a guarantee."*
+
+Day-2 detail — backup, offboarding, the per-drive storage class — is in
+[docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s "User drives on Kubernetes".
 
 ### Known gaps (v0.6)
 
@@ -814,6 +867,11 @@ See `values.yaml` for all options. Key settings:
 - `networkPolicy.*`: default-deny policy knobs (Postgres port, ingress sources, extra egress)
 - `k8s.*`: the Kubernetes runner substrate, off by default — see
   [Kubernetes runner substrate](#kubernetes-runner-substrate-k8senabled) above.
+- `userDrives.enabled`: adds `persistentvolumeclaims: get, create` to the
+  k8s-runner Role so runs can mount per-person storage, off by default — see
+  [User drives](#user-drives-userdrivesenabled) above. It is the only key in the
+  block: a drive's storage class is a per-drive field in the console, not a chart
+  value.
 - `ssh.*`: SSH access into a running sandbox, off by default — see
   [Split SSH exposure](#split-ssh-exposure) above.
 - `replicas`: **leave at 1 — the chart refuses anything higher.** A render with

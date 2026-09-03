@@ -470,3 +470,91 @@ func TestReservedSecret_HarnessBlobSealedByPattern(t *testing.T) {
 		t.Errorf("ReservedPlatformSecret(%q) = false", blob)
 	}
 }
+
+// ─── group C: the member seam's two ends ─────────────────────────────────────
+
+// TestListSecrets_CrossUserReadIsAudited pins the ASYMMETRY, which is the
+// finding rather than "a read was unlogged". `?owner=` is admin-only, and every
+// WRITE through it stamps secret_owner — secret.write and secret.delete both
+// do. The read was the one verb on that surface that recorded nothing, so an
+// admin could enumerate another human's secret namespace and leave an
+// investigator nothing to find, on the same query parameter whose writes are
+// attributable.
+//
+// The row records an ENUMERATION, not a disclosure: this handler returns
+// store.List, i.e. names only — no value is read, decrypted or returned (value
+// resolution is secret.read, at injection time, a different action carrying
+// grant_id/jti). The assertions below pin that wording by pinning the shape:
+// secret_owner plus a COUNT, never the names themselves.
+//
+// Counterfactual: delete the recordAudit block and the cross-user read leaves
+// zero events while the sibling PUT still stamps secret_owner — the exact
+// asymmetry.
+func TestListSecrets_CrossUserReadIsAudited(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{}}
+	h, srv := secretsRBACServer(t, sec)
+	admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
+
+	// Two secrets in bob's namespace, so the count is not trivially 0 or 1.
+	for _, n := range []string{"anthropic-api-key", "openai-api-key"} {
+		if err := sec.For("sub-bob").Put(context.Background(), n, []byte("v-"+n)); err != nil {
+			t.Fatalf("seed %s: %v", n, err)
+		}
+	}
+
+	w := doSSO(t, srv, http.MethodGet, "/api/v1/secrets?owner=sub-bob", admin, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("admin GET ?owner=sub-bob = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	// The fixture must actually return bob's namespace, or the audit assertion
+	// below is about a read that saw nothing.
+	if !strings.Contains(w.Body.String(), "anthropic-api-key") {
+		t.Fatalf("the cross-user read returned %s — it did not reach bob's namespace, so this test proves nothing",
+			w.Body.String())
+	}
+
+	ev := lastAuditEvent(t, h.audit.events, "secret.list")
+	if owner, ok := auditDataField(t, ev, "secret_owner"); !ok || owner != "sub-bob" {
+		t.Errorf("secret.list secret_owner = (%q, present=%v), want sub-bob — the same marker the WRITE path stamps "+
+			"on this same ?owner= surface", owner, ok)
+	}
+	if ev.Target != "sub-bob" {
+		t.Errorf("target = %q, want the namespace read", ev.Target)
+	}
+	// Content-free: a count, never the names.
+	body, _ := json.Marshal(ev.Data)
+	for _, name := range []string{"anthropic-api-key", "openai-api-key"} {
+		if strings.Contains(string(body), name) {
+			t.Errorf("audit data carries the secret NAME %q; the row is count/shape-only by design: %s", name, body)
+		}
+	}
+	// A JSON number, not a string — auditDataField only reads strings, so this
+	// one is decoded directly rather than pretending the count is text.
+	var data map[string]any
+	if err := json.Unmarshal(ev.Data, &data); err != nil {
+		t.Fatalf("unmarshal audit Data: %v", err)
+	}
+	if n, ok := data["names"].(float64); !ok || int(n) != 2 {
+		t.Errorf("names count = %v (%T), want 2 — the row records HOW MUCH was enumerated", data["names"], data["names"])
+	}
+}
+
+// TestListSecrets_OwnNamespaceReadIsNotAudited is the bound. A member listing
+// their own namespace is the ordinary console poll on every page load; auditing
+// it would bury the cross-user reads the row above exists for. Without this,
+// "audit the read" quietly becomes "audit every page load".
+func TestListSecrets_OwnNamespaceReadIsNotAudited(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{}}
+	h, srv := secretsRBACServer(t, sec)
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+
+	if w := doSSO(t, srv, http.MethodGet, "/api/v1/secrets", alice, ""); w.Code != http.StatusOK {
+		t.Fatalf("member GET /secrets = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	for _, ev := range h.audit.events {
+		if ev.Action == "secret.list" {
+			t.Fatalf("a member's own-namespace list emitted secret.list (%+v) — the row is for the admin-only "+
+				"?owner= surface, not for every console poll", ev)
+		}
+	}
+}

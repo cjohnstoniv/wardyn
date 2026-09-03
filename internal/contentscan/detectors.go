@@ -21,8 +21,6 @@ type knownSecretDetector struct {
 	normalize bool
 }
 
-func (d *knownSecretDetector) Name() string { return "known-secret" }
-
 func (d *knownSecretDetector) Scan(s Span, dst *[]Finding) {
 	// Field paths are built partly from agent-controlled JSON object keys, so a
 	// secret used AS a key could otherwise ride into the (SIEM-fanned) audit log.

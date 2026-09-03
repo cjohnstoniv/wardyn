@@ -294,19 +294,40 @@ func (s *Server) capScan(ctx context.Context, kind, value string) (deny, allow b
 // costs the caller access (capAllowed falls through to the enforcement switch,
 // capGranted refuses outright), which is the fail-CLOSED direction already.
 //
-// ponytail: the whole (small) grant table, read only on the stale path, and
-// only for the kind/value in hand. The per-subject index cannot serve this
-// question — the point is precisely the rows whose subject is NOT in the
-// caller's snapshot — so a narrower query would be a new store method for a
-// path that a correctly signed-in caller never takes.
+// THE ROWS ARE SELECTED IN SQL, NOT SCANNED IN GO, and the reason is not
+// tidiness. This runs on the path taken by every caller whose group snapshot is
+// unanswerable — which, by the fail-closed reading of a NULL groups_truncated
+// column, is EVERY API token minted before 0.7, on every request it makes — and
+// it runs once per value a handler checks, not once per request. Asking
+// ListCapabilityGrants (the whole table) there meant the cost of an
+// authorization check scaled with the size of the grant table: measured at
+// 68 ms per call against 20k grants versus 0.35 ms for the indexed sibling, and
+// a run create alone checks three values while a secrets narrowing checks one
+// per paired name. That is an availability surface — a caller holding one
+// pre-0.7 token can force an unbounded read per checked value — and it grows
+// precisely as a deployment adopts the feature.
+//
+// ListGroupDenyGrants applies EXACTLY the predicate this loop applied
+// (group + deny + this kind) in the query instead, leaving only the
+// value-overlap test in Go, where the one host/wildcard matcher lives. Same
+// rows considered, same answer; TestCapUnresolvableGroupDenyMatchesFullScan
+// pins the new path against a full scan of the old shape over a generated
+// matrix, because a FASTER fail-closed check that stops firing is a breach, not
+// a regression.
+//
+// ponytail: still no per-request memo. The query now returns nothing at all on
+// any deployment holding no group deny rows of this kind — the overwhelming
+// majority, and the case the scoping above exists to protect — so a memo would
+// add a request-scoped cache and a context holder to save a query that returns
+// zero rows. The remaining per-VALUE repetition is the caller-controlled loop's
+// problem, not this function's.
 func (s *Server) capUnresolvableGroupDeny(ctx context.Context, kind, value string) (bool, error) {
-	grants, err := s.cfg.Store.ListCapabilityGrants(ctx)
+	grants, err := s.cfg.Store.ListGroupDenyGrants(ctx, kind)
 	if err != nil {
 		return false, fmt.Errorf("api: resolve capability %q: %w", kind, err)
 	}
 	for _, g := range grants {
-		if g.SubjectType == types.CapabilitySubjectGroup && g.Effect == types.CapabilityDeny &&
-			g.Capability == kind && capValueOverlaps(kind, g.Value, value) {
+		if capValueOverlaps(kind, g.Value, value) {
 			return true, nil
 		}
 	}
@@ -448,8 +469,10 @@ type capBatch struct {
 	grants []types.CapabilityGrant
 	enf    map[string]bool
 
-	fullLoaded bool
-	full       []types.CapabilityGrant
+	// groupDeny memoizes ListGroupDenyGrants PER KIND — the narrow read, not the
+	// full table. It is a map because the store call is keyed by capability and a
+	// spec can ask about more than one (egress_host, then secret).
+	groupDeny map[string][]types.CapabilityGrant
 }
 
 // newCapBatch snapshots the cheap, store-free decisions capAllowed makes before
@@ -539,16 +562,30 @@ func (b *capBatch) allowed(ctx context.Context, kind, value string) (bool, error
 // ONCE. Loaded only on the stale path, so an answerable caller never pays for it
 // — exactly as before.
 func (b *capBatch) unresolvableGroupDeny(ctx context.Context, kind, value string) (bool, error) {
-	if !b.fullLoaded {
-		grants, err := b.s.cfg.Store.ListCapabilityGrants(ctx)
-		if err != nil {
+	if b.groupDeny == nil {
+		b.groupDeny = map[string][]types.CapabilityGrant{}
+	}
+	grants, loaded := b.groupDeny[kind]
+	if !loaded {
+		var err error
+		// ListGroupDenyGrants, the same NARROW read capUnresolvableGroupDeny
+		// makes: the store filters subject_type='group' AND effect='deny' AND
+		// capability=$1 in SQL, so nothing is filtered again here and the match
+		// is capValueOverlaps alone — one shared matcher, as capScan uses.
+		//
+		// This memo used to hold the WHOLE capability_grants table, because that
+		// is what the predicate read when the batch was written. A concurrent
+		// change narrowed the read, and keeping the old one would have quietly
+		// reintroduced the full-table scan on exactly the path this batch exists
+		// to make O(1) — the two would not have disagreed about the ANSWER, only
+		// about the cost, which is the kind of drift nothing fails on.
+		if grants, err = b.s.cfg.Store.ListGroupDenyGrants(ctx, kind); err != nil {
 			return false, fmt.Errorf("api: resolve capability %q: %w", kind, err)
 		}
-		b.full, b.fullLoaded = grants, true
+		b.groupDeny[kind] = grants
 	}
-	for _, g := range b.full {
-		if g.SubjectType == types.CapabilitySubjectGroup && g.Effect == types.CapabilityDeny &&
-			g.Capability == kind && capValueOverlaps(kind, g.Value, value) {
+	for _, g := range grants {
+		if capValueOverlaps(kind, g.Value, value) {
 			return true, nil
 		}
 	}

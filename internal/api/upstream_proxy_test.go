@@ -13,7 +13,7 @@ import (
 )
 
 // TestResolveUpstreamProxyURL covers the site-config → ProxyConfig.UpstreamProxyURL
-// resolution dispatchWithVerify performs: a plain URL is preferred when set, a
+// resolution dispatchRun performs: a plain URL is preferred when set, a
 // secret ref resolves to a URL otherwise, neither configured is a safe no-op,
 // and an https value (from either source) is skipped (the sidecar's
 // parseUpstreamProxy only supports http — see resolveUpstreamProxyURL's doc).

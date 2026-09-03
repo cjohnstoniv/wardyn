@@ -394,10 +394,35 @@ func TestRecordWorkspaceIsSuperAdminOnly(t *testing.T) {
 	if w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces/"+uuid.NewString()+"/record", sess, `{"name":"exfil"}`); w.Code != http.StatusForbidden {
 		t.Errorf("security_admin POST record on a MISSING workspace = %d, want the same 403", w.Code)
 	}
-	// The corroborating inconsistency this closes: the same tier cannot read it.
-	if w := doSSO(t, srv, http.MethodGet, path, sess, ""); w.Code != http.StatusNotFound {
-		t.Errorf("security_admin GET workspace = %d, want 404 — if this ever changes, re-argue the record tier "+
-			"rather than assuming it", w.Code)
+	// THE CORROBORATING LEG IS GONE, AND THE TIER STILL HOLDS — re-argued here
+	// rather than assumed, as this comment's earlier revision asked.
+	//
+	// This used to assert that the same tier gets 404 on GET /workspaces/{id},
+	// offered as a corroborating inconsistency. That read was WIDENED
+	// deliberately (F015, ownsWorkspaceOrSecurityAdmin in helpers.go): a
+	// security admin already listed every workspace and already rewrote any
+	// workspace's approved/denied egress, so refusing it the row — and
+	// especially /observed-egress, the traffic that is the INPUT to the egress
+	// decision it makes — left the tier acting blind on its own stated purpose.
+	//
+	// The record tier does not depend on that leg and never did. It rests on
+	// what the ROUTE does: POST .../record launches a credentialed,
+	// host-mounting, open-egress sandbox and stamps the caller as its owner,
+	// which is reach INTO a run and AT the host — the two axes securityOps is
+	// defined never to reach (routes.go). Reading a row is not launching one.
+	//
+	// So the assertion inverts into a STRONGER one: the tier can now read the
+	// workspace and is STILL refused the record route. That proves the record
+	// gate is the router's tier check rather than a side effect of the caller
+	// being unable to see the row — which the old assertion could not
+	// distinguish.
+	if w := doSSO(t, srv, http.MethodGet, path, sess, ""); w.Code == http.StatusNotFound {
+		t.Errorf("security_admin GET workspace = 404; the read was widened for this tier (F015) — " +
+			"if it has been narrowed again, that decision and this one need re-reconciling")
+	}
+	if w := doSSO(t, srv, http.MethodPost, path+"/record", sess, `{"name":"exfil"}`); w.Code != http.StatusForbidden {
+		t.Errorf("security_admin POST record = %d AFTER being able to read the workspace, want 403 — the record "+
+			"refusal must come from the tier gate, not from the caller's inability to see the row", w.Code)
 	}
 	// The EGRESS DECISION stays delegable: promote-egress writes a list and
 	// launches nothing, so the security tier keeps it. Reaching the handler (any

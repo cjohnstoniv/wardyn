@@ -257,6 +257,14 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		// shared-volume delivery, are impossible on k8s; see SandboxSpec's
 		// Recording doc).
 		SessionRecording: true,
+		// D4: this substrate binds a member's drive — ensureDrivePVC creates or
+		// adopts the claim and applyDriveToPod attaches it (drives.go,
+		// sandbox.go). The control plane reads this to admit a drive-carrying
+		// run at create and at preflight, so it is true only while that path
+		// exists: declaring it without the mount is a run that previews green
+		// and fails at dispatch, and TestCreateSandbox_MountsAUserDrive pins
+		// the two together.
+		UserDrives: true,
 	}, nil
 }
 

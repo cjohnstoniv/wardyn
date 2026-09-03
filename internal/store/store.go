@@ -515,8 +515,17 @@ func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEv
 		return fmt.Errorf("store: begin audit tx: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck — best-effort on the failure path
+	// Bound the wait BEFORE asking for the lock, or the ask has no bound: since
+	// 0056 any open transaction that touched audit_events holds this lock, and
+	// this call is on the request path. A timeout here is not a lost event - the
+	// error travels back to spoolingRecorder, which fsyncs it to the local spool
+	// for the drain to replay. See db.AuditChainLockTimeout.
+	if _, err := tx.Exec(ctx, db.AuditChainLockTimeoutSQL()); err != nil {
+		return fmt.Errorf("store: bound audit chain lock wait: %w", err)
+	}
 	if _, err := tx.Exec(ctx, lockAuditChainSQL, db.AuditChainLockKey); err != nil {
-		return fmt.Errorf("store: lock audit chain: %w", err)
+		return fmt.Errorf("store: lock audit chain (waited up to %s; another transaction that inserted into audit_events may still be open): %w",
+			db.AuditChainLockTimeout, err)
 	}
 	// COALESCE: the genesis row's prev_hash is SQL NULL, which will not scan
 	// into a string. Empty string and NULL both mean "nothing before this row".

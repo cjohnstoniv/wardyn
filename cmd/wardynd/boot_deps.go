@@ -165,24 +165,26 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source strin
 // into the orchestrator so lifecycle routing — and therefore the kill switch —
 // survives a control-plane restart; nil keeps the in-memory-only behavior.
 //
+// driveHostRoots is the boot-parsed WARDYN_USER_DRIVE_HOST_ROOTS ceiling
+// (parseMountCeilings), passed in rather than re-parsed here so the substrate's
+// bind-time check and internal/api's authoring-time check are literally the
+// same slice — and so the "dangerously wide root" warning is emitted once.
+//
 // The one exception to "the target IS the resolved substrate" is
 // -runner-target (WARDYN_RUNNER_TARGET) with no runner configured: see the
 // branch below. It cannot make this daemon dispatch — the runner stays nil —
 // and it is ignored the moment a real substrate resolves.
-func buildRunnerFromFlags(f *bootFlags, refs orchestrator.RefStore) (runner.Runner, string, error) {
+func buildRunnerFromFlags(f *bootFlags, refs orchestrator.RefStore, driveHostRoots []string) (runner.Runner, string, error) {
 	confRuntimes, err := parseConfinementMap(*f.confinementMap)
 	if err != nil {
 		return nil, "", err
 	}
 	if sel := *f.runnerSel; sel == "none" || sel == "" {
 		slog.Info("wardynd: no runner selected; runs stay PENDING (headless API-only)")
-		// WARDYN_RUNNER_TARGET, honoured ONLY here — a configured runner's own
-		// substrate name is the only truthful target, so the override is never
-		// consulted below. Without it a runner-less daemon resolves "none",
-		// which no drive backend can name, and types.ValidateUserDrive refuses
-		// every backend with a 400: the Playwright backend could not register a
-		// drive by any route. Fail closed on an unknown value rather than
-		// advertising a target no stored object could ever match.
+		// WARDYN_RUNNER_TARGET, honoured ONLY here (bootFlags.runnerTargetOverride
+		// says why it exists and why a configured runner ignores it), and failing
+		// boot closed on an unknown value rather than advertising a target no
+		// stored object could ever match.
 		if t := strings.TrimSpace(*f.runnerTargetOverride); t != "" {
 			if !slices.Contains(knownRunnerTargets(), t) {
 				return nil, "", fmt.Errorf("unknown -runner-target %q (want one of %s): it names the substrate STORED objects validate against while -runner is \"none\", and is for test harnesses only",
@@ -197,6 +199,7 @@ func buildRunnerFromFlags(f *bootFlags, refs orchestrator.RefStore) (runner.Runn
 	sub, err := substrate.New(*f.runnerSel, substrate.Deps{
 		ProxyImage:          *f.proxyImage,
 		ConfinementRuntimes: confRuntimes,
+		UserDriveHostRoots:  driveHostRoots,
 	})
 	if err != nil {
 		// W27-S1-3: discriminate WHY substrate.New failed before printing the
@@ -350,8 +353,19 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			// the login still succeeds — see oidc.Config.OnLogin's own doc for
 			// why that contract lives on the callback side, not here.
 			OnLogin: func(ctx context.Context, sub, role string) {
-				if err := store.NewPG(pool).RefreshSSHKeyRoles(ctx, sub, role, time.Now().UTC()); err != nil {
+				st := store.NewPG(pool)
+				if err := st.RefreshSSHKeyRoles(ctx, sub, role, time.Now().UTC()); err != nil {
 					slog.Warn("wardynd: ssh key role refresh at login failed", slog.String("err", err.Error()))
+				}
+				// The api-token twin. Both credentials freeze a role at issue
+				// time and neither could learn about a demotion on its own; the
+				// key lane was bounded in 0046 and the token lane was not, so a
+				// demoted human's outstanding wdn_ tokens kept authenticating as
+				// an admin until someone remembered to revoke them by hand. One
+				// login now bounds both. Best-effort for the same reason as
+				// above: a store hiccup here must not fail the login.
+				if err := st.RefreshAPITokenRoles(ctx, sub, role); err != nil {
+					slog.Warn("wardynd: api token role refresh at login failed", slog.String("err", err.Error()))
 				}
 			},
 		}, sessKey)

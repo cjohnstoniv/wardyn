@@ -70,6 +70,21 @@ type Config struct {
 	// instead of refusing. OFF by default — an untrusted sandbox must not run
 	// uncapped. Set only on a trusted host (WARDYN_ALLOW_UNENFORCEABLE_CAPS=1).
 	AllowUnenforceableCaps bool
+	// UserDriveHostRoots is the deployment's WARDYN_USER_DRIVE_HOST_ROOTS
+	// ceiling over host_path USER DRIVES, parsed once at boot
+	// (runner.ParseUserDriveHostRoots) and handed to the substrate constructor,
+	// so the driver's bind-time re-check and the API's authoring-time check are
+	// the same operator-set list.
+	//
+	// It is DRIVER CONFIG rather than a SandboxSpec field — the opposite of
+	// MemberMountRoots, deliberately. Member roots are resolved PER PRINCIPAL
+	// (a `_MAP` entry replaces the shared list for one member), so only the
+	// control plane knows which roots bound a given run. A drive's ceiling is
+	// per DEPLOYMENT: it says where this daemon's operator has mounted shares,
+	// which is a fact about the host wardynd runs on, not about whose run this
+	// is. Empty — the zero value, and the default — refuses every host_path
+	// drive, which is the whole posture (see runner.UserDriveHostRootCheck).
+	UserDriveHostRoots []string
 }
 
 // RecordingMountTarget is where RecordingMount appears inside the agent
@@ -214,13 +229,16 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		StructuralEgress: c.StructuralEgress,
 		NetworkPolicy:    c.NetworkPolicy,
 		SessionRecording: c.SessionRecording,
+		// D3: this substrate binds a member's drive — driveMount
+		// (driver_mounts.go) resolves it and ensureDriveVolume
+		// (driver_volumes.go) creates or adopts the named volume. The control
+		// plane reads this to admit a drive-carrying run at create and at
+		// preflight, so it is true only while that path exists: declaring it
+		// without the mount is a run that previews green and fails at dispatch,
+		// and TestCreateSandbox_MountsAUserDrive pins the two together.
+		UserDrives: true,
 	}, nil
 }
-
-// errDriveUnsupported names the gap between the control plane resolving a
-// member's drive (migration 0054) and this driver being able to mount it.
-// D3 removes this: the Docker mount path lands on its own lane.
-var errDriveUnsupported = errors.New("user drive: this runner does not mount drives yet")
 
 // CreateSandbox provisions the per-run network, the wardyn-proxy sidecar, and
 // the agent container with L0 confinement. Order matters for fail-closed
@@ -228,13 +246,6 @@ var errDriveUnsupported = errors.New("user drive: this runner does not mount dri
 //
 //nolint:funlen // Deliberate: a single linear container-assembly sequence (network → proxy sidecar → hardening → mounts → sandbox container) whose teardown-on-failure compensations must stay in one scope to be verifiably complete; low branching (passes gocyclo/gocognit), just long.
 func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
-	// D3 removes this. A spec carrying a resolved drive is refused before ANY
-	// Docker call, for the reason seedRequestDrive refuses an unmountable one:
-	// a member who asked for storage must never silently get a run without it.
-	if spec.Drive != nil {
-		return runner.Sandbox{}, fmt.Errorf("docker: %w (%q, backend %s)",
-			errDriveUnsupported, spec.Drive.ObjectName, spec.Drive.Backend)
-	}
 	infoRes, err := d.cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return runner.Sandbox{}, fmt.Errorf("docker: info: %w", err)
@@ -422,6 +433,14 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		idleCmd = []string{"agent-run", "--idle"}
 	}
 	env := envSlice(spec.Env)
+	// SandboxSpec.SecretEnv rides plain container env HERE, and that is the
+	// honest posture on this substrate rather than an oversight: the k8s driver
+	// must route it through a Secret because a Pod spec is readable by anyone
+	// holding pods/get in the namespace, whereas a docker container's config is
+	// reachable only through the daemon socket — the same root-equivalent trust
+	// boundary proxyEnv already documents for the run token. Concatenation needs
+	// no dedup: dispatch's splitSecretEnv keeps the two maps disjoint.
+	env = append(env, envSlice(spec.SecretEnv)...)
 	if d.cfg.Record {
 		// The one in-sandbox signal that session recording is configured.
 		// boot_seed_rec_wrap (agent-run-lib.sh) keys its wardyn-rec wrap on this
@@ -450,7 +469,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// DNS (required under gVisor; harmless under runc). This is the ONLY host entry
 	// the agent gets — NOT host.docker.internal, which stays proxy-only.
 	agentHost.ExtraHosts = append(agentHost.ExtraHosts, "wardyn-proxy:"+proxyIP)
-	agentMounts, err := d.agentMounts(spec.Mounts, spec.MemberMountRoots)
+	agentMounts, err := d.agentMounts(ctx, spec)
 	if err != nil {
 		return fail(err)
 	}

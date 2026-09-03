@@ -59,7 +59,7 @@ func TestBuildRunnerFromFlags_K8sConstructFailureNotMislabeled(t *testing.T) {
 	sel, cmap, img := "k8s", "", ""
 	f := &bootFlags{runnerSel: &sel, confinementMap: &cmap, proxyImage: &img}
 
-	_, _, err := buildRunnerFromFlags(f, nil)
+	_, _, err := buildRunnerFromFlags(f, nil, nil)
 	if err == nil {
 		t.Fatal("buildRunnerFromFlags(k8s) with no ProxyImage: want an error, got nil")
 	}
