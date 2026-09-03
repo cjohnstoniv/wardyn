@@ -20,9 +20,8 @@
 // (internal/api/injection.go); the broker's git_pat and GitHub App private-key
 // reads are audited via the higher-level credential.mint event instead of an
 // individual secret.read (see internal/broker); and boot-time reads — the
-// composer LLM API key (cmd/wardynd/composer.go) and the platform
-// signing/session keys (cmd/wardynd) — are currently NOT audited. Do not treat
-// "every read is an audit event" as a guarantee.
+// platform signing/session keys (cmd/wardynd) — are currently NOT audited. Do
+// not treat "every read is an audit event" as a guarantee.
 package secretstore
 
 import (
