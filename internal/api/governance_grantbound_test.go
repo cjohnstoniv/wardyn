@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -295,4 +296,80 @@ func TestGovernanceOmissionWarnings(t *testing.T) {
 			t.Errorf("warnings = %v, want none: adding a deny and raising confinement omits nothing", got)
 		}
 	})
+}
+
+// TestClampAndComparatorAreOneRule is the cross-package pin: the WRITE-TIME
+// comparator (governanceGrantsWithinCeiling, here) and the RUNTIME clamp
+// (composer.Clamp) must answer the same question about the same input.
+//
+// They did not. The comparator searched per-grant — "some SINGLE ceiling grant
+// dominates on EVERY axis" — while the clamp indexed the ceiling by KIND alone
+// and let the last same-kind entry supply the approval posture and TTL. So the
+// exact fixture TestGovernanceGrantBoundDominationIsPerGrant refuses (pairing A
+// asking for pairing B's TTL headroom) sailed through composer.Clamp untouched
+// at 3600s. Both now consult composer's ceilingGrantsBounding/PairingInCeiling,
+// so the disagreement is not merely fixed but unrepresentable.
+//
+// The two do NOT have identical OUTPUTS, and should not: the comparator REFUSES
+// a profile grant that exceeds its ceiling (a profile is authored once and must
+// be readable as what it permits), while the clamp NARROWS a run's grant to the
+// bound (a run is bounded, not rejected, so a member's task still launches).
+// What must agree is the BOUND each applies — which is what this asserts.
+func TestClampAndComparatorAreOneRule(t *testing.T) {
+	const hostA, hostB = "a.corp.example", "b.corp.example"
+	// The SAME fixture TestGovernanceGrantBoundDominationIsPerGrant uses.
+	deployment := []types.GrantSpec{
+		{Kind: types.GrantAPIKey, Scope: apiKeyScope(t, hostA, "secret-a"), TTLSeconds: 60},
+		{Kind: types.GrantAPIKey, Scope: apiKeyScope(t, hostB, "secret-b"), TTLSeconds: 3600},
+	}
+	proposal := types.GrantSpec{Kind: types.GrantAPIKey, Scope: apiKeyScope(t, hostA, "secret-a"), TTLSeconds: 3600}
+
+	// The comparator refuses it, naming pairing A's own 60s ceiling.
+	if err := governanceGrantsWithinCeiling([]types.GrantSpec{proposal}, deployment); err == nil {
+		t.Fatal("the comparator accepted pairing A at pairing B's TTL — this fixture no longer exercises the disagreement")
+	}
+	// The clamp must bound it to the same 60s rather than pass it at 3600.
+	clamped, warns := composer.Clamp(
+		types.RunPolicySpec{EligibleGrants: []types.GrantSpec{proposal}},
+		types.RunPolicySpec{EligibleGrants: deployment},
+	)
+	if len(clamped.EligibleGrants) != 1 {
+		t.Fatalf("clamp dropped the grant (warns=%q); it should bound it, not refuse it", warns)
+	}
+	if got := clamped.EligibleGrants[0].TTLSeconds; got != 60 {
+		t.Errorf("composer.Clamp left ttl_seconds=%d for a pairing whose own ceiling entry caps it at 60 — "+
+			"the clamp and the comparator disagree about the same input", got)
+	}
+}
+
+// TestStoredSecretPairingMatchesComposer is the drift guard for the seam this
+// consolidation leaves behind. storedSecretGrantPairing decodes a grant for
+// DELIVERY (it fails a malformed scope closed, and validates an env_secret's
+// variable name because that name is written into a process environment);
+// composer.GrantPairing decodes it for MATCHING. Two decoders of one wire shape
+// is exactly the arrangement that produced this finding, so pin that they read
+// the same pairing out of every kind.
+func TestStoredSecretPairingMatchesComposer(t *testing.T) {
+	for _, g := range []types.GrantSpec{
+		{Kind: types.GrantAPIKey, Scope: apiKeyScope(t, "a.corp.example", "secret-a")},
+		{Kind: types.GrantGitPAT, Scope: mustJSON(map[string]any{"host": "gitlab.corp.io", "secret_name": "pat"})},
+		{Kind: types.GrantSSHKey, Scope: mustJSON(map[string]any{"host": "github.com", "key_secret_ref": "k", "known_hosts_secret_ref": "kh"})},
+		{Kind: types.GrantEnvSecret, Scope: mustJSON(map[string]any{"name": "CORP_TOKEN", "secret_name": "corp"})},
+		{Kind: types.GrantGitHubToken, Scope: ghScopeJSON(t, []string{"o/r"}, nil)},
+		{Kind: types.GrantCloudSTS, Scope: mustJSON(map[string]any{})},
+	} {
+		wantHost, wantSecret, wantKH, wantCovered, err := storedSecretGrantPairing(g)
+		if err != nil {
+			t.Fatalf("%s: storedSecretGrantPairing: %v", g.Kind, err)
+		}
+		gotHost, gotSecret, gotKH, gotCovered, ok := composer.GrantPairing(g)
+		if !ok {
+			t.Errorf("%s: composer.GrantPairing could not decode a scope the delivery decoder accepted", g.Kind)
+			continue
+		}
+		if gotCovered != wantCovered || gotHost != wantHost || gotSecret != wantSecret || gotKH != wantKH {
+			t.Errorf("%s: composer.GrantPairing = (%q,%q,%q,covered=%v), storedSecretGrantPairing = (%q,%q,%q,covered=%v) — the two decoders have drifted",
+				g.Kind, gotHost, gotSecret, gotKH, gotCovered, wantHost, wantSecret, wantKH, wantCovered)
+		}
+	}
 }

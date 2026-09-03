@@ -256,11 +256,14 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	//     which is today's behaviour, and the deployment-wide opt-in is an
 	//     `all`-subject assignment.
 	//
-	// The FULL member pipeline, never Clamp alone: clampGrants passes same-kind
-	// grant pairings through VERBATIM, so a Clamp-only stored branch would hand
-	// a member every operator-secret pairing the row happened to carry — the
-	// "one rule whether body or row id" claim would be false at exactly the
-	// grant-bearing rows, which are the ones that matter.
+	// The FULL member pipeline, never Clamp alone: clampGrants BOUNDS a grant by
+	// the ceiling entry whose pairing it names, but it does not GATE on the
+	// pairing — an unpaired grant is kept (bounded by the strictest same-kind
+	// entry) rather than dropped. So a Clamp-only stored branch would hand a
+	// member every operator-secret pairing the row happened to carry — the "one
+	// rule whether body or row id" claim would be false at exactly the
+	// grant-bearing rows, which are the ones that matter. Dropping the unlisted
+	// pairing is filterMemberGrants' job, stage 2.
 	if policyID != nil && ceiling.Profile != nil && !s.isOperator(r.Context()) {
 		var warns []string
 		var bounded bool
@@ -726,20 +729,19 @@ func storedSecretGrantPairing(g types.GrantSpec) (host, secretRef, knownHostsRef
 // pairing and matches nothing here, so it authorizes the kind for the
 // composer's own (sentinel, host-pinned) grants without empowering a member to
 // pick the secret and host.
+//
+// FORWARDS to composer.PairingInCeiling, which is THE comparator. It used to be
+// a second implementation, and its sibling in composer (clampGrants' kind-keyed
+// map) answered a DIFFERENT question — "the last same-kind ceiling grant" rather
+// than "the one that names this pairing" — so the runtime clamp bounded a
+// proposal's approval posture and TTL by an arbitrary same-kind grant while this
+// gate and governanceGrantWithinCeiling bounded it by the right one. Two
+// implementations of one rule drift; one implementation with two callers cannot.
+// The pairing DECODE here (storedSecretGrantPairing) stays, because it answers a
+// different question: whether a grant is well-formed enough to DELIVER, which
+// fails a malformed scope closed rather than merely declining to match it.
 func storedSecretPairingInCeiling(kind types.GrantKind, host, secretRef, knownHostsRef string, ceiling []types.GrantSpec) bool {
-	for _, cg := range ceiling {
-		if cg.Kind != kind {
-			continue
-		}
-		ch, cs, ckhr, covered, err := storedSecretGrantPairing(cg)
-		if !covered || err != nil {
-			continue
-		}
-		if cs == secretRef && hostEqual(ch, host) && ckhr == knownHostsRef {
-			return true
-		}
-	}
-	return false
+	return composer.PairingInCeiling(kind, host, secretRef, knownHostsRef, ceiling)
 }
 
 func (s *Server) validateInlineSecretRefs(ctx context.Context, owner string, spec types.RunPolicySpec) (int, error) {

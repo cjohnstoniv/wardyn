@@ -571,6 +571,18 @@ are ever consulted.
 
 ## `eligible_grants[]` — `GrantSpec`
 
+**Which ceiling entry bounds a grant.** When a member's run policy is clamped to
+their ceiling, each proposed grant is bounded by the ceiling entry that names the
+**same pairing** — the same `(host, secret_name)` for `api_key`/`git_pat`, the
+same `(host, key_secret_ref, known_hosts_secret_ref)` for `ssh_key`, the same
+`(name, secret_name)` for `env_secret`. So a ceiling listing two `ssh_key` grants
+for two forges holds a run to *its own* forge's `ttl_seconds` and
+`requires_approval`, and the order the entries appear in never changes the
+answer. A proposed grant whose pairing no entry names — and every `github_token`
+or `cloud_sts` grant, which name no stored secret — is bounded by the strictest
+of the same-kind entries. This is the same rule that decides whether a governance
+profile's eligible grants are within the deployment ceiling.
+
 | Field | Type | Default | What it does |
 |---|---|---|---|
 | `kind` | `string` | — (required) | `github_token`, `cloud_sts`, `api_key`, `git_pat`, `ssh_key`, or `env_secret`. Anything else is rejected. |
