@@ -104,6 +104,63 @@ const SecretRekeyLockKey int64 = 0x5741524459_524B59 // ASCII "WARDYRKY"
 // is per-partition chains with a key per partition, not a finer lock over one.
 const AuditChainLockKey int64 = 0x5741524459_434841 // ASCII "WARDYCHA"
 
+// AuditChainLockTimeout bounds how long ANY writer waits for AuditChainLockKey
+// before giving up. Since 0056 the trigger takes that lock on every insert into
+// audit_events, including inserts from outside this repo, so one transaction
+// that inserted an audit row and stayed open holds up every audit write in the
+// process - and that is reachable with no Wardyn bug at all: an operator's psql
+// session, a seed script, a paused migration tool. AuditSpool.Drain already
+// bounds its side of this at 15s per pass ("one idle psql transaction must not
+// become a process-wide stall"); the SYNCHRONOUS side had no bound of any kind.
+// A request-path audit write took the lock on the raw request context, against a
+// server with lock_timeout = 0 and statement_timeout = 0 and an http.Server that
+// deliberately sets no WriteTimeout, so it waited forever - pinning a request
+// goroutine and a pool connection each time. With pool_max_conns at the
+// documented minimum of 3, a handful of stuck audit writes exhausts the pool and
+// every other query in the process starts blocking behind them.
+//
+// BOTH DIRECTIONS OF THE CHOICE, because a bound on a synchronous path can fail
+// either way. Too short and a healthy-but-loaded deployment refuses audit writes
+// it could have completed; too long and the request path stalls exactly when the
+// database is already in trouble. 5s is chosen against measured shapes rather
+// than taste: a legitimate wait here is other audit writers queueing, each
+// holding the lock for one nextval, one indexed head read, one sha256 and one
+// insert - low single-digit milliseconds - so 5s absorbs a queue in the
+// thousands before it ever refuses a write that would have completed. It is also
+// deliberately well UNDER the drain's 15s pass bound, so the request path yields
+// before the background drain does, which is the right order: the drain is the
+// thing built to absorb a backlog.
+//
+// WHAT HAPPENS TO THE WRITE THAT LOSES THE RACE decides whether this is a fix or
+// a relocation of the failure, so it is stated here. On the request path, the
+// error travels back through spoolingRecorder, which fsyncs the event to the
+// local spool and logs AUDIT WRITE FAILED; the drain replays it once the lock
+// clears. The event is not dropped - it takes exactly the degraded path C1 built
+// for a failed durable write. On the broker's mint transaction the audit insert
+// is in the same tx as the credential, so a timeout refuses the MINT: no
+// credential is issued that could not be audited, which is the fail-closed
+// direction a governance tool wants, and is what that path already did for every
+// other audit failure.
+//
+// lock_timeout rather than a context deadline, verified rather than assumed: it
+// fires ONLY on a lock wait, never on a slow-but-progressing statement (so the
+// "too short" direction cannot abort work that was making progress), it is
+// enforced server-side, SET LOCAL scopes it to the transaction so nothing leaks
+// onto a pooled connection, and it reports the distinguishable SQLSTATE 55P03.
+// Measured on Postgres 17: it bounds the explicit pg_advisory_xact_lock AND the
+// trigger's own acquisition during an ordinary INSERT, so it also covers a
+// writer that never takes the lock explicitly.
+var AuditChainLockTimeout = 5 * time.Second
+
+// AuditChainLockTimeoutSQL is the statement that applies AuditChainLockTimeout
+// to the current transaction. SET takes no bind parameters, so the value is
+// formatted in - it is an integer from the variable above, never caller input.
+// SET LOCAL, so it reverts at commit or rollback and the pooled connection is
+// handed back exactly as it was found.
+func AuditChainLockTimeoutSQL() string {
+	return fmt.Sprintf("SET LOCAL lock_timeout = '%dms'", AuditChainLockTimeout.Milliseconds())
+}
+
 // TryAdvisoryLock takes session-level advisory lock key on a connection borrowed
 // from pool WITHOUT waiting, reporting ok=false when another session already
 // holds it. Call the returned release (deferred) to unlock and hand the

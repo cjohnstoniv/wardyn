@@ -199,6 +199,30 @@ any Wardyn bug since the chain trigger began taking the serializing lock: an
 external session that inserted into `audit_events` and left its transaction open
 holds it. A pass that times out replays nothing, counts nothing against any line
 (a store that never answered has rejected nothing), and retries on the next tick.
+**The synchronous side is bounded too, at 5 seconds** (`db.AuditChainLockTimeout`).
+Since `0056` the chain trigger takes that lock on *every* insert into
+`audit_events`, so one transaction that inserted an audit row and stayed open
+holds up every audit write in the process — and nothing in Wardyn has to
+misbehave for that: a psql session, a seed script, a paused migration tool will
+do. A request-path audit write that cannot get the lock within 5s **fails, and
+the event goes to the local spool** to be replayed when the lock clears — the
+same degraded path a store outage uses, not a dropped event. The one exception is
+a **credential mint**, whose audit row shares the mint's transaction: there the
+timeout refuses the mint, because a credential that could not be audited is not
+one to issue. The bound is `lock_timeout`, set `LOCAL` on the audit transaction,
+so it fires only while WAITING for the lock — a slow-but-progressing insert is
+never aborted by it — and it is deliberately shorter than the drain's 15s pass,
+so the request path yields before the background drain does.
+
+**Set the two server-side timeouts** on the database Wardyn uses. Wardyn bounds
+its own waits, but the *holder* is the actual problem, and only Postgres can end
+it: `idle_in_transaction_session_timeout` (a few minutes) reaps the stray open
+transaction that causes this, and `statement_timeout` bounds anything else that
+runs away. Neither is set by default (`SHOW idle_in_transaction_session_timeout`
+returns `0` on a stock server), and Wardyn does not set them for you — they are
+cluster policy, and a value that suits your maintenance jobs is not one Wardyn
+can guess.
+
 **Scraping `/metrics` is not one of the things that lock stalls**: the spool
 gauges are served from counters, not from a read of the spool file, so a scrape
 answers in constant time while a pass is stuck on a blocked store. It has to —
