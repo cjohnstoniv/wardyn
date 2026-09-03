@@ -448,7 +448,26 @@ func (s *Server) routes() chi.Router {
 			// This is where that matters most: the blast radius is corp-wide (the
 			// baseline feeds every run's upstream proxy / artifact mirror / SCM
 			// hosts), higher than a single policy.
-			r.Get("/site-config", s.handleGetSiteConfig)
+			// GET is operatorOnly for the SAME reason the PUT beside it is, and
+			// that symmetry is the whole point: authz_test.go justifies the PUT
+			// as SUPER because it "replaces the WHOLE site-config document,
+			// integration credential refs included" — and the GET returns that
+			// same whole document, refs included. UpstreamProxySecretRef and
+			// every integrations[].secrets[].secret_name are credential REFS;
+			// UpstreamProxyURL, ScmHosts, ArtifactOverrides and EgressRedirects
+			// are the operator's internal topology. A member session used to
+			// receive all of it on a page load.
+			//
+			// The console degrades rather than breaks: both callers already
+			// wrap this GET in .catch() and render with a null config
+			// (settings-screen.tsx, setup-screen.tsx). What a member loses is
+			// exactly the leak — the verbatim upstream_proxy_url line and the
+			// scm_hosts-derived rows — on cards whose every control is already
+			// disabled for them. Widening to securityOps later is the one-line
+			// move routes.go's own tier note describes; narrowing after the
+			// fact is the regression nobody notices, so this lands on the safe
+			// side of that rule.
+			operatorOnly.Get("/site-config", s.handleGetSiteConfig)
 			operatorOnly.Put("/site-config", s.handlePutSiteConfig)
 			// Live connectivity probes: launch a throwaway one-shot sandbox and
 			// actually traverse the upstream proxy / egress redirect, rather than

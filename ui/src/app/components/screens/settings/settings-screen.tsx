@@ -30,9 +30,14 @@ import type { SetupStatus, SiteConfig } from "../../../lib/types";
 import { PageHeader } from "../../wardyn/page-header";
 import { ErrorState, TableSkeleton } from "../../wardyn/states";
 import { Mono } from "../../wardyn/code-block";
-import { getDefaultCc, resolveDefaultCc, setDefaultCc } from "../../wardyn/default-confinement";
+import {
+  getDefaultCc,
+  resolveDefaultCc,
+  setDefaultCc,
+} from "../../wardyn/default-confinement";
 import type { ConfinementClass } from "../../../lib/types";
 import { EnvironmentStep } from "../setup/environment-step";
+import { useOperator } from "../../wardyn/operator-context";
 import { isProxyConfigured } from "../setup/corp-network-proxy";
 import { SshKeysPane } from "../ssh-keys";
 import { ModelProviderCard, GitHostCard } from "./connection-cards";
@@ -58,16 +63,31 @@ function HostCard({
 }) {
   const navigate = useNavigate();
   const [override, setOverride] = React.useState<ConfinementClass | null>(null);
-  const selected = resolveDefaultCc(override ?? getDefaultCc(), status.runner.confinement_classes ?? []);
+  const selected = resolveDefaultCc(
+    override ?? getDefaultCc(),
+    status.runner.confinement_classes ?? [],
+  );
 
   const envBuilder = status.checks.find((c) => c.id === "env_builder");
+  // GET /api/v1/site-config is operatorOnly since R1 — it carries the upstream
+  // proxy secret ref, the integration credential refs and the internal
+  // proxy/SCM hostnames, which no member should be handed. Both callers of it
+  // already .catch() into a null config, so a member reaches here with
+  // siteConfig === null and `proxied` false. That is fine as ABSENCE and wrong
+  // as a STATEMENT: rendering "Not configured — sandboxes go direct" to a member
+  // of a deployment that IS behind a corporate proxy is a false claim, not a
+  // redaction. So the two places that assert a proxy POSTURE are operator-only,
+  // and a member simply does not see them — they also link into an operator
+  // funnel step, which was never theirs to open.
+  const operator = useOperator();
   const proxied = isProxyConfigured(siteConfig);
 
   return (
     <section className="rounded-xl border border-border bg-card p-4">
       <h3 className="text-sm font-medium text-foreground">Host</h3>
       <p className="mt-0.5 text-body leading-snug text-muted-foreground">
-        The barriers this machine can build, and what every run inherits by default.
+        The barriers this machine can build, and what every run inherits by
+        default.
       </p>
 
       <div className="mt-3">
@@ -92,7 +112,9 @@ function HostCard({
             envBuilder?.status === "ok" ? (
               "Wired"
             ) : (
-              <span className="text-muted-foreground">Off — devcontainer builds and --image wraps are unavailable</span>
+              <span className="text-muted-foreground">
+                Off — devcontainer builds and --image wraps are unavailable
+              </span>
             )
           }
         />
@@ -102,33 +124,46 @@ function HostCard({
             status.age_key?.durable ? (
               "Enabled"
             ) : (
-              <span className="text-warn">Ephemeral — recordings are lost on restart</span>
+              <span className="text-warn">
+                Ephemeral — recordings are lost on restart
+              </span>
             )
           }
         />
-        <Row label="Internet" value={proxied ? "Through the corporate proxy" : "Direct"} />
+        {operator && (
+          <Row
+            label="Internet"
+            value={proxied ? "Through the corporate proxy" : "Direct"}
+          />
+        )}
       </div>
 
-      {/* Delegated, not duplicated — see the file header. */}
-      <button
-        type="button"
-        onClick={() => navigate("/setup?step=corp_network")}
-        className="mt-3 flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-left transition-colors hover:border-border-strong"
-      >
-        <span>
-          <span className="block text-body font-medium text-foreground">Corporate proxy &amp; egress</span>
-          <span className="block text-meta text-muted-foreground">
-            {proxied ? (
-              <>
-                Upstream proxy set — <Mono>{siteConfig?.upstream_proxy_url || "configured"}</Mono>
-              </>
-            ) : (
-              "Not configured — sandboxes go direct"
-            )}
+      {/* Delegated, not duplicated — see the file header. Operator-only: it
+          states the deployment's proxy posture and opens a setup step. */}
+      {operator && (
+        <button
+          type="button"
+          onClick={() => navigate("/setup?step=corp_network")}
+          className="mt-3 flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-left transition-colors hover:border-border-strong"
+        >
+          <span>
+            <span className="block text-body font-medium text-foreground">
+              Corporate proxy &amp; egress
+            </span>
+            <span className="block text-meta text-muted-foreground">
+              {proxied ? (
+                <>
+                  Upstream proxy set —{" "}
+                  <Mono>{siteConfig?.upstream_proxy_url || "configured"}</Mono>
+                </>
+              ) : (
+                "Not configured — sandboxes go direct"
+              )}
+            </span>
           </span>
-        </span>
-        <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-      </button>
+          <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+        </button>
+      )}
       <button
         type="button"
         onClick={onRecheck}
@@ -141,12 +176,17 @@ function HostCard({
 }
 
 export function SettingsScreen() {
-  const [state, setState] = React.useState<"loading" | "error" | "ready">("loading");
+  const [state, setState] = React.useState<"loading" | "error" | "ready">(
+    "loading",
+  );
   const [status, setStatus] = React.useState<SetupStatus | null>(null);
   const [siteConfig, setSiteConfig] = React.useState<SiteConfig | null>(null);
 
   const load = React.useCallback(() => {
-    Promise.all([setupApi.getSetupStatus(), health.getSiteConfig().catch(() => null)])
+    Promise.all([
+      setupApi.getSetupStatus(),
+      health.getSiteConfig().catch(() => null),
+    ])
       .then(([s, cfg]) => {
         setStatus(s);
         setSiteConfig(cfg);
@@ -167,8 +207,16 @@ export function SettingsScreen() {
       {state === "ready" && status && (
         <div className="space-y-4">
           <HostCard status={status} siteConfig={siteConfig} onRecheck={load} />
-          <ModelProviderCard status={status} siteConfig={siteConfig} onChanged={load} />
-          <GitHostCard status={status} siteConfig={siteConfig} onChanged={load} />
+          <ModelProviderCard
+            status={status}
+            siteConfig={siteConfig}
+            onChanged={load}
+          />
+          <GitHostCard
+            status={status}
+            siteConfig={siteConfig}
+            onChanged={load}
+          />
           <SshKeysPane heading="h3" />
           {/* The FIFTH card, and so the last one (user-drives-prompt.md §6) —
               the SAME component the setup funnel's Workspaces step renders,

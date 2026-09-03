@@ -97,8 +97,8 @@ is *about* would record it in the one place already under suspicion.
 | `workspace.egress.deny` | Operator/member denies a workspace egress decision | `domains`, `source` | `internal/api/approvals.go:865`, `internal/api/workspaces.go:704` | internal |
 | `workspace.llm_cred.set` | An operator binds (or clears) the model/harness credential for a workspace/container (`PUT /workspaces/{id}/llm-cred`) | `integration_ref` | `internal/api/workspaces.go:733` | internal |
 | `workspace.reassign` | An admin returns a member-owned workspace to the operator, `owned_by=""` (`POST /workspaces/{id}/reassign`) — the offboarding path for a member who has left | `from_owner` (the departed member's principal; `""` when the row was already operator-owned) | `internal/api/workspace_owner.go:60` | internal |
-| `source.write` | A workspace source (dir/repo) is added or updated | `kind`, `locator`, `ref`, `writable` | `internal/api/sources.go:260` | internal |
-| `source.delete` | A workspace source is removed | `detached_from`, `forced` | `internal/api/sources.go:342` | internal |
+| `source.write` | A workspace source (dir/repo) is added or updated | `kind`, `locator`, `ref`, `writable` | `internal/api/sources.go:277` | internal |
+| `source.delete` | A workspace source is removed | `detached_from`, `forced` | `internal/api/sources.go:359` | internal |
 | `source.scan` | A single source's onboarding scan runs | `ai_advisor`, `ai_changed`, `confidence`, `detail`, `leak_findings`, `reason`, `scan_run_id`, `secret_reqs` | `internal/api/workspace_run.go:730`, `internal/api/source_scan.go:62` | internal |
 
 **`workspace_owner` — the cross-user marker on every workspace-scoped write.**

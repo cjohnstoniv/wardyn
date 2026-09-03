@@ -159,6 +159,25 @@ var routeMatrix = map[string]classifiedRoute{
 	// helper, different tier, decided at the router.
 	"PUT /api/v1/workspaces/{id}/llm-cred":     {class: classAdmin},
 	"PUT /api/v1/workspaces/{id}/requirements": {class: classAdmin},
+	// THE OPERATOR-TOPOLOGY READS. Their WRITES were already classAdmin and the
+	// reads were classMember — a split made by VERB rather than by what the
+	// document carries. GET /site-config returns the same whole document the
+	// PUT above is classAdmin for "integration credential refs included": the
+	// upstream-proxy secret ref, every integrations[].secrets[].secret_name,
+	// and the internal proxy / SCM / artifact hostnames. A Source row carries
+	// Locator (the host filesystem path of a local_dir source) and requirement
+	// keys spelled `secret:<name>` / `egress:<host>`; a BaseImageEntry carries
+	// the internal registry ref and the bootstrap URLs in Steps. No secret
+	// VALUES — those are write-only — so this is a target list rather than a
+	// key, handed to the whole member tier by routes the console called on page
+	// load. Nothing member-facing consumes them (the console has no client
+	// method for /sources or /base-images at all, and both /site-config callers
+	// already tolerate a null), which is why the fix is one router line each
+	// rather than three response projections.
+	"GET /api/v1/site-config":  {class: classAdmin},
+	"GET /api/v1/sources":      {class: classAdmin},
+	"GET /api/v1/sources/{id}": {class: classAdmin},
+	"GET /api/v1/base-images":  {class: classAdmin},
 	// RECORD, by that same criterion. It reads like an egress-decision sibling
 	// (it is how the hosts promote-egress promotes get observed) and was
 	// classified with them, but it LAUNCHES an interactive sandbox rather than
@@ -295,7 +314,6 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/approvals":    {class: classMember},
 	"GET /api/v1/audit":        {class: classMember},
 	"GET /api/v1/audit/export": {class: classMember},
-	"GET /api/v1/base-images":  {class: classMember},
 	"GET /api/v1/integrations": {class: classMember},
 	"GET /api/v1/me":           {class: classMember},
 	// /me/ssh-keys (SSH lane, C2): classMember, NOT classOwner — this is a
@@ -335,9 +353,6 @@ var routeMatrix = map[string]classifiedRoute{
 	"DELETE /api/v1/secrets/{name}": {class: classMember},
 	"GET /api/v1/secrets":           {class: classMember},
 	"GET /api/v1/setup/status":      {class: classMember},
-	"GET /api/v1/site-config":       {class: classMember},
-	"GET /api/v1/sources":           {class: classMember},
-	"GET /api/v1/sources/{id}":      {class: classMember},
 	// The workspace READS stay member-class: an operator-owned workspace — every
 	// pre-0048 row — is readable by any authenticated caller exactly as before.
 	// What 0048 adds is that another MEMBER's owned row 404s, which is the same
@@ -737,11 +752,14 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// POST /workspaces/{id}/record, which §B put in the workspace
 	// egress-decision lane but which LAUNCHES a credentialed, host-mounting,
 	// open-egress sandbox and stamps the caller as its owner rather than
-	// deciding anything — so 21 SEC / 34 SUPER. A route silently reclassified in
-	// the table above would still pass every probe — it would just be enforcing
-	// the WRONG tier, exactly the drift the per-route loop cannot see.
-	if sec != 21 || super != 34 {
-		t.Errorf("tier split = %d security / %d admin, want 21 / 34 (§B's 14 SEC + governance's 7 + §I's directory search, MINUS record; and 26 SUPER + /drives' 7 + record)", sec, super)
+	// deciding anything. R1 also moved FOUR reads OUT of classMember and into
+	// SUPER — GET /site-config, /sources, /sources/{id} and /base-images, which
+	// returned operator topology and credential refs to the whole member tier —
+	// so 21 SEC / 38 SUPER. A route silently reclassified in the table above
+	// would still pass every probe — it would just be enforcing the WRONG tier,
+	// exactly the drift the per-route loop cannot see.
+	if sec != 21 || super != 38 {
+		t.Errorf("tier split = %d security / %d admin, want 21 / 38 (§B's 14 SEC + governance's 7 + §I's directory search, MINUS record; and 26 SUPER + /drives' 7 + record + the four operator-topology reads)", sec, super)
 	}
 }
 
