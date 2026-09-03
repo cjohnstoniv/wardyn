@@ -150,6 +150,27 @@ func TestValidateCapabilityGrant(t *testing.T) {
 		{"egress: the kind wildcard is not a domain", func(g *types.CapabilityGrant) {
 			g.Capability, g.Value = capEgressHost, capWildcard
 		}, ""},
+
+		// A GROUP subject is matched by exact equality against the login-time
+		// snapshot, which carries printable ASCII only — so a subject that
+		// snapshot can never produce is a stored row that matches nobody: the
+		// SUBJECT half of the failure the egress_host arms above close on the
+		// value half. See TestGroupSubjectWriteBoundariesShareTheSnapshotRule
+		// for the shared-helper pin across both 0.7 tables.
+		{"group subject with a non-ASCII name", func(g *types.CapabilityGrant) {
+			g.SubjectType, g.Subject = types.CapabilitySubjectGroup, "Entwickler-Büro"
+		}, "printable ASCII"},
+		{"group subject that folds onto an ASCII group", func(g *types.CapabilityGrant) {
+			g.SubjectType, g.Subject = types.CapabilitySubjectGroup, "\u212Aubernetes-admins"
+		}, "printable ASCII"},
+		{"group subject that is plain ASCII is fine", func(g *types.CapabilityGrant) {
+			g.SubjectType, g.Subject = types.CapabilitySubjectGroup, "  Eng-Team "
+		}, ""},
+		// A USER subject is a sub/email, normalized by capabilitySubjects with
+		// a bare ToLower — the group rule must not leak onto it.
+		{"user subject is not held to the group rule", func(g *types.CapabilityGrant) {
+			g.SubjectType, g.Subject = types.CapabilitySubjectUser, "renée@corp.example"
+		}, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

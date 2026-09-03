@@ -25,6 +25,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -263,10 +264,12 @@ type governanceAssignmentRequest struct {
 
 // validateGovernanceAssignment normalizes a in place and validates it, applying
 // the SAME field hygiene validateCapabilityGrant applies to a capability grant
-// subject — trim, lowercase, length, no control characters — because these two
-// tables are written against the identical subject vocabulary and are resolved
-// through the identical capabilitySubjects call. A subject normalized one way
-// here and another way there is a row that silently never matches.
+// subject — trim, length, no control characters, and for a GROUP subject the
+// shared oidc.CanonicalGroupSubject the login-time snapshot itself uses —
+// because these two tables are written against the identical subject vocabulary
+// and are resolved through the identical capabilitySubjects call. A subject
+// normalized one way here and another way there is a row that silently never
+// matches.
 func validateGovernanceAssignment(a *types.GovernanceAssignment) error {
 	if !a.SubjectType.Valid() {
 		return fmt.Errorf("subject_type: invalid %q", a.SubjectType)
@@ -282,9 +285,25 @@ func validateGovernanceAssignment(a *types.GovernanceAssignment) error {
 		a.Subject = ""
 		return nil
 	}
-	a.Subject = strings.ToLower(strings.TrimSpace(a.Subject))
+	a.Subject = strings.TrimSpace(a.Subject)
 	if a.Subject == "" {
 		return fmt.Errorf("subject: required for subject_type %q", a.SubjectType)
+	}
+	if a.SubjectType == types.CapabilitySubjectGroup {
+		// The group half of that hygiene is oidc.CanonicalGroupSubject, not a
+		// lowercase — see validateCapabilityGrant. A group-tier assignment is
+		// the sharper case of the two: HasGroupTierAssignments counts the dead
+		// row as "a group tier exists", so a subject no snapshot can carry both
+		// fails to wall the member it names AND refuses every caller with an
+		// unanswerable snapshot on account of an assignment that could never
+		// have applied to them.
+		subject, ok := oidc.CanonicalGroupSubject(a.Subject)
+		if !ok {
+			return fmt.Errorf("subject: must be printable ASCII — a group subject is matched against the login-time group snapshot, which carries printable ASCII only, so this value can never match anyone")
+		}
+		a.Subject = subject
+	} else {
+		a.Subject = strings.ToLower(a.Subject)
 	}
 	if len(a.Subject) > maxCapabilityGrantFieldLen || !controlCharFree(a.Subject) {
 		return fmt.Errorf("subject: invalid")

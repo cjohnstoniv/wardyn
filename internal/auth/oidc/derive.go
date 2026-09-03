@@ -534,9 +534,11 @@ const maxSessionGroupsBytes = 2048
 // NEVER returns nil — an empty result is the empty non-nil slice, because nil
 // is reserved for "this cookie predates 0.6" (see Session.Groups).
 //
-// Printable-ASCII only, for the same reason deriveRole's loop skips non-ASCII
-// claim values (ASCIIOnly): a grant subject is an operator-authored ASCII
-// string, and Unicode case folding lets a crafted claim fold ONTO one. Control
+// Printable-ASCII only (CanonicalGroupSubject, which internal/api's group-subject
+// write boundaries share so the two surfaces cannot drift), for the same reason
+// deriveRole's loop skips non-ASCII claim values: a grant subject is an
+// operator-authored ASCII string, and Unicode case folding lets a crafted claim
+// fold ONTO one — so the guard runs on the RAW value, BEFORE the fold. Control
 // characters are dropped with the rest — they cannot appear in a real group
 // name, and excluding them keeps the byte budget below exact.
 //
@@ -566,12 +568,36 @@ const maxSessionGroupsBytes = 2048
 // Wardyn does not dereference the pointer (that is a Graph call with its own
 // credential and egress, at login latency); it fails closed instead and marks
 // the snapshot partial, which is what "unanswerable" already means downstream.
+//
+// A value CanonicalGroupSubject refuses is the THIRD way, and it is the one
+// that used to be invisible: the drop happens before uniq is built, so the
+// len(out) < len(uniq) reading below cannot see it and the snapshot reported
+// COMPLETE while a group the human really holds was missing. A directory that
+// names groups in a non-English locale ("Entwickler-Büro") hits this on an
+// ordinary login. It stamps the same bit — see unrepresentable below.
 func sessionGroups(rolesClaim, groupsClaim []string, claimNames map[string]any) (groups []string, truncated bool) {
 	seen := make(map[string]bool, len(rolesClaim)+len(groupsClaim))
 	uniq := make([]string, 0, len(rolesClaim)+len(groupsClaim))
+	// unrepresentable counts claim values this snapshot CANNOT carry — the
+	// THIRD way it is partial, and the one no byte cap and no `_claim_names`
+	// pointer can see. A group the human really holds that CanonicalGroupSubject
+	// refuses never reaches uniq, so `len(out) < len(uniq)` cannot see the loss
+	// either: the snapshot would read COMPLETE while a real group is missing
+	// from it, and a group-subject DENY or a group-tier ceiling written against
+	// that group would simply not match — no refusal, no audit, no warning.
+	// That is the evaporation this bit exists to prevent, so a drop here stamps
+	// it exactly as the cap and the overage do.
+	unrepresentable := 0
 	for _, v := range slices.Concat(rolesClaim, groupsClaim) {
-		g := strings.ToLower(strings.TrimSpace(v))
-		if g == "" || !printableASCII(g) || seen[g] {
+		if strings.TrimSpace(v) == "" {
+			continue // names no group; nothing was lost
+		}
+		g, ok := CanonicalGroupSubject(v)
+		if !ok {
+			unrepresentable++
+			continue
+		}
+		if seen[g] {
 			continue
 		}
 		seen[g] = true
@@ -601,7 +627,37 @@ func sessionGroups(rolesClaim, groupsClaim []string, claimNames map[string]any) 
 			return out, true
 		}
 	}
-	return out, len(out) < len(uniq)
+	return out, len(out) < len(uniq) || unrepresentable > 0
+}
+
+// CanonicalGroupSubject canonicalizes an operator-authored group name into the
+// EXACT string a session snapshot carries for a claim of that name, or reports
+// ok=false when NO snapshot can ever carry it (empty/whitespace-only, or any
+// character outside printable ASCII).
+//
+// It is exported because sessionGroups is the MATCH surface and internal/api's
+// three group-subject WRITE surfaces — a capability grant, a governance
+// assignment, a user-drive grant — must refuse exactly what this one drops.
+// Every one of those subject columns is matched by exact string equality
+// against this snapshot, so a subject this function refuses is a row that can
+// never match anyone: a DENY that protects nothing, or a group tier that
+// counts as "assigned" while resolving to no profile. One implementation, so
+// the two surfaces cannot drift about what a group name is.
+//
+// THE ASCII GUARD RUNS ON THE RAW VALUE, BEFORE THE FOLD, and the order is the
+// security property — the same ordering ParseRoleMap and deriveRole's own
+// lookup loop already use, for the same reason. strings.ToLower does Unicode case
+// mapping: KELVIN SIGN U+212A folds to ASCII 'k' and U+0130 folds to 'i', so
+// guarding the LOWERED value lets a crafted claim "Kubernetes-admins" (U+212A)
+// fold ONTO the operator-authored ASCII group "kubernetes-admins" and enter the
+// snapshot as it — inheriting every grant and every governance profile bound to
+// the real group. Fold first, guard second, and the guard is decorative.
+func CanonicalGroupSubject(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" || !printableASCII(s) {
+		return "", false
+	}
+	return strings.ToLower(s), true
 }
 
 // printableASCII reports whether every rune of s is a printable ASCII

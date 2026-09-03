@@ -697,6 +697,16 @@ identity hits), `group` (the login-time union of the ID token's `roles` and
 `groups` claims, lowercased and deduped — so Entra App Roles are grantable for
 free), or `all` (every signed-in human).
 
+A `group` subject must be **printable ASCII**, and the write is refused with that
+reason when it is not — the same rule a console role mapping already gets. The
+snapshot a group grant is matched against carries printable ASCII only, so a
+subject outside that set is a row that can never match anyone: a deny that
+protects nothing while the Permissions screen renders it as active. The check runs
+on what you typed, *before* lowercasing, so a look-alike character that collapses
+onto one of your ASCII group names (Unicode case folding maps KELVIN SIGN to `k`)
+is refused rather than quietly stored as the real group. The same refusal guards a
+governance assignment's subject, for the same reason.
+
 Group membership is a **snapshot taken at login**, carried in the session cookie;
 grants are read from the database per request, so a new grant takes effect on the
 very next request but a *directory* change does not until the human signs in
@@ -711,9 +721,9 @@ reported distinctly as `groups_snapshot_stale` on `GET /me/capabilities`, becaus
 "can't tell yet" and "holds no groups" must not read the same.
 
 **A DENY is never allowed to evaporate with the snapshot.** A group that fell off
-the 2048-byte cut — or a caller still holding a pre-0.6 cookie, or a pre-0.7 API
-token whose completeness was never recorded — has none of its group rows in the
-scan. For an ALLOW that costs the caller access, which is the safe direction. For
+the 2048-byte cut — or one your directory names with a character the snapshot
+cannot carry, or a caller still holding a pre-0.6 cookie, or a pre-0.7 API token
+whose completeness was never recorded — has none of its group rows in the scan. For an ALLOW that costs the caller access, which is the safe direction. For
 a DENY it would hand back exactly what the row forbade, so the resolver
 (`capScan`, `internal/api/capabilities.go`) checks whether **any** group-subject
 deny row of that kind could cover the value, and refuses when one could — the
