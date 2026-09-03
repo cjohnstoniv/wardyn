@@ -153,12 +153,23 @@ var routeMatrix = map[string]classifiedRoute{
 	"DELETE /api/v1/sources/{id}":     {class: classAdmin},
 	"POST /api/v1/base-images":        {class: classAdmin},
 	"DELETE /api/v1/base-images/{id}": {class: classAdmin},
-	// The three workspace routes that BIND CREDENTIAL MATERIAL or WRITE THE
-	// HOST. Their egress-decision siblings (approved-/denied-egress, record,
-	// promote-egress) are classSecurity below — same handler file, same
-	// scopedWorkspaceWrite helper, different tier, decided at the router.
+	// The workspace routes that BIND CREDENTIAL MATERIAL or WRITE THE HOST.
+	// Their egress-decision siblings (approved-/denied-egress, promote-egress)
+	// are classSecurity below — same handler file, same scopedWorkspaceWrite
+	// helper, different tier, decided at the router.
 	"PUT /api/v1/workspaces/{id}/llm-cred":     {class: classAdmin},
 	"PUT /api/v1/workspaces/{id}/requirements": {class: classAdmin},
+	// RECORD, by that same criterion. It reads like an egress-decision sibling
+	// (it is how the hosts promote-egress promotes get observed) and was
+	// classified with them, but it LAUNCHES an interactive sandbox rather than
+	// writing a list: open egress by default, the workspace's local_dir
+	// bind-mounted read-write, the clone credential minted, the workspace's
+	// required secrets folded into proxy injections, the operator's LLM
+	// credential attached — and the run stamped CreatedBy = the caller, which
+	// walked straight through handleAttachTicket's strict foreign-run guard and
+	// yielded a PTY in a sandbox holding another member's files. Pinned by
+	// TestRecordWorkspaceIsSuperAdminOnly (security_admin_test.go).
+	"POST /api/v1/workspaces/{id}/record": {class: classAdmin},
 	// Offboarding (O6): admin-only, and gated by requireOperator rather than in
 	// the handler precisely so the member refusal is a CONSTANT 403 that never
 	// varies with whether the named workspace exists.
@@ -198,9 +209,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// The workspace EGRESS-DECISION lane. Deciding which hosts a workspace's
 	// runs may reach is the same authority as deciding an egress approval, and
 	// promote-egress is literally its bulk form.
+	// record itself is classAdmin above: it LAUNCHES the sandbox whose
+	// observations promote-egress promotes, and launching is not deciding.
 	"PUT /api/v1/workspaces/{id}/approved-egress":               {class: classSecurity},
 	"PUT /api/v1/workspaces/{id}/denied-egress":                 {class: classSecurity},
-	"POST /api/v1/workspaces/{id}/record":                       {class: classSecurity},
 	"POST /api/v1/workspaces/{id}/record/{task}/promote-egress": {class: classSecurity},
 	// Non-mutating: they launch a throwaway probe sandbox and answer "does the
 	// baseline this deployment already declares actually work" — evidence, not
@@ -721,11 +733,15 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// The split itself, pinned as a number: §B decided 14 SEC of the 40 gated
 	// routes, plus /governance's 7 and §I's directory search (all new in 0.7,
 	// outside that count) = 22, and 26 SUPER — plus /drives' 7, also new in 0.7
-	// and born SUPER, = 33. A route silently reclassified in the table above
-	// would still pass every probe — it would just be enforcing the WRONG tier,
-	// exactly the drift the per-route loop cannot see.
-	if sec != 22 || super != 33 {
-		t.Errorf("tier split = %d security / %d admin, want 22 / 33 (§B's 14 SEC + governance's 7 + §I's directory search, and 26 SUPER + /drives' 7)", sec, super)
+	// and born SUPER, = 33. R1 then moved ONE route across:
+	// POST /workspaces/{id}/record, which §B put in the workspace
+	// egress-decision lane but which LAUNCHES a credentialed, host-mounting,
+	// open-egress sandbox and stamps the caller as its owner rather than
+	// deciding anything — so 21 SEC / 34 SUPER. A route silently reclassified in
+	// the table above would still pass every probe — it would just be enforcing
+	// the WRONG tier, exactly the drift the per-route loop cannot see.
+	if sec != 21 || super != 34 {
+		t.Errorf("tier split = %d security / %d admin, want 21 / 34 (§B's 14 SEC + governance's 7 + §I's directory search, MINUS record; and 26 SUPER + /drives' 7 + record)", sec, super)
 	}
 }
 

@@ -325,16 +325,38 @@ func (s *Server) routes() chi.Router {
 			// WRITES THE HOST stays gated below; owning a workspace does not make
 			// a member the operator of it. 0.7 splits that set across the two
 			// admin tiers (§B): the EGRESS-DECISION lane — approved-egress,
-			// denied-egress, record and record/{task}/promote-egress — is
-			// securityOps (deciding which hosts a workspace's runs may reach is
-			// the same authority as deciding an egress approval, and the
-			// promote-egress writer is literally the bulk form of it), while
-			// llm-cred (binds credential material), requirements, reassign (user
-			// administration) and env-as-code/write (writes the host) stay
-			// operatorOnly. None of the four SEC routes carries an in-handler
-			// tier check — scopedWorkspaceWrite and getWorkspaceOr404 authorize
-			// nothing beyond existence — so for them the router IS the whole
-			// gate, and this is the only place the tier is decided.
+			// denied-egress and record/{task}/promote-egress — is securityOps
+			// (deciding which hosts a workspace's runs may reach is the same
+			// authority as deciding an egress approval, and the promote-egress
+			// writer is literally the bulk form of it), while llm-cred (binds
+			// credential material), requirements, reassign (user administration),
+			// env-as-code/write (writes the host) and RECORD stay operatorOnly.
+			// None of the three SEC routes carries an in-handler tier check —
+			// scopedWorkspaceWrite and getWorkspaceOr404 authorize nothing beyond
+			// existence — so for them the router IS the whole gate, and this is
+			// the only place the tier is decided.
+			//
+			// RECORD IS NOT AN EGRESS DECISION, which is why it is not in that
+			// lane. It was grouped there by association with promote-egress, but
+			// the two do categorically different things: promote-egress WRITES A
+			// LIST, while record LAUNCHES AN INTERACTIVE SANDBOX — open egress by
+			// default (AllowAllEgress = !confined), the workspace's local_dir
+			// bind-mounted (read-WRITE when the owning member ticked Writable),
+			// the repo clone credential minted, the workspace's required secret:/
+			// integration: rows folded into proxy-side injections, and the
+			// operator's LLM credential attached. That is all three things
+			// securityOps is DEFINED never to reach — into a run, credential
+			// material, the host — and the classAdmin criterion authz_test.go
+			// states for llm-cred/requirements ("BIND CREDENTIAL MATERIAL or
+			// WRITE THE HOST") names record too. It also stamped the run
+			// CreatedBy = the CALLER, which is what defeated the guards written
+			// to hold this line: handleAttachTicket's strict re-check refuses a
+			// security admin a PTY in a FOREIGN sandbox, and a run they launched
+			// themselves is not foreign. And the tier could not even READ the
+			// workspace it was recording — getWorkspaceReadable answers a
+			// security admin 404 for a member-owned row — so the surface let them
+			// launch a credentialed sandbox over something they were refused a
+			// GET on.
 			//
 			// Create/update validate the source the
 			// same way policy WorkspaceMounts do (runner.ValidateMount /
@@ -386,7 +408,7 @@ func (s *Server) routes() chi.Router {
 			// varies with whether the id exists — owning a workspace does not
 			// let a member disown it.
 			operatorOnly.Post("/workspaces/{id}/reassign", s.handleReassignWorkspace)
-			securityOps.Post("/workspaces/{id}/record", s.handleRecordWorkspace)
+			operatorOnly.Post("/workspaces/{id}/record", s.handleRecordWorkspace)
 			securityOps.Post("/workspaces/{id}/record/{task}/promote-egress", s.handlePromoteRecordEgress)
 			// Committable env-as-code (devcontainer.json/AGENTS.md) from the
 			// scanned profile. GET re-generates it any time (repo workspaces have

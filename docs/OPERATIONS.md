@@ -834,8 +834,15 @@ or group to `security_admin` in the role map (chart or People page). Security
 admins author and assign **governance profiles** (named ceilings bound to users or
 groups), write the org allow/denylists (capability grants), decide escalated
 approvals — egress, credential, tool — on anyone's run, revoke sessions and API
-tokens, and verify the audit chain. They cannot touch the People page,
-integrations, site-config writes, base images, or the deploy funnel — and they run
+tokens, and verify the audit chain. They **promote** a workspace's recorded
+egress into its allowlist, but they cannot **record** one: launching a recording
+session opens an interactive sandbox with open egress, the workspace's directory
+bind-mounted and its credentials injected, which is reach into a run, credential
+material and the host — the three things this tier is defined never to have — so
+`POST /workspaces/{id}/record` is admin-only and the console shows a security
+admin that control disabled beside the promote control it leaves live. They also
+cannot touch the People page, integrations, site-config writes, base images, or
+the deploy funnel — and they run
 under a governance profile themselves if one is assigned to them, since only
 `admin` is exempt from ceiling resolution. A profile can only make the deployer's
 stored credentials *less* available, never more — and a security admin widening
