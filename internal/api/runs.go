@@ -302,12 +302,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			Toolchains:         runToolchainNeeds(wsRefs),
 			CeilingDeny:        ceilingDeny,
 			CeilingProfile:     ceilingProfile,
-			// The member's own persistent storage, already resolved and narrowed
-			// at create (seedRequestDrive) — nil unless this run asked for it.
-			// Carried here rather than re-resolved inside dispatch for the reason
-			// CeilingDeny is: resolution keys on the caller's OIDC claims, which
-			// the run row does not hold, so dispatch has no identity to resolve
-			// FROM. See user_drives_run.go's own note.
+			// The member's own persistent storage, resolved and narrowed at
+			// create (seedRequestDrive) — nil unless this run asked for it.
 			Drive: driveMount,
 			// The zero posture unless this run attaches a MEMBER-OWNED workspace, in
 			// which case the driver re-checks that member's own binds against these

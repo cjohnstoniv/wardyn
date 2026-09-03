@@ -74,6 +74,7 @@ persona is the audience, not an auditor.
 | Video | Questions (answer from the viewing only) |
 |---|---|
 | 01 (primer) | Why would a team without AI agents still want a sandbox? What are a sandbox, egress, and a proxy, in your own words? What was the real caught-on-camera example, and what happened to it? What does "observe, then decide" replace? |
+| 00 (front door) | What three questions can a sandbox alone not answer? What happened to the first request, and what did the person's "always" change? What did the sandbox get when it asked for the secret by name? Where did the confined run's allowlist come from? |
 | 02 | What is a "barrier"? What happens when a run reaches a host that isn't allowed? Where does the model key live? What did the setup actually require of you? |
 | 02b (desktop) | What does MDM deliver, and what never rides in it? Who is NOT the adversary in this tier? What flips a′ into m′? |
 | 02c (cloud) | What is different about where the sandbox runs? What did the readiness probe prove? |
@@ -84,6 +85,7 @@ persona is the audience, not an auditor.
 | 04 | What is a workspace? What can a run touch outside it? |
 | 04b (members) | Where may a member mount from, and who set that? What does a member see of another member's workspace? |
 | 04c (admin) | Name one thing a member cannot do, and where the console says so. Who may decide an egress approval on a run they created? |
+| 04d (members) | Where does a drive mount, and who chose the size? What proved the file survived the first run? What did the read-only toggle change, and what refused the write? What does Wardyn do when a person leaves — and what does it leave to you? |
 | 05 | What does a policy carry that a single run's settings don't? What does the "floor" do? What did the safety meter read, and why? |
 | 06 | What ran, and where? How did you know it finished? How do you know which policy the run ACTUALLY ran under? |
 | 07 | Who was driving the terminal? What credential did the agent hold, and why didn't it matter? What's the difference from the first run in 06? |
@@ -207,3 +209,7 @@ and tiled with `scripts/demo-review/tile-sheets.py DIR`.
   labeled contact sheets, cited by sheet and tile). One frame per read cost
   ~150k context per turn and burned two session-limit windows; the sheets are
   ~11 reads for a ten-minute take.
+- 2026-09-02: quiz rows for the two 0.7 additions — 00 (front door) and 04d
+  (members), each the wording its own script proposed (`00-script.md` §5 #8,
+  `04d-script.md` §6 #5). A frames round grades a cut against this table, so an
+  episode with no row was being graded against nothing.

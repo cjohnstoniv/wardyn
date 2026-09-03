@@ -45,6 +45,79 @@ Offboarding — handing a workspace back to your admin — is an admin action
 (`POST /workspaces/{id}/reassign`); see
 [OPERATIONS.md § Multi-user: who can change what](OPERATIONS.md#multi-user-who-can-change-what).
 
+## Your drive
+
+A **drive** is persistent storage your admin registers once and allocates to
+you, to a group you are in, or to everyone. It is not a workspace — you do not
+onboard it, it holds no repo, and it is not something you can add yourself. It
+mounts at `/home/agent/drive`, and it is yours alone: a run sees **your own
+directory** inside the drive, never the drive's root, and Wardyn binds nothing
+named for anyone else — what your share's administrator does above that directory
+is theirs (the threat model's residual #33).
+`GET /me` carries `user_drive` (`null` when none is allocated to you) and is the
+ground truth for what you have.
+
+**It mounts only when you ask, per run.** New run's Workspace card carries a
+checkbox — "Mount my drive" — and nothing mounts without it. What the request
+carries is a flag (`drive.enabled`), never a path: the server resolves which
+drive and which directory from the identity you signed in with, so there is no
+drive name, directory or size for you to type, and nothing you can point
+somewhere else.
+
+**Read-only is the default, and you can only narrow it.** When your allocation
+is writable the checkbox is joined by "Mount read-only for this run", so you can
+take the safer posture on a run you don't trust. The line under the checkbox
+says which one you're getting — either
+"What a run writes there persists to your next run."
+or
+"A run can read it and never change it."
+There is no toggle the other way: `read_only: false` against a read-only
+allocation is refused, never quietly honoured, because a run you believed was
+writable would only reveal itself when the work failed to persist.
+
+**A change your admin makes reaches you at your next run, not this one.**
+Pausing your allocation, resizing it, or changing its mode takes effect the next
+time you launch; a run already dispatched keeps what it mounted. Where the
+checkbox would be, a paused allocation reads
+"Your drive is paused by your admin."
+and a launch that asks for it anyway is refused. One exception is slower: a
+drive allocated to a **group** reaches you when you next **sign in**, because
+your group membership is read once, at login.
+
+**The refusals you can see**, at launch and, because `POST /runs/preflight`
+resolves your drive the same way, in a dry run too:
+
+- `drive: no user drive is allocated to you — ask an admin for an allocation`
+- `drive: your allocation is paused by an admin`
+- `drive: your allocation is read-only; read_only:false cannot widen it`
+- `drive: directory <yours> does not exist on the share — ask an admin to create it` — a share drive only; Wardyn never invents a directory inside somebody's NAS.
+- `drive: your <claim> cannot name a directory (lowercase letters and digits, then . _ -, up to 63 characters) — ask an admin to set your directory name` — on a **Kubernetes** deployment the rule is stricter and the refusal says so, appending `(on a Kubernetes deployment the rule is stricter: no _, and it may not end in - or .)`: a directory name there becomes part of a volume-claim name.
+- `drive: this deployment cannot mount your drive (<why>)` — the drive is real; this deployment's runner cannot bind it.
+- `mounting a user drive is not allowed by your governance profile "<name>". Launch without drive.` — the one **403** of the set, and the only one that is audited. Before you launch, the console shows it where the checkbox would be, as `Your governance profile "<name>" does not allow mounting a drive.`
+
+The first six are **422s** and none of them is audited: you were authorized and
+simply had nothing to mount. `/home/agent/drive` is also reserved — a policy
+that names it as a `workspace_mounts` target is refused with
+`workspace_mounts[0]: target /home/agent/drive is reserved for the user drive`
+(see [POLICIES.md](POLICIES.md)).
+
+Preflight is honest about the **allocation**, not about the substrate: a drive
+whose storage the runner cannot actually provision still passes preflight and
+fails when the run is dispatched.
+
+**The size you are shown is an allocation, not a quota.** Quoted as the console
+quotes it:
+
+> Wardyn never enforces a drive's size itself. On Kubernetes the size is the volume request and the storage class decides whether it binds — block disks do, network-share provisioners do not. On Docker a managed drive has no byte cap, the same gap disk_mib has. A share is bounded by its own quota. The size you see is the allocation, not a guarantee.
+
+So treat a full drive as something to notice, not something Wardyn will stop for
+you, and do not rely on the number as a backstop.
+
+**Two more things that are not promises.** Your concurrent runs mount the *same*
+drive — two agents writing one directory can corrupt each other's lock files, and
+Wardyn does not warn about it. And there is no self-service reset: a drive you
+have poisoned is reclaimed by your admin with a documented command, so ask.
+
 ## Your first run
 
 Launching and killing a run is yours to do. Your `inline_policy` is clamped
@@ -118,3 +191,7 @@ their own inline policy.
 - **A workspace root**, if you don't have one yet.
 - **A wider egress ceiling** — the stored policy is your admin's to change,
   not yours.
+- **A drive, a writable drive, or a bigger one** — all three are allocations
+  only an admin writes; see [Your drive](#your-drive). A drive that has gone
+  wrong is reclaimed by an admin command too, so ask for that rather than
+  looking for a reset.

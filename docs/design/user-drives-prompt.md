@@ -272,9 +272,9 @@ unchanged.
 ### 2.7 Canon frozen here, shipped later
 
 - **The run rail's drive line (§7.8).** The `IdentityWidget` is fed from the run row, and
-  `DESIGN.md` §6.1 residual #36 puts drive persistence on the run row in 0.7.1. The line is
-  frozen now so the rail does not get a second copy round; it renders when the run row carries a
-  drive, and until then it does not exist.
+  THREAT-MODEL §4.6 ("concurrent runs share one drive") puts drive persistence on the run row
+  in 0.7.1. The line is frozen now so the rail does not get a second copy round; it renders
+  when the run row carries a drive, and until then it does not exist.
 - **The `enforcement` vocabulary.** `types.StorageEnforcement` — `filesystem`, `request`,
   `external`, `none` — is introduced by this feature and adopted by `docs/OPERATIONS.md`'s
   known-gaps section and, later, the two `DiskMiB` warn sites. The four glosses (§7.2) are
@@ -301,7 +301,7 @@ unchanged.
 - **No policy field.** The flag is on the run request; `POLICIES.md` gains only the reserved
   target note.
 - **No CLI.** `wardyn drive get|apply` is 0.7.1.
-- **No collision warning** for one person's concurrent runs on one drive (residual #36).
+- **No collision warning** for one person's concurrent runs on one drive (THREAT-MODEL §4.6 ("concurrent runs share one drive")).
 - **No change to `/governance` beyond the third row**, and no change to the Limits lead
   (Q4 — a copy change, owner-gated, not this round's).
 - **No re-record** of the demo videos; 04d and the 12b beat arrive with the feature.
@@ -519,11 +519,30 @@ does not freeze a second wording:
 | Template invalid for a share (400) | `validateUserDrive` | home_template "hash" is not allowed on a share backend — a share's directories are named by your directory, so pick sub or email_local |
 | Size required for a managed claim (400) | `validateUserDrive` | size_mib must be above 0 for a k8s_pvc drive — it is the volume request |
 | Delete while allocated (409) | `handleDeleteUserDrive` | this drive is still allocated — remove its allocations first (deleting it while allocated would leave those subjects with a mount that names nothing) |
+| Identity-affecting PUT on an allocated drive (409) | `driveRehomeGuard` | this drive is allocated to {n subjects} and this change re-homes {them}: {backend "host_path" → "docker_volume", …}. Every allocated person's storage object is derived from these fields, so their next run mounts a different object and the one holding their work is left behind with nothing in Wardyn naming it. Confirming is an API action, not a console one: re-send as PUT /drives/{id}?confirm=rehome. |
 | Home override on a non-user row (400) | `validateUserDriveGrant` | home_override is accepted on a user-tier allocation only — a group cannot share one directory |
+| Stricter home rule on a Kubernetes backend (**suffix**, 422) | `DriveHomeStricterRuleClause`, appended by `newResolvedDrive` after `REFUSED_HOME_INVALID` | (on a Kubernetes deployment the rule is stricter: no _, and it may not end in - or .) |
+
+The last row is a **suffix, not a rewording**. `REFUSED_HOME_INVALID` (§7.7) is frozen and
+describes `driveHomeSegmentRe`, the DOCKER rule; a `k8s_pvc`/`k8s_pvc_static` home must satisfy
+`driveHomeSegmentK8sRe`, which also forbids `_` and a trailing `-`/`.` — and that gap is the
+motivating case, since an Entra `sub` is base64url and routinely carries `_`. The frozen sentence
+still ships byte-for-byte on every deployment; a Kubernetes one appends the clause its own regex
+enforces, which is what this table's rule is for.
 
 The 409 body **carries no count and must not grow one**: `DELETE_RESTRICT_BODY` (§7.4) is the
 client-side pre-fill and names the count the list already shows; on the race path the client
 believed the count was zero and renders the wire text.
+
+The **re-home 409** is the second row that names a count, and it names its own: nothing on the
+client can pre-fill it, because which of the four identity columns a PUT changes is only known
+once the stored row and the submitted one are compared. It ends by naming an **API** action on
+purpose. The console has no confirm affordance — `updateDrive` PUTs `/drives/{id}` with no query
+and the editor renders any `HttpError` under `DRIVES.SAVE_REFUSED_TITLE` (§7.4) — so a remedy
+phrased as "re-send with `?confirm=rehome`" reads, on the one screen that raises it, as a button
+an admin cannot find. A confirm dialog is new UI and new copy: **FILED for a mock round**
+(CONSOLE-RULES §12), not invented here. Until it exists the sentence must keep saying that
+confirming happens through the API.
 
 ### 7.2 `DRIVES` — the drives block
 
@@ -779,7 +798,12 @@ prefixed `workspace_mounts[i]` (`workspace_repos[i]` for a repo), and the frozen
 the first mount's, so the canon equals the server's bytes. `{reason}` in `REFUSED_BACKEND` is **`driveMountFor`'s own prose**
 (`internal/api/user_drives_run.go`): the backend/runner mismatch — *it is a "{backend}" drive and
 this deployment dispatches to "{target}"* — or, for a share, `driveShareIsBindable`'s host-root
-error. It is **not** an apiserver refusal; the console never asks the cluster and nothing on this
+arm, *drive "{name}" is on a share this deployment does not allow — ask an admin*. That arm is
+**path-free by rule**: `UserDriveHostRootCheck`'s own error spells the drive's `host_root` and the
+whole `WARDYN_USER_DRIVE_HOST_ROOTS` list, and this body is read by a MEMBER, so the diagnosis
+goes to `slog` for the operator and the member gets the drive's name and who to ask — the same
+line `REFUSED_HOME_MISSING`, `applyUserDriveEnv` and the `run.drive.mount` target already hold.
+It is **not** an apiserver refusal; the console never asks the cluster and nothing on this
 path relays one. `{claim}` in `REFUSED_HOME_INVALID` is
 the template's claim name (`sub`, `email_local`). `MEMBER.DENIED_STALE_GROUPS` (§7.1)
 is reused verbatim for the truncated-snapshot case and is not re-frozen.
@@ -903,9 +927,10 @@ Departures from `DESIGN.md` §4.3's draft tables, each with the reason; the mode
    those two cannot coexist. State 2 draws a Kubernetes deployment (`k8s_pvc_static` share,
    read-only, beside `k8s_pvc` managed, writable) and a scaffold-labelled Docker variant of the
    same table (`host_path` + `docker_volume`) so all four backend chips are reviewable.
-2. **The run rail line has no data in v1.** `IdentityWidget` reads the run row, and residual
-   #36 puts drive persistence on the run row in 0.7.1. The line is frozen (§7.8) under "canon
-   frozen here, shipped later", the governance round's own device, and drawn as such.
+2. **The run rail line has no data in v1.** `IdentityWidget` reads the run row, and
+   THREAT-MODEL §4.6 ("concurrent runs share one drive") puts drive persistence on the run
+   row in 0.7.1. The line is frozen (§7.8) under "canon frozen here, shipped later", the
+   governance round's own device, and drawn as such.
 3. **`NR_DENIED` needs a wire bit `DESIGN.md` §5.1 does not carry.** `GET /policies/default`
    ships the profile name only; the door is knowable client-side only with a `/me` field — a
    sibling `user_drive_denied_by_profile` so `user_drive` stays nil-means-no-allocation (Q6 a′). Drawn pre-filled on that assumption, and post-attempt

@@ -9,6 +9,9 @@
 // them nothing to do with setup, so it belongs in lib/ — and the /me pair
 // followed it here for the same reason, once seven suites had retyped the same
 // member body and four had retyped the same drive.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { expect, it } from "vitest";
 import type { Me, MeUserDrive } from "./api/health";
 import type { SetupStatus } from "./types";
 
@@ -61,4 +64,47 @@ export function baseMeDrive(overrides: Partial<MeUserDrive> = {}): MeUserDrive {
     enforcement: "request",
     ...overrides,
   };
+}
+
+// ─── the canon pin, shared ────────────────────────────────────────────────────
+
+// expectNoOwnCopy is THE canon pin two screen directories both need: a
+// component in a copy-governed directory may RENDER copy, never author it, so a
+// quoted or bare prose string in its source is a canon break rather than a
+// style question. Declared once here because the scan was byte-for-byte
+// identical in both suites and only DIR/FILES differed — a second copy is a
+// second thing to keep in step with the strip rules.
+//
+// Call it inside the owning suite so the failure still names that directory.
+export function expectNoOwnCopy(dir: string, files: string[]) {
+  const source = (f: string) => readFileSync(join(process.cwd(), dir, f), "utf8");
+
+  // Comments explain, they do not render; className, cn() class lists and
+  // data-testid are machinery. Everything left is a candidate for the eye.
+  const strip = (src: string) =>
+    src
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "")
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
+      .replace(/className=(\{[^{}]*\}|"[^"]*")/g, "")
+      .replace(/\bcn\([^()]*\)/g, "")
+      .replace(/data-testid="[^"]*"/g, "");
+
+  // Two words of prose is the signal: import paths, wire keys and CSS tokens
+  // are single words or hyphenated, and a rendered sentence is not.
+  const PROSE = /[A-Za-z]{2,}\s+[A-Za-z]{2,}/;
+
+  it.each(files)("%s holds no quoted product prose", (f) => {
+    const quoted = [...strip(source(f)).matchAll(/"([^"\n]*)"|'([^'\n]*)'/g)]
+      .map((m) => m[1] ?? m[2])
+      .filter((s) => PROSE.test(s));
+    expect(quoted).toEqual([]);
+  });
+
+  it.each(files)("%s holds no bare JSX text node either", (f) => {
+    const bare = [...strip(source(f)).matchAll(/>([^<>{}\n]{4,})</g)]
+      .map((m) => m[1].trim())
+      .filter((s) => PROSE.test(s));
+    expect(bare).toEqual([]);
+  });
 }

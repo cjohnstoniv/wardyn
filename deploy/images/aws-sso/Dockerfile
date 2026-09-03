@@ -239,9 +239,14 @@ ENV AWS_PAGER=""
 # Create user `agent` (uid 1000, home /home/agent, work /home/agent/work) —
 # debian's useradd, unlike the node:24-bookworm-slim base the sibling images
 # use, has no pre-existing uid-1000 user to rename.
+# /home/agent/drive is the RESERVED user-drive mount point (runner.DriveTarget),
+# created here owned by agent for the copy-up reason deploy/images/base/Dockerfile
+# states in full: a fresh managed volume inherits the uid/gid of the image directory
+# it is mounted over, so without it a docker_volume drive's root is root-owned and a
+# writable managed drive is read-only in practice for uid 1000.
 RUN groupadd -g 1000 agent \
  && useradd -m -u 1000 -g agent -d /home/agent -s /bin/bash agent \
- && mkdir -p /home/agent/work \
+ && mkdir -p /home/agent/work /home/agent/drive \
  && chown -R agent:agent /home/agent
 
 # Copy the statically-linked binaries from the build stage.

@@ -42,6 +42,7 @@ import { Input } from "../../ui/input";
 import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
 import { Label } from "../../ui/label";
 import { Field, OptionCard, Switch } from "../../wardyn/form-primitives";
+import { useOperator } from "../../wardyn/operator-context";
 import { Note, withMono } from "./display";
 
 // The three templates in admin-surface order (types.HomeTemplates). There is no
@@ -72,7 +73,6 @@ export function DriveEditor({
   drive,
   runnerTarget,
   hostRootsConfigured,
-  disabled,
   onCancel,
   onSaved,
 }: {
@@ -82,10 +82,12 @@ export function DriveEditor({
   runnerTarget: string;
   /** GET /drives's host_roots_configured — whether a host path may back a drive at all. */
   hostRootsConfigured: boolean;
-  disabled: boolean;
   onCancel: () => void;
   onSaved: () => void;
 }) {
+  // The tier gate off the context this editor already sits inside, not drilled
+  // from the screen — the same read the sibling UserDrivesCard makes.
+  const disabled = !useOperator();
   const offered = backendsFor(runnerTarget);
   const [name, setName] = React.useState(drive?.name ?? "");
   const [backend, setBackend] = React.useState<DriveBackend>(drive?.backend ?? offered[0] ?? "docker_volume");

@@ -290,7 +290,6 @@ export function DrivesScreen() {
                 drive={editing.drive}
                 runnerTarget={snap.runner_target}
                 hostRootsConfigured={snap.host_roots_configured}
-                disabled={!operator}
                 onCancel={() => setEditing(null)}
                 onSaved={() => {
                   setEditing(null);
@@ -310,7 +309,6 @@ export function DrivesScreen() {
             <AllocationsBlock
               drives={snap.drives}
               grants={snap.grants}
-              disabled={!operator}
               collapsed={editorOpen}
               onChanged={load}
             />

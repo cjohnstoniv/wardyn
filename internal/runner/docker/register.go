@@ -50,6 +50,9 @@ func init() {
 			// WARDYN_ALLOW_UNENFORCEABLE_CAPS=1 (trusted host) downgrades to a warn.
 			AllowUnenforceableCaps: os.Getenv("WARDYN_ALLOW_UNENFORCEABLE_CAPS") == "1",
 			ConfinementRuntimes:    d.ConfinementRuntimes,
+			// The deployment's host_path user-drive ceiling, parsed once at
+			// boot and passed down rather than re-read here (see Deps).
+			UserDriveHostRoots: d.UserDriveHostRoots,
 		})
 		if err != nil {
 			return nil, err

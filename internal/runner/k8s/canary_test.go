@@ -47,13 +47,21 @@ func TestNewWithClient_CanaryUnenforced_RefusesBoot(t *testing.T) {
 	cs := fake.NewClientset()
 	installCanaryReactor(t, cs, true)
 
-	_, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test"})
+	d, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test"})
 	if err == nil {
 		t.Fatal("newWithClient: want an error refusing boot, got nil")
+	}
+	// And NO driver alongside the error: a caller that logged the error and
+	// carried on must not find a usable substrate in its place.
+	if d != nil {
+		t.Errorf("driver = %v on a refusal, want nil", d)
 	}
 	if !errors.Is(err, errNetworkPolicyUnenforced) {
 		t.Errorf("err = %v, want errors.Is(err, errNetworkPolicyUnenforced)", err)
 	}
+	// The refusal path sweeps its canary too — the PASS and opt-out paths are
+	// not the only ones that must not leave a pod and a policy behind.
+	assertCanaryCleanedUp(t, cs)
 }
 
 // TestNewWithClient_CanaryUnenforced_OptOut covers the documented escape
@@ -84,6 +92,12 @@ func TestNewWithClient_CanaryUnenforced_OptOut(t *testing.T) {
 	}
 	if cls.StructuralEgress {
 		t.Errorf("ClassSupport.StructuralEgress = true, want false (this substrate never claims L0)")
+	}
+	// Nor ACKNOWLEDGED: the opt-out is an operator accepting an unenforced CNI,
+	// which is the opposite of a substrate whose NetworkPolicy support has been
+	// confirmed — a console reading this field must not show either as the other.
+	if cls.NetworkPolicyAcknowledged {
+		t.Errorf("ClassSupport.NetworkPolicyAcknowledged = true, want false under the opt-out")
 	}
 	assertCanaryCleanedUp(t, cs)
 }
