@@ -291,6 +291,13 @@ func isLoopbackHost(host string) bool {
 // adminAuth. Fail closed: an absent/invalid session AND an absent/invalid token
 // is rejected by adminAuth.
 func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
+	// ONE CEILING PER REQUEST. This middleware wraps every routed public-API
+	// call exactly once, which makes it the only place that can install the
+	// per-request memo effectiveCeiling reads (governance.go). Installed for
+	// EVERY caller, not just members: an operator short-circuits the resolve
+	// anyway, so the memo costs a pointer and removes the case where two sites
+	// in one request disagree about who the caller is bounded by.
+	next = ceilingMemoMiddleware(next)
 	// LOCAL HOST MODE: no SSO/token. Attribute every admin-gated action to the
 	// local operator and skip auth entirely. This bypasses ONLY the public-API
 	// human/admin gate — internalAuth (sidecar/run-token verification) is a
@@ -717,4 +724,13 @@ func claimsFromContext(r *http.Request) (*identity.Claims, error) {
 		return nil, errors.New("api: missing run claims on context")
 	}
 	return c, nil
+}
+
+// ceilingMemoMiddleware installs the per-request ceiling memo. Separate from
+// humanOrAdminAuth's body only so the three auth modes (local, SSO, admin token)
+// cannot each forget it — it wraps the whole chain once, above the branch.
+func ceilingMemoMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(withCeilingMemo(r.Context())))
+	})
 }

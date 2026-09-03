@@ -144,3 +144,92 @@ func TestReconcileStillHealsDecisionsNewerThanTheListEdit(t *testing.T) {
 		t.Fatalf("the dropped write-back was not healed: approved=%v", approved)
 	}
 }
+
+// rcRequireEgress marks a host REQUIRED in the workspace's requirements
+// contract — the M1 condition the live deny-always path refuses on, reached by a
+// requirements PUT, which deliberately does NOT stamp EgressEditedAt.
+func rcRequireEgress(f *scopeFixture, wsID uuid.UUID, host string) {
+	f.store.mu.Lock()
+	defer f.store.mu.Unlock()
+	ws := f.store.workspaces[wsID]
+	ws.Requirements = map[string]types.WorkspaceRequirement{"egress:" + host: {Level: "required"}}
+	f.store.workspaces[wsID] = ws
+}
+
+// TestReconcileSkipsAVerdictTheLivePathWouldRefuse pins the parity
+// alwaysEgressDecision's doc comment used to CLAIM: the heal must not write
+// something the live API answers 400 for.
+//
+// The heal replays a verdict recorded at t0 against the workspace as it is at
+// BOOT, and the two diverge: mark `egress:<host>` required after an older
+// deny-always on that host and every restart re-wrote the deny. Its only
+// newer-action guard is EgressEditedAt, which the requirements PUT does not
+// stamp — so nothing caught it, and the M1 guard exists because a deny on a
+// required host makes "the workspace declare a need it can never satisfy" in
+// every confined replay. Re-broken on each boot, with nothing saying why.
+//
+// Both halves are asserted on ONE run: the durable list is untouched AND the
+// skip is audited. Auditing is not decoration here — the live twin audits even
+// its give-up paths precisely so "how did this host get onto this workspace's
+// list" has one answer, and a host that appeared only because a boot replayed a
+// months-old verdict was the case that query could not answer.
+func TestReconcileSkipsAVerdictTheLivePathWouldRefuse(t *testing.T) {
+	const host = "registry.npmjs.org"
+	f := newScopeFixture(t)
+	wsID := f.seedWorkspace(t, nil, nil)
+	rcRequireEgress(f, wsID, host)
+	rcSeedDecided(f, host, types.ApprovalDenied, time.Now().UTC())
+
+	before := len(f.audit())
+	n, err := f.srv.ReconcileWorkspaceEgressDecisions(t.Context())
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("reconciled = %d, want 0 — the live decide path answers 400 for this exact write", n)
+	}
+	if _, denied := f.egressLists(t, wsID); len(denied) != 0 {
+		t.Errorf("denied_egress = %v, want empty — the heal wrote a deny that contradicts the workspace's own "+
+			"requirements contract, and would do it again on every boot", denied)
+	}
+	if got := len(f.audit()) - before; got == 0 {
+		t.Error("the heal skipped silently — 'why is this host NOT on the list' needs an answer too")
+	}
+}
+
+// TestReconcileAuditsTheWritesItMakes is the other half: the heal's DURABLE
+// writes were recorded nowhere at all, while its live twin audits even the
+// paths where it gives up. The source distinguishes the two, because "an
+// operator clicked this" and "a restart replayed this" are different facts
+// about the same row.
+func TestReconcileAuditsTheWritesItMakes(t *testing.T) {
+	const host = "registry.npmjs.org"
+	f := newScopeFixture(t)
+	wsID := f.seedWorkspace(t, nil, nil)
+	rcSeedDecided(f, host, types.ApprovalApproved, time.Now().UTC())
+
+	before := len(f.audit())
+	if n, err := f.srv.ReconcileWorkspaceEgressDecisions(t.Context()); err != nil || n != 1 {
+		t.Fatalf("reconcile = %d, %v; want 1, nil", n, err)
+	}
+	if approved, _ := f.egressLists(t, wsID); !slices.Contains(approved, host) {
+		t.Fatalf("approved_egress = %v, want it to carry %q — the fixture stopped exercising a real write", approved, host)
+	}
+	var found bool
+	for _, ev := range f.audit()[before:] {
+		if ev.Action != "workspace.egress.approve" {
+			continue
+		}
+		var d map[string]any
+		if err := json.Unmarshal(ev.Data, &d); err != nil {
+			t.Fatalf("decode audit data: %v", err)
+		}
+		if d["source"] == "boot-heal" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no workspace.egress.approve row with source=boot-heal; the heal wrote to the workspace and left "+
+			"no trace. events=%+v", f.audit()[before:])
+	}
+}

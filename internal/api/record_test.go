@@ -17,6 +17,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
 	"github.com/cjohnstoniv/wardyn/internal/recordmode"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -987,4 +988,133 @@ func TestGetWorkspace_RepairsStaleRecordingOnRead(t *testing.T) {
 	if res := fake.savedResult(t, "build"); res.Status != recordStatusFailed {
 		t.Fatalf("stale recording not repaired on read: status=%q", res.Status)
 	}
+}
+
+// f093Store fills the two methods the record LAUNCH path reaches and
+// recordStore leaves nil. It is here because recordStore is one of this
+// package's ~60 embedded-store doubles: they satisfy store.Store by embedding
+// it, so an unimplemented method is a nil call at runtime rather than a compile
+// error, and the recovered 500 stands in for whatever the test meant to assert.
+// Both were found that way — as recovered panics, not as failed assertions.
+type f093Store struct {
+	*recordStore
+	createErr error
+}
+
+func (s *f093Store) UpdateRunStateIf(context.Context, uuid.UUID, types.RunState, types.RunState) (bool, error) {
+	return true, nil
+}
+
+func (s *f093Store) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, error) {
+	if s.createErr != nil {
+		return types.AgentRun{}, s.createErr
+	}
+	return s.recordStore.CreateRun(ctx, r)
+}
+
+// TestRecordStartStampsTheCrossUserMarker pins decision O5 on the record launch.
+//
+// RE-ADJUDICATED RATIONALE. This was filed as "the one securityOps route that
+// acts on a member's workspace". R1 re-tiered POST /workspaces/{id}/record to
+// operatorOnly, so that sentence is false — but the defect is not, and the
+// restated version is STRONGER: an ADMIN recording a MEMBER-owned workspace is
+// precisely the act O5 exists for. auditWorkspaceDataFor frames it as "an admin
+// acting on a MEMBER's workspace stays visible", so re-tiering moved this route
+// INTO the marker's class rather than out of it.
+//
+// Why it matters beyond tidiness: the marker exists so cross-user admin access
+// is QUERYABLE rather than merely present. Without it an auditor filtering for
+// cross-user access must join workspace_id back to workspaces.owned_by out of
+// band — and that join is lossy the moment the workspace is reassigned
+// (owned_by is overwritten) or deleted.
+//
+// BOTH EMITS, because the failure one carries the same disclosure: it names the
+// workspace an admin tried to record and who tried.
+func TestRecordStartStampsTheCrossUserMarker(t *testing.T) {
+	const owner = "sub-victim-member"
+	wsID := uuid.New()
+	ws := types.Workspace{
+		ID: wsID, OwnedBy: owner, Status: types.WorkspaceScanned,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: "/home/agent/work"}},
+	}
+
+	// recordStart returns the run.record.start rows one POST produced.
+	recordStart := func(t *testing.T, createErr error, srcTarget string) []types.AuditEvent {
+		t.Helper()
+		w := ws
+		if srcTarget != "" {
+			w.Sources = []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: srcTarget}}
+		}
+		h := newHarness(t)
+		cfg := baseTestConfig(h, &f093Store{
+			recordStore: &recordStore{importStateFake: importStateFake{ws: w}},
+			createErr:   createErr,
+		})
+		cfg.Runner = &fakeRunner{} // past the no-runner 503, into the launch
+		srv := New(cfg)
+		do(t, srv, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/record", adminToken, `{"name":"exfil"}`)
+		var out []types.AuditEvent
+		for _, ev := range h.audit.events {
+			if ev.Action == "run.record.start" {
+				out = append(out, ev)
+			}
+		}
+		return out
+	}
+
+	marked := func(t *testing.T, ev types.AuditEvent) bool {
+		t.Helper()
+		var d map[string]any
+		if err := json.Unmarshal(ev.Data, &d); err != nil {
+			t.Fatalf("decode audit data: %v", err)
+		}
+		return d["workspace_owner"] == owner
+	}
+
+	t.Run("the launch-failure emit names the workspace's owner", func(t *testing.T) {
+		evs := recordStart(t, errors.New("boom"), "")
+		if len(evs) != 1 {
+			t.Fatalf("run.record.start rows = %d, want 1", len(evs))
+		}
+		if !marked(t, evs[0]) {
+			t.Errorf("failure emit carries no workspace_owner=%q: %s — an auditor filtering for cross-user admin "+
+				"access misses this launch and must join workspace_id back out of band", owner, evs[0].Data)
+		}
+	})
+
+	// A REFUSED source target must still be recorded. The 422 branch was added
+	// two commits before this one and returned BEFORE the audit, so a workspace
+	// refused for a bad stored target produced no row at all — the same
+	// fail-silent give-up this wave fixed twice elsewhere, reintroduced by the
+	// fix for one of them.
+	t.Run("a refused source target is still audited", func(t *testing.T) {
+		evs := recordStart(t, nil, runner.DriveTarget)
+		if len(evs) != 1 {
+			t.Fatalf("run.record.start rows = %d, want 1 — a launch refused for a bad stored target must still be "+
+				"recorded; every other launch failure is", len(evs))
+		}
+		if !marked(t, evs[0]) {
+			t.Errorf("refusal emit carries no workspace_owner=%q: %s", owner, evs[0].Data)
+		}
+	})
+
+	// The other direction: an OPERATOR-owned workspace stamps nothing, so the
+	// marker means "cross-user" rather than "present on every record".
+	t.Run("an operator-owned workspace is not marked", func(t *testing.T) {
+		saved := ws.OwnedBy
+		ws.OwnedBy = ""
+		defer func() { ws.OwnedBy = saved }()
+		evs := recordStart(t, errors.New("boom"), "")
+		if len(evs) != 1 {
+			t.Fatalf("run.record.start rows = %d, want 1", len(evs))
+		}
+		var d map[string]any
+		if err := json.Unmarshal(evs[0].Data, &d); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if _, present := d["workspace_owner"]; present {
+			t.Errorf("workspace_owner stamped for an operator-owned workspace: %s — the marker would stop meaning "+
+				"cross-user", evs[0].Data)
+		}
+	})
 }

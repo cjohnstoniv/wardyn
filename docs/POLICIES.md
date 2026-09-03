@@ -612,7 +612,7 @@ profile's eligible grants are within the deployment ceiling.
 | Field | Type | Default | What it does |
 |---|---|---|---|
 | `repo` | `string` | — (required) | Repo slug or URL, validated like a run's `--repo`. |
-| `target` | `string` | (unset) | Optional clone destination; validated and collision-checked against every other target when set. Unset defers to the `~/work/<name>` convention. |
+| `target` | `string` | (unset) | Optional clone destination; validated and collision-checked against every other target when set — including the reserved `/home/agent/drive` subtree, refused with the same message as `workspace_mounts[].target` above. Unset defers to the `~/work/<name>` convention. |
 | `ref` | `string` | (unset) | Branch, tag, or commit SHA to clone. Unset clones the remote's default branch (shallow, `git clone --depth 1`). A branch/tag clones shallow directly (`--branch`); an arbitrary SHA falls back to a shallow fetch of that exact ref plus checkout. |
 
 ## `ui_apps[]` — `UIApp`

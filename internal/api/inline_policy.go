@@ -603,10 +603,13 @@ func (s *Server) auditMemberPolicyDrops(ctx context.Context, r *http.Request, dr
 // which credential pairings its members may reuse, and reading the deployment
 // list here would have left that narrowing unenforced at the one seam where a
 // pairing actually becomes an injected credential. Resolved INSIDE rather than
-// threaded in from resolveRunPolicy — ponytail: that costs one extra indexed
-// read on the member create path (PF-13's accepted double resolution) and buys
-// a signature no caller, present or future, can pass the wrong ceiling to;
-// thread it through if a profile-load benchmark ever says to.
+// threaded in from resolveRunPolicy — ponytail: it buys a signature no caller,
+// present or future, can pass the wrong ceiling to. It used to cost an extra
+// indexed read per member create ("PF-13's accepted double resolution") and,
+// worse, a second ANSWER: two reads of governance_assignments in one request can
+// straddle a profile edit, so this seam could filter grants under a ceiling the
+// caller's own clamp never saw. Both are gone — effectiveCeiling memoizes per
+// request (governance.go), so asking here is free AND cannot disagree.
 func (s *Server) filterMemberGrants(ctx context.Context, owner string, allowedDomains []string, grants []types.GrantSpec) (kept []types.GrantSpec, warns []string, code int, err error) {
 	resolved, cerr := s.effectiveCeiling(ctx)
 	if cerr != nil {

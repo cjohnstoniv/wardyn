@@ -169,6 +169,15 @@ func (s *envSecretCeilingStore) GetPolicy(context.Context, uuid.UUID) (types.Run
 func (s *envSecretCeilingStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
+
+// ListGroupDenyGrants is the narrow stale-path read capUnresolvableGroupDeny and
+// capBatch make. Present because this double embeds store.Store: a widened
+// interface is satisfied at COMPILE time by the embedded nil, so an unfilled
+// method is a runtime panic that the recovered 500 then reports as whatever the
+// test was asserting. This fixture holds no grants either way.
+func (s *envSecretCeilingStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
 func (s *envSecretCeilingStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }

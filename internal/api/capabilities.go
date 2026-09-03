@@ -469,8 +469,10 @@ type capBatch struct {
 	grants []types.CapabilityGrant
 	enf    map[string]bool
 
-	fullLoaded bool
-	full       []types.CapabilityGrant
+	// groupDeny memoizes ListGroupDenyGrants PER KIND — the narrow read, not the
+	// full table. It is a map because the store call is keyed by capability and a
+	// spec can ask about more than one (egress_host, then secret).
+	groupDeny map[string][]types.CapabilityGrant
 }
 
 // newCapBatch snapshots the cheap, store-free decisions capAllowed makes before
@@ -560,16 +562,30 @@ func (b *capBatch) allowed(ctx context.Context, kind, value string) (bool, error
 // ONCE. Loaded only on the stale path, so an answerable caller never pays for it
 // — exactly as before.
 func (b *capBatch) unresolvableGroupDeny(ctx context.Context, kind, value string) (bool, error) {
-	if !b.fullLoaded {
-		grants, err := b.s.cfg.Store.ListCapabilityGrants(ctx)
-		if err != nil {
+	if b.groupDeny == nil {
+		b.groupDeny = map[string][]types.CapabilityGrant{}
+	}
+	grants, loaded := b.groupDeny[kind]
+	if !loaded {
+		var err error
+		// ListGroupDenyGrants, the same NARROW read capUnresolvableGroupDeny
+		// makes: the store filters subject_type='group' AND effect='deny' AND
+		// capability=$1 in SQL, so nothing is filtered again here and the match
+		// is capValueOverlaps alone — one shared matcher, as capScan uses.
+		//
+		// This memo used to hold the WHOLE capability_grants table, because that
+		// is what the predicate read when the batch was written. A concurrent
+		// change narrowed the read, and keeping the old one would have quietly
+		// reintroduced the full-table scan on exactly the path this batch exists
+		// to make O(1) — the two would not have disagreed about the ANSWER, only
+		// about the cost, which is the kind of drift nothing fails on.
+		if grants, err = b.s.cfg.Store.ListGroupDenyGrants(ctx, kind); err != nil {
 			return false, fmt.Errorf("api: resolve capability %q: %w", kind, err)
 		}
-		b.full, b.fullLoaded = grants, true
+		b.groupDeny[kind] = grants
 	}
-	for _, g := range b.full {
-		if g.SubjectType == types.CapabilitySubjectGroup && g.Effect == types.CapabilityDeny &&
-			g.Capability == kind && capValueOverlaps(kind, g.Value, value) {
+	for _, g := range grants {
+		if capValueOverlaps(kind, g.Value, value) {
 			return true, nil
 		}
 	}

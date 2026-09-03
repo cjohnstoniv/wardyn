@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -264,7 +266,10 @@ func TestWireWorkspaceSource_EphemeralTargetReturnedForDispatch(t *testing.T) {
 		},
 	}
 
-	_, ephemeralDirs := wireWorkspaceSource(&run, &policy, ws)
+	_, ephemeralDirs, err := wireWorkspaceSource(&run, &policy, ws)
+	if err != nil {
+		t.Fatalf("wireWorkspaceSource: %v", err)
+	}
 
 	if want := []string{"/home/agent/scratch"}; !slices.Equal(ephemeralDirs, want) {
 		t.Errorf("ephemeralDirs = %v, want %v", ephemeralDirs, want)
@@ -276,11 +281,19 @@ func TestWireWorkspaceSource_EphemeralTargetReturnedForDispatch(t *testing.T) {
 }
 
 // TestWireWorkspaceSource_EphemeralTargetMustPassValidateTarget pins the
-// reconcile-wave1 fix: an ephemeral source never passes through
-// ValidateMount (there is no mount, just WARDYN_EPHEMERAL_DIRS -> mkdir -p
-// inside the sandbox), so wireWorkspaceSource is the only gate standing
-// between a legacy row's target and the sandbox. A target outside
-// allowedTargetPrefixes must be dropped, not surfaced for dispatch.
+// reconcile-wave1 fix: an ephemeral source never passes through ValidateMount
+// (there is no mount, just WARDYN_EPHEMERAL_DIRS -> mkdir -p inside the
+// sandbox), so wireWorkspaceSource is the only gate standing between a legacy
+// row's target and the sandbox.
+//
+// STRENGTHENED (R1): it used to assert the bad target was DROPPED and the good
+// one surfaced. Dropping is now a REFUSAL, and the change is deliberate — the
+// guard moved above the type switch so it covers repo and local_dir too, and
+// for those a drop is not an option: seedRequestWorkspace, the create path's
+// sibling over the same stored rows, 422s the identical workspace, and the repo
+// half's late drop (buildRepoRecords) was already silent enough to start a
+// session with a repo that never cloned. A workspace cannot be legal on one run
+// door and quietly broken on the other, so both now refuse and say which source.
 func TestWireWorkspaceSource_EphemeralTargetMustPassValidateTarget(t *testing.T) {
 	var run types.AgentRun
 	var policy types.RunPolicySpec
@@ -292,9 +305,99 @@ func TestWireWorkspaceSource_EphemeralTargetMustPassValidateTarget(t *testing.T)
 		},
 	}
 
-	_, ephemeralDirs := wireWorkspaceSource(&run, &policy, ws)
-
-	if want := []string{"/home/agent/scratch"}; !slices.Equal(ephemeralDirs, want) {
-		t.Errorf("ephemeralDirs = %v, want %v (the out-of-allowlist target must be dropped, not surfaced for WARDYN_EPHEMERAL_DIRS)", ephemeralDirs, want)
+	_, ephemeralDirs, err := wireWorkspaceSource(&run, &policy, ws)
+	if err == nil {
+		t.Fatalf("an out-of-allowlist ephemeral target was accepted; ephemeralDirs=%v", ephemeralDirs)
 	}
+	if !strings.Contains(err.Error(), "/root/.ssh") && !strings.Contains(err.Error(), "target") {
+		t.Errorf("refusal = %q, want it to name the offending target", err)
+	}
+	// Nothing is surfaced for dispatch on a refusal — not even the valid sibling.
+	if len(ephemeralDirs) != 0 {
+		t.Errorf("ephemeralDirs = %v on a refused workspace, want none", ephemeralDirs)
+	}
+}
+
+// TestWireWorkspaceSource_ReservedDriveTargetRefusedOnEveryBranch is the
+// reserved-drive rule stated as requirement 11 says it: /home/agent/drive is
+// refused as an authored target EVERYWHERE.
+//
+// It was refused on the create-run path (seedRequestWorkspace re-validates every
+// stored source and 422s) and on the ONBOARDING write, but the record/verify
+// composition re-validated only its EPHEMERAL branch — the one branch whose
+// target is a mkdir rather than a mount. So a stored local_dir source targeting
+// the reserved path became a real operator bind mount at exactly the path
+// driveMountFor calls "the path validateWorkspaceSources/validatePolicySpec
+// refuse to let anyone else name", and a repo source targeting it was dropped
+// LATE and SILENTLY by buildRepoRecords, starting a session with a repo that
+// never cloned.
+//
+// Nothing downstream re-imposed it, which is the load-bearing half: the composed
+// record policy never passes through validatePolicySpec, and the driver's own
+// gate is runner.ValidateMount -> ValidateTarget, which does NOT carry the
+// reserved rule (targetReservedForDrive is reached only from
+// ValidateAuthoredTarget). The control below asserts exactly that, so this test
+// fails if someone "fixes" it by trusting the driver.
+func TestWireWorkspaceSource_ReservedDriveTargetRefusedOnEveryBranch(t *testing.T) {
+	// The control first: the driver's gate accepts the reserved path, so the
+	// refusal has to come from here.
+	if err := runner.ValidateTarget(runner.DriveTarget); err != nil {
+		t.Fatalf("premise changed: runner.ValidateTarget now refuses %q (%v) — if the driver carries the "+
+			"reserved rule, re-argue where this guard belongs", runner.DriveTarget, err)
+	}
+	if err := runner.ValidateAuthoredTarget(runner.DriveTarget); err == nil {
+		t.Fatal("premise changed: ValidateAuthoredTarget no longer refuses the reserved drive target")
+	}
+
+	for _, c := range []struct {
+		name string
+		src  types.WorkspaceSource
+	}{
+		{"local_dir at the reserved path", types.WorkspaceSource{
+			Type: types.WorkspaceSourceTypeLocalDir, Path: "/home/cjohn/legacy",
+			Target: runner.DriveTarget, Writable: true,
+		}},
+		{"repo UNDER the reserved subtree", types.WorkspaceSource{
+			Type: types.WorkspaceSourceTypeRepo, Source: "octocat/Hello-World",
+			Target: runner.DriveTarget + "/repo",
+		}},
+		{"ephemeral under the reserved subtree", types.WorkspaceSource{
+			Type: types.WorkspaceSourceTypeEphemeral, Target: runner.DriveTarget + "/scratch",
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var run types.AgentRun
+			var policy types.RunPolicySpec
+			ws := types.Workspace{ID: uuid.New(), Sources: []types.WorkspaceSource{c.src}}
+			_, eph, err := wireWorkspaceSource(&run, &policy, ws)
+			if err == nil {
+				t.Fatalf("composed unrefused: mounts=%+v repos=%+v ephemeral=%v", policy.WorkspaceMounts, policy.WorkspaceRepos, eph)
+			}
+			if !strings.Contains(err.Error(), "reserved for the user drive") {
+				t.Errorf("refusal = %q, want the reserved-drive wording a reader can match against the create path's", err)
+			}
+			// Nothing composed on a refusal — a mount that reached the policy
+			// would be the bind this test is about, error or not.
+			if len(policy.WorkspaceMounts) != 0 || len(policy.WorkspaceRepos) != 0 || len(eph) != 0 {
+				t.Errorf("a refused source still composed mounts=%+v repos=%+v ephemeral=%v",
+					policy.WorkspaceMounts, policy.WorkspaceRepos, eph)
+			}
+		})
+	}
+
+	// The other direction: an ORDINARY /home/agent target still composes, so the
+	// guard is scoped to the reserved subtree rather than to the prefix.
+	t.Run("an ordinary /home/agent target still composes", func(t *testing.T) {
+		var run types.AgentRun
+		var policy types.RunPolicySpec
+		ws := types.Workspace{ID: uuid.New(), Sources: []types.WorkspaceSource{
+			{Type: types.WorkspaceSourceTypeLocalDir, Path: "/home/cjohn/app", Target: "/home/agent/work"},
+		}}
+		if _, _, err := wireWorkspaceSource(&run, &policy, ws); err != nil {
+			t.Fatalf("an ordinary target was refused: %v", err)
+		}
+		if len(policy.WorkspaceMounts) != 1 {
+			t.Fatalf("mounts = %+v, want the one ordinary bind", policy.WorkspaceMounts)
+		}
+	})
 }

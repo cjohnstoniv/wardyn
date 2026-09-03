@@ -92,10 +92,11 @@ func runWalledDispatch(t *testing.T, d walledDispatch) (types.RunPolicySpec, run
 		FirstGitHubGrantID: firstGitHub,
 		GitGrants:          d.gitGrants,
 		GitPATGrants:       d.patGrants,
-		// The never-resident PAT lane: with it on, the grant ids ride
-		// ProxyConfig.PATGrants and NOTHING reaches the sandbox — which is
-		// precisely the lane that bypasses denied_domains.
-		PATBroker:  len(d.patGrants) > 0,
+		// The never-resident PAT lane rides ProxyConfig.PATGrants with NOTHING
+		// reaching the sandbox — precisely the lane that bypasses
+		// denied_domains. It is no longer a dispatchParams field: dispatchRun
+		// derives it from Config.DisableGitPATBroker, which this fixture leaves
+		// at its zero value, i.e. the broker ON (the documented default).
 		Injections: d.injections,
 	})
 
