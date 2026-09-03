@@ -944,6 +944,41 @@ hiding them would repeat the failure mode we are designed to avoid.
     `scripts/test-install-sh-trust.sh` are written and enforce the first of
     those the moment `F10_EXPECT_COMPOSE_INTEGRITY=1` is set.
 
+33. **A per-user API token's role and group snapshot are frozen at mint, with no
+    expiry and no re-stamp — so the demoted-admin window is UNBOUNDED, where the
+    SSH analogue's (#15) is merely long.** `0045_api_tokens.sql` stamps `role`
+    and `groups` from the minting session (`internal/api/apitokens.go`), and
+    every request the token authenticates republishes them through
+    `withHumanIdentity`, so downstream the bearer is that human exactly as they
+    were at mint time. Nothing narrows the staleness the way `0046` narrows the
+    key stamp: the table carries `created_at`, `last_used_at` and `revoked_at`
+    and **no expiry column**; `oidc.Config.OnLogin` re-stamps SSH keys only
+    (`store.RefreshSSHKeyRoles`); the only `UPDATE`s the store issues against
+    `api_tokens` set `last_used_at` and `revoked_at`; and a demotion in the IdP
+    never reaches the row. Since 0.7 stamps `security_admin` verbatim, a human
+    demoted out of that tier keeps — through any token minted while they held it
+    — profile authoring and assignment, capability-grant writes, session and
+    token revocation, escalated approval decisions on anyone's run, workspace
+    `approved_egress`/`denied_egress` writes, and audit-chain verify. It gains
+    nothing the tier itself lacks: a token is never a shell, never an attach
+    ticket on a foreign run, and no capability grant widens it to admin
+    (`TestCapabilityGrantsNeverReachTheAdminTier`).
+
+    **The remediation exists, is the only one, and has to be invoked
+    deliberately.** `GET /api/v1/tokens` lists every live token with its owner
+    and `last_used_at`; `DELETE /api/v1/tokens/{id}` revokes one; `POST
+    /api/v1/sessions/revoke` with `{"sub":"<sub or email>"}` revokes a human's
+    sessions AND every unrevoked token they hold in one call — naming either
+    identity, because on an IdP whose `sub` is an opaque per-app identifier the
+    operator knows the email. All three are admin or `security_admin`. The
+    `session.revoke` row's `tokens_revoked` count is the receipt that the
+    identifier matched a person: sessions are stateless and cannot be counted, so
+    a zero there against someone you believe holds tokens means you named them
+    wrong. Nothing ages a token out, so offboarding must revoke explicitly
+    (`docs/OPERATIONS.md`, "Per-user API tokens"). Closing this means re-deriving
+    the role at auth time, or revoking a principal's live tokens from the
+    role-mapping write path; neither is built.
+
 ### 5.1a LLM egress content inspection — the honest-claims contract
 
 The optional `llm_inspection` guardrail (residuals #1, #2) is a **visibility +

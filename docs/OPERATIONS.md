@@ -863,8 +863,8 @@ its own.
 | `POST /api/v1/me/tokens` | any signed-in human | mint one for yourself — the response is the **only** time the plaintext exists |
 | `GET /api/v1/me/tokens` | any signed-in human | your own tokens, revoked ones included |
 | `DELETE /api/v1/me/tokens/{id}` | any signed-in human | revoke one of your own |
-| `GET /api/v1/tokens` | admin | every token in the deployment |
-| `DELETE /api/v1/tokens/{id}` | admin | revoke anyone's |
+| `GET /api/v1/tokens` | admin or `security_admin` | every token in the deployment |
+| `DELETE /api/v1/tokens/{id}` | admin or `security_admin` | revoke anyone's |
 
 Revoking a human (`POST /api/v1/sessions/revoke`, `wardyn sessions revoke`) also
 revokes every unrevoked token that principal holds — a token is their session in
@@ -884,13 +884,51 @@ recovered, and a database reader (a reporting role, a hot standby, a `pg_dump` i
 a backup bucket) cannot lift a usable credential off a row. `last_used_at` is best
 effort and is the signal for "which of these are dead"; revoke those.
 
-**The role is a stamp, not a live check.** A token carries the role its owner held
-when they minted it, exactly as a registered SSH key does. Demoting a human from
-admin to member does **not** reach their outstanding tokens — revoke them with
-`DELETE /api/v1/tokens/{id}`, which is also the path for a departed owner's
-credential. Both `token.create` and `token.revoke` are audited
+**The role is a stamp, not a live check — and unlike an SSH key's, nothing ages
+it out.** A token carries the role AND the group snapshot its owner held when
+they minted it, and every request it authenticates republishes them, so
+downstream it is that human as they were at mint time. A registered SSH key's
+stamp is *bounded*-stale: every login re-stamps it and `WARDYN_SSH_ROLE_TTL`
+expires it. A token's is not bounded at all. `api_tokens` has `created_at`,
+`last_used_at` and `revoked_at` and **no expiry column**; nothing re-stamps the
+row on login; and demoting the human in your IdP never touches it. **Explicit
+revocation is the only thing that ends it.**
+
+That matters most for the tier 0.7 added. A human demoted out of `security_admin`
+keeps, through any token they minted while they held it, exactly what the tier
+governs: profile authoring and assignment, capability-grant writes, session and
+token revocation, escalated approval decisions on anyone's run, workspace
+`approved-egress`/`denied-egress` writes, and audit-chain verify. What it does not
+gain is anything the tier itself never had — a token reaches no shell, no attach
+ticket on a foreign run, and no capability grant widens it to admin.
+
+**So revoke it, and check that you named the right person.**
+
+```sh
+# Everything live in the deployment, with owner, name and last_used_at:
+curl -H "Authorization: Bearer $TOKEN" $WARDYN/api/v1/tokens
+
+# One token:
+curl -X DELETE -H "Authorization: Bearer $TOKEN" $WARDYN/api/v1/tokens/<id>
+
+# A whole human — sessions AND every unrevoked token they hold, in one call.
+# "sub" takes EITHER identity: the OIDC subject or the email. Use the one you
+# actually know; on an IdP whose sub is an opaque per-app id (Entra), that is
+# the email.
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"sub":"alice@corp.com"}' $WARDYN/api/v1/sessions/revoke
+```
+
+The `session.revoke` audit row carries `tokens_revoked`. That count is the
+receipt: a **zero** against a human you believe holds tokens means the identifier
+matched nobody, not that there was nothing to revoke — sessions are stateless, so
+that half cannot be counted, and only this half can tell you. Both
+`token.create` and `token.revoke` are audited
 ([`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md)); the revoke row names the token's
-owner.
+owner. Offboarding a person means revoking their tokens explicitly — the row
+outlives their access to your IdP, and it is published as a residual
+(`threatmodel/THREAT-MODEL.md` §5, "A per-user API token's role and group
+snapshot are frozen at mint").
 
 ### Three roles, and who sets the walls
 
