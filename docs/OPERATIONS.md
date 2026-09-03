@@ -26,7 +26,7 @@ permanent.
 | Postgres | volume `<project>_postgres_data` | runs, approvals, workspaces, policies, encrypted secrets, the append-only audit log — and, under the default `pg` recording store, the PTY asciicasts too | everything |
 | Recordings | volume `${WARDYN_NS:-wardyn}-recordings` (`WARDYN_RECORDING_DIR=/data/recordings`) | PTY asciicasts for Replay — **only with `WARDYN_RECORDING_STORE=fs`**; the shipped default (`pg`) keeps them in Postgres and leaves this volume empty | every session replay it holds; nothing reconstructs them |
 | Age key | `WARDYN_AGE_KEY` in `deploy/compose/.env` | the X25519 identity every stored secret is encrypted to | every secret in Postgres becomes undecryptable ciphertext |
-| User drives | one object per person, per drive, on a deployment that registered one — Docker volume `wardyn-drive-<home>`, a subdirectory of the share YOU mounted (`host_path` — `<host_root>/<home>`), or PVC `wardyn-drive-<drive-slug>-<home>` | each person's own files, written by their own runs at `/home/agent/drive`. Postgres holds the drive rows and the allocations, never the bytes, so `pg_dump` never carried this | that person's work; nothing reconstructs it |
+| User drives | one object per person, per drive, on a deployment that registered one — a Docker volume or a PVC, both named `wardyn-drive-<drive-slug>-<home>`, or a subdirectory of the share YOU mounted (`host_path` — `<host_root>/<home>`) | each person's own files, written by their own runs at `/home/agent/drive`. Postgres holds the drive rows and the allocations, never the bytes, so `pg_dump` never carried this | that person's work; nothing reconstructs it |
 
 `postgres_data`, `registry_data` and `audit` carry no explicit `name:` in
 `deploy/compose/docker-compose.yaml`, so Docker prefixes them with the compose
@@ -851,16 +851,17 @@ Docker deployment there are two backends, and the difference is who owns the
 bytes.
 
 **`docker_volume` — Wardyn allocates.** A per-person named volume
-(`wardyn-drive-<home>`), created on first use with the `local` driver and
-mounted at the reserved target. Nothing to configure. It carries four labels:
-`wardyn.managed=true`; `wardyn.drive` = the **drive row's id** (the object name
-is per *person*, so the id is the only thing that groups a drive's volumes
-together); `wardyn.home` = that person's directory name; and
+(`wardyn-drive-<drive-slug>-<home>`), created on first use with the `local`
+driver and mounted at the reserved target. Nothing to configure. It carries four
+labels: `wardyn.managed=true`; `wardyn.drive` = the **drive row's id** (the name
+folds the drive's SLUG, which a rename changes, and the id never does — so the
+label is the only key that still finds a drive's volumes across one, which is
+what the reclaim recipes below select on); `wardyn.home` = that person's directory name; and
 `wardyn.subject` = a **digest** of the person
 themselves (never their claim — see the restore note below). Reclaim is a
 command, not a button:
 
-- one person: `docker volume rm wardyn-drive-<home>` — `POST /drives/preview`
+- one person: `docker volume rm wardyn-drive-<drive-slug>-<home>` — `POST /drives/preview`
   prints the object name for a principal — paste the sign-in subject FIRST: on a
   `hash` drive the name keys on the first claim, and the API's
   `home_subject` says which claim it used (the console does not yet show it);
@@ -880,7 +881,7 @@ docker volume create \
   --label wardyn.managed=true \
   --label wardyn.drive=<drive id> \
   --label wardyn.home=<home> \
-  wardyn-drive-<home>
+  wardyn-drive-<drive-slug>-<home>
 ```
 
 then copy the data in. `wardyn.drive` carries the **drive row's id** (the `id`

@@ -4,6 +4,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -52,9 +54,16 @@ func TestStateStoreTableCoversUserDrives(t *testing.T) {
 	hostPath := derive(types.UserDrive{Backend: types.DriveBackendHostPath, HostRoot: "<host_root>", Name: probeSlug})
 	pvc := derive(types.UserDrive{Backend: types.DriveBackendK8sPVC, Name: probeSlug})
 
+	// Scoped to the ROW, not the document. Both minted backends now share one
+	// name, so a document-wide Contains is answered by the Kubernetes sections
+	// three thousand lines away and the row's own shape could be wrong while
+	// this passed — which is exactly what happened when the naming rule changed:
+	// this guard stayed green on a state-store row naming a volume that no
+	// longer exists.
+	row := driveStateStoreRow(t)
 	for _, want := range []string{volume, hostPath, pvc} {
-		if !strings.Contains(doc, want) {
-			t.Errorf("docs/OPERATIONS.md's state-store table never names the object shape %q", want)
+		if !strings.Contains(row, want) {
+			t.Errorf("docs/OPERATIONS.md's state-store User drives row never names the object shape %q; row is:\n%s", want, row)
 		}
 	}
 	// Every backend must be reachable from one of the shapes above; a NEW
@@ -77,4 +86,22 @@ func TestStateStoreTableCoversUserDrives(t *testing.T) {
 			t.Errorf("docs/OPERATIONS.md's state-store section omits %q — %s", want.claim, want.why)
 		}
 	}
+}
+
+// driveStateStoreRow returns the "User drives" row of the State stores table,
+// read from the raw file so the row boundary survives (readDoc collapses
+// newlines for prose matching, which would merge this row into its neighbours).
+func driveStateStoreRow(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(repoRoot(t), "docs", "OPERATIONS.md"))
+	if err != nil {
+		t.Fatalf("read docs/OPERATIONS.md: %v", err)
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(line, "| User drives |") {
+			return line
+		}
+	}
+	t.Fatal("docs/OPERATIONS.md's State stores table has no `User drives` row")
+	return ""
 }
