@@ -196,11 +196,19 @@ deploy that grants `TRIGGER` back is reported as NOT protected.
 and `SELECT` on `audit_events` is still the whole of it. The chain trigger
 allocates the row's `seq` itself (so position and chain link are one decision —
 see the serialization paragraph below), which is a privileged operation the
-identity default never was, so the trigger runs `SECURITY DEFINER` with a pinned
-`search_path` (`0057_audit_chain_security_definer.sql`): the sequence read
-happens as the *owner*, not as whoever inserted. Nothing is widened for the app
-role — a trigger function cannot be called directly — and a split-role deploy
-needs no new `GRANT`. Migration
+identity default never was, so the trigger runs `SECURITY DEFINER`
+(`0057_audit_chain_security_definer.sql`): the sequence read happens as the
+*owner*, not as whoever inserted. Nothing is widened for the app role — a trigger
+function cannot be called directly — and a split-role deploy needs no new
+`GRANT`. Because it runs with elevated rights it resolves no name through a
+search_path it does not control: every table and function it touches is
+**schema-qualified to the schema Wardyn was migrated into**, read from the
+catalog when the migration applies, and its pinned `search_path` ends in
+`pg_temp` so the session temporary schema is searched last rather than first
+(`0058_audit_chain_schema_qualified.sql`). That is what keeps the chain working
+on an install whose objects are not in `public`, and what stops a caller
+shadowing `audit_events` with a temp table of their own to choose their row's
+`prev_hash`. Migration
 `0047_audit_hash_chain.sql` does not close that hole; it makes a single use of it
 **visible**. Every row written from `0047` onward carries two hex columns:
 
