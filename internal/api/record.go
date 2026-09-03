@@ -311,18 +311,28 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "an import step is already running for this workspace")
 		return
 	}
-	// A stored source whose authored target this composition refuses is the
-	// operator's row to fix, not a daemon fault — 422, the SAME status the
-	// create-run path answers for the identical workspace (seedRequestWorkspace).
-	// The two doors disagreeing about one stored row is what made this hard to
-	// diagnose; they now agree on the code and on the wording.
-	if errors.Is(lerr, errWorkspaceSourceTarget) {
-		writeError(w, http.StatusUnprocessableEntity, lerr.Error())
-		return
-	}
 	if lerr != nil {
+		// AUDIT FIRST, then map the status — the shape errGroupsSnapshotStale
+		// below already had, and which the source-target 422 did NOT when it was
+		// added: it returned above this emit, so a workspace refused for a bad
+		// stored target produced no run.record.start row at all, while every
+		// other launch failure produced one. That is the same fail-silent
+		// give-up this wave fixed in learnVerifyEgress and the boot heal,
+		// introduced two commits earlier by the fix for it. Status mapping is a
+		// tail decision; the record of the attempt is not.
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
-			"run.record.start", id.String(), "failure", mustJSON(map[string]any{"task": key, "detail": lerr.Error()})))
+			"run.record.start", id.String(), "failure",
+			auditWorkspaceData(r, ws.OwnedBy, map[string]any{"task": key, "detail": lerr.Error()})))
+		// A stored source whose authored target this composition refuses is the
+		// operator's row to fix, not a daemon fault — 422, the SAME status the
+		// create-run path answers for the identical workspace
+		// (seedRequestWorkspace). The two doors disagreeing about one stored row
+		// is what made this hard to diagnose; they agree on the code and on the
+		// wording.
+		if errors.Is(lerr, errWorkspaceSourceTarget) {
+			writeError(w, http.StatusUnprocessableEntity, lerr.Error())
+			return
+		}
 		// An unresolvable ceiling is a 403 naming its remedy, not a 500 —
 		// writeCeilingError is the ONE mapping, so this lane cannot answer
 		// differently from run-create for the same cause. Everything else keeps
@@ -343,8 +353,25 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 	if weakCC {
 		auditData["weak_confinement"] = "cc1"
 	}
+	// THE O5 CROSS-USER MARKER, on both emits. workspace_owner.go states the
+	// decision as "the cross-user audit marker every workspace-scoped write
+	// stamps", and warns that "a second copy of the actor != owner comparison is
+	// exactly how the marker drifts onto some writes and off others" — these two
+	// emits were the drift. Every workspace-scoped sibling stamps it, including
+	// the one in THIS file (workspace.egress.approve), and record is the most
+	// privileged of them: it launches an interactive open-egress sandbox with the
+	// workspace's directory mounted and its credentials injected.
+	//
+	// The RATIONALE, restated. This was filed as "the one securityOps route that
+	// acts on a member's workspace"; the route is operatorOnly now (R1 re-tiered
+	// it), so that sentence is false. The defect is not: an ADMIN recording a
+	// MEMBER-owned workspace is exactly the act O5 exists for — auditWorkspaceDataFor's
+	// own doc frames it as "an admin acting on a MEMBER's workspace stays
+	// visible" — so re-tiering moved this route INTO the class the marker was
+	// written for rather than out of it. ws.OwnedBy is already in hand from the
+	// load above; it was simply unused.
 	s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor,
-		"run.record.start", id.String(), "success", mustJSON(auditData)))
+		"run.record.start", id.String(), "success", auditWorkspaceData(r, ws.OwnedBy, auditData)))
 
 	detail := "open recording session launched; attach via GET /runs/{id}/attach, do the real activity (build, test, run the agent), then stop the run (Done recording) to capture"
 	if req.Confined {
