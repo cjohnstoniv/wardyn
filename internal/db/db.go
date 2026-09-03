@@ -413,7 +413,76 @@ func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
 			return fmt.Errorf("db: %s trigger is missing or disabled on audit_events; the append-only guarantee is not in force, and restoring it means replaying the initial schema — refusing to start", name)
 		}
 	}
+	// The shipped guards being armed is not the same as nothing ELSE being
+	// armed beside them. auditTriggerNames already read the complete list.
+	tamperCapable, other, err := auditForeignTriggers(ctx, db)
+	if err != nil {
+		return err
+	}
+	if len(other) > 0 {
+		slog.ErrorContext(ctx, "db: trigger(s) on audit_events that Wardyn does not ship; they cannot rewrite a row on the way in (only a row-level BEFORE INSERT trigger can) but nothing else in the system reports them — confirm they are yours",
+			slog.Any("triggers", other))
+	}
+	if len(tamperCapable) > 0 {
+		return fmt.Errorf("db: row-level BEFORE INSERT trigger(s) on audit_events that Wardyn does not ship (%s); such a trigger sees NEW and its changes are what Postgres stores, so it can rewrite or drop any audit row on the way in while every shipped guard stays armed and the verify sweep still reports clean — refusing to start", strings.Join(tamperCapable, ", "))
+	}
 	return nil
+}
+
+// auditForeignTriggers returns the FIRING, non-internal triggers on audit_events
+// that Wardyn does not ship, split into the two classes that matter. Returns
+// nothing when the table does not exist.
+//
+// tamperCapable is the class that defeats the whole audit design: a ROW-level
+// BEFORE INSERT trigger. It is handed NEW and whatever it returns is what
+// Postgres stores, so it can rewrite any field, choose prev_hash/row_hash, or
+// RETURN NULL to make the event vanish — and the row it leaves behind is
+// internally consistent, so store.VerifyAuditChain reports the log clean. This
+// was measured, not assumed: with such a trigger installed, an event submitted
+// through store.InsertAuditEvent as actor=X outcome=denied was stored as
+// actor=Y outcome=success, InsertAuditEvent returned nil, this boot check
+// returned nil, and the sweep returned ok=true.
+//
+// NAME ORDER IS NOT THE TEST, and reasoning that it is would have left the
+// easier attack open. AuditDDLProtected's doc comment and docs/OPERATIONS.md
+// both describe this bypass as a trigger sorting AFTER audit_events_chain
+// (same-event row triggers fire in name order, so it runs last and overwrites
+// the hashes). That is one way to do it. A trigger sorting BEFORE the chain
+// trigger is strictly easier: it rewrites NEW and the SHIPPED chain trigger
+// then hashes the forgery for it — no name trick, no hash call. Both were
+// executed; both left the sweep reporting ok=true. So every foreign row-level
+// BEFORE INSERT trigger is refused, whatever it is called.
+//
+// other is every remaining foreign trigger — AFTER, statement-level, or bound
+// to another event. None of them can alter the stored row, so they are reported
+// rather than refused: a deployment may legitimately hang a replication or
+// notify trigger off this table, and bricking that boot would be a worse
+// failure than naming it.
+func auditForeignTriggers(ctx context.Context, db migrationExecutor) (tamperCapable, other []string, err error) {
+	var exists bool
+	if err := db.QueryRow(ctx, `SELECT to_regclass('audit_events') IS NOT NULL`).Scan(&exists); err != nil {
+		return nil, nil, fmt.Errorf("db: look up audit_events: %w", err)
+	}
+	if !exists {
+		return nil, nil, nil
+	}
+	shipped := append([]string{auditChainTrigger}, auditAppendOnlyTriggers...)
+	// pg_trigger.tgtype is the bitmask from Postgres's own trigger.h:
+	// 1 = FOR EACH ROW, 2 = BEFORE, 4 = INSERT. So (tgtype & 3) = 3 is a
+	// row-level BEFORE trigger and (tgtype & 4) <> 0 means it fires on INSERT.
+	const rowBeforeInsert = `(tgtype & 3) = 3 AND (tgtype & 4) <> 0`
+	if err := db.QueryRow(ctx, `
+		SELECT COALESCE(array_agg(tgname::text ORDER BY tgname) FILTER (WHERE `+rowBeforeInsert+`), ARRAY[]::text[]),
+		       COALESCE(array_agg(tgname::text ORDER BY tgname) FILTER (WHERE NOT (`+rowBeforeInsert+`)), ARRAY[]::text[])
+		FROM pg_trigger
+		WHERE tgrelid = 'audit_events'::regclass
+		  AND NOT tgisinternal
+		  AND tgenabled IN ('O', 'A')
+		  AND tgname <> ALL($1)`, shipped,
+	).Scan(&tamperCapable, &other); err != nil {
+		return nil, nil, fmt.Errorf("db: read foreign audit_events triggers: %w", err)
+	}
+	return tamperCapable, other, nil
 }
 
 // auditTriggerNames returns the FIRING row/statement triggers on audit_events,

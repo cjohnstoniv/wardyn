@@ -34,18 +34,19 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// TestPG_ChainTriggerWorksOutsideThePublicSchema is the F024 pin. It migrates a
-// COMPLETE schema into a throwaway namespace — the shared-corporate-Postgres
-// posture, reachable with nothing but `search_path` on the connection — and
-// appends two audit rows through the real trigger.
-func TestPG_ChainTriggerWorksOutsideThePublicSchema(t *testing.T) {
+// probeSchemaPool migrates a COMPLETE Wardyn schema into a throwaway namespace
+// and returns a pool whose search_path points at it. Nothing it does can reach
+// the lane's own audit_events, so a test is free to install triggers on the
+// table or leave rows behind. The schema is dropped on cleanup.
+func probeSchemaPool(t *testing.T) (*pgxpool.Pool, string) {
+	t.Helper()
 	base := pgPool(t) // also proves the default-schema install still migrates
 	ctx := context.Background()
 
-	dsn := os.Getenv("WARDYN_TEST_PG")
-	u, err := url.Parse(dsn)
+	u, err := url.Parse(os.Getenv("WARDYN_TEST_PG"))
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		t.Skip("WARDYN_TEST_PG is not a URL-form DSN; cannot point a connection at another schema")
 	}
@@ -72,6 +73,16 @@ func TestPG_ChainTriggerWorksOutsideThePublicSchema(t *testing.T) {
 	if err := Migrate(ctx, pool); err != nil {
 		t.Fatalf("Migrate into schema %s: %v", schema, err)
 	}
+	return pool, schema
+}
+
+// TestPG_ChainTriggerWorksOutsideThePublicSchema is the F024 pin. It migrates a
+// COMPLETE schema into a throwaway namespace — the shared-corporate-Postgres
+// posture, reachable with nothing but `search_path` on the connection — and
+// appends two audit rows through the real trigger.
+func TestPG_ChainTriggerWorksOutsideThePublicSchema(t *testing.T) {
+	pool, schema := probeSchemaPool(t)
+	ctx := context.Background()
 
 	// Everything the migrations create is unqualified, so it must all have
 	// landed in the probe schema. If it did not, the rest of the test would be

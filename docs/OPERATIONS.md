@@ -128,6 +128,18 @@ makes `wardynd` REFUSE TO START: restoring it means replaying the initial schema
 which is a far bigger blast radius than stopping and telling you. Either way the
 process no longer continues silently on a table whose guards are gone.
 
+The same read also asks what ELSE is armed on that table, because the shipped
+guards being present is not the same as nothing standing beside them. A
+**row-level `BEFORE INSERT` trigger Wardyn does not ship** makes `wardynd`
+REFUSE TO START, whatever it is called: such a trigger is handed `NEW` and
+whatever it returns is what Postgres stores, so it can rewrite any field, choose
+`prev_hash`/`row_hash`, or `RETURN NULL` to make the event vanish — and the row
+it leaves behind is internally consistent, so the verify sweep below reports the
+log **clean**. Any other unexpected trigger (`AFTER`, statement-level, or bound
+to another event) cannot alter the stored row, so it is named in the boot log at
+ERROR rather than refused — a deployment may legitimately hang a replication or
+notify trigger off this table.
+
 A trigger you have hardened with `ALTER TABLE … ENABLE ALWAYS TRIGGER`
 (`tgenabled='A'`, so it fires even under `session_replication_role = replica` —
 the bypass the sweep otherwise only catches after the fact) is left **exactly as
@@ -194,11 +206,17 @@ the residual `0007_audit_least_privilege.sql` states plainly. The role-split che
 that reports this posture at boot (`AuditDDLProtected`) counts THREE ways to
 bypass, not two: superuser, membership in the owner role, and the **`TRIGGER`
 privilege** on `audit_events`. The third is the quiet one — a role granted
-`TRIGGER` cannot drop the shipped guards, but it can add a BEFORE INSERT trigger
-of its own whose name sorts after `audit_events_chain` (same-event row triggers
-fire in name order) and overwrite `prev_hash`/`row_hash` on the way in, minting
-rows that hash to whatever it says while every shipped guard is still armed. So a
-deploy that grants `TRIGGER` back is reported as NOT protected.
+`TRIGGER` cannot drop the shipped guards, but it can add a row-level BEFORE
+INSERT trigger of its own and rewrite the row on the way in, minting records that
+say whatever it likes while every shipped guard is still armed. Name order is
+**not** what makes that work: a trigger sorting *after* `audit_events_chain`
+(same-event row triggers fire in name order) runs last and can overwrite
+`prev_hash`/`row_hash` directly, but one sorting *before* it is easier still —
+it rewrites `NEW` and the shipped chain trigger then hashes the forgery for it.
+Either way the stored row is self-consistent and the verify sweep reports clean,
+which is why the boot check now refuses to start over ANY foreign row-level
+BEFORE INSERT trigger on this table. So a deploy that grants `TRIGGER` back is
+reported as NOT protected.
 
 **The app role's grant set does not grow to keep the chain working.** `INSERT`
 and `SELECT` on `audit_events` is still the whole of it. The chain trigger
