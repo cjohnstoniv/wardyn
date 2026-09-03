@@ -214,6 +214,30 @@ func TestPG_UserDrive_DeleteRestrictedWhileGranted(t *testing.T) {
 	if err := st.DeleteUserDrive(ctx, uuid.New()); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("delete unknown id: err = %v, want ErrNotFound", err)
 	}
+
+	// A PAUSED allocation pins the drive exactly as a live one does. The
+	// RESTRICT is on the FOREIGN KEY, not on `enabled`, and it has to be: a
+	// paused grant is the shape an admin leaves behind while they work out what
+	// to do with somebody's storage, and it is the ONLY remaining record of
+	// which directory was that person's. Reading "paused" as "not really
+	// allocated" would let exactly that drive be deleted, orphaning the
+	// directory with nothing in the product naming it — the failure the
+	// RESTRICT exists to prevent, arriving through its quietest door.
+	paused := seedUserDrive(t, st, "test-restrict-paused-"+uuid.NewString())
+	pausedGrant := seedDisabledUserDriveGrant(t, st, types.UserDriveGrant{
+		SubjectType: types.CapabilitySubjectUser,
+		Subject:     "test-paused-user-" + uuid.NewString(),
+		DriveID:     paused.ID,
+	})
+	if err := st.DeleteUserDrive(ctx, paused.ID); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("delete a drive held by a PAUSED grant: err = %v, want ErrConflict", err)
+	}
+	if _, err := st.DeleteUserDriveGrant(ctx, pausedGrant.ID); err != nil {
+		t.Fatalf("delete paused grant: %v", err)
+	}
+	if err := st.DeleteUserDrive(ctx, paused.ID); err != nil {
+		t.Errorf("delete after the paused grant is gone: err = %v, want nil — the refusal is about the binding", err)
+	}
 }
 
 // TestPG_UserDriveGrant_NaturalKeyUpsert: re-allocating a subject must REPOINT
@@ -676,6 +700,95 @@ func TestPG_ResolveUserDrive(t *testing.T) {
 		if got := resolveName(t, []string{user}, []string{group}); got != userDrive.Name {
 			t.Errorf("resolve = %q, want the user row's %q (user > group, against priority 1000 and name ASC)",
 				got, userDrive.Name)
+		}
+	})
+
+	// The MIXED case, and the one the two arms above cannot make between them:
+	// "precedence among disabled rows" pauses BOTH rows, so a WHERE that
+	// excluded disabled rows would leave nothing to resolve and the sub-test
+	// would fail loudly. Here the wider row is LIVE — which is exactly the
+	// shape the exclusion would silently succeed on, handing the member a drive
+	// no admin decided they should have and calling it an answer. The paused row
+	// must still win its tier, and must still come back with its bit off.
+	t.Run("a paused row beats an ENABLED row one tier down", func(t *testing.T) {
+		for _, tc := range []struct {
+			name       string
+			pausedTier types.CapabilitySubjectType
+			liveTier   types.CapabilitySubjectType
+		}{
+			{"paused user over enabled group", types.CapabilitySubjectUser, types.CapabilitySubjectGroup},
+			{"paused group over enabled all", types.CapabilitySubjectGroup, types.CapabilitySubjectAll},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				who := string(tc.pausedTier) + "-mixed-" + uniq
+				// The LIVE row is handed the other levers — the alphabetically
+				// FIRST name of the pair, and priority where this arm can set one
+				// — so a win for the paused row is the tier rule and the enabled
+				// bit, and nothing else.
+				pausedDrive := seedUserDrive(t, st, "zzz-mixed-paused-"+string(tc.pausedTier)+"-"+uniq)
+				seedDisabledUserDriveGrant(t, st, types.UserDriveGrant{
+					SubjectType: tc.pausedTier, Subject: who, DriveID: pausedDrive.ID,
+				})
+				var users, groups []string
+				switch tc.pausedTier {
+				case types.CapabilitySubjectUser:
+					// The live row one tier down is a GROUP row this caller is in.
+					users = []string{who}
+					liveGroup := "mixed-live-grp-" + uniq
+					groups = []string{liveGroup}
+					liveDrive := seedUserDrive(t, st, "aaa-mixed-live-"+uniq)
+					seedUserDriveGrant(t, st, types.UserDriveGrant{
+						SubjectType: tc.liveTier, Subject: liveGroup, DriveID: liveDrive.ID, Priority: 1000,
+					})
+				default:
+					// The live row one tier down is the EVERYONE row — UNIQUE per
+					// database (subject_type 'all' keys on the empty subject), so
+					// it is the one this test seeded once at the top rather than a
+					// second one no schema would allow. It carries the
+					// alphabetically FIRST name of the pair, so the win below is
+					// the tier rule and the enabled bit rather than name ASC.
+					users, groups = []string{"nobody-" + uniq}, []string{who}
+				}
+
+				d, g, tier, err := st.ResolveUserDrive(ctx, users, groups)
+				if err != nil {
+					t.Fatalf("resolve: %v", err)
+				}
+				if d.ID != pausedDrive.ID || tier != tc.pausedTier {
+					t.Fatalf("resolve = %q at tier %q, want the PAUSED %s row's %q — falling through to the live %s row is the widening DESIGN forbids",
+						d.Name, tier, tc.pausedTier, pausedDrive.Name, tc.liveTier)
+				}
+				if g.Enabled {
+					t.Error("the winning grant came back ENABLED; the paused row is indistinguishable from a live one")
+				}
+			})
+		}
+	})
+
+	// THE CALL SHAPE driveWithUnusableGroups makes: user subjects only, groups
+	// nil, on a deployment that HAS group-tier rows. The store answers the
+	// everyone row and reports the tier honestly — it does not, and must not,
+	// pretend the caller matched nothing, because "no groups were supplied" and
+	// "this caller is in no group" are the same query and only the caller knows
+	// which one it is. That is precisely why HasGroupTierDriveGrants exists and
+	// why the API's refusal leans on it: without that second read the resolver
+	// would serve this row to a member whose group grant the snapshot dropped.
+	t.Run("the unusable-groups call shape still matches the everyone row", func(t *testing.T) {
+		groupDrive := seedUserDrive(t, st, "zzz-unusable-grp-"+uniq)
+		seedUserDriveGrant(t, st, types.UserDriveGrant{
+			SubjectType: types.CapabilitySubjectGroup, Subject: "unusable-grp-" + uniq, DriveID: groupDrive.ID,
+		})
+
+		d, _, tier, err := st.ResolveUserDrive(ctx, []string{"nobody-" + uniq}, nil)
+		if err != nil {
+			t.Fatalf("resolve(users, nil): %v", err)
+		}
+		if d.ID != dAll.ID || tier != types.CapabilitySubjectAll {
+			t.Fatalf("resolve = %q at tier %q, want the everyone row %q at tier all", d.Name, tier, dAll.Name)
+		}
+		has, err := st.HasGroupTierDriveGrants(ctx)
+		if err != nil || !has {
+			t.Fatalf("HasGroupTierDriveGrants = %v, %v; want true — it is the only thing that can tell this answer from a complete one", has, err)
 		}
 	})
 

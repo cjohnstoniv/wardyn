@@ -186,27 +186,16 @@ type requirementAuditEntry struct {
 // Shared by create (runs.go) and preflight so the two can never disagree about
 // which selection a workspace resolves to.
 func resolveWorkspaceSelections(req createRunRequest) map[string]client.WorkspaceSelection {
-	out := selectionsByWorkspaceID(req.Workspaces)
+	out := make(map[string]client.WorkspaceSelection, len(req.Workspaces))
+	for _, sel := range req.Workspaces {
+		if sel.WorkspaceID != "" {
+			out[sel.WorkspaceID] = sel
+		}
+	}
 	if req.WorkspaceID != nil {
 		id := req.WorkspaceID.String()
 		if _, exists := out[id]; !exists {
 			out[id] = client.WorkspaceSelection{WorkspaceID: id}
-		}
-	}
-	return out
-}
-
-// selectionsByWorkspaceID indexes a WorkspaceSelection list by id — the part of
-// resolveWorkspaceSelections that has a second caller: the compose pipeline's
-// preview fold (compose.go), which has req.WorkspaceSelections (the same
-// []client.WorkspaceSelection shape) but no legacy singular workspace_id to
-// alias in, so it calls this directly instead of resolveWorkspaceSelections'
-// createRunRequest-shaped wrapper.
-func selectionsByWorkspaceID(sels []client.WorkspaceSelection) map[string]client.WorkspaceSelection {
-	out := make(map[string]client.WorkspaceSelection, len(sels))
-	for _, sel := range sels {
-		if sel.WorkspaceID != "" {
-			out[sel.WorkspaceID] = sel
 		}
 	}
 	return out
@@ -417,9 +406,7 @@ func (s *Server) applyRequiredSecretGrant(present map[string]bool, spec *types.R
 	// is missing from AllowedDomains fails the proxy injector closed at startup
 	// (zero egress) — e.g. a required operator_set secret on an allow_all_egress
 	// ceiling would otherwise brick every run granted it.
-	if !domainAllowedExact(spec.AllowedDomains, p.host) {
-		spec.AllowedDomains = append(spec.AllowedDomains, p.host)
-	}
+	unionAllowedDomains(spec, []string{p.host})
 	return requirementAuditEntry{
 		action: "run.workspace.requirement.secret", target: secretName,
 		data: map[string]any{"secret_name": secretName, "host": p.host},

@@ -101,7 +101,7 @@ func urlDecode(text string) (string, bool) {
 // for matching; we return the raw decoded string and let the caller bytes.Index.
 func base64Decode(text string) (string, bool) {
 	t := strings.TrimSpace(text)
-	if len(t) < 12 || !looksBase64(t) {
+	if len(t) < 12 || !allTokenChars(t) {
 		return "", false
 	}
 	for _, enc := range []*base64.Encoding{
@@ -115,12 +115,12 @@ func base64Decode(text string) (string, bool) {
 	return "", false
 }
 
-func looksBase64(t string) bool {
-	for _, r := range t {
-		switch {
-		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-		case r == '+' || r == '/' || r == '-' || r == '_' || r == '=':
-		default:
+// allTokenChars reports whether every byte of t is in the base64/token alphabet
+// -- isTokenChar, the one home for that alphabet. Byte-wise is rune-wise here:
+// every UTF-8 byte of a non-ASCII rune is >= 0x80 and fails just as the rune did.
+func allTokenChars(t string) bool {
+	for i := 0; i < len(t); i++ {
+		if !isTokenChar(t[i]) {
 			return false
 		}
 	}

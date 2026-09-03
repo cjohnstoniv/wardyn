@@ -52,7 +52,7 @@ import { statusWord } from "../../../lib/workspace-status";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
-import { Mono } from "../../wardyn/code-block";
+import { makeMono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
 import { SectionCard } from "./new-run-primitives";
 import type { WizardState } from "./wizard-types";
@@ -62,26 +62,9 @@ import type { WizardState } from "./wizard-types";
 // frozen string carries it as PLAIN TEXT — mono is a display concern the
 // consuming component applies, never baked into canon. The drive NAME is not
 // here: it is a human-chosen label, and the strings already quote it.
-//
-// ponytail: a third local copy of the governance/access-panel withMono, with
-// the one term this surface needs. The other two live under screens/governance
-// and screens/setup, each with its own term list; hoisting all three into one
-// shared helper is a change to two files this lane does not own. Do it when
-// the drives admin surface lands and the term list is complete.
 const DRIVE_TARGET = "/home/agent/drive";
 
-function withDriveTarget(text: string): React.ReactNode {
-  return text.split(DRIVE_TARGET).flatMap((part, i) =>
-    i === 0
-      ? [<React.Fragment key={`t${i}`}>{part}</React.Fragment>]
-      : [
-          <Mono key={`m${i}`} className="text-inherit">
-            {DRIVE_TARGET}
-          </Mono>,
-          <React.Fragment key={`t${i}`}>{part}</React.Fragment>,
-        ],
-  );
-}
+const withDriveTarget = makeMono([DRIVE_TARGET]);
 
 // One line where the checkbox would be. Same class as the ungranted-selection
 // note above it — both are "the reason your selection costs something", and

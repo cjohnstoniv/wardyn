@@ -215,48 +215,39 @@ func classifyProxyProbe(res probeRunResult, subj proxyProbeSubject, controlPlane
 // the test-redirect endpoint's {state, detail}. See redirectProbeScript for
 // exactly what ran and what each exit code means. controlPlaneURL mirrors
 // classifyProxyProbe's own parameter -- see its doc.
+//
+// Same shape as classifyProxyProbe: the fields every verdict carries are set
+// once up front and each arm sets only State/Detail, so elapsed_ms cannot be
+// forgotten by a new arm (it was repeated at all six return sites). The arm
+// ORDER is the contract -- the bypass sentinel is matched before the generic
+// hasExitCode arm, and no arm may be reached without an exit code (see
+// TestClassifyRedirectProbe_BypassNeverInferred).
 func classifyRedirectProbe(res probeRunResult, toHost, fromHost, controlPlaneURL string) siteConfigProbeResponse {
+	resp := siteConfigProbeResponse{ElapsedMS: res.elapsed.Milliseconds()}
 	switch {
 	case res.hasExitCode && res.exitCode == 0:
-		return siteConfigProbeResponse{
-			State: "reached",
-			Detail: fmt.Sprintf("%s is reachable via the mirror; %s is correctly blocked when dialed directly (redirect enforced) — checked in %s",
-				toHost, fromHost, res.elapsed.Round(time.Millisecond)),
-			ElapsedMS: res.elapsed.Milliseconds(),
-		}
+		resp.State = "reached"
+		resp.Detail = fmt.Sprintf("%s is reachable via the mirror; %s is correctly blocked when dialed directly (redirect enforced) — checked in %s",
+			toHost, fromHost, res.elapsed.Round(time.Millisecond))
 	case res.hasExitCode && res.exitCode == redirectProbeBypassCode:
-		return siteConfigProbeResponse{
-			State: "bypass",
-			Detail: fmt.Sprintf("%s is reachable via the mirror, but %s is ALSO still reachable directly from a sandbox — "+
-				"the redirect is configured but not enforced; runs can still bypass the mirror", toHost, fromHost),
-			ElapsedMS: res.elapsed.Milliseconds(),
-		}
+		resp.State = "bypass"
+		resp.Detail = fmt.Sprintf("%s is reachable via the mirror, but %s is ALSO still reachable directly from a sandbox — "+
+			"the redirect is configured but not enforced; runs can still bypass the mirror", toHost, fromHost)
 	case res.hasExitCode:
-		return siteConfigProbeResponse{
-			State:     "blocked",
-			Detail:    fmt.Sprintf("could not reach the mirror %s: %s", toHost, curlFailureDetail(res.exitCode)),
-			ElapsedMS: res.elapsed.Milliseconds(),
-		}
+		resp.State = "blocked"
+		resp.Detail = fmt.Sprintf("could not reach the mirror %s: %s", toHost, curlFailureDetail(res.exitCode))
 	case res.timedOut:
-		return siteConfigProbeResponse{
-			State:     "timed_out",
-			Detail:    timedOutDetail(res.agentStatus, controlPlaneURL),
-			ElapsedMS: res.elapsed.Milliseconds(),
-		}
+		resp.State = "timed_out"
+		resp.Detail = timedOutDetail(res.agentStatus, controlPlaneURL)
 	case res.neverRan:
-		return siteConfigProbeResponse{
-			State: "not_run",
-			Detail: fmt.Sprintf("The probe never ran: %s. Nothing was learned about %s — the sandbox that carries the probe could not start, so this says nothing about your proxy or your network.",
-				res.incompleteReason, toHost),
-			ElapsedMS: res.elapsed.Milliseconds(),
-		}
+		resp.State = "not_run"
+		resp.Detail = fmt.Sprintf("The probe never ran: %s. Nothing was learned about %s — the sandbox that carries the probe could not start, so this says nothing about your proxy or your network.",
+			res.incompleteReason, toHost)
 	default:
-		return siteConfigProbeResponse{
-			State:     "blocked",
-			Detail:    fmt.Sprintf("the probe of the mirror %s did not get a clean answer: %s", toHost, res.incompleteReason),
-			ElapsedMS: res.elapsed.Milliseconds(),
-		}
+		resp.State = "blocked"
+		resp.Detail = fmt.Sprintf("the probe of the mirror %s did not get a clean answer: %s", toHost, res.incompleteReason)
 	}
+	return resp
 }
 
 // findEgressRedirect resolves the stored row whose From matches want

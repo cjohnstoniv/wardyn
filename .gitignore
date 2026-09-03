@@ -13,7 +13,7 @@ dist/
 vendor/
 
 # Node
-node_modules/
+node_modules
 package-lock.json
 .pnpm-store/
 # Local npm registry config (may hold a corporate/private registry URL or token) — never commit

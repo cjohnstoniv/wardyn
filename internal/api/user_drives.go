@@ -27,10 +27,8 @@
 //     place that can tell "the client said false" from "the client said
 //     nothing" — see userDriveGrantRequest.Enabled.
 //
-// EVERY ROUTE IS SUPER-ONLY (routes.go). A drive names host paths and storage
-// classes, which is the "never the host" line the operator tier exists to hold;
-// a security admin reaches drives only through the DenyUserDrive door in the
-// profile editor, which is already theirs.
+// EVERY ROUTE IS SUPER-ONLY, not securityOps; the tier argument is written at
+// the mountUserDriveRoutes call that decides it (routes.go).
 package api
 
 import (
@@ -154,7 +152,7 @@ func (s *Server) userDriveHostRootCheck() types.UserDriveHostRootCheck {
 // returning the HTTP status and message the caller answers with (0, "" on
 // success) and the validated row.
 //
-// THREE GATES IN ORDER, and the order is the argument:
+// FOUR GATES IN ORDER, and the order is the argument:
 //
 //  1. Strict decoding (decodeStrictMsg, which is also where the 1 MiB body cap
 //     rides — an unknown field is a typo that must not silently widen
@@ -168,6 +166,10 @@ func (s *Server) userDriveHostRootCheck() types.UserDriveHostRootCheck {
 //     well-formed and it is the DEPLOYMENT that cannot accept it. The
 //     distinction is the one denyMemberRunQuota draws: a 400 says "you wrote
 //     this wrong", a 422 says "there is nothing here to write it into".
+//  4. NESTING against the other stored host_path roots (driveHostRootNesting)
+//     — a 422 for the same reason as 3, and LAST because it is the only gate
+//     that reads the database: a row that is malformed or outside the ceiling
+//     must be refused without a store round-trip.
 func (s *Server) decodeUserDriveRequest(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.UserDrive, int, string) {
 	var req userDriveRequest
 	if msg := decodeStrictMsg(w, r, &req); msg != "" {
@@ -192,109 +194,91 @@ func (s *Server) decodeUserDriveRequest(w http.ResponseWriter, r *http.Request, 
 		if err := s.userDriveHostRootCheck()(d.HostRoot); err != nil {
 			return types.UserDrive{}, http.StatusUnprocessableEntity, "invalid drive: " + err.Error()
 		}
+		if code, msg := s.driveHostRootNesting(r, d); msg != "" {
+			return types.UserDrive{}, code, msg
+		}
 	}
 	return d, 0, ""
 }
 
-// driveRehomeProbeHome is a stand-in home segment used ONLY to ask whether an
-// edit moves the storage. DriveObjectName folds the DRIVE's half of the name
-// (the slug, or the host root) around whatever home it is given, so comparing
-// the function's own output for one fixed home answers "does this edit re-point
-// the object?" exactly — and keeps answering it when a backend is added or the
-// naming changes, which a hand-listed set of fields would not.
-const driveRehomeProbeHome = "probe"
-
-// driveRehomeGuard refuses an identity-affecting edit to an ALLOCATED drive
-// unless the caller confirms it with ?confirm=rehome. It reports whether the
-// write may proceed, and whether it is a confirmed re-home (for the audit row).
+// driveHostRootNesting is the FOURTH gate, and the only one that has to look at
+// the other ROWS: a host_path drive whose host_root sits inside — or contains —
+// another host_path drive's host_root is refused, 422, naming the other drive.
 //
-// THE EDIT THAT MOVES SOMEBODY'S DATA IS NOT THE ONE THAT LOOKS DESTRUCTIVE.
-// Deleting an allocated drive already answers 409 — the FK's ON DELETE RESTRICT
-// surfaced by handleDeleteUserDrive — while the far more consequential in-place
-// rewrite had nothing. types.DriveObjectName folds the drive's NAME into a
-// volume and a claim name and its HOST ROOT into a share path, and
-// types.DriveHomeName folds the HOME TEMPLATE, so a rename, a host-root
-// correction or a template change re-points every allocated principal at a
-// different object with the grant rows untouched. On k8s a managed drive then
-// provisions a fresh EMPTY claim and the member's previous work sits in one
-// nobody in the product points at; on host_path it binds a different directory;
-// on docker_volume it mints a new empty volume. Nothing is deleted — the
-// objects are retained — but with no reclaim runbook and no `list` verb in the
-// k8s RBAC, an operator's only way back is knowing to restore the drive exactly
-// as it was.
+// THE HOLE IT CLOSES IS A MEMBER'S, NOT AN ADMIN'S TYPO. Drive A is rooted at
+// /srv/shares and gives alice a WRITABLE home at /srv/shares/alice. Drive B is
+// then rooted at /srv/shares/alice/team. Nothing above notices: B's root is
+// inside the deployment's ceiling, exists, is not a credential directory and is
+// an ordinary path. But its whole tree is a directory alice can write from
+// INSIDE a run — so she can replace `team`, or any segment under it, with a
+// link, and B's members are bound wherever she points them. The driver's
+// resolved-real-path checks bound where that can aim (the ceiling, and now the
+// member's own home name) but they cannot make the layout supportable: two
+// drives sharing a tree means one drive's members author the other drive's
+// storage.
 //
-// internal/store/user_drives.go states this consequence and assigns the duty
-// across the module boundary — "the admin surface says so at the write". This
-// is that sentence, implemented.
+// STRICT nesting only. Two drives on the SAME root are left alone: that is the
+// ordinary "one share, two allocations with different home templates" shape, and
+// neither drive's members can move the other's root, because the root is not
+// inside anybody's home. Equal roots are a naming question; nested roots are a
+// containment one.
 //
-// The BACKEND is compared as well as the derived name, because k8s_pvc ->
-// k8s_pvc_static leaves the claim name identical while flipping who creates it:
-// a missing claim stops being provisioned and becomes a refusal.
+// LEXICAL, on the already-cleaned stored strings. The symlink half belongs to
+// UserDriveHostRootCheck, which resolved both roots against the deployment's
+// ceiling when each was written and does it again at bind time; what THIS gate
+// owns is the relationship between two rows, which is exactly what the rows say.
 //
-// ONE READ, and it is the read the console's own screen already makes: the
-// existing row and its grant count come back together, so the guard cannot ask
-// "is it allocated" of a different moment than "what did it look like". A PUT
-// naming an id no row holds is a create — PUT's documented meaning here — and
-// passes without a question.
-func (s *Server) driveRehomeGuard(w http.ResponseWriter, r *http.Request, next types.UserDrive) (ok, rehomed bool) {
-	items, err := s.cfg.Store.ListUserDrives(r.Context())
+// ONE STORE READ, on the drive-write path only — a handful of calls in a
+// deployment's lifetime, and the same list the console already loads on every
+// visit to the screen.
+func (s *Server) driveHostRootNesting(r *http.Request, d types.UserDrive) (int, string) {
+	drives, err := s.cfg.Store.ListUserDrives(r.Context())
 	if err != nil {
-		// FAIL CLOSED. An unreadable allocation state is not permission to
-		// re-home somebody quietly — the whole point of the guard is that this
-		// edit is unrecoverable in the product, so "I could not check" has to
-		// refuse rather than proceed.
-		writeError(w, http.StatusInternalServerError,
-			"this edit could not be checked against the drive's allocations: "+err.Error())
-		return false, false
+		// 500, never "no other drives": a list that failed cannot say the tree is
+		// clear, and treating it as clear is how the check silently stops biting
+		// on exactly the deployment whose database is unhappy.
+		return http.StatusInternalServerError, "list user drives: " + err.Error()
 	}
-	var prev *types.UserDriveListItem
-	for i := range items {
-		if items[i].ID == next.ID {
-			prev = &items[i]
-			break
+	for _, other := range drives {
+		// A row is not its own ancestor: a PUT that re-saves a drive unchanged
+		// must not start refusing itself.
+		if other.ID == d.ID || other.Backend != types.DriveBackendHostPath || other.HostRoot == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(d.HostRoot, other.HostRoot+"/"):
+			return http.StatusUnprocessableEntity, fmt.Sprintf(
+				"invalid drive: host_root %q is inside drive %q's host_root %q — that tree holds directories the other drive's "+
+					"members can write from inside a run, so they could redirect this one; give the two drives separate trees",
+				d.HostRoot, other.Name, other.HostRoot)
+		case strings.HasPrefix(other.HostRoot, d.HostRoot+"/"):
+			return http.StatusUnprocessableEntity, fmt.Sprintf(
+				"invalid drive: host_root %q contains drive %q's host_root %q — this drive's members could redirect that one "+
+					"from inside a run; give the two drives separate trees",
+				d.HostRoot, other.Name, other.HostRoot)
 		}
 	}
-	if prev == nil {
-		return true, false // a PUT that creates: nothing is bound to move
-	}
-	moves := prev.Backend != next.Backend ||
-		prev.HomeTemplate != next.HomeTemplate ||
-		types.DriveObjectName(prev.UserDrive, driveRehomeProbeHome) != types.DriveObjectName(next, driveRehomeProbeHome)
-	if !moves || prev.GrantCount == 0 {
-		return true, false
-	}
-	if r.URL.Query().Get("confirm") != "rehome" {
-		// No count, for handleDeleteUserDrive's reason: the allocations table
-		// the admin is looking at already shows it, and a second number read
-		// here could only contradict the one on screen.
-		writeError(w, http.StatusConflict, "this drive is allocated, and this edit re-points the storage every "+
-			"allocated member is bound to — their existing data stays under the old name, and a managed drive "+
-			"provisions a fresh empty one. Confirm the move (confirm=rehome), or edit only the fields that do "+
-			"not name storage: size, mode, reclaim and storage class.")
-		return false, false
-	}
-	return true, true
+	return 0, ""
 }
 
 // writeUserDrive is the shared body of POST and PUT: decode, validate against
-// both the shape rules and the env ceiling, guard an allocated re-home,
-// persist, audit, answer.
+// both the shape rules and the env ceiling, refuse a silent re-homing, persist,
+// audit, answer.
 //
-// mayRehome is false for POST, whose id is freshly minted and can therefore
-// name no existing row, and true for PUT, which is the door an edit to an
-// ALLOCATED drive comes through.
-func (s *Server) writeUserDrive(w http.ResponseWriter, r *http.Request, id uuid.UUID, status int, mayRehome bool) {
+// The re-home guard runs LAST of the gates and needs no "is this a PUT" flag:
+// it keys on whether the id already names a row with allocations, and
+// handleCreateUserDrive mints a fresh uuid, so a create finds nothing and the
+// guard is a single list read that returns immediately.
+func (s *Server) writeUserDrive(w http.ResponseWriter, r *http.Request, id uuid.UUID, status int) {
 	d, code, msg := s.decodeUserDriveRequest(w, r, id)
 	if msg != "" {
 		writeError(w, code, msg)
 		return
 	}
-	var rehomed bool
-	if mayRehome {
-		var ok bool
-		if ok, rehomed = s.driveRehomeGuard(w, r, d); !ok {
-			return
-		}
+	code, msg, rehomed := s.driveRehomeGuard(r, d)
+	if msg != "" {
+		writeError(w, code, msg)
+		return
 	}
 	saved, err := s.cfg.Store.UpsertUserDrive(r.Context(), d)
 	if errors.Is(err, store.ErrConflict) {
@@ -332,24 +316,208 @@ func (s *Server) writeUserDrive(w http.ResponseWriter, r *http.Request, id uuid.
 // another drive already holds is a caller-fixable 409, never a raw driver
 // error. operatorOnly (routes.go).
 func (s *Server) handleCreateUserDrive(w http.ResponseWriter, r *http.Request) {
-	s.writeUserDrive(w, r, uuid.New(), http.StatusCreated, false)
+	s.writeUserDrive(w, r, uuid.New(), http.StatusCreated)
 }
 
 // handleUpdateUserDrive replaces the drive at {id} (200), rename included —
 // renaming has to work, because ON DELETE RESTRICT makes delete-and-recreate
 // impossible for a drive that is actually allocated. A PUT naming an id no row
-// holds creates it there, which is what PUT means.
+// holds creates it there, which is what PUT means and what UpsertUserDrive's
+// single statement does without an existence read. operatorOnly (routes.go).
 //
-// An edit that RE-POINTS the storage of an allocated member answers 409 unless
-// it carries ?confirm=rehome — driveRehomeGuard, above, which is the guard the
-// store's own comment delegates to "the admin surface". operatorOnly
-// (routes.go).
+// An IDENTITY-AFFECTING change on an ALLOCATED drive answers 409 unless the
+// request says it means it — see driveRehomeGuard, which holds the argument.
 func (s *Server) handleUpdateUserDrive(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "user drive")
 	if !ok {
 		return
 	}
-	s.writeUserDrive(w, r, id, http.StatusOK, true)
+	s.writeUserDrive(w, r, id, http.StatusOK)
+}
+
+// driveIdentityFields lists the identity-affecting differences between a stored
+// drive and the one a PUT would replace it with.
+//
+// The four columns are the ones every allocated person's STORAGE OBJECT is
+// derived from (types.DriveObjectName over the drive and the home its template
+// yields). Changing one does not edit a drive: it points every allocation at a
+// DIFFERENT object, all at once, and leaves the old ones behind with nothing in
+// the product naming them.
+//
+//   - backend — a host_path → docker_volume flip moves everyone off their NAS
+//     home onto a fresh, empty volume.
+//   - home_template — sub → hash re-derives every home; the old objects survive
+//     and are findable only by the wardyn.drive label.
+//   - host_root — the same home names, bound against a different tree, from the
+//     next run onward.
+//   - name — BOTH minted object names carry the drive slug
+//     (`wardyn-drive-<drive-slug>-<home>`), so a rename re-homes a Docker volume
+//     exactly as it re-homes a Kubernetes claim. It used to be inert on Docker,
+//     where the volume was `wardyn-drive-<home>`; that changed when the slug
+//     landed on the volume arm so one member's two drives could not be one
+//     volume, and this gate inherited the wider reach for free.
+//
+// THE NAME IS COMPARED THROUGH THE FOLD, not raw. driveSlug collapses case and
+// punctuation, so "Corp NAS" and "  Corp   NAS! " are one slug and name one
+// object: a raw comparison would refuse a cosmetic edit that re-homes nobody,
+// and an admin refused for a typo fix learns to send ?confirm=rehome by reflex —
+// which is how a confirmation stops meaning anything. The message still prints
+// the names an admin typed, because that is what they need to see.
+//
+// Stable order, so the same edit reads the same way twice.
+func driveIdentityFields(before, after types.UserDrive) []string {
+	var out []string
+	for _, f := range []struct {
+		name, old, updated string
+		moved              bool
+	}{
+		{"backend", string(before.Backend), string(after.Backend), before.Backend != after.Backend},
+		{"home_template", string(before.HomeTemplate), string(after.HomeTemplate), before.HomeTemplate != after.HomeTemplate},
+		{"host_root", before.HostRoot, after.HostRoot, before.HostRoot != after.HostRoot},
+		{"name", before.Name, after.Name, driveNameMovesTheObject(before.Name, after.Name)},
+	} {
+		if f.moved {
+			out = append(out, fmt.Sprintf("%s %q → %q", f.name, f.old, f.updated))
+		}
+	}
+	return out
+}
+
+// driveNameMovesTheObject reports whether renaming a drive from before to after
+// changes the object its members bind — i.e. whether the two names fold to
+// different slugs. It asks types.DriveObjectName rather than re-implementing the
+// fold, over one fixed backend and one fixed home, so the ONLY thing that can
+// differ is the name's own contribution; a naming change in types is then a
+// change this gate inherits instead of one it drifts away from.
+func driveNameMovesTheObject(before, after string) bool {
+	const probeHome = "probe"
+	object := func(name string) string {
+		return types.DriveObjectName(types.UserDrive{Name: name, Backend: types.DriveBackendK8sPVC}, probeHome)
+	}
+	return object(before) != object(after)
+}
+
+// driveRehomeConfirm is the query value that means "yes, re-home them":
+// `PUT /drives/{id}?confirm=rehome`.
+//
+// A QUERY PARAMETER RATHER THAN A BODY FIELD, and the choice is not cosmetic.
+// A PUT's body is the drive ROW, and decodeStrict refuses unknown fields in it
+// precisely so a typo cannot be stored — while a confirmation is not a column,
+// it is a property of this one request. In the body it would be carried back by
+// every client that GETs a drive and PUTs it again, which is the one shape a
+// confirmation must never have; and it would force DisallowUnknownFields to
+// tolerate a key that is not part of the resource, weakening the write boundary
+// for the sake of a flag.
+const driveRehomeConfirm = "rehome"
+
+// driveRehomeGuard refuses an identity-affecting PUT on a drive that already has
+// ALLOCATIONS, unless the request carries ?confirm=rehome. It returns (0, "")
+// when the write may proceed, and rehomed=true when it proceeded BECAUSE the
+// caller confirmed — the one bit `drive.write` needs to tell a cosmetic edit
+// from one that moved somebody's storage.
+//
+// WHY A DOOR AND NOT A WARNING. UpsertUserDrive writes every column in place, so
+// before this gate a PUT changing `home_template` on a drive with forty grants
+// answered 200 and re-homed forty people silently: their next run mounts a
+// different object, the one holding their work is orphaned, and nothing in the
+// product points at it any more. That is the class of act handleDeleteUserDrive
+// already refuses to perform quietly (ON DELETE RESTRICT), and it earns the same
+// status — a 409 is "the state of this resource makes that unsafe", which is
+// exactly the claim.
+//
+// WHY A CONFIRMATION AND NOT A REFUSAL. Re-homing is sometimes precisely what an
+// admin means — a share re-mounted at a new root, a directory convention that
+// changed — and delete-and-recreate is not open to them while the FK RESTRICTs.
+// So the gate names both halves an admin needs in order to decide: WHAT changes,
+// and HOW MANY allocations it moves.
+//
+// AN UNALLOCATED DRIVE MEETS NOTHING. With no grants nothing is re-homed, which
+// is the state these fields are corrected in most often — a row authored a
+// minute ago.
+//
+// ONE STORE READ IN THIS GATE — not one on the write path. It is ListUserDrives
+// because that read carries the existing row AND its grant count together, where
+// a GetUserDrive plus a grant scan would be two reads for one question; but on a
+// host_path write driveHostRootNesting has already listed, so that path costs
+// two. Kept as two rather than threaded through both gates from writeUserDrive:
+// a gate that takes its rows as an argument fails closed only while every caller
+// remembers to read them, and these two run on different conditions (nesting on
+// host_path alone, this one on every write). The cost is a handful of list reads
+// across a deployment's lifetime, on the query the console already issues on
+// every visit to the screen.
+//
+// A read that FAILS is a 500 and never "no grants": a list that could not answer
+// cannot say a drive is unallocated, and treating it as unallocated is how a
+// gate silently stops biting on exactly the deployment whose database is
+// unhappy — the ordering rule driveHostRootNesting states for the same reason.
+//
+// WEAKER THAN THE DELETE 409 IT TAKES ITS STATUS FROM, and that is worth stating
+// rather than implying. handleDeleteUserDrive's 409 is enforced by POSTGRES (ON
+// DELETE RESTRICT on user_drive_grants.drive_id), so it has no window at all.
+// This one is application-level, between a read and an UNCONDITIONAL
+// UpsertUserDrive: a grant created after the list and before the write is
+// re-homed silently, exactly as it was before this gate existed. Closing that
+// needs the read and the write in ONE transaction, and the Store interface
+// exposes finished operations rather than a tx handle — to PG and to every test
+// double alike — so the real fix is a database-level one and it is 0.7.1. What
+// the gate does close is the case that actually happens: an admin editing a
+// drive that people are already allocated on.
+func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int, msg string, rehomed bool) {
+	drives, err := s.cfg.Store.ListUserDrives(r.Context())
+	if err != nil {
+		return http.StatusInternalServerError, "list user drives: " + err.Error(), false
+	}
+	var before *types.UserDriveListItem
+	for i := range drives {
+		if drives[i].ID == d.ID {
+			before = &drives[i]
+			break
+		}
+	}
+	// A PUT that CREATES (an id no row holds) re-homes nobody, and neither does
+	// one on a drive nothing is allocated from.
+	if before == nil || before.GrantCount == 0 {
+		return 0, "", false
+	}
+	changes := driveIdentityFields(before.UserDrive, d)
+	if len(changes) == 0 {
+		return 0, "", false
+	}
+	// CONFIRMED, and the audit row has to say so: `drive.write` covers a
+	// cosmetic edit and one that moved every allocated member's storage, and
+	// without this flag an auditor cannot tell them apart after the fact.
+	if r.URL.Query().Get("confirm") == driveRehomeConfirm {
+		return 0, "", true
+	}
+	them := "it"
+	if before.GrantCount > 1 {
+		them = "them"
+	}
+	// NAMES AN ACTION ITS READER CAN TAKE. The console has no confirm affordance
+	// — updateDrive PUTs /drives/{id} with no query and the editor renders any
+	// HttpError under SAVE_REFUSED_TITLE — so "re-send with ?confirm=rehome"
+	// read, on the one screen that raises this, as a button an admin could not
+	// find. It says what changes, how many allocations move, and that confirming
+	// is an API act. The console affordance is a mock round's (CONSOLE-RULES
+	// §12): a confirm dialog is new UI and new copy, and the frozen module has
+	// neither.
+	return http.StatusConflict, fmt.Sprintf(
+		"this drive is allocated to %s and this change re-homes %s: %s. Every allocated person's storage object is derived from "+
+			"these fields, so their next run mounts a different object and the one holding their work is left behind with nothing "+
+			"in Wardyn naming it. Confirming is an API action, not a console one: re-send as PUT /drives/{id}?confirm=%s.",
+		pluralDriveSubjects(before.GrantCount), them, strings.Join(changes, ", "), driveRehomeConfirm), false
+}
+
+// pluralDriveSubjects counts a drive's allocations the way the console's
+// ALLOCATED_COUNT does — "1 subject" / "n subjects" — so the wire and the screen
+// count the same things in the same words. ALLOCATIONS, never people: a group
+// allocation is one row and Wardyn holds no directory read, so "14 people" would
+// be a claim rather than a count.
+func pluralDriveSubjects(n int) string {
+	if n == 1 {
+		return "1 subject"
+	}
+	return fmt.Sprintf("%d subjects", n)
 }
 
 // handleDeleteUserDrive removes a drive (204), or 409 when it is still
@@ -624,21 +792,22 @@ func (s *Server) resolveMeUserDrive(r *http.Request) *meUserDrive {
 // an allocation would not help them, and a field folded into user_drive could
 // not have said so.
 //
-// The SAME predicate denyMemberDrive enforces with, keyed the same two ways: an
-// operator is exempt (the door does not apply to them, so it is never reported
-// as shut), and an unassigned member has no profile to carry a door. A ceiling
-// that cannot be resolved reports "" for resolveMeUserDrive's own reason — /me
-// is a display read, and the ENFORCEMENT path answers the same failure with a
-// refusal.
+// It reads driveDoorProfile — the SAME predicate denyMemberDrive enforces with,
+// whose keying (operator exempt, unassigned member has no door) is documented
+// there. A ceiling that cannot be resolved reports "" for resolveMeUserDrive's
+// own reason — /me is a display read, and the ENFORCEMENT path answers the same
+// failure with a refusal. The operator short-circuit stays HERE too, ahead of
+// the resolve: a display read must not cost an operator a ceiling round-trip.
 func (s *Server) userDriveDeniedByProfile(r *http.Request) string {
 	if s.isOperator(r.Context()) {
 		return ""
 	}
 	ceiling, err := s.effectiveCeiling(r.Context())
-	if err != nil || ceiling.Profile == nil || !ceiling.Limits.DenyUserDrive {
+	if err != nil {
 		return ""
 	}
-	return ceiling.Profile.Name
+	name, _ := s.driveDoorProfile(r.Context(), ceiling)
+	return name
 }
 
 // driveRefusal composes a 422 body in the frozen member voice: lowercase

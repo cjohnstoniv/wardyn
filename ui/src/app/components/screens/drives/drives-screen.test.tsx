@@ -16,14 +16,14 @@
 //      `host_path` WITH ITS REASON when no roots are configured (Q3),
 //   4. delete is TWO refusals: a pre-filled, count-bearing one the client can
 //      see, and a COUNT-FREE 409 for the race it cannot,
-//   5. the preview has three arms — a drive, no drive, and a PAUSED winner that
-//      derives no directory and no storage object,
+//   5. the preview has three ANSWERS — a drive, no drive, and a PAUSED winner
+//      that derives no directory and no storage object — and renders the
+//      server's own refusal for everything that is not one,
 //   6. no component in this directory renders a product string of its own.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { expectNoOwnCopy } from "../../../lib/test-fixtures";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
@@ -653,7 +653,7 @@ describe("DrivesScreen — the allocation form's wire shapes", () => {
   });
 });
 
-describe("DrivesScreen — the preview has three arms", () => {
+describe("DrivesScreen — the preview's three answers and its refusals", () => {
   const ask = async (claims = "wardyn.platform") => {
     await screen.findByText(DRIVES.PREVIEW_TITLE);
     await userEvent.type(screen.getByLabelText(PREVIEW.FIELD_CLAIMS), claims);
@@ -713,11 +713,37 @@ describe("DrivesScreen — the preview has three arms", () => {
     expect(result.getByText(DRIVES.PREVIEW_ENFORCEMENT_LABEL)).toBeInTheDocument();
   });
 
-  it("a failed preview is the one honest cause of PREVIEW_RESULT_UNKNOWN", async () => {
+  // A failure with NO BODY — a dropped connection, a thrown TypeError — is the
+  // only thing left that PREVIEW_RESULT_UNKNOWN answers, because it is the only
+  // thing the server did not put a sentence on.
+  it("a bodiless failure is the one remaining cause of PREVIEW_RESULT_UNKNOWN", async () => {
     renderScreen();
     previewDriveMock.mockRejectedValueOnce(new Error("boom"));
     await ask();
     expect(await screen.findByText(GOV.PREVIEW_RESULT_UNKNOWN)).toBeInTheDocument();
+  });
+
+  // THE PANEL RUNS THE LAUNCH'S GATES NOW, so it has real refusals to show —
+  // the governance door's 403 and the launch's 422s. Collapsing every non-2xx
+  // into "couldn't resolve this" threw away the one answer an admin opened the
+  // panel for. Rendered the way drive-editor.tsx already renders a refused
+  // save: the server's message verbatim, no new component and no new string.
+  it("the governance door's 403 renders the server's own sentence", async () => {
+    renderScreen();
+    const denied = 'drive: mounting a user drive is not allowed by your governance profile "Locked down". Launch without drive.';
+    previewDriveMock.mockRejectedValueOnce(new HttpError(403, denied));
+    await ask();
+    expect(await screen.findByText(denied)).toBeInTheDocument();
+    expect(screen.queryByText(GOV.PREVIEW_RESULT_UNKNOWN)).not.toBeInTheDocument();
+  });
+
+  it("a 422 for a home that is not on the share renders the launch's own refusal", async () => {
+    renderScreen();
+    const missing = "drive: directory bob does not exist on the share — ask an admin to create it";
+    previewDriveMock.mockRejectedValueOnce(new HttpError(422, missing));
+    await ask();
+    expect(await screen.findByText(missing)).toBeInTheDocument();
+    expect(screen.queryByText(GOV.PREVIEW_RESULT_UNKNOWN)).not.toBeInTheDocument();
   });
 
   // The drive resolver reads user_subjects POSITIONALLY to pick which claim an
@@ -803,34 +829,12 @@ describe("DrivesScreen — the write gate", () => {
 // modules §7.1 defers to — so a quoted or bare prose string in this source is a
 // canon break, not a style question.
 describe("Drives components render no copy of their own", () => {
-  const FILES = ["drives-screen.tsx", "drive-editor.tsx", "allocations.tsx", "display.tsx"];
-  const DIR = "src/app/components/screens/drives";
-  const source = (f: string) => readFileSync(join(process.cwd(), DIR, f), "utf8");
-
-  const strip = (src: string) =>
-    src
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "")
-      .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
-      .replace(/className=(\{[^{}]*\}|"[^"]*")/g, "")
-      .replace(/\bcn\([^()]*\)/g, "")
-      .replace(/data-testid="[^"]*"/g, "");
-
-  const PROSE = /[A-Za-z]{2,}\s+[A-Za-z]{2,}/;
-
-  it.each(FILES)("%s holds no quoted product prose", (f) => {
-    const quoted = [...strip(source(f)).matchAll(/"([^"\n]*)"|'([^'\n]*)'/g)]
-      .map((m) => m[1] ?? m[2])
-      .filter((s) => PROSE.test(s));
-    expect(quoted).toEqual([]);
-  });
-
-  it.each(FILES)("%s holds no bare JSX text node either", (f) => {
-    const bare = [...strip(source(f)).matchAll(/>([^<>{}\n]{4,})</g)]
-      .map((m) => m[1].trim())
-      .filter((s) => PROSE.test(s));
-    expect(bare).toEqual([]);
-  });
+  expectNoOwnCopy("src/app/components/screens/drives", [
+    "drives-screen.tsx",
+    "drive-editor.tsx",
+    "allocations.tsx",
+    "display.tsx",
+  ]);
 });
 
 // SIZE_MIB / SIZE_GIB / SIZE_NONE through the ONE helper (§5 #10) — never

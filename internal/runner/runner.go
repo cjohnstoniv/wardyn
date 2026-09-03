@@ -67,9 +67,34 @@ type SandboxSpec struct {
 	RunID            uuid.UUID
 	Image            string // resolved agent/workspace OCI image
 	ConfinementClass types.ConfinementClass
-	// Env is non-secret environment. Secrets NEVER pass through here —
-	// they are injected proxy-side or resolved late via the broker.
+	// Env is non-secret environment: every value here is safe to read straight
+	// off the substrate's own object model (a docker container config, a k8s
+	// Pod spec — which any principal with pods/get can read). Credential
+	// material NEVER passes through here; it rides SecretEnv.
 	Env map[string]string
+	// SecretEnv is CREDENTIAL-BEARING environment — the same name=value shape as
+	// Env, delivered to the agent under the same names — split out because a
+	// substrate must be able to deliver it WITHOUT writing the value anywhere an
+	// ordinary reader of that substrate can see it. Two dispatch lanes populate
+	// it (internal/api's resolveEnvSecretGrants, for env_secret grant VALUES,
+	// and applyBedrockTransport, for the resident AWS SigV4 keys / the captured
+	// AWS SSO blob); every other variable a run gets is platform configuration
+	// and stays in Env.
+	//
+	// DISJOINT from Env by construction — dispatch's splitSecretEnv MOVES a key
+	// from one map to the other, never copies — so a driver may concatenate the
+	// two without deduplicating, and no value is ever delivered twice.
+	//
+	// Driver obligations differ because the exposure differs. The k8s driver
+	// MUST route these through the per-run Secret via ValueFrom.SecretKeyRef:
+	// an inline EnvVar.Value is readable by anyone holding pods/get in the runs
+	// namespace, which is the entire reason this field exists (the same reason
+	// the proxy config already travels as a Secret rather than inline). The
+	// docker driver passes them as ordinary container env: a container's config
+	// is readable only through the daemon socket, i.e. by a principal already
+	// root-equivalent on that host — the trust boundary docker's proxyEnv
+	// already documents for the run token.
+	SecretEnv map[string]string
 	// ProxyConfig wires the L0 path: the sandbox's only egress is the
 	// wardyn-proxy sidecar identified here.
 	ProxyConfig ProxyConfig
@@ -136,6 +161,44 @@ type Mount struct {
 	// Set by internal/api dispatch from the run's member-owned workspaces
 	// (memberMountPosture); false — the operator default — everywhere else.
 	MemberAuthored bool `json:"member_authored,omitempty"`
+	// DriveAuthored marks the ONE bind a driver synthesizes from
+	// SandboxSpec.Drive: the host_path user drive's per-person subdirectory.
+	//
+	// IT IS A LABEL, NEVER A GATE — unlike MemberAuthored, which selects which
+	// of a mixed slice of binds the member roots apply to. A drive arrives on
+	// its OWN field (SandboxSpec.Drive), so the driver already knows it is
+	// looking at a drive; the deployment's WARDYN_USER_DRIVE_HOST_ROOTS ceiling
+	// (UserDriveHostRootCheck) therefore runs on EVERY host_path drive
+	// unconditionally, and no check anywhere may be written as `if
+	// m.DriveAuthored`. One was, and it was fail-OPEN by shape: the flag's only
+	// false state is a refactor that stops stamping it, so the check would
+	// vanish exactly when the code around it changed.
+	//
+	// IT NEVER LEAVES THE DRIVER, and never reaches a wire. SandboxSpec.Drive is
+	// a types.DriveMount rather than a Mount precisely so the composer clamp, the
+	// workspace-source allow-list and the k8s blanket host-bind refusal never see
+	// a drive — which also means dispatch puts no Mount carrying this flag into
+	// spec.Mounts, and nothing that serializes a SandboxSpec ever observes it.
+	// The Docker driver builds a local Mount from the DriveMount so the bind
+	// passes through the same value shape every other bind does, stamps this on
+	// it, and converts it to the runtime's own mount type in the next statement.
+	// The json tag is the struct's shape, not a claim that this field is
+	// transmitted; `omitempty` plus "never set outside the driver" means it is
+	// absent from every spec that is.
+	//
+	// So it is DOCUMENTATION IN THE TYPE, kept deliberately (user-drives DESIGN
+	// §3.1(5) and §11 Q3, owner default: a bool, converted to a Kind enum at the
+	// third authoring class). `git grep -n DriveAuthored` is the whole audit: the
+	// declaration, the one assignment, and prose. If a gate ever reads it, that
+	// grep is where the fail-open shows up.
+	//
+	// TWO FLAGS, NOT A Kind ENUM, and this comment is the trigger to change
+	// that: N=2 is below the consolidation threshold and MemberAuthored is
+	// security-critical code, so a THIRD authoring class — anything that adds a
+	// `*Authored bool` beside these two — is the point at which both become one
+	// `Kind` field with a closed set of values, rather than three booleans whose
+	// illegal combinations are only prevented by everyone remembering.
+	DriveAuthored bool `json:"drive_authored,omitempty"`
 }
 
 type ProxyConfig struct {

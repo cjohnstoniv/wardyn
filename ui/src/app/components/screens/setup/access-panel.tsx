@@ -43,7 +43,7 @@ import {
 import { cn } from "../../ui/utils";
 import { Field } from "../../wardyn/form-primitives";
 import { DirectoryCombobox } from "../../wardyn/directory-combobox";
-import { Mono } from "../../wardyn/code-block";
+import { makeMono, Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState } from "../../wardyn/states";
 import { Segmented } from "../permissions";
@@ -54,27 +54,14 @@ import { Segmented } from "../permissions";
 // decides which substrings get the mono treatment, applied uniformly
 // wherever they recur.
 // ------------------------------------------------------------
-const MONO_TERMS = [
+const withMono = makeMono([
   "WARDYN_OIDC_ROLE_MAP",
   "WARDYN_OIDC_OPERATOR_EMAILS",
   "WARDYN_OIDC_DEFAULT_ROLE",
   "WARDYN_OIDC_EMAIL_DOMAINS",
   "WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS",
   "email_verified",
-];
-const MONO_RE = new RegExp(`(${MONO_TERMS.join("|")})`, "g");
-
-function withMono(text: string): React.ReactNode {
-  return text.split(MONO_RE).map((part, i) =>
-    MONO_TERMS.includes(part) ? (
-      <Mono key={i} className="text-inherit">
-        {part}
-      </Mono>
-    ) : (
-      <React.Fragment key={i}>{part}</React.Fragment>
-    ),
-  );
-}
+]);
 
 // The chip/label form of a role, for every place this panel shows one. Takes
 // the WIRE string, not AccessRole: AccessMapping.role and

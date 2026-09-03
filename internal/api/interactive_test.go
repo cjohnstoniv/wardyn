@@ -30,6 +30,10 @@ type fakeRunner struct {
 	execCalls   int
 	createCalls int
 	lastSpec    runner.SandboxSpec
+	// createErr, when set, makes CreateSandbox fail — the driver refusing a
+	// sandbox it cannot bring up. The spec is still recorded, so a test can
+	// assert both what dispatch composed AND what it did not audit afterwards.
+	createErr error
 }
 
 func (f *fakeRunner) Name() string { return "fake" }
@@ -39,6 +43,12 @@ func (f *fakeRunner) Capabilities(context.Context) (runner.Capabilities, error) 
 		Driver:             "fake",
 		ConfinementClasses: []types.ConfinementClass{types.CC1, types.CC2, types.CC3},
 		StructuralEgress:   true,
+		// This double's CreateSandbox accepts any spec, spec.Drive included, so
+		// the declaration has to say so: api.driveIsMountableHere refuses a
+		// drive-carrying run whose runner declares it cannot bind one, and a
+		// double that under-declares would refuse runs its own CreateSandbox
+		// would have served.
+		UserDrives: true,
 	}, nil
 }
 
@@ -47,6 +57,9 @@ func (f *fakeRunner) CreateSandbox(_ context.Context, spec runner.SandboxSpec) (
 	defer f.mu.Unlock()
 	f.createCalls++
 	f.lastSpec = spec
+	if f.createErr != nil {
+		return runner.Sandbox{}, f.createErr
+	}
 	return runner.Sandbox{Ref: "fake-" + spec.RunID.String(), Driver: "fake", EnforcedClass: spec.ConfinementClass}, nil
 }
 

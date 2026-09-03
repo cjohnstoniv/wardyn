@@ -67,6 +67,14 @@ type dockerAPI interface {
 	// ExecResize resizes the PTY of an interactive exec. Used by an attach
 	// Session to honour client window-size changes.
 	ExecResize(ctx context.Context, execID string, options client.ExecResizeOptions) (client.ExecResizeResult, error)
+
+	// VolumeInspect / VolumeCreate back MANAGED user drives (docker_volume):
+	// a per-person named volume, looked up by name and created on first use.
+	// The ONLY volume writes the driver makes — see driver_volumes.go for why
+	// no VolumeRemove sits beside them (reclaim is an operator command in v1,
+	// so nothing here may delete a member's persistent storage).
+	VolumeInspect(ctx context.Context, volumeID string, options client.VolumeInspectOptions) (client.VolumeInspectResult, error)
+	VolumeCreate(ctx context.Context, options client.VolumeCreateOptions) (client.VolumeCreateResult, error)
 }
 
 // the real client must implement our slice.

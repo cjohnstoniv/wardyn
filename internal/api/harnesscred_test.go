@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -77,6 +78,89 @@ func TestReadManagedBlob_DistinguishesStoreErrors(t *testing.T) {
 				t.Fatalf("err = %v, wantErr = %v", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+// TestReadHarnessBlob_InputClasses pins the ONE read discipline both harness
+// lanes share (readHarnessBlob): absent, unparseable, and structurally-unusable
+// blobs must NEVER read as connected, and only a non-ErrNotFound store failure
+// may propagate. The identical class list runs through BOTH readers, so the two
+// lanes cannot silently drift apart again — the drift risk that made a single
+// shared reader worth having. A `usable` predicate weakened to a bare non-empty
+// check, or a parse error swallowed into found=false, fails here.
+func TestReadHarnessBlob_InputClasses(t *testing.T) {
+	goodManaged, _ := json.Marshal(managedCredBlob{Token: "sk-ant-oat01-real-token"})
+	// Whitespace-only: parses, but is not a token. readManagedBlob's shape check
+	// TrimSpaces before deciding.
+	blankManaged, _ := json.Marshal(managedCredBlob{Token: "   "})
+	goodSSO, _ := json.Marshal(awsSSOBlob{
+		AccessToken: "sso-tok", StartURL: "https://d-1.awsapps.com/start", Region: "us-east-1",
+		AccountID: "111122223333", RoleName: "Dev", ExpiresAt: time.Now().Add(time.Hour),
+	})
+	// A half-written capture: a real access token, but list-accounts came up
+	// empty so account/role are missing — awsSSOBlob.valid refuses it, and it
+	// must read as ABSENT rather than pre-empt the host-mode Bedrock lane.
+	partialSSO, _ := json.Marshal(awsSSOBlob{
+		AccessToken: "sso-tok", StartURL: "https://d-1.awsapps.com/start", Region: "us-east-1",
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+
+	readers := []struct {
+		name     string
+		read     func(*Server, context.Context) (bool, error)
+		good     []byte
+		unusable []byte
+	}{
+		{
+			name: "managed",
+			read: func(s *Server, ctx context.Context) (bool, error) {
+				_, ok, err := s.readManagedBlob(ctx, "anthropic")
+				return ok, err
+			},
+			good:     goodManaged,
+			unusable: blankManaged,
+		},
+		{
+			name: "aws-sso",
+			read: func(s *Server, ctx context.Context) (bool, error) {
+				_, ok, err := s.readAWSSSOBlob(ctx)
+				return ok, err
+			},
+			good:     goodSSO,
+			unusable: partialSSO,
+		},
+	}
+
+	h := newHarness(t)
+	for _, r := range readers {
+		classes := []struct {
+			name    string
+			store   secretstore.Store
+			wantOK  bool
+			wantErr bool
+		}{
+			{"nil store is not-connected", nil, false, false},
+			{"absent is not-connected", getErrStore{getErr: secretstore.ErrNotFound}, false, false},
+			{"wrapped absent is not-connected", getErrStore{getErr: fmt.Errorf("pg: %w", secretstore.ErrNotFound)}, false, false},
+			{"decrypt failure propagates", getErrStore{getErr: errors.New("age: no identity matched key")}, false, true},
+			{"backend down propagates", getErrStore{getErr: errors.New("dial tcp: connection refused")}, false, true},
+			{"malformed blob is an error", getErrStore{val: []byte("{not json")}, false, true},
+			{"unusable shape reads as absent", getErrStore{val: r.unusable}, false, false},
+			{"connected", getErrStore{val: r.good}, true, false},
+		}
+		for _, tc := range classes {
+			t.Run(r.name+"/"+tc.name, func(t *testing.T) {
+				cfg := h.srv.cfg
+				cfg.Secrets = tc.store
+				ok, err := r.read(New(cfg), context.Background())
+				if ok != tc.wantOK {
+					t.Fatalf("found = %v, want %v (err %v)", ok, tc.wantOK, err)
+				}
+				if (err != nil) != tc.wantErr {
+					t.Fatalf("err = %v, wantErr = %v", err, tc.wantErr)
+				}
+			})
+		}
 	}
 }
 

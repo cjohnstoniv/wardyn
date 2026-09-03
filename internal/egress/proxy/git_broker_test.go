@@ -22,7 +22,7 @@ import (
 )
 
 // gitBrokerUpstream is one TLS server standing in for BOTH the control-plane mint
-// route and github.com — redirectDial funnels every dial to a single addr, so the
+// route and the forge — redirectDial funnels every dial to a single addr, so the
 // server routes by path: /api/v1/internal/credentials/mint mints a token (counting
 // calls, to prove the per-grant cache), everything else is the git-smart-HTTP
 // upstream (capturing the injected Authorization + rewritten path).
@@ -30,15 +30,19 @@ type gitBrokerUpstream struct {
 	srv       *httptest.Server
 	mu        sync.Mutex
 	mintCalls int
-	gitAuth   string // Authorization the upstream github request carried
+	gitAuth   string // Authorization the upstream forge request carried
 	gitPath   string
 	gitQuery  string
 	gitProto  string
-	gitBody   []byte // body github received (proves byte-for-byte forwarding)
+	gitBody   []byte // body the forge received (proves byte-for-byte forwarding)
 	gitHits   int
 }
 
-func newGitBrokerUpstream(t *testing.T, token string) *gitBrokerUpstream {
+// newBrokerUpstream builds that server with mintJSON as the mint response body.
+// Both broker lanes share it because both mint through the SAME control-plane
+// route and differ only in the credential kind it answers with (github_token vs
+// git_pat) — see newGitBrokerUpstream and newPATBrokerUpstream.
+func newBrokerUpstream(t *testing.T, mintJSON string) *gitBrokerUpstream {
 	t.Helper()
 	u := &gitBrokerUpstream{}
 	u.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -46,9 +50,8 @@ func newGitBrokerUpstream(t *testing.T, token string) *gitBrokerUpstream {
 		defer u.mu.Unlock()
 		if r.URL.Path == "/api/v1/internal/credentials/mint" {
 			u.mintCalls++
-			exp := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"kind":"github_token","token":"`+token+`","username":"x-access-token","jti":"j","expires_at":"`+exp+`"}`)
+			_, _ = io.WriteString(w, mintJSON)
 			return
 		}
 		u.gitHits++
@@ -62,6 +65,13 @@ func newGitBrokerUpstream(t *testing.T, token string) *gitBrokerUpstream {
 	}))
 	t.Cleanup(u.srv.Close)
 	return u
+}
+
+func newGitBrokerUpstream(t *testing.T, token string) *gitBrokerUpstream {
+	t.Helper()
+	exp := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+	return newBrokerUpstream(t,
+		`{"kind":"github_token","token":"`+token+`","username":"x-access-token","jti":"j","expires_at":"`+exp+`"}`)
 }
 
 // newGitBrokerProxyWithSpec is newGitBrokerProxy with the compiled policy

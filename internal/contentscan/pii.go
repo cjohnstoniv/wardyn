@@ -12,8 +12,6 @@ import "regexp"
 // the PII type lives in the Detector name + Category, not the value).
 type piiDetector struct{}
 
-func (piiDetector) Name() string { return "pii" }
-
 // piiRule is a simple regex PII rule; validate optionally rejects a regex match
 // (e.g. Luhn for credit cards) to cut false positives.
 type piiRule struct {

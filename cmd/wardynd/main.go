@@ -251,12 +251,24 @@ func run() error {
 	// approval.decide events now reach file/webhook/syslog sinks, not just Postgres.
 	approvals := &approvalService{st: approvalStore{PG: store.NewPG(pool), rec: maskedRec}}
 
+	// Member local_dir + user-drive mount ceilings (the section-(c) ceiling and
+	// its one-level-up sibling). Parsed at boot so a malformed root fails closed
+	// here rather than at a member's first onboarding. O4: a root of "/" or
+	// $HOME is permitted but WARNED about, matching the LocalMode
+	// unspecified-bind warn precedent. AHEAD OF THE RUNNER because the drive
+	// roots are substrate config — the docker driver re-checks a host_path
+	// drive's resolved real path against them at bind time.
+	memberMounts, driveHostRoots, err := parseMountCeilings(f)
+	if err != nil {
+		return err
+	}
+
 	// Runner (optional): "none" or a self-registered substrate (the docker
 	// substrate registers itself only under the "docker" build tag), with
 	// fail-closed confinement pins. The pg-backed RefStore makes the
 	// orchestrator's ref->substrate routing (and thus the kill switch) durable
 	// across control-plane restarts.
-	run, runnerTarget, err := buildRunnerFromFlags(f, store.NewPG(pool))
+	run, runnerTarget, err := buildRunnerFromFlags(f, store.NewPG(pool), driveHostRoots)
 	if err != nil {
 		return err
 	}
@@ -317,17 +329,6 @@ func run() error {
 	// RESOLVED local-mode fact — local mode auto-enables, so the raw flag is not
 	// the answer — and feats.authn is the resolved "OIDC is configured" one.
 	if err := validateMemberModePosture(*f.memberMode, lm.enabled, feats.authn != nil); err != nil {
-		return err
-	}
-
-	// Member local_dir mount posture (the section-(c) ceiling). Parsed at boot so
-	// a malformed root fails closed here rather than at a member's first
-	// onboarding. O4: a root of "/" or $HOME is permitted but WARNED about,
-	// matching the LocalMode unspecified-bind warn precedent — refusing it would
-	// be safer, warning is what the surrounding code already does for a posture
-	// the operator may have chosen deliberately.
-	memberMounts, driveHostRoots, err := parseMountCeilings(f)
-	if err != nil {
 		return err
 	}
 

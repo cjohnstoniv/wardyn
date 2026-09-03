@@ -125,7 +125,6 @@ type Span struct {
 // safe for concurrent use (the engine is shared across the proxy's request
 // handlers) and must never place raw matched bytes into a Finding.
 type Detector interface {
-	Name() string
 	Scan(span Span, dst *[]Finding)
 }
 

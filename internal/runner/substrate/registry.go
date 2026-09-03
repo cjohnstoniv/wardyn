@@ -20,6 +20,16 @@ type Deps struct {
 	// ConfinementRuntimes are the operator's fail-closed per-class runtime pins
 	// (WARDYN_CONFINEMENT_MAP); nil = the substrate's built-in defaults.
 	ConfinementRuntimes map[types.ConfinementClass]string
+	// UserDriveHostRoots is the deployment's WARDYN_USER_DRIVE_HOST_ROOTS
+	// ceiling over host_path user drives, parsed at boot
+	// (runner.ParseUserDriveHostRoots) and passed here rather than re-read from
+	// the env by each substrate: the flag has an env pair, so a substrate
+	// reading os.Getenv would silently ignore an operator who set the FLAG, and
+	// a ceiling one half of the process disagrees about is not a ceiling.
+	//
+	// nil (the default) refuses every host_path drive. A substrate with no
+	// host-path drive backend at all (Kubernetes) ignores it.
+	UserDriveHostRoots []string
 }
 
 // Constructor builds a Substrate from Deps.

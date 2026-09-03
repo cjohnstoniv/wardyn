@@ -46,6 +46,8 @@ head_() { printf '\n\033[1;35m── %s\033[0m\n' "$*"; }
 # that reaches the artifact check without wardyn_ffmpeg reports "no audio" over a
 # take that has audio.
 command -v wardyn_ffmpeg >/dev/null || bad "scripts/lib/common.sh did not load — wardyn_ffmpeg is missing"
+# grade_py, the shared grader runner every python block below goes through, is
+# scripts/lib/verify-demo-take-grade.sh — sourced by the loop above.
 
 # The autonomous episode's checks (new 08 — the legacy walkthrough's act 5), exactly as this script has
 # always run them, now behind a name so the dispatch below can pick them.
@@ -226,9 +228,9 @@ fi
 check_video_02_workspace() {
 head_ "Video 02 · the workspace"
 WS_JSON=$(curl -fsS "http://localhost:${WARDYN_UP_PORT:-8080}/api/v1/workspaces" 2>/dev/null || echo '[]')
-python3 - "$WS_JSON" <<'PYEOF'
+python3 /dev/fd/3 3<<'PYEOF' <<<"${WS_JSON}"
 import sys, json
-d = json.loads(sys.argv[1]); items = d if isinstance(d, list) else d.get("items", d.get("workspaces", []))
+d = json.loads(sys.stdin.read()); items = d if isinstance(d, list) else d.get("items", d.get("workspaces", []))
 ws = next((w for w in items if w.get("name") == "slugify"), None)
 assert ws, "no slugify workspace — beat 2 never landed"
 mounts = ws.get("mounts") or ws.get("workspace_mounts") or []
@@ -241,8 +243,26 @@ NAMES=$(curl -fsS "http://localhost:${WARDYN_UP_PORT:-8080}/api/v1/secrets" 2>/d
 grep -qx "deploy-webhook-token" <<<"${NAMES}" && ok "deploy-webhook-token stored" || bad "secret missing — beat 4 never saved"
 # The canary must not appear in the audit trail (a write-only store that logs
 # the value would be the leak the video denies).
+#
+# THE FEED IS ASSERTED BEFORE THE GREP, the two steps V00's leak check already
+# takes and for exactly the same reason: `curl … || true` hands a down stack, a
+# wrong port and a 500 the SAME empty body that a clean feed's grep misses on, so
+# "the canary appears nowhere" was this arm's verdict over no evidence at all —
+# a green leak check on a stack that answered nothing. Counting the rows first
+# makes the absence mean something.
 AUD=$(curl -fsS "http://localhost:${WARDYN_UP_PORT:-8080}/api/v1/audit?limit=500" 2>/dev/null || true)
-grep -q "WARDYN-V04-CANARY" <<<"${AUD}" && bad "the canary VALUE appears in the audit trail" || ok "canary value nowhere in the audit trail"
+AUD_N=$(printf '%s' "${AUD}" | python3 -c 'import json,sys
+try: d = json.loads(sys.stdin.read())
+except Exception: d = []
+ev = d if isinstance(d, list) else d.get("events") or d.get("items") or []
+print(len(ev))' 2>/dev/null || echo 0)
+if [[ "${AUD_N:-0}" -le 0 ]]; then
+  bad "the audit feed came back empty — the canary leak check proved nothing (is the stack up on :${WARDYN_UP_PORT:-8080}?)"
+elif grep -q "WARDYN-V04-CANARY" <<<"${AUD}"; then
+  bad "the canary VALUE appears in the audit trail"
+else
+  ok "canary value nowhere in the audit trail (${AUD_N} rows read)"
+fi
 }
 
 # --- video 03: your first run ---------------------------------------------------
@@ -252,10 +272,10 @@ check_video_03_first_run() {
 head_ "Video 03 · the run"
 V03_TITLE="${WARDYN_DEMO_V06_TITLE:-Take inventory — first governed run}"
 RUNS=$(curl -fsS "http://localhost:${WARDYN_UP_PORT:-8080}/api/v1/runs" 2>/dev/null || echo '[]')
-STATE=$(python3 - "$RUNS" "$V03_TITLE" <<'PYEOF'
+STATE=$(python3 /dev/fd/3 "$V03_TITLE" 3<<'PYEOF' <<<"${RUNS}"
 import sys, json
-d = json.loads(sys.argv[1]); rs = d if isinstance(d, list) else d.get("items", d.get("runs", []))
-m = [r for r in rs if r.get("title") == sys.argv[2]]
+d = json.loads(sys.stdin.read()); rs = d if isinstance(d, list) else d.get("items", d.get("runs", []))
+m = [r for r in rs if r.get("title") == sys.argv[1]]
 print(m[0]["state"] if m else "MISSING")
 PYEOF
 )
@@ -282,15 +302,17 @@ V06_WSJ=$(curl -fsS "${V06_API}/api/v1/workspaces" 2>/dev/null || echo '[]')
 V06_POLJ=$(curl -fsS "${V06_API}/api/v1/policies" 2>/dev/null || echo '[]')
 # A temp file, NOT a pipe: `| while read` runs in a subshell and ok()/bad()
 # would increment counters that vanish — the bug class this script exists for.
-python3 - "$V06_WSJ" "$V06_POLJ" "$V06_WS" "$V06_KEY" "$V06_POLICY" <<'PYEOF' > /tmp/_demo_v06.$$ 2>/dev/null
+grade_py /tmp/_demo_v06.$$ "V06 · the recorded session" "$V06_WS" "$V06_KEY" "$V06_POLICY" \
+  3<<'PYEOF' < <(printf '%s\0' "${V06_WSJ}" "${V06_POLJ}")
 import sys, json
-def items(raw):
-    try: d = json.loads(raw)
+feeds = sys.stdin.buffer.read().split(b"\0")
+def items(i):
+    try: d = json.loads(feeds[i])
     except Exception: return []
     if isinstance(d, list): return d
     return d.get("items") or d.get("workspaces") or d.get("policies") or []
-ws_all, pol_all = items(sys.argv[1]), items(sys.argv[2])
-name, key, policy = sys.argv[3], sys.argv[4], sys.argv[5]
+ws_all, pol_all = items(0), items(1)
+name, key, policy = sys.argv[1], sys.argv[2], sys.argv[3]
 ws = next((w for w in ws_all if w.get("name") == name), None)
 print("V06_WS_EXISTS", bool(ws))
 rr = (ws or {}).get("record_results") or {}
@@ -360,9 +382,10 @@ if [[ "${V06_REPLAY}" == "-" ]]; then
 else
   ok "replay run ${V06_REPLAY}"
   V06_AUD=$(curl -fsS "${V06_API}/api/v1/audit?run_id=${V06_REPLAY}&limit=1000" 2>/dev/null || echo '[]')
-  python3 - "$V06_AUD" <<'PYEOF' > /tmp/_demo_v06b.$$ 2>/dev/null
+  grade_py /tmp/_demo_v06b.$$ "V06 · the clean replay" \
+    3<<'PYEOF' < <(printf '%s\0' "${V06_AUD}")
 import sys, json
-try: d = json.loads(sys.argv[1])
+try: d = json.loads(sys.stdin.buffer.read().split(b"\0")[0])
 except Exception: d = []
 ev = d if isinstance(d, list) else d.get("events") or d.get("items") or []
 def hits(host, *actions):
@@ -409,12 +432,13 @@ V07_HELD="example.org"
 V07_TELE="ingest.sentry.io"
 V07_PROOF_TITLE="${WARDYN_DEMO_V07_PROOF_TITLE:-Same host, no approval}"
 V07_DEC=$(curl -fsS "${V07_API}/api/v1/audit?action=approval.decide&limit=1000" 2>/dev/null || echo '[]')
-python3 - "$V07_DEC" "$V07_HELD" "$V07_TELE" <<'PYEOF' > /tmp/_demo_v07.$$ 2>/dev/null
+grade_py /tmp/_demo_v07.$$ "V07 · the decisions" "$V07_HELD" "$V07_TELE" \
+  3<<'PYEOF' < <(printf '%s\0' "${V07_DEC}")
 import sys, json
-try: d = json.loads(sys.argv[1])
+try: d = json.loads(sys.stdin.buffer.read().split(b"\0")[0])
 except Exception: d = []
 ev = d if isinstance(d, list) else d.get("events") or d.get("items") or []
-held, tele = sys.argv[2], sys.argv[3]
+held, tele = sys.argv[1], sys.argv[2]
 # approval.decide carries the host at the TOP level of data (approval.go lifts it
 # out of requested_scope) plus the raw decision_scope: "" means "no scope
 # recorded", which Normalize() reads as today's default, run.
@@ -447,12 +471,13 @@ rm -f /tmp/_demo_v07.$$
 
 head_ "Video 07 · the receipt on ${V07_WS}"
 V07_WSJ=$(curl -fsS "${V07_API}/api/v1/workspaces" 2>/dev/null || echo '[]')
-python3 - "$V07_WSJ" "$V07_WS" "$V07_HELD" "$V07_TELE" <<'PYEOF' > /tmp/_demo_v07b.$$ 2>/dev/null
+grade_py /tmp/_demo_v07b.$$ "V07 · the receipt" "$V07_WS" "$V07_HELD" "$V07_TELE" \
+  3<<'PYEOF' < <(printf '%s\0' "${V07_WSJ}")
 import sys, json
-try: d = json.loads(sys.argv[1])
+try: d = json.loads(sys.stdin.buffer.read().split(b"\0")[0])
 except Exception: d = []
 ws_all = d if isinstance(d, list) else d.get("items") or d.get("workspaces") or []
-name, held, tele = sys.argv[2], sys.argv[3], sys.argv[4]
+name, held, tele = sys.argv[1], sys.argv[2], sys.argv[3]
 ws = next((w for w in ws_all if w.get("name") == name), None)
 print("V07_WS_EXISTS", bool(ws))
 appr = set((ws or {}).get("approved_egress") or [])
@@ -477,12 +502,12 @@ rm -f /tmp/_demo_v07b.$$
 
 head_ "Video 07 · the run that never had to ask"
 V07_RUNS=$(curl -fsS "${V07_API}/api/v1/runs" 2>/dev/null || echo '[]')
-V07_PROOF=$(python3 - "$V07_RUNS" "$V07_PROOF_TITLE" <<'PYEOF'
+V07_PROOF=$(python3 /dev/fd/3 "$V07_PROOF_TITLE" 3<<'PYEOF' <<<"${V07_RUNS}"
 import sys, json
-try: d = json.loads(sys.argv[1])
+try: d = json.loads(sys.stdin.read())
 except Exception: d = []
 rs = d if isinstance(d, list) else d.get("items") or d.get("runs") or []
-m = [r for r in rs if (r.get("title") or "").strip() == sys.argv[2]]
+m = [r for r in rs if (r.get("title") or "").strip() == sys.argv[1]]
 print(m[0]["id"] if m else "-")
 PYEOF
 )
@@ -491,12 +516,13 @@ if [[ "${V07_PROOF}" == "-" || -z "${V07_PROOF}" ]]; then
 else
   ok "proof run ${V07_PROOF}"
   V07_AUD=$(curl -fsS "${V07_API}/api/v1/audit?run_id=${V07_PROOF}&limit=1000" 2>/dev/null || echo '[]')
-  python3 - "$V07_AUD" "$V07_HELD" <<'PYEOF' > /tmp/_demo_v07c.$$ 2>/dev/null
+  grade_py /tmp/_demo_v07c.$$ "V07 · the run that never had to ask" "$V07_HELD" \
+    3<<'PYEOF' < <(printf '%s\0' "${V07_AUD}")
 import sys, json
-try: d = json.loads(sys.argv[1])
+try: d = json.loads(sys.stdin.buffer.read().split(b"\0")[0])
 except Exception: d = []
 ev = d if isinstance(d, list) else d.get("events") or d.get("items") or []
-host = sys.argv[2]
+host = sys.argv[1]
 def acts(*names):
     return [e for e in ev
             if e.get("action") in names
@@ -560,7 +586,10 @@ fi
 
 # A temp file, NOT a pipe: `| while read` runs in a subshell and ok()/bad()
 # would increment counters that vanish — the bug class this script exists for.
-python3 - "${V09_OUT}/run.json" "${V09_OUT}/audit.json" "${V09_TASK}" <<'PYEOF' > /tmp/_demo_v09.$$ 2>/dev/null
+# FILE PATHS, so no E2BIG here — but the same "grades nothing when it cannot
+# run" shape, so it goes through grade_py too.
+grade_py /tmp/_demo_v09.$$ "V09 · the CI artifacts" \
+  "${V09_OUT}/run.json" "${V09_OUT}/audit.json" "${V09_TASK}" 3<<'PYEOF' </dev/null
 import sys, json
 def load(p):
     try:
@@ -673,13 +702,15 @@ V10_AUD=$(curl -fsS "${V10_API}/api/v1/audit?run_id=${V10_RUN}&limit=1000" 2>/de
 
 # A temp file, NOT a pipe: `| while read` runs in a subshell and ok()/bad()
 # would increment counters that vanish — the bug class this script exists for.
-python3 - "$V10_RUNJ" "$V10_ME" "$V10_AUD" "$V10_RUN" <<'PYEOF' > /tmp/_demo_v10.$$ 2>/dev/null
+grade_py /tmp/_demo_v10.$$ "V10 · the run the terminals attacked" "$V10_RUN" \
+  3<<'PYEOF' < <(printf '%s\0' "${V10_RUNJ}" "${V10_ME}" "${V10_AUD}")
 import sys, json
-def load(s):
-    try: return json.loads(s)
+feeds = sys.stdin.buffer.read().split(b"\0")
+def load(i):
+    try: return json.loads(feeds[i])
     except Exception: return {}
-run, me = load(sys.argv[1]), load(sys.argv[2])
-d = load(sys.argv[3]); run_id = sys.argv[4]
+run, me = load(0), load(1)
+d = load(2); run_id = sys.argv[1]
 ev = d if isinstance(d, list) else (d or {}).get("events") or (d or {}).get("items") or []
 owner = run.get("created_by") or "-"
 print("V10_OWNER", owner)
@@ -803,8 +834,8 @@ case "${WARDYN_DEMO_VIDEO:-}" in
   03c) check_video_03c ;;
   03d) check_video_03d ;;
   02|05|07) "check_video_floor_${WARDYN_DEMO_VIDEO}" ;;   # cue floors (H-6); content arms still owed
-  02b|02c|04b|04c|12b) "check_video_${WARDYN_DEMO_VIDEO}" ;;  # optionals: stubs that FAIL until their lane ships rows
-  *) head_ "Video ${WARDYN_DEMO_VIDEO}"; bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 01..13 or a lettered sub-episode such as 03a, or unset for the walkthrough" ;;
+  00|02b|02c|04b|04c|04d|12b) "check_video_${WARDYN_DEMO_VIDEO}" ;;  # optionals + the 0.7 additions, each in its own scripts/lib arm
+  *) head_ "Video ${WARDYN_DEMO_VIDEO}"; bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 00..13 or a lettered sub-episode such as 03a or 04d, or unset for the walkthrough" ;;
 esac
 
 # --- shared: every take, every video -----------------------------------------
