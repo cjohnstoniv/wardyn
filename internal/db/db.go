@@ -229,6 +229,17 @@ func migrateOn(ctx context.Context, db migrationExecutor) error {
 		return fmt.Errorf("db: ensure schema_migrations: %w", err)
 	}
 
+	// Read the operator's ENABLE ALWAYS hardening BEFORE anything runs. Every
+	// migration that (re)defines an audit trigger does so with DROP TRIGGER IF
+	// EXISTS + CREATE TRIGGER, and CREATE TRIGGER always yields tgenabled='O' —
+	// so the loop below, and the trigger-restore replay inside
+	// ensureAuditTriggers, both silently revert 'A' back to 'O'. This is the
+	// WRITE side of the invariant auditTriggerNames states on the READ side.
+	hardened, err := auditAlwaysTriggers(ctx, db)
+	if err != nil {
+		return err
+	}
+
 	entries, err := migrationFS.ReadDir("migrations")
 	if err != nil {
 		return fmt.Errorf("db: read migrations dir: %w", err)
@@ -267,7 +278,84 @@ func migrateOn(ctx context.Context, db migrationExecutor) error {
 		}
 		slog.InfoContext(ctx, "db: applied migration", slog.String("file", name), slog.Duration("elapsed", time.Since(start)))
 	}
-	return ensureAuditTriggers(ctx, db)
+	if err := ensureAuditTriggers(ctx, db); err != nil {
+		return err
+	}
+	// AFTER ensureAuditTriggers, not just after the loop: its restore path
+	// replays the trigger-defining migrations, which re-creates the trigger as
+	// plain 'O' for exactly the same reason the loop does.
+	restoreAlwaysTriggers(ctx, db, hardened)
+	return nil
+}
+
+// auditAlwaysTriggers returns the audit_events triggers an operator has hardened
+// with ALTER TABLE ... ENABLE ALWAYS TRIGGER (pg_trigger.tgenabled = 'A'), or
+// nil when the table does not exist yet (a database mid-bootstrap has none).
+func auditAlwaysTriggers(ctx context.Context, db migrationExecutor) ([]string, error) {
+	var exists bool
+	if err := db.QueryRow(ctx, `SELECT to_regclass('audit_events') IS NOT NULL`).Scan(&exists); err != nil {
+		return nil, fmt.Errorf("db: look up audit_events: %w", err)
+	}
+	if !exists {
+		return nil, nil
+	}
+	var names []string
+	if err := db.QueryRow(ctx, `
+		SELECT COALESCE(array_agg(tgname::text ORDER BY tgname), ARRAY[]::text[])
+		FROM pg_trigger
+		WHERE tgrelid = 'audit_events'::regclass AND NOT tgisinternal AND tgenabled = 'A'`,
+	).Scan(&names); err != nil {
+		return nil, fmt.Errorf("db: read hardened audit_events triggers: %w", err)
+	}
+	return names, nil
+}
+
+// restoreAlwaysTriggers re-applies ENABLE ALWAYS to each trigger in want that is
+// no longer 'A'. docs/OPERATIONS.md promises a hardened trigger is left "exactly
+// as it is"; auditTriggerNames keeps that promise on the READ side by counting
+// 'A' as firing, and this keeps it on the WRITE side, for the whole of Migrate.
+// Without it the promise held only for a database with nothing left to apply:
+// a 0.6.x deployment that had hardened the chain trigger lost the hardening the
+// moment it upgraded, with nothing logged, and the next boot then read the
+// resulting 'O' as the normal shipped state.
+//
+// Idempotent, and deliberately narrow: it re-reads the catalog and issues the
+// ALTER only for a trigger that WAS 'A' and is not any more, so a run with
+// nothing pending — or on a deployment that never hardened anything — touches
+// nothing at all. A trigger nobody hardened is never promoted to 'A' by this.
+//
+// A failure is logged, not returned. Refusing the boot would not save the
+// hardening: the migrations have already been applied and re-recorded, so the
+// NEXT boot's capture reads the reverted 'O' and has nothing left to restore.
+// An ERROR line naming the exact statement to re-run is the honest outcome, and
+// it keeps the "never continue silently" property that ensureAuditTriggers has.
+func restoreAlwaysTriggers(ctx context.Context, db migrationExecutor, want []string) {
+	if len(want) == 0 {
+		return
+	}
+	still, err := auditAlwaysTriggers(ctx, db)
+	if err != nil {
+		slog.ErrorContext(ctx, "db: cannot tell whether the migration loop reverted an ENABLE ALWAYS audit trigger; re-check pg_trigger.tgenabled by hand",
+			slog.Any("error", err), slog.Any("hardened_before", want))
+		return
+	}
+	always := make(map[string]bool, len(still))
+	for _, n := range still {
+		always[n] = true
+	}
+	for _, name := range want {
+		if always[name] {
+			continue // untouched by this run; nothing to re-apply
+		}
+		stmt := `ALTER TABLE audit_events ENABLE ALWAYS TRIGGER ` + pgx.Identifier{name}.Sanitize()
+		if _, err := db.Exec(ctx, stmt); err != nil {
+			slog.ErrorContext(ctx, "db: a migration reverted this trigger's ENABLE ALWAYS hardening and it could NOT be re-applied; it now fires only for ordinary writes, not under session_replication_role = replica — re-apply it by hand",
+				slog.String("trigger", name), slog.String("statement", stmt), slog.Any("error", err))
+			continue
+		}
+		slog.WarnContext(ctx, "db: re-applied the ENABLE ALWAYS hardening a migration reverted on an audit_events trigger",
+			slog.String("trigger", name))
+	}
 }
 
 // auditChainTrigger is the BEFORE INSERT trigger that hash-chains audit_events
@@ -344,6 +432,13 @@ func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
 // trigger would have made Migrate refuse the boot outright — bricking the
 // upgrade of the most careful deployments. 'D' (disabled) and 'R' (replica-only,
 // which does NOT fire for ordinary writes) stay absent, correctly.
+//
+// This is only the READ half of what 'A' means. Reading it as firing is not
+// enough on its own: every migration that (re)defines an audit trigger ends in
+// CREATE TRIGGER, which always yields 'O', so the migration loop reverted the
+// hardening this function is careful not to punish. restoreAlwaysTriggers is the
+// WRITE half, and the two must keep agreeing — 'A' is a hardening to be
+// preserved, never a deviation to be normalised.
 func auditTriggerNames(ctx context.Context, db migrationExecutor) (map[string]bool, error) {
 	var exists bool
 	if err := db.QueryRow(ctx, `SELECT to_regclass('audit_events') IS NOT NULL`).Scan(&exists); err != nil {

@@ -131,9 +131,17 @@ process no longer continues silently on a table whose guards are gone.
 A trigger you have hardened with `ALTER TABLE … ENABLE ALWAYS TRIGGER`
 (`tgenabled='A'`, so it fires even under `session_replication_role = replica` —
 the bypass the sweep otherwise only catches after the fact) is left **exactly as
-it is**: the boot check counts `'A'` as firing, never re-creates it as plain
-`'O'`, and never refuses over it. `'D'` (disabled) and `'R'` (replica-only, which
-does not fire for ordinary writes) are correctly read as not in force.
+it is**, and that holds across an upgrade, not just across a restart. The boot
+check counts `'A'` as firing, never re-creates it as plain `'O'`, and never
+refuses over it. `Migrate` reads which triggers are hardened *before* it applies
+anything and re-applies `ENABLE ALWAYS` to any the run reverted: every migration
+that redefines an audit trigger ends in `CREATE TRIGGER`, which always yields
+`'O'`, so without that the 0.7 upgrade would have quietly stripped the hardening
+off a 0.6.x deployment that had installed it. The restore is narrow — a trigger
+you never hardened is never promoted to `'A'` on your behalf — and if it cannot
+be re-applied the boot log says so at ERROR and names the statement to run.
+`'D'` (disabled) and `'R'` (replica-only, which does not fire for ordinary
+writes) are correctly read as not in force.
 
 Completeness survives an outage too. When a Postgres write fails, the event is
 not dropped: it is fsync'd, one JSON line at a time, to a local append-only spool

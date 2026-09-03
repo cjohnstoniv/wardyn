@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -434,5 +435,131 @@ func TestMigrateLeavesAnAlwaysTriggerAlone(t *testing.T) {
 				t.Errorf("tgenabled = %q after Migrate, want 'A' — the boot check reverted an operator's ENABLE ALWAYS hardening", got)
 			}
 		})
+	}
+}
+
+// chainTriggerMigrations returns the migration filenames that define the chain
+// trigger — the same content predicate replayTriggerMigrations uses, so the
+// test cannot drift from the set the production code replays.
+func chainTriggerMigrations(t *testing.T) []string {
+	t.Helper()
+	entries, err := migrationFS.ReadDir("migrations")
+	if err != nil {
+		t.Fatalf("read migrations dir: %v", err)
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
+			continue
+		}
+		body, err := migrationFS.ReadFile("migrations/" + e.Name())
+		if err != nil {
+			t.Fatalf("read migration %s: %v", e.Name(), err)
+		}
+		if strings.Contains(string(body), "TRIGGER "+auditChainTrigger) {
+			names = append(names, e.Name())
+		}
+	}
+	if len(names) == 0 {
+		t.Fatal("no migration defines the chain trigger")
+	}
+	sort.Strings(names)
+	return names
+}
+
+// unapplyMigrations deletes the given filenames from schema_migrations so the
+// next Migrate re-runs them, exactly as a 0.6.x database that never saw them
+// would. The rows are put back by the Migrate under test (it re-records what it
+// applies), and the cleanup restores any the test did not reach.
+func unapplyMigrations(t *testing.T, pool *pgxpool.Pool, names []string) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `DELETE FROM schema_migrations WHERE filename = ANY($1)`, names); err != nil {
+		t.Fatalf("un-apply %v: %v", names, err)
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(),
+			`INSERT INTO schema_migrations (filename) SELECT unnest($1::text[]) ON CONFLICT DO NOTHING`, names); err != nil {
+			t.Errorf("re-record %v in schema_migrations: %v", names, err)
+		}
+	})
+}
+
+// TestMigrateKeepsAnAlwaysTriggerAcrossAnUpgrade is the arm
+// TestMigrateLeavesAnAlwaysTriggerAlone structurally cannot reach: that test
+// calls Migrate on an ALREADY fully-migrated database, where every migration is
+// skipped and only ensureAuditTriggers runs — so it exercises the half that
+// honours 'A' and never the migration loop that reverted it.
+//
+// The real upgrade path is a 0.6.x deployment that had hardened the chain
+// trigger and then applies the 0.7 migrations that redefine it. Each of those
+// ends in DROP TRIGGER IF EXISTS + CREATE TRIGGER, and CREATE TRIGGER always
+// yields tgenabled='O', so the operator's hardening was removed with nothing
+// logged — and the boot check that follows read the resulting 'O' as the normal
+// shipped state. docs/OPERATIONS.md promises this never happens.
+func TestMigrateKeepsAnAlwaysTriggerAcrossAnUpgrade(t *testing.T) {
+	pool := pgPool(t)
+	ctx := context.Background()
+	pending := chainTriggerMigrations(t)
+
+	if _, err := pool.Exec(ctx, `ALTER TABLE audit_events ENABLE ALWAYS TRIGGER `+auditChainTrigger); err != nil {
+		t.Skipf("cannot ENABLE ALWAYS as this role (%v); the test needs table ownership", err)
+	}
+	t.Cleanup(func() {
+		// Back to the shipped state for every later test in the run.
+		if _, err := pool.Exec(context.Background(), `ALTER TABLE audit_events ENABLE TRIGGER `+auditChainTrigger); err != nil {
+			t.Errorf("restore %s to 'O': %v", auditChainTrigger, err)
+		}
+	})
+	if got := auditTriggerState(t, pool, auditChainTrigger); got != "A" {
+		t.Fatalf("precondition: tgenabled = %q after ENABLE ALWAYS, want 'A'", got)
+	}
+
+	unapplyMigrations(t, pool, pending) // simulate the 0.6.x -> 0.7 upgrade
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate applying %v over a hardened trigger: %v", pending, err)
+	}
+	if got := auditTriggerState(t, pool, auditChainTrigger); got != "A" {
+		t.Fatalf("tgenabled = %q after applying %v, want 'A' — the upgrade silently reverted the operator's "+
+			"ENABLE ALWAYS hardening on the chain trigger, which docs/OPERATIONS.md promises is left exactly as it is",
+			got, pending)
+	}
+
+	// Idempotent: a second Migrate with nothing pending must leave 'A' alone
+	// (and must not thrash the catalog re-applying an ALTER that is not needed).
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("second Migrate: %v", err)
+	}
+	if got := auditTriggerState(t, pool, auditChainTrigger); got != "A" {
+		t.Errorf("tgenabled = %q after a no-op Migrate, want 'A'", got)
+	}
+}
+
+// TestMigrateDoesNotHardenATriggerNobodyHardened is the other direction of the
+// same guard: the restore must fire ONLY for a trigger the operator had set to
+// 'A' before the loop ran. A deployment that never hardened anything must come
+// out of the same upgrade with plain 'O' — promoting a shipped trigger to ALWAYS
+// on its owner's behalf would be its own surprise (an ALWAYS trigger fires under
+// session_replication_role = replica, which is exactly what a restore/replication
+// tool sets to load rows).
+func TestMigrateDoesNotHardenATriggerNobodyHardened(t *testing.T) {
+	pool := pgPool(t)
+	ctx := context.Background()
+	pending := chainTriggerMigrations(t)
+
+	for _, name := range append([]string{auditChainTrigger}, auditAppendOnlyTriggers...) {
+		if got := auditTriggerState(t, pool, name); got != "O" {
+			t.Fatalf("precondition: %s is %q, want the shipped 'O' — another test left the table hardened", name, got)
+		}
+	}
+
+	unapplyMigrations(t, pool, pending)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate applying %v: %v", pending, err)
+	}
+	for _, name := range append([]string{auditChainTrigger}, auditAppendOnlyTriggers...) {
+		if got := auditTriggerState(t, pool, name); got != "O" {
+			t.Errorf("%s is %q after Migrate, want 'O' — the hardening restore fired on a trigger nobody hardened", name, got)
+		}
 	}
 }
