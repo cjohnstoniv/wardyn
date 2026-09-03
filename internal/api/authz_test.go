@@ -678,6 +678,18 @@ func TestAuthzMatrix(t *testing.T) {
 // Same probe doctrine as TestAuthzMatrix: a non-401/403 status is a pass (the
 // handler ran and answered on its own merits — a 4xx for the deliberately
 // bogus "x1" path id or the empty body is expected and irrelevant here).
+//
+// AND THAT DOCTRINE IS WHERE THIS TEST STOPS. "x1" is not a UUID, so on every
+// {id}-bearing route parseIDParam 400s before the handler's own authorization
+// runs: what is pinned here is the ROUTER GATE, never what the tier can then
+// reach. A route sitting on the right tier is not evidence that the handler
+// behind it respects ownership — which is exactly how a route can be gated
+// perfectly consistently onto the wrong tier with nothing to notice.
+// TestSecurityAdminOnForeignWorkspace (security_admin_workspace_test.go) is the
+// compensating arm for the workspace-scoped members of this set: it seeds a
+// real, foreign, member-owned workspace and asserts what each handler does with
+// it, deriving the route set from this same table so a re-tiering changes its
+// coverage without an edit.
 func TestSecurityAdminRouteTier(t *testing.T) {
 	srv, _, _, _ := newAuthzMatrixServer(t)
 	secSess := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
