@@ -169,6 +169,23 @@ func (s *Server) routes() chi.Router {
 			// (security_admin_test.go) — a capability kind that ever widens
 			// isOperator breaks that test, not this comment.
 			//
+			// WHY THE OPERATOR-TOPOLOGY READS ARE NOT HERE (asked and decided in
+			// R1, recorded so it is not re-litigated). GET /site-config,
+			// /sources, /sources/{id} and /base-images were member-readable and
+			// are now operatorOnly, not securityOps. The tier argument for
+			// widening them is real — a security admin holds the org
+			// allow/denylist, so scm_hosts is arguably theirs — but it does not
+			// survive what those documents actually carry: an upstream-proxy
+			// PASSWORD ref, a database-password requirement key, and the
+			// /srv NFS path of a local_dir source. That is credential material
+			// and the host, two of the three axes this tier is DEFINED never to
+			// reach. The scm_hosts case is an argument for a SCOPED endpoint
+			// returning that one field, never for handing over a document that
+			// also carries a proxy password — and such an endpoint has no caller
+			// today (the console has no client for /sources or /base-images at
+			// all, and both /site-config callers already tolerate a null), so it
+			// is not built on spec.
+			//
 			// Stored-policy WRITES (POST/PUT/DELETE /policies) stay on
 			// operatorOnly for the twin reason: a stored run_policy is selectable
 			// CONTENT, so a SEC write path there would let a security admin
