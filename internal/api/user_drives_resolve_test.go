@@ -209,8 +209,10 @@ func TestResolveUserDrive(t *testing.T) {
 		if got == nil {
 			t.Fatal("a matched grant resolved to no drive")
 		}
-		if !strings.HasPrefix(got.HomeName, "d-") || got.ObjectName != "wardyn-drive-"+got.HomeName {
-			t.Errorf("home/object = %q/%q, want the hashed home and its volume name", got.HomeName, got.ObjectName)
+		// The volume name carries the DRIVE's slug as well as the home, so two
+		// drives are two volumes even when they resolve one home.
+		if !strings.HasPrefix(got.HomeName, "d-") || got.ObjectName != "wardyn-drive-corp-nas-"+got.HomeName {
+			t.Errorf("home/object = %q/%q, want the hashed home and its slugged volume name", got.HomeName, got.ObjectName)
 		}
 		if got.SizeMiB != 10240 || got.Writable {
 			t.Errorf("size/writable = %d/%v, want the drive's 10240 and read-only", got.SizeMiB, got.Writable)
@@ -310,8 +312,11 @@ func TestResolveUserDrive(t *testing.T) {
 		if !got.Writable {
 			t.Error("writable = false; an explicit writable_override on a read-only drive must win")
 		}
-		if got.HomeName != "bsmith" || got.ObjectName != "wardyn-drive-bsmith" {
-			t.Errorf("home/object = %q/%q, want the override's", got.HomeName, got.ObjectName)
+		// THE CASE THE SLUG EXISTS FOR. An override is written on the GRANT, so
+		// it does not move when the grant is re-pointed at another drive; the
+		// drive's slug is the only thing keeping the two volumes apart.
+		if got.HomeName != "bsmith" || got.ObjectName != "wardyn-drive-corp-nas-bsmith" {
+			t.Errorf("home/object = %q/%q, want the override's home under this drive's slug", got.HomeName, got.ObjectName)
 		}
 	})
 

@@ -184,8 +184,10 @@ The per-person directory (subdirectory / volume / PVC suffix) is **derived, neve
   A claim that cannot name a directory is a **422 at that person's run, never a guess**.
 - `home_override` on a user-tier allocation wins over the template.
 
-Object names: Docker volume `wardyn-drive-<home>`, PVC `wardyn-drive-<drive-slug>-<home>`, host
-path `<host_root>/<home>`. **The member's request carries `drive: {enabled, read_only}` and
+Object names: every name Wardyn MINTS carries the drive's slug — Docker volume and PVC alike,
+`wardyn-drive-<drive-slug>-<home>` — because a `home_override` is written on the GRANT and does
+not move when that grant is re-pointed at another drive; a share is `<host_root>/<home>`, scoped
+by its root and named by whoever owns the tree. **The member's request carries `drive: {enabled, read_only}` and
 never a path**; the server resolves subject → allocation → drive → home from the authenticated
 identity. Only the subdirectory is bound — a run never sees the root or another person's
 directory. The mount target is the reserved literal `/home/agent/drive`.

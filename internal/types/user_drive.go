@@ -557,14 +557,15 @@ func DriveHomeName(d UserDrive, subject, override string) (string, error) {
 	return seg, nil
 }
 
-// driveObjectPrefix is shared by both managed object names so an operator can
+// driveObjectPrefix is shared by every minted object name so an operator can
 // find every Wardyn-created volume or claim with one glob, and so nothing
 // Wardyn did not create can be mistaken for a drive.
 const driveObjectPrefix = "wardyn-drive-"
 
-// driveSlugMaxLen bounds the drive-name half of a PVC name. A PVC name is
-// capped at 253 characters and the home segment can be 63, so 40 leaves room
-// for both plus the prefix with no arithmetic anywhere else.
+// driveSlugMaxLen bounds the drive-name half of a minted object name. A PVC
+// name is capped at 253 characters (a Docker volume name at 255) and the home
+// segment can be 63, so 40 leaves room for both plus the prefix with no
+// arithmetic anywhere else.
 const driveSlugMaxLen = 40
 
 // driveSlugUnsafeRe matches every run of characters a DNS-1123 name may not
@@ -587,24 +588,38 @@ func driveSlug(name string) string {
 // DriveObjectName is what the runner asks the substrate for, given a home
 // already derived by DriveHomeName:
 //
-//   - docker_volume  -> wardyn-drive-<home>
+//   - docker_volume    -> wardyn-drive-<drive-slug>-<home>
 //   - k8s_pvc[_static] -> wardyn-drive-<drive-slug>-<home>
-//   - host_path      -> <host_root>/<home>, cleaned
+//   - host_path        -> <host_root>/<home>, cleaned
 //
-// The PVC name carries the DRIVE's slug and the volume name does not, and that
-// asymmetry is the namespaces they live in: Docker volume names are global to a
-// daemon that also holds one drive's worth of state, while PVCs share a
-// namespace with every other claim in it — including a second drive's, whose
-// home for the same member is a different hash but whose PURPOSE an operator
-// reading `kubectl get pvc` has no other way to tell.
+// EVERY name Wardyn MINTS carries the DRIVE's slug, because the home alone does
+// not identify a drive. It reads as though it did — a `hash` home folds the
+// drive id, so one member's two drives are already two homes — but a
+// home_override does not: the admin writes "Bob's directory is bsmith" on the
+// GRANT, and the grant is the row that gets re-pointed from one drive to
+// another (user_drive_grants is UNIQUE on (subject_type, subject), so
+// re-pointing IS how a member moves between drives). With no slug both sides of
+// that re-point named one volume, so Bob mounted the old drive's contents under
+// the new drive's name, size and writable posture, and an offboarding command
+// naming `wardyn-drive-bsmith` could not say which drive it was reclaiming.
+//
+// The volume arm carried no slug on the reasoning that Docker volume names are
+// global to a daemon holding one drive's worth of state — an assumption nothing
+// enforces: user_drives has no cardinality constraint and a deployment may
+// register any number of docker_volume drives. The slug costs a longer name and
+// buys the same (drive, home) scoping the PVC arm always had, which is also
+// what lets an operator reading `docker volume ls` tell two drives apart, as
+// `kubectl get pvc` already could.
+//
+// A SHARE keeps its own shape: <host_root> already scopes it, and the directory
+// under it was named by whoever owns the tree, not by Wardyn — a slug there
+// would name a directory that does not exist.
 func DriveObjectName(d UserDrive, home string) string {
 	switch d.Backend {
 	case DriveBackendHostPath:
 		return filepath.Join(filepath.Clean(d.HostRoot), home)
-	case DriveBackendK8sPVC, DriveBackendK8sPVCStatic:
-		return driveObjectPrefix + driveSlug(d.Name) + "-" + home
 	default:
-		return driveObjectPrefix + home
+		return driveObjectPrefix + driveSlug(d.Name) + "-" + home
 	}
 }
 

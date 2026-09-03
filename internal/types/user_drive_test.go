@@ -216,9 +216,11 @@ func TestDriveHomeNameIsDNS1123OnKubernetes(t *testing.T) {
 	})
 }
 
-// TestDriveObjectName pins what the runner asks the substrate for. The PVC form
-// carries the drive's slug and the volume form does not, and an operator
-// reading `kubectl get pvc` has no other way to tell two drives apart.
+// TestDriveObjectName pins what the runner asks the substrate for. Every MINTED
+// name carries the drive's slug — an operator reading `docker volume ls` or
+// `kubectl get pvc` has no other way to tell two drives apart — and a share's
+// path carries none, because the directory under the root is not Wardyn's to
+// name.
 func TestDriveObjectName(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -228,8 +230,8 @@ func TestDriveObjectName(t *testing.T) {
 		home     string
 		want     string
 	}{
-		{name: "docker volume", backend: DriveBackendDockerVolume, drive: "Corp NAS", home: "d-abc", want: "wardyn-drive-d-abc"},
-		{name: "pvc carries the drive slug", backend: DriveBackendK8sPVC, drive: "Corp NAS", home: "d-abc", want: "wardyn-drive-corp-nas-d-abc"},
+		{name: "a volume carries the drive slug", backend: DriveBackendDockerVolume, drive: "Corp NAS", home: "d-abc", want: "wardyn-drive-corp-nas-d-abc"},
+		{name: "and a pvc is named the same way", backend: DriveBackendK8sPVC, drive: "Corp NAS", home: "d-abc", want: "wardyn-drive-corp-nas-d-abc"},
 		{name: "static pvc is named the same way", backend: DriveBackendK8sPVCStatic, drive: "Corp NAS", home: "alice", want: "wardyn-drive-corp-nas-alice"},
 		// Punctuation folds to a single dash and the edges are trimmed, so one
 		// drive can never produce two different claim names.
@@ -244,6 +246,62 @@ func TestDriveObjectName(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDriveObjectNameSeparatesTwoDrivesOnOneHome pins the invariant the volume
+// arm used to break: a name WARDYN MINTS identifies the drive as well as the
+// person.
+//
+// It reads as though the home alone were enough, because a `hash` home folds
+// the drive id and one member's two drives are already two homes. A
+// home_override does not fold it: the admin writes "Bob's directory is bsmith"
+// on the GRANT, and user_drive_grants is UNIQUE on (subject_type, subject), so
+// re-pointing that one grant IS how a member moves between drives. With no slug
+// both sides of the re-point named one volume — Bob mounting the old drive's
+// contents under the new drive's name, size and writable posture — and an
+// offboarding command naming `wardyn-drive-bsmith` could not say which drive it
+// was reclaiming.
+func TestDriveObjectNameSeparatesTwoDrivesOnOneHome(t *testing.T) {
+	// What a user-tier home_override derives on ANY drive, unchanged by the
+	// template, which is why the F034 template rule does not cover this.
+	const home = "bsmith"
+
+	for _, backend := range []DriveBackend{DriveBackendDockerVolume, DriveBackendK8sPVC} {
+		t.Run(string(backend), func(t *testing.T) {
+			a := UserDrive{ID: uuid.New(), Name: "Eng scratch", Backend: backend}
+			b := UserDrive{ID: uuid.New(), Name: "Design scratch", Backend: backend}
+			gotA, gotB := DriveObjectName(a, home), DriveObjectName(b, home)
+			if gotA == gotB {
+				t.Errorf("both drives mint %q — re-pointing one grant would hand the member the OTHER "+
+					"drive's data under this drive's size and writable posture", gotA)
+			}
+			// The slug has to be the DRIVE's, not merely something distinct:
+			// an operator reads these names to reclaim by.
+			if !strings.Contains(gotA, "eng-scratch") || !strings.Contains(gotB, "design-scratch") {
+				t.Errorf("names = %q / %q, want each to carry its own drive's slug", gotA, gotB)
+			}
+			// …and the one glob that finds every Wardyn-created object still
+			// finds both.
+			if !strings.HasPrefix(gotA, driveObjectPrefix) || !strings.HasPrefix(gotB, driveObjectPrefix) {
+				t.Errorf("names = %q / %q, want both under %q", gotA, gotB, driveObjectPrefix)
+			}
+		})
+	}
+
+	// The SHARE arm must NOT gain a slug: the root already scopes it and the
+	// directory under it was named by whoever owns the tree. Two shares on one
+	// root and one home ARE one directory, and that is the admin pointing two
+	// rows at one tree — not Wardyn minting a collision.
+	t.Run("a share is scoped by its root, not by a slug", func(t *testing.T) {
+		a := UserDrive{ID: uuid.New(), Name: "Eng scratch", Backend: DriveBackendHostPath, HostRoot: "/srv/eng"}
+		b := UserDrive{ID: uuid.New(), Name: "Design scratch", Backend: DriveBackendHostPath, HostRoot: "/srv/design"}
+		if got := DriveObjectName(a, home); got != "/srv/eng/bsmith" {
+			t.Errorf("host path = %q, want the root joined to the home with no slug", got)
+		}
+		if DriveObjectName(a, home) == DriveObjectName(b, home) {
+			t.Errorf("two roots gave one path %q", DriveObjectName(a, home))
+		}
+	})
 }
 
 // TestDriveBackendMapping pins the three derivations a backend carries: which
