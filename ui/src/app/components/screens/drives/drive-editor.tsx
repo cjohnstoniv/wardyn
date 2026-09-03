@@ -101,15 +101,21 @@ export function DriveEditor({
   const [error, setError] = React.useState<{ title?: string; message: string } | null>(null);
 
   const managed = isManagedBackend(backend);
-  // A share's directories are named by the corporation's own directory, so the
-  // derived id cannot name one — disabled here, refused on the API path.
-  const homeDisabled = (t: HomeTemplate) => t === "hash" && !managed;
-  // Selecting a share while `hash` is chosen would author exactly the row the
-  // server refuses, so the choice moves with the backend rather than waiting to
-  // be refused.
+  // The kinds take OPPOSITE halves of the template list, and both halves are
+  // refused on the API path. A share's directories are named by the
+  // corporation's own directory, so the derived id cannot name one. A managed
+  // drive is the reverse: Wardyn mints the volume, and a claim-derived name is
+  // not unique across email domains (alice@corp and alice@partner would share
+  // one), so only the derived id is safe there — a readable directory for one
+  // person is that person's own directory-name override on their allocation.
+  const homeDisabled = (t: HomeTemplate) => (t === "hash") !== managed;
+  // Switching kinds while the other half's template is chosen would author
+  // exactly the row the server refuses, so the choice moves with the backend
+  // rather than waiting to be refused.
   const pickBackend = (b: DriveBackend) => {
     setBackend(b);
     if (!isManagedBackend(b) && home === "hash") setHome("sub");
+    if (isManagedBackend(b) && home !== "hash") setHome("hash");
   };
 
   const save = async () => {

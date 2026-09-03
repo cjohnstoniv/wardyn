@@ -517,6 +517,7 @@ does not freeze a second wording:
 | Host root under a denied prefix (400) | `validateUserDrive` | host_root "{path}" is under a denied prefix ({prefix}) — the same deny list every host bind obeys |
 | Backend / runner mismatch (400) | `validateUserDrive` | backend "{backend}" cannot be mounted by this deployment's runner ({runner}) |
 | Template invalid for a share (400) | `validateUserDrive` | home_template "hash" is not allowed on a share backend — a share's directories are named by your directory, so pick sub or email_local |
+| Template invalid for a managed backend (400) | `validateUserDrive` | home_template "{template}" is not allowed on a managed backend — Wardyn names the volume itself and a claim-derived name is not unique across email domains, so two people would share one; pick hash, or name a single person's directory with a home_override on their allocation |
 | Size required for a managed claim (400) | `validateUserDrive` | size_mib must be above 0 for a k8s_pvc drive — it is the volume request |
 | Delete while allocated (409) | `handleDeleteUserDrive` | this drive is still allocated — remove its allocations first (deleting it while allocated would leave those subjects with a mount that names nothing) |
 | Home override on a non-user row (400) | `validateUserDriveGrant` | home_override is accepted on a user-tier allocation only — a group cannot share one directory |

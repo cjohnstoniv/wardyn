@@ -522,7 +522,12 @@ func previewDriveHTTP(t *testing.T, srv *Server, users, groups []string) *httpte
 func TestPreviewUserDrive(t *testing.T) {
 	t.Run("a match is answered with the object name", func(t *testing.T) {
 		d := driveFixture(func(d *types.UserDrive) {
-			d.Name, d.Backend, d.HomeTemplate = "Corp NAS", types.DriveBackendK8sPVC, types.HomeTemplateEmailLocal
+			// A STATIC pvc, because the claim template this case is about is a
+			// SHARE's: a managed backend mints its own object, so
+			// ValidateUserDrive refuses a claim-derived name there (two email
+			// domains would name one volume). The claim name is identical on
+			// both k8s arms, so the object_name below is unchanged.
+			d.Name, d.Backend, d.HomeTemplate = "Corp NAS", types.DriveBackendK8sPVCStatic, types.HomeTemplateEmailLocal
 		})
 		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
 		w := previewDriveHTTP(t, driveServer(st), []string{"sub-abc", "Alice@Corp.Example"}, []string{"Eng"})
@@ -545,9 +550,10 @@ func TestPreviewUserDrive(t *testing.T) {
 		if got.DriveName != "Corp NAS" || got.MatchedTier != types.CapabilitySubjectUser {
 			t.Errorf("drive/tier = %q/%q, want the winning row's", got.DriveName, got.MatchedTier)
 		}
-		// A PVC's size is a REQUEST, and only a block storage class binds it.
-		if got.Enforcement != types.StorageEnforcementRequest {
-			t.Errorf("enforcement = %q, want %q", got.Enforcement, types.StorageEnforcementRequest)
+		// A pre-created claim's size is bound by whoever created it, never by
+		// Wardyn — the preview says so rather than showing a number as a cap.
+		if got.Enforcement != types.StorageEnforcementExternal {
+			t.Errorf("enforcement = %q, want %q", got.Enforcement, types.StorageEnforcementExternal)
 		}
 	})
 

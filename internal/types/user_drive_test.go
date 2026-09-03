@@ -380,6 +380,24 @@ func TestValidateUserDrive(t *testing.T) {
 				d.Backend, d.HomeTemplate, d.HostRoot = DriveBackendHostPath, HomeTemplateSub, "/srv/homes"
 			}),
 			target: "docker"},
+		// …and the MIRROR: a MANAGED backend cannot take a claim template. On a
+		// share the claim names a directory somebody else already minted; on a
+		// managed drive Wardyn mints the object, so a name that is not
+		// injective over principals is Wardyn handing two people one volume.
+		{name: "a managed volume cannot take a claim template",
+			drive:  ok(func(d *UserDrive) { d.HomeTemplate = HomeTemplateEmailLocal }),
+			target: "docker", wantErr: true},
+		{name: "a managed volume cannot take the subject claim either",
+			drive:  ok(func(d *UserDrive) { d.HomeTemplate = HomeTemplateSub }),
+			target: "docker", wantErr: true},
+		{name: "a provisioning pvc cannot take a claim template",
+			drive: ok(func(d *UserDrive) {
+				d.Backend, d.HomeTemplate, d.SizeMiB = DriveBackendK8sPVC, HomeTemplateEmailLocal, 10240
+			}),
+			target: "k8s", wantErr: true},
+		{name: "a managed drive on the hash is accepted",
+			drive:  ok(func(d *UserDrive) { d.HomeTemplate = HomeTemplateHash }),
+			target: "docker"},
 		{name: "an unknown home template is refused",
 			drive: ok(func(d *UserDrive) { d.HomeTemplate = "uid" }), target: "docker", wantErr: true},
 		{name: "a negative size is refused", drive: ok(func(d *UserDrive) { d.SizeMiB = -1 }), target: "docker", wantErr: true},
@@ -404,6 +422,102 @@ func TestValidateUserDrive(t *testing.T) {
 		}
 		if d.HomeTemplate != HomeTemplateHash || d.Reclaim != DriveReclaimRetain {
 			t.Errorf("defaults = %q/%q, want %q/%q", d.HomeTemplate, d.Reclaim, HomeTemplateHash, DriveReclaimRetain)
+		}
+	})
+}
+
+// TestManagedBackendTakesOnlyTheHashTemplate is the write boundary's half of
+// the ONE guarantee a managed drive rests on: the object name Wardyn mints for
+// a person is that person's alone.
+//
+// A claim template is not injective over principals. `email_local` drops the
+// domain, so alice@corp.example and alice@partner.example — a guest/B2B/
+// contractor tenant, the exact deployment shape user drives target — derive one
+// home and therefore ONE Docker volume and ONE PVC; `sub` is lowercased, so two
+// subjects differing only in case do the same. On a SHARE that is the
+// directory's own hazard and a home_override answers it, because Wardyn is only
+// binding a directory somebody else named. On a MANAGED backend Wardyn is
+// CREATING the object, so accepting such a template is Wardyn mounting one
+// member's persistent storage into another member's sandbox — read-write when
+// the allocation is writable.
+//
+// The test proves both halves: the refusal, and the collision that makes the
+// refusal load-bearing rather than tidy.
+func TestManagedBackendTakesOnlyTheHashTemplate(t *testing.T) {
+	managed := []DriveBackend{DriveBackendDockerVolume, DriveBackendK8sPVC}
+	claims := []HomeTemplate{HomeTemplateSub, HomeTemplateEmailLocal}
+
+	t.Run("the write boundary refuses every claim template on a managed backend", func(t *testing.T) {
+		for _, b := range managed {
+			for _, tmpl := range claims {
+				d := UserDrive{Name: "Corp NAS", Backend: b, HomeTemplate: tmpl, SizeMiB: 10240}
+				err := ValidateUserDrive(&d, b.RunnerTarget())
+				if err == nil {
+					t.Errorf("ValidateUserDrive(%s, %s) = nil, want a refusal — Wardyn mints this object, "+
+						"and a claim-derived name is two people's", b, tmpl)
+					continue
+				}
+				// The admin has to be able to act on it: the message names the
+				// template they picked and the one that works.
+				if !strings.Contains(err.Error(), string(tmpl)) || !strings.Contains(err.Error(), string(HomeTemplateHash)) {
+					t.Errorf("ValidateUserDrive(%s, %s) = %v, want a message naming both %q and %q",
+						b, tmpl, err, tmpl, HomeTemplateHash)
+				}
+			}
+			// Scoped: the refusal is about the CLAIM templates, not about
+			// managed drives having a template at all.
+			d := UserDrive{Name: "Corp NAS", Backend: b, HomeTemplate: HomeTemplateHash, SizeMiB: 10240}
+			if err := ValidateUserDrive(&d, b.RunnerTarget()); err != nil {
+				t.Errorf("ValidateUserDrive(%s, hash) = %v, want it accepted", b, err)
+			}
+		}
+	})
+
+	// A share is the opposite case and must not be caught by the new rule: its
+	// directories exist already under names Wardyn did not choose, so a claim
+	// template is the ONLY thing that can name one.
+	t.Run("a share still takes both claim templates", func(t *testing.T) {
+		for _, b := range []DriveBackend{DriveBackendHostPath, DriveBackendK8sPVCStatic} {
+			for _, tmpl := range claims {
+				d := UserDrive{Name: "Corp NAS", Backend: b, HomeTemplate: tmpl}
+				if b == DriveBackendHostPath {
+					d.HostRoot = "/srv/homes"
+				}
+				if err := ValidateUserDrive(&d, b.RunnerTarget()); err != nil {
+					t.Errorf("ValidateUserDrive(%s, %s) = %v, want it accepted — only a claim can name a "+
+						"directory Wardyn did not create", b, tmpl, err)
+				}
+			}
+		}
+	})
+
+	// WHY the refusal exists, stated as the collision it now makes
+	// unauthorable. Built by hand rather than through ValidateUserDrive,
+	// because after the fix this row cannot be written.
+	t.Run("the collision the refusal prevents", func(t *testing.T) {
+		d := UserDrive{ID: uuid.New(), Name: "Corp NAS", Backend: DriveBackendDockerVolume, HomeTemplate: HomeTemplateEmailLocal}
+		one, err := DriveHomeName(d, "alice@corp.example", "")
+		if err != nil {
+			t.Fatalf("home for alice@corp.example: %v", err)
+		}
+		two, err := DriveHomeName(d, "alice@partner.example", "")
+		if err != nil {
+			t.Fatalf("home for alice@partner.example: %v", err)
+		}
+		if DriveObjectName(d, one) != DriveObjectName(d, two) {
+			t.Fatalf("two email domains derived %q and %q — if they no longer collide the write-boundary "+
+				"refusal has lost its reason and this test needs rewriting, not deleting",
+				DriveObjectName(d, one), DriveObjectName(d, two))
+		}
+		// …and the template the rule leaves standing does separate them, which
+		// is why `hash` is the whole remedy and not a workaround.
+		h := d
+		h.HomeTemplate = HomeTemplateHash
+		hOne, _ := DriveHomeName(h, "alice@corp.example", "")
+		hTwo, _ := DriveHomeName(h, "alice@partner.example", "")
+		if DriveObjectName(h, hOne) == DriveObjectName(h, hTwo) {
+			t.Errorf("hash gave both principals %q; the digest covers the subject, so it must not",
+				DriveObjectName(h, hOne))
 		}
 	})
 }

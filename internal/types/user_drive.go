@@ -126,13 +126,23 @@ const (
 	// HomeTemplateHash is `d-` + a truncated sha256 over the drive id and the
 	// subject: deterministic, DNS-1123-safe for a PVC name, and it leaks no
 	// identity into an object name an operator will read in `docker volume ls`.
-	// The default, and the only sane template for a MANAGED backend, where
-	// Wardyn is naming an object nothing else has an opinion about.
+	// The default, and the ONLY template a MANAGED backend may use — where
+	// Wardyn is naming an object nothing else has an opinion about, a name
+	// derived from a claim buys nothing and can collide (see the two claim
+	// templates below); ValidateUserDrive refuses the others there.
 	HomeTemplateHash HomeTemplate = "hash"
-	// HomeTemplateSub uses the sign-in subject claim verbatim.
+	// HomeTemplateSub uses the sign-in subject claim verbatim, lowercased.
+	// SHARE backends only: it is not folded with the drive id, so one member's
+	// two drives would be one object, and the lowercasing makes two subjects
+	// differing only in case one home.
 	HomeTemplateSub HomeTemplate = "sub"
 	// HomeTemplateEmailLocal uses the part of the email claim before the "@" —
 	// the usual shape of a corporate home directory (alice@corp -> alice).
+	// SHARE backends only: the domain is dropped, so alice@corp.example and
+	// alice@partner.example name ONE directory. On a share that directory was
+	// minted by somebody else and the answer is a home_override on the
+	// colliding person's allocation; on a managed backend Wardyn would be
+	// minting the collision itself, so ValidateUserDrive refuses it there.
 	//
 	// THERE IS DELIBERATELY NO WHOLE-EMAIL TEMPLATE. An address carries an "@",
 	// which driveHomeSegmentRe excludes and a DNS-1123 label could not hold
@@ -523,7 +533,8 @@ func DriveHomeName(d UserDrive, subject, override string) (string, error) {
 	}
 	// `d-` + hex satisfies BOTH backend rules by construction — no `_`, no dot,
 	// no trailing `-`, 22 characters — which is why it is checked against
-	// neither and why it is the only template a MANAGED backend should use.
+	// neither and why it is the only template a MANAGED backend MAY use
+	// (ValidateUserDrive refuses the claim templates on one).
 	if d.HomeTemplate == HomeTemplateHash || d.HomeTemplate == "" {
 		sum := sha256.Sum256([]byte(d.ID.String() + "\n" + subject))
 		return "d-" + hex.EncodeToString(sum[:])[:driveHomeHashLen], nil
@@ -664,6 +675,30 @@ func ValidateUserDrive(d *UserDrive, runnerTarget string) error {
 	if d.Backend.Kind() == DriveKindShare && d.HomeTemplate == HomeTemplateHash {
 		return fmt.Errorf("home_template %q is not allowed on a share backend — a share's directories are named by "+
 			"your directory, so pick %s or %s", HomeTemplateHash, HomeTemplateSub, HomeTemplateEmailLocal)
+	}
+	// And the MIRROR, which is not symmetry for its own sake. On a MANAGED
+	// backend WARDYN mints the object name, so the template is the only thing
+	// standing between two people and one volume — and a claim-derived name is
+	// not injective over principals: `email_local` drops the domain, so
+	// alice@corp.example and alice@partner.example are one `wardyn-drive-alice`
+	// on any multi-domain tenant (a guest/B2B/contractor directory — the exact
+	// deployment shape a user drive is for), and `sub` is lowercased, so two
+	// subjects differing only in case are one home too. `hash` folds the drive
+	// id AND the subject, so it cannot collide either way. A readable home on a
+	// managed drive is a home_override on that one person's allocation, which
+	// is a named admin act about one directory rather than a rule that quietly
+	// applies to everyone.
+	//
+	// A share is the opposite case and keeps both claim templates: its
+	// directories already exist under names Wardyn did not choose, a hash would
+	// name none of them, and the same-local-part hazard there belongs to the
+	// directory that minted them — answered by a home_override on the colliding
+	// person's allocation, which is why that arm warns and this one refuses.
+	if d.Backend.Kind() == DriveKindManaged && d.HomeTemplate != HomeTemplateHash {
+		return fmt.Errorf("home_template %q is not allowed on a managed backend — Wardyn names the volume itself "+
+			"and a claim-derived name is not unique across email domains, so two people would share one; pick %s, "+
+			"or name a single person's directory with a home_override on their allocation",
+			d.HomeTemplate, HomeTemplateHash)
 	}
 	if d.SizeMiB < 0 {
 		return fmt.Errorf("size_mib: must not be negative")
