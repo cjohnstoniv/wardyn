@@ -321,8 +321,27 @@ JSONL fallback spool — a value that never returns to 0 means the drain loop is
 working). Beside them, `wardyn_audit_spool_quarantined_total` counts events the
 store permanently refused and the drain moved aside (see the spool paragraph
 above): non-zero means the trail is missing those events even though the spool
-drained. Scrape with any Prometheus `authorization` config carrying the admin
-token. `/healthz` stays the liveness/component surface (identity, runner classes,
+drained.
+
+Two counters cover the authentication lane, where a failure otherwise leaves no
+trace at all. `wardyn_auth_failed_suppressed_total` counts `auth.failed` audit
+rows the rate limiter dropped — the trail is capped at roughly one row per
+second, so past a small burst it stops describing the volume it is bounding and
+**a credential-stuffing run reads quieter than a handful of typos**. Alert on
+this series, not on the audit row count: flat rows with this climbing is the
+attack. `wardyn_auth_store_errors_total` counts requests an authentication lane
+could not decide because its store read failed and answered `500` — a state with
+no audit row (there is no authenticated principal to attribute one to) and no
+client-visible cause.
+
+That second counter exists because **`wardyn_store_up` cannot answer for it**.
+The gauge is a *ping*: it says the pool is reachable, and a reachable pool still
+fails individual queries — one table denying a read, one statement timing out.
+So it can scrape `1` throughout an outage that is 500ing every token-authenticated
+request, which is worse than no signal, because it argues against the operator's
+own evidence. Read `wardyn_store_up` as reachability and the two counters above
+as whether the work is actually succeeding. Scrape with any Prometheus
+`authorization` config carrying the admin token. `/healthz` stays the liveness/component surface (identity, runner classes,
 eBPF ground-truth state); `/metrics` is the trend surface. Audit sinks
 (`WARDYN_AUDIT_SINKS`, [ENV.md](ENV.md)) are the event stream for SIEMs — metrics
 carry no per-run detail.

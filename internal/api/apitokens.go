@@ -27,6 +27,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -106,6 +107,22 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 			return
 		}
 		if err != nil {
+			// VISIBLE SERVER-SIDE, because this 500s an entire authentication
+			// lane — every CI job and script holding a wdn_ token — and the
+			// only other evidence is a client complaint. writeError does not
+			// log, no audit row is written (there is no authenticated principal
+			// to attribute one to), and wardyn_store_up keeps scraping 1: that
+			// gauge answers a PING, which a pool passes while one table denies
+			// a read or one statement times out. A health signal that stays
+			// green through the outage it appears to cover argues AGAINST the
+			// operator's own evidence, so the honest fix is to say what the
+			// gauge asserts and give this lane its own series.
+			//
+			// ERROR level by internal/audit/sink.go's own rule: a lost event is
+			// an ERROR-level fact an operator can alert on.
+			slog.ErrorContext(r.Context(), "api: api-token lookup failed; this request could not be authenticated",
+				"error", err, "path", r.URL.Path)
+			s.metrics.authStoreErrorInc()
 			writeError(w, http.StatusInternalServerError, "api token lookup failed")
 			return
 		}
