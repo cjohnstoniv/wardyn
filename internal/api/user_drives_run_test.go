@@ -6,6 +6,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -343,6 +345,42 @@ func TestSeedRequestDrive422Matrix(t *testing.T) {
 			runnerTarget: "k8s", req: driveRunRequest(true, nil),
 			ctx: withOIDCGroups(operatorCtx("sub_drive_bob", "bob@corp.example", oidc.RoleMember), []string{"eng"}),
 			want: "drive: your sub cannot name a directory " +
+				"(lowercase letters and digits, then . _ -, up to 63 characters) — ask an admin to set your directory name " +
+				"(on a Kubernetes deployment the rule is stricter: no _, and it may not end in - or .)",
+		},
+		{
+			// THE ADMIN'S VALUE, BLAMED ON THE MEMBER — F137's surviving half,
+			// pinned here because nothing exercised an INVALID override at all
+			// (every other test stores a legal one).
+			//
+			// The case is the one DriveHomeName's own comment names: an override
+			// legal on Docker stored against a k8s drive. `b_smith` passes
+			// ValidateUserDriveGrant, which holds the grant row and cannot see
+			// which substrate the drive lands on, and then fails the apiserver's
+			// stricter rule at resolve time.
+			//
+			// READ THE `want` BELOW: the member is told "your HASH cannot name a
+			// directory". Hash is machine-generated from the drive id and the
+			// subject — it cannot fail, and the member supplied neither it nor
+			// the override. The sentence is byte-exact ONLY because §7.7 is
+			// frozen and no row covers an admin-set value; the corrected
+			// sentence is filed (local/FILED-COPY.md), and when it lands THIS
+			// ROW MUST CHANGE — which is the point of asserting it byte-exact
+			// rather than by prefix.
+			//
+			// What IS durable and asserted by the loop: a 422, not a 403 or a
+			// 500 — the caller is authorized and their allocation simply cannot
+			// be mounted as stored — and no sentinel text reaching the member.
+			name: "an admin's stored directory name is invalid on this backend",
+			store: &driveStore{
+				drive: driveFixture(func(d *types.UserDrive) {
+					d.Backend, d.SizeMiB = types.DriveBackendK8sPVC, 10240
+				}),
+				grant: grantFixture(uuid.Nil, func(g *types.UserDriveGrant) { g.HomeOverride = "b_smith" }),
+				tier:  types.CapabilitySubjectUser,
+			},
+			runnerTarget: "k8s", req: driveRunRequest(true, nil),
+			want: "drive: your hash cannot name a directory " +
 				"(lowercase letters and digits, then . _ -, up to 63 characters) — ask an admin to set your directory name " +
 				"(on a Kubernetes deployment the rule is stricter: no _, and it may not end in - or .)",
 		},
@@ -832,7 +870,7 @@ func TestRevokingAGrantStopsTheNextRunMounting(t *testing.T) {
 // user_drive value (nil when the key is null) alongside the SIBLING door field.
 // Both are read from one call because the pair is the contract: four states, two
 // keys, and the console tells them apart by reading both.
-func meDriveBody(t *testing.T, srv *Server, ctx context.Context) (map[string]any, string) {
+func meDriveBody(t *testing.T, srv *Server, ctx context.Context) (map[string]any, string, string) {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil).WithContext(ctx)
 	w := httptest.NewRecorder()
@@ -851,9 +889,18 @@ func meDriveBody(t *testing.T, srv *Server, ctx context.Context) (map[string]any
 	if !ok {
 		t.Fatal("/me has no user_drive_denied_by_profile key — always present, so an older daemon's MISSING key is distinguishable from an open door")
 	}
+	// The THIRD key, present for the same reason the door key is: an older
+	// daemon's missing key must be distinguishable from a daemon that answered
+	// "nothing is wrong". Asserted in the shared helper so every case below
+	// carries the guarantee without restating it.
+	unavailable, ok := body["user_drive_unavailable"]
+	if !ok {
+		t.Fatal("/me has no user_drive_unavailable key — always present, so a daemon that cannot answer for a drive is distinguishable from one that answered \"no allocation\"")
+	}
 	name, _ := denied.(string)
+	reason, _ := unavailable.(string)
 	ud, _ := body["user_drive"].(map[string]any)
-	return ud, name
+	return ud, name, reason
 }
 
 // TestMeUserDrive pins the member's own view of the same resolution the run
@@ -862,7 +909,7 @@ func meDriveBody(t *testing.T, srv *Server, ctx context.Context) (map[string]any
 func TestMeUserDrive(t *testing.T) {
 	t.Run("no allocation is null, not an empty object", func(t *testing.T) {
 		srv, _ := driveRunServer(&driveStore{}, "docker")
-		ud, denied := meDriveBody(t, srv, driveMemberCtx(nil, false))
+		ud, denied, _ := meDriveBody(t, srv, driveMemberCtx(nil, false))
 		if ud != nil {
 			t.Errorf("user_drive = %v, want null", ud)
 		}
@@ -875,7 +922,7 @@ func TestMeUserDrive(t *testing.T) {
 		d := driveFixture(nil)
 		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
 		srv, _ := driveRunServer(st, "docker")
-		ud, denied := meDriveBody(t, srv, driveMemberCtx(nil, false))
+		ud, denied, _ := meDriveBody(t, srv, driveMemberCtx(nil, false))
 		if ud == nil {
 			t.Fatal("user_drive = null for an allocated member")
 		}
@@ -901,7 +948,7 @@ func TestMeUserDrive(t *testing.T) {
 		// where the checkbox would be. Reported as null instead, the member
 		// would be told to ask for an allocation they already have.
 		srv, _ := driveRunServer(pausedDriveStore(nil), "docker")
-		ud, denied := meDriveBody(t, srv, driveMemberCtx(nil, false))
+		ud, denied, _ := meDriveBody(t, srv, driveMemberCtx(nil, false))
 		if ud == nil {
 			t.Fatal("user_drive = null for a paused allocation")
 		}
@@ -935,7 +982,7 @@ func TestMeUserDrive(t *testing.T) {
 			govTier: types.CapabilitySubjectUser,
 		}
 		srv := New(Config{Store: cs, Audit: &recRecorder{}, RunnerTarget: "docker"})
-		ud, denied := meDriveBody(t, srv, driveMemberCtx(nil, false))
+		ud, denied, _ := meDriveBody(t, srv, driveMemberCtx(nil, false))
 		if ud == nil {
 			t.Fatal("user_drive = null — a shut door does not un-allocate the drive")
 		}
@@ -955,7 +1002,7 @@ func TestMeUserDrive(t *testing.T) {
 			govTier: types.CapabilitySubjectUser,
 		}
 		srv := New(Config{Store: cs, Audit: &recRecorder{}, RunnerTarget: "docker"})
-		ud, denied := meDriveBody(t, srv, driveMemberCtx(nil, false))
+		ud, denied, _ := meDriveBody(t, srv, driveMemberCtx(nil, false))
 		if ud != nil {
 			t.Errorf("user_drive = %v, want null", ud)
 		}
@@ -976,8 +1023,101 @@ func TestMeUserDrive(t *testing.T) {
 		}
 		srv := New(Config{Store: cs, Audit: &recRecorder{}, RunnerTarget: "docker"})
 		adminCtx := withOIDCGroups(operatorCtx("sub-drive-bob", "bob@corp.example", oidc.RoleAdmin), nil)
-		if _, denied := meDriveBody(t, srv, adminCtx); denied != "" {
+		if _, denied, _ := meDriveBody(t, srv, adminCtx); denied != "" {
 			t.Errorf("user_drive_denied_by_profile = %q for an operator, want empty", denied)
+		}
+	})
+
+	// THE THREE STATES THAT USED TO BE ONE. Each is a distinct server state the
+	// LAUNCH path refuses with its own status and its own remedy — 403 sign in
+	// again, 422 ask an admin, 500 try again — and each arrived here as the same
+	// `user_drive: null` a genuinely unallocated member gets. The console
+	// renders that as no drive affordance at all, so the member could never
+	// reach the sentence naming their remedy, and the one piece of advice the
+	// card could give ("ask an admin for an allocation") was wrong for all three.
+	//
+	// The object stays null in every arm — a display read must not 500 the
+	// console shell over a drive card, which is the posture
+	// TestUnusableGroupSnapshotRefusesTheLaunchWhileMeStaysQuiet fixes in place.
+	// What changed is that null is no longer the WHOLE answer.
+	t.Run("a state /me cannot answer for is named, not collapsed into null", func(t *testing.T) {
+		d := driveFixture(nil)
+		for _, tc := range []struct {
+			name       string
+			err        error
+			wantReason string
+		}{
+			{
+				name: "a truncated group snapshot", err: errGroupsSnapshotStale,
+				wantReason: driveUnavailableGroups,
+			},
+			{
+				// The one whose remedy is an ADMIN's, and the state that reads
+				// most wrongly as "you have no allocation": the member has one.
+				name:       "an allocation that cannot name a directory",
+				err:        fmt.Errorf("%w: drive: your sub cannot name a directory", errDriveUnmountable),
+				wantReason: driveUnavailableUnmountable,
+			},
+			{
+				name: "a store that cannot answer", err: errors.New("pg: connection refused"),
+				wantReason: driveUnavailableUnknown,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser, driveErr: tc.err}
+				srv, _ := driveRunServer(st, "docker")
+				ud, denied, reason := meDriveBody(t, srv, driveMemberCtx(nil, false))
+				if ud != nil {
+					t.Errorf("user_drive = %v, want null — a display read still swallows the failure", ud)
+				}
+				if denied != "" {
+					t.Errorf("user_drive_denied_by_profile = %q, want empty — the DOOR is not what failed", denied)
+				}
+				if reason != tc.wantReason {
+					t.Errorf("user_drive_unavailable = %q, want %q — this state is not %q",
+						reason, tc.wantReason, "no allocation")
+				}
+			})
+		}
+	})
+
+	// …and the ordinary answers stay distinguishable from all three: an
+	// unallocated member is "" (I answered; you have none), which is what makes
+	// the tokens above mean anything.
+	t.Run("a member with no allocation is answered, not unavailable", func(t *testing.T) {
+		srv, _ := driveRunServer(&driveStore{}, "docker")
+		if ud, _, reason := meDriveBody(t, srv, driveMemberCtx(nil, false)); ud != nil || reason != "" {
+			t.Errorf("user_drive/unavailable = %v/%q, want null and \"\" — nothing failed", ud, reason)
+		}
+	})
+
+	// THE DOOR'S HALF OF THE SAME DEFECT, one layer up. "" on the door key is an
+	// affirmative promise that no profile denies the mount, and it was ALSO what
+	// a caller got when the ceiling could not be resolved — the permissive
+	// answer to an unknown question. Worse than the null above, because it
+	// shipped beside a fully populated allocation: /me promised a mountable,
+	// writable drive for a create the same outage refuses at the ceiling, so the
+	// card drew the checkbox and its writable sentence for a launch that could
+	// not succeed.
+	t.Run("an unresolvable ceiling is unknown, never an open door", func(t *testing.T) {
+		d := driveFixture(func(d *types.UserDrive) { d.Writable = true })
+		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser,
+			err: errors.New("pg: connection refused")}
+		srv, _ := driveRunServer(st, "docker")
+		ud, denied, reason := meDriveBody(t, srv, driveMemberCtx(nil, false))
+		if reason != driveUnavailableGovernance {
+			t.Errorf("user_drive_unavailable = %q, want %q — the door state is UNKNOWN", reason, driveUnavailableGovernance)
+		}
+		if denied != "" {
+			t.Errorf("user_drive_denied_by_profile = %q, want empty — no profile was read, so none may be named", denied)
+		}
+		// THE LOAD-BEARING HALF. The allocation is suppressed WITH the door:
+		// offering a mount whose governance is unknown is the promise that
+		// cannot be kept, and it is the one an unknown door alone would leave
+		// standing.
+		if ud != nil {
+			t.Errorf("user_drive = %v beside an unknown door, want null — the card must not offer a mount "+
+				"whose governance nobody could read", ud)
 		}
 	})
 
@@ -988,7 +1128,7 @@ func TestMeUserDrive(t *testing.T) {
 		d := driveFixture(nil)
 		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectAll}
 		srv, _ := driveRunServer(st, "docker")
-		if ud, _ := meDriveBody(t, srv, context.Background()); ud != nil {
+		if ud, _, _ := meDriveBody(t, srv, context.Background()); ud != nil {
 			t.Errorf("user_drive = %v for a caller with no subjects, want null", ud)
 		}
 	})
@@ -1217,4 +1357,104 @@ func TestUnusableGroupSnapshotRefusesTheLaunchWhileMeStaysQuiet(t *testing.T) {
 	if want := types.DriveObjectName(*d, home); ev.Target != want {
 		t.Errorf("run.drive.mount target = %q, want the managed object %q", ev.Target, want)
 	}
+}
+
+// ─── the runner-capability gate ───────────────────────────────────────────────
+
+// driveCapsRunner is fakeRunner with ONE thing replaced: what Capabilities
+// declares about drives, and whether the call works at all.
+type driveCapsRunner struct {
+	*fakeRunner
+	drives bool
+	err    error
+}
+
+func (r driveCapsRunner) Capabilities(ctx context.Context) (runner.Capabilities, error) {
+	if r.err != nil {
+		return runner.Capabilities{}, r.err
+	}
+	caps, err := r.fakeRunner.Capabilities(ctx)
+	caps.UserDrives = r.drives
+	return caps, err
+}
+
+// TestSeedRequestDriveGatesOnRunnerCapability pins the gate that makes the
+// control plane and the runner agree about drives.
+//
+// WHICH SIDE WAS LYING. Both drivers refuse a spec carrying a drive, and both
+// say why in the same words the control plane uses — "a member who asked for
+// storage must never silently get a run without it". They are truthfully
+// reporting a capability they do not have; dispatch was right. The control
+// plane was the liar: its only substrate question was the BACKEND-vs-TARGET
+// string match, which a docker_volume drive on a Docker deployment passes, so
+// preflight previewed green, create answered 201, and dispatch then failed the
+// run. seedRequestDrive's own doc calls that "the one thing the preflight
+// handler exists not to do".
+//
+// Fixing driveMountFor fixes BOTH doors at once, because preflight and create
+// share it — which is why the gate lives there and not in either handler.
+func TestSeedRequestDriveGatesOnRunnerCapability(t *testing.T) {
+	drive := driveFixture(nil) // docker_volume, on a docker deployment: it PASSES the target check
+	st := &driveStore{drive: drive, grant: grantFixture(drive.ID, nil), tier: types.CapabilitySubjectUser}
+	ctx := driveMemberCtx(nil, false)
+
+	serverWith := func(rn runner.Runner) *Server {
+		return New(Config{Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", Runner: rn})
+	}
+
+	t.Run("a runner that cannot mount drives refuses the run", func(t *testing.T) {
+		srv := serverWith(driveCapsRunner{fakeRunner: &fakeRunner{}, drives: false})
+		mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
+		if ok || mount != nil {
+			t.Fatalf("ok/mount = %v/%+v, want a refusal — this run would fail at dispatch", ok, mount)
+		}
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("code = %d, want 422 (the same shape every unmountable allocation gets): %s",
+				w.Code, w.Body.String())
+		}
+		// The member must learn the SUBSTRATE is the limit, not their
+		// allocation — they have one, and it is fine. It reuses
+		// REFUSED_BACKEND's frozen sentence rather than adding a string to a
+		// table §7.7 declares COMPLETE, so the frozen half is asserted too.
+		body := w.Body.String()
+		if !strings.Contains(body, "this deployment cannot mount your drive") {
+			t.Errorf("body = %s, want REFUSED_BACKEND's frozen sentence", body)
+		}
+		if !strings.Contains(body, "does not mount drives") {
+			t.Errorf("body = %s, want the reason to name the runner as the limitation", body)
+		}
+	})
+
+	t.Run("a runner that can mount drives is unaffected", func(t *testing.T) {
+		srv := serverWith(driveCapsRunner{fakeRunner: &fakeRunner{}, drives: true})
+		mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
+		if !ok || mount == nil {
+			t.Fatalf("ok/mount = %v/%+v, want the mount; body=%s", ok, mount, w.Body.String())
+		}
+		if mount.Target != runner.DriveTarget {
+			t.Errorf("target = %q, want %q", mount.Target, runner.DriveTarget)
+		}
+	})
+
+	// "Cannot" and "cannot tell" are different answers, the same split
+	// resolveEnforcedConfinement draws for the confinement gate.
+	t.Run("an unreadable capability is a 503, not a silent admit", func(t *testing.T) {
+		srv := serverWith(driveCapsRunner{fakeRunner: &fakeRunner{}, err: errors.New("docker: no such host")})
+		mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
+		if ok || mount != nil {
+			t.Fatalf("ok/mount = %v/%+v, want a refusal when the capability cannot be read", ok, mount)
+		}
+		if w.Code != http.StatusServiceUnavailable {
+			t.Errorf("code = %d, want 503: %s", w.Code, w.Body.String())
+		}
+	})
+
+	// SCOPED TO A WIRED RUNNER, as the confinement gate is: with no runner
+	// there is no dispatch to disagree with, so there is no promise to break.
+	t.Run("no runner wired leaves the seam alone", func(t *testing.T) {
+		srv, _ := driveRunServer(st, "docker")
+		if _, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx); !ok {
+			t.Fatalf("ok = false with no runner wired: %s", w.Body.String())
+		}
+	})
 }

@@ -96,7 +96,8 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	// as null. Assigned through the typed local so that stays true by
 	// construction rather than by luck.
 	body["user_drive"] = nil
-	if ud := s.resolveMeUserDrive(r); ud != nil {
+	ud, unavailable := s.resolveMeUserDrive(r)
+	if ud != nil {
 		body["user_drive"] = ud
 	}
 	// The DOOR, as a SIBLING of the allocation rather than a field inside it
@@ -108,7 +109,32 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	// one where the obvious advice — "ask an admin for an allocation" — is
 	// wrong. Always PRESENT (never omitted), so an older daemon's missing key is
 	// distinguishable from an open door.
-	body["user_drive_denied_by_profile"] = s.userDriveDeniedByProfile(r)
+	deniedBy, doorUnknown := s.userDriveDeniedByProfile(r)
+	body["user_drive_denied_by_profile"] = deniedBy
+	// A ceiling that could not be resolved makes the DOOR unknown, not open, and
+	// an unknown door must not ship beside an allocation the card would then
+	// offer: the checkbox and its writable/read-only sentence would promise a
+	// mount the create path refuses at that same ceiling. So the allocation is
+	// suppressed with it and the reason says which half is missing — the caller
+	// is told "I cannot answer", never "yes" to a question nobody answered.
+	if doorUnknown {
+		body["user_drive"] = nil
+		unavailable = driveUnavailableGovernance
+	}
+	// THE THIRD KEY, and the reason there are three rather than two. The door
+	// needed its own key because four states do not fit in one; this is the same
+	// argument one layer up. `user_drive: null` means "you have no allocation",
+	// which is ADVICE ("ask an admin for one") — and it was also what a member
+	// got when their group snapshot was stale, when their allocation could not
+	// name a directory, and when the store was down. Three states whose remedies
+	// differ, wearing the answer whose remedy is wrong for all of them.
+	//
+	// ALWAYS PRESENT, for the reason the door key is: an older daemon's missing
+	// key has to be distinguishable from a daemon that answered "nothing is
+	// wrong". "" is that answer; every other value is a token from the closed
+	// set beside writeDriveError, which composes the sentence a member meets if
+	// they launch anyway.
+	body["user_drive_unavailable"] = unavailable
 	// W31-S1-7: an SSO session dies outright at this instant (no refresh) — the
 	// console polls this and warns ahead of it, rather than the human learning
 	// about it from a sudden 401 that wipes mid-work state back to the gate.

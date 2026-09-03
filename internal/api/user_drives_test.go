@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -121,6 +122,15 @@ func (s *driveCRUDStore) UpsertUserDriveGrant(_ context.Context, g types.UserDri
 	if _, ok := s.drives[g.DriveID]; !ok {
 		return types.UserDriveGrant{}, store.ErrNotFound // the FK
 	}
+	// The one uniqueness rule the natural key does not carry, mirrored from the
+	// store's own NOT EXISTS guard: a directory name on a drive is ONE
+	// person's.
+	for _, existing := range s.grants {
+		if g.HomeOverride != "" && existing.DriveID == g.DriveID && existing.HomeOverride == g.HomeOverride &&
+			!(existing.SubjectType == g.SubjectType && existing.Subject == g.Subject) {
+			return types.UserDriveGrant{}, store.ErrConflict
+		}
+	}
 	for id, existing := range s.grants {
 		if existing.SubjectType == g.SubjectType && existing.Subject == g.Subject {
 			g.ID = id // the EXISTING row's id, never the candidate's
@@ -149,7 +159,34 @@ func (s *driveCRUDStore) ListUserDriveGrants(context.Context) ([]types.UserDrive
 	for _, g := range s.grants {
 		out = append(out, g)
 	}
+	// SORTED, because a Go map's iteration order is randomised per run and the
+	// real read is ORDERED (tier, then priority, then subject). A double that
+	// returned map order made every paging assertion depend on the run — it
+	// passed alone and failed in the suite — and, worse, would have let a
+	// handler that dropped the ordering look correct here.
+	sort.Slice(out, func(i, j int) bool {
+		if a, b := driveTierRank(out[i].SubjectType), driveTierRank(out[j].SubjectType); a != b {
+			return a < b
+		}
+		if out[i].Priority != out[j].Priority {
+			return out[i].Priority > out[j].Priority // DESC, as the SQL has it
+		}
+		return out[i].Subject < out[j].Subject
+	})
 	return out, nil
+}
+
+// driveTierRank mirrors userDriveTierOrder: user > group > all, most specific
+// first.
+func driveTierRank(t types.CapabilitySubjectType) int {
+	switch t {
+	case types.CapabilitySubjectUser:
+		return 0
+	case types.CapabilitySubjectGroup:
+		return 1
+	default:
+		return 2
+	}
 }
 
 // ─── the handler harness ──────────────────────────────────────────────────────
@@ -256,7 +293,7 @@ func TestCreateUserDriveWritesAndAudits(t *testing.T) {
 		t.Error("writable = true, want the read-only product default")
 	}
 	// BY VALUE, not by key presence: every field is compared, and the map is
-	// compared WHOLE so a ninth key cannot appear unnoticed either. The
+	// compared WHOLE so a tenth key cannot appear unnoticed either. The
 	// host_path half of this contract — where host_root is non-empty and
 	// therefore falsifiable — is TestUserDriveWriteAuditIsTheWholeRow.
 	if got, want := driveAuditData(t, rec, "drive.write"), map[string]any{
@@ -268,6 +305,11 @@ func TestCreateUserDriveWritesAndAudits(t *testing.T) {
 		"size_mib":      float64(10240),
 		"writable":      false,
 		"reclaim":       "retain",
+		// The NINTH key, and the one that is not a column: it separates an edit
+		// that moved every allocated member's storage from a cosmetic one, which
+		// this single action otherwise covers indistinguishably. False on a
+		// create — nothing was allocated to re-home.
+		"rehomed": false,
 	}; !reflect.DeepEqual(got, want) {
 		t.Errorf("drive.write data = %#v,\nwant EXACTLY %#v", got, want)
 	}
@@ -335,6 +377,10 @@ func TestUserDriveWriteAuditIsTheWholeRow(t *testing.T) {
 				"size_mib":      float64(0),
 				"writable":      writable,
 				"reclaim":       "delete",
+				// See the create-path assertion: `rehomed` marks the edits that
+				// re-pointed an allocated member's storage. False here — this
+				// drive has no allocations.
+				"rehomed": false,
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("drive.write data = %#v,\nwant EXACTLY %#v", got, want)
@@ -631,6 +677,147 @@ func TestUpdateUserDriveRenames(t *testing.T) {
 	}
 }
 
+// TestUpdateAllocatedUserDriveGuardsTheRehome is the asymmetry this surface had
+// backwards. DELETING an allocated drive already answered 409; the far more
+// consequential IN-PLACE REWRITE answered 200 and moved every allocated
+// member's storage with the grant rows untouched — a rename re-points a volume
+// and a claim name, a host-root correction binds a different tree, a template
+// change derives a different home. Nothing is deleted, so nothing surfaces: the
+// old object is retained under a name nothing in the product points at, and the
+// same `drive.write` row covered a cosmetic edit and an identity-affecting one.
+func TestUpdateAllocatedUserDriveGuardsTheRehome(t *testing.T) {
+	// allocated seeds one drive with one grant and returns a PUT caller for it.
+	allocated := func(t *testing.T, roots []string, mut func(*types.UserDrive)) (
+		*driveCRUDStore, *recRecorder, uuid.UUID, func(body, query string) *httptest.ResponseRecorder) {
+		t.Helper()
+		st := newDriveCRUDStore()
+		srv, rec := driveAdminServer(st, roots)
+		d := *driveFixture(mut)
+		st.drives[d.ID] = d
+		st.grants[uuid.New()] = types.UserDriveGrant{
+			ID: uuid.New(), SubjectType: types.CapabilitySubjectUser, Subject: "sub-bob", DriveID: d.ID, Enabled: true,
+		}
+		return st, rec, d.ID, func(body, query string) *httptest.ResponseRecorder {
+			return driveCall(t, srv.handleUpdateUserDrive, http.MethodPut,
+				"/api/v1/drives/"+d.ID.String()+query, body, map[string]string{"id": d.ID.String()})
+		}
+	}
+
+	t.Run("a rename is refused, and writes nothing", func(t *testing.T) {
+		st, rec, id, put := allocated(t, nil, nil)
+		w := put(`{"name":"Corp NAS archive","backend":"docker_volume","size_mib":10240}`, "")
+		if w.Code != http.StatusConflict {
+			t.Fatalf("rename of an allocated drive = %d, want 409: %s", w.Code, w.Body.String())
+		}
+		if st.drives[id].Name != "Corp NAS" {
+			t.Errorf("stored name = %q, want the refused write to have landed nothing", st.drives[id].Name)
+		}
+		// A refusal is not an event: the same silence a refused delete keeps.
+		if len(rec.events) != 0 {
+			t.Errorf("audit = %v, want nothing recorded for a refused edit", driveAuditActions(rec))
+		}
+	})
+
+	t.Run("confirmed, it lands and the audit row says so", func(t *testing.T) {
+		st, rec, id, put := allocated(t, nil, nil)
+		w := put(`{"name":"Corp NAS archive","backend":"docker_volume","size_mib":10240}`, "?confirm=rehome")
+		if w.Code != http.StatusOK {
+			t.Fatalf("confirmed rename = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		if st.drives[id].Name != "Corp NAS archive" {
+			t.Errorf("stored name = %q, want the confirmed rename to have landed", st.drives[id].Name)
+		}
+		// THE POINT OF THE FIELD: one `drive.write` action covers both kinds of
+		// edit, so without this the orphaning is invisible to an auditor.
+		if data := driveAuditData(t, rec, "drive.write"); data["rehomed"] != true {
+			t.Errorf("drive.write rehomed = %v, want true", data["rehomed"])
+		}
+	})
+
+	// The guard asks types.DriveObjectName whether the object MOVES rather than
+	// diffing a hand-listed set of fields — so an edit that folds to the same
+	// slug is not a re-home, and a hand-listed rule would have refused it.
+	t.Run("a name that folds to the same slug is not a rehome", func(t *testing.T) {
+		_, rec, _, put := allocated(t, nil, nil)
+		w := put(`{"name":"  Corp   NAS! ","backend":"docker_volume","size_mib":10240}`, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("cosmetic rename = %d, want 200 (the object does not move): %s", w.Code, w.Body.String())
+		}
+		if data := driveAuditData(t, rec, "drive.write"); data["rehomed"] != false {
+			t.Errorf("drive.write rehomed = %v, want false", data["rehomed"])
+		}
+	})
+
+	t.Run("the fields that name no storage stay editable", func(t *testing.T) {
+		_, rec, _, put := allocated(t, nil, nil)
+		w := put(`{"name":"Corp NAS","backend":"docker_volume","size_mib":20480,"writable":true,"reclaim":"delete"}`, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("size/mode/reclaim edit = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		if data := driveAuditData(t, rec, "drive.write"); data["rehomed"] != false {
+			t.Errorf("drive.write rehomed = %v, want false", data["rehomed"])
+		}
+	})
+
+	// The OTHER two folds, so the guard is not a rename check wearing a general
+	// name: host_root is the share's half of the object name, and the template
+	// is the home's.
+	t.Run("a host_root correction is refused", func(t *testing.T) {
+		from, to := t.TempDir(), t.TempDir()
+		_, _, _, put := allocated(t, []string{from, to}, func(d *types.UserDrive) {
+			d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateSub, from
+		})
+		w := put(`{"name":"Corp NAS","backend":"host_path","home_template":"sub","host_root":"`+to+`"}`, "")
+		if w.Code != http.StatusConflict {
+			t.Errorf("host_root change = %d, want 409: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("a home_template change is refused", func(t *testing.T) {
+		root := t.TempDir()
+		_, _, _, put := allocated(t, []string{root}, func(d *types.UserDrive) {
+			d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateSub, root
+		})
+		w := put(`{"name":"Corp NAS","backend":"host_path","home_template":"email_local","host_root":"`+root+`"}`, "")
+		if w.Code != http.StatusConflict {
+			t.Errorf("home_template change = %d, want 409: %s", w.Code, w.Body.String())
+		}
+	})
+
+	// An UNALLOCATED drive is nobody's storage yet, so the guard must not stand
+	// between an admin and a correction they are still free to make.
+	t.Run("an unallocated drive renames freely", func(t *testing.T) {
+		st := newDriveCRUDStore()
+		srv, rec := driveAdminServer(st, nil)
+		d := *driveFixture(nil)
+		st.drives[d.ID] = d
+		w := driveCall(t, srv.handleUpdateUserDrive, http.MethodPut, "/api/v1/drives/"+d.ID.String(),
+			`{"name":"Corp NAS archive","backend":"docker_volume","size_mib":10240}`,
+			map[string]string{"id": d.ID.String()})
+		if w.Code != http.StatusOK {
+			t.Fatalf("rename of an unallocated drive = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		if data := driveAuditData(t, rec, "drive.write"); data["rehomed"] != false {
+			t.Errorf("drive.write rehomed = %v, want false", data["rehomed"])
+		}
+	})
+
+	// FAIL CLOSED. An unreadable allocation state is not permission to re-home
+	// somebody quietly — the edit is unrecoverable in the product, so "I could
+	// not check" must refuse.
+	t.Run("an unreadable allocation state refuses rather than proceeds", func(t *testing.T) {
+		st, _, id, put := allocated(t, nil, nil)
+		st.listErr = errors.New("pg: connection refused")
+		w := put(`{"name":"Corp NAS archive","backend":"docker_volume","size_mib":10240}`, "")
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("unreadable state = %d, want a refusal: %s", w.Code, w.Body.String())
+		}
+		if st.drives[id].Name != "Corp NAS" {
+			t.Errorf("stored name = %q, want nothing written when the check could not run", st.drives[id].Name)
+		}
+	})
+}
+
 // TestDeleteAllocatedUserDriveIs409 is the RESTRICT arm and the count in its
 // message. Cascading instead would silently un-allocate every person this drive
 // named a directory for, with nothing in the log saying so.
@@ -752,6 +939,60 @@ func TestUserDriveGrantRefusals(t *testing.T) {
 		`{"subject_type":"user","subject":"bob","drive_id":"`+uuid.New().String()+`"}`, nil)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("unknown drive_id = %d, want 404: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestUserDriveGrantRefusesOneDirectoryNameTwice pins the loophole in the rule
+// above: a home_override on a GROUP row is refused because it would hand every
+// member of that group the SAME directory, and TWO USER ROWS carrying one
+// override is that same loss spelled with two rows instead of one.
+//
+// It bites hardest on a MANAGED drive. types.ValidateUserDrive now refuses a
+// claim home_template there and a hash home folds the subject, so the override
+// is the LAST way left to name an object Wardyn itself mints non-injectively —
+// without this refusal Wardyn creates one volume and binds it into two people's
+// sandboxes, read-write wherever the allocations are writable.
+func TestUserDriveGrantRefusesOneDirectoryNameTwice(t *testing.T) {
+	st := newDriveCRUDStore()
+	srv, _ := driveAdminServer(st, nil)
+	d := *driveFixture(nil) // docker_volume: a MANAGED drive, the object Wardyn mints
+	st.drives[d.ID] = d
+	other := *driveFixture(func(o *types.UserDrive) { o.ID, o.Name = uuid.New(), "Design scratch" })
+	st.drives[other.ID] = other
+
+	grant := func(subject, drive, home string) *httptest.ResponseRecorder {
+		return driveCall(t, srv.handleUpsertUserDriveGrant, http.MethodPost, "/api/v1/drives/grants",
+			`{"subject_type":"user","subject":"`+subject+`","drive_id":"`+drive+`","home_override":"`+home+`"}`, nil)
+	}
+
+	if w := grant("sub-bob", d.ID.String(), "bsmith"); w.Code != http.StatusCreated {
+		t.Fatalf("first allocation = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	// THE REFUSAL. A second person handed the same directory on the same drive.
+	w := grant("sub-alice", d.ID.String(), "bsmith")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("second subject on one directory = %d, want 409: %s", w.Code, w.Body.String())
+	}
+	// The admin has to be able to act on it: the message names the directory
+	// they typed. It names no OTHER subject, for handleDeleteUserDrive's reason
+	// — the allocations table already lists every override.
+	if !strings.Contains(w.Body.String(), "bsmith") {
+		t.Errorf("409 body = %s, want it to name the directory", w.Body.String())
+	}
+
+	// SCOPED, three ways, so the rule refuses collisions and nothing else.
+	// (1) The SAME subject re-submitting its own row is a repoint, not a clash.
+	if w := grant("sub-bob", d.ID.String(), "bsmith"); w.Code != http.StatusOK {
+		t.Errorf("repointing the holder's own row = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	// (2) The same name on a DIFFERENT drive is a different object.
+	if w := grant("sub-alice", other.ID.String(), "bsmith"); w.Code != http.StatusCreated {
+		t.Errorf("same name on another drive = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	// (3) No override at all is the common case and never collides — every
+	// grant without one derives its own home from its own subject.
+	if w := grant("sub-carol", d.ID.String(), ""); w.Code != http.StatusCreated {
+		t.Errorf("no override = %d, want 201: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -1110,4 +1351,181 @@ func TestUpdateAllocatedUserDriveRefusesASilentRehome(t *testing.T) {
 			t.Errorf("stored row = %+v, want it untouched", got)
 		}
 	})
+}
+
+// TestGetUserDrivesBoundsTheAllocationList pins the half of GET /drives whose
+// cost tracked HEADCOUNT.
+//
+// The response composes two store reads with very different costs.
+// ListUserDrives is an index-only scan and stays whole — there are as many
+// drives as an admin registered. The GRANT list is one row per SUBJECT, two
+// subjects per person, over an ORDER BY with no index: unbounded it sorted every
+// allocation in the deployment on every load of one admin screen (measured at
+// 50,000 allocations as a 5.5 MB on-disk external merge; bounded, a 301 kB
+// top-N heapsort).
+//
+// THE DEFAULT IS THE PART THAT MUST NOT TAKE ROWS AWAY. It is maxListLimit, not
+// defaultListLimit, so a deployment the console can actually render gets the
+// answer it always got; past the cap the page says so on the wire twice — the
+// X-Wardyn-Truncated header every paged list already sets, and grant_total,
+// which is free because the per-drive counts in the same response sum to it.
+func TestGetUserDrivesBoundsTheAllocationList(t *testing.T) {
+	const seeded = 7
+	// BOTH BRANCHES, because the handler has two and only one of them is
+	// production. driveCRUDStore is not a store.Pager, so it exercises the
+	// in-Go fallback every test double takes; drivePagerStore is, so it
+	// exercises the DB-level path PG takes — the one where the LIMIT is what
+	// bounds the sort. A test that ran only the fallback would leave the
+	// production branch free to regress while staying green, which is exactly
+	// how the first draft of this test passed with the page deliberately
+	// unbounded.
+	for _, tc := range []struct {
+		name  string
+		build func() (*Server, *driveCRUDStore)
+	}{
+		{name: "fallback (not a Pager)", build: func() (*Server, *driveCRUDStore) {
+			st := newDriveCRUDStore()
+			srv, _ := driveAdminServer(st, nil)
+			return srv, st
+		}},
+		{name: "pager (the production path)", build: func() (*Server, *driveCRUDStore) {
+			st := newDriveCRUDStore()
+			srv := New(Config{Store: &drivePagerStore{driveCRUDStore: st}, Audit: &recRecorder{},
+				RunnerTarget: "docker", LocalMode: true})
+			return srv, st
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) { runDriveListBoundsCase(t, tc.build) })
+	}
+
+	// AND THE BOUND REACHES THE STORE. Everything above is about the response,
+	// which the Go-side trim makes identical whether the query was bounded or
+	// not — so none of it can see the defect, which is that the DATABASE sorted
+	// every allocation. This asserts the Page the handler handed the store.
+	t.Run("the window is pushed into the query, not applied after it", func(t *testing.T) {
+		st := newDriveCRUDStore()
+		pager := &drivePagerStore{driveCRUDStore: st}
+		srv := New(Config{Store: pager, Audit: &recRecorder{}, RunnerTarget: "docker", LocalMode: true})
+		d := *driveFixture(nil)
+		st.drives[d.ID] = d
+
+		w := driveCall(t, srv.handleGetUserDrives, http.MethodGet, "/api/v1/drives?limit=3&offset=6", "", nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /drives = %d: %s", w.Code, w.Body.String())
+		}
+		// limit+1 is the overfetch that proves a next page exists without a
+		// second query — the same probe servePage uses.
+		if pager.asked.Limit != 4 || pager.asked.Offset != 6 {
+			t.Errorf("store was asked for %+v, want Limit 4 (the caller's 3 plus the probe row) and Offset 6 — "+
+				"an unbounded ask makes PostgreSQL sort every allocation in the deployment before the trim", pager.asked)
+		}
+		// A DEFAULT request is bounded too: absent ?limit is maxListLimit, never
+		// "unbounded", which is the whole regression this closes.
+		w = driveCall(t, srv.handleGetUserDrives, http.MethodGet, "/api/v1/drives", "", nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /drives = %d: %s", w.Code, w.Body.String())
+		}
+		if pager.asked.Limit != maxListLimit+1 {
+			t.Errorf("default request asked for Limit %d, want %d — an absent ?limit must still bound the sort",
+				pager.asked.Limit, maxListLimit+1)
+		}
+	})
+}
+
+// drivePagerStore is driveCRUDStore that IS a store.Pager: the embedded nil
+// Pager supplies the six methods this path never calls, and the one it does call
+// windows the double's own map exactly as the SQL LIMIT/OFFSET does.
+type drivePagerStore struct {
+	*driveCRUDStore
+	store.Pager
+	// asked records the Page the handler REQUESTED. It is the only place the
+	// bound is observable: the handler trims in Go afterwards, so a response
+	// built from an unbounded read is byte-identical to one built from a bounded
+	// read — and asserting the response alone cannot tell a query that sorted
+	// 50,000 rows from one that sorted 1,001. This is what the SQL was given.
+	asked store.Page
+}
+
+func (s *drivePagerStore) ListUserDriveGrantsPage(ctx context.Context, p store.Page) ([]types.UserDriveGrant, error) {
+	s.asked = p
+	all, err := s.ListUserDriveGrants(ctx)
+	if err != nil {
+		return nil, err
+	}
+	off := min(p.Offset, len(all))
+	rest := all[off:]
+	if p.Limit > 0 && p.Limit < len(rest) {
+		rest = rest[:p.Limit]
+	}
+	return rest, nil
+}
+
+func runDriveListBoundsCase(t *testing.T, build func() (*Server, *driveCRUDStore)) {
+	t.Helper()
+	srv, st := build()
+	d := *driveFixture(nil)
+	st.drives[d.ID] = d
+	const seeded = 7
+	for i := range seeded {
+		id := uuid.New()
+		st.grants[id] = types.UserDriveGrant{
+			ID: id, SubjectType: types.CapabilitySubjectUser,
+			Subject: fmt.Sprintf("sub-%02d", i), DriveID: d.ID, Enabled: true,
+		}
+	}
+
+	// offset is passed rather than parsed back out of the query because the
+	// header means "a FURTHER page exists", not "you did not get everything":
+	// the last page carries fewer rows than the total and is not truncated, and
+	// conflating the two is how a client loops forever or stops early.
+	get := func(query string, offset int) userDrivesResponse {
+		t.Helper()
+		w := driveCall(t, srv.handleGetUserDrives, http.MethodGet, "/api/v1/drives"+query, "", nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /drives%s = %d: %s", query, w.Code, w.Body.String())
+		}
+		var body userDrivesResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		more := offset+len(body.Grants) < body.GrantTotal
+		if got := w.Header().Get("X-Wardyn-Truncated"); (got == "true") != more {
+			t.Errorf("X-Wardyn-Truncated = %q at offset %d with %d of %d grants — the header must mean "+
+				"\"a further page exists\"", got, offset, len(body.Grants), body.GrantTotal)
+		}
+		return body
+	}
+
+	// THE TOTAL IS ALWAYS THE TRUE COUNT, page or no page: it is summed from the
+	// per-drive counts, not from the rows this response happens to carry.
+	whole := get("", 0)
+	if whole.GrantTotal != seeded || len(whole.Grants) != seeded {
+		t.Fatalf("unbounded: %d of %d grants, want all %d — the default must not take rows from a small deployment",
+			len(whole.Grants), whole.GrantTotal, seeded)
+	}
+
+	page := get("?limit=3", 0)
+	if len(page.Grants) != 3 {
+		t.Errorf("?limit=3 returned %d grants, want 3", len(page.Grants))
+	}
+	if page.GrantTotal != seeded {
+		t.Errorf("grant_total = %d on a page of 3, want the true %d — a client cannot tell it has all of them otherwise",
+			page.GrantTotal, seeded)
+	}
+
+	// The window MOVES, and the last page is not marked truncated.
+	second := get("?limit=3&offset=3", 3)
+	if len(second.Grants) != 3 || second.Grants[0].ID == page.Grants[0].ID {
+		t.Errorf("offset=3 returned %d grants starting at the same row — the offset is not applied", len(second.Grants))
+	}
+	last := get("?limit=3&offset=6", 6)
+	if len(last.Grants) != 1 {
+		t.Errorf("offset=6 returned %d grants, want the final 1", len(last.Grants))
+	}
+
+	// The drives half is UNTOUCHED by the window: it is the cheap read, and its
+	// per-drive counts are what stay correct when the allocation table is a page.
+	if len(whole.Drives) != 1 || whole.Drives[0].GrantCount != seeded {
+		t.Errorf("drives = %+v, want the one drive still carrying its full count of %d", whole.Drives, seeded)
+	}
 }

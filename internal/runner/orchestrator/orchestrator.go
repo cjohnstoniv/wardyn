@@ -147,11 +147,21 @@ func (o *Orchestrator) ImagePresent(ctx context.Context, ref string) (bool, erro
 // Capabilities aggregates the substrates' ClassSupport into one Capabilities:
 // the union of enforceable classes (strongest last) and the merged per-class
 // substrate labels. A class is advertised only when SOME substrate enforces it.
+//
+// UserDrives IS THE ONE CONJUNCTION, and the asymmetry is which side of routing
+// the flag is read on. Every union above describes a control that has to hold
+// for the run ROUTED TO THAT SUBSTRATE, and CreateSandbox picks a substrate
+// that enforces the demanded class. A drive request is refused BEFORE routing,
+// so a union would let a deployment with one drive-capable substrate promise a
+// mount to a run the orchestrator then hands to one that cannot bind it — the
+// "previewed green, failed at dispatch" shape this flag exists to close. With
+// no substrates wired there is nothing to bind, so it is false there too.
 func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, error) {
 	caps := runner.Capabilities{
 		Driver:   o.Name(),
 		Resolved: map[types.ConfinementClass]string{},
 	}
+	drives := len(o.substrates) > 0
 	seen := map[types.ConfinementClass]bool{}
 	var classes []types.ConfinementClass
 	for _, s := range o.substrates {
@@ -175,7 +185,9 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 		caps.NetworkPolicy = caps.NetworkPolicy || cs.NetworkPolicy
 		caps.NetworkPolicyAcknowledged = caps.NetworkPolicyAcknowledged || cs.NetworkPolicyAcknowledged
 		caps.SessionRecording = caps.SessionRecording || cs.SessionRecording
+		drives = drives && cs.UserDrives
 	}
+	caps.UserDrives = drives
 	// Strongest last regardless of substrate order.
 	sort.Slice(classes, func(i, j int) bool { return classes[i].Rank() < classes[j].Rank() })
 	caps.ConfinementClasses = classes

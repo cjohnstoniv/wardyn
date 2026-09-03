@@ -320,6 +320,29 @@ describe("DrivesScreen — the editor offers only this runner's backends (Q3)", 
     expect(within(editor).queryByLabelText(DRIVES.FIELD_STORAGE_CLASS)).not.toBeInTheDocument();
   });
 
+  it("a FRESH editor on a managed backend already has the subject-bearing names disabled", async () => {
+    renderScreen();
+    const editor = await openNew();
+    // The mirror of the rule above, and the reason is not symmetry: Wardyn
+    // mints a managed drive's volume itself, and a claim-derived name is not
+    // unique across email domains — alice@corp and alice@partner would be one
+    // volume — so the server refuses a claim template on a managed backend and
+    // the editor must not offer the row it would refuse.
+    expect(within(editor).getByText(DRIVES.HOME_SUB).closest("button")).toBeDisabled();
+    expect(within(editor).getByText(DRIVES.HOME_EMAIL_LOCAL).closest("button")).toBeDisabled();
+    expect(within(editor).getByText(DRIVES.HOME_HASH).closest("button")).toHaveAttribute("aria-pressed", "true");
+
+    // Going out to a share and back must not leave `sub` selected on a managed
+    // backend: the choice moves with the backend in BOTH directions, so the
+    // round trip cannot author a row the server refuses.
+    await userEvent.click(within(editor).getByText(DRIVES.BACKEND_K8S_PVC_STATIC));
+    expect(within(editor).getByText(DRIVES.HOME_SUB).closest("button")).toHaveAttribute("aria-pressed", "true");
+
+    await userEvent.click(within(editor).getByText(DRIVES.BACKEND_K8S_PVC));
+    expect(within(editor).getByText(DRIVES.HOME_SUB).closest("button")).toBeDisabled();
+    expect(within(editor).getByText(DRIVES.HOME_HASH).closest("button")).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("a managed backend disables the subject-bearing names and moves off them — the mirror of the share rule", async () => {
     renderScreen();
     const editor = await openNew();

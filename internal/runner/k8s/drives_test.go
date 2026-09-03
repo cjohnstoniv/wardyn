@@ -1142,3 +1142,47 @@ func TestEnsureDrivePVC_RefusesAClaimStampedForAnotherPerson(t *testing.T) {
 		}
 	})
 }
+
+// TestClassesDeclaresDrivesAndBindsThem pins the DECLARATION against the
+// BEHAVIOUR: this substrate says it can bind a member's drive, and it does.
+//
+// The two halves are one fact, and drift between them is member-visible in
+// whichever direction it drifts. The control plane admits or refuses a
+// drive-carrying run by reading Classes().UserDrives, at create and again at
+// preflight (api.driveIsMountableHere). A driver that declares FALSE while it
+// can bind refuses every allocation on a deployment that would have worked; one
+// that declares TRUE while it cannot is the run that previews green, answers
+// 201 and then fails at dispatch.
+//
+// This is the D4 half of that pair. Before D4 the same assertion ran the other
+// way, over the errDriveUnsupported stub this driver no longer has: it asserted
+// that CreateSandbox refused a drive AND that Classes declared false. D4 landed
+// the claim (ensureDrivePVC, applyDriveToPod) and the declaration moved with it.
+// What is pinned never changed — the two must agree.
+//
+// The CLAIM's own behaviour — naming, labels, reuse, the RBAC verbs, every
+// fail-closed arm — is this file's other tests; this asserts only that a bind
+// happens at all, because that is what the declaration claims.
+func TestClassesDeclaresDrivesAndBindsThem(t *testing.T) {
+	ctx := context.Background()
+	d, cs := newTestDriver(t, Config{})
+
+	support, err := d.Classes(ctx)
+	if err != nil {
+		t.Fatalf("Classes: %v", err)
+	}
+	if !support.UserDrives {
+		t.Fatal("Classes reports UserDrives=false while this driver binds drives — " +
+			"the control plane would refuse every allocation on this deployment")
+	}
+
+	// …and the claim is true. A declaration nothing exercises is the half of the
+	// pair that rots.
+	cs.ClearActions()
+	if err := ensureDrivePVC(ctx, cs, testNamespace, testDriveMount()); err != nil {
+		t.Fatalf("Classes declares UserDrives, but ensureDrivePVC refused: %v", err)
+	}
+	if pvcs := createdPVCs(t, cs); len(pvcs) != 1 {
+		t.Errorf("claims created = %d, want exactly 1 — the declaration promises a bind", len(pvcs))
+	}
+}
