@@ -450,6 +450,16 @@ func (s *Server) authorizeMemberDecision(w http.ResponseWriter, r *http.Request,
 // single-operator deployment, which is most of them.
 const envEgressSecondHuman = "WARDYN_EGRESS_SECOND_HUMAN"
 
+// EgressSecondHumanEnabled reports whether the four-eyes egress switch is on.
+//
+// Exported for exactly one caller — cmd/wardynd's boot-time local-mode check,
+// which warns when the switch is combined with a mode that cannot enforce it.
+// It is a function rather than a second os.Getenv at the boot site so the env
+// NAME and the truthiness rule keep ONE definition: a boot guard that disagreed
+// with the runtime gate about what "on" means would warn about a deployment that
+// is fine, or stay silent for one that is not.
+func EgressSecondHumanEnabled() bool { return envEnabled(os.Getenv(envEgressSecondHuman)) }
+
 // requireSecondHuman is decide's rule 8: under envEgressSecondHuman, refuse an
 // egress_domain decision whose decider IS the run's creator. It returns false
 // having already written its own 4xx/5xx, exactly like the other rule helpers.

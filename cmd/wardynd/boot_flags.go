@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
 )
 
@@ -473,6 +474,28 @@ func resolveLocalMode(f *bootFlags) (localModeState, error) {
 				slog.String("listen", *f.listen),
 			)
 		}
+	}
+	// The four-eyes egress switch cannot be enforced in local mode, and an
+	// operator who set both learns that when their FIRST approval hangs — a 503
+	// per decision, forever. Say it at boot instead.
+	//
+	// SCOPED TO THE COMBINATION THAT IS ACTUALLY BROKEN, and only that one: local
+	// mode authenticates nobody, so both the decider and the run's created_by
+	// come from the same client-supplied source and no request in that mode can
+	// prove a second human decided (requireSecondHuman refuses outright). With
+	// either half alone there is nothing to say — the switch works normally off
+	// local mode, and local mode is unaffected with the switch unset — so this
+	// stays silent for both. A boot warning that fires on a merely unusual
+	// configuration gets filtered out of the logs within a week, and is then
+	// missing for the deployment that needed it.
+	//
+	// WARN, not a refusal: everything else in the deployment works, so refusing
+	// to start would cost an operator their whole daemon over one disabled
+	// control. The message names the consequence and the remedy.
+	if api.EgressSecondHumanEnabled() {
+		slog.Warn("wardynd: WARDYN_EGRESS_SECOND_HUMAN is set but LOCAL MODE authenticates nobody — the four-eyes gate cannot be enforced here, so EVERY egress_domain approval decision will be refused with 503. Configure SSO to use this switch, or unset it.",
+			slog.String("listen", *f.listen),
+		)
 	}
 	if lm.operator == "" {
 		lm.operator = defaultLocalOperator()
