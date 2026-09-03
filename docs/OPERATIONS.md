@@ -204,8 +204,16 @@ and the role split hardens that against the app role. Neither binds a **table
 owner or superuser**, who can `ALTER TABLE … DISABLE TRIGGER` and rewrite a row —
 the residual `0007_audit_least_privilege.sql` states plainly. The role-split check
 that reports this posture at boot (`AuditDDLProtected`) counts THREE ways to
-bypass, not two: superuser, membership in the owner role, and the **`TRIGGER`
-privilege** on `audit_events`. The third is the quiet one — a role granted
+bypass, not two: membership in a superuser role, membership in the owner role,
+and the **`TRIGGER` privilege** on `audit_events`. All three are **membership**
+tests, not attribute lookups — `GRANT some_admin_role TO app_role`, the ordinary
+managed-Postgres migration shape, leaves `app_role` with `rolsuper = false` while
+it can still `SET ROLE` and `ALTER TABLE … DISABLE TRIGGER`, and the chain is
+followed to any depth whether or not the role `INHERIT`s. Membership in
+`pg_write_all_data` is deliberately **not** counted: it confers
+`INSERT`/`UPDATE`/`DELETE`, but the append-only guard is a trigger rather than a
+privilege and still refuses both — counting it would understate the posture just
+as badly as missing a superuser overstates it. The third is the quiet one — a role granted
 `TRIGGER` cannot drop the shipped guards, but it can add a row-level BEFORE
 INSERT trigger of its own and rewrite the row on the way in, minting records that
 say whatever it likes while every shipped guard is still armed. Name order is

@@ -151,23 +151,54 @@ func TryAdvisoryLock(ctx context.Context, pool *pgxpool.Pool, key int64) (releas
 // THE TRIGGER PRIVILEGE IS PART OF THE CLAIM, and it is the least obvious third
 // of it. A role that is neither owner nor superuser but holds
 // GRANT TRIGGER ON audit_events cannot drop the shipped triggers — it can do
-// something quieter: CREATE its own BEFORE INSERT trigger. Postgres fires
-// same-event row triggers in NAME order, so one named after audit_events_chain
-// runs last and overwrites NEW.prev_hash/NEW.row_hash on the way in, minting
-// rows that hash to whatever it says while every shipped guard stays armed and
-// every catalog check still finds them. 0007_audit_least_privilege.sql revokes
+// something quieter: CREATE its own row-level BEFORE INSERT trigger, which is
+// handed NEW and whose changes are what Postgres stores — so it can rewrite any
+// field, choose prev_hash/row_hash, or drop the row entirely, minting records
+// that say whatever it wants while every shipped guard stays armed and every
+// catalog check still finds them. Name order is NOT what makes that work: a
+// trigger sorting after audit_events_chain (same-event row triggers fire in name
+// order) runs last and can overwrite the hashes directly, but one sorting BEFORE
+// it is easier still — it rewrites NEW and the shipped chain trigger then hashes
+// the forgery for it. ensureAuditTriggers refuses the boot over either, keyed on
+// the trigger's SHAPE rather than its name; this function is the PREVENTIVE half
+// and only asks whether the privilege to create one is held.
+// 0007_audit_least_privilege.sql revokes
 // TRIGGER from PUBLIC precisely because of that, but a deploy is free to grant
 // it back, so the claim has to be checked and not inferred.
+//
+// ALL THREE LEGS TEST MEMBERSHIP, not a role attribute. The superuser leg asks
+// whether current_user is a member of ANY role with rolsuper — not whether
+// current_user itself has rolsuper. Reading the attribute off the current_user
+// row missed the ordinary managed-Postgres shape (GRANT some admin role TO the
+// app role): that role has rolsuper = false, is not a member of the table's
+// owner, and holds no TRIGGER privilege, so it was reported PROTECTED while it
+// could SET ROLE to a superuser and ALTER TABLE ... DISABLE TRIGGER. pg_has_role
+// with 'MEMBER' is what makes this honest: 'MEMBER' is the right to SET ROLE, so
+// it follows the grant chain to any depth AND ignores INHERIT — a NOINHERIT role
+// that can still SET ROLE is caught. A role is a member of itself, so a directly
+// superuser role is reported exactly as it was before.
+//
+// WHAT THIS DELIBERATELY DOES NOT MODEL, stated so the next reader does not
+// widen it by guesswork. Membership in pg_write_all_data is NOT a bypass and is
+// NOT tested for: it confers INSERT/UPDATE/DELETE rights, but the append-only
+// triggers still fire and raise — measured in the probe beside this function,
+// not assumed. Roles that own the HOST rather than the guard —
+// pg_execute_server_program, pg_write_server_files — can escalate to superuser
+// by documented PostgreSQL behaviour and are still reported protected here. The
+// predicate stays a closed, catalog-derived test (rolsuper) rather than a list
+// of role names that rots with every Postgres release: once the database host is
+// compromised, no claim Wardyn makes about that database survives anyway.
 func AuditDDLProtected(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
 	var canBypass bool
 	err := pool.QueryRow(ctx, `
 		SELECT COALESCE(
-			bool_or(r.rolsuper
+			bool_or(EXISTS (SELECT 1 FROM pg_roles s
+			                 WHERE s.rolsuper
+			                   AND pg_has_role(current_user, s.oid, 'MEMBER'))
 			        OR pg_has_role(current_user, c.relowner, 'MEMBER')
 			        OR has_table_privilege(current_user, c.oid, 'TRIGGER')),
 			true)
 		FROM pg_class c
-		JOIN pg_roles r ON r.rolname = current_user
 		WHERE c.relname = 'audit_events' AND c.relkind = 'r'`,
 	).Scan(&canBypass)
 	if err != nil {
