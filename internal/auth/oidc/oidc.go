@@ -578,6 +578,22 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 		redirectAuthError(w, r, authErrorNoRole)
 		return
 	}
+	// The overage half of role derivation. deriveRole is a pure function of the
+	// claims it was HANDED, and on an overage the claim the role map is keyed on
+	// is simply not in the token — so its "nothing matched, take the default"
+	// is an absence of evidence, not a fact. Denying here rather than inside
+	// deriveRole keeps that function pure and puts the refusal beside every
+	// other login denial, and it is the same fail-closed choice
+	// authErrorRoleCheckUnavailable already makes when the role-mapping store
+	// cannot be read: an unanswerable input never widens a session.
+	if overageWidensRole(dc.ClaimNames, role, matches) {
+		slog.Warn("oidc: login denied — the IdP omitted a claim role derivation depends on (overage) and the default role would widen this session",
+			"sub", idToken.Subject, "default_role", a.cfg.DefaultRole,
+			"env", "WARDYN_OIDC_DEFAULT_ROLE", "claim_names", claimNamesKeys(dc.ClaimNames))
+		clearCookie(w, sessionCookieName)
+		redirectAuthError(w, r, authErrorClaimsOverage)
+		return
+	}
 	if len(matches) > 0 {
 		slog.Debug("oidc: role derivation matched", "sub", idToken.Subject, "role", role, "matches", matches)
 	}
@@ -767,6 +783,16 @@ const (
 	// env-only WARDYN_OIDC_ROLE_MAP, which could WIDEN access under
 	// WARDYN_OIDC_DEFAULT_ROLE=admin.
 	authErrorRoleCheckUnavailable = "role_check_unavailable"
+	// authErrorClaimsOverage: the IdP declined to send the `groups` (or
+	// `roles`) claim because the human is in more groups than its token limit
+	// (an Entra overage, signalled by `_claim_names`), and WARDYN_OIDC_DEFAULT_ROLE
+	// would then have handed them a role WIDER than the narrowest tier on the
+	// strength of a claim nobody read. Distinct from authErrorNoRole's
+	// "checked, and nothing matched": here nothing was checkable. The remedy is
+	// the operator's — carry the tier on Entra App Roles (the much smaller
+	// `roles` claim), map the human's email directly, or stop defaulting
+	// unmatched humans to admin — so retrying will not clear it.
+	authErrorClaimsOverage = "claims_overage"
 	// authErrorOIDCTransient (D12): the token exchange kept failing with a
 	// network timeout or a 5xx from the IdP after retryExchange's retries —
 	// the IdP is having a bad moment, not the deployment being misconfigured.

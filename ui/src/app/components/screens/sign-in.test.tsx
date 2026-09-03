@@ -184,6 +184,19 @@ describe("SignIn — renders the OIDC callback's ?auth_error=<code> inline (W31-
     expect(await screen.findByRole("alert")).toHaveTextContent(/couldn't check your access/i);
   });
 
+  // claims_overage must NOT reach the generic fallback: that arm says "Try
+  // again", and retrying replays the identical token. The remedy is the
+  // admin's, so the copy has to name it.
+  it("renders the claims_overage message and does not tell the user to retry", async () => {
+    window.history.pushState({}, "", "/?auth_error=claims_overage");
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/too many groups/i);
+    expect(alert).toHaveTextContent(/ask your wardyn admin/i);
+    expect(alert).not.toHaveTextContent(/sign-in failed/i);
+  });
+
   it("falls back to a generic message for an unrecognized code", async () => {
     window.history.pushState({}, "", "/?auth_error=something_new");
     healthMock.mockResolvedValue({});

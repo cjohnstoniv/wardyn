@@ -102,8 +102,20 @@ func (s *Server) routes() chi.Router {
 			//   mountSetupMutationRoutes                 4     0
 			//   mountAccessRoutes      (access.go)       4     0
 			//   mountGovernanceRoutes  (governance.go)   0     7
+			//   mountUserDriveRoutes   (user_drives.go)  7     0
 			//                                        -----  ----
-			//                                           24    22
+			//                                           31    22
+			//
+			// The /drives row is the one this comment MISSED for a release: the
+			// mount landed, the enforcement matrix counted its 7, and this
+			// derivation was not re-run — so the table read 24 SUPER and
+			// under-counted the super tier by exactly those 7. That is the whole
+			// hazard of a hand-summed count, so the split no longer rests on
+			// this comment being right: TestSecurityAdminRouteTier
+			// (authz_test.go) asserts the totals below as a NUMBER and reddens
+			// on any drift. This table is the map of WHERE the routes are
+			// registered — the thing no test can tell you; that assertion is
+			// whether the arithmetic still holds.
 			//
 			// The 8 SEC direct registrations below: POST /sessions/revoke ·
 			// workspace approved-egress + denied-egress + record +
@@ -115,8 +127,8 @@ func (s *Server) routes() chi.Router {
 			// admin token twins /tokens, /tokens/{id}) and adminRoutes' GET
 			// /audit/chain/verify (its sibling, the sandbox sweep, stays SUPER).
 			//
-			// = 46 group registrations with every conditional route mounted
-			// (Secrets configured); 43 with Secrets unconfigured — 3 of
+			// = 53 group registrations with every conditional route mounted
+			// (Secrets configured); 50 with Secrets unconfigured — 3 of
 			// mountSetupMutationRoutes' 4 are conditional on s.cfg.Secrets, and
 			// POST /sessions/revoke on s.cfg.SessionRevocations. 0.7 moved
 			// PUT/DELETE /secrets off these groups entirely (see "Secret
@@ -125,9 +137,9 @@ func (s *Server) routes() chi.Router {
 			// in 0048 — those gates moved INTO the handlers, they were not
 			// dropped.
 			//
-			// §B's 40 GATED ROUTES = these 24+22 MINUS mountGovernanceRoutes' 7
-			// AND §I's directory search (both new in 0.7, outside the count)
-			// PLUS the two gated elsewhere, both
+			// §B's 40 GATED ROUTES = these 31+22 MINUS mountGovernanceRoutes' 7,
+			// mountUserDriveRoutes' 7 AND §I's directory search (all new in 0.7,
+			// outside the count) PLUS the two gated elsewhere, both
 			// SUPER: GET /metrics (outside /api/v1, its own explicit
 			// requireOperator — commit "absorb the operator tier") and the attach
 			// WebSocket's ticket-LESS fallback lane (ticketOrHumanAuth's own

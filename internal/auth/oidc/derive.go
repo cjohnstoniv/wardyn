@@ -619,13 +619,9 @@ func sessionGroups(rolesClaim, groupsClaim []string, claimNames map[string]any) 
 		out = append(out, g)
 	}
 	// Either kind of partial snapshot — dropped at the byte cap here, or never
-	// sent by the IdP (overage) — stamps the same bit. Both claims sessionGroups
-	// unions are checked: an App Roles overage hides a `roles`-derived group
-	// identity just as completely as a `groups` one.
-	for _, claim := range []string{"groups", "roles"} {
-		if _, overage := claimNames[claim]; overage {
-			return out, true
-		}
+	// sent by the IdP (overage) — stamps the same bit.
+	if claimsOverage(claimNames) {
+		return out, true
 	}
 	return out, len(out) < len(uniq) || unrepresentable > 0
 }
@@ -658,6 +654,73 @@ func CanonicalGroupSubject(s string) (string, bool) {
 		return "", false
 	}
 	return strings.ToLower(s), true
+}
+
+// claimsOverage reports whether the ID token's `_claim_names` says the IdP
+// OMITTED a claim this package derives identity from, rather than sending an
+// empty one. Entra ID stops emitting `groups` (or `roles`) altogether once the
+// human is in more groups than the token limit — 200 for a JWT — and sends an
+// OIDC Core distributed-claim pointer (`_claim_names`/`_claim_sources`) to
+// Microsoft Graph in its place. The claim then decodes to nil, which is
+// byte-for-byte "asked, there were none", so this marker is the only thing that
+// tells the two apart. Wardyn does not dereference the pointer (a Graph call
+// with its own credential and egress, at login latency) — it fails closed.
+//
+// BOTH claims are checked, because both feed both derivations: sessionGroups
+// unions them into one group identity, and deriveRole looks both up in the role
+// map. An App Roles overage hides a `roles`-derived identity just as completely
+// as a `groups` one.
+//
+// One function, two callers — sessionGroups' truncation bit and
+// overageWidensRole — because "was this token answerable" must have exactly one
+// answer. They diverged once: the snapshot half was made overage-aware and the
+// role half was not, and on WARDYN_OIDC_DEFAULT_ROLE=admin that silently
+// promoted a group-mapped member to super admin.
+func claimsOverage(claimNames map[string]any) bool {
+	for _, claim := range []string{"groups", "roles"} {
+		if _, overage := claimNames[claim]; overage {
+			return true
+		}
+	}
+	return false
+}
+
+// overageWidensRole reports whether an IdP claim overage turned deriveRole's
+// "nothing matched" into a WIDENING default — the login CallbackHandler must
+// deny rather than serve.
+//
+// deriveRole's arm 3 falls through to defaultRole when no claim value and no
+// allowlist entry matched. On an overage that "nothing matched" is not a fact,
+// it is an absence of evidence: the IdP declined to send the very claim the
+// role map is keyed on. Serving the default then hands the human a role NO
+// configured rule granted them, decided by a directory change nobody in Wardyn
+// made or can see.
+//
+// The check is deliberately narrow, so it costs nothing in the ordinary
+// posture:
+//
+//   - A real MATCH is served as-is. Hiding a claim can only REMOVE matches from
+//     a highest-wins fold, so an overage can only ever narrow a matched role.
+//     Narrowing is the safe direction and needs no denial.
+//   - A default that cannot widen is served too. defaultRole=member is the
+//     narrowest tier there is, so no hidden claim could have produced less; a
+//     human in 200+ groups still signs in exactly as before. Keyed on roleRank
+//     rather than the literal "admin" so a fourth tier inherits the rule.
+//   - Only a fallthrough to a default that OUTRANKS the narrowest tier is
+//     refused — today exactly WARDYN_OIDC_DEFAULT_ROLE=admin, the "everyone not
+//     specifically walled is an admin" posture, where the hidden claim is
+//     precisely the one that would have walled them.
+//
+// Arm 1 (no role map at all) is untouched: it derives from the allowlist and
+// the email, never from a claim, and its Matches are never MatchSourceDefaultRole.
+func overageWidensRole(claimNames map[string]any, role string, matches []Match) bool {
+	if !claimsOverage(claimNames) {
+		return false
+	}
+	if !slices.ContainsFunc(matches, func(m Match) bool { return m.Source == MatchSourceDefaultRole }) {
+		return false
+	}
+	return roleRank(role) > roleRank(RoleMember)
 }
 
 // printableASCII reports whether every rune of s is a printable ASCII
@@ -700,4 +763,18 @@ func emailInList(email string, list []string) bool {
 // fold onto).
 func ASCIIOnly(s string) bool {
 	return strings.IndexFunc(s, func(r rune) bool { return r > unicode.MaxASCII }) < 0
+}
+
+// claimNamesKeys returns the distributed-claim names present in a token's
+// `_claim_names`, sorted, for the one log line an operator debugging a
+// claims_overage denial has to go on. Keys only — the VALUES are
+// `_claim_sources` references into the IdP's own endpoints and say nothing this
+// log needs.
+func claimNamesKeys(claimNames map[string]any) []string {
+	keys := make([]string, 0, len(claimNames))
+	for k := range claimNames {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
 }

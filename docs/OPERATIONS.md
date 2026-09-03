@@ -747,6 +747,21 @@ assignment. Where members legitimately sit in that many groups, prefer Entra App
 Roles (the much smaller `roles` claim) or user-subject grants — or configure the
 group claim to emit only the groups assigned to the application.
 
+An overage also blocks one **role derivation** it must not be allowed to decide.
+The role map is keyed on the very claims the IdP withheld, so an overage login
+matches nothing — and "nothing matched" is then an absence of evidence, not a
+fact. Falling through to `WARDYN_OIDC_DEFAULT_ROLE=admin` would hand that human
+the top tier on the strength of a claim nobody read, promoting exactly the member
+the hidden claim was going to wall. Such a login is **denied**
+(`auth_error=claims_overage`), with a server log line naming the claim and the
+var. The check is narrow, so the ordinary posture is untouched: a login whose
+claims genuinely matched is served as-is (a hidden claim can only ever *narrow* a
+highest-wins match), and so is a fallthrough to `member`, the narrowest tier
+there is — a human in 200+ groups still signs in. Only a default WIDER than
+`member` is refused. The remedy is the operator's, and retrying will not clear
+it: carry the tier on Entra App Roles, map the human's email directly, or stop
+defaulting unmatched humans to `admin`.
+
 **What a capability deliberately does not reach.** `always`-scope decisions stay
 operator-only even for a member granted the host — a grant must never promote a
 member's decision into durable workspace config. `GET /workspaces` is not
