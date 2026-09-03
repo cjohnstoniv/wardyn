@@ -212,9 +212,18 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/access/mappings":        {class: classAdmin},
 	"DELETE /api/v1/access/mappings/{id}": {class: classAdmin},
 	"POST /api/v1/access/preview":         {class: classAdmin},
-	// Operator-triggered sandbox sweep. SUPER: it TEARS DOWN containers —
-	// other people's live runs, mid-flight — which is reach INTO runs the
-	// caller does not own, the one axis the security tier never gets.
+	// Operator-triggered sandbox sweep. SUPER for HOST reach and blast radius —
+	// it drives the runner (Status + StopSandbox) plus the credential revoke
+	// cascade across every run in the deployment from one call, and the host is
+	// one of the three axes securityOps never gets.
+	//
+	// It used to be justified here as "it TEARS DOWN containers — other people's
+	// live runs, mid-flight — which is reach INTO runs the caller does not own,
+	// the one axis the security tier never gets". Both halves were false: the
+	// sweep skips every non-terminal run (it reaps the sandbox of runs that have
+	// ALREADY ended), and the security tier CAN stop a foreign run, on purpose —
+	// ownsRunOrAdmin is isSecurityOperator, so kill admits it on any run. See
+	// TestSecurityAdminCanStopAForeignRun below and routes.go's own note.
 	"POST /api/v1/admin/sandboxes/sweep": {class: classAdmin},
 
 	// ── security (0.7 §B: admin OR security_admin; a member still 403s) ──

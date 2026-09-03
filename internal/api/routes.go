@@ -755,10 +755,42 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// whole-fleet audit VOLUME is the same disclosure that keeps /metrics
 	// gated. Operator-INVOKED by design: wardynd never verifies at boot.
 	securityOps.Get("/audit/chain/verify", s.handleVerifyAuditChain)
-	// Sandbox sweep. SUPER: it TEARS DOWN containers — other people's live
+	// Sandbox sweep. SUPER — but NOT for the reason this comment used to give,
+	// and the correction matters because an operator deciding who to trust with
+	// RoleSecurityAdmin reads exactly these lines.
+	//
+	// It used to say the sweep "TEARS DOWN containers — other people's live
 	// runs, mid-flight — which is reach into runs the caller does not own, the
-	// exact axis the security tier does not get. Deliberately not wired at boot
-	// (sweepOrphanedSandboxes already covers that case — see reconcile.go) and
-	// deliberately not a ticker; see handleSweepSandboxes for the cost argument.
+	// exact axis the security tier does not get." BOTH halves were false:
+	//
+	//   - It never touches a live run. SweepTerminalSandboxes skips every
+	//     non-terminal row outright (`if !isTerminalRunState(run.State) ...
+	//     continue`, runs_lifecycle.go) and reaps only the sandbox of a run that
+	//     has ALREADY ended and whose container outlived it. That is orphan
+	//     cleanup, not termination — pinned by
+	//     TestSweepTerminalSandboxes_TearsDownOrphanedLiveSandbox, whose fixture
+	//     carries a RUNNING run precisely to assert it is left alone.
+	//   - The security tier HAS that axis, deliberately. ownsRunOrAdmin is
+	//     isSecurityOperator (helpers.go), so POST /runs/{id}/kill admits a
+	//     security admin on ANY run, over a fleet-wide list handleListRuns hands
+	//     the same tier — "INSPECT-OR-STOP is the whole of that arm's warrant",
+	//     and killing a foreign run is named there as the tier's most
+	//     time-critical act. Executed: a security_admin POSTs kill on a foreign
+	//     RUNNING run and gets 202 with the row transitioned to KILLED
+	//     (TestSecurityAdminCanStopAForeignRun). So "the axis the security tier
+	//     does not get" described the opposite of this codebase.
+	//
+	// WHAT IS actually true, and why it stays SUPER: the sweep drives the RUNNER
+	// — Status then StopSandbox — across every run in the deployment, plus the
+	// credential revoke cascade for each. That is reach at the HOST over the
+	// whole fleet from one call, and the host IS one of the three axes securityOps
+	// is defined never to reach. The per-run kill is bounded to a run the caller
+	// names and audits per run; this is unbounded and audits one row for the
+	// batch. Blast radius and host reach are the argument; foreign-run
+	// termination never was.
+	//
+	// Deliberately not wired at boot (sweepOrphanedSandboxes already covers that
+	// case — see reconcile.go) and deliberately not a ticker; see
+	// handleSweepSandboxes for the cost argument.
 	operatorOnly.Post("/admin/sandboxes/sweep", s.handleSweepSandboxes)
 }

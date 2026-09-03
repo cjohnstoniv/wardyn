@@ -414,3 +414,60 @@ func TestRecordWorkspaceIsSuperAdminOnly(t *testing.T) {
 		t.Errorf("admin POST record = 403 — the super admin must still be able to record any workspace: %s", w.Body.String())
 	}
 }
+
+// TestSecurityAdminCanStopAForeignRun makes an in-tree PROSE CLAIM executable,
+// which is the whole point of it existing.
+//
+// Two authoritative comments disagreed about the same tier. helpers.go's
+// ownsRunOrAdmin says the security tier gets foreign-run KILL on purpose —
+// "INSPECT-OR-STOP is the whole of that arm's warrant … kill", named as the
+// tier's most time-critical act — while routes.go and the authz matrix
+// justified the sandbox sweep's SUPER gate as protecting "the one axis the
+// security tier never gets", meaning exactly that reach. An operator choosing
+// who to trust with RoleSecurityAdmin reads the second pair and concludes the
+// tier cannot terminate other people's runs. It can.
+//
+// So this pins the TRUE half, in the direction that keeps the two in step: if
+// anyone later narrows kill to ownsRunOrSuperAdmin, this test goes red and the
+// person doing it is told, at the point of the change, that the sweep's
+// rationale depends on the answer. That is the repair for an invariant asserted
+// in prose and enforced by nothing.
+//
+// The other half — that the sweep never touches a live run — is already pinned
+// by TestSweepTerminalSandboxes_TearsDownOrphanedLiveSandbox, whose fixture
+// carries a RUNNING run for exactly that purpose; it is not duplicated here.
+func TestSecurityAdminCanStopAForeignRun(t *testing.T) {
+	kill := func(t *testing.T, role string) (int, types.RunState) {
+		t.Helper()
+		srv, ast, _, _ := newAuthzMatrixServer(t)
+		id := uuid.New()
+		ast.mu.Lock()
+		ast.runs[id] = types.AgentRun{ID: id, CreatedBy: "sub-someone-else", State: types.RunRunning, Agent: "claude-code"}
+		ast.mu.Unlock()
+		sess := ssoSession(t, "sub-killer", "killer@corp.example", role)
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/"+id.String()+"/kill", sess, "")
+		ast.mu.Lock()
+		defer ast.mu.Unlock()
+		return w.Code, ast.runs[id].State
+	}
+
+	// The claim under test: the SECURITY tier really does reach a run it does
+	// not own, and the run really ends — status alone would not prove the
+	// transition applied.
+	if code, state := kill(t, oidc.RoleSecurityAdmin); code != http.StatusAccepted || state != types.RunKilled {
+		t.Errorf("security_admin kill of a FOREIGN run = %d, run state %q; want 202 and KILLED. "+
+			"If this is now refused, that is a deliberate narrowing — and routes.go's sandbox-sweep note plus "+
+			"the authz matrix row must be revisited, because they no longer describe the tier", code, state)
+	}
+	// The super admin, for contrast: same answer, so the assertion above is
+	// about the SECURITY tier rather than about kill being open to everyone.
+	if code, state := kill(t, oidc.RoleAdmin); code != http.StatusAccepted || state != types.RunKilled {
+		t.Errorf("admin kill of a foreign run = %d, state %q; want 202 and KILLED", code, state)
+	}
+	// And the member, which is what makes it a TIER statement: a plain member is
+	// refused with the byte-identical 404 a missing run gives, and the run is
+	// untouched.
+	if code, state := kill(t, oidc.RoleMember); code != http.StatusNotFound || state != types.RunRunning {
+		t.Errorf("member kill of a foreign run = %d, state %q; want 404 and the run still RUNNING", code, state)
+	}
+}

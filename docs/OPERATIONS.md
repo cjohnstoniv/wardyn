@@ -839,7 +839,13 @@ or group to `security_admin` in the role map (chart or People page). Security
 admins author and assign **governance profiles** (named ceilings bound to users or
 groups), write the org allow/denylists (capability grants), decide escalated
 approvals — egress, credential, tool — on anyone's run, revoke sessions and API
-tokens, and verify the audit chain. They **promote** a workspace's recorded
+tokens, and verify the audit chain. They can also **stop** any run in the
+deployment — killing a foreign run is incident response, and the most
+time-critical thing this tier does — which is deliberately *not* the same as
+reaching INTO one: no attach ticket, no shell, no credential material, no host.
+Inspect-or-stop is the whole of that warrant. (The batch form, the sandbox
+sweep, stays admin-only: it drives the container runtime across every run at
+once, which is host reach rather than run reach.) They **promote** a workspace's recorded
 egress into its allowlist, but they cannot **record** one: launching a recording
 session opens an interactive sandbox with open egress, the workspace's directory
 bind-mounted and its credentials injected, which is reach into a run, credential

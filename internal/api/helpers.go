@@ -304,6 +304,15 @@ func (s *Server) getRunOr404(w http.ResponseWriter, r *http.Request, id uuid.UUI
 // INSPECT-OR-STOP is the whole of that arm's warrant — run_files, run_resources,
 // grants, kill, the approval/audit evidence reads.
 //
+// THE SANDBOX SWEEP'S TIER NOTE DEPENDS ON THIS LINE, so the two are
+// cross-referenced rather than left to drift: routes.go once justified keeping
+// POST /admin/sandboxes/sweep on operatorOnly as protecting "the axis the
+// security tier does not get", meaning foreign-run termination — which this
+// predicate grants on purpose. That note now says what is actually true (host
+// reach and fleet-wide blast radius). If kill is ever narrowed to
+// ownsRunOrSuperAdmin below, revisit it: TestSecurityAdminCanStopAForeignRun is
+// the pin that will say so.
+//
 // THE SPLIT, named once: two routes sit under the same owner-or-admin shape and
 // are NOT inspect-or-stop, so neither may use this predicate —
 //
