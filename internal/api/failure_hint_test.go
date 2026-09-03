@@ -33,7 +33,7 @@ func TestDispatch_PreAgentFailure_StampsFailureHint(t *testing.T) {
 	rn := &createFailRunner{fakeRunner: &fakeRunner{}, err: errors.New("no such image: agent-claude-code:0.6.0")}
 	srv, st, _, run := dispatchTeardownFixture(t, rn, types.RunPending)
 
-	srv.dispatchRun(context.Background(), run, dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Policy: types.RunPolicySpec{MinConfinementClass: types.CC1},
 	})

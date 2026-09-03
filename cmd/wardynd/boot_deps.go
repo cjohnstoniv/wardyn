@@ -353,8 +353,19 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			// the login still succeeds — see oidc.Config.OnLogin's own doc for
 			// why that contract lives on the callback side, not here.
 			OnLogin: func(ctx context.Context, sub, role string) {
-				if err := store.NewPG(pool).RefreshSSHKeyRoles(ctx, sub, role, time.Now().UTC()); err != nil {
+				st := store.NewPG(pool)
+				if err := st.RefreshSSHKeyRoles(ctx, sub, role, time.Now().UTC()); err != nil {
 					slog.Warn("wardynd: ssh key role refresh at login failed", slog.String("err", err.Error()))
+				}
+				// The api-token twin. Both credentials freeze a role at issue
+				// time and neither could learn about a demotion on its own; the
+				// key lane was bounded in 0046 and the token lane was not, so a
+				// demoted human's outstanding wdn_ tokens kept authenticating as
+				// an admin until someone remembered to revoke them by hand. One
+				// login now bounds both. Best-effort for the same reason as
+				// above: a store hiccup here must not fail the login.
+				if err := st.RefreshAPITokenRoles(ctx, sub, role); err != nil {
+					slog.Warn("wardynd: api token role refresh at login failed", slog.String("err", err.Error()))
 				}
 			},
 		}, sessKey)

@@ -366,30 +366,52 @@ func ClampRunConfinement(runClass string, floor types.ConfinementClass) (string,
 	return runClass, ""
 }
 
+// clampGrants narrows each proposed grant to the bound of the ceiling grant that
+// covers it, and drops any whose KIND the ceiling does not carry.
+//
+// WHICH ceiling grant supplies the bound is ceilingGrantsBounding's answer, not
+// a kind-keyed map's — see grantbound.go for why that map was the defect: with
+// two same-kind ceiling entries it let the LAST one supply the approval posture
+// and TTL for a proposal naming the FIRST one's pairing, which both stripped an
+// operator-mandated requires_approval and made the result depend on the order of
+// a set.
+//
+// The bounds are MET across whatever ceilingGrantsBounding returns (one grant
+// when the pairing matched, every same-kind grant otherwise): the TTL cap is the
+// minimum, requires_approval is forced on if ANY of them requires it, and a
+// github scope is intersected against each in turn. Meeting can only narrow, so
+// no path through this function can hand a run a wider bound than some ceiling
+// grant actually wrote.
 func clampGrants(grants []types.GrantSpec, ceiling types.RunPolicySpec, warns *[]string) []types.GrantSpec {
 	if len(grants) == 0 {
 		return grants
 	}
-	// Index ceiling grants by kind for permission/approval ceilings.
-	ceilByKind := map[types.GrantKind]types.GrantSpec{}
-	for _, cg := range ceiling.EligibleGrants {
-		ceilByKind[cg.Kind] = cg
-	}
 	var out []types.GrantSpec
 	for _, g := range grants {
-		cg, ok := ceilByKind[g.Kind]
-		if !ok {
+		bounds := ceilingGrantsBounding(g, ceiling.EligibleGrants)
+		if len(bounds) == 0 {
 			*warns = append(*warns, fmt.Sprintf("dropped grant %q: not in operator's eligible grants", g.Kind))
 			continue
 		}
-		// GitHub: intersect permissions down to the ceiling's permissions.
+		// GitHub: intersect repos+permissions down to EVERY bounding ceiling
+		// grant's. Sequential intersection is the meet here — each pass can only
+		// remove a repo or lower a permission — and the warnings are deduped
+		// because the same removal seen against three ceiling entries is one
+		// fact, not three.
 		if g.Kind == types.GrantGitHubToken {
-			g.Scope = clampGitHubScope(g.Scope, cg.Scope, warns)
+			var scopeWarns []string
+			for _, cg := range bounds {
+				g.Scope = clampGitHubScope(g.Scope, cg.Scope, &scopeWarns)
+			}
+			*warns = append(*warns, dedupeStrings(scopeWarns)...)
 		}
-		// TTL cap.
+		// TTL cap: the STRICTEST bound. A ceiling TTL of 0 (or negative) bounds
+		// nothing and leaves the broker maximum standing, exactly as before.
 		max := maxGrantTTLSeconds
-		if cg.TTLSeconds > 0 && cg.TTLSeconds < max {
-			max = cg.TTLSeconds
+		for _, cg := range bounds {
+			if cg.TTLSeconds > 0 && cg.TTLSeconds < max {
+				max = cg.TTLSeconds
+			}
 		}
 		if g.TTLSeconds == 0 || g.TTLSeconds > max {
 			if g.TTLSeconds > max {
@@ -397,13 +419,31 @@ func clampGrants(grants []types.GrantSpec, ceiling types.RunPolicySpec, warns *[
 			}
 			g.TTLSeconds = max
 		}
-		// Approval: the operator can only TIGHTEN — if the ceiling requires
-		// approval, force it on.
-		if cg.RequiresApproval && !g.RequiresApproval {
+		// Approval: the operator can only TIGHTEN — if ANY bounding ceiling
+		// grant requires approval, force it on.
+		if !g.RequiresApproval && slices.ContainsFunc(bounds,
+			func(cg types.GrantSpec) bool { return cg.RequiresApproval }) {
 			*warns = append(*warns, fmt.Sprintf("grant %q forced to require approval (operator policy)", g.Kind))
 			g.RequiresApproval = true
 		}
 		out = append(out, g)
+	}
+	return out
+}
+
+// dedupeStrings keeps the first occurrence of each value, preserving order.
+func dedupeStrings(in []string) []string {
+	if len(in) < 2 {
+		return in
+	}
+	seen := make(map[string]bool, len(in))
+	out := in[:0:0]
+	for _, v := range in {
+		if seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
 	}
 	return out
 }

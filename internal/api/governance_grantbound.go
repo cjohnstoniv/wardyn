@@ -22,7 +22,12 @@ import (
 // Duplicated rather than exported because drift in THIS constant cannot widen
 // anything: clampGrants re-caps every minted grant at the real maximum on both
 // the profile-as-ceiling and deployment-as-ceiling paths, so a stale copy here
-// can only make this comparator refuse MORE than it must. The rules that could
+// can only make this comparator refuse MORE than it must. That argument rests on
+// the clamp capping against the ceiling grant this comparator ACCEPTED against,
+// which is now guaranteed rather than assumed: both sides select that grant with
+// composer.ceilingGrantsBounding. While the clamp indexed the ceiling by kind
+// alone, the argument held only for a ceiling carrying at most one grant per
+// kind. The rules that could
 // widen if they drifted — the github repo/permission subset test — are not
 // duplicated at all; they live in composer beside the clamp that honors them
 // (composer.GitHubScopeWithin).
@@ -30,7 +35,10 @@ const maxGovernanceGrantTTLSeconds = 3600
 
 // normalizeGrantTTLSeconds resolves a GrantSpec's TTL to the number of seconds
 // composer.Clamp would actually mint at (clamp.go's clampGrants: a ceiling TTL
-// bounds the max, and 0 means "take the max").
+// bounds the max, and 0 means "take the max"). True of the SAME ceiling grant
+// on both sides now that the clamp selects by pairing rather than by kind — it
+// was not while a ceiling with two same-kind grants let the clamp cap against
+// one grant and this comparator judge against another.
 //
 // This is the whole of PF-28, and it is the difference between a comparator
 // that works and one that admits the widening it was written to refuse: raw
@@ -57,7 +65,10 @@ func normalizeGrantTTLSeconds(ttl int) int {
 // when SOME single ceiling grant dominates it on EVERY axis — checking the axes
 // against different ceiling grants would let a profile pair one grant's
 // approval posture with another's TTL, which is precisely the widening a
-// per-axis check misses.
+// per-axis check misses. The RUNTIME clamp now takes its bound from that same
+// single grant (composer's ceilingGrantsBounding); it used to take approval and
+// TTL from whichever same-kind ceiling grant came last, which is this exact
+// widening committed one layer down.
 type grantBoundFailure int
 
 const (
@@ -99,9 +110,10 @@ const (
 //     of authoring one.
 //
 // Four axes, all in the narrowing direction: the pairing must be one the
-// deployment ceiling already lists (storedSecretPairingInCeiling — the SAME
-// comparator filterMemberGrants uses, so a profile and a member are bounded by
-// one rule, not two that can drift); approval may be forced on, never stripped;
+// deployment ceiling already lists (storedSecretPairingInCeiling, which forwards
+// to composer.PairingInCeiling — the SAME comparator filterMemberGrants AND the
+// runtime clamp use, so a profile, a member and a dispatched run are bounded by
+// one rule, not three that can drift); approval may be forced on, never stripped;
 // TTL may be shortened, never lengthened (both sides normalized —
 // normalizeGrantTTLSeconds); and github_token repos/permissions must be a
 // subset, which pairing checks CANNOT see (storedSecretGrantPairing reports

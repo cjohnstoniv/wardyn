@@ -411,6 +411,17 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 	// no_runner state as s.cfg.Runner == nil, just discovered one layer
 	// deeper -- both handlers below translate errProbeNoRunner before their
 	// generic 500 path.
+	// The acting principal's ceiling. Both probe routes are mounted on
+	// securityOps, and effectiveCeiling is DELIBERATELY keyed on isOperator
+	// rather than isSecurityOperator (governance.go: "a security admin authors
+	// profiles and is BOUNDED by their own"), so a security admin IS
+	// ceiling-bound here — and this lane dispatches a sandbox carrying the
+	// site-config's integration grants as EligibleGrants plus proxy-side
+	// injections for them. FAIL CLOSED on a resolver error.
+	dc, _, dcErr := s.resolveDispatchCeiling(launchCtx)
+	if dcErr != nil {
+		return runID, probeRunResult{}, dcErr
+	}
 	caps, capsErr := s.cfg.Runner.Capabilities(ctx)
 	cc := bestClass(caps.ConfinementClasses)
 	if capsErr != nil || cc == "" {
@@ -439,7 +450,7 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 		return runID, probeRunResult{}, err
 	}
 
-	s.dispatchRun(launchCtx, created, dispatchParams{
+	s.dispatchRun(launchCtx, created, dc, dispatchParams{
 		RunToken: token,
 		// "base": the probe runs a plain curl, never a coding agent -- base is
 		// the image Wardyn actually publishes for exec-only tasks. "claude-code"

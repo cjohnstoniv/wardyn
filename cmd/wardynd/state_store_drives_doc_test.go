@@ -34,9 +34,23 @@ func TestStateStoreTableCoversUserDrives(t *testing.T) {
 	// DriveObjectName is total over the backends, and it composes its answer
 	// from the inputs — so the doc's placeholder shapes ARE its output on
 	// placeholder inputs.
-	volume := types.DriveObjectName(types.UserDrive{Backend: types.DriveBackendDockerVolume}, "<home>")
-	hostPath := types.DriveObjectName(types.UserDrive{Backend: types.DriveBackendHostPath, HostRoot: "<host_root>"}, "<home>")
-	pvc := strings.TrimSuffix(volume, "<home>") + "<drive-slug>-<home>"
+	// A NAMED drive, because a nameless one is not a drive: DriveObjectName is
+	// prefix + driveSlug(Name) + "-" + home, so feeding the zero UserDrive
+	// derived "wardyn-drive--<home>" — a double hyphen no valid row can produce
+	// (ValidateUserDrive requires a name) and which therefore appears in no
+	// document. Derive with a real slug and swap it for the doc's placeholder:
+	// the shape stays derived from the function, so a rename still fails here,
+	// and the expectation is now a name an operator could actually grep for.
+	//
+	// The docker-volume and PVC backends share DriveObjectName's default arm,
+	// so they share one shape; only host_path differs.
+	const probeSlug = "probe-drive"
+	derive := func(d types.UserDrive) string {
+		return strings.Replace(types.DriveObjectName(d, "<home>"), probeSlug, "<drive-slug>", 1)
+	}
+	volume := derive(types.UserDrive{Backend: types.DriveBackendDockerVolume, Name: probeSlug})
+	hostPath := derive(types.UserDrive{Backend: types.DriveBackendHostPath, HostRoot: "<host_root>", Name: probeSlug})
+	pvc := derive(types.UserDrive{Backend: types.DriveBackendK8sPVC, Name: probeSlug})
 
 	for _, want := range []string{volume, hostPath, pvc} {
 		if !strings.Contains(doc, want) {

@@ -64,6 +64,45 @@ func (s PG) ListCapabilityGrants(ctx context.Context) ([]types.CapabilityGrant, 
 	return collect(ctx, s.Pool, "list", "capability grants", q, nil, scanCapabilityGrant)
 }
 
+// ListGroupDenyGrants returns the GROUP-subject DENY rows of one capability
+// kind — the only rows internal/api's unresolvable-group-deny check can match,
+// and never more than a handful even on a deployment with tens of thousands of
+// grants.
+//
+// It exists because that check runs on the FAIL-CLOSED path taken by every
+// caller whose group snapshot is unanswerable — which includes every API token
+// minted before 0.7, on every request — and it used to ask
+// ListCapabilityGrants, i.e. the whole table, once per value checked. That made
+// a holder of one pre-0.7 token able to force an unbounded full-table read per
+// checked value: 68 ms at 20k grants against 0.35 ms for the indexed sibling,
+// multiplied by however many values the handler examines. An authorization
+// question whose cost scales with the size of the table it reads is an
+// availability surface, not just a slow page.
+//
+// The predicate is EXACTLY the one internal/api applied in Go afterwards
+// (subject_type='group', effect='deny', capability=$1), moved into SQL so the
+// rows never leave Postgres; the value-overlap matching stays in Go, where the
+// one host/wildcard matcher already lives and where it now runs over a few rows
+// instead of all of them. Same rows in, same answer out — see
+// TestCapUnresolvableGroupDenyMatchesFullScan, which pins the two against each
+// other.
+//
+// The (subject_type, subject) index serves the leading equality, so this reads
+// the group rows rather than the table. No new index: adding one is a migration,
+// and the selectivity that matters here (subject_type) is already the index's
+// first column.
+//
+// ponytail: no EXISTS fast path in front of it. It would be a second round trip
+// to save a query that already returns nothing on the deployments the fast path
+// would help.
+func (s PG) ListGroupDenyGrants(ctx context.Context, capability string) ([]types.CapabilityGrant, error) {
+	const q = `SELECT ` + capabilityGrantCols + ` FROM capability_grants
+		WHERE subject_type = 'group' AND effect = 'deny' AND capability = $1
+		ORDER BY value`
+	return collect(ctx, s.Pool, "list", "group deny capability grants", q,
+		[]any{capability}, scanCapabilityGrant)
+}
+
 // ListCapabilityGrantsFor returns every grant that could apply to one caller:
 // the `all` rows, plus `user` rows naming any of users (the caller's lowercased
 // sub AND email — a grant on either hits), plus `group` rows naming any of

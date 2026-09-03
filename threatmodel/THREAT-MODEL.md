@@ -1216,18 +1216,27 @@ hiding them would repeat the failure mode we are designed to avoid.
     covers all four columns, so the gap that remains is the console's, not the
     API's.
 
-38. **A per-user API token's role and group snapshot are frozen at mint, with no
-    expiry and no re-stamp — so the demoted-admin window is UNBOUNDED, where the
-    SSH analogue's (#15) is merely long.** `0045_api_tokens.sql` stamps `role`
-    and `groups` from the minting session (`internal/api/apitokens.go`), and
-    every request the token authenticates republishes them through
-    `withHumanIdentity`, so downstream the bearer is that human exactly as they
-    were at mint time. Nothing narrows the staleness the way `0046` narrows the
-    key stamp: the table carries `created_at`, `last_used_at` and `revoked_at`
-    and **no expiry column**; `oidc.Config.OnLogin` re-stamps SSH keys only
-    (`store.RefreshSSHKeyRoles`); the only `UPDATE`s the store issues against
-    `api_tokens` set `last_used_at` and `revoked_at`; and a demotion in the IdP
-    never reaches the row. Since 0.7 stamps `security_admin` verbatim, a human
+38. **A per-user API token's GROUP SNAPSHOT is frozen at mint, with no expiry
+    — so for a group-derived power the demoted-admin window is UNBOUNDED, where
+    the SSH analogue's (#15) is merely long.** NARROWED, NOT CLOSED, and the
+    half that moved is worth stating exactly. `0045_api_tokens.sql` stamps
+    `role` and `groups` from the minting session
+    (`internal/api/apitokens.go`), and every request the token authenticates
+    republishes them through `withHumanIdentity`, so downstream the bearer is
+    that human as they were at mint time.
+
+    Since the token lane gained the login hook the key lane had since `0046`,
+    the ROLE half is now bounded the same way: `oidc.Config.OnLogin` fires
+    `store.RefreshAPITokenRoles` beside `store.RefreshSSHKeyRoles`, so the
+    demoted human's own next sign-in re-stamps `role` on every unrevoked token
+    they hold. What did NOT move: `groups` is never refreshed by that hook or
+    anything else, the table still carries `created_at`, `last_used_at` and
+    `revoked_at` and **no expiry column**, there is no TTL the way
+    `WARDYN_SSH_ROLE_TTL` bounds a key, and a human who never signs in again is
+    re-stamped never. So a power that derives from the frozen GROUP snapshot —
+    a capability grant or governance profile bound to a group they have left —
+    survives indefinitely, and a demotion in the IdP still never reaches the
+    row on its own. Since 0.7 stamps `security_admin` verbatim, a human
     demoted out of that tier keeps — through any token minted while they held it
     — profile authoring and assignment, capability-grant writes, session and
     token revocation, escalated approval decisions on anyone's run, workspace
@@ -1394,7 +1403,11 @@ platform-internal name (write time AND at the dispatch sink); the grant may not
 overwrite a variable dispatch already set; `requires_approval` is REFUSED rather
 than silently ignored (there is no mint to gate); and the kind is **admin-only by
 default** — a member's `env_secret` grant is dropped even for a ceiling-listed
-pairing unless the operator sets `WARDYN_ALLOW_MEMBER_ENV_SECRET`. Prefer `api_key`
+pairing unless the operator sets `WARDYN_ALLOW_MEMBER_ENV_SECRET`. That drop is a
+ROLE check plus the switch, never a ceiling check, so it binds every non-operator
+on every route a run policy arrives by (an inline body, a stored row the member
+selected, or the deployment default) and regardless of whether a governance
+profile is assigned to them (`dropAdminOnlyEnvSecretGrants`). Prefer `api_key`
 (never resident) whenever the tool can be pointed at a host + header instead.
 
 **Everything else is never-resident** — `api_key`, the Bedrock **bearer** token

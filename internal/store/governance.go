@@ -207,6 +207,7 @@ const governanceTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' T
 //  1. TIER — user > group > all. An assignment is one admin explicitly naming
 //     one principal, so the more specific naming wins outright; no priority in
 //     the group tier can beat a user-tier row.
+//
 //  2. WITHIN THE USER TIER, a sub-keyed match beats an email-keyed one.
 //     capabilitySubjects returns up to TWO user subjects (lowercased sub, then
 //     email) and an admin may legitimately have written an assignment against
@@ -217,11 +218,29 @@ const governanceTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' T
 //     POSITION in the caller's own userSubjects slice (array_position), so the
 //     caller's documented ordering IS the precedence and this query needs no
 //     opinion about which identity kind sits at which index.
+//
 //  3. priority DESC — the admin's explicit tie-break, and the group tier's
 //     working lever (a member is usually in several groups at once).
-//  4. profiles.name ASC — the deterministic total-order floor, applied in EVERY
-//     tier. Without it two same-priority rows make LIMIT 1 depend on the plan,
-//     and "why did Bob get profile B today" has no answer.
+//
+//  4. profiles.name ASC — applied in EVERY tier. Without it two same-priority
+//     rows make LIMIT 1 depend on the plan, and "why did Bob get profile B
+//     today" has no answer.
+//
+//  5. assignments.subject ASC — the deterministic total-order FLOOR, and the
+//     same last key ListGovernanceAssignments already ends on (:182), so the
+//     two orderings in this file now agree.
+//
+//     It changes no answer today, and the reason is worth writing down because
+//     it is a DEPENDENCY rather than a coincidence: the tier is the first key,
+//     so two rows still tied after (4) necessarily share a tier AND a profile,
+//     and this SELECT returns profile columns plus a.subject_type and nothing
+//     else per assignment — so LIMIT 1 picking either row yields byte-identical
+//     output. That held only while the projection carried no per-assignment
+//     column. The moment anyone adds a.subject, a.priority or a new assignment
+//     field to the SELECT (an audit line naming WHICH assignment matched is the
+//     obvious next ask), the tie becomes observable and the answer starts
+//     depending on the plan. One key removes the dependency instead of
+//     documenting it, so nothing has to notice when that day comes.
 //
 // users/groups are normalized from nil to empty for the same reason
 // ListCapabilityGrantsFor normalizes them: a nil Go slice binds as SQL NULL and
@@ -247,7 +266,8 @@ func (s PG) ResolveGovernanceProfile(ctx context.Context, userSubjects, groups [
 				THEN COALESCE(array_position($1::text[], a.subject), 2147483647)
 				ELSE 0 END,
 			a.priority DESC,
-			p.name ASC
+			p.name ASC,
+			a.subject ASC
 		LIMIT 1`
 	var tier string
 	p, err := scanGovernanceProfileInto(s.Pool.QueryRow(ctx, q, userSubjects, groups), &tier)

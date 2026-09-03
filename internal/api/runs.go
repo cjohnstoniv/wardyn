@@ -281,11 +281,11 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		// A create-time deny alone is not enough — the artifact-redirect phase INSIDE
 		// dispatch adds corporate hosts and authors token injections for them, AFTER
 		// this handler's clamp ran — so the profile's walls have to be re-asserted
-		// there. ceilingDispatchDenies owns the absent-row scoping (it answers
-		// (nil, "") for anyone with no assigned profile, operators included), so the
-		// doctrine is decided once, in one function, and not re-decided here.
-		ceilingDeny, ceilingProfile := ceilingDispatchDenies(ceiling)
-		s.dispatchRun(ctx, created, dispatchParams{
+		// there. ceilingForDispatch owns the absent-row scoping (it answers a
+		// RESOLVED empty ceiling for anyone with no assigned profile, operators
+		// included), so the doctrine is decided once, in one function, and not
+		// re-decided here.
+		s.dispatchRun(ctx, created, ceilingForDispatch(ceiling), dispatchParams{
 			RunToken:           id.Token,
 			Image:              image,
 			Policy:             spec,
@@ -302,10 +302,12 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			BedrockRef:         bedrockRef,
 			EphemeralDirs:      ephemeralDirs,
 			Toolchains:         runToolchainNeeds(wsRefs),
-			CeilingDeny:        ceilingDeny,
-			CeilingProfile:     ceilingProfile,
-			// The member's own persistent storage, resolved and narrowed at
-			// create (seedRequestDrive) — nil unless this run asked for it.
+			// The member's own persistent storage, already resolved and narrowed
+			// at create (seedRequestDrive) — nil unless this run asked for it.
+			// Carried here rather than re-resolved inside dispatch for the reason
+			// the ceiling is: resolution keys on the caller's OIDC claims, which
+			// the run row does not hold, so dispatch has no identity to resolve
+			// FROM. See user_drives_run.go's own note.
 			Drive: driveMount,
 			// The zero posture unless this run attaches a MEMBER-OWNED workspace, in
 			// which case the driver re-checks that member's own binds against these

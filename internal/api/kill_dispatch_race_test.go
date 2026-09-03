@@ -322,7 +322,7 @@ func dispatchRun(runID uuid.UUID) types.AgentRun {
 }
 
 func runDispatch(srv *Server, run types.AgentRun) {
-	srv.dispatchRun(context.Background(), run, dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Policy: types.RunPolicySpec{MinConfinementClass: types.CC1},
 	})

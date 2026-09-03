@@ -40,7 +40,10 @@ import { SIGNIN } from "../../lib/people-access-copy";
 // docs/design/people-access-prompt.md §7.7) — both now name "your Wardyn
 // admin" as who to ask, env var(s) demoted to a parenthetical, per that
 // section's rule that a signed-in human should never be told to go set an env
-// var themselves. role_check_unavailable is the one NEW arm (the People
+// var themselves. claims_overage is the newest arm (an Entra groups/App-Roles
+// overage the server refuses rather than defaulting through — see
+// authErrorClaimsOverage in oidc.go); the generic fallback would have told this
+// human to try again, which can never work. role_check_unavailable is the one NEW arm (the People
 // step's preview panel and this screen share the same "couldn't check"
 // language). All three come from lib/people-access-copy.ts's SIGNIN table —
 // every other arm below is unchanged and out of scope this round.
@@ -56,6 +59,13 @@ function authErrorMessage(code: string): string {
       return SIGNIN.NO_ROLE;
     case "role_check_unavailable":
       return SIGNIN.ROLE_CHECK_UNAVAILABLE;
+    // claims_overage: the IdP withheld the groups/App Roles claim entirely
+    // (too many groups to fit a sign-in token), so the role map matched
+    // nothing and the server refused to let the default role decide. NOT a
+    // "try again" — retrying sends the same token — which is exactly why it
+    // must not fall through to the generic arm below.
+    case "claims_overage":
+      return "Your identity provider sent too many groups to list in a sign-in token, so this console can't tell what access you should have — and won't guess. Ask your Wardyn admin to map your role by App Role or email instead (the People step, or WARDYN_OIDC_ROLE_MAP). Trying again won't help.";
     case "oidc_transient":
       return "Your identity provider didn't respond in time. This is usually temporary — try signing in again.";
     case "oidc_config":

@@ -215,9 +215,19 @@ const (
 //
 // Rows 11, 12 and 15 sit in TestGovernanceProfileNonEscape_Dispatch below:
 // their enforcement point is the dispatch re-assertion phase, so they are
-// driven at dispatchRun with the ceiling already resolved onto dispatchParams,
-// which is the seam handleCreateRun fills. Rows 13 and 14 are create-time and
-// live here.
+// driven at dispatchRun with the ceiling already resolved, which is the seam
+// each lane fills. Rows 13 and 14 are create-time and live here.
+//
+// ROWS 17 AND 18 — the OTHER DOORS. The table above enumerates what a member can
+// ask for on the create path; it says nothing about the other four lanes that
+// launch a sandbox, and for a while two of them (the workspace source scan and
+// the site-config probe) dispatched without resolving a ceiling at all. They are
+// not rows here because their escape is structural rather than per-field: the
+// pins are TestSourceScanLaneResolvesTheActingPrincipalsCeiling (the scan door,
+// end to end: the reassert row, the withheld broker lane, the principal's own
+// confinement floor) and TestDispatchCeilingIsRequiredAtEveryLane +
+// TestDispatchCeilingZeroValueRefusesToLaunch (every door, by construction),
+// all in dispatch_ceiling_lanes_test.go.
 func TestGovernanceProfileNonEscape(t *testing.T) {
 	profile := govProfile("walled")
 	profile.Ceiling.ToolRules = []types.ToolRule{{Tool: "Bash", Effect: types.ToolDeny}}

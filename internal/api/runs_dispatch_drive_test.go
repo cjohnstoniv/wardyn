@@ -54,7 +54,12 @@ func runDriveDispatchWith(t *testing.T, fr *fakeRunner, drive *types.DriveMount)
 	t.Helper()
 	srv, _, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	run.Task = "" // no agent exec / completion watcher: this is about composition
-	srv.dispatchRun(context.Background(), run, dispatchParams{
+	// The ceiling argument the policy lane made mandatory: dispatchRun grew it
+	// when the governance ceiling stopped being two optional dispatchParams
+	// fields and became a parameter every door must pass. The zero ceiling is
+	// what every other dispatch test uses — this test is about drive
+	// composition, not governance.
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Drive: drive,
 	})

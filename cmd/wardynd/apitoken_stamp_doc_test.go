@@ -52,12 +52,23 @@ func TestAPITokenStampResidualIsPublished(t *testing.T) {
 	// (2) Store premise: nothing re-stamps the row. Only last_used_at and
 	// revoked_at are ever written after mint.
 	updated := apiTokenUpdatedColumns(t)
-	allowed := []string{"last_used_at", "revoked_at"}
+	// `role` JOINED this list when the token lane gained the login hook the key
+	// lane had since 0046 (store.RefreshAPITokenRoles, fired from OnLogin beside
+	// RefreshSSHKeyRoles). That NARROWED the residual rather than closing it, and
+	// the guard narrowed with it: `groups` must stay off this list, because the
+	// group snapshot is the half nothing refreshes and is what residual #38 is
+	// now about. A future UPDATE of `groups` means the residual is closed and
+	// needs re-reading, not that this test needs another entry.
+	allowed := []string{"last_used_at", "revoked_at", "role"}
 	for _, c := range updated {
 		if !slices.Contains(allowed, c) {
-			t.Errorf("internal/store/store_apitokens.go now UPDATEs api_tokens.%s — if that re-stamps the role or groups, "+
-				"the unbounded-staleness claim in OPERATIONS.md and residual #33 is no longer true", c)
+			t.Errorf("internal/store/store_apitokens.go now UPDATEs api_tokens.%s — if that re-stamps the GROUP snapshot, "+
+				"the remaining unbounded-staleness claim in OPERATIONS.md and residual #38 is no longer true", c)
 		}
+	}
+	if !slices.Contains(updated, "role") {
+		t.Error("internal/store/store_apitokens.go no longer UPDATEs api_tokens.role — the login re-stamp that bounds " +
+			"the ROLE half is gone, so OPERATIONS.md and residual #38 overstate what is bounded")
 	}
 
 	// (3) The contrast the docs draw is real: SSH keys DO get re-stamped on
@@ -66,16 +77,19 @@ func TestAPITokenStampResidualIsPublished(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read boot_deps.go: %v", err)
 	}
-	if !strings.Contains(string(boot), "RefreshSSHKeyRoles") {
-		t.Error("boot_deps.go no longer wires OnLogin to RefreshSSHKeyRoles — the SSH stamp may no longer be bounded either, " +
-			"so the \"unlike an SSH key's\" contrast in docs/OPERATIONS.md needs re-checking")
+	for _, hook := range []string{"RefreshSSHKeyRoles", "RefreshAPITokenRoles"} {
+		if !strings.Contains(string(boot), hook) {
+			t.Errorf("boot_deps.go no longer wires OnLogin to %s — one of the two stamps this residual compares is "+
+				"no longer re-checked at login, so docs/OPERATIONS.md and residual #38 need re-reading", hook)
+		}
 	}
 
 	// (4) The operator document names the tier and the remedy, with the receipt
 	// that tells an operator the revoke actually named somebody.
 	ops := readDoc(t, "docs/OPERATIONS.md")
 	for _, want := range []string{
-		"unlike an SSH key's, nothing ages it out",
+		"re-checked at login; the GROUP SNAPSHOT is not checked at all",
+		"**The group snapshot is never refreshed**",
 		"**no expiry column**",
 		"A human demoted out of `security_admin`",
 		"`DELETE /api/v1/tokens/{id}`",
@@ -91,7 +105,7 @@ func TestAPITokenStampResidualIsPublished(t *testing.T) {
 	// (5) And it is published where the SSH analogue is, as a numbered residual.
 	tm := readDoc(t, "threatmodel/THREAT-MODEL.md")
 	for _, want := range []string{
-		"A per-user API token's role and group snapshot are frozen at mint",
+		"A per-user API token's GROUP SNAPSHOT is frozen at mint",
 		"the demoted-admin window is UNBOUNDED",
 		"The remediation exists, is the only one, and has to be invoked deliberately",
 	} {

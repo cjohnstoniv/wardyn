@@ -68,30 +68,24 @@ type dispatchParams struct {
 	// sandbox just needs the directory to exist. Surfaced as
 	// WARDYN_EPHEMERAL_DIRS (comma-separated); nil/empty adds nothing.
 	EphemeralDirs []string
-	// CeilingDeny is the ACTING PRINCIPAL's governance-profile deny list —
-	// ceiling.Spec.DeniedDomains from effectiveCeiling, and ONLY when that
-	// resolve returned an ASSIGNED profile (ceiling.Profile != nil; use
-	// ceilingDispatchDenies, never hand-roll the test). NIL for everyone else:
-	// an unassigned member, an operator, and every scan/probe/harness lane with
-	// no member principal at all — which is what makes reassertCeilingDenies a
-	// provable no-op on a deployment that has never authored a profile.
+	// The acting principal's ceiling is deliberately NOT a field here: it is a
+	// required positional argument of dispatchRun/dispatchAndSettle, because an
+	// optional field defaulting to "no ceiling" made enforcement opt-in per call
+	// site and three of five lanes had opted out. See dispatchCeiling
+	// (runs_dispatch_ceiling.go).
 	//
-	// NEVER the run's own merged policy.DeniedDomains — see ceilingDenies for
-	// why a merged-list matcher would kill every broker lane on a deployment
-	// with no governance profile at all.
-	CeilingDeny []string
-	// CeilingProfile is that profile's NAME, for the run.ceiling.reassert audit
-	// event. Nothing branches on it.
-	CeilingProfile string
 	// Drive is the acting principal's USER DRIVE, resolved and narrowed at
 	// create time by seedRequestDrive (migration 0054). NIL for every run that
 	// did not ask for one — which is every run on a deployment that has
 	// allocated no drives, and every scan/probe/harness lane, none of which
 	// carries a member principal to resolve a drive for.
 	//
-	// A CREATE-TIME SNAPSHOT by necessity, not by preference — the same
-	// constraint CeilingDeny above is a snapshot for; the argument is written
-	// once, in user_drives_run.go's package doc.
+	// A CREATE-TIME SNAPSHOT by necessity, not by preference: resolution keys on
+	// capabilitySubjects (the caller's OIDC sub/email/groups) and the run row
+	// carries only CreatedBy, so there is nothing here to re-resolve from —
+	// exactly the constraint dispatchCeiling is a snapshot for. dispatchRun
+	// runs inline in the create request, so the snapshot has no staleness window
+	// to be stale in. See user_drives_run.go.
 	Drive *types.DriveMount
 	// ResolvedManaged, when non-nil, is filled in by dispatchRun with whether
 	// the ACTUAL resolved llmTransport used the Wardyn-managed subscription
@@ -140,7 +134,24 @@ type dispatchParams struct {
 // — a phase hoisted into a caller silently loses the ordering guarantee.
 //
 //nolint:funlen // Deliberate: one linear provision → CAS → compensate sequence whose phase ORDER is the security contract (see above). Each phase already lives in its own helper; splitting the sequence would hide the ordering behind a call graph and make it unauditable in one scope. Low branching — passes gocyclo/gocognit, just long.
-func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatchParams) {
+func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling, p dispatchParams) {
+	// FAIL CLOSED on a ceiling nobody resolved. The compiler already forces a
+	// lane to pass SOMETHING; this refuses the one thing it could pass without
+	// deciding — the zero value — so "a new dispatch lane forgot the ceiling"
+	// surfaces as a failed run with an audit row rather than as a sandbox that
+	// quietly ran with no profile enforcement and no run.ceiling.reassert to
+	// show for it. Unreachable from any lane in tree (a compile-time enumeration
+	// of the construction sites is TestDispatchCeilingIsRequiredAtEveryLane).
+	if !ceiling.resolved {
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch",
+			run.ID.String(), "failure", mustJSON(map[string]any{
+				"note": "dispatch was handed an unresolved governance ceiling (the dispatchCeiling zero value); " +
+					"refusing to launch rather than running with no profile enforcement",
+			})))
+		s.failAndRevoke(context.WithoutCancel(ctx), run.ID, types.RunPending,
+			"this run was not launched: its dispatch lane did not resolve the acting principal's governance ceiling")
+		return
+	}
 	// Only the values a phase below REBINDS get a local alias; everything else is
 	// read straight off p (the named-field struct is already self-documenting).
 	policy := p.Policy // local copy; the phases below mutate policy.AllowedDomains
@@ -342,7 +353,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	// create-time deny is defeated by those widenings — the artifact-redirect
 	// phase adds corp hosts AND authors token injections for them mid-dispatch.
 	// A no-op with no assigned profile. See reassertCeilingDenies.
-	s.reassertCeilingDenies(ctx, run, &policy, &injections, &p, sandboxEnv)
+	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv)
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
 	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.

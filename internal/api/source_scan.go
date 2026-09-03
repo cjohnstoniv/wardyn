@@ -195,7 +195,21 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 		return cause
 	}
 
-	cc := s.defaultFloorClass()
+	// The ACTING PRINCIPAL's ceiling, resolved once and used twice: it supplies
+	// the confinement floor below and the deny/injection re-assertion at
+	// dispatch. This lane is reachable by a MEMBER — routes.go mounts
+	// POST /workspaces/{id}/scan on the member group and handleScanWorkspace
+	// authorizes owner-or-admin — and it dispatches a sandbox holding a
+	// git-broker grant and SSH grants for the source's clone host, so running it
+	// with no ceiling handed that member brokered credentials for the very host
+	// their profile denies, at the deployment's floor rather than their own.
+	// Resolved from ctx (the request's, values preserved across the
+	// WithoutCancel above), and FAIL CLOSED on a resolver error.
+	dc, ceiling, cerr := s.resolveDispatchCeiling(ctx)
+	if cerr != nil {
+		return types.AgentRun{}, release(cerr)
+	}
+	cc := ceilingFloorClass(ceiling)
 	srcID := src.ID
 	run, token, err := s.newStepRun(ctx, runID, actor, "source scan", cc, func(run *types.AgentRun) {
 		run.SourceID = &srcID
@@ -235,7 +249,7 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 		AllowedDomains:      scanEgressDomains(url),
 		AutoStopAfterSec:    scanIdleCapSec,
 	}
-	return s.dispatchAndSettle(ctx, created, dispatchParams{
+	return s.dispatchAndSettle(ctx, created, dc, dispatchParams{
 		RunToken:           token,
 		Image:              agentImage("claude-code", s.cfg.AgentImages),
 		Policy:             scanPolicy,

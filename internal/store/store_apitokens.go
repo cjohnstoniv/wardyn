@@ -113,6 +113,43 @@ func (s PG) ListAPITokens(ctx context.Context) ([]types.APIToken, error) {
 	return queryAPITokens(ctx, s, q)
 }
 
+// RefreshAPITokenRoles re-stamps role on EVERY token principal holds, and it is
+// the api-token twin of RefreshSSHKeyRoles: the OIDC callback's OnLogin hook
+// fires both, so one login bounds both frozen credentials at once.
+//
+// It exists because a token's role was frozen at mint with nothing anywhere
+// able to refresh it. Only two statements ever touched this table —
+// last_used_at and revoked_at — so demoting a human from admin left every
+// outstanding wdn_ token of theirs authenticating AS AN ADMIN until somebody
+// separately remembered DELETE /api/v1/tokens/{id}, and 0.7 widened that stamp
+// to carry security_admin. The sibling credential got this bound in migration
+// 0046; the token lane did not.
+//
+// role only — NOT groups. The hook carries the freshly derived role and nothing
+// else, and the group snapshot is a separate frozen field with its own
+// fail-closed treatment (a NULL groups_truncated already reads as truncated).
+// Widening the hook to re-stamp groups is a bigger change than this bound
+// needs, and re-stamping a snapshot without also re-stamping its completeness
+// bit would be worse than leaving it alone.
+//
+// STILL BOUNDED-STALE, NOT LIVE, and the ceiling is the owner's next login —
+// exactly what docs/SSH.md §Bounds already documents for the key lane. A human
+// who never signs in again keeps the stamp; narrowing THAT needs the other half
+// of 0046 (a role_checked_at column plus a TTL the auth path enforces), which
+// is a migration this does not take.
+//
+// No error when the principal holds no tokens: an UPDATE matching zero rows is
+// the ordinary case for most humans, not a failure.
+func (s PG) RefreshAPITokenRoles(ctx context.Context, principal, role string) error {
+	_, err := s.Pool.Exec(ctx,
+		`UPDATE api_tokens SET role = $1 WHERE principal = $2 AND revoked_at IS NULL`,
+		role, principal)
+	if err != nil {
+		return fmt.Errorf("store: refresh api token roles: %w", err)
+	}
+	return nil
+}
+
 // RevokeAPIToken marks id revoked. principal scopes the UPDATE when non-empty
 // (the self-service path, where a human may only ever revoke their OWN token and
 // someone else's id is ErrNotFound rather than a distinguishable 403 — no

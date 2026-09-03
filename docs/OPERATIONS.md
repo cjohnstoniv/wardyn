@@ -478,8 +478,27 @@ working; it is the count of events still to replay, which mid-drain can be lower
 than the line count of the file on disk). Beside them, `wardyn_audit_spool_quarantined_total` counts events the
 store permanently refused and the drain moved aside (see the spool paragraph
 above): non-zero means the trail is missing those events even though the spool
-drained. Scrape with any Prometheus `authorization` config carrying the admin
-token. `/healthz` stays the liveness/component surface (identity, runner classes,
+drained.
+
+Two counters cover the authentication lane, where a failure otherwise leaves no
+trace at all. `wardyn_auth_failed_suppressed_total` counts `auth.failed` audit
+rows the rate limiter dropped — the trail is capped at roughly one row per
+second, so past a small burst it stops describing the volume it is bounding and
+**a credential-stuffing run reads quieter than a handful of typos**. Alert on
+this series, not on the audit row count: flat rows with this climbing is the
+attack. `wardyn_auth_store_errors_total` counts requests an authentication lane
+could not decide because its store read failed and answered `500` — a state with
+no audit row (there is no authenticated principal to attribute one to) and no
+client-visible cause.
+
+That second counter exists because **`wardyn_store_up` cannot answer for it**.
+The gauge is a *ping*: it says the pool is reachable, and a reachable pool still
+fails individual queries — one table denying a read, one statement timing out.
+So it can scrape `1` throughout an outage that is 500ing every token-authenticated
+request, which is worse than no signal, because it argues against the operator's
+own evidence. Read `wardyn_store_up` as reachability and the two counters above
+as whether the work is actually succeeding. Scrape with any Prometheus
+`authorization` config carrying the admin token. `/healthz` stays the liveness/component surface (identity, runner classes,
 eBPF ground-truth state); `/metrics` is the trend surface. Audit sinks
 (`WARDYN_AUDIT_SINKS`, [ENV.md](ENV.md)) are the event stream for SIEMs — metrics
 carry no per-run detail.
@@ -599,7 +618,8 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 |---|---|
 | managed harness credential; policy create/update/delete; `PUT /site-config` (a full-document replace, integration credential refs included); `GET /metrics`; the `/access` role-mapping routes below — they bound who derives admin at all | ⛔ admin only |
 | the `/workspaces` routes that BIND CREDENTIAL MATERIAL or WRITE THE HOST — `llm-cred`, `requirements`, `env-as-code/write` — plus `reassign` (user administration) | ⛔ admin only |
-| the `/workspaces` routes that DECIDE AN EGRESS CEILING — `approved-egress`, `denied-egress`, `record` + `promote-egress`: deciding which hosts a workspace's runs may reach is the same authority as deciding an egress approval, and `promote-egress` is that decision in bulk | ⛔ admin or `security_admin` |
+| the `/workspaces` routes that DECIDE AN EGRESS CEILING — `approved-egress`, `denied-egress`, `promote-egress`: deciding which hosts a workspace's runs may reach is the same authority as deciding an egress approval, and `promote-egress` is that decision in bulk | ⛔ admin or `security_admin` |
+| launching a recording session (`POST /workspaces/{id}/record`) — it sat with the egress-decision routes above until 0.7 re-tiered it, because the route does not decide a ceiling: it LAUNCHES a credentialed, host-mounting, open-egress sandbox and stamps the caller as its owner, which is reach into a run and at the host. The egress DECISION stays delegable; only the launch moved | ⛔ admin only |
 | the two `/site-config` connectivity probes (`POST /site-config/test-proxy`, `/test-redirect`) — non-mutating, and the evidence half of the security admin's job — and the `/permissions` routes below | ⛔ admin or `security_admin` |
 | the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, the `/governance` profile and assignment routes, `GET /access/directory/search` | ⛔ admin or `security_admin` |
 | workspace CRUD/scan/build | 🟡 owner-or-admin since 0.6 ("Workspace ownership") |
@@ -732,8 +752,13 @@ with `reason: second_human_required`, landing **before** the decision is written
 so a refused decision leaves the approval `PENDING`. Scoped to `egress_domain`
 only; `credential`/`tool_call` are already admin-only. A run with an empty
 `created_by` (system-created follow-on runs) has no human creator to be the same
-as, so the rule cannot apply. Local mode binds normally — the injected operator IS
-a verified human, so `local:alice` deciding `local:alice`'s own run is refused.
+as, so the rule cannot apply. **Local mode REFUSES the switch** (`503`) rather
+than enforcing it: local mode authenticates nobody, so both the decider and the
+run's `created_by` come from the same client-supplied source — the DEV-ONLY
+`X-Wardyn-Principal` header, honored there by design — and no request in that
+mode can prove a second human decided. Configure SSO to use this switch, or
+leave it unset. The refusal is scoped to `egress_domain` decisions, so nothing
+else in local mode changes.
 
 **The `admin-token` principal BYPASSES it**, and you should plan around that. A
 bare `WARDYN_ADMIN_TOKEN` caller is attributed `system`/`admin-token` because a
@@ -1124,6 +1149,16 @@ identity hits), `group` (the login-time union of the ID token's `roles` and
 `groups` claims, lowercased and deduped — so Entra App Roles are grantable for
 free), or `all` (every signed-in human).
 
+A `group` subject must be **printable ASCII**, and the write is refused with that
+reason when it is not — the same rule a console role mapping already gets. The
+snapshot a group grant is matched against carries printable ASCII only, so a
+subject outside that set is a row that can never match anyone: a deny that
+protects nothing while the Permissions screen renders it as active. The check runs
+on what you typed, *before* lowercasing, so a look-alike character that collapses
+onto one of your ASCII group names (Unicode case folding maps KELVIN SIGN to `k`)
+is refused rather than quietly stored as the real group. The same refusal guards a
+governance assignment's subject, for the same reason.
+
 Group membership is a **snapshot taken at login**, carried in the session cookie;
 grants are read from the database per request, so a new grant takes effect on the
 very next request but a *directory* change does not until the human signs in
@@ -1138,9 +1173,9 @@ reported distinctly as `groups_snapshot_stale` on `GET /me/capabilities`, becaus
 "can't tell yet" and "holds no groups" must not read the same.
 
 **A DENY is never allowed to evaporate with the snapshot.** A group that fell off
-the 2048-byte cut — or a caller still holding a pre-0.6 cookie, or a pre-0.7 API
-token whose completeness was never recorded — has none of its group rows in the
-scan. For an ALLOW that costs the caller access, which is the safe direction. For
+the 2048-byte cut — or one your directory names with a character the snapshot
+cannot carry, or a caller still holding a pre-0.6 cookie, or a pre-0.7 API token
+whose completeness was never recorded — has none of its group rows in the scan. For an ALLOW that costs the caller access, which is the safe direction. For
 a DENY it would hand back exactly what the row forbade, so the resolver
 (`capScan`, `internal/api/capabilities.go`) checks whether **any** group-subject
 deny row of that kind could cover the value, and refuses when one could — the
@@ -1150,6 +1185,17 @@ capability denial, with a server log line naming the unanswerable snapshot;
 signing in again (or re-minting the token) resolves it for good. Where a deny has
 to bite with no store read at all, write it against the **user** (either
 identity).
+
+**Re-mint pre-0.7 API tokens.** A token minted before 0.7 recorded nothing about
+whether its group snapshot was complete, and that unknown is read as
+"incomplete" — the fail-closed choice. So every request such a token makes takes
+the extra check above, on every capability it touches, for the whole life of the
+token. It is correct but it is not free, and it is the one lasting cost of the
+upgrade: re-minting moves those callers (CI jobs, scripts, the headless `wardyn
+run` lane) back onto the ordinary indexed path and removes the standing
+possibility of a group-completeness refusal they cannot themselves resolve.
+`GET /api/v1/tokens` lists the deployment's tokens with their `last_used_at`, so
+the dead ones can be revoked rather than re-minted.
 
 **A third cause of a partial snapshot: the IdP's own overage.** Entra ID stops
 sending the `groups` (or `roles`) claim altogether once a human is in more groups
@@ -1206,6 +1252,21 @@ App Roles are a smaller claim, not automatically a safer one.
 If the groups cannot be flattened and the rows cannot be re-keyed, user subjects
 are the only shape in this release that a claim-configuration change cannot break
 without telling you (`threatmodel/THREAT-MODEL.md` §5).
+
+An overage also blocks one **role derivation** it must not be allowed to decide.
+The role map is keyed on the very claims the IdP withheld, so an overage login
+matches nothing — and "nothing matched" is then an absence of evidence, not a
+fact. Falling through to `WARDYN_OIDC_DEFAULT_ROLE=admin` would hand that human
+the top tier on the strength of a claim nobody read, promoting exactly the member
+the hidden claim was going to wall. Such a login is **denied**
+(`auth_error=claims_overage`), with a server log line naming the claim and the
+var. The check is narrow, so the ordinary posture is untouched: a login whose
+claims genuinely matched is served as-is (a hidden claim can only ever *narrow* a
+highest-wins match), and so is a fallthrough to `member`, the narrowest tier
+there is — a human in 200+ groups still signs in. Only a default WIDER than
+`member` is refused. The remedy is the operator's, and retrying will not clear
+it: carry the tier on Entra App Roles, map the human's email directly, or stop
+defaulting unmatched humans to `admin`.
 
 **What a capability deliberately does not reach.** `always`-scope decisions stay
 on the admin-or-`security_admin` gate even for a member granted the host — a grant must never promote a
@@ -1268,6 +1329,21 @@ revokes every unrevoked token that principal holds — a token is their session 
 another form. The `all` arm is deployment-wide for tokens too: EVERY live token
 goes, the calling admin's own included — plan to re-mint after a global revoke.
 
+**Name them by either identity.** `--sub` takes the OIDC `sub` **or** the email,
+and both halves of the revoke honour both — the session cutoff and the token
+sweep — so you do not have to know which one your IdP made authoritative. This
+matters on Entra, where the `sub` is an opaque per-app identifier that appears
+nowhere a responder would naturally read it; the email is matched
+case-insensitively, the `sub` exactly. It is the same rule a
+`subject_type=user` capability grant already follows.
+
+What the API cannot tell you is whether the name matched anybody. Sessions are
+stateless signed cookies with no row to count, so a target that names nobody is
+indistinguishable from one whose sessions have already expired, and both answer
+`204`. The `session.revoke` audit row carries `tokens_revoked` for the half that
+*is* countable — a zero there, against a human you believe holds tokens, is the
+signal that the identifier was wrong.
+
 Use one as an ordinary bearer: `Authorization: Bearer wdn_…`. Downstream it is
 indistinguishable from that human's console session — run ownership, the
 admin/member gate and capability grants all resolve to the owning human — so a
@@ -1281,15 +1357,22 @@ recovered, and a database reader (a reporting role, a hot standby, a `pg_dump` i
 a backup bucket) cannot lift a usable credential off a row. `last_used_at` is best
 effort and is the signal for "which of these are dead"; revoke those.
 
-**The role is a stamp, not a live check — and unlike an SSH key's, nothing ages
-it out.** A token carries the role AND the group snapshot its owner held when
-they minted it, and every request it authenticates republishes them, so
-downstream it is that human as they were at mint time. A registered SSH key's
-stamp is *bounded*-stale: every login re-stamps it and `WARDYN_SSH_ROLE_TTL`
-expires it. A token's is not bounded at all. `api_tokens` has `created_at`,
-`last_used_at` and `revoked_at` and **no expiry column**; nothing re-stamps the
-row on login; and demoting the human in your IdP never touches it. **Explicit
-revocation is the only thing that ends it.**
+**The role is a stamp re-checked at login; the GROUP SNAPSHOT is not checked at
+all.** A token carries the role AND the group snapshot its owner held when they
+minted it, and every request it authenticates republishes them, so downstream it
+is that human as they were at mint time.
+
+The two halves age differently, and only one of them ages. Their next successful
+sign-in **re-stamps the role** on every unrevoked token they hold — the same
+`OnLogin` hook that has re-stamped their SSH keys since 0.6 — so a demotion does
+reach outstanding tokens, at that human's own next login rather than
+immediately. **The group snapshot is never refreshed**, by that hook or anything
+else. And nothing ages either half out on its own: `api_tokens` has
+`created_at`, `last_used_at` and `revoked_at` and **no expiry column**, there is
+no TTL on the stamp the way `WARDYN_SSH_ROLE_TTL` bounds an SSH key, and a human
+who is demoted and never signs in again keeps the role their tokens were minted
+with indefinitely. **Explicit revocation is the only thing that ends it on your
+schedule.**
 
 That matters most for the tier 0.7 added. A human demoted out of `security_admin`
 keeps, through any token they minted while they held it, exactly what the tier
@@ -1316,6 +1399,9 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/jso
   -d '{"sub":"alice@corp.com"}' $WARDYN/api/v1/sessions/revoke
 ```
 
+A revoked token is never re-stamped — it keeps whatever role it carried when it
+was revoked, so the trail still says what that credential actually was.
+
 The `session.revoke` audit row carries `tokens_revoked`. That count is the
 receipt: a **zero** against a human you believe holds tokens means the identifier
 matched nobody, not that there was nothing to revoke — sessions are stateless, so
@@ -1341,17 +1427,58 @@ guard.
 **Security admin (`security_admin`).** A mapped tier — never a default, and never
 derivable from the operator allowlist; you create one by mapping an IdP App Role
 or group to `security_admin` in the role map (chart or People page). Security
+admins read the whole workspace inventory AND any workspace in it — the list,
+the row, its build status, its env-as-code and its **observed egress** — because
+they decide that workspace's allowed and denied hosts and the observed traffic is
+the input to that decision. They cannot otherwise WRITE a workspace: renaming,
+reassigning, deleting, binding credential material and launching a recording all
+stay with the super admin. Security
 admins author and assign **governance profiles** (named ceilings bound to users or
 groups), write the org allow/denylists (capability grants), decide escalated
 approvals — egress, credential, tool — on anyone's run, revoke sessions and API
-tokens, and verify the audit chain. They cannot touch the People page,
-integrations, site-config writes, base images, or the deploy funnel — and they run
+tokens, and verify the audit chain. They can also **stop** any run in the
+deployment — killing a foreign run is incident response, and the most
+time-critical thing this tier does — which is deliberately *not* the same as
+reaching INTO one: no attach ticket, no shell, no credential material, no host.
+Inspect-or-stop is the whole of that warrant. (The batch form, the sandbox
+sweep, stays admin-only: it drives the container runtime across every run at
+once, which is host reach rather than run reach.) They **promote** a workspace's recorded
+egress into its allowlist, but they cannot **record** one: launching a recording
+session opens an interactive sandbox with open egress, the workspace's directory
+bind-mounted and its credentials injected, which is reach into a run, credential
+material and the host — the three things this tier is defined never to have — so
+`POST /workspaces/{id}/record` is admin-only and the console shows a security
+admin that control disabled beside the promote control it leaves live. They also
+cannot touch the People page, integrations, site-config writes, base images, or
+the deploy funnel — and they run
 under a governance profile themselves if one is assigned to them, since only
 `admin` is exempt from ceiling resolution. A profile can only make the deployer's
 stored credentials *less* available, never more — and a security admin widening
 their own egress is an audited act, visible in the log they cannot rewrite. No
 capability grant can widen anyone to admin; that invariant is what makes
 delegating `/permissions` safe.
+
+**A security admin's revocations reach the super admin, deliberately.** "Revoke
+sessions and API tokens" above is not scoped to members: `POST
+/api/v1/sessions/revoke` applies no target-role check, so a security admin may
+cut a *super admin's* sessions and tokens by `sub`, and the `{"all":true}` arm
+logs out **every** principal and revokes **every** live API token in the
+deployment — CI and automation credentials included — in one audited call. That
+is the tier working as designed. Incident response is the security admin's job,
+the two tiers deliberately do not nest (a security admin still cannot reach into
+a run, and their SSH key and attach ticket still stamp `member`), and a
+revocation only ever *subtracts* reach — it grants the caller nothing.
+
+What bounds it is that a revocation is not a lockout. The session cutoff is a
+**timestamp**, not a flag: signing in again mints a session issued after the
+cutoff, which clears it with no operator action. The **admin bearer token never
+consults revocations at all**, so the break-glass above survives a
+`{"all":true}` — a security admin cannot use this to lock the deployer out of
+undoing it. API tokens are the one part that does not self-heal: they are
+revoked permanently and must be re-minted, so treat `{"all":true}` as an
+incident lever rather than a routine one. Every call is audited as
+`session.revoke` with its scope and the number of tokens revoked, under the
+calling security admin's own principal.
 
 **User (member).** Signs in, runs agents inside the governance profile their group
 is assigned (or the deployment ceiling if none). The profile is enforced outside
@@ -1393,7 +1520,7 @@ Every member denial that isn't a plain foreign-resource 404 is audited under
 | `capability_agent` | `agent`: a member named an agent they aren't granted (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ `403` |
 | `capability_integration` | `integration_id`: a member named a model-provider integration they aren't granted (same seam). Tier 1 only — a workspace's own pin and the site default are never gated | ⛔ `403` |
 | `governance_profile` | the member's assigned governance profile refuses this run SHAPE — `task_mode=exec`, an interactive run, `seed_auto_tools`, or codex-cli under hold-deriving rules. A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
-| `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped | 🟡 drop |
+| `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_MEMBER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
 | `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | ⛔ `403` |
 
 The drop rows are why `POST /runs` mostly *narrows* rather than refuses: a member
