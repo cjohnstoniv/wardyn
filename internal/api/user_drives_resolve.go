@@ -329,9 +329,39 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 		// gibberish appended to the sentence that was meant for them. So it goes
 		// to the LOG, where the operator who has to act on it already looks —
 		// and the member's 422 stays byte-identical to the mock.
+		//
+		// WHOSE VALUE FAILED IS IN THE LOG, because the log is where the person
+		// who can fix it looks. DriveHomeName SHORT-CIRCUITS on the override —
+		// a non-empty one is checked and returned before any template is read —
+		// so home_override_set true means the invalid value is the ADMIN's
+		// stored one and the template had no part in it. Without this field the
+		// operator's own diagnostic named home_template for a failure the
+		// template did not cause, and the admin looked at the wrong setting.
+		//
+		// The flag, never the value: a directory name is a person's username as
+		// often as not, the same reason drive.grant.write audits
+		// home_override_set rather than what it was set to.
 		slog.Warn("wardynd: user drive: a home name could not be derived for this principal",
 			slog.String("drive", d.Name), slog.String("backend", string(d.Backend)),
-			slog.String("home_template", string(d.HomeTemplate)), slog.String("err", err.Error()))
+			slog.String("home_template", string(d.HomeTemplate)),
+			slog.Bool("home_override_set", strings.TrimSpace(override) != ""),
+			slog.String("err", err.Error()))
+		// FILED, NOT FIXED HERE — THE SENTENCE BLAMES THE MEMBER FOR AN ADMIN'S
+		// VALUE. When an override is set it is the ONLY thing that can have
+		// failed (see the short-circuit above), yet this interpolates
+		// d.HomeTemplate unconditionally, so a member is told "your hash cannot
+		// name a directory" about a machine-generated name they never supplied
+		// and cannot change. The remedy clause is already right — an admin does
+		// fix it — but the subject is not, and the member is left with nothing
+		// to ask for by name.
+		//
+		// It is not fixed here because §7.7 declares its table COMPLETE and no
+		// row covers "an administrator's setting for your drive is invalid":
+		// REFUSED_HOME_INVALID says "your {claim}", which is the wrong subject,
+		// and REFUSED_BACKEND is the deployment-capability sentence, which
+		// carries no remedy for a case that has one. That is new member copy, so
+		// it is FILED (local/FILED-COPY.md) rather than invented at a call site.
+		//
 		// The FROZEN sentence first, byte-for-byte, then the substrate's own
 		// clause when the substrate is stricter than the sentence describes.
 		//

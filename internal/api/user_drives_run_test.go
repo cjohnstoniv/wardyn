@@ -348,6 +348,42 @@ func TestSeedRequestDrive422Matrix(t *testing.T) {
 				"(lowercase letters and digits, then . _ -, up to 63 characters) — ask an admin to set your directory name " +
 				"(on a Kubernetes deployment the rule is stricter: no _, and it may not end in - or .)",
 		},
+		{
+			// THE ADMIN'S VALUE, BLAMED ON THE MEMBER — F137's surviving half,
+			// pinned here because nothing exercised an INVALID override at all
+			// (every other test stores a legal one).
+			//
+			// The case is the one DriveHomeName's own comment names: an override
+			// legal on Docker stored against a k8s drive. `b_smith` passes
+			// ValidateUserDriveGrant, which holds the grant row and cannot see
+			// which substrate the drive lands on, and then fails the apiserver's
+			// stricter rule at resolve time.
+			//
+			// READ THE `want` BELOW: the member is told "your HASH cannot name a
+			// directory". Hash is machine-generated from the drive id and the
+			// subject — it cannot fail, and the member supplied neither it nor
+			// the override. The sentence is byte-exact ONLY because §7.7 is
+			// frozen and no row covers an admin-set value; the corrected
+			// sentence is filed (local/FILED-COPY.md), and when it lands THIS
+			// ROW MUST CHANGE — which is the point of asserting it byte-exact
+			// rather than by prefix.
+			//
+			// What IS durable and asserted by the loop: a 422, not a 403 or a
+			// 500 — the caller is authorized and their allocation simply cannot
+			// be mounted as stored — and no sentinel text reaching the member.
+			name: "an admin's stored directory name is invalid on this backend",
+			store: &driveStore{
+				drive: driveFixture(func(d *types.UserDrive) {
+					d.Backend, d.SizeMiB = types.DriveBackendK8sPVC, 10240
+				}),
+				grant: grantFixture(uuid.Nil, func(g *types.UserDriveGrant) { g.HomeOverride = "b_smith" }),
+				tier:  types.CapabilitySubjectUser,
+			},
+			runnerTarget: "k8s", req: driveRunRequest(true, nil),
+			want: "drive: your hash cannot name a directory " +
+				"(lowercase letters and digits, then . _ -, up to 63 characters) — ask an admin to set your directory name " +
+				"(on a Kubernetes deployment the rule is stricter: no _, and it may not end in - or .)",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.store.drive != nil && tc.store.grant == nil {
