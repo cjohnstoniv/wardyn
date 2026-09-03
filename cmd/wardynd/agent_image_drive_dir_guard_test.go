@@ -7,16 +7,21 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
 )
 
+// agentHome is the sandbox user's home: the directory the OWNERSHIP half of this
+// guard is about, and the parent of driveDir.
+const agentHome = "/home/agent"
+
 // driveDir is the reserved in-container user-drive mount point
 // (runner.DriveTarget). Spelled literally rather than imported: this guard
 // reads Dockerfiles, and the whole point is to catch an image whose text does
 // not carry the path.
-const driveDir = "/home/agent/drive"
+const driveDir = agentHome + "/drive"
 
 // wardynSiblingRef matches a base that is another image in this directory —
 // `wardyn/agent-<name>:<tag>`. Those images inherit the drive directory from
@@ -121,9 +126,15 @@ func TestAgentImagesPreCreateDriveDir(t *testing.T) {
 			for hops := 0; hops <= total; hops++ {
 				st := stages[idx]
 				if mk := driveMkdirInstruction(st.instrs); mk != "" {
-					if !strings.Contains(mk, "chown -R agent:agent /home/agent") {
-						t.Errorf("%s: %s is created but the SAME instruction does not chown it to agent:\n\t%s\n"+
-							"A root-owned drive root is EACCES for uid 1000 the first time a managed drive is mounted over it.", cur, driveDir, mk)
+					// BOTH FORMS. The substring pins the SPELLING the images
+					// actually use (flag, owner, path, in that order);
+					// chownsAgentHome pins that the path is /home/agent ITSELF
+					// and not a child of it — `chown -R agent:agent
+					// /home/agent/work` satisfies the substring and leaves the
+					// drive directory root-owned.
+					if !strings.Contains(mk, "chown -R agent:agent "+agentHome) || !chownsAgentHome(mk) {
+						t.Errorf("%s: %s is created but the SAME instruction does not chown %s to agent:\n\t%s\n"+
+							"A root-owned drive root is EACCES for uid 1000 the first time a managed drive is mounted over it.", cur, driveDir, agentHome, mk)
 					}
 					return
 				}
@@ -222,11 +233,74 @@ func dockerfileInstructions(src string) []string {
 // directory, or "" when no instruction does.
 func driveMkdirInstruction(instrs []string) string {
 	for _, in := range instrs {
-		if strings.Contains(in, "mkdir") && strings.Contains(in, driveDir) {
+		if driveMkdirSegment(in) != "" {
 			return in
 		}
 	}
 	return ""
+}
+
+// shellWords splits one `&&`-joined segment into its words, dropping the leading
+// Dockerfile verb (`RUN`) that only the first segment carries.
+func shellWords(seg string) []string {
+	fields := strings.Fields(seg)
+	if len(fields) > 0 && strings.EqualFold(fields[0], "RUN") {
+		fields = fields[1:]
+	}
+	return fields
+}
+
+// driveMkdirSegment returns the `&&`-joined segment of one instruction that
+// really creates the drive directory, or "".
+//
+// THE SEGMENT, AND THE PATH AS A WHOLE WORD. `strings.Contains(in, "mkdir") &&
+// strings.Contains(in, driveDir)` over the whole instruction was true for two
+// shapes that create nothing at the reserved path:
+//
+//   - a SAME-PREFIX SIBLING. `mkdir -p /home/agent/work /home/agent/drive-cache`
+//     contains the substring "/home/agent/drive" and leaves the reserved path
+//     uncreated, so a managed volume still copies up onto a ROOT-owned directory
+//     and a writable drive is EACCES for uid 1000 — the exact failure this file
+//     exists to make loud.
+//   - a MENTION rather than a creation. `RUN mkdir -p /home/agent/work && echo
+//     "would mkdir /home/agent/drive"` satisfies both substrings across two
+//     different segments, and creates only the work directory.
+//
+// So: the path must be a whole ARGUMENT (strings.Fields, never a substring) of a
+// segment whose COMMAND is mkdir.
+func driveMkdirSegment(instr string) string {
+	for _, seg := range strings.Split(instr, "&&") {
+		words := shellWords(seg)
+		if len(words) == 0 || filepath.Base(words[0]) != "mkdir" {
+			continue
+		}
+		if slices.Contains(words[1:], driveDir) {
+			return strings.TrimSpace(seg)
+		}
+	}
+	return ""
+}
+
+// chownsAgentHome reports whether one instruction hands /home/agent ITSELF to
+// agent, recursively — the half that matters, because a drive directory the
+// image creates but leaves owned by root is exactly as unwritable as one it
+// never created.
+//
+// A COMPLETE WORD, never a substring: `strings.Contains(mk, "chown -R
+// agent:agent /home/agent")` was satisfied by `chown -R agent:agent
+// /home/agent/work`, which is the drift this file was written for in the first
+// place — the work directory chowned, the drive directory left to root.
+func chownsAgentHome(instr string) bool {
+	for _, seg := range strings.Split(instr, "&&") {
+		words := shellWords(seg)
+		if len(words) == 0 || filepath.Base(words[0]) != "chown" {
+			continue
+		}
+		if slices.Contains(words, "-R") && slices.Contains(words, "agent:agent") && slices.Contains(words, agentHome) {
+			return true
+		}
+	}
+	return false
 }
 
 // sortedKeys returns a map's keys in a stable order, so subtest names and
@@ -278,5 +352,56 @@ RUN mkdir -p /home/agent/work && chown -R agent:agent /home/agent
 	// And a --platform flag on the FROM does not become the base.
 	if got := dockerfileStages("FROM --platform=$BUILDPLATFORM golang:1.27 AS builder\nRUN true\n"); len(got) != 1 || got[0].base != "golang:1.27" || got[0].alias != "builder" {
 		t.Errorf("--platform FROM parsed as %+v, want base golang:1.27 alias builder", got)
+	}
+}
+
+// TestDriveDirGuard_RefusesLookalikes is the counterfactual for the two
+// predicates the walk above is built on — the shapes that used to satisfy a
+// substring test while shipping an image whose /home/agent/drive is root-owned
+// or absent. Every "want false" row here is an image that would have graded
+// green.
+func TestDriveDirGuard_RefusesLookalikes(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		instr string
+		want  bool
+	}{
+		{"the real thing", "RUN mkdir -p /home/agent/work /home/agent/drive && chown -R agent:agent /home/agent", true},
+		{"the drive alone", "RUN mkdir -p /home/agent/drive", true},
+		// A directory whose name merely STARTS with the reserved path. The
+		// reserved path is never created, so the volume's copy-up still lands on
+		// a root-owned directory.
+		{"a same-prefix sibling", "RUN mkdir -p /home/agent/work /home/agent/drive-cache && chown -R agent:agent /home/agent", false},
+		{"a same-prefix child", "RUN mkdir -p /home/agent/drive/inbox", false},
+		// "mkdir" in one segment, the path in another: both substrings present,
+		// nothing created at the reserved path.
+		{"a mention, not a creation", `RUN mkdir -p /home/agent/work && echo "would mkdir /home/agent/drive"`, false},
+		{"an unquoted mention", "RUN mkdir -p /home/agent/work && echo would mkdir /home/agent/drive", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := driveMkdirSegment(tc.instr) != ""; got != tc.want {
+				t.Errorf("driveMkdirSegment(%q) creates %s = %v, want %v", tc.instr, driveDir, got, tc.want)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name  string
+		instr string
+		want  bool
+	}{
+		{"the real thing", "RUN mkdir -p /home/agent/drive && chown -R agent:agent /home/agent", true},
+		// THE ORIGINAL HOLE: a chown of a CHILD of the home satisfies the
+		// substring `chown -R agent:agent /home/agent` and leaves the drive
+		// directory owned by root.
+		{"a child of the home", "RUN mkdir -p /home/agent/drive && chown -R agent:agent /home/agent/work", false},
+		{"not recursive", "RUN mkdir -p /home/agent/drive && chown agent:agent /home/agent", false},
+		{"the wrong owner", "RUN mkdir -p /home/agent/drive && chown -R root:root /home/agent", false},
+		{"a mention, not a chown", `RUN mkdir -p /home/agent/drive && echo "chown -R agent:agent /home/agent"`, false},
+	} {
+		t.Run("chown/"+tc.name, func(t *testing.T) {
+			if got := chownsAgentHome(tc.instr); got != tc.want {
+				t.Errorf("chownsAgentHome(%q) = %v, want %v", tc.instr, got, tc.want)
+			}
+		})
 	}
 }
