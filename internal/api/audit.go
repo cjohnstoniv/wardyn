@@ -227,6 +227,25 @@ func (s *Server) handleVerifyAuditChain(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusNotImplemented, "audit chain verification requires the Postgres store backend")
 		return
 	}
+	// ONE SWEEP AT A TIME. The sweep re-hashes every row of a table that can
+	// never be pruned, so N concurrent GETs are N full passes, each pinning a
+	// pool connection for the duration — and a cron or a retrying client stacks
+	// them without anyone deciding to. Refusing the second is better than
+	// serving it slowly: the answer it would return is the answer the in-flight
+	// sweep is already computing, and 429 tells a retrying client exactly what
+	// to do. Deliberately NOT a deadline as well: this is the endpoint an
+	// operator reaches for during a suspected tamper incident, and a fixed
+	// timeout would put a ceiling on how large a log can be verified AT ALL,
+	// which is the one thing it must not do. The paged sweep checks the request
+	// context between pages instead, so a client that goes away stops the work —
+	// which the single materializing statement it replaced could not.
+	if !s.auditChainSweep.TryLock() {
+		w.Header().Set("Retry-After", "30")
+		writeError(w, http.StatusTooManyRequests, "an audit chain verification is already running; retry when it finishes")
+		return
+	}
+	defer s.auditChainSweep.Unlock()
+
 	st, err := v.VerifyAuditChain(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "wardyn: audit chain sweep failed", slog.Any("err", err))

@@ -335,6 +335,17 @@ chained row. Run it from cron and alert on `ok: false`: a broken chain answers
 found something), while `5xx` means the sweep could not run. `head_hash` is the
 value to diff against your SIEM's copy.
 
+**One sweep at a time.** The audit log cannot be pruned, so this is the endpoint
+whose cost only ever rises — and a retrying client or an overlapping cron would
+otherwise turn one operator action into several full re-hash passes, each holding
+a database connection. A request that arrives while a sweep is running is
+refused with **429** and a `Retry-After`; it is not queued. Point your cron at a
+single caller and let a 429 mean "the answer you want is already being
+computed". There is deliberately no server-side time limit on a sweep — a fixed
+one would cap how large a log can be verified at all — so the bound is your
+client's: the sweep is walked in pages and stops between them when the caller
+goes away.
+
 **A break is permanent.** The sweep stops at the first broken row and the log is
 append-only, so every later sweep reports that same `broken_seq` forever — no
 repair, no "acknowledge" cursor. `ok: false` is a one-way latch: treat the first

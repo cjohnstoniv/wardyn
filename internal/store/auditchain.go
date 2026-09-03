@@ -6,6 +6,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"math"
 )
 
 // lockAuditChainSQL serializes appends to the audit_events hash chain. It is
@@ -17,6 +18,13 @@ import (
 // and holding it across the whole statement costs nothing. See
 // db.AuditChainLockKey.
 const lockAuditChainSQL = `SELECT pg_advisory_xact_lock($1)`
+
+// AuditChainPageSize is how many rows one page of the verify sweep reads. It
+// bounds the sweep's memory: a page, never the table. Large enough that the
+// per-page round trip is noise against re-hashing a thousand rows, small enough
+// that the page itself is a few hundred kilobytes. A var only so the parity test
+// can shrink it and actually cross page boundaries.
+var AuditChainPageSize int32 = 1000
 
 // AuditChainStatus is one verification sweep's verdict (migration 0047).
 //
@@ -154,8 +162,36 @@ func (w *auditChainWalk) fail(seq int64, reason string) {
 // trigger used to write it, so there is no second implementation to drift out
 // of agreement with the first.
 //
-// Rows are STREAMED, not buffered: an audit log is unbounded, and this is the
-// one query in the package that reads all of it.
+// THE SWEEP IS PAGED, and that is a correctness property before it is a cost
+// one. The comment here used to say "rows are STREAMED, not buffered", which
+// described the Go side (pgx iteration with an early break) and not the
+// database side: whether an unbounded `ORDER BY seq` streams or materializes is
+// a PLANNER decision, and review observed it planning as Seq Scan -> Sort on a
+// real audit_events, which buffers the entire table before returning row one.
+// Under that plan the early break below saves nothing (the sort has already
+// finished), the memory is the whole table, and an audit log cannot be pruned —
+// the append-only triggers see to that — so the endpoint an operator reaches for
+// during a suspected tamper incident is the one that gets slowest and hungriest
+// over time.
+//
+// Walking it in keyset pages over the primary key removes the planner's choice
+// instead of hoping for it: `seq > $1 ORDER BY seq LIMIT n` is an index scan
+// with a bound, so memory is one page whatever the table's statistics say, and
+// the early break genuinely stops the work.
+//
+// PAGING DOES NOT VERIFY LESS, which is the only thing that would make this a
+// bad trade. Each page is its own snapshot, so the question is whether a row can
+// appear BELOW the cursor after the walk has passed it. It cannot: since 0056
+// the trigger allocates seq while holding the chain lock and releases it at
+// commit, so seq order IS commit order — a row is never assigned a lower seq
+// than one that has already committed. For a writer that bypasses the trigger
+// entirely (session_replication_role = replica, the bypass rule 3 exists to
+// catch after the fact) the comparison is with what the single-statement version
+// did, and it is never worse: a row committing DURING the sweep was invisible to
+// the one snapshot the old query took, while the paged walk sees it whenever its
+// seq is still ahead of the cursor. The walk state — prev, Checked, FirstSeq —
+// is carried across pages by one auditChainWalk, so a chain longer than a page
+// is one continuous chain and not a sequence of independent ones.
 func (s PG) VerifyAuditChain(ctx context.Context) (AuditChainStatus, error) {
 	// EVERY row, hashless ones included, in seq order — rule 3 is a statement
 	// about where the hashless rows SIT, so the walk has to see them in place.
@@ -171,28 +207,48 @@ func (s PG) VerifyAuditChain(ctx context.Context) (AuditChainStatus, error) {
 		       COALESCE(audit_row_hash(prev_hash, id, time, run_id, actor_type, actor,
 		                               action, target, outcome, source_ip, data), '')
 		FROM audit_events
-		ORDER BY seq`
-	rows, err := s.Pool.Query(ctx, q)
-	if err != nil {
-		return AuditChainStatus{}, fmt.Errorf("store: read audit chain: %w", err)
-	}
-	defer rows.Close()
+		WHERE seq > $1
+		ORDER BY seq
+		LIMIT $2`
 
 	w := newAuditChainWalk()
-	for rows.Next() {
-		var l auditChainLink
-		if err := rows.Scan(&l.seq, &l.unchained, &l.prevIsNull, &l.prev, &l.row, &l.want); err != nil {
-			return AuditChainStatus{}, fmt.Errorf("store: scan audit chain row: %w", err)
+	// Below every possible seq: the identity starts at 1, but nothing here needs
+	// to depend on that.
+	after := int64(math.MinInt64)
+	for {
+		rows, err := s.Pool.Query(ctx, q, after, AuditChainPageSize)
+		if err != nil {
+			return AuditChainStatus{}, fmt.Errorf("store: read audit chain: %w", err)
 		}
-		if !w.step(l) {
-			break
+		n, broke := 0, false
+		for rows.Next() {
+			var l auditChainLink
+			if err := rows.Scan(&l.seq, &l.unchained, &l.prevIsNull, &l.prev, &l.row, &l.want); err != nil {
+				rows.Close()
+				return AuditChainStatus{}, fmt.Errorf("store: scan audit chain row: %w", err)
+			}
+			n++
+			after = l.seq
+			if !w.step(l) {
+				broke = true
+				break
+			}
+		}
+		rows.Close()
+		// rows.Err() is checked even after an early break: a broken chain is a
+		// finding, but a truncated READ is an error, and answering "tampered"
+		// when the connection dropped mid-sweep would be a false accusation.
+		if err := rows.Err(); err != nil && w.st.OK {
+			return AuditChainStatus{}, fmt.Errorf("store: iterate audit chain: %w", err)
+		}
+		if broke || int32(n) < AuditChainPageSize {
+			return w.st, nil
+		}
+		// A short-circuit the single-statement version could not offer: between
+		// pages the caller's context is live, so a client that goes away (or an
+		// operator who gives up) actually stops the sweep.
+		if err := ctx.Err(); err != nil {
+			return AuditChainStatus{}, fmt.Errorf("store: audit chain sweep cancelled: %w", err)
 		}
 	}
-	// rows.Err() is checked even after an early break: a broken chain is a
-	// finding, but a truncated READ is an error, and answering "tampered" when
-	// the connection dropped mid-sweep would be a false accusation.
-	if err := rows.Err(); err != nil && w.st.OK {
-		return AuditChainStatus{}, fmt.Errorf("store: iterate audit chain: %w", err)
-	}
-	return w.st, nil
 }
