@@ -749,3 +749,123 @@ func TestNilEngineSafe(t *testing.T) {
 	}
 	_ = out
 }
+
+// TestExtractOpenAIChat_ContentShapes pins the exact spans extractOpenAIChat
+// yields for every OpenAI content shape, so the shared string-or-blocks walker
+// (walkTextOrBlocks, also used by the Anthropic extractor) can never yield
+// FEWER spans or different field paths than the OpenAI-only walker it replaced.
+//
+// That superset claim is now LITERALLY true, and the last two rows are what make
+// it so. The OpenAI-only walker read `text` off every part without ever
+// consulting `type`, so a part typed tool_use/tool_result that ALSO carried a
+// text field was scanned by it — and a type-switched walkBlock silently stopped
+// scanning it. walkBlock yields `.text` ahead of its type switch, so it is
+// covered again; the mismatched-sibling row is the boundary of that promise
+// (a text field that isn't a string fails the whole block's decode, spans none).
+func TestExtractOpenAIChat_ContentShapes(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want []Span
+	}{
+		{
+			name: "content is a string",
+			body: `{"messages":[{"role":"user","content":"plain text"}]}`,
+			want: []Span{{FieldPath: "messages[0].content", Text: "plain text"}},
+		},
+		{
+			name: "content is an empty string",
+			body: `{"messages":[{"role":"user","content":""}]}`,
+			want: nil,
+		},
+		{
+			name: "content missing",
+			body: `{"messages":[{"role":"user"}]}`,
+			want: nil,
+		},
+		{
+			name: "array of text parts",
+			body: `{"messages":[{"role":"user","content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}]}`,
+			want: []Span{
+				{FieldPath: "messages[0].content[0].text", Text: "a"},
+				{FieldPath: "messages[0].content[1].text", Text: "b"},
+			},
+		},
+		{
+			name: "image_url part carries no scannable text",
+			body: `{"messages":[{"role":"user","content":[{"type":"text","text":"a"},` +
+				`{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}]}]}`,
+			want: []Span{{FieldPath: "messages[0].content[0].text", Text: "a"}},
+		},
+		{
+			name: "empty text part is skipped",
+			body: `{"messages":[{"role":"user","content":[{"type":"text","text":""},{"type":"text","text":"b"}]}]}`,
+			want: []Span{{FieldPath: "messages[0].content[1].text", Text: "b"}},
+		},
+		{
+			name: "unknown part type still yields a stray text field",
+			body: `{"messages":[{"role":"user","content":[{"type":"input_text","text":"c"}]}]}`,
+			want: []Span{{FieldPath: "messages[0].content[0].text", Text: "c"}},
+		},
+		{
+			name: "only the LAST message is scanned",
+			body: `{"messages":[{"role":"user","content":"older"},{"role":"user","content":"newest"}]}`,
+			want: []Span{{FieldPath: "messages[1].content", Text: "newest"}},
+		},
+		{
+			name: "tool_call arguments are walked as JSON leaves",
+			body: `{"messages":[{"role":"assistant","tool_calls":[{"function":{"arguments":"{\"pw\":\"v\"}"}}]}]}`,
+			want: []Span{{FieldPath: "messages[0].tool_calls[0].function.arguments.pw", Text: "v"}},
+		},
+		{
+			name: "non-JSON tool_call arguments are scanned verbatim",
+			body: `{"messages":[{"role":"assistant","tool_calls":[{"function":{"arguments":"not json"}}]}]}`,
+			want: []Span{{FieldPath: "messages[0].tool_calls[0].function.arguments", Text: "not json"}},
+		},
+		{
+			// Superset over the OpenAI-only walker, which yielded NOTHING for a
+			// content array it could not unmarshal into []{type,text}.
+			name: "block-shaped part inside an OpenAI content array is still scanned",
+			body: `{"messages":[{"role":"user","content":[{"type":"tool_result","content":"inner"}]}]}`,
+			want: []Span{{FieldPath: "messages[0].content[0].content", Text: "inner"}},
+		},
+		{
+			// The row the superset claim used to be false for: a typed block
+			// carrying a STRAY text sibling. The OpenAI-only walker read it
+			// (type-blind); a walkBlock that only yielded .text under `case
+			// "text"` dropped it. Both the text and the tool_use input must land.
+			name: "a tool_use part's stray text field is scanned alongside its input",
+			body: `{"messages":[{"role":"user","content":[{"type":"tool_use","text":"stray","input":{"pw":"v"}}]}]}`,
+			want: []Span{
+				{FieldPath: "messages[0].content[0].text", Text: "stray"},
+				{FieldPath: "messages[0].content[0].input.pw", Text: "v"},
+			},
+		},
+		{
+			// The boundary of that promise, and a deliberate NON-goal: `text`
+			// spelled as a number fails the header decode for the WHOLE block, so
+			// nothing in it is scanned — not the text, not a sibling. Hoisting the
+			// text yield above the type switch does not (and must not) change that:
+			// the block never decodes far enough to reach either.
+			name: "a mismatched text sibling drops the whole block",
+			body: `{"messages":[{"role":"user","content":[{"type":"text","text":42}]}]}`,
+			want: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []Span
+			if err := extractOpenAIChat([]byte(tc.body), func(s Span) { got = append(got, s) }); err != nil {
+				t.Fatalf("extractOpenAIChat: %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("spans = %+v, want %+v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("span[%d] = %+v, want %+v", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}

@@ -123,6 +123,25 @@ func TestMITMInspectsAndForwardsPreservingResidentCred(t *testing.T) {
 	tlsConn := agentMITMConn(t, proxySrv.URL, caPEM)
 	defer tlsConn.Close()
 
+	// The leaf the agent accepted must arrive WITH the CA that signed it
+	// (leafFor's Certificate is [leaf DER, caCert.Raw]). Without the chain the
+	// agent's own verification would depend on it already holding the issuer for
+	// some other reason — true in this test, where the CA is pinned in the trust
+	// pool, and NOT true of a sandbox client that only has the CA in a system
+	// store it does not consult per-connection. So the second cert is load-bearing
+	// and is asserted to be that exact CA, byte for byte, not merely "some cert".
+	st := tlsConn.ConnectionState()
+	if len(st.PeerCertificates) != 2 {
+		t.Fatalf("MITM leaf chain = %d cert(s), want 2 (leaf then the Wardyn CA)", len(st.PeerCertificates))
+	}
+	caDER, _ := pem.Decode(caPEM)
+	if caDER == nil {
+		t.Fatal("could not decode the Wardyn CA PEM")
+	}
+	if !bytes.Equal(st.PeerCertificates[1].Raw, caDER.Bytes) {
+		t.Fatal("the chain's second cert is not the Wardyn CA that signed the leaf")
+	}
+
 	body := anthropicMessagesBody("leak " + scanTestSecret)
 	req, _ := http.NewRequest(http.MethodPost, "https://"+anthropicHost+"/v1/messages", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer RESIDENT-OAUTH-TOKEN") // the subscription cred
@@ -465,5 +484,80 @@ func TestMITMRefreshFailureMasksSecretInError(t *testing.T) {
 	// …and the secret really was in the error text (else the test is vacuous).
 	if !strings.Contains(rec.Body.String(), "<secret-hidden>") {
 		t.Fatalf("expected the masked placeholder in the error, got %q", rec.Body.String())
+	}
+}
+
+// TestMITMCorpHost_DecisionCarriesRealPort is the audit half of W13-S1-5.
+// TestMITMCorpHost_DialsConfiguredPort already pins that the real CONNECT port
+// reaches the DIAL; this pins that it also reaches the DECISION LOG. The two are
+// separate plumbing — mitmConnect threads port into serveMITMRequest, which
+// hands it to BOTH egressTarget and emitLLMDecision — so a regression that
+// reverted only the decision arm would leave the audit trail saying the
+// operator's registry token went to mirror.corp:443 while the wire says :5000.
+// On a host-matched MITM lane the port is the ONLY field distinguishing the
+// configured mirror from anything else answering on that hostname, so a row
+// naming the wrong one is worse than no row.
+func TestMITMCorpHost_DecisionCarriesRealPort(t *testing.T) {
+	cu := captureUpstream(t, true, "mirror-ok")
+
+	certPEM, keyPEM := genTestCA(t)
+	ca, err := newCertAuthority(certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("newCertAuthority: %v", err)
+	}
+	buf := &bytes.Buffer{}
+	p := newProxy(Options{
+		RunID:  uuid.New(),
+		Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"mirror.corp"}}),
+		Sink:   &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 16)},
+		CA:     ca,
+		// Port-SCOPED entry (what planArtifactRedirect authors): mitmPorts["mirror.corp"]
+		// is 5000, so only a CONNECT to :5000 is MITM-eligible at all.
+		MITMHosts:       []string{"mirror.corp:5000"},
+		Resolver:        publicResolver{},
+		TLSClientConfig: testInsecureTLSConfig,
+		Dial:            redirectDial(upstreamAddr(cu.srv)),
+	})
+	proxySrv := httptest.NewServer(p)
+	defer proxySrv.Close()
+
+	conn, status := connectThrough(t, proxySrv.URL, "mirror.corp:5000")
+	defer conn.Close()
+	if !strings.Contains(status, "200") {
+		t.Fatalf("CONNECT status = %q, want 200", status)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(certPEM) {
+		t.Fatal("failed to add Wardyn CA to agent trust pool")
+	}
+	tlsConn := tls.Client(conn, &tls.Config{ServerName: "mirror.corp", RootCAs: pool})
+	if err := tlsConn.Handshake(); err != nil {
+		t.Fatalf("agent TLS handshake: %v", err)
+	}
+	defer tlsConn.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, "https://mirror.corp/api/npm/some-pkg", nil)
+	if err := req.Write(tlsConn); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(tlsConn), req)
+	if err != nil {
+		t.Fatalf("read MITM response: %v", err)
+	}
+	rb, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(rb) != "mirror-ok" {
+		t.Fatalf("mirror request must forward, got %d %q", resp.StatusCode, rb)
+	}
+
+	d := findDecision(t, buf, ruleSourceArtifactMITM)
+	if d.Request.Port != 5000 {
+		t.Fatalf("decision port = %d, want 5000 (the CONNECT's real port). A row saying 443 "+
+			"credits the operator's registry token to a service the redirect never named (W13-S1-5)", d.Request.Port)
+	}
+	if d.Request.Host != "mirror.corp" {
+		t.Fatalf("decision host = %q, want mirror.corp", d.Request.Host)
+	}
+	if d.Decision != egress.Allow {
+		t.Fatalf("decision = %q, want allow", d.Decision)
 	}
 }

@@ -17,7 +17,8 @@ substrates identically: authorization and the per-process constraints live in
 
 ## State stores
 
-Three stores hold data that exists nowhere else. Lose any of them and the loss is
+Three stores hold data that exists nowhere else on every deployment, and a fourth
+appears the moment you register a **user drive**. Lose any of them and the loss is
 permanent.
 
 | Store | Where | Holds | If you lose it |
@@ -25,6 +26,7 @@ permanent.
 | Postgres | volume `<project>_postgres_data` | runs, approvals, workspaces, policies, encrypted secrets, the append-only audit log — and, under the default `pg` recording store, the PTY asciicasts too | everything |
 | Recordings | volume `${WARDYN_NS:-wardyn}-recordings` (`WARDYN_RECORDING_DIR=/data/recordings`) | PTY asciicasts for Replay — **only with `WARDYN_RECORDING_STORE=fs`**; the shipped default (`pg`) keeps them in Postgres and leaves this volume empty | every session replay it holds; nothing reconstructs them |
 | Age key | `WARDYN_AGE_KEY` in `deploy/compose/.env` | the X25519 identity every stored secret is encrypted to | every secret in Postgres becomes undecryptable ciphertext |
+| User drives | one object per person, per drive, on a deployment that registered one — Docker volume `wardyn-drive-<home>`, a subdirectory of the share YOU mounted (`host_path` — `<host_root>/<home>`), or PVC `wardyn-drive-<drive-slug>-<home>` | each person's own files, written by their own runs at `/home/agent/drive`. Postgres holds the drive rows and the allocations, never the bytes, so `pg_dump` never carried this | that person's work; nothing reconstructs it |
 
 `postgres_data`, `registry_data` and `audit` carry no explicit `name:` in
 `deploy/compose/docker-compose.yaml`, so Docker prefixes them with the compose
@@ -36,6 +38,14 @@ volume into agent containers BY NAME. Reach for the unprefixed form and `docker
 volume inspect postgres_data` reports no such volume — a volume-level backup that
 ignores that error archives nothing. Back Postgres up with `pg_dump` (below), not
 at the volume layer.
+
+**A user-drive volume is not part of the compose project.** `wardyn-drive-*`
+volumes are created by the runner through the Docker API, not declared in
+`deploy/compose/docker-compose.yaml`, so `docker compose down -v` — and `make
+reset`, which runs it — leaves every one of them in place. That is deliberate: a
+stack teardown must not delete a person's files. It is also why a backup that
+walks the compose volumes misses them entirely; list them with `docker volume ls
+--filter label=wardyn.managed=true`.
 
 The `audit` volume is **derived**, not primary: the optional file sink
 (`WARDYN_AUDIT_SINKS`, [ENV.md](ENV.md)). Postgres is the source of truth for the
@@ -58,6 +68,17 @@ docker run --rm -v wardyn-recordings:/from -v "$PWD":/to alpine \
 
 # 3. The age key — copy WARDYN_AGE_KEY out of deploy/compose/.env into your
 #    secret manager. A Postgres dump without it is unreadable ciphertext.
+
+# 4. User drives — one object per person, and step 1's dump does NOT contain
+#    them. Wardyn-managed Docker volumes tar out the same way as step 2, one
+#    per person:
+#      for v in $(docker volume ls -q --filter label=wardyn.managed=true); do
+#        docker run --rm -v "$v":/from -v "$PWD":/to alpine \
+#          tar czf "/to/$v-$(date +%F).tar.gz" -C /from .
+#      done
+#    A `host_path` drive is a subtree of a share you already back up, and a PVC
+#    is a snapshot per claim — see "User drives on Docker" and "User drives on
+#    Kubernetes" for the per-substrate detail.
 ```
 
 ### Restore them
@@ -162,6 +183,19 @@ not dropped: it is fsync'd, one JSON line at a time, to a local append-only spoo
 once the store recovers. The spool is per-process by design: the fallback for one
 pod's failed write, each `wardynd` draining its own back on recovery (see
 [One replica, by construction](#one-replica-by-construction)).
+
+**What the drain does not restore: the off-box hash series.** The chain hashes
+are filled by the Postgres write itself (`RETURNING`, `store.InsertAuditEvent`),
+so an event whose write failed fans out to the sinks with **no** `prev_hash` or
+`row_hash` on it at all — both fields are `omitempty`, so they are simply absent
+— and the drain replays it through the RAW store recorder, deliberately not
+through the sink fanout (a replay into a still-down store has to be retryable,
+not re-spooled), so it is never streamed a second time. The queryable trail heals
+completely; the SIEM's head-hash series does not. Across an outage window a SIEM
+holds those events unchained, and the rows they become are chained when the drain
+replays them, interleaved with whatever else is being written then — so reconcile
+that window with `GET /audit/chain/verify` and the `wardyn_audit_spool_lines`
+gauge, not with the sink stream.
 
 **One line the store will never accept does not wedge the rest.** A rejection
 that cannot resolve — a `CHECK` violation, a payload a column type refuses, a
@@ -312,9 +346,13 @@ as an exact `seq` and a reason.
 who can rewrite one row can usually rewrite every row after it and re-chain the
 lot; a re-chained tail verifies perfectly clean, and truncating the newest rows
 leaves a shorter, valid chain. The defence against both is **off-box**: every
-event on an audit sink stream (`WARDYN_AUDIT_SINKS`) carries its
-`prev_hash`/`row_hash`, so a SIEM holds head hashes Wardyn cannot later disown —
-that comparison, not the sweep, is the control. Signed receipts (a key the
+event **whose Postgres write succeeded** carries its `prev_hash`/`row_hash` onto
+the audit sink stream (`WARDYN_AUDIT_SINKS`), so a SIEM holds head hashes Wardyn
+cannot later disown — that comparison, not the sweep, is the control. The
+qualifier is load-bearing, because the hashes are computed by the write itself:
+an event written while Postgres is down still reaches your sinks, but unchained,
+and the drain does not re-stream it — see "Completeness survives an outage too"
+above. Signed receipts (a key the
 database role cannot reach) are the next rung and are **not built**.
 
 **Verifying.** Operator-invoked, never automatic:
@@ -368,15 +406,33 @@ remains, stated plainly: `seq` gaps *below* the first chained row (a rolled-back
 insert burns a `seq`) can still hold a hashless forgery that no rule here can
 tell from a legacy row — only your off-box copy can.
 
-**Every writer is serialized, including one that is not Wardyn.** The chain link
-and the row's `seq` are allocated together under one advisory lock held inside
-the insert trigger (`0056_audit_chain_serialize.sql`), so a direct `INSERT` from
-`psql`, a seed script or any future code path takes its place in line rather than
-reading the same head as a concurrent Wardyn write. Before that, two writers
+**Writers are serialized, and the link is correct for a writer at `READ
+COMMITTED`.** The chain link and the row's `seq` are allocated together under one
+advisory lock held inside the insert trigger (`0056_audit_chain_serialize.sql`,
+redefined by `0057`), so a direct `INSERT` from `psql`, a seed script or any
+future code path takes its place in line instead of racing a concurrent Wardyn
+write between reading the head and writing its own row. Before that, two writers
 could chain to the same head and the sweep reported a **tamper that never
-happened** — permanently, per the latch above. The cost is honest: a session
-that holds a transaction open after inserting into `audit_events` blocks every
-other audit append until it commits or rolls back, so do not leave an interactive
+happened** — permanently, per the latch above.
+
+**What the lock does not decide is which head you read.** The trigger's head
+lookup is an ordinary `SELECT`, running in the CALLER's transaction, so it sees
+what that transaction's snapshot sees. Under `READ COMMITTED` — Postgres's
+default, and what every in-tree writer uses — that statement takes a fresh
+snapshot after the lock is acquired, so the head it finds is the row the previous
+writer just committed and the link is right. A writer whose snapshot was fixed
+EARLIER (`REPEATABLE READ` or `SERIALIZABLE`, begun before that commit landed)
+still takes its place in line and still gets a correct `seq` — and still chains
+onto the stale head its snapshot can see. Two rows then carry the same
+`prev_hash`, and the sweep reports *"a row was deleted or reordered"* at the
+second of them, permanently, with nothing having been tampered with. **An
+external writer to `audit_events` must use `READ COMMITTED`.** Nothing in the
+database enforces that: there is no row conflict for Postgres to raise a
+serialization failure over, so a `REPEATABLE READ` insert succeeds quietly.
+
+The costs are honest, and there are two: that isolation rule, and a session that
+holds a transaction open after inserting into `audit_events` blocks every other
+audit append until it commits or rolls back — so do not leave an interactive
 `psql` transaction sitting on that table.
 
 ### Retention, erasure and GDPR — a residual, not a solved problem
@@ -432,16 +488,16 @@ carry no per-run detail.
 
 The API authenticates with **either** an OIDC session (human SSO) **or** the
 admin bearer token; local mode skips both on a loopback-only bind. That is
-authentication. Authorization is a real two-role model: every OIDC session
-carries an **admin** or **member** role, derived once at login
-(`internal/auth/oidc`'s `deriveRole`) and stamped into the signed session
+authentication. Authorization is a real three-role model: every OIDC session
+carries an **admin**, **`security_admin`** or **member** role, derived once at
+login (`internal/auth/oidc`'s `deriveRole`) and stamped into the signed session
 cookie — a cookie signed before this existed (pre-0.5) decodes as no session,
 forcing a re-login that derives one fresh.
 
 | The merged map (chart `WARDYN_OIDC_ROLE_MAP` + console People-step rows) | Signed-in humans | Admin token / local mode |
 |---|---|---|
 | empty | listed in `WARDYN_OIDC_OPERATOR_EMAILS` → **admin**, others → **member**; all **admin** only when the allowlist is also unset (override-only under OIDC — the pre-0.5 behavior) | always **admin** |
-| non-empty | mapped by `roles`/`groups`/email claim to **admin** or **member**; no match falls through to `WARDYN_OIDC_DEFAULT_ROLE`, or denies the login when that is also unset | always **admin** |
+| non-empty | mapped by `roles`/`groups`/email claim to **admin**, **`security_admin`** or **member**; no match falls through to `WARDYN_OIDC_DEFAULT_ROLE` (which takes `admin`/`member` only), or denies the login when that is also unset | always **admin** |
 
 A console-added row keys on this exact same table: adding the deployment's
 *first* row (with the chart map also unset) or removing its *last* one moves the
@@ -506,12 +562,18 @@ A few things that don't fit the grid:
 [ENV.md](ENV.md)): each `value` is matched case-insensitively against the ID
 token's `roles` claim (an Entra App Role — the priority path; app-registration
 walkthrough in `.claude/skills/wardyn-k8s-setup`), its `groups` claim, or the
-signed-in email. **Any match resolving to `admin` wins** over one resolving to
-`member`, whichever claim produced it. `WARDYN_OIDC_OPERATOR_EMAILS` is **not
+signed-in email. Matches fold **highest wins** over three ranks — `member` <
+`security_admin` < `admin` — whichever claim produced them (`roleRank`,
+`internal/auth/oidc/derive.go`): a human matching a `security_admin` row and a
+`member` row is a security admin; one matching an `admin` row anywhere is an
+admin, exactly as before 0.7. `WARDYN_OIDC_OPERATOR_EMAILS` is **not
 replaced**: an email on it is still an *additional* `admin` match
 (`LegacyAdminEmails`), so a deployment adopting the role map keeps its current
 operators with zero re-configuration. `WARDYN_OIDC_DEFAULT_ROLE`
-(`admin`/`member`, unset = deny) covers everyone the map doesn't name.
+(`admin`/`member`, unset = deny) covers everyone the map doesn't name —
+`security_admin` is **refused** there and fails boot (`validDefaultRole`,
+`cmd/wardynd/boot_deps.go`): the role map is the only way to reach that tier, so
+it is never the tier granted by fallthrough to everyone nobody named.
 
 Both are validated at **boot**, not at first use: a malformed entry (invalid role
 value, non-ASCII key — matching is ASCII-only, so it could never match —
@@ -523,18 +585,30 @@ nothing in a valid map, with no default role set, is denied at login instead
 ("no Wardyn role assigned").
 
 **What admin-only still means** — the writes with the widest blast radius stay
-gated on the role being exactly `admin` (`requireOperator`). Status icons in the
-tables throughout this document: 🟢 open/works · 🟡 partial or narrowed · ⛔
-refused.
+gated on the role being exactly `admin` (`requireOperator`). Since 0.7 a SECOND
+gate covers part of that surface: `requireSecurityOperator` — admin **or**
+`security_admin` — the tier that holds authority over the verdict and over the
+org's ceilings, and never reaches into a run, onto credential material, or onto
+the host. The two tiers overlap and deliberately do not nest: every gated route
+names exactly one of them, and `internal/api/authz_test.go`'s route matrix is
+the authoritative per-route classification (it fails on any route it cannot
+classify). Status icons in the tables throughout this document: 🟢 open/works ·
+🟡 partial or narrowed · ⛔ refused.
 
 | Surface | Gate |
 |---|---|
-| managed harness credential; policy create/update/delete; `PUT /site-config` + its connectivity probes; `GET /metrics`; the permissioning routes below | ⛔ admin only |
-| the `/workspaces` routes that WIDEN AN EGRESS CEILING, BIND CREDENTIAL MATERIAL or WRITE THE HOST — `approved-egress`, `denied-egress`, `llm-cred`, `requirements`, `record` + `promote-egress`, `env-as-code/write`, `reassign` | ⛔ admin only |
+| managed harness credential; policy create/update/delete; `PUT /site-config` (a full-document replace, integration credential refs included); `GET /metrics`; the `/access` role-mapping routes below — they bound who derives admin at all | ⛔ admin only |
+| the `/workspaces` routes that BIND CREDENTIAL MATERIAL or WRITE THE HOST — `llm-cred`, `requirements`, `env-as-code/write` — plus `reassign` (user administration) | ⛔ admin only |
+| the `/workspaces` routes that DECIDE AN EGRESS CEILING — `approved-egress`, `denied-egress`, `record` + `promote-egress`: deciding which hosts a workspace's runs may reach is the same authority as deciding an egress approval, and `promote-egress` is that decision in bulk | ⛔ admin or `security_admin` |
+| the two `/site-config` connectivity probes (`POST /site-config/test-proxy`, `/test-redirect`) — non-mutating, and the evidence half of the security admin's job — and the `/permissions` routes below | ⛔ admin or `security_admin` |
+| the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, the `/governance` profile and assignment routes, `GET /access/directory/search` | ⛔ admin or `security_admin` |
 | workspace CRUD/scan/build | 🟡 owner-or-admin since 0.6 ("Workspace ownership") |
 | `devcontainer_repo` on a run (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ admin only, never grantable |
 | a custom sandbox `image` | 🟡 admin by default; the one power a capability grant can hand a member ("Capabilities") |
 | a member's own onboarded-workspace base image | 🟢 never gated — operator-authored at onboarding, not the member's free-text choice |
+| the `/drives` routes — registering a **user drive**, allocating it to people or groups, previewing whose drive resolves (`mountUserDriveRoutes`, `internal/api/user_drives.go`) | ⛔ admin only, deliberately NOT the security-admin tier: a drive names a host path (`host_root`) or a cluster storage class, and "never the host" is the line between the two admin tiers |
+| the user-drive **door** — `DenyUserDrive` on a governance profile (`internal/types/governance.go`) | 🟡 security admin too, through `/governance` — a limit on a profile, not a drive; it refuses the mount, it does not deallocate anything |
+| mounting YOUR OWN drive on a run (`drive.enabled`) | 🟢 the person, per run — read-only unless their allocation says otherwise, and the run flag may only narrow that, never widen it |
 | `POST /runs`, `POST /runs/{id}/kill` | 🟢 any signed-in human — using the product is a member act |
 
 **Ownership scoping — real, not just admin-vs-everyone.** A member reaches their
@@ -575,6 +649,28 @@ migration `0050`)** are the second and third owned nouns after runs.
   member's ids never fails halfway. The row's `local_dir` sources stop being
   member-authored, so the member root and dotfile gates no longer bound them —
   they become ordinary operator mounts. Treat it like creating the workspace.
+- **Offboarding a USER DRIVE is two halves, and only one of them is a product
+  action.** Deleting the allocation (`DELETE /drives/grants/{id}`, admin-only,
+  audited `drive.grant.delete`) stops the mount at that person's next run and
+  **deletes no data** — which is why the audit row carries the drive's declared
+  `reclaim` intent (`retain` or `delete`), so the log records what the operator
+  was told to do about the directory this allocation was the last pointer to.
+  What is left behind is one object per person: a Docker named volume, or a
+  subdirectory of the share the operator mounted host-side, or a
+  PersistentVolumeClaim. A **managed** object (`docker_volume`, `k8s_pvc`)
+  carries the drive row's **id** and the person's home name as labels, so a
+  departed member's objects stay findable after the row is gone; a share's
+  subdirectory and a static claim carry nothing — `POST /drives/preview` is how
+  you name those. Reclaiming it is a deliberate operator command, one per
+  substrate, and Wardyn holds no `delete` verb that could do it by accident: the
+  recipes are "User drives on Docker" and "User drives on Kubernetes" in this
+  document, and are not repeated here. `POST /drives/preview` prints the object
+  name for a principal — paste the sign-in subject FIRST: on a `hash`/`sub` drive
+  the name keys on the first claim, and the API's `home_subject` says which claim
+  it used (the console does not yet show it). Deleting the **drive row** itself
+  is a `409` while any allocation still points at it (`ON DELETE RESTRICT`), so
+  the deallocation is always its own audited event and offboarding can never
+  silently widen anything.
 - **Secret write/delete moved from admin-only to self-service.** Any signed-in
   human may `PUT`/`DELETE /secrets/{name}` their OWN row
   (`secretOwnerFromRequest`: `""` for an operator, their own principal for a
@@ -676,11 +772,13 @@ approved before v0.6 leases anything.
 **An `egress_domain` decision's *scope* adds a second, narrower gate — and one of
 the four scopes is gated on ROLE, not ownership.** A member who owns the run may
 choose `once`, `run`, or `until`; each stays inside that run's own proxy cache.
-`always` is **operator-only regardless of run ownership** (`decide()` rule 6,
-same file): it writes a durable entry onto the run's workspace (`approved_egress`
-on approve, `denied_egress` on deny) — the SAME two columns the
-`approved-egress`/`denied-egress` routes write, both already `operatorOnly`, so
-without this gate a member could reach them through the approval queue. The
+`always` is **admin or `security_admin`, regardless of run ownership**
+(`decide()` rule 6, same file; the check is `isSecurityOperator`, in LOCKSTEP
+with `authorizeMemberDecision`): it writes a durable entry onto the run's
+workspace (`approved_egress` on approve, `denied_egress` on deny) — the SAME two
+columns the `approved-egress`/`denied-egress` routes write, and those routes sit
+on that same `securityOps` tier, so the gate keeps the approval queue from being
+a way around them for anyone below it. The
 refusal is a `403`, not the ownership checks' `404`: the caller has already proven
 the approval exists, is `egress_domain`, and is theirs. It is checked before the
 run is confirmed to reference a workspace at all — authorization before
@@ -719,6 +817,234 @@ holds: the unclamped spec lands on the audit feed as `policy.inline` before
 the sandbox except `wardyn-proxy`, and the session is still recorded. A governance
 control, not a containment boundary against the operator holding the laptop. Full
 accounting: [docs/DESKTOP.md](DESKTOP.md) "Tamper posture, stated honestly".
+
+### User drives on Docker
+
+A **user drive** is persistent storage an admin registers once and allocates to
+people or groups; a member mounts theirs per run at `/home/agent/drive`. On a
+Docker deployment there are two backends, and the difference is who owns the
+bytes.
+
+**`docker_volume` — Wardyn allocates.** A per-person named volume
+(`wardyn-drive-<home>`), created on first use with the `local` driver and
+mounted at the reserved target. Nothing to configure. It carries four labels:
+`wardyn.managed=true`; `wardyn.drive` = the **drive row's id** (the object name
+is per *person*, so the id is the only thing that groups a drive's volumes
+together); `wardyn.home` = that person's directory name; and
+`wardyn.subject` = a **digest** of the person
+themselves (never their claim — see the restore note below). Reclaim is a
+command, not a button:
+
+- one person: `docker volume rm wardyn-drive-<home>` — `POST /drives/preview`
+  prints the object name for a principal — paste the sign-in subject FIRST: on a
+  `hash`/`sub` drive the name keys on the first claim, and the API's
+  `home_subject` says which claim it used (the console does not yet show it);
+- one drive, everybody: `docker volume ls --filter label=wardyn.drive=<drive id>`
+  lists every volume that drive allocated.
+
+**Restoring one by hand: re-create it with its labels, and with no `--opt`.**
+Wardyn reuses a volume that already answers to the name, but only when it has
+Wardyn's own shape — the `local` driver and **no driver options** — and refuses
+to mount anything else rather than adopt it. That refusal is deliberate: a
+volume an operator precreated with `--opt type=cifs --opt o=…,password=…` would
+otherwise become somebody's drive, on a share credential Wardyn never chose. So
+a restore is
+
+```
+docker volume create \
+  --label wardyn.managed=true \
+  --label wardyn.drive=<drive id> \
+  --label wardyn.home=<home> \
+  wardyn-drive-<home>
+```
+
+then copy the data in. `wardyn.drive` carries the **drive row's id** (the `id`
+on `GET /api/v1/drives`, and the `Target` of that drive's `drive.write` audit
+row), not the volume's name — the id is what groups every person's object under
+the drive that allocated them. Get it wrong and Wardyn **refuses** the volume
+rather than adopting it: a label naming a *different* drive is how two drives
+whose home names collided would otherwise hand one member the other's storage.
+A volume restored with **no** `wardyn.drive` label at all still mounts (that is
+the fall-back this path is for, and every volume created before the label
+carried an id has none) — it just no longer answers
+`docker volume ls --filter label=wardyn.drive=<drive id>`.
+
+Wardyn also stamps **`wardyn.subject`**, a digest of the person the volume was
+allocated to — never their sign-in claim, because `docker volume inspect` echoes
+labels to anyone who can reach the daemon. It is the discriminator `wardyn.drive`
+cannot be: a volume name carries only the *home*, so one drive whose home
+template folded two people onto one directory would produce one volume that
+*both* their allocations agree belongs to this drive. Wardyn refuses to mount a
+volume stamped for a different person. You need not compute the digest for a
+restore (it is a truncated sha256 of the sign-in subject): **leave
+`wardyn.subject` off** the `docker volume create` above and the volume mounts,
+exactly as a label-less `wardyn.drive` does.
+
+**`host_path` — you already mount the share.** Wardyn binds **one person's
+subdirectory** of a tree the *operator* mounted host-side. Wardyn never performs
+the share mount, never holds a share credential, and never creates a volume with
+`--opt type=cifs`: those options are stored with the volume and echoed by
+`docker volume inspect` to anyone who can reach the daemon. The recipe:
+
+1. **Mount the share on the host**, in `fstab` or a systemd mount unit:
+
+   ```
+   # SMB — the credential is a root-owned 0600 file, never a mount option in a table
+   //nas.corp/wardyn-drives /srv/wardyn-drives cifs credentials=/etc/wardyn/smb.cred,uid=1000,gid=1000,file_mode=0600,dir_mode=0700,vers=3.1.1 0 0
+   # or Kerberos instead of a service account: replace credentials= with sec=krb5
+   # NFS — export it Wardyn-dedicated and squashed to the sandbox uid
+   nas.corp:/export/wardyn-drives /srv/wardyn-drives nfs4 rw,hard,_netdev 0 0
+   ```
+
+   The matching NFS export line, on the NAS:
+   `/export/wardyn-drives 10.0.0.0/8(rw,all_squash,anonuid=1000,anongid=1000)`.
+
+2. **Make one `0700` subdirectory per person** under the mount point, named the
+   way the drive's home template resolves. There are three templates —
+   `hash` (a digest of the drive id and the subject), `sub` (the sign-in subject
+   claim verbatim) and `email_local` (the part of the email claim before the
+   `@`, the usual shape of a corporate home) — and a **share** drive may only
+   use `sub` or `email_local`: a hash would name a directory nobody created.
+   Per person, a grant's *home override* pins any other name. Wardyn does **not**
+   `mkdir` on a share — a missing home is a `422` at run create ("directory
+   `<home>` does not exist on the share — ask an admin to create it"), not a
+   directory Wardyn invents inside somebody's NAS.
+
+   Two people whose email addresses share the part before the `@` resolve to the
+   **same** home under `email_local` — the segment is validated, not proven
+   unique. On a share that is a tree you own and can inspect: use `sub`, or a
+   per-person home override, where it can happen. On a **managed** drive there
+   is nothing to inspect, so `email_local` is **refused outright** — a
+   `docker_volume` or `k8s_pvc` drive registered with it answers a `400`
+   beginning `invalid drive: home_template "email_local" is not allowed on a
+   managed backend` and going on to name the two templates that do work. Wardyn
+   names a managed object after the home and nothing else, so those two people
+   would be allocated one volume, with write access to each other's files
+   whenever the drive is writable; use `hash` (the default) or `sub`. A row
+   written before this rule is refused at *run* time too (`drive: this
+   deployment cannot mount your drive (…)`), and every managed volume carries a
+   `wardyn.subject` label — a digest of the principal, never the claim — that
+   the driver refuses to mount for anybody else.
+
+3. **Set the ceiling**: `WARDYN_USER_DRIVE_HOST_ROOTS=/srv/wardyn-drives`
+   ([ENV.md](ENV.md)). Unset means **no `host_path` drive may be registered at
+   all** — the same fail-closed posture `WARDYN_MEMBER_WORKSPACE_ROOTS` takes,
+   one level up: a drive's `host_root` is authored in the database by an admin
+   and its subdirectories are bound into *other people's* sandboxes, so the
+   allowlist over it lives where a console compromise cannot reach it. The
+   driver re-checks the **symlink-resolved real path** against these roots as
+   the last thing before the container is created, so a home directory replaced
+   by a symlink out of the share after the drive was registered is refused at
+   run time too — and it adds two checks the ceiling cannot make, because every
+   other drive's tree and every sibling home are inside it as well. The resolved
+   directory must be **inside this drive's own `host_root`**, which catches a
+   home replaced by a link into *another* `host_path` drive's root (a ceiling
+   naming both roots allows either tree, so it cannot tell one drive's from the
+   other's); and it must still be **named after the person it resolved for**,
+   which catches a home replaced by a link to the home *next to it*. A home
+   symlinked deeper inside its own drive's root — homes filed under a year or a
+   department — still works, as long as the directory keeps its name; a home
+   symlinked onto a *second export* no longer does, even when that export is
+   also a configured root. Give the drive the root its homes actually live
+   under, or register a second drive for the second export.
+
+   **Two `host_path` drives may not nest.** Registering a drive whose
+   `host_root` is inside — or contains — another `host_path` drive's `host_root`
+   answers `422`, naming the other drive. Drives on the *same* root are fine
+   (one share, two allocations with different home templates), and so are
+   sibling trees; what is refused is one drive rooted inside a tree whose
+   directories another drive's members can rewrite from inside a run.
+
+**On the Compose stack, wardynd must be able to SEE the root — set two
+variables.** The bind's source is resolved by the host daemon (wardynd's
+sandboxes are sibling containers), but the ceiling check resolves symlinks and
+fails closed on a path it cannot stat, so a `host_path` drive registered from a
+containerised wardynd is refused unless the share is visible inside it too.
+`docker-compose.yaml` carries both halves already — nothing to hand-edit:
+
+```
+WARDYN_USER_DRIVE_HOST_ROOTS=/srv/wardyn-drives   # the ceiling wardynd enforces
+WARDYN_USER_DRIVE_HOST_ROOT=/srv/wardyn-drives    # compose binds this one, RO, same path
+```
+
+in `deploy/compose/.env` (or the environment `docker compose` is run with).
+Unset, both default to nothing exposed — the same opt-in posture
+`WARDYN_WORKSPACES_ROOT` and `WARDYN_MEMBER_WORKSPACE_ROOTS` take.
+
+**One root on Compose.** The ceiling is a CSV and may name several roots;
+the bind is singular, because compose cannot expand a CSV into volume lines. A
+deployment whose ceiling names more than one root adds one more volume line per
+extra root in `deploy/compose/docker-compose.yaml`, copied from the
+`WARDYN_USER_DRIVE_HOST_ROOT` line — or runs wardynd on the host, or on
+Kubernetes, where no bind is involved and the ceiling is the only thing to set.
+
+Read-only is enough for wardynd: it stats the tree and never writes to it. It
+does need **search (`x`) permission down to the person's directory**, though,
+because the bind-time ceiling check resolves symlinks in *wardynd's own
+process* — so a CIFS mount table line like the `dir_mode=0700,uid=1000` one
+above works when wardynd runs as root or as uid 1000, and otherwise needs
+`dir_mode=0750,gid=<wardynd's gid>` (or the equivalent NFS export mode). A
+share wardynd cannot traverse fails every drive on it closed at run create —
+with `drive: this deployment cannot mount your drive (host_root … could not be
+resolved on this host …)` when the **root itself** is what wardynd cannot
+resolve, and with `drive: directory <home> does not exist on the share — ask an
+admin to create it` when the root resolves but the person's directory does not
+stat (a home that was never created, and a home behind a directory whose
+permissions hide it, are the same sentence). The sandbox's own mode comes from
+the allocation, not from this line. A `docker_volume` drive needs none of this —
+there is no host path to see.
+
+**Why every sandbox is uid 1000, and what that buys.** Every agent image is
+`USER agent` (uid 1000), and every agent image pre-creates `/home/agent/drive`
+owned by agent — the ones built on a public base do it themselves, the ones
+built on a sibling image inherit it — so a fresh managed volume inherits that
+ownership by Docker's copy-up. Isolation between people is the **bind of the
+subdirectory**, never the uid: a run sees its own home and has no path to the
+root or to anyone else's. NFS `AUTH_SYS` trusts the client's uid, which is why
+the export above is Wardyn-dedicated and squashed rather than a corporate home
+tree. Existing corporate home directories owned by per-user uids are supported
+read-only where uid 1000 can read them; where it cannot, Wardyn does **not**
+refuse — the directory only has to EXIST for wardynd's own uid
+(`driveShareIsBindable`), so the mount succeeds and the agent sees permission
+denied at first access.
+
+A **BYOI** image is your own to get right on this one point: a custom base that
+never creates `/home/agent/drive` gets a root-owned one from the daemon at mount
+time, so a drive you allocated writable is unwritable by uid 1000 on its first
+run. `deploy/images/README.md`'s image contract states the one line that fixes
+it; wardynd will not chown volume state to compensate.
+
+**gVisor (CC2): if a share bind misbehaves under `runsc`, turn `directfs`
+off.** Wardyn does not claim this is required — `runsc`'s own filesystem
+guidance ([gvisor.dev](https://gvisor.dev/docs/user_guide/filesystem/)) is the
+reference, and whether a given network-backed mount needs direct host-FD access
+disabled depends on the share. If a `host_path` drive reads or writes wrongly
+under CC2 and works under CC1, this is the first thing to try. It is a
+**daemon** setting, not a Wardyn one — add it to the runtime in
+`/etc/docker/daemon.json` and restart the daemon:
+
+```json
+{ "runtimes": { "runsc": { "path": "/usr/local/bin/runsc", "runtimeArgs": ["--directfs=false"] } } }
+```
+
+CC1 (`runc`) and CC3 (Kata) need nothing. Wardyn's own runsc tweaks are
+unchanged: this is an operator recipe, and the product does not rewrite your
+daemon config.
+
+**What a drive's SIZE means here.** Quoted verbatim, and the same sentence the
+console renders:
+
+> Wardyn never enforces a drive's size itself. On Kubernetes the size is the
+> volume request and the storage class decides whether it binds — block disks
+> do, network-share provisioners do not. On Docker a managed drive has no byte
+> cap, the same gap disk_mib has. A share is bounded by its own quota. The
+> size you see is the allocation, not a guarantee.
+
+Concretely on Docker: a `docker_volume` drive reports `enforcement: none` —
+`--storage-opt size` caps only a container's writable layer, never a volume, and
+an XFS project quota needs `CAP_SYS_ADMIN` the control plane must not hold. A
+`host_path` drive reports `enforcement: external`: the NAS's own quota binds it,
+and Wardyn displays the allocation.
 
 ### Capabilities: what one member, or one group, may do
 
@@ -834,12 +1160,55 @@ dereference that pointer; it marks the snapshot **truncated** (`sessionGroups`,
 fell off the byte cap: the ceiling resolver treats it as unanswerable rather than
 as "asked, there were none". Without that, such a login would arrive
 complete-and-empty and quietly shed every group-tier grant and governance
-assignment. Where members legitimately sit in that many groups, prefer Entra App
-Roles (the much smaller `roles` claim) or user-subject grants — or configure the
-group claim to emit only the groups assigned to the application.
+assignment. Where members legitimately sit in that many groups, the answers that do not
+depend on the size of the claim are Entra App Roles (the much smaller `roles`
+claim) and user-subject grants.
+
+**Every workaround that merely SHRINKS the group claim trades a detected failure
+for an undetected one.** An overage is loud: the claim is absent, the snapshot is
+marked truncated, and the resolver refuses rather than guessing. A FILTERED claim
+is silent. Set `groupMembershipClaims: "ApplicationGroup"` — the "Groups assigned
+to the application" option, which Microsoft recommends for exactly this limit —
+and the token carries a smaller list that is *complete by the IdP's account*: no
+`_claim_names`, no truncation bit, nothing downstream to refuse. A governance
+assignment or a group DENY row keyed on a group that is no longer emitted simply
+stops applying. That is the evaporation the truncation bit exists to prevent,
+with the detector switched off, and **Wardyn cannot tell the two claims apart** —
+a filtered claim and a full one are identical in the token.
+
+What that option drops is **nested membership**: "nested groups are not included
+and the user must be a direct member of the group assigned to the application"
+([Configure optional
+claims](https://learn.microsoft.com/en-us/entra/identity-platform/optional-claims)).
+The same rule governs group-based **App Role** assignment — nested group
+memberships are not supported for group-based assignment to an application, so a
+role assigned to a group reaches its direct members only ([Manage users and
+groups
+assignment](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/assign-user-or-group-access-portal)).
+App Roles are a smaller claim, not automatically a safer one.
+
+**So re-key before you change the claim, not after:**
+
+1. List what resolves by group today: `GET /permissions` for every
+   `subject_type=group` grant — **deny rows first**, since those are the ones
+   whose loss WIDENS somebody — and `GET /governance` for every group-tier
+   assignment.
+2. Re-point each one at something the new claim will still carry: a group the
+   member is a **direct** member of and that is assigned to the application, or
+   the member themselves (`subject_type=user`, or a user-tier assignment).
+3. Then change the claim configuration.
+4. Verify with a real login, not by reading the IdP's UI: have an affected member
+   sign in again and read `GET /me/capabilities`, whose `session_groups` is the
+   snapshot their token actually produced. Every group your re-keyed rows name
+   must appear in it. `POST /governance/preview` with that exact list says which
+   profile now resolves for them.
+
+If the groups cannot be flattened and the rows cannot be re-keyed, user subjects
+are the only shape in this release that a claim-configuration change cannot break
+without telling you (`threatmodel/THREAT-MODEL.md` §5).
 
 **What a capability deliberately does not reach.** `always`-scope decisions stay
-operator-only even for a member granted the host — a grant must never promote a
+on the admin-or-`security_admin` gate even for a member granted the host — a grant must never promote a
 member's decision into durable workspace config. `GET /workspaces` is not
 narrowed: visibility is not capability, the launch gate is what refuses. Machine
 lanes (`/internal/*`, ground-truth ingest, attach tickets) are untouched. And
@@ -847,7 +1216,9 @@ where the operator ceiling sets `allow_all_egress` the allowlist is not the gate
 at all, so `egress_host` narrowing does nothing there — the operator's own
 posture, not a switch that failed.
 
-**Managing them** (all `operatorOnly` except the last):
+**Managing them** (the four `/permissions` rows are `securityOps` — admin or
+`security_admin`; the `/access` rows are `operatorOnly`; `GET /me/capabilities`
+is member-safe):
 
 | Route | Does |
 |---|---|
@@ -889,8 +1260,8 @@ its own.
 | `POST /api/v1/me/tokens` | any signed-in human | mint one for yourself — the response is the **only** time the plaintext exists |
 | `GET /api/v1/me/tokens` | any signed-in human | your own tokens, revoked ones included |
 | `DELETE /api/v1/me/tokens/{id}` | any signed-in human | revoke one of your own |
-| `GET /api/v1/tokens` | admin | every token in the deployment |
-| `DELETE /api/v1/tokens/{id}` | admin | revoke anyone's |
+| `GET /api/v1/tokens` | admin or `security_admin` | every token in the deployment |
+| `DELETE /api/v1/tokens/{id}` | admin or `security_admin` | revoke anyone's |
 
 Revoking a human (`POST /api/v1/sessions/revoke`, `wardyn sessions revoke`) also
 revokes every unrevoked token that principal holds — a token is their session in
@@ -910,13 +1281,51 @@ recovered, and a database reader (a reporting role, a hot standby, a `pg_dump` i
 a backup bucket) cannot lift a usable credential off a row. `last_used_at` is best
 effort and is the signal for "which of these are dead"; revoke those.
 
-**The role is a stamp, not a live check.** A token carries the role its owner held
-when they minted it, exactly as a registered SSH key does. Demoting a human from
-admin to member does **not** reach their outstanding tokens — revoke them with
-`DELETE /api/v1/tokens/{id}`, which is also the path for a departed owner's
-credential. Both `token.create` and `token.revoke` are audited
+**The role is a stamp, not a live check — and unlike an SSH key's, nothing ages
+it out.** A token carries the role AND the group snapshot its owner held when
+they minted it, and every request it authenticates republishes them, so
+downstream it is that human as they were at mint time. A registered SSH key's
+stamp is *bounded*-stale: every login re-stamps it and `WARDYN_SSH_ROLE_TTL`
+expires it. A token's is not bounded at all. `api_tokens` has `created_at`,
+`last_used_at` and `revoked_at` and **no expiry column**; nothing re-stamps the
+row on login; and demoting the human in your IdP never touches it. **Explicit
+revocation is the only thing that ends it.**
+
+That matters most for the tier 0.7 added. A human demoted out of `security_admin`
+keeps, through any token they minted while they held it, exactly what the tier
+governs: profile authoring and assignment, capability-grant writes, session and
+token revocation, escalated approval decisions on anyone's run, workspace
+`approved-egress`/`denied-egress` writes, and audit-chain verify. What it does not
+gain is anything the tier itself never had — a token reaches no shell, no attach
+ticket on a foreign run, and no capability grant widens it to admin.
+
+**So revoke it, and check that you named the right person.**
+
+```sh
+# Everything live in the deployment, with owner, name and last_used_at:
+curl -H "Authorization: Bearer $TOKEN" $WARDYN/api/v1/tokens
+
+# One token:
+curl -X DELETE -H "Authorization: Bearer $TOKEN" $WARDYN/api/v1/tokens/<id>
+
+# A whole human — sessions AND every unrevoked token they hold, in one call.
+# "sub" takes EITHER identity: the OIDC subject or the email. Use the one you
+# actually know; on an IdP whose sub is an opaque per-app id (Entra), that is
+# the email.
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"sub":"alice@corp.com"}' $WARDYN/api/v1/sessions/revoke
+```
+
+The `session.revoke` audit row carries `tokens_revoked`. That count is the
+receipt: a **zero** against a human you believe holds tokens means the identifier
+matched nobody, not that there was nothing to revoke — sessions are stateless, so
+that half cannot be counted, and only this half can tell you. Both
+`token.create` and `token.revoke` are audited
 ([`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md)); the revoke row names the token's
-owner.
+owner. Offboarding a person means revoking their tokens explicitly — the row
+outlives their access to your IdP, and it is published as a residual
+(`threatmodel/THREAT-MODEL.md` §5, "A per-user API token's role and group
+snapshot are frozen at mint").
 
 ### Three roles, and who sets the walls
 
@@ -973,8 +1382,10 @@ Every member denial that isn't a plain foreign-resource 404 is audited under
 
 | `reason` | Raised when | Shape |
 |---|---|---|
-| `admin_surface` | a member requested an admin-only route | ⛔ `403` |
+| `admin_surface` | a member requested an admin-only route (`requireOperator`) | ⛔ `403` |
+| `security_admin_surface` | a member requested a route on the SECURITY tier (`requireSecurityOperator` — admin or `security_admin`). The `403` body is byte-identical to `admin_surface`'s on purpose, so a refusal never maps which tier a route sits on; only this reason distinguishes them, which is what lets a rule tell "a member hit an admin route" from "a member hit a security-tier route" | ⛔ `403` |
 | `not_owner` | a member reached a run/approval/recording, or a member-OWNED workspace (`owned_by`, migration 0048), that exists but isn't theirs | ⛔ `404` (byte-identical to missing) |
+| `attach_ticket_foreign_run` | a caller who is not the super admin — **including a `security_admin`** — asked to mint a PTY attach ticket for a run they did not create. Its own reason rather than `not_owner` so an auditor can see the security tier refused a foreign shell without inferring it from the path (`internal/api/attach_ticket.go`) | ⛔ `404` (byte-identical to missing) |
 | `byoi_member` | a member named a `devcontainer_repo`, or an `image` they hold no grant for | ⛔ `403` |
 | `capability_workspace` | `workspace_id`: a member named a workspace they aren't granted (`403`). Launching: an `inline_policy` `workspace_repos` entry for an ungranted workspace was dropped — the run still launches | ⛔ `403`, or 🟡 a drop |
 | `capability_egress_host` | deciding: the approval's host isn't granted (`403`). Launching: member-authored allowlist entries were dropped from an `inline_policy` — the run still launches | ⛔ `403`, or 🟡 a drop |
@@ -2111,6 +2522,79 @@ nothing crashed and nothing logged. Pin the probe back for such an image with
 Postgres reads healthy again). CI does not catch this — `helm-install-test` and
 the kind quickstart both build `wardynd` from source.
 
+### Splitting the migrator and app roles (`WARDYN_PG_MIGRATE_DSN`)
+
+Single-DSN mode logs a NOTICE at every boot: wardynd's own role owns
+`audit_events`, so `DROP TRIGGER`, `ALTER TABLE … DISABLE TRIGGER` and
+`DROP TABLE` bypass the append-only guard. `WARDYN_PG_MIGRATE_DSN` is the fix —
+migrations run as an owner/migrator role, wardynd connects as a non-owner app
+role — and this is how to adopt it on a database that already exists.
+
+**Which role becomes which is the whole procedure, and it only works one way.**
+The role you have TODAY already owns every table, function and trigger, so it
+becomes the **migrator**. The role you create is the **app** role. Doing it the
+other way round — pointing `WARDYN_PG_MIGRATE_DSN` at a fresh "migrator" that
+owns nothing — fails on the first migration that touches an existing object,
+because PostgreSQL requires ownership for `ALTER TABLE` and for
+`CREATE OR REPLACE FUNCTION`. That is not hypothetical on a 0.6 → 0.7 upgrade:
+`0048`, `0050`, `0053` and `0055` are `ALTER TABLE` on pre-existing tables
+(`0050` also drops and re-adds a primary key), and `0056`/`0057` replace the
+chain function `0047` created. The failure is at least loud and fail-closed —
+each migration runs in its own transaction and `db.Migrate` returns the error, so
+wardynd refuses to boot rather than half-applying — but it is a permission error
+with no way forward except giving the migrator ownership.
+
+Run this as the role you have today, the one in `WARDYN_PG_DSN`:
+
+```sql
+-- 1. The new LEAST-PRIVILEGE app role. Migrations create no roles by design
+--    (0007_audit_least_privilege.sql: "deploy/infra territory").
+CREATE ROLE wardyn_app LOGIN PASSWORD '…';
+GRANT USAGE ON SCHEMA public TO wardyn_app;
+
+-- 2. Full DML everywhere it needs it …
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO wardyn_app;
+
+-- 3. … except audit_events, which is INSERT + SELECT and nothing else. This is
+--    the point of the split: no UPDATE, no DELETE, no TRUNCATE — and no TRIGGER,
+--    which would let the app role add its own BEFORE INSERT trigger that fires
+--    after the shipped one (name order) and overwrite the hashes on the way in.
+REVOKE UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES ON audit_events FROM wardyn_app;
+
+-- 4. Every FUTURE migration creates its tables as the MIGRATOR, and a new table
+--    grants the app role nothing. Without this line the next upgrade boots an
+--    app role that cannot read its own new tables.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO wardyn_app;
+```
+
+Then set **`WARDYN_PG_MIGRATE_DSN` to the DSN you were already using** and point
+`WARDYN_PG_DSN` at `wardyn_app`, and restart. Do **not** grant `wardyn_app`
+membership in the owner role and do not make it a superuser: either one hands
+back every privilege the split just removed, and the boot check below is written
+to catch exactly that.
+
+**wardynd verifies the claim rather than asserting it.** On the next boot it
+queries whether the app role is a superuser, a member of `audit_events`' owner,
+or holds `TRIGGER` on it (`db.AuditDDLProtected`), and logs one of two lines:
+
+- `migrations applied via WARDYN_PG_MIGRATE_DSN … app role is a verified
+  non-owner of audit_events — the append-only guard is DDL-protected`
+- `WARDYN_PG_MIGRATE_DSN is set but the app role … still owns audit_events or is
+  a superuser — DDL protection is NOT in effect`
+
+The second line means the split did not take; the deployment is no worse off than
+single-DSN mode, and no better.
+
+**Why an INSERT+SELECT-only role can write to a hash-chained table at all.** The
+chain trigger function is `SECURITY DEFINER` and runs as its owner — the
+migrator, which also owns `audit_events` — so allocating `seq` and reading the
+chain head are the owner's acts, not the caller's (`0057`). Before that, a split
+deployment upgrading past `0056` hit `permission denied for sequence
+audit_events_seq_seq` on **every** audit insert, which pushed every write to the
+spool and refused every credential mint. Keep the migrator as the owner of both
+the table and that function; that pairing is what makes the posture work.
+
 ## Kubernetes: day-2
 
 The four sections above — backup, restore, the age key, upgrades — are written
@@ -2426,6 +2910,218 @@ recipe, including the wildcard Ingress, in
 [docs/UI-SANDBOXES.md §4](UI-SANDBOXES.md#4-deployment) and the chart section
 linked above.
 
+### User drives on Kubernetes
+
+A **user drive** is per-person storage a run mounts at `/home/agent/drive`. On
+this substrate it is always a PersistentVolumeClaim — a pod cannot bind a host
+path, and Pod Security Standards forbids `hostPath` at Baseline and Restricted
+alike, so no drive backend offers one.
+
+**Two backends, two lifecycles.** A **managed** drive (`k8s_pvc`) is one claim
+per person, named `wardyn-drive-<drive-slug>-<home>` (`<drive-slug>` = the
+drive's name lowercased, every run of characters outside `a-z0-9` folded to one
+`-`, at most 40 characters), created by wardynd on the first run that mounts
+it — `accessModes: [ReadWriteOnce]`, the allocation as
+`resources.requests.storage`, and the drive's own storage class when it has one
+(empty = the cluster default). A **share** (`k8s_pvc_static`) is a claim an admin
+provisioned — typically over an NFS/SMB export — and wardynd only ever looks it
+up by name. A missing one fails the run with *"your drive's volume is not
+provisioned on this cluster"* rather than being invented as an empty volume where
+somebody's files were meant to be.
+
+**RBAC is two verbs.** `userDrives.enabled=true` adds exactly
+`persistentvolumeclaims: ["get","create"]` to the namespaced runner Role
+(`deploy/helm/wardyn/templates/rbac.yaml`): `get` because a claim is always
+resolved by name first, and is all a share ever needs; `create` for a managed
+drive's first use. Leave it on for **any** drive at all. With it off, EVERY
+drive's run fails at dispatch — the lookup is the first call a drive makes and a
+share makes no other — and the run's failure hint names the switch. Both the Get
+and the Create map their 403 onto that one refusal, because the apiserver's own
+"cannot get resource" text names nothing an operator can flip. A 403 has a second
+cause that no status code distinguishes from the first and that takes the
+opposite remedy — a namespace `ResourceQuota` refusing the claim — so wardynd
+picks which of the two the hint names, on the `exceeded quota` substring the
+quota admission plugin always emits. A hint naming `ResourceQuota` means the
+quota, and RBAC is not the problem.
+
+**The failure hint does not quote the apiserver, and the daemon log does.** A raw
+403 reads `User "system:serviceaccount:<ns>:<sa>" cannot get resource ...`, and a
+run's failure hint is read by the member whose run failed — so the hint carries
+the claim name and one remedy, and nothing that names this cluster. The
+apiserver's own sentence goes to the daemon log instead, with the verb, the
+claim, the namespace, the drive id and the refusal verbatim; grep it for `the
+apiserver refused a drive claim`. The claim name appears in both halves, so a
+member's report of a failed run joins to the full text without anybody having
+been handed the runs namespace or the runner's ServiceAccount name.
+
+**Renaming a drive orphans its claims, and Wardyn will not clean that up.** A
+claim's name folds the drive's NAME into a slug
+(`wardyn-drive-<drive-slug>-<home>`), so renaming a drive in the console changes
+the name every FUTURE claim is
+created under. The claims already provisioned keep their old names, keep the
+member data in them, and are never looked up again — the next run for each
+person provisions a fresh, empty claim under the new name. Nothing deletes the
+old ones, on purpose: Wardyn holds no `delete` verb, and a rename must never be
+able to destroy storage. The `wardyn.drive` label carries the drive's row **id**
+rather than its name precisely so the orphans stay findable:
+
+```sh
+kubectl -n <runsNamespace> get pvc -l wardyn.drive=<drive-id>
+```
+
+Everything that comes back under a name that is not
+`wardyn-drive-<new drive-slug>-*` predates the rename. Move the data (`kubectl
+cp`, or a snapshot restore into the new claim) and reclaim the old claim with
+the `delete pvc` above. The cheap
+alternative is not renaming a drive that has claims.
+
+**The console does not warn about this**, and in 0.7 it does not refuse it
+either: a rename with grants attached is accepted like any other edit. Treat the
+rename field as an operator action with a runbook, not a label edit.
+
+**An existing claim's SHAPE is reused as it is, and logged rather than
+enforced.** A managed claim is looked up by name and mounted whatever its spec
+says. If its shape disagrees with the drive row — a different storage class, a
+different `requests.storage`, an access mode that is not `ReadWriteOnce` —
+wardynd logs one warning naming the claim and every disagreement, and mounts it
+anyway. That is deliberate: the claim is the member's data, a PVC request cannot
+be shrunk, and refusing the run would mean an admin editing an allocation in the
+console breaks every existing member's runs. Grep the daemon log for `disagrees
+with the drive` when a console size and a pod's actual volume do not match.
+
+**Two states are refusals, not warnings.** A claim that is **Terminating** fails
+the run outright: a pod mounting a claim under deletion never schedules, and
+re-creating it under the same name would undo the reclaim somebody is in the
+middle of. So does a claim whose IDENTITY labels are not this run's — a managed
+claim whose `wardyn.drive` or `wardyn.home` names a different pair, or whose
+`wardyn.subject` names a different person (that third label is checked only when
+it is PRESENT, so claims stamped before it existed still mount), or a share
+whose claim turns out to carry `wardyn.managed=true` (i.e. it is one person's
+managed drive, not an admin's share). That one is the collision the object name
+cannot rule out: `wardyn-drive-<drive-slug>-<home>` joins two variable-width
+fields with the separator both of them admit, so drive `eng` + home `us-bob` and
+drive
+`eng-us` + home `bob` resolve to the same claim name. Wardyn holds no `delete`
+verb and cannot repair the collision, so it refuses the run rather than mount
+one member's private drive inside another member's agent. The fix is to rename
+one of the two drives (see the rename caveat above) or to give the colliding
+people distinct home names.
+
+Both refusals also cover the loser of a create race. Two first runs can collide
+inside the lookup→create window, and the loser's create comes back
+`AlreadyExists`; it re-reads the claim that won rather than mounting on the
+strength of the name, so the identity and Terminating answers are the same ones,
+one moment later. If the winning claim has been deleted again by the time the
+loser looks — a reclaim landing mid-dispatch — the run is refused with *"your
+drive's volume claim was deleted while your run was starting"*, and starting it
+again is the whole remedy: nothing re-creates a claim somebody is reclaiming.
+
+**Restoring a managed claim by hand: it must carry the labels.** Unlike Docker, a
+label-less claim is FOREIGN here (`driveClaimIdentity`): a claim you create
+yourself under a member's name — from a snapshot, or to move data after a
+rename — needs `wardyn.managed=true`, `wardyn.drive=<drive-id>` and
+`wardyn.home=<home>` (leave `wardyn.subject` off), or every run on it fails as
+*"belongs to a different drive or a different person"*.
+
+**`ReadWriteOnce` binds a claim to one node.** A managed drive is provisioned
+RWO, so a person's second concurrent run schedules onto the node their first run
+landed on — or stays Pending and fails at the dispatch wait timeout with the
+message below. The pod's failure reads `0/N nodes are available: pod has unbound
+immediate PersistentVolumeClaims` or a volume-node-affinity conflict, and wardynd
+surfaces the scheduler's own
+`PodScheduled` message in the run's failure hint rather than a bare timeout. The
+same message is what a claim that never bound at all produces — a storage class
+with no provisioner, or no default class on the cluster for a drive that names
+none. If members routinely run several sandboxes at once, provision the drive's
+class as `ReadWriteMany` storage and pre-create the claims as a
+`k8s_pvc_static` share; Wardyn's managed backend does not offer RWX, because a
+concurrently-written shared home is a data-loss shape, not a feature.
+
+**Backup.** A drive is *not* in `pg_dump` — the database holds the drive rows and
+the allocations, never the bytes. Back the volumes up the way the cluster already
+backs up claims: a `VolumeSnapshotClass` snapshot per claim, or
+`kubectl -n <ns> cp <pod>:/home/agent/drive <dest>` from a pod that mounts one. A
+share is backed up by whoever owns the export, not by Wardyn.
+
+**Offboarding — the reclaim command.** Deleting the allocation in the console is
+the product-side half and it deletes no data. Reclaiming the storage is one
+deliberate operator command, and Wardyn holds no `delete` verb that could do it
+by accident:
+
+```sh
+kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
+```
+
+The drive's `when a person leaves` column records the intent (`retain` or
+`delete`) so the log says what the operator was told to do; the console's drive
+preview prints the object name for a principal — paste the sign-in subject
+FIRST: on a `hash`/`sub` drive the name keys on the first claim, and the API's
+`home_subject` says which claim it used (the console does not yet show it). The
+claim carries `wardyn.managed`, `wardyn.drive` (the drive's
+row **id**, not its name, so the claims a rename orphans stay findable with the
+`get pvc -l wardyn.drive=<drive-id>` above) and `wardyn.home` labels — the same
+pair the Docker driver stamps on a managed volume — and, deliberately, **no
+`wardyn.run-id`**, so the per-run teardown sweep (a `DeleteCollection` selecting
+on exactly that label) cannot reach it. That pair is also what the driver checks
+before it mounts anything: see the two refusals above.
+
+**Ownership, and where fsGroup stops working.** A pod with a drive carries
+`fsGroup: 1000` (a GROUP id — it happens to equal the uid every agent image runs as, but this field can never make a volume user-owned) with
+`fsGroupChangePolicy: OnRootMismatch` — `Always` would recursively chown a large
+drive on every single run. The kubelet applies fsGroup for CSI drivers that
+declare `ReadWriteOnceWithFSType` volume ownership, i.e. block storage: the
+managed case is correct by construction. It does **not** apply to an NFS-type
+volume. A static share is owned by whatever its export says, so map it there — a
+Wardyn-dedicated export with `all_squash,anonuid=1000,anongid=1000`, or per-user
+`0700` subdirectories — and expect a read-only mount where an existing corporate
+home is owned by a different uid.
+
+**gVisor wants `directfs` off for a drive, and the annotation is a request.**
+The Wall (CC2) and Vault (CC3) tiers run the agent pod under a RuntimeClass; when
+its handler is `runsc`, gVisor's `directfs` has the gofer donate a file
+descriptor per mount point to the sandbox, which then operates on the file
+directly. That is right for a block PVC and wrong for a network-backed export —
+a `k8s_pvc_static` share over NFS/SMB. gVisor takes the override **per mount**,
+from a pod annotation keyed by the volume's own name, and wardynd stamps it on
+every drive pod whose resolved handler is `runsc`:
+
+```yaml
+dev.gvisor.spec.mount.drive.directfs: "off"
+```
+
+containerd only forwards it when the node's runsc runtime section allows the
+prefix, so on a cluster whose `/etc/containerd/config.toml` does not carry
+
+```toml
+pod_annotations = ["dev.gvisor.*"]
+```
+
+the annotation is inert and the node-level setting is the one that applies:
+`--directfs=false` in the runsc shim's own config (`/etc/containerd/runsc.toml`,
+or the `runtimeArgs` a node image bakes in). Either is fine; the annotation is
+per-pod and the flag is per-node. See
+[gVisor's containerd configuration guide](https://gvisor.dev/docs/user_guide/containerd/configuration/).
+
+The companion caveat is CACHING, and it cuts the other way. runsc serves bind
+mounts `shared` by default (`--file-access-mounts=shared`), revalidating against
+the host because it cannot assume exclusive access. An operator who has set
+`--file-access-mounts=exclusive` for throughput must **not** do so on nodes that
+run drive pods over a share other writers touch: exclusive mode caches
+aggressively, and a file another writer changes is not seen. A managed
+(`k8s_pvc`) drive is exclusive to its pod by construction and is unaffected. See
+[gVisor's filesystem guide](https://gvisor.dev/docs/user_guide/filesystem/).
+
+**Size is an allocation, not a limit**, and the product says so in one frozen
+sentence: *"Wardyn never enforces a drive's size itself. On Kubernetes the size
+is the volume request and the storage class decides whether it binds — block
+disks do, network-share provisioners do not. On Docker a managed drive has no
+byte cap, the same gap disk_mib has. A share is bounded by its own quota. The
+size you see is the allocation, not a guarantee."* That is the `enforcement`
+vocabulary this feature introduces (`filesystem` / `request` / `external` /
+`none`): a managed claim is `request`, a share is `external`. It is the same
+honesty the `DiskMiB` gap below is written with, and the two will converge on one
+vocabulary.
+
 ## One replica, by construction
 
 `replicas` is not a scaling knob and it is not modesty — **the pin is a safety
@@ -2546,6 +3242,19 @@ driver, not a guess:
   per-container writable-storage quota is wired up yet, so a requested disk cap
   is accepted, not enforced, and logged (`internal/runner/k8s/sandbox.go`). A
   cluster-level `ephemeral-storage` request/limit is the closest mitigation.
+  **The honest wording for a size Wardyn does not enforce is now settled, and
+  `DiskMiB` should adopt it.** User drives introduced an `enforcement`
+  vocabulary — `types.StorageEnforcement`, one of `filesystem` (a quota binds
+  it), `request` (a volume request; the storage class decides), `external`
+  (somebody else's quota binds it) or `none` — and one frozen sentence the
+  console and the docs both render verbatim:
+
+  > Wardyn never enforces a drive's size itself. On Kubernetes the size is the volume request and the storage class decides whether it binds — block disks do, network-share provisioners do not. On Docker a managed drive has no byte cap, the same gap disk_mib has. A share is bounded by its own quota. The size you see is the allocation, not a guarantee.
+
+  That sentence names this gap by its policy field, on purpose. A drive is
+  `request` on a managed claim and `external` on a share; `disk_mib` is `none`
+  on both substrates today, and the two will converge on the one vocabulary
+  rather than on two ways of saying "accepted, not enforced".
 - 🟡 **No k8s ground-truth correlator.** The Tetragon host-sensor → ground-truth
   pipeline (`cmd/wardynd/gt_rotator.go`, `wardyn-tetragon-ingest`, the
   `groundtruth` Compose profile) has no k8s-substrate equivalent — it is not

@@ -131,26 +131,10 @@ func (p *Proxy) handleBrokerMint(w http.ResponseWriter, r *http.Request) {
 			http.StatusForbidden)
 		return
 	}
-	resp, err := p.forwardToControlPlane(r.Context(), http.MethodPost,
-		"/api/v1/internal/credentials/mint", body, r.Header.Get("Content-Type"))
-	if err != nil {
-		p.emitLocalDecision(r, egress.Deny, ruleSourceMint, nil)
-		p.httpError(w, "control plane error", err, http.StatusBadGateway)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	// Capture the upstream body so we can both pass it through and inspect a
-	// 409 for the approval id (decision-log enrichment).
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxBrokeredBody))
-
-	var approvalID *uuid.UUID
-	if resp.StatusCode == http.StatusConflict {
-		approvalID = extractApprovalID(respBody)
-	}
-	p.emitLocalDecision(r, decisionForStatus(resp.StatusCode), ruleSourceMint, approvalID)
-
-	passThrough(w, resp, respBody)
+	// The 409 body carries the approval id (decision-log enrichment); a 200 mint
+	// body is not parsed for one.
+	p.relayControlPlane(w, r, http.MethodPost, "/api/v1/internal/credentials/mint",
+		body, r.Header.Get("Content-Type"), ruleSourceMint, approvalIDOn409)
 }
 
 // handleBrokerApproval forwards GET /wardyn/v1/approvals/{id} to the control
@@ -164,18 +148,8 @@ func (p *Proxy) handleBrokerApproval(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid approval id", http.StatusNotFound)
 		return
 	}
-	resp, err := p.forwardToControlPlane(r.Context(), http.MethodGet,
-		"/api/v1/internal/approvals/"+id, nil, "")
-	if err != nil {
-		p.emitLocalDecision(r, egress.Deny, ruleSourceApprovals, nil)
-		p.httpError(w, "control plane error", err, http.StatusBadGateway)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxBrokeredBody))
-	p.emitLocalDecision(r, decisionForStatus(resp.StatusCode), ruleSourceApprovals, nil)
-	passThrough(w, resp, respBody)
+	p.relayControlPlane(w, r, http.MethodGet, "/api/v1/internal/approvals/"+id,
+		nil, "", ruleSourceApprovals, nil)
 }
 
 // toolApprovalRequest is the SANDBOX-facing body for POST /wardyn/v1/approvals.
@@ -253,20 +227,10 @@ func (p *Proxy) handleBrokerCreateApproval(w http.ResponseWriter, r *http.Reques
 		p.httpError(w, "encode tool approval", err, http.StatusInternalServerError)
 		return
 	}
-	resp, err := p.forwardToControlPlane(r.Context(), http.MethodPost,
-		"/api/v1/internal/approvals", fwd, "application/json")
-	if err != nil {
-		p.emitLocalDecision(r, egress.Deny, ruleSourceApprovals, nil)
-		p.httpError(w, "control plane error", err, http.StatusBadGateway)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxBrokeredBody))
 	// The created row's id rides the decision log so audit can join "the sandbox
 	// raised this hold" to the approval it raised, without parsing the response.
-	p.emitLocalDecision(r, decisionForStatus(resp.StatusCode), ruleSourceApprovals, extractApprovalID(respBody))
-	passThrough(w, resp, respBody)
+	p.relayControlPlane(w, r, http.MethodPost, "/api/v1/internal/approvals",
+		fwd, "application/json", ruleSourceApprovals, approvalIDAlways)
 }
 
 // clampToolField bounds a sandbox-supplied string for storage and marks any
@@ -324,17 +288,8 @@ func (p *Proxy) forwardBrokeredUpload(w http.ResponseWriter, r *http.Request, pr
 		http.Error(w, readErrMsg, http.StatusBadRequest)
 		return
 	}
-	resp, err := p.forwardToControlPlane(r.Context(), http.MethodPut,
-		cpPathPrefix+id, body, r.Header.Get("Content-Type"))
-	if err != nil {
-		p.emitLocalDecision(r, egress.Deny, ruleSource, nil)
-		p.httpError(w, "control plane error", err, http.StatusBadGateway)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxBrokeredBody))
-	p.emitLocalDecision(r, decisionForStatus(resp.StatusCode), ruleSource, nil)
-	passThrough(w, resp, respBody)
+	p.relayControlPlane(w, r, http.MethodPut, cpPathPrefix+id, body,
+		r.Header.Get("Content-Type"), ruleSource, nil)
 }
 
 // handleBrokerScanResult forwards PUT /wardyn/v1/scan-results/{runID} to the
@@ -473,6 +428,52 @@ func hostPortFromURL(rawURL string) (host string, port int, err error) {
 		return "", 0, fmt.Errorf("url %q has empty host", rawURL)
 	}
 	return host, port, nil
+}
+
+// relayControlPlane is the shared tail of every brokered sandbox->control-plane
+// route: forward with the run token injected, capture the capped response body,
+// emit the brokered decision under ruleSource, and pass the response through
+// verbatim. A forward error is a Deny row plus a 502 — the fail-closed shape all
+// four callers already had. Each caller keeps its own prologue (the guards).
+// idOf, when non-nil, derives the approval id the decision row carries.
+func (p *Proxy) relayControlPlane(w http.ResponseWriter, r *http.Request, method, path string,
+	body []byte, contentType, ruleSource string, idOf func(status int, body []byte) *uuid.UUID) {
+	resp, err := p.forwardToControlPlane(r.Context(), method, path, body, contentType)
+	if err != nil {
+		p.emitLocalDecision(r, egress.Deny, ruleSource, nil)
+		p.httpError(w, "control plane error", err, http.StatusBadGateway)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxBrokeredBody))
+	var approvalID *uuid.UUID
+	if idOf != nil {
+		approvalID = idOf(resp.StatusCode, respBody)
+	}
+	p.emitLocalDecision(r, decisionForStatus(resp.StatusCode), ruleSource, approvalID)
+	passThrough(w, resp, respBody)
+}
+
+// approvalIDOn409 reads the approval id only out of a 409 (mint pending/denied).
+func approvalIDOn409(status int, body []byte) *uuid.UUID {
+	if status != http.StatusConflict {
+		return nil
+	}
+	return extractApprovalID(body)
+}
+
+// approvalIDAlways reads the approval id out of any response body.
+func approvalIDAlways(_ int, body []byte) *uuid.UUID { return extractApprovalID(body) }
+
+// relay streams an upstream response back to the client verbatim: headers (less
+// hop-by-hop), status code, then the body. The streaming sibling of passThrough,
+// which writes an already-captured (capped) body instead.
+func relay(w http.ResponseWriter, resp *http.Response) {
+	dst := w.Header()
+	copyHeader(dst, resp.Header)
+	removeHopByHop(dst)
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
 }
 
 // passThrough writes a forwarded control-plane response verbatim: status code

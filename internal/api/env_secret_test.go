@@ -7,6 +7,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -135,5 +136,160 @@ func TestResolveEnvSecretGrants(t *testing.T) {
 		types.RunPolicySpec{EligibleGrants: []types.GrantSpec{envSecretGrant("ANTHROPIC_BASE_URL", "corp-token")}}, env2)
 	if env2["ANTHROPIC_BASE_URL"] != "https://api.anthropic.com" {
 		t.Fatalf("ANTHROPIC_BASE_URL = %q, want the platform value — a grant must not override platform-authored env", env2["ANTHROPIC_BASE_URL"])
+	}
+}
+
+// TestDispatchEnvSplit_CredentialsLeaveEnv pins the control-plane half of the
+// F9-H1 fix — the premise every substrate then relies on.
+//
+// runner.SandboxSpec's Env is documented non-secret and drivers treat it that
+// way (the k8s driver writes it inline into a Pod spec, readable by anyone with
+// pods/get). resolveEnvSecretGrants breaks that contract by design: it puts a
+// REAL stored secret under a variable name. The fix is not to stop resolving it
+// but to REPORT it, so splitSecretEnv can move it to SandboxSpec.SecretEnv,
+// which drivers must deliver without publishing the value.
+//
+// Two properties, both load-bearing: the credential lands in exactly one map,
+// and it is the secret one. A copy left behind in Env would be the original
+// leak with an extra secretKeyRef beside it.
+func TestDispatchEnvSplit_CredentialsLeaveEnv(t *testing.T) {
+	h, sec := newSecretsHarness(t)
+	if err := sec.Put(context.Background(), "corp-token", []byte("s3cr3t-value")); err != nil {
+		t.Fatal(err)
+	}
+	reg := secretmask.NewRegistry()
+	h.srv.cfg.MaskRegistry = reg
+	run := types.AgentRun{ID: uuid.New()}
+
+	sandboxEnv := map[string]string{"WARDYN_TASK_MODE": "exec", "HTTP_PROXY": "http://wardyn-proxy:3128"}
+	policy := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{
+		envSecretGrant("CORP_API_TOKEN", "corp-token"),
+		envSecretGrant("GONE_TOKEN", "no-such-secret"),
+	}}
+	names := h.srv.resolveEnvSecretGrants(context.Background(), run, policy, sandboxEnv)
+
+	// Only the grants that actually RESOLVED are named: a skipped grant set no
+	// variable, and naming it would move a platform value out of Env.
+	if len(names) != 1 || names[0] != "CORP_API_TOKEN" {
+		t.Fatalf("resolveEnvSecretGrants returned %v, want exactly [CORP_API_TOKEN]", names)
+	}
+
+	secretEnv := splitSecretEnv(sandboxEnv, names)
+	if secretEnv["CORP_API_TOKEN"] != "s3cr3t-value" {
+		t.Errorf("SecretEnv[CORP_API_TOKEN] = %q, want the resolved secret value", secretEnv["CORP_API_TOKEN"])
+	}
+	if v, still := sandboxEnv["CORP_API_TOKEN"]; still {
+		t.Errorf("Env still carries CORP_API_TOKEN = %q after the split — a driver would publish it inline", v)
+	}
+	// Platform configuration is untouched: the split moves credentials out, it
+	// does not move configuration in.
+	if sandboxEnv["WARDYN_TASK_MODE"] != "exec" || sandboxEnv["HTTP_PROXY"] != "http://wardyn-proxy:3128" {
+		t.Errorf("non-secret env was disturbed by the split: %v", sandboxEnv)
+	}
+	if _, moved := secretEnv["HTTP_PROXY"]; moved {
+		t.Errorf("SecretEnv swept up a non-secret variable: %v", secretEnv)
+	}
+
+	// The drift guard, and the reason this test is worth more than the two
+	// assertions above: whatever dispatch thought was worth MASKING out of a
+	// recording is exactly what must not sit inline in a pod spec. A future
+	// credential lane that forgets to report its keys fails here without anyone
+	// having to remember this file exists.
+	for k, v := range sandboxEnv {
+		for _, masked := range reg.Snapshot(run.ID) {
+			if len(masked) > 0 && strings.Contains(v, string(masked)) {
+				t.Errorf("Env[%s] carries a mask-registered credential: a lane wrote it without naming it for splitSecretEnv", k)
+			}
+		}
+	}
+
+	// A run with no credential grant produces a nil SecretEnv, so its spec is
+	// byte-identical to one composed before the split existed.
+	if got := splitSecretEnv(map[string]string{"HTTP_PROXY": "x"}, nil); got != nil {
+		t.Errorf("splitSecretEnv with no credential keys = %v, want nil", got)
+	}
+}
+
+// TestDispatchEnvSplit_BedrockCredentialsLeaveEnv is the OTHER half of the same
+// premise, and the half nothing pinned: env_secret grants are not the only lane
+// that writes a real credential into the composed sandbox env. A resident
+// Bedrock posture puts static AWS SigV4 keys there (SigV4 cannot be
+// proxy-injected the way a static api key can), and the captured-AWS-SSO posture
+// puts a base64 blob there whose payload IS the access and refresh token.
+//
+// Driven through resolveLLMTransport rather than applyBedrockTransport directly,
+// because the assignment is the thing under test: reverting
+// `t.secretEnvKeys = s.applyBedrockTransport(...)` to a bare call leaves the
+// keys unreported, splitSecretEnv moves nothing, and the credentials stay in Env
+// — where the k8s driver writes them inline into an API-readable Pod spec. A
+// test that called applyBedrockTransport itself would keep passing through that
+// revert.
+func TestDispatchEnvSplit_BedrockCredentialsLeaveEnv(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*testing.T, *Server)
+		want  []string
+	}{
+		{
+			// Resident static SigV4 keys: no bearer token, no captured SSO, no
+			// ~/.aws mount, so resolveBedrockAuth falls to the resident lane.
+			name:  "resident SigV4 keys",
+			setup: func(*testing.T, *Server) {},
+			want:  []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"},
+		},
+		{
+			// Captured AWS SSO: one variable, whose base64 payload carries the
+			// SSO access + refresh token in the generated ~/.aws cache file.
+			name: "captured SSO blob",
+			setup: func(t *testing.T, s *Server) {
+				s.cfg.Now = func() time.Time { return awsSSOTestFixedNow }
+				putAWSSSOBlob(t, s, awsSSOTestFixedNow.Add(time.Hour))
+			},
+			want: []string{awsSSOConfigEnvVar},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// New (not a bare &Server{}) so the transport runs with the same
+			// defaults dispatch gives it — cfg.Now above all, which the Bedrock
+			// audit event reads.
+			srv := New(Config{
+				BedrockRegion:         "us-east-1",
+				BedrockModel:          "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+				SubscriptionPostureOK: true,
+				MaskRegistry:          secretmask.NewRegistry(),
+				Secrets: &memSecrets{m: map[string][]byte{
+					bedrockAccessKeyIDSecret:     []byte("AKIATESTTESTTESTTEST"),
+					bedrockSecretAccessKeySecret: []byte("wJalrXUtnFEMItesttesttesttesttesttestKEY"),
+					// A session token only exists on the resident lane; harmless
+					// on the SSO one, which never reads it.
+					bedrockSessionTokenSecret: []byte("FwoGZXItesttesttesttesttestSESSION"),
+				}},
+			})
+			tc.setup(t, srv)
+
+			run := types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: "alice@example.com"}
+			policy := &types.RunPolicySpec{AllowedDomains: []string{"git.example.com"}}
+			sandboxEnv := map[string]string{"WARDYN_TASK_MODE": "agent"}
+			llm := srv.resolveLLMTransport(context.Background(), run, policy, sandboxEnv, nil,
+				false, "", "http://wardyn-proxy:3128", nil)
+			if !llm.bedrockReady {
+				t.Fatalf("bedrockReady = false; the fixture never reached the lane under test")
+			}
+
+			secretEnv := splitSecretEnv(sandboxEnv, llm.secretEnvKeys)
+			for _, k := range tc.want {
+				if secretEnv[k] == "" {
+					t.Errorf("SecretEnv[%s] is empty, want the credential value (keys reported: %v)", k, llm.secretEnvKeys)
+				}
+				if v, still := sandboxEnv[k]; still {
+					t.Errorf("Env still carries %s = %q after the split — the k8s driver would write it inline into an API-readable pod spec", k, v)
+				}
+			}
+			// The non-secret Bedrock configuration stays put: the split moves
+			// credentials out, it does not sweep the transport's whole env.
+			if sandboxEnv["CLAUDE_CODE_USE_BEDROCK"] != "1" || sandboxEnv["WARDYN_TASK_MODE"] != "agent" {
+				t.Errorf("non-secret env was disturbed by the split: %v", sandboxEnv)
+			}
+		})
 	}
 }

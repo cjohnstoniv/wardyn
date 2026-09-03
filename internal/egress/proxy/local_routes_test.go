@@ -520,3 +520,141 @@ func TestLocalToolApprovalCreateRejects(t *testing.T) {
 		})
 	}
 }
+
+// TestRelayStripsHopByHopResponseHeaders pins the SHARED relay tail
+// (local_routes.go relay), which every streamed brokered response goes through:
+// the git broker, the git_pat broker and the brokered/MITM'd LLM forward all end
+// in it, so one hole here is a hole on all four. The brokered LLM route is the
+// cheapest way in.
+//
+// Hop-by-hop headers describe the UPSTREAM's connection, not this one, and
+// relaying them is how a proxy leaks another connection's framing into its own.
+// relay has to drop two kinds: the fixed RFC 7230 §6.1 names (Keep-Alive,
+// Connection, …), and whatever the upstream NAMED in its own Connection header
+// (X-Hop) — hop-by-hop only because that header says so. Everything else
+// (X-Keep) and the status must arrive untouched.
+//
+// The two rows differ ONLY in whether that Connection header also carries the
+// "close" token, and that turns out to decide whether the named-token arm can
+// work at all — see the connCloseEatsTokenList row.
+func TestRelayStripsHopByHopResponseHeaders(t *testing.T) {
+	cases := []struct {
+		name       string
+		connection string
+		wantXHop   string // "" == stripped
+	}{
+		{
+			// The arm relay itself implements: Connection reaches resp.Header, so
+			// removeHopByHop reads its token list and drops X-Hop by name.
+			name:       "named token is stripped",
+			connection: "X-Hop",
+			wantXHop:   "",
+		},
+		{
+			// KNOWN GAP, pinned deliberately rather than left as folklore. When
+			// Connection carries "close", net/http's own readTransfer DELETES the
+			// whole Connection header from resp.Header (folding it into
+			// resp.Close) before relay ever runs. removeHopByHop therefore finds
+			// no token list to read, and X-Hop is relayed to the sandbox. Nothing
+			// sensitive rides it — it is a response header from an upstream this
+			// run was already allowed to reach — but the strip is NOT the
+			// unconditional one the code reads like. If relay ever learns to
+			// consult resp.Close (or strips before the transport folds it), flip
+			// this row to "" rather than deleting it.
+			name:       "connection close eats the token list",
+			connection: "close, X-Hop",
+			wantXHop:   "1",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			up := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Connection", tc.connection)
+				w.Header().Set("X-Hop", "1")
+				w.Header().Set("Keep-Alive", "timeout=5")
+				w.Header().Set("X-Keep", "1")
+				w.WriteHeader(http.StatusAccepted)
+				_, _ = io.WriteString(w, "relayed")
+			}))
+			defer up.Close()
+
+			inj := staticInj(map[string]injectedHeader{
+				anthropicHost: {name: "X-Api-Key", value: "BROKERED-KEY"},
+			})
+			p, _ := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(up), inj, testInsecureTLSConfig)
+
+			rec := httptest.NewRecorder()
+			p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"v1/messages", strings.NewReader(`{}`)))
+
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want 202 relayed verbatim (body %q)", rec.Code, rec.Body.String())
+			}
+			if rec.Body.String() != "relayed" {
+				t.Fatalf("body = %q, want the upstream body streamed through", rec.Body.String())
+			}
+			if got := rec.Header().Get("X-Keep"); got != "1" {
+				t.Fatalf("X-Keep = %q, want it relayed — only hop-by-hop headers may be dropped", got)
+			}
+			if got := rec.Header().Get("Connection"); got != "" {
+				t.Fatalf("Connection = %q, want it stripped (RFC 7230 §6.1 hop-by-hop)", got)
+			}
+			// A fixed-list name the transport does NOT fold away, so this arm is
+			// relay's own work in both rows.
+			if got := rec.Header().Get("Keep-Alive"); got != "" {
+				t.Fatalf("Keep-Alive = %q, want it stripped (RFC 7230 §6.1 hop-by-hop)", got)
+			}
+			if got := rec.Header().Get("X-Hop"); got != tc.wantXHop {
+				t.Fatalf("X-Hop = %q, want %q (Connection: %q)", got, tc.wantXHop, tc.connection)
+			}
+		})
+	}
+}
+
+// TestBrokeredRouteControlPlaneDownDeniesAndFails502 pins relayControlPlane's
+// error branch across the brokered sandbox->control-plane routes. It is the
+// FAIL-CLOSED shape: an unreachable control plane is a 502 to the sandbox AND a
+// Deny row under that route's own rule source — never a silent 200, and never an
+// audit gap where a brokered call simply left no trace.
+//
+// The per-route rule source is the point of the table: these four share one tail,
+// so a tail that emitted a single generic source would still pass a one-route
+// test while making the decision log unable to say WHICH brokered call failed.
+func TestBrokeredRouteControlPlaneDownDeniesAndFails502(t *testing.T) {
+	runID := uuid.New()
+	cases := []struct {
+		name       string
+		method     string
+		route      string
+		body       string
+		ruleSource string
+	}{
+		{"mint", http.MethodPost, routeMint, `{"grant_id":"` + uuid.New().String() + `"}`, ruleSourceMint},
+		{"approval", http.MethodGet, routeApprovals + uuid.New().String(), "", ruleSourceApprovals},
+		{"recording", http.MethodPut, routeRecordings + runID.String(), `{"version":2}`, ruleSourceRecordings},
+		{"scan-result", http.MethodPut, routeScanResults + runID.String(), `{"facts":1}`, ruleSourceScanResults},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// "127.0.0.1:1" is the repo's dead-port convention: the control-plane
+			// URL resolves and vets fine, and then nothing answers the dial.
+			p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", "127.0.0.1:1", nil, nil)
+
+			var body io.Reader
+			if tc.body != "" {
+				body = strings.NewReader(tc.body)
+			}
+			rec := httptest.NewRecorder()
+			req := mustLocalReq(t, tc.method, tc.route, body)
+			req.Header.Set("Content-Type", "application/json")
+			p.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadGateway {
+				t.Fatalf("status = %d, want 502 when the control plane is unreachable (body %q)", rec.Code, rec.Body.String())
+			}
+			d := lastDecision(t, buf)
+			if d.RuleSource != tc.ruleSource || d.Decision != egress.Deny {
+				t.Fatalf("decision = %+v, want a %s deny row", d, tc.ruleSource)
+			}
+		})
+	}
+}

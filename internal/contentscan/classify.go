@@ -24,8 +24,6 @@ func newClassifyDetector(markers []string) (classifyDetector, bool) {
 	return classifyDetector{markers: out}, len(out) > 0
 }
 
-func (classifyDetector) Name() string { return "classify" }
-
 func (d classifyDetector) Scan(s Span, dst *[]Finding) {
 	lower := strings.ToLower(s.Text)
 	path := sanitizePath(s.FieldPath)

@@ -8,7 +8,7 @@
 // it says.
 import * as React from "react";
 import { cn } from "../../ui/utils";
-import { Mono } from "../../wardyn/code-block";
+import { makeMono } from "../../wardyn/code-block";
 
 // Backtick-mono rendering (governance-prompt.md §7 header rule): a backticked
 // substring inside a frozen string is an env var or a wire value and renders
@@ -20,20 +20,7 @@ import { Mono } from "../../wardyn/code-block";
 // ONE place that decides which substrings get it. A profile NAME is never here:
 // §7 renders it inside double quotes because it is a human-chosen label, not a
 // literal.
-const MONO_TERMS = ["WARDYN_DEFAULT_POLICY", "task_mode=exec"];
-const MONO_RE = new RegExp(`(${MONO_TERMS.join("|")})`, "g");
-
-export function withMono(text: string): React.ReactNode {
-  return text.split(MONO_RE).map((part, i) =>
-    MONO_TERMS.includes(part) ? (
-      <Mono key={i} className="text-inherit">
-        {part}
-      </Mono>
-    ) : (
-      <React.Fragment key={i}>{part}</React.Fragment>
-    ),
-  );
-}
+export const withMono = makeMono(["WARDYN_DEFAULT_POLICY", "task_mode=exec"]);
 
 // A standing note under a heading. `tone` carries the meaning: plain for the
 // precedence/preview facts, red for a refusal, amber for the omission warnings

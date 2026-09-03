@@ -102,10 +102,21 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, e
 	podCopy := pod.DeepCopy()
 	podCopy.Spec.EphemeralContainers = append(podCopy.Spec.EphemeralContainers, corev1.EphemeralContainer{
 		EphemeralContainerCommon: corev1.EphemeralContainerCommon{
-			Name:            execContainerName,
-			Image:           main.Image,
-			Command:         recordCmd(runID, argv),
-			Env:             main.Env, // copied verbatim: ephemeral containers inherit nothing
+			Name:    execContainerName,
+			Image:   main.Image,
+			Command: recordCmd(runID, argv),
+			Env:     main.Env, // copied verbatim: ephemeral containers inherit nothing
+			// The user drive, for the same reason as Env and read the same way —
+			// from the live pod. An ephemeral container inherits no mounts either,
+			// and the agent's real work happens HERE, not in the idle main
+			// container: without this the member's drive would be mounted into a
+			// container their agent never touches. Copying the main container's
+			// mounts rather than rebuilding one keeps the two in step by
+			// construction and cannot invent anything (the apiserver refuses a
+			// mount naming a volume the pod does not have). The drive is the only
+			// mount that ever appears there — spec.Mounts is refused outright by
+			// CreateSandbox.
+			VolumeMounts:    main.VolumeMounts,
 			SecurityContext: agentSecurityContext(),
 			// Resources deliberately left zero-value: the apiserver rejects a
 			// resource request on an ephemeral container.

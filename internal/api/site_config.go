@@ -48,13 +48,19 @@ var ecosystemPublicURL = map[string]string{
 	"nuget": "https://api.nuget.org/v3/index.json",
 }
 
-// validSiteURL reports whether raw is safe to persist as a site-config URL
-// (upstream proxy / artifact base URL): well-formed, http(s) scheme only, a
-// real dotted host of the same shape ValidApprovedHost accepts, and free of
-// control characters or shell metacharacters. These strings flow into proxy
-// dial targets and emitted per-tool config files (.npmrc/pip.conf/settings.xml/
-// GOPROXY/...), so this is SSRF/injection hardening, not cosmetic validation.
-func validSiteURL(raw string) bool {
+// shellSafeSiteString is the injection-safety half every persisted site-config
+// string reaches this file through — with one documented exception, the bare
+// host, which validSiteHost short-circuits ahead of this gate and which
+// hostrules.ValidApprovedHost then bounds more tightly than this does
+// (^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$ after TrimSpace, so a control
+// character never survives it either). In ONE place: non-empty, bounded, no control characters or
+// DEL, and none of the shell/XML metacharacters hostrules.EmitArtifactConfig
+// interpolates verbatim into .npmrc/pip.conf/.cargo/config.toml/settings.xml/
+// NuGet.Config/GOPROXY (its doc names validateSiteConfig as the gate it relies
+// on). Both validSiteURL and validSiteURLOrHost call it, so the shared property
+// their docs claim is one function rather than two hand-kept copies that could
+// drift apart on the next edit.
+func shellSafeSiteString(raw string) bool {
 	if raw == "" || len(raw) > 2048 {
 		return false
 	}
@@ -63,7 +69,17 @@ func validSiteURL(raw string) bool {
 			return false
 		}
 	}
-	if strings.ContainsAny(raw, "`$;&|<>\"'\\") {
+	return !strings.ContainsAny(raw, "`$;&|<>\"'\\")
+}
+
+// validSiteURL reports whether raw is safe to persist as a site-config URL
+// (upstream proxy / artifact base URL): well-formed, http(s) scheme only, a
+// real dotted host of the same shape ValidApprovedHost accepts, and
+// shellSafeSiteString. These strings flow into proxy dial targets and emitted
+// per-tool config files (.npmrc/pip.conf/settings.xml/GOPROXY/...), so this is
+// SSRF/injection hardening, not cosmetic validation.
+func validSiteURL(raw string) bool {
+	if !shellSafeSiteString(raw) {
 		return false
 	}
 	u, err := url.Parse(raw)
@@ -93,9 +109,11 @@ func validSecretRef(ref string) bool {
 // From (substituteArtifactEgress only ever needs its HOST; the ecosystem's
 // whole public-host table, not From, drives what gets dropped — see
 // substituteArtifactEgress's doc) or either field of a network-only row. Three
-// shapes are accepted, all sharing the SAME control-char/shell-metacharacter
-// safety validSiteURL enforces: a full http(s) URL (validSiteURL), a bare host
-// (validSiteHost), or a bare host with a path/port and no scheme (e.g.
+// shapes are accepted: a full http(s) URL (validSiteURL) and a bare host with a
+// path/port and no scheme share the shellSafeSiteString gate; a bare host
+// (validSiteHost) short-circuits above it and is bounded instead by
+// hostrules.ValidApprovedHost's stricter character class. The third shape is
+// (e.g.
 // "registry.corp.internal/ghcr-remote" or "10.40.2.11:8443") — the realistic
 // shape for a redirect that is a destination, not a browsable URL. An
 // Ecosystem row's To is NEVER validated by this: it is interpolated as a real
@@ -105,15 +123,7 @@ func validSiteURLOrHost(raw string) bool {
 	if validSiteURL(raw) || validSiteHost(raw) {
 		return true
 	}
-	if raw == "" || len(raw) > 2048 || strings.Contains(raw, "://") {
-		return false
-	}
-	for _, r := range raw {
-		if r < 0x20 || r == 0x7f {
-			return false
-		}
-	}
-	if strings.ContainsAny(raw, "`$;&|<>\"'\\") {
+	if !shellSafeSiteString(raw) || strings.Contains(raw, "://") {
 		return false
 	}
 	return hostrules.HostOf(raw) != "" // tolerates a trailing /path or :port

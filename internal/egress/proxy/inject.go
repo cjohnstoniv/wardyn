@@ -162,16 +162,15 @@ func (i *injector) resolve(host string) (injectedHeader, bool, error) {
 }
 
 // apply sets the injected header on req if an exactly-allowed rule matches its
-// host. Returns true when a header was injected. (Forward-proxy plain-HTTP path;
-// a dynamic entry that fails to re-resolve simply isn't injected here — dynamic
-// credentials target the TLS-MITM path, which fails closed via resolve.)
-func (i *injector) apply(req *http.Request, host string) bool {
+// host. (Forward-proxy plain-HTTP path; a dynamic entry that fails to re-resolve
+// simply isn't injected here — dynamic credentials target the TLS-MITM path,
+// which fails closed via resolve.)
+func (i *injector) apply(req *http.Request, host string) {
 	h, ok, err := i.resolve(host)
 	if err != nil || !ok {
-		return false
+		return
 	}
 	req.Header.Set(h.name, h.value)
-	return true
 }
 
 // headerFor returns the current injection header for host, if a rule exists.

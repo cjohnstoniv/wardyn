@@ -193,31 +193,14 @@ func workspaceStatusValues() map[string]bool {
 	)
 }
 
-// driveBackendValues, homeTemplateValues and driveReclaimValues are 0054's
-// three closed sets, derived from the exported slices in internal/types rather
-// than re-listed here: a fifth backend (or template, or reclaim intent) added
-// to the Go side without widening the migration's CHECK fails this test, which
-// is the whole point of the pin.
-func driveBackendValues() map[string]bool {
-	out := map[string]bool{}
-	for _, b := range types.DriveBackends {
-		out[string(b)] = true
-	}
-	return out
-}
-
-func homeTemplateValues() map[string]bool {
-	out := map[string]bool{}
-	for _, t := range types.HomeTemplates {
-		out[string(t)] = true
-	}
-	return out
-}
-
-func driveReclaimValues() map[string]bool {
-	out := map[string]bool{}
-	for _, r := range types.DriveReclaims {
-		out[string(r)] = true
+// enumSet is 0054's three closed sets, derived from the exported slices in
+// internal/types rather than re-listed here: a fifth backend (or template, or
+// reclaim intent) added to the Go side without widening the migration's CHECK
+// fails this test, which is the whole point of the pin.
+func enumSet[T ~string](vals []T) map[string]bool {
+	out := make(map[string]bool, len(vals))
+	for _, v := range vals {
+		out[string(v)] = true
 	}
 	return out
 }
@@ -315,9 +298,9 @@ func TestClosedEnumChecksMatchConstants(t *testing.T) {
 		// is missing, so a fifth backend landing in Go without the CHECK is a
 		// write that passes validation and is refused by Postgres immediately
 		// after.
-		{"user_drives", "backend", driveBackendValues()},
-		{"user_drives", "home_template", homeTemplateValues()},
-		{"user_drives", "reclaim", driveReclaimValues()},
+		{"user_drives", "backend", enumSet(types.DriveBackends)},
+		{"user_drives", "home_template", enumSet(types.HomeTemplates)},
+		{"user_drives", "reclaim", enumSet(types.DriveReclaims)},
 		// user_drive_grants.subject_type is the SAME closed enum the two tables
 		// above carry, reused rather than re-enumerated — one Go definition for
 		// "who is this row written against". Pinned here so a fourth subject
