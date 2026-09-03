@@ -306,15 +306,33 @@ remains, stated plainly: `seq` gaps *below* the first chained row (a rolled-back
 insert burns a `seq`) can still hold a hashless forgery that no rule here can
 tell from a legacy row — only your off-box copy can.
 
-**Every writer is serialized, including one that is not Wardyn.** The chain link
-and the row's `seq` are allocated together under one advisory lock held inside
-the insert trigger (`0056_audit_chain_serialize.sql`), so a direct `INSERT` from
-`psql`, a seed script or any future code path takes its place in line rather than
-reading the same head as a concurrent Wardyn write. Before that, two writers
+**Writers are serialized, and the link is correct for a writer at `READ
+COMMITTED`.** The chain link and the row's `seq` are allocated together under one
+advisory lock held inside the insert trigger (`0056_audit_chain_serialize.sql`,
+redefined by `0057`), so a direct `INSERT` from `psql`, a seed script or any
+future code path takes its place in line instead of racing a concurrent Wardyn
+write between reading the head and writing its own row. Before that, two writers
 could chain to the same head and the sweep reported a **tamper that never
-happened** — permanently, per the latch above. The cost is honest: a session
-that holds a transaction open after inserting into `audit_events` blocks every
-other audit append until it commits or rolls back, so do not leave an interactive
+happened** — permanently, per the latch above.
+
+**What the lock does not decide is which head you read.** The trigger's head
+lookup is an ordinary `SELECT`, running in the CALLER's transaction, so it sees
+what that transaction's snapshot sees. Under `READ COMMITTED` — Postgres's
+default, and what every in-tree writer uses — that statement takes a fresh
+snapshot after the lock is acquired, so the head it finds is the row the previous
+writer just committed and the link is right. A writer whose snapshot was fixed
+EARLIER (`REPEATABLE READ` or `SERIALIZABLE`, begun before that commit landed)
+still takes its place in line and still gets a correct `seq` — and still chains
+onto the stale head its snapshot can see. Two rows then carry the same
+`prev_hash`, and the sweep reports *"a row was deleted or reordered"* at the
+second of them, permanently, with nothing having been tampered with. **An
+external writer to `audit_events` must use `READ COMMITTED`.** Nothing in the
+database enforces that: there is no row conflict for Postgres to raise a
+serialization failure over, so a `REPEATABLE READ` insert succeeds quietly.
+
+The costs are honest, and there are two: that isolation rule, and a session that
+holds a transaction open after inserting into `audit_events` blocks every other
+audit append until it commits or rolls back — so do not leave an interactive
 `psql` transaction sitting on that table.
 
 ### Retention, erasure and GDPR — a residual, not a solved problem

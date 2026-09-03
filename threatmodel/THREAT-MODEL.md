@@ -396,12 +396,32 @@ rewrite one row can usually rewrite every row after it and re-chain the tail, an
 a re-chained tail verifies perfectly clean; truncating the newest rows leaves a
 shorter, valid chain and is likewise invisible to the chain alone. The control
 against both is OFF-BOX and a separate promise: the audit-sink stream carries each
-row's `prev_hash`/`row_hash`, so a SIEM holds head hashes, and a chain no longer
-containing a recorded head has been rewritten or truncated. Pre-migration rows
+row's `prev_hash`/`row_hash` **for every event whose Postgres write succeeded**,
+so a SIEM holds head hashes, and a chain no longer containing a recorded head has
+been rewritten or truncated. That qualifier is a residual of its own: the hashes
+are filled by the write itself, so an event written while Postgres is unavailable
+fans out to the sinks with no hashes on it, and the spool drain replays it into
+Postgres through the raw store recorder rather than back onto a sink — the
+off-box head series therefore has a gap across an outage (`docs/OPERATIONS.md`,
+"What the drain does not restore"). Pre-migration rows
 keep NULL hashes and sit outside the chain (no backfill — hashes computed after
 the fact by the process that could have altered the rows prove nothing). Signed
 receipts under a key no database role can reach are the next rung and are **NOT
 built**.
+
+**A break is evidence to investigate, not proof on its own — and a false one is
+reachable with no tampering at all.** The insert trigger allocates `seq` and the
+chain link under one advisory lock, but its head lookup runs in the CALLER's
+transaction snapshot. A writer that is not Wardyn, holding a `REPEATABLE READ` or
+`SERIALIZABLE` transaction opened before the previous append committed, chains
+onto the head its snapshot still shows: two rows share a `prev_hash` and the
+sweep reports *"a row was deleted or reordered"*. Postgres raises nothing — there
+is no row conflict to fail on — and the verdict does not clear, because the walk
+stops at the first break. Every in-tree writer is `READ COMMITTED`, so this is
+reachable only by a direct database writer; the deployment rule that keeps the
+signal meaningful is that nothing but Wardyn writes to `audit_events`, and
+anything that must, writes at `READ COMMITTED` (`docs/OPERATIONS.md`, "The hash
+chain").
 
 ---
 

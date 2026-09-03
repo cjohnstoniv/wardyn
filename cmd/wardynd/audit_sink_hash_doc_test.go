@@ -100,6 +100,17 @@ func TestAuditSinkHashClaimIsQualified(t *testing.T) {
 	if strings.Contains(ops, "every event on an audit sink stream (`WARDYN_AUDIT_SINKS`) carries its `prev_hash`/`row_hash`") {
 		t.Error("docs/OPERATIONS.md is back to the unqualified claim: a spooled event fans out unchained and is never re-streamed")
 	}
+	// The threat model makes the SAME off-box promise in its own words (§4.5,
+	// "what it is and is not"), and it was missed when the other two were
+	// qualified — a doc guard that stops at docs/ leaves the file a security
+	// reader reaches for first.
+	tm := readDoc(t, "threatmodel/THREAT-MODEL.md")
+	if !strings.Contains(tm, "**for every event whose Postgres write succeeded**") {
+		t.Error("threatmodel/THREAT-MODEL.md §4.5 still promises the sink stream carries the hashes unconditionally")
+	}
+	if !strings.Contains(tm, "the off-box head series therefore has a gap across an outage") {
+		t.Error("threatmodel/THREAT-MODEL.md §4.5 does not publish the outage gap as a residual")
+	}
 	actions := readDoc(t, "docs/AUDIT-ACTIONS.md")
 	if strings.Contains(actions, "(webhook/syslog/file), which is what puts a head hash in your SIEM") {
 		t.Error("docs/AUDIT-ACTIONS.md still promises the sink stream always carries the hashes")
