@@ -86,8 +86,20 @@ type capStore struct {
 	// govHasGroupTier is HasGroupTierAssignments' answer — the gate that keeps
 	// the stale-snapshot 403 off deployments that never adopted group profiles.
 	govHasGroupTier bool
-	// govErr fails BOTH governance reads, for the never-fail-open arm.
+	// govErr fails ResolveGovernanceProfile — the FIRST of the two governance
+	// reads ceilingWithUnusableGroups makes.
 	govErr error
+	// govHasGroupTierErr fails HasGroupTierAssignments ALONE, and it exists
+	// because one shared error field made the second read's fail-closed branch
+	// untestable. ceilingWithUnusableGroups returns on a failed resolve before
+	// it ever asks the gate, so a double that failed both could only ever
+	// exercise the first — and deleting the gate's error check left the whole
+	// package green while the subtest named after it still passed. Two reads,
+	// two knobs: a fixture can now answer ErrNotFound to the resolve and still
+	// fail the gate, which is an ordinary production state (one query timing
+	// out, a permission error on that one table) and the only shape that
+	// reaches governance.go's herr branch.
+	govHasGroupTierErr error
 
 	// The user-drive resolver's reads, the same four-field shape the governance
 	// ones above take and for the same reason: the store's own ORDER BY has its
@@ -98,7 +110,14 @@ type capStore struct {
 	driveGrant        *types.UserDriveGrant
 	driveTier         types.CapabilitySubjectType
 	driveHasGroupTier bool
-	driveErr          error
+	// driveErr fails ResolveUserDrive; driveHasGroupTierErr fails
+	// HasGroupTierDriveGrants alone. Split for the same reason the governance
+	// pair above is: driveWithUnusableGroups returns on a failed resolve before
+	// asking the gate, so one shared field left the gate's fail-closed branch
+	// unreachable from any fixture. The drive twin's branch is still unpinned —
+	// this knob is what a test for it needs.
+	driveErr             error
+	driveHasGroupTierErr error
 }
 
 func (s *capStore) ResolveUserDrive(context.Context, []string, []string) (
@@ -113,8 +132,8 @@ func (s *capStore) ResolveUserDrive(context.Context, []string, []string) (
 }
 
 func (s *capStore) HasGroupTierDriveGrants(context.Context) (bool, error) {
-	if s.driveErr != nil {
-		return false, s.driveErr
+	if s.driveHasGroupTierErr != nil {
+		return false, s.driveHasGroupTierErr
 	}
 	return s.driveHasGroupTier, nil
 }
@@ -130,8 +149,8 @@ func (s *capStore) ResolveGovernanceProfile(_ context.Context, _, _ []string) (*
 }
 
 func (s *capStore) HasGroupTierAssignments(context.Context) (bool, error) {
-	if s.govErr != nil {
-		return false, s.govErr
+	if s.govHasGroupTierErr != nil {
+		return false, s.govHasGroupTierErr
 	}
 	return s.govHasGroupTier, nil
 }

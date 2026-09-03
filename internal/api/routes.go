@@ -145,10 +145,26 @@ func (s *Server) routes() chi.Router {
 			// WebSocket's ticket-LESS fallback lane (ticketOrHumanAuth's own
 			// group below; an interactive shell in a foreign sandbox is the
 			// ladder-killing case, and the ticket-BEARING lane is
-			// owner-or-admin). 26 SUPER / 14 SEC. The authoritative per-route
-			// classification is authz_test.go's chi.Walk matrix, which fails on
-			// any route it cannot classify — this comment is the derivation,
-			// that table is the enforcement.
+			// owner-or-admin). 26 SUPER / 14 SEC.
+			//
+			// THAT PAIR IS §B's SUBSET, NOT THE DEPLOYMENT TOTAL, and reading it
+			// as the total is a mistake this comment has now caused three times.
+			// §B deliberately EXCLUDES the three 0.7 mounts named above, so its
+			// 26/14 and the matrix's 33 classAdmin / 22 classSecurity are two
+			// different quantities that happen to share a spelling:
+			//
+			//   §B      26 SUPER / 14 SEC  = 40   (excludes /governance,
+			//                                     /drives and §I's search)
+			//   matrix  33 admin  / 22 sec = 55   (everything gated, and the
+			//                                     only one an assertion pins)
+			//
+			// 26 + /drives' 7 = 33; 14 + /governance's 7 + the directory search
+			// = 22. If you are checking a tier boundary, the matrix pair is the
+			// one you want. The authoritative per-route classification is
+			// authz_test.go's chi.Walk matrix, which fails on any route it
+			// cannot classify, and TestSecurityAdminRouteTier asserts its
+			// totals — this comment is the derivation, that table is the
+			// enforcement.
 			operatorOnly := r.With(s.requireOperator)
 			// securityOps is the SECOND admin tier (0.7, §B): admin OR
 			// security_admin, via requireSecurityOperator / isSecurityOperator
