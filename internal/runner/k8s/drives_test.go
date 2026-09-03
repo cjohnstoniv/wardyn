@@ -37,9 +37,21 @@ var dns1123Subdomain = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`)
 // literals rather than as whatever uuid.New() happened to produce.
 var testDriveID = uuid.MustParse("6f1d4b6e-3c2a-4d5f-9a71-8b0c1d2e3f40")
 
+// testDriveSubject is the fixture's subject digest, and it is NON-EMPTY on
+// purpose. The fixture used to leave SubjectHash at "" — which made the third
+// identity label unfalsifiable everywhere it was read: `existingDriveClaim` is
+// stamped FROM the drive, so both sides of every reuse comparison were "", and
+// driveClaimIdentity's own check is presence-guarded (`got != "" && …`), so ""
+// on both sides is the arm that always passes. Deleting `labelDriveSubject:
+// drive.SubjectHash` from ensureDrivePVC's create left the whole file green, and
+// every claim created thereafter became ADOPTABLE by any principal sharing this
+// drive's id and home — precisely the collision the label exists to break.
+const testDriveSubject = "0f1e2d3c4b5a69788796"
+
 // testDriveMount is the shape the control plane's resolver hands the driver for
 // a MANAGED (k8s_pvc) drive: an object name it derived, the reserved target as
-// the symbol, and the size/enforcement pair the honesty vocabulary is built on.
+// the symbol, the subject digest that discriminates two principals folded onto
+// one home, and the size/enforcement pair the honesty vocabulary is built on.
 func testDriveMount() *types.DriveMount {
 	return &types.DriveMount{
 		DriveID:      testDriveID,
@@ -47,6 +59,7 @@ func testDriveMount() *types.DriveMount {
 		ObjectName:   "wardyn-drive-research-d-9f3a1c",
 		StorageClass: "fast-block",
 		HomeName:     "d-9f3a1c",
+		SubjectHash:  testDriveSubject,
 		Target:       runner.DriveTarget,
 		SizeMiB:      10240,
 		Enforcement:  types.StorageEnforcementRequest,
@@ -145,6 +158,18 @@ func TestEnsureDrivePVC_ManagedCreatesTheClaim(t *testing.T) {
 	}
 	if got := pvc.Labels[labelDriveHome]; got != drive.HomeName {
 		t.Errorf("%s = %q, want %q", labelDriveHome, got, drive.HomeName)
+	}
+	// THE THIRD IDENTITY LABEL, on the claim this code path CREATED. Every other
+	// assertion on wardyn.subject in this file runs against existingDriveClaim,
+	// a fixture stamped by the same rule the code uses — so the create path was
+	// the one place the label could go missing unobserved, and
+	// driveClaimIdentity's presence guard (`got != "" && …`) means a claim
+	// created WITHOUT it is adoptable by any principal who shares this drive's
+	// id and home. That is the collision the label exists to break, so the stamp
+	// is asserted where it is written.
+	if got := pvc.Labels[labelDriveSubject]; got != drive.SubjectHash {
+		t.Errorf("%s = %q, want the resolver's subject digest %q — a created claim without it is adoptable by anyone sharing this drive id and home",
+			labelDriveSubject, got, drive.SubjectHash)
 	}
 	if got := pvc.Labels[labelManaged]; got != "true" {
 		t.Errorf("%s = %q, want %q", labelManaged, got, "true")

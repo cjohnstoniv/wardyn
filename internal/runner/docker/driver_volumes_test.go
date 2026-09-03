@@ -125,6 +125,14 @@ func TestDriveVolume_CreatedWithLabelsAndNoOptions(t *testing.T) {
 		t.Errorf("drive volume carries a %s label (%v) — teardown reaps by that label and would delete the member's storage", labelRun, opts.Labels)
 	}
 
+	// THE SET, not the one mount findMount happens to return: a SECOND mount of
+	// this same volume — writable, at /work/drive-rw, or laid over
+	// /home/agent/.claude — satisfies every field assertion below and hands the
+	// member a writable door onto storage this test then calls read-only.
+	assertMountSet(t, mounts, []mountSummary{
+		{Target: runner.DriveTarget, Source: "wardyn-drive-alice", ReadOnly: true},
+	})
+
 	m := findMount(mounts, runner.DriveTarget)
 	if m == nil {
 		t.Fatalf("drive not mounted at %s; mounts=%+v", runner.DriveTarget, mounts)
@@ -137,6 +145,35 @@ func TestDriveVolume_CreatedWithLabelsAndNoOptions(t *testing.T) {
 	}
 	if !m.ReadOnly {
 		t.Errorf("drive mount ReadOnly = false, want true (the resolved allocation was read-only)")
+	}
+}
+
+// TestDriveMount_ManagedIsExactlyOneMount is the managed arm's own count, and
+// the host_path arm has had one since TestDriveMount_HostPathCeilingIsUnconditional
+// (driver_mount_test.go). Without it, "the drive is read-only" was a claim about
+// the mount findMount returns FIRST and about nothing else: a second
+// `mount.Mount{Type: mount.TypeVolume, Source: drive.ObjectName, Target:
+// "/work/drive-rw"}` returned from the docker_volume arm binds the same volume
+// WRITABLE somewhere else in the same sandbox, and every assertion in this file
+// stayed green.
+//
+// driveMount is called DIRECTLY, the way the host_path test calls it: the count
+// is a property of the converter, and asserting it here says so whether or not a
+// CreateSandbox-level set assertion happens to be watching.
+func TestDriveMount_ManagedIsExactlyOneMount(t *testing.T) {
+	d := newWithClient(newFakeDocker(), Config{ProxyImage: "wardyn-proxy:dev"})
+	drive := dockerVolumeDrive()
+
+	got, err := d.driveMount(context.Background(), drive)
+	if err != nil {
+		t.Fatalf("driveMount for a managed drive: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("driveMount returned %d mounts, want exactly 1: %+v", len(got), got)
+	}
+	if got[0].Type != mount.TypeVolume || got[0].Source != drive.ObjectName ||
+		got[0].Target != drive.Target || got[0].ReadOnly != drive.ReadOnly {
+		t.Errorf("driveMount(%+v) = %+v, want ONE volume mount carrying the resolver's object name, target and mode verbatim", *drive, got[0])
 	}
 }
 
@@ -572,6 +609,12 @@ func TestCreateSandbox_NoDriveTouchesNothing(t *testing.T) {
 	if f.volumeCreates != 0 {
 		t.Errorf("a run with no drive made %d VolumeCreate calls, want 0", f.volumeCreates)
 	}
+	// NO MOUNTS AT ALL, not merely none at the reserved target. "Byte-identical
+	// to before this feature" is a claim about the whole slice, and the
+	// reserved-target lookup below cannot make it: a bind of the host root at
+	// /work/host, appended to every sandbox, is invisible to findMount and this
+	// is the one test in the package that would have been about it.
+	assertMountSet(t, mounts, nil)
 	if m := findMount(mounts, runner.DriveTarget); m != nil {
 		t.Errorf("a run with no drive got a mount at %s: %+v", runner.DriveTarget, *m)
 	}

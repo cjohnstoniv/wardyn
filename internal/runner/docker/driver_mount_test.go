@@ -8,6 +8,7 @@ package docker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -42,9 +43,50 @@ func createWithMounts(t *testing.T, mounts []runner.Mount) ([]mount.Mount, error
 	return agent.host.Mounts, nil
 }
 
+// mountSummary is one applied mount reduced to what a SET assertion is about:
+// where it lands, what it binds, and whether the sandbox may write it.
+type mountSummary struct {
+	Target   string
+	Source   string
+	ReadOnly bool
+}
+
+// assertMountSet asserts the agent's applied mounts are EXACTLY want — the whole
+// slice, compared as a sorted set, never a member of it.
+//
+// WHY THE SET AND NOT A LOOKUP. Every mount assertion in this package finds its
+// mount by target (findMount, or an inline loop) and checks that one, which says
+// nothing at all about what ELSE the driver attached. A `mount.Mount{Type:
+// mount.TypeBind, Source: "/", Target: "/work/host"}` appended in agentMounts —
+// a WRITABLE bind of the HOST ROOT into every sandbox, on every run, drive or no
+// drive — left this whole file green, because no test ever asked how many mounts
+// came back. The mount nobody names is exactly the mount an extra line adds, so
+// the count and the contents are asserted together.
+//
+// Sorted rather than positional: the ORDER agentMounts appends in is its own
+// business (the drive is deliberately last, and that is argued at its own site),
+// while the SET is the security claim.
+func assertMountSet(t *testing.T, got []mount.Mount, want []mountSummary) {
+	t.Helper()
+	key := func(m mountSummary) string { return fmt.Sprintf("%s\x00%s\x00%t", m.Target, m.Source, m.ReadOnly) }
+	sorted := func(ms []mountSummary) []mountSummary {
+		out := slices.Clone(ms)
+		slices.SortFunc(out, func(a, b mountSummary) int { return strings.Compare(key(a), key(b)) })
+		return out
+	}
+	have := make([]mountSummary, 0, len(got))
+	for _, m := range got {
+		have = append(have, mountSummary{Target: m.Target, Source: m.Source, ReadOnly: m.ReadOnly})
+	}
+	if h, w := sorted(have), sorted(want); !slices.Equal(h, w) {
+		t.Errorf("applied mounts = %d %+v,\nwant EXACTLY %d %+v — a mount nobody named is the one an extra line adds",
+			len(h), h, len(w), w)
+	}
+}
+
 // TestCreateSandbox_AllowedMountApplied: an allowed (absolute, non-dangerous
 // source; allowed target prefix) mount is applied as a bind mount with the
-// requested read-only flag.
+// requested read-only flag — and it is the ONLY mount the sandbox gets.
 func TestCreateSandbox_AllowedMountApplied(t *testing.T) {
 	got, err := createWithMounts(t, []runner.Mount{
 		{Source: "/home/maintainer/repo", Target: "/home/agent/work", ReadOnly: false},
@@ -52,6 +94,11 @@ func TestCreateSandbox_AllowedMountApplied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSandbox with allowed mount failed: %v", err)
 	}
+	// THE SET, first: everything below is about the mount this test looks up,
+	// and only this line is about the mounts nobody asked for.
+	assertMountSet(t, got, []mountSummary{
+		{Target: "/home/agent/work", Source: "/home/maintainer/repo", ReadOnly: false},
+	})
 	var found *mount.Mount
 	for i := range got {
 		if got[i].Target == "/home/agent/work" {

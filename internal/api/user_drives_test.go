@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -47,6 +48,17 @@ type driveCRUDStore struct {
 	// DELETE's own RETURNING row, and TestDeleteUserDriveGrantAuditsTheReclaimIntent
 	// sets this to prove the scan is gone.
 	listErr error
+	// listErrOnce makes listErr a TRANSIENT blip on ListUserDrives: it fails
+	// once and the store is healthy again.
+	//
+	// WHY A ONE-SHOT EXISTS AT ALL. The drive-write path takes TWO
+	// ListUserDrives reads — driveHostRootNesting's, then driveRehomeGuard's —
+	// and each answers 500 on its own. A permanently failing list therefore
+	// cannot tell them apart: the nesting gate's 500 arm could be deleted
+	// outright and "a store failure is a 500, never a pass" stayed green on the
+	// rehome guard's identical answer. Failing exactly the FIRST read leaves the
+	// second healthy, so the 500 can only have come from the gate under test.
+	listErrOnce bool
 }
 
 func newDriveCRUDStore() *driveCRUDStore {
@@ -86,7 +98,11 @@ func (s *driveCRUDStore) DeleteUserDrive(_ context.Context, id uuid.UUID) error 
 
 func (s *driveCRUDStore) ListUserDrives(context.Context) ([]types.UserDriveListItem, error) {
 	if s.listErr != nil {
-		return nil, s.listErr
+		err := s.listErr
+		if s.listErrOnce {
+			s.listErr = nil // the blip is consumed; the next read succeeds
+		}
+		return nil, err
 	}
 	var out []types.UserDriveListItem
 	for _, d := range s.drives {
@@ -181,23 +197,31 @@ func driveAuditActions(rec *recRecorder) []string {
 	return out
 }
 
+// driveAuditEvent returns the LAST recorded event of one action, whole — the
+// row's TARGET is part of the record (it names which drive was authorized) and
+// a decoded payload cannot carry it.
+func driveAuditEvent(t *testing.T, rec *recRecorder, action string) types.AuditEvent {
+	t.Helper()
+	for i := len(rec.events) - 1; i >= 0; i-- {
+		if rec.events[i].Action == action {
+			return rec.events[i]
+		}
+	}
+	t.Fatalf("no %s audit event; got %v", action, driveAuditActions(rec))
+	return types.AuditEvent{}
+}
+
 // driveAuditData returns the LAST recorded event of one action, decoded.
 func driveAuditData(t *testing.T, rec *recRecorder, action string) map[string]any {
 	t.Helper()
-	for i := len(rec.events) - 1; i >= 0; i-- {
-		if rec.events[i].Action != action {
-			continue
+	ev := driveAuditEvent(t, rec, action)
+	var m map[string]any
+	if len(ev.Data) > 0 {
+		if err := json.Unmarshal(ev.Data, &m); err != nil {
+			t.Fatalf("unmarshal %s data: %v", action, err)
 		}
-		var m map[string]any
-		if len(rec.events[i].Data) > 0 {
-			if err := json.Unmarshal(rec.events[i].Data, &m); err != nil {
-				t.Fatalf("unmarshal %s data: %v", action, err)
-			}
-		}
-		return m
 	}
-	t.Fatalf("no %s audit event; got %v", action, driveAuditActions(rec))
-	return nil
+	return m
 }
 
 const driveCreateBody = `{"name":"Corp NAS","backend":"docker_volume","size_mib":10240}`
@@ -231,11 +255,91 @@ func TestCreateUserDriveWritesAndAudits(t *testing.T) {
 	if saved.Writable {
 		t.Error("writable = true, want the read-only product default")
 	}
-	d := driveAuditData(t, rec, "drive.write")
-	for _, k := range []string{"name", "backend", "host_root", "storage_class", "home_template", "size_mib", "writable", "reclaim"} {
-		if _, ok := d[k]; !ok {
-			t.Errorf("drive.write payload is missing %q: %v", k, d)
-		}
+	// BY VALUE, not by key presence: every field is compared, and the map is
+	// compared WHOLE so a ninth key cannot appear unnoticed either. The
+	// host_path half of this contract — where host_root is non-empty and
+	// therefore falsifiable — is TestUserDriveWriteAuditIsTheWholeRow.
+	if got, want := driveAuditData(t, rec, "drive.write"), map[string]any{
+		"name":          "Corp NAS",
+		"backend":       "docker_volume",
+		"host_root":     "",
+		"storage_class": "",
+		"home_template": "hash",
+		"size_mib":      float64(10240),
+		"writable":      false,
+		"reclaim":       "retain",
+	}; !reflect.DeepEqual(got, want) {
+		t.Errorf("drive.write data = %#v,\nwant EXACTLY %#v", got, want)
+	}
+	if ev := driveAuditEvent(t, rec, "drive.write"); ev.Target != saved.ID.String() {
+		t.Errorf("drive.write target = %q, want the saved row's id %q", ev.Target, saved.ID)
+	}
+}
+
+// TestUserDriveWriteAuditIsTheWholeRow is the drive.write payload asserted BY
+// VALUE on a host_path drive — the shape where the row actually carries a claim.
+//
+// WHAT KEY-PRESENCE COULD NOT SEE. The assertion above this one used to check
+// only that eight keys EXISTED, over a docker_volume fixture whose host_root is
+// "" even on a pass. So `"host_root": "REDACTED"`, a hard-coded `"backend"`, an
+// always-true `"writable"` and a target of uuid.Nil all survived it — and
+// host_root is the single most audit-worthy field on the row, since it is the
+// host tree this write authorized binding into other people's sandboxes. A
+// redacted or invented one makes the row a record of something that did not
+// happen, which is worse than no row.
+//
+// BOTH MODES, because ONE row cannot falsify a constant: the writable case
+// catches a hard-coded false, the read-only case catches a hard-coded true, and
+// read-only is the product default — so only the pair pins the field at all.
+func TestUserDriveWriteAuditIsTheWholeRow(t *testing.T) {
+	realRoot := t.TempDir()
+	inside := filepath.Join(realRoot, "homes")
+	if err := os.MkdirAll(inside, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for _, writable := range []bool{true, false} {
+		t.Run(fmt.Sprintf("writable=%v", writable), func(t *testing.T) {
+			st := newDriveCRUDStore()
+			srv, rec := driveAdminServer(st, []string{realRoot})
+			body := fmt.Sprintf(
+				`{"name":"Corp NAS","backend":"host_path","home_template":"email_local","host_root":%q,"writable":%v,"reclaim":"delete"}`,
+				inside, writable)
+			w := driveCall(t, srv.handleCreateUserDrive, http.MethodPost, "/api/v1/drives", body, nil)
+			if w.Code != http.StatusCreated {
+				t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+			}
+			var saved types.UserDrive
+			if err := json.Unmarshal(w.Body.Bytes(), &saved); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			ev := driveAuditEvent(t, rec, "drive.write")
+			// THE TARGET names the row this payload describes, and nothing in
+			// the payload carries the id. uuid.Nil — or another drive's id —
+			// files the authorization under a drive that does not exist.
+			if ev.Target != saved.ID.String() {
+				t.Errorf("drive.write target = %q, want the saved row's id %q", ev.Target, saved.ID)
+			}
+			if saved.ID == uuid.Nil {
+				t.Fatal("the create returned a nil id — the target assertion above would be vacuous")
+			}
+			var got map[string]any
+			if err := json.Unmarshal(ev.Data, &got); err != nil {
+				t.Fatalf("unmarshal drive.write data: %v", err)
+			}
+			want := map[string]any{
+				"name":          "Corp NAS",
+				"backend":       "host_path",
+				"host_root":     inside,
+				"storage_class": "",
+				"home_template": "email_local",
+				"size_mib":      float64(0),
+				"writable":      writable,
+				"reclaim":       "delete",
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("drive.write data = %#v,\nwant EXACTLY %#v", got, want)
+			}
+		})
 	}
 }
 
@@ -472,11 +576,21 @@ func TestNestedHostRootDrivesAreRefused(t *testing.T) {
 		// A list that failed cannot say the tree is clear, and treating it as
 		// clear is how the check silently stops biting on exactly the deployment
 		// whose database is unhappy.
+		//
+		// ONE BLIP, not a permanently broken store, and that IS the assertion
+		// (driveCRUDStore.listErrOnce carries the argument): the write path
+		// takes two ListUserDrives reads and a store that failed both answered
+		// 500 whichever one you deleted. Failing exactly the first leaves the
+		// rehome guard's read healthy, so this 500 can only be the nesting
+		// gate's own.
 		st, srv := seed(t)
-		st.listErr = errors.New("boom")
+		st.listErr, st.listErrOnce = errors.New("boom"), true
 		w := driveCall(t, srv.handleCreateUserDrive, http.MethodPost, "/api/v1/drives", body("Team", nested), nil)
 		if w.Code != http.StatusInternalServerError {
 			t.Fatalf("code = %d, want 500: %s", w.Code, w.Body.String())
+		}
+		if st.listErr != nil {
+			t.Fatal("the blip was never consumed — the nesting gate did not read the store at all, so this subtest proved nothing")
 		}
 	})
 }

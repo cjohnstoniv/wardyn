@@ -99,42 +99,84 @@ func TestSeedRequestDriveNoFlagIsANoOp(t *testing.T) {
 // authorization event: the profile refuses the door, so it answers 403 AND
 // writes authz.denied at target runs.drive with reason governance_profile — the
 // existing closed enum, no new value.
+//
+// TWO CEILINGS, because the door's DECISION and its DISPLAY NAME are different
+// values and only a blank name can tell them apart — see the second row.
 func TestSeedRequestDriveDoorIs403WithAudit(t *testing.T) {
-	d := driveFixture(nil)
-	st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
-	srv, rec := driveRunServer(st, "docker")
+	for _, tc := range []struct {
+		name    string
+		ceiling governanceCeiling
+		// want is the frozen member sentence, byte-for-byte. Written out per
+		// row rather than composed with the same format string the handler
+		// uses: a test that formats it the way the code does asserts nothing
+		// about the bytes.
+		want string
+	}{
+		{
+			name:    "a named profile shuts the door",
+			ceiling: deniedCeiling(),
+			want:    "mounting a user drive is not allowed by your governance profile \"contractors\". Launch without drive.",
+		},
+		{
+			// THE FAIL-OPEN THIS GUARD EXISTS FOR. driveDoorShut returns (name,
+			// decision) and the DECISION is the bool; reverting it to
+			// `return ceiling.Profile.Name, ceiling.Profile.Name != ""` reads a
+			// profile whose name happens to be empty as NO DOOR AT ALL and
+			// mounts the drive — with no 403 and no authz.denied row.
+			//
+			// AND THE ROW IS REACHABLE. governance_profiles.name is TEXT NOT
+			// NULL UNIQUE with no non-empty CHECK, so the HTTP API's own refusal
+			// of a blank name is not the last word: an out-of-band write, a
+			// restore, or an older binary produces exactly this row. A guard
+			// whose only false state is "somebody wrote a blank name" is
+			// precisely the guard that has to be pinned, because nothing else
+			// would ever notice the revert.
+			name: "a blank-named profile shuts it too",
+			ceiling: governanceCeiling{
+				Profile: &types.GovernanceProfile{Name: ""},
+				Limits:  types.GovernanceLimits{DenyUserDrive: true},
+			},
+			want: "mounting a user drive is not allowed by your governance profile \"\". Launch without drive.",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := driveFixture(nil)
+			st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+			srv, rec := driveRunServer(st, "docker")
 
-	mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), deniedCeiling(), driveMemberCtx([]string{"eng"}, false))
-	if ok || mount != nil {
-		t.Fatalf("mount = %+v, ok = %v; want the door to stop the run", mount, ok)
-	}
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("code = %d, want 403: %s", w.Code, w.Body.String())
-	}
-	// The mock round's frozen member copy, byte-exact — and NO BACKTICKS. The
-	// canon module (ui/src/app/lib/user-drives-copy.ts) carries none anywhere:
-	// §7's header note makes a backticked substring in the doc a MONO SPAN the
-	// console applies at display time, never characters on the wire. This
-	// refusal used to ship "Launch without `drive`." and members read the
-	// backticks as punctuation.
-	const want = "mounting a user drive is not allowed by your governance profile \"contractors\". Launch without drive."
-	if got := refusalBody(t, w); got != want {
-		t.Errorf("body  = %s\nwant BYTE-EXACT: %s", got, want)
-	}
-	if strings.Contains(refusalBody(t, w), "`") {
-		t.Errorf("the refusal ships a literal backtick: %s", refusalBody(t, w))
-	}
-	if r := auditReasons(t, srv, "authz.denied"); !slices.Contains(r, "governance_profile") {
-		t.Errorf("authz.denied reasons = %v, want a governance_profile row", r)
-	}
-	var target string
-	for _, ev := range rec.events {
-		if ev.Action == "authz.denied" {
-			target = ev.Target
-		}
-	}
-	if target != "runs.drive" {
-		t.Errorf("authz.denied target = %q, want runs.drive", target)
+			mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), tc.ceiling, driveMemberCtx([]string{"eng"}, false))
+			if ok || mount != nil {
+				t.Fatalf("mount = %+v, ok = %v; want the door to stop the run", mount, ok)
+			}
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("code = %d, want 403: %s", w.Code, w.Body.String())
+			}
+			// The mock round's frozen member copy, byte-exact — and NO
+			// BACKTICKS. The canon module (ui/src/app/lib/user-drives-copy.ts)
+			// carries none anywhere: §7's header note makes a backticked
+			// substring in the doc a MONO SPAN the console applies at display
+			// time, never characters on the wire. This refusal used to ship
+			// "Launch without `drive`." and members read the backticks as
+			// punctuation.
+			if got := refusalBody(t, w); got != tc.want {
+				t.Errorf("body  = %s\nwant BYTE-EXACT: %s", got, tc.want)
+			}
+			if strings.Contains(refusalBody(t, w), "`") {
+				t.Errorf("the refusal ships a literal backtick: %s", refusalBody(t, w))
+			}
+			if r := auditReasons(t, srv, "authz.denied"); !slices.Contains(r, "governance_profile") {
+				t.Errorf("authz.denied reasons = %v, want a governance_profile row", r)
+			}
+			var target string
+			for _, ev := range rec.events {
+				if ev.Action == "authz.denied" {
+					target = ev.Target
+				}
+			}
+			if target != "runs.drive" {
+				t.Errorf("authz.denied target = %q, want runs.drive", target)
+			}
+		})
 	}
 }
 
