@@ -368,12 +368,19 @@ func (s *Server) memberVisibleOperatorSecretNames(ctx context.Context) ([]string
 			paired[knownHostsRef] = true
 		}
 	}
+	// The same batch narrowMemberInlinePolicy uses. N here is OPERATOR-controlled
+	// (the deployment's stored secret names, intersected with the ceiling's
+	// paired grants) rather than caller-controlled, so this was hygiene and not
+	// the availability defect capBatch was written for — but it is the identical
+	// "2N round trips over a list" shape, and leaving one copy standing is how
+	// the next reader concludes the pattern is fine.
+	cap := s.newCapBatch(ctx)
 	kept := all[:0:0]
 	for _, n := range all {
 		if !paired[n] {
 			continue
 		}
-		ok, cerr := s.capSeamAllowed(ctx, capSecret, n)
+		ok, cerr := cap.allowed(ctx, capSecret, n)
 		if cerr != nil {
 			return nil, cerr
 		}

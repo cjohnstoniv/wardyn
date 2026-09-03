@@ -413,9 +413,18 @@ func (s *Server) narrowMemberInlinePolicy(ctx context.Context, owner string, spe
 	var warns []string
 	var drops []capDrop
 
+	// ONE resolution for the whole spec, not one per value. The egress loop
+	// below walks spec.AllowedDomains, which is the REQUEST BODY's list —
+	// uncapped and un-deduplicated on this path — so the per-value
+	// capSeamAllowed this used to call made a member's own body decide how many
+	// sequential Postgres round trips the handler performed: measured at ~505µs
+	// each, 104,850 of them (27.0s, or 45.3s on a stale snapshot) for the most
+	// entries that fit under maxJSONBody. See capBatch.
+	cap := s.newCapBatch(ctx)
+
 	keptDomains := spec.AllowedDomains[:0:0]
 	for _, d := range spec.AllowedDomains {
-		ok, err := s.capSeamAllowed(ctx, capEgressHost, d)
+		ok, err := cap.allowed(ctx, capEgressHost, d)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -467,7 +476,7 @@ func (s *Server) narrowMemberInlinePolicy(ctx context.Context, owner string, spe
 			if s.ownsSecret(ctx, owner, ref) {
 				continue
 			}
-			ok, err := s.capSeamAllowed(ctx, capSecret, ref)
+			ok, err := cap.allowed(ctx, capSecret, ref)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -511,7 +520,7 @@ func (s *Server) narrowMemberInlinePolicy(ctx context.Context, owner string, spe
 		for _, wr := range spec.WorkspaceRepos {
 			ws, onboarded := idx.repo[wr.Repo]
 			if onboarded {
-				ok, err := s.capSeamAllowed(ctx, capWorkspace, ws.ID.String())
+				ok, err := cap.allowed(ctx, capWorkspace, ws.ID.String())
 				if err != nil {
 					return nil, nil, err
 				}
