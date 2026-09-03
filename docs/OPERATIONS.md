@@ -17,7 +17,8 @@ substrates identically: authorization and the per-process constraints live in
 
 ## State stores
 
-Three stores hold data that exists nowhere else. Lose any of them and the loss is
+Three stores hold data that exists nowhere else on every deployment, and a fourth
+appears the moment you register a **user drive**. Lose any of them and the loss is
 permanent.
 
 | Store | Where | Holds | If you lose it |
@@ -25,6 +26,7 @@ permanent.
 | Postgres | volume `<project>_postgres_data` | runs, approvals, workspaces, policies, encrypted secrets, the append-only audit log — and, under the default `pg` recording store, the PTY asciicasts too | everything |
 | Recordings | volume `${WARDYN_NS:-wardyn}-recordings` (`WARDYN_RECORDING_DIR=/data/recordings`) | PTY asciicasts for Replay — **only with `WARDYN_RECORDING_STORE=fs`**; the shipped default (`pg`) keeps them in Postgres and leaves this volume empty | every session replay it holds; nothing reconstructs them |
 | Age key | `WARDYN_AGE_KEY` in `deploy/compose/.env` | the X25519 identity every stored secret is encrypted to | every secret in Postgres becomes undecryptable ciphertext |
+| User drives | one object per person, per drive, on a deployment that registered one — Docker volume `wardyn-drive-<home>`, a subdirectory of the share YOU mounted (`host_path` — `<host_root>/<home>`), or PVC `wardyn-drive-<drive-slug>-<home>` | each person's own files, written by their own runs at `/home/agent/drive`. Postgres holds the drive rows and the allocations, never the bytes, so `pg_dump` never carried this | that person's work; nothing reconstructs it |
 
 `postgres_data`, `registry_data` and `audit` carry no explicit `name:` in
 `deploy/compose/docker-compose.yaml`, so Docker prefixes them with the compose
@@ -36,6 +38,14 @@ volume into agent containers BY NAME. Reach for the unprefixed form and `docker
 volume inspect postgres_data` reports no such volume — a volume-level backup that
 ignores that error archives nothing. Back Postgres up with `pg_dump` (below), not
 at the volume layer.
+
+**A user-drive volume is not part of the compose project.** `wardyn-drive-*`
+volumes are created by the runner through the Docker API, not declared in
+`deploy/compose/docker-compose.yaml`, so `docker compose down -v` — and `make
+reset`, which runs it — leaves every one of them in place. That is deliberate: a
+stack teardown must not delete a person's files. It is also why a backup that
+walks the compose volumes misses them entirely; list them with `docker volume ls
+--filter label=wardyn.managed=true`.
 
 The `audit` volume is **derived**, not primary: the optional file sink
 (`WARDYN_AUDIT_SINKS`, [ENV.md](ENV.md)). Postgres is the source of truth for the
@@ -58,6 +68,17 @@ docker run --rm -v wardyn-recordings:/from -v "$PWD":/to alpine \
 
 # 3. The age key — copy WARDYN_AGE_KEY out of deploy/compose/.env into your
 #    secret manager. A Postgres dump without it is unreadable ciphertext.
+
+# 4. User drives — one object per person, and step 1's dump does NOT contain
+#    them. Wardyn-managed Docker volumes tar out the same way as step 2, one
+#    per person:
+#      for v in $(docker volume ls -q --filter label=wardyn.managed=true); do
+#        docker run --rm -v "$v":/from -v "$PWD":/to alpine \
+#          tar czf "/to/$v-$(date +%F).tar.gz" -C /from .
+#      done
+#    A `host_path` drive is a subtree of a share you already back up, and a PVC
+#    is a snapshot per claim — see "User drives on Docker" and "User drives on
+#    Kubernetes" for the per-substrate detail.
 ```
 
 ### Restore them
