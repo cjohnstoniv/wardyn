@@ -157,3 +157,116 @@ func TestPG_ListRunsPage_BoundAndWindow(t *testing.T) {
 		}
 	}
 }
+
+// TestPG_ListApprovalsPageByRunCreator pins the JOIN predicate the API's member
+// approvals queue is entirely built on.
+//
+// The api layer decides WHETHER to scope; this query decides WHAT scoped means,
+// and approvals carry no created_by of their own — the ownership lives one table
+// over, on agent_runs. So the whole member-tier guarantee ("you see approvals on
+// runs you created, and no others") is one JOIN predicate, and nothing exercised
+// it: docs/TEST-GAPS.md listed ListApprovalsPageByRunCreator as untested in both
+// the union and the Postgres lane, and the api-side test above drives a fixture
+// double rather than this SQL.
+//
+// Every row is marker-scoped so the assertions hold inside the shared database.
+func TestPG_ListApprovalsPageByRunCreator(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+
+	mine := "creator-" + uuid.NewString()
+	theirs := "creator-" + uuid.NewString()
+
+	seed := func(createdBy string, state types.ApprovalState, at time.Time) uuid.UUID {
+		t.Helper()
+		r := newRun(types.RunRunning)
+		r.CreatedBy = createdBy
+		persistRun(t, ctx, pool, r)
+		ap := types.ApprovalRequest{
+			ID: uuid.New(), RunID: r.ID, Kind: types.ApprovalEgressDomain,
+			RequestedScope: []byte(`{"host":"example.com"}`),
+			State:          state, RequestedAt: at,
+		}
+		if _, err := pg.CreateApproval(ctx, ap); err != nil {
+			t.Fatalf("create approval: %v", err)
+		}
+		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM approvals WHERE id=$1`, ap.ID) })
+		return ap.ID
+	}
+
+	base := time.Now().UTC()
+	newest := seed(mine, types.ApprovalPending, base)
+	older := seed(mine, types.ApprovalPending, base.Add(-time.Minute))
+	decided := seed(mine, types.ApprovalApproved, base.Add(-2*time.Minute))
+	foreign := seed(theirs, types.ApprovalPending, base)
+
+	only := func(t *testing.T, got []types.ApprovalRequest) []uuid.UUID {
+		t.Helper()
+		var ids []uuid.UUID
+		for _, ap := range got {
+			switch ap.ID {
+			case newest, older, decided, foreign:
+				ids = append(ids, ap.ID)
+			}
+		}
+		return ids
+	}
+
+	// The JOIN: this creator's rows, and NOT the other creator's, in
+	// requested_at DESC order.
+	got, err := pg.ListApprovalsPageByRunCreator(ctx, mine, "", store.Page{})
+	if err != nil {
+		t.Fatalf("unfiltered: %v", err)
+	}
+	ids := only(t, got)
+	want := []uuid.UUID{newest, older, decided}
+	if len(ids) != len(want) {
+		t.Fatalf("got %v, want exactly %v — the JOIN either dropped an owned row or admitted a foreign one", ids, want)
+	}
+	for i := range want {
+		if ids[i] != want[i] {
+			t.Fatalf("order = %v, want requested_at DESC %v", ids, want)
+		}
+	}
+	// Stated separately from the count so a failure names the security half.
+	for _, id := range ids {
+		if id == foreign {
+			t.Errorf("approval %s on ANOTHER creator's run was returned", foreign)
+		}
+	}
+
+	// The state filter composes with the JOIN rather than replacing it.
+	pending, err := pg.ListApprovalsPageByRunCreator(ctx, mine, types.ApprovalPending, store.Page{})
+	if err != nil {
+		t.Fatalf("state-filtered: %v", err)
+	}
+	if ids := only(t, pending); len(ids) != 2 || ids[0] != newest || ids[1] != older {
+		t.Errorf("state=PENDING gave %v, want [%s %s]", ids, newest, older)
+	}
+
+	// LIMIT/OFFSET window the SCOPED set, not the table.
+	first, err := pg.ListApprovalsPageByRunCreator(ctx, mine, "", store.Page{Limit: 1})
+	if err != nil {
+		t.Fatalf("limit: %v", err)
+	}
+	if len(first) != 1 || first[0].ID != newest {
+		t.Errorf("limit=1 gave %+v, want just the newest owned row %s", only(t, first), newest)
+	}
+	second, err := pg.ListApprovalsPageByRunCreator(ctx, mine, "", store.Page{Limit: 1, Offset: 1})
+	if err != nil {
+		t.Fatalf("offset: %v", err)
+	}
+	if len(second) != 1 || second[0].ID != older {
+		t.Errorf("limit=1 offset=1 gave %+v, want the second owned row %s", only(t, second), older)
+	}
+
+	// A creator with no runs gets nothing — not "everything".
+	none, err := pg.ListApprovalsPageByRunCreator(ctx, "creator-"+uuid.NewString(), "", store.Page{})
+	if err != nil {
+		t.Fatalf("unknown creator: %v", err)
+	}
+	if ids := only(t, none); len(ids) != 0 {
+		t.Errorf("an unknown creator was served %v, want none", ids)
+	}
+}

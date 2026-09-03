@@ -554,8 +554,13 @@ with `reason: second_human_required`, landing **before** the decision is written
 so a refused decision leaves the approval `PENDING`. Scoped to `egress_domain`
 only; `credential`/`tool_call` are already admin-only. A run with an empty
 `created_by` (system-created follow-on runs) has no human creator to be the same
-as, so the rule cannot apply. Local mode binds normally — the injected operator IS
-a verified human, so `local:alice` deciding `local:alice`'s own run is refused.
+as, so the rule cannot apply. **Local mode REFUSES the switch** (`503`) rather
+than enforcing it: local mode authenticates nobody, so both the decider and the
+run's `created_by` come from the same client-supplied source — the DEV-ONLY
+`X-Wardyn-Principal` header, honored there by design — and no request in that
+mode can prove a second human decided. Configure SSO to use this switch, or
+leave it unset. The refusal is scoped to `egress_domain` decisions, so nothing
+else in local mode changes.
 
 **The `admin-token` principal BYPASSES it**, and you should plan around that. A
 bare `WARDYN_ADMIN_TOKEN` caller is attributed `system`/`admin-token` because a
@@ -912,11 +917,30 @@ guard.
 **Security admin (`security_admin`).** A mapped tier — never a default, and never
 derivable from the operator allowlist; you create one by mapping an IdP App Role
 or group to `security_admin` in the role map (chart or People page). Security
+admins read the whole workspace inventory AND any workspace in it — the list,
+the row, its build status, its env-as-code and its **observed egress** — because
+they decide that workspace's allowed and denied hosts and the observed traffic is
+the input to that decision. They cannot otherwise WRITE a workspace: renaming,
+reassigning, deleting, binding credential material and launching a recording all
+stay with the super admin. Security
 admins author and assign **governance profiles** (named ceilings bound to users or
 groups), write the org allow/denylists (capability grants), decide escalated
 approvals — egress, credential, tool — on anyone's run, revoke sessions and API
-tokens, and verify the audit chain. They cannot touch the People page,
-integrations, site-config writes, base images, or the deploy funnel — and they run
+tokens, and verify the audit chain. They can also **stop** any run in the
+deployment — killing a foreign run is incident response, and the most
+time-critical thing this tier does — which is deliberately *not* the same as
+reaching INTO one: no attach ticket, no shell, no credential material, no host.
+Inspect-or-stop is the whole of that warrant. (The batch form, the sandbox
+sweep, stays admin-only: it drives the container runtime across every run at
+once, which is host reach rather than run reach.) They **promote** a workspace's recorded
+egress into its allowlist, but they cannot **record** one: launching a recording
+session opens an interactive sandbox with open egress, the workspace's directory
+bind-mounted and its credentials injected, which is reach into a run, credential
+material and the host — the three things this tier is defined never to have — so
+`POST /workspaces/{id}/record` is admin-only and the console shows a security
+admin that control disabled beside the promote control it leaves live. They also
+cannot touch the People page, integrations, site-config writes, base images, or
+the deploy funnel — and they run
 under a governance profile themselves if one is assigned to them, since only
 `admin` is exempt from ceiling resolution. A profile can only make the deployer's
 stored credentials *less* available, never more — and a security admin widening
@@ -984,7 +1008,7 @@ Every member denial that isn't a plain foreign-resource 404 is audited under
 | `capability_agent` | `agent`: a member named an agent they aren't granted (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ `403` |
 | `capability_integration` | `integration_id`: a member named a model-provider integration they aren't granted (same seam). Tier 1 only — a workspace's own pin and the site default are never gated | ⛔ `403` |
 | `governance_profile` | the member's assigned governance profile refuses this run SHAPE — `task_mode=exec`, an interactive run, `seed_auto_tools`, or codex-cli under hold-deriving rules. A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
-| `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped | 🟡 drop |
+| `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_MEMBER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
 | `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | ⛔ `403` |
 
 The drop rows are why `POST /runs` mostly *narrows* rather than refuses: a member

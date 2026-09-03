@@ -1036,7 +1036,11 @@ platform-internal name (write time AND at the dispatch sink); the grant may not
 overwrite a variable dispatch already set; `requires_approval` is REFUSED rather
 than silently ignored (there is no mint to gate); and the kind is **admin-only by
 default** — a member's `env_secret` grant is dropped even for a ceiling-listed
-pairing unless the operator sets `WARDYN_ALLOW_MEMBER_ENV_SECRET`. Prefer `api_key`
+pairing unless the operator sets `WARDYN_ALLOW_MEMBER_ENV_SECRET`. That drop is a
+ROLE check plus the switch, never a ceiling check, so it binds every non-operator
+on every route a run policy arrives by (an inline body, a stored row the member
+selected, or the deployment default) and regardless of whether a governance
+profile is assigned to them (`dropAdminOnlyEnvSecretGrants`). Prefer `api_key`
 (never resident) whenever the tool can be pointed at a host + header instead.
 
 **Everything else is never-resident** — `api_key`, the Bedrock **bearer** token

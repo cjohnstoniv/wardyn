@@ -44,7 +44,9 @@ vi.mock("../../../lib/api/secrets", () => ({
 
 // The model card's sign-in pane drives a real PTY through xterm, which does not
 // render in jsdom.
-vi.mock("./harness-login-pane", () => ({ HarnessLoginPane: () => <div data-testid="login-pane" /> }));
+vi.mock("./harness-login-pane", () => ({
+  HarnessLoginPane: () => <div data-testid="login-pane" />,
+}));
 
 import { SettingsScreen } from "./settings-screen";
 import { baseStatus } from "../../../lib/test-fixtures";
@@ -66,7 +68,12 @@ beforeEach(() => {
   getSiteConfigMock.mockReset().mockResolvedValue({});
   getDrivesMock
     .mockReset()
-    .mockResolvedValue({ drives: [], grants: [], host_roots_configured: false, runner_target: "docker" });
+    .mockResolvedValue({
+      drives: [],
+      grants: [],
+      host_roots_configured: false,
+      runner_target: "docker",
+    });
 });
 
 describe("SettingsScreen", () => {
@@ -85,8 +92,48 @@ describe("SettingsScreen", () => {
     renderScreen(false);
     // The host card is the settle anchor — once it is on screen the ready
     // branch has rendered, so the absence below is a decision, not a race.
-    expect(await screen.findByRole("heading", { name: "Host", level: 3 })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "Host", level: 3 }),
+    ).toBeInTheDocument();
     expect(screen.queryByTestId("user-drives-card")).toBeNull();
     expect(getDrivesMock).not.toHaveBeenCalled();
+  });
+});
+
+// GET /api/v1/site-config became operatorOnly in R1: it carries the upstream
+// proxy secret ref, every integration's credential ref and the internal
+// proxy/SCM hostnames, and a plain member used to receive all of it on this
+// page load. A member now reaches this screen with siteConfig === null (the
+// fetch 403s and the screen already .catch()es into null).
+//
+// Absence is fine; a false STATEMENT is not. With a null config `isProxyConfigured`
+// is false, so the two places that assert a proxy POSTURE would tell a member of
+// a proxied deployment that sandboxes "go direct" — wrong, not redacted. Both are
+// operator-only now, and this pins BOTH directions: an operator still sees them,
+// so the gate cannot be satisfied by deleting the feature.
+describe("SettingsScreen — the proxy posture is operator-only", () => {
+  it("hides the proxy posture from a member rather than telling them it is not configured", async () => {
+    getSiteConfigMock.mockResolvedValue(null);
+    renderScreen(false);
+    await screen.findAllByText("Host");
+    expect(screen.queryByText(/sandboxes go direct/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/corporate proxy & egress/i),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Internet$/)).not.toBeInTheDocument();
+  });
+
+  it("still shows an operator the proxy posture, including the configured URL", async () => {
+    getSiteConfigMock.mockResolvedValue({
+      upstream_proxy_url: "http://proxy.internal.corp.example:3128",
+    });
+    renderScreen(true);
+    expect(
+      await screen.findByText(/corporate proxy & egress/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/proxy\.internal\.corp\.example:3128/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/^Internet$/)).toBeInTheDocument();
   });
 });

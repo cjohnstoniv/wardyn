@@ -44,13 +44,13 @@ func (s ceilingDispatchStore) CreateGrant(_ context.Context, g types.CredentialG
 }
 
 // walledDispatch is one dispatch driven straight at dispatchRun, with the
-// ceiling arriving the way handleCreateRun and launchRecordRun deliver it: as
-// dispatchParams.CeilingDeny.
+// ceiling arriving the way every lane delivers it: as the required
+// dispatchCeiling argument.
 //
-// DRIVEN DIRECTLY, DELIBERATELY. The create handler's own job is to RESOLVE the
-// ceiling and set these two fields (ceilingDispatchDenies); this harness's job
-// is the phase that consumes them, which is where every widening that defeats a
-// create-time deny actually happens. Both halves are pinned, in the lane that
+// DRIVEN DIRECTLY, DELIBERATELY. Each lane's own job is to RESOLVE the ceiling
+// and hand it over (ceilingForDispatch / resolveDispatchCeiling); this harness's
+// job is the phase that consumes it, which is where every widening that defeats
+// a create-time deny actually happens. Both halves are pinned, in the lane that
 // owns each.
 type walledDispatch struct {
 	deny       []string // the ASSIGNED profile's denies; nil = an unassigned principal
@@ -79,11 +79,14 @@ func runWalledDispatch(t *testing.T, d walledDispatch) (types.RunPolicySpec, run
 		firstGitHub = &gid
 		break
 	}
-	profile := ""
+	ceiling := ceilingForDispatch(governanceCeiling{})
 	if len(d.deny) > 0 {
-		profile = "walled"
+		ceiling = ceilingForDispatch(governanceCeiling{
+			Spec:    types.RunPolicySpec{DeniedDomains: d.deny},
+			Profile: &types.GovernanceProfile{Name: "walled"},
+		})
 	}
-	srv.dispatchRun(context.Background(), run, dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceiling, dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Policy:             d.policy,
 		FirstGitHubGrantID: firstGitHub,
@@ -92,10 +95,8 @@ func runWalledDispatch(t *testing.T, d walledDispatch) (types.RunPolicySpec, run
 		// The never-resident PAT lane: with it on, the grant ids ride
 		// ProxyConfig.PATGrants and NOTHING reaches the sandbox — which is
 		// precisely the lane that bypasses denied_domains.
-		PATBroker:      len(d.patGrants) > 0,
-		Injections:     d.injections,
-		CeilingDeny:    d.deny,
-		CeilingProfile: profile,
+		PATBroker:  len(d.patGrants) > 0,
+		Injections: d.injections,
 	})
 
 	ev := findAudit(audit.events, run.ID, "run.policy.effective", "success")
@@ -322,7 +323,7 @@ func (s ceilingRecordStore) HasGroupTierAssignments(context.Context) (bool, erro
 // ceiling's denies have to ride into dispatch, where deny beats allow_all at
 // the proxy.
 //
-// Counterfactual: drop the CeilingDeny/CeilingProfile lines from the record
+// Counterfactual: pass ceilingForDispatch(governanceCeiling{}) instead of the record
 // lane's dispatchParams and the run comes up allow-all with the walled host
 // wide open — a create-time clamp cannot help, because this lane never passes
 // through one.

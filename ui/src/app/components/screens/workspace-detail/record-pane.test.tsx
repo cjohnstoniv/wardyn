@@ -747,12 +747,28 @@ describe("RecordPane — an orphaned verify:* session (no open sibling)", () => 
 // securityOps at the server for every control here (record/replay/approve-
 // host/promote-egress) — a viewer must see them disabled, not enabled-then-403.
 describe("RecordPane — a viewer's controls are disabled", () => {
-  // 0.7 §B: and a SECURITY ADMIN (operator:false, security_operator:true) must
-  // see them ENABLED — POST /workspaces/{id}/record and .../promote-egress
-  // both register on securityOps (routes.go:388-389). Gating this pane on
-  // useOperator would show them a dead pane over routes the server honours.
-  it("leaves a security admin's controls live even though they are not a super admin", () => {
-    const recorded: RecordResult = { run_id: "r1", label: "build & test", mode: "interactive", status: "recorded" };
+  // 0.7 §B, as amended by R1: a SECURITY ADMIN (operator:false,
+  // security_operator:true) keeps the DECISION half of this pane —
+  // .../promote-egress and the approve-hosts PUT .../approved-egress are still
+  // securityOps, and gating the pane on useOperator would show them a dead pane
+  // over routes the server honours. The LAUNCH half moved: POST
+  // /workspaces/{id}/record is operatorOnly, because it starts a credentialed,
+  // host-mounting, open-egress sandbox and stamps the caller as its owner
+  // rather than deciding an egress question. So the split, not the whole pane,
+  // is what this asserts — enabled-then-403 in EITHER direction is the bug.
+  it("splits a security admin's controls: the decision half live, the launch half disabled", () => {
+    // A session with an OBSERVED host the workspace has not approved, so the
+    // decision control (Approve N observed hosts -> promote-egress) actually
+    // renders — without it this test could only prove the launch half.
+    const recorded: RecordResult = {
+      run_id: "r1",
+      label: "build & test",
+      mode: "interactive",
+      status: "recorded",
+      observations: {
+        domains: [{ host: "registry.npmjs.org", allow_count: 4, deny_count: 0, pending_count: 0 }],
+      } as unknown as RecordResult["observations"],
+    };
     render(
       <OperatorProvider operator={false} securityOperator={true}>
         <RecordPane
@@ -771,9 +787,15 @@ describe("RecordPane — a viewer's controls are disabled", () => {
         />
       </OperatorProvider>,
     );
-    expect(screen.getByLabelText(/session name/i)).not.toBeDisabled();
-    expect(screen.getByRole("button", { name: /^replay confined$/i })).not.toBeDisabled();
-    expect(screen.queryByText(/requires the admin role/i)).not.toBeInTheDocument();
+    // The DECISION half — promoting observed egress into the allowlist — is
+    // theirs and stays live. This is what makes the pane worth showing them at
+    // all, and what a blanket useOperator gate would have taken away.
+    expect(screen.getByRole("button", { name: /approve 1 observed host/i })).not.toBeDisabled();
+    // The LAUNCH half is not: all three of these POST .../record, which is
+    // operatorOnly.
+    expect(screen.getByRole("button", { name: /^replay confined$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /re-record/i })).toBeDisabled();
+    expect(screen.getByLabelText(/session name/i)).toBeDisabled();
   });
 
   it("disables the New-session field, Start recording, and a session's Replay/Re-record buttons", () => {

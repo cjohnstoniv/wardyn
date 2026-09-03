@@ -42,13 +42,31 @@ import (
 // discard-on-conflict handler that route used to be (handleUpdateSource) and
 // its base-image GET-by-id twin (handleGetBaseImage, whose only caller was
 // its own now-removed route) are gone, not stubbed.
+// THE READS ARE operatorOnly TOO, matching their writes. They were the member
+// group's, and the split was made by VERB rather than by what the document
+// carries: a Source row carries Locator — the HOST FILESYSTEM PATH of a
+// local_dir source — and Requirements keyed `secret:<name>` / `egress:<host>`,
+// so a plain member GET returned the operator's on-disk layout and the NAMES of
+// the secrets and internal hosts every library entry needs. A BaseImageEntry
+// carries Image and Steps: the internal registry host and the bootstrap URLs
+// fetched to build it. No secret VALUES (those are write-only), so this is
+// topology and credential-REF disclosure, which is a target list rather than a
+// key.
+//
+// Reclassified rather than projected, and the question was asked before it was
+// answered: NOTHING member-facing consumes either route. The console has no
+// client method for /sources or /base-images at all (ui/src/app/lib/api), and
+// the CLI's only callers are `wardyn source list` and `wardyn site-config get`,
+// both under operator management verbs whose siblings are already operatorOnly.
+// A projection would have been three response types' worth of new code to serve
+// no caller. The cheapest redaction is a field nobody asked for.
 func (s *Server) mountLibraryRoutes(r chi.Router, operatorOnly chi.Router) {
-	r.Get("/sources", s.handleListSources)
+	operatorOnly.Get("/sources", s.handleListSources)
 	operatorOnly.Post("/sources", s.handleCreateSource)
-	r.Get("/sources/{id}", s.handleGetSource)
+	operatorOnly.Get("/sources/{id}", s.handleGetSource)
 	operatorOnly.Post("/sources/{id}/scan", s.handleScanSource)
 	operatorOnly.Delete("/sources/{id}", s.handleDeleteSource)
-	r.Get("/base-images", s.handleListBaseImages)
+	operatorOnly.Get("/base-images", s.handleListBaseImages)
 	operatorOnly.Post("/base-images", s.handleCreateBaseImage)
 	operatorOnly.Delete("/base-images/{id}", s.handleDeleteBaseImage)
 }

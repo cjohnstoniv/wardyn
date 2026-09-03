@@ -162,12 +162,42 @@ var routeMatrix = map[string]classifiedRoute{
 	"DELETE /api/v1/sources/{id}":     {class: classAdmin},
 	"POST /api/v1/base-images":        {class: classAdmin},
 	"DELETE /api/v1/base-images/{id}": {class: classAdmin},
-	// The three workspace routes that BIND CREDENTIAL MATERIAL or WRITE THE
-	// HOST. Their egress-decision siblings (approved-/denied-egress, record,
-	// promote-egress) are classSecurity below — same handler file, same
-	// scopedWorkspaceWrite helper, different tier, decided at the router.
+	// The workspace routes that BIND CREDENTIAL MATERIAL or WRITE THE HOST.
+	// Their egress-decision siblings (approved-/denied-egress, promote-egress)
+	// are classSecurity below — same handler file, same scopedWorkspaceWrite
+	// helper, different tier, decided at the router.
 	"PUT /api/v1/workspaces/{id}/llm-cred":     {class: classAdmin},
 	"PUT /api/v1/workspaces/{id}/requirements": {class: classAdmin},
+	// THE OPERATOR-TOPOLOGY READS. Their WRITES were already classAdmin and the
+	// reads were classMember — a split made by VERB rather than by what the
+	// document carries. GET /site-config returns the same whole document the
+	// PUT above is classAdmin for "integration credential refs included": the
+	// upstream-proxy secret ref, every integrations[].secrets[].secret_name,
+	// and the internal proxy / SCM / artifact hostnames. A Source row carries
+	// Locator (the host filesystem path of a local_dir source) and requirement
+	// keys spelled `secret:<name>` / `egress:<host>`; a BaseImageEntry carries
+	// the internal registry ref and the bootstrap URLs in Steps. No secret
+	// VALUES — those are write-only — so this is a target list rather than a
+	// key, handed to the whole member tier by routes the console called on page
+	// load. Nothing member-facing consumes them (the console has no client
+	// method for /sources or /base-images at all, and both /site-config callers
+	// already tolerate a null), which is why the fix is one router line each
+	// rather than three response projections.
+	"GET /api/v1/site-config":  {class: classAdmin},
+	"GET /api/v1/sources":      {class: classAdmin},
+	"GET /api/v1/sources/{id}": {class: classAdmin},
+	"GET /api/v1/base-images":  {class: classAdmin},
+	// RECORD, by that same criterion. It reads like an egress-decision sibling
+	// (it is how the hosts promote-egress promotes get observed) and was
+	// classified with them, but it LAUNCHES an interactive sandbox rather than
+	// writing a list: open egress by default, the workspace's local_dir
+	// bind-mounted read-write, the clone credential minted, the workspace's
+	// required secrets folded into proxy injections, the operator's LLM
+	// credential attached — and the run stamped CreatedBy = the caller, which
+	// walked straight through handleAttachTicket's strict foreign-run guard and
+	// yielded a PTY in a sandbox holding another member's files. Pinned by
+	// TestRecordWorkspaceIsSuperAdminOnly (security_admin_test.go).
+	"POST /api/v1/workspaces/{id}/record": {class: classAdmin},
 	// Offboarding (O6): admin-only, and gated by requireOperator rather than in
 	// the handler precisely so the member refusal is a CONSTANT 403 that never
 	// varies with whether the named workspace exists.
@@ -191,9 +221,18 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/access/mappings":        {class: classAdmin},
 	"DELETE /api/v1/access/mappings/{id}": {class: classAdmin},
 	"POST /api/v1/access/preview":         {class: classAdmin},
-	// Operator-triggered sandbox sweep. SUPER: it TEARS DOWN containers —
-	// other people's live runs, mid-flight — which is reach INTO runs the
-	// caller does not own, the one axis the security tier never gets.
+	// Operator-triggered sandbox sweep. SUPER for HOST reach and blast radius —
+	// it drives the runner (Status + StopSandbox) plus the credential revoke
+	// cascade across every run in the deployment from one call, and the host is
+	// one of the three axes securityOps never gets.
+	//
+	// It used to be justified here as "it TEARS DOWN containers — other people's
+	// live runs, mid-flight — which is reach INTO runs the caller does not own,
+	// the one axis the security tier never gets". Both halves were false: the
+	// sweep skips every non-terminal run (it reaps the sandbox of runs that have
+	// ALREADY ended), and the security tier CAN stop a foreign run, on purpose —
+	// ownsRunOrAdmin is isSecurityOperator, so kill admits it on any run. See
+	// TestSecurityAdminCanStopAForeignRun below and routes.go's own note.
 	"POST /api/v1/admin/sandboxes/sweep": {class: classAdmin},
 
 	// ── security (0.7 §B: admin OR security_admin; a member still 403s) ──
@@ -207,9 +246,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// The workspace EGRESS-DECISION lane. Deciding which hosts a workspace's
 	// runs may reach is the same authority as deciding an egress approval, and
 	// promote-egress is literally its bulk form.
+	// record itself is classAdmin above: it LAUNCHES the sandbox whose
+	// observations promote-egress promotes, and launching is not deciding.
 	"PUT /api/v1/workspaces/{id}/approved-egress":               {class: classSecurity},
 	"PUT /api/v1/workspaces/{id}/denied-egress":                 {class: classSecurity},
-	"POST /api/v1/workspaces/{id}/record":                       {class: classSecurity},
 	"POST /api/v1/workspaces/{id}/record/{task}/promote-egress": {class: classSecurity},
 	// Non-mutating: they launch a throwaway probe sandbox and answer "does the
 	// baseline this deployment already declares actually work" — evidence, not
@@ -292,7 +332,6 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/approvals":    {class: classMember},
 	"GET /api/v1/audit":        {class: classMember},
 	"GET /api/v1/audit/export": {class: classMember},
-	"GET /api/v1/base-images":  {class: classMember},
 	"GET /api/v1/integrations": {class: classMember},
 	"GET /api/v1/me":           {class: classMember},
 	// /me/ssh-keys (SSH lane, C2): classMember, NOT classOwner — this is a
@@ -332,9 +371,6 @@ var routeMatrix = map[string]classifiedRoute{
 	"DELETE /api/v1/secrets/{name}": {class: classMember},
 	"GET /api/v1/secrets":           {class: classMember},
 	"GET /api/v1/setup/status":      {class: classMember},
-	"GET /api/v1/site-config":       {class: classMember},
-	"GET /api/v1/sources":           {class: classMember},
-	"GET /api/v1/sources/{id}":      {class: classMember},
 	// The workspace READS stay member-class: an operator-owned workspace — every
 	// pre-0048 row — is readable by any authenticated caller exactly as before.
 	// What 0048 adds is that another MEMBER's owned row 404s, which is the same
@@ -810,11 +846,18 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// The split itself, pinned as a number: §B decided 14 SEC of the 40 gated
 	// routes, plus /governance's 7 and §I's directory search (all new in 0.7,
 	// outside that count) = 22, and 26 SUPER — plus /drives' 7, also new in 0.7
-	// and born SUPER, = 33. A route silently reclassified in the table above
+	// and born SUPER, = 33. R1 then moved ONE route across:
+	// POST /workspaces/{id}/record, which §B put in the workspace
+	// egress-decision lane but which LAUNCHES a credentialed, host-mounting,
+	// open-egress sandbox and stamps the caller as its owner rather than
+	// deciding anything. R1 also moved FOUR reads OUT of classMember and into
+	// SUPER — GET /site-config, /sources, /sources/{id} and /base-images, which
+	// returned operator topology and credential refs to the whole member tier —
+	// so 21 SEC / 38 SUPER. A route silently reclassified in the table above
 	// would still pass every probe — it would just be enforcing the WRONG tier,
 	// exactly the drift the per-route loop cannot see.
-	if sec != 22 || super != 33 {
-		t.Errorf("tier split = %d security / %d admin, want 22 / 33 (§B's 14 SEC + governance's 7 + §I's directory search, and 26 SUPER + /drives' 7)", sec, super)
+	if sec != 21 || super != 38 {
+		t.Errorf("tier split = %d security / %d admin, want 21 / 38 (§B's 14 SEC + governance's 7 + §I's directory search, MINUS record; and 26 SUPER + /drives' 7 + record + the four operator-topology reads)", sec, super)
 	}
 }
 

@@ -37,8 +37,8 @@
 //
 // ─── WHERE THE RESOLVED MOUNT LIVES BETWEEN CREATE AND DISPATCH ────────────
 //
-// On dispatchParams, exactly as the governance ceiling's own dispatch-time
-// inputs do (dispatchParams.CeilingDeny / CeilingProfile) — NOT on the run row,
+// On dispatchParams, next to the governance ceiling's own dispatch-time input
+// (the dispatchCeiling argument dispatchRun requires) — NOT on the run row,
 // and there is no migration for it. Three facts decide that, and the third is
 // the one that closes the question:
 //
