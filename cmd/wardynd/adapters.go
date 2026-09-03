@@ -115,17 +115,39 @@ type pgSessionRevocations struct {
 }
 
 // IsSessionRevoked reports revoked when issuedAt is at-or-before the LATER of
-// the sub-specific cutoff and the global one — a single query (MAX over the
-// two candidate rows) so a caller with no wired revocations at all (the
-// common case: no row for this sub or globally) pays one indexed lookup and
+// the cutoffs matching this human and the global one — a single query (MAX
+// over the candidate rows) so a caller with no wired revocations at all (the
+// common case: no row for either identity or globally) pays one lookup and
 // gets back SQL NULL, which is "never revoked", not a zero-time false alarm.
-func (r *pgSessionRevocations) IsSessionRevoked(ctx context.Context, sub string, issuedAt time.Time) (bool, error) {
+//
+// THREE candidate keys, because a revoke may name either identity (see
+// oidc.SessionRevocations): the sub EXACTLY — an OIDC sub is opaque and
+// case-sensitive, so folding it could collide two distinct principals — the
+// email CASE-INSENSITIVELY, since that is how a human types one and the admin
+// naming a target has no reason to match the IdP's casing, and the reserved ""
+// global row.
+//
+// An empty email needs NO guard, and adding one would be unpinnable defensive
+// code: lower(sub) = lower(”) selects exactly the sub = ” row, which is the
+// global row the third arm already selects. The two arms return the same
+// cutoff, so a session with no email claim behaves identically either way —
+// verified by removing a NULLIF guard and finding no test could tell the
+// difference, because there is no difference to tell.
+//
+// lower(sub) defeats the index on this arm. Deliberate: oidc_session_revocations
+// holds one row per revoked principal plus the global one — tens of rows on a
+// real deployment, not a scan worth an expression index — and the alternative
+// (folding at write time) cannot work, since the writer does not know whether
+// the caller named a sub or an email.
+func (r *pgSessionRevocations) IsSessionRevoked(ctx context.Context, sub, email string, issuedAt time.Time) (bool, error) {
 	const q = `
 		SELECT MAX(revoked_at)
 		FROM oidc_session_revocations
-		WHERE sub = $1 OR sub = $2`
+		WHERE sub = $1
+		   OR lower(sub) = lower($2)
+		   OR sub = $3`
 	var cutoff sql.NullTime
-	if err := r.pool.QueryRow(ctx, q, sub, globalRevokeSub).Scan(&cutoff); err != nil {
+	if err := r.pool.QueryRow(ctx, q, sub, email, globalRevokeSub).Scan(&cutoff); err != nil {
 		return false, fmt.Errorf("wardynd: is-session-revoked query: %w", err)
 	}
 	if !cutoff.Valid {

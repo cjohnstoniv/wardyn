@@ -451,7 +451,7 @@ func assertNotBlocked(t *testing.T, who string, w *httptest.ResponseRecorder) {
 // conditional route mounted" doctrine requires it wired here too.
 type fakeAuthzSessionRevocations struct{}
 
-func (fakeAuthzSessionRevocations) IsSessionRevoked(context.Context, string, time.Time) (bool, error) {
+func (fakeAuthzSessionRevocations) IsSessionRevoked(context.Context, string, string, time.Time) (bool, error) {
 	return false, nil
 }
 func (fakeAuthzSessionRevocations) RevokeSub(context.Context, string) error { return nil }

@@ -21,7 +21,7 @@ type fakeSessionRevocations struct {
 	revokedAll  int
 }
 
-func (f *fakeSessionRevocations) IsSessionRevoked(context.Context, string, time.Time) (bool, error) {
+func (f *fakeSessionRevocations) IsSessionRevoked(context.Context, string, string, time.Time) (bool, error) {
 	return false, nil
 }
 func (f *fakeSessionRevocations) RevokeSub(_ context.Context, sub string) error {
@@ -334,4 +334,101 @@ func TestSecurityAdminRevokesSuperAdmin(t *testing.T) {
 			t.Errorf("a member's request reached RevokeSub: %v", fake.revokedSubs)
 		}
 	})
+}
+
+// ─── an email names the same human as their sub (F002) ───────────────────────
+
+// TestRevokeSessions_EmailFormRevokesTheSameHuman: "revoke a human now" is the
+// time-critical half of incident response, and it used to be keyed on the OIDC
+// sub ALONE while both the CLI flag help and OPERATIONS.md advertised
+// "sub/email". On any IdP where the two differ — Entra, whose sub is an opaque
+// per-app identifier, the shape the SSO work targets — naming the email stamped
+// a cutoff that matched nobody and swept no tokens, and the responder's only
+// feedback was 204 plus an append-only outcome=success row.
+//
+// Both halves of one revoke have to agree about who was named, so both are
+// asserted here: the cutoff key AND the token sweep.
+//
+// Counterfactual: drop the email fallback in revokeAPITokensFor and the token
+// assertion fails while the cutoff one still passes — which is exactly how this
+// shipped half-working.
+func TestRevokeSessions_EmailFormRevokesTheSameHuman(t *testing.T) {
+	const (
+		aliceSub   = "sub-alice-opaque-entra-identifier"
+		aliceMail  = "alice@corp.example"
+		bystanderS = "sub-bob"
+	)
+	gone := time.Now().UTC()
+
+	for _, tc := range []struct {
+		name   string
+		target string
+	}{
+		{"named by sub", aliceSub},
+		{"named by email", aliceMail},
+		// An admin types an address; the IdP's casing is not their problem.
+		{"named by email, different case", "Alice@Corp.Example"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a1, a2, ar, b1 := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+			srv, fake, st := sessionsTestServerWithTokens(t, []types.APIToken{
+				{ID: a1, Principal: aliceSub, Email: aliceMail},
+				{ID: a2, Principal: aliceSub, Email: aliceMail},
+				{ID: ar, Principal: aliceSub, Email: aliceMail, RevokedAt: &gone},
+				{ID: b1, Principal: bystanderS, Email: "bob@corp.example"},
+			})
+			admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
+
+			w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", admin, `{"sub":"`+tc.target+`"}`)
+			if w.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want 204; body=%s", w.Code, w.Body.String())
+			}
+			// Half 1: the cutoff is stamped under whatever was named —
+			// IsSessionRevoked is what matches it back to the session.
+			if len(fake.revokedSubs) != 1 || fake.revokedSubs[0] != tc.target {
+				t.Errorf("revokedSubs = %v, want [%s]", fake.revokedSubs, tc.target)
+			}
+			// Half 2: the tokens. This is the half that does NOT self-heal —
+			// a wdn_ bearer never consults the session cutoff and api_tokens
+			// has no expiry, so a missed sweep leaves a live credential forever.
+			if len(st.revoked) != 2 {
+				t.Fatalf("revoked tokens = %v, want alice's two LIVE tokens (%s, %s) — "+
+					"a revoke naming %q swept nothing, so her wdn_ tokens keep authenticating as her",
+					st.revoked, a1, a2, tc.target)
+			}
+			for _, id := range st.revoked {
+				if id == b1 {
+					t.Errorf("revoked the bystander's token %s", id)
+				}
+				if id == ar {
+					t.Errorf("re-revoked an already-revoked token %s", id)
+				}
+			}
+		})
+	}
+}
+
+// TestRevokeSessions_UnmatchedTargetSweepsNobodyElse is the bound on the email
+// fallback: it must widen a revoke to the SAME human's other identity, never to
+// anyone else. A target matching no principal and no email revokes zero tokens
+// — not "all of them" via some empty-means-everyone slip, which is exactly the
+// convention revokeAPITokensFor uses one branch away.
+func TestRevokeSessions_UnmatchedTargetSweepsNobodyElse(t *testing.T) {
+	x1, x2 := uuid.New(), uuid.New()
+	srv, fake, st := sessionsTestServerWithTokens(t, []types.APIToken{
+		{ID: x1, Principal: "sub-alice", Email: "alice@corp.example"},
+		{ID: x2, Principal: "sub-bob", Email: "bob@corp.example"},
+	})
+	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
+
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", admin, `{"sub":"nobody@corp.example"}`)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", w.Code, w.Body.String())
+	}
+	if len(st.revoked) != 0 {
+		t.Fatalf("revoked = %v, want none — an unmatched target must not sweep the deployment", st.revoked)
+	}
+	if len(fake.revokedSubs) != 1 || fake.revokedSubs[0] != "nobody@corp.example" {
+		t.Errorf("revokedSubs = %v, want the cutoff still stamped (a sub with no live session is indistinguishable from a typo here)", fake.revokedSubs)
+	}
 }

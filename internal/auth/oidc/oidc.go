@@ -171,23 +171,38 @@ type Config struct {
 // SPIFFE-style identity_revocations denylist, which this package never
 // touches.
 type SessionRevocations interface {
-	// IsSessionRevoked reports whether a session for sub, issued at issuedAt,
-	// must be treated as revoked — because of a revoke targeting exactly sub,
-	// or the reserved "" (global revoke-all) sub, whichever cutoff is later.
+	// IsSessionRevoked reports whether a session for this human, issued at
+	// issuedAt, must be treated as revoked — because of a revoke targeting
+	// EITHER of their identities, or the reserved "" (global revoke-all) sub,
+	// whichever cutoff is later.
 	// issuedAt.IsZero() (a pre-D16 cookie with no iat) is always revoked once
 	// ANY matching cutoff exists: an old session predating this feature has
 	// no reliable issued-at to compare, so it fails closed the moment revoke
 	// is used for the first time against it, rather than staying immune.
 	//
+	// BOTH IDENTITIES, for the reason every other user-addressing surface in
+	// the product already takes: an admin naming a human "shouldn't have to
+	// guess which the IdP made authoritative" (docs/OPERATIONS.md on a
+	// subject_type=user capability grant, which matches the sub OR the email;
+	// capabilitySubjects in internal/api offers both the same way). Revocation
+	// was the one such surface keyed on sub ALONE, and on any IdP where the two
+	// differ — Entra, where sub is an opaque per-app identifier — a revoke
+	// naming the email stamped a cutoff that matched nobody: 204, an audited
+	// success, and a compromised human still signed in. sub is compared
+	// EXACTLY (an OIDC sub is opaque and case-sensitive); email is compared
+	// case-insensitively, since that is how humans type one.
+	//
 	// ponytail: Middleware calls this on every authenticated request with no
-	// in-process cache — one extra indexed point-lookup per request against
-	// the store wardynd already requires (Postgres). Add a short-TTL
-	// in-memory cache keyed on sub if that round trip ever shows up in
-	// latency; a POC-scale deployment's request volume doesn't justify one
-	// yet, and a cache is one more place revocation could go stale.
-	IsSessionRevoked(ctx context.Context, sub string, issuedAt time.Time) (bool, error)
+	// in-process cache — one extra lookup per request against the store
+	// wardynd already requires (Postgres), over a table holding one row per
+	// revoked principal plus the global one. Add a short-TTL in-memory cache
+	// keyed on sub if that round trip ever shows up in latency; a POC-scale
+	// deployment's request volume doesn't justify one yet, and a cache is one
+	// more place revocation could go stale.
+	IsSessionRevoked(ctx context.Context, sub, email string, issuedAt time.Time) (bool, error)
 	// RevokeSub invalidates every CURRENT session for sub, effective now —
-	// a targeted "log this one person out everywhere".
+	// a targeted "log this one person out everywhere". sub is whichever
+	// identity the caller named; IsSessionRevoked matches it against both.
 	RevokeSub(ctx context.Context, sub string) error
 	// RevokeAll invalidates every CURRENT session for every principal,
 	// effective now — the incident-response "log everyone out" lever.
@@ -664,7 +679,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 				// (nil Revocations => unset changes nothing, the same rule
 				// every other optional Config field follows).
 				if a.cfg.Revocations != nil {
-					revoked, rerr := a.cfg.Revocations.IsSessionRevoked(r.Context(), sess.Sub, sess.IssuedAt)
+					revoked, rerr := a.cfg.Revocations.IsSessionRevoked(r.Context(), sess.Sub, sess.Email, sess.IssuedAt)
 					if rerr != nil {
 						// Fail CLOSED: a store error must never look
 						// indistinguishable from "not revoked" on a security

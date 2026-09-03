@@ -821,6 +821,21 @@ revokes every unrevoked token that principal holds — a token is their session 
 another form. The `all` arm is deployment-wide for tokens too: EVERY live token
 goes, the calling admin's own included — plan to re-mint after a global revoke.
 
+**Name them by either identity.** `--sub` takes the OIDC `sub` **or** the email,
+and both halves of the revoke honour both — the session cutoff and the token
+sweep — so you do not have to know which one your IdP made authoritative. This
+matters on Entra, where the `sub` is an opaque per-app identifier that appears
+nowhere a responder would naturally read it; the email is matched
+case-insensitively, the `sub` exactly. It is the same rule a
+`subject_type=user` capability grant already follows.
+
+What the API cannot tell you is whether the name matched anybody. Sessions are
+stateless signed cookies with no row to count, so a target that names nobody is
+indistinguishable from one whose sessions have already expired, and both answer
+`204`. The `session.revoke` audit row carries `tokens_revoked` for the half that
+*is* countable — a zero there, against a human you believe holds tokens, is the
+signal that the identifier was wrong.
+
 Use one as an ordinary bearer: `Authorization: Bearer wdn_…`. Downstream it is
 indistinguishable from that human's console session — run ownership, the
 admin/member gate and capability grants all resolve to the owning human — so a
