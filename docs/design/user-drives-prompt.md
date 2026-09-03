@@ -165,6 +165,14 @@ group beats everyone; within a person the sign-in subject beats the email; betwe
 higher priority wins, then the drive **name**. `priority` is meaningful only inside the group
 tier — user and everyone rows show `GOV.PRIORITY_NA`.
 
+The drive name is not the LAST key, because it cannot separate two allocations naming the SAME
+drive — two groups one person is in, each granted one drive, both at the default priority. The
+resolver's floor is therefore the allocation's **subject**, ascending: the alphabetically first
+group's row wins. It matters because this resolver returns the ALLOCATION, and the allocation
+carries the size, mode and directory overrides and the paused flag, so the tie decides whether
+an admin's read-only narrowing applies. `PRECEDENCE` (§7.3) stops at the drive name and is
+FROZEN; naming the last key in the console is a copy change for a later round.
+
 Overrides are columns on the allocation row. A size override replaces the drive's size; a
 writable override replaces the drive's mode **for that subject** (it may widen or narrow — an
 admin's call); a home override names one person's exact directory and is accepted **on a

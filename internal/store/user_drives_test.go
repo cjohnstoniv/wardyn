@@ -385,6 +385,97 @@ func TestPG_UserDriveGrant_OneDirectoryNamePerDrive(t *testing.T) {
 	})
 }
 
+// TestPG_ResolveUserDrive_TieHasATotalOrder pins the LAST key, and the reason
+// it is not the drive's name.
+//
+// drives.name is UNIQUE, so `d.name ASC` totally orders two DISTINCT drives.
+// The tie it cannot break is two grants naming the SAME drive:
+// UNIQUE(subject_type, subject) is per SUBJECT, so two groups one member
+// belongs to may each be granted one drive, and priority DEFAULTS to 0 on both.
+// Every key above then ties and LIMIT 1 falls to whichever row the plan reached
+// first.
+//
+// It decides something, because THIS RESOLVER RETURNS THE GRANT: the grant
+// carries writable_override, size_mib_override, home_override and enabled. The
+// failing direction is an admin's explicit read-only narrowing silently NOT
+// applying — and the answer changing across a re-write of the rows, with no
+// admin action in between.
+//
+// The test flips the PHYSICAL insert order and demands one answer, which is the
+// shape that catches a plan-dependent LIMIT 1; asserting a single resolve would
+// pass on an unordered query half the time.
+func TestPG_ResolveUserDrive_TieHasATotalOrder(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+
+	shared := seedUserDrive(t, st, "test-tie-shared-"+uuid.NewString())
+	// Two groups ONE member is in, both allocated the SAME drive at the default
+	// priority. "aaa" sorts before "zzz", so the rule has a nameable answer.
+	first := "test-grp-aaa-" + uuid.NewString()
+	second := "test-grp-zzz-" + uuid.NewString()
+	no := false
+
+	// The narrowing an admin wrote lives on the LOSING row in one insert order
+	// and the WINNING row in the other — which is the whole point.
+	grants := map[string]types.UserDriveGrant{
+		first: {
+			SubjectType: types.CapabilitySubjectGroup, Subject: first, DriveID: shared.ID,
+			WritableOverride: &no, CreatedBy: "admin@example.com",
+		},
+		second: {
+			SubjectType: types.CapabilitySubjectGroup, Subject: second, DriveID: shared.ID,
+			CreatedBy: "admin@example.com",
+		},
+	}
+	resolveWith := func(t *testing.T, order []string) types.UserDriveGrant {
+		t.Helper()
+		var ids []uuid.UUID
+		for _, subject := range order {
+			saved, err := st.UpsertUserDriveGrant(ctx, grants[subject])
+			if err != nil {
+				t.Fatalf("seed %s: %v", subject, err)
+			}
+			ids = append(ids, saved.ID)
+		}
+		defer func() {
+			for _, id := range ids {
+				_, _ = st.DeleteUserDriveGrant(ctx, id)
+			}
+		}()
+		d, g, tier, err := st.ResolveUserDrive(ctx, nil, []string{first, second})
+		if err != nil {
+			t.Fatalf("resolve (%v): %v", order, err)
+		}
+		if d.ID != shared.ID || tier != types.CapabilitySubjectGroup {
+			t.Fatalf("resolved drive/tier = %s/%q, want the shared drive at the group tier", d.ID, tier)
+		}
+		return *g
+	}
+
+	forward := resolveWith(t, []string{first, second})
+	reverse := resolveWith(t, []string{second, first})
+
+	if forward.Subject != reverse.Subject {
+		t.Fatalf("insert order decided the winner: %q then %q — the ORDER BY is not a total order, "+
+			"so the same principal resolves differently across a re-write of the rows",
+			forward.Subject, reverse.Subject)
+	}
+	// …and the winner is the one the rule NAMES, not merely a stable one: a
+	// deterministic answer nobody can predict is not an explanation.
+	if forward.Subject != first {
+		t.Errorf("winner = %q, want the alphabetically first subject %q", forward.Subject, first)
+	}
+	// THE CONSEQUENCE, asserted rather than implied: the grant that wins is the
+	// one carrying the admin's read-only narrowing, in BOTH insert orders.
+	for _, g := range []types.UserDriveGrant{forward, reverse} {
+		if g.WritableOverride == nil || *g.WritableOverride {
+			t.Errorf("writable_override = %v, want the admin's explicit false to have survived the tie",
+				g.WritableOverride)
+		}
+	}
+}
+
 // TestPG_ResolveUserDrive is the precedence table — the whole rule this feature
 // rests on, asserted against the real ORDER BY rather than a Go
 // re-implementation of it (there is deliberately no Go copy to test).

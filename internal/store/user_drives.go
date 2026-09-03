@@ -309,9 +309,30 @@ const userDriveTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' TH
 //     documented ordering IS the precedence.
 //  3. priority DESC — the admin's explicit tie-break, and the group tier's
 //     working lever (a member is usually in several groups at once).
-//  4. drives.name ASC — the deterministic total-order floor, applied in EVERY
-//     tier. Without it two same-priority rows make LIMIT 1 depend on the plan,
-//     and "why did Bob get the other drive today" has no answer.
+//  4. drives.name ASC — applied in EVERY tier, and a total order across
+//     DISTINCT drives because drives.name is UNIQUE. It is what decides which
+//     of two drives a member reaches when nothing above it separates them.
+//  5. grants.subject ASC — THE FLOOR, and the drive's name is not one. Two
+//     grants can name the SAME drive: UNIQUE(subject_type, subject) is per
+//     SUBJECT, so two groups one member belongs to may each be granted one
+//     drive, and priority DEFAULTS to 0 on both — every key above ties, and
+//     LIMIT 1 falls to physical row order. That is not academic here, because
+//     THIS RESOLVER RETURNS THE GRANT and the grant is what carries
+//     writable_override, size_mib_override, home_override and enabled: the
+//     losing coin-flip is an admin's explicit read-only narrowing silently not
+//     applying, or a paused allocation mounting. Subject is a total order
+//     within a tier (the UNIQUE key makes subjects distinct there) and it is
+//     EXPLAINABLE, which a row id would not be — "the alphabetically first
+//     group's allocation wins" is an answer to "why did Bob get that one".
+//
+// THE RULE WAS COPIED FROM ResolveGovernanceProfile, WHICH DOES NOT NEED THE
+// LAST KEY. governance_assignments carries no per-assignment override — only
+// profile_id and priority — so two assignments naming one profile are
+// interchangeable and the tie is unobservable. Copying the ORDER BY into a
+// table whose rows DO carry per-row overrides is what turned a benign gap into
+// a decision. ListUserDriveGrants already ended with `subject`, so the console
+// listing and the resolver now agree on the last key rather than only the
+// first.
 //
 // DISABLED GRANTS ARE IN THE QUERY, and the winner's own `enabled` decides
 // PAUSED vs MOUNTED — a disabled row that wins its tier yields paused, never
@@ -358,7 +379,8 @@ func (s PG) ResolveUserDrive(ctx context.Context, userSubjects, groups []string)
 				THEN COALESCE(array_position($1::text[], g.subject), 2147483647)
 				ELSE 0 END,
 			g.priority DESC,
-			d.name ASC
+			d.name ASC,
+			g.subject ASC
 		LIMIT 1`
 	var d types.UserDrive
 	var g types.UserDriveGrant
