@@ -33,6 +33,17 @@ func seedEgressApproval(h *harness, runID uuid.UUID, host string) uuid.UUID {
 	return id
 }
 
+// seedEgressApprovalRawScope seeds an approval whose requested_scope is verbatim
+// JSON rather than the usual object — the shape the unmarshal branch gives up on.
+func seedEgressApprovalRawScope(h *harness, runID uuid.UUID, raw string) uuid.UUID {
+	id := uuid.New()
+	h.approvals.byID[id] = types.ApprovalRequest{
+		ID: id, RunID: runID, Kind: types.ApprovalEgressDomain,
+		RequestedScope: json.RawMessage(raw),
+	}
+	return id
+}
+
 // TestApproveDecision_RecordRun_WritesContractRow: approving an egress_domain
 // request raised by a workspace record/verify run writes the row IMMEDIATELY
 // into that workspace's requirements overlay — required (a human wants the
@@ -76,10 +87,21 @@ func TestApproveDecision_RecordRun_WritesContractRow(t *testing.T) {
 func TestApproveDecision_NoDurableWriteOffTheVerifyPath(t *testing.T) {
 	cases := []struct {
 		name, task, host, verb string
+		// rawScope, when set, replaces the usual {"host":…} object — the
+		// non-object shapes the unmarshal branch gives up on.
+		rawScope string
 	}{
-		{"plain run's approval", "dev task", "api.stripe.com", "approve"},
-		{"deny on a record run", "workspace record", "api.stripe.com", "deny"},
-		{"junk host shape", "workspace record", "localhost", "approve"},
+		{name: "plain run's approval", task: "dev task", host: "api.stripe.com", verb: "approve"},
+		{name: "deny on a record run", task: "workspace record", host: "api.stripe.com", verb: "deny"},
+		{name: "junk host shape", task: "workspace record", host: "localhost", verb: "approve"},
+		// The branch four lines ABOVE the junk-host guard. Valid JSON, not an
+		// object: json.Unmarshal into the scope struct fails and this used to
+		// `return` bare — producing the exact symptom W19-W19b-5 was written to
+		// eliminate (200, empty contract, silent audit), through the neighbouring
+		// branch. Both shapes, because an array and a scalar fail differently in
+		// encoding/json and only one of them was ever likely to be tried by hand.
+		{name: "scope is a JSON array", task: "workspace record", verb: "approve", rawScope: `[]`},
+		{name: "scope is a JSON string", task: "workspace record", verb: "approve", rawScope: `"api.stripe.com"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -94,6 +116,9 @@ func TestApproveDecision_NoDurableWriteOffTheVerifyPath(t *testing.T) {
 			srv := New(cfg)
 
 			apID := seedEgressApproval(h, runID, tc.host)
+			if tc.rawScope != "" {
+				apID = seedEgressApprovalRawScope(h, runID, tc.rawScope)
+			}
 			w := do(t, srv, http.MethodPost, "/api/v1/approvals/"+apID.String()+"/"+tc.verb, adminToken, "")
 			if w.Code != http.StatusOK {
 				t.Fatalf("%s: code = %d, body=%s", tc.verb, w.Code, w.Body.String())
@@ -105,7 +130,11 @@ func TestApproveDecision_NoDurableWriteOffTheVerifyPath(t *testing.T) {
 			// every other give-up path in learnVerifyEgress — it must now audit
 			// the miss too, so an operator can see why the contract wasn't
 			// updated instead of wondering why the next replay still holds.
-			if tc.name == "junk host shape" {
+			// EVERY give-up path in learnVerifyEgress must audit its miss — the
+			// junk host shape (W19-W19b-5) and, since R1, the non-object scope
+			// beside it. They are indistinguishable to the operator: a green UI
+			// and a contract that never learned the host.
+			if tc.name == "junk host shape" || tc.rawScope != "" {
 				found := false
 				for _, ev := range h.audit.events {
 					if ev.Action == "workspace.requirement.write" && ev.Outcome == "failure" {
