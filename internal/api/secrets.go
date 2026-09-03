@@ -319,12 +319,45 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 	if !s.isOperator(ctx) {
 		names, err = s.memberVisibleOperatorSecretNames(ctx)
 		if err != nil {
-			// ceilingErrorStatus so an unanswerable group snapshot is the same
-			// 403 every other routed site gives, not a 500 that reads as an
-			// outage; a plain store failure still 500s.
-			writeError(w, ceilingErrorStatus(err), "list secrets: "+err.Error())
+			// writeCeilingErrorPrefixed, not a hand-pasted prefix: the
+			// stale-snapshot arm has to reach the member with the REMEDY
+			// (groupsSnapshotStaleMsg), and "list secrets: " + err.Error()
+			// published the bare `groups_snapshot_stale` sentinel instead — an
+			// internal identifier for a condition a member cannot clear without
+			// being told how. Same 403 as before; a plain store failure still
+			// 500s under this seam's own prefix.
+			writeCeilingErrorPrefixed(w, "list secrets: ", err)
 			return
 		}
+	}
+	// THE ONE UNAUDITED VERB ON AN AUDITED SURFACE. `?owner=` is admin-only
+	// (secretOwnerParam) and every WRITE through it stamps secret_owner —
+	// secret.write and secret.delete both do. The read did not, so an admin
+	// could enumerate another human's secret namespace and leave nothing an
+	// investigator could find afterwards, on the same query parameter whose
+	// writes are attributable. The asymmetry is the finding: not that a read is
+	// unlogged in general, but that this read is the only verb on this surface
+	// that was.
+	//
+	// NAMES, NOT VALUES, and the row says so. reservedFilteredSecretNames
+	// returns store.List — identifiers only; no value is read, decrypted or
+	// returned here (value resolution is secret.read, at injection time, which
+	// is a different action carrying grant_id/jti). So this records an
+	// ENUMERATION of a namespace, which is what an investigator asking "who
+	// looked at Bob's secrets" needs, without overclaiming disclosure.
+	//
+	// Only the EXPLICIT ?owner= surface is audited. A member listing their own
+	// namespace is the ordinary console poll on every page load; auditing that
+	// would bury the cross-user reads this row exists for. Count only, never
+	// the names — a secret name is operator-authored but still an identifier
+	// the trail has no reason to index (the same count/shape-only rule
+	// auditWorkspaceData follows).
+	if r.URL.Query().Get("owner") != "" {
+		s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+			"secret.list", owner, "success", mustJSON(map[string]any{
+				"secret_owner": owner,
+				"names":        len(mine),
+			})))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"names": names, "mine": mine})
 }

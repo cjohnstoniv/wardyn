@@ -555,6 +555,29 @@ func writeCeilingError(w http.ResponseWriter, err error) {
 	writeError(w, http.StatusInternalServerError, "resolve governance ceiling: "+err.Error())
 }
 
+// writeCeilingErrorPrefixed is writeCeilingError for a seam that has its own
+// error prefix ("list secrets: ", "policy: ", …).
+//
+// THE STALE ARM DROPS THE PREFIX ON PURPOSE. groupsSnapshotStaleMsg exists
+// because the remedy is one the human can actually perform — sign in again, or
+// re-mint the API token — and the alternative is a support ticket. A seam that
+// pastes its prefix onto err.Error() instead publishes the bare
+// `groups_snapshot_stale` sentinel: an internal identifier naming a condition a
+// member has no vocabulary for and no documented way to clear. The status was
+// already shared (ceilingErrorStatus); this shares the SENTENCE, so a refusal
+// cannot name the remedy at one member-reachable seam and withhold it at the
+// next.
+//
+// Everything else keeps the seam's own prefix over the underlying error, which
+// is the 500 an operator reads, not the member.
+func writeCeilingErrorPrefixed(w http.ResponseWriter, prefix string, err error) {
+	if errors.Is(err, errGroupsSnapshotStale) {
+		writeError(w, http.StatusForbidden, groupsSnapshotStaleMsg)
+		return
+	}
+	writeError(w, http.StatusInternalServerError, prefix+err.Error())
+}
+
 // ceilingErrorStatus is writeCeilingError's status half, for the two seams that
 // hand a code back up to a caller instead of writing the response themselves.
 // One mapping, so a resolver failure cannot answer 403 at one site and 500 at

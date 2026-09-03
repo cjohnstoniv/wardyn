@@ -160,6 +160,31 @@ func TestF2_TruncatedSnapshotRefusedAtTheReadSite(t *testing.T) {
 		}
 	})
 
+	// GET /secrets is the site this file's own premise had not been applied to.
+	// It resolved the ceiling (memberVisibleOperatorSecretNames) and mapped the
+	// status with ceilingErrorStatus — the right 403 — but wrote
+	// "list secrets: " + err.Error(), publishing the BARE sentinel. A member
+	// read `groups_snapshot_stale` with no remedy, while every sibling seam
+	// named one; `wardyn secret list` printed it verbatim and exited 2.
+	//
+	// Counterfactual: put the hand-pasted prefix back and the remedy assertion
+	// fails while the 403 still passes — which is exactly how this shipped.
+	t.Run("GET /secrets names the remedy, not just the sentinel", func(t *testing.T) {
+		srv, _ := newSrv(t, &capStore{govHasGroupTier: true})
+		srv.cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+		srv.router = srv.routes() // re-mount with the secret surface enabled
+
+		w := doSSO(t, srv, http.MethodGet, "/api/v1/secrets",
+			govSession(t, "sub-many-groups", []string{"a-team"}, true), "")
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("GET /secrets (truncated cookie) = %d, want 403: %s", w.Code, w.Body.String())
+		}
+		if !containsAll(w.Body.String(), "groups_snapshot_stale", "sign in again") {
+			t.Errorf("403 body = %s; want it to name the condition AND the remedy — a member has no vocabulary "+
+				"for the bare sentinel and no documented way to clear it", w.Body.String())
+		}
+	})
+
 	t.Run("API token with the NULL (pre-0.7) marker, then with the bit set", func(t *testing.T) {
 		srv, st := newSrv(t, &capStore{govProfile: govProfile("everyone"), govTier: types.CapabilitySubjectAll, govHasGroupTier: true})
 		st.tokenRaw = apiTokenPrefix + "f2probe"
