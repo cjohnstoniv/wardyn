@@ -15,14 +15,13 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// integrations_write.go is the write + run/composer resolution half of
-// integrations.go, split out (scripts/check-file-size.sh) once the file grew
-// past the 1000-line gate: validateIntegrationWrite backs the write endpoints
+// integrations_write.go is the write + run resolution half of integrations.go,
+// split out (scripts/check-file-size.sh) once the file grew past the 1000-line
+// gate: validateIntegrationWrite backs the write endpoints
 // (setup_integrations.go); resolveIntegrationRef/defaultAgentRunsIntegration
-// back the run-time resolution ladder (llmcred.go); WardynFeaturesBackend
-// backs the composer-registry boot derivation (cmd/wardynd/composer.go).
-// Everything here builds ON TOP of effectiveIntegrations/capabilitiesFor
-// (integrations.go) without changing either.
+// back the run-time resolution ladder (llmcred.go). Everything here builds ON
+// TOP of effectiveIntegrations/capabilitiesFor (integrations.go) without
+// changing either.
 
 // genericIntegrationKind reports whether kind is a GENERIC open slug — one
 // whose behavior does NOT come from code: the row's own secrets, egress and
@@ -264,10 +263,10 @@ func validateIntegrationWrite(in types.Integration) error {
 	}
 	if len(in.DefaultFor) > 0 && !types.AIProviderKind(in.Kind) {
 		// PLATFORM-API-3: both marks are defined only for the AI kinds
-		// (types.Integration.DefaultFor's doc), and both readers
-		// (applyDefaultForRadio's clear, defaultAgentRunsIntegration,
-		// WardynFeaturesBackend) already filter on it — so a non-AI row taking
-		// a mark here just STEALS it from the real AI row (applyDefaultForRadio
+		// (types.Integration.DefaultFor's doc), and their readers
+		// (applyDefaultForRadio's clear, defaultAgentRunsIntegration) already
+		// filter on it — so a non-AI row taking a mark here just STEALS it from
+		// the real AI row (applyDefaultForRadio
 		// clears it from every OTHER row regardless of kind) while never being
 		// able to SERVE it itself: silent, site-wide loss of model access
 		// through a write that validated clean.
@@ -407,9 +406,3 @@ func (s *Server) defaultAgentRunsIntegration(ctx context.Context, onlyType strin
 	}
 	return types.Integration{}, false
 }
-
-// WardynFeaturesBackend lived here: it picked the stored AI-provider integration
-// marked DefaultFor: wardyn_features so cmd/wardynd could derive a composer
-// registry at boot when WARDYN_COMPOSER_CONFIG was unset. Its only caller was
-// cmd/wardynd/composer.go, deleted with the AI Run Composer; api.Config no
-// longer has a Composer field for it to feed.
