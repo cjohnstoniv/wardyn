@@ -6,6 +6,8 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -133,4 +135,145 @@ func TestSecondHuman_CredentialApprovalUnaffected(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("credential approval under the egress switch: status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
+}
+
+// localSecondHumanFixture is a LOCALMODE server holding one PENDING egress
+// approval on a run created by createdBy. LocalMode is the no-auth bypass, so
+// the request needs a loopback peer and a loopback Host and no credential at
+// all — exactly what a local CLI or the console sends.
+func localSecondHumanFixture(t *testing.T, createdBy string) (*Server, *authzApprovals, uuid.UUID) {
+	t.Helper()
+	ast := newAuthzStore()
+	aap := newAuthzApprovals(ast)
+	h := newHarness(t)
+	cfg := baseTestConfig(h, ast)
+	cfg.Approvals = aap
+	cfg.LocalMode = true
+	cfg.LocalOperator = "local:alice"
+	srv := New(cfg)
+
+	runID := uuid.New()
+	ast.mu.Lock()
+	ast.runs[runID] = types.AgentRun{ID: runID, CreatedBy: createdBy, State: types.RunRunning}
+	ast.mu.Unlock()
+
+	apID := uuid.New()
+	aap.mu.Lock()
+	aap.byID[apID] = types.ApprovalRequest{
+		ID: apID, RunID: runID, Kind: types.ApprovalEgressDomain,
+		RequestedScope: json.RawMessage(`{"host":"registry.npmjs.org"}`),
+		State:          types.ApprovalPending, RequestedAt: time.Now().UTC(),
+	}
+	aap.mu.Unlock()
+	return srv, aap, apID
+}
+
+// localDecide drives one decision as a local-mode client, optionally carrying
+// the DEV-ONLY X-Wardyn-Principal attribution override.
+func localDecide(t *testing.T, srv *Server, apID uuid.UUID, verb, principalHeader string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/approvals/"+apID.String()+"/"+verb, http.NoBody)
+	req.Host = "127.0.0.1:8080"
+	req.RemoteAddr = "127.0.0.1:54321"
+	if principalHeader != "" {
+		req.Header.Set("X-Wardyn-Principal", principalHeader)
+	}
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	return w
+}
+
+// TestSecondHuman_LocalModeRefusesTheSwitch pins the mode where the four-eyes
+// gate cannot bind, and it pins WHY — because the reason decides the fix.
+//
+// The gate compared run.CreatedBy against actorFromRequest's principal. In
+// LocalMode BOTH of those are client-supplied: actorFromRequest honors the
+// DEV-ONLY X-Wardyn-Principal header there (by design, for attribution), and
+// run.CreatedBy is written from that same function at create. So the mode had
+// TWO ways past the gate, and the second is the one that rules out the narrow
+// fix:
+//
+//	arm 1 — forge the DECIDER: the run's own creator adds one header and the
+//	        gate passes, stamping the invented name as decided_by.
+//	arm 2 — forge the CREATOR: create the run under a header, then decide it
+//	        yourself with NO header at all. Comparing the INJECTED operator
+//	        instead of the header (the obvious fix) still passes this one,
+//	        because local:alice != local:carol.
+//
+// LocalMode authenticates nobody and its only non-client-supplied identity is
+// one deployment-wide constant, so no request in it can ever prove a second
+// human decided. The switch is therefore refused outright — 503, naming the
+// incompatibility and the remedy — rather than enforced by a comparison that
+// two different forgeries walk through.
+func TestSecondHuman_LocalModeRefusesTheSwitch(t *testing.T) {
+	const wantMsg = "cannot be enforced in local mode"
+
+	for _, c := range []struct {
+		name      string
+		createdBy string
+		header    string
+	}{
+		{"forged decider: the creator adds a header", "local:alice", "local:bob"},
+		{"no header at all: the plain self-decision", "local:alice", ""},
+		{"forged creator: the run was created under a header", "local:carol", ""},
+		{"forged creator AND decider", "local:carol", "local:dave"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			for _, verb := range []string{"approve", "deny"} {
+				t.Setenv(envEgressSecondHuman, "1")
+				srv, aap, apID := localSecondHumanFixture(t, c.createdBy)
+				w := localDecide(t, srv, apID, verb, c.header)
+				if w.Code != http.StatusServiceUnavailable {
+					t.Fatalf("%s: status = %d, want 503; body=%s", verb, w.Code, w.Body.String())
+				}
+				if !strings.Contains(w.Body.String(), wantMsg) {
+					t.Errorf("%s: body = %s, want it to name the incompatibility (%q)", verb, w.Body.String(), wantMsg)
+				}
+				// PENDING -> decided is one-way, so the refusal must land BEFORE
+				// Decide() and leave nothing stamped: the whole failure class here
+				// is an audit row naming a human who did not decide.
+				aap.mu.Lock()
+				state, decidedBy := aap.byID[apID].State, aap.byID[apID].DecidedBy
+				aap.mu.Unlock()
+				if state != types.ApprovalPending {
+					t.Errorf("%s: approval state = %q after a refused decision, want PENDING", verb, state)
+				}
+				if decidedBy != "" {
+					t.Errorf("%s: decided_by = %q after a refused decision, want empty", verb, decidedBy)
+				}
+			}
+		})
+	}
+
+	// SCOPED TO THE SWITCH. With it unset, local mode decides exactly as before
+	// — the refusal must not become a local-mode-wide outage.
+	t.Run("switch off: local mode decides normally", func(t *testing.T) {
+		srv, _, apID := localSecondHumanFixture(t, "local:alice")
+		if w := localDecide(t, srv, apID, "approve", ""); w.Code != http.StatusOK {
+			t.Fatalf("switch off: status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	// SCOPED TO EGRESS. The switch governs egress_domain decisions only, so a
+	// credential approval in local mode is untouched even with it on — the
+	// refusal sits after the kind check for exactly this reason.
+	t.Run("credential approval is untouched", func(t *testing.T) {
+		t.Setenv(envEgressSecondHuman, "1")
+		srv, aap, _ := localSecondHumanFixture(t, "local:alice")
+		credID := uuid.New()
+		aap.mu.Lock()
+		runID := uuid.Nil
+		for _, ap := range aap.byID {
+			runID = ap.RunID
+		}
+		aap.byID[credID] = types.ApprovalRequest{
+			ID: credID, RunID: runID, Kind: types.ApprovalCredential,
+			RequestedScope: json.RawMessage(`{"host":"dev.azure.com","secret_name":"ado-pat"}`),
+			State:          types.ApprovalPending, RequestedAt: time.Now().UTC(),
+		}
+		aap.mu.Unlock()
+		if w := localDecide(t, srv, credID, "approve", ""); w.Code == http.StatusServiceUnavailable {
+			t.Fatalf("credential approval got the egress switch's 503: %s", w.Body.String())
+		}
+	})
 }

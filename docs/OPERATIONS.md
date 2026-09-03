@@ -535,8 +535,13 @@ with `reason: second_human_required`, landing **before** the decision is written
 so a refused decision leaves the approval `PENDING`. Scoped to `egress_domain`
 only; `credential`/`tool_call` are already admin-only. A run with an empty
 `created_by` (system-created follow-on runs) has no human creator to be the same
-as, so the rule cannot apply. Local mode binds normally — the injected operator IS
-a verified human, so `local:alice` deciding `local:alice`'s own run is refused.
+as, so the rule cannot apply. **Local mode REFUSES the switch** (`503`) rather
+than enforcing it: local mode authenticates nobody, so both the decider and the
+run's `created_by` come from the same client-supplied source — the DEV-ONLY
+`X-Wardyn-Principal` header, honored there by design — and no request in that
+mode can prove a second human decided. Configure SSO to use this switch, or
+leave it unset. The refusal is scoped to `egress_domain` decisions, so nothing
+else in local mode changes.
 
 **The `admin-token` principal BYPASSES it**, and you should plan around that. A
 bare `WARDYN_ADMIN_TOKEN` caller is attributed `system`/`admin-token` because a
