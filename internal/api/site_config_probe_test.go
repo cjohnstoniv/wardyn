@@ -117,6 +117,41 @@ func TestClassifyRedirectProbe(t *testing.T) {
 	}
 }
 
+// TestClassifyRedirectProbe_EveryStateCarriesElapsed pins what hoisting
+// ElapsedMS out of the six return sites bought: elapsed_ms is set on EVERY
+// verdict, not on the arms whoever added one remembered. Both consumers read
+// it unconditionally -- the console renders it beside the state, and
+// handleTestSiteConfigRedirect records it in the site_config.test_redirect
+// audit event -- so an arm that silently omitted it would read as "0 ms" in
+// both places with nothing red.
+func TestClassifyRedirectProbe_EveryStateCarriesElapsed(t *testing.T) {
+	const elapsed = 1234 * time.Millisecond
+	cases := []struct {
+		name      string
+		res       probeRunResult
+		wantState string
+	}{
+		{"reached", probeRunResult{hasExitCode: true, exitCode: 0}, "reached"},
+		{"bypass", probeRunResult{hasExitCode: true, exitCode: redirectProbeBypassCode}, "bypass"},
+		{"blocked (curl exit code)", probeRunResult{hasExitCode: true, exitCode: 28}, "blocked"},
+		{"timed_out", probeRunResult{timedOut: true, agentStatus: "RUNNING"}, "timed_out"},
+		{"not_run", probeRunResult{neverRan: true, incompleteReason: "image pull failed"}, "not_run"},
+		{"blocked (no exit code at all)", probeRunResult{incompleteReason: "no exit code"}, "blocked"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			c.res.elapsed = elapsed
+			got := classifyRedirectProbe(c.res, "artifactory.corp", "registry.npmjs.org", testControlPlaneURL)
+			if got.State != c.wantState {
+				t.Fatalf("state = %q, want %q (detail=%q)", got.State, c.wantState, got.Detail)
+			}
+			if got.ElapsedMS != elapsed.Milliseconds() {
+				t.Errorf("elapsed_ms = %d, want %d", got.ElapsedMS, elapsed.Milliseconds())
+			}
+		})
+	}
+}
+
 // bypass must never be reachable via a passed-through curl code: it is only
 // ever produced by the script's own explicit `exit 250`, so classify must key
 // on the sentinel exactly, and a run that never got an exit code at all must
