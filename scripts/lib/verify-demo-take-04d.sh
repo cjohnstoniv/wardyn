@@ -73,15 +73,19 @@ V04D_CREATED_B="$(v04d_get "/api/v1/runs/${V04D_B}" | jq -r '.created_at // ""' 
 head_ "Video 04d · the drive, the allocation, and the two mounts"
 # A temp file, NOT a pipe: `| while read` runs in a subshell and ok()/bad()
 # would increment counters that vanish — the bug class this script exists for.
-python3 - "$V04D_AUD_G" "$V04D_AUD_A" "$V04D_AUD_B" "$V04D_OBJ" "$V04D_STATE_A" "$V04D_CREATED_B" \
-  <<'PYEOF' > /tmp/_demo_v04d.$$ 2>/dev/null
+grade_py /tmp/_demo_v04d.$$ "V04d · the drive, the allocation and the mounts" \
+  "$V04D_OBJ" "$V04D_STATE_A" "$V04D_CREATED_B" \
+  3<<'PYEOF' < <(printf '%s\0' "${V04D_AUD_G}" "${V04D_AUD_A}" "${V04D_AUD_B}")
 import sys, json
-def rows(raw):
-    try: d = json.loads(raw)
+# The three FEEDS ride stdin NUL-separated, in the order the caller printf'd
+# them; only the short arguments are argv (grade_py's own note says why).
+feeds = sys.stdin.buffer.read().split(b"\0")
+def rows(i):
+    try: d = json.loads(feeds[i])
     except Exception: return []
     return d if isinstance(d, list) else (d.get("events") or d.get("items") or [])
-glob, a, b = rows(sys.argv[1]), rows(sys.argv[2]), rows(sys.argv[3])
-obj, state_a, created_b = sys.argv[4], sys.argv[5], sys.argv[6]
+glob, a, b = rows(0), rows(1), rows(2)
+obj, state_a, created_b = sys.argv[1], sys.argv[2], sys.argv[3]
 def data(e): return e.get("data") or {}
 
 # 2 · the drive itself. The three fields that make it THIS episode's drive: the

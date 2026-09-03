@@ -37,12 +37,13 @@ V00_CANARY="WARDYN-V00-CANARY"
 V00_WSA=$(curl -fsS "${V00_API}/api/v1/audit?action_prefix=workspace.&limit=1000" 2>/dev/null || echo '[]')
 # A temp file, NOT a pipe: `| while read` runs in a subshell and ok()/bad()
 # would increment counters that vanish — the bug class this script exists for.
-python3 - "$V00_WSA" "$V00_WS" "$V00_REACH" "$V00_JOB" <<'PYEOF' > /tmp/_demo_v00.$$ 2>/dev/null
+grade_py /tmp/_demo_v00.$$ "V00 · the workspace" "$V00_WS" "$V00_REACH" "$V00_JOB" \
+  3<<'PYEOF' < <(printf '%s\0' "${V00_WSA}")
 import sys, json
-try: d = json.loads(sys.argv[1])
+try: d = json.loads(sys.stdin.buffer.read().split(b"\0")[0])
 except Exception: d = []
 ev = d if isinstance(d, list) else d.get("events") or d.get("items") or []
-name, reach, job = sys.argv[2], sys.argv[3], sys.argv[4]
+name, reach, job = sys.argv[1], sys.argv[2], sys.argv[3]
 
 created = [e for e in ev if e.get("action") == "workspace.create"
            and ((e.get("data") or {}).get("name") or "") == name]
@@ -97,12 +98,13 @@ head_ "Video 00 · the decisions"
 # 4.16 — and cannot catch the .first() trap, where the driver decides a row it
 # did not mean to.
 V00_DEC=$(curl -fsS "${V00_API}/api/v1/audit?action=approval.decide&limit=1000" 2>/dev/null || echo '[]')
-python3 - "$V00_DEC" "$V00_REACH" "$V00_VILLAIN" <<'PYEOF' > /tmp/_demo_v00b.$$ 2>/dev/null
+grade_py /tmp/_demo_v00b.$$ "V00 · the decisions" "$V00_REACH" "$V00_VILLAIN" \
+  3<<'PYEOF' < <(printf '%s\0' "${V00_DEC}")
 import sys, json
-try: d = json.loads(sys.argv[1])
+try: d = json.loads(sys.stdin.buffer.read().split(b"\0")[0])
 except Exception: d = []
 ev = d if isinstance(d, list) else d.get("events") or d.get("items") or []
-reach, villain = sys.argv[2], sys.argv[3]
+reach, villain = sys.argv[1], sys.argv[2]
 # approval.decide carries the host at the TOP level of data (approval.go lifts
 # it out of requested_scope) plus the raw decision_scope: "" means "no scope
 # recorded", which Normalize() reads as today's default, run.
@@ -133,12 +135,13 @@ rm -f /tmp/_demo_v00b.$$
 
 head_ "Video 00 · what the run may hold"
 V00_SEC=$(curl -fsS "${V00_API}/api/v1/audit?action_prefix=secret.&limit=1000" 2>/dev/null || echo '[]')
-python3 - "$V00_SEC" "$V00_SECRET" <<'PYEOF' > /tmp/_demo_v00c.$$ 2>/dev/null
+grade_py /tmp/_demo_v00c.$$ "V00 · what the run may hold" "$V00_SECRET" \
+  3<<'PYEOF' < <(printf '%s\0' "${V00_SEC}")
 import sys, json
-try: d = json.loads(sys.argv[1])
+try: d = json.loads(sys.stdin.buffer.read().split(b"\0")[0])
 except Exception: d = []
 ev = d if isinstance(d, list) else d.get("events") or d.get("items") or []
-name = sys.argv[2]
+name = sys.argv[1]
 def has(action): return any(e.get("action") == action and e.get("target") == name for e in ev)
 print("V00_SECRET_WRITTEN", has("secret.write"))
 print("V00_SECRET_DELETED", has("secret.delete"))
@@ -166,11 +169,15 @@ rm -f /tmp/_demo_v00c.$$
 # would otherwise be this arm's verdict on a stack that answered nothing at
 # all — a green leak check over no evidence.
 V00_AUD=$(curl -fsS "${V00_API}/api/v1/audit?limit=1000" 2>/dev/null || echo '[]')
-V00_AUD_N="$(python3 -c 'import json,sys
-try: d = json.loads(sys.argv[1])
+# STDIN, not argv, for the same E2BIG reason grade_py states: this feed is the
+# WHOLE trail, so it is the likeliest of them all to be past MAX_ARG_STRLEN — and
+# an exec that fails here reports 0 rows, which the arm below already treats as a
+# failure. Feeding it on stdin makes the count real rather than fail-safe.
+V00_AUD_N="$(printf '%s' "${V00_AUD}" | python3 -c 'import json,sys
+try: d = json.loads(sys.stdin.read())
 except Exception: d = []
 ev = d if isinstance(d, list) else d.get("events") or d.get("items") or []
-print(len(ev))' "${V00_AUD}" 2>/dev/null || echo 0)"
+print(len(ev))' 2>/dev/null || echo 0)"
 if [[ "${V00_AUD_N:-0}" -le 0 ]]; then
   bad "the audit feed came back empty — the leak check proved nothing (is the stack up on ${V00_API}?)"
 elif grep -q "${V00_CANARY}" <<<"${V00_AUD}"; then
