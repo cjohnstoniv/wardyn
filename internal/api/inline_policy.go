@@ -154,6 +154,12 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		// SECMODEL-1 gate: a clamp bounds a member without blocking them.)
 		spec := *req.InlinePolicy
 		clampWarnings := append([]string(nil), ceiling.Warnings...)
+		// env_secret's admin-only posture, applied FIRST and unconditionally for
+		// a non-operator — it is a role check, not a ceiling check, so it must
+		// not sit behind the ceiling-scoped gate below (see
+		// memberEnvSecretIsAdminOnly).
+		spec, envWarns := s.boundEnvSecretPosture(ctx, r, spec, dryRun)
+		clampWarnings = append(clampWarnings, envWarns...)
 		// DELIBERATELY isOperator (three-tier doctrine, internal/auth/oidc's
 		// RoleSecurityAdmin), in lockstep with denyMemberRequest: a security
 		// admin's OWN run is clamped like anyone else's. They author the
@@ -214,6 +220,17 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		return types.RunPolicySpec{}, nil, nil, false
 	}
 	storedWarns := append([]string(nil), ceiling.Warnings...)
+	// Same unconditional env_secret posture the inline branch applies, in the
+	// same position, and it is the half PF-1's scoping below CANNOT carry: the
+	// clamp fires only for an ASSIGNED member selecting a row, while this rule
+	// binds every non-operator on every stored AND default resolution. Without
+	// it an unassigned member — the default posture — selected a stored row (or
+	// took the deployment default) carrying an env_secret grant and the
+	// operator's raw secret value landed in their sandbox env at
+	// resolveEnvSecretGrants, contradicting three docs that state the control
+	// without qualification.
+	spec, envWarns := s.boundEnvSecretPosture(ctx, r, spec, dryRun)
+	storedWarns = append(storedWarns, envWarns...)
 	// PF-1, the central escape: a stored policy row is admin-authored CONTENT,
 	// but ANY signed-in caller may put one on their own run (policy_id is
 	// ungated, and it has to stay that way — gating it removes a legitimate
@@ -258,6 +275,102 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		return types.RunPolicySpec{}, nil, nil, false
 	}
 	return spec, policyID, storedWarns, true
+}
+
+// memberEnvSecretIsAdminOnly is THE env_secret posture rule, in one place: a
+// NON-OPERATOR does not hold an env_secret grant unless the deployment opened
+// envAllowMemberEnvSecret.
+//
+// It takes no ceiling and no principal's assignment, because the rule needs
+// neither — it is a role check plus an env switch. That is exactly what made
+// the original placement wrong: the drop lived only inside filterMemberGrants,
+// which is reached only from boundMemberSpec, whose stored/default invocation is
+// scoped to `ceiling.Profile != nil`. A member with NO governance assignment —
+// the default posture, and every pre-0.7 deployment upgrading into 0.7 — ran no
+// member pipeline at all, so the control the docs state UNCONDITIONALLY
+// (threatmodel/THREAT-MODEL.md §5.1a, docs/ENV.md's WARDYN_ALLOW_MEMBER_ENV_SECRET
+// row, docs/POLICIES.md's env_secret row) simply did not fire for them and the
+// operator's raw secret value reached their sandbox env at
+// resolveEnvSecretGrants. A ceiling-scoped gate must never carry a rule that is
+// not about the ceiling.
+func memberEnvSecretIsAdminOnly() bool { return !envEnabled(os.Getenv(envAllowMemberEnvSecret)) }
+
+// envSecretAdminOnlyWarning is the one message both drop sites use, so the
+// member sees the same sentence in Review whichever path bounded their run.
+func envSecretAdminOnlyWarning(secretRef string) string {
+	return fmt.Sprintf("dropped env_secret grant for %q: env_secret is admin-only (an operator can open it with %s)",
+		secretRef, envAllowMemberEnvSecret)
+}
+
+// dropAdminOnlyEnvSecretGrants applies memberEnvSecretIsAdminOnly to a spec a
+// non-operator is putting on their own run, and returns the warnings + audit
+// drops the removal owes.
+//
+// UNCONDITIONAL on every member path, which is the whole fix: the other kinds a
+// member may reuse are bounded after delivery (an api_key value never leaves the
+// broker, a git_pat reaches git through the helper, an ssh_key is wiped after
+// the clone), while an env_secret is a raw value in the process environment for
+// the run's whole life, with no mint, no TTL and nothing to revoke (see
+// GrantEnvSecret). "The operator listed this pairing" is a weaker statement here
+// than for every other kind, so it is not the statement this rule rests on.
+//
+// The drop is AUDITED, not merely warned, under the SAME authz.denied reason
+// filterMemberGrants' drops already carry (`grant_pairing_not_eligible`, a
+// closed vocabulary docs/OPERATIONS.md is the source of record for): an operator
+// reading the stream must be able to see that a member's grant went, and the
+// inline path already recorded it that way — adding a second reason value for
+// the same event would break the enum's documented stability for no new
+// information.
+//
+// An operator is never called with (the caller checks isOperator): the ceiling
+// authority is not clamped by its own ceiling. A SECURITY admin is, deliberately
+// — same three-tier doctrine as resolveRunPolicy's inline clamp.
+func dropAdminOnlyEnvSecretGrants(grants []types.GrantSpec) ([]types.GrantSpec, []string, []capDrop) {
+	if !memberEnvSecretIsAdminOnly() || !slices.ContainsFunc(grants,
+		func(g types.GrantSpec) bool { return g.Kind == types.GrantEnvSecret }) {
+		return grants, nil, nil
+	}
+	kept := make([]types.GrantSpec, 0, len(grants))
+	var warns []string
+	var drops []capDrop
+	for _, g := range grants {
+		if g.Kind != types.GrantEnvSecret {
+			kept = append(kept, g)
+			continue
+		}
+		// The env var NAME sits in the host slot for this kind
+		// (storedSecretGrantPairing); the SECRET name is what the warning names,
+		// matching filterMemberGrants' wording. An undecodable scope is NOT an
+		// error here — it is dropped like any other env_secret, and the caller's
+		// later validatePolicySpec/validateInlineSecretRefs still see a spec
+		// with nothing left to be malformed about.
+		_, secretRef, _, _, _ := storedSecretGrantPairing(g)
+		w := envSecretAdminOnlyWarning(secretRef)
+		warns = append(warns, w)
+		drops = append(drops, capDrop{reason: "grant_pairing_not_eligible", detail: w})
+	}
+	return kept, warns, drops
+}
+
+// boundEnvSecretPosture is resolveRunPolicy's per-branch application of
+// dropAdminOnlyEnvSecretGrants: it runs for every non-operator caller on BOTH
+// branches, BEFORE (and independently of) the ceiling-scoped member pipeline, so
+// no assignment state can decide whether the rule fires. dryRun suppresses the
+// audit write for the same reason the rest of resolveRunPolicy does — a
+// preflight preview is not a policy USE.
+func (s *Server) boundEnvSecretPosture(ctx context.Context, r *http.Request, spec types.RunPolicySpec, dryRun bool) (types.RunPolicySpec, []string) {
+	if s.isOperator(r.Context()) {
+		return spec, nil
+	}
+	kept, warns, drops := dropAdminOnlyEnvSecretGrants(spec.EligibleGrants)
+	if len(drops) == 0 {
+		return spec, nil
+	}
+	spec.EligibleGrants = kept
+	if !dryRun {
+		s.auditMemberPolicyDrops(ctx, r, drops)
+	}
+	return spec, warns
 }
 
 // capDrop is one thing a capability took away from a member's inline policy:
@@ -522,18 +635,14 @@ func (s *Server) filterMemberGrants(ctx context.Context, owner string, allowedDo
 		}
 		// env_secret is ADMIN-ONLY by default, ahead of the pairing check — a
 		// member does not get one even for a pairing the operator DID list.
-		// The other kinds a member may reuse are bounded after delivery: an
-		// api_key value never leaves the broker, a git_pat reaches git through
-		// the helper, an ssh_key is wiped after the clone. An env_secret is a
-		// raw value in the process environment for the run's whole life, with no
-		// mint, no TTL and nothing to revoke (see GrantEnvSecret), so "the
-		// operator listed this pairing" is a weaker statement here than it is
-		// for every other kind. An operator who has weighed that opens
-		// envAllowMemberEnvSecret; until then the answer is no.
-		if g.Kind == types.GrantEnvSecret && !envEnabled(os.Getenv(envAllowMemberEnvSecret)) {
-			warns = append(warns, fmt.Sprintf(
-				"dropped env_secret grant for %q: env_secret is admin-only (an operator can open it with %s)",
-				secretRef, envAllowMemberEnvSecret))
+		// Defence in depth only: resolveRunPolicy already ran
+		// dropAdminOnlyEnvSecretGrants over the same spec on EVERY member path,
+		// so by the time a grant reaches here there is nothing left for this arm
+		// to drop. It stays because filterMemberGrants is the grant gate and a
+		// gate that trusts its caller to have already applied half its rule is
+		// one refactor away from applying none of it.
+		if g.Kind == types.GrantEnvSecret && memberEnvSecretIsAdminOnly() {
+			warns = append(warns, envSecretAdminOnlyWarning(secretRef))
 			continue
 		}
 		if !storedSecretPairingInCeiling(g.Kind, host, secretRef, knownHostsRef, ceiling) {

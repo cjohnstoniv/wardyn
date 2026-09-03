@@ -5,12 +5,16 @@ package api
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -136,4 +140,172 @@ func TestResolveEnvSecretGrants(t *testing.T) {
 	if env2["ANTHROPIC_BASE_URL"] != "https://api.anthropic.com" {
 		t.Fatalf("ANTHROPIC_BASE_URL = %q, want the platform value — a grant must not override platform-authored env", env2["ANTHROPIC_BASE_URL"])
 	}
+}
+
+// envSecretCeilingStore is the fixture for the posture's REAL door: a member
+// resolving a run policy through resolveRunPolicy. `profile` nil models the
+// default posture — a principal with NO governance assignment, which is every
+// deployment that has not adopted 0.7 governance profiles and every pre-0.7
+// deployment upgrading into it.
+type envSecretCeilingStore struct {
+	store.Store
+	profile *types.GovernanceProfile
+	policy  types.RunPolicy
+}
+
+func (s *envSecretCeilingStore) ResolveGovernanceProfile(context.Context, []string, []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+	if s.profile == nil {
+		return nil, types.CapabilitySubjectUser, store.ErrNotFound
+	}
+	return s.profile, types.CapabilitySubjectUser, nil
+}
+func (s *envSecretCeilingStore) HasGroupTierAssignments(context.Context) (bool, error) {
+	return false, nil
+}
+func (s *envSecretCeilingStore) GetPolicy(context.Context, uuid.UUID) (types.RunPolicy, error) {
+	return s.policy, nil
+}
+func (s *envSecretCeilingStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (s *envSecretCeilingStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (s *envSecretCeilingStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
+	return nil, nil
+}
+
+// TestEnvSecretPosture_BindsWithoutAGovernanceAssignment is the pin for the
+// admin-only posture at the seam that decides a real run, not at
+// filterMemberGrants' front door.
+//
+// TestFilterMemberGrants_EnvSecretIsAdminOnly above calls filterMemberGrants
+// DIRECTLY, so it cannot see whether anything reaches it — and for the default
+// posture nothing did: the stored/default branch of resolveRunPolicy gates the
+// whole member pipeline on `ceiling.Profile != nil`, so an UNASSIGNED member
+// selecting a stored row (or taking the deployment default) kept the grant
+// verbatim and resolveEnvSecretGrants wrote the operator's raw secret value into
+// their sandbox env. THREAT-MODEL.md §5.1a, docs/ENV.md's
+// WARDYN_ALLOW_MEMBER_ENV_SECRET row and docs/POLICIES.md's env_secret row all
+// state the control without qualification.
+//
+// Four arms over the two axes that gate it — assignment (the bug) and the route
+// the spec arrived by — plus the opt-in arm, which is what stops the test from
+// being satisfied by deleting env_secret support outright.
+func TestEnvSecretPosture_BindsWithoutAGovernanceAssignment(t *testing.T) {
+	grant := envSecretGrant("CORP_API_TOKEN", "corp-api-key")
+	// The ceiling LISTS the pairing: "dropped even for a ceiling-listed
+	// pairing" is the documented claim, so a fixture the ceiling refuses on
+	// pairing grounds would prove nothing about the posture.
+	ceiling := types.RunPolicySpec{
+		MinConfinementClass: types.CC2,
+		AllowedDomains:      []string{"api.anthropic.com"},
+		EligibleGrants:      []types.GrantSpec{grant},
+	}
+	wide := types.RunPolicySpec{
+		MinConfinementClass: types.CC2,
+		AllowedDomains:      []string{"api.anthropic.com"},
+		EligibleGrants:      []types.GrantSpec{grant},
+	}
+
+	// route names how the spec reached the run: a stored row the member selected
+	// by id, an inline body they authored, or neither — the deployment default,
+	// which resolvePolicy answers with the caller's own ceiling.
+	resolve := func(t *testing.T, assigned bool, route string) ([]types.GrantSpec, []map[string]any) {
+		t.Helper()
+		h := newHarness(t)
+		policyID := uuid.New()
+		st := &envSecretCeilingStore{policy: types.RunPolicy{ID: policyID, Name: "wide", Spec: wide}}
+		if assigned {
+			st.profile = &types.GovernanceProfile{ID: uuid.New(), Name: "walled", Ceiling: ceiling}
+		}
+		cfg := baseTestConfig(h, st)
+		cfg.OIDC = &oidc.Authenticator{}
+		cfg.DefaultPolicy = ceiling
+		srv := New(cfg)
+
+		req := &createRunRequest{Agent: "claude-code", Repo: "acme/widgets"}
+		switch route {
+		case "stored":
+			req.PolicyID = &policyID
+		case "inline":
+			inline := wide
+			req.InlinePolicy = &inline
+		case "default": // neither — the caller's ceiling IS the spec
+		default:
+			t.Fatalf("unknown route %q", route)
+		}
+		r, ctx := boundMemberRequest(t)
+		spec, _, _, ok := srv.resolveRunPolicy(ctx, httptest.NewRecorder(), r, req, false)
+		if !ok {
+			t.Fatalf("resolveRunPolicy refused (assigned=%v route=%s)", assigned, route)
+		}
+		var env []types.GrantSpec
+		for _, g := range spec.EligibleGrants {
+			if g.Kind == types.GrantEnvSecret {
+				env = append(env, g)
+			}
+		}
+		return env, dropAudits(t, h.audit.events)
+	}
+
+	for _, c := range []struct {
+		name     string
+		assigned bool
+		route    string
+	}{
+		{"unassigned member, stored row", false, "stored"},
+		{"unassigned member, deployment default", false, "default"},
+		{"unassigned member, inline body", false, "inline"},
+		{"assigned member, stored row", true, "stored"},
+		{"assigned member, deployment default", true, "default"},
+		{"assigned member, inline body", true, "inline"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			env, drops := resolve(t, c.assigned, c.route)
+			if len(env) != 0 {
+				t.Fatalf("env_secret grants on the resolved spec = %d (%+v), want 0 — env_secret is admin-only by default", len(env), env)
+			}
+			// Warned is not enough: an operator must be able to see from the
+			// stream that a member's grant went.
+			if len(drops) == 0 {
+				t.Fatal("no authz.denied audit event — the env_secret drop was silent")
+			}
+		})
+	}
+
+	// The opt-in still works, and still binds the (name, secret) pairing to the
+	// ceiling for an assigned member: a fix that simply deleted the kind would
+	// pass every arm above and fail here.
+	t.Run("operator opened the posture", func(t *testing.T) {
+		t.Setenv(envAllowMemberEnvSecret, "1")
+		if env, _ := resolve(t, false, "stored"); len(env) != 1 {
+			t.Fatalf("posture open, unassigned member: env_secret grants = %d, want 1", len(env))
+		}
+		if env, _ := resolve(t, true, "stored"); len(env) != 1 {
+			t.Fatalf("posture open, assigned member: env_secret grants = %d, want 1", len(env))
+		}
+	})
+
+	// An OPERATOR is never clamped by their own ceiling — the posture is a role
+	// check, and this is the half that proves it is one.
+	t.Run("operator run is unaffected", func(t *testing.T) {
+		h := newHarness(t)
+		policyID := uuid.New()
+		st := &envSecretCeilingStore{policy: types.RunPolicy{ID: policyID, Spec: wide}}
+		cfg := baseTestConfig(h, st)
+		cfg.OIDC = &oidc.Authenticator{}
+		cfg.DefaultPolicy = ceiling
+		srv := New(cfg)
+		ctx := operatorCtx("sub-admin", "admin@corp.example", oidc.RoleAdmin)
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx)
+		spec, _, _, ok := srv.resolveRunPolicy(ctx, httptest.NewRecorder(), r,
+			&createRunRequest{Agent: "claude-code", Repo: "acme/widgets", PolicyID: &policyID}, false)
+		if !ok {
+			t.Fatal("resolveRunPolicy refused an operator")
+		}
+		if len(spec.EligibleGrants) != 1 || spec.EligibleGrants[0].Kind != types.GrantEnvSecret {
+			t.Fatalf("operator's grants = %+v, want the env_secret grant kept", spec.EligibleGrants)
+		}
+	})
 }
