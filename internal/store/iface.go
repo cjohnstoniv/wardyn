@@ -213,6 +213,13 @@ type Store interface {
 	UpsertCapabilityGrant(ctx context.Context, g types.CapabilityGrant) (types.CapabilityGrant, error)
 	DeleteCapabilityGrant(ctx context.Context, id uuid.UUID) error
 	ListCapabilityGrants(ctx context.Context) ([]types.CapabilityGrant, error)
+	// ListGroupDenyGrants returns the group-subject DENY rows of one kind — the
+	// only rows the unresolvable-group-deny refusal can match. Separate from
+	// ListCapabilityGrants because that refusal is on the request path of every
+	// caller with an unanswerable group snapshot (every pre-0.7 API token), and
+	// answering it with the whole table made an authorization check cost scale
+	// with the table's size. See the implementation.
+	ListGroupDenyGrants(ctx context.Context, capability string) ([]types.CapabilityGrant, error)
 	// ListCapabilityGrantsFor returns the grants that could apply to one caller:
 	// the `all` rows plus the `user` rows naming any of users (sub AND email)
 	// plus the `group` rows naming any of groups. Not filtered by capability —

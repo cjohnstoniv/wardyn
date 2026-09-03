@@ -734,6 +734,17 @@ signing in again (or re-minting the token) resolves it for good. Where a deny ha
 to bite with no store read at all, write it against the **user** (either
 identity).
 
+**Re-mint pre-0.7 API tokens.** A token minted before 0.7 recorded nothing about
+whether its group snapshot was complete, and that unknown is read as
+"incomplete" — the fail-closed choice. So every request such a token makes takes
+the extra check above, on every capability it touches, for the whole life of the
+token. It is correct but it is not free, and it is the one lasting cost of the
+upgrade: re-minting moves those callers (CI jobs, scripts, the headless `wardyn
+run` lane) back onto the ordinary indexed path and removes the standing
+possibility of a group-completeness refusal they cannot themselves resolve.
+`GET /api/v1/tokens` lists the deployment's tokens with their `last_used_at`, so
+the dead ones can be revoked rather than re-minted.
+
 **A third cause of a partial snapshot: the IdP's own overage.** Entra ID stops
 sending the `groups` (or `roles`) claim altogether once a human is in more groups
 than the token limit — **200** for a JWT, 150 for SAML — and sends a `_claim_names` /

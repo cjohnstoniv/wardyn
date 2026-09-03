@@ -233,3 +233,90 @@ func TestPG_CapabilityGrants_SubjectTypeCheck(t *testing.T) {
 		t.Error("stored a grant with an unknown effect; the CHECK is missing")
 	}
 }
+
+// TestPG_ListGroupDenyGrants_PredicateMatchesAGoSideScan pins the SQL predicate
+// that replaced internal/api's whole-table scan on the unresolvable-group-deny
+// FAIL-CLOSED path. The api-side equivalence test drives a Go double, so it
+// cannot see this query at all — and this query is the newly written half, so
+// it is where a narrowing mistake would actually live.
+//
+// The oracle is a Go filter applying the predicate the old code applied in
+// Go (subject_type='group' AND effect='deny' AND capability=$1). Postgres must
+// return exactly that set. A dropped clause here means either a deny that stops
+// firing (a breach) or one that fires on rows the old path ignored (every
+// pre-0.7 token refused on every deployment).
+func TestPG_ListGroupDenyGrants_PredicateMatchesAGoSideScan(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	kind := "test_groupdeny_" + uuid.NewString()
+	otherKind := "test_groupdeny_other_" + uuid.NewString()
+
+	// Every combination of the three predicate fields, so each clause has a row
+	// that only it excludes — plus two rows on a DIFFERENT kind, since the kind
+	// filter is the one carrying a bind parameter.
+	seed := []types.CapabilityGrant{
+		{SubjectType: types.CapabilitySubjectGroup, Subject: "walled", Capability: kind, Value: "prod-db", Effect: types.CapabilityDeny},
+		{SubjectType: types.CapabilitySubjectGroup, Subject: "contractors", Capability: kind, Value: "*.corp.example", Effect: types.CapabilityDeny},
+		{SubjectType: types.CapabilitySubjectGroup, Subject: "walled", Capability: kind, Value: "allowed-db", Effect: types.CapabilityAllow},
+		{SubjectType: types.CapabilitySubjectUser, Subject: "alice@example.com", Capability: kind, Value: "prod-db", Effect: types.CapabilityDeny},
+		{SubjectType: types.CapabilitySubjectAll, Subject: "", Capability: kind, Value: "prod-db", Effect: types.CapabilityDeny},
+		{SubjectType: types.CapabilitySubjectGroup, Subject: "walled", Capability: otherKind, Value: "prod-db", Effect: types.CapabilityDeny},
+		{SubjectType: types.CapabilitySubjectUser, Subject: "bob@example.com", Capability: otherKind, Value: "x", Effect: types.CapabilityAllow},
+	}
+	for _, g := range seed {
+		g.CreatedBy = "admin@example.com"
+		if _, err := st.UpsertCapabilityGrant(ctx, g); err != nil {
+			t.Fatalf("seed %+v: %v", g, err)
+		}
+	}
+
+	// The oracle: the predicate the pre-fix Go loop applied.
+	wantSet := map[string]bool{}
+	for _, g := range seed {
+		if g.SubjectType == types.CapabilitySubjectGroup && g.Effect == types.CapabilityDeny && g.Capability == kind {
+			wantSet[g.Subject+"|"+g.Value] = true
+		}
+	}
+	if len(wantSet) == 0 {
+		t.Fatal("the oracle selected nothing; the fixture proves nothing")
+	}
+
+	got, err := st.ListGroupDenyGrants(ctx, kind)
+	if err != nil {
+		t.Fatalf("ListGroupDenyGrants: %v", err)
+	}
+	gotSet := map[string]bool{}
+	for _, g := range got {
+		if g.SubjectType != types.CapabilitySubjectGroup {
+			t.Errorf("returned a %s-tier row (%+v) — the subject_type clause is not holding", g.SubjectType, g)
+		}
+		if g.Effect != types.CapabilityDeny {
+			t.Errorf("returned an %s row (%+v) — the effect clause is not holding; every pre-0.7 token would be refused on an ALLOW row", g.Effect, g)
+		}
+		if g.Capability != kind {
+			t.Errorf("returned a %q row while asking for %q — the kind clause is not holding", g.Capability, kind)
+		}
+		gotSet[g.Subject+"|"+g.Value] = true
+	}
+	for k := range wantSet {
+		if !gotSet[k] {
+			t.Errorf("row %q missing from the result — a group DENY that no longer reaches the refusal is a breach, not a slow path", k)
+		}
+	}
+	for k := range gotSet {
+		if !wantSet[k] {
+			t.Errorf("row %q returned but the Go-side scan excludes it", k)
+		}
+	}
+
+	// And the empty case, which is the one nearly every deployment hits: no
+	// group deny rows of that kind => no rows, not "all of them".
+	empty, err := st.ListGroupDenyGrants(ctx, "test_groupdeny_absent_"+uuid.NewString())
+	if err != nil {
+		t.Fatalf("ListGroupDenyGrants(absent kind): %v", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("an unknown kind returned %d rows, want 0 — the refusal must stay SCOPED or it denies every pre-0.7 token", len(empty))
+	}
+}

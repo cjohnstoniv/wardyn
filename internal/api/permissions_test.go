@@ -61,6 +61,16 @@ func (s *permStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGra
 	return s.grants, nil
 }
 
+func (s *permStore) ListGroupDenyGrants(_ context.Context, capability string) ([]types.CapabilityGrant, error) {
+	var out []types.CapabilityGrant
+	for _, g := range s.grants {
+		if g.SubjectType == types.CapabilitySubjectGroup && g.Effect == types.CapabilityDeny && g.Capability == capability {
+			out = append(out, g)
+		}
+	}
+	return out, nil
+}
+
 // PutCapabilityEnforcement REPLACES the map, exactly as the PG statement does —
 // an omitted key is a real "turn it off", which is the round-trip the handler's
 // doc comment stakes its upgrade story on.

@@ -1231,6 +1231,9 @@ func (s *authzStore) DeleteCapabilityGrant(context.Context, uuid.UUID) error {
 func (s *authzStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
+func (s *authzStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
 func (s *authzStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }

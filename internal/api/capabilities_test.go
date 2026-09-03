@@ -68,6 +68,13 @@ type capStore struct {
 	enf    map[string]bool
 	err    error
 
+	// Read counters. fullTableReads is the one that matters: the
+	// unresolvable-group-deny check must never issue a whole-table read again
+	// (it did, once per VALUE checked, on the path every pre-0.7 API token
+	// takes on every request). groupDenyReads is its replacement.
+	fullTableReads int
+	groupDenyReads int
+
 	// govProfile, when set, is the profile the resolver returns for ANY caller
 	// — the store's own ORDER BY has its own pg test (TestPG_Resolve
 	// GovernanceProfile); what the api-side tests need to drive is the ANSWER.
@@ -129,16 +136,36 @@ func (s *capStore) HasGroupTierAssignments(context.Context) (bool, error) {
 	return s.govHasGroupTier, nil
 }
 
-// ListCapabilityGrants is the WHOLE fake table — the admin listing, and the
-// read capScan's unresolvable-group-deny check makes when the caller's group
-// snapshot is unanswerable. Embedding store.Store makes an unimplemented
-// method a nil-pointer panic rather than a silent answer, which is why this
-// one is spelled out here rather than left to the embed.
+// ListCapabilityGrants is the WHOLE fake table — the ADMIN LISTING, and now
+// nothing else. The resolver used to reach it on every unanswerable-snapshot
+// check; the counter is what keeps it from creeping back. Embedding store.Store
+// makes an unimplemented method a nil-pointer panic rather than a silent
+// answer, which is why this one is spelled out here rather than left to the
+// embed.
 func (s *capStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
+	s.fullTableReads++
 	if s.err != nil {
 		return nil, s.err
 	}
 	return slices.Clone(s.grants), nil
+}
+
+// ListGroupDenyGrants mirrors the SQL predicate exactly — group + deny + this
+// kind — so a double can never be the reason the fail-closed path agrees with
+// the full scan it replaced (TestCapUnresolvableGroupDenyMatchesFullScan).
+// fullReads counts the calls the resolver must no longer make.
+func (s *capStore) ListGroupDenyGrants(_ context.Context, capability string) ([]types.CapabilityGrant, error) {
+	s.groupDenyReads++
+	if s.err != nil {
+		return nil, s.err
+	}
+	var out []types.CapabilityGrant
+	for _, g := range s.grants {
+		if g.SubjectType == types.CapabilitySubjectGroup && g.Effect == types.CapabilityDeny && g.Capability == capability {
+			out = append(out, g)
+		}
+	}
+	return out, nil
 }
 
 func (s *capStore) ListCapabilityGrantsFor(_ context.Context, users, groups []string) ([]types.CapabilityGrant, error) {

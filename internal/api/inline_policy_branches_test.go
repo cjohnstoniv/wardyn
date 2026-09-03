@@ -43,6 +43,10 @@ func (s *memberBoundStore) ListCapabilityGrants(context.Context) ([]types.Capabi
 	return nil, nil
 }
 
+func (s *memberBoundStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+
 func (s *memberBoundStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
