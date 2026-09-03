@@ -315,6 +315,54 @@ func TestResolveUserDrive(t *testing.T) {
 		}
 	})
 
+	t.Run("an ALL-tier winner under an unusable snapshot is refused, not served", func(t *testing.T) {
+		// The two arms above take the shape where the store matches NOTHING on
+		// user subjects alone (ErrNotFound), so the refusal is reached from an
+		// absence. This is the shape where the store MATCHES: the everyone row
+		// wins on user subjects alone, and the resolver must still refuse —
+		// because the tier it matched at is not `user`, and a group row the
+		// snapshot dropped would have outranked it.
+		//
+		// It is the reachable half of the hazard rather than the theoretical
+		// one. An `all`-tier row is what a deployment writes FIRST (one drive
+		// for everybody) and group rows arrive later, so the store usually DOES
+		// have an answer here — and serving it hands the member the everyone
+		// drive, at whatever mode it carries, in place of the read-only group
+		// drive an admin allocated them.
+		allTier := func() *driveStore {
+			d := driveFixture(func(d *types.UserDrive) { d.Writable = true })
+			return &driveStore{
+				drive: d,
+				grant: grantFixture(d.ID, func(g *types.UserDriveGrant) {
+					g.SubjectType, g.Subject = types.CapabilitySubjectAll, ""
+				}),
+				tier: types.CapabilitySubjectAll, hasGroupTier: true,
+			}
+		}
+		for name, ctx := range map[string]context.Context{
+			"a nil snapshot":       driveMemberCtx(nil, false),
+			"a truncated snapshot": driveMemberCtx([]string{"a-team"}, true),
+		} {
+			t.Run(name, func(t *testing.T) {
+				got, err := driveServer(allTier()).resolveUserDrive(ctx)
+				if !errors.Is(err, errGroupsSnapshotStale) {
+					t.Fatalf("resolve = %+v, %v; want errGroupsSnapshotStale — the everyone row matched on user subjects "+
+						"alone while a group-tier grant exists that the snapshot may be hiding", got, err)
+				}
+				if got != nil {
+					t.Errorf("a refused resolve still handed back a drive: %+v", got)
+				}
+			})
+		}
+		// The control: with the snapshot COMPLETE the same everyone row is the
+		// honest answer and is served, so the refusal is about the snapshot and
+		// not about all-tier allocations.
+		got, err := driveServer(allTier()).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		if err != nil || got == nil || !got.Writable || got.Tier != types.CapabilitySubjectAll {
+			t.Fatalf("resolve = %+v, %v; want the writable everyone row served on a complete snapshot", got, err)
+		}
+	})
+
 	t.Run("a user-tier match is served despite an unusable snapshot", func(t *testing.T) {
 		// user > group > all, so an explicitly named principal's drive is fully
 		// determined whatever their groups are. Refusing would lock out exactly
@@ -575,14 +623,36 @@ func TestResolveUserDrive(t *testing.T) {
 		// exactly the people an admin took the trouble to name out of being
 		// told why their drive stopped, on the deployment shape (a group-tier
 		// grant exists) where the refusal otherwise fires.
-		st := pausedDriveStore(nil)
-		st.hasGroupTier, st.userTierOnly = true, true
-		got, err := driveServer(st).resolveUserDrive(driveMemberCtx(nil, false))
-		if err != nil {
-			t.Fatalf("resolve with an unusable snapshot: %v", err)
-		}
-		if got == nil || !got.Paused {
-			t.Fatalf("resolved = %+v, want the paused allocation served", got)
+		//
+		// BOTH unusable shapes, because they arrive by different routes and the
+		// resolver reads them from different places: a nil snapshot is a
+		// pre-0.6 cookie, a truncated one is a live session whose IdP sent more
+		// groups than the cookie holds. A member in that second state is having
+		// an ordinary day, and telling them "sign in again" for an allocation
+		// that is simply switched off is the wrong sentence and the wrong
+		// remedy.
+		for name, ctx := range map[string]context.Context{
+			"a nil snapshot":       driveMemberCtx(nil, false),
+			"a truncated snapshot": driveMemberCtx([]string{"a-team"}, true),
+		} {
+			t.Run(name, func(t *testing.T) {
+				st := pausedDriveStore(nil)
+				st.hasGroupTier, st.userTierOnly = true, true
+				got, err := driveServer(st).resolveUserDrive(ctx)
+				if err != nil {
+					t.Fatalf("resolve with an unusable snapshot: %v", err)
+				}
+				if got == nil || !got.Paused {
+					t.Fatalf("resolved = %+v, want the paused allocation served", got)
+				}
+				// And still nothing derived: the paused fold runs before the
+				// derivation on this path too, so an unusable snapshot cannot be
+				// the thing that produces a home name for a drive that mounts
+				// nothing.
+				if got.HomeName != "" || got.ObjectName != "" {
+					t.Errorf("home/object = %q/%q, want both empty", got.HomeName, got.ObjectName)
+				}
+			})
 		}
 	})
 }
@@ -1082,4 +1152,166 @@ func TestPreviewUserDriveAnswersTheSameRefusalAsLaunch(t *testing.T) {
 			t.Fatalf("code = %d, want 200 once the groups are supplied; body=%s", w.Code, w.Body.String())
 		}
 	})
+}
+
+// ─── preview IS enforcement, in the answer as well as in the refusal ──────────
+
+// drivePreviewAnswer is the derived answer, comparable by value, in the shape
+// BOTH surfaces produce it: what the run resolver decided (types.ResolvedDrive)
+// and what the admin's preview reported (userDrivePreviewResponse). Reduced to
+// one struct so a case says "these are the same answer" rather than comparing
+// seven fields and quietly forgetting the eighth when one is added.
+type drivePreviewAnswer struct {
+	Tier         types.CapabilitySubjectType
+	Home, Object string
+	Size         int
+	Writable     bool
+	Paused       bool
+	Enforcement  types.StorageEnforcement
+}
+
+func drivePreviewAnswerOf(r *types.ResolvedDrive) drivePreviewAnswer {
+	if r == nil {
+		return drivePreviewAnswer{}
+	}
+	return drivePreviewAnswer{
+		Tier: r.Tier, Home: r.HomeName, Object: r.ObjectName, Size: r.SizeMiB,
+		Writable: r.Writable, Paused: r.Paused, Enforcement: r.Enforcement,
+	}
+}
+
+// TestPreviewUserDriveDerivesTheSameAnswerAsEnforcement is the other half of
+// TestPreviewUserDriveAnswersTheSameRefusalAsLaunch: that one pins the
+// REFUSALS, this one pins the ANSWER, over every home template, every grant
+// tier, and every spelling of the claims an admin can paste.
+//
+// The preview is what an admin reads before allocating, and its whole value is
+// that it is the run's own answer rather than a plausible reconstruction of
+// one. The object name in particular is copied out of it into offboarding and
+// reclaim commands, so a preview that derived a home the run would not is worse
+// than no preview: an admin acts on it against the wrong directory.
+//
+// The claim spellings are the same answer three times because
+// normalizeGovernancePreviewClaims lowercases, trims and dedupes while
+// PRESERVING ORDER — and order is the whole positional contract (a subject
+// first, an address last). A normalisation that sorted, or that deduped by
+// building a set, would still look right on the "as typed" row and change which
+// claim `email_local` reads on every other one.
+func TestPreviewUserDriveDerivesTheSameAnswerAsEnforcement(t *testing.T) {
+	yes := true
+	for _, tc := range []struct {
+		name string
+		// store is rebuilt per case: drivePreviewShareServer rewrites the
+		// fixture's HostRoot, so a shared one would leak between cases.
+		store func() *driveStore
+		// homes are the per-person directories a SHARE needs on disk; empty for
+		// a managed drive, which has no host tree.
+		homes []string
+	}{
+		{
+			name: "managed hash, user grant",
+			store: func() *driveStore {
+				d := driveFixture(nil)
+				return &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+			},
+		},
+		{
+			// A share keyed on the sign-in subject: users[0] both sides.
+			name: "share, sub template",
+			store: func() *driveStore {
+				d := driveFixture(func(d *types.UserDrive) {
+					d.Backend, d.HomeTemplate = types.DriveBackendHostPath, types.HomeTemplateSub
+				})
+				return &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+			},
+			homes: []string{"sub-drive-bob"},
+		},
+		{
+			// The template that reads the LAST claim rather than the first —
+			// the one an order-losing normalisation would silently re-key.
+			name: "share, email_local template",
+			store: func() *driveStore {
+				d := driveFixture(func(d *types.UserDrive) {
+					d.Backend, d.HomeTemplate = types.DriveBackendHostPath, types.HomeTemplateEmailLocal
+				})
+				return &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+			},
+			homes: []string{"bob"},
+		},
+		{
+			name: "group-tier winner",
+			store: func() *driveStore {
+				d := driveFixture(nil)
+				return &driveStore{drive: d, tier: types.CapabilitySubjectGroup,
+					grant: grantFixture(d.ID, func(g *types.UserDriveGrant) {
+						g.SubjectType, g.Subject = types.CapabilitySubjectGroup, "eng"
+					})}
+			},
+		},
+		{
+			// The FOLDS have to agree too, not merely the home: a preview that
+			// read the drive's own size where the grant overrode it would show
+			// an admin an allocation nobody has.
+			name: "all-tier winner with size and writable overrides",
+			store: func() *driveStore {
+				d := driveFixture(nil)
+				return &driveStore{drive: d, tier: types.CapabilitySubjectAll,
+					grant: grantFixture(d.ID, func(g *types.UserDriveGrant) {
+						g.SubjectType, g.Subject = types.CapabilitySubjectAll, ""
+						g.SizeMiBOverride, g.WritableOverride = 512, &yes
+					})}
+			},
+		},
+		{
+			// Paused derives nothing on both surfaces, which is the case where
+			// "the same answer" is the same ABSENCE.
+			name:  "paused",
+			store: func() *driveStore { return pausedDriveStore(nil) },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := tc.store()
+			srv := driveServer(st)
+			if len(tc.homes) > 0 {
+				srv = drivePreviewShareServer(t, st, tc.homes...)
+			}
+			resolved, err := srv.resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+			if err != nil {
+				t.Fatalf("enforcement resolve: %v", err)
+			}
+			want := drivePreviewAnswerOf(resolved)
+			// Guard against the vacuous pass: two EMPTY answers compare equal,
+			// so a case whose enforcement side quietly resolved to nothing would
+			// "agree" with a preview that also said nothing. Every case here
+			// either derives a home and an object, or is the paused one, which
+			// derives neither.
+			if derived := want.Home != "" && want.Object != ""; derived == want.Paused {
+				t.Fatalf("enforcement answer = %+v; a live case must derive a home and an object, a paused one neither", want)
+			}
+
+			for name, users := range map[string][]string{
+				"as typed":           {"sub-drive-bob", "bob@corp.example"},
+				"upper-case, padded": {"  SUB-DRIVE-BOB ", "Bob@Corp.Example"},
+				"a duplicated claim": {"sub-drive-bob", "sub-drive-bob", "bob@corp.example"},
+			} {
+				t.Run(name, func(t *testing.T) {
+					w := previewDriveHTTP(t, srv, users, []string{"eng"})
+					if w.Code != http.StatusOK {
+						t.Fatalf("preview = %d: %s", w.Code, w.Body.String())
+					}
+					var resp userDrivePreviewResponse
+					if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+						t.Fatalf("decode preview: %v", err)
+					}
+					got := drivePreviewAnswer{
+						Tier: resp.MatchedTier, Home: resp.HomeName, Object: resp.ObjectName, Size: resp.SizeMiB,
+						Writable: resp.Writable, Paused: resp.Paused, Enforcement: resp.Enforcement,
+					}
+					if got != want {
+						t.Errorf("preview     = %+v\nenforcement = %+v\nwant identical", got, want)
+					}
+				})
+			}
+		})
+	}
 }

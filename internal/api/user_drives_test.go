@@ -792,6 +792,32 @@ func TestDriveTargetIsReservedFromAuthoring(t *testing.T) {
 	}); msg != "" {
 		t.Errorf("neighbouring target refused: %q — the reservation must be the subtree, not a prefix match", msg)
 	}
+
+	// THE ROW THAT WAS STORED BEFORE THE RESERVATION EXISTED. Everything above
+	// is the write boundary, and it only ever ran on rows written since. A
+	// stored policy is handed to dispatch verbatim — resolvePolicy does not
+	// re-run validatePolicySpec, which runs for INLINE specs only — so a
+	// workspace_repos row pointing into the drive reaches buildRepoRecords, and
+	// this is where it has to stop.
+	//
+	// The direction matters more than the mechanism: a clone that landed inside
+	// /home/agent/drive would write somebody else's repository into a member's
+	// PERSISTENT storage — on a writable allocation it survives the run and
+	// every run after it, and on a share it lands in the operator's NAS. The
+	// record is dropped instead, so the run comes up with one fewer repo rather
+	// than with a repo in the wrong place.
+	t.Run("a stored repo row at the reserved target never reaches the clone", func(t *testing.T) {
+		for _, target := range []string{runner.DriveTarget, runner.DriveTarget + "/x"} {
+			if got := buildRepoRecords("", []types.WorkspaceRepo{{Repo: "octocat/hello", Target: target}}); got != "" {
+				t.Errorf("a repo destined for %q reached WARDYN_REPOS: %q", target, got)
+			}
+		}
+		// The control: an ordinary destination still clones, so the rule is the
+		// reserved subtree rather than "repos with an explicit target".
+		if got := buildRepoRecords("", []types.WorkspaceRepo{{Repo: "octocat/hello", Target: "/home/agent/work/hello"}}); !strings.Contains(got, "/home/agent/work/hello") {
+			t.Errorf("an ordinary destination was dropped too: %q", got)
+		}
+	})
 }
 
 // TestUpdateAllocatedUserDriveRefusesASilentRehome is the second half of the

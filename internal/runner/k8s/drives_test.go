@@ -76,6 +76,27 @@ func countPVCVerbs(cs *fake.Clientset) map[string]int {
 	return verbs
 }
 
+// assertOnlyChartGrantedVerbs is the RBAC ceiling as a per-case assertion: the
+// chart's Role lists get and create and nothing else (the Makefile pins that
+// list, and pins that userDrives.enabled is what gates the rule existing at
+// all), so a driver that reached for list, watch, patch or delete would fail on
+// a real cluster with a 403 an operator cannot fix by flipping a switch.
+//
+// It is asserted per case rather than once, because the verbs a case issues
+// depend on which arm it took: a refusal that already knows the answer must not
+// go on to ask, and a delete-and-retry is exactly the "repair" a driver with no
+// delete verb must never be written to attempt.
+func assertOnlyChartGrantedVerbs(t *testing.T, cs *fake.Clientset) map[string]int {
+	t.Helper()
+	verbs := countPVCVerbs(cs)
+	for v := range verbs {
+		if v != "get" && v != "create" {
+			t.Errorf("issued %q against persistentvolumeclaims; the chart's Role grants only get and create", v)
+		}
+	}
+	return verbs
+}
+
 // TestEnsureDrivePVC_ManagedCreatesTheClaim pins every field of the claim a
 // managed drive provisions — including the one that is ABSENT: no wardyn.run-id
 // label, so teardownByRunID's DeleteCollection selector cannot match a person's
@@ -234,9 +255,21 @@ func TestEnsureDrivePVC_ForbiddenNamesTheSwitch(t *testing.T) {
 // reuseDriveClaim's identity check. So the loser re-reads and goes through
 // exactly that check — which is what the FOREIGN row here proves, and what the
 // same-identity row proves it did not break.
+//
+// The rows are the SAME shapes the Get-hit arm's tables walk —
+// TestEnsureDrivePVC_RefusesAClaimThatIsNotThisMembers,
+// TestEnsureDrivePVC_RefusesAClaimStampedForAnotherPerson,
+// TestEnsureDrivePVC_RefusesATerminatingClaim — because the two doors have to
+// ask the same question and only one of them is ever exercised in practice.
+// This one is reached only by a first run that lost a race, so a door that
+// diverged would diverge exactly where nobody looks, and each shape's wrong
+// answer here is the same wrong answer it would be there.
 func TestEnsureDrivePVC_ToleratesAnAlreadyExistsRace(t *testing.T) {
 	for _, tc := range []struct {
 		name string
+		// mutate adjusts the drive this run resolved for, where a shape needs a
+		// field the fixture leaves at its zero value.
+		mutate func(*types.DriveMount)
 		// winner is the claim the race is lost TO, or nil when the winner is
 		// gone by the time the loser looks (an operator's reclaim landing
 		// between the Create and the re-read).
@@ -272,9 +305,78 @@ func TestEnsureDrivePVC_ToleratesAnAlreadyExistsRace(t *testing.T) {
 			winner: func(*types.DriveMount) *corev1.PersistentVolumeClaim { return nil },
 			wantIs: errDriveClaimVanished,
 		},
+		{
+			// Same drive row, another person's home — the rename / changed
+			// home-template collision, which the drive-id label alone cannot
+			// catch because the id matches.
+			name: "the winner is another person's home on this same drive",
+			winner: func(d *types.DriveMount) *corev1.PersistentVolumeClaim {
+				other := testDriveMount()
+				other.HomeName = "d-0000aa"
+				claim := existingDriveClaim(other)
+				claim.Name = d.ObjectName
+				return claim
+			},
+			wantIs: errDriveClaimForeign,
+		},
+		{
+			// One home template folding two principals onto ONE home
+			// (email_local across two domains): drive id and home both match,
+			// and only the subject digest tells the claims apart.
+			name:   "the winner is another PRINCIPAL under the same home",
+			mutate: func(d *types.DriveMount) { d.SubjectHash = "1111111111111111aaaa" },
+			winner: func(d *types.DriveMount) *corev1.PersistentVolumeClaim {
+				claim := existingDriveClaim(d)
+				claim.Labels[labelDriveSubject] = "2222222222222222bbbb"
+				return claim
+			},
+			wantIs: errDriveClaimForeign,
+		},
+		{
+			// An object carrying none of the three labels was never created by
+			// this driver, so it is an admin's own claim that happens to collide
+			// — not an older Wardyn claim to adopt.
+			name: "the winner is an unlabelled object under this claim name",
+			winner: func(d *types.DriveMount) *corev1.PersistentVolumeClaim {
+				claim := existingDriveClaim(d)
+				claim.Labels = nil
+				return claim
+			},
+			wantIs: errDriveClaimForeign,
+		},
+		{
+			// The reclaim that landed inside the window: this run's own claim,
+			// already being deleted. Mounting it hangs the pod until the
+			// dispatch timeout with no readable cause, and re-creating it under
+			// the same name would undo the operator's reclaim mid-flight.
+			name: "the winner is this member's own claim, already terminating",
+			winner: func(d *types.DriveMount) *corev1.PersistentVolumeClaim {
+				claim := existingDriveClaim(d)
+				deleted := metav1.NewTime(time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC))
+				claim.DeletionTimestamp = &deleted
+				claim.Finalizers = []string{"kubernetes.io/pvc-protection"}
+				return claim
+			},
+			wantIs: errDriveClaimTerminating,
+		},
+		{
+			// The presence-guarded arm, through this door too: a claim stamped
+			// before wardyn.subject existed is this member's, and an upgrade
+			// that turned it foreign would orphan every drive on the cluster.
+			name:   "the winner predates the subject label and is still this member's",
+			mutate: func(d *types.DriveMount) { d.SubjectHash = "1111111111111111aaaa" },
+			winner: func(d *types.DriveMount) *corev1.PersistentVolumeClaim {
+				claim := existingDriveClaim(d)
+				delete(claim.Labels, labelDriveSubject)
+				return claim
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			drive := testDriveMount()
+			if tc.mutate != nil {
+				tc.mutate(drive)
+			}
 			var seed []runtime.Object
 			if winner := tc.winner(drive); winner != nil {
 				seed = append(seed, winner)
@@ -302,8 +404,10 @@ func TestEnsureDrivePVC_ToleratesAnAlreadyExistsRace(t *testing.T) {
 				t.Fatalf("err = %v, want errors.Is(err, %v) — the claim that won the race is not this run's to mount", err, tc.wantIs)
 			}
 			// The proof that the fix is the RE-READ and not a re-worded return:
-			// two gets, one per side of the window.
-			if verbs := countPVCVerbs(cs); verbs["get"] != 2 || verbs["create"] != 1 {
+			// two gets, one per side of the window. And nothing else — a driver
+			// that "repaired" a foreign winner would reach for a verb the chart
+			// does not grant, which is a 403 on every real cluster.
+			if verbs := assertOnlyChartGrantedVerbs(t, cs); verbs["get"] != 2 || verbs["create"] != 1 {
 				t.Errorf("claim verbs = %v, want the lost create race to re-read the claim it lost to (get=2, create=1)", verbs)
 			}
 		})
@@ -351,35 +455,93 @@ func TestEnsureDrivePVC_SurfacesANonNotFoundGetError(t *testing.T) {
 // spec alone does not deliver: the agent process runs in the EPHEMERAL exec
 // container, so a drive mounted only into the idle main container would be
 // invisible to the agent that is supposed to use it.
+//
+// The MODE is walked in both directions across all THREE places it has to
+// arrive, because read-only here is not one flag but three independent ones —
+// the pod Volume's PVC reference, the main container's VolumeMount, and the
+// exec container's copy of it. Kubernetes ANDs them, so any one left false is a
+// writable drive: a read-only allocation the agent can write to is the failure
+// nobody sees until a member's files change under a share an admin published as
+// read-only, and the exec container's is the copy most easily dropped, since it
+// is assembled by Exec rather than by applyDriveToPod.
 func TestExec_EphemeralContainerMountsTheDrive(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
 	installProxyIPReactor(t, cs, "10.244.0.9")
 	installAgentRunningReactor(t, cs)
 
-	spec := testSandboxSpec()
-	spec.Drive = testDriveMount()
-	sb, err := d.CreateSandbox(context.Background(), spec)
-	if err != nil {
-		t.Fatalf("CreateSandbox: %v", err)
-	}
-	if _, err := d.Exec(context.Background(), sb.Ref, []string{"agent-run"}); err != nil {
-		t.Fatalf("Exec: %v", err)
-	}
+	for _, readOnly := range []bool{false, true} {
+		spec := testSandboxSpec()
+		spec.Drive = testDriveMount()
+		spec.Drive.ReadOnly = readOnly
+		sb, err := d.CreateSandbox(context.Background(), spec)
+		if err != nil {
+			t.Fatalf("CreateSandbox (ro=%v): %v", readOnly, err)
+		}
+		if _, err := d.Exec(context.Background(), sb.Ref, []string{"agent-run"}); err != nil {
+			t.Fatalf("Exec (ro=%v): %v", readOnly, err)
+		}
 
-	pod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("get agent pod: %v", err)
-	}
-	if len(pod.Spec.EphemeralContainers) != 1 {
-		t.Fatalf("ephemeral containers = %d, want 1", len(pod.Spec.EphemeralContainers))
-	}
-	mounts := pod.Spec.EphemeralContainers[0].VolumeMounts
-	if len(mounts) != 1 {
-		t.Fatalf("exec container mounts = %v, want exactly the drive", mounts)
-	}
-	want := corev1.VolumeMount{Name: driveVolumeName, MountPath: runner.DriveTarget, ReadOnly: false}
-	if mounts[0] != want {
-		t.Errorf("exec container mount = %+v, want %+v", mounts[0], want)
+		pod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("get agent pod (ro=%v): %v", readOnly, err)
+		}
+
+		// (1) The pod VOLUME. A PVC reference carries its own ReadOnly, and it
+		// is the one the kubelet honours for the volume as a whole.
+		var vol *corev1.Volume
+		for i := range pod.Spec.Volumes {
+			if pod.Spec.Volumes[i].Name == driveVolumeName {
+				vol = &pod.Spec.Volumes[i]
+			}
+		}
+		if vol == nil || vol.PersistentVolumeClaim == nil {
+			t.Fatalf("ro=%v: no %s volume backed by a claim; volumes=%+v", readOnly, driveVolumeName, pod.Spec.Volumes)
+		}
+		if vol.PersistentVolumeClaim.ClaimName != spec.Drive.ObjectName || vol.PersistentVolumeClaim.ReadOnly != readOnly {
+			t.Errorf("ro=%v: pod volume = %+v, want claim %q readOnly=%v", readOnly, *vol.PersistentVolumeClaim, spec.Drive.ObjectName, readOnly)
+		}
+
+		// (2) The MAIN container's mount, by name — a sidecar is not where the
+		// agent's drive goes.
+		var mainMount *corev1.VolumeMount
+		for _, c := range pod.Spec.Containers {
+			if c.Name != mainContainerName {
+				continue
+			}
+			for i := range c.VolumeMounts {
+				if c.VolumeMounts[i].Name == driveVolumeName {
+					mainMount = &c.VolumeMounts[i]
+				}
+			}
+		}
+		wantMain := corev1.VolumeMount{Name: driveVolumeName, MountPath: runner.DriveTarget, ReadOnly: readOnly}
+		if mainMount == nil || *mainMount != wantMain {
+			t.Errorf("ro=%v: main container mount = %+v, want %+v", readOnly, mainMount, wantMain)
+		}
+
+		// (3) The EPHEMERAL exec container's copy — the one the agent actually
+		// runs in.
+		if len(pod.Spec.EphemeralContainers) != 1 {
+			t.Fatalf("ro=%v: ephemeral containers = %d, want 1", readOnly, len(pod.Spec.EphemeralContainers))
+		}
+		mounts := pod.Spec.EphemeralContainers[0].VolumeMounts
+		if len(mounts) != 1 {
+			t.Fatalf("ro=%v: exec container mounts = %v, want exactly the drive", readOnly, mounts)
+		}
+		if mounts[0] != wantMain {
+			t.Errorf("ro=%v: exec container mount = %+v, want %+v", readOnly, mounts[0], wantMain)
+		}
+
+		// The claim the whole run resolved against is still a drive, not a
+		// per-run object: teardownByRunID selects on the run label, and a drive
+		// that acquired one would be deleted with the pod that mounted it.
+		claim, err := cs.CoreV1().PersistentVolumeClaims(testNamespace).Get(context.Background(), spec.Drive.ObjectName, metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("ro=%v: get claim: %v", readOnly, err)
+		}
+		if _, has := claim.Labels[labelRun]; has {
+			t.Errorf("ro=%v: the claim carries %s — teardownByRunID would delete the member's storage", readOnly, labelRun)
+		}
 	}
 
 	// Negative control: a drive-less run's exec container mounts nothing, so
@@ -743,8 +905,10 @@ func TestEnsureDrivePVC_RefusesAClaimThatIsNotThisMembers(t *testing.T) {
 				t.Errorf("err = %q, want it to name the label that decided it (%s)", err.Error(), tc.want)
 			}
 			// Never a create: the claim under that name is somebody's data and
-			// the driver holds no verb that could move it aside.
-			if verbs := countPVCVerbs(cs); verbs["create"] != 0 {
+			// the driver holds no verb that could move it aside — asserted as
+			// the whole verb set, since "move it aside" is precisely the repair
+			// a driver without a delete verb must never be written to attempt.
+			if verbs := assertOnlyChartGrantedVerbs(t, cs); verbs["create"] != 0 {
 				t.Errorf("claim verbs = %v, want no create over a claim this drive does not own", verbs)
 			}
 		})

@@ -109,6 +109,31 @@ func TestParseUserDriveHostRoots(t *testing.T) {
 			t.Fatalf("= %v, %v, %v; want two roots and no warning", roots, warns, err)
 		}
 	})
+
+	// The CSV's own shape, which an operator types by hand into a unit file.
+	// Surrounding whitespace and a trailing separator are the two things that
+	// survive an edit, and neither may become a root — nor may either REFUSE
+	// boot, which is the wrong answer in the other direction: a mistyped
+	// ceiling must refuse, but " /srv/homes , /mnt/nas " is not mistyped, it is
+	// formatted, and a deployment that will not start over a space is one an
+	// operator disables the feature to get past.
+	t.Run("the CSV is trimmed and an empty entry is dropped", func(t *testing.T) {
+		for _, tc := range []struct {
+			raw  string
+			want int
+		}{
+			{"/srv/homes,", 1},
+			{" /srv/homes , /mnt/nas ", 2},
+		} {
+			roots, warns, err := ParseUserDriveHostRoots(tc.raw)
+			if err != nil || len(roots) != tc.want {
+				t.Errorf("ParseUserDriveHostRoots(%q) = %v, %v; want %d root(s)", tc.raw, roots, err, tc.want)
+			}
+			if len(warns) != 0 {
+				t.Errorf("ParseUserDriveHostRoots(%q) warned %v — trimming is not a mistake to report", tc.raw, warns)
+			}
+		}
+	})
 }
 
 // TestUserDriveHostRootCheck walks the ceiling itself. Every arm is a decision
@@ -167,6 +192,60 @@ func TestUserDriveHostRootCheck(t *testing.T) {
 	}
 	if err := check(link); err == nil {
 		t.Error("a symlink out of the ceiling was accepted — a lexical match would have missed it")
+	}
+
+	// THE SPELLING TABLE. withinAnyRoot resolves BOTH sides, so a ceiling and a
+	// drive row may name one tree by two different paths — which is the ordinary
+	// operator shape rather than an edge case: /srv/homes is a symlink to the
+	// mount point on plenty of hosts, and an admin fills the form in from
+	// whichever spelling their runbook uses. Resolving only the drive's side
+	// would refuse a correct row for a reason no error message could explain.
+	//
+	// The last three rows are the other direction — the ways a path that LOOKS
+	// in-ceiling is not, and each is a decision parseRootList or withinAnyRoot
+	// makes rather than a property of the filesystem.
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve tempdir: %v", err)
+	}
+	real := filepath.Join(base, "nas", "homes")
+	if err := os.MkdirAll(filepath.Join(real, "alice"), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	sibling := real + "-other"
+	if err := os.MkdirAll(sibling, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	linked := filepath.Join(base, "srv-homes")
+	if err := os.Symlink(real, linked); err != nil {
+		t.Skipf("symlink unsupported here: %v", err)
+	}
+	for _, tc := range []struct {
+		name     string
+		roots    []string
+		hostRoot string
+		ok       bool
+	}{
+		{"a symlinked root entry accepts the link spelling", []string{linked}, linked, true},
+		{"a symlinked root entry accepts the real spelling", []string{linked}, real, true},
+		{"a real root entry accepts the symlinked spelling", []string{real}, linked, true},
+		// Separator-anchored, or "/srv/homes-other" would be inside "/srv/homes"
+		// and every neighbouring export on the same parent would be authorable.
+		{"a prefix-string sibling is outside", []string{real}, sibling, false},
+		// parseRootList's cleanliness rule applies to the DRIVE's side too: a
+		// trailing slash is the same tree under a different string, and letting
+		// one through would mean two rows naming one directory that no UNIQUE
+		// constraint or nesting check could see were the same.
+		{"an uncleaned trailing slash is refused", []string{real}, real + "/", false},
+		// Relative resolves against the DAEMON's working directory, which is not
+		// a thing an admin filling in a form can reason about.
+		{"a relative path is refused", []string{real}, "nas/homes", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := UserDriveHostRootCheck(tc.roots)(tc.hostRoot); (err == nil) != tc.ok {
+				t.Errorf("UserDriveHostRootCheck(%v)(%q) = %v, want ok=%v", tc.roots, tc.hostRoot, err, tc.ok)
+			}
+		})
 	}
 }
 
@@ -272,6 +351,96 @@ func TestUserDriveMountSourceCheck(t *testing.T) {
 	if wantElsewhere, _ := filepath.EvalSymlinks(elsewhere); got != wantElsewhere {
 		t.Errorf("resolved path = %q, want the link's target %q", got, wantElsewhere)
 	}
+
+	// THE SAME SPELLING TABLE AS THE AUTHORING CHECK, plus the rule only a BIND
+	// has: the root is resolved before the comparison, so a ceiling naming the
+	// link and a source naming the real tree (or the other way round) agree —
+	// and the strict-subdirectory rule survives that resolution, which is the
+	// row that matters. `<link>` and `<real>` are ONE directory, so a source
+	// that spells it either way is the share itself and binds every person's
+	// home; a lexical equality check would have caught only one of the two.
+	base, berr := filepath.EvalSymlinks(t.TempDir())
+	if berr != nil {
+		t.Fatalf("resolve tempdir: %v", berr)
+	}
+	shared := filepath.Join(base, "nas", "homes")
+	if err := os.MkdirAll(filepath.Join(shared, "alice"), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	nextDoor := shared + "-other"
+	if err := os.MkdirAll(nextDoor, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	sharedLink := filepath.Join(base, "srv-homes")
+	if err := os.Symlink(shared, sharedLink); err != nil {
+		t.Skipf("symlink unsupported here: %v", err)
+	}
+	for _, tc := range []struct {
+		name     string
+		roots    []string
+		source   string
+		ok       bool
+		wantReal string
+	}{
+		{"a home under a symlinked root", []string{sharedLink}, filepath.Join(sharedLink, "alice"), true, filepath.Join(shared, "alice")},
+		{"the link itself IS the root", []string{sharedLink}, sharedLink, false, ""},
+		{"the real root reached through the link", []string{shared}, sharedLink, false, ""},
+		{"a sibling directory of the root", []string{shared}, nextDoor, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resolved, err := UserDriveMountSourceCheck(tc.roots)(tc.source)
+			if (err == nil) != tc.ok {
+				t.Fatalf("UserDriveMountSourceCheck(%v)(%q) = %q, %v; want ok=%v", tc.roots, tc.source, resolved, err, tc.ok)
+			}
+			if resolved != tc.wantReal {
+				t.Errorf("resolved = %q, want %q", resolved, tc.wantReal)
+			}
+		})
+	}
+
+	// THE DENY LIST RUNS ON THE RESOLVED PATH, so listing a denied tree as a
+	// root buys nothing: ValidateMountSource resolves the source and re-runs
+	// deniedSource on what it found, which is why ParseUserDriveHostRoots warns
+	// that such a root matches NOTHING rather than treating it as an escape
+	// hatch. Without this the deny-list would be a statement about the string an
+	// admin typed, and a host-side symlink would be the way past it.
+	//
+	// /dev/shm because /dev is deny-listed and /dev/shm is world-writable, so
+	// the arm needs no privilege; it skips where the tmpfs is absent.
+	t.Run("a symlink into a denied tree is refused even when that tree is a configured root", func(t *testing.T) {
+		if st, err := os.Stat("/dev/shm"); err != nil || !st.IsDir() {
+			t.Skip("/dev/shm not available")
+		}
+		shm, err := os.MkdirTemp("/dev/shm", "wardyn-drive-deny-")
+		if err != nil {
+			t.Skipf("/dev/shm not writable: %v", err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(shm) })
+		if err := os.MkdirAll(filepath.Join(shm, "alice"), 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		ordinary, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatalf("resolve tempdir: %v", err)
+		}
+		escaping := filepath.Join(ordinary, "alice")
+		if err := os.Symlink(filepath.Join(shm, "alice"), escaping); err != nil {
+			t.Skipf("symlink unsupported here: %v", err)
+		}
+		resolved, err := UserDriveMountSourceCheck([]string{ordinary, "/dev/shm"})(escaping)
+		if err == nil {
+			t.Fatalf("a bind source resolving to %q — under a denied prefix — was accepted", resolved)
+		}
+		if !strings.Contains(err.Error(), "denied host path") {
+			t.Errorf("refusal = %v, want the deny-list's wording on the RESOLVED path", err)
+		}
+		// The control: with the denied tree NOT listed, the same link is refused
+		// for the ordinary reason (it leaves every root), so the row above is a
+		// statement about the deny list rather than about the ceiling.
+		if _, err := UserDriveMountSourceCheck([]string{ordinary})(escaping); err == nil {
+			t.Error("a symlink out of the only configured root was accepted")
+		}
+	})
 }
 
 // TestUserDriveHomeWithinItsRoot walks the PER-DRIVE bound — the one the
