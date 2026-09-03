@@ -979,6 +979,34 @@ hiding them would repeat the failure mode we are designed to avoid.
     the role at auth time, or revoking a principal's live tokens from the
     role-mapping write path; neither is built.
 
+34. **A group claim the IdP FILTERS is indistinguishable from a complete one, so
+    a shrink-the-claim workaround loses grants silently.** Wardyn marks a group
+    snapshot partial in exactly two cases: entries dropped at the cookie byte cap,
+    and the IdP's overage pointer (`_claim_names`, the claim withheld entirely) —
+    `sessionGroups`, `internal/auth/oidc/derive.go`. Both are LOUD downstream: the
+    ceiling resolver treats the identity as unanswerable and refuses rather than
+    resolving on a partial list, and an unresolvable DENY refuses too. A claim the
+    IdP was CONFIGURED to narrow sets neither bit: it is complete by the IdP's
+    account and merely smaller. Entra's `groupMembershipClaims: "ApplicationGroup"`
+    — the option Microsoft recommends for the token group limit — emits only groups
+    assigned to the application and excludes nested membership, and group-based App
+    Role assignment reaches direct members only. Either way a governance assignment
+    or a group-subject capability grant keyed on a group the member reaches
+    transitively stops matching, with no refusal, no audit line and no
+    `groups_snapshot_stale`. The token carries no signal that anything was filtered,
+    so there is nothing Wardyn could check.
+
+    Accepted for 0.7 because the remedy is procedural and the burden is the
+    operator's: re-key group-subject grants and group-tier assignments onto a
+    directly-assigned group or onto the user BEFORE changing the claim
+    configuration, then verify against a real login's `session_groups`
+    (`GET /me/capabilities`) rather than against the IdP's UI —
+    `docs/OPERATIONS.md`, "A third cause of a partial snapshot", carries the
+    procedure. User-subject rows are the only shape a claim-configuration change
+    cannot silently break. Closing this needs a signal the IdP does not send;
+    the nearest approximation is warning when a group-subject row stops matching
+    anyone, which is not built.
+
 ### 5.1a LLM egress content inspection — the honest-claims contract
 
 The optional `llm_inspection` guardrail (residuals #1, #2) is a **visibility +

@@ -806,9 +806,52 @@ dereference that pointer; it marks the snapshot **truncated** (`sessionGroups`,
 fell off the byte cap: the ceiling resolver treats it as unanswerable rather than
 as "asked, there were none". Without that, such a login would arrive
 complete-and-empty and quietly shed every group-tier grant and governance
-assignment. Where members legitimately sit in that many groups, prefer Entra App
-Roles (the much smaller `roles` claim) or user-subject grants — or configure the
-group claim to emit only the groups assigned to the application.
+assignment. Where members legitimately sit in that many groups, the answers that do not
+depend on the size of the claim are Entra App Roles (the much smaller `roles`
+claim) and user-subject grants.
+
+**Every workaround that merely SHRINKS the group claim trades a detected failure
+for an undetected one.** An overage is loud: the claim is absent, the snapshot is
+marked truncated, and the resolver refuses rather than guessing. A FILTERED claim
+is silent. Set `groupMembershipClaims: "ApplicationGroup"` — the "Groups assigned
+to the application" option, which Microsoft recommends for exactly this limit —
+and the token carries a smaller list that is *complete by the IdP's account*: no
+`_claim_names`, no truncation bit, nothing downstream to refuse. A governance
+assignment or a group DENY row keyed on a group that is no longer emitted simply
+stops applying. That is the evaporation the truncation bit exists to prevent,
+with the detector switched off, and **Wardyn cannot tell the two claims apart** —
+a filtered claim and a full one are identical in the token.
+
+What that option drops is **nested membership**: "nested groups are not included
+and the user must be a direct member of the group assigned to the application"
+([Configure optional
+claims](https://learn.microsoft.com/en-us/entra/identity-platform/optional-claims)).
+The same rule governs group-based **App Role** assignment — nested group
+memberships are not supported for group-based assignment to an application, so a
+role assigned to a group reaches its direct members only ([Manage users and
+groups
+assignment](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/assign-user-or-group-access-portal)).
+App Roles are a smaller claim, not automatically a safer one.
+
+**So re-key before you change the claim, not after:**
+
+1. List what resolves by group today: `GET /permissions` for every
+   `subject_type=group` grant — **deny rows first**, since those are the ones
+   whose loss WIDENS somebody — and `GET /governance` for every group-tier
+   assignment.
+2. Re-point each one at something the new claim will still carry: a group the
+   member is a **direct** member of and that is assigned to the application, or
+   the member themselves (`subject_type=user`, or a user-tier assignment).
+3. Then change the claim configuration.
+4. Verify with a real login, not by reading the IdP's UI: have an affected member
+   sign in again and read `GET /me/capabilities`, whose `session_groups` is the
+   snapshot their token actually produced. Every group your re-keyed rows name
+   must appear in it. `POST /governance/preview` with that exact list says which
+   profile now resolves for them.
+
+If the groups cannot be flattened and the rows cannot be re-keyed, user subjects
+are the only shape in this release that a claim-configuration change cannot break
+without telling you (`threatmodel/THREAT-MODEL.md` §5).
 
 **What a capability deliberately does not reach.** `always`-scope decisions stay
 on the admin-or-`security_admin` gate even for a member granted the host — a grant must never promote a
