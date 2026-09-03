@@ -196,13 +196,105 @@ func (s *Server) decodeUserDriveRequest(w http.ResponseWriter, r *http.Request, 
 	return d, 0, ""
 }
 
+// driveRehomeProbeHome is a stand-in home segment used ONLY to ask whether an
+// edit moves the storage. DriveObjectName folds the DRIVE's half of the name
+// (the slug, or the host root) around whatever home it is given, so comparing
+// the function's own output for one fixed home answers "does this edit re-point
+// the object?" exactly — and keeps answering it when a backend is added or the
+// naming changes, which a hand-listed set of fields would not.
+const driveRehomeProbeHome = "probe"
+
+// driveRehomeGuard refuses an identity-affecting edit to an ALLOCATED drive
+// unless the caller confirms it with ?confirm=rehome. It reports whether the
+// write may proceed, and whether it is a confirmed re-home (for the audit row).
+//
+// THE EDIT THAT MOVES SOMEBODY'S DATA IS NOT THE ONE THAT LOOKS DESTRUCTIVE.
+// Deleting an allocated drive already answers 409 — the FK's ON DELETE RESTRICT
+// surfaced by handleDeleteUserDrive — while the far more consequential in-place
+// rewrite had nothing. types.DriveObjectName folds the drive's NAME into a
+// volume and a claim name and its HOST ROOT into a share path, and
+// types.DriveHomeName folds the HOME TEMPLATE, so a rename, a host-root
+// correction or a template change re-points every allocated principal at a
+// different object with the grant rows untouched. On k8s a managed drive then
+// provisions a fresh EMPTY claim and the member's previous work sits in one
+// nobody in the product points at; on host_path it binds a different directory;
+// on docker_volume it mints a new empty volume. Nothing is deleted — the
+// objects are retained — but with no reclaim runbook and no `list` verb in the
+// k8s RBAC, an operator's only way back is knowing to restore the drive exactly
+// as it was.
+//
+// internal/store/user_drives.go states this consequence and assigns the duty
+// across the module boundary — "the admin surface says so at the write". This
+// is that sentence, implemented.
+//
+// The BACKEND is compared as well as the derived name, because k8s_pvc ->
+// k8s_pvc_static leaves the claim name identical while flipping who creates it:
+// a missing claim stops being provisioned and becomes a refusal.
+//
+// ONE READ, and it is the read the console's own screen already makes: the
+// existing row and its grant count come back together, so the guard cannot ask
+// "is it allocated" of a different moment than "what did it look like". A PUT
+// naming an id no row holds is a create — PUT's documented meaning here — and
+// passes without a question.
+func (s *Server) driveRehomeGuard(w http.ResponseWriter, r *http.Request, next types.UserDrive) (ok, rehomed bool) {
+	items, err := s.cfg.Store.ListUserDrives(r.Context())
+	if err != nil {
+		// FAIL CLOSED. An unreadable allocation state is not permission to
+		// re-home somebody quietly — the whole point of the guard is that this
+		// edit is unrecoverable in the product, so "I could not check" has to
+		// refuse rather than proceed.
+		writeError(w, http.StatusInternalServerError,
+			"this edit could not be checked against the drive's allocations: "+err.Error())
+		return false, false
+	}
+	var prev *types.UserDriveListItem
+	for i := range items {
+		if items[i].ID == next.ID {
+			prev = &items[i]
+			break
+		}
+	}
+	if prev == nil {
+		return true, false // a PUT that creates: nothing is bound to move
+	}
+	moves := prev.Backend != next.Backend ||
+		prev.HomeTemplate != next.HomeTemplate ||
+		types.DriveObjectName(prev.UserDrive, driveRehomeProbeHome) != types.DriveObjectName(next, driveRehomeProbeHome)
+	if !moves || prev.GrantCount == 0 {
+		return true, false
+	}
+	if r.URL.Query().Get("confirm") != "rehome" {
+		// No count, for handleDeleteUserDrive's reason: the allocations table
+		// the admin is looking at already shows it, and a second number read
+		// here could only contradict the one on screen.
+		writeError(w, http.StatusConflict, "this drive is allocated, and this edit re-points the storage every "+
+			"allocated member is bound to — their existing data stays under the old name, and a managed drive "+
+			"provisions a fresh empty one. Confirm the move (confirm=rehome), or edit only the fields that do "+
+			"not name storage: size, mode, reclaim and storage class.")
+		return false, false
+	}
+	return true, true
+}
+
 // writeUserDrive is the shared body of POST and PUT: decode, validate against
-// both the shape rules and the env ceiling, persist, audit, answer.
-func (s *Server) writeUserDrive(w http.ResponseWriter, r *http.Request, id uuid.UUID, status int) {
+// both the shape rules and the env ceiling, guard an allocated re-home,
+// persist, audit, answer.
+//
+// mayRehome is false for POST, whose id is freshly minted and can therefore
+// name no existing row, and true for PUT, which is the door an edit to an
+// ALLOCATED drive comes through.
+func (s *Server) writeUserDrive(w http.ResponseWriter, r *http.Request, id uuid.UUID, status int, mayRehome bool) {
 	d, code, msg := s.decodeUserDriveRequest(w, r, id)
 	if msg != "" {
 		writeError(w, code, msg)
 		return
+	}
+	var rehomed bool
+	if mayRehome {
+		var ok bool
+		if ok, rehomed = s.driveRehomeGuard(w, r, d); !ok {
+			return
+		}
 	}
 	saved, err := s.cfg.Store.UpsertUserDrive(r.Context(), d)
 	if errors.Is(err, store.ErrConflict) {
@@ -228,6 +320,10 @@ func (s *Server) writeUserDrive(w http.ResponseWriter, r *http.Request, id uuid.
 			"size_mib":      saved.SizeMiB,
 			"writable":      saved.Writable,
 			"reclaim":       saved.Reclaim,
+			// The one field that separates a cosmetic edit from one that moved
+			// every allocated member's storage. Without it both are the same
+			// `drive.write` row and the orphaning is invisible in the log.
+			"rehomed": rehomed,
 		})))
 	writeJSON(w, status, saved)
 }
@@ -236,20 +332,24 @@ func (s *Server) writeUserDrive(w http.ResponseWriter, r *http.Request, id uuid.
 // another drive already holds is a caller-fixable 409, never a raw driver
 // error. operatorOnly (routes.go).
 func (s *Server) handleCreateUserDrive(w http.ResponseWriter, r *http.Request) {
-	s.writeUserDrive(w, r, uuid.New(), http.StatusCreated)
+	s.writeUserDrive(w, r, uuid.New(), http.StatusCreated, false)
 }
 
 // handleUpdateUserDrive replaces the drive at {id} (200), rename included —
 // renaming has to work, because ON DELETE RESTRICT makes delete-and-recreate
 // impossible for a drive that is actually allocated. A PUT naming an id no row
-// holds creates it there, which is what PUT means and what UpsertUserDrive's
-// single statement does without an existence read. operatorOnly (routes.go).
+// holds creates it there, which is what PUT means.
+//
+// An edit that RE-POINTS the storage of an allocated member answers 409 unless
+// it carries ?confirm=rehome — driveRehomeGuard, above, which is the guard the
+// store's own comment delegates to "the admin surface". operatorOnly
+// (routes.go).
 func (s *Server) handleUpdateUserDrive(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "user drive")
 	if !ok {
 		return
 	}
-	s.writeUserDrive(w, r, id, http.StatusOK)
+	s.writeUserDrive(w, r, id, http.StatusOK, true)
 }
 
 // handleDeleteUserDrive removes a drive (204), or 409 when it is still

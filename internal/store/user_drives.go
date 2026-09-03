@@ -55,14 +55,17 @@ func userDriveGrantDest(g *types.UserDriveGrant) []any {
 // they must be able to be, since ON DELETE RESTRICT makes delete-and-recreate
 // impossible for an allocated drive).
 //
-// RENAMING A DRIVE MOVES A PVC's NAME, and that is a documented consequence
-// rather than a bug this store can fix: types.DriveObjectName folds the name
-// into a k8s claim name, so a renamed drive's members bind a claim that does
-// not exist yet and a managed drive provisions a fresh empty one. The admin
-// surface says so at the write; the alternative — a second immutable slug
-// column — buys stability for the one field an admin most needs to be able to
-// correct, and the operator runbook for a rename is `kubectl get pvc` plus the
-// preview endpoint, which prints the exact object name for a principal.
+// RENAMING A DRIVE MOVES ITS OBJECT'S NAME, and that is a documented
+// consequence rather than a bug this store can fix: types.DriveObjectName folds
+// the name into a claim name and a volume name alike, so a renamed drive's
+// members bind an object that does not exist yet and a managed drive provisions
+// a fresh empty one. The admin surface says so at the write — api's
+// driveRehomeGuard, which answers 409 for an identity-affecting edit to an
+// ALLOCATED drive unless the caller confirms it, and marks the confirmed write
+// `rehomed` in the audit row. The alternative — a second immutable slug column
+// — buys stability for the one field an admin most needs to be able to correct,
+// and the operator runbook for a rename is `kubectl get pvc` plus the preview
+// endpoint, which prints the exact object name for a principal.
 //
 // Returns ErrConflict when UNIQUE(name) rejects the write — a new drive taking
 // a taken name, or a rename onto another row's name. The caller maps that to

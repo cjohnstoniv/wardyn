@@ -397,6 +397,147 @@ func TestUpdateUserDriveRenames(t *testing.T) {
 	}
 }
 
+// TestUpdateAllocatedUserDriveGuardsTheRehome is the asymmetry this surface had
+// backwards. DELETING an allocated drive already answered 409; the far more
+// consequential IN-PLACE REWRITE answered 200 and moved every allocated
+// member's storage with the grant rows untouched — a rename re-points a volume
+// and a claim name, a host-root correction binds a different tree, a template
+// change derives a different home. Nothing is deleted, so nothing surfaces: the
+// old object is retained under a name nothing in the product points at, and the
+// same `drive.write` row covered a cosmetic edit and an identity-affecting one.
+func TestUpdateAllocatedUserDriveGuardsTheRehome(t *testing.T) {
+	// allocated seeds one drive with one grant and returns a PUT caller for it.
+	allocated := func(t *testing.T, roots []string, mut func(*types.UserDrive)) (
+		*driveCRUDStore, *recRecorder, uuid.UUID, func(body, query string) *httptest.ResponseRecorder) {
+		t.Helper()
+		st := newDriveCRUDStore()
+		srv, rec := driveAdminServer(st, roots)
+		d := *driveFixture(mut)
+		st.drives[d.ID] = d
+		st.grants[uuid.New()] = types.UserDriveGrant{
+			ID: uuid.New(), SubjectType: types.CapabilitySubjectUser, Subject: "sub-bob", DriveID: d.ID, Enabled: true,
+		}
+		return st, rec, d.ID, func(body, query string) *httptest.ResponseRecorder {
+			return driveCall(t, srv.handleUpdateUserDrive, http.MethodPut,
+				"/api/v1/drives/"+d.ID.String()+query, body, map[string]string{"id": d.ID.String()})
+		}
+	}
+
+	t.Run("a rename is refused, and writes nothing", func(t *testing.T) {
+		st, rec, id, put := allocated(t, nil, nil)
+		w := put(`{"name":"Corp NAS archive","backend":"docker_volume","size_mib":10240}`, "")
+		if w.Code != http.StatusConflict {
+			t.Fatalf("rename of an allocated drive = %d, want 409: %s", w.Code, w.Body.String())
+		}
+		if st.drives[id].Name != "Corp NAS" {
+			t.Errorf("stored name = %q, want the refused write to have landed nothing", st.drives[id].Name)
+		}
+		// A refusal is not an event: the same silence a refused delete keeps.
+		if len(rec.events) != 0 {
+			t.Errorf("audit = %v, want nothing recorded for a refused edit", driveAuditActions(rec))
+		}
+	})
+
+	t.Run("confirmed, it lands and the audit row says so", func(t *testing.T) {
+		st, rec, id, put := allocated(t, nil, nil)
+		w := put(`{"name":"Corp NAS archive","backend":"docker_volume","size_mib":10240}`, "?confirm=rehome")
+		if w.Code != http.StatusOK {
+			t.Fatalf("confirmed rename = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		if st.drives[id].Name != "Corp NAS archive" {
+			t.Errorf("stored name = %q, want the confirmed rename to have landed", st.drives[id].Name)
+		}
+		// THE POINT OF THE FIELD: one `drive.write` action covers both kinds of
+		// edit, so without this the orphaning is invisible to an auditor.
+		if data := driveAuditData(t, rec, "drive.write"); data["rehomed"] != true {
+			t.Errorf("drive.write rehomed = %v, want true", data["rehomed"])
+		}
+	})
+
+	// The guard asks types.DriveObjectName whether the object MOVES rather than
+	// diffing a hand-listed set of fields — so an edit that folds to the same
+	// slug is not a re-home, and a hand-listed rule would have refused it.
+	t.Run("a name that folds to the same slug is not a rehome", func(t *testing.T) {
+		_, rec, _, put := allocated(t, nil, nil)
+		w := put(`{"name":"  Corp   NAS! ","backend":"docker_volume","size_mib":10240}`, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("cosmetic rename = %d, want 200 (the object does not move): %s", w.Code, w.Body.String())
+		}
+		if data := driveAuditData(t, rec, "drive.write"); data["rehomed"] != false {
+			t.Errorf("drive.write rehomed = %v, want false", data["rehomed"])
+		}
+	})
+
+	t.Run("the fields that name no storage stay editable", func(t *testing.T) {
+		_, rec, _, put := allocated(t, nil, nil)
+		w := put(`{"name":"Corp NAS","backend":"docker_volume","size_mib":20480,"writable":true,"reclaim":"delete"}`, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("size/mode/reclaim edit = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		if data := driveAuditData(t, rec, "drive.write"); data["rehomed"] != false {
+			t.Errorf("drive.write rehomed = %v, want false", data["rehomed"])
+		}
+	})
+
+	// The OTHER two folds, so the guard is not a rename check wearing a general
+	// name: host_root is the share's half of the object name, and the template
+	// is the home's.
+	t.Run("a host_root correction is refused", func(t *testing.T) {
+		from, to := t.TempDir(), t.TempDir()
+		_, _, _, put := allocated(t, []string{from, to}, func(d *types.UserDrive) {
+			d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateSub, from
+		})
+		w := put(`{"name":"Corp NAS","backend":"host_path","home_template":"sub","host_root":"`+to+`"}`, "")
+		if w.Code != http.StatusConflict {
+			t.Errorf("host_root change = %d, want 409: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("a home_template change is refused", func(t *testing.T) {
+		root := t.TempDir()
+		_, _, _, put := allocated(t, []string{root}, func(d *types.UserDrive) {
+			d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateSub, root
+		})
+		w := put(`{"name":"Corp NAS","backend":"host_path","home_template":"email_local","host_root":"`+root+`"}`, "")
+		if w.Code != http.StatusConflict {
+			t.Errorf("home_template change = %d, want 409: %s", w.Code, w.Body.String())
+		}
+	})
+
+	// An UNALLOCATED drive is nobody's storage yet, so the guard must not stand
+	// between an admin and a correction they are still free to make.
+	t.Run("an unallocated drive renames freely", func(t *testing.T) {
+		st := newDriveCRUDStore()
+		srv, rec := driveAdminServer(st, nil)
+		d := *driveFixture(nil)
+		st.drives[d.ID] = d
+		w := driveCall(t, srv.handleUpdateUserDrive, http.MethodPut, "/api/v1/drives/"+d.ID.String(),
+			`{"name":"Corp NAS archive","backend":"docker_volume","size_mib":10240}`,
+			map[string]string{"id": d.ID.String()})
+		if w.Code != http.StatusOK {
+			t.Fatalf("rename of an unallocated drive = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		if data := driveAuditData(t, rec, "drive.write"); data["rehomed"] != false {
+			t.Errorf("drive.write rehomed = %v, want false", data["rehomed"])
+		}
+	})
+
+	// FAIL CLOSED. An unreadable allocation state is not permission to re-home
+	// somebody quietly — the edit is unrecoverable in the product, so "I could
+	// not check" must refuse.
+	t.Run("an unreadable allocation state refuses rather than proceeds", func(t *testing.T) {
+		st, _, id, put := allocated(t, nil, nil)
+		st.listErr = errors.New("pg: connection refused")
+		w := put(`{"name":"Corp NAS archive","backend":"docker_volume","size_mib":10240}`, "")
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("unreadable state = %d, want a refusal: %s", w.Code, w.Body.String())
+		}
+		if st.drives[id].Name != "Corp NAS" {
+			t.Errorf("stored name = %q, want nothing written when the check could not run", st.drives[id].Name)
+		}
+	})
+}
+
 // TestDeleteAllocatedUserDriveIs409 is the RESTRICT arm and the count in its
 // message. Cascading instead would silently un-allocate every person this drive
 // named a directory for, with nothing in the log saying so.
