@@ -8,6 +8,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Security
+
+- **`golang.org/x/crypto` 0.55.0 → 0.56.0 (GO-2026-6354, GO-2026-6355).** Two
+  denial-of-service advisories in `golang.org/x/crypto/ssh`, both reachable from
+  the SSH gateway: `govulncheck` traces each to `handleSSHConn`'s own
+  `ssh.NewServerConn` call. A malicious peer deadlocks the whole connection —
+  6354 by flooding the incoming requests of a channel that is registered but not
+  yet established, 6355 with crafted messages after establishment — and the
+  gateway clears its handshake deadline once the session is up, so a deadlocked
+  connection has no timer left to reap it. Fixed upstream in 0.56.0; no other
+  dependency moves.
+
 ### Added
 
 - An admin can fence **which agents and which model providers** a member may name on their own run, as two more permission kinds on the existing Permissions page. Both narrow: until one is enforced members keep the powers they had, and a deny bites even before enforcement. A model-provider permission bounds only what the member chose — the provider a workspace is pinned to and the site-wide default still reach every run.

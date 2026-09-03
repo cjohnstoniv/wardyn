@@ -396,12 +396,32 @@ rewrite one row can usually rewrite every row after it and re-chain the tail, an
 a re-chained tail verifies perfectly clean; truncating the newest rows leaves a
 shorter, valid chain and is likewise invisible to the chain alone. The control
 against both is OFF-BOX and a separate promise: the audit-sink stream carries each
-row's `prev_hash`/`row_hash`, so a SIEM holds head hashes, and a chain no longer
-containing a recorded head has been rewritten or truncated. Pre-migration rows
+row's `prev_hash`/`row_hash` **for every event whose Postgres write succeeded**,
+so a SIEM holds head hashes, and a chain no longer containing a recorded head has
+been rewritten or truncated. That qualifier is a residual of its own: the hashes
+are filled by the write itself, so an event written while Postgres is unavailable
+fans out to the sinks with no hashes on it, and the spool drain replays it into
+Postgres through the raw store recorder rather than back onto a sink — the
+off-box head series therefore has a gap across an outage (`docs/OPERATIONS.md`,
+"What the drain does not restore"). Pre-migration rows
 keep NULL hashes and sit outside the chain (no backfill — hashes computed after
 the fact by the process that could have altered the rows prove nothing). Signed
 receipts under a key no database role can reach are the next rung and are **NOT
 built**.
+
+**A break is evidence to investigate, not proof on its own — and a false one is
+reachable with no tampering at all.** The insert trigger allocates `seq` and the
+chain link under one advisory lock, but its head lookup runs in the CALLER's
+transaction snapshot. A writer that is not Wardyn, holding a `REPEATABLE READ` or
+`SERIALIZABLE` transaction opened before the previous append committed, chains
+onto the head its snapshot still shows: two rows share a `prev_hash` and the
+sweep reports *"a row was deleted or reordered"*. Postgres raises nothing — there
+is no row conflict to fail on — and the verdict does not clear, because the walk
+stops at the first break. Every in-tree writer is `READ COMMITTED`, so this is
+reachable only by a direct database writer; the deployment rule that keeps the
+signal meaningful is that nothing but Wardyn writes to `audit_events`, and
+anything that must, writes at `READ COMMITTED` (`docs/OPERATIONS.md`, "The hash
+chain").
 
 ### 4.6 User drives (v0.7) — admin-provisioned, member-attached persistent storage
 
@@ -1195,6 +1215,72 @@ hiding them would repeat the failure mode we are designed to avoid.
     `host_root` change binds a different tree under the same names. The 409 above
     covers all four columns, so the gap that remains is the console's, not the
     API's.
+
+38. **A per-user API token's role and group snapshot are frozen at mint, with no
+    expiry and no re-stamp — so the demoted-admin window is UNBOUNDED, where the
+    SSH analogue's (#15) is merely long.** `0045_api_tokens.sql` stamps `role`
+    and `groups` from the minting session (`internal/api/apitokens.go`), and
+    every request the token authenticates republishes them through
+    `withHumanIdentity`, so downstream the bearer is that human exactly as they
+    were at mint time. Nothing narrows the staleness the way `0046` narrows the
+    key stamp: the table carries `created_at`, `last_used_at` and `revoked_at`
+    and **no expiry column**; `oidc.Config.OnLogin` re-stamps SSH keys only
+    (`store.RefreshSSHKeyRoles`); the only `UPDATE`s the store issues against
+    `api_tokens` set `last_used_at` and `revoked_at`; and a demotion in the IdP
+    never reaches the row. Since 0.7 stamps `security_admin` verbatim, a human
+    demoted out of that tier keeps — through any token minted while they held it
+    — profile authoring and assignment, capability-grant writes, session and
+    token revocation, escalated approval decisions on anyone's run, workspace
+    `approved_egress`/`denied_egress` writes, and audit-chain verify. It gains
+    nothing the tier itself lacks: a token is never a shell, never an attach
+    ticket on a foreign run, and no capability grant widens it to admin
+    (`TestCapabilityGrantsNeverReachTheAdminTier`).
+
+    **The remediation exists, is the only one, and has to be invoked
+    deliberately.** `GET /api/v1/tokens` lists every live token with its owner
+    and `last_used_at`; `DELETE /api/v1/tokens/{id}` revokes one; `POST
+    /api/v1/sessions/revoke` with `{"sub":"<sub or email>"}` revokes a human's
+    sessions AND every unrevoked token they hold in one call — naming either
+    identity, because on an IdP whose `sub` is an opaque per-app identifier the
+    operator knows the email. All three are admin or `security_admin`. The
+    `session.revoke` row's `tokens_revoked` count is the receipt that the
+    identifier matched a person: sessions are stateless and cannot be counted, so
+    a zero there against someone you believe holds tokens means you named them
+    wrong. Nothing ages a token out, so offboarding must revoke explicitly
+    (`docs/OPERATIONS.md`, "Per-user API tokens"). Closing this means re-deriving
+    the role at auth time, or revoking a principal's live tokens from the
+    role-mapping write path; neither is built.
+
+39. **A group claim the IdP FILTERS is indistinguishable from a complete one, so
+    a shrink-the-claim workaround loses grants silently.** Wardyn marks a group
+    snapshot partial in exactly two cases: entries dropped at the cookie byte cap,
+    and the IdP's overage pointer (`_claim_names`, the claim withheld entirely) —
+    `sessionGroups`, `internal/auth/oidc/derive.go`. Both are LOUD downstream: the
+    ceiling resolver treats the identity as unanswerable and refuses rather than
+    resolving on a partial list, an unresolvable DENY refuses too, and since the
+    drives merge a group-tier drive allocation refuses the mount on the same bit
+    (`driveWithUnusableGroups`, `internal/api/user_drives_resolve.go`) — three
+    consumers, all fail-closed. A claim the
+    IdP was CONFIGURED to narrow sets neither bit: it is complete by the IdP's
+    account and merely smaller. Entra's `groupMembershipClaims: "ApplicationGroup"`
+    — the option Microsoft recommends for the token group limit — emits only groups
+    assigned to the application and excludes nested membership, and group-based App
+    Role assignment reaches direct members only. Either way a governance assignment
+    or a group-subject capability grant keyed on a group the member reaches
+    transitively stops matching, with no refusal, no audit line and no
+    `groups_snapshot_stale`. The token carries no signal that anything was filtered,
+    so there is nothing Wardyn could check.
+
+    Accepted for 0.7 because the remedy is procedural and the burden is the
+    operator's: re-key group-subject grants and group-tier assignments onto a
+    directly-assigned group or onto the user BEFORE changing the claim
+    configuration, then verify against a real login's `session_groups`
+    (`GET /me/capabilities`) rather than against the IdP's UI —
+    `docs/OPERATIONS.md`, "A third cause of a partial snapshot", carries the
+    procedure. User-subject rows are the only shape a claim-configuration change
+    cannot silently break. Closing this needs a signal the IdP does not send;
+    the nearest approximation is warning when a group-subject row stops matching
+    anyone, which is not built.
 
 ### 5.1a LLM egress content inspection — the honest-claims contract
 
