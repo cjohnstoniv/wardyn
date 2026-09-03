@@ -277,3 +277,135 @@ func TestSecondHuman_LocalModeRefusesTheSwitch(t *testing.T) {
 		}
 	})
 }
+
+// TestSecondHuman_FailsClosedWhenTheRunCannotBeRead is the gate's documented
+// fail-closed half: with the switch on and the approval's run unreadable, the
+// decision must 503 rather than pass, because "without the run we cannot prove
+// the decider is not its creator".
+//
+// WHO CAN REACH IT, established by execution before this test was written,
+// because an untested fail-closed branch is exactly where a fixture that cannot
+// reach it hides:
+//
+//	SSO admin            -> 503   reachable
+//	SSO security_admin   -> 503   reachable
+//	MEMBER               -> 404   UNREACHABLE — authorizeMemberDecision loads the
+//	                              run itself for a member and 404s first, so
+//	                              haveRun is true and this block is skipped
+//	admin token          -> 200   bypasses the gate entirely (break-glass)
+//
+// So the branch is live code on the security tier only, and a member-session
+// test would have "passed" against a 404 without ever reaching it. Both arms
+// below therefore drive an SSO admin.
+//
+// The body is asserted, not just the status, and that is the load-bearing part:
+// requireSecondHuman now has TWO 503s — this one and the local-mode refusal — so
+// a status-only assertion would pass if the fixture ever acquired LocalMode and
+// the OTHER branch answered. The fixture is asserted non-local for the same
+// reason.
+func TestSecondHuman_FailsClosedWhenTheRunCannotBeRead(t *testing.T) {
+	const wantMsg = "could not be read to verify a second human decided it"
+	const localMsg = "cannot be enforced in local mode"
+
+	// unreadable is the two ways the run can be unavailable, which the code
+	// deliberately treats identically: a read error, and a backend with no run
+	// store at all. A nil Store must not read as a pass.
+	for _, c := range []struct {
+		name    string
+		breakIt func(t *testing.T, f *scopeFixture)
+	}{
+		{"GetRun errors", func(t *testing.T, f *scopeFixture) {
+			f.store.mu.Lock()
+			delete(f.store.runs, f.runID) // ErrNotFound from the fixture's GetRun
+			f.store.mu.Unlock()
+		}},
+		{"no run store configured at all", func(t *testing.T, f *scopeFixture) {
+			f.srv.cfg.Store = nil
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			for _, verb := range []string{"approve", "deny"} {
+				t.Setenv(envEgressSecondHuman, "1")
+				f := newScopeFixture(t)
+				if f.srv.cfg.LocalMode {
+					t.Fatal("fixture is in LocalMode — the local-mode refusal would answer first and this test " +
+						"would be asserting the wrong 503")
+				}
+				id := f.seedEgress(t, "registry.npmjs.org")
+				c.breakIt(t, f)
+
+				// An SSO ADMIN: the tier that actually reaches this branch.
+				admin := ssoSession(t, "sub-second-admin", "admin@corp.example", oidc.RoleAdmin)
+				w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/"+verb, admin, `{}`)
+				if w.Code != http.StatusServiceUnavailable {
+					t.Fatalf("%s: status = %d, want 503 — an unreadable run must never read as a pass; body=%s",
+						verb, w.Code, w.Body.String())
+				}
+				if !strings.Contains(w.Body.String(), wantMsg) {
+					t.Errorf("%s: body = %s, want the fail-closed message %q", verb, w.Body.String(), wantMsg)
+				}
+				if strings.Contains(w.Body.String(), localMsg) {
+					t.Errorf("%s: the LOCAL-MODE 503 answered instead of the fail-closed one — this test is "+
+						"pinning the wrong branch: %s", verb, w.Body.String())
+				}
+				// PENDING -> decided is one-way, so the refusal has to land
+				// BEFORE Decide().
+				f.approval.mu.Lock()
+				state := f.approval.byID[id].State
+				f.approval.mu.Unlock()
+				if state != types.ApprovalPending {
+					t.Errorf("%s: approval state = %q after a refused decision, want PENDING", verb, state)
+				}
+			}
+		})
+	}
+}
+
+// TestSecondHuman_EmptyCreatedByPasses asserts the documented behaviour for a run
+// with no human creator (system-created follow-on runs): the rule cannot apply,
+// and "closed" here would mean refusing every decision on a run nobody authored,
+// which no second human can ever unblock.
+//
+// WHAT THIS DOES NOT DO, stated because the finding asked for the
+// `run.CreatedBy == ""` CLAUSE to be pinned and it cannot be. That clause only
+// changes the answer when the DECIDER's principal is also "" — otherwise
+// `run.CreatedBy != principal` is already true for an empty creator and the
+// second half of the same condition carries it. And an empty principal is
+// unreachable here: probed all three shapes through actorFromRequest, and every
+// one that yields "" (no identity, an OIDC human with an empty sub) resolves to
+// system/admin-token, which the gate bypasses at the top before this line. So
+// the clause is REDUNDANT-BUT-DEFENSIVE today, no behavioural test can
+// distinguish its presence, and the counterfactual for it correctly does not
+// fire — there is nothing to break. Deleting it is not the lesson: it is the
+// guard that keeps this line correct if an empty principal ever becomes
+// reachable.
+//
+// What IS pinned is the behaviour plus a load-bearing control: the same fixture
+// still refuses when created_by IS the decider, so this is a scoped pass-through
+// rather than a dead gate.
+func TestSecondHuman_EmptyCreatedByPasses(t *testing.T) {
+	decide := func(t *testing.T, createdBy string) int {
+		t.Helper()
+		t.Setenv(envEgressSecondHuman, "1")
+		f := newScopeFixture(t)
+		f.store.mu.Lock()
+		r := f.store.runs[f.runID]
+		r.CreatedBy = createdBy
+		f.store.runs[f.runID] = r
+		f.store.mu.Unlock()
+		id := f.seedEgress(t, "registry.npmjs.org")
+		sess := ssoSession(t, "sub-decider", "decider@corp.example", oidc.RoleAdmin)
+		return doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/approve", sess, `{}`).Code
+	}
+
+	if got := decide(t, ""); got != http.StatusOK {
+		t.Errorf("empty created_by: status = %d, want 200 — a run with no human creator has no second human "+
+			"to require, and refusing would be unblockable by anyone", got)
+	}
+	// The control: the SAME fixture still refuses when the decider IS the
+	// creator, so the arm above is a scoped pass-through and not a dead gate.
+	if got := decide(t, "sub-decider"); got != http.StatusForbidden {
+		t.Errorf("decider IS the creator: status = %d, want 403 — the pass-through above must be scoped to an "+
+			"EMPTY created_by, not to everything", got)
+	}
+}

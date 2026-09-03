@@ -505,6 +505,15 @@ const envEgressSecondHuman = "WARDYN_EGRESS_SECOND_HUMAN"
 // because a reader could reasonably expect empty to fail closed; here "closed"
 // would mean refusing every decision on a run nobody authored, which no second
 // human can ever unblock.
+//
+// That `run.CreatedBy == ""` test is REDUNDANT-BUT-DEFENSIVE today, and the note
+// is here so nobody "simplifies" it away: it only changes the answer when the
+// DECIDER's principal is also "", and every shape that yields an empty principal
+// (no identity at all, an OIDC human with an empty sub) resolves to
+// system/admin-token, which the bypass above returns on before reaching this
+// line. So no behavioural test can distinguish it — which is exactly why it is
+// worth keeping, since it is what holds this line correct if an empty principal
+// ever becomes reachable.
 func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id uuid.UUID, ap types.ApprovalRequest, run types.AgentRun, haveAP, haveRun bool) bool {
 	if !envEnabled(os.Getenv(envEgressSecondHuman)) {
 		return true
