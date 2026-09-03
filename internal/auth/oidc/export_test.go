@@ -48,6 +48,16 @@ func SessionGroupsTruncatedForTest(rolesClaim, groupsClaim []string, claimNames 
 	return truncated
 }
 
+// OverageWidensRoleForTest exposes the login guard that refuses to let an IdP
+// claim overage promote a session through the DefaultRole fallthrough. It is
+// the ROLE half of the same "was this token answerable" question
+// SessionGroupsTruncatedForTest asks about the group snapshot; the two share
+// claimsOverage, and pinning them separately is what keeps them from diverging
+// again.
+func OverageWidensRoleForTest(claimNames map[string]any, role string, matches []Match) bool {
+	return overageWidensRole(claimNames, role, matches)
+}
+
 // MaxSessionGroupsBytesForTest exposes the cookie byte budget.
 const MaxSessionGroupsBytesForTest = maxSessionGroupsBytes
 

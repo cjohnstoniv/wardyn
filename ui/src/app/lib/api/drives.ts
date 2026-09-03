@@ -79,7 +79,27 @@ export interface UserDriveGrant {
 // actually mount here.
 export interface UserDrivesSnapshot {
   drives: UserDriveListItem[];
+  /**
+   * ONE PAGE of the deployment's allocations, not necessarily all of them.
+   *
+   * user_drive_grants holds one row per SUBJECT, so its size is the
+   * deployment's headcount; the server bounds this read (default and hard cap
+   * `maxListLimit`) because unbounded it sorted every allocation on every load
+   * of this screen. A deployment at or under the cap is unaffected — the same
+   * rows it always got.
+   */
   grants: UserDriveGrant[];
+  /**
+   * How many allocations EXIST, against `grants.length` on this page. Free on
+   * the server: every grant's drive_id is an FK to a drive, so the per-drive
+   * `grant_count` values above sum to it.
+   *
+   * The two being unequal means this is a page. The screen does not act on that
+   * yet — paging the allocations table needs a control and its copy, which is a
+   * mock round — so `grant_count` per drive stays the number to trust for
+   * "how many people hold this drive". Absent on a pre-0.7 daemon.
+   */
+  grant_total?: number;
   host_roots_configured: boolean;
   runner_target: string;
 }

@@ -591,6 +591,11 @@ type Server struct {
 	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is
 	// ready to use.
 	metrics metrics
+	// auditChainSweep admits ONE verify sweep at a time (handleVerifyAuditChain).
+	// The sweep re-hashes an unprunable table, so concurrent GETs would multiply
+	// one operator action into N full passes each holding a pool connection.
+	// Zero value is ready to use.
+	auditChainSweep sync.Mutex
 	// lastTouch debounces the decision-ingest TouchRun UPDATEs per run (see
 	// shouldTouch in internal.go). Zero value is ready to use.
 	lastTouchMu sync.Mutex

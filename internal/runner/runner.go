@@ -47,6 +47,19 @@ type Capabilities struct {
 	NetworkPolicyAcknowledged bool `json:"network_policy_acknowledged,omitempty"`
 	// SessionRecording reports wardyn-rec sidecar support.
 	SessionRecording bool `json:"session_recording"`
+	// UserDrives reports whether this driver can BIND a member's user drive
+	// (migration 0054) into the sandbox — SandboxSpec.Drive.
+	//
+	// FALSE IS THE FAIL-CLOSED DEFAULT AND IT IS LOAD-BEARING. A driver that
+	// says nothing declares no drive support, so the control plane refuses a
+	// drive-carrying request rather than admitting one this substrate would
+	// reject at CreateSandbox — the same rule ConfinementClasses states one
+	// field up: never claim a control that is not structurally enforced, and
+	// never schedule a run demanding more than the driver declares.
+	//
+	// omitempty: absent on a driver that predates the field reads the same as
+	// false, which is the safe half.
+	UserDrives bool `json:"user_drives,omitempty"`
 }
 
 // SandboxSpec is everything a driver needs to create one governed sandbox.

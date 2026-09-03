@@ -165,6 +165,14 @@ group beats everyone; within a person the sign-in subject beats the email; betwe
 higher priority wins, then the drive **name**. `priority` is meaningful only inside the group
 tier — user and everyone rows show `GOV.PRIORITY_NA`.
 
+The drive name is not the LAST key, because it cannot separate two allocations naming the SAME
+drive — two groups one person is in, each granted one drive, both at the default priority. The
+resolver's floor is therefore the allocation's **subject**, ascending: the alphabetically first
+group's row wins. It matters because this resolver returns the ALLOCATION, and the allocation
+carries the size, mode and directory overrides and the paused flag, so the tie decides whether
+an admin's read-only narrowing applies. `PRECEDENCE` (§7.3) stops at the drive name and is
+FROZEN; naming the last key in the console is a copy change for a later round.
+
 Overrides are columns on the allocation row. A size override replaces the drive's size; a
 writable override replaces the drive's mode **for that subject** (it may widen or narrow — an
 admin's call); a home override names one person's exact directory and is accepted **on a
@@ -184,8 +192,10 @@ The per-person directory (subdirectory / volume / PVC suffix) is **derived, neve
   A claim that cannot name a directory is a **422 at that person's run, never a guess**.
 - `home_override` on a user-tier allocation wins over the template.
 
-Object names: Docker volume `wardyn-drive-<home>`, PVC `wardyn-drive-<drive-slug>-<home>`, host
-path `<host_root>/<home>`. **The member's request carries `drive: {enabled, read_only}` and
+Object names: every name Wardyn MINTS carries the drive's slug — Docker volume and PVC alike,
+`wardyn-drive-<drive-slug>-<home>` — because a `home_override` is written on the GRANT and does
+not move when that grant is re-pointed at another drive; a share is `<host_root>/<home>`, scoped
+by its root and named by whoever owns the tree. **The member's request carries `drive: {enabled, read_only}` and
 never a path**; the server resolves subject → allocation → drive → home from the authenticated
 identity. Only the subdirectory is bound — a run never sees the root or another person's
 directory. The mount target is the reserved literal `/home/agent/drive`.
@@ -517,10 +527,12 @@ does not freeze a second wording:
 | Host root under a denied prefix (400) | `validateUserDrive` | host_root "{path}" is under a denied prefix ({prefix}) — the same deny list every host bind obeys |
 | Backend / runner mismatch (400) | `validateUserDrive` | backend "{backend}" cannot be mounted by this deployment's runner ({runner}) |
 | Template invalid for a share (400) | `validateUserDrive` | home_template "hash" is not allowed on a share backend — a share's directories are named by your directory, so pick sub or email_local |
+| Template invalid for a managed backend (400) | `validateUserDrive` | home_template "{template}" is not allowed on a managed backend — Wardyn names the volume itself and a claim-derived name is not unique across email domains, so two people would share one; pick hash, or name a single person's directory with a home_override on their allocation |
 | Size required for a managed claim (400) | `validateUserDrive` | size_mib must be above 0 for a k8s_pvc drive — it is the volume request |
 | Delete while allocated (409) | `handleDeleteUserDrive` | this drive is still allocated — remove its allocations first (deleting it while allocated would leave those subjects with a mount that names nothing) |
 | Identity-affecting PUT on an allocated drive (409) | `driveRehomeGuard` | this drive is allocated to {n subjects} and this change re-homes {them}: {backend "host_path" → "docker_volume", …}. Every allocated person's storage object is derived from these fields, so their next run mounts a different object and the one holding their work is left behind with nothing in Wardyn naming it. Confirming is an API action, not a console one: re-send as PUT /drives/{id}?confirm=rehome. |
 | Home override on a non-user row (400) | `validateUserDriveGrant` | home_override is accepted on a user-tier allocation only — a group cannot share one directory |
+| Home override already held on this drive (409) | `handleUpsertUserDriveGrant` | another allocation on this drive already uses the directory name "{home}" — a directory name is one person's, which is why a group allocation may not carry one; pick a different name or remove the allocation that holds it |
 | Stricter home rule on a Kubernetes backend (**suffix**, 422) | `DriveHomeStricterRuleClause`, appended by `newResolvedDrive` after `REFUSED_HOME_INVALID` | (on a Kubernetes deployment the rule is stricter: no _, and it may not end in - or .) |
 
 The last row is a **suffix, not a rewording**. `REFUSED_HOME_INVALID` (§7.7) is frozen and

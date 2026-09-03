@@ -37,8 +37,8 @@
 //
 // ─── WHERE THE RESOLVED MOUNT LIVES BETWEEN CREATE AND DISPATCH ────────────
 //
-// On dispatchParams, exactly as the governance ceiling's own dispatch-time
-// inputs do (dispatchParams.CeilingDeny / CeilingProfile) — NOT on the run row,
+// On dispatchParams, next to the governance ceiling's own dispatch-time input
+// (the dispatchCeiling argument dispatchRun requires) — NOT on the run row,
 // and there is no migration for it. Three facts decide that, and the third is
 // the one that closes the question:
 //
@@ -113,7 +113,7 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 			driveRefusal("your allocation is paused by an admin"))
 		return nil, false
 	}
-	return s.driveMountFor(w, req, *resolved)
+	return s.driveMountFor(r.Context(), w, req, *resolved)
 }
 
 // driveDoorProfile names the governance profile whose DenyUserDrive DOOR is
@@ -192,6 +192,31 @@ func (s *Server) denyMemberDrive(w http.ResponseWriter, r *http.Request, ceiling
 // a preview that skipped them told an admin a drive was allocated and working
 // right up until the member ticked the box.
 //
+//  0. THE RUNNER CANNOT BIND A DRIVE AT ALL. runner.Capabilities.UserDrives is
+//     the declaration, and it is checked here for the reason
+//     resolveEnforcedConfinement checks ConfinementClasses in the same request:
+//     the control plane must refuse to schedule a run demanding more than the
+//     driver declares. Without it the only substrate question is the
+//     BACKEND-vs-TARGET match below — which a docker_volume drive on a Docker
+//     deployment passes — so a run whose runner cannot bind a drive is
+//     admitted, answered 201, and fails at dispatch. Both substrates declare
+//     true today (D3, D4); the gate is what makes the NEXT one safe, and what
+//     makes a driver that regresses its own mount path fail at the door
+//     instead of at a member's run.
+//
+//     IT IS CHECKED FIRST because it is the dominant fact: a mis-targeted
+//     backend is a row an admin can re-author, while this one no request can
+//     satisfy on this build, and it stays true after the other is fixed. A
+//     Capabilities error is a 503 and not a 422 — the same split
+//     resolveEnforcedConfinement draws between "cannot" and "cannot tell".
+//
+//     IT ADDS NO MEMBER STRING: it reuses REFUSED_BACKEND, whose frozen
+//     sentence is already parameterized on the reason, so the table §7.7
+//     declares COMPLETE stays complete.
+//
+//     SCOPED TO A WIRED RUNNER, as that sibling gate is: with no runner there
+//     is no dispatch to disagree with, so there is no promise to break.
+//
 //  1. BACKEND UNAVAILABLE HERE. A drive's backend names exactly one substrate
 //     (types.DriveBackend.RunnerTarget), and the write boundary already refuses
 //     to author a mismatched one — so this arm only fires for a row that was
@@ -202,7 +227,19 @@ func (s *Server) denyMemberDrive(w http.ResponseWriter, r *http.Request, ceiling
 //  2. THE SHARE IS NOT THERE (host_path only — see driveShareIsBindable).
 //
 // It writes its own 422 and returns false once it has.
-func (s *Server) driveIsMountableHere(w http.ResponseWriter, resolved types.ResolvedDrive) bool {
+func (s *Server) driveIsMountableHere(ctx context.Context, w http.ResponseWriter, resolved types.ResolvedDrive) bool {
+	if s.cfg.Runner != nil {
+		caps, cerr := s.cfg.Runner.Capabilities(ctx)
+		if cerr != nil {
+			writeError(w, http.StatusServiceUnavailable, "runner capabilities unavailable: "+cerr.Error())
+			return false
+		}
+		if !caps.UserDrives {
+			writeError(w, http.StatusUnprocessableEntity, driveRefusal(fmt.Sprintf(
+				"this deployment cannot mount your drive (its runner %q does not mount drives)", caps.Driver)))
+			return false
+		}
+	}
 	if target := resolved.Drive.Backend.RunnerTarget(); target != s.cfg.RunnerTarget {
 		writeError(w, http.StatusUnprocessableEntity, driveRefusal(fmt.Sprintf(
 			"this deployment cannot mount your drive (it is a %q drive and this deployment dispatches to %q)",
@@ -226,9 +263,9 @@ func (s *Server) driveIsMountableHere(w http.ResponseWriter, resolved types.Reso
 //	would find out when their work failed to persist. The narrow direction
 //	(read_only:true on a writable allocation) is always honoured — that is what
 //	NARROW-ONLY means, and it matches WorkspaceSelection.ReadOnly exactly.
-func (s *Server) driveMountFor(w http.ResponseWriter, req createRunRequest,
+func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, req createRunRequest,
 	resolved types.ResolvedDrive) (*types.DriveMount, bool) {
-	if !s.driveIsMountableHere(w, resolved) {
+	if !s.driveIsMountableHere(ctx, w, resolved) {
 		return nil, false
 	}
 	readOnly := !resolved.Writable

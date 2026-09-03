@@ -93,50 +93,39 @@ func (s *Server) routes() chi.Router {
 			// moved between the two groups leaves the TOTAL unchanged and only
 			// the split wrong, which no total can catch.
 			//
-			//                                        SUPER   SEC
-			//   direct registrations in this body       10     8
-			//   mountPermissionRoutes  (this file)       0     4
-			//   mountAccountRoutes     (this file)       0     2
-			//   adminRoutes            (this file)       1     1
-			//   mountLibraryRoutes     (sources.go)      5     0
-			//   mountSetupMutationRoutes                 4     0
-			//   mountAccessRoutes      (access.go)       4     0
-			//   mountGovernanceRoutes  (governance.go)   0     7
-			//                                        -----  ----
-			//                                           24    22
+			// WHERE THE GATED ROUTES ARE REGISTERED. This is a map, not a
+			// census: which addend a route lives in is the thing no test can
+			// tell you, and it is stable. The COUNTS are not, and they are
+			// deliberately absent — this comment carried hand-summed totals for
+			// three revisions and was wrong in two of them, most recently
+			// because another lane re-tiered a route the same day. A number
+			// restated here is a second account of something a test already
+			// asserts, and the two drift silently.
 			//
-			// The 8 SEC direct registrations below: POST /sessions/revoke ·
-			// workspace approved-egress + denied-egress + record +
-			// record/{task}/promote-egress · the two /site-config probes · GET
-			// /access/directory/search (§I, new in 0.7 and outside §B's count,
-			// like /governance's 7). The other 7 SEC live in this file's
-			// helpers: mountPermissionRoutes' 4 (the /permissions family,
-			// extracted for funlen — see its doc), mountAccountRoutes' 2 (the
-			// admin token twins /tokens, /tokens/{id}) and adminRoutes' GET
-			// /audit/chain/verify (its sibling, the sandbox sweep, stays SUPER).
+			//   direct registrations in this body   (both groups)
+			//   mountPermissionRoutes  (this file)  securityOps
+			//   mountAccountRoutes     (this file)  securityOps
+			//   adminRoutes            (this file)  one per group
+			//   mountLibraryRoutes     (sources.go) operatorOnly (+ member reads on r)
+			//   mountSetupMutationRoutes            operatorOnly
+			//   mountAccessRoutes      (access.go)  operatorOnly
+			//   mountGovernanceRoutes  (governance.go) — CALLED WITH securityOps,
+			//       despite naming its parameter operatorOnly; read the call site
+			//   mountUserDriveRoutes   (user_drives.go) operatorOnly
 			//
-			// = 46 group registrations with every conditional route mounted
-			// (Secrets configured); 43 with Secrets unconfigured — 3 of
-			// mountSetupMutationRoutes' 4 are conditional on s.cfg.Secrets, and
-			// POST /sessions/revoke on s.cfg.SessionRevocations. 0.7 moved
-			// PUT/DELETE /secrets off these groups entirely (see "Secret
-			// management" below), and five workspace routes
-			// (create/update/delete/scan/build) LEFT for the owner-or-admin tier
-			// in 0048 — those gates moved INTO the handlers, they were not
-			// dropped.
+			// Re-derive by hand ONE ADDEND AT A TIME if you need to (W7-S1-1): a
+			// same-file grep silently misses every addend registered through a
+			// differently-named chi.Router parameter or living in another file,
+			// which is how mountUserDriveRoutes went unlisted here for a release.
 			//
-			// §B's 40 GATED ROUTES = these 24+22 MINUS mountGovernanceRoutes' 7
-			// AND §I's directory search (both new in 0.7, outside the count)
-			// PLUS the two gated elsewhere, both
-			// SUPER: GET /metrics (outside /api/v1, its own explicit
-			// requireOperator — commit "absorb the operator tier") and the attach
-			// WebSocket's ticket-LESS fallback lane (ticketOrHumanAuth's own
-			// group below; an interactive shell in a foreign sandbox is the
-			// ladder-killing case, and the ticket-BEARING lane is
-			// owner-or-admin). 26 SUPER / 14 SEC. The authoritative per-route
-			// classification is authz_test.go's chi.Walk matrix, which fails on
-			// any route it cannot classify — this comment is the derivation,
-			// that table is the enforcement.
+			// FOR THE ACTUAL NUMBERS, READ THE TEST. authz_test.go's chi.Walk
+			// matrix fails on any route it cannot classify, and
+			// TestSecurityAdminRouteTier asserts the security/admin split as a
+			// number — so a re-tiering reddens there, where it is enforced,
+			// instead of quietly disagreeing with prose here. §B's own subset
+			// (which deliberately excludes the 0.7 mounts) is a SMALLER pair
+			// than the matrix total; if you are checking a tier boundary, the
+			// matrix pair is the one you want, and the test is where it lives.
 			operatorOnly := r.With(s.requireOperator)
 			// securityOps is the SECOND admin tier (0.7, §B): admin OR
 			// security_admin, via requireSecurityOperator / isSecurityOperator
@@ -147,6 +136,14 @@ func (s *Server) routes() chi.Router {
 			// hold the org allow/denylist, revoke a human's session or another
 			// human's API token, promote a workspace's observed egress, author
 			// governance profiles.
+			//
+			// "a human's" INCLUDES A SUPER ADMIN'S, and the revoke route's
+			// {"all":true} arm is deployment-wide — see handleRevokeSessions
+			// (sessions.go) for why that is the tier working rather than a hole,
+			// and TestSecurityAdminRevokesSuperAdmin for the pin. Stated here
+			// because "only ever SUBTRACTS reach" is the justification that put
+			// the route on this group, and a reader is entitled to know it was
+			// measured against a target in the tier ABOVE, not just a member.
 			//
 			// NOT a rung below operatorOnly on a ladder — the two tiers overlap
 			// on this surface and deliberately do not nest. A security admin's
@@ -168,6 +165,23 @@ func (s *Server) routes() chi.Router {
 			// allow/denylist. Pinned by TestCapabilityGrantsNeverReachTheAdminTier
 			// (security_admin_test.go) — a capability kind that ever widens
 			// isOperator breaks that test, not this comment.
+			//
+			// WHY THE OPERATOR-TOPOLOGY READS ARE NOT HERE (asked and decided in
+			// R1, recorded so it is not re-litigated). GET /site-config,
+			// /sources, /sources/{id} and /base-images were member-readable and
+			// are now operatorOnly, not securityOps. The tier argument for
+			// widening them is real — a security admin holds the org
+			// allow/denylist, so scm_hosts is arguably theirs — but it does not
+			// survive what those documents actually carry: an upstream-proxy
+			// PASSWORD ref, a database-password requirement key, and the
+			// /srv NFS path of a local_dir source. That is credential material
+			// and the host, two of the three axes this tier is DEFINED never to
+			// reach. The scm_hosts case is an argument for a SCOPED endpoint
+			// returning that one field, never for handing over a document that
+			// also carries a proxy password — and such an endpoint has no caller
+			// today (the console has no client for /sources or /base-images at
+			// all, and both /site-config callers already tolerate a null), so it
+			// is not built on spec.
 			//
 			// Stored-policy WRITES (POST/PUT/DELETE /policies) stay on
 			// operatorOnly for the twin reason: a stored run_policy is selectable
@@ -325,16 +339,38 @@ func (s *Server) routes() chi.Router {
 			// WRITES THE HOST stays gated below; owning a workspace does not make
 			// a member the operator of it. 0.7 splits that set across the two
 			// admin tiers (§B): the EGRESS-DECISION lane — approved-egress,
-			// denied-egress, record and record/{task}/promote-egress — is
-			// securityOps (deciding which hosts a workspace's runs may reach is
-			// the same authority as deciding an egress approval, and the
-			// promote-egress writer is literally the bulk form of it), while
-			// llm-cred (binds credential material), requirements, reassign (user
-			// administration) and env-as-code/write (writes the host) stay
-			// operatorOnly. None of the four SEC routes carries an in-handler
-			// tier check — scopedWorkspaceWrite and getWorkspaceOr404 authorize
-			// nothing beyond existence — so for them the router IS the whole
-			// gate, and this is the only place the tier is decided.
+			// denied-egress and record/{task}/promote-egress — is securityOps
+			// (deciding which hosts a workspace's runs may reach is the same
+			// authority as deciding an egress approval, and the promote-egress
+			// writer is literally the bulk form of it), while llm-cred (binds
+			// credential material), requirements, reassign (user administration),
+			// env-as-code/write (writes the host) and RECORD stay operatorOnly.
+			// None of the three SEC routes carries an in-handler tier check —
+			// scopedWorkspaceWrite and getWorkspaceOr404 authorize nothing beyond
+			// existence — so for them the router IS the whole gate, and this is
+			// the only place the tier is decided.
+			//
+			// RECORD IS NOT AN EGRESS DECISION, which is why it is not in that
+			// lane. It was grouped there by association with promote-egress, but
+			// the two do categorically different things: promote-egress WRITES A
+			// LIST, while record LAUNCHES AN INTERACTIVE SANDBOX — open egress by
+			// default (AllowAllEgress = !confined), the workspace's local_dir
+			// bind-mounted (read-WRITE when the owning member ticked Writable),
+			// the repo clone credential minted, the workspace's required secret:/
+			// integration: rows folded into proxy-side injections, and the
+			// operator's LLM credential attached. That is all three things
+			// securityOps is DEFINED never to reach — into a run, credential
+			// material, the host — and the classAdmin criterion authz_test.go
+			// states for llm-cred/requirements ("BIND CREDENTIAL MATERIAL or
+			// WRITE THE HOST") names record too. It also stamped the run
+			// CreatedBy = the CALLER, which is what defeated the guards written
+			// to hold this line: handleAttachTicket's strict re-check refuses a
+			// security admin a PTY in a FOREIGN sandbox, and a run they launched
+			// themselves is not foreign. And the tier could not even READ the
+			// workspace it was recording — getWorkspaceReadable answers a
+			// security admin 404 for a member-owned row — so the surface let them
+			// launch a credentialed sandbox over something they were refused a
+			// GET on.
 			//
 			// Create/update validate the source the
 			// same way policy WorkspaceMounts do (runner.ValidateMount /
@@ -386,7 +422,7 @@ func (s *Server) routes() chi.Router {
 			// varies with whether the id exists — owning a workspace does not
 			// let a member disown it.
 			operatorOnly.Post("/workspaces/{id}/reassign", s.handleReassignWorkspace)
-			securityOps.Post("/workspaces/{id}/record", s.handleRecordWorkspace)
+			operatorOnly.Post("/workspaces/{id}/record", s.handleRecordWorkspace)
 			securityOps.Post("/workspaces/{id}/record/{task}/promote-egress", s.handlePromoteRecordEgress)
 			// Committable env-as-code (devcontainer.json/AGENTS.md) from the
 			// scanned profile. GET re-generates it any time (repo workspaces have
@@ -426,7 +462,26 @@ func (s *Server) routes() chi.Router {
 			// This is where that matters most: the blast radius is corp-wide (the
 			// baseline feeds every run's upstream proxy / artifact mirror / SCM
 			// hosts), higher than a single policy.
-			r.Get("/site-config", s.handleGetSiteConfig)
+			// GET is operatorOnly for the SAME reason the PUT beside it is, and
+			// that symmetry is the whole point: authz_test.go justifies the PUT
+			// as SUPER because it "replaces the WHOLE site-config document,
+			// integration credential refs included" — and the GET returns that
+			// same whole document, refs included. UpstreamProxySecretRef and
+			// every integrations[].secrets[].secret_name are credential REFS;
+			// UpstreamProxyURL, ScmHosts, ArtifactOverrides and EgressRedirects
+			// are the operator's internal topology. A member session used to
+			// receive all of it on a page load.
+			//
+			// The console degrades rather than breaks: both callers already
+			// wrap this GET in .catch() and render with a null config
+			// (settings-screen.tsx, setup-screen.tsx). What a member loses is
+			// exactly the leak — the verbatim upstream_proxy_url line and the
+			// scm_hosts-derived rows — on cards whose every control is already
+			// disabled for them. Widening to securityOps later is the one-line
+			// move routes.go's own tier note describes; narrowing after the
+			// fact is the regression nobody notices, so this lands on the safe
+			// side of that rule.
+			operatorOnly.Get("/site-config", s.handleGetSiteConfig)
 			operatorOnly.Put("/site-config", s.handlePutSiteConfig)
 			// Live connectivity probes: launch a throwaway one-shot sandbox and
 			// actually traverse the upstream proxy / egress redirect, rather than
@@ -697,10 +752,42 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// whole-fleet audit VOLUME is the same disclosure that keeps /metrics
 	// gated. Operator-INVOKED by design: wardynd never verifies at boot.
 	securityOps.Get("/audit/chain/verify", s.handleVerifyAuditChain)
-	// Sandbox sweep. SUPER: it TEARS DOWN containers — other people's live
+	// Sandbox sweep. SUPER — but NOT for the reason this comment used to give,
+	// and the correction matters because an operator deciding who to trust with
+	// RoleSecurityAdmin reads exactly these lines.
+	//
+	// It used to say the sweep "TEARS DOWN containers — other people's live
 	// runs, mid-flight — which is reach into runs the caller does not own, the
-	// exact axis the security tier does not get. Deliberately not wired at boot
-	// (sweepOrphanedSandboxes already covers that case — see reconcile.go) and
-	// deliberately not a ticker; see handleSweepSandboxes for the cost argument.
+	// exact axis the security tier does not get." BOTH halves were false:
+	//
+	//   - It never touches a live run. SweepTerminalSandboxes skips every
+	//     non-terminal row outright (`if !isTerminalRunState(run.State) ...
+	//     continue`, runs_lifecycle.go) and reaps only the sandbox of a run that
+	//     has ALREADY ended and whose container outlived it. That is orphan
+	//     cleanup, not termination — pinned by
+	//     TestSweepTerminalSandboxes_TearsDownOrphanedLiveSandbox, whose fixture
+	//     carries a RUNNING run precisely to assert it is left alone.
+	//   - The security tier HAS that axis, deliberately. ownsRunOrAdmin is
+	//     isSecurityOperator (helpers.go), so POST /runs/{id}/kill admits a
+	//     security admin on ANY run, over a fleet-wide list handleListRuns hands
+	//     the same tier — "INSPECT-OR-STOP is the whole of that arm's warrant",
+	//     and killing a foreign run is named there as the tier's most
+	//     time-critical act. Executed: a security_admin POSTs kill on a foreign
+	//     RUNNING run and gets 202 with the row transitioned to KILLED
+	//     (TestSecurityAdminCanStopAForeignRun). So "the axis the security tier
+	//     does not get" described the opposite of this codebase.
+	//
+	// WHAT IS actually true, and why it stays SUPER: the sweep drives the RUNNER
+	// — Status then StopSandbox — across every run in the deployment, plus the
+	// credential revoke cascade for each. That is reach at the HOST over the
+	// whole fleet from one call, and the host IS one of the three axes securityOps
+	// is defined never to reach. The per-run kill is bounded to a run the caller
+	// names and audits per run; this is unbounded and audits one row for the
+	// batch. Blast radius and host reach are the argument; foreign-run
+	// termination never was.
+	//
+	// Deliberately not wired at boot (sweepOrphanedSandboxes already covers that
+	// case — see reconcile.go) and deliberately not a ticker; see
+	// handleSweepSandboxes for the cost argument.
 	operatorOnly.Post("/admin/sandboxes/sweep", s.handleSweepSandboxes)
 }

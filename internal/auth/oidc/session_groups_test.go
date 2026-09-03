@@ -53,6 +53,119 @@ func TestSessionGroupsDropsUnmatchableClaims(t *testing.T) {
 	}
 }
 
+// TestSessionGroupsGuardsBeforeTheFold is the arm the case list above cannot
+// reach, and the difference is the entire security property.
+//
+// strings.ToLower applies Unicode SIMPLE case mapping. "admın" (U+0131) and
+// "roſs" (U+017F) stay non-ASCII under it, so the guard refuses them whichever
+// side of the fold it runs on — they exercise the trivially-safe half of the
+// class. The runes that actually LAND on ASCII are KELVIN SIGN U+212A (→ 'k')
+// and U+0130 (→ 'i'), and those are the escalation: guard the LOWERED value and
+// a crafted claim "Kubernetes-admins" enters the snapshot as the operator's own
+// ASCII group "kubernetes-admins", inheriting every capability grant and every
+// governance profile bound to it.
+//
+// Counterfactual (run it): move the printable-ASCII check back after
+// strings.ToLower in CanonicalGroupSubject and this test fails with the crafted
+// names present in the snapshot, while TestSessionGroupsDropsUnmatchableClaims
+// above stays green byte for byte. The same pin exists for the deriveRole path
+// in TestF2_RoleMapPrecedence_ChartOverConsoleOverClaims' KELVIN SIGN case.
+func TestSessionGroupsGuardsBeforeTheFold(t *testing.T) {
+	for _, crafted := range []string{
+		"\u212Aubernetes-admins", // U+212A KELVIN SIGN lowercases to ASCII 'k'
+		"\u0130nfra",             // U+0130 LATIN CAPITAL I WITH DOT ABOVE lowercases to ASCII 'i'
+	} {
+		got := writoidc.SessionGroupsForTest(nil, []string{crafted, "real-group"})
+		if !slices.Equal(got, []string{"real-group"}) {
+			t.Errorf("claim %+q -> groups = %+q; the crafted rune folded ONTO an ASCII group name and entered the snapshot", crafted, got)
+		}
+		if !writoidc.SessionGroupsTruncatedForTest(nil, []string{crafted, "real-group"}, nil) {
+			t.Errorf("claim %+q dropped WITHOUT the partial bit — the snapshot reports complete while a claim went unanswered", crafted)
+		}
+	}
+}
+
+// TestSessionGroupsUnrepresentableClaimMarksSnapshotPartial is the PF-26 half
+// the byte cap and the overage already have and the ASCII filter did not.
+//
+// A directory that names groups in a non-English locale ("Entwickler-Büro") is
+// ordinary, and such a claim is dropped here — but the drop happens BEFORE uniq
+// is built, so `len(out) < len(uniq)` could never see it. The snapshot then read
+// COMPLETE-and-missing-a-group: capScan never consulted capUnresolvableGroupDeny,
+// effectiveCeiling never took ceilingWithUnusableGroups, and a group-subject DENY
+// or a group-tier profile written for that group evaporated with no refusal, no
+// audit row and nothing to notice.
+//
+// Counterfactual: drop `|| unrepresentable > 0` from sessionGroups' return and
+// every want-true row below fails while the snapshot contents stay identical.
+func TestSessionGroupsUnrepresentableClaimMarksSnapshotPartial(t *testing.T) {
+	cases := []struct {
+		name  string
+		claim []string
+		want  bool
+	}{
+		{"a real non-ASCII group name", []string{"Entwickler-Büro"}, true},
+		{"non-ASCII alongside a carried group", []string{"alpha", "Entwickler-Büro"}, true},
+		{"a control character", []string{"alpha", "eng\ttab"}, true},
+		// The bit must not fire on ordinary logins, or every caller is refused
+		// with groups_snapshot_stale forever and PF-26 means nothing.
+		{"ordinary ASCII groups", []string{"eng", "platform"}, false},
+		{"empty and whitespace-only entries name no group", []string{"eng", "", "   "}, false},
+		{"no claims at all", nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := writoidc.SessionGroupsTruncatedForTest(nil, tc.claim, nil); got != tc.want {
+				t.Fatalf("truncated = %v, want %v for claim %+q (snapshot %+q)",
+					got, tc.want, tc.claim, writoidc.SessionGroupsForTest(nil, tc.claim))
+			}
+		})
+	}
+}
+
+// TestCanonicalGroupSubjectIsTheSnapshotRule pins the shared exported helper
+// internal/api's three group-subject write boundaries call. It is exported for
+// exactly one reason: a subject those boundaries accept but this function
+// refuses is a row matched by exact equality against a snapshot that can never
+// contain it — a DENY that protects nothing. One implementation, so the write
+// surface and the match surface cannot drift.
+func TestCanonicalGroupSubjectIsTheSnapshotRule(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string // "" means refused
+	}{
+		{"  Eng-Team  ", "eng-team"},
+		{"Wardyn.Contractors", "wardyn.contractors"},
+		{"", ""},
+		{"   ", ""},
+		{"Entwickler-Büro", ""},
+		{"équipe-fr", ""},
+		{"\u212Aubernetes-admins", ""}, // must not fold onto the ASCII group
+		{"\u0130nfra", ""},
+		{"eng\ttab", ""},
+		{"eng\u0085nel", ""},
+	}
+	for _, tc := range cases {
+		got, ok := writoidc.CanonicalGroupSubject(tc.in)
+		if (tc.want == "") == ok {
+			t.Errorf("CanonicalGroupSubject(%+q) ok = %v, want %v", tc.in, ok, tc.want != "")
+			continue
+		}
+		if ok && got != tc.want {
+			t.Errorf("CanonicalGroupSubject(%+q) = %q, want %q", tc.in, got, tc.want)
+		}
+		// Whatever it accepts, the snapshot must actually produce — that is the
+		// whole contract, and it is what stops the two from drifting again.
+		if ok {
+			if snap := writoidc.SessionGroupsForTest(nil, []string{tc.in}); !slices.Equal(snap, []string{got}) {
+				t.Errorf("CanonicalGroupSubject(%+q) = %q but sessionGroups produced %+q", tc.in, got, snap)
+			}
+		} else if snap := writoidc.SessionGroupsForTest(nil, []string{tc.in}); len(snap) != 0 {
+			t.Errorf("CanonicalGroupSubject refused %+q but sessionGroups produced %+q", tc.in, snap)
+		}
+	}
+}
+
 // TestSessionGroupsNeverNil: nil is RESERVED for "this cookie predates 0.6".
 // A 0.6 login whose IdP sent nothing must produce the empty NON-NIL slice, or
 // every such human is permanently reported as having a stale group snapshot.

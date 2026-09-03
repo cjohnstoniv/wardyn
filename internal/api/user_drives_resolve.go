@@ -53,6 +53,52 @@ var errDriveUnmountable = errors.New("drive_unmountable")
 // states: a store failure means the answer is unknown, and carrying on with the
 // zero value would silently mean "you have no drive" for a member who does —
 // mounting nothing where an admin allocated something.
+// driveUnavailableReason names WHY /me could not answer for a caller's drive, in
+// the one shape a wire field may carry it: a closed token, never a sentence.
+//
+// IT IS writeDriveError'S SWITCH, in the same order and over the same sentinels,
+// because the two answer ONE question at two doors. writeDriveError is what a
+// member meets when they launch; this is what /me says before they try. A
+// deployment where those two disagree is one where the console shows a member a
+// state the launch path does not have, which is the whole defect this exists to
+// close — so they are written adjacent and a new arm in one is a missing arm in
+// the other rather than a silent divergence.
+//
+// The tokens are for a CLIENT to branch on, not for a human to read. The
+// sentence a member gets is still the server-composed one writeDriveError
+// writes at the door that refuses them.
+func driveUnavailableReason(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, errGroupsSnapshotStale):
+		return driveUnavailableGroups
+	case errors.Is(err, errDriveUnmountable):
+		return driveUnavailableUnmountable
+	default:
+		return driveUnavailableUnknown
+	}
+}
+
+// The closed reason set. `user_drive_unavailable` carries exactly one of these,
+// and "" is the ordinary answer: /me could answer, and user_drive says what it
+// answered (an allocation, or null for none).
+const (
+	// driveUnavailableGroups: the caller's group snapshot cannot answer the
+	// group tier, so an allocation may exist and be invisible. 403 at launch.
+	driveUnavailableGroups = "groups_snapshot_stale"
+	// driveUnavailableUnmountable: an allocation EXISTS and cannot be mounted —
+	// a home name that cannot name a directory, a share that is not there. 422
+	// at launch, and the one state whose remedy is an admin's, not the member's.
+	driveUnavailableUnmountable = "unmountable"
+	// driveUnavailableUnknown: the allocation could not be READ. 500 at launch.
+	driveUnavailableUnknown = "unavailable"
+	// driveUnavailableGovernance: the caller's CEILING could not be resolved, so
+	// whether the door is open is unknown. Distinct from the three above because
+	// nothing is wrong with the allocation — what is unknown is permission.
+	driveUnavailableGovernance = "governance_unavailable"
+)
+
 func writeDriveError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errGroupsSnapshotStale):
@@ -283,9 +329,39 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 		// gibberish appended to the sentence that was meant for them. So it goes
 		// to the LOG, where the operator who has to act on it already looks —
 		// and the member's 422 stays byte-identical to the mock.
+		//
+		// WHOSE VALUE FAILED IS IN THE LOG, because the log is where the person
+		// who can fix it looks. DriveHomeName SHORT-CIRCUITS on the override —
+		// a non-empty one is checked and returned before any template is read —
+		// so home_override_set true means the invalid value is the ADMIN's
+		// stored one and the template had no part in it. Without this field the
+		// operator's own diagnostic named home_template for a failure the
+		// template did not cause, and the admin looked at the wrong setting.
+		//
+		// The flag, never the value: a directory name is a person's username as
+		// often as not, the same reason drive.grant.write audits
+		// home_override_set rather than what it was set to.
 		slog.Warn("wardynd: user drive: a home name could not be derived for this principal",
 			slog.String("drive", d.Name), slog.String("backend", string(d.Backend)),
-			slog.String("home_template", string(d.HomeTemplate)), slog.String("err", err.Error()))
+			slog.String("home_template", string(d.HomeTemplate)),
+			slog.Bool("home_override_set", strings.TrimSpace(override) != ""),
+			slog.String("err", err.Error()))
+		// FILED, NOT FIXED HERE — THE SENTENCE BLAMES THE MEMBER FOR AN ADMIN'S
+		// VALUE. When an override is set it is the ONLY thing that can have
+		// failed (see the short-circuit above), yet this interpolates
+		// d.HomeTemplate unconditionally, so a member is told "your hash cannot
+		// name a directory" about a machine-generated name they never supplied
+		// and cannot change. The remedy clause is already right — an admin does
+		// fix it — but the subject is not, and the member is left with nothing
+		// to ask for by name.
+		//
+		// It is not fixed here because §7.7 declares its table COMPLETE and no
+		// row covers "an administrator's setting for your drive is invalid":
+		// REFUSED_HOME_INVALID says "your {claim}", which is the wrong subject,
+		// and REFUSED_BACKEND is the deployment-capability sentence, which
+		// carries no remedy for a case that has one. That is new member copy, so
+		// it is FILED (local/FILED-COPY.md) rather than invented at a call site.
+		//
 		// The FROZEN sentence first, byte-for-byte, then the substrate's own
 		// clause when the substrate is stricter than the sentence describes.
 		//
@@ -518,7 +594,7 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 	// (3) And would it bind here. Skipped for a PAUSED row, where nothing above
 	// it was derived — there is no object name to stat and nothing would mount
 	// anyway, which is the answer the response already carries.
-	if !resolved.Paused && !s.driveIsMountableHere(w, *resolved) {
+	if !resolved.Paused && !s.driveIsMountableHere(r.Context(), w, *resolved) {
 		return
 	}
 	// The SAME positional pick newResolvedDrive made, read back rather than

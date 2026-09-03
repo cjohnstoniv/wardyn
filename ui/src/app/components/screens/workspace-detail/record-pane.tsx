@@ -79,7 +79,7 @@ import { C } from "../../../lib/workspace-copy";
 // workspace-copy.ts's mock-sourced canon — this line has no mock counterpart.
 const VERIFY_APPROVE_LEARNS_HINT =
   "Approving a held request here also adds that host to this workspace's requirements — future runs won't ask again.";
-import { useSecurityOperator } from "../../wardyn/operator-context";
+import { useOperator, useSecurityOperator } from "../../wardyn/operator-context";
 import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 
 export function RecordPane({
@@ -139,14 +139,21 @@ export function RecordPane({
   // Open the existing ProfileReview drawer on a record run (Save profile).
   onOpenProfile: (runId: string, suggestedName?: string) => void;
 }) {
-  // useSecurityOperator, not useOperator (0.7 §B): every route this pane
-  // drives is on securityOps — POST /workspaces/{id}/record and
-  // .../record/{task}/promote-egress (routes.go:388-389), and the
-  // approve-hosts path's PUT .../approved-egress (routes.go:363). Recording a
-  // workspace's real egress and promoting it into the allowlist IS the
-  // security tier's loop. The ONE control under this fieldset that reaches a
-  // super-only route is "Save profile", whose drawer POSTs /policies — gated
-  // separately in profile-review.tsx, where that call actually lives.
+  // useSecurityOperator, not useOperator (0.7 §B): the DECISION routes this
+  // pane drives are on securityOps — .../record/{task}/promote-egress and the
+  // approve-hosts path's PUT .../approved-egress. Promoting a workspace's
+  // observed egress into its allowlist IS the security tier's loop.
+  //
+  // The LAUNCH controls are the exception and are gated separately, in the two
+  // components that own them (NewSessionForm and SessionCard): R1 moved
+  // POST /workspaces/{id}/record to operatorOnly, because it does not decide an
+  // egress question — it starts an interactive sandbox with open egress, the
+  // workspace's local_dir bind-mounted, the clone credential minted and the
+  // operator's LLM credential attached, and stamps the caller as the run's
+  // owner. Same pattern as "Save profile", whose drawer POSTs the super-only
+  // /policies and is gated in profile-review.tsx: the control is gated where
+  // its call lives, so this pane never shows a security admin a live button
+  // over a route the server now refuses.
   const securityOperator = useSecurityOperator();
   const sessions = recordSessions(ws);
   const orphans = orphanedVerifySessions(ws);
@@ -323,6 +330,12 @@ function NewSessionForm({
   disabled: boolean;
   onRecord: (name: string) => void;
 }) {
+  // LAUNCH, not a decision: POST /workspaces/{id}/record is operatorOnly
+  // (routes.go), so a security admin sees this whole form disabled rather than
+  // enabled-then-403 — the pane's own rule for a super-only control. The FORM,
+  // not just its button: a live name field over a dead Start is a worse lie
+  // than a form that plainly says who may use it.
+  const operator = useOperator();
   const [name, setName] = React.useState(existing.length === 0 ? "build & test" : "");
   const trimmed = name.trim();
   const start = () => {
@@ -341,11 +354,13 @@ function NewSessionForm({
           placeholder="name this session — e.g. build & test"
           className="h-9 max-w-xs flex-1"
           aria-label="Session name"
+          disabled={!operator}
         />
-        <Button size="sm" onClick={start} disabled={disabled || !trimmed}>
+        <Button size="sm" onClick={start} disabled={disabled || !trimmed || !operator}>
           <Radio className="size-3.5" /> Start recording
         </Button>
       </div>
+      {!operator && <p className="text-meta text-muted-foreground">{OPERATOR_ONLY_REASON}</p>}
       <p className="text-meta text-muted-foreground">
         Opens an attached terminal with the repo + your model provider ready. Do the real thing, then
         click Done recording to capture what it used. You can replay it confined once it settles.
@@ -429,6 +444,9 @@ function SessionCard({
   // next poll with no chance to back out. Route through the same
   // AlertDialog idiom workspace-detail.tsx's own Rescan confirm uses.
   const [confirmKind, setConfirmKind] = React.useState<"record" | "replay" | null>(null);
+  // The launch controls below (Re-record, Replay confined, Replay again) all
+  // POST .../record, which R1 moved to operatorOnly — see the pane's own note.
+  const operator = useOperator();
 
   return (
     <div className="rounded-lg border border-border p-3" data-testid={`session-${sessionKey}`}>
@@ -454,12 +472,13 @@ function SessionCard({
         <div className="mt-3 space-y-3">
           <RecordReviewCard ws={ws} sessionKey={sessionKey} rr={openRR} onPromoteEgress={onPromoteEgress} onOpenProfile={onOpenProfile} />
           <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => setConfirmKind("record")} disabled={busyOpen}>
+            {/* Re-record and Replay confined both POST .../record (operatorOnly). */}
+            <Button size="sm" variant="outline" onClick={() => setConfirmKind("record")} disabled={busyOpen || !operator}>
               {busyOpen ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
               Re-record
             </Button>
             {stage === "recorded" && (
-              <Button size="sm" onClick={() => onReplayConfined(label)} disabled={busyConfined}>
+              <Button size="sm" onClick={() => onReplayConfined(label)} disabled={busyConfined || !operator}>
                 {busyConfined ? <Loader2 className="size-3.5 animate-spin" /> : <ShieldCheck className="size-3.5" />}
                 Replay confined
               </Button>
@@ -503,7 +522,7 @@ function SessionCard({
             replayName={label}
             onOpenProfile={onOpenProfile}
           />
-          <Button size="sm" variant="outline" onClick={() => setConfirmKind("replay")} disabled={busyConfined}>
+          <Button size="sm" variant="outline" onClick={() => setConfirmKind("replay")} disabled={busyConfined || !operator}>
             {busyConfined ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
             Replay again
           </Button>

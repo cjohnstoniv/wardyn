@@ -1121,19 +1121,25 @@ hiding them would repeat the failure mode we are designed to avoid.
     named (a uid-agnostic rebuild of all five agent images, `userns-remap`
     interactions, and the credential-staging binds re-owned per run).
 
-34. **The Kubernetes claim name joins two variable-width fields, and the
-    collision is a REFUSED RUN, not a cross-mount.** A managed claim is
+34. **Every minted object name joins two variable-width fields, and the
+    collision is a REFUSED RUN, not a cross-mount.** Every name Wardyn mints —
+    a Docker volume as well as a Kubernetes claim — is
     `wardyn-drive-<drive-slug>-<home>`; both fields admit `-` and a slug folds
     case, so drive `eng` + home `us-bob` and drive `eng-us` + home `bob` name
-    the same claim. The consequence is bounded by a fail-closed identity check
+    the same object. The consequence is bounded by a fail-closed identity check
     rather than by the name: the driver refuses a claim whose `wardyn.drive` /
     `wardyn.home` labels are not this run's (`driveClaimIdentity`), and Wardyn
     holds no `delete` verb with which to repair a collision, so what a colliding
     pair produces is a refused run for one of the two people — never one
-    member's private storage inside another member's agent. Docker's
-    `wardyn-drive-<home>` has one field and no separator ambiguity, and is
-    guarded the same way at the object (`driveVolumeAdoptable`). **The ambiguity
-    itself is open.** The operator remedy is to rename one of the two drives
+    member's private storage inside another member's agent. Docker is guarded
+    the same way at the object rather than by the name: `driveVolumeAdoptable`
+    refuses a volume whose `wardyn.drive` label is another drive's, so a
+    colliding pair costs one of the two people a refused run there too. This
+    parity is NEW — the volume name carried no slug and so had no separator
+    ambiguity at all until every minted name took one, which closed a
+    re-pointing hole (a `home_override` moved between drives named one volume)
+    at the price of extending this one to Docker. **The ambiguity itself is
+    open.** The operator remedy is to rename one of the two drives
     (with the caveat in #37) or to give the colliding people distinct home
     names; the product fix — a fixed-width drive id in the object name, or slug
     uniqueness enforced at the write boundary plus a unique index — is 0.7.1,
@@ -1188,8 +1194,8 @@ hiding them would repeat the failure mode we are designed to avoid.
     real mitigations are the storage class (block, not network-share), the
     share's own quota, and a namespace `ResourceQuota`.
 
-37. **Renaming a drive orphans every Kubernetes claim already provisioned under
-    it, and 0.7 warns nobody at the write.** A managed claim's name folds the
+37. **Renaming a drive orphans every object already provisioned under it, on
+    BOTH substrates, and the console still warns nobody at the write.** A managed claim's name folds the
     drive's slug, so a rename changes the name every FUTURE claim is created
     under: the claims already provisioned keep their old names, keep the
     member's data, and are never looked up again — each person's next run
@@ -1203,12 +1209,20 @@ hiding them would repeat the failure mode we are designed to avoid.
     no longer performs it quietly:** a rename — like any change to `backend`,
     `home_template` or `host_root` — on a drive that already has grants is a
     **409** naming what changes and how many allocations move, unless the request
-    carries `?confirm=rehome` (`driveRehomeGuard`). What is NOT closed is the
-    console: it has no confirm affordance, so an admin who means the rename
-    carries it out through the API, and the runbook above is still how the
-    orphaned claims are reclaimed afterwards. Docker is unaffected: a managed volume's name is
-    `wardyn-drive-<home>` and folds no drive name, so a rename orphans nothing
-    there. Rename is the visible case of a wider gap: `PUT /drives/{id}` accepts
+    carries `?confirm=rehome` (`driveRehomeGuard`), and the `drive.write` row
+    carries `rehomed: true` so the log distinguishes a cosmetic edit from one
+    that moved somebody's storage. What is NOT closed is the console: it has no
+    confirm affordance, so an admin who means the rename carries it out through
+    the API, and the runbook above is still how the orphaned objects are
+    reclaimed afterwards. **Docker is no longer exempt.** A managed volume's
+    name folds the drive's slug exactly as a claim's does, so a rename orphans
+    volumes the same way — the old ones keep the data, are never looked up
+    again, and each person's next run creates a fresh empty volume under the new
+    name. They stay findable by the label the name does not carry
+    (`docker volume ls --filter label=wardyn.drive=<drive id>`, "User drives on
+    Docker"), which is why the id is labelled rather than the name. Before the
+    naming change this residual was Kubernetes-only; nothing about the rename
+    path changed, only the set of objects it orphans. Rename is the visible case of a wider gap: `PUT /drives/{id}` accepts
     EVERY field change on an allocated drive without a warning — a
     `home_template` change hands each member a fresh, empty object at their next
     run (the old ones findable by `wardyn.drive` on managed backends only), and a
@@ -1216,18 +1230,27 @@ hiding them would repeat the failure mode we are designed to avoid.
     covers all four columns, so the gap that remains is the console's, not the
     API's.
 
-38. **A per-user API token's role and group snapshot are frozen at mint, with no
-    expiry and no re-stamp — so the demoted-admin window is UNBOUNDED, where the
-    SSH analogue's (#15) is merely long.** `0045_api_tokens.sql` stamps `role`
-    and `groups` from the minting session (`internal/api/apitokens.go`), and
-    every request the token authenticates republishes them through
-    `withHumanIdentity`, so downstream the bearer is that human exactly as they
-    were at mint time. Nothing narrows the staleness the way `0046` narrows the
-    key stamp: the table carries `created_at`, `last_used_at` and `revoked_at`
-    and **no expiry column**; `oidc.Config.OnLogin` re-stamps SSH keys only
-    (`store.RefreshSSHKeyRoles`); the only `UPDATE`s the store issues against
-    `api_tokens` set `last_used_at` and `revoked_at`; and a demotion in the IdP
-    never reaches the row. Since 0.7 stamps `security_admin` verbatim, a human
+38. **A per-user API token's GROUP SNAPSHOT is frozen at mint, with no expiry
+    — so for a group-derived power the demoted-admin window is UNBOUNDED, where
+    the SSH analogue's (#15) is merely long.** NARROWED, NOT CLOSED, and the
+    half that moved is worth stating exactly. `0045_api_tokens.sql` stamps
+    `role` and `groups` from the minting session
+    (`internal/api/apitokens.go`), and every request the token authenticates
+    republishes them through `withHumanIdentity`, so downstream the bearer is
+    that human as they were at mint time.
+
+    Since the token lane gained the login hook the key lane had since `0046`,
+    the ROLE half is now bounded the same way: `oidc.Config.OnLogin` fires
+    `store.RefreshAPITokenRoles` beside `store.RefreshSSHKeyRoles`, so the
+    demoted human's own next sign-in re-stamps `role` on every unrevoked token
+    they hold. What did NOT move: `groups` is never refreshed by that hook or
+    anything else, the table still carries `created_at`, `last_used_at` and
+    `revoked_at` and **no expiry column**, there is no TTL the way
+    `WARDYN_SSH_ROLE_TTL` bounds a key, and a human who never signs in again is
+    re-stamped never. So a power that derives from the frozen GROUP snapshot —
+    a capability grant or governance profile bound to a group they have left —
+    survives indefinitely, and a demotion in the IdP still never reaches the
+    row on its own. Since 0.7 stamps `security_admin` verbatim, a human
     demoted out of that tier keeps — through any token minted while they held it
     — profile authoring and assignment, capability-grant writes, session and
     token revocation, escalated approval decisions on anyone's run, workspace
@@ -1394,7 +1417,11 @@ platform-internal name (write time AND at the dispatch sink); the grant may not
 overwrite a variable dispatch already set; `requires_approval` is REFUSED rather
 than silently ignored (there is no mint to gate); and the kind is **admin-only by
 default** — a member's `env_secret` grant is dropped even for a ceiling-listed
-pairing unless the operator sets `WARDYN_ALLOW_MEMBER_ENV_SECRET`. Prefer `api_key`
+pairing unless the operator sets `WARDYN_ALLOW_MEMBER_ENV_SECRET`. That drop is a
+ROLE check plus the switch, never a ceiling check, so it binds every non-operator
+on every route a run policy arrives by (an inline body, a stored row the member
+selected, or the deployment default) and regardless of whether a governance
+profile is assigned to them (`dropAdminOnlyEnvSecretGrants`). Prefer `api_key`
 (never resident) whenever the tool can be pointed at a host + header instead.
 
 **Everything else is never-resident** — `api_key`, the Bedrock **bearer** token

@@ -468,16 +468,52 @@ const envEgressSecondHuman = "WARDYN_EGRESS_SECOND_HUMAN"
 // that wants the gate to actually bind must therefore treat the admin token as
 // the break-glass credential it is — SSO configured, token held out of band.
 //
-// LocalMode is the same story with a different label: the injected operator IS a
-// verified human there, so a local:alice deciding local:alice's own run is
-// refused like any other self-decision. On that single-dev machine the switch is
-// simply not something to turn on.
+// LOCALMODE REFUSES THE GATE OUTRIGHT — 503, not a comparison. The switch is
+// UNENFORCEABLE there, and that is structural rather than a hole to patch:
+// LocalMode is the no-auth bypass (humanOrAdminAuth injects Config.LocalOperator
+// and authenticates nobody), so BOTH operands of "is the decider the creator"
+// are client-supplied. actorFromRequest honors the DEV-ONLY X-Wardyn-Principal
+// header in this mode by design (runs_policy.go), which makes the DECIDER
+// forgeable; and run.CreatedBy comes from that same function at create
+// (runs.go), which makes the CREATOR forgeable too. So comparing the INJECTED
+// operator instead of the header — the obvious narrow fix — closes only the
+// first half: a run created under `X-Wardyn-Principal: local:carol` is then
+// decided by its real author with no header at all, because local:alice !=
+// local:carol. Both arms are pinned in approvals_second_human_test.go.
+//
+// And the mode cannot be made to satisfy the gate honestly, because the only
+// identity in it that is NOT client-supplied is a single deployment-wide
+// constant — every request is the same principal, so a rule demanding a
+// DIFFERENT human can never pass. Enforcing it correctly means refusing every
+// egress decision forever. Refusing with a 503 that NAMES the incompatibility
+// is the same outcome, arrived at honestly and once, instead of an operator
+// discovering an unexplained deadlock or (worse) a gate they believe is binding
+// that one curl defeats.
+//
+// This is NOT the single-dev machine only: Config.LocalTrustForwarder documents
+// LocalMode as the compose/team topology too (server.go), so "nobody would turn
+// it on there" was never a safe assumption.
+//
+// No audit event, matching the fail-closed 503 branch below rather than the
+// bypass above: this refusal is a deployment-configuration answer that every
+// caller gets identically and that the response itself states, not a decision
+// about one principal. (A BOOT-time refusal would tell the operator earlier
+// still; that belongs with cmd/wardynd's other boot-flag validation.)
 //
 // A run with an EMPTY created_by (system-created follow-on runs) has no human
 // creator to be the same as, so the rule cannot apply and passes. Said out loud
 // because a reader could reasonably expect empty to fail closed; here "closed"
 // would mean refusing every decision on a run nobody authored, which no second
 // human can ever unblock.
+//
+// That `run.CreatedBy == ""` test is REDUNDANT-BUT-DEFENSIVE today, and the note
+// is here so nobody "simplifies" it away: it only changes the answer when the
+// DECIDER's principal is also "", and every shape that yields an empty principal
+// (no identity at all, an OIDC human with an empty sub) resolves to
+// system/admin-token, which the bypass above returns on before reaching this
+// line. So no behavioural test can distinguish it — which is exactly why it is
+// worth keeping, since it is what holds this line correct if an empty principal
+// ever becomes reachable.
 func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id uuid.UUID, ap types.ApprovalRequest, run types.AgentRun, haveAP, haveRun bool) bool {
 	if !envEnabled(os.Getenv(envEgressSecondHuman)) {
 		return true
@@ -499,6 +535,16 @@ func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id u
 	}
 	if ap.Kind != types.ApprovalEgressDomain {
 		return true // the switch is scoped to egress decisions
+	}
+	// AFTER the kind check on purpose: the switch governs egress decisions only,
+	// so refusing here must not reach a credential or tool_call decision, which
+	// are already admin-only and which this switch never claimed to gate.
+	if s.cfg.LocalMode {
+		writeError(w, http.StatusServiceUnavailable, envEgressSecondHuman+
+			" cannot be enforced in local mode: local mode authenticates nobody, so both the decider and"+
+			" the run's creator are client-supplied and no request can prove a second human decided."+
+			" Configure SSO to use this switch, or unset it")
+		return false
 	}
 	if !haveRun {
 		// Fail CLOSED on BOTH ways the run can be unavailable — a read error, and

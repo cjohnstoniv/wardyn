@@ -323,13 +323,57 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 		}
 	})
 
-	t.Run("HasGroupTierAssignments failing is an error, not a pass", func(t *testing.T) {
-		// The gate itself must fail closed: an unreadable "does a group row
-		// exist" is not evidence that none does.
+	// The two governance reads ceilingWithUnusableGroups makes fail
+	// INDEPENDENTLY, and each needs its own case. They used to share one
+	// fixture field, which meant the second could never be reached: the
+	// resolver errors and returns before the gate is ever asked, so the case
+	// named for the gate was re-testing the resolver. Deleting the gate's
+	// error check left the ENTIRE package green — executed, 53s — with this
+	// subtest still passing under its old name.
+	t.Run("ResolveGovernanceProfile failing is an error, not a pass", func(t *testing.T) {
 		boom := errors.New("pg: connection refused")
 		st := &capStore{govErr: boom}
 		if _, err := govServer(st).effectiveCeiling(govMemberCtx(nil, false)); !errors.Is(err, boom) {
-			t.Fatalf("err = %v, want the store failure — an unreadable gate must never read as `no group rows`", err)
+			t.Fatalf("err = %v, want the store failure — a failed resolve must never read as `no assignment matched`", err)
+		}
+
+		// AND IT MUST NOT BE MASKED AS A REFUSAL. Deleting
+		// ceilingWithUnusableGroups' own resolve-error check does NOT fail-open
+		// — ceilingFromProfile re-checks the same error downstream, which is
+		// why the arm above passes without it — but with a group-tier row
+		// present the flow reaches the stale refusal FIRST and answers
+		// groups_snapshot_stale: a 403 telling the human to sign in again for
+		// what is actually a database outage, and one no re-login can clear.
+		// Executed: with that check removed this returns groups_snapshot_stale,
+		// not boom. Without this second case, the early check could be deleted
+		// with the suite green.
+		masked := &capStore{govErr: boom, govHasGroupTier: true}
+		_, err := govServer(masked).effectiveCeiling(govMemberCtx(nil, true))
+		if !errors.Is(err, boom) {
+			t.Fatalf("err = %v, want the store failure — a store outage must not be reported as `groups_snapshot_stale`, "+
+				"which sends the caller to re-login for something re-logging in cannot fix", err)
+		}
+	})
+
+	t.Run("HasGroupTierAssignments failing is an error, not a pass", func(t *testing.T) {
+		// THE GATE ITSELF, reached at last: an unreadable "does a group row
+		// exist" is not evidence that none does. The fixture is the ordinary
+		// production shape this branch exists for — the resolver answers
+		// ErrNotFound (nobody has a user-tier assignment) while the gate's own
+		// query fails, which is one statement timing out or one table denying
+		// a read, not a whole database outage.
+		//
+		// Counterfactual: change governance.go's `hasGroupTier, herr :=` to
+		// `hasGroupTier, _ :=` and this case reports the DEPLOYMENT ceiling
+		// with a nil error — a walled member silently widened by an unreadable
+		// gate, which is the exact fail-open ceilingWithUnusableGroups exists
+		// to refuse.
+		boom := errors.New("pg: statement timeout")
+		st := &capStore{govHasGroupTierErr: boom}
+		got, err := govServer(st).effectiveCeiling(govMemberCtx(nil, true))
+		if !errors.Is(err, boom) {
+			t.Fatalf("err = %v (ceiling %+v), want the store failure — an unreadable gate must never read as `no group rows`",
+				err, got.Spec.AllowedDomains)
 		}
 	})
 }

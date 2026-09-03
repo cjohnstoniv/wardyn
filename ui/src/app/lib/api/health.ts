@@ -66,6 +66,24 @@ export interface Me {
   // user_drive is null, the state where "ask an admin for an allocation" is
   // the wrong advice.
   user_drive_denied_by_profile?: string;
+  // WHY /me COULD NOT ANSWER for this caller's drive, or "" when it could.
+  // Always present on a 0.7 daemon, so an absent key is an older server rather
+  // than "nothing is wrong".
+  //
+  // It exists because `user_drive: null` means "you have no allocation", which
+  // is ADVICE — and three server states the LAUNCH path refuses with 403, 422
+  // and 500 used to wear that same answer. A closed set, matching the server's
+  // own vocabulary beside writeDriveError: "groups_snapshot_stale" (sign in
+  // again), "unmountable" (an allocation exists and an admin must fix its
+  // directory name), "unavailable" (the allocation could not be read), and
+  // "governance_unavailable" (the ceiling could not be read, so whether the
+  // door is open is unknown — the allocation is withheld with it).
+  //
+  // Non-empty means the drive affordance must NOT be offered: the server has
+  // not said the mount would work. Rendering the remedy in its place is a copy
+  // change and is not wired yet — the card falls back to offering nothing,
+  // which is what it already did for all four states.
+  user_drive_unavailable?: string;
 }
 
 // Result of a real throwaway-sandbox probe (test-proxy / test-redirect) —

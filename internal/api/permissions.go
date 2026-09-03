@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -127,9 +128,29 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 	// user/group: lowercased the SAME way the caller's own identities are
 	// (capabilitySubjects, sessionGroups) — a grant written "Alice@Corp.com"
 	// must still hit the lowercased sub/email the resolver compares against.
-	g.Subject = strings.ToLower(strings.TrimSpace(g.Subject))
+	g.Subject = strings.TrimSpace(g.Subject)
 	if g.Subject == "" {
 		return fmt.Errorf("subject: required for subject_type %q", g.SubjectType)
+	}
+	if g.SubjectType == types.CapabilitySubjectGroup {
+		// A GROUP subject is matched by exact equality against the login-time
+		// snapshot, and that snapshot is strictly narrower than "lowercase it":
+		// sessionGroups can only carry printable ASCII, checked BEFORE the fold.
+		// So the write surface asks the match surface itself — one function,
+		// oidc.CanonicalGroupSubject — rather than a second, looser spelling of
+		// the same rule. Without it a subject no session can ever produce is
+		// stored 201-Created and rendered on the Permissions screen as active
+		// while it matches nobody: a DENY that protects nothing (the failure
+		// the egress_host arm above added ValidDomainEntry to close, on the
+		// VALUE half of the identical record), and a group tier that
+		// HasGroupTierAssignments still counts as present.
+		subject, ok := oidc.CanonicalGroupSubject(g.Subject)
+		if !ok {
+			return fmt.Errorf("subject: must be printable ASCII — a group subject is matched against the login-time group snapshot, which carries printable ASCII only, so this value can never match anyone")
+		}
+		g.Subject = subject
+	} else {
+		g.Subject = strings.ToLower(g.Subject)
 	}
 	if len(g.Subject) > maxCapabilityGrantFieldLen || !controlCharFree(g.Subject) {
 		return fmt.Errorf("subject: invalid")

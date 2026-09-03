@@ -22,6 +22,15 @@ import (
 // pagerFake embeds store.Store (nil — unused methods panic) and implements
 // store.Pager over canned slices, honouring Limit/Offset exactly as the SQL
 // LIMIT/OFFSET does, so the handlers take their production pager path.
+//
+// THE ASSERTION BELOW IS LOAD-BEARING, not decoration. Handlers reach this fake
+// through a runtime type assertion to store.Pager, so a method ADDED to that
+// interface and not added here does not fail the build — it silently makes this
+// fake stop being a Pager, and every test in this file quietly starts exercising
+// the FALLBACK path while still passing, which is the opposite of what the file
+// exists for. Caught exactly that way when ListUserDriveGrantsPage was added.
+var _ store.Pager = (*pagerFake)(nil)
+
 type pagerFake struct {
 	store.Store
 	runs        []types.AgentRun
@@ -45,6 +54,9 @@ func (f *pagerFake) ListRunsPage(_ context.Context, p store.Page) ([]types.Agent
 	return pagerSlice(f.runs, p), nil
 }
 func (f *pagerFake) ListPoliciesPage(context.Context, store.Page) ([]types.RunPolicy, error) {
+	return nil, nil
+}
+func (f *pagerFake) ListUserDriveGrantsPage(context.Context, store.Page) ([]types.UserDriveGrant, error) {
 	return nil, nil
 }
 func (f *pagerFake) ListWorkspacesPage(context.Context, store.Page) ([]types.Workspace, error) {

@@ -324,3 +324,175 @@ func TestCapabilityGrantsNeverReachTheAdminTier(t *testing.T) {
 		}
 	}
 }
+
+// recordTierStore serves one member-owned workspace, which is all the two
+// authorization questions below need: may this tier reach the record route, and
+// may it read the workspace it would be recording.
+type recordTierStore struct {
+	store.Store
+	ws types.Workspace
+}
+
+func (s *recordTierStore) GetWorkspace(_ context.Context, id uuid.UUID) (types.Workspace, error) {
+	if id != s.ws.ID {
+		return types.Workspace{}, store.ErrNotFound
+	}
+	return s.ws, nil
+}
+
+// TestRecordWorkspaceIsSuperAdminOnly is the tier decision for
+// POST /workspaces/{id}/record, and it is a TIER decision rather than a guard.
+//
+// The route sat on securityOps, grouped with the workspace EGRESS-DECISION lane
+// because recording is how the hosts promote-egress promotes get observed. But
+// record does not DECIDE anything — it LAUNCHES an interactive sandbox with
+// open egress by default, the workspace's local_dir bind-mounted (read-write
+// when the owning member ticked Writable), the repo clone credential minted, the
+// workspace's required secret:/integration: rows folded into proxy-side
+// injections, and the operator's LLM credential attached. Those are the three
+// axes routes.go defines the security tier as never reaching (into a run,
+// credential material, the host), and they are the exact criterion
+// authz_test.go states for keeping llm-cred and requirements on classAdmin.
+//
+// Worse, the run was stamped CreatedBy = the CALLER, so every downstream guard
+// that keys on run OWNERSHIP passed: handleAttachTicket's explicit strict
+// re-check refuses a security admin a PTY in a FOREIGN sandbox
+// (TestAttachTicketRefusesForeignRunForSecurityAdmin above), and a run they
+// launched themselves is not foreign — TestAttachTicketOwnRunStampsMemberForSecurityAdmin
+// asserts that own-run mint returns 200. The escalation was to become the owner.
+//
+// The second assertion is the one that settles it as a mistake rather than a
+// trade-off: the SAME tier is refused a plain GET of that workspace
+// (getWorkspaceReadable → ownsWorkspaceOrAdmin, deliberately isOperator). A
+// surface that lets a principal launch a credentialed sandbox over a row they
+// are answered 404 for is not a considered delegation.
+func TestRecordWorkspaceIsSuperAdminOnly(t *testing.T) {
+	h := newHarness(t)
+	ws := types.Workspace{
+		ID: uuid.New(), Name: "victim", OwnedBy: "sub-victim-member", Status: types.WorkspaceScanned,
+		Sources: []types.WorkspaceSource{{
+			Type: types.WorkspaceSourceTypeLocalDir, Path: "/home/victim/projects/app",
+			Target: "/home/agent/work", Writable: true,
+		}},
+	}
+	cfg := baseTestConfig(h, &recordTierStore{ws: ws})
+	cfg.OIDC = &oidc.Authenticator{}
+	srv := New(cfg)
+	sess := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
+	path := "/api/v1/workspaces/" + ws.ID.String()
+
+	// The tier is refused at the ROUTER, so the refusal is a constant 403 that
+	// never varies with whether the workspace exists — no existence oracle, and
+	// nothing in the handler to keep in step with it.
+	if w := doSSO(t, srv, http.MethodPost, path+"/record", sess, `{"name":"exfil"}`); w.Code != http.StatusForbidden {
+		t.Fatalf("security_admin POST record = %d, want 403 — this route LAUNCHES a credentialed, host-mounting, "+
+			"open-egress sandbox and stamps the caller as its owner, which is the super admin's tier; body=%s",
+			w.Code, w.Body.String())
+	}
+	// A workspace id that does not exist answers the SAME 403, proving the gate
+	// is the router and not a handler that first looked the row up.
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces/"+uuid.NewString()+"/record", sess, `{"name":"exfil"}`); w.Code != http.StatusForbidden {
+		t.Errorf("security_admin POST record on a MISSING workspace = %d, want the same 403", w.Code)
+	}
+	// THE CORROBORATING LEG IS GONE, AND THE TIER STILL HOLDS — re-argued here
+	// rather than assumed, as this comment's earlier revision asked.
+	//
+	// This used to assert that the same tier gets 404 on GET /workspaces/{id},
+	// offered as a corroborating inconsistency. That read was WIDENED
+	// deliberately (F015, ownsWorkspaceOrSecurityAdmin in helpers.go): a
+	// security admin already listed every workspace and already rewrote any
+	// workspace's approved/denied egress, so refusing it the row — and
+	// especially /observed-egress, the traffic that is the INPUT to the egress
+	// decision it makes — left the tier acting blind on its own stated purpose.
+	//
+	// The record tier does not depend on that leg and never did. It rests on
+	// what the ROUTE does: POST .../record launches a credentialed,
+	// host-mounting, open-egress sandbox and stamps the caller as its owner,
+	// which is reach INTO a run and AT the host — the two axes securityOps is
+	// defined never to reach (routes.go). Reading a row is not launching one.
+	//
+	// So the assertion inverts into a STRONGER one: the tier can now read the
+	// workspace and is STILL refused the record route. That proves the record
+	// gate is the router's tier check rather than a side effect of the caller
+	// being unable to see the row — which the old assertion could not
+	// distinguish.
+	if w := doSSO(t, srv, http.MethodGet, path, sess, ""); w.Code == http.StatusNotFound {
+		t.Errorf("security_admin GET workspace = 404; the read was widened for this tier (F015) — " +
+			"if it has been narrowed again, that decision and this one need re-reconciling")
+	}
+	if w := doSSO(t, srv, http.MethodPost, path+"/record", sess, `{"name":"exfil"}`); w.Code != http.StatusForbidden {
+		t.Errorf("security_admin POST record = %d AFTER being able to read the workspace, want 403 — the record "+
+			"refusal must come from the tier gate, not from the caller's inability to see the row", w.Code)
+	}
+	// The EGRESS DECISION stays delegable: promote-egress writes a list and
+	// launches nothing, so the security tier keeps it. Reaching the handler (any
+	// non-403) is the assertion; what it then answers is that handler's own test.
+	if w := doSSO(t, srv, http.MethodPost, path+"/record/build/promote-egress", sess, `{}`); w.Code == http.StatusForbidden {
+		t.Errorf("security_admin promote-egress = 403 — the egress DECISION must stay on the security tier; "+
+			"only the sandbox LAUNCH moved: %s", w.Body.String())
+	}
+	// And the super admin still records, over a member-owned workspace: this is
+	// a re-tiering, not a removal. 503 (no runner in this harness) proves the
+	// request passed authorization and reached the launch.
+	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
+	if w := doSSO(t, srv, http.MethodPost, path+"/record", admin, `{"name":"exfil"}`); w.Code == http.StatusForbidden {
+		t.Errorf("admin POST record = 403 — the super admin must still be able to record any workspace: %s", w.Body.String())
+	}
+}
+
+// TestSecurityAdminCanStopAForeignRun makes an in-tree PROSE CLAIM executable,
+// which is the whole point of it existing.
+//
+// Two authoritative comments disagreed about the same tier. helpers.go's
+// ownsRunOrAdmin says the security tier gets foreign-run KILL on purpose —
+// "INSPECT-OR-STOP is the whole of that arm's warrant … kill", named as the
+// tier's most time-critical act — while routes.go and the authz matrix
+// justified the sandbox sweep's SUPER gate as protecting "the one axis the
+// security tier never gets", meaning exactly that reach. An operator choosing
+// who to trust with RoleSecurityAdmin reads the second pair and concludes the
+// tier cannot terminate other people's runs. It can.
+//
+// So this pins the TRUE half, in the direction that keeps the two in step: if
+// anyone later narrows kill to ownsRunOrSuperAdmin, this test goes red and the
+// person doing it is told, at the point of the change, that the sweep's
+// rationale depends on the answer. That is the repair for an invariant asserted
+// in prose and enforced by nothing.
+//
+// The other half — that the sweep never touches a live run — is already pinned
+// by TestSweepTerminalSandboxes_TearsDownOrphanedLiveSandbox, whose fixture
+// carries a RUNNING run for exactly that purpose; it is not duplicated here.
+func TestSecurityAdminCanStopAForeignRun(t *testing.T) {
+	kill := func(t *testing.T, role string) (int, types.RunState) {
+		t.Helper()
+		srv, ast, _, _ := newAuthzMatrixServer(t)
+		id := uuid.New()
+		ast.mu.Lock()
+		ast.runs[id] = types.AgentRun{ID: id, CreatedBy: "sub-someone-else", State: types.RunRunning, Agent: "claude-code"}
+		ast.mu.Unlock()
+		sess := ssoSession(t, "sub-killer", "killer@corp.example", role)
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/"+id.String()+"/kill", sess, "")
+		ast.mu.Lock()
+		defer ast.mu.Unlock()
+		return w.Code, ast.runs[id].State
+	}
+
+	// The claim under test: the SECURITY tier really does reach a run it does
+	// not own, and the run really ends — status alone would not prove the
+	// transition applied.
+	if code, state := kill(t, oidc.RoleSecurityAdmin); code != http.StatusAccepted || state != types.RunKilled {
+		t.Errorf("security_admin kill of a FOREIGN run = %d, run state %q; want 202 and KILLED. "+
+			"If this is now refused, that is a deliberate narrowing — and routes.go's sandbox-sweep note plus "+
+			"the authz matrix row must be revisited, because they no longer describe the tier", code, state)
+	}
+	// The super admin, for contrast: same answer, so the assertion above is
+	// about the SECURITY tier rather than about kill being open to everyone.
+	if code, state := kill(t, oidc.RoleAdmin); code != http.StatusAccepted || state != types.RunKilled {
+		t.Errorf("admin kill of a foreign run = %d, state %q; want 202 and KILLED", code, state)
+	}
+	// And the member, which is what makes it a TIER statement: a plain member is
+	// refused with the byte-identical 404 a missing run gives, and the run is
+	// untouched.
+	if code, state := kill(t, oidc.RoleMember); code != http.StatusNotFound || state != types.RunRunning {
+		t.Errorf("member kill of a foreign run = %d, state %q; want 404 and the run still RUNNING", code, state)
+	}
+}

@@ -26,7 +26,7 @@ permanent.
 | Postgres | volume `<project>_postgres_data` | runs, approvals, workspaces, policies, encrypted secrets, the append-only audit log — and, under the default `pg` recording store, the PTY asciicasts too | everything |
 | Recordings | volume `${WARDYN_NS:-wardyn}-recordings` (`WARDYN_RECORDING_DIR=/data/recordings`) | PTY asciicasts for Replay — **only with `WARDYN_RECORDING_STORE=fs`**; the shipped default (`pg`) keeps them in Postgres and leaves this volume empty | every session replay it holds; nothing reconstructs them |
 | Age key | `WARDYN_AGE_KEY` in `deploy/compose/.env` | the X25519 identity every stored secret is encrypted to | every secret in Postgres becomes undecryptable ciphertext |
-| User drives | one object per person, per drive, on a deployment that registered one — Docker volume `wardyn-drive-<home>`, a subdirectory of the share YOU mounted (`host_path` — `<host_root>/<home>`), or PVC `wardyn-drive-<drive-slug>-<home>` | each person's own files, written by their own runs at `/home/agent/drive`. Postgres holds the drive rows and the allocations, never the bytes, so `pg_dump` never carried this | that person's work; nothing reconstructs it |
+| User drives | one object per person, per drive, on a deployment that registered one — a Docker volume or a PVC, both named `wardyn-drive-<drive-slug>-<home>`, or a subdirectory of the share YOU mounted (`host_path` — `<host_root>/<home>`) | each person's own files, written by their own runs at `/home/agent/drive`. Postgres holds the drive rows and the allocations, never the bytes, so `pg_dump` never carried this | that person's work; nothing reconstructs it |
 
 `postgres_data`, `registry_data` and `audit` carry no explicit `name:` in
 `deploy/compose/docker-compose.yaml`, so Docker prefixes them with the compose
@@ -149,12 +149,32 @@ makes `wardynd` REFUSE TO START: restoring it means replaying the initial schema
 which is a far bigger blast radius than stopping and telling you. Either way the
 process no longer continues silently on a table whose guards are gone.
 
+The same read also asks what ELSE is armed on that table, because the shipped
+guards being present is not the same as nothing standing beside them. A
+**row-level `BEFORE INSERT` trigger Wardyn does not ship** makes `wardynd`
+REFUSE TO START, whatever it is called: such a trigger is handed `NEW` and
+whatever it returns is what Postgres stores, so it can rewrite any field, choose
+`prev_hash`/`row_hash`, or `RETURN NULL` to make the event vanish — and the row
+it leaves behind is internally consistent, so the verify sweep below reports the
+log **clean**. Any other unexpected trigger (`AFTER`, statement-level, or bound
+to another event) cannot alter the stored row, so it is named in the boot log at
+ERROR rather than refused — a deployment may legitimately hang a replication or
+notify trigger off this table.
+
 A trigger you have hardened with `ALTER TABLE … ENABLE ALWAYS TRIGGER`
 (`tgenabled='A'`, so it fires even under `session_replication_role = replica` —
 the bypass the sweep otherwise only catches after the fact) is left **exactly as
-it is**: the boot check counts `'A'` as firing, never re-creates it as plain
-`'O'`, and never refuses over it. `'D'` (disabled) and `'R'` (replica-only, which
-does not fire for ordinary writes) are correctly read as not in force.
+it is**, and that holds across an upgrade, not just across a restart. The boot
+check counts `'A'` as firing, never re-creates it as plain `'O'`, and never
+refuses over it. `Migrate` reads which triggers are hardened *before* it applies
+anything and re-applies `ENABLE ALWAYS` to any the run reverted: every migration
+that redefines an audit trigger ends in `CREATE TRIGGER`, which always yields
+`'O'`, so without that the 0.7 upgrade would have quietly stripped the hardening
+off a 0.6.x deployment that had installed it. The restore is narrow — a trigger
+you never hardened is never promoted to `'A'` on your behalf — and if it cannot
+be re-applied the boot log says so at ERROR and names the statement to run.
+`'D'` (disabled) and `'R'` (replica-only, which does not fire for ordinary
+writes) are correctly read as not in force.
 
 Completeness survives an outage too. When a Postgres write fails, the event is
 not dropped: it is fsync'd, one JSON line at a time, to a local append-only spool
@@ -190,7 +210,10 @@ move back onto the spool path once the cause is fixed. A store that is simply
 down accepts nothing, so nothing is ever quarantined during an outage. Each move
 logs at ERROR with the event's id and action and increments
 `wardyn_audit_spool_quarantined_total`: alert on it, because a spool that has
-drained back to 0 no longer implies the queryable trail is complete.
+drained back to 0 no longer implies the queryable trail is complete. The counter
+is **re-read from the sidecar at startup**, so it survives a restart the way the
+condition it reports does — a deploy or a crash loop does not clear the alert
+while the events are still sitting in `<spool>.quarantine`.
 
 **Two limits of that rule, stated.** First, the probe needs a line BEHIND the
 suspect to land, so two or more *adjacent* unacceptable lines still wedge — the
@@ -210,6 +233,50 @@ any Wardyn bug since the chain trigger began taking the serializing lock: an
 external session that inserted into `audit_events` and left its transaction open
 holds it. A pass that times out replays nothing, counts nothing against any line
 (a store that never answered has rejected nothing), and retries on the next tick.
+**The synchronous side is bounded too, at 5 seconds** (`db.AuditChainLockTimeout`).
+Since `0056` the chain trigger takes that lock on *every* insert into
+`audit_events`, so one transaction that inserted an audit row and stayed open
+holds up every audit write in the process — and nothing in Wardyn has to
+misbehave for that: a psql session, a seed script, a paused migration tool will
+do. A request-path audit write that cannot get the lock within 5s **fails, and
+the event goes to the local spool** to be replayed when the lock clears — the
+same degraded path a store outage uses, not a dropped event. The one exception is
+a **credential mint**, whose audit row shares the mint's transaction: there the
+timeout refuses the mint, because a credential that could not be audited is not
+one to issue. The bound is `lock_timeout`, set `LOCAL` on the audit transaction,
+so it fires only while WAITING for the lock — a slow-but-progressing insert is
+never aborted by it — and it is deliberately shorter than the drain's 15s pass,
+so the request path yields before the background drain does.
+
+**Set the two server-side timeouts** on the database Wardyn uses. Wardyn bounds
+its own waits, but the *holder* is the actual problem, and only Postgres can end
+it: `idle_in_transaction_session_timeout` (a few minutes) reaps the stray open
+transaction that causes this, and `statement_timeout` bounds anything else that
+runs away. Neither is set by default (`SHOW idle_in_transaction_session_timeout`
+returns `0` on a stock server), and Wardyn does not set them for you — they are
+cluster policy, and a value that suits your maintenance jobs is not one Wardyn
+can guess.
+
+**Scraping `/metrics` is not one of the things that lock stalls**: the spool
+gauges are served from counters, not from a read of the spool file, so a scrape
+answers in constant time while a pass is stuck on a blocked store. It has to —
+those gauges are how you see the outage, and a scrape that waited on the drain
+lost the whole response, `wardyn_store_up` included, once per tick for as long
+as the condition lasted.
+
+**Recovering a backlog costs what the backlog costs.** A pass replays a bounded
+batch and retires it by advancing a read offset; the file is physically compacted
+only once the replayed prefix is at least as large as what is left, so each
+compaction halves it and a full drain writes at most about twice the backlog
+rather than once per batch. The consequence to know is that mid-drain the spool
+FILE can still hold lines that have already reached the store — `wc -l` on it is
+not the backlog, `wardyn_audit_spool_lines` is — and that an unclean stop
+mid-recovery can replay the not-yet-reclaimed prefix, which the trail records as
+duplicate events with the same `id`. The spool has always been at-least-once for
+this reason (a crash between the store write and the trim); this widens that
+window in exchange for not fsyncing the whole backlog once per batch onto the
+volume the database is recovering on. Duplicates are the benign direction: `seq`
+still identifies every row, and each one verifies.
 
 ### The hash chain — what a rewritten row looks like
 
@@ -218,23 +285,45 @@ and the role split hardens that against the app role. Neither binds a **table
 owner or superuser**, who can `ALTER TABLE … DISABLE TRIGGER` and rewrite a row —
 the residual `0007_audit_least_privilege.sql` states plainly. The role-split check
 that reports this posture at boot (`AuditDDLProtected`) counts THREE ways to
-bypass, not two: superuser, membership in the owner role, and the **`TRIGGER`
-privilege** on `audit_events`. The third is the quiet one — a role granted
-`TRIGGER` cannot drop the shipped guards, but it can add a BEFORE INSERT trigger
-of its own whose name sorts after `audit_events_chain` (same-event row triggers
-fire in name order) and overwrite `prev_hash`/`row_hash` on the way in, minting
-rows that hash to whatever it says while every shipped guard is still armed. So a
-deploy that grants `TRIGGER` back is reported as NOT protected.
+bypass, not two: membership in a superuser role, membership in the owner role,
+and the **`TRIGGER` privilege** on `audit_events`. All three are **membership**
+tests, not attribute lookups — `GRANT some_admin_role TO app_role`, the ordinary
+managed-Postgres migration shape, leaves `app_role` with `rolsuper = false` while
+it can still `SET ROLE` and `ALTER TABLE … DISABLE TRIGGER`, and the chain is
+followed to any depth whether or not the role `INHERIT`s. Membership in
+`pg_write_all_data` is deliberately **not** counted: it confers
+`INSERT`/`UPDATE`/`DELETE`, but the append-only guard is a trigger rather than a
+privilege and still refuses both — counting it would understate the posture just
+as badly as missing a superuser overstates it. The third is the quiet one — a role granted
+`TRIGGER` cannot drop the shipped guards, but it can add a row-level BEFORE
+INSERT trigger of its own and rewrite the row on the way in, minting records that
+say whatever it likes while every shipped guard is still armed. Name order is
+**not** what makes that work: a trigger sorting *after* `audit_events_chain`
+(same-event row triggers fire in name order) runs last and can overwrite
+`prev_hash`/`row_hash` directly, but one sorting *before* it is easier still —
+it rewrites `NEW` and the shipped chain trigger then hashes the forgery for it.
+Either way the stored row is self-consistent and the verify sweep reports clean,
+which is why the boot check now refuses to start over ANY foreign row-level
+BEFORE INSERT trigger on this table. So a deploy that grants `TRIGGER` back is
+reported as NOT protected.
 
 **The app role's grant set does not grow to keep the chain working.** `INSERT`
 and `SELECT` on `audit_events` is still the whole of it. The chain trigger
 allocates the row's `seq` itself (so position and chain link are one decision —
 see the serialization paragraph below), which is a privileged operation the
-identity default never was, so the trigger runs `SECURITY DEFINER` with a pinned
-`search_path` (`0057_audit_chain_security_definer.sql`): the sequence read
-happens as the *owner*, not as whoever inserted. Nothing is widened for the app
-role — a trigger function cannot be called directly — and a split-role deploy
-needs no new `GRANT`. Migration
+identity default never was, so the trigger runs `SECURITY DEFINER`
+(`0057_audit_chain_security_definer.sql`): the sequence read happens as the
+*owner*, not as whoever inserted. Nothing is widened for the app role — a trigger
+function cannot be called directly — and a split-role deploy needs no new
+`GRANT`. Because it runs with elevated rights it resolves no name through a
+search_path it does not control: every table and function it touches is
+**schema-qualified to the schema Wardyn was migrated into**, read from the
+catalog when the migration applies, and its pinned `search_path` ends in
+`pg_temp` so the session temporary schema is searched last rather than first
+(`0058_audit_chain_schema_qualified.sql`). That is what keeps the chain working
+on an install whose objects are not in `public`, and what stops a caller
+shadowing `audit_events` with a temp table of their own to choose their row's
+`prev_hash`. Migration
 `0047_audit_hash_chain.sql` does not close that hole; it makes a single use of it
 **visible**. Every row written from `0047` onward carries two hex columns:
 
@@ -283,6 +372,17 @@ chained row. Run it from cron and alert on `ok: false`: a broken chain answers
 **200** with `ok: false`, `broken_seq` and `reason` (the sweep succeeded; it
 found something), while `5xx` means the sweep could not run. `head_hash` is the
 value to diff against your SIEM's copy.
+
+**One sweep at a time.** The audit log cannot be pruned, so this is the endpoint
+whose cost only ever rises — and a retrying client or an overlapping cron would
+otherwise turn one operator action into several full re-hash passes, each holding
+a database connection. A request that arrives while a sweep is running is
+refused with **429** and a `Retry-After`; it is not queued. Point your cron at a
+single caller and let a 429 mean "the answer you want is already being
+computed". There is deliberately no server-side time limit on a sweep — a fixed
+one would cap how large a log can be verified at all — so the bound is your
+client's: the sweep is walked in pages and stops between them when the caller
+goes away.
 
 **A break is permanent.** The sweep stops at the first broken row and the log is
 append-only, so every later sweep reports that same `broken_seq` forever — no
@@ -374,11 +474,31 @@ counter only moves on success — a dead store and an idle cluster otherwise scr
 identically: `wardyn_store_up` (1 when Postgres answers the same bounded ping
 `/readyz` makes) and `wardyn_audit_spool_lines` (audit events waiting in the local
 JSONL fallback spool — a value that never returns to 0 means the drain loop is not
-working). Beside them, `wardyn_audit_spool_quarantined_total` counts events the
+working; it is the count of events still to replay, which mid-drain can be lower
+than the line count of the file on disk). Beside them, `wardyn_audit_spool_quarantined_total` counts events the
 store permanently refused and the drain moved aside (see the spool paragraph
 above): non-zero means the trail is missing those events even though the spool
-drained. Scrape with any Prometheus `authorization` config carrying the admin
-token. `/healthz` stays the liveness/component surface (identity, runner classes,
+drained.
+
+Two counters cover the authentication lane, where a failure otherwise leaves no
+trace at all. `wardyn_auth_failed_suppressed_total` counts `auth.failed` audit
+rows the rate limiter dropped — the trail is capped at roughly one row per
+second, so past a small burst it stops describing the volume it is bounding and
+**a credential-stuffing run reads quieter than a handful of typos**. Alert on
+this series, not on the audit row count: flat rows with this climbing is the
+attack. `wardyn_auth_store_errors_total` counts requests an authentication lane
+could not decide because its store read failed and answered `500` — a state with
+no audit row (there is no authenticated principal to attribute one to) and no
+client-visible cause.
+
+That second counter exists because **`wardyn_store_up` cannot answer for it**.
+The gauge is a *ping*: it says the pool is reachable, and a reachable pool still
+fails individual queries — one table denying a read, one statement timing out.
+So it can scrape `1` throughout an outage that is 500ing every token-authenticated
+request, which is worse than no signal, because it argues against the operator's
+own evidence. Read `wardyn_store_up` as reachability and the two counters above
+as whether the work is actually succeeding. Scrape with any Prometheus
+`authorization` config carrying the admin token. `/healthz` stays the liveness/component surface (identity, runner classes,
 eBPF ground-truth state); `/metrics` is the trend surface. Audit sinks
 (`WARDYN_AUDIT_SINKS`, [ENV.md](ENV.md)) are the event stream for SIEMs — metrics
 carry no per-run detail.
@@ -498,7 +618,8 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 |---|---|
 | managed harness credential; policy create/update/delete; `PUT /site-config` (a full-document replace, integration credential refs included); `GET /metrics`; the `/access` role-mapping routes below — they bound who derives admin at all | ⛔ admin only |
 | the `/workspaces` routes that BIND CREDENTIAL MATERIAL or WRITE THE HOST — `llm-cred`, `requirements`, `env-as-code/write` — plus `reassign` (user administration) | ⛔ admin only |
-| the `/workspaces` routes that DECIDE AN EGRESS CEILING — `approved-egress`, `denied-egress`, `record` + `promote-egress`: deciding which hosts a workspace's runs may reach is the same authority as deciding an egress approval, and `promote-egress` is that decision in bulk | ⛔ admin or `security_admin` |
+| the `/workspaces` routes that DECIDE AN EGRESS CEILING — `approved-egress`, `denied-egress`, `promote-egress`: deciding which hosts a workspace's runs may reach is the same authority as deciding an egress approval, and `promote-egress` is that decision in bulk | ⛔ admin or `security_admin` |
+| launching a recording session (`POST /workspaces/{id}/record`) — it sat with the egress-decision routes above until 0.7 re-tiered it, because the route does not decide a ceiling: it LAUNCHES a credentialed, host-mounting, open-egress sandbox and stamps the caller as its owner, which is reach into a run and at the host. The egress DECISION stays delegable; only the launch moved | ⛔ admin only |
 | the two `/site-config` connectivity probes (`POST /site-config/test-proxy`, `/test-redirect`) — non-mutating, and the evidence half of the security admin's job — and the `/permissions` routes below | ⛔ admin or `security_admin` |
 | the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, the `/governance` profile and assignment routes, `GET /access/directory/search` | ⛔ admin or `security_admin` |
 | workspace CRUD/scan/build | 🟡 owner-or-admin since 0.6 ("Workspace ownership") |
@@ -631,8 +752,13 @@ with `reason: second_human_required`, landing **before** the decision is written
 so a refused decision leaves the approval `PENDING`. Scoped to `egress_domain`
 only; `credential`/`tool_call` are already admin-only. A run with an empty
 `created_by` (system-created follow-on runs) has no human creator to be the same
-as, so the rule cannot apply. Local mode binds normally — the injected operator IS
-a verified human, so `local:alice` deciding `local:alice`'s own run is refused.
+as, so the rule cannot apply. **Local mode REFUSES the switch** (`503`) rather
+than enforcing it: local mode authenticates nobody, so both the decider and the
+run's `created_by` come from the same client-supplied source — the DEV-ONLY
+`X-Wardyn-Principal` header, honored there by design — and no request in that
+mode can prove a second human decided. Configure SSO to use this switch, or
+leave it unset. The refusal is scoped to `egress_domain` decisions, so nothing
+else in local mode changes.
 
 **The `admin-token` principal BYPASSES it**, and you should plan around that. A
 bare `WARDYN_ADMIN_TOKEN` caller is attributed `system`/`admin-token` because a
@@ -725,16 +851,17 @@ Docker deployment there are two backends, and the difference is who owns the
 bytes.
 
 **`docker_volume` — Wardyn allocates.** A per-person named volume
-(`wardyn-drive-<home>`), created on first use with the `local` driver and
-mounted at the reserved target. Nothing to configure. It carries four labels:
-`wardyn.managed=true`; `wardyn.drive` = the **drive row's id** (the object name
-is per *person*, so the id is the only thing that groups a drive's volumes
-together); `wardyn.home` = that person's directory name; and
+(`wardyn-drive-<drive-slug>-<home>`), created on first use with the `local`
+driver and mounted at the reserved target. Nothing to configure. It carries four
+labels: `wardyn.managed=true`; `wardyn.drive` = the **drive row's id** (the name
+folds the drive's SLUG, which a rename changes, and the id never does — so the
+label is the only key that still finds a drive's volumes across one, which is
+what the reclaim recipes below select on); `wardyn.home` = that person's directory name; and
 `wardyn.subject` = a **digest** of the person
 themselves (never their claim — see the restore note below). Reclaim is a
 command, not a button:
 
-- one person: `docker volume rm wardyn-drive-<home>` — `POST /drives/preview`
+- one person: `docker volume rm wardyn-drive-<drive-slug>-<home>` — `POST /drives/preview`
   prints the object name for a principal — paste the sign-in subject FIRST: on a
   `hash`/`sub` drive the name keys on the first claim, and the API's
   `home_subject` says which claim it used (the console does not yet show it);
@@ -754,7 +881,7 @@ docker volume create \
   --label wardyn.managed=true \
   --label wardyn.drive=<drive id> \
   --label wardyn.home=<home> \
-  wardyn-drive-<home>
+  wardyn-drive-<drive-slug>-<home>
 ```
 
 then copy the data in. `wardyn.drive` carries the **drive row's id** (the `id`
@@ -1023,6 +1150,16 @@ identity hits), `group` (the login-time union of the ID token's `roles` and
 `groups` claims, lowercased and deduped — so Entra App Roles are grantable for
 free), or `all` (every signed-in human).
 
+A `group` subject must be **printable ASCII**, and the write is refused with that
+reason when it is not — the same rule a console role mapping already gets. The
+snapshot a group grant is matched against carries printable ASCII only, so a
+subject outside that set is a row that can never match anyone: a deny that
+protects nothing while the Permissions screen renders it as active. The check runs
+on what you typed, *before* lowercasing, so a look-alike character that collapses
+onto one of your ASCII group names (Unicode case folding maps KELVIN SIGN to `k`)
+is refused rather than quietly stored as the real group. The same refusal guards a
+governance assignment's subject, for the same reason.
+
 Group membership is a **snapshot taken at login**, carried in the session cookie;
 grants are read from the database per request, so a new grant takes effect on the
 very next request but a *directory* change does not until the human signs in
@@ -1037,9 +1174,9 @@ reported distinctly as `groups_snapshot_stale` on `GET /me/capabilities`, becaus
 "can't tell yet" and "holds no groups" must not read the same.
 
 **A DENY is never allowed to evaporate with the snapshot.** A group that fell off
-the 2048-byte cut — or a caller still holding a pre-0.6 cookie, or a pre-0.7 API
-token whose completeness was never recorded — has none of its group rows in the
-scan. For an ALLOW that costs the caller access, which is the safe direction. For
+the 2048-byte cut — or one your directory names with a character the snapshot
+cannot carry, or a caller still holding a pre-0.6 cookie, or a pre-0.7 API token
+whose completeness was never recorded — has none of its group rows in the scan. For an ALLOW that costs the caller access, which is the safe direction. For
 a DENY it would hand back exactly what the row forbade, so the resolver
 (`capScan`, `internal/api/capabilities.go`) checks whether **any** group-subject
 deny row of that kind could cover the value, and refuses when one could — the
@@ -1049,6 +1186,17 @@ capability denial, with a server log line naming the unanswerable snapshot;
 signing in again (or re-minting the token) resolves it for good. Where a deny has
 to bite with no store read at all, write it against the **user** (either
 identity).
+
+**Re-mint pre-0.7 API tokens.** A token minted before 0.7 recorded nothing about
+whether its group snapshot was complete, and that unknown is read as
+"incomplete" — the fail-closed choice. So every request such a token makes takes
+the extra check above, on every capability it touches, for the whole life of the
+token. It is correct but it is not free, and it is the one lasting cost of the
+upgrade: re-minting moves those callers (CI jobs, scripts, the headless `wardyn
+run` lane) back onto the ordinary indexed path and removes the standing
+possibility of a group-completeness refusal they cannot themselves resolve.
+`GET /api/v1/tokens` lists the deployment's tokens with their `last_used_at`, so
+the dead ones can be revoked rather than re-minted.
 
 **A third cause of a partial snapshot: the IdP's own overage.** Entra ID stops
 sending the `groups` (or `roles`) claim altogether once a human is in more groups
@@ -1105,6 +1253,21 @@ App Roles are a smaller claim, not automatically a safer one.
 If the groups cannot be flattened and the rows cannot be re-keyed, user subjects
 are the only shape in this release that a claim-configuration change cannot break
 without telling you (`threatmodel/THREAT-MODEL.md` §5).
+
+An overage also blocks one **role derivation** it must not be allowed to decide.
+The role map is keyed on the very claims the IdP withheld, so an overage login
+matches nothing — and "nothing matched" is then an absence of evidence, not a
+fact. Falling through to `WARDYN_OIDC_DEFAULT_ROLE=admin` would hand that human
+the top tier on the strength of a claim nobody read, promoting exactly the member
+the hidden claim was going to wall. Such a login is **denied**
+(`auth_error=claims_overage`), with a server log line naming the claim and the
+var. The check is narrow, so the ordinary posture is untouched: a login whose
+claims genuinely matched is served as-is (a hidden claim can only ever *narrow* a
+highest-wins match), and so is a fallthrough to `member`, the narrowest tier
+there is — a human in 200+ groups still signs in. Only a default WIDER than
+`member` is refused. The remedy is the operator's, and retrying will not clear
+it: carry the tier on Entra App Roles, map the human's email directly, or stop
+defaulting unmatched humans to `admin`.
 
 **What a capability deliberately does not reach.** `always`-scope decisions stay
 on the admin-or-`security_admin` gate even for a member granted the host — a grant must never promote a
@@ -1167,6 +1330,21 @@ revokes every unrevoked token that principal holds — a token is their session 
 another form. The `all` arm is deployment-wide for tokens too: EVERY live token
 goes, the calling admin's own included — plan to re-mint after a global revoke.
 
+**Name them by either identity.** `--sub` takes the OIDC `sub` **or** the email,
+and both halves of the revoke honour both — the session cutoff and the token
+sweep — so you do not have to know which one your IdP made authoritative. This
+matters on Entra, where the `sub` is an opaque per-app identifier that appears
+nowhere a responder would naturally read it; the email is matched
+case-insensitively, the `sub` exactly. It is the same rule a
+`subject_type=user` capability grant already follows.
+
+What the API cannot tell you is whether the name matched anybody. Sessions are
+stateless signed cookies with no row to count, so a target that names nobody is
+indistinguishable from one whose sessions have already expired, and both answer
+`204`. The `session.revoke` audit row carries `tokens_revoked` for the half that
+*is* countable — a zero there, against a human you believe holds tokens, is the
+signal that the identifier was wrong.
+
 Use one as an ordinary bearer: `Authorization: Bearer wdn_…`. Downstream it is
 indistinguishable from that human's console session — run ownership, the
 admin/member gate and capability grants all resolve to the owning human — so a
@@ -1180,15 +1358,22 @@ recovered, and a database reader (a reporting role, a hot standby, a `pg_dump` i
 a backup bucket) cannot lift a usable credential off a row. `last_used_at` is best
 effort and is the signal for "which of these are dead"; revoke those.
 
-**The role is a stamp, not a live check — and unlike an SSH key's, nothing ages
-it out.** A token carries the role AND the group snapshot its owner held when
-they minted it, and every request it authenticates republishes them, so
-downstream it is that human as they were at mint time. A registered SSH key's
-stamp is *bounded*-stale: every login re-stamps it and `WARDYN_SSH_ROLE_TTL`
-expires it. A token's is not bounded at all. `api_tokens` has `created_at`,
-`last_used_at` and `revoked_at` and **no expiry column**; nothing re-stamps the
-row on login; and demoting the human in your IdP never touches it. **Explicit
-revocation is the only thing that ends it.**
+**The role is a stamp re-checked at login; the GROUP SNAPSHOT is not checked at
+all.** A token carries the role AND the group snapshot its owner held when they
+minted it, and every request it authenticates republishes them, so downstream it
+is that human as they were at mint time.
+
+The two halves age differently, and only one of them ages. Their next successful
+sign-in **re-stamps the role** on every unrevoked token they hold — the same
+`OnLogin` hook that has re-stamped their SSH keys since 0.6 — so a demotion does
+reach outstanding tokens, at that human's own next login rather than
+immediately. **The group snapshot is never refreshed**, by that hook or anything
+else. And nothing ages either half out on its own: `api_tokens` has
+`created_at`, `last_used_at` and `revoked_at` and **no expiry column**, there is
+no TTL on the stamp the way `WARDYN_SSH_ROLE_TTL` bounds an SSH key, and a human
+who is demoted and never signs in again keeps the role their tokens were minted
+with indefinitely. **Explicit revocation is the only thing that ends it on your
+schedule.**
 
 That matters most for the tier 0.7 added. A human demoted out of `security_admin`
 keeps, through any token they minted while they held it, exactly what the tier
@@ -1215,6 +1400,9 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/jso
   -d '{"sub":"alice@corp.com"}' $WARDYN/api/v1/sessions/revoke
 ```
 
+A revoked token is never re-stamped — it keeps whatever role it carried when it
+was revoked, so the trail still says what that credential actually was.
+
 The `session.revoke` audit row carries `tokens_revoked`. That count is the
 receipt: a **zero** against a human you believe holds tokens means the identifier
 matched nobody, not that there was nothing to revoke — sessions are stateless, so
@@ -1240,17 +1428,58 @@ guard.
 **Security admin (`security_admin`).** A mapped tier — never a default, and never
 derivable from the operator allowlist; you create one by mapping an IdP App Role
 or group to `security_admin` in the role map (chart or People page). Security
+admins read the whole workspace inventory AND any workspace in it — the list,
+the row, its build status, its env-as-code and its **observed egress** — because
+they decide that workspace's allowed and denied hosts and the observed traffic is
+the input to that decision. They cannot otherwise WRITE a workspace: renaming,
+reassigning, deleting, binding credential material and launching a recording all
+stay with the super admin. Security
 admins author and assign **governance profiles** (named ceilings bound to users or
 groups), write the org allow/denylists (capability grants), decide escalated
 approvals — egress, credential, tool — on anyone's run, revoke sessions and API
-tokens, and verify the audit chain. They cannot touch the People page,
-integrations, site-config writes, base images, or the deploy funnel — and they run
+tokens, and verify the audit chain. They can also **stop** any run in the
+deployment — killing a foreign run is incident response, and the most
+time-critical thing this tier does — which is deliberately *not* the same as
+reaching INTO one: no attach ticket, no shell, no credential material, no host.
+Inspect-or-stop is the whole of that warrant. (The batch form, the sandbox
+sweep, stays admin-only: it drives the container runtime across every run at
+once, which is host reach rather than run reach.) They **promote** a workspace's recorded
+egress into its allowlist, but they cannot **record** one: launching a recording
+session opens an interactive sandbox with open egress, the workspace's directory
+bind-mounted and its credentials injected, which is reach into a run, credential
+material and the host — the three things this tier is defined never to have — so
+`POST /workspaces/{id}/record` is admin-only and the console shows a security
+admin that control disabled beside the promote control it leaves live. They also
+cannot touch the People page, integrations, site-config writes, base images, or
+the deploy funnel — and they run
 under a governance profile themselves if one is assigned to them, since only
 `admin` is exempt from ceiling resolution. A profile can only make the deployer's
 stored credentials *less* available, never more — and a security admin widening
 their own egress is an audited act, visible in the log they cannot rewrite. No
 capability grant can widen anyone to admin; that invariant is what makes
 delegating `/permissions` safe.
+
+**A security admin's revocations reach the super admin, deliberately.** "Revoke
+sessions and API tokens" above is not scoped to members: `POST
+/api/v1/sessions/revoke` applies no target-role check, so a security admin may
+cut a *super admin's* sessions and tokens by `sub`, and the `{"all":true}` arm
+logs out **every** principal and revokes **every** live API token in the
+deployment — CI and automation credentials included — in one audited call. That
+is the tier working as designed. Incident response is the security admin's job,
+the two tiers deliberately do not nest (a security admin still cannot reach into
+a run, and their SSH key and attach ticket still stamp `member`), and a
+revocation only ever *subtracts* reach — it grants the caller nothing.
+
+What bounds it is that a revocation is not a lockout. The session cutoff is a
+**timestamp**, not a flag: signing in again mints a session issued after the
+cutoff, which clears it with no operator action. The **admin bearer token never
+consults revocations at all**, so the break-glass above survives a
+`{"all":true}` — a security admin cannot use this to lock the deployer out of
+undoing it. API tokens are the one part that does not self-heal: they are
+revoked permanently and must be re-minted, so treat `{"all":true}` as an
+incident lever rather than a routine one. Every call is audited as
+`session.revoke` with its scope and the number of tokens revoked, under the
+calling security admin's own principal.
 
 **User (member).** Signs in, runs agents inside the governance profile their group
 is assigned (or the deployment ceiling if none). The profile is enforced outside
@@ -1292,7 +1521,7 @@ Every member denial that isn't a plain foreign-resource 404 is audited under
 | `capability_agent` | `agent`: a member named an agent they aren't granted (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ `403` |
 | `capability_integration` | `integration_id`: a member named a model-provider integration they aren't granted (same seam). Tier 1 only — a workspace's own pin and the site default are never gated | ⛔ `403` |
 | `governance_profile` | the member's assigned governance profile refuses this run SHAPE — `task_mode=exec`, an interactive run, `seed_auto_tools`, or codex-cli under hold-deriving rules. A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
-| `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped | 🟡 drop |
+| `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_MEMBER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
 | `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | ⛔ `403` |
 
 The drop rows are why `POST /runs` mostly *narrows* rather than refuses: a member

@@ -83,6 +83,11 @@ type Pager interface {
 	// action, outcome, actor type); see AuditFilter in auditfilter.go. An
 	// unfiltered read still uses the two methods above.
 	QueryAuditEventsFilteredPage(ctx context.Context, runID *uuid.UUID, f AuditFilter, p Page) ([]types.AuditEvent, error)
+	// ListUserDriveGrantsPage serves the drives console's allocation table. It
+	// is here for the reason the six above are: one row per SUBJECT means this
+	// table's size IS the deployment's headcount, and its ORDER BY has no index,
+	// so unbounded it sorts every allocation on every load of one admin screen.
+	ListUserDriveGrantsPage(ctx context.Context, p Page) ([]types.UserDriveGrant, error)
 }
 
 // Compile-time assertion: PG satisfies Pager (the paginated read surface).

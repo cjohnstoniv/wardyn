@@ -211,6 +211,44 @@ func (s *Server) ownsWorkspaceOrAdmin(r *http.Request, ws types.Workspace) bool 
 	return ws.OwnedBy != "" && principal != "" && ws.OwnedBy == principal
 }
 
+// ownsWorkspaceOrSecurityAdmin is ownsWorkspaceOrAdmin's READ twin: the
+// workspace's owner, or EITHER admin tier.
+//
+// WHY THE READ TIER IS WIDER THAN THE WRITE TIER, and it is not symmetry for
+// its own sake: a security admin may already rewrite a workspace's
+// approved/denied egress (securityOps, routes.go — "deciding which hosts a
+// workspace's runs may reach is the same authority as deciding an egress
+// approval") and already sees every workspace in the inventory
+// (handleListWorkspaces). What they could NOT do was READ the workspace whose
+// egress they were deciding — GET /workspaces/{id} and, worse,
+// GET /workspaces/{id}/observed-egress answered the foreign-workspace 404. So
+// the tier could write a denylist but not read the observed traffic that is the
+// INPUT to that decision: acting blind on its own stated purpose, and unable to
+// check its own work. That is what makes the old state actively harmful rather
+// than merely inconsistent.
+//
+// THE RUN NOUN ALREADY RESOLVED THIS EXACT QUESTION, THE SAME WAY. ownsRunOrAdmin
+// is isSecurityOperator (inspect-or-stop, over a fleet-wide list the same tier
+// gets), and ownsRunOrSuperAdmin exists as its strict twin for the ONE route
+// that writes into a live PTY. Two predicates, two names, one per tier. The
+// workspace noun had ONE predicate — named for the write tier
+// (ownsWorkspaceOrAdmin, "may ACT ON ws as its owner or as an admin") and reused
+// for reads by getWorkspaceReadable — so the read answer was never decided, it
+// was inherited. Splitting them is what stops it drifting back.
+//
+// A MEMBER IS UNAFFECTED, and no route changes tier: all four readers stay
+// classMember, a foreign member still gets the byte-identical 404, and the WRITE
+// getter (getWorkspaceAuthorized) keeps isOperator via ownsWorkspaceOrAdmin
+// below — a security admin still cannot update, delete, reassign, or bind
+// credential material to a workspace they do not own.
+func (s *Server) ownsWorkspaceOrSecurityAdmin(r *http.Request, ws types.Workspace) bool {
+	if s.isSecurityOperator(r.Context()) {
+		return true
+	}
+	principal := principalFromRequest(r)
+	return ws.OwnedBy != "" && principal != "" && ws.OwnedBy == principal
+}
+
 // denyForeignWorkspace writes the refusal for a caller who may not act on a
 // workspace that GENUINELY EXISTS but belongs to another member: the
 // BYTE-IDENTICAL 404 getWorkspaceOr404 writes for a truly-missing id, never a
@@ -264,12 +302,18 @@ func (s *Server) getWorkspaceAuthorized(w http.ResponseWriter, r *http.Request, 
 // write tier: an OPERATOR-OWNED workspace stays readable by any authenticated
 // caller, exactly as it is today, while another MEMBER's owned workspace gets
 // the byte-identical 404 — the one thing 0048 adds to these routes.
+//
+// "minus the write tier" is now literal: this consults
+// ownsWorkspaceOrSecurityAdmin (either admin tier) where getWorkspaceAuthorized
+// consults ownsWorkspaceOrAdmin (super only). They shared one predicate until
+// 0.7's second admin tier made the read answer wrong — see
+// ownsWorkspaceOrSecurityAdmin for why the read is the half that had to widen.
 func (s *Server) getWorkspaceReadable(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.Workspace, bool) {
 	ws, ok := s.getWorkspaceOr404(w, r, id)
 	if !ok {
 		return types.Workspace{}, false
 	}
-	if ws.OwnedBy == "" || s.ownsWorkspaceOrAdmin(r, ws) {
+	if ws.OwnedBy == "" || s.ownsWorkspaceOrSecurityAdmin(r, ws) {
 		return ws, true
 	}
 	s.denyForeignWorkspace(w, r, ws)
@@ -303,6 +347,15 @@ func (s *Server) getRunOr404(w http.ResponseWriter, r *http.Request, id uuid.UUI
 // behind an approval or an audit line is the evidence a decision rests on.
 // INSPECT-OR-STOP is the whole of that arm's warrant — run_files, run_resources,
 // grants, kill, the approval/audit evidence reads.
+//
+// THE SANDBOX SWEEP'S TIER NOTE DEPENDS ON THIS LINE, so the two are
+// cross-referenced rather than left to drift: routes.go once justified keeping
+// POST /admin/sandboxes/sweep on operatorOnly as protecting "the axis the
+// security tier does not get", meaning foreign-run termination — which this
+// predicate grants on purpose. That note now says what is actually true (host
+// reach and fleet-wide blast radius). If kill is ever narrowed to
+// ownsRunOrSuperAdmin below, revisit it: TestSecurityAdminCanStopAForeignRun is
+// the pin that will say so.
 //
 // THE SPLIT, named once: two routes sit under the same owner-or-admin shape and
 // are NOT inspect-or-stop, so neither may use this predicate —

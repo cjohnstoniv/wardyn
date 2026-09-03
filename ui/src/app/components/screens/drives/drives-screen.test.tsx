@@ -320,6 +320,50 @@ describe("DrivesScreen — the editor offers only this runner's backends (Q3)", 
     expect(within(editor).queryByLabelText(DRIVES.FIELD_STORAGE_CLASS)).not.toBeInTheDocument();
   });
 
+  it("a FRESH editor on a managed backend already has the subject-bearing names disabled", async () => {
+    renderScreen();
+    const editor = await openNew();
+    // The mirror of the rule above, and the reason is not symmetry: Wardyn
+    // mints a managed drive's volume itself, and a claim-derived name is not
+    // unique across email domains — alice@corp and alice@partner would be one
+    // volume — so the server refuses a claim template on a managed backend and
+    // the editor must not offer the row it would refuse.
+    expect(within(editor).getByText(DRIVES.HOME_SUB).closest("button")).toBeDisabled();
+    expect(within(editor).getByText(DRIVES.HOME_EMAIL_LOCAL).closest("button")).toBeDisabled();
+    expect(within(editor).getByText(DRIVES.HOME_HASH).closest("button")).toHaveAttribute("aria-pressed", "true");
+
+    // Going out to a share and back must not leave `sub` selected on a managed
+    // backend: the choice moves with the backend in BOTH directions, so the
+    // round trip cannot author a row the server refuses.
+    await userEvent.click(within(editor).getByText(DRIVES.BACKEND_K8S_PVC_STATIC));
+    expect(within(editor).getByText(DRIVES.HOME_SUB).closest("button")).toHaveAttribute("aria-pressed", "true");
+
+    await userEvent.click(within(editor).getByText(DRIVES.BACKEND_K8S_PVC));
+    expect(within(editor).getByText(DRIVES.HOME_SUB).closest("button")).toBeDisabled();
+    expect(within(editor).getByText(DRIVES.HOME_HASH).closest("button")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("a managed backend disables the subject-bearing names and moves off them — the mirror of the share rule", async () => {
+    renderScreen();
+    const editor = await openNew();
+
+    // Start on a share so a subject-bearing template is legitimately selected.
+    await userEvent.click(within(editor).getByText(DRIVES.BACKEND_K8S_PVC_STATIC));
+    expect(within(editor).getByText(DRIVES.HOME_SUB).closest("button")).toHaveAttribute("aria-pressed", "true");
+
+    // Back to managed: the home segment is concatenated into the object name
+    // that `docker volume ls` and `kubectl get pvc` print, so publishing the
+    // subject there is refused by the API — for email_local always, and for
+    // sub since 2026-09-03. The console must not offer a menu that 400s.
+    await userEvent.click(within(editor).getByText(DRIVES.BACKEND_K8S_PVC));
+
+    expect(within(editor).getByText(DRIVES.HOME_SUB).closest("button")).toBeDisabled();
+    expect(within(editor).getByText(DRIVES.HOME_EMAIL_LOCAL).closest("button")).toBeDisabled();
+    // …and the selection moved rather than waiting to be refused.
+    expect(within(editor).getByText(DRIVES.HOME_HASH).closest("button")).not.toBeDisabled();
+    expect(within(editor).getByText(DRIVES.HOME_HASH).closest("button")).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("Docker with no WARDYN_USER_DRIVE_HOST_ROOTS disables host_path WITH ITS REASON, never offers-and-refuses", async () => {
     renderScreen(snapshot({ runner_target: "docker", host_roots_configured: false }));
     const editor = await openNew();

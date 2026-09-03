@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -126,7 +128,14 @@ type classifiedRoute struct {
 // needs re-verifying against the live router.
 var routeMatrix = map[string]classifiedRoute{
 	// ── anonymous ──
-	"GET /":              {class: classAnonymous},
+	"GET /": {class: classAnonymous},
+	// The console SPA, registered INSTEAD of "GET /" when a UIDir is set —
+	// which the shipped image does (ENV WARDYN_UI_DIR=/srv/ui). Anonymous by
+	// necessity: the console shell has to load before anyone can sign in. It is
+	// mounted on the TOP-LEVEL router, outside every auth group and after the
+	// whole /api/v1 tree, so it can shadow nothing; mountUI's own withinDir
+	// check is what keeps it from serving outside the directory.
+	"GET /*":             {class: classAnonymous},
 	"GET /healthz":       {class: classAnonymous},
 	"GET /readyz":        {class: classAnonymous},
 	"GET /auth/login":    {class: classAnonymous},
@@ -153,12 +162,42 @@ var routeMatrix = map[string]classifiedRoute{
 	"DELETE /api/v1/sources/{id}":     {class: classAdmin},
 	"POST /api/v1/base-images":        {class: classAdmin},
 	"DELETE /api/v1/base-images/{id}": {class: classAdmin},
-	// The three workspace routes that BIND CREDENTIAL MATERIAL or WRITE THE
-	// HOST. Their egress-decision siblings (approved-/denied-egress, record,
-	// promote-egress) are classSecurity below — same handler file, same
-	// scopedWorkspaceWrite helper, different tier, decided at the router.
+	// The workspace routes that BIND CREDENTIAL MATERIAL or WRITE THE HOST.
+	// Their egress-decision siblings (approved-/denied-egress, promote-egress)
+	// are classSecurity below — same handler file, same scopedWorkspaceWrite
+	// helper, different tier, decided at the router.
 	"PUT /api/v1/workspaces/{id}/llm-cred":     {class: classAdmin},
 	"PUT /api/v1/workspaces/{id}/requirements": {class: classAdmin},
+	// THE OPERATOR-TOPOLOGY READS. Their WRITES were already classAdmin and the
+	// reads were classMember — a split made by VERB rather than by what the
+	// document carries. GET /site-config returns the same whole document the
+	// PUT above is classAdmin for "integration credential refs included": the
+	// upstream-proxy secret ref, every integrations[].secrets[].secret_name,
+	// and the internal proxy / SCM / artifact hostnames. A Source row carries
+	// Locator (the host filesystem path of a local_dir source) and requirement
+	// keys spelled `secret:<name>` / `egress:<host>`; a BaseImageEntry carries
+	// the internal registry ref and the bootstrap URLs in Steps. No secret
+	// VALUES — those are write-only — so this is a target list rather than a
+	// key, handed to the whole member tier by routes the console called on page
+	// load. Nothing member-facing consumes them (the console has no client
+	// method for /sources or /base-images at all, and both /site-config callers
+	// already tolerate a null), which is why the fix is one router line each
+	// rather than three response projections.
+	"GET /api/v1/site-config":  {class: classAdmin},
+	"GET /api/v1/sources":      {class: classAdmin},
+	"GET /api/v1/sources/{id}": {class: classAdmin},
+	"GET /api/v1/base-images":  {class: classAdmin},
+	// RECORD, by that same criterion. It reads like an egress-decision sibling
+	// (it is how the hosts promote-egress promotes get observed) and was
+	// classified with them, but it LAUNCHES an interactive sandbox rather than
+	// writing a list: open egress by default, the workspace's local_dir
+	// bind-mounted read-write, the clone credential minted, the workspace's
+	// required secrets folded into proxy injections, the operator's LLM
+	// credential attached — and the run stamped CreatedBy = the caller, which
+	// walked straight through handleAttachTicket's strict foreign-run guard and
+	// yielded a PTY in a sandbox holding another member's files. Pinned by
+	// TestRecordWorkspaceIsSuperAdminOnly (security_admin_test.go).
+	"POST /api/v1/workspaces/{id}/record": {class: classAdmin},
 	// Offboarding (O6): admin-only, and gated by requireOperator rather than in
 	// the handler precisely so the member refusal is a CONSTANT 403 that never
 	// varies with whether the named workspace exists.
@@ -182,9 +221,18 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/access/mappings":        {class: classAdmin},
 	"DELETE /api/v1/access/mappings/{id}": {class: classAdmin},
 	"POST /api/v1/access/preview":         {class: classAdmin},
-	// Operator-triggered sandbox sweep. SUPER: it TEARS DOWN containers —
-	// other people's live runs, mid-flight — which is reach INTO runs the
-	// caller does not own, the one axis the security tier never gets.
+	// Operator-triggered sandbox sweep. SUPER for HOST reach and blast radius —
+	// it drives the runner (Status + StopSandbox) plus the credential revoke
+	// cascade across every run in the deployment from one call, and the host is
+	// one of the three axes securityOps never gets.
+	//
+	// It used to be justified here as "it TEARS DOWN containers — other people's
+	// live runs, mid-flight — which is reach INTO runs the caller does not own,
+	// the one axis the security tier never gets". Both halves were false: the
+	// sweep skips every non-terminal run (it reaps the sandbox of runs that have
+	// ALREADY ended), and the security tier CAN stop a foreign run, on purpose —
+	// ownsRunOrAdmin is isSecurityOperator, so kill admits it on any run. See
+	// TestSecurityAdminCanStopAForeignRun below and routes.go's own note.
 	"POST /api/v1/admin/sandboxes/sweep": {class: classAdmin},
 
 	// ── security (0.7 §B: admin OR security_admin; a member still 403s) ──
@@ -198,9 +246,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// The workspace EGRESS-DECISION lane. Deciding which hosts a workspace's
 	// runs may reach is the same authority as deciding an egress approval, and
 	// promote-egress is literally its bulk form.
+	// record itself is classAdmin above: it LAUNCHES the sandbox whose
+	// observations promote-egress promotes, and launching is not deciding.
 	"PUT /api/v1/workspaces/{id}/approved-egress":               {class: classSecurity},
 	"PUT /api/v1/workspaces/{id}/denied-egress":                 {class: classSecurity},
-	"POST /api/v1/workspaces/{id}/record":                       {class: classSecurity},
 	"POST /api/v1/workspaces/{id}/record/{task}/promote-egress": {class: classSecurity},
 	// Non-mutating: they launch a throwaway probe sandbox and answer "does the
 	// baseline this deployment already declares actually work" — evidence, not
@@ -283,7 +332,6 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/approvals":    {class: classMember},
 	"GET /api/v1/audit":        {class: classMember},
 	"GET /api/v1/audit/export": {class: classMember},
-	"GET /api/v1/base-images":  {class: classMember},
 	"GET /api/v1/integrations": {class: classMember},
 	"GET /api/v1/me":           {class: classMember},
 	// /me/ssh-keys (SSH lane, C2): classMember, NOT classOwner — this is a
@@ -323,9 +371,6 @@ var routeMatrix = map[string]classifiedRoute{
 	"DELETE /api/v1/secrets/{name}": {class: classMember},
 	"GET /api/v1/secrets":           {class: classMember},
 	"GET /api/v1/setup/status":      {class: classMember},
-	"GET /api/v1/site-config":       {class: classMember},
-	"GET /api/v1/sources":           {class: classMember},
-	"GET /api/v1/sources/{id}":      {class: classMember},
 	// The workspace READS stay member-class: an operator-owned workspace — every
 	// pre-0048 row — is readable by any authenticated caller exactly as before.
 	// What 0048 adds is that another MEMBER's owned row 404s, which is the same
@@ -451,7 +496,7 @@ func assertNotBlocked(t *testing.T, who string, w *httptest.ResponseRecorder) {
 // conditional route mounted" doctrine requires it wired here too.
 type fakeAuthzSessionRevocations struct{}
 
-func (fakeAuthzSessionRevocations) IsSessionRevoked(context.Context, string, time.Time) (bool, error) {
+func (fakeAuthzSessionRevocations) IsSessionRevoked(context.Context, string, string, time.Time) (bool, error) {
 	return false, nil
 }
 func (fakeAuthzSessionRevocations) RevokeSub(context.Context, string) error { return nil }
@@ -480,8 +525,38 @@ func newAuthzMatrixServer(t *testing.T) (*Server, *authzStore, *authzApprovals, 
 	return New(cfg), ast, aap, rs
 }
 
+// newAuthzMatrixServerWithUI is newAuthzMatrixServer built THE WAY THE SHIPPED
+// IMAGE IS: deploy/compose/Dockerfile.wardynd sets ENV WARDYN_UI_DIR=/srv/ui and
+// ships the console there, so a UIDir is the default in production and the Helm
+// chart inherits it from the image. mountUI (ui.go) registers the SPA catch-all
+// `GET /*` in that configuration and the bare `GET /` only WITHOUT one — so the
+// two configurations register DIFFERENT root routes, and a matrix built from
+// only one of them proves route-completeness for a router the product does not
+// ship.
+func newAuthzMatrixServerWithUI(t *testing.T) *Server {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<!doctype html>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ast := newAuthzStore()
+	cfg := baseTestConfig(newHarness(t), ast)
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.Secrets = getErrStore{getErr: secretstore.ErrNotFound}
+	cfg.Approvals = newAuthzApprovals(ast)
+	fs, err := recording.NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.RecordingStore = fs
+	cfg.SessionRevocations = fakeAuthzSessionRevocations{}
+	cfg.UIDir = dir
+	return New(cfg)
+}
+
 func TestAuthzMatrix(t *testing.T) {
 	srv, ast, aap, rs := newAuthzMatrixServer(t)
+	uiSrv := newAuthzMatrixServerWithUI(t)
 
 	const memberSub = "sub-member"
 	const otherSub = "sub-other-member"
@@ -520,12 +595,34 @@ func TestAuthzMatrix(t *testing.T) {
 	}
 
 	// ── discover every ACTUAL route via chi.Walk; classify or fail ──
+	//
+	// BOTH SHIPPED CONFIGURATIONS ARE WALKED, and the UNION is what must be
+	// classified. UIDir decides the root route — `GET /*` with a console,
+	// `GET /` without — so walking one server alone asserts completeness for a
+	// router half the deployments do not run. The shipped image sets
+	// WARDYN_UI_DIR, so the UI-less walk on its own is the configuration NOBODY
+	// ships; the union covers the headless API-only install too.
 	discovered := map[string]bool{}
-	if err := chi.Walk(srv.router, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
-		discovered[method+" "+route] = true
-		return nil
-	}); err != nil {
-		t.Fatalf("chi.Walk: %v", err)
+	onlyWithoutUI := map[string]bool{}
+	walk := func(name string, router chi.Router, into map[string]bool) {
+		if err := chi.Walk(router, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+			discovered[method+" "+route] = true
+			if into != nil {
+				into[method+" "+route] = true
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("chi.Walk(%s): %v", name, err)
+		}
+	}
+	walk("no UIDir", srv.router, onlyWithoutUI)
+	walk("UIDir set (the shipped image)", uiSrv.router, nil)
+	// The two configurations must genuinely differ, or this walked the same
+	// router twice and the union proves nothing more than one walk did.
+	if !discovered["GET /*"] || !discovered["GET /"] {
+		t.Errorf("the two walks produced no UI-conditional split (GET /* present=%v, GET / present=%v) — "+
+			"mountUI's two arms are the reason this test walks twice",
+			discovered["GET /*"], discovered["GET /"])
 	}
 	for key := range discovered {
 		if _, ok := routeMatrix[key]; !ok {
@@ -547,6 +644,12 @@ func TestAuthzMatrix(t *testing.T) {
 		}
 		t.Run(key, func(t *testing.T) {
 			body := bodyFor(method)
+			// A route the UI-less server does not register (today: the SPA
+			// catch-all) is probed against the server that DOES register it.
+			srv := srv
+			if !onlyWithoutUI[key] {
+				srv = uiSrv
+			}
 			switch rc.class {
 			case classAnonymous:
 				// Auth-independent by definition: the only meaningful signal is
@@ -561,7 +664,7 @@ func TestAuthzMatrix(t *testing.T) {
 				}
 
 			case classInternal:
-				p := buildPath(pattern, uuid.New().String())
+				p := buildPath(pattern, "x1") // CF: OLD probe
 				if w := do(t, srv, method, p, "", body); w.Code != http.StatusUnauthorized {
 					t.Errorf("no token: status = %d, want 401; body=%s", w.Code, w.Body.String())
 				}
@@ -592,7 +695,17 @@ func TestAuthzMatrix(t *testing.T) {
 				}
 
 			case classMember:
-				p := buildPath(pattern, "x1")
+				// A REAL uuid, not "x1". parseIDParam rejects a non-uuid with a
+				// 400 BEFORE the handler's authorization runs, and
+				// assertNotBlocked passes on any non-401/403 — so on every
+				// {id}-bearing member route the old probe asserted nothing at
+				// all about admitting members. Executed: three of them could
+				// answer 403 "requires admin role" to every non-operator with
+				// this whole package green. A syntactically valid id reaches
+				// authorization; the 404 that usually follows is the handler
+				// answering on its own merits, which is what this matrix
+				// tolerates by design.
+				p := buildPath(pattern, uuid.New().String())
 				assertNotBlocked(t, "admin", doSSO(t, srv, method, p, adminSess, body))
 				assertNotBlocked(t, "member", doSSO(t, srv, method, p, memberSess, body))
 				if w := doSSO(t, srv, method, p, nil, body); w.Code != http.StatusUnauthorized {
@@ -678,6 +791,18 @@ func TestAuthzMatrix(t *testing.T) {
 // Same probe doctrine as TestAuthzMatrix: a non-401/403 status is a pass (the
 // handler ran and answered on its own merits — a 4xx for the deliberately
 // bogus "x1" path id or the empty body is expected and irrelevant here).
+//
+// AND THAT DOCTRINE IS WHERE THIS TEST STOPS. "x1" is not a UUID, so on every
+// {id}-bearing route parseIDParam 400s before the handler's own authorization
+// runs: what is pinned here is the ROUTER GATE, never what the tier can then
+// reach. A route sitting on the right tier is not evidence that the handler
+// behind it respects ownership — which is exactly how a route can be gated
+// perfectly consistently onto the wrong tier with nothing to notice.
+// TestSecurityAdminOnForeignWorkspace (security_admin_workspace_test.go) is the
+// compensating arm for the workspace-scoped members of this set: it seeds a
+// real, foreign, member-owned workspace and asserts what each handler does with
+// it, deriving the route set from this same table so a re-tiering changes its
+// coverage without an edit.
 func TestSecurityAdminRouteTier(t *testing.T) {
 	srv, _, _, _ := newAuthzMatrixServer(t)
 	secSess := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
@@ -721,11 +846,18 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// The split itself, pinned as a number: §B decided 14 SEC of the 40 gated
 	// routes, plus /governance's 7 and §I's directory search (all new in 0.7,
 	// outside that count) = 22, and 26 SUPER — plus /drives' 7, also new in 0.7
-	// and born SUPER, = 33. A route silently reclassified in the table above
+	// and born SUPER, = 33. R1 then moved ONE route across:
+	// POST /workspaces/{id}/record, which §B put in the workspace
+	// egress-decision lane but which LAUNCHES a credentialed, host-mounting,
+	// open-egress sandbox and stamps the caller as its owner rather than
+	// deciding anything. R1 also moved FOUR reads OUT of classMember and into
+	// SUPER — GET /site-config, /sources, /sources/{id} and /base-images, which
+	// returned operator topology and credential refs to the whole member tier —
+	// so 21 SEC / 38 SUPER. A route silently reclassified in the table above
 	// would still pass every probe — it would just be enforcing the WRONG tier,
 	// exactly the drift the per-route loop cannot see.
-	if sec != 22 || super != 33 {
-		t.Errorf("tier split = %d security / %d admin, want 22 / 33 (§B's 14 SEC + governance's 7 + §I's directory search, and 26 SUPER + /drives' 7)", sec, super)
+	if sec != 21 || super != 38 {
+		t.Errorf("tier split = %d security / %d admin, want 21 / 38 (§B's 14 SEC + governance's 7 + §I's directory search, MINUS record; and 26 SUPER + /drives' 7 + record + the four operator-topology reads)", sec, super)
 	}
 }
 
@@ -1186,6 +1318,9 @@ func (s *authzStore) DeleteSSHKey(context.Context, string, string) error { retur
 func (s *authzStore) RefreshSSHKeyRoles(context.Context, string, string, time.Time) error {
 	return nil
 }
+func (s *authzStore) RefreshAPITokenRoles(context.Context, string, string) error {
+	return nil
+}
 
 // ─── per-user api tokens (migration 0045) ─────────────────────────────────
 //
@@ -1229,6 +1364,9 @@ func (s *authzStore) DeleteCapabilityGrant(context.Context, uuid.UUID) error {
 	return store.ErrNotFound
 }
 func (s *authzStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (s *authzStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
 func (s *authzStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {

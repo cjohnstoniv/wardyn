@@ -585,6 +585,15 @@ func TestAccess_InvalidShapeRejected(t *testing.T) {
 		// must stay refused: it case-folds onto ASCII "s", the escalating
 		// direction the guard exists for.
 		{"fold-escalating rune", `{"value":"roſs","role":"member","acknowledge_access_change":true}`},
+		// U+212A KELVIN SIGN is the arm the row above CANNOT reach: strings.ToLower
+		// folds it to a plain ASCII 'k', so a guard that runs AFTER the fold
+		// accepts this value and stores a DIFFERENT, ASCII one ("kubernetes-admins")
+		// — a role bound to a group the operator never named, and the console
+		// write surface silently disagreeing with the chart parser (ParseRoleMap
+		// refuses it at boot, ahead of its own ToLower). U+0130 folds to 'i' the
+		// same way.
+		{"fold-onto-ASCII rune (U+212A)", `{"value":"Kubernetes-admins","role":"admin","acknowledge_access_change":true}`},
+		{"fold-onto-ASCII rune (U+0130)", `{"value":"İnfra","role":"admin","acknowledge_access_change":true}`},
 		// Invalid UTF-8 decodes to RuneError (U+FFFD), which is above ASCII —
 		// so a byte-level and a rune-level check agree here, and refusing is
 		// the fail-closed answer either way.

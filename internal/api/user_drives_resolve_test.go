@@ -45,6 +45,25 @@ type driveStore struct {
 	hasGroupTier bool
 	// err fails BOTH reads, for the never-fail-quiet arm.
 	err error
+	// hasGroupTierErr fails the GROUP-TIER read ALONE, leaving the drive read to
+	// answer normally.
+	//
+	// driveWithUnusableGroups makes TWO store reads and fails closed on both,
+	// and the second one had no fixture: `err` fails both, so the function
+	// returned at the FIRST read every time and never reached the second's error
+	// branch. A gate that cannot be exercised is a gate nobody notices the
+	// deletion of — which is exactly what the counterfactual showed, since
+	// turning that branch into `hasGroupTier, _ :=` left the package green.
+	hasGroupTierErr error
+	// driveErr fails the DRIVE read ALONE, leaving the ceiling answerable.
+	//
+	// It exists because `err` deliberately fails both, and a caller that reads
+	// the drive AND the door — /me does — then cannot tell which half failed:
+	// every state arrives as "the governance read broke" and the drive-side
+	// states are unreachable from any fixture. That is the same coupling that
+	// makes a real defect invisible, so the double grows the seam rather than
+	// the assertion being weakened to match it.
+	driveErr error
 	// userTierOnly models the enforcement shape the stale branch produces: the
 	// resolver is called a second time with NO groups, and a group-tier answer
 	// must not come back from it.
@@ -78,6 +97,9 @@ func (s *driveStore) ResolveUserDrive(_ context.Context, _, groups []string) (
 	if s.err != nil {
 		return nil, nil, "", s.err
 	}
+	if s.driveErr != nil {
+		return nil, nil, "", s.driveErr
+	}
 	if s.nilAnswer {
 		return nil, nil, "", nil
 	}
@@ -90,6 +112,9 @@ func (s *driveStore) ResolveUserDrive(_ context.Context, _, groups []string) (
 func (s *driveStore) HasGroupTierDriveGrants(context.Context) (bool, error) {
 	if s.err != nil {
 		return false, s.err
+	}
+	if s.hasGroupTierErr != nil {
+		return false, s.hasGroupTierErr
 	}
 	return s.hasGroupTier, nil
 }
@@ -236,6 +261,70 @@ func TestResolveUserDrive(t *testing.T) {
 		}
 	})
 
+	// THE SECOND READ'S FAIL-CLOSED ARM, which had no fixture at all.
+	//
+	// driveWithUnusableGroups asks the store twice and must fail closed on BOTH:
+	// once for the caller's own drive, once for "does ANY group-tier allocation
+	// exist" — the question that decides whether an unreadable group snapshot
+	// could be hiding one. Only the first read had a test, because the double's
+	// `err` failed both by construction, so the function always returned at the
+	// first branch. The counterfactual the finding ran is the proof: turning the
+	// second branch into `hasGroupTier, _ :=` left the whole package green.
+	//
+	// IT MATTERS BECAUSE THE SWALLOWED ANSWER IS THE PERMISSIVE ONE. `false`
+	// from that read means "no group-tier allocation exists, so the empty answer
+	// above is the whole truth" — and the caller then mounts nothing for a
+	// member who may well have a drive through a group the snapshot could not
+	// show. That is the silent data loss the 403 exists to prevent, arrived at
+	// through a database hiccup instead of a stale cookie.
+	t.Run("the GROUP-TIER read fails closed too, not just the drive read", func(t *testing.T) {
+		boom := errors.New("pg: connection refused")
+		// The drive read answers honestly — no grant matched — so the function
+		// gets past the first branch and reaches the second, which is the only
+		// arrangement that exercises it.
+		st := &driveStore{hasGroupTierErr: boom}
+
+		for _, tc := range []struct {
+			name string
+			call func(*Server) (*types.ResolvedDrive, error)
+		}{{
+			// The ENFORCEMENT entrance: a member whose snapshot is truncated.
+			name: "a member with a truncated snapshot",
+			call: func(srv *Server) (*types.ResolvedDrive, error) {
+				return srv.resolveUserDrive(driveMemberCtx([]string{"eng"}, true))
+			},
+		}, {
+			// The PREVIEW entrance: an admin who typed no groups. Both doors
+			// reach the same function, so both must fail closed at it.
+			name: "an admin preview with no groups",
+			call: func(srv *Server) (*types.ResolvedDrive, error) {
+				return srv.previewResolveUserDrive(context.Background(), []string{"sub-abc"}, nil)
+			},
+		}} {
+			t.Run(tc.name, func(t *testing.T) {
+				got, err := tc.call(driveServer(st))
+				if err == nil {
+					t.Fatalf("an unreadable group-tier read resolved to %+v instead of erroring — "+
+						"a member whose group could be hiding an allocation would mount nothing", got)
+				}
+				if !errors.Is(err, boom) {
+					t.Errorf("error = %v, want the store failure wrapped", err)
+				}
+				// NOT the 403: this is not a stale snapshot, it is an unknown
+				// answer, and the two remedies differ ("sign in again" against
+				// "try again"). writeDriveError's default arm is what says so.
+				if errors.Is(err, errGroupsSnapshotStale) {
+					t.Errorf("error = %v, want a store failure rather than the stale-snapshot refusal", err)
+				}
+				w := httptest.NewRecorder()
+				writeDriveError(w, err)
+				if w.Code != http.StatusInternalServerError {
+					t.Errorf("writeDriveError(group-tier read failure) = %d, want 500", w.Code)
+				}
+			})
+		}
+	})
+
 	t.Run("no grant matched means no drive", func(t *testing.T) {
 		// Absent row, absent behaviour: a deployment that has allocated nothing
 		// mounts nothing, exactly as before the feature existed. Asserted for
@@ -260,8 +349,10 @@ func TestResolveUserDrive(t *testing.T) {
 		if got == nil {
 			t.Fatal("a matched grant resolved to no drive")
 		}
-		if !strings.HasPrefix(got.HomeName, "d-") || got.ObjectName != "wardyn-drive-"+got.HomeName {
-			t.Errorf("home/object = %q/%q, want the hashed home and its volume name", got.HomeName, got.ObjectName)
+		// The volume name carries the DRIVE's slug as well as the home, so two
+		// drives are two volumes even when they resolve one home.
+		if !strings.HasPrefix(got.HomeName, "d-") || got.ObjectName != "wardyn-drive-corp-nas-"+got.HomeName {
+			t.Errorf("home/object = %q/%q, want the hashed home and its slugged volume name", got.HomeName, got.ObjectName)
 		}
 		if got.SizeMiB != 10240 || got.Writable {
 			t.Errorf("size/writable = %d/%v, want the drive's 10240 and read-only", got.SizeMiB, got.Writable)
@@ -409,8 +500,11 @@ func TestResolveUserDrive(t *testing.T) {
 		if !got.Writable {
 			t.Error("writable = false; an explicit writable_override on a read-only drive must win")
 		}
-		if got.HomeName != "bsmith" || got.ObjectName != "wardyn-drive-bsmith" {
-			t.Errorf("home/object = %q/%q, want the override's", got.HomeName, got.ObjectName)
+		// THE CASE THE SLUG EXISTS FOR. An override is written on the GRANT, so
+		// it does not move when the grant is re-pointed at another drive; the
+		// drive's slug is the only thing keeping the two volumes apart.
+		if got.HomeName != "bsmith" || got.ObjectName != "wardyn-drive-corp-nas-bsmith" {
+			t.Errorf("home/object = %q/%q, want the override's home under this drive's slug", got.HomeName, got.ObjectName)
 		}
 	})
 

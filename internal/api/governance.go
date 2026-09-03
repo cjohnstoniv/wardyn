@@ -25,6 +25,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -263,10 +264,12 @@ type governanceAssignmentRequest struct {
 
 // validateGovernanceAssignment normalizes a in place and validates it, applying
 // the SAME field hygiene validateCapabilityGrant applies to a capability grant
-// subject — trim, lowercase, length, no control characters — because these two
-// tables are written against the identical subject vocabulary and are resolved
-// through the identical capabilitySubjects call. A subject normalized one way
-// here and another way there is a row that silently never matches.
+// subject — trim, length, no control characters, and for a GROUP subject the
+// shared oidc.CanonicalGroupSubject the login-time snapshot itself uses —
+// because these two tables are written against the identical subject vocabulary
+// and are resolved through the identical capabilitySubjects call. A subject
+// normalized one way here and another way there is a row that silently never
+// matches.
 func validateGovernanceAssignment(a *types.GovernanceAssignment) error {
 	if !a.SubjectType.Valid() {
 		return fmt.Errorf("subject_type: invalid %q", a.SubjectType)
@@ -282,9 +285,25 @@ func validateGovernanceAssignment(a *types.GovernanceAssignment) error {
 		a.Subject = ""
 		return nil
 	}
-	a.Subject = strings.ToLower(strings.TrimSpace(a.Subject))
+	a.Subject = strings.TrimSpace(a.Subject)
 	if a.Subject == "" {
 		return fmt.Errorf("subject: required for subject_type %q", a.SubjectType)
+	}
+	if a.SubjectType == types.CapabilitySubjectGroup {
+		// The group half of that hygiene is oidc.CanonicalGroupSubject, not a
+		// lowercase — see validateCapabilityGrant. A group-tier assignment is
+		// the sharper case of the two: HasGroupTierAssignments counts the dead
+		// row as "a group tier exists", so a subject no snapshot can carry both
+		// fails to wall the member it names AND refuses every caller with an
+		// unanswerable snapshot on account of an assignment that could never
+		// have applied to them.
+		subject, ok := oidc.CanonicalGroupSubject(a.Subject)
+		if !ok {
+			return fmt.Errorf("subject: must be printable ASCII — a group subject is matched against the login-time group snapshot, which carries printable ASCII only, so this value can never match anyone")
+		}
+		a.Subject = subject
+	} else {
+		a.Subject = strings.ToLower(a.Subject)
 	}
 	if len(a.Subject) > maxCapabilityGrantFieldLen || !controlCharFree(a.Subject) {
 		return fmt.Errorf("subject: invalid")
@@ -534,6 +553,29 @@ func writeCeilingError(w http.ResponseWriter, err error) {
 		return
 	}
 	writeError(w, http.StatusInternalServerError, "resolve governance ceiling: "+err.Error())
+}
+
+// writeCeilingErrorPrefixed is writeCeilingError for a seam that has its own
+// error prefix ("list secrets: ", "policy: ", …).
+//
+// THE STALE ARM DROPS THE PREFIX ON PURPOSE. groupsSnapshotStaleMsg exists
+// because the remedy is one the human can actually perform — sign in again, or
+// re-mint the API token — and the alternative is a support ticket. A seam that
+// pastes its prefix onto err.Error() instead publishes the bare
+// `groups_snapshot_stale` sentinel: an internal identifier naming a condition a
+// member has no vocabulary for and no documented way to clear. The status was
+// already shared (ceilingErrorStatus); this shares the SENTENCE, so a refusal
+// cannot name the remedy at one member-reachable seam and withhold it at the
+// next.
+//
+// Everything else keeps the seam's own prefix over the underlying error, which
+// is the 500 an operator reads, not the member.
+func writeCeilingErrorPrefixed(w http.ResponseWriter, prefix string, err error) {
+	if errors.Is(err, errGroupsSnapshotStale) {
+		writeError(w, http.StatusForbidden, groupsSnapshotStaleMsg)
+		return
+	}
+	writeError(w, http.StatusInternalServerError, prefix+err.Error())
 }
 
 // ceilingErrorStatus is writeCeilingError's status half, for the two seams that

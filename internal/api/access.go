@@ -281,16 +281,25 @@ func (s *Server) accessUnmatchedOutcome(rows []oidc.RoleMapping) string {
 // (the same hygiene validateCapabilityGrant applies to its own Value field —
 // an empty/control-char value stored raw would be either a dead key or,
 // worse for whitespace, one that matches ANY empty/whitespace claim).
+//
+// THE ASCII GUARD RUNS BEFORE THE FOLD, mirroring the chart-side twin
+// oidc.ParseRoleMap (its ASCIIOnly refusal precedes its own ToLower) and
+// oidc's deriveRole lookup loop. strings.ToLower folds KELVIN SIGN U+212A to
+// 'k' and U+0130 to 'i', so guarding the LOWERED value accepts a value the
+// operator did not type and stores a DIFFERENT, ASCII one under it — the
+// console write surface silently disagreeing with the boot-time parser about
+// what "ASCII" means, and binding a role to a group nobody named.
 func canonicalRoleMapValue(value string) (string, error) {
-	v := strings.ToLower(strings.TrimSpace(value))
-	if v == "" {
+	raw := strings.TrimSpace(value)
+	if raw == "" {
 		return "", fmt.Errorf("value: required")
 	}
+	if !oidc.ASCIIOnly(raw) {
+		return "", fmt.Errorf("value: must be ASCII — matching is ASCII-only, a non-ASCII value can never match a claim")
+	}
+	v := strings.ToLower(raw)
 	if len(v) > maxCapabilityGrantFieldLen || !controlCharFree(v) {
 		return "", fmt.Errorf("value: invalid")
-	}
-	if !oidc.ASCIIOnly(v) {
-		return "", fmt.Errorf("value: must be ASCII — matching is ASCII-only, a non-ASCII value can never match a claim")
 	}
 	return v, nil
 }

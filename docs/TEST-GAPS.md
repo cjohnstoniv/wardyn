@@ -29,7 +29,7 @@ The real backlog: exported funcs no lane covers. PG-package funcs appear here
 only when the Postgres lane ALSO leaves them at 0.0%.
 
 - **cmd/wardyn-toolgate**: Error
-- **cmd/wardynd**: BuildDevcontainer, BuildFromDevcontainerFiles, Decide, FinalizeBase, Get, IsRevoked, IsSessionRevoked, List, ListApprovalsPage, ListApprovalsPageByRunCreator, ListRoleMappings, ListRunningWithPolicy, Request, RevokeAll, RevokeJTI, RevokeRun, RevokeSub, StopRun, SweepOrphanedBuilds, Write
+- **cmd/wardynd**: BuildDevcontainer, BuildFromDevcontainerFiles, Decide, FinalizeBase, Get, IsRevoked, IsSessionRevoked, List, ListApprovalsPage, ListRoleMappings, ListRunningWithPolicy, Request, RevokeAll, RevokeJTI, RevokeRun, RevokeSub, StopRun, SweepOrphanedBuilds, Write
 - **internal/api**: Error, LocalAddr, Network, Peek, RemoteAddr, ReservedPlatformSecret, StartDrain, String
 - **internal/audit/sinks**: Name, Name, Name, ParseSinks
 - **internal/auth/oidc**: ExpiryFromContext, Issuer
@@ -57,7 +57,7 @@ only when the Postgres lane ALSO leaves them at 0.0%.
 - **internal/secretstore/pg**: Name
 - **internal/secretstore/secretstoretest**: RunConformance
 - **internal/setup**: DetectSCMPosture, VaultKVMDetail
-- **internal/store**: ClearSourceActiveRun, GetSource, IsZero, Keep, LatestAuditEventByAction, ListAPITokens, ListApprovalsPageByRunCreator, ListBaseImages, ListGovernanceProfiles, ListSources, ListWorkspacesPageForOwner, Matches, Ping, QueryAuditEvents, QueryAuditEventsFilteredPage, QueryRecentAuditEvents, QueryRecentAuditEventsPage, Record, RunWatcherFresh, SetRunFailureHint, SetRunImage, SetSandboxRef, SetWorkspaceBuiltImage, SetWorkspaceImportState, SetWorkspaceLLMCred, SetWorkspaceOwner, UpdateSourceConfig, UpdateWorkspace
+- **internal/store**: ClearSourceActiveRun, GetSource, IsZero, Keep, LatestAuditEventByAction, ListAPITokens, ListBaseImages, ListGovernanceProfiles, ListSources, ListWorkspacesPageForOwner, Matches, Ping, QueryAuditEvents, QueryAuditEventsFilteredPage, QueryRecentAuditEvents, QueryRecentAuditEventsPage, Record, RunWatcherFresh, SetRunFailureHint, SetRunImage, SetSandboxRef, SetWorkspaceBuiltImage, SetWorkspaceImportState, SetWorkspaceLLMCred, SetWorkspaceOwner, UpdateSourceConfig, UpdateWorkspace
 - **internal/types**: AIProviderKind, Clone, ClosedIntegrationKindList, CredentialsMap, Normalize, PathOrRoot, RaisesApproval, Valid, Valid, Valid, ValidToolEffect
 - **internal/workspacescan**: ToolchainNeeds
 - **pkg/client**: ConnectManagedSubscription, CreateSource, CreateWorkspace, DeleteWorkspace, DisconnectManagedSubscription, GetDefaultPolicy, GetSiteConfig, GetSource, GetWorkspace, Healthz, ListSources, ListWorkspaces, Me, New, Preflight, RecentAuditEvents, RecordWorkspaceTask, RevokeSessions, ScanSource, ScanWorkspace, SetupStatus, SynthesizeProfile, UpdateWorkspace

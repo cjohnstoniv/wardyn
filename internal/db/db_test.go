@@ -328,3 +328,50 @@ func TestTrackingTableAssumptionsHold(t *testing.T) {
 		}
 	}
 }
+
+// TestReplayedMigrationsAreIdempotentMarked guards the files
+// replayTriggerMigrations re-executes at boot. That path re-runs each of them
+// verbatim against a database where they are ALREADY applied and where none is
+// re-recorded in schema_migrations, so its correctness rests entirely on those
+// files staying idempotent — and nothing asserted it.
+//
+// TestMigrationsAreIdempotentMarked above is a hand-written list frozen at
+// 0004, so it says nothing about the replay set: 0047, 0056 and 0057 could all
+// have lost their markers and the package stayed green. The set has since grown
+// again (0058), which is the point — it is DERIVED from triggerMigrationFiles,
+// the same function the production replay uses, so a file that joins the replay
+// set joins this guard in the same commit and cannot be forgotten.
+//
+// What it costs to get this wrong is not a failed test later: a non-idempotent
+// replayed migration makes replayTriggerMigrations return an error,
+// ensureAuditTriggers propagates it out of Migrate, and wardynd refuses to boot
+// on exactly the database whose audit trigger already went missing — the
+// scenario the restore path exists to rescue.
+func TestReplayedMigrationsAreIdempotentMarked(t *testing.T) {
+	names, err := triggerMigrationFiles(auditChainTrigger)
+	if err != nil {
+		t.Fatalf("triggerMigrationFiles: %v", err)
+	}
+	if len(names) == 0 {
+		t.Fatalf("no migration defines the %s trigger; either the replay set is empty (the boot-time restore "+
+			"path can no longer restore anything) or the predicate changed and this guard now covers nothing",
+			auditChainTrigger)
+	}
+	// Both markers matter, and for different halves of the file: CREATE OR
+	// REPLACE lets the FUNCTION be redefined over itself, DROP TRIGGER IF EXISTS
+	// lets the TRIGGER be re-created over itself. A file with only one of them
+	// fails the replay on whichever object it forgot.
+	for _, name := range names {
+		name := name
+		t.Run(name, func(t *testing.T) {
+			sql := strings.ToUpper(readMigration(t, name))
+			for _, marker := range []string{"DROP TRIGGER IF EXISTS", "CREATE OR REPLACE FUNCTION"} {
+				if !strings.Contains(sql, marker) {
+					t.Errorf("migration %q is replayed verbatim by the boot-time trigger restore but lacks %q; "+
+						"replaying it against a database where it is already applied would ERROR, and wardynd "+
+						"would refuse to boot on the database that most needs the restore", name, marker)
+				}
+			}
+		})
+	}
+}

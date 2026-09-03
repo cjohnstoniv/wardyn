@@ -229,6 +229,14 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		StructuralEgress: c.StructuralEgress,
 		NetworkPolicy:    c.NetworkPolicy,
 		SessionRecording: c.SessionRecording,
+		// D3: this substrate binds a member's drive — driveMount
+		// (driver_mounts.go) resolves it and ensureDriveVolume
+		// (driver_volumes.go) creates or adopts the named volume. The control
+		// plane reads this to admit a drive-carrying run at create and at
+		// preflight, so it is true only while that path exists: declaring it
+		// without the mount is a run that previews green and fails at dispatch,
+		// and TestCreateSandbox_MountsAUserDrive pins the two together.
+		UserDrives: true,
 	}, nil
 }
 

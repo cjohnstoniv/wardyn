@@ -103,15 +103,22 @@ export function DriveEditor({
   const [error, setError] = React.useState<{ title?: string; message: string } | null>(null);
 
   const managed = isManagedBackend(backend);
+  // The rule runs BOTH ways, and until 2026-09-03 only one way was gated here.
   // A share's directories are named by the corporation's own directory, so the
-  // derived id cannot name one — disabled here, refused on the API path.
-  const homeDisabled = (t: HomeTemplate) => t === "hash" && !managed;
-  // Selecting a share while `hash` is chosen would author exactly the row the
-  // server refuses, so the choice moves with the backend rather than waiting to
-  // be refused.
+  // derived id cannot name one. A MANAGED drive is the mirror: its home segment
+  // is concatenated into the object name that `docker volume ls` and `kubectl
+  // get pvc` print, so a subject-bearing template would publish the principal
+  // there — refused on the API path for `email_local` all along, and for `sub`
+  // since 2026-09-03. Offering a choice the server always refuses is a menu that
+  // 400s, so both directions are disabled here.
+  const homeDisabled = (t: HomeTemplate) => (managed ? t !== "hash" : t === "hash");
+  // Selecting a backend while an incompatible template is chosen would author
+  // exactly the row the server refuses, so the choice moves with the backend
+  // rather than waiting to be refused.
   const pickBackend = (b: DriveBackend) => {
     setBackend(b);
     if (!isManagedBackend(b) && home === "hash") setHome("sub");
+    if (isManagedBackend(b) && home !== "hash") setHome("hash");
   };
 
   const save = async () => {

@@ -45,6 +45,37 @@ type metrics struct {
 	mints        int64
 	launchSum    float64 // seconds, run creation -> RUNNING
 	launchCount  int64
+
+	// authFailedSuppressed counts auth.failed audit emits the rate limiter
+	// DISCARDED, and it is the reason that limiter is safe to have. Without it
+	// a burst of authentication failures produces a bounded ~1 row/sec no
+	// matter how hard it is pushed, so a credential-stuffing run reads QUIETER
+	// than a handful of typos — the audit volume flattens exactly when the
+	// thing it describes accelerates. Counted rather than logged, because
+	// nobody alerts on a log line they do not know to grep for, and because
+	// this is precisely the shape that has to be graphable: audit rows flat and
+	// this series climbing IS the attack.
+	authFailedSuppressed int64
+	// authStoreErrors counts requests an authentication lane could not decide
+	// because its store read failed. Distinct from wardyn_store_up: that gauge
+	// answers a PING (see writeHealthGauges), which a healthy pool passes while
+	// one table denies a read or one statement times out.
+	authStoreErrors int64
+}
+
+// authFailedSuppressedInc records one dropped auth.failed audit emit.
+func (m *metrics) authFailedSuppressedInc() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.authFailedSuppressed++
+}
+
+// authStoreErrorInc records one authentication attempt abandoned on a store
+// failure.
+func (m *metrics) authStoreErrorInc() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.authStoreErrors++
 }
 
 func (m *metrics) runTerminal(st types.RunState) {
@@ -108,6 +139,10 @@ func (m *metrics) write(w io.Writer) {
 		"# TYPE wardyn_egress_denies_total counter\nwardyn_egress_denies_total %d\n", m.egressDenies)
 	fmt.Fprintf(w, "# HELP wardyn_credential_mints_total Credentials minted by the broker.\n"+
 		"# TYPE wardyn_credential_mints_total counter\nwardyn_credential_mints_total %d\n", m.mints)
+	fmt.Fprintf(w, "# HELP wardyn_auth_failed_suppressed_total Authentication failures whose auth.failed audit row was dropped by the rate limiter. Audit volume is capped at ~1/sec, so this series — not the audit trail — is what grows during a burst.\n"+
+		"# TYPE wardyn_auth_failed_suppressed_total counter\nwardyn_auth_failed_suppressed_total %d\n", m.authFailedSuppressed)
+	fmt.Fprintf(w, "# HELP wardyn_auth_store_errors_total Requests an authentication lane could not decide because its store read failed (answered 500). Not covered by wardyn_store_up, which only pings.\n"+
+		"# TYPE wardyn_auth_store_errors_total counter\nwardyn_auth_store_errors_total %d\n", m.authStoreErrors)
 	// A summary with no quantiles: sum/count only, i.e. an average launch time.
 	fmt.Fprintf(w, "# HELP wardyn_sandbox_launch_seconds Time from run creation to RUNNING.\n"+
 		"# TYPE wardyn_sandbox_launch_seconds summary\n"+
@@ -148,7 +183,7 @@ func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
 			up = 0
 		}
 	}
-	fmt.Fprintf(w, "# HELP wardyn_store_up 1 when the control-plane Postgres answers a ping, 0 when it does not (the same check /readyz makes).\n"+
+	fmt.Fprintf(w, "# HELP wardyn_store_up 1 when the control-plane Postgres answers a PING, 0 when it does not (the same check /readyz makes). Reachability only: a pool that pings can still fail an individual query — see wardyn_auth_store_errors_total.\n"+
 		"# TYPE wardyn_store_up gauge\nwardyn_store_up %d\n", up)
 	fmt.Fprintf(w, "# HELP wardyn_audit_spool_lines Audit events in the durable fallback spool, waiting to drain back into the store.\n"+
 		"# TYPE wardyn_audit_spool_lines gauge\nwardyn_audit_spool_lines %d\n", s.cfg.AuditSpool.Lines())

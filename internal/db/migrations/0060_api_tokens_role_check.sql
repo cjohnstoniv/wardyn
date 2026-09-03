@@ -1,0 +1,72 @@
+-- Copyright 2025 The Wardyn Authors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- Constrain api_tokens.role, and retire 0045's argument for leaving it
+-- unconstrained (review finding against that comment).
+--
+-- 0045 said, as its stated reason for shipping no constraint here: "the two
+-- values are Go constants (oidc.RoleAdmin / oidc.RoleMember) written at exactly
+-- one call site, and isOperator compares for equality with RoleAdmin -- any
+-- other value is inert (fail closed), never a privilege."
+--
+-- THE FALSIFIED HALF. 0.7 stopped re-deriving that column from a two-valued
+-- isOperator and started copying the caller's verbatim session role
+-- (internal/api/apitokens.go, deliberately -- collapsing a security_admin
+-- session to "member" there would make every security-governance route
+-- unreachable by API or CLI for exactly the persona whose surfaces ship
+-- API-first). So a THIRD value is written at that call site, and it is not
+-- inert: Server.isSecurityOperator returns true for security_admin, and the
+-- whole securityOps route group gates on precisely that. "Never a privilege"
+-- stopped being true and nothing said so.
+--
+-- WHY THE ARGUMENT CANNOT SIMPLY BE RE-MADE. Its content was "the privileged
+-- set is the singleton {admin}, therefore anything else grants nothing." That
+-- set is now a pair, and it grows with every tier the product adds -- so any
+-- restatement is a claim with a known expiry date. An invariant a reviewer
+-- reads to decide whether a missing constraint is safe has to be one that
+-- survives the next role, and this one structurally cannot.
+--
+-- AND IT WAS NEVER A SECURITY ARGUMENT, which is the part worth recording. A
+-- CHECK constrains what may be WRITTEN to the column, and writing an arbitrary
+-- role needs direct table write access -- the owner-class actor the threat
+-- model already concedes can do anything, and which db.AuditDDLProtected exists
+-- to report on rather than prevent. So the constraint was never a defence
+-- against an application-level attacker; it is a DRIFT GUARD, the same job
+-- role_mappings.role's CHECK does. Dressing that convenience call in
+-- fail-closed language is what let it rot invisibly: a reader asking "is the
+-- missing CHECK safe?" got a yes that quietly stopped being true.
+--
+-- 0034 AND 0043 ARE DIFFERENT, and keep their argument. ssh_public_keys.role
+-- and the attach-ticket role are still derived two-valued at their own call
+-- sites (handleAddSSHKey stamps member-or-admin and nothing else), and on those
+-- columns the field means foreign-run reach and nothing else, whose consumers
+-- all still compare for equality with admin alone. Their singleton really is a
+-- singleton. Only this column started carrying the whole session identity.
+--
+-- The set is the one oidc.Roles holds, and internal/db's
+-- TestClosedEnumChecksMatchConstants now derives an api_tokens.role case from
+-- that slice -- so this constraint and the Go set move together in BOTH
+-- directions. That guard is what makes adding the constraint safe rather than
+-- risky: the failure it would otherwise invite is the incident 0053 documents
+-- (Go widens first, the CHECK refuses, and the write 500s at the database) --
+-- here that would land on token minting. With the derived pin, a fourth role
+-- reddens a test before it can redden a deployment.
+--
+-- ON EXISTING DATA: no row can violate it. The column is NOT NULL DEFAULT
+-- 'member' and is written from one call site out of the same closed Go set; a
+-- database upgraded from 0.6.x can only hold admin or member, since
+-- security_admin did not exist to be stamped. If this nevertheless fails on a
+-- hand-edited database, find the rows with:
+--
+--   SELECT id, principal, role FROM api_tokens
+--    WHERE role NOT IN ('admin', 'security_admin', 'member');
+--
+-- and decide what those tokens should be. Failing loudly is the point: a
+-- constraint that quietly skipped itself would leave the drift guard absent
+-- with nothing to say so.
+
+ALTER TABLE api_tokens DROP CONSTRAINT IF EXISTS api_tokens_role_check;
+
+ALTER TABLE api_tokens
+    ADD CONSTRAINT api_tokens_role_check
+    CHECK (role IN ('admin', 'security_admin', 'member'));

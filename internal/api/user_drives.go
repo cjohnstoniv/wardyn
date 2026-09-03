@@ -95,26 +95,85 @@ type userDrivesResponse struct {
 	Grants              []types.UserDriveGrant    `json:"grants"`
 	HostRootsConfigured bool                      `json:"host_roots_configured"`
 	RunnerTarget        string                    `json:"runner_target"`
+	// GrantTotal is how many allocations EXIST, against the len(Grants) this
+	// page carries. It costs nothing: every grant's drive_id is an FK to a
+	// drive, so the per-drive counts already in Drives sum to it, and that read
+	// is an index-only scan this request was making anyway. Always present, so a
+	// client can tell "this is all of them" from "this is the first page"
+	// without comparing against a limit it may not have sent.
+	GrantTotal int `json:"grant_total"`
 }
 
-// handleGetUserDrives returns the whole drives picture. operatorOnly
-// (routes.go).
+// handleGetUserDrives returns the whole drives picture: every drive, and a
+// BOUNDED page of the allocations. operatorOnly (routes.go).
+//
+// THE TWO READS HAVE DIFFERENT COSTS AND ONLY ONE NEEDED FIXING. ListUserDrives
+// is an index-only scan over user_drive_grants_drive_id_idx and stays whole —
+// there are as many drives as an admin chose to register, and any correct
+// per-drive count has to touch those index entries anyway. The GRANT list is
+// the one that grows with HEADCOUNT: one row per subject, two subjects per
+// person, and an ORDER BY with no index to serve it, so unbounded it sorted
+// every allocation in the deployment on every load of one admin screen —
+// measured at 50,000 allocations as a 5.5 MB on-disk external merge and a ~15 MB
+// body. Bounded, the same query is a top-N heapsort in 301 kB.
+//
+// THE DEFAULT IS maxListLimit, NOT defaultListLimit, and the difference is
+// whether this change can take rows away from anyone. A deployment with 1,000
+// allocations or fewer gets a byte-identical answer to the one it got before;
+// past that the page is capped and says so, where the old behaviour shipped
+// 50,000 rows into a table the browser renders unvirtualised. A smaller ?limit
+// is honoured, a larger one clamps — the same rule every other list obeys.
+//
+// GrantTotal is free rather than a second COUNT: every grant's drive_id is an FK
+// to a drive, so the per-drive counts in Drives sum to the number of grants that
+// exist, and X-Wardyn-Truncated is the same header servePage sets, so a client
+// that already understands one paged list understands this one.
 func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
+	page, ok := parseListPage(w, r, maxListLimit)
+	if !ok {
+		return
+	}
 	drives, err := s.cfg.Store.ListUserDrives(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list user drives: "+err.Error())
 		return
 	}
-	grants, err := s.cfg.Store.ListUserDriveGrants(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list user drive grants: "+err.Error())
-		return
+	total := 0
+	for _, d := range drives {
+		total += d.GrantCount
+	}
+
+	var grants []types.UserDriveGrant
+	var truncated bool
+	if pg, isPager := s.cfg.Store.(store.Pager); isPager {
+		// The overfetch servePage uses: one row past the window proves a next
+		// page exists without a second query. OFFSET is already applied by the
+		// SQL, so the window here starts at 0.
+		got, gerr := pg.ListUserDriveGrantsPage(r.Context(), store.Page{Limit: page.Limit + 1, Offset: page.Offset})
+		if gerr != nil {
+			writeError(w, http.StatusInternalServerError, "list user drive grants: "+gerr.Error())
+			return
+		}
+		grants, truncated = pageWindow(got, 0, page.Limit)
+	} else {
+		// A store that is not a Pager is a test double — production is PG, which
+		// is. Windowed in Go so every caller sees ONE contract either way.
+		got, gerr := s.cfg.Store.ListUserDriveGrants(r.Context())
+		if gerr != nil {
+			writeError(w, http.StatusInternalServerError, "list user drive grants: "+gerr.Error())
+			return
+		}
+		grants, truncated = pageWindow(got, page.Offset, page.Limit)
+	}
+	if truncated {
+		w.Header().Set("X-Wardyn-Truncated", "true")
 	}
 	writeJSON(w, http.StatusOK, userDrivesResponse{
 		Drives:              drives,
 		Grants:              grants,
 		HostRootsConfigured: len(s.cfg.UserDriveHostRoots) > 0,
 		RunnerTarget:        s.cfg.RunnerTarget,
+		GrantTotal:          total,
 	})
 }
 
@@ -275,7 +334,8 @@ func (s *Server) writeUserDrive(w http.ResponseWriter, r *http.Request, id uuid.
 		writeError(w, code, msg)
 		return
 	}
-	if code, msg := s.driveRehomeGuard(r, d); msg != "" {
+	code, msg, rehomed := s.driveRehomeGuard(r, d)
+	if msg != "" {
 		writeError(w, code, msg)
 		return
 	}
@@ -303,6 +363,10 @@ func (s *Server) writeUserDrive(w http.ResponseWriter, r *http.Request, id uuid.
 			"size_mib":      saved.SizeMiB,
 			"writable":      saved.Writable,
 			"reclaim":       saved.Reclaim,
+			// The one field that separates a cosmetic edit from one that moved
+			// every allocated member's storage. Without it both are the same
+			// `drive.write` row and the orphaning is invisible in the log.
+			"rehomed": rehomed,
 		})))
 	writeJSON(w, status, saved)
 }
@@ -345,25 +409,51 @@ func (s *Server) handleUpdateUserDrive(w http.ResponseWriter, r *http.Request) {
 //     and are findable only by the wardyn.drive label.
 //   - host_root — the same home names, bound against a different tree, from the
 //     next run onward.
-//   - name — a k8s object is `wardyn-drive-<drive-slug>-<home>`, so a rename
-//     re-homes every claim on a Kubernetes deployment. It is inert on Docker and
-//     is listed anyway: which substrate a stored row is on is not something this
-//     gate should have to be right about to stay safe.
+//   - name — BOTH minted object names carry the drive slug
+//     (`wardyn-drive-<drive-slug>-<home>`), so a rename re-homes a Docker volume
+//     exactly as it re-homes a Kubernetes claim. It used to be inert on Docker,
+//     where the volume was `wardyn-drive-<home>`; that changed when the slug
+//     landed on the volume arm so one member's two drives could not be one
+//     volume, and this gate inherited the wider reach for free.
+//
+// THE NAME IS COMPARED THROUGH THE FOLD, not raw. driveSlug collapses case and
+// punctuation, so "Corp NAS" and "  Corp   NAS! " are one slug and name one
+// object: a raw comparison would refuse a cosmetic edit that re-homes nobody,
+// and an admin refused for a typo fix learns to send ?confirm=rehome by reflex —
+// which is how a confirmation stops meaning anything. The message still prints
+// the names an admin typed, because that is what they need to see.
 //
 // Stable order, so the same edit reads the same way twice.
 func driveIdentityFields(before, after types.UserDrive) []string {
 	var out []string
-	for _, f := range []struct{ name, old, updated string }{
-		{"backend", string(before.Backend), string(after.Backend)},
-		{"home_template", string(before.HomeTemplate), string(after.HomeTemplate)},
-		{"host_root", before.HostRoot, after.HostRoot},
-		{"name", before.Name, after.Name},
+	for _, f := range []struct {
+		name, old, updated string
+		moved              bool
+	}{
+		{"backend", string(before.Backend), string(after.Backend), before.Backend != after.Backend},
+		{"home_template", string(before.HomeTemplate), string(after.HomeTemplate), before.HomeTemplate != after.HomeTemplate},
+		{"host_root", before.HostRoot, after.HostRoot, before.HostRoot != after.HostRoot},
+		{"name", before.Name, after.Name, driveNameMovesTheObject(before.Name, after.Name)},
 	} {
-		if f.old != f.updated {
+		if f.moved {
 			out = append(out, fmt.Sprintf("%s %q → %q", f.name, f.old, f.updated))
 		}
 	}
 	return out
+}
+
+// driveNameMovesTheObject reports whether renaming a drive from before to after
+// changes the object its members bind — i.e. whether the two names fold to
+// different slugs. It asks types.DriveObjectName rather than re-implementing the
+// fold, over one fixed backend and one fixed home, so the ONLY thing that can
+// differ is the name's own contribution; a naming change in types is then a
+// change this gate inherits instead of one it drifts away from.
+func driveNameMovesTheObject(before, after string) bool {
+	const probeHome = "probe"
+	object := func(name string) string {
+		return types.DriveObjectName(types.UserDrive{Name: name, Backend: types.DriveBackendK8sPVC}, probeHome)
+	}
+	return object(before) != object(after)
 }
 
 // driveRehomeConfirm is the query value that means "yes, re-home them":
@@ -381,7 +471,9 @@ const driveRehomeConfirm = "rehome"
 
 // driveRehomeGuard refuses an identity-affecting PUT on a drive that already has
 // ALLOCATIONS, unless the request carries ?confirm=rehome. It returns (0, "")
-// when the write may proceed.
+// when the write may proceed, and rehomed=true when it proceeded BECAUSE the
+// caller confirmed — the one bit `drive.write` needs to tell a cosmetic edit
+// from one that moved somebody's storage.
 //
 // WHY A DOOR AND NOT A WARNING. UpsertUserDrive writes every column in place, so
 // before this gate a PUT changing `home_template` on a drive with forty grants
@@ -429,10 +521,10 @@ const driveRehomeConfirm = "rehome"
 // double alike — so the real fix is a database-level one and it is 0.7.1. What
 // the gate does close is the case that actually happens: an admin editing a
 // drive that people are already allocated on.
-func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (int, string) {
+func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int, msg string, rehomed bool) {
 	drives, err := s.cfg.Store.ListUserDrives(r.Context())
 	if err != nil {
-		return http.StatusInternalServerError, "list user drives: " + err.Error()
+		return http.StatusInternalServerError, "list user drives: " + err.Error(), false
 	}
 	var before *types.UserDriveListItem
 	for i := range drives {
@@ -444,11 +536,17 @@ func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (int, stri
 	// A PUT that CREATES (an id no row holds) re-homes nobody, and neither does
 	// one on a drive nothing is allocated from.
 	if before == nil || before.GrantCount == 0 {
-		return 0, ""
+		return 0, "", false
 	}
 	changes := driveIdentityFields(before.UserDrive, d)
-	if len(changes) == 0 || r.URL.Query().Get("confirm") == driveRehomeConfirm {
-		return 0, ""
+	if len(changes) == 0 {
+		return 0, "", false
+	}
+	// CONFIRMED, and the audit row has to say so: `drive.write` covers a
+	// cosmetic edit and one that moved every allocated member's storage, and
+	// without this flag an auditor cannot tell them apart after the fact.
+	if r.URL.Query().Get("confirm") == driveRehomeConfirm {
+		return 0, "", true
 	}
 	them := "it"
 	if before.GrantCount > 1 {
@@ -466,7 +564,7 @@ func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (int, stri
 		"this drive is allocated to %s and this change re-homes %s: %s. Every allocated person's storage object is derived from "+
 			"these fields, so their next run mounts a different object and the one holding their work is left behind with nothing "+
 			"in Wardyn naming it. Confirming is an API action, not a console one: re-send as PUT /drives/{id}?confirm=%s.",
-		pluralDriveSubjects(before.GrantCount), them, strings.Join(changes, ", "), driveRehomeConfirm)
+		pluralDriveSubjects(before.GrantCount), them, strings.Join(changes, ", "), driveRehomeConfirm), false
 }
 
 // pluralDriveSubjects counts a drive's allocations the way the console's
@@ -590,6 +688,22 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	if notFoundIf(w, err, "user drive") {
 		return
 	}
+	// ErrConflict here is the ONE uniqueness rule the natural key does not
+	// carry: another subject already holds this drive with this home_override.
+	// A directory name is ONE PERSON'S — which is exactly why a group or all
+	// row may not carry one — and on a managed drive it is the last way left to
+	// point two people at one object Wardyn itself creates.
+	//
+	// The message names NO subject, for handleDeleteUserDrive's reason: the
+	// allocations table the admin is looking at already lists every override,
+	// and a name read here would be a second, later answer from a read the
+	// refusal does not need.
+	if errors.Is(err, store.ErrConflict) {
+		writeError(w, http.StatusConflict, fmt.Sprintf("another allocation on this drive already uses the "+
+			"directory name %q — a directory name is one person's, which is why a group allocation may not "+
+			"carry one; pick a different name or remove the allocation that holds it", g.HomeOverride))
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "upsert user drive grant: "+err.Error())
 		return
@@ -707,10 +821,21 @@ type meUserDrive struct {
 // ENFORCEMENT path (seedRequestDrive) makes the opposite choice for the same
 // error, and must: mounting nothing where an admin allocated something is a
 // data loss, while showing nothing for a moment is a refresh.
-func (s *Server) resolveMeUserDrive(r *http.Request) *meUserDrive {
+// WHAT WAS WRONG WAS NOT THE nil — IT WAS THAT nil WAS THE WHOLE ANSWER. Three
+// distinct states the launch path refuses with 403, 422 and 500 all arrived here
+// as the SAME `{"user_drive":null}` a genuinely unallocated member gets, and the
+// console renders that as no drive affordance at all — so a member could never
+// reach the refusal naming their remedy, and an admin-fixable home name looked
+// exactly like "you have no allocation". The reason string is the second half of
+// the answer, on the wire, so a client can tell them apart: the same argument
+// the door already won as its own sibling key.
+func (s *Server) resolveMeUserDrive(r *http.Request) (*meUserDrive, string) {
 	resolved, err := s.resolveUserDrive(r.Context())
-	if err != nil || resolved == nil {
-		return nil
+	if err != nil {
+		return nil, driveUnavailableReason(err)
+	}
+	if resolved == nil {
+		return nil, "" // answered, and the answer is "no allocation"
 	}
 	return &meUserDrive{
 		Name:        resolved.Drive.Name,
@@ -720,7 +845,7 @@ func (s *Server) resolveMeUserDrive(r *http.Request) *meUserDrive {
 		Enforcement: resolved.Enforcement,
 		HomeName:    resolved.HomeName,
 		Paused:      resolved.Paused,
-	}
+	}, ""
 }
 
 // userDriveDeniedByProfile names the profile whose DenyUserDrive door is shut
@@ -743,16 +868,23 @@ func (s *Server) resolveMeUserDrive(r *http.Request) *meUserDrive {
 // own reason — /me is a display read, and the ENFORCEMENT path answers the same
 // failure with a refusal. The operator short-circuit stays HERE too, ahead of
 // the resolve: a display read must not cost an operator a ceiling round-trip.
-func (s *Server) userDriveDeniedByProfile(r *http.Request) string {
+func (s *Server) userDriveDeniedByProfile(r *http.Request) (name string, unresolved bool) {
 	if s.isOperator(r.Context()) {
-		return ""
+		return "", false
 	}
 	ceiling, err := s.effectiveCeiling(r.Context())
 	if err != nil {
-		return ""
+		// UNKNOWN IS NOT OPEN. "" on this key is an affirmative promise that no
+		// profile shuts the door, and serving it for a ceiling that could not be
+		// resolved answers an unknown question permissively — the exact thing
+		// writeCeilingError refuses to do at the enforcement door, where this
+		// same outage refuses the run. Shipped beside a fully populated
+		// user_drive it made /me promise a mountable, writable drive for a
+		// create the server would then refuse.
+		return "", true
 	}
-	name, _ := s.driveDoorProfile(r.Context(), ceiling)
-	return name
+	name, _ = s.driveDoorProfile(r.Context(), ceiling)
+	return name, false
 }
 
 // driveRefusal composes a 422 body in the frozen member voice: lowercase

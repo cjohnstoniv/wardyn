@@ -225,6 +225,10 @@ var gatedRoutes = []struct{ method, path string }{
 	// of here, this table's own GET entry needs rbacStore.ListRoleMappings
 	// stubbed above so the admin-passes probe actually reaches the handler.
 	{http.MethodGet, "/api/v1/access"},
+	// 8. The site-config READ (R1). Its PUT is item 5 above; the GET returns the
+	// same whole document, integration credential refs included, so both belong
+	// to the same tier. A member used to get it on a console page load.
+	{http.MethodGet, "/api/v1/site-config"},
 	{http.MethodPost, "/api/v1/access/mappings"},
 	{http.MethodDelete, "/api/v1/access/mappings/m1"},
 	{http.MethodPost, "/api/v1/access/preview"},
@@ -236,13 +240,29 @@ var gatedRoutes = []struct{ method, path string }{
 // NOT here: GET /api/v1/approvals. B2 made it OWNERSHIP-scoped for a member
 // (item 2) rather than a flat pass-through, which needs a store/Approvals
 // fake that can answer "which runs did this principal create" — rbacServer's
-// fakeApprovals models approvals only, not run ownership. Its real (scoped,
-// non-500) behavior is covered by the chi.Walk-enumerated matrix in
-// authz_test.go instead, same reasoning as the gatedRoutes note above.
+// fakeApprovals models approvals only, not run ownership.
+//
+// CORRECTED (R1): this note used to claim its "real (scoped, non-500) behavior
+// is covered by the chi.Walk-enumerated matrix in authz_test.go instead". That
+// was FALSE, and the claim is why the gap survived — the matrix classifies the
+// route classMember, but the classMember arm only calls assertNotBlocked, which
+// reads a status code and never inspects the body, so it cannot see WHICH rows
+// come back. Deleting the whole member branch from handleListApprovals left
+// `go test ./internal/api/` green. The real coverage now lives in
+// approvals_list_test.go (TestListApprovals_MemberSeesOnlyTheirOwnRuns and its
+// fail-closed twin) and, for the JOIN those rest on, in internal/store's
+// TestPG_ListApprovalsPageByRunCreator.
+// NOT here since R1: GET /api/v1/site-config, which moved to gatedRoutes above.
+// It returns the WHOLE site-config document — the upstream-proxy secret ref,
+// every integration's secret_name, and the internal proxy/SCM/artifact hosts —
+// so "this gate refuses writes, it does not blind anyone" was the wrong rule for
+// it: the read IS the disclosure. Its sibling reads GET /sources,
+// /sources/{id} and /base-images moved with it and are asserted by the
+// chi.Walk-enumerated matrix in authz_test.go rather than duplicated here, the
+// same division of labour the approvals note above describes.
 var readRoutes = []string{
 	"/api/v1/policies",
 	"/api/v1/workspaces",
-	"/api/v1/site-config",
 	"/api/v1/secrets",
 }
 

@@ -147,10 +147,19 @@ func (s *Server) newWorkspaceStepRun(ctx context.Context, runID uuid.UUID, actor
 	})
 }
 
-// defaultFloorClass is the operator's configured confinement floor (CC1 when
-// unset) — what a scan/verify inherits, as opposed to record's strongest-class.
-func (s *Server) defaultFloorClass() types.ConfinementClass {
-	if cc := s.cfg.DefaultPolicy.MinConfinementClass; cc != "" {
+// ceilingFloorClass is the ACTING PRINCIPAL's confinement floor (CC1 when their
+// ceiling declares none) — what a scan inherits, as opposed to record's
+// strongest-class.
+//
+// The principal's ceiling, never Config.DefaultPolicy directly: a governance
+// profile REPLACES the deployment default rather than composing with it, so
+// reading the deployment field here would run a walled member's sandbox at the
+// deployment's floor instead of the floor their profile declares. For a
+// principal with no assignment effectiveCeiling answers Config.DefaultPolicy, so
+// this is byte-for-byte the old defaultFloorClass on every deployment that has
+// authored no profile.
+func ceilingFloorClass(ceiling governanceCeiling) types.ConfinementClass {
+	if cc := ceiling.Spec.MinConfinementClass; cc != "" {
 		return cc
 	}
 	return types.CC1
@@ -159,8 +168,8 @@ func (s *Server) defaultFloorClass() types.ConfinementClass {
 // dispatchAndSettle is the shared launch tail: dispatch, re-read the run so the
 // caller returns the store's freshest row, and settle a launch that already
 // reached a terminal state (see settleTerminalLaunch).
-func (s *Server) dispatchAndSettle(ctx context.Context, created types.AgentRun, p dispatchParams) types.AgentRun {
-	s.dispatchRun(ctx, created, p)
+func (s *Server) dispatchAndSettle(ctx context.Context, created types.AgentRun, ceiling dispatchCeiling, p dispatchParams) types.AgentRun {
+	s.dispatchRun(ctx, created, ceiling, p)
 	created = s.refreshRun(ctx, created.ID, created)
 	s.settleTerminalLaunch(ctx, created.ID, created)
 	return created
@@ -255,7 +264,6 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		// one lane that hands out an open-egress sandbox.
 		return types.AgentRun{}, false, fmt.Errorf("resolve governance ceiling: %w", cerr)
 	}
-	ceilingDeny, ceilingProfile := ceilingDispatchDenies(ceiling)
 	caps, cerr := s.cfg.Runner.Capabilities(ctx)
 	if cerr != nil {
 		return types.AgentRun{}, false, fmt.Errorf("runner capabilities unavailable: %w", cerr)
@@ -469,7 +477,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// Sessions are interactive (the operator drives the activity in the attach
 	// shell); no auto command plan. The `--idle` path clones the repo + attaches.
 	var resolvedManaged bool
-	result := s.dispatchAndSettle(ctx, created, dispatchParams{
+	result := s.dispatchAndSettle(ctx, created, ceilingForDispatch(ceiling), dispatchParams{
 		RunToken:           runToken,
 		Image:              image,
 		Policy:             policy,
@@ -494,13 +502,6 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		// path) — and even for a member's, it gates that workspace's OWN binds
 		// only, never the session's operator-staged credential mounts.
 		MemberMounts: s.memberMountPosture([]types.Workspace{ws}),
-		// The acting principal's own profile walls (resolved at the top of this
-		// function): dispatch's re-assertion phase unions these denies into the
-		// AllowAllEgress policy above — deny beats allow_all at the proxy — and
-		// drops every credential lane that reaches one. Empty for an unassigned
-		// principal or an operator, which is Record Mode's unchanged path.
-		CeilingDeny:    ceilingDeny,
-		CeilingProfile: ceilingProfile,
 		// W20-llm-transport-matrix-2: the pre-dispatch llmMode guess above
 		// cannot see the Wardyn-managed subscription lane at all — correct it
 		// below against what dispatch ACTUALLY resolved.

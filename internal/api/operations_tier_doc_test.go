@@ -55,8 +55,13 @@ var docTierRows = []struct{ route, token string }{
 	// the rest of the tier the same table now names.
 	{"PUT /api/v1/workspaces/{id}/approved-egress", "`approved-egress`"},
 	{"PUT /api/v1/workspaces/{id}/denied-egress", "`denied-egress`"},
-	{"POST /api/v1/workspaces/{id}/record", "`record` + `promote-egress`"},
-	{"POST /api/v1/workspaces/{id}/record/{task}/promote-egress", "`record` + `promote-egress`"},
+	// SEPARATE TOKENS, because 0.7 re-tiered one of these and not the other.
+	// They shared the surface token "`record` + `promote-egress`" while they
+	// shared a tier; once record moved to admin-only and promote-egress stayed
+	// on the security tier, one token could not express two gates and this
+	// guard could not pass whatever the doc said. Each names its own row now.
+	{"POST /api/v1/workspaces/{id}/record", "`POST /workspaces/{id}/record`"},
+	{"POST /api/v1/workspaces/{id}/record/{task}/promote-egress", "`promote-egress`"},
 	{"POST /api/v1/site-config/test-proxy", "`POST /site-config/test-proxy`"},
 	{"POST /api/v1/site-config/test-redirect", "`/test-redirect`"},
 	{"GET /api/v1/permissions", "the `/permissions` routes below"},

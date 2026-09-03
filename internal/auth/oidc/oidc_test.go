@@ -560,7 +560,7 @@ type fakeSessionRevocations struct {
 	calls   int32
 }
 
-func (f *fakeSessionRevocations) IsSessionRevoked(context.Context, string, time.Time) (bool, error) {
+func (f *fakeSessionRevocations) IsSessionRevoked(context.Context, string, string, time.Time) (bool, error) {
 	atomic.AddInt32(&f.calls, 1)
 	return f.revoked, f.err
 }
