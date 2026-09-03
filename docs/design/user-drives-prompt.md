@@ -523,6 +523,7 @@ does not freeze a second wording:
 | Size required for a managed claim (400) | `validateUserDrive` | size_mib must be above 0 for a k8s_pvc drive — it is the volume request |
 | Delete while allocated (409) | `handleDeleteUserDrive` | this drive is still allocated — remove its allocations first (deleting it while allocated would leave those subjects with a mount that names nothing) |
 | Home override on a non-user row (400) | `validateUserDriveGrant` | home_override is accepted on a user-tier allocation only — a group cannot share one directory |
+| Home override already held on this drive (409) | `handleUpsertUserDriveGrant` | another allocation on this drive already uses the directory name "{home}" — a directory name is one person's, which is why a group allocation may not carry one; pick a different name or remove the allocation that holds it |
 
 The 409 body **carries no count and must not grow one**: `DELETE_RESTRICT_BODY` (§7.4) is the
 client-side pre-fill and names the count the list already shows; on the race path the client

@@ -104,6 +104,15 @@ func (s *driveCRUDStore) UpsertUserDriveGrant(_ context.Context, g types.UserDri
 	if _, ok := s.drives[g.DriveID]; !ok {
 		return types.UserDriveGrant{}, store.ErrNotFound // the FK
 	}
+	// The one uniqueness rule the natural key does not carry, mirrored from the
+	// store's own NOT EXISTS guard: a directory name on a drive is ONE
+	// person's.
+	for _, existing := range s.grants {
+		if g.HomeOverride != "" && existing.DriveID == g.DriveID && existing.HomeOverride == g.HomeOverride &&
+			!(existing.SubjectType == g.SubjectType && existing.Subject == g.Subject) {
+			return types.UserDriveGrant{}, store.ErrConflict
+		}
+	}
 	for id, existing := range s.grants {
 		if existing.SubjectType == g.SubjectType && existing.Subject == g.Subject {
 			g.ID = id // the EXISTING row's id, never the candidate's
@@ -509,6 +518,60 @@ func TestUserDriveGrantRefusals(t *testing.T) {
 		`{"subject_type":"user","subject":"bob","drive_id":"`+uuid.New().String()+`"}`, nil)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("unknown drive_id = %d, want 404: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestUserDriveGrantRefusesOneDirectoryNameTwice pins the loophole in the rule
+// above: a home_override on a GROUP row is refused because it would hand every
+// member of that group the SAME directory, and TWO USER ROWS carrying one
+// override is that same loss spelled with two rows instead of one.
+//
+// It bites hardest on a MANAGED drive. types.ValidateUserDrive now refuses a
+// claim home_template there and a hash home folds the subject, so the override
+// is the LAST way left to name an object Wardyn itself mints non-injectively —
+// without this refusal Wardyn creates one volume and binds it into two people's
+// sandboxes, read-write wherever the allocations are writable.
+func TestUserDriveGrantRefusesOneDirectoryNameTwice(t *testing.T) {
+	st := newDriveCRUDStore()
+	srv, _ := driveAdminServer(st, nil)
+	d := *driveFixture(nil) // docker_volume: a MANAGED drive, the object Wardyn mints
+	st.drives[d.ID] = d
+	other := *driveFixture(func(o *types.UserDrive) { o.ID, o.Name = uuid.New(), "Design scratch" })
+	st.drives[other.ID] = other
+
+	grant := func(subject, drive, home string) *httptest.ResponseRecorder {
+		return driveCall(t, srv.handleUpsertUserDriveGrant, http.MethodPost, "/api/v1/drives/grants",
+			`{"subject_type":"user","subject":"`+subject+`","drive_id":"`+drive+`","home_override":"`+home+`"}`, nil)
+	}
+
+	if w := grant("sub-bob", d.ID.String(), "bsmith"); w.Code != http.StatusCreated {
+		t.Fatalf("first allocation = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	// THE REFUSAL. A second person handed the same directory on the same drive.
+	w := grant("sub-alice", d.ID.String(), "bsmith")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("second subject on one directory = %d, want 409: %s", w.Code, w.Body.String())
+	}
+	// The admin has to be able to act on it: the message names the directory
+	// they typed. It names no OTHER subject, for handleDeleteUserDrive's reason
+	// — the allocations table already lists every override.
+	if !strings.Contains(w.Body.String(), "bsmith") {
+		t.Errorf("409 body = %s, want it to name the directory", w.Body.String())
+	}
+
+	// SCOPED, three ways, so the rule refuses collisions and nothing else.
+	// (1) The SAME subject re-submitting its own row is a repoint, not a clash.
+	if w := grant("sub-bob", d.ID.String(), "bsmith"); w.Code != http.StatusOK {
+		t.Errorf("repointing the holder's own row = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	// (2) The same name on a DIFFERENT drive is a different object.
+	if w := grant("sub-alice", other.ID.String(), "bsmith"); w.Code != http.StatusCreated {
+		t.Errorf("same name on another drive = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	// (3) No override at all is the common case and never collides — every
+	// grant without one derives its own home from its own subject.
+	if w := grant("sub-carol", d.ID.String(), ""); w.Code != http.StatusCreated {
+		t.Errorf("no override = %d, want 201: %s", w.Code, w.Body.String())
 	}
 }
 

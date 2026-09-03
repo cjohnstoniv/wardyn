@@ -297,6 +297,94 @@ func TestPG_UserDriveGrant_NaturalKeyUpsert(t *testing.T) {
 	}
 }
 
+// TestPG_UserDriveGrant_OneDirectoryNamePerDrive pins the uniqueness rule the
+// natural key does NOT carry, against the real statement rather than a Go
+// re-implementation of it.
+//
+// UNIQUE(subject_type, subject) makes one grant per subject; nothing makes one
+// home_override per drive. A home_override names ONE PERSON'S directory — the
+// stated reason a group or all row may not carry one — and two user rows with
+// one override is that same loss spelled with two rows. On a MANAGED drive it
+// is the last remaining way to point two principals at one object Wardyn itself
+// mints, since types.ValidateUserDrive refuses a claim home_template there and
+// a hash home folds the subject.
+func TestPG_UserDriveGrant_OneDirectoryNamePerDrive(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+
+	drive := seedUserDrive(t, st, "test-home-uniq-a-"+uuid.NewString())
+	other := seedUserDrive(t, st, "test-home-uniq-b-"+uuid.NewString())
+	bob := "test-user-bob-" + uuid.NewString()
+	alice := "test-user-alice-" + uuid.NewString()
+	home := "home-" + uuid.NewString()[:8]
+
+	seedUserDriveGrant(t, st, types.UserDriveGrant{
+		SubjectType: types.CapabilitySubjectUser, Subject: bob, DriveID: drive.ID,
+		HomeOverride: home, CreatedBy: "admin@example.com",
+	})
+
+	// THE REFUSAL, and it is the WRITE that fails rather than a later surprise
+	// at resolve time.
+	_, err := st.UpsertUserDriveGrant(ctx, types.UserDriveGrant{
+		ID: uuid.New(), SubjectType: types.CapabilitySubjectUser, Subject: alice, DriveID: drive.ID,
+		HomeOverride: home, Enabled: true, CreatedBy: "admin@example.com",
+	})
+	if !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("second subject on one directory: err = %v, want ErrConflict — both would mount one object", err)
+	}
+	// …and it wrote NOTHING. Allocating alice to the same drive under a name
+	// nobody holds must be an INSERT — the store returns the EXISTING row's id
+	// on a conflict, so getting the candidate's id back is the proof that the
+	// refused write left no half-applied row behind.
+	candidate := uuid.New()
+	fresh, err := st.UpsertUserDriveGrant(ctx, types.UserDriveGrant{
+		ID: candidate, SubjectType: types.CapabilitySubjectUser, Subject: alice, DriveID: drive.ID,
+		HomeOverride: home + "-other", Enabled: true, CreatedBy: "admin@example.com",
+	})
+	if err != nil {
+		t.Fatalf("alice under a free name: %v", err)
+	}
+	t.Cleanup(func() { _, _ = st.DeleteUserDriveGrant(ctx, fresh.ID) })
+	if fresh.ID != candidate {
+		t.Errorf("id = %s, want the candidate %s — the refused write left a row behind", fresh.ID, candidate)
+	}
+
+	// SCOPED. The holder repointing its OWN row is not a clash with itself —
+	// this is the case a naive "does any row hold this name" check breaks.
+	repointed, err := st.UpsertUserDriveGrant(ctx, types.UserDriveGrant{
+		ID: uuid.New(), SubjectType: types.CapabilitySubjectUser, Subject: bob, DriveID: drive.ID,
+		HomeOverride: home, Priority: 7, Enabled: true, CreatedBy: "admin@example.com",
+	})
+	if err != nil {
+		t.Fatalf("the holder repointing its own row: %v", err)
+	}
+	if repointed.Priority != 7 || repointed.HomeOverride != home {
+		t.Errorf("repointed = %+v, want the edit applied", repointed)
+	}
+	t.Cleanup(func() { _, _ = st.DeleteUserDriveGrant(ctx, repointed.ID) })
+
+	// The same name on ANOTHER drive is another object entirely — the rule is
+	// per drive, not global, or one person's directory name would reserve that
+	// word across the deployment.
+	erin := "test-user-erin-" + uuid.NewString()
+	seedUserDriveGrant(t, st, types.UserDriveGrant{
+		SubjectType: types.CapabilitySubjectUser, Subject: erin, DriveID: other.ID,
+		HomeOverride: home, CreatedBy: "admin@example.com",
+	})
+
+	// And an EMPTY override never collides, however many carry it: each of
+	// those grants derives its own home from its own subject.
+	carol := "test-user-carol-" + uuid.NewString()
+	dave := "test-user-dave-" + uuid.NewString()
+	seedUserDriveGrant(t, st, types.UserDriveGrant{
+		SubjectType: types.CapabilitySubjectUser, Subject: carol, DriveID: drive.ID, CreatedBy: "admin@example.com",
+	})
+	seedUserDriveGrant(t, st, types.UserDriveGrant{
+		SubjectType: types.CapabilitySubjectUser, Subject: dave, DriveID: drive.ID, CreatedBy: "admin@example.com",
+	})
+}
+
 // TestPG_ResolveUserDrive is the precedence table — the whole rule this feature
 // rests on, asserted against the real ORDER BY rather than a Go
 // re-implementation of it (there is deliberately no Go copy to test).

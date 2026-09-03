@@ -178,6 +178,27 @@ func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, erro
 // and "the drive you named does not exist" is a 404 the caller can act on, not
 // a 500.
 //
+// Returns ErrConflict when ANOTHER subject already holds this drive with the
+// SAME home_override. A home_override names ONE PERSON'S directory — that is
+// the whole reason a group or all row may not carry one (ValidateUserDriveGrant:
+// "would hand every member of that group the SAME directory — the isolation a
+// per-user subdirectory buys") — and two user rows carrying one override is
+// that same loss spelled with two rows instead of one. It matters most on a
+// MANAGED backend, where the override is the only remaining way to name a
+// minted object non-injectively (the home_template arm is refused by
+// types.ValidateUserDrive, and a hash home folds the subject), so without this
+// guard Wardyn itself creates one volume and binds it into two people's
+// sandboxes, read-write wherever the allocations are writable.
+//
+// THE GUARD IS IN THE STATEMENT, not in a read before it, so the window between
+// "nobody else holds this name" and the write is one statement rather than two
+// round trips. It is still not a constraint: two concurrent inserts can both
+// pass NOT EXISTS under READ COMMITTED. The race-free form is a partial unique
+// index — CREATE UNIQUE INDEX ... ON user_drive_grants (drive_id, home_override)
+// WHERE home_override <> ” — which belongs in a migration; this guard closes
+// the reachable case (an admin typing one directory name twice) and stays
+// correct as belt-and-braces once the index exists.
+//
 // Enabled is written VERBATIM, so a zero-value grant is a DISABLED one. That is
 // the fail-closed half (an allocation nobody enabled mounts nothing) and it
 // puts the "new grants are on by default" decision at the API write boundary,
@@ -190,7 +211,12 @@ func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant) (t
 	const q = `
 		INSERT INTO user_drive_grants (id, subject_type, subject, drive_id, priority,
 			size_mib_override, writable_override, home_override, enabled, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		SELECT $1::uuid,$2::text,$3::text,$4::uuid,$5::int,$6::int,$7::boolean,$8::text,$9::boolean,$10::text
+		WHERE $8::text = '' OR NOT EXISTS (
+			SELECT 1 FROM user_drive_grants
+			WHERE drive_id = $4::uuid AND home_override = $8::text
+			  AND NOT (subject_type = $2::text AND subject = $3::text)
+		)
 		ON CONFLICT (subject_type, subject) DO UPDATE
 			SET drive_id = EXCLUDED.drive_id, priority = EXCLUDED.priority,
 			    size_mib_override = EXCLUDED.size_mib_override,
@@ -204,6 +230,15 @@ func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant) (t
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
 			return types.UserDriveGrant{}, ErrNotFound
+		}
+		// NO ROWS is the guard above and nothing else: the FK raises 23503
+		// (handled just above), the natural key is absorbed by ON CONFLICT, and
+		// the SELECT is otherwise a row of constants that cannot be empty. It
+		// arrives as ErrNotFound because scanUserDriveGrant folds pgx.ErrNoRows
+		// into it for the READ callers that share the helper — on THIS
+		// statement that reading would be wrong, and the reason is above.
+		if errors.Is(err, ErrNotFound) {
+			return types.UserDriveGrant{}, ErrConflict
 		}
 		return types.UserDriveGrant{}, err
 	}

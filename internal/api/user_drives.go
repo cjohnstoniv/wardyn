@@ -361,6 +361,22 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	if notFoundIf(w, err, "user drive") {
 		return
 	}
+	// ErrConflict here is the ONE uniqueness rule the natural key does not
+	// carry: another subject already holds this drive with this home_override.
+	// A directory name is ONE PERSON'S — which is exactly why a group or all
+	// row may not carry one — and on a managed drive it is the last way left to
+	// point two people at one object Wardyn itself creates.
+	//
+	// The message names NO subject, for handleDeleteUserDrive's reason: the
+	// allocations table the admin is looking at already lists every override,
+	// and a name read here would be a second, later answer from a read the
+	// refusal does not need.
+	if errors.Is(err, store.ErrConflict) {
+		writeError(w, http.StatusConflict, fmt.Sprintf("another allocation on this drive already uses the "+
+			"directory name %q — a directory name is one person's, which is why a group allocation may not "+
+			"carry one; pick a different name or remove the allocation that holds it", g.HomeOverride))
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "upsert user drive grant: "+err.Error())
 		return
