@@ -604,7 +604,7 @@ profile's eligible grants are within the deployment ceiling.
 | Field | Type | Default | What it does |
 |---|---|---|---|
 | `source` | `string` | — (required) | Host path. Must be absolute and cleaned, and not under a denied host location — the same deny-list the docker driver enforces, checked here so a bad mount is a 400 at write time too. |
-| `target` | `string` | — (required) | In-container path, under an allowed prefix (`/home/agent`, `/work`, `/workspace`). Must be unique across all `workspace_mounts` **and** `workspace_repos` targets, so a clone can never land on a bind target. |
+| `target` | `string` | — (required) | In-container path, under an allowed prefix (`/home/agent`, `/work`, `/workspace`). Must be unique across all `workspace_mounts` **and** `workspace_repos` targets, so a clone can never land on a bind target. **Never `/home/agent/drive` or anything under it** — that subtree is reserved for the per-person user drive the runner mounts there, so a policy naming it is refused at write time with `target /home/agent/drive is reserved for the user drive`. |
 | `read_only` | `bool` | `true` when omitted | Omitting it means read-only — the safe direction. Read-write requires an explicit `"read_only": false`. |
 
 ## `workspace_repos[]` — `WorkspaceRepo`
@@ -612,7 +612,7 @@ profile's eligible grants are within the deployment ceiling.
 | Field | Type | Default | What it does |
 |---|---|---|---|
 | `repo` | `string` | — (required) | Repo slug or URL, validated like a run's `--repo`. |
-| `target` | `string` | (unset) | Optional clone destination; validated and collision-checked against every other target when set. Unset defers to the `~/work/<name>` convention. |
+| `target` | `string` | (unset) | Optional clone destination; validated and collision-checked against every other target when set — including the reserved `/home/agent/drive` subtree, refused with the same message as `workspace_mounts[].target` above. Unset defers to the `~/work/<name>` convention. |
 | `ref` | `string` | (unset) | Branch, tag, or commit SHA to clone. Unset clones the remote's default branch (shallow, `git clone --depth 1`). A branch/tag clones shallow directly (`--branch`); an arbitrary SHA falls back to a shallow fetch of that exact ref plus checkout. |
 
 ## `ui_apps[]` — `UIApp`

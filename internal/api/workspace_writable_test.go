@@ -31,7 +31,9 @@ func TestWireWorkspaceSource_LocalDirReadOnlyByDefault(t *testing.T) {
 		},
 	}
 
-	wireWorkspaceSource(&run, &policy, ws)
+	if _, _, err := wireWorkspaceSource(&run, &policy, ws); err != nil {
+		t.Fatalf("wireWorkspaceSource: %v", err)
+	}
 
 	if len(policy.WorkspaceMounts) != 1 {
 		t.Fatalf("want exactly 1 workspace mount, got %d", len(policy.WorkspaceMounts))
@@ -61,7 +63,9 @@ func TestWireWorkspaceSource_WritableOptInIsHonored(t *testing.T) {
 		},
 	}
 
-	wireWorkspaceSource(&run, &policy, ws)
+	if _, _, err := wireWorkspaceSource(&run, &policy, ws); err != nil {
+		t.Fatalf("wireWorkspaceSource: %v", err)
+	}
 
 	if len(policy.WorkspaceMounts) != 1 {
 		t.Fatalf("want exactly 1 workspace mount, got %d", len(policy.WorkspaceMounts))
@@ -91,7 +95,9 @@ func TestWireWorkspaceSource_RefIsHonored(t *testing.T) {
 		},
 	}
 
-	wireWorkspaceSource(&run, &policy, ws)
+	if _, _, err := wireWorkspaceSource(&run, &policy, ws); err != nil {
+		t.Fatalf("wireWorkspaceSource: %v", err)
+	}
 
 	if len(policy.WorkspaceRepos) != 1 {
 		t.Fatalf("want exactly 1 workspace repo, got %d", len(policy.WorkspaceRepos))

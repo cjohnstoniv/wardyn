@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	neturl "net/url"
@@ -347,7 +348,10 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		AutoStopAfterSec: int(recordInteractiveIdleCap.Seconds()),
 	}
 	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row
-	cloneURLs, ephemeralDirs := wireWorkspaceSource(&run, &policy, ws)
+	cloneURLs, ephemeralDirs, werr := wireWorkspaceSource(&run, &policy, ws)
+	if werr != nil {
+		return types.AgentRun{}, false, abort(werr)
+	}
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
 		return types.AgentRun{}, false, abort(fmt.Errorf("create record run: %w", err))
@@ -543,6 +547,15 @@ func requiredIntegrationIDs(ws types.Workspace) []string {
 	return ids
 }
 
+// errWorkspaceSourceTarget marks a stored source whose authored target the
+// record/verify composition refuses — the same class the create path answers 422
+// for (seedRequestWorkspace), so handleRecordWorkspace can answer 422 too rather
+// than the generic 500 every other launch failure gets. The status is the point:
+// this is a stored row an operator must edit, not a fault in the daemon, and
+// telling them "500 launch record run" for a workspace the OTHER door already
+// rejects by name is how the inconsistency stayed hard to diagnose.
+var errWorkspaceSourceTarget = errors.New("invalid workspace source target")
+
 // wireWorkspaceSource points run+policy at EVERY one of the workspace's
 // sources: each repo source clones (added to policy.WorkspaceRepos; the FIRST
 // also sets run.Repo, the run-row label); each local_dir source is
@@ -563,8 +576,32 @@ func requiredIntegrationIDs(ws types.Workspace) []string {
 // also create must run AFTER it, since credential_grants.run_id REFERENCES
 // agent_runs(id) with an immediate FK. Doing both halves here forced one of the
 // two orders to be wrong; the grant half is split out for that reason.
-func wireWorkspaceSource(run *types.AgentRun, policy *types.RunPolicySpec, ws types.Workspace) (cloneURLs, ephemeralDirs []string) {
+func wireWorkspaceSource(run *types.AgentRun, policy *types.RunPolicySpec, ws types.Workspace) (cloneURLs, ephemeralDirs []string, err error) {
 	for _, src := range ws.Sources {
+		// RE-VALIDATED ABOVE THE SWITCH, so it covers repo, local_dir and
+		// ephemeral alike — the shape seedRequestWorkspace already has
+		// (runs_create.go). It used to sit inside the EPHEMERAL arm only, which
+		// is the branch that never needed it least: an ephemeral target is a
+		// mkdir, while a repo or local_dir target becomes a real clone or bind
+		// MOUNT, and nothing downstream re-imposes the rule for either. The
+		// composed record policy never goes through validatePolicySpec, and the
+		// driver's own gate is runner.ValidateMount -> ValidateTarget, which does
+		// NOT carry the reserved-drive rule (targetReservedForDrive is reached
+		// only from ValidateAuthoredTarget) — so /home/agent/drive passed it as an
+		// ordinary /home/agent path and became an operator bind mount at the one
+		// path the runner reserves for the user's own drive.
+		//
+		// A REFUSAL, not a silent skip. The repo half used to fail late and
+		// invisibly — buildRepoRecords drops a repo whose dest fails this same
+		// check with no error to the operator (runs_scm.go), so the session
+		// started with a repo that never cloned and nothing said why. The same
+		// stored workspace already 422s on the ordinary create-run path; a
+		// workspace cannot be legal on one door and quietly broken on the other.
+		if src.Target != "" {
+			if verr := runner.ValidateAuthoredTarget(src.Target); verr != nil {
+				return nil, nil, fmt.Errorf("%w: workspace %s source target: %v", errWorkspaceSourceTarget, ws.ID, verr)
+			}
+		}
 		switch src.Type {
 		case types.WorkspaceSourceTypeRepo:
 			if run.Repo == "" {
@@ -596,17 +633,14 @@ func wireWorkspaceSource(run *types.AgentRun, policy *types.RunPolicySpec, ws ty
 		case types.WorkspaceSourceTypeEphemeral:
 			// No policy entry — it's a mkdir inside the sandbox, not a mount/clone —
 			// which also means it never passes through ValidateMount at CreateSandbox
-			// time the way a repo/local_dir target does. Re-validate it here against
-			// the same deny-list runner.ValidateAuthoredTarget applies at onboarding, mirroring
-			// seedRequestWorkspace's identical guard (runs_create.go): a row written
-			// before that check existed must not ride straight past the gate onto a
-			// path outside allowedTargetPrefixes.
-			if src.Target != "" && runner.ValidateAuthoredTarget(src.Target) == nil {
+			// time the way a repo/local_dir target does. The target was validated
+			// above the switch, with every other kind.
+			if src.Target != "" {
 				ephemeralDirs = append(ephemeralDirs, src.Target)
 			}
 		}
 	}
-	return cloneURLs, ephemeralDirs
+	return cloneURLs, ephemeralDirs, nil
 }
 
 // workspaceSourceGrants creates the repo clone's read credentials. It MUST be

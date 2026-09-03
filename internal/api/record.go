@@ -311,6 +311,15 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "an import step is already running for this workspace")
 		return
 	}
+	// A stored source whose authored target this composition refuses is the
+	// operator's row to fix, not a daemon fault — 422, the SAME status the
+	// create-run path answers for the identical workspace (seedRequestWorkspace).
+	// The two doors disagreeing about one stored row is what made this hard to
+	// diagnose; they now agree on the code and on the wording.
+	if errors.Is(lerr, errWorkspaceSourceTarget) {
+		writeError(w, http.StatusUnprocessableEntity, lerr.Error())
+		return
+	}
 	if lerr != nil {
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
 			"run.record.start", id.String(), "failure", mustJSON(map[string]any{"task": key, "detail": lerr.Error()})))
