@@ -107,6 +107,44 @@ func removeAPIKeyGrantForHost(spec *types.RunPolicySpec, host string) {
 	})
 }
 
+// addAPIKeyGrant proposes ONE api_key grant for host AND couples its exact-host
+// egress entry. The two are a unit, which is why they have one author: the
+// proxy's credential injector consults the exact allowlist only and deliberately
+// does NOT honor allow-all (Policy.AllowedExactHost), so a grant whose host is
+// missing from AllowedDomains fails buildInjector CLOSED at startup and the
+// sandbox gets zero egress — hence the coupling is UNCONDITIONAL, even under
+// allow-all (SPINE-4). Same rule the dispatch/integration-side authors follow
+// (integrations_run.go). TTL 3600 mirrors the broker/clamp 1h ceiling (the
+// clamp caps it regardless).
+//
+// The guards stay with the CALLERS because they differ per lane: never
+// double-grant a host (apiKeyGrantForHost), and never grant an unstored secret
+// (that also fails the proxy closed).
+func addAPIKeyGrant(spec *types.RunPolicySpec, host, header, format, secret string) {
+	scope, _ := json.Marshal(map[string]string{
+		"host": host, "header": header, "format": format, "secret_name": secret,
+	})
+	spec.EligibleGrants = append(spec.EligibleGrants, types.GrantSpec{
+		Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600, RequiresApproval: false,
+	})
+	if !domainAllowedExact(spec.AllowedDomains, host) {
+		spec.AllowedDomains = append(spec.AllowedDomains, host)
+	}
+}
+
+// ensureSubscriptionEgress proposes the Anthropic subscription transport's two
+// egress entries (the wildcard plus the agent's own provider host) — the
+// no-grant, no-secret, no-injection half both subscription lanes need. Under
+// allow-all there is nothing to add; the entries survive the clamp only if the
+// operator ceiling lists them verbatim.
+func ensureSubscriptionEgress(spec *types.RunPolicySpec, host string) {
+	for _, d := range []string{"*.anthropic.com", host} {
+		if !spec.AllowAllEgress && !domainAllowedExact(spec.AllowedDomains, d) {
+			spec.AllowedDomains = append(spec.AllowedDomains, d)
+		}
+	}
+}
+
 // Claude subscription-mode credential mount targets. Dispatch detects
 // subscription mode by the FIRST of these (internal/api/runs.go:
 // specHasMountTarget(claudeCredTarget) => ANTHROPIC_BASE_URL=https://api.anthropic.com,
@@ -329,11 +367,7 @@ func (s *Server) applyIntegrationCreds(ctx context.Context, owner string, spec *
 		// applyLLMCredMount (THE single subscription gate) since only it
 		// knows the ceiling — this function only ever sees the resolved spec.
 		removeAPIKeyGrantForHost(spec, p.host)
-		for _, d := range []string{"*.anthropic.com", p.host} {
-			if !spec.AllowAllEgress && !domainAllowedExact(spec.AllowedDomains, d) {
-				spec.AllowedDomains = append(spec.AllowedDomains, d)
-			}
-		}
+		ensureSubscriptionEgress(spec, p.host)
 		return integ.Kind, nil
 	case types.IntegrationKindBedrock:
 		removeAPIKeyGrantForHost(spec, p.host)
@@ -364,21 +398,7 @@ func (s *Server) applyIntegrationCreds(ctx context.Context, owner string, spec *
 		if _, exists := apiKeyGrantForHost(spec, p.host); exists {
 			return integ.Kind, nil // an api_key grant for this host was already proposed; respect it
 		}
-		scope, _ := json.Marshal(map[string]string{
-			"host": p.host, "header": header, "format": format, "secret_name": secret,
-		})
-		spec.EligibleGrants = append(spec.EligibleGrants, types.GrantSpec{
-			Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600, RequiresApproval: false,
-		})
-		// Couple the exact-host egress entry UNCONDITIONALLY, even under allow-all
-		// (SPINE-4): the proxy's credential injector consults the exact allowlist
-		// only and deliberately does NOT honor allow-all (Policy.AllowedExactHost),
-		// so a grant whose host is missing from AllowedDomains fails buildInjector
-		// CLOSED at startup and the sandbox gets zero egress. Same rule the four
-		// dispatch/integration-side authors already follow (integrations_run.go).
-		if !domainAllowedExact(spec.AllowedDomains, p.host) {
-			spec.AllowedDomains = append(spec.AllowedDomains, p.host)
-		}
+		addAPIKeyGrant(spec, p.host, header, format, secret)
 		// The row's OWN egress — where the system lives — comes along, the same
 		// half applyIntegrationRequirement folds for a workspace-named row. Under
 		// allow-all there is nothing to add (the injector's exact entry above is
@@ -575,13 +595,7 @@ func (s *Server) ensureLLMGrant(spec *types.RunPolicySpec, agent string, secretP
 		return // non-LLM / unknown agent
 	}
 	if subscribed {
-		// Subscription transport: propose the egress entries only (survive iff the
-		// ceiling lists them verbatim); no grant, no secret, no injection.
-		for _, d := range []string{"*.anthropic.com", p.host} {
-			if !spec.AllowAllEgress && !domainAllowedExact(spec.AllowedDomains, d) {
-				spec.AllowedDomains = append(spec.AllowedDomains, d)
-			}
-		}
+		ensureSubscriptionEgress(spec, p.host) // egress only: no grant, no secret, no injection
 		return
 	}
 	if _, exists := apiKeyGrantForHost(spec, p.host); exists {
@@ -590,20 +604,7 @@ func (s *Server) ensureLLMGrant(spec *types.RunPolicySpec, agent string, secretP
 	if !secretPresent[p.secret] {
 		return // adding a grant with no secret would fail the proxy at startup
 	}
-	scope, _ := json.Marshal(map[string]string{
-		"host": p.host, "header": p.header, "format": p.format, "secret_name": p.secret,
-	})
-	// TTL 3600 mirrors the broker/clamp 1h ceiling (the clamp caps it regardless).
-	spec.EligibleGrants = append(spec.EligibleGrants, types.GrantSpec{
-		Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600, RequiresApproval: false,
-	})
-	// Couple the exact-host egress entry (required by the injector) UNCONDITIONALLY,
-	// even under allow-all (SPINE-4): AllowedExactHost does not honor allow-all, so
-	// a grant without its exact allowlist entry fails buildInjector closed at
-	// startup and the sandbox gets zero egress; dedup.
-	if !domainAllowedExact(spec.AllowedDomains, p.host) {
-		spec.AllowedDomains = append(spec.AllowedDomains, p.host)
-	}
+	addAPIKeyGrant(spec, p.host, p.header, p.format, p.secret)
 }
 
 // subscriptionInjectEnabled reports whether subscription runs will inject the

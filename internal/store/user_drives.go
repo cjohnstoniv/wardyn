@@ -58,11 +58,22 @@ func userDriveGrantDest(g *types.UserDriveGrant) []any {
 // RENAMING A DRIVE MOVES A PVC's NAME, and that is a documented consequence
 // rather than a bug this store can fix: types.DriveObjectName folds the name
 // into a k8s claim name, so a renamed drive's members bind a claim that does
-// not exist yet and a managed drive provisions a fresh empty one. The admin
-// surface says so at the write; the alternative — a second immutable slug
-// column — buys stability for the one field an admin most needs to be able to
-// correct, and the operator runbook for a rename is `kubectl get pvc` plus the
-// preview endpoint, which prints the exact object name for a principal.
+// not exist yet and a managed drive provisions a fresh empty one. The alternative
+// — a second immutable slug column — buys stability for the one field an admin
+// most needs to be able to correct, and the operator runbook for a rename is
+// `kubectl get pvc -l wardyn.drive=<id>` (the label carries the row id, so the
+// orphans stay findable) plus the preview endpoint, which prints the exact
+// object name for a principal. docs/OPERATIONS.md, "User drives on Kubernetes",
+// is that runbook.
+//
+// THE HANDLER NO LONGER WRITES THAT UNCONDITIONALLY. An identity-affecting PUT
+// on a drive that already has grants — backend, home_template, host_root or
+// name, the four columns every allocated person's storage object is derived
+// from — is refused 409 by driveRehomeGuard unless the request carries
+// ?confirm=rehome. This statement stays unconditional and must: the gate belongs
+// at the API boundary, where the request that asked for it is, and a store that
+// re-read the grants on every write would be a second, quieter copy of a rule
+// that already has one.
 //
 // Returns ErrConflict when UNIQUE(name) rejects the write — a new drive taking
 // a taken name, or a rename onto another row's name. The caller maps that to
@@ -239,12 +250,19 @@ func (s PG) ListUserDriveGrants(ctx context.Context) ([]types.UserDriveGrant, er
 }
 
 // userDriveTierOrder ranks the three subject tiers MOST SPECIFIC FIRST —
-// user > group > all. Written once, as SQL, and shared by the resolver and the
-// console listing so the two can never disagree about what "most specific"
-// means. Deliberately a SEPARATE constant from governanceTierOrder despite the
-// identical text: these two are the same RULE over different tables, and
-// sharing the string would make a future per-table divergence look like a typo
-// in a shared const rather than the deliberate change it would have to be.
+// user > group > all. Written once, as SQL, and spliced into BOTH the resolver
+// and the console listing so the two can never disagree about what "most
+// specific" means. Deliberately a SEPARATE constant from governanceTierOrder
+// despite the identical text: these two are the same RULE over different
+// tables, and sharing the string would make a future per-table divergence look
+// like a typo in a shared const rather than the deliberate change it would have
+// to be.
+//
+// subject_type is deliberately UNQUALIFIED so the one string works in the
+// resolver's JOIN as well as the single-table listing. That is safe because
+// user_drives has no subject_type column (migration 0054) — the only other
+// table in that JOIN. A migration that added one would make this ambiguous, and
+// Postgres would say so loudly rather than silently re-rank.
 const userDriveTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' THEN 1 ELSE 2 END`
 
 // ResolveUserDrive returns THE ONE drive that applies to a caller, the grant
@@ -315,7 +333,7 @@ func (s PG) ResolveUserDrive(ctx context.Context, userSubjects, groups []string)
 		   OR (g.subject_type = 'user'  AND g.subject = ANY($1::text[]))
 		   OR (g.subject_type = 'group' AND g.subject = ANY($2::text[])))
 		ORDER BY
-			CASE g.subject_type WHEN 'user' THEN 0 WHEN 'group' THEN 1 ELSE 2 END,
+			` + userDriveTierOrder + `,
 			CASE g.subject_type WHEN 'user'
 				THEN COALESCE(array_position($1::text[], g.subject), 2147483647)
 				ELSE 0 END,

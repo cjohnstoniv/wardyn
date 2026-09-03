@@ -43,7 +43,7 @@ func TestApplyDispatchModeEnv_BootSeed(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			run := types.AgentRun{ID: uuid.New(), Task: c.task}
 			env := map[string]string{}
-			applyDispatchModeEnv(env, run, c.interactive, "", "", c.seedAutoTools, "", nil, nil, nil, nil, false)
+			applyDispatchModeEnv(env, run, dispatchParams{Interactive: c.interactive, SeedAutoTools: c.seedAutoTools})
 			if got := env["WARDYN_INTERACTIVE_SEED"]; got != c.wantSeed {
 				t.Errorf("Env[WARDYN_INTERACTIVE_SEED] = %q, want %q", got, c.wantSeed)
 			}
@@ -68,7 +68,7 @@ func TestApplyDispatchModeEnv_BootSeed_ReservedTasksExcluded(t *testing.T) {
 		t.Run(task, func(t *testing.T) {
 			run := types.AgentRun{ID: uuid.New(), Task: task}
 			env := map[string]string{}
-			applyDispatchModeEnv(env, run, true /* interactive */, "", "", true /* seedAutoTools */, "", nil, nil, nil, nil, false)
+			applyDispatchModeEnv(env, run, dispatchParams{Interactive: true, SeedAutoTools: true})
 			if v, ok := env["WARDYN_INTERACTIVE_SEED"]; ok {
 				t.Errorf("Env[WARDYN_INTERACTIVE_SEED] = %q on reserved task %q, want absent", v, task)
 			}
@@ -100,7 +100,7 @@ func TestApplyDispatchModeEnv_ToolApprovals(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			run := types.AgentRun{ID: uuid.New()}
 			env := map[string]string{}
-			applyDispatchModeEnv(env, run, c.interactive, "", "", false, c.toolApprovals, nil, nil, nil, nil, false)
+			applyDispatchModeEnv(env, run, dispatchParams{Interactive: c.interactive, ToolApprovals: c.toolApprovals})
 			if got := env["WARDYN_TOOL_APPROVALS"]; got != c.want {
 				t.Errorf("Env[WARDYN_TOOL_APPROVALS] = %q, want %q", got, c.want)
 			}

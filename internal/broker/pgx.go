@@ -38,16 +38,7 @@ func (s *PgxStore) MintedJTIs(ctx context.Context, runID uuid.UUID) ([]string, e
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var jti string
-		if err := rows.Scan(&jti); err != nil {
-			return nil, err
-		}
-		out = append(out, jti)
-	}
-	return out, rows.Err()
+	return pgx.CollectRows(rows, pgx.RowTo[string])
 }
 
 type pgxTx struct{ tx pgx.Tx }

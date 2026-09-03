@@ -89,12 +89,9 @@ type dispatchParams struct {
 	// allocated no drives, and every scan/probe/harness lane, none of which
 	// carries a member principal to resolve a drive for.
 	//
-	// A CREATE-TIME SNAPSHOT by necessity, not by preference: resolution keys on
-	// capabilitySubjects (the caller's OIDC sub/email/groups) and the run row
-	// carries only CreatedBy, so there is nothing here to re-resolve from —
-	// exactly the constraint CeilingDeny above is a snapshot for. dispatchRun
-	// runs inline in the create request, so the snapshot has no staleness window
-	// to be stale in. See user_drives_run.go.
+	// A CREATE-TIME SNAPSHOT by necessity, not by preference — the same
+	// constraint CeilingDeny above is a snapshot for; the argument is written
+	// once, in user_drives_run.go's package doc.
 	Drive *types.DriveMount
 	// ResolvedManaged, when non-nil, is filled in by dispatchRun with whether
 	// the ACTUAL resolved llmTransport used the Wardyn-managed subscription
@@ -146,10 +143,8 @@ type dispatchParams struct {
 func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatchParams) {
 	// Only the values a phase below REBINDS get a local alias; everything else is
 	// read straight off p (the named-field struct is already self-documenting).
-	image := p.Image
 	policy := p.Policy // local copy; the phases below mutate policy.AllowedDomains
 	injections := p.Injections
-	interactive := p.Interactive
 
 	// Client-disconnect isolation: dispatch is invoked synchronously from the
 	// create-run handler, so a client disconnect cancels ctx mid-flight — which would
@@ -203,7 +198,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	// a credential and is not getting it, so say why — same shape as the codex-cli
 	// drop (applySSHLaneWarnings, runs_create.go), minus the response warning,
 	// which dispatch has no caller to return one to.
-	droppedSSH, droppedPAT := applyDispatchModeEnv(sandboxEnv, run, interactive, p.TaskMode, p.InteractiveStart, p.SeedAutoTools, p.ToolApprovals, p.FirstGitHubGrantID, p.GitPATGrants, p.SSHGrants, p.GitGrants, p.PATBroker)
+	droppedSSH, droppedPAT := applyDispatchModeEnv(sandboxEnv, run, p)
 	s.auditBrokeredGrantDrop(ctx, run.ID, "ssh_key", "run.ssh.brokered_forge", droppedSSH,
 		"this run is brokered for a repo on this forge, so the git-broker route is its only route to it BY NAME "+
 			"(confineGitBrokerEgress denies the forge and its SSH endpoint). Withholding the key is load-bearing, not "+
@@ -218,6 +213,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 			"Drop the github_token grant to push with your own PAT instead")
 	applyRepoCloneEnv(sandboxEnv, run, policy)
 	applyEphemeralDirsEnv(sandboxEnv, p.EphemeralDirs)
+	applyUserDriveEnv(sandboxEnv, p.Drive)
 	// Caller-supplied non-secret env (p.ExtraEnv): the AWS harness login's
 	// pre-login WARDYN_AWS_SSO_CONFIG_B64, or the site-config probe's own
 	// settings — the same "only a discriminator + non-secret payload changes;
@@ -269,7 +265,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	// Bedrock > api-key gateway): sets the sandbox auth env (+ the codex-cli
 	// OpenAI gateway route), may widen policy egress for Bedrock, and reports
 	// which proxy-side injections / TLS-MITM this run needs.
-	llm := s.resolveLLMTransport(ctx, run, &policy, sandboxEnv, injections, interactive, p.TaskMode, proxyURL, p.BedrockRef)
+	llm := s.resolveLLMTransport(ctx, run, &policy, sandboxEnv, injections, p.Interactive, p.TaskMode, proxyURL, p.BedrockRef)
 	if p.ResolvedManaged != nil {
 		*p.ResolvedManaged = llm.injectManaged
 	}
@@ -368,15 +364,24 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	// p.ExtraEnv and resolveLLMTransport's auth vars) so its refusal to overwrite
 	// an already-set variable covers every platform-authored key, not just the
 	// ones written above it. See resolveEnvSecretGrants.
-	s.resolveEnvSecretGrants(ctx, run, policy, sandboxEnv)
+	secretEnvKeys := s.resolveEnvSecretGrants(ctx, run, policy, sandboxEnv)
+
+	// Split the composed environment into its non-secret and credential-bearing
+	// halves — after EVERY writer above, so the "already set" guards each of them
+	// runs saw the whole map. See splitSecretEnv (it moves, never copies).
+	secretEnv := splitSecretEnv(sandboxEnv, append(secretEnvKeys, llm.secretEnvKeys...))
 
 	spec := runner.SandboxSpec{
 		RunID:            run.ID,
-		Image:            image,
+		Image:            p.Image,
 		ConfinementClass: run.ConfinementClass,
 		Env:              sandboxEnv,
-		Mounts:           mounts,
-		Drive:            p.Drive,
+		// The credential half (SandboxSpec.SecretEnv states the driver
+		// obligations). Nil for a run with no env_secret grant and no resident
+		// Bedrock credential, which is most of them.
+		SecretEnv: secretEnv,
+		Mounts:    mounts,
+		Drive:     p.Drive,
 		// nil for an operator run (the driver then behaves exactly as it does
 		// today); non-nil marks a member-owned-workspace run whose MEMBER-AUTHORED
 		// binds (stamped above by buildRunMounts) the driver re-checks against
@@ -385,7 +390,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 		// Interactive runs come up idle for `wardyn attach`; the driver prepares the
 		// workspace (clones the repo into ~/work) on the idle process so the attach
 		// shell isn't empty. A non-interactive run's task exec does this itself.
-		Interactive: interactive,
+		Interactive: p.Interactive,
 		ProxyConfig: runner.ProxyConfig{
 			RunToken:        p.RunToken,
 			ControlPlaneURL: s.cfg.ControlPlaneURL,
@@ -487,6 +492,20 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
 		return
 	}
+
+	// USER DRIVE ATTACHED — a no-op for the runs (most of them) that carry
+	// none. See auditDriveMount.
+	//
+	// AFTER CreateSandbox, not beside the spec that carries the drive: the
+	// driver has the last word on whether the drive is actually bound (the
+	// host-root ceiling and the bind deny-list are re-run there, on the
+	// symlink-resolved real path, as the last thing before the container is
+	// created). Emitted before that decision, a `success` row claimed a mount
+	// that the very next event — `run.create` `failure` — contradicted. Nothing
+	// downstream of here can refuse the drive, so this row is now true when it
+	// is written.
+	s.auditDriveMount(ctx, run.ID, p.Drive)
+
 	// HOLD the run's watcher lease for the rest of dispatch — starting the moment
 	// there is a sandbox to watch and BEFORE SetSandboxRef publishes its ref, so a
 	// run whose sandbox_ref is set is ALWAYS backed by a fresh lease while its
@@ -549,7 +568,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 	s.metrics.sandboxLaunched(s.cfg.Now().Sub(run.CreatedAt))
 
 	// INTERACTIVE vs task exec vs BYOI selftest — see startAgentOrIdle.
-	s.startAgentOrIdle(ctx, run, sb.Ref, image, interactive)
+	s.startAgentOrIdle(ctx, run, sb.Ref, p.Image, p.Interactive)
 }
 
 // startAgentOrIdle is dispatch's final phase, after the run is RUNNING.
@@ -566,7 +585,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, p dispatch
 // for an interactive/login box, warn-only (a login box legitimately lacks repo
 // wiring and the human sees the shell regardless). Keyed off the wardyn-byoi/
 // image tag so convention/devcontainer runs are unaffected. Extracted verbatim
-// from dispatchWithVerify.
+// from dispatchRun.
 //
 // mainProcessExecID is the agent_exec_id persisted when Runner.Exec succeeds
 // with an EMPTY id ("", nil) — an EXEC-LESS substrate (krun runtime; see
@@ -755,7 +774,12 @@ const envAllowMemberEnvSecret = "WARDYN_ALLOW_MEMBER_ENV_SECRET"
 // all of it, not just the part written so far. Non-empty, not merely present:
 // an empty value carries no configuration to protect, and treating it as
 // occupied would make a placeholder key unfillable for no gain.
-func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, sandboxEnv map[string]string) {
+// It REPORTS the variable names it actually filled, because those values are
+// credential material and must not ride a substrate's readable object model:
+// splitSecretEnv moves them onto SandboxSpec.SecretEnv, which the k8s driver
+// delivers via secretKeyRef rather than inline in the agent Pod spec.
+func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, sandboxEnv map[string]string) []string {
+	var resolvedNames []string
 	for _, g := range policy.EligibleGrants {
 		if g.Kind != types.GrantEnvSecret {
 			continue
@@ -780,6 +804,7 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 				skip = "secret could not be resolved"
 			} else {
 				sandboxEnv[name] = string(val)
+				resolvedNames = append(resolvedNames, name)
 				if s.cfg.MaskRegistry != nil {
 					s.cfg.MaskRegistry.Add(run.ID, val)
 				}
@@ -793,6 +818,7 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.env_secret.resolve",
 			run.ID.String(), outcome, mustJSON(data)))
 	}
+	return resolvedNames
 }
 
 // auditablePolicy returns a Clone of policy safe to write to the append-only

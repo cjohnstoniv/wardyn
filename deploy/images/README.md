@@ -90,10 +90,23 @@ speaks the [Git credential protocol][cred-proto] and obtains tokens by calling
 `POST /wardyn/v1/credentials/mint` on the proxy (see credential flow below).
 The system `gitconfig` wires it GLOBALLY (all hosts, not just GitHub) — see §6.
 
-### 5. USER agent (uid 1000)
+### 5. USER agent (uid 1000), owning `work` and `drive`
 
-The image creates user `agent` with uid 1000, home `/home/agent`, and
-workspace `/home/agent/work`.  All agent activity runs as this user.
+The image creates user `agent` with uid 1000, home `/home/agent`, workspace
+`/home/agent/work`, and `/home/agent/drive`.  All agent activity runs as this
+user, and **both directories must exist in the image, owned by `agent`** — the
+same `RUN` that creates them chowns them.
+
+`/home/agent/drive` is the reserved mount point for a **user drive**
+(`runner.DriveTarget`), and it must exist even though most runs mount nothing
+there.  Docker's copy-up gives a fresh named volume the uid/gid of the image
+directory it is mounted over: with no directory in the image the daemon creates
+a **root-owned** one at mount time, so a `docker_volume` drive an admin
+allocated *writable* is EACCES for uid 1000 the first time it is used.  wardynd
+cannot repair that at run time — fixing it would mean chowning volume state,
+which the control plane must never do.  `cmd/wardynd`'s
+`TestAgentImagesPreCreateDriveDir` holds every image here to this, tracing
+`FROM wardyn/agent-…` chains so a derived image inherits rather than repeats it.
 
 ### 6. System gitconfig
 
@@ -328,6 +341,10 @@ What the wrap does NOT add — your base must still provide:
   nothing at runtime.
 - Non-root is recommended (Claude Code refuses `--dangerously-skip-permissions`
   as root); the wrap does not remap USER/HOME.
+- **`/home/agent/drive`, owned by your agent uid**, if the deployment allocates
+  user drives. The wrap creates no directories, so a base without it gets a
+  root-owned mount root from the daemon and a writable drive is unwritable for
+  the agent — see §5.
 
 **Private registries:** pre-pull on the host (`docker pull …`) — the driver
 short-circuits the pull when the image is already present, so no registry-auth
@@ -395,7 +412,10 @@ below, register it under an agent name in `WARDYN_AGENT_IMAGES` (a JSON
 4. Set the system gitconfig credential helper — copy the exact `RUN git config
    --system ...` line from §6, `--secret-file` included (required for git
    brokering).
-5. Create user `agent` uid 1000, home `/home/agent`, work `/home/agent/work`.
+5. Create user `agent` uid 1000, home `/home/agent`, work `/home/agent/work`,
+   and drive `/home/agent/drive` — both directories `mkdir -p`'d and chowned to
+   `agent` in the SAME `RUN` (§5: a missing drive directory makes every managed
+   user drive root-owned and unwritable).
 6. Do NOT add an ENTRYPOINT.
 7. Add a `profiles: [build-only]` stanza to `deploy/compose/docker-compose.yaml`
    mirroring the `proxy-image` and `agent-claude-code` stanzas.

@@ -46,6 +46,11 @@ var docTierRows = []struct{ route, token string }{
 	{"PUT /api/v1/workspaces/{id}/requirements", "`requirements`"},
 	{"POST /api/v1/workspaces/{id}/env-as-code/write", "`env-as-code/write`"},
 	{"POST /api/v1/workspaces/{id}/reassign", "`reassign`"},
+	// The /drives family arrived with the user-drives merge and its own table
+	// rows; keyed on the mount function the row names, which is also what
+	// decides the tier.
+	{"POST /api/v1/drives", "`mountUserDriveRoutes`"},
+	{"POST /api/v1/drives/grants", "`mountUserDriveRoutes`"},
 	// securityOps (SEC) — the eight the pre-0.7 table marked admin-only, plus
 	// the rest of the tier the same table now names.
 	{"PUT /api/v1/workspaces/{id}/approved-egress", "`approved-egress`"},
@@ -98,8 +103,12 @@ func TestOperationsTierTableMatchesRouteMatrix(t *testing.T) {
 			t.Errorf("%s: the tier table names %s in %d rows, want exactly 1", dr.route, dr.token, len(got))
 			continue
 		}
-		if got[0] != want {
-			t.Errorf("%s is %s in the router, but OPERATIONS.md's tier table gates %s as %q, want %q",
+		// The gate cell LEADS with the tier and may append a rationale after it
+		// (the drives rows do). Match the tier as a prefix: the two tier strings
+		// are not prefixes of each other, so this still fails on a wrong tier —
+		// it only tolerates the document's habit of explaining itself in place.
+		if !strings.HasPrefix(got[0], want) {
+			t.Errorf("%s is %s in the router, but OPERATIONS.md's tier table gates %s as %q, want it to lead with %q",
 				dr.route, rc.class, dr.token, got[0], want)
 		}
 	}

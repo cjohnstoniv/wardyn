@@ -34,6 +34,9 @@ describe("demo-videos", () => {
   it("pins every episode's (path, audience) to the approved Shape C partition", () => {
     const partition = Object.fromEntries(EPISODES.map((e) => [e.id, `${e.path}/${e.audience}`]));
     expect(partition).toEqual({
+      // 00 is the front door: core, and for everyone — it assumes nothing but
+      // "I want to sandbox an AI coding agent".
+      "00": "core/everyone",
       "01": "core/everyone",
       "02": "single/admin",
       "02b": "single/admin",
@@ -45,6 +48,10 @@ describe("demo-videos", () => {
       "04": "single/admin",
       "04b": "multi/member",
       "04c": "multi/admin",
+      // 04d is the MEMBER's episode on the multi path: the admin registers and
+      // allocates in its opening, but the drive is the member's and the
+      // persistence proof is filmed from their seat.
+      "04d": "multi/member",
       "05": "core/everyone",
       "06": "any/member",
       "07": "any/member",

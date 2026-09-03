@@ -558,7 +558,10 @@ func mintWithApproval(ctx context.Context, client *http.Client, proxyURL, grantI
 // nil) on success, ("", "", approvalID, nil) on 409-pending, or ("", "", "",
 // err) on all other error conditions.
 func callMint(ctx context.Context, client *http.Client, proxyURL, grantID string) (token, username, approvalID string, err error) {
-	mintURL, err := buildLocalURL(proxyURL, "/wardyn/v1/credentials/mint")
+	// Origin form: a path-only URL against the proxy host itself. The proxy
+	// serves its /wardyn/ routes locally ONLY for these, never for an
+	// absolute-URI forward request (internal/egress/proxy/proxy.go ServeHTTP).
+	mintURL, err := url.JoinPath(proxyURL, "/wardyn/v1/credentials/mint")
 	if err != nil {
 		return "", "", "", fmt.Errorf("build mint URL: %w", err)
 	}
@@ -601,17 +604,19 @@ func callMint(ctx context.Context, client *http.Client, proxyURL, grantID string
 		if err := json.Unmarshal(respBody, &pr); err != nil {
 			return "", "", "", fmt.Errorf("decode 409 response: %w", err)
 		}
+		deniedErr := func(reason string) error {
+			if reason == "" {
+				reason = "no reason given"
+			}
+			return fmt.Errorf("credential grant denied: %s", reason)
+		}
 		// W19-W19a-2: the four 409 conditions share the status but carry a
 		// "code" discriminator — name the real cause instead of falling
 		// through to the generic missing-approval_id guess (mintWithApproval)
 		// for a condition that was never approval-pending at all.
 		switch pr.Code {
 		case mintConflictDenied:
-			reason := pr.Reason
-			if reason == "" {
-				reason = "no reason given"
-			}
-			return "", "", "", fmt.Errorf("credential grant denied: %s", reason)
+			return "", "", "", deniedErr(pr.Reason)
 		case mintConflictAlreadyMinted:
 			return "", "", "", fmt.Errorf("credential already minted (single-use) — a prior mint for this grant already succeeded. " +
 				"For a git_pat this is the second-git-op case (docs/adoption/corp-network-onboarding-findings.md B2): approve with " +
@@ -624,11 +629,7 @@ func callMint(ctx context.Context, client *http.Client, proxyURL, grantID string
 			// Pre-code broker (or the legacy shape before W19-W19a-2): fall
 			// back to the field-presence heuristic exactly as before.
 			if pr.Denied {
-				reason := pr.Reason
-				if reason == "" {
-					reason = "no reason given"
-				}
-				return "", "", "", fmt.Errorf("credential grant denied: %s", reason)
+				return "", "", "", deniedErr(pr.Reason)
 			}
 			return "", "", pr.ApprovalID, nil
 		}
@@ -650,7 +651,7 @@ func callMint(ctx context.Context, client *http.Client, proxyURL, grantID string
 // pollApproval calls GET {proxy}/wardyn/v1/approvals/{id} and returns the
 // approval state string (PENDING / APPROVED / DENIED / EXPIRED).
 func pollApproval(ctx context.Context, client *http.Client, proxyURL, approvalID string) (string, error) {
-	pollURL, err := buildLocalURL(proxyURL, "/wardyn/v1/approvals/"+approvalID)
+	pollURL, err := url.JoinPath(proxyURL, "/wardyn/v1/approvals/"+approvalID)
 	if err != nil {
 		return "", fmt.Errorf("build poll URL: %w", err)
 	}
@@ -676,22 +677,4 @@ func pollApproval(ctx context.Context, client *http.Client, proxyURL, approvalID
 		return "", fmt.Errorf("decode approval: %w", err)
 	}
 	return ar.State, nil
-}
-
-// buildLocalURL constructs the URL for a proxy-local route. The path must
-// begin with /wardyn/ so it routes to a local handler rather than being
-// forwarded as an absolute-URI proxy request.
-//
-// The proxy's local routes are served ONLY for origin-form (path-only) requests
-// addressed to the proxy host itself. We achieve this by issuing a plain HTTP
-// request to the proxy host+port with the local path — the proxy sees a request
-// with URL.Host="" (origin form) and handles it locally instead of forwarding.
-//
-// Concretely: if proxyURL is "http://wardyn-proxy:3128" and path is
-// "/wardyn/v1/credentials/mint", the resulting URL is
-// "http://wardyn-proxy:3128/wardyn/v1/credentials/mint" — a plain HTTP GET/POST
-// to the proxy host at the given path. The proxy's ServeHTTP receives it with
-// r.URL.Host == "" (no absolute URI), matching the local-route condition.
-func buildLocalURL(proxyURL, path string) (string, error) {
-	return url.JoinPath(proxyURL, path)
 }

@@ -225,8 +225,9 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 // req.Interactive is the wrong question everywhere the ANSWER matters.
 //
 // It exists because two callers need that answer BEFORE the coercion runs:
-// denyMemberRequest (which is called at :97, and whose deny_interactive limit is
-// otherwise evaded by simply omitting the task) and effectiveToolApprovals. The
+// denyMemberRequest (called from decodeAndValidateCreateRun above, and whose
+// deny_interactive limit is otherwise evaded by simply omitting the task) and
+// effectiveToolApprovals. The
 // expression is deliberately the same one the coercion itself branches on — one
 // definition, so the gate and the coercion cannot disagree about what a
 // task-less request is.

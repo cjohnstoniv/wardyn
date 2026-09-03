@@ -38,7 +38,7 @@ import (
 // (resolveBedrockAuth) — host mode auto-detects it, the compose stack opts in via
 // the WARDYN_BEDROCK_AWS_DIR bind; it is env-driven with no host/compose branch.
 // A single-user / self-hosted choice, not for a shared multi-tenant service.
-// Extracted verbatim from dispatchWithVerify.
+// Extracted verbatim from dispatchRun.
 //
 // member is the run's member-mount posture (memberMountPosture, workspace_refs.go).
 // Its Sources decide which binds carry runner.Mount.MemberAuthored — the flag the
@@ -97,7 +97,7 @@ func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member memberM
 // new one. Fail SAFE: neither field configured, an unresolvable secret, or a
 // non-http URL (from either source) all return "" (direct egress, today's
 // behavior) plus an audit event; none of them fail the run or crash dispatch.
-// Extracted verbatim from dispatchWithVerify.
+// Extracted verbatim from dispatchRun.
 func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, siteCfg types.SiteConfig, siteCfgErr error) string {
 	if siteCfgErr != nil {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
@@ -140,13 +140,13 @@ func envEnabled(v string) bool {
 	}
 }
 
-// buildBaseSandboxEnv assembles dispatchWithVerify's baseline non-secret sandbox
+// buildBaseSandboxEnv assembles dispatchRun's baseline non-secret sandbox
 // env (invariant 1: the run token never appears here): proxy routing, the
 // toolchain-fidelity env the run's workspaces actually need (needs — Go's
 // tempdir/cache redirect, the JVM proxy sysprops Maven/Gradle need because
 // they ignore HTTP(S)_PROXY; nil needs = no workspace context, full set), and
 // git commit attribution carrying the sub/act delegation chain. Every later
-// phase in dispatchWithVerify only adds to this map, never removes from it.
+// phase in dispatchRun only adds to this map, never removes from it.
 func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNeeds) map[string]string {
 	env := map[string]string{
 		"WARDYN_RUN_ID":    run.ID.String(),
@@ -239,20 +239,26 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 // Returns the ssh_key and git_pat grant hosts it withheld because the run is
 // BROKERED for that forge (dropBrokeredGrants) — both nil in the ordinary case.
 // The caller warns and audits each; neither must ever be silent.
-func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, interactive bool, taskMode, interactiveStart string, seedAutoTools bool, toolApprovals string, firstGitHubGrantID *uuid.UUID, gitPATGrants, sshGrants map[string]string, gitGrants map[string]uuid.UUID, patBroker bool) (droppedSSH, droppedPAT []string) {
+//
+// Takes dispatchParams whole rather than the twelve values it reads: the
+// positional form put GitPATGrants and SSHGrants — adjacent map[string]string
+// arguments carrying DIFFERENT credential families — side by side at every
+// call site, re-opening one layer down the exact swap hazard dispatchParams
+// itself exists to close (see its doc).
+func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p dispatchParams) (droppedSSH, droppedPAT []string) {
 	// Governed repo SCAN run: after cloning, the entrypoint runs wardyn-scan (which
 	// walks ~/work and PUTs ScanFacts to the brokered scan-results route) INSTEAD of
 	// the agent. A non-nil WorkspaceID marks a scan run — UNLESS the run is
 	// interactive (an interactive workspace-linked run is Record Mode, a
 	// human-driven sandbox, never a scan); no agent CLI / model call happens on a
 	// scan.
-	if (run.WorkspaceID != nil || run.SourceID != nil) && !interactive {
+	if (run.WorkspaceID != nil || run.SourceID != nil) && !p.Interactive {
 		sandboxEnv["WARDYN_SCAN_ONLY"] = "1"
 	}
 	// exec task mode (BYOA/CI lane): agent-run runs the task as a plain shell
 	// command instead of the agent harness. Only the discriminator rides env —
 	// everything above/below (clone, grants, egress, recording) is identical.
-	if taskMode == "exec" {
+	if p.TaskMode == "exec" {
 		sandboxEnv["WARDYN_TASK_MODE"] = "exec"
 	}
 	// interactive_start=agent: the attach shell opens IN the image's agent CLI
@@ -262,7 +268,7 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, inte
 	// than in a doc comment, so "ignored for a non-interactive run" is
 	// structurally true: a batch run can never carry this env no matter what
 	// the request said.
-	if interactive && interactiveStart == "agent" {
+	if p.Interactive && p.InteractiveStart == "agent" {
 		sandboxEnv["WARDYN_INTERACTIVE_START"] = "agent"
 	}
 	// Boot seed (Part A1): an interactive run's Task, when non-empty, is no
@@ -277,10 +283,10 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, inte
 	// without this guard they would boot-seed `claude "workspace record"` into
 	// what is supposed to be a plain record-mode sandbox, and the login box
 	// would boot-seed over its own login flow.
-	if interactive && !reservedRunTasks[run.Task] {
+	if p.Interactive && !reservedRunTasks[run.Task] {
 		if seed := strings.TrimSpace(run.Task); seed != "" {
 			sandboxEnv["WARDYN_INTERACTIVE_SEED"] = run.Task
-			if seedAutoTools {
+			if p.SeedAutoTools {
 				sandboxEnv["WARDYN_SEED_AUTO_TOOLS"] = "1"
 			}
 		}
@@ -293,11 +299,11 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, inte
 	// InteractiveStart above is gated on `interactive`: an interactive run's
 	// supervised-seed posture is SeedAutoTools's job, so this can't ride one no
 	// matter what the request said.
-	if !interactive && toolApprovals == "hold" {
+	if !p.Interactive && p.ToolApprovals == "hold" {
 		sandboxEnv["WARDYN_TOOL_APPROVALS"] = "hold"
 	}
-	if firstGitHubGrantID != nil {
-		sandboxEnv["WARDYN_GITHUB_GRANT_ID"] = firstGitHubGrantID.String()
+	if p.FirstGitHubGrantID != nil {
+		sandboxEnv["WARDYN_GITHUB_GRANT_ID"] = p.FirstGitHubGrantID.String()
 	}
 	// The repos this run is BROKERED for — the SAME map confineGitBrokerEgress
 	// keys on, so the sandbox's answer to "is my GitHub access brokered?" cannot
@@ -308,8 +314,8 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, inte
 	// declared anywhere is NOT brokered — no route, no deny — and keeps the
 	// helper as its credential path, unchanged. Non-secret: repo names only,
 	// space-separated canonical "<org>/<repo>", sorted for a stable env value.
-	if len(gitGrants) > 0 {
-		repos := slices.Sorted(maps.Keys(gitGrants))
+	if len(p.GitGrants) > 0 {
+		repos := slices.Sorted(maps.Keys(p.GitGrants))
 		sandboxEnv["WARDYN_GIT_BROKER_REPOS"] = strings.Join(repos, " ")
 	}
 	// git_pat grants: surface the {host: grant_id} map so the git-credential
@@ -317,7 +323,7 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, inte
 	// (grant ids, not the PAT); the value is returned only through the brokered mint.
 	// A PAT for a BROKERED forge is withheld for the same reason the ssh_key is —
 	// see dropBrokeredGrants.
-	gitPATGrants, droppedPAT = dropBrokeredGrants(gitPATGrants, gitGrants, brokeredForgeHost)
+	gitPATGrants, droppedPAT := dropBrokeredGrants(p.GitPATGrants, p.GitGrants, brokeredForgeHost)
 	// THE POINT OF THE PAT BROKER, and the half that is easy to leave out: when
 	// the never-resident lane is on, the grant ids must NOT reach the sandbox.
 	// Leaving them here would let the in-sandbox credential helper mint the PAT
@@ -327,7 +333,7 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, inte
 	// agent-run learns which hosts to route through the broker from
 	// WARDYN_GIT_PAT_BROKER_HOSTS below, which carries HOST NAMES ONLY and no
 	// grant id, so it cannot be used to mint anything.
-	if patBroker && len(gitPATGrants) > 0 {
+	if p.PATBroker && len(gitPATGrants) > 0 {
 		hosts := slices.Sorted(maps.Keys(gitPATGrants))
 		sandboxEnv["WARDYN_GIT_PAT_BROKER_HOSTS"] = strings.Join(hosts, " ")
 		gitPATGrants = nil
@@ -342,7 +348,7 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, inte
 	// so the key is written to a 0400 file and wiped after the clone). Non-secret
 	// (grant ids, not the key); the key material is returned only via the brokered
 	// mint and never touches env. See GrantSSHKey.
-	sshGrants, droppedSSH = dropBrokeredGrants(sshGrants, gitGrants, brokeredForgeSSHHost)
+	sshGrants, droppedSSH := dropBrokeredGrants(p.SSHGrants, p.GitGrants, brokeredForgeSSHHost)
 	if len(sshGrants) > 0 {
 		if b, merr := json.Marshal(sshGrants); merr == nil {
 			sandboxEnv["WARDYN_SSH_GRANTS"] = string(b)
@@ -354,7 +360,7 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, inte
 // applyRepoCloneEnv surfaces the repo(s) to clone (the legacy single run.Repo
 // plus each onboarded WorkspaceRepo on the resolved policy) as sandbox env the
 // agent-run launcher reads before running the agent — non-secret; invariant 1
-// preserved. Extracted verbatim from dispatchWithVerify — pure map mutation, no
+// preserved. Extracted verbatim from dispatchRun — pure map mutation, no
 // branch here changes control flow. See buildRepoRecords for the validation
 // (repoFieldSafe, allowed-prefix targets, dedup) it relies on.
 func applyRepoCloneEnv(sandboxEnv map[string]string, run types.AgentRun, policy types.RunPolicySpec) {
@@ -380,4 +386,178 @@ func applyEphemeralDirsEnv(sandboxEnv map[string]string, dirs []string) {
 		return
 	}
 	sandboxEnv["WARDYN_EPHEMERAL_DIRS"] = strings.Join(dirs, ",")
+}
+
+// splitSecretEnv moves the CREDENTIAL-BEARING keys out of the composed sandbox
+// env into the second map runner.SandboxSpec.SecretEnv carries — the half a
+// driver must deliver without writing the value into its own (readable) object
+// model. Only two lanes ever name a key here: resolveEnvSecretGrants (env_secret
+// grant values) and applyBedrockTransport (resident SigV4 / captured-SSO
+// credentials); both report their names rather than having them re-derived, so
+// the classification cannot drift from the write.
+//
+// Dispatch composes ONE env map and splits it once, at the end, so every
+// "is this variable already set?" refusal along the way (resolveEnvSecretGrants'
+// own overwrite guard, setSandboxCATrustVars' onlyIfUnset) still sees the whole
+// environment rather than half of it.
+//
+// MOVE, not copy: a key left in both maps would reach a k8s Pod spec twice —
+// once as a secretKeyRef and once INLINE — and the inline copy is exactly the
+// API-readable leak the split exists to close. A named key that is absent (a
+// grant that resolved and was later dropped) is simply skipped; nil is returned
+// when nothing is credential-bearing, so an ordinary run's spec is unchanged.
+func splitSecretEnv(sandboxEnv map[string]string, keys []string) map[string]string {
+	secretEnv := map[string]string{}
+	for _, k := range keys {
+		v, ok := sandboxEnv[k]
+		if !ok {
+			continue
+		}
+		secretEnv[k] = v
+		delete(sandboxEnv, k)
+	}
+	if len(secretEnv) == 0 {
+		return nil
+	}
+	return secretEnv
+}
+
+// applyUserDriveEnv announces the mounted USER DRIVE to the sandbox as
+// "<target>:ro" or "<target>:rw" — the one in-sandbox signal that a run has
+// persistent storage and whether it may write to it. No-op for the runs that
+// carry no drive, which is most of them.
+//
+// It is an ANNOUNCEMENT, never the mechanism: the mount itself is made by the
+// driver from SandboxSpec.Drive, so an agent that ignores this variable still
+// gets the drive, and one that fabricates it still gets nothing. That split is
+// what lets it be non-secret env (invariant 1) beside WARDYN_EPHEMERAL_DIRS —
+// and it is why the value names the in-container target and the mode and
+// nothing else: the object name, the host path and the drive's name are
+// admin-facing, and a member's own run must not be able to read back the
+// storage object it was allocated.
+//
+// The mode suffix is `ro`/`rw` rather than a boolean because that is what the
+// mount reads as everywhere else a human sees one (`docker inspect`, `mount`,
+// the console's own chip), and a variable an agent is expected to print in a
+// startup banner should not need a translation table.
+func applyUserDriveEnv(sandboxEnv map[string]string, drive *types.DriveMount) {
+	if drive == nil {
+		return
+	}
+	sandboxEnv["WARDYN_USER_DRIVE"] = drive.Target + ":" + driveAuditMode(drive.ReadOnly)
+}
+
+// auditDriveMount records run.drive.mount: dispatch attached a member's user
+// drive to this sandbox. Silent when no drive was attached — an audit action
+// that fires on every run is noise an operator learns to skip past.
+//
+// Called AFTER CreateSandbox has returned, never beside the spec assembly: the
+// driver re-runs the drive's ceiling and deny matrix at bind time and can still
+// refuse, so an earlier emit wrote `success` for a mount the next event
+// (run.create failure) contradicted. See the call site in runs_dispatch.go.
+//
+// Its own event rather than a field on the run's policy snapshot, because the
+// drive is the ONE thing in a run's spec that OUTLIVES the run: "which run
+// mounted whose storage, in which mode" is a question asked months later about
+// data that is still there. Actor SYSTEM — a member ticked a checkbox, and what
+// is recorded is dispatch's own resolution of that flag into an object.
+//
+// TARGET NAMES THE STORAGE, not the run id — the run is already named by the
+// event's own run id, so spending the target on it a second time made the row's
+// one rendered detail redundant. The console's Audit tab renders a row as time,
+// actor, action and `target`, and nothing at all from `data` (`AuditTab`), so
+// this is the only place the storage reaches a screen.
+//
+// WHICH storage it names depends on WHO can read the row, and that is
+// driveAuditTarget's whole subject: a member reads their own run's rows through
+// GET /audit?run_id=, so a share's absolute host path ANYWHERE ON THIS ROW would
+// hand them the operator's filesystem layout — the exact thing
+// driveShareIsBindable refuses to put in a refusal and applyUserDriveEnv refuses
+// to put in the sandbox. A share's target is therefore "<drive>/<home>"; a
+// managed object's name is Wardyn's own and stays verbatim.
+//
+// `object` CARRIES THE SAME NAME, and the reason is that "anywhere on this row"
+// is the whole claim: masking the Target while the payload still spelled
+// <host_root>/<home> moved the operator's filesystem layout one field over,
+// inside the same row GET /audit?run_id= hands the run's creator whole. So a
+// share's `object` is "<drive>/<home>" as well, and the operator reads the root
+// from GET /drives — operator-only, and it already shows it — rather than from a
+// member-readable audit row. A MANAGED object is untouched on both fields: its
+// name is Wardyn's own and discloses nothing about the host. `drive` is the
+// per-person HOME SEGMENT — not the drive object's name, which is what the same
+// key carries on the drive.grant.* rows
+// (userDriveGrantAuditData). Neither ever enters the sandbox env, which carries
+// the target and the mode and nothing else (applyUserDriveEnv), so an agent
+// cannot read back the object it was allocated. `enforcement` is what actually
+// binds the drive's bytes (types.StorageEnforcement), logged beside the mount so
+// a size read back in a later dispute carries its caveat instead of reading as a
+// promise. Five fields, matching docs/AUDIT-ACTIONS.md exactly.
+//
+// The nil test lives HERE rather than at the assembly site for a mechanical
+// reason worth stating: dispatchRun sits at its gocyclo ceiling, so one more
+// branch there is a lint failure. It belongs with the payload anyway.
+func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, drive *types.DriveMount) {
+	if drive == nil {
+		return
+	}
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.drive.mount",
+		driveAuditTarget(drive), "success", mustJSON(map[string]any{
+			"backend":     drive.Backend,
+			"drive":       drive.HomeName,
+			"enforcement": drive.Enforcement,
+			"mode":        driveAuditMode(drive.ReadOnly),
+			"object":      driveAuditTarget(drive),
+		})))
+}
+
+// driveAuditTarget is what run.drive.mount's Target names, and it differs by
+// backend because the row's READER differs from the reader every other field on
+// it was written for.
+//
+// A member can read their own run's rows (auditScope lets the run's creator
+// through GET /audit?run_id=), and the console's Audit tab renders `target` and
+// nothing from `data`. For a MANAGED object that is exactly right: the name is
+// Wardyn's own — `wardyn-drive-<home>`, `wardyn-drive-<slug>-<home>` — it says
+// which volume or claim the run was handed, and it discloses nothing about the
+// host.
+//
+// For a SHARE the object name is `<host_root>/<home>`, an absolute path on the
+// operator's filesystem, and putting it on the member's own run page
+// contradicted two rules the same tree already states for the same reader:
+// driveShareIsBindable names the HOME and never the resolved path ("the
+// operator's filesystem layout stays where GET /drives already keeps it"), and
+// applyUserDriveEnv carries the target and the mode and nothing else. So a
+// share's target is "<drive>/<home>" — which drive, whose directory — and the
+// absolute path is on the row NOWHERE, `object` included (auditDriveMount calls
+// this for that field too): a payload the same reader can fetch is not a place
+// to keep it. The operator reads the root from GET /drives, which is
+// operator-only and already carries it.
+//
+// A mount that carries no DriveName (an older control plane, a hand-written
+// -spec) falls back to the home alone rather than to the object: the fallback
+// for "I cannot name the drive" must not be "then disclose the path".
+func driveAuditTarget(drive *types.DriveMount) string {
+	if drive.Backend != types.DriveBackendHostPath {
+		return drive.ObjectName
+	}
+	if drive.DriveName == "" {
+		return drive.HomeName
+	}
+	return drive.DriveName + "/" + drive.HomeName
+}
+
+// driveAuditMode renders a drive's mode as the SAME two words the sandbox env
+// (applyUserDriveEnv) and the run.drive.mount audit row use — one vocabulary
+// for the machine-facing surfaces, so a log line and a run's env agree.
+//
+// NOT the console, which is a HUMAN surface and says "Read-only"/"Writable"
+// (MODE_RO/MODE_RW in ui/src/app/lib/user-drives-copy.ts, frozen copy). Those
+// two vocabularies are deliberately different and must not be reconciled: `ro`
+// is what a mount reads as in `docker inspect` and in `mount`, and a chip in a
+// table is prose.
+func driveAuditMode(readOnly bool) string {
+	if readOnly {
+		return "ro"
+	}
+	return "rw"
 }
