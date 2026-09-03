@@ -772,11 +772,7 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	dst := w.Header()
-	copyHeader(dst, resp.Header)
-	removeHopByHop(dst)
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	relay(w, resp)
 }
 
 // handleConnect establishes a raw TCP tunnel for CONNECT (TLS passthrough).

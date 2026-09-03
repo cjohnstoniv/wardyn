@@ -381,3 +381,30 @@ func TestLLMGateway_TrailingDotBaseURL_KeyTrimmed(t *testing.T) {
 		t.Fatal("isLLMHost must match the gateway host with and without the trailing dot")
 	}
 }
+
+// TestLLMGateway_DecisionRecordsRealPort: a gateway configured on a non-443
+// port must be recorded in the decision log on THAT port. The emitter used to
+// hard-code 443 for every LLM/MITM row (only the generic forward path carried a
+// real port), so a gateway on :8443 produced an audit row naming a port nothing
+// was dialled on. docs/AUDIT-ACTIONS.md lists `port` as an egress.* detail
+// field; a wrong one is a dishonest row, not a cosmetic detail.
+func TestLLMGateway_DecisionRecordsRealPort(t *testing.T) {
+	const host = "llm-gateway.corp.internal"
+	gw := captureUpstream(t, true, `{"ok":true}`)
+	res := fakeResolver{m: map[string][]net.IP{host: ips("10.40.1.5")}}
+	inj := staticInj(map[string]injectedHeader{host: {name: "X-Api-Key", value: "K"}})
+	p, buf := gatewayProxy(t, "https://"+host+":8443/v1", res, upstreamAddr(gw.srv), inj)
+
+	rec := httptest.NewRecorder()
+	req := mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"messages", strings.NewReader(`{"hi":1}`))
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%q", rec.Code, rec.Body.String())
+	}
+	d := lastDecision(t, buf)
+	if d.Request.Host != host || d.Request.Port != 8443 {
+		t.Fatalf("decision request = %s:%d, want %s:8443 (the port actually dialled)",
+			d.Request.Host, d.Request.Port, host)
+	}
+}

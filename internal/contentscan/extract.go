@@ -127,7 +127,12 @@ func extractOpenAIChat(body []byte, yield func(Span)) error {
 		return fmt.Errorf("contentscan: parse openai message: %w", err)
 	}
 	prefix := fmt.Sprintf("messages[%d]", n-1)
-	walkOpenAIContent(m.Content, prefix+".content", yield)
+	// Content is the same string-or-blocks shape walkTextOrBlocks already walks
+	// for Anthropic: a JSON string, or an array whose text parts yield
+	// `<path>[i].text`. Sharing it also scans an OpenAI part spelled as a
+	// tool_result/tool_use block -- a STRICT superset of the OpenAI-only walker,
+	// which read `text` off every part type-blind (walkBlock now does too).
+	walkTextOrBlocks(m.Content, prefix+".content", yield)
 	for i, tc := range m.ToolCalls {
 		args := tc.Function.Arguments
 		if args == "" {
@@ -143,35 +148,6 @@ func extractOpenAIChat(body []byte, yield func(Span)) error {
 		}
 	}
 	return nil
-}
-
-// walkOpenAIContent handles an OpenAI message content that is a string or an
-// array of parts (text parts yielded; image_url/other parts skipped).
-func walkOpenAIContent(raw json.RawMessage, path string, yield func(Span)) {
-	raw = bytes.TrimSpace(raw)
-	if len(raw) == 0 {
-		return
-	}
-	switch raw[0] {
-	case '"':
-		var s string
-		if json.Unmarshal(raw, &s) == nil && s != "" {
-			yield(Span{FieldPath: path, Text: s})
-		}
-	case '[':
-		var parts []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}
-		if json.Unmarshal(raw, &parts) != nil {
-			return
-		}
-		for i, p := range parts {
-			if p.Text != "" {
-				yield(Span{FieldPath: fmt.Sprintf("%s[%d].text", path, i), Text: p.Text})
-			}
-		}
-	}
 }
 
 // extractAnthropicMessages yields the text the agent is sending THIS turn: the
@@ -232,8 +208,9 @@ func walkTextOrBlocks(raw json.RawMessage, path string, yield func(Span)) {
 	}
 }
 
-// walkBlock yields the scannable text of one content block: text blocks, the
-// nested content of a tool_result, and every string leaf of a tool_use input.
+// walkBlock yields the scannable text of one content block: EVERY block's own
+// `text` field whatever its type, plus the nested content of a tool_result and
+// every string leaf of a tool_use input.
 func walkBlock(b json.RawMessage, path string, yield func(Span)) {
 	var hdr struct {
 		Type    string          `json:"type"`
@@ -244,11 +221,16 @@ func walkBlock(b json.RawMessage, path string, yield func(Span)) {
 	if json.Unmarshal(b, &hdr) != nil {
 		return
 	}
+	// Type-BLIND, deliberately, and ahead of the switch: image/document parts
+	// keep their binary source.data skipped, but a stray `text` sibling is
+	// scanned no matter what the part calls itself. A type-switched version
+	// silently dropped it on a tool_use/tool_result part — the one shape that
+	// made "never fewer spans than the OpenAI-only walker" untrue, since that
+	// walker read `text` off any part without consulting `type` at all.
+	if hdr.Text != "" {
+		yield(Span{FieldPath: path + ".text", Text: hdr.Text})
+	}
 	switch hdr.Type {
-	case "text":
-		if hdr.Text != "" {
-			yield(Span{FieldPath: path + ".text", Text: hdr.Text})
-		}
 	case "tool_result":
 		if len(bytes.TrimSpace(hdr.Content)) > 0 {
 			walkTextOrBlocks(hdr.Content, path+".content", yield)
@@ -256,12 +238,6 @@ func walkBlock(b json.RawMessage, path string, yield func(Span)) {
 	case "tool_use":
 		if len(bytes.TrimSpace(hdr.Input)) > 0 {
 			walkJSONStrings(hdr.Input, path+".input", yield)
-		}
-	default:
-		// image / document / unknown: skip binary source.data; still scan a
-		// stray text field if one is present (forward-compatible).
-		if hdr.Text != "" {
-			yield(Span{FieldPath: path + ".text", Text: hdr.Text})
 		}
 	}
 }

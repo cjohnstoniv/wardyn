@@ -34,7 +34,6 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -89,7 +88,16 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// Same smart-HTTP surface the GitHub lane admits: refs discovery and the two
 	// pack endpoints, nothing else. A broker that forwarded arbitrary paths would
 	// be a credentialed proxy to the whole forge — the REST API included.
-	if !validGitRest(r.Method, rest, r.URL.Query().Get("service")) {
+	//
+	// The GitHub lane hands validGitRest a bare tail because parseGitBrokerPath
+	// strips <org>/<repo> for it. A forge path is arbitrarily deep, so this lane
+	// takes the last segment instead — the ONE exception being refs discovery,
+	// whose two segments are the whole surface it must match.
+	verb := rest[strings.LastIndex(rest, "/")+1:]
+	if strings.HasSuffix(rest, "/info/refs") {
+		verb = "info/refs"
+	}
+	if !validGitRest(r.Method, verb, r.URL.Query().Get("service")) {
 		p.emitLocalDecision(r, egress.Deny, ruleSourcePATDenied, nil)
 		http.Error(w, "unsupported git request", http.StatusForbidden)
 		return
@@ -144,11 +152,7 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	dst := w.Header()
-	copyHeader(dst, resp.Header)
-	removeHopByHop(dst)
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	relay(w, resp)
 }
 
 // patToken mints the PAT server-side, returning it with the git username the
@@ -159,7 +163,7 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 // wants "oauth2", and an operator override rides the grant. An EMPTY username
 // is the one value that fails on every forge, so it is never sent.
 func (p *Proxy) patToken(ctx context.Context, g PATGrant) (token, username string, err error) {
-	tok, user, _, status, body, err := p.callMintGitFull(ctx, g.GrantID)
+	tok, user, _, status, body, err := p.callMintGit(ctx, g.GrantID)
 	if err != nil {
 		return "", "", err
 	}

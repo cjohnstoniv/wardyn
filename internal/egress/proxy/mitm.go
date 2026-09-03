@@ -38,9 +38,8 @@ const leafCertTTL = 24 * time.Hour
 // KEY lives ONLY here in proxy memory; only the CA's PUBLIC cert is trusted inside
 // the sandbox. A nil *certAuthority means MITM is disabled (opaque passthrough).
 type certAuthority struct {
-	caCert  *x509.Certificate
-	caKey   crypto.Signer
-	caChain [][]byte // CA cert DER, appended to each leaf chain
+	caCert *x509.Certificate
+	caKey  crypto.Signer
 
 	mu     sync.Mutex
 	leaves map[string]*tls.Certificate
@@ -64,10 +63,9 @@ func newCertAuthority(certPEM, keyPEM []byte) (*certAuthority, error) {
 		return nil, fmt.Errorf("mitm: CA private key is not a crypto.Signer")
 	}
 	return &certAuthority{
-		caCert:  caCert,
-		caKey:   signer,
-		caChain: [][]byte{kp.Certificate[0]},
-		leaves:  make(map[string]*tls.Certificate),
+		caCert: caCert,
+		caKey:  signer,
+		leaves: make(map[string]*tls.Certificate),
 	}, nil
 }
 
@@ -124,7 +122,7 @@ func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 		return nil, err
 	}
 	cert := &tls.Certificate{
-		Certificate: append([][]byte{der}, a.caChain...),
+		Certificate: [][]byte{der, a.caCert.Raw}, // leaf then CA
 		PrivateKey:  key,
 	}
 	if leaf, perr := x509.ParseCertificate(der); perr == nil {
@@ -309,7 +307,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	// relaxes the vetted-IP pin for this hop (see dialThroughUpstream).
 	target, _, terr := p.egressTarget(host, port)
 	if terr != nil {
-		p.emitLLMDecision(r, host, egress.Deny, mitmSource, nil)
+		p.emitLLMDecision(r, host, port, egress.Deny, mitmSource, nil)
 		p.httpError(w, "llm upstream vet failed", terr, http.StatusBadGateway)
 		return
 	}
@@ -331,7 +329,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 		p.scanner.InspectForwardEgress() && p.scanner.Mode() != contentscan.ModeOff && hasScannableBody(r) {
 		bodyReader, scanSummary, blocked = p.inspectForwardBody(w, r, host, port)
 	} else {
-		bodyReader, scanSummary, blocked = p.inspectLLM(w, r, host, rest, channel)
+		bodyReader, scanSummary, blocked = p.inspectLLM(w, r, host, port, rest, channel)
 	}
 	if blocked {
 		return
@@ -344,7 +342,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	// cannot be refreshed fails closed — never forward a stale token.
 	hdr, ok, ierr := p.inject.resolve(host)
 	if ierr != nil {
-		p.emitLLMDecision(r, host, egress.Deny, mitmSource, nil)
+		p.emitLLMDecision(r, host, port, egress.Deny, mitmSource, nil)
 		p.httpError(w, "llm credential refresh failed", ierr, http.StatusBadGateway)
 		return
 	}

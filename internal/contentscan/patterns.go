@@ -35,8 +35,6 @@ var secretRules = []secretRule{
 // regexSecretDetector flags well-known secret formats (DetectSecretPatterns).
 type regexSecretDetector struct{}
 
-func (regexSecretDetector) Name() string { return "regex-secret" }
-
 func (regexSecretDetector) Scan(s Span, dst *[]Finding) {
 	path := sanitizePath(s.FieldPath)
 	for _, rule := range secretRules {
@@ -67,8 +65,6 @@ const (
 // entropyDetector flags long, high-entropy tokens (DetectEntropy). Best-effort,
 // off by default; medium severity so block_min_severity can exclude it.
 type entropyDetector struct{}
-
-func (entropyDetector) Name() string { return "entropy" }
 
 func (entropyDetector) Scan(s Span, dst *[]Finding) {
 	path := sanitizePath(s.FieldPath)
