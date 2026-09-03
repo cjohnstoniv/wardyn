@@ -186,3 +186,81 @@ func TestPG_APITokens_NilGroupsStayNull(t *testing.T) {
 		t.Errorf("groups = %v, want a non-nil empty slice (the IdP sent none)", gotEmpty.Groups)
 	}
 }
+
+// TestPG_APITokens_RefreshRolesAtLogin pins the bound the token lane did not
+// have. The role is stamped at mint and only two statements ever touched this
+// table — last_used_at and revoked_at — so demoting a human from admin left
+// every outstanding wdn_ token of theirs authenticating AS AN ADMIN until
+// someone separately remembered to revoke it, and 0.7 widened that stamp to
+// carry security_admin. The sibling credential got exactly this bound in
+// migration 0046 (RefreshSSHKeyRoles, fired from the same OnLogin hook); this
+// is its twin.
+//
+// Four properties, each a way the UPDATE could be wrong:
+//   - it re-stamps EVERY token the principal holds, not just one;
+//   - it does not touch anyone else's;
+//   - it leaves a REVOKED token alone (revoking is terminal — re-stamping a
+//     revoked row would resurrect nothing but would make the trail lie about
+//     what that credential was);
+//   - a principal with no tokens is not an error, which is the ordinary case
+//     for most humans and would otherwise fail every login.
+func TestPG_APITokens_RefreshRolesAtLogin(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+
+	alice := "alice-" + uuid.NewString()
+	bob := "bob-" + uuid.NewString()
+	a1 := seedToken(t, st, alice, "wdn_"+uuid.NewString(), []string{"eng"})
+	a2 := seedToken(t, st, alice, "wdn_"+uuid.NewString(), []string{"eng"})
+	gone := seedToken(t, st, alice, "wdn_"+uuid.NewString(), nil)
+	b1 := seedToken(t, st, bob, "wdn_"+uuid.NewString(), nil)
+
+	// Alice is promoted, so her live tokens must follow at her next login.
+	if err := st.RefreshAPITokenRoles(ctx, alice, "admin"); err != nil {
+		t.Fatalf("RefreshAPITokenRoles: %v", err)
+	}
+	roleOf := func(id uuid.UUID) string {
+		t.Helper()
+		var role string
+		if err := pool.QueryRow(ctx, `SELECT role FROM api_tokens WHERE id = $1`, id).Scan(&role); err != nil {
+			t.Fatalf("read role: %v", err)
+		}
+		return role
+	}
+	if got := roleOf(a1.ID); got != "admin" {
+		t.Errorf("a1 role = %q, want admin — the login hook did not reach every token", got)
+	}
+	if got := roleOf(a2.ID); got != "admin" {
+		t.Errorf("a2 role = %q, want admin — the refresh stopped at the first row", got)
+	}
+	if got := roleOf(b1.ID); got != "member" {
+		t.Errorf("bob's role = %q, want member — one human's login re-stamped ANOTHER human's token", got)
+	}
+
+	// And the demotion direction, which is the one the finding is about.
+	if _, err := st.RevokeAPIToken(ctx, gone.ID, "", time.Now().UTC()); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	if err := st.RefreshAPITokenRoles(ctx, alice, "member"); err != nil {
+		t.Fatalf("RefreshAPITokenRoles (demote): %v", err)
+	}
+	if got := roleOf(a1.ID); got != "member" {
+		t.Errorf("a1 role = %q after demotion, want member — a demoted human kept admin on an outstanding token", got)
+	}
+	// gone was promoted with the rest while it was still live, THEN revoked,
+	// THEN the demote ran. So it must still read admin: the
+	// `WHERE revoked_at IS NULL` clause skipped it, and a revoked credential
+	// keeps the stamp it carried at revocation rather than being rewritten
+	// afterwards by an event it was no longer party to.
+	if got := roleOf(gone.ID); got != "admin" {
+		t.Errorf("revoked token role = %q, want the admin it held when it was revoked — the demote rewrote a "+
+			"revoked row, so the trail no longer says what that credential actually was", got)
+	}
+
+	// A principal with no tokens at all: every login of every human without a
+	// token takes this path.
+	if err := st.RefreshAPITokenRoles(ctx, "nobody-"+uuid.NewString(), "admin"); err != nil {
+		t.Errorf("refresh for a principal with no tokens = %v, want nil — this fires on EVERY login", err)
+	}
+}

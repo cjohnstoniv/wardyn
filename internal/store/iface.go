@@ -176,6 +176,12 @@ type Store interface {
 	GetSSHKeyByFingerprint(ctx context.Context, fingerprint string) (types.SSHPublicKey, error)
 	DeleteSSHKey(ctx context.Context, fingerprint, principal string) error
 	RefreshSSHKeyRoles(ctx context.Context, principal, role string, checkedAt time.Time) error
+	// RefreshAPITokenRoles re-stamps role on every unrevoked api_tokens row a
+	// principal holds. Fired from the SAME OnLogin hook as RefreshSSHKeyRoles,
+	// because both credentials freeze a role at issue time and neither had any
+	// way to learn about a demotion. See the implementation for why it does not
+	// touch groups, and for the ceiling it does NOT remove.
+	RefreshAPITokenRoles(ctx context.Context, principal, role string) error
 
 	// Per-user API tokens (migration 0045, self-service via /api/v1/me/tokens
 	// and admin-wide via /api/v1/tokens). These ARE part of Store for the same

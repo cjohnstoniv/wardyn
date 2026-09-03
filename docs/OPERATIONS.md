@@ -879,13 +879,24 @@ recovered, and a database reader (a reporting role, a hot standby, a `pg_dump` i
 a backup bucket) cannot lift a usable credential off a row. `last_used_at` is best
 effort and is the signal for "which of these are dead"; revoke those.
 
-**The role is a stamp, not a live check.** A token carries the role its owner held
-when they minted it, exactly as a registered SSH key does. Demoting a human from
-admin to member does **not** reach their outstanding tokens — revoke them with
-`DELETE /api/v1/tokens/{id}`, which is also the path for a departed owner's
-credential. Both `token.create` and `token.revoke` are audited
-([`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md)); the revoke row names the token's
-owner.
+**The role is a stamp, re-checked at login — not a live check.** A token carries
+the role its owner held when they minted it, exactly as a registered SSH key
+does, and **their next successful sign-in re-stamps it**: one login refreshes the
+role on every unrevoked token that human holds, the same hook that has refreshed
+their SSH keys since 0.6. So a demotion does reach outstanding tokens, but on the
+demoted human's own next login rather than immediately.
+
+Read that bound honestly. A human who is demoted and **never signs in again keeps
+the role their tokens were minted with, indefinitely** — there is no expiry on a
+token and no TTL on the stamp (the SSH lane narrows its equivalent window with
+`WARDYN_SSH_ROLE_TTL`; the token lane has no such ceiling yet). When a demotion
+has to take effect now, or when the owner has left, revoke: `DELETE
+/api/v1/tokens/{id}` for one, or `POST /api/v1/sessions/revoke` naming the human,
+which cuts their sessions and every token they hold in one call. A revoked token
+is never re-stamped — it keeps whatever role it carried when it was revoked, so
+the trail still says what that credential actually was. Both `token.create` and
+`token.revoke` are audited ([`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md)); the
+revoke row names the token's owner.
 
 ### Three roles, and who sets the walls
 

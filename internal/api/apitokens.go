@@ -316,7 +316,11 @@ func (s *Server) handleRevokeAPIToken(w http.ResponseWriter, r *http.Request) {
 // (see handleRevokeSessions for that argument in full). This is the remediation
 // path for the stamp
 // ceiling migration 0045 documents — a demoted admin's outstanding tokens keep
-// the role they were minted under until they are revoked here — and for a token
+// the role they were minted under until their owner's next login re-stamps it
+// (store.RefreshAPITokenRoles, fired from the same OnLogin hook that has
+// refreshed SSH keys since 0.6) or until they are revoked here. This route is
+// the path that takes effect IMMEDIATELY, and the only one that helps for an
+// owner who never signs in again — and for a token
 // whose owner has left.
 func (s *Server) handleAdminRevokeAPIToken(w http.ResponseWriter, r *http.Request) {
 	s.revokeAPIToken(w, r, "")

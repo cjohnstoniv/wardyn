@@ -1275,6 +1275,9 @@ func (s *authzStore) DeleteSSHKey(context.Context, string, string) error { retur
 func (s *authzStore) RefreshSSHKeyRoles(context.Context, string, string, time.Time) error {
 	return nil
 }
+func (s *authzStore) RefreshAPITokenRoles(context.Context, string, string) error {
+	return nil
+}
 
 // ─── per-user api tokens (migration 0045) ─────────────────────────────────
 //
