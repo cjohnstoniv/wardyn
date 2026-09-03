@@ -192,7 +192,7 @@ func TestDispatch_KillRaceTeardownFailure_AuditsTeardownError(t *testing.T) {
 		st.mu.Unlock()
 	}
 
-	srv.dispatchRun(context.Background(), run, dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Policy: types.RunPolicySpec{MinConfinementClass: types.CC1},
 	})
@@ -236,7 +236,7 @@ func TestDispatch_ExecFailureTeardownFailure_AuditsTeardownError(t *testing.T) {
 	}
 	srv, st, audit, run := dispatchTeardownFixture(t, rn, types.RunPending)
 
-	srv.dispatchRun(context.Background(), run, dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Policy: types.RunPolicySpec{MinConfinementClass: types.CC1},
 	})
@@ -319,7 +319,7 @@ func TestCompletionWatcher_TransientWaitError_FinalizesViaHandoff(t *testing.T) 
 	cfg.BaseCtx = baseCtx
 	srv := New(cfg)
 
-	srv.dispatchRun(context.Background(), run, dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Policy: types.RunPolicySpec{MinConfinementClass: types.CC1},
 	})

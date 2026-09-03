@@ -40,7 +40,7 @@ func TestDispatch_AuditsEffectivePolicyEnvelope(t *testing.T) {
 	srv.cfg.Store = artifactSiteCfgStore{st}
 	run.Task = "" // no agent exec / completion watcher: this test is about the envelope
 
-	srv.dispatchRun(context.Background(), run, dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Policy: types.RunPolicySpec{
 			AllowedDomains:      []string{"api.anthropic.com", "registry.npmjs.org"},
@@ -77,7 +77,7 @@ func TestDispatch_AuditsEffectivePolicyEnvelope_RedactsLLMInspectionValues(t *te
 	srv, _, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	run.Task = ""
 
-	srv.dispatchRun(context.Background(), run, dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Policy: types.RunPolicySpec{
 			MinConfinementClass: types.CC1,
@@ -129,7 +129,7 @@ func TestDispatch_ResolvesLLMInspectionSecretNamesAtDispatch(t *testing.T) {
 	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"prod-db-password": []byte("resolved-secret-value")}}
 	srv.cfg.MaskRegistry = secretmask.NewRegistry()
 
-	srv.dispatchRun(context.Background(), run, dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Policy: types.RunPolicySpec{
 			MinConfinementClass: types.CC1,

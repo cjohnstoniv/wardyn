@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"maps"
 	"slices"
@@ -30,21 +31,78 @@ import (
 // Split out of runs_dispatch.go for the 1000-line file-size gate
 // (scripts/check-file-size.sh), the same way the broker and mount halves were.
 
-// ceilingDispatchDenies is the ONE translation from a resolved ceiling into the
-// two dispatchParams fields, so "absent row ⇒ absent behaviour" cannot be
-// re-decided per call site.
+// dispatchCeiling is the acting principal's ceiling in the shape dispatch needs
+// it, and it is a REQUIRED POSITIONAL ARGUMENT of dispatchRun/dispatchAndSettle
+// rather than a field on dispatchParams. That is the fix for the defect class,
+// not a style preference.
 //
-// It returns something only for an ASSIGNED profile. That is the whole scoping
+// It used to be two optional dispatchParams fields (CeilingDeny, CeilingProfile),
+// and reassertCeilingDenies returns immediately on an empty deny list — so a
+// dispatch lane that simply did not populate them ran with NO ceiling
+// enforcement at all and no run.ceiling.reassert row to say so. Three of the
+// five lanes did not populate them; two of those three are reachable by a
+// principal effectiveCeiling does NOT short-circuit (a member owning a workspace
+// reaches the source scan, a security admin reaches the site-config probes), so
+// the enforcement default for an unconverted lane was fail-OPEN, and a SIXTH
+// lane added later would have inherited that default silently.
+//
+// Two properties make forgetting impossible now:
+//
+//   - COMPILE. The ceiling is an argument, so a new dispatch lane cannot be
+//     written without deciding what to pass.
+//   - RUNTIME. `resolved` is set only by the constructors below, so the zero
+//     value — the thing a hurried caller would reach for to satisfy the compiler
+//     — is REFUSED by dispatchRun and the run fails closed. There is
+//     deliberately no "exempt" constructor: every one of the lanes can resolve a
+//     real ceiling, and for an operator effectiveCeiling short-circuits to
+//     (nil profile, no store read), which is the same provable no-op an
+//     exemption would have been, without a door that can be claimed by mistake.
+type dispatchCeiling struct {
+	// resolved records that this value came from a constructor. Never set it by
+	// hand; the zero value must stay the "nobody decided" state.
+	resolved bool
+	// deny is the ceiling's OWN deny list — never the run's merged
+	// policy.DeniedDomains; see ceilingDenies for why a merged-list matcher
+	// would kill every broker lane on a deployment with no profile at all.
+	deny []string
+	// profile is the assigned profile's NAME, for the run.ceiling.reassert audit
+	// event. Nothing branches on it.
+	profile string
+}
+
+// ceilingForDispatch is the ONE translation from a resolved ceiling into the
+// dispatch value, so "absent row ⇒ absent behaviour" cannot be re-decided per
+// call site.
+//
+// It carries denies only for an ASSIGNED profile. That is the whole scoping
 // rule (§A): a member with no assignment resolves to Config.DefaultPolicy, whose
 // denies are ALREADY in their run's policy by every ordinary path — re-asserting
 // them would be a no-op on a good day and a behaviour change on a bad one, on
 // deployments that have never authored a profile. An operator short-circuits
-// earlier still, at effectiveCeiling's step 1.
-func ceilingDispatchDenies(c governanceCeiling) (deny []string, profile string) {
+// earlier still, at effectiveCeiling's step 1. Either way the result is
+// RESOLVED: "this principal has no profile" is an answer, and the zero value is
+// not.
+func ceilingForDispatch(c governanceCeiling) dispatchCeiling {
 	if c.Profile == nil {
-		return nil, ""
+		return dispatchCeiling{resolved: true}
 	}
-	return c.Spec.DeniedDomains, c.Profile.Name
+	return dispatchCeiling{resolved: true, deny: c.Spec.DeniedDomains, profile: c.Profile.Name}
+}
+
+// resolveDispatchCeiling is effectiveCeiling + ceilingForDispatch, for the lanes
+// that do not already hold a resolved ceiling (the source scan, the site-config
+// probes, the managed-harness login).
+//
+// FAIL CLOSED on a resolver error, exactly as launchRecordRun does: carrying on
+// would silently substitute the deployment ceiling for a profile that may be far
+// narrower — a widening caused by a database hiccup, on lanes that hand out
+// brokered clone credentials and proxy-side injections.
+func (s *Server) resolveDispatchCeiling(ctx context.Context) (dispatchCeiling, governanceCeiling, error) {
+	c, err := s.effectiveCeiling(ctx)
+	if err != nil {
+		return dispatchCeiling{}, governanceCeiling{}, fmt.Errorf("resolve governance ceiling: %w", err)
+	}
+	return ceilingForDispatch(c), c, nil
 }
 
 // ceilingDenies reports whether the CEILING's deny list covers host — an exact
@@ -162,22 +220,24 @@ func unionCeilingDenies(policy *types.RunPolicySpec, deny []string) []string {
 // run.ConfinementClass, fixed at create — raising policy.MinConfinementClass
 // here would be decoration that looks enforced and is not.
 //
-// A provable NO-OP when the principal has no assigned profile: p.CeilingDeny is
-// nil for an unassigned member, an operator, and every scan/probe/harness lane
-// with no member principal at all.
+// A provable NO-OP when the principal has no assigned profile: c.deny is empty
+// for an unassigned member and for an operator (effectiveCeiling's step-1
+// short-circuit). It is NOT a no-op merely because a lane forgot to resolve a
+// ceiling — that state is unrepresentable now, since dispatchCeiling is a
+// required argument whose zero value dispatchRun refuses (see dispatchCeiling).
 func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
-	policy *types.RunPolicySpec, injections *[]runner.InjectionGrant, p *dispatchParams,
-	sandboxEnv map[string]string,
+	policy *types.RunPolicySpec, injections *[]runner.InjectionGrant, c dispatchCeiling,
+	p *dispatchParams, sandboxEnv map[string]string,
 ) {
-	if len(p.CeilingDeny) == 0 {
+	if len(c.deny) == 0 {
 		return
 	}
-	added := unionCeilingDenies(policy, p.CeilingDeny)
+	added := unionCeilingDenies(policy, c.deny)
 
 	var droppedInjection []string
 	kept := (*injections)[:0:0] // :0:0 — never alias the caller's array
 	for _, in := range *injections {
-		if ceilingDenies(p.CeilingDeny, in.Rule.Host) {
+		if ceilingDenies(c.deny, in.Rule.Host) {
 			droppedInjection = append(droppedInjection, in.Rule.Host)
 			continue
 		}
@@ -185,11 +245,11 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 	}
 	*injections = kept
 
-	droppedLane := s.dropBrokeredLanes(p, sandboxEnv)
+	droppedLane := s.dropBrokeredLanes(c, p, sandboxEnv)
 
 	if len(droppedInjection) > 0 || len(droppedLane) > 0 {
 		slog.WarnContext(ctx, "wardynd: governance ceiling — withholding credential lanes for hosts this principal's profile denies",
-			slog.String("run_id", run.ID.String()), slog.String("profile", p.CeilingProfile),
+			slog.String("run_id", run.ID.String()), slog.String("profile", c.profile),
 			slog.Any("injection_hosts", droppedInjection), slog.Any("broker_lanes", droppedLane))
 	}
 	// ALWAYS audited when a profile applies, even with nothing to drop: "which
@@ -199,7 +259,7 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 	// broker grants ride ProxyConfig, not the spec.
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.ceiling.reassert",
 		run.ID.String(), "success", mustJSON(map[string]any{
-			"profile":                 p.CeilingProfile,
+			"profile":                 c.profile,
 			"denied_added":            added,
 			"dropped_injection_hosts": droppedInjection,
 			"dropped_broker_lanes":    droppedLane,
@@ -241,9 +301,9 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 // phase, and re-deriving them here would duplicate dropBrokeredGrants' own
 // filtering. PF-1b is about the lanes that BYPASS denied_domains; a resident
 // credential for a denied host still meets that deny on every named dial.
-func (s *Server) dropBrokeredLanes(p *dispatchParams, sandboxEnv map[string]string) []string {
+func (s *Server) dropBrokeredLanes(c dispatchCeiling, p *dispatchParams, sandboxEnv map[string]string) []string {
 	var dropped []string
-	if len(p.GitGrants) > 0 && ceilingDeniesAny(p.CeilingDeny, gitBrokerManagedHosts) {
+	if len(p.GitGrants) > 0 && ceilingDeniesAny(c.deny, gitBrokerManagedHosts) {
 		dropped = append(dropped, slices.Sorted(maps.Keys(p.GitGrants))...)
 		p.GitGrants = nil
 		delete(sandboxEnv, "WARDYN_GITHUB_GRANT_ID")
@@ -251,7 +311,7 @@ func (s *Server) dropBrokeredLanes(p *dispatchParams, sandboxEnv map[string]stri
 	if len(p.GitPATGrants) > 0 {
 		kept := map[string]string{} // a new map: the caller's is still read elsewhere
 		for host, grantID := range p.GitPATGrants {
-			if ceilingDenies(p.CeilingDeny, host) {
+			if ceilingDenies(c.deny, host) {
 				dropped = append(dropped, host)
 				continue
 			}

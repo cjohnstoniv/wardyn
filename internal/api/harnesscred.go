@@ -477,7 +477,17 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// No injections, no repo, no verify plan: a blank interactive box (plus, for
 	// AWS, the non-secret ~/.aws/config above). The `--idle` path installs the MITM
 	// CA and attaches; the login pane auto-types the provider's command.
-	s.dispatchRun(ctx, created, dispatchParams{
+	// The acting principal's ceiling. This lane is mounted operatorOnly
+	// (mountSetupMutationRoutes), so effectiveCeiling short-circuits at step 1
+	// with no store read and this resolves to the RESOLVED-empty ceiling — a
+	// provable no-op. It is resolved rather than exempted on purpose: an
+	// exemption is a door that can be claimed by mistake if the route is ever
+	// re-tiered, while a resolve simply starts binding.
+	dc, _, dcErr := s.resolveDispatchCeiling(ctx)
+	if dcErr != nil {
+		return types.AgentRun{}, dcErr
+	}
+	s.dispatchRun(ctx, created, dc, dispatchParams{
 		RunToken: token, Image: image, Policy: policy,
 		Interactive: true, ExtraEnv: extraEnv,
 	})

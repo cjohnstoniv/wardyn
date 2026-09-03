@@ -323,7 +323,7 @@ func TestDispatch_BrokeredSSHDropIsAuditedAndNeverReachesTheSandbox(t *testing.T
 	srv, _, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	run.Task = "" // no agent exec / completion watcher; this test is about dispatch
 
-	srv.dispatchRun(context.Background(), run, dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Policy:    types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, MinConfinementClass: types.CC1},
 		GitGrants: map[string]uuid.UUID{"acme/widgets": uuid.New()},
