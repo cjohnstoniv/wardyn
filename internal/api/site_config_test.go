@@ -125,6 +125,65 @@ func TestValidateSiteConfig(t *testing.T) {
 	}
 }
 
+// TestShellSafeSiteString_IsTheOneInjectionGate pins the property
+// shellSafeSiteString exists to make structural: every site-config string that
+// reaches this gate is refused on the SAME control characters, DEL, shell/XML
+// metacharacters and over-long inputs — including validSiteURLOrHost's third
+// shape (a bare host with a port/path and no scheme), which no scheme or host
+// check rejects on its own and which TestValidateSiteConfig never exercised
+// (its metacharacter case carries a scheme, so the "://" arm refuses it first).
+// hostrules.EmitArtifactConfig interpolates these strings verbatim into
+// .npmrc/pip.conf/.cargo/config.toml/settings.xml/NuGet.Config and names
+// validateSiteConfig as the reason that is safe, so the gate is the whole
+// justification for that interpolation.
+func TestShellSafeSiteString_IsTheOneInjectionGate(t *testing.T) {
+	unsafe := []struct{ name, raw string }{
+		{"backtick", "registry.corp.internal/`whoami`"},
+		{"dollar", "registry.corp.internal/$(id)"},
+		{"semicolon", "registry.corp.internal/x;id"},
+		{"ampersand", "registry.corp.internal/x&id"},
+		{"pipe", "registry.corp.internal/x|id"},
+		{"angle brackets", "registry.corp.internal/<x>"},
+		{"double quote", `registry.corp.internal/"x"`},
+		{"single quote", "registry.corp.internal/'x'"},
+		{"backslash", `registry.corp.internal\x`},
+		{"newline", "registry.corp.internal/x\n"},
+		{"NUL", "registry.corp.internal/x\x00"},
+		{"DEL", "registry.corp.internal/x\x7f"},
+		{"empty", ""},
+		{"over 2048 bytes", "registry.corp.internal/" + strings.Repeat("a", 2048)},
+	}
+	for _, c := range unsafe {
+		t.Run(c.name, func(t *testing.T) {
+			if shellSafeSiteString(c.raw) {
+				t.Errorf("shellSafeSiteString(%q) = true, want false", c.raw)
+			}
+			// Both callers of the gate, so deleting the call from either one
+			// (the state before the extraction: two hand-kept copies) is red.
+			if validSiteURLOrHost(c.raw) {
+				t.Errorf("validSiteURLOrHost(%q) = true, want false", c.raw)
+			}
+			if validSiteURL("https://" + c.raw) {
+				t.Errorf("validSiteURL(%q) = true, want false", "https://"+c.raw)
+			}
+			// End to end: the refusal validateSiteConfig actually owes an
+			// operator, on the network-only tier where a bare host is legal.
+			if err := validateSiteConfig(types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+				{From: "ghcr.io", To: c.raw},
+			}}); err == nil {
+				t.Errorf("validateSiteConfig accepted a network-only redirect to %q", c.raw)
+			}
+		})
+	}
+	// ...and the gate is not a blanket refusal of the third shape: the two
+	// documented examples still pass.
+	for _, ok := range []string{"registry.corp.internal/ghcr-remote", "10.40.2.11:8443"} {
+		if !validSiteURLOrHost(ok) {
+			t.Errorf("validSiteURLOrHost(%q) = false, want true (documented third-shape example)", ok)
+		}
+	}
+}
+
 // TestValidateSiteConfig_InternalHosts_Rejects: every declared CIDR must lie
 // ENTIRELY inside ipguard.Liftable (RFC1918/fc00::/7/100.64.0.0/10) — the
 // obvious SSRF-guard-widening mistakes are all refused at write time.

@@ -14,6 +14,11 @@
 // and a removed wire field is a runtime TypeError the e2e lane catches, not a
 // compile error here.
 import type { CapabilitySubjectType } from "../types";
+// The POST /drives/preview body is the governance preview's, not a second
+// spelling of it: the same two claim lists, filled by the same previewClaims(),
+// folded by the same server-side normalizer. Type-only, so it is erased at
+// build and adds no import edge.
+import type { GovernancePreviewInput } from "./governance";
 import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
 
 // types.DriveBackend — four backends, two per runner.
@@ -74,7 +79,27 @@ export interface UserDriveGrant {
 // actually mount here.
 export interface UserDrivesSnapshot {
   drives: UserDriveListItem[];
+  /**
+   * ONE PAGE of the deployment's allocations, not necessarily all of them.
+   *
+   * user_drive_grants holds one row per SUBJECT, so its size is the
+   * deployment's headcount; the server bounds this read (default and hard cap
+   * `maxListLimit`) because unbounded it sorted every allocation on every load
+   * of this screen. A deployment at or under the cap is unaffected — the same
+   * rows it always got.
+   */
   grants: UserDriveGrant[];
+  /**
+   * How many allocations EXIST, against `grants.length` on this page. Free on
+   * the server: every grant's drive_id is an FK to a drive, so the per-drive
+   * `grant_count` values above sum to it.
+   *
+   * The two being unequal means this is a page. The screen does not act on that
+   * yet — paging the allocations table needs a control and its copy, which is a
+   * mock round — so `grant_count` per drive stays the number to trust for
+   * "how many people hold this drive". Absent on a pre-0.7 daemon.
+   */
+  grant_total?: number;
   host_roots_configured: boolean;
   runner_target: string;
 }
@@ -95,7 +120,7 @@ export interface UserDriveInput {
 // userDriveGrantRequest. `enabled` and `writable_override` are pointers on the
 // Go side, so an omitted key is not the same as `false` — the caller omits
 // rather than sends a default it did not mean.
-export interface UserDriveGrantInput {
+interface UserDriveGrantInput {
   subject_type: CapabilitySubjectType;
   subject: string;
   drive_id: string;
@@ -104,13 +129,6 @@ export interface UserDriveGrantInput {
   writable_override?: boolean;
   home_override?: string;
   enabled?: boolean;
-}
-
-// The POST /drives/preview body — the same two claim lists the governance
-// preview takes, because the server folds them with the same normalizer.
-export interface UserDrivePreviewInput {
-  user_subjects: string[];
-  groups: string[];
 }
 
 // userDrivePreviewResponse: which drive a principal carrying those claims would
@@ -129,6 +147,23 @@ export interface UserDrivePreview {
   writable?: boolean;
   enforcement?: StorageEnforcement;
   paused?: boolean;
+  // WHICH of the submitted claims the directory name was derived from — the
+  // server's positional pick (the sign-in subject first, the email last) made
+  // visible. The request cannot LABEL a claim: the console sends one kind-less
+  // box, so an admin who pasted only an address against a `hash` or `sub` drive
+  // gets a perfectly well-formed object name that NO RUN WILL EVER MOUNT.
+  // Absent on a paused row, where nothing is derived at all.
+  home_subject?: string;
+  // A server-composed hint about the REQUEST — not a refusal, and deliberately
+  // NOT one of §7's frozen strings: those are the member's doors, and this is an
+  // admin's typo. Rendered verbatim, under its own heading, when it is present.
+  //
+  // NOT RENDERED YET, and that is the point of typing it. Both keys have been on
+  // the wire since the endpoint shipped and the console silently dropped them;
+  // the type is where the gap becomes visible to the mock round that owns where
+  // they belong on the "Who gets what" panel. A surface arrives through a mock
+  // round, never through a type (CONSOLE-RULES §12).
+  warning?: string;
 }
 
 // DriveBackend.Kind() — managed (Wardyn allocates the object) vs share (it
@@ -220,7 +255,7 @@ export const drives = {
   // the enforcement path takes), so there is deliberately no client-side
   // precedence here: a second implementation of the precedence rule is a second
   // implementation of the answer.
-  async previewDrive(input: UserDrivePreviewInput): Promise<UserDrivePreview> {
+  async previewDrive(input: GovernancePreviewInput): Promise<UserDrivePreview> {
     const res = await wfetch("/drives/preview", { method: "POST", body: JSON.stringify(input) });
     return asJson<UserDrivePreview>(res);
   },

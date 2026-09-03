@@ -133,7 +133,7 @@ func TestBrokeredRunWithholdsGitPATGrantEnv(t *testing.T) {
 	brokered := map[string]uuid.UUID{"acme/widgets": uuid.New()}
 	apply := func(patGrants map[string]string, gitGrants map[string]uuid.UUID) (map[string]string, []string) {
 		env := map[string]string{}
-		_, dropped := applyDispatchModeEnv(env, run, false, "", "", false, "", nil, patGrants, nil, gitGrants, false)
+		_, dropped := applyDispatchModeEnv(env, run, dispatchParams{GitPATGrants: patGrants, GitGrants: gitGrants})
 		return env, dropped
 	}
 

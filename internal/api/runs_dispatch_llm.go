@@ -49,6 +49,13 @@ type llmTransport struct {
 	// injectBedrockBearer: Bedrock in BEARER mode — proxy-side token injection
 	// into bedrock-runtime (never-resident), the only inspectable Bedrock path.
 	injectBedrockBearer bool
+	// secretEnvKeys are the sandboxEnv variables applyBedrockTransport filled
+	// with REAL credential material — the resident SigV4 keys, or the captured
+	// AWS SSO blob. Nil for every never-resident mode (bearer, ~/.aws mount) and
+	// for every non-Bedrock transport, whose env holds only placeholders. Read
+	// by dispatch's splitSecretEnv, which moves them onto SandboxSpec.SecretEnv
+	// so a substrate does not have to publish them in a readable pod spec.
+	secretEnvKeys []string
 }
 
 // isModelRun reports whether a dispatch actually invokes the model. Two run
@@ -195,7 +202,7 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 		sandboxEnv["CLAUDE_CONFIG_DIR"] = "/home/agent/.claude-run"
 		sandboxEnv["WARDYN_CLAUDE_MANAGED_B64"] = managedSentinelCredsB64()
 	} else if t.bedrockReady {
-		s.applyBedrockTransport(ctx, run, t.bedrock, policy, sandboxEnv)
+		t.secretEnvKeys = s.applyBedrockTransport(ctx, run, t.bedrock, policy, sandboxEnv)
 	} else {
 		sandboxEnv["ANTHROPIC_API_KEY"] = "wardyn-proxy-injected"
 	}
@@ -226,7 +233,7 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 // policy allow-list, and audits which of the four modes (bearer / sso-inject /
 // aws-dir-mount / resident) credentials the run. Extracted verbatim from
 // resolveLLMTransport's t.bedrockReady branch.
-func (s *Server) applyBedrockTransport(ctx context.Context, run types.AgentRun, b bedrockAuth, policy *types.RunPolicySpec, sandboxEnv map[string]string) {
+func (s *Server) applyBedrockTransport(ctx context.Context, run types.AgentRun, b bedrockAuth, policy *types.RunPolicySpec, sandboxEnv map[string]string) []string {
 	for k, v := range b.env {
 		sandboxEnv[k] = v
 	}
@@ -234,6 +241,25 @@ func (s *Server) applyBedrockTransport(ctx context.Context, run types.AgentRun, 
 	// `agent-run --selftest` echo. Bearer mode holds only a placeholder and the
 	// ~/.aws-mount mode holds no keys in env at all (the SDK reads the mount), so
 	// neither has anything secret to mask here.
+	//
+	// secretEnvKeys names the SAME variables, decided by the SAME condition and
+	// in the same place, so the two answers to "which of these is a credential?"
+	// cannot drift: what is worth masking out of a recording is exactly what is
+	// worth keeping out of an API-readable pod spec (SandboxSpec.SecretEnv).
+	// AWS_SESSION_TOKEN is conditional because a long-lived key pair has none;
+	// the SSO blob is a separate mode whose env carries no SigV4 key at all, but
+	// whose base64 payload IS the captured access/refresh token.
+	var secretEnvKeys []string
+	if !b.bearer && !b.awsMount {
+		for _, k := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"} {
+			if b.env[k] != "" {
+				secretEnvKeys = append(secretEnvKeys, k)
+			}
+		}
+	}
+	if b.ssoInject && b.env[awsSSOConfigEnvVar] != "" {
+		secretEnvKeys = append(secretEnvKeys, awsSSOConfigEnvVar)
+	}
 	if s.cfg.MaskRegistry != nil && !b.bearer && !b.awsMount {
 		s.cfg.MaskRegistry.Add(run.ID, []byte(b.env["AWS_ACCESS_KEY_ID"]))
 		s.cfg.MaskRegistry.Add(run.ID, []byte(b.env["AWS_SECRET_ACCESS_KEY"]))
@@ -241,11 +267,7 @@ func (s *Server) applyBedrockTransport(ctx context.Context, run types.AgentRun, 
 			s.cfg.MaskRegistry.Add(run.ID, []byte(tok))
 		}
 	}
-	for _, h := range b.egressHosts {
-		if !domainAllowedExact(policy.AllowedDomains, h) {
-			policy.AllowedDomains = append(policy.AllowedDomains, h)
-		}
-	}
+	unionAllowedDomains(policy, b.egressHosts)
 	detail := "resident AWS SigV4 credentials in sandbox env (SigV4 request signing can't be proxy-injected like a static api key); IAM least-privilege scoping is the operator's responsibility"
 	mode := "resident"
 	switch {
@@ -269,6 +291,7 @@ func (s *Server) applyBedrockTransport(ctx context.Context, run types.AgentRun, 
 			"endpoint": b.runtimeHost,
 			"mode":     mode, "detail": detail,
 		})))
+	return secretEnvKeys
 }
 
 // provisionDispatchMITMCA provisions the per-run TLS-MITM CA when any consumer
@@ -279,7 +302,7 @@ func (s *Server) applyBedrockTransport(ctx context.Context, run types.AgentRun, 
 // NODE_EXTRA_CA_CERTS (additive for Node clients like Claude Code). On failure
 // it marks the run FAILED (CAS from STARTING so a concurrent kill's KILLED
 // state is preserved), audits, and returns ok=false — the dispatch must stop.
-// Extracted verbatim from dispatchWithVerify.
+// Extracted verbatim from dispatchRun.
 func (s *Server) provisionDispatchMITMCA(ctx context.Context, run types.AgentRun, sandboxEnv map[string]string) (certPEM, keyPEM string, ok bool) {
 	pemCert, pemKey, caErr := generateRunCA(time.Now())
 	if caErr != nil {
@@ -385,7 +408,7 @@ func installSandboxTrustedCA(corpPEM string, sandboxEnv map[string]string) {
 // construction (managed requires !subscription). Returns the updated injections
 // slice; ok=false means the grant write failed, the run was marked FAILED
 // (CAS from STARTING), and dispatch must stop. Extracted verbatim from
-// dispatchWithVerify.
+// dispatchRun.
 func (s *Server) authorSubscriptionInjection(ctx context.Context, run types.AgentRun, t llmTransport, policy *types.RunPolicySpec, injections []runner.InjectionGrant) ([]runner.InjectionGrant, bool) {
 	const anthropicAPIHost = "api.anthropic.com"
 	sentinelName := subscriptionOAuthSecret
@@ -431,9 +454,7 @@ func (s *Server) authorSubscriptionInjection(ctx context.Context, run types.Agen
 	if rule, derr := injectionRuleFromScope(subScope); derr == nil {
 		injections = append(injections, runner.InjectionGrant{GrantID: subGrantID, Rule: rule})
 	}
-	if !domainAllowedExact(policy.AllowedDomains, anthropicAPIHost) {
-		policy.AllowedDomains = append(policy.AllowedDomains, anthropicAPIHost)
-	}
+	unionAllowedDomains(policy, []string{anthropicAPIHost})
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.subscription_inject",
 		run.ID.String(), "success", mustJSON(map[string]any{
 			"host": anthropicAPIHost, "tls_mitm": true, "source": injectSource, "detail": detail,
@@ -450,7 +471,7 @@ func (s *Server) authorSubscriptionInjection(ctx context.Context, run types.Agen
 // sandbox holds only the placeholder bearer. Returns the updated injections and
 // the MITM host list; ok=false means the grant write failed, the run was marked
 // FAILED (CAS from STARTING), and dispatch must stop. Extracted verbatim from
-// dispatchWithVerify.
+// dispatchRun.
 func (s *Server) authorBedrockBearerInjection(ctx context.Context, run types.AgentRun, t llmTransport, injections []runner.InjectionGrant) ([]runner.InjectionGrant, []string, bool) {
 	mitmHosts := []string{t.bedrock.runtimeHost}
 	beScope, _ := json.Marshal(map[string]string{
@@ -495,7 +516,7 @@ func llmInspectMITMEnabled(policy *types.RunPolicySpec) bool {
 // silently exempting opaque Bedrock. The default (require_inspectable_llm=false)
 // instead degrades visibly rather than failing. Returns false when the run was
 // marked FAILED (CAS from STARTING so a concurrent kill's KILLED is not
-// clobbered) and dispatch must stop. Extracted verbatim from dispatchWithVerify.
+// clobbered) and dispatch must stop. Extracted verbatim from dispatchRun.
 func (s *Server) enforceInspectableLLM(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, llm llmTransport) bool {
 	li := policy.LLMInspection
 	if li == nil || !li.RequireInspectableLLM || li.Mode == "" || strings.EqualFold(li.Mode, "off") {

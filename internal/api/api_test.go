@@ -355,6 +355,35 @@ func TestInternalAuthRejectsBadToken(t *testing.T) {
 	}
 }
 
+// TestInternalDecisionAllowIsSuccess pins decisionOutcome's other arm: an allow
+// lands as egress.allow with outcome "success" (the deny arm is pinned above;
+// without this the collapse of the Allow and default arms was untested).
+func TestInternalDecisionAllowIsSuccess(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	tok := h.mintRunToken(t, runID)
+	body := `{"request":{"host":"api.example.com","method":"CONNECT"},"decision":"allow","rule_source":"policy"}`
+	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/decisions", tok, body)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("decision code = %d, want 202", w.Code)
+	}
+	var found bool
+	for _, ev := range h.audit.events {
+		if ev.Action == "egress.allow" {
+			found = true
+			if ev.Outcome != "success" {
+				t.Errorf("egress.allow outcome = %s, want success", ev.Outcome)
+			}
+			if ev.RunID == nil || *ev.RunID != runID {
+				t.Errorf("egress audit run id mismatch")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no egress.allow audit event recorded")
+	}
+}
+
 func TestInternalDecisionPersistsAudit(t *testing.T) {
 	h := newHarness(t)
 	runID := uuid.New()

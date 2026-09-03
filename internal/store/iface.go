@@ -339,7 +339,10 @@ type Store interface {
 	// UpsertUserDriveGrant keys on the natural UNIQUE (subject_type, subject):
 	// re-allocating a subject REPOINTS its one row, returning the EXISTING
 	// row's id on a conflict. ErrNotFound when drive_id names no drive (the FK
-	// rejects it).
+	// rejects it). ErrConflict when ANOTHER subject already holds this drive
+	// with the same home_override — a directory name is one person's, which is
+	// why a group row may not carry one, and on a managed drive it is the last
+	// way left to point two people at one object Wardyn creates.
 	UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant) (types.UserDriveGrant, error)
 	// DeleteUserDriveGrant RETURNS the row it removed (ErrNotFound when none
 	// matched): the delete's own audit row has to name the subject that was

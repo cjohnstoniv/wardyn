@@ -396,12 +396,178 @@ rewrite one row can usually rewrite every row after it and re-chain the tail, an
 a re-chained tail verifies perfectly clean; truncating the newest rows leaves a
 shorter, valid chain and is likewise invisible to the chain alone. The control
 against both is OFF-BOX and a separate promise: the audit-sink stream carries each
-row's `prev_hash`/`row_hash`, so a SIEM holds head hashes, and a chain no longer
-containing a recorded head has been rewritten or truncated. Pre-migration rows
+row's `prev_hash`/`row_hash` **for every event whose Postgres write succeeded**,
+so a SIEM holds head hashes, and a chain no longer containing a recorded head has
+been rewritten or truncated. That qualifier is a residual of its own: the hashes
+are filled by the write itself, so an event written while Postgres is unavailable
+fans out to the sinks with no hashes on it, and the spool drain replays it into
+Postgres through the raw store recorder rather than back onto a sink — the
+off-box head series therefore has a gap across an outage (`docs/OPERATIONS.md`,
+"What the drain does not restore"). Pre-migration rows
 keep NULL hashes and sit outside the chain (no backfill — hashes computed after
 the fact by the process that could have altered the rows prove nothing). Signed
 receipts under a key no database role can reach are the next rung and are **NOT
 built**.
+
+**A break is evidence to investigate, not proof on its own — and a false one is
+reachable with no tampering at all.** The insert trigger allocates `seq` and the
+chain link under one advisory lock, but its head lookup runs in the CALLER's
+transaction snapshot. A writer that is not Wardyn, holding a `REPEATABLE READ` or
+`SERIALIZABLE` transaction opened before the previous append committed, chains
+onto the head its snapshot still shows: two rows share a `prev_hash` and the
+sweep reports *"a row was deleted or reordered"*. Postgres raises nothing — there
+is no row conflict to fail on — and the verdict does not clear, because the walk
+stops at the first break. Every in-tree writer is `READ COMMITTED`, so this is
+reachable only by a direct database writer; the deployment rule that keeps the
+signal meaningful is that nothing but Wardyn writes to `audit_events`, and
+anything that must, writes at `READ COMMITTED` (`docs/OPERATIONS.md`, "The hash
+chain").
+
+### 4.6 User drives (v0.7) — admin-provisioned, member-attached persistent storage
+
+A **user drive** is the one thing a run mounts that deliberately OUTLIVES the
+run. An admin registers a drive (`user_drives`, migration `0054_user_drives.sql`)
+and allocates it to a user, a group, or everyone (`user_drive_grants`); a member
+attaches theirs per run. Two kinds: a **share** the platform already mounts (a
+host path on Docker, an admin-provisioned claim on Kubernetes) and a **managed**
+object Wardyn creates per person (a Docker named volume, a dynamic PVC).
+
+**The request carries a flag, never a path.** `CreateRunRequest.Drive` is
+`DriveSelection{Enabled, ReadOnly}` (`pkg/client`) and nothing else — no drive
+name, no directory, no size, no source. The server resolves subject → grant →
+drive → per-person home name from the AUTHENTICATED identity
+(`resolveUserDrive`/`resolveUserDriveFor`, `internal/api/user_drives_resolve.go`)
+on the same dual key governance profiles use — the lowercased OIDC `sub` and the
+email, never a UPN — and the whole precedence rule is one SQL `ORDER BY` ending
+in `LIMIT 1` (`PG.ResolveUserDrive`, `internal/store/user_drives.go`) over a
+grant table with `UNIQUE (subject_type, subject)`. **One principal resolves to
+exactly one object**: allocating to a subject that already has one REPLACES that
+row rather than adding a second, and where several tiers match a caller
+(`user` > `group` > `all`) the precedence picks one — so no path exists IN THE
+RESOLVER on which a run mounts two drives or one person's twice; a share's
+directory layout is not the resolver's (`email_local` folds two addresses onto
+one home — see "User drives on Docker" step 2 — and #33/#35 say what a host-side
+link can do). A truncated group snapshot does not fall through to a wider
+`all`-tier row — with group-tier allocations present the run is refused
+(`HasGroupTierDriveGrants`, `driveWithUnusableGroups`), the same fail-closed shape
+ceiling resolution already takes.
+
+**Read-only is the floor and the run flag may only narrow.** A drive is
+`writable: false` unless an admin says otherwise, per-drive and again per
+allocation; `DriveSelection.ReadOnly` can force read-only on a writable
+allocation, and `read_only: false` against a read-only one is a `422`, never a
+widening (`driveMountFor`, `internal/api/user_drives_run.go`). A governance
+profile can shut the door outright: `GovernanceLimits.DenyUserDrive`
+(`internal/types/governance.go`) refuses the mount for every member under that
+profile as an audited `403` (`denyMemberDrive` — `authz.denied`, reason
+`governance_profile`, target `runs.drive`, no new `reason` enum value).
+
+**The mount target is reserved.** `runner.DriveTarget` (`/home/agent/drive`) is
+refused to every authored mount target, workspace source and clone destination
+(`ValidateAuthoredTarget`, `internal/runner/mount.go`), so no policy can land on
+— or shadow — somebody's storage.
+
+**The resolver decides; the driver validates its own inputs.** (Kubernetes pins
+`Target == runner.DriveTarget` in `validateDriveMount`; Docker's `driveMount`
+checks the allowed-prefix rule only — `driveMountFor` is the single writer of
+that field today.) That split is the boundary. The API half derives the object
+(never the caller), and the runner half re-checks the object it was handed as
+the last thing before the sandbox is
+created, because a share directory can be repointed between the write and the
+run. On Docker (`Driver.driveMount`) a drive runs the ordinary bind deny matrix
+(`ValidateTarget` on every backend; for `host_path`, `ValidateMountSource` inside
+`UserDriveMountSourceCheck` — `ValidateMount` itself is deliberately not run a
+second time) and, for a `host_path` drive, the deployment's ceiling on the
+symlink-RESOLVED real path
+(`UserDriveMountSourceCheck`) — plus three refusals a drive alone needs: a source
+that resolves to the configured ROOT rather than a subdirectory (that would bind
+everyone's home into one sandbox); a source that resolves OUTSIDE THIS DRIVE'S
+OWN `host_root`, carried on the mount and asserted by
+`UserDriveHomeWithinItsRoot` (the deployment ceiling is the operator's outer
+bound over every drive at once, so on a deployment with two share drives it
+cannot tell one drive's tree from the other's — a home replaced by a link to the
+same-named home under the OTHER drive's root satisfies it, and an absent
+`host_root` on a share mount is a refusal rather than a skip); and a source whose
+resolved directory NAME is not the home the resolver derived (the
+sibling-symlink case: alice's directory replaced host-side by a link to bob's).
+The target is pinned to `runner.DriveTarget` on BOTH substrates
+(`errDriveTargetInvalid` in each driver), so a drive can never be mounted over
+the credential staging directory or the workspace.
+
+**`host_path` drives sit under a fail-closed env ceiling, not a database one.** A
+drive's `host_root` is authored in the DB by an admin and its subdirectories are
+bound into OTHER PEOPLE'S sandboxes, so the allowlist over it is
+operator/MDM-set: `WARDYN_USER_DRIVE_HOST_ROOTS`
+(`ParseUserDriveHostRoots`/`UserDriveHostRootCheck`,
+`internal/runner/user_drive_mount.go`). Unset = **no `host_path` drive may be
+registered at all**, the posture `WARDYN_MEMBER_WORKSPACE_ROOTS` takes one level
+down. The root must exist on this host (fail-closed on any resolve error, no
+lexical fallback), must pass the same host bind-mount deny-list every authored
+source does, and must neither BE nor TRAVERSE a credential dotfile path — the
+`deniedMemberSegment` list of §4.4, applied to a drive's resolved root.
+
+**No credential ever rides a volume option.** Wardyn never performs the share
+mount and never holds a share credential: the operator mounts the export
+host-side (fstab/systemd, `credentials=` in a root-owned file), and Wardyn binds
+one subdirectory of the result. A managed Docker volume is created with labels
+and **no driver options** (`ensureDriveVolume`), and a volume that already
+answers to the name is adopted only when it has that exact shape — the `local`
+driver with zero options — and carries no label contradicting this drive or this
+principal (`driveVolumeAdoptable`). So an operator's `--opt type=cifs --opt
+o=…,password=…` volume can never become somebody's drive, and no share password
+is ever readable from `docker volume inspect`, because Wardyn never put one
+there. A volume carrying NO such label is still adopted, deliberately: restoring
+one from backup by hand is a documented operator gesture, and refusing a
+label-less volume would turn a restore into an outage.
+
+**On Kubernetes there is no host path at all, and two verbs.** Every backend is a
+PersistentVolumeClaim; `hostPath` is offered by none, and is forbidden by Pod
+Security Standards at Baseline and Restricted anyway. `userDrives.enabled` adds
+exactly `persistentvolumeclaims: ["get","create"]` to the namespaced runner Role
+(`deploy/helm/wardyn/templates/rbac.yaml`) — `get` because a claim is always
+resolved BY NAME (nothing lists or watches), `create` for a managed drive's first
+use, and deliberately **no `delete`/`deletecollection`**: a drive outlives every
+run that mounts it, so reclaiming one is an operator command, never something
+wardynd can do on its own (`ensureDrivePVC`, `internal/runner/k8s/drives.go`).
+The claim carries the drive row's id and the person's home as labels and,
+deliberately, no `wardyn.run-id`, so the per-run teardown sweep cannot reach it;
+a claim whose identity labels are not this run's, or one already Terminating, is
+a refused run rather than a mount (`driveClaimIdentity`); a label-less claim is
+foreign — the opposite of Docker's restore gesture.
+
+**What is on the log.** `drive.write`, `drive.delete`, `drive.grant.write` and
+`drive.grant.delete` cover every authoring act; `run.drive.mount` records the
+attachment itself at dispatch (actor `system`, after `CreateSandbox` returns, so
+a success row means the object really was bound) with the backend, the object,
+the mode and the `enforcement` value — vocabulary in `docs/AUDIT-ACTIONS.md`.
+The row's rendered `Target` is masked to `<drive>/<home>` for a `host_path`
+drive, because a run's creator can read their own run's rows and a share's
+object name is an absolute path on the operator's filesystem; the exact object
+stays in the payload, which the run page does not render.
+Nothing logs the drive's contents, and the preview endpoint is not audited, for
+the reason its governance twin is not: it saves nothing and answers only about
+claims the caller pasted.
+
+**WHAT THIS DOES NOT CLOSE**, beyond residuals #33–#37 below. A mounted drive is
+**exfiltration loot and a persistence vector**, and nothing above changes that:
+whatever egress the run's policy allows can carry the drive's bytes out (the
+model-API channel of residual #1 included), and a prompt-injected run that
+writes a WRITABLE drive poisons the NEXT run, which is what makes a drive
+different from every other mount: it is state the product hands back on purpose. What bounds it is the read-only default, the
+`DenyUserDrive` door and the run's unchanged egress policy; what does NOT exist
+is any coupling between the two, so "a writable drive mounted" is not yet an
+input to egress policy (no forced `first_use_approval`, deliberately deferred
+past v1), and there is no member self-service reset — a poisoned managed drive
+is reclaimed by an operator command. Separately, **one person's concurrent runs
+share one drive**: two agents writing the same directory can corrupt each
+other's lock files, v1 mounts it anyway, and no warning fires — the existing
+collision warning keys on the run's workspace path, which a drive deliberately
+does not set, so a drive-aware warning waits on run-row persistence. And the
+admin preview and the member preflight are honest about the ALLOCATION only: the
+preview skips the door, the stale-snapshot arm and `driveMountFor`, and neither
+touches the substrate — a claim the cluster cannot bind (the stock chart's
+missing PVC rule, a class with no provisioner) is discovered at dispatch, after
+the row is written.
 
 ---
 
@@ -923,6 +1089,207 @@ hiding them would repeat the failure mode we are designed to avoid.
     `TestInstallSh_ComposeFetchIsVerified` and T6 of
     `scripts/test-install-sh-trust.sh` are written and enforce the first of
     those the moment `F10_EXPECT_COMPOSE_INTEGRITY=1` is set.
+
+33. **A `host_path` user drive extends trust to whoever administers the host and
+    the share; Wardyn bounds the PATH, not the tree.** Wardyn never performs the
+    share mount and never holds a share credential — the operator mounts the
+    export host-side and Wardyn binds one person's subdirectory of the result.
+    What that buys is checked and real: the operator/MDM-set
+    `WARDYN_USER_DRIVE_HOST_ROOTS` ceiling on the `EvalSymlinks` real path, the
+    ordinary bind deny-list, the credential-dotfile list of §4.4 on that same
+    real path, a refusal when the source resolves to the configured root rather
+    than a subdirectory, and a refusal when the resolved directory's own NAME is
+    not the home the resolver derived — which is the sibling-symlink case (one
+    person's home replaced host-side by a link to another's) closed at the last
+    moment before `ContainerCreate` (`UserDriveMountSourceCheck`,
+    `Driver.driveMount`). What is NOT closed is everything ABOVE the path.
+    Whoever administers the share decides what is in it: a host-side bind mount
+    of one home over another, hard links, an export re-pointed at a different
+    tree, or per-directory modes that make every home world-readable are all
+    invisible to a path check, and a host-level compromise reads the whole
+    export. Isolation between people is the BIND OF THE SUBDIRECTORY, never the
+    uid — every sandbox is uid 1000 by construction, and NFS `AUTH_SYS` trusts
+    the client's uid — so the documented shape is a Wardyn-DEDICATED export
+    squashed to that uid with `0700` per-person directories, not a corporate
+    home tree; an SMB service account's reach is likewise the blast radius of a
+    host compromise. Existing corporate homes owned by per-user uids are
+    supported read-only where uid 1000 can read them; where it cannot, Wardyn
+    does NOT refuse — the directory only has to EXIST for wardynd's own uid
+    (`driveShareIsBindable`), so the mount succeeds and the agent sees permission
+    denied at first access. Kerberos,
+    `multiuser` SMB and per-user uids are deferred with their migration cost
+    named (a uid-agnostic rebuild of all five agent images, `userns-remap`
+    interactions, and the credential-staging binds re-owned per run).
+
+34. **The Kubernetes claim name joins two variable-width fields, and the
+    collision is a REFUSED RUN, not a cross-mount.** A managed claim is
+    `wardyn-drive-<drive-slug>-<home>`; both fields admit `-` and a slug folds
+    case, so drive `eng` + home `us-bob` and drive `eng-us` + home `bob` name
+    the same claim. The consequence is bounded by a fail-closed identity check
+    rather than by the name: the driver refuses a claim whose `wardyn.drive` /
+    `wardyn.home` labels are not this run's (`driveClaimIdentity`), and Wardyn
+    holds no `delete` verb with which to repair a collision, so what a colliding
+    pair produces is a refused run for one of the two people — never one
+    member's private storage inside another member's agent. Docker's
+    `wardyn-drive-<home>` has one field and no separator ambiguity, and is
+    guarded the same way at the object (`driveVolumeAdoptable`). **The ambiguity
+    itself is open.** The operator remedy is to rename one of the two drives
+    (with the caveat in #37) or to give the colliding people distinct home
+    names; the product fix — a fixed-width drive id in the object name, or slug
+    uniqueness enforced at the write boundary plus a unique index — is 0.7.1,
+    because it changes an object name people already have storage under.
+
+35. **The credential-dotfile deny-list now matches a DRIVE's real path too, and
+    that is the whole of what it covers.** The list §4.4 applies to member mount
+    sources (`.ssh`, `.aws`, `.claude`, `.kube`, `.config/gh`, …) runs on a
+    drive's resolved `host_root` as well (`deniedMemberSegment` inside
+    `UserDriveHostRootCheck`), so a share whose mount point is or traverses a
+    credential directory — or a symlink that lands in one — is refused at
+    authoring and again at bind time, and the claim residual #25 makes about
+    member mounts is now true of drives. It closes nothing beyond that: a drive
+    inherits residual #25's TOCTOU **identically**. The blast radius is bounded
+    two ways. The roots are operator/MDM-set, so the race can only be aimed
+    WITHIN the declared roots. And containment is **PER DRIVE**, evaluated at
+    CHECK TIME: `runner.UserDriveHomeWithinItsRoot` asserts the symlink-resolved
+    source is a strict subdirectory of THIS drive's own `host_root` — carried
+    onto the mount from the resolved row, and an absent one is a refusal rather
+    than a skip — on top of `UserDriveMountSourceCheck`'s ceiling over the whole
+    root LIST and the base-name rule. So a home in one drive replaced host-side
+    by a link into another drive's root is refused even when both roots are
+    configured, and a deployment may run as many `host_path` drives inside a root
+    as its layout needs.
+
+    **What is left is the window, not the rule.** Every one of those checks runs
+    on the `EvalSymlinks`-resolved path, and what is handed to `ContainerCreate`
+    is still the LEXICAL `<host_root>/<home>` source, which the daemon resolves
+    again for itself — validate and create remain two operations, so a host-root
+    attacker who re-points the home in between binds whatever that second resolve
+    finds. The check is placed as late as this process can look, immediately
+    before the create, and the deny-list matches the post-`EvalSymlinks` real
+    path, so a won race landing on a credential directory is still refused. The
+    race is not deterministically testable and no test claims to cover it.
+
+36. **A drive's SIZE is an allocation Wardyn never enforces, on any substrate.**
+    Published in the product's own frozen words, rendered verbatim by the
+    console and the docs:
+
+    > Wardyn never enforces a drive's size itself. On Kubernetes the size is the volume request and the storage class decides whether it binds — block disks do, network-share provisioners do not. On Docker a managed drive has no byte cap, the same gap disk_mib has. A share is bounded by its own quota. The size you see is the allocation, not a guarantee.
+
+    Every drive therefore carries an `enforcement` value naming who, if anyone,
+    binds the bytes (`types.StorageEnforcement`: `filesystem`, `request`,
+    `external`, `none`) — `request` for a managed claim, `external` for a share,
+    `none` for a Docker volume — and that value is on the `run.drive.mount`
+    audit row beside the mount, so a later dispute reads the size with its
+    caveat attached. **Marketing and UI must not call a drive's size a quota or
+    a limit.** Concretely: a member with a writable drive can fill the node's or
+    the share's storage, and nothing in Wardyn stops them. `--storage-opt size`
+    caps only a container's writable layer, never a volume, and an XFS project
+    quota needs `CAP_SYS_ADMIN` the control plane must not hold; the closest
+    real mitigations are the storage class (block, not network-share), the
+    share's own quota, and a namespace `ResourceQuota`.
+
+37. **Renaming a drive orphans every Kubernetes claim already provisioned under
+    it, and 0.7 warns nobody at the write.** A managed claim's name folds the
+    drive's slug, so a rename changes the name every FUTURE claim is created
+    under: the claims already provisioned keep their old names, keep the
+    member's data, and are never looked up again — each person's next run
+    provisions a fresh, EMPTY claim under the new name, and the work looks lost
+    to them. Nothing deletes the old claims, on purpose (Wardyn holds no
+    `delete` verb, and a rename must never be able to destroy storage), and the
+    reclaim is documented: the claims carry the drive row's **id** rather than
+    its name precisely so a label selector still finds them, and
+    `docs/OPERATIONS.md` "User drives on Kubernetes" carries the `get pvc -l`
+    and `delete pvc` recipe to move the data and reclaim the object. **The API
+    no longer performs it quietly:** a rename — like any change to `backend`,
+    `home_template` or `host_root` — on a drive that already has grants is a
+    **409** naming what changes and how many allocations move, unless the request
+    carries `?confirm=rehome` (`driveRehomeGuard`). What is NOT closed is the
+    console: it has no confirm affordance, so an admin who means the rename
+    carries it out through the API, and the runbook above is still how the
+    orphaned claims are reclaimed afterwards. Docker is unaffected: a managed volume's name is
+    `wardyn-drive-<home>` and folds no drive name, so a rename orphans nothing
+    there. Rename is the visible case of a wider gap: `PUT /drives/{id}` accepts
+    EVERY field change on an allocated drive without a warning — a
+    `home_template` change hands each member a fresh, empty object at their next
+    run (the old ones findable by `wardyn.drive` on managed backends only), and a
+    `host_root` change binds a different tree under the same names. The 409 above
+    covers all four columns, so the gap that remains is the console's, not the
+    API's.
+
+38. **A per-user API token's GROUP SNAPSHOT is frozen at mint, with no expiry
+    — so for a group-derived power the demoted-admin window is UNBOUNDED, where
+    the SSH analogue's (#15) is merely long.** NARROWED, NOT CLOSED, and the
+    half that moved is worth stating exactly. `0045_api_tokens.sql` stamps
+    `role` and `groups` from the minting session
+    (`internal/api/apitokens.go`), and every request the token authenticates
+    republishes them through `withHumanIdentity`, so downstream the bearer is
+    that human as they were at mint time.
+
+    Since the token lane gained the login hook the key lane had since `0046`,
+    the ROLE half is now bounded the same way: `oidc.Config.OnLogin` fires
+    `store.RefreshAPITokenRoles` beside `store.RefreshSSHKeyRoles`, so the
+    demoted human's own next sign-in re-stamps `role` on every unrevoked token
+    they hold. What did NOT move: `groups` is never refreshed by that hook or
+    anything else, the table still carries `created_at`, `last_used_at` and
+    `revoked_at` and **no expiry column**, there is no TTL the way
+    `WARDYN_SSH_ROLE_TTL` bounds a key, and a human who never signs in again is
+    re-stamped never. So a power that derives from the frozen GROUP snapshot —
+    a capability grant or governance profile bound to a group they have left —
+    survives indefinitely, and a demotion in the IdP still never reaches the
+    row on its own. Since 0.7 stamps `security_admin` verbatim, a human
+    demoted out of that tier keeps — through any token minted while they held it
+    — profile authoring and assignment, capability-grant writes, session and
+    token revocation, escalated approval decisions on anyone's run, workspace
+    `approved_egress`/`denied_egress` writes, and audit-chain verify. It gains
+    nothing the tier itself lacks: a token is never a shell, never an attach
+    ticket on a foreign run, and no capability grant widens it to admin
+    (`TestCapabilityGrantsNeverReachTheAdminTier`).
+
+    **The remediation exists, is the only one, and has to be invoked
+    deliberately.** `GET /api/v1/tokens` lists every live token with its owner
+    and `last_used_at`; `DELETE /api/v1/tokens/{id}` revokes one; `POST
+    /api/v1/sessions/revoke` with `{"sub":"<sub or email>"}` revokes a human's
+    sessions AND every unrevoked token they hold in one call — naming either
+    identity, because on an IdP whose `sub` is an opaque per-app identifier the
+    operator knows the email. All three are admin or `security_admin`. The
+    `session.revoke` row's `tokens_revoked` count is the receipt that the
+    identifier matched a person: sessions are stateless and cannot be counted, so
+    a zero there against someone you believe holds tokens means you named them
+    wrong. Nothing ages a token out, so offboarding must revoke explicitly
+    (`docs/OPERATIONS.md`, "Per-user API tokens"). Closing this means re-deriving
+    the role at auth time, or revoking a principal's live tokens from the
+    role-mapping write path; neither is built.
+
+39. **A group claim the IdP FILTERS is indistinguishable from a complete one, so
+    a shrink-the-claim workaround loses grants silently.** Wardyn marks a group
+    snapshot partial in exactly two cases: entries dropped at the cookie byte cap,
+    and the IdP's overage pointer (`_claim_names`, the claim withheld entirely) —
+    `sessionGroups`, `internal/auth/oidc/derive.go`. Both are LOUD downstream: the
+    ceiling resolver treats the identity as unanswerable and refuses rather than
+    resolving on a partial list, an unresolvable DENY refuses too, and since the
+    drives merge a group-tier drive allocation refuses the mount on the same bit
+    (`driveWithUnusableGroups`, `internal/api/user_drives_resolve.go`) — three
+    consumers, all fail-closed. A claim the
+    IdP was CONFIGURED to narrow sets neither bit: it is complete by the IdP's
+    account and merely smaller. Entra's `groupMembershipClaims: "ApplicationGroup"`
+    — the option Microsoft recommends for the token group limit — emits only groups
+    assigned to the application and excludes nested membership, and group-based App
+    Role assignment reaches direct members only. Either way a governance assignment
+    or a group-subject capability grant keyed on a group the member reaches
+    transitively stops matching, with no refusal, no audit line and no
+    `groups_snapshot_stale`. The token carries no signal that anything was filtered,
+    so there is nothing Wardyn could check.
+
+    Accepted for 0.7 because the remedy is procedural and the burden is the
+    operator's: re-key group-subject grants and group-tier assignments onto a
+    directly-assigned group or onto the user BEFORE changing the claim
+    configuration, then verify against a real login's `session_groups`
+    (`GET /me/capabilities`) rather than against the IdP's UI —
+    `docs/OPERATIONS.md`, "A third cause of a partial snapshot", carries the
+    procedure. User-subject rows are the only shape a claim-configuration change
+    cannot silently break. Closing this needs a signal the IdP does not send;
+    the nearest approximation is warning when a group-subject row stops matching
+    anyone, which is not built.
 
 ### 5.1a LLM egress content inspection — the honest-claims contract
 

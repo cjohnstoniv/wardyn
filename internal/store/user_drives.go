@@ -57,12 +57,24 @@ func userDriveGrantDest(g *types.UserDriveGrant) []any {
 //
 // RENAMING A DRIVE MOVES A PVC's NAME, and that is a documented consequence
 // rather than a bug this store can fix: types.DriveObjectName folds the name
-// into a k8s claim name, so a renamed drive's members bind a claim that does
-// not exist yet and a managed drive provisions a fresh empty one. The admin
-// surface says so at the write; the alternative — a second immutable slug
-// column — buys stability for the one field an admin most needs to be able to
-// correct, and the operator runbook for a rename is `kubectl get pvc` plus the
-// preview endpoint, which prints the exact object name for a principal.
+// into a k8s claim name AND a Docker volume name, so a renamed drive's members
+// bind an object that does not exist yet and a managed drive provisions a fresh
+// empty one. The alternative
+// — a second immutable slug column — buys stability for the one field an admin
+// most needs to be able to correct, and the operator runbook for a rename is
+// `kubectl get pvc -l wardyn.drive=<id>` (the label carries the row id, so the
+// orphans stay findable) plus the preview endpoint, which prints the exact
+// object name for a principal. docs/OPERATIONS.md, "User drives on Kubernetes",
+// is that runbook.
+//
+// THE HANDLER NO LONGER WRITES THAT UNCONDITIONALLY. An identity-affecting PUT
+// on a drive that already has grants — backend, home_template, host_root or
+// name, the four columns every allocated person's storage object is derived
+// from — is refused 409 by driveRehomeGuard unless the request carries
+// ?confirm=rehome. This statement stays unconditional and must: the gate belongs
+// at the API boundary, where the request that asked for it is, and a store that
+// re-read the grants on every write would be a second, quieter copy of a rule
+// that already has one.
 //
 // Returns ErrConflict when UNIQUE(name) rejects the write — a new drive taking
 // a taken name, or a rename onto another row's name. The caller maps that to
@@ -178,6 +190,27 @@ func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, erro
 // and "the drive you named does not exist" is a 404 the caller can act on, not
 // a 500.
 //
+// Returns ErrConflict when ANOTHER subject already holds this drive with the
+// SAME home_override. A home_override names ONE PERSON'S directory — that is
+// the whole reason a group or all row may not carry one (ValidateUserDriveGrant:
+// "would hand every member of that group the SAME directory — the isolation a
+// per-user subdirectory buys") — and two user rows carrying one override is
+// that same loss spelled with two rows instead of one. It matters most on a
+// MANAGED backend, where the override is the only remaining way to name a
+// minted object non-injectively (the home_template arm is refused by
+// types.ValidateUserDrive, and a hash home folds the subject), so without this
+// guard Wardyn itself creates one volume and binds it into two people's
+// sandboxes, read-write wherever the allocations are writable.
+//
+// THE GUARD IS IN THE STATEMENT, not in a read before it, so the window between
+// "nobody else holds this name" and the write is one statement rather than two
+// round trips. It is still not a constraint: two concurrent inserts can both
+// pass NOT EXISTS under READ COMMITTED. The race-free form is a partial unique
+// index — CREATE UNIQUE INDEX ... ON user_drive_grants (drive_id, home_override)
+// WHERE home_override <> ” — which belongs in a migration; this guard closes
+// the reachable case (an admin typing one directory name twice) and stays
+// correct as belt-and-braces once the index exists.
+//
 // Enabled is written VERBATIM, so a zero-value grant is a DISABLED one. That is
 // the fail-closed half (an allocation nobody enabled mounts nothing) and it
 // puts the "new grants are on by default" decision at the API write boundary,
@@ -190,7 +223,12 @@ func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant) (t
 	const q = `
 		INSERT INTO user_drive_grants (id, subject_type, subject, drive_id, priority,
 			size_mib_override, writable_override, home_override, enabled, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		SELECT $1::uuid,$2::text,$3::text,$4::uuid,$5::int,$6::int,$7::boolean,$8::text,$9::boolean,$10::text
+		WHERE $8::text = '' OR NOT EXISTS (
+			SELECT 1 FROM user_drive_grants
+			WHERE drive_id = $4::uuid AND home_override = $8::text
+			  AND NOT (subject_type = $2::text AND subject = $3::text)
+		)
 		ON CONFLICT (subject_type, subject) DO UPDATE
 			SET drive_id = EXCLUDED.drive_id, priority = EXCLUDED.priority,
 			    size_mib_override = EXCLUDED.size_mib_override,
@@ -204,6 +242,32 @@ func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant) (t
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
 			return types.UserDriveGrant{}, ErrNotFound
+		}
+		// 23505 IS THE GUARD ABOVE, WON BY THE DATABASE INSTEAD. Migration 0059
+		// added the partial unique index this statement's NOT EXISTS could only
+		// approximate — two concurrent inserts can both pass NOT EXISTS under
+		// READ COMMITTED, and the index is what actually stops the second. That
+		// path must answer the caller with the SAME refusal the single-threaded
+		// path does: without this arm the loser of the race gets a 500 and a raw
+		// driver string, for the one request the index exists to refuse
+		// correctly.
+		//
+		// NOT DETERMINISTICALLY TESTABLE and nothing here claims to cover it —
+		// the same statement residual #25 makes about the mount TOCTOU. The
+		// guard closes every single-threaded case, so no fixture can reach the
+		// index; internal/db's own test asserts the SQLSTATE at the database,
+		// and this maps it.
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return types.UserDriveGrant{}, ErrConflict
+		}
+		// NO ROWS is the guard above and nothing else: the FK raises 23503
+		// (handled just above), the natural key is absorbed by ON CONFLICT, and
+		// the SELECT is otherwise a row of constants that cannot be empty. It
+		// arrives as ErrNotFound because scanUserDriveGrant folds pgx.ErrNoRows
+		// into it for the READ callers that share the helper — on THIS
+		// statement that reading would be wrong, and the reason is above.
+		if errors.Is(err, ErrNotFound) {
+			return types.UserDriveGrant{}, ErrConflict
 		}
 		return types.UserDriveGrant{}, err
 	}
@@ -233,18 +297,52 @@ func (s PG) DeleteUserDriveGrant(ctx context.Context, id uuid.UUID) (types.UserD
 // gets what" table reads top-down as the precedence rule, not as insertion
 // order an admin then has to re-sort in their head.
 func (s PG) ListUserDriveGrants(ctx context.Context) ([]types.UserDriveGrant, error) {
-	const q = `SELECT ` + userDriveGrantCols + ` FROM user_drive_grants
+	return collect(ctx, s.Pool, "list", "user drive grants", userDriveGrantList, nil, scanUserDriveGrant)
+}
+
+// userDriveGrantList is the grant read WITHOUT its window, written once so the
+// whole-list and paged forms cannot drift into two different orders. A page
+// whose ORDER BY differs from the list's is a page that omits rows the caller
+// would have seen and repeats others across offsets — the failure a second copy
+// of an ORDER BY makes silently.
+const userDriveGrantList = `SELECT ` + userDriveGrantCols + ` FROM user_drive_grants
 		ORDER BY ` + userDriveTierOrder + `, priority DESC, subject`
-	return collect(ctx, s.Pool, "list", "user drive grants", q, nil, scanUserDriveGrant)
+
+// ListUserDriveGrantsPage is ListUserDriveGrants bounded to one window — the
+// seventh entry in Pager, and the one user_drive_grants was missing.
+//
+// THE LIMIT IS NOT A COURTESY, IT CHANGES THE PLAN. This ORDER BY has no index
+// to serve it, so unbounded it is a Seq Scan feeding a full sort: measured on
+// this deployment's own PostgreSQL 17 at work_mem=4MB with 50,000 allocations,
+// `external merge Disk: 5584kB`, 149.7 ms, every row materialised and
+// serialised. The same query with the caller's LIMIT becomes a top-N heapsort
+// bounded by the window — `Memory: 301kB`, 37.7 ms, no temp file — because
+// Postgres only has to keep the best k rows rather than sort all n. The Seq
+// Scan (8-11 ms) stays; removing THAT needs an index on the sort keys, which is
+// a migration.
+//
+// One row per SUBJECT (UNIQUE(subject_type, subject)) and two user subjects per
+// person, so this table's row count is deployment headcount — the shape
+// migration 0054's opening paragraph names as the target, not an edge case.
+func (s PG) ListUserDriveGrantsPage(ctx context.Context, p Page) ([]types.UserDriveGrant, error) {
+	q, args := p.appendTo(userDriveGrantList, nil)
+	return collect(ctx, s.Pool, "list", "user drive grants", q, args, scanUserDriveGrant)
 }
 
 // userDriveTierOrder ranks the three subject tiers MOST SPECIFIC FIRST —
-// user > group > all. Written once, as SQL, and shared by the resolver and the
-// console listing so the two can never disagree about what "most specific"
-// means. Deliberately a SEPARATE constant from governanceTierOrder despite the
-// identical text: these two are the same RULE over different tables, and
-// sharing the string would make a future per-table divergence look like a typo
-// in a shared const rather than the deliberate change it would have to be.
+// user > group > all. Written once, as SQL, and spliced into BOTH the resolver
+// and the console listing so the two can never disagree about what "most
+// specific" means. Deliberately a SEPARATE constant from governanceTierOrder
+// despite the identical text: these two are the same RULE over different
+// tables, and sharing the string would make a future per-table divergence look
+// like a typo in a shared const rather than the deliberate change it would have
+// to be.
+//
+// subject_type is deliberately UNQUALIFIED so the one string works in the
+// resolver's JOIN as well as the single-table listing. That is safe because
+// user_drives has no subject_type column (migration 0054) — the only other
+// table in that JOIN. A migration that added one would make this ambiguous, and
+// Postgres would say so loudly rather than silently re-rank.
 const userDriveTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' THEN 1 ELSE 2 END`
 
 // ResolveUserDrive returns THE ONE drive that applies to a caller, the grant
@@ -271,9 +369,30 @@ const userDriveTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' TH
 //     documented ordering IS the precedence.
 //  3. priority DESC — the admin's explicit tie-break, and the group tier's
 //     working lever (a member is usually in several groups at once).
-//  4. drives.name ASC — the deterministic total-order floor, applied in EVERY
-//     tier. Without it two same-priority rows make LIMIT 1 depend on the plan,
-//     and "why did Bob get the other drive today" has no answer.
+//  4. drives.name ASC — applied in EVERY tier, and a total order across
+//     DISTINCT drives because drives.name is UNIQUE. It is what decides which
+//     of two drives a member reaches when nothing above it separates them.
+//  5. grants.subject ASC — THE FLOOR, and the drive's name is not one. Two
+//     grants can name the SAME drive: UNIQUE(subject_type, subject) is per
+//     SUBJECT, so two groups one member belongs to may each be granted one
+//     drive, and priority DEFAULTS to 0 on both — every key above ties, and
+//     LIMIT 1 falls to physical row order. That is not academic here, because
+//     THIS RESOLVER RETURNS THE GRANT and the grant is what carries
+//     writable_override, size_mib_override, home_override and enabled: the
+//     losing coin-flip is an admin's explicit read-only narrowing silently not
+//     applying, or a paused allocation mounting. Subject is a total order
+//     within a tier (the UNIQUE key makes subjects distinct there) and it is
+//     EXPLAINABLE, which a row id would not be — "the alphabetically first
+//     group's allocation wins" is an answer to "why did Bob get that one".
+//
+// THE RULE WAS COPIED FROM ResolveGovernanceProfile, WHICH DOES NOT NEED THE
+// LAST KEY. governance_assignments carries no per-assignment override — only
+// profile_id and priority — so two assignments naming one profile are
+// interchangeable and the tie is unobservable. Copying the ORDER BY into a
+// table whose rows DO carry per-row overrides is what turned a benign gap into
+// a decision. ListUserDriveGrants already ended with `subject`, so the console
+// listing and the resolver now agree on the last key rather than only the
+// first.
 //
 // DISABLED GRANTS ARE IN THE QUERY, and the winner's own `enabled` decides
 // PAUSED vs MOUNTED — a disabled row that wins its tier yields paused, never
@@ -315,12 +434,13 @@ func (s PG) ResolveUserDrive(ctx context.Context, userSubjects, groups []string)
 		   OR (g.subject_type = 'user'  AND g.subject = ANY($1::text[]))
 		   OR (g.subject_type = 'group' AND g.subject = ANY($2::text[])))
 		ORDER BY
-			CASE g.subject_type WHEN 'user' THEN 0 WHEN 'group' THEN 1 ELSE 2 END,
+			` + userDriveTierOrder + `,
 			CASE g.subject_type WHEN 'user'
 				THEN COALESCE(array_position($1::text[], g.subject), 2147483647)
 				ELSE 0 END,
 			g.priority DESC,
-			d.name ASC
+			d.name ASC,
+			g.subject ASC
 		LIMIT 1`
 	var d types.UserDrive
 	var g types.UserDriveGrant

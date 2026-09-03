@@ -319,61 +319,56 @@ func (b awsSSOBlob) expired(now time.Time) bool { return !now.Before(b.ExpiresAt
 // this threshold (a conservative "likely expiring soon; reconnect").
 const harnessTokenAging = 11 * 30 * 24 * time.Hour
 
-// readManagedBlob loads and parses a provider's captured token blob.
+// readHarnessBlob loads and parses a provider's reserved harness credential
+// blob under the ONE error discipline both harness lanes need.
+//
 // Only secretstore.ErrNotFound means "not connected" (found=false, nil). Any
 // other store error is a genuine failure (age-key mismatch after rotation, PG
 // down, …) — it is logged and PROPAGATED so a caller never mistakes a wedged
 // store for "no credential connected" (which would flip setup status to a false
 // "LLM access not configured" for an operator who IS connected). A parse error
 // is likewise a real error.
-func (s *Server) readManagedBlob(ctx context.Context, provider string) (managedCredBlob, bool, error) {
-	if s.cfg.Secrets == nil {
-		return managedCredBlob{}, false, nil
+//
+// usable is the lane's shape check: a structurally incomplete blob reads as
+// ABSENT, never as an error, so a half-written capture can never be mistaken
+// for a usable credential. label names the credential in the log line and in
+// both error strings. st is always the operator-wide store (harness names are
+// RESERVED — secrets.go — never per-principal), so no caller scopes it by owner.
+func readHarnessBlob[T any](ctx context.Context, st secretstore.Store, provider, label string, usable func(T) bool) (T, bool, error) {
+	var zero T
+	if st == nil {
+		return zero, false, nil
 	}
-	raw, err := s.cfg.Secrets.Get(ctx, harnessCredSecretName(provider)) // operator-wide managed credential, not per-principal
+	raw, err := st.Get(ctx, harnessCredSecretName(provider))
 	if errors.Is(err, secretstore.ErrNotFound) {
-		return managedCredBlob{}, false, nil // absent == not connected (not an error)
+		return zero, false, nil // absent == not connected (not an error)
 	}
 	if err != nil {
-		slog.ErrorContext(ctx, "wardynd: read managed credential from secret store failed",
+		slog.ErrorContext(ctx, "wardynd: read "+label+" from secret store failed",
 			slog.String("provider", provider), slog.Any("err", err))
-		return managedCredBlob{}, false, fmt.Errorf("read managed credential: %w", err)
+		return zero, false, fmt.Errorf("read %s: %w", label, err)
 	}
-	var blob managedCredBlob
+	var blob T
 	if uerr := json.Unmarshal(raw, &blob); uerr != nil {
-		return managedCredBlob{}, false, fmt.Errorf("parse managed credential blob: %w", uerr)
+		return zero, false, fmt.Errorf("parse %s blob: %w", label, uerr)
 	}
-	if strings.TrimSpace(blob.Token) == "" {
-		return managedCredBlob{}, false, nil
+	if !usable(blob) {
+		return zero, false, nil
 	}
 	return blob, true, nil
 }
 
-// readAWSSSOBlob loads the captured AWS SSO credential. Same error discipline as
-// readManagedBlob: absent means "not connected", not a failure. A structurally
-// invalid blob is treated as absent so a half-written capture can never be
-// mistaken for a usable credential.
+// readManagedBlob loads a provider's captured setup-token blob; usable = a
+// non-blank token.
+func (s *Server) readManagedBlob(ctx context.Context, provider string) (managedCredBlob, bool, error) {
+	return readHarnessBlob(ctx, s.cfg.Secrets, provider, "managed credential",
+		func(b managedCredBlob) bool { return strings.TrimSpace(b.Token) != "" })
+}
+
+// readAWSSSOBlob loads the captured AWS SSO credential; usable = the full shape
+// GetRoleCredentials needs (awsSSOBlob.valid).
 func (s *Server) readAWSSSOBlob(ctx context.Context) (awsSSOBlob, bool, error) {
-	if s.cfg.Secrets == nil {
-		return awsSSOBlob{}, false, nil
-	}
-	raw, err := s.cfg.Secrets.Get(ctx, harnessCredSecretName(awsSSOProvider)) // operator-wide, not per-principal
-	if errors.Is(err, secretstore.ErrNotFound) {
-		return awsSSOBlob{}, false, nil
-	}
-	if err != nil {
-		slog.ErrorContext(ctx, "wardynd: read aws sso credential from secret store failed",
-			slog.Any("err", err))
-		return awsSSOBlob{}, false, fmt.Errorf("read aws sso credential: %w", err)
-	}
-	var blob awsSSOBlob
-	if uerr := json.Unmarshal(raw, &blob); uerr != nil {
-		return awsSSOBlob{}, false, fmt.Errorf("parse aws sso credential blob: %w", uerr)
-	}
-	if !blob.valid() {
-		return awsSSOBlob{}, false, nil
-	}
-	return blob, true, nil
+	return readHarnessBlob(ctx, s.cfg.Secrets, awsSSOProvider, "aws sso credential", awsSSOBlob.valid)
 }
 
 // storeAWSSSOBlob persists a captured AWS SSO credential under the reserved

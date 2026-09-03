@@ -719,16 +719,14 @@ func (s *Server) auditRenewDenied(r *http.Request, claims *identity.Claims, reas
 	s.recordAudit(r.Context(), ev)
 }
 
-// decisionOutcome maps an egress decision to an audit outcome.
+// decisionOutcome maps an egress decision to an audit outcome. Only a Deny is a
+// refusal: an Allow proceeded, and a Pending is held for a human rather than
+// turned away, so both record as a success.
 func decisionOutcome(d egress.Decision) string {
-	switch d {
-	case egress.Allow:
-		return "success"
-	case egress.Deny:
+	if d == egress.Deny {
 		return "denied"
-	default: // pending
-		return "success"
 	}
+	return "success"
 }
 
 // touchDebounce bounds how often the decision ingest refreshes a run's

@@ -915,8 +915,16 @@ func insertAuditEventTx(ctx context.Context, tx Querier, ev types.AuditEvent) er
 	if err != nil {
 		return fmt.Errorf("broker: marshal mint audit data: %w", err)
 	}
+	// Same bound as store.InsertAuditEvent, and it matters MORE here: this insert
+	// shares the mint transaction, so an unbounded wait holds a half-finished
+	// mint open (and its grant/approval row locks with it). A timeout refuses the
+	// mint rather than spooling, which is the fail-closed direction - no
+	// credential is issued that could not be audited. See db.AuditChainLockTimeout.
+	if _, err := tx.Exec(ctx, db.AuditChainLockTimeoutSQL()); err != nil {
+		return fmt.Errorf("broker: bound audit chain lock wait: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, db.AuditChainLockKey); err != nil {
-		return fmt.Errorf("broker: lock audit chain: %w", err)
+		return fmt.Errorf("broker: lock audit chain (waited up to %s): %w", db.AuditChainLockTimeout, err)
 	}
 	const q = `
 		INSERT INTO audit_events

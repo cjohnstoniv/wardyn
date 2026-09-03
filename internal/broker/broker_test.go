@@ -64,6 +64,9 @@ type fakeDB struct {
 	approvals   map[uuid.UUID]*fakeApproval
 	revokedRuns map[uuid.UUID]bool
 	auditRows   []auditRow // in-tx audit_events INSERTs (D29)
+	// lockTimeoutSet records that the mint tx bounded its chain-lock wait
+	// before taking the lock (db.AuditChainLockTimeout).
+	lockTimeoutSet bool
 
 	beginErr  error
 	commitErr error
@@ -200,6 +203,14 @@ func (tx *fakeTx) Exec(_ context.Context, sql string, args ...any) (int64, error
 	tx.db.mu.Lock()
 	defer tx.db.mu.Unlock()
 	switch {
+	case strings.Contains(sql, "SET LOCAL lock_timeout"):
+		// The bound insertAuditEventTx puts on the chain-lock wait before taking
+		// it (db.AuditChainLockTimeout). Nothing to model here either — the fake
+		// never blocks — but it is recorded so the atomicity test below can prove
+		// the bound is issued ON THE MINT TX and not on some other connection,
+		// where SET LOCAL would silently bind nothing.
+		tx.db.lockTimeoutSet = true
+		return 0, nil
 	case strings.Contains(sql, "pg_advisory_xact_lock"):
 		// The audit hash-chain lock insertAuditEventTx takes before its INSERT
 		// (migration 0047). Nothing to model: the fake is single-threaded, so
@@ -798,6 +809,13 @@ func TestMint_AuditRidesTxAtomicWithJTI(t *testing.T) {
 	}
 	if !rows[0].preCommit {
 		t.Fatal("mint audit was written AFTER commit — not atomic with the minted_jti burn (D29)")
+	}
+	// The chain-lock wait is bounded ON THIS TX. SET LOCAL binds nothing outside
+	// a transaction, so a bound issued anywhere else would look identical in the
+	// code and do nothing at run time: an unbounded wait here holds a
+	// half-finished mint open, with its grant and approval row locks.
+	if !db.lockTimeoutSet {
+		t.Error("the mint tx took the audit chain lock without bounding the wait first (db.AuditChainLockTimeout)")
 	}
 	if db.approvals[aid].mintedJTI != minted.JTI {
 		t.Fatalf("minted_jti not written in the same tx")

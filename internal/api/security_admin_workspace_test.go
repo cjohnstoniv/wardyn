@@ -100,29 +100,12 @@ func securityAdminWorkspaceExpectations() map[string]securityAdminWorkspaceExpec
 			why:            "promoting a workspace's observed egress is named in the securityOps rationale",
 		},
 
-		// OPEN QUESTION — RECORDED, NOT ENDORSED.
-		//
-		// handleRecordWorkspace uses getWorkspaceOr404 (existence only), so a
-		// security_admin reaching here LAUNCHES A RECORDING RUN inside another
-		// human's workspace — which is reach INTO a run, the one thing the
-		// securityOps rationale says the tier must never have ("never reach
-		// INTO a run, never credential material, never the host"). The policy
-		// lane is re-tiering this route to operatorOnly for exactly that
-		// reason.
-		//
-		// This entry pins TODAY's behaviour so the change is VISIBLE rather
-		// than silent. Two futures, both fine:
-		//   - the re-tier lands: the route leaves classSecurity, drops out of
-		//     the derived set below, and this entry is reported as stale.
-		//   - someone instead adds an ownership check in the handler: this
-		//     assertion goes red, and the fix is to flip reachesForeign to
-		//     false — a deliberate edit, which is the point.
-		"POST /api/v1/workspaces/{id}/record": {
-			body:           `{"name":"probe session"}`,
-			reachesForeign: true,
-			why: "RECORDED, NOT ENDORSED: this route currently admits a security_admin over any member's workspace " +
-				"(getWorkspaceOr404, existence only). If you just scoped it, flip reachesForeign to false here",
-		},
+		// The record route USED TO BE HERE, recorded-not-endorsed: it admitted a
+		// security_admin over any member's workspace and launched a run in it.
+		// The policy lane re-tiered it to operatorOnly, so it left classSecurity
+		// and left this derived set on its own — which is what the stale-entry
+		// note above is for. Entry removed; TestRecordWorkspaceIsSuperAdminOnly
+		// (security_admin_test.go) is where that route is pinned now.
 	}
 }
 

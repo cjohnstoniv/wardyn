@@ -33,6 +33,7 @@
 import * as React from "react";
 import { Loader2, Users } from "lucide-react";
 import { toast } from "sonner";
+import { HttpError } from "../../../lib/api/core";
 import { previewClaims } from "../../../lib/api/governance";
 import {
   drives as api,
@@ -62,6 +63,7 @@ import { Textarea } from "../../ui/textarea";
 import { Mono } from "../../wardyn/code-block";
 import { DirectoryCombobox } from "../../wardyn/directory-combobox";
 import { Field, Switch } from "../../wardyn/form-primitives";
+import { useOperator } from "../../wardyn/operator-context";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState } from "../../wardyn/states";
 import { SUBJECTS, SUBJECT_LABEL, Segmented, subjectText } from "../permissions";
@@ -86,20 +88,21 @@ const WRITABLE_CHOICES: { value: WritableChoice; label: string }[] = [
 export function AllocationsBlock({
   drives,
   grants,
-  disabled,
   collapsed,
   onChanged,
 }: {
   drives: UserDriveListItem[];
   grants: UserDriveGrant[];
-  disabled: boolean;
   /** The drive editor is open: the add form collapses for exactly that span. */
   collapsed: boolean;
   onChanged: () => void;
 }) {
+  // The tier gate off the context this block already sits inside, not drilled
+  // from the screen — the same read the sibling UserDrivesCard makes. Every
+  // write control below is disabled by it; the server is what refuses.
+  const disabled = !useOperator();
   const [toRemove, setToRemove] = React.useState<UserDriveGrant | null>(null);
   const [busy, setBusy] = React.useState(false);
-  const [replaced, setReplaced] = React.useState(false);
   const driveName = (id: string) => drives.find((d) => d.id === id)?.name ?? id;
 
   const remove = async (g: UserDriveGrant) => {
@@ -189,15 +192,7 @@ export function AllocationsBlock({
             </Button>
           </div>
         ) : (
-          <AddAllocationForm
-            drives={drives}
-            disabled={disabled}
-            replaced={replaced}
-            onAdded={(wasReplaced) => {
-              setReplaced(wasReplaced);
-              onChanged();
-            }}
-          />
+          <AddAllocationForm drives={drives} onChanged={onChanged} />
         )}
       </section>
 
@@ -276,18 +271,13 @@ function Overrides({ grant: g }: { grant: UserDriveGrant }) {
 // whole block renders only once a drive exists to allocate (drives-screen.tsx),
 // so the case the teal had to be handed back for — an empty registry, where the
 // drives empty state's New drive carries it — never reaches this form.
-function AddAllocationForm({
-  drives,
-  disabled,
-  replaced,
-  onAdded,
-}: {
-  drives: UserDriveListItem[];
-  disabled: boolean;
-  /** The last upsert repointed an existing row (a 200, not a 201). */
-  replaced: boolean;
-  onAdded: (replaced: boolean) => void;
-}) {
+function AddAllocationForm({ drives, onChanged }: { drives: UserDriveListItem[]; onChanged: () => void }) {
+  const disabled = !useOperator();
+  /** The last upsert repointed an existing row (a 200, not a 201). Lives HERE,
+   *  with the fields it is a note about: the form unmounts wholesale while the
+   *  drive editor is open, so a note that outlived it would be a note about
+   *  fields that are gone. */
+  const [replaced, setReplaced] = React.useState(false);
   const [subjectType, setSubjectType] = React.useState<CapabilitySubjectType>("group");
   const [subject, setSubject] = React.useState("");
   const [driveID, setDriveID] = React.useState("");
@@ -318,7 +308,8 @@ function AddAllocationForm({
         enabled,
       });
       setSubject("");
-      onAdded(res.replaced);
+      setReplaced(res.replaced);
+      onChanged();
     } catch (e) {
       toast.error(DRIVES.ADD_TITLE, { description: getErrorMessage(e) });
     } finally {
@@ -452,14 +443,22 @@ function AddAllocationForm({
 function DrivePreview() {
   const [claims, setClaims] = React.useState("");
   const [busy, setBusy] = React.useState(false);
-  const [result, setResult] = React.useState<{ answer: UserDrivePreview } | { error: true } | null>(null);
+  const [result, setResult] = React.useState<{ answer: UserDrivePreview } | { error: string } | null>(null);
 
   const run = async () => {
     setBusy(true);
     try {
       setResult({ answer: await api.previewDrive(previewClaims(claims)) });
-    } catch {
-      setResult({ error: true });
+    } catch (e) {
+      // The SAME thing the drive editor does with a refused save. The preview
+      // runs the launch path's own gates now — the governance door's 403, the
+      // backend this deployment cannot mount, the home that is not on the share
+      // — and each answers in the launch's own words. Collapsing all of them
+      // into "couldn't resolve this" threw away the one answer the admin opened
+      // the panel for. The console contributes no string: the server's sentence
+      // renders verbatim, and the canon line stays as the fallback for a
+      // failure that carried no body at all.
+      setResult({ error: e instanceof HttpError ? e.message : GOV.PREVIEW_RESULT_UNKNOWN });
     } finally {
       setBusy(false);
     }
@@ -490,7 +489,7 @@ function DrivePreview() {
       </div>
       {result &&
         ("error" in result ? (
-          <Note tone="red">{GOV.PREVIEW_RESULT_UNKNOWN}</Note>
+          <Note tone="red">{result.error}</Note>
         ) : result.answer.drive_name && result.answer.matched_tier ? (
           <PreviewResult answer={result.answer} />
         ) : (

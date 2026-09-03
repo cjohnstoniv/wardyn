@@ -16,22 +16,16 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { MeUserDrive } from "../../../lib/api/health";
+import { baseMeDrive } from "../../../lib/test-fixtures";
 import { DRIVES, DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 import { WorkspaceCard } from "./workspace-card";
 import { initialWizardState, type WizardState } from "./wizard-types";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
-function drive(overrides: Partial<MeUserDrive> = {}): MeUserDrive {
-  return {
-    name: "Scratch",
-    backend: "k8s_pvc",
-    size_mib: 16384,
-    writable: true,
-    enforcement: "request",
-    ...overrides,
-  };
-}
+// The shared /me drive fixture the other three drive suites already import —
+// byte-for-byte what this file used to declare locally.
+const drive = baseMeDrive;
 
 // Renders the card with a live WizardState, so a click on the checkbox is
 // asserted through the SAME patch the screen wires up — a test that stubbed

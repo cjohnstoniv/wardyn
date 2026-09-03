@@ -227,11 +227,7 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	dst := w.Header()
-	copyHeader(dst, resp.Header)
-	removeHopByHop(dst)
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body) // stream the pack back
+	relay(w, resp) // stream the pack back
 }
 
 // isBrokeredGitGrant reports whether a sandbox-supplied mint body names one of
@@ -276,9 +272,6 @@ func (p *Proxy) gitToken(ctx context.Context, grantID uuid.UUID) (string, error)
 	e, ok := p.gitTokens[grantID]
 	if !ok {
 		e = &gitTokEntry{}
-		if p.gitTokens == nil {
-			p.gitTokens = make(map[uuid.UUID]*gitTokEntry)
-		}
 		p.gitTokens[grantID] = e
 	}
 	p.gitTokMu.Unlock()
@@ -326,7 +319,7 @@ func (p *Proxy) gitToken(ctx context.Context, grantID uuid.UUID) (string, error)
 // (the proxy already holds the run token) rather than 502ing the clone before
 // any human could possibly have approved it (W23-S1-1 / W19-W19a-1).
 func (p *Proxy) mintGitToken(ctx context.Context, grantID uuid.UUID) (string, int64, error) {
-	tok, expMs, status, body, err := p.callMintGit(ctx, grantID)
+	tok, _, expMs, status, body, err := p.callMintGit(ctx, grantID)
 	if err != nil {
 		return "", 0, err
 	}
@@ -344,19 +337,12 @@ func (p *Proxy) mintGitToken(ctx context.Context, grantID uuid.UUID) (string, in
 }
 
 // callMintGit issues ONE POST to the control-plane mint route and reports its
-// raw outcome: (token, expiry, 200) on success, ("", 0, 409, body-with-
-// approval_id) when approval-gated and pending, or an error for anything the
-// caller cannot itself retry (network failure, malformed response).
-func (p *Proxy) callMintGit(ctx context.Context, grantID uuid.UUID) (token string, expMs int64, status int, body []byte, err error) {
-	tok, user, exp, st, b, e := p.callMintGitFull(ctx, grantID)
-	_ = user
-	return tok, exp, st, b, e
-}
-
-// callMintGitFull is callMintGit plus the git username a git_pat mint returns.
-// Split so the GitHub lane, which always authenticates as x-access-token, keeps
-// its narrower signature and cannot accidentally consume a username.
-func (p *Proxy) callMintGitFull(ctx context.Context, grantID uuid.UUID) (token, username string, expMs int64, status int, body []byte, err error) {
+// raw outcome: (token, username, expiry, 200) on success, ("", "", 0, 409,
+// body-with-approval_id) when approval-gated and pending, or an error for
+// anything the caller cannot itself retry (network failure, malformed response).
+// username is the git user a git_pat mint returns; the GitHub lane always
+// authenticates as x-access-token and discards it at the call site.
+func (p *Proxy) callMintGit(ctx context.Context, grantID uuid.UUID) (token, username string, expMs int64, status int, body []byte, err error) {
 	reqBody, err := json.Marshal(map[string]string{"grant_id": grantID.String()})
 	if err != nil {
 		return "", "", 0, 0, nil, err
@@ -424,7 +410,7 @@ func (p *Proxy) waitForGitApproval(ctx context.Context, grantID, approvalID uuid
 		}
 		switch state {
 		case types.ApprovalApproved:
-			tok, expMs, status, body, err := p.callMintGit(ctx, grantID)
+			tok, _, expMs, status, body, err := p.callMintGit(ctx, grantID)
 			if err != nil {
 				return "", 0, err
 			}

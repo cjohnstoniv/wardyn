@@ -9,6 +9,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -43,6 +45,25 @@ type driveStore struct {
 	hasGroupTier bool
 	// err fails BOTH reads, for the never-fail-quiet arm.
 	err error
+	// hasGroupTierErr fails the GROUP-TIER read ALONE, leaving the drive read to
+	// answer normally.
+	//
+	// driveWithUnusableGroups makes TWO store reads and fails closed on both,
+	// and the second one had no fixture: `err` fails both, so the function
+	// returned at the FIRST read every time and never reached the second's error
+	// branch. A gate that cannot be exercised is a gate nobody notices the
+	// deletion of — which is exactly what the counterfactual showed, since
+	// turning that branch into `hasGroupTier, _ :=` left the package green.
+	hasGroupTierErr error
+	// driveErr fails the DRIVE read ALONE, leaving the ceiling answerable.
+	//
+	// It exists because `err` deliberately fails both, and a caller that reads
+	// the drive AND the door — /me does — then cannot tell which half failed:
+	// every state arrives as "the governance read broke" and the drive-side
+	// states are unreachable from any fixture. That is the same coupling that
+	// makes a real defect invisible, so the double grows the seam rather than
+	// the assertion being weakened to match it.
+	driveErr error
 	// userTierOnly models the enforcement shape the stale branch produces: the
 	// resolver is called a second time with NO groups, and a group-tier answer
 	// must not come back from it.
@@ -50,12 +71,34 @@ type driveStore struct {
 	// nilAnswer is the OTHER shape "no grant matched" can arrive in: nil rows
 	// with a nil error, rather than ErrNotFound.
 	nilAnswer bool
+	// profile is the governance profile the DOOR resolves for these claims —
+	// nil (noGovernanceStore's ErrNotFound) is a deployment that has authored
+	// none, which is every case that is not about the door.
+	profile *types.GovernanceProfile
+}
+
+// ResolveGovernanceProfile shadows noGovernanceStore's so a case can shut the
+// DRIVE DOOR for the claims under test. The preview resolves the ceiling for
+// the previewed principal, not for the admin asking, so this is the only way to
+// state "this person's profile forbids a drive".
+func (s *driveStore) ResolveGovernanceProfile(_ context.Context, _, _ []string) (
+	*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+	if s.err != nil {
+		return nil, "", s.err
+	}
+	if s.profile == nil {
+		return nil, "", store.ErrNotFound
+	}
+	return s.profile, types.CapabilitySubjectUser, nil
 }
 
 func (s *driveStore) ResolveUserDrive(_ context.Context, _, groups []string) (
 	*types.UserDrive, *types.UserDriveGrant, types.CapabilitySubjectType, error) {
 	if s.err != nil {
 		return nil, nil, "", s.err
+	}
+	if s.driveErr != nil {
+		return nil, nil, "", s.driveErr
 	}
 	if s.nilAnswer {
 		return nil, nil, "", nil
@@ -69,6 +112,9 @@ func (s *driveStore) ResolveUserDrive(_ context.Context, _, groups []string) (
 func (s *driveStore) HasGroupTierDriveGrants(context.Context) (bool, error) {
 	if s.err != nil {
 		return false, s.err
+	}
+	if s.hasGroupTierErr != nil {
+		return false, s.hasGroupTierErr
 	}
 	return s.hasGroupTier, nil
 }
@@ -114,12 +160,42 @@ func pausedDriveStore(mut func(*types.UserDrive)) *driveStore {
 }
 
 // driveServer builds a Server over st (nil for the no-store arm).
-func driveServer(st *driveStore) *Server {
-	cfg := Config{}
+func driveServer(st *driveStore) *Server { return driveServerOn(st, "docker") }
+
+// driveServerOn is the same with the deployment's runner target named, which
+// the PREVIEW now needs: it runs driveIsMountableHere, so a k8s-backed drive
+// previewed on a server that dispatches to "docker" is refused exactly as a
+// launch would refuse it. The resolver tests below call resolveUserDrive
+// directly and never reach that gate, so "docker" is the harmless default.
+func driveServerOn(st *driveStore, runnerTarget string) *Server {
+	cfg := Config{RunnerTarget: runnerTarget}
 	if st != nil {
 		cfg.Store = st
 	}
 	return &Server{cfg: cfg}
+}
+
+// drivePreviewShareServer is driveServerOn for a host_path fixture. The preview now
+// runs driveIsMountableHere, and a SHARE has to actually be bindable: a real
+// root the deployment's ceiling allows, and the per-person directories that
+// really exist under it. Rewriting the fixture's HostRoot here rather than
+// spelling a temp path at every call site keeps the drive fixtures readable and
+// keeps the two facts (the ceiling, the directory) in one place.
+func drivePreviewShareServer(t *testing.T, st *driveStore, homes ...string) *Server {
+	t.Helper()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve tempdir: %v", err)
+	}
+	for _, h := range homes {
+		if err := os.MkdirAll(filepath.Join(root, h), 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+	st.drive.HostRoot = root
+	srv := driveServerOn(st, "docker")
+	srv.cfg.UserDriveHostRoots = []string{root}
+	return srv
 }
 
 // driveMemberCtx is what humanOrAdminAuth publishes for a signed-in MEMBER:
@@ -185,6 +261,70 @@ func TestResolveUserDrive(t *testing.T) {
 		}
 	})
 
+	// THE SECOND READ'S FAIL-CLOSED ARM, which had no fixture at all.
+	//
+	// driveWithUnusableGroups asks the store twice and must fail closed on BOTH:
+	// once for the caller's own drive, once for "does ANY group-tier allocation
+	// exist" — the question that decides whether an unreadable group snapshot
+	// could be hiding one. Only the first read had a test, because the double's
+	// `err` failed both by construction, so the function always returned at the
+	// first branch. The counterfactual the finding ran is the proof: turning the
+	// second branch into `hasGroupTier, _ :=` left the whole package green.
+	//
+	// IT MATTERS BECAUSE THE SWALLOWED ANSWER IS THE PERMISSIVE ONE. `false`
+	// from that read means "no group-tier allocation exists, so the empty answer
+	// above is the whole truth" — and the caller then mounts nothing for a
+	// member who may well have a drive through a group the snapshot could not
+	// show. That is the silent data loss the 403 exists to prevent, arrived at
+	// through a database hiccup instead of a stale cookie.
+	t.Run("the GROUP-TIER read fails closed too, not just the drive read", func(t *testing.T) {
+		boom := errors.New("pg: connection refused")
+		// The drive read answers honestly — no grant matched — so the function
+		// gets past the first branch and reaches the second, which is the only
+		// arrangement that exercises it.
+		st := &driveStore{hasGroupTierErr: boom}
+
+		for _, tc := range []struct {
+			name string
+			call func(*Server) (*types.ResolvedDrive, error)
+		}{{
+			// The ENFORCEMENT entrance: a member whose snapshot is truncated.
+			name: "a member with a truncated snapshot",
+			call: func(srv *Server) (*types.ResolvedDrive, error) {
+				return srv.resolveUserDrive(driveMemberCtx([]string{"eng"}, true))
+			},
+		}, {
+			// The PREVIEW entrance: an admin who typed no groups. Both doors
+			// reach the same function, so both must fail closed at it.
+			name: "an admin preview with no groups",
+			call: func(srv *Server) (*types.ResolvedDrive, error) {
+				return srv.previewResolveUserDrive(context.Background(), []string{"sub-abc"}, nil)
+			},
+		}} {
+			t.Run(tc.name, func(t *testing.T) {
+				got, err := tc.call(driveServer(st))
+				if err == nil {
+					t.Fatalf("an unreadable group-tier read resolved to %+v instead of erroring — "+
+						"a member whose group could be hiding an allocation would mount nothing", got)
+				}
+				if !errors.Is(err, boom) {
+					t.Errorf("error = %v, want the store failure wrapped", err)
+				}
+				// NOT the 403: this is not a stale snapshot, it is an unknown
+				// answer, and the two remedies differ ("sign in again" against
+				// "try again"). writeDriveError's default arm is what says so.
+				if errors.Is(err, errGroupsSnapshotStale) {
+					t.Errorf("error = %v, want a store failure rather than the stale-snapshot refusal", err)
+				}
+				w := httptest.NewRecorder()
+				writeDriveError(w, err)
+				if w.Code != http.StatusInternalServerError {
+					t.Errorf("writeDriveError(group-tier read failure) = %d, want 500", w.Code)
+				}
+			})
+		}
+	})
+
 	t.Run("no grant matched means no drive", func(t *testing.T) {
 		// Absent row, absent behaviour: a deployment that has allocated nothing
 		// mounts nothing, exactly as before the feature existed. Asserted for
@@ -209,8 +349,10 @@ func TestResolveUserDrive(t *testing.T) {
 		if got == nil {
 			t.Fatal("a matched grant resolved to no drive")
 		}
-		if !strings.HasPrefix(got.HomeName, "d-") || got.ObjectName != "wardyn-drive-"+got.HomeName {
-			t.Errorf("home/object = %q/%q, want the hashed home and its volume name", got.HomeName, got.ObjectName)
+		// The volume name carries the DRIVE's slug as well as the home, so two
+		// drives are two volumes even when they resolve one home.
+		if !strings.HasPrefix(got.HomeName, "d-") || got.ObjectName != "wardyn-drive-corp-nas-"+got.HomeName {
+			t.Errorf("home/object = %q/%q, want the hashed home and its slugged volume name", got.HomeName, got.ObjectName)
 		}
 		if got.SizeMiB != 10240 || got.Writable {
 			t.Errorf("size/writable = %d/%v, want the drive's 10240 and read-only", got.SizeMiB, got.Writable)
@@ -264,6 +406,54 @@ func TestResolveUserDrive(t *testing.T) {
 		}
 	})
 
+	t.Run("an ALL-tier winner under an unusable snapshot is refused, not served", func(t *testing.T) {
+		// The two arms above take the shape where the store matches NOTHING on
+		// user subjects alone (ErrNotFound), so the refusal is reached from an
+		// absence. This is the shape where the store MATCHES: the everyone row
+		// wins on user subjects alone, and the resolver must still refuse —
+		// because the tier it matched at is not `user`, and a group row the
+		// snapshot dropped would have outranked it.
+		//
+		// It is the reachable half of the hazard rather than the theoretical
+		// one. An `all`-tier row is what a deployment writes FIRST (one drive
+		// for everybody) and group rows arrive later, so the store usually DOES
+		// have an answer here — and serving it hands the member the everyone
+		// drive, at whatever mode it carries, in place of the read-only group
+		// drive an admin allocated them.
+		allTier := func() *driveStore {
+			d := driveFixture(func(d *types.UserDrive) { d.Writable = true })
+			return &driveStore{
+				drive: d,
+				grant: grantFixture(d.ID, func(g *types.UserDriveGrant) {
+					g.SubjectType, g.Subject = types.CapabilitySubjectAll, ""
+				}),
+				tier: types.CapabilitySubjectAll, hasGroupTier: true,
+			}
+		}
+		for name, ctx := range map[string]context.Context{
+			"a nil snapshot":       driveMemberCtx(nil, false),
+			"a truncated snapshot": driveMemberCtx([]string{"a-team"}, true),
+		} {
+			t.Run(name, func(t *testing.T) {
+				got, err := driveServer(allTier()).resolveUserDrive(ctx)
+				if !errors.Is(err, errGroupsSnapshotStale) {
+					t.Fatalf("resolve = %+v, %v; want errGroupsSnapshotStale — the everyone row matched on user subjects "+
+						"alone while a group-tier grant exists that the snapshot may be hiding", got, err)
+				}
+				if got != nil {
+					t.Errorf("a refused resolve still handed back a drive: %+v", got)
+				}
+			})
+		}
+		// The control: with the snapshot COMPLETE the same everyone row is the
+		// honest answer and is served, so the refusal is about the snapshot and
+		// not about all-tier allocations.
+		got, err := driveServer(allTier()).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		if err != nil || got == nil || !got.Writable || got.Tier != types.CapabilitySubjectAll {
+			t.Fatalf("resolve = %+v, %v; want the writable everyone row served on a complete snapshot", got, err)
+		}
+	})
+
 	t.Run("a user-tier match is served despite an unusable snapshot", func(t *testing.T) {
 		// user > group > all, so an explicitly named principal's drive is fully
 		// determined whatever their groups are. Refusing would lock out exactly
@@ -310,8 +500,11 @@ func TestResolveUserDrive(t *testing.T) {
 		if !got.Writable {
 			t.Error("writable = false; an explicit writable_override on a read-only drive must win")
 		}
-		if got.HomeName != "bsmith" || got.ObjectName != "wardyn-drive-bsmith" {
-			t.Errorf("home/object = %q/%q, want the override's", got.HomeName, got.ObjectName)
+		// THE CASE THE SLUG EXISTS FOR. An override is written on the GRANT, so
+		// it does not move when the grant is re-pointed at another drive; the
+		// drive's slug is the only thing keeping the two volumes apart.
+		if got.HomeName != "bsmith" || got.ObjectName != "wardyn-drive-corp-nas-bsmith" {
+			t.Errorf("home/object = %q/%q, want the override's home under this drive's slug", got.HomeName, got.ObjectName)
 		}
 	})
 
@@ -377,6 +570,73 @@ func TestResolveUserDrive(t *testing.T) {
 		writeDriveError(w, err)
 		if w.Code != http.StatusUnprocessableEntity {
 			t.Errorf("writeDriveError(unmountable) = %d, want 422 — the caller is authorized, there is simply nothing to mount", w.Code)
+		}
+	})
+
+	t.Run("a MANAGED drive templated on the email local part is unmountable", func(t *testing.T) {
+		// The write boundary refuses this pair (types.ValidateUserDrive); this is
+		// the second half of that rule, repeated exactly as the home-override
+		// tier gate is, because a row written by an older binary — or by hand —
+		// would otherwise resolve two principals whose addresses share a local
+		// part onto ONE volume. The driver cannot catch that either: the object
+		// IS labelled with this drive, so its id check matches.
+		d := driveFixture(func(d *types.UserDrive) { d.HomeTemplate = types.HomeTemplateEmailLocal })
+		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		if !errors.Is(err, errDriveUnmountable) {
+			t.Fatalf("resolve = %+v, err = %v; want errDriveUnmountable", got, err)
+		}
+		// REFUSED_BACKEND's frozen shape, whose parenthesised half is where the
+		// diagnosis goes — never a new member sentence.
+		if !strings.Contains(err.Error(), "drive: this deployment cannot mount your drive (") {
+			t.Errorf("err = %v, want the frozen REFUSED_BACKEND shape", err)
+		}
+		w := httptest.NewRecorder()
+		writeDriveError(w, err)
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Errorf("writeDriveError = %d, want 422", w.Code)
+		}
+	})
+
+	t.Run("a SHARE templated on the email local part still resolves", func(t *testing.T) {
+		// The scoping half: a share's directories are named by whoever owns the
+		// share, and email_local is the corporate shape the template exists for.
+		d := driveFixture(func(d *types.UserDrive) {
+			d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateEmailLocal, "/srv/homes"
+		})
+		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		if got.HomeName != "bob" || got.ObjectName != "/srv/homes/bob" {
+			t.Errorf("home/object = %q/%q, want the email local part's", got.HomeName, got.ObjectName)
+		}
+	})
+
+	t.Run("the subject fingerprint rides the resolved answer", func(t *testing.T) {
+		// The value the driver stamps on a managed object. It is derived from the
+		// SAME claim the home was — driveHomeSubject's positional pick, never
+		// users[0] a second time — because the whole point is that it
+		// discriminates principals the home name cannot.
+		d := driveFixture(nil)
+		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		if want := types.DriveSubjectHash("sub-drive-bob"); got.SubjectHash != want {
+			t.Errorf("subject hash = %q, want the digest of the claim the home came from (%q)", got.SubjectHash, want)
+		}
+		// A PAUSED row derives nothing, the fingerprint included: there is no
+		// object to stamp, and a digest beside a mount that will not happen is a
+		// value a later reader could take for one that did.
+		paused, err := driveServer(pausedDriveStore(nil)).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		if err != nil {
+			t.Fatalf("resolve paused: %v", err)
+		}
+		if paused.SubjectHash != "" {
+			t.Errorf("a paused allocation carries a subject hash %q — nothing is derived for a row that mounts nothing", paused.SubjectHash)
 		}
 	})
 
@@ -457,14 +717,36 @@ func TestResolveUserDrive(t *testing.T) {
 		// exactly the people an admin took the trouble to name out of being
 		// told why their drive stopped, on the deployment shape (a group-tier
 		// grant exists) where the refusal otherwise fires.
-		st := pausedDriveStore(nil)
-		st.hasGroupTier, st.userTierOnly = true, true
-		got, err := driveServer(st).resolveUserDrive(driveMemberCtx(nil, false))
-		if err != nil {
-			t.Fatalf("resolve with an unusable snapshot: %v", err)
-		}
-		if got == nil || !got.Paused {
-			t.Fatalf("resolved = %+v, want the paused allocation served", got)
+		//
+		// BOTH unusable shapes, because they arrive by different routes and the
+		// resolver reads them from different places: a nil snapshot is a
+		// pre-0.6 cookie, a truncated one is a live session whose IdP sent more
+		// groups than the cookie holds. A member in that second state is having
+		// an ordinary day, and telling them "sign in again" for an allocation
+		// that is simply switched off is the wrong sentence and the wrong
+		// remedy.
+		for name, ctx := range map[string]context.Context{
+			"a nil snapshot":       driveMemberCtx(nil, false),
+			"a truncated snapshot": driveMemberCtx([]string{"a-team"}, true),
+		} {
+			t.Run(name, func(t *testing.T) {
+				st := pausedDriveStore(nil)
+				st.hasGroupTier, st.userTierOnly = true, true
+				got, err := driveServer(st).resolveUserDrive(ctx)
+				if err != nil {
+					t.Fatalf("resolve with an unusable snapshot: %v", err)
+				}
+				if got == nil || !got.Paused {
+					t.Fatalf("resolved = %+v, want the paused allocation served", got)
+				}
+				// And still nothing derived: the paused fold runs before the
+				// derivation on this path too, so an unusable snapshot cannot be
+				// the thing that produces a home name for a drive that mounts
+				// nothing.
+				if got.HomeName != "" || got.ObjectName != "" {
+					t.Errorf("home/object = %q/%q, want both empty", got.HomeName, got.ObjectName)
+				}
+			})
 		}
 	})
 }
@@ -521,11 +803,15 @@ func previewDriveHTTP(t *testing.T, srv *Server, users, groups []string) *httpte
 // offboarding command rather than compute from a hash by hand.
 func TestPreviewUserDrive(t *testing.T) {
 	t.Run("a match is answered with the object name", func(t *testing.T) {
+		// A STATIC PVC, because `email_local` is a SHARE template: a managed
+		// backend names its object after the home alone, so the write boundary
+		// and the resolver both refuse that pair now (two people whose addresses
+		// share a local part would be allocated one object).
 		d := driveFixture(func(d *types.UserDrive) {
-			d.Name, d.Backend, d.HomeTemplate = "Corp NAS", types.DriveBackendK8sPVC, types.HomeTemplateEmailLocal
+			d.Name, d.Backend, d.HomeTemplate = "Corp NAS", types.DriveBackendK8sPVCStatic, types.HomeTemplateEmailLocal
 		})
 		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
-		w := previewDriveHTTP(t, driveServer(st), []string{"sub-abc", "Alice@Corp.Example"}, []string{"Eng"})
+		w := previewDriveHTTP(t, driveServerOn(st, "k8s"), []string{"sub-abc", "Alice@Corp.Example"}, []string{"Eng"})
 		if w.Code != http.StatusOK {
 			t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
 		}
@@ -545,7 +831,43 @@ func TestPreviewUserDrive(t *testing.T) {
 		if got.DriveName != "Corp NAS" || got.MatchedTier != types.CapabilitySubjectUser {
 			t.Errorf("drive/tier = %q/%q, want the winning row's", got.DriveName, got.MatchedTier)
 		}
-		// A PVC's size is a REQUEST, and only a block storage class binds it.
+		// And the two literals above are the TYPES PACKAGE's own derivation,
+		// not a second copy of it: this is the tie that keeps the preview and
+		// the runner (TestSeedRequestDriveMountShape asserts the same pair on
+		// the enforcement path) reading one function.
+		wantHome, err := types.DriveHomeName(*d, "Alice@Corp.Example", "")
+		if err != nil {
+			t.Fatalf("DriveHomeName: %v", err)
+		}
+		if got.HomeName != wantHome || got.ObjectName != types.DriveObjectName(*d, wantHome) {
+			t.Errorf("home/object = %q/%q, want the derivation's %q/%q",
+				got.HomeName, got.ObjectName, wantHome, types.DriveObjectName(*d, wantHome))
+		}
+		// A STATIC PVC's size is bound by whatever provisioned it, never by
+		// Wardyn — the field is carried through the preview verbatim so the
+		// number beside it is not read as a cap Wardyn enforces.
+		if got.Enforcement != types.StorageEnforcementExternal {
+			t.Errorf("enforcement = %q, want %q", got.Enforcement, types.StorageEnforcementExternal)
+		}
+	})
+
+	// A PROVISIONING PVC's size IS a request the cluster acts on, and it is the
+	// one enforcement value that differs from what the object holding it does —
+	// so it is previewed on its own drive rather than folded into the row above,
+	// where `email_local` is now refused.
+	t.Run("a managed pvc previews its size as a REQUEST", func(t *testing.T) {
+		d := driveFixture(func(d *types.UserDrive) {
+			d.Name, d.Backend, d.HomeTemplate = "Cluster", types.DriveBackendK8sPVC, types.HomeTemplateHash
+		})
+		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+		w := previewDriveHTTP(t, driveServerOn(st, "k8s"), []string{"sub-abc", "alice@corp.example"}, []string{"eng"})
+		if w.Code != http.StatusOK {
+			t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		var got userDrivePreviewResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v (body=%s)", err, w.Body.String())
+		}
 		if got.Enforcement != types.StorageEnforcementRequest {
 			t.Errorf("enforcement = %q, want %q", got.Enforcement, types.StorageEnforcementRequest)
 		}
@@ -681,7 +1003,11 @@ func TestPreviewUserDrive(t *testing.T) {
 					}
 				})
 				st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
-				w := previewDriveHTTP(t, driveServer(st), tc.users, nil)
+				srv := driveServer(st)
+				if backend == types.DriveBackendHostPath {
+					srv = drivePreviewShareServer(t, st, tc.want[:strings.IndexAny(tc.want+"@", "@")])
+				}
+				w := previewDriveHTTP(t, srv, tc.users, nil)
 				if w.Code != http.StatusOK {
 					t.Fatalf("code = %d: %s", w.Code, w.Body.String())
 				}
@@ -743,7 +1069,7 @@ func TestPreviewUserDrive(t *testing.T) {
 		})
 		est := &driveStore{drive: ed, grant: grantFixture(ed.ID, nil), tier: types.CapabilitySubjectUser}
 		got = userDrivePreviewResponse{}
-		w = previewDriveHTTP(t, driveServer(est), []string{"alice@corp.example"}, nil)
+		w = previewDriveHTTP(t, drivePreviewShareServer(t, est, "alice"), []string{"alice@corp.example"}, nil)
 		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 			t.Fatalf("email_local: decode: %v (body=%s)", err, w.Body.String())
 		}
@@ -796,4 +1122,290 @@ func TestPreviewUserDrive(t *testing.T) {
 			t.Errorf("code = %d, want 400 — the preview takes claims, and a caller naming a drive is asking a different question", w.Code)
 		}
 	})
+}
+
+// TestPreviewUserDriveAnswersTheSameRefusalAsLaunch is the preview-IS-enforcement
+// pin. The endpoint used to be resolveUserDriveFor alone — the store read and
+// the fold — with three of the launch path's gates living above and below it,
+// so a claim set that WOULD be refused at launch previewed green and the member
+// found out by ticking the box.
+//
+// Every arm below asserts the LAUNCH's status and the LAUNCH's bytes, because
+// an admin diagnosing "why can't Bob mount his drive" should read the sentence
+// Bob reads rather than a paraphrase they then have to match to a ticket.
+func TestPreviewUserDriveAnswersTheSameRefusalAsLaunch(t *testing.T) {
+	// THE DOOR, resolved for the PREVIEWED claims. The caller here is always an
+	// operator (every /drives route is SUPER), so asking about the caller —
+	// which is what the launch path's driveDoorProfile does — would answer
+	// "open" for every previewed principal and the preview would go on saying
+	// "this person mounts their drive" about somebody whose profile forbids it.
+	t.Run("a profile that denies the drive is the launch's own 403", func(t *testing.T) {
+		d := driveFixture(nil)
+		st := &driveStore{
+			drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser,
+			profile: &types.GovernanceProfile{
+				ID: uuid.New(), Name: "contractors",
+				Limits: types.GovernanceLimits{DenyUserDrive: true},
+			},
+		}
+		w := previewDriveHTTP(t, driveServer(st), []string{"sub-abc"}, []string{"eng"})
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("code = %d, want 403; body=%s", w.Code, w.Body.String())
+		}
+		const want = "mounting a user drive is not allowed by your governance profile \"contractors\". Launch without drive."
+		if got := refusalBody(t, w); got != want {
+			t.Errorf("body = %q\nwant the LAUNCH's own bytes: %q", got, want)
+		}
+	})
+
+	// The control: the same allocation with the door OPEN previews as before, so
+	// the arm above is a statement about DenyUserDrive rather than about every
+	// deployment that has authored a profile.
+	t.Run("an open profile changes nothing", func(t *testing.T) {
+		d := driveFixture(nil)
+		st := &driveStore{
+			drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser,
+			profile: &types.GovernanceProfile{ID: uuid.New(), Name: "engineering"},
+		}
+		w := previewDriveHTTP(t, driveServer(st), []string{"sub-abc"}, []string{"eng"})
+		if w.Code != http.StatusOK {
+			t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	// THE SHARE THAT IS NOT THERE — the input TOP RISK 5 was written around: a
+	// host_path drive whose /srv/homes/bob does not exist previewed as
+	// "\"nas\" via the user allocation" with an object name an admin could copy,
+	// and Bob's tick answered REFUSED_HOME_MISSING.
+	t.Run("a share whose directory is missing is the launch's own 422", func(t *testing.T) {
+		d := driveFixture(func(d *types.UserDrive) {
+			d.Name, d.Backend, d.HomeTemplate = "nas", types.DriveBackendHostPath, types.HomeTemplateSub
+		})
+		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+		// A real, allowed root — with nobody's home under it.
+		srv := drivePreviewShareServer(t, st)
+		w := previewDriveHTTP(t, srv, []string{"bob"}, []string{"eng"})
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("code = %d, want 422; body=%s", w.Code, w.Body.String())
+		}
+		const want = "drive: directory bob does not exist on the share — ask an admin to create it"
+		if got := refusalBody(t, w); got != want {
+			t.Errorf("body = %q\nwant the LAUNCH's own bytes: %q", got, want)
+		}
+		// And the positive control on the SAME server: the directory exists, so
+		// the refusal is about the home rather than about share drives.
+		if err := os.MkdirAll(filepath.Join(srv.cfg.UserDriveHostRoots[0], "bob"), 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if w := previewDriveHTTP(t, srv, []string{"bob"}, []string{"eng"}); w.Code != http.StatusOK {
+			t.Fatalf("code = %d, want 200 once the home is there; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	// THE BACKEND THIS DEPLOYMENT CANNOT MOUNT. A row valid when it was written
+	// and not now (the deployment re-pointed WARDYN_RUNNER) is the same 422 at
+	// launch, and previewing it green would send an admin looking at the
+	// allocation instead of at the deployment.
+	t.Run("a backend this deployment cannot mount is the launch's own 422", func(t *testing.T) {
+		d := driveFixture(func(d *types.UserDrive) {
+			d.Backend, d.HomeTemplate, d.SizeMiB = types.DriveBackendK8sPVC, types.HomeTemplateHash, 10240
+		})
+		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+		w := previewDriveHTTP(t, driveServerOn(st, "docker"), []string{"sub-abc"}, []string{"eng"})
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("code = %d, want 422; body=%s", w.Code, w.Body.String())
+		}
+		if got := refusalBody(t, w); !strings.HasPrefix(got, "drive: this deployment cannot mount your drive") {
+			t.Errorf("body = %q, want the launch's REFUSED_BACKEND shape", got)
+		}
+	})
+
+	// THE UNANSWERABLE GROUP TIER. A request carrying no `groups` has not
+	// evaluated the group tier, which is the condition a nil snapshot creates at
+	// launch — and answering it from the `all` row is how an admin gets a
+	// confident preview of a drive no run will mount. The console always sends
+	// both lists (previewClaims splits one box into both), so this arm answers
+	// the hand-made request.
+	t.Run("a claim set with no groups takes the unusable-groups arm", func(t *testing.T) {
+		st := &driveStore{
+			drive: driveFixture(nil), tier: types.CapabilitySubjectAll,
+			hasGroupTier: true, userTierOnly: true,
+		}
+		st.grant = grantFixture(st.drive.ID, nil)
+		w := previewDriveHTTP(t, driveServer(st), []string{"sub-abc"}, nil)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("code = %d, want the launch's 403; body=%s", w.Code, w.Body.String())
+		}
+		if got := refusalBody(t, w); got != groupsSnapshotStaleMsg {
+			t.Errorf("body = %q, want the launch's own %q", got, groupsSnapshotStaleMsg)
+		}
+		// The SAME deployment, with the groups supplied: answered. The arm is
+		// about a request that cannot evaluate the tier, not about deployments
+		// that allocate by group.
+		if w := previewDriveHTTP(t, driveServer(st), []string{"sub-abc"}, []string{"eng"}); w.Code != http.StatusOK {
+			t.Fatalf("code = %d, want 200 once the groups are supplied; body=%s", w.Code, w.Body.String())
+		}
+	})
+}
+
+// ─── preview IS enforcement, in the answer as well as in the refusal ──────────
+
+// drivePreviewAnswer is the derived answer, comparable by value, in the shape
+// BOTH surfaces produce it: what the run resolver decided (types.ResolvedDrive)
+// and what the admin's preview reported (userDrivePreviewResponse). Reduced to
+// one struct so a case says "these are the same answer" rather than comparing
+// seven fields and quietly forgetting the eighth when one is added.
+type drivePreviewAnswer struct {
+	Tier         types.CapabilitySubjectType
+	Home, Object string
+	Size         int
+	Writable     bool
+	Paused       bool
+	Enforcement  types.StorageEnforcement
+}
+
+func drivePreviewAnswerOf(r *types.ResolvedDrive) drivePreviewAnswer {
+	if r == nil {
+		return drivePreviewAnswer{}
+	}
+	return drivePreviewAnswer{
+		Tier: r.Tier, Home: r.HomeName, Object: r.ObjectName, Size: r.SizeMiB,
+		Writable: r.Writable, Paused: r.Paused, Enforcement: r.Enforcement,
+	}
+}
+
+// TestPreviewUserDriveDerivesTheSameAnswerAsEnforcement is the other half of
+// TestPreviewUserDriveAnswersTheSameRefusalAsLaunch: that one pins the
+// REFUSALS, this one pins the ANSWER, over every home template, every grant
+// tier, and every spelling of the claims an admin can paste.
+//
+// The preview is what an admin reads before allocating, and its whole value is
+// that it is the run's own answer rather than a plausible reconstruction of
+// one. The object name in particular is copied out of it into offboarding and
+// reclaim commands, so a preview that derived a home the run would not is worse
+// than no preview: an admin acts on it against the wrong directory.
+//
+// The claim spellings are the same answer three times because
+// normalizeGovernancePreviewClaims lowercases, trims and dedupes while
+// PRESERVING ORDER — and order is the whole positional contract (a subject
+// first, an address last). A normalisation that sorted, or that deduped by
+// building a set, would still look right on the "as typed" row and change which
+// claim `email_local` reads on every other one.
+func TestPreviewUserDriveDerivesTheSameAnswerAsEnforcement(t *testing.T) {
+	yes := true
+	for _, tc := range []struct {
+		name string
+		// store is rebuilt per case: drivePreviewShareServer rewrites the
+		// fixture's HostRoot, so a shared one would leak between cases.
+		store func() *driveStore
+		// homes are the per-person directories a SHARE needs on disk; empty for
+		// a managed drive, which has no host tree.
+		homes []string
+	}{
+		{
+			name: "managed hash, user grant",
+			store: func() *driveStore {
+				d := driveFixture(nil)
+				return &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+			},
+		},
+		{
+			// A share keyed on the sign-in subject: users[0] both sides.
+			name: "share, sub template",
+			store: func() *driveStore {
+				d := driveFixture(func(d *types.UserDrive) {
+					d.Backend, d.HomeTemplate = types.DriveBackendHostPath, types.HomeTemplateSub
+				})
+				return &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+			},
+			homes: []string{"sub-drive-bob"},
+		},
+		{
+			// The template that reads the LAST claim rather than the first —
+			// the one an order-losing normalisation would silently re-key.
+			name: "share, email_local template",
+			store: func() *driveStore {
+				d := driveFixture(func(d *types.UserDrive) {
+					d.Backend, d.HomeTemplate = types.DriveBackendHostPath, types.HomeTemplateEmailLocal
+				})
+				return &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+			},
+			homes: []string{"bob"},
+		},
+		{
+			name: "group-tier winner",
+			store: func() *driveStore {
+				d := driveFixture(nil)
+				return &driveStore{drive: d, tier: types.CapabilitySubjectGroup,
+					grant: grantFixture(d.ID, func(g *types.UserDriveGrant) {
+						g.SubjectType, g.Subject = types.CapabilitySubjectGroup, "eng"
+					})}
+			},
+		},
+		{
+			// The FOLDS have to agree too, not merely the home: a preview that
+			// read the drive's own size where the grant overrode it would show
+			// an admin an allocation nobody has.
+			name: "all-tier winner with size and writable overrides",
+			store: func() *driveStore {
+				d := driveFixture(nil)
+				return &driveStore{drive: d, tier: types.CapabilitySubjectAll,
+					grant: grantFixture(d.ID, func(g *types.UserDriveGrant) {
+						g.SubjectType, g.Subject = types.CapabilitySubjectAll, ""
+						g.SizeMiBOverride, g.WritableOverride = 512, &yes
+					})}
+			},
+		},
+		{
+			// Paused derives nothing on both surfaces, which is the case where
+			// "the same answer" is the same ABSENCE.
+			name:  "paused",
+			store: func() *driveStore { return pausedDriveStore(nil) },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := tc.store()
+			srv := driveServer(st)
+			if len(tc.homes) > 0 {
+				srv = drivePreviewShareServer(t, st, tc.homes...)
+			}
+			resolved, err := srv.resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+			if err != nil {
+				t.Fatalf("enforcement resolve: %v", err)
+			}
+			want := drivePreviewAnswerOf(resolved)
+			// Guard against the vacuous pass: two EMPTY answers compare equal,
+			// so a case whose enforcement side quietly resolved to nothing would
+			// "agree" with a preview that also said nothing. Every case here
+			// either derives a home and an object, or is the paused one, which
+			// derives neither.
+			if derived := want.Home != "" && want.Object != ""; derived == want.Paused {
+				t.Fatalf("enforcement answer = %+v; a live case must derive a home and an object, a paused one neither", want)
+			}
+
+			for name, users := range map[string][]string{
+				"as typed":           {"sub-drive-bob", "bob@corp.example"},
+				"upper-case, padded": {"  SUB-DRIVE-BOB ", "Bob@Corp.Example"},
+				"a duplicated claim": {"sub-drive-bob", "sub-drive-bob", "bob@corp.example"},
+			} {
+				t.Run(name, func(t *testing.T) {
+					w := previewDriveHTTP(t, srv, users, []string{"eng"})
+					if w.Code != http.StatusOK {
+						t.Fatalf("preview = %d: %s", w.Code, w.Body.String())
+					}
+					var resp userDrivePreviewResponse
+					if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+						t.Fatalf("decode preview: %v", err)
+					}
+					got := drivePreviewAnswer{
+						Tier: resp.MatchedTier, Home: resp.HomeName, Object: resp.ObjectName, Size: resp.SizeMiB,
+						Writable: resp.Writable, Paused: resp.Paused, Enforcement: resp.Enforcement,
+					}
+					if got != want {
+						t.Errorf("preview     = %+v\nenforcement = %+v\nwant identical", got, want)
+					}
+				})
+			}
+		})
+	}
 }

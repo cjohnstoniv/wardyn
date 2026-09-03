@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -89,4 +90,61 @@ func TestVerifyAuditChainRoute(t *testing.T) {
 			t.Errorf("code = %d, want 501 (never report a clean sweep that did not run)", w.Code)
 		}
 	})
+}
+
+// blockingChainStore holds a sweep open until released, so a second request
+// meets a sweep that is genuinely in flight.
+type blockingChainStore struct {
+	store.Store
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingChainStore) VerifyAuditChain(ctx context.Context) (store.AuditChainStatus, error) {
+	s.once.Do(func() { close(s.entered) })
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return store.AuditChainStatus{}, ctx.Err()
+	}
+	return store.AuditChainStatus{OK: true, Checked: 1}, nil
+}
+
+// TestVerifyAuditChainIsSingleFlight pins the concurrency guard. The sweep
+// re-hashes every row of a table the append-only triggers make unprunable, so N
+// concurrent GETs are N full passes, each pinning a pool connection — and a cron
+// or a retrying client stacks them with nobody deciding to. The second caller is
+// REFUSED rather than served slowly: the answer it would compute is the answer
+// already being computed, and 429 plus Retry-After tells a client what to do.
+func TestVerifyAuditChainIsSingleFlight(t *testing.T) {
+	const path = "/api/v1/audit/chain/verify"
+	st := &blockingChainStore{entered: make(chan struct{}), release: make(chan struct{})}
+	srv := chainServer(t, st)
+
+	first := make(chan int, 1)
+	go func() {
+		first <- doSSO(t, srv, http.MethodGet, path, permAdmin(t), "").Code
+	}()
+	<-st.entered // a sweep is now genuinely in flight
+
+	w := doSSO(t, srv, http.MethodGet, path, permAdmin(t), "")
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("second concurrent sweep code = %d, want 429 — one operator action must not multiply into N "+
+			"full-table re-hash passes", w.Code)
+	}
+	if w.Header().Get("Retry-After") == "" {
+		t.Error("429 carries no Retry-After; a retrying client is exactly what stacks these")
+	}
+
+	close(st.release)
+	if code := <-first; code != http.StatusOK {
+		t.Errorf("the in-flight sweep returned %d, want 200 — the guard must refuse the SECOND caller, not the first", code)
+	}
+
+	// And the guard releases: a later sweep runs normally.
+	st2 := &chainStore{st: store.AuditChainStatus{OK: true, Checked: 5}}
+	if w := doSSO(t, chainServer(t, st2), http.MethodGet, path, permAdmin(t), ""); w.Code != http.StatusOK {
+		t.Errorf("sweep after the first finished = %d, want 200", w.Code)
+	}
 }
