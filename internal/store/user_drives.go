@@ -280,9 +280,36 @@ func (s PG) DeleteUserDriveGrant(ctx context.Context, id uuid.UUID) (types.UserD
 // gets what" table reads top-down as the precedence rule, not as insertion
 // order an admin then has to re-sort in their head.
 func (s PG) ListUserDriveGrants(ctx context.Context) ([]types.UserDriveGrant, error) {
-	const q = `SELECT ` + userDriveGrantCols + ` FROM user_drive_grants
+	return collect(ctx, s.Pool, "list", "user drive grants", userDriveGrantList, nil, scanUserDriveGrant)
+}
+
+// userDriveGrantList is the grant read WITHOUT its window, written once so the
+// whole-list and paged forms cannot drift into two different orders. A page
+// whose ORDER BY differs from the list's is a page that omits rows the caller
+// would have seen and repeats others across offsets — the failure a second copy
+// of an ORDER BY makes silently.
+const userDriveGrantList = `SELECT ` + userDriveGrantCols + ` FROM user_drive_grants
 		ORDER BY ` + userDriveTierOrder + `, priority DESC, subject`
-	return collect(ctx, s.Pool, "list", "user drive grants", q, nil, scanUserDriveGrant)
+
+// ListUserDriveGrantsPage is ListUserDriveGrants bounded to one window — the
+// seventh entry in Pager, and the one user_drive_grants was missing.
+//
+// THE LIMIT IS NOT A COURTESY, IT CHANGES THE PLAN. This ORDER BY has no index
+// to serve it, so unbounded it is a Seq Scan feeding a full sort: measured on
+// this deployment's own PostgreSQL 17 at work_mem=4MB with 50,000 allocations,
+// `external merge Disk: 5584kB`, 149.7 ms, every row materialised and
+// serialised. The same query with the caller's LIMIT becomes a top-N heapsort
+// bounded by the window — `Memory: 301kB`, 37.7 ms, no temp file — because
+// Postgres only has to keep the best k rows rather than sort all n. The Seq
+// Scan (8-11 ms) stays; removing THAT needs an index on the sort keys, which is
+// a migration.
+//
+// One row per SUBJECT (UNIQUE(subject_type, subject)) and two user subjects per
+// person, so this table's row count is deployment headcount — the shape
+// migration 0054's opening paragraph names as the target, not an edge case.
+func (s PG) ListUserDriveGrantsPage(ctx context.Context, p Page) ([]types.UserDriveGrant, error) {
+	q, args := p.appendTo(userDriveGrantList, nil)
+	return collect(ctx, s.Pool, "list", "user drive grants", q, args, scanUserDriveGrant)
 }
 
 // userDriveTierOrder ranks the three subject tiers MOST SPECIFIC FIRST —

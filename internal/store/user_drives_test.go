@@ -13,6 +13,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -497,6 +498,88 @@ func TestPG_ResolveUserDrive_TieHasATotalOrder(t *testing.T) {
 			t.Errorf("writable_override = %v, want the admin's explicit false to have survived the tie",
 				g.WritableOverride)
 		}
+	}
+}
+
+// TestPG_ListUserDriveGrantsPage pins the bounded read against the REAL query
+// plan's contract: the same order as the whole list, a window that honours limit
+// and offset, and a limit of 0 meaning unbounded (Page's own rule).
+//
+// WHY IT IS BOUNDED AT ALL. user_drive_grants holds one row per SUBJECT and
+// capabilitySubjects yields two per person, so this table's size is the
+// deployment's headcount — and its ORDER BY has no index. Unbounded on this
+// deployment's own PostgreSQL at 50,000 allocations that is `external merge
+// Disk: 5584kB` and 149.7 ms; with the caller's LIMIT it is a top-N heapsort in
+// `Memory: 301kB` and 37.7 ms, because Postgres keeps the best k rows instead of
+// sorting all n. The page is what changes the plan, not just the payload.
+func TestPG_ListUserDriveGrantsPage(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+
+	drive := seedUserDrive(t, st, "test-page-"+uuid.NewString())
+	// Seeded on the GROUP tier so these rows sort together, after every
+	// user-tier row the shared substrate holds: the assertions below are then
+	// about THIS test's rows in THIS test's order.
+	mine := map[string]bool{}
+	for _, suffix := range []string{"a", "b", "c", "d"} {
+		g := seedUserDriveGrant(t, st, types.UserDriveGrant{
+			SubjectType: types.CapabilitySubjectGroup,
+			Subject:     "test-page-" + suffix + "-" + uuid.NewString(),
+			DriveID:     drive.ID, CreatedBy: "admin@example.com",
+		})
+		mine[g.Subject] = true
+	}
+
+	// The page's order IS the whole list's order, restricted to this test's
+	// rows. A page ordered differently would omit rows a caller had seen and
+	// repeat others across offsets, which is the failure a second ORDER BY makes
+	// silently — hence one shared const behind both reads.
+	all, err := st.ListUserDriveGrants(ctx)
+	if err != nil {
+		t.Fatalf("ListUserDriveGrants: %v", err)
+	}
+	var want []string
+	for _, g := range all {
+		if mine[g.Subject] {
+			want = append(want, g.Subject)
+		}
+	}
+	if len(want) != 4 {
+		t.Fatalf("seeded 4 grants, the whole list shows %d", len(want))
+	}
+
+	// Walk the deployment in pages of 2 and keep only this test's rows: the
+	// concatenation must reproduce the whole list's order exactly once.
+	var got []string
+	for offset := 0; ; offset += 2 {
+		page, err := st.ListUserDriveGrantsPage(ctx, store.Page{Limit: 2, Offset: offset})
+		if err != nil {
+			t.Fatalf("page at offset %d: %v", offset, err)
+		}
+		if len(page) > 2 {
+			t.Fatalf("page returned %d rows for Limit 2 — the LIMIT is what bounds the sort", len(page))
+		}
+		for _, g := range page {
+			if mine[g.Subject] {
+				got = append(got, g.Subject)
+			}
+		}
+		if len(page) < 2 {
+			break
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("paged walk = %v,\nwhole list = %v — the two reads must share one order", got, want)
+	}
+
+	// Page's own rule, relied on by every internal caller that wants everything.
+	unbounded, err := st.ListUserDriveGrantsPage(ctx, store.Page{})
+	if err != nil {
+		t.Fatalf("unbounded page: %v", err)
+	}
+	if len(unbounded) != len(all) {
+		t.Errorf("Limit 0 returned %d rows, want the whole list's %d — Limit<=0 means unbounded", len(unbounded), len(all))
 	}
 }
 

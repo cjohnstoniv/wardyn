@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -158,7 +159,34 @@ func (s *driveCRUDStore) ListUserDriveGrants(context.Context) ([]types.UserDrive
 	for _, g := range s.grants {
 		out = append(out, g)
 	}
+	// SORTED, because a Go map's iteration order is randomised per run and the
+	// real read is ORDERED (tier, then priority, then subject). A double that
+	// returned map order made every paging assertion depend on the run — it
+	// passed alone and failed in the suite — and, worse, would have let a
+	// handler that dropped the ordering look correct here.
+	sort.Slice(out, func(i, j int) bool {
+		if a, b := driveTierRank(out[i].SubjectType), driveTierRank(out[j].SubjectType); a != b {
+			return a < b
+		}
+		if out[i].Priority != out[j].Priority {
+			return out[i].Priority > out[j].Priority // DESC, as the SQL has it
+		}
+		return out[i].Subject < out[j].Subject
+	})
 	return out, nil
+}
+
+// driveTierRank mirrors userDriveTierOrder: user > group > all, most specific
+// first.
+func driveTierRank(t types.CapabilitySubjectType) int {
+	switch t {
+	case types.CapabilitySubjectUser:
+		return 0
+	case types.CapabilitySubjectGroup:
+		return 1
+	default:
+		return 2
+	}
 }
 
 // ─── the handler harness ──────────────────────────────────────────────────────
@@ -1314,4 +1342,181 @@ func TestUpdateAllocatedUserDriveRefusesASilentRehome(t *testing.T) {
 			t.Errorf("stored row = %+v, want it untouched", got)
 		}
 	})
+}
+
+// TestGetUserDrivesBoundsTheAllocationList pins the half of GET /drives whose
+// cost tracked HEADCOUNT.
+//
+// The response composes two store reads with very different costs.
+// ListUserDrives is an index-only scan and stays whole — there are as many
+// drives as an admin registered. The GRANT list is one row per SUBJECT, two
+// subjects per person, over an ORDER BY with no index: unbounded it sorted every
+// allocation in the deployment on every load of one admin screen (measured at
+// 50,000 allocations as a 5.5 MB on-disk external merge; bounded, a 301 kB
+// top-N heapsort).
+//
+// THE DEFAULT IS THE PART THAT MUST NOT TAKE ROWS AWAY. It is maxListLimit, not
+// defaultListLimit, so a deployment the console can actually render gets the
+// answer it always got; past the cap the page says so on the wire twice — the
+// X-Wardyn-Truncated header every paged list already sets, and grant_total,
+// which is free because the per-drive counts in the same response sum to it.
+func TestGetUserDrivesBoundsTheAllocationList(t *testing.T) {
+	const seeded = 7
+	// BOTH BRANCHES, because the handler has two and only one of them is
+	// production. driveCRUDStore is not a store.Pager, so it exercises the
+	// in-Go fallback every test double takes; drivePagerStore is, so it
+	// exercises the DB-level path PG takes — the one where the LIMIT is what
+	// bounds the sort. A test that ran only the fallback would leave the
+	// production branch free to regress while staying green, which is exactly
+	// how the first draft of this test passed with the page deliberately
+	// unbounded.
+	for _, tc := range []struct {
+		name  string
+		build func() (*Server, *driveCRUDStore)
+	}{
+		{name: "fallback (not a Pager)", build: func() (*Server, *driveCRUDStore) {
+			st := newDriveCRUDStore()
+			srv, _ := driveAdminServer(st, nil)
+			return srv, st
+		}},
+		{name: "pager (the production path)", build: func() (*Server, *driveCRUDStore) {
+			st := newDriveCRUDStore()
+			srv := New(Config{Store: &drivePagerStore{driveCRUDStore: st}, Audit: &recRecorder{},
+				RunnerTarget: "docker", LocalMode: true})
+			return srv, st
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) { runDriveListBoundsCase(t, tc.build) })
+	}
+
+	// AND THE BOUND REACHES THE STORE. Everything above is about the response,
+	// which the Go-side trim makes identical whether the query was bounded or
+	// not — so none of it can see the defect, which is that the DATABASE sorted
+	// every allocation. This asserts the Page the handler handed the store.
+	t.Run("the window is pushed into the query, not applied after it", func(t *testing.T) {
+		st := newDriveCRUDStore()
+		pager := &drivePagerStore{driveCRUDStore: st}
+		srv := New(Config{Store: pager, Audit: &recRecorder{}, RunnerTarget: "docker", LocalMode: true})
+		d := *driveFixture(nil)
+		st.drives[d.ID] = d
+
+		w := driveCall(t, srv.handleGetUserDrives, http.MethodGet, "/api/v1/drives?limit=3&offset=6", "", nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /drives = %d: %s", w.Code, w.Body.String())
+		}
+		// limit+1 is the overfetch that proves a next page exists without a
+		// second query — the same probe servePage uses.
+		if pager.asked.Limit != 4 || pager.asked.Offset != 6 {
+			t.Errorf("store was asked for %+v, want Limit 4 (the caller's 3 plus the probe row) and Offset 6 — "+
+				"an unbounded ask makes PostgreSQL sort every allocation in the deployment before the trim", pager.asked)
+		}
+		// A DEFAULT request is bounded too: absent ?limit is maxListLimit, never
+		// "unbounded", which is the whole regression this closes.
+		w = driveCall(t, srv.handleGetUserDrives, http.MethodGet, "/api/v1/drives", "", nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /drives = %d: %s", w.Code, w.Body.String())
+		}
+		if pager.asked.Limit != maxListLimit+1 {
+			t.Errorf("default request asked for Limit %d, want %d — an absent ?limit must still bound the sort",
+				pager.asked.Limit, maxListLimit+1)
+		}
+	})
+}
+
+// drivePagerStore is driveCRUDStore that IS a store.Pager: the embedded nil
+// Pager supplies the six methods this path never calls, and the one it does call
+// windows the double's own map exactly as the SQL LIMIT/OFFSET does.
+type drivePagerStore struct {
+	*driveCRUDStore
+	store.Pager
+	// asked records the Page the handler REQUESTED. It is the only place the
+	// bound is observable: the handler trims in Go afterwards, so a response
+	// built from an unbounded read is byte-identical to one built from a bounded
+	// read — and asserting the response alone cannot tell a query that sorted
+	// 50,000 rows from one that sorted 1,001. This is what the SQL was given.
+	asked store.Page
+}
+
+func (s *drivePagerStore) ListUserDriveGrantsPage(ctx context.Context, p store.Page) ([]types.UserDriveGrant, error) {
+	s.asked = p
+	all, err := s.ListUserDriveGrants(ctx)
+	if err != nil {
+		return nil, err
+	}
+	off := min(p.Offset, len(all))
+	rest := all[off:]
+	if p.Limit > 0 && p.Limit < len(rest) {
+		rest = rest[:p.Limit]
+	}
+	return rest, nil
+}
+
+func runDriveListBoundsCase(t *testing.T, build func() (*Server, *driveCRUDStore)) {
+	t.Helper()
+	srv, st := build()
+	d := *driveFixture(nil)
+	st.drives[d.ID] = d
+	const seeded = 7
+	for i := range seeded {
+		id := uuid.New()
+		st.grants[id] = types.UserDriveGrant{
+			ID: id, SubjectType: types.CapabilitySubjectUser,
+			Subject: fmt.Sprintf("sub-%02d", i), DriveID: d.ID, Enabled: true,
+		}
+	}
+
+	// offset is passed rather than parsed back out of the query because the
+	// header means "a FURTHER page exists", not "you did not get everything":
+	// the last page carries fewer rows than the total and is not truncated, and
+	// conflating the two is how a client loops forever or stops early.
+	get := func(query string, offset int) userDrivesResponse {
+		t.Helper()
+		w := driveCall(t, srv.handleGetUserDrives, http.MethodGet, "/api/v1/drives"+query, "", nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /drives%s = %d: %s", query, w.Code, w.Body.String())
+		}
+		var body userDrivesResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		more := offset+len(body.Grants) < body.GrantTotal
+		if got := w.Header().Get("X-Wardyn-Truncated"); (got == "true") != more {
+			t.Errorf("X-Wardyn-Truncated = %q at offset %d with %d of %d grants — the header must mean "+
+				"\"a further page exists\"", got, offset, len(body.Grants), body.GrantTotal)
+		}
+		return body
+	}
+
+	// THE TOTAL IS ALWAYS THE TRUE COUNT, page or no page: it is summed from the
+	// per-drive counts, not from the rows this response happens to carry.
+	whole := get("", 0)
+	if whole.GrantTotal != seeded || len(whole.Grants) != seeded {
+		t.Fatalf("unbounded: %d of %d grants, want all %d — the default must not take rows from a small deployment",
+			len(whole.Grants), whole.GrantTotal, seeded)
+	}
+
+	page := get("?limit=3", 0)
+	if len(page.Grants) != 3 {
+		t.Errorf("?limit=3 returned %d grants, want 3", len(page.Grants))
+	}
+	if page.GrantTotal != seeded {
+		t.Errorf("grant_total = %d on a page of 3, want the true %d — a client cannot tell it has all of them otherwise",
+			page.GrantTotal, seeded)
+	}
+
+	// The window MOVES, and the last page is not marked truncated.
+	second := get("?limit=3&offset=3", 3)
+	if len(second.Grants) != 3 || second.Grants[0].ID == page.Grants[0].ID {
+		t.Errorf("offset=3 returned %d grants starting at the same row — the offset is not applied", len(second.Grants))
+	}
+	last := get("?limit=3&offset=6", 6)
+	if len(last.Grants) != 1 {
+		t.Errorf("offset=6 returned %d grants, want the final 1", len(last.Grants))
+	}
+
+	// The drives half is UNTOUCHED by the window: it is the cheap read, and its
+	// per-drive counts are what stay correct when the allocation table is a page.
+	if len(whole.Drives) != 1 || whole.Drives[0].GrantCount != seeded {
+		t.Errorf("drives = %+v, want the one drive still carrying its full count of %d", whole.Drives, seeded)
+	}
 }
