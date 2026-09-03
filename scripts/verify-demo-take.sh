@@ -803,8 +803,8 @@ case "${WARDYN_DEMO_VIDEO:-}" in
   03c) check_video_03c ;;
   03d) check_video_03d ;;
   02|05|07) "check_video_floor_${WARDYN_DEMO_VIDEO}" ;;   # cue floors (H-6); content arms still owed
-  02b|02c|04b|04c|12b) "check_video_${WARDYN_DEMO_VIDEO}" ;;  # optionals: stubs that FAIL until their lane ships rows
-  *) head_ "Video ${WARDYN_DEMO_VIDEO}"; bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 01..13 or a lettered sub-episode such as 03a, or unset for the walkthrough" ;;
+  00|02b|02c|04b|04c|04d|12b) "check_video_${WARDYN_DEMO_VIDEO}" ;;  # optionals + the 0.7 additions, each in its own scripts/lib arm
+  *) head_ "Video ${WARDYN_DEMO_VIDEO}"; bad "unknown WARDYN_DEMO_VIDEO=${WARDYN_DEMO_VIDEO} — expected 00..13 or a lettered sub-episode such as 03a or 04d, or unset for the walkthrough" ;;
 esac
 
 # --- shared: every take, every video -----------------------------------------

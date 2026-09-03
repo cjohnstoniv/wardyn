@@ -214,7 +214,12 @@ def speakable(text: str, initialisms: bool = True) -> str:
     if initialisms:
         for ident, said in (("ssh_key", "ess ess aitch key"), ("cloud_sts", "cloud ess tee ess"),
                             ("ttl_seconds", "tee tee ell seconds"), ("api_key", "eh pee eye key"),
-                            ("git_pat", "git pee eh tee"), ("the ssh client", "the ess ess aitch client")):
+                            ("git_pat", "git pee eh tee"), ("the ssh client", "the ess ess aitch client"),
+                            # "mib" is not a word: the underscore split below would
+                            # hand Kokoro "disk mib". Episode 04d speaks this one
+                            # inside the FROZEN honesty sentence, so the caption
+                            # cannot be reworded to avoid it.
+                            ("disk_mib", "disk em eye bee")):
             out = out.replace(ident, said)
     # Every other policy key is spoken as words: eligible_grants → "eligible
     # grants" (the decoration strip below would otherwise fuse them).
