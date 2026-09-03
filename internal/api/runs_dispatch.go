@@ -31,12 +31,11 @@ type dispatchParams struct {
 	Policy             types.RunPolicySpec  // egress/resource policy (dispatchRun mutates a local copy)
 	FirstGitHubGrantID *uuid.UUID           // surfaced as WARDYN_GITHUB_GRANT_ID; nil when no GitHub grant
 	GitGrants          map[string]uuid.UUID // git-broker allowlist {"<org>/<repo>": grant_id}; proxy-side only
-	// PATBroker reports whether the never-resident git_pat lane is on for this
-	// run. When it is, every git_pat grant is brokered proxy-side and NONE of
-	// them reaches the sandbox env — which is the entire point: leaving the
-	// grant ids in place would let the in-sandbox helper mint the PAT anyway and
-	// the credential would be resident despite the broker.
-	PATBroker        bool
+	// The never-resident git_pat posture is deliberately NOT a field here: it is
+	// a DEPLOYMENT-wide operator escape hatch (Config.DisableGitPATBroker,
+	// WARDYN_GIT_PAT_BROKER), so dispatchRun derives it once rather than every
+	// lane remembering to pass it. It used to be an optional field, and no
+	// production caller set it — see dispatchRun's derivation for what that cost.
 	GitPATGrants     map[string]string          // {host: grant_id} for non-GitHub PAT hosts
 	SSHGrants        map[string]string          // {host: grant_id} for SSH clone hosts
 	Injections       []runner.InjectionGrant    // proxy-side credential injections
@@ -211,7 +210,21 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// a credential and is not getting it, so say why — same shape as the codex-cli
 	// drop (applySSHLaneWarnings, runs_create.go), minus the response warning,
 	// which dispatch has no caller to return one to.
-	droppedSSH, droppedPAT := applyDispatchModeEnv(sandboxEnv, run, interactive, p.TaskMode, p.InteractiveStart, p.SeedAutoTools, p.ToolApprovals, p.FirstGitHubGrantID, p.GitPATGrants, p.SSHGrants, p.GitGrants, p.PATBroker)
+	// THE NEVER-RESIDENT git_pat LANE, derived from the deployment's own flag
+	// rather than taken from the caller. It was a dispatchParams field that NO
+	// production literal ever set, so every real dispatch ran with it false:
+	// patBrokerGrants returned nil, ProxyConfig.PATGrants stayed empty, and
+	// applyDispatchModeEnv left WARDYN_GIT_PAT_GRANTS in the sandbox env — i.e.
+	// exactly the pre-0.7 resident posture docs/ENV.md and docs/POLICIES.md say
+	// only `WARDYN_GIT_PAT_BROKER=off` restores. Config.DisableGitPATBroker, the
+	// field the flag resolves into, was read by nothing at all. The promise was
+	// documented in three places and delivered in none.
+	//
+	// Derived HERE, once, for the reason the ceiling argument above is required:
+	// a per-lane opt-in that defaults to the weaker posture is a control whose
+	// default is "off by omission", and the omission is invisible.
+	patBroker := !s.cfg.DisableGitPATBroker
+	droppedSSH, droppedPAT := applyDispatchModeEnv(sandboxEnv, run, interactive, p.TaskMode, p.InteractiveStart, p.SeedAutoTools, p.ToolApprovals, p.FirstGitHubGrantID, p.GitPATGrants, p.SSHGrants, p.GitGrants, patBroker)
 	s.auditBrokeredGrantDrop(ctx, run.ID, "ssh_key", "run.ssh.brokered_forge", droppedSSH,
 		"this run is brokered for a repo on this forge, so the git-broker route is its only route to it BY NAME "+
 			"(confineGitBrokerEgress denies the forge and its SSH endpoint). Withholding the key is load-bearing, not "+
@@ -424,7 +437,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// hosts, minting the stored PAT proxy-side so it never enters the
 			// sandbox. Empty when the lane is off, which makes the route 403 —
 			// the same state as a run with no PAT grants at all.
-			PATGrants: patBrokerGrants(p.GitPATGrants, p.PATBroker),
+			PATGrants: patBrokerGrants(p.GitPATGrants, patBroker),
 			// Resolved above from site-config.UpstreamProxySecretRef; "" when
 			// unconfigured or unresolvable (direct dial, backward-compatible).
 			UpstreamProxyURL: upstreamProxyURL,

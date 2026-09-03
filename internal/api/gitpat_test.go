@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -286,4 +287,74 @@ func TestInternalMint_BrokeredForgeRefusesGitPAT(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDispatchHonoursTheGitPATBrokerFlag is the promise three documents make,
+// asserted where it is actually delivered.
+//
+// docs/ENV.md's WARDYN_GIT_PAT_BROKER row, docs/POLICIES.md and the CHANGELOG
+// all state that with the default `on` a non-GitHub forge's PAT is minted
+// PROXY-SIDE, never enters the sandbox, and the grant ids are WITHHELD from the
+// sandbox env — and that only the literal `off` restores the pre-0.7 resident
+// lane. None of it happened. PATBroker was an optional dispatchParams field
+// that NO production literal set, so every real dispatch ran with it false:
+// patBrokerGrants returned nil, ProxyConfig.PATGrants stayed empty, and
+// WARDYN_GIT_PAT_GRANTS rode into the sandbox. Config.DisableGitPATBroker — the
+// field the flag resolves into — was read by nothing at all.
+//
+// That is why this drives dispatchRun rather than the helpers: the two existing
+// pat_broker tests call applyDispatchModeEnv and patBrokerGrants directly with
+// the flag they want, so they were green throughout and could not see that
+// nothing supplied it. The lane, not the helper, is the thing that was inert.
+//
+// BOTH postures, because the escape hatch has to keep working: `off` is what an
+// operator flips when a forge misbehaves under the insteadOf rewrite, and a fix
+// that made the broker unconditional would strand that fleet.
+func TestDispatchHonoursTheGitPATBrokerFlag(t *testing.T) {
+	const host = "gitlab.corp.io"
+
+	dispatch := func(t *testing.T, disabled bool) runner.SandboxSpec {
+		t.Helper()
+		fr := &fakeRunner{}
+		srv, _, _, run := dispatchTeardownFixture(t, fr, types.RunPending)
+		srv.cfg.DisableGitPATBroker = disabled
+		run.Task = "" // composition only: no agent exec, no completion watcher
+		srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}), dispatchParams{
+			RunToken: "run-token", Image: "wardyn/claude-code:latest",
+			GitPATGrants: map[string]string{host: uuid.NewString()},
+		})
+		return fr.lastSpec
+	}
+
+	t.Run("default (broker ON): the PAT never enters the sandbox", func(t *testing.T) {
+		spec := dispatch(t, false)
+		// The half that matters: leaving the grant ids would let the in-sandbox
+		// helper mint the PAT anyway, and the credential would be resident
+		// DESPITE the broker.
+		if got := spec.Env["WARDYN_GIT_PAT_GRANTS"]; got != "" {
+			t.Errorf("WARDYN_GIT_PAT_GRANTS = %q in the sandbox env, want empty — the docs promise the grant ids "+
+				"are withheld unless the operator sets `off`", got)
+		}
+		if _, ok := spec.ProxyConfig.PATGrants[host]; !ok {
+			t.Errorf("ProxyConfig.PATGrants = %v, want %q brokered proxy-side — without it the lane mints nothing "+
+				"and the run simply cannot clone", spec.ProxyConfig.PATGrants, host)
+		}
+		// The sandbox still learns WHICH hosts to route through the broker; that
+		// list carries no grant id and cannot mint.
+		if got := spec.Env["WARDYN_GIT_PAT_BROKER_HOSTS"]; !strings.Contains(got, host) {
+			t.Errorf("WARDYN_GIT_PAT_BROKER_HOSTS = %q, want it to name %q — agent-run rewrites those hosts to the "+
+				"broker path, so an empty list is a clone that never routes", got, host)
+		}
+	})
+
+	t.Run("escape hatch (broker OFF): the pre-0.7 resident lane is restored", func(t *testing.T) {
+		spec := dispatch(t, true)
+		if got := spec.Env["WARDYN_GIT_PAT_GRANTS"]; !strings.Contains(got, host) {
+			t.Errorf("WARDYN_GIT_PAT_GRANTS = %q, want the grant id present — `off` is the documented escape hatch "+
+				"for a forge that misbehaves under the rewrite, and it has to still work", got)
+		}
+		if len(spec.ProxyConfig.PATGrants) != 0 {
+			t.Errorf("ProxyConfig.PATGrants = %v, want empty with the broker off", spec.ProxyConfig.PATGrants)
+		}
+	})
 }
