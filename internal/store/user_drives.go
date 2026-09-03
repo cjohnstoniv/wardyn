@@ -243,6 +243,23 @@ func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant) (t
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
 			return types.UserDriveGrant{}, ErrNotFound
 		}
+		// 23505 IS THE GUARD ABOVE, WON BY THE DATABASE INSTEAD. Migration 0059
+		// added the partial unique index this statement's NOT EXISTS could only
+		// approximate — two concurrent inserts can both pass NOT EXISTS under
+		// READ COMMITTED, and the index is what actually stops the second. That
+		// path must answer the caller with the SAME refusal the single-threaded
+		// path does: without this arm the loser of the race gets a 500 and a raw
+		// driver string, for the one request the index exists to refuse
+		// correctly.
+		//
+		// NOT DETERMINISTICALLY TESTABLE and nothing here claims to cover it —
+		// the same statement residual #25 makes about the mount TOCTOU. The
+		// guard closes every single-threaded case, so no fixture can reach the
+		// index; internal/db's own test asserts the SQLSTATE at the database,
+		// and this maps it.
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return types.UserDriveGrant{}, ErrConflict
+		}
 		// NO ROWS is the guard above and nothing else: the FK raises 23503
 		// (handled just above), the natural key is absorbed by ON CONFLICT, and
 		// the SELECT is otherwise a row of constants that cannot be empty. It

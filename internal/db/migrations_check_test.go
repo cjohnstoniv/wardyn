@@ -250,8 +250,29 @@ func TestClosedEnumChecksMatchConstants(t *testing.T) {
 		// accepting a role 0051's CHECK still refused — a write that passed
 		// API validation and then 500'd at the database. 0053 widens the
 		// CHECK; naming the constants here is what makes a FOURTH role
-		// impossible to land on one side only.
-		{"role_mappings", "role", stringSet(oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleMember)},
+		// impossible to land on one side only — which it now is, in BOTH
+		// directions, because the set is DERIVED from oidc.Roles rather than
+		// typed out here a third time. Hand-enumerating it made this case blind
+		// in the Go-widens-first direction: oidc.ValidRole could accept a fourth
+		// role the CHECK refused and this test stayed green, which is exactly
+		// the incident 0053 documents (security_admin passed the /access write
+		// boundary and then 500'd at the database). Only the opposite direction
+		// was caught, by the "allows X which is not a defined Go constant"
+		// branch. The user_drives cases below already derived; this one did not.
+		{"role_mappings", "role", stringSet(oidc.Roles...)},
+		// 0060's api_tokens.role, derived from the SAME slice for the same
+		// reason. 0045 shipped this column with no CHECK and said why: "the two
+		// values are Go constants ... any other value is inert (fail closed),
+		// never a privilege." 0.7 made the column carry the caller's verbatim
+		// session role instead of a two-valued re-derivation, so security_admin
+		// is written here and is NOT inert -- isSecurityOperator gates the whole
+		// securityOps route group on it. The argument's content was "the
+		// privileged set is a singleton", which is now a pair and grows with
+		// every tier, so it cannot be restated in a form that survives a fourth
+		// role. 0060 adds the CHECK; this case is what keeps it and oidc.Roles
+		// moving together, and is what makes ADDING the CHECK safe -- without it
+		// the constraint would re-import 0053's incident onto token minting.
+		{"api_tokens", "role", stringSet(oidc.Roles...)},
 		// 0052's governance_assignments.subject_type — the SAME closed enum
 		// capability_grants.subject_type above carries, reused rather than
 		// re-enumerated (types.CapabilitySubjectType is the one Go definition

@@ -592,6 +592,15 @@ const driveHomeHashLen = 20
 // is never the GRANT's subject — a group grant's subject would give an entire
 // group one home, and re-pointing a grant would move a member's data.
 func DriveHomeName(d UserDrive, subject, override string) (string, error) {
+	// THE OVERRIDE IS NOT SUBJECT TO THE MANAGED HASH-ONLY RULE, deliberately.
+	// That rule (ValidateUserDrive) refuses a TEMPLATE on a managed backend
+	// because a template derives the home from the sign-in subject AUTOMATICALLY
+	// — every allocation publishes its principal into an object name as a
+	// mechanical consequence, with nobody deciding per person. An override is the
+	// opposite: one literal an admin typed for one named allocation, the same
+	// decision they make naming a directory on a share. Asked and answered here
+	// so the next audit does not have to re-derive it: automatic derivation from
+	// the subject is refused; an operator's explicit choice remains theirs.
 	if seg := strings.ToLower(strings.TrimSpace(override)); seg != "" {
 		// Re-checked against THIS drive's backend rule, not just the write
 		// boundary's: ValidateUserDriveGrant holds only the grant row and
@@ -813,12 +822,26 @@ func ValidateUserDrive(d *UserDrive, runnerTarget string) error {
 	//
 	// REFUSED, not warned: the collision is invisible from the admin surface
 	// (both allocations preview a perfectly well-formed object name), and the
-	// two remedies are cheap — `hash`, which puts the subject in the digest and
-	// is already the default, or `sub`, which is unique by definition.
-	if d.Backend.Kind() == DriveKindManaged && d.HomeTemplate == HomeTemplateEmailLocal {
+	// the remedy is cheap — `hash`, which puts the subject in the digest and is
+	// already the default.
+	//
+	// SCOPE WIDENED (2026-09-03): the refusal covers EVERY non-hash template on a
+	// managed backend, not just email_local. `sub` was previously allowed here as
+	// the collision-free alternative, which answered collision but never asked the
+	// EXPOSURE question DriveSubjectHash settles for labels: the home segment is
+	// concatenated into the object name (DriveObjectName -> `wardyn-drive-<home>`),
+	// and an object name is read by `docker volume ls` / `kubectl get pvc` WITHOUT
+	// the inspect or describe a label needs. So `sub` was refused in the LESS
+	// exposed place and permitted in the MORE exposed one. `hash` is unique AND
+	// reveals nothing, so nothing is lost: a managed volume's name is not a thing
+	// a human navigates, which is precisely what a share backend is for — and
+	// share backends keep every template.
+	if d.Backend.Kind() == DriveKindManaged && d.HomeTemplate != "" && d.HomeTemplate != HomeTemplateHash {
 		return fmt.Errorf("home_template %q is not allowed on a managed backend — Wardyn names the object after the "+
-			"directory, so two people whose addresses share the part before the \"@\" would be allocated one %s object; "+
-			"pick %s (the default) or %s", HomeTemplateEmailLocal, d.Backend, HomeTemplateHash, HomeTemplateSub)
+			"directory, so the template lands in a %s object name that `docker volume ls` and `kubectl get pvc` show "+
+			"without inspecting anything; %s also collides two people whose addresses share the part before the \"@\". "+
+			"Use %s, which is unique and reveals nothing; a share backend keeps every template",
+			d.HomeTemplate, d.Backend, HomeTemplateEmailLocal, HomeTemplateHash)
 	}
 	if d.SizeMiB < 0 {
 		return fmt.Errorf("size_mib: must not be negative")

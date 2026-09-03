@@ -1,0 +1,52 @@
+-- Copyright 2025 The Wardyn Authors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- One directory, one principal: make the cross-principal collision on
+-- user_drive_grants.home_override impossible in the DATABASE, not only in the
+-- statement that writes it.
+--
+-- home_override is 0054's single stored exception to deriving a member's
+-- directory from their own identity: an admin stating "Bob's directory on the
+-- NAS is bsmith" is a fact about a filesystem Wardyn does not own, and no
+-- derivation may out-vote it. 0054 constrains WHO may carry one (user-tier
+-- only -- on a group or all row it would hand a whole group one directory) but
+-- nothing stopped the SAME override being typed on TWO user-tier grants for one
+-- drive, which hands two people one storage object: each mounts /home/agent/
+-- drive over the other's bytes, and the per-user subdirectory that isolation
+-- rests on is gone. The derived names cannot collide (a truncated sha256 of the
+-- drive id and the subject), so this is the one place the isolation is a typo
+-- away.
+--
+-- The store's upsert carries an application guard for this and KEEPS it: that
+-- guard answers the reachable case (an admin typing the same directory twice)
+-- in one statement, with an error the API can turn into a 409, which a raw
+-- 23505 from an index is not. What it cannot do is exclude a concurrent second
+-- writer -- two upserts that both pass the guard before either commits still
+-- land two rows. The index is the race-free floor UNDER the guard, not a
+-- replacement for it, and the two are meant to coexist.
+--
+-- PARTIAL, on home_override <> '': the empty string is the ordinary case (no
+-- override, derive the name), and every grant without one would otherwise
+-- collide with every other. The predicate is safe because 0054 declares the
+-- column NOT NULL DEFAULT '' -- verified against the live catalog, attnotnull =
+-- true, so "unset" is genuinely '' and never NULL. Had it been nullable, `<> ''`
+-- would silently drop every NULL row out of the constraint, which is exactly the
+-- shape this class of bug keeps taking.
+--
+-- ON EXISTING DATA: none can exist. user_drive_grants is created by 0054, which
+-- is new in this release (0.6.6 ships migrations through 0049), so no deployed
+-- database holds a row of this table at all. If this nevertheless fails on a
+-- development database, Postgres reports `could not create unique index` and
+-- names the index but NOT the offending rows -- find them with:
+--
+--   SELECT drive_id, home_override, count(*)
+--     FROM user_drive_grants WHERE home_override <> ''
+--    GROUP BY 1, 2 HAVING count(*) > 1;
+--
+-- and change one side's directory name. The migration is deliberately left to
+-- fail loudly rather than skip itself: an index that silently did not get
+-- created would leave the floor missing with nothing to say so.
+
+CREATE UNIQUE INDEX IF NOT EXISTS user_drive_grants_home_override_idx
+    ON user_drive_grants (drive_id, home_override)
+    WHERE home_override <> '';

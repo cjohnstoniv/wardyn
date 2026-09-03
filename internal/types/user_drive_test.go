@@ -490,8 +490,23 @@ func TestValidateUserDrive(t *testing.T) {
 			drive: ok(func(d *UserDrive) {
 				d.Backend, d.HomeTemplate, d.SizeMiB = DriveBackendK8sPVC, HomeTemplateEmailLocal, 10240
 			}), target: "k8s", wantErr: true},
-		{name: "a managed volume templated on sub is accepted",
-			drive: ok(func(d *UserDrive) { d.HomeTemplate = HomeTemplateSub }), target: "docker"},
+		// `sub` was accepted here until 2026-09-03. It answered the COLLISION
+		// question (a sub is unique) but not the EXPOSURE one: the home segment is
+		// concatenated into the object name, which `docker volume ls` shows without
+		// the inspect a label needs — so the subject was refused in the less exposed
+		// place (DriveSubjectHash's label rule) and permitted in the more exposed one.
+		{name: "a managed volume cannot be templated on sub — the object name shows it",
+			drive: ok(func(d *UserDrive) { d.HomeTemplate = HomeTemplateSub }), target: "docker", wantErr: true},
+		{name: "a managed pvc cannot be templated on sub either",
+			drive: ok(func(d *UserDrive) {
+				d.Backend, d.HomeTemplate, d.SizeMiB = DriveBackendK8sPVC, HomeTemplateSub, 10240
+			}), target: "k8s", wantErr: true},
+		{name: "a managed volume on the hash template is still accepted (the not-everything-is-refused control)",
+			drive: ok(func(d *UserDrive) { d.HomeTemplate = HomeTemplateHash }), target: "docker"},
+		{name: "a share may still be templated on sub",
+			drive: ok(func(d *UserDrive) {
+				d.Backend, d.HomeTemplate, d.HostRoot = DriveBackendHostPath, HomeTemplateSub, "/srv/homes"
+			}), target: "docker"},
 		// …and the refusal is scoped to MANAGED. A share's directories are named
 		// by whoever owns the share, and `email_local` is the corporate shape the
 		// template exists for.
@@ -530,52 +545,59 @@ func TestValidateUserDrive(t *testing.T) {
 	})
 }
 
-// TestManagedBackendRefusesTheEmailLocalTemplate is the write boundary's half of
+// TestManagedBackendTakesOnlyTheHashTemplate is the write boundary's half of
 // the ONE guarantee a managed drive rests on: the object name Wardyn mints for
 // a person is that person's alone.
 //
-// A claim template is not injective over principals. `email_local` drops the
-// domain, so alice@corp.example and alice@partner.example — a guest/B2B/
-// contractor tenant, the exact deployment shape user drives target — derive one
-// home and therefore ONE Docker volume and ONE PVC; `sub` is lowercased, so two
-// subjects differing only in case do the same. On a SHARE that is the
-// directory's own hazard and a home_override answers it, because Wardyn is only
-// binding a directory somebody else named. On a MANAGED backend Wardyn is
-// CREATING the object, so accepting such a template is Wardyn mounting one
-// member's persistent storage into another member's sandbox — read-write when
-// the allocation is writable.
+// TWO REASONS, and the second is why `sub` is refused alongside `email_local`.
+//
+// COLLISION: a claim template is not injective over principals. `email_local`
+// drops the domain, so alice@corp.example and alice@partner.example — a
+// guest/B2B/contractor tenant, the exact deployment shape user drives target —
+// derive one home and therefore ONE Docker volume and ONE PVC. On a MANAGED
+// backend Wardyn is CREATING that object, so accepting such a template is
+// Wardyn mounting one member's storage into another member's sandbox,
+// read-write when the allocation is writable.
+//
+// EXPOSURE: the object NAME carries the template's output, and `docker volume
+// ls` / `kubectl get pvc` show it to anyone who can reach the daemon or the
+// namespace WITHOUT inspecting anything. `sub` is injective, so it answers the
+// collision question — but it writes the sign-in subject into that name, which
+// is the very thing types.DriveSubjectHash refuses to put in a mere LABEL. A
+// rule that forbade the subject in the less exposed place and permitted it in
+// the more exposed one was answering only half the question.
+//
+// On a SHARE neither reason applies: the directories exist under names Wardyn
+// did not choose, so a claim template is the only thing that can name one, and
+// the same-local-part hazard belongs to whoever minted them.
 //
 // The test proves both halves: the refusal, and the collision that makes the
 // refusal load-bearing rather than tidy.
-func TestManagedBackendRefusesTheEmailLocalTemplate(t *testing.T) {
+func TestManagedBackendTakesOnlyTheHashTemplate(t *testing.T) {
 	managed := []DriveBackend{DriveBackendDockerVolume, DriveBackendK8sPVC}
 
-	t.Run("the write boundary refuses email_local on a managed backend", func(t *testing.T) {
+	t.Run("the write boundary refuses EVERY claim template on a managed backend", func(t *testing.T) {
 		for _, b := range managed {
-			d := UserDrive{Name: "Corp NAS", Backend: b, HomeTemplate: HomeTemplateEmailLocal, SizeMiB: 10240}
-			err := ValidateUserDrive(&d, b.RunnerTarget())
-			if err == nil {
-				t.Errorf("ValidateUserDrive(%s, email_local) = nil, want a refusal — Wardyn mints this "+
-					"object, and a name that drops the domain is two people's", b)
-				continue
-			}
-			// The admin has to be able to act on it: the message names the
-			// template they picked and one that works.
-			if !strings.Contains(err.Error(), string(HomeTemplateEmailLocal)) ||
-				!strings.Contains(err.Error(), string(HomeTemplateHash)) {
-				t.Errorf("ValidateUserDrive(%s, email_local) = %v, want a message naming both %q and %q",
-					b, err, HomeTemplateEmailLocal, HomeTemplateHash)
-			}
-			// SCOPED: the refusal is about the template that is not injective
-			// over principals, not about managed drives having a template at
-			// all. `sub` stays legal on a managed backend — a deliberate call
-			// on the RC ("unique by definition"); see the merge report for the
-			// residual it leaves.
-			for _, tmpl := range []HomeTemplate{HomeTemplateHash, HomeTemplateSub} {
-				ok := UserDrive{Name: "Corp NAS", Backend: b, HomeTemplate: tmpl, SizeMiB: 10240}
-				if err := ValidateUserDrive(&ok, b.RunnerTarget()); err != nil {
-					t.Errorf("ValidateUserDrive(%s, %s) = %v, want it accepted", b, tmpl, err)
+			for _, tmpl := range []HomeTemplate{HomeTemplateEmailLocal, HomeTemplateSub} {
+				d := UserDrive{Name: "Corp NAS", Backend: b, HomeTemplate: tmpl, SizeMiB: 10240}
+				err := ValidateUserDrive(&d, b.RunnerTarget())
+				if err == nil {
+					t.Errorf("ValidateUserDrive(%s, %s) = nil, want a refusal — Wardyn mints this object, "+
+						"and a claim-derived name is both a collision and an exposure", b, tmpl)
+					continue
 				}
+				// The admin has to be able to act on it: the message names the
+				// template they picked and the one that works.
+				if !strings.Contains(err.Error(), string(tmpl)) || !strings.Contains(err.Error(), string(HomeTemplateHash)) {
+					t.Errorf("ValidateUserDrive(%s, %s) = %v, want a message naming both %q and %q",
+						b, tmpl, err, tmpl, HomeTemplateHash)
+				}
+			}
+			// SCOPED: the refusal is about the CLAIM templates, not about a
+			// managed drive having a template at all.
+			ok := UserDrive{Name: "Corp NAS", Backend: b, HomeTemplate: HomeTemplateHash, SizeMiB: 10240}
+			if err := ValidateUserDrive(&ok, b.RunnerTarget()); err != nil {
+				t.Errorf("ValidateUserDrive(%s, hash) = %v, want it accepted", b, err)
 			}
 		}
 	})
