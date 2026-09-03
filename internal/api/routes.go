@@ -160,6 +160,14 @@ func (s *Server) routes() chi.Router {
 			// human's API token, promote a workspace's observed egress, author
 			// governance profiles.
 			//
+			// "a human's" INCLUDES A SUPER ADMIN'S, and the revoke route's
+			// {"all":true} arm is deployment-wide — see handleRevokeSessions
+			// (sessions.go) for why that is the tier working rather than a hole,
+			// and TestSecurityAdminRevokesSuperAdmin for the pin. Stated here
+			// because "only ever SUBTRACTS reach" is the justification that put
+			// the route on this group, and a reader is entitled to know it was
+			// measured against a target in the tier ABOVE, not just a member.
+			//
 			// NOT a rung below operatorOnly on a ladder — the two tiers overlap
 			// on this surface and deliberately do not nest. A security admin's
 			// SSH key and attach ticket still stamp `member`, so the tier never

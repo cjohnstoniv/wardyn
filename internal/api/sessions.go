@@ -37,6 +37,43 @@ type revokeSessionsRequest struct {
 //
 // Mounted only when OIDC + SessionRevocations are both wired (see routes.go)
 // — with no OIDC session mechanism there is nothing to revoke.
+//
+// NO TARGET-ROLE GUARD, DELIBERATELY — and this is the SECURITY_ADMIN tier
+// (securityOps, routes.go), so a security admin may cut a SUPER ADMIN's
+// sessions and tokens, and the All arm below cuts every principal's. Asked
+// directly: should a security admin be refused a target in the tier above?
+// No, and the reasons are structural rather than a judgement call:
+//
+//   - Revocation only SUBTRACTS. It hands the caller nothing — no session, no
+//     token, no reach — which is the exact property that put this route on
+//     securityOps at all. A guard here would protect no capability; it would
+//     only decide who may perform an audited subtraction.
+//   - Incident response IS this tier's job. RevokeAll's own doc calls it "the
+//     incident-response 'log everyone out' lever", and a lever that exempts the
+//     most privileged accounts is not one — a compromised super-admin session
+//     is precisely the case you buy it for.
+//   - The tiers deliberately DO NOT NEST (routes.go's securityOps rationale).
+//     "security_admin may not act on admin" would be a ladder assertion, and
+//     the ladder is the shape this design refuses; the asymmetry it DOES keep
+//     is the one that matters — a security admin's SSH key and attach ticket
+//     still stamp member, so this tier never yields a shell in a foreign
+//     sandbox.
+//   - It is not a lockout, so it cannot be used to hold the deployment. The
+//     cutoff is a TIMESTAMP (oidc.SessionRevocations.IsSessionRevoked), so the
+//     target signs in again and their new session's issued-at clears it; and
+//     adminAuth (http.go) never consults revocations, so the admin bearer
+//     break-glass survives even the All arm. A rogue security admin cannot
+//     revoke their way to an un-revertible position.
+//
+// What a guard here WOULD have cost is the case it exists for: a super admin
+// whose session is the compromised one, at 3am, with the security admin the
+// only person on call.
+//
+// API tokens are the asymmetric half and the reason the All arm is an incident
+// lever rather than a routine one: unlike sessions they do not self-heal, and
+// every automation credential in the deployment must be re-minted by hand.
+// Pinned by TestSecurityAdminRevokesSuperAdmin; stated for operators in
+// docs/OPERATIONS.md's security-admin section.
 func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 	var body revokeSessionsRequest
 	if !decodeStrict(w, r, &body) {

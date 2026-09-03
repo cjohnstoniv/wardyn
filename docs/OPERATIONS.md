@@ -868,6 +868,28 @@ their own egress is an audited act, visible in the log they cannot rewrite. No
 capability grant can widen anyone to admin; that invariant is what makes
 delegating `/permissions` safe.
 
+**A security admin's revocations reach the super admin, deliberately.** "Revoke
+sessions and API tokens" above is not scoped to members: `POST
+/api/v1/sessions/revoke` applies no target-role check, so a security admin may
+cut a *super admin's* sessions and tokens by `sub`, and the `{"all":true}` arm
+logs out **every** principal and revokes **every** live API token in the
+deployment — CI and automation credentials included — in one audited call. That
+is the tier working as designed. Incident response is the security admin's job,
+the two tiers deliberately do not nest (a security admin still cannot reach into
+a run, and their SSH key and attach ticket still stamp `member`), and a
+revocation only ever *subtracts* reach — it grants the caller nothing.
+
+What bounds it is that a revocation is not a lockout. The session cutoff is a
+**timestamp**, not a flag: signing in again mints a session issued after the
+cutoff, which clears it with no operator action. The **admin bearer token never
+consults revocations at all**, so the break-glass above survives a
+`{"all":true}` — a security admin cannot use this to lock the deployer out of
+undoing it. API tokens are the one part that does not self-heal: they are
+revoked permanently and must be re-minted, so treat `{"all":true}` as an
+incident lever rather than a routine one. Every call is audited as
+`session.revoke` with its scope and the number of tokens revoked, under the
+calling security admin's own principal.
+
 **User (member).** Signs in, runs agents inside the governance profile their group
 is assigned (or the deployment ceiling if none). The profile is enforced outside
 the sandbox: inline policies are clamped to it, saved policies are clamped to it

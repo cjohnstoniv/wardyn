@@ -236,3 +236,102 @@ func TestRevokeSessions_AuditEmitted(t *testing.T) {
 		t.Error("no session.revoke audit event recorded")
 	}
 }
+
+// ─── the SEC-over-SUPER direction (Requirement 3) ────────────────────────────
+
+// TestSecurityAdminRevokesSuperAdmin pins the answer to "may a security_admin
+// revoke a SUPER admin's sessions and tokens". YES — deliberately, and this
+// test is what makes that a decision rather than an accident.
+//
+// It was previously unpinned in BOTH directions: TestSecurityAdminRouteTier
+// (authz_test.go) probes this route with bodyFor("POST") == "{}", which 400s in
+// handleRevokeSessions' default arm before any target is named, so it proves
+// only that the router gate admits a security_admin. Every test in this file
+// used an ADMIN caller. Nothing anywhere named a super admin as the TARGET, so
+// adding a target-role guard would have reddened nothing.
+//
+// The reasoning is on handleRevokeSessions; the short form is that revocation
+// only ever SUBTRACTS reach, incident response is this tier's job, and it is
+// not a lockout — which the last two subtests pin, because they are what bound
+// the blast radius.
+func TestSecurityAdminRevokesSuperAdmin(t *testing.T) {
+	const superSub = "sub-the-deployer"
+	secAdmin := func(t *testing.T) *http.Cookie {
+		return ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
+	}
+
+	t.Run("by sub: the super admin's sessions AND tokens go", func(t *testing.T) {
+		superTok, secTok := uuid.New(), uuid.New()
+		srv, fake, st := sessionsTestServerWithTokens(t, []types.APIToken{
+			{ID: superTok, Principal: superSub},
+			{ID: secTok, Principal: secAdminSub},
+		})
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", secAdmin(t),
+			`{"sub":"`+superSub+`"}`)
+		if w.Code != http.StatusNoContent {
+			t.Fatalf("status = %d, want 204 — a security admin must be able to cut a compromised super-admin session; "+
+				"if this is now a 403, the tier boundary changed and OPERATIONS.md's security-admin section says otherwise; body=%s",
+				w.Code, w.Body.String())
+		}
+		if len(fake.revokedSubs) != 1 || fake.revokedSubs[0] != superSub {
+			t.Errorf("revokedSubs = %v, want [%s]", fake.revokedSubs, superSub)
+		}
+		// The token half is the part that does NOT self-heal, so it is the part
+		// worth naming: a wdn_ bearer authenticates as the human and never
+		// consults the session cutoff.
+		if len(st.revoked) != 1 || st.revoked[0] != superTok {
+			t.Errorf("revoked tokens = %v, want exactly the super admin's %s (and not the caller's own %s)",
+				st.revoked, superTok, secTok)
+		}
+	})
+
+	t.Run("all: deployment-wide, super admin included", func(t *testing.T) {
+		superTok, memberTok := uuid.New(), uuid.New()
+		srv, fake, st := sessionsTestServerWithTokens(t, []types.APIToken{
+			{ID: superTok, Principal: superSub},
+			{ID: memberTok, Principal: "sub-member"},
+		})
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", secAdmin(t), `{"all":true}`)
+		if w.Code != http.StatusNoContent {
+			t.Fatalf("status = %d, want 204; body=%s", w.Code, w.Body.String())
+		}
+		if fake.revokedAll != 1 {
+			t.Errorf("revokedAll = %d, want 1", fake.revokedAll)
+		}
+		if len(st.revoked) != 2 {
+			t.Errorf("revoked = %v, want every live token in the deployment (%s, %s) — "+
+				"this arm destroys CI/automation credentials too, which is why it is documented as an incident lever",
+				st.revoked, superTok, memberTok)
+		}
+	})
+
+	// THE BOUND, and the reason the direction above is acceptable: adminAuth
+	// (http.go) never consults SessionRevocations, so the admin bearer — the
+	// break-glass OPERATIONS.md promises — still authenticates after a
+	// deployment-wide revoke. Without this, a security admin could revoke their
+	// way into a position no super admin could undo.
+	t.Run("the admin bearer break-glass survives a revoke-all", func(t *testing.T) {
+		srv, _, _ := sessionsTestServerWithTokens(t, nil)
+		if w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", secAdmin(t), `{"all":true}`); w.Code != http.StatusNoContent {
+			t.Fatalf("revoke-all: status = %d; body=%s", w.Code, w.Body.String())
+		}
+		w := do(t, srv, http.MethodPost, "/api/v1/sessions/revoke", adminToken, `{"all":true}`)
+		if w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden {
+			t.Fatalf("the admin bearer was refused (%d) after a revoke-all: the break-glass is gone and a security admin "+
+				"can hold the deployment; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	// The tier stops where the design says it stops: a MEMBER is still refused,
+	// so this test cannot be read as "the route is simply open".
+	t.Run("a member is still refused", func(t *testing.T) {
+		srv, fake, _ := sessionsTestServerWithTokens(t, nil)
+		member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+		if w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", member, `{"sub":"`+superSub+`"}`); w.Code != http.StatusForbidden {
+			t.Errorf("member: status = %d, want 403", w.Code)
+		}
+		if len(fake.revokedSubs) != 0 {
+			t.Errorf("a member's request reached RevokeSub: %v", fake.revokedSubs)
+		}
+	})
+}
