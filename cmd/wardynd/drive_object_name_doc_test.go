@@ -5,6 +5,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -101,28 +102,17 @@ func TestDocumentedDriveObjectNamesMatchTheFunction(t *testing.T) {
 	}
 
 	root := repoRoot(t)
-	skipDir := map[string]bool{".git": true, "node_modules": true, "vendor": true, "dist": true}
 	files, hits := 0, 0
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+	for _, rel := range trackedMarkdown(t, root) {
+		b, rerr := os.ReadFile(filepath.Join(root, rel))
+		if os.IsNotExist(rerr) {
+			continue // tracked but deleted in this worktree
 		}
-		if d.IsDir() {
-			if skipDir[d.Name()] {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(d.Name(), ".md") {
-			return nil
+		if rerr != nil {
+			t.Fatalf("read %s: %v", rel, rerr)
 		}
 		files++
-		b, rerr := os.ReadFile(path)
-		if rerr != nil {
-			return rerr
-		}
 		src := string(b)
-		rel, _ := filepath.Rel(root, path)
 		for _, loc := range driveNameToken.FindAllStringIndex(src, -1) {
 			tok := src[loc[0]:loc[1]]
 			hits++
@@ -142,13 +132,9 @@ func TestDocumentedDriveObjectNamesMatchTheFunction(t *testing.T) {
 				"(it produces %v). An operator pasting that into a reclaim command matches nothing and reports the reclaim as done",
 				rel, line, tok, allowed)
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk repo: %v", err)
 	}
 	if files < 20 || hits == 0 {
-		t.Fatalf("scanned %d markdown files and %d names — the walk, not the docs, is what changed", files, hits)
+		t.Fatalf("scanned %d tracked markdown files and %d names — the enumeration, not the docs, is what changed", files, hits)
 	}
 }
 
@@ -198,4 +184,38 @@ func sectionBody(src, heading string) (string, bool) {
 		return rest[:j], true
 	}
 	return rest, true
+}
+
+// trackedMarkdown lists the repository's markdown files by asking GIT, not the
+// filesystem.
+//
+// The distinction is the whole correctness of a repo-wide documentation guard.
+// A filesystem walk grades whatever happens to be on someone's disk: campaign
+// planning notes under a gitignored directory, a downloaded file, another
+// agent's scratch. Those are not documentation the product ships, and failing a
+// build over their wording is noise that trains people to ignore the guard. The
+// invariant is about what SHIPS, and tracked-ness is the honest proxy for it —
+// anything shipped is tracked by definition, wherever it lives, which keeps the
+// property that matters: the threat model is covered without naming it, and so
+// is whatever new document is added next.
+//
+// git ls-files reads the INDEX, so a file that has been `git add`ed is already
+// covered before it is committed; the uncovered window is "written but not yet
+// staged", which no build-time check can see anyway.
+func trackedMarkdown(t *testing.T, root string) []string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", root, "ls-files", "-z", "--", "*.md").Output()
+	if err != nil {
+		// No git, or not a repository (a source tarball). The invariant is
+		// "documentation this repo ships", which cannot be evaluated without
+		// knowing what it ships — say so loudly rather than passing silently.
+		t.Skipf("cannot list tracked files (%v) — this guard grades SHIPPED documentation and needs git to know what that is", err)
+	}
+	var files []string
+	for _, f := range strings.Split(string(out), "\x00") {
+		if strings.HasSuffix(f, ".md") {
+			files = append(files, f)
+		}
+	}
+	return files
 }
