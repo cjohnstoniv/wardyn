@@ -573,22 +573,10 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	providers, claudeDetail := s.setupProviders()
 
 	// secrets: names only (reserved excluded); github_app iff both App secrets present.
-	secretNames := []string{}
-	if s.cfg.Secrets != nil {
-		names, err := s.listUserSecretNames(ctx)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "list secrets: "+err.Error())
-			return
-		}
-		secretNames = names
-	}
-	present := make(map[string]bool, len(secretNames))
-	for _, n := range secretNames {
-		present[n] = true
-	}
-	sec := SetupSecrets{
-		Present:   secretNames,
-		GitHubApp: present[secretGitHubAppID] && present[secretGitHubAppKey],
+	secretNames, present, sec, err := s.setupSecretsSnapshot(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list secrets: "+err.Error())
+		return
 	}
 
 	plat := setup.DetectPlatform()
