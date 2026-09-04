@@ -590,8 +590,10 @@ describe("NewRunScreen — the member's drive reaches the wire", () => {
     renderAsMember(withDrive);
 
     expect(await screen.findByLabelText(DM.NR_CHECKBOX)).toBeInTheDocument();
-    expect(screen.getByLabelText(DM.NR_READONLY_TOGGLE)).toBeInTheDocument();
     await user.click(screen.getByLabelText(DM.NR_CHECKBOX));
+    // The narrowing rides the MOUNT: it is offered once this run has a mount
+    // to narrow, never over an unticked checkbox that sends no `drive` at all.
+    expect(screen.getByLabelText(DM.NR_READONLY_TOGGLE)).toBeInTheDocument();
     await user.type(screen.getByLabelText("Title"), "Refund flow");
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());

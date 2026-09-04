@@ -304,6 +304,30 @@ describe("DrivesScreen — the editor offers only this runner's backends (Q3)", 
     expect(within(editor).getByLabelText(DRIVES.FIELD_STORAGE_CLASS)).toBeInTheDocument();
   });
 
+  // wardynd's DEFAULT runner is `none` (cmd/wardynd/boot_deps.go), and NO
+  // backend's RunnerTarget() is `none` — types.ValidateUserDrive compares the
+  // two, so on that deployment every save is refused, create and update alike.
+  // The picker is therefore empty, and the Save that would compose a 400
+  // naming a backend the admin never saw is not offered either: the `backend`
+  // state's fallback is a type floor, not a choice.
+  it("a runner that can mount NO backend offers none — and cannot save the one it fell back to", async () => {
+    renderScreen(snapshot({ runner_target: "none" }));
+    const editor = await openNew();
+
+    for (const label of [
+      DRIVES.BACKEND_DOCKER_VOLUME,
+      DRIVES.BACKEND_HOST_PATH,
+      DRIVES.BACKEND_K8S_PVC,
+      DRIVES.BACKEND_K8S_PVC_STATIC,
+    ]) {
+      expect(within(editor).queryByText(label)).not.toBeInTheDocument();
+    }
+    // The one thing that otherwise ungates Save: a name.
+    await userEvent.type(within(editor).getByLabelText(DRIVES.FIELD_NAME), "Anything");
+    expect(within(editor).getByRole("button", { name: DRIVES.SAVE_CTA })).toBeDisabled();
+    expect(createDriveMock).not.toHaveBeenCalled();
+  });
+
   it("a share disables the derived directory name and moves off it rather than authoring a refusal", async () => {
     renderScreen();
     const editor = await openNew();
@@ -464,6 +488,33 @@ describe("DrivesScreen — delete: the pre-fill and the race are different refus
     expect(within(dialog).queryByText(DRIVES.DELETE_RESTRICT_BODY(LOOSE.name, 0))).not.toBeInTheDocument();
     expect(confirm).not.toBeDisabled();
   });
+
+  // ...and the same 409 is the authority on the COUNT. ALLOCATED_NONE is what
+  // let that dialog open unrestricted; the server has just said otherwise, so
+  // the row is re-read. Without it the table keeps the count the server refused
+  // and every later Delete on that row re-opens the same doomed confirm.
+  it("the race: the 409 re-reads the list, so the row stops claiming nobody holds it", async () => {
+    const conflict =
+      "this drive is still allocated — remove its allocations first (deleting it while allocated would leave those subjects with a mount that names nothing)";
+    const LOOSE = drive({ id: "d3", name: "Workbench", grant_count: 0 });
+    deleteDriveMock.mockRejectedValue(new HttpError(409, conflict));
+    // The first read is the stale one the dialog opened from; the re-read after
+    // the refusal carries the allocation the other admin had just written.
+    getDrivesMock.mockResolvedValueOnce(snapshot({ drives: [LOOSE] }));
+    getDrivesMock.mockResolvedValue(snapshot({ drives: [{ ...LOOSE, grant_count: 1 }] }));
+    render(<DrivesScreen />);
+    await screen.findByText(LOOSE.name);
+    expect(screen.getByText(DRIVES.ALLOCATED_NONE)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: `${DRIVES.DELETE} ${LOOSE.name}` }));
+    const dialog = await screen.findByRole("alertdialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: DRIVES.DELETE }));
+    expect(await within(dialog).findByText(conflict)).toBeInTheDocument();
+
+    expect(await screen.findByText(DRIVES.ALLOCATED_COUNT(1))).toBeInTheDocument();
+    expect(screen.queryByText(DRIVES.ALLOCATED_NONE)).not.toBeInTheDocument();
+    expect(getDrivesMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("DrivesScreen — allocations", () => {
@@ -554,14 +605,14 @@ describe("DrivesScreen — allocations", () => {
     await userEvent.click(screen.getByRole("button", { name: DRIVES.ADD_CTA }));
 
     expect(await screen.findByText(DRIVES.ALLOC_REPLACED)).toBeInTheDocument();
-    // "Same as the drive" is the wire's absent *bool, so no key is sent at all.
+    // "Same as the drive" is the wire's absent *bool, so no key is sent at all
+    // — and neither is home_override, which this form never looked at.
     expect(upsertGrantMock).toHaveBeenCalledWith({
       subject_type: "group",
       subject: "wardyn.platform",
       drive_id: SCRATCH.id,
       priority: 0,
       size_mib_override: 0,
-      home_override: "",
       enabled: true,
     });
 
@@ -605,7 +656,6 @@ describe("DrivesScreen — the allocation form's wire shapes", () => {
     drive_id: SCRATCH.id,
     priority: 0,
     size_mib_override: 0,
-    home_override: "",
     enabled: true,
   };
 
@@ -651,6 +701,53 @@ describe("DrivesScreen — the allocation form's wire shapes", () => {
     await allocate();
     expect(upsertGrantMock).toHaveBeenCalledWith({ ...base, enabled: false });
     expect(deleteGrantMock).not.toHaveBeenCalled();
+  });
+
+  // home_override is a POINTER on the wire, and the store writes the column
+  // VERBATIM: an unstated key keeps whatever directory name is pinned, while a
+  // sent "" clears it. A form that stated the key on every submit therefore
+  // re-homed anyone whose allocation it repointed without ever looking at this
+  // field — silently, which is the act the server now answers 409 for.
+  it("an untouched directory field states NO home_override at all", async () => {
+    renderScreen();
+    await screen.findByText(DRIVES.ALLOC_TITLE);
+    await userEvent.click(screen.getByRole("button", { name: PERM.SUBJECT_USER }));
+    await fill("bob@corp.example");
+    await allocate();
+
+    expect(upsertGrantMock.mock.calls[0][0]).not.toHaveProperty("home_override");
+    expect(upsertGrantMock).toHaveBeenCalledWith({
+      ...base,
+      subject_type: "user",
+      subject: "bob@corp.example",
+    });
+  });
+
+  it("a name typed and then cleared states an EMPTY home_override — the deliberate drop", async () => {
+    renderScreen();
+    await screen.findByText(DRIVES.ALLOC_TITLE);
+    await userEvent.click(screen.getByRole("button", { name: PERM.SUBJECT_USER }));
+    await fill("bob@corp.example");
+    const home = screen.getByLabelText(DRIVES.FIELD_HOME_OVERRIDE);
+    await userEvent.type(home, "bsmith");
+    await userEvent.clear(home);
+    await allocate();
+
+    expect(upsertGrantMock).toHaveBeenCalledWith({
+      ...base,
+      subject_type: "user",
+      subject: "bob@corp.example",
+      home_override: "",
+    });
+  });
+
+  // The tier that may not carry one never states it either — a group row with
+  // home_override: "" is a 400 the form would have authored for itself.
+  it("a group row states no home_override", async () => {
+    renderScreen();
+    await fill();
+    await allocate();
+    expect(upsertGrantMock.mock.calls[0][0]).not.toHaveProperty("home_override");
   });
 
   it("a user-tier row carries its directory name and its size override", async () => {

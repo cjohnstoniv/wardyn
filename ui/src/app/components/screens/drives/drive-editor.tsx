@@ -89,6 +89,17 @@ export function DriveEditor({
   // from the screen — the same read the sibling UserDrivesCard makes.
   const disabled = !useOperator();
   const offered = backendsFor(runnerTarget);
+  // NOTHING THIS RUNNER CAN MOUNT IS STILL AN ANSWER. wardynd's DEFAULT runner
+  // is `none` (cmd/wardynd/boot_deps.go), and backendsFor() offers no pair for
+  // it — nor for a substrate this build does not know — rather than guessing
+  // one whose every save would 400. types.ValidateUserDrive compares
+  // Backend.RunnerTarget() against the deployment's, and no backend's target is
+  // `none`, so on such a deployment EVERY save is refused, create and update
+  // alike. The `backend` state below therefore falls back to a TYPE FLOOR the
+  // admin never picked, and saving it would meet a refusal naming a backend
+  // that was never on screen — so the save is not offered at all. (An explicit
+  // sentence for the empty field is FILED: §7.2 freezes none.)
+  const noBackend = offered.length === 0;
   const [name, setName] = React.useState(drive?.name ?? "");
   const [backend, setBackend] = React.useState<DriveBackend>(drive?.backend ?? offered[0] ?? "docker_volume");
   const [hostRoot, setHostRoot] = React.useState(drive?.host_root ?? "");
@@ -309,7 +320,7 @@ export function DriveEditor({
         </Button>
         {/* The screen's ONE `default` button while the editor is open — the
             allocation form below collapses and takes its teal with it. */}
-        <Button onClick={save} disabled={disabled || saving || !name.trim()}>
+        <Button onClick={save} disabled={disabled || saving || noBackend || !name.trim()}>
           {saving ? <Loader2 className="size-4 animate-spin" /> : null}
           {DRIVES.SAVE_CTA}
         </Button>

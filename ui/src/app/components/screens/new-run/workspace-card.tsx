@@ -100,7 +100,17 @@ function DriveBlock({
   // allocation narrowed for this run is read-only here, so the hint's {mode}
   // and the sentence after it flip together and neither promises persistence a
   // read-only mount cannot give.
-  const writable = drive.writable && !readOnly;
+  //
+  // A NARROWING NEEDS A MOUNT TO NARROW. With the checkbox off this run mounts
+  // nothing — wizard-spec.ts emits `drive` only for driveEnabled, so
+  // `read_only` would ride nothing — and the sentence above is an OFFER, not a
+  // description of this run. So `driveReadOnly` is read only while the mount is
+  // on: the toggle is absent below rather than live over a mount that is not
+  // happening, and the offer describes the allocation as the admin granted it.
+  // The mock draws both toggle states with the checkbox ON
+  // (docs/design/user-drives-mock/index.html 7a/7b) and none with it off (7c).
+  const narrowed = enabled && readOnly;
+  const writable = drive.writable && !narrowed;
   const mode = driveModeWord(writable);
   const size = driveSizeLabel(drive.size_mib);
   return (
@@ -126,10 +136,13 @@ function DriveBlock({
           </p>
         </div>
       </div>
-      {/* Only a WRITABLE allocation can be narrowed, and it defaults OFF (Q5):
-          a run may narrow what an admin granted, never widen it, so there is
-          no matching control on a read-only allocation to disable. */}
-      {drive.writable && (
+      {/* Only a WRITABLE allocation being MOUNTED can be narrowed, and the
+          narrowing defaults OFF (Q5): a run may narrow what an admin granted,
+          never widen it, so there is no matching control on a read-only
+          allocation to disable — and none on an unmounted one, which has no
+          mount to make read-only. Absent, never disabled: the same shape the
+          reason lines above take. */}
+      {enabled && drive.writable && (
         <label
           htmlFor="nr-drive-readonly"
           className="mt-2.5 ml-6 flex items-center gap-2 text-xs text-foreground"
