@@ -53,7 +53,7 @@ Features are not done until they pass the conformance suite (`test/conformance`)
 - Supply chain: `govulncheck`, `staticcheck`, `gitleaks` (secret scan),
   `go-licenses` (dependency license check), and SPDX license headers
   (`make license-headers`)
-- DCO: a `Signed-off-by` line on every commit (see Getting Started)
+- DCO: a `Signed-off-by` line on every commit (CI's `dco` job checks every commit in the pushed range; a new branch or a force-push is checked at its head only, so sign locally rather than relying on the gate) (see Getting Started)
 
 ### Large files
 
