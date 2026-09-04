@@ -531,3 +531,115 @@ func (s *Server) enforceInspectableLLM(ctx context.Context, run types.AgentRun, 
 	}
 	return true
 }
+
+// dispatchLLMPlan is what the LLM/credential-injection phase decides: the
+// resolved transport, the injection list it authored, and the TLS-MITM material
+// the proxy sidecar needs. A struct because the phase produces six values and
+// threading six returns through dispatchRun is how one of them gets dropped.
+type dispatchLLMPlan struct {
+	llm        llmTransport
+	injections []runner.InjectionGrant
+	// mitmCACertPEM/mitmCAKeyPEM are the per-run CA; empty unless some consumer
+	// needs one. The PRIVATE key reaches ONLY the proxy sidecar.
+	mitmCACertPEM string
+	mitmCAKeyPEM  string
+	// bedrockMITMHosts is the Bedrock bearer's per-run MITM host, if any.
+	bedrockMITMHosts []string
+	// mitmLLM is whether the BUILT-IN LLM hosts should be intercepted —
+	// subscription/managed injection or intercept_tls inspection, never a CA
+	// minted purely for artifact tokens. Computed here because every input to it
+	// is decided here; dispatchRun used to recompute the same disjunction inline.
+	mitmLLM bool
+}
+
+// resolveLLMInjections resolves the LLM transport and authors every proxy-side
+// injection that follows from it, as ONE phase.
+//
+// It is a phase and not a slice taken to satisfy a complexity counter: the
+// transport decision (host-staged subscription > managed > Bedrock > api-key
+// gateway) is what determines whether this run needs a MITM CA, a subscription
+// sentinel grant, a Bedrock bearer, or none of them — so the authoring steps are
+// consequences of one decision rather than neighbours that happen to be
+// adjacent. The corporate-CA install rides along because its placement is
+// load-bearing: before resolveEnvSecretGrants, so a user env_secret named
+// SSL_CERT_FILE cannot clobber the bundle it stages.
+//
+// FAIL CLOSED, and the ok return is the whole contract: each authoring helper
+// has already marked the run FAILED before returning false, so a false here
+// means "stop dispatching, the run is already terminal" — exactly what the four
+// bare returns meant when this lived inline.
+//
+// policy and sandboxEnv are MUTATED (egress widening for Bedrock, the auth env,
+// the trust store); injections is returned rather than mutated because
+// authorSubscriptionInjection reslices it.
+func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p dispatchParams,
+	policy *types.RunPolicySpec, sandboxEnv map[string]string, injections []runner.InjectionGrant,
+	proxyURL string, artifactPlan artifactRedirectPlan, artifactInject bool,
+) (dispatchLLMPlan, bool) {
+	llm := s.resolveLLMTransport(ctx, run, policy, sandboxEnv, injections, p.Interactive, p.TaskMode, proxyURL, p.BedrockRef)
+	if p.ResolvedManaged != nil {
+		*p.ResolvedManaged = llm.injectManaged
+	}
+
+	// Optional TLS-MITM of opaque LLM CONNECT tunnels: provision a per-run CA
+	// when ANY consumer needs one — intercept_tls content inspection,
+	// subscription/managed credential injection, artifact-token injection, or
+	// Bedrock bearer injection. The PRIVATE key reaches ONLY the proxy sidecar
+	// (ProxyConfig below); the sandbox trusts the PUBLIC cert. See
+	// provisionDispatchMITMCA for the trust-store wiring.
+	mitmForInspect := llmInspectMITMEnabled(policy)
+	var mitmCACertPEM, mitmCAKeyPEM string
+	if llm.injectSub || llm.injectManaged || mitmForInspect || artifactInject || llm.injectBedrockBearer {
+		var ok bool
+		if mitmCACertPEM, mitmCAKeyPEM, ok = s.provisionDispatchMITMCA(ctx, run, sandboxEnv); !ok {
+			return dispatchLLMPlan{}, false
+		}
+	}
+
+	// Corporate CA trust (WARDYN_TRUSTED_CA_FILE): append the operator's PEM to
+	// this run's sandbox CA trust exactly as provisionDispatchMITMCA does for
+	// the per-run MITM cert — see installSandboxTrustedCA. Runs unconditionally
+	// (no-op when the knob is unset) so a non-MITM run gets it too. Placed
+	// before resolveEnvSecretGrants below, so a user env_secret named
+	// SSL_CERT_FILE can never clobber the bundle this just staged.
+	installSandboxTrustedCA(s.cfg.TrustedCAPEM, sandboxEnv)
+
+	// Subscription / managed: author the proxy-side sentinel credential grant
+	// (see authorSubscriptionInjection for the re-mint + api-key-replacement
+	// rationale). A failed grant write already marked the run FAILED — stop.
+	if llm.injectSub || llm.injectManaged {
+		var ok bool
+		if injections, ok = s.authorSubscriptionInjection(ctx, run, llm, policy, injections); !ok {
+			return dispatchLLMPlan{}, false
+		}
+	}
+
+	// Bedrock BEARER injection + its per-run MITM host (see
+	// authorBedrockBearerInjection). Same stop-on-failure contract.
+	var bedrockMITMHosts []string
+	if llm.injectBedrockBearer {
+		var ok bool
+		if injections, bedrockMITMHosts, ok = s.authorBedrockBearerInjection(ctx, run, llm, injections); !ok {
+			return dispatchLLMPlan{}, false
+		}
+	}
+
+	// Artifact-redirect token injections (authored in planArtifactRedirect, whose
+	// egress substitution already added each corp host to policy.AllowedDomains, so
+	// the injector's exact-allowlist check passes). Appended AFTER the subscription
+	// block, which reslices `injections` in place.
+	injections = append(injections, artifactPlan.injections...)
+
+	// Fail CLOSED at schedule time when inspection is REQUIRED but the resolved
+	// LLM transport is OPAQUE — see enforceInspectableLLM.
+	if !s.enforceInspectableLLM(ctx, run, policy, llm) {
+		return dispatchLLMPlan{}, false
+	}
+
+	return dispatchLLMPlan{
+		llm: llm, injections: injections,
+		mitmCACertPEM: mitmCACertPEM, mitmCAKeyPEM: mitmCAKeyPEM,
+		bedrockMITMHosts: bedrockMITMHosts,
+		mitmLLM:          llm.injectSub || llm.injectManaged || mitmForInspect,
+	}, true
+}

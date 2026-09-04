@@ -298,65 +298,18 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// Bedrock > api-key gateway): sets the sandbox auth env (+ the codex-cli
 	// OpenAI gateway route), may widen policy egress for Bedrock, and reports
 	// which proxy-side injections / TLS-MITM this run needs.
-	llm := s.resolveLLMTransport(ctx, run, &policy, sandboxEnv, injections, p.Interactive, p.TaskMode, proxyURL, p.BedrockRef)
-	if p.ResolvedManaged != nil {
-		*p.ResolvedManaged = llm.injectManaged
-	}
-
-	// Optional TLS-MITM of opaque LLM CONNECT tunnels: provision a per-run CA
-	// when ANY consumer needs one — intercept_tls content inspection,
-	// subscription/managed credential injection, artifact-token injection, or
-	// Bedrock bearer injection. The PRIVATE key reaches ONLY the proxy sidecar
-	// (ProxyConfig below); the sandbox trusts the PUBLIC cert. See
-	// provisionDispatchMITMCA for the trust-store wiring.
-	mitmForInspect := llmInspectMITMEnabled(&policy)
-	var mitmCACertPEM, mitmCAKeyPEM string
-	if llm.injectSub || llm.injectManaged || mitmForInspect || artifactInject || llm.injectBedrockBearer {
-		var ok bool
-		if mitmCACertPEM, mitmCAKeyPEM, ok = s.provisionDispatchMITMCA(ctx, run, sandboxEnv); !ok {
-			return
-		}
-	}
-
-	// Corporate CA trust (WARDYN_TRUSTED_CA_FILE): append the operator's PEM to
-	// this run's sandbox CA trust exactly as provisionDispatchMITMCA does for
-	// the per-run MITM cert — see installSandboxTrustedCA. Runs unconditionally
-	// (no-op when the knob is unset) so a non-MITM run gets it too. Placed
-	// before resolveEnvSecretGrants below, so a user env_secret named
-	// SSL_CERT_FILE can never clobber the bundle this just staged.
-	installSandboxTrustedCA(s.cfg.TrustedCAPEM, sandboxEnv)
-
-	// Subscription / managed: author the proxy-side sentinel credential grant
-	// (see authorSubscriptionInjection for the re-mint + api-key-replacement
-	// rationale). A failed grant write already marked the run FAILED — stop.
-	if llm.injectSub || llm.injectManaged {
-		var ok bool
-		if injections, ok = s.authorSubscriptionInjection(ctx, run, llm, &policy, injections); !ok {
-			return
-		}
-	}
-
-	// Bedrock BEARER injection + its per-run MITM host (see
-	// authorBedrockBearerInjection). Same stop-on-failure contract.
-	var bedrockMITMHosts []string
-	if llm.injectBedrockBearer {
-		var ok bool
-		if injections, bedrockMITMHosts, ok = s.authorBedrockBearerInjection(ctx, run, llm, injections); !ok {
-			return
-		}
-	}
-
-	// Artifact-redirect token injections (authored in planArtifactRedirect, whose
-	// egress substitution already added each corp host to policy.AllowedDomains, so
-	// the injector's exact-allowlist check passes). Appended AFTER the subscription
-	// block, which reslices `injections` in place.
-	injections = append(injections, artifactPlan.injections...)
-
-	// Fail CLOSED at schedule time when inspection is REQUIRED but the resolved
-	// LLM transport is OPAQUE — see enforceInspectableLLM.
-	if !s.enforceInspectableLLM(ctx, run, &policy, llm) {
+	// LLM TRANSPORT + EVERY INJECTION THAT FOLLOWS FROM IT — resolved as one
+	// named phase (resolveLLMInjections, runs_dispatch_llm.go). It is a phase
+	// rather than a split chosen to satisfy a counter: the transport decides
+	// which proxy-side credentials this run needs, and the MITM CA, the
+	// subscription sentinel, the Bedrock bearer and the artifact tokens are all
+	// consequences of that one decision, each failing the run closed on its own
+	// authoring failure. ok=false means the run is already marked FAILED.
+	plan, ok := s.resolveLLMInjections(ctx, run, p, &policy, sandboxEnv, injections, proxyURL, artifactPlan, artifactInject)
+	if !ok {
 		return
 	}
+	llm, injections := plan.llm, plan.injections
 
 	// BROKERED GIT: make the broker route the only route to the managed host names.
 	// Last of the policy
@@ -433,19 +386,19 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			Injection: injections,
 			// Per-run TLS-MITM CA (empty unless intercept_tls): private key to the
 			// proxy only; the sandbox trusts the public cert via the agent env.
-			MITMCACertPEM: mitmCACertPEM,
-			MITMCAKeyPEM:  mitmCAKeyPEM,
+			MITMCACertPEM: plan.mitmCACertPEM,
+			MITMCAKeyPEM:  plan.mitmCAKeyPEM,
 			// Operator-configured corp artifact hosts the proxy is allowed to
 			// TLS-MITM (beyond the built-in LLM hosts) so a registry token injects on
 			// the wire. Only hosts with a resolved token injection appear here — a
 			// tight per-host allowlist, never a blanket. See isMITMHost widening.
-			MITMHosts: append(append([]string{}, artifactPlan.mitmHosts...), bedrockMITMHosts...),
+			MITMHosts: append(append([]string{}, artifactPlan.mitmHosts...), plan.bedrockMITMHosts...),
 			// MITM the BUILT-IN LLM hosts only when that's actually intended for this
 			// run — subscription OAuth injection or intercept_tls content inspection.
 			// The CA above may also be minted purely for artifact-token injection, so
 			// this keeps an artifact-only run from TLS-terminating a direct CONNECT to
 			// Anthropic/OpenAI it never asked to intercept.
-			MITMLLM: llm.injectSub || llm.injectManaged || mitmForInspect,
+			MITMLLM: plan.mitmLLM,
 			// Git-broker per-repo allowlist: the proxy's /wardyn/gh/ route serves only
 			// these "<org>/<repo>" keys (each -> its github_token grant), minting the
 			// scoped token proxy-side so it never enters the sandbox.
