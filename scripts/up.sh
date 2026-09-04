@@ -201,6 +201,39 @@ host_goarch() {
 # can never go stale across a network change. base64 because compose interpolates
 # `$` inside .env values; the payload is credential-masked before it is emitted.
 #
+# IMAGES_ORIGIN — how the wardyn/*:local images this run uses came to exist:
+#   built     compiled from THIS working tree (the default and the fallback)
+#   verified  pulled from ghcr and checked by cosign (signature + SBOM
+#             attestation, exactly docs/VERIFY.md s1 and s2)
+#   pulled    pulled from ghcr and checked by NOTHING (no cosign on PATH)
+# Set by cmd_up's pull-first block; read by seed_host_proxy, which extracts a
+# binary out of one of those images and executes it ON THE HOST.
+IMAGES_ORIGIN=built
+
+# cosign_verify REF — 0 verified, 1 verification FAILED, 2 cosign not installed.
+# Both halves, because they answer different questions: the signature says who
+# built the image, the CycloneDX attestation says what is inside it (VERIFY.md
+# s2 makes exactly this point). A caller that treats 2 as 0 is back to
+# announcing a check nobody ran.
+#
+# The identity + issuer are the same two values docs/VERIFY.md s1/s2 tell an
+# operator to paste, and they live INSIDE the function so extracting it
+# (scripts/test-claims-match-code.sh C4) yields something that actually runs.
+# Keyless: the check is "built by THIS repo's release workflow, from a tag",
+# not "signed by a key someone holds".
+cosign_verify() {
+  command -v cosign >/dev/null 2>&1 || return 2
+  COSIGN_ID_RE='^https://github\.com/cjohnstoniv/wardyn/\.github/workflows/release\.yml@refs/tags/v.*$'
+  COSIGN_ISSUER='https://token.actions.githubusercontent.com'
+  cosign verify \
+    --certificate-identity-regexp "${COSIGN_ID_RE}" \
+    --certificate-oidc-issuer "${COSIGN_ISSUER}" "$1" >/dev/null 2>&1 || return 1
+  cosign verify-attestation --type cyclonedx \
+    --certificate-identity-regexp "${COSIGN_ID_RE}" \
+    --certificate-oidc-issuer "${COSIGN_ISSUER}" "$1" >/dev/null 2>&1 || return 1
+  return 0
+}
+
 # Also leaves a working host-native CLI at bin/wardyn (same convention as
 # scripts/setup.sh's host-mode `go build -o bin/wardyn`) for cmd_up's hand-off
 # to point at — the containerized path installs no `wardyn` on PATH otherwise.
@@ -212,6 +245,12 @@ seed_host_proxy() {
   docker cp "${_shp_cid}:/host/wardyn" "${_shp_bin}" >/dev/null 2>&1 || true
   docker rm -f "${_shp_cid}" >/dev/null 2>&1 || true
   [ -x "${_shp_bin}" ] || { unset _shp_bin _shp_cid; return 0; }
+  # This is HOST-NATIVE execution of a binary taken out of a container image —
+  # not a container entrypoint, so no confinement applies to it at all. Fine
+  # when the image was built from this tree, and fine when cosign verified it;
+  # say so when it was neither (threatmodel/THREAT-MODEL.md s5 residual 32).
+  [ "${IMAGES_ORIGIN}" = pulled ] && \
+    warn "About to run bin/wardyn on this HOST, extracted from an image pulled by tag and verified by nothing (no cosign on PATH). Skip it with WARDYN_BUILD_LOCAL=1, or verify first — docs/VERIFY.md s1."
   _shp_json=$("${_shp_bin}" setup detect-proxy 2>/dev/null) || _shp_json=""
   if [ -n "${_shp_json}" ]; then
     _shp_b64=$(printf '%s' "${_shp_json}" | base64 2>/dev/null | tr -d '\n') || _shp_b64=""
@@ -264,12 +303,26 @@ wardyn_cli_prefix() {
 wardynd_probe() {
   _wp_env=$1; _wp_path=$2
   _wp_tok=$(env_get "${_wp_env}" WARDYN_ADMIN_TOKEN)
-  docker run --rm --network "${WARDYN_NS:-wardyn}-internal" curlimages/curl:latest \
+  # DIGEST-pinned, and fetched before the run so the run itself resolves nothing.
+  # This container is placed ON wardyn-internal — the network where
+  # WARDYN_LOCAL_TRUST_FORWARDER makes the control-plane API answer with no
+  # credential — three times on every `make setup`, and its upstream is a
+  # COMMUNITY Docker Hub repository whose `latest` is re-pointable by whoever
+  # holds that account. ensure_image logs to STDERR: this function's stdout IS
+  # the probe result. Gated by scripts/check-image-pins.sh.
+  _wp_img="curlimages/curl@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777"
+  if ! ensure_image "${_wp_img}"; then
+    warn "could not obtain ${_wp_img} — cannot ask wardynd from inside the network." >&2
+    echo 000
+    unset _wp_env _wp_path _wp_tok _wp_img
+    return 0
+  fi
+  docker run --rm --pull=never --network "${WARDYN_NS:-wardyn}-internal" "${_wp_img}" \
     -s -m 5 -w '\n%{http_code}' \
     -H "Host: 127.0.0.1:8080" \
     -H "Authorization: Bearer ${_wp_tok:-demo-admin-token}" \
     "http://wardynd:8080${_wp_path}" || echo 000
-  unset _wp_env _wp_path _wp_tok
+  unset _wp_env _wp_path _wp_tok _wp_img
 }
 
 # open_url URL — best-effort browser opener. Honors WARDYN_UP_NO_BROWSER=1.
@@ -333,196 +386,10 @@ _confirm_host_stop() {
 }
 
 # ── doctor ───────────────────────────────────────────────────────────────
-
-DOCTOR_BLOCKED=0
-
-report() {  # report LEVEL MESSAGE
-  case "$1" in
-    ok)    printf '  [ok]    %s\n' "$2" ;;
-    warn)  printf '  [warn]  %s\n' "$2" ;;
-    block) printf '  [BLOCK] %s\n' "$2"; DOCTOR_BLOCKED=1 ;;
-  esac
-}
-
-# sock_mountable SOCK — true iff the DAEMON can see a socket at SOCK (the in-VM
-# path case, e.g. Rancher Desktop, where the host has no such file).
-# Mounts SOCK's PARENT read-only and tests the leaf inside it. Naming a missing
-# SOCK as the bind source instead — what this probe used to do — makes docker
-# materialize it as a root-owned DIRECTORY there, breaking doctor's
-# "creates/changes nothing" contract. Skipped when the parent is missing too.
-sock_mountable() {
-  _sm_dir=$(dirname "$1")
-  [ -d "${_sm_dir}" ] && docker run --rm --pull=never -v "${_sm_dir}:/probe:ro" \
-    alpine:3.20 test -S "/probe/$(basename "$1")" >/dev/null 2>&1
-}
-
-cmd_doctor() {
-  DOCTOR_BLOCKED=0
-  # "read-only" means doctor changes nothing about this host's Wardyn setup —
-  # no volume, container, image or config of yours is created or touched. The
-  # ONE thing it runs is the socket-mountability probe below: a throwaway
-  # `alpine:3.20 test -S`, --pull=never so it can never reach the network or
-  # write to your image store, skipped entirely when that image isn't already
-  # local. Keep that flag: without it, `make doctor` on a fresh box silently
-  # pulled an image, which is exactly the surprise the claim rules out. And see
-  # sock_mountable: never name a MISSING path as a bind source — docker
-  # materializes an absent source as a root-owned directory.
-  log "Wardyn doctor — read-only preflight (nothing on this host is created or changed)"
-
-  _kind=$(os_kind)
-  case "${_kind}" in
-    windows)
-      report block "native Windows shell detected. Install WSL2 + Docker Desktop (enable WSL integration), then run \`make setup\` INSIDE your WSL distro — not from cmd.exe/PowerShell."
-      ;;
-    wsl)    report ok "WSL detected (${WSL_DISTRO_NAME:-distro unknown}) — \`make setup\` opens the UI in the Windows browser." ;;
-    linux)  report ok "native Linux detected." ;;
-    darwin) report ok "macOS detected." ;;
-    *)      report warn "could not determine OS (uname -s = $(uname -s 2>/dev/null || echo '?')); proceeding anyway." ;;
-  esac
-
-  if ! command -v docker >/dev/null 2>&1; then
-    report block "docker not found on PATH. Install Docker: https://docs.docker.com/get-docker/"
-  elif ! docker info >/dev/null 2>&1; then
-    report block "docker daemon not reachable. Start Docker Desktop (macOS/Windows) or dockerd (Linux), then re-run \`make doctor\`."
-  else
-    report ok "docker daemon reachable."
-    if docker compose version >/dev/null 2>&1; then
-      report ok "docker compose v2 available ($(docker compose version 2>/dev/null | head -1))."
-    else
-      report block "docker compose v2 required (standalone docker-compose v1 is not supported). Update Docker Desktop or install the compose plugin."
-    fi
-
-    _runtimes=$(docker info --format '{{json .Runtimes}}' 2>/dev/null || echo '{}')
-    _classes="CC1 (runc, always)"
-    case "${_runtimes}" in *'"runsc"'*) _classes="${_classes}, CC2 (gVisor/runsc)" ;; esac
-    case "${_runtimes}" in *'"kata'*)   _classes="${_classes}, CC3 (kata)" ;; esac
-    report ok "confinement classes available: ${_classes}"
-
-    # Resource-cap enforceability HINT (pre-boot; advisory). The authoritative gate
-    # is post-create: a governed run refuses only if the daemon actually DISCARDS a
-    # requested limit (create-response warning). These docker-info booleans are just
-    # an early heads-up and are UNRELIABLE on Podman's compat API (it under-reports
-    # CpuCfsQuota=false even when the quota binds), so treat a warn here as "check",
-    # not "will fail".
-    _caps=$(docker info --format '{{.MemoryLimit}}/{{.PidsLimit}}/{{.CPUCfsQuota}}' 2>/dev/null || echo '?/?/?')
-    case "${_caps}" in
-      true/true/true) report ok "resource caps look enforceable (memory + pids + cpu; cgroup v$(docker info --format '{{.CgroupVersion}}' 2>/dev/null || echo '?'))." ;;
-      *) report warn "docker info hints some resource limits may not enforce (memory/pids/cpu = ${_caps}). If a real run is refused (daemon discarded a limit), delegate the cgroup v2 controllers (systemd: Delegate=yes; rootless: enable cgroup v2 delegation) or set WARDYN_ALLOW_UNENFORCEABLE_CAPS=1. On Podman this is often a false alarm (compat API under-reports; caps still bind)." ;;
-    esac
-  fi
-
-  _port="${WARDYN_UP_PORT:-8080}"
-  if port_in_use "${_port}"; then
-    report warn "port ${_port} already in use — wardynd may fail to bind. Override with WARDYN_UP_PORT=<port>, or free the port. Never force-killed by this tool."
-  else
-    report ok "port ${_port} free."
-  fi
-  _pg_port="${WARDYN_PG_PORT:-5432}"
-  if port_in_use "${_pg_port}"; then
-    report warn "port ${_pg_port} already in use — postgres may fail to bind (an existing wardyn-postgres container already holding it is fine). Override with WARDYN_PG_PORT=<port>, or free the port."
-  else
-    report ok "port ${_pg_port} free."
-  fi
-  # registry: auto-started via postgres/dex/wardynd's depends_on, so it binds
-  # even on a plain `make setup` — not opt-in like the SSO/groundtruth profiles.
-  _registry_port="${WARDYN_REGISTRY_PORT:-5010}"
-  if port_in_use "${_registry_port}"; then
-    report warn "port ${_registry_port} already in use — the devcontainer-build registry may fail to bind. Override with WARDYN_REGISTRY_PORT=<port>, or free the port."
-  else
-    report ok "port ${_registry_port} free."
-  fi
-  # wardynd's SSH gateway mapping is always published in compose, whether or
-  # not WARDYN_SSH_LISTEN is set to actually enable the gateway.
-  _ssh_port="${WARDYN_SSH_PORT:-2222}"
-  if port_in_use "${_ssh_port}"; then
-    report warn "port ${_ssh_port} already in use — wardynd's SSH gateway mapping may fail to bind. Override with WARDYN_SSH_PORT=<port>, or free the port."
-  else
-    report ok "port ${_ssh_port} free."
-  fi
-  # Same story for the UI-sandbox gateway mapping (docs/UI-SANDBOXES.md).
-  _ui_sandbox_port="${WARDYN_UI_SANDBOX_PORT:-8081}"
-  if port_in_use "${_ui_sandbox_port}"; then
-    report warn "port ${_ui_sandbox_port} already in use — wardynd's UI-sandbox gateway mapping may fail to bind. Override with WARDYN_UI_SANDBOX_PORT=<port>, or free the port."
-  else
-    report ok "port ${_ui_sandbox_port} free."
-  fi
-
-  if [ -e /dev/kvm ]; then
-    report ok "/dev/kvm present (CC3/Kata-capable hardware)."
-  else
-    report warn "/dev/kvm not present — CC3 (Kata) confinement tier unavailable (optional; CC1/CC2 unaffected)."
-  fi
-  if [ -r /sys/kernel/btf/vmlinux ]; then
-    report ok "/sys/kernel/btf/vmlinux present (eBPF ground-truth tier possible)."
-  else
-    report warn "/sys/kernel/btf/vmlinux not present — eBPF/Tetragon ground-truth tier unavailable (optional)."
-  fi
-  if command -v claude >/dev/null 2>&1; then
-    report ok "claude CLI on PATH (host-mode composer backend, scripts/run-host.sh, available)."
-  else
-    report warn "claude CLI not on PATH — host-mode composer unavailable (optional; the compose path's Describe-mode uses the no-key fake backend by default)."
-  fi
-
-  # ── corporate-network preflight ───────────────────────────────────────────
-  # Turn the two classic 3-minute-build / silent-bring-up failures into a warning
-  # BEFORE anything is built: (1) a TLS-MITM proxy present but no corp CA staged,
-  # (2) the chosen docker socket not actually bind-mountable by the daemon.
-  # Signal on an explicit forward proxy only — a low-false-positive predictor of a
-  # build-breaking TLS-MITM. (Custom CAs in the trust store are too noisy: mkcert
-  # and other local-dev CAs live there too.) A transparent MITM with no proxy env
-  # won't trip this, but the build's own x509 error then points here.
-  _corp_signal=0
-  for _pv in HTTPS_PROXY https_proxy HTTP_PROXY http_proxy; do
-    eval "_pval=\${${_pv}:-}"; [ -n "${_pval}" ] && _corp_signal=1
-  done
-  if [ "${_corp_signal}" = 1 ]; then
-    if [ -f "${REPO_ROOT}/deploy/images/corp-ca.pem" ]; then
-      report ok "forward proxy set and deploy/images/corp-ca.pem is staged — image builds will trust your corp CA."
-    else
-      report warn "a forward proxy is set (HTTP(S)_PROXY) but deploy/images/corp-ca.pem is NOT staged. If a build fails with 'x509: certificate signed by unknown authority', copy your corp root CA to deploy/images/corp-ca.pem (gitignored) and rebuild — see deploy/images/README.md."
-    fi
-  fi
-  unset _corp_signal _pv _pval
-
-  # The compose wardynd bind-mounts WARDYN_DOCKER_SOCK to drive the daemon. Assert
-  # it is actually bind-mountable (not merely that the CLI can reach the daemon):
-  # on Rancher Desktop the host ~/.rd/docker.sock is NOT mountable while the in-VM
-  # /var/run/docker.sock is. wardyn_pick_docker_host (sourced at top) resolves it.
-  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-    wardyn_pick_docker_host 2>/dev/null || true
-    _sock="${WARDYN_DOCKER_SOCK:-/var/run/docker.sock}"
-    if [ -S "${_sock}" ]; then
-      report ok "docker socket ${_sock} present on host (bind-mountable)."
-    elif docker image inspect alpine:3.20 >/dev/null 2>&1 && sock_mountable "${_sock}"; then
-      report ok "docker socket ${_sock} is bind-mountable by the daemon (in-VM path, e.g. Rancher Desktop)."
-    else
-      report warn "chosen docker socket ${_sock} is not present on the host, and the in-VM mountability probe did not confirm it (it is skipped rather than pulled when alpine:3.20 isn't already local — \`docker pull alpine:3.20\` and re-run to test it). The compose wardynd may not be able to create sandboxes. On Rancher Desktop set WARDYN_DOCKER_SOCK=/var/run/docker.sock (the in-VM path); otherwise check the path and permissions."
-    fi
-    unset _sock
-  fi
-
-  # Bedrock model-auth preflight (host vs container): which credential source is
-  # usable here. Region/model come from env or deploy/compose/.env; the actual
-  # secrets (bedrock-api-key / static keys) live in the store and are reported by
-  # `wardyn setup status` after boot. This is a pre-boot heads-up only.
-  _br_region="${WARDYN_BEDROCK_REGION:-$(env_get "${ENV_FILE}" WARDYN_BEDROCK_REGION 2>/dev/null || true)}"
-  _br_dir="${WARDYN_BEDROCK_AWS_DIR:-$(env_get "${ENV_FILE}" WARDYN_BEDROCK_AWS_DIR 2>/dev/null || true)}"
-  if [ -n "${_br_region}" ]; then
-    if [ -n "${_br_dir}" ] && [ -d "${_br_dir}" ]; then
-      report ok "Bedrock configured with an ~/.aws mount (${_br_dir}) — SSO/temp creds auto-rotate; grant uid 1000 read (setfacl -R -m u:1000:rX '${_br_dir}') if runs can't auth."
-    else
-      report ok "Bedrock region set (${_br_region}). Prefer a bedrock-api-key bearer (never resident) or an ~/.aws mount for SSO; add credentials in the UI or via 'wardyn secret set' — 'wardyn setup status' shows which path is live after boot."
-    fi
-  fi
-  unset _br_region _br_dir
-
-  if [ "${DOCTOR_BLOCKED}" -eq 1 ]; then
-    printf '\n' >&2
-    printf '\033[1;31m[error]\033[0m %s\n' "doctor found blocking issue(s) above — fix them, then re-run \`make doctor\`." >&2
-    exit 2
-  fi
-  log "doctor: no blocking issues (see warnings above, if any)."
-}
+#
+# cmd_doctor + report/DOCTOR_BLOCKED + sock_mountable live in
+# scripts/lib/up-doctor.sh (same file-size-gate split as up-reset.sh above).
+. "${REPO_ROOT}/scripts/lib/up-doctor.sh"
 
 # ── up ───────────────────────────────────────────────────────────────────
 
@@ -553,6 +420,7 @@ cmd_up() {
   # WARDYN_BUILD_LOCAL=1 skips the pull outright (contributors testing their own
   # changes must never silently run a published binary instead).
   pulled_all=false
+  verified_all=true
   if [ "${WARDYN_BUILD_LOCAL:-}" != 1 ] && [ "${WARDYN_BUILD_LOCAL:-}" != true ]; then
     ver="$(grep -oE 'Version = "[^"]+"' "${REPO_ROOT}/internal/version/version.go" | head -1 | cut -d'"' -f2 || true)"
     if [ -n "$ver" ]; then
@@ -565,8 +433,18 @@ cmd_up() {
                   "agent-aws-sso:wardyn/agent-aws-sso:local"; do
         remote="ghcr.io/cjohnstoniv/${pair%%:*}:${ver}"
         localref="${pair#*:}"
-        if docker pull -q "$remote" >/dev/null 2>&1 && docker tag "$remote" "$localref"; then
-          continue
+        if docker pull -q "$remote" >/dev/null 2>&1; then
+          # VERIFY BEFORE USE. A pull by tag proves nothing; this is docs/VERIFY.md
+          # s1+s2 run for you when cosign is here. rc 2 = no cosign, which is not a
+          # failed check but an ABSENT one — keep the images, downgrade the claim.
+          _cv=0; cosign_verify "$remote" || _cv=$?
+          if [ "${_cv}" = 1 ]; then
+            warn "cosign could NOT verify ${remote} against this repo's release workflow — refusing it and building from source instead (docs/VERIFY.md s1)."
+            pulled_all=false
+            break
+          fi
+          [ "${_cv}" = 2 ] && verified_all=false
+          docker tag "$remote" "$localref" && continue
         fi
         warn "could not pull ${remote} — building from source instead."
         pulled_all=false
@@ -575,7 +453,14 @@ cmd_up() {
     fi
   fi
   if $pulled_all; then
-    log "Using published images (cosign-signed, SBOM-attested — see docs/VERIFY.md). Skipped the local build."
+    if $verified_all; then
+      IMAGES_ORIGIN=verified
+      log "Using published images (cosign-signed, SBOM-attested — see docs/VERIFY.md). Skipped the local build."
+    else
+      IMAGES_ORIGIN=pulled
+      log "Using published images. Skipped the local build."
+      warn "These images were pulled by TAG and verified by NOTHING — cosign is not on PATH, so neither the signature nor the SBOM attestation was checked. Install cosign and re-run, or check them by hand: docs/VERIFY.md s1-s3."
+    fi
   else
 
   log "Building the wardynd image (serves the REST API + embedded UI)"
@@ -903,9 +788,22 @@ cmd_up() {
     log "WARDYN_UP_SKIP_RUN_IMAGES=1 — skipping the run images (build later: make agent-images-core && docker compose -f \"${COMPOSE_FILE}\" --profile build-only build proxy-image)"
   else
     log "Finishing the run components so your first run is ready (sandbox proxy + agent images)…"
-    # The proxy sidecar is the SOLE egress path for every run — if it can't build,
-    # no run can work, so it stays fatal under set -e.
-    compose --profile build-only build proxy-image
+    # What the pull-first block above ALREADY put at these :local tags must not be
+    # rebuilt here: four of the five images it fetches are the proxy and three
+    # agent images, and rebuilding them discards the published (and, with cosign
+    # on PATH, verified) artifacts in favour of a local compile — while the
+    # transcript said "Skipped the local build". agent-claude-code is the one
+    # exception in either direction: Wardyn publishes no image carrying the
+    # vendor CLI (docs/VERIFY.md), so it is always built here.
+    if $pulled_all; then
+      log "  proxy + agent-base/codex-cli/aws-sso came from the pull — building only agent-claude-code."
+      _svcs="agent-claude-code"
+    else
+      # The proxy sidecar is the SOLE egress path for every run — if it can't build,
+      # no run can work, so it stays fatal under set -e.
+      compose --profile build-only build proxy-image
+      _svcs="agent-base agent-claude-code agent-codex-cli agent-aws-sso"
+    fi
     # Agent images are PER-AGENT: one blocked image (e.g. a corp mirror missing an
     # agent's package) must not abort the stack or the other agents. Build each
     # independently, continue on error, and summarize — mirroring the host-mode
@@ -913,7 +811,7 @@ cmd_up() {
     # so a failed agent image is a warning, not a teardown. Building via compose so
     # the corp-build args (NPM_REGISTRY/HTTP(S)_PROXY) wired into these stanzas apply.
     _agent_img_warn=0
-    for _svc in agent-base agent-claude-code agent-codex-cli agent-aws-sso; do
+    for _svc in ${_svcs}; do
       log "Building ${_svc}…"
       if compose --profile build-only build "${_svc}"; then
         log "  built ${_svc}"
@@ -927,7 +825,7 @@ cmd_up() {
     else
       log "Run components ready — you can launch your first run."
     fi
-    unset _agent_img_warn _svc
+    unset _agent_img_warn _svc _svcs
   fi
 
   log "  Tear down: make compose-down   (or: scripts/up.sh down)"

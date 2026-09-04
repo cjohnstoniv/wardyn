@@ -1629,6 +1629,30 @@ wardynd publish loopback-only (`127.0.0.1:PORT`,
 the same box, each with their own identity, and takes setup `make setup` does not
 do for you:
 
+> **Read this before you hand someone a shell on this box.** "Loopback-only"
+> bounds the network, not the *host*: every local user reaches `127.0.0.1`, and
+> two of the published ports are not behind any Wardyn identity at all.
+>
+> - **Postgres, `127.0.0.1:${WARDYN_PG_PORT:-5432}`, password `wardyn-dev`** —
+>   a literal published in this repository and written into every stack
+>   `deploy/compose/docker-compose.yaml` starts. It is Wardyn's whole system of
+>   record: `psql -h 127.0.0.1 -U wardyn wardyn` from the second person's own
+>   shell reads and REWRITES every run, every policy decision and the
+>   append-only audit log, under no Wardyn role and leaving no Wardyn audit
+>   entry. The admin/member split below is enforced by wardynd, so anything that
+>   goes around wardynd is not subject to it.
+> - **The devcontainer-build registry, `127.0.0.1:${WARDYN_REGISTRY_PORT:-5010}`,
+>   with no authentication** — any local user can push a layer that a later
+>   `WARDYN_ENVBUILD_PUSHED_REF` run pulls and executes.
+>
+> Both are governed by host access, so a second person you do not trust with the
+> database is a second person you do not put on this box. Repoint them
+> (`WARDYN_PG_PORT` / `WARDYN_REGISTRY_PORT`) and firewall the loopback ports if
+> your host has more users than that — Wardyn does not do it for you. This is
+> `threatmodel/THREAT-MODEL.md` residual #23 (the shipped default deployment
+> collapses the audited insider into the trusted operator) seen from the
+> operator's side.
+
 1. **Turn local mode off.** The containerized `make setup` path writes
    `WARDYN_LOCAL_MODE=true` into `deploy/compose/.env` (see the
    `WARDYN_ADMIN_TOKEN` row in [ENV.md](ENV.md)); left in place alongside a

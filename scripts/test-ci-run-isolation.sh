@@ -14,6 +14,11 @@
 #   2. The script REFUSES when that project already has running containers,
 #      instead of tearing them down. This is what makes a collision (from any
 #      cause, including a hand-pinned WARDYN_CI_PROJECT) non-destructive.
+#   3. (R5 F199) The admin bearer never reaches the host `docker` process argv.
+#      The shim passed `-e WARDYN_ADMIN_TOKEN=<value>` on every CLI call, so a
+#      real fleet token sat in /proc/<pid>/cmdline and in `ps` output for every
+#      other user on the runner — redundantly, since the wardynd container the
+#      same script started already carries it from the compose interpolation.
 #
 # Usage: scripts/test-ci-run-isolation.sh   (exit 0 = PASS)
 set -uo pipefail
@@ -92,6 +97,46 @@ case "$out_free" in
     *"wardyn-ci-selftest"*already*) bad "ci-run.sh refused an UNUSED project name" ;;
     *) ok "an unused project name proceeds" ;;
 esac
+
+# ── 3. the admin bearer is not on the host docker argv (F199) ────────────────
+# Behavioural: the REAL shim is extracted from the live script and called with a
+# `docker` on PATH that dumps its own argv. `ps`/`/proc/<pid>/cmdline` is world-
+# readable on a shared runner, and this fires on every single CLI call the job
+# makes — while docker-compose.yaml already sets WARDYN_ADMIN_TOKEN inside
+# wardynd from the same exported variable, so the container has it either way.
+shim="$(sed -n '/^wardyn() {/,/^}/p' scripts/ci-run.sh)"
+[ -n "$shim" ] || bad "scripts/ci-run.sh has no wardyn() shim to extract"
+ARGV="$STUB/argv.log"
+cat > "$STUB/argv-docker" <<'ARGVEOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$ARGV"
+exit 0
+ARGVEOF
+chmod +x "$STUB/argv-docker"
+(
+  set +u
+  eval "$shim"
+  COMPOSE=("$STUB/argv-docker" compose -p wardyn-ci-selftest -f /dev/null)
+  WARDYN_ADMIN_TOKEN='s3cr3t-real-fleet-admin-token'
+  ARGV="$ARGV" wardyn runs list
+) >/dev/null 2>&1 || true
+if grep -qF 's3cr3t-real-fleet-admin-token' "$ARGV" 2>/dev/null; then
+    bad "scripts/ci-run.sh's wardyn() puts the admin bearer on the host docker argv — world-readable in ps/proc on a shared runner, on every CLI call: $(tr '\n' ' ' < "$ARGV")"
+else
+    ok "the admin bearer never reaches the host docker argv"
+fi
+# The counterweight: a shim that stopped invoking the CLI at all would also pass.
+if grep -qxF '/usr/local/bin/wardyn' "$ARGV" 2>/dev/null && grep -qxF 'runs' "$ARGV" 2>/dev/null; then
+    ok "the shim still execs the in-container CLI with its arguments"
+else
+    bad "the extracted wardyn() no longer invokes /usr/local/bin/wardyn with its arguments — the case above would pass vacuously. Got: $(tr '\n' ' ' < "$ARGV" 2>/dev/null)"
+fi
+# ...and the container must still be TOLD which URL to talk to.
+if grep -qxF 'WARDYN_URL=http://localhost:8080' "$ARGV" 2>/dev/null; then
+    ok "the shim still passes WARDYN_URL (not a credential)"
+else
+    bad "the shim no longer passes WARDYN_URL — dropping the credential must not drop the endpoint"
+fi
 
 [ "$fail" -eq 0 ] && echo "PASS: scripts/test-ci-run-isolation.sh" || echo "FAIL: scripts/test-ci-run-isolation.sh" >&2
 exit "$fail"

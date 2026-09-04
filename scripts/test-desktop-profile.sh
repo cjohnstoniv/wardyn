@@ -312,4 +312,89 @@ grep -q 'PREFIX="${PAYLOAD}/usr/local/lib/wardyn"' "${PKGR}" \
   || fail "${PKGR}'s payload prefix changed — wardyn-desktop.sh's REPO_ROOT='../..' depends on the deploy/ level being present"
 
 echo "test-desktop-profile: m-prime invariants PASS"
+
+# ── F185: /etc/wardyn/secret.env is a trust boundary, not formatting ────────
+#
+# wardyn-desktop.sh dot-sources it AS ROOT on every timer tick, out of a 0755
+# directory install.sh creates. `.` EXECUTES the file, so its mode and owner
+# decide who chooses the code root runs — and docs/DESKTOP.md's MDM file table
+# asserted 0600 with nothing enforcing it. Driven for real: each fixture's
+# secret.env carries a `touch PWNED` line, so "was it sourced" is observable.
+#
+# Daemon-free by construction, like the rest of this file: `docker` is a PATH
+# stub that answers everything with success and DOCKER_HOST points at a socket
+# that does not exist, so nothing past the gate can reach a real daemon.
+DESKTOP_SH="${DESK_DIR}/wardyn-desktop.sh"
+[ -f "${DESKTOP_SH}" ] || fail "${DESKTOP_SH} not found"
+F185_TMP="$(mktemp -d)"
+trap 'rm -rf "${F185_TMP}"' EXIT
+mkdir -p "${F185_TMP}/bin"
+printf '#!/usr/bin/env bash\nexit 0\n' > "${F185_TMP}/bin/docker"
+# curl too: the launcher's wait_healthy polls /healthz for up to 60s before it
+# gives up, and this fixture has no stack. A stub that answers immediately keeps
+# these three cases sub-second AND keeps the run entirely off the network.
+printf '#!/usr/bin/env bash\nexit 0\n' > "${F185_TMP}/bin/curl"
+chmod +x "${F185_TMP}/bin/docker" "${F185_TMP}/bin/curl"
+
+f185_fixture() { # MODE -> managed dir
+  local mode="$1" md
+  md="$(mktemp -d -p "${F185_TMP}")"
+  printf 'WARDYN_WARDYND_IMAGE=ghcr.io/example/wardynd@sha256:aa\n' > "${md}/wardyn.env"
+  printf 'AGE-SECRET-KEY-1FAKE\n' > "${md}/age.key"
+  # secret.env IS a shell script, which is what dot-sourcing means.
+  printf 'WARDYN_OIDC_CLIENT_SECRET=s3cret\ntouch "%s/PWNED"\n' "${md}" > "${md}/secret.env"
+  chmod "${mode}" "${md}/secret.env"
+  printf '%s' "${md}"
+}
+f185_run() { # MANAGED_DIR -> combined output (never fatal here)
+  timeout 30 env PATH="${F185_TMP}/bin:${PATH}" \
+      DOCKER_HOST="unix:///nonexistent-f185.sock" \
+      WARDYN_MANAGED_DIR="$1" \
+      "${DESKTOP_SH}" up 2>&1 || true
+}
+
+# 1. group+world WRITABLE: anyone on the box chooses the code root runs.
+md="$(f185_fixture 0666)"; out="$(f185_run "${md}")"
+[ ! -e "${md}/PWNED" ] \
+  || fail "wardyn-desktop.sh SOURCED a world-writable ${md}/secret.env as root — any local account can put a command in that file and have this timer run it (F185)"
+printf '%s' "${out}" | grep -qi 'writable' \
+  || fail "wardyn-desktop.sh refused a world-writable secret.env without saying the mode was why — the MDM operator cannot fix what is not named (F185). Got: $(printf '%s' "${out}" | tail -1)"
+
+# 2. group/world READABLE (0644 — the mode docs/DESKTOP.md's table forbids):
+#    the SIEM bearer token and OIDC client secret were readable by every local
+#    account. Not a refusal (nothing has executed), but the exposure already
+#    happened, so: re-assert 0600 and say it loudly enough to rotate.
+md="$(f185_fixture 0644)"; out="$(f185_run "${md}")"
+mode="$(stat -c '%a' "${md}/secret.env" 2>/dev/null || stat -f '%OLp' "${md}/secret.env")"
+[ "${mode}" = "600" ] \
+  || fail "a 0644 secret.env was left at mode ${mode} — its live credentials stay readable by every local account on the device (F185)"
+printf '%s' "${out}" | grep -qi 'readable by every local account' \
+  || fail "wardyn-desktop.sh silently re-permed a 0644 secret.env — the credentials in it are org-wide and already exposed, so this has to be loud enough to trigger a rotation (F185)"
+
+# 3. the counterweight: a correct 0600 file must still be sourced, or 1 and 2
+#    are satisfied by a launcher that stopped reading secrets at all.
+md="$(f185_fixture 0600)"; f185_run "${md}" >/dev/null
+[ -e "${md}/PWNED" ] \
+  || fail "a root-owned 0600 secret.env was NOT sourced — the audit-sink bearer token and OIDC client secret never reach the stack (F185)"
+echo "test-desktop-profile: secret.env trust-boundary invariants PASS"
+
+# ── F113/F184: the enrolment image is disclosed where it is decided ─────────
+#
+# install.sh's default WARDYN_INSTALL_IMAGE is the CONTINUOUS :latest tag
+# publish-image.yml pushes on every merge and never cosign-signs, and it runs
+# AS ROOT to mint the device's age identity. The envelope pins
+# WARDYN_WARDYND_IMAGE by digest, so a reader of DESKTOP.md would reasonably
+# assume the whole lane is pinned. scripts/check-image-pins.sh pins the console
+# warning; this pins the doc.
+DESKTOP_MD="${REPO_ROOT}/docs/DESKTOP.md"
+grep -q 'WARDYN_INSTALL_IMAGE' "${DESKTOP_MD}" \
+  || fail "docs/DESKTOP.md never names WARDYN_INSTALL_IMAGE — the one override that pins the enrolment image is undiscoverable from the tier's own doc (F113/F184)"
+grep -q 'wardynd:latest' "${DESKTOP_MD}" \
+  || fail "docs/DESKTOP.md does not state that the enrolment default is the :latest tag (F113/F184)"
+grep -qi 'not.*cosign-signed' "${DESKTOP_MD}" \
+  || fail "docs/DESKTOP.md does not say the enrolment image is unsigned — the envelope pins a digest, so a reader assumes the whole lane is verified (F113/F184)"
+grep -qF 'is a MUTABLE tag, not a digest' "${DESK_DIR}/install.sh" \
+  || fail "deploy/desktop/install.sh no longer warns at the console when the enrolment ref floats — the person who needs that is the one RUNNING it, not the one reading the source (F113/F184)"
+echo "test-desktop-profile: enrolment-image disclosure PASS"
+
 echo "test-desktop-profile: self-test PASS"

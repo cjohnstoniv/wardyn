@@ -46,6 +46,8 @@
 #   T13 PASS  a QUOTED WARDYN_AGE_KEY — a shape compose accepts — is a key  (C05)
 #   T14 PASS  a refused upgrade writes nothing: .env and compose untouched (C06)
 #   T15 PASS  every network fetch carries a timeout                    (perf2-C2)
+#   T20 PASS  a WARDYN_VERSION carrying `../` is refused before any fetch —
+#             no request leaves the ${REPO} path (4 rows + 2 counterweights) (F183)
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -616,6 +618,59 @@ if run_install "${d}/bin" "${d}/home"; then
     fail "${t}" "the four-image gap is stated without pointing at docs/VERIFY.md §6, where it is documented"
   else pass "${t}"; fi
 else fail "${t}" "install.sh exited $? — $(tail -2 "${d}/home/install.out" | tr '\n' ' ')"; fi
+
+# ── T20: WARDYN_VERSION is a TAG, not a URL path (F183) ────────────────────
+# The version string is interpolated straight into every fetch URL — the
+# compose file on raw.githubusercontent.com, and the CLI asset plus the
+# SHA256SUMS it is checked against on github.com — and into every image ref.
+# A `../` walks OUT of the ${REPO} path segment and re-points those downloads
+# at an arbitrary owner. Because it moves the asset AND its SHA256SUMS
+# together, install_cli's same-origin checksum gate still passes: it compares
+# the attacker's binary against the attacker's own digest.
+#
+# The invariant is not "die with a nice message", it is: NOTHING install.sh
+# fetches may leave https://<host>/${REPO}/ .
+# A URL whose path carries a `..` segment is OFF-repo even though its literal
+# prefix still reads as the repo: curl resolves the dot-segments before it
+# dials (RFC 3986 s5.2.4), which is the whole mechanic of this defect.
+t20_offsite() { # LOGFILE -> any fetched URL that does not resolve inside ${REPO}
+  grep -oE 'https?://[^ ]+' "$1" 2>/dev/null \
+    | grep -vE '^https://(raw\.githubusercontent\.com|github\.com|api\.github\.com/repos)/cjohnstoniv/wardyn([/?]|$)' \
+    || true
+  grep -oE 'https?://[^ ]+' "$1" 2>/dev/null | grep -E '(^|/)\.\.(/|$)' || true
+}
+
+t20_case() { # LABEL VERSION
+  local label="$1" ver="$2" d off
+  t="T20/${label} WARDYN_VERSION with a path escape fetches nothing off-repo"
+  d="${WORK}/t20-${label}"; make_stubs "${d}/bin" default; mkdir -p "${d}/home"
+  run_install "${d}/bin" "${d}/home" WARDYN_VERSION="${ver}" && rc=0 || rc=$?
+  off="$(t20_offsite "${d}/bin/state/curl.log")"
+  if [ -n "${off}" ]; then
+    fail "${t}" "install.sh fetched off-repo URL(s) for '${ver}': $(printf '%s' "${off}" | tr '\n' ' ')"
+  elif [ "${rc}" = 0 ]; then
+    fail "${t}" "install.sh accepted '${ver}' and ran to completion — the version is used as a path segment, so it must be refused, not merely survived"
+  elif ! grep -qi 'WARDYN_VERSION' "${d}/home/install.out"; then
+    fail "${t}" "died without naming WARDYN_VERSION, so the operator cannot tell what was rejected: $(tail -1 "${d}/home/install.out")"
+  else pass "${t}"; fi
+}
+
+t20_case compose-escape   'v/../../../attacker/evil/main'
+t20_case asset-escape     'v/../../../../../attacker/evil/releases/download/v9.9.9'
+t20_case absolute         'v/attacker/evil/main'
+t20_case dotdot-only      'v..'
+
+# The counterweights: a guard that refuses everything is no guard. A plain tag
+# and the pre-release form RELEASING.md mandates must both still install.
+t20_ok() { # LABEL VERSION
+  local label="$1" ver="$2" d
+  t="T20/${label} a legitimate WARDYN_VERSION='${ver}' still installs"
+  d="${WORK}/t20-${label}"; make_stubs "${d}/bin" default; mkdir -p "${d}/home"
+  if run_install "${d}/bin" "${d}/home" WARDYN_VERSION="${ver}"; then pass "${t}"
+  else fail "${t}" "refused a legitimate tag: $(tail -1 "${d}/home/install.out")"; fi
+}
+t20_ok plain      'v0.6.6'
+t20_ok prerelease 'v0.7.0-rc1'
 
 echo
 echo "passed=${#PASSED[@]} failed=${#FAILED[@]} skipped=${#SKIPPED[@]}"

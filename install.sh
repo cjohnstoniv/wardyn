@@ -155,6 +155,19 @@ if [ -z "$VERSION" ]; then
   [ -n "$VERSION" ] || die "could not resolve the latest release — set WARDYN_VERSION=vX.Y.Z"
 fi
 case "$VERSION" in v*) ;; *) VERSION="v$VERSION" ;; esac
+# A release TAG — never anything that can act as a URL path. VERSION is
+# interpolated into four fetch URLs (the compose file on raw.githubusercontent,
+# the CLI asset and the SHA256SUMS it is checked against on github.com) and into
+# every image ref below. curl resolves `..` segments BEFORE it dials (RFC 3986
+# s5.2.4), so `WARDYN_VERSION=v/../../../attacker/evil/main` walks out of
+# ${REPO} and re-points those downloads at an arbitrary owner — SHA256SUMS
+# included, which is exactly why install_cli's same-origin checksum gate cannot
+# catch it: it would compare the attacker's binary against the attacker's own
+# digest. Allow exactly what a git tag needs and refuse the rest.
+case "$VERSION" in
+  *[!A-Za-z0-9._+-]*|*..*)
+    die "WARDYN_VERSION must be a release tag (letters, digits and . _ + -), not '${VERSION}' — it is used as a URL path segment and a container image tag." ;;
+esac
 SEMVER="${VERSION#v}"
 # The wardynd image is named four times — two mints, the fresh .env, the upgrade
 # rewrite — and a version-pin that disagreed with itself across them is exactly

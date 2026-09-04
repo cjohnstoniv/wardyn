@@ -103,12 +103,19 @@ if [[ -n "${_live}" ]]; then
 fi
 unset _live
 
-# wardyn runs the shipped CLI inside the wardynd container with the admin token
-# (same shim as scripts/demo.sh — no host Go/binary needed at run time).
+# wardyn runs the shipped CLI inside the wardynd container (same shim as
+# scripts/demo.sh — no host Go/binary needed at run time).
+#
+# It does NOT re-inject the admin bearer. wardynd already has it: compose
+# interpolates WARDYN_ADMIN_TOKEN (exported above) into the service's own
+# environment, so `exec` inherits it inside the container. Passing it again put
+# a real fleet token on the HOST `docker` process argv — world-readable in `ps`
+# and /proc/<pid>/cmdline to every other user on a shared runner — on every
+# single CLI call this job makes. WARDYN_URL stays: it is an endpoint, not a
+# credential, and the container has no reason to know it otherwise.
 wardyn() {
   "${COMPOSE[@]}" exec -T \
     -e WARDYN_URL="http://localhost:8080" \
-    -e WARDYN_ADMIN_TOKEN="${WARDYN_ADMIN_TOKEN}" \
     wardynd /usr/local/bin/wardyn "$@"
 }
 

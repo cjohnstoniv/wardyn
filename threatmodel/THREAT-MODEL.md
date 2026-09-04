@@ -1074,10 +1074,29 @@ hiding them would repeat the failure mode we are designed to avoid.
     - The images are pulled by TAG (`docker compose pull`, and `mint_age_key`'s
       `docker run … -gen-age-key` before it). They are cosign-verifi**able** by
       the operator (`docs/VERIFY.md` §1); the installer verifies none of them.
+      `docker compose pull` covers exactly the three DEFAULT-PROFILE services
+      (`wardynd`, `postgres`, `registry`) — the proxy sidecar and the three
+      agent images sit behind the `build-only` profile in the compose file and
+      are pulled by wardynd itself at the first run, so four of the seven images
+      this release ships arrive long after the install transcript has scrolled
+      past (`docs/VERIFY.md` §6 bullets 2-3).
     - So on a fresh install the FIRST foreign code to execute on the box is the
       wardynd image's `-gen-age-key` entrypoint, which `mint_age_key` runs to
       mint the secret-store key — before `docker compose up -d --no-build`, and
       before the operator has read the compose file or anything else.
+    - **From a CLONE the same images also run HOST-NATIVE, outside any
+      container.** `scripts/up.sh`'s pull-first path is the `make setup`
+      equivalent of the above, and its `seed_host_proxy` copies `/host/wardyn`
+      out of the `wardynd` image to `bin/wardyn` and EXECUTES it on the host to
+      detect the operator's proxy settings — a plain host process, so none of
+      §3's confinement applies to it, and the bullet above (a container
+      entrypoint) does not describe it. Narrowed for 0.7 rather than only
+      documented: that path now runs `cosign verify` + `cosign
+      verify-attestation --type cyclonedx` against the release-workflow identity
+      itself when `cosign` is on PATH, REFUSES an image that fails and falls back
+      to building from source, and names the gap out loud when `cosign` is absent
+      instead of announcing "cosign-signed, SBOM-attested" as it used to.
+      `WARDYN_BUILD_LOCAL=1` removes the pull, and with it this residual.
 
     Accepted for 0.7 on one honest ground, stated as what it is: `curl … | sh`
     is a decision to trust this project's release origin for one command, and

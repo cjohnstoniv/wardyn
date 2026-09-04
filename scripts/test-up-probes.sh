@@ -28,6 +28,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UP_SH="${REPO_ROOT}/scripts/up.sh"
+# doctor's half of up.sh lives in a sourced sibling (file-size-gate split).
+DOCTOR_SH="${REPO_ROOT}/scripts/lib/up-doctor.sh"
 
 # shellcheck source=lib/common.sh
 . "${REPO_ROOT}/scripts/lib/common.sh"  # env_get / env_set
@@ -47,6 +49,13 @@ mkdir -p "${dir}/bin"
 cat > "${dir}/bin/docker" <<'STUB'
 #!/usr/bin/env bash
 set -u
+# ensure_image (scripts/lib/common.sh) asks whether the digest-pinned probe
+# image is already local before the run. It is, here — so the pull arm below is
+# never taken and `docker run --pull=never` resolves nothing at probe time.
+case "${1:-}" in
+  image) [[ "${2:-}" == inspect ]] && exit 0; echo "stub docker: unexpected image subcommand: $*" >&2; exit 96 ;;
+  pull)  echo "stub docker: pulled an image that was already present: $*" >&2; exit 95 ;;
+esac
 [[ "${1:-}" == "run" ]] || { echo "stub docker: unexpected subcommand: $*" >&2; exit 99; }
 
 # ── alpine:3.20 -> doctor's socket-mountability probe ───────────────────────
@@ -129,6 +138,17 @@ printf '%s' "${probe_body}" | grep -q 'curlimages/curl' \
   || fail "the surviving curlimages/curl invocation is not inside wardynd_probe()"
 printf '%s' "${probe_body}" | grep -qE -- '-H "Host: (127\.0\.0\.1|localhost|\[::1\])' \
   || fail "wardynd_probe() does not override Host with a loopback authority — local mode's DNS-rebinding guard 403s the Docker-DNS authority 'wardynd:8080' (ADV2-01)"
+
+# ...and that ONE reference must be DIGEST-pinned and run --pull=never (F006 /
+# F010 / F152). This container is placed ON wardyn-internal — the network where
+# WARDYN_LOCAL_TRUST_FORWARDER makes the control-plane API answer with no
+# credential — three times on every `make setup`. curlimages/curl is a community
+# Docker Hub repository, so `:latest` there is re-pointable by whoever holds
+# that account, and each `up` would silently fetch whatever it points at today.
+printf '%s' "${probe_body}" | grep -qE 'curlimages/curl@sha256:[0-9a-f]{64}' \
+  || fail "wardynd_probe()'s curl image is not digest-pinned — a floating community tag is resolved fresh on every \`make setup\` and run ON wardyn-internal, where the local-mode forwarder answers the control-plane API with no credential (F006/F010/F152)"
+printf '%s' "${probe_body}" | grep -q -- '--pull=never' \
+  || fail "wardynd_probe()'s docker run does not pass --pull=never — the digest pin only binds if the run itself resolves nothing at probe time (F006/F010/F152)"
 eval "${probe_body}"
 
 # ── 2) local mode (the default compose posture): the probe must answer 200 ──
@@ -247,8 +267,8 @@ kill "${stall_pid}" >/dev/null 2>&1 || true
 # bind-mount SOURCE, and docker materializes a missing source as a root-owned
 # DIRECTORY — so doctor left a directory sitting exactly where the socket is
 # supposed to appear, on the Rancher-Desktop-shaped hosts the probe exists for.
-eval "$(sed -n '/^sock_mountable() {/,/^}/p' "${UP_SH}")"
-[ "$(type -t sock_mountable)" = "function" ] || fail "scripts/up.sh has no sock_mountable() — doctor's socket-mountability probe must be extractable so its no-create contract can be pinned (C5)"
+eval "$(sed -n '/^sock_mountable() {/,/^}/p' "${DOCTOR_SH}")"
+[ "$(type -t sock_mountable)" = "function" ] || fail "${DOCTOR_SH#"${REPO_ROOT}/"} has no sock_mountable() — doctor's socket-mountability probe must be extractable so its no-create contract can be pinned (C5)"
 
 sockdir="${dir}/rd"; mkdir -p "${sockdir}"
 missing="${sockdir}/docker.sock"

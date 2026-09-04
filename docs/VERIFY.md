@@ -132,11 +132,14 @@ integrity check — the first bullet — and even that one is **same-origin**:
   installer never fetches `SHA256SUMS.sig` or `SHA256SUMS.pem`. The `cosign
   verify-blob` in step 5 is **yours** to run; nothing in the installer runs
   cosign.
-- **The images** are pulled by *tag* (`docker compose pull`). They are
-  cosign-verifi**able** — that is step 1 — and the installer verifies none of
-  them. On a fresh install the first foreign code to execute on your machine is
-  in fact the `wardynd` image's `-gen-age-key` entrypoint, which the installer
-  runs to mint your secret-store key *before* `docker compose up`.
+- **The images it does pull** — `wardynd`, and the third-party `postgres` and
+  `registry`, which are the only three services in the compose file's default
+  profile — arrive by *tag* (`docker compose pull`); see the next bullet for the
+  four that do not arrive at all. They are cosign-verifi**able** — that is step
+  1 — and the installer verifies none of them. On a fresh install the first
+  foreign code to execute on your machine is in fact the `wardynd` image's
+  `-gen-age-key` entrypoint, which the installer runs to mint your secret-store
+  key *before* `docker compose up`.
 - **Four of the images do not arrive at install time at all.** `docker compose
   pull` resolves only the three default-profile services (`wardynd`,
   `postgres`, `registry`); the proxy sidecar (`WARDYN_PROXY_IMAGE`) and the
@@ -146,6 +149,15 @@ integrity check — the first bullet — and even that one is **same-origin**:
   They carry the same release tag and verify exactly the same way, so run step 1
   against each of them too — the installer's "Pulling signed images" line covers
   neither the pull nor the verification of these four.
+- **From a clone, `make setup` also runs published code on the host itself.**
+  Its pull-first path fetches the same five release images and then copies the
+  host-native `wardyn` CLI out of the `wardynd` image to `bin/wardyn` and
+  **executes it outside any container** to detect your host's proxy settings
+  (`seed_host_proxy`, `scripts/up.sh`) — no confinement applies to that process.
+  Since 0.7 that path runs `cosign verify` + `cosign verify-attestation` itself
+  when `cosign` is on your PATH, refuses an image that fails, and says plainly
+  that nothing was checked when it is not; `WARDYN_BUILD_LOCAL=1` skips the pull
+  entirely and builds from your own tree.
 - **The compose file** — `deploy/compose/docker-compose.yaml`, which decides
   which images run, which ports publish on which interface, whether
   `WARDYN_LOCAL_MODE` is on, and what is bind-mounted — is fetched from the
