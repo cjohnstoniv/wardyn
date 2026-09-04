@@ -232,9 +232,12 @@ its entry says so:
   [deploy/images/README.md](../deploy/images/README.md)).
 - **`scripts/run-e2e-byoi.sh`** (`make test-e2e-byoi`) — live BYOI wrap +
   selftest proof. It requires a wardynd ALREADY running with `-envbuild` and a
-  staged `WARDYN_ENVBUILD_TOOLS_DIR`; the nightly stack boots without envbuild,
-  so a CI copy would skip its load-bearing assertions. Run by hand when
-  re-validating BYOI (see RELEASING.md).
+  staged `WARDYN_ENVBUILD_TOOLS_DIR`, and — unlike the SSH and UI-sandbox
+  scripts below — starts no control plane of its own. That is setup this
+  repo does not put on every PR, so it runs in `nightly.yml`'s `byoi-e2e-live`
+  job (which boots the compose stack first, the way `ci.yml`'s
+  `desktop-envelope` does) rather than in `ci.yml`, and remains runnable by
+  hand. See RELEASING.md when re-validating BYOI.
 - **`scripts/run-e2e-subscription.sh`** (`make test-e2e-subscription`) — live
   subscription proxy-injection proof. It needs a real operator
   `claude setup-token`; no repository secret carries one. Run by hand before a

@@ -118,7 +118,12 @@ auth:
   #      Secret you created out-of-band carrying the token under `key`.
   #   2. Inline demo: leave secretRef.name empty and set adminToken.value; the
   #      chart creates "<fullname>-auth" (token lands in the release history).
-  # Running OIDC instead? Set env.WARDYN_OIDC_ISSUER and leave both empty.
+  # Running OIDC instead? Leave both empty and set env.WARDYN_OIDC_ISSUER —
+  # PLUS one of env.WARDYN_OIDC_OPERATOR_EMAILS, env.WARDYN_OIDC_ROLE_MAP or
+  # env.WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true. The issuer alone is refused at
+  # render, because wardynd refuses to BOOT on it (an empty operator list makes
+  # every human the IdP signs in admin-equivalent), so the incomplete recipe
+  # would apply cleanly and then crash-loop. An empty string is not "set".
   adminToken:
     key: admin-token
     secretRef:

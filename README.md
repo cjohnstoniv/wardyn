@@ -25,7 +25,7 @@ Pick by **who runs this box**. Everything here pulls cosign-signed, SBOM-atteste
 
 ### Single-user — you are the operator
 
-**Your own machine** — no SSO; the installer prints an admin token you paste once:
+**Your own machine** — no SSO; the installer mints an admin token and prints where to read it (`grep WARDYN_ADMIN_TOKEN ~/.wardyn/.env`), rather than into your scrollback:
 
 ```sh
 curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.6/install.sh | sh

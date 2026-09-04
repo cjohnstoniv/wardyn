@@ -574,6 +574,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **Helm: the chart's cluster-scoped RBAC objects now carry the release namespace in their names.** The ClusterRole and ClusterRoleBinding were named without it (release `wardyn` in namespace `wardyn` rendered `wardyn-k8s-runtimeclasses`), so two releases in one cluster contended for one object. They now render as `wardyn-wardyn-k8s-runtimeclasses`; `helm upgrade` replaces them in place. Anything outside the chart that referenced the old names — an RBAC audit, an admission policy — needs the new ones. (R5 s2-ops-2:ops2-04)
 - `GET /access` no longer carries `issuer`; `provider` is unchanged. The raw OIDC issuer URL was never read by the console — the human-facing IdP name it shows is derived from the issuer server-side and sent as `provider`.
 
 - **Everyone signs in once after upgrading.** The session cookie's format version is stamped, so cookies issued by an older daemon are re-derived rather than accepted. This is deliberate and it is one field's fault: the cookie now records whether a member's group list was truncated, and an absent bit would decode as "not truncated" — the exact wrong answer, since group membership decides which governance profile applies. API tokens carry the same marker from the moment they are minted.

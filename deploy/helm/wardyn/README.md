@@ -287,9 +287,10 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
 
 Wardyn has a real two-role model — every OIDC session carries an **admin** or
 **member** role, derived at login (`internal/auth/oidc`'s `deriveRole`).
-`env.WARDYN_OIDC_ISSUER` alone only enables SSO (everyone signs in as admin,
-today's pre-0.5 behavior); `env.WARDYN_OIDC_ROLE_MAP` is what turns that into
-RBAC. Full semantics (ownership scoping, the approval kind-restriction, the
+`env.WARDYN_OIDC_ISSUER` alone would only enable SSO (everyone signs in as
+admin, the pre-0.5 behaviour) — which is why the chart **refuses to render** it
+alone; `env.WARDYN_OIDC_ROLE_MAP` (or, at minimum,
+`env.WARDYN_OIDC_OPERATOR_EMAILS`) is what turns SSO into RBAC. Full semantics (ownership scoping, the approval kind-restriction, the
 policy clamp, the admin-token ceiling): [docs/OPERATIONS.md's "Multi-user: who
 can change what"](../../../docs/OPERATIONS.md#multi-user-who-can-change-what).
 A worked, end-to-end setup for Entra ID App Roles specifically (the manifest,
@@ -487,6 +488,17 @@ wardynd never reads one back); the cluster-scoped ClusterRole covers
 only ever resolves one by name). One rule is conditional:
 `persistentvolumeclaims` get+create, rendered only with `userDrives.enabled` —
 see [User drives](#user-drives-userdrivesenabled) below.
+
+**Two releases on one cluster is supported.** The namespaced objects are named
+from the release, and the two cluster-scoped ones additionally carry the release
+namespace — `<namespace>-<fullname>-k8s-runtimeclasses`, so
+`helm install wardyn -n team-a` renders `team-a-wardyn-k8s-runtimeclasses`.
+Without that prefix, `helm install wardyn -n team-a` and
+`helm install wardyn -n team-b` would both want the same global name, and
+uninstalling either would take the other's RuntimeClass read permission with it
+(every CC2/CC3 run in the survivor then fails on a 403 nothing explains).
+Upgrading a release installed before 0.7 renames both objects in place, which
+Helm handles as an ordinary create-then-prune.
 
 ### User drives (`userDrives.enabled`)
 
@@ -691,6 +703,34 @@ spec:
 it on. See [docs/SSH.md](../../../docs/SSH.md) for the SSH gateway itself
 (what it does once traffic reaches it, session semantics, client setup).
 
+## Scraping `/metrics` through the NetworkPolicy
+
+`GET /metrics` needs the admin bearer token ([docs/OPERATIONS.md's
+Monitoring](../../../docs/OPERATIONS.md#monitoring)) — and on Kubernetes it also
+needs a route. The chart's default-deny NetworkPolicy admits **this namespace
+only**, so a Prometheus running in a `monitoring` namespace is dropped before it
+reaches wardynd, which is indistinguishable from a target that is down.
+
+`networkPolicy.ingress.from` **REPLACES** that same-namespace default rather
+than adding to it, so name every peer that must reach the pod:
+
+```yaml
+networkPolicy:
+  ingress:
+    from:
+      - namespaceSelector:
+          matchLabels: {kubernetes.io/metadata.name: ingress-nginx}
+      - namespaceSelector:
+          matchLabels: {kubernetes.io/metadata.name: monitoring}
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+```
+
+`ci/all-on-values.yaml` renders exactly that pair. The chart ships no
+ServiceMonitor: it would bind this chart to a specific operator's CRD, and the
+annotation plus the peer above is what a stock Prometheus needs.
+
 ## UI sandbox gateway
 
 `uiSandbox.enabled` relays one policy-declared loopback port inside a run's
@@ -808,12 +848,15 @@ See `values.yaml` for all options. Key settings:
 - `postgres.dsn.value`: inline DSN (inline mode only)
 - `auth.adminToken.secretRef.name` / `auth.adminToken.value`: admin bearer token,
   external Secret or inline demo. **One of these (or `env.WARDYN_OIDC_ISSUER`)
-  is required** — the chart fails the render otherwise. `env.WARDYN_OIDC_ISSUER`
-  alone renders fine but is NOT enough to boot: also set
-  `env.WARDYN_OIDC_OPERATOR_EMAILS`, or the pod crash-loops — wardynd refuses to
-  start with OIDC configured and an empty operator list (override with
-  `env.WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true` if every signed-in human should
-  really be admin-equivalent).
+  is required** — the chart fails the render otherwise, and an empty string does
+  not count as set for either variable. `env.WARDYN_OIDC_ISSUER` **on its own is
+  refused at render too**: wardynd will not boot with OIDC configured and an
+  empty operator list, so the chart refuses the combination rather than letting
+  it apply cleanly and then crash-loop. Set one of
+  `env.WARDYN_OIDC_OPERATOR_EMAILS`, `env.WARDYN_OIDC_ROLE_MAP`, or
+  `env.WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true` (that last only if every
+  signed-in human should really be admin-equivalent). `extraEnv` entries count
+  for all of these, `valueFrom` ones included.
 - `secrets.ageKey` / `secrets.ageKeyFromSecret`: secret-store age identity (empty
   => wardynd self-generates an ephemeral key). `ageKey` is inline-mode only;
   with an external DSN Secret, put `age-key` in it and set `ageKeyFromSecret=true`.

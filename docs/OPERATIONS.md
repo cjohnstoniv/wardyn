@@ -498,7 +498,30 @@ So it can scrape `1` throughout an outage that is 500ing every token-authenticat
 request, which is worse than no signal, because it argues against the operator's
 own evidence. Read `wardyn_store_up` as reachability and the two counters above
 as whether the work is actually succeeding. Scrape with any Prometheus
-`authorization` config carrying the admin token. `/healthz` stays the liveness/component surface (identity, runner classes,
+`authorization` config carrying the admin token.
+
+**On Kubernetes the scrape must also be let through the NetworkPolicy.** The
+Helm chart renders a default-deny policy whose only ingress peer is *this
+namespace*, so a Prometheus in a `monitoring` namespace is denied before it
+reaches `/metrics` — and a scrape a NetworkPolicy dropped looks exactly like a
+target that is down. `networkPolicy.ingress.from` opens it, but that value
+**REPLACES** the same-namespace default rather than adding to it, so list every
+peer that must reach wardynd:
+
+```yaml
+networkPolicy:
+  ingress:
+    from:
+      - namespaceSelector:
+          matchLabels: {kubernetes.io/metadata.name: ingress-nginx}
+      - namespaceSelector:
+          matchLabels: {kubernetes.io/metadata.name: monitoring}
+```
+
+`deploy/helm/wardyn/ci/all-on-values.yaml` carries exactly that pair, beside the
+`prometheus.io/scrape` pod annotation it advertises.
+
+`/healthz` stays the liveness/component surface (identity, runner classes,
 eBPF ground-truth state); `/metrics` is the trend surface. Audit sinks
 (`WARDYN_AUDIT_SINKS`, [ENV.md](ENV.md)) are the event stream for SIEMs — metrics
 carry no per-run detail.
@@ -939,18 +962,27 @@ the share mount, never holds a share credential, and never creates a volume with
    Two people whose email addresses share the part before the `@` resolve to the
    **same** home under `email_local` — the segment is validated, not proven
    unique. On a share that is a tree you own and can inspect: use `sub`, or a
-   per-person home override, where it can happen. On a **managed** drive there
-   is nothing to inspect, so `email_local` is **refused outright** — a
-   `docker_volume` or `k8s_pvc` drive registered with it answers a `400`
-   beginning `invalid drive: home_template "email_local" is not allowed on a
-   managed backend` and going on to name the two templates that do work. Wardyn
-   names a managed object after the home and nothing else, so those two people
-   would be allocated one volume, with write access to each other's files
-   whenever the drive is writable; use `hash` (the default) or `sub`. A row
-   written before this rule is refused at *run* time too (`drive: this
-   deployment cannot mount your drive (…)`), and every managed volume carries a
-   `wardyn.subject` label — a digest of the principal, never the claim — that
-   the driver refuses to mount for anybody else.
+   per-person home override, where it can happen.
+
+   **A managed drive takes `hash` and nothing else.** As of 0.7 the refusal
+   covers **every** non-`hash` template on a `docker_volume` or `k8s_pvc`
+   backend — `sub` as well as `email_local`. Registering either answers a `400`
+   beginning `invalid drive: home_template "<template>" is not allowed on a
+   managed backend`, and the message names `hash` as the single remedy. Two
+   reasons, and `sub` fails the second one: Wardyn names a managed object after
+   the home and nothing else, so `email_local` allocates two colliding people
+   one volume with write access to each other's files whenever the drive is
+   writable — and an object *name* is what `docker volume ls` and
+   `kubectl get pvc` print with no inspect or describe, so a verbatim `sub`
+   publishes the sign-in subject to anyone who can list the daemon or the
+   namespace, in the more exposed of the two places the label vocabulary already
+   refuses to put it. `hash` is unique and reveals nothing, and it is the
+   default; a **share** backend keeps every template, because its tree is one
+   you own and navigate by hand. A row written before this rule is refused at
+   *run* time too (`drive: this deployment cannot mount your drive (…)`), and
+   every managed volume carries a `wardyn.subject` label — a digest of the
+   principal, never the claim — that the driver refuses to mount for anybody
+   else.
 
 3. **Set the ceiling**: `WARDYN_USER_DRIVE_HOST_ROOTS=/srv/wardyn-drives`
    ([ENV.md](ENV.md)). Unset means **no `host_path` drive may be registered at
@@ -2650,6 +2682,38 @@ nothing crashed and nothing logged. Pin the probe back for such an image with
 Postgres reads healthy again). CI does not catch this — `helm-install-test` and
 the kind quickstart both build `wardynd` from source.
 
+### Upgrading a one-line install
+
+The recipe above assumes a checkout. An install created by `curl … | sh` has
+none — its compose file and `.env` live in `~/.wardyn` (or `$WARDYN_HOME`), and
+the installer's own closing banner says only *"re-run this installer at the new
+version"*. That is the mechanism, and it is genuinely all of it: re-running
+fetches the new release's compose file and bumps the image pins in `.env`
+(`WARDYN_AGENT_IMAGES` is **merged**, so an image you added by hand survives),
+while leaving your age key and your ports alone — it refuses outright rather
+than continue if `WARDYN_AGE_KEY` is missing, and it re-mints the admin token
+only when the existing one is empty or a placeholder. What it does **not** do is
+take the dump for you, and the forward-only rule is the same one:
+
+```sh
+WARDYN_VERSION=0.6.6                                     # the release you are moving TO
+cd ~/.wardyn                                             # or $WARDYN_HOME
+docker exec wardyn-postgres pg_dump -U wardyn wardyn > wardyn-$(date +%F).sql
+docker compose down                                      # keeps the Postgres volume
+curl -fsSL "https://github.com/cjohnstoniv/wardyn/releases/download/v${WARDYN_VERSION}/install.sh" | sh
+curl -fsS http://127.0.0.1:8080/healthz                  # or your WARDYN_UP_PORT
+```
+
+That dump is your only rollback, for the reason at the top of this section:
+there are no `down` migrations, so re-running an OLDER installer against a
+database a newer wardynd has already migrated is unsupported — and nothing stops
+you. `wardyn --version` says what CLI you have and `/healthz`'s `version` field
+says what the control plane is serving; check both before moving backwards.
+
+The desktop tier is different again: its upgrade is an MDM rewrite of the two
+image digests in `wardyn.env`, not a re-run of anything
+([DESKTOP.md](DESKTOP.md)).
+
 ### Splitting the migrator and app roles (`WARDYN_PG_MIGRATE_DSN`)
 
 Single-DSN mode logs a NOTICE at every boot: wardynd's own role owns
@@ -2777,20 +2841,35 @@ wired, rather than letting the reset render cleanly and take the pod down at boo
 (see [the age key](#the-age-key-is-a-secret-and-the-default-loses-your-secrets-on-boot-2)
 below).
 
-**The second, and why `--reuse-values` is not the fix for the first:
-`--reuse-values` replaces the new chart's `values.yaml` with the previous
-release's, so every value block the new version ADDED is absent from the map the
-templates read.** That is fatal for any chart that dereferences a new block
-without a default — the render dies on a nil map, not on a refusal. This chart is
-written not to: each `0.6`-only block (the UI-sandbox gateway, the
-readiness-probe path) is read through a `default dict` and its `values.yaml` leaf
-default, so a `0.5` values map renders as though you had accepted the new
-defaults, with and without `k8s.enabled`. It renders — but only ever with those
-defaults: the knobs `0.6` added never appear in the map, so what a fresh install
-would have made you choose is chosen for you, silently. Use
+**The second, and why `--reuse-values` is not the fix for the first: it makes
+the PREVIOUS release's values win over the new chart's, so a default the new
+version CHANGED silently keeps its old value.** `--reuse-values` layers the
+previous release's coalesced values *over* the new chart's `values.yaml` — it
+does not replace it. So a block the new version merely ADDED is not missing from
+the map the templates read: it arrives with the new chart's defaults, and no
+nil-dereference follows from its being new. (A `helm template` of a faithfully
+reconstructed `0.6.6` values map against the `0.7` chart renders byte-identical
+objects to the same map against `0.6.6`, because `trustedCA` and `userDrives`
+are purely additive.)
+
+What `--reuse-values` really costs you is the other direction. Every key the
+previous release's map *does* carry wins — including the keys it carries only
+because they were that chart's defaults, never because you chose them. So the
+day a Wardyn release CHANGES a default (rather than adding one), a
+`--reuse-values` upgrade silently keeps the old value, with nothing at render
+time to say so: a hardened NetworkPolicy port list, a probe path, a security
+context. That has not bitten anyone yet — every `values.yaml` change from `0.5`
+through `0.7` is additive, which is exactly why the reused-map render above is
+byte-identical — and it is a property of the changes so far, not a promise. Use
 `--reset-then-reuse-values` instead (Helm ≥ 3.14: starts from the NEW chart's
-defaults and layers the previous release's overrides on top), or better, pass `-f
-your-values.yaml` as above.
+defaults and layers only your explicit overrides on top), or better, pass `-f
+your-values.yaml` as above and keep that file the source of truth.
+
+(The `| default dict` guards in `templates/networkpolicy.yaml` and
+`templates/rbac.yaml` are **null**-robustness, not `--reuse-values`
+robustness: they cover a key that is PRESENT and explicitly `null`, which is
+what `--set uiSandbox=null` or an operator clearing a block by hand produces.
+That is the case the chart's own render checks exercise.)
 
 The new pod applies only the migration files `schema_migrations` does not already
 record. For the `0.5` → `0.6` upgrade this recipe serves, that is
@@ -3103,9 +3182,31 @@ cp`, or a snapshot restore into the new claim) and reclaim the old claim with
 the `delete pvc` above. The cheap
 alternative is not renaming a drive that has claims.
 
-**The console does not warn about this**, and in 0.7 it does not refuse it
-either: a rename with grants attached is accepted like any other edit. Treat the
-rename field as an operator action with a runbook, not a label edit.
+**The API refuses the edit; the console has no way to confirm it.** An
+identity-affecting `PUT /api/v1/drives/{id}` on a drive that already has
+allocations answers **`409`** (`driveRehomeGuard`), naming what changes and how
+many allocations move: *"this drive is allocated to N subjects and this change
+re-homes them: name "old" → "new". … re-send as PUT
+/drives/{id}?confirm=rehome."* Four fields count as identity-affecting —
+`backend`, `home_template`, `host_root`, and a `name` that folds to a
+**different slug** (a purely cosmetic rename that folds to the same slug is not
+refused, and neither is any edit to a drive nothing is allocated from).
+
+Confirming is an API action, deliberately:
+
+```sh
+curl -fsS -X PUT "$WARDYN_URL/api/v1/drives/<drive-id>?confirm=rehome" \
+  -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' --data @drive.json
+```
+
+The console PUTs with no query parameter and renders the `409` as a save
+refusal, so an admin cannot click past this — which is the point: plan the data
+move (the `kubectl cp` / snapshot restore above) first, then confirm. The
+resulting `drive.write` audit row carries **`rehomed: true`**, so an auditor can
+tell a storage re-point from a cosmetic edit after the fact
+([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)). Treat the rename field as an operator
+action with a runbook, not a label edit.
 
 **An existing claim's SHAPE is reused as it is, and logged rather than
 enforced.** A managed claim is looked up by name and mounted whatever its spec
@@ -3151,16 +3252,37 @@ rename — needs `wardyn.managed=true`, `wardyn.drive=<drive-id>` and
 `wardyn.home=<home>` (leave `wardyn.subject` off), or every run on it fails as
 *"belongs to a different drive or a different person"*.
 
-**`ReadWriteOnce` binds a claim to one node.** A managed drive is provisioned
-RWO, so a person's second concurrent run schedules onto the node their first run
-landed on — or stays Pending and fails at the dispatch wait timeout with the
-message below. The pod's failure reads `0/N nodes are available: pod has unbound
-immediate PersistentVolumeClaims` or a volume-node-affinity conflict, and wardynd
-surfaces the scheduler's own
-`PodScheduled` message in the run's failure hint rather than a bare timeout. The
-same message is what a claim that never bound at all produces — a storage class
-with no provisioner, or no default class on the cluster for a drive that names
-none. If members routinely run several sandboxes at once, provision the drive's
+**`ReadWriteOnce` binds a volume to one NODE — not to one pod, and nothing
+schedules around it.** A managed drive is provisioned RWO, which permits any
+number of pods to mount it *as long as they land on the same node*
+([Kubernetes: access modes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes)
+— for one-pod-at-a-time you need `ReadWriteOncePod`). kube-scheduler enforces
+only that stricter mode: its `volumerestrictions` plugin has an
+`ErrReasonReadWriteOncePodConflict` and **no ReadWriteOnce equivalent**. So a
+person's second concurrent run is not co-located and is not held back — it is
+scheduled like any other pod, and then one of three things happens:
+
+- **Same node** (or a bound PV whose node affinity pins the scheduler there, which
+  is what a topology-aware CSI provisioner sets): it mounts, and two sandboxes
+  write one home concurrently. Correctness is then the agents' problem, not
+  Kubernetes'.
+- **Different node:** the pod is *scheduled* and stalls in `ContainerCreating`
+  while the attach-detach controller waits for a detach that is not coming. The
+  evidence is a `FailedAttachVolume` **warning event on the pod**, naming the
+  pod(s) already using the volume — `kubectl -n <runsNamespace> describe pod
+  <pod>` is where to read it. wardynd's failure hint does **not** carry this: the
+  hint is read from the `PodScheduled` condition, which is `True` here, so the
+  run reports the bare dispatch-wait timeout.
+- **Node affinity excludes every candidate:** the pod stays Pending with
+  `node(s) didn't match PersistentVolume's node affinity`, which *does* land in
+  `PodScheduled` and therefore *does* reach the run's failure hint.
+
+`0/N nodes are available: pod has unbound immediate PersistentVolumeClaims` is a
+**different failure and does not describe any of the above** — the scheduler
+emits it in PreFilter for claims that never bound at all: a storage class with no
+provisioner, or no default class on the cluster for a drive that names none.
+
+If members routinely run several sandboxes at once, provision the drive's
 class as `ReadWriteMany` storage and pre-create the claims as a
 `k8s_pvc_static` share; Wardyn's managed backend does not offer RWX, because a
 concurrently-written shared home is a data-loss shape, not a feature.
@@ -3204,31 +3326,34 @@ Wardyn-dedicated export with `all_squash,anonuid=1000,anongid=1000`, or per-user
 `0700` subdirectories — and expect a read-only mount where an existing corporate
 home is owned by a different uid.
 
-**gVisor wants `directfs` off for a drive, and the annotation is a request.**
-The Wall (CC2) and Vault (CC3) tiers run the agent pod under a RuntimeClass; when
-its handler is `runsc`, gVisor's `directfs` has the gofer donate a file
-descriptor per mount point to the sandbox, which then operates on the file
-directly. That is right for a block PVC and wrong for a network-backed export —
-a `k8s_pvc_static` share over NFS/SMB. gVisor takes the override **per mount**,
-from a pod annotation keyed by the volume's own name, and wardynd stamps it on
-every drive pod whose resolved handler is `runsc`:
+**gVisor wants `directfs` off for a drive, and today only the NODE FLAG
+delivers it.** The Wall (CC2) and Vault (CC3) tiers run the agent pod under a
+RuntimeClass; when its handler is `runsc`, gVisor's `directfs` has the gofer
+donate a file descriptor per mount point to the sandbox, which then operates on
+the file directly. That is right for a block PVC and wrong for a network-backed
+export — a `k8s_pvc_static` share over NFS/SMB.
 
-```yaml
-dev.gvisor.spec.mount.drive.directfs: "off"
-```
+**Turn it off per node.** `--directfs=false` in the runsc shim's own config
+(`/etc/containerd/runsc.toml`, or the `runtimeArgs` a node image bakes in), on
+the nodes that run drive pods. This is the whole remedy; there is no working
+per-pod alternative to weigh it against.
 
-containerd only forwards it when the node's runsc runtime section allows the
-prefix, so on a cluster whose `/etc/containerd/config.toml` does not carry
-
-```toml
-pod_annotations = ["dev.gvisor.*"]
-```
-
-the annotation is inert and the node-level setting is the one that applies:
-`--directfs=false` in the runsc shim's own config (`/etc/containerd/runsc.toml`,
-or the `runtimeArgs` a node image bakes in). Either is fine; the annotation is
-per-pod and the flag is per-node. See
-[gVisor's containerd configuration guide](https://gvisor.dev/docs/user_guide/containerd/configuration/).
+> ⚠️ **The per-mount annotation wardynd stamps is currently inert — do not rely
+> on it.** wardynd sets `dev.gvisor.spec.mount.drive.directfs: "off"` on every
+> drive pod whose resolved handler is `runsc`, and runsc **discards it**. A
+> gVisor mount hint is only kept when it carries `share`, `source` *and* `type`
+> alongside the option; a hint missing any of them is dropped with *"ignoring
+> mount annotations for … because of missing required field(s)"*
+> ([`runsc/boot/mount_hints.go`](https://github.com/google/gvisor/blob/release-20260824.0/runsc/boot/mount_hints.go),
+> `NewPodMountHints`). Nor is the name in the key what binds a hint to a mount:
+> `FindMount` matches on the mount's **source path**, which for a CSI-provisioned
+> claim is a per-pod path the kubelet generates and no static annotation can name
+> in advance. Completing the annotation is a code change, not a configuration
+> one, and this document will not claim it works until it does. Separately, and
+> upstream of all of that, containerd forwards `dev.gvisor.*` annotations at all
+> only where the node's runsc runtime section carries
+> `pod_annotations = ["dev.gvisor.*"]` in `/etc/containerd/config.toml`. See
+> [gVisor's containerd configuration guide](https://gvisor.dev/docs/user_guide/containerd/configuration/).
 
 The companion caveat is CACHING, and it cuts the other way. runsc serves bind
 mounts `shared` by default (`--file-access-mounts=shared`), revalidating against
@@ -3236,8 +3361,12 @@ the host because it cannot assume exclusive access. An operator who has set
 `--file-access-mounts=exclusive` for throughput must **not** do so on nodes that
 run drive pods over a share other writers touch: exclusive mode caches
 aggressively, and a file another writer changes is not seen. A managed
-(`k8s_pvc`) drive is exclusive to its pod by construction and is unaffected. See
-[gVisor's filesystem guide](https://gvisor.dev/docs/user_guide/filesystem/).
+(`k8s_pvc`) drive is **not** exempt from this. RWO makes the volume exclusive to
+a NODE, not to a pod — see the `ReadWriteOnce` paragraph above — so two
+concurrent runs by the same person on that node are two sandboxes caching one
+home aggressively and not seeing each other's writes. Exclusive mode is safe for
+managed drives only where a member cannot have two runs on the same node at
+once. See [gVisor's filesystem guide](https://gvisor.dev/docs/user_guide/filesystem/).
 
 **Size is an allocation, not a limit**, and the product says so in one frozen
 sentence: *"Wardyn never enforces a drive's size itself. On Kubernetes the size

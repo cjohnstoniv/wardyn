@@ -317,6 +317,32 @@ genuinely different files rather than one portable script because the
 divergence is not cosmetic — `chown root:wheel` is a **hard failure** on Debian
 and Ubuntu, which have no `wheel` group, under `set -euo pipefail`.
 
+**Two shapes the bundle arrives in.** Run in place from a checkout (a pilot),
+`install.sh` registers the converge job at that checkout's path. For a fleet,
+[`scripts/build-desktop-package.sh`](../scripts/build-desktop-package.sh) builds
+a `.deb`/`.rpm`/tarball from a **clean git tree** — never the working directory,
+because `deploy/compose/.env` on a maintainer's box carries a live
+`WARDYN_AGE_KEY` and packaging it would make every device's secret store
+decryptable by anyone holding the package. The payload lands at
+`/usr/local/lib/wardyn/deploy/desktop/` (with `scripts/lib/common.sh` beside it
+at `/usr/local/lib/wardyn/scripts/lib/`, which is why the `deploy/` level in
+that path is load-bearing), and the CLI at `/usr/local/bin/wardyn`. Both shapes
+run the same `install.sh`; only the path it registers differs.
+
+**Enrolment runs one container image, as root.** `install.sh` mints `age.key` by
+running `wardynd -gen-age-key`, and the image it pulls for that defaults to
+`ghcr.io/cjohnstoniv/wardynd:latest` — the CONTINUOUS, main-tip tag
+`.github/workflows/publish-image.yml` pushes on every merge, which is **not**
+cosign-signed and is not the digest the envelope then pins. That is the one
+place on this page where a tag does move under the fleet, and it is bounded to
+first-device enrolment. A fleet that will not accept it sets
+**`WARDYN_INSTALL_IMAGE`** ([ENV.md](ENV.md)) to the release digest already
+pinned in `wardyn.env`, or to a corporate mirror of it:
+
+```sh
+sudo WARDYN_INSTALL_IMAGE=ghcr.io/cjohnstoniv/wardynd@sha256:<digest> ./install.sh
+```
+
 Everything the plist and the wrapper do is exercised, machine-verifiable and
 daemon-free: `scripts/test-desktop-profile.sh` (wired into `make test-scripts`)
 checks the envelope parses, every variable it sets is a real documented one,
@@ -404,7 +430,7 @@ the file:
 ```sh
 # MDM-scheduled, e.g. daily. The admin token is MDM-held; the developer never
 # reads it, and on m′ they could not use it anyway.
-wardyn support-bundle -o "/var/log/wardyn/support-$(date +%F).tar.gz"
+wardyn support-bundle --out "/var/log/wardyn/support-$(date +%F).tar.gz"
 ```
 
 **Leaked sandboxes.** A run row that is terminal but still carries a sandbox ref
@@ -447,7 +473,7 @@ network; here is what each does when it cannot.
 |---|---|
 | The converge job's image pull | **Fine.** It runs `--pull missing`, so an image already on the box is used as-is. (It used to be `--pull always` under `set -euo pipefail`, which killed the launcher and left the stack **down even though every image was local**.) |
 | OIDC discovery at boot (m′ only) | **Fails boot, loudly, inside a 30s budget — and that is correct.** See below. |
-| First-device enrolment (`install.sh`) | **Needs the network, once.** It mints `age.key` by running `wardynd -gen-age-key`, so it needs that image. This is inherent: enrolment cannot complete offline. Pre-seed the image, or enrol on-network. |
+| First-device enrolment (`install.sh`) | **Needs the network, once.** It mints `age.key` by running `wardynd -gen-age-key`, so it needs that image — `ghcr.io/cjohnstoniv/wardynd:latest` unless `WARDYN_INSTALL_IMAGE` names another (see "The install lane"). This is inherent: enrolment cannot complete offline. Pre-seed that exact ref, or enrol on-network. |
 | Audit fanout to the SIEM | **Drops past the buffer.** At-most-once beyond 4096 events; see the ceiling above. This is the one that loses evidence rather than recovering. |
 
 **Why the IdP case is not a bug.** On m′, OIDC is the only authentication, so a
@@ -496,6 +522,26 @@ converging against the wrong daemon or hanging. That refusal is deliberate: a
 converge that "succeeds" against a daemon the developer never uses is worse
 than one that fails.
 
+**Enrolment has the same problem and a different override.** `install.sh` also
+runs as root, and it also needs the daemon — it mints `age.key` by running
+`wardynd -gen-age-key` in a container. But it runs **before** MDM has delivered
+`/etc/wardyn/wardyn.env`, so there is no envelope to read. It takes the socket
+from the **environment** instead, resolving it with the same
+`wardyn_pick_docker_host` the launcher uses, and refuses with the same "no
+reachable Docker daemon" diagnostic when nothing answers:
+
+```sh
+# Colima (macOS) — the enrolled user's socket, absolute path
+sudo WARDYN_DOCKER_SOCK=/Users/alice/.colima/default/docker.sock ./install.sh
+
+# rootless Docker / Podman (Linux)
+sudo DOCKER_HOST=unix:///run/user/1000/docker.sock ./install.sh
+```
+
+Either variable works and `WARDYN_DOCKER_SOCK` wins. On a per-user runtime set
+the **same path in `wardyn.env`** as well: enrolment happens once and reads the
+environment, the converge job runs every 300s and reads the envelope.
+
 **Decision, recorded:** the unit is **system-scope**, matching the macOS
 LaunchDaemon. A user-scope unit would resolve the per-user socket for free, but
 it cannot read `/etc/wardyn` at `0600`, and MDM enrolment targets a device
@@ -524,13 +570,23 @@ is offline keeps running what it already has instead of failing to start.
 `wardyn-desktop.sh down --purge` additionally destroys the Postgres volume:
 every run, every recording, and the whole append-only audit log. Note the
 LaunchDaemon (or systemd timer) re-asserts the stack every 300s, so a plain
-`docker compose down` does not stick — unload the daemon first:
+`docker compose down` does not stick — unload the supervisor FIRST, or the next
+tick brings the stack straight back:
 
 ```sh
 sudo launchctl bootout system/com.wardyn.daemon      # macOS
 sudo systemctl disable --now wardyn.timer            # Linux
-sudo /usr/local/lib/wardyn/deploy/desktop/wardyn-desktop.sh down
+
+# ...then the SAME wardyn-desktop.sh the supervisor was pointed at. install.sh
+# registers it at whatever path the bundle sat on when it ran, so use YOUR path:
+sudo /path/to/deploy/desktop/wardyn-desktop.sh down            # in-place bundle
+sudo /usr/local/lib/wardyn/deploy/desktop/wardyn-desktop.sh down  # .deb/.rpm payload
 ```
+
+If you have lost track of the path, the supervisor holds it — `install.sh`
+substitutes it into both templates at registration: `sudo launchctl print
+system/com.wardyn.daemon` prints the job's program arguments on macOS, and
+`systemctl cat wardyn.service` shows the `ExecStart=` line on Linux.
 
 **Uninstall keeps your data unless you ask otherwise**, matching `dpkg`/`rpm`
 convention: it stops the stack, unloads the daemon and removes the payload, and

@@ -78,9 +78,25 @@ var envDocShellOnly = map[string]bool{
 	// EvalSymlinks can run there. A mount mapping, never a ceiling — nothing in
 	// Go reads it, by design.
 	"WARDYN_USER_DRIVE_HOST_ROOT": true,
-	"WARDYN_SETUP_MODE":           true, "WARDYN_SUBSCRIPTION_TOKEN": true, "WARDYN_STAGE_CLAUDE": true,
+	// WARDYN_STAGE_CLAUDE is deliberately NOT here any more: it had an ENV.md
+	// row, an exemption on this list, and no reader ANYWHERE — not in Go, not in
+	// a script — so the exemption was the only thing keeping a dead row green,
+	// while this list's own stated predicate ("read by compose/the operator
+	// scripts") was false for it. The row is gone with it. If the knob is ever
+	// implemented in scripts/setup.sh's staging branch (the sibling of the
+	// WARDYN_IMPORT_AWS / WARDYN_IMPORT_SCM gates), document it and re-add it.
+	"WARDYN_SETUP_MODE": true, "WARDYN_SUBSCRIPTION_TOKEN": true,
 	"WARDYN_IMPORT_AWS": true, "WARDYN_IMPORT_SCM": true, "WARDYN_FORCE_RESET": true,
 	"WARDYN_DEFAULT_POLICY_AUTO": true,
+	// The rest of the operator knobs install.sh + scripts/*.sh actually read.
+	// Real configuration, documented in ENV.md's "Setup / operator scripts
+	// (shell-only)" table, with no Go reader by design.
+	"WARDYN_FORCE_STOP_HOST": true, "WARDYN_UP_NO_BROWSER": true,
+	"WARDYN_UP_SKIP_RUN_IMAGES": true, "WARDYN_SCM_SSH_HOSTS": true,
+	"WARDYN_GEN_DEPLOY_KEY": true, "WARDYN_DEPLOY_KEY_HOST": true,
+	// install.sh's own three: the one-line installer's version pin, its target
+	// directory, and the loopback port it publishes.
+	"WARDYN_VERSION": true, "WARDYN_HOME": true, "WARDYN_PORT": true,
 	// The desktop tier's MDM-managed directory: docker-compose.yaml bind-mounts
 	// it read-only at /etc/wardyn and wardyn-desktop.sh exports it. Go never
 	// reads the var — it reads the POLICY FILE at the path inside that mount

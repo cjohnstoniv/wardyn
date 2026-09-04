@@ -115,11 +115,23 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "wardyn.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{/* CLUSTER-SCOPED NAMES CARRY THE NAMESPACE; namespaced ones above must not.
+wardyn.fullname is built from the RELEASE NAME alone, which is enough for every
+namespaced object (two releases in two namespaces get two distinct Roles) but
+NOT for these two: a cluster-scoped object has one global name, so
+`helm install wardyn -n team-a` and `helm install wardyn -n team-b` both want
+"wardyn-k8s-runtimeclasses" — the second install fails on a resource it does not
+own, and an uninstall of either would take the other's RuntimeClass read
+permission with it, breaking every CC2/CC3 run in the surviving namespace with a
+403 no chart output explains. Prefixing with .Release.Namespace makes the two
+independent. Renaming is safe on upgrade: both objects are in the release
+manifest, so Helm creates the new pair and removes the old. */}}
+{{- $clusterName := printf "%s-%s-k8s-runtimeclasses" .Release.Namespace (include "wardyn.fullname" .) -}}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "wardyn.fullname" . }}-k8s-runtimeclasses
+  name: {{ $clusterName }}
   labels:
     {{- include "wardyn.labels" . | nindent 4 }}
 rules:
@@ -130,13 +142,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "wardyn.fullname" . }}-k8s-runtimeclasses
+  name: {{ $clusterName }}
   labels:
     {{- include "wardyn.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "wardyn.fullname" . }}-k8s-runtimeclasses
+  name: {{ $clusterName }}
 subjects:
   - kind: ServiceAccount
     name: {{ include "wardyn.serviceAccountName" . }}

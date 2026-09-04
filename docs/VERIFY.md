@@ -22,6 +22,28 @@ image that bundles it. Build that one locally with `make agent-images`; you then
 install the vendor CLI under your own agreement with Anthropic. See
 [`deploy/images/THIRD-PARTY-TERMS.md`](../deploy/images/THIRD-PARTY-TERMS.md).
 
+## 0. Pick the version you are verifying
+
+Every command below is parameterised on `$WARDYN_VERSION`. Set it once, in the
+shell you are about to paste into. A stale literal in a doc is how `cosign
+verify` ends up answering `MANIFEST_UNKNOWN` for a tag that was never published
+— which reads like a verification failure and is not one:
+
+```sh
+# The newest release. NOT releases/latest — that endpoint excludes pre-releases,
+# and every Wardyn release is one, so it 404s and leaves this empty.
+WARDYN_VERSION=$(curl -fsSL "https://api.github.com/repos/cjohnstoniv/wardyn/releases?per_page=1" \
+                 | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -1)
+: "${WARDYN_VERSION:?could not resolve a version — set it by hand, e.g. WARDYN_VERSION=0.6.6}"
+```
+
+Or set it by hand to the release you actually pulled — `wardyn --version`
+prints it, and it is the `version` field of `GET /healthz`. The image tag and
+the release tag are the same number; only the git tag carries the `v`. What is
+published is listed at
+<https://github.com/cjohnstoniv/wardyn/pkgs/container/wardynd>, and a tag that
+is not there has no signature to verify.
+
 ## 1. Verify the signature
 
 Signing is keyless (Sigstore): there is no public key to distribute, and no
@@ -32,7 +54,7 @@ which repository, at which tag* produced the image.
 cosign verify \
   --certificate-identity-regexp '^https://github\.com/cjohnstoniv/wardyn/\.github/workflows/release\.yml@refs/tags/v.*$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/cjohnstoniv/wardynd:0.6.2
+  "ghcr.io/cjohnstoniv/wardynd:${WARDYN_VERSION}"
 ```
 
 Read the identity regexp before you copy it. It is the whole check: it says the
@@ -47,7 +69,7 @@ The image's own component inventory, attested to its digest:
 cosign verify-attestation --type cyclonedx \
   --certificate-identity-regexp '^https://github\.com/cjohnstoniv/wardyn/\.github/workflows/release\.yml@refs/tags/v.*$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/cjohnstoniv/wardynd:0.6.2 \
+  "ghcr.io/cjohnstoniv/wardynd:${WARDYN_VERSION}" \
   | jq -r '.payload' | base64 -d | jq '.predicate.components[] | {name, version, licenses}'
 ```
 
@@ -60,7 +82,7 @@ question is still open.
 How it was built, in the format GitHub's own tooling reads:
 
 ```sh
-gh attestation verify oci://ghcr.io/cjohnstoniv/wardynd:0.6.2 --repo cjohnstoniv/wardyn
+gh attestation verify "oci://ghcr.io/cjohnstoniv/wardynd:${WARDYN_VERSION}" --repo cjohnstoniv/wardyn
 ```
 
 ## 4. Verify the Helm chart
@@ -71,13 +93,13 @@ The chart is an OCI artifact signed by the same workflow:
 cosign verify \
   --certificate-identity-regexp '^https://github\.com/cjohnstoniv/wardyn/\.github/workflows/release\.yml@refs/tags/v.*$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/cjohnstoniv/charts/wardyn:0.6.2
+  "ghcr.io/cjohnstoniv/charts/wardyn:${WARDYN_VERSION}"
 ```
 
 Then install it directly — `oci://` is native Helm, no `helm repo add`:
 
 ```sh
-helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version 0.6.2 \
+helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "${WARDYN_VERSION}" \
   --namespace wardyn --create-namespace \
   --set auth.adminToken.secretRef.name=wardyn-auth
 ```
@@ -88,7 +110,7 @@ Each release carries the per-image SBOMs, `THIRD-PARTY-NOTICES.md`, `LICENSE`,
 `NOTICE`, and a signed `SHA256SUMS`:
 
 ```sh
-gh release download v0.6.2 --repo cjohnstoniv/wardyn
+gh release download "v${WARDYN_VERSION}" --repo cjohnstoniv/wardyn
 sha256sum -c SHA256SUMS
 cosign verify-blob \
   --certificate SHA256SUMS.pem --signature SHA256SUMS.sig \
@@ -115,6 +137,15 @@ integrity check — the first bullet — and even that one is **same-origin**:
   them. On a fresh install the first foreign code to execute on your machine is
   in fact the `wardynd` image's `-gen-age-key` entrypoint, which the installer
   runs to mint your secret-store key *before* `docker compose up`.
+- **Four of the images do not arrive at install time at all.** `docker compose
+  pull` resolves only the three default-profile services (`wardynd`,
+  `postgres`, `registry`); the proxy sidecar (`WARDYN_PROXY_IMAGE`) and the
+  three agent images the installer registers in `WARDYN_AGENT_IMAGES`
+  (`agent-base`, `agent-codex-cli`, `agent-aws-sso`) are pulled by **wardynd
+  itself, at your first run**, long after the install transcript scrolled past.
+  They carry the same release tag and verify exactly the same way, so run step 1
+  against each of them too — the installer's "Pulling signed images" line covers
+  neither the pull nor the verification of these four.
 - **The compose file** — `deploy/compose/docker-compose.yaml`, which decides
   which images run, which ports publish on which interface, whether
   `WARDYN_LOCAL_MODE` is on, and what is bind-mounted — is fetched from the

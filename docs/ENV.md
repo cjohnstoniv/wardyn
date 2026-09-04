@@ -121,7 +121,7 @@ log them.
 | `WARDYN_BEDROCK_AWS_PROFILE` | string | (unset) | `AWS_PROFILE` to select from the mounted `~/.aws` (flag `-bedrock-aws-profile`); falls back to the standard `AWS_PROFILE` when empty |
 | `WARDYN_BEDROCK_AWS_SSO_REGION` | string | (= bedrock-region) | AWS SSO region for the sandbox token exchange (flag `-bedrock-aws-sso-region`) |
 | `WARDYN_RECORDING_MOUNT` | string | (unset) | recording mount override read on the docker runner path (`runner_docker.go`) |
-| `WARDYN_SSH_LISTEN` | string | (unset) | SSH gateway listen address, e.g. `:2222` (flag `-ssh-listen`). **Empty = off = no listener, no new surface** — the host key is not even generated/persisted unless this is set (`buildOptionalFeatures`, `cmd/wardynd/boot_deps.go`). Registered-public-key auth only (no passwords), owner-or-admin authorization (`run.created_by` equals the key's principal, or the key was stamped `role=admin` and re-checked within `WARDYN_SSH_ROLE_TTL`); see `docs/SSH.md` Bounds |
+| `WARDYN_SSH_LISTEN` | string | daemon: (unset); **one-line install and desktop envelope: `:2222`** | SSH gateway listen address, e.g. `:2222` (flag `-ssh-listen`). **Empty = off = no listener, no new surface** — the host key is not even generated/persisted unless this is set (`buildOptionalFeatures`, `cmd/wardynd/boot_deps.go`). The DAEMON default is off, but two shipped deployments turn it on: `install.sh` writes `WARDYN_SSH_LISTEN=:2222` into every `.env` it creates **and backfills it on upgrade** (an install predating the listener vars would otherwise publish a port that refuses every connection), and `deploy/desktop/wardyn.env.example` ships it on too. So on those two paths the pre-auth listener exists by default, bound to loopback via the compose host-port publish — see [SSH.md](SSH.md) and `threatmodel/THREAT-MODEL.md` B9. Registered-public-key auth only (no passwords), owner-or-admin authorization (`run.created_by` equals the key's principal, or the key was stamped `role=admin` and re-checked within `WARDYN_SSH_ROLE_TTL`); see `docs/SSH.md` Bounds |
 | `WARDYN_SSH_ADVERTISE` | string | (unset) | externally-reachable `host[:port]` for the SSH gateway, shown in the run-detail "Attach from your terminal" pane's `ssh` command and on `/healthz`'s `ssh.advertise_addr` (flag `-ssh-advertise`). Purely advisory copy — the gateway itself binds `WARDYN_SSH_LISTEN`, not this; a container/NAT deployment's bind and its externally-reachable address routinely differ, so set this whenever the gateway is enabled (unset logs a boot warning) |
 | `WARDYN_SSH_ROLE_TTL` | duration | `24h` | how stale a registered SSH key's admin-override stamp (`ssh_public_keys.role_checked_at`, migration `0046`) may be before `sshAuth` refuses the override (flag `-ssh-role-ttl`). Refreshed on every OIDC login for that key's owning principal (`oidc.Config.OnLogin`) and at registration time; a key whose stamp is older than this (or was never stamped — `NULL`, a pre-`0046` row) is treated as **bounded-stale**, never live — see `docs/SSH.md` Bounds |
 | `WARDYN_UI_SANDBOX_LISTEN` | string | (unset) | UI-sandbox gateway listen address, e.g. `:8081` (flag `-ui-sandbox-listen`). **Empty = off = no listener, no new surface** — the relay cookie key is not even generated unless this is set. It **must differ from `WARDYN_LISTEN`** (and from `-ssh-listen`) and boot refuses if it does not: relayed pages are the sandbox's own code, and the separate browser origin is the only thing keeping that code away from the console's session. Boot also applies the `WARDYN_ALLOW_PLAINTEXT_LISTEN` rule to **this** address, not only to `WARDYN_LISTEN`: the relay session cookie is an 8h bearer credential for a run, so a specific non-loopback bind with no TLS posture is refused here too |
@@ -254,8 +254,13 @@ count means the collector is slow/down and events are being shed after
 | `WARDYN_URL` | string | `http://localhost:8080` | control plane URL (flag `-url`) |
 | `WARDYN_ADMIN_TOKEN` 🔒 | string | (unset) | admin bearer for CLI calls |
 | `WARDYN_TOKEN` 🔒 | string | (unset) | fallback source for the CLI's admin bearer (`cmd/wardyn/main.go`) — read by the CLI only, never by `wardynd` |
-| `WARDYN_WORKSPACE_DIR` | string | `defaultWorkspaceDir` | workspace directory for local commands |
 | `WARDYN_ALLOW_PLAINTEXT` | bool | `false` | silence the warning the CLI prints when the admin token would travel in cleartext (`http://` to a non-loopback wardynd). Advisory only — the call is never refused; set it when TLS terminates in front of the control plane |
+
+## `wardyn-scan` (workspace-needs scanner, run INSIDE a sandbox)
+
+| Variable | Type | Default | Notes |
+|---|---|---|---|
+| `WARDYN_WORKSPACE_DIR` | string (path) | `/home/agent/work` | the directory `wardyn-scan` scans, **inside the run container** — the agent images' workspace mount point (`defaultWorkspaceDir`, `cmd/wardyn-scan/main.go`). Not a host path and not read by the `wardyn` CLI at all |
 
 ## `wardyn-rec` (recording uploader)
 
@@ -339,18 +344,27 @@ compose stack itself — mostly scoping, so several stacks can coexist on one ho
 
 ### Setup / operator scripts (shell-only)
 
-Read by `scripts/setup.sh`, `scripts/up.sh`, `scripts/ci-run.sh` and the Makefile.
-For the rest of the CI knobs see [docs/CI.md](CI.md); for everything else, the
-header comments in `scripts/up.sh`.
+Read by `install.sh`, `scripts/setup.sh`, `scripts/up.sh`, `scripts/up-reset.sh`,
+`scripts/ci-run.sh` and the Makefile. For the rest of the CI knobs see
+[docs/CI.md](CI.md). This table is the registry for the rest — there is no
+second list of shell knobs anywhere else.
 
 | Variable | Type | Default | Notes |
 |---|---|---|---|
 | `WARDYN_SETUP_MODE` | string | (unset = interactive prompt; headless `container`) | `make setup` installer path: `container` (this compose stack — the default and the recommended mode) or `local`/`host` (advanced host mode). Read by `scripts/setup.sh`, not by `wardynd` |
-| `WARDYN_SUBSCRIPTION_TOKEN` 🔒 | string | (unset) | seeds a Claude subscription headlessly through `scripts/up.sh` / `scripts/ci-run.sh`, equivalent to `wardyn subscription connect` on stdin |
-| `WARDYN_STAGE_CLAUDE` | bool | (unset = ask) | stage the operator's local Claude credentials during setup |
+| `WARDYN_SUBSCRIPTION_TOKEN` 🔒 | string | (unset) | **Neither compose path honours it, despite the name.** `scripts/up.sh` *ignores* it with a warning — a shared subscription credential is a single-user desktop setting (`WARDYN_ALLOW_SHARED_SUBSCRIPTION` is that escape hatch, and the Helm chart refuses the whole family outright) — and `scripts/ci-run.sh` **exits non-zero** on it, because a subscription belongs to one person while a pipeline runs on behalf of everyone who can trigger it (pass an `anthropic-api-key` CI secret, or use Bedrock — [docs/CI.md](CI.md) has the variable). The one reader that honours it is `scripts/record-demo.sh`, which pipes it into `wardyn subscription connect --token-stdin`. Everywhere else: connect it in the console, Settings → Model provider → Claude subscription |
 | `WARDYN_IMPORT_AWS` | bool | (unset = ask) | import the operator's `~/.aws` selectors during setup |
 | `WARDYN_IMPORT_SCM` | bool | (unset = ask, default no) | import host SCM credentials during setup |
 | `WARDYN_FORCE_RESET` | bool | (unset = ask) | answer the destructive-reset confirmation non-interactively |
+| `WARDYN_FORCE_STOP_HOST` | bool | (unset = ask) | `WARDYN_FORCE_RESET`'s sibling, gated **separately** because it is the bigger act: `scripts/up.sh reset-all` stops a HOST-mode wardynd only when this is set too (`_confirm_host_stop`, `scripts/up-reset.sh`). `WARDYN_FORCE_RESET` alone answers the volume-wipe confirmation and leaves a host daemon running |
+| `WARDYN_UP_NO_BROWSER` | bool | (unset = open one) | `1` stops `scripts/up.sh` and `scripts/setup.sh` opening the console in a browser when they finish. Set it on headless boxes, in recorded demos, and anywhere `up` is driven by another script |
+| `WARDYN_UP_SKIP_RUN_IMAGES` | bool | (unset = build them) | `1` makes `scripts/up.sh` skip building the agent + proxy run images, for a console-only look. Runs then fail until you build them: `make agent-images-core && docker compose -f deploy/compose/docker-compose.yaml --profile build-only build proxy-image` |
+| `WARDYN_SCM_SSH_HOSTS` | string (space-separated) | `github.com` | hosts `scripts/setup.sh` fetches SSH host keys for while importing SCM credentials, e.g. `"github.com dev.azure.com"` |
+| `WARDYN_GEN_DEPLOY_KEY` | bool | (unset = ask) | `1` makes `scripts/setup.sh` generate a per-repo deploy key headlessly instead of prompting for one |
+| `WARDYN_DEPLOY_KEY_HOST` | string | `github.com` | the host that deploy key is generated for (`scripts/setup.sh`); read only when a key is actually being generated |
+| `WARDYN_VERSION` | string | (unset = newest release) | `install.sh` only: which release the one-line installer resolves, e.g. `v0.6.6`. Unset asks the GitHub releases API |
+| `WARDYN_HOME` | string (path) | `~/.wardyn` (`~/.<WARDYN_NS>`) | `install.sh` only: where the one-line install puts `.env`, the compose file and the data. Re-running the installer at a newer version reads the same directory — that is the upgrade path ([OPERATIONS.md](OPERATIONS.md#upgrading-a-one-line-install)) |
+| `WARDYN_PORT` | int | `8080` | `install.sh` only: the loopback host port the one-line install publishes the console on. It is written once, as `WARDYN_UP_PORT` in `.env`; an upgrade re-run deliberately does **not** rewrite the ports, so change the port in `.env` rather than here |
 | `WARDYN_DEFAULT_POLICY_AUTO` | bool | (unset) | **not operator-settable — an internal marker, not a knob.** `scripts/up.sh` writes `1` into `deploy/compose/.env` next to `WARDYN_DEFAULT_POLICY` whenever it auto-picked that value itself; `0` once an explicit `WARDYN_DEFAULT_POLICY` override is seen. Lets `up` safely re-run the auto-pick on a later invocation without ever clobbering a value the operator set by hand — including a model path `host_llm_key_present` cannot see in THIS process's env at all (a subscription connected in a prior `up`, or a key added through the UI): `up` asks the running daemon's own `/setup/status` `llm_ready` for that, not just its own env |
 | `WARDYN_INSTALL_IMAGE` | string | `ghcr.io/cjohnstoniv/wardynd:latest` | `deploy/desktop/install.sh` only: the `wardynd` image it runs `-gen-age-key` against to mint a new device's `age.key`. Set it to a pinned digest or a corporate mirror ref; the desktop tier's compose stack itself still resolves its own image from `WARDYN_WARDYND_IMAGE` in the managed `wardyn.env` (`wardyn-desktop.sh` defaults that one too — see [docs/DESKTOP.md](DESKTOP.md)) |
 
