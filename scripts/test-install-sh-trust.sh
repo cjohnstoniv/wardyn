@@ -53,6 +53,10 @@
 #             and no banner, and an old compose still installs             (F037)
 #   T22 PASS  an upgrade never discards WARDYN_PORT in silence — it names the
 #             stored port and the remedy, and does not move the port       (F036)
+#   T23 PASS  the SSH listener this installer turns on is disclosed on EVERY
+#             install, not only when the CLI happened to land               (F153)
+#   T24 PASS  a compose too old for `up --wait` says nothing probed wardynd and
+#             names the log command, instead of asserting health it never saw (F231)
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -753,6 +757,67 @@ d="${WORK}/t22b"; upgrade_fixture "${d}" 'WARDYN_UP_PORT=8090'
 if run_install "${d}/bin" "${d}/home" WARDYN_PORT=8090; then
   if grep -q 'was ignored' "${d}/home/install.out"; then
     fail "${t}" "warned about an override that changes nothing: $(grep 'was ignored' "${d}/home/install.out")"
+  else pass "${t}"; fi
+else fail "${t}" "install.sh exited $? — $(tail -2 "${d}/home/install.out" | tr '\n' ' ')"; fi
+
+# ── T23: the listener the installer turns on is disclosed unconditionally ──
+# install.sh writes WARDYN_SSH_LISTEN=:2222 into every fresh .env (and backfills
+# it on upgrade), while the daemon's own default is off — docs/ENV.md's row says
+# so. The install's ONLY mention of that listener used to sit inside
+# `if [ -n "${CLI_PATH}" ]`, and install_cli returns without setting CLI_PATH on
+# six branches (unsupported arch/OS, download failure, SHA256SUMS unfetchable,
+# asset not listed, no writable PATH dir). The stub curl here 404s every
+# releases/download/* URL, so EVERY case in this file already takes one of those
+# branches — which is exactly the shape in which a first-contact operator
+# finished the install having been told nothing about a new listening socket.
+t="T23 a fresh install discloses the SSH listener even when the CLI is skipped"
+d="${WORK}/t23"; make_stubs "${d}/bin" default; mkdir -p "${d}/home"
+if run_install "${d}/bin" "${d}/home"; then
+  out="${d}/home/install.out"
+  if grep -q 'CLI:' "${out}"; then
+    fail "${t}" "the CLI installed after all, so this case no longer exercises the skip branch"
+  elif ! grep -qi 'SSH gateway' "${out}"; then
+    fail "${t}" "no SSH listener disclosure on a CLI-skipped install: $(tail -12 "${out}" | tr '\n' ' ')"
+  elif ! grep -q '127.0.0.1:2222' "${out}"; then
+    fail "${t}" "disclosed a listener without naming where it listens: $(grep -i 'ssh gateway' "${out}")"
+  elif ! grep -q 'WARDYN_SSH_LISTEN' "${out}"; then
+    fail "${t}" "named no variable the operator can turn it off with: $(grep -iA2 'ssh gateway' "${out}" | tr '\n' ' ')"
+  else pass "${t}"; fi
+else fail "${t}" "install.sh exited $? — $(tail -2 "${d}/home/install.out" | tr '\n' ' ')"; fi
+
+t="T23b an upgrade whose .env has WARDYN_SSH_LISTEN blank reports the gateway OFF"
+d="${WORK}/t23b"; upgrade_fixture "${d}" 'WARDYN_UP_PORT=8080' 'WARDYN_SSH_LISTEN='
+if run_install "${d}/bin" "${d}/home"; then
+  out="${d}/home/install.out"
+  if [ -n "$(env_val "${d}/home/.wardyn/.env" WARDYN_SSH_LISTEN)" ]; then
+    fail "${t}" "the upgrade re-enabled a listener the operator had deliberately blanked"
+  elif ! grep -qi 'SSH gateway: *off' "${out}"; then
+    fail "${t}" "claimed a listener that is not configured: $(grep -i 'ssh gateway' "${out}" | tr '\n' ' ')"
+  else pass "${t}"; fi
+else fail "${t}" "install.sh exited $? — $(tail -2 "${d}/home/install.out" | tr '\n' ' ')"; fi
+
+# ── T24: an unprobed banner says it is unprobed ────────────────────────────
+# T21c pins that a compose predating `up --wait` (v2.1.1) still installs. On
+# that path nothing observed wardynd's health, so "Wardyn is running" is an
+# assertion again — the exact claim F231 named. The banner text is unchanged
+# (T21c asserts it verbatim); what this pins is that the transcript SAYS the
+# claim was not probed and names the one command that shows a crash-loop.
+t="T24 an old compose is told nothing probed wardynd, and where the crash-loop shows"
+d="${WORK}/t24"; make_stubs "${d}/bin" default; mkdir -p "${d}/home"; : > "${d}/bin/state/no-wait-flag"
+if run_install "${d}/bin" "${d}/home"; then
+  out="${d}/home/install.out"
+  if ! grep -q 'nothing probed wardynd' "${out}"; then
+    fail "${t}" "never said the readiness probe was unavailable: $(tail -14 "${out}" | tr '\n' ' ')"
+  elif ! grep -q 'docker compose logs wardynd' "${out}"; then
+    fail "${t}" "named no command that shows a crash-looping daemon: $(tail -14 "${out}" | tr '\n' ' ')"
+  else pass "${t}"; fi
+else fail "${t}" "install.sh exited $? on an old compose — $(tail -2 "${d}/home/install.out" | tr '\n' ' ')"; fi
+
+t="T24b a compose that DOES support --wait says no such thing"
+d="${WORK}/t24b"; make_stubs "${d}/bin" default; mkdir -p "${d}/home"
+if run_install "${d}/bin" "${d}/home"; then
+  if grep -q 'nothing probed wardynd' "${d}/home/install.out"; then
+    fail "${t}" "warned about a missing probe on a compose that ran one: $(grep 'nothing here probed' "${d}/home/install.out")"
   else pass "${t}"; fi
 else fail "${t}" "install.sh exited $? — $(tail -2 "${d}/home/install.out" | tr '\n' ' ')"; fi
 

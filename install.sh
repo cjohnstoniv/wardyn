@@ -406,6 +406,14 @@ umask "${OLD_UMASK}"
 # just written, so there is one code path and nothing to keep in step.
 PORT=$(env_get WARDYN_UP_PORT); PORT="${PORT:-${WARDYN_PORT:-8080}}"
 SSH_PORT=$(env_get WARDYN_SSH_PORT); SSH_PORT="${SSH_PORT:-${WARDYN_SSH_PORT:-2222}}"
+# …and the LISTENER, read the same way. This installer turns the SSH gateway on
+# while the daemon's own default is off (docs/ENV.md's WARDYN_SSH_LISTEN row
+# records both), so the banner below discloses it — but only if it is actually
+# on: an upgrade over an .env whose operator deliberately blanked the line does
+# NOT get it back (the backfill appends only when the key is absent), and
+# announcing a listener that is off would be the same lie in the other
+# direction.
+SSH_LISTEN=$(env_get WARDYN_SSH_LISTEN)
 
 say "Pulling signed images"
 docker compose pull --quiet 2>/dev/null || docker compose pull
@@ -438,8 +446,9 @@ echo "                 same signatures, verified the same way: docs/VERIFY.md §
 #
 # Probed, not assumed: --wait landed in Compose v2.1.1 and the only floor this
 # script enforces is "v2". On an older v2 the flag is unknown and the run is
-# unchanged from before this probe existed — no readiness proof, and the banner
-# says so rather than claiming one.
+# unchanged from before this probe existed — no readiness proof at all. The
+# closing banner still reads "Wardyn is running" there, so it carries a note
+# saying nothing observed that; see the COMPOSE_WAIT check beside it below.
 say "Starting"
 # An `if` CONDITION, not `cmd && VAR=x`: under `set -e` a failing AND-OR list is
 # still the statement's own exit status, so the probe would abort the install on
@@ -521,6 +530,15 @@ install_cli
 # Reached only when the stack came up healthy (or when this compose is too old to
 # be asked) — the `up` above dies with the daemon log otherwise, so this line is
 # no longer printed over a crash-looping container.
+#
+# On the too-old-to-be-asked path it is an assertion again, and it says so
+# HERE, attached to the claim, rather than leaving the operator to discover it.
+if [ -z "${COMPOSE_WAIT}" ]; then
+  say "This docker compose predates \`up --wait\` (Compose v2.1.1), so nothing probed wardynd —"
+  echo "                the next line is where it should be, not something this install observed."
+  echo "                Give it up to a minute; a crash-looping daemon shows up in:"
+  echo "                cd ${HOME_DIR} && docker compose logs wardynd"
+fi
 say "Wardyn is running: http://127.0.0.1:${PORT}"
 echo
 if [ -n "${CLI_PATH}" ]; then
@@ -529,7 +547,21 @@ if [ -n "${CLI_PATH}" ]; then
     *":$(dirname "${CLI_PATH}"):"*) ;;
     *) echo "                (not on your PATH — add: export PATH=\"$(dirname "${CLI_PATH}"):\$PATH\")" ;;
   esac
-  echo "  Attach:       wardyn ssh <run-id>   (the SSH gateway is on at 127.0.0.1:${SSH_PORT})"
+  echo "  Attach:       wardyn ssh <run-id>"
+fi
+# OUTSIDE the CLI block on purpose. This is the disclosure of a network listener
+# this installer turned on, and install_cli returns without setting CLI_PATH on
+# six branches — unsupported arch, unsupported OS, a failed download, an
+# unfetchable SHA256SUMS, an asset SHA256SUMS does not list, and no writable
+# directory on PATH. On any of those the operator used to finish the install
+# having been told nothing about it.
+if [ -n "${SSH_LISTEN}" ]; then
+  echo "  SSH gateway:  ON at 127.0.0.1:${SSH_PORT} — this installer writes WARDYN_SSH_LISTEN=${SSH_LISTEN}"
+  echo "                into ${HOME_DIR}/.env; the daemon's own default is off. Published"
+  echo "                loopback-only; registered public keys only, owner-or-admin: docs/SSH.md."
+  echo "                Turn it off: blank that line, then cd ${HOME_DIR} && docker compose up -d"
+else
+  echo "  SSH gateway:  off (WARDYN_SSH_LISTEN is empty in ${HOME_DIR}/.env — no listener, no host key)"
 fi
 echo "  Mode:         single-user — you are the admin. Multiple people? https://github.com/${REPO}/blob/${VERSION}/docs/OPERATIONS.md#second-user-same-host"
 echo "  Admin token:  grep WARDYN_ADMIN_TOKEN ${HOME_DIR}/.env"
