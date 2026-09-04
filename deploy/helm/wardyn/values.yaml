@@ -41,6 +41,13 @@ replicas: 1
 # fails OPEN, so a second replica can persist a session recording with live
 # credentials in cleartext. Setting this true renders the manifest anyway and
 # accepts that.
+#
+# It lifts TWO controls, not one. Besides the render refusal, wardynd takes the
+# database's single-instance advisory lock at boot and refuses to start while
+# another instance holds it — the control that still applies when someone
+# `kubectl scale`s this Deployment behind the chart's back. true adds
+# `-allow-multi-instance` to the pod's args, so the second pod comes up instead
+# of exiting; leave it false and a hand-scaled replica fails closed on its own.
 allowMultiReplica: false
 
 # Readiness probe path. /readyz pings Postgres, so a dead DB takes the pod out
@@ -251,6 +258,12 @@ k8s:
   # the control-plane NetworkPolicy withholds ssh/uiSandbox from wardyn.managed
   # pods (see networkPolicy.ingress.from).
   runsNamespace: ""
+  # Accept the ceiling above. k8s.enabled with an EMPTY runsNamespace is refused
+  # at render (templates/rbac.yaml); this renders it anyway, for a laptop demo or
+  # a cluster where wardynd is the only workload in its namespace and "every other
+  # workload here" is the empty set. Same "I accept the ceiling" escape hatch as
+  # allowMultiReplica and secrets.allowEphemeralAgeKey — not a default, a choice.
+  allowRunsInReleaseNamespace: false
   # wardyn-proxy sidecar image (WARDYN_PROXY_IMAGE) — ALSO what the boot-time
   # egress canary launches (with -egress-canary instead of its normal
   # entrypoint args). REQUIRED when k8s.enabled: the chart refuses to render

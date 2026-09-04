@@ -43,7 +43,7 @@ out; guarded, the 0.5 defaults simply carry forward.
 {{- fail (printf "wardyn: image.digest=%q must be a full digest beginning with \"sha256:\" (sha256: followed by 64 hex characters). It is appended as <repository>@<digest>, so a bare hex string renders `<repository>@<that string>`, which no kubelet can pull — and the pod ImagePullBackOffs with nothing else to go on. Putting a digest in image.tag or image.repository does not work either: they render `repo:sha256:...` and `repo@sha256:...:<appVersion>` respectively, which is why this key exists." $digest) -}}
 {{- end -}}
 {{- if and (gt (int .Values.replicas) 1) (not .Values.allowMultiReplica) -}}
-{{- fail "wardyn: replicas > 1 is refused. wardynd keeps state per-process that a second pod cannot see; the sharpest is the secret-masking registry (internal/secretmask) — an in-memory, process-local map that FAILS OPEN. Secrets are registered on whichever replica served the run's proxy injection; a session recording uploaded to any other replica finds an empty snapshot and is persisted VERBATIM, live credentials in cleartext, with a `success` audit event. The same holds for the live-attach cast. Run one replica (docs/OPERATIONS.md, \"One replica, by construction\"); set allowMultiReplica=true to render anyway and accept that." -}}
+{{- fail "wardyn: replicas > 1 is refused. wardynd keeps state per-process that a second pod cannot see; the sharpest is the secret-masking registry (internal/secretmask) — an in-memory, process-local map that FAILS OPEN. Secrets are registered on whichever replica served the run's proxy injection; a session recording uploaded to any other replica finds an empty snapshot and is persisted VERBATIM, live credentials in cleartext, with a `success` audit event. The same holds for the live-attach cast. Run one replica (docs/OPERATIONS.md, \"One replica, by construction\"); set allowMultiReplica=true to render anyway and accept that. Note this refusal is only the FIRST of two controls: wardynd itself takes the database's single-instance advisory lock at boot and refuses to start while another instance holds it, so a second pod exits rather than serving — which is what still protects you when someone scales this Deployment by hand instead of through the chart. allowMultiReplica=true passes -allow-multi-instance to the process too, lifting both together." -}}
 {{- end -}}
 {{- if and .Values.k8s.enabled (not .Values.serviceAccount.automount) -}}
 {{- fail "wardyn: k8s.enabled requires serviceAccount.automount=true. The k8s runner substrate (internal/runner/k8s) drives the Kubernetes API directly via client-go, which needs the pod's own projected ServiceAccount token to authenticate — automount=false (the chart's own default, since wardynd calls no API server otherwise) leaves it completely unable to. Set serviceAccount.automount=true." -}}
@@ -67,12 +67,24 @@ spec:
   # "One replica, by construction" carries the full remaining list. The value
   # stays templated for a future build that ships multi-replica for real.
   replicas: {{ .Values.replicas }}
-  # Recreate, not Kubernetes' default RollingUpdate: a rolling update starts the
-  # NEW pod before terminating the old one — a second replica for the window
-  # between them, on every `helm upgrade`, even though `replicas` never leaves
-  # 1 — exactly the secret-masking exposure the refusal above exists to
-  # prevent. Recreate tears the old pod down first so there is never a second
-  # one live.
+  # Recreate, not Kubernetes' default RollingUpdate. TWO reasons, either alone
+  # sufficient:
+  #   1. A rolling update starts the NEW pod before terminating the old one — a
+  #      second replica for the window between them, on every `helm upgrade`,
+  #      even though `replicas` never leaves 1 — exactly the secret-masking
+  #      exposure the refusal above exists to prevent.
+  #   2. It could not converge anyway. wardynd holds the database's
+  #      single-instance advisory lock and refuses to start while another
+  #      instance holds it, so under RollingUpdate the new pod would refuse,
+  #      never become Ready, and therefore never let the old pod (which holds
+  #      the lock) be terminated — a rollout deadlocked on itself, with the
+  #      only symptom a CrashLoopBackOff whose log says another instance is
+  #      running.
+  # Recreate tears the old pod down first, releasing the lock with its
+  # connection, so there is never a second one live and the new one always
+  # starts clean. The cost is a brief gap with no control plane during an
+  # upgrade, which is the correct trade for a daemon that is single-instance by
+  # construction.
   strategy:
     type: Recreate
   selector:
@@ -127,6 +139,18 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - -listen=:{{ .Values.service.port }}
+            {{- if .Values.allowMultiReplica }}
+            # wardynd takes the database's single-instance advisory lock at boot
+            # and REFUSES to start when another wardynd already holds it — the
+            # runtime half of the one-replica rule, and the half that survives
+            # someone editing this Deployment by hand or scaling it with
+            # `kubectl scale`, which no render-time refusal can see. An operator
+            # who set allowMultiReplica has already accepted that ceiling here,
+            # so the acceptance is handed to the process rather than made a
+            # second, separately-remembered switch: without it every replica but
+            # the first would exit at boot and the rollout would never converge.
+            - -allow-multi-instance
+            {{- end }}
           env:
             # DSN is the only required input; pulled from the (external or
             # chart-created) Secret so it never appears in the pod spec.
