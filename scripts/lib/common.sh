@@ -18,21 +18,29 @@
 # wait_healthy URL [TRIES] [SLEEP_SECS] — poll URL/healthz until it answers
 # (curl -fsS), sleeping SLEEP_SECS (default 1) between up to TRIES (default 60)
 # attempts. Returns 1 on timeout.
+#
+# -m 3 is what makes the TRIES budget mean anything: a peer that ACCEPTS the
+# connection and then never replies (a daemon wedged mid-boot, a stale WSL2 NAT
+# mapping) blocks an unbounded curl indefinitely, so the loop never reaches its
+# second attempt and the advertised ceiling is not a ceiling. Pinned by
+# scripts/test-up-probes.sh.
 wait_healthy() {
   local url="$1" tries="${2:-60}" slp="${3:-1}"
   for _ in $(seq 1 "${tries}"); do
-    curl -fsS "${url}/healthz" >/dev/null 2>&1 && return 0
+    curl -fsS -m 3 "${url}/healthz" >/dev/null 2>&1 && return 0
     sleep "${slp}"
   done
   return 1
 }
 
 # wait_down URL [TRIES] [SLEEP_SECS] — poll until URL/healthz stops answering.
-# Returns 1 on timeout (still answering).
+# Returns 1 on timeout (still answering). Same -m 3 bound as wait_healthy, and
+# for the same reason: a stalled-but-accepting peer is exactly the shape a
+# teardown leaves behind.
 wait_down() {
   local url="$1" tries="${2:-30}" slp="${3:-1}"
   for _ in $(seq 1 "${tries}"); do
-    curl -fsS "${url}/healthz" >/dev/null 2>&1 || return 0
+    curl -fsS -m 3 "${url}/healthz" >/dev/null 2>&1 || return 0
     sleep "${slp}"
   done
   return 1
@@ -178,9 +186,23 @@ env_get() {
 # env_set FILE KEY VALUE — idempotently set KEY=VALUE, replacing an existing
 # uncommented line or appending. Plain awk (no sed -i) so it behaves the same
 # under GNU and BSD userlands.
+#
+# MODE-PRESERVING on the replace path. The rewrite is awk-to-a-tmp-then-mv, and
+# a tmp created fresh by the redirect is born under the caller's umask (0644 on
+# a stock host) — so the mv replaced a 0600 target with a world-readable file.
+# up.sh chmods deploy/compose/.env 600 four separate times because it holds
+# WARDYN_AGE_KEY and WARDYN_ADMIN_TOKEN, but its post-boot policy re-pick calls
+# env_set AFTER the last of them, and deploy/ deploy/compose are both 0755: the
+# secret-store master key and the admin token ended up readable by every local
+# user on the box. Seeding the tmp with `cp -p` copies the target's own mode
+# across BEFORE the redirect truncates it (a redirect to an existing file keeps
+# its mode), which fixes the primitive rather than the one call site that
+# happened to be found — all ~15 callers are covered, up.sh's and setup.sh's
+# alike. Pinned by scripts/test-up-policy.sh.
 env_set() {
   _es_file=$1; _es_key=$2; _es_val=$3
   if [ -f "${_es_file}" ] && grep -qE "^${_es_key}=" "${_es_file}"; then
+    cp -p "${_es_file}" "${_es_file}.tmp"
     awk -v k="${_es_key}=" -v line="${_es_key}=${_es_val}" \
       'index($0,k)==1{print line; next}{print}' "${_es_file}" > "${_es_file}.tmp"
     mv "${_es_file}.tmp" "${_es_file}"

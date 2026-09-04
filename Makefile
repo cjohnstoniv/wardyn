@@ -441,6 +441,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-reset-capture-hint.sh
 	./scripts/test-reset-host-gate.sh
 	./scripts/test-up-policy.sh
+	./scripts/test-up-probes.sh
 
 # ── CI supply-chain / deploy gates (single-sourced, called by ci.yml) ────────
 # Each target below is the authority for one CI gate: ci.yml runs `make <target>`

@@ -101,6 +101,26 @@ got="$(llm_ready_from_probe '
 000')"
 [ -z "$got" ] || fail "llm_ready_from_probe false-positived on an unreachable-daemon 000, got '$got'"
 
+# 3d) MODE regression (adversarial-1:C1): deploy/compose/.env holds
+# WARDYN_AGE_KEY (the secret-store master key) and WARDYN_ADMIN_TOKEN, and
+# up.sh chmods it 600 — but its post-boot policy re-pick runs env_set AFTER the
+# last chmod, and env_set's awk-to-tmp-then-mv used to create the tmp under the
+# caller's umask. The mv then published the file 0644 inside a 0755 deploy/
+# compose/ tree. Exercise the PRODUCT's own path (resolve_default_policy, which
+# is what the re-pick calls) rather than env_set directly, so a future re-pick
+# that writes the file some other way is still covered.
+mode_env="${dir}/.env-mode"
+printf 'WARDYN_AGE_KEY=AGE-SECRET-KEY-1TESTONLY\nWARDYN_ADMIN_TOKEN=deadbeef\nWARDYN_DEFAULT_POLICY=/examples/policies/demo.json\nWARDYN_DEFAULT_POLICY_AUTO=1\n' > "${mode_env}"
+chmod 600 "${mode_env}"
+resolve_default_policy "${mode_env}" "" '{}' "1" >/dev/null
+got="$(stat -c '%a' "${mode_env}")"
+[ "$got" = "600" ] || fail "the post-boot policy re-pick left ${mode_env} mode ${got}, want 600 — env_set dropped the file mode and published WARDYN_AGE_KEY + WARDYN_ADMIN_TOKEN world-readable"
+# ...and the append path (a key not yet in the file) must not regress either.
+resolve_default_policy "${mode_env}" "/my/other.json" '{}' "" >/dev/null
+got="$(stat -c '%a' "${mode_env}")"
+[ "$got" = "600" ] || fail "env_set's append path left ${mode_env} mode ${got}, want 600"
+grep -q '^WARDYN_AGE_KEY=AGE-SECRET-KEY-1TESTONLY$' "${mode_env}" || fail "env_set lost unrelated lines while preserving the mode"
+
 # 4) An explicit operator override wins outright and clears the auto marker.
 got="$(resolve_default_policy "${env_file}" "/my/custom.json" '{}' "1")"
 [ "$got" = "/my/custom.json" ] || fail "explicit override not honored, got '$got'"

@@ -236,6 +236,39 @@ wardyn_cli_prefix() {
   fi
 }
 
+# wardynd_probe ENV_FILE PATH -> "<body>\n<http_code>" (llm_ready_from_probe's
+# STATUS_RAW encoding). THE one way cmd_up asks the running wardynd a question.
+#
+# wardynd is distroless (no curl, no shell), so the question goes through a
+# throwaway curl container on the compose network — which makes it arrive from
+# a NON-loopback peer, exactly like a real host UI/CLI request arriving via the
+# docker bridge gateway (docker-compose.yaml's WARDYN_LOCAL_TRUST_FORWARDER
+# note). Two headers are what make such a request answerable at all:
+#
+#   Host: 127.0.0.1:8080 — local mode's DNS-rebinding guard (isLoopbackHost,
+#     internal/api/http.go) 403s any non-loopback Host, and Docker DNS forces
+#     the URL authority to "wardynd:8080". A real host request carries the
+#     browser's/CLI's own loopback Host, so this REPRODUCES the real shape
+#     rather than faking a pass — the PEER gate, the only thing these probes
+#     exist to test, is still exercised in full and a 403 still means what the
+#     call sites say. Without it every probe 403'd on EVERY `make setup`.
+#   Authorization: Bearer — /api/v1/me and /api/v1/setup/status are in the
+#     humanOrAdminAuth group, which 401s an unauthenticated call whenever local
+#     mode is off; local mode returns before the bearer check, so ONE shape
+#     answers both postures. Fallback mirrors compose's :-demo-admin-token.
+#
+# Pinned by scripts/test-up-probes.sh + cmd/wardynd/up_sh_oidc_probe_guard_test.go.
+wardynd_probe() {
+  _wp_env=$1; _wp_path=$2
+  _wp_tok=$(env_get "${_wp_env}" WARDYN_ADMIN_TOKEN)
+  docker run --rm --network "${WARDYN_NS:-wardyn}-internal" curlimages/curl:latest \
+    -s -m 5 -w '\n%{http_code}' \
+    -H "Host: 127.0.0.1:8080" \
+    -H "Authorization: Bearer ${_wp_tok:-demo-admin-token}" \
+    "http://wardynd:8080${_wp_path}" 2>/dev/null || echo 000
+  unset _wp_env _wp_path _wp_tok
+}
+
 # open_url URL — best-effort browser opener. Honors WARDYN_UP_NO_BROWSER=1.
 open_url() {
   if [ "${WARDYN_UP_NO_BROWSER:-0}" = "1" ]; then
@@ -310,6 +343,18 @@ report() {  # report LEVEL MESSAGE
   esac
 }
 
+# sock_mountable SOCK — true iff the DAEMON can see a socket at SOCK (the in-VM
+# path case, e.g. Rancher Desktop, where the host has no such file).
+# Mounts SOCK's PARENT read-only and tests the leaf inside it. Naming a missing
+# SOCK as the bind source instead — what this probe used to do — makes docker
+# materialize it as a root-owned DIRECTORY there, breaking doctor's
+# "creates/changes nothing" contract. Skipped when the parent is missing too.
+sock_mountable() {
+  _sm_dir=$(dirname "$1")
+  [ -d "${_sm_dir}" ] && docker run --rm --pull=never -v "${_sm_dir}:/probe:ro" \
+    alpine:3.20 test -S "/probe/$(basename "$1")" >/dev/null 2>&1
+}
+
 cmd_doctor() {
   DOCTOR_BLOCKED=0
   # "read-only" means doctor changes nothing about this host's Wardyn setup —
@@ -318,7 +363,9 @@ cmd_doctor() {
   # `alpine:3.20 test -S`, --pull=never so it can never reach the network or
   # write to your image store, skipped entirely when that image isn't already
   # local. Keep that flag: without it, `make doctor` on a fresh box silently
-  # pulled an image, which is exactly the surprise the claim rules out.
+  # pulled an image, which is exactly the surprise the claim rules out. And see
+  # sock_mountable: never name a MISSING path as a bind source — docker
+  # materializes an absent source as a root-owned directory.
   log "Wardyn doctor — read-only preflight (nothing on this host is created or changed)"
 
   _kind=$(os_kind)
@@ -445,8 +492,7 @@ cmd_doctor() {
     _sock="${WARDYN_DOCKER_SOCK:-/var/run/docker.sock}"
     if [ -S "${_sock}" ]; then
       report ok "docker socket ${_sock} present on host (bind-mountable)."
-    elif docker image inspect alpine:3.20 >/dev/null 2>&1 &&
-      docker run --rm --pull=never -v "${_sock}:/probe.sock" alpine:3.20 test -S /probe.sock >/dev/null 2>&1; then
+    elif docker image inspect alpine:3.20 >/dev/null 2>&1 && sock_mountable "${_sock}"; then
       report ok "docker socket ${_sock} is bind-mountable by the daemon (in-VM path, e.g. Rancher Desktop)."
     else
       report warn "chosen docker socket ${_sock} is not present on the host, and the in-VM mountability probe did not confirm it (it is skipped rather than pulled when alpine:3.20 isn't already local — \`docker pull alpine:3.20\` and re-run to test it). The compose wardynd may not be able to create sandboxes. On Rancher Desktop set WARDYN_DOCKER_SOCK=/var/run/docker.sock (the in-VM path); otherwise check the path and permissions."
@@ -704,14 +750,21 @@ cmd_up() {
   _cid=$(compose ps -q wardynd 2>/dev/null || true)
   log "Waiting for wardynd to become healthy"
   _tries=0
+  # -m 3 (the shape the WSL-reachability probe below uses): a peer that ACCEPTS
+  # and never replies hangs an unbounded curl forever, so the 60-try budget
+  # never expires and `make setup` waits with no ceiling at all.
   until { [ -n "${_cid}" ] && [ "$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${_cid}" 2>/dev/null)" = "healthy" ]; } \
-        || curl -fsS "${_url}/healthz" >/dev/null 2>&1; do
+        || curl -fsS -m 3 "${_url}/healthz" >/dev/null 2>&1; do
     _tries=$((_tries + 1))
     if [ "${_tries}" -gt 60 ]; then
       compose logs --tail 50 wardynd
       die "wardynd did not become healthy — see logs above (or: docker compose -f ${COMPOSE_FILE} logs wardynd)"
     fi
     sleep 2
+    # The capture above ran right after `compose up -d`; on a slow daemon it can
+    # come back empty, wedging this loop on the host-curl arm. Re-read until it
+    # lands.
+    [ -n "${_cid}" ] || _cid=$(compose ps -q wardynd 2>/dev/null || true)
   done
   log "wardynd is healthy"
 
@@ -751,11 +804,12 @@ cmd_up() {
   if [ -n "$(env_get "${ENV_FILE}" WARDYN_OIDC_ISSUER)" ]; then
     log "Post-boot LLM-ready re-pick: skipped (WARDYN_OIDC_ISSUER is set — SSO mode, /api/v1/setup/status correctly requires a real session)."
   else
-    # -w appends "\n<code>" after the response body (llm_ready_from_probe's
-    # STATUS_RAW encoding) so one round trip yields both the body and the
-    # status needed to tell "no model path yet" apart from "couldn't ask".
-    _status_raw=$(docker run --rm --network "${WARDYN_NS:-wardyn}-internal" curlimages/curl:latest \
-      -s -m 5 -w '\n%{http_code}' "http://wardynd:8080/api/v1/setup/status" 2>/dev/null || echo 000)
+    # wardynd_probe yields the body AND the status in one round trip
+    # (llm_ready_from_probe's STATUS_RAW encoding), so "no model path yet" is
+    # distinguishable from "couldn't ask" — and, because it sends the loopback
+    # Host + bearer the gates require, a healthy stack now answers 200 instead
+    # of the 403/401 that made this re-pick dead code in every posture.
+    _status_raw=$(wardynd_probe "${ENV_FILE}" /api/v1/setup/status)
     _status_code=$(printf '%s' "${_status_raw}" | tail -n1)
     [ "${_status_code}" = "200" ] \
       || warn "post-boot LLM-ready probe got HTTP ${_status_code} from /api/v1/setup/status — skipping the policy re-pick this run (a managed subscription or UI-added key won't take effect until the next \`up\`); check 'docker compose -f ${COMPOSE_FILE} logs wardynd'."
@@ -787,8 +841,7 @@ cmd_up() {
   # lets workspace VERIFY report its result (the exact thing that can't work on
   # Docker Desktop + WSL2 when wardynd runs host-mode). Prove it with a
   # throwaway container on the same network; never fatal.
-  if docker run --rm --network "${WARDYN_NS:-wardyn}-internal" curlimages/curl:latest \
-       -s -m 5 -o /dev/null "http://wardynd:8080/healthz" >/dev/null 2>&1; then
+  if [ "$(wardynd_probe "${ENV_FILE}" /healthz | tail -n1)" = "200" ]; then
     log "Sandbox → control-plane reachability: OK — workspace recordings and confined replays will complete on this instance."
   else
     warn "sandbox → control-plane probe failed (http://wardynd:8080 on wardyn-internal). Verify results may not report and Record captures will land empty (record_failed); check 'docker network inspect wardyn-internal'."
@@ -812,11 +865,11 @@ cmd_up() {
   if [ -n "$(env_get "${ENV_FILE}" WARDYN_OIDC_ISSUER)" ]; then
     log "Local-mode no-auth gate: skipped (WARDYN_OIDC_ISSUER is set — SSO mode, not local-mode no-auth; /api/v1/me correctly requires a real session)."
   else
-    _me_code=$(docker run --rm --network "${WARDYN_NS:-wardyn}-internal" curlimages/curl:latest \
-      -s -m 5 -o /dev/null -w '%{http_code}' "http://wardynd:8080/api/v1/me" 2>/dev/null || echo 000)
+    _me_code=$(wardynd_probe "${ENV_FILE}" /api/v1/me | tail -n1)
     case "${_me_code}" in
       200) log "Local-mode no-auth gate: OK (gated API reachable from a non-loopback peer — WARDYN_LOCAL_TRUST_FORWARDER effective)." ;;
       403) warn "Local-mode no-auth gate REJECTED a non-loopback peer (HTTP 403). The UI/CLI will be locked out — ensure WARDYN_LOCAL_TRUST_FORWARDER=true reached wardynd (docker compose config)." ;;
+      401) warn "Local-mode no-auth gate probe was asked for a credential (HTTP 401): wardynd booted with WARDYN_LOCAL_MODE off, and the WARDYN_ADMIN_TOKEN in ${ENV_FILE} is not the one it accepted. Re-run \`make setup\` (or reconcile the token) — the UI/CLI will be asked to log in." ;;
       *)   warn "Local-mode gate probe inconclusive (HTTP ${_me_code}); check 'docker compose -f ${COMPOSE_FILE} logs wardynd'." ;;
     esac
   fi

@@ -29,13 +29,15 @@ func TestUpShLocalModeProbeSkipsUnderOIDC(t *testing.T) {
 	}
 	src := string(b)
 
-	// Anchor on the actual curl invocation (the full URL), not the surrounding
-	// prose — a plain "/api/v1/me" match would also hit the block's own comment
-	// explaining the probe, which sits BEFORE the guard this test requires.
-	probe := regexp.MustCompile(`http://wardynd:8080/api/v1/me`)
+	// Anchor on the actual probe invocation, not the surrounding prose — a plain
+	// "/api/v1/me" match would also hit the block's own comment explaining the
+	// probe, which sits BEFORE the guard this test requires. The URL itself now
+	// lives in wardynd_probe (ADV2-01/ADV2-02: one correct way to ask wardynd a
+	// question), so the call site is what identifies the smoke.
+	probe := regexp.MustCompile(`wardynd_probe "\$\{ENV_FILE\}" /api/v1/me`)
 	loc := probe.FindStringIndex(src)
 	if loc == nil {
-		t.Fatal(`scripts/up.sh no longer probes http://wardynd:8080/api/v1/me — update this guard if the local-mode no-auth smoke moved or was removed`)
+		t.Fatal(`scripts/up.sh no longer probes /api/v1/me via wardynd_probe — update this guard if the local-mode no-auth smoke moved or was removed`)
 	}
 
 	// The nearest preceding OIDC-issuer guard must be an `if` (skip path), not
@@ -61,5 +63,55 @@ func TestUpShLocalModeProbeSkipsUnderOIDC(t *testing.T) {
 	}
 	if !guarded {
 		t.Fatal("scripts/up.sh: the /api/v1/me local-mode no-auth probe runs unguarded under WARDYN_OIDC_ISSUER (SSO) — it must be skipped (bug-ops-2)")
+	}
+}
+
+// TestUpShProbeCarriesLoopbackHostAndBearer is the regression for ADV2-01 /
+// ADV2-02. scripts/up.sh's post-boot probes run a throwaway curl container on
+// the compose network, so the request reaches wardynd from a NON-loopback peer
+// (a container on the bridge — the same shape as the docker gateway a real host
+// UI/CLI request arrives as). Sent bare, that request is rejected in every
+// compose posture and the probes were therefore useless: in local mode the
+// DNS-rebinding Host guard 403s the Docker-DNS authority "wardynd:8080"
+// (isLoopbackHost, internal/api/http.go), and with local mode off the
+// humanOrAdminAuth group 401s an unauthenticated call. So the "local-mode
+// no-auth gate REJECTED a non-loopback peer" warning fired on EVERY `make
+// setup` — the probe could never return 200 and could never detect the
+// forwarder regression it exists to detect — and the post-boot LLM-ready policy
+// re-pick behind /api/v1/setup/status was unreachable dead code.
+//
+// Both are one cause, so there is one fix: wardynd_probe overrides Host with a
+// loopback authority (reproducing the real host request's own Host, which
+// leaves the PEER gate fully exercised) and carries the admin bearer. This
+// guard pins those two headers on the helper; the shell-level behaviour — that
+// the probe answers 200 when healthy and still reports 403 when
+// WARDYN_LOCAL_TRUST_FORWARDER is off — is pinned by scripts/test-up-probes.sh.
+func TestUpShProbeCarriesLoopbackHostAndBearer(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "up.sh"))
+	if err != nil {
+		t.Fatalf("read scripts/up.sh: %v", err)
+	}
+	src := string(b)
+
+	fn := regexp.MustCompile(`(?s)\nwardynd_probe\(\) \{.*?\n\}`)
+	body := fn.FindString(src)
+	if body == "" {
+		t.Fatal("scripts/up.sh has no wardynd_probe() — the post-boot probes must ask wardynd through one helper that sends the loopback Host + bearer the gates require (ADV2-01/ADV2-02)")
+	}
+
+	if !regexp.MustCompile(`-H "Host: (127\.0\.0\.1|localhost|\[::1\])`).MatchString(body) {
+		t.Error(`wardynd_probe does not override Host with a loopback authority — local mode 403s the Docker-DNS authority "wardynd:8080" via the DNS-rebinding guard, so every probe fails on every ` + "`make setup`" + ` (ADV2-01)`)
+	}
+	if !regexp.MustCompile(`-H "Authorization: Bearer `).MatchString(body) {
+		t.Error("wardynd_probe sends no Authorization bearer — /api/v1/me and /api/v1/setup/status sit in the humanOrAdminAuth group and 401 an unauthenticated call whenever local mode is off (ADV2-02)")
+	}
+	if !regexp.MustCompile(`WARDYN_ADMIN_TOKEN`).MatchString(body) {
+		t.Error("wardynd_probe does not read WARDYN_ADMIN_TOKEN from the env file — it would send a token wardynd never booted with")
+	}
+
+	// One way to ask: any OTHER in-network curl invocation is a second, bare
+	// request shape that the gates reject exactly as before the fix.
+	if n := len(regexp.MustCompile(`curlimages/curl`).FindAllString(src, -1)); n != 1 {
+		t.Errorf("scripts/up.sh has %d curlimages/curl invocations, want exactly 1 (inside wardynd_probe) — a bare in-network probe is answered 403/401 in every compose posture (ADV2-01/ADV2-02)", n)
 	}
 }
