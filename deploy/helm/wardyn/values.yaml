@@ -54,7 +54,7 @@ allowMultiReplica: false
 # of the Service's endpoints; liveness and startup stay on /healthz either way.
 #
 # ONLY OVERRIDE THIS FOR AN OLD IMAGE. /readyz was added in 0.6, and the empty
-# image.tag above resolves to .Chart.AppVersion, which is 0.6.0 — so the default
+# image.tag above resolves to .Chart.AppVersion, which is 0.6.6 — so the default
 # install serves it. An image.tag PINNED at or below 0.5.0 does not: the probe
 # 404s forever, the pod never becomes Ready, and the rollout hangs with no other
 # symptom. Pin it back with `--set readinessProbe.path=/healthz` and accept

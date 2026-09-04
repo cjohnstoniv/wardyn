@@ -84,6 +84,8 @@ done < <( { cut -d, -f3 "$tmp/go.csv"; jq -r '.[][] | .license // empty' "$tmp/u
   echo "with it and the licences they are distributed under. Verbatim licence texts are"
   echo "in \`licenses/texts/\`. Regenerate with \`make notices ARGS=fix\`; CI fails on drift."
   echo
+  echo "The licence cell is go-licenses' single-id classification of each module's LICENSE file; where a module is distributed under more than one licence, licenses/texts/ carries the authoritative verbatim text."
+  echo
   echo "## Go modules (compiled into the shipped binaries)"
   echo
   echo "Scope: reachable from \`./cmd/...\` under the production build tags \`docker,k8s\`."

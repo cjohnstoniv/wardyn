@@ -16,7 +16,11 @@ import (
 // the CSP directives that are easy to loosen without noticing: font-src data:
 // (the built CSS embeds its woff2), connect-src ws: (the PTY attach), and
 // media-src's exact two hosts (a wildcard here would let the console's
-// admin-bearing origin embed arbitrary third-party media).
+// admin-bearing origin embed arbitrary third-party media) — and base-uri /
+// object-src 'none', which the threat model publishes as SHIPPED mitigations
+// for the admin-token-in-web-storage residual and which nothing pinned: the
+// testing lens deleted both from the served header and the whole internal/api
+// suite stayed green.
 func TestSecurityHeadersOnEveryResponse(t *testing.T) {
 	h := newHarness(t)
 
@@ -38,6 +42,8 @@ func TestSecurityHeadersOnEveryResponse(t *testing.T) {
 		for _, directive := range []string{
 			"default-src 'self'",
 			"frame-ancestors 'none'",
+			"base-uri 'none'",                      // no <base> can retarget the console's relative URLs
+			"object-src 'none'",                    // no <object>/<embed> plugin surface on the admin origin
 			"font-src 'self' data:",                // console webfont is a data: URI
 			"connect-src 'self' ws: wss:",          // PTY attach WebSocket
 			"script-src 'self' 'wasm-unsafe-eval'", // recording replay player instantiates WASM

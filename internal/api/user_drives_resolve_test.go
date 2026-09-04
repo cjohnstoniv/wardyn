@@ -598,6 +598,37 @@ func TestResolveUserDrive(t *testing.T) {
 		}
 	})
 
+	t.Run("a MANAGED drive templated on the sign-in subject is unmountable", func(t *testing.T) {
+		// The regression for the half of the widening that never reached the
+		// resolver. `sub` used to be the SANCTIONED alternative here, so a
+		// managed row carrying it exists on any box installed before the rule
+		// widened — and is still authorable by hand. types.ValidateUserDrive
+		// refuses it on write; the resolver keyed on `email_local` alone, so the
+		// row mounted and the object it named was `wardyn-drive-<sign-in
+		// subject>`, which `docker volume ls` and `kubectl get pvc` print with
+		// no inspect. Both sites now ask types.ManagedBackendRejectsTemplate.
+		d := driveFixture(func(d *types.UserDrive) { d.HomeTemplate = types.HomeTemplateSub })
+		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		if !errors.Is(err, errDriveUnmountable) {
+			t.Fatalf("resolve = %+v, err = %v; want errDriveUnmountable — a managed `sub` row must not mount", got, err)
+		}
+		if !strings.Contains(err.Error(), "drive: this deployment cannot mount your drive (") {
+			t.Errorf("err = %v, want the frozen REFUSED_BACKEND shape", err)
+		}
+	})
+
+	t.Run("a MANAGED drive on the hash template still resolves", func(t *testing.T) {
+		// The counterweight: the widened rule must refuse every NON-hash
+		// template and nothing else, or it takes the default configuration down
+		// with it.
+		d := driveFixture(func(d *types.UserDrive) { d.HomeTemplate = types.HomeTemplateHash })
+		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+		if _, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false)); err != nil {
+			t.Fatalf("a managed `hash` drive must still resolve, got %v", err)
+		}
+	})
+
 	t.Run("a SHARE templated on the email local part still resolves", func(t *testing.T) {
 		// The scoping half: a share's directories are named by whoever owns the
 		// share, and email_local is the corporate shape the template exists for.

@@ -353,6 +353,22 @@ else
   done
   # …which leaves `{"a":"b",}` when the map started out empty.
   env_set WARDYN_AGENT_IMAGES "$(printf '%s' "${images}" | sed 's|,[[:space:]]*}$|}|')"
+  # WARDYN_PORT is read ONCE, on the FRESH branch, where it seeds WARDYN_UP_PORT.
+  # This branch deliberately rewrites only the version-derived lines, so the
+  # published port keeps coming from .env — which means an operator who set
+  # WARDYN_PORT on an upgrade had it discarded with nothing said, while the
+  # closing banner (which reads .env) announced a DIFFERENT number than the one
+  # they had just asked for. Moving it here is not the fix: the port is also
+  # baked into WARDYN_SSH_ADVERTISE-style values and into whatever the operator
+  # has bookmarked or reverse-proxied, and re-publishing a live install on a new
+  # port as a side effect of an upgrade is a bigger surprise than being told no.
+  # So: say no, out loud, and name the two-step remedy.
+  stored_port=$(env_get WARDYN_UP_PORT); stored_port="${stored_port:-8080}"
+  if [ -n "${WARDYN_PORT:-}" ] && [ "${WARDYN_PORT}" != "${stored_port}" ]; then
+    say "WARDYN_PORT=${WARDYN_PORT} was ignored — this install already publishes ${stored_port}"
+    echo "                To move it: set WARDYN_UP_PORT=${WARDYN_PORT} in ${HOME_DIR}/.env, then"
+    echo "                cd ${HOME_DIR} && docker compose up -d   (the container is re-created)"
+  fi
   # Listeners are additive: an install from before they existed has neither, and
   # without them the published ports stay inert.
   grep -qE '^WARDYN_SSH_LISTEN=' .env || printf 'WARDYN_SSH_LISTEN=:2222\n' >> .env
@@ -405,8 +421,38 @@ echo "                 same signatures, verified the same way: docs/VERIFY.md §
 
 # --no-build is the guarantee: the compose file carries build stanzas for
 # contributors, and this install must never trigger one.
+#
+# --wait is what makes the closing "Wardyn is running" an OBSERVATION instead of
+# an assertion. wardynd carries `restart: unless-stopped` and a healthcheck, so a
+# daemon that boots and immediately exits — a bad WARDYN_AGE_KEY, a failed
+# migration, a port already bound — leaves `up -d` exiting 0 while the container
+# crash-loops behind it, and this installer then printed a URL nothing answers.
+# The contributor path (scripts/up.sh) has polled health and died with logs for
+# releases; the one-line install, which is the path a first-time operator takes,
+# had no probe at all.
+#
+# The daemon-side healthcheck, not a host-side curl: on Docker Desktop + WSL2 NAT
+# the published port is reachable from the Windows browser and NOT from this
+# shell (scripts/up.sh warns about exactly that), so a host poll would fail an
+# install that is perfectly healthy.
+#
+# Probed, not assumed: --wait landed in Compose v2.1.1 and the only floor this
+# script enforces is "v2". On an older v2 the flag is unknown and the run is
+# unchanged from before this probe existed — no readiness proof, and the banner
+# says so rather than claiming one.
 say "Starting"
-docker compose up -d --no-build
+# An `if` CONDITION, not `cmd && VAR=x`: under `set -e` a failing AND-OR list is
+# still the statement's own exit status, so the probe would abort the install on
+# any docker hiccup instead of falling back.
+COMPOSE_WAIT=""
+if docker compose up --help 2>/dev/null | grep -q -- '--wait'; then COMPOSE_WAIT="--wait"; fi
+if ! docker compose up -d --no-build ${COMPOSE_WAIT}; then
+  echo >&2
+  echo "The stack did not come up healthy. The last 50 lines of the daemon log:" >&2
+  docker compose logs --tail 50 wardynd >&2 || true
+  die "wardynd is not healthy — nothing is listening on http://127.0.0.1:${PORT}.
+  Fix the cause above, then: cd ${HOME_DIR} && docker compose up -d"
+fi
 
 # The CLI. Without it this install has NO host binary at all: the only command
 # path is `docker compose exec`, which is in-container and root-only, so
@@ -472,6 +518,9 @@ CLI_PATH=""
 say "Installing the wardyn CLI"
 install_cli
 
+# Reached only when the stack came up healthy (or when this compose is too old to
+# be asked) — the `up` above dies with the daemon log otherwise, so this line is
+# no longer printed over a crash-looping container.
 say "Wardyn is running: http://127.0.0.1:${PORT}"
 echo
 if [ -n "${CLI_PATH}" ]; then

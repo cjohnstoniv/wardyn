@@ -9,7 +9,8 @@ never import `internal/types`.
 > external tooling automates, not a 1:1 mirror of wardynd. The exact list of what it
 > wraps and what it does not — and the `ListOpts` / `X-Wardyn-Truncated` pagination
 > contract — is the package doc on `pkg/client` itself, where your IDE shows it at the
-> call site; `TestClientCoversRouteFamilies` pins it against the real methods.
+> call site; `TestClientCoversRouteFamilies` pins what it wraps against the real methods, and
+> `TestSDKCensusNamesEveryRouteFamily` (internal/api) pins that the not-covered half names every route family the router mounts.
 
 ```go
 package main

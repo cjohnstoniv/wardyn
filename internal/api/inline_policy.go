@@ -422,11 +422,27 @@ func (s *Server) narrowMemberInlinePolicy(ctx context.Context, owner string, spe
 	// entries that fit under maxJSONBody. See capBatch.
 	cap := s.newCapBatch(ctx)
 
+	// ONE resolution per DISTINCT host, not per entry. The list is the request
+	// body's, and nothing on this path de-duplicates it: validatePolicySpec has
+	// no allowed_domains arm and composer.Clamp's intersection keeps every
+	// duplicate that passes (and is skipped outright under an allow_all_egress
+	// ceiling), so `["a","a",…,"a"]` bought one full grant-set match per copy.
+	// Memoized rather than de-duplicated: every entry still gets its own warning
+	// and its own capDrop, so preflight's output and the audit stream are
+	// unchanged byte for byte — only the repeated work is gone. The answer is
+	// deterministic within a batch (grants, enforcement and the group-deny
+	// memo are all snapshotted by capBatch), so a cached one is the same answer.
+	seen := make(map[string]bool, len(spec.AllowedDomains))
 	keptDomains := spec.AllowedDomains[:0:0]
 	for _, d := range spec.AllowedDomains {
-		ok, err := cap.allowed(ctx, capEgressHost, d)
-		if err != nil {
-			return nil, nil, err
+		ok, cached := seen[d]
+		if !cached {
+			var err error
+			ok, err = cap.allowed(ctx, capEgressHost, d)
+			if err != nil {
+				return nil, nil, err
+			}
+			seen[d] = ok
 		}
 		if !ok {
 			warns = append(warns, fmt.Sprintf("dropped egress host %q: not granted to you", d))

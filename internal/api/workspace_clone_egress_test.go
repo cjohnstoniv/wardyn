@@ -87,7 +87,7 @@ func TestConfinedEgressDomains_UnionsCloneHostsAndProfile(t *testing.T) {
 		Profile:        mustJSON(map[string]any{"egress_domains": []string{"registry.npmjs.org"}}),
 		ApprovedEgress: []string{"api.stripe.com"},
 	}
-	got := confinedEgressDomains(ws)
+	got := New(Config{RequireOperatorSetEgress: true}).confinedEgressDomains(ws)
 	for _, want := range []string{"gitlab.corp.internal", "registry.npmjs.org", "api.stripe.com"} {
 		if !slices.Contains(got, want) {
 			t.Errorf("confined allowlist missing %q (got %v)", want, got)

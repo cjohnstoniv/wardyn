@@ -325,7 +325,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		// learning session (open) allows all egress so the capture is complete.
 		// Same interactive attach either way.
 		AllowAllEgress: !confined,
-		AllowedDomains: confinedEgressDomains(ws),
+		AllowedDomains: s.confinedEgressDomains(ws),
 		// The operator's permanent per-workspace denies (Phase 4's `deny · always`)
 		// must reach BOTH branches above, not just the confined AllowedDomains set —
 		// deny beats allow_all_egress at the proxy (docs/POLICIES.md), so this line

@@ -302,7 +302,14 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 	// It runs BEFORE the derivation, not after: the home it would derive is
 	// exactly the colliding one, and a check downstream of it would be reasoning
 	// about a value it had already accepted.
-	if d.Backend.Kind() == types.DriveKindManaged && d.HomeTemplate == types.HomeTemplateEmailLocal {
+	//
+	// EVERY non-hash template, not just `email_local`: the write boundary was
+	// widened to the full rule (types.ManagedBackendRejectsTemplate) and this
+	// site was not, so a managed row carrying `sub` — authorable by any older
+	// binary, or by hand — was refused on write and still resolved and mounted,
+	// publishing the sign-in subject in an object name `docker volume ls` and
+	// `kubectl get pvc` print without inspecting anything.
+	if types.ManagedBackendRejectsTemplate(d.Backend, d.HomeTemplate) {
 		slog.Warn("wardynd: user drive: a managed drive is templated on the email local part, which cannot name one object per person",
 			slog.String("drive", d.Name), slog.String("backend", string(d.Backend)),
 			slog.String("home_template", string(d.HomeTemplate)))

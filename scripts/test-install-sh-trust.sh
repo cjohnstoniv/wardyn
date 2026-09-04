@@ -48,6 +48,11 @@
 #   T15 PASS  every network fetch carries a timeout                    (perf2-C2)
 #   T20 PASS  a WARDYN_VERSION carrying `../` is refused before any fetch —
 #             no request leaves the ${REPO} path (4 rows + 2 counterweights) (F183)
+#   T21 PASS  the success banner is an OBSERVATION: `up` carries --wait when the
+#             compose supports it, an unhealthy stack fails with the daemon log
+#             and no banner, and an old compose still installs             (F037)
+#   T22 PASS  an upgrade never discards WARDYN_PORT in silence — it names the
+#             stored port and the remedy, and does not move the port       (F036)
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -81,7 +86,23 @@ case "$1" in
     shift
     case "$1" in
       version) echo "Docker Compose version v2.99.0"; exit 0 ;;
-      pull|up) echo "compose $*" >> "${state}/compose.log"; exit 0 ;;
+      up)
+        # install.sh probes for --wait before using it (it landed in Compose
+        # v2.1.1 and the script's only floor is "v2"). Answer the probe the way
+        # a modern compose does — unless state/no-wait-flag says this is an old
+        # one, which is the fallback path.
+        if [ "${2:-}" = "--help" ]; then
+          echo "Usage:  docker compose up [OPTIONS] [SERVICE...]"
+          [ -f "${state}/no-wait-flag" ] || echo "      --wait   Wait for services to be running|healthy."
+          exit 0
+        fi
+        echo "compose $*" >> "${state}/compose.log"
+        if [ -f "${state}/up-unhealthy" ]; then
+          echo "container wardyn-api is unhealthy" >&2; exit 1
+        fi
+        exit 0 ;;
+      pull) echo "compose $*" >> "${state}/compose.log"; exit 0 ;;
+      logs) echo "wardynd | FATAL: migration 0060 failed: constraint violated"; exit 0 ;;
       *) exit 0 ;;
     esac ;;
   ps) cat "${state}/ps-names" 2>/dev/null; exit 0 ;;   # no file -> no names -> no "already exists" die
@@ -671,6 +692,69 @@ t20_ok() { # LABEL VERSION
 }
 t20_ok plain      'v0.6.6'
 t20_ok prerelease 'v0.7.0-rc1'
+
+# ── T21: the success banner is an observation, not an assertion ────────────
+# `docker compose up -d` exits 0 the moment the containers are CREATED. wardynd
+# carries `restart: unless-stopped` and a healthcheck, so a daemon that boots and
+# dies (a bad WARDYN_AGE_KEY, a failed migration, a bound port) crash-loops behind
+# a zero exit — and the installer printed "Wardyn is running: http://127.0.0.1:…"
+# over it, sending a first-time operator to a URL nothing answers. The
+# contributor path (scripts/up.sh) has polled health and died with logs for
+# releases; this one had no probe at all.
+t="T21a the compose up carries --wait when this compose supports it"
+d="${WORK}/t21a"; make_stubs "${d}/bin" default; mkdir -p "${d}/home"
+if run_install "${d}/bin" "${d}/home"; then
+  if grep -qE '^compose up .*--wait' "${d}/bin/state/compose.log"; then pass "${t}"
+  else fail "${t}" "up invocation was: $(grep '^compose up' "${d}/bin/state/compose.log" | tr '\n' ' ')"; fi
+else fail "${t}" "install.sh exited $? — $(tail -2 "${d}/home/install.out" | tr '\n' ' ')"; fi
+
+t="T21b an unhealthy stack fails the install, prints the daemon log, and never claims 'Wardyn is running'"
+d="${WORK}/t21b"; make_stubs "${d}/bin" default; mkdir -p "${d}/home"; : > "${d}/bin/state/up-unhealthy"
+if run_install "${d}/bin" "${d}/home"; then
+  fail "${t}" "install.sh exited 0 over a crash-looping wardynd — $(grep 'Wardyn is' "${d}/home/install.out" | tr '\n' ' ')"
+elif grep -q 'Wardyn is running' "${d}/home/install.out"; then
+  fail "${t}" "the success banner was printed anyway: $(grep 'Wardyn is running' "${d}/home/install.out")"
+elif ! grep -q 'migration 0060 failed' "${d}/home/install.out"; then
+  fail "${t}" "died without showing the daemon log, so the operator has no cause: $(tail -3 "${d}/home/install.out" | tr '\n' ' ')"
+else pass "${t}"; fi
+
+t="T21c a compose too old for --wait still installs (the flag is probed, not assumed)"
+d="${WORK}/t21c"; make_stubs "${d}/bin" default; mkdir -p "${d}/home"; : > "${d}/bin/state/no-wait-flag"
+if run_install "${d}/bin" "${d}/home"; then
+  if grep -qE '^compose up .*--wait' "${d}/bin/state/compose.log"; then
+    fail "${t}" "passed --wait to a compose that does not advertise it"
+  elif grep -q 'Wardyn is running' "${d}/home/install.out"; then pass "${t}"
+  else fail "${t}" "no banner: $(tail -3 "${d}/home/install.out" | tr '\n' ' ')"; fi
+else fail "${t}" "install.sh exited $? on an old compose — $(tail -2 "${d}/home/install.out" | tr '\n' ' ')"; fi
+
+# ── T22: an upgrade never discards WARDYN_PORT in silence ──────────────────
+# WARDYN_PORT is read once, on the FRESH branch, where it seeds WARDYN_UP_PORT.
+# The upgrade branch rewrites only version-derived lines, so an operator who set
+# the documented override on an upgrade had it dropped with nothing said — and
+# T11's banner fix then correctly announced the OTHER port, which is the moment
+# the discard became invisible rather than merely wrong.
+t="T22 an upgrade says WARDYN_PORT was ignored and names the stored port + the remedy"
+d="${WORK}/t22"; upgrade_fixture "${d}" 'WARDYN_UP_PORT=8090'
+if run_install "${d}/bin" "${d}/home" WARDYN_PORT=9000; then
+  out="${d}/home/install.out"
+  if ! grep -q 'WARDYN_PORT=9000 was ignored' "${out}"; then
+    fail "${t}" "silently discarded WARDYN_PORT=9000: $(grep -i port "${out}" | tr '\n' ' ')"
+  elif ! grep -q 'already publishes 8090' "${out}"; then
+    fail "${t}" "did not name the port this install actually publishes: $(grep -i ignored "${out}")"
+  elif ! grep -q 'WARDYN_UP_PORT=9000' "${out}"; then
+    fail "${t}" "named no remedy the operator can paste: $(grep -iA2 ignored "${out}" | tr '\n' ' ')"
+  elif [ "$(env_val "${d}/home/.wardyn/.env" WARDYN_UP_PORT)" != "8090" ]; then
+    fail "${t}" "the upgrade MOVED the published port — refusing is the contract, not re-publishing a live install"
+  else pass "${t}"; fi
+else fail "${t}" "install.sh exited $? — $(tail -2 "${d}/home/install.out" | tr '\n' ' ')"; fi
+
+t="T22b an upgrade whose WARDYN_PORT matches the stored port says nothing"
+d="${WORK}/t22b"; upgrade_fixture "${d}" 'WARDYN_UP_PORT=8090'
+if run_install "${d}/bin" "${d}/home" WARDYN_PORT=8090; then
+  if grep -q 'was ignored' "${d}/home/install.out"; then
+    fail "${t}" "warned about an override that changes nothing: $(grep 'was ignored' "${d}/home/install.out")"
+  else pass "${t}"; fi
+else fail "${t}" "install.sh exited $? — $(tail -2 "${d}/home/install.out" | tr '\n' ' ')"; fi
 
 echo
 echo "passed=${#PASSED[@]} failed=${#FAILED[@]} skipped=${#SKIPPED[@]}"

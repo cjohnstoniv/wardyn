@@ -164,7 +164,7 @@ func TestConfinedEgressDomains_HonorsFoldedRequiredRows(t *testing.T) {
 			"secret:STRIPE_KEY":           {Level: "required", Provenance: "operator_set"}, // not an egress row
 		},
 	}
-	got := confinedEgressDomains(ws)
+	got := New(Config{RequireOperatorSetEgress: true}).confinedEgressDomains(ws)
 	if !slices.Contains(got, "registry.npmjs.org") {
 		t.Errorf("allowlist %v missing the folded required egress row", got)
 	}
@@ -173,6 +173,36 @@ func TestConfinedEgressDomains_HonorsFoldedRequiredRows(t *testing.T) {
 	}
 	if slices.Contains(got, "optional.example.com") {
 		t.Errorf("allowlist %v must not include an optional row", got)
+	}
+}
+
+// TestConfinedEgressDomains_HonorsOperatorSetProvenanceGate is the regression
+// for the half of the 0.7 provenance gate that shipped unenforced: the gate
+// (RequireOperatorSetEgress, default TRUE since 0.7) was written inline at the
+// run-create call site, so a scan_seeded `egress:` requirement — a host the
+// WORKSPACE SCANNER derived from UNTRUSTED repo content, never an operator's
+// act — was refused at launch and then unioned straight into the confined
+// REPLAY's AllowedDomains, which is the session an operator runs precisely to
+// prove least privilege. Both paths now route through egressProvenanceAllowed.
+func TestConfinedEgressDomains_HonorsOperatorSetProvenanceGate(t *testing.T) {
+	ws := types.Workspace{
+		EffectiveRequirements: map[string]types.WorkspaceRequirement{
+			"egress:evil.example":       {Level: "required", Provenance: "scan_seeded"},
+			"egress:registry.npmjs.org": {Level: "required", Provenance: "operator_set"},
+		},
+	}
+	got := New(Config{RequireOperatorSetEgress: true}).confinedEgressDomains(ws)
+	if slices.Contains(got, "evil.example") {
+		t.Errorf("confined replay allowlist %v carries a scan_seeded host — the run-create path refuses it, so the replay must too", got)
+	}
+	if !slices.Contains(got, "registry.npmjs.org") {
+		t.Errorf("confined replay allowlist %v dropped the operator_set row the gate is supposed to keep", got)
+	}
+	// Off (the documented pre-0.7 escape hatch) both rows are honored, exactly
+	// as the launch path does — the gate is the only difference between them.
+	off := New(Config{}).confinedEgressDomains(ws)
+	if !slices.Contains(off, "evil.example") || !slices.Contains(off, "registry.npmjs.org") {
+		t.Errorf("with the gate off the replay allowlist is %v, want both rows (pre-0.7 behavior)", off)
 	}
 }
 

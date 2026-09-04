@@ -89,16 +89,16 @@ is *about* would record it in the one place already under suspicion.
 | Action | When | Data fields | Where | Stable? |
 |---|---|---|---|---|
 | `workspace.create` | `POST /workspaces` | `name`, `owned_by`, `sources` | `internal/api/workspaces.go:454` | internal |
-| `workspace.update` | `PUT /workspaces/{id}` | `image_changed`, `name`, `rescan_required`, `sources` | `internal/api/workspaces.go:583` | internal |
-| `workspace.delete` | `DELETE /workspaces/{id}` | — | `internal/api/workspaces.go:897` | internal |
+| `workspace.update` | `PUT /workspaces/{id}` | `image_changed`, `name`, `rescan_required`, `sources` | `internal/api/workspaces.go:594` | internal |
+| `workspace.delete` | `DELETE /workspaces/{id}` | — | `internal/api/workspaces.go:908` | internal |
 | `workspace.scan` | A workspace directory/repo scan (needs-scanner) runs | `detail`, `reason`, `scan_run_ids`, `sources`, `workspace_id` | `internal/api/workspace_run.go:799`, `internal/api/source_scan.go:302,343,360` | internal |
 | `workspace.record` | The "workspace record" onboarding-import run completes | `anomalies`, `domains`, `kernel_sensor_blind`, `minted_grants`, `mode`, `task` | `internal/api/workspace_run.go:976` | internal |
 | `workspace.requirement.write` | An admin/member edits a workspace-needs requirement from the approval flow | (requirement diff) | `internal/api/approvals_writeback.go:270` | internal |
 | `workspace.requirements.write` | An admin/member replaces the workspace's whole requirements contract (`PUT /workspaces/{id}/requirements`) — distinct from the singular `workspace.requirement.write` above (a single-requirement edit from the approval flow); this is the map-wide replace | `count` | `internal/api/workspace_requirements.go:137` | internal |
 | `workspace.envcode.write` | The onboarding "env code" (devcontainer/setup snippet) is written for a workspace | `files`, `skipped`, `skipped_files`, `written_files` | `internal/api/workspace_envcode.go:70` | internal |
 | `workspace.egress.approve` | Operator/member approves a pending workspace egress decision (`always`/`session` scope write-back), **or the boot heal replays one** — `source` tells them apart (`approval:<id>` vs `boot-heal`), and the heal also emits `failure` for a verdict the live path would now refuse | `domains`, `source` | `internal/api/approvals_writeback.go:179`, `internal/api/approvals_reconcile.go:257`, `internal/api/record.go:785` | internal |
-| `workspace.egress.deny` | Operator/member denies a workspace egress decision, **or the boot heal replays one** (same `source` split as the approve row above) | `domains`, `source` | `internal/api/approvals_writeback.go:177`, `internal/api/approvals_reconcile.go:255`, `internal/api/workspaces.go:720` | internal |
-| `workspace.llm_cred.set` | An operator binds (or clears) the model/harness credential for a workspace/container (`PUT /workspaces/{id}/llm-cred`) | `integration_ref` | `internal/api/workspaces.go:749` | internal |
+| `workspace.egress.deny` | Operator/member denies a workspace egress decision, **or the boot heal replays one** (same `source` split as the approve row above) | `domains`, `source` | `internal/api/approvals_writeback.go:177`, `internal/api/approvals_reconcile.go:255`, `internal/api/workspaces.go:731` | internal |
+| `workspace.llm_cred.set` | An operator binds (or clears) the model/harness credential for a workspace/container (`PUT /workspaces/{id}/llm-cred`) | `integration_ref` | `internal/api/workspaces.go:760` | internal |
 | `workspace.reassign` | An admin returns a member-owned workspace to the operator, `owned_by=""` (`POST /workspaces/{id}/reassign`) — the offboarding path for a member who has left | `from_owner` (the departed member's principal; `""` when the row was already operator-owned) | `internal/api/workspace_owner.go:60` | internal |
 | `source.write` | A workspace source (dir/repo) is added or updated | `kind`, `locator`, `ref`, `writable` | `internal/api/sources.go:277` | internal |
 | `source.delete` | A workspace source is removed | `detached_from`, `forced` | `internal/api/sources.go:359` | internal |
@@ -142,7 +142,7 @@ Data is unchanged.
 |---|---|---|---|---|
 | `session.attach` | A human attaches to a run's tmux session (console or CLI) | `cols`, `error`, `lane`, `reason`, `rows`, `sandbox_ref`, `transport` | `internal/api/attach.go` | internal |
 | `session.detach` | A session detaches | `read_only`, `reason`, `transport` | `internal/api/attach.go` | internal |
-| `session.takeover` | A second viewer takes over a held session (the write-lane single-holder rule) | `held_since`, `previous_holder`, `previous_source`, `taken_over` | `internal/api/attach.go` | internal |
+| `session.takeover` | A second viewer takes over a held session (the write-lane single-holder rule) | `held_since`, `previous_holder`, `previous_source`, `taken_over` | `internal/api/attach_holder.go:419` | internal |
 | `session.recording` | A recording is attached to / detached from a session | — | `internal/api/attach.go:603` | internal |
 | `recording.upload` | A sandbox uploads an asciinema-cast chunk for a run's recording session — audited on both outcomes, like every sibling recording lane, since a full store or an over-cap upload is exactly how a long session's provenance gets lost | `error` (failure only) | `internal/api/recording.go:120` | internal |
 | `ssh.auth` | Every SSH-gateway connection attempt, success or failure — `docs/SSH.md` names this one **stable** and documents it as the residual-#19 correlate | `override`, `reason` | `internal/api/sshgateway.go:309` (failure), `internal/api/sshgateway.go:345` (success); documented `docs/SSH.md:346,398,403` | **stable** (documented) |

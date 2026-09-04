@@ -38,6 +38,20 @@ func TestVersionMatchesChangelog(t *testing.T) {
 // pinned above, but the Helm chart and the UI package manifest drift silently:
 // values.yaml's comment claimed AppVersion was "0.0.1" while Chart.yaml said
 // 0.3.1, and RELEASING.md's steps never mention bumping any of them.
+//
+// It covered MACHINE-READABLE files only, which is the mechanism behind every
+// stale prose copy of the release literal: RELEASING.md step 1b names five
+// places and the guard checked three, so the two INSTALLER URLs — the first
+// command a new operator runs, in README.md and in install.sh's own header —
+// were bumped by hand or not at all, and a values.yaml comment naming
+// .Chart.AppVersion sat six patch releases behind. A version literal a human
+// reads is exactly as wrong as one a machine reads.
+//
+// Deliberately NOT here: README.md's Status paragraph and the demo-asset links
+// it pins. The Status line is prose about what a release ADDED, so bumping the
+// number alone would make it wronger, not righter; the asset links pin an older
+// tag on purpose ("Links pin v0.6.0"). Neither is a mechanical restatement of
+// internal/version, which is what this guard is for.
 func TestShippedVersionStringsAgree(t *testing.T) {
 	for _, tc := range []struct {
 		file, pattern string
@@ -45,6 +59,16 @@ func TestShippedVersionStringsAgree(t *testing.T) {
 		{"../../deploy/helm/wardyn/Chart.yaml", `(?m)^version:\s*(\S+)`},
 		{"../../deploy/helm/wardyn/Chart.yaml", `(?m)^appVersion:\s*"?([^"\s]+)"?`},
 		{"../../ui/package.json", `(?m)^\s*"version":\s*"([^"]+)"`},
+		// The pinned one-line install URL, in both places RELEASING.md step 1b
+		// names it. This is the command README's hero block and the installer's
+		// own header tell an operator to paste, so a stale tag here installs the
+		// PREVIOUS release while every machine-readable file says otherwise.
+		{"../../README.md", `releases/download/v(\d+\.\d+\.\d+)/install\.sh`},
+		{"../../install.sh", `releases/download/v(\d+\.\d+\.\d+)/install\.sh`},
+		// values.yaml's readiness-probe note tells the operator which AppVersion
+		// the empty image.tag resolves to — the number they compare their own pin
+		// against before deciding to override the probe path.
+		{"../../deploy/helm/wardyn/values.yaml", `(?m)^# image\.tag above resolves to \.Chart\.AppVersion, which is (\S+)`},
 	} {
 		raw, err := os.ReadFile(tc.file)
 		if err != nil {

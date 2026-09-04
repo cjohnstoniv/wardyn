@@ -291,11 +291,13 @@ func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[
 					continue
 				}
 				// #12: same TRUST BOUNDARY as the secret case below, gated
-				// behind RequireOperatorSetEgress (default off — see the
-				// Config field doc). When enabled, a scan_seeded egress host
-				// (the workspace scanner reading untrusted repo content) is
-				// skipped; only an operator's DIRECT declaration auto-adds.
-				if s.cfg.RequireOperatorSetEgress && req.Provenance != "operator_set" {
+				// behind RequireOperatorSetEgress (DEFAULT TRUE since 0.7 —
+				// see the Config field doc). When enabled, a scan_seeded
+				// egress host (the workspace scanner reading untrusted repo
+				// content) is skipped; only an operator's DIRECT declaration
+				// auto-adds. The predicate is shared with the confined-replay
+				// path — see egressProvenanceAllowed in workspace_egress.go.
+				if !s.egressProvenanceAllowed(req) {
 					continue
 				}
 				addedEgress = append(addedEgress, unionAllowedDomains(spec, []string{name})...)

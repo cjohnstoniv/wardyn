@@ -335,10 +335,18 @@ func TestSeedRequestDrive422Matrix(t *testing.T) {
 			// The canon is frozen, so it is not reworded: the substrate's clause
 			// is APPENDED after it (types.DriveHomeStricterRuleClause), which is
 			// why this row is byte-exact on the canon sentence AND on the suffix.
+			//
+			// A STATIC PVC, not a managed one: `sub` on a MANAGED backend is now
+			// refused outright (types.ManagedBackendRejectsTemplate — the object
+			// is NAMED by the home, and an object name is printed without an
+			// inspect), so a managed fixture would never reach the derivation
+			// this row exists to exercise. k8s_pvc_static is the k8s SHARE
+			// backend, where every template stays legal and the apiserver's
+			// stricter name rule still applies — same door, still reachable.
 			name: "the home name breaks the stricter Kubernetes rule",
 			store: &driveStore{
 				drive: driveFixture(func(d *types.UserDrive) {
-					d.Backend, d.HomeTemplate, d.SizeMiB = types.DriveBackendK8sPVC, types.HomeTemplateSub, 10240
+					d.Backend, d.HomeTemplate, d.SizeMiB = types.DriveBackendK8sPVCStatic, types.HomeTemplateSub, 10240
 				}),
 				tier: types.CapabilitySubjectUser,
 			},

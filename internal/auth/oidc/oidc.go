@@ -252,9 +252,20 @@ type Session struct {
 	// pre-upgrade cookie would be told their group grants simply do not apply.
 	// The cost is 12 bytes of cookie.
 	//
-	// decodeSession is deliberately NOT widened to require this field: a
-	// pre-0.6 cookie stays VALID and nobody is forced to re-login by an
-	// upgrade.
+	// decodeSession is deliberately not widened to require this FIELD — but it
+	// does require the codec VERSION, and that is the fact that decides who is
+	// signed out. `sess.V != SessionCodecVersion` (session_codec.go) is an exact
+	// compare, and a pre-0.7 cookie carries no "v" key at all, so it decodes to
+	// 0 and is refused outright: upgrading to 0.7 signs every SSO human out
+	// ONCE, on their next request. This comment used to assert the opposite —
+	// that an older cookie survived the upgrade and nobody was forced to sign in
+	// again — and three shipped documents were written from it.
+	//
+	// So the nil-vs-empty signal above discriminates within ONE codec version:
+	// a session this binary wrote either has groups or has `[]`. The pre-0.6
+	// no-groups-key case it was designed for cannot reach the decoder any more —
+	// keeping the distinction is what lets the NEXT codec-compatible change
+	// carry a "we never asked" session without inventing a second flag.
 	Groups []string `json:"groups"`
 	// GroupsTruncated reports that Groups is a PARTIAL snapshot — sessionGroups
 	// hit the maxSessionGroupsBytes cap and dropped the alphabetically-last
