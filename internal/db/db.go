@@ -512,7 +512,13 @@ func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
 			slog.Any("triggers", other))
 	}
 	if len(tamperCapable) > 0 {
-		return fmt.Errorf("db: row-level BEFORE INSERT trigger(s) on audit_events that Wardyn does not ship (%s); such a trigger sees NEW and its changes are what Postgres stores, so it can rewrite or drop any audit row on the way in while every shipped guard stays armed and the verify sweep still reports clean — refusing to start", strings.Join(tamperCapable, ", "))
+		// Wrapped only to satisfy lll; the sentence is the operator's whole
+		// explanation of why a boot refusal is the proportionate response, so
+		// it is split rather than shortened.
+		return fmt.Errorf("db: row-level BEFORE INSERT trigger(s) on audit_events that Wardyn does not ship (%s); "+
+			"such a trigger sees NEW and its changes are what Postgres stores, so it can rewrite or drop any "+
+			"audit row on the way in while every shipped guard stays armed and the verify sweep still reports "+
+			"clean — refusing to start", strings.Join(tamperCapable, ", "))
 	}
 	return nil
 }
