@@ -147,11 +147,20 @@ func (s *Server) integrationByID(ctx context.Context, sc types.SiteConfig, id st
 }
 
 // putIntegrationRequest is the wire body for PUT /integrations/{id}: every
-// operator-settable field of a stored Integration. id comes from the URL, not
-// the body (mirrors handleDeleteSecret's path-is-authoritative style) — PUT is
-// a FULL REPLACEMENT (handlePutSiteConfig's own doctrine: no partial merge),
-// so a caller must round-trip a GET first to preserve fields it does not
-// intend to change.
+// operator-settable field of a stored Integration, and ONLY those — name, kind,
+// disabled, secrets, egress, config, docs, disabled_capabilities, default_for.
+// id comes from the URL, not the body (mirrors handleDeleteSecret's
+// path-is-authoritative style).
+//
+// PUT is a FULL REPLACEMENT (handlePutSiteConfig's own doctrine: no partial
+// merge), so send every field you want to keep — but the body is NOT a GET
+// document. GET /integrations emits five fields the server owns and this DTO
+// has no home for — id, created_at, updated_at, source, capabilities — and the
+// decode is STRICT, so PUTting a GET row back unchanged is a 400 naming the
+// first of them, not a round trip. Take the GET row, drop those five, send the
+// rest. (Strict stays deliberately: this write steers every run's model
+// credential, so a misspelled field name has to 400 rather than silently
+// resolve to the zero value.)
 type putIntegrationRequest struct {
 	Name                 string                    `json:"name"`
 	Kind                 string                    `json:"kind"`

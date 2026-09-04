@@ -60,10 +60,11 @@ run inside it did:
 |---|---|
 | `0` | ok — the command succeeded (`run --wait`: the run `COMPLETED`, task/agent exited 0) |
 | `2` | auth — the control plane rejected the request as unauthenticated/unauthorized. **Also** `run --wait`: the run ended `KILLED`, `STOPPED`, or `ARCHIVED` (lifecycle termination, not a task result) |
-| `3` | client-4xx — any other client error (bad request, not found, conflict, ...) |
+| `3` | client — any other non-2xx response: a 4xx (bad request, not found, conflict, ...), or an unfollowed 3xx redirect (an interposed proxy — the CLI never follows redirects) |
 | `4` | server-5xx — the control plane returned a server error |
 | `5` | network — couldn't reach the control plane at all (DNS, connection refused, TLS) |
 | `124` | `run --wait` only: the wait timed out before the run reached a terminal state |
+| `1` | the CLI failed locally against a response it could not classify — e.g. a 2xx whose body did not decode. **Also** `run --wait`: see the row below |
 | _task's own code_ | `run --wait`: the run ended `FAILED` — the exit is the task/agent's own real exit code (from the `run.complete` audit event), or `1` if that code is missing/unreadable (never `0` on `FAILED`) |
 
 `wardyn run get <id> --json` (or the `run.complete` audit event) always has
@@ -176,6 +177,15 @@ dependency — `up -d postgres wardynd` always starts it too) — so parallel
 invocations don't collide on container names, the control-plane network, the
 recordings volume, or any of those three host ports, and one job's
 `down --volumes` never tears down another's.
+
+The default project name's suffix comes from `/dev/urandom`, so it is unique
+even between jobs that cannot see each other's PIDs (the usual shape: every job
+in its own container, all of them driving one shared host Docker socket). And
+because a job's teardown is `down --volumes`, `ci-run.sh` refuses to start at
+all when its project name already has **running** containers — a pinned
+`WARDYN_CI_PROJECT` reused while the previous job is still live is an error,
+not a silent teardown of that job. (Stopped leftovers don't count, so retrying
+a pinned name after its stack exited still works.)
 
 The variables that do it (see [docs/ENV.md](ENV.md#compose--scripts-shell-only--not-read-by-go)):
 

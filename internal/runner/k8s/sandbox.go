@@ -351,11 +351,20 @@ func (d *Driver) waitContainerRunning(ctx context.Context, podName, containerNam
 // the caller then reports the bare timeout rather than a fabricated cause.
 //
 // PodScheduled=False is read FIRST and is the one that matters here: it is where
-// the scheduler writes "pod has unbound immediate PersistentVolumeClaims", the
-// message a drive whose claim never bound produces, and the reason a
-// ReadWriteOnce claim already attached to a pod on another node produces too
-// (docs/OPERATIONS.md, "User drives on Kubernetes"). Both are storage facts an
-// operator can act on and neither appears anywhere else in the pod's status.
+// the scheduler writes "pod has unbound immediate PersistentVolumeClaims" (a
+// drive whose claim never bound at all) and "node(s) didn't match
+// PersistentVolume's node affinity" (a bound PV whose affinity excludes every
+// candidate node). Both are storage facts an operator can act on and neither
+// appears anywhere else in the pod's status.
+//
+// The cross-node ReadWriteOnce case does NOT arrive here and this hint does not
+// carry it. Nothing schedules around RWO — kube-scheduler's volumerestrictions
+// plugin enforces only ReadWriteOncePod — so that pod IS scheduled
+// (PodScheduled=True) and then stalls in ContainerCreating waiting on a detach
+// that is not coming. Its evidence is a FailedAttachVolume warning EVENT on the
+// pod, which this function never reads, so such a run reports the bare
+// dispatch-wait timeout. docs/OPERATIONS.md, "User drives on Kubernetes", is
+// where an operator is sent for it.
 func podStuckReason(pod *corev1.Pod) string {
 	if pod == nil {
 		return ""

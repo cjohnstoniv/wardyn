@@ -35,12 +35,23 @@ const (
 	// most one claim.
 	driveVolumeName = "drive"
 
-	// driveDirectfsAnnotation asks gVisor to serve THIS volume with directfs
-	// off. gVisor keys the option by the mount's name, so the key is
-	// driveVolumeName's — built from the same constant rather than re-typed, or
-	// renaming the volume would silently leave the annotation pointing at a
-	// mount that no longer exists. Stamped by applyDriveToPod on runsc pods
-	// only; see its doc for what the annotation does and does not guarantee.
+	// driveDirectfsAnnotation is the key applyDriveToPod stamps on runsc drive
+	// pods to serve THIS volume with directfs off. Built from driveVolumeName
+	// rather than re-typed, so renaming the volume cannot leave the annotation
+	// naming a mount that no longer exists.
+	//
+	// IT IS INERT TODAY, and nothing depends on it working. runsc keeps a mount
+	// hint only when it carries `share`, `source` AND `type` alongside the
+	// option — one missing any of them is discarded ("ignoring mount
+	// annotations for ... because of missing required field(s)",
+	// runsc/boot/mount_hints.go's NewPodMountHints) — and this key sets none of
+	// the three. Nor does the <NAME> in the key bind a hint to a mount:
+	// FindMount matches on the mount's SOURCE PATH, which for a
+	// CSI-provisioned claim is a per-pod path the kubelet generates and no
+	// static annotation can name in advance. The remedy that does work is the
+	// NODE flag --directfs=false; see docs/OPERATIONS.md, "User drives on
+	// Kubernetes". Left stamped because the key is the right one if the hint is
+	// ever completed — which is a code change, not a configuration one.
 	driveDirectfsAnnotation = "dev.gvisor.spec.mount." + driveVolumeName + ".directfs"
 
 	// labelDrive marks a claim as belonging to one drive ROW (by id, so a rename
@@ -506,23 +517,23 @@ func reuseDriveClaim(claim *corev1.PersistentVolumeClaim, drive *types.DriveMoun
 // GVISOR (the CC2/CC3 RuntimeClasses resolveRuntimeClassName pins): a
 // network-backed volume under runsc wants `directfs` OFF — the gofer donates a
 // file descriptor per mount point and the sandbox then operates on it directly,
-// which a 9p/NFS-backed export does not reliably support. gVisor takes that per
-// MOUNT, from a pod annotation keyed by the volume's own name
-// (`dev.gvisor.spec.mount.<NAME>.directfs: "off"`), so this function stamps it
-// on exactly the pods that need it and no others: a drive pod whose resolved
+// which a 9p/NFS-backed export does not reliably support. This function stamps
+// the per-mount annotation (`dev.gvisor.spec.mount.<NAME>.directfs: "off"`) on
+// exactly the pods that would want it and no others: a drive pod whose resolved
 // RuntimeClass handler is runsc. runtimeHandler is "" for every other pod, which
 // is why the parameter exists at all — it is the RuntimeClass's .Handler, not
-// its object name, that names the runtime family (see handlerRunscPrefix).
+// its object name, that names the runtime family (see handlerRunscPrefix). It is
+// stamped here because this is the only place in the tree where a drive volume
+// and a RuntimeClass meet.
 //
-// It is a REQUEST, not an enforcement, and OPERATIONS says so: containerd only
-// forwards the annotation when the node's runsc runtime config lists
-// `pod_annotations = ["dev.gvisor.*"]`, and the node-level `--directfs=false`
-// is the setting that does not depend on that. Both recipes, plus the
-// `--file-access-mounts` caching caveat a share other writers touch needs, are
-// in docs/OPERATIONS.md "User drives on Kubernetes".
-//
-// It is stamped at this function because this is the only place in the tree
-// where a drive volume and a RuntimeClass meet.
+// THE ANNOTATION DOES NOT DELIVER IT: runsc discards this hint outright (see
+// driveDirectfsAnnotation for why, with the upstream reference). The node flag
+// `--directfs=false` is therefore not one remedy among two — it is the only
+// one, and docs/OPERATIONS.md "User drives on Kubernetes" carries that recipe
+// plus the `--file-access-mounts` caching caveat a share other writers touch
+// needs. containerd's `pod_annotations = ["dev.gvisor.*"]` gate sits upstream
+// of all of it: without that, the annotation never reaches runsc to be
+// discarded in the first place.
 func applyDriveToPod(pod *corev1.Pod, drive *types.DriveMount, runtimeHandler string) {
 	if strings.HasPrefix(runtimeHandler, handlerRunscPrefix) {
 		if pod.Annotations == nil {

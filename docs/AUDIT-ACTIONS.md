@@ -232,8 +232,8 @@ it never blocks, and it is blind inside CC3/Kata microVM guests.
 |---|---|---|---|---|
 | `base_image.write` | An admin creates/updates a base agent image | `image`, `kind`, `steps` | `internal/api/base_images.go:113` | internal |
 | `base_image.delete` | An admin deletes a base image | `detached_from`, `forced` | `internal/api/base_images.go:155` | internal |
-| `integration.write` | An admin creates/updates an integration (secrets/egress/config/delivery) | `default_for`, `egress`, `header`, `kind` | `internal/api/setup_integrations.go:251` | internal |
-| `integration.delete` | An admin deletes an integration | `credentials`, `egress`, `kind` | `internal/api/setup_integrations.go:292` | internal |
+| `integration.write` | An admin creates/updates an integration (secrets/egress/config/delivery) | `default_for`, `egress`, `header`, `kind` | `internal/api/setup_integrations.go:260` | internal |
+| `integration.delete` | An admin deletes an integration | `credentials`, `egress`, `kind` | `internal/api/setup_integrations.go:301` | internal |
 | `setup.onboarding.completed` | An operator finished (or deliberately left) the Getting Started funnel — stamps `SiteConfig.OnboardingCompletedAt`, the install-side fact the console's landing, welcome hero and setup gate read. Emitted once per install: the handler is idempotent and a later re-finish never moves the timestamp | `completed_at` | `internal/api/setup_onboarding.go:72` | internal |
 | `site_config.write` | `PUT /site-config` (full-document replace) | `egress_redirects_count`, `internal_hosts_count`, `scm_hosts_count`, `upstream_proxy_configured` | `internal/api/site_config.go:441` | internal |
 | `site_config.test_proxy` | The site-config "test upstream proxy" probe runs | `custom_target`, `elapsed_ms`, `intercepted`, `state`, `target_host` | `internal/api/site_config_probe.go:839` | internal |

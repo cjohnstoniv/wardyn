@@ -332,7 +332,20 @@ services:
       WARDYN_OIDC_INTERNAL_ISSUER: "${WARDYN_OIDC_INTERNAL_ISSUER:-http://dex:5556}"
       WARDYN_OIDC_CLIENT_ID: "wardyn"
       WARDYN_OIDC_CLIENT_SECRET: "${WARDYN_OIDC_CLIENT_SECRET:-wardyn-oidc-secret}"
-      WARDYN_OIDC_REDIRECT_URL: "http://localhost:8080/auth/callback"
+      # Follows the published port (and is overridable like its five neighbours):
+      # this is the URL the BROWSER is sent back to, so it has to name the host
+      # port the console is actually reachable on. Hard-coded to 8080, a stack on
+      # WARDYN_UP_PORT=8090 sent every login to a port nothing serves, and the
+      # documented WARDYN_OIDC_REDIRECT_URL was inert. Set it directly for a real
+      # IdP (a public hostname, TLS) — deploy/azure-entra-sso/04-values.sh does.
+      #
+      # dex.yaml's staticClients[].redirectURIs must MATCH whatever this resolves
+      # to, and that file cannot be parameterised (its own header: env expansion
+      # is off there, and turning it on corrupts the bcrypt hash) — so running the
+      # `sso` profile on a non-8080 WARDYN_UP_PORT means editing dex.yaml too.
+      # With them out of sync Dex refuses the authorize request outright, which
+      # is the loud failure; the 8080 hard-code was the silent one.
+      WARDYN_OIDC_REDIRECT_URL: "${WARDYN_OIDC_REDIRECT_URL:-http://localhost:${WARDYN_UP_PORT:-8080}/auth/callback}"
       WARDYN_OIDC_EMAIL_DOMAINS: "${WARDYN_OIDC_EMAIL_DOMAINS:-wardyn.local}"
       # Operator allowlist of the minimal viewer/operator gate. EMPTY by default
       # = every authenticated human is an operator (unchanged). Set it to a

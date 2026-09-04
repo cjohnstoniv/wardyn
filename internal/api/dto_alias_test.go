@@ -4,8 +4,11 @@
 package api
 
 import (
+	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -38,4 +41,60 @@ func TestRequestDTOs_AreClientDTOAliases(t *testing.T) {
 	var _ client.WorkspaceRequest = workspaceRequest{}
 	var _ sourceRequest = client.SourceRequest{}
 	var _ client.SourceRequest = sourceRequest{}
+}
+
+// jsonTagNames returns the wire names of a struct's json-tagged, exported
+// fields (tag "-" and unexported fields excluded).
+func jsonTagNames(t *testing.T, typ reflect.Type) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if name == "" || name == "-" {
+			continue
+		}
+		out[name] = true
+	}
+	return out
+}
+
+// R5 F027: putIntegrationRequest (setup_integrations.go) hand-mirrors
+// types.Integration with no SDK twin to alias, so nothing made adding a field
+// to the stored type also make it settable — a new operator-settable field
+// built clean, passed every alias/parity test, and was simply unreachable over
+// the wire (decodeStrict 400s the field the console would send). This is that
+// missing compile-independent parity: every types.Integration wire field is
+// either settable on the PUT body or explicitly server-owned, and the
+// server-owned list is written out so a new field forces a deliberate choice
+// rather than defaulting to "silently unsettable".
+func TestPutIntegrationRequest_MirrorsSettableIntegrationFields(t *testing.T) {
+	// The fields the SERVER owns on a stored Integration: the id comes from the
+	// URL (path-is-authoritative, like handleDeleteSecret) and the timestamps
+	// are stamped by handlePutIntegration from s.cfg.Now(). Everything else on
+	// types.Integration is operator-settable and must be on the PUT body.
+	serverOwned := map[string]bool{"id": true, "created_at": true, "updated_at": true}
+
+	stored := jsonTagNames(t, reflect.TypeOf(types.Integration{}))
+	settable := jsonTagNames(t, reflect.TypeOf(putIntegrationRequest{}))
+
+	for name := range stored {
+		if serverOwned[name] {
+			if settable[name] {
+				t.Errorf("putIntegrationRequest accepts %q, which handlePutIntegration owns — remove it from the DTO or from serverOwned here", name)
+			}
+			continue
+		}
+		if !settable[name] {
+			t.Errorf("types.Integration has wire field %q but putIntegrationRequest does not — an operator cannot set it (decodeStrict 400s it). Add it to the DTO and to handlePutIntegration's construction, or declare it server-owned in serverOwned here", name)
+		}
+	}
+	for name := range settable {
+		if !stored[name] {
+			t.Errorf("putIntegrationRequest accepts %q, which types.Integration has no wire field for — the PUT would silently drop it", name)
+		}
+	}
 }

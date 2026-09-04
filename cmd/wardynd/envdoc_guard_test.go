@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -140,20 +141,94 @@ func readVars(t *testing.T, root string) map[string]bool {
 	return seen
 }
 
+// documentedVars tokenizes docs/ENV.md into the exact WARDYN_* names it names.
+// The regex is greedy, so WARDYN_GROUNDTRUTH_TOKEN_FILE yields exactly that one
+// token and NOT its prefix WARDYN_GROUNDTRUTH_TOKEN — which is the whole point:
+// both ratchets must compare whole names, never substrings.
+func documentedVars(docText string) map[string]bool {
+	documented := map[string]bool{}
+	for _, m := range wardynVarLit.FindAllString(docText, -1) {
+		documented[m] = true
+	}
+	return documented
+}
+
+// envDocForwardMissing is the forward ratchet's decision, split out from the
+// test so a fixture doc can exercise it. Returns the Go-read vars docs/ENV.md
+// does not name, sorted.
+//
+// R5 F211: this used to be strings.Contains over the whole document, which any
+// var that is a strict PREFIX of another documented var passed with its own row
+// deleted — ten of them, including the secret WARDYN_GROUNDTRUTH_TOKEN
+// (absorbed by WARDYN_GROUNDTRUTH_TOKEN_FILE). Compare against the same
+// tokenized name set the reverse ratchet already builds.
+func envDocForwardMissing(read map[string]bool, docText string) []string {
+	documented := documentedVars(docText)
+	var missing []string
+	for v := range read {
+		if envDocAllow[v] {
+			continue
+		}
+		if !documented[v] {
+			missing = append(missing, v)
+		}
+	}
+	sort.Strings(missing)
+	return missing
+}
+
 // TestEnvDoc_ForwardEveryReadIsDocumented ratchets one direction: every WARDYN_*
 // literal read in non-test Go under cmd/ + internal/ must appear in docs/ENV.md
 // (or the test-only allowlist). Adds a new env var without documenting it → fail.
 func TestEnvDoc_ForwardEveryReadIsDocumented(t *testing.T) {
 	root := repoRoot(t)
-	docText := readEnvDoc(t, root)
+	for _, v := range envDocForwardMissing(readVars(t, root), readEnvDoc(t, root)) {
+		t.Errorf("%s is read in non-test Go but undocumented in docs/ENV.md (add it there, or to envDocAllow if it is test-only)", v)
+	}
+}
 
-	for v := range readVars(t, root) {
-		if envDocAllow[v] {
+// TestEnvDoc_ForwardRejectsPrefixAbsorbedRow is the counterfactual the forward
+// ratchet could not make: delete the ONE docs/ENV.md row for a Go-read var that
+// is a strict prefix of another documented var, and the ratchet must notice.
+// WARDYN_GROUNDTRUTH_TOKEN (read by cmd/wardyn-tetragon-ingest) is the live
+// example — it is a host-sensor bearer token, so an undocumented one is exactly
+// the row an operator must not lose silently.
+func TestEnvDoc_ForwardRejectsPrefixAbsorbedRow(t *testing.T) {
+	const absorbed = "WARDYN_GROUNDTRUTH_TOKEN"
+	root := repoRoot(t)
+	read := readVars(t, root)
+	if !read[absorbed] {
+		t.Fatalf("%s is no longer read in non-test Go — repoint this counterfactual at another prefix-absorbed var", absorbed)
+	}
+
+	// Drop only that var's own row(s); the WARDYN_GROUNDTRUTH_TOKEN_FILE row
+	// that used to absorb it stays, which is what makes this a counterfactual.
+	var kept []string
+	dropped := 0
+	for _, line := range strings.Split(readEnvDoc(t, root), "\n") {
+		if strings.HasPrefix(line, "| `"+absorbed+"`") {
+			dropped++
 			continue
 		}
-		if !strings.Contains(docText, v) {
-			t.Errorf("%s is read in non-test Go but undocumented in docs/ENV.md (add it there, or to envDocAllow if it is test-only)", v)
+		kept = append(kept, line)
+	}
+	if dropped == 0 {
+		t.Fatalf("no docs/ENV.md row starts with | `%s` — the fixture no longer removes anything", absorbed)
+	}
+	fixture := strings.Join(kept, "\n")
+	if !strings.Contains(fixture, absorbed) {
+		t.Fatalf("fixture no longer contains %s as a substring, so it cannot prove the substring check was the bug", absorbed)
+	}
+
+	missing := envDocForwardMissing(read, fixture)
+	found := false
+	for _, v := range missing {
+		if v == absorbed {
+			found = true
 		}
+	}
+	if !found {
+		t.Errorf("forward ratchet passed docs/ENV.md with %s's row deleted (missing=%v) — it is matching substrings, not documented names: %s is still present inside %s_FILE", absorbed, missing, absorbed, absorbed)
 	}
 }
 
@@ -166,10 +241,7 @@ func TestEnvDoc_ReverseEveryRowHasReader(t *testing.T) {
 	docText := readEnvDoc(t, root)
 	seen := readVars(t, root)
 
-	documented := map[string]bool{}
-	for _, m := range wardynVarLit.FindAllString(docText, -1) {
-		documented[m] = true
-	}
+	documented := documentedVars(docText)
 	for v := range documented {
 		if envDocAllow[v] {
 			continue // documented purely as test-only; read only from _test.go

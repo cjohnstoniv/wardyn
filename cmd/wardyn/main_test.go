@@ -161,3 +161,35 @@ func TestWarnPlaintextToken(t *testing.T) {
 		}
 	}
 }
+
+// R5 F167: the whole status taxonomy in one table, so a class can't silently
+// fall through to 1 again. pkg/client mints an *sdk.APIError for EVERY non-2xx
+// (client.go: `StatusCode < 200 || > 299`), 3xx included — nothing follows
+// redirects — so an interposed proxy's 302 used to land on the catch-all 1,
+// the code docs/CI.md reserves for a FAILED run's own task exit code. Every
+// typed API error is a request-level failure and must classify as 2/3/4.
+func TestExitCodeFor_EveryStatusClass(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		want   int
+	}{
+		{300, 3}, {304, 3}, {302, 3}, // unfollowed redirect: request-level, not the run's code
+		{401, 2}, {403, 2},
+		{400, 3}, {404, 3}, {409, 3}, {429, 3},
+		{500, 4}, {503, 4},
+	} {
+		err := &sdk.APIError{Status: tc.status, Body: "x"}
+		if got := exitCodeFor(err); got != tc.want {
+			t.Errorf("exitCodeFor(APIError %d) = %d, want %d", tc.status, got, tc.want)
+		}
+		// Wrapped must classify identically (callers wrap with %w).
+		if got := exitCodeFor(fmt.Errorf("call: %w", err)); got != tc.want {
+			t.Errorf("exitCodeFor(wrapped APIError %d) = %d, want %d", tc.status, got, tc.want)
+		}
+	}
+	// A 2xx whose body doesn't decode is NOT an APIError — it stays on the
+	// catch-all 1, which docs/CI.md's `1` row now names explicitly.
+	if got := exitCodeFor(fmt.Errorf("decode response: %w", errors.New("json: cannot unmarshal object"))); got != 1 {
+		t.Errorf("exitCodeFor(decode error) = %d, want 1", got)
+	}
+}

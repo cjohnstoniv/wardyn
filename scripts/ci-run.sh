@@ -44,11 +44,16 @@ CI_OVERLAY="${REPO_ROOT}/deploy/compose/docker-compose.ci.yaml"
 # collide on container names, the control-plane network, the recordings volume, or
 # host ports — and one job's `down --volumes` teardown never touches another's.
 # Caller may pin WARDYN_CI_PROJECT (e.g. to the CI job id) for a stable name;
-# default is unique per invocation ($$ = this shell's PID, distinct across
-# concurrent runs). COMPOSE_PROJECT_NAME scopes compose's own bookkeeping +
+# default is unique per invocation. The suffix comes from the kernel CSPRNG, NOT
+# from $$: a PID is unique only within its own PID namespace, and the common CI
+# shape — each job in its own container, all of them driving one shared host
+# docker socket — puts several PID 1s (or 42s) on the same daemon at once. Two
+# jobs that agree on a project name is not a naming annoyance here: the teardown
+# below is `down --volumes`, so the second job destroys the first job's live
+# postgres. COMPOSE_PROJECT_NAME scopes compose's own bookkeeping +
 # unnamed volumes; WARDYN_NS scopes the explicitly-named objects (container_name /
 # network / recordings volume) and MUST match wardynd's WARDYN_INTERNAL_NETWORK.
-CI_PROJECT="${WARDYN_CI_PROJECT:-wardyn-ci-$$}"
+CI_PROJECT="${WARDYN_CI_PROJECT:-wardyn-ci-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')}"
 export COMPOSE_PROJECT_NAME="${CI_PROJECT}"
 export WARDYN_NS="${CI_PROJECT}"
 # Host UI/postgres/registry ports are unused in CI (the CLI runs in-container
@@ -82,6 +87,21 @@ docker compose version >/dev/null 2>&1 || die "docker compose v2 required"
 # container's bind-mounted socket at it. wardyn_pick_docker_host derives both
 # DOCKER_HOST and WARDYN_DOCKER_SOCK.
 wardyn_pick_docker_host
+
+# A project name only isolates this job if nothing else is USING it. The
+# `down --volumes` further down is unconditional and ephemerality is
+# load-bearing (see its comment), so a name already in use would be torn out
+# from under whoever holds it — a concurrent job, or an operator's
+# WARDYN_CI_KEEP=1 stack. Refuse instead. The query is by compose's own project
+# label rather than `compose ps`, because ${COMPOSE[@]} carries the CI overlay
+# and that file cannot even be loaded until WARDYN_CI_TOOLS_DIR exists (set
+# below). Only RUNNING containers count, so an ordinary retry of a pinned
+# WARDYN_CI_PROJECT whose stack already exited still proceeds.
+_live="$(docker ps -q --filter "label=com.docker.compose.project=${CI_PROJECT}" 2>/dev/null || true)"
+if [[ -n "${_live}" ]]; then
+  die "compose project '${CI_PROJECT}' already has running containers — this job's 'down --volumes' would destroy them. Wait for that job, pick another WARDYN_CI_PROJECT, or tear it down: docker compose -p '${CI_PROJECT}' down --volumes"
+fi
+unset _live
 
 # wardyn runs the shipped CLI inside the wardynd container with the admin token
 # (same shim as scripts/demo.sh — no host Go/binary needed at run time).

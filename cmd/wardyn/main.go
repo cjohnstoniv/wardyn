@@ -69,7 +69,8 @@ func dialHint(err error) string {
 // exitCodeFor maps an error to a process exit code CI can branch on. A run
 // outcome from --wait (*exitError) wins — it already encodes the agent/lifecycle
 // result. Otherwise a typed API error maps by status class (auth=2, server=4,
-// other 4xx=3), a transport failure (*url.Error) is 5, and anything else is 1.
+// every other non-2xx=3), a transport failure (*url.Error) is 5, and anything
+// else is 1.
 func exitCodeFor(err error) int {
 	var ee *exitError
 	if errors.As(err, &ee) {
@@ -82,7 +83,13 @@ func exitCodeFor(err error) int {
 			return 2
 		case ae.Status >= 500:
 			return 4
-		case ae.Status >= 400:
+		default:
+			// pkg/client mints an *sdk.APIError for EVERY non-2xx status, 3xx
+			// included (nothing sets CheckRedirect, so a redirect from an
+			// interposed proxy is never followed). All of them are failures of
+			// the CLI-to-control-plane request itself, so they classify with
+			// the 4xx class — never on the catch-all 1, which docs/CI.md
+			// reserves for a FAILED run's own task exit code.
 			return 3
 		}
 	}

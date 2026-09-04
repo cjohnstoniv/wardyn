@@ -431,6 +431,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/lib/common_clone_present_test.sh
 	./scripts/lib/nightly_ssh_e2e_test.sh
 	./scripts/lib/up_doctor_ports_test.sh
+	./scripts/test-ci-run-isolation.sh
 	./scripts/test-claims-match-code.sh
 	./scripts/test-compose-ns-registry-port.sh
 	./scripts/test-desktop-profile.sh
@@ -749,6 +750,15 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 	@# that collides with the imported stack only fails when Compose RESOLVES it —
 	@# which no daemon-free gate did before, so it broke in CI first (0.6.1).
 	docker compose --env-file deploy/desktop/wardyn.env.example -f deploy/desktop/docker-compose.yaml config >/dev/null
+	@# R5 F022: the SSO callback must FOLLOW the published port and honour an
+	@# explicit override, or `WARDYN_UP_PORT=8090 --profile sso` sends the browser
+	@# to a port nothing serves and the documented WARDYN_OIDC_REDIRECT_URL is inert.
+	@WARDYN_UP_PORT=8090 docker compose -f $(COMPOSE_FILE) config \
+	  | grep -q 'WARDYN_OIDC_REDIRECT_URL: http://localhost:8090/auth/callback' \
+	  || { echo "compose: WARDYN_OIDC_REDIRECT_URL does not follow WARDYN_UP_PORT"; exit 1; }
+	@WARDYN_OIDC_REDIRECT_URL=https://sso.corp.example/auth/callback docker compose -f $(COMPOSE_FILE) config \
+	  | grep -q 'WARDYN_OIDC_REDIRECT_URL: https://sso.corp.example/auth/callback' \
+	  || { echo "compose: WARDYN_OIDC_REDIRECT_URL is inert (no \$${VAR:-default} passthrough)"; exit 1; }
 
 # DCO sign-off: every non-merge commit in DCO_RANGE carries a Signed-off-by.
 # CI passes the PR range (BASE..HEAD); default is origin/main..HEAD for local use.
