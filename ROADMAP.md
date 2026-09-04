@@ -30,7 +30,8 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
 - **Credentials are first-class at the CLI.** `wardyn subscription
   connect|status|disconnect` (stdin only, age-encrypted, injected proxy-side) and
   `wardyn setup status`, which prints the exact next command per unmet check.
-  `WARDYN_SUBSCRIPTION_TOKEN` seeds a subscription headlessly.
+  `WARDYN_SUBSCRIPTION_TOKEN` is not a headless seed — `make setup` warns and
+  ignores it; connect through the CLI or the console (`docs/ENV.md` says why).
 - **YAML policies.** `--policy-file` and `policy create|update -f` accept YAML or
   JSON; `wardyn policy render -f <file>` converts and strictly validates. See
   [`examples/policies/sandbox.yaml`](examples/policies/sandbox.yaml) and

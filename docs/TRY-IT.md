@@ -205,7 +205,11 @@ the real credential out of the sandbox *except* the Bedrock access-key path
   injects `x-api-key` at startup; **never resident**.
 - **Subscription (managed, container-native)** — `claude setup-token | wardyn
   subscription connect` (headless: `printf '%s' "$TOKEN" | wardyn subscription
-  connect --token-stdin`, or set `WARDYN_SUBSCRIPTION_TOKEN` before `make setup`).
+  connect --token-stdin`). **Not** `WARDYN_SUBSCRIPTION_TOKEN` before `make setup`:
+  neither compose path honours that variable despite its name — `scripts/up.sh`
+  warns and ignores it and `scripts/ci-run.sh` exits non-zero, because a shared
+  subscription credential is a single-user desktop setting (see its row in
+  [ENV.md](ENV.md)).
   The token is captured once, stored **age-encrypted**, and injected proxy-side as
   `Authorization: Bearer` into every eligible run — the sandbox holds only an inert
   sentinel (`docker exec … env | grep -i key` is empty). `wardyn subscription

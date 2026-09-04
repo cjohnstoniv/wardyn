@@ -2706,8 +2706,9 @@ curl -fsS http://127.0.0.1:8080/healthz                  # or your WARDYN_UP_POR
 
 That dump is your only rollback, for the reason at the top of this section:
 there are no `down` migrations, so re-running an OLDER installer against a
-database a newer wardynd has already migrated is unsupported — and nothing stops
-you. `wardyn --version` says what CLI you have and `/healthz`'s `version` field
+database a newer wardynd has already migrated is unsupported — and `install.sh`
+refuses it: a downgrade is a refusal that writes nothing, so restore the dump
+onto the older version instead. `wardyn --version` says what CLI you have and `/healthz`'s `version` field
 says what the control plane is serving; check both before moving backwards.
 
 The desktop tier is different again: its upgrade is an MDM rewrite of the two

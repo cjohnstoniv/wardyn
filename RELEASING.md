@@ -89,6 +89,13 @@ before step 3.
    Prerequisites run above only sees the previous release's already-consistent
    versions and passes either way. **Re-run `make release-check` after this
    commit** before tagging.
+
+   **`docs/VERIFY.md` is deliberately NOT on that list.** Every command in it is
+   parameterised on `$WARDYN_VERSION`, which its own step 0 resolves, so it needs
+   no bump — and hard-coding this release's number into one of those commands is
+   how it silently starts verifying the wrong artifacts.
+   `scripts/test-claims-match-code.sh` fails if any `ghcr.io` / `helm` /
+   `gh release` line in that file names a literal version.
 2. **Commit** the CHANGELOG and version-string bumps together, DCO-signed:
    `git commit -s -m "release: X.Y.Z"`.
 3. **Cut (or reuse) the release branch.** Starting with 0.5, every minor

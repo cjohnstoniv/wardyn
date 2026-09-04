@@ -431,6 +431,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/lib/common_clone_present_test.sh
 	./scripts/lib/nightly_ssh_e2e_test.sh
 	./scripts/lib/up_doctor_ports_test.sh
+	./scripts/test-claims-match-code.sh
 	./scripts/test-compose-ns-registry-port.sh
 	./scripts/test-desktop-profile.sh
 	./scripts/test-image-pins.sh

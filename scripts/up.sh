@@ -257,6 +257,9 @@ wardyn_cli_prefix() {
 #     mode is off; local mode returns before the bearer check, so ONE shape
 #     answers both postures. Fallback mirrors compose's :-demo-admin-token.
 #
+# NOT `2>/dev/null`: `-m 5` bounds the curl, not the image pull docker does first
+# and reports ONLY on stderr — discarded, a slow or failed acquisition reached the
+# call sites as a bare `000` they then blamed wardynd for. curl is `-s` anyway.
 # Pinned by scripts/test-up-probes.sh + cmd/wardynd/up_sh_oidc_probe_guard_test.go.
 wardynd_probe() {
   _wp_env=$1; _wp_path=$2
@@ -265,7 +268,7 @@ wardynd_probe() {
     -s -m 5 -w '\n%{http_code}' \
     -H "Host: 127.0.0.1:8080" \
     -H "Authorization: Bearer ${_wp_tok:-demo-admin-token}" \
-    "http://wardynd:8080${_wp_path}" 2>/dev/null || echo 000
+    "http://wardynd:8080${_wp_path}" || echo 000
   unset _wp_env _wp_path _wp_tok
 }
 
@@ -292,10 +295,8 @@ open_url() {
   log "Open in your browser: $1"
 }
 
-# env_get FILE KEY -> current value (empty if unset/absent). Ignores comments
-# (matches only an uncommented "KEY=" line start).
-# env_get/env_set moved to scripts/lib/common.sh — setup.sh's front-door
-# workspaces-root prompt persists through the same helpers.
+# env_get/env_set moved to scripts/lib/common.sh (contracts documented there) —
+# setup.sh's front-door workspaces-root prompt persists through the same helpers.
 
 # _confirm PROMPT — shared consent gate for destructive commands (same
 # convention as setup.sh's stale-store recovery): WARDYN_FORCE_RESET=1 is the
