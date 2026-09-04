@@ -404,31 +404,54 @@ func (a *Authenticator) LoginHandler(w http.ResponseWriter, r *http.Request) {
 // callback), not a real user hitting a real policy denial, and a redirect
 // there would be a worse UX for a case an operator needs to see failed
 // loudly, not routed back into a retry loop.
-func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) {
-	// (1) CSRF: compare state parameter to cookie.
+// consumeCallbackCookies is CallbackHandler's PHASE 1: prove this redirect is
+// the one THIS browser started, and spend the single-use cookies that prove it.
+//
+// EVERY COOKIE IS READ BEFORE ANY IS CLEARED, and that order is the point. The
+// three are single-use by construction — state guards this redirect, nonce binds
+// this ID token, the verifier proves this exchange — so clearing one before the
+// others are known to be present would spend it on a request that never reaches
+// the token exchange, turning a retryable error into a login the human cannot
+// repeat by pressing back. On the failure paths nothing is cleared at all: the
+// browser keeps the cookies and the flow can be retried.
+//
+// The state comparison is the CSRF check and stays FIRST: a callback whose state
+// does not match a cookie this server set is not a login this browser began, and
+// nothing else about the request is worth reading until that holds.
+//
+// Returns the nonce the ID token must carry and the PKCE verifier the exchange
+// must present. ok=false means the response has ALREADY been written — the same
+// (value, ok) shape parseIDParam and the getWorkspace* helpers use, so a caller
+// that forgets to return on !ok is a familiar bug rather than a new one.
+func consumeCallbackCookies(w http.ResponseWriter, r *http.Request) (nonce, verifier string, ok bool) {
 	stateParam := r.URL.Query().Get("state")
 	stateCookie, err := r.Cookie(stateCookieName)
 	if err != nil || stateCookie.Value == "" || stateParam != stateCookie.Value {
 		http.Error(w, "invalid state parameter", http.StatusBadRequest)
-		return
+		return "", "", false
 	}
-
-	// Read nonce and PKCE verifier cookies.
 	nonceCookie, err := r.Cookie(nonceCookieName)
 	if err != nil || nonceCookie.Value == "" {
 		http.Error(w, "missing nonce cookie", http.StatusBadRequest)
-		return
+		return "", "", false
 	}
 	pkceCookie, err := r.Cookie(pkceCookieName)
 	if err != nil || pkceCookie.Value == "" {
 		http.Error(w, "missing pkce cookie", http.StatusBadRequest)
-		return
+		return "", "", false
 	}
-
-	// Clear the one-time cookies immediately (they are single-use).
 	clearCookie(w, stateCookieName)
 	clearCookie(w, nonceCookieName)
 	clearCookie(w, pkceCookieName)
+	return nonceCookie.Value, pkceCookie.Value, true
+}
+
+func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) {
+	// (1) CSRF and the one-time cookies — consumeCallbackCookies below.
+	nonce, verifier, ok := consumeCallbackCookies(w, r)
+	if !ok {
+		return
+	}
 
 	// (2) Exchange code for tokens, supplying the PKCE verifier.
 	code := r.URL.Query().Get("code")
@@ -449,7 +472,7 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	// invalid_grant is the common case) is never retried: the code is
 	// single-use, so re-sending it after the IdP has already consumed it
 	// would just trade one clear error for a confusing "invalid_grant" one.
-	token, exchangeErr := retryExchange(exchangeCtx, a.oauth2, code, pkceCookie.Value)
+	token, exchangeErr := retryExchange(exchangeCtx, a.oauth2, code, verifier)
 	if exchangeErr != nil {
 		if isTransientOIDCErr(exchangeErr) {
 			redirectAuthError(w, r, authErrorOIDCTransient)
@@ -472,7 +495,7 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// Nonce verification: the ID token nonce must match the cookie.
-	if idToken.Nonce != nonceCookie.Value {
+	if idToken.Nonce != nonce {
 		http.Error(w, "nonce mismatch", http.StatusUnauthorized)
 		return
 	}
