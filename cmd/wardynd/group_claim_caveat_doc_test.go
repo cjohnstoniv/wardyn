@@ -40,29 +40,21 @@ const caveatWindow = 1600
 // exists to make visible, recommended with the detector off.
 func TestGroupClaimWorkaroundKeepsItsCaveat(t *testing.T) {
 	root := repoRoot(t)
-	skipDir := map[string]bool{".git": true, "node_modules": true, "vendor": true, "dist": true}
 	checked, mentions := 0, 0
 
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+	// Tracked files, not a filesystem walk: see trackedMarkdown. A gitignored
+	// planning note that recommends the workaround is not documentation this
+	// product ships, and grading it is how a guard earns a reputation for noise.
+	for _, rel := range trackedMarkdown(t, root) {
+		b, rerr := os.ReadFile(filepath.Join(root, rel))
+		if os.IsNotExist(rerr) {
+			continue // tracked but deleted in this worktree
 		}
-		if d.IsDir() {
-			if skipDir[d.Name()] {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(d.Name(), ".md") {
-			return nil
+		if rerr != nil {
+			t.Fatalf("read %s: %v", rel, rerr)
 		}
 		checked++
-		b, rerr := os.ReadFile(path)
-		if rerr != nil {
-			return rerr
-		}
 		src := string(b)
-		rel, _ := filepath.Rel(root, path)
 		for _, loc := range shrinkTheClaimRE.FindAllStringIndex(src, -1) {
 			mentions++
 			lo := max(0, loc[0]-caveatWindow)
@@ -74,13 +66,9 @@ func TestGroupClaimWorkaroundKeepsItsCaveat(t *testing.T) {
 					rel, 1+strings.Count(src[:loc[0]], "\n"))
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk repo: %v", err)
 	}
 	if checked < 20 {
-		t.Fatalf("only %d markdown files scanned — the walk, not the docs, is what changed", checked)
+		t.Fatalf("only %d tracked markdown files scanned — the enumeration, not the docs, is what changed", checked)
 	}
 	if mentions == 0 {
 		t.Skip("no document mentions the workaround any more; nothing to caveat")
