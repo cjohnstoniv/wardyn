@@ -25,6 +25,36 @@ import (
 // clientFn lazily builds the SDK client after persistent flags are parsed.
 type clientFn func() *sdk.Client
 
+// subcommandGroup gives a parent command that only GROUPS subcommands the
+// exit-code contract the rest of the CLI holds: an unrecognised word under it is
+// an error on stderr and a non-zero exit, exactly as an unrecognised top-level
+// verb already is. A bare `wardyn <group>` is unchanged — it still prints help
+// on stdout and exits 0.
+//
+// It sets BOTH fields, and both are load-bearing. `Args: cobra.NoArgs` alone
+// does nothing here: cobra's Command.execute() returns flag.ErrHelp from its
+// `if !c.Runnable()` check BEFORE it reaches ValidateArgs, and ExecuteC turns
+// ErrHelp into "print help, return nil". A grouping parent with no RunE is not
+// Runnable, so its Args validator is unreachable. The RunE makes it Runnable
+// (and prints the same help for the bare invocation); NoArgs is then what
+// refuses the typo. cobra's own root-level refusal comes from a different path
+// (legacyArgs, which errors only for a command with no parent), which is why
+// `wardyn bogus` always failed correctly while `wardyn setup bogus` did not.
+//
+// Applied at every grouping constructor rather than at the AddCommand site so
+// the contract is visible in the file that defines the group.
+//
+// NOT FOR THE ROOT COMMAND. The root already refuses an unknown verb, and it
+// does so through legacyArgs — which cobra's Find() consults only while Args is
+// nil. Setting Args on the root would disable that path and leave the root
+// non-Runnable, i.e. back to help-and-exit-0. Root's refusal is pinned by the
+// same walk in TestUnknownSubcommandUnderEveryGroupIsAnError.
+func subcommandGroup(cmd *cobra.Command) *cobra.Command {
+	cmd.Args = cobra.NoArgs
+	cmd.RunE = func(c *cobra.Command, _ []string) error { return c.Help() }
+	return cmd
+}
+
 // parseID parses an id-like positional arg into a UUID, failing fast with a
 // clear client-side message rather than posting a malformed path the server can
 // only answer with an opaque 400/404. `what` names the noun (run/policy/approval).
@@ -633,7 +663,7 @@ func approvalsCmd(client clientFn) *cobra.Command {
 	get.Flags().StringVar(&getRun, "run", "", "run ID to search (required)")
 	get.Flags().BoolVar(&getJSON, "json", false, "emit raw JSON")
 	cmd.AddCommand(get)
-	return cmd
+	return subcommandGroup(cmd)
 }
 
 // parseOptionalUUID parses raw as a uuid.UUID, returning uuid.Nil when raw is

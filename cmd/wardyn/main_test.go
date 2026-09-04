@@ -94,11 +94,14 @@ func TestDialHint_RefusedVsAPI(t *testing.T) {
 	if hint := dialHint(err); !strings.Contains(hint, "is wardynd running?") {
 		t.Errorf("dialHint(refused) = %q, want it to carry the recovery hint", hint)
 	}
-	// W4-S1-7 regression: `wardyn setup` is a subcommand group with no bare
-	// RunE (prints help, exits 0) — it never starts wardynd, so the recovery
-	// hint must not send an operator there. `make setup` is a live alternative.
+	// W4-S1-7 regression: `wardyn setup` is a subcommand group, so a bare
+	// invocation prints help and exits 0 — it never starts wardynd, so the
+	// recovery hint must not send an operator there. `make setup` is a live
+	// alternative. (F009 gave every group a help-only RunE so a MISTYPED
+	// subcommand exits non-zero; the bare invocation is unchanged, and
+	// TestBareGroupStillPrintsHelpAndSucceeds pins that.)
 	if hint := dialHint(err); strings.Contains(hint, "`wardyn setup`") {
-		t.Errorf("dialHint(refused) = %q, must not point at `wardyn setup` (a dead end: no bare RunE)", hint)
+		t.Errorf("dialHint(refused) = %q, must not point at `wardyn setup` (a dead end: it only prints help)", hint)
 	}
 	if hint := dialHint(err); !strings.Contains(hint, "make setup") {
 		t.Errorf("dialHint(refused) = %q, want a working recovery command (make setup)", hint)

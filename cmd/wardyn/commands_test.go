@@ -1972,3 +1972,95 @@ func TestRunFailureReason_SurvivesACappedAuditTrail(t *testing.T) {
 		t.Errorf("runFailureReason = %q, want %q — the failure event sat past the audit page cap", got, want)
 	}
 }
+
+// TestUnknownSubcommandUnderEveryGroupIsAnError is F009: `wardyn secret ste`
+// printed help on STDOUT and exited 0, so a mistyped subcommand reported
+// SUCCESS to a script, a CI step, or a pasted instruction. Wardyn sells the exit
+// code as the contract (README, docs/CI.md's exit-code taxonomy,
+// scripts/ci-run.sh), and it was not held on the typo path.
+//
+// The mechanism, and why `Args: cobra.NoArgs` ALONE does not fix it: cobra's
+// Command.execute() returns flag.ErrHelp from its `if !c.Runnable()` check
+// BEFORE it ever reaches ValidateArgs, and ExecuteC turns ErrHelp into "print
+// help, return nil". A grouping parent with no RunE is not Runnable, so its Args
+// validator is dead code. Both halves are required, which is what
+// subcommandGroup applies.
+//
+// It WALKS the real tree instead of listing group names, so a group added later
+// inherits the contract or fails here.
+func TestUnknownSubcommandUnderEveryGroupIsAnError(t *testing.T) {
+	const typo = "definitely-not-a-subcommand"
+
+	var groups [][]string
+	var walk func(c *cobra.Command, path []string)
+	walk = func(c *cobra.Command, path []string) {
+		if c.HasSubCommands() {
+			groups = append(groups, path)
+		}
+		for _, sub := range c.Commands() {
+			if sub.Name() == "help" || sub.Name() == "completion" {
+				continue // cobra's own, not Wardyn's contract to hold
+			}
+			walk(sub, append(append([]string{}, path...), sub.Name()))
+		}
+	}
+	walk(rootCmd(), nil)
+
+	// The ten groups the finding named, plus `approvals` (the same shape, missed
+	// by the finding) and `run` (which already held the contract) and the root.
+	if len(groups) < 13 {
+		t.Fatalf("walked %d grouping commands (%v) — the CLI has at least 13, so this guard is grading almost nothing", len(groups), groups)
+	}
+
+	for _, path := range groups {
+		name := strings.Join(append([]string{"wardyn"}, path...), " ")
+		t.Run(name, func(t *testing.T) {
+			root := rootCmd()
+			var out, errOut strings.Builder
+			root.SetArgs(append(append([]string{}, path...), typo))
+			root.SetIn(strings.NewReader(""))
+			root.SetOut(&out)
+			root.SetErr(&errOut)
+
+			err := root.Execute()
+			if err == nil {
+				t.Fatalf("%s %s exited 0 — a mistyped subcommand reports SUCCESS to the caller", name, typo)
+			}
+			if !strings.Contains(err.Error(), typo) {
+				t.Errorf("error %q does not name the word that was wrong (%q)", err, typo)
+			}
+			if code := exitCodeFor(err); code == 0 {
+				t.Errorf("exitCodeFor = %d, want non-zero", code)
+			}
+			// STDOUT is deliberately not asserted here: cobra's usage-on-error
+			// goes to OutOrStderr(), which is os.Stderr in the real binary
+			// (nothing calls SetOut) and this test's own buffer here. The
+			// contract that broke is the EXIT CODE, and main() prints the error
+			// above to os.Stderr itself (the root sets SilenceErrors).
+			_ = out
+		})
+	}
+}
+
+// A bare group is UNCHANGED by the fix above: `wardyn setup` still prints its
+// help on stdout and exits 0. That is the half of the contract subcommandGroup
+// must not break — the compat note covers the typo path only.
+func TestBareGroupStillPrintsHelpAndSucceeds(t *testing.T) {
+	for _, group := range []string{"setup", "policy", "secret", "workspace", "record", "subscription", "sessions", "source", "ssh-key", "site-config", "approvals"} {
+		t.Run(group, func(t *testing.T) {
+			root := rootCmd()
+			var out, errOut strings.Builder
+			root.SetArgs([]string{group})
+			root.SetIn(strings.NewReader(""))
+			root.SetOut(&out)
+			root.SetErr(&errOut)
+
+			if err := root.Execute(); err != nil {
+				t.Fatalf("`wardyn %s` = %v, want nil (a bare group prints help and exits 0)", group, err)
+			}
+			if !strings.Contains(out.String(), "Available Commands:") {
+				t.Errorf("`wardyn %s` printed no help block on stdout: %q", group, out.String())
+			}
+		})
+	}
+}

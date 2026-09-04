@@ -35,7 +35,7 @@ func sshKeyCmd(client clientFn) *cobra.Command {
 		Short: "Manage the SSH keys the gateway trusts for your account",
 	}
 	cmd.AddCommand(sshKeyEnsureCmd(client), sshKeyListCmd(client))
-	return cmd
+	return subcommandGroup(cmd)
 }
 
 // sshKeyEnsureResult is `ssh-key ensure --json`'s output.

@@ -616,6 +616,25 @@ func TestResolveUserDrive(t *testing.T) {
 		if !strings.Contains(err.Error(), "drive: this deployment cannot mount your drive (") {
 			t.Errorf("err = %v, want the frozen REFUSED_BACKEND shape", err)
 		}
+		// F056's residue. The parenthesised half — the ONLY half a member reads
+		// for a reason — said "its directory name comes from your email address".
+		// For a `sub` row that is simply false: the email claim had no part in
+		// it, and a member told to look at their email address cannot act on the
+		// sentence, nor can the admin they forward it to. The diagnosis has to
+		// cover both templates the rule refuses, so it names the sign-in identity
+		// the home is derived FROM rather than one claim inside it.
+		if strings.Contains(err.Error(), "email") {
+			t.Errorf("err = %v — the refusal blames the email address on a `sub` row, where the email claim was never read", err)
+		}
+		for _, want := range []string{
+			"its directory name is derived from your sign-in identity",
+			"ask an admin to change how this drive names directories",
+			string(types.DriveBackendDockerVolume), // the %s stays d.Backend
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("err = %v, want it to contain %q", err, want)
+			}
+		}
 	})
 
 	t.Run("a MANAGED drive on the hash template still resolves", func(t *testing.T) {

@@ -157,5 +157,5 @@ func sourceCmd(client clientFn) *cobra.Command {
 	del.Flags().BoolVar(&delForce, "force", false, "detach from every workspace still using it (those workspaces stop mounting this source; their next runs succeed without it)")
 
 	cmd.AddCommand(list, create, scan, del)
-	return cmd
+	return subcommandGroup(cmd)
 }

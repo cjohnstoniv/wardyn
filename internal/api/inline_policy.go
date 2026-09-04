@@ -153,6 +153,16 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		// and is left unclamped. (This supersedes the earlier operator-only
 		// SECMODEL-1 gate: a clamp bounds a member without blocking them.)
 		spec := *req.InlinePolicy
+		// COUNT-CAPPED FIRST, before any narrowing. validatePolicySpec below
+		// applies the same cap, but it runs AFTER boundMemberSpec, and
+		// boundMemberSpec's narrowing is the per-entry work an unbounded
+		// allowed_domains buys with a single request body (see
+		// maxAllowedDomainsPerSpec and capBatch). A cap that only fires
+		// afterwards bounds the stored policy and not the request.
+		if err := validateAllowedDomainsCount(spec.AllowedDomains); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid inline_policy: "+err.Error())
+			return types.RunPolicySpec{}, nil, nil, false
+		}
 		clampWarnings := append([]string(nil), ceiling.Warnings...)
 		// env_secret's admin-only posture, applied FIRST and unconditionally for
 		// a non-operator — it is a role check, not a ceiling check, so it must

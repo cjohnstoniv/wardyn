@@ -70,7 +70,7 @@ func setupCmd(client clientFn) *cobra.Command {
 		setupTierCmd("wall"),
 		setupTierCmd("vault"),
 	)
-	return cmd
+	return subcommandGroup(cmd)
 }
 
 // setupStatusCmd prints the terminal-parity readiness checklist — the same

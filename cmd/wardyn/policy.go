@@ -165,7 +165,7 @@ func policyCmd(client clientFn) *cobra.Command {
 	}
 
 	cmd.AddCommand(list, get, getDefault, create, update, del, policyRenderCmd())
-	return cmd
+	return subcommandGroup(cmd)
 }
 
 // policyRenderCmd converts a JSON or YAML policy (full body or bare spec) to

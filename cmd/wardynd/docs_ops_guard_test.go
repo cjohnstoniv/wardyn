@@ -336,6 +336,23 @@ func TestDocsOpsDiskCapDocSaysWhatBothSubstratesDo(t *testing.T) {
 	if !regexp.MustCompile(`(?i)uncapped`).MatchString(row) {
 		t.Errorf("docs/POLICIES.md's disk_mib row does not say the run proceeds UNCAPPED on an unsupported driver — that is the outcome an operator has to plan for: %s", row)
 	}
+
+	// F064's doc half. The THIRD outcome is the one the mainstream host gets:
+	// overlay2's size storage-opt is an xfs project quota, so on overlay2 over
+	// ext4 (Docker Desktop/WSL2, stock Ubuntu/Debian) the daemon refuses the
+	// create and the run never starts. Anchored on the warning applyDiskQuota
+	// emits for exactly that branch, so a change of posture re-opens this guard
+	// rather than leaving the row quietly wrong.
+	hardening, err := os.ReadFile(filepath.Join(root, "internal", "runner", "docker", "hardening.go"))
+	if err != nil {
+		t.Fatalf("read internal/runner/docker/hardening.go: %v", err)
+	}
+	if !regexp.MustCompile(`(?i)needs xfs mounted with the pquota option`).Match(hardening) {
+		t.Fatalf("internal/runner/docker/hardening.go no longer warns that overlay2 needs xfs+pquota — re-check what the disk cap does on a non-xfs overlay2 host and update docs/POLICIES.md's disk_mib row with it")
+	}
+	if !regexp.MustCompile(`(?i)\bxfs\b`).MatchString(row) {
+		t.Errorf("docs/POLICIES.md's disk_mib row never names xfs, the one backing filesystem overlay2's size quota works on — an operator on the default ext4 host reads this row, sets disk_mib, and the daemon refuses every create: %s", row)
+	}
 }
 
 // TestDocsOpsDirectoryEgressIsInTheDataFlowPage is F048: the page designated as the

@@ -267,7 +267,10 @@ func ageKeyCheck(durable bool) SetupCheck {
 	return SetupCheck{
 		ID: "age_key", Label: "Secret store durability", Status: "warn",
 		Detail: "The secret store uses an EPHEMERAL age key generated at boot; stored secrets (API keys, GitHub App credentials) become unreadable after a restart.",
-		Fix:    "Generate a durable key with `wardynd -gen-age-key`, then wire it as WARDYN_AGE_KEY: on a host, -age-key or the env var; on Helm, keep it in a Secret — secrets.ageKeyFromSecret=true (an `age-key` entry in the Secret postgres.dsn.secretRef names) or secrets.ageKeySecretRef.name for a separate one. Not env.WARDYN_AGE_KEY — that renders the master key as a plaintext literal in the Deployment.",
+		Fix: "Generate a durable key with `wardynd -gen-age-key`, then wire it as WARDYN_AGE_KEY: " +
+			"on a host, -age-key or the env var; " +
+			"on Helm, keep it in a Secret — secrets.ageKeyFromSecret=true (an `age-key` entry in the Secret postgres.dsn.secretRef names) or secrets.ageKeySecretRef.name for a separate one. " +
+			"Not env.WARDYN_AGE_KEY — that renders the master key as a plaintext literal in the Deployment.",
 	}
 }
 

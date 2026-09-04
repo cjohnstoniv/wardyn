@@ -951,10 +951,22 @@ labels to anyone who can reach the daemon. It is the discriminator `wardyn.drive
 cannot be: a volume name carries only the *home*, so one drive whose home
 template folded two people onto one directory would produce one volume that
 *both* their allocations agree belongs to this drive. Wardyn refuses to mount a
-volume stamped for a different person. You need not compute the digest for a
-restore (it is a truncated sha256 of the sign-in subject): **leave
-`wardyn.subject` off** the `docker volume create` above and the volume mounts,
-exactly as a label-less `wardyn.drive` does.
+volume stamped for a different person.
+
+A managed drive can no longer be *authored* into that state. The rule is
+`ManagedBackendRejectsTemplate` in `internal/types/user_drive.go`, and as of 0.7
+it refuses **every** non-`hash` template on a `docker_volume` or `k8s_pvc`
+backend — `sub` as well as `email_local` — at **both** enforcement points: the
+write boundary, and the run-time resolver that derives the home. It used to name
+`email_local` alone, and the resolver keyed on `email_local` alone, so a `sub`
+row written by an older binary (or by hand) was refused on write and still
+mounted. The folded homes `wardyn.subject` discriminates are therefore rows from
+before that widening, or hand-made ones — which is exactly why the label is still
+checked rather than assumed away.
+
+You need not compute the digest for a restore (it is a truncated sha256 of the
+sign-in subject): **leave `wardyn.subject` off** the `docker volume create`
+above and the volume mounts, exactly as a label-less `wardyn.drive` does.
 
 **`host_path` — you already mount the share.** Wardyn binds **one person's
 subdirectory** of a tree the *operator* mounted host-side. Wardyn never performs

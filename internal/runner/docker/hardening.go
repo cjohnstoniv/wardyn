@@ -296,8 +296,12 @@ func capabilitiesForWith(info system.Info, overrides map[types.ConfinementClass]
 //     MemorySwap pinned so the cap is not silently doubled via swap, and a
 //     PidsLimit fork-bomb guard set unconditionally).
 //   - StorageOpt: a per-container writable-disk quota when the spec requests one
-//     (DiskMiB>0) AND the daemon storage driver can enforce it; otherwise a
-//     clear warning is logged and the run proceeds uncapped (never hard-broken).
+//     (DiskMiB>0) AND the daemon storage driver can enforce it. On a driver that
+//     cannot take a size opt at all a clear warning is logged and the run
+//     proceeds uncapped (never hard-broken); on overlay2 over a non-xfs backing
+//     filesystem the opt is handed over anyway and the daemon refuses the
+//     create, so the run fails closed rather than silently losing the cap
+//     (applyDiskQuota).
 //   - userns: left to daemon config (daemon-wide userns-remap); documented,
 //     not forced per-container, because per-container userns conflicts with
 //     some runtimes and the daemon setting is the supported knob.
@@ -383,20 +387,43 @@ func kvmDeviceGID() string {
 }
 
 // applyDiskQuota sets the per-container writable-storage cap (StorageOpt "size")
-// when the spec requests one (DiskMiB>0) AND the daemon storage driver can
-// actually enforce a per-container quota. Detection is best-effort from
-// `docker info` (storageDriverSupportsQuota). When a cap is requested but the
-// backend cannot enforce it we do NOT hard-break the run: we log a clear,
-// visible warning and proceed uncapped — mirroring the codebase's "visible
-// blindness" posture (never silently claim a control we cannot enforce, but do
-// not punish a run for an operator's storage-driver choice). A DiskMiB of 0 is
-// the common case and never warns.
+// when the spec requests one (DiskMiB>0). A DiskMiB of 0 is the common case and
+// never warns. Above 0 there are exactly three outcomes, and which one a host
+// gets is decided here rather than left to a surprise at ContainerCreate:
+//
+//   - The driver can ENFORCE the cap (storageDriverSupportsQuota): the size opt
+//     goes on the create and the cap is real.
+//   - The driver TAKES a size opt but this host's backing filesystem cannot
+//     carry the project quota it needs (overlay2 on anything but xfs): the opt
+//     goes on the create ANYWAY and the daemon refuses it, so the run fails
+//     closed rather than running with a cap the policy promised and the host
+//     never applied. Only the daemon can settle this (see
+//     storageDriverSupportsQuota), so we warn FIRST, naming xfs — otherwise the
+//     operator's only evidence is the daemon's own bare create error.
+//   - The driver cannot take a size opt at all (vfs, fuse-overlayfs, ...): we do
+//     NOT hard-break the run. We log a clear, visible warning and proceed
+//     uncapped — the codebase's "visible blindness" posture (never silently
+//     claim a control we cannot enforce, but do not punish a run for an
+//     operator's storage-driver choice). docs/POLICIES.md's disk_mib row states
+//     this outcome, and the k8s substrate behaves the same way.
 func applyDiskQuota(hc *container.HostConfig, res runner.Resources, info system.Info) {
 	if res.DiskMiB <= 0 {
 		return
 	}
-	if !storageDriverSupportsQuota(info) {
-		slog.Warn("wardyn/docker: disk cap requested but the storage driver does not support a per-container size quota (need overlay2 with project quota, or btrfs/zfs); running WITHOUT a disk cap",
+	switch {
+	case storageDriverSupportsQuota(info):
+		// Enforced.
+	case storageDriverTakesSizeOpt(info.Driver):
+		// Reachable for overlay2 ONLY: btrfs and zfs take the opt AND always
+		// enforce it, so they are already answered by the case above. The message
+		// names overlay2 because nothing else can arrive here.
+		slog.Warn("wardyn/docker: disk cap requested on overlay2 over a backing filesystem that is not xfs; the overlay2 size storage-opt needs xfs mounted with the pquota option, so the daemon will REFUSE this create and the run fails closed (move the daemon's data-root to xfs+pquota, or drop disk_mib from the policy)",
+			slog.Int64("disk_mib", res.DiskMiB),
+			slog.String("storage_driver", info.Driver),
+			slog.String("backing_filesystem", strings.ToLower(driverStatusValue(info, "Backing Filesystem"))),
+		)
+	default:
+		slog.Warn("wardyn/docker: disk cap requested but the storage driver does not support a per-container size quota (need overlay2 on xfs mounted with pquota, or btrfs/zfs); running WITHOUT a disk cap",
 			slog.Int64("disk_mib", res.DiskMiB),
 			slog.String("storage_driver", info.Driver),
 		)
@@ -409,22 +436,51 @@ func applyDiskQuota(hc *container.HostConfig, res runner.Resources, info system.
 }
 
 // storageDriverSupportsQuota reports, best-effort from `docker info`, whether
-// the daemon's storage driver can enforce a per-container `size` quota.
-//   - overlay2 honors the size storage-opt ONLY on a project-quota-capable
-//     backing filesystem (xfs mounted with pquota, or ext4 with the project
-//     feature). `docker info` cannot fully confirm the pquota mount option, so
-//     we approve overlay2 on an xfs/ext4 backing fs and rely on the daemon to
-//     reject a genuinely-unquota'd backend at create time (the run then fails
-//     closed at ContainerCreate rather than running silently uncapped).
+// the daemon's storage driver can ENFORCE a per-container `size` quota.
+//
+//   - overlay2 honors the size storage-opt on xfs ONLY. That is the driver's
+//     contract, not a Wardyn policy: Docker's CLI reference states the size
+//     option "is only available if the backing filesystem is xfs and mounted
+//     with the pquota mount option", and moby's overlay2 driver sets its
+//     projectQuotaSupported flag only when the backing filesystem is xfs. ext4
+//     is NOT supported by that driver's size option — an earlier comment here
+//     claimed "or ext4 with the project feature" and it was simply wrong, which
+//     mattered because overlay2 over ext4 is the default on Docker Desktop /
+//     WSL2 and on stock Ubuntu/Debian. (moby is not vendored here — the client
+//     is — so this states the driver's contract rather than citing a local
+//     line.)
 //   - btrfs and zfs support the size opt natively (subvolume/dataset quotas).
 //   - every other driver (vfs, devicemapper on loopback, fuse-overlayfs, ...)
 //     cannot, so we report false and the caller warns + runs uncapped.
+//
+// `docker info` reports the backing filesystem but never the pquota MOUNT
+// OPTION, so an xfs answer here is necessary and not sufficient: an xfs data-root
+// mounted without pquota still fails the create, which is the deliberate
+// fail-closed posture applyDiskQuota describes. This predicate is the "can this
+// host enforce it" question alone; storageDriverTakesSizeOpt is the separate
+// "will the daemon even look at a size opt" question, and applyDiskQuota uses
+// both.
 func storageDriverSupportsQuota(info system.Info) bool {
 	switch info.Driver {
 	case "overlay2":
-		backing := strings.ToLower(driverStatusValue(info, "Backing Filesystem"))
-		return backing == "xfs" || backing == "extfs" || backing == "ext4"
+		return strings.ToLower(driverStatusValue(info, "Backing Filesystem")) == "xfs"
 	case "btrfs", "zfs":
+		return true
+	default:
+		return false
+	}
+}
+
+// storageDriverTakesSizeOpt reports whether the daemon's storage driver accepts
+// a `size` storage-opt AT ALL — a strictly wider set than the drivers that can
+// enforce one on a given host. The gap between the two is exactly overlay2 on a
+// non-xfs backing filesystem, and it is the branch that fails the run closed at
+// create instead of degrading it to uncapped: the driver takes the option, so
+// the daemon (which alone knows whether the backing filesystem carries project
+// quotas) is the authority on whether the cap can be honoured.
+func storageDriverTakesSizeOpt(driver string) bool {
+	switch driver {
+	case "overlay2", "btrfs", "zfs":
 		return true
 	default:
 		return false

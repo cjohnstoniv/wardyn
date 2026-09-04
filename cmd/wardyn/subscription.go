@@ -157,7 +157,7 @@ func subscriptionCmd(client clientFn) *cobra.Command {
 	}
 
 	cmd.AddCommand(connect, status, disconnect)
-	return cmd
+	return subcommandGroup(cmd)
 }
 
 // printSubscriptionStatus surfaces the model-access rows most relevant to
