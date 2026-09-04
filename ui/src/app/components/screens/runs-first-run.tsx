@@ -38,8 +38,19 @@ const FirstRunDemoGrid = React.lazy(() => import("./runs-first-run-demos"));
 // The one hard blocker in the product: no sandbox barrier means no run can
 // start, full stop. Non-dismissible by design — there's nothing to dismiss it
 // TO, every other affordance on this page is dead until this is fixed.
+//
+// R6 F001 (docs/design/ui-batch3-mock.md): this used to offer `sudo wardyn
+// setup fence`, and no alias could have made it true. There is no `fence`
+// subcommand and there cannot be one — `wardyn setup` installs a RUNTIME
+// (wall/vault), and CC1 "Fence" is the baseline tier nothing installs. Nor is a
+// missing tier the trigger: this fires on confinement_classes being EMPTY, which
+// on a reachable daemon means Docker is unreachable / no -tags docker / -runner
+// none. And sudo does nothing — the CLI talks to the daemon with the operator's
+// token, and as root it would read root's config instead. `wardyn setup status`
+// exists, needs no root, and prints this host's checklist with the real next
+// command beside each unmet row.
 export function NoBarrierBanner({ onRecheck }: { onRecheck: () => void }) {
-  const setupCmd = "sudo wardyn setup fence";
+  const setupCmd = "wardyn setup status";
   return (
     <div
       role="alert"

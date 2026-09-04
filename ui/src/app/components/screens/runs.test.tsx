@@ -145,7 +145,18 @@ describe("RunsScreen — first-run empty state", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "No sandbox barrier on this host. Runs cannot start.",
     );
-    expect(screen.getByText("sudo wardyn setup fence")).toBeInTheDocument();
+    // R6 F001 (docs/design/ui-batch3-mock.md): the command must be one that
+    // EXISTS. `wardyn setup` has status/detect-proxy/proxy-relay/wall/vault —
+    // there is no `fence` subcommand and there cannot be one (CC1 Fence is the
+    // baseline tier nothing installs), and the banner's trigger is an empty
+    // confinement_classes (an unreachable runner), not a missing tier.
+    expect(screen.getByText("wardyn setup status")).toBeInTheDocument();
+    expect(screen.queryByText(/setup fence/)).toBeNull();
+    // ...and no sudo: the CLI talks to the daemon with the operator's token, so
+    // root buys nothing and would read root's config instead of the operator's.
+    expect(screen.queryByText(/sudo/)).toBeNull();
+    // The copy-to-clipboard affordance beside it survives the reword.
+    expect(screen.getByRole("button", { name: "Copy setup command" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /re-check/i })).toBeInTheDocument();
     // The board itself still renders underneath — the banner sits above it,
     // it doesn't replace the screen.

@@ -65,21 +65,30 @@ export const TIER_GUIDES: Partial<Record<ConfinementClass, SetupGuide>> = {
 // (deploy/helm/wardyn/README.md's k8s.runtimeClasses.CC2/.CC3) — a value only
 // the cluster operator can set, so the "command" here is the `helm upgrade`
 // invocation, not something Re-check can ever satisfy on its own.
+//
+// R5 F236/ADV3-05 (docs/design/ui-batch3-mock.md): EnvironmentStep renders
+// `command` beside a copy-to-clipboard button, so it has to be a command that
+// RUNS. `helm upgrade --set …` exits "requires 2 arguments" (no release, no
+// chart), and a bare --set with no -f is the shape docs/OPERATIONS.md documents
+// as resetting every other value to chart defaults. The trailing "..." went with
+// it — an ellipsis pasted into a shell is a syntax error, not a hint.
 export const K8S_TIER_GUIDES: Partial<Record<ConfinementClass, SetupGuide>> = {
   CC2: {
     title: "Enable the Wall tier",
     description:
       "Wall runs the agent inside gVisor — a userspace kernel that intercepts every syscall so nothing touches the node's kernel.",
-    command: "helm upgrade --set k8s.runtimeClasses.CC2=<runtimeclass-name> ...",
+    command:
+      "helm -n <namespace> upgrade <release> ./deploy/helm/wardyn -f your-values.yaml --set k8s.runtimeClasses.CC2=<runtimeclass-name>",
     docNote:
-      "Register a gVisor RuntimeClass in the cluster (its object name is operator-chosen — Wardyn can't guess it), then pin it here. Then Re-check.",
+      "Register a gVisor RuntimeClass in the cluster (its object name is operator-chosen — Wardyn can't guess it), then pin it here. Pass your values file: a bare `--set` resets every other value to the chart's defaults. Then Re-check.",
   },
   CC3: {
     title: "Enable the Vault tier",
     description:
       "Vault runs the agent in its own hardware-virtualized microVM with its own kernel — the strongest isolation.",
-    command: "helm upgrade --set k8s.runtimeClasses.CC3=<runtimeclass-name> ...",
+    command:
+      "helm -n <namespace> upgrade <release> ./deploy/helm/wardyn -f your-values.yaml --set k8s.runtimeClasses.CC3=<runtimeclass-name>",
     docNote:
-      "Register a Kata RuntimeClass on a KVM-capable node pool, then pin it here. Then Re-check.",
+      "Register a Kata RuntimeClass on a KVM-capable node pool, then pin it here. Pass your values file: a bare `--set` resets every other value to the chart's defaults. Then Re-check.",
   },
 };
