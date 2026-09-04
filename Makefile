@@ -437,9 +437,11 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-install-sh-trust.sh
 	./scripts/test-install-sh.sh
 	./scripts/test-narrate-speakable.sh
+	./scripts/test-repo-guards.sh
 	./scripts/test-repo-scan-ok.sh
 	./scripts/test-reset-capture-hint.sh
 	./scripts/test-reset-host-gate.sh
+	./scripts/test-reset-network-ns.sh
 	./scripts/test-up-policy.sh
 	./scripts/test-up-probes.sh
 
@@ -523,7 +525,8 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	[ "$$(echo "$$out" | grep -c 'path: /healthz')" = "2" ] || { echo "expected exactly 2 probes still on /healthz (liveness + startup)"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'kind: ConfigMap')" = "0" ] || { echo "default render (no defaultPolicy set) still created a ConfigMap"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'WARDYN_DEFAULT_POLICY')" = "0" ] || { echo "default render (no defaultPolicy set) still set WARDYN_DEFAULT_POLICY"; exit 1; }; \
-	[ "$$(echo "$$out" | grep -c 'kind: Ingress')" = "0" ] || { echo "default render (ingress.enabled=false) still created an Ingress"; exit 1; }
+	[ "$$(echo "$$out" | grep -c 'kind: Ingress')" = "0" ] || { echo "default render (ingress.enabled=false) still created an Ingress"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'trusted-ca\|WARDYN_TRUSTED_CA_FILE')" = "0" ] || { echo "default render (no trustedCA set) rendered part of the corporate-CA surface — the switch is off by default and must render NONE of its five objects"; exit 1; }
 	@out=$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml); \
 	echo "$$out" | grep -q "kind: PersistentVolumeClaim" || { echo "persistence.enabled rendered no PVC"; exit 1; }; \
 	echo "$$out" | grep -q 'value: "/data/recordings"' || { echo "WARDYN_RECORDING_DIR does not follow the persistent mount"; exit 1; }; \
@@ -539,7 +542,9 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q "port: 6443" || { echo "k8s.apiServer.ports did not render the control-plane NetworkPolicy's apiserver egress rule"; exit 1; }; \
 	echo "$$out" | grep -q '^kind: Role$$' || { echo "k8s.enabled rendered no RBAC Role"; exit 1; }; \
 	echo "$$out" | grep -q '^kind: ClusterRole$$' || { echo "k8s.enabled rendered no RBAC ClusterRole (runtimeclasses is cluster-scoped)"; exit 1; }; \
-	echo "$$out" | grep -A1 'persistentvolumeclaims' | grep -q 'verbs: \["get", "create"\]$$' || { echo "userDrives.enabled did not render EXACTLY persistentvolumeclaims verbs [get, create] — a missing rule fails every k8s_pvc drive on a 403, and an extra verb (delete above all) is a verb wardynd must never hold"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'resources: \["persistentvolumeclaims"\]')" = "1" ] || { echo "the render grants persistentvolumeclaims in more than one rule (or none) — a SECOND rule adding delete/deletecollection/list is invisible to a grep that only proves the FIRST rule still says [get, create]"; exit 1; }; \
+	echo "$$out" | awk '/^---/{r=0} /^kind: Role$$/{r=1} r' | grep -q 'resources: \["persistentvolumeclaims"\]' || { echo "the persistentvolumeclaims rule is NOT in the namespaced Role — moving it to the cluster-scoped ClusterRole keeps every verb assertion green while granting those verbs in EVERY namespace"; exit 1; }; \
+	echo "$$out" | awk '/^---/{r=0} /^kind: Role$$/{r=1} r' | grep -A1 'persistentvolumeclaims' | grep -q 'verbs: \["get", "create"\]$$' || { echo "userDrives.enabled did not render EXACTLY persistentvolumeclaims verbs [get, create] — a missing rule fails every k8s_pvc drive on a 403, and an extra verb (delete above all) is a verb wardynd must never hold"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_SSH_LISTEN" || { echo "ssh.enabled rendered no WARDYN_SSH_LISTEN"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_SSH_ADVERTISE" || { echo "ssh.enabled rendered no WARDYN_SSH_ADVERTISE"; exit 1; }; \
 	echo "$$out" | grep -q "targetPort: ssh" || { echo "ssh.enabled rendered no ssh Service port"; exit 1; }; \
@@ -551,7 +556,12 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q "checksum/default-policy:" || { echo "defaultPolicy did not stamp the checksum pod annotation — an edit to the ConfigMap alone would not roll the pod"; exit 1; }; \
 	echo "$$out" | grep -q "kind: Ingress" || { echo "ingress.enabled did not render an Ingress"; exit 1; }; \
 	echo "$$out" | grep -A5 "backend:" | grep -q "name: wardyn" || { echo "Ingress backend does not target the wardyn Service"; exit 1; }; \
-	echo "$$out" | grep -A7 "backend:" | grep -q "name: http" || { echo "Ingress backend does not target the http-named Service port"; exit 1; }
+	echo "$$out" | grep -A7 "backend:" | grep -q "name: http" || { echo "Ingress backend does not target the http-named Service port"; exit 1; }; \
+	echo "$$out" | grep -q "name: wardyn-trusted-ca" || { echo "trustedCA rendered no ConfigMap — with the switch at its default NEITHER render touched this five-object surface, so breaking any part of it passed the whole gate"; exit 1; }; \
+	echo "$$out" | grep -q "checksum/trusted-ca:" || { echo "trustedCA did not stamp the checksum pod annotation — an edit to the CA bundle alone would not roll the pod"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_TRUSTED_CA_FILE" | grep -q 'value: "/etc/wardyn/trusted-ca/ca.pem"' || { echo "trustedCA did not wire WARDYN_TRUSTED_CA_FILE at the mounted path — wardynd would boot trusting only the public roots while the operator believes the corporate CA is installed"; exit 1; }; \
+	echo "$$out" | grep -q "mountPath: /etc/wardyn/trusted-ca" || { echo "trustedCA rendered no volumeMount — WARDYN_TRUSTED_CA_FILE would name a path nothing mounts"; exit 1; }; \
+	echo "$$out" | grep -A2 '^        - name: trusted-ca$$' | grep -q "name: wardyn-trusted-ca" || { echo "the trusted-ca volume does not source the ConfigMap the chart rendered"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn 2>&1 | grep -q "the public API would 401" || { echo "chart no longer refuses an install with neither an admin token nor an OIDC issuer"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set postgres.dsn.secretRef.name="" 2>&1 | grep -q "set either postgres.dsn" || { echo "chart no longer refuses an install with no DSN"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKey=fake 2>&1 | grep -q "secrets.ageKey applies to inline mode only" || { echo "chart no longer refuses an ageKey it would silently drop"; exit 1; }
@@ -559,14 +569,14 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.allowEphemeralAgeKey=true >/dev/null 2>&1 || { echo "secrets.allowEphemeralAgeKey no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set env.WARDYN_AGE_KEY=AGE-SECRET-KEY-EXAMPLE >/dev/null 2>&1 || { echo "an age identity wired through .Values.env no longer satisfies the refusal — the chart refuses a render that is actually fine"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set readinessProbe.path=/healthz | grep -q 'path: "/healthz"' || { echo "readinessProbe.path no longer pins the probe back to /healthz — an image <= 0.5.0 serves no /readyz, so the pod would never become Ready and the rollout would hang"; exit 1; }
-	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set uiSandbox=null --set readinessProbe=null --set secrets.ageKeySecretRef=null --set ingress=null | grep -q 'path: "/readyz"' || { echo "chart no longer renders a values map that predates the 0.6 blocks — 'helm upgrade --reuse-values' from a 0.5 release hands the templates exactly that map, and an unguarded .Values.uiSandbox.enabled, .Values.secrets.ageKeySecretRef, or .Values.ingress kills the upgrade at render (nil pointer)"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set uiSandbox=null --set readinessProbe=null --set secrets.ageKeySecretRef=null --set ingress=null | grep -q 'path: "/readyz"' || { echo "chart no longer renders a values map whose 0.6 blocks are PRESENT-but-null — what `--set uiSandbox=null` reproduces, and what an operator clearing a block by hand (or a values file carrying it as null) supplies; an unguarded .Values.uiSandbox.enabled, .Values.secrets.ageKeySecretRef, or .Values.ingress kills that render on a nil pointer. NOT a --reuse-values case: docs/OPERATIONS.md's upgrade section explains that a merely-ADDED block arrives with the new chart's defaults"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set uiSandbox.enabled=true --set uiSandbox.advertiseURL=https://u.example --set uiSandbox.port=8080 2>&1 | grep -q "uiSandbox.port and service.port are both" || { echo "chart no longer refuses uiSandbox.port == service.port — wardynd refuses to boot on it (validateUISandboxConfig), so the render would apply cleanly and then crash-loop"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set ssh.enabled=true --set ssh.advertiseHost=h.example --set ssh.port=8080 2>&1 | grep -q "ssh.port and service.port are both" || { echo "chart no longer refuses ssh.port == service.port — the Service would carry one port number twice and the API server rejects it"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set replicas=5 2>&1 | grep -q "replicas > 1 is refused" || { echo "chart no longer refuses replicas > 1 — the secret-masking registry is process-local and fails open, so a second replica can persist a recording with live credentials in cleartext"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=false 2>&1 | grep -q "k8s.enabled requires serviceAccount.automount=true" || { echo "chart no longer refuses k8s.enabled with serviceAccount.automount=false — the k8s runner needs the API server"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set serviceAccount.automount=true 2>&1 | grep -q "k8s.enabled requires k8s.proxyImage" || { echo "chart no longer refuses k8s.enabled with an empty k8s.proxyImage — the k8s runner substrate refuses to construct (errProxyImageUnset), a BOOT-time crash-loop, not a per-run one"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true | grep -q 'persistentvolumeclaims' && { echo "the k8s-runner Role grants persistentvolumeclaims with userDrives.enabled UNSET — the switch is not gating anything"; exit 1; } || true
-	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set userDrives=null >/dev/null 2>&1 || { echo "a values map that predates the userDrives block no longer renders — 'helm upgrade --reuse-values' from a 0.6 release hands the templates exactly that map"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set userDrives=null >/dev/null 2>&1 || { echo "a values map carrying userDrives as an explicit null no longer renders — `--set userDrives=null` is the null-robustness case (an operator clearing the block), not the --reuse-values one; see docs/OPERATIONS.md's upgrade section"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set replicas=5 --set allowMultiReplica=true >/dev/null 2>&1 || { echo "allowMultiReplica no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set serviceAccount.create=false 2>&1 | grep -q "would bind the k8s-runner privileges" || { echo "chart no longer refuses k8s.enabled with serviceAccount.create=false and no serviceAccount.name — the RBAC binding would silently fall to the namespace default ServiceAccount"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set serviceAccount.create=false --set serviceAccount.name=my-existing-sa >/dev/null 2>&1 || { echo "serviceAccount.create=false with an explicit serviceAccount.name no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
@@ -574,7 +584,7 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	[ "$$(echo "$$out" | grep -cE '^kind: (Cluster)?Role(Binding)?$$')" = "0" ] || { echo "k8s.rbac.create=false still rendered RBAC objects"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'namespace: wardyn-runs')" = "0" ] || { echo "k8s.rbac.create=false still rendered a wardyn-runs namespace reference (the RBAC Role/RoleBinding's own namespace)"; exit 1; }; \
 	echo "$$out" | grep -q "kind: Deployment" || { echo "k8s.rbac.create=false suppressed the Deployment too — only the RBAC objects should be gated"; exit 1; }
-	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.rbac=null | grep -q '^kind: Role$$' || { echo "k8s.rbac=null (a --reuse-values map that predates this key) no longer renders RBAC — hasKey must treat an absent key as unset, not as create=false"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.rbac=null | grep -q '^kind: Role$$' || { echo "k8s.rbac=null (the key PRESENT and explicitly null, which is what `--set k8s.rbac=null` and a hand-cleared block both produce) no longer renders RBAC — hasKey must treat an absent key as unset, not as create=false"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeySecretRef.name=wardyn-age | grep -A3 "name: WARDYN_AGE_KEY" | grep -q "name: wardyn-age" || { echo "secrets.ageKeySecretRef.name did not wire WARDYN_AGE_KEY from that Secret"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeySecretRef.name=wardyn-age --set secrets.ageKeyFromSecret=true 2>&1 | grep -q "secrets.ageKeySecretRef.name is set together with" || { echo "chart no longer refuses two age-identity sources named at once"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set-file defaultPolicy=examples/policies/demo.json --set env.WARDYN_DEFAULT_POLICY=/examples/policies/demo.json | grep -q 'value: "/examples/policies/demo.json"' || { echo "env.WARDYN_DEFAULT_POLICY no longer wins over the ConfigMap-backed default"; exit 1; }
@@ -588,6 +598,33 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@helm template wardyn ./deploy/helm/wardyn --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@example.com >/dev/null 2>&1 || { echo "a COMPLETE SSO recipe (issuer + operator allowlist) no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_OIDC_ROLE_MAP=Wardyn.Admin=admin >/dev/null 2>&1 || { echo "a role-map-only SSO recipe no longer renders — validateOperatorPosture accepts it (hasRoleMap), so the chart must too"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set postgres.dsn.secretRef.name=ext --set secrets.ageKeyFromSecret=true --set-string env.WARDYN_ADMIN_TOKEN= 2>&1 | grep -q "the public API would 401" || { echo "an EMPTY env.WARDYN_ADMIN_TOKEN satisfies the auth refusal again — adminAuth reads an empty token as unconfigured, so the chart would render exactly the 401s-everything control plane the refusal exists to prevent"; exit 1; }
+	@# The one refusal whose subject is an AUTHENTICATION BYPASS, and the only one
+	@# the gate never asserted. WARDYN_LOCAL_MODE turns off public-API auth
+	@# outright; the shared-subscription pair serves one operator's Claude
+	@# subscription to every user's run. Both reach the pod through .Values.env
+	@# (rendered verbatim) and through .Values.extraEnv, so both doors are asserted.
+	@for k in WARDYN_LOCAL_MODE WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC WARDYN_ALLOW_SHARED_SUBSCRIPTION; do \
+		helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.$$k=true 2>&1 | grep -q "single-user desktop settings" || { echo "chart no longer refuses env.$$k on Kubernetes — local mode bypasses public-API authentication entirely, and a shared subscription credential serves one person's Claude subscription to every user's run"; exit 1; }; \
+		helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set extraEnv[0].name=$$k --set extraEnv[0].value=true 2>&1 | grep -q "single-user desktop settings" || { echo "chart no longer refuses $$k via extraEnv — a refusal that only reads .Values.env leaves the documented secret-bearing door wide open"; exit 1; }; \
+	done
+	@# COVERAGE, not correctness: a top-level values.yaml key that neither render
+	@# sets is a passthrough NO assertion above can see — trustedCA and resources
+	@# were exactly that until ci/all-on-values.yaml gained them. Every new key must
+	@# land in all-on or be exempted here, on purpose, with its reason.
+	@#   nameOverride/fullnameOverride — the assertions above grep the RENDERED name
+	@#     `wardyn`; overriding it in all-on would break about ten of them.
+	@#   replicas/allowMultiReplica    — exercised by their own refusal renders below
+	@#     (`--set replicas=5` is refused; `--set allowMultiReplica=true` renders).
+	@#   readinessProbe                — exercised by its own render (`readinessProbe.path=/healthz`).
+	@#   service                       — exercised by the two port-collision refusals
+	@#     (uiSandbox.port == service.port, ssh.port == service.port).
+	@#   pod/containerSecurityContext  — the DEFAULT render is what pins runAsNonRoot
+	@#     and readOnlyRootFilesystem; an all-on override would weaken that assertion.
+	@missing=""; for k in $$(grep -oE '^[a-zA-Z][a-zA-Z0-9]*:' deploy/helm/wardyn/values.yaml | tr -d ':'); do \
+		case " nameOverride fullnameOverride replicas allowMultiReplica readinessProbe service podSecurityContext containerSecurityContext " in *" $$k "*) continue ;; esac; \
+		grep -qE "^$$k:" deploy/helm/wardyn/ci/all-on-values.yaml || missing="$$missing $$k"; \
+	done; \
+	[ -z "$$missing" ] || { echo "values.yaml keys neither helm-lint render exercises:$$missing — add them to deploy/helm/wardyn/ci/all-on-values.yaml, or exempt them in the comment above with the reason"; exit 1; }
 
 # ── kind Helm install-test (CI: ci.yml's helm-install-test job) ─────────────
 # helm-lint above only proves the chart RENDERS; this proves an install
@@ -813,21 +850,23 @@ record-demo: ## Record the demo video (DESTRUCTIVE: resets the stack; ARGS: --no
 # pull (offline host, a mirror with no pnpm) falls back to building from this checkout
 # automatically — WARDYN_BUILD_LOCAL=1 forces that path; see
 # docs/adoption/make-setup-requires-ui-stage-on-pnpm-less-mirror.md.
-# In host mode a terminal PROMPTS for each credential (staging, AWS, SCM); a headless
-# run (no TTY) skips them unless WARDYN_STAGE_CLAUDE=1 / WARDYN_IMPORT_AWS=1 /
-# WARDYN_IMPORT_SCM=1 / WARDYN_FORCE_RESET=1 are set. Scripts that must not
+# In host mode a terminal PROMPTS for each credential it can import (AWS, SCM); a
+# headless run (no TTY) skips them unless WARDYN_IMPORT_AWS=1 / WARDYN_IMPORT_SCM=1 /
+# WARDYN_FORCE_RESET=1 are set. Subscription staging is NOT one of those prompts —
+# `make setup` does not stage at all (see stage-claude below). Scripts that must not
 # prompt at all pick the mode up front with WARDYN_SETUP_MODE=local|container.
 setup: ## One-command Wardyn: containerized (default) or host; builds, ups, opens the UI
 	@echo "Wardyn setup — asks containerized (default) vs host, then launches + opens the UI..."
 	./scripts/setup.sh
 
-# HOST MODE ONLY — it pins WARDYN_SETUP_MODE=local, and the ceiling it writes
-# (~/.wardyn/claude-subscription.json) is read by scripts/run-host.sh, never
-# by the containerized wardynd. Re-runs setup with staging forced; a running HOST
-# wardynd is restarted so it loads the just-generated ceiling. Idempotent — safe to
-# re-run anytime (e.g. after a headless `make setup` skipped the staging prompt).
-# Containerized (the default) stages model access at the CLI instead:
-# `claude setup-token | wardyn subscription connect`.
+# HOST MODE ONLY, and a DEMO path: the ceiling it writes
+# (~/.wardyn/claude-subscription.json) is read by scripts/run-host.sh, never by the
+# containerized wardynd. `make setup` does not call it — copying a host ~/.claude is
+# a SHARED subscription credential, which the daemon refuses outside a single-user
+# posture, so the script refuses too unless WARDYN_ALLOW_SHARED_SUBSCRIPTION=1 (set
+# below). Idempotent — re-run to refresh the staged copies. Ordinary installs connect
+# a subscription in the console instead (Settings -> Model provider), which signs in
+# inside a sandbox and stores the token age-encrypted.
 stage-claude: ## Stage your Claude login for HOST-mode subscription mounts (restarts the host wardynd)
 	WARDYN_ALLOW_SHARED_SUBSCRIPTION=1 ./scripts/stage-claude-creds.sh
 

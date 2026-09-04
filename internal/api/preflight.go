@@ -98,35 +98,17 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Same workspace_id seeding launch runs (runs.go): an unknown workspace or a
-	// base_image-triggered XOR violation fails here exactly as it would at
-	// create, and the checklist below sees the attached workspace
-	// (seedRequestWorkspace prepends it, so deriveSetupItems' workspace rows
-	// match launch). ephemeralDirs is launch-only (WARDYN_EPHEMERAL_DIRS at
-	// dispatch) — preflight dispatches nothing, so it's discarded here.
-	_, seededImageOwner, code, err := s.seedRequestWorkspace(ctx, &spec, &req)
-	if err != nil {
-		writeError(w, code, "workspace_id: "+err.Error())
-		return
-	}
-	// Same G3 (PF-34) post-seed capability re-check launch runs (runs.go). The
-	// sibling the ticket forgets, and the one that matters for the wizard: without
-	// it Review previews a green checklist for a launch that will 403, which is
-	// exactly the "never preview a rosier picture than launch" rule this whole
-	// handler is written to.
-	if s.denyMemberSeededImage(w, r, seededImageOwner, req.Image) {
-		return
-	}
-	// Same base_image XOR + builder-wired re-check launch runs (runs.go).
-	if msg := s.validateImageBuildRequest(req); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
-		return
-	}
-
-	// Same un-bypassable onboarding gate launch runs (runs.go): a non-onboarded
-	// mount source or repo 422s here exactly as it would at create.
-	if code, err := s.validateWorkspaceSources(ctx, spec); err != nil {
-		writeError(w, code, "workspace: "+err.Error())
+	// The SAME seed-and-admit block launch runs — called, not re-implemented.
+	// seedAndAdmitWorkspace (runs.go) is the one place that owns the four gates
+	// seeding can invalidate, in order: the workspace_id seed's 400/422s, the G3
+	// (PF-34) post-seed capability re-check, the base_image XOR + builder-wired
+	// re-check, and the un-bypassable onboarded-source gate. Preflight used to
+	// inline all four verbatim, so a fifth gate added to launch's block reached
+	// Review only if someone remembered to copy it — the exact drift
+	// TestPreflightMirrorsLaunchGates now refuses. ephemeralDirs is launch-only
+	// (WARDYN_EPHEMERAL_DIRS at dispatch) — preflight dispatches nothing, so it
+	// is discarded here.
+	if _, ok := s.seedAndAdmitWorkspace(ctx, w, r, &spec, &req); !ok {
 		return
 	}
 

@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -390,8 +392,9 @@ func subscriptionLLMDetail(tok subscription.Token, peekErr error, injectEnabled 
 // already says "add one"). The gap it catches: the model-access badge reads
 // green from the HOST login, but a run only reaches it after staging generates
 // the subscription ceiling (~/.wardyn/composer-dev-subscription.json) and
-// wardynd restarts onto it — a headless `make setup` (no TTY, no
-// WARDYN_STAGE_CLAUDE=1) skips staging silently. blessed mirrors run-host.sh's
+// wardynd restarts onto it — and `make setup` does not stage at all any more
+// (scripts/stage-claude-creds.sh is the explicit, separately-gated path), so a
+// logged-in host is unstaged by default. blessed mirrors run-host.sh's
 // policy pick: WARDYN_DEFAULT_POLICY blesses the /home/agent/.claude mount only
 // when staging produced the ceiling, so logged-in && !blessed == "not staged".
 // Pure (host I/O done by the caller) so it is unit-testable.
@@ -502,6 +505,45 @@ func isConventionLimitedToolchainImage(ref string) bool {
 	return false
 }
 
+// Host-proxy sweep memo. setup.DetectHostProxy's OS tier shells out to the
+// platform's proxy configuration (registry/scutil/gsettings) and measured ~450ms
+// per call on a WSL host — 90%+ of handleSetupStatus's cost, on an endpoint the
+// console polls every 5s, so a single open Getting-started tab spent most of a
+// core on re-reading a host setting that changes about never.
+//
+// Memoized here rather than on Server (the way githubRefRulesetCheck's cache is)
+// on purpose: the answer is a property of the HOST, not of any one Server, so
+// two Servers in one process would only duplicate the sweep. hostProxyDetect is
+// the seam the memo test swaps; hostProxyCacheReset drops the memo (tests, and
+// the Re-check path if one is ever wired to force a re-detect).
+const hostProxyTTL = 30 * time.Second
+
+var (
+	hostProxyMu     sync.Mutex
+	hostProxyAt     time.Time
+	hostProxyVal    setup.HostProxyDetection
+	hostProxyDetect = setup.DetectHostProxy
+)
+
+func cachedHostProxy() setup.HostProxyDetection {
+	hostProxyMu.Lock()
+	defer hostProxyMu.Unlock()
+	if !hostProxyAt.IsZero() && time.Since(hostProxyAt) < hostProxyTTL {
+		return hostProxyVal
+	}
+	hostProxyVal = hostProxyDetect()
+	hostProxyAt = time.Now()
+	return hostProxyVal
+}
+
+// hostProxyCacheReset forgets the memo so the next caller re-detects.
+func hostProxyCacheReset() {
+	hostProxyMu.Lock()
+	defer hostProxyMu.Unlock()
+	hostProxyAt = time.Time{}
+	hostProxyVal = setup.HostProxyDetection{}
+}
+
 // handleSetupStatus assembles the first-run readiness snapshot. It sits behind
 // humanOrAdminAuth (reaching it already proves auth: local-mode bypass, an OIDC
 // session, or the admin bearer), so it may enumerate resident CLIs, present
@@ -550,7 +592,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	plat := setup.DetectPlatform()
-	hostProxy := setup.DetectHostProxy()
+	hostProxy := cachedHostProxy()
 	scmPosture := setup.DetectSCMPosture()
 
 	// LLM access provenance: the detail of the WINNING signal (resident CLI
@@ -675,12 +717,24 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	checks = append(checks, platformChecks(plat)...)
 
-	// has_runs: cheap existence check via the store. reuses ListRuns (fine for a
-	// first-run wizard); a dedicated COUNT(*)/EXISTS is the upgrade if run volume
-	// ever makes this scan matter.
+	// has_runs: an EXISTENCE check, so it reads exactly one row. ListRuns builds
+	// an unbounded `SELECT <every column> FROM agent_runs ORDER BY created_at
+	// DESC` — every run this install ever launched, decoded in full, on an
+	// endpoint the console polls every 5s — only to test len(runs) > 0. Use the
+	// same Pager idiom firstBrokeredRepoFromRuns already uses
+	// (setup_checks.go); ListRuns stays the fallback, which only test doubles
+	// lacking Pager ever take (every real deployment is PG). A dedicated
+	// COUNT(*)/EXISTS is the remaining upgrade, but LIMIT 1 already makes the
+	// cost independent of run history.
 	hasRuns := false
 	if s.cfg.Store != nil {
-		runs, err := s.cfg.Store.ListRuns(ctx)
+		var runs []types.AgentRun
+		var err error
+		if pg, ok := s.cfg.Store.(store.Pager); ok {
+			runs, err = pg.ListRunsPage(ctx, store.Page{Limit: 1})
+		} else {
+			runs, err = s.cfg.Store.ListRuns(ctx)
+		}
 		hasRuns = err == nil && len(runs) > 0
 	}
 

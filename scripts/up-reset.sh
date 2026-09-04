@@ -150,10 +150,17 @@ cmd_reset_all() {
     docker volume inspect "${_ra_v}" >/dev/null 2>&1 && _ra_volumes="${_ra_volumes}${_ra_v} "
   done
 
+  # The control-plane network name is DERIVED, never literal: docker-compose.yaml
+  # names it ${WARDYN_NS:-wardyn}-internal (and hands wardynd the same value as
+  # WARDYN_INTERNAL_NETWORK), and up.sh's own docker runs use that same form. A
+  # hardcoded "wardyn-internal" here meant a namespaced install (WARDYN_NS=wardyn2)
+  # reported and REMOVED the DEFAULT install's network — a foreign stack's — while
+  # never touching its own.
+  _ra_netname="${WARDYN_NS:-wardyn}-internal"
   _ra_net=0; _ra_net_attached=0
-  if docker network inspect wardyn-internal >/dev/null 2>&1; then
+  if docker network inspect "${_ra_netname}" >/dev/null 2>&1; then
     _ra_net=1
-    _ra_net_attached=$(docker network inspect -f '{{len .Containers}}' wardyn-internal 2>/dev/null || echo 0)
+    _ra_net_attached=$(docker network inspect -f '{{len .Containers}}' "${_ra_netname}" 2>/dev/null || echo 0)
   fi
 
   # Per-run sandbox containers + their per-run internal networks: wardynd
@@ -211,9 +218,9 @@ cmd_reset_all() {
     _capture_hint
   fi
   if [ "${_ra_net}" = 1 ]; then
-    _ra_mark 1 "docker network wardyn-internal (${_ra_net_attached} attached — removed only if 0 remain after teardown)"
+    _ra_mark 1 "docker network ${_ra_netname} (${_ra_net_attached} attached — removed only if 0 remain after teardown)"
   else
-    _ra_mark 0 "docker network wardyn-internal"
+    _ra_mark 0 "docker network ${_ra_netname}"
   fi
   _ra_mark "$([ "${_ra_sandbox_containers:-0}" -gt 0 ] && echo 1 || echo 0)" \
     "live per-run sandbox containers: ${_ra_sandbox_containers:-0} (label wardyn.managed=true — compose down never touches these)"
@@ -268,12 +275,12 @@ cmd_reset_all() {
   compose ${_ra_profiles} down -v --remove-orphans \
     || warn "compose down failed (docker unreachable?) — continuing with filesystem cleanup"
 
-  # run-host.sh creates wardyn-internal OUTSIDE compose ownership (the source of
+  # run-host.sh creates this network OUTSIDE compose ownership (the source of
   # setup.sh's "incorrect label" recovery dance) — remove it when nothing is
   # attached so the next setup recreates it cleanly; a busy network is left alone.
-  if docker network inspect wardyn-internal >/dev/null 2>&1; then
-    docker network rm wardyn-internal >/dev/null 2>&1 \
-      || warn "wardyn-internal still has attached containers — left in place"
+  if docker network inspect "${_ra_netname}" >/dev/null 2>&1; then
+    docker network rm "${_ra_netname}" >/dev/null 2>&1 \
+      || warn "${_ra_netname} still has attached containers — left in place"
   fi
 
   # -v: also drop the anonymous pgdata volume docker auto-created for it
