@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"maps"
 	"os"
 	"slices"
@@ -48,6 +49,16 @@ import (
 // lives under no member root by construction, so stamping it would refuse the
 // very credential mounts a member-owned workspace's model run needs. The zero
 // posture (every operator run) stamps nothing.
+// driveTargetReserved reports whether a stored policy target IS the reserved
+// user-drive path or nests under it — the same question runner's own
+// targetReservedForDrive answers for ValidateAuthoredTarget, over the SAME
+// exported constant, because that constant is the thing that could move and the
+// prefix rule is not. FILED for the runner lane: export it there and delete
+// this, so one rule has one spelling.
+func driveTargetReserved(target string) bool {
+	return target == runner.DriveTarget || strings.HasPrefix(target, runner.DriveTarget+"/")
+}
+
 func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member memberMountPosture) []runner.Mount {
 	var mounts []runner.Mount
 	for _, wm := range policy.WorkspaceMounts {
@@ -59,6 +70,35 @@ func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member memberM
 		// integration consent). Every other injection mode already gates on
 		// llm.modelRun; this is the one path that read the policy verbatim.
 		if !llm.modelRun && (wm.Target == claudeCredTarget || wm.Target == claudeCredJSONTarget) {
+			continue
+		}
+		// THE RESERVED DRIVE TARGET, RE-CHECKED ON THE STORED POLICY. Every
+		// AUTHORING seam refuses /home/agent/drive (validatePolicySpec,
+		// validateWorkspaceSource, seedRequestWorkspace, wireWorkspaceSource) —
+		// and none of them ran on a policy row written BEFORE the reservation
+		// existed. resolvePolicy hands a stored spec to dispatch verbatim, so
+		// such a row arrived here intact, and the driver's own gate then
+		// refused the whole CreateSandbox: not the bind, the RUN. Every run
+		// under that policy failed at STARTING with "denied workspace mount …:
+		// target /home/agent/drive is reserved for the user drive" as its
+		// failure_hint — a sentence about an internal reservation, handed to a
+		// member, for a policy an operator wrote long before the rule.
+		//
+		// DROPPED, not refused, which is buildRepoRecords' choice for the same
+		// row on the repo side (runs_scm.go) and the same reasoning: the bind
+		// is UNPERFORMABLE either way — the driver will not do it — so the only
+		// question is whether the run comes up with one fewer mount or does not
+		// come up at all. And it is the one direction that cannot lose data:
+		// the target is the member's own drive, so a bind there would either be
+		// shadowed by their drive or land in an empty directory.
+		//
+		// LOUD, for the reason the repo-side collision is loud: the operator has
+		// a policy row to fix and nothing else will tell them. The LOG is the
+		// audience — this seam has no run warnings channel, and the member has
+		// nothing to do about an operator's stored row.
+		if driveTargetReserved(wm.Target) {
+			slog.Warn("wardynd: stored policy binds the reserved user-drive target; dropping that mount",
+				slog.String("source", wm.Source), slog.String("target", wm.Target))
 			continue
 		}
 		mounts = append(mounts, runner.Mount{

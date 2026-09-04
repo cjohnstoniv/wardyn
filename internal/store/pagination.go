@@ -111,6 +111,53 @@ type RunsByCreatorPager interface {
 // Compile-time assertion: PG satisfies RunsByCreatorPager.
 var _ RunsByCreatorPager = PG{}
 
+// ActiveRunsAtPathReader answers ONE question the create path asks on every run:
+// which OTHER non-terminal runs already operate on this host workspace path.
+//
+// It is a capability interface for Pager's reason, and it is separate from
+// Pager for RunsByCreatorPager's: this one is answered by a WHERE clause rather
+// than a window, so a store that does not implement it cannot be served by
+// windowing the unbounded list. The api-layer call site falls back to the
+// unbounded ListRuns + an in-Go filter, which is what it did before this
+// existed — SAFE here, unlike the ownership-scoped list, because the answer is
+// identical either way and the fallback is merely slower.
+//
+// WHY IT EXISTS. warnWorkspaceCollision loaded EVERY run in the deployment to
+// find the handful sharing one path — a Seq Scan plus a full sort of
+// agent_runs, on every single run create, over a table nothing prunes and no
+// retention policy bounds. The warning is advisory and never blocks a launch,
+// so a deployment's whole run history was being sorted to produce a sentence
+// that is usually not printed.
+type ActiveRunsAtPathReader interface {
+	ActiveRunsAtWorkspacePath(ctx context.Context, workspacePath string) ([]types.AgentRun, error)
+}
+
+// Compile-time assertion: PG satisfies ActiveRunsAtPathReader.
+var _ ActiveRunsAtPathReader = PG{}
+
+// ActiveRunsAtWorkspacePath returns the non-terminal runs bound to one host
+// workspace path.
+//
+// The state predicate is the POSITIVE list (types.NonTerminalRunStates), the
+// same choice CountActiveRunsBy makes and for the same reason: a state added to
+// the enum and forgotten there merely under-warns, while `NOT IN (terminal)`
+// would treat a newly-added TERMINAL state as active and warn about a
+// collision with a run that finished.
+//
+// ponytail: no new index. workspace_path is selective and the state filter is a
+// cheap check over the rows that match it; a composite (workspace_path, state)
+// index is the upgrade if a deployment ever has enough runs on ONE path to
+// notice. What this replaces was not an index problem — it was reading the
+// whole table.
+func (s PG) ActiveRunsAtWorkspacePath(ctx context.Context, workspacePath string) ([]types.AgentRun, error) {
+	states := make([]string, 0, len(types.NonTerminalRunStates))
+	for _, st := range types.NonTerminalRunStates {
+		states = append(states, string(st))
+	}
+	q := `SELECT ` + runCols + ` FROM agent_runs WHERE workspace_path = $1 AND state = ANY($2) ORDER BY created_at DESC`
+	return collect(ctx, s.Pool, "list", "active runs at workspace path", q, []any{workspacePath, states}, scanRun)
+}
+
 // ListRunsPageByCreator is ListRunsPage narrowed to one creator, same order.
 // ponytail: no dedicated (created_by, created_at) index yet — agent_runs is
 // small enough per-operator that the existing created_at index plus a filter

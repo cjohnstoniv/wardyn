@@ -350,7 +350,14 @@ type Store interface {
 	// with the same home_override — a directory name is one person's, which is
 	// why a group row may not carry one, and on a managed drive it is the last
 	// way left to point two people at one object Wardyn creates.
-	UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant) (types.UserDriveGrant, error)
+	//
+	// homeOverrideStated is the REQUEST's tri-state, not the row's: false means
+	// the caller never mentioned home_override, and a repoint that never
+	// mentioned it must not CLEAR one — see the guard in PG's statement.
+	// ErrConflict is that refusal too, and the two causes are distinguishable
+	// by this argument alone (a stated override disables the re-home guard; an
+	// unstated one is empty, which short-circuits the uniqueness guard).
+	UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, error)
 	// DeleteUserDriveGrant RETURNS the row it removed (ErrNotFound when none
 	// matched): the delete's own audit row has to name the subject that was
 	// de-allocated, and by then it is gone.

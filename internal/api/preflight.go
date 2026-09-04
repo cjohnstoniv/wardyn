@@ -47,8 +47,23 @@ type preflightResponse struct {
 // an XOR violation, an unknown-secret 422, or an invalid inline spec surface as
 // the real launch errors), computes the enforced confinement class the same way
 // runs.go does (requested-vs-floor + blast-radius CC3 raise), and returns the
-// deterministic setup checklist. It mints nothing, persists nothing, dispatches
-// nothing.
+// deterministic setup checklist. It mints nothing and dispatches nothing.
+//
+// IT DOES PERSIST ONE THING, and the claim used to say otherwise. Every gate it
+// reproduces is a real gate, and a gate that REFUSES a member writes its
+// authz.denied audit row — denyMemberField, from inside the shared code path.
+// So a dry run that is refused (task_mode, the drive door, any other profile
+// limit) leaves exactly one row per refused door per call, with run_id NULL
+// because there is no run. A dry run that PASSES writes nothing at all.
+//
+// It stays that way deliberately rather than being suppressed: the row is the
+// record that this principal was refused this capability, which is true whether
+// or not they went on to launch, and the alternative — a gate that audits at
+// one door and not at the identical door one handler over — is the drift the
+// shared path exists to prevent. What it costs is that Review's re-resolve on
+// every edit can write a row per keystroke for a member editing against a
+// closed door; the run_id NULL is what tells those apart from the denials that
+// actually bounded a run.
 //
 // The runner-capability 422 launch hard-gates on is deliberately NOT duplicated
 // here: deriveSetupItems' backend row reports that honestly instead, so a host

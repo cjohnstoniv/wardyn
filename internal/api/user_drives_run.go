@@ -68,10 +68,69 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// driveRefusalReasons is the CLOSED label set wardyn_drive_refusals_total
+// carries, in the order /metrics prints them — every series present from the
+// first scrape, so a dashboard does not have to wait for a refusal to learn the
+// label exists, and an alert on a rate can be written before the first one.
+//
+// One entry per arm below. A refusal with no reason in this list cannot be
+// recorded, which is the point: adding an arm means naming it here, and naming
+// it here is what makes it operable.
+var driveRefusalReasons = []string{
+	driveRefusalNoAllocation, driveRefusalPaused, driveRefusalRunnerCannotMount,
+	driveRefusalBackendElsewhere, driveRefusalCeilingMoved, driveRefusalHomeMissing,
+	driveRefusalShareUnreachable, driveRefusalReadOnly,
+}
+
+const (
+	driveRefusalNoAllocation      = "no_allocation"
+	driveRefusalPaused            = "paused"
+	driveRefusalRunnerCannotMount = "runner_cannot_mount"
+	driveRefusalBackendElsewhere  = "backend_elsewhere"
+	driveRefusalCeilingMoved      = "ceiling_moved"
+	driveRefusalHomeMissing       = "home_missing"
+	driveRefusalShareUnreachable  = "share_unreachable"
+	driveRefusalReadOnly          = "read_only"
+)
+
+// refuseDrive is the ONE place a run is told it cannot have its drive: it
+// writes the member's frozen sentence, counts the refusal by reason, and logs
+// the operator's half — in that order, and never one without the others.
+//
+// IT EXISTS BECAUSE FIVE OF THE SIX ARMS RECORDED NOTHING. A refused drive was
+// a 422 to the member and silence everywhere else: no audit row (the profile
+// DOOR has one, denyMemberDrive's authz.denied, and it is the only arm that
+// did), no log line, no metric, and no request log either — routes.go wires
+// RequestID and Recoverer and no logger. So the failure mode the runbook itself
+// predicts — "Wardyn does not mkdir on a share, a missing home is a 422 at run
+// create" — reached an operator as a support ticket or not at all, and the
+// deployment-wide version of it (the share moved, the roots were narrowed, the
+// runner was re-pointed) looked from the outside exactly like nobody launching
+// runs.
+//
+// THE AUDIENCE SPLIT IS THE SAME ONE driveShareIsBindable ARGUES FOR. The
+// member gets driveRefusal's sentence and nothing else; the operator's
+// diagnosis — the drive, the backend, the path, the roots — goes to slog, where
+// the person who can fix it already looks. So attrs may name the operator's
+// filesystem and the message may not.
+//
+// NOT AN AUDIT ROW. An audit row is an authorization event about a principal's
+// attempt, which is what the door's authz.denied is; these are the deployment
+// failing to keep a promise it already made to somebody it already authorized.
+// Recording them as denials would put "bob was denied" in the log for a NAS
+// outage, and an auditor reading it would be reading the wrong story.
+func (s *Server) refuseDrive(w http.ResponseWriter, status int, reason, member string, attrs ...any) {
+	s.metrics.driveRefused(reason)
+	slog.Warn("wardynd: user drive: a run was refused its drive",
+		append([]any{slog.String("reason", reason)}, attrs...)...)
+	writeError(w, status, driveRefusal(member))
+}
 
 // seedRequestDrive resolves the run request's drive flag into the mount the
 // runner will execute, writing its own HTTP error and returning ok=false once
@@ -104,13 +163,14 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 		return nil, false
 	}
 	if resolved == nil {
-		writeError(w, http.StatusUnprocessableEntity,
-			driveRefusal("no user drive is allocated to you — ask an admin for an allocation"))
+		s.refuseDrive(w, http.StatusUnprocessableEntity, driveRefusalNoAllocation,
+			"no user drive is allocated to you — ask an admin for an allocation")
 		return nil, false
 	}
 	if resolved.Paused {
-		writeError(w, http.StatusUnprocessableEntity,
-			driveRefusal("your allocation is paused by an admin"))
+		s.refuseDrive(w, http.StatusUnprocessableEntity, driveRefusalPaused,
+			"your allocation is paused by an admin",
+			slog.String("drive", resolved.Drive.Name))
 		return nil, false
 	}
 	return s.driveMountFor(r.Context(), w, req, *resolved)
@@ -235,18 +295,21 @@ func (s *Server) driveIsMountableHere(ctx context.Context, w http.ResponseWriter
 			return false
 		}
 		if !caps.UserDrives {
-			writeError(w, http.StatusUnprocessableEntity, driveRefusal(fmt.Sprintf(
-				"this deployment cannot mount your drive (its runner %q does not mount drives)", caps.Driver)))
+			s.refuseDrive(w, http.StatusUnprocessableEntity, driveRefusalRunnerCannotMount, fmt.Sprintf(
+				"this deployment cannot mount your drive (its runner %q does not mount drives)", caps.Driver),
+				slog.String("drive", resolved.Drive.Name), slog.String("driver", caps.Driver))
 			return false
 		}
 	}
 	if target := resolved.Drive.Backend.RunnerTarget(); target != s.cfg.RunnerTarget {
-		writeError(w, http.StatusUnprocessableEntity, driveRefusal(fmt.Sprintf(
+		s.refuseDrive(w, http.StatusUnprocessableEntity, driveRefusalBackendElsewhere, fmt.Sprintf(
 			"this deployment cannot mount your drive (it is a %q drive and this deployment dispatches to %q)",
-			resolved.Drive.Backend, s.cfg.RunnerTarget)))
+			resolved.Drive.Backend, s.cfg.RunnerTarget),
+			slog.String("drive", resolved.Drive.Name), slog.String("backend", string(resolved.Drive.Backend)),
+			slog.String("backend_runner", target), slog.String("deployment_runner", s.cfg.RunnerTarget))
 		return false
 	}
-	return s.driveShareIsBindable(w, resolved)
+	return s.driveShareIsBindable(ctx, w, resolved)
 }
 
 // driveMountFor folds a resolved drive and the run request into the mount, or
@@ -271,8 +334,9 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, req c
 	readOnly := !resolved.Writable
 	if req.Drive.ReadOnly != nil {
 		if !*req.Drive.ReadOnly && readOnly {
-			writeError(w, http.StatusUnprocessableEntity,
-				driveRefusal("your allocation is read-only; read_only:false cannot widen it"))
+			s.refuseDrive(w, http.StatusUnprocessableEntity, driveRefusalReadOnly,
+				"your allocation is read-only; read_only:false cannot widen it",
+				slog.String("drive", resolved.Drive.Name))
 			return nil, false
 		}
 		readOnly = readOnly || *req.Drive.ReadOnly
@@ -364,18 +428,49 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, req c
 // file at the drive target is not a drive, and the sentence a member needs
 // ("that directory is not there") is true of both.
 //
+// ─── (3) AND IT HAS TO ANSWER, WITHIN A BOUND ──────────────────────────────
+//
+// Both facts above are FILESYSTEM syscalls on a path the operator mounted, and
+// on a share that path is very often an NFS/SMB mount. A blackholed server does
+// not return ENOENT: an uninterruptible stat blocks until the mount's own
+// timeout, which on a hard mount is forever. That thread is a run-create
+// request — on a server that deliberately sets no WriteTimeout, because the
+// attach WebSocket and the fleet SSE stream must not be killed by a whole-
+// request deadline (boot_serve.go) — so the ONLY bound available is one here.
+// It is the same argument, and the same shape, as the broker's
+// refRulesetProbeTimeout for a blackholed api.github.com.
+//
+// THE SYSCALL IS NOT CANCELLABLE and this does not pretend otherwise: os.Stat
+// and filepath.EvalSymlinks take no context, so the goroutine runs to
+// completion after we have stopped waiting. What the bound buys is that the
+// REQUEST returns, the connection is released, and the member gets a sentence
+// instead of a hang. The stranded goroutine ends when the mount does.
+//
+// A TIMEOUT IS ITS OWN REFUSAL, never folded into "that directory is not
+// there": the two have different remedies (one is an admin creating a
+// directory, the other is an operator's mount) and telling a member the first
+// when the second is true sends them to the wrong person.
+//
 // ponytail: one os.Stat, on a path already derived, on the create path only.
-func (s *Server) driveShareIsBindable(w http.ResponseWriter, resolved types.ResolvedDrive) bool {
+func (s *Server) driveShareIsBindable(ctx context.Context, w http.ResponseWriter, resolved types.ResolvedDrive) bool {
 	if resolved.Drive.Backend != types.DriveBackendHostPath {
 		return true
 	}
-	if err := s.userDriveHostRootCheck()(resolved.Drive.HostRoot); err != nil {
-		slog.Warn("wardynd: user drive: a stored share drive's host_root is no longer allowed by this deployment",
+	rootErr, ok := driveShareProbe(ctx, func() error { return s.userDriveHostRootCheck()(resolved.Drive.HostRoot) })
+	if !ok {
+		s.refuseDrive(w, http.StatusUnprocessableEntity, driveRefusalShareUnreachable, fmt.Sprintf(
+			"this deployment cannot mount your drive (drive %q did not answer in time — ask an admin)",
+			resolved.Drive.Name),
+			slog.String("drive", resolved.Drive.Name), slog.String("host_root", resolved.Drive.HostRoot),
+			slog.Duration("timeout", driveShareProbeTimeout))
+		return false
+	}
+	if err := rootErr; err != nil {
+		s.refuseDrive(w, http.StatusUnprocessableEntity, driveRefusalCeilingMoved, fmt.Sprintf(
+			"this deployment cannot mount your drive (drive %q is on a share this deployment does not allow — ask an admin)",
+			resolved.Drive.Name),
 			slog.String("drive", resolved.Drive.Name), slog.String("host_root", resolved.Drive.HostRoot),
 			slog.Any("host_roots", s.cfg.UserDriveHostRoots), slog.String("err", err.Error()))
-		writeError(w, http.StatusUnprocessableEntity, driveRefusal(fmt.Sprintf(
-			"this deployment cannot mount your drive (drive %q is on a share this deployment does not allow — ask an admin)",
-			resolved.Drive.Name)))
 		return false
 	}
 	// The HOME name, never the resolved path: the member is told which
@@ -392,10 +487,65 @@ func (s *Server) driveShareIsBindable(w http.ResponseWriter, resolved types.Reso
 	// REFUSED_HOME_INVALID's `. _ -` are wire text here and mono on screen. Three
 	// refusals used to type them and shipped literal backticks a member read as
 	// punctuation.
-	if st, err := os.Stat(resolved.ObjectName); err != nil || !st.IsDir() {
-		writeError(w, http.StatusUnprocessableEntity, driveRefusal(fmt.Sprintf(
-			"directory %s does not exist on the share — ask an admin to create it", resolved.HomeName)))
+	statErr, ok := driveShareProbe(ctx, func() error {
+		st, err := os.Stat(resolved.ObjectName)
+		if err != nil {
+			return err
+		}
+		if !st.IsDir() {
+			return fmt.Errorf("not a directory")
+		}
+		return nil
+	})
+	if !ok {
+		s.refuseDrive(w, http.StatusUnprocessableEntity, driveRefusalShareUnreachable, fmt.Sprintf(
+			"this deployment cannot mount your drive (drive %q did not answer in time — ask an admin)",
+			resolved.Drive.Name),
+			slog.String("drive", resolved.Drive.Name), slog.String("home", resolved.HomeName),
+			slog.Duration("timeout", driveShareProbeTimeout))
+		return false
+	}
+	if statErr != nil {
+		s.refuseDrive(w, http.StatusUnprocessableEntity, driveRefusalHomeMissing, fmt.Sprintf(
+			"directory %s does not exist on the share — ask an admin to create it", resolved.HomeName),
+			slog.String("drive", resolved.Drive.Name), slog.String("home", resolved.HomeName),
+			slog.String("object", resolved.ObjectName), slog.String("err", statErr.Error()))
 		return false
 	}
 	return true
+}
+
+// driveShareProbeTimeout bounds ONE share filesystem question — the roots
+// re-check or the home's existence.
+//
+// Five seconds is a local stat's worth of headroom by four orders of magnitude
+// and a fraction of a hard NFS mount's own retry, so it fires only when the
+// share is genuinely not answering. It is not configurable: an operator whose
+// share needs longer than this to stat one directory has a mount to fix, not a
+// knob to turn, and the refusal names the drive so they know which.
+const driveShareProbeTimeout = 5 * time.Second
+
+// driveShareProbe runs one uncancellable filesystem check with a deadline,
+// returning its error and whether it ANSWERED at all. ok=false means the probe
+// is still running and we stopped waiting.
+//
+// The buffered channel is load-bearing: the goroutine must be able to finish
+// and exit after the receiver has gone, or a blackholed share would leak a
+// goroutine AND a blocked send per refused run.
+//
+// The caller's ctx is honoured too, so a member who gave up on the request does
+// not hold the connection for the rest of the timeout.
+func driveShareProbe(ctx context.Context, check func() error) (err error, ok bool) {
+	done := make(chan error, 1)
+	go func() { done <- check() }()
+	timer := time.NewTimer(driveShareProbeTimeout)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err, true
+	case <-timer.C:
+		return nil, false
+	case <-ctx.Done():
+		return nil, false
+	}
 }

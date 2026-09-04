@@ -58,7 +58,7 @@ func seedUserDriveGrant(t *testing.T, st store.PG, g types.UserDriveGrant) types
 	t.Helper()
 	ctx := context.Background()
 	g.Enabled = true
-	saved, err := st.UpsertUserDriveGrant(ctx, g)
+	saved, err := st.UpsertUserDriveGrant(ctx, g, true)
 	if err != nil {
 		t.Fatalf("seed grant %+v: %v", g, err)
 	}
@@ -74,7 +74,7 @@ func seedDisabledUserDriveGrant(t *testing.T, st store.PG, g types.UserDriveGran
 	t.Helper()
 	ctx := context.Background()
 	g.Enabled = false
-	saved, err := st.UpsertUserDriveGrant(ctx, g)
+	saved, err := st.UpsertUserDriveGrant(ctx, g, true)
 	if err != nil {
 		t.Fatalf("seed disabled grant %+v: %v", g, err)
 	}
@@ -279,7 +279,7 @@ func TestPG_UserDriveGrant_NaturalKeyUpsert(t *testing.T) {
 		SizeMiBOverride:  512,
 		WritableOverride: &no,
 		HomeOverride:     "bsmith",
-	})
+	}, true)
 	if err != nil {
 		t.Fatalf("re-allocate: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestPG_UserDriveGrant_NaturalKeyUpsert(t *testing.T) {
 		Subject:     "test-orphan-" + uuid.NewString(),
 		DriveID:     uuid.New(),
 		Enabled:     true,
-	}); !errors.Is(err, store.ErrNotFound) {
+	}, true); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("grant naming an unknown drive: err = %v, want ErrNotFound", err)
 	}
 	if _, err := st.DeleteUserDriveGrant(ctx, uuid.New()); !errors.Is(err, store.ErrNotFound) {
@@ -354,7 +354,7 @@ func TestPG_UserDriveGrant_OneDirectoryNamePerDrive(t *testing.T) {
 	_, err := st.UpsertUserDriveGrant(ctx, types.UserDriveGrant{
 		ID: uuid.New(), SubjectType: types.CapabilitySubjectUser, Subject: alice, DriveID: drive.ID,
 		HomeOverride: home, Enabled: true, CreatedBy: "admin@example.com",
-	})
+	}, true)
 	if !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("second subject on one directory: err = %v, want ErrConflict — both would mount one object", err)
 	}
@@ -366,7 +366,7 @@ func TestPG_UserDriveGrant_OneDirectoryNamePerDrive(t *testing.T) {
 	fresh, err := st.UpsertUserDriveGrant(ctx, types.UserDriveGrant{
 		ID: candidate, SubjectType: types.CapabilitySubjectUser, Subject: alice, DriveID: drive.ID,
 		HomeOverride: home + "-other", Enabled: true, CreatedBy: "admin@example.com",
-	})
+	}, true)
 	if err != nil {
 		t.Fatalf("alice under a free name: %v", err)
 	}
@@ -380,7 +380,7 @@ func TestPG_UserDriveGrant_OneDirectoryNamePerDrive(t *testing.T) {
 	repointed, err := st.UpsertUserDriveGrant(ctx, types.UserDriveGrant{
 		ID: uuid.New(), SubjectType: types.CapabilitySubjectUser, Subject: bob, DriveID: drive.ID,
 		HomeOverride: home, Priority: 7, Enabled: true, CreatedBy: "admin@example.com",
-	})
+	}, true)
 	if err != nil {
 		t.Fatalf("the holder repointing its own row: %v", err)
 	}
@@ -457,7 +457,7 @@ func TestPG_ResolveUserDrive_TieHasATotalOrder(t *testing.T) {
 		t.Helper()
 		var ids []uuid.UUID
 		for _, subject := range order {
-			saved, err := st.UpsertUserDriveGrant(ctx, grants[subject])
+			saved, err := st.UpsertUserDriveGrant(ctx, grants[subject], true)
 			if err != nil {
 				t.Fatalf("seed %s: %v", subject, err)
 			}

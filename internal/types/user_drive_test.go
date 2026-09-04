@@ -4,6 +4,7 @@
 package types
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -162,17 +163,37 @@ func TestDriveHomeNameIsDNS1123OnKubernetes(t *testing.T) {
 		{name: "a trailing dash", subject: "alice-", docker: true, k8s: false},
 		{name: "a trailing dot", subject: "alice.", docker: true, k8s: false},
 		{name: "consecutive dots", subject: "a..b", docker: true, k8s: false},
+		// EACH DOT-SEPARATED LABEL IS ITS OWN NAME, and these five are what a
+		// regex anchored only at the two ENDS of the whole string cannot say.
+		// `^[a-z0-9]([a-z0-9.-]{0,61}[a-z0-9])?$` accepted every one of them:
+		// each starts and ends alphanumeric, so `.` and `-` sat in any order in
+		// between — and the apiserver then refused the claim inside somebody's
+		// run, which is the failure this rule exists to move to preview time.
+		{name: "a dash opening a label", subject: "a.-b", docker: true, k8s: false},
+		{name: "a dash closing a label", subject: "a-.b", docker: true, k8s: false},
+		{name: "the middle label empty on both sides", subject: "x.-y.z", docker: true, k8s: false},
+		{name: "a dash-opened label after a real one", subject: "ab.-cd", docker: true, k8s: false},
+		{name: "digits either side of the adjacency", subject: "9-.-9", docker: true, k8s: false},
 		// What BOTH accept: the ordinary corporate username, dotted or not.
 		{name: "a plain username", subject: "alice", docker: true, k8s: true},
 		{name: "a dotted username", subject: "alice.smith", docker: true, k8s: true},
 		{name: "an inner dash", subject: "alice-smith", docker: true, k8s: true},
 		{name: "63 characters", subject: strings.Repeat("a", 63), docker: true, k8s: true},
 		{name: "64 characters", subject: strings.Repeat("a", 64), docker: false, k8s: false},
+		// The 63 is a SEPARATE clause from the k8s pattern now (the pattern is
+		// anchored per label, so nothing in it bounds the whole string). This
+		// row is what proves the clause is still applied: every label here is
+		// individually legal and short, and only the total is over.
+		{name: "two legal labels, 65 characters together",
+			subject: strings.Repeat("a", 32) + "." + strings.Repeat("b", 32), docker: false, k8s: false},
+		{name: "two legal labels, 63 characters together",
+			subject: strings.Repeat("a", 31) + "." + strings.Repeat("b", 31), docker: true, k8s: true},
 		// The override is an admin's fact about a filesystem, and it is still
 		// not allowed to name something the apiserver will reject: the grant row
 		// holds a drive_id, not a backend, so this is the only place that check
 		// can run.
 		{name: "an underscore in an override", subject: "alice", override: "b_smith", docker: true, k8s: false},
+		{name: "dash-dot adjacency in an override", subject: "alice", override: "ab.-cd", docker: true, k8s: false},
 		{name: "a plain override", subject: "alice", override: "bsmith", docker: true, k8s: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -713,4 +734,65 @@ func TestValidateUserDriveGrant(t *testing.T) {
 			t.Errorf("all-tier subject = %q, want empty", g.Subject)
 		}
 	})
+}
+
+// TestUserDriveIntegersFitTheColumn pins the range these two tables' integer
+// columns actually have.
+//
+// Migration 0054 declares user_drives.size_mib, user_drive_grants.priority and
+// user_drive_grants.size_mib_override as INT — PostgreSQL's 4-byte signed
+// integer — and Go's int is 64-bit here, so every value in the gap validated,
+// was written, and came back as SQLSTATE 22003 ("integer out of range"). That
+// is neither store.ErrConflict nor store.ErrNotFound, so internal/api took its
+// 500 arm and answered the admin with the raw driver string for a row that was
+// theirs to fix.
+//
+// Both DIRECTIONS on priority, because negative priorities are legitimate (a
+// deliberately de-prioritised group row) and int32 is asymmetric — a bound
+// written as ±MaxInt32 would refuse a value the column holds.
+func TestUserDriveIntegersFitTheColumn(t *testing.T) {
+	const overInt32 = int(math.MaxInt32) + 1
+
+	t.Run("size_mib above the column", func(t *testing.T) {
+		d := driveFor(t, DriveBackendDockerVolume, HomeTemplateHash)
+		d.SizeMiB = overInt32
+		if err := ValidateUserDrive(&d, "docker"); err == nil {
+			t.Fatalf("ValidateUserDrive accepted size_mib=%d — the column is INT and the DATABASE refuses it, as a 500", overInt32)
+		}
+	})
+	t.Run("size_mib at the column ceiling is accepted", func(t *testing.T) {
+		d := driveFor(t, DriveBackendDockerVolume, HomeTemplateHash)
+		d.SizeMiB = math.MaxInt32
+		if err := ValidateUserDrive(&d, "docker"); err != nil {
+			t.Fatalf("ValidateUserDrive refused size_mib=%d, which the column holds: %v", math.MaxInt32, err)
+		}
+	})
+
+	grant := func() UserDriveGrant {
+		return UserDriveGrant{SubjectType: CapabilitySubjectUser, Subject: "bob@corp.example", DriveID: uuid.New()}
+	}
+	for _, tc := range []struct {
+		name string
+		set  func(*UserDriveGrant)
+		want bool // accepted?
+	}{
+		{"size_mib_override above the column", func(g *UserDriveGrant) { g.SizeMiBOverride = overInt32 }, false},
+		{"size_mib_override at the ceiling", func(g *UserDriveGrant) { g.SizeMiBOverride = math.MaxInt32 }, true},
+		{"priority above the column", func(g *UserDriveGrant) { g.Priority = overInt32 }, false},
+		{"priority below the column", func(g *UserDriveGrant) { g.Priority = int(math.MinInt32) - 1 }, false},
+		{"priority at the ceiling", func(g *UserDriveGrant) { g.Priority = math.MaxInt32 }, true},
+		{"priority at the floor", func(g *UserDriveGrant) { g.Priority = math.MinInt32 }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := grant()
+			tc.set(&g)
+			err := ValidateUserDriveGrant(&g)
+			if tc.want && err != nil {
+				t.Fatalf("ValidateUserDriveGrant refused a value the column holds: %v", err)
+			}
+			if !tc.want && err == nil {
+				t.Fatalf("ValidateUserDriveGrant accepted %+v — the column is INT and the DATABASE refuses it, as a 500", g)
+			}
+		})
+	}
 }

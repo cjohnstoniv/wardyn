@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -75,6 +76,20 @@ type driveStore struct {
 	// nil (noGovernanceStore's ErrNotFound) is a deployment that has authored
 	// none, which is every case that is not about the door.
 	profile *types.GovernanceProfile
+	// hasGroupTierAssignments is the GOVERNANCE half of "the group tier could
+	// have been hiding something", shadowing noGovernanceStore's false. It is
+	// what makes the launch path's ceilingWithUnusableGroups refuse, and the
+	// preview's door has to reach the same answer for the same claims.
+	hasGroupTierAssignments bool
+	// sawUsers / sawGroups are the arguments the LAST ResolveUserDrive call was
+	// made with — see the method for why a double that discards them is a
+	// double that hides a whole class of defect.
+	sawUsers  [][]string
+	sawGroups [][]string
+}
+
+func (s *driveStore) HasGroupTierAssignments(context.Context) (bool, error) {
+	return s.hasGroupTierAssignments, nil
 }
 
 // ResolveGovernanceProfile shadows noGovernanceStore's so a case can shut the
@@ -92,8 +107,18 @@ func (s *driveStore) ResolveGovernanceProfile(_ context.Context, _, _ []string) 
 	return s.profile, types.CapabilitySubjectUser, nil
 }
 
-func (s *driveStore) ResolveUserDrive(_ context.Context, _, groups []string) (
+func (s *driveStore) ResolveUserDrive(_ context.Context, users, groups []string) (
 	*types.UserDrive, *types.UserDriveGrant, types.CapabilitySubjectType, error) {
+	// RECORDED, not discarded. Every store double in this package took the
+	// users argument as `_`, so nothing in the suite pinned WHICH principal's
+	// subjects the grant lookup is made with: patching resolveUserDriveFor to
+	// read the drive for a subject that does not exist left the entire package
+	// green, while the DERIVATION (newResolvedDrive, which takes the real
+	// claims) kept every home name and object name correct. A resolver that
+	// looks up one person's allocation and derives another person's directory
+	// is the single worst outcome this file has, and it was invisible.
+	s.sawUsers = append([][]string(nil), users)
+	s.sawGroups = append([][]string(nil), groups)
 	if s.err != nil {
 		return nil, nil, "", s.err
 	}
@@ -1438,5 +1463,163 @@ func TestPreviewUserDriveDerivesTheSameAnswerAsEnforcement(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+// TestResolveUserDriveLooksTheGrantUpForTheCALLER pins the argument every store
+// double in this package used to throw away.
+//
+// The counterfactual is one line: patch resolveUserDriveFor to read the drive
+// for []string{"COUNTERFACTUAL-NOBODY"} while leaving the DERIVATION
+// (newResolvedDrive, which takes the caller's real claims) untouched, and the
+// whole api suite stays green — home names, object names and subject hashes are
+// all still correct, because they are derived from the claims rather than from
+// the row. What changes is WHOSE allocation was found, which is the one thing
+// this resolver decides, and nothing was asserting it.
+func TestResolveUserDriveLooksTheGrantUpForTheCALLER(t *testing.T) {
+	d := driveFixture(nil)
+	st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+	srv := driveServer(st)
+
+	users := []string{"sub-drive-bob", "bob@corp.example"}
+	groups := []string{"eng"}
+	if _, err := srv.resolveUserDriveFor(context.Background(), users, groups); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(st.sawUsers) != 1 {
+		t.Fatalf("the store was read %d times, want exactly once", len(st.sawUsers))
+	}
+	if !reflect.DeepEqual(st.sawUsers[0], users) {
+		t.Errorf("the grant lookup was made for %v, want the caller's own subjects %v — in that order, "+
+			"because the resolver's array_position tie-break IS this slice's order", st.sawUsers[0], users)
+	}
+	if !reflect.DeepEqual(st.sawGroups[0], groups) {
+		t.Errorf("the grant lookup was made with groups %v, want %v", st.sawGroups[0], groups)
+	}
+
+	// The UNUSABLE-GROUPS arm re-reads with the SAME users and NO groups — the
+	// one place the two arguments deliberately differ, and the place a copy of
+	// the wrong slice would be least visible.
+	st2 := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+	if _, err := driveServer(st2).driveWithUnusableGroups(context.Background(), users); err != nil {
+		t.Fatalf("unusable-groups resolve: %v", err)
+	}
+	if len(st2.sawUsers) != 1 || !reflect.DeepEqual(st2.sawUsers[0], users) {
+		t.Errorf("the unusable-groups read used %v, want the caller's subjects %v", st2.sawUsers, users)
+	}
+	if st2.sawGroups[0] != nil {
+		t.Errorf("the unusable-groups read passed groups %v, want none — a truncated list must not be MATCHED against",
+			st2.sawGroups[0])
+	}
+}
+
+// TestPreviewDoorTakesTheUnusableGroupTier pins the preview DOOR against the
+// launch's ceiling, on the one claim shape where they used to disagree.
+//
+// The preview's RESOLVER already took driveWithUnusableGroups when a request
+// carried no groups; the door beside it resolved the governance profile with
+// that same empty list and no unusable arm. So on a deployment with group-tier
+// governance assignments, a hand-made preview answered 200 — "this person
+// mounts Corp NAS" — for a principal whose every launch is refused
+// groups_snapshot_stale. A preview that drifts from enforcement is worse than
+// no preview: it is confidently wrong at the moment an admin is deciding
+// whether an allocation is right.
+func TestPreviewDoorTakesTheUnusableGroupTier(t *testing.T) {
+	d := driveFixture(nil)
+	newStore := func() *driveStore {
+		return &driveStore{
+			drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser,
+			// The deployment HAS group-tier governance assignments, so an
+			// unevaluable group tier could have been hiding the row that walls
+			// this principal — which is exactly what the launch refuses on.
+			hasGroupTierAssignments: true,
+		}
+	}
+
+	// NO GROUPS: the group tier was not evaluated, and the launch's ceiling
+	// refuses. The preview must give the same answer in the same words.
+	w := previewDriveHTTP(t, driveServer(newStore()), []string{"sub-drive-bob"}, nil)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("preview with no groups = %d, want 403: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), groupsSnapshotStaleMsg) {
+		t.Errorf("403 body = %s, want the launch's own %q", w.Body.String(), groupsSnapshotStaleMsg)
+	}
+	// The launch, for the same claims, on the same deployment.
+	srv := driveServer(newStore())
+	// A member whose group snapshot is NIL — the launch-side spelling of "the
+	// group tier was not evaluated", which is what an empty preview `groups` is.
+	ctx := withOIDCGroups(operatorCtx("sub-drive-bob", "bob@corp.example", oidc.RoleMember), nil)
+	if _, err := srv.effectiveCeiling(ctx); !errors.Is(err, errGroupsSnapshotStale) {
+		t.Fatalf("the launch ceiling for the same claims = %v, want errGroupsSnapshotStale — "+
+			"the preview must not be answering a question the launch refuses", err)
+	}
+
+	// THE SCOPE, both ways. Groups PRESENT is an answerable tier and previews
+	// normally...
+	if w := previewDriveHTTP(t, driveServer(newStore()), []string{"sub-drive-bob"}, []string{"eng"}); w.Code != http.StatusOK {
+		t.Errorf("preview WITH groups = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	// ...and a deployment that has authored no group-tier assignment has
+	// nothing an unknown group could have been hiding, so it previews too.
+	st := newStore()
+	st.hasGroupTierAssignments = false
+	if w := previewDriveHTTP(t, driveServer(st), []string{"sub-drive-bob"}, nil); w.Code != http.StatusOK {
+		t.Errorf("preview with no groups on a deployment with no group-tier assignments = %d, want 200: %s",
+			w.Code, w.Body.String())
+	}
+}
+
+// TestShareHashRowIsRefusedAtResolveToo pins the mirror of the managed/non-hash
+// refusal newResolvedDrive already repeats.
+//
+// A `hash` home on a SHARE names a directory that cannot exist: a share's
+// directories are named by whoever owns the share, and Wardyn never mkdir's on
+// one. The write boundary has refused that pair since it was written — but a
+// row that PREDATES the rule, or one written by hand, resolved cleanly, and the
+// member met the MISSING-HOME refusal instead: "directory
+// d-00e23f375d35be941331 does not exist on the share — ask an admin to create
+// it". That sentence asks an admin to create a directory named after a digest.
+// The remedy is the TEMPLATE, and this is where the member has to be told so.
+func TestShareHashRowIsRefusedAtResolveToo(t *testing.T) {
+	d := driveFixture(func(d *types.UserDrive) {
+		d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateHash, "/srv/homes"
+	})
+	st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+
+	// The write boundary's own answer for the identical row, quoted so the two
+	// halves of one rule stay visibly one rule.
+	if err := types.ValidateUserDrive(&types.UserDrive{
+		Name: "Corp NAS", Backend: types.DriveBackendHostPath, HostRoot: "/srv/homes",
+		HomeTemplate: types.HomeTemplateHash, Reclaim: types.DriveReclaimRetain,
+	}, "docker"); err == nil {
+		t.Fatal("the write boundary accepts share+hash — this test's premise is gone")
+	}
+
+	resolved, err := driveServer(st).resolveUserDriveFor(context.Background(), []string{"sub-drive-bob"}, nil)
+	if err == nil {
+		t.Fatalf("a stored share+hash row resolved to %+v, want a refusal — the home it derives is a directory "+
+			"nobody could have created", resolved)
+	}
+	if !errors.Is(err, errDriveUnmountable) {
+		t.Errorf("err = %v, want errDriveUnmountable (the 422 class)", err)
+	}
+	// The member's sentence has to name the fixable thing. "does not exist on
+	// the share" was the OLD answer and it named the wrong remedy entirely.
+	if !strings.Contains(err.Error(), "cannot mount your drive") || !strings.Contains(err.Error(), "ask an admin") {
+		t.Errorf("refusal = %q, want the REFUSED_BACKEND sentence naming who can fix it", err)
+	}
+	if strings.Contains(err.Error(), "does not exist on the share") {
+		t.Errorf("refusal = %q — that is the missing-directory remedy, which is the wrong one for this row", err)
+	}
+
+	// THE CONTROL: the same share with a template a share can actually hold
+	// still resolves, so the refusal is the pair and not the backend.
+	ok := driveFixture(func(d *types.UserDrive) {
+		d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateSub, "/srv/homes"
+	})
+	okStore := &driveStore{drive: ok, grant: grantFixture(ok.ID, nil), tier: types.CapabilitySubjectUser}
+	if _, err := driveServer(okStore).resolveUserDriveFor(context.Background(), []string{"sub-drive-bob"}, nil); err != nil {
+		t.Errorf("a share templated on sub = %v, want it to resolve", err)
 	}
 }

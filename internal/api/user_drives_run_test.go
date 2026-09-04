@@ -4,10 +4,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -1175,7 +1178,7 @@ func TestPreflightAnswersTheSameDriveRefusalAsCreate(t *testing.T) {
 		// denyMemberRequest FIRST, so the ceiling it hands seedRequestDrive is
 		// the SAME one create resolved — a preflight that passed a zero ceiling
 		// would preview an open door for a run the door will refuse.
-		srv, _, _ := govEscapeFixture(t, assignedStore(limitsProfile("contractors",
+		srv, _, rec := govEscapeFixture(t, assignedStore(limitsProfile("contractors",
 			types.GovernanceLimits{DenyUserDrive: true})))
 		session := govSession(t, "sub-drives", []string{"eng"}, false)
 
@@ -1187,6 +1190,37 @@ func TestPreflightAnswersTheSameDriveRefusalAsCreate(t *testing.T) {
 		}
 		if got, want := refusalBody(t, preflight), refusalBody(t, create); got != want {
 			t.Errorf("preflight body = %q\ncreate body    = %q\nwant them identical", got, want)
+		}
+
+		// AND WHAT THE DRY RUN LEAVES BEHIND, which nothing pinned in either
+		// direction. The recorder was returned and thrown away here, so
+		// preflight could have audited every dry run, or none, and this test —
+		// the one test about preflight and the drive door — would not have
+		// noticed either way. It DOES audit: the door is denyMemberField from
+		// inside the shared path, so a refused dry run writes exactly the row a
+		// refused launch writes. That contradicts handlePreflightRun's own
+		// "persists nothing", which is now corrected rather than the behaviour,
+		// because a gate that audits at one door and not at the identical door
+		// one handler over is the drift the shared path exists to prevent.
+		//
+		// run_id NULL is what separates the two afterwards, and it is the only
+		// thing that can: a dry run has no run to name.
+		var doors []types.AuditEvent
+		for _, ev := range rec.events {
+			if ev.Action == "authz.denied" && ev.Target == "runs.drive" {
+				doors = append(doors, ev)
+			}
+		}
+		if len(doors) != 2 {
+			t.Fatalf("authz.denied{runs.drive} rows = %d, want 2 — one for the launch and one for the dry run "+
+				"(actions: %v)", len(doors), driveAuditActions(rec))
+		}
+		if doors[0].RunID != nil {
+			t.Errorf("the LAUNCH's denial carries run_id %v; the create is refused before a run exists", doors[0].RunID)
+		}
+		if doors[1].RunID != nil {
+			t.Errorf("the DRY RUN's denial carries run_id %v, want NULL — that is what tells a preview's "+
+				"denials from the ones that bounded a real run", doors[1].RunID)
 		}
 	})
 
@@ -1465,4 +1499,147 @@ func TestSeedRequestDriveGatesOnRunnerCapability(t *testing.T) {
 			t.Fatalf("ok = false with no runner wired: %s", w.Body.String())
 		}
 	})
+}
+
+// TestDriveRefusalLeavesAnOperatorVisibleRecord is the observability half of
+// the 422 matrix above.
+//
+// Every one of those refusals used to be a sentence to the MEMBER and silence
+// everywhere else: no audit row (the profile DOOR's authz.denied is the one arm
+// that had one), no log line for five of the six, no metric, and no request log
+// either — routes.go wires RequestID and Recoverer and nothing that records a
+// 422. So the deployment-wide failures — the share moved, the roots were
+// narrowed, WARDYN_RUNNER was re-pointed — looked from an operator's side
+// exactly like nobody launching runs, and the failure the runbook itself
+// predicts ("a missing home is a 422 at run create") arrived as a support
+// ticket or not at all.
+//
+// BOTH HALVES, because either alone is a trap: a log line nobody greps for is
+// not an alert, and a counter with no line beside it names no drive to go and
+// look at.
+func TestDriveRefusalLeavesAnOperatorVisibleRecord(t *testing.T) {
+	shareStore := func(t *testing.T) (*driveStore, *Server) {
+		t.Helper()
+		d := driveFixture(func(d *types.UserDrive) {
+			d.Backend, d.HomeTemplate = types.DriveBackendHostPath, types.HomeTemplateSub
+		})
+		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+		// A real, allowed root with NO directory for this principal — the
+		// missing-home arm, which is the one the runbook predicts.
+		return st, drivePreviewShareServer(t, st)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		build  func(t *testing.T) (*driveStore, *Server)
+		reason string
+	}{
+		{
+			name: "no allocation",
+			build: func(*testing.T) (*driveStore, *Server) {
+				st := &driveStore{}
+				s, _ := driveRunServer(st, "docker")
+				return st, s
+			},
+			reason: driveRefusalNoAllocation,
+		},
+		{
+			name: "the allocation is paused",
+			build: func(*testing.T) (*driveStore, *Server) {
+				st := pausedDriveStore(nil)
+				s, _ := driveRunServer(st, "docker")
+				return st, s
+			},
+			reason: driveRefusalPaused,
+		},
+		{
+			name: "the backend is not this deployment's",
+			build: func(*testing.T) (*driveStore, *Server) {
+				d := driveFixture(func(d *types.UserDrive) {
+					d.Backend, d.HomeTemplate = types.DriveBackendK8sPVC, types.HomeTemplateHash
+				})
+				st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+				s, _ := driveRunServer(st, "docker")
+				return st, s
+			},
+			reason: driveRefusalBackendElsewhere,
+		},
+		{name: "the home directory is missing from the share", build: shareStore, reason: driveRefusalHomeMissing},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, srv := tc.build(t)
+			var buf bytes.Buffer
+			restore := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+			t.Cleanup(func() { slog.SetDefault(restore) })
+
+			_, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, driveMemberCtx([]string{"eng"}, false))
+			if ok || w.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("ok = %v, code = %d, want a 422 refusal: %s", ok, w.Code, w.Body.String())
+			}
+			// THE COUNTER, by reason and only by this reason.
+			if got := srv.metrics.driveRefusals[tc.reason]; got != 1 {
+				t.Errorf("wardyn_drive_refusals_total{reason=%q} = %d, want 1 (counters: %v)",
+					tc.reason, got, srv.metrics.driveRefusals)
+			}
+			// THE LOG LINE, carrying the reason so the two agree.
+			if !strings.Contains(buf.String(), `reason=`+tc.reason) {
+				t.Errorf("slog = %q, want a WARN naming reason=%s", buf.String(), tc.reason)
+			}
+			// And the operator's half is in the LOG, never in the member's body
+			// — the audience split driveShareIsBindable already argues for.
+			if strings.Contains(w.Body.String(), "host_root") {
+				t.Errorf("member body = %s leaks the operator's layout", w.Body.String())
+			}
+		})
+	}
+
+	// EVERY reason /metrics prints is one this file can actually emit, and
+	// every reason this file emits is printed: a label set that drifts is a
+	// dashboard that silently stops counting an arm.
+	var out bytes.Buffer
+	(&metrics{}).write(&out)
+	for _, reason := range driveRefusalReasons {
+		if !strings.Contains(out.String(), `wardyn_drive_refusals_total{reason="`+reason+`"}`) {
+			t.Errorf("/metrics does not print reason %q — the series appears only after the first refusal, "+
+				"which is the one time nobody is looking", reason)
+		}
+	}
+}
+
+// TestDriveShareProbeIsBounded pins the deadline on the share filesystem
+// questions a run create blocks on.
+//
+// Both are uncancellable syscalls on a path the operator mounted, and on an
+// NFS/SMB share a blackholed server does not return ENOENT — a hard mount's
+// stat blocks until the mount's own timeout, which is often never. The API
+// server sets NO WriteTimeout on purpose (the attach WebSocket and the fleet
+// SSE stream must outlive any whole-request deadline), so this is the only
+// bound in the path: without it one unreachable share pins a request, a
+// connection and a pool slot for as long as it stays unreachable.
+func TestDriveShareProbeIsBounded(t *testing.T) {
+	// ANSWERS: the probe returns the check's own error, unchanged.
+	sentinel := errors.New("the check's own answer")
+	if err, ok := driveShareProbe(context.Background(), func() error { return sentinel }); !ok || !errors.Is(err, sentinel) {
+		t.Fatalf("probe = (%v, %v), want the check's error and ok", err, ok)
+	}
+
+	// DOES NOT ANSWER: a cancelled caller returns immediately and reports that
+	// nothing was decided — never an error the caller could mistake for "the
+	// directory is not there", which has a completely different remedy.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	blocked := make(chan struct{})
+	t.Cleanup(func() { close(blocked) })
+	start := time.Now()
+	err, ok := driveShareProbe(ctx, func() error { <-blocked; return nil })
+	if ok {
+		t.Fatal("probe reported an answer from a check that never returned")
+	}
+	if err != nil {
+		t.Errorf("probe err = %v, want nil — an unanswered probe is not a refusal reason", err)
+	}
+	if elapsed := time.Since(start); elapsed > driveShareProbeTimeout {
+		t.Errorf("probe waited %v on a cancelled context, want it to return at once", elapsed)
+	}
 }
