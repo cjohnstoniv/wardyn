@@ -720,8 +720,19 @@ migration `0050`)** are the second and third owned nouns after runs.
   member-authored, so the member root and dotfile gates no longer bound them —
   they become ordinary operator mounts. Treat it like creating the workspace.
 - **Offboarding a USER DRIVE is two halves, and only one of them is a product
-  action.** Deleting the allocation (`DELETE /drives/grants/{id}`, admin-only,
-  audited `drive.grant.delete`) stops the mount at that person's next run and
+  action — and the ORDER is not the obvious one.** Run `POST /drives/preview`
+  **first, while the allocation still exists**, and write the object name down.
+  The preview answers "what does this deployment say about THIS principal" by
+  running the ordinary resolver (`resolveUserDriveFor`,
+  `internal/api/user_drives_resolve.go`), and the resolver matches on the
+  **grant**: delete the allocation first and the preview resolves nothing, so
+  the one call that names the object a person is about to lose stops being able
+  to name it. Paste the sign-in subject FIRST — on a `hash` drive the name keys
+  on the first claim, and the API's `home_subject` says which claim it used (the
+  console does not yet show it).
+
+  *Then* delete the allocation (`DELETE /drives/grants/{id}`, admin-only,
+  audited `drive.grant.delete`). It stops the mount at that person's next run and
   **deletes no data** — which is why the audit row carries the drive's declared
   `reclaim` intent (`retain` or `delete`), so the log records what the operator
   was told to do about the directory this allocation was the last pointer to.
@@ -729,15 +740,13 @@ migration `0050`)** are the second and third owned nouns after runs.
   subdirectory of the share the operator mounted host-side, or a
   PersistentVolumeClaim. A **managed** object (`docker_volume`, `k8s_pvc`)
   carries the drive row's **id** and the person's home name as labels, so a
-  departed member's objects stay findable after the row is gone; a share's
-  subdirectory and a static claim carry nothing — `POST /drives/preview` is how
-  you name those. Reclaiming it is a deliberate operator command, one per
+  departed member's objects stay findable after the row is gone — that is the
+  recovery path if you skipped the preview; a share's subdirectory and a static
+  claim carry **nothing**, so for those the preview is the only thing that names
+  the object at all. Reclaiming it is a deliberate operator command, one per
   substrate, and Wardyn holds no `delete` verb that could do it by accident: the
   recipes are "User drives on Docker" and "User drives on Kubernetes" in this
-  document, and are not repeated here. `POST /drives/preview` prints the object
-  name for a principal — paste the sign-in subject FIRST: on a `hash` drive
-  the name keys on the first claim, and the API's `home_subject` says which claim
-  it used (the console does not yet show it). Deleting the **drive row** itself
+  document, and are not repeated here. Deleting the **drive row** itself
   is a `409` while any allocation still points at it (`ON DELETE RESTRICT`), so
   the deallocation is always its own audited event and offboarding can never
   silently widen anything.
@@ -1040,6 +1049,59 @@ the share mount, never holds a share credential, and never creates a volume with
    sibling trees; what is refused is one drive rooted inside a tree whose
    directories another drive's members can rewrite from inside a run.
 
+   The question is asked on the stored strings **and again on the
+   symlink-resolved paths**, and either answer refuses — a root that is a link
+   into the other drive's tree nests exactly as surely as a literal path does.
+   So the refusal **names where each root resolves** whenever that differs from
+   what was typed: *host_root "/mnt/teamshare" (resolves to
+   "/srv/shares/alice/team") is inside drive "Corp NAS"'s host_root
+   "/srv/shares" — …*. Without it an admin reads a refusal about two paths that
+   plainly do not nest, and the one fact that explains it — the hop the link
+   makes — is the one thing the console form cannot show them. A root that no
+   longer resolves on this host falls back to the lexical answer rather than to
+   a refusal, so one dead row cannot block every new drive
+   (`driveHostRootNesting`, `internal/api`). Two admins creating nested drives at
+   the same instant can still both be stored — the gate is a read followed by an
+   unconditional write, and the database-level form is 0.7.1.
+
+   **And the drive ceiling must not overlap `WARDYN_MEMBER_WORKSPACE_ROOTS` —
+   the member ceiling defeats per-person isolation where they meet.** Per-person
+   isolation is the **bind of the subdirectory**: Wardyn hands a run one home out
+   of the share and refuses a source that resolved to the root. A member
+   workspace is a different surface with a different rule — a member names a
+   directory under `WARDYN_MEMBER_WORKSPACE_ROOTS` and binds it **whole**,
+   writable where `WARDYN_MEMBER_WRITABLE_ROOTS` allows it, and that path
+   consults no drive allocation at all. Point the two ceilings at one tree and a
+   member onboards the share as a workspace and mounts **every** person's home.
+   Each list is valid on its own, so wardynd compares the pair at boot and
+   **WARNs** — it does not refuse, because an operator may have opened a tree to
+   both deliberately and a boot refusal would take a running deployment down on
+   upgrade (`MountCeilingOverlapWarnings`,
+   `internal/runner/user_drive_mount.go`). Three shapes earn the line, each
+   behind the prefix `wardynd: mount ceilings overlap — `:
+
+   | Shape | The line says |
+   |---|---|
+   | The two lists name the same tree | ``WARDYN_MEMBER_WORKSPACE_ROOTS and WARDYN_USER_DRIVE_HOST_ROOTS both name "<p>": a member can onboard that directory as a workspace and bind the WHOLE share, every other person's home included, without a drive allocation. Point the drive ceiling at the share and the member ceiling somewhere else`` |
+   | A member root CONTAINS a drive root | ``WARDYN_MEMBER_WORKSPACE_ROOTS contains "<m>", which holds the WARDYN_USER_DRIVE_HOST_ROOTS entry "<d>": a member can onboard that share as a workspace and bind it whole, every other person's home included, without a drive allocation. Point the member ceiling at a tree that does not contain the share`` |
+   | A member root is INSIDE a drive root | ``WARDYN_MEMBER_WORKSPACE_ROOTS contains "<m>", which is INSIDE the WARDYN_USER_DRIVE_HOST_ROOTS entry "<d>": member workspaces would be authored inside a share whose directories Wardyn hands out one person at a time. Point the member ceiling outside the share`` |
+
+   Every member ceiling is compared, the shared list **and** each
+   `WARDYN_MEMBER_WORKSPACE_ROOTS_MAP` per-principal override — an override
+   *replaces* the shared list, so it is a ceiling in its own right. The
+   comparison is **lexical**, on the values as configured: boot is not the place
+   to touch a share that may not be mounted yet.
+
+   **What the operator gets when a bind is refused.** The member-facing hint
+   from a driver-side share refusal carries the drive and the directory and
+   never a path; the paths go to the log, on the same run, as
+   `wardyn: user drive: this share mount was refused at bind time` with `source`,
+   `real_path` and `host_root` attributes (`RefuseUserDriveBind`,
+   `internal/runner/user_drive_mount.go`). That split is the rule everywhere on
+   this path — see the member's own refusal vocabulary in
+   [docs/design/user-drives-prompt.md](design/user-drives-prompt.md) §7.7 and
+   §7.9.
+
 **On the Compose stack, wardynd must be able to SEE the root — set two
 variables.** The bind's source is resolved by the host daemon (wardynd's
 sandboxes are sibling containers), but the ceiling check resolves symlinks and
@@ -1070,12 +1132,18 @@ process* — so a CIFS mount table line like the `dir_mode=0700,uid=1000` one
 above works when wardynd runs as root or as uid 1000, and otherwise needs
 `dir_mode=0750,gid=<wardynd's gid>` (or the equivalent NFS export mode). A
 share wardynd cannot traverse fails every drive on it closed at run create —
-with `drive: this deployment cannot mount your drive (host_root … could not be
-resolved on this host …)` when the **root itself** is what wardynd cannot
-resolve, and with `drive: directory <home> does not exist on the share — ask an
-admin to create it` when the root resolves but the person's directory does not
-stat (a home that was never created, and a home behind a directory whose
-permissions hide it, are the same sentence). The sandbox's own mode comes from
+with `drive: this deployment cannot mount your drive (drive "<name>" is on a
+share this deployment does not allow — ask an admin)` when the **root itself**
+is what wardynd cannot resolve, and with `drive: directory <home> does not exist
+on the share — ask an admin to create it` when the root resolves but the
+person's directory does not stat (a home that was never created, and a home
+behind a directory whose permissions hide it, are the same sentence). **Neither
+422 names a path**, deliberately: both are read by the MEMBER, so the diagnosis
+— the drive's `host_root`, the whole `WARDYN_USER_DRIVE_HOST_ROOTS` list, and
+the check's own sentence — goes to wardynd's log instead, as `wardynd: user
+drive: a stored share drive's host_root is no longer allowed by this
+deployment`, which is where the admin who can act on it is looking
+(`driveShareIsBindable`, `internal/api/user_drives_run.go`). The sandbox's own mode comes from
 the allocation, not from this line. A `docker_volume` drive needs none of this —
 there is no host path to see.
 
@@ -1115,6 +1183,30 @@ under CC2 and works under CC1, this is the first thing to try. It is a
 CC1 (`runc`) and CC3 (Kata) need nothing. Wardyn's own runsc tweaks are
 unchanged: this is an operator recipe, and the product does not rewrite your
 daemon config.
+
+**A READ-ONLY share loses its RECURSIVE guarantee under `runsc`, and says so in
+the log.** A read-only bind's `ro` reaches SUBMOUNTS only when the runtime
+declares the OCI `rro` mount option — and gVisor does not (`runsc features`
+lists `ro` and `rbind` and no `rro`), while the daemon **refuses the create
+outright** for a runtime that does not. So Wardyn asks for it only where it is
+declared (`runtimeSupportsRecursiveReadOnly`,
+`internal/runner/docker/hardening.go`; `driveBindOptions`,
+`internal/runner/docker/driver_mounts.go`): the bind still goes in read-only,
+and a submount **under** the person's home — an autofs home, a second export
+mounted below the first — can be writable inside the sandbox. wardynd WARNs on
+the run it affects, with the drive and the home:
+
+```
+wardyn: user drive: this runtime does not support recursively read-only binds,
+so a submount under the share's home could be writable inside the sandbox
+```
+
+Asking unconditionally is not the alternative: it made every CC2 run with a
+read-only drive fail at `ContainerCreate` with the daemon's `rro is not
+supported by runtime "runsc"` as the member's failure hint. There is one lever
+— run the drives that need the recursive guarantee at **CC1**, where the
+daemon's default `runc` declares `rro`. Nothing in the sandbox is affected when
+the share carries no submounts.
 
 **What a drive's SIZE means here.** Quoted verbatim, and the same sentence the
 console renders:
@@ -1593,10 +1685,20 @@ a `403`, because the run's admin-authored egress is still there. A drop is never
 silent: it comes back as a **warning on the launch response itself** (a console
 toast, `wardyn run`'s stderr), appears the same way in a preflight/Review dry-run
 *before* launch, and is recorded as an audit event at launch — one event per
-reason with the affected values beside it, not one per dropped host. Preflight
-dry-runs are not audited: Review re-resolves on every edit, and a stream of
-denials for a policy nobody launched is indistinguishable from denials that
-actually bounded a run.
+reason with the affected values beside it, not one per dropped host. A preflight
+dry-run writes no **drop** rows — a drop is not a denial, and it is recorded at
+launch. A dry run that is **refused** does audit, though: every gate preflight
+reproduces is the real gate, so a refused door writes its own `authz.denied` row
+from inside the shared path (`denyMemberField`) — one row per refused door per
+call, with **`run_id` NULL**, because there is no run. A dry run that passes
+writes nothing at all. That is deliberate rather than suppressed: the row records
+that this principal was refused this capability, which is true whether or not
+they went on to launch, and a gate that audits at one door and not at the
+identical door one handler over is the drift the shared path exists to prevent.
+What it costs is that Review re-resolves on every edit, so a member editing
+against a closed door can write a row per keystroke — the NULL `run_id` is what
+tells those apart from the denials that actually bounded a run
+(`handlePreflightRun`, `internal/api/preflight.go`).
 
 A 404 on a resource that genuinely doesn't exist stays silent by design. One
 exception: the `always`-scope 403 above returns before `decide()` reaches any
@@ -2737,6 +2839,54 @@ Take the Postgres dump above **before** the restart; that dump is the only
 rollback you have. Agent images are built separately — `make agent-images`
 rebuilds them.
 
+**0.7 needs the agent images rebuilt, or an allocated drive is unwritable.**
+`/home/agent/drive` is the reserved in-container mount point a **user drive**
+lands on (`runner.DriveTarget`, `internal/runner/mount.go`), and every image
+under `deploy/images` now pre-creates it owned by `agent` — the ones on a public
+base do it themselves, the ones on a sibling image inherit it — so a fresh
+managed volume takes that ownership through Docker's copy-up. **No pre-0.7 image
+has the directory**: 0.6.6's base image created `/home/agent/work` and nothing
+else, so the daemon conjures a **root-owned** one at mount time and a drive you
+allocated *writable* is unwritable by uid 1000 on its very first run. Nothing
+else goes wrong — the image builds, the container starts, the mount succeeds —
+so the only symptom is the agent failing to write to its own drive, and wardynd
+cannot repair it (fixing that ownership would mean chowning volume state, which
+the control plane must never do). Rebuild with `make agent-images-core`, and
+re-pin anything listed in `WARDYN_AGENT_IMAGES` at the rebuilt tag; a **BYOI**
+image is yours to fix, one `mkdir` (see "User drives on Docker" and
+`deploy/images/README.md`'s image contract). `TestAgentImagesPreCreateDriveDir`
+holds the rule for every image in this tree. A deployment that registers no
+drive is unaffected.
+
+**0.7 refuses `/home/agent/drive` as an AUTHORED mount target, and a row stored
+before this release still names it.** The reserved target — the whole subtree,
+so `/home/agent/drive/shared` too — is refused to every policy
+`workspace_mounts[].target`, every `workspace_repos[].target` and every
+workspace `local_dir` source target (`ValidateAuthoredTarget`,
+`internal/runner/mount.go`, the authored-target arm of the same validator every
+mount target runs). Before 0.7 the rule was only the allowed-prefix one
+(`/home/agent`, `/work`, `/workspace`), which admits it. Nothing re-validates a
+stored row on read — `validatePolicySpec` runs on the two **write** paths — so
+such a row survives the upgrade and fails at **run** time instead, with
+`workspace_mounts[0]: target /home/agent/drive is reserved for the user drive`
+at create and, for anything that reaches the driver,
+`docker: denied workspace mount "<source>" -> "<target>": target
+/home/agent/drive is reserved for the user drive` immediately before
+`ContainerCreate`. Find them before the upgrade window rather than in somebody's
+run:
+
+```sh
+for path in policies workspaces; do
+  curl -fsS "$WARDYN_URL/api/v1/$path" -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" \
+    | grep -o '"target":"/home/agent/drive[^"]*"' || true
+done
+```
+
+Re-target each hit anywhere else under `/home/agent`, `/work` or `/workspace`
+and write the policy or workspace back. Nothing migrates them for you, on
+purpose: a mount target is an operator's authored decision, and silently moving
+a bind is the outcome this refusal exists to prevent.
+
 On Helm, a **mixed-version rollout repeats that logout** for as long as both
 versions serve: a human who lands on an old replica is signed in, and the next
 request routed to a new one bounces them. It costs logins, not containment — the
@@ -3396,16 +3546,35 @@ pair the Docker driver stamps on a managed volume — and, deliberately, **no
 on exactly that label) cannot reach it. That pair is also what the driver checks
 before it mounts anything: see the two refusals above.
 
-**Ownership, and where fsGroup stops working.** A pod with a drive carries
-`fsGroup: 1000` (a GROUP id — it happens to equal the uid every agent image runs as, but this field can never make a volume user-owned) with
-`fsGroupChangePolicy: OnRootMismatch` — `Always` would recursively chown a large
-drive on every single run. The kubelet applies fsGroup for CSI drivers that
-declare `ReadWriteOnceWithFSType` volume ownership, i.e. block storage: the
-managed case is correct by construction. It does **not** apply to an NFS-type
-volume. A static share is owned by whatever its export says, so map it there — a
-Wardyn-dedicated export with `all_squash,anonuid=1000,anongid=1000`, or per-user
-`0700` subdirectories — and expect a read-only mount where an existing corporate
-home is owned by a different uid.
+**Ownership: fsGroup is a MANAGED-claim field, and a share never gets it.** A
+pod carrying a **managed** (`k8s_pvc`) drive carries `fsGroup: 1000` (a GROUP id
+— it happens to equal the uid every agent image runs as, but this field can
+never make a volume user-owned) with `fsGroupChangePolicy: OnRootMismatch`;
+`Always` would recursively chown a large drive on every single run. That is
+correct by construction for a managed claim: it is provisioned **empty**, it
+belongs to **one** principal, and a root-owned volume root is unwritable for uid
+1000 — while the control plane must never chown volume state itself.
+
+A pod carrying a **share** (`k8s_pvc_static`) drive carries **no `fsGroup` at
+all**, deliberately. The tempting justification for setting it — that the
+kubelet does not apply fsGroup to an NFS-type volume — is **false** for the
+upstream CSI NFS driver (`kubernetes-csi/csi-driver-nfs`), which ships
+`fsGroupPolicy: File`: File means Kubernetes may use fsGroup to change
+permissions and ownership of the volume *regardless of fstype or access mode*.
+(`ReadWriteOnceWithFSType`, the policy that really is limited to block storage,
+is only the DEFAULT for a driver that declares none.) `OnRootMismatch` narrows
+**when**, never **what** — the first run whose export root is not already gid
+1000 walks the volume and re-owns what it finds, which on a share is **other
+people's files**. So the gate is on the drive's kind, not on a backend list
+(`applyDriveToPod`, `internal/runner/k8s/drives.go`, over
+`types.DriveBackend.Kind`), and a backend this binary does not recognise reads
+as a share and gets no fsGroup either — the fail-closed direction here.
+
+A share's ownership is therefore **the export's own uid/gid mapping and nothing
+else** — a Wardyn-dedicated export with `all_squash,anonuid=1000,anongid=1000`,
+or per-user `0700` subdirectories. That recipe is the mechanism, not a fallback
+for when fsGroup does not fire. Expect a read-only mount where an existing
+corporate home is owned by a different uid.
 
 **gVisor wants `directfs` off for a drive, and today only the NODE FLAG
 delivers it.** The Wall (CC2) and Vault (CC3) tiers run the agent pod under a

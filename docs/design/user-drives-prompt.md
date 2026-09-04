@@ -796,7 +796,8 @@ after `WORKSPACE_BODY`, only when `/me.user_drive` is non-null.
 | `REFUSED_TARGET_RESERVED` | workspace_mounts[0]: target `/home/agent/drive` is reserved for the user drive |
 
 **This table is COMPLETE** (§5 #4): every string a member can be refused with at a door this
-feature adds is here. `DENIED_DRIVE` is the one **403** (audited `authz.denied`,
+feature adds is here. It is complete about **doors**, not about the whole path — a drive that
+passes every door can still be refused by the RUNNER, and those strings are §7.9. `DENIED_DRIVE` is the one **403** (audited `authz.denied`,
 reason `governance_profile`, target `runs.drive` — `denyMemberDrive` beside
 `denyMemberRunQuota`); the six `REFUSED_*` are **422s with no audit** (`seedRequestDrive`, run
 create and preflight both). **Nothing here names an unprovisioned `k8s_pvc_static` claim**: no
@@ -831,6 +832,50 @@ One `<dt>`/`<dd>` pair in `IdentityWidget`'s `<dl>`, between Sandbox and Started
 **only when the run row carries a drive** — which it does not in v1 (§2.7). `{mode}` is `MODE_RO`
 / `MODE_RW`. The name is quoted, never mono; the `dd`'s `title` carries the object name for the
 admin who hovers, and nothing else on the run page names it.
+
+### 7.9 `DRIVE_DISPATCH` — refusals and log lines the RUNNER composes
+
+The four refusals in §7.7 are the **doors** — `422`/`403` bodies this feature's own handlers
+write. These are the **dispatch** half: a drive that passed every door and was refused by the
+runner, at the last moment before the sandbox is created. They reach a human as the run's
+`failure_hint`, **verbatim**, so the canon owns them the same way it owns a `writeError` body.
+Same audience rule as §7.7 and for the same reason — the reader is whoever launched the run —
+so **not one of them names a path on the operator's filesystem**: the drive, the directory and
+the reason, and the paths go to the log rows below instead.
+
+| Key | String |
+|---|---|
+| `DISPATCH_SOURCE_REFUSED(name, home)` | user drive: drive "{name}", directory "{home}" cannot be bound on this host: the directory this deployment resolved for it is not one a drive may bind here — wardynd's log names the rule that refused it, and an operator can fix it |
+| `DISPATCH_SIBLING_NAME(name, home)` | user drive: drive "{name}", directory "{home}" resolves to a directory named after somebody else — a home replaced by a link to a sibling would bind another person's directory |
+| `DISPATCH_TARGET_RESERVED(name, home, target)` | docker: denied user drive (drive "{name}", directory "{home}") -> "{target}": a user drive may bind only at the reserved drive path (`/home/agent/drive`) |
+| `DISPATCH_BACKEND_UNSUPPORTED(name, home, backend)` | docker: user drive (drive "{name}", directory "{home}") has backend "{backend}", which this runner cannot mount (…) |
+
+The first two are wrapped by the driver at the call site in the frozen shape `docker: denied
+user drive mount -> "{target}": …`, which is **kept** — the target is the member's own sandbox
+path and is theirs to read. `drive "{name}", directory "{home}"` is one subject rendered by a
+single helper; a mount that carries no drive name degrades to `directory "{home}"` and one that
+carries no drive at all to `this drive` — the fallback for "I cannot name the drive" is never
+"then name the path". The `(…)` on `DISPATCH_BACKEND_UNSUPPORTED` is the runner's own list of
+the backends it does mount. These are **wire** strings, not console copy: nothing here is a
+`{mode}`, a `{size}` or a mono span the console applies, and the drive name is quoted here
+because the string ships with the quotes in it.
+
+**Operator log lines — the other half of the same split.** Frozen here because they are what an
+admin is told to go and read whenever a member-facing string above declines to say more; a
+member never sees one.
+
+| Key | Line |
+|---|---|
+| `LOG_BIND_REFUSED` | wardyn: user drive: this share mount was refused at bind time — attrs `source`, `real_path`, `host_root`, `drive`, `home` |
+| `LOG_NO_RRO` | wardyn: user drive: this runtime does not support recursively read-only binds, so a submount under the share's home could be writable inside the sandbox — attrs `drive`, `home`, `mount_option` = `rro` |
+| `LOG_CEILINGS_OVERLAP` | boot WARN, prefix `wardynd: mount ceilings overlap — ` over three variants: *…both name "{p}": a member can onboard that directory as a workspace and bind the WHOLE share, every other person's home included, without a drive allocation…*; *…contains "{m}", which holds the WARDYN_USER_DRIVE_HOST_ROOTS entry "{d}"…*; *…contains "{m}", which is INSIDE the WARDYN_USER_DRIVE_HOST_ROOTS entry "{d}": member workspaces would be authored inside a share whose directories Wardyn hands out one person at a time…* |
+
+`LOG_BIND_REFUSED` is the operator half of `DISPATCH_SOURCE_REFUSED` and `DISPATCH_SIBLING_NAME`
+— one refusal, two audiences, written in one place so the two cannot drift, and the direction
+they would drift in is disclosure. `LOG_CEILINGS_OVERLAP` is a **warning and not a refusal**:
+the pair it describes may be a posture the operator chose, and a boot refusal would take a
+running deployment down on upgrade. [OPERATIONS.md](../OPERATIONS.md) "User drives on Docker"
+carries all three with the operator recipe.
 
 ## 8. Where to apply (once implemented, out of scope this round)
 
