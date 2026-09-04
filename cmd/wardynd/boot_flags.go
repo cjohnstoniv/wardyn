@@ -192,6 +192,13 @@ type bootFlags struct {
 	// rotate the store on EVERY boot. See rotateAgeKeyMode (rekey.go).
 	rotateAgeKey *string
 
+	// allowMultiInstance is the runtime twin of the Helm chart's
+	// allowMultiReplica: it waives the single-instance boot lock
+	// (claimSingleInstance). Like rotateAgeKey it has NO WARDYN_* env pair — a
+	// stray variable in a compose .env must not silently disable a safety
+	// control, and the chart passes it as an arg where it is set deliberately.
+	allowMultiInstance *bool
+
 	// SSH gateway (C2/C3): sshListen empty = off = no listener, no new surface
 	// (see resolveSSHGateway). sshAdvertise is purely advisory copy for the
 	// run-detail pane's `ssh` command — never read by the gateway itself.
@@ -345,6 +352,9 @@ func parseBootFlags() *bootFlags {
 		// `docker run --rm wardyn/wardynd:local -gen-age-key` can mint a durable
 		// WARDYN_AGE_KEY with no Postgres.
 		genAgeKey: flagBool("gen-age-key", "WARDYN_GEN_AGE_KEY", false, "generate a fresh age X25519 identity (AGE-SECRET-KEY-...) to stdout for WARDYN_AGE_KEY, then exit (no DSN required)"),
+
+		// flag.Bool, NOT flagBool: no env pair by design — see the struct field.
+		allowMultiInstance: flag.Bool("allow-multi-instance", false, "override: start even though another wardynd already holds this database's single-instance lock. wardynd's secret-masking registry is process-local and FAILS OPEN, so a recording uploaded to the instance that did not serve the run's proxy injection is persisted verbatim, live credentials in cleartext. The runtime twin of the chart's allowMultiReplica; normally refused."),
 
 		// flag.String, NOT flagEnv: no env pair by design — see the struct field.
 		// The backquoted word is deliberate: flag.PrintDefaults renders the first

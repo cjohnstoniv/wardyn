@@ -170,6 +170,16 @@ func run() error {
 	}
 	defer pool.Close()
 
+	// One instance per database, enforced at RUNTIME — the Helm chart's
+	// replicas>1 refusal is render-time only. Claimed here, immediately after
+	// the pool exists and before anything registers process-local state, and
+	// held until shutdown. See claimSingleInstance for the ceiling.
+	releaseInstance, err := claimSingleInstance(rootCtx, pool, *f.allowMultiInstance)
+	if err != nil {
+		return err
+	}
+	defer releaseInstance()
+
 	// bootCtx bounds the REST of the boot sequence (signing-key load, optional
 	// features) — unrelated to the connect/migrate split above, which now runs
 	// under its own two budgets rather than sharing this one.
