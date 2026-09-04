@@ -458,7 +458,6 @@ func (a *AuditSpool) readWindow(size int64) ([][]byte, []int64, int64, error) {
 			if _, err := f.ReadAt(buf, a.consumed); err != nil {
 				return nil, nil, 0, err
 			}
-			end = size
 		} else {
 			buf = buf[:i+1]
 		}
@@ -673,6 +672,45 @@ func (a *AuditSpool) TornDrops() int64 {
 	return a.tornDrops.Load()
 }
 
+// drainUntilIdle replays until the spool is empty, a pass makes no progress, or
+// a replay error defers the rest to the next tick. Returns how many events
+// landed. Extracted so StartDrain and its tests drive the SAME loop: the bug
+// below was invisible partly because the tests drove a hand-written copy of it.
+//
+// THE TERMINATION TEST ASKS THE BACKLOG, NOT THE BATCH. It used to be
+// `n < batch`, commented "backlog cleared", and that was true while a pass read
+// the whole file: replaying fewer than a full batch could only mean there was
+// nothing left to replay. Once a pass reads a bounded WINDOW, a short pass far
+// more often means the WINDOW ended, so the old test stopped the tick early and
+// left the rest of a large backlog for the next one — draining a window per
+// interval instead of continuously. Nothing was lost, but recovery slowed to a
+// crawl on exactly the backlogs the paging exists to make fast, which is the
+// opposite of what that change was for.
+//
+// The no-progress guard is what makes this loop safe to run to exhaustion: a
+// pass that cannot consume anything ends the tick rather than spinning inside
+// it.
+func (a *AuditSpool) drainUntilIdle(ctx context.Context, rec audit.Recorder, batch int) (int, error) {
+	total := 0
+	for {
+		before := a.Lines()
+		n, err := a.Drain(ctx, rec, batch)
+		total += n
+		if errors.Is(err, errSpoolLineQuarantined) {
+			// quarantineLine already logged what was moved aside. The head of
+			// the spool advanced, so keep draining this tick instead of making
+			// every line behind it wait an interval per poison line.
+			continue
+		}
+		if err != nil {
+			return total, err
+		}
+		if a.Lines() == 0 || a.Lines() >= before {
+			return total, nil
+		}
+	}
+}
+
 // StartDrain runs Drain on a ticker until ctx is cancelled, replaying spooled
 // events into rec once the store recovers. Each tick drains repeatedly (yielding
 // the lock between batches so Append is not starved) until the backlog clears or a
@@ -685,25 +723,10 @@ func (a *AuditSpool) StartDrain(ctx context.Context, rec audit.Recorder, interva
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			total := 0
-			for {
-				n, err := a.Drain(ctx, rec, batch)
-				total += n
-				if errors.Is(err, errSpoolLineQuarantined) {
-					// quarantineLine already logged what was moved aside. The
-					// head of the spool advanced, so keep draining this tick
-					// instead of making every line behind it wait an interval
-					// per poison line.
-					continue
-				}
-				if err != nil {
-					slog.WarnContext(ctx, "wardynd: audit spool drain deferred (store still failing)",
-						slog.Int("drained", total), slog.Any("err", err))
-					break
-				}
-				if n < batch { // backlog cleared
-					break
-				}
+			total, err := a.drainUntilIdle(ctx, rec, batch)
+			if err != nil {
+				slog.WarnContext(ctx, "wardynd: audit spool drain deferred (store still failing)",
+					slog.Int("drained", total), slog.Any("err", err))
 			}
 			if total > 0 {
 				slog.InfoContext(ctx, "wardynd: drained audit spool into durable store", slog.Int("events", total))

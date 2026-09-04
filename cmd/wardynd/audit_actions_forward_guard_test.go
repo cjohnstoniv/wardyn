@@ -107,9 +107,7 @@ func emittedAuditActions(t *testing.T, root string) []emittedAuditAction {
 				return nil // not this guard's job to police syntax
 			}
 			rel, _ := filepath.Rel(root, path)
-			for _, a := range auditActionsInFile(f, rel) {
-				out = append(out, a)
-			}
+			out = append(out, auditActionsInFile(f, rel)...)
 			return nil
 		})
 		if err != nil {

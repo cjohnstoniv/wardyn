@@ -295,3 +295,173 @@ func TestAuditSpoolQuarantineCountSurvivesARestart(t *testing.T) {
 		t.Errorf("Lines() = %d after a restart, want the %d lines on disk", got, spoolLineCount(t, path))
 	}
 }
+
+// TestAuditSpoolDrainsALineLongerThanTheReadWindow covers readWindow's escape
+// hatch, which had NO test at all — the coverage profile showed zero on every
+// statement of that branch, which is how a vestigial assignment survived in it.
+//
+// A pass reads at most spoolReadWindow bytes and cuts back to the last newline
+// so a line is never split across passes. A single line longer than the whole
+// window has no newline to cut back to, and cutting to zero would mean a pass
+// that consumes nothing — the drain would spin for ever on a spool it can never
+// advance past, and every event behind the oversized line would wait for ever
+// with it. The branch takes the whole remainder instead.
+//
+// The oversized line is placed THIRD, not first, so one drain sequence exercises
+// both paths in order: the first pass cuts at a newline in the ordinary way, and
+// the second meets the line no window can hold.
+func TestAuditSpoolDrainsALineLongerThanTheReadWindow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit-spool.jsonl")
+
+	huge := newTestEvent("egress.deny")
+	blob := bytes.Repeat([]byte("a"), spoolReadWindow+4096)
+	huge.Data = json.RawMessage(`{"blob":"` + string(blob) + `"}`)
+	hugeLine, err := json.Marshal(huge)
+	if err != nil {
+		t.Fatalf("marshal oversized event: %v", err)
+	}
+	// The test's own precondition, asserted rather than assumed: if this line
+	// ever fits inside a window the test silently becomes a second copy of the
+	// ordinary path and proves nothing about the branch it exists for.
+	if int64(len(hugeLine)) <= spoolReadWindow {
+		t.Fatalf("the oversized line is %d bytes against a %d-byte window; this test no longer reaches the branch it pins",
+			len(hugeLine), spoolReadWindow)
+	}
+
+	var file bytes.Buffer
+	want := []types.AuditEvent{newTestEvent("run.kill"), newTestEvent("ssh_key.add"), huge, newTestEvent("credential.mint")}
+	for _, ev := range want {
+		line, merr := json.Marshal(ev)
+		if merr != nil {
+			t.Fatalf("marshal: %v", merr)
+		}
+		file.Write(line)
+		file.WriteByte('\n')
+	}
+	if err := os.WriteFile(path, file.Bytes(), 0o600); err != nil {
+		t.Fatalf("seed spool: %v", err)
+	}
+
+	sp, err := NewAuditSpool(path)
+	if err != nil {
+		t.Fatalf("NewAuditSpool: %v", err)
+	}
+	rec := &fakeRecorder{}
+	ctx := context.Background()
+
+	// FIRST, the fact that broke the caller's contract. One pass replays only
+	// what its window held, so it returns fewer than a full batch while the
+	// backlog is still there. StartDrain used to read "fewer than a batch" as
+	// "backlog cleared" and end the tick here.
+	n, derr := sp.Drain(ctx, rec, 200)
+	if derr != nil {
+		t.Fatalf("first drain pass: %v", derr)
+	}
+	if n == 0 || n >= 200 {
+		t.Fatalf("first pass replayed %d events; the probe needs a pass that is short because its WINDOW ended", n)
+	}
+	if sp.Lines() == 0 {
+		t.Fatal("the first pass cleared the whole spool; this probe no longer reaches a window boundary")
+	}
+
+	// THEN the real loop, the one StartDrain runs, which must go on to exhaust
+	// the spool within this tick rather than leaving it for the next.
+	if _, derr := sp.drainUntilIdle(ctx, rec, 200); derr != nil {
+		t.Fatalf("drainUntilIdle: %v", derr)
+	}
+
+	if rec.count() != len(want) {
+		t.Fatalf("replayed %d events, want %d — an oversized line must be drained, not skipped and not wedged",
+			rec.count(), len(want))
+	}
+	for i, ev := range want {
+		if rec.got[i].ID != ev.ID {
+			t.Errorf("event %d replayed out of order: got %s, want %s (action %q)", i, rec.got[i].ID, ev.ID, ev.Action)
+		}
+	}
+	if lc := spoolLineCount(t, path); lc != 0 {
+		t.Errorf("spool still holds %d lines after draining an oversized one", lc)
+	}
+	if n := sp.Lines(); n != 0 {
+		t.Errorf("backlog gauge is %d after the spool drained, want 0", n)
+	}
+}
+
+// TestAuditSpoolDrainClearsABacklogSpanningManyWindowsInOneTick pins the
+// termination test of the drain loop, which is a different question from
+// whether one pass works.
+//
+// A pass stops at whichever comes first: `batch` events replayed, or the end of
+// its read window. StartDrain used to end the tick on `n < batch`, commented
+// "backlog cleared" — true only while a pass read the WHOLE file, where a short
+// pass could only mean nothing was left. With a bounded window a short pass
+// usually means the window ended, so that test ended the tick with most of the
+// backlog still on disk and drained a window per 30-second interval instead of
+// continuously. Nothing was lost; recovery just stopped being prompt on exactly
+// the backlogs paging exists to make fast.
+//
+// The events are deliberately LARGE so the window, not the batch, is what ends
+// a pass — with small events a window holds far more than a batch and the old
+// test looks correct. That is why the defect survived the rest of this suite.
+func TestAuditSpoolDrainClearsABacklogSpanningManyWindowsInOneTick(t *testing.T) {
+	const (
+		perEvent = 100 << 10 // ~100 KiB each: ~10 per 1 MiB window
+		events   = 30        // ~3 MiB: three windows' worth
+		batch    = 200       // far more than a window can hold, so the WINDOW binds
+	)
+	path := filepath.Join(t.TempDir(), "audit-spool.jsonl")
+
+	var file bytes.Buffer
+	blob := string(bytes.Repeat([]byte("a"), perEvent))
+	for i := 0; i < events; i++ {
+		ev := newTestEvent("egress.deny")
+		ev.Data = json.RawMessage(`{"blob":"` + blob + `"}`)
+		line, err := json.Marshal(ev)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		file.Write(line)
+		file.WriteByte('\n')
+	}
+	if err := os.WriteFile(path, file.Bytes(), 0o600); err != nil {
+		t.Fatalf("seed spool: %v", err)
+	}
+
+	sp, err := NewAuditSpool(path)
+	if err != nil {
+		t.Fatalf("NewAuditSpool: %v", err)
+	}
+	rec := &fakeRecorder{}
+	ctx := context.Background()
+
+	// Precondition, asserted so the probe cannot quietly stop testing what it
+	// claims: one pass must be cut short by its WINDOW, not by the batch.
+	n, err := sp.Drain(ctx, rec, batch)
+	if err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	if n == 0 || n >= batch {
+		t.Fatalf("first pass replayed %d of %d events with batch=%d; the probe needs the WINDOW to be what ends a "+
+			"pass, or it is not testing the condition it exists for", n, events, batch)
+	}
+	if sp.Lines() == 0 {
+		t.Fatalf("one pass cleared all %d events; the backlog no longer spans several windows", events)
+	}
+
+	// One tick must finish the backlog.
+	drained, err := sp.drainUntilIdle(ctx, rec, batch)
+	if err != nil {
+		t.Fatalf("drainUntilIdle: %v", err)
+	}
+	if got := rec.count(); got != events {
+		t.Fatalf("one tick drained %d of %d events (%d in the loop, %d in the first pass) and left %d in the spool — "+
+			"the loop ended on a pass that was short because its window ended, not because the backlog was gone, so "+
+			"the rest waits a whole interval per window", got, events, drained, n, sp.Lines())
+	}
+	if lc := spoolLineCount(t, path); lc != 0 {
+		t.Errorf("spool file still holds %d lines", lc)
+	}
+	if sp.Lines() != 0 {
+		t.Errorf("backlog gauge is %d after a full drain, want 0", sp.Lines())
+	}
+}
