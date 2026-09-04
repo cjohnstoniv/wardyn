@@ -1370,7 +1370,6 @@ func TestUpdateAllocatedUserDriveRefusesASilentRehome(t *testing.T) {
 // X-Wardyn-Truncated header every paged list already sets, and grant_total,
 // which is free because the per-drive counts in the same response sum to it.
 func TestGetUserDrivesBoundsTheAllocationList(t *testing.T) {
-	const seeded = 7
 	// BOTH BRANCHES, because the handler has two and only one of them is
 	// production. driveCRUDStore is not a store.Pager, so it exercises the
 	// in-Go fallback every test double takes; drivePagerStore is, so it
