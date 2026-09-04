@@ -1,7 +1,10 @@
 # Verifying what you pulled
 
-Every Wardyn image is signed, carries an SBOM you can read, and records how it was
-built. This page is how you check that yourself, without trusting this page.
+Every Wardyn **release** image is signed, carries an SBOM you can read, and
+records how it was built. This page is how you check that yourself, without
+trusting this page. Wardyn also publishes a *continuous* lane, on different
+terms — see ["The continuous lane"](#the-continuous-lane) before you verify a
+`:latest` or `:sha-…` tag with anything on this page.
 
 Nothing here needs an account, a token, or a GitHub login.
 
@@ -107,7 +110,9 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "${WARDYN_
 ## 5. Verify the release assets
 
 Each release carries the per-image SBOMs, `THIRD-PARTY-NOTICES.md`, `LICENSE`,
-`NOTICE`, and a signed `SHA256SUMS`:
+`NOTICE`, `install.sh`, the four `wardyn-<os>-<arch>` CLI binaries, and a signed
+`SHA256SUMS` — `release.yml`'s `release-assets` job fails the release unless
+every one of them landed:
 
 ```sh
 gh release download "v${WARDYN_VERSION}" --repo cjohnstoniv/wardyn
@@ -183,6 +188,36 @@ Rather than ask you to take that on trust, it ships as a machine-readable
 [OpenVEX statement](../security/vex/wardyn.openvex.json) (`not_affected` /
 `vulnerable_code_not_present`) that most scanners can consume directly. The full
 reasoning is in [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md).
+
+## The continuous lane
+
+Everything above is about **release** images — the five `vX.Y.Z`-tagged images
+`release.yml` publishes. A second lane publishes on every push to `main`:
+`.github/workflows/publish-image.yml` builds `wardynd` alone and pushes
+`ghcr.io/cjohnstoniv/wardynd:latest` and `:sha-<short-sha>`.
+
+Those tags are **signed but not attested**, and their signature is under a
+different identity:
+
+- **Signed.** The workflow runs `cosign sign --yes` on the pushed digest, keyless.
+- **No SBOM, no provenance.** It runs no `cosign attest` and no
+  `attest-build-provenance` step, so §2 and §3 above have nothing to fetch for
+  these tags — `cosign verify-attestation` finds no attestation, which is the
+  expected answer, not a tampering signal.
+- **A different certificate identity.** The regexp every command on this page
+  uses is pinned to `release.yml@refs/tags/v.*` and structurally cannot match a
+  `main`-push signature. Verify a continuous tag with its own:
+
+  ```sh
+  cosign verify ghcr.io/cjohnstoniv/wardynd:latest \
+    --certificate-identity-regexp '^https://github\.com/cjohnstoniv/wardyn/\.github/workflows/publish-image\.yml@refs/heads/main$' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+  ```
+
+`deploy/desktop/install.sh` defaults to `:latest`, so a desktop install runs
+this lane unless `WARDYN_INSTALL_IMAGE` pins the release digest (its own error
+path prints that command). If you need an SBOM and provenance for what you run,
+run a release tag.
 
 ## If verification fails
 

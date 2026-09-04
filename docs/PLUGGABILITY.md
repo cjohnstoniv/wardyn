@@ -167,9 +167,10 @@ not a second roadmap.
 | eBPF ground-truth | host sensor ingest | none (honest-degraded `/healthz`) | **Tetragon** (enforcement) | Falco / Tracee (ingest-compatible) | — | shipped (ingest seam) |
 
 All recommended-prod candidates are Apache-2.0 / permissive, self-hostable, and
-CNCF-graduated/incubating where available (Kata, SPIRE, OPA, Tetragon, Cilium),
-or LF-governed (OpenBao). None are built in this effort — each is a documented
-row with a seam (or a planned one) and a conformance contract ready to hold it.
+CNCF-graduated/incubating where available (SPIRE, OPA, Tetragon, Cilium),
+OpenInfra-Foundation-governed (Kata Containers), or LF-governed (OpenBao).
+None are built in this effort — each is a documented row with a seam (or a
+planned one) and a conformance contract ready to hold it.
 
 ---
 

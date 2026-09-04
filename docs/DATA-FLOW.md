@@ -19,7 +19,11 @@ and `internal/api/routes.go` has no telemetry endpoint. Every destination
 there is no hardcoded destination that isn't either a customer-supplied
 integration or bundled open-source infrastructure the operator runs
 themselves (compose's local registry/Dex/Postgres, all on the operator's own
-Docker network).
+Docker network). The one *literal* hostname in the daemon's own code is
+Microsoft Graph, in the identity-directory connector (`internal/directory`),
+and it is dialled only when an operator sets `WARDYN_DIRECTORY_PROVIDER` — the
+directory-connector row below, and `docs/OPERATIONS.md`'s "Directory
+autocomplete: the one path where the daemon dials out".
 
 The one telemetry source in the system that is *not* Wardyn's is the agent
 harness's own: Claude Code ships its own Datadog usage telemetry
@@ -34,16 +38,18 @@ Wardyn suppresses it by default inside the sandbox; set
 |---|---|---|---|
 | **`wardyn-proxy`** (the **L2** egress gateway every sandboxed process's traffic transits) | Whatever host the run's policy allowlists — typically an LLM API (`api.anthropic.com`, `api.openai.com`, a Bedrock regional endpoint), a git host, or an operator-declared integration host | The operator, per-policy (`docs/POLICIES.md`) | The model-API and any other allowed egress for the run. This is the one channel the threat model names as an unavoidable data-exit path by design (`threatmodel/THREAT-MODEL.md` §5.1) — the proxy logs it, it does not silently hide it. |
 | **git broker** (`internal/broker`) | `github.com` / a GitHub Enterprise host, or `dev.azure.com` for Azure DevOps | The operator, via the configured SCM integration | Mints short-lived, scope-bound git credentials (installation tokens / PATs) — never a long-lived credential resident in the sandbox. |
-| **OIDC auth** (`internal/auth/oidc`) | The operator's own IdP issuer URL (`WARDYN_OIDC_ISSUER`) — in the bundled Docker Compose dev stack this is a local Dex sidecar the operator runs themselves, not a Wardyn-hosted service | The operator | Human SSO login; discovery + token exchange only. |
+| **OIDC auth** (`internal/auth/oidc`) | The operator's own IdP issuer URL (`WARDYN_OIDC_ISSUER`) — in the bundled Docker Compose dev stack this is a local Dex sidecar the operator runs themselves, not a Wardyn-hosted service | The operator | Human SSO login: OIDC discovery, JWKS, and the token exchange at `/auth/callback`. Group/directory *reads* are a separate opt-in component — the row below. |
 | **Audit sinks** (`internal/audit/sinks`: `webhook.go`, `syslog.go`) | An operator-configured SIEM webhook URL or syslog endpoint (file sink is local-disk-only, no network) | The operator, opt-in per sink (off by default) | Streams the append-only audit log to the operator's own SIEM. Each event carries its hash-chain `prev_hash`/`row_hash` (migration `0047`), so what the SIEM holds off-box is a head hash Wardyn cannot later disown — that comparison, not anything in the database, is what detects a rewritten or truncated trail (`docs/OPERATIONS.md`). Delivery loss on that endpoint being unreachable is a tracked gap, not a claim of guaranteed delivery. |
 | **Agent image pulls** (Docker daemon `docker pull`) | `ghcr.io/cjohnstoniv/agent-*` by default (Wardyn's own published OCI images — public, unauthenticated pulls, no data sent besides the standard registry protocol), or an operator-supplied registry via `WARDYN_AGENT_IMAGES` (`docs/ENV.md`) | Ships with a default; fully overridable by the operator | Pulls the agent runtime container image. No source code, secrets, or run data is part of this pull — it is a one-way image download. |
 | **Upstream corporate proxy** (optional, `docs/OPERATIONS.md`'s "upstream-proxy" section) | A URL the operator pastes in as a secret | The operator | Lets `wardyn-proxy` itself egress through a corporate forward proxy — this is the operator routing Wardyn's own egress through infrastructure *they* control, the reverse direction of a sub-processor relationship. |
+| **Identity-directory connector** (`internal/directory`, off unless `WARDYN_DIRECTORY_PROVIDER=entra`) | `graph.microsoft.com`, `login.microsoftonline.com` — the only literal hostnames in the daemon's own code (`internal/directory/entra.go`) | The operator, by setting `WARDYN_DIRECTORY_PROVIDER` (unset = the whole feature off, `503 directory_unconfigured`, no connector and no read) | Backs the console's "who" autocomplete: reads users and groups (and App Roles where consented) from the operator's OWN Entra tenant so an admin picks a name and Wardyn stores the claim value. **Daemon-side outbound HTTPS**, not sandbox egress and not proxied by the egress sidecar — the same class as the IdP row above. Suggestions are cached in memory for 60s and never persisted; unsetting the var fully retracts the capability. |
 
 Every row above is either (a) a destination the operator explicitly configures
-(an integration, an IdP, a SIEM endpoint, a registry override), or (b) a
-default that ships with the product and does nothing beyond that default's
-stated, narrow purpose (pulling the agent image). None of it is Wardyn
-collecting data *from* the deployment and sending it *to* Wardyn.
+(an integration, an IdP, a SIEM endpoint, a registry override, the directory
+connector), or (b) a default that ships with the product and does nothing
+beyond that default's stated, narrow purpose (pulling the agent image). None
+of it is Wardyn collecting data *from* the deployment and sending it *to*
+Wardyn.
 
 ## Sub-processors are the operator's own choices, not Wardyn's
 

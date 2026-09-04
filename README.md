@@ -69,17 +69,27 @@ API key, no agent. Put the sandbox rules in a small **YAML** (or JSON) policy an
 hand it to one `wardyn run` — interactive or unattended:
 
 ```sh
+cat > sandbox.yaml <<'YAML'
+allowed_domains: []              # the sandbox can reach nothing
+first_use_approval: always_deny  # an off-allowlist host is a hard 403, no human
+min_confinement_class: CC1       # refuse to launch below hardened runc
+auto_stop_after_sec: 900         # reaper backstop
+YAML
+
 wardyn run --agent claude-code --task-mode exec \
   --task 'echo hello from a governed sandbox' \
-  --policy-file examples/policies/sandbox.yaml --wait
+  --policy-file sandbox.yaml --wait
 ```
 
 That runs a plain shell command in a governed sandbox: `--task-mode exec` means
 no agent and no model are involved at all. (`--agent` still names which sandbox
 image to launch — it is an image label, not a statement that an AI runs your
-task.) That [file](examples/policies/sandbox.yaml) is a commented, sealed floor;
-`wardyn policy render -f <file>` checks it. `--image` brings your own base
-([docs/ENVBUILD.md](docs/ENVBUILD.md)); `make compose-down` stops everything.
+task.) The policy is written out here because the one-line install ships no
+repo — from a clone, the same four keys with their comments are
+[`examples/policies/sandbox.yaml`](examples/policies/sandbox.yaml).
+`wardyn policy render -f <file>` checks either. `--image` brings your own base
+([docs/ENVBUILD.md](docs/ENVBUILD.md)). To stop everything:
+`cd ~/.wardyn && docker compose down` (from a clone: `make compose-down`).
 
 **Want an agent to write the code?** *Then* connect a model — optional, and
 equally first-class at the CLI or in the UI:
@@ -116,7 +126,7 @@ built-in demos need no model either — see
 | Policies & confinement | One policy picks the barrier: Fence (runc), Wall (gVisor), Vault (Kata, experimental); a host that can't enforce it refuses. Right-size it — a read-only scan or an indexer does not need what an autonomous agent needs | [POLICIES.md](docs/POLICIES.md) |
 | Model access | Key, subscription or Bedrock injected proxy-side; the sandbox holds an inert sentinel | [TRY-IT.md](docs/TRY-IT.md) |
 | CI / headless | No UI, no human: the governed run's exit code becomes the pipeline's | [CI.md](docs/CI.md) |
-| Audit + attach | Three append-only streams a Postgres trigger won't let you rewrite; attach live from browser or SSH | [SSH.md](docs/SSH.md) |
+| Audit + attach | Three audit streams. The audit log itself is append-only — a Postgres trigger refuses `UPDATE`, `DELETE` and `TRUNCATE` on it. PTY replay is a separate store (upserted per cast, retention-swept), each upload audited. Attach live from browser or SSH | [SSH.md](docs/SSH.md) |
 | UI sandbox gateway | Relay a declared loopback port (editor, dev server) to a browser over its own origin — a per-run origin is the documented production default | [UI-SANDBOXES.md](docs/UI-SANDBOXES.md) |
 
 Everything else — env and policy reference, deployment, sample workspaces — is
@@ -215,10 +225,11 @@ What Wardyn does **not** defend against is published in full
 
 ## Status
 
-**v0.6.0 (pre-alpha)** is the current release, adding capability grants,
-Kubernetes as the base deployment story, `wardyn ssh`, governed UI sandboxes,
-member-owned workspaces and a hash-chained audit log. Two deployment lanes,
-both running real sandboxes, not one inverted into the other:
+Wardyn is **pre-alpha**. The current release is the one the install line above
+pins — the same version `internal/version`'s `Version` and the chart's
+`appVersion` carry — and [CHANGELOG.md](CHANGELOG.md) is what each release
+added. Two deployment lanes, both running real sandboxes, not one inverted into
+the other:
 
 - **`deploy/compose`** — the local 10-minute trial. The only lane that runs on
   a laptop without a real cluster, and the only one with recorded demos

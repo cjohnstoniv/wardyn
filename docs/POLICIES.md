@@ -645,9 +645,13 @@ want and the second is more interruptions than a human sustains — and an opera
 who tires of approving picks `auto` for everything, which is the worst of the
 two. `tool_rules` is the middle.
 
+`tool_approvals` itself is **not** a policy field — it rides the `POST /runs`
+body (`"tool_approvals": "hold"`), which is why it is absent from the spec
+below: `wardyn policy render -f` rejects the whole file with
+`invalid RunPolicySpec: json: unknown field "tool_approvals"` if you paste it in.
+
 ```json
 {
-  "tool_approvals": "hold",
   "tool_rules": [
     { "tool": "Read",     "effect": "allow" },
     { "tool": "Glob",     "effect": "allow" },
@@ -734,4 +738,4 @@ defaults so **every** run is capped even under a policy that sets nothing.
 | `cpu_millis` | `int` | `2000` (2 vCPU) | Milli-CPU cap. |
 | `memory_mib` | `int` | `4096` | Hard memory cap, MiB. |
 | `pids_limit` | `int` | `512` | Max processes/threads — the fork-bomb guard. |
-| `disk_mib` | `int` | (storage-driver default) | Writable-storage cap, MiB. Best-effort: it needs a storage driver that supports a per-container quota, and warns/fails closed when a cap is demanded but unsupported. |
+| `disk_mib` | `int` | (storage-driver default) | Writable-storage cap, MiB. Best-effort: it needs a storage driver that supports a per-container quota. On one that does not, **both substrates warn and the run proceeds UNCAPPED** — Docker's `applyDiskQuota` returns without setting `StorageOpt`, the k8s substrate logs `DiskMiB requested but not enforced`. Nothing refuses a run on that branch; the only fail-closed outcome is the container runtime itself rejecting a quota its backing filesystem cannot take. |

@@ -16,7 +16,13 @@ steps:
   - checkout: self
 
   - bash: |
-      git clone --depth 1 https://github.com/cjohnstoniv/wardyn "$(Agent.TempDirectory)/wardyn"
+      # PINNED, and it must stay pinned — the next step EXECUTES this clone's
+      # scripts/ci-run.sh in a job holding your secrets (the ANTHROPIC_API_KEY
+      # variable below). Without --branch this clones the default branch at job
+      # time. Bump it deliberately, to a release you verified (docs/VERIFY.md);
+      # `git -c advice.detachedHead=false checkout <sha>` after the clone pins
+      # harder still. See docs/CI.md "Pin the wardyn checkout".
+      git clone --depth 1 --branch v0.6.6 https://github.com/cjohnstoniv/wardyn "$(Agent.TempDirectory)/wardyn"
     displayName: Fetch wardyn
 
   - bash: |
