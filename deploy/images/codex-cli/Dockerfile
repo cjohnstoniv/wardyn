@@ -136,11 +136,27 @@ ARG HTTP_PROXY=
 ARG HTTPS_PROXY=
 ARG NO_PROXY=
 ARG CODEX_INSTALL=npm
+# CODEX_VERSION is a PINNED exact version, exactly like CLAUDE_CODE_VERSION in
+# the claude-code sibling and AWS_CLI_VERSION in aws-sso. This image IS
+# published and cosign-signed (.github/workflows/release.yml's agent-codex-cli
+# row), so an unversioned `npm install -g @openai/codex` meant two builds of
+# the SAME git tag shipped different agents — the reproducibility rule its two
+# siblings state verbatim (D3, supply chain), and the one third-party agent CLI
+# in the image set that was exempt from it.
+#
+# The value is the version deploy/images/THIRD-PARTY-TERMS.md already records
+# as the one this image conveys. That table is a LICENCE statement about a
+# specific version, so bump both in the same commit — deliberately, never as a
+# side effect of a rebuild.
+ARG CODEX_VERSION=0.149.1
 # Same CVE-2026-59873 fix as the claude-code sibling: the base image's bundled
-# npm (10.9.8) vendors node-tar 7.5.11; 11.19.0 vendors the patched 7.5.19. No
-# node:24-bookworm-slim digest ships a fixed one yet, and it is npm's internal
-# copy, so upgrading npm is the only reach. Keep in step with that image.
-ARG NPM_VERSION=11.19.0
+# npm (10.9.8) vendors node-tar 7.5.11. 11.19.1 vendors 7.5.22, which is also
+# the floor for CVE-2026-73566 (node-tar <= 7.5.20, patched 7.5.21) — 11.19.0
+# vendors 7.5.19 and so does 12.0.2, so a HIGHER npm is not automatically a
+# fixed one. No node:24-bookworm-slim digest ships a fixed one yet, and it is
+# npm's internal copy, so upgrading npm is the only reach. Keep in step with
+# that image.
+ARG NPM_VERSION=11.19.1
 RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
  && npm install -g "npm@${NPM_VERSION}" \
  && npm --version
@@ -154,7 +170,8 @@ RUN set -eu; \
         if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi; \
         if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi; \
         if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi; \
-        npm install -g @openai/codex; \
+        npm install -g "@openai/codex@$CODEX_VERSION"; \
+        echo "installed codex $CODEX_VERSION via npm"; \
     fi
 
 # The node:24-bookworm-slim base image ships a `node` user at uid=1000.

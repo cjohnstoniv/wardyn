@@ -211,6 +211,24 @@ else
   # WARDYN_INSTALL_IMAGE to the release digest it already pins in the envelope,
   # or to its corporate mirror of it — see docs/DESKTOP.md "The install lane".
   IMG="${WARDYN_INSTALL_IMAGE:-ghcr.io/cjohnstoniv/wardynd:latest}"
+  # Say it at the console, not only in this comment: the comment is read by
+  # whoever edits the installer, and the person who needs this is whoever RUNS
+  # it. Nothing in the repo gated this call site — scripts/check-image-pins.sh
+  # covers Dockerfile FROMs and deploy/compose/*.yaml only, so a `docker run` in
+  # a shell script is outside every pin gate by design.
+  case "${IMG}" in
+    *@sha256:*) ;;
+    *)
+      echo "install.sh: WARNING — ${IMG} is a MUTABLE tag, not a digest." >&2
+      echo "  This step runs that image AS ROOT to mint ${AGE_FILE}, the only" >&2
+      echo "  identity that can decrypt this device's secret store. The default is" >&2
+      echo "  the CONTINUOUS main-tip tag publish-image.yml pushes on every merge;" >&2
+      echo "  it is not cosign-signed, so nothing verifies what gets pulled." >&2
+      echo "  Pin it to the digest wardyn.env already pins for WARDYN_WARDYND_IMAGE:" >&2
+      echo "    sudo WARDYN_INSTALL_IMAGE=ghcr.io/cjohnstoniv/wardynd@sha256:<digest> ./install.sh" >&2
+      echo "  See docs/DESKTOP.md 'The install lane'." >&2
+      ;;
+  esac
   # Refuse LOUDLY on an unreachable daemon rather than let `docker run` fail
   # into the generic "produced no key" below — on Colima and rootless Docker
   # that is the ACTUAL cause, and it is the one message an enroller can act on.

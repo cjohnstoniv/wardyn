@@ -181,10 +181,16 @@ ARG TARGETARCH
 # The node base's bundled npm has shipped a vendored node-tar carrying
 # CVE-2026-59873 (gzip-bomb DoS) — a CRITICAL the trivy gate fails on, and it
 # is npm's INTERNAL copy, so no application-level pin reaches it. Pin npm
-# itself instead of trusting whatever the base bundles: 11.19.0 vendors tar
-# 7.5.19, the patched release. Pinned exactly, and bumped deliberately, like
-# every other version here.
-ARG NPM_VERSION=11.19.0
+# itself instead of trusting whatever the base bundles.
+#
+# 11.19.1 is the FLOOR, and a higher npm is not automatically a safer one:
+# 11.19.0 vendors tar 7.5.19 and 12.0.2 still vendors 7.5.19 — both inside
+# CVE-2026-73566's vulnerable range (node-tar <= 7.5.20, patched 7.5.21).
+# 11.19.1 vendors 7.5.22. Check what a candidate ACTUALLY vendors before
+# bumping (`tar -xzOf npm-<v>.tgz package/node_modules/tar/package.json`),
+# rather than assuming the newest release carries the fix. Pinned exactly, and
+# bumped deliberately, like every other version here.
+ARG NPM_VERSION=11.19.1
 RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
  && npm install -g "npm@${NPM_VERSION}" \
  && npm --version

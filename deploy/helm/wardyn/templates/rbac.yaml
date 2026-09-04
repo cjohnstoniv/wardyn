@@ -59,6 +59,21 @@ render exists to catch). `| default dict` makes an absent block read as off.
 */}}
 {{- $userDrives := .Values.userDrives | default dict -}}
 {{- if or (not (hasKey $rbac "create")) $rbac.create -}}
+{{- if not .Values.k8s.runsNamespace }}
+# ─────────────────────────────────────────────────────────────────────────────
+# WARNING: k8s.runsNamespace is empty, so runs land in the CONTROL-PLANE
+# namespace and the Role below is created there ({{ .Release.Namespace }}).
+# Every verb in it then applies to every OTHER workload that shares this
+# namespace — wardynd can exec into any pod here, delete any pod here, and
+# create or delete any Secret and NetworkPolicy here, not merely the ones it
+# made for a run. RBAC cannot narrow that: a run's object names are derived
+# per-run from its UUID, so `resourceNames` is not available to scope them.
+# The confinement is the NAMESPACE. Set k8s.runsNamespace to a dedicated,
+# pre-existing namespace that holds nothing else and this Role moves there with
+# the runs; the sibling guard above already refuses the OTHER way these verbs
+# leak (binding them to the namespace's default ServiceAccount).
+# ─────────────────────────────────────────────────────────────────────────────
+{{- end }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

@@ -609,6 +609,57 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 		helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.$$k=true 2>&1 | grep -q "single-user desktop settings" || { echo "chart no longer refuses env.$$k on Kubernetes — local mode bypasses public-API authentication entirely, and a shared subscription credential serves one person's Claude subscription to every user's run"; exit 1; }; \
 		helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set extraEnv[0].name=$$k --set extraEnv[0].value=true 2>&1 | grep -q "single-user desktop settings" || { echo "chart no longer refuses $$k via extraEnv — a refusal that only reads .Values.env leaves the documented secret-bearing door wide open"; exit 1; }; \
 	done
+	@# ── R5 W4-deploy: refusals and invariants added in the 0.7 hardening wave ──
+	@# F018/F193: ssh + the UI-sandbox gateway are OPERATOR/HUMAN ports, and
+	@# k8s.runsNamespace defaults to EMPTY — runs land in THIS namespace, so the
+	@# http rule's `podSelector: {}` peer (every pod here) covers every agent pod
+	@# and proxy sidecar. Ingress rules are additive, so those two ports must ride
+	@# a rule whose peer EXCLUDES wardyn.managed pods, or the invariant the
+	@# runsNamespace-differs rule states ("never ssh, never the UI gateway") holds
+	@# only in the configuration almost nobody is in.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set ssh.enabled=true --set ssh.advertiseHost=h.example --set uiSandbox.enabled=true --set uiSandbox.advertiseURL=https://u.example); \
+	for port in ssh ui; do \
+		rule=$$(echo "$$out" | awk -v p="port: $$port" '/^    - from:/{r=""} {r=r"\n"$$0} $$0 ~ p {print r; exit}'); \
+		echo "$$rule" | grep -q 'key: wardyn.managed' || { echo "the NetworkPolicy rule granting $$port does not exclude wardyn.managed pods — with k8s.runsNamespace empty (the default) every agent pod and proxy sidecar in this namespace can reach an operator/human port"; exit 1; }; \
+		echo "$$rule" | grep -q 'operator: DoesNotExist' || { echo "the $$port rule names wardyn.managed but not DoesNotExist — a matchLabels/Exists selector would ADMIT run pods instead of excluding them"; exit 1; }; \
+		echo "$$rule" | grep -q 'podSelector: {}' && { echo "the $$port rule still carries the bare same-namespace podSelector — that peer IS every run pod"; exit 1; } || true; \
+	done; \
+	echo "$$out" | grep -q 'podSelector: {}' || { echo "the http rule lost its same-namespace default peer — a run's proxy sidecar in this namespace could no longer call back for mints/approvals/recording uploads"; exit 1; }
+	@# ...and the same when the operator supplies their own peer list in the
+	@# documented "keep the default peer, add mine" shape (deploy/kind/quickstart.sh,
+	@# the chart README): the bare catch-all is rewritten for the ssh/ui rule, every
+	@# other peer they wrote is passed through untouched.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set ssh.enabled=true --set ssh.advertiseHost=h.example --set-json 'networkPolicy.ingress.from=[{"podSelector":{}},{"ipBlock":{"cidr":"172.18.0.0/16"}}]'); \
+	rule=$$(echo "$$out" | awk '/^    - from:/{r=""} {r=r"\n"$$0} /port: ssh/{print r; exit}'); \
+	echo "$$rule" | grep -q 'operator: DoesNotExist' || { echo "an operator-supplied `podSelector: {}` peer was NOT rewritten on the ssh rule — the documented add-a-peer idiom would hand ssh straight back to every run pod"; exit 1; }; \
+	echo "$$rule" | grep -q '172.18.0.0/16' || { echo "the operator's non-podSelector peers were dropped from the ssh rule instead of passed through"; exit 1; }
+	@# F189: an env/extraEnv WARDYN_AGE_KEY IS an age-identity source. It used to
+	@# be counted by the ephemeral-key check and NOT by the two-sources refusal, so
+	@# naming it beside secrets.ageKeySecretRef rendered both and the plaintext
+	@# literal won on last-defined-wins — the exact silent ranking that refusal exists to forbid.
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeySecretRef.name=wardyn-age --set-string env.WARDYN_AGE_KEY=AGE-SECRET-KEY-1LITERAL 2>&1 | grep -q "pick exactly one age-identity source" || { echo "chart no longer refuses env.WARDYN_AGE_KEY beside secrets.ageKeySecretRef — both render, and the literal silently wins"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set extraEnv[0].name=WARDYN_AGE_KEY --set extraEnv[0].value=AGE-SECRET-KEY-1LITERAL 2>&1 | grep -q "pick exactly one age-identity source" || { echo "chart no longer refuses an extraEnv WARDYN_AGE_KEY beside secrets.ageKeyFromSecret — extraEnv is the DOCUMENTED secret-bearing door, so a refusal that misses it is one keystroke from bypassed"; exit 1; }
+	@# F192: the admin bearer, same shape. A Secret-wired token beside a literal
+	@# renders both, and the literal wins — so rotating the Secret changes nothing.
+	@helm template wardyn ./deploy/helm/wardyn --set secrets.ageKeyFromSecret=true --set auth.adminToken.secretRef.name=wardyn-auth --set-string env.WARDYN_ADMIN_TOKEN=stale-literal 2>&1 | grep -q "pick exactly one admin-token source" || { echo "chart no longer refuses env.WARDYN_ADMIN_TOKEN beside auth.adminToken.secretRef — the pod would authenticate with the literal while the operator believes the Secret is in effect"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set secrets.ageKeyFromSecret=true --set auth.adminToken.value=inline-demo --set extraEnv[0].name=WARDYN_ADMIN_TOKEN --set extraEnv[0].value=stale-literal 2>&1 | grep -q "pick exactly one admin-token source" || { echo "chart no longer refuses an extraEnv WARDYN_ADMIN_TOKEN beside auth.adminToken.value"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set secrets.ageKeyFromSecret=true --set-string env.WARDYN_ADMIN_TOKEN=only-source >/dev/null 2>&1 || { echo "env.WARDYN_ADMIN_TOKEN ALONE no longer renders — it is a documented escape hatch; the refusal is about naming TWO sources, not about forbidding this one"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn 2>&1 | grep -q "plaintext literal in the pod spec" || { echo "the auth refusal no longer warns that env.WARDYN_ADMIN_TOKEN renders the admin bearer verbatim into the Deployment — the chart was RECOMMENDING a plaintext credential in an object anything with `get deploy` can read"; exit 1; }
+	@# F194: with k8s.runsNamespace empty the k8s-runner Role lands in the
+	@# control-plane namespace, where pods/exec + secrets delete + networkpolicies
+	@# delete cover every OTHER workload sharing it. RBAC cannot narrow it (run
+	@# object names are per-run), so the render has to SAY so where a review or a
+	@# GitOps diff sees it.
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true | grep -q "WARNING: k8s.runsNamespace is empty" || { echo "the k8s-runner RBAC no longer warns that an empty k8s.runsNamespace binds pods/exec + secrets delete over the whole control-plane namespace"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.runsNamespace=wardyn-runs | grep -q "WARNING: k8s.runsNamespace is empty" && { echo "the empty-runsNamespace warning renders even with a dedicated runs namespace set — a warning that is always on is a warning nobody reads"; exit 1; } || true
+	@# F195: the chart can state a digest pin at all. image.tag=sha256:... rendered
+	@# `repo:sha256:...` and a digest in image.repository rendered `repo@sha256:...:0.6.6`
+	@# — both unpullable, so the blessed Kubernetes path was the one place in the
+	@# repo that could not express the invariant check-image-pins.sh enforces everywhere else.
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set-string image.digest=sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef | grep -q 'image: "ghcr.io/cjohnstoniv/wardynd@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"' || { echo "image.digest does not render an immutable <repository>@<digest> reference"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set-string image.digest=sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef --set image.tag=0.7.0 | grep -q 'image: "ghcr.io/cjohnstoniv/wardynd:0.7.0@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"' || { echo "an explicit image.tag beside image.digest is silently dropped instead of kept as repo:tag@digest — the digest is still what is pulled, so dropping the tag loses the operator's own label for it"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set-string image.digest=0123456789abcdef 2>&1 | grep -q 'must be a full digest beginning with' || { echo "chart no longer refuses an image.digest with no sha256: prefix — it would render repo@0123..., which no kubelet can pull, and the pod ImagePullBackOffs with nothing else to go on"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true | grep -q 'image: "ghcr.io/cjohnstoniv/wardynd:' || { echo "the default (no image.digest) render no longer pins the tag path — image.digest must be additive, byte-identical when unset"; exit 1; }
 	@# COVERAGE, not correctness: a top-level values.yaml key that neither render
 	@# sets is a passthrough NO assertion above can see — trustedCA and resources
 	@# were exactly that until ci/all-on-values.yaml gained them. Every new key must

@@ -17,6 +17,17 @@ image:
   pullPolicy: IfNotPresent
   # Empty => .Chart.AppVersion.
   tag: ""
+  # OPTIONAL digest pin, e.g. sha256:<64 hex>. Set it and the Deployment pulls
+  # `<repository>@<digest>` — an immutable reference, which is the distribution
+  # invariant scripts/check-image-pins.sh already enforces on every Dockerfile
+  # FROM and every compose image, and which this chart previously had no way to
+  # express (a digest in `tag` renders `repo:sha256:...`, a digest in
+  # `repository` renders `repo@sha256:...:<appVersion>`; both are unpullable, and
+  # the chart now refuses a digest that does not start with "sha256:").
+  # A non-empty `tag` is kept alongside it (`repo:tag@sha256:...`) rather than
+  # dropped — the digest is what is pulled either way. Empty (default) => the
+  # tag behaviour above, byte-identical to before.
+  digest: ""
   # Names of imagePullSecrets for a private registry (list of {name: ...}).
   pullSecrets: []
 
@@ -226,6 +237,19 @@ k8s:
   # NetworkPolicy below (see networkPolicy's template) and its own
   # Role/RoleBinding (templates/rbac.yaml) — it must already exist at install
   # time; the chart does not create it.
+  #
+  # SET IT to a dedicated namespace for anything but a demo. Empty is not just
+  # "the simple default": it puts the k8s-runner Role — pods create/delete/exec,
+  # secrets create/delete, networkpolicies create/delete — in the CONTROL-PLANE
+  # namespace, where those verbs cover every other workload that happens to share
+  # it, not only the pods wardynd created for a run. RBAC cannot narrow that (run
+  # object names are derived per-run, so `resourceNames` cannot enumerate them),
+  # so the namespace IS the blast radius. templates/rbac.yaml renders that warning
+  # into the manifest when this is empty, and it is the same class of leak as the
+  # default-ServiceAccount binding the chart already refuses outright.
+  # Empty also means run pods sit in the same namespace as wardynd, which is why
+  # the control-plane NetworkPolicy withholds ssh/uiSandbox from wardyn.managed
+  # pods (see networkPolicy.ingress.from).
   runsNamespace: ""
   # wardyn-proxy sidecar image (WARDYN_PROXY_IMAGE) — ALSO what the boot-time
   # egress canary launches (with -egress-canary instead of its normal
@@ -330,6 +354,16 @@ networkPolicy:
     # Empty => `podSelector: {}`, i.e. all pods in THIS namespace only; add peers
     # (e.g. your ingress controller's namespace) to widen. Do NOT widen with a
     # bare `namespaceSelector: {}` — that means ALL namespaces, not this one.
+    #
+    # ssh.enabled / uiSandbox.enabled get a SECOND rule from this same list,
+    # with one rewrite: a bare `podSelector: {}` entry (the "keep the default
+    # same-namespace peer and add mine" idiom) becomes "every pod in this
+    # namespace EXCEPT ones labelled wardyn.managed". SSH and the UI-sandbox
+    # gateway are operator/human surfaces, and with k8s.runsNamespace empty (the
+    # default) a run's agent pod and proxy sidecar are in THIS namespace — so
+    # without that rewrite the catch-all peer hands them both ports. Every other
+    # peer shape you write (ipBlock, namespaceSelector, a podSelector with
+    # labels) is passed through untouched to both rules.
     from: []
   egress:
     # Additional NetworkPolicy egress rules (e.g. OIDC issuer, SIEM webhooks).

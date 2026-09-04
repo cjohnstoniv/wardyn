@@ -306,10 +306,32 @@ Five files, all under [`deploy/desktop/`](../deploy/desktop/):
 
 | File | Role |
 |---|---|
-| [`install.sh`](../deploy/desktop/install.sh) | Run once per device, as root (an MDM package's postinstall step, or by hand for a pilot). Creates `/etc/wardyn`, mints `age.key` if one doesn't already exist (`wardynd -gen-age-key`, `0600`, never overwritten), and registers the platform's converge job — [`com.wardyn.daemon.plist`](../deploy/desktop/com.wardyn.daemon.plist) with launchd on macOS, `wardyn.service` + `wardyn.timer` with systemd on Linux — pointed at `wardyn-desktop.sh` wherever the installer bundle sits on disk. `--uninstall` reverses it (keeping `age.key` and the database); `--uninstall --purge` destroys both. |
+| [`install.sh`](../deploy/desktop/install.sh) | Run once per device, as root (an MDM package's postinstall step, or by hand for a pilot). Creates `/etc/wardyn`, mints `age.key` if one doesn't already exist (`wardynd -gen-age-key`, `0600`, never overwritten — see [What the enrolment mint pulls](#what-the-enrolment-mint-pulls), because that one command runs a container image as root), and registers the platform's converge job — [`com.wardyn.daemon.plist`](../deploy/desktop/com.wardyn.daemon.plist) with launchd on macOS, `wardyn.service` + `wardyn.timer` with systemd on Linux — pointed at `wardyn-desktop.sh` wherever the installer bundle sits on disk. `--uninstall` reverses it (keeping `age.key` and the database); `--uninstall --purge` destroys both. |
 | `com.wardyn.daemon.plist` | The launchd `LaunchDaemon`. Runs `wardyn-desktop.sh up` at load and every 5 minutes after (`StartInterval`) — the same "re-assert, don't assume" posture MDM uses for the files it owns, not a foreground process launchd has to keep alive (`wardynd`'s own container carries `restart: unless-stopped`; this job's only work is making sure the *stack* is up). |
 | [`wardyn.service`](../deploy/desktop/wardyn.service) + [`wardyn.timer`](../deploy/desktop/wardyn.timer) | The systemd analogue. `Type=oneshot` driven by the timer — `wardyn-desktop.sh up` converges and exits, exactly as the launchd job does, so a `Restart=` would fight the timer. `OnBootSec` mirrors `RunAtLoad` and `OnUnitActiveSec=300s` mirrors `StartInterval`; the two platforms must not drift, and `scripts/test-desktop-profile.sh` asserts they do not. Logs to journald rather than a file, which is where a Linux operator looks and which rotates on its own. |
 | [`wardyn-desktop.sh`](../deploy/desktop/wardyn-desktop.sh) | What the plist actually runs. Reads the envelope out of `/etc/wardyn`, brings up [`deploy/desktop/docker-compose.yaml`](../deploy/desktop/docker-compose.yaml) (which `include:`s the same [compose stack](../deploy/compose/README.md) every other single-host deployment uses, and exports `WARDYN_MANAGED_DIR=/etc/wardyn` so that stack's own read-only mount gives `WARDYN_DEFAULT_POLICY` sight of the managed policy file), waits for `/healthz`, and idempotently applies `site-config.json` if MDM has delivered one. |
+
+### What the enrolment mint pulls
+
+`wardynd -gen-age-key` is a container command, so minting this device's
+secret-store identity means `install.sh` runs a `wardynd` image **as root**,
+once, before MDM has delivered anything. Which image:
+
+| | |
+|---|---|
+| Default | `ghcr.io/cjohnstoniv/wardynd:latest` |
+| What that tag is | the **continuous, main-tip** half of image publishing — [`publish-image.yml`](../.github/workflows/publish-image.yml) pushes it on every merge to `main`. It is **not** cosign-signed, and it is not a release. |
+| Verification | none. Nothing in this lane checks a signature or a digest, and no repo gate covers it: `scripts/check-image-pins.sh` reads Dockerfile `FROM`s and `deploy/compose/*.yaml`, so a `docker run` in a shell script is outside it by construction. |
+| Override | `WARDYN_INSTALL_IMAGE` (also in [ENV.md](ENV.md)) — `sudo WARDYN_INSTALL_IMAGE=ghcr.io/cjohnstoniv/wardynd@sha256:<digest> ./install.sh` |
+
+**A fleet should pin it**, to the same digest `wardyn.env` already pins for
+`WARDYN_WARDYND_IMAGE` (or a corporate mirror of it). The stack the device then
+*runs* is pinned by digest either way — `wardyn.env.example` says so in its own
+comment, and `wardyn-desktop.sh` reads the pin out of the envelope — so the
+mutable tag is confined to this one enrolment call. That is still a container
+running as root on the device, with the master key for its secret store as the
+output, which is why `install.sh` prints a warning when the ref it is about to
+run carries no `@sha256:`.
 
 Both platforms ship. `install.sh` branches on `uname -s`: the macOS path is
 unchanged, and the Linux path installs the systemd unit + timer. They are

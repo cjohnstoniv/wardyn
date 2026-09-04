@@ -72,6 +72,36 @@ export WARDYN_AGE_KEY
 # process's env (compose interpolation prefers shell env over --env-file) so
 # it is never written into a compose var file on disk.
 if [ -f "${SECRET_FILE}" ]; then
+  # `.` EXECUTES this file, as root, on every timer tick, out of a 0755
+  # directory install.sh creates — so its mode and owner are a trust boundary,
+  # not formatting. docs/DESKTOP.md's MDM file table asserts 0600 for exactly
+  # this reason (the row above it marks wardyn.env 0644 and says "readable is
+  # fine", so the table is distinguishing them on purpose) and nothing enforced
+  # it. Two different failures, two different answers:
+  #
+  #   not owned by us, or group/other WRITABLE  -> whoever can write it chooses
+  #     the shell code this root process runs on the next tick. REFUSE: chmod
+  #     cannot un-run a line that is already in the file.
+  #   merely group/other READABLE -> the SIEM bearer token inside
+  #     WARDYN_AUDIT_SINKS and WARDYN_OIDC_CLIENT_SECRET have been readable by
+  #     every local account. Re-assert 0600 (the same "re-assert, don't assume"
+  #     posture the rest of this launcher runs on, and what scripts/setup.sh
+  #     does for age.key) and say so loudly, because the exposure has already
+  #     happened and those are org-wide credentials worth rotating.
+  #
+  # `stat -c` is GNU/Linux, `stat -f` is BSD/macOS; this tier ships both.
+  _sec_stat="$(stat -c '%a %u' "${SECRET_FILE}" 2>/dev/null || stat -f '%OLp %u' "${SECRET_FILE}" 2>/dev/null || true)"
+  [ -n "${_sec_stat}" ] || die "wardyn-desktop.sh: cannot stat ${SECRET_FILE} — refusing to source a file whose mode and owner are unknown"
+  _sec_perm=$(( 8#${_sec_stat%% *} ))
+  _sec_uid="${_sec_stat##* }"
+  if [ "${_sec_uid}" != "$(id -u)" ] || [ $(( _sec_perm & 0022 )) -ne 0 ]; then
+    die "wardyn-desktop.sh: ${SECRET_FILE} is owned by uid ${_sec_uid} and/or group/world-writable (mode ${_sec_stat%% *}) — this file is SOURCED by this root process, so anyone who can write it runs code as root here. Ship it from MDM as root-owned 0600 (docs/DESKTOP.md 'The MDM file table'), then re-run."
+  fi
+  if [ $(( _sec_perm & 0077 )) -ne 0 ]; then
+    warn "${SECRET_FILE} was mode ${_sec_stat%% *}, not 0600 — its SIEM bearer token and OIDC client secret were readable by every local account on this device. Re-asserting 0600; rotate those credentials and fix the MDM payload's mode."
+    chmod 0600 "${SECRET_FILE}"
+  fi
+  unset _sec_stat _sec_perm _sec_uid
   set -a
   # shellcheck source=/dev/null
   . "${SECRET_FILE}"

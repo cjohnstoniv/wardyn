@@ -127,6 +127,13 @@ serves nothing. templates/secret.yaml turns that into a render-time failure.
 Every escape hatch counts: the chart's two adminToken modes, and an
 operator-supplied token/issuer in .Values.env or .Values.extraEnv — each read
 through wardyn.envValue, so an EMPTY one no longer counts.
+
+"Counts as configured" is NOT "is a good idea": a .Values.env WARDYN_ADMIN_TOKEN
+renders the bearer that gates the whole public API as a plaintext literal in the
+Deployment object. It stays accepted (removing an escape hatch operators depend
+on is its own outage), but templates/secret.yaml no longer recommends it in the
+refusal message, and refuses it OUTRIGHT when it is named alongside
+auth.adminToken.* — where it would silently win on last-defined-wins.
 */}}
 {{- define "wardyn.authConfigured" -}}
 {{- $token := include "wardyn.envValue" (dict "ctx" . "name" "WARDYN_ADMIN_TOKEN") -}}

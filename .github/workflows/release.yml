@@ -167,6 +167,13 @@ jobs:
             dockerfile: deploy/images/base/Dockerfile
             build-args: ""
             float-latest: "true"
+          # build-args stays empty on purpose: the @openai/codex version this
+          # published image ships is pinned by the Dockerfile's own
+          # CODEX_VERSION ARG default (like CLAUDE_CODE_VERSION and
+          # AWS_CLI_VERSION in the sibling images), so the pin lives with the
+          # recipe and a release build cannot silently float past it. Bumping
+          # it here instead would leave every LOCAL `make agent-images-core`
+          # build on a different agent version than the released image.
           - name: agent-codex-cli
             dockerfile: deploy/images/codex-cli/Dockerfile
             build-args: ""

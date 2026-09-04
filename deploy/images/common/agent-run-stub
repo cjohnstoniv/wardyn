@@ -27,7 +27,7 @@ cat >&2 <<'MSG'
 agent-run: this is wardyn/agent-base, which ships no coding agent.
 
     FROM ghcr.io/cjohnstoniv/agent-base:<version>
-    RUN npm install -g <your-agent-cli>
+    RUN npm install -g <your-agent-cli>@<exact version>
     COPY your-agent-run /usr/local/bin/agent-run
 
 Wardyn publishes no image containing a proprietary vendor CLI, so you install it

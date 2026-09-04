@@ -38,6 +38,10 @@ out; guarded, the 0.5 defaults simply carry forward.
 {{- $ssh := .Values.ssh | default dict -}}
 {{- $ui := .Values.uiSandbox | default dict -}}
 {{- $ageRef := .Values.secrets.ageKeySecretRef | default dict -}}
+{{- $digest := .Values.image.digest | default "" -}}
+{{- if and $digest (not (hasPrefix "sha256:" $digest)) -}}
+{{- fail (printf "wardyn: image.digest=%q must be a full digest beginning with \"sha256:\" (sha256: followed by 64 hex characters). It is appended as <repository>@<digest>, so a bare hex string renders `<repository>@<that string>`, which no kubelet can pull — and the pod ImagePullBackOffs with nothing else to go on. Putting a digest in image.tag or image.repository does not work either: they render `repo:sha256:...` and `repo@sha256:...:<appVersion>` respectively, which is why this key exists." $digest) -}}
+{{- end -}}
 {{- if and (gt (int .Values.replicas) 1) (not .Values.allowMultiReplica) -}}
 {{- fail "wardyn: replicas > 1 is refused. wardynd keeps state per-process that a second pod cannot see; the sharpest is the secret-masking registry (internal/secretmask) — an in-memory, process-local map that FAILS OPEN. Secrets are registered on whichever replica served the run's proxy injection; a session recording uploaded to any other replica finds an empty snapshot and is persisted VERBATIM, live credentials in cleartext, with a `success` audit event. The same holds for the live-attach cast. Run one replica (docs/OPERATIONS.md, \"One replica, by construction\"); set allowMultiReplica=true to render anyway and accept that." -}}
 {{- end -}}
@@ -106,7 +110,20 @@ spec:
       {{- end }}
       containers:
         - name: wardynd
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          # image.digest, when set, makes this an IMMUTABLE reference. It is the
+          # distribution invariant scripts/check-image-pins.sh enforces on every
+          # Dockerfile FROM and every compose image — "a floating tag lets an
+          # attacker who controls the upstream tag swap the image contents" —
+          # and until this key existed the blessed Kubernetes path was the one
+          # place in the repo that could not state it: image.tag=sha256:... renders
+          # `repo:sha256:...` and a digest in image.repository renders
+          # `repo@sha256:...:<appVersion>`, both unpullable references.
+          # A non-empty image.tag is KEPT beside the digest (`repo:tag@sha256:...`,
+          # a legal reference in which the digest is what actually gets pulled)
+          # rather than silently dropped; an EMPTY tag does not fall back to
+          # .Chart.AppVersion here, because pinning a tag the operator never asked
+          # for next to their digest would be inventing a second claim.
+          image: "{{ .Values.image.repository }}{{ if $digest }}{{ with .Values.image.tag }}:{{ . }}{{ end }}@{{ $digest }}{{ else }}:{{ .Values.image.tag | default .Chart.AppVersion }}{{ end }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - -listen=:{{ .Values.service.port }}

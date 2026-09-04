@@ -218,11 +218,14 @@ services:
       # bridge gateway, not loopback — trust the forwarder here. This is safe ONLY
       # because of that 127.0.0.1 publish (a LAN peer cannot reach the port at all);
       # the DNS-rebinding Host guard still applies. Never set this on a directly-bound
-      # host-mode wardynd. Residual (defense-in-depth): with this on, other containers
-      # ON wardyn-internal (postgres, dex, a run's proxy sidecar) can also reach the
-      # no-auth API — agents are NOT on this network, so this needs an already-
-      # compromised in-network container. Follow-up hardening: accept only a trusted
-      # gateway CIDR instead of any non-loopback peer.
+      # host-mode wardynd. Residual (defense-in-depth): with this on, EVERY member of
+      # wardyn-internal can also reach the no-auth API. The membership is enumerated
+      # ONCE, at this file's `networks:` block — it is wider than "postgres and dex",
+      # and it includes `registry`, which is multi-homed onto the untrusted
+      # wardyn-envbuild build bridge, so an envbuild container that compromises the
+      # registry is one hop from the no-auth API. Agents are NOT on this network, so
+      # this still needs an already-compromised in-network container. Follow-up
+      # hardening: accept only a trusted gateway CIDR instead of any non-loopback peer.
       WARDYN_LOCAL_TRUST_FORWARDER: "${WARDYN_LOCAL_TRUST_FORWARDER:-true}"
       WARDYN_RUNNER: "docker"
       # Mirrors the volumes-side WARDYN_WORKSPACES_ROOT mapping below, so wardynd
@@ -796,9 +799,17 @@ networks:
     # control-plane network. Default wardyn-internal (single-tenant, unchanged).
     # MUST match wardynd's WARDYN_INTERNAL_NETWORK (both derive from WARDYN_NS) so
     # the docker runner connects the proxy sidecar to the right network.
-    # postgres, dex, and wardynd (the admin API) live here — see wardyn-envbuild
-    # below for why the untrusted envbuild build container is deliberately NOT
-    # a member.
+    # MEMBERSHIP — the canonical list. Every other trust-boundary comment in
+    # this file points HERE instead of keeping its own copy: the two copies that
+    # did keep one both drifted, and each named a strictly SMALLER set than the
+    # file actually joins, which is the direction that misleads.
+    #   postgres, dex, wardynd (the admin API), wardyn-tetragon-ingest, and
+    #   `registry` — which is ALSO on the wardyn-envbuild bridge below, making it
+    #   the ONE member with a foot on the untrusted-build network.
+    #   Plus, at runtime, each run's proxy sidecar: the docker runner joins it to
+    #   this network by name (wardynd's WARDYN_INTERNAL_NETWORK).
+    # NOT a member: the untrusted envbuild BUILD container — see wardyn-envbuild
+    # below for why, and for how it still reaches registry:5000 to push.
     name: ${WARDYN_NS:-wardyn}-internal
     driver: bridge
   wardyn-envbuild:
