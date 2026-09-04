@@ -323,10 +323,20 @@ func subscriptionInjectPosture(runnerTarget string, oidcConfigured, localMode, a
 // one posture with two scopes and share every rule: parsed at BOOT so a
 // malformed value fails closed here instead of at somebody's first onboarding
 // or first run; unset means the narrow answer (a member mounts no host
-// directory; no host_path drive may be registered at all); and a root at "/" or
-// the daemon's own $HOME is permitted but WARNED about — refusing would be
-// safer, warning is what the surrounding boot code already does for a posture
-// the operator may have chosen deliberately.
+// directory; no host_path drive may be registered at all); and a root at "/",
+// the daemon's own $HOME, or (for the drive list) anything under a denied bind
+// prefix is permitted but WARNED about — refusing would be safer, warning is
+// what the surrounding boot code already does for a posture the operator may
+// have chosen deliberately.
+//
+// Each warning is logged VERBATIM behind a neutral prefix, because those cases
+// are warned about for OPPOSITE reasons and only the parser knows which is
+// which: $HOME is far too WIDE, while "/" and a denied-prefix root are DEAD —
+// they match NOTHING and refuse every drive (see the three-case doc on
+// runner.ParseUserDriveHostRoots). Prefixing every line "dangerously wide"
+// re-merged exactly what those parsers keep in separate sentences, and sent an
+// operator hunting the drive it wrongly allowed instead of the drive it
+// silently refused.
 //
 // The drive ceiling is the same rule ONE LEVEL UP: a drive's host_root is
 // authored in the DATABASE by an admin and its per-person subdirectories are
@@ -339,14 +349,14 @@ func parseMountCeilings(f *bootFlags) (runner.MemberMountPolicy, []string, error
 		return runner.MemberMountPolicy{}, nil, err
 	}
 	for _, warn := range memberWarns {
-		slog.Warn("wardynd: member workspace roots are dangerously wide — " + warn)
+		slog.Warn("wardynd: member workspace roots — " + warn)
 	}
 	driveHostRoots, driveWarns, err := runner.ParseUserDriveHostRoots(*f.userDriveHostRoots)
 	if err != nil {
 		return runner.MemberMountPolicy{}, nil, err
 	}
 	for _, warn := range driveWarns {
-		slog.Warn("wardynd: user drive host roots are dangerously wide — " + warn)
+		slog.Warn("wardynd: user drive host roots — " + warn)
 	}
 	return memberMounts, driveHostRoots, nil
 }

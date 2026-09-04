@@ -1859,3 +1859,116 @@ func TestLogsCmd_FollowDrainsAuditsAfterTerminal(t *testing.T) {
 		t.Errorf("logs output = %q, want the completion line written after the state flip", out)
 	}
 }
+
+// cappedAuditServer models what the REAL /api/v1/audit does and waitServer does
+// not: a per-run read is capped (internal/api/audit.go's auditPerRunDefaultLimit,
+// 1000) and X-Wardyn-Truncated says so, while ?action_prefix= / ?outcome= are
+// applied server-side BEFORE that cap. `total` events are generated, the
+// interesting one is appended LAST (per-run order is seq ASC, so the terminal
+// run.complete is the newest), and an unfiltered first page therefore cannot
+// reach it.
+func cappedAuditServer(t *testing.T, runID uuid.UUID, states []types.RunState, total int, last types.AuditEvent) *httptest.Server {
+	t.Helper()
+	const cap = 1000
+	all := make([]types.AuditEvent, 0, total+1)
+	for i := 0; i < total; i++ {
+		all = append(all, types.AuditEvent{Action: "egress.decision", Outcome: "success", Data: json.RawMessage(`{}`)})
+	}
+	all = append(all, last)
+
+	var mu sync.Mutex
+	polls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/runs":
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, State: types.RunPending})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/runs/"+runID.String():
+			mu.Lock()
+			i := polls
+			if i >= len(states) {
+				i = len(states) - 1
+			}
+			polls++
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, State: states[i]})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/audit":
+			q := r.URL.Query()
+			kept := make([]types.AuditEvent, 0, len(all))
+			for _, e := range all {
+				if p := q.Get("action_prefix"); p != "" && !strings.HasPrefix(e.Action, p) {
+					continue
+				}
+				if o := q.Get("outcome"); o != "" && e.Outcome != o {
+					continue
+				}
+				kept = append(kept, e)
+			}
+			limit := cap
+			if v := q.Get("limit"); v != "" {
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					limit = n
+				}
+			}
+			off := 0
+			if v := q.Get("offset"); v != "" {
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					off = n
+				}
+			}
+			if off > len(kept) {
+				off = len(kept)
+			}
+			end := off + limit
+			if end > len(kept) {
+				end = len(kept)
+			}
+			if end < len(kept) {
+				w.Header().Set("X-Wardyn-Truncated", "true")
+			}
+			_ = json.NewEncoder(w).Encode(kept[off:end])
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestRunCmd_WaitExitCodeSurvivesACappedAuditTrail pins docs/CI.md's exit
+// taxonomy against a LONG trail: `run --wait` must report the agent's own exit
+// code, not the "missing/unreadable" fallback of 1, when run.complete sits past
+// the server's per-run page cap. agentExitCode read the trail unfiltered, so on
+// a chatty run (an egress-heavy agent clears 1000 events easily) it never saw
+// the completion event and every FAILED run reported exit 1.
+func TestRunCmd_WaitExitCodeSurvivesACappedAuditTrail(t *testing.T) {
+	setWaitPollInterval(t, time.Millisecond)
+	runID := uuid.New()
+	srv := cappedAuditServer(t, runID, []types.RunState{types.RunRunning, types.RunFailed}, 1200,
+		types.AuditEvent{Action: "run.complete", Outcome: "failure", Data: json.RawMessage(`{"exit_code":42,"state":"FAILED"}`)})
+
+	err := execCmd(t, "run", "--url", srv.URL, "--token", "tok", "--agent", "claude-code", "--wait")
+	var ee *exitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("err = %v, want *exitError", err)
+	}
+	if ee.code != 42 {
+		t.Errorf("exit code = %d, want the agent's real exit code 42 — run.complete sat past the audit page cap", ee.code)
+	}
+}
+
+// The same cap hides the FAILURE REASON: runFailureReason read the trail
+// unfiltered too, so the dispatch error that explains an opaque "FAILED" was
+// unreachable on any run with more than a page of events.
+func TestRunFailureReason_SurvivesACappedAuditTrail(t *testing.T) {
+	runID := uuid.New()
+	srv := cappedAuditServer(t, runID, []types.RunState{types.RunFailed}, 1200,
+		types.AuditEvent{Action: "run.dispatch", Outcome: "failure", Data: json.RawMessage(`{"error":"pull ghcr.io/x/agent-oracle:latest: not found"}`)})
+
+	got := runFailureReason(t.Context(), sdk.New(srv.URL, "tok"), runID)
+	if want := "run.dispatch: pull ghcr.io/x/agent-oracle:latest: not found"; got != want {
+		t.Errorf("runFailureReason = %q, want %q — the failure event sat past the audit page cap", got, want)
+	}
+}

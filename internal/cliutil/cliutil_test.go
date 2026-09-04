@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"flag"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -420,5 +421,71 @@ func TestSplitCSV(t *testing.T) {
 				break
 			}
 		}
+	}
+}
+
+// ScrubChildEnv is the named denylist every host-exec'd third-party CLI child
+// inherits its environment through, and it had no test at all: replacing its
+// filter with a pass-through left the ENTIRE tagless tree green, so the
+// difference between "a resident `claude` authenticates with the subscription
+// session" and "it is handed the operator's ANTHROPIC_API_KEY, the
+// secret-store MASTER key and the API bearer" was not pinned anywhere.
+//
+// The doc makes three promises and this asserts all three: the named secrets
+// go, the WARDYN_ prefix takes every future one with it, and the proxy/CA/AWS
+// variables a corp-network or Bedrock child legitimately needs survive.
+func TestScrubChildEnv(t *testing.T) {
+	in := []string{
+		"ANTHROPIC_API_KEY=sk-ant-secret",
+		"WARDYN_AGE_KEY=AGE-SECRET-KEY-1master",
+		"WARDYN_ADMIN_TOKEN=bearer",
+		"WARDYN_PG_DSN=postgres://u:p@h/db",
+		"WARDYN_SOME_FUTURE_SECRET=x", // the prefix covers what no allowlist could
+		"HTTPS_PROXY=http://proxy.corp:3128",
+		"NO_PROXY=localhost,127.0.0.1",
+		"NODE_EXTRA_CA_CERTS=/etc/ssl/corp.pem",
+		"AWS_REGION=us-east-1",
+		"PATH=/usr/bin",
+		// Not a WARDYN_ variable, merely one that mentions it.
+		"MY_WARDYN_URL=http://localhost:8080",
+	}
+	before := append([]string(nil), in...)
+
+	got := ScrubChildEnv(in)
+	kept := map[string]bool{}
+	for _, kv := range got {
+		kept[kv] = true
+	}
+
+	for _, want := range []string{
+		"HTTPS_PROXY=http://proxy.corp:3128",
+		"NO_PROXY=localhost,127.0.0.1",
+		"NODE_EXTRA_CA_CERTS=/etc/ssl/corp.pem",
+		"AWS_REGION=us-east-1",
+		"PATH=/usr/bin",
+		"MY_WARDYN_URL=http://localhost:8080",
+	} {
+		if !kept[want] {
+			t.Errorf("ScrubChildEnv dropped %q — these children are resident operator CLIs and need the proxy/CA/AWS environment the operator's shell carries", want)
+		}
+	}
+	for _, gone := range []string{
+		"ANTHROPIC_API_KEY=sk-ant-secret",
+		"WARDYN_AGE_KEY=AGE-SECRET-KEY-1master",
+		"WARDYN_ADMIN_TOKEN=bearer",
+		"WARDYN_PG_DSN=postgres://u:p@h/db",
+		"WARDYN_SOME_FUTURE_SECRET=x",
+	} {
+		if kept[gone] {
+			t.Errorf("ScrubChildEnv passed %q through to a third-party CLI child", gone)
+		}
+	}
+	if len(got) != 6 {
+		t.Errorf("ScrubChildEnv returned %d variables (%v), want the 6 non-denied ones", len(got), got)
+	}
+	// The doc promises the input is not mutated: the caller's own os.Environ()
+	// slice is frequently reused for a second child.
+	if !slices.Equal(in, before) {
+		t.Errorf("ScrubChildEnv mutated its input: %v, want %v", in, before)
 	}
 }

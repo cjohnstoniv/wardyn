@@ -27,8 +27,16 @@ func TestUpShLocalModeProbeSkipsUnderOIDC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read scripts/up.sh: %v", err)
 	}
-	src := string(b)
+	if problem := oidcProbeSkipProblem(string(b)); problem != "" {
+		t.Fatal("scripts/up.sh: " + problem)
+	}
+}
 
+// oidcProbeSkipProblem returns "" when src gates the /api/v1/me probe behind a
+// WARDYN_OIDC_ISSUER check AND puts the probe in that check's NEGATIVE branch;
+// otherwise it names what is wrong. Pure so the fixture counterfactual below
+// can drive it over a branch-swapped script without touching up.sh.
+func oidcProbeSkipProblem(src string) string {
 	// Anchor on the actual probe invocation, not the surrounding prose — a plain
 	// "/api/v1/me" match would also hit the block's own comment explaining the
 	// probe, which sits BEFORE the guard this test requires. The URL itself now
@@ -37,18 +45,16 @@ func TestUpShLocalModeProbeSkipsUnderOIDC(t *testing.T) {
 	probe := regexp.MustCompile(`wardynd_probe "\$\{ENV_FILE\}" /api/v1/me`)
 	loc := probe.FindStringIndex(src)
 	if loc == nil {
-		t.Fatal(`scripts/up.sh no longer probes /api/v1/me via wardynd_probe — update this guard if the local-mode no-auth smoke moved or was removed`)
+		return "no longer probes /api/v1/me via wardynd_probe — update this guard if the local-mode no-auth smoke moved or was removed"
 	}
 
-	// The nearest preceding OIDC-issuer guard must be an `if` (skip path), not
-	// merely present somewhere earlier in the file — else the probe still runs
-	// unconditionally under SSO.
 	guard := regexp.MustCompile(`if \[ -n "\$\(env_get "\$\{ENV_FILE\}" WARDYN_OIDC_ISSUER\)" \]; then`)
 	guardLoc := guard.FindAllStringIndex(src, -1)
 	if len(guardLoc) == 0 {
-		t.Fatal(`scripts/up.sh: no "WARDYN_OIDC_ISSUER is set" if-guard found — the /api/v1/me probe must be skipped under SSO/OIDC (bug-ops-2)`)
+		return `no "WARDYN_OIDC_ISSUER is set" if-guard found — the /api/v1/me probe must be skipped under SSO/OIDC (bug-ops-2)`
 	}
-	guarded := false
+	fiRe := regexp.MustCompile(`(?m)^\s*fi\s*$`)
+	elseRe := regexp.MustCompile(`(?m)^\s*else\s*$`)
 	for _, g := range guardLoc {
 		// The guard must open BEFORE the probe and the probe must be the thing
 		// it's guarding, i.e. no unrelated `fi` closes the guard first.
@@ -56,13 +62,66 @@ func TestUpShLocalModeProbeSkipsUnderOIDC(t *testing.T) {
 			continue
 		}
 		between := src[g[1]:loc[0]]
-		if !regexp.MustCompile(`(?m)^\s*fi\s*$`).MatchString(between) {
-			guarded = true
-			break
+		if fiRe.MatchString(between) {
+			continue
 		}
+		// And the probe must sit in the guard's NEGATIVE branch. Without this,
+		// `if OIDC-is-set; then <probe> else <skip> fi` — the exact INVERSION of
+		// the fix — satisfied the test: it has no `fi` in between either, so
+		// "there is a guard above it" was the only thing being asserted.
+		if !elseRe.MatchString(between) {
+			return "the /api/v1/me local-mode no-auth probe runs in the THEN branch of the WARDYN_OIDC_ISSUER guard — it must run in the else branch, i.e. only when OIDC is NOT set (bug-ops-2)"
+		}
+		return ""
 	}
-	if !guarded {
-		t.Fatal("scripts/up.sh: the /api/v1/me local-mode no-auth probe runs unguarded under WARDYN_OIDC_ISSUER (SSO) — it must be skipped (bug-ops-2)")
+	return "the /api/v1/me local-mode no-auth probe runs unguarded under WARDYN_OIDC_ISSUER (SSO) — it must be skipped (bug-ops-2)"
+}
+
+// TestUpShOIDCProbeMatcher_RejectsAnInvertedGuard is the counterfactual the
+// guard above could not make about itself: swapping up.sh's then/else so the
+// probe runs ONLY under SSO — the precise inversion of the bug-ops-2 fix — left
+// the old matcher green, because "no `fi` between the guard and the probe" is
+// true of BOTH branches of one if/else.
+func TestUpShOIDCProbeMatcher_RejectsAnInvertedGuard(t *testing.T) {
+	const probeLine = `    _me_code=$(wardynd_probe "${ENV_FILE}" /api/v1/me | tail -n1)`
+	const guardLine = `  if [ -n "$(env_get "${ENV_FILE}" WARDYN_OIDC_ISSUER)" ]; then`
+
+	for _, tc := range []struct {
+		name    string
+		src     string
+		wantErr bool
+	}{
+		{
+			name: "correct: probe in the else branch",
+			src: guardLine + "\n" +
+				`    log "Local-mode no-auth gate: skipped"` + "\n  else\n" + probeLine + "\n  fi\n",
+		},
+		{
+			name: "inverted: probe in the then branch",
+			src: guardLine + "\n" + probeLine + "\n  else\n" +
+				`    log "Local-mode no-auth gate: skipped"` + "\n  fi\n",
+			wantErr: true,
+		},
+		{
+			name:    "unguarded: no OIDC check at all",
+			src:     probeLine + "\n",
+			wantErr: true,
+		},
+		{
+			name:    "guard closed before the probe",
+			src:     guardLine + "\n    log \"x\"\n  fi\n" + probeLine + "\n",
+			wantErr: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			problem := oidcProbeSkipProblem(tc.src)
+			if tc.wantErr && problem == "" {
+				t.Error("matcher accepted a script that does NOT skip the probe under SSO")
+			}
+			if !tc.wantErr && problem != "" {
+				t.Errorf("matcher rejected the correct shape: %s", problem)
+			}
+		})
 	}
 }
 

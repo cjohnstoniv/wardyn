@@ -168,7 +168,7 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source strin
 // driveHostRoots is the boot-parsed WARDYN_USER_DRIVE_HOST_ROOTS ceiling
 // (parseMountCeilings), passed in rather than re-parsed here so the substrate's
 // bind-time check and internal/api's authoring-time check are literally the
-// same slice — and so the "dangerously wide root" warning is emitted once.
+// same slice — and so the ceiling's boot warning is emitted once.
 //
 // The one exception to "the target IS the resolved substrate" is
 // -runner-target (WARDYN_RUNNER_TARGET) with no runner configured: see the

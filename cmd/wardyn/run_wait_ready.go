@@ -120,7 +120,17 @@ func waitForRunReady(ctx context.Context, c *sdk.Client, runID uuid.UUID, timeou
 					lastFilesErr = nil
 					res.Workspace.VCS = files.VCS
 					res.Workspace.Path = files.Path
-					if files.VCS == "git" || (!wantGit && files.VCS != "unknown") {
+					// vcs:"unknown" is not "not yet": the exec RAN (so the
+					// sandbox is up) and Path names the directory it settled
+					// on, which is the whole of what a caller who did not ask
+					// for git needs. Waiting cannot improve it, so treating it
+					// as un-ready spent the full --timeout and exited 124 on a
+					// sandbox an editor could already open. With wantGit it
+					// still waits: "unknown" is git confirming a work tree and
+					// a later git command failing (runFilesScript exits 3 —
+					// vcs:"none" — when git is missing outright), the shape a
+					// clone still landing has.
+					if files.VCS == "git" || !wantGit {
 						fmt.Fprintf(os.Stderr, "run %s ready: workspace %s (%s)\n", runID, files.Path, files.VCS)
 						return res, nil
 					}
@@ -147,21 +157,27 @@ func waitForRunReady(ctx context.Context, c *sdk.Client, runID uuid.UUID, timeou
 }
 
 // filesErrIsPermanent reports whether a RunFiles error cannot be fixed by
-// waiting: 501 (the runner cannot exec into a sandbox at all) and any 4xx
-// except 409 (no sandbox YET). Everything else — network blips, 5xx — is
-// treated as transient.
+// waiting: 501 (the runner cannot exec into a sandbox at all), a 3xx (an
+// interposed proxy or a misrouted --url — never a sandbox that is still coming
+// up), and any 4xx except the four that mean "ask again later". Everything
+// else — network blips, 5xx — is treated as transient.
+//
+// Those four are 409 (no sandbox YET, handleRunFiles' empty-SandboxRef arm)
+// plus 408, 425 and 429. 429 is one wardynd itself sends (internal/api/audit.go)
+// and the one any ingress rate limiter in front of it sends; 408 and 425 are
+// the other two an ingress emits for a request it never refused on its merits.
+// Classed permanent, a single one of them aborted `run wait-ready` outright on
+// a sandbox that was coming up fine.
 func filesErrIsPermanent(err error) bool {
 	var apiErr *sdk.APIError
 	if !errors.As(err, &apiErr) {
 		return false
 	}
-	switch {
-	case apiErr.Status == http.StatusConflict:
+	switch apiErr.Status {
+	case http.StatusConflict, http.StatusRequestTimeout, http.StatusTooEarly, http.StatusTooManyRequests:
 		return false
-	case apiErr.Status == http.StatusNotImplemented:
-		return true
-	case apiErr.Status >= 400 && apiErr.Status < 500:
+	case http.StatusNotImplemented:
 		return true
 	}
-	return false
+	return apiErr.Status >= 300 && apiErr.Status < 500
 }

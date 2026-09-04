@@ -19,6 +19,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -26,13 +27,97 @@ import (
 	"testing"
 )
 
-func readInstallSh(t *testing.T) string {
+func rawInstallSh(t *testing.T) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(repoRoot(t), "install.sh"))
 	if err != nil {
 		t.Fatalf("read install.sh: %v", err)
 	}
 	return string(b)
+}
+
+// installShCode is install.sh with its full-line comments blanked out. EVERY
+// guard below asserts about CODE, and must therefore read this rather than the
+// raw text.
+//
+// install.sh documents its own trust decisions at length, quoting the very
+// commands it runs — "under `umask 077` both were dead code", "`shasum -a 256`
+// on a mac-shaped PATH". A plain substring search was satisfied by that PROSE:
+// deleting the executable `umask 077` and the executable `shasum -a 256`
+// fallback each left its guard GREEN while scripts/test-install-sh-trust.sh
+// went red, which is the whole failure mode these guards exist to prevent.
+// Lines are blanked rather than dropped so offsets and (?m) anchors keep
+// pointing at the same places.
+func installShCode(raw string) string {
+	var b strings.Builder
+	b.Grow(len(raw))
+	for _, line := range strings.Split(raw, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			b.WriteByte('\n')
+			continue
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func readInstallSh(t *testing.T) string {
+	t.Helper()
+	return installShCode(rawInstallSh(t))
+}
+
+// adminTokenComplaints returns every way `code` fails to close H1/H2 — the two
+// independent ways the admin-token mint used to yield a value that is not a
+// secret. Pure so the counterfactual below can feed it a mutated script.
+func adminTokenComplaints(code string) []string {
+	var out []string
+	tokLine := regexp.MustCompile(`(?m)^\s*TOKEN=\$\(.*$`).FindString(code)
+	if tokLine == "" {
+		return []string{"install.sh no longer derives TOKEN=$(...) — update this guard to the new derivation"}
+	}
+	if strings.Contains(tokLine, "sha256sum") && !strings.Contains(tokLine, "shasum") {
+		out = append(out, "install.sh's admin-token line depends on `sha256sum` with no `shasum` fallback (sha256_hex, which install_cli's SHA256SUMS check uses, has one): on macOS TOKEN is empty and compose falls through to demo-admin-token\n  "+strings.TrimSpace(tokLine))
+	}
+	// H1: no hashing binary at all on a mac. sha256_hex's else-branch is the
+	// ONLY line that runs there, so it is pinned as a COMMAND — until T2 of
+	// scripts/test-install-sh-trust.sh was given a real mac-shaped PATH nothing
+	// executed it, and the branch could have been deleted with every gate green.
+	if !regexp.MustCompile(`(?m)^\s*shasum -a 256\b`).MatchString(code) {
+		out = append(out, "install.sh has no `shasum -a 256` fallback anywhere: macOS ships no GNU coreutils, so every hashing site — the admin-token mint and install_cli's SHA256SUMS check — silently produces nothing there")
+	}
+	// H2: the MINT, not the hash. This is the assertion that closes it, and it
+	// has to name the raw `docker run … -gen-age-key` output: TOKEN is a sha256
+	// OUTPUT and is never empty (sha256("") is a 64-hex constant), so a
+	// non-empty check on TOKEN cannot detect a failed mint — it was green with
+	// mint_age_key's own guard deleted and sha256("")[0:48] installed as this
+	// box's admin credential.
+	if !regexp.MustCompile(`\[\s+-n\s+"\$\{?minted\}?"\s+\]\s*\|\|\s*die`).MatchString(code) {
+		out = append(out, "install.sh's mint_age_key has no `[ -n \"$minted\" ] || die` guard on the raw `docker run … -gen-age-key` output: POSIX sh has no pipefail, so `set -e` cannot see the docker failure, and the empty stdin it leaves is hashed into sha256(\"\")[0:48] — a public constant — and installed as the admin token")
+	}
+	// The TOKEN non-empty guard is a SEPARATE, weaker check: it catches "no
+	// hashing binary produced anything at all", not a failed mint.
+	if !regexp.MustCompile(`\[\s+-n\s+"\$\{?TOKEN\}?"\s+\]\s*\|\|\s*die`).MatchString(code) {
+		out = append(out, "install.sh has no `[ -n \"$TOKEN\" ] || die` guard: with no hashing binary on PATH the derivation yields an empty TOKEN and compose substitutes ${WARDYN_ADMIN_TOKEN:-demo-admin-token}")
+	}
+	return out
+}
+
+// envUnderRestrictiveUmask returns "" when `umask 077` runs, as a COMMAND,
+// before the first `cat > .env`.
+func envUnderRestrictiveUmask(code string) string {
+	firstWrite := strings.Index(code, "cat > .env")
+	if firstWrite < 0 {
+		return "install.sh no longer writes .env via `cat > .env` — update this guard"
+	}
+	loc := regexp.MustCompile(`(?m)^\s*umask 077\s*$`).FindStringIndex(code)
+	if loc == nil {
+		return "install.sh writes .env with no `umask 077` COMMAND anywhere: the age key + admin token would be world-readable until a later chmod"
+	}
+	if loc[0] > firstWrite {
+		return fmt.Sprintf("install.sh writes .env (offset %d) before its `umask 077` (offset %d): the age key + admin token would be world-readable until a later chmod", firstWrite, loc[0])
+	}
+	return ""
 }
 
 // The admin token was `docker run … -gen-age-key | sha256sum | cut -c1-48`.
@@ -55,21 +140,8 @@ func readInstallSh(t *testing.T) string {
 // say) is still welcome; it just has to update this guard on the way in, which
 // is the point of pinning it.
 func TestInstallSh_AdminTokenDerivationFailsClosed(t *testing.T) {
-	src := readInstallSh(t)
-	tokLine := regexp.MustCompile(`(?m)^\s*TOKEN=\$\(.*$`).FindString(src)
-	if tokLine == "" {
-		t.Fatal("install.sh no longer derives TOKEN=$(...) — update this guard to the new derivation")
-	}
-	if strings.Contains(tokLine, "sha256sum") && !strings.Contains(tokLine, "shasum") {
-		t.Errorf("install.sh's admin-token line depends on `sha256sum` with no `shasum` fallback (sha256_hex, which install_cli's SHA256SUMS check uses, has one): on macOS TOKEN is empty and compose falls through to demo-admin-token\n  %s", strings.TrimSpace(tokLine))
-	}
-	if !strings.Contains(src, "shasum -a 256") {
-		t.Error("install.sh has no `shasum -a 256` fallback anywhere: macOS ships no GNU coreutils, so every hashing site — the admin-token mint and install_cli's SHA256SUMS check — silently produces nothing there")
-	}
-	// A non-empty guard must sit on TOKEN the way install.sh guards KEY.
-	guard := regexp.MustCompile(`\[\s+-n\s+"\$\{?TOKEN\}?"\s+\]\s*\|\|\s*die`)
-	if !guard.MatchString(src) {
-		t.Errorf("install.sh has no `[ -n \"$TOKEN\" ] || die` guard: a failed second `docker run … -gen-age-key` hashes an empty stdin and installs sha256(\"\")[0:48] as the admin token")
+	for _, c := range adminTokenComplaints(readInstallSh(t)) {
+		t.Error(c)
 	}
 }
 
@@ -88,14 +160,54 @@ func TestInstallSh_AdminTokenDerivationFailsClosed(t *testing.T) {
 // scripts/test-install-sh-trust.sh assert the resulting mode with a
 // record-only chmod stub in place.
 func TestInstallSh_EnvWrittenUnderRestrictiveUmask(t *testing.T) {
-	src := readInstallSh(t)
-	firstWrite := strings.Index(src, "cat > .env")
-	if firstWrite < 0 {
-		t.Fatal("install.sh no longer writes .env via `cat > .env` — update this guard")
+	if c := envUnderRestrictiveUmask(readInstallSh(t)); c != "" {
+		t.Error(c)
 	}
-	umask := strings.Index(src, "umask 077")
-	if umask < 0 || umask > firstWrite {
-		t.Errorf("install.sh writes .env (offset %d) with no preceding `umask 077` (found at %d): the age key + admin token would be world-readable until the later chmod 600", firstWrite, umask)
+}
+
+// TestInstallShGuards_AreNotSatisfiedByComments is the permanent counterfactual
+// for the two guards above (F10 regression class REG1-001/REG1-002/TEST1-C1):
+// each case DELETES the one executable line that closes a settled finding,
+// leaves every comment that discusses it in place, and requires the guard to
+// notice. Before the comment-stripping fix all three mutations left the Go
+// guards green while scripts/test-install-sh-trust.sh went red.
+func TestInstallShGuards_AreNotSatisfiedByComments(t *testing.T) {
+	raw := rawInstallSh(t)
+	for _, tc := range []struct {
+		name  string
+		cut   *regexp.Regexp
+		fails func(code string) bool
+	}{
+		{
+			name:  "umask 077 deleted, its comments kept",
+			cut:   regexp.MustCompile(`(?m)^umask 077\n`),
+			fails: func(code string) bool { return envUnderRestrictiveUmask(code) != "" },
+		},
+		{
+			name:  "mint_age_key non-empty guard deleted",
+			cut:   regexp.MustCompile(`(?m)^\s*\[ -n "\$minted" \] \|\| die .*\n`),
+			fails: func(code string) bool { return len(adminTokenComplaints(code)) > 0 },
+		},
+		{
+			name:  "shasum -a 256 fallback deleted",
+			cut:   regexp.MustCompile(`(?m)^\s*shasum -a 256 .*\n`),
+			fails: func(code string) bool { return len(adminTokenComplaints(code)) > 0 },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Guard the guard: a mutation that matches nothing proves nothing.
+			if !tc.cut.MatchString(raw) {
+				t.Fatalf("the counterfactual's own pattern %s matches nothing in install.sh — the line it deletes moved or changed shape, and this case is now vacuous", tc.cut)
+			}
+			mutated := tc.cut.ReplaceAllString(raw, "")
+			if !tc.fails(installShCode(mutated)) {
+				t.Errorf("deleting the executable line left the guard GREEN — it is satisfied by install.sh's own COMMENTS, not by the command that closes the finding")
+			}
+			// Control: the real script must still pass, or the guard is simply broken.
+			if tc.fails(installShCode(raw)) {
+				t.Errorf("the guard fails on the UNMUTATED install.sh — the counterfactual proves nothing")
+			}
+		})
 	}
 }
 

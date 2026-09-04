@@ -780,6 +780,41 @@ func (c *Client) httpClient() *http.Client {
 	return http.DefaultClient
 }
 
+// streamTransport bounds everything up to and INCLUDING the response headers
+// and nothing after it, so a body may stream for as long as it takes while a
+// peer that completes the handshake and then says nothing is still cut off.
+// One shared instance: a per-call *http.Transport would leak its own idle
+// connection pool.
+var streamTransport = func() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.ResponseHeaderTimeout = 30 * time.Second
+	return t
+}()
+
+// streamClient is httpClient with the WHOLE-REQUEST deadline shed, for the
+// methods that hand back an unread body.
+//
+// http.Client.Timeout covers reading that body, so the 30s the CLI sets to
+// stop a hung JSON poll from wedging `run --wait` (cmd/wardyn/main.go) also
+// cut a large recording download off mid-stream — and `run recording -o` then
+// left a truncated .cast on disk. A streamed body is bounded by the caller's
+// CONTEXT instead; the handshake keeps a deadline of its own via
+// streamTransport. A caller who supplied their own Transport keeps it: they
+// chose its bounds, and this only drops the one that cannot tell a slow
+// download from a hung server.
+func (c *Client) streamClient() *http.Client {
+	base := c.httpClient()
+	if base.Timeout == 0 {
+		return base
+	}
+	cp := *base
+	cp.Timeout = 0
+	if cp.Transport == nil {
+		cp.Transport = streamTransport
+	}
+	return &cp
+}
+
 // GetRecording streams a run's terminal recording as raw asciicast bytes (the
 // .cast a player consumes). The caller MUST Close the returned reader.
 // GET /api/v1/runs/{id}/recording/{key} — the id really does appear twice: the
@@ -804,7 +839,7 @@ func (c *Client) GetRecording(ctx context.Context, runID uuid.UUID, session ...s
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/x-asciicast")
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.streamClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("http: %w", err)
 	}

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -196,56 +195,6 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.AddCommand(runListCmd(client), runGetCmd(client), runKillCmd(client),
 		runGrantsCmd(client), runRecordingCmd(client), runWaitReadyCmd(client))
 	return cmd
-}
-
-// runRecordingCmd downloads a run's terminal recording. It lives under the
-// `run` noun, NOT under `wardyn record` — that noun is Recording MODE (learning
-// a least-privilege policy from a run's activity), an unrelated concept the
-// name would fuse with this one.
-func runRecordingCmd(client clientFn) *cobra.Command {
-	var outPath, session string
-	rec := &cobra.Command{
-		Use:   "recording <run-id>",
-		Short: "Download a run's terminal recording as an asciicast (stdout unless -o)",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			id, err := parseID("run", args[0])
-			if err != nil {
-				return err
-			}
-			// W21-S1-6: defaults to the run's own (bare-id) cast when --session is
-			// unset — an interactive run's OTHER recordings (one per attach
-			// session, keyed "<run-id>~<session>") are otherwise unreachable from
-			// the CLI/SDK even though the server has always served them.
-			rc, err := client().GetRecording(cmd.Context(), id, session)
-			if err != nil {
-				return err
-			}
-			defer rc.Close()
-			if outPath == "" {
-				_, err = io.Copy(os.Stdout, rc)
-				return err
-			}
-			f, err := os.Create(outPath)
-			if err != nil {
-				return err
-			}
-			if _, err := io.Copy(f, rc); err != nil {
-				f.Close()
-				return err
-			}
-			// Close is checked: a swallowed flush error writes a truncated cast
-			// that only fails much later, in a player.
-			if err := f.Close(); err != nil {
-				return err
-			}
-			fmt.Fprintf(os.Stderr, "wrote %s\n", outPath)
-			return nil
-		},
-	}
-	rec.Flags().StringVarP(&outPath, "output", "o", "", "write the .cast here instead of stdout")
-	rec.Flags().StringVar(&session, "session", "", "attach-session id, for an interactive run's OTHER recordings (default: the run's own recording)")
-	return rec
 }
 
 // printPreflight renders the --dry-run checklist: one row per setup item plus
@@ -466,8 +415,19 @@ func waitForRun(ctx context.Context, c *sdk.Client, runID uuid.UUID, timeout tim
 
 // agentExitCode reads the agent's real exit code from the last run.complete
 // audit event. Best-effort: 0 when the event is missing or unparseable.
+//
+// action_prefix, not the whole trail: an unfiltered per-run read is CAPPED by
+// the server (internal/api/audit.go's auditPerRunDefaultLimit, 1000 events,
+// seq ASC) and run.complete is the newest event there is — so on any run that
+// clears the cap the completion event fell off the page and every FAILED run
+// reported the "missing/unreadable" fallback of 1 instead of the task's own
+// code that docs/CI.md's taxonomy promises. The filter is applied server-side
+// before the cap on BOTH store paths (handleQueryAudit's pager arm and its
+// fetch-all fallback), so one bounded request always reaches it. The Action
+// re-check below stays: it costs nothing and keeps this correct against a
+// wardynd too old to know the parameter.
 func agentExitCode(ctx context.Context, c *sdk.Client, runID uuid.UUID) int {
-	events, err := c.AuditEvents(ctx, runID)
+	events, _, err := c.AuditEventsPage(ctx, runID, sdk.AuditFilter{ActionPrefix: "run.complete"})
 	if err != nil {
 		return 0
 	}
@@ -495,8 +455,12 @@ func agentExitCode(ctx context.Context, c *sdk.Client, runID uuid.UUID) int {
 // a proxy-resolve error all land here). Returns "" for a plain nonzero agent exit,
 // where the exit code is the whole story. ponytail: first failure ≈ root cause;
 // a later "failure" is usually a teardown cascade.
+//
+// ?outcome=failure for agentExitCode's reason: an unfiltered per-run read is
+// capped at 1000 events, so on a chatty run the dispatch error that explains an
+// otherwise opaque "FAILED" was simply not on the page.
 func runFailureReason(ctx context.Context, c *sdk.Client, runID uuid.UUID) string {
-	events, err := c.AuditEvents(ctx, runID)
+	events, _, err := c.AuditEventsPage(ctx, runID, sdk.AuditFilter{Outcome: "failure"})
 	if err != nil {
 		return ""
 	}

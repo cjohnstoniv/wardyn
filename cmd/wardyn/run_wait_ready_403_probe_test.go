@@ -151,3 +151,66 @@ func TestProbeF4_WaitReady_409StillWaits(t *testing.T) {
 		t.Fatalf("/files polled %d times on a 409; want >= 2 (it must be retried)", filePolls)
 	}
 }
+
+// TestWaitReady_TransientFilesStatusesAreRetried is the mirror of
+// TestProbeF4_WaitReady_403DoesNotSpin: the statuses that mean "ask again
+// later" must NOT be classed permanent. 429 is the one wardynd itself sends
+// (internal/api/audit.go's concurrent-verification arm, and any ingress rate
+// limiter in front of it); 408 and 425 are the other two an ingress emits for a
+// request that was never refused on its merits. Classing them permanent aborts
+// `run wait-ready` on the FIRST such answer, on a sandbox that is coming up
+// fine.
+func TestWaitReady_TransientFilesStatusesAreRetried(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"429-too-many-requests", http.StatusTooManyRequests, `{"error":"too many requests; slow down"}`},
+		{"408-request-timeout", http.StatusRequestTimeout, `{"error":"request timeout"}`},
+		{"425-too-early", http.StatusTooEarly, `{"error":"too early"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prev := waitPollInterval
+			waitPollInterval = time.Millisecond
+			t.Cleanup(func() { waitPollInterval = prev })
+
+			runID := uuid.New()
+			srv, counts := countingReadyServer(t, runID, tc.status, tc.body)
+			c := &sdk.Client{BaseURL: srv.URL}
+
+			_, err := waitForRunReady(context.Background(), c, runID, 30*time.Millisecond, false)
+			var ee *exitError
+			if !errors.As(err, &ee) || ee.code != 124 {
+				t.Fatalf("err = %v, want exit 124: a %d is transient and must be retried to the deadline", err, tc.status)
+			}
+			if _, filePolls := counts(); filePolls < 2 {
+				t.Fatalf("/files polled %d times on a %d; want >= 2 (it must be retried)", filePolls, tc.status)
+			}
+		})
+	}
+}
+
+// TestWaitReady_RedirectFailsFast pins the other end of the same classing: a
+// 3xx is an interposed proxy or a misrouted --url, never a sandbox that is
+// still coming up, so waiting cannot fix it. Untyped it fell into the
+// "transient" default and spun to the 5-minute deadline.
+func TestWaitReady_RedirectFailsFast(t *testing.T) {
+	prev := waitPollInterval
+	waitPollInterval = time.Millisecond
+	t.Cleanup(func() { waitPollInterval = prev })
+
+	runID := uuid.New()
+	// No Location header: the SDK's http.Client has nothing to follow, so the
+	// 302 surfaces as an *sdk.APIError exactly as an operator's proxy would.
+	srv, counts := countingReadyServer(t, runID, http.StatusFound, ``)
+	c := &sdk.Client{BaseURL: srv.URL}
+
+	_, err := waitForRunReady(context.Background(), c, runID, 5*time.Second, false)
+	if err == nil || !strings.Contains(err.Error(), "cannot read its workspace") {
+		t.Fatalf("err = %v, want the permanent 'cannot read its workspace' wrapper", err)
+	}
+	if _, filePolls := counts(); filePolls != 1 {
+		t.Fatalf("/files polled %d times on a 302; want exactly 1 (a redirect is not something waiting fixes)", filePolls)
+	}
+}

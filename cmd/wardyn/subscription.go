@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"slices"
 	"strings"
@@ -135,9 +136,16 @@ func subscriptionCmd(client clientFn) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			err := client().DisconnectManagedSubscription(cmd.Context(), subscriptionProvider)
 			if err != nil {
-				// Idempotent: a not-found is success (nothing to remove).
+				// Idempotent on ABSENCE, and absence is a STATUS. Matching
+				// "not found" anywhere in the BODY swallowed every backend
+				// failure whose text happens to contain the phrase — a
+				// Postgres `relation "secrets" not found`, a gateway page, an
+				// `unknown provider: …` 400 — and printed "nothing was
+				// connected" with exit 0 while the credential was still there.
+				// handleHarnessDisconnect (internal/api/harnesscred.go) has no
+				// 404 arm of its own; every refusal it makes is 400/500/503.
 				var apiErr *sdk.APIError
-				if errors.As(err, &apiErr) && (apiErr.Status == 404 || strings.Contains(strings.ToLower(apiErr.Body), "not found")) {
+				if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
 					fmt.Println("no managed Claude subscription was connected")
 					return nil
 				}

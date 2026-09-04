@@ -66,10 +66,37 @@ func TestPublishedImageListsAgree(t *testing.T) {
 		offer[f] = true
 	}
 
-	var missing, extra []string
+	// RELEASING.md's manual multi-arch cosign verification: the SECOND
+	// hand-copy this guard's doc comment names, and the one it did not read.
+	// Its `for img in …; do` loop is parsed the same regex-not-YAML way, and it
+	// drifts the same way — silently, because `docker buildx imagetools
+	// inspect` on a ref that does not exist prints an error the maintainer
+	// pasting the block has no `set -e` to stop on, while the image that IS
+	// published is simply never verified.
+	doc, err := os.ReadFile(filepath.Join(root, "RELEASING.md"))
+	if err != nil {
+		t.Fatalf("read RELEASING.md: %v", err)
+	}
+	loopRe := regexp.MustCompile(`(?m)^\s*for img in ([a-z0-9 -]+); do\s*$`)
+	lm := loopRe.FindStringSubmatch(string(doc))
+	if lm == nil {
+		t.Fatal("could not find RELEASING.md's `for img in …; do` cosign-verification loop — this guard can no longer see the list it exists to check")
+	}
+	verify := map[string]bool{}
+	for _, f := range strings.Fields(lm[1]) {
+		verify[f] = true
+	}
+	if len(verify) < 3 {
+		t.Fatalf("parsed only %d images from RELEASING.md's verification loop (%v) — the parse regressed and this arm would pass vacuously", len(verify), slices.Sorted(maps.Keys(verify)))
+	}
+
+	var missing, extra, unverified, phantom []string
 	for img := range published {
 		if !offer[img] {
 			missing = append(missing, img)
+		}
+		if !verify[img] {
+			unverified = append(unverified, img)
 		}
 	}
 	for img := range offer {
@@ -77,8 +104,15 @@ func TestPublishedImageListsAgree(t *testing.T) {
 			extra = append(extra, img)
 		}
 	}
+	for img := range verify {
+		if !published[img] {
+			phantom = append(phantom, img)
+		}
+	}
 	sort.Strings(missing)
 	sort.Strings(extra)
+	sort.Strings(unverified)
+	sort.Strings(phantom)
 
 	if len(missing) > 0 {
 		t.Errorf("published images with NO corresponding-source offer: %v\n"+
@@ -87,5 +121,13 @@ func TestPublishedImageListsAgree(t *testing.T) {
 	if len(extra) > 0 {
 		t.Errorf("gpl-source-offer.sh scans images we do NOT publish: %v\n"+
 			"The scan silently produces nothing for them, which reads as 'no GPL packages' rather than 'never scanned'.", extra)
+	}
+	if len(unverified) > 0 {
+		t.Errorf("published images RELEASING.md's release verification never checks: %v\n"+
+			"The maintainer runs that loop to confirm each published image is a multi-arch index with a cosign signature on it; an image absent from the loop ships unverified.", unverified)
+	}
+	if len(phantom) > 0 {
+		t.Errorf("RELEASING.md verifies images we do NOT publish: %v\n"+
+			"`docker buildx imagetools inspect` on a ref that does not exist just errors, and the paste has no `set -e` — so the loop carries on and the maintainer reads it as verified.", phantom)
 	}
 }
