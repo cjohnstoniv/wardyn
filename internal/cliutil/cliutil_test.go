@@ -107,19 +107,9 @@ func TestFlagEnv_Precedence(t *testing.T) {
 		}
 	})
 
-	// Unlike FlagBool, an explicitly-EMPTY string value is honoured rather than
-	// treated as unset — that is how an operator blanks a value via the env.
-	t.Run("empty env value honoured", func(t *testing.T) {
-		resetFlags(t)
-		t.Setenv("CLIUTIL_TEST_STR", "")
-		p := FlagEnv("s", "CLIUTIL_TEST_STR", "compiled-default", "usage")
-		if err := flag.CommandLine.Parse(nil); err != nil {
-			t.Fatalf("parse: %v", err)
-		}
-		if *p != "" {
-			t.Fatalf("explicit empty env = %q, want empty string", *p)
-		}
-	})
+	// The explicitly-empty env case moved to TestFlagEnv_EmptyEnvKeepsTheDefault
+	// below, which asserts the opposite: an empty env keeps the default (like
+	// every other helper in this file), and `-name=` is the explicit blank.
 }
 
 // ─── FlagBool ──
@@ -488,4 +478,43 @@ func TestScrubChildEnv(t *testing.T) {
 	if !slices.Equal(in, before) {
 		t.Errorf("ScrubChildEnv mutated its input: %v, want %v", in, before)
 	}
+}
+
+// TestFlagEnv_EmptyEnvKeepsTheDefault pins F011's root cause. FlagEnv was the
+// ONE helper in this file that let an explicitly-empty env var blank a
+// compiled-in default — FlagBool, FlagDuration, FlagIntEnv, EnvBool,
+// EnvDuration and EnvOr all read empty as "unset, keep the default", precisely
+// because `docker run -e VAR` and a compose `VAR=` passthrough produce an empty
+// string for a var the operator never set. Thirteen wardynd flags carry a
+// non-empty default (WARDYN_LISTEN ":8080", WARDYN_RUNNER "none",
+// WARDYN_DEFAULT_POLICY, WARDYN_GIT_PAT_BROKER "on", ...) and every one of them
+// could be silently blanked that way.
+//
+// The escape hatch for a genuinely-intended blank is the flag, which states the
+// intent explicitly — asserted below so the fix cannot be read as "you can no
+// longer blank a value".
+func TestFlagEnv_EmptyEnvKeepsTheDefault(t *testing.T) {
+	t.Run("empty env keeps the compiled default", func(t *testing.T) {
+		resetFlags(t)
+		t.Setenv("CLIUTIL_TEST_STR", "")
+		p := FlagEnv("s", "CLIUTIL_TEST_STR", "compiled-default", "usage")
+		if err := flag.CommandLine.Parse(nil); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if *p != "compiled-default" {
+			t.Fatalf("explicitly-empty env = %q, want compiled-default kept", *p)
+		}
+	})
+
+	t.Run("an explicit empty flag still blanks it", func(t *testing.T) {
+		resetFlags(t)
+		t.Setenv("CLIUTIL_TEST_STR", "from-env")
+		p := FlagEnv("s", "CLIUTIL_TEST_STR", "compiled-default", "usage")
+		if err := flag.CommandLine.Parse([]string{"-s="}); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if *p != "" {
+			t.Fatalf("-s= = %q, want the empty string (the explicit blank)", *p)
+		}
+	})
 }

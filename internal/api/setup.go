@@ -821,6 +821,30 @@ func redactSetupStatusForMember(st SetupStatus) SetupStatus {
 	st.Providers = []SetupProvider{}
 	st.Secrets = SetupSecrets{Present: []string{}}
 	st.Runner = SetupRunner{ConfinementClasses: st.Runner.ConfinementClasses}
+	// Host credential/environment posture — a description of the OPERATOR'S
+	// MACHINE, not of anything a member can act on, and the last place a member
+	// could read it off this endpoint. SCM names which git credentials sit on
+	// the wardynd host's disk (a gh session, ~/.git-credentials, ~/.netrc, a
+	// plaintext-ish "store"/"cache" helper); HostProxy carries the corporate
+	// proxy topology, host:port and a "the operator's proxy credentials live
+	// here" flag; Deployment.HostLike is derived from Providers, which is
+	// redacted two lines up — keeping it published the resident-login signal
+	// after dropping the detail that produced it.
+	st.SCM = setup.SCMPosture{}
+	st.HostProxy = setup.HostProxyDetection{}
+	st.Deployment = SetupDeployment{}
+	// Harness is REDUCED, not dropped: ui/lib/api/integrations.ts reads
+	// provider/captured/expired to answer "is there a model path" for a
+	// member's own readiness. Capture time, source run id, aging and
+	// renewability are operator credential-lifecycle detail. Rebuilt into a new
+	// slice rather than edited in place — the input is the caller's value.
+	if len(st.Harness) > 0 {
+		reduced := make([]SetupHarness, len(st.Harness))
+		for i, h := range st.Harness {
+			reduced[i] = SetupHarness{Provider: h.Provider, Captured: h.Captured, Expired: h.Expired}
+		}
+		st.Harness = reduced
+	}
 	return st
 }
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -81,6 +82,21 @@ type sshTarget struct {
 }
 
 func runSSH(cmd *cobra.Command, c *sdk.Client, runID string, doPrint, doConfig, doJSON bool) error {
+	// The run id is ARGV: it is spliced into ssh(1)'s "<run-id>@<host>"
+	// argument, into the ssh_config User/Host block --config emits, and into
+	// the command string --print/--json hand an operator to paste. Unvalidated,
+	// a leading "-o..." became an ssh OPTION rather than a username
+	// (ProxyCommand = arbitrary execution), an embedded newline injected a
+	// fresh ssh_config directive, and a ";" rode into a pasted shell line.
+	// Validated HERE, before the /healthz call and before any of the four
+	// output paths, because all four route through this one function.
+	//
+	// A UUID is exactly what the gateway itself accepts (sshAuth's uuid.Parse,
+	// internal/api/sshgateway.go) — anything else could never have connected,
+	// so refusing it costs no legitimate use.
+	if _, err := parseID("run", runID); err != nil {
+		return err
+	}
 	raw, err := c.Healthz(cmd.Context())
 	if err != nil {
 		return err
@@ -143,6 +159,10 @@ func runSSH(cmd *cobra.Command, c *sdk.Client, runID string, doPrint, doConfig, 
 	}
 
 	sub := exec.CommandContext(cmd.Context(), "ssh", args...)
+	// ssh(1) is a third-party binary that runs the operator's own
+	// ProxyCommand/LocalCommand children and can SendEnv to the remote host.
+	// It has no use for the admin bearer, the age master key or an API key.
+	sub.Env = cliutil.ScrubChildEnv(os.Environ())
 	sub.Stdin = os.Stdin
 	sub.Stdout = os.Stdout
 	sub.Stderr = os.Stderr

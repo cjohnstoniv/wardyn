@@ -6,6 +6,7 @@ package main
 import (
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -121,5 +122,45 @@ func TestRelayConn_UnreachableUpstreamClosesTheClient(t *testing.T) {
 	_ = clientSide.SetDeadline(time.Now().Add(2 * time.Second))
 	if _, err := clientSide.Read(make([]byte, 1)); err == nil {
 		t.Error("the client side stayed open after the upstream dial failed")
+	}
+}
+
+// The default is a SECURITY decision that TestProxyRelay_ListenDefaults pins,
+// and F202's point is that it was nowhere in the operator's view: the caveat
+// ("this exposes the corp proxy to anything that can reach the listen address")
+// lived only in a source comment, so `--help` described 0.0.0.0 as merely
+// "address to listen on" and the running relay printed only which ports it was
+// forwarding. Nothing changes the default here — it says out loud what the
+// default does.
+func TestProxyRelay_SaysWhatTheDefaultExposes(t *testing.T) {
+	long := setupProxyRelayCmd().Long
+	for _, want := range []string{"UNAUTHENTICATED", "0.0.0.0", "every interface", "--listen-addr"} {
+		if !strings.Contains(long, want) {
+			t.Errorf("`proxy-relay --help` never says %q:\n%s", want, long)
+		}
+	}
+}
+
+// The running relay must say it too — an operator who started it from a script
+// never reads --help, and this line is printed next to the address it describes.
+func TestProxyRelay_WarnsOnANonLoopbackBind(t *testing.T) {
+	for _, tc := range []struct {
+		addr string
+		warn bool
+	}{
+		{"0.0.0.0", true},
+		{"", true},
+		{"192.168.1.5", true},
+		{"127.0.0.1", false},
+		{"::1", false},
+		{"localhost", false},
+	} {
+		got := relayExposureWarning(tc.addr)
+		if (got != "") != tc.warn {
+			t.Errorf("relayExposureWarning(%q) = %q, want warn=%v", tc.addr, got, tc.warn)
+		}
+		if tc.warn && !strings.Contains(got, "unauthenticated") {
+			t.Errorf("relayExposureWarning(%q) = %q, want it to name the relay as unauthenticated", tc.addr, got)
+		}
 	}
 }

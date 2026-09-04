@@ -386,3 +386,35 @@ func TestTierRuntimeName(t *testing.T) {
 		t.Errorf("tierRuntimeName(vault) = %q, want kata", got)
 	}
 }
+
+// TestGvisorScripts_NameWhatEachVerificationProves closes F205. The binary path
+// fetches runsc AND runsc.sha512 from the same URL prefix, so `sha512sum -c`
+// proves the download was not corrupted in transit — it cannot prove the bucket
+// served what gVisor published, because whoever serves the binary serves the
+// digest. The apt path IS authenticated: its key comes from gvisor.dev, a
+// different origin from the storage.googleapis.com repo it verifies. Neither
+// check is removed here; the scripts now say which one they are.
+func TestGvisorScripts_NameWhatEachVerificationProves(t *testing.T) {
+	e := dockerEnv{family: "debian", initSys: "systemd"}
+
+	apt := gvisorAptScript(e)
+	if !strings.Contains(apt, "https://gvisor.dev/archive.key") {
+		t.Error("apt script no longer fetches the signing key from gvisor.dev — that different origin IS the authenticity")
+	}
+	if !strings.Contains(apt, "signed-by=") {
+		t.Error("apt script no longer pins the repo to that key")
+	}
+
+	bin := gvisorBinaryScript(e)
+	if !strings.Contains(bin, "sha512sum -c") {
+		t.Error("binary script no longer verifies the checksum at all")
+	}
+	for _, want := range []string{"same origin", "apt"} {
+		if !strings.Contains(bin, want) {
+			t.Errorf("binary script never says %q — the sha512 is served by whoever serves the binary:\n%s", want, bin)
+		}
+	}
+	if !strings.Contains(planWallNativeLinux(dockerEnv{hasDocker: true, family: "rhel"}).why, "same origin") {
+		t.Error("the printed plan's `why` never names the ceiling of the check it advertises")
+	}
+}

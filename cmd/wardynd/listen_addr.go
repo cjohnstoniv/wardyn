@@ -57,18 +57,51 @@ func listenIsLoopback(listen string) bool {
 // include a public IP, so it earns a loud warning rather than a refusal (refusing
 // it would block the common docker-bridge/compose single-host case).
 func listenIsRoutablePublic(listen string) bool {
-	host := listenHost(listen)
-	if host == "" || strings.EqualFold(host, "localhost") {
-		return false
+	ips, ok := listenHostIPs(listenHost(listen))
+	if !ok {
+		return false // nothing to classify — see listenHostIPs on why that is not a refusal
 	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return false // a hostname we can't classify — don't refuse
+	// ANY address, not all — the same direction as listenBindsSpecificRoutable
+	// and the opposite of listenIsLoopback's "every". One publicly-routable
+	// address is enough to be serving a no-auth admin API on the internet, so a
+	// dual-stack name whose A record is private and whose AAAA is public must
+	// still refuse. Resolving the hostname AT ALL is the fix: this was the last
+	// of the three classifiers still doing a bare net.ParseIP, so naming the
+	// public interface instead of numbering it skipped the -local-mode refusal
+	// entirely.
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+			continue
+		}
+		if ip.IsGlobalUnicast() {
+			return true
+		}
 	}
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
-		return false
+	return false
+}
+
+// defaultListenAddr is the compiled-in -listen/WARDYN_LISTEN default, named so
+// the flag registration (parseBootFlags) and normalizeListenAddr below cannot
+// drift apart.
+const defaultListenAddr = ":8080"
+
+// normalizeListenAddr turns an empty (or whitespace-only) listen address into
+// the documented default.
+//
+// An empty value is not a bind: net/http reads Server.Addr == "" as ":http",
+// i.e. 0.0.0.0:80, while every classifier above reads it as "cannot classify"
+// and so silences ALL THREE listen-based boot refusals on the way there —
+// -local-mode on a public bind, -local-trust-forwarder on a LAN bind, and
+// plaintext HTTP on a LAN bind. It arrives that way from `docker run -e
+// WARDYN_LISTEN` with no value, a compose `WARDYN_LISTEN=` passthrough, or a
+// bare `-listen=`, none of which state an intent worth honouring. Normalising
+// once at parse time means the classifiers and the server see the same real
+// address.
+func normalizeListenAddr(listen string) string {
+	if strings.TrimSpace(listen) == "" {
+		return defaultListenAddr
 	}
-	return ip.IsGlobalUnicast()
+	return listen
 }
 
 // listenBindsSpecificRoutable reports whether the listen address binds a

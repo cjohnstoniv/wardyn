@@ -145,14 +145,27 @@ func rootCmd() *cobra.Command {
 		// full usage block — acceptable; the message is already actionable.
 		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
 			cmd.SilenceUsage = true
+			// The env token is resolved HERE, not as the flag's default, so it
+			// never becomes cobra's printed `(default "...")`. Pre-run beats
+			// every RunE (and so every client() call), and an explicit --token
+			// has already been parsed into `token` by now, so it still wins.
+			if token == "" {
+				token = cliutil.EnvOr("WARDYN_ADMIN_TOKEN", os.Getenv("WARDYN_TOKEN"))
+			}
 			warnPlaintextToken(cmd.ErrOrStderr(), serverURL, token)
 		},
 	}
 	root.PersistentFlags().StringVar(&serverURL, "url", cliutil.EnvOr("WARDYN_URL", "http://localhost:8080"),
 		"control plane base URL (env WARDYN_URL)")
-	// WARDYN_ADMIN_TOKEN takes precedence, then WARDYN_TOKEN. NOTE: passing
-	// --token puts the secret in argv (visible in `ps`); prefer the env var.
-	root.PersistentFlags().StringVar(&token, "token", cliutil.EnvOr("WARDYN_ADMIN_TOKEN", os.Getenv("WARDYN_TOKEN")),
+	// WARDYN_ADMIN_TOKEN takes precedence, then WARDYN_TOKEN — resolved in
+	// PersistentPreRun above, NOT here. A non-empty string default is echoed by
+	// cobra as `(default "<value>")` in `wardyn --help` and in the usage block
+	// every structural error prints, which put the fleet-wide bearer in
+	// cleartext in every terminal capture, CI log and screenshot of one. The
+	// declared default stays empty; the env is read where the token is USED.
+	// NOTE: passing --token puts the secret in argv (visible in `ps`); prefer
+	// the env var.
+	root.PersistentFlags().StringVar(&token, "token", "",
 		"admin bearer token (env WARDYN_ADMIN_TOKEN or WARDYN_TOKEN; --token is visible in the process list, prefer the env var)")
 
 	// client() resolves the configured SDK client lazily so flags are parsed

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/spf13/cobra"
 )
@@ -239,7 +240,9 @@ func tierRuntimeName(use string) string {
 func dockerInfo() (dockerInfoJSON, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "docker", "info", "--format", "{{json .}}").Output()
+	c := exec.CommandContext(ctx, "docker", "info", "--format", "{{json .}}")
+	c.Env = cliutil.ScrubChildEnv(os.Environ())
+	out, err := c.Output()
 	if err != nil {
 		return dockerInfoJSON{}, false
 	}
@@ -352,7 +355,9 @@ func planWallNativeLinux(e dockerEnv) plan {
 				"your sudo; wardynd never installs anything.",
 			script: gvisorAptScript(e)}
 	}
-	why := "Installs the checksum-verified gVisor binaries to /usr/local/bin and registers runsc with Docker."
+	why := "Installs the checksum-verified gVisor binaries to /usr/local/bin and registers runsc with Docker." +
+		" The published sha512 is served from the same origin as the binary, so it proves the download is intact," +
+		" not that the bucket is honest; the apt path (Debian/Ubuntu) is the GPG-signed one."
 	if e.selinux {
 		why += " SELinux is enforcing — gVisor has no SELinux integration, so runsc containers need " +
 			"--security-opt label=disable (wardyn's docker driver applies this)."
@@ -524,11 +529,24 @@ sudo runsc install
 ` + restartDocker(e) + "\n" + gvisorDone + "\n"
 }
 
+// gvisorBinaryScript is gVisor's own published release-binary recipe, run
+// unmodified. Its `sha512sum -c` proves the download was not corrupted in
+// transit and NOTHING MORE: runsc.sha512 comes from the same URL prefix as
+// runsc, so whoever serves the binary serves the digest. Authenticity rests on
+// TLS to storage.googleapis.com alone. gvisorAptScript is the authenticated
+// path — its key comes from gvisor.dev, a different origin from the repo it
+// verifies — and is preferred wherever apt applies (planWallNativeLinux).
+// Upstream publishes no detached signature for the raw binaries, so the honest
+// move is to say which check this is rather than to invent a stronger-looking
+// one.
 func gvisorBinaryScript(e dockerEnv) string {
 	return `set -euo pipefail
 ARCH="$(uname -m)"
 URL="https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}"
 TMP="$(mktemp -d)"; cd "$TMP"
+echo "NOTE: runsc.sha512 is served from the same origin as runsc, so this check"
+echo "      catches a corrupted download, not a compromised bucket. On Debian/Ubuntu"
+echo "      prefer the apt path, whose key comes from gvisor.dev (a different origin)."
 echo "-> downloading runsc + shim for ${ARCH}"
 wget --quiet "${URL}/runsc" "${URL}/runsc.sha512" "${URL}/containerd-shim-runsc-v1" "${URL}/containerd-shim-runsc-v1.sha512"
 sha512sum -c runsc.sha512 -c containerd-shim-runsc-v1.sha512
@@ -717,6 +735,9 @@ func dockerHostHint(sock string) string {
 // selections like the restart line), so there is no command-injection surface.
 func runScript(script string) error {
 	c := exec.Command("bash", "-c", script) // #nosec G204 -- trusted constant script, no user input
+	// A sudo'd installer needs the operator's PATH/HOME/proxy vars (all kept by
+	// the denylist) and none of Wardyn's own configuration or credentials.
+	c.Env = cliutil.ScrubChildEnv(os.Environ())
 	c.Stdout, c.Stderr, c.Stdin = os.Stdout, os.Stderr, os.Stdin
 	return c.Run()
 }

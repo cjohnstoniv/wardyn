@@ -43,8 +43,16 @@ func EnvOr(key, def string) string {
 }
 
 // FlagEnv defines a string flag whose default is overridden by an env var.
+// Unset — or set to the empty string, which is what `docker run -e VAR` and a
+// compose `VAR=` passthrough produce for a var the operator never set — means
+// "use the default", exactly like FlagBool/FlagDuration/FlagIntEnv/EnvOr. It
+// used to honour an explicit empty as an intentional blank, which silently
+// erased thirteen non-empty compiled defaults (WARDYN_LISTEN ":8080",
+// WARDYN_RUNNER "none", WARDYN_DEFAULT_POLICY, WARDYN_GIT_PAT_BROKER "on", ...)
+// for anyone whose orchestrator passes every known variable through. The
+// escape hatch for a genuinely-intended blank is `-name=`, which states it.
 func FlagEnv(name, env, def, usage string) *string {
-	if v, ok := os.LookupEnv(env); ok {
+	if v := os.Getenv(env); v != "" {
 		def = v
 	}
 	return flag.String(name, def, usage+" (env "+env+")")
@@ -154,6 +162,11 @@ func EnvDuration(name string, def time.Duration) time.Duration {
 // HONEST RESIDUAL: this is defense-in-depth and consistency, NOT containment. A
 // host-exec'd child runs as the same uid as wardynd and can read
 // /proc/<ppid>/environ regardless. Containment is the sandbox composer wire.
+//
+// ONE documented exception, enforced by cmd/wardyn's childenv_guard_test.go:
+// `docker compose config` in supportbundle.go's gatherComposeConfig, whose
+// entire job is to resolve ${WARDYN_*} against the real environment. Its
+// output goes through redactSecrets before it reaches a bundle.
 func ScrubChildEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {

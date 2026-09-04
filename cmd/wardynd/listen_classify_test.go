@@ -200,3 +200,73 @@ func TestSecondHumanBootWarningFiresOnlyForTheBrokenCombination(t *testing.T) {
 		})
 	}
 }
+
+// TestListenIsRoutablePublicResolvesHostnames closes the third classifier's
+// hole (F067). listenIsLoopback and listenBindsSpecificRoutable both resolve a
+// hostname through listenHostIPs; listenIsRoutablePublic alone still did
+// net.ParseIP and returned false for anything that was not a literal. It is the
+// fail-closed gate for -local-mode — "a no-auth public API must never be served
+// on a public IP" — so naming the public interface instead of numbering it
+// booted an UNAUTHENTICATED admin API on the internet with only a warning.
+//
+// ANY, not all, exactly like listenBindsSpecificRoutable: one publicly-routable
+// address is enough to be serving no-auth on the internet.
+func TestListenIsRoutablePublicResolvesHostnames(t *testing.T) {
+	stubListenLookup(t, map[string][]string{
+		"public-host.example.com": {"203.0.113.10"},
+		"lan-host.corp":           {"192.168.1.50"},
+		"loop-alias.corp":         {"127.0.0.1"},
+		"split.example.com":       {"10.0.0.7", "198.51.100.9"}, // private AND public
+	})
+
+	for _, c := range []struct {
+		name   string
+		listen string
+		want   bool
+		why    string
+	}{
+		{"hostname resolving to a public IP", "public-host.example.com:8080", true,
+			"the -local-mode refusal exists for exactly this bind"},
+		{"the literal it resolves to", "203.0.113.10:8080", true, "unchanged"},
+		{"hostname resolving to a private IP", "lan-host.corp:8080", false,
+			"private is the -local-trust-forwarder classifier's business, not this one"},
+		{"hostname resolving only to loopback", "loop-alias.corp:8080", false, "safe"},
+		{"split private/public", "split.example.com:8080", true,
+			"ANY: one public address is enough to be serving no-auth on the internet"},
+		{"hostname that does not resolve", "nope.invalid:8080", false,
+			"a resolver blip must not refuse boot"},
+		{"loopback literal", "127.0.0.1:8080", false, "unchanged"},
+		{"private literal", "10.0.0.5:8080", false, "unchanged"},
+		{"unspecified bind", "0.0.0.0:8080", false, "warned, never refused"},
+		{"empty host", ":8080", false, "unchanged"},
+		{"localhost", "localhost:8080", false, "unchanged"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := listenIsRoutablePublic(c.listen); got != c.want {
+				t.Errorf("listenIsRoutablePublic(%q) = %v, want %v — %s", c.listen, got, c.want, c.why)
+			}
+		})
+	}
+}
+
+// TestEmptyListenNeverReachesTheClassifiers closes F011. WARDYN_LISTEN="" (a
+// `docker run -e WARDYN_LISTEN` with no value, a compose `WARDYN_LISTEN=`
+// passthrough, or `-listen=`) used to survive all the way to net/http, whose
+// Server.Addr == "" means ":http" — 0.0.0.0:80. Every classifier read "" as
+// "cannot classify" and skipped ALL THREE listen-based boot refusals on the
+// way there. An empty bind states no intent, so it falls back to the same
+// default the -listen usage string advertises.
+func TestEmptyListenNeverReachesTheClassifiers(t *testing.T) {
+	for _, raw := range []string{"", "   ", "\t"} {
+		got := normalizeListenAddr(raw)
+		if got != defaultListenAddr {
+			t.Errorf("normalizeListenAddr(%q) = %q, want the documented default %q",
+				raw, got, defaultListenAddr)
+		}
+	}
+	for _, raw := range []string{":8080", "127.0.0.1:9000", "0.0.0.0:80", "lan-host.corp:8080"} {
+		if got := normalizeListenAddr(raw); got != raw {
+			t.Errorf("normalizeListenAddr(%q) = %q, want it left alone", raw, got)
+		}
+	}
+}

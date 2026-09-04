@@ -7,10 +7,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -191,5 +193,58 @@ func TestExitCodeFor_EveryStatusClass(t *testing.T) {
 	// catch-all 1, which docs/CI.md's `1` row now names explicitly.
 	if got := exitCodeFor(fmt.Errorf("decode response: %w", errors.New("json: cannot unmarshal object"))); got != 1 {
 		t.Errorf("exitCodeFor(decode error) = %d, want 1", got)
+	}
+}
+
+// ─── the admin bearer must never reach --help or a usage dump (F221) ─────────
+//
+// cobra prints `(default "<value>")` for every non-empty string flag default,
+// so seeding --token's DEFAULT from WARDYN_ADMIN_TOKEN/WARDYN_TOKEN put the
+// fleet-wide bearer in `wardyn --help`, in the usage block every structural
+// error prints, and therefore in any terminal capture, CI log or screenshot of
+// one. The env value is resolved where the token is USED, not where the flag is
+// declared, so the flag's printed default stays empty.
+
+func TestRootUsageNeverPrintsTheAdminToken(t *testing.T) {
+	const secret = "s3cr3t-admin-bearer-DO-NOT-LOG"
+	for _, env := range []string{"WARDYN_ADMIN_TOKEN", "WARDYN_TOKEN"} {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv("WARDYN_ADMIN_TOKEN", "")
+			t.Setenv("WARDYN_TOKEN", "")
+			t.Setenv(env, secret)
+			usage := rootCmd().UsageString()
+			if !strings.Contains(usage, "--token") {
+				t.Fatalf("--token vanished from the usage block entirely:\n%s", usage)
+			}
+			if strings.Contains(usage, secret) {
+				t.Errorf("usage printed the admin bearer from %s in cleartext:\n%s", env, usage)
+			}
+		})
+	}
+}
+
+// The counterweight: resolving the token later must not stop it authenticating.
+// Both env names, and an explicit --token still beating them.
+func TestAdminTokenFromEnvStillAuthenticates(t *testing.T) {
+	for _, tc := range []struct{ name, adminEnv, tokenEnv, flag, want string }{
+		{"WARDYN_ADMIN_TOKEN", "from-admin-env", "", "", "Bearer from-admin-env"},
+		{"WARDYN_TOKEN fallback", "", "from-token-env", "", "Bearer from-token-env"},
+		{"flag beats env", "from-admin-env", "from-token-env", "from-flag", "Bearer from-flag"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("WARDYN_ADMIN_TOKEN", tc.adminEnv)
+			t.Setenv("WARDYN_TOKEN", tc.tokenEnv)
+			srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{})
+			args := []string{"audit", "11111111-2222-3333-4444-555555555555", "--url", srv.URL}
+			if tc.flag != "" {
+				args = append(args, "--token", tc.flag)
+			}
+			if err := execCmd(t, args...); err != nil {
+				t.Fatalf("audit: %v", err)
+			}
+			if got := srv.last().auth; got != tc.want {
+				t.Errorf("Authorization = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
