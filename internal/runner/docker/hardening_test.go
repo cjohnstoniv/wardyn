@@ -6,6 +6,7 @@
 package docker
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -21,14 +22,83 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// ociFeaturesJSON is the `docker info` runtime-status value a real daemon
+// publishes for a runtime: the OCI features struct, as JSON, with the mount
+// options that runtime recognises. Only the field this tree reads is filled in.
+func ociFeaturesJSON(mountOptions ...string) map[string]string {
+	b, err := json.Marshal(struct {
+		MountOptions []string `json:"mountOptions"`
+	}{MountOptions: mountOptions})
+	if err != nil {
+		panic(err)
+	}
+	return map[string]string{ociFeaturesStatusKey: string(b)}
+}
+
+// runcMountOptions and runscMountOptions are the two runtimes' REAL answers,
+// trimmed to the options this tree reasons about. runc (1.4.x) declares `rro`;
+// gVisor does not — `runsc features` lists `ro` and `rbind` and no `rro`, which
+// is why a drive bind may not ask the daemon for a recursively read-only mount
+// on the runtime the Wall tier (CC2) requires.
+var (
+	runcMountOptions  = []string{"bind", "rbind", "ro", "rprivate", "rro", "rrw", "rw"}
+	runscMountOptions = []string{"bind", "rbind", "ro", "rprivate", "rw"}
+)
+
 func infoWithRuntimes(names ...string) system.Info {
 	rt := map[string]system.RuntimeWithStatus{
-		"runc": {}, // always present
+		"runc": {Status: ociFeaturesJSON(runcMountOptions...)}, // always present
 	}
 	for _, n := range names {
-		rt[n] = system.RuntimeWithStatus{}
+		st := map[string]string(nil)
+		if strings.HasPrefix(n, runtimeRunsc) {
+			st = ociFeaturesJSON(runscMountOptions...)
+		}
+		rt[n] = system.RuntimeWithStatus{Status: st}
 	}
-	return system.Info{Runtimes: rt}
+	// DefaultRuntime is what "" resolves to on a real daemon, and the drive's
+	// bind-option decision asks about it by name.
+	return system.Info{Runtimes: rt, DefaultRuntime: "runc"}
+}
+
+// The daemon decides `rro` on the runtime's own OCI features struct, and so
+// must this tree — moby's supportsRecursivelyReadOnly errors for a runtime that
+// does not list the option, and container_routes then FAILS THE CREATE when a
+// mount asked for it. Every row here is a shape a real daemon produces.
+func TestRuntimeSupportsRecursiveReadOnly(t *testing.T) {
+	info := infoWithRuntimes(runtimeRunsc)
+	for _, tc := range []struct {
+		name    string
+		runtime string
+		want    bool
+	}{
+		{"runc declares rro", "runc", true},
+		{`"" is the daemon default, which is runc here`, "", true},
+		{"gVisor does not declare rro", runtimeRunsc, false},
+		{"a runtime the daemon does not have", "kata-runtime", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := runtimeSupportsRecursiveReadOnly(info, tc.runtime); got != tc.want {
+				t.Errorf("runtimeSupportsRecursiveReadOnly(%q) = %v, want %v", tc.runtime, got, tc.want)
+			}
+		})
+	}
+	// A daemon that publishes NO features for the runtime (pre-API-v1.44, or a
+	// Docker-compatible engine that does not) reads as unsupported — the same
+	// answer the daemon itself gives, which is what stops the create being
+	// refused for asking.
+	noFeatures := system.Info{Runtimes: map[string]system.RuntimeWithStatus{"runc": {}}, DefaultRuntime: "runc"}
+	if runtimeSupportsRecursiveReadOnly(noFeatures, "") {
+		t.Error("a runtime publishing no OCI features read as rro-capable — the daemon refuses that create")
+	}
+	// And so does a status carrying something that is not the features struct.
+	garbage := system.Info{
+		Runtimes:       map[string]system.RuntimeWithStatus{"runc": {Status: map[string]string{ociFeaturesStatusKey: "not json"}}},
+		DefaultRuntime: "runc",
+	}
+	if runtimeSupportsRecursiveReadOnly(garbage, "") {
+		t.Error("an undecodable features status read as rro-capable")
+	}
 }
 
 func TestCapabilitiesFor_ClassMapping(t *testing.T) {

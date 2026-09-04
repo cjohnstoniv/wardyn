@@ -224,6 +224,40 @@ func (f *fakeDocker) NetworkRemove(ctx context.Context, networkID string, _ clie
 	return client.NetworkRemoveResult{}, nil
 }
 
+// refuseUnsupportedRRO reproduces the ONE create-time rule a fake daemon has to
+// carry for the drive's read-only bind to be testable at all: moby refuses a
+// create whose mount asks for BindOptions.ReadOnlyForceRecursive when the
+// container's RUNTIME does not declare the OCI `rro` mount option.
+//
+// Upstream (daemon/container_operations.go, verbatim in shape):
+//
+//	if rroErr := supportsRecursivelyReadOnly(daemonCfg, c.HostConfig.Runtime); rroErr != nil {
+//	        rro = false
+//	        if m.ReadOnlyForceRecursive { return rroErr }
+//	}
+//
+// Without this the fake accepts every create and the gVisor case — every
+// read-only share drive on this product's own default confinement floor —
+// grades green here while failing on any real host that has runsc.
+func (f *fakeDocker) refuseUnsupportedRRO(host *container.HostConfig) error {
+	if host == nil {
+		return nil
+	}
+	for _, m := range host.Mounts {
+		if m.BindOptions == nil || !m.BindOptions.ReadOnlyForceRecursive {
+			continue
+		}
+		if !runtimeSupportsRecursiveReadOnly(f.info, host.Runtime) {
+			rt := host.Runtime
+			if rt == "" {
+				rt = f.info.DefaultRuntime
+			}
+			return fmt.Errorf("rro is not supported by runtime %q", rt)
+		}
+	}
+	return nil
+}
+
 func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
 	f.mu.Lock()
 	hook := f.onCreate
@@ -236,6 +270,9 @@ func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerC
 	name := opts.Name
 	if f.failCreateContainer != "" && strings.HasPrefix(name, f.failCreateContainer) {
 		return client.ContainerCreateResult{}, fmt.Errorf("boom: create %s", name)
+	}
+	if err := f.refuseUnsupportedRRO(opts.HostConfig); err != nil {
+		return client.ContainerCreateResult{}, err
 	}
 	c := &createdContainer{
 		name:  name,

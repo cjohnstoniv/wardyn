@@ -342,6 +342,14 @@ func subscriptionInjectPosture(runnerTarget string, oidcConfigured, localMode, a
 // authored in the DATABASE by an admin and its per-person subdirectories are
 // bound into OTHER PEOPLE's sandboxes, so the allowlist over it has to live
 // where a console compromise cannot reach it.
+//
+// AND "ONE LEVEL UP" IS ITSELF A POSTURE NOTHING CHECKED. Each parser vets its
+// own list and neither could see the other, so the two could name the SAME
+// TREE and every check pass: a member then onboards the share as a workspace
+// and binds it whole, every other person's home included, through a surface
+// that consults no drive allocation. This function is where both lists exist at
+// once, so the comparison is made here and warned about in the same voice
+// (runner.MountCeilingOverlapWarnings).
 func parseMountCeilings(f *bootFlags) (runner.MemberMountPolicy, []string, error) {
 	memberMounts, memberWarns, err := runner.ParseMemberMountPolicy(
 		*f.memberRoots, *f.memberRootsMap, *f.memberWritableRoots, *f.memberWritableDeny)
@@ -357,6 +365,13 @@ func parseMountCeilings(f *bootFlags) (runner.MemberMountPolicy, []string, error
 	}
 	for _, warn := range driveWarns {
 		slog.Warn("wardynd: user drive host roots — " + warn)
+	}
+	// The relation BETWEEN the two ceilings, which neither parser can see. Its
+	// own prefix: this is not a complaint about either list's contents, it is
+	// one about the pair, and an operator who reads it has to change one of two
+	// variables rather than the one the line happens to be filed under.
+	for _, warn := range runner.MountCeilingOverlapWarnings(memberMounts, driveHostRoots) {
+		slog.Warn("wardynd: mount ceilings overlap — " + warn)
 	}
 	return memberMounts, driveHostRoots, nil
 }

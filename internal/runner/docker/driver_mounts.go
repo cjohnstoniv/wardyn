@@ -8,6 +8,7 @@ package docker
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 
@@ -63,7 +64,14 @@ import (
 //     SandboxSpec.Drive — so nothing above has to learn about it, and a
 //     host_path drive runs the SAME source deny matrix every other host bind
 //     does, by way of the roots ceiling that composes it (driveMount).
-func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec) ([]mount.Mount, error) {
+//
+// rroSupported is the DAEMON's own answer about the runtime this container will
+// actually run on (runtimeSupportsRecursiveReadOnly). Only the drive's bind
+// consults it — see driveMount — and it is passed in rather than re-derived
+// because CreateSandbox has already resolved both the runtime and the
+// `docker info` it is read from: a second Info call could answer differently
+// from the one the rest of this create was built against.
+func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec, rroSupported bool) ([]mount.Mount, error) {
 	specMounts, memberRoots := spec.Mounts, spec.MemberMountRoots
 	var mounts []mount.Mount
 	if d.cfg.RecordingMount != "" {
@@ -130,7 +138,7 @@ func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec) ([]mo
 	// The user drive, LAST — so its host-path arm's resolved-real-path checks
 	// are the final thing that happens before the caller hands this slice to
 	// ContainerCreate (the member gate's own argument, one object up).
-	driveMounts, err := d.driveMount(ctx, spec.Drive)
+	driveMounts, err := d.driveMount(ctx, spec.Drive, rroSupported)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +178,7 @@ func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec) ([]mo
 // changed under a stored row. Mounting nothing would hand the member a sandbox
 // with no drive and no explanation — and, for a WRITABLE drive, an agent
 // happily writing a session's work into a directory that dies with the run.
-func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount) ([]mount.Mount, error) {
+func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, rroSupported bool) ([]mount.Mount, error) {
 	if drive == nil {
 		return nil, nil
 	}
@@ -184,12 +192,24 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount) ([]mou
 	//
 	// Nothing in the control plane can reach this today — driveMountFor copies
 	// the constant — and that is precisely the argument for the check rather
-	// than against it. The reachable inputs are a future control-plane bug and
-	// the standalone runner's -spec JSON (cmd/wardyn-runner), neither of which
-	// has a validating boundary of its own.
+	// than against it. What CAN reach it is a future control-plane bug and any
+	// IN-PROCESS caller that assembles a runner.SandboxSpec itself: the struct
+	// and its Drive field are exported, the conformance suite already builds
+	// specs that way, and neither route has a validating boundary of its own.
+	// NOT the standalone runner's -spec JSON (cmd/wardyn-runner): its fileSpec
+	// decodes no drive field and loadSpec never sets SandboxSpec.Drive, so a
+	// hand-written spec cannot deliver a DriveMount at all. Naming it here was
+	// a reader's only evidence for a check they might otherwise delete, and it
+	// was wrong.
+	//
+	// NAMED BY runner.DriveSubject, NEVER BY drive.ObjectName. This refusal is
+	// a CreateSandbox error and therefore the run's failure_hint verbatim, and
+	// on a SHARE the object name is <host_root>/<home> — the operator's
+	// absolute share path. The target is the member's own sandbox path and is
+	// theirs to read.
 	if drive.Target != runner.DriveTarget {
-		return nil, fmt.Errorf("docker: denied user drive %q -> %q: %w (%q)",
-			drive.ObjectName, drive.Target, errDriveTargetInvalid, runner.DriveTarget)
+		return nil, fmt.Errorf("docker: denied user drive (%s) -> %q: %w (%q)",
+			runner.DriveSubject(drive), drive.Target, errDriveTargetInvalid, runner.DriveTarget)
 	}
 	// And the reserved path is still checked as a PATH. ValidateTarget — never
 	// ValidateAuthoredTarget, which refuses runner.DriveTarget by design: the
@@ -200,7 +220,7 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount) ([]mou
 	// the caller: if runner.DriveTarget were ever edited to a path no mount may
 	// land at, this driver refuses instead of binding a member's storage there.
 	if err := runner.ValidateTarget(drive.Target); err != nil {
-		return nil, fmt.Errorf("docker: denied user drive %q -> %q: %w", drive.ObjectName, drive.Target, err)
+		return nil, fmt.Errorf("docker: denied user drive (%s) -> %q: %w", runner.DriveSubject(drive), drive.Target, err)
 	}
 	switch drive.Backend {
 	case types.DriveBackendDockerVolume:
@@ -255,9 +275,17 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount) ([]mou
 		// runner.UserDriveHostRootCheck (which this composes) rather than as a
 		// `len(roots) > 0` test here, so the driver and the API write boundary
 		// cannot drift on what "the operator has not said where" means.
+		//
+		// THE WRAPPER NAMES THE TARGET, NEVER m.Source, and the refusal it
+		// wraps names the drive and the directory: this error becomes the run's
+		// failure_hint, m.Source is the operator's absolute share path, and the
+		// composed check's own sentence goes on to name the deployment's
+		// configured roots or the denied prefix that caught it. All of it is in
+		// the log, where runner.RefuseUserDriveBind writes it.
 		real, err := runner.UserDriveMountSourceCheck(d.cfg.UserDriveHostRoots)(m.Source)
 		if err != nil {
-			return nil, fmt.Errorf("docker: denied user drive mount %q -> %q: %w", m.Source, m.Target, err)
+			return nil, fmt.Errorf("docker: denied user drive mount -> %q: %w", m.Target,
+				runner.RefuseUserDriveBind(drive, m.Source, "", runner.DriveSourceRefused, err))
 		}
 		// AND INSIDE THIS DRIVE'S OWN ROOT, not merely inside SOME configured
 		// one. The ceiling above is the OPERATOR's outer bound over every drive
@@ -292,10 +320,9 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount) ([]mou
 		// validate-then-create remains two operations: nothing here closes that
 		// window and no test claims to.
 		//
-		// The wrapper names the TARGET, never m.Source, and the refusal it wraps
-		// names the drive and the directory: this error becomes the run's
-		// failure_hint, and m.Source is the operator's absolute path. The paths
-		// are in the log, where UserDriveHomeWithinItsRoot slogs them.
+		// Same audience split as the site above, and this one has always taken
+		// it: UserDriveHomeWithinItsRoot slogs the paths itself and returns a
+		// sentence naming the drive and the directory.
 		if err := runner.UserDriveHomeWithinItsRoot(drive, real); err != nil {
 			return nil, fmt.Errorf("docker: denied user drive mount -> %q: %w", m.Target, err)
 		}
@@ -315,34 +342,73 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount) ([]mou
 		// the layout it served (one drive's homes spread over two mount points)
 		// is expressed by giving the drive the root its homes actually live
 		// under.
+		//
+		// AND THE SAME AUDIENCE SPLIT as the two rules above it, for the
+		// sharpest case of all: the path this would have named is the resolved
+		// home of ANOTHER PRINCIPAL, on the operator's share. The member is
+		// told that the directory resolved to somebody else's, which is the
+		// whole diagnosis; the paths go to the log.
 		if filepath.Base(real) != drive.HomeName {
-			return nil, fmt.Errorf("docker: denied user drive mount %q -> %q: it resolves to %q, whose directory name is not "+
-				"this principal's home %q — a home replaced by a link to a sibling would bind another person's directory",
-				m.Source, m.Target, real, drive.HomeName)
+			return nil, fmt.Errorf("docker: denied user drive mount -> %q: %w", m.Target,
+				runner.RefuseUserDriveBind(drive, m.Source, real, runner.DriveHomeNameRefused, nil))
 		}
 		return []mount.Mount{{
-			Type:     mount.TypeBind,
-			Source:   m.Source,
-			Target:   m.Target,
-			ReadOnly: m.ReadOnly,
-			// FAIL CLOSED ON AN OLD KERNEL. A bind's `ro` is only RECURSIVE from
-			// Linux 5.12 (mount_setattr's AT_RECURSIVE); below that the kernel
-			// silently binds the top level read-only and leaves every SUBMOUNT
-			// beneath it writable — and a share's per-person home is exactly where
-			// a submount (an autofs home, a second export mounted under the first)
-			// turns up. ReadOnlyForceRecursive makes the daemon ERROR instead of
-			// producing that half-honoured mount, so a read-only allocation is
-			// read-only or the run does not start.
-			//
-			// Set from the mount's own mode rather than unconditionally: the flag
-			// is meaningless without ReadOnly, and writing `true` beside a
-			// writable bind would be a claim about a mount that has none to make.
-			BindOptions: &mount.BindOptions{ReadOnlyForceRecursive: m.ReadOnly},
+			Type:        mount.TypeBind,
+			Source:      m.Source,
+			Target:      m.Target,
+			ReadOnly:    m.ReadOnly,
+			BindOptions: driveBindOptions(drive, m.ReadOnly, rroSupported),
 		}}, nil
 
 	default:
-		return nil, fmt.Errorf("docker: user drive %q has backend %q, which this runner cannot mount "+
+		// The SUBJECT again, not the object name: a k8s_pvc_static row reaching
+		// this driver still carries a name, and a member reading their own
+		// failure hint has no use for it.
+		return nil, fmt.Errorf("docker: user drive (%s) has backend %q, which this runner cannot mount "+
 			"(the docker runner mounts %q and %q; a Kubernetes-backed drive belongs to a Kubernetes deployment)",
-			drive.ObjectName, drive.Backend, types.DriveBackendDockerVolume, types.DriveBackendHostPath)
+			runner.DriveSubject(drive), drive.Backend, types.DriveBackendDockerVolume, types.DriveBackendHostPath)
 	}
+}
+
+// driveBindOptions decides whether the share bind asks the daemon to make its
+// read-only RECURSIVE, or carries no BindOptions at all.
+//
+// WHY ASK AT ALL. A bind's `ro` only reaches SUBMOUNTS from Linux 5.12
+// (mount_setattr's AT_RECURSIVE); below that the kernel silently binds the top
+// level read-only and leaves every submount beneath it writable — and a share's
+// per-person home is exactly where a submount (an autofs home, a second export
+// mounted under the first) turns up. ReadOnlyForceRecursive makes the daemon
+// ERROR rather than hand back that half-honoured mount.
+//
+// WHY IT IS NOT ASKED UNCONDITIONALLY. The daemon only honours the request for
+// a runtime that declares the OCI `rro` mount option, and REFUSES THE CREATE
+// for one that does not (moby's supportsRecursivelyReadOnly). gVisor does not
+// declare it — `runsc features` lists `ro` and `rbind` and no `rro` — and
+// gVisor is the runtime the Wall tier (CC2) requires, which is this product's
+// own shipped confinement floor. Asking unconditionally therefore did not make
+// a read-only share safer on those runs; it made every one of them fail at
+// ContainerCreate, with the daemon's `rro is not supported by runtime "runsc"`
+// as the member's failure hint.
+//
+// A WRITABLE bind gets no BindOptions either: the flag is a claim about a
+// read-only mount, and writing `true` beside a writable bind would assert a
+// property this mount does not have.
+//
+// THE LOSS IS LOGGED, ON THE RUN IT AFFECTS. When a read-only drive lands on a
+// runtime that cannot be asked, the bind still goes in read-only and this says
+// so — an operator who needs the recursive guarantee for a share with submounts
+// has one lever, which is to run that drive's workloads on a runtime that
+// declares `rro` (the daemon's default runc does). Nothing else here can
+// deliver it, and silently proceeding would have made that unknowable.
+func driveBindOptions(drive *types.DriveMount, readOnly, rroSupported bool) *mount.BindOptions {
+	if !readOnly {
+		return nil
+	}
+	if !rroSupported {
+		slog.Warn("wardyn: user drive: this runtime does not support recursively read-only binds, so a submount under the share's home could be writable inside the sandbox",
+			slog.String("drive", drive.DriveName), slog.String("home", drive.HomeName),
+			slog.String("mount_option", ociMountOptionRRO))
+		return nil
+	}
+	return &mount.BindOptions{ReadOnlyForceRecursive: true}
 }

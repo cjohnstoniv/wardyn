@@ -469,7 +469,12 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// DNS (required under gVisor; harmless under runc). This is the ONLY host entry
 	// the agent gets — NOT host.docker.internal, which stays proxy-only.
 	agentHost.ExtraHosts = append(agentHost.ExtraHosts, "wardyn-proxy:"+proxyIP)
-	agentMounts, err := d.agentMounts(ctx, spec)
+	// The drive's read-only bind asks for a RECURSIVELY read-only mount only
+	// where the runtime this container will actually run on declares support —
+	// runtimeName as resolved above, never the daemon's default. Under a runtime
+	// that does not (gVisor, which CC2 requires), asking refuses the create
+	// outright; see driveBindOptions.
+	agentMounts, err := d.agentMounts(ctx, spec, runtimeSupportsRecursiveReadOnly(info, runtimeName))
 	if err != nil {
 		return fail(err)
 	}

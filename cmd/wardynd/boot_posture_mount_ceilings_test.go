@@ -86,3 +86,27 @@ func TestParseMountCeilings_WideRootStillReadsAsWide(t *testing.T) {
 		t.Errorf("boot log does not name both variables:\n  %s", strings.TrimSpace(out))
 	}
 }
+
+// res2-07 (the boot line): the overlap between the two ceilings reaches the
+// operator's log, under its own prefix.
+//
+// Each parser vets only its own list, so a deployment whose member roots and
+// drive host roots name ONE tree booted clean: every drive check passed, every
+// member check passed, and a member could onboard the share as a workspace and
+// bind every person's home through a surface that consults no drive allocation.
+// parseMountCeilings is where both lists exist at once.
+func TestParseMountCeilings_OverlappingCeilingsAreWarnedAbout(t *testing.T) {
+	out := capturedCeilingWarns(t, "/srv/shares", "/srv/shares")
+	if !strings.Contains(out, "mount ceilings overlap") {
+		t.Errorf("boot log does not warn that the two ceilings name one tree:\n  %s", strings.TrimSpace(out))
+	}
+	for _, name := range []string{"WARDYN_MEMBER_WORKSPACE_ROOTS", "WARDYN_USER_DRIVE_HOST_ROOTS"} {
+		if !strings.Contains(out, name) {
+			t.Errorf("boot log does not name %s, so the operator cannot tell which of the two to change:\n  %s", name, strings.TrimSpace(out))
+		}
+	}
+	// The control: two separate trees are an ordinary posture and say nothing.
+	if clean := capturedCeilingWarns(t, "/home/projects", "/srv/shares"); strings.Contains(clean, "overlap") {
+		t.Errorf("two separate ceilings warned about overlapping:\n  %s", strings.TrimSpace(clean))
+	}
+}

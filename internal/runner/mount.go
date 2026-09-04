@@ -228,10 +228,47 @@ func deniedSource(src string) error {
 	case "docker.sock", "containerd.sock", "podman.sock", "crio.sock":
 		return fmt.Errorf("mount source %q references a container-runtime socket; denied", src)
 	}
-	for _, p := range deniedSourcePrefixes {
-		if src == p || strings.HasPrefix(src, p+"/") {
-			return fmt.Errorf("mount source %q is under denied host path %q", src, p)
-		}
+	if p := deniedPrefixOf(src); p != "" {
+		return fmt.Errorf("mount source %q is under denied host path %q", src, p)
 	}
 	return nil
+}
+
+// deniedPrefixOf returns the deniedSourcePrefixes entry that refuses an ALREADY
+// absolute+cleaned src, or "". The loop lives here rather than inside
+// deniedSource so a caller that must NAME the prefix (in its own vocabulary,
+// not the bind-mount one) shares the list instead of re-deriving it.
+func deniedPrefixOf(src string) string {
+	for _, p := range deniedSourcePrefixes {
+		if src == p || strings.HasPrefix(src, p+"/") {
+			return p
+		}
+	}
+	return ""
+}
+
+// DeniedSourcePrefix returns the deny-list prefix that refuses src, or "" when
+// no prefix does (including for every OTHER reason ValidateMountSource refuses
+// a path: empty, relative, uncleaned, the host root, a runtime socket).
+//
+// It exists for the one surface with its own FROZEN vocabulary for this
+// refusal — a user drive's host_root, whose editor has no "mount source" field
+// to send an admin looking for (UserDriveHostRootCheck). Naming the prefix is
+// what lets that surface say WHICH prefix bit without keeping a second copy of
+// the list, and a second copy is how the deny-list and the sentence explaining
+// it drift apart.
+//
+// It answers on the same TWO paths deniedSource is run against — the lexical
+// value and the symlink-resolved one — so a root that resolves INTO a denied
+// tree names the prefix that actually caught it. A resolve error is not this
+// function's to report: it answers "" and the caller's own ValidateMountSource
+// call says why.
+func DeniedSourcePrefix(src string) string {
+	if p := deniedPrefixOf(src); p != "" {
+		return p
+	}
+	if real, err := filepath.EvalSymlinks(src); err == nil {
+		return deniedPrefixOf(real)
+	}
+	return ""
 }

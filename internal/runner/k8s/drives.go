@@ -87,6 +87,9 @@ const (
 	// this field is a GID and can never make a volume user-owned. Without it a
 	// block volume comes up root-owned and the agent cannot write to its own
 	// drive.
+	//
+	// A MANAGED claim only. applyDriveToPod states why a SHARE must never carry
+	// it: the kubelet would re-own an export several principals' homes live on.
 	driveFSGroup int64 = 1000
 )
 
@@ -501,14 +504,38 @@ func reuseDriveClaim(claim *corev1.PersistentVolumeClaim, drive *types.DriveMoun
 // reader of the pod spec (and an admission policy) sees — disagreeing halves are
 // how a read-only allocation comes up writable.
 //
-// FSGroupChangePolicy OnRootMismatch, not Always: a recursive chown of a large
-// existing drive on every single run is how a pod start goes from seconds to
-// minutes, and the root's own ownership already answers the question. The
-// kubelet applies fsGroup for CSI drivers that declare ReadWriteOnceWithFSType
-// volume ownership — i.e. block storage, the managed k8s_pvc case. It does NOT
-// apply it to an NFS-type volume: a k8s_pvc_static share is owned by whatever
-// its export says, and the recipe for that is the export's own uid/gid mapping
-// (docs/OPERATIONS.md, "User drives on Kubernetes"), not this field.
+// FSGROUP IS A MANAGED-CLAIM FIELD, AND THE BACKEND DECIDES. A
+// dynamically-provisioned k8s_pvc comes up EMPTY and belongs to ONE principal,
+// so group-owning its root to the gid every agent image runs as is both
+// necessary (a root-owned volume root is EACCES for uid 1000, and the control
+// plane must never chown volume state itself) and harmless — there is nothing
+// in it yet but that member's own future files.
+//
+// A SHARE (k8s_pvc_static) is the opposite object: an admin-precreated claim
+// over an export whose files are owned by whatever the export says, with
+// several principals' homes among them. This function used to set fsGroup on it
+// too, justified by a claim that the kubelet does not apply fsGroup to an
+// NFS-type volume. THAT CLAIM IS FALSE for the upstream CSI NFS driver
+// (kubernetes-csi/csi-driver-nfs), which ships `fsGroupPolicy: File` — and File
+// means, verbatim, that Kubernetes may use fsGroup to change permissions and
+// ownership of the volume "regardless of fstype or access mode".
+// ReadWriteOnceWithFSType, the policy that really is limited to block storage,
+// is only the DEFAULT for a driver that declares none. OnRootMismatch narrows
+// WHEN, never WHAT: the first run whose export root is not already gid 1000
+// walks the volume and re-owns what it finds, which on a share is other
+// people's files. So the field is not set at all for a share; the ownership
+// recipe for one is the export's own uid/gid mapping (docs/OPERATIONS.md, "User
+// drives on Kubernetes").
+//
+// FSGroupChangePolicy stays OnRootMismatch rather than Always for the managed
+// case it survives on: a recursive chown of a large existing drive on every
+// single run is how a pod start goes from seconds to minutes, and the root's own
+// ownership already answers the question.
+//
+// Kind(), not a backend list: types.DriveBackend.Kind reads an UNKNOWN backend
+// as a SHARE, so a row this binary does not understand gets no fsGroup either.
+// That is the fail-closed direction here — the harm is in setting the field on
+// storage Wardyn does not own, never in omitting it.
 //
 // PSS Restricted admits `persistentVolumeClaim` as a volume type; it forbids
 // `hostPath` under Baseline and Restricted alike. No drive backend on this
@@ -556,6 +583,9 @@ func applyDriveToPod(pod *corev1.Pod, drive *types.DriveMount, runtimeHandler st
 		if spec.Containers[i].Name == mainContainerName {
 			spec.Containers[i].VolumeMounts = append(spec.Containers[i].VolumeMounts, mount)
 		}
+	}
+	if drive.Backend.Kind() != types.DriveKindManaged {
+		return
 	}
 	if spec.SecurityContext == nil {
 		spec.SecurityContext = &corev1.PodSecurityContext{}

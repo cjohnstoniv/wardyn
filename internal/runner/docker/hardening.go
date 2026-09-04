@@ -6,6 +6,7 @@
 package docker
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -97,6 +98,62 @@ var cc3Runtimes = []string{runtimeKata, runtimeKrun}
 // Kata (its own in-VM agent), runsc, and runc all support exec.
 func runtimeSupportsExec(runtimeName string) bool {
 	return !strings.HasPrefix(runtimeName, runtimeKrun)
+}
+
+const (
+	// ociFeaturesStatusKey is the `docker info` runtime-status key carrying that
+	// runtime's OCI features struct as JSON (API v1.44 and newer). It is the
+	// SAME evidence the daemon decides on — moby's supportsRecursivelyReadOnly
+	// reads the identical struct through Runtimes.Features(runtime) — which is
+	// the whole point of asking the daemon rather than guessing from a name.
+	ociFeaturesStatusKey = "org.opencontainers.runtime-spec.features"
+	// ociMountOptionRRO is the OCI mount option for a RECURSIVELY read-only
+	// bind, the one BindOptions.ReadOnlyForceRecursive asks the runtime for.
+	ociMountOptionRRO = "rro"
+)
+
+// runtimeSupportsRecursiveReadOnly reports whether runtimeName — as the DAEMON
+// describes it in `docker info` — declares the OCI `rro` mount option.
+//
+// IT IS A PRE-FLIGHT FOR A CREATE THE DAEMON WOULD OTHERWISE REFUSE, not an
+// optimisation. moby's supportsRecursivelyReadOnly returns an error for a
+// runtime that does not list `rro` in its features (and for one that publishes
+// no features struct at all), and container_routes then FAILS THE CREATE when
+// the mount asked for ReadOnlyForceRecursive. gVisor is exactly that runtime:
+// `runsc features` lists `ro` and `rbind` and no `rro`, so asking for it under
+// the runtime the Wall tier (CC2) requires refused every read-only share drive
+// at ContainerCreate — on this product's own default confinement floor.
+//
+// UNKNOWN READS AS UNSUPPORTED, deliberately, and that is NOT the fail-closed
+// direction being abandoned: it is the direction the DAEMON takes. A daemon
+// whose info carries no features for this runtime (pre-v1.44, or a
+// Docker-compatible engine that publishes none) is a daemon that would refuse
+// the create, so a request it cannot honour is not a stronger guarantee — it is
+// a run that does not start. driveMount says what is lost when the answer is
+// false, in the log, on the run that is affected.
+func runtimeSupportsRecursiveReadOnly(info system.Info, runtimeName string) bool {
+	name := runtimeName
+	if name == "" {
+		// "" is the daemon's DEFAULT runtime (CC1), which is what the create
+		// will actually be scheduled on — resolving it here is the same hop
+		// the daemon makes before consulting the features struct.
+		name = info.DefaultRuntime
+	}
+	rt, ok := info.Runtimes[name]
+	if !ok {
+		return false
+	}
+	// Only the one field is decoded. The features struct is a large, growing
+	// OCI type and this is a single yes/no question about one list; decoding
+	// the whole of it would promote an indirect dependency to a direct one to
+	// learn nothing more.
+	var feats struct {
+		MountOptions []string `json:"mountOptions"`
+	}
+	if err := json.Unmarshal([]byte(rt.Status[ociFeaturesStatusKey]), &feats); err != nil {
+		return false
+	}
+	return slices.Contains(feats.MountOptions, ociMountOptionRRO)
 }
 
 // classToRuntime returns the Docker runtime name required to enforce class,

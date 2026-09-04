@@ -72,3 +72,48 @@ func buildStub(t *testing.T) string {
 	}
 	return bin
 }
+
+// res2-06: the -spec JSON cannot deliver a user drive, which is the fact three
+// comments in internal/runner leaned on while saying the opposite.
+//
+// Those comments justified drive defence-in-depth checks by naming "a
+// hand-written -spec for the standalone runner" as a reachable
+// types.DriveMount input. fileSpec declares no drive field and loadSpec never
+// assigns SandboxSpec.Drive, so the JSON decodes it into nothing: the reachable
+// inputs are a control-plane bug and an in-process caller that builds a
+// SandboxSpec itself. The checks are correct and stay; the evidence a reader
+// had for keeping them was not, and evidence that does not survive a check is
+// how a correct check gets deleted.
+//
+// READ FROM THE SOURCE rather than exercised, because loadSpec is behind
+// `//go:build docker` and this pin has to run in the DEFAULT build — the one
+// `go test ./cmd/wardyn-runner/...` runs. Adding a drive field to either place
+// fails this and sends whoever adds it to re-derive the three comments.
+func TestSpecJSON_CannotCarryADrive(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	text := string(src)
+
+	start := strings.Index(text, "type fileSpec struct {")
+	if start < 0 {
+		t.Fatal("main.go declares no fileSpec — the -spec decoder was renamed; re-derive this guard and the comments citing it")
+	}
+	end := strings.Index(text[start:], "\n}")
+	if end < 0 {
+		t.Fatal("fileSpec's declaration did not close — the struct scan regressed")
+	}
+	decl := text[start : start+end]
+	// Vacuity guard: the scan must really be looking at the decoded fields.
+	if !strings.Contains(decl, `json:"image"`) {
+		t.Fatalf("fileSpec scan found no image field, so it would pass vacuously:\n%s", decl)
+	}
+	if strings.Contains(strings.ToLower(decl), "drive") {
+		t.Errorf("fileSpec now decodes a drive field:\n%s\n"+
+			"A hand-written -spec can then deliver a types.DriveMount, which internal/runner's drive comments state it cannot.", decl)
+	}
+	if strings.Contains(text, "Drive:") || strings.Contains(text, ".Drive =") {
+		t.Error("main.go assigns SandboxSpec.Drive — the standalone runner can now produce a drive, and internal/runner's drive comments say it cannot")
+	}
+}
