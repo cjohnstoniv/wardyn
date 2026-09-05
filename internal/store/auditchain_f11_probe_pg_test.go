@@ -54,7 +54,7 @@ func withTriggersOff(ctx context.Context, pool *pgxpool.Pool, fn func(tx pgx.Tx)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck — best-effort on the failure path
+	defer tx.Rollback(ctx) //nolint:errcheck // best-effort on the failure path
 	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
 		return errNoTriggerBypass
 	}

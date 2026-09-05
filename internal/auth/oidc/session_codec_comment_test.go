@@ -40,7 +40,7 @@ func TestSessionCommentsMatchTheCodec(t *testing.T) {
 	// in this package. Bounded so it cannot span paragraphs and match two
 	// unrelated sentences.
 	staleClaim := regexp.MustCompile(`(?i)pre-0\.[0-9]+[^.\n]{0,160}(stays|is still|remains) valid`)
-	for _, name := range []string{"oidc.go", "session_codec.go", "session_groups.go"} {
+	for _, name := range []string{"oidc.go", "oidc_callback.go", "session_codec.go", "session_groups.go"} {
 		b, err := os.ReadFile(name)
 		if os.IsNotExist(err) {
 			continue

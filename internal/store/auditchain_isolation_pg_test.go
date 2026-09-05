@@ -109,7 +109,7 @@ func TestPG_InsertAuditEventDoesNotForkTheChainAtRepeatableRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin blocker tx: %v", err)
 	}
-	defer tx.Rollback(context.Background()) //nolint:errcheck — committed below on the happy path
+	defer tx.Rollback(context.Background()) //nolint:errcheck // committed below on the happy path
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, db.AuditChainLockKey); err != nil {
 		t.Fatalf("blocker takes the chain lock: %v", err)
 	}
