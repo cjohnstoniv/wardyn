@@ -221,11 +221,12 @@ func TryAdvisoryLock(ctx context.Context, pool *pgxpool.Pool, key int64) (releas
 }
 
 // AuditDDLProtected reports whether the given (application) pool's role is
-// UNABLE to bypass the audit_events append-only triggers via DDL — i.e. it is
-// neither a superuser nor a MEMBER of the table's owner role (membership, not
-// just direct ownership: a role GRANTed the owner role inherits DROP TRIGGER /
-// ALTER ... DISABLE TRIGGER rights) AND it does not hold the TRIGGER privilege
-// on the table. The N4 role-separation only protects the append-only guarantee
+// UNABLE to bypass the audit_events append-only triggers — i.e. it is neither a
+// superuser nor a MEMBER of the table's owner role (membership, not just direct
+// ownership: a role GRANTed the owner role inherits DROP TRIGGER /
+// ALTER ... DISABLE TRIGGER rights), it does not hold the TRIGGER privilege on
+// the table, AND it cannot SET session_replication_role, which silences every
+// simply-enabled trigger without touching DDL at all (the fourth leg, below). The N4 role-separation only protects the append-only guarantee
 // when this is true, so the two-DSN deploy must be VERIFIED here rather than
 // assumed (honesty: never log a protection claim stronger than the enforcing
 // role setup). Fails safe: any ambiguity (missing table, error) reports NOT
@@ -249,7 +250,7 @@ func TryAdvisoryLock(ctx context.Context, pool *pgxpool.Pool, key int64) (releas
 // TRIGGER from PUBLIC precisely because of that, but a deploy is free to grant
 // it back, so the claim has to be checked and not inferred.
 //
-// ALL THREE LEGS TEST MEMBERSHIP, not a role attribute. The superuser leg asks
+// ALL THREE ROLE LEGS TEST MEMBERSHIP, not a role attribute. The superuser leg asks
 // whether current_user is a member of ANY role with rolsuper — not whether
 // current_user itself has rolsuper. Reading the attribute off the current_user
 // row missed the ordinary managed-Postgres shape (GRANT some admin role TO the
@@ -287,7 +288,48 @@ func AuditDDLProtected(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("db: check audit ddl protection: %w", err)
 	}
-	return !canBypass, nil
+	if canBypass {
+		return false, nil // already answered; the fourth leg cannot make it more false
+	}
+	// THE FOURTH LEG, AND IT IS NOT A DDL ONE. The three above ask who can DROP
+	// or DISABLE a trigger. `SET session_replication_role = 'replica'` needs no
+	// DDL at all: it makes every SIMPLY-ENABLED ('O') trigger stop firing for the
+	// session, so a role holding nothing but INSERT appends rows past all three
+	// audit guards — unchained, unrewritten by the chain trigger, and the boot
+	// meanwhile logged the deployment as DDL-protected. Executed in the probe
+	// beside this function, not assumed: row_hash came back NULL. It is also the
+	// reason ENABLE ALWAYS is the documented hardening — an 'A' trigger fires
+	// regardless of replication role — and why auditForeignTriggers now reads
+	// tgenabled 'R' as armed.
+	//
+	// GRANTABLE SINCE POSTGRESQL 15, which is what makes it a leg rather than a
+	// restatement of the superuser one. GRANT SET ON PARAMETER
+	// session_replication_role TO app is exactly the narrow grant a DBA hands an
+	// application role for a bulk load, and it survives as a standing capability.
+	//
+	// SEPARATE QUERY, AND VERSION-GUARDED, deliberately. has_parameter_privilege
+	// does not exist before PostgreSQL 15, and a missing function is a PARSE
+	// error — it would fail even inside an untaken CASE branch — so folding this
+	// into the query above would turn every pre-15 split-role boot into a hard
+	// refusal (cmd/wardynd treats an error here as fatal). Skipping the leg there
+	// is not a gap but the correct answer: parameter-level GRANT did not exist
+	// before 15 either, so on those servers only a superuser can set the GUC, and
+	// the first leg already covers that.
+	var granular bool
+	if err := pool.QueryRow(ctx,
+		`SELECT current_setting('server_version_num')::int >= 150000`).Scan(&granular); err != nil {
+		return false, fmt.Errorf("db: read server version for the session_replication_role check: %w", err)
+	}
+	if !granular {
+		return true, nil
+	}
+	var canSilenceTriggers bool
+	if err := pool.QueryRow(ctx,
+		`SELECT has_parameter_privilege(current_user, 'session_replication_role', 'SET')`,
+	).Scan(&canSilenceTriggers); err != nil {
+		return false, fmt.Errorf("db: check session_replication_role privilege: %w", err)
+	}
+	return !canSilenceTriggers, nil
 }
 
 // Connect opens a pgxpool to dsn and performs a lightweight liveness check.
