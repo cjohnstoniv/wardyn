@@ -102,7 +102,10 @@ fi
 DEAD_KNOB="WARDYN_STAGE_CLAUDE"
 DEAD_KNOB_ALLOW="cmd/wardynd/envdoc_guard_test.go scripts/test-repo-guards.sh"
 stale=""
-for f in $(grep -rl "$DEAD_KNOB" --exclude-dir=.git . | sed 's|^\./||'); do
+# Tracked files only: a repo guard judges the repository, not the checkout. Generated
+# artifacts (test/reports/**, gitignored) can carry the name for weeks after the source
+# dropped it and would fail every developer while CI stays green.
+for f in $(git ls-files -z | xargs -0 grep -l "$DEAD_KNOB" 2>/dev/null); do
     case " $DEAD_KNOB_ALLOW " in *" $f "*) continue ;; esac
     stale="$stale $f"
 done
