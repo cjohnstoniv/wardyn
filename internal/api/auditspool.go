@@ -251,6 +251,40 @@ func (a *AuditSpool) endsUnterminated() bool {
 	return last[0] != '\n'
 }
 
+// auditWriteTimedOut reports whether a store rejection was a WAIT the DATABASE
+// aborted rather than a judgement about the event.
+//
+// SQLSTATE, not a message match and not a driver type: the codes are the
+// database's own closed vocabulary, stable across driver versions, and
+// documented for exactly this purpose.
+//   - 55P03 lock_not_available — the audit-chain advisory lock was held past
+//     `SET LOCAL lock_timeout` (internal/db's AuditChainLockTimeoutSQL). The
+//     transaction never got to evaluate this event.
+//   - 57014 query_canceled — statement_timeout, or an administrator cancelling
+//     the backend. Same argument: aborted, not refused.
+//
+// Read through the `SQLState() string` method rather than *pgconn.PgError so
+// this package keeps its layering — internal/api talks to store.Store and has
+// never imported the driver — and so a wrapped or re-typed error from a future
+// store implementation still classifies, as long as it carries the code.
+// errors.As walks the %w chain the store builds around the driver error.
+func auditWriteTimedOut(err error) bool {
+	var coded interface{ SQLState() string }
+	if !errors.As(err, &coded) {
+		return false
+	}
+	switch coded.SQLState() {
+	case sqlStateLockNotAvailable, sqlStateQueryCanceled:
+		return true
+	}
+	return false
+}
+
+const (
+	sqlStateLockNotAvailable = "55P03"
+	sqlStateQueryCanceled    = "57014"
+)
+
 // Drain replays up to batch spooled events into rec (the DURABLE store recorder)
 // and removes exactly those it confirmed, leaving the rest for the next call. It
 // returns the number of events replayed. On a replay error it stops and keeps
@@ -370,10 +404,21 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 			replayErr = err
 			// A timeout is NOT a rejection: the store never answered, so this
 			// line has proved nothing about itself and must not earn a strike
-			// toward quarantine. Checked on the context rather than the error
-			// shape, so a driver that wraps or reformats the cause cannot turn a
-			// slow store into a poison verdict.
-			if passCtx.Err() != nil {
+			// toward quarantine.
+			//
+			// TWO KINDS OF TIMEOUT, and only one of them was checked. A
+			// CLIENT-side deadline shows up on passCtx. A DATABASE-side abort
+			// does not: the audit-chain insert runs under `SET LOCAL
+			// lock_timeout` (db.AuditChainLockTimeoutSQL), so a contended chain
+			// lock comes back as an ordinary statement error with
+			// passCtx.Err() == nil and earned a strike. Three contended ticks on
+			// the same head line and the first line to land behind it proved
+			// "the store is up", moving a replayable event — a credential.mint,
+			// say — into <spool>.quarantine, after which the spool gauge reads 0
+			// (fully recovered) over a permanently incomplete trail. Per
+			// docs/OPERATIONS.md an outage, chain-lock contention included, must
+			// quarantine nothing.
+			if passCtx.Err() != nil || auditWriteTimedOut(err) {
 				break
 			}
 			// A second rejection in the same pass answers the question the
