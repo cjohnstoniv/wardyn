@@ -18,6 +18,8 @@ package db
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -547,5 +549,160 @@ func TestMigrateDoesNotHardenATriggerNobodyHardened(t *testing.T) {
 		if got := auditTriggerState(t, pool, name); got != "O" {
 			t.Errorf("%s is %q after Migrate, want 'O' — the hardening restore fired on a trigger nobody hardened", name, got)
 		}
+	}
+}
+
+// ─── the 0048-0054 upgrade set, applied over NON-EMPTY data ──────────────────
+
+// partialSchemaPool migrates a throwaway schema up to (but NOT including)
+// upTo, and returns a pool pointed at it. It is probeSchemaPool's other half:
+// that helper gives a FULLY migrated schema, which is exactly the state an
+// upgrade test cannot start from.
+//
+// It calls the PRODUCTION applyMigration rather than executing the files by
+// hand, so a partially-migrated database here is recorded in schema_migrations
+// the same way a real one is — and the Migrate() under test then picks up
+// precisely the pending set a 0.6.x deployment would.
+func partialSchemaPool(t *testing.T, upTo string) (*pgxpool.Pool, string) {
+	t.Helper()
+	dsn := os.Getenv("WARDYN_TEST_PG")
+	if dsn == "" {
+		t.Skip("WARDYN_TEST_PG not set")
+	}
+	u, err := url.Parse(dsn)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		t.Skip("WARDYN_TEST_PG is not a URL-form DSN; cannot point a connection at another schema")
+	}
+	ctx := context.Background()
+	base := pgPool(t)
+	schema := fmt.Sprintf("wardyn_up_%d", time.Now().UnixNano()%1_000_000_000)
+	if _, err := base.Exec(ctx, `CREATE SCHEMA `+schema); err != nil {
+		t.Fatalf("create upgrade schema: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := base.Exec(context.Background(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`); err != nil {
+			t.Logf("cleanup drop schema %s: %v", schema, err)
+		}
+	})
+	q := u.Query()
+	q.Set("search_path", schema)
+	u.RawQuery = q.Encode()
+	pool, err := Connect(ctx, u.String())
+	if err != nil {
+		t.Fatalf("connect with search_path=%s: %v", schema, err)
+	}
+	t.Cleanup(pool.Close)
+
+	if _, err := pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+		filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`); err != nil {
+		t.Fatalf("ensure schema_migrations in %s: %v", schema, err)
+	}
+	applied := 0
+	for _, name := range readMigrationNames(t) {
+		if name >= upTo {
+			break // lexical order IS apply order
+		}
+		if err := applyMigration(ctx, pool, name, readMigration(t, name)); err != nil {
+			t.Fatalf("apply %s into %s: %v", name, schema, err)
+		}
+		applied++
+	}
+	if applied == 0 {
+		t.Fatalf("no migration sorts before %q; the helper applied nothing", upTo)
+	}
+	return pool, schema
+}
+
+// TestPG_MigrateAppliesTheUpgradeSetOverNonEmptyData covers the gap the
+// audit-chain trio already had and 0048-0054 did not: every committed test that
+// applies those files runs against an EMPTY database, so the upgrade path a real
+// deployment takes — the same DDL over tables that already hold rows — was
+// exercised nowhere, and the CI PG lane inherited the gap.
+//
+// 0050 is the sharp one and the reason this is not a formality: it DROPs
+// secrets' primary key and rebuilds it as (owned_by, name) on a table every
+// deployment holds rows in. Nothing committed had ever run that statement over a
+// row. The other six are additive, and this asserts they stay additive — a
+// column added NOT NULL without a default would fail here and only here.
+func TestPG_MigrateAppliesTheUpgradeSetOverNonEmptyData(t *testing.T) {
+	const upgradeFloor = "0048"
+	pool, schema := partialSchemaPool(t, upgradeFloor)
+	ctx := context.Background()
+
+	// Pre-upgrade rows, in the three tables the upgrade set touches columns on.
+	wsID, tokenID := uuid.New(), uuid.New()
+	secretName := "test-upgrade-secret-" + uuid.NewString()[:8]
+	for _, s := range []struct {
+		what, q string
+		args    []any
+	}{
+		// attachments is the one column with no default (0031 set it NOT NULL
+		// after backfilling); everything else the pre-0048 shape requires has one.
+		{"workspace", `INSERT INTO workspaces (id, name, attachments) VALUES ($1, $2, '[]'::jsonb)`,
+			[]any{wsID, "test-upgrade-ws-" + uuid.NewString()[:8]}},
+		{"secret", `INSERT INTO secrets (name, ciphertext) VALUES ($1, '\x00'::bytea)`,
+			[]any{secretName}},
+		{"api token", `INSERT INTO api_tokens (id, principal, token_sha256) VALUES ($1, 'upgrade@example.com', $2)`,
+			[]any{tokenID, uuid.NewString()}},
+		{"audit row", `INSERT INTO audit_events (id, actor_type, actor, action, outcome)
+			VALUES (gen_random_uuid(), 'system', 'upgrade-probe', 'test.upgrade.seed', 'success')`, nil},
+	} {
+		if _, err := pool.Exec(ctx, s.q, s.args...); err != nil {
+			t.Fatalf("seed %s in %s: %v", s.what, schema, err)
+		}
+	}
+
+	// Precondition: the upgrade set really IS pending, or this test would be a
+	// second copy of the fully-migrated one.
+	var pending int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM schema_migrations WHERE filename >= $1`, upgradeFloor).Scan(&pending); err != nil {
+		t.Fatalf("count applied migrations: %v", err)
+	}
+	if pending != 0 {
+		t.Fatalf("precondition: %d migration(s) at or above %s are already recorded applied", pending, upgradeFloor)
+	}
+
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate applying the %s+ upgrade set over non-empty workspaces/secrets/api_tokens/audit_events: %v",
+			upgradeFloor, err)
+	}
+
+	// THE ROWS SURVIVED, with the new columns taking their defaults.
+	var wsOwner, secretOwner, tokenRole string
+	if err := pool.QueryRow(ctx, `SELECT owned_by FROM workspaces WHERE id = $1`, wsID).Scan(&wsOwner); err != nil {
+		t.Fatalf("0048 over an existing workspace row: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT owned_by FROM secrets WHERE name = $1`, secretName).Scan(&secretOwner); err != nil {
+		t.Fatalf("0050 over an existing secrets row: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT role FROM api_tokens WHERE id = $1`, tokenID).Scan(&tokenRole); err != nil {
+		t.Fatalf("0060's CHECK over an existing api_tokens row: %v", err)
+	}
+	if wsOwner != "" || secretOwner != "" {
+		t.Errorf("pre-upgrade rows did not take the '' owner default: workspace=%q secret=%q", wsOwner, secretOwner)
+	}
+	if tokenRole != "member" {
+		t.Errorf("pre-upgrade api_tokens.role = %q, want the column default 'member'", tokenRole)
+	}
+
+	// 0050 REBUILT THE PRIMARY KEY on a table holding a row. Asserted from the
+	// catalog rather than inferred from the migration text.
+	var pkCols []string
+	if err := pool.QueryRow(ctx, `
+		SELECT COALESCE(array_agg(a.attname::text ORDER BY k.ord), ARRAY[]::text[])
+		FROM pg_constraint c
+		JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord) ON TRUE
+		JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+		WHERE c.conrelid = 'secrets'::regclass AND c.contype = 'p'`).Scan(&pkCols); err != nil {
+		t.Fatalf("read the secrets primary key: %v", err)
+	}
+	if len(pkCols) != 2 || pkCols[0] != "owned_by" || pkCols[1] != "name" {
+		t.Errorf("secrets primary key = %v, want [owned_by name] — 0050 rebuilds it over rows every deployment holds", pkCols)
+	}
+
+	// And the upgrade is idempotent over the same non-empty data.
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("second Migrate over the upgraded, non-empty schema: %v", err)
 	}
 }
