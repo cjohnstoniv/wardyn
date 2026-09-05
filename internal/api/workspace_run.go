@@ -261,6 +261,7 @@ func (s *Server) recordCeilingLimits(ctx context.Context, actor string, ceiling 
 	// shape to inspect — the route itself IS the interactive request. That is
 	// why this reads the limit directly rather than through requestIsInteractive.
 	if ceiling.Limits.DenyInteractive {
+		//lint:ignore ST1005 canon member sentence (docs/design/governance-prompt.md limits table), pinned verbatim by governance_limits_test.go; it ends the way the doc writes it
 		return fmt.Errorf("%w: interactive runs are not allowed by your governance profile %q, and a request with no task comes up interactive too. Launch with a task, and without `--interactive`.", errRecordCeilingLimit, name)
 	}
 	if limit := ceiling.Limits.MaxConcurrentRuns; limit > 0 {
@@ -269,6 +270,7 @@ func (s *Server) recordCeilingLimits(ctx context.Context, actor string, ceiling 
 			return fmt.Errorf("count active runs: %w", err)
 		}
 		if active >= limit {
+			//lint:ignore ST1005 canon member sentence (docs/design/governance-prompt.md limits table), pinned verbatim by governance_limits_test.go; it ends the way the doc writes it
 			return fmt.Errorf("%w: too many runs at once (max %d) — your governance profile %q caps how many runs you can have going, and %d are still active. Stop one first.", errRecordCeilingLimit, limit, name, active)
 		}
 	}

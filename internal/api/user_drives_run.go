@@ -423,7 +423,8 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, req c
 	}, true
 }
 
-// driveShareIsBindable is driveMountFor's host_path arm: the two facts a share
+// driveShareBindFailure is driveMountFor's host_path arm (F269 split the DECISION out of the
+// former driveShareIsBindable writer; driveBindFailureHere is its only caller): the two facts a share
 // bind depends on that the ROW CANNOT CARRY, re-established at the moment of
 // the mount. It writes its own 422 and returns false once it has.
 //
@@ -495,16 +496,8 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, req c
 // when the second is true sends them to the wrong person.
 //
 // ponytail: one os.Stat, on a path already derived, on the create path only.
-func (s *Server) driveShareIsBindable(ctx context.Context, w http.ResponseWriter, resolved types.ResolvedDrive) bool {
-	f := s.driveShareBindFailure(ctx, resolved)
-	if f == nil {
-		return true
-	}
-	f.write(s, w)
-	return false
-}
 
-// driveShareBindFailure is driveShareIsBindable's DECISION, with no writer — see
+// driveShareBindFailure is the share half of driveBindFailureHere's DECISION, with no writer — see
 // driveBindFailure for why the two audiences are split.
 func (s *Server) driveShareBindFailure(ctx context.Context, resolved types.ResolvedDrive) *driveBindFailure {
 	if resolved.Drive.Backend != types.DriveBackendHostPath {
