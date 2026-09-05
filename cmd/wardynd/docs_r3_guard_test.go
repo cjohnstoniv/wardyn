@@ -290,14 +290,15 @@ func TestThreatModelDrivePreviewResidualMatchesTheHandler(t *testing.T) {
 	// backend short-circuits before any of that, which is why the Kubernetes
 	// half of the residual survives.
 	// F269 (round 3) split the bindability check into a pure DECISION,
-	// driveShareBindFailure, and the writer driveShareIsBindable that emits it, so
+	// driveShareBindFailure, reached from driveIsMountableHere via driveBindFailureHere, so
 	// /me and the preview can ask the same question without paying the writer's
 	// metric and WARN. The substrate facts §4.6 publishes now live in the
 	// decision; the writer is pinned to route through it, so inspecting the
 	// decision is inspecting what the preview runs.
 	run := readSrc(t, "internal", "api", "user_drives_run.go")
-	if !strings.Contains(methodBody(t, run, "driveShareIsBindable"), "driveShareBindFailure(") {
-		t.Error("driveShareIsBindable no longer routes through driveShareBindFailure — the decision this guard inspects is not the one the preview runs")
+	if !strings.Contains(methodBody(t, run, "driveIsMountableHere"), "driveBindFailureHere(") ||
+		!strings.Contains(methodBody(t, run, "driveBindFailureHere"), "driveShareBindFailure(") {
+		t.Error("driveIsMountableHere no longer routes through driveBindFailureHere → driveShareBindFailure — the decision this guard inspects is not the one the preview runs")
 	}
 	bindable := methodBody(t, run, "driveShareBindFailure")
 	if !strings.Contains(bindable, "os.Stat(resolved.ObjectName)") {
