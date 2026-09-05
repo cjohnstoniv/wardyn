@@ -57,12 +57,20 @@ type WorkspaceRequest struct {
 	LLMCred *types.WorkspaceLLMCred `json:"llm_cred,omitempty"`
 }
 
+// ListWorkspacesPage is ListWorkspaces plus the server's X-Wardyn-Truncated
+// signal: truncated=true means a further page exists.
+func (c *Client) ListWorkspacesPage(ctx context.Context, opts ...ListOpts) (workspaces []types.Workspace, truncated bool, err error) {
+	var hdr http.Header
+	err = c.do(ctx, http.MethodGet, appendListOpts("/api/v1/workspaces", opts), nil, &workspaces, &hdr)
+	return workspaces, hdr.Get("X-Wardyn-Truncated") == "true", err
+}
+
 // ListWorkspaces returns onboarded workspaces in reverse creation order. Pass a
-// ListOpts to page.
+// ListOpts to page. Prefer ListWorkspacesPage, which also returns the server's
+// truncation signal.
 func (c *Client) ListWorkspaces(ctx context.Context, opts ...ListOpts) ([]types.Workspace, error) {
-	var out []types.Workspace
-	err := c.do(ctx, http.MethodGet, appendListOpts("/api/v1/workspaces", opts), nil, &out)
-	return out, err
+	workspaces, _, err := c.ListWorkspacesPage(ctx, opts...)
+	return workspaces, err
 }
 
 // GetWorkspace fetches a single workspace by id. Returns 404/APIError when unknown.
