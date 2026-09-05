@@ -541,14 +541,34 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	// deriveRole — fail closed on that one claim, not the whole login), and a
 	// malformed roles claim can't discard a valid groups claim or vice versa
 	// since each has its own struct.
+	//
+	// TOLERATING THE SHAPE AND REPORTING THE LOSS ARE DIFFERENT JOBS, and the
+	// decode error used to be discarded, which collapsed them. A claim the IdP
+	// DID send in a shape this build cannot read then arrived at derivation as
+	// nil — byte-for-byte "asked, there were none". The group the human really
+	// holds vanished from the snapshot with the PF-26 partial bit CLEAR, so
+	// capScan never consulted capUnresolvableGroupDeny and effectiveCeiling
+	// never took ceilingWithUnusableGroups: a group-subject DENY protected
+	// nothing and a group-tier ceiling degraded to the deployment default, with
+	// no refusal, no audit row and nothing to notice. It is the same evaporation
+	// the byte cap and the Entra overage are already closed for, on the one
+	// input neither can see, so unreadableClaims below stamps the same bit and
+	// takes the same role-widening refusal. The claim still contributes NOTHING
+	// to derivation: coercing a scalar into a one-element list would let the raw
+	// string match a role-map row (TestCallbackScalarGroupsClaimMapSetContributesNothing).
+	var unreadableClaims []string
 	var rc struct {
 		Roles []string `json:"roles"`
 	}
-	_ = idToken.Claims(&rc)
+	if err := idToken.Claims(&rc); err != nil {
+		unreadableClaims = append(unreadableClaims, "roles")
+	}
 	var gc struct {
 		Groups []string `json:"groups"`
 	}
-	_ = idToken.Claims(&gc)
+	if err := idToken.Claims(&gc); err != nil {
+		unreadableClaims = append(unreadableClaims, "groups")
+	}
 	// The distributed-claim pointer, decoded just as tolerantly and for the
 	// same fail-closed reason: when `_claim_names` names "groups" (or "roles"),
 	// the claim above is absent because the IdP OMITTED it — an overage — not
@@ -556,10 +576,17 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	// truncation bit. map[string]any rather than map[string]string so a value
 	// shape this package does not read cannot fail the decode and hide the
 	// marker.
+	//
+	// A marker this build cannot read is a question that cannot be answered, so
+	// it joins unreadableClaims too — defense in depth rather than a live arm:
+	// go-oidc parses the distributed-claim block during Verify and refuses such
+	// an id_token outright, one step earlier (TestUnreadableClaimNamesIsRefusedUpstream).
 	var dc struct {
 		ClaimNames map[string]any `json:"_claim_names"`
 	}
-	_ = idToken.Claims(&dc)
+	if err := idToken.Claims(&dc); err != nil {
+		unreadableClaims = append(unreadableClaims, "_claim_names")
+	}
 
 	// (4) Domain check — fail closed.
 	if len(a.cfg.AllowedEmailDomains) > 0 {
@@ -643,6 +670,22 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 		redirectAuthError(w, r, authErrorClaimsOverage)
 		return
 	}
+	// The UNREADABLE half of the same question, kept as its own branch so each
+	// denial logs the cause it actually knows. The IdP sent the claim, so
+	// `_claim_names` says nothing and claimNamesKeys would log an empty list;
+	// what an operator needs here is WHICH claim arrived in a shape this build
+	// could not decode. The auth_error code is shared deliberately: to the human
+	// at the sign-in screen both mean "this console could not read the claim
+	// your access depends on and will not guess", and retrying sends the same
+	// token either way.
+	if unanswerableWidensRole(len(unreadableClaims) > 0, role, matches) {
+		slog.Warn("oidc: login denied — the IdP sent a claim role derivation depends on in a shape this build cannot decode, and the default role would widen this session",
+			"sub", idToken.Subject, "default_role", a.cfg.DefaultRole,
+			"env", "WARDYN_OIDC_DEFAULT_ROLE", "unreadable_claims", unreadableClaims)
+		clearCookie(w, sessionCookieName)
+		redirectAuthError(w, r, authErrorClaimsOverage)
+		return
+	}
 	if len(matches) > 0 {
 		slog.Debug("oidc: role derivation matched", "sub", idToken.Subject, "role", role, "matches", matches)
 	}
@@ -662,6 +705,19 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	// and never fails the login. The `_claim_names` pointer rides along so an
 	// IdP-side overage stamps the snapshot partial instead of empty.
 	groups, groupsTruncated := sessionGroups(rc.Roles, gc.Groups, dc.ClaimNames)
+	if len(unreadableClaims) > 0 {
+		// PF-26's third cause, stamped here rather than inside sessionGroups
+		// because it is the DECODE that failed, and sessionGroups only ever
+		// sees what survived one. "Contributes nothing to the role" and
+		// "contributes nothing to the snapshot" were both already true; what
+		// was missing is that the snapshot said so. Without this the login
+		// carries a COMPLETE-and-empty group identity for a human whose IdP
+		// just named their groups, and every group-subject DENY and group-tier
+		// ceiling written for them evaporates silently.
+		groupsTruncated = true
+		slog.Warn("oidc: group snapshot marked partial — the id_token carried a role/group claim in a shape this build cannot decode, so the human's real groups are not in it",
+			"sub", idToken.Subject, "unreadable_claims", unreadableClaims)
+	}
 	sess := Session{
 		Sub:             idToken.Subject,
 		Email:           claims.Email,

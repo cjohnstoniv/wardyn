@@ -734,7 +734,29 @@ func claimsOverage(claimNames map[string]any) bool {
 // Arm 1 (no role map at all) is untouched: it derives from the allowlist and
 // the email, never from a claim, and its Matches are never MatchSourceDefaultRole.
 func overageWidensRole(claimNames map[string]any, role string, matches []Match) bool {
-	if !claimsOverage(claimNames) {
+	return unanswerableWidensRole(claimsOverage(claimNames), role, matches)
+}
+
+// unanswerableWidensRole is the rule overageWidensRole documents with its CAUSE
+// factored out, because an IdP overage is not the only way the claim a role map
+// is keyed on goes unanswered.
+//
+// The second way is a claim the IdP DID send, in a shape this build cannot
+// decode. CallbackHandler decodes `roles` and `groups` tolerantly, one struct
+// each, so a scalar string ("eng-team" rather than ["eng-team"]) cannot fail the
+// whole login — a real IdP sends that shape and a fatal decode there is a 100%
+// login outage. But the claim then contributes nothing, and arm 3's fallthrough
+// to defaultRole is once again "nothing matched" standing in for "nobody could
+// read it". Serving a WIDENING default on that input is the same escalation
+// reached by a different road, so it takes the same refusal.
+//
+// unanswerable is the caller's answer to "was the claim readable at all". The
+// two conjuncts after it are unchanged and are what keep the rule narrow (see
+// overageWidensRole): a real match is authoritative, and a default that cannot
+// outrank the narrowest tier could not have been widened by anything the
+// unreadable claim would have said.
+func unanswerableWidensRole(unanswerable bool, role string, matches []Match) bool {
+	if !unanswerable {
 		return false
 	}
 	if !slices.ContainsFunc(matches, func(m Match) bool { return m.Source == MatchSourceDefaultRole }) {
