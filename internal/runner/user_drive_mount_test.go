@@ -4,6 +4,7 @@
 package runner
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -431,8 +432,12 @@ func TestUserDriveMountSourceCheck(t *testing.T) {
 		if err == nil {
 			t.Fatalf("a bind source resolving to %q — under a denied prefix — was accepted", resolved)
 		}
-		if !strings.Contains(err.Error(), "denied host path") {
-			t.Errorf("refusal = %v, want the deny-list's wording on the RESOLVED path", err)
+		// The frozen host_root wording (docs/design/user-drives-prompt.md §7.1),
+		// and NAMING /dev is the proof the RESOLVED path is what was checked:
+		// the value passed in is under an ordinary temp dir, and only what it
+		// resolves to is under a denied prefix.
+		if !strings.Contains(err.Error(), "is under a denied prefix") || !strings.Contains(err.Error(), "(/dev)") {
+			t.Errorf("refusal = %v, want the frozen host_root deny-prefix wording naming /dev — the prefix of the RESOLVED path", err)
 		}
 		// The control: with the denied tree NOT listed, the same link is refused
 		// for the ordinary reason (it leaves every root), so the row above is a
@@ -543,5 +548,218 @@ func TestUserDriveHomeWithinItsRoot(t *testing.T) {
 	}
 	if err := within(linkedRoot, realHome); err != nil {
 		t.Errorf("a host_root reached through a symlink refused its own home: %v", err)
+	}
+}
+
+// res2-04: the denied-prefix arm ships the FROZEN host_root sentence, not the
+// bind-mount vocabulary the shared deny-list speaks.
+//
+// UserDriveHostRootCheck is the API write boundary's predicate, so its error is
+// the 400 an ADMIN reads on the drive editor — a form whose field is host_root
+// and which has no "mount source" at all. Returned unwrapped, ValidateMountSource
+// told them `mount source "/etc/homes" is under denied host path "/etc"`, sending
+// them to look for a field that is not there. docs/design/user-drives-prompt.md
+// §7.1's server-composed table froze the wording for exactly this row; its four
+// sibling rows are already byte-exact (internal/types), and this one was not.
+func TestUserDriveHostRootCheck_DeniedPrefixUsesTheFrozenHostRootWording(t *testing.T) {
+	check := UserDriveHostRootCheck([]string{"/srv/homes"})
+	for _, tc := range []struct {
+		root, prefix string
+	}{
+		{"/etc/homes", "/etc"},
+		{"/etc", "/etc"},
+		{"/var/run/homes", "/var/run"},
+		{"/proc/homes", "/proc"},
+		{"/var/lib/docker/homes", "/var/lib/docker"},
+	} {
+		t.Run(tc.root, func(t *testing.T) {
+			err := check(tc.root)
+			if err == nil {
+				t.Fatalf("host_root %q under a denied prefix was accepted", tc.root)
+			}
+			want := fmt.Sprintf("host_root %q is under a denied prefix (%s) — the same deny list every host bind obeys", tc.root, tc.prefix)
+			if err.Error() != want {
+				t.Errorf("refusal =\n  %q\nwant the frozen §7.1 row\n  %q", err.Error(), want)
+			}
+			if strings.Contains(err.Error(), "mount source") {
+				t.Errorf("refusal names a field the drive editor does not have: %q", err.Error())
+			}
+		})
+	}
+	// The arms with NO frozen row keep the shared sentence rather than
+	// acquiring a second invented one — the deny-list's vocabulary is right
+	// wherever the table does not overrule it.
+	for _, root := range []string{"shares/alice", "/srv/homes/../etc"} {
+		if err := check(root); err == nil {
+			t.Errorf("host_root %q was accepted", root)
+		} else if strings.Contains(err.Error(), "denied prefix") {
+			t.Errorf("host_root %q got the denied-prefix row it has no claim to: %v", root, err)
+		}
+	}
+}
+
+// res2-05: a DRIVER-side bind refusal splits its audience — the paths to the
+// operator's log, the drive and the directory to the member.
+//
+// A CreateSandbox error is the run's failure_hint VERBATIM, read by whoever
+// launched the run. `source` on a share is the OPERATOR's absolute share path,
+// `real` is where a symlink actually landed (on the sibling case, ANOTHER
+// PRINCIPAL's home), and `cause` is the composed check's own sentence, which
+// names the deployment's configured roots or the denied prefix. None of the
+// three may appear in the returned error.
+func TestRefuseUserDriveBind_SplitsTheAudience(t *testing.T) {
+	drive := &types.DriveMount{
+		Backend:   types.DriveBackendHostPath,
+		DriveName: "nas",
+		HomeName:  "alice",
+		HostRoot:  "/srv/wardyn-drives",
+	}
+	const (
+		source = "/srv/wardyn-drives/alice"
+		real   = "/srv/wardyn-drives/bob"
+	)
+	cause := fmt.Errorf("user drive source %q is not inside WARDYN_USER_DRIVE_HOST_ROOTS (/srv/wardyn-drives, /mnt/other)", source)
+
+	for _, tc := range []struct{ name, reason string }{
+		{"source refused", DriveSourceRefused},
+		{"home name refused", DriveHomeNameRefused},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := RefuseUserDriveBind(drive, source, real, tc.reason, cause)
+			if err == nil {
+				t.Fatal("RefuseUserDriveBind returned nil — a refusal must be an error")
+			}
+			for _, leak := range []string{source, real, drive.HostRoot, "/mnt/other", "WARDYN_USER_DRIVE_HOST_ROOTS"} {
+				if strings.Contains(err.Error(), leak) {
+					t.Errorf("refusal = %q leaks %q to the run's creator", err, leak)
+				}
+			}
+			for _, want := range []string{`drive "nas"`, `directory "alice"`} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("refusal = %q, want it to name %s", err, want)
+				}
+			}
+		})
+	}
+
+	// A mount carrying no drive NAME falls back to the directory alone: the
+	// fallback for "I cannot name the drive" must not be "then disclose the
+	// object", which on a share IS the operator's absolute path.
+	anon := *drive
+	anon.DriveName = ""
+	if got := DriveSubject(&anon); got != `directory "alice"` {
+		t.Errorf("DriveSubject(no drive name) = %q, want `directory \"alice\"`", got)
+	}
+	if got := DriveSubject(nil); got == "" || strings.Contains(got, "%!") {
+		t.Errorf("DriveSubject(nil) = %q, want a sentence — a refusal about a driveless mount is still a refusal", got)
+	}
+}
+
+// res2-06: the three drive comments that justified a defence-in-depth check by
+// naming cmd/wardyn-runner's -spec JSON as a reachable DriveMount input.
+//
+// It is not one. fileSpec declares no drive field and loadSpec never assigns
+// SandboxSpec.Drive (cmd/wardyn-runner/main_test.go's TestSpecJSON_CannotCarryADrive
+// pins that from the source), so a hand-written spec cannot deliver a drive at
+// all. The checks are right and stay; what was wrong was the only evidence a
+// reader had for keeping them, and evidence that does not survive a two-minute
+// check is how a correct check gets deleted.
+func TestDriveCommentsDoNotClaimTheSpecJSONIsAReachableDriveInput(t *testing.T) {
+	for _, file := range []string{"user_drive_mount.go", "docker/driver_mounts.go", "docker/driver_mount_test.go"} {
+		src, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		for _, claim := range []string{
+			"hand-written -spec",
+			"the standalone runner's -spec JSON (cmd/wardyn-runner), neither",
+			"a control-plane bug and the standalone\n// runner's -spec JSON",
+		} {
+			if strings.Contains(string(src), claim) {
+				t.Errorf("%s still names the -spec JSON as a reachable drive input (%q) — its decoder has no drive field", file, claim)
+			}
+		}
+	}
+}
+
+// res2-07: the two operator ceilings may not name overlapping trees without the
+// operator being told.
+//
+// WARDYN_USER_DRIVE_HOST_ROOTS bounds where a SHARE may be rooted, and Wardyn
+// binds one person's subdirectory of it. WARDYN_MEMBER_WORKSPACE_ROOTS bounds
+// what a MEMBER may onboard and bind WHOLE. Point both at /srv/shares and the
+// member surface hands out every person's home through a path that consults no
+// drive allocation — with both parsers returning no warning, because neither
+// could see the other's list.
+func TestMountCeilingOverlapWarnings(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		member MemberMountPolicy
+		drives []string
+		want   string
+	}{
+		{
+			name:   "the same tree",
+			member: MemberMountPolicy{Roots: []string{"/srv/shares"}},
+			drives: []string{"/srv/shares"},
+			want:   "both name",
+		},
+		{
+			name:   "a member root that HOLDS the share",
+			member: MemberMountPolicy{Roots: []string{"/srv"}},
+			drives: []string{"/srv/shares"},
+			want:   "which holds the WARDYN_USER_DRIVE_HOST_ROOTS entry",
+		},
+		{
+			name:   "a member root INSIDE the share",
+			member: MemberMountPolicy{Roots: []string{"/srv/shares/projects"}},
+			drives: []string{"/srv/shares"},
+			want:   "which is INSIDE the WARDYN_USER_DRIVE_HOST_ROOTS entry",
+		},
+		{
+			// A per-principal override REPLACES the shared list, so it is a
+			// ceiling in its own right and overlaps on its own.
+			name: "a per-principal override",
+			member: MemberMountPolicy{
+				Roots:            []string{"/home/projects"},
+				RootsByPrincipal: map[string][]string{"alice@corp.example": {"/srv/shares"}},
+			},
+			drives: []string{"/srv/shares"},
+			want:   "both name",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := MountCeilingOverlapWarnings(tc.member, tc.drives)
+			if len(got) != 1 {
+				t.Fatalf("warnings = %v, want exactly one", got)
+			}
+			if !strings.Contains(got[0], tc.want) {
+				t.Errorf("warning = %q, want it to carry %q", got[0], tc.want)
+			}
+			for _, name := range []string{"WARDYN_MEMBER_WORKSPACE_ROOTS", "WARDYN_USER_DRIVE_HOST_ROOTS"} {
+				if !strings.Contains(got[0], name) {
+					t.Errorf("warning = %q does not name %s — an operator has two variables to choose between", got[0], name)
+				}
+			}
+		})
+	}
+
+	// The CONTROL: separate trees warn about nothing. A same-PREFIX sibling is
+	// the row that would fail a naive HasPrefix without the separator.
+	for _, tc := range []struct {
+		name   string
+		member []string
+		drives []string
+	}{
+		{"separate trees", []string{"/home/projects"}, []string{"/srv/shares"}},
+		{"a same-prefix sibling", []string{"/srv/shares-archive"}, []string{"/srv/shares"}},
+		{"no drive ceiling at all", []string{"/srv/shares"}, nil},
+		{"no member ceiling at all", nil, []string{"/srv/shares"}},
+	} {
+		t.Run("clean/"+tc.name, func(t *testing.T) {
+			if got := MountCeilingOverlapWarnings(MemberMountPolicy{Roots: tc.member}, tc.drives); len(got) != 0 {
+				t.Errorf("warnings = %v, want none", got)
+			}
+		})
 	}
 }

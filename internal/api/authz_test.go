@@ -1455,7 +1455,7 @@ func (s *authzStore) DeleteUserDrive(context.Context, uuid.UUID) error {
 func (s *authzStore) ListUserDrives(context.Context) ([]types.UserDriveListItem, error) {
 	return nil, nil
 }
-func (s *authzStore) UpsertUserDriveGrant(_ context.Context, g types.UserDriveGrant) (types.UserDriveGrant, error) {
+func (s *authzStore) UpsertUserDriveGrant(_ context.Context, g types.UserDriveGrant, _ bool) (types.UserDriveGrant, error) {
 	return g, nil
 }
 func (s *authzStore) DeleteUserDriveGrant(context.Context, uuid.UUID) (types.UserDriveGrant, error) {

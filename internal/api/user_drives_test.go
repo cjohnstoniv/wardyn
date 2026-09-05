@@ -118,9 +118,21 @@ func (s *driveCRUDStore) ListUserDrives(context.Context) ([]types.UserDriveListI
 	return out, nil
 }
 
-func (s *driveCRUDStore) UpsertUserDriveGrant(_ context.Context, g types.UserDriveGrant) (types.UserDriveGrant, error) {
+func (s *driveCRUDStore) UpsertUserDriveGrant(_ context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, error) {
 	if _, ok := s.drives[g.DriveID]; !ok {
 		return types.UserDriveGrant{}, store.ErrNotFound // the FK
+	}
+	// The SILENT RE-HOME guard, mirrored from the store's own DO UPDATE ...
+	// WHERE: a write that never mentioned home_override may not clear a pinned
+	// one. Mirrored rather than skipped because this double is what every
+	// handler-level drive test writes through, and a double that cannot refuse
+	// is a double that hides the refusal.
+	if !homeOverrideStated {
+		for _, existing := range s.grants {
+			if existing.SubjectType == g.SubjectType && existing.Subject == g.Subject && existing.HomeOverride != "" {
+				return types.UserDriveGrant{}, store.ErrConflict
+			}
+		}
 	}
 	// The one uniqueness rule the natural key does not carry, mirrored from the
 	// store's own NOT EXISTS guard: a directory name on a drive is ONE
@@ -434,10 +446,17 @@ func TestUserDriveWriteRefusals(t *testing.T) {
 		{
 			// The bind-mount deny-list, applied at AUTHORING rather than left to
 			// the driver: /etc is inside no legitimate share.
+			//
+			// It names the DENIED PREFIX, not the mount-source phrasing the
+			// generic bind refusal uses: an admin authoring a drive typed a
+			// host_root, and "mount source" is vocabulary from a layer they are
+			// not looking at. The prefix in parentheses is the actionable half
+			// — WHICH tree bit — so it is pinned too, which is strictly more
+			// than the single substring this row used to assert.
 			name:  "a host_path drive under a denied prefix is a 422",
 			roots: []string{"/"},
 			body:  `{"name":"share","backend":"host_path","home_template":"email_local","host_root":"/etc/homes"}`,
-			want:  http.StatusUnprocessableEntity, msg: "denied host path",
+			want:  http.StatusUnprocessableEntity, msg: "is under a denied prefix (/etc)",
 		},
 		{
 			// A share's directories are named by whoever owns the share, so a
@@ -1080,13 +1099,22 @@ func TestGetUserDrivesIsTheWholePicture(t *testing.T) {
 		t.Errorf("runner_target = %q, want docker", got.RunnerTarget)
 	}
 
-	srv, _ = driveAdminServer(st, []string{"/srv/homes"})
+	// A REAL root, not a spelled one. The field promises "a host_path drive can
+	// be authored here", which is why it is asked through the write boundary's
+	// own ceiling check (userDriveHostRootsUsable) rather than through
+	// len(roots): "/srv/homes" is not on this host, so a deployment configured
+	// that way OFFERS host_path in the console and 422s every save. Asserting
+	// the old len(roots) answer here would be asserting that offer-and-refuse.
+	// Strictly more than it replaces: it still pins true-with-roots, and now
+	// pins that the roots have to be usable — the dead-ceiling matrix is
+	// TestHostRootsConfiguredMeansUsable.
+	srv, _ = driveAdminServer(st, []string{t.TempDir()})
 	w = driveCall(t, srv.handleGetUserDrives, http.MethodGet, "/api/v1/drives", "", nil)
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if !got.HostRootsConfigured {
-		t.Error("host_roots_configured = false with roots set")
+		t.Error("host_roots_configured = false with a usable root set")
 	}
 }
 
@@ -1526,5 +1554,381 @@ func runDriveListBoundsCase(t *testing.T, build func() (*Server, *driveCRUDStore
 	// per-drive counts are what stay correct when the allocation table is a page.
 	if len(whole.Drives) != 1 || whole.Drives[0].GrantCount != seeded {
 		t.Errorf("drives = %+v, want the one drive still carrying its full count of %d", whole.Drives, seeded)
+	}
+}
+
+// TestGrantRepointCannotSilentlyClearAPinnedHomeOverride is the grant-row half
+// of the rule driveRehomeGuard states for the drive row: nothing may re-home an
+// allocated member without saying so.
+//
+// home_override IS an identity field — DriveObjectName derives the object from
+// the resolved home — so clearing one moves that person's storage. Before this
+// guard, ANY write on their natural key did it silently: home_override decoded
+// as a plain string, so "absent" and "empty" were one value, and the store's ON
+// CONFLICT replaced the column wholesale. An admin repointing bsmith at another
+// drive, or bumping a priority, wiped the directory name; the member's next run
+// mounted wardyn-drive-<hash> and the object holding their work was left behind
+// with nothing in Wardyn naming it.
+//
+// STATING THE FIELD IS THE CONFIRMATION, which is why there is no ?confirm=
+// here and one on the drive PUT: a drive PUT cannot express "leave these four
+// columns alone", while this write can express the one column exactly.
+func TestGrantRepointCannotSilentlyClearAPinnedHomeOverride(t *testing.T) {
+	st := newDriveCRUDStore()
+	srv, _ := driveAdminServer(st, nil)
+	d := *driveFixture(nil)
+	st.drives[d.ID] = d
+	other := *driveFixture(func(o *types.UserDrive) { o.ID, o.Name = uuid.New(), "Design scratch" })
+	st.drives[other.ID] = other
+
+	post := func(body string) *httptest.ResponseRecorder {
+		return driveCall(t, srv.handleUpsertUserDriveGrant, http.MethodPost, "/api/v1/drives/grants", body, nil)
+	}
+	storedHome := func(t *testing.T) string {
+		t.Helper()
+		for _, g := range st.grants {
+			if g.SubjectType == types.CapabilitySubjectUser && g.Subject == "sub-bob" {
+				return g.HomeOverride
+			}
+		}
+		t.Fatal("no grant stored for sub-bob")
+		return ""
+	}
+
+	if w := post(`{"subject_type":"user","subject":"sub-bob","drive_id":"` + d.ID.String() +
+		`","home_override":"bsmith"}`); w.Code != http.StatusCreated {
+		t.Fatalf("allocate = %d, want 201: %s", w.Code, w.Body.String())
+	}
+
+	// THE REGRESSION: a repoint that never mentions the field.
+	w := post(`{"subject_type":"user","subject":"sub-bob","drive_id":"` + other.ID.String() + `","priority":5}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("a repoint that never mentioned home_override = %d, want 409: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "home_override") {
+		t.Errorf("409 body = %s, want it to name the field the admin has to state", w.Body.String())
+	}
+	if got := storedHome(t); got != "bsmith" {
+		t.Fatalf("stored home_override = %q after the refused write, want it untouched at \"bsmith\"", got)
+	}
+
+	// STATING IT is the confirmation, in both directions. Keeping the name:
+	if w := post(`{"subject_type":"user","subject":"sub-bob","drive_id":"` + other.ID.String() +
+		`","priority":5,"home_override":"bsmith"}`); w.Code != http.StatusOK {
+		t.Fatalf("a repoint that states the name = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if got := storedHome(t); got != "bsmith" {
+		t.Errorf("stored home_override = %q, want the stated \"bsmith\"", got)
+	}
+	// And dropping it deliberately, which an admin must still be able to do.
+	if w := post(`{"subject_type":"user","subject":"sub-bob","drive_id":"` + other.ID.String() +
+		`","home_override":""}`); w.Code != http.StatusOK {
+		t.Fatalf("an explicit empty home_override = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if got := storedHome(t); got != "" {
+		t.Errorf("stored home_override = %q after an explicit \"\", want it cleared", got)
+	}
+
+	// THE SCOPE: a row that pins NOTHING is not protected by this guard, so the
+	// ordinary allocation write is unaffected — the refusal is about losing a
+	// name, not about the field being absent.
+	if w := post(`{"subject_type":"user","subject":"sub-alice","drive_id":"` + d.ID.String() +
+		`"}`); w.Code != http.StatusCreated {
+		t.Fatalf("a first allocation with no home_override = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	if w := post(`{"subject_type":"user","subject":"sub-alice","drive_id":"` + d.ID.String() +
+		`","priority":3}`); w.Code != http.StatusOK {
+		t.Fatalf("re-writing a row that pins nothing = %d, want 200: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestDriveHostRootNestingSeesThroughASymlink pins the half of the nesting gate
+// that no other check can perform.
+//
+// The gate used to compare the two STORED STRINGS only, and delegated the
+// symlink half to UserDriveHostRootCheck — which resolves ONE root against the
+// deployment's env ceiling and has no second drive in scope, so it never
+// compared two drives' roots at all. The literal nested path was refused and a
+// SYMLINK to the same directory was accepted, with the deployment's own ceiling
+// honoured throughout.
+//
+// What the accepted pair costs: drive A's members have writable homes inside
+// A's tree, so any of them can replace a segment under it with a link and
+// redirect every member of drive B — one drive's members authoring the other
+// drive's storage, which is the outcome this gate exists to refuse.
+func TestDriveHostRootNestingSeesThroughASymlink(t *testing.T) {
+	base := t.TempDir()
+	shares := filepath.Join(base, "shares")
+	team := filepath.Join(shares, "alice", "team")
+	if err := os.MkdirAll(team, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	link := filepath.Join(base, "teamshare")
+	if err := os.Symlink(team, link); err != nil {
+		t.Skipf("symlinks unavailable on this host: %v", err)
+	}
+
+	st := newDriveCRUDStore()
+	// BOTH paths are inside the ceiling, so nothing above this gate can refuse
+	// either of them: the refusal has to come from the relationship of the two
+	// rows, which is the whole claim.
+	srv, _ := driveAdminServer(st, []string{base})
+	create := func(name, root string) *httptest.ResponseRecorder {
+		return driveCall(t, srv.handleCreateUserDrive, http.MethodPost, "/api/v1/drives",
+			`{"name":"`+name+`","backend":"host_path","host_root":"`+root+`","home_template":"sub"}`, nil)
+	}
+
+	if w := create("Drive A", shares); w.Code != http.StatusCreated {
+		t.Fatalf("create the outer drive = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	w := create("Drive B", link)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("a root that RESOLVES inside another drive's root = %d, want 422: %s", w.Code, w.Body.String())
+	}
+	// The admin cannot act on this without being told what they cannot see from
+	// the form: which real directory their path landed in.
+	if !strings.Contains(w.Body.String(), "resolves to") || !strings.Contains(w.Body.String(), "Drive A") {
+		t.Errorf("422 body = %s, want it to name the other drive AND the resolved path", w.Body.String())
+	}
+
+	// THE CONTROL, in both directions. A sibling that resolves nowhere near the
+	// other tree is still authorable, so the gate refuses nesting and not links.
+	sibling := filepath.Join(base, "other")
+	if err := os.MkdirAll(sibling, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	siblingLink := filepath.Join(base, "otherlink")
+	if err := os.Symlink(sibling, siblingLink); err != nil {
+		t.Skipf("symlinks unavailable on this host: %v", err)
+	}
+	if w := create("Drive C", siblingLink); w.Code != http.StatusCreated {
+		t.Errorf("a link to a SIBLING tree = %d, want 201: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestHostRootsConfiguredMeansUsable pins what GET /drives' host_roots_configured
+// actually promises: not "the operator set the variable" but "a host_path drive
+// can be authored here".
+//
+// It was len(roots) > 0, and three configured values are DEAD ceilings — a root
+// of "/" (which withinAnyRoot matches nothing under), a root beneath a denied
+// bind prefix, and a root that does not resolve on this host. Every one of them
+// reported the backend as available, so the console enabled `host_path` and the
+// save 422'd — the exact offer-and-refuse this field exists to prevent, on the
+// deployments least able to diagnose it.
+func TestHostRootsConfiguredMeansUsable(t *testing.T) {
+	live := t.TempDir()
+	for _, tc := range []struct {
+		name  string
+		roots []string
+		want  bool
+	}{
+		{"unset", nil, false},
+		{"a live root", []string{live}, true},
+		{"the dead \"/\" ceiling", []string{"/"}, false},
+		{"a root under a denied bind prefix", []string{"/dev/shm"}, false},
+		{"a root that is not on this host", []string{filepath.Join(live, "not-mounted")}, false},
+		{"one dead root beside a live one", []string{"/dev/shm", live}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := driveAdminServer(newDriveCRUDStore(), tc.roots)
+			w := driveCall(t, srv.handleGetUserDrives, http.MethodGet, "/api/v1/drives", "", nil)
+			if w.Code != http.StatusOK {
+				t.Fatalf("GET /drives = %d: %s", w.Code, w.Body.String())
+			}
+			var body struct {
+				HostRootsConfigured bool `json:"host_roots_configured"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if body.HostRootsConfigured != tc.want {
+				t.Errorf("host_roots_configured = %v, want %v — the console enables the host_path option on this bit, "+
+					"and every save under a dead ceiling is a 422", body.HostRootsConfigured, tc.want)
+			}
+		})
+	}
+}
+
+// TestDriveTargetIsReservedOnEveryCompositionSeam is the half
+// TestDriveTargetIsReservedFromAuthoring does not reach: the two seams that
+// turn a STORED workspace's sources into a run policy.
+//
+// The counterfactual is what makes this worth writing. Reverting BOTH seams'
+// runner.ValidateAuthoredTarget to runner.ValidateTarget — which is the SAME
+// call minus the reserved-drive rule, i.e. exactly the regression a merge or a
+// refactor would produce — left ./internal/api fully green. The authoring
+// tests above cover validatePolicySpec, validateWorkspaceSource and
+// buildRepoRecords; neither seedRequestWorkspace (the create path) nor
+// wireWorkspaceSource (the record/verify path) had a case, and both compose a
+// stored row that never passed the authoring gate.
+//
+// AND THE DISPATCH SEAM BELOW THEM, which cannot 422 because the run row
+// already exists: a stored policy that names the reserved target reached the
+// driver and failed the whole CreateSandbox, so every run under that policy
+// died at STARTING with an internal reservation as its failure_hint.
+func TestDriveTargetIsReservedOnEveryCompositionSeam(t *testing.T) {
+	h := newHarness(t)
+	for _, target := range []string{runner.DriveTarget, runner.DriveTarget + "/shared"} {
+		for _, src := range []types.WorkspaceSource{
+			{Type: types.WorkspaceSourceTypeEphemeral, Target: target},
+			{Type: types.WorkspaceSourceTypeLocalDir, Path: "/srv/legacy", Target: target},
+			{Type: types.WorkspaceSourceTypeRepo, Source: "octocat/hello", Target: target},
+		} {
+			t.Run("seedRequestWorkspace "+string(src.Type)+" "+target, func(t *testing.T) {
+				wsID := uuid.New()
+				ws := types.Workspace{ID: wsID, Sources: []types.WorkspaceSource{src}}
+				srv := New(baseTestConfig(h, &workspaceStoreFake{ws: ws}))
+				spec := &types.RunPolicySpec{}
+				req := &createRunRequest{Agent: "claude-code", WorkspaceID: &wsID}
+
+				dirs, _, code, err := srv.seedRequestWorkspace(context.Background(), spec, req)
+				if err == nil {
+					t.Fatalf("a stored %s source at %q composed unrefused: dirs=%v mounts=%+v repos=%+v",
+						src.Type, target, dirs, spec.WorkspaceMounts, spec.WorkspaceRepos)
+				}
+				if code != http.StatusUnprocessableEntity {
+					t.Errorf("code = %d, want 422 (the create path refuses, it does not drop): %v", code, err)
+				}
+				if !strings.Contains(err.Error(), "reserved") {
+					t.Errorf("err = %v, want the reserved-target refusal", err)
+				}
+			})
+		}
+	}
+
+	// THE POSITIVE CONTROL: a neighbouring target under the same allowed prefix
+	// still composes, so the seam refuses the reserved subtree and not the
+	// stored-source path in general.
+	t.Run("a neighbouring target still composes", func(t *testing.T) {
+		wsID := uuid.New()
+		ws := types.Workspace{ID: wsID, Sources: []types.WorkspaceSource{
+			{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/drives-report"},
+		}}
+		srv := New(baseTestConfig(h, &workspaceStoreFake{ws: ws}))
+		spec := &types.RunPolicySpec{}
+		req := &createRunRequest{Agent: "claude-code", WorkspaceID: &wsID}
+		dirs, _, code, err := srv.seedRequestWorkspace(context.Background(), spec, req)
+		if err != nil {
+			t.Fatalf("neighbouring target refused: %d %v", code, err)
+		}
+		if len(dirs) != 1 || dirs[0] != "/home/agent/drives-report" {
+			t.Errorf("ephemeralDirs = %v, want the neighbouring target", dirs)
+		}
+	})
+
+	// DISPATCH. resolvePolicy hands a stored spec through verbatim, so this is
+	// the last seam before the driver — and the driver's answer is to refuse
+	// the whole sandbox.
+	t.Run("buildRunMounts drops a stored mount at the reserved target", func(t *testing.T) {
+		ro := false
+		policy := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{
+			{Source: "/srv/legacy", Target: runner.DriveTarget, ReadOnly: &ro},
+			{Source: "/srv/legacy2", Target: runner.DriveTarget + "/shared", ReadOnly: &ro},
+			{Source: "/srv/work", Target: "/home/agent/work", ReadOnly: &ro},
+		}}
+		mounts := buildRunMounts(policy, llmTransport{}, memberMountPosture{})
+		if len(mounts) != 1 || mounts[0].Target != "/home/agent/work" {
+			t.Fatalf("mounts = %+v, want ONLY the ordinary bind — a reserved-target bind fails the whole "+
+				"CreateSandbox, so every run under this stored policy dies at STARTING", mounts)
+		}
+	})
+}
+
+// TestUserDriveGrantAuditIsTheWholeRow is the allocation-side counterpart of
+// TestUserDriveWriteAuditIsTheWholeRow, and it exists because the two grant
+// rows were pinned by NEITHER key set NOR value.
+//
+// The counterfactual: redact `subject` to "REDACTED", zero `drive_id`,
+// `priority` and `size_mib_override`, nil `writable_override`, force
+// `home_override_set` false — and delete two of the keys outright — and every
+// Go suite in the repo stays green. Only `enabled` (drive.grant.write) and
+// `subject` (drive.grant.delete) were read at all, and neither by value against
+// a known row. docs/AUDIT-ACTIONS.md declares the key set for both; nothing
+// held the code to it.
+//
+// BY VALUE AND BY THE WHOLE MAP, the same treatment drive.write already gets: a
+// key-set check alone would pass on a row whose every value came from the wrong
+// allocation, and a value check alone would pass on a row that had quietly
+// grown a field carrying the directory NAME — which is the one thing this
+// payload deliberately reduces to a boolean.
+func TestUserDriveGrantAuditIsTheWholeRow(t *testing.T) {
+	st := newDriveCRUDStore()
+	srv, rec := driveAdminServer(st, nil)
+	d := *driveFixture(nil)
+	st.drives[d.ID] = d
+
+	w := driveCall(t, srv.handleUpsertUserDriveGrant, http.MethodPost, "/api/v1/drives/grants",
+		`{"subject_type":"user","subject":"Sub-Bob","drive_id":"`+d.ID.String()+
+			`","priority":7,"size_mib_override":2048,"writable_override":false,"home_override":"bsmith"}`, nil)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("allocate = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	var saved types.UserDriveGrant
+	if err := json.Unmarshal(w.Body.Bytes(), &saved); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	ev := driveAuditEvent(t, rec, "drive.grant.write")
+	if ev.Target != saved.ID.String() {
+		t.Errorf("drive.grant.write target = %q, want the saved row's id %q", ev.Target, saved.ID)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(ev.Data, &got); err != nil {
+		t.Fatalf("unmarshal drive.grant.write data: %v", err)
+	}
+	want := map[string]any{
+		"subject_type": "user",
+		// LOWERCASED, because that is what was stored and what the resolver
+		// will match on: an audit row spelling the subject the way the request
+		// typed it would not name the row that exists.
+		"subject":           "sub-bob",
+		"drive_id":          d.ID.String(),
+		"priority":          float64(7),
+		"size_mib_override": float64(2048),
+		"writable_override": false,
+		// A BOOLEAN AND NEVER THE VALUE: a directory name is a person's
+		// username as often as not, and whether an admin pinned one is the
+		// governance fact. If this key ever becomes a string, this assertion is
+		// where that has to be argued for.
+		"home_override_set": true,
+		"enabled":           true,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("drive.grant.write data = %#v,\nwant EXACTLY %#v", got, want)
+	}
+	if s := string(ev.Data); strings.Contains(s, "bsmith") {
+		t.Errorf("drive.grant.write data = %s — it carries the directory NAME, which home_override_set exists to avoid", s)
+	}
+
+	// THE DELETE, which is the offboarding half: it deletes no data, so the row
+	// has to say what the operator was told to do about the directory this
+	// allocation was the last pointer to.
+	rec.events = nil
+	w = driveCall(t, srv.handleDeleteUserDriveGrant, http.MethodDelete, "/api/v1/drives/grants/"+saved.ID.String(),
+		"", map[string]string{"id": saved.ID.String()})
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("delete = %d, want 204: %s", w.Code, w.Body.String())
+	}
+	del := driveAuditEvent(t, rec, "drive.grant.delete")
+	if del.Target != saved.ID.String() {
+		t.Errorf("drive.grant.delete target = %q, want the removed row's id %q", del.Target, saved.ID)
+	}
+	var gotDel map[string]any
+	if err := json.Unmarshal(del.Data, &gotDel); err != nil {
+		t.Fatalf("unmarshal drive.grant.delete data: %v", err)
+	}
+	wantDel := map[string]any{
+		"subject_type": "user",
+		"subject":      "sub-bob",
+		"drive_id":     d.ID.String(),
+		// `drive` is the drive OBJECT's name and `reclaim` its declared intent
+		// — the pair that makes this row worth writing, and the pair a store
+		// lookup failure is allowed to degrade (best-effort, after the delete).
+		"drive":   "Corp NAS",
+		"reclaim": string(types.DriveReclaimRetain),
+	}
+	if !reflect.DeepEqual(gotDel, wantDel) {
+		t.Errorf("drive.grant.delete data = %#v,\nwant EXACTLY %#v", gotDel, wantDel)
 	}
 }

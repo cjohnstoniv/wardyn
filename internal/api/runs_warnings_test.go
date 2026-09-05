@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -89,5 +90,99 @@ func TestCreateRun_SurfacesMemberNarrowingWarnings(t *testing.T) {
 	// caller HEARS about it.
 	if st.created.ID == (types.AgentRun{}).ID {
 		t.Fatal("no run was persisted, so the 201 above proved nothing")
+	}
+}
+
+// collisionStore answers the workspace-collision question BOTH ways and counts
+// which way it was asked: the targeted store read and the unbounded ListRuns
+// fallback. Both return the same collision, so a test that gets the right
+// warning from the wrong read still fails — which is the whole point, because
+// the defect here is a performance one and produces identical output.
+type collisionStore struct {
+	store.Store
+	runs          []types.AgentRun
+	listRunsCalls int
+	activeCalls   int
+	activePath    string
+}
+
+func (s *collisionStore) ListRuns(context.Context) ([]types.AgentRun, error) {
+	s.listRunsCalls++
+	return s.runs, nil
+}
+
+func (s *collisionStore) ActiveRunsAtWorkspacePath(_ context.Context, path string) ([]types.AgentRun, error) {
+	s.activeCalls++
+	s.activePath = path
+	var out []types.AgentRun
+	for _, r := range s.runs {
+		if r.WorkspacePath == path && !r.State.IsTerminal() {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// TestWorkspaceCollisionAsksTheQuestionItMeans pins the READ, not the sentence.
+//
+// warnWorkspaceCollision is advisory and never blocks a launch, and it ran on
+// EVERY run create — loading every run in the deployment (ListRuns is
+// documented "all runs in reverse creation order (unbounded)") through a Seq
+// Scan plus a full sort of agent_runs, a table nothing prunes and no retention
+// policy bounds, to decide whether to print one sentence that usually is not
+// printed. The predicate is two columns; Postgres can answer it with a WHERE.
+//
+// THE OUTPUT IS IDENTICAL EITHER WAY, which is exactly why this needs a test
+// that watches the read: every existing assertion about the warning's text
+// passes on both implementations, so nothing stood between the fix and a
+// silent revert to the full scan.
+func TestWorkspaceCollisionAsksTheQuestionItMeans(t *testing.T) {
+	const path = "/srv/shared-workspace"
+	mine, other, done, elsewhere := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	st := &collisionStore{runs: []types.AgentRun{
+		{ID: other, WorkspacePath: path, State: types.RunRunning},
+		{ID: done, WorkspacePath: path, State: types.RunCompleted},
+		{ID: elsewhere, WorkspacePath: "/srv/other", State: types.RunRunning},
+		{ID: mine, WorkspacePath: path, State: types.RunPending},
+	}}
+	srv := New(Config{Store: st, Audit: &recRecorder{}, RunnerTarget: "docker"})
+
+	warnings := srv.warnWorkspaceCollision(context.Background(), mine, path)
+
+	if st.activeCalls != 1 {
+		t.Errorf("ActiveRunsAtWorkspacePath called %d times, want exactly 1 — the create path must ask "+
+			"the question it means", st.activeCalls)
+	}
+	if st.listRunsCalls != 0 {
+		t.Errorf("ListRuns called %d times — that is the UNBOUNDED read of every run in the deployment, "+
+			"on every single run create", st.listRunsCalls)
+	}
+	if st.activePath != path {
+		t.Errorf("the read was scoped to %q, want the run's own workspace path %q", st.activePath, path)
+	}
+
+	// AND THE ANSWER IS UNCHANGED, in all three directions the filter decides:
+	// the other live run collides, the finished one does not, the run being
+	// created is not its own collision, and a run elsewhere is irrelevant.
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %v, want exactly one collision warning", warnings)
+	}
+	if !strings.Contains(warnings[0], other.String()) {
+		t.Errorf("warning = %q, want it to name the colliding run %s", warnings[0], other)
+	}
+	for _, id := range []uuid.UUID{mine, done, elsewhere} {
+		if strings.Contains(warnings[0], id.String()) {
+			t.Errorf("warning = %q names %s, which is not a live collision on this path", warnings[0], id)
+		}
+	}
+
+	// NO COLLISION reads nothing beyond the one scoped query and warns nothing.
+	clean := &collisionStore{runs: st.runs}
+	srvClean := New(Config{Store: clean, Audit: &recRecorder{}, RunnerTarget: "docker"})
+	if w := srvClean.warnWorkspaceCollision(context.Background(), uuid.New(), "/srv/untouched"); len(w) != 0 {
+		t.Errorf("warnings = %v for a path nothing runs on, want none", w)
+	}
+	if clean.listRunsCalls != 0 {
+		t.Errorf("ListRuns called %d times on the no-collision path", clean.listRunsCalls)
 	}
 }

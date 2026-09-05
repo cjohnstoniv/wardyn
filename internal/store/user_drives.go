@@ -216,7 +216,35 @@ func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, erro
 // puts the "new grants are on by default" decision at the API write boundary,
 // where the request that omitted the field can still be seen — the column's own
 // DEFAULT true never applies, because this INSERT always supplies a value.
-func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant) (types.UserDriveGrant, error) {
+//
+// ─── AND THE SECOND GUARD IN THE SAME STATEMENT: A SILENT RE-HOME ──────────
+//
+// home_override IS an identity field. The object a member binds is derived
+// from it (DriveObjectName over the resolved home), so clearing one re-homes
+// that person: their next run mounts `wardyn-drive-<hash>` instead of
+// `wardyn-drive-bsmith`, and the object holding their work is left behind with
+// nothing in Wardyn naming it. That is the SAME act driveRehomeGuard answers
+// 409 for one surface over, on the drive row — and this write had no
+// counterpart, because ON CONFLICT replaced every override wholesale. A POST
+// that only meant to change a priority, or to repoint a subject at another
+// drive, cleared it.
+//
+// homeOverrideStated is the request's tri-state, decided at the API boundary
+// where "the client said nothing" is still visible (the same thing Enabled's
+// *bool exists for, two fields apart in the same request struct). When it is
+// FALSE the DO UPDATE is refused on a row that pins a name — no row comes back,
+// which the caller reads as ErrConflict and answers 409 naming the remedy:
+// state the field. Stating it is the confirmation, so there is no ?confirm= to
+// invent and no second spelling of the act.
+//
+// IN THE STATEMENT, not in a read before it, for the reason the uniqueness
+// guard above is: the window between "does this row pin a name" and the write
+// is one statement rather than two round trips — which is strictly better than
+// driveRehomeGuard, whose own doc concedes its read-then-write race.
+//
+// THE ZERO VALUE IS THE SAFE ONE. A caller that forgets the argument passes
+// false, which REFUSES the clear rather than performing it.
+func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, error) {
 	if g.ID == uuid.Nil {
 		g.ID = uuid.New()
 	}
@@ -234,10 +262,12 @@ func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant) (t
 			    size_mib_override = EXCLUDED.size_mib_override,
 			    writable_override = EXCLUDED.writable_override,
 			    home_override = EXCLUDED.home_override, enabled = EXCLUDED.enabled
+			WHERE $11::boolean OR user_drive_grants.home_override = ''
 		RETURNING ` + userDriveGrantCols
 	out, err := scanUserDriveGrant(s.Pool.QueryRow(ctx, q,
 		g.ID, g.SubjectType, g.Subject, g.DriveID, g.Priority,
-		g.SizeMiBOverride, g.WritableOverride, g.HomeOverride, g.Enabled, g.CreatedBy))
+		g.SizeMiBOverride, g.WritableOverride, g.HomeOverride, g.Enabled, g.CreatedBy,
+		homeOverrideStated))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
@@ -260,12 +290,20 @@ func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant) (t
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return types.UserDriveGrant{}, ErrConflict
 		}
-		// NO ROWS is the guard above and nothing else: the FK raises 23503
-		// (handled just above), the natural key is absorbed by ON CONFLICT, and
-		// the SELECT is otherwise a row of constants that cannot be empty. It
-		// arrives as ErrNotFound because scanUserDriveGrant folds pgx.ErrNoRows
-		// into it for the READ callers that share the helper — on THIS
-		// statement that reading would be wrong, and the reason is above.
+		// NO ROWS is one of the two guards above and nothing else: the FK raises
+		// 23503 (handled just above), the natural key is absorbed by ON
+		// CONFLICT, and the SELECT is otherwise a row of constants that cannot
+		// be empty. It arrives as ErrNotFound because scanUserDriveGrant folds
+		// pgx.ErrNoRows into it for the READ callers that share the helper — on
+		// THIS statement that reading would be wrong, and the reason is above.
+		//
+		// WHICH of the two is decidable by the caller without a second read, and
+		// the API needs to decide because the two remedies are different
+		// sentences. They are mutually exclusive by construction: the INSERT's
+		// uniqueness guard short-circuits on an EMPTY home_override, and an
+		// unstated one is always empty; the DO UPDATE's re-home guard is
+		// disabled outright by a STATED one. So homeOverrideStated alone tells
+		// them apart.
 		if errors.Is(err, ErrNotFound) {
 			return types.UserDriveGrant{}, ErrConflict
 		}

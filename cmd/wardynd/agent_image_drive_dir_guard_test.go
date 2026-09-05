@@ -128,12 +128,13 @@ func TestAgentImagesPreCreateDriveDir(t *testing.T) {
 				if mk := driveMkdirInstruction(st.instrs); mk != "" {
 					// BOTH FORMS. The substring pins the SPELLING the images
 					// actually use (flag, owner, path, in that order);
-					// chownsAgentHome pins that the path is /home/agent ITSELF
-					// and not a child of it — `chown -R agent:agent
+					// chownsAgentHomeAfter pins that the path is /home/agent
+					// ITSELF and not a child of it — `chown -R agent:agent
 					// /home/agent/work` satisfies the substring and leaves the
-					// drive directory root-owned.
-					if !strings.Contains(mk, "chown -R agent:agent "+agentHome) || !chownsAgentHome(mk) {
-						t.Errorf("%s: %s is created but the SAME instruction does not chown %s to agent:\n\t%s\n"+
+					// drive directory root-owned — AND that the chown runs
+					// after the mkdir, which is the only order that owns it.
+					if !strings.Contains(mk, "chown -R agent:agent "+agentHome) || !chownsAgentHomeAfter(mk) {
+						t.Errorf("%s: %s is created but the SAME instruction does not chown %s to agent AFTER creating it:\n\t%s\n"+
 							"A root-owned drive root is EACCES for uid 1000 the first time a managed drive is mounted over it.", cur, driveDir, agentHome, mk)
 					}
 					return
@@ -269,29 +270,55 @@ func shellWords(seg string) []string {
 // So: the path must be a whole ARGUMENT (strings.Fields, never a substring) of a
 // segment whose COMMAND is mkdir.
 func driveMkdirSegment(instr string) string {
-	for _, seg := range strings.Split(instr, "&&") {
+	if i := driveMkdirSegmentIndex(instr); i >= 0 {
+		return strings.TrimSpace(strings.Split(instr, "&&")[i])
+	}
+	return ""
+}
+
+// driveMkdirSegmentIndex is driveMkdirSegment's answer as a POSITION, which is
+// what the ownership half needs: `&&` is sequential, so "is there a chown" and
+// "is there a chown after the mkdir" are different questions and only the
+// second one is about the directory that ships.
+func driveMkdirSegmentIndex(instr string) int {
+	for i, seg := range strings.Split(instr, "&&") {
 		words := shellWords(seg)
 		if len(words) == 0 || filepath.Base(words[0]) != "mkdir" {
 			continue
 		}
 		if slices.Contains(words[1:], driveDir) {
-			return strings.TrimSpace(seg)
+			return i
 		}
 	}
-	return ""
+	return -1
 }
 
-// chownsAgentHome reports whether one instruction hands /home/agent ITSELF to
-// agent, recursively — the half that matters, because a drive directory the
-// image creates but leaves owned by root is exactly as unwritable as one it
-// never created.
+// chownsAgentHomeAfter reports whether one instruction hands /home/agent ITSELF
+// to agent, recursively, in a segment that runs AFTER the one creating the drive
+// directory — the half that matters, because a drive directory the image creates
+// but leaves owned by root is exactly as unwritable as one it never created.
 //
 // A COMPLETE WORD, never a substring: `strings.Contains(mk, "chown -R
 // agent:agent /home/agent")` was satisfied by `chown -R agent:agent
 // /home/agent/work`, which is the drift this file was written for in the first
 // place — the work directory chowned, the drive directory left to root.
-func chownsAgentHome(instr string) bool {
-	for _, seg := range strings.Split(instr, "&&") {
+//
+// AND IN ORDER, which membership alone cannot say. `&&` is sequential: a
+// recursive chown that runs BEFORE the mkdir owns everything the image had at
+// that moment and nothing the mkdir goes on to create, so `chown -R agent:agent
+// /home/agent && mkdir -p /home/agent/work /home/agent/drive` ships the exact
+// root-owned drive root this guard exists to catch — and it graded GREEN, since
+// both segments were present in one instruction. Reordering base/Dockerfile's
+// own RUN that way was the proof.
+func chownsAgentHomeAfter(instr string) bool {
+	mkdirAt := driveMkdirSegmentIndex(instr)
+	if mkdirAt < 0 {
+		return false
+	}
+	for i, seg := range strings.Split(instr, "&&") {
+		if i <= mkdirAt {
+			continue
+		}
 		words := shellWords(seg)
 		if len(words) == 0 || filepath.Base(words[0]) != "chown" {
 			continue
@@ -397,10 +424,24 @@ func TestDriveDirGuard_RefusesLookalikes(t *testing.T) {
 		{"not recursive", "RUN mkdir -p /home/agent/drive && chown agent:agent /home/agent", false},
 		{"the wrong owner", "RUN mkdir -p /home/agent/drive && chown -R root:root /home/agent", false},
 		{"a mention, not a chown", `RUN mkdir -p /home/agent/drive && echo "chown -R agent:agent /home/agent"`, false},
+		// THE ORDER HOLE: `&&` is sequential, so a recursive chown that runs
+		// BEFORE the mkdir owns nothing the mkdir goes on to create. Both
+		// segments are present in one instruction, which is all the membership
+		// test ever asked — and the image ships a ROOT-owned /home/agent/drive.
+		{"chowned before the mkdir", "RUN chown -R agent:agent /home/agent && mkdir -p /home/agent/work /home/agent/drive", false},
+		// The real base image's spelling, with its usermod prelude, in order.
+		{"the shipped spelling", "RUN usermod -l agent node && usermod -d /home/agent -m agent && groupmod -n agent node " +
+			"&& mkdir -p /home/agent/work /home/agent/drive && chown -R agent:agent /home/agent", true},
+		// And a chown on BOTH sides is fine: the one that runs after is the one
+		// that decides.
+		{"chowned before AND after", "RUN chown -R agent:agent /home/agent && mkdir -p /home/agent/drive && chown -R agent:agent /home/agent", true},
+		// No mkdir at all is not an ownership question — the walk reports the
+		// missing directory instead, and this predicate must not claim green.
+		{"no mkdir of the drive dir", "RUN mkdir -p /home/agent/work && chown -R agent:agent /home/agent", false},
 	} {
 		t.Run("chown/"+tc.name, func(t *testing.T) {
-			if got := chownsAgentHome(tc.instr); got != tc.want {
-				t.Errorf("chownsAgentHome(%q) = %v, want %v", tc.instr, got, tc.want)
+			if got := chownsAgentHomeAfter(tc.instr); got != tc.want {
+				t.Errorf("chownsAgentHomeAfter(%q) = %v, want %v", tc.instr, got, tc.want)
 			}
 		})
 	}

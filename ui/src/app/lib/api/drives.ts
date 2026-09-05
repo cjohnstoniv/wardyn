@@ -117,9 +117,18 @@ export interface UserDriveInput {
   reclaim?: DriveReclaim;
 }
 
-// userDriveGrantRequest. `enabled` and `writable_override` are pointers on the
-// Go side, so an omitted key is not the same as `false` — the caller omits
-// rather than sends a default it did not mean.
+// userDriveGrantRequest. `enabled`, `writable_override` and `home_override` are
+// POINTERS on the Go side, so an omitted key is not the same as its zero value
+// — the caller omits rather than sends a default it did not mean.
+//
+// `home_override` is the one where the zero value is destructive rather than
+// merely wrong: the store's ON CONFLICT writes the column VERBATIM, so a sent
+// "" CLEARS a directory name an admin pinned, and the member's next run mounts
+// a different object while the one holding their work is left behind. Absent
+// means "say nothing, keep it"; "" is a deliberate drop; and a repoint that is
+// silent over a pinned name is refused with a 409 that says so, rather than
+// re-homing anyone. Only a field the admin actually typed in states this key
+// (allocations.tsx's homeTouched).
 interface UserDriveGrantInput {
   subject_type: CapabilitySubjectType;
   subject: string;

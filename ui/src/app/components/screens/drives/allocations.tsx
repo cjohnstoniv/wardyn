@@ -285,6 +285,18 @@ function AddAllocationForm({ drives, onChanged }: { drives: UserDriveListItem[];
   const [sizeOverride, setSizeOverride] = React.useState("");
   const [writable, setWritable] = React.useState<WritableChoice>("inherit");
   const [homeOverride, setHomeOverride] = React.useState("");
+  /** Whether the admin TOUCHED the directory-name field. `home_override` is a
+   *  POINTER on the wire (internal/api/user_drives.go's userDriveGrantRequest),
+   *  and the store's ON CONFLICT writes the column VERBATIM, so the three
+   *  states are not two: ABSENT is "I said nothing" and keeps whatever name is
+   *  pinned, an explicit "" is an admin dropping it, and a repoint that says
+   *  nothing over a pinned name is refused (409) rather than silently
+   *  re-homing that person. This form used to send the key on every submit,
+   *  which made every repoint that never looked at this field CLEAR the name —
+   *  the same silent re-home driveRehomeGuard answers 409 for on the drive row.
+   *  So the key rides only on a field the admin actually typed in, and typing a
+   *  name and then clearing it is how they say "drop it". */
+  const [homeTouched, setHomeTouched] = React.useState(false);
   const [enabled, setEnabled] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
 
@@ -304,7 +316,9 @@ function AddAllocationForm({ drives, onChanged }: { drives: UserDriveListItem[];
         // Omitted, not false: an absent *bool is "same as the drive", which is
         // neither of the two booleans.
         ...(writable === "inherit" ? {} : { writable_override: writable === "rw" }),
-        home_override: userTier ? homeOverride.trim() : "",
+        // Stated only when the admin said something, and never off the user
+        // tier, which may not carry one at all — see homeTouched above.
+        ...(userTier && homeTouched ? { home_override: homeOverride.trim() } : {}),
         enabled,
       });
       setSubject("");
@@ -403,7 +417,10 @@ function AddAllocationForm({ drives, onChanged }: { drives: UserDriveListItem[];
           <Input
             id="drive-allocation-home"
             value={userTier ? homeOverride : ""}
-            onChange={(e) => setHomeOverride(e.target.value)}
+            onChange={(e) => {
+              setHomeOverride(e.target.value);
+              setHomeTouched(true);
+            }}
             disabled={disabled || !userTier}
             className="font-mono"
             autoComplete="off"

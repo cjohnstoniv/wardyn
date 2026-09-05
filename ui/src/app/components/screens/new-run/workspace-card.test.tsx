@@ -66,7 +66,7 @@ describe("WorkspaceCard — no allocation and no door", () => {
 });
 
 describe("WorkspaceCard — a writable allocation", () => {
-  it("offers the checkbox, the hint and the writable sentence, toggle off", () => {
+  it("offers the checkbox, the hint and the writable sentence", () => {
     renderCard({ drive: drive() });
     expect(screen.getByText(DM.NR_CHECKBOX)).toBeInTheDocument();
     // The mount target renders mono, so the hint is split across sibling text
@@ -75,8 +75,31 @@ describe("WorkspaceCard — a writable allocation", () => {
     expect(screen.getByTestId("nr-drive").textContent).toContain(hint);
     expect(screen.getByTestId("nr-drive").textContent).toContain(DM.NR_RW_NOTE);
     expect(screen.getByTestId("nr-drive").textContent).not.toContain(DM.NR_RO_NOTE);
+  });
+
+  // A NARROWING NEEDS A MOUNT TO NARROW. The toggle rides the checkbox, the
+  // way the mock draws it (7a/7b are both mount-ON; nothing draws it with the
+  // mount off) — and it still defaults OFF once it appears (Q5).
+  it("offers no narrowing until the mount is ticked, then offers it off", () => {
+    renderCard({ drive: drive() });
+    expect(screen.queryByText(DM.NR_READONLY_TOGGLE)).toBeNull();
+
+    renderCard({ drive: drive(), state: { driveEnabled: true } });
     expect(screen.getByText(DM.NR_READONLY_TOGGLE)).toBeInTheDocument();
     expect(screen.getByLabelText(DM.NR_READONLY_TOGGLE)).not.toBeChecked();
+  });
+
+  // The half of that which is not cosmetic: with the mount off, `drive` is not
+  // on the wire at all (wizard-spec.ts), so a retained driveReadOnly must not
+  // rewrite the OFFER into a promise of a read-only mount this run will not
+  // make. The sentence describes the allocation as the admin granted it.
+  it("an unmounted drive is offered as granted, whatever driveReadOnly holds", () => {
+    renderCard({ drive: drive(), state: { driveEnabled: false, driveReadOnly: true } });
+    const block = screen.getByTestId("nr-drive").textContent ?? "";
+    expect(block).toContain(DM.NR_HINT("Scratch", DRIVES.SIZE_GIB(16), DRIVES.MODE_RW_INLINE));
+    expect(block).toContain(DM.NR_RW_NOTE);
+    expect(block).not.toContain(DM.NR_RO_NOTE);
+    expect(screen.queryByText(DM.NR_READONLY_TOGGLE)).toBeNull();
   });
 
   it("renders the target in mono without baking the span into the canon string", () => {

@@ -307,6 +307,26 @@ describe("MemberGettingStarted", () => {
     ).not.toBeInTheDocument();
   });
 
+  // The door outranks the allocation HERE too, and for the reason it does on
+  // the New Run card: this page does not merely name the drive, GS_DRIVE_BODY
+  // sends the member to New run to mount it — where NR_DENIED refuses them by
+  // profile name one page load later. An offer that cannot be taken is a false
+  // instruction, so neither moment renders; the absent row claims nothing.
+  it("a shut governance door renders neither the drive chip nor the mount instruction", async () => {
+    getDefaultPolicyMock.mockResolvedValue({
+      min_confinement_class: "CC1",
+      governance_profile_name: "walled",
+    });
+    renderPage(
+      baseMe({ user_drive: baseMeDrive(), user_drive_denied_by_profile: "Contractors" }),
+    );
+    // The governance chip settles the async reads, so the two absences below
+    // are a resolved state rather than a race with the /me read.
+    expect(await screen.findByText(MEMBER.GS_CHIP("walled"))).toBeInTheDocument();
+    expect(screen.queryByText(DM.GS_DRIVE_BODY)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Drive · /)).not.toBeInTheDocument();
+  });
+
   it("shows no chip and no sentence with nothing allocated — today's page", async () => {
     // The governance chip is the settle anchor: it appears only once the
     // async reads have flushed, so the two absences below are a resolved

@@ -1246,3 +1246,98 @@ func TestDirectfsCommentsSayTheAnnotationIsInert(t *testing.T) {
 		}
 	}
 }
+
+// staticShareDriveMount is the OTHER drive this substrate mounts: a
+// k8s_pvc_static SHARE — an admin-precreated claim over an export whose files
+// belong to whoever the export says, several principals' homes among them.
+// Wardyn never creates it and never sizes it.
+func staticShareDriveMount() *types.DriveMount {
+	d := testDriveMount()
+	d.Backend = types.DriveBackendK8sPVCStatic
+	d.SizeMiB = 0
+	d.Enforcement = types.StorageEnforcementExternal
+	return d
+}
+
+// res2-02: fsGroup is a MANAGED-claim field and the SHARE must not carry it.
+//
+// The pod-level fsGroup was set for every drive, justified by a claim that the
+// kubelet does not apply fsGroup to an NFS-type volume. The upstream CSI NFS
+// driver ships `fsGroupPolicy: File`, which is defined as applying fsGroup
+// "regardless of fstype or access mode" — so on a share the kubelet does apply
+// it, and OnRootMismatch only decides WHEN: the first run whose export root is
+// not already gid 1000 walks the volume and re-owns what it finds. On a shared
+// export that is other people's files, written by a run that merely mounted the
+// share read-only.
+//
+// The managed row is the control: a dynamically-provisioned claim comes up
+// empty and root-owned, and without fsGroup the agent cannot write its own
+// drive at all.
+func TestApplyDriveToPod_FSGroupIsManagedOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		drive *types.DriveMount
+		want  bool
+	}{
+		{"managed k8s_pvc", testDriveMount(), true},
+		{"share k8s_pvc_static", staticShareDriveMount(), false},
+		// An unknown backend reads as a SHARE (types.DriveBackend.Kind), which
+		// is the fail-closed direction: the harm is in setting the field on
+		// storage Wardyn does not own.
+		{"a backend this binary does not know", func() *types.DriveMount {
+			d := testDriveMount()
+			d.Backend = types.DriveBackend("k8s_pvc_from_the_future")
+			return d
+		}(), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: mainContainerName}}}}
+			applyDriveToPod(pod, tc.drive, "")
+
+			// The drive is mounted either way — this is about ownership, never
+			// about whether a share is bindable.
+			if len(pod.Spec.Volumes) != 1 || pod.Spec.Volumes[0].Name != driveVolumeName {
+				t.Fatalf("volumes = %+v, want the drive mounted whatever its backend", pod.Spec.Volumes)
+			}
+			sc := pod.Spec.SecurityContext
+			got := sc != nil && sc.FSGroup != nil
+			if got != tc.want {
+				t.Fatalf("pod securityContext = %+v, fsGroup present = %v, want %v", sc, got, tc.want)
+			}
+			if !tc.want {
+				if sc != nil && sc.FSGroupChangePolicy != nil {
+					t.Errorf("share pod carries fsGroupChangePolicy = %v with no fsGroup — the half that decides WHEN is meaningless without the one that decides WHAT", *sc.FSGroupChangePolicy)
+				}
+				return
+			}
+			if *sc.FSGroup != driveFSGroup {
+				t.Errorf("fsGroup = %d, want %d", *sc.FSGroup, driveFSGroup)
+			}
+			if sc.FSGroupChangePolicy == nil || *sc.FSGroupChangePolicy != corev1.FSGroupChangeOnRootMismatch {
+				t.Errorf("fsGroupChangePolicy = %v, want OnRootMismatch", sc.FSGroupChangePolicy)
+			}
+		})
+	}
+}
+
+// res2-02 (the comment half): the sentence that justified the bug must not
+// survive the fix, and the doc must name the policy that makes it false —
+// otherwise the next reader re-derives the same wrong rule from the same wrong
+// premise.
+func TestFSGroupCommentsDoNotClaimNFSIsExempt(t *testing.T) {
+	doc := docCommentAbove(t, "drives.go", "func applyDriveToPod(")
+	for _, false_ := range []string{
+		"It does NOT\n// apply it to an NFS-type volume",
+		"does NOT apply it to an NFS-type volume",
+	} {
+		if strings.Contains(doc, false_) {
+			t.Errorf("drives.go applyDriveToPod still claims %q — csi-driver-nfs declares fsGroupPolicy: File:\n%s", false_, doc)
+		}
+	}
+	if !strings.Contains(doc, "fsGroupPolicy: File") {
+		t.Errorf("applyDriveToPod's doc does not name the CSI policy that decides this (`fsGroupPolicy: File`):\n%s", doc)
+	}
+	if !strings.Contains(doc, "regardless of fstype or access mode") {
+		t.Errorf("applyDriveToPod's doc does not quote what File actually means, so the next reader has only an assertion to weigh:\n%s", doc)
+	}
+}

@@ -519,20 +519,33 @@ that every product string rendered in the mock has a key somewhere.
 absent" rule).** The drives module carries **no copy** of these. They are the wording the Go
 side emits (P2 transcribes them beside the gates that raise them); the console renders them from
 the wire under its own heading. They are listed so the mock can draw them and so an implementer
-does not freeze a second wording:
+does not freeze a second wording.
+
+**This table is DERIVED FROM THE CODE, and checked against it.** `Emitted by` names the Go
+function that composes the string, `String` is that function's own literal with its format verbs
+written as `{placeholders}` (or as the constant the verb is always given), and the status is the
+one the write boundary answers with. `user-drives-copy.test.ts` parses these three columns back
+out and matches every row against the real literal in `internal/api`, `internal/types` and
+`internal/runner` — a row the code cannot emit fails there. Two things the rows leave out, both
+for the same reason (the table freezes the refusal, not the envelope): the write boundary's own
+`invalid drive: ` / `invalid allocation: ` prefix, and the ` (resolves to "{real}")` clause the
+`host_root` rows gain when the path is a symlink that lands somewhere else.
 
 | Source | Emitted by | String |
 |---|---|---|
-| Host root outside the roots (400) | `validateUserDrive` | host_root "{path}" is not inside WARDYN_USER_DRIVE_HOST_ROOTS ({roots}) — a drive may bind only a subdirectory of a root this deployment allows |
-| Host root under a denied prefix (400) | `validateUserDrive` | host_root "{path}" is under a denied prefix ({prefix}) — the same deny list every host bind obeys |
-| Backend / runner mismatch (400) | `validateUserDrive` | backend "{backend}" cannot be mounted by this deployment's runner ({runner}) |
-| Template invalid for a share (400) | `validateUserDrive` | home_template "hash" is not allowed on a share backend — a share's directories are named by your directory, so pick sub or email_local |
-| Template invalid for a managed backend (400) | `validateUserDrive` | home_template "{template}" is not allowed on a managed backend — Wardyn names the volume itself and a claim-derived name is not unique across email domains, so two people would share one; pick hash, or name a single person's directory with a home_override on their allocation |
-| Size required for a managed claim (400) | `validateUserDrive` | size_mib must be above 0 for a k8s_pvc drive — it is the volume request |
+| Host root outside the roots (422) | `UserDriveHostRootCheck` | host_root "{path}" is not inside WARDYN_USER_DRIVE_HOST_ROOTS ({roots}) — a drive may bind only a subdirectory of a root this deployment allows |
+| Host root under a denied prefix (422) | `UserDriveHostRootCheck` | host_root "{path}" is under a denied prefix ({prefix}) — the same deny list every host bind obeys |
+| Host root inside another drive's (422) | `driveHostRootNesting` | host_root "{path}" is inside drive "{name}"'s host_root "{other}" — that tree holds directories the other drive's members can write from inside a run, so they could redirect this one; give the two drives separate trees |
+| Host root containing another drive's (422) | `driveHostRootNesting` | host_root "{path}" contains drive "{name}"'s host_root "{other}" — this drive's members could redirect that one from inside a run; give the two drives separate trees |
+| Backend / runner mismatch (400) | `ValidateUserDrive` | backend "{backend}" cannot be mounted by this deployment's runner ({runner}) |
+| Template invalid for a share (400) | `ValidateUserDrive` | home_template "hash" is not allowed on a share backend — a share's directories are named by your directory, so pick sub or email_local |
+| Template invalid for a managed backend (400) | `ValidateUserDrive` | home_template "{template}" is not allowed on a managed backend — Wardyn names the object after the directory, so the template lands in a {backend} object name that `docker volume ls` and `kubectl get pvc` show without inspecting anything; email_local also collides two people whose addresses share the part before the "@". Use hash, which is unique and reveals nothing; a share backend keeps every template |
+| Size required for a managed claim (400) | `ValidateUserDrive` | size_mib must be above 0 for a k8s_pvc drive — it is the volume request |
 | Delete while allocated (409) | `handleDeleteUserDrive` | this drive is still allocated — remove its allocations first (deleting it while allocated would leave those subjects with a mount that names nothing) |
 | Identity-affecting PUT on an allocated drive (409) | `driveRehomeGuard` | this drive is allocated to {n subjects} and this change re-homes {them}: {backend "host_path" → "docker_volume", …}. Every allocated person's storage object is derived from these fields, so their next run mounts a different object and the one holding their work is left behind with nothing in Wardyn naming it. Confirming is an API action, not a console one: re-send as PUT /drives/{id}?confirm=rehome. |
-| Home override on a non-user row (400) | `validateUserDriveGrant` | home_override is accepted on a user-tier allocation only — a group cannot share one directory |
-| Home override already held on this drive (409) | `handleUpsertUserDriveGrant` | another allocation on this drive already uses the directory name "{home}" — a directory name is one person's, which is why a group allocation may not carry one; pick a different name or remove the allocation that holds it |
+| Home override on a non-user row (400) | `ValidateUserDriveGrant` | home_override is accepted on a user-tier allocation only — a group cannot share one directory |
+| Home override already held on this drive (409) | `driveGrantConflictMsg` | another allocation on this drive already uses the directory name "{home}" — a directory name is one person's, which is why a group allocation may not carry one; pick a different name or remove the allocation that holds it |
+| Home override unstated on an allocation that pins one (409) | `driveGrantConflictMsg` | this allocation pins a directory name and your request did not mention home_override — writing it would CLEAR that name, so this subject's next run would mount a different object and the one holding their work would be left behind with nothing in Wardyn naming it. Re-send with home_override set to the name you want kept, or to "" to drop it deliberately |
 | Stricter home rule on a Kubernetes backend (**suffix**, 422) | `DriveHomeStricterRuleClause`, appended by `newResolvedDrive` after `REFUSED_HOME_INVALID` | (on a Kubernetes deployment the rule is stricter: no _, and it may not end in - or .) |
 
 The last row is a **suffix, not a rewording**. `REFUSED_HOME_INVALID` (§7.7) is frozen and
@@ -796,7 +809,8 @@ after `WORKSPACE_BODY`, only when `/me.user_drive` is non-null.
 | `REFUSED_TARGET_RESERVED` | workspace_mounts[0]: target `/home/agent/drive` is reserved for the user drive |
 
 **This table is COMPLETE** (§5 #4): every string a member can be refused with at a door this
-feature adds is here. `DENIED_DRIVE` is the one **403** (audited `authz.denied`,
+feature adds is here. It is complete about **doors**, not about the whole path — a drive that
+passes every door can still be refused by the RUNNER, and those strings are §7.9. `DENIED_DRIVE` is the one **403** (audited `authz.denied`,
 reason `governance_profile`, target `runs.drive` — `denyMemberDrive` beside
 `denyMemberRunQuota`); the six `REFUSED_*` are **422s with no audit** (`seedRequestDrive`, run
 create and preflight both). **Nothing here names an unprovisioned `k8s_pvc_static` claim**: no
@@ -831,6 +845,50 @@ One `<dt>`/`<dd>` pair in `IdentityWidget`'s `<dl>`, between Sandbox and Started
 **only when the run row carries a drive** — which it does not in v1 (§2.7). `{mode}` is `MODE_RO`
 / `MODE_RW`. The name is quoted, never mono; the `dd`'s `title` carries the object name for the
 admin who hovers, and nothing else on the run page names it.
+
+### 7.9 `DRIVE_DISPATCH` — refusals and log lines the RUNNER composes
+
+The four refusals in §7.7 are the **doors** — `422`/`403` bodies this feature's own handlers
+write. These are the **dispatch** half: a drive that passed every door and was refused by the
+runner, at the last moment before the sandbox is created. They reach a human as the run's
+`failure_hint`, **verbatim**, so the canon owns them the same way it owns a `writeError` body.
+Same audience rule as §7.7 and for the same reason — the reader is whoever launched the run —
+so **not one of them names a path on the operator's filesystem**: the drive, the directory and
+the reason, and the paths go to the log rows below instead.
+
+| Key | String |
+|---|---|
+| `DISPATCH_SOURCE_REFUSED(name, home)` | user drive: drive "{name}", directory "{home}" cannot be bound on this host: the directory this deployment resolved for it is not one a drive may bind here — wardynd's log names the rule that refused it, and an operator can fix it |
+| `DISPATCH_SIBLING_NAME(name, home)` | user drive: drive "{name}", directory "{home}" resolves to a directory named after somebody else — a home replaced by a link to a sibling would bind another person's directory |
+| `DISPATCH_TARGET_RESERVED(name, home, target)` | docker: denied user drive (drive "{name}", directory "{home}") -> "{target}": a user drive may bind only at the reserved drive path (`/home/agent/drive`) |
+| `DISPATCH_BACKEND_UNSUPPORTED(name, home, backend)` | docker: user drive (drive "{name}", directory "{home}") has backend "{backend}", which this runner cannot mount (…) |
+
+The first two are wrapped by the driver at the call site in the frozen shape `docker: denied
+user drive mount -> "{target}": …`, which is **kept** — the target is the member's own sandbox
+path and is theirs to read. `drive "{name}", directory "{home}"` is one subject rendered by a
+single helper; a mount that carries no drive name degrades to `directory "{home}"` and one that
+carries no drive at all to `this drive` — the fallback for "I cannot name the drive" is never
+"then name the path". The `(…)` on `DISPATCH_BACKEND_UNSUPPORTED` is the runner's own list of
+the backends it does mount. These are **wire** strings, not console copy: nothing here is a
+`{mode}`, a `{size}` or a mono span the console applies, and the drive name is quoted here
+because the string ships with the quotes in it.
+
+**Operator log lines — the other half of the same split.** Frozen here because they are what an
+admin is told to go and read whenever a member-facing string above declines to say more; a
+member never sees one.
+
+| Key | Line |
+|---|---|
+| `LOG_BIND_REFUSED` | wardyn: user drive: this share mount was refused at bind time — attrs `source`, `real_path`, `host_root`, `drive`, `home` |
+| `LOG_NO_RRO` | wardyn: user drive: this runtime does not support recursively read-only binds, so a submount under the share's home could be writable inside the sandbox — attrs `drive`, `home`, `mount_option` = `rro` |
+| `LOG_CEILINGS_OVERLAP` | boot WARN, prefix `wardynd: mount ceilings overlap — ` over three variants: *…both name "{p}": a member can onboard that directory as a workspace and bind the WHOLE share, every other person's home included, without a drive allocation…*; *…contains "{m}", which holds the WARDYN_USER_DRIVE_HOST_ROOTS entry "{d}"…*; *…contains "{m}", which is INSIDE the WARDYN_USER_DRIVE_HOST_ROOTS entry "{d}": member workspaces would be authored inside a share whose directories Wardyn hands out one person at a time…* |
+
+`LOG_BIND_REFUSED` is the operator half of `DISPATCH_SOURCE_REFUSED` and `DISPATCH_SIBLING_NAME`
+— one refusal, two audiences, written in one place so the two cannot drift, and the direction
+they would drift in is disclosure. `LOG_CEILINGS_OVERLAP` is a **warning and not a refusal**:
+the pair it describes may be a posture the operator chose, and a boot refusal would take a
+running deployment down on upgrade. [OPERATIONS.md](../OPERATIONS.md) "User drives on Docker"
+carries all three with the operator recipe.
 
 ## 8. Where to apply (once implemented, out of scope this round)
 

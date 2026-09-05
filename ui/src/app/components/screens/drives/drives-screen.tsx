@@ -115,11 +115,24 @@ export function DrivesScreen() {
     } catch (e) {
       // The 409 is the ON DELETE RESTRICT refusal and it is the authority on
       // the race: another admin allocated this drive since the list was read.
+      const restricted = e instanceof HttpError && e.status === 409 ? e : null;
       setDeleteError(
-        e instanceof HttpError && e.status === 409
-          ? { title: DRIVES.DELETE_RESTRICT_TITLE, message: e.message }
+        restricted
+          ? { title: DRIVES.DELETE_RESTRICT_TITLE, message: restricted.message }
           : { message: getErrorMessage(e) },
       );
+      // It is the authority on the COUNT too, and that is what this re-read is
+      // for. `grant_count` said nobody — which is the whole reason this dialog
+      // opened unrestricted — and the server has just said otherwise, so the
+      // row the table shows is now known to be wrong and is re-read. The OPEN
+      // dialog is deliberately left as it is: §7.4 draws the race post-attempt,
+      // COUNT-FREE, with the console's heading over the server's text and the
+      // confirm STILL ENABLED (the allocation may be gone by the retry). What
+      // the re-read ends is the loop AFTER it — without it the row keeps saying
+      // ALLOCATED_NONE and every later Delete on it re-opens the same doomed
+      // confirm, where now the next one opens PRE-FILLED from the true count
+      // with its confirm disabled and nothing to attempt.
+      if (restricted) load();
     } finally {
       setBusy(false);
     }
@@ -274,9 +287,21 @@ export function DrivesScreen() {
                     </TableBody>
                   </Table>
                   {/* Once, under the table (Q1) — never a per-number warning and
-                      never a second wording of "we do not enforce this". */}
+                      never a second wording of "we do not enforce this".
+
+                      THE SPAN IS NOT DECORATION. Note is a flex COLUMN (its
+                      children are the stacked blocks a refusal note wants:
+                      heading over body), and withMono returns an ARRAY — a text
+                      run, the `disk_mib` Mono, another text run. Handed to Note
+                      directly those become three flex items, so the one frozen
+                      sentence painted as three stacked lines with the
+                      identifier orphaned on a full-width line of its own. One
+                      wrapper makes it one flex item again and the prose flows,
+                      exactly as the mock draws it. */}
                   <div className="px-6 pb-5">
-                    <Note>{withMono(DRIVES.HONESTY)}</Note>
+                    <Note>
+                      <span>{withMono(DRIVES.HONESTY)}</span>
+                    </Note>
                   </div>
                 </>
               )}

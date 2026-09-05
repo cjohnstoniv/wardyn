@@ -129,11 +129,20 @@ export function MemberGettingStarted() {
   // /me rather than a second one of this page's own — see
   // operator-context.tsx's UserDriveContext. null for a member with none, for
   // an older daemon, and for a read that failed: all three render as today's
-  // page, no chip and no sentence. §7.6's drive moments here are the
-  // allocation's own, so the door (deniedByProfile) is deliberately NOT read:
-  // nothing on this page offers a mount, so there is nothing for it to refuse.
-  // It renders where the offer is, on the New Run card.
-  const { drive: userDrive } = useUserDrive();
+  // page, no chip and no sentence.
+  //
+  // THE DOOR IS READ HERE TOO. This page does not merely NAME the allocation —
+  // GS_DRIVE_BODY sends the member to New run to mount it, and with the
+  // profile's DenyUserDrive limit shut that instruction is refused one page
+  // load later by NR_DENIED, which names the profile. So a shut door renders
+  // NEITHER moment, chip or sentence: the absent-row doctrine (§2.5) applied to
+  // the door, since an offer withheld claims nothing while an offer that cannot
+  // be taken is a claim that is false. The refusal itself stays where the offer
+  // is, on the New Run card — this page never had a mount to refuse, only one
+  // to stop advertising. A DENIED chip of its own would be new copy (§7.6
+  // freezes a PAUSED twin and no denied one): FILED, not invented here.
+  const { drive: allocatedDrive, deniedByProfile: driveDeniedBy } = useUserDrive();
+  const userDrive = driveDeniedBy ? null : allocatedDrive;
 
   const [sshKeyCount, setSshKeyCount] = React.useState<number | null>(null);
   React.useEffect(() => {

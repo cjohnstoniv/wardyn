@@ -26,6 +26,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -476,90 +477,6 @@ type UserDriveHostRootCheck func(hostRoot string) error
 
 // ─── derivation ───────────────────────────────────────────────────────────────
 
-// driveHomeSegmentRe is the shape a home name may take on a DOCKER backend: a
-// single path segment that is also a legal Docker volume-name component, so
-// one string can be both a subdirectory of a share and the suffix of a named
-// volume.
-//
-// It is NOT a DNS-1123 name and never was — `_` is not legal in one, and a
-// trailing `-` or `.` is not either. That claim used to sit on this comment
-// and was the bug driveHomeSegmentK8sRe below exists to close: a k8s drive
-// whose home came through here would validate and then be rejected by the
-// apiserver at bind time, on somebody's run.
-//
-// The leading character is [a-z0-9] specifically to exclude a LEADING DOT: a
-// dotfile home would put a drive inside the credential deny class the member
-// mount rules already refuse by segment, and "..", the traversal, is excluded
-// by the same clause.
-var driveHomeSegmentRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
-
-// driveHomeSegmentK8sRe is the same segment on a KUBERNETES backend, where it
-// is concatenated into a PVC NAME (DriveObjectName) and must therefore be a
-// DNS-1123 subdomain: lowercase alphanumerics, `-` and `.` in the middle only,
-// and at most 63 characters. The `{0,61}` middle plus the two anchored
-// alphanumerics is that 63 written as the regex rather than as a second length
-// check something could forget.
-//
-// THE MOTIVATING CASE IS NOT HYPOTHETICAL: an Entra `sub` is base64url and
-// routinely carries `_`, so a `k8s_pvc` drive templated on `sub` passes the
-// Docker rule, is stored, and then fails at bind time for every member it
-// allocates. Refusing it in DriveHomeName makes that a resolve-time
-// REFUSED_HOME_INVALID naming the claim an admin has to override, at the
-// moment the admin previews the allocation, instead of a cluster error inside
-// somebody's run.
-var driveHomeSegmentK8sRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]{0,61}[a-z0-9])?$`)
-
-// driveHomeSegmentOK reports whether seg is a legal home name for backend b,
-// picking the rule from the substrate that has to hold the name.
-//
-// The ".." clause is the one thing the k8s regex above cannot say: consecutive
-// dots are not a legal DNS-1123 subdomain (each dot-separated label must be
-// non-empty), and the same two characters are the path traversal a share's
-// subdirectory bind must never carry. One check, both reasons.
-func driveHomeSegmentOK(b DriveBackend, seg string) bool {
-	if b.RunnerTarget() != "k8s" {
-		return driveHomeSegmentRe.MatchString(seg)
-	}
-	return driveHomeSegmentK8sRe.MatchString(seg) && !strings.Contains(seg, "..")
-}
-
-// driveHomeSegmentRule renders b's rule for the error message that refuses a
-// name — the pattern itself, so an admin reading a refusal sees the shape they
-// have to satisfy rather than a prose paraphrase of it that can drift.
-func driveHomeSegmentRule(b DriveBackend) string {
-	if b.RunnerTarget() != "k8s" {
-		return driveHomeSegmentRe.String()
-	}
-	return driveHomeSegmentK8sRe.String() + " (a DNS-1123 subdomain: it becomes part of a PVC name)"
-}
-
-// DriveHomeStricterRuleClause is the same difference said to a MEMBER: the extra
-// sentence a backend's home rule needs beyond the frozen refusal, or "" when the
-// frozen sentence is already the whole rule.
-//
-// The frozen sentence (DRIVE_MEMBER.REFUSED_HOME_INVALID) describes
-// driveHomeSegmentRe — "lowercase letters and digits, then . _ -, up to 63
-// characters" — which is the DOCKER rule. On a Kubernetes backend
-// driveHomeSegmentK8sRe is strictly narrower, and the gap is exactly the
-// motivating case: an Entra `sub` is base64url and routinely carries `_`, so the
-// member whose k8s drive is templated on `sub` was told the character that
-// refused them was allowed, and asked their admin for nothing.
-//
-// A SERVER-COMPOSED SUFFIX rather than a reworded canon (§7.1's "composed by
-// the server — rendered verbatim, never keyed" class): the frozen table is one
-// sentence per door and it is frozen, so the substrate's own extra clause is
-// appended AFTER it. The canon sentence still ships byte-for-byte on every
-// deployment, and a k8s deployment adds the clause its regex actually enforces.
-//
-// It lives HERE, beside the two regexes, because it is prose about them: a copy
-// in the API layer would be a third statement of a rule that already has two.
-func DriveHomeStricterRuleClause(b DriveBackend) string {
-	if b.RunnerTarget() != "k8s" {
-		return ""
-	}
-	return "(on a Kubernetes deployment the rule is stricter: no _, and it may not end in - or .)"
-}
-
 // driveHomeHashLen is how many hex characters of the sha256 a `hash` home
 // carries. 20 hex = 80 bits, which is collision-free for any plausible member
 // count and leaves the whole name (d- + 20) at 22 characters — short enough
@@ -803,7 +720,7 @@ func ValidateUserDrive(d *UserDrive, runnerTarget string) error {
 	// A SHARE's directories are named by whoever owns the share, so a hash
 	// would name a directory that does not exist and Wardyn does not create
 	// one: a missing home on a share is a refusal, not a mkdir.
-	if d.Backend.Kind() == DriveKindShare && d.HomeTemplate == HomeTemplateHash {
+	if ShareBackendRejectsTemplate(d.Backend, d.HomeTemplate) {
 		return fmt.Errorf("home_template %q is not allowed on a share backend — a share's directories are named by "+
 			"your directory, so pick %s or %s", HomeTemplateHash, HomeTemplateSub, HomeTemplateEmailLocal)
 	}
@@ -845,6 +762,9 @@ func ValidateUserDrive(d *UserDrive, runnerTarget string) error {
 	}
 	if d.SizeMiB < 0 {
 		return fmt.Errorf("size_mib: must not be negative")
+	}
+	if d.SizeMiB > maxUserDriveInt {
+		return fmt.Errorf("size_mib: must be at most %d — %s", maxUserDriveInt, userDriveIntColumnReason)
 	}
 	// A k8s_pvc drive is the ONE backend where the size is not a display value:
 	// it becomes the PVC's resources.requests.storage, and a claim requesting
@@ -925,6 +845,12 @@ func ValidateUserDriveGrant(g *UserDriveGrant) error {
 	if g.SizeMiBOverride < 0 {
 		return fmt.Errorf("size_mib_override: must not be negative")
 	}
+	if g.SizeMiBOverride > maxUserDriveInt {
+		return fmt.Errorf("size_mib_override: must be at most %d — %s", maxUserDriveInt, userDriveIntColumnReason)
+	}
+	if g.Priority > maxUserDriveInt || g.Priority < minUserDriveInt {
+		return fmt.Errorf("priority: must be between %d and %d — %s", minUserDriveInt, maxUserDriveInt, userDriveIntColumnReason)
+	}
 	g.HomeOverride = strings.ToLower(strings.TrimSpace(g.HomeOverride))
 	if g.HomeOverride == "" {
 		return nil
@@ -946,6 +872,31 @@ func ValidateUserDriveGrant(g *UserDriveGrant) error {
 	}
 	return nil
 }
+
+// maxUserDriveInt / minUserDriveInt are the range EVERY integer column on these
+// two tables actually has, and it is the COLUMN'S rather than a policy: 0054
+// declares user_drives.size_mib, user_drive_grants.priority and
+// user_drive_grants.size_mib_override as INT — PostgreSQL's 4-byte signed
+// integer — while Go's int is 64-bit on every platform wardynd ships on. So a
+// value in the gap validated here, was written, and the DATABASE refused it
+// with SQLSTATE 22003 ("integer out of range"), which is neither ErrConflict
+// nor ErrNotFound and therefore reached the admin as a 500 carrying the raw
+// driver string. That is the shape the CreatePolicy contract exists to keep off
+// the wire, and the row was the caller's to fix all along.
+//
+// A CEILING, NOT A SIZE OPINION. 2 PiB of size_mib is not a number this package
+// has grounds to argue with; a number the column cannot hold is. Priority is
+// bounded in BOTH directions because negative priorities are legitimate (a
+// deliberate de-prioritised group row) and int32 is asymmetric.
+const (
+	maxUserDriveInt = math.MaxInt32
+	minUserDriveInt = math.MinInt32
+)
+
+// userDriveIntColumnReason is the half of those three refusals that says WHY,
+// written once so the three cannot drift into three different explanations of
+// one column type.
+const userDriveIntColumnReason = "the column is a 32-bit integer (migration 0054), and a larger value is refused by the database rather than stored"
 
 // driveTextIsClean reports whether s carries no control characters — the same
 // field hygiene the capability-grant and governance-assignment writes apply,
@@ -974,4 +925,25 @@ func driveTextIsClean(s string) bool {
 // a third site cannot diverge again.
 func ManagedBackendRejectsTemplate(backend DriveBackend, tmpl HomeTemplate) bool {
 	return backend.Kind() == DriveKindManaged && tmpl != "" && tmpl != HomeTemplateHash
+}
+
+// ShareBackendRejectsTemplate is the MIRROR rule, and it is exported for the
+// same reason its twin above is: it had exactly one enforcement point.
+//
+// A SHARE's directories are named by whoever owns the share, and Wardyn never
+// mkdir's on one — so a `hash` home names a directory that does not exist and
+// nothing will create it. The write boundary refused that row; the resolver did
+// not, so a row written before the rule (or by hand) resolved cleanly and the
+// member met the MISSING-HOME refusal instead — "directory
+// d-00e23f375d35be941331 does not exist on the share — ask an admin to create
+// it", which names a directory nobody could ever have made and asks the admin
+// to create a digest. The remedy the member was handed was the wrong one for
+// the row they actually had.
+//
+// The empty template is excluded on both sides because ValidateUserDrive
+// defaults it before this is asked, and a resolver looking at a legacy row with
+// no template must fall through to the derivation rather than refuse a shape
+// this rule has no opinion about.
+func ShareBackendRejectsTemplate(backend DriveBackend, tmpl HomeTemplate) bool {
+	return backend.Kind() == DriveKindShare && tmpl == HomeTemplateHash
 }

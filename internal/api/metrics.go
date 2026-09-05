@@ -61,6 +61,29 @@ type metrics struct {
 	// answers a PING (see writeHealthGauges), which a healthy pool passes while
 	// one table denies a read or one statement times out.
 	authStoreErrors int64
+	// driveRefusals counts runs REFUSED their user drive, by reason. It is the
+	// series that made a whole class of failure operable: a refused drive was
+	// answered to the member as a 422 and recorded NOWHERE — no audit row (the
+	// door's authz.denied covers the profile arm alone), no log line for five of
+	// the six arms, and no request log at all (routes.go wires no logger). So
+	// "nobody can mount their drive since the NAS moved" reached an operator as
+	// a support ticket, if at all.
+	//
+	// BY REASON, and the label set is CLOSED (driveRefusalReason*): a reason is
+	// a cardinality decision, and a free-form label here would be one series per
+	// message. Never the drive, the subject or the path — those are the audit
+	// log's and the slog line's, both of which this counter points at.
+	driveRefusals map[string]int64
+}
+
+// driveRefused records one run refused its user drive, by reason.
+func (m *metrics) driveRefused(reason string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.driveRefusals == nil {
+		m.driveRefusals = map[string]int64{}
+	}
+	m.driveRefusals[reason]++
 }
 
 // authFailedSuppressedInc records one dropped auth.failed audit emit.
@@ -134,6 +157,11 @@ func (m *metrics) write(w io.Writer) {
 		"# TYPE wardyn_approval_decisions_total counter\n")
 	for decision, n := range m.approvals {
 		fmt.Fprintf(w, "wardyn_approval_decisions_total{decision=%q} %d\n", decision, n)
+	}
+	fmt.Fprint(w, "# HELP wardyn_drive_refusals_total Runs refused their user drive, by reason.\n"+
+		"# TYPE wardyn_drive_refusals_total counter\n")
+	for _, reason := range driveRefusalReasons {
+		fmt.Fprintf(w, "wardyn_drive_refusals_total{reason=%q} %d\n", reason, m.driveRefusals[reason])
 	}
 	fmt.Fprintf(w, "# HELP wardyn_egress_denies_total Egress requests denied by policy (proxy decision ingest).\n"+
 		"# TYPE wardyn_egress_denies_total counter\nwardyn_egress_denies_total %d\n", m.egressDenies)

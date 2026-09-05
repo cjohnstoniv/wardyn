@@ -518,9 +518,9 @@ func TestCreateSandbox_HostPathDriveStaysInsideItsOwnDriveRoot(t *testing.T) {
 
 	// FAIL CLOSED on a mount that carries no host_root. "" means this DriveMount
 	// was built by something that does not know the field — an older control
-	// plane, a hand-written -spec for the standalone runner — and falling
-	// through would be the pre-fix behaviour reappearing exactly where nobody
-	// would look for it. The ceiling is deliberately satisfied here, so the row
+	// plane, or an in-process caller that assembled the SandboxSpec itself —
+	// and falling through would be the pre-fix behaviour reappearing exactly
+	// where nobody would look for it. The ceiling is deliberately satisfied here, so the row
 	// is a statement about the drive's own root and nothing else.
 	t.Run("a share mount with no host_root is refused", func(t *testing.T) {
 		root, home := driveHostRoot(t)
@@ -668,8 +668,10 @@ func TestCreateSandbox_ReservedSpecMountIsRefusedBeforeTheDriveIsAllocated(t *te
 // are pinned in one place rather than in two tests that could drift.
 //
 // Nothing in the control plane produces any of them (driveMountFor copies the
-// constant); the reachable inputs are a control-plane bug and the standalone
-// runner's -spec JSON, which is exactly what a driver-side check is for. The
+// constant); what CAN is a control-plane bug or an in-process caller building a
+// runner.SandboxSpec itself, which is exactly what a driver-side check is for —
+// NOT the standalone runner's -spec JSON, whose decoder has no drive field at
+// all (cmd/wardyn-runner's TestSpecJSON_CannotCarryADrive). The
 // OTHER half of the split — that the drive's own target passes ValidateTarget
 // and is refused to AUTHORS — is walked by
 // TestValidateAuthoredTargetReservesTheDriveTarget, in the package that owns
@@ -729,7 +731,7 @@ func TestDriveMount_HostPathCeilingIsUnconditional(t *testing.T) {
 	drive := hostPathDrive(home)
 
 	d := newWithClient(newFakeDocker(), Config{ProxyImage: "wardyn-proxy:dev", UserDriveHostRoots: []string{root}})
-	got, err := d.driveMount(context.Background(), drive)
+	got, err := d.driveMount(context.Background(), drive, true)
 	if err != nil {
 		t.Fatalf("driveMount for an in-root share: %v", err)
 	}
@@ -743,9 +745,217 @@ func TestDriveMount_HostPathCeilingIsUnconditional(t *testing.T) {
 	// The SAME drive, on a deployment that configured no roots: refused. No
 	// flag, provenance stamp or backend detail sits between the two calls.
 	unset := newWithClient(newFakeDocker(), Config{ProxyImage: "wardyn-proxy:dev"})
-	if _, err := unset.driveMount(context.Background(), drive); err == nil {
+	if _, err := unset.driveMount(context.Background(), drive, true); err == nil {
 		t.Error("driveMount bound a share on a deployment with no WARDYN_USER_DRIVE_HOST_ROOTS — the ceiling must run unconditionally")
 	} else if !strings.Contains(err.Error(), "denied user drive") {
 		t.Errorf("the refusal should identify the denied drive, got: %v", err)
 	}
+}
+
+// createWithDriveOn is createWithDrive for a run whose CONFINEMENT CLASS picks a
+// non-default runtime: the fake daemon is given that runtime (with the OCI
+// features it really publishes), so the create is decided on the same evidence a
+// real daemon would decide it on.
+func createWithDriveOn(t *testing.T, class types.ConfinementClass, runtimes []string,
+	drive *types.DriveMount, hostRoots []string) (*fakeDocker, []mount.Mount, error) {
+	t.Helper()
+	f := newFakeDocker()
+	f.info = infoWithRuntimes(runtimes...)
+	f.images["busybox:latest"] = true
+	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev", UserDriveHostRoots: hostRoots})
+
+	spec := testSpec()
+	spec.ConfinementClass = class
+	spec.Drive = drive
+	if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
+		return f, nil, err
+	}
+	agent := f.containers[agentContainerName(spec.RunID)]
+	if agent == nil {
+		t.Fatalf("agent container not created")
+	}
+	return f, agent.host.Mounts, nil
+}
+
+// res2-03: a read-only share drive must NOT ask the daemon for a recursively
+// read-only bind under a runtime that does not declare the OCI `rro` mount
+// option — the daemon refuses that create outright (moby's
+// supportsRecursivelyReadOnly), and gVisor is exactly such a runtime: `runsc
+// features` lists `ro` and `rbind` and no `rro`.
+//
+// That is not an exotic combination. gVisor is the runtime the Wall tier (CC2)
+// REQUIRES, and CC2 is this product's own shipped confinement floor, so asking
+// unconditionally meant every read-only share drive on the default tier failed
+// at ContainerCreate — with `rro is not supported by runtime "runsc"` as the
+// member's failure hint. The fake reproduces that refusal (refuseUnsupportedRRO),
+// so this test fails the way a real host does rather than merely observing a
+// field.
+func TestCreateSandbox_ReadOnlyDriveDoesNotAskGvisorForRRO(t *testing.T) {
+	root, home := driveHostRoot(t)
+	_, mounts, err := createWithDriveOn(t, types.CC2, []string{runtimeRunsc}, hostPathDrive(home), []string{root})
+	if err != nil {
+		t.Fatalf("CreateSandbox with a read-only share drive at CC2 (gVisor): %v", err)
+	}
+	m := findMount(mounts, runner.DriveTarget)
+	if m == nil {
+		t.Fatalf("drive not mounted at %s; mounts=%+v", runner.DriveTarget, mounts)
+	}
+	// Still read-only: dropping the RECURSIVE request never makes the bind
+	// writable, and the mode is the allocation's, not the runtime's.
+	if !m.ReadOnly {
+		t.Error("drive mount ReadOnly = false, want true — the runtime decides `rro`, never the allocation's mode")
+	}
+	if m.BindOptions != nil && m.BindOptions.ReadOnlyForceRecursive {
+		t.Errorf("drive mount asks gVisor for ReadOnlyForceRecursive (%+v) — the daemon refuses that create, so every read-only share drive on the CC2 floor would fail to start", m.BindOptions)
+	}
+}
+
+// The CONTROL for the row above, and the reason the fix is not "stop asking":
+// on a runtime that DOES declare `rro` the request is still made, so the
+// half-honoured-mount guarantee is kept everywhere it can be kept. CC1 runs on
+// the daemon's default runtime, which is runc.
+func TestCreateSandbox_ReadOnlyDriveStillAsksRuncForRRO(t *testing.T) {
+	root, home := driveHostRoot(t)
+	_, mounts, err := createWithDriveOn(t, types.CC1, nil, hostPathDrive(home), []string{root})
+	if err != nil {
+		t.Fatalf("CreateSandbox with a read-only share drive at CC1 (runc): %v", err)
+	}
+	m := findMount(mounts, runner.DriveTarget)
+	if m == nil {
+		t.Fatalf("drive not mounted; mounts=%+v", mounts)
+	}
+	if m.BindOptions == nil || !m.BindOptions.ReadOnlyForceRecursive {
+		t.Errorf("drive mount BindOptions = %+v, want ReadOnlyForceRecursive on a runtime that declares rro — "+
+			"without it an old kernel binds the submounts read-WRITE and says nothing", m.BindOptions)
+	}
+}
+
+// res2-05 (the driver half): NO host_path drive refusal may hand the run's
+// creator the operator's absolute share paths, the deployment's configured
+// roots, or another principal's real home.
+//
+// Every one of these errors becomes the run's failure_hint verbatim, read by
+// whoever launched the run — the same reader driveShareIsBindable already
+// refuses to hand the resolved path and driveAuditTarget masks the audit row
+// for. The function's own comment stated that rule above the ONE site that
+// obeyed it: the composed-source-check site wrapped in m.Source and then the
+// ceiling's own sentence naming every configured root, and the base-name site
+// named the sibling directory the link actually landed on. This walks all
+// three sites; the operator's copy is in the slog line RefuseUserDriveBind
+// writes beside each.
+func TestCreateSandbox_DriveRefusalsNeverNameAHostPath(t *testing.T) {
+	root, home := driveHostRoot(t)
+	otherRoot := filepath.Join(filepath.Dir(root), "other-share")
+	if err := os.MkdirAll(filepath.Join(otherRoot, "alice"), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "bob"), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	sibling := filepath.Join(root, "alice-linked")
+	if err := os.Symlink(filepath.Join(root, "bob"), sibling); err != nil {
+		t.Skipf("symlink unsupported here: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		drive   func() *types.DriveMount
+		roots   []string
+		secrets []string
+	}{
+		{
+			// The composed source check, refusing because the home is not
+			// inside the ceiling: its own sentence names EVERY configured root.
+			name:    "outside the deployment's roots",
+			drive:   func() *types.DriveMount { return hostPathDrive(home) },
+			roots:   []string{otherRoot},
+			secrets: []string{home, root, otherRoot},
+		},
+		{
+			// The same site, refusing on the deny-list: the frozen host_root
+			// sentence names the path and the prefix.
+			name:    "a host root under a denied prefix",
+			drive:   func() *types.DriveMount { return hostPathDrive("/etc/wardyn-drives/alice") },
+			roots:   []string{"/etc/wardyn-drives"},
+			secrets: []string{"/etc/wardyn-drives"},
+		},
+		{
+			// The base-name rule: the path it would name is BOB's home.
+			name: "a home symlinked onto a sibling's",
+			drive: func() *types.DriveMount {
+				d := hostPathDrive(sibling)
+				d.HomeName = "alice-linked"
+				d.DriveName = "nas"
+				return d
+			},
+			roots:   []string{root},
+			secrets: []string{sibling, filepath.Join(root, "bob"), root},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			drive := tc.drive()
+			f, _, err := createWithDrive(t, drive, tc.roots)
+			if err == nil {
+				t.Fatal("the drive was bound; this row is a refusal")
+			}
+			if !strings.Contains(err.Error(), "denied user drive") {
+				t.Errorf("error should identify the denied drive, got: %v", err)
+			}
+			for _, leak := range append(tc.secrets, "WARDYN_USER_DRIVE_HOST_ROOTS", "mount source") {
+				if strings.Contains(err.Error(), leak) {
+					t.Errorf("refusal = %q leaks %q to the run's creator", err, leak)
+				}
+			}
+			// It still says WHOSE drive: a message with nothing in it is not the
+			// alternative to one with too much.
+			if !strings.Contains(err.Error(), `directory "`+drive.HomeName+`"`) {
+				t.Errorf("refusal = %q, want it to name the directory %q", err, drive.HomeName)
+			}
+			// The TARGET is the member's own sandbox path and stays.
+			if !strings.Contains(err.Error(), runner.DriveTarget) {
+				t.Errorf("refusal = %q, want it to name the in-sandbox target %q", err, runner.DriveTarget)
+			}
+			if f.containers[agentContainerName(testSpec().RunID)] != nil {
+				t.Error("agent container exists after the refusal — the check must precede ContainerCreate")
+			}
+		})
+	}
+
+	// The two refusals ABOVE the backend switch take the same rule: on a share
+	// the object name is <host_root>/<home>, so naming it would disclose the
+	// operator's absolute path for a reason that has nothing to do with paths.
+	t.Run("a share addressed to a reserved-target violation", func(t *testing.T) {
+		drive := hostPathDrive(home)
+		drive.DriveName = "nas"
+		drive.Target = "/home/agent/.claude"
+		_, _, err := createWithDrive(t, drive, []string{root})
+		if err == nil {
+			t.Fatal("a drive addressed outside the reserved target was mounted")
+		}
+		if !errors.Is(err, errDriveTargetInvalid) {
+			t.Errorf("error = %v, want errDriveTargetInvalid", err)
+		}
+		if strings.Contains(err.Error(), home) || strings.Contains(err.Error(), root) {
+			t.Errorf("refusal = %q names the share's absolute path", err)
+		}
+		if !strings.Contains(err.Error(), `drive "nas"`) {
+			t.Errorf("refusal = %q, want it to name the drive", err)
+		}
+	})
+
+	t.Run("a backend this runner cannot mount", func(t *testing.T) {
+		drive := hostPathDrive(home)
+		drive.DriveName = "nas"
+		drive.Backend = types.DriveBackendK8sPVCStatic
+		_, _, err := createWithDrive(t, drive, []string{root})
+		if err == nil {
+			t.Fatal("a Kubernetes-backed drive was mounted by the docker runner")
+		}
+		if strings.Contains(err.Error(), home) || strings.Contains(err.Error(), root) {
+			t.Errorf("refusal = %q names the share's absolute path", err)
+		}
+		if !strings.Contains(err.Error(), `drive "nas"`) {
+			t.Errorf("refusal = %q, want it to name the drive", err)
+		}
+	})
 }

@@ -509,6 +509,21 @@ profile can shut the door outright: `GovernanceLimits.DenyUserDrive`
 profile as an audited `403` (`denyMemberDrive` — `authz.denied`, reason
 `governance_profile`, target `runs.drive`, no new `reason` enum value).
 
+**Read-only is TOP-LEVEL on a runtime that does not declare `rro`.** A bind's
+`ro` reaches SUBMOUNTS only where the runtime declares the OCI recursive
+read-only mount option, and the daemon refuses the create outright for one that
+does not — gVisor, the runtime the Wall tier (CC2) requires, lists `ro` and
+`rbind` and no `rro`. So the recursive form is asked for only where it is
+declared (`runtimeSupportsRecursiveReadOnly`,
+`internal/runner/docker/hardening.go`), the bind still goes in read-only either
+way, and the loss is WARNed on the run it affects rather than assumed away
+(`driveBindOptions`). The residual is a host submount UNDER the person's home —
+an autofs home, a second export mounted below the first — writable inside a
+sandbox holding a read-only drive. Asking unconditionally is not the
+alternative: it failed every CC2 run with a read-only drive at
+`ContainerCreate`. The operator lever is to run those drives at CC1, where the
+default `runc` declares it.
+
 **The mount target is reserved.** `runner.DriveTarget` (`/home/agent/drive`) is
 refused to every authored mount target, workspace source and clone destination
 (`ValidateAuthoredTarget`, `internal/runner/mount.go`), so no policy can land on
@@ -533,8 +548,13 @@ bound over every drive at once, so on a deployment with two share drives it
 cannot tell one drive's tree from the other's — a home replaced by a link to the
 same-named home under the OTHER drive's root satisfies it, and an absent
 `host_root` on a share mount is a refusal rather than a skip); and a source whose
-resolved directory NAME is not the home the resolver derived (the
-sibling-symlink case: alice's directory replaced host-side by a link to bob's).
+resolved directory NAME is not the home the resolver derived — which closes the
+DIFFERENTLY-NAMED sibling-symlink case (alice's directory replaced host-side by
+a link to bob's) and only that: the assertion is on the BASE NAME, because a
+share may legitimately file its homes in subdirectories of the root
+(`<root>/alice` → `<root>/2024/alice`), so a link onto a SAME-NAMED directory
+nested inside another principal's home (`<root>/alice` → `<root>/bob/alice`)
+passes every one of these checks — see residual #33.
 The target is pinned to `runner.DriveTarget` on BOTH substrates
 (`errDriveTargetInvalid` in each driver), so a drive can never be mounted over
 the credential staging directory or the workspace.
@@ -550,6 +570,24 @@ down. The root must exist on this host (fail-closed on any resolve error, no
 lexical fallback), must pass the same host bind-mount deny-list every authored
 source does, and must neither BE nor TRAVERSE a credential dotfile path — the
 `deniedMemberSegment` list of §4.4, applied to a drive's resolved root.
+
+**And the per-person isolation this ceiling buys is only as good as the OTHER
+ceiling's disjointness.** `WARDYN_MEMBER_WORKSPACE_ROOTS` bounds a different
+surface under a different rule: a member names a directory inside it and binds it
+WHOLE, writable where `WARDYN_MEMBER_WRITABLE_ROOTS` allows, through a path that
+consults no drive allocation at all. Point the two ceilings at one tree and the
+second undoes the first — a member onboards the share as a workspace and mounts
+every person's home, with no drive grant anywhere in it. Each parser vets its own
+list and neither can see the other, so the comparison is made where both exist at
+once, lexically, on the values as configured, and every member ceiling counts —
+the shared list and each per-principal override, which replaces rather than
+extends it (`MountCeilingOverlapWarnings`,
+`internal/runner/user_drive_mount.go`). **It is a boot WARNING, not a refusal**,
+the allow-and-warn posture the surrounding ceiling parsing already takes: an
+operator may have opened a tree to both deliberately, and refusing at boot would
+take a running deployment down on upgrade over a posture it already has. So the
+residual is an operator who does not read the line — what was missing before was
+their ever being told.
 
 **No credential ever rides a volume option.** Wardyn never performs the share
 mount and never holds a share credential: the operator mounts the export
@@ -585,10 +623,17 @@ foreign — the opposite of Docker's restore gesture.
 attachment itself at dispatch (actor `system`, after `CreateSandbox` returns, so
 a success row means the object really was bound) with the backend, the object,
 the mode and the `enforcement` value — vocabulary in `docs/AUDIT-ACTIONS.md`.
-The row's rendered `Target` is masked to `<drive>/<home>` for a `host_path`
+The row's `Target` is masked to `<drive>/<home>` for a `host_path`
 drive, because a run's creator can read their own run's rows and a share's
-object name is an absolute path on the operator's filesystem; the exact object
-stays in the payload, which the run page does not render.
+object name is an absolute path on the operator's filesystem — and the absolute
+path is on the row NOWHERE, `object` included: `auditDriveMount` composes that
+payload field with the same masking helper (`driveAuditTarget`,
+`internal/api/runs_dispatch_mounts.go`), because `GET /audit?run_id=` hands that
+same reader the whole event, `data` and all, so masking only the rendered field
+would have moved one disclosure one key over. A mount carrying no drive NAME
+falls back to the home alone rather than to the object: the fallback for "I
+cannot name the drive" must not be "then disclose the path". The operator reads
+the root from `GET /drives`, which is operator-only and already carries it.
 Nothing logs the drive's contents, and the preview endpoint is not audited, for
 the reason its governance twin is not: it saves nothing and answers only about
 claims the caller pasted.
@@ -1218,10 +1263,29 @@ hiding them would repeat the failure mode we are designed to avoid.
     ordinary bind deny-list, the credential-dotfile list of §4.4 on that same
     real path, a refusal when the source resolves to the configured root rather
     than a subdirectory, and a refusal when the resolved directory's own NAME is
-    not the home the resolver derived — which is the sibling-symlink case (one
-    person's home replaced host-side by a link to another's) closed at the last
-    moment before `ContainerCreate` (`UserDriveMountSourceCheck`,
-    `Driver.driveMount`). What is NOT closed is everything ABOVE the path.
+    not the home the resolver derived, applied at the last moment before
+    `ContainerCreate` (`UserDriveMountSourceCheck`, `Driver.driveMount`).
+
+    **That last rule closes the DIFFERENTLY-NAMED sibling-symlink case, and only
+    that case.** One person's home replaced host-side by a link to another's —
+    `alice` → `../bob` — is refused. The assertion is deliberately on the BASE
+    NAME rather than on the whole path, because a share may legitimately file its
+    homes in subdirectories of its root (`<root>/alice` → `<root>/2024/alice`),
+    and the price of that is exact: a link onto a SAME-NAMED directory nested
+    inside another principal's home (`<root>/alice` → `<root>/bob/alice`)
+    satisfies all three checks — it is inside the deployment ceiling, inside this
+    drive's own `host_root`, and its resolved base name is still `alice` — so
+    Wardyn binds a directory sitting within bob's tree. Nothing in the product
+    tells that shape apart from the legitimate `2024/alice` one, which is the
+    point: the rule bounds the NAME, not the tree, and the tree is the share
+    administrator's to arrange. What is NOT closed is everything ABOVE the path.
+    And the isolation is bounded by the OTHER mount ceiling as well: a
+    `WARDYN_MEMBER_WORKSPACE_ROOTS` entry that names, contains, or sits inside a
+    drive's root lets a member onboard the share as a WORKSPACE and bind it whole,
+    every home included, through a surface that consults no drive allocation.
+    That pair earns a boot WARNING and not a refusal
+    (`MountCeilingOverlapWarnings`), so a deployment configured that way keeps
+    the hole; §4.6 states the argument.
     Whoever administers the share decides what is in it: a host-side bind mount
     of one home over another, hard links, an export re-pointed at a different
     tree, or per-directory modes that make every home world-readable are all

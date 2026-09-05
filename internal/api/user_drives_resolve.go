@@ -327,6 +327,32 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 			"(its directory name is derived from your sign-in identity, which cannot safely name one %s object per person — "+
 			"ask an admin to change how this drive names directories)", errDriveUnmountable, d.Backend)
 	}
+	// THE MIRROR REFUSAL, and repeated here for the same reason and on the same
+	// class of row: a share's directories are named by whoever owns the share
+	// and Wardyn never mkdir's on one, so a `hash` home names a directory that
+	// cannot exist. The write boundary has refused that shape since it was
+	// written; a row that PREDATES the rule, or one written by hand, resolved
+	// cleanly and then met the MISSING-HOME refusal — "directory
+	// d-00e23f375d35be941331 does not exist on the share — ask an admin to
+	// create it", which asks an admin to make a directory named after a digest
+	// and names the wrong remedy for the row they actually have. The right
+	// remedy is the template, and it is an admin's to change.
+	//
+	// BEFORE the derivation, like the managed arm above: the home it would
+	// derive is exactly the unmakeable one, and a check downstream of it would
+	// be reasoning about a value it had already accepted.
+	if types.ShareBackendRejectsTemplate(d.Backend, d.HomeTemplate) {
+		slog.Warn("wardynd: user drive: a share drive is templated on a hash, which names a directory nobody created",
+			slog.String("drive", d.Name), slog.String("backend", string(d.Backend)),
+			slog.String("home_template", string(d.HomeTemplate)))
+		// REFUSED_BACKEND's frozen shape again, whose parenthesised half is
+		// where the admin's diagnosis goes — the same reuse the managed arm and
+		// driveShareIsBindable both make, and the same honest reading: from the
+		// member's side this deployment cannot mount their drive.
+		return nil, fmt.Errorf("%w: drive: this deployment cannot mount your drive "+
+			"(its directory name comes from a hash, and a share's directories are named by whoever owns the share — "+
+			"ask an admin to change how this drive names directories)", errDriveUnmountable)
+	}
 	override := ""
 	if tier == types.CapabilitySubjectUser {
 		override = g.HomeOverride
@@ -650,6 +676,17 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 // own ordering rule, reused rather than restated: a resolve that failed also
 // returns a nil profile, and treating that as no-door would fail open on
 // exactly the deployment whose database is unhappy.
+//
+// AND AN EMPTY `groups` IS THE UNANSWERABLE GROUP TIER HERE TOO, which this
+// gate did not say and its own resolver two functions down does
+// (previewResolveUserDrive → driveWithUnusableGroups). The launch path resolves
+// its ceiling through effectiveCeiling, which takes ceilingWithUnusableGroups on
+// a stale or truncated snapshot; a preview has no snapshot, and an empty list is
+// the same condition. Without the arm the DOOR answered from the `all` tier
+// while the launch refused groups_snapshot_stale — a hand-made preview said 200
+// for a principal every launch bounces, which is a confidently wrong answer at
+// the moment an admin is deciding whether an allocation is right. Same function
+// as the launch, so the two cannot drift.
 func (s *Server) drivePreviewDoorIsOpen(w http.ResponseWriter, r *http.Request, users, groups []string) bool {
 	// A build with no store holds no profiles, so there is no door — the same
 	// short-circuit resolveUserDrive's step 1 makes, and it has to be here too
@@ -657,8 +694,14 @@ func (s *Server) drivePreviewDoorIsOpen(w http.ResponseWriter, r *http.Request, 
 	if s.cfg.Store == nil {
 		return true
 	}
-	p, _, err := s.cfg.Store.ResolveGovernanceProfile(r.Context(), users, groups)
-	ceiling, err := s.ceilingFromProfile(p, err, governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone()})
+	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone()}
+	ceiling, err := deployment, error(nil)
+	if len(groups) == 0 {
+		ceiling, err = s.ceilingWithUnusableGroups(r.Context(), users, deployment)
+	} else {
+		p, _, rerr := s.cfg.Store.ResolveGovernanceProfile(r.Context(), users, groups)
+		ceiling, err = s.ceilingFromProfile(p, rerr, deployment)
+	}
 	if err != nil {
 		writeCeilingError(w, err)
 		return false

@@ -40,7 +40,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -81,11 +80,24 @@ func (s *Server) mountUserDriveRoutes(operatorOnly chi.Router) {
 // The two scalars are the DEPLOYMENT facts the console cannot derive and would
 // otherwise guess at:
 //
-//   - HostRootsConfigured says whether WARDYN_USER_DRIVE_HOST_ROOTS is set at
-//     all, so the backend picker can disable `host_path` WITH THE REASON rather
-//     than offering an option whose every save 422s. It is a BOOLEAN, never the
-//     roots themselves: the console needs to know that a ceiling exists, not
-//     where the operator's filesystem is laid out.
+//   - HostRootsConfigured says whether a host_path drive can be authored on
+//     this deployment AT ALL, so the backend picker can disable `host_path`
+//     WITH THE REASON rather than offering an option whose every save 422s. It
+//     is a BOOLEAN, never the roots themselves: the console needs to know that
+//     a ceiling exists, not where the operator's filesystem is laid out.
+//
+//     IT IS NOT len(roots) > 0, and that was the bug it was named after. Three
+//     configured values are DEAD ceilings — "/" (withinAnyRoot matches `real ==
+//     root` or `real` under `root + "/"`, and no cleaned absolute path begins
+//     "//", so a root of "/" matches nothing), a root under a denied bind
+//     prefix (/dev/shm, /var/run/…, a relocated docker data-root), and a root
+//     that does not resolve on this host. ParseUserDriveHostRoots warns about
+//     the first two at boot, and every one of them still counted as
+//     "configured": the console then OFFERED host_path and the save 422'd,
+//     which is the exact outcome this field exists to prevent. Asked instead
+//     through userDriveHostRootsUsable, which is the write boundary's OWN
+//     predicate rather than a second copy of the dead-root rules.
+//
 //   - RunnerTarget is which substrate this deployment dispatches to, so the
 //     picker can offer the two backends that can actually mount here instead of
 //     letting an admin author a k8s drive on a Docker install and learn about it
@@ -171,7 +183,7 @@ func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, userDrivesResponse{
 		Drives:              drives,
 		Grants:              grants,
-		HostRootsConfigured: len(s.cfg.UserDriveHostRoots) > 0,
+		HostRootsConfigured: s.userDriveHostRootsUsable(),
 		RunnerTarget:        s.cfg.RunnerTarget,
 		GrantTotal:          total,
 	})
@@ -192,19 +204,6 @@ type userDriveRequest struct {
 	SizeMiB      int                `json:"size_mib,omitempty"`
 	Writable     bool               `json:"writable,omitempty"`
 	Reclaim      types.DriveReclaim `json:"reclaim,omitempty"`
-}
-
-// userDriveHostRootCheck is the deployment's ceiling over an admin-authored
-// host_path, built from the boot-parsed roots. It returns the hook type
-// internal/types names but cannot implement, which is the whole point of the
-// hook: internal/types must not read the environment, and a ceiling that lived
-// in two places would be a ceiling one of them could forget.
-//
-// EMPTY ROOTS REFUSE EVERY host_path DRIVE, and the refusal is inside the
-// closure rather than a caller's `if`, so no call site can acquire the
-// fail-open version by forgetting the guard.
-func (s *Server) userDriveHostRootCheck() types.UserDriveHostRootCheck {
-	return runner.UserDriveHostRootCheck(s.cfg.UserDriveHostRoots)
 }
 
 // decodeUserDriveRequest decodes, normalizes and validates a drive write body,
@@ -258,66 +257,6 @@ func (s *Server) decodeUserDriveRequest(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 	return d, 0, ""
-}
-
-// driveHostRootNesting is the FOURTH gate, and the only one that has to look at
-// the other ROWS: a host_path drive whose host_root sits inside — or contains —
-// another host_path drive's host_root is refused, 422, naming the other drive.
-//
-// THE HOLE IT CLOSES IS A MEMBER'S, NOT AN ADMIN'S TYPO. Drive A is rooted at
-// /srv/shares and gives alice a WRITABLE home at /srv/shares/alice. Drive B is
-// then rooted at /srv/shares/alice/team. Nothing above notices: B's root is
-// inside the deployment's ceiling, exists, is not a credential directory and is
-// an ordinary path. But its whole tree is a directory alice can write from
-// INSIDE a run — so she can replace `team`, or any segment under it, with a
-// link, and B's members are bound wherever she points them. The driver's
-// resolved-real-path checks bound where that can aim (the ceiling, and now the
-// member's own home name) but they cannot make the layout supportable: two
-// drives sharing a tree means one drive's members author the other drive's
-// storage.
-//
-// STRICT nesting only. Two drives on the SAME root are left alone: that is the
-// ordinary "one share, two allocations with different home templates" shape, and
-// neither drive's members can move the other's root, because the root is not
-// inside anybody's home. Equal roots are a naming question; nested roots are a
-// containment one.
-//
-// LEXICAL, on the already-cleaned stored strings. The symlink half belongs to
-// UserDriveHostRootCheck, which resolved both roots against the deployment's
-// ceiling when each was written and does it again at bind time; what THIS gate
-// owns is the relationship between two rows, which is exactly what the rows say.
-//
-// ONE STORE READ, on the drive-write path only — a handful of calls in a
-// deployment's lifetime, and the same list the console already loads on every
-// visit to the screen.
-func (s *Server) driveHostRootNesting(r *http.Request, d types.UserDrive) (int, string) {
-	drives, err := s.cfg.Store.ListUserDrives(r.Context())
-	if err != nil {
-		// 500, never "no other drives": a list that failed cannot say the tree is
-		// clear, and treating it as clear is how the check silently stops biting
-		// on exactly the deployment whose database is unhappy.
-		return http.StatusInternalServerError, "list user drives: " + err.Error()
-	}
-	for _, other := range drives {
-		// A row is not its own ancestor: a PUT that re-saves a drive unchanged
-		// must not start refusing itself.
-		if other.ID == d.ID || other.Backend != types.DriveBackendHostPath || other.HostRoot == "" {
-			continue
-		}
-		switch {
-		case strings.HasPrefix(d.HostRoot, other.HostRoot+"/"):
-			return http.StatusUnprocessableEntity, fmt.Sprintf(
-				"invalid drive: host_root %q is inside drive %q's host_root %q — that tree holds directories the other drive's "+
-					"members can write from inside a run, so they could redirect this one; give the two drives separate trees",
-				d.HostRoot, other.Name, other.HostRoot)
-		case strings.HasPrefix(other.HostRoot, d.HostRoot+"/"):
-			return http.StatusUnprocessableEntity, fmt.Sprintf(
-				"invalid drive: host_root %q contains drive %q's host_root %q — this drive's members could redirect that one "+
-					"from inside a run; give the two drives separate trees",
-				d.HostRoot, other.Name, other.HostRoot)
-		}
-	}
-	return 0, ""
 }
 
 // writeUserDrive is the shared body of POST and PUT: decode, validate against
@@ -567,6 +506,37 @@ func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int,
 		pluralDriveSubjects(before.GrantCount), them, strings.Join(changes, ", "), driveRehomeConfirm), false
 }
 
+// driveGrantConflictMsg is the ONE store.ErrConflict this write can raise, told
+// apart by the request's own tri-state rather than by a second read.
+//
+// THE TWO CAUSES ARE MUTUALLY EXCLUSIVE BY CONSTRUCTION, which is what makes
+// this a decision and not a guess (see PG.UpsertUserDriveGrant): the
+// uniqueness guard short-circuits on an EMPTY home_override and an unstated one
+// is always empty, while the re-home guard is disabled outright by a stated
+// one. So exactly one of them can have fired.
+//
+// The RE-HOME half takes 409 for driveRehomeGuard's reason — "the state of this
+// resource makes that unsafe" — and names the act rather than the field, because
+// an admin who sent a priority edit has no idea they were about to move
+// somebody's storage. Re-sending the name they want is the confirmation; "" is
+// how they clear it deliberately.
+//
+// The UNIQUENESS half names NO subject, for handleDeleteUserDrive's reason: the
+// allocations table the admin is looking at already lists every override, and a
+// name read here would be a second, later answer from a read the refusal does
+// not need.
+func driveGrantConflictMsg(g types.UserDriveGrant, homeOverrideStated bool) string {
+	if !homeOverrideStated {
+		return "this allocation pins a directory name and your request did not mention home_override — writing it " +
+			"would CLEAR that name, so this subject's next run would mount a different object and the one holding " +
+			"their work would be left behind with nothing in Wardyn naming it. Re-send with home_override set to " +
+			"the name you want kept, or to \"\" to drop it deliberately"
+	}
+	return fmt.Sprintf("another allocation on this drive already uses the "+
+		"directory name %q — a directory name is one person's, which is why a group allocation may not "+
+		"carry one; pick a different name or remove the allocation that holds it", g.HomeOverride)
+}
+
 // pluralDriveSubjects counts a drive's allocations the way the console's
 // ALLOCATED_COUNT does — "1 subject" / "n subjects" — so the wire and the screen
 // count the same things in the same words. ALLOCATIONS, never people: a group
@@ -632,8 +602,23 @@ type userDriveGrantRequest struct {
 	// WritableOverride is TRI-STATE on the wire exactly as it is in the column:
 	// absent inherits the drive's posture, and an explicit false is an admin
 	// saying "this subject reads only" on a writable drive.
-	WritableOverride *bool  `json:"writable_override,omitempty"`
-	HomeOverride     string `json:"home_override,omitempty"`
+	WritableOverride *bool `json:"writable_override,omitempty"`
+	// HomeOverride is a POINTER for the reason Enabled below is one, and it is
+	// the same class of bug: the column is written VERBATIM by the store's ON
+	// CONFLICT, so a plain string made every request that omitted the field —
+	// a repoint to another drive, a priority edit, any CLI script that does not
+	// send it — CLEAR the directory name an admin had pinned. That is a silent
+	// re-home: the member's next run mounts a hash-named object instead of
+	// their own directory, and the one holding their work is left behind with
+	// nothing in Wardyn naming it, which is exactly the act driveRehomeGuard
+	// answers 409 for on the drive row.
+	//
+	// The pointer is what lets THIS boundary tell "the client said nothing"
+	// from "the client said empty" — an explicit "" is an admin deliberately
+	// dropping the override, and it still goes through. Unstated, the store
+	// refuses to overwrite a pinned name (ErrConflict → the 409 below): stating
+	// the field IS the confirmation, so there is no ?confirm= to invent.
+	HomeOverride *string `json:"home_override,omitempty"`
 	// Enabled is a *bool DEFAULTING TRUE, and this is the one field on this
 	// surface whose zero value would be a security-shaped bug rather than a
 	// cosmetic one. UpsertUserDriveGrant writes Enabled VERBATIM, so a plain
@@ -664,6 +649,7 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	if !decodeStrict(w, r, &req) {
 		return
 	}
+	homeOverrideStated := req.HomeOverride != nil
 	g := types.UserDriveGrant{
 		SubjectType:      req.SubjectType,
 		Subject:          req.Subject,
@@ -671,8 +657,10 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 		Priority:         req.Priority,
 		SizeMiBOverride:  req.SizeMiBOverride,
 		WritableOverride: req.WritableOverride,
-		HomeOverride:     req.HomeOverride,
 		Enabled:          req.Enabled == nil || *req.Enabled,
+	}
+	if homeOverrideStated {
+		g.HomeOverride = *req.HomeOverride
 	}
 	// Shape first (types.ValidateUserDriveGrant owns the subject hygiene and the
 	// user-tier-only home_override rule), then the row is what the store sees.
@@ -682,7 +670,7 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	}
 	g.ID = uuid.New()
 	g.CreatedBy = principalFromRequest(r)
-	saved, err := s.cfg.Store.UpsertUserDriveGrant(r.Context(), g)
+	saved, err := s.cfg.Store.UpsertUserDriveGrant(r.Context(), g, homeOverrideStated)
 	// ErrNotFound here is the FK refusing an unknown drive_id — a 404 naming the
 	// drive, not a 500, and not a silent no-op.
 	if notFoundIf(w, err, "user drive") {
@@ -699,9 +687,7 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	// and a name read here would be a second, later answer from a read the
 	// refusal does not need.
 	if errors.Is(err, store.ErrConflict) {
-		writeError(w, http.StatusConflict, fmt.Sprintf("another allocation on this drive already uses the "+
-			"directory name %q — a directory name is one person's, which is why a group allocation may not "+
-			"carry one; pick a different name or remove the allocation that holds it", g.HomeOverride))
+		writeError(w, http.StatusConflict, driveGrantConflictMsg(g, homeOverrideStated))
 		return
 	}
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -53,18 +54,43 @@ func parseConfinementClass(s string) (types.ConfinementClass, bool) {
 // agents sharing a host directory could interfere — and records a collision
 // audit event. Best-effort: an empty path, a store list error, or no collision
 // yields no warning and the run still launches.
+//
+// THE READ IS THE QUESTION, not the whole table. This used to call ListRuns,
+// which is documented "all runs in reverse creation order (unbounded)" — a Seq
+// Scan plus a full sort of agent_runs, on EVERY run create, over a table
+// nothing prunes and no retention policy bounds, to produce a sentence that is
+// usually not printed. The predicate is two columns and Postgres can answer it
+// with a WHERE, so it does (ActiveRunsAtPathReader). The in-Go fallback below
+// is the old behaviour, kept for the test doubles that are not PG: the answer
+// is identical either way, which is what makes an unconditional fallback safe
+// here and not on the ownership-scoped list.
 func (s *Server) warnWorkspaceCollision(ctx context.Context, runID uuid.UUID, workspacePath string) []string {
 	if workspacePath == "" {
 		return nil
 	}
-	existing, lerr := s.cfg.Store.ListRuns(ctx)
-	if lerr != nil {
-		return nil
-	}
 	var others []string
-	for _, e := range existing {
-		if e.ID != runID && e.WorkspacePath == workspacePath && !isTerminalRunState(e.State) {
-			others = append(others, e.ID.String())
+	if r, ok := s.cfg.Store.(store.ActiveRunsAtPathReader); ok {
+		active, lerr := r.ActiveRunsAtWorkspacePath(ctx, workspacePath)
+		if lerr != nil {
+			return nil
+		}
+		for _, e := range active {
+			// The state and the path are the STORE's now; only "not me" is left,
+			// and it stays here because the run being created is this handler's
+			// fact rather than a column the query could have filtered on.
+			if e.ID != runID {
+				others = append(others, e.ID.String())
+			}
+		}
+	} else {
+		existing, lerr := s.cfg.Store.ListRuns(ctx)
+		if lerr != nil {
+			return nil
+		}
+		for _, e := range existing {
+			if e.ID != runID && e.WorkspacePath == workspacePath && !isTerminalRunState(e.State) {
+				others = append(others, e.ID.String())
+			}
 		}
 	}
 	if len(others) == 0 {
