@@ -229,34 +229,50 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 	policy *types.RunPolicySpec, injections *[]runner.InjectionGrant, c dispatchCeiling,
 	p *dispatchParams, sandboxEnv map[string]string,
 ) {
-	if len(c.deny) == 0 {
-		return
-	}
-	added := unionCeilingDenies(policy, c.deny)
+	// THE ENFORCEMENT half is gated on the deny list, because with nothing to
+	// deny there is nothing to union, no injection to drop and no lane to
+	// withhold. The AUDIT half below is gated on the PROFILE instead — those are
+	// two different questions, and folding them into one early return is what
+	// made "always audited when a profile applies" false for the commonest
+	// assigned shape there is: a profile that grants rather than denies.
+	var added, droppedInjection, droppedLane []string
+	if len(c.deny) > 0 {
+		added = unionCeilingDenies(policy, c.deny)
 
-	var droppedInjection []string
-	kept := (*injections)[:0:0] // :0:0 — never alias the caller's array
-	for _, in := range *injections {
-		if ceilingDenies(c.deny, in.Rule.Host) {
-			droppedInjection = append(droppedInjection, in.Rule.Host)
-			continue
+		kept := (*injections)[:0:0] // :0:0 — never alias the caller's array
+		for _, in := range *injections {
+			if ceilingDenies(c.deny, in.Rule.Host) {
+				droppedInjection = append(droppedInjection, in.Rule.Host)
+				continue
+			}
+			kept = append(kept, in)
 		}
-		kept = append(kept, in)
+		*injections = kept
+
+		droppedLane = s.dropBrokeredLanes(c, p, sandboxEnv)
+
+		if len(droppedInjection) > 0 || len(droppedLane) > 0 {
+			slog.WarnContext(ctx, "wardynd: governance ceiling — withholding credential lanes for hosts this principal's profile denies",
+				slog.String("run_id", run.ID.String()), slog.String("profile", c.profile),
+				slog.Any("injection_hosts", droppedInjection), slog.Any("broker_lanes", droppedLane))
+		}
 	}
-	*injections = kept
-
-	droppedLane := s.dropBrokeredLanes(c, p, sandboxEnv)
-
-	if len(droppedInjection) > 0 || len(droppedLane) > 0 {
-		slog.WarnContext(ctx, "wardynd: governance ceiling — withholding credential lanes for hosts this principal's profile denies",
-			slog.String("run_id", run.ID.String()), slog.String("profile", c.profile),
-			slog.Any("injection_hosts", droppedInjection), slog.Any("broker_lanes", droppedLane))
+	// NO ASSIGNED PROFILE — an operator (effectiveCeiling short-circuits at step
+	// 1) or an unassigned member: no run.ceiling.reassert row, which is what
+	// makes the row's ABSENCE mean "no profile applies" rather than "this door
+	// skipped the ceiling". ceilingForDispatch leaves deny and profile empty
+	// together, so this is the same provable no-op the deny check stood for.
+	if c.profile == "" {
+		return
 	}
 	// ALWAYS audited when a profile applies, even with nothing to drop: "which
 	// ceiling did this run actually run under" is the question the envelope at
 	// run.policy.effective cannot answer (it records a policy, not whose walls
 	// they are), and the drops themselves are invisible there — injections and
-	// broker grants ride ProxyConfig, not the spec.
+	// broker grants ride ProxyConfig, not the spec. A profile with an EMPTY
+	// denied_domains is exactly where that question is hardest to answer any
+	// other way: nothing about the dispatch changes, so this row is the ONLY
+	// evidence of which walls the run stood inside.
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.ceiling.reassert",
 		run.ID.String(), "success", mustJSON(map[string]any{
 			"profile":                 c.profile,
