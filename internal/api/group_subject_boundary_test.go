@@ -1,9 +1,13 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// group_subject_boundary_test.go pins ONE rule across the two 0.7 tables that
+// group_subject_boundary_test.go pins ONE rule across the THREE 0.7 tables that
 // are written against a `group` subject: a subject the login-time snapshot can
 // never carry must be REFUSED at the write boundary, not stored.
+//
+// It covered two of them and shipped, which is how the third — the user-drive
+// grant — stayed the one surface that stored a group allocation no session could
+// ever match. A parity test's own coverage set is part of what it asserts.
 //
 // Both columns are matched by exact string equality against Session.Groups
 // (store_capabilities.go's `subject = ANY($2::text[])`, and the same shape in
@@ -16,9 +20,14 @@
 // 403 groups_snapshot_stale on account of an assignment that could never have
 // applied to them).
 //
-// The two validators share oidc.CanonicalGroupSubject with the snapshot itself
-// so they cannot drift again, and the last case here is what proves it: every
-// accepted subject is re-derived through the real snapshot normalizer.
+// The three validators share ONE rule with the snapshot itself so they cannot
+// drift again, and the last case here is what proves it: every accepted subject
+// is re-derived through the real snapshot normalizer. The rule has two homes for
+// now — oidc.CanonicalGroupSubject (the snapshot's own) and
+// types.CanonicalGroupSubject (which internal/types must have, because
+// internal/types is imported by pkg/client and the CLI and must not gain the
+// server's OIDC/JOSE dependency stack to canonicalize a subject) — so this file
+// also asserts the two answer identically, until oidc's becomes a delegate.
 package api
 
 import (
@@ -69,25 +78,32 @@ func TestGroupSubjectWriteBoundariesShareTheSnapshotRule(t *testing.T) {
 			}
 			assignErr := validateGovernanceAssignment(&assign)
 
-			// The two tables share a subject vocabulary; a value one accepts
-			// and the other refuses is the drift this pin exists to catch.
-			if (grantErr == nil) != (assignErr == nil) {
-				t.Fatalf("the two write boundaries disagree on %+q: grant err=%v, assignment err=%v",
-					tc.subject, grantErr, assignErr)
+			drive := types.UserDriveGrant{
+				SubjectType: types.CapabilitySubjectGroup, Subject: tc.subject,
+				DriveID: uuid.New(),
+			}
+			driveErr := types.ValidateUserDriveGrant(&drive)
+
+			// The three tables share a subject vocabulary; a value one accepts
+			// and another refuses is the drift this pin exists to catch.
+			if (grantErr == nil) != (assignErr == nil) || (grantErr == nil) != (driveErr == nil) {
+				t.Fatalf("the write boundaries disagree on %+q: grant err=%v, assignment err=%v, drive grant err=%v",
+					tc.subject, grantErr, assignErr, driveErr)
 			}
 
 			if tc.want == "" {
 				if grantErr == nil {
-					t.Fatalf("both boundaries ACCEPTED %+q (stored as %+q / %+q) — no session snapshot can carry it, so the row matches nobody",
-						tc.subject, grant.Subject, assign.Subject)
+					t.Fatalf("the boundaries ACCEPTED %+q (stored as %+q / %+q / %+q) — no session snapshot can carry it, so the row matches nobody",
+						tc.subject, grant.Subject, assign.Subject, drive.Subject)
 				}
 				return
 			}
 			if grantErr != nil {
-				t.Fatalf("both boundaries refused %+q: %v — a group name the snapshot does carry must be writable", tc.subject, grantErr)
+				t.Fatalf("the boundaries refused %+q: %v — a group name the snapshot does carry must be writable", tc.subject, grantErr)
 			}
-			if grant.Subject != tc.want || assign.Subject != tc.want {
-				t.Fatalf("stored subject = %q (grant) / %q (assignment), want %q", grant.Subject, assign.Subject, tc.want)
+			if grant.Subject != tc.want || assign.Subject != tc.want || drive.Subject != tc.want {
+				t.Fatalf("stored subject = %q (grant) / %q (assignment) / %q (drive grant), want %q",
+					grant.Subject, assign.Subject, drive.Subject, tc.want)
 			}
 			// The accepted form must be BYTE-FOR-BYTE what a login would put in
 			// the snapshot — the property that makes exact-equality matching
@@ -113,13 +129,46 @@ func TestGroupSubjectRefusalNamesTheReason(t *testing.T) {
 		SubjectType: types.CapabilitySubjectGroup, Subject: "Entwickler-Büro",
 		Capability: capSecret, Value: "prod-db", Effect: types.CapabilityDeny,
 	}
-	err := validateCapabilityGrant(&grant)
-	if err == nil {
-		t.Fatal("accepted a non-ASCII group subject")
+	drive := types.UserDriveGrant{
+		SubjectType: types.CapabilitySubjectGroup, Subject: "Entwickler-Büro",
+		DriveID: uuid.New(),
 	}
-	for _, want := range []string{"subject:", "printable ASCII", "group snapshot"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not mention %q", err, want)
+	for name, err := range map[string]error{
+		"capability grant": validateCapabilityGrant(&grant),
+		"user-drive grant": types.ValidateUserDriveGrant(&drive),
+	} {
+		if err == nil {
+			t.Fatalf("%s: accepted a non-ASCII group subject", name)
+		}
+		for _, want := range []string{"subject:", "printable ASCII", "group snapshot"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: error %q does not mention %q", name, err, want)
+			}
+		}
+	}
+}
+
+// TestCanonicalGroupSubjectHasOneAnswer is the drift guard between the rule's two
+// homes. internal/types needs it because ValidateUserDriveGrant is a write
+// boundary and internal/types is imported by pkg/client and the CLI, which must
+// not acquire the server's OIDC/JOSE dependency stack to canonicalize a subject;
+// internal/auth/oidc needs it because sessionGroups is the match surface. Two
+// homes is one more than the rule should have — oidc's should become a delegate
+// to types' (its dependency direction is the one that works) — and until it does,
+// this asserts they cannot answer differently. THIS is the defect shape the
+// original finding named: one rule, several hand-written copies.
+func TestCanonicalGroupSubjectHasOneAnswer(t *testing.T) {
+	for _, s := range []string{
+		"eng-team", "  Eng-Team  ", "Wardyn.Contractors", "ENG-TEAM",
+		"Entwickler-Büro", "équipe-fr", "инженеры",
+		"\u212Aubernetes-admins", "İnfra", "eng\tteam", "   ", "",
+		"a b", "~", " ", "eng-team\n",
+	} {
+		gotTypes, okTypes := types.CanonicalGroupSubject(s)
+		gotOIDC, okOIDC := oidc.CanonicalGroupSubject(s)
+		if gotTypes != gotOIDC || okTypes != okOIDC {
+			t.Errorf("types.CanonicalGroupSubject(%+q) = (%q, %v), oidc.CanonicalGroupSubject = (%q, %v) — the rule has drifted between its two homes",
+				s, gotTypes, okTypes, gotOIDC, okOIDC)
 		}
 	}
 }

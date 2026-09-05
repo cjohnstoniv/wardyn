@@ -4,6 +4,8 @@
 package main
 
 import (
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -218,4 +220,80 @@ func trackedMarkdown(t *testing.T, root string) []string {
 		}
 	}
 	return files
+}
+
+// TestDriveNamingCommentsMatchTheFunction is the same parity over the other half
+// of the prose, in the one file where the standard is absolute.
+//
+// TestDocumentedDriveObjectNamesMatchTheFunction walks tracked MARKDOWN, and was
+// written repo-wide so a section-scoped check could not miss the runbook's
+// reclaim command. It still could not see the RATIONALE COMMENTS in
+// internal/types/user_drive.go, which restate the minted shape to carry a
+// security argument about what an object name exposes — and which went on
+// stating the retired pre-slug rule (`wardyn-drive-<home>`, "named by the HOME
+// and by nothing else") after every minted name took the drive slug. A reader
+// auditing the managed-backend template refusal reads those comments as the
+// specification; one of them claimed a managed object is named by the home "and
+// by nothing else", which is a claim about the very exposure that refusal bounds.
+//
+// SCOPED TO THAT ONE FILE, DELIBERATELY, and the reason is what a repo-wide
+// version could not do. Run over all of cmd/ and internal/, this flags four more
+// sites, and only two are defects: internal/api/user_drives.go's rename gate
+// says the shape is `wardyn-drive-<drive-slug>-<home>` and then correctly
+// recounts that "it used to be `wardyn-drive-<home>`" — load-bearing history the
+// fix wave wrote on purpose. A guard that cannot tell a stale SPECIFICATION from
+// a deliberate account of what changed would demand the history be deleted, and
+// would be silenced within a round. This file DEFINES DriveObjectName, so its
+// own comments have no business narrating a retired shape at all; every other
+// package legitimately may. The genuinely stale siblings this found are filed,
+// not allowlisted.
+//
+// Only tokens carrying a `<placeholder>` are checked. `wardyn-drive-bsmith` in
+// DriveObjectName's own doc is a deliberate example of the RETIRED name, quoted
+// to explain why the slug was added; a concrete example is not a template, and
+// flagging it would be flagging the explanation of the fix.
+func TestDriveNamingCommentsMatchTheFunction(t *testing.T) {
+	shapes := mintedShapes(t)
+	allowed := make([]string, 0, len(shapes))
+	for _, s := range shapes {
+		if !slices.Contains(allowed, s) {
+			allowed = append(allowed, s)
+		}
+	}
+	slices.Sort(allowed)
+
+	const rel = "internal/types/user_drive.go"
+	path := filepath.Join(repoRoot(t), rel)
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse %s: %v", rel, err)
+	}
+	hits := 0
+	for _, group := range f.Comments {
+		for _, c := range group.List {
+			for _, tok := range driveNameToken.FindAllString(c.Text, -1) {
+				if !strings.Contains(tok, "<") {
+					continue // a concrete example name, not a template
+				}
+				hits++
+				if slices.Contains(allowed, tok) {
+					continue
+				}
+				line := fset.Position(c.Pos()).Line
+				if slices.Contains(allowed, strings.ReplaceAll(tok, "<slug>", "<drive-slug>")) {
+					t.Errorf("%s:%d writes %q — right shape, non-canonical placeholder; DriveObjectName's own doc "+
+						"spells it `<drive-slug>`, and this file should say the name one way", rel, line, tok)
+					continue
+				}
+				t.Errorf("%s:%d states the minted object name %q, which types.DriveObjectName does not produce for "+
+					"any backend (it produces %v). This file DEFINES that function, and these comments carry the "+
+					"security argument for the managed-backend template refusal — a stale shape here is a stale "+
+					"specification, not a note about history", rel, line, tok, allowed)
+			}
+		}
+	}
+	if hits == 0 {
+		t.Fatalf("found no templated wardyn-drive names in %s — the enumeration, not the comments, is what changed", rel)
+	}
 }
