@@ -11,6 +11,7 @@ package api
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -24,10 +25,11 @@ import (
 // the profile-as-ceiling and deployment-as-ceiling paths, so a stale copy here
 // can only make this comparator refuse MORE than it must. That argument rests on
 // the clamp capping against the ceiling grant this comparator ACCEPTED against,
-// which is now guaranteed rather than assumed: both sides select that grant with
-// composer.ceilingGrantsBounding. While the clamp indexed the ceiling by kind
-// alone, the argument held only for a ceiling carrying at most one grant per
-// kind. The rules that could
+// which is guaranteed rather than assumed: both sides select that grant by
+// calling composer.CeilingGrantsCovering — one function, not two searches that
+// happen to agree. While the clamp indexed the ceiling by kind alone, the
+// argument held only for a ceiling carrying at most one grant per kind. The
+// rules that could
 // widen if they drifted — the github repo/permission subset test — are not
 // duplicated at all; they live in composer beside the clamp that honors them
 // (composer.GitHubScopeWithin).
@@ -65,16 +67,18 @@ func normalizeGrantTTLSeconds(ttl int) int {
 // when SOME single ceiling grant dominates it on EVERY axis — checking the axes
 // against different ceiling grants would let a profile pair one grant's
 // approval posture with another's TTL, which is precisely the widening a
-// per-axis check misses. The RUNTIME clamp now takes its bound from that same
-// single grant (composer's ceilingGrantsBounding); it used to take approval and
-// TTL from whichever same-kind ceiling grant came last, which is this exact
-// widening committed one layer down.
+// per-axis check misses. The RUNTIME clamp takes its bound from the SAME
+// candidate set, because both sides call composer.CeilingGrantsCovering; it used
+// to take approval and TTL from whichever same-kind ceiling grant came last,
+// which is this exact widening committed one layer down.
 type grantBoundFailure int
 
 const (
-	boundFailKind grantBoundFailure = iota
-	boundFailPairing
-	boundFailApproval
+	// The BOUND axes only. Kind and pairing are no longer ranked because they
+	// are no longer walked here: composer.CeilingGrantsCovering answers identity
+	// in one place, and a proposal it covers nothing of is refused with the
+	// matching sentence before any ranking starts.
+	boundFailApproval grantBoundFailure = iota
 	boundFailTTL
 	boundFailGitHubScope
 )
@@ -110,10 +114,11 @@ const (
 //     of authoring one.
 //
 // Four axes, all in the narrowing direction: the pairing must be one the
-// deployment ceiling already lists (storedSecretPairingInCeiling, which forwards
-// to composer.PairingInCeiling — the SAME comparator filterMemberGrants AND the
-// runtime clamp use, so a profile, a member and a dispatched run are bounded by
-// one rule, not three that can drift); approval may be forced on, never stripped;
+// deployment ceiling already lists — that axis is composer.CeilingGrantsCovering,
+// the SAME selection the runtime clamp bounds against and the same pairing rule
+// filterMemberGrants enforces, so a profile, a member and a dispatched run are
+// bounded by one rule, not three that can drift; approval may be forced on,
+// never stripped;
 // TTL may be shortened, never lengthened (both sides normalized —
 // normalizeGrantTTLSeconds); and github_token repos/permissions must be a
 // subset, which pairing checks CANNOT see (storedSecretGrantPairing reports
@@ -139,33 +144,47 @@ func governanceGrantWithinCeiling(g types.GrantSpec, ceiling []types.GrantSpec) 
 	// An UNDECODABLE profile scope is a malformed write, not a silent pass: the
 	// pairing cannot be computed, so nothing can be said about whether it is in
 	// the ceiling. Fail closed, exactly as filterMemberGrants does.
-	host, secretRef, knownHostsRef, covered, derr := storedSecretGrantPairing(g)
+	host, secretRef, _, covered, derr := storedSecretGrantPairing(g)
 	if derr != nil {
 		return fmt.Errorf("eligible grant %q: invalid scope: %w", g.Kind, derr)
 	}
 
-	worst, worstErr := boundFailKind, error(nil)
+	// IDENTITY IS COMPOSER'S ANSWER, not a second copy of it. Which ceiling
+	// grants a proposal is judged against — same kind, and for the kinds that
+	// name a stored secret the same (host, secret, known_hosts) pairing — is
+	// exactly the question the runtime clamp asks about the same proposal, and
+	// F014 is that question having been implemented twice. Round 1 shared only
+	// the pairing PREDICATE and left the two SEARCHES standing; they drifted
+	// again inside the round, on github_token, whose scope names no pairing at
+	// all and which the two searches therefore disagreed about. One search now.
+	//
+	// What stays here is the BOUNDS half — approval, TTL, github scope — because
+	// that is where the two sides legitimately differ: the clamp NARROWS a
+	// proposal to them, this comparator REFUSES a proposal that exceeds them.
+	covering := composer.CeilingGrantsCovering(g, ceiling)
+	if len(covering) == 0 {
+		// Nothing covers it, and the two reasons need different sentences: a
+		// pairing the deployment does not list, versus a KIND it does not list
+		// at all. Only the covered kinds can produce the first.
+		if covered && slices.ContainsFunc(ceiling, func(cg types.GrantSpec) bool { return cg.Kind == g.Kind }) {
+			return fmt.Errorf(
+				"eligible grant %q pairing secret %q with host %q is not in the deployment ceiling "+
+					"(a profile may narrow the deployment's eligible grants, never add one)",
+				g.Kind, secretRef, host)
+		}
+		return fmt.Errorf(
+			"eligible grant %q is not in the deployment ceiling's eligible grants "+
+				"(a profile may narrow the deployment's credential eligibility, never mint new eligibility)",
+			g.Kind)
+	}
+
+	worst, worstErr := boundFailApproval, error(nil)
 	note := func(rank grantBoundFailure, err error) {
 		if worstErr == nil || rank >= worst {
 			worst, worstErr = rank, err
 		}
 	}
-	for _, cg := range ceiling {
-		if cg.Kind != g.Kind {
-			continue
-		}
-		// Pairing. For the stored-secret kinds this is the exact (host, secret,
-		// known_hosts) match the member path already enforces. github_token and
-		// cloud_sts name no stored secret, so same-kind membership IS the
-		// pairing test for them and the GitHub scope check below carries the
-		// rest.
-		if covered && !storedSecretPairingInCeiling(g.Kind, host, secretRef, knownHostsRef, []types.GrantSpec{cg}) {
-			note(boundFailPairing, fmt.Errorf(
-				"eligible grant %q pairing secret %q with host %q is not in the deployment ceiling "+
-					"(a profile may narrow the deployment's eligible grants, never add one)",
-				g.Kind, secretRef, host))
-			continue
-		}
+	for _, cg := range covering {
 		if cg.RequiresApproval && !g.RequiresApproval {
 			note(boundFailApproval, fmt.Errorf(
 				"eligible grant %q strips requires_approval, which the deployment ceiling sets "+
@@ -188,11 +207,7 @@ func governanceGrantWithinCeiling(g types.GrantSpec, ceiling []types.GrantSpec) 
 		}
 		return nil // this ceiling grant dominates on every axis
 	}
-	if worstErr != nil {
-		return worstErr
-	}
-	return fmt.Errorf(
-		"eligible grant %q is not in the deployment ceiling's eligible grants "+
-			"(a profile may narrow the deployment's credential eligibility, never mint new eligibility)",
-		g.Kind)
+	// Non-nil by construction: covering is non-empty, and every iteration above
+	// either returns nil or records a failure.
+	return worstErr
 }

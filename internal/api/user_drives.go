@@ -40,6 +40,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -668,6 +669,69 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid allocation: "+err.Error())
 		return
 	}
+	// THE GROUP SUBJECT, held to the SAME rule as the other two tables written
+	// against one (validateCapabilityGrant, validateGovernanceAssignment). It is
+	// applied HERE rather than inside types.ValidateUserDriveGrant because
+	// internal/types must not import internal/auth/oidc, and a hand-copied
+	// second spelling of the snapshot rule is exactly the drift these three
+	// boundaries keep having.
+	//
+	// TWO FAILURES, and the second is the worse one. A group name the snapshot
+	// can never carry — "équipe-fr", "инженеры" — was stored verbatim and
+	// matched nobody: an allocation an admin can see on the allocations screen
+	// that no member will ever mount. And ValidateUserDriveGrant's plain
+	// strings.ToLower FOLD-ESCALATES: U+212A KELVIN SIGN folds to ASCII 'k' and
+	// U+0130 to ASCII 'i', so "Kubernetes-admins" (crafted K) was stored as
+	// "kubernetes-admins" and "İnfra" as "infra" — binding a drive, with its
+	// size and writability, to a REAL group the operator never named. That is a
+	// widening, not an inert row, and it is why the guard has to precede the
+	// fold rather than follow it (which is what CanonicalGroupSubject does).
+	if g.SubjectType == types.CapabilitySubjectGroup {
+		subject, ok := oidc.CanonicalGroupSubject(req.Subject)
+		if !ok {
+			writeError(w, http.StatusBadRequest, "invalid allocation: subject: must be printable ASCII — a group subject is matched against the login-time group snapshot, which carries printable ASCII only, so this value can never match anyone")
+			return
+		}
+		g.Subject = subject
+	}
+	// THE BACKEND-AWARE HOME CHECK, run at the moment the admin types it rather
+	// than at every launch afterwards.
+	//
+	// types.ValidateUserDriveGrant holds only the grant ROW, so it cannot see
+	// which substrate the drive it points at lands on, and it applies the DOCKER
+	// segment rule as the looser of the two (its own comment says so). A k8s
+	// backend enforces DNS-1123: no `_`, no trailing `-` or `.`. So
+	// home_override="bob_smith" on a k8s_pvc drive was accepted 201 with a
+	// drive.grant.write audit row, and then EVERY launch by that member resolved
+	// errDriveUnmountable and answered 422 while /me reported
+	// user_drive_unavailable="unmountable" — the admin's only signal was a
+	// member complaining.
+	//
+	// The system already knows the backend here; it just was not asked. Asked
+	// now, through the resolver's OWN predicate (types.DriveHomeName), so the
+	// write boundary and the resolve boundary cannot answer differently — a
+	// second copy of the rule is how they diverged in the first place.
+	//
+	// The subject is irrelevant and passed empty deliberately: DriveHomeName
+	// SHORT-CIRCUITS on a non-empty override, checking it and returning before
+	// any template or subject is read.
+	//
+	// The read also gives the 404 arm below a REASON rather than a dependency on
+	// the FK: an unknown drive_id is now named here.
+	if strings.TrimSpace(g.HomeOverride) != "" {
+		d, derr := s.cfg.Store.GetUserDrive(r.Context(), g.DriveID)
+		if notFoundIf(w, derr, "user drive") {
+			return
+		}
+		if derr != nil {
+			writeError(w, http.StatusInternalServerError, "get user drive: "+derr.Error())
+			return
+		}
+		if _, herr := types.DriveHomeName(d, "", g.HomeOverride); herr != nil {
+			writeError(w, http.StatusBadRequest, "invalid allocation: "+herr.Error())
+			return
+		}
+	}
 	g.ID = uuid.New()
 	g.CreatedBy = principalFromRequest(r)
 	saved, err := s.cfg.Store.UpsertUserDriveGrant(r.Context(), g, homeOverrideStated)
@@ -823,6 +887,37 @@ func (s *Server) resolveMeUserDrive(r *http.Request) (*meUserDrive, string) {
 	if resolved == nil {
 		return nil, "" // answered, and the answer is "no allocation"
 	}
+	// WOULD IT ACTUALLY BIND HERE. driveIsMountableHere ran at the launch door
+	// and at the ADMIN preview and never on the member's own surface, so /me
+	// offered a mountable-looking allocation — name, size, writable, home_name,
+	// user_drive_unavailable "" — for a drive this deployment refuses 422 at
+	// launch ("directory carol does not exist on the share — ask an admin to
+	// create it"). The New Run card drew the checkbox and its writable sentence
+	// for a mount the create path was going to reject.
+	//
+	// THE DECISION, NOT THE REFUSAL (driveBindFailureHere): a /me poll is a
+	// display read on a timer, so running the writer here — even against a
+	// throwaway ResponseWriter — would inflate wardyn_user_drive_refused_total
+	// and fill the log with WARNs for a member who never asked for a run.
+	//
+	// SKIPPED FOR A PAUSED ROW, the same scoping the preview uses: nothing was
+	// derived above it, there is no object name to stat, and "paused" is already
+	// the answer the response carries.
+	//
+	// THE EXISTING `unmountable` TOKEN, not a new one. Its own doc reads "an
+	// allocation EXISTS and cannot be mounted — a home name that cannot name a
+	// directory, a share that is not there. 422 at launch, and the one state
+	// whose remedy is an admin's" — which is this state exactly. The 503 arm
+	// (the runner could not be asked) is not about the drive at all, so it takes
+	// `unavailable`, matching writeDriveError's own status mapping.
+	if !resolved.Paused {
+		if f := s.driveBindFailureHere(r.Context(), *resolved); f != nil {
+			if f.status == http.StatusServiceUnavailable {
+				return nil, driveUnavailableUnknown
+			}
+			return nil, driveUnavailableUnmountable
+		}
+	}
 	return &meUserDrive{
 		Name:        resolved.Drive.Name,
 		Backend:     resolved.Drive.Backend,
@@ -848,6 +943,10 @@ func (s *Server) resolveMeUserDrive(r *http.Request) (*meUserDrive, string) {
 // an allocation would not help them, and a field folded into user_drive could
 // not have said so.
 //
+// THE SECOND RETURN IS "I CANNOT ANSWER THE DOOR", and it now covers TWO
+// causes, both of which must not read as an open door: a ceiling that could not
+// be resolved, and a door that is shut under a profile with no name to quote.
+//
 // It reads driveDoorProfile — the SAME predicate denyMemberDrive enforces with,
 // whose keying (operator exempt, unassigned member has no door) is documented
 // there. A ceiling that cannot be resolved reports "" for resolveMeUserDrive's
@@ -869,7 +968,27 @@ func (s *Server) userDriveDeniedByProfile(r *http.Request) (name string, unresol
 		// create the server would then refuse.
 		return "", true
 	}
-	name, _ = s.driveDoorProfile(r.Context(), ceiling)
+	// THE BOOL IS THE DECISION, and discarding it here was the same fail-open
+	// driveDoorShut's own bool was introduced to close, left standing at the
+	// sibling call site. governance_profiles.name is TEXT NOT NULL UNIQUE with
+	// no non-empty CHECK, so a profile with DenyUserDrive set and a blank name
+	// reports ("", true): the name key then shipped "" — which the documented
+	// contract reads as "no profile denies you" — beside a fully populated,
+	// writable user_drive, while POST /runs with drive.enabled answered 403
+	// 'mounting a user drive is not allowed by your governance profile ""'.
+	//
+	// UNNAMED-BUT-SHUT TAKES THE DOOR-UNKNOWN PATH (the remediation's second
+	// option), rather than a new value on either key. The display key cannot say
+	// "shut" without a name to quote — that is what it is FOR — so the honest
+	// answer is the one /me already has for "I cannot answer the door": suppress
+	// the allocation so the card cannot offer a mount the launch refuses, and
+	// let the reason key carry it. A NAMED deny is untouched: it keeps shipping
+	// the profile name beside the allocation, which is the four-state doctrine
+	// working as designed (an allocation and a door are different facts).
+	name, shut := s.driveDoorProfile(r.Context(), ceiling)
+	if shut && name == "" {
+		return "", true
+	}
 	return name, false
 }
 

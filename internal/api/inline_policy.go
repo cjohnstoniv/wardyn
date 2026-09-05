@@ -127,6 +127,16 @@ func (s *Server) boundMemberSpec(ctx context.Context, w http.ResponseWriter, r *
 // preflighting and a silent narrowing is a run that quietly is not the run the
 // member asked for.
 func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r *http.Request, req *createRunRequest, dryRun bool) (types.RunPolicySpec, *uuid.UUID, []string, bool) {
+	// The caller's OWN secret names, resolved at most once for this whole
+	// resolution rather than once per eligible_grant at each of the three sites
+	// that ask (filterMemberGrants' 6c arm, narrowMemberInlinePolicy's ownership
+	// exemption, validateInlineSecretRefs' unknown-name arm). eligible_grants is
+	// request-body-sized and uncapped, so an unmemoized read per grant let one
+	// member choose how many store round trips this handler made — see
+	// ownedSecretMemo, which is capBatch's law applied to the list capBatch did
+	// not cover.
+	ctx = withOwnedSecretMemo(ctx)
+
 	// XOR: a run picks EITHER a stored policy_id OR an inline policy, never both.
 	if req.InlinePolicy != nil && req.PolicyID != nil {
 		writeError(w, http.StatusBadRequest, "specify either policy_id or inline_policy, not both")
@@ -499,7 +509,7 @@ func (s *Server) narrowMemberInlinePolicy(ctx context.Context, owner string, spe
 			// A name the member OWNS is exempt from capSecret: that capability
 			// bounds access to OPERATOR material, and a member's own row widens
 			// nothing (6c).
-			if s.ownsSecret(ctx, owner, ref) {
+			if s.ownsSecretMemoized(ctx, owner, ref) {
 				continue
 			}
 			ok, err := cap.allowed(ctx, capSecret, ref)
@@ -669,7 +679,7 @@ func (s *Server) filterMemberGrants(ctx context.Context, owner string, allowedDo
 			// has already intersected egress to the ceiling; the suffix
 			// match alone would admit evilanthropic.com), and ownership is
 			// proved by a names-only For(owner).List, never a value read.
-			if s.isModelProviderHost(host) && domainAllowedExact(allowedDomains, host) && s.ownsSecret(ctx, owner, secretRef) {
+			if s.isModelProviderHost(host) && domainAllowedExact(allowedDomains, host) && s.ownsSecretMemoized(ctx, owner, secretRef) {
 				kept = append(kept, g)
 				continue
 			}
@@ -875,7 +885,7 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, owner string, spe
 		// accepted too — this is what lets a member's inline_policy name their
 		// own model key with no operator row of that name at all (6c). Never
 		// widens: an operator-only name still 422s below.
-		if !known[n] && !s.ownsSecret(ctx, owner, n) {
+		if !known[n] && !s.ownsSecretMemoized(ctx, owner, n) {
 			return http.StatusUnprocessableEntity, fmt.Errorf(
 				"api_key grant references unknown secret %q (set it first via the secrets API)", n)
 		}

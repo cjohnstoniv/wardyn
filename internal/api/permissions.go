@@ -118,6 +118,46 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 			return fmt.Errorf("value: %w", err)
 		}
 	}
+	// workspace values are UUIDs, and the resolver compares them by EXACT
+	// STRING EQUALITY (capValueMatches: every kind but egress_host is
+	// `grantValue == want`) against uuid.UUID.String(), which is always the
+	// canonical lowercase-hyphenated form. So the VALUE half needs the same
+	// treatment the SUBJECT half and the egress_host value already get: a
+	// spelling the resolver will never be asked about is refused or
+	// canonicalized at the write boundary, not stored 201-Created.
+	//
+	// MEASURED before this: all four alternative spellings uuid.Parse accepts —
+	// uppercase, braced, urn:uuid:, unhyphenated — validated clean, rendered on
+	// the Permissions screen as an active DENY, and capValueOverlaps answered
+	// false for every request naming that workspace. The deny protected nothing,
+	// which is the one thing capabilities.go promises it always does. The
+	// canonical spelling (the control) bit correctly, so nothing in the UI or
+	// the audit trail distinguished the two.
+	//
+	// CANONICALIZED, not refused, for the spellings uuid.Parse accepts: an admin
+	// who pastes a braced id from a tool means the workspace, and storing the
+	// canonical form ALSO folds the five spellings onto one natural key
+	// (subject_type, subject, capability, value) instead of five rows that each
+	// claim to govern the same workspace. A value uuid.Parse cannot read at all
+	// IS refused — it can never name a workspace, so storing it would be the
+	// same inert row by another route.
+	//
+	// The "*" wildcard is this table's own spelling for "every value of this
+	// kind" (capValueMatches short-circuits on it), not a workspace id, so it is
+	// exempt exactly as it is on the egress_host arm above.
+	if g.Capability == capWorkspace && g.Value != capWildcard {
+		id, err := uuid.Parse(g.Value)
+		if err != nil {
+			return fmt.Errorf("value: %q is not a workspace id — a workspace capability names a workspace by uuid, and the resolver compares it exactly, so a value it cannot read can never match anything", g.Value)
+		}
+		g.Value = id.String()
+	}
+	// EVERY OTHER KIND IS AN EXACT, CASE-SENSITIVE IDENTIFIER STORED VERBATIM,
+	// and that is a decision rather than an omission. A secret name, an agent
+	// id, an image ref and an integration id are all authored elsewhere in the
+	// system with their own case, and there is no canonical form to fold them
+	// onto: lowercasing a secret name here would stop it matching the row
+	// secrets.go stores, which is the opposite of what this block is for.
 	if g.SubjectType == types.CapabilitySubjectAll {
 		// "all" names every signed-in human; the migration is explicit that
 		// subject is '' for this type, so a caller-supplied value is dropped

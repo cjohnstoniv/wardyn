@@ -774,8 +774,10 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 
 // redactSetupStatusForMember drops the operator/admin-facing DIAGNOSTIC detail
 // a member has no route to act on — the environment/credential checklist rows,
-// resident-CLI login detection, and secret NAMES (item 2's explicit drop list:
-// checks/providers/secret names/runner detail) — while keeping everything a
+// resident-CLI login detection, and secret NAMES — item 2's explicit drop list
+// (checks/providers/secret names/runner detail), plus the integration rows' OWN
+// credential refs, egress hosts and operator config, which are secret names by
+// another name and were shipping in the same body — while keeping everything a
 // member's own console needs: Ready/Auth (App.tsx's reachability gate) and
 // HasRuns, plus every field the run-launch UI reads (Bedrock, Deployment,
 // Harness*, Integrations, Platform, HostProxy, SCM, AgeKey) so a member can
@@ -826,6 +828,13 @@ func redactSetupStatusForMember(st SetupStatus) SetupStatus {
 	// member's own readiness. Capture time, source run id, aging and
 	// renewability are operator credential-lifecycle detail. Rebuilt into a new
 	// slice rather than edited in place — the input is the caller's value.
+	// THE SAME ROWS /integrations publishes, and the same projection. Dropping
+	// SetupSecrets.Present as "secret NAMES" while shipping
+	// integrations[].secrets[].secret_name in the SAME response body was the
+	// contradiction: one credential-ref list withheld, an equivalent one beside
+	// it passed through, together with the internal egress hosts and the
+	// operator's connection config.
+	st.Integrations = memberSafeIntegrations(st.Integrations)
 	if len(st.Harness) > 0 {
 		reduced := make([]SetupHarness, len(st.Harness))
 		for i, h := range st.Harness {

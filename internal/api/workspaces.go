@@ -277,12 +277,26 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	// write (llm-cred, requirements, reassign, env-as-code/write, record,
 	// update, delete) stays on the super-admin predicate, through
 	// getWorkspaceAuthorized and ownsWorkspaceOrAdmin.
+	// EVERY ROW THIS ROUTE RETURNS goes through the same per-reader projection
+	// the detail route applies (redactWorkspaceForRead) — the list hands out the
+	// identical document, so redacting only the detail read would have moved the
+	// disclosure one route sideways rather than closing it.
+	redact := func(rows []types.Workspace, err error) ([]types.Workspace, error) {
+		if err != nil {
+			return nil, err
+		}
+		out := make([]types.Workspace, 0, len(rows))
+		for _, ws := range rows {
+			out = append(out, redactWorkspaceForRead(ws, s.workspaceReadTierFor(r, ws)))
+		}
+		return out, nil
+	}
 	if !s.isSecurityOperator(r.Context()) {
 		principal := principalFromRequest(r)
 		var ownerPageFn func(store.Page) ([]types.Workspace, error)
 		if pg, ok := s.cfg.Store.(store.WorkspacesByOwnerPager); ok {
 			ownerPageFn = func(p store.Page) ([]types.Workspace, error) {
-				return pg.ListWorkspacesPageForOwner(r.Context(), principal, p)
+				return redact(pg.ListWorkspacesPageForOwner(r.Context(), principal, p))
 			}
 		}
 		servePage(w, page, ownerPageFn, func() ([]types.Workspace, error) {
@@ -296,15 +310,17 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 					out = append(out, ws)
 				}
 			}
-			return out, nil
+			return redact(out, nil)
 		})
 		return
 	}
 	var pageFn func(store.Page) ([]types.Workspace, error)
 	if pg, ok := s.cfg.Store.(store.Pager); ok {
-		pageFn = func(p store.Page) ([]types.Workspace, error) { return pg.ListWorkspacesPage(r.Context(), p) }
+		pageFn = func(p store.Page) ([]types.Workspace, error) { return redact(pg.ListWorkspacesPage(r.Context(), p)) }
 	}
-	servePage(w, page, pageFn, func() ([]types.Workspace, error) { return s.cfg.Store.ListWorkspaces(r.Context()) })
+	servePage(w, page, pageFn, func() ([]types.Workspace, error) {
+		return redact(s.cfg.Store.ListWorkspaces(r.Context()))
+	})
 }
 
 // handleGetWorkspace returns one workspace by id (404 when unknown).
@@ -325,7 +341,13 @@ func (s *Server) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 	ws = s.repairStaleWorkspaceRuns(r.Context(), ws)
 	// The import panel renders Record Mode from the workspace's own record_results
 	// map (per-session state); sessions are user-named, not a derived taxonomy.
-	writeJSON(w, http.StatusOK, ws)
+	//
+	// PROJECTED AT THE RESPONSE, per the reader's tier. getWorkspaceReadable
+	// decides WHO may read this row; redactWorkspaceForRead decides WHAT of it
+	// they see, and the two are separate because the same getter feeds
+	// workspace_build.go and workspace_envcode.go, which need the real host
+	// paths and image refs to do their work.
+	writeJSON(w, http.StatusOK, redactWorkspaceForRead(ws, s.workspaceReadTierFor(r, ws)))
 }
 
 // sshWorkspaceSourcesReady returns a 400-worthy message when any repo source's

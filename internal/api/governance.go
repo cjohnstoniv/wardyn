@@ -468,7 +468,7 @@ func (s *Server) handlePreviewGovernanceProfile(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	groups, msg := normalizeGovernancePreviewClaims(req.Groups, "groups")
+	groups, msg := normalizeGovernancePreviewGroups(req.Groups)
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -491,12 +491,19 @@ func (s *Server) handlePreviewGovernanceProfile(w http.ResponseWriter, r *http.R
 // claim list, preserving ORDER — which matters, because order is the user
 // tier's tie-break (array_position).
 //
-// The normalization is not a nicety: assignments are stored lowercased
-// (validateGovernanceAssignment) and BOTH enforcement-path inputs arrive
-// already folded — capabilitySubjects lowercases the sub and the email,
-// sessionGroups lowercases every group. A preview that skipped it would answer
-// "no assignment matches" for a claim typed `Eng` against a row the real run
-// matches, which is the drift this endpoint exists to remove.
+// USER SUBJECTS ONLY. The normalization is not a nicety: assignments are stored
+// lowercased (validateGovernanceAssignment) and the enforcement path's user
+// input arrives already folded — capabilitySubjects lowercases the sub and the
+// email. A preview that skipped it would answer "no assignment matches" for a
+// claim typed `Eng` against a row the real run matches, which is the drift this
+// endpoint exists to remove.
+//
+// A plain ToLower is the WHOLE rule for a user subject and is NOT the whole rule
+// for a group: this comment used to say "sessionGroups lowercases every group",
+// and that sentence was the premise a real divergence rested on. sessionGroups
+// applies a printable-ASCII guard BEFORE the fold (oidc.CanonicalGroupSubject),
+// so a group claim is either canonical ASCII or it is not in the snapshot at
+// all. Groups therefore go through normalizeGovernancePreviewGroups below.
 func normalizeGovernancePreviewClaims(in []string, field string) ([]string, string) {
 	if len(in) > maxGovernancePreviewClaims {
 		return nil, fmt.Sprintf("%s: at most %d claims", field, maxGovernancePreviewClaims)
@@ -504,6 +511,47 @@ func normalizeGovernancePreviewClaims(in []string, field string) ([]string, stri
 	out := make([]string, 0, len(in))
 	for _, v := range in {
 		if c := strings.ToLower(strings.TrimSpace(v)); c != "" && !slices.Contains(out, c) {
+			out = append(out, c)
+		}
+	}
+	return out, ""
+}
+
+// normalizeGovernancePreviewGroups is the GROUP half, and it calls the snapshot's
+// own normalizer rather than restating it.
+//
+// THE DIVERGENCE THIS CLOSES. The preview answers one question — "which profile
+// would bind a principal presenting this claim" — and there has to be one
+// answer. A plain ToLower with no ASCII guard FOLDS: U+212A KELVIN SIGN becomes
+// ASCII 'k', so a crafted "Kubernetes-admins" normalized onto the real,
+// operator-authored group "kubernetes-admins" and the endpoint reported that the
+// profile BINDS it. The enforcement path refuses the same claim outright
+// (CanonicalGroupSubject ok=false), drops it from the snapshot and stamps the
+// snapshot truncated. Preview said yes; enforcement said no.
+//
+// DROPPED, not refused with a 400, because dropping is exactly what the
+// enforcement path does with the same claim — a preview that 400s where a login
+// silently drops would be a second, different answer rather than the same one.
+// The count cap and the de-duplication stay identical to the user half.
+//
+// RESIDUAL, named rather than hidden: enforcement ALSO stamps the snapshot
+// truncated when it drops a group, and a truncated snapshot makes
+// effectiveCeiling answer errGroupsSnapshotStale (403) for that member whenever
+// a group-tier assignment exists. The preview has no field for "and this claim
+// would make your snapshot incomplete", so it reports the dropped claim as
+// simply unmatched. That is strictly closer to enforcement than the fold was,
+// and the gap is filed rather than invented as a new response field here.
+func normalizeGovernancePreviewGroups(in []string) ([]string, string) {
+	if len(in) > maxGovernancePreviewClaims {
+		return nil, fmt.Sprintf("groups: at most %d claims", maxGovernancePreviewClaims)
+	}
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		c, ok := oidc.CanonicalGroupSubject(v)
+		if !ok {
+			continue // no login snapshot can carry it; enforcement drops it too
+		}
+		if !slices.Contains(out, c) {
 			out = append(out, c)
 		}
 	}
@@ -672,12 +720,7 @@ func (s *Server) effectiveCeiling(ctx context.Context) (governanceCeiling, error
 	// request and the next one resolves afresh. A background caller (reconcile,
 	// the boot heal) carries no memo and resolves normally.
 	if memo := ceilingMemoFromContext(ctx); memo != nil {
-		if c, err, done := memo.get(); done {
-			return c, err
-		}
-		c, err := s.resolveEffectiveCeiling(ctx)
-		memo.put(c, err)
-		return c, err
+		return memo.do(ctx, s.resolveEffectiveCeiling)
 	}
 	return s.resolveEffectiveCeiling(ctx)
 }
@@ -747,6 +790,39 @@ func (s *Server) ceilingWithUnusableGroups(ctx context.Context, users []string, 
 		return governanceCeiling{}, fmt.Errorf("api: resolve governance profile: %w", herr)
 	}
 	if hasGroupTier {
+		// AUDITED, at the ONE site that produces this refusal.
+		//
+		// docs/OPERATIONS.md's "Every denial that isn't a 404" makes
+		// authz.denied the record of every member denial that is not a plain
+		// foreign-resource 404, and this 403 is member-reachable from six seams
+		// (GET /policies/default, POST /runs, /runs/preflight, the secrets list,
+		// the profile read, the drives door) — and produced none. An operator
+		// reading the denial stream saw nothing at all for a member who cannot
+		// use the product.
+		//
+		// HERE rather than in writeCeilingError, and that placement is the fix
+		// rather than an implementation detail: writeCeilingError is a free
+		// function with no server and no context, and there are three of them
+		// (writeCeilingError, writeCeilingErrorPrefixed, ceilingErrorStatus) —
+		// auditing at the WRITE sites would mean one emit per seam and a seam
+		// that hands the code upward (ceilingErrorStatus) emitting nothing.
+		// This is the only place the refusal is DECIDED, so it is the only place
+		// it can be recorded once.
+		//
+		// ONCE PER REQUEST, not once per seam, because effectiveCeiling memoizes
+		// (ceilingMemo): a create that asks three times is one denial, which is
+		// what an operator counting denials means.
+		// Guarded on the SINK, not merely handed to recordAudit's own nil check:
+		// auditEvent is evaluated as recordAudit's ARGUMENT, so a server with no
+		// recorder would still build the event — and stamp it from cfg.Now,
+		// which a Server assembled without New() does not have. Nothing records
+		// on such a build by definition, so the cheapest correct thing is not to
+		// build the row at all.
+		if s.cfg.Audit != nil {
+			s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, oidcHumanFromContext(ctx),
+				"authz.denied", "governance.ceiling", "denied",
+				mustJSON(map[string]any{"reason": "groups_snapshot_stale"})))
+		}
 		return governanceCeiling{}, errGroupsSnapshotStale
 	}
 	return s.ceilingFromProfile(p, err, deployment)
@@ -932,18 +1008,48 @@ type ceilingMemo struct {
 	err   error
 }
 
-func (m *ceilingMemo) get() (governanceCeiling, error, bool) {
+// do is the memo's whole contract: resolve AT MOST ONCE, and hand every caller
+// that one answer.
+//
+// SINGLE-FLIGHT, not last-writer-wins, and the difference is the bug. The lock
+// used to be released between the check and the fill, so two concurrent callers
+// both missed, both resolved, and the loser returned ITS OWN pair rather than
+// the memo's — the store was asked twice and the two callers received DIFFERENT
+// profiles. That is precisely the divergence the memo exists to remove: a
+// security admin narrowing a profile mid-request could still land a run whose
+// egress was clamped under one ceiling and whose grants were filtered under
+// another, which is what the memo was introduced to make impossible.
+//
+// The lock is HELD ACROSS THE RESOLVE, deliberately. A concurrent caller waits
+// for the answer instead of starting a second read, which is the point — the
+// alternative (resolve twice, keep the first) still asks the store twice and
+// still lets the two reads straddle a profile edit. The cost is bounded by the
+// request itself: a single request fans out to at most a couple of goroutines
+// (dispatch runs inline on a WithoutCancel copy that shares these values), and
+// resolveEffectiveCeiling never re-enters this method, so there is no
+// self-deadlock to reason about.
+//
+// A WAITER'S OWN CONTEXT IS NOT CONSULTED while it waits: it gets the answer the
+// first caller's resolve produced, cancelled context or not. That is correct for
+// this memo — the answer is about the PRINCIPAL, not about the waiter's
+// deadline, and handing one caller a "context cancelled" where another got a
+// ceiling would reintroduce the disagreement by another route.
+//
+// THE SCOPE IS ONE REQUEST, which is what makes a lock held across a store read
+// safe to reason about at all. The memo lives on the request context
+// (ceilingMemoKey, installed once per authenticated request by the auth
+// middleware), so the longest anything waits here is one in-flight resolve for
+// the SAME principal in the SAME request — never another request's, and a
+// memoized failure dies with the request rather than souring the next one.
+func (m *ceilingMemo) do(ctx context.Context, resolve func(context.Context) (governanceCeiling, error)) (governanceCeiling, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.value, m.err, m.done
-}
-
-func (m *ceilingMemo) put(c governanceCeiling, err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !m.done {
-		m.value, m.err, m.done = c, err, true
+	if m.done {
+		return m.value, m.err
 	}
+	m.value, m.err = resolve(ctx)
+	m.done = true
+	return m.value, m.err
 }
 
 // withCeilingMemo installs an empty memo. Called once per authenticated request
