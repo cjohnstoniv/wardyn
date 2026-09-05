@@ -887,6 +887,37 @@ func (s *Server) resolveMeUserDrive(r *http.Request) (*meUserDrive, string) {
 	if resolved == nil {
 		return nil, "" // answered, and the answer is "no allocation"
 	}
+	// WOULD IT ACTUALLY BIND HERE. driveIsMountableHere ran at the launch door
+	// and at the ADMIN preview and never on the member's own surface, so /me
+	// offered a mountable-looking allocation — name, size, writable, home_name,
+	// user_drive_unavailable "" — for a drive this deployment refuses 422 at
+	// launch ("directory carol does not exist on the share — ask an admin to
+	// create it"). The New Run card drew the checkbox and its writable sentence
+	// for a mount the create path was going to reject.
+	//
+	// THE DECISION, NOT THE REFUSAL (driveBindFailureHere): a /me poll is a
+	// display read on a timer, so running the writer here — even against a
+	// throwaway ResponseWriter — would inflate wardyn_user_drive_refused_total
+	// and fill the log with WARNs for a member who never asked for a run.
+	//
+	// SKIPPED FOR A PAUSED ROW, the same scoping the preview uses: nothing was
+	// derived above it, there is no object name to stat, and "paused" is already
+	// the answer the response carries.
+	//
+	// THE EXISTING `unmountable` TOKEN, not a new one. Its own doc reads "an
+	// allocation EXISTS and cannot be mounted — a home name that cannot name a
+	// directory, a share that is not there. 422 at launch, and the one state
+	// whose remedy is an admin's" — which is this state exactly. The 503 arm
+	// (the runner could not be asked) is not about the drive at all, so it takes
+	// `unavailable`, matching writeDriveError's own status mapping.
+	if !resolved.Paused {
+		if f := s.driveBindFailureHere(r.Context(), *resolved); f != nil {
+			if f.status == http.StatusServiceUnavailable {
+				return nil, driveUnavailableUnknown
+			}
+			return nil, driveUnavailableUnmountable
+		}
+	}
 	return &meUserDrive{
 		Name:        resolved.Drive.Name,
 		Backend:     resolved.Drive.Backend,

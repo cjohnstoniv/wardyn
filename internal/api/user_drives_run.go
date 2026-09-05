@@ -288,28 +288,71 @@ func (s *Server) denyMemberDrive(w http.ResponseWriter, r *http.Request, ceiling
 //
 // It writes its own 422 and returns false once it has.
 func (s *Server) driveIsMountableHere(ctx context.Context, w http.ResponseWriter, resolved types.ResolvedDrive) bool {
+	f := s.driveBindFailureHere(ctx, resolved)
+	if f == nil {
+		return true
+	}
+	f.write(s, w)
+	return false
+}
+
+// driveBindFailure is ONE deployment-side refusal, DECIDED but not yet written:
+// the status, the metric's reason token, the member sentence and the operator's
+// log attributes.
+//
+// It exists because the decision has two audiences and only one of them is a
+// refusal. The launch door and the admin preview WRITE it; /me needs the same
+// answer as a fact — "would this allocation bind here" — and must not write
+// anything, count a refusal, or log one. A /me poll is a display read on a timer,
+// so running it through a throwaway ResponseWriter would inflate
+// wardyn_user_drive_refused_total and fill the log with WARNs for a member who
+// never asked for a run.
+//
+// A reason of "" is the ONE arm that is not a drive refusal at all: the runner
+// could not be asked, which is a 503 about the deployment rather than a 422
+// about this drive, and it carries no metric today. Modelled rather than
+// special-cased at the call sites, so the writer stays one line per audience.
+type driveBindFailure struct {
+	status int
+	reason string
+	member string
+	attrs  []any
+}
+
+// write emits the failure the way the enforcement door always has: refuseDrive
+// (metric + WARN + the frozen member sentence) for a real refusal, and the plain
+// 503 for the runner-unavailable arm.
+func (f *driveBindFailure) write(s *Server, w http.ResponseWriter) {
+	if f.reason == "" {
+		writeError(w, f.status, f.member)
+		return
+	}
+	s.refuseDrive(w, f.status, f.reason, f.member, f.attrs...)
+}
+
+// driveBindFailureHere is driveIsMountableHere's DECISION, with no writer, no
+// metric and no log — nil means "this deployment would bind it".
+func (s *Server) driveBindFailureHere(ctx context.Context, resolved types.ResolvedDrive) *driveBindFailure {
 	if s.cfg.Runner != nil {
 		caps, cerr := s.cfg.Runner.Capabilities(ctx)
 		if cerr != nil {
-			writeError(w, http.StatusServiceUnavailable, "runner capabilities unavailable: "+cerr.Error())
-			return false
+			return &driveBindFailure{status: http.StatusServiceUnavailable,
+				member: "runner capabilities unavailable: " + cerr.Error()}
 		}
 		if !caps.UserDrives {
-			s.refuseDrive(w, http.StatusUnprocessableEntity, driveRefusalRunnerCannotMount, fmt.Sprintf(
-				"this deployment cannot mount your drive (its runner %q does not mount drives)", caps.Driver),
-				slog.String("drive", resolved.Drive.Name), slog.String("driver", caps.Driver))
-			return false
+			return &driveBindFailure{status: http.StatusUnprocessableEntity, reason: driveRefusalRunnerCannotMount,
+				member: fmt.Sprintf("this deployment cannot mount your drive (its runner %q does not mount drives)", caps.Driver),
+				attrs:  []any{slog.String("drive", resolved.Drive.Name), slog.String("driver", caps.Driver)}}
 		}
 	}
 	if target := resolved.Drive.Backend.RunnerTarget(); target != s.cfg.RunnerTarget {
-		s.refuseDrive(w, http.StatusUnprocessableEntity, driveRefusalBackendElsewhere, fmt.Sprintf(
-			"this deployment cannot mount your drive (it is a %q drive and this deployment dispatches to %q)",
-			resolved.Drive.Backend, s.cfg.RunnerTarget),
-			slog.String("drive", resolved.Drive.Name), slog.String("backend", string(resolved.Drive.Backend)),
-			slog.String("backend_runner", target), slog.String("deployment_runner", s.cfg.RunnerTarget))
-		return false
+		return &driveBindFailure{status: http.StatusUnprocessableEntity, reason: driveRefusalBackendElsewhere,
+			member: fmt.Sprintf("this deployment cannot mount your drive (it is a %q drive and this deployment dispatches to %q)",
+				resolved.Drive.Backend, s.cfg.RunnerTarget),
+			attrs: []any{slog.String("drive", resolved.Drive.Name), slog.String("backend", string(resolved.Drive.Backend)),
+				slog.String("backend_runner", target), slog.String("deployment_runner", s.cfg.RunnerTarget)}}
 	}
-	return s.driveShareIsBindable(ctx, w, resolved)
+	return s.driveShareBindFailure(ctx, resolved)
 }
 
 // driveMountFor folds a resolved drive and the run request into the mount, or
@@ -453,25 +496,34 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, req c
 //
 // ponytail: one os.Stat, on a path already derived, on the create path only.
 func (s *Server) driveShareIsBindable(ctx context.Context, w http.ResponseWriter, resolved types.ResolvedDrive) bool {
-	if resolved.Drive.Backend != types.DriveBackendHostPath {
+	f := s.driveShareBindFailure(ctx, resolved)
+	if f == nil {
 		return true
+	}
+	f.write(s, w)
+	return false
+}
+
+// driveShareBindFailure is driveShareIsBindable's DECISION, with no writer — see
+// driveBindFailure for why the two audiences are split.
+func (s *Server) driveShareBindFailure(ctx context.Context, resolved types.ResolvedDrive) *driveBindFailure {
+	if resolved.Drive.Backend != types.DriveBackendHostPath {
+		return nil
 	}
 	rootErr, ok := driveShareProbe(ctx, func() error { return s.userDriveHostRootCheck()(resolved.Drive.HostRoot) })
 	if !ok {
-		s.refuseDrive(w, http.StatusUnprocessableEntity, driveRefusalShareUnreachable, fmt.Sprintf(
-			"this deployment cannot mount your drive (drive %q did not answer in time — ask an admin)",
-			resolved.Drive.Name),
-			slog.String("drive", resolved.Drive.Name), slog.String("host_root", resolved.Drive.HostRoot),
-			slog.Duration("timeout", driveShareProbeTimeout))
-		return false
+		return &driveBindFailure{status: http.StatusUnprocessableEntity, reason: driveRefusalShareUnreachable,
+			member: fmt.Sprintf("this deployment cannot mount your drive (drive %q did not answer in time — ask an admin)",
+				resolved.Drive.Name),
+			attrs: []any{slog.String("drive", resolved.Drive.Name), slog.String("host_root", resolved.Drive.HostRoot),
+				slog.Duration("timeout", driveShareProbeTimeout)}}
 	}
 	if err := rootErr; err != nil {
-		s.refuseDrive(w, http.StatusUnprocessableEntity, driveRefusalCeilingMoved, fmt.Sprintf(
-			"this deployment cannot mount your drive (drive %q is on a share this deployment does not allow — ask an admin)",
-			resolved.Drive.Name),
-			slog.String("drive", resolved.Drive.Name), slog.String("host_root", resolved.Drive.HostRoot),
-			slog.Any("host_roots", s.cfg.UserDriveHostRoots), slog.String("err", err.Error()))
-		return false
+		return &driveBindFailure{status: http.StatusUnprocessableEntity, reason: driveRefusalCeilingMoved,
+			member: fmt.Sprintf("this deployment cannot mount your drive (drive %q is on a share this deployment does not allow — ask an admin)",
+				resolved.Drive.Name),
+			attrs: []any{slog.String("drive", resolved.Drive.Name), slog.String("host_root", resolved.Drive.HostRoot),
+				slog.Any("host_roots", s.cfg.UserDriveHostRoots), slog.String("err", err.Error())}}
 	}
 	// The HOME name, never the resolved path: the member is told which
 	// directory is missing, and the operator's filesystem layout stays where
@@ -498,21 +550,19 @@ func (s *Server) driveShareIsBindable(ctx context.Context, w http.ResponseWriter
 		return nil
 	})
 	if !ok {
-		s.refuseDrive(w, http.StatusUnprocessableEntity, driveRefusalShareUnreachable, fmt.Sprintf(
-			"this deployment cannot mount your drive (drive %q did not answer in time — ask an admin)",
-			resolved.Drive.Name),
-			slog.String("drive", resolved.Drive.Name), slog.String("home", resolved.HomeName),
-			slog.Duration("timeout", driveShareProbeTimeout))
-		return false
+		return &driveBindFailure{status: http.StatusUnprocessableEntity, reason: driveRefusalShareUnreachable,
+			member: fmt.Sprintf("this deployment cannot mount your drive (drive %q did not answer in time — ask an admin)",
+				resolved.Drive.Name),
+			attrs: []any{slog.String("drive", resolved.Drive.Name), slog.String("home", resolved.HomeName),
+				slog.Duration("timeout", driveShareProbeTimeout)}}
 	}
 	if statErr != nil {
-		s.refuseDrive(w, http.StatusUnprocessableEntity, driveRefusalHomeMissing, fmt.Sprintf(
-			"directory %s does not exist on the share — ask an admin to create it", resolved.HomeName),
-			slog.String("drive", resolved.Drive.Name), slog.String("home", resolved.HomeName),
-			slog.String("object", resolved.ObjectName), slog.String("err", statErr.Error()))
-		return false
+		return &driveBindFailure{status: http.StatusUnprocessableEntity, reason: driveRefusalHomeMissing,
+			member: fmt.Sprintf("directory %s does not exist on the share — ask an admin to create it", resolved.HomeName),
+			attrs: []any{slog.String("drive", resolved.Drive.Name), slog.String("home", resolved.HomeName),
+				slog.String("object", resolved.ObjectName), slog.String("err", statErr.Error())}}
 	}
-	return true
+	return nil
 }
 
 // driveShareProbeTimeout bounds ONE share filesystem question — the roots
