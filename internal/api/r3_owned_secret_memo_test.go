@@ -163,3 +163,91 @@ func TestOwnedSecretReadsAreFlatInCallerInput(t *testing.T) {
 		t.Errorf("even n=1 made %d owner-scoped reads; the pipeline should resolve the owner's names once per request", base)
 	}
 }
+
+// TestMemberPipelineOwnedSecretReadsPerSite is F205's pin: the THREE sibling
+// per-grant ownsSecret loops capBatch left standing, asserted one at a time.
+//
+// The end-to-end pin above proves the request installs a memo; this proves each
+// site consults it, so a future edit that reverts ONE of them fails here naming
+// which. Each loop is driven with n=1 and n=400 grants and must make the same
+// number of owner-scoped reads.
+func TestMemberPipelineOwnedSecretReadsPerSite(t *testing.T) {
+	apiKeyGrants := func(n int) []types.GrantSpec {
+		out := make([]types.GrantSpec, 0, n)
+		for i := 0; i < n; i++ {
+			out = append(out, types.GrantSpec{
+				Kind:  types.GrantAPIKey,
+				Scope: json.RawMessage(`{"host":"api.anthropic.com","secret_name":"alice-model-key","header":"X-Api-Key"}`),
+			})
+		}
+		return out
+	}
+
+	build := func(t *testing.T) (*Server, *countingSecretStore, context.Context) {
+		t.Helper()
+		h := newHarness(t)
+		cfg := baseTestConfig(h, r3PlainStore{})
+		cfg.OIDC = &oidc.Authenticator{}
+		cfg.DefaultPolicy = types.RunPolicySpec{
+			MinConfinementClass: types.CC2,
+			AllowedDomains:      []string{"api.anthropic.com"},
+			EligibleGrants: []types.GrantSpec{{
+				Kind:  types.GrantAPIKey,
+				Scope: json.RawMessage(`{"host":"api.anthropic.com","secret_name":"operator-key","header":"X-Api-Key"}`),
+			}},
+		}
+		sec := newCountingSecretStore(nil, map[string][]string{"sub-gov-bob": {"alice-model-key"}})
+		cfg.Secrets = sec
+		srv := New(cfg)
+		// One memo for the whole resolution — exactly what resolveRunPolicy
+		// installs for a real request.
+		return srv, sec, withOwnedSecretMemo(withCeilingMemo(govMemberCtx([]string{"eng"}, false)))
+	}
+
+	sites := map[string]func(t *testing.T, srv *Server, ctx context.Context, n int){
+		"filterMemberGrants": func(t *testing.T, srv *Server, ctx context.Context, n int) {
+			kept, _, code, err := srv.filterMemberGrants(ctx, "sub-gov-bob", []string{"api.anthropic.com"}, apiKeyGrants(n))
+			if err != nil {
+				t.Fatalf("n=%d: code=%d %v", n, code, err)
+			}
+			if len(kept) != n {
+				t.Fatalf("n=%d: kept %d grants, want %d — a loop that stopped running proves nothing", n, len(kept), n)
+			}
+		},
+		"narrowMemberInlinePolicy": func(t *testing.T, srv *Server, ctx context.Context, n int) {
+			spec := types.RunPolicySpec{MinConfinementClass: types.CC2, EligibleGrants: apiKeyGrants(n)}
+			if _, _, err := srv.narrowMemberInlinePolicy(ctx, "sub-gov-bob", &spec); err != nil {
+				t.Fatalf("n=%d: %v", n, err)
+			}
+			if len(spec.EligibleGrants) != n {
+				t.Fatalf("n=%d: kept %d grants, want %d", n, len(spec.EligibleGrants), n)
+			}
+		},
+		"validateInlineSecretRefs": func(t *testing.T, srv *Server, ctx context.Context, n int) {
+			spec := types.RunPolicySpec{MinConfinementClass: types.CC2, EligibleGrants: apiKeyGrants(n)}
+			if code, err := srv.validateInlineSecretRefs(ctx, "sub-gov-bob", spec); err != nil {
+				t.Fatalf("n=%d: code=%d %v", n, code, err)
+			}
+		},
+	}
+
+	for name, drive := range sites {
+		t.Run(name, func(t *testing.T) {
+			srv, sec, ctx := build(t)
+			drive(t, srv, ctx, 1)
+			one := sec.ownerList.Load()
+
+			srv, sec, ctx = build(t)
+			drive(t, srv, ctx, 400)
+			many := sec.ownerList.Load()
+
+			if one != many {
+				t.Errorf("owner-scoped secret List calls: n=1 -> %d, n=400 -> %d; want equal — %s must resolve the "+
+					"owner's names once per request, not once per caller-supplied grant", one, many, name)
+			}
+			if one > 1 {
+				t.Errorf("%s made %d owner-scoped reads for a single grant, want at most 1", name, one)
+			}
+		})
+	}
+}
