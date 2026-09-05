@@ -480,8 +480,8 @@ type UserDriveHostRootCheck func(hostRoot string) error
 // driveHomeHashLen is how many hex characters of the sha256 a `hash` home
 // carries. 20 hex = 80 bits, which is collision-free for any plausible member
 // count and leaves the whole name (d- + 20) at 22 characters — short enough
-// that `wardyn-drive-<slug>-<home>` stays well inside a PVC's 253-character
-// name limit.
+// that `wardyn-drive-<drive-slug>-<home>` stays well inside a PVC's
+// 253-character name limit.
 const driveHomeHashLen = 20
 
 // DriveHomeName derives the per-user home segment for one principal.
@@ -725,9 +725,9 @@ func ValidateUserDrive(d *UserDrive, runnerTarget string) error {
 			"your directory, so pick %s or %s", HomeTemplateHash, HomeTemplateSub, HomeTemplateEmailLocal)
 	}
 	// AND THE MIRROR IMAGE, for a reason that is security rather than symmetry.
-	// A MANAGED object is named by the HOME and by nothing else
-	// (DriveObjectName: `wardyn-drive-<home>`, `wardyn-drive-<slug>-<home>`), so
-	// under `email_local` two principals whose addresses share the part before
+	// A MANAGED object's name ENDS in the HOME segment, and everything before it
+	// is fixed for the drive (DriveObjectName: `wardyn-drive-<drive-slug>-<home>`),
+	// so under `email_local` two principals whose addresses share the part before
 	// the "@" — alice@corp.example and alice@acquired.example, the ordinary
 	// shape of a merged tenant — resolve to ONE object name. On a SHARE that is
 	// an admin's problem with a filesystem they own and can see; on a managed
@@ -746,8 +746,9 @@ func ValidateUserDrive(d *UserDrive, runnerTarget string) error {
 	// managed backend, not just email_local. `sub` was previously allowed here as
 	// the collision-free alternative, which answered collision but never asked the
 	// EXPOSURE question DriveSubjectHash settles for labels: the home segment is
-	// concatenated into the object name (DriveObjectName -> `wardyn-drive-<home>`),
-	// and an object name is read by `docker volume ls` / `kubectl get pvc` WITHOUT
+	// concatenated into the object name (DriveObjectName ->
+	// `wardyn-drive-<drive-slug>-<home>`), and an object name is read by
+	// `docker volume ls` / `kubectl get pvc` WITHOUT
 	// the inspect or describe a label needs. So `sub` was refused in the LESS
 	// exposed place and permitted in the MORE exposed one. `hash` is unique AND
 	// reveals nothing, so nothing is lost: a managed volume's name is not a thing
@@ -930,8 +931,8 @@ func driveTextIsClean(s string) bool {
 }
 
 // ManagedBackendRejectsTemplate is THE managed-backend home-template rule: a
-// managed object is NAMED by the home segment (DriveObjectName ->
-// `wardyn-drive-<home>`), and an object name is printed by `docker volume ls`
+// managed object's name ENDS in the home segment (DriveObjectName ->
+// `wardyn-drive-<drive-slug>-<home>`), and it is printed by `docker volume ls`
 // and `kubectl get pvc` without the inspect or describe a label needs — so on a
 // managed backend only `hash`, which is unique and reveals nothing, may name
 // one. A share backend keeps every template.
