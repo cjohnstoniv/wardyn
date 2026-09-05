@@ -40,6 +40,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -667,6 +668,31 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	if err := types.ValidateUserDriveGrant(&g); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid allocation: "+err.Error())
 		return
+	}
+	// THE GROUP SUBJECT, held to the SAME rule as the other two tables written
+	// against one (validateCapabilityGrant, validateGovernanceAssignment). It is
+	// applied HERE rather than inside types.ValidateUserDriveGrant because
+	// internal/types must not import internal/auth/oidc, and a hand-copied
+	// second spelling of the snapshot rule is exactly the drift these three
+	// boundaries keep having.
+	//
+	// TWO FAILURES, and the second is the worse one. A group name the snapshot
+	// can never carry — "équipe-fr", "инженеры" — was stored verbatim and
+	// matched nobody: an allocation an admin can see on the allocations screen
+	// that no member will ever mount. And ValidateUserDriveGrant's plain
+	// strings.ToLower FOLD-ESCALATES: U+212A KELVIN SIGN folds to ASCII 'k' and
+	// U+0130 to ASCII 'i', so "Kubernetes-admins" (crafted K) was stored as
+	// "kubernetes-admins" and "İnfra" as "infra" — binding a drive, with its
+	// size and writability, to a REAL group the operator never named. That is a
+	// widening, not an inert row, and it is why the guard has to precede the
+	// fold rather than follow it (which is what CanonicalGroupSubject does).
+	if g.SubjectType == types.CapabilitySubjectGroup {
+		subject, ok := oidc.CanonicalGroupSubject(req.Subject)
+		if !ok {
+			writeError(w, http.StatusBadRequest, "invalid allocation: subject: must be printable ASCII — a group subject is matched against the login-time group snapshot, which carries printable ASCII only, so this value can never match anyone")
+			return
+		}
+		g.Subject = subject
 	}
 	g.ID = uuid.New()
 	g.CreatedBy = principalFromRequest(r)
