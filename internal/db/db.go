@@ -499,7 +499,7 @@ func auditChainCanary(ctx context.Context, db migrationExecutor) error {
 	if !exists {
 		return nil
 	}
-	tx, err := db.Begin(ctx)
+	tx, err := beginReadCommitted(ctx, db)
 	if err != nil {
 		return fmt.Errorf("db: begin audit chain canary: %w", err)
 	}
@@ -539,6 +539,37 @@ func auditChainCanary(ctx context.Context, db migrationExecutor) error {
 			"refusing to start", prevHash, head, auditChainTrigger)
 	}
 	return nil
+}
+
+// beginReadCommitted starts a transaction and PINS it to READ COMMITTED, so it
+// does not inherit default_transaction_isolation — a USERSET GUC any role can
+// set per-role or per-database, which nothing in this tree pinned or checked.
+//
+// SAME CLASS AS store.InsertAuditEvent's pinned Begin, and here for the same
+// reason: a transaction that touches the audit chain must not have its snapshot
+// semantics decided by a deployment setting. The canary reads the chain head and
+// then INSERTs, and the trigger reads the head again inside that INSERT; at
+// REPEATABLE READ both reads answer from a snapshot taken by the advisory-lock
+// statement BEFORE the lock was granted, so the canary validates a world that
+// may already be stale, and at SERIALIZABLE the same transaction can be aborted
+// with a serialization failure that this function would report as a broken chain
+// and REFUSE THE BOOT over. Neither is a thing to leave to a GUC.
+//
+// SET TRANSACTION rather than a BeginTx on the interface: migrationExecutor is
+// deliberately the small subset of pgxpool.Pool/Conn the migration steps need,
+// and `SET TRANSACTION ISOLATION LEVEL` is exactly equivalent as long as it is
+// the first statement of the transaction, which it is here. A failed SET leaves
+// no transaction behind for the caller to clean up.
+func beginReadCommitted(ctx context.Context, db migrationExecutor) (pgx.Tx, error) {
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `SET TRANSACTION ISOLATION LEVEL READ COMMITTED`); err != nil {
+		tx.Rollback(context.Background()) //nolint:errcheck — best-effort on the failure path
+		return nil, fmt.Errorf("pin read committed: %w", err)
+	}
+	return tx, nil
 }
 
 // auditCanaryTransient decides the one direction this check must not get wrong:
