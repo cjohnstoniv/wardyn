@@ -287,9 +287,21 @@ export function DrivesScreen() {
                     </TableBody>
                   </Table>
                   {/* Once, under the table (Q1) — never a per-number warning and
-                      never a second wording of "we do not enforce this". */}
+                      never a second wording of "we do not enforce this".
+
+                      THE SPAN IS NOT DECORATION. Note is a flex COLUMN (its
+                      children are the stacked blocks a refusal note wants:
+                      heading over body), and withMono returns an ARRAY — a text
+                      run, the `disk_mib` Mono, another text run. Handed to Note
+                      directly those become three flex items, so the one frozen
+                      sentence painted as three stacked lines with the
+                      identifier orphaned on a full-width line of its own. One
+                      wrapper makes it one flex item again and the prose flows,
+                      exactly as the mock draws it. */}
                   <div className="px-6 pb-5">
-                    <Note>{withMono(DRIVES.HONESTY)}</Note>
+                    <Note>
+                      <span>{withMono(DRIVES.HONESTY)}</span>
+                    </Note>
                   </div>
                 </>
               )}

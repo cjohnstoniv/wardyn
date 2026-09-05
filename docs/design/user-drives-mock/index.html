@@ -310,7 +310,12 @@ dl.rail dd.plain{font-family:var(--font-sans)}
     <!-- HONESTY, once, as the plain note under the table (Q1 recommended). Every size
          cell above already carries its ENFORCEMENT_* gloss as a sub-line. -->
     <div class="pad" style="padding-top:12px;padding-bottom:16px">
-      <div class="note plain" style="margin-top:0">Wardyn never enforces a drive's size itself. On Kubernetes the size is the volume request and the storage class decides whether it binds — block disks do, network-share provisioners do not. On Docker a managed drive has no byte cap, the same gap <span class="mono">disk_mib</span> has. A share is bounded by its own quota. The size you see is the allocation, not a guarantee.</div>
+      <!-- The inner span is what keeps this a PARAGRAPH: .note is a flex column
+           (so a refusal note can stack its heading over its body), which turns
+           every contiguous text run and the inline .mono into a flex item of its
+           own — the sentence painted as three stacked lines with `disk_mib`
+           orphaned. One wrapper, one flex item, prose that flows. -->
+      <div class="note plain" style="margin-top:0"><span>Wardyn never enforces a drive's size itself. On Kubernetes the size is the volume request and the storage class decides whether it binds — block disks do, network-share provisioners do not. On Docker a managed drive has no byte cap, the same gap <span class="mono">disk_mib</span> has. A share is bounded by its own quota. The size you see is the allocation, not a guarantee.</span></div>
     </div>
     <hr class="rule">
 
@@ -918,14 +923,14 @@ dl.rail dd.plain{font-family:var(--font-sans)}
     <div class="varlabel"><b>7f — refused at launch</b> — composed server-side, rendered verbatim; backend-unavailable is knowable HERE only</div>
     <div class="pad">
       <!-- The one 403 (audited), then the 422s (not audited), then the policy-side 400. -->
-      <div class="note red" style="margin-top:0">mounting a user drive is not allowed by your governance profile "Greenfield contractors". Launch without <span class="mono">drive</span>.</div>
+      <div class="note red" style="margin-top:0"><span>mounting a user drive is not allowed by your governance profile "Greenfield contractors". Launch without <span class="mono">drive</span>.</span></div>
       <div class="note red">drive: no user drive is allocated to you — ask an admin for an allocation</div>
       <div class="note red">drive: your allocation is paused by an admin</div>
-      <div class="note red">drive: your email_local cannot name a directory (lowercase letters and digits, then <span class="mono">. _ -</span>, up to 63 characters) — ask an admin to set your directory name</div>
-      <div class="note red">drive: directory <span class="mono">bsmith</span> does not exist on the share — ask an admin to create it</div>
-      <div class="note red">drive: your allocation is read-only; <span class="mono">read_only:false</span> cannot widen it</div>
+      <div class="note red"><span>drive: your email_local cannot name a directory (lowercase letters and digits, then <span class="mono">. _ -</span>, up to 63 characters) — ask an admin to set your directory name</span></div>
+      <div class="note red"><span>drive: directory <span class="mono">bsmith</span> does not exist on the share — ask an admin to create it</span></div>
+      <div class="note red"><span>drive: your allocation is read-only; <span class="mono">read_only:false</span> cannot widen it</span></div>
       <div class="note red">drive: this deployment cannot mount your drive (it is a "k8s_pvc" drive and this deployment dispatches to "docker")</div>
-      <div class="note red">workspace_mounts[0]: target <span class="mono">/home/agent/drive</span> is reserved for the user drive</div>
+      <div class="note red"><span>workspace_mounts[0]: target <span class="mono">/home/agent/drive</span> is reserved for the user drive</span></div>
     </div>
     <div class="varlabel"><b>Beside them, reused:</b> the governance round's stale-snapshot refusal, when group-tier allocations exist and the snapshot is truncated</div>
     <div class="pad" style="padding-top:14px">

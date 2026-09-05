@@ -519,20 +519,33 @@ that every product string rendered in the mock has a key somewhere.
 absent" rule).** The drives module carries **no copy** of these. They are the wording the Go
 side emits (P2 transcribes them beside the gates that raise them); the console renders them from
 the wire under its own heading. They are listed so the mock can draw them and so an implementer
-does not freeze a second wording:
+does not freeze a second wording.
+
+**This table is DERIVED FROM THE CODE, and checked against it.** `Emitted by` names the Go
+function that composes the string, `String` is that function's own literal with its format verbs
+written as `{placeholders}` (or as the constant the verb is always given), and the status is the
+one the write boundary answers with. `user-drives-copy.test.ts` parses these three columns back
+out and matches every row against the real literal in `internal/api`, `internal/types` and
+`internal/runner` — a row the code cannot emit fails there. Two things the rows leave out, both
+for the same reason (the table freezes the refusal, not the envelope): the write boundary's own
+`invalid drive: ` / `invalid allocation: ` prefix, and the ` (resolves to "{real}")` clause the
+`host_root` rows gain when the path is a symlink that lands somewhere else.
 
 | Source | Emitted by | String |
 |---|---|---|
-| Host root outside the roots (400) | `validateUserDrive` | host_root "{path}" is not inside WARDYN_USER_DRIVE_HOST_ROOTS ({roots}) — a drive may bind only a subdirectory of a root this deployment allows |
-| Host root under a denied prefix (400) | `validateUserDrive` | host_root "{path}" is under a denied prefix ({prefix}) — the same deny list every host bind obeys |
-| Backend / runner mismatch (400) | `validateUserDrive` | backend "{backend}" cannot be mounted by this deployment's runner ({runner}) |
-| Template invalid for a share (400) | `validateUserDrive` | home_template "hash" is not allowed on a share backend — a share's directories are named by your directory, so pick sub or email_local |
-| Template invalid for a managed backend (400) | `validateUserDrive` | home_template "{template}" is not allowed on a managed backend — Wardyn names the volume itself and a claim-derived name is not unique across email domains, so two people would share one; pick hash, or name a single person's directory with a home_override on their allocation |
-| Size required for a managed claim (400) | `validateUserDrive` | size_mib must be above 0 for a k8s_pvc drive — it is the volume request |
+| Host root outside the roots (422) | `UserDriveHostRootCheck` | host_root "{path}" is not inside WARDYN_USER_DRIVE_HOST_ROOTS ({roots}) — a drive may bind only a subdirectory of a root this deployment allows |
+| Host root under a denied prefix (422) | `UserDriveHostRootCheck` | host_root "{path}" is under a denied prefix ({prefix}) — the same deny list every host bind obeys |
+| Host root inside another drive's (422) | `driveHostRootNesting` | host_root "{path}" is inside drive "{name}"'s host_root "{other}" — that tree holds directories the other drive's members can write from inside a run, so they could redirect this one; give the two drives separate trees |
+| Host root containing another drive's (422) | `driveHostRootNesting` | host_root "{path}" contains drive "{name}"'s host_root "{other}" — this drive's members could redirect that one from inside a run; give the two drives separate trees |
+| Backend / runner mismatch (400) | `ValidateUserDrive` | backend "{backend}" cannot be mounted by this deployment's runner ({runner}) |
+| Template invalid for a share (400) | `ValidateUserDrive` | home_template "hash" is not allowed on a share backend — a share's directories are named by your directory, so pick sub or email_local |
+| Template invalid for a managed backend (400) | `ValidateUserDrive` | home_template "{template}" is not allowed on a managed backend — Wardyn names the object after the directory, so the template lands in a {backend} object name that `docker volume ls` and `kubectl get pvc` show without inspecting anything; email_local also collides two people whose addresses share the part before the "@". Use hash, which is unique and reveals nothing; a share backend keeps every template |
+| Size required for a managed claim (400) | `ValidateUserDrive` | size_mib must be above 0 for a k8s_pvc drive — it is the volume request |
 | Delete while allocated (409) | `handleDeleteUserDrive` | this drive is still allocated — remove its allocations first (deleting it while allocated would leave those subjects with a mount that names nothing) |
 | Identity-affecting PUT on an allocated drive (409) | `driveRehomeGuard` | this drive is allocated to {n subjects} and this change re-homes {them}: {backend "host_path" → "docker_volume", …}. Every allocated person's storage object is derived from these fields, so their next run mounts a different object and the one holding their work is left behind with nothing in Wardyn naming it. Confirming is an API action, not a console one: re-send as PUT /drives/{id}?confirm=rehome. |
-| Home override on a non-user row (400) | `validateUserDriveGrant` | home_override is accepted on a user-tier allocation only — a group cannot share one directory |
-| Home override already held on this drive (409) | `handleUpsertUserDriveGrant` | another allocation on this drive already uses the directory name "{home}" — a directory name is one person's, which is why a group allocation may not carry one; pick a different name or remove the allocation that holds it |
+| Home override on a non-user row (400) | `ValidateUserDriveGrant` | home_override is accepted on a user-tier allocation only — a group cannot share one directory |
+| Home override already held on this drive (409) | `driveGrantConflictMsg` | another allocation on this drive already uses the directory name "{home}" — a directory name is one person's, which is why a group allocation may not carry one; pick a different name or remove the allocation that holds it |
+| Home override unstated on an allocation that pins one (409) | `driveGrantConflictMsg` | this allocation pins a directory name and your request did not mention home_override — writing it would CLEAR that name, so this subject's next run would mount a different object and the one holding their work would be left behind with nothing in Wardyn naming it. Re-send with home_override set to the name you want kept, or to "" to drop it deliberately |
 | Stricter home rule on a Kubernetes backend (**suffix**, 422) | `DriveHomeStricterRuleClause`, appended by `newResolvedDrive` after `REFUSED_HOME_INVALID` | (on a Kubernetes deployment the rule is stricter: no _, and it may not end in - or .) |
 
 The last row is a **suffix, not a rewording**. `REFUSED_HOME_INVALID` (§7.7) is frozen and

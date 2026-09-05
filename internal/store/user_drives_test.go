@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -885,11 +886,90 @@ func TestPG_ResolveUserDrive(t *testing.T) {
 	})
 }
 
+// driveGroupTierWindowLockKey serializes the emptied-group-tier window below
+// with any other process running this package against the same database. Same
+// shape as db.migrateAdvisoryLockKey (ASCII, stable, blocking): "WARDYDGT" —
+// Wardyn Drive Group Tier.
+const driveGroupTierWindowLockKey int64 = 0x5741524459_444754
+
+// hasGroupTierDriveGrantsWithNoGroupRow answers HasGroupTierDriveGrants against
+// a database that has NO group-tier grant at all, and leaves the database
+// exactly as it found it.
+//
+// The false direction cannot be asserted by deleting only this test's own row:
+// these tests share one substrate (both drive tables are global, there is no
+// per-run scoping — see this file's header), so a sibling's group-tier row is
+// the normal case and a bare `want false` would be a flake. So the window is
+// MADE. Under a session advisory lock on one checked-out connection — a second
+// `go test` against the same DSN blocks on it rather than observing half a
+// table — every group-tier row is parked in a temp table on that same
+// connection, deleted, the gate is asked, and the rows go back. `SELECT *` in
+// and `INSERT ... SELECT *` out carry every column and every id without a
+// column list that the next migration would silently rot, so the sibling tests'
+// by-id cleanups still find their rows afterwards.
+//
+// Every step's undo is DEFERRED: t.Fatal unwinds through deferred calls, so a
+// failure inside the window still restores the table.
+func hasGroupTierDriveGrantsWithNoGroupRow(t *testing.T, pool *pgxpool.Pool, st store.PG) bool {
+	t.Helper()
+	ctx := context.Background()
+
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire a connection for the group-tier window: %v", err)
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, driveGroupTierWindowLockKey); err != nil {
+		t.Fatalf("take the group-tier window lock: %v", err)
+	}
+	defer func() {
+		if _, err := conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, driveGroupTierWindowLockKey); err != nil {
+			t.Errorf("release the group-tier window lock: %v", err)
+		}
+	}()
+
+	// IF EXISTS: the pool hands back connections, so a run whose DROP below
+	// failed must not poison the next one with a leftover parking table.
+	if _, err := conn.Exec(ctx, `DROP TABLE IF EXISTS pg_temp.parked_group_grants`); err != nil {
+		t.Fatalf("clear a leftover parking table: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `CREATE TEMP TABLE parked_group_grants AS SELECT * FROM user_drive_grants WHERE subject_type = 'group'`); err != nil {
+		t.Fatalf("park the group-tier rows: %v", err)
+	}
+	defer func() {
+		if _, err := conn.Exec(ctx, `DROP TABLE IF EXISTS pg_temp.parked_group_grants`); err != nil {
+			t.Errorf("drop the parking table: %v", err)
+		}
+	}()
+
+	if _, err := conn.Exec(ctx, `DELETE FROM user_drive_grants WHERE subject_type = 'group'`); err != nil {
+		t.Fatalf("empty the group tier: %v", err)
+	}
+	defer func() {
+		if _, err := conn.Exec(ctx, `INSERT INTO user_drive_grants SELECT * FROM parked_group_grants`); err != nil {
+			t.Errorf("restore the parked group-tier rows: %v — this database has LOST every group-tier grant it held; drop and re-migrate it before trusting another run", err)
+		}
+	}()
+
+	has, err := st.HasGroupTierDriveGrants(ctx)
+	if err != nil {
+		t.Fatalf("has group tier (no group-tier row in the database): %v", err)
+	}
+	return has
+}
+
 // TestPG_HasGroupTierDriveGrants pins the gate on the stale/truncated
 // group-snapshot refusal: it must report TRUE only while a group-tier row
 // actually exists. On a deployment with none, an unknown group snapshot could
 // not have matched anything, so refusing there would lock out every pre-upgrade
 // session on a deployment that allocates by user only.
+//
+// BOTH directions are ASSERTED, and the false one is the load-bearing half: it
+// is the only thing that can fail a gate answering true unconditionally, and
+// that gate is what turns every caller with a nil or truncated group snapshot
+// into a 403 on a deployment that never allocated by group. A log line in its
+// place fails nothing.
 func TestPG_HasGroupTierDriveGrants(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
@@ -903,6 +983,14 @@ func TestPG_HasGroupTierDriveGrants(t *testing.T) {
 		Subject:     "test-user-" + uuid.NewString(),
 		DriveID:     d.ID,
 	})
+
+	// FALSE first, while the user-tier row is the only grant this test has
+	// seeded: asked after the group row exists, the "a user row does not flip
+	// the answer" claim would never be observed.
+	if hasGroupTierDriveGrantsWithNoGroupRow(t, pool, st) {
+		t.Error("HasGroupTierDriveGrants = true with only a user-tier row in the database, want false — that answer refuses every caller whose group snapshot is nil on a user-only deployment")
+	}
+
 	group := seedUserDriveGrant(t, st, types.UserDriveGrant{
 		SubjectType: types.CapabilitySubjectGroup,
 		Subject:     "test-group-" + uuid.NewString(),
@@ -915,17 +1003,13 @@ func TestPG_HasGroupTierDriveGrants(t *testing.T) {
 	if !withGroup {
 		t.Error("HasGroupTierDriveGrants = false with a group-tier row present, want true")
 	}
+
+	// And false again once that row is gone: the gate follows the table, it
+	// does not latch on the first group grant a deployment ever wrote.
 	if _, err := st.DeleteUserDriveGrant(ctx, group.ID); err != nil {
 		t.Fatalf("delete group grant: %v", err)
 	}
-	// The shared substrate may legitimately carry another test's group row, so
-	// the post-delete direction is only asserted when this database has none:
-	// a false here would otherwise be a flake rather than a finding.
-	after, err := st.HasGroupTierDriveGrants(ctx)
-	if err != nil {
-		t.Fatalf("has group tier (after delete): %v", err)
-	}
-	if !after {
-		t.Log("no group-tier grant remains in this database; the false direction is exercised")
+	if hasGroupTierDriveGrantsWithNoGroupRow(t, pool, st) {
+		t.Error("HasGroupTierDriveGrants = true after the last group-tier row was deleted, want false")
 	}
 }

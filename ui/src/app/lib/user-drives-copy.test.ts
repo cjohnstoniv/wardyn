@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import * as GovernanceCopy from "./governance-copy";
@@ -48,7 +48,9 @@ function parseFrozenTables(): Map<string, string> {
       // permissions-copy.ts / people-access-copy.ts / governance-copy.ts /
       // the server) and its second table (server-composed, no Key column),
       // neither of which are keys this module freezes. There is no §7.9 in
-      // this doc.
+      // this doc. §7.1's second table is not unguarded, though — it is checked
+      // against the Go source at the bottom of this file, where the truth is
+      // the emitting literal rather than a key in this module.
       inSection = /^### 7\.[2-8]\b/.test(line);
       continue;
     }
@@ -239,5 +241,188 @@ describe("user-drives-copy — the reuse and no-shadow rules §5 spells out", ()
     ]) {
       expect(all).not.toContain(serverOnly);
     }
+  });
+});
+
+// ─── §7.1's second table: the strings the SERVER composes ───────────────────
+//
+// The table above freezes what the drives MODULE renders. This one freezes
+// what the module deliberately does NOT carry — the admin-facing refusals the
+// Go side composes and the console renders verbatim off the wire — and until
+// now nothing checked it: parseFrozenTables() skips §7.1 by design (it has no
+// Key column), so the one table an implementer is told to render without a key
+// was the only one that could drift, and it had. It named a refusal that
+// existed nowhere in the tree, gave two host_root rows a 400 the code answers
+// 422 for, mis-cased two emitters, and omitted four shipped strings.
+//
+// So the doc is checked against the CODE here, in the direction the campaign
+// requires: the Go literal is the truth for a server-composed string, and a
+// row the code cannot emit fails.
+//
+// ponytail: the check is ONE-WAY — every doc row must exist in Go, but a NEW
+// server-composed refusal added without a doc row still passes. Closing that
+// needs a marker on the Go side saying "this literal is §7.1 canon" (there is
+// no other way to tell a frozen refusal from the dozens of ordinary
+// `fmt.Errorf("field: invalid")` shapes in the same files), which is a Go
+// change this doc fix does not carry. The four omissions this round were found
+// by reading, and are now rows.
+
+const GO_DIRS = ["internal/api", "internal/types", "internal/runner"];
+
+/**
+ * Every interpreted string literal in the drives-bearing Go packages, with Go's
+ * source-level concatenation (`"a " +\n "b"`) already joined so a wrapped
+ * message reads as the one string it is at runtime.
+ */
+function goStringLiterals(): string[] {
+  const out: string[] = [];
+  for (const dir of GO_DIRS) {
+    const abs = resolve(process.cwd(), "..", dir);
+    for (const name of readdirSync(abs)) {
+      if (!name.endsWith(".go") || name.endsWith("_test.go")) continue;
+      const joined = readFileSync(resolve(abs, name), "utf8").replace(/"\s*\+\s*\n?\s*"/g, "");
+      for (const m of joined.matchAll(/"((?:[^"\\\n]|\\.)*)"/g)) {
+        out.push(m[1].replace(/\\(.)/g, (_, c) => (c === "n" ? "\n" : c === "t" ? "\t" : c)));
+      }
+    }
+  }
+  return out;
+}
+
+/** Every `func Name(` / `func (recv) Name(` declared in those same packages. */
+function goFuncNames(): Set<string> {
+  const names = new Set<string>();
+  for (const dir of GO_DIRS) {
+    const abs = resolve(process.cwd(), "..", dir);
+    for (const name of readdirSync(abs)) {
+      if (!name.endsWith(".go") || name.endsWith("_test.go")) continue;
+      for (const m of readFileSync(resolve(abs, name), "utf8").matchAll(/^func (?:\([^)]*\) )?([A-Za-z_]\w*)\(/gm)) {
+        names.add(m[1]);
+      }
+    }
+  }
+  return names;
+}
+
+/**
+ * The write boundary's envelope, stripped from BOTH sides: `decodeUserDrive-
+ * Request` and `handleUpsertUserDriveGrant` prefix the validator's error, and
+ * `driveHostRootNesting` bakes the same prefix into its own literal. The table
+ * freezes the refusal, not the envelope, so neither side carries it.
+ */
+const unenvelope = (s: string) => s.replace(/^(?:invalid drive|invalid allocation): /, "");
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** A Go literal cut at its format verbs: the runs of text the output is fixed at. */
+const goFixedRuns = (lit: string) => unenvelope(lit).split(/%[#+\- 0]*\d*(?:\.\d+)?[a-zA-Z]/);
+
+/**
+ * A Go literal as the pattern its runtime output must fit: every format verb
+ * becomes a wildcard, everything else is fixed. That is what lets one row cover
+ * both spellings the doc legitimately uses for a verb — `"{path}"` for a value
+ * only the request knows, and the constant itself (`k8s_pvc`, `email_local`)
+ * where the verb is always given the same one.
+ *
+ * THE FIXED FLOOR IS LOAD-BEARING, not a tuning knob: without it the bare `"%s"`
+ * that exists in these packages compiles to `^.*?$`, matches every row, and the
+ * whole check passes vacuously. A frozen refusal is a sentence; 30 characters of
+ * it are fixed by construction.
+ */
+const MIN_FIXED = 30;
+const goLiteralPattern = (lit: string) => new RegExp(`^${goFixedRuns(lit).map(escapeRe).join(".*?")}$`);
+const goLiteralIsASentence = (lit: string) => goFixedRuns(lit).join("").length >= MIN_FIXED;
+
+/** The fixed runs long enough to identify the refusal they came from. */
+const goLiteralChunks = (lit: string) =>
+  goFixedRuns(lit)
+    .map((c) => c.trim())
+    .filter((c) => c.length >= 10);
+
+type ServerRow = { source: string; emitter: string; text: string; status: number };
+
+/** §7.1's second table — the one with a `Source` column instead of a `Key` one. */
+function parseServerComposedTable(): ServerRow[] {
+  const rows: ServerRow[] = [];
+  let started = false;
+  for (const line of readFileSync(DOC, "utf8").split("\n")) {
+    if (!line.startsWith("|")) {
+      if (started) break; // the table ended
+      continue;
+    }
+    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
+    if (cells[0] === "Source") {
+      started = true;
+      continue;
+    }
+    if (!started || /^:?-+:?$/.test(cells[0])) continue;
+    const status = /\((?:[^()]*,\s*)?(\d{3})\)/.exec(cells[0]);
+    const emitter = /`([A-Za-z_]\w*)`/.exec(cells[1]);
+    if (!status || !emitter) throw new Error(`§7.1 row has no status or no emitter symbol: ${cells[0]}`);
+    rows.push({ source: cells[0], emitter: emitter[1], text: cells[2], status: Number(status[1]) });
+  }
+  return rows;
+}
+
+const serverRows = parseServerComposedTable();
+const literals = goStringLiterals();
+const funcNames = goFuncNames();
+
+/** The Go literal this row is the doc's rendering of, or undefined. */
+const literalFor = (row: ServerRow) =>
+  literals.find((lit) => goLiteralIsASentence(lit) && goLiteralPattern(lit).test(row.text));
+
+describe("user-drives-prompt §7.1 — the server-composed table matches the Go source", () => {
+  it("finds all 14 server-composed rows", () => {
+    expect(serverRows.length).toBe(14);
+  });
+
+  it.each(serverRows.map((r) => [r.source, r] as const))(
+    "%s is a string the Go side actually emits",
+    (_source, row) => {
+      // toBeDefined() would print "undefined"; the row's own text is what the
+      // reader needs in order to go look for it.
+      if (!literalFor(row)) {
+        throw new Error(
+          `no literal in ${GO_DIRS.join(" / ")} matches this §7.1 row — the code is the truth for a ` +
+            `server-composed string, so either correct the row or delete it:\n  ${row.text}`,
+        );
+      }
+    },
+  );
+
+  it.each(serverRows.map((r) => [r.source, r] as const))("%s names a real emitter", (_source, row) => {
+    expect([...funcNames].includes(row.emitter)).toBe(true);
+  });
+
+  // The status half of the drift, checked against the statuses the Go API tests
+  // already pin: each `want:`/`msg:` case whose message belongs to a row must
+  // agree with that row's parenthesised code. Not every row has such a case —
+  // the count below is the floor that stops this degrading to nothing.
+  it("agrees with the statuses internal/api/user_drives_test.go pins", () => {
+    const src = readFileSync(resolve(process.cwd(), "../internal/api/user_drives_test.go"), "utf8");
+    const codes: Record<string, number> = {
+      BadRequest: 400,
+      Forbidden: 403,
+      NotFound: 404,
+      Conflict: 409,
+      UnprocessableEntity: 422,
+    };
+    let checked = 0;
+    for (const m of src.matchAll(/want:\s*http\.Status(\w+),\s*msg:\s*(?:"([^"]*)"|`([^`]*)`)/g)) {
+      const want = codes[m[1]];
+      const msg = m[2] ?? m[3];
+      for (const row of serverRows) {
+        const lit = literalFor(row);
+        if (!lit) continue;
+        // The pinned message is a SUBSTRING of the refusal, so it either sits
+        // inside one fixed run of the literal or starts with one (the case
+        // where the test spells a concrete value the literal interpolates).
+        if (!goLiteralChunks(lit).some((c) => c.includes(msg) || msg.startsWith(c))) continue;
+        checked++;
+        expect(`${row.source} -> ${row.status}`).toBe(`${row.source} -> ${want}`);
+      }
+    }
+    expect(checked).toBeGreaterThanOrEqual(6);
   });
 });
