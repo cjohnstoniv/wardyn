@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -384,4 +385,75 @@ func (s *Server) revokeAPIToken(w http.ResponseWriter, r *http.Request, principa
 		"token.revoke", revoked.ID.String(), "success",
 		mustJSON(map[string]any{"principal": revoked.Principal, "name": revoked.Name})))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// staleRoleSnapshotCount reports how many UNREVOKED wdn_ tokens still carry a
+// frozen role snapshot that a role-mapping edit naming `value` cannot reach.
+//
+// WHY THIS EXISTS. An api_token's role is stamped at mint (handleCreateAPIToken)
+// and read verbatim on every request (apiTokenAuth) — since 0.7 that stamp can
+// be security_admin. The sibling credential got a bound in migration 0046: an
+// SSH key's admin override is refused once RoleCheckedAt is older than
+// WARDYN_SSH_ROLE_TTL (sshgateway.go's sshRoleFresh). A wdn_ token has no such
+// bound, so removing someone's admin through the People screen leaves their
+// outstanding tokens holding it until a human separately remembers DELETE
+// /api/v1/tokens/{id} or POST /sessions/revoke — and nothing in the demotion
+// path said so.
+//
+// WHAT IT IS NOT: it is not a TTL and it does not revoke anything. Auto-revoking
+// on a mapping edit would be a self-DoS with the blast radius of a group — one
+// edit killing every CI credential whose snapshot happens to name that group —
+// so the admin is TOLD rather than surprised. (POST /sessions/revoke is the
+// lever, and since F143 a token minted at-or-before that cutoff stops
+// authenticating, so the remedy this names actually works.)
+//
+// THE MATCH IS THE SNAPSHOT'S OWN VOCABULARY. api_tokens carries the principal,
+// the email and the login-time GROUP snapshot (migration 0045 + the 0.7 groups
+// column), and a role-mapping value is a group/App-Role key or — where the org
+// opted in — an email. Both are canonicalized lowercase at their write
+// boundaries (canonicalRoleMapValue, oidc.CanonicalGroupSubject), so groups
+// compare exactly and the email compares case-insensitively, exactly as
+// IsSessionRevoked's email arm does.
+//
+// BEST EFFORT BY CONTRACT: a store failure returns the error for the caller to
+// log, never to fail the write with — the mapping edit is already durable by the
+// time this runs, and refusing it afterwards would be a lie about what happened.
+func (s *Server) staleRoleSnapshotCount(ctx context.Context, value string) (int, error) {
+	if s.cfg.Store == nil || value == "" {
+		return 0, nil
+	}
+	toks, err := s.cfg.Store.ListAPITokens(ctx)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, t := range toks {
+		if t.RevokedAt != nil {
+			continue
+		}
+		if t.Principal == value || (t.Email != "" && strings.EqualFold(t.Email, value)) || slices.Contains(t.Groups, value) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// noteStaleRoleSnapshots counts the frozen token snapshots a role-mapping write
+// does not reach and says so at WARN, naming the lever. Returns the count for
+// the handler to publish; 0 on any failure, which is the quiet direction — a
+// count this could not take must not read as "none outstanding" in the audit
+// row, so the error is logged where an operator sees it.
+func (s *Server) noteStaleRoleSnapshots(ctx context.Context, value, what string) int {
+	n, err := s.staleRoleSnapshotCount(ctx, value)
+	if err != nil {
+		slog.WarnContext(ctx, "api: could not count api tokens carrying a frozen role snapshot for this mapping",
+			"value", value, "error", err)
+		return 0
+	}
+	if n > 0 {
+		slog.WarnContext(ctx, "api: role mapping changed; outstanding api tokens still carry the OLD role snapshot",
+			"value", value, "change", what, "tokens", n,
+			"remedy", "POST /api/v1/sessions/revoke {\"sub\":\"<principal>\"} or DELETE /api/v1/tokens/{id} — a token's role is frozen at mint and no sign-in refreshes it")
+	}
+	return n
 }

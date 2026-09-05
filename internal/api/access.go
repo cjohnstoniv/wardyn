@@ -528,11 +528,26 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	if saved.ID != m.ID {
 		status = http.StatusOK
 	}
+	// WHAT THIS WRITE DOES NOT REACH, said in the two places an operator looks.
+	// A role mapping decides the role a LOGIN derives; an outstanding wdn_ token
+	// carries a role stamped at MINT and read verbatim on every request, and no
+	// sign-in refreshes it (see staleRoleSnapshotCount for why that is unbounded
+	// where the SSH lane's equivalent is not). So a demotion made here is not
+	// yet effective for those tokens, and until now nothing said so anywhere.
+	stale := s.noteStaleRoleSnapshots(r.Context(), saved.Value, "upsert")
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		action, saved.ID.String(), "success", mustJSON(map[string]any{
-			"value": saved.Value, "role": saved.Role,
+			"value": saved.Value, "role": saved.Role, "stale_token_snapshots": stale,
 		})))
-	writeJSON(w, status, saved)
+	// EMBEDDED, so the response is a strict SUPERSET of the RoleMapping every
+	// existing client already decodes — the console, pkg/client and the CLI keep
+	// working byte for byte, and a client that wants the signal reads one more
+	// key. omitempty: a deployment with no outstanding tokens sees no new field
+	// at all.
+	writeJSON(w, status, struct {
+		types.RoleMapping
+		StaleTokenSnapshots int `json:"stale_token_snapshots,omitempty"`
+	}{RoleMapping: saved, StaleTokenSnapshots: stale})
 }
 
 // ─── DELETE /access/mappings/{id} ──────────────────────────────────────────
@@ -592,9 +607,15 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "delete role mapping: "+err.Error())
 		return
 	}
+	// The delete side of the same gap, and the sharper one: removing a mapping
+	// is how an admin takes a role AWAY. The response is 204 with no body, so
+	// the count rides the audit row and the WARN line rather than the wire — a
+	// body here would change this route's status shape for every existing
+	// client to carry a number most deletes will report as zero.
+	staleDeleted := s.noteStaleRoleSnapshots(r.Context(), matched.Value, "delete")
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"access.role_mapping.delete", id.String(), "success", mustJSON(map[string]any{
-			"value": matched.Value, "role": matched.Role,
+			"value": matched.Value, "role": matched.Role, "stale_token_snapshots": staleDeleted,
 		})))
 	w.WriteHeader(http.StatusNoContent)
 }
