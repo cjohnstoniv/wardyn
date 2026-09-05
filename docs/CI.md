@@ -32,6 +32,22 @@ WARDYN_CI_TASK='echo hello from a governed sandbox' \
 scripts/ci-run.sh
 ```
 
+### Pin the wardyn checkout
+
+Step two **executes shell out of that checkout** — `scripts/ci-run.sh`, and
+everything it sources — inside the same job the same file tells you to seed
+with `secrets.ANTHROPIC_API_KEY`. Fetched at tip of Wardyn's default branch,
+that is a job where a push to a repository you do not control runs in front of
+your credentials, on your runner, with your network position.
+
+So both examples pin it: `ref: v<release>` on the Actions checkout,
+`--branch v<release>` on the Azure clone. They ship pinned at the release that
+shipped them; bump that deliberately, to a release you verified
+([VERIFY.md](VERIFY.md)). A full commit sha (`ref: <40-hex>`, or a
+`git checkout <sha>` after the clone) pins harder still — a tag can be moved,
+a sha cannot. The same reasoning is why the third-party actions in these files
+carry versions rather than floating refs.
+
 ## scripts/ci-run.sh
 
 | Env | Meaning | Default |
@@ -64,12 +80,15 @@ run inside it did:
 | `4` | server-5xx — the control plane returned a server error |
 | `5` | network — couldn't reach the control plane at all (DNS, connection refused, TLS) |
 | `124` | `run --wait` only: the wait timed out before the run reached a terminal state |
-| `1` | the CLI failed locally against a response it could not classify — e.g. a 2xx whose body did not decode. **Also** `run --wait`: see the row below |
+| `1` | the invocation failed **locally**, before or beside the request: a usage error (unknown flag or argument), a malformed id, an unreadable or schema-invalid `--policy-file`, or a response the CLI could not classify (e.g. a 2xx whose body did not decode). This is `exitCodeFor`'s catch-all in `cmd/wardyn/main.go`, so it is also what a future local failure lands on. **Also** `run --wait`: see the row below |
 | _task's own code_ | `run --wait`: the run ended `FAILED` — the exit is the task/agent's own real exit code (from the `run.complete` audit event), or `1` if that code is missing/unreadable (never `0` on `FAILED`) |
 
 `wardyn run get <id> --json` (or the `run.complete` audit event) always has
 the authoritative outcome — check it when the process's own exit status alone
-doesn't say why a run didn't complete.
+doesn't say why a run didn't complete. That is also how a pipeline tells the two
+meanings of `1` apart: a **usage** failure never created a run, so there is no
+run id to get; a `FAILED` run whose exit code was unreadable has one, and its
+`run.complete` event says so.
 
 ## Writing a CI policy
 

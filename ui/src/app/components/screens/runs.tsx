@@ -84,12 +84,12 @@ export function RunsScreen() {
 
   // Backs both the first-run checklist (barrier tiers / model provider) and the
   // one hard blocker in the product: no sandbox barrier at all. Polled ONLY
-  // while that blocker is up, so the banner clears on its own once
-  // `sudo wardyn setup fence` lands, with no manual reload — Re-check just
-  // fires it early. On a host with a barrier there is nothing to watch for,
-  // and /setup/status is expensive (a full ListRuns plus a shell-out host
-  // sweep), so the poll stops rather than running forever on the landing
-  // screen of every open tab.
+  // while that blocker is up, so the banner clears on its own once a runner
+  // comes back (what the banner's `wardyn setup status` diagnoses), with no
+  // manual reload — Re-check just fires it early. On a host with a barrier
+  // there is nothing to watch for, and /setup/status is expensive (a full
+  // ListRuns plus a shell-out host sweep), so the poll stops rather than
+  // running forever on the landing screen of every open tab.
   const [setupStatus, setSetupStatus] = React.useState<SetupStatus | null>(null);
   const loadSetupStatus = React.useCallback(() => setupApi.getSetupStatus().then(setSetupStatus), []);
   React.useEffect(() => {

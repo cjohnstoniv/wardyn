@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"slices"
+	"strconv"
 	"sync/atomic"
 	"testing"
 
@@ -164,6 +165,86 @@ func TestCapBatch_StoreReadsAreFlatInCallerInput(t *testing.T) {
 		}
 		if got := cs.total(); got != 0 {
 			t.Errorf("empty spec made %d store reads, want 0", got)
+		}
+	})
+}
+
+// TestCapBatch_CPUIsFlatInCallerInput is the second half of the growth law, and
+// the half 0.7 shipped OPEN: the store round trips were made flat and the CPU
+// was not. capBatch.allowed walked the caller's WHOLE grant set for every value,
+// `continue`-ing past every row of another kind, and narrowMemberInlinePolicy
+// called it once per allowed_domains ENTRY — a list taken verbatim from the
+// request body, which nothing on this path caps or de-duplicates. So one
+// authenticated member's POST /runs/preflight bought O(len(AllowedDomains) x
+// grants) grant comparisons inside a single handler: 1.44s at 200 grants, 7.20s
+// at 1000, while the database work stayed at the flat 2 reads the sibling test
+// pins. "No more round trips" is not "no more amplification".
+//
+// Counted, not timed: a wall-clock threshold on a shared box is a flake, and the
+// count is the defect exactly.
+func TestCapBatch_CPUIsFlatInCallerInput(t *testing.T) {
+	// 300 grants the caller actually holds: 100 egress_host (the kind asked
+	// about) and 200 of other kinds, which a per-value walk pays for and a
+	// kind-indexed one never touches.
+	var grants []types.CapabilityGrant
+	for i := 0; i < 100; i++ {
+		grants = append(grants, types.CapabilityGrant{
+			ID: uuid.New(), Capability: capEgressHost, Effect: types.CapabilityAllow,
+			SubjectType: types.CapabilitySubjectGroup, Subject: "eng", Value: "granted-" + strconv.Itoa(i) + ".example.com",
+		})
+	}
+	for _, kind := range []string{capSecret, capWorkspace} {
+		for i := 0; i < 100; i++ {
+			grants = append(grants, types.CapabilityGrant{
+				ID: uuid.New(), Capability: kind, Effect: types.CapabilityAllow,
+				SubjectType: types.CapabilitySubjectGroup, Subject: "eng", Value: kind + "-" + strconv.Itoa(i),
+			})
+		}
+	}
+
+	run := func(t *testing.T, n int) int64 {
+		t.Helper()
+		h := newHarness(t)
+		srv := New(baseTestConfig(h, &countingCapStore{grants: grants}))
+		domains := make([]string, n)
+		for i := range domains {
+			domains[i] = "granted-7.example.com" // one legal entry, repeated: nothing dedupes it
+		}
+		spec := types.RunPolicySpec{AllowedDomains: domains}
+		if _, _, err := srv.narrowMemberInlinePolicy(govMemberCtx([]string{"eng"}, false), "", &spec); err != nil {
+			t.Fatalf("n=%d: %v", n, err)
+		}
+		if len(spec.AllowedDomains) != n {
+			t.Fatalf("n=%d: kept %d domains, want all %d — a test whose loop stopped running proves nothing", n, len(spec.AllowedDomains), n)
+		}
+		return srv.capRowsScanned.Load()
+	}
+
+	// CONSTANCY in n, and bounded by the ONE kind asked about — not by every
+	// grant the caller holds. 100 egress_host rows are scanned once, for the
+	// single distinct host; 8 is slack for the seam's own other lookups.
+	const want = 108
+	for _, n := range []int{1, 10, 1000, 20000} {
+		if got := run(t, n); got > want {
+			t.Errorf("n=%d: compared %d grant rows, want <= %d regardless of n — a member's request body "+
+				"must not choose how much CPU the control plane spends, any more than it chooses the round trips", n, got, want)
+		}
+	}
+
+	// The counterweight: a genuinely NEW host is still resolved, so the memo
+	// cannot be "answer everything from the first entry".
+	t.Run("distinct hosts are each resolved", func(t *testing.T) {
+		h := newHarness(t)
+		srv := New(baseTestConfig(h, &countingCapStore{grants: grants}))
+		spec := types.RunPolicySpec{AllowedDomains: []string{"granted-1.example.com", "granted-2.example.com", "granted-1.example.com"}}
+		if _, _, err := srv.narrowMemberInlinePolicy(govMemberCtx([]string{"eng"}, false), "", &spec); err != nil {
+			t.Fatal(err)
+		}
+		if len(spec.AllowedDomains) != 3 {
+			t.Fatalf("kept %v, want all three entries (duplicates included — the memo must not de-duplicate the OUTPUT)", spec.AllowedDomains)
+		}
+		if got := srv.capRowsScanned.Load(); got < 100 {
+			t.Errorf("compared %d rows for two distinct hosts — under one full kind scan means a host went unresolved", got)
 		}
 	})
 }

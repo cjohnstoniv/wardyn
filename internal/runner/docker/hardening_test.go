@@ -6,7 +6,9 @@
 package docker
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -413,9 +415,11 @@ func TestHardenedHostConfig_ResourceOverrides(t *testing.T) {
 	}
 }
 
-// A disk cap is applied as StorageOpt["size"] only when DiskMiB>0 AND the
-// daemon storage driver can enforce a per-container quota; otherwise the run
-// proceeds uncapped (no StorageOpt, never a hard failure).
+// A disk cap is applied as StorageOpt["size"] when DiskMiB>0 and the daemon
+// storage driver can enforce a per-container quota. On a driver that cannot take
+// a size opt at all the run proceeds uncapped (no StorageOpt, never a hard
+// failure); the third case — a driver that takes the opt on a host that cannot
+// carry the quota — is TestApplyDiskQuota_NonXFSOverlay2FailsClosedNamingXFS.
 func TestHardenedHostConfig_DiskQuota(t *testing.T) {
 	// overlay2 on an xfs backing fs supports project quotas => StorageOpt set.
 	supported := system.Info{
@@ -441,7 +445,8 @@ func TestHardenedHostConfig_DiskQuota(t *testing.T) {
 	}
 }
 
-// storageDriverSupportsQuota's best-effort detection across daemons.
+// storageDriverSupportsQuota's best-effort detection across daemons: it answers
+// "can this host ENFORCE a per-container size quota", nothing wider.
 func TestStorageDriverSupportsQuota(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -450,8 +455,16 @@ func TestStorageDriverSupportsQuota(t *testing.T) {
 		want    bool
 	}{
 		{"overlay2 + xfs", "overlay2", "xfs", true},
-		{"overlay2 + extfs", "overlay2", "extfs", true},
-		{"overlay2 + ext4", "overlay2", "ext4", true},
+		// F064: these two pinned the WRONG answer. overlay2's `size` storage-opt
+		// is an xfs project quota — Docker's CLI reference says the option "is
+		// only available if the backing filesystem is xfs and mounted with the
+		// pquota mount option", and moby's overlay2 driver sets
+		// projectQuotaSupported only for an xfs backing filesystem. ext4/extfs
+		// cannot ENFORCE one, which is what this predicate answers; the daemon
+		// refusing the create is the separate fail-closed branch, pinned by
+		// TestApplyDiskQuota_NonXFSOverlay2FailsClosedNamingXFS below.
+		{"overlay2 + extfs", "overlay2", "extfs", false},
+		{"overlay2 + ext4", "overlay2", "ext4", false},
 		{"overlay2 + zfs backing (unsupported)", "overlay2", "zfs", false},
 		{"overlay2 + no backing", "overlay2", "", false},
 		{"btrfs", "btrfs", "", true},
@@ -719,4 +732,78 @@ func TestCapabilities_SessionRecordingFollowsRecordConfig(t *testing.T) {
 	if capabilitiesForWith(info, nil, false).SessionRecording {
 		t.Fatal("Record=false must NOT advertise SessionRecording")
 	}
+}
+
+// TestApplyDiskQuota_NonXFSOverlay2FailsClosedNamingXFS is F064.
+//
+// overlay2 over ext4 is the DEFAULT on Docker Desktop / WSL2 and on stock
+// Ubuntu/Debian, and a policy carrying disk_mib > 0 there has always failed the
+// run: the size opt went on the create and the daemon refused it. That refusal
+// is deliberate — a promised cap must not silently evaporate — but nothing in
+// Wardyn said so. storageDriverSupportsQuota claimed ext4 was supported (its
+// comment invented "ext4 with the project feature", which the overlay2 driver
+// has no such thing), the unit test pinned that wrong answer, and the operator's
+// only evidence was the daemon's bare create error, which never names xfs.
+//
+// So this pins BOTH halves of the intended posture at once: the run still fails
+// closed (the size opt IS handed over), and wardynd says what the host needs
+// before the daemon says no.
+func TestApplyDiskQuota_NonXFSOverlay2FailsClosedNamingXFS(t *testing.T) {
+	for _, backing := range []string{"ext4", "extfs", "btrfs"} {
+		t.Run(backing, func(t *testing.T) {
+			info := system.Info{
+				Driver:       "overlay2",
+				DriverStatus: [][2]string{{"Backing Filesystem", backing}},
+			}
+			logged := captureSlog(t, func() {
+				hc := hardenedHostConfig("none", "", runner.Resources{DiskMiB: 2048}, info)
+				// FAIL CLOSED: the opt goes on the create, the daemon refuses it,
+				// and the run never starts with a cap the policy promised and the
+				// host cannot apply.
+				if got := hc.StorageOpt["size"]; got != "2048m" {
+					t.Errorf("StorageOpt[size] = %q, want 2048m — overlay2 takes the size opt, so the daemon must be the one to refuse it", got)
+				}
+			})
+			if !strings.Contains(logged, "xfs") {
+				t.Errorf("the warning never names xfs, the one thing that makes this host work: %q", logged)
+			}
+			if !strings.Contains(logged, "pquota") {
+				t.Errorf("the warning never names the pquota mount option: %q", logged)
+			}
+		})
+	}
+}
+
+// The degrade branch keeps its own warning, and it must stay legible: a driver
+// that cannot take a size opt AT ALL runs UNCAPPED rather than failing the run
+// for an operator's storage-driver choice. docs/POLICIES.md's disk_mib row and
+// cmd/wardynd's TestDocsOpsDiskCapDocSaysWhatBothSubstratesDo are anchored on
+// this outcome.
+func TestApplyDiskQuota_DriverWithoutSizeOptRunsUncapped(t *testing.T) {
+	for _, driver := range []string{"vfs", "fuse-overlayfs"} {
+		t.Run(driver, func(t *testing.T) {
+			var hc *container.HostConfig
+			logged := captureSlog(t, func() {
+				hc = hardenedHostConfig("none", "", runner.Resources{DiskMiB: 2048}, system.Info{Driver: driver})
+			})
+			if _, ok := hc.StorageOpt["size"]; ok {
+				t.Errorf("StorageOpt = %v, want no size opt on a driver that cannot take one", hc.StorageOpt)
+			}
+			if !strings.Contains(logged, "WITHOUT a disk cap") {
+				t.Errorf("the uncapped warning is gone: %q", logged)
+			}
+		})
+	}
+}
+
+// captureSlog runs fn with the default slog logger pointed at a buffer and
+// returns everything it wrote. The default logger is restored on cleanup.
+func captureSlog(t *testing.T, fn func()) string {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	fn()
+	return buf.String()
 }

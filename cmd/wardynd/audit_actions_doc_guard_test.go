@@ -33,6 +33,21 @@ var backtickSpan = regexp.MustCompile("`([^`]+)`")
 // that shape tree-wide, and this file is no exception to its own neighbor.)
 var fileLineCitation = regexp.MustCompile(`^([A-Za-z0-9_./-]+\.(?:go|md)):([0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*)$`)
 
+// barePathCitation is the SAME claim with the ":line" left off — "this action is
+// emitted in this file" — and it was invisible to this guard. The `:N` suffix
+// above is REQUIRED, so a backtick span holding a bare path matched nothing,
+// cellCitations stayed empty and the whole row was `continue`d past: it counted
+// in neither the rows nor the citations the guard reports, so a doc where EVERY
+// citation lost its line number would pass while claiming to check citations.
+// Thirteen rows cite this way today, and one had already rotted.
+//
+// It is checked in the only way a line-less citation can be: the file must
+// EXIST, and the row's action literal (or one of that cell's other cited
+// symbols) must appear SOMEWHERE in it — no window, because there is no line to
+// window around. Weaker than the line-checked path by construction, and still
+// the difference between "resolved" and "never looked at".
+var barePathCitation = regexp.MustCompile(`^[A-Za-z0-9_./-]+\.(?:go|md)$`)
+
 // lineGroup is one cited line or line range, expanded from a citation's line
 // spec ("135" or "44-64").
 type lineGroup struct{ lo, hi int }
@@ -144,11 +159,47 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 			}
 			var cellAnchors []string
 			var cellCitations [][2]string // {path, lineSpec}
+			var cellBarePaths []string
 			for _, sp := range spans {
-				if m := fileLineCitation.FindStringSubmatch(sp[1]); m != nil {
+				switch {
+				case fileLineCitation.MatchString(sp[1]):
+					m := fileLineCitation.FindStringSubmatch(sp[1])
 					cellCitations = append(cellCitations, [2]string{m[1], m[2]})
-				} else {
+				case barePathCitation.MatchString(sp[1]):
+					cellBarePaths = append(cellBarePaths, sp[1])
+					// ALSO an anchor: a bare path names a file, and the
+					// line-checked branch already treats a path-shaped anchor
+					// as a resolvable name rather than a symbol.
 					cellAnchors = append(cellAnchors, sp[1])
+				default:
+					cellAnchors = append(cellAnchors, sp[1])
+				}
+			}
+			for _, path := range cellBarePaths {
+				rowHasCitation = true
+				citationsChecked++
+				cited, gerr := getLines(path)
+				if gerr != nil {
+					t.Errorf("docs/AUDIT-ACTIONS.md:%d: row %q cites %s, but %s does not exist: %v",
+						docLineNo, actionLiteral, path, path, gerr)
+					continue
+				}
+				body := strings.Join(cited, "\n")
+				if strings.Contains(body, searchTerm) {
+					continue
+				}
+				found := false
+				for _, a := range cellAnchors {
+					if a != path && strings.Contains(body, a) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("docs/AUDIT-ACTIONS.md:%d: row %q cites %s (no line), but neither the action literal %q "+
+						"nor any of that cell's other cited symbols %v appear ANYWHERE in it — the citation has rotted "+
+						"(re-point it at the real emit site, with its line)",
+						docLineNo, actionLiteral, path, actionLiteral, cellAnchors)
 				}
 			}
 			if len(cellCitations) == 0 {

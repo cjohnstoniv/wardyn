@@ -58,5 +58,5 @@ func sessionsCmd(client clientFn) *cobra.Command {
 	revoke.Flags().BoolVar(&all, "all", false, "revoke every active session, for every principal")
 
 	cmd.AddCommand(revoke)
-	return cmd
+	return subcommandGroup(cmd)
 }

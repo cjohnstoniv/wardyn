@@ -68,9 +68,26 @@ classify() {
     # file falls into this branch (next-ed away) instead of ever reaching
     # Phase 2. Branching on FILENAME instead is correct regardless of how
     # many records either file contributes.
+    #
+    # KEYED BY ORDINAL, not by (file, func) alone. Go allows many exported
+    # METHODS of the same name in one file, one per receiver type, and
+    # `go tool cover -func` prints no receiver — the only thing separating
+    # them in its output is the line number, which is exactly what this key
+    # strips. So (file, name) collided: if the PG lane covered ANY same-named
+    # method in a file, every 0.0% sibling was bucketed "PG-gated (proven
+    # covered by ci test-pg)" and vanished from the Untested backlog.
+    #
+    # The line cannot simply go back into the key: the two profiles are
+    # generated at different times (the PG one needs WARDYN_TEST_PG and is
+    # refreshed far less often), so line DRIFT between them is normal and
+    # keying on the line would silently stop matching everything. Both files
+    # list the funcs of a file in line order, so the k-th Name in a file matches
+    # the k-th Name in the other lane whether or not the lines moved.
     FILENAME==pgfile {
-      if ($2 ~ /^[A-Z]/ && $3 != "0.0%") {
-        f=$1; sub(mod,"",f); sub(/:[0-9]+:$/,"",f); pgcov[f "\t" $2]=1
+      if ($2 ~ /^[A-Z]/) {
+        f=$1; sub(mod,"",f); sub(/:[0-9]+:$/,"",f)
+        k=f "\t" $2
+        pgcov[k "\t" ++pgord[k]] = ($3 != "0.0%")
       }
       next
     }
@@ -80,9 +97,10 @@ classify() {
       file=loc; sub(/:[0-9]+$/,"",file)             # relpath
       pkg=file; sub(/\/[^\/]+$/,"",pkg)             # dir
       key=file "\t" $2
-      if (key in pgcov)          cat="PG"
-      else if (pkg ~ dockerre)   cat="DOCKER"
-      else                       cat="UNTESTED"
+      key=key "\t" ++uord[key]                    # k-th same-named func in this file
+      if (key in pgcov && pgcov[key]) cat="PG"
+      else if (pkg ~ dockerre)        cat="DOCKER"
+      else                            cat="UNTESTED"
       print cat "\t" pkg "\t" $2 "\t" loc
     }
   ' "$pg" "$union"
@@ -98,16 +116,30 @@ self_test() {
   printf '%sinternal/api/runs.go:9:\tComposeRun\t0.0%%\n' "$MODULE" >> "$d/u"
   printf '%sinternal/api/runs.go:9:\thelperFn\t0.0%%\n' "$MODULE" >> "$d/u"
   printf '%sinternal/api/runs.go:9:\tAlreadyCovered\t80.0%%\n' "$MODULE" >> "$d/u"
+  # THE COLLISION FIXTURE: two exported methods named Close in one file, one per
+  # receiver type — legal Go, and indistinguishable in `go tool cover -func`
+  # output except by line. The PG lane covers the FIRST and not the second, so a
+  # (file, func) key bucketed BOTH as PG-gated and dropped a genuinely untested
+  # func off the backlog. Ordinal keying keeps them apart.
+  printf '%sinternal/egress/proxy/conn.go:20:\tClose\t0.0%%\n' "$MODULE" >> "$d/u"
+  printf '%sinternal/egress/proxy/conn.go:71:\tClose\t0.0%%\n' "$MODULE" >> "$d/u"
   # PG lane covers CreateRun (=> PG-gated) but NOT UpdateRunState (=> untested).
   printf '%sinternal/store/store.go:41:\tCreateRun\t100.0%%\n' "$MODULE"  > "$d/pg"
   printf '%sinternal/store/store.go:80:\tUpdateRunState\t0.0%%\n' "$MODULE" >> "$d/pg"
+  # Same two Close methods, lines DRIFTED (the PG profile is generated at a
+  # different time) — ordinal matching must survive that, which is why the line
+  # is not part of the key.
+  printf '%sinternal/egress/proxy/conn.go:18:\tClose\t92.3%%\n' "$MODULE" >> "$d/pg"
+  printf '%sinternal/egress/proxy/conn.go:64:\tClose\t0.0%%\n' "$MODULE" >> "$d/pg"
 
   local got want
   got="$(classify "$d/u" "$d/pg" | LC_ALL=C sort)"
   want="$(printf '%s\n' \
     "DOCKER	internal/runner/docker	CreateSandbox	internal/runner/docker/driver.go:10" \
+    "PG	internal/egress/proxy	Close	internal/egress/proxy/conn.go:20" \
     "PG	internal/store	CreateRun	internal/store/store.go:43" \
     "UNTESTED	internal/api	ComposeRun	internal/api/runs.go:9" \
+    "UNTESTED	internal/egress/proxy	Close	internal/egress/proxy/conn.go:71" \
     "UNTESTED	internal/store	UpdateRunState	internal/store/store.go:84" | LC_ALL=C sort)"
   if [ "$got" != "$want" ]; then
     echo "test-gaps: self-test FAIL (pg present)" >&2
@@ -123,6 +155,8 @@ self_test() {
   want="$(printf '%s\n' \
     "DOCKER	internal/runner/docker	CreateSandbox	internal/runner/docker/driver.go:10" \
     "UNTESTED	internal/api	ComposeRun	internal/api/runs.go:9" \
+    "UNTESTED	internal/egress/proxy	Close	internal/egress/proxy/conn.go:20" \
+    "UNTESTED	internal/egress/proxy	Close	internal/egress/proxy/conn.go:71" \
     "UNTESTED	internal/store	CreateRun	internal/store/store.go:43" \
     "UNTESTED	internal/store	UpdateRunState	internal/store/store.go:84" | LC_ALL=C sort)"
   if [ "$got" != "$want" ]; then

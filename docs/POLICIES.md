@@ -51,7 +51,7 @@ on `/policies`) and validate through the same `validatePolicySpec`.
 | `allowed_methods` | `[]string` | `[]` (all) | Optional HTTP method restriction. |
 | `min_confinement_class` | `string` | — (**required**) | `CC1` (hardened runc), `CC2` (gVisor), or `CC3` (Kata microVM). The run refuses to launch below it; an unrecognised value is rejected at write time and would otherwise rank below CC1. |
 | `eligible_grants` | `[]GrantSpec` | `[]` | The ceiling of credential scopes this run may request. Eligibility is not issuance — the broker still mints. |
-| `auto_stop_after_sec` | `int` | `0` | Idle auto-stop. `> 0` = stop after that many seconds of wall-clock idleness plus a fixed 30s activity-debounce slack (egress-driven clock resets are coalesced to one per 30s, so the slack guarantees an active run is never read as idle; the `run.autostop` audit event's `threshold_sec` records the effective value, configured + 30); `0` = never reaped; `< 0` = never reaped, stated explicitly (what an interactive run should set, so the reaper does not stop it the moment it looks idle). Idleness is `updated_at` age — an attach or an egress call resets it, local CPU/disk work does not (`internal/lifecycle`). |
+| `auto_stop_after_sec` | `int` | `0` | Idle auto-stop. `> 0` = stop after that many seconds of wall-clock idleness plus a fixed 30s activity-debounce slack (egress-driven clock resets are coalesced to one per 30s, so the slack guarantees an active run is never read as idle; the `run.autostop` audit event's `threshold_sec` records the effective value, configured + 30); `0` = never reaped; `< 0` = never reaped, stated explicitly (what an interactive run should set, so the reaper does not stop it the moment it looks idle). Idleness is `updated_at` age — an attach or an egress call resets it, local CPU/disk work does not (`internal/lifecycle`). **Under a governance ceiling that sets no positive maximum of its own, the composer clamp leaves this field exactly as authored** — so a run there is never idle-reaped whether the field is absent, `0`, or negative: the reaper skips every policy value `<= 0`, which makes those three the same run. A ceiling that wants member runs reaped states a positive maximum, which the clamp then binds them to. |
 | `workspace_mounts` | `[]WorkspaceMount` | `[]` | Operator-authored host bind mounts. Never agent-chosen. |
 | `workspace_repos` | `[]WorkspaceRepo` | `[]` | Additional git repos cloned into the run — the clone counterpart of `workspace_mounts`. |
 | `ui_apps` | `[]UIApp` | `[]` | In-sandbox loopback HTTP apps the UI gateway may relay to a browser. Operator-authored, never agent-chosen, and never a command string. |
@@ -645,9 +645,13 @@ want and the second is more interruptions than a human sustains — and an opera
 who tires of approving picks `auto` for everything, which is the worst of the
 two. `tool_rules` is the middle.
 
+`tool_approvals` itself is **not** a policy field — it rides the `POST /runs`
+body (`"tool_approvals": "hold"`), which is why it is absent from the spec
+below: `wardyn policy render -f` rejects the whole file with
+`invalid RunPolicySpec: json: unknown field "tool_approvals"` if you paste it in.
+
 ```json
 {
-  "tool_approvals": "hold",
   "tool_rules": [
     { "tool": "Read",     "effect": "allow" },
     { "tool": "Glob",     "effect": "allow" },
@@ -734,4 +738,4 @@ defaults so **every** run is capped even under a policy that sets nothing.
 | `cpu_millis` | `int` | `2000` (2 vCPU) | Milli-CPU cap. |
 | `memory_mib` | `int` | `4096` | Hard memory cap, MiB. |
 | `pids_limit` | `int` | `512` | Max processes/threads — the fork-bomb guard. |
-| `disk_mib` | `int` | (storage-driver default) | Writable-storage cap, MiB. Best-effort: it needs a storage driver that supports a per-container quota, and warns/fails closed when a cap is demanded but unsupported. |
+| `disk_mib` | `int` | (storage-driver default) | Writable-storage cap, MiB. Best-effort, and what that means splits three ways by driver. **`overlay2` needs an `xfs` backing filesystem mounted with `pquota`** — the driver's own contract, not a Wardyn rule: Docker's CLI reference states the `size` option "is only available if the backing filesystem is xfs and mounted with the pquota mount option", and `ext4` is **not** supported by it (overlay2-over-ext4 is nonetheless the default on Docker Desktop/WSL2 and stock Ubuntu/Debian). On such a host Wardyn hands the daemon the `size` option anyway and wardynd logs the xfs requirement first, so a run whose policy sets `disk_mib` is **refused by the daemon at create** instead of starting without the cap its policy promised — deliberate: a promised cap must not silently evaporate. `btrfs`/`zfs` enforce it natively. On a driver that cannot take a `size` option at all (`vfs`, `fuse-overlayfs`, …) **both substrates warn and the run proceeds UNCAPPED** — Docker's `applyDiskQuota` returns without setting `StorageOpt`, the k8s substrate logs `DiskMiB requested but not enforced`; nothing refuses a run on that branch. |

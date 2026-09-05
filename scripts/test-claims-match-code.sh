@@ -25,6 +25,15 @@
 #       gates it BOLDS as gates — `notices` and every cell of ci.yml's `trivy`
 #       matrix (F121). The trivy cells are derived from ci.yml, so adding an
 #       image to the scan matrix and forgetting branch protection goes red here.
+#   C8  the R6 docs-ops wave: the two pasteable CI pipelines pin the wardyn
+#       checkout they EXECUTE (F007); the release-asset prose covers what
+#       release.yml actually requires (F016); the migrator/app-role rationale
+#       names the real ALTER TABLEs (F034); README's inline hero policy is the
+#       same spec as examples/policies/sandbox.yaml (F038); the four-command
+#       SSH recipe parses as four commands (F043); no fenced RunPolicySpec
+#       carries a run-create field (F045); DESKTOP.md's Podman socket is
+#       Podman's (F054). Each derived from the file it describes.
+#
 #   C7  three docs describe what the code does, each derived from the code:
 #       ENV.md's WARDYN_IMPORT_AWS row names the SECRETS setup.sh writes (F081);
 #       VERIFY.md/THREAT-MODEL say which services `docker compose pull` covers
@@ -301,5 +310,162 @@ printf '%s' "${second_user}" | grep -qF "${pg_pw}" \
 printf '%s' "${second_user}" | grep -qi 'registry' \
   || fail "docs/OPERATIONS.md's 'Second user, same host' recipe never mentions the unauthenticated loopback registry — any local user can push a layer a later envbuild run executes (F155)"
 pass "C7 ENV.md/VERIFY.md/THREAT-MODEL/OPERATIONS.md match the code they describe"
+
+# ── C8: the R6 docs-ops wave — every claim derived from what it describes ──
+GH_CI="${ROOT}/docs/ci/github-actions.yml"
+AZ_CI="${ROOT}/docs/ci/azure-pipelines.yml"
+RELEASE_YML="${ROOT}/.github/workflows/release.yml"
+
+# F007 — both pasteable pipelines fetch cjohnstoniv/wardyn and then EXECUTE that
+# checkout's scripts/ci-run.sh inside a job the same files tell you to seed with
+# the consumer's ANTHROPIC_API_KEY. Unpinned, that is every push to Wardyn's
+# default branch running shell in front of a stranger's secrets. The expected
+# pin is DERIVED from the shipped version, so a release bump that forgets these
+# two files fails here rather than shipping a pipeline pinned to last release.
+shipped_ver="$(sed -n 's/.*Version = "\([^"]*\)".*/\1/p' "${ROOT}/internal/version/version.go" | head -1)"
+[ -n "${shipped_ver}" ] || fail "could not read the shipped version out of internal/version/version.go — this guard would compare against nothing"
+gh_ref="$(grep -oE '^[[:space:]]+ref:[[:space:]]*\S+' "${GH_CI}" | awk '{print $2}' | head -1 || true)"
+[ -n "${gh_ref}" ] || fail "docs/ci/github-actions.yml's wardyn checkout has no \`ref:\` — it resolves to tip of the default branch, and the next step EXECUTES that checkout's scripts/ci-run.sh in a job holding the consumer's ANTHROPIC_API_KEY (F007)"
+[ "${gh_ref}" = "v${shipped_ver}" ] \
+  || fail "docs/ci/github-actions.yml pins the wardyn checkout at '${gh_ref}', but this tree ships v${shipped_ver} — bump it with the other version strings (RELEASING.md step 1b) so a pasted pipeline runs the release it documents (F007)"
+az_branch="$(grep -oE 'git clone[^|]*--branch[[:space:]]+\S+' "${AZ_CI}" | awk '{for(i=1;i<=NF;i++) if ($i=="--branch") print $(i+1)}' | head -1 || true)"
+[ -n "${az_branch}" ] || fail "docs/ci/azure-pipelines.yml clones cjohnstoniv/wardyn with no --branch — it clones the default branch, and the next step EXECUTES that clone's scripts/ci-run.sh in a job holding the consumer's secrets (F007)"
+[ "${az_branch}" = "v${shipped_ver}" ] \
+  || fail "docs/ci/azure-pipelines.yml pins the wardyn clone at '${az_branch}', but this tree ships v${shipped_ver} (F007)"
+grep -q 'Pin the wardyn checkout' "${ROOT}/docs/CI.md" \
+  || fail "docs/CI.md never explains why the wardyn checkout is pinned — the pin without the reason is the thing a consumer deletes as noise (F007)"
+pass "C8a both CI examples pin the wardyn checkout they execute, at the shipped version"
+
+# F016 — release.yml hard-fails unless a fixed asset list landed on the Release.
+# Both release-facing docs enumerated a SHORTER set, so a reader checking a
+# release against the prose would not notice install.sh or the CLI binaries
+# missing. The required set is read out of the workflow's own assertion.
+want_assets="$(awk '/Assert every required asset actually landed/{f=1} f&&/for want in/{g=1} g{print} g&&/; do/{exit}' "${RELEASE_YML}" \
+                | tr ' \\\n' '\n\n\n' | grep -vE '^(for|want|in|do|;|)$' | sort -u || true)"
+[ -n "${want_assets}" ] || fail "could not derive release.yml's required-asset list — this guard would check nothing (F016)"
+for doc in "${ROOT}/docs/VERIFY.md" "${ROOT}/RELEASING.md"; do
+  for a in ${want_assets}; do
+    case "${a}" in
+      # The four CLI binaries and the three SHA256SUMS parts are enumerated in
+      # prose by family, not one by one — check the family name instead.
+      wardyn-*-*)        needle='wardyn-<os>-<arch>' ;;
+      SHA256SUMS.sig|SHA256SUMS.pem) continue ;;
+      *)                 needle="${a}" ;;
+    esac
+    grep -qF "${needle}" "${doc}" \
+      || fail "${doc#"${ROOT}/"} never names '${needle}', which release.yml's release-assets job hard-fails the release without — the doc enumerates a smaller asset set than the pipeline requires (F016)"
+  done
+done
+pass "C8b VERIFY.md/RELEASING.md enumerate every asset release.yml requires"
+
+# F034 — the enumeration justifying the one-way migrator/app-role split named
+# 0053 (whose table the same upgrade CREATES two migrations earlier) and omitted
+# 0052, 0058 and 0060. Derived: on the 0.6 -> 0.7 path, an ALTER TABLE is a
+# hazard exactly when its table was created by a migration from an EARLIER
+# release, and a CREATE OR REPLACE FUNCTION always is.
+MIGDIR="${ROOT}/internal/db/migrations"
+# Tables created at or before the last migration 0.6.x shipped (0049).
+old_tables="$(for f in "${MIGDIR}"/00[0-4]*.sql; do
+                [ -f "${f}" ] || continue
+                grep -ioE 'CREATE TABLE (IF NOT EXISTS )?[a-z_]+' "${f}" || true
+              done | awk '{print tolower($NF)}' | sort -u)"
+[ -n "${old_tables}" ] || fail "no pre-0.7 CREATE TABLE found under ${MIGDIR#"${ROOT}/"} — this guard would check nothing (F034)"
+ops_para="$(awk '/Which role becomes which is the whole procedure/{f=1} f{print} f&&/^Run this as the role you have today/{exit}' "${ROOT}/docs/OPERATIONS.md")"
+[ -n "${ops_para}" ] || fail "docs/OPERATIONS.md no longer carries the migrator/app-role rationale — re-anchor this guard (F034)"
+for f in "${MIGDIR}"/00[5-9]*.sql "${MIGDIR}"/0[1-9]*.sql; do
+  [ -f "${f}" ] || continue
+  num="$(basename "${f}" | cut -c1-4)"
+  hazard=no
+  while read -r tbl; do
+    [ -n "${tbl}" ] || continue
+    printf '%s\n' "${old_tables}" | grep -qx "${tbl}" && hazard=yes
+  done <<< "$(grep -ioE '^[[:space:]]*ALTER TABLE [a-z_]+' "${f}" | awk '{print tolower($NF)}' | sort -u || true)"
+  grep -qi 'CREATE OR REPLACE FUNCTION' "${f}" && hazard=yes
+  [ "${hazard}" = yes ] || continue
+  printf '%s' "${ops_para}" | grep -qF "\`${num}\`" \
+    || fail "migration ${num} ALTERs a table an earlier release created (or replaces a function it created), so it needs the migrator to OWN that object — and docs/OPERATIONS.md's migrator/app-role rationale never names it. That enumeration is the whole justification for the one-way role split (F034)"
+done
+pass "C8c the migrator rationale names every ownership-requiring migration on the upgrade path"
+
+# F038 — README's hero handed the reader `--policy-file examples/policies/…`
+# immediately after the no-clone install, which ships no examples/ tree, so the
+# pasted command exited 1 on a missing file. It now writes the policy inline;
+# this asserts the inline copy is the SAME spec as the committed example rather
+# than a second policy that can drift from it.
+hero="$(awk '/^cat > sandbox.yaml <</{f=1;next} f&&/^YAML$/{exit} f' "${ROOT}/README.md" \
+        | sed 's/#.*//' | sed -E 's/[[:space:]]+$//' | grep -v '^$' | sort)"
+[ -n "${hero}" ] || fail "README.md's hero no longer writes a policy inline — if it went back to --policy-file examples/…, the one-line install (which ships no examples/ tree) cannot paste it (F038)"
+example="$(sed 's/#.*//' "${ROOT}/examples/policies/sandbox.yaml" | sed -E 's/[[:space:]]+$//' | grep -v '^$' | sort)"
+[ "${hero}" = "${example}" ] \
+  || fail "README.md's inline hero policy and examples/policies/sandbox.yaml have drifted apart — the page says they are the same four keys (F038):
+--- README inline ---
+${hero}
+--- examples/policies/sandbox.yaml ---
+${example}"
+grep -qF 'cd ~/.wardyn && docker compose down' "${ROOT}/README.md" \
+  || fail "README.md's stop advice is clone-only (\`make compose-down\`) — the install it follows writes no Makefile, and install.sh's own closing banner says \`cd \${HOME_DIR} && docker compose down\` (F038)"
+grep -qF 'demo-admin-token' "${ROOT}/docs/TRY-IT.md" \
+  || fail "docs/TRY-IT.md no longer warns that demo-admin-token is the compose stack's literal, not the installer's — README routes one-line-install users straight here (F038)"
+pass "C8d the README hero pastes on the no-clone path and matches the shipped example"
+
+# F043 — the 0.7 external-tool lane's only start-to-finish recipe could not be
+# pasted: a stray escaped space made line 2 pass a literal " " positional, and a
+# trailing comment with no continuation split the command in two. Behavioural:
+# the block is extracted and PARSED, with a `wardyn` stub counting commands.
+ssh_block="$(awk '/^wardyn ssh-key ensure/{f=1} f{print} f&&/^wardyn ssh </{exit}' "${ROOT}/docs/SSH.md")"
+[ -n "${ssh_block}" ] || fail "docs/SSH.md no longer carries the four-command external-tool recipe — re-anchor this guard (F043)"
+printf '%s\n' "${ssh_block}" | sed 's/<[a-z-]*>/PLACEHOLDER/g' > "${WORK}/ssh-recipe.sh"
+bash -n "${WORK}/ssh-recipe.sh" \
+  || fail "docs/SSH.md's external-tool recipe does not parse as shell — it is the lane's only start-to-finish recipe and it is meant to be pasted (F043)"
+# The stub prints one line per wardyn invocation, with each argv element in
+# angle brackets, so an EMPTY positional (what `\ \` produces) is visible.
+bash -c "wardyn() { printf 'CMD'; for a in \"\$@\"; do printf ' <%s>' \"\$a\"; done; printf '\n'; }; source '${WORK}/ssh-recipe.sh'" \
+  > "${WORK}/ssh-argv" 2>/dev/null || true
+n_cmds="$(grep -c '^CMD' "${WORK}/ssh-argv" || true)"
+[ "${n_cmds}" = "4" ] \
+  || fail "docs/SSH.md's recipe says 'Four commands, each doing one part' but parses as ${n_cmds} wardyn invocations — a trailing comment or a stray continuation has split or merged one (F043)"
+grep -qE '<[[:space:]]*>' "${WORK}/ssh-argv" \
+  && fail "docs/SSH.md's recipe passes a BLANK argument to wardyn — a stray escaped space before a line continuation (\`\\ \\\`) hands \`wardyn run\` a literal one-space positional (F043)"
+run_line="$(grep -F 'CMD <run> <--agent>' "${WORK}/ssh-argv" | head -1 || true)"
+[ -n "${run_line}" ] || fail "docs/SSH.md's recipe no longer launches a run — re-anchor this guard (F043)"
+for flag in --policy-file --description --interactive --json; do
+  printf '%s' "${run_line}" | grep -qF "<${flag}>" \
+    || fail "docs/SSH.md's recipe never passes ${flag} to \`wardyn run\` — it is written on a continuation line the shell does not join, so it parses as its own command instead: ${run_line} (F043)"
+done
+pass "C8e docs/SSH.md's external-tool recipe parses as the four commands it claims"
+
+# F045 — the policy reference's only tool_rules example opened with
+# `"tool_approvals": "hold"`, which is a run-CREATE request field, so the
+# validation command the SAME page recommends (`wardyn policy render -f`)
+# rejected the block outright. The field set is derived from RunPolicySpec.
+spec_fields="$(sed -n '/type RunPolicySpec struct/,/^}/p' "${ROOT}/internal/types/policy.go" \
+               | grep -oE 'json:"[a-z_]+' | cut -d'"' -f2 | sort -u || true)"
+[ -n "${spec_fields}" ] || fail "could not read RunPolicySpec's json field names out of internal/types/policy.go — this guard would check nothing (F045)"
+awk '/^```json$/{f=1;next} /^```$/{f=0} f' "${ROOT}/docs/POLICIES.md" \
+  | grep -oE '^[[:space:]]*"[a-z_]+":' | tr -d ' ":' | sort -u > "${WORK}/policy-doc-keys"
+[ -s "${WORK}/policy-doc-keys" ] || fail "no json keys found in docs/POLICIES.md's fenced blocks — this guard would check nothing (F045)"
+while read -r k; do
+  [ -n "${k}" ] || continue
+  printf '%s\n' "${spec_fields}" | grep -qx "${k}" && continue
+  # Nested object keys (a grant's `kind`/`scope`, a tool rule's `tool`/`effect`)
+  # are not top-level spec fields; only flag the run-create fields that make the
+  # whole block invalid.
+  case "${k}" in
+    tool_approvals|task_mode|interactive_start|seed_auto_tools|agent|repo|task|title|description|drive)
+      fail "docs/POLICIES.md presents \`${k}\` inside a fenced json policy block, but it is a POST /runs request field, not a RunPolicySpec field — \`wardyn policy render -f\`, which the same page recommends, rejects the whole block with: invalid RunPolicySpec: json: unknown field \"${k}\" (F045)" ;;
+  esac
+done < "${WORK}/policy-doc-keys"
+pass "C8f no fenced policy block in docs/POLICIES.md carries a run-create field"
+
+# F054 — the socket table collapsed rootless Docker and Podman into one row and
+# handed Podman the DOCKER socket path. The right path is read out of this
+# repo's own Podman test, which agrees with podman-system-service(1).
+podman_sock="$(grep -oE 'podman/podman\.sock' "${ROOT}/scripts/test-podman.sh" | head -1 || true)"
+[ -n "${podman_sock}" ] || fail "scripts/test-podman.sh no longer names podman/podman.sock — this guard would check nothing (F054)"
+desk_row="$(grep -n 'Rootless Podman' "${ROOT}/docs/DESKTOP.md" || true)"
+[ -n "${desk_row}" ] || fail "docs/DESKTOP.md has no 'Rootless Podman' socket row — it collapsed Podman into the rootless-Docker row and gave it docker.sock (F054)"
+printf '%s' "${desk_row}" | grep -qF "${podman_sock}" \
+  || fail "docs/DESKTOP.md's Rootless Podman row does not name ${podman_sock}, the socket scripts/test-podman.sh defaults to and podman-system-service(1) documents (F054)"
+pass "C8g DESKTOP.md's Podman socket row matches this repo's own Podman default"
 
 echo "test-claims-match-code: self-test PASS"

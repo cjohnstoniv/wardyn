@@ -110,10 +110,30 @@ docker exec -i wardyn-postgres psql -U wardyn -v ON_ERROR_STOP=1 wardyn < wardyn
 docker run --rm -v wardyn-recordings:/to -v "$PWD":/from alpine \
   tar xzf /from/recordings-<date>.tar.gz -C /to
 
-# 5. Now bring up the rest of the stack.
+# 5. User drives — backup step 4's tarballs. The dump in step 3 brought back
+#    the drive ROWS; it holds none of the BYTES. Skip this and the runner
+#    creates a fresh EMPTY volume on the drive's first use, silently.
+#    Re-create each volume WITH ITS LABELS and with NO --opt (see "User drives
+#    on Docker": Wardyn refuses to mount a volume that is not local-driver and
+#    option-free), then untar into it. Leave wardyn.subject OFF — you need not
+#    compute the digest, and a volume without it still mounts.
+#      for f in wardyn-drive-*; do          # backup step 4's tarballs
+#        v="${f%-????-??-??.tar.gz}"        # the volume each came from
+#        docker volume create \
+#          --label wardyn.managed=true \
+#          --label wardyn.drive=<drive id> \
+#          --label wardyn.home=<home> "$v"
+#        docker run --rm -v "$v":/to -v "$PWD":/from alpine \
+#          tar xzf "/from/$f" -C /to
+#      done
+#    <drive id> is the `id` on GET /api/v1/drives (the drive row's id, not the
+#    volume name); a WRONG id makes Wardyn refuse the volume rather than adopt
+#    it. host_path drives need nothing here — you restore that share yourself.
+
+# 6. Now bring up the rest of the stack.
 make setup
 
-# 6. Verify — row count first:
+# 7. Verify — row count first:
 docker exec -i wardyn-postgres psql -U wardyn -d wardyn -c "SELECT count(*) FROM audit_events;"
 #    then prove the age key actually decrypts what came back, which a row
 #    count alone can't: launch a run against any workspace/policy that
@@ -121,6 +141,13 @@ docker exec -i wardyn-postgres psql -U wardyn -d wardyn -c "SELECT count(*) FROM
 #    failing closed with a decrypt error (see "Rotating the age key" — the
 #    wrong key fails exactly here, not at boot):
 wardyn run --agent claude-code --workspace <workspace-id>
+#    and, if this deployment allocates user drives, that a drive came back with
+#    its bytes rather than as a fresh empty volume — step 5 is the only thing
+#    that puts them there:
+docker volume ls --filter label=wardyn.drive=<drive id>
+#    then launch one run WITH a drive (the console's new-run form, or POST /runs
+#    with a `drive` selection — there is no CLI flag for it) and confirm
+#    /home/agent/drive holds that person's data rather than an empty directory.
 ```
 
 > `make reset` runs `compose down -v` after a confirmation prompt
@@ -924,10 +951,22 @@ labels to anyone who can reach the daemon. It is the discriminator `wardyn.drive
 cannot be: a volume name carries only the *home*, so one drive whose home
 template folded two people onto one directory would produce one volume that
 *both* their allocations agree belongs to this drive. Wardyn refuses to mount a
-volume stamped for a different person. You need not compute the digest for a
-restore (it is a truncated sha256 of the sign-in subject): **leave
-`wardyn.subject` off** the `docker volume create` above and the volume mounts,
-exactly as a label-less `wardyn.drive` does.
+volume stamped for a different person.
+
+A managed drive can no longer be *authored* into that state. The rule is
+`ManagedBackendRejectsTemplate` in `internal/types/user_drive.go`, and as of 0.7
+it refuses **every** non-`hash` template on a `docker_volume` or `k8s_pvc`
+backend — `sub` as well as `email_local` — at **both** enforcement points: the
+write boundary, and the run-time resolver that derives the home. It used to name
+`email_local` alone, and the resolver keyed on `email_local` alone, so a `sub`
+row written by an older binary (or by hand) was refused on write and still
+mounted. The folded homes `wardyn.subject` discriminates are therefore rows from
+before that widening, or hand-made ones — which is exactly why the label is still
+checked rather than assumed away.
+
+You need not compute the digest for a restore (it is a truncated sha256 of the
+sign-in subject): **leave `wardyn.subject` off** the `docker volume create`
+above and the volume mounts, exactly as a label-less `wardyn.drive` does.
 
 **`host_path` — you already mount the share.** Wardyn binds **one person's
 subdirectory** of a tree the *operator* mounted host-side. Wardyn never performs
@@ -1200,14 +1239,18 @@ again. The snapshot is capped at 2048 payload bytes (`maxSessionGroupsBytes`,
 browser silently drops entirely; groups are sorted and dropped **from the end**,
 so the same human loses the same groups every login instead of a coin flip. That
 is roughly 100 typical group names — past that, grant the user directly, or prefer
-Entra App Roles on the much smaller `roles` claim. A pre-0.6 session cookie
-carries no groups field at all and stays valid (no forced re-login); that state is
-reported distinctly as `groups_snapshot_stale` on `GET /me/capabilities`, because
-"can't tell yet" and "holds no groups" must not read the same.
+Entra App Roles on the much smaller `roles` claim. `groups_snapshot_stale` on
+`GET /me/capabilities` reports the "can't tell yet" state distinctly from "holds
+no groups", because the two must not read the same — but as of 0.7 it is never a
+*pre-upgrade cookie* that produces it. The session payload carries a codec
+version and `decodeSession` requires an exact match
+(`SessionCodecVersion = 1`, `internal/auth/oidc/session_codec.go`), so a cookie
+minted before 0.7 — which has no `v` key at all — is not a stale-groups session;
+it is not a session, and the human is bounced to sign in. See "Upgrades" below.
 
 **A DENY is never allowed to evaporate with the snapshot.** A group that fell off
 the 2048-byte cut — or one your directory names with a character the snapshot
-cannot carry, or a caller still holding a pre-0.6 cookie, or a pre-0.7 API token
+cannot carry, or a pre-0.7 API token
 whose completeness was never recorded — has none of its group rows in the scan. For an ALLOW that costs the caller access, which is the safe direction. For
 a DENY it would hand back exactly what the row forbade, so the resolver
 (`capScan`, `internal/api/capabilities.go`) checks whether **any** group-subject
@@ -1257,8 +1300,8 @@ a filtered claim and a full one are identical in the token.
 
 What that option drops is **nested membership**: "nested groups are not included
 and the user must be a direct member of the group assigned to the application"
-([Configure optional
-claims](https://learn.microsoft.com/en-us/entra/identity-platform/optional-claims)).
+([Configure group claims for
+applications](https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/how-to-connect-fed-group-claims)).
 The same rule governs group-based **App Role** assignment — nested group
 memberships are not supported for group-based assignment to an application, so a
 role assigned to a group reaches its direct members only ([Manage users and
@@ -1758,15 +1801,19 @@ A workspace is not one unit of configuration. Wardyn splits it into three:
 1. **Source** (tier 1) — a repo or local directory configured ONCE, in a
    shared library: its own requirements contract, its own scan profile and
    status, deduplicated by canonical identity (locator + ref). `GET/POST
-   /api/v1/sources`, `GET/PUT/DELETE /api/v1/sources/{id}`, `POST
+   /api/v1/sources`, `GET/DELETE /api/v1/sources/{id}`, `POST
    /api/v1/sources/{id}/scan` (`mountLibraryRoutes`,
    `internal/api/sources.go`) — there is no separate
-   `/sources/{id}/requirements` route; a source's own contract rides the
-   plain `PUT /sources/{id}` body (`handleUpdateSource`).
+   `/sources/{id}/requirements` route, and no `PUT` either. A source's own
+   contract is authored by re-`POST`ing an existing identity to
+   `POST /api/v1/sources` with a new requirements body, which APPLIES it
+   (WSPIPE-8); the write-once `handleUpdateSource` that `PUT` used to reach is
+   gone, not stubbed.
 2. **Base image** (tier 2) — a shared catalog row: registry, custom, or BYO.
    "Recommended" is never a catalog kind — it is a per-workspace DERIVED
    build, excluded by a database CHECK constraint, not by convention.
-   `GET/POST /api/v1/base-images`, `GET/DELETE /api/v1/base-images/{id}`.
+   `GET/POST /api/v1/base-images`, `DELETE /api/v1/base-images/{id}` — there
+   is no `GET` by id (`handleGetBaseImage` went with its route).
 3. **Workspace** (tier 3) — an ordered list of attachments (library sources, or
    inline ephemeral scratch dirs) plus an optional catalog image. Attachment
    order is load-bearing: `attachments[0]` is the primary, the same rule a
@@ -2685,6 +2732,14 @@ Migrations are **forward-only**. `internal/db` records each applied filename in
 concurrent starts do not race. There are no `down` migrations and no downgrade
 path — a rollback to an older wardynd against a migrated database is unsupported.
 
+**Upgrading to 0.7 signs every SSO human out, once.** The session payload gained
+a codec version and `decodeSession` requires an exact match
+(`SessionCodecVersion`, `internal/auth/oidc/session_codec.go`), so every cookie
+minted by an earlier release decodes as no session and the human re-authenticates
+at their next request. Nothing is lost but the login: grants, group snapshots and
+governance assignments are all read from the database. **Admin-token and
+API-token auth are unaffected** — neither carries a session cookie.
+
 ```sh
 git pull && make compose-build          # rebuild wardynd at the new revision
 docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
@@ -2693,6 +2748,12 @@ docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
 Take the Postgres dump above **before** the restart; that dump is the only
 rollback you have. Agent images are built separately — `make agent-images`
 rebuilds them.
+
+On Helm, a **mixed-version rollout repeats that logout** for as long as both
+versions serve: a human who lands on an old replica is signed in, and the next
+request routed to a new one bounces them. It costs logins, not containment — the
+old binary never accepts a cookie the new one refuses, only the reverse — but
+plan the window. `--wait` (below) is what keeps it short.
 
 **On Helm, a downgrade past 0.6 also stalls the rollout, before migrations ever
 matter.** The chart's readiness probe targets `/readyz`, which the 0.6 images
@@ -2753,10 +2814,17 @@ becomes the **migrator**. The role you create is the **app** role. Doing it the
 other way round — pointing `WARDYN_PG_MIGRATE_DSN` at a fresh "migrator" that
 owns nothing — fails on the first migration that touches an existing object,
 because PostgreSQL requires ownership for `ALTER TABLE` and for
-`CREATE OR REPLACE FUNCTION`. That is not hypothetical on a 0.6 → 0.7 upgrade:
-`0048`, `0050`, `0053` and `0055` are `ALTER TABLE` on pre-existing tables
-(`0050` also drops and re-adds a primary key), and `0056`/`0057` replace the
-chain function `0047` created. The failure is at least loud and fail-closed —
+`CREATE OR REPLACE FUNCTION`. That is not hypothetical on a 0.6 → 0.7 upgrade. Every 0.6.x release ships
+through `0049`, so this path applies `0050`–`0060`, and most of it is exactly
+this shape: `0050` (secrets), `0052` and `0060` (api_tokens, created back in
+`0045`) and `0055` (workspaces) are `ALTER TABLE` on tables an earlier release
+created — `0050` also drops and re-adds a primary key, `0060` drops and re-adds
+a CHECK — and `0056`, `0057` and `0058` are three successive
+`CREATE OR REPLACE`s of the chain function `0047` created, each re-creating its
+trigger on `audit_events`. (`0053` alters `role_mappings`, which `0051` CREATES
+two migrations earlier in the same run, so it is not an instance of the hazard.)
+`scripts/test-claims-match-code.sh` derives that list from the migration bodies,
+so a new `ALTER TABLE` landing undocumented fails there rather than here. The failure is at least loud and fail-closed —
 each migration runs in its own transaction and `db.Migrate` returns the error, so
 wardynd refuses to boot rather than half-applying — but it is a permission error
 with no way forward except giving the migrator ownership.

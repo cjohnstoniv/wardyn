@@ -535,7 +535,8 @@ question never arises there.
 | Docker Engine (Linux, default) | yes (`/var/run/docker.sock`) | no |
 | Docker Desktop (macOS, default socket) | yes | no |
 | Colima | **no** — `~/.colima/<profile>/docker.sock` | yes, absolute path |
-| Rootless Docker / Podman (Linux) | **no** — `/run/user/<uid>/docker.sock` | yes, absolute path |
+| Rootless Docker (Linux) | **no** — `/run/user/<uid>/docker.sock` | yes, absolute path |
+| Rootless Podman (Linux) | **no** — `/run/user/<uid>/podman/podman.sock` (`$XDG_RUNTIME_DIR/podman/podman.sock`, the default `podman-system-service` binds — the same one `scripts/test-podman.sh` defaults to) | yes, absolute path |
 
 `wardyn-desktop.sh` reads `WARDYN_DOCKER_SOCK` **from the envelope** — so MDM
 carries it to every device — and it takes precedence over auto-detection. If

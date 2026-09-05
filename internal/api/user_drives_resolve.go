@@ -291,19 +291,31 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 		resolved.Paused = true
 		return resolved, nil
 	}
-	// THE MANAGED/`email_local` REFUSAL, REPEATED — and repeated for the same
-	// reason the home-override tier gate below is, on a row written by an older
-	// binary or by hand. A managed object is named by the HOME alone, so under
-	// `email_local` two principals whose addresses share the part before the "@"
-	// resolve to ONE volume or PVC, and the driver's own collision check cannot
-	// see it (the object IS labelled with this drive). Deriving the home anyway
-	// would hand the second principal the first one's storage.
+	// THE MANAGED NON-HASH REFUSAL, REPEATED — and repeated for the same reason
+	// the home-override tier gate below is, on a row written by an older binary
+	// or by hand. A managed object is named by the HOME alone, and neither
+	// non-hash template can safely name one: under `email_local` two principals
+	// whose addresses share the part before the "@" resolve to ONE volume or PVC
+	// (the driver's own collision check cannot see it — the object IS labelled
+	// with this drive), so deriving the home anyway would hand the second
+	// principal the first one's storage; under `sub` the name is unique but it
+	// publishes the sign-in subject (below). Hence the member sentence names the
+	// sign-in IDENTITY the home is derived from rather than the email claim: on
+	// a `sub` row the email had no part in it, so a member told to look at their
+	// email address — and the admin they forward that to — cannot act on it.
 	//
 	// It runs BEFORE the derivation, not after: the home it would derive is
 	// exactly the colliding one, and a check downstream of it would be reasoning
 	// about a value it had already accepted.
-	if d.Backend.Kind() == types.DriveKindManaged && d.HomeTemplate == types.HomeTemplateEmailLocal {
-		slog.Warn("wardynd: user drive: a managed drive is templated on the email local part, which cannot name one object per person",
+	//
+	// EVERY non-hash template, not just `email_local`: the write boundary was
+	// widened to the full rule (types.ManagedBackendRejectsTemplate) and this
+	// site was not, so a managed row carrying `sub` — authorable by any older
+	// binary, or by hand — was refused on write and still resolved and mounted,
+	// publishing the sign-in subject in an object name `docker volume ls` and
+	// `kubectl get pvc` print without inspecting anything.
+	if types.ManagedBackendRejectsTemplate(d.Backend, d.HomeTemplate) {
+		slog.Warn("wardynd: user drive: a managed drive carries a non-hash home template, which cannot safely name one object per person",
 			slog.String("drive", d.Name), slog.String("backend", string(d.Backend)),
 			slog.String("home_template", string(d.HomeTemplate)))
 		// REFUSED_BACKEND's frozen shape, whose parenthesised half is where the
@@ -312,7 +324,7 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 		// "the roots moved" and "this row could not be authored today" are one
 		// fact, which is that this deployment cannot mount their drive.
 		return nil, fmt.Errorf("%w: drive: this deployment cannot mount your drive "+
-			"(its directory name comes from your email address, which cannot name one %s object per person — "+
+			"(its directory name is derived from your sign-in identity, which cannot safely name one %s object per person — "+
 			"ask an admin to change how this drive names directories)", errDriveUnmountable, d.Backend)
 	}
 	override := ""

@@ -4,6 +4,7 @@
 package api
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -300,7 +301,7 @@ func TestRunnerCheckCC1OnlyFixIsDriverAware(t *testing.T) {
 		name       string
 		driver     string
 		wantWardyn bool // fix names the `wardyn setup wall/vault` docker command
-		wantHelm   bool // fix names k8s.runtimeClasses via helm upgrade --set
+		wantHelm   bool // fix names k8s.runtimeClasses via the Helm pin command
 	}{
 		{"docker driver: the host-side `wardyn setup` command", "docker", true, false},
 		{"k8s driver: the Helm RuntimeClass pin, never the docker command", "k8s", false, true},
@@ -365,5 +366,126 @@ func TestPermissionsPostureCheck(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// helmUpgradeWithArgs matches a `helm [-n ns] upgrade <release> <chart>`
+// invocation: `upgrade` followed by TWO positional arguments, neither of them a
+// flag. That is not a style preference — `helm upgrade` genuinely requires 2
+// arguments and exits with that message when given none, so a Fix hint printing
+// the bare form hands the operator a command that cannot run.
+var helmUpgradeWithArgs = regexp.MustCompile(`helm(?:\s+-n\s+\S+)?\s+upgrade\s+[^-\s]\S*\s+[^-\s]\S*`)
+
+// assertHelmFixRunnable is the R5 F236 (deduped twin ADV3-05) invariant, applied
+// to one SetupCheck.Fix. Three rules, each one a shape a reviewer found shipped:
+//
+//  1. never the bare `helm upgrade --set` — it exits "requires 2 arguments";
+//  2. a Helm `--set` must re-pass the install's values (`-f …`) or ask Helm to
+//     do it (`--reset-then-reuse-values`). docs/OPERATIONS.md § "`helm upgrade`,
+//     and why `--wait` is not optional" documents why: a bare `--set` resets
+//     every OTHER value to chart defaults, dropping auth.adminToken.*,
+//     k8s.proxyImage, serviceAccount.automount and secrets.ageKeyFromSecret —
+//     the chart then refuses the render, so the operator who repairs the missing
+//     arguments by hand walks into a second, more confusing failure;
+//  3. the invocation names a release and a chart, so it runs as printed.
+func assertHelmFixRunnable(t *testing.T, where, fix string) {
+	t.Helper()
+	if !strings.Contains(fix, "helm") || !strings.Contains(fix, "--set") {
+		return
+	}
+	if strings.Contains(fix, "helm upgrade --set") {
+		t.Errorf("%s: Fix prints `helm upgrade --set …`, which exits \"requires 2 arguments\" — name the release and chart (`helm -n <namespace> upgrade <release> ./deploy/helm/wardyn …`). Fix = %q", where, fix)
+	}
+	if !strings.Contains(fix, "-f ") && !strings.Contains(fix, "--reset-then-reuse-values") {
+		t.Errorf("%s: Fix passes `--set` with neither `-f <values>` nor `--reset-then-reuse-values` — that is the shape docs/OPERATIONS.md documents as resetting every other value to chart defaults (dropping auth.adminToken.*, k8s.proxyImage, serviceAccount.automount, secrets.ageKeyFromSecret). Fix = %q", where, fix)
+	}
+	if !helmUpgradeWithArgs.MatchString(fix) {
+		t.Errorf("%s: Fix names a Helm --set but no `upgrade <release> <chart>` pair — the command cannot run as printed. Fix = %q", where, fix)
+	}
+}
+
+// TestSetupFixHelmCommandsAreRunnable sweeps every Fix the checklist can compose
+// on a Kubernetes runner — both through the pure check functions (which need a
+// driver/floor combination no single fixture produces) and across the whole live
+// GET /setup/status payload, so a Helm hint added to some FUTURE check is
+// covered by the same invariant rather than needing its own test.
+func TestSetupFixHelmCommandsAreRunnable(t *testing.T) {
+	helmFixes := 0
+	sweep := func(where, fix string) {
+		if strings.Contains(fix, "helm") && strings.Contains(fix, "--set") {
+			helmFixes++
+		}
+		assertHelmFixRunnable(t, where, fix)
+	}
+
+	// The two driver-conditional arms, called directly.
+	sweep("runnerCheck(k8s, CC1-only)",
+		runnerCheck(SetupRunner{Driver: "k8s", ConfinementClasses: []string{"CC1"}}).Fix)
+	floorChk, ok := confinementFloorCheck(SetupRunner{Driver: "k8s", ConfinementClasses: []string{"CC1"}}, types.CC2)
+	if !ok {
+		t.Fatal("confinementFloorCheck(k8s, CC1-only, CC2 floor) emitted no row — the fixture no longer reaches the Helm arm this guard exists for")
+	}
+	sweep("confinementFloorCheck(k8s, CC2 floor)", floorChk.Fix)
+
+	// ...and the whole wire payload, on a fixture that puts a k8s runner and an
+	// unadvertised floor in play at once.
+	srv := New(Config{
+		AdminToken:    adminToken,
+		Runner:        k8sRunner{networkPolicy: true},
+		DefaultPolicy: types.RunPolicySpec{MinConfinementClass: types.CC2},
+	})
+	code, st := decodeSetup(t, srv, adminToken)
+	if code != 200 {
+		t.Fatalf("GET /setup/status: code = %d, want 200", code)
+	}
+	for _, c := range st.Checks {
+		sweep("check "+c.ID, c.Fix)
+	}
+
+	// Guard the guard: an invariant that never sees a Helm string passes
+	// vacuously, which is exactly how the bare `--set` survived to a release
+	// candidate.
+	if helmFixes < 2 {
+		t.Fatalf("swept only %d Helm Fix strings — the k8s fixtures no longer reach the Helm hints; re-point this guard rather than letting it pass on nothing", helmFixes)
+	}
+}
+
+// TestAgeKeyCheckFixSteersToASecretBackedKey is R5 F159/F190. The warn arm's Fix
+// used to offer `helm: env.WARDYN_AGE_KEY` — which renders the secret store's
+// MASTER key as a plaintext literal in the Deployment object, readable by
+// anything with `get deploy` and captured in every `helm get manifest`. The
+// chart has two Secret-backed doors (deploy/helm/wardyn/values.yaml's
+// secrets.ageKeyFromSecret over the postgres.dsn.secretRef Secret's `age-key`
+// entry, and secrets.ageKeySecretRef.name for a separate Secret), and the
+// console's own remedy has to name them.
+func TestAgeKeyCheckFixSteersToASecretBackedKey(t *testing.T) {
+	if fix := ageKeyCheck(true).Fix; fix != "" {
+		t.Errorf("durable arm carries a Fix (%q) — an ok row has nothing to fix", fix)
+	}
+
+	chk := ageKeyCheck(false)
+	if chk.Status != "warn" {
+		t.Fatalf("Status = %q, want warn", chk.Status)
+	}
+	// The two Secret-backed chart keys, named as the Helm answer.
+	for _, want := range []string{"secrets.ageKeyFromSecret", "secrets.ageKeySecretRef"} {
+		if !strings.Contains(chk.Fix, want) {
+			t.Errorf("Fix does not name the Secret-backed chart key %q — Fix = %q", want, chk.Fix)
+		}
+	}
+	// The plaintext-literal door is not offered as the Helm answer. Naming it as
+	// the thing NOT to do is the point (an operator who already wired it needs to
+	// recognise it), so the assertion is on the `helm: env.…` STEERING shape the
+	// old string used, not on the substring appearing at all.
+	if strings.Contains(chk.Fix, "helm: env.WARDYN_AGE_KEY") {
+		t.Errorf("Fix still steers the master key into env.WARDYN_AGE_KEY, a plaintext literal in the Deployment — Fix = %q", chk.Fix)
+	}
+	if !strings.Contains(chk.Fix, "plaintext") {
+		t.Errorf("Fix does not say WHY env.WARDYN_AGE_KEY is refused (a plaintext literal in the Deployment); \"not X\" with no reason is how the old advice survived three reviews — Fix = %q", chk.Fix)
+	}
+	// The host answer stays: on a bare binary there is no Deployment object to
+	// leak into, and -age-key / the env var is what compose and install.sh write.
+	if !strings.Contains(chk.Fix, "-age-key") {
+		t.Errorf("Fix dropped the host-side -age-key answer — Fix = %q", chk.Fix)
 	}
 }

@@ -70,6 +70,11 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 	// no rejection is warranted. The SSRF/private-IP guard and the exact-entry
 	// requirement for credential injection are enforced by the proxy and are
 	// unaffected by this mode.
+	// HOW MANY first, then what each one is: the per-entry check below is itself
+	// the work an unbounded list buys (see maxAllowedDomainsPerSpec).
+	if err := validateAllowedDomainsCount(spec.AllowedDomains); err != nil {
+		return err
+	}
 	// Every domain entry must be a shape the proxy's matcher can actually
 	// match. A dead entry (mid-label wildcard, URL, bad :port) reads as
 	// protection but allows/denies nothing — reject it at every ingest point
@@ -120,6 +125,36 @@ const (
 	maxToolRulesPerPolicy = 32
 	maxToolRuleNameLen    = 64
 )
+
+// maxAllowedDomainsPerSpec bounds allowed_domains, the last per-spec list that
+// had no count cap at all. Every entry is work: the proxy matches against it per
+// request, and on the MEMBER path narrowMemberInlinePolicy asks the capability
+// seam about each one, so an unbounded list was an unbounded amount of work
+// bought with one request body. maxJSONBody left room for ~52k entries of
+// "api.anthropic.com", and POST /runs/preflight persists nothing, so it was
+// repeatable for free. 256 is a hostile-input ceiling, not a sizing of any real
+// allowlist: the widest policy the project ships names a handful of hosts, and a
+// corporate baseline with a wildcard per business unit is still two orders of
+// magnitude under it.
+//
+// It is a REFUSAL, not a truncation. A silently truncated allowlist is a policy
+// that reads as permission and denies — the same class of lie validateToolRules
+// refuses a dead rule for.
+const maxAllowedDomainsPerSpec = 256
+
+// validateAllowedDomainsCount is the count half of allowed_domains validation,
+// split out because it has to run at TWO points on the member path: here, inside
+// validatePolicySpec (the chokepoint every ingest funnels through), and earlier
+// in resolveRunPolicy, BEFORE boundMemberSpec narrows the spec — the narrowing
+// is itself the expensive per-entry work, and validatePolicySpec runs after it.
+// One message, so the 400 an admin sees and the 400 a member sees are the same
+// sentence.
+func validateAllowedDomainsCount(domains []string) error {
+	if len(domains) > maxAllowedDomainsPerSpec {
+		return fmt.Errorf("allowed_domains: at most %d entries", maxAllowedDomainsPerSpec)
+	}
+	return nil
+}
 
 // uiAppNameRE constrains a UI app name to a short lower-case slug. The name is
 // NOT cosmetic: it is interpolated into the launcher path the gateway execs

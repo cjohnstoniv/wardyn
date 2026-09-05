@@ -26,6 +26,8 @@ everything; CNCF Sandbox is the governance target.
 | `wardyn-tetragon-ingest` | Host-scoped eBPF/Tetragon ground-truth ingest sidecar: tails Tetragon's JSON export, correlates each `kernel.*` event to a run via the `wardyn.run-id` container label, and POSTs to `POST /api/v1/internal/groundtruth`. Opt-in (`groundtruth` profile). |
 | `wardyn-git-helper` | In-sandbox git credential helper: brokers a short-lived, repo-scoped token from the control plane and writes it to **stdout only** (never disk or env). |
 | `wardyn-scan` | In-sandbox workspace scanner: clone-and-scan a source and upload raw `ScanFacts` (profile derivation is server-side). |
+| `wardyn-toolgate` | In-sandbox stdio MCP relay, built into the agent images: exposes one tool (`approve`), wired as claude's `--permission-prompt-tool` on a run dispatched with `tool_approvals=hold`. Each tool call is raised through the proxy's brokered `POST /wardyn/v1/approvals` and blocks until decided; `DENIED`/`EXPIRED` fail closed. Operator-authored `tool_rules` are resolved PROXY-SIDE first (`decideByToolRules`), so an `allow`/`deny` answers without waking anyone. **Cooperative, not a boundary** — an agent that never calls it is not gated; see `threatmodel/THREAT-MODEL.md` B3. |
+| `wardyn-aws-sso` | In-sandbox uploader for the containerized `aws sso login` capture lane: brokers the resulting SSO token cache back to the control plane over `PUT /wardyn/v1/sso-token/{runID}`. Built into the AWS-SSO agent image; the login run itself is a throwaway box that is never recorded. |
 | `wardyn` | CLI: `wardyn run` (create/list/get/grants/recording/kill), `wardyn source` (list/create/scan/delete — the shared source library), `wardyn workspace` (create/list/get/delete/scan), `wardyn attach`, `wardyn ssh`, `wardyn logs`, `wardyn approvals`, `wardyn approve`/`wardyn deny`, `wardyn audit`, `wardyn policy`, `wardyn secret`, `wardyn record`, `wardyn sessions`, `wardyn subscription` (connect/status/disconnect), `wardyn site-config` (get/apply), `wardyn support-bundle`, `wardyn setup status\|detect-proxy\|proxy-relay\|wall\|vault`. |
 
 How they fit together (same diagram as the README):
@@ -57,14 +59,23 @@ masked session casts flow back into the append-only audit log — drawn in
 [`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md) §8, "The three
 audit streams".
 
-The console itself (`wardynd`'s embedded UI) is permitted exactly one class of
-external resource: `securityHeaders`' CSP `media-src` (`internal/api/server.go`)
+The console itself (`wardynd`'s embedded UI) is served under a single CSP
+(`securityHeaders`, `internal/api/security_headers.go`). Its `media-src`
 allowlists the two hosts a GitHub Release asset download touches — `github.com`
-and the redirect target it resolves to — and nothing else. The one consumer is
-the Getting Started demo-episode player, which streams an episode only on an
-explicit click from the tag-pinned manifest (`ui/src/app/lib/demo-videos.ts`,
-`episodeUrl`/`episodesFor`): no prefetch, no autoplay, no third-party video
-player. An air-gapped mirror of the series is a named gap, not built.
+and the redirect target it resolves to — for one consumer: the Getting Started
+demo-episode player, which streams an episode only on an explicit click from the
+tag-pinned manifest (`ui/src/app/lib/demo-videos.ts`, `episodeUrl`/`episodesFor`):
+no prefetch, no autoplay, no third-party video player. An air-gapped mirror of the
+series is a named gap, not built.
+
+Three further relaxations in that same policy are deliberate, and are named rather
+than summarised away: `connect-src 'self' ws: wss:` (a bare scheme-source matches
+any host under CSP Level 3, so the WebSocket half is not origin-restricted),
+`script-src 'self' 'wasm-unsafe-eval'` (the recording replay player's WASM VT
+core; WASM compilation only, never JS `eval`) and `font-src 'self' data:`. The
+threat model prices all of them against the admin token's at-rest posture —
+`threatmodel/THREAT-MODEL.md` § "Console auth token storage", which quotes the
+served header in full.
 
 ### Feature surfaces on top of the core loop (all shipped)
 
@@ -149,15 +160,15 @@ forward-compatibility values; no transition produces them today.
    disk, or args — static API keys and OAuth subscription tokens never enter the
    sandbox (env inside shows only an inert placeholder, the real value injected
    on the wire), and broker-scoped credentials are minted and revoked per run. These residuals break
-   that rule deliberately — each bounded and disclosed rather than hidden; the
-   authoritative, complete table is `threatmodel/THREAT-MODEL.md` §5.1a:
-
-   | Exception | Why it can't be brokered | Bound / disclosure |
-   |---|---|---|
-   | `ssh_key` grant | `ssh` reads the key from disk | RESIDENT private key, written 0400, descendant-scoped, wiped after clone |
-   | `env_secret` grant | a `*_TOKEN`-reading CLI has no helper seam and no one-host header to inject | RESIDENT for the whole run in the sandbox env — no mint/TTL, nothing to revoke; admin-gated by default |
-   | Bedrock **access-key** mode | SigV4 request-signing happens in-process, so there is nothing to inject on the wire | `aws-access-key-id`/`aws-secret-access-key` sit in the sandbox env; the preferred bearer mode is never resident |
-   | `WARDYN_SUBSCRIPTION_INJECT=off` (`cmd/wardynd/boot_deps.go`) | Opt-in escape hatch, not a limitation: stages a sanitized RESIDENT COPY of the operator's Claude credential — `~/.claude` + `~/.claude.json`, copied read-only by `scripts/stage-claude-creds.sh` from a host staging dir (default `~/.wardyn/claude-creds`). It is a real, refreshable OAuth token, unlike the default's inert sentinel that the proxy replaces on the wire, and it goes stale as the operator's own `claude` rotates its refresh token (re-run the staging script) | The ABSENCE of the `run.llm.subscription_inject` audit event on an otherwise subscription-mounted run (present = proxy-injected; absent = resident copy) |
+   that rule deliberately — each bounded and disclosed rather than hidden. The
+   authoritative, complete list is `threatmodel/THREAT-MODEL.md` §5.1a, and it is
+   deliberately **not** copied here: a shorter copy printed beside the word
+   "complete" is a drift surface, and this one had fallen five rows behind the
+   table it pointed at (four printed here against nine there). Read §5.1a. The
+   shapes it covers are grant-delivered credentials with no injection seam, the
+   SigV4 modes that sign in-process, the operator's own mounted credential
+   material, and the container-login runs whose whole purpose is to obtain a
+   credential that does not exist yet.
 
    Secret values are masked on the audit/recording/decision-log streams by
    `internal/secretmask` (verbatim-match; the encoded/transformed-exfil residual
@@ -277,7 +288,7 @@ is decided by grant kind and host, and neither can cover the other's set:
 | Grant / transport | Mechanism | Where the credential lives |
 |---|---|---|
 | `github_token`, granted repo, HTTPS | **proxy git broker** — `git`'s `url.<broker>.insteadOf` rewrites the remote to `http://wardyn-proxy:3128/wardyn/gh/<org>/<repo>` (`internal/egress/proxy/git_broker.go`) | proxy memory only; dispatch subtracts + denies the broker-managed GitHub hosts for any run with git grants (`confineGitBrokerEgress`), so an un-brokered GitHub URL has no route **by name** — these are name-keyed denies, so under `allow_all_egress` a raw-IP CONNECT is a different key and is not bound by them (bounded in practice because no GitHub credential reaches a brokered sandbox). The repo is the unit of trust. Pushes are confined to `refs/heads/wardyn/<run-id>/*` by default — `agent-run` checks the clone out onto `wardyn/<run-id>/work`; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts a proxy out |
-| `git_pat` (Azure DevOps / GitLab, or a GitHub PAT on a forge the run is NOT brokered for), HTTPS | **`wardyn-git-helper`** — brokers on `git`'s `get` and writes to stdout | helper stdout → `git`. **Not available for the SAME forge as a `github_token` grant** — refused at policy write (`validateGrantLaneExclusivity`), withheld from the sandbox at dispatch for anything already stored (`dropBrokeredGrants`), and refused at mint |
+| `git_pat` (Azure DevOps / GitLab, or a GitHub PAT on a forge the run is NOT brokered for), HTTPS | **proxy PAT broker** (`WARDYN_GIT_PAT_BROKER=on`, the default since 0.7) — `agent-run` rewrites the granted hosts to `url.<broker>/git/<host>/.insteadOf`, so the proxy terminates the request, mints server-side and sets Basic auth on the OUTBOUND leg (`internal/egress/proxy/pat_broker.go`); the grant ids are withheld from the sandbox env. `WARDYN_GIT_PAT_BROKER=off` restores the pre-0.7 in-sandbox **`wardyn-git-helper`** lane, which brokers on `git`'s `get` and writes to stdout | proxy memory only on the default; helper stdout → `git` under `off`, where the PAT is resident for the run (§5.1a). Non-resident is not least-privilege either way — a PAT carries whatever scope the operator issued it with, so the broker's allowlist is per-HOST. **Not available for the SAME forge as a `github_token` grant** — refused at policy write (`validateGrantLaneExclusivity`), withheld from the sandbox at dispatch for anything already stored (`dropBrokeredGrants`), and refused at mint |
 | `ssh_key`, any host | **neither** — `agent-run` writes a 0400 key for the clone and shreds it after | resident file, wiped post-clone (documented exception, invariant 1). **Not available at all for the SAME forge as a `github_token` grant** — refused at policy write (`validateGrantLaneExclusivity`), and for anything already stored, withheld from the sandbox at dispatch (`dropBrokeredGrants`) while `confineGitBrokerEgress` denies that forge's SSH endpoint too |
 
 The broker is structurally github.com-only and App-token-only: it has no host
@@ -320,11 +331,26 @@ wardyn-proxy (L7 allowlist + injection) **[shipped]** → L3 MCP/tool gateway
 
 ## Deployment surface (anti-sprawl constraint)
 
-Exactly TWO paths: `deploy/compose` (config-validated in CI; exercised
+Exactly TWO stacks: `deploy/compose` (config-validated in CI; exercised
 end-to-end by the nightly full-stack e2e) and ONE blessed Helm chart
 `deploy/helm/wardyn` (`helm lint` + `helm template` render-checked in CI on both
 the default values and `ci/all-on-values.yaml`, plus its refusals). No
 "your arbitrary K8s".
+
+The **desktop tier** (`deploy/desktop`, [docs/DESKTOP.md](docs/DESKTOP.md)) is a
+third packaged SHAPE and not a third stack — its `docker-compose.yaml` is an
+`include:` of `deploy/compose/docker-compose.yaml` unmodified, which is the whole
+file. What the envelope adds around that one stack is a managed-laptop lifecycle:
+a root `install.sh`, a supervisor (`com.wardyn.daemon.plist` on macOS, a
+`wardyn.service` + `wardyn.timer` pair on Linux) that re-asserts the stack at boot
+and on each tick rather than assuming it, log rotation, and an MDM-owned read-only
+`/etc/wardyn` carrying the envelope, secrets, the policy ceiling and site-config —
+`WARDYN_MANAGED_DIR` is how that directory reaches the containerized `wardynd`.
+Packaged by `scripts/build-desktop-package.sh` into the MDM-distributable payload
+(a `.deb` and a tarball; `--rpm` adds the third). It has
+its own threat posture, because the developer is root on the laptop and the
+governance authority is not them: `threatmodel/THREAT-MODEL.md`'s member-mode
+actor row and boundary B9 both cover it.
 
 The compose stack (`deploy/compose/docker-compose.yaml`):
 
@@ -354,16 +380,22 @@ The compose stack (`deploy/compose/docker-compose.yaml`):
 > product yet and is not scheduled** (see [ROADMAP.md](ROADMAP.md)); the Dex
 > (SSO) profile and OIDC backend exist and are CI-tested, and the console's SSO
 > sign-in lights up when OIDC is configured. Authorization underneath it is
-> real, not aspirational: every OIDC session carries an **admin** or **member**
-> role derived at login (`WARDYN_OIDC_ROLE_MAP` against Entra App Roles/groups/
-> email; unset = everyone admin, upgrade-safe), a member is scoped to their own
+> real, not aspirational: every OIDC session carries an **admin**,
+> **security_admin** or **member** role derived at login (`WARDYN_OIDC_ROLE_MAP`
+> against Entra App Roles/groups/email, merged with console-managed rows since
+> 0.7; unset = everyone admin, upgrade-safe), a member is scoped to their own
 > runs/approvals with owner-or-admin gating (byte-identical 404 on a foreign
 > resource, no existence oracle), a member's own policy is clamped to the
 > operator's ceiling, and BYOI/devcontainer images are admin-only. The admin
 > token and local mode are always admin — one shared credential carries no
 > human to demote. Full semantics, the legacy `WARDYN_OIDC_OPERATOR_EMAILS`
-> allowlist path, and what's still NOT built (custom roles, per-resource
-> permissions, tenant/org columns, separation of duty among admins):
+> allowlist path, the second admin tier `security_admin` — governance authority
+> (approvals, audit, capability grants, governance profiles, revocation) that
+> deliberately never reaches INTO a run: `isSecurityOperator` admits it,
+> `isOperator` does not, and the two predicates sit beside each other rather than
+> on a ladder — and what's still NOT built (custom roles, per-resource
+> permissions, tenant/org columns, separation of duty WITHIN the super-admin
+> tier):
 > [docs/OPERATIONS.md "Multi-user: who can change what"](docs/OPERATIONS.md#multi-user-who-can-change-what).
 > `make setup` asks **containerized vs host** (Enter =
 > containerized); team is not a selectable mode

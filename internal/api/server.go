@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -591,6 +592,14 @@ type Server struct {
 	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is
 	// ready to use.
 	metrics metrics
+	// capRowsScanned counts capability-grant rows compared inside capBatch (see
+	// capabilities.go). It is INSTRUMENTATION, read by nothing on any request
+	// path: the per-request cost of the capability seam is chosen partly by the
+	// member's own request body (spec.AllowedDomains), so "how much work did one
+	// request buy" is a claim that has to be assertable rather than asserted —
+	// capability_batch_test.go's growth law reads it. One atomic add per row
+	// already being compared. Zero value is ready to use.
+	capRowsScanned atomic.Int64
 	// auditChainSweep admits ONE verify sweep at a time (handleVerifyAuditChain).
 	// The sweep re-hashes an unprunable table, so concurrent GETs would multiply
 	// one operator action into N full passes each holding a pool connection.

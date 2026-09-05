@@ -116,7 +116,7 @@ func recordCmd(client clientFn) *cobra.Command {
 	task.Flags().BoolVar(&taskJSON, "json", false, "emit the record-run response as JSON")
 
 	cmd.AddCommand(synth, save, task)
-	return cmd
+	return subcommandGroup(cmd)
 }
 
 func printProfile(p sdk.ProfileResult) {

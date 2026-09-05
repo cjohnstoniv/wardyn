@@ -325,6 +325,82 @@ wardynd_probe() {
   unset _wp_env _wp_path _wp_tok _wp_img
 }
 
+# ensure_age_key_or_die ENV_FILE — ENV_FILE must carry a PERSISTED
+# WARDYN_AGE_KEY before this stack is allowed to start: mint one if it has none,
+# REFUSE if the mint produces nothing.
+#
+# This used to warn twice and continue — "this wardynd build may predate the
+# flag", then "Continuing with an ephemeral key — fine for now, but secrets
+# won't survive a container restart". Both halves were wrong. The cause is not
+# one thing (a transient daemon error or a missing image mint nothing either),
+# and the consequence is not lost secrets: with no key wardynd mints a throwaway
+# one PER BOOT, and this compose file gives postgres a persistent volume and
+# `restart: unless-stopped`. Boot 1 encrypts its own signing key into that
+# database under identity A; boot 2 generates identity B, cannot decrypt it, and
+# loadOrCreateSecret fails closed rather than overwrite (cmd/wardynd/main.go) —
+# the daemon does not start at all and the rows written under A are
+# unrecoverable. install.sh dies on this condition and
+# deploy/helm/wardyn/templates/secret.yaml fails the render on it; up.sh was the
+# one front door of the three that shrugged. Extracted from cmd_up so
+# scripts/test-up-policy.sh can drive all three arms with no daemon.
+ensure_age_key_or_die() {
+  _ak_env=$1
+  if grep -qE '^WARDYN_AGE_KEY=AGE-SECRET-KEY-' "${_ak_env}" 2>/dev/null; then
+    unset _ak_env
+    return 0
+  fi
+  log "Minting a persistent secret-store age key"
+  # 2>&1, not 2>/dev/null: the mint's own error is the only thing that
+  # distinguishes "no such image" from "the daemon went away", and the refusal
+  # below is the last place it can be shown. `|| true` so a non-zero docker
+  # reaches that message instead of aborting under `set -e`.
+  _ak_out=$(docker run --rm wardyn/wardynd:local -gen-age-key 2>&1 || true)
+  _ak_key=$(printf '%s\n' "${_ak_out}" | grep '^AGE-SECRET-KEY-' | head -1 || true)
+  if [ -n "${_ak_key}" ]; then
+    env_set "${_ak_env}" WARDYN_AGE_KEY "${_ak_key}"
+    log "Persisted WARDYN_AGE_KEY to ${_ak_env} (secrets now survive restarts)"
+    unset _ak_env _ak_out _ak_key
+    return 0
+  fi
+  _ak_why=$(printf '%s\n' "${_ak_out}" | grep -v '^[[:space:]]*$' | tail -3 | tr '\n' ' ' || true)
+  die "could not mint this stack's secret-store key: \`docker run --rm wardyn/wardynd:local -gen-age-key\` printed no AGE-SECRET-KEY- line.${_ak_why:+
+  It said: ${_ak_why}}
+  Refusing to start the stack. Booting without WARDYN_AGE_KEY does not merely lose secrets on
+  restart: wardynd mints a throwaway key on EVERY boot, so boot 1 encrypts its own signing key
+  into the persistent postgres volume and boot 2 cannot decrypt it and fails closed — the daemon
+  crash-loops on its SECOND start and those rows are unrecoverable. install.sh and the Helm chart
+  refuse this same condition.
+  Fix the mint (\`make build\` rebuilds wardyn/wardynd:local, then run that command by hand to see
+  the error), or paste a key you already hold into ${_ak_env} as WARDYN_AGE_KEY=AGE-SECRET-KEY-…"
+}
+
+# refuse_local_mode_with_oidc ENV_FILE — refuse the ONE .env pair wardynd will
+# not boot on: WARDYN_LOCAL_MODE=true alongside a configured WARDYN_OIDC_ISSUER.
+#
+# This used to warn that local mode "bypasses SSO entirely (no login required)"
+# and proceed. It does not: resolveLocalMode (cmd/wardynd/boot_flags.go) refuses
+# to start on exactly this pair, because local mode would silently disable the
+# OIDC admin/member RBAC the operator just configured. So `compose up` ran, the
+# daemon exited, and the only in-band diagnostic was the health-wait's generic
+# "wardynd did not become healthy" several hundred lines later — the wrong
+# subsystem, after a full build+boot cycle, with the true cause already in hand.
+# The daemon's third escape hatch, WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC=true, is
+# deliberately NOT offered: docker-compose.yaml's wardynd service does not
+# forward that variable, so setting it in this .env would change nothing.
+refuse_local_mode_with_oidc() {
+  _lm_env=$1
+  [ "$(env_get "${_lm_env}" WARDYN_LOCAL_MODE)" = "true" ] || { unset _lm_env; return 0; }
+  [ -n "$(env_get "${_lm_env}" WARDYN_OIDC_ISSUER)" ] || { unset _lm_env; return 0; }
+  die "${_lm_env} sets WARDYN_LOCAL_MODE=true AND WARDYN_OIDC_ISSUER — wardynd REFUSES to boot on
+  that pair (resolveLocalMode, cmd/wardynd/boot_flags.go): local mode bypasses ALL public-API
+  auth, which would silently disable the OIDC operator/viewer split this .env configures.
+  Refusing here rather than spending a build+boot cycle to fail as a health timeout.
+  Keep SSO:     set WARDYN_LOCAL_MODE=false in ${_lm_env}
+  Keep no-auth: clear WARDYN_OIDC_ISSUER in ${_lm_env}
+  (WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC overrides this in the daemon, but the compose file does not
+  forward it to the wardynd container — setting it here would change nothing.)"
+}
+
 # open_url URL — best-effort browser opener. Honors WARDYN_UP_NO_BROWSER=1.
 open_url() {
   if [ "${WARDYN_UP_NO_BROWSER:-0}" = "1" ]; then
@@ -508,17 +584,7 @@ cmd_up() {
     cp "${ENV_EXAMPLE}" "${ENV_FILE}"
   fi
 
-  if ! grep -qE '^WARDYN_AGE_KEY=AGE-SECRET-KEY-' "${ENV_FILE}" 2>/dev/null; then
-    log "Minting a persistent secret-store age key"
-    _keyline=$(docker run --rm wardyn/wardynd:local -gen-age-key 2>/dev/null | grep '^AGE-SECRET-KEY-' | head -1 || true)
-    if [ -n "${_keyline}" ]; then
-      env_set "${ENV_FILE}" WARDYN_AGE_KEY "${_keyline}"
-      log "Persisted WARDYN_AGE_KEY to ${ENV_FILE} (secrets now survive restarts)"
-    else
-      warn "wardyn/wardynd:local -gen-age-key produced no key (this wardynd build may predate the flag)."
-      warn "Continuing with an ephemeral key — fine for now, but secrets won't survive a container restart."
-    fi
-  fi
+  ensure_age_key_or_die "${ENV_FILE}"
   chmod 600 "${ENV_FILE}" 2>/dev/null || true
 
   # Persist the daemon choice wardyn_pick_docker_host derived. It is otherwise
@@ -537,12 +603,10 @@ cmd_up() {
   if [ -n "$(env_get "${ENV_FILE}" WARDYN_OIDC_ISSUER)" ]; then
     log "Preserving existing OIDC config (WARDYN_OIDC_ISSUER is set) — leaving auth in SSO mode, not forcing local no-auth."
     # An issuer alone is not enough: a pre-SSO `make setup` wrote LOCAL_MODE=true
-    # into this same .env, and local mode SHORT-CIRCUITS auth entirely (no login,
-    # for anyone) regardless of the issuer. Warn — don't auto-flip, which could
+    # into this same .env, and wardynd refuses to boot on that pair. Refuse HERE,
+    # before `compose up`, rather than auto-flipping either value — which could
     # lock the operator out if the IdP is down.
-    if [ "$(env_get "${ENV_FILE}" WARDYN_LOCAL_MODE)" = "true" ]; then
-      warn "WARDYN_LOCAL_MODE=true is still set in ${ENV_FILE} — it bypasses SSO entirely (no login required). Set it false to actually enforce the OIDC operator/viewer split."
-    fi
+    refuse_local_mode_with_oidc "${ENV_FILE}"
   else
     env_set "${ENV_FILE}" WARDYN_LOCAL_MODE true
     env_set "${ENV_FILE}" WARDYN_OIDC_ISSUER ""

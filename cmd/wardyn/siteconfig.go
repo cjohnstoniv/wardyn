@@ -41,7 +41,7 @@ func siteConfigCmd(client clientFn) *cobra.Command {
 			"existed (still keyed by artifact_overrides) is folded automatically on apply.",
 	}
 	cmd.AddCommand(siteConfigGetCmd(client), siteConfigApplyCmd(client))
-	return cmd
+	return subcommandGroup(cmd)
 }
 
 func siteConfigGetCmd(client clientFn) *cobra.Command {

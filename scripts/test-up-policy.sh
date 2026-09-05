@@ -27,7 +27,7 @@ UP_SH="${REPO_ROOT}/scripts/up.sh"
 extract_func() {  # $1=function name -> its body, verbatim
   sed -n "/^$1() {/,/^}/p" "${UP_SH}"
 }
-for fn in pick_policy host_llm_key_present llm_ready_from_status llm_ready_from_probe resolve_default_policy wardyn_cli_prefix; do
+for fn in pick_policy host_llm_key_present llm_ready_from_status llm_ready_from_probe resolve_default_policy wardyn_cli_prefix ensure_age_key_or_die refuse_local_mode_with_oidc; do
   body="$(extract_func "$fn")"
   [ -n "$body" ] || { echo "test-up-policy: '$fn' not found in ${UP_SH} (renamed/removed?)" >&2; exit 1; }
   eval "$body"
@@ -130,6 +130,123 @@ got="$(resolve_default_policy "${env_file}" "/my/custom.json" '{}' "1")"
 # even with a model signal present — the marker says it's no longer ours.
 got="$(resolve_default_policy "${env_file}" "" '{}' "1")"
 [ "$got" = "/my/custom.json" ] || fail "auto-pick clobbered an operator override, got '$got'"
+
+# 5a) F150 — a FAILED age-key mint refuses the stack instead of shrugging.
+# cmd_up used to warn twice ("this wardynd build may predate the flag";
+# "Continuing with an ephemeral key — fine for now, but secrets won't survive a
+# container restart") and boot anyway. On this compose topology — persistent
+# postgres volume, restart: unless-stopped — an ephemeral key does not lose
+# secrets on restart, it makes wardynd UNBOOTABLE on its second start
+# (loadOrCreateSecret fails closed rather than overwrite), with the rows written
+# under the first boot's identity unrecoverable. install.sh dies on this and the
+# Helm chart fails the render on it; up.sh was the front door that did not.
+#
+# The `docker` shell function below is the whole fixture: no daemon is reachable
+# from this test and none is needed. A function beats PATH lookup, so the
+# extracted ensure_age_key_or_die calls THIS.
+MINT_MODE=ok
+MINT_CALLS=0
+docker() {  # only `run … -gen-age-key` is ever reached from this function
+  MINT_CALLS=$((MINT_CALLS + 1))
+  case "${MINT_MODE}" in
+    ok)     echo "AGE-SECRET-KEY-1TESTONLYQPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L" ;;
+    silent) : ;;                                            # exit 0, prints nothing
+    boom)   echo "Unable to find image 'wardyn/wardynd:local' locally" >&2
+            echo "docker: Error response from daemon: pull access denied." >&2
+            return 125 ;;
+  esac
+}
+
+age_env="${dir}/.env-age"
+
+# Already persisted: no mint at all, and the existing key is left alone.
+printf 'WARDYN_AGE_KEY=AGE-SECRET-KEY-1ALREADYHERE\n' > "${age_env}"
+MINT_CALLS=0
+ensure_age_key_or_die "${age_env}" >/dev/null 2>&1 \
+  || fail "ensure_age_key_or_die refused an .env that already carries a persisted key"
+[ "${MINT_CALLS}" = 0 ] || fail "ensure_age_key_or_die re-minted over an existing WARDYN_AGE_KEY (${MINT_CALLS} calls)"
+grep -q '^WARDYN_AGE_KEY=AGE-SECRET-KEY-1ALREADYHERE$' "${age_env}" || fail "ensure_age_key_or_die overwrote an existing key"
+
+# A working mint persists the key it got.
+: > "${age_env}"
+MINT_MODE=ok
+ensure_age_key_or_die "${age_env}" >/dev/null 2>&1 \
+  || fail "ensure_age_key_or_die refused a successful mint"
+[ "$(env_get "${age_env}" WARDYN_AGE_KEY)" = "AGE-SECRET-KEY-1TESTONLYQPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L" ] \
+  || fail "a successful mint was not persisted to .env"
+
+# THE regression: a mint that yields no key must stop the stack, not warn it on.
+for mode in silent boom; do
+  : > "${age_env}"
+  MINT_MODE="${mode}"
+  out="$( ( ensure_age_key_or_die "${age_env}" ) 2>&1 )" && st=0 || st=$?
+  [ "${st}" != 0 ] || fail "a failed age-key mint (${mode}) returned SUCCESS — up.sh would boot the stack with an ephemeral key: ${out}"
+  case "${out}" in
+    *"fine for now"*) fail "the failed-mint message (${mode}) still reassures with 'fine for now': ${out}" ;;
+  esac
+  case "${out}" in
+    *"crash-loops on its SECOND start"*) ;;
+    *) fail "the failed-mint message (${mode}) does not state the real consequence (an unbootable daemon, not lost secrets): ${out}" ;;
+  esac
+  case "${out}" in
+    *"WARDYN_AGE_KEY=AGE-SECRET-KEY-"*) ;;
+    *) fail "the failed-mint message (${mode}) names no way out: ${out}" ;;
+  esac
+  [ -z "$(env_get "${age_env}" WARDYN_AGE_KEY)" ] || fail "a failed mint wrote a WARDYN_AGE_KEY anyway (${mode})"
+done
+# ...and the daemon's own error text survives into the refusal, so "no such
+# image" is distinguishable from "the daemon went away". 2>/dev/null used to
+# discard it and the warning asserted ONE cause ("may predate the flag").
+MINT_MODE=boom
+: > "${age_env}"
+out="$( ( ensure_age_key_or_die "${age_env}" ) 2>&1 )" || true
+case "${out}" in
+  *"pull access denied"*) ;;
+  *) fail "the refusal swallowed the mint's own error, so the operator cannot tell WHY it failed: ${out}" ;;
+esac
+unset -f docker
+
+# 5b) F012 — WARDYN_LOCAL_MODE=true alongside a configured WARDYN_OIDC_ISSUER is
+# the one pair resolveLocalMode (cmd/wardynd/boot_flags.go) REFUSES to boot on.
+# up.sh used to warn that local mode "bypasses SSO entirely (no login required)"
+# — the opposite of what happens — and then spend a full build+boot cycle to die
+# on a generic "wardynd did not become healthy".
+lm_env="${dir}/.env-lm"
+
+printf 'WARDYN_LOCAL_MODE=true\nWARDYN_OIDC_ISSUER=https://idp.example.com\n' > "${lm_env}"
+out="$( ( refuse_local_mode_with_oidc "${lm_env}" ) 2>&1 )" && st=0 || st=$?
+[ "${st}" != 0 ] || fail "up.sh proceeds on WARDYN_LOCAL_MODE=true + WARDYN_OIDC_ISSUER — wardynd refuses to boot on exactly that pair"
+case "${out}" in
+  *"bypasses SSO entirely"*) fail "the refusal still repeats the stale 'bypasses SSO entirely' model: ${out}" ;;
+esac
+case "${out}" in
+  *WARDYN_LOCAL_MODE=false*) ;;
+  *) fail "the refusal does not name the keep-SSO remedy: ${out}" ;;
+esac
+case "${out}" in
+  *WARDYN_OIDC_ISSUER*) ;;
+  *) fail "the refusal does not name the keep-no-auth remedy: ${out}" ;;
+esac
+# deploy/compose/docker-compose.yaml's wardynd service does not forward
+# WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC, so offering it here as a settable remedy
+# would send the operator to a variable this path ignores. If the compose file
+# ever forwards it, THIS is the assertion to change.
+grep -q 'WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC' "${REPO_ROOT}/deploy/compose/docker-compose.yaml" \
+  && fail "docker-compose.yaml now forwards WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC — up.sh's refusal says it does not, and should now offer it as a real override"
+case "${out}" in
+  *"does not"*"forward it"*) ;;
+  *) fail "the refusal names no override caveat — an operator will try WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC in .env and get no effect: ${out}" ;;
+esac
+
+# Neither half alone is the refused pair: a local-mode box with no issuer, and
+# an SSO box with local mode off, must both pass straight through.
+printf 'WARDYN_LOCAL_MODE=true\nWARDYN_OIDC_ISSUER=\n' > "${lm_env}"
+refuse_local_mode_with_oidc "${lm_env}" >/dev/null 2>&1 \
+  || fail "refused a plain local-mode .env with no OIDC issuer — that is the default compose posture"
+printf 'WARDYN_LOCAL_MODE=false\nWARDYN_OIDC_ISSUER=https://idp.example.com\n' > "${lm_env}"
+refuse_local_mode_with_oidc "${lm_env}" >/dev/null 2>&1 \
+  || fail "refused a correctly-configured SSO .env (local mode off)"
+
 
 # 6) wardyn_cli_prefix: no bin/wardyn extracted -> bare "wardyn" fallback.
 got="$(wardyn_cli_prefix "${dir}")"

@@ -11,7 +11,7 @@
   "auto_stop_after_sec": 3600,
   "ui_apps": [
     {
-      "name": "code",
+      "name": "vscode",
       "port": 8080
     }
   ]

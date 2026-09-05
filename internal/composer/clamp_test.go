@@ -741,16 +741,31 @@ func TestClamp_AutoStopAfterSec(t *testing.T) {
 	if hasWarn(warns, "auto_stop_after_sec") {
 		t.Errorf("unexpected auto_stop_after_sec warning with no ceiling opinion: %v", warns)
 	}
-	// W14-S1-3: -1 (never reap) is the single most permissive value there is —
-	// a proposal may not opt OUT of the reaper just because the ceiling
-	// itself opines nothing. Clamped to 0 (the platform default), not left
-	// alone.
-	got, warns = Clamp(types.RunPolicySpec{AutoStopAfterSec: -1}, operatorCeiling(t))
-	if got.AutoStopAfterSec != 0 {
-		t.Errorf("auto_stop_after_sec = %d, want 0 (never-reap must not survive an unopinionated ceiling)", got.AutoStopAfterSec)
-	}
-	if !hasWarn(warns, "auto_stop_after_sec") {
-		t.Errorf("expected an auto_stop_after_sec warning clamping never-reap, got %v", warns)
+	// F062, replacing the W14-S1-3 assertion that used to stand here. That one
+	// pinned "-1 is rewritten to 0, with a warning" — a rewrite that changed the
+	// NUMBER and not the OUTCOME: internal/lifecycle's reaper skips every run
+	// whose policy value is <= 0, so 0 and -1 are the same never-reaped run. It
+	// also contradicted the value's documented meaning (docs/POLICIES.md's
+	// auto_stop_after_sec row; the console's field help calls -1 "never reaped,
+	// stated explicitly — identical behavior to leaving it out"), so a member who
+	// wrote their intent down got a warning and a member who omitted the field
+	// did not.
+	//
+	// This asserts STRICTLY MORE than it replaced: the value is preserved, there
+	// is no warning, AND the outcome invariant the old branch was reaching for is
+	// stated directly — under a ceiling with no positive maximum, neither an
+	// omitted nor a negative auto_stop leaves the run reapable.
+	for _, proposed := range []int{-1, 0} {
+		got, warns = Clamp(types.RunPolicySpec{AutoStopAfterSec: proposed}, operatorCeiling(t))
+		if got.AutoStopAfterSec != proposed {
+			t.Errorf("auto_stop_after_sec = %d, want %d preserved — a ceiling with no positive maximum has no opinion to enforce", got.AutoStopAfterSec, proposed)
+		}
+		if got.AutoStopAfterSec > 0 {
+			t.Errorf("auto_stop_after_sec = %d: the clamp turned a never-reaped run into a reapable one", got.AutoStopAfterSec)
+		}
+		if hasWarn(warns, "auto_stop_after_sec") {
+			t.Errorf("proposed %d produced an auto_stop_after_sec warning with nothing clamped: %v", proposed, warns)
+		}
 	}
 }
 

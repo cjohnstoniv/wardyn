@@ -836,7 +836,7 @@ func ValidateUserDrive(d *UserDrive, runnerTarget string) error {
 	// reveals nothing, so nothing is lost: a managed volume's name is not a thing
 	// a human navigates, which is precisely what a share backend is for — and
 	// share backends keep every template.
-	if d.Backend.Kind() == DriveKindManaged && d.HomeTemplate != "" && d.HomeTemplate != HomeTemplateHash {
+	if ManagedBackendRejectsTemplate(d.Backend, d.HomeTemplate) {
 		return fmt.Errorf("home_template %q is not allowed on a managed backend — Wardyn names the object after the "+
 			"directory, so the template lands in a %s object name that `docker volume ls` and `kubectl get pvc` show "+
 			"without inspecting anything; %s also collides two people whose addresses share the part before the \"@\". "+
@@ -956,4 +956,22 @@ func ValidateUserDriveGrant(g *UserDriveGrant) error {
 // looser. Same expression, same stance as internal/api's controlCharFree.
 func driveTextIsClean(s string) bool {
 	return !strings.ContainsFunc(s, unicode.IsControl)
+}
+
+// ManagedBackendRejectsTemplate is THE managed-backend home-template rule: a
+// managed object is NAMED by the home segment (DriveObjectName ->
+// `wardyn-drive-<home>`), and an object name is printed by `docker volume ls`
+// and `kubectl get pvc` without the inspect or describe a label needs — so on a
+// managed backend only `hash`, which is unique and reveals nothing, may name
+// one. A share backend keeps every template.
+//
+// It is a function, and exported, because the rule has TWO enforcement points
+// and they had drifted apart. The write boundary (Validate, above) was widened
+// from `email_local` to every non-hash template; the RUN-TIME resolver
+// (newResolvedDrive) was not, so a legacy or hand-written `sub` row was refused
+// at authoring and still mounted — putting the sign-in subject in the object
+// name, which is the exposure the widening exists to prevent. One predicate, so
+// a third site cannot diverge again.
+func ManagedBackendRejectsTemplate(backend DriveBackend, tmpl HomeTemplate) bool {
+	return backend.Kind() == DriveKindManaged && tmpl != "" && tmpl != HomeTemplateHash
 }

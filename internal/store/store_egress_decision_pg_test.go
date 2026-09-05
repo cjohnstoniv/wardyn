@@ -351,4 +351,28 @@ func TestPG_EgressEditedAtMarksOnlyTheOperatorsListEdits(t *testing.T) {
 	if got.EgressEditedAt == nil || !got.EgressEditedAt.Equal(*denied.EgressEditedAt) {
 		t.Errorf("GetWorkspace returned egress_edited_at %v, want the written %v", got.EgressEditedAt, denied.EgressEditedAt)
 	}
+
+	// UpdateWorkspace is the THIRD durable writer of approved_egress
+	// (handleUpdateWorkspace clears the list on a composition change). It must
+	// CARRY the field: omitting the column from its SET clause meant that clear
+	// left the stamp wherever the last scoped setter put it, and the boot heal
+	// re-applied every `always` approval onto the emptied list. It must not
+	// STAMP it either (0055) — an unrelated edit restates what it read.
+	got.EgressEditedAt = nil
+	cleared, err := pg.UpdateWorkspace(ctx, ws.ID, got)
+	if err != nil {
+		t.Fatalf("UpdateWorkspace (clearing the stamp): %v", err)
+	}
+	if cleared.EgressEditedAt != nil {
+		t.Errorf("UpdateWorkspace ignored the caller's nil egress_edited_at (%v) — it must persist what the handler decided, not what the row already held", cleared.EgressEditedAt)
+	}
+	stamp := time.Now().UTC().Truncate(time.Microsecond)
+	cleared.EgressEditedAt = &stamp
+	stamped, err := pg.UpdateWorkspace(ctx, ws.ID, cleared)
+	if err != nil {
+		t.Fatalf("UpdateWorkspace (stamping the composition edit): %v", err)
+	}
+	if stamped.EgressEditedAt == nil || !stamped.EgressEditedAt.Truncate(time.Microsecond).Equal(stamp) {
+		t.Errorf("UpdateWorkspace persisted egress_edited_at %v, want %v — without this column in its SET clause a composition edit clears approved_egress and the next boot re-widens it", stamped.EgressEditedAt, stamp)
+	}
 }

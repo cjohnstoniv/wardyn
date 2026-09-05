@@ -48,8 +48,16 @@ func runnerCheck(rnr SetupRunner) SetupCheck {
 		// DOCKER host — meaningless advice on a k8s runner, where the lever is
 		// pinning a cluster-registered RuntimeClass via Helm (README.md's
 		// k8s.runtimeClasses.CC2/.CC3), not a command wardynd's own host runs.
+		//
+		// R5 F236/ADV3-05: that Helm command has to be RUNNABLE, and it wasn't.
+		// `helm upgrade --set …` exits "requires 2 arguments" — no release, no
+		// chart — and the shape it teaches (a bare --set, no -f) is the one
+		// docs/OPERATIONS.md documents as resetting every OTHER value to chart
+		// defaults, dropping exactly the values a Wardyn install cannot run
+		// without. Name the release and chart, and re-pass the values file.
+		// TestSetupFixHelmCommandsAreRunnable is the guard.
 		if rnr.Driver == "k8s" {
-			fix = "Unlock the Wall or Vault tier: register a gVisor (or Kata) RuntimeClass in the cluster, then pin it with `helm upgrade --set k8s.runtimeClasses.CC2=<name>` (or `.CC3=<name>`)."
+			fix = "Unlock the Wall or Vault tier: register a gVisor (or Kata) RuntimeClass in the cluster, then pin it with `helm -n <namespace> upgrade <release> ./deploy/helm/wardyn -f your-values.yaml --set k8s.runtimeClasses.CC2=<name>` (or `.CC3=<name>`). Re-pass your values file — a bare `--set` resets every other value to the chart's defaults."
 		}
 		return SetupCheck{
 			ID: "runner", Label: "Sandbox runner", Status: "info",
@@ -86,8 +94,10 @@ func confinementFloorCheck(rnr SetupRunner, floor types.ConfinementClass) (Setup
 	fix := fmt.Sprintf(
 		"Lower the floor to a class this runner advertises (%s) — set WARDYN_DEFAULT_POLICY (or the Helm chart's defaultPolicy) to a policy JSON with that min_confinement_class; examples/policies/demo.json is a CC1 reference.",
 		advertised)
+	// Same R5 F236/ADV3-05 shape as runnerCheck's: release, chart, and the
+	// values file re-passed, or the pin lands as the only value the release has.
 	if rnr.Driver == "k8s" {
-		fix += fmt.Sprintf(" Or register the floor's RuntimeClass in the cluster and pin it: helm upgrade --set k8s.runtimeClasses.%s=<name>.", floor)
+		fix += fmt.Sprintf(" Or register the floor's RuntimeClass in the cluster and pin it: helm -n <namespace> upgrade <release> ./deploy/helm/wardyn -f your-values.yaml --set k8s.runtimeClasses.%s=<name> (pass your values file — a bare --set resets everything else to chart defaults).", floor)
 	}
 	return SetupCheck{
 		ID: "confinement_floor", Label: "Confinement floor", Status: "warn",
@@ -236,6 +246,17 @@ func bedrockProviderCheck(bedrock SetupBedrock) (SetupCheck, bool) {
 
 // ageKeyCheck warns when the secret store's age key is EPHEMERAL: stored secrets
 // become unreadable after a restart.
+//
+// R5 F159/F190: the Fix used to offer `helm: env.WARDYN_AGE_KEY` as the cluster
+// answer, which renders the secret store's MASTER key as a plaintext literal in
+// the Deployment object — readable by anything with `get deploy`, and captured
+// in every `helm get manifest`. The chart has two Secret-backed doors
+// (secrets.ageKeyFromSecret over the postgres.dsn.secretRef Secret's `age-key`
+// entry, or secrets.ageKeySecretRef.name for a separate one) and refuses a
+// render naming more than one, so the advice names them as an either/or in the
+// chart's own order. The host answer (-age-key, or the env var on a bare binary
+// with no Deployment to leak into) stays: it is what compose and install.sh
+// already write.
 func ageKeyCheck(durable bool) SetupCheck {
 	if durable {
 		return SetupCheck{
@@ -246,7 +267,10 @@ func ageKeyCheck(durable bool) SetupCheck {
 	return SetupCheck{
 		ID: "age_key", Label: "Secret store durability", Status: "warn",
 		Detail: "The secret store uses an EPHEMERAL age key generated at boot; stored secrets (API keys, GitHub App credentials) become unreadable after a restart.",
-		Fix:    "Generate a durable key with `wardynd -gen-age-key` and set it as WARDYN_AGE_KEY (helm: env.WARDYN_AGE_KEY; or -age-key).",
+		Fix: "Generate a durable key with `wardynd -gen-age-key`, then wire it as WARDYN_AGE_KEY: " +
+			"on a host, -age-key or the env var; " +
+			"on Helm, keep it in a Secret — secrets.ageKeyFromSecret=true (an `age-key` entry in the Secret postgres.dsn.secretRef names) or secrets.ageKeySecretRef.name for a separate one. " +
+			"Not env.WARDYN_AGE_KEY — that renders the master key as a plaintext literal in the Deployment.",
 	}
 }
 

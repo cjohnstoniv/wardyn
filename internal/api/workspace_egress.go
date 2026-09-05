@@ -289,7 +289,14 @@ func workspaceSuggestedEgress(workspaces []types.Workspace) []string {
 // reads ws.DeniedEgress directly off the raw column for the deny side, since
 // there is no per-source deny CONTRACT to fold the way the required-egress
 // loop below folds allows.
-func confinedEgressDomains(ws types.Workspace) []string {
+//
+// A METHOD, not a package function, for one reason: the operator_set
+// provenance gate lives on s.cfg and this path MUST apply it. It was a package
+// func through 0.7's flip of RequireOperatorSetEgress, so the gate reached the
+// run-create path only and a scan_seeded egress host — derived by the scanner
+// from UNTRUSTED repo content — was still auto-allowed on every confined
+// replay. Both paths now route through egressProvenanceAllowed.
+func (s *Server) confinedEgressDomains(ws types.Workspace) []string {
 	base := &types.RunPolicySpec{AllowedDomains: workspaceCloneEgress(ws)}
 	unionWorkspaceEgress(base, []types.Workspace{ws})
 	// The verify loop's approvals land as REQUIRED egress: rows in the folded
@@ -301,11 +308,36 @@ func confinedEgressDomains(ws types.Workspace) []string {
 		if req.Level != "required" {
 			continue
 		}
+		// Same trust boundary as the launch path (applyWorkspaceRequirements):
+		// a scan_seeded row is repo content, not an operator's act.
+		if !s.egressProvenanceAllowed(req) {
+			continue
+		}
 		if typ, host, ok := types.SplitRequirementKey(key); ok && typ == "egress" {
 			unionAllowedDomains(base, []string{host})
 		}
 	}
 	return base.AllowedDomains
+}
+
+// egressProvenanceAllowed is THE decision point for the operator_set
+// egress-provenance gate (RequireOperatorSetEgress,
+// WARDYN_REQUIRE_OPERATOR_SET_EGRESS — default TRUE since 0.7): may this
+// workspace requirement row auto-widen a run's egress allowlist without an
+// operator ever acting?
+//
+// Every path that folds a workspace's egress: requirement rows into a run
+// policy calls this and nothing else. It exists because the gate was
+// originally written inline at the run-create call site, which left the
+// confined-replay path (confinedEgressDomains, above) unioning every required
+// row regardless of provenance — the same host the launch path refused, allowed
+// on the replay. A shared predicate is what makes "both paths" checkable.
+//
+// It answers only the PROVENANCE question. Whether a row is enabled at all
+// (required, or an optional row the operator selected) stays with each caller:
+// a replay has no enabled-optional wire, a launch does.
+func (s *Server) egressProvenanceAllowed(req types.WorkspaceRequirement) bool {
+	return !s.cfg.RequireOperatorSetEgress || req.Provenance == "operator_set"
 }
 
 // workspaceCloneEgress is the clone-host allowlist for EVERY repo source a

@@ -53,6 +53,13 @@ type Store interface {
 	CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Workspace, error)
 	GetWorkspace(ctx context.Context, id uuid.UUID) (types.Workspace, error)
 	ListWorkspaces(ctx context.Context) ([]types.Workspace, error)
+	// UpdateWorkspace writes the full column set, CARRYING ws.EgressEditedAt
+	// rather than stamping it: this is the third durable writer of
+	// approved_egress (handleUpdateWorkspace clears the list when the
+	// composition changes) and an implementation that drops the column lets
+	// ReconcileWorkspaceEgressDecisions re-widen a list the operator just
+	// cleared. Callers round-trip a fetched row, so leaving the field alone
+	// rewrites what was read.
 	UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspace) (types.Workspace, error)
 	// SetWorkspaceApprovedEgress replaces the operator-owned approved-egress
 	// list and stamps Workspace.EgressEditedAt: this PUT is the documented undo

@@ -4,6 +4,8 @@ Wardyn is Apache-2.0. This file lists the third-party components distributed
 with it and the licences they are distributed under. Verbatim licence texts are
 in `licenses/texts/`. Regenerate with `make notices ARGS=fix`; CI fails on drift.
 
+The licence cell is go-licenses' single-id classification of each module's LICENSE file; where a module is distributed under more than one licence, licenses/texts/ carries the authoritative verbatim text.
+
 ## Go modules (compiled into the shipped binaries)
 
 Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.

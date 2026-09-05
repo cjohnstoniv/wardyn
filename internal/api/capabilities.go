@@ -467,6 +467,13 @@ type capBatch struct {
 
 	loaded bool
 	grants []types.CapabilityGrant
+	// byKind indexes grants by capability, built ONCE in load(). allowed() used
+	// to walk the caller's WHOLE grant set per value, `continue`-ing past every
+	// row of another kind — so a spec asking about N egress hosts paid
+	// O(N x every grant the caller holds) inside one handler, on a path any
+	// authenticated member reaches (POST /runs/preflight). The store round trips
+	// were fixed; the CPU was not.
+	byKind map[string][]types.CapabilityGrant
 	enf    map[string]bool
 
 	// groupDeny memoizes ListGroupDenyGrants PER KIND — the narrow read, not the
@@ -501,6 +508,10 @@ func (b *capBatch) load(ctx context.Context) error {
 		return fmt.Errorf("api: read capability enforcement: %w", err)
 	}
 	b.grants, b.enf, b.loaded = grants, enf, true
+	b.byKind = make(map[string][]types.CapabilityGrant, len(capabilityKinds))
+	for _, g := range grants {
+		b.byKind[g.Capability] = append(b.byKind[g.Capability], g)
+	}
 	return nil
 }
 
@@ -519,10 +530,10 @@ func (b *capBatch) allowed(ctx context.Context, kind, value string) (bool, error
 		return false, err
 	}
 	allow := false
-	for _, g := range b.grants {
-		if g.Capability != kind {
-			continue
-		}
+	// The kind's OWN rows, not every row the caller holds — same order, same
+	// rules, same answer (a grant of another kind could only ever be skipped).
+	for _, g := range b.byKind[kind] {
+		b.s.capRowsScanned.Add(1)
 		if g.Effect == types.CapabilityDeny {
 			if capValueOverlaps(kind, g.Value, value) {
 				return false, nil // deny is final

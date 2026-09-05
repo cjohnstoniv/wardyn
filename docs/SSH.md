@@ -224,9 +224,12 @@ RUNNING. Four commands, each doing one part:
 
 ```sh
 wardyn ssh-key ensure                                    # once per machine
-wardyn run --agent claude-code --interactive --json \ \
-  --description "external:<tool>"   # the run page then says it is tool-managed
-  --policy-file examples/policies/remote-workspace.yaml  # -> prints the run, including its id
+
+# --description "external:<tool>" is what makes the run page say tool-managed.
+# This command prints the run, including its id.
+wardyn run --agent claude-code --interactive --json \
+  --description "external:<tool>" \
+  --policy-file examples/policies/remote-workspace.yaml
 wardyn run wait-ready <id> --json                        # -> {"workspace":{"vcs":"git","path":"..."}}
 wardyn ssh <id> --json                                   # -> {"host","port","username","host_key_fingerprint","command"}
 ```

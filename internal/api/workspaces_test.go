@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -282,6 +283,51 @@ func TestUpdateWorkspace_ContentChangeClearsEveryReviewedField(t *testing.T) {
 	if got.ImageRef != "" || got.BuiltProfileHash != "" || got.ApprovedEgress != nil ||
 		got.Requirements != nil || got.RecordResults != nil {
 		t.Errorf("source change must clear every field reviewed against the old source; got %+v", got)
+	}
+	// The clear must be STAMPED, or the boot heal undoes it — see
+	// TestUpdateWorkspace_ContentChangeStampsTheEgressEdit below.
+	if got.EgressEditedAt == nil {
+		t.Error("source change cleared ApprovedEgress without stamping EgressEditedAt")
+	}
+}
+
+// TestUpdateWorkspace_ContentChangeStampsTheEgressEdit is the regression for
+// the third writer migration 0055 did not know about. The migration names the
+// two scoped setters as the only stampers of egress_edited_at; this handler is
+// also a durable writer of approved_egress — it CLEARS the list when the
+// composition changes — and it left the stamp alone. Since egress_edited_at is
+// ReconcileWorkspaceEgressDecisions's ONLY newer-action guard, an `always`
+// approval decided before the edit still read APPROVED/always at the next boot
+// and the heal put the host straight back, with an audit event saying
+// "success": a durable, fail-OPEN re-widening of a list the operator had just
+// emptied by changing what the workspace is.
+//
+// Asserted as "newer than the pre-edit stamp", not merely non-nil: a workspace
+// whose lists were last touched by an earlier approval PUT already carries one,
+// and only a stamp that moves past the decision suppresses the heal.
+func TestUpdateWorkspace_ContentChangeStampsTheEgressEdit(t *testing.T) {
+	h := newHarness(t)
+	id := uuid.New()
+	before := time.Now().UTC().Add(-time.Hour)
+	fake := &workspaceStoreFake{ws: types.Workspace{
+		ID: id, Name: "w",
+		Sources:        []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/home/u/old"}},
+		Status:         types.WorkspaceScanned,
+		ApprovedEgress: []string{"example.com"},
+		EgressEditedAt: &before,
+	}}
+	srv := New(baseTestConfig(h, fake))
+	w := do(t, srv, http.MethodPut, "/api/v1/workspaces/"+id.String(), adminToken,
+		`{"name":"w","kind":"local_dir","source":"/home/u/new"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	got := fake.updated
+	if got.ApprovedEgress != nil {
+		t.Fatalf("precondition: the source change must clear ApprovedEgress, got %v", got.ApprovedEgress)
+	}
+	if got.EgressEditedAt == nil || !got.EgressEditedAt.After(before) {
+		t.Errorf("EgressEditedAt = %v, want a stamp newer than the pre-edit %v — without it the boot heal re-applies every `always` approval onto the list this edit just cleared", got.EgressEditedAt, before)
 	}
 }
 

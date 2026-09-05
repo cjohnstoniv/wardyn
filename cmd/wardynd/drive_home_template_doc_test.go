@@ -127,3 +127,49 @@ func managedTemplateVerdicts(t *testing.T) (accepted, refused []types.HomeTempla
 	}
 	return accepted, refused
 }
+
+// TestManagedDriveLabelDocSaysTheRuleWidened pins the OTHER managed-drive
+// passage in docs/OPERATIONS.md — the `docker_volume` restore recipe's
+// `wardyn.subject` explanation — to the same widened rule.
+//
+// That passage justifies the `wardyn.subject` label with "one drive whose home
+// template folded two people onto one directory", which was written when the
+// managed refusal covered `email_local` alone. It now covers every non-`hash`
+// template at BOTH enforcement points (types.ManagedBackendRejectsTemplate), so
+// a folded home cannot be authored on a managed drive at all today — the label
+// discriminates rows from before the widening, and an operator reading the old
+// text would reasonably conclude the collision is a live configuration choice
+// they have to reason about.
+//
+// It ASKS the rule rather than restating it: if a future change lets a managed
+// backend take `sub` again, this expectation changes with it.
+func TestManagedDriveLabelDocSaysTheRuleWidened(t *testing.T) {
+	if !types.ManagedBackendRejectsTemplate(types.DriveBackendDockerVolume, types.HomeTemplateSub) {
+		t.Fatal("a managed docker_volume now ACCEPTS `sub` — the widening this guard documents is gone, so re-derive the passage instead of deleting the guard")
+	}
+
+	root := repoRoot(t)
+	b, err := os.ReadFile(filepath.Join(root, "docs", "OPERATIONS.md"))
+	if err != nil {
+		t.Fatalf("read docs/OPERATIONS.md: %v", err)
+	}
+	doc := string(b)
+
+	// The label passage, bounded by the next backend heading so the share
+	// paragraphs (which legitimately recommend `sub`) stay out of the window.
+	start := strings.Index(doc, "`wardyn.subject`")
+	if start < 0 {
+		t.Fatal("docs/OPERATIONS.md no longer explains the `wardyn.subject` label — re-anchor this guard")
+	}
+	end := strings.Index(doc[start:], "**`host_path`")
+	if end < 0 {
+		t.Fatal("docs/OPERATIONS.md's docker_volume section is no longer followed by the host_path one — re-anchor this guard")
+	}
+	window := strings.Join(strings.Fields(doc[start:start+end]), " ")
+
+	for _, want := range []string{"ManagedBackendRejectsTemplate", "`sub`"} {
+		if !strings.Contains(window, want) {
+			t.Errorf("docs/OPERATIONS.md's `wardyn.subject` passage never mentions %s — it explains a home-template collision that a managed drive can no longer be configured into, without saying so", want)
+		}
+	}
+}

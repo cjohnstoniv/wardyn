@@ -86,7 +86,7 @@ func secretCmd(client clientFn) *cobra.Command {
 	}
 
 	cmd.AddCommand(set, list, del)
-	return cmd
+	return subcommandGroup(cmd)
 }
 
 // readSecretValue reads an entire secret value from r. Secrets are frequently

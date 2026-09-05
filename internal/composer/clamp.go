@@ -92,7 +92,10 @@ func EffectiveConfinementFloor(policyMin, floor, cap types.ConfinementClass) typ
 //     exactly like an explicit value that exceeds the ceiling;
 //   - auto_stop_after_sec capped at the ceiling's maximum when the ceiling sets
 //     one — 0 (platform default) and negative (never reap) both rank as MORE
-//     permissive than a real cap and are capped down too;
+//     permissive than a real cap and are capped down too. A ceiling with NO
+//     positive maximum leaves the field untouched: 0 and negative are the same
+//     run to internal/lifecycle's reaper (it skips every value <= 0), so a run
+//     under such a ceiling is never idle-reaped whichever one it carries;
 //   - grants of a kind the ceiling does not list are dropped; github permissions
 //     intersected down to the ceiling's github permissions; TTL capped; and
 //     requires_approval forced on when the ceiling requires it;
@@ -276,17 +279,20 @@ func Clamp(proposed, ceiling types.RunPolicySpec) (types.RunPolicySpec, []string
 	// ceiling) and a negative value (never reap — the MOST permissive: a
 	// compromised/runaway agent lives forever) both rank as more permissive than
 	// an explicit cap and are capped down exactly like an excessive positive one.
+	//
+	// AND NOTHING WHEN THE CEILING SETS NO POSITIVE MAXIMUM. A branch here used
+	// to rewrite a negative proposal to 0 and warn about it; it changed the
+	// number without changing the outcome, because internal/lifecycle's reaper
+	// skips every run whose policy value is <= 0 — 0 and -1 are the same run,
+	// never idle-reaped. It also contradicted the value's documented meaning
+	// (docs/POLICIES.md's auto_stop_after_sec row, and the console's field help:
+	// "-1 = never reaped, stated explicitly — identical behavior to leaving it
+	// out, written down as intent"), so a member who wrote their intent down was
+	// warned for it and a member who omitted the field was not. A ceiling that
+	// wants runs reaped states a positive maximum, which the branch above binds.
 	if ceiling.AutoStopAfterSec > 0 && (out.AutoStopAfterSec <= 0 || out.AutoStopAfterSec > ceiling.AutoStopAfterSec) {
 		warns = append(warns, fmt.Sprintf("auto_stop_after_sec capped to operator maximum %ds", ceiling.AutoStopAfterSec))
 		out.AutoStopAfterSec = ceiling.AutoStopAfterSec
-	} else if ceiling.AutoStopAfterSec <= 0 && out.AutoStopAfterSec < 0 {
-		// W14-S1-3: the ceiling sets no real cap, but a proposal choosing a
-		// NEGATIVE auto_stop is asking for "never reap" — the single most
-		// permissive value there is, strictly worse than simply inheriting
-		// the platform default (0, filled in later). A member/proposal may
-		// not opt a run OUT of the reaper entirely; clamp to 0.
-		warns = append(warns, "auto_stop_after_sec: negative (never reap) is not allowed; reset to the platform default")
-		out.AutoStopAfterSec = 0
 	}
 
 	// Workspace mounts: NEVER composer-introduced. Operators author mounts on a

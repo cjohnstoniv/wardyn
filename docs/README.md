@@ -27,7 +27,8 @@ wizard — with its built-in demo steps — is the first-run path. Everything he
 | Understand the design, or contribute | [../ARCHITECTURE.md](../ARCHITECTURE.md), [../CONTRIBUTING.md](../CONTRIBUTING.md) |
 | Answer a vendor security questionnaire — what leaves the box, what never does | [DATA-FLOW.md](DATA-FLOW.md) |
 | Verify a release artifact (cosign signatures, SBOM attestations) | [VERIFY.md](VERIFY.md) |
-| Export or erase a run's data (GDPR-shaped requests) | [EXPORT.md](EXPORT.md) |
+| Answer a data-subject request — what Wardyn retains, and why there is no selective erasure | [OPERATIONS.md](OPERATIONS.md#retention-erasure-and-gdpr--a-residual-not-a-solved-problem) |
+| State an export-control classification (ECCN, EAR) for a procurement form | [EXPORT.md](EXPORT.md) |
 | Look up an audit action's meaning and emit site | [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md) |
 | Record or re-record the demo video series | [DEMO-SCRIPT.md](DEMO-SCRIPT.md) |
 | Reason about agent risk in general — shared terminology and threat categories | [../threatmodel/AGENT-THREAT-MODEL.md](../threatmodel/AGENT-THREAT-MODEL.md) |

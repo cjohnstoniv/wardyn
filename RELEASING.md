@@ -77,10 +77,16 @@ before step 3.
    chart-publish job now REFUSES to push if `version:` does not equal the tag,
    since `helm install --version` would otherwise resolve to a different chart
    than the release being cut), and
-   `ui/package.json` (`"version"`), and **the pinned `install.sh` release-asset
+   `ui/package.json` (`"version"`), **the pinned `install.sh` release-asset
    URL in `README.md` and in `install.sh`'s own header comment** — those two
    point at the cosign-signed copy rather than tip-of-`main`, so a missed bump
-   hands new users the previous release's installer.
+   hands new users the previous release's installer — and **the pinned wardyn
+   checkout in `docs/ci/github-actions.yml` (`ref:`) and
+   `docs/ci/azure-pipelines.yml` (`--branch`)**, which exist so a pasted
+   pipeline does not execute tip-of-default-branch shell in a secret-bearing
+   job (docs/CI.md "Pin the wardyn checkout").
+   `scripts/test-claims-match-code.sh` fails if either pin drifts from
+   `internal/version/version.go`.
    `scripts/test-install-sh.sh` asserts the two agree with each other, but it
    cannot know the tag you are cutting. `cmd/wardyn/version_test.go`'s
    `TestVersionMatchesChangelog`/`TestShippedVersionStringsAgree` enforce that
@@ -124,7 +130,8 @@ before step 3.
    and sign: per published digest it attests a CycloneDX SBOM scanned from the
    **pushed image** (not the source tree, which sees no OS packages) and a build
    provenance statement, then a `release-assets` job uploads those SBOMs,
-   `THIRD-PARTY-NOTICES.md`, `LICENSE`, `NOTICE` and a cosign-signed `SHA256SUMS`
+   `THIRD-PARTY-NOTICES.md`, `LICENSE`, `NOTICE`, `install.sh`, the four
+   `wardyn-<os>-<arch>` CLI binaries and a cosign-signed `SHA256SUMS`
    to the Release — creating a draft Release first if you have not cut one yet —
    and **fails if any of them did not land**. So the supply-chain assets are no
    longer yours to remember; the demo videos in step 7 still are.
@@ -243,8 +250,14 @@ the other:
 
 - **Continuous (every push to `main`).**
   `.github/workflows/publish-image.yml` builds and pushes `wardynd` only, to
-  `ghcr.io/cjohnstoniv/wardynd` (`:latest`, `:sha-<commit>`). Unsigned. The
-  compose stack still always builds from source (see [docs/CI.md](docs/CI.md)).
+  `ghcr.io/cjohnstoniv/wardynd` (`:latest`, `:sha-<commit>`). **Signed
+  (keyless, by digest) but not SBOM- or provenance-attested**, and under the
+  `publish-image.yml@refs/heads/main` certificate identity — not the
+  `release.yml@refs/tags/v.*` one every command in `docs/VERIFY.md` pins, so
+  that page's recipes structurally cannot verify these tags. See
+  [docs/VERIFY.md](docs/VERIFY.md) "The continuous lane" for the regexp that
+  can. The compose stack still always builds from source (see
+  [docs/CI.md](docs/CI.md)).
 - **Release (every `vX.Y.Z` tag).** `.github/workflows/release.yml` builds and
   pushes all FIVE images a release ships —
   `ghcr.io/cjohnstoniv/wardynd` (built with both runner substrates,
@@ -255,9 +268,12 @@ the other:
   `appVersion`) and **cosign-signed (keyless)** by digest. Step 5's tag push
   is what triggers it. It also attests a per-digest CycloneDX SBOM and build
   provenance, publishes the Helm chart to `oci://ghcr.io/cjohnstoniv/charts`,
-  and uploads the SBOMs, notices and a cosign-signed `SHA256SUMS` to the Release
-  — failing if any asset did not land. The supply-chain artifacts are no longer
-  yours to remember; the demo videos in step 7 still are.
+  and uploads the SBOMs, notices, `install.sh`, the four `wardyn-<os>-<arch>`
+  CLI binaries and a cosign-signed `SHA256SUMS` to the Release
+  — failing if any asset did not land (the required set is the `for want in …`
+  list in `release.yml`'s "Assert every required asset actually landed").
+  The supply-chain artifacts are no longer yours to remember; the demo videos
+  in step 7 still are.
   Each is a **multi-arch index** covering `linux/amd64` and `linux/arm64`
   (arm64 laptops are the desktop tier's ordinary hardware — see
   [docs/DESKTOP.md](docs/DESKTOP.md)). Images are **not** digest-pinned

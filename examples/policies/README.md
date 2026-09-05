@@ -51,8 +51,11 @@ editor, or that tool's own agent working between calls that touch the sandbox
 at all — both would otherwise read as idle. `first_use_approval:
 wait_for_review` holds an unknown-host connection for a live decision instead
 of denying it outright, on the premise that someone is already at the
-keyboard to decide. turns off Wardyn's own push branch-namespace check for this run (each such push is audited as `brokered:git:branch-ns-off`); the grant's GitHub ruleset still bounds what the token may touch.md](../../docs/POLICIES.md)'s "Bound the token itself" for what
-still bounds the token when this is on.
+keyboard to decide. `git_push_any_branch: true` turns off Wardyn's own push
+branch-namespace check for this run (each such push is audited as
+`brokered:git:branch-ns-off`); the grant's GitHub ruleset still bounds what the
+token may touch — see [docs/POLICIES.md](../../docs/POLICIES.md)'s "Bound the
+token itself" for what still bounds the token when this is on.
 
 ## default.json
 
@@ -129,7 +132,8 @@ feature turns on had no worked example anywhere.
 `{name, port, path}`, operator-authored, never a command. `name` selects the
 launcher the image must ship as `/usr/local/bin/wardyn-ui-<name>`: **declaring
 an app does not install one**, and an image without that launcher fails closed
-with the path it looked for. `code` matches `deploy/images/vscode/`.
+with the path it looked for. `vscode` matches `deploy/images/vscode/`, which ships
+`/usr/local/bin/wardyn-ui-vscode`; `novnc` is the other shipped launcher.
 
 Two things this example deliberately does NOT do:
 
@@ -148,7 +152,12 @@ the product to leave open overnight.
 
 ## `autonomous-tool-rules.json` — an autonomous run that is not all-or-nothing
 
-Launch it with `--tool-approvals hold`. Without `tool_rules` that setting means
+Launch it from the console's New-run wizard with **Tool approvals** set to
+*Hold in Wardyn*, or `POST /runs` with `"tool_approvals": "hold"` in the body:
+`tool_approvals` is a run-CREATE field, not a policy field, and the CLI has no
+flag for it today. It applies to an AUTONOMOUS `claude-code` run — the API
+refuses `hold` on an interactive run and on `codex-cli`
+(`internal/api/runs_create_validate.go`). Without `tool_rules` that setting means
 **every** gated call wakes a human, which nobody sustains — and an operator who
 tires of approving sets `auto` instead, which gates nothing at all. This policy
 is the middle: reading is free, writing and shell ask, web fetch is refused, and

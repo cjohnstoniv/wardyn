@@ -97,3 +97,54 @@ func TestValidateToolRules(t *testing.T) {
 		}
 	})
 }
+
+// TestValidateAllowedDomainsCount is F061's residue: allowed_domains was the
+// last per-spec list with NO count cap, so one request body could carry ~52,425
+// entries (what fits under maxJSONBody) and every one of them became work — the
+// proxy matches against each per request, and on the member path
+// narrowMemberInlinePolicy asks the capability seam about each. POST
+// /runs/preflight is on the member router, persists nothing, and is therefore
+// repeatable for free.
+//
+// The literals here are deliberate: 256 is the contract a member can hit, so
+// this test states it rather than restating the constant to itself.
+func TestValidateAllowedDomainsCount(t *testing.T) {
+	base := types.RunPolicySpec{
+		MinConfinementClass: types.CC1,
+		FirstUseApproval:    types.FirstUseAlwaysDeny,
+	}
+	domains := func(n int) types.RunPolicySpec {
+		s := base
+		s.AllowedDomains = make([]string, n)
+		for i := range s.AllowedDomains {
+			s.AllowedDomains[i] = "api.anthropic.com"
+		}
+		return s
+	}
+
+	t.Run("exactly 256 entries is accepted", func(t *testing.T) {
+		if err := validatePolicySpec(domains(256)); err != nil {
+			t.Fatalf("256 entries was refused (%v) — the cap is a hostile-input ceiling, not a sizing of a real allowlist", err)
+		}
+	})
+
+	t.Run("257 entries is refused, naming the cap", func(t *testing.T) {
+		err := validatePolicySpec(domains(257))
+		if err == nil {
+			t.Fatal("257 allowed_domains entries was accepted; every entry is per-request proxy work and a per-entry capability question on the member path")
+		}
+		if want := "allowed_domains: at most 256 entries"; !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %q, want it to contain %q", err, want)
+		}
+	})
+
+	// A REFUSAL, never a truncation: a silently shortened allowlist is a policy
+	// that reads as permission and denies.
+	t.Run("the spec is not truncated", func(t *testing.T) {
+		spec := domains(257)
+		_ = validatePolicySpec(spec)
+		if len(spec.AllowedDomains) != 257 {
+			t.Errorf("allowed_domains was mutated to %d entries — validation must refuse, not edit", len(spec.AllowedDomains))
+		}
+	})
+}

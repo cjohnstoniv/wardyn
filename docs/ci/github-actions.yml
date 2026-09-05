@@ -28,6 +28,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: cjohnstoniv/wardyn
+          # PINNED, and it must stay pinned. The next step EXECUTES this
+          # checkout's scripts/ci-run.sh in a job you seed with your own
+          # secrets (the ANTHROPIC_API_KEY line below). Without `ref` this
+          # resolves to Wardyn's default branch at job time, so every push to
+          # that branch would run arbitrary shell in front of your secrets.
+          # Bump it deliberately, to a release you verified (docs/VERIFY.md);
+          # a full commit sha pins harder still.
+          ref: v0.6.6
           path: wardyn
 
       - name: Run the governed sandboxed task

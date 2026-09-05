@@ -353,6 +353,22 @@ else
   done
   # …which leaves `{"a":"b",}` when the map started out empty.
   env_set WARDYN_AGENT_IMAGES "$(printf '%s' "${images}" | sed 's|,[[:space:]]*}$|}|')"
+  # WARDYN_PORT is read ONCE, on the FRESH branch, where it seeds WARDYN_UP_PORT.
+  # This branch deliberately rewrites only the version-derived lines, so the
+  # published port keeps coming from .env — which means an operator who set
+  # WARDYN_PORT on an upgrade had it discarded with nothing said, while the
+  # closing banner (which reads .env) announced a DIFFERENT number than the one
+  # they had just asked for. Moving it here is not the fix: the port is also
+  # baked into WARDYN_SSH_ADVERTISE-style values and into whatever the operator
+  # has bookmarked or reverse-proxied, and re-publishing a live install on a new
+  # port as a side effect of an upgrade is a bigger surprise than being told no.
+  # So: say no, out loud, and name the two-step remedy.
+  stored_port=$(env_get WARDYN_UP_PORT); stored_port="${stored_port:-8080}"
+  if [ -n "${WARDYN_PORT:-}" ] && [ "${WARDYN_PORT}" != "${stored_port}" ]; then
+    say "WARDYN_PORT=${WARDYN_PORT} was ignored — this install already publishes ${stored_port}"
+    echo "                To move it: set WARDYN_UP_PORT=${WARDYN_PORT} in ${HOME_DIR}/.env, then"
+    echo "                cd ${HOME_DIR} && docker compose up -d   (the container is re-created)"
+  fi
   # Listeners are additive: an install from before they existed has neither, and
   # without them the published ports stay inert.
   grep -qE '^WARDYN_SSH_LISTEN=' .env || printf 'WARDYN_SSH_LISTEN=:2222\n' >> .env
@@ -390,6 +406,14 @@ umask "${OLD_UMASK}"
 # just written, so there is one code path and nothing to keep in step.
 PORT=$(env_get WARDYN_UP_PORT); PORT="${PORT:-${WARDYN_PORT:-8080}}"
 SSH_PORT=$(env_get WARDYN_SSH_PORT); SSH_PORT="${SSH_PORT:-${WARDYN_SSH_PORT:-2222}}"
+# …and the LISTENER, read the same way. This installer turns the SSH gateway on
+# while the daemon's own default is off (docs/ENV.md's WARDYN_SSH_LISTEN row
+# records both), so the banner below discloses it — but only if it is actually
+# on: an upgrade over an .env whose operator deliberately blanked the line does
+# NOT get it back (the backfill appends only when the key is absent), and
+# announcing a listener that is off would be the same lie in the other
+# direction.
+SSH_LISTEN=$(env_get WARDYN_SSH_LISTEN)
 
 say "Pulling signed images"
 docker compose pull --quiet 2>/dev/null || docker compose pull
@@ -405,8 +429,39 @@ echo "                 same signatures, verified the same way: docs/VERIFY.md §
 
 # --no-build is the guarantee: the compose file carries build stanzas for
 # contributors, and this install must never trigger one.
+#
+# --wait is what makes the closing "Wardyn is running" an OBSERVATION instead of
+# an assertion. wardynd carries `restart: unless-stopped` and a healthcheck, so a
+# daemon that boots and immediately exits — a bad WARDYN_AGE_KEY, a failed
+# migration, a port already bound — leaves `up -d` exiting 0 while the container
+# crash-loops behind it, and this installer then printed a URL nothing answers.
+# The contributor path (scripts/up.sh) has polled health and died with logs for
+# releases; the one-line install, which is the path a first-time operator takes,
+# had no probe at all.
+#
+# The daemon-side healthcheck, not a host-side curl: on Docker Desktop + WSL2 NAT
+# the published port is reachable from the Windows browser and NOT from this
+# shell (scripts/up.sh warns about exactly that), so a host poll would fail an
+# install that is perfectly healthy.
+#
+# Probed, not assumed: --wait landed in Compose v2.1.1 and the only floor this
+# script enforces is "v2". On an older v2 the flag is unknown and the run is
+# unchanged from before this probe existed — no readiness proof at all. The
+# closing banner still reads "Wardyn is running" there, so it carries a note
+# saying nothing observed that; see the COMPOSE_WAIT check beside it below.
 say "Starting"
-docker compose up -d --no-build
+# An `if` CONDITION, not `cmd && VAR=x`: under `set -e` a failing AND-OR list is
+# still the statement's own exit status, so the probe would abort the install on
+# any docker hiccup instead of falling back.
+COMPOSE_WAIT=""
+if docker compose up --help 2>/dev/null | grep -q -- '--wait'; then COMPOSE_WAIT="--wait"; fi
+if ! docker compose up -d --no-build ${COMPOSE_WAIT}; then
+  echo >&2
+  echo "The stack did not come up healthy. The last 50 lines of the daemon log:" >&2
+  docker compose logs --tail 50 wardynd >&2 || true
+  die "wardynd is not healthy — nothing is listening on http://127.0.0.1:${PORT}.
+  Fix the cause above, then: cd ${HOME_DIR} && docker compose up -d"
+fi
 
 # The CLI. Without it this install has NO host binary at all: the only command
 # path is `docker compose exec`, which is in-container and root-only, so
@@ -472,6 +527,18 @@ CLI_PATH=""
 say "Installing the wardyn CLI"
 install_cli
 
+# Reached only when the stack came up healthy (or when this compose is too old to
+# be asked) — the `up` above dies with the daemon log otherwise, so this line is
+# no longer printed over a crash-looping container.
+#
+# On the too-old-to-be-asked path it is an assertion again, and it says so
+# HERE, attached to the claim, rather than leaving the operator to discover it.
+if [ -z "${COMPOSE_WAIT}" ]; then
+  say "This docker compose predates \`up --wait\` (Compose v2.1.1), so nothing probed wardynd —"
+  echo "                the next line is where it should be, not something this install observed."
+  echo "                Give it up to a minute; a crash-looping daemon shows up in:"
+  echo "                cd ${HOME_DIR} && docker compose logs wardynd"
+fi
 say "Wardyn is running: http://127.0.0.1:${PORT}"
 echo
 if [ -n "${CLI_PATH}" ]; then
@@ -480,7 +547,21 @@ if [ -n "${CLI_PATH}" ]; then
     *":$(dirname "${CLI_PATH}"):"*) ;;
     *) echo "                (not on your PATH — add: export PATH=\"$(dirname "${CLI_PATH}"):\$PATH\")" ;;
   esac
-  echo "  Attach:       wardyn ssh <run-id>   (the SSH gateway is on at 127.0.0.1:${SSH_PORT})"
+  echo "  Attach:       wardyn ssh <run-id>"
+fi
+# OUTSIDE the CLI block on purpose. This is the disclosure of a network listener
+# this installer turned on, and install_cli returns without setting CLI_PATH on
+# six branches — unsupported arch, unsupported OS, a failed download, an
+# unfetchable SHA256SUMS, an asset SHA256SUMS does not list, and no writable
+# directory on PATH. On any of those the operator used to finish the install
+# having been told nothing about it.
+if [ -n "${SSH_LISTEN}" ]; then
+  echo "  SSH gateway:  ON at 127.0.0.1:${SSH_PORT} — this installer writes WARDYN_SSH_LISTEN=${SSH_LISTEN}"
+  echo "                into ${HOME_DIR}/.env; the daemon's own default is off. Published"
+  echo "                loopback-only; registered public keys only, owner-or-admin: docs/SSH.md."
+  echo "                Turn it off: blank that line, then cd ${HOME_DIR} && docker compose up -d"
+else
+  echo "  SSH gateway:  off (WARDYN_SSH_LISTEN is empty in ${HOME_DIR}/.env — no listener, no host key)"
 fi
 echo "  Mode:         single-user — you are the admin. Multiple people? https://github.com/${REPO}/blob/${VERSION}/docs/OPERATIONS.md#second-user-same-host"
 echo "  Admin token:  grep WARDYN_ADMIN_TOKEN ${HOME_DIR}/.env"
