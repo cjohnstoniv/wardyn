@@ -382,3 +382,65 @@ func driveUnavailableTokens(t *testing.T, src string) []string {
 	slices.Sort(out)
 	return out
 }
+
+// The canonical page that actually carries the nested-membership sentence, and
+// the page an earlier pass attributed it to by mistake.
+const (
+	entraGroupClaimsPage = "https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/how-to-connect-fed-group-claims"
+	entraOptionalClaims  = "identity-platform/optional-claims"
+	nestedMembershipRule = "nested groups are not included and the user must be a direct member of the group assigned to the application"
+)
+
+// TestGroupClaimCaveatCitesThePageThatCarriesIt (F103) pins WHERE the runbook's
+// load-bearing Entra quote comes from.
+//
+// The overage remedy carries a verbatim quotation, and the whole point of the
+// paragraph is that an operator will re-key every group-subject grant before
+// changing a claim configuration on the strength of it. An earlier pass
+// attributed the sentence to the optional-claims page, which recommends the
+// setting and never mentions nested membership — so an operator who followed
+// the link to check found a page that reads as if the caveat were overstated.
+// The existing caveat guard pins that the caveat is PRESENT; nothing pinned
+// where it came from, which is why the wrong URL survived a round.
+func TestGroupClaimCaveatCitesThePageThatCarriesIt(t *testing.T) {
+	doc := readDoc(t, "docs/OPERATIONS.md")
+	i := strings.Index(doc, nestedMembershipRule)
+	if i < 0 {
+		t.Fatalf("docs/OPERATIONS.md no longer quotes the nested-membership rule — the caveat guard owns its presence, but this guard is now asserting nothing")
+	}
+	window := doc[i:min(i+600, len(doc))]
+	if !strings.Contains(window, entraGroupClaimsPage) {
+		t.Errorf("the nested-membership quote is not attributed to %s, the page that carries it — an operator checking the caveat before re-keying their grants lands somewhere that does not state it", entraGroupClaimsPage)
+	}
+	if strings.Contains(window, entraOptionalClaims) {
+		t.Errorf("the nested-membership quote is attributed to %s again; that page recommends the option and never states the exclusion", entraOptionalClaims)
+	}
+}
+
+// TestDataFlowAuditSinkRowCarriesTheOutageQualifier (F048, round-2 residue)
+// extends the audit-sink guard's AUDIT-ACTIONS.md-style assertion to the third
+// file that makes the same off-box promise.
+//
+// The round-1 fix qualified the promise in the runbook, the audit-actions
+// reference and the threat model, and the standing guard pins all three. The
+// data-flow page repeats it verbatim — and cites the runbook as its authority,
+// so after that fix it contradicted the very file it points at. It carried no
+// wording the standing guard looks for, so it passed while it was wrong.
+func TestDataFlowAuditSinkRowCarriesTheOutageQualifier(t *testing.T) {
+	// The premise this whole family of claims rests on, re-asserted here so the
+	// data-flow row cannot be "fixed" against a rule that has since changed:
+	// the hashes come from the store write, and the drain has no fanout.
+	adapters := readSrc(t, "cmd", "wardynd", "adapters.go")
+	if !strings.Contains(adapters, "A failed store write leaves both empty and the event still fans out.") {
+		t.Error("fanoutRecorder no longer records that a failed store write still fans out — re-read the sink claims in all four documents before trusting this guard")
+	}
+
+	doc := readDoc(t, "docs/DATA-FLOW.md")
+	mustNotSay(t, doc, "docs/DATA-FLOW.md",
+		"Each event carries its hash-chain `prev_hash`/`row_hash` (migration `0047`), so what the SIEM holds off-box is a head hash Wardyn cannot later disown",
+	)
+	mustSay(t, doc, "docs/DATA-FLOW.md",
+		"whose Postgres write succeeded",
+		"is not re-streamed when the spool drains",
+	)
+}
