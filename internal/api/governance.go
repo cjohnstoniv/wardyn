@@ -468,7 +468,7 @@ func (s *Server) handlePreviewGovernanceProfile(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	groups, msg := normalizeGovernancePreviewClaims(req.Groups, "groups")
+	groups, msg := normalizeGovernancePreviewGroups(req.Groups)
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -491,12 +491,19 @@ func (s *Server) handlePreviewGovernanceProfile(w http.ResponseWriter, r *http.R
 // claim list, preserving ORDER — which matters, because order is the user
 // tier's tie-break (array_position).
 //
-// The normalization is not a nicety: assignments are stored lowercased
-// (validateGovernanceAssignment) and BOTH enforcement-path inputs arrive
-// already folded — capabilitySubjects lowercases the sub and the email,
-// sessionGroups lowercases every group. A preview that skipped it would answer
-// "no assignment matches" for a claim typed `Eng` against a row the real run
-// matches, which is the drift this endpoint exists to remove.
+// USER SUBJECTS ONLY. The normalization is not a nicety: assignments are stored
+// lowercased (validateGovernanceAssignment) and the enforcement path's user
+// input arrives already folded — capabilitySubjects lowercases the sub and the
+// email. A preview that skipped it would answer "no assignment matches" for a
+// claim typed `Eng` against a row the real run matches, which is the drift this
+// endpoint exists to remove.
+//
+// A plain ToLower is the WHOLE rule for a user subject and is NOT the whole rule
+// for a group: this comment used to say "sessionGroups lowercases every group",
+// and that sentence was the premise a real divergence rested on. sessionGroups
+// applies a printable-ASCII guard BEFORE the fold (oidc.CanonicalGroupSubject),
+// so a group claim is either canonical ASCII or it is not in the snapshot at
+// all. Groups therefore go through normalizeGovernancePreviewGroups below.
 func normalizeGovernancePreviewClaims(in []string, field string) ([]string, string) {
 	if len(in) > maxGovernancePreviewClaims {
 		return nil, fmt.Sprintf("%s: at most %d claims", field, maxGovernancePreviewClaims)
@@ -504,6 +511,47 @@ func normalizeGovernancePreviewClaims(in []string, field string) ([]string, stri
 	out := make([]string, 0, len(in))
 	for _, v := range in {
 		if c := strings.ToLower(strings.TrimSpace(v)); c != "" && !slices.Contains(out, c) {
+			out = append(out, c)
+		}
+	}
+	return out, ""
+}
+
+// normalizeGovernancePreviewGroups is the GROUP half, and it calls the snapshot's
+// own normalizer rather than restating it.
+//
+// THE DIVERGENCE THIS CLOSES. The preview answers one question — "which profile
+// would bind a principal presenting this claim" — and there has to be one
+// answer. A plain ToLower with no ASCII guard FOLDS: U+212A KELVIN SIGN becomes
+// ASCII 'k', so a crafted "Kubernetes-admins" normalized onto the real,
+// operator-authored group "kubernetes-admins" and the endpoint reported that the
+// profile BINDS it. The enforcement path refuses the same claim outright
+// (CanonicalGroupSubject ok=false), drops it from the snapshot and stamps the
+// snapshot truncated. Preview said yes; enforcement said no.
+//
+// DROPPED, not refused with a 400, because dropping is exactly what the
+// enforcement path does with the same claim — a preview that 400s where a login
+// silently drops would be a second, different answer rather than the same one.
+// The count cap and the de-duplication stay identical to the user half.
+//
+// RESIDUAL, named rather than hidden: enforcement ALSO stamps the snapshot
+// truncated when it drops a group, and a truncated snapshot makes
+// effectiveCeiling answer errGroupsSnapshotStale (403) for that member whenever
+// a group-tier assignment exists. The preview has no field for "and this claim
+// would make your snapshot incomplete", so it reports the dropped claim as
+// simply unmatched. That is strictly closer to enforcement than the fold was,
+// and the gap is filed rather than invented as a new response field here.
+func normalizeGovernancePreviewGroups(in []string) ([]string, string) {
+	if len(in) > maxGovernancePreviewClaims {
+		return nil, fmt.Sprintf("groups: at most %d claims", maxGovernancePreviewClaims)
+	}
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		c, ok := oidc.CanonicalGroupSubject(v)
+		if !ok {
+			continue // no login snapshot can carry it; enforcement drops it too
+		}
+		if !slices.Contains(out, c) {
 			out = append(out, c)
 		}
 	}
