@@ -372,29 +372,132 @@ func ClampRunConfinement(runClass string, floor types.ConfinementClass) (string,
 	return runClass, ""
 }
 
+// normalizeClampTTL resolves a TTL to the number of seconds a mint would actually
+// live. 0 and every NEGATIVE value mean "the broker maximum" — the same reading
+// internal/api's normalizeGrantTTLSeconds gives them, which is what makes the two
+// sides comparable. The clamp used to test `== 0` alone and pass a negative
+// through untouched, so it kept a grant the write-time comparator refuses:
+// under a 300s ceiling, ttl_seconds=-1 resolves to 3600 for the comparator and
+// stayed -1 through the clamp.
+func normalizeClampTTL(ttl int) int {
+	if ttl <= 0 || ttl > maxGrantTTLSeconds {
+		return maxGrantTTLSeconds
+	}
+	return ttl
+}
+
+// CeilingGrantsCovering returns the ceiling grants whose IDENTITY covers g: the
+// same kind, and — for the kinds that name a stored secret — the same (host,
+// secret, known_hosts) pairing.
+//
+// This is the SELECTION half of "is this grant within the ceiling", and it is
+// exported because internal/api's write-time comparator
+// (governanceGrantWithinCeiling) must select from the same set the runtime clamp
+// bounds against. F014 was that selection existing twice; round 1 shared only the
+// pairing PREDICATE (PairingInCeiling) and left the two searches standing, and
+// they drifted again within the round — on github_token, whose scope names no
+// pairing at all.
+//
+// Identity, never bounds: approval, TTL and github scope are what a clamp
+// NARROWS and a comparator REFUSES, so they are the caller's question, not this
+// one's. An undecodable proposal scope names no pairing and is therefore covered
+// by NOTHING (fail closed); github_token and cloud_sts name no stored secret, so
+// same-kind membership is the whole of their identity and the repo/permission
+// subset is a bound axis handled by the caller.
+func CeilingGrantsCovering(g types.GrantSpec, ceiling []types.GrantSpec) []types.GrantSpec {
+	want, covered, ok := grantPairingOf(g)
+	var out []types.GrantSpec
+	for _, cg := range ceiling {
+		if cg.Kind != g.Kind {
+			continue
+		}
+		if !covered {
+			out = append(out, cg)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		got, cgCovered, cgOK := grantPairingOf(cg)
+		if cgCovered && cgOK && samePairing(got, want) {
+			out = append(out, cg)
+		}
+	}
+	return out
+}
+
+// grantDominatedBy reports whether ceiling grant cg bounds g on every axis a
+// clamp can narrow — the same three questions, in the same order and with the
+// same normalization, that internal/api's governanceGrantWithinCeiling asks after
+// the pairing axis. Identity is CeilingGrantsCovering's answer, not this one's.
+//
+// It is what makes the two sides agree: if some covering ceiling grant dominates
+// g, the comparator ACCEPTS g, so the clamp must return g unchanged rather than
+// narrow it against a different entry of the same kind.
+func grantDominatedBy(g, cg types.GrantSpec) bool {
+	if cg.RequiresApproval && !g.RequiresApproval {
+		return false
+	}
+	if normalizeClampTTL(g.TTLSeconds) > normalizeClampTTL(cg.TTLSeconds) {
+		return false
+	}
+	if g.Kind == types.GrantGitHubToken && GitHubScopeWithin(g.Scope, cg.Scope) != nil {
+		return false
+	}
+	return true
+}
+
 // clampGrants narrows each proposed grant to the bound of the ceiling grant that
 // covers it, and drops any whose KIND the ceiling does not carry.
 //
-// WHICH ceiling grant supplies the bound is ceilingGrantsBounding's answer, not
-// a kind-keyed map's — see grantbound.go for why that map was the defect: with
-// two same-kind ceiling entries it let the LAST one supply the approval posture
-// and TTL for a proposal naming the FIRST one's pairing, which both stripped an
-// operator-mandated requires_approval and made the result depend on the order of
-// a set.
+// WHICH ceiling grant supplies the bound is a two-step answer, and the steps are
+// the whole of F014:
 //
-// The bounds are MET across whatever ceilingGrantsBounding returns (one grant
-// when the pairing matched, every same-kind grant otherwise): the TTL cap is the
-// minimum, requires_approval is forced on if ANY of them requires it, and a
-// github scope is intersected against each in turn. Meeting can only narrow, so
-// no path through this function can hand a run a wider bound than some ceiling
-// grant actually wrote.
+//  1. SELECT the ceiling grants whose identity covers the proposal
+//     (CeilingGrantsCovering: same kind, same pairing where the kind names a
+//     stored secret). Never a kind-keyed map — that map was the original defect,
+//     letting the LAST same-kind entry supply the approval posture and TTL for a
+//     proposal naming the FIRST one's pairing.
+//
+//  2. If ONE of them DOMINATES the proposal on every remaining axis, bound
+//     against THAT grant alone. This is exactly the question the write-time
+//     comparator asks, so a proposal the operator's ceiling already permits comes
+//     through unchanged instead of being narrowed against a sibling entry. Round
+//     1 met every candidate instead, which emptied a github_token proposal naming
+//     one of two repo sets the ceiling carved (the comparator accepts it; the
+//     clamp handed the run no repos) and made a ceiling naming ONE pairing twice
+//     answer differently in the two slice orders.
+//
+// When none dominates, the bounds are MET across the candidates: the TTL cap is
+// the minimum, requires_approval is forced on if ANY of them requires it, and a
+// github scope is intersected against each in turn. The meet is order-independent
+// and can only narrow, so no path through this function can hand a run a wider
+// bound than some ceiling grant actually wrote.
+//
+// A proposal whose pairing NO ceiling entry names falls back to the meet of every
+// same-kind entry (ceilingGrantsBounding, whose paired branch this caller has
+// already pre-empted). It is still KEPT, bounded to the strictest same-kind
+// bound: the pairing gate is filterMemberGrants' job (stage 2 of
+// boundMemberSpec), not the clamp's, and the write-time comparator refuses such a
+// grant outright — the one deliberate asymmetry between the two, pinned in
+// grantbound_test.go and internal/api/grant_clamp_agreement_test.go.
 func clampGrants(grants []types.GrantSpec, ceiling types.RunPolicySpec, warns *[]string) []types.GrantSpec {
 	if len(grants) == 0 {
 		return grants
 	}
 	var out []types.GrantSpec
 	for _, g := range grants {
-		bounds := ceilingGrantsBounding(g, ceiling.EligibleGrants)
+		bounds := CeilingGrantsCovering(g, ceiling.EligibleGrants)
+		if len(bounds) == 0 {
+			// No entry names this pairing: fall back to every same-kind entry.
+			bounds = ceilingGrantsBounding(g, ceiling.EligibleGrants)
+		} else if i := slices.IndexFunc(bounds, func(cg types.GrantSpec) bool { return grantDominatedBy(g, cg) }); i >= 0 {
+			// The comparator accepts g against this grant, so bounding against it
+			// is a no-op on every axis but an unset TTL. Which dominating grant is
+			// picked cannot matter: domination means the proposal is already
+			// inside each of them, so the answer is the same for all.
+			bounds = bounds[i : i+1]
+		}
 		if len(bounds) == 0 {
 			*warns = append(*warns, fmt.Sprintf("dropped grant %q: not in operator's eligible grants", g.Kind))
 			continue
@@ -419,7 +522,7 @@ func clampGrants(grants []types.GrantSpec, ceiling types.RunPolicySpec, warns *[
 				max = cg.TTLSeconds
 			}
 		}
-		if g.TTLSeconds == 0 || g.TTLSeconds > max {
+		if g.TTLSeconds <= 0 || g.TTLSeconds > max {
 			if g.TTLSeconds > max {
 				*warns = append(*warns, fmt.Sprintf("grant %q TTL capped to %ds", g.Kind, max))
 			}
