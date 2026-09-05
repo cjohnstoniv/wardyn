@@ -261,3 +261,124 @@ func TestManagedObjectNameRationaleMatchesTheNamingFunction(t *testing.T) {
 		"names a managed object after the drive and the home",
 	)
 }
+
+// TestThreatModelDrivePreviewResidualMatchesTheHandler (F190) pins §4.6's
+// published residual to what the preview handler actually runs.
+//
+// The residual said the preview skips the governance door, the stale-snapshot
+// arm and driveMountFor, and that it touches no substrate. Three of those four
+// stopped being true when the preview was widened to run the enforcement path's
+// own gates in the enforcement path's own order — and §4.6's own earlier
+// paragraph already described the arm the residual said was skipped. A threat
+// model that overstates a gap is not conservative; it is wrong about its own
+// system, in the document a reviewer checks first.
+func TestThreatModelDrivePreviewResidualMatchesTheHandler(t *testing.T) {
+	resolve := readSrc(t, "internal", "api", "user_drives_resolve.go")
+	preview := methodBody(t, resolve, "handlePreviewUserDrive")
+	for _, gate := range []string{"drivePreviewDoorIsOpen", "previewResolveUserDrive", "driveIsMountableHere"} {
+		if !strings.Contains(preview, gate) {
+			t.Errorf("handlePreviewUserDrive no longer runs %s — §4.6 publishes it as something the preview DOES run; re-widen the residual deliberately", gate)
+		}
+	}
+	if strings.Contains(preview, "driveMountFor") {
+		t.Error("handlePreviewUserDrive now calls driveMountFor — §4.6 names its narrowing arm as the one thing the preview skips")
+	}
+	if !strings.Contains(methodBody(t, resolve, "previewResolveUserDrive"), "driveWithUnusableGroups") {
+		t.Error("previewResolveUserDrive no longer takes the driveWithUnusableGroups arm — §4.6 publishes the preview as running the identical unusable-groups function the launch does")
+	}
+	// The substrate half: a share's home is really stat'd, and a MANAGED
+	// backend short-circuits before any of that, which is why the Kubernetes
+	// half of the residual survives.
+	run := readSrc(t, "internal", "api", "user_drives_run.go")
+	bindable := methodBody(t, run, "driveShareIsBindable")
+	if !strings.Contains(bindable, "os.Stat(resolved.ObjectName)") {
+		t.Error("driveShareIsBindable no longer stats the person's home — §4.6 says the preview DOES touch the substrate for a share")
+	}
+	if !strings.Contains(bindable, "resolved.Drive.Backend != types.DriveBackendHostPath") {
+		t.Error("driveShareIsBindable no longer short-circuits for a managed backend — §4.6 keeps the Kubernetes half of the residual on exactly that")
+	}
+
+	tm := readDoc(t, "threatmodel/THREAT-MODEL.md")
+	mustNotSay(t, tm, "threatmodel/THREAT-MODEL.md",
+		"the preview skips the door, the stale-snapshot arm and `driveMountFor`, and neither touches the substrate",
+	)
+	mustSay(t, tm, "threatmodel/THREAT-MODEL.md",
+		"the preview now runs the governance door",
+		"What it does NOT run is `driveMountFor`'s narrowing arm",
+		"nothing here asks the CLUSTER whether a claim can bind",
+	)
+}
+
+// methodBody returns the source of a method by name, from its `func (recv)`
+// line to the closing brace in column 0. funcBody's anchor only matches a
+// plain top-level func.
+func methodBody(t *testing.T, src, name string) string {
+	t.Helper()
+	loc := regexp.MustCompile(`(?m)^func \([^)]*\) ` + regexp.QuoteMeta(name) + `\(`).FindStringIndex(src)
+	if loc == nil {
+		t.Fatalf("method %s not found — the guard's anchor moved, so it is asserting nothing", name)
+	}
+	rest := src[loc[0]:]
+	if end := strings.Index(rest, "\n}\n"); end >= 0 {
+		return rest[:end]
+	}
+	return rest
+}
+
+// TestMembersDocStatesTheThreeKeyDriveContract (F169) pins the member-facing
+// doc to the shape GET /me actually returns.
+//
+// MEMBERS.md calls /me "the ground truth" and described the two-state contract
+// the 0.7 fix superseded: user_drive null == nothing allocated. The fix exists
+// because null meant four different things, so the doc taught an external
+// consumer the exact wrong inference the fix was written to prevent — read
+// null, tell the member to ask an admin for an allocation, which is the wrong
+// remedy in four of the five states. The token set is closed and lives in one
+// const block, so the doc is checked against that block rather than a list
+// typed twice.
+func TestMembersDocStatesTheThreeKeyDriveContract(t *testing.T) {
+	src := readSrc(t, "internal", "api", "user_drives_resolve.go")
+	tokens := driveUnavailableTokens(t, src)
+	if len(tokens) < 4 {
+		t.Fatalf("found %d driveUnavailable* tokens (%v) — the matcher needs updating, it is checking almost nothing", len(tokens), tokens)
+	}
+	// The key is always written, so "" is a real answer and a MISSING key means
+	// an older daemon. The doc's "always present" claim rests on that.
+	me := methodBody(t, readSrc(t, "internal", "api", "me.go"), "handleMe")
+	for _, key := range []string{`body["user_drive"]`, `body["user_drive_denied_by_profile"]`, `body["user_drive_unavailable"]`} {
+		if !strings.Contains(me, key) {
+			t.Errorf("GET /me no longer writes %s — MEMBERS.md documents a three-key contract", key)
+		}
+	}
+
+	doc := readDoc(t, "docs/MEMBERS.md")
+	mustNotSay(t, doc, "docs/MEMBERS.md",
+		"`GET /me` carries `user_drive` (`null` when none is allocated to you) and is the ground truth for what you have.",
+	)
+	mustSay(t, doc, "docs/MEMBERS.md",
+		"`user_drive_denied_by_profile`",
+		"`user_drive_unavailable`",
+		"no longer means",
+	)
+	for _, tok := range tokens {
+		if !strings.Contains(doc, "`"+tok+"`") {
+			t.Errorf("docs/MEMBERS.md never names the `user_drive_unavailable` value %q, so a member or an external consumer cannot tell that state from 'you have no allocation'", tok)
+		}
+	}
+}
+
+// driveUnavailableTokens reads the closed user_drive_unavailable vocabulary off
+// its const block — the same single place the resolver and the launch door
+// share.
+func driveUnavailableTokens(t *testing.T, src string) []string {
+	t.Helper()
+	re := regexp.MustCompile(`driveUnavailable[A-Za-z]+\s+=\s+"([a-z_]+)"`)
+	var out []string
+	for _, m := range re.FindAllStringSubmatch(src, -1) {
+		if !slices.Contains(out, m[1]) {
+			out = append(out, m[1])
+		}
+	}
+	slices.Sort(out)
+	return out
+}
