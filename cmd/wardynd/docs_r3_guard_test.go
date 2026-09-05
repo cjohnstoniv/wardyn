@@ -289,13 +289,22 @@ func TestThreatModelDrivePreviewResidualMatchesTheHandler(t *testing.T) {
 	// The substrate half: a share's home is really stat'd, and a MANAGED
 	// backend short-circuits before any of that, which is why the Kubernetes
 	// half of the residual survives.
+	// F269 (round 3) split the bindability check into a pure DECISION,
+	// driveShareBindFailure, and the writer driveShareIsBindable that emits it, so
+	// /me and the preview can ask the same question without paying the writer's
+	// metric and WARN. The substrate facts §4.6 publishes now live in the
+	// decision; the writer is pinned to route through it, so inspecting the
+	// decision is inspecting what the preview runs.
 	run := readSrc(t, "internal", "api", "user_drives_run.go")
-	bindable := methodBody(t, run, "driveShareIsBindable")
+	if !strings.Contains(methodBody(t, run, "driveShareIsBindable"), "driveShareBindFailure(") {
+		t.Error("driveShareIsBindable no longer routes through driveShareBindFailure — the decision this guard inspects is not the one the preview runs")
+	}
+	bindable := methodBody(t, run, "driveShareBindFailure")
 	if !strings.Contains(bindable, "os.Stat(resolved.ObjectName)") {
-		t.Error("driveShareIsBindable no longer stats the person's home — §4.6 says the preview DOES touch the substrate for a share")
+		t.Error("driveShareBindFailure no longer stats the person's home — §4.6 says the preview DOES touch the substrate for a share")
 	}
 	if !strings.Contains(bindable, "resolved.Drive.Backend != types.DriveBackendHostPath") {
-		t.Error("driveShareIsBindable no longer short-circuits for a managed backend — §4.6 keeps the Kubernetes half of the residual on exactly that")
+		t.Error("driveShareBindFailure no longer short-circuits for a managed backend — §4.6 keeps the Kubernetes half of the residual on exactly that")
 	}
 
 	tm := readDoc(t, "threatmodel/THREAT-MODEL.md")
