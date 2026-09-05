@@ -117,11 +117,11 @@ func TestClampDuplicatePairingIsOrderIndependent(t *testing.T) {
 }
 
 // TestClampNegativeTTLResolvesToTheCap pins the third divergence, the one
-// internal/api/governance_grantbound.go:50-54 wrote down rather than fixed: the
-// comparator resolves a NEGATIVE ttl_seconds to the broker maximum (so a ceiling of
-// 300 refuses it), while the clamp tested only `== 0` and passed the negative
-// through untouched. A negative TTL that survives the clamp is a grant the
-// comparator would refuse.
+// normalizeGrantTTLSeconds (internal/api/governance_grantbound.go) wrote down in
+// its own doc comment rather than fixed: the comparator resolves a NEGATIVE
+// ttl_seconds to the broker maximum (so a ceiling of 300 refuses it), while the
+// clamp tested only `== 0` and passed the negative through untouched. A negative
+// TTL that survives the clamp is a grant the comparator would refuse.
 func TestClampNegativeTTLResolvesToTheCap(t *testing.T) {
 	ceiling := apiKeyGrant(t, "vendor.example", "vendor_key", false, 300)
 	got, _ := clampOne(t, apiKeyGrant(t, "vendor.example", "vendor_key", false, -1), ceiling)
