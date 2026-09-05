@@ -41,6 +41,71 @@ func sqlState(err error) string {
 	return ""
 }
 
+// ─── skips that would hide a failure ─────────────────────────────────────────
+
+// probeSkipMarker lets an operator ASSERT that this lane is fully provisioned,
+// turning every precondition guard below into a failure instead of a skip. CI's
+// test-pg job connects as a superuser over a URL-form DSN, so every guard here
+// is satisfiable there and a skip means something broke.
+const probeSkipMarker = "WARDYN_TEST_PG_SUPERUSER"
+
+// probeMustNotSkip reports whether a skip from here on would be HIDING a
+// failure rather than reporting an unmet precondition.
+//
+// WHY IT IS DERIVED AND NOT ONLY DECLARED. Every guard in this file produces
+// `--- SKIP` -> `ok` -> exit 0, scripts/test-report.sh grades on the exit code,
+// and nothing inspects the JSON stream for skips — so a probe that quietly
+// stopped running looked exactly like a probe that passed, and the invariant it
+// proves (audit_events is append-only, and the boot check says so honestly) was
+// unfalsifiable from CI's own output. Requiring an env marker alone would have
+// left that true for every lane nobody remembered to set it on, so the answer is
+// derived from the connection itself: a role that can CREATE ROLE, over a
+// URL-form DSN, can satisfy every precondition in this file, and any failure
+// after that is a real one. The marker stays as an explicit override for a lane
+// that wants to assert it regardless.
+func probeMustNotSkip(t *testing.T, canCreateRole, urlDSN bool) bool {
+	t.Helper()
+	if os.Getenv(probeSkipMarker) == "1" {
+		return true
+	}
+	return canCreateRole && urlDSN
+}
+
+// skipOrFatal reports an unmet precondition the way this lane deserves: a skip
+// where the environment genuinely cannot provide it, a FAILURE where it can and
+// did not.
+func skipOrFatal(t *testing.T, mustNotSkip bool, format string, args ...any) {
+	t.Helper()
+	if mustNotSkip {
+		t.Fatalf("this lane can satisfy this precondition, so a skip here would hide a failure ("+
+			probeSkipMarker+"=1 or a CREATE ROLE-capable role over a URL-form DSN): "+format, args...)
+	}
+	t.Skipf(format, args...)
+}
+
+// TestPG_ProbeF11_LaneCannotSilentlySelfSkip pins the derivation itself. On the
+// lane CI actually runs — superuser, URL-form DSN — every probe in this file
+// MUST be in fail-not-skip mode; if that ever stops being true, the append-only
+// probes can go back to reporting `ok` while proving nothing, which is the whole
+// finding.
+func TestPG_ProbeF11_LaneCannotSilentlySelfSkip(t *testing.T) {
+	pool := pgPool(t)
+	ctx := context.Background()
+	var canCreateRole bool
+	if err := pool.QueryRow(ctx,
+		`SELECT rolsuper OR rolcreaterole FROM pg_roles WHERE rolname = current_user`).Scan(&canCreateRole); err != nil {
+		t.Fatalf("read role: %v", err)
+	}
+	u, err := url.Parse(os.Getenv("WARDYN_TEST_PG"))
+	urlDSN := err == nil && u.Scheme != "" && u.Host != ""
+	if !probeMustNotSkip(t, canCreateRole, urlDSN) {
+		t.Fatalf("this lane is in SKIP-ALLOWED mode (createrole=%v url_dsn=%v, %s=%q): the F11 append-only probes "+
+			"can self-skip to a green `ok` here and nothing in CI or the test tooling would detect it. Point "+
+			"WARDYN_TEST_PG at a CREATE ROLE-capable role over a URL-form DSN, or set %s=1.",
+			canCreateRole, urlDSN, probeSkipMarker, os.Getenv(probeSkipMarker), probeSkipMarker)
+	}
+}
+
 func TestPG_ProbeF11_AuditDDLProtected(t *testing.T) {
 	pool := pgPool(t)
 	ctx := context.Background()
@@ -49,12 +114,14 @@ func TestPG_ProbeF11_AuditDDLProtected(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT rolsuper OR rolcreaterole FROM pg_roles WHERE rolname = current_user`).Scan(&canCreateRole); err != nil {
 		t.Fatalf("read role: %v", err)
 	}
-	if !canCreateRole {
-		t.Skip("WARDYN_TEST_PG role cannot CREATE ROLE; the split-role probe needs it")
-	}
 	u, err := url.Parse(os.Getenv("WARDYN_TEST_PG"))
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		t.Skip("WARDYN_TEST_PG is not a URL-form DSN; cannot derive an app-role DSN from it")
+	urlDSN := err == nil && u.Scheme != "" && u.Host != ""
+	mustNotSkip := probeMustNotSkip(t, canCreateRole, urlDSN)
+	if !canCreateRole {
+		skipOrFatal(t, mustNotSkip, "WARDYN_TEST_PG role cannot CREATE ROLE; the split-role probe needs it")
+	}
+	if !urlDSN {
+		skipOrFatal(t, mustNotSkip, "WARDYN_TEST_PG is not a URL-form DSN; cannot derive an app-role DSN from it")
 	}
 
 	// 1. Honesty on the owning/migrating role: it must NOT be reported protected.
@@ -98,7 +165,7 @@ func TestPG_ProbeF11_AuditDDLProtected(t *testing.T) {
 	u.User = url.UserPassword(role, pw)
 	app, err := Connect(ctx, u.String())
 	if err != nil {
-		t.Skipf("cannot connect as the app role (pg_hba may not password-auth a new role): %v", err)
+		skipOrFatal(t, mustNotSkip, "cannot connect as the app role (pg_hba may not password-auth a new role): %v", err)
 	}
 	t.Cleanup(app.Close)
 
@@ -230,7 +297,15 @@ func TestPG_ProbeF11_DroppedChainTriggerIsRestoredByMigrate(t *testing.T) {
 		t.Fatal("precondition: audit_events_chain trigger missing or disabled before the probe ran")
 	}
 	if _, err := pool.Exec(ctx, `DROP TRIGGER audit_events_chain ON audit_events`); err != nil {
-		t.Skipf("cannot DROP TRIGGER as this role (%v); the probe needs table ownership", err)
+		var canCreateRole bool
+		if qerr := pool.QueryRow(ctx,
+			`SELECT rolsuper OR rolcreaterole FROM pg_roles WHERE rolname = current_user`).Scan(&canCreateRole); qerr != nil {
+			t.Fatalf("read role: %v", qerr)
+		}
+		u, perr := url.Parse(os.Getenv("WARDYN_TEST_PG"))
+		urlDSN := perr == nil && u.Scheme != "" && u.Host != ""
+		skipOrFatal(t, probeMustNotSkip(t, canCreateRole, urlDSN),
+			"cannot DROP TRIGGER as this role (%v); the probe needs table ownership", err)
 	}
 	t.Cleanup(func() {
 		// EVERY migration that defines the chain trigger, in order — not 0047

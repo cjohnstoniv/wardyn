@@ -25,6 +25,28 @@
 -- land two rows. The index is the race-free floor UNDER the guard, not a
 -- replacement for it, and the two are meant to coexist.
 --
+-- CORRECTION, ON THE PARAGRAPH ABOVE (review finding against this comment).
+-- "The derived names cannot collide" is true ONLY under the `hash` template,
+-- and `hash` is managed-backend-only: types.ValidateUserDrive REFUSES it on a
+-- share ("a share's directories are named by your directory, so pick sub or
+-- email_local", internal/types/user_drive.go). On a SHARE backend the derived
+-- name is a claim substring, so two principals really can derive one directory
+-- -- alice@corp.example and alice@partner.example both derive "alice" under
+-- email_local -- and home_override is the admin's REMEDY for that, not the only
+-- place the isolation is a typo away. Executed, not argued:
+-- internal/store/user_drives_share_home_pg_test.go asserts as its premise that
+-- two same-root share drives return ONE types.DriveObjectName for one home.
+--
+-- So this migration's claim holds where its index does: on a MANAGED backend,
+-- where the minted name is `wardyn-drive-<drive-slug>-<home>` and (drive_id,
+-- home_override) IS the namespace. It does not hold on a share, whose object
+-- name is `<host_root>/<home>` with no drive component at all -- the store's
+-- guard was widened to the (host_root, home_override) namespace for exactly
+-- that reason, and a unique index cannot follow it there because host_root
+-- lives on a different table. The DERIVED-name collision across two same-root
+-- shares is an open design question (whether two share drives may share a root
+-- at all), deliberately not decided by this migration.
+--
 -- PARTIAL, on home_override <> '': the empty string is the ordinary case (no
 -- override, derive the name), and every grant without one would otherwise
 -- collide with every other. The predicate is safe because 0054 declares the

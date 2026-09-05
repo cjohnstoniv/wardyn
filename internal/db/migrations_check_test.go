@@ -4,6 +4,7 @@
 package db
 
 import (
+	"fmt"
 	"regexp"
 	"sort"
 	"strings"
@@ -136,11 +137,131 @@ func targetsTableRe(table string) *regexp.Regexp {
 		`(?is)(?:CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?|ALTER\s+TABLE\s+(?:ONLY\s+)?)` + regexp.QuoteMeta(table) + `\b`)
 }
 
-// effectiveCheckValues returns the set of values a `table.column IN (...)`
-// CHECK allows after ALL migrations are applied in lexical order — the LAST
-// migration that (re)defines it wins, same rule as effectiveAgentRunStates,
-// generalized past agent_runs.state to the closed enums below. Reuses
-// readMigrationNames (db_test.go) and quotedRe.
+// quotedAnyRe extracts single-quoted tokens INCLUDING the empty one. quotedRe
+// (`'([^']+)'`) requires at least one character between the quotes, which is why
+// 0039 hoisted `decision_scope = ”` out of its IN-list: on
+// IN (”,'once',...) that regexp matches the COMMAS between the quotes rather
+// than the values. The whole-expression parser below has to see ” wherever it
+// is written, so it uses this one.
+var quotedAnyRe = regexp.MustCompile(`'([^']*)'`)
+
+// sqlLineCommentRe matches a `--` comment to end of line. The migrations in this
+// tree are comment-heavy and several of those comments contain the word CHECK
+// followed by a parenthesis, so checkExprs strips them before scanning; a regex
+// that reads a comment as SQL would attribute a constraint to prose.
+var sqlLineCommentRe = regexp.MustCompile(`(?m)--[^\n]*`)
+
+// balancedParen returns the text between the parenthesis at s[open] and its
+// match, plus the index of that closing parenthesis. Single-quoted literals are
+// skipped, so a parenthesis inside a value cannot unbalance the scan.
+func balancedParen(s string, open int) (inner string, closeAt int, ok bool) {
+	if open >= len(s) || s[open] != '(' {
+		return "", 0, false
+	}
+	depth, inQuote := 0, false
+	for i := open; i < len(s); i++ {
+		switch {
+		case inQuote:
+			if s[i] == '\'' {
+				inQuote = false
+			}
+		case s[i] == '\'':
+			inQuote = true
+		case s[i] == '(':
+			depth++
+		case s[i] == ')':
+			depth--
+			if depth == 0 {
+				return s[open+1 : i], i, true
+			}
+		}
+	}
+	return "", 0, false
+}
+
+// checkExprs returns the FULL expression of every CHECK constraint in stmt — the
+// balanced-parenthesis text after each CHECK keyword.
+//
+// Reading the whole expression is the point. The parser this replaces went
+// straight for the first `<column> IN (...)` list and read nothing else, so any
+// value admitted by a disjunct OUTSIDE that list was invisible to the parity
+// guard: `CHECK (decision_scope IN ('once','run','until','always') OR
+// decision_scope = 'ZZZSNEAK')` was accepted by the database and reported clean
+// by a test whose own doc promises the opposite direction.
+func checkExprs(stmt string) []string {
+	stmt = sqlLineCommentRe.ReplaceAllString(stmt, " ")
+	lower := strings.ToLower(stmt)
+	var out []string
+	for i := 0; i < len(stmt); {
+		j := strings.Index(lower[i:], "check")
+		if j < 0 {
+			return out
+		}
+		k := i + j + len("check")
+		for k < len(stmt) && (stmt[k] == ' ' || stmt[k] == '\t' || stmt[k] == '\n' || stmt[k] == '\r') {
+			k++
+		}
+		inner, closeAt, ok := balancedParen(stmt, k)
+		if !ok {
+			i = i + j + len("check")
+			continue
+		}
+		out = append(out, inner)
+		i = closeAt + 1
+	}
+	return out
+}
+
+// checkGlueRe is everything a CHECK expression may be left holding once every
+// value-bearing clause for the column has been removed: parentheses, whitespace
+// and OR. Anything else means the parser did not model the constraint, and the
+// caller FAILS rather than returning a set it cannot stand behind — an AND, a
+// second column, a function call, a range test all narrow or widen what the
+// database accepts in ways an IN-list cannot express.
+var checkGlueRe = regexp.MustCompile(`(?is)^[\s()]*(?:OR[\s()]*)*$`)
+
+// columnCheckValues returns every value expr admits for column, or an error
+// naming what it could not model. It understands two forms — `col IN (...)` and
+// `col = 'literal'` — which is what this tree's migrations actually write, and
+// it refuses to guess at anything else.
+func columnCheckValues(expr, column string) (map[string]bool, error) {
+	vals := map[string]bool{}
+	rest := expr
+	if loc := checkInRe(column).FindStringSubmatchIndex(rest); loc != nil {
+		for _, q := range quotedAnyRe.FindAllStringSubmatch(rest[loc[2]:loc[3]], -1) {
+			vals[q[1]] = true
+		}
+		rest = rest[:loc[0]] + " " + rest[loc[1]:]
+	}
+	eqRe := regexp.MustCompile(`(?is)` + regexp.QuoteMeta(column) + `\s*=\s*'([^']*)'`)
+	for {
+		loc := eqRe.FindStringSubmatchIndex(rest)
+		if loc == nil {
+			break
+		}
+		vals[rest[loc[2]:loc[3]]] = true
+		rest = rest[:loc[0]] + " " + rest[loc[1]:]
+	}
+	if !checkGlueRe.MatchString(rest) {
+		return nil, fmt.Errorf("the CHECK expression %q holds a clause this parser cannot model (%q). "+
+			"Model it here or state it in the migration - a parity guard that silently reads only part of a "+
+			"constraint reports the DB and the Go set as agreeing when they do not", expr, strings.TrimSpace(rest))
+	}
+	return vals, nil
+}
+
+// effectiveCheckValues returns the set of values a `table.column` CHECK allows
+// after ALL migrations are applied in lexical order — the LAST migration that
+// (re)defines it wins, same rule as effectiveAgentRunStates, generalized past
+// agent_runs.state to the closed enums below. Reuses readMigrationNames
+// (db_test.go).
+//
+// IT PARSES THE WHOLE EXPRESSION, not the first IN-list. Reading only the list
+// made this guard blind in the direction its own test states explicitly ("the
+// CHECK must not allow values the code does not define"): a disjunct outside the
+// list was never seen, and approvals.decision_scope already carries one. A
+// counterfactual `OR decision_scope = 'ZZZSNEAK'` added to 0039 was admitted by
+// the live database and left this test green.
 func effectiveCheckValues(t *testing.T, table, column string) map[string]bool {
 	t.Helper()
 	targetsRe := targetsTableRe(table)
@@ -157,16 +278,17 @@ func effectiveCheckValues(t *testing.T, table, column string) map[string]bool {
 			if !targetsRe.MatchString(stmt) {
 				continue
 			}
-			loc := inRe.FindStringSubmatch(stmt)
-			if loc == nil {
-				continue
-			}
-			vals := map[string]bool{}
-			for _, q := range quotedRe.FindAllStringSubmatch(loc[1], -1) {
-				vals[q[1]] = true
-			}
-			if len(vals) > 0 {
-				allowed = vals // last writer (lexically-latest migration) wins
+			for _, expr := range checkExprs(stmt) {
+				if !inRe.MatchString(expr) {
+					continue
+				}
+				vals, err := columnCheckValues(expr, column)
+				if err != nil {
+					t.Fatalf("%s: %s.%s: %v", name, table, column, err)
+				}
+				if len(vals) > 0 {
+					allowed = vals // last writer (lexically-latest migration) wins
+				}
 			}
 		}
 	}
@@ -224,8 +346,20 @@ func TestClosedEnumChecksMatchConstants(t *testing.T) {
 		{"workspaces", "status", workspaceStatusValues()},
 		{"sources", "status", workspaceStatusValues()},
 		{"sources", "kind", stringSet(string(types.SourceLocalDir), string(types.SourceRepo))},
+		// The EMPTY STRING is in this set on purpose, and it is what the
+		// whole-expression parser made visible. 0039 wrote the column as
+		// NOT NULL DEFAULT '' and hoisted '' into its own OR disjunct rather
+		// than listing it inside IN (...) — deliberately, to work around
+		// quotedRe requiring at least one character between the quotes. The
+		// side effect was that the guard read only the IN-list and never saw
+		// the disjunct at all, so any value hung off an OR was admitted by the
+		// database and reported clean here. '' is a real, defined state of this
+		// column ("no decision recorded", honest for a PENDING row), so it
+		// belongs in the Go-side set rather than being filtered back out of the
+		// parse — filtering it would put the blindness straight back.
 		{"approvals", "decision_scope", stringSet(
 			string(types.ScopeOnce), string(types.ScopeRun), string(types.ScopeUntil), string(types.ScopeAlways),
+			"", // 0039's NOT NULL DEFAULT '' — see above
 		)},
 		// 0042's two closed enums. capability_grants.capability is deliberately
 		// NOT here: it carries no CHECK at all (the kind set is one Go slice in
