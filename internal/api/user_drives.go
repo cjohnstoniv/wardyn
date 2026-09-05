@@ -694,6 +694,44 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 		}
 		g.Subject = subject
 	}
+	// THE BACKEND-AWARE HOME CHECK, run at the moment the admin types it rather
+	// than at every launch afterwards.
+	//
+	// types.ValidateUserDriveGrant holds only the grant ROW, so it cannot see
+	// which substrate the drive it points at lands on, and it applies the DOCKER
+	// segment rule as the looser of the two (its own comment says so). A k8s
+	// backend enforces DNS-1123: no `_`, no trailing `-` or `.`. So
+	// home_override="bob_smith" on a k8s_pvc drive was accepted 201 with a
+	// drive.grant.write audit row, and then EVERY launch by that member resolved
+	// errDriveUnmountable and answered 422 while /me reported
+	// user_drive_unavailable="unmountable" — the admin's only signal was a
+	// member complaining.
+	//
+	// The system already knows the backend here; it just was not asked. Asked
+	// now, through the resolver's OWN predicate (types.DriveHomeName), so the
+	// write boundary and the resolve boundary cannot answer differently — a
+	// second copy of the rule is how they diverged in the first place.
+	//
+	// The subject is irrelevant and passed empty deliberately: DriveHomeName
+	// SHORT-CIRCUITS on a non-empty override, checking it and returning before
+	// any template or subject is read.
+	//
+	// The read also gives the 404 arm below a REASON rather than a dependency on
+	// the FK: an unknown drive_id is now named here.
+	if strings.TrimSpace(g.HomeOverride) != "" {
+		d, derr := s.cfg.Store.GetUserDrive(r.Context(), g.DriveID)
+		if notFoundIf(w, derr, "user drive") {
+			return
+		}
+		if derr != nil {
+			writeError(w, http.StatusInternalServerError, "get user drive: "+derr.Error())
+			return
+		}
+		if _, herr := types.DriveHomeName(d, "", g.HomeOverride); herr != nil {
+			writeError(w, http.StatusBadRequest, "invalid allocation: "+herr.Error())
+			return
+		}
+	}
 	g.ID = uuid.New()
 	g.CreatedBy = principalFromRequest(r)
 	saved, err := s.cfg.Store.UpsertUserDriveGrant(r.Context(), g, homeOverrideStated)
