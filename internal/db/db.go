@@ -8,6 +8,7 @@ package db
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -450,9 +451,108 @@ func migrateOn(ctx context.Context, db migrationExecutor) error {
 		}
 		slog.InfoContext(ctx, "db: applied migration", slog.String("file", name), slog.Duration("elapsed", time.Since(start)))
 	}
+	if err := ensureAuditTriggers(ctx, db); err != nil {
+		return err
+	}
 	// The hardening restore is the deferred call registered above, so it runs
 	// after this returns however it returns.
-	return ensureAuditTriggers(ctx, db)
+	return auditChainCanary(ctx, db)
+}
+
+// auditChainCanary appends ONE synthetic audit row inside a transaction it
+// always rolls back, and asserts the row came out chained: row_hash set, and
+// prev_hash equal to the head read under the same lock. It is the FUNCTIONAL
+// half of the boot check.
+//
+// WHY CATALOG SHAPE IS NOT ENOUGH, and the release has the receipt. Everything
+// above this asks the catalog: is the trigger there, is it enabled, is it the
+// function we ship. 0057 shipped a trigger that was all three and did not work
+// — a SECURITY DEFINER pinned to `pg_catalog, public` while its body named
+// audit_events unqualified, so on a deployment whose objects live in another
+// schema Migrate reported success and then EVERY audit insert failed from inside
+// the trigger, or (quieter and worse, where public held a second Wardyn schema)
+// linked the chain to the wrong table's head and never linked at all. 0058
+// repaired that particular body; nothing made the failure CLASS visible at boot.
+// A single round trip does, and it converts the class from post-hoc to
+// boot-time.
+//
+// NEVER COMMITTED, so there is no synthetic row in anybody's audit log and no
+// question about what an operator is looking at. The cost is one burned seq per
+// boot — which the sweep already tolerates by design: auditChainWalk's own
+// doc records that seq gaps below the chain come from rolled-back inserts and
+// that seq is not hashed.
+//
+// WHAT REFUSES AND WHAT ONLY REPORTS. A chain that demonstrably does not chain
+// — the insert succeeded and the row came back with no row_hash, or with a
+// prev_hash that is not the head — refuses the boot: that is the 0057 state, and
+// a wardynd serving over it writes an audit log the verify sweep will report as
+// broken for as long as it runs. A canary that could not be RUN because the
+// chain lock was busy or the statement was cancelled reports at ERROR and lets
+// the boot continue: those are bounded, transient and self-clearing (the whole
+// subject of AuditChainLockTimeout), and bricking a boot over one is a failure
+// this check would cause rather than one it would find.
+func auditChainCanary(ctx context.Context, db migrationExecutor) error {
+	var exists bool
+	if err := db.QueryRow(ctx, `SELECT to_regclass('audit_events') IS NOT NULL`).Scan(&exists); err != nil {
+		return fmt.Errorf("db: look up audit_events: %w", err)
+	}
+	if !exists {
+		return nil
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("db: begin audit chain canary: %w", err)
+	}
+	// Background context, and it is the ONE thing this function must not fail to
+	// do: a cancelled ctx must still roll the canary row back.
+	defer tx.Rollback(context.Background()) //nolint:errcheck — the canary is never committed
+
+	// Same bound and same lock the real writers take, so the canary queues
+	// behind a busy chain instead of waiting for a boot timeout.
+	if _, err := tx.Exec(ctx, AuditChainLockTimeoutSQL()); err != nil {
+		return auditCanaryTransient(ctx, "bound the canary's chain lock wait", err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, AuditChainLockKey); err != nil {
+		return auditCanaryTransient(ctx, "take the chain lock for the canary", err)
+	}
+	var head string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT row_hash FROM audit_events
+		WHERE row_hash IS NOT NULL ORDER BY seq DESC LIMIT 1), '')`).Scan(&head); err != nil {
+		return auditCanaryTransient(ctx, "read the chain head for the canary", err)
+	}
+	var rowHash, prevHash string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO audit_events (id, actor_type, actor, action, target, outcome)
+		VALUES (gen_random_uuid(), 'system', 'wardynd', 'audit.chain.canary', 'audit_events', 'success')
+		RETURNING COALESCE(row_hash, ''), COALESCE(prev_hash, '')`).Scan(&rowHash, &prevHash); err != nil {
+		return fmt.Errorf("db: the audit chain canary could not append a row, so every audit write this process makes "+
+			"will fail the same way — the chain trigger is catalogued and enabled but not working: %w", err)
+	}
+	if rowHash == "" {
+		return fmt.Errorf("db: the audit chain canary appended a row with NO row_hash: the %s trigger is present, "+
+			"enabled and correctly named, and it is not chaining — every row written by this process would be "+
+			"unchained, which the verify sweep reports as a break; refusing to start", auditChainTrigger)
+	}
+	if prevHash != head {
+		return fmt.Errorf("db: the audit chain canary linked to %q but the chain head is %q: the %s trigger's head read "+
+			"is resolving somewhere other than the table it is attached to, so the chain would never link; "+
+			"refusing to start", prevHash, head, auditChainTrigger)
+	}
+	return nil
+}
+
+// auditCanaryTransient decides the one direction this check must not get wrong:
+// a lock wait that timed out (SQLSTATE 55P03) or a statement that was cancelled
+// (57014) says nothing about whether the chain works, so it is reported and the
+// boot continues. Anything else is returned and refuses.
+func auditCanaryTransient(ctx context.Context, what string, err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && (pgErr.Code == "55P03" || pgErr.Code == "57014") {
+		slog.ErrorContext(ctx, "db: could not run the boot audit-chain canary; the chain trigger's catalog shape was verified but its BEHAVIOUR was not - re-run the verify sweep once the database is quiet",
+			slog.String("step", what), slog.Any("error", err))
+		return nil
+	}
+	return fmt.Errorf("db: audit chain canary: %s: %w", what, err)
 }
 
 // auditAlwaysTriggers returns the audit_events triggers an operator has hardened
