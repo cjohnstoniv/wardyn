@@ -54,8 +54,31 @@ mounts at `/home/agent/drive`, and it is yours alone: a run sees **your own
 directory** inside the drive, never the drive's root, and Wardyn binds nothing
 named for anyone else — what your share's administrator does above that directory
 is theirs (the threat model's residual #33).
-`GET /me` carries `user_drive` (`null` when none is allocated to you) and is the
-ground truth for what you have.
+`GET /me` is the ground truth for what you have, and it answers in **three**
+keys, not one. The last two are **always present**, so a missing key means an
+older daemon rather than "nothing is wrong":
+
+- `user_drive` — your allocation, or `null`.
+- `user_drive_denied_by_profile` — the **door**: the name of the governance
+  profile that refuses to mount a drive for you, or `""` when none does.
+- `user_drive_unavailable` — `""` when Wardyn could answer. Any other value is
+  one of four tokens saying it could **not**, and which remedy that implies:
+  - `groups_snapshot_stale` — your group membership cannot be read, so an
+    allocation may exist and be invisible to this answer. Sign in again; until
+    you do, a launch that asks for the drive is refused (`403`).
+  - `unmountable` — an allocation exists and this deployment cannot bind it: a
+    directory that is not on the share, or a name that cannot name a directory.
+    An admin's fix, not yours; a launch is a `422`.
+  - `unavailable` — your allocation could not be read at all. A launch is a
+    `500`; try again, and tell an admin if it persists.
+  - `governance_unavailable` — your ceiling could not be resolved, so whether
+    the door is open is unknown. Nothing is wrong with the allocation itself,
+    and a launch is refused rather than guessed at.
+
+So `user_drive: null` on its own **no longer means** "nothing is allocated to
+you". It means that only when `user_drive_unavailable` is `""`; in the four
+states above the obvious reading — ask an admin for an allocation — is the wrong
+one, which is exactly why the third key exists.
 
 **It mounts only when you ask, per run.** New run's Workspace card carries a
 checkbox — "Mount my drive" — and nothing mounts without it. What the request

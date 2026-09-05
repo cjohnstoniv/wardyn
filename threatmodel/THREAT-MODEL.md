@@ -653,11 +653,21 @@ share one drive**: two agents writing the same directory can corrupt each
 other's lock files, v1 mounts it anyway, and no warning fires — the existing
 collision warning keys on the run's workspace path, which a drive deliberately
 does not set, so a drive-aware warning waits on run-row persistence. And the
-admin preview and the member preflight are honest about the ALLOCATION only: the
-preview skips the door, the stale-snapshot arm and `driveMountFor`, and neither
-touches the substrate — a claim the cluster cannot bind (the stock chart's
-missing PVC rule, a class with no provisioner) is discovered at dispatch, after
-the row is written.
+admin preview and the member preflight are honest about the ALLOCATION only —
+though less narrowly than that used to mean. Since 0.7 the preview now runs the
+governance door (`drivePreviewDoorIsOpen`), the unusable/stale group-snapshot arm
+(`driveWithUnusableGroups`, reached through `previewResolveUserDrive` in
+`internal/api/user_drives_resolve.go`) and the would-it-bind-here check
+(`driveIsMountableHere` in `internal/api/user_drives_run.go`), in the enforcement
+path's own order and with the enforcement path's own refusals — and for a
+`host_path` share that last check does touch the substrate: `driveShareIsBindable`
+re-runs the deployment's host-root ceiling and `os.Stat`s the person's own home.
+What it does NOT run is `driveMountFor`'s narrowing arm, which folds a run
+request's `read_only` and has no counterpart in a preview that holds no run
+request. And on a MANAGED backend the bind check short-circuits, so nothing here
+asks the CLUSTER whether a claim can bind: the stock chart's missing PVC rule, or
+a storage class with no provisioner, is still discovered at dispatch, after the
+row is written.
 
 ---
 
