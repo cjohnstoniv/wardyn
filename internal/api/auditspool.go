@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -146,7 +147,20 @@ func NewAuditSpool(path string) (*AuditSpool, error) {
 	// restart used to clear the only scrape-surface signal that the queryable
 	// trail is permanently incomplete, while the sidecar holding the missing
 	// events sat untouched beside the spool.
-	a.lines.Store(countSpoolLines(path))
+	// THE CURSOR IS ON-DISK STATE TOO, for the same reason the two counters
+	// above are: it describes the file, not this process. Drain retires work by
+	// advancing `consumed` and only REWRITES the file when the reclaim pays for
+	// itself (at least half), so between compactions the cursor is the only
+	// record of what has already reached the store. A restart that started it at
+	// zero re-replayed every line back to the last compaction — measured: one
+	// pass of 100 out of 400 spooled events, then a restart, replayed all 400,
+	// i.e. 100 duplicate audit_events rows, and the compaction rule bounds that
+	// at ~50% of the spool, so a 64k backlog can produce ~32k duplicates on one
+	// restart. The file's own doc claimed the bound was "a crash between
+	// rec.Record succeeding and the on-disk trim", i.e. the in-flight batch;
+	// this makes that sentence true.
+	a.consumed = seedSpoolCursor(a.consumedPath(), spoolFileSize(path))
+	a.lines.Store(countSpoolLinesFrom(path, a.consumed))
 	a.quarantined.Store(countSpoolLines(a.quarantinePath()))
 	// Said once, at boot, where an operator reads it — not left to be inferred
 	// from a quarantine counter that came back 0 after a deploy. WARN rather
@@ -185,6 +199,80 @@ func ephemeralSpoolDir(path string) (string, bool) {
 	return dir, false
 }
 
+// spoolFileSize is the spool's size on disk, 0 for a missing or unreadable file.
+func spoolFileSize(path string) int64 {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return fi.Size()
+}
+
+// consumedPath is the CURSOR sidecar: the byte offset of the first un-replayed
+// line. Beside the spool and the quarantine sidecar, named the same way, so an
+// operator looking at the spool directory sees the three files as one set.
+func (a *AuditSpool) consumedPath() string { return a.path + ".consumed" }
+
+// saveSpoolCursor fsyncs the cursor beside the spool. Best effort BY DESIGN: a
+// failure here costs a duplicate replay after a restart, which is the
+// at-least-once residual this file already documents and accepts, while failing
+// the drain over it would stop replaying events that HAVE landed. Logged rather
+// than returned so the cost is visible without being fatal.
+func (a *AuditSpool) saveSpoolCursor() {
+	tmp := a.consumedPath() + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err == nil {
+		_, err = f.WriteString(strconv.FormatInt(a.consumed, 10))
+		if err == nil {
+			err = f.Sync()
+		}
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err == nil {
+			err = os.Rename(tmp, a.consumedPath())
+		}
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
+		slog.Warn("wardynd: audit spool cursor not persisted; a restart may replay already-recorded events",
+			slog.String("path", a.consumedPath()), slog.Any("err", err))
+	}
+}
+
+// seedSpoolCursor reads the cursor back, bounded by the spool's ACTUAL size.
+//
+// A cursor past the end of the file describes a file that no longer exists — the
+// spool was compacted, truncated or replaced while this sidecar was stale — and
+// honouring it would SKIP un-replayed events, which is the one direction this
+// file never errs in. So an out-of-range or unreadable cursor reads as 0: replay
+// from the start, at-least-once, exactly the pre-cursor behaviour.
+func seedSpoolCursor(path string, size int64) int64 {
+	buf, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(string(buf)), 10, 64)
+	if err != nil || n < 0 || n > size {
+		return 0
+	}
+	return n
+}
+
+// countSpoolLinesFrom counts the UN-REPLAYED lines: those after the cursor. The
+// gauge means "events still to replay", so seeding it from the whole file would
+// report a backlog that is already in the store.
+func countSpoolLinesFrom(path string, from int64) int64 {
+	buf, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	if from > 0 && from <= int64(len(buf)) {
+		buf = buf[from:]
+	}
+	return countSpoolLinesIn(buf)
+}
+
 // countSpoolLines counts the JSONL lines in path, 0 for a missing or unreadable
 // one. Same line semantics as Drain: a trailing newline is a terminator, and a
 // torn tail with no newline is still a line.
@@ -193,6 +281,11 @@ func countSpoolLines(path string) int64 {
 	if err != nil {
 		return 0
 	}
+	return countSpoolLinesIn(buf)
+}
+
+// countSpoolLinesIn is countSpoolLines over bytes already in hand.
+func countSpoolLinesIn(buf []byte) int64 {
 	trimmed := bytes.TrimRight(buf, "\n")
 	if len(bytes.TrimSpace(trimmed)) == 0 {
 		return 0
@@ -319,7 +412,15 @@ const (
 // of racing the truncate); the bounded batch keeps that hold short.
 //
 // at-least-once, and it stays that way. A crash between rec.Record succeeding
-// and the on-disk trim can re-replay a duplicate on the next Drain.
+// and the cursor's fsync can re-replay that batch on the next Drain.
+//
+// THE BOUND IS THE IN-FLIGHT BATCH, and it is a bound the code holds rather
+// than a sentence about one. The cursor used to live only in memory while the
+// file was rewritten at most every other pass (see the compaction rule below),
+// so a restart replayed everything back to the LAST COMPACTION — up to half the
+// spool, measured at 100 duplicates from a 400-event backlog after one 100-event
+// pass. It is now fsynced beside the spool at every advance (saveSpoolCursor)
+// and seeded at open (seedSpoolCursor), so the window really is one batch.
 // `ON CONFLICT (id) DO NOTHING` does NOT fix that: audit_events has no unique
 // constraint on `id` (the PK is the surrogate `seq`), so Postgres rejects that
 // clause at PLAN time with 42P10 — it would break every audit insert, not just
@@ -493,6 +594,10 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 	a.lines.Add(-int64(dropped))
 	if dropped == prefix {
 		a.consumed += ends[prefix-1]
+		// PERSISTED WITH THE WORK IT DESCRIBES. This is the only record that
+		// these lines already reached the store until a compaction rewrites the
+		// file, which happens at most every other pass by design.
+		a.saveSpoolCursor()
 		// COMPACT ONLY WHEN THE RECLAIM PAYS FOR ITSELF: once the consumed
 		// prefix is at least as big as what is left, a rewrite halves the file,
 		// so the rewrites over a whole backlog sum to at most 2N instead of the
@@ -577,6 +682,10 @@ func (a *AuditSpool) readWindow(size int64) ([][]byte, []int64, int64, error) {
 // Caller must hold a.mu.
 func (a *AuditSpool) reclaimAll(size int64) error {
 	a.consumed = 0
+	// The cursor describes the file, so it is reset with it — and BEFORE the
+	// truncate, so a crash in between leaves a cursor of 0 over the old file
+	// (replay, at-least-once) rather than a stale offset over an empty one.
+	a.saveSpoolCursor()
 	if size == 0 {
 		return nil
 	}
@@ -641,6 +750,10 @@ func (a *AuditSpool) compact(head [][]byte, tailStart, size int64) error {
 	_ = a.f.Close()
 	a.f = tf
 	a.consumed = 0
+	// The file the cursor described is gone; the new one starts un-replayed at
+	// byte 0. seedSpoolCursor's out-of-range guard would already refuse a stale
+	// offset here, but writing it is one fsync and removes the reliance.
+	a.saveSpoolCursor()
 	return nil
 }
 
