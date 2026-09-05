@@ -45,12 +45,34 @@ func TestSecurityHeadersOnEveryResponse(t *testing.T) {
 			"base-uri 'none'",                      // no <base> can retarget the console's relative URLs
 			"object-src 'none'",                    // no <object>/<embed> plugin surface on the admin origin
 			"font-src 'self' data:",                // console webfont is a data: URI
-			"connect-src 'self' ws: wss:",          // PTY attach WebSocket
 			"script-src 'self' 'wasm-unsafe-eval'", // recording replay player instantiates WASM
 			"media-src 'self' https://github.com https://release-assets.githubusercontent.com", // demo episodes are GitHub release assets, loaded only on click
 		} {
 			if !strings.Contains(csp, directive) {
 				t.Errorf("%s: CSP %q missing %q", path, csp, directive)
+			}
+		}
+		// connect-src is the PTY attach's grant AND the only directive bounding
+		// where an injected script on this admin-bearing origin may ship data, so
+		// it is checked as a WHOLE SEGMENT (like media-src below), never with
+		// Contains: a Contains check passes with an extra source appended, and the
+		// bare `ws:`/`wss:` SCHEMES this used to carry matched ANY host, which
+		// made the directive bound nothing at all. It is now built per request
+		// from r.Host, and do() drives every request with Host 127.0.0.1.
+		const wantConnect = "connect-src 'self' ws://127.0.0.1 wss://127.0.0.1"
+		var gotConnect string
+		for _, seg := range strings.Split(csp, "; ") {
+			if strings.HasPrefix(seg, "connect-src ") {
+				gotConnect = strings.TrimSuffix(seg, ";")
+			}
+		}
+		if gotConnect != wantConnect {
+			t.Errorf("%s: CSP connect-src = %q, want exactly %q", path, gotConnect, wantConnect)
+		}
+		for _, bare := range []string{"ws:", "wss:"} {
+			if strings.Contains(gotConnect+" ", " "+bare+" ") {
+				t.Errorf("%s: CSP connect-src = %q carries the bare scheme %q, which matches ANY host",
+					path, gotConnect, bare)
 			}
 		}
 		// The recording player needs 'wasm-unsafe-eval' (WASM compile only), NOT
