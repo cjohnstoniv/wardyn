@@ -2974,10 +2974,26 @@ a CHECK — and `0056`, `0057` and `0058` are three successive
 trigger on `audit_events`. (`0053` alters `role_mappings`, which `0051` CREATES
 two migrations earlier in the same run, so it is not an instance of the hazard.)
 `scripts/test-claims-match-code.sh` derives that list from the migration bodies,
-so a new `ALTER TABLE` landing undocumented fails there rather than here. The failure is at least loud and fail-closed —
-each migration runs in its own transaction and `db.Migrate` returns the error, so
-wardynd refuses to boot rather than half-applying — but it is a permission error
-with no way forward except giving the migrator ownership.
+so a new `ALTER TABLE` landing undocumented fails there rather than here. The
+failure is loud and the boot is refused — but **it is not a rollback, and it does
+not leave the database where it found it.**
+
+**Per-migration atomicity bounds ONE migration, not the sequence.**
+`applyMigration` wraps each file in its own transaction and records it in
+`schema_migrations` inside that same transaction, and `migrateOn` returns on the
+first error (`internal/db/db.go`). So a failure at migration *N* leaves `0…N-1`
+**committed and recorded** and only *N* rolled back: the database is
+**half-upgraded**, and wardynd's refusal to boot is a refusal to serve that
+state, not a repair of it. In the scenario above, `0050` and `0051` commit before
+`0052` fails on `api_tokens` and `schema_migrations` is left at `0051`; a failure
+at `0060` instead leaves `0050`–`0059` applied. Migrations are forward-only with
+no `down` path, so **restoring the pre-upgrade dump is the only supported
+recovery** — putting the older binary back does not undo the migrations that
+already committed, and it will not boot against the schema they left. Take the
+dump before the upgrade, not after the refusal.
+
+The permission error itself has no way forward except giving the migrator
+ownership; do that on the restored database, not on the half-upgraded one.
 
 Run this as the role you have today, the one in `WARDYN_PG_DSN`:
 
