@@ -549,9 +549,9 @@ func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
 	return nil
 }
 
-// auditForeignTriggers returns the FIRING, non-internal triggers on audit_events
-// that Wardyn does not ship, split into the two classes that matter. Returns
-// nothing when the table does not exist.
+// auditForeignTriggers returns the non-internal triggers on audit_events that
+// Wardyn does not ship and that are not DISABLED, split into the two classes
+// that matter. Returns nothing when the table does not exist.
 //
 // tamperCapable is the class that defeats the whole audit design: a ROW-level
 // BEFORE INSERT trigger. It is handed NEW and whatever it returns is what
@@ -578,6 +578,28 @@ func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
 // rather than refused: a deployment may legitimately hang a replication or
 // notify trigger off this table, and bricking that boot would be a worse
 // failure than naming it.
+//
+// TGENABLED IS NOT auditTriggerNames' FILTER, and reusing that one left the
+// state that matters most invisible. auditTriggerNames asks whether one of
+// WARDYN'S OWN triggers is firing for ORDINARY writes, so it reads 'O' and 'A'
+// and correctly treats 'R' (replica-only) as absent. Asking the same question of
+// a FOREIGN trigger inverts the answer: 'R' means dormant for ordinary traffic
+// and ARMED for exactly the `session_replication_role = replica` session the
+// whole audit design names as the bypass window (docs/OPERATIONS.md,
+// AuditDDLProtected's doc comment, the sweep's rule 3 in store.auditChainWalk).
+// A forging row-level BEFORE INSERT trigger parked at 'R' therefore passed this
+// refusal outright — and with the shipped chain trigger hardened to ENABLE
+// ALWAYS, the hardening this file goes out of its way to preserve and which
+// fires under replica too, the forged row was hash-chained on the way in: actor
+// and outcome the forger's, row_hash present and valid, VerifyAuditChain
+// reporting the log clean. So the predicate is stated in ITS OWN terms rather
+// than borrowed: any state except 'D'.
+//
+// 'D' STAYS OUT, deliberately and narrowly. A disabled trigger fires for
+// nothing at all, so a catalog row parked at 'D' cannot rewrite a row; arming it
+// is an ALTER TABLE ... ENABLE, which needs the very TRIGGER privilege
+// AuditDDLProtected exists to report on, and a boot that refused over a trigger
+// somebody had neutralised the supported way would fail in the wrong direction.
 func auditForeignTriggers(ctx context.Context, db migrationExecutor) (tamperCapable, other []string, err error) {
 	var exists bool
 	if err := db.QueryRow(ctx, `SELECT to_regclass('audit_events') IS NOT NULL`).Scan(&exists); err != nil {
@@ -597,7 +619,7 @@ func auditForeignTriggers(ctx context.Context, db migrationExecutor) (tamperCapa
 		FROM pg_trigger
 		WHERE tgrelid = 'audit_events'::regclass
 		  AND NOT tgisinternal
-		  AND tgenabled IN ('O', 'A')
+		  AND tgenabled <> 'D'
 		  AND tgname <> ALL($1)`, shipped,
 	).Scan(&tamperCapable, &other); err != nil {
 		return nil, nil, fmt.Errorf("db: read foreign audit_events triggers: %w", err)
