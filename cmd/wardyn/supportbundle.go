@@ -157,19 +157,45 @@ func gatherComposeConfig(path string) ([]byte, string) {
 	return raw, ""
 }
 
+// secretMarkers is THE vocabulary of key-name substrings that mark a value as
+// a secret — the one list both regexes below are built from, so a marker can
+// never be known to one pass and not the other. Deliberately broad, and
+// deliberately not only the names Wardyn itself ships: `docker compose config`
+// resolves an OPERATOR's whole environment, so the bundle carries key names
+// this repo has never seen. PASSWD/PASSPHRASE/APIKEY are spelled out because
+// PASSWORD/_KEY do not contain them.
+const secretMarkers = `PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN|APIKEY|_KEY|CREDENTIAL|AUTHORIZATION|AUTH|COOKIE|BEARER|_DSN`
+
 // secretLineRe matches a YAML/env-style "KEY: value" or "KEY=value" line
 // (optionally list-prefixed with "- ", and optionally commented out with
-// "#"/"##") whose key name contains a password/secret/token/dsn/key/
-// credential marker — the same shape both a raw compose file's
-// `environment:` block and `docker compose config`'s resolved output use.
+// "#"/"##") whose key name carries a secretMarkers word — the same shape both
+// a raw compose file's `environment:` block and `docker compose config`'s
+// resolved output use. The whole rest of the line is the value, which is the
+// conservative reading for an unquoted value containing spaces.
 // The comment prefix matters on the raw-file fallback path (gatherComposeConfig):
 // `docker compose config` itself strips comments, but a support bundle
 // gathered from the file on disk still carries them, and "comment out the
 // old token" is a routine ops pattern — the value must not survive that.
 // Intentionally broad: WARDYN_GROUNDTRUTH_TOKEN_FILE (a file PATH, not a
-// secret) also matches and gets redacted — a false-positive path redaction
-// is a cost worth paying to "refuse to include secret VALUES anywhere".
-var secretLineRe = regexp.MustCompile(`(?i)^(\s*(?:#+\s*)?-?\s*)([A-Za-z_][A-Za-z0-9_.]*(?:PASSWORD|SECRET|TOKEN|_DSN|_KEY|CREDENTIAL)[A-Za-z0-9_.]*)(\s*[:=]\s*)(.*)$`)
+// secret) also matches and gets redacted, and so does a non-secret key that
+// merely contains AUTH — a false-positive redaction is a cost worth paying to
+// "refuse to include secret VALUES anywhere".
+var secretLineRe = regexp.MustCompile(`(?i)^(\s*(?:#+\s*)?-?\s*)([A-Za-z_][A-Za-z0-9_.]*(?:` + secretMarkers + `)[A-Za-z0-9_.]*)(\s*[:=]\s*)(.*)$`)
+
+// secretPairRe finds a secretMarkers key and its value ANYWHERE in a line, for
+// the two shapes that have no bare key at the start of the line at all:
+//
+//   - a secret NESTED in the value of an innocuously-named variable, which
+//     secretLineRe's leading-key check can never see. The shipped compose file's
+//     own audit sink is one: WARDYN_AUDIT_SINKS carries a webhook `bearer_token`,
+//     and `docker compose config` resolves it to the operator's real SIEM bearer.
+//   - a `--flag=value` argv entry under `command:`, whose key starts with dashes
+//     (`- --admin-token=...`).
+//
+// The value stops at the closing quote, or at the first whitespace/JSON
+// delimiter for a bare one — never the rest of the line, because these matches
+// sit INSIDE a larger structure whose remainder is diagnostic content.
+var secretPairRe = regexp.MustCompile(`(?i)("?[A-Za-z0-9_.-]*(?:` + secretMarkers + `)[A-Za-z0-9_.-]*"?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}\])]+)`)
 
 // dsnCredsRe is defense-in-depth for a credential embedded in a DSN-shaped
 // value on a line secretLineRe's key check didn't catch (e.g. a comment, or
@@ -185,6 +211,7 @@ func redactSecrets(b []byte) []byte {
 			lines[i] = m[1] + m[2] + m[3] + `"<redacted>"`
 			continue
 		}
+		line = secretPairRe.ReplaceAllString(line, `${1}"<redacted>"`)
 		lines[i] = dsnCredsRe.ReplaceAllString(line, "://<redacted>@")
 	}
 	return []byte(strings.Join(lines, "\n"))

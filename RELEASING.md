@@ -89,6 +89,13 @@ before step 3.
    Prerequisites run above only sees the previous release's already-consistent
    versions and passes either way. **Re-run `make release-check` after this
    commit** before tagging.
+
+   **`docs/VERIFY.md` is deliberately NOT on that list.** Every command in it is
+   parameterised on `$WARDYN_VERSION`, which its own step 0 resolves, so it needs
+   no bump — and hard-coding this release's number into one of those commands is
+   how it silently starts verifying the wrong artifacts.
+   `scripts/test-claims-match-code.sh` fails if any `ghcr.io` / `helm` /
+   `gh release` line in that file names a literal version.
 2. **Commit** the CHANGELOG and version-string bumps together, DCO-signed:
    `git commit -s -m "release: X.Y.Z"`.
 3. **Cut (or reuse) the release branch.** Starting with 0.5, every minor
@@ -197,11 +204,26 @@ gh api -X PATCH repos/cjohnstoniv/wardyn/branches/main/protection/required_statu
   "contexts": [
     "build", "ui", "dco",
     "gates (govulncheck)", "gates (staticcheck)", "gates (gitleaks)",
-    "gates (licenses)", "gates (license-headers)"
+    "gates (licenses)", "gates (license-headers)",
+    "notices",
+    "trivy (wardynd)", "trivy (wardyn-proxy)", "trivy (agent-base)",
+    "trivy (agent-codex-cli)", "trivy (agent-aws-sso)"
   ]
 }
 JSON
 ```
+
+`notices` and the five `trivy` cells are in that list because the Prerequisites
+section above already calls them gates and they are **not** conditional — both
+report on every pull request, so both are eligible contexts. Until the PATCH
+above is applied they are advisory only: `notices` is the copyleft /
+unreviewed-dependency gate, and `trivy` is the only CVE scan of the five images
+a release publishes, so with either red a PR still merges. `trivy` is a matrix
+job, so it reports one context per image cell — adding an image to
+`.github/workflows/ci.yml`'s `trivy` matrix means adding its context here **and**
+re-running the PATCH, or that image merges unscanned.
+`scripts/test-claims-match-code.sh` (C6) fails if this list and that matrix drift
+apart.
 
 Read it back with
 `gh api repos/cjohnstoniv/wardyn/branches/main/protection --jq .required_status_checks.contexts`.

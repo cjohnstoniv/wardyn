@@ -48,6 +48,12 @@ secrets:
 
 env:
   WARDYN_OIDC_ISSUER: https://issuer.example
+  # NOT optional garnish. An OIDC issuer with no operator allowlist, no role map
+  # and no explicit override is a BOOT refusal (validateOperatorPosture), so the
+  # chart refuses to render it — this file used to be exactly that unbootable
+  # shape, rendering exit 0 and crash-looping on apply. Keeping a satisfier here
+  # means the "all switches on" example is also a bootable one.
+  WARDYN_OIDC_OPERATOR_EMAILS: platform@example.com
 
 extraEnv:
   - name: WARDYN_OIDC_CLIENT_SECRET
@@ -72,10 +78,19 @@ defaultPolicy: |
 
 networkPolicy:
   ingress:
+    # Setting this REPLACES the same-namespace default, so every peer that must
+    # reach wardynd has to be listed. The monitoring namespace is here because
+    # podAnnotations below advertises prometheus.io/scrape — an example that
+    # advertised the scrape while the default-deny policy admitted no scraper
+    # was advertising a signal nothing could collect. See the chart README's
+    # "Scraping /metrics through the NetworkPolicy".
     from:
       - namespaceSelector:
           matchLabels:
             kubernetes.io/metadata.name: ingress-nginx
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: monitoring
   egress:
     extra:
       - to:
@@ -139,6 +154,26 @@ uiSandbox:
   port: 8081
   advertiseURL: https://wardyn-ui.example.com
   originTemplate: https://run-{run}.ui.example.com
+
+# Corporate CA trust, the "other side" of ITS off-by-default switch. It is a
+# FIVE-object surface — a ConfigMap, a checksum pod annotation,
+# WARDYN_TRUSTED_CA_FILE, a volume and a volumeMount — and with `trustedCA`
+# left at its default neither of helm-lint's two renders touched any of them:
+# breaking the mount path passed the whole gate. PEM TEXT, structurally shaped
+# but not a real certificate (nothing here is ever installed, only rendered).
+trustedCA: |
+  -----BEGIN CERTIFICATE-----
+  MIIBnotarealcertificateitisonlyrenderedneverinstalledAAAAAAAAAAAA
+  -----END CERTIFICATE-----
+
+# Explicit requests/limits: the values.yaml default is `{}` (no resources
+# stanza at all), so the passthrough was likewise rendered by neither gate.
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 1Gi
 
 podAnnotations:
   prometheus.io/scrape: "true"

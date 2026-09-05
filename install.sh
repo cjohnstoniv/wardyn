@@ -22,20 +22,60 @@
 # Building from source is a CONTRIBUTOR path, not an install path: see
 # CONTRIBUTING.md.
 #
-# Env: WARDYN_VERSION (default: latest release), WARDYN_HOME (default ~/.wardyn),
+# Env: WARDYN_VERSION (default: latest release), WARDYN_HOME (default ~/.<NS>),
 #      WARDYN_PORT (default 8080), WARDYN_NS (default "wardyn" — the container-name
-#      prefix; change it to run a second install alongside the first).
+#      prefix; change it to run a second install alongside the first, and the
+#      install root follows it so that second stack gets its own .env and keys).
 #
 # ponytail: sh, not bash — this is the one script that runs on a machine we know
 # nothing about, before anything of ours is installed.
 set -eu
 
 REPO=cjohnstoniv/wardyn
-HOME_DIR="${WARDYN_HOME:-$HOME/.wardyn}"
-PORT="${WARDYN_PORT:-8080}"
 
 say() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+
+# env_get KEY [FILE] — the last uncommented KEY= value in FILE (default .env),
+# stripped of surrounding whitespace and ONE layer of matching quotes (the `\1`
+# back-reference is what keeps `"x'` from being unquoted). EVERY read of an
+# existing install's .env routes through here, because `KEY="value"` is a shape
+# docker compose accepts — it strips the quotes and the stack runs — so a reader
+# that tests the RAW line calls a quoted key ABSENT. That is how the upgrade
+# refused a perfectly good WARDYN_AGE_KEY with "has no … line", and how the
+# admin-token predicate this replaced counted `""` as a credential.
+env_get() {
+  sed -n "s/^$1=//p" "${2:-.env}" 2>/dev/null | tail -1 \
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+          -e 's/^\(["'\'']\)\(.*\)\1$/\2/' \
+          -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
+# fetch URL [curl args…] — every network read this script makes. curl's default
+# is to wait FOREVER, and a peer that completes the handshake and then answers
+# nothing hangs `curl … | sh` with no output and no exit — indistinguishable
+# from a machine that has stopped. One wrapper keeps the four fetches in step.
+fetch() { curl -fsSL --connect-timeout 10 --max-time 120 "$@"; }
+
+# The namespace names the containers AND, by default, the install root. A second
+# install under a different WARDYN_NS needs its own .env or it is not a second
+# install at all: it shares the first one's age key, admin token and ports and
+# merely redeploys it, which is exactly what the "install alongside it" remedy
+# below used to do.
+NS="${WARDYN_NS:-wardyn}"
+HOME_DIR="${WARDYN_HOME:-}"
+if [ -z "${HOME_DIR}" ]; then
+  HOME_DIR="${HOME}/.${NS}"
+  # Installs made before that default all live in ~/.wardyn whatever their NS.
+  # Keep upgrading THAT one when its .env claims this very namespace: deriving a
+  # fresh root beside it would mint a second age key and orphan every secret the
+  # first one holds.
+  if [ ! -f "${HOME_DIR}/.env" ] && \
+     [ "$(env_get WARDYN_NS "${HOME}/.wardyn/.env")" = "${NS}" ]; then
+    HOME_DIR="${HOME}/.wardyn"
+  fi
+fi
+PORT="${WARDYN_PORT:-8080}"
 
 # sha256_hex [FILE] — the hex digest of FILE, or of stdin with no argument.
 # macOS ships `shasum`, not GNU coreutils' `sha256sum`, so BOTH hashing sites
@@ -79,6 +119,22 @@ mint_admin_token() {
   printf '%s' "$TOKEN"
 }
 
+# older_than A B — true when A is a strictly OLDER release than B, comparing the
+# numeric major.minor.patch and nothing else. Not `sort -V`: that is a GNU
+# extension and this is the one script that runs on a machine we know nothing
+# about. Anything that is not three dotted numbers on BOTH sides (a hand-edited
+# .env header, a build with no patch component) is NOT called older — the
+# refusal below skips rather than guess an ordering it cannot justify.
+older_than() {
+  awk -v a="${1#v}" -v b="${2#v}" 'BEGIN{
+    if (split(a, x, ".") < 3 || split(b, y, ".") < 3) exit 1
+    for (i = 1; i <= 3; i++) {
+      if (x[i] + 0 < y[i] + 0) exit 0
+      if (x[i] + 0 > y[i] + 0) exit 1
+    }
+    exit 1 }'
+}
+
 command -v docker >/dev/null 2>&1 || die "docker is required — https://docs.docker.com/get-docker/"
 docker info >/dev/null 2>&1 || die "the docker daemon is not reachable (is Docker running?)"
 docker compose version >/dev/null 2>&1 || die "docker compose v2 is required (docker-compose v1 is not supported)"
@@ -94,38 +150,114 @@ docker compose version >/dev/null 2>&1 || die "docker compose v2 is required (do
 VERSION="${WARDYN_VERSION:-}"
 if [ -z "$VERSION" ]; then
   say "Resolving the latest release"
-  VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=1" 2>/dev/null \
+  VERSION=$(fetch "https://api.github.com/repos/${REPO}/releases?per_page=1" 2>/dev/null \
             | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
   [ -n "$VERSION" ] || die "could not resolve the latest release — set WARDYN_VERSION=vX.Y.Z"
 fi
 case "$VERSION" in v*) ;; *) VERSION="v$VERSION" ;; esac
+# A release TAG — never anything that can act as a URL path. VERSION is
+# interpolated into four fetch URLs (the compose file on raw.githubusercontent,
+# the CLI asset and the SHA256SUMS it is checked against on github.com) and into
+# every image ref below. curl resolves `..` segments BEFORE it dials (RFC 3986
+# s5.2.4), so `WARDYN_VERSION=v/../../../attacker/evil/main` walks out of
+# ${REPO} and re-points those downloads at an arbitrary owner — SHA256SUMS
+# included, which is exactly why install_cli's same-origin checksum gate cannot
+# catch it: it would compare the attacker's binary against the attacker's own
+# digest. Allow exactly what a git tag needs and refuse the rest.
+case "$VERSION" in
+  *[!A-Za-z0-9._+-]*|*..*)
+    die "WARDYN_VERSION must be a release tag (letters, digits and . _ + -), not '${VERSION}' — it is used as a URL path segment and a container image tag." ;;
+esac
 SEMVER="${VERSION#v}"
 # The wardynd image is named four times — two mints, the fresh .env, the upgrade
 # rewrite — and a version-pin that disagreed with itself across them is exactly
 # the class of bug the upgrade path already shipped once. Name it once.
 IMG="ghcr.io/${REPO%/*}/wardynd:${SEMVER}"
+# The agent images this release publishes, as `<catalog name>:<image name>` —
+# the fresh .env seeds the map below from these, and the upgrade merges into
+# whatever map the box already has, row by row.
+AGENT_IMAGE_ROWS="claude-code:agent-base codex-cli:agent-codex-cli aws-sso:agent-aws-sso"
 say "Installing Wardyn ${VERSION} into ${HOME_DIR}"
 
 # Container names are ${WARDYN_NS:-wardyn}-*, so a stack already running from a
 # clone owns them. Surface that as a sentence instead of a daemon conflict error
 # fifty lines into a compose transcript.
-NS="${WARDYN_NS:-wardyn}"
-if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "${NS}-api"; then
+# Only when this is a FRESH install, though. On an upgrade — "re-run this
+# installer at the new version", the procedure the closing banner prints — the
+# containers `docker ps -a` reports are OUR OWN, so this fired on every box that
+# had ever run the installer and made the documented upgrade exit 1 with a
+# message about somebody else's stack.
+#
+# The remedy below is written to be PASTED: a `VAR=x curl … | sh` prefix applies
+# to `curl`, never to the piped `sh` (/bin/sh is dash on most Linux), so the
+# form this used to print re-ran the installer with a default environment and
+# reproduced the identical error.
+if [ ! -f "${HOME_DIR}/.env" ] && docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "${NS}-api"; then
   die "a Wardyn stack named '${NS}' already exists on this Docker daemon.
   Stop it first (cd ${HOME_DIR} && docker compose down), or install alongside it
   under a different name and free ports:
-      WARDYN_NS=wardyn2 WARDYN_PORT=8090 WARDYN_PG_PORT=5433 \\
-        WARDYN_REGISTRY_PORT=5011 WARDYN_SSH_PORT=2223 WARDYN_UI_SANDBOX_PORT=8091 \\
-        curl -fsSL <this-url> | sh"
+      curl -fsSL <this-url> | WARDYN_NS=wardyn2 WARDYN_PORT=8090 WARDYN_PG_PORT=5433 \\
+        WARDYN_REGISTRY_PORT=5011 WARDYN_SSH_PORT=2223 WARDYN_UI_SANDBOX_PORT=8091 sh
+  That second stack gets its own install root, ${HOME}/.wardyn2, and its own keys."
 fi
 
 mkdir -p "$HOME_DIR"
 cd "$HOME_DIR"
 
+# REFUSALS COME FIRST — before the compose file is overwritten at the new tag
+# and before .env is touched — so a refusal leaves the box exactly as it was
+# found. This one used to run AFTER both rewrites, which left a stopped upgrade
+# pinning a version it had just been told it cannot start.
+#
+# An .env with no store key cannot decrypt one secret this box has already
+# written, and compose would start wardynd against an empty WARDYN_AGE_KEY.
+# Minting a fresh key here would be WORSE than stopping — it would silently
+# orphan every existing secret behind a key that never encrypted them — so this
+# is the one upgrade condition the installer refuses instead of fixing.
+if [ -f .env ]; then
+  case "$(env_get WARDYN_AGE_KEY)" in
+    AGE-SECRET-KEY-*) ;;
+    *) die "${HOME_DIR}/.env has no WARDYN_AGE_KEY=AGE-SECRET-KEY-… line.
+  Minting a new one here would orphan every secret already stored on this box.
+  Restore that line from your backup, or move ${HOME_DIR}/.env aside to start
+  over (every stored secret then becomes unrecoverable)." ;;
+  esac
+
+  # An .env here means this is an UPGRADE, and the closing banner's whole
+  # instruction for one is "re-run this installer at the new version". True, and
+  # it omits the part that cannot be undone: migrations are forward-only
+  # (internal/db applies anything new on boot; there are no `down` migrations),
+  # so the Postgres dump is the only rollback this box has and it has to be
+  # taken BEFORE the restart. Say it here, where it is still actionable, rather
+  # than only in a doc the operator reached this script instead of reading.
+  # The trailing `[0-9]` is what stops the greedy `[0-9.]*` from swallowing the
+  # sentence-ending period of "…for Wardyn v0.6.5. Safe to edit." and reporting
+  # this box as running "0.6.5.".
+  INSTALLED=$(sed -n '1s/^# Generated by install\.sh for Wardyn v\{0,1\}\([0-9][0-9.]*[0-9]\).*/\1/p' .env)
+  say "Upgrading the install already in ${HOME_DIR}${INSTALLED:+ (${INSTALLED})} — if you have not taken a dump, Ctrl-C and take one:"
+  say "  docker exec ${NS}-postgres pg_dump -U wardyn wardyn > wardyn-\$(date +%F).sql"
+  say "  Full procedure: https://github.com/${REPO}/blob/${VERSION}/docs/OPERATIONS.md#upgrading-a-one-line-install"
+
+  # …and the same forward-only rule is why moving BACKWARDS is refused rather
+  # than warned about. This branch is about to rewrite the image pins in place,
+  # which is what would leave an OLDER wardynd booting against a database a
+  # newer one has already migrated — unsupported, with no `down` migration to
+  # walk it back. Until now nothing stopped it, at the one moment it could be.
+  # Refused with the rest of the refusals, before the first write.
+  if [ -n "${INSTALLED}" ] && older_than "${SEMVER}" "${INSTALLED}"; then
+    die "${HOME_DIR} is running ${INSTALLED} and this installer is ${SEMVER} — that is a DOWNGRADE.
+  Migrations are forward-only: there are no \`down\` migrations, so an older wardynd against a
+  database a newer one has already migrated is unsupported and nothing can walk it back.
+  Re-run at ${INSTALLED} or newer (WARDYN_VERSION=vX.Y.Z), or restore your pg_dump into a
+  FRESH install root (WARDYN_HOME=~/.wardyn-${SEMVER}).
+  https://github.com/${REPO}/blob/${VERSION}/docs/OPERATIONS.md#upgrading-a-one-line-install"
+  fi
+fi
+
 # The compose file comes from the tag itself, so this works the moment a release
 # exists — no dependency on a release asset having been uploaded.
 say "Fetching the compose definition"
-curl -fsSL "https://raw.githubusercontent.com/${REPO}/${VERSION}/deploy/compose/docker-compose.yaml" \
+fetch "https://raw.githubusercontent.com/${REPO}/${VERSION}/deploy/compose/docker-compose.yaml" \
   -o docker-compose.yaml || die "could not fetch the compose file for ${VERSION}"
 
 # .env holds WARDYN_AGE_KEY — the master key for every secret on this box — and
@@ -198,20 +330,37 @@ else
   awk -v v="${VERSION}" 'NR==1 && /^# Generated by install.sh for Wardyn / {print "# Generated by install.sh for Wardyn " v ". Safe to edit."; next} {print}' .env > .env.tmp && mv .env.tmp .env
   env_set WARDYN_WARDYND_IMAGE "${IMG}"
   env_set WARDYN_PROXY_IMAGE "ghcr.io/${REPO%/*}/wardyn-proxy:${SEMVER}"
-  env_set WARDYN_AGENT_IMAGES "{\"claude-code\":\"ghcr.io/${REPO%/*}/agent-base:${SEMVER}\",\"codex-cli\":\"ghcr.io/${REPO%/*}/agent-codex-cli:${SEMVER}\",\"aws-sso\":\"ghcr.io/${REPO%/*}/agent-aws-sso:${SEMVER}\"}"
+  # WARDYN_AGENT_IMAGES is MERGED, not replaced. docs/UI-SANDBOXES.md tells
+  # operators to add their own images to this same map, and rewriting the line
+  # wholesale deleted every one of them on the next upgrade — silently, under
+  # the comment above promising that hand edits survive. Only rows still
+  # pointing at ghcr.io/<owner>/ are bumped, so an operator who REPOINTED a
+  # known name at their own registry keeps that too; a published row the file
+  # never had (0.6.x seeded no claude-code) is added.
+  images=$(env_get WARDYN_AGENT_IMAGES)
+  case "$(printf '%s' "${images}" | tr -d '[:space:]')" in
+    '{'*'}') ;;
+    *) images='{}' ;;   # absent, or not an object at all — every row is missing
+  esac
+  for row in ${AGENT_IMAGE_ROWS}; do
+    name=${row%%:*}; img="ghcr.io/${REPO%/*}/${row#*:}:${SEMVER}"
+    if printf '%s' "${images}" | grep -q "\"${name}\"[[:space:]]*:[[:space:]]*\"ghcr\.io/${REPO%/*}/"; then
+      images=$(printf '%s' "${images}" \
+        | sed "s|\"${name}\"[[:space:]]*:[[:space:]]*\"ghcr\.io/${REPO%/*}/[^\"]*\"|\"${name}\":\"${img}\"|")
+    elif ! printf '%s' "${images}" | grep -q "\"${name}\"[[:space:]]*:"; then
+      images=$(printf '%s' "${images}" | sed "s|^{[[:space:]]*|{\"${name}\":\"${img}\",|")
+    fi
+  done
+  # …which leaves `{"a":"b",}` when the map started out empty.
+  env_set WARDYN_AGENT_IMAGES "$(printf '%s' "${images}" | sed 's|,[[:space:]]*}$|}|')"
   # Listeners are additive: an install from before they existed has neither, and
   # without them the published ports stay inert.
   grep -qE '^WARDYN_SSH_LISTEN=' .env || printf 'WARDYN_SSH_LISTEN=:2222\n' >> .env
-  grep -qE '^WARDYN_SSH_ADVERTISE=' .env || printf 'WARDYN_SSH_ADVERTISE=127.0.0.1:%s\n' "${WARDYN_SSH_PORT:-2222}" >> .env
-  # An .env with no store key cannot decrypt one secret this box has already
-  # written, and compose would start wardynd against an empty WARDYN_AGE_KEY.
-  # Minting a fresh key here would be WORSE than stopping — it would silently
-  # orphan every existing secret behind a key that never encrypted them — so
-  # this is the one upgrade condition the installer refuses instead of fixing.
-  grep -qE '^WARDYN_AGE_KEY=AGE-SECRET-KEY-' .env || die "${HOME_DIR}/.env has no WARDYN_AGE_KEY=AGE-SECRET-KEY-… line.
-  Minting a new one here would orphan every secret already stored on this box.
-  Restore that line from your backup, or move ${HOME_DIR}/.env aside to start
-  over (every stored secret then becomes unrecoverable)."
+  # …and from the port THIS INSTALL publishes: compose reads WARDYN_SSH_PORT
+  # from the same .env, so backfilling the advertise from the process
+  # environment told the console and /healthz a port nothing forwards.
+  ssh_port=$(env_get WARDYN_SSH_PORT)
+  grep -qE '^WARDYN_SSH_ADVERTISE=' .env || printf 'WARDYN_SSH_ADVERTISE=127.0.0.1:%s\n' "${ssh_port:-${WARDYN_SSH_PORT:-2222}}" >> .env
   # An install that landed an EMPTY admin token — 0.6.x on a host with no
   # sha256sum, or a docker run that failed mid-pipeline — carried it forward
   # through every later upgrade in silence, and the compose file substitutes its
@@ -222,15 +371,8 @@ else
   # SOME character follows the `=`: that predicate is satisfied by `=""`, by
   # `=''`, by a single space, and by both placeholders an operator is most likely
   # to have copied in — compose's published `demo-admin-token` and a `change-me`
-  # — so each of those was carried forward as though it were a credential. Strip
-  # the surrounding whitespace, then ONE layer of matching quotes (the `\1`
-  # back-reference is what keeps `"x'` from being unquoted), then whitespace the
-  # quotes were hiding.
-  cur_token=$(sed -n 's/^WARDYN_ADMIN_TOKEN=//p' .env | tail -1 \
-              | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
-                    -e 's/^\(["'\'']\)\(.*\)\1$/\2/' \
-                    -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-  case "${cur_token}" in
+  # — so each of those was carried forward as though it were a credential.
+  case "$(env_get WARDYN_ADMIN_TOKEN)" in
     ''|demo-admin-token|change-me)
       say "The existing WARDYN_ADMIN_TOKEN is empty or a placeholder — minting a new one"
       TOKEN=$(mint_admin_token)
@@ -240,8 +382,26 @@ else
 fi
 umask "${OLD_UMASK}"
 
+# From here on the banner describes THE INSTALL THAT NOW EXISTS, not the
+# variables this invocation happened to carry. The upgrade branch leaves the
+# ports in .env untouched by design, so echoing ${WARDYN_PORT:-8080} ended every
+# upgrade re-run by sending the operator to a port nothing listens on. Both
+# branches route through the same read: on a fresh install .env holds the values
+# just written, so there is one code path and nothing to keep in step.
+PORT=$(env_get WARDYN_UP_PORT); PORT="${PORT:-${WARDYN_PORT:-8080}}"
+SSH_PORT=$(env_get WARDYN_SSH_PORT); SSH_PORT="${SSH_PORT:-${WARDYN_SSH_PORT:-2222}}"
+
 say "Pulling signed images"
 docker compose pull --quiet 2>/dev/null || docker compose pull
+# `docker compose pull` resolves only the three default-profile services. The
+# proxy sidecar (WARDYN_PROXY_IMAGE) and the three agent images the .env above
+# registers are pulled by wardynd ITSELF, at the first run — long after this
+# transcript has scrolled past — so the line above covers three of the seven
+# images this release publishes. docs/VERIFY.md §6 says so; nothing said it HERE,
+# where an operator counting what arrived is standing.
+echo "                (the control plane: wardynd, postgres, registry. The proxy and the three"
+echo "                 agent images are pulled by wardynd at your first run — same release tag,"
+echo "                 same signatures, verified the same way: docs/VERIFY.md §6.)"
 
 # --no-build is the guarantee: the compose file carries build stanzas for
 # contributors, and this install must never trigger one.
@@ -270,7 +430,7 @@ install_cli() {
   asset="wardyn-${os}-${arch}"
   base="https://github.com/${REPO}/releases/download/${VERSION}"
   tmp="${HOME_DIR}/.wardyn-cli.$$"
-  curl -fsSL "${base}/${asset}" -o "${tmp}" 2>/dev/null || {
+  fetch "${base}/${asset}" -o "${tmp}" 2>/dev/null || {
     say "Could not download the ${asset} CLI; skipping (the console still works)"
     rm -f "${tmp}"; return 0
   }
@@ -278,7 +438,7 @@ install_cli() {
   # Verify against the release's SHA256SUMS. A failure here is FATAL, not a
   # skip: silently installing an unverified binary onto PATH is worse than
   # having no CLI at all.
-  if sums=$(curl -fsSL "${base}/SHA256SUMS" 2>/dev/null) && [ -n "${sums}" ]; then
+  if sums=$(fetch "${base}/SHA256SUMS" 2>/dev/null) && [ -n "${sums}" ]; then
     # SHA256SUMS lists names as `<hash>  ./<name>`, so strip the leading ./ and
     # match the basename EXACTLY — a substring match would let
     # wardyn-linux-amd64 be satisfied by a line for some other asset.
@@ -320,12 +480,14 @@ if [ -n "${CLI_PATH}" ]; then
     *":$(dirname "${CLI_PATH}"):"*) ;;
     *) echo "                (not on your PATH — add: export PATH=\"$(dirname "${CLI_PATH}"):\$PATH\")" ;;
   esac
-  echo "  Attach:       wardyn ssh <run-id>   (the SSH gateway is on at 127.0.0.1:${WARDYN_SSH_PORT:-2222})"
+  echo "  Attach:       wardyn ssh <run-id>   (the SSH gateway is on at 127.0.0.1:${SSH_PORT})"
 fi
 echo "  Mode:         single-user — you are the admin. Multiple people? https://github.com/${REPO}/blob/${VERSION}/docs/OPERATIONS.md#second-user-same-host"
 echo "  Admin token:  grep WARDYN_ADMIN_TOKEN ${HOME_DIR}/.env"
 echo "  Stop:         cd ${HOME_DIR} && docker compose down            (keeps all data)"
 echo "  Upgrade:      re-run this installer at the new version"
+echo "                pg_dump FIRST — migrations are forward-only, so that dump is your only"
+echo "                rollback: https://github.com/${REPO}/blob/${VERSION}/docs/OPERATIONS.md#upgrading-a-one-line-install"
 echo "  Uninstall:    cd ${HOME_DIR} && docker compose down            then remove ${HOME_DIR} yourself."
 echo "                ${HOME_DIR}/.env holds WARDYN_AGE_KEY in cleartext: deleting it"
 echo "                makes every secret stored on this box UNRECOVERABLE. \`docker compose"

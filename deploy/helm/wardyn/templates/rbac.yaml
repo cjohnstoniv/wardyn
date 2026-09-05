@@ -40,6 +40,27 @@ Cluster-scoped (ClusterRole+ClusterRoleBinding): RuntimeClass lookups
 {{- fail "wardyn: k8s.enabled is set with serviceAccount.create=false and no serviceAccount.name — the RoleBinding/ClusterRoleBinding below would bind the k8s-runner privileges (pods/exec, secrets create/delete, networkpolicies create/delete) to the namespace's default ServiceAccount, handing them to every OTHER pod in the namespace that also uses it. This holds with k8s.rbac.create=false too: wardynd still runs AS that ServiceAccount, and whoever writes the bindings out-of-band binds them to the namespace default SA just the same. Either leave serviceAccount.create=true (the default, a dedicated ServiceAccount), or set serviceAccount.name to an existing ServiceAccount you intend to grant these privileges to." -}}
 {{- end -}}
 {{/*
+The OTHER way these verbs reach things they should not: not the wrong SUBJECT
+(above) but the wrong NAMESPACE. An empty k8s.runsNamespace puts runs — and so
+this Role — in the control-plane namespace, where pods/exec + secrets delete +
+networkpolicies delete cover every workload that happens to share it. RBAC
+cannot narrow that (run object names are derived per-run from a UUID, so
+resourceNames cannot enumerate them), so the namespace IS the blast radius and
+the only fix is to pick a different one. Refused ABOVE the k8s.rbac.create gate
+on purpose: with create=false a platform team writes the same Role out-of-band,
+so the namespace question is identical — only who types it changes.
+
+Gated on serviceAccount.automount and k8s.proxyImage being satisfied FIRST, by
+condition rather than by file position: Helm evaluates rbac.yaml before
+deployment.yaml, so without this an install that is missing the proxy image (a
+boot-time crash-loop) or the API-server token (a runner that cannot function at
+all) would be told about namespace hygiene instead of about the thing that stops
+it working. Fix what breaks the install, then what widens its blast radius.
+*/}}
+{{- if and .Values.serviceAccount.automount .Values.k8s.proxyImage (not .Values.k8s.runsNamespace) (not .Values.k8s.allowRunsInReleaseNamespace) -}}
+{{- fail "wardyn: k8s.enabled is set with an empty k8s.runsNamespace, so every run's pods land in the CONTROL-PLANE namespace and the k8s-runner Role is created there. Its verbs then apply to every OTHER workload sharing that namespace: wardynd can exec into any pod there, delete any pod there, and create or delete any Secret and NetworkPolicy there — not only the objects it created for a run. RBAC cannot narrow it: a run's object names are derived per-run from its UUID, so resourceNames cannot enumerate them, which makes the namespace itself the blast radius. Set k8s.runsNamespace to a dedicated, pre-existing namespace that holds nothing else and the chart moves the Role, the RoleBinding and the control-plane NetworkPolicy's callback peer there with it. Sharing the namespace deliberately (a laptop demo, or a cluster where wardynd is the only workload): set k8s.allowRunsInReleaseNamespace=true to render anyway and accept that." -}}
+{{- end -}}
+{{/*
 k8s.rbac.create=false skips the four objects below — for a platform team
 that provisions equivalent RBAC out-of-band (e.g. via GitOps) and would
 rather this chart not manage it. `default dict` + `hasKey`, not
@@ -59,6 +80,21 @@ render exists to catch). `| default dict` makes an absent block read as off.
 */}}
 {{- $userDrives := .Values.userDrives | default dict -}}
 {{- if or (not (hasKey $rbac "create")) $rbac.create -}}
+{{- if not .Values.k8s.runsNamespace }}
+# ─────────────────────────────────────────────────────────────────────────────
+# WARNING: k8s.runsNamespace is empty, so runs land in the CONTROL-PLANE
+# namespace and the Role below is created there ({{ .Release.Namespace }}).
+# Every verb in it then applies to every OTHER workload that shares this
+# namespace — wardynd can exec into any pod here, delete any pod here, and
+# create or delete any Secret and NetworkPolicy here, not merely the ones it
+# made for a run. RBAC cannot narrow that: a run's object names are derived
+# per-run from its UUID, so `resourceNames` is not available to scope them.
+# The confinement is the NAMESPACE. Set k8s.runsNamespace to a dedicated,
+# pre-existing namespace that holds nothing else and this Role moves there with
+# the runs; the sibling guard above already refuses the OTHER way these verbs
+# leak (binding them to the namespace's default ServiceAccount).
+# ─────────────────────────────────────────────────────────────────────────────
+{{- end }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -115,11 +151,23 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "wardyn.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{/* CLUSTER-SCOPED NAMES CARRY THE NAMESPACE; namespaced ones above must not.
+wardyn.fullname is built from the RELEASE NAME alone, which is enough for every
+namespaced object (two releases in two namespaces get two distinct Roles) but
+NOT for these two: a cluster-scoped object has one global name, so
+`helm install wardyn -n team-a` and `helm install wardyn -n team-b` both want
+"wardyn-k8s-runtimeclasses" — the second install fails on a resource it does not
+own, and an uninstall of either would take the other's RuntimeClass read
+permission with it, breaking every CC2/CC3 run in the surviving namespace with a
+403 no chart output explains. Prefixing with .Release.Namespace makes the two
+independent. Renaming is safe on upgrade: both objects are in the release
+manifest, so Helm creates the new pair and removes the old. */}}
+{{- $clusterName := printf "%s-%s-k8s-runtimeclasses" .Release.Namespace (include "wardyn.fullname" .) -}}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "wardyn.fullname" . }}-k8s-runtimeclasses
+  name: {{ $clusterName }}
   labels:
     {{- include "wardyn.labels" . | nindent 4 }}
 rules:
@@ -130,13 +178,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "wardyn.fullname" . }}-k8s-runtimeclasses
+  name: {{ $clusterName }}
   labels:
     {{- include "wardyn.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "wardyn.fullname" . }}-k8s-runtimeclasses
+  name: {{ $clusterName }}
 subjects:
   - kind: ServiceAccount
     name: {{ include "wardyn.serviceAccountName" . }}

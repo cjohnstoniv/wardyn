@@ -291,25 +291,39 @@ func parseRootList(name, raw string) ([]string, error) {
 	return out, nil
 }
 
-// bootWarnings returns the O4 notices: a root at "/" or at the daemon's own
-// $HOME is allowed (WARN, not refuse) but bounds nothing much — the dotfile
-// deny-list is then the only thing between a member and the operator's
-// credentials.
+// bootWarnings returns the O4 notices for the two roots that are allowed (WARN,
+// not refuse) but do not bound what an operator setting them expects. They are
+// warned about for OPPOSITE reasons and so get OPPOSITE sentences — the same
+// split ParseUserDriveHostRoots keeps, and for the same reason (a merged
+// sentence sends an operator hunting the wrong failure):
+//
+//   - $HOME is far too WIDE: withinAnyRoot really does admit everything under
+//     it, so the credential dotfile deny-list is the only thing left between a
+//     member and the operator's credentials.
+//   - "/" is DEAD: withinAnyRoot compares real == root || HasPrefix(real,
+//     root+"/"), which for "/" is the prefix "//" — so a root of "/" matches
+//     nothing but the literal path "/" and REFUSES every member mount under it.
+//     Saying it is bounded only by the deny-list states the opposite of what
+//     the code does.
+//
+// Fail-closed is the right behaviour for "/" and stays; only the sentence was
+// wrong. internal/runner/member_mount_test.go drives both against withinAnyRoot
+// so the wording cannot drift from the behaviour again.
 func (p MemberMountPolicy) bootWarnings() []string {
 	home := filepath.Clean(strings.TrimSpace(os.Getenv("HOME")))
 	seen := map[string]bool{}
 	var out []string
 	check := func(name string, roots []string) {
 		for _, r := range roots {
+			var msg string
 			switch {
 			case r == "/":
-				// keep going
+				msg = fmt.Sprintf("%s contains %q, which matches NOTHING: a root of \"/\" bounds only the literal path \"/\", so every member mount under it is refused rather than allowed; point it at a dedicated projects directory instead", name, r)
 			case home != "" && home != "." && r == home:
-				// keep going
+				msg = fmt.Sprintf("%s contains %q, this daemon's own home directory — a member's mounts are then bounded only by the credential dotfile deny-list; point it at a dedicated projects directory instead", name, r)
 			default:
 				continue
 			}
-			msg := fmt.Sprintf("%s contains %q — a member's mounts are then bounded only by the credential dotfile deny-list; point it at a dedicated projects directory instead", name, r)
 			if !seen[msg] {
 				seen[msg] = true
 				out = append(out, msg)

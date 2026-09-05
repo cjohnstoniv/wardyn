@@ -54,7 +54,8 @@ conditionally. Conditions that fall on **you as the operator**, not on Wardyn:
 | | |
 |---|---|
 | Component | `@openai/codex` |
-| Version in `0.6.1` | 0.149.1 |
+| Version in `0.6.1` | 0.149.1 — an OBSERVATION, not a pin: through 0.6.1 the image installed `@openai/codex` unversioned, so this records what one build happened to convey |
+| Version from `0.7` | `0.149.1`, PINNED by `CODEX_VERSION` in [`codex-cli/Dockerfile`](codex-cli/Dockerfile) — bump the two together, because this row is a licence statement about a specific version |
 | Licence | **Apache-2.0**, with an upstream NOTICE |
 
 Genuinely open source. No additional terms are known to attach. Listed here only

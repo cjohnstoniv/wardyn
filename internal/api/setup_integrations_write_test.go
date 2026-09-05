@@ -5,8 +5,13 @@ package api
 
 import (
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/url"
+	"os"
+	"reflect"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -465,4 +470,115 @@ func auditCount(audit *recRecorder, action string) int {
 		}
 	}
 	return n
+}
+
+// R5 F028: putIntegrationRequest's doc comment prescribed a procedure the
+// handler rejects — "a caller must round-trip a GET first to preserve fields it
+// does not intend to change", while decodeStrict 400s the very first field
+// every GET emits ("unknown field \"id\""). The contract chosen is the strict
+// one: decodeStrict stays (a typo'd field name must not be silently dropped on
+// a corp-wide write), and the comment now names what a caller has to drop.
+// This checks each half of that comment against the running handler.
+func TestPutIntegration_DocumentedProcedureIsTheOneThatWorks(t *testing.T) {
+	srv, _, _ := integrationWriteHarness(t, []types.Integration{{
+		ID: "acme-anthropic", Name: "Acme", Kind: types.IntegrationKindAnthropicAPIKey,
+		Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "acme-anthropic-key"}},
+		Egress:  []string{"api.anthropic.com"},
+	}})
+
+	// The GET half of the documented round trip.
+	w := do(t, srv, http.MethodGet, "/api/v1/integrations", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /integrations: code = %d, body=%s", w.Code, w.Body.String())
+	}
+	var listed struct {
+		Integrations []map[string]any `json:"integrations"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	var row map[string]any
+	for _, r := range listed.Integrations {
+		if r["id"] == "acme-anthropic" {
+			row = r
+		}
+	}
+	if row == nil {
+		t.Fatalf("acme-anthropic not in GET /integrations: %s", w.Body.String())
+	}
+
+	put := func(body map[string]any) int {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return do(t, srv, http.MethodPut, "/api/v1/integrations/acme-anthropic", adminToken, string(raw)).Code
+	}
+
+	// Everything the GET emits that the PUT body has no field for is
+	// server-owned and must be dropped by the caller.
+	settable := jsonTagNames(t, reflect.TypeOf(putIntegrationRequest{}))
+	var serverOwned []string
+	stripped := map[string]any{}
+	for k, v := range row {
+		if settable[k] {
+			stripped[k] = v
+			continue
+		}
+		serverOwned = append(serverOwned, k)
+	}
+	sort.Strings(serverOwned)
+	if len(serverOwned) == 0 {
+		t.Fatal("the GET document is already PUT-shaped; this test no longer describes the endpoint")
+	}
+
+	// 1. The raw GET document does NOT round-trip — the procedure as written.
+	if code := put(row); code != http.StatusBadRequest {
+		t.Errorf("PUT of the unmodified GET document: code = %d, want 400 (decodeStrict rejects server-owned fields)", code)
+	}
+	// 2. The documented procedure — drop exactly those fields — does.
+	if code := put(stripped); code != http.StatusOK {
+		t.Errorf("PUT of the GET document minus %v: code = %d, want 200", serverOwned, code)
+	}
+	// 3. Each one really is load-bearing, so the comment's list is exact and
+	//    not merely a superset someone pasted.
+	for _, k := range serverOwned {
+		body := maps.Clone(stripped)
+		body[k] = row[k]
+		if code := put(body); code != http.StatusBadRequest {
+			t.Errorf("PUT with server-owned field %q re-added: code = %d, want 400", k, code)
+		}
+	}
+	// 4. The doc comment has to NAME every one of them, or a caller cannot
+	//    perform the procedure from the comment alone — which is the defect.
+	doc := putIntegrationRequestDoc(t)
+	for _, k := range serverOwned {
+		if !strings.Contains(doc, k) {
+			t.Errorf("putIntegrationRequest's doc comment does not name server-owned field %q, which a caller MUST drop from a GET document (400 otherwise). Full comment:\n%s", k, doc)
+		}
+	}
+}
+
+// putIntegrationRequestDoc returns the doc comment immediately above
+// `type putIntegrationRequest struct` in setup_integrations.go — the text a
+// caller reads to learn what to send.
+func putIntegrationRequestDoc(t *testing.T) string {
+	t.Helper()
+	src, err := os.ReadFile("setup_integrations.go")
+	if err != nil {
+		t.Fatalf("read setup_integrations.go: %v", err)
+	}
+	lines := strings.Split(string(src), "\n")
+	decl := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, "type putIntegrationRequest struct") })
+	if decl < 0 {
+		t.Fatal("type putIntegrationRequest struct not found in setup_integrations.go")
+	}
+	start := decl
+	for start > 0 && strings.HasPrefix(lines[start-1], "//") {
+		start--
+	}
+	if start == decl {
+		t.Fatal("putIntegrationRequest has no doc comment")
+	}
+	return strings.Join(lines[start:decl], "\n")
 }

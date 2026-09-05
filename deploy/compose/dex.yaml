@@ -37,6 +37,12 @@ staticClients:
     # are literals. This must match WARDYN_OIDC_CLIENT_SECRET in docker-compose.yaml
     # (default "wardyn-oidc-secret"). To rotate, change both in lockstep.
     secret: wardyn-oidc-secret
+    # LITERAL, for the same reason the secret above is: env expansion is off in
+    # this file. docker-compose.yaml derives wardynd's WARDYN_OIDC_REDIRECT_URL
+    # from ${WARDYN_UP_PORT:-8080}, and Dex matches redirect_uri EXACTLY — so a
+    # compose stack published on a non-8080 port needs this line changed to the
+    # same port (or a second entry added for it), or Dex refuses the authorize
+    # request. The default pair (8080 here, 8080 there) is the demo path.
     redirectURIs:
       - http://localhost:8080/auth/callback
 

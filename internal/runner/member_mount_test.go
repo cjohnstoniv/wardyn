@@ -354,3 +354,62 @@ func TestParseMemberMountPolicy_WarnsOnWideRoots(t *testing.T) {
 		t.Error("a per-member root of / produced no warning")
 	}
 }
+
+// R5 F066: bootWarnings' sentence for a root must describe what withinAnyRoot
+// actually does with that root — the two "/"-and-$HOME cases were merged into
+// one wide-open sentence, and for "/" it stated the OPPOSITE of the code.
+// withinAnyRoot matches `real == root || strings.HasPrefix(real, root+"/")`, so
+// a root of "/" compares against the prefix "//" and matches nothing but the
+// literal "/" — the same dead ceiling ParseUserDriveHostRoots already words as
+// "matches NOTHING". This drives the parser and withinAnyRoot together, so the
+// wording cannot drift from the behaviour again.
+func TestMemberBootWarnings_MatchWithinAnyRootReality(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	under := filepath.Join(home, "proj")
+	if err := os.MkdirAll(under, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		root string
+		// probe is a real path under root that a member might mount.
+		probe string
+	}{
+		{"slash-is-dead", "/", under},
+		{"home-is-wide-open", home, under},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, warns, err := ParseMemberMountPolicy(tc.root, "", "", "")
+			if err != nil {
+				t.Fatalf("ParseMemberMountPolicy(%q): %v", tc.root, err)
+			}
+			if len(warns) == 0 {
+				t.Fatalf("ParseMemberMountPolicy(%q) warned about nothing", tc.root)
+			}
+			got := strings.Join(warns, "\n")
+			if !strings.Contains(got, "WARDYN_MEMBER_WORKSPACE_ROOTS") {
+				t.Errorf("warning does not name the variable that is set wrong:\n  %s", got)
+			}
+
+			// The ground truth the sentence has to agree with.
+			reaches := withinAnyRoot(tc.probe, []string{tc.root})
+			wideOpen := strings.Contains(got, "bounded only by the credential dotfile deny-list")
+			dead := strings.Contains(got, "matches NOTHING")
+
+			if reaches && !wideOpen {
+				t.Errorf("withinAnyRoot(%q, [%q]) = true (the root really is wide open) but the warning does not say so:\n  %s", tc.probe, tc.root, got)
+			}
+			if !reaches && wideOpen {
+				t.Errorf("withinAnyRoot(%q, [%q]) = false — the root refuses every mount under it — yet the warning claims a member's mounts are bounded only by the dotfile deny-list, the OPPOSITE:\n  %s", tc.probe, tc.root, got)
+			}
+			if !reaches && !dead {
+				t.Errorf("withinAnyRoot(%q, [%q]) = false, so this ceiling is DEAD; the warning must say so in ParseUserDriveHostRoots' words (\"matches NOTHING\"):\n  %s", tc.probe, tc.root, got)
+			}
+			if reaches && dead {
+				t.Errorf("withinAnyRoot(%q, [%q]) = true but the warning calls the ceiling dead:\n  %s", tc.probe, tc.root, got)
+			}
+		})
+	}
+}

@@ -1011,7 +1011,10 @@ func TestPodStuckReason(t *testing.T) {
 			unbound,
 		},
 		{
-			"a ReadWriteOnce claim already attached elsewhere",
+			// NOT the cross-node RWO attach case (that pod is SCHEDULED — see
+			// podStuckReason's doc): this is the bound PV whose node affinity
+			// excludes every candidate, which really does land here.
+			"a bound PV whose node affinity excludes every node",
 			&corev1.Pod{Status: corev1.PodStatus{
 				Phase: corev1.PodPending,
 				Conditions: []corev1.PodCondition{{
@@ -1081,5 +1084,37 @@ func TestWaitContainerRunning_TimeoutNamesTheUnboundClaim(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), unbound) {
 		t.Errorf("err = %q, want the scheduler's own reason — a bare deadline names nothing an operator can act on", err)
+	}
+}
+
+// res2-01: podStuckReason's doc comment claimed the cross-node ReadWriteOnce
+// case reaches PodScheduled. It does not — nothing schedules around RWO
+// (kube-scheduler enforces only ReadWriteOncePod), so that pod IS scheduled and
+// then stalls in ContainerCreating with a FailedAttachVolume warning EVENT,
+// which this function never reads. docs/OPERATIONS.md ("User drives on
+// Kubernetes") carries the corrected account; the comment must not contradict
+// it, or an operator is sent to read a condition that says nothing about their
+// failure. The behaviour below is the control: it is already right.
+func TestPodStuckReasonCommentDoesNotClaimTheCrossNodeRWOCase(t *testing.T) {
+	doc := docCommentAbove(t, "sandbox.go", "func podStuckReason(")
+	if strings.Contains(doc, "already attached to a pod on another node") {
+		t.Errorf("sandbox.go podStuckReason still claims a cross-node ReadWriteOnce attach reaches PodScheduled; that pod is SCHEDULED (PodScheduled=True) and stalls on a FailedAttachVolume event this function never reads:\n%s", doc)
+	}
+	if !strings.Contains(doc, "FailedAttachVolume") {
+		t.Errorf("sandbox.go podStuckReason does not name what the cross-node ReadWriteOnce case actually produces (a FailedAttachVolume event), so the next reader has nowhere to go:\n%s", doc)
+	}
+
+	// Control: a pod in exactly that state — scheduled, Pending, waiting on the
+	// attach — really does produce no storage cause here.
+	pod := &corev1.Pod{Status: corev1.PodStatus{
+		Phase:      corev1.PodPending,
+		Conditions: []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionTrue}},
+		ContainerStatuses: []corev1.ContainerStatus{{
+			Name:  mainContainerName,
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}},
+		}},
+	}}
+	if got := podStuckReason(pod); strings.Contains(got, "unscheduled") {
+		t.Errorf("podStuckReason(cross-node RWO shape) = %q, want no unscheduled claim — that pod IS scheduled", got)
 	}
 }

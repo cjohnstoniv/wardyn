@@ -9,6 +9,7 @@ import (
 	"net"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -51,7 +52,12 @@ func setupProxyRelayCmd() *cobra.Command {
 			"unreachable from any container.\n\n" +
 			"Runs in the FOREGROUND until interrupted. Store the relay's address as the\n" +
 			"upstream-proxy secret and reference it from site-config; the sandbox's egress\n" +
-			"policy is still enforced by wardyn-proxy before anything reaches the relay.",
+			"policy is still enforced by wardyn-proxy before anything reaches the relay.\n\n" +
+			"SECURITY: the relay is UNAUTHENTICATED, and --listen-addr defaults to 0.0.0.0 —\n" +
+			"every interface on this host. Anything that can reach <listen-port> reaches your\n" +
+			"corporate proxy through it (the proxy's own authentication still applies to every\n" +
+			"request). Narrow --listen-addr to the one interface your sandbox uses, or\n" +
+			"firewall the port.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			listenPort, err := strconv.Atoi(args[0])
@@ -83,6 +89,12 @@ func setupProxyRelayCmd() *cobra.Command {
 			go func() { <-ctx.Done(); _ = ln.Close() }()
 
 			fmt.Fprintf(cmd.OutOrStdout(), "relaying %s -> %s (Ctrl-C to stop)\n", ln.Addr(), target)
+			// Printed next to the address it describes: an operator who started
+			// this from a script never reads --help, and the exposure the
+			// default carries used to live only in a source comment.
+			if warn := relayExposureWarning(listenAddr); warn != "" {
+				fmt.Fprintln(cmd.OutOrStdout(), warn)
+			}
 			fmt.Fprintf(cmd.OutOrStdout(),
 				"store this as the upstream-proxy secret, replacing <host-gateway> with the address your sandbox reaches this host on:\n"+
 					"    wardyn secret set upstream-proxy-url   # then paste: http://<host-gateway>:%d\n", listenPort)
@@ -105,6 +117,21 @@ func setupProxyRelayCmd() *cobra.Command {
 	cmd.Flags().StringVar(&targetHost, "target-host", "127.0.0.1",
 		"loopback address the corporate proxy is bound to")
 	return cmd
+}
+
+// relayExposureWarning returns the line to print when the relay is NOT bound to
+// loopback — i.e. whenever something other than this host can reach it. Empty
+// for a loopback bind, which exposes nothing new. An unparseable or empty
+// address warns: the default ("0.0.0.0") and a bare hostname both land here,
+// and the fail-safe direction for an exposure warning is to print it.
+func relayExposureWarning(listenAddr string) string {
+	host := strings.TrimSpace(listenAddr)
+	if strings.EqualFold(host, "localhost") || (net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback()) {
+		return ""
+	}
+	return "WARNING: this relay is unauthenticated and is bound to " + listenAddr +
+		" — anything that can reach this port reaches your corporate proxy. " +
+		"Narrow it with --listen-addr, or firewall the port."
 }
 
 // relayConn pumps bytes both ways between an accepted client and a fresh

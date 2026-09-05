@@ -291,15 +291,45 @@ func TestWaitReady_ExpectGitFlagWaitsForGit(t *testing.T) {
 	}
 }
 
-// vcs:"unknown" (git ran and failed) is never "ready", even without
-// --expect-git: the deadline trips and the message names the last state.
-func TestWaitReady_UnknownVCSKeepsWaiting(t *testing.T) {
-	fastPoll(t)
-	id := uuid.New()
-	srv := runReadyServer(t, id, "", []types.RunState{types.RunRunning},
-		[]runFilesResp{{body: `{"vcs":"unknown","files":[],"path":"/home/agent/work","truncated":false}`}}, nil)
-	_, err := execWaitReadyText(t, srv, id.String(), "--timeout", "30ms")
-	if code := exitCodeOf(err); code != 124 || !strings.Contains(err.Error(), `vcs "unknown"`) {
-		t.Fatalf("exit=%d err=%v, want 124 naming vcs \"unknown\"", code, err)
-	}
+// vcs:"unknown" is what wait-ready must decide about, and the answer differs
+// by arm.
+//
+// Without --expect-git (and no repo) the caller asked only for a USABLE
+// sandbox: the exec ran, so the sandbox is up, and Path names the directory it
+// settled on — that is exactly the "workspace inspectable" this command
+// promises. Waiting cannot improve it; the loop used to poll the state to the
+// full 5-minute deadline and exit 124 on a sandbox an editor could already
+// open.
+//
+// With --expect-git it must still wait: "unknown" is git confirming a work
+// tree and then a later git command failing (internal/api/run_files.go's
+// runFilesScript exits 3 — vcs:"none" — when git is missing outright), which
+// is precisely the shape a clone still landing has.
+func TestWaitReady_UnknownVCS_ReadyWithoutGit_WaitsWithIt(t *testing.T) {
+	const unknown = `{"vcs":"unknown","files":[],"path":"/home/agent/work","truncated":false}`
+
+	t.Run("no-git-wanted-is-ready", func(t *testing.T) {
+		fastPoll(t)
+		id := uuid.New()
+		srv := runReadyServer(t, id, "", []types.RunState{types.RunRunning},
+			[]runFilesResp{{body: unknown}}, nil)
+		out, err := execWaitReadyText(t, srv, id.String(), "--timeout", "30ms")
+		if err != nil {
+			t.Fatalf("err = %v, want readiness: the sandbox is up and its workspace path is known", err)
+		}
+		if !strings.Contains(out, "/home/agent/work") || !strings.Contains(out, "(unknown)") {
+			t.Errorf("output = %q, want it to name the path and report vcs unknown honestly", out)
+		}
+	})
+
+	t.Run("expect-git-still-waits", func(t *testing.T) {
+		fastPoll(t)
+		id := uuid.New()
+		srv := runReadyServer(t, id, "", []types.RunState{types.RunRunning},
+			[]runFilesResp{{body: unknown}}, nil)
+		_, err := execWaitReadyText(t, srv, id.String(), "--expect-git", "--timeout", "30ms")
+		if code := exitCodeOf(err); code != 124 || !strings.Contains(err.Error(), `vcs "unknown"`) {
+			t.Fatalf("exit=%d err=%v, want 124 naming vcs \"unknown\"", code, err)
+		}
+	})
 }

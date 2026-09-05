@@ -192,6 +192,13 @@ type bootFlags struct {
 	// rotate the store on EVERY boot. See rotateAgeKeyMode (rekey.go).
 	rotateAgeKey *string
 
+	// allowMultiInstance is the runtime twin of the Helm chart's
+	// allowMultiReplica: it waives the single-instance boot lock
+	// (claimSingleInstance). Like rotateAgeKey it has NO WARDYN_* env pair — a
+	// stray variable in a compose .env must not silently disable a safety
+	// control, and the chart passes it as an arg where it is set deliberately.
+	allowMultiInstance *bool
+
 	// SSH gateway (C2/C3): sshListen empty = off = no listener, no new surface
 	// (see resolveSSHGateway). sshAdvertise is purely advisory copy for the
 	// run-detail pane's `ssh` command — never read by the gateway itself.
@@ -218,7 +225,7 @@ func parseBootFlags() *bootFlags {
 		dsn:            flagEnv("dsn", "WARDYN_PG_DSN", "", "Postgres DSN (required)"),
 		migrateDSN:     flagEnv("migrate-dsn", "WARDYN_PG_MIGRATE_DSN", "", "OPTIONAL Postgres DSN for an owner/migrator role that runs migrations; when set, WARDYN_PG_DSN is used ONLY for the least-privilege runtime app pool (enables audit_events DDL protection). Empty = single-DSN mode (no DDL protection, unchanged behavior)."),
 		migrateTimeout: flagDuration("migrate-timeout", "WARDYN_MIGRATE_TIMEOUT", 5*time.Minute, "how long db.Migrate may run before boot fails closed — separate from the fixed 30s connect budget so a slow migration on a large table (e.g. a new index) doesn't crash-loop the upgrade"),
-		listen:         flagEnv("listen", "WARDYN_LISTEN", ":8080", "HTTP listen address"),
+		listen:         flagEnv("listen", "WARDYN_LISTEN", defaultListenAddr, "HTTP listen address"),
 		tlsCert:        flagEnv("tls-cert", "WARDYN_TLS_CERT", "", "path to the TLS certificate (PEM); enables built-in TLS when set together with -tls-key"),
 		tlsKey:         flagEnv("tls-key", "WARDYN_TLS_KEY", "", "path to the TLS private key (PEM); enables built-in TLS when set together with -tls-cert"),
 		tlsTerminated:  flagBool("tls-terminated", "WARDYN_TLS_TERMINATED", false, "set when TLS terminates at an upstream reverse proxy; marks session cookies Secure even though wardynd itself serves plain HTTP"),
@@ -346,6 +353,13 @@ func parseBootFlags() *bootFlags {
 		// WARDYN_AGE_KEY with no Postgres.
 		genAgeKey: flagBool("gen-age-key", "WARDYN_GEN_AGE_KEY", false, "generate a fresh age X25519 identity (AGE-SECRET-KEY-...) to stdout for WARDYN_AGE_KEY, then exit (no DSN required)"),
 
+		// flag.Bool, NOT flagBool: no env pair by design — see the struct field.
+		allowMultiInstance: flag.Bool("allow-multi-instance", false,
+			"override: start even though another wardynd already holds this database's single-instance lock. "+
+				"wardynd's secret-masking registry is process-local and FAILS OPEN, so a recording uploaded to the instance "+
+				"that did not serve the run's proxy injection is persisted verbatim, live credentials in cleartext. "+
+				"The runtime twin of the chart's allowMultiReplica; normally refused."),
+
 		// flag.String, NOT flagEnv: no env pair by design — see the struct field.
 		// The backquoted word is deliberate: flag.PrintDefaults renders the first
 		// one in a usage string as the argument placeholder ("-rotate-age-key path").
@@ -363,15 +377,23 @@ func parseBootFlags() *bootFlags {
 	}
 	flag.Parse()
 
+	// An empty -listen/WARDYN_LISTEN is not a bind — see normalizeListenAddr.
+	// Done HERE, once, so every listen classifier and the http.Server itself
+	// read the same real address instead of net/http's implicit 0.0.0.0:80.
+	*f.listen = normalizeListenAddr(*f.listen)
+
 	// Standard-AWS fallback. An operator whose environment is already configured
 	// for AWS shouldn't have to restate the same values under a Wardyn-specific
 	// name. WARDYN_BEDROCK_* (and its flag) stay authoritative — these apply only
 	// where it resolved EMPTY.
 	//
 	// Post-parse, NOT as the flagEnv default argument: compose passes
-	// WARDYN_BEDROCK_REGION="" unconditionally (docker-compose.yaml) and flagEnv
-	// honours an explicitly-empty env as an intentional blank, so a default-arg
-	// fallback would be dead in the deployment mode most people run. Here in
+	// WARDYN_BEDROCK_REGION="" unconditionally (docker-compose.yaml), and the
+	// fallback has to key off what the flag ACTUALLY resolved to — including an
+	// explicit `-bedrock-region=` — not off what the compiled-in default was.
+	// (flagEnv now reads an empty env as "unset, keep the default" like every
+	// other helper in cliutil, so the env half alone would work as a default
+	// argument; the flag half still would not.) Here in
 	// parseBootFlags rather than resolveLocalMode (where the sibling Bedrock
 	// auto-detect lives) because that function returns early when local mode is
 	// off — which is every auth-configured deployment, i.e. exactly the

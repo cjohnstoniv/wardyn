@@ -91,19 +91,65 @@ their mode independently.
 {{- end -}}
 
 {{/*
+wardyn.envValue — the EFFECTIVE value of one WARDYN_* variable as the pod will
+see it, from either injection path: {"ctx": $, "name": "WARDYN_X"}. Returns ""
+when the variable is unset OR set to an empty/whitespace-only string, and the
+literal "<valueFrom>" for an extraEnv entry sourced from a Secret/ConfigMap/
+fieldRef (the chart cannot read that value, and must not treat "cannot see it"
+as "not set").
+
+Presence was the wrong test. `hasKey` counted an EMPTY WARDYN_ADMIN_TOKEN or
+WARDYN_OIDC_ISSUER as auth, so the chart rendered exactly the 401s-everything
+control plane its refusal exists to prevent — an empty token is not a token,
+and internal/api/http.go's adminAuth reads it as unconfigured. extraEnv wins
+over env when both name the same variable, matching the order deployment.yaml
+appends them in.
+*/}}
+{{- define "wardyn.envValue" -}}
+{{- $ctx := .ctx -}}
+{{- $name := .name -}}
+{{- $env := $ctx.Values.env | default dict -}}
+{{- $v := "" -}}
+{{- if hasKey $env $name -}}{{- $v = get $env $name | toString | trim -}}{{- end -}}
+{{- range $ctx.Values.extraEnv | default list -}}
+{{- if eq (.name | default "") $name -}}
+{{- if .valueFrom -}}{{- $v = "<valueFrom>" -}}{{- else -}}{{- $v = .value | default "" | toString | trim -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $v -}}
+{{- end -}}
+
+{{/*
 Non-empty when SOME authentication is wired. Without one, internal/api/http.go
 adminAuth 401s every API route ("admin token not configured; public API
 disabled") while /healthz keeps reporting Ready — a pod that looks healthy and
 serves nothing. templates/secret.yaml turns that into a render-time failure.
 Every escape hatch counts: the chart's two adminToken modes, and an
-operator-supplied token/issuer in .Values.env or .Values.extraEnv.
+operator-supplied token/issuer in .Values.env or .Values.extraEnv — each read
+through wardyn.envValue, so an EMPTY one no longer counts.
+
+"Counts as configured" is NOT "is a good idea": a .Values.env WARDYN_ADMIN_TOKEN
+renders the bearer that gates the whole public API as a plaintext literal in the
+Deployment object. It stays accepted (removing an escape hatch operators depend
+on is its own outage), but templates/secret.yaml no longer recommends it in the
+refusal message, and refuses it OUTRIGHT when it is named alongside
+auth.adminToken.* — where it would silently win on last-defined-wins.
 */}}
 {{- define "wardyn.authConfigured" -}}
-{{- $ok := or .Values.auth.adminToken.secretRef.name .Values.auth.adminToken.value (hasKey .Values.env "WARDYN_ADMIN_TOKEN") (hasKey .Values.env "WARDYN_OIDC_ISSUER") -}}
-{{- range .Values.extraEnv -}}
-{{- if has (.name | default "") (list "WARDYN_ADMIN_TOKEN" "WARDYN_OIDC_ISSUER") -}}{{- $ok = true -}}{{- end -}}
+{{- $token := include "wardyn.envValue" (dict "ctx" . "name" "WARDYN_ADMIN_TOKEN") -}}
+{{- $issuer := include "wardyn.envValue" (dict "ctx" . "name" "WARDYN_OIDC_ISSUER") -}}
+{{- if or .Values.auth.adminToken.secretRef.name .Values.auth.adminToken.value $token $issuer }}true{{ end -}}
 {{- end -}}
-{{- if $ok }}true{{ end -}}
+
+{{/*
+"true" when WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST is set to something wardynd
+reads as true. internal/cliutil.FlagBool accepts 1/true/yes/on
+(case-insensitive) and EXITS on anything else, so matching that exact set is
+what keeps this render check and the boot check agreeing.
+*/}}
+{{- define "wardyn.allowNoOperatorList" -}}
+{{- $v := include "wardyn.envValue" (dict "ctx" . "name" "WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST") | lower -}}
+{{- if has $v (list "1" "true" "yes" "on" "<valuefrom>") }}true{{ end -}}
 {{- end -}}
 
 {{/*

@@ -74,35 +74,51 @@ func TestReleasingDocNamesEveryCIJob(t *testing.T) {
 			"A maintainer reads that list to decide what must be green before tagging; a job missing from it is a gate they will skip.", missing)
 	}
 
-	// The other direction: a job named in the doc that no longer exists. This is
-	// what `sbom-stub` was — a phantom the maintainer waits on forever.
+	// The other direction: a name in the list that is no longer a ci.yml job —
+	// what `sbom-stub` was, a phantom the maintainer waits on forever because
+	// GitHub never reports a job that cannot run.
+	//
+	// Scoped to the ENUMERATION, not to every backticked token in the file: the
+	// prose around it deliberately names things that are not ci.yml jobs (the
+	// deleted `sbom-stub` it records, the `publish-image` / `release` workflows
+	// it excludes by name), and a whole-file scan therefore had to allowlist
+	// them — which it did by hardcoding `sbom-stub` as the ONLY name it would
+	// ever complain about, so deleting a real job the list still names left
+	// this arm silent. The enumeration runs from the "job list:" marker to the
+	// em-dash that ends it; `gates`' matrix parenthetical is cut because those
+	// are matrix entries, not top-level job ids, and jobRe above never sees them.
 	present := map[string]bool{}
 	for _, j := range jobs {
 		present[j] = true
 	}
-	// Only check names that LOOK like job ids inside backticks and are not
-	// obviously something else (a make target, a file, a context cell).
-	backtick := regexp.MustCompile("`([a-z][a-z0-9-]{2,})`")
+	const marker = "ci.yml` job list:"
+	at := strings.Index(text, marker)
+	if at < 0 {
+		t.Fatal("RELEASING.md no longer introduces the ci.yml job list with \"ci.yml` job list:\" — this guard can no longer see the list it exists to check")
+	}
+	list := text[at+len(marker):]
+	if end := strings.Index(list, " — "); end >= 0 {
+		list = list[:end]
+	}
+	list = regexp.MustCompile(`\(a matrix job:[^)]*\)`).ReplaceAllString(list, "")
+
+	named := regexp.MustCompile("`([a-z][a-z0-9-]*)`").FindAllStringSubmatch(list, -1)
+	if len(named) < 10 {
+		t.Fatalf("parsed only %d job names from RELEASING.md's list — the parse regressed, and this arm would pass vacuously", len(named))
+	}
 	seen := map[string]bool{}
 	var phantom []string
-	for _, m := range backtick.FindAllStringSubmatch(text, -1) {
+	for _, m := range named {
 		name := m[1]
 		if seen[name] || present[name] {
 			continue
 		}
 		seen[name] = true
-		// A name is only a phantom if the doc presents it AS a ci.yml job. The
-		// cheap, low-false-positive signal: it used to be one. Keep this list
-		// empty; it exists so a deletion has somewhere to be recorded.
-		for _, dead := range []string{"sbom-stub"} {
-			if name == dead && !strings.Contains(text, "`"+dead+"` used to be named here") &&
-				!strings.Contains(text, "used\nto cite `"+dead+"`") {
-				phantom = append(phantom, name)
-			}
-		}
+		phantom = append(phantom, name)
 	}
+	sort.Strings(phantom)
 	if len(phantom) > 0 {
-		t.Errorf("RELEASING.md names ci.yml jobs that no longer exist: %v\n"+
+		t.Errorf("RELEASING.md's ci.yml job list names jobs that no longer exist: %v\n"+
 			"GitHub never reports a job that cannot run, so a maintainer waits on it forever.", phantom)
 	}
 }

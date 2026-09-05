@@ -329,12 +329,19 @@ the default values and `ci/all-on-values.yaml`, plus its refusals). No
 The compose stack (`deploy/compose/docker-compose.yaml`):
 
 - **Control plane** — one `wardynd` service on `:8080` (the browser opens
-  `localhost:8080`; under WSL, in the Windows browser) plus `postgres`, both on
-  the compose network. That is the whole control plane.
+  `localhost:8080`; under WSL, in the Windows browser) plus `postgres`. Three
+  services start by default, not two: `registry` (the local devcontainer-build
+  registry) rides along because `wardynd` declares `depends_on: registry`, so
+  every bring-up path starts it whether or not a devcontainer is ever built. It
+  is multi-homed onto `wardyn` and `wardyn-envbuild` — the second bridge is the
+  untrusted envbuilder BUILD container's, which is deliberately NOT a member of
+  `wardyn` and so can push images without becoming an in-network peer of
+  `postgres` or wardynd's admin API.
 - **Opt-in profiles** — `sso` adds Dex (`WARDYN_LOCAL_MODE` bypasses it);
   `groundtruth` adds `tetragon` → `wardyn-tetragon-ingest` → `wardynd`.
-- **Build-only profile** — `proxy-image` / `agent-claude-code` /
-  `agent-codex-cli` are images, not services.
+- **Build-only profile** — six entries that are images, not services:
+  `proxy-image`, `agent-base`, `agent-claude-code`, `agent-codex-cli`,
+  `agent-vscode`, `agent-aws-sso`.
 - **Per-run sandboxes** — `wardynd` calls the Docker API to create each run its
   own gatewayless network (agent container + `wardyn-proxy` sidecar). State
   persists to the `postgres_data` volume; `wardynd` holds `recordings` and

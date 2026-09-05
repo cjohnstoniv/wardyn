@@ -293,3 +293,81 @@ func TestSupportBundleCmdEndToEnd(t *testing.T) {
 		t.Errorf("compose-config.redacted.yaml leaked the admin token: %s", files["compose-config.redacted.yaml"])
 	}
 }
+
+// ─── redactSecrets: the key names and value shapes the first pass missed ─────
+//
+// F070/F143/F166/F201. `support-bundle`'s own Long text promises "Never
+// includes a secret VALUE", and the bundle is gathered from `docker compose
+// config` — the LIVE resolved environment, i.e. the real values, not ${VAR}
+// placeholders — and then mailed to a support ticket. Three holes:
+//
+//  1. the marker vocabulary knew PASSWORD/SECRET/TOKEN/_DSN/_KEY/CREDENTIAL and
+//     nothing else, so APIKEY / PASSWD / PASSPHRASE / AUTH(ORIZATION) / COOKIE
+//     / BEARER key names shipped verbatim;
+//  2. only the line's LEADING key was inspected, so a secret nested inside an
+//     innocuously-named variable's JSON value survived — including
+//     WARDYN_AUDIT_SINKS' webhook bearer_token, which is in the shipped compose
+//     file;
+//  3. a `--flag=value` argv entry has no bare key at line start at all, so
+//     `- --admin-token=...` shipped the token.
+
+func TestRedactSecrets_KeyNamesAndNestedValues(t *testing.T) {
+	cases := []struct{ name, in, secret string }{
+		// (1) marker vocabulary
+		{"APIKEY, no underscore", `      WARDYN_APIKEY: sk-live-abcdef`, "sk-live-abcdef"},
+		{"OPENAI_APIKEY", `      OPENAI_APIKEY: sk-REALVALUE`, "sk-REALVALUE"},
+		{"bare APIKEY", `      APIKEY: "sk-live-abcdef"`, "sk-live-abcdef"},
+		{"PASSWD", `      PGPASSWD: hunter2`, "hunter2"},
+		{"MYSQL_PASSWD", `      MYSQL_PASSWD: hunter2`, "hunter2"},
+		{"PASSPHRASE list entry", `        - REGISTRY_PASSPHRASE=hunter2`, "hunter2"},
+		{"SSH_PASSPHRASE", `      SSH_PASSPHRASE: "correct horse"`, "correct horse"},
+		{"AUTH", `      ANTHROPIC_AUTH: Bearer zzz`, "Bearer zzz"},
+		{"PROXY_AUTH", `      HTTP_PROXY_AUTH: Basic am9lOnMzY3JldA==`, "am9lOnMzY3JldA=="},
+		{"AUTHORIZATION", `      AUTHORIZATION: "Bearer eyJhbGciOi"`, "eyJhbGciOi"},
+		{"REGISTRY_AUTH", `      REGISTRY_AUTH: "docker-auth-blob"`, "docker-auth-blob"},
+		{"COOKIE", `      SESSION_COOKIE: "abc123"`, "abc123"},
+		// (2) nested inside a value whose own key carries no marker — the
+		// shipped compose file's audit sink (deploy/compose/docker-compose.yaml).
+		{
+			"audit-sink webhook bearer",
+			`      WARDYN_AUDIT_SINKS: '{"webhook":{"url":"https://siem.corp.example/ingest","bearer_token":"siem-bearer-SUPERSECRET"}}'`,
+			"siem-bearer-SUPERSECRET",
+		},
+		{
+			"nested client_secret",
+			`      WARDYN_PROXY_CONFIG_JSON: '{"upstream":{"client_secret":"nested-oidc-secret"}}'`,
+			"nested-oidc-secret",
+		},
+		// (3) flag-style argv entry
+		{"--flag=value argv", `      - --admin-token=real-flag-token`, "real-flag-token"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := string(redactSecrets([]byte(tc.in)))
+			if strings.Contains(out, tc.secret) {
+				t.Errorf("secret %q survived redaction: %s", tc.secret, out)
+			}
+			if !strings.Contains(out, "<redacted>") {
+				t.Errorf("no <redacted> marker in %q", out)
+			}
+		})
+	}
+}
+
+// The counterweight: the diagnostic content a support engineer actually needs
+// must still come through. A redactor that eats the whole file is useless.
+func TestRedactSecrets_NonSecretLinesSurvive(t *testing.T) {
+	for _, line := range []string{
+		`    image: ghcr.io/wardyn/wardynd:0.7.0`,
+		`      WARDYN_LISTEN: "0.0.0.0:8080"`,
+		`      WARDYN_RUNNER: "docker"`,
+		`      WARDYN_OIDC_ISSUER: "https://dex:5556/dex"`,
+		`      WARDYN_OIDC_REDIRECT_URL: "https://wardyn.example.com/auth/callback"`,
+		`      - "127.0.0.1:8080:8080"`,
+		`    restart: unless-stopped`,
+	} {
+		if out := string(redactSecrets([]byte(line))); out != line {
+			t.Errorf("non-secret line was modified:\n got %q\nwant %q", out, line)
+		}
+	}
+}

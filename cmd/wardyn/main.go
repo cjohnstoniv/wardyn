@@ -69,7 +69,8 @@ func dialHint(err error) string {
 // exitCodeFor maps an error to a process exit code CI can branch on. A run
 // outcome from --wait (*exitError) wins — it already encodes the agent/lifecycle
 // result. Otherwise a typed API error maps by status class (auth=2, server=4,
-// other 4xx=3), a transport failure (*url.Error) is 5, and anything else is 1.
+// every other non-2xx=3), a transport failure (*url.Error) is 5, and anything
+// else is 1.
 func exitCodeFor(err error) int {
 	var ee *exitError
 	if errors.As(err, &ee) {
@@ -82,7 +83,13 @@ func exitCodeFor(err error) int {
 			return 2
 		case ae.Status >= 500:
 			return 4
-		case ae.Status >= 400:
+		default:
+			// pkg/client mints an *sdk.APIError for EVERY non-2xx status, 3xx
+			// included (nothing sets CheckRedirect, so a redirect from an
+			// interposed proxy is never followed). All of them are failures of
+			// the CLI-to-control-plane request itself, so they classify with
+			// the 4xx class — never on the catch-all 1, which docs/CI.md
+			// reserves for a FAILED run's own task exit code.
 			return 3
 		}
 	}
@@ -138,14 +145,27 @@ func rootCmd() *cobra.Command {
 		// full usage block — acceptable; the message is already actionable.
 		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
 			cmd.SilenceUsage = true
+			// The env token is resolved HERE, not as the flag's default, so it
+			// never becomes cobra's printed `(default "...")`. Pre-run beats
+			// every RunE (and so every client() call), and an explicit --token
+			// has already been parsed into `token` by now, so it still wins.
+			if token == "" {
+				token = cliutil.EnvOr("WARDYN_ADMIN_TOKEN", os.Getenv("WARDYN_TOKEN"))
+			}
 			warnPlaintextToken(cmd.ErrOrStderr(), serverURL, token)
 		},
 	}
 	root.PersistentFlags().StringVar(&serverURL, "url", cliutil.EnvOr("WARDYN_URL", "http://localhost:8080"),
 		"control plane base URL (env WARDYN_URL)")
-	// WARDYN_ADMIN_TOKEN takes precedence, then WARDYN_TOKEN. NOTE: passing
-	// --token puts the secret in argv (visible in `ps`); prefer the env var.
-	root.PersistentFlags().StringVar(&token, "token", cliutil.EnvOr("WARDYN_ADMIN_TOKEN", os.Getenv("WARDYN_TOKEN")),
+	// WARDYN_ADMIN_TOKEN takes precedence, then WARDYN_TOKEN — resolved in
+	// PersistentPreRun above, NOT here. A non-empty string default is echoed by
+	// cobra as `(default "<value>")` in `wardyn --help` and in the usage block
+	// every structural error prints, which put the fleet-wide bearer in
+	// cleartext in every terminal capture, CI log and screenshot of one. The
+	// declared default stays empty; the env is read where the token is USED.
+	// NOTE: passing --token puts the secret in argv (visible in `ps`); prefer
+	// the env var.
+	root.PersistentFlags().StringVar(&token, "token", "",
 		"admin bearer token (env WARDYN_ADMIN_TOKEN or WARDYN_TOKEN; --token is visible in the process list, prefer the env var)")
 
 	// client() resolves the configured SDK client lazily so flags are parsed

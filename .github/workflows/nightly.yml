@@ -317,14 +317,20 @@ jobs:
   # notified anywhere, and no nightly job is a branch-protection context — so a
   # red nightly blocked nothing and told nobody.
   #
-  # SCOPED TO THE TWO JOBS ADDED ABOVE, deliberately. The flagship `e2e-live` job
-  # carries pre-existing failures that have never been re-characterised; wiring a
-  # notification to the whole workflow would fire every night, and an alert that
-  # always fires is one everybody filters by week two — the same end state as no
-  # alert, reached expensively. Widen this only after e2e-live is green or its
-  # failures are characterised.
+  # SCOPED TO EVERY LANE WITH NO CHARACTERISED NOISE — which is every job in this
+  # workflow except `e2e-live`. The flagship `e2e-live` job carries pre-existing
+  # failures that have never been re-characterised; wiring a notification to it
+  # would fire every night, and an alert that always fires is one everybody
+  # filters by week two — the same end state as no alert, reached expensively.
+  # Add e2e-live once it is green or its failures are characterised.
+  #
+  # It was scoped to two lanes for the same reason and never widened as lanes
+  # were added, so six of eight failed SILENTLY — `test-drive` included, the only
+  # CI home of the guided first-run and of scripts/test-reset-all-sandbox-reap.sh.
+  # A new lane joins this list; scripts/test-repo-guards.sh (in `make
+  # test-scripts`) fails the build if one does not.
   notify-new-lanes:
-    needs: [byoi-e2e-live, ui-sandbox-e2e-live]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live]
     if: failure()
     runs-on: ubuntu-latest
     permissions:
@@ -336,7 +342,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          title="nightly: a BYOI or UI-sandbox e2e lane is failing"
+          title="nightly: a governed e2e lane is failing"
           # Deduplicate by title: a lane that stays broken for a week should
           # append to one issue, not open seven.
           existing="$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
@@ -344,9 +350,9 @@ jobs:
             gh issue comment "$existing" --body "Still failing: $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "One of the nightly lanes added in 0.7 (byoi-e2e-live, ui-sandbox-e2e-live) failed." \
+              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live or ui-sandbox-e2e-live." \
               "" \
-              "Both were green when wired, and neither shares the pre-existing failures of the older e2e-live job - so this is a real regression rather than known noise." \
+              "Every one of them was green when wired, and none shares the pre-existing failures of the older e2e-live job (deliberately not watched here) - so this is a real regression rather than known noise." \
               "" \
               "Run: $RUN_URL")
             gh issue create --title "$title" --body "$body"

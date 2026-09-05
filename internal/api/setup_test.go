@@ -14,6 +14,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -644,5 +645,85 @@ func TestAgentImageCheck(t *testing.T) {
 		if chk.ID != "agent_image" {
 			t.Errorf("check id = %q, want agent_image", chk.ID)
 		}
+	}
+}
+
+// TestRedactSetupStatusForMember_DropsHostCredentialPosture closes F196.
+// The redaction dropped the deployer's checklist (checks/providers/secret
+// names/runner detail) but left three fields that describe the OPERATOR'S HOST
+// rather than anything a member can act on:
+//
+//   - SCM: which git credentials sit on the wardynd host's disk — a gh CLI
+//     session, ~/.git-credentials, ~/.netrc, and whether credential.helper is
+//     the plaintext-ish "store"/"cache". That is a target list.
+//   - HostProxy: the corporate proxy topology, host:port included, plus a
+//     has_credentials flag saying the operator's proxy creds are on that box.
+//   - Deployment.HostLike: derived from Providers, which IS redacted — so the
+//     resident-login signal survived the drop of the detail that produced it.
+//
+// Harness is reduced rather than dropped: deriveIntegrations (ui) reads
+// provider/captured/expired to answer "is there a model path", which a member's
+// own readiness needs; capture time, source run id, aging and renewability are
+// operator credential-lifecycle detail with no member route to act on.
+func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
+	full := SetupStatus{
+		Ready: true, HasRuns: true, LLMReady: true, OnboardingComplete: true,
+		Checks:    []SetupCheck{{ID: "runner", Status: "ok"}},
+		Providers: []SetupProvider{{Tool: "claude", Installed: true, LoggedIn: true}},
+		Secrets:   SetupSecrets{Present: []string{"anthropic-api-key"}},
+		Runner:    SetupRunner{Driver: "docker", ConfinementClasses: []string{"CC2"}},
+		SCM: setup.SCMPosture{
+			GhCLI: true, CredentialHelper: "store", GitCredentialsFile: true, Netrc: true,
+		},
+		HostProxy: setup.HostProxyDetection{
+			HTTPSProxy:     &setup.HostProxySetting{Value: "http://proxy.corp.example:3128", HasCredentials: true},
+			HasCredentials: true,
+		},
+		Deployment: SetupDeployment{HostLike: true},
+		Harness: []SetupHarness{{
+			Provider: "anthropic", Captured: true, Expired: false,
+			CapturedAt: "2026-01-02T03:04:05Z", Aging: true,
+			SourceRunID: "11111111-2222-3333-4444-555555555555",
+			ExpiresAt:   "2026-02-02T03:04:05Z", Renewable: true,
+		}},
+		Integrations: []SetupIntegration{{}},
+	}
+	got := redactSetupStatusForMember(full)
+
+	if got.SCM != (setup.SCMPosture{}) {
+		t.Errorf("scm = %+v, want zero — host git-credential posture is not a member's business", got.SCM)
+	}
+	if got.HostProxy.HTTPSProxy != nil || got.HostProxy.HasCredentials {
+		t.Errorf("host_proxy = %+v, want zero — the corp proxy topology is operator posture", got.HostProxy)
+	}
+	if got.Deployment != (SetupDeployment{}) {
+		t.Errorf("deployment = %+v, want zero — it is derived from the redacted Providers", got.Deployment)
+	}
+	if len(got.Harness) != 1 {
+		t.Fatalf("harness = %+v, want one reduced row", got.Harness)
+	}
+	wantHarness := SetupHarness{Provider: "anthropic", Captured: true}
+	if got.Harness[0] != wantHarness {
+		t.Errorf("harness[0] = %+v, want %+v (presence bits only)", got.Harness[0], wantHarness)
+	}
+
+	// Still there: everything a member's own console needs.
+	for name, ok := range map[string]bool{
+		"ready":                      got.Ready,
+		"llm_ready":                  got.LLMReady,
+		"has_runs":                   got.HasRuns,
+		"runner.confinement_classes": len(got.Runner.ConfinementClasses) == 1,
+		"integrations":               len(got.Integrations) == 1,
+	} {
+		if !ok {
+			t.Errorf("%s did not survive redaction", name)
+		}
+	}
+
+	// Redaction must not scribble on the caller's own value — the handler keeps
+	// using the pre-redaction slices nowhere, but a shared backing array is the
+	// kind of aliasing bug that only shows up under a second caller.
+	if full.Harness[0].SourceRunID == "" || full.SCM.CredentialHelper != "store" {
+		t.Error("redaction mutated its input")
 	}
 }

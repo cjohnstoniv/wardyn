@@ -10,9 +10,14 @@ re-open only what wardynd needs:
     .Values.k8s.apiServer.ports, scoped to .Values.k8s.apiServer.to when set
     (empty by default — see the BOLD warning on that value) — wardynd itself
     drives the k8s runner substrate via client-go
-  - ingress to the HTTP (+ SSH when ssh.enabled, + the UI-sandbox gateway when
-    uiSandbox.enabled) ports from the configured sources (default: same
+  - ingress to the HTTP port from the configured sources (default: same
     namespace, e.g. an ingress controller / the UI)
+  - a SEPARATE ingress rule for SSH (ssh.enabled) and the UI-sandbox gateway
+    (uiSandbox.enabled), whose peer list EXCLUDES the pods the k8s runner
+    substrate creates: those two are operator/human surfaces, and a run's
+    agent pod or proxy sidecar has no business on either. They cannot ride
+    the HTTP rule above, because NetworkPolicy ingress rules are ADDITIVE —
+    withholding a port from run pods means NO rule may grant it to them.
   - a SEPARATE ingress rule, HTTP ONLY, when k8s.enabled and
     k8s.runsNamespace differs from this release's namespace: that namespace's
     proxy sidecars call back to wardynd for credential mints, approval
@@ -69,6 +74,49 @@ spec:
       ports:
         - protocol: TCP
           port: http
+    {{- if or $ssh.enabled $ui.enabled }}
+    # SSH and the UI-sandbox gateway, on their OWN rule with their OWN peers.
+    #
+    # The rule above cannot carry them. Its default peer is `podSelector: {}` —
+    # every pod in THIS namespace — and k8s.runsNamespace defaults to EMPTY,
+    # i.e. runs land in this same namespace. So the http rule's peer already
+    # includes every agent pod and every proxy sidecar the k8s substrate
+    # creates, and ingress rules are additive: a port listed there is granted to
+    # them, full stop. The runsNamespace-differs rule below already withholds
+    # ssh/ui correctly for a SEPARATE namespace; this is that same invariant for
+    # the default, same-namespace case, which is the case almost every install
+    # is actually in.
+    #
+    # `wardyn.managed` is stamped on every object the k8s runner substrate
+    # creates (internal/runner/k8s/naming.go's wardynLabels) and is stamped
+    # LAST, after any caller-supplied "extra" labels, so a run cannot un-select
+    # itself from this exclusion.
+    - from:
+        {{- if .Values.networkPolicy.ingress.from }}
+        {{- range .Values.networkPolicy.ingress.from }}
+        {{- if and (hasKey . "podSelector") (empty .podSelector) (not .namespaceSelector) }}
+        # Your catch-all same-namespace peer, MINUS run pods. Rewritten only for
+        # this exact shape (a bare `podSelector: {}` and nothing else) — the
+        # documented "keep the default peer and add mine" idiom, which is what
+        # deploy/kind/quickstart.sh and this chart's README both write. Any
+        # other peer you supply is passed through untouched: an ipBlock or a
+        # namespaceSelector is yours to scope, and the chart will not silently
+        # narrow a selector you wrote deliberately.
+        - podSelector:
+            matchExpressions:
+              - key: wardyn.managed
+                operator: DoesNotExist
+        {{- else }}
+        {{- toYaml (list .) | nindent 8 }}
+        {{- end }}
+        {{- end }}
+        {{- else }}
+        - podSelector:
+            matchExpressions:
+              - key: wardyn.managed
+                operator: DoesNotExist
+        {{- end }}
+      ports:
         {{- if $ssh.enabled }}
         - protocol: TCP
           port: ssh
@@ -77,6 +125,7 @@ spec:
         - protocol: TCP
           port: ui
         {{- end }}
+    {{- end }}
     {{- if and .Values.k8s.enabled .Values.k8s.runsNamespace (ne .Values.k8s.runsNamespace .Release.Namespace) }}
     # A different runs namespace carries no chart labels (the chart never
     # creates/labels it — see values.yaml's k8s.runsNamespace doc) — match

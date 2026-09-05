@@ -30,10 +30,22 @@ updates:
   # frozen forever while its identically-pinned siblings moved. Expansion only
   # matches directories that hold a manifest, so common/ (no Dockerfile) is
   # skipped for free and the next agent image is covered on arrival.
+  #
+  # BOTH levels of deploy/ are globbed, for that same reason one level up: a
+  # hand-listed `/deploy/compose` left /deploy/kind (Dockerfile.conformance-agent,
+  # pinned at busybox 1.36 while 1.38 shipped) frozen forever — recreating the
+  # exact gap the /deploy/images/* glob was adopted to prevent, one directory
+  # over. `/deploy/*` covers every current and future deploy/ subdirectory that
+  # holds a Dockerfile or a compose file; `/deploy/images/*` is still needed
+  # because a glob matches ONE path segment, and the agent images sit a level
+  # deeper.
   - package-ecosystem: docker
     directories:
-      - /deploy/compose
+      - /deploy/*
       - /deploy/images/*
+      # test/e2e/fixtures holds a base image too; a fixture that never moves
+      # is a CVE that never surfaces (R5 F181 follow-up).
+      - /test/e2e/fixtures
     schedule:
       interval: weekly
     groups:

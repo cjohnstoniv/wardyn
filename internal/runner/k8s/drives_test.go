@@ -8,6 +8,7 @@ package k8s
 import (
 	"context"
 	"errors"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -1184,5 +1185,64 @@ func TestClassesDeclaresDrivesAndBindsThem(t *testing.T) {
 	}
 	if pvcs := createdPVCs(t, cs); len(pvcs) != 1 {
 		t.Errorf("claims created = %d, want exactly 1 — the declaration promises a bind", len(pvcs))
+	}
+}
+
+// docCommentAbove returns the contiguous "//" block immediately above the first
+// line of file starting with decl — the comment a maintainer reads before
+// touching that declaration.
+func docCommentAbove(t *testing.T, file, decl string) string {
+	t.Helper()
+	src, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read %s: %v", file, err)
+	}
+	lines := strings.Split(string(src), "\n")
+	at := -1
+	for i, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), decl) {
+			at = i
+			break
+		}
+	}
+	if at < 0 {
+		t.Fatalf("%s: no line starting with %q", file, decl)
+	}
+	start := at
+	for start > 0 && strings.HasPrefix(strings.TrimSpace(lines[start-1]), "//") {
+		start--
+	}
+	if start == at {
+		t.Fatalf("%s: %q has no doc comment", file, decl)
+	}
+	return strings.Join(lines[start:at], "\n")
+}
+
+// res2-01: the annotation wardynd stamps here is INERT — runsc drops a mount
+// hint that carries no share/source/type, and binds a hint to a mount by SOURCE
+// PATH, not by the <NAME> in the key. docs/OPERATIONS.md ("User drives on
+// Kubernetes") says so with the upstream reference; these comments described it
+// as a working request whose only caveat was containerd forwarding, which sends
+// the next reader to configure a node setting that changes nothing. The
+// stamping itself is deliberate and unchanged — TestApplyDriveToPod pins it.
+func TestDirectfsCommentsSayTheAnnotationIsInert(t *testing.T) {
+	for _, tc := range []struct {
+		decl string
+		// falseClaim must NOT survive: the sentence that was wrong.
+		falseClaim string
+	}{
+		{"driveDirectfsAnnotation = ", "keys the option by the mount's name"},
+		{"func applyDriveToPod(", "It is a REQUEST, not an enforcement"},
+	} {
+		doc := docCommentAbove(t, "drives.go", tc.decl)
+		if strings.Contains(doc, tc.falseClaim) {
+			t.Errorf("drives.go %q still claims %q — runsc discards this hint (missing share/source/type) and matches hints by mount source, so it is not a request that a node config would grant:\n%s", tc.decl, tc.falseClaim, doc)
+		}
+		if !strings.Contains(doc, "inert") && !strings.Contains(doc, "discard") {
+			t.Errorf("drives.go %q does not say the annotation is inert/discarded, so the next reader will still treat it as the remedy:\n%s", tc.decl, doc)
+		}
+		if !strings.Contains(doc, "--directfs=false") && !strings.Contains(doc, "driveDirectfsAnnotation") {
+			t.Errorf("drives.go %q names neither the working remedy (--directfs=false) nor where it is explained:\n%s", tc.decl, doc)
+		}
 	}
 }

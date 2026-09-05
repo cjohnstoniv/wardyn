@@ -15,6 +15,12 @@ import (
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
+// testRunID is a real run id — a UUID, the ONLY username the SSH gateway
+// accepts (internal/api/sshgateway.go's sshAuth calls uuid.Parse on it). These
+// tests used to pass "run-1", a username no gateway would ever have
+// authenticated.
+const testRunID = "a1b2c3d4-5566-4788-99aa-bbccddeeff00"
+
 // --------------------------------------------------------------------------
 // splitHostPort: mirrors ui/.../run-detail-ssh.tsx's splitHostPort exactly.
 // --------------------------------------------------------------------------
@@ -74,7 +80,7 @@ func runSSHPrint(t *testing.T, healthzBody, runID string) (string, error) {
 }
 
 func TestRunSSH_Disabled(t *testing.T) {
-	_, err := runSSHPrint(t, `{"ssh":null}`, "run-1")
+	_, err := runSSHPrint(t, `{"ssh":null}`, "a1b2c3d4-5566-4788-99aa-bbccddeeff00")
 	if err == nil {
 		t.Fatal("expected an error when the gateway is off")
 	}
@@ -86,11 +92,11 @@ func TestRunSSH_Disabled(t *testing.T) {
 func TestRunSSH_EnabledHostWithPort(t *testing.T) {
 	out, err := runSSHPrint(t,
 		`{"ssh":{"enabled":true,"advertise_addr":"wardyn.example.com:2222","host_key_fingerprint":"SHA256:abc"}}`,
-		"run-1")
+		"a1b2c3d4-5566-4788-99aa-bbccddeeff00")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := "ssh run-1@wardyn.example.com -p 2222"
+	want := "ssh a1b2c3d4-5566-4788-99aa-bbccddeeff00@wardyn.example.com -p 2222"
 	if out != want {
 		t.Errorf("--print output = %q, want %q", out, want)
 	}
@@ -99,11 +105,11 @@ func TestRunSSH_EnabledHostWithPort(t *testing.T) {
 func TestRunSSH_EnabledBareHost(t *testing.T) {
 	out, err := runSSHPrint(t,
 		`{"ssh":{"enabled":true,"advertise_addr":"wardyn.example.com","host_key_fingerprint":"SHA256:abc"}}`,
-		"run-1")
+		"a1b2c3d4-5566-4788-99aa-bbccddeeff00")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := "ssh run-1@wardyn.example.com"
+	want := "ssh a1b2c3d4-5566-4788-99aa-bbccddeeff00@wardyn.example.com"
 	if out != want {
 		t.Errorf("--print output = %q, want %q (no -p flag on a bare host)", out, want)
 	}
@@ -112,11 +118,11 @@ func TestRunSSH_EnabledBareHost(t *testing.T) {
 func TestRunSSH_EnabledBracketedIPv6(t *testing.T) {
 	out, err := runSSHPrint(t,
 		`{"ssh":{"enabled":true,"advertise_addr":"[::1]:2222","host_key_fingerprint":"SHA256:abc"}}`,
-		"run-1")
+		"a1b2c3d4-5566-4788-99aa-bbccddeeff00")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := "ssh run-1@::1 -p 2222"
+	want := "ssh a1b2c3d4-5566-4788-99aa-bbccddeeff00@::1 -p 2222"
 	if out != want {
 		t.Errorf("--print output = %q, want %q", out, want)
 	}
@@ -151,13 +157,13 @@ func runSSHJSON(t *testing.T, healthzBody, runID string) (sshTarget, error) {
 func TestRunSSH_JSON(t *testing.T) {
 	got, err := runSSHJSON(t,
 		`{"ssh":{"enabled":true,"advertise_addr":"wardyn.example.com:2222","host_key_fingerprint":"SHA256:abc"}}`,
-		"run-1")
+		"a1b2c3d4-5566-4788-99aa-bbccddeeff00")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	want := sshTarget{
-		Host: "wardyn.example.com", Port: 2222, Username: "run-1",
-		HostKeyFingerprint: "SHA256:abc", Command: "ssh run-1@wardyn.example.com -p 2222",
+		Host: "wardyn.example.com", Port: 2222, Username: "a1b2c3d4-5566-4788-99aa-bbccddeeff00",
+		HostKeyFingerprint: "SHA256:abc", Command: "ssh a1b2c3d4-5566-4788-99aa-bbccddeeff00@wardyn.example.com -p 2222",
 	}
 	if got != want {
 		t.Errorf("--json output = %+v, want %+v", got, want)
@@ -170,17 +176,17 @@ func TestRunSSH_JSON(t *testing.T) {
 func TestRunSSH_JSON_BareHostDefaultsPort22(t *testing.T) {
 	got, err := runSSHJSON(t,
 		`{"ssh":{"enabled":true,"advertise_addr":"wardyn.example.com","host_key_fingerprint":"SHA256:abc"}}`,
-		"run-1")
+		"a1b2c3d4-5566-4788-99aa-bbccddeeff00")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got.Port != 22 {
 		t.Errorf("port = %d, want the conventional default 22 when the gateway advertises none", got.Port)
 	}
-	if got.Host != "wardyn.example.com" || got.Username != "run-1" {
-		t.Errorf("got %+v, want host=wardyn.example.com username=run-1", got)
+	if got.Host != "wardyn.example.com" || got.Username != "a1b2c3d4-5566-4788-99aa-bbccddeeff00" {
+		t.Errorf("got %+v, want host=wardyn.example.com username=a1b2c3d4-5566-4788-99aa-bbccddeeff00", got)
 	}
-	if got.Command != "ssh run-1@wardyn.example.com" {
+	if got.Command != "ssh a1b2c3d4-5566-4788-99aa-bbccddeeff00@wardyn.example.com" {
 		t.Errorf("command = %q, want the bare-host form with no -p flag", got.Command)
 	}
 }
@@ -190,11 +196,11 @@ func TestRunSSH_JSON_BareHostDefaultsPort22(t *testing.T) {
 // close approximation a caller might reasonably expect to differ.
 func TestRunSSH_JSON_CommandMatchesPrintOutput(t *testing.T) {
 	body := `{"ssh":{"enabled":true,"advertise_addr":"[2001:db8::1]:2222","host_key_fingerprint":"SHA256:abc"}}`
-	printOut, err := runSSHPrint(t, body, "run-1")
+	printOut, err := runSSHPrint(t, body, "a1b2c3d4-5566-4788-99aa-bbccddeeff00")
 	if err != nil {
 		t.Fatalf("--print: unexpected error: %v", err)
 	}
-	got, err := runSSHJSON(t, body, "run-1")
+	got, err := runSSHJSON(t, body, "a1b2c3d4-5566-4788-99aa-bbccddeeff00")
 	if err != nil {
 		t.Fatalf("--json: unexpected error: %v", err)
 	}
@@ -219,11 +225,11 @@ func TestRunSSH_Config(t *testing.T) {
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetContext(context.Background())
-	cmd.SetArgs([]string{"run_abcdefgh12345", "--config"})
+	cmd.SetArgs([]string{testRunID, "--config"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := "Host wardyn-abcdefgh\n  HostName wardyn.example.com\n  Port 2222\n  User run_abcdefgh12345\n"
+	want := "Host wardyn-a1b2c3d4\n  HostName wardyn.example.com\n  Port 2222\n  User " + testRunID + "\n"
 	if out.String() != want {
 		t.Errorf("--config output =\n%q\nwant\n%q", out.String(), want)
 	}
@@ -237,7 +243,7 @@ func TestRunSSH_ConfigDefaultPort(t *testing.T) {
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetContext(context.Background())
-	cmd.SetArgs([]string{"run-1", "--config"})
+	cmd.SetArgs([]string{"a1b2c3d4-5566-4788-99aa-bbccddeeff00", "--config"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -273,12 +279,78 @@ func TestRunSSH_EnabledButNoAdvertiseAddr(t *testing.T) {
 		`{"ssh":{"enabled":true,"advertise_addr":"","host_key_fingerprint":"SHA256:abc"}}`,
 		`{"ssh":{"enabled":true,"advertise_addr":":2222","host_key_fingerprint":"SHA256:abc"}}`,
 	} {
-		out, err := runSSHPrint(t, body, "run-1")
+		out, err := runSSHPrint(t, body, "a1b2c3d4-5566-4788-99aa-bbccddeeff00")
 		if err == nil {
 			t.Fatalf("expected a refusal, got output %q", out)
 		}
 		if !strings.Contains(err.Error(), "WARDYN_SSH_ADVERTISE") {
 			t.Errorf("error = %q, want it to name WARDYN_SSH_ADVERTISE", err.Error())
 		}
+	}
+}
+
+// --------------------------------------------------------------------------
+// The run-id is argv (F198)
+// --------------------------------------------------------------------------
+//
+// `wardyn ssh <run-id>` splices its argument into ssh(1)'s argv as
+// "<run-id>@<host>", and into --print/--json/--config output an operator
+// pastes into a shell or an ssh_config. Unvalidated, a leading "-o..." became
+// an ssh OPTION rather than a username (ProxyCommand = arbitrary execution), a
+// newline injected a fresh ssh_config directive, and a ";" rode into a pasted
+// command line. The gateway itself only ever accepts a UUID username
+// (internal/api/sshgateway.go's sshAuth uuid.Parse), so anything else could
+// never have connected — it could only ever have been an injection.
+func TestRunSSH_RefusesANonUUIDRunID(t *testing.T) {
+	const healthz = `{"ssh":{"enabled":true,"advertise_addr":"gw.example.com:2222","host_key_fingerprint":"SHA256:x"}}`
+	hostile := []string{
+		"-oProxyCommand=touch /tmp/wardyn-pwn",
+		"run_x; touch /tmp/OWNED #",
+		"run_x\nProxyCommand touch /tmp/OWNED2",
+		"run_x --anything",
+		"",
+	}
+	for _, mode := range []string{"--print", "--json", "--config"} {
+		for _, id := range hostile {
+			t.Run(mode+" "+id, func(t *testing.T) {
+				srv := fakeHealthzServer(t, healthz)
+				defer srv.Close()
+				cmd := sshCmd(func() *sdk.Client { return &sdk.Client{BaseURL: srv.URL} })
+				// The real root sets this in PersistentPreRun; without it cobra
+				// prints its usage block into out on every RunE error.
+				cmd.SilenceUsage = true
+				var out bytes.Buffer
+				cmd.SetOut(&out)
+				cmd.SetErr(&bytes.Buffer{})
+				cmd.SetContext(context.Background())
+				// "--" first: exactly how the evidence drove it, and the only way
+				// a leading "-o..." reaches the command as a positional at all.
+				cmd.SetArgs([]string{mode, "--", id})
+				err := cmd.Execute()
+				if err == nil {
+					t.Fatalf("%s %q was accepted; output:\n%s", mode, id, out.String())
+				}
+				if !strings.Contains(err.Error(), "invalid run id") {
+					t.Errorf("error = %q, want it to name an invalid run id", err.Error())
+				}
+				if out.Len() != 0 {
+					t.Errorf("%s %q emitted output before refusing:\n%s", mode, id, out.String())
+				}
+			})
+		}
+	}
+}
+
+// The counterweight: a real run id (a UUID, what the gateway accepts) still
+// produces the exact command/config the console shows.
+func TestRunSSH_AcceptsARealRunID(t *testing.T) {
+	out, err := runSSHPrint(t,
+		`{"ssh":{"enabled":true,"advertise_addr":"gw.example.com:2222","host_key_fingerprint":"SHA256:x"}}`,
+		testRunID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := "ssh " + testRunID + "@gw.example.com -p 2222"; out != want {
+		t.Errorf("--print output = %q, want %q", out, want)
 	}
 }

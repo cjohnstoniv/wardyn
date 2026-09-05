@@ -66,6 +66,31 @@ const ReaperAdvisoryLockKey int64 = 0x5741524459_524541 // ASCII "WARDYREA"
 // other key in this file.
 const GroundTruthRotatorLockKey int64 = 0x5741524459_475452 // ASCII "WARDYGTR"
 
+// SingleInstanceLockKey is the RUNTIME half of the one-replica safety control
+// (the Helm chart's `replicas > 1` render refusal is the other half). wardynd
+// takes it ONCE at boot, with TryAdvisoryLock, and holds it for the process
+// lifetime: a second instance against the same database refuses to start
+// instead of quietly serving.
+//
+// WHY IT IS A SAFETY CONTROL, not modesty: wardynd keeps state per-process that
+// a second instance cannot see, the sharpest being the secret-masking registry
+// (internal/secretmask) — an in-memory, process-local map that FAILS OPEN.
+// Secrets are registered on whichever instance served the run's proxy
+// injection; a session recording uploaded to any other instance finds an empty
+// snapshot and is persisted VERBATIM, live credentials in cleartext, with a
+// `success` audit event. The chart's refusal is render-time only, so
+// `kubectl scale`, an HPA, or a non-Helm replica edit defeated it silently.
+//
+// HONEST CEILING — AT MOST ONE STEADY-STATE INSTANCE, NOT MUTUAL EXCLUSION,
+// exactly as GroundTruthRotatorLockKey documents for the same mechanism. An
+// advisory lock dies with its SESSION, not with the process, and the holder
+// never re-verifies it: a Postgres restart, a failover, pg_terminate_backend or
+// an idle-session timeout releases it under a still-running daemon, and the
+// next instance to boot takes it — two daemons, neither aware. It closes the
+// silent-scale hole; it is not a fence. Any stable value works, as long as it
+// differs from every other key in this file.
+const SingleInstanceLockKey int64 = 0x5741524459_494E53 // ASCII "WARDYINS"
+
 // SecretRekeyLockKey serializes the `wardynd -rotate-age-key` maintenance mode
 // (cmd/wardynd's rotateAgeKeyMode): two concurrent rekeys of the same store
 // would each re-encrypt from an old key the other has already replaced, so the
@@ -73,9 +98,10 @@ const GroundTruthRotatorLockKey int64 = 0x5741524459_475452 // ASCII "WARDYGTR"
 // ReaperAdvisoryLockKey).
 //
 // HONEST CEILING — this does NOT detect a running wardynd. No wardynd holds a
-// process-lifetime lock on this key or any other unconditional one (the reaper
-// takes ReaperAdvisoryLockKey per tick and releases it; GroundTruthRotatorLockKey
-// is only taken when the rotator is configured), so a serving daemon is
+// process-lifetime lock on THIS key: a serving daemon holds
+// SingleInstanceLockKey (a different key), the reaper takes
+// ReaperAdvisoryLockKey per tick and releases it, and GroundTruthRotatorLockKey
+// is only taken when the rotator is configured — so a serving daemon is
 // invisible to this check. "Stop the daemon first" is an operator procedure
 // documented in docs/OPERATIONS.md, not something this lock enforces — a live
 // daemon holds the OLD identity in memory and would write ciphertext under a key

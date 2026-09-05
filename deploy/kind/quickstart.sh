@@ -40,6 +40,15 @@ cd "${ROOT}"
 CLUSTER="${WARDYN_QUICKSTART_CLUSTER:-wardyn-quickstart}"
 CONTEXT="kind-${CLUSTER}"
 NAMESPACE="wardyn"
+# A SEPARATE namespace for run pods, not the opt-out the chart also offers
+# (k8s.allowRunsInReleaseNamespace). The chart refuses an empty k8s.runsNamespace
+# because the k8s-runner Role — pods/exec, secrets delete, networkpolicies
+# delete — would then cover every workload sharing the control-plane namespace,
+# and this file is the shape people copy. Taking the escape hatch here would
+# teach exactly what the refusal exists to stop. It also buys real coverage: the
+# runsNamespace ingress peer on the control-plane NetworkPolicy and the Role in
+# a foreign namespace are otherwise exercised by no local path at all.
+RUNS_NAMESPACE="wardyn-runs"
 RELEASE="wardyn"
 # Pinned exactly as ci.yml's conformance-k8s job installs it.
 CALICO_VERSION="v3.28.0"
@@ -141,9 +150,16 @@ for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${BASE_IMAGE}";
   kind load docker-image "${img}" --name "${CLUSTER}"
 done
 
-# ── 3. namespace, DSN + age Secret, Postgres ────────────────────────────────
-kubectl --context "${CONTEXT}" create namespace "${NAMESPACE}" \
-  --dry-run=client -o yaml | kubectl --context "${CONTEXT}" apply -f -
+# ── 3. namespaces, DSN + age Secret, Postgres ───────────────────────────────
+# Both, and both here: the chart never creates or labels the runs namespace (see
+# values.yaml's k8s.runsNamespace), and helm install fails on a namespace that
+# does not exist yet. `kubernetes.io/metadata.name` — which the control-plane
+# NetworkPolicy's callback peer selects on — is stamped by Kubernetes itself, so
+# a bare `create namespace` is all that is needed.
+for ns in "${NAMESPACE}" "${RUNS_NAMESPACE}"; do
+  kubectl --context "${CONTEXT}" create namespace "${ns}" \
+    --dry-run=client -o yaml | kubectl --context "${CONTEXT}" apply -f -
+done
 
 # Created ONCE and never rotated on a re-run: the age identity in it is what
 # decrypts everything a previous boot wrote to the secret store. Regenerating
@@ -223,7 +239,11 @@ k8s:
   # Refused at render if empty, and it is a BOOT-time refusal in wardynd too
   # (errProxyImageUnset) — not a per-run failure.
   proxyImage: ${PROXY_IMAGE}
-  # runsNamespace left empty => sandboxes run in this same namespace.
+  # A DEDICATED namespace for run pods. Empty is refused at render (the
+  # k8s-runner Role would land here, where pods/exec + secrets delete cover
+  # every other workload); created in step 3 above, because the chart never
+  # creates one.
+  runsNamespace: ${RUNS_NAMESPACE}
 ssh:
   enabled: true
   port: ${SSH_PORT}
@@ -233,8 +253,9 @@ ssh:
 networkPolicy:
   ingress:
     from:
-      # Keep the chart's default peer (this namespace: the UI, and every run's
-      # proxy sidecar calling back for mints/approvals/recording uploads)...
+      # Keep the chart's default peer (this namespace: the UI and anything else
+      # here). A run's proxy sidecar calls back from RUNS_NAMESPACE and is
+      # covered by the chart's own runsNamespace ingress rule, not by this peer.
       - podSelector: {}
       # ...and add the node network, or NodePort traffic is denied (see above).
       - ipBlock:
@@ -307,6 +328,7 @@ Wardyn is up.
   Token:  ${TOKEN}
   SSH:    ssh -p ${SSH_PORT} <run-id>@127.0.0.1   (docs/SSH.md)
 
-  kubectl --context ${CONTEXT} -n ${NAMESPACE} get pods
+  kubectl --context ${CONTEXT} -n ${NAMESPACE} get pods        # the control plane
+  kubectl --context ${CONTEXT} -n ${RUNS_NAMESPACE} get pods   # a run's agent + proxy pods
   WARDYN_QUICKSTART_CLUSTER=${CLUSTER} deploy/kind/quickstart.sh --down    # delete the cluster
 EOF
