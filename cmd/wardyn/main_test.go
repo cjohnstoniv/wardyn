@@ -237,7 +237,7 @@ func TestAdminTokenFromEnvStillAuthenticates(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("WARDYN_ADMIN_TOKEN", tc.adminEnv)
 			t.Setenv("WARDYN_TOKEN", tc.tokenEnv)
-			srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{})
+			srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{}, withRunLookup)
 			args := []string{"audit", "11111111-2222-3333-4444-555555555555", "--url", srv.URL}
 			if tc.flag != "" {
 				args = append(args, "--token", tc.flag)
