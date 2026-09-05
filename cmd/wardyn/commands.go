@@ -251,16 +251,17 @@ func printPreflight(ctx context.Context, c *sdk.Client, body sdk.CreateRunReques
 
 func runListCmd(client clientFn) *cobra.Command {
 	var listJSON bool
-	var listLimit int
+	var listLimit, listOffset int
 	list := &cobra.Command{
 		Use:   "list",
 		Short: "List all runs",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			runs, err := client().ListRuns(cmd.Context(), listPageOpts(listLimit)...)
+			runs, truncated, err := client().ListRunsPage(cmd.Context(), listPageOptsAt(listLimit, listOffset)...)
 			if err != nil {
 				return err
 			}
+			warnListTruncated(cmd, truncated, "run", len(runs), listOffset)
 			if listJSON {
 				return emitJSON(runs)
 			}
@@ -276,6 +277,7 @@ func runListCmd(client clientFn) *cobra.Command {
 	}
 	list.Flags().BoolVar(&listJSON, "json", false, "emit raw JSON")
 	list.Flags().IntVar(&listLimit, "limit", 0, "max rows to return (0 = server default page)")
+	list.Flags().IntVar(&listOffset, "offset", 0, "skip this many rows (page forward past a truncated list)")
 	return list
 }
 
@@ -564,7 +566,7 @@ func approvalsCmd(client clientFn) *cobra.Command {
 	var state string
 	var runFilter string
 	var asJSON bool
-	var listLimit int
+	var listLimit, listOffset int
 	list := &cobra.Command{
 		Use:   "list",
 		Short: "List approval requests (optionally filtered by --state and/or --run)",
@@ -574,10 +576,11 @@ func approvalsCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			aps, err := client().ListApprovals(cmd.Context(), types.ApprovalState(state), runID, listPageOpts(listLimit)...)
+			aps, truncated, err := client().ListApprovalsPage(cmd.Context(), types.ApprovalState(state), runID, listPageOptsAt(listLimit, listOffset)...)
 			if err != nil {
 				return err
 			}
+			warnListTruncated(cmd, truncated, "approvals", len(aps), listOffset)
 			if asJSON {
 				return emitJSON(aps)
 			}
@@ -601,6 +604,7 @@ func approvalsCmd(client clientFn) *cobra.Command {
 	list.Flags().StringVar(&runFilter, "run", "", "filter to approvals on one run (server-side)")
 	list.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
 	list.Flags().IntVar(&listLimit, "limit", 0, "max rows to return (0 = server default page)")
+	list.Flags().IntVar(&listOffset, "offset", 0, "skip this many rows (page forward past a truncated list)")
 	cmd.AddCommand(list)
 
 	// approvalScanPage is the page size `approvals get` scans a run with. It
@@ -885,6 +889,41 @@ only at the end.`,
 // listPageOpts turns a --limit flag into the SDK's variadic ListOpts: limit<=0
 // sends nothing (the server applies its default page, preserving the prior
 // unparameterised output), a positive limit is passed through.
+// warnListTruncated surfaces the server's X-Wardyn-Truncated signal the way
+// `wardyn audit` already does, and for the same reason: without it a truncated
+// list is byte-identical to a complete one — exit 0, nothing on stderr, no
+// marker in --json — so a caller cannot tell "this is everything" from "this is
+// page 1 of more". The SDK's package doc named that header as the pagination
+// contract for the list endpoints while only the audit method honoured it.
+//
+// The SENTENCE deliberately mirrors auditCmd's, noun swapped and nothing else:
+// these are one family of warning, and an operator who has learned to act on
+// one should not have to read the other. That is also why --offset exists on
+// these commands at all — a warning that names a remedy the command does not
+// have is worse than none, so the flag was added with the message rather than
+// the message softened to fit.
+//
+// STDERR, never stdout: --json output keeps the plain array shape existing
+// scripts (scripts/ci-run.sh and friends) already parse.
+func warnListTruncated(cmd *cobra.Command, truncated bool, kind string, shown, offset int) {
+	if !truncated {
+		return
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(),
+		"warning: %s list truncated at %d row(s); page forward with --offset=%d (or a larger --limit) to reach the rest\n",
+		kind, shown, offset+shown)
+}
+
+// listPageOptsAt is listPageOpts with an explicit offset, for the list commands
+// that carry --offset. Kept SEPARATE rather than widening listPageOpts, whose
+// other callers (policy.go, workspace.go) have no offset flag of their own yet.
+func listPageOptsAt(limit, offset int) []sdk.ListOpts {
+	if limit <= 0 && offset <= 0 {
+		return nil
+	}
+	return []sdk.ListOpts{{Limit: limit, Offset: offset}}
+}
+
 func listPageOpts(limit int) []sdk.ListOpts {
 	if limit <= 0 {
 		return nil

@@ -232,7 +232,7 @@ func (s *Server) persistWorkspaceEgressDecision(ctx context.Context, ap types.Ap
 // other workspace attaching the same source. Every guard fails silent — the
 // approval itself already stands; this is the durable echo, not the decision.
 func (s *Server) learnVerifyEgress(ctx context.Context, ap types.ApprovalRequest, byType types.ActorType, by string) {
-	if ap.Kind != types.ApprovalEgressDomain || s.cfg.Store == nil {
+	if ap.Kind != types.ApprovalEgressDomain {
 		return
 	}
 	// Scope gate, reading the RETURNING echo (ap.DecisionScope) like the
@@ -245,8 +245,36 @@ func (s *Server) learnVerifyEgress(ctx context.Context, ap types.ApprovalRequest
 	if sc := ap.DecisionScope.Normalize(); sc == types.ScopeOnce || sc == types.ScopeUntil {
 		return
 	}
+	// UNFOLDED from the kind check above and from the run-shape check below,
+	// because a missing store and an unreadable run are GIVE-UPS, not
+	// not-applicable conditions: this file's contract is FAIL SILENT BUT AUDITED
+	// (header), so each one has to leave a workspace.requirement.write failure
+	// naming its cause. Both carry an EMPTY target: the workspace link lives on
+	// the run row neither branch got to read, so naming a workspace here would
+	// be inventing one. Mirrors persistWorkspaceEgressDecision's own
+	// "no store configured" arm, and sits AFTER the scope gate so an explicitly
+	// ephemeral decision — which was never going to teach the contract — does
+	// not report a miss it never had.
+	if s.cfg.Store == nil {
+		s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, "workspace.requirement.write",
+			"", "failure", auditWorkspaceDataFor(by, "", map[string]any{
+				"source": "verify:" + ap.RunID.String(), "detail": "no store configured",
+			})))
+		return
+	}
 	run, err := s.cfg.Store.GetRun(ctx, ap.RunID)
-	if err != nil || run.WorkspaceID == nil || run.Task != "workspace record" {
+	if err != nil {
+		s.recordAudit(ctx, s.auditEvent(&ap.RunID, byType, by, "workspace.requirement.write",
+			"", "failure", auditWorkspaceDataFor(by, "", map[string]any{
+				"source": "verify:" + ap.RunID.String(), "detail": "read run: " + err.Error(),
+			})))
+		return
+	}
+	// NOT audited, unlike the two arms above and the two below: these are the
+	// genuinely NOT-APPLICABLE conditions — a plain run, or a run carrying no
+	// workspace link — where there is no contract to teach and so no miss to
+	// report. A failure row here would cry wolf on every ordinary approval.
+	if run.WorkspaceID == nil || run.Task != "workspace record" {
 		return
 	}
 	// FOLDED WITH THE HOST CHECK BELOW, because they are one give-up with two

@@ -25,6 +25,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -36,10 +37,43 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const f1Host = "registry.npmjs.org"
+
+// f1NilTargetGuardStore is the STRUCTURAL half of the no-linkage pin: rule 5
+// refuses an `always` on a run with no recorded workspace link, and the proof
+// it refused is that nothing downstream ever asked the store about uuid.Nil. A
+// status-only assertion cannot see that — the fall-through answers 400 too,
+// from the workspace read one rule later — so this wrapper fails the test at
+// the moment the guard is skipped, whatever status comes back.
+type f1NilTargetGuardStore struct {
+	store.Store
+	t *testing.T
+}
+
+func (s f1NilTargetGuardStore) GetWorkspace(ctx context.Context, id uuid.UUID) (types.Workspace, error) {
+	if id == uuid.Nil {
+		s.t.Errorf("GetWorkspace(uuid.Nil): rule 5's `target == uuid.Nil` refusal was skipped and `always` " +
+			"fell through to the workspace read — the 400 an operator then sees is about a workspace that " +
+			"never existed rather than about the run's missing link")
+	}
+	return s.Store.GetWorkspace(ctx, id)
+}
+
+// f1ErrorMessage returns the `error` string of a JSON error body.
+func f1ErrorMessage(t *testing.T, body string) string {
+	t.Helper()
+	var out struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		t.Fatalf("response body %q is not a JSON error object: %v", body, err)
+	}
+	return out.Error
+}
 
 // f1SeedWorkspace registers a bare workspace row (ownedBy may be "") and
 // returns its id. Unlike scopeFixture.seedWorkspace it does NOT touch the run —
@@ -96,20 +130,35 @@ func TestF1_AlwaysTargetsPrimaryWorkspaceOnly(t *testing.T) {
 		link       func(w, wPrime uuid.UUID) ([]uuid.UUID, *uuid.UUID)
 		wantStatus int
 		wantOnW    bool
+		// wantBody, when set, is the refusal's OWN sentence, asserted
+		// byte-exactly. Rule 5 (no recorded link) and the workspace read one
+		// rule later both answer 400, so a status-only row passes with rule 5
+		// disabled — which is how the no-linkage pin came to prove nothing.
+		// The two are only distinguishable by what they say.
+		wantBody string
 	}
 	cases := []shape{
 		{"WorkspaceIDs=[W]",
-			func(w, _ uuid.UUID) ([]uuid.UUID, *uuid.UUID) { return []uuid.UUID{w}, nil }, http.StatusOK, true},
+			func(w, _ uuid.UUID) ([]uuid.UUID, *uuid.UUID) { return []uuid.UUID{w}, nil }, http.StatusOK, true, ""},
 		{"WorkspaceIDs=[W] and trusted WorkspaceID=W' — the denormalization wins, the trusted linkage is not a target",
-			func(w, wp uuid.UUID) ([]uuid.UUID, *uuid.UUID) { return []uuid.UUID{w}, &wp }, http.StatusOK, true},
+			func(w, wp uuid.UUID) ([]uuid.UUID, *uuid.UUID) { return []uuid.UUID{w}, &wp }, http.StatusOK, true, ""},
 		{"WorkspaceIDs=nil and trusted WorkspaceID=W — a record/verify step run",
-			func(w, _ uuid.UUID) ([]uuid.UUID, *uuid.UUID) { return nil, &w }, http.StatusOK, true},
+			func(w, _ uuid.UUID) ([]uuid.UUID, *uuid.UUID) { return nil, &w }, http.StatusOK, true, ""},
 		{"WorkspaceIDs=[W, W'] — a multi-workspace run writes ONLY the primary (H1 in the trace doc)",
-			func(w, wp uuid.UUID) ([]uuid.UUID, *uuid.UUID) { return []uuid.UUID{w, wp}, nil }, http.StatusOK, true},
+			func(w, wp uuid.UUID) ([]uuid.UUID, *uuid.UUID) { return []uuid.UUID{w, wp}, nil }, http.StatusOK, true, ""},
 		{"WorkspaceIDs=[W', W] — order decides: W' is the primary, so W must NOT be written",
-			func(w, wp uuid.UUID) ([]uuid.UUID, *uuid.UUID) { return []uuid.UUID{wp, w}, nil }, http.StatusOK, false},
+			func(w, wp uuid.UUID) ([]uuid.UUID, *uuid.UUID) { return []uuid.UUID{wp, w}, nil }, http.StatusOK, false, ""},
 		{"no linkage at all — 400, nothing written anywhere",
-			func(_, _ uuid.UUID) ([]uuid.UUID, *uuid.UUID) { return nil, nil }, http.StatusBadRequest, false},
+			func(_, _ uuid.UUID) ([]uuid.UUID, *uuid.UUID) { return nil, nil }, http.StatusBadRequest, false,
+			"always needs a workspace: this run has no recorded workspace link"},
+		// The SIBLING arm, and the reason the row above needs its own sentence:
+		// a run that DOES record a link to a workspace that has since gone
+		// answers 400 as well, from GetWorkspace one rule later. Without both
+		// rows asserting their own message, rule 5 can be deleted and the suite
+		// stays green — the fall-through simply lands here instead.
+		{"linked to a workspace that no longer exists — 400, and a DIFFERENT refusal",
+			func(_, _ uuid.UUID) ([]uuid.UUID, *uuid.UUID) { return []uuid.UUID{uuid.New()}, nil }, http.StatusBadRequest, false,
+			"always needs a workspace: this run's workspace no longer exists"},
 	}
 	for _, verb := range []string{"approve", "deny"} {
 		for _, tc := range cases {
@@ -122,12 +171,26 @@ func TestF1_AlwaysTargetsPrimaryWorkspaceOnly(t *testing.T) {
 				wp := f1SeedWorkspace(f, "W-prime", "sub-other-owner-f1")
 				ids, trusted := tc.link(w, wp)
 				f1LinkRun(f, f.runID, ids, trusted)
+				// Rule 5's refusal is only observable as an ABSENCE — nothing
+				// downstream ever asks about uuid.Nil. Wrap the fixture store so
+				// that absence is asserted structurally, on every row.
+				f.srv.cfg.Store = f1NilTargetGuardStore{Store: f.store, t: t}
 
 				apID := f.seedEgress(t, f1Host)
 				resp := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+apID.String()+"/"+verb,
 					admin, decideBody(t, types.ScopeAlways, nil))
 				if resp.Code != tc.wantStatus {
 					t.Fatalf("%s always: status = %d, want %d; body=%s", verb, resp.Code, tc.wantStatus, resp.Body.String())
+				}
+				// BYTE-EXACT, not Contains: the two 400s below rule 6 differ only
+				// in their sentence, and a substring check on one of them still
+				// passes against the other. This is the assertion that makes rule
+				// 5's guard undeletable.
+				if tc.wantBody != "" {
+					if got := f1ErrorMessage(t, resp.Body.String()); got != tc.wantBody {
+						t.Errorf("%s always: refusal = %q, want exactly %q — the other 400 on this path is a "+
+							"different fact about the run and must not be able to answer for this one", verb, got, tc.wantBody)
+					}
 				}
 
 				list := func(wsID uuid.UUID) []string {
