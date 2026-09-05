@@ -227,6 +227,54 @@ func (s *Server) mintRecordAPIKeyInjections(ctx context.Context, runID uuid.UUID
 	return injections, nil
 }
 
+// errRecordCeilingLimit marks a refusal by the acting principal's governance
+// profile rather than a daemon fault. Its own sentinel so the handler answers
+// the status the create path answers for the same limit instead of a 500.
+var errRecordCeilingLimit = errors.New("governance profile limit")
+
+// recordCeilingLimits applies the Limits axis to a record launch: the two limits
+// that can bind this lane, in the same order and by the same rule the create
+// path applies them (denyMemberGovernance, denyMemberRunQuota).
+//
+// ASSIGNED SUBJECTS ONLY (Profile != nil), the same scoping the create path
+// uses: an unassigned member has no profile, so there is no limit to read and no
+// deployment-wide default to fall back on (PF-36 — the `all` assignment IS the
+// opt-in).
+//
+// The MESSAGES are the frozen member copy from those two sites, reused verbatim
+// rather than reworded: one limit means one sentence wherever a member meets it,
+// and a second wording for the same refusal is how "your profile denies this"
+// stops being recognisable. The interactive sentence's tail ("Launch with a
+// task, and without `--interactive`") does not fit an always-interactive route
+// and a reword is FILED for the canon owner rather than applied here.
+//
+// A quota COUNT failure is a store error, not a refusal, and is returned as
+// itself so the handler keeps answering 500 for it — an outage must not read as
+// a policy decision.
+func (s *Server) recordCeilingLimits(ctx context.Context, actor string, ceiling governanceCeiling) error {
+	if ceiling.Profile == nil {
+		return nil
+	}
+	name := ceiling.Profile.Name
+	// A record session is ALWAYS interactive (see launchRecordRun's doc comment:
+	// the sandbox comes up idle for the attach terminal), so there is no request
+	// shape to inspect — the route itself IS the interactive request. That is
+	// why this reads the limit directly rather than through requestIsInteractive.
+	if ceiling.Limits.DenyInteractive {
+		return fmt.Errorf("%w: interactive runs are not allowed by your governance profile %q, and a request with no task comes up interactive too. Launch with a task, and without `--interactive`.", errRecordCeilingLimit, name)
+	}
+	if limit := ceiling.Limits.MaxConcurrentRuns; limit > 0 {
+		active, err := s.cfg.Store.CountActiveRunsBy(ctx, actor)
+		if err != nil {
+			return fmt.Errorf("count active runs: %w", err)
+		}
+		if active >= limit {
+			return fmt.Errorf("%w: too many runs at once (max %d) — your governance profile %q caps how many runs you can have going, and %d are still active. Stop one first.", errRecordCeilingLimit, limit, name, active)
+		}
+	}
+	return nil
+}
+
 func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Workspace, sessionKey, sessionLabel string, confined bool) (types.AgentRun, bool, error) {
 	if s.cfg.Runner == nil {
 		return types.AgentRun{}, false, fmt.Errorf("no runner configured")
@@ -244,9 +292,23 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// to on demand — and POST /workspaces/{id}/record is a SECURITY-tier route
 	// (§B), so a security admin can open one. They are bounded by their own
 	// assigned profile like anyone else (effectiveCeiling short-circuits on
-	// isOperator, which a security admin fails, by design), so their ceiling's
-	// denies ride into dispatch and the re-assertion phase applies them there —
-	// the same phase and the same walls as their ordinary runs.
+	// isOperator, which a security admin fails, by design).
+	//
+	// WHICH WALLS RIDE ALONG, named rather than implied — the earlier wording
+	// ("the same walls as their ordinary runs") was true of one axis and false
+	// of the other, which is how the gap survived review:
+	//   - the DENY axis rides into dispatch and the re-assertion phase applies
+	//     it there (runs_dispatch_ceiling.go), same phase as an ordinary run;
+	//   - the member CLAMP is deliberately skipped, for the reason just given;
+	//   - the LIMITS axis is applied BELOW, in this function. It is read nowhere
+	//     else that this lane passes through: dispatch never reads it, and
+	//     denyMemberGovernance/denyMemberRunQuota sit on POST /runs. Until this
+	//     call existed, a profile setting deny_interactive or
+	//     max_concurrent_runs bound a member's ordinary run and NOT the
+	//     interactive, attachable, allow-all session this route opens for the
+	//     same principal — while the sentence this comment replaces asserted the
+	//     opposite. deny_task_mode_exec genuinely does not apply: a record
+	//     session runs an agent, never `exec`.
 	//
 	// Unwalled principals thread nothing: no assignment ⇒ no denies ⇒ Record
 	// Mode byte-for-byte unchanged, moat workflow intact.
@@ -264,6 +326,11 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		// may be far narrower — a widening caused by a database hiccup, on the
 		// one lane that hands out an open-egress sandbox.
 		return types.AgentRun{}, false, fmt.Errorf("resolve governance ceiling: %w", cerr)
+	}
+	// BEFORE the CAS claim below, so a refusal costs no state and needs no
+	// abort() — the same reason the ceiling resolve sits where it does.
+	if lerr := s.recordCeilingLimits(ctx, actor, ceiling); lerr != nil {
+		return types.AgentRun{}, false, lerr
 	}
 	caps, cerr := s.cfg.Runner.Capabilities(ctx)
 	if cerr != nil {

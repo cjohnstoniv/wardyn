@@ -334,6 +334,15 @@ func TestLaunchRecordRun_ThreadsActingPrincipalCeiling(t *testing.T) {
 	fr := &fakeRunner{}
 	profile := govProfile("walled")
 	profile.Ceiling.DeniedDomains = []string{govCorpDeny}
+	// FIXTURE CORRECTION, not a weakening: this test is about the DENY axis
+	// riding into dispatch, and govProfile carries Limits{DenyInteractive:true}
+	// incidentally for the create-path tests it was written for. A record
+	// session is always interactive, so once the Limits axis binds this lane
+	// (recordCeilingLimits) that stray limit refuses the launch before the
+	// dispatch spec this test reads is ever built. Clearing it states the
+	// fixture's real intent; the assertion below is unchanged and still fails if
+	// the deny stops riding along.
+	profile.Limits = types.GovernanceLimits{}
 	cfg := baseTestConfig(h, ceilingRecordStore{recordLLMModeStore: newRecordLLMModeStore(ws), profile: profile})
 	cfg.Runner = fr
 	cfg.Broker = h.broker
