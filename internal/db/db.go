@@ -746,6 +746,7 @@ func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
 		slog.ErrorContext(ctx, "db: trigger(s) on audit_events that Wardyn does not ship; they cannot rewrite a row on the way in (only a row-level BEFORE INSERT trigger can) but nothing else in the system reports them — confirm they are yours",
 			slog.Any("triggers", other))
 	}
+	reportTransactionIsolation(ctx, db)
 	if len(tamperCapable) > 0 {
 		// Wrapped only to satisfy lll; the sentence is the operator's whole
 		// explanation of why a boot refusal is the proportionate response, so
@@ -756,6 +757,43 @@ func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
 			"clean — refusing to start", strings.Join(tamperCapable, ", "))
 	}
 	return nil
+}
+
+// reportTransactionIsolation names a default_transaction_isolation that is not
+// READ COMMITTED, at ERROR, with the statement to fix it — the same "never
+// continue silently" treatment a missing guard gets.
+//
+// WHY THE CHAIN CARES AT ALL. Since 0056 the head read that decides prev_hash
+// runs INSIDE the trigger, i.e. inside the inserting transaction. Under
+// REPEATABLE READ that read uses the transaction's snapshot, which the advisory
+// -lock statement takes BEFORE the lock is granted — so a writer that queued
+// behind the lock reads a head from before the winner committed and chains to
+// it. Two rows claim one predecessor and the verify sweep reports a break.
+// default_transaction_isolation is a USERSET GUC: any role can set it, per role
+// or per database, with no superuser involved.
+//
+// REPORT, NOT REFUSE, and the two halves are deliberate. Wardyn's OWN writers no
+// longer depend on it — store.InsertAuditEvent and the broker's mint transaction
+// pin pgx.ReadCommitted on their Begin, and a transaction-level isolation level
+// overrides the GUC — so this is about writers this package knows nothing about,
+// which is a deployment posture to report rather than a defect to refuse over.
+// It is also read on whichever connection Migrate holds: in a split-DSN deploy
+// that is the MIGRATE role, and the app role may carry a different ALTER ROLE
+// setting, so a clean line here is not a promise about the serving pool. Said
+// plainly so nobody reads it as one.
+func reportTransactionIsolation(ctx context.Context, db migrationExecutor) {
+	var iso string
+	if err := db.QueryRow(ctx, `SELECT current_setting('default_transaction_isolation')`).Scan(&iso); err != nil {
+		slog.ErrorContext(ctx, "db: cannot read default_transaction_isolation; a level other than read committed forks the audit chain for writers that do not pin their own",
+			slog.Any("error", err))
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(iso), "read committed") {
+		return
+	}
+	slog.ErrorContext(ctx, "db: default_transaction_isolation is not read committed; Wardyn's own audit writers pin READ COMMITTED per transaction and are unaffected, but any OTHER writer to audit_events inheriting this default can chain to a stale head and the verify sweep will report the result as a break - fix with ALTER DATABASE ... SET default_transaction_isolation = 'read committed' (or the matching ALTER ROLE)",
+		slog.String("default_transaction_isolation", iso),
+		slog.String("statement", "ALTER DATABASE <db> SET default_transaction_isolation = 'read committed'"))
 }
 
 // auditImpostorTriggers returns the SHIPPED-NAMED triggers on audit_events that
