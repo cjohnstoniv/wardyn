@@ -490,6 +490,22 @@ const auditChainTrigger = "audit_events_chain"
 
 var auditAppendOnlyTriggers = []string{"audit_events_no_update", "audit_events_no_truncate"}
 
+// auditAppendOnlyFunc is the function 0001 and 0004 attach to BOTH append-only
+// triggers. The chain trigger's function is named after the trigger itself
+// (0047/0056/0057/0058), so auditChainTrigger doubles as its proname.
+const auditAppendOnlyFunc = "audit_events_append_only"
+
+// auditShippedTriggerFuncs maps each shipped trigger to the function the
+// migrations bind it to. Derived from the same constants the checks use, so a
+// renamed trigger cannot leave a stale expectation behind here.
+func auditShippedTriggerFuncs() map[string]string {
+	m := map[string]string{auditChainTrigger: auditChainTrigger}
+	for _, n := range auditAppendOnlyTriggers {
+		m[n] = auditAppendOnlyFunc
+	}
+	return m
+}
+
 // ensureAuditTriggers is the boot-time answer to "the migration ran once, years
 // of restarts ago". schema_migrations records a FILENAME, so an owner or
 // superuser who DROPs (or DISABLEs) one of the audit_events triggers leaves a
@@ -519,6 +535,41 @@ func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
 	if present == nil { // no audit_events table at all
 		return nil
 	}
+	// A NAME IS NOT AN IDENTITY, and every check above this line was keyed on
+	// one. auditTriggerNames reports a trigger PRESENT when the catalog holds
+	// its name; auditForeignTriggers excludes the three shipped names from the
+	// foreign set by that same name. So the one shape neither can see is a
+	// trigger WEARING a shipped name over a body nobody shipped —
+	// DROP TRIGGER audit_events_chain, then CREATE TRIGGER audit_events_chain
+	// ... EXECUTE FUNCTION somebody_elses_function(). That is the quiet bypass
+	// in its strongest form: the boot log is clean, every catalog check passes,
+	// and the trigger the whole audit design rests on is the forger's. The
+	// append-only arm is the same hole with a worse ending — a function that
+	// returns NEW puts UPDATE and DELETE back on the audit log while this check
+	// reports the guarantee in force.
+	impostors, err := auditImpostorTriggers(ctx, db)
+	if err != nil {
+		return err
+	}
+	if fn := impostors[auditChainTrigger]; fn != "" {
+		slog.ErrorContext(ctx, "db: the audit_events hash-chain trigger executes a function Wardyn does not ship; restoring it — whatever it wrote is what that function decided, so treat rows written since as unverified even where the chain verifies",
+			slog.String("trigger", auditChainTrigger), slog.String("function", fn))
+		if err := replayTriggerMigrations(ctx, db, auditChainTrigger); err != nil {
+			return err
+		}
+		if impostors, err = auditImpostorTriggers(ctx, db); err != nil {
+			return err
+		}
+		if fn := impostors[auditChainTrigger]; fn != "" {
+			return fmt.Errorf("db: %s trigger executes %s rather than the function Wardyn ships and could not be restored; "+
+				"refusing to run with an audit log a foreign trigger writes", auditChainTrigger, fn)
+		}
+		if present, err = auditTriggerNames(ctx, db); err != nil {
+			return err
+		}
+		slog.WarnContext(ctx, "db: audit_events hash-chain trigger restored over a foreign function",
+			slog.String("trigger", auditChainTrigger))
+	}
 	if !present[auditChainTrigger] {
 		slog.ErrorContext(ctx, "db: the audit_events hash-chain trigger is missing or disabled; restoring it — rows written since it went away are UNCHAINED and the verify sweep will report them",
 			slog.String("trigger", auditChainTrigger))
@@ -536,6 +587,11 @@ func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
 	for _, name := range auditAppendOnlyTriggers {
 		if !present[name] {
 			return fmt.Errorf("db: %s trigger is missing or disabled on audit_events; the append-only guarantee is not in force, and restoring it means replaying the initial schema — refusing to start", name)
+		}
+		if fn := impostors[name]; fn != "" {
+			return fmt.Errorf("db: %s trigger on audit_events executes %s rather than the %s function Wardyn ships, so the "+
+				"append-only guarantee is not in force; restoring it means replaying the initial schema — refusing to start",
+				name, fn, auditAppendOnlyFunc)
 		}
 	}
 	// The shipped guards being armed is not the same as nothing ELSE being
@@ -558,6 +614,74 @@ func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
 			"clean — refusing to start", strings.Join(tamperCapable, ", "))
 	}
 	return nil
+}
+
+// auditImpostorTriggers returns the SHIPPED-NAMED triggers on audit_events that
+// are bound to something other than the function the migrations bind them to,
+// keyed by trigger name with the offending function as `<schema>.<name>` so the
+// operator can find it. Empty when every shipped trigger is the one Wardyn
+// created, and when the table does not exist.
+//
+// THE SCHEMA IS PART OF THE COMPARISON, not decoration in the message. Matching
+// on proname alone would accept a forger's own `audit_events_chain()` created in
+// a schema earlier on the search_path — the same shadowing 0058 exists to stop
+// on the resolution side, arriving here through the catalog instead. The
+// shipped function always lives in the schema the table does (0001 creates it
+// unqualified alongside audit_events; 0058 creates it as `<schema>.
+// audit_events_chain` from the table's own namespace), so that is the identity
+// tested.
+//
+// WHAT THIS DOES NOT CATCH, stated so nobody reads it as more than it is: the
+// shipped function's BODY, replaced in place with CREATE OR REPLACE FUNCTION.
+// The name and the schema still match and the catalog looks identical. That is a
+// behavioural question, not a catalog one, and it is what the boot canary answers
+// — a rolled-back synthetic append asserting the row actually chains.
+func auditImpostorTriggers(ctx context.Context, db migrationExecutor) (map[string]string, error) {
+	var exists bool
+	if err := db.QueryRow(ctx, `SELECT to_regclass('audit_events') IS NOT NULL`).Scan(&exists); err != nil {
+		return nil, fmt.Errorf("db: look up audit_events: %w", err)
+	}
+	if !exists {
+		return nil, nil
+	}
+	want := auditShippedTriggerFuncs()
+	names := make([]string, 0, len(want))
+	for n := range want {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	// One read, decided in Go: the catalog answers "what does each shipped
+	// trigger execute, and where does that function live"; the expectation is
+	// the map above, so the two cannot be restated differently in SQL and Go.
+	var tgnames, funcs, funcSchemas, tableSchemas []string
+	if err := db.QueryRow(ctx, `
+		SELECT COALESCE(array_agg(t.tgname::text   ORDER BY t.tgname), ARRAY[]::text[]),
+		       COALESCE(array_agg(p.proname::text  ORDER BY t.tgname), ARRAY[]::text[]),
+		       COALESCE(array_agg(fn.nspname::text ORDER BY t.tgname), ARRAY[]::text[]),
+		       COALESCE(array_agg(tn.nspname::text ORDER BY t.tgname), ARRAY[]::text[])
+		FROM pg_trigger t
+		JOIN pg_proc p       ON p.oid  = t.tgfoid
+		JOIN pg_namespace fn ON fn.oid = p.pronamespace
+		JOIN pg_class c      ON c.oid  = t.tgrelid
+		JOIN pg_namespace tn ON tn.oid = c.relnamespace
+		WHERE t.tgrelid = 'audit_events'::regclass
+		  AND NOT t.tgisinternal
+		  AND t.tgname = ANY($1)`, names,
+	).Scan(&tgnames, &funcs, &funcSchemas, &tableSchemas); err != nil {
+		return nil, fmt.Errorf("db: read audit_events trigger functions: %w", err)
+	}
+	out := make(map[string]string)
+	for i, n := range tgnames {
+		if i >= len(funcs) || i >= len(funcSchemas) || i >= len(tableSchemas) {
+			break
+		}
+		if funcs[i] == want[n] && funcSchemas[i] == tableSchemas[i] {
+			continue
+		}
+		out[n] = funcSchemas[i] + "." + funcs[i]
+	}
+	return out, nil
 }
 
 // auditForeignTriggers returns the non-internal triggers on audit_events that
