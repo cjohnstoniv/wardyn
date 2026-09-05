@@ -162,3 +162,102 @@ func bedrockReservedSecretNames(t *testing.T) []string {
 	slices.Sort(out)
 	return out
 }
+
+// TestAuthzDeniedGovernanceProfileRowNamesEveryTarget (F179) closes the level
+// the reason-set guard cannot see.
+//
+// docs/OPERATIONS.md's denial table declares itself the source of record for
+// authz.denied's reason vocabulary, and internal/api's own guard pins the set
+// of REASONS. Nothing pinned the CAUSES inside a row: the governance_profile
+// row enumerated four, and 0.7 added a fifth emitter — the user-drive door —
+// that the row never learned about, so a runs.drive denial had no documented
+// cause. The targets are derived from the emit sites, so the next cause that
+// lands undocumented fails here.
+func TestAuthzDeniedGovernanceProfileRowNamesEveryTarget(t *testing.T) {
+	targets := denyMemberFieldTargets(t, "governance_profile")
+	if len(targets) < 5 {
+		t.Fatalf("found %d denyMemberField targets for governance_profile (%v) — the matcher needs updating, it is checking almost nothing", len(targets), targets)
+	}
+	row := opsTableRow(t, readDoc(t, "docs/OPERATIONS.md"), "governance_profile")
+	for _, target := range targets {
+		if !strings.Contains(row, "`"+target+"`") {
+			t.Errorf("docs/OPERATIONS.md's `governance_profile` row does not name the target %q, so a denial with that target has no documented cause in the section that calls itself the source of record", target)
+		}
+	}
+}
+
+// denyMemberFieldTargets returns every `target` internal/api denies with the
+// given authz.denied reason, read off the emit sites.
+func denyMemberFieldTargets(t *testing.T, reason string) []string {
+	t.Helper()
+	dir := filepath.Join(repoRoot(t), "internal", "api")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read internal/api: %v", err)
+	}
+	re := regexp.MustCompile(`denyMemberField\(w, r, "([a-z_.]+)", "` + regexp.QuoteMeta(reason) + `"`)
+	var out []string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		for _, m := range re.FindAllStringSubmatch(string(b), -1) {
+			if !slices.Contains(out, m[1]) {
+				out = append(out, m[1])
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// opsTableRow returns the markdown table row of the folded runbook whose first
+// cell is the backticked key, up to the row's end.
+func opsTableRow(t *testing.T, doc, key string) string {
+	t.Helper()
+	start := strings.Index(doc, "| `"+key+"` | ")
+	if start < 0 {
+		t.Fatalf("no table row keyed `%s` in docs/OPERATIONS.md — the guard's anchor moved", key)
+	}
+	rest := doc[start+1:]
+	if end := strings.Index(rest, " | ⛔ "); end >= 0 {
+		return rest[:end]
+	}
+	return rest
+}
+
+// TestManagedObjectNameRationaleMatchesTheNamingFunction (F189) pins the
+// runbook's REASONING about managed object names, which the name-token guard
+// structurally cannot see.
+//
+// Every minted name now folds the drive slug in, so a name identifies the
+// (drive, home) pair and wardyn.subject is what tells two PEOPLE apart inside
+// one home. Two runbook sentences still argued from the older rule — the object
+// is named for the home "and nothing else" — and neither contains a
+// wardyn-drive-… token, so the repo-wide token guard passed over both. The
+// shapes here come from the naming function itself, so if the slug is ever
+// dropped again the doc's argument is re-examined rather than silently restored.
+func TestManagedObjectNameRationaleMatchesTheNamingFunction(t *testing.T) {
+	for backend, shape := range mintedShapes(t) {
+		if !strings.Contains(shape, "<drive-slug>") {
+			t.Fatalf("%s mints %q, which no longer carries the drive slug — the runbook's naming rationale is written against a name that identifies the (drive, home) pair; re-derive the prose before this guard", backend, shape)
+		}
+		if !strings.Contains(shape, "<home>") {
+			t.Fatalf("%s mints %q, which no longer carries the home — re-derive the runbook's collision argument", backend, shape)
+		}
+	}
+	doc := readDoc(t, "docs/OPERATIONS.md")
+	mustNotSay(t, doc, "docs/OPERATIONS.md",
+		"a volume name carries only the *home*",
+		"names a managed object after the home and nothing else",
+	)
+	mustSay(t, doc, "docs/OPERATIONS.md",
+		"a volume name carries the drive and the *home*",
+		"names a managed object after the drive and the home",
+	)
+}
