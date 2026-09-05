@@ -216,7 +216,7 @@ func TryAdvisoryLock(ctx context.Context, pool *pgxpool.Pool, key int64) (releas
 		// Unlock on a background context: ctx is typically cancelled at shutdown,
 		// exactly when releasing matters most. Best-effort — the lock also dies
 		// with the session when the conn is finally closed.
-		conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, key) //nolint:errcheck — best-effort release
+		conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, key) //nolint:errcheck // best-effort release
 		conn.Release()
 	}, true, nil
 }
@@ -363,7 +363,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	// so the lock is released even if ctx is cancelled at the instant the server
 	// grants it (pgx can return the ctx error after the grant); unlocking a
 	// non-held lock is a harmless no-op.
-	defer conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, migrateAdvisoryLockKey) //nolint:errcheck — best-effort release
+	defer conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, migrateAdvisoryLockKey) //nolint:errcheck // best-effort release
 	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrateAdvisoryLockKey); err != nil {
 		return fmt.Errorf("db: acquire migration advisory lock: %w", err)
 	}
@@ -505,7 +505,7 @@ func auditChainCanary(ctx context.Context, db migrationExecutor) error {
 	}
 	// Background context, and it is the ONE thing this function must not fail to
 	// do: a cancelled ctx must still roll the canary row back.
-	defer tx.Rollback(context.Background()) //nolint:errcheck — the canary is never committed
+	defer tx.Rollback(context.Background()) //nolint:errcheck // the canary is never committed
 
 	// Same bound and same lock the real writers take, so the canary queues
 	// behind a busy chain instead of waiting for a boot timeout.
@@ -566,7 +566,7 @@ func beginReadCommitted(ctx context.Context, db migrationExecutor) (pgx.Tx, erro
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `SET TRANSACTION ISOLATION LEVEL READ COMMITTED`); err != nil {
-		tx.Rollback(context.Background()) //nolint:errcheck — best-effort on the failure path
+		tx.Rollback(context.Background()) //nolint:errcheck // best-effort on the failure path
 		return nil, fmt.Errorf("pin read committed: %w", err)
 	}
 	return tx, nil
@@ -822,7 +822,9 @@ func reportTransactionIsolation(ctx context.Context, db migrationExecutor) {
 	if strings.EqualFold(strings.TrimSpace(iso), "read committed") {
 		return
 	}
-	slog.ErrorContext(ctx, "db: default_transaction_isolation is not read committed; Wardyn's own audit writers pin READ COMMITTED per transaction and are unaffected, but any OTHER writer to audit_events inheriting this default can chain to a stale head and the verify sweep will report the result as a break - fix with ALTER DATABASE ... SET default_transaction_isolation = 'read committed' (or the matching ALTER ROLE)",
+	slog.ErrorContext(ctx, "db: default_transaction_isolation is not read committed; "+
+		"Wardyn's own audit writers pin READ COMMITTED per transaction and are unaffected, but any OTHER writer to audit_events inheriting this default can chain to a stale head and the verify sweep will report the result as a break - fix with ALTER DATABASE ... "+
+		"SET default_transaction_isolation = 'read committed' (or the matching ALTER ROLE)",
 		slog.String("default_transaction_isolation", iso),
 		slog.String("statement", "ALTER DATABASE <db> SET default_transaction_isolation = 'read committed'"))
 }
@@ -1096,7 +1098,7 @@ func applyMigration(ctx context.Context, db migrationExecutor, filename, sql str
 	if err != nil {
 		return fmt.Errorf("db: begin tx for migration %s: %w", filename, err)
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck — best-effort on failure path
+	defer tx.Rollback(ctx) //nolint:errcheck // best-effort on failure path
 
 	if _, err := tx.Exec(ctx, sql); err != nil {
 		return fmt.Errorf("db: apply migration %s: %w", filename, err)

@@ -532,60 +532,26 @@ func consumeCallbackCookies(w http.ResponseWriter, r *http.Request) (nonce, veri
 	return nonceCookie.Value, pkceCookie.Value, true
 }
 
-func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) {
-	// (1) CSRF and the one-time cookies — consumeCallbackCookies below.
-	nonce, verifier, ok := consumeCallbackCookies(w, r)
-	if !ok {
-		return
-	}
+// callbackClaims is everything CallbackHandler reads out of a verified
+// id_token, decoded by decodeCallbackClaims. Split out of the handler (round-3
+// lint gate: funlen) with NO behaviour change — the same three tolerant decodes,
+// the same one fatal decode, the same unreadable list.
+type callbackClaims struct {
+	email         string
+	emailVerified *bool
+	roles         []string
+	groups        []string
+	claimNames    map[string]any
+	// unreadable lists the claims the IdP sent in a shape this build cannot
+	// decode; CallbackHandler stamps the snapshot partial and refuses a
+	// role-widening default on it.
+	unreadable []string
+}
 
-	// (2) Exchange code for tokens, supplying the PKCE verifier.
-	code := r.URL.Query().Get("code")
-	if code == "" {
-		http.Error(w, "missing code parameter", http.StatusBadRequest)
-		return
-	}
-	// Inject the stored HTTP client into the exchange context so tests that
-	// use a custom transport (e.g. rewriteTokenRT) also work for token exchange.
-	exchangeCtx := r.Context()
-	if a.httpClient != nil {
-		exchangeCtx = gooidc.ClientContext(exchangeCtx, a.httpClient)
-	}
-	// D12: a transient IdP hiccup on the token endpoint (5xx, timeout) used to
-	// hard-fail the whole login on the FIRST blip — retryExchange gives it
-	// tokenExchangeRetries short-backoff attempts before giving up. A
-	// PERMANENT rejection (bad client secret, expired/replayed code —
-	// invalid_grant is the common case) is never retried: the code is
-	// single-use, so re-sending it after the IdP has already consumed it
-	// would just trade one clear error for a confusing "invalid_grant" one.
-	token, exchangeErr := retryExchange(exchangeCtx, a.oauth2, code, verifier)
-	if exchangeErr != nil {
-		if isTransientOIDCErr(exchangeErr) {
-			redirectAuthError(w, r, authErrorOIDCTransient)
-		} else {
-			redirectAuthError(w, r, authErrorOIDCConfig)
-		}
-		return
-	}
-
-	// (3) Extract and verify the ID token.
-	rawIDToken, ok := token.Extra("id_token").(string)
-	if !ok || rawIDToken == "" {
-		// Fail closed: a missing ID token is not a valid OIDC response.
-		http.Error(w, "id_token absent in token response", http.StatusUnauthorized)
-		return
-	}
-	idToken, err := a.verifier.Verify(r.Context(), rawIDToken)
-	if err != nil {
-		http.Error(w, "id_token verification failed", http.StatusUnauthorized)
-		return
-	}
-	// Nonce verification: the ID token nonce must match the cookie.
-	if idToken.Nonce != nonce {
-		http.Error(w, "nonce mismatch", http.StatusUnauthorized)
-		return
-	}
-
+// decodeCallbackClaims reads the login claims off a verified id_token. Only the
+// standard-claims decode is fatal; the role/group/distributed-claim decodes are
+// tolerant and report their loss through callbackClaims.unreadable.
+func decodeCallbackClaims(idToken *gooidc.IDToken) (callbackClaims, error) {
 	// Extract standard claims from the ID token — UNCHANGED shape and fatal
 	// error from before role derivation existed: this is the ONE claims
 	// struct whose failure to parse must abort the login.
@@ -601,8 +567,7 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 		EmailVerified *bool `json:"email_verified"`
 	}
 	if err := idToken.Claims(&claims); err != nil {
-		http.Error(w, "id_token claims extraction failed", http.StatusUnauthorized)
-		return
+		return callbackClaims{}, err // CallbackHandler answers 401 "id_token claims extraction failed", unchanged
 	}
 
 	// Role-derivation claims are decoded SEPARATELY and TOLERANTLY, one
@@ -662,11 +627,78 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	if err := idToken.Claims(&dc); err != nil {
 		unreadableClaims = append(unreadableClaims, "_claim_names")
 	}
+	return callbackClaims{
+		email:         claims.Email,
+		emailVerified: claims.EmailVerified,
+		roles:         rc.Roles,
+		groups:        gc.Groups,
+		claimNames:    dc.ClaimNames,
+		unreadable:    unreadableClaims,
+	}, nil
+}
 
+func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) {
+	// (1) CSRF and the one-time cookies — consumeCallbackCookies below.
+	nonce, verifier, ok := consumeCallbackCookies(w, r)
+	if !ok {
+		return
+	}
+
+	// (2) Exchange code for tokens, supplying the PKCE verifier.
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		http.Error(w, "missing code parameter", http.StatusBadRequest)
+		return
+	}
+	// Inject the stored HTTP client into the exchange context so tests that
+	// use a custom transport (e.g. rewriteTokenRT) also work for token exchange.
+	exchangeCtx := r.Context()
+	if a.httpClient != nil {
+		exchangeCtx = gooidc.ClientContext(exchangeCtx, a.httpClient)
+	}
+	// D12: a transient IdP hiccup on the token endpoint (5xx, timeout) used to
+	// hard-fail the whole login on the FIRST blip — retryExchange gives it
+	// tokenExchangeRetries short-backoff attempts before giving up. A
+	// PERMANENT rejection (bad client secret, expired/replayed code —
+	// invalid_grant is the common case) is never retried: the code is
+	// single-use, so re-sending it after the IdP has already consumed it
+	// would just trade one clear error for a confusing "invalid_grant" one.
+	token, exchangeErr := retryExchange(exchangeCtx, a.oauth2, code, verifier)
+	if exchangeErr != nil {
+		if isTransientOIDCErr(exchangeErr) {
+			redirectAuthError(w, r, authErrorOIDCTransient)
+		} else {
+			redirectAuthError(w, r, authErrorOIDCConfig)
+		}
+		return
+	}
+
+	// (3) Extract and verify the ID token.
+	rawIDToken, ok := token.Extra("id_token").(string)
+	if !ok || rawIDToken == "" {
+		// Fail closed: a missing ID token is not a valid OIDC response.
+		http.Error(w, "id_token absent in token response", http.StatusUnauthorized)
+		return
+	}
+	idToken, err := a.verifier.Verify(r.Context(), rawIDToken)
+	if err != nil {
+		http.Error(w, "id_token verification failed", http.StatusUnauthorized)
+		return
+	}
+	// Nonce verification: the ID token nonce must match the cookie.
+	if idToken.Nonce != nonce {
+		http.Error(w, "nonce mismatch", http.StatusUnauthorized)
+		return
+	}
+	cc, err := decodeCallbackClaims(idToken)
+	if err != nil {
+		http.Error(w, "id_token claims extraction failed", http.StatusUnauthorized)
+		return
+	}
 	// (4) Domain check — fail closed.
 	if len(a.cfg.AllowedEmailDomains) > 0 {
 		switch {
-		case claims.EmailVerified == nil:
+		case cc.emailVerified == nil:
 			// C1: distinct from "false" — the IdP said nothing at all about
 			// verification (Entra's normal shape), not that it explicitly
 			// failed. No opt-in flag to relax this: allowlisting a
@@ -679,12 +711,12 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 			clearCookie(w, sessionCookieName)
 			redirectAuthError(w, r, authErrorEmailVerifiedAbsent)
 			return
-		case !*claims.EmailVerified:
+		case !*cc.emailVerified:
 			clearCookie(w, sessionCookieName)
 			redirectAuthError(w, r, authErrorEmailUnverified)
 			return
 		}
-		if !emailDomainAllowed(claims.Email, a.cfg.AllowedEmailDomains) {
+		if !emailDomainAllowed(cc.email, a.cfg.AllowedEmailDomains) {
 			clearCookie(w, sessionCookieName)
 			redirectAuthError(w, r, authErrorEmailDomain)
 			return
@@ -721,7 +753,7 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 			slog.Warn("oidc: one or more console-managed role mappings were shadowed by chart/operator config or rejected as invalid", "shadowed", shadowed)
 		}
 	}
-	role, matches, ok := deriveRole(rc.Roles, gc.Groups, claims.Email, roleMap, a.cfg.LegacyAdminEmails, a.cfg.DefaultRole)
+	role, matches, ok := deriveRole(cc.roles, cc.groups, cc.email, roleMap, a.cfg.LegacyAdminEmails, a.cfg.DefaultRole)
 	if !ok {
 		// L6: a denied login must not leave a PRE-EXISTING session cookie
 		// (from before this re-login attempt) still valid in the browser.
@@ -737,10 +769,10 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	// other login denial, and it is the same fail-closed choice
 	// authErrorRoleCheckUnavailable already makes when the role-mapping store
 	// cannot be read: an unanswerable input never widens a session.
-	if overageWidensRole(dc.ClaimNames, role, matches) {
+	if overageWidensRole(cc.claimNames, role, matches) {
 		slog.Warn("oidc: login denied — the IdP omitted a claim role derivation depends on (overage) and the default role would widen this session",
 			"sub", idToken.Subject, "default_role", a.cfg.DefaultRole,
-			"env", "WARDYN_OIDC_DEFAULT_ROLE", "claim_names", claimNamesKeys(dc.ClaimNames))
+			"env", "WARDYN_OIDC_DEFAULT_ROLE", "claim_names", claimNamesKeys(cc.claimNames))
 		clearCookie(w, sessionCookieName)
 		redirectAuthError(w, r, authErrorClaimsOverage)
 		return
@@ -753,10 +785,10 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	// at the sign-in screen both mean "this console could not read the claim
 	// your access depends on and will not guess", and retrying sends the same
 	// token either way.
-	if unanswerableWidensRole(len(unreadableClaims) > 0, role, matches) {
+	if unanswerableWidensRole(len(cc.unreadable) > 0, role, matches) {
 		slog.Warn("oidc: login denied — the IdP sent a claim role derivation depends on in a shape this build cannot decode, and the default role would widen this session",
 			"sub", idToken.Subject, "default_role", a.cfg.DefaultRole,
-			"env", "WARDYN_OIDC_DEFAULT_ROLE", "unreadable_claims", unreadableClaims)
+			"env", "WARDYN_OIDC_DEFAULT_ROLE", "unreadable_claims", cc.unreadable)
 		clearCookie(w, sessionCookieName)
 		redirectAuthError(w, r, authErrorClaimsOverage)
 		return
@@ -779,8 +811,8 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	// enough to contribute nothing to the role contributes nothing here either,
 	// and never fails the login. The `_claim_names` pointer rides along so an
 	// IdP-side overage stamps the snapshot partial instead of empty.
-	groups, groupsTruncated := sessionGroups(rc.Roles, gc.Groups, dc.ClaimNames)
-	if len(unreadableClaims) > 0 {
+	groups, groupsTruncated := sessionGroups(cc.roles, cc.groups, cc.claimNames)
+	if len(cc.unreadable) > 0 {
 		// PF-26's third cause, stamped here rather than inside sessionGroups
 		// because it is the DECODE that failed, and sessionGroups only ever
 		// sees what survived one. "Contributes nothing to the role" and
@@ -791,11 +823,11 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 		// ceiling written for them evaporates silently.
 		groupsTruncated = true
 		slog.Warn("oidc: group snapshot marked partial — the id_token carried a role/group claim in a shape this build cannot decode, so the human's real groups are not in it",
-			"sub", idToken.Subject, "unreadable_claims", unreadableClaims)
+			"sub", idToken.Subject, "unreadable_claims", cc.unreadable)
 	}
 	sess := Session{
 		Sub:             idToken.Subject,
-		Email:           claims.Email,
+		Email:           cc.email,
 		Role:            role,
 		Expiry:          idToken.Expiry,
 		IssuedAt:        time.Now().UTC(), // D16: the cutoff SessionRevocations compares against

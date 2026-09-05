@@ -531,7 +531,7 @@ func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEv
 	if err != nil {
 		return fmt.Errorf("store: begin audit tx: %w", err)
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck — best-effort on the failure path
+	defer tx.Rollback(ctx) //nolint:errcheck // best-effort on the failure path
 	// Bound the wait BEFORE asking for the lock, or the ask has no bound: since
 	// 0056 any open transaction that touched audit_events holds this lock, and
 	// this call is on the request path. A timeout here is not a lost event - the
