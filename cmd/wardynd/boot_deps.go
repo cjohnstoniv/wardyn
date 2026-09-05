@@ -353,20 +353,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			// the login still succeeds — see oidc.Config.OnLogin's own doc for
 			// why that contract lives on the callback side, not here.
 			OnLogin: func(ctx context.Context, sub, role string) {
-				st := store.NewPG(pool)
-				if err := st.RefreshSSHKeyRoles(ctx, sub, role, time.Now().UTC()); err != nil {
-					slog.Warn("wardynd: ssh key role refresh at login failed", slog.String("err", err.Error()))
-				}
-				// The api-token twin. Both credentials freeze a role at issue
-				// time and neither could learn about a demotion on its own; the
-				// key lane was bounded in 0046 and the token lane was not, so a
-				// demoted human's outstanding wdn_ tokens kept authenticating as
-				// an admin until someone remembered to revoke them by hand. One
-				// login now bounds both. Best-effort for the same reason as
-				// above: a store hiccup here must not fail the login.
-				if err := st.RefreshAPITokenRoles(ctx, sub, role); err != nil {
-					slog.Warn("wardynd: api token role refresh at login failed", slog.String("err", err.Error()))
-				}
+				refreshLoginStamps(ctx, store.NewPG(pool), sub, role, time.Now().UTC())
 			},
 		}, sessKey)
 		if err != nil {
@@ -712,4 +699,47 @@ func buildDirectoryConnector(f *bootFlags) (directory.Directory, error) {
 		slog.Bool("dedicated_app", strings.TrimSpace(*f.dirClientID) != ""),
 	)
 	return dir, nil
+}
+
+// loginStampStore is the two-method slice of the store refreshLoginStamps needs,
+// declared so the demoted-admin bound can be DRIVEN by a test rather than
+// asserted by grepping this file for a method name.
+type loginStampStore interface {
+	RefreshSSHKeyRoles(ctx context.Context, principal, role string, checkedAt time.Time) error
+	RefreshAPITokenRoles(ctx context.Context, principal, role string) error
+}
+
+// refreshLoginStamps re-stamps the role a login just derived onto both frozen-role
+// credential lanes this principal owns: their ssh_public_keys rows (migration
+// 0046, the bounded-stale re-check sshAuth's admin-override path reads under
+// WARDYN_SSH_ROLE_TTL) and their api_tokens rows (the twin — both credentials
+// freeze a role at issue time and neither can learn about a demotion on its own,
+// so a demoted human's outstanding wdn_ tokens kept authenticating as an admin
+// until someone remembered to revoke them by hand). One login bounds both.
+//
+// It is a NAMED FUNCTION over an INTERFACE, not the closure it used to be, and
+// that is the whole of F257. The only thing guarding this bound was
+// apitoken_stamp_doc_test.go's strings.Contains(boot_deps.go,
+// "RefreshAPITokenRoles") — a grep for the method NAME. Transposing the two
+// string arguments (`st.RefreshAPITokenRoles(ctx, role, sub)`) silently stamps
+// the role column of whatever principal is literally named "member" and leaves
+// every demoted admin's tokens untouched, and cmd/wardynd, internal/auth/oidc and
+// internal/store all stayed green. A name a guard can see is not a behaviour a
+// guard can check. login_stamp_test.go now drives this function with a recording
+// fake and asserts each call got the principal in the principal position and the
+// role in the role position; the grep guard stays, because it catches DELETION,
+// which the driven test cannot.
+//
+// BEST-EFFORT, deliberately, and in BOTH directions: a store hiccup logs and the
+// login still succeeds (oidc.Config.OnLogin's own doc carries why that contract
+// lives on the callback side), and a failure of the FIRST stamp must not skip the
+// SECOND — they bound two independent credential lanes and one being unreachable
+// is no reason to leave the other stale.
+func refreshLoginStamps(ctx context.Context, st loginStampStore, sub, role string, now time.Time) {
+	if err := st.RefreshSSHKeyRoles(ctx, sub, role, now); err != nil {
+		slog.Warn("wardynd: ssh key role refresh at login failed", slog.String("err", err.Error()))
+	}
+	if err := st.RefreshAPITokenRoles(ctx, sub, role); err != nil {
+		slog.Warn("wardynd: api token role refresh at login failed", slog.String("err", err.Error()))
+	}
 }

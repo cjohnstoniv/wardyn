@@ -281,3 +281,62 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 	}
 	t.Logf("checked %d citations across %d rows", citationsChecked, rowsChecked)
 }
+
+// TestAuditActionsForwardGuardCoversEveryEmitShape is the anchor under the
+// forward guard, and it exists because that guard passed for the wrong reason
+// twice: once when it did not exist at all, and once when it existed but could
+// not see two of the six packages docs/AUDIT-ACTIONS.md itself names.
+//
+// A guard's FIELD OF VIEW is part of its correctness, and a gap in it is
+// invisible precisely because everything passes. So this asserts the view, not
+// the verdict:
+//
+//   - the emitter set is DERIVED and contains all three in-tree emit helpers, at
+//     the right parameter index. `auditEvent` used to be hardcoded; (*Provider)
+//     .audit and auditFor were the two the hardcoding missed, and adding a
+//     brand-new action through either left the whole suite green.
+//   - every action that was outside the old scan's reach is inside this one's.
+//     These seven are documented, so the forward guard says nothing about them
+//     either way — deleting their rows failed nothing before, and must fail now.
+func TestAuditActionsForwardGuardCoversEveryEmitShape(t *testing.T) {
+	root := repoRoot(t)
+	tr := parseAuditTree(t, root)
+
+	// The action parameter's index in each helper's own signature.
+	for name, want := range map[string]int{
+		"auditEvent": 3, // (*Server).auditEvent(runID, actorType, actor, ACTION, ...)
+		"audit":      3, // (*Provider).audit(ctx, runID, actor, ACTION, ...)
+		"auditFor":   1, // auditFor(runID, ACTION, target, outcome, data)
+	} {
+		got, ok := tr.actionEmitters()[name]
+		if !ok {
+			t.Errorf("the derived emitter set does not contain %q — an audit helper the guard cannot see is an "+
+				"undocumented action it cannot demand a row for", name)
+			continue
+		}
+		if got != want {
+			t.Errorf("emitter %q: action parameter index %d, want %d", name, got, want)
+		}
+	}
+
+	seen := map[string]bool{}
+	for _, e := range emittedAuditActions(t, root) {
+		seen[e.action] = true
+	}
+	for _, action := range []string{
+		// internal/identity/embedded, through the (*Provider).audit wrapper.
+		"identity.mint", "identity.revoke",
+		// internal/groundtruth, through auditFor and through const-valued
+		// Action fields in composite literals.
+		"kernel.process.exec", "kernel.network.connect", "kernel.file.write",
+		"kernel.sensor.heartbeat", "kernel.sensor.blind",
+		// The shapes that were already covered, so a refactor cannot trade one
+		// blind spot for another.
+		"drive.delete", "credential.mint", "approval.decide", "run.autostop",
+	} {
+		if !seen[action] {
+			t.Errorf("audit action %q is emitted by non-test Go but the forward guard's scan does not see it — "+
+				"deleting its docs/AUDIT-ACTIONS.md row would fail nothing", action)
+		}
+	}
+}
