@@ -153,11 +153,16 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 // principal is whichever identity the caller named, and api_tokens carries
 // BOTH (principal = the IdP sub, email = the address that minted it, migration
 // 0045), so an email-form target has to be matched on the email column or the
-// sweep silently finds nothing — the half of "revoke a human now" that does
-// NOT self-heal, since a wdn_ bearer never consults the session cutoff and
-// api_tokens has no expiry. The indexed principal lookup stays the primary
+// sweep silently finds nothing. The indexed principal lookup stays the primary
 // path; the email sweep runs only when it came back empty, so the ordinary
 // sub-form revoke pays exactly what it paid before.
+//
+// THE SWEEP IS NO LONGER THE ONLY CLOSURE. api_tokens still has no expiry, but
+// apiTokenAuth now compares each row's created_at against the SAME cutoff this
+// handler stamps, so a mint whose INSERT commits after this snapshot is taken —
+// unreachable by this sweep forever, since nothing ever re-listed — stops
+// authenticating anyway. The sweep is what makes GET /api/v1/tokens SHOW the
+// row revoked; the read-side check is what makes the lever true.
 func (s *Server) revokeAPITokensFor(ctx context.Context, principal string) (int, error) {
 	var (
 		toks []types.APIToken

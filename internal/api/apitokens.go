@@ -126,6 +126,41 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 			writeError(w, http.StatusInternalServerError, "api token lookup failed")
 			return
 		}
+		// THE SAME CUTOFF THE SESSION LANE OBEYS, applied to the token's
+		// created_at. Without it POST /sessions/revoke was a race the sweep
+		// could lose FOREVER: revokeAPITokensFor takes a ListAPITokens snapshot,
+		// and a mint whose INSERT commits after that snapshot is never reachable
+		// by that revoke again — api_tokens has no expiry, so the escaped row is
+		// a permanent credential. Closing it on the READ side rather than by
+		// locking the writer also removes the sweep's dependence on winning the
+		// race at all: the sweep still runs (it is what makes GET /api/v1/tokens
+		// show the row revoked), but a row it missed no longer authenticates.
+		//
+		// A token created AT OR BEFORE the cutoff is not a credential; one
+		// minted AFTER it is, which is correct — that is a new credential the
+		// principal minted from a session that itself cleared the cutoff.
+		//
+		// FALLS THROUGH rather than 401ing here, for the reason the not-found
+		// arm above does: unknown, revoked and cut-off collapse into one 401
+		// from one place, and no branch here becomes an existence oracle.
+		//
+		// A store FAILURE fails closed with the same 500 the lookup failure
+		// gives, and for the same reason — an unanswerable revocation check must
+		// never read as "not revoked".
+		if s.cfg.SessionRevocations != nil {
+			revoked, rerr := s.cfg.SessionRevocations.IsSessionRevoked(r.Context(), t.Principal, t.Email, t.CreatedAt)
+			if rerr != nil {
+				slog.ErrorContext(r.Context(), "api: session-revocation lookup failed; this api token could not be authenticated",
+					"error", rerr, "path", r.URL.Path)
+				s.metrics.authStoreErrorInc()
+				writeError(w, http.StatusInternalServerError, "api token lookup failed")
+				return
+			}
+			if revoked {
+				fallback.ServeHTTP(w, r)
+				return
+			}
+		}
 		// Best effort by contract (see Store.TouchAPIToken): a failed touch must
 		// never fail an otherwise-valid request. "Last used" is an operator
 		// hygiene signal — which tokens are dead and can be revoked — not an
