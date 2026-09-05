@@ -269,9 +269,15 @@ func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, erro
 //
 // home_override IS an identity field. The object a member binds is derived
 // from it (DriveObjectName over the resolved home), so clearing one re-homes
-// that person: their next run mounts `wardyn-drive-<hash>` instead of
-// `wardyn-drive-bsmith`, and the object holding their work is left behind with
-// nothing in Wardyn naming it. That is the SAME act driveRehomeGuard answers
+// that person: on a managed backend their next run mounts
+// `wardyn-drive-corp-nas-d-9f2a1c04` instead of `wardyn-drive-corp-nas-bsmith`,
+// and the object holding their work is left behind with nothing in Wardyn
+// naming it. The DRIVE SLUG is in both halves because it is in the minted name
+// — types.DriveObjectName is `wardyn-drive-<drive-slug>-<home>`, and only the
+// <home> half moves when an override is cleared; writing the pair without the
+// slug read as though the whole name changed, which is a different (and
+// larger) act than the one this guard refuses. On a share the same clearing
+// re-homes them from `<host_root>/bsmith` to `<host_root>/<derived>`. That is the SAME act driveRehomeGuard answers
 // 409 for one surface over, on the drive row — and this write had no
 // counterpart, because ON CONFLICT replaced every override wholesale. A POST
 // that only meant to change a priority, or to repoint a subject at another
