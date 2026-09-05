@@ -114,16 +114,71 @@ func (s *Server) integrationsWithCapabilitiesUsing(ctx context.Context, present 
 	return out
 }
 
+// memberSafeIntegration is the ONE projection of an integration row for a
+// non-operator, used by both routes that publish these rows: GET /integrations
+// and GET /setup/status.
+//
+// WHAT IT DROPS AND WHY. secrets[].secret_name is a credential REF — the exact
+// datum routes.go names as the reason GET /site-config is admin-only ("every
+// integrations[].secrets[].secret_name are credential REFS"). egress[] is where
+// the system LIVES: internal hostnames, the same class R1 narrowed /sources and
+// /base-images for. config[] is operator-authored connection detail (base_url,
+// endpoint_hint, app_id/installation_id) and docs[] is wherever the operator
+// documented the internal system. None of it is readable by a member on
+// /site-config, and serving the identical rows through two other routes made
+// that narrowing cosmetic — a member could read "acme-artifactory-token" from
+// GET /integrations while GET /site-config answered them 403.
+//
+// WHAT IT KEEPS is exactly what the run-launch UI renders: identity (id, name,
+// kind), whether it is off, what it is the default for, and the live capability
+// matrix — enough to choose an integration for a run, and nothing about how the
+// platform reaches it. Source stays too: "stored" vs "legacy" is not topology.
+func memberSafeIntegration(in SetupIntegration) SetupIntegration {
+	in.Secrets = nil
+	in.Egress = nil
+	in.Config = nil
+	in.Docs = ""
+	return in
+}
+
+// memberSafeIntegrations projects a whole list, leaving the caller's slice
+// untouched — both call sites share a value computed once per request
+// (integrationsWithCapabilitiesUsing), so editing in place would redact an
+// operator's own copy.
+func memberSafeIntegrations(rows []SetupIntegration) []SetupIntegration {
+	if len(rows) == 0 {
+		return rows
+	}
+	out := make([]SetupIntegration, len(rows))
+	for i, in := range rows {
+		out[i] = memberSafeIntegration(in)
+	}
+	return out
+}
+
 // handleListIntegrations returns the effective integration set (stored ∪
-// legacy-derived) with each row's live capabilities. Read-only, humanOrAdmin
-// (same posture as GET /site-config, not operator-only): Credentials only
-// ever holds secret NAMES, never values, so this is safe for any
-// authenticated human. No audit — this is a read, like GET /site-config.
+// legacy-derived) with each row's live capabilities. Read-only, humanOrAdmin.
+//
+// PROJECTED FOR A NON-OPERATOR (memberSafeIntegration). This route used to
+// justify its wide tier with "Credentials only ever holds secret NAMES, never
+// values, so this is safe for any authenticated human" — and routes.go called it
+// "the same RBAC posture as site-config's GET". Both went false when site-config's
+// GET moved to operatorOnly precisely BECAUSE a secret name is a credential ref:
+// a member read secrets[].secret_name and the internal egress hosts here at 200
+// while the document that embeds the identical rows answered them 403. The tier
+// stays (the console's launch card needs the identity and capability half); the
+// credential refs, hosts and operator config do not cross it.
+//
+// No audit — this is a read, like GET /site-config.
 //
 //	GET /api/v1/integrations
 func (s *Server) handleListIntegrations(w http.ResponseWriter, r *http.Request) {
 	present := s.presentSecretNamesFor(r.Context(), s.secretOwnerFromRequest(r))
-	writeJSON(w, http.StatusOK, map[string]any{"integrations": s.integrationsWithCapabilities(r.Context(), present)})
+	rows := s.integrationsWithCapabilities(r.Context(), present)
+	if !s.isOperator(r.Context()) {
+		rows = memberSafeIntegrations(rows)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"integrations": rows})
 }
 
 // integrationByID recomputes the live capability matrix for exactly one row of

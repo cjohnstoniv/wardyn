@@ -14,13 +14,13 @@
 // The SDK covers these wardynd public route families (the ones external tooling
 // automates); it is a curated subset, NOT a 1:1 mirror of every route:
 //
-//   - runs (/api/v1/runs):               CreateRun, Preflight, GetRun, ListRuns, ListGrants,
-//     KillRun, SynthesizeProfile, GetRecording, RunFiles
-//   - approvals (/api/v1/approvals):     ListApprovals, Approve, Deny
+//   - runs (/api/v1/runs):               CreateRun, Preflight, GetRun, ListRuns, ListRunsPage,
+//     ListGrants, KillRun, SynthesizeProfile, GetRecording, RunFiles
+//   - approvals (/api/v1/approvals):     ListApprovals, ListApprovalsPage, Approve, Deny
 //   - policies (/api/v1/policies):       CreatePolicy, GetPolicy, GetDefaultPolicy, ListPolicies,
-//     UpdatePolicy, DeletePolicy
+//     ListPoliciesPage, UpdatePolicy, DeletePolicy
 //   - workspaces (/api/v1/workspaces):   CreateWorkspace, GetWorkspace, ListWorkspaces,
-//     UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask
+//     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask
 //   - sources (/api/v1/sources):         ListSources, CreateSource, GetSource, ScanSource, DeleteSource
 //   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents
 //   - secrets (/api/v1/secrets):         ListSecrets, SetSecret, DeleteSecret
@@ -71,10 +71,18 @@
 // The list endpoints and the audit trail accept an optional ListOpts (variadic,
 // so existing zero-arg calls are unchanged) that sends ?limit=&offset=. A page
 // may be truncated (the server sets X-Wardyn-Truncated); re-request with Offset
-// advanced by len(page) to page forward. AuditEventsPage returns that signal
-// directly as a bool instead of leaving a caller to infer completeness from
-// len(page) == the limit it happened to pass — a guess that silently breaks the
-// moment a caller omits Limit and gets the server's own default page size.
+// advanced by len(page) to page forward.
+//
+// EVERY list family surfaces that signal, through a *Page variant returning it
+// as a bool: ListRunsPage, ListApprovalsPage, ListPoliciesPage,
+// ListWorkspacesPage, AuditEventsPage. The plain forms are thin wrappers that
+// discard it, so existing callers are unchanged — but they leave the caller to
+// infer completeness from len(page) == the limit it happened to pass, a guess
+// that silently breaks the moment a caller omits Limit and gets the server's
+// own default page size. This doc used to name the header as the pagination
+// contract for the list endpoints while only the audit method honoured it: the
+// four list families discarded the header, so `wardyn run|approvals|policy|
+// workspace list` printed a truncated page with exit 0 and nothing on stderr.
 //
 // Usage:
 //
@@ -441,11 +449,22 @@ func (c *Client) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, erro
 	return out, err
 }
 
+// ListRunsPage is ListRuns plus the server's X-Wardyn-Truncated signal:
+// truncated=true means a further page exists and this one is not the whole
+// list. See the package doc's "# Pagination" for why every list family answers
+// this and not just the audit trail.
+func (c *Client) ListRunsPage(ctx context.Context, opts ...ListOpts) (runs []types.AgentRun, truncated bool, err error) {
+	var hdr http.Header
+	err = c.do(ctx, http.MethodGet, appendListOpts("/api/v1/runs", opts), nil, &runs, &hdr)
+	return runs, hdr.Get("X-Wardyn-Truncated") == "true", err
+}
+
 // ListRuns returns runs in reverse creation order. Pass a ListOpts to page.
+// Prefer ListRunsPage, which also returns the server's truncation signal — this
+// form cannot tell "this is everything" from "this is page 1 of more".
 func (c *Client) ListRuns(ctx context.Context, opts ...ListOpts) ([]types.AgentRun, error) {
-	var out []types.AgentRun
-	err := c.do(ctx, http.MethodGet, appendListOpts("/api/v1/runs", opts), nil, &out)
-	return out, err
+	runs, _, err := c.ListRunsPage(ctx, opts...)
+	return runs, err
 }
 
 // ListGrants returns the credential-grant eligibility records for a run.
@@ -481,7 +500,17 @@ func (c *Client) KillRun(ctx context.Context, id uuid.UUID) (KillRunResponse, er
 // (internal/api/approvals.go's handleListApprovals) was otherwise unreachable
 // from the CLI.
 // Valid states: "PENDING", "APPROVED", "DENIED", "EXPIRED" (types.ApprovalState).
+// Prefer ListApprovalsPage, which also returns the server's truncation signal.
 func (c *Client) ListApprovals(ctx context.Context, state types.ApprovalState, runID uuid.UUID, opts ...ListOpts) ([]types.ApprovalRequest, error) {
+	aps, _, err := c.ListApprovalsPage(ctx, state, runID, opts...)
+	return aps, err
+}
+
+// ListApprovalsPage is ListApprovals plus the server's X-Wardyn-Truncated
+// signal: truncated=true means a further page exists. It matters most on this
+// family — an approval queue read as complete when it is not is a pending
+// decision nobody sees.
+func (c *Client) ListApprovalsPage(ctx context.Context, state types.ApprovalState, runID uuid.UUID, opts ...ListOpts) (aps []types.ApprovalRequest, truncated bool, err error) {
 	path := "/api/v1/approvals"
 	q := url.Values{}
 	if state != "" {
@@ -493,9 +522,9 @@ func (c *Client) ListApprovals(ctx context.Context, state types.ApprovalState, r
 	if len(q) > 0 {
 		path += "?" + q.Encode()
 	}
-	var out []types.ApprovalRequest
-	err := c.do(ctx, http.MethodGet, appendListOpts(path, opts), nil, &out)
-	return out, err
+	var hdr http.Header
+	err = c.do(ctx, http.MethodGet, appendListOpts(path, opts), nil, &aps, &hdr)
+	return aps, hdr.Get("X-Wardyn-Truncated") == "true", err
 }
 
 // approvalDecisionRequest is the shared approve/deny body. Scope/ExpiresAt use
@@ -562,11 +591,19 @@ type PolicyRequest struct {
 	Spec types.RunPolicySpec `json:"spec"`
 }
 
+// ListPoliciesPage is ListPolicies plus the server's X-Wardyn-Truncated signal:
+// truncated=true means a further page exists.
+func (c *Client) ListPoliciesPage(ctx context.Context, opts ...ListOpts) (policies []types.RunPolicy, truncated bool, err error) {
+	var hdr http.Header
+	err = c.do(ctx, http.MethodGet, appendListOpts("/api/v1/policies", opts), nil, &policies, &hdr)
+	return policies, hdr.Get("X-Wardyn-Truncated") == "true", err
+}
+
 // ListPolicies returns run policies in reverse creation order. Pass a ListOpts to page.
+// Prefer ListPoliciesPage, which also returns the server's truncation signal.
 func (c *Client) ListPolicies(ctx context.Context, opts ...ListOpts) ([]types.RunPolicy, error) {
-	var out []types.RunPolicy
-	err := c.do(ctx, http.MethodGet, appendListOpts("/api/v1/policies", opts), nil, &out)
-	return out, err
+	policies, _, err := c.ListPoliciesPage(ctx, opts...)
+	return policies, err
 }
 
 // GetPolicy fetches a single RunPolicy by its UUID.

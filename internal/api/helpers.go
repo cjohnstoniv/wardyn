@@ -507,3 +507,135 @@ func readCappedBody(w http.ResponseWriter, r *http.Request, capBytes int64, noun
 	}
 	return raw, true
 }
+
+// ─── workspace read redaction ────────────────────────────────────────────────
+
+// workspaceReadTier is how much of a workspace document a reader may see. Three
+// values, because the routes already have three answers and were giving all of
+// them the same document.
+type workspaceReadTier int
+
+const (
+	// workspaceReadFull: the workspace's OWNER, or a super admin. The owner
+	// authored these paths and the super admin owns the topology; redacting
+	// either would be withholding a fact from the person who wrote it.
+	workspaceReadFull workspaceReadTier = iota
+	// workspaceReadSecurity: a security admin reading a workspace they do not
+	// own. The HOST axis goes (paths, image refs, secret NAMES) and the EGRESS
+	// axis stays — egress is the input to the decision this tier is widened to
+	// make (ownsWorkspaceOrSecurityAdmin's own rationale: it may rewrite a
+	// workspace's approved/denied egress and could not read the traffic it was
+	// deciding about).
+	workspaceReadSecurity
+	// workspaceReadMember: any other authenticated caller. The host axis AND the
+	// internal egress hosts go — this tier decides nothing about either.
+	workspaceReadMember
+)
+
+// workspaceReadTierFor answers which tier this request reads at.
+func (s *Server) workspaceReadTierFor(r *http.Request, ws types.Workspace) workspaceReadTier {
+	if s.isOperator(r.Context()) {
+		return workspaceReadFull
+	}
+	if principal := principalFromRequest(r); principal != "" && ws.OwnedBy == principal {
+		return workspaceReadFull
+	}
+	if s.isSecurityOperator(r.Context()) {
+		return workspaceReadSecurity
+	}
+	return workspaceReadMember
+}
+
+// redactWorkspaceForRead projects a workspace document down to what its reader's
+// tier may see.
+//
+// WHAT THIS CLOSES. R1 narrowed GET /site-config, /sources, /sources/{id} and
+// /base-images to admin-only because those documents carry "an upstream-proxy
+// PASSWORD ref, a database-password requirement key, and the /srv NFS path of a
+// local_dir source" (routes.go). GET /workspaces{,/{id}} served the SAME class
+// of datum — sources[].path=/srv/nfs-prod/payments,
+// base_image.image=registry.corp.internal/base:1,
+// requirements[secret:acme-prod-db-password], requirements[egress:
+// artifacts.corp.internal] — to a plain member, 200 OK, while that identical
+// session was 403'd on the other three. One disclosure class, two answers.
+//
+// PROJECTION RATHER THAN NARROWING, unlike the four routes above, and the reason
+// is that these routes have real member callers: the console's own workspace
+// list and detail are how a member picks what to run against. The four narrowed
+// routes had none (mountLibraryRoutes' own note: "NOTHING member-facing consumes
+// either route"). A tier move here would break the product; a projection does
+// not.
+//
+// APPLIED AT THE RESPONSE, never inside getWorkspaceReadable, and that placement
+// is load-bearing: workspace_build.go and workspace_envcode.go take the same
+// struct from that getter and do real work with these fields (resolving an
+// image, mounting a path). Redacting in the getter would break a build to fix a
+// read.
+//
+// WHAT IS DELIBERATELY KEPT, so the next reader does not have to guess:
+//   - approved_egress / denied_egress stay. They are what a member's own run
+//     against this workspace may reach, and a member who may launch it can
+//     observe them from their run's policy anyway.
+//   - image_ref stays. It is the workspace's own BUILT image, which the
+//     member's run executes; base_image.image is the operator's authored
+//     registry coordinate and is the one this class is about.
+//   - integration: requirement keys stay. An integration ID is a slug the
+//     console renders on the launch card, not a credential ref; the credential
+//     it resolves is the integration row's secret_name, which the integrations
+//     projection (setup_integrations.go) withholds separately.
+func redactWorkspaceForRead(ws types.Workspace, tier workspaceReadTier) types.Workspace {
+	if tier == workspaceReadFull {
+		return ws
+	}
+	// CLONE BEFORE MUTATING. The store hands back a freshly scanned struct
+	// today, but its slices and maps are still shared with everything else that
+	// read it in this request, and a redaction that reached back into a cached
+	// row would be a far worse bug than the one it fixes.
+	ws.Sources = slices.Clone(ws.Sources)
+	for i := range ws.Sources {
+		if ws.Sources[i].Type == types.WorkspaceSourceTypeLocalDir {
+			ws.Sources[i].Path = ""
+		}
+	}
+	// The derived single-source mirror carries the SAME datum as Sources[0].Path
+	// for a local_dir workspace (deriveWorkspaceMirrors), so leaving it would
+	// make the redaction cosmetic.
+	if ws.Kind == types.WorkspaceKindLocalDir {
+		ws.Source = ""
+	}
+	if ws.BaseImage != nil {
+		bi := *ws.BaseImage
+		bi.Image = ""
+		bi.Steps = nil
+		ws.BaseImage = &bi
+	}
+	ws.Requirements = redactRequirementsForRead(ws.Requirements, tier)
+	ws.EffectiveRequirements = redactRequirementsForRead(ws.EffectiveRequirements, tier)
+	return ws
+}
+
+// redactRequirementsForRead drops the requirement keys whose KEY is itself the
+// disclosure: `secret:<NAME>` names a stored credential, `write:<HOST PATH>` is
+// the same host path Sources[].Path was just blanked for, and `egress:<host>` is
+// an internal hostname the member tier decides nothing about.
+func redactRequirementsForRead(reqs map[string]types.WorkspaceRequirement, tier workspaceReadTier) map[string]types.WorkspaceRequirement {
+	if len(reqs) == 0 {
+		return reqs
+	}
+	out := make(map[string]types.WorkspaceRequirement, len(reqs))
+	for k, v := range reqs {
+		typ, _, ok := types.SplitRequirementKey(k)
+		if ok {
+			switch typ {
+			case "secret", "write":
+				continue
+			case "egress":
+				if tier == workspaceReadMember {
+					continue
+				}
+			}
+		}
+		out[k] = v
+	}
+	return out
+}

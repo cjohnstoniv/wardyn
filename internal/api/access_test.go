@@ -46,6 +46,14 @@ type roleMapStore struct {
 	listErr error
 }
 
+// ListAPITokens completes the double for the read the write handlers now make:
+// a role-mapping edit reports how many outstanding wdn_ tokens still carry a
+// frozen role snapshot it cannot reach (staleRoleSnapshotCount). Empty by
+// default, which is what these tests mean — they are about the mapping rows.
+func (s *roleMapStore) ListAPITokens(context.Context) ([]types.APIToken, error) {
+	return nil, nil
+}
+
 func (s *roleMapStore) ListRoleMappings(context.Context) ([]types.RoleMapping, error) {
 	if s.listErr != nil {
 		return nil, s.listErr

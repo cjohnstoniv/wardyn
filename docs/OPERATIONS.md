@@ -957,8 +957,9 @@ carried an id has none) — it just no longer answers
 Wardyn also stamps **`wardyn.subject`**, a digest of the person the volume was
 allocated to — never their sign-in claim, because `docker volume inspect` echoes
 labels to anyone who can reach the daemon. It is the discriminator `wardyn.drive`
-cannot be: a volume name carries only the *home*, so one drive whose home
-template folded two people onto one directory would produce one volume that
+cannot be: a volume name carries the drive and the *home* and no person at all
+(`DriveObjectName` mints `wardyn-drive-<drive-slug>-<home>`), so one drive whose
+home template folded two people onto one directory would produce one volume that
 *both* their allocations agree belongs to this drive. Wardyn refuses to mount a
 volume stamped for a different person.
 
@@ -1018,8 +1019,10 @@ the share mount, never holds a share credential, and never creates a volume with
    beginning `invalid drive: home_template "<template>" is not allowed on a
    managed backend`, and the message names `hash` as the single remedy. Two
    reasons, and `sub` fails the second one: Wardyn names a managed object after
-   the home and nothing else, so `email_local` allocates two colliding people
-   one volume with write access to each other's files whenever the drive is
+   the drive and the home and nothing about the person
+   (`wardyn-drive-<drive-slug>-<home>`), so within one drive `email_local`
+   allocates two colliding people one volume with write access to each other's
+   files whenever the drive is
    writable — and an object *name* is what `docker volume ls` and
    `kubectl get pvc` print with no inspect or describe, so a verbatim `sub`
    publishes the sign-in subject to anyone who can list the daemon or the
@@ -1687,8 +1690,9 @@ Every member denial that isn't a plain foreign-resource 404 is audited under
 | `capability_secret` | a member's `inline_policy` grant referenced a secret they aren't granted — dropped, not rejected | 🟡 drop |
 | `capability_agent` | `agent`: a member named an agent they aren't granted (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ `403` |
 | `capability_integration` | `integration_id`: a member named a model-provider integration they aren't granted (same seam). Tier 1 only — a workspace's own pin and the site default are never gated | ⛔ `403` |
-| `governance_profile` | the member's assigned governance profile refuses this run SHAPE — `task_mode=exec`, an interactive run, `seed_auto_tools`, or codex-cli under hold-deriving rules. A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
+| `governance_profile` | the member's assigned governance profile refuses this run SHAPE. Five causes, one per emitted `target`: `task_mode=exec` (`runs.task_mode`), an interactive run (`runs.interactive`), `seed_auto_tools` (`runs.seed_auto_tools`), codex-cli under hold-deriving rules (`runs.agent`), and — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `denyMemberDrive`). A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
 | `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_MEMBER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
+| `groups_snapshot_stale` | the resolver cannot answer this caller's group tier — their login-time group snapshot is missing or was truncated at sign-in, and the deployment assigns governance profiles by group — so every ceiling-bounded seam refuses. Emitted ONCE per request at the one site that decides it (`ceilingWithUnusableGroups`, `internal/api/governance.go`), at target `governance.ceiling`, because the ceiling is memoized per request: the count means denials, not ceiling reads. The remedy is the caller's own and is in the refusal body — sign in again, or re-mint the API token | ⛔ `403` |
 | `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | ⛔ `403` |
 
 The drop rows are why `POST /runs` mostly *narrows* rather than refuses: a member
@@ -2974,10 +2978,26 @@ a CHECK — and `0056`, `0057` and `0058` are three successive
 trigger on `audit_events`. (`0053` alters `role_mappings`, which `0051` CREATES
 two migrations earlier in the same run, so it is not an instance of the hazard.)
 `scripts/test-claims-match-code.sh` derives that list from the migration bodies,
-so a new `ALTER TABLE` landing undocumented fails there rather than here. The failure is at least loud and fail-closed —
-each migration runs in its own transaction and `db.Migrate` returns the error, so
-wardynd refuses to boot rather than half-applying — but it is a permission error
-with no way forward except giving the migrator ownership.
+so a new `ALTER TABLE` landing undocumented fails there rather than here. The
+failure is loud and the boot is refused — but **it is not a rollback, and it does
+not leave the database where it found it.**
+
+**Per-migration atomicity bounds ONE migration, not the sequence.**
+`applyMigration` wraps each file in its own transaction and records it in
+`schema_migrations` inside that same transaction, and `migrateOn` returns on the
+first error (`internal/db/db.go`). So a failure at migration *N* leaves `0…N-1`
+**committed and recorded** and only *N* rolled back: the database is
+**half-upgraded**, and wardynd's refusal to boot is a refusal to serve that
+state, not a repair of it. In the scenario above, `0050` and `0051` commit before
+`0052` fails on `api_tokens` and `schema_migrations` is left at `0051`; a failure
+at `0060` instead leaves `0050`–`0059` applied. Migrations are forward-only with
+no `down` path, so **restoring the pre-upgrade dump is the only supported
+recovery** — putting the older binary back does not undo the migrations that
+already committed, and it will not boot against the schema they left. Take the
+dump before the upgrade, not after the refusal.
+
+The permission error itself has no way forward except giving the migrator
+ownership; do that on the restored database, not on the half-upgraded one.
 
 Run this as the role you have today, the one in `WARDYN_PG_DSN`:
 

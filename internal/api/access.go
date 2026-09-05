@@ -54,6 +54,26 @@ const accessEmailKeyRefused = "Email mappings are disabled on this install. Map 
 // caught one.
 const accessStaleSnapshot = "your sign-in is too old to verify this change — sign in again before changing role mappings"
 
+// accessStaleSnapshotToken is the SAME refusal for the API-TOKEN lane, and it
+// exists because the sentence above names a remedy that lane provably cannot
+// perform.
+//
+// This guard fires on ANY caller whose frozen claim snapshot cannot reproduce
+// the admin role they hold — and apiTokenAuth installs exactly such a snapshot:
+// api_tokens.groups is stamped at MINT and read verbatim on every request, and a
+// NULL groups_truncated (a pre-0.7 token) reads as truncated by PF-26. So a
+// wdn_-token admin is refused every POST/DELETE /access/mappings and told to
+// sign in again — which changes nothing they hold. RefreshAPITokenRoles
+// re-stamps the ROLE column and provably does not touch groups, so there is no
+// sign-in, no refresh and no re-login that clears it. The token has to be
+// re-minted.
+//
+// The guard already distinguishes lanes once (the admin-token/local-mode
+// exemption above), so this is the same distinction applied to the sentence
+// rather than to the decision: the refusal is unchanged, only the remedy is the
+// caller's own.
+const accessStaleSnapshotToken = "your API token's sign-in snapshot is too old to verify this change — re-mint the token from the console (Account → API tokens) before changing role mappings; a token's group snapshot is frozen at mint and signing in again does not refresh it"
+
 // mountAccessRoutes registers the People-step access surface. ALL FOUR routes
 // are operatorOnly, including the two reads: unlike /permissions (a member
 // gets a scoped read via GET /me/capabilities), there is no member-safe view
@@ -404,6 +424,14 @@ func (s *Server) accessLockoutErr(r *http.Request, existing []types.RoleMapping,
 	groups, email := oidcGroupsFromContext(r.Context()), oidcEmailFromContext(r.Context())
 	roleBefore, ok := s.cfg.OIDC.PreviewRoleAgainst(toOIDCRoleMappings(existing), nil, groups, email)
 	if !ok || roleBefore != oidc.RoleAdmin {
+		// SAME REFUSAL, the caller's own REMEDY. The two lanes reach this arm
+		// for the same reason — a frozen snapshot that cannot reproduce the
+		// admin they hold — but only the cookie lane can fix it by signing in
+		// again; a token's snapshot is stamped at mint and no login refreshes
+		// it. Telling the token lane to sign in again is a refusal with no exit.
+		if apiTokenIDFromContext(r.Context()) != uuid.Nil {
+			return errors.New(accessStaleSnapshotToken)
+		}
 		return errors.New(accessStaleSnapshot)
 	}
 	roleAfter, ok := s.cfg.OIDC.PreviewRoleAgainst(candidate, nil, groups, email)
@@ -528,11 +556,26 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	if saved.ID != m.ID {
 		status = http.StatusOK
 	}
+	// WHAT THIS WRITE DOES NOT REACH, said in the two places an operator looks.
+	// A role mapping decides the role a LOGIN derives; an outstanding wdn_ token
+	// carries a role stamped at MINT and read verbatim on every request, and no
+	// sign-in refreshes it (see staleRoleSnapshotCount for why that is unbounded
+	// where the SSH lane's equivalent is not). So a demotion made here is not
+	// yet effective for those tokens, and until now nothing said so anywhere.
+	stale := s.noteStaleRoleSnapshots(r.Context(), saved.Value, "upsert")
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		action, saved.ID.String(), "success", mustJSON(map[string]any{
-			"value": saved.Value, "role": saved.Role,
+			"value": saved.Value, "role": saved.Role, "stale_token_snapshots": stale,
 		})))
-	writeJSON(w, status, saved)
+	// EMBEDDED, so the response is a strict SUPERSET of the RoleMapping every
+	// existing client already decodes — the console, pkg/client and the CLI keep
+	// working byte for byte, and a client that wants the signal reads one more
+	// key. omitempty: a deployment with no outstanding tokens sees no new field
+	// at all.
+	writeJSON(w, status, struct {
+		types.RoleMapping
+		StaleTokenSnapshots int `json:"stale_token_snapshots,omitempty"`
+	}{RoleMapping: saved, StaleTokenSnapshots: stale})
 }
 
 // ─── DELETE /access/mappings/{id} ──────────────────────────────────────────
@@ -592,9 +635,15 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "delete role mapping: "+err.Error())
 		return
 	}
+	// The delete side of the same gap, and the sharper one: removing a mapping
+	// is how an admin takes a role AWAY. The response is 204 with no body, so
+	// the count rides the audit row and the WARN line rather than the wire — a
+	// body here would change this route's status shape for every existing
+	// client to carry a number most deletes will report as zero.
+	staleDeleted := s.noteStaleRoleSnapshots(r.Context(), matched.Value, "delete")
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"access.role_mapping.delete", id.String(), "success", mustJSON(map[string]any{
-			"value": matched.Value, "role": matched.Role,
+			"value": matched.Value, "role": matched.Role, "stale_token_snapshots": staleDeleted,
 		})))
 	w.WriteHeader(http.StatusNoContent)
 }

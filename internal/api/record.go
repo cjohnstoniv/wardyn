@@ -333,6 +333,23 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnprocessableEntity, lerr.Error())
 			return
 		}
+		// A governance LIMIT is a refusal, not a fault: 403, the same status
+		// denyMemberGovernance answers when the identical limit refuses the
+		// identical principal's ordinary run. Both limits map here — the quota
+		// one too, even though the create path answers it 422 — because 422 on
+		// this route would mean "your request is malformed", and the request is
+		// not: it is a well-formed request this principal may not make right
+		// now. Answering the create path's own status would also make the two
+		// routes' 422s mean two different things.
+		//
+		// NO EXISTENCE ORACLE: this refusal is reached only after the caller has
+		// already cleared the route's own authorization and the workspace read,
+		// so it reveals nothing a principal who may launch here could not
+		// already see. The sentence is the create path's, verbatim.
+		if errors.Is(lerr, errRecordCeilingLimit) {
+			writeError(w, http.StatusForbidden, strings.TrimPrefix(lerr.Error(), errRecordCeilingLimit.Error()+": "))
+			return
+		}
 		// An unresolvable ceiling is a 403 naming its remedy, not a 500 —
 		// writeCeilingError is the ONE mapping, so this lane cannot answer
 		// differently from run-create for the same cause. Everything else keeps

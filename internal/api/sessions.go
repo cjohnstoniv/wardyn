@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -153,11 +155,34 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 // principal is whichever identity the caller named, and api_tokens carries
 // BOTH (principal = the IdP sub, email = the address that minted it, migration
 // 0045), so an email-form target has to be matched on the email column or the
-// sweep silently finds nothing — the half of "revoke a human now" that does
-// NOT self-heal, since a wdn_ bearer never consults the session cutoff and
-// api_tokens has no expiry. The indexed principal lookup stays the primary
-// path; the email sweep runs only when it came back empty, so the ordinary
-// sub-form revoke pays exactly what it paid before.
+// sweep silently finds nothing.
+//
+// ONE UNCONDITIONAL UNION, not a fallback. The email arm used to run only when
+// the principal lookup came back EMPTY, which made the two halves of one revoke
+// disagree about who was named: a human whose tokens straddle two principals —
+// one row minted under the email form, one under the IdP's opaque sub, which is
+// the ordinary Entra shape — had the literal match found, the email arm skipped,
+// and their other rows left live. The request answered 204 and the audit row
+// reported a NON-ZERO tokens_revoked, so the doc's own detection heuristic ("a
+// zero there is the signal") never fired for the case it exists to catch. The
+// session cutoff has always matched sub OR email (IsSessionRevoked); this is the
+// token half agreeing with it.
+//
+// ListAPITokensByPrincipal is UNFILTERED (handleCreateAPIToken's own
+// `t.RevokedAt == nil` loop is the proof), so a target with nothing but revoked
+// rows returned a non-empty list and suppressed the email arm too.
+//
+// COST: the one ListAPITokens the fallback already paid in the common
+// email-form case, now paid in the sub-form case as well. The gate saved a
+// single indexed read on an incident-response lever; it cost correctness on the
+// shape the lever exists for.
+//
+// THE SWEEP IS NO LONGER THE ONLY CLOSURE. api_tokens still has no expiry, but
+// apiTokenAuth now compares each row's created_at against the SAME cutoff this
+// handler stamps, so a mint whose INSERT commits after this snapshot is taken —
+// unreachable by this sweep forever, since nothing ever re-listed — stops
+// authenticating anyway. The sweep is what makes GET /api/v1/tokens SHOW the
+// row revoked; the read-side check is what makes the lever true.
 func (s *Server) revokeAPITokensFor(ctx context.Context, principal string) (int, error) {
 	var (
 		toks []types.APIToken
@@ -171,16 +196,22 @@ func (s *Server) revokeAPITokensFor(ctx context.Context, principal string) (int,
 	if err != nil {
 		return 0, err
 	}
-	if principal != "" && len(toks) == 0 {
-		// Nothing under that sub — the caller may have named the email. Match
-		// it case-insensitively, the same way IsSessionRevoked's email arm
-		// does, so the two halves of one revoke agree about who was named.
+	if principal != "" {
+		// The caller may have named either identity, so BOTH are matched, every
+		// time. Case-insensitively on email, exactly as IsSessionRevoked's email
+		// arm does, so the two halves of one revoke cannot disagree about who
+		// was named.
 		all, aerr := s.cfg.Store.ListAPITokens(ctx)
 		if aerr != nil {
 			return 0, aerr
 		}
+		seen := make(map[uuid.UUID]bool, len(toks))
+		for _, t := range toks {
+			seen[t.ID] = true
+		}
 		for _, t := range all {
-			if t.Email != "" && strings.EqualFold(t.Email, principal) {
+			if t.Email != "" && strings.EqualFold(t.Email, principal) && !seen[t.ID] {
+				seen[t.ID] = true
 				toks = append(toks, t)
 			}
 		}

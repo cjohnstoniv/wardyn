@@ -273,7 +273,12 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// pre-Decide() rules for the same reason they are all pre-Decide(): PENDING
 	// -> decided is one-way. It loads what it needs (and nothing when the switch
 	// is off), so a deployment that has not opted in pays no round trip.
-	if !s.requireSecondHuman(w, r, id, ap, run, haveAP, haveRun) {
+	//
+	// It REPORTS the admin-token break-glass rather than recording it: that row
+	// says a four-eyes rule was bypassed on a decision that was MADE, and no
+	// decision has been made yet at this line. The emit is below Decide().
+	bypassedSecondHuman, ok := s.requireSecondHuman(w, r, id, ap, run, haveAP, haveRun)
+	if !ok {
 		return
 	}
 
@@ -312,6 +317,20 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// approval.Decide itself: internal/api imports internal/approval, so the
 	// dependency only runs this way.
 	s.metrics.approvalDecided(approve)
+	// The four-eyes break-glass, recorded HERE and not inside the gate that
+	// detected it. docs/ENV.md, docs/OPERATIONS.md and the threat model all
+	// describe this row the same way — the four-eyes rule WAS bypassed, on a
+	// decision that WAS made — and only this side of Decide() can honour that
+	// sentence. Written from the gate's decision that the switch applied, so it
+	// covers exactly the egress_domain approvals that exist and that the gate
+	// would otherwise have blocked, and carrying the run id so the
+	// actor_type=system approval.decide it sits beside is findable from it.
+	if bypassedSecondHuman {
+		s.recordAudit(r.Context(), s.auditEvent(&result.RunID, decidedByType, decidedBy,
+			"approval.second_human.bypass", id.String(), "success", mustJSON(map[string]any{
+				"reason": "admin_token_break_glass", "switch": envEgressSecondHuman,
+			})))
+	}
 	if approve {
 		s.learnVerifyEgress(r.Context(), result, decidedByType, decidedBy)
 	}
@@ -476,6 +495,9 @@ func EgressSecondHumanEnabled() bool { return envEnabled(os.Getenv(envEgressSeco
 // actor_type=system approval.decide the decision itself emits. A deployment
 // that wants the gate to actually bind must therefore treat the admin token as
 // the break-glass credential it is — SSO configured, token held out of band.
+// This function only REPORTS that bypass (its first return value); decide()
+// writes the row once Decide() has succeeded, for the reason argued at the
+// admin-token branch below.
 //
 // LOCALMODE REFUSES THE GATE OUTRIGHT — 503, not a comparison. The switch is
 // UNENFORCEABLE there, and that is structural rather than a hole to patch:
@@ -509,6 +531,11 @@ func EgressSecondHumanEnabled() bool { return envEnabled(os.Getenv(envEgressSeco
 // about one principal. (A BOOT-time refusal would tell the operator earlier
 // still; that belongs with cmd/wardynd's other boot-flag validation.)
 //
+// It returns (bypassed, ok). `bypassed` marks the admin-token break-glass, and
+// it is REPORTED rather than recorded here: decide() writes the
+// approval.second_human.bypass row once Decide() has succeeded, so the row can
+// only ever describe a four-eyes rule bypassed on a decision that was made.
+//
 // A run with an EMPTY created_by (system-created follow-on runs) has no human
 // creator to be the same as, so the rule cannot apply and passes. Said out loud
 // because a reader could reasonably expect empty to fail closed; here "closed"
@@ -523,27 +550,39 @@ func EgressSecondHumanEnabled() bool { return envEnabled(os.Getenv(envEgressSeco
 // line. So no behavioural test can distinguish it — which is exactly why it is
 // worth keeping, since it is what holds this line correct if an empty principal
 // ever becomes reachable.
-func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id uuid.UUID, ap types.ApprovalRequest, run types.AgentRun, haveAP, haveRun bool) bool {
+func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id uuid.UUID, ap types.ApprovalRequest, run types.AgentRun, haveAP, haveRun bool) (bool, bool) {
 	if !envEnabled(os.Getenv(envEgressSecondHuman)) {
-		return true
+		return false, true
 	}
 	actorType, principal := actorFromRequest(r)
-	if actorType == types.ActorSystem && principal == adminTokenPrincipal {
-		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, principal,
-			"approval.second_human.bypass", id.String(), "success", mustJSON(map[string]any{
-				"reason": "admin_token_break_glass", "switch": envEgressSecondHuman,
-			})))
-		return true
-	}
+	// THE SCOPE CHECKS COME FIRST, for the admin-token caller too. They used to
+	// sit below the break-glass branch, so an approval.second_human.bypass row
+	// was written for any admin-token caller while the switch was on — before
+	// the kind, before the row was known to exist, and before the decision.
+	// That produced break-glass records for credential approvals this switch
+	// never governs, for approval ids that do not exist, and for requests that
+	// went on to 500 with no approval.decide beside them, while docs/ENV.md
+	// ("Scoped to egress_domain only") and the threat model both describe the
+	// row as the record of a four-eyes rule bypassed on a decision that
+	// happened. The load is what makes "on an approval that exists" true, so it
+	// is paid on the admin path as well — only when the switch is on.
 	if !haveAP {
 		var err error
 		if ap, err = s.cfg.Approvals.Get(r.Context(), id); err != nil {
 			writeError(w, http.StatusNotFound, "approval not found")
-			return false
+			return false, false
 		}
 	}
 	if ap.Kind != types.ApprovalEgressDomain {
-		return true // the switch is scoped to egress decisions
+		return false, true // the switch is scoped to egress decisions
+	}
+	// The break-glass itself, now that both "does this gate apply" questions are
+	// answered. Still ahead of the local-mode refusal below, so an admin token
+	// remains the way past a switch that mode cannot enforce. Reported, not
+	// recorded: the third half of the same finding is a bypass row for a
+	// decision that then FAILED, which only an emit after Decide() closes.
+	if actorType == types.ActorSystem && principal == adminTokenPrincipal {
+		return true, true
 	}
 	// AFTER the kind check on purpose: the switch governs egress decisions only,
 	// so refusing here must not reach a credential or tool_call decision, which
@@ -553,7 +592,7 @@ func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id u
 			" cannot be enforced in local mode: local mode authenticates nobody, so both the decider and"+
 			" the run's creator are client-supplied and no request can prove a second human decided."+
 			" Configure SSO to use this switch, or unset it")
-		return false
+		return false, false
 	}
 	if !haveRun {
 		// Fail CLOSED on BOTH ways the run can be unavailable — a read error, and
@@ -570,11 +609,11 @@ func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id u
 		if err != nil {
 			writeError(w, http.StatusServiceUnavailable,
 				envEgressSecondHuman+" is set, but this approval's run could not be read to verify a second human decided it")
-			return false
+			return false, false
 		}
 	}
 	if run.CreatedBy == "" || run.CreatedBy != principal {
-		return true
+		return false, true
 	}
 	writeError(w, http.StatusForbidden, envEgressSecondHuman+
 		" is set: a second human must decide this — you created this run, so someone else approves or denies its egress")
@@ -582,7 +621,7 @@ func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id u
 		"authz.denied", id.String(), "denied", mustJSON(map[string]any{
 			"reason": "second_human_required", "host": approvalHost(ap),
 		})))
-	return false
+	return false, false
 }
 
 // validateDecisionScope is scope rules 1–3 — the ones that read ONLY the body.

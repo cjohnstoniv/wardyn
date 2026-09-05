@@ -45,8 +45,9 @@ type recordedReq struct {
 // replies with a canned status + JSON body.
 type cmdServer struct {
 	*httptest.Server
-	mu   sync.Mutex
-	reqs []recordedReq
+	mu        sync.Mutex
+	reqs      []recordedReq
+	runLookup bool
 }
 
 func (s *cmdServer) last() recordedReq {
@@ -58,11 +59,26 @@ func (s *cmdServer) last() recordedReq {
 	return s.reqs[len(s.reqs)-1]
 }
 
+// withRunLookup makes the stub answer GET /api/v1/runs/{uuid} with a minimal
+// RUNNING run, leaving every other path on respBody.
+//
+// The `audit` and `logs` commands look the run up FIRST, and they have to:
+// GET /api/v1/audit is scoped per member by FILTERING ROWS, so an unknown or
+// unowned run id answers 200 with an empty array — byte-identical to a real run
+// that has no events yet — and only the run lookup can tell the two apart. A
+// stub that answers EVERY path with an audit-event array makes that lookup fail
+// for a reason the real server never would, so these tests opt into the run arm.
+// Nothing about what they assert changes.
+func withRunLookup(cs *cmdServer) { cs.runLookup = true }
+
 // newCmdServer starts a server that replies with respStatus and respBody for
 // every request. respBody is JSON-encoded when non-nil.
-func newCmdServer(t *testing.T, respStatus int, respBody any) *cmdServer {
+func newCmdServer(t *testing.T, respStatus int, respBody any, opts ...func(*cmdServer)) *cmdServer {
 	t.Helper()
 	cs := &cmdServer{}
+	for _, o := range opts {
+		o(cs)
+	}
 	cs.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		cs.mu.Lock()
@@ -71,6 +87,11 @@ func newCmdServer(t *testing.T, respStatus int, respBody any) *cmdServer {
 			auth: r.Header.Get("Authorization"), ctype: r.Header.Get("Content-Type"), body: body,
 		})
 		cs.mu.Unlock()
+		if cs.runLookup && r.Method == http.MethodGet && isRunLookupPath(r.URL.Path) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: uuid.New(), State: types.RunRunning})
+			return
+		}
 		if respBody != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(respStatus)
@@ -81,6 +102,17 @@ func newCmdServer(t *testing.T, respStatus int, respBody any) *cmdServer {
 	}))
 	t.Cleanup(cs.Close)
 	return cs
+}
+
+// isRunLookupPath reports whether path is GET /api/v1/runs/{uuid} exactly — the
+// run lookup, not one of its sub-resources (/files, /audit, /logs).
+func isRunLookupPath(path string) bool {
+	rest, ok := strings.CutPrefix(path, "/api/v1/runs/")
+	if !ok {
+		return false
+	}
+	_, err := uuid.Parse(rest)
+	return err == nil
 }
 
 // execCmd runs the wardyn root command with the given args, discarding output.
@@ -852,7 +884,7 @@ func TestParseDecisionUntil(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestAuditCmd_BuildsQuery(t *testing.T) {
-	srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{{Action: "run.create", Outcome: "success"}})
+	srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{{Action: "run.create", Outcome: "success"}}, withRunLookup)
 
 	runID := uuid.New()
 	// Positional run id, like the sibling commands (run get, approve, attach).
@@ -870,7 +902,7 @@ func TestAuditCmd_BuildsQuery(t *testing.T) {
 
 // The deprecated --run flag still resolves the same run id for existing scripts.
 func TestAuditCmd_DeprecatedRunFlagStillWorks(t *testing.T) {
-	srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{{Action: "run.create", Outcome: "success"}})
+	srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{{Action: "run.create", Outcome: "success"}}, withRunLookup)
 
 	runID := uuid.New()
 	if err := execCmd(t, "audit", "--run", runID.String(), "--url", srv.URL, "--token", "tok"); err != nil {
@@ -906,7 +938,7 @@ func TestAuditCmd_RequiresRun(t *testing.T) {
 // with more events than that silently dropped its newest ones (including
 // run.complete) with no flag to ask for the rest.
 func TestAuditCmd_LimitOffsetFlagsPage(t *testing.T) {
-	srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{{Action: "run.create", Outcome: "success"}})
+	srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{{Action: "run.create", Outcome: "success"}}, withRunLookup)
 	runID := uuid.New()
 	if err := execCmd(t, "audit", runID.String(), "--limit", "5", "--offset", "10", "--url", srv.URL, "--token", "tok"); err != nil {
 		t.Fatalf("audit returned error: %v", err)
@@ -922,7 +954,7 @@ func TestAuditCmd_LimitOffsetFlagsPage(t *testing.T) {
 // since/until/action_prefix/actor_type/outcome predicates, but auditCmd had no
 // such flags at all — the doc overclaimed. This locks the flags to the wire.
 func TestAuditCmd_FilterFlagsReachServer(t *testing.T) {
-	srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{})
+	srv := newCmdServer(t, http.StatusOK, []types.AuditEvent{}, withRunLookup)
 	runID := uuid.New()
 	err := execCmd(t, "audit", runID.String(),
 		"--since", "2026-01-01T00:00:00Z", "--until", "2026-02-01T00:00:00Z",
@@ -953,8 +985,15 @@ func TestAuditCmd_FilterFlagsReachServer(t *testing.T) {
 // this text could land inside the --json array.
 func TestAuditCmd_TruncatedPageWarnsOnStderr(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Wardyn-Truncated", "true")
 		w.Header().Set("Content-Type", "application/json")
+		// The run lookup auditCmd makes first (see withRunLookup): it must not
+		// carry the truncation header, or this test would pass on the wrong
+		// response.
+		if r.Method == http.MethodGet && isRunLookupPath(r.URL.Path) {
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: uuid.New(), State: types.RunRunning})
+			return
+		}
+		w.Header().Set("X-Wardyn-Truncated", "true")
 		_ = json.NewEncoder(w).Encode([]types.AuditEvent{{Action: "run.create", Outcome: "success"}})
 	}))
 	t.Cleanup(srv.Close)

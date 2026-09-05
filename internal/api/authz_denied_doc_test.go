@@ -29,6 +29,7 @@ var authzDeniedReasons = []string{
 	"capability_" + capWorkspace,
 	"governance_profile",
 	"grant_pairing_not_eligible",
+	"groups_snapshot_stale",
 	"not_owner",
 	"second_human_required",
 	"security_admin_surface",

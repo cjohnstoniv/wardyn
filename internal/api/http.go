@@ -8,6 +8,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -629,7 +630,45 @@ func (s *Server) adminAuth(next http.Handler) http.Handler {
 // itself a memory-DoS vector) and a global cap already starves a flood from
 // any single source; add per-IP if a shared IP (corp NAT) needs to be
 // distinguished from an attacker sharing it.
+// sessionRevocationUnavailable is oidc.Middleware's fail-closed reason for a
+// revocation-store read that errored (oidc.SessionRejectedFromContext's
+// documented set). Mirrored as a constant rather than compared as a literal at
+// the one site that branches on it, so the value has a name where it is USED and
+// a rename upstream is a grep away rather than a silent no-op that turns the
+// counter off.
+const sessionRevocationUnavailable = "session_revocation_unavailable"
+
 func (s *Server) auditAuthFailed(r *http.Request, reason string) {
+	// RESOLVED BEFORE THE LIMITER, not after. The row's content is unchanged by
+	// the move — but the store-outage arm below has to count every REQUEST, and
+	// the limiter drops most of them: measured, 50 requests during a revocation
+	// outage produced 5 audit rows and 45 suppressions, so a counter reached
+	// only past the limiter would report a tenth of an outage.
+	if sr := oidc.SessionRejectedFromContext(r.Context()); sr != "" {
+		reason = sr
+	}
+	// THE SSO LANE'S STORE OUTAGE, counted in the SAME series the api-token lane
+	// uses (apitokens.go). Both lanes abandon an authentication because a store
+	// read failed; only one of them said so.
+	//
+	// What the asymmetry cost is not a missing metric, it is a WRONG one: a
+	// revocation-store outage 401s every SSO human with "missing bearer token",
+	// wrote no log line, left wardyn_auth_store_errors_total at 0 and
+	// wardyn_store_up at 1 (that gauge answers a PING, which a pool passes while
+	// one table denies a read), and pushed the flood into
+	// wardyn_auth_failed_suppressed_total — the series OPERATIONS.md defines as
+	// the credential-stuffing signature. An operator following their own runbook
+	// was looking for an attacker during a database incident.
+	//
+	// ERROR level by internal/audit/sink.go's own rule and by the sibling lane's
+	// precedent: an authentication that could not be DECIDED is an ERROR-level
+	// fact an operator can alert on, and the client-side symptom names the wrong
+	// cause.
+	if reason == sessionRevocationUnavailable {
+		slog.ErrorContext(r.Context(), "api: session-revocation lookup failed; this request could not be authenticated",
+			"path", r.URL.Path)
+		s.metrics.authStoreErrorInc()
+	}
 	if !s.authFailedLimiter.allow(s.cfg.Now()) {
 		// COUNTED, NOT JUST DROPPED. The limiter caps the audit trail at ~1
 		// row/sec, so past the burst the trail stops describing the volume it
@@ -642,9 +681,6 @@ func (s *Server) auditAuthFailed(r *http.Request, reason string) {
 		// (metrics.go): a discarded event is a countable fact.
 		s.metrics.authFailedSuppressedInc()
 		return
-	}
-	if sr := oidc.SessionRejectedFromContext(r.Context()); sr != "" {
-		reason = sr
 	}
 	ev := s.auditEvent(nil, types.ActorSystem, "wardyn/adminAuth", "auth.failed", r.URL.Path,
 		"failure", mustJSON(map[string]any{"reason": reason}))

@@ -19,7 +19,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `github.com/coder/websocket` | ISC | https://github.com/coder/websocket/blob/v1.8.15/LICENSE.txt |
 | `github.com/containerd/errdefs` | Apache-2.0 | https://github.com/containerd/errdefs/blob/v1.0.0/LICENSE |
 | `github.com/containerd/errdefs/pkg` | Apache-2.0 | https://github.com/containerd/errdefs/blob/pkg/v0.3.0/pkg/LICENSE |
-| `github.com/coreos/go-oidc/v3/oidc` | Apache-2.0 | https://github.com/coreos/go-oidc/blob/v3.20.0/LICENSE |
+| `github.com/coreos/go-oidc/v3/oidc` | Apache-2.0 | https://github.com/coreos/go-oidc/blob/v3.21.0/LICENSE |
 | `github.com/davecgh/go-spew/spew` | ISC | https://github.com/davecgh/go-spew/blob/d8f796af33cc/LICENSE |
 | `github.com/distribution/reference` | Apache-2.0 | https://github.com/distribution/reference/blob/v0.6.0/LICENSE |
 | `github.com/docker/go-connections` | Apache-2.0 | https://github.com/docker/go-connections/blob/v0.7.0/LICENSE |
@@ -28,8 +28,8 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `github.com/felixge/httpsnoop` | MIT | https://github.com/felixge/httpsnoop/blob/v1.0.4/LICENSE.txt |
 | `github.com/fxamacker/cbor/v2` | MIT | https://github.com/fxamacker/cbor/blob/v2.9.0/LICENSE |
 | `github.com/go-chi/chi/v5` | MIT | https://github.com/go-chi/chi/blob/v5.3.2/LICENSE |
-| `github.com/go-jose/go-jose/v4` | Apache-2.0 | https://github.com/go-jose/go-jose/blob/v4.1.4/LICENSE |
-| `github.com/go-jose/go-jose/v4/json` | BSD-3-Clause | https://github.com/go-jose/go-jose/blob/v4.1.4/json/LICENSE |
+| `github.com/go-jose/go-jose/v4` | Apache-2.0 | https://github.com/go-jose/go-jose/blob/v4.1.5/LICENSE |
+| `github.com/go-jose/go-jose/v4/json` | BSD-3-Clause | https://github.com/go-jose/go-jose/blob/v4.1.5/json/LICENSE |
 | `github.com/go-logr/logr` | Apache-2.0 | https://github.com/go-logr/logr/blob/v1.4.3/LICENSE |
 | `github.com/go-logr/stdr` | Apache-2.0 | https://github.com/go-logr/stdr/blob/v1.2.2/LICENSE |
 | `github.com/go-openapi/jsonpointer` | Apache-2.0 | https://github.com/go-openapi/jsonpointer/blob/v0.21.0/LICENSE |
