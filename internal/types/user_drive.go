@@ -815,11 +815,12 @@ func validateDriveHostRoot(d *UserDrive) error {
 }
 
 // ValidateUserDriveGrant normalizes g in place and validates it, applying the
-// SAME subject hygiene validateGovernanceAssignment applies — trim, lowercase,
-// length, no control characters — because the two tables are written against
-// the identical subject vocabulary and resolved through the identical
-// capabilitySubjects call. A subject normalized one way here and another way
-// there is a row that silently never matches.
+// SAME subject hygiene validateGovernanceAssignment applies — trim, length, no
+// control characters, and for a GROUP subject the shared CanonicalGroupSubject
+// the login-time snapshot itself is built with — because the three tables are
+// written against the identical subject vocabulary and resolved through the
+// identical capabilitySubjects call. A subject normalized one way here and
+// another way there is a row that silently never matches.
 func ValidateUserDriveGrant(g *UserDriveGrant) error {
 	if !g.SubjectType.Valid() {
 		return fmt.Errorf("subject_type: invalid %q", g.SubjectType)
@@ -834,9 +835,28 @@ func ValidateUserDriveGrant(g *UserDriveGrant) error {
 		// unreachable everyone row.
 		g.Subject = ""
 	} else {
-		g.Subject = strings.ToLower(strings.TrimSpace(g.Subject))
+		g.Subject = strings.TrimSpace(g.Subject)
 		if g.Subject == "" {
 			return fmt.Errorf("subject: required for subject_type %q", g.SubjectType)
+		}
+		if g.SubjectType == CapabilitySubjectGroup {
+			// The group half of that hygiene is CanonicalGroupSubject, not a
+			// lowercase. A group subject is matched by EXACT equality against
+			// the login-time snapshot, which carries printable ASCII guarded
+			// before the Unicode fold — so a plain ToLower both ACCEPTS a
+			// subject no session can ever carry (an allocation that matches
+			// nobody, while HasGroupTierDriveGrants counts the dead row as a
+			// group tier that exists) and, worse, folds U+212A / U+0130 ONTO an
+			// operator-authored ASCII group, binding a drive to a group the
+			// author never named. This was the one write boundary of the three
+			// left on the loose rule.
+			subject, ok := CanonicalGroupSubject(g.Subject)
+			if !ok {
+				return fmt.Errorf("subject: must be printable ASCII — a group subject is matched against the login-time group snapshot, which carries printable ASCII only, so this value can never match anyone")
+			}
+			g.Subject = subject
+		} else {
+			g.Subject = strings.ToLower(g.Subject)
 		}
 		if len(g.Subject) > maxUserDriveFieldLen || !driveTextIsClean(g.Subject) {
 			return fmt.Errorf("subject: invalid")
