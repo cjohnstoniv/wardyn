@@ -224,8 +224,21 @@ policy. `workspaces.owned_by` (migration `0048`) makes ownership real — CRUD,
 scan and build on their own workspaces, another member's answering the
 byte-identical 404 a missing one does. What they cannot do is anything that
 widens an egress ceiling, binds credential material, or writes the host: those
-`/workspaces` routes, policy CRUD, secret writes and `PUT /site-config` all stay
-admin-only. See [OPERATIONS.md § Multi-user](OPERATIONS.md#multi-user-who-can-change-what).
+`/workspaces` routes, policy CRUD and `PUT /site-config` all stay admin-only.
+
+**Secrets are the one tier line 0.7 moved, and it moved TOWARDS the developer.**
+`PUT`/`DELETE /secrets/{name}` is self-service for any signed-in human and
+scoped to the caller's OWN namespace — `secretOwnerFromRequest` returns `""` for
+an operator and the caller's own principal for a member, so the developer writes
+their own row and can neither read, overwrite nor delete the operator's. Three
+things stay admin-only inside that: the operator's `""` namespace itself, the
+four Bedrock/SigV4 names (`aws-access-key-id`, `aws-secret-access-key`,
+`aws-session-token`, `bedrock-api-key`), which a non-operator `PUT`/`DELETE`
+refuses with a `403` because dispatch always resolves them from the operator
+namespace, and `?owner=<principal>` — the cross-namespace write — which answers
+`403 ?owner= is admin-only` to a member. A run resolves its own owner's row and
+falls back to the operator's, never to another member's.
+See [OPERATIONS.md § Multi-user](OPERATIONS.md#multi-user-who-can-change-what).
 
 **Mounting their own project directory.** The one power m′ adds that no other
 tier has is a NON-operator naming a host bind source. It is bounded by
