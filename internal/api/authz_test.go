@@ -116,9 +116,40 @@ const (
 	entityWorkspace routeEntity = "workspace"
 )
 
+// ownerTier names WHICH ADMIN TIER an owner-scoped route's admin bypass belongs
+// to. Required whenever class == classOwner, the same way entity already is.
+//
+// WHY THE TABLE NEEDED A THIRD DIMENSION (F155). routeMatrix is what routes.go
+// calls authoritative, and classAdmin/classSecurity carry the tier so that a
+// route wired to the wrong predicate reddens TestSecurityAdminRouteTier.
+// classOwner carried none, so all 16 owner-scoped routes were SKIPPED by that
+// test — and the 0.7 invariant they most need is exactly the one it enforces:
+// the tiers DO NOT NEST, so "may an admin bypass ownership here" has two
+// different answers depending on whether the bypass is inspect-or-stop
+// (ownsRunOrAdmin, isSecurityOperator) or something the super admin reserves (a
+// live PTY, a recording replay, a workspace write). Executed on the unfixed
+// tree: a NEW owner-scoped route wired to the WIDE predicate and classified
+// {classOwner, entityRun} passed both matrix tests while answering 200 to a
+// security_admin on a foreign run.
+type ownerTier string
+
+const (
+	// tierSuper: the admin bypass on this route is the SUPER admin's alone. A
+	// security_admin reading a FOREIGN entity gets the byte-identical 404 a
+	// non-owner gets — no existence oracle, and no ladder.
+	tierSuper ownerTier = "super"
+	// tierSecurity: the bypass extends to the security tier, deliberately —
+	// inspect-or-stop is that tier's warrant (helpers.go's ownsRunOrAdmin).
+	tierSecurity ownerTier = "security"
+)
+
 type classifiedRoute struct {
 	class  routeClass
 	entity routeEntity
+	// ownerTier is required for classOwner and meaningless elsewhere; the
+	// classOwner arm of TestAuthzMatrix fatals on a route that omits it, the
+	// same way it already does for a missing entity.
+	ownerTier ownerTier
 }
 
 // routeMatrix is keyed exactly as chi.Walk reports a route: "METHOD /pattern".
@@ -397,30 +428,30 @@ var routeMatrix = map[string]classifiedRoute{
 	// reaches every one. The 403 an operator-owned row still returns to a member
 	// is NOT exercised here (this probe only ever seeds member-owned fixtures) —
 	// TestWorkspaceOwnership_OperatorOwnedStaysAdminOnly pins it.
-	"PUT /api/v1/workspaces/{id}":             {class: classOwner, entity: entityWorkspace},
-	"DELETE /api/v1/workspaces/{id}":          {class: classOwner, entity: entityWorkspace},
-	"POST /api/v1/workspaces/{id}/scan":       {class: classOwner, entity: entityWorkspace},
-	"POST /api/v1/workspaces/{id}/build":      {class: classOwner, entity: entityWorkspace},
-	"GET /api/v1/runs/{id}":                   {class: classOwner, entity: entityRun},
-	"GET /api/v1/runs/{id}/grants":            {class: classOwner, entity: entityRun},
-	"GET /api/v1/runs/{id}/recording/{runID}": {class: classOwner, entity: entityRun},
-	"POST /api/v1/runs/{id}/attach-ticket":    {class: classOwner, entity: entityRun},
-	"POST /api/v1/runs/{id}/kill":             {class: classOwner, entity: entityRun},
-	"POST /api/v1/runs/{id}/profile":          {class: classOwner, entity: entityRun},
+	"PUT /api/v1/workspaces/{id}":             {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
+	"DELETE /api/v1/workspaces/{id}":          {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
+	"POST /api/v1/workspaces/{id}/scan":       {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
+	"POST /api/v1/workspaces/{id}/build":      {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
+	"GET /api/v1/runs/{id}":                   {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"GET /api/v1/runs/{id}/grants":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"GET /api/v1/runs/{id}/recording/{runID}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
+	"POST /api/v1/runs/{id}/attach-ticket":    {class: classOwner, entity: entityRun, ownerTier: tierSuper},
+	"POST /api/v1/runs/{id}/kill":             {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"POST /api/v1/runs/{id}/profile":          {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	// The run cockpit's live evidence reads. classOwner, same gate as GET
 	// /runs/{id} above: each names a run in its path and each exposes something
 	// about a LIVE sandbox — the workspace's diff, its resource usage, and who
 	// is holding its PTY. A foreign member gets the byte-identical 404.
-	"GET /api/v1/runs/{id}/files":         {class: classOwner, entity: entityRun},
-	"GET /api/v1/runs/{id}/resources":     {class: classOwner, entity: entityRun},
-	"GET /api/v1/runs/{id}/attach-holder": {class: classOwner, entity: entityRun},
+	"GET /api/v1/runs/{id}/files":         {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"GET /api/v1/runs/{id}/resources":     {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"GET /api/v1/runs/{id}/attach-holder": {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	// Take-over ends another human's live terminal session. Still classOwner
 	// (an owner may reclaim their own run's PTY, and the act is audited as
 	// session.takeover) — NOT classMember, which would let anyone displace
 	// anyone.
-	"POST /api/v1/runs/{id}/attach/takeover": {class: classOwner, entity: entityRun},
-	"POST /api/v1/approvals/{id}/approve":    {class: classOwner, entity: entityApproval},
-	"POST /api/v1/approvals/{id}/deny":       {class: classOwner, entity: entityApproval},
+	"POST /api/v1/runs/{id}/attach/takeover": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
+	"POST /api/v1/approvals/{id}/approve":    {class: classOwner, entity: entityApproval, ownerTier: tierSecurity},
+	"POST /api/v1/approvals/{id}/deny":       {class: classOwner, entity: entityApproval, ownerTier: tierSecurity},
 
 	// GET /runs/{id}/attach (the interactive PTY WebSocket) is a SPECIAL case:
 	// its ticket-LESS fallback lane (ticketOrHumanAuth) is plain admin-only
@@ -724,6 +755,15 @@ func TestAuthzMatrix(t *testing.T) {
 				default:
 					t.Fatalf("classOwner route %q has no entity set", key)
 				}
+				// REQUIRED, the same way entity is: a new owner-scoped route
+				// that does not state which admin tier may bypass ownership on
+				// it cannot be classified, because the answer is not derivable
+				// from the class (F155). Fatal here rather than defaulted, so
+				// the omission is a failure and not a silent tierSuper.
+				if rc.ownerTier != tierSuper && rc.ownerTier != tierSecurity {
+					t.Fatalf("classOwner route %q has no ownerTier set (want tierSuper or tierSecurity) — "+
+						"the tiers do not nest, so 'may an admin bypass ownership here' has two answers", key)
+				}
 				// L3: the non-owner probe below gets its OWN untouched foreign
 				// approval — foreignID itself is DECIDED by the admin-bypass probe
 				// right below (a state-mutating call against an approval's FSM),
@@ -807,6 +847,95 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	srv, _, _, _ := newAuthzMatrixServer(t)
 	secSess := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
 	memberSess := ssoSession(t, "sub-member-tier", "member-tier@corp.example", oidc.RoleMember)
+
+	// F155: the owner-scoped half, probed against a REAL, SEEDED, FOREIGN
+	// entity rather than the "x1" placeholder the gated-route loop uses.
+	//
+	// The placeholder is why this could not simply be folded into the loop
+	// below: on an {id}-bearing route parseIDParam 400s before the handler's
+	// own authorization runs, so a bogus id proves nothing about ownership —
+	// and ownership is the WHOLE question for classOwner. These routes have no
+	// router-level tier gate at all; the tier lives in the handler's predicate
+	// (helpers.go's ownsRunOrAdmin vs ownsRunOrSuperAdmin vs
+	// ownsWorkspaceOrAdmin), which is exactly why nothing was checking it.
+	t.Run("owner-scoped routes", func(t *testing.T) {
+		srv, ast, aap, rs := newAuthzMatrixServer(t)
+		const foreignSub = "sub-foreign-owner"
+		seedRun := func() uuid.UUID {
+			id := uuid.New()
+			ast.mu.Lock()
+			ast.runs[id] = types.AgentRun{ID: id, CreatedBy: foreignSub, State: types.RunRunning, Agent: "claude-code"}
+			ast.mu.Unlock()
+			// A real cast, so GET .../recording/{runID} answers about ACCESS
+			// rather than about a missing file.
+			_ = rs.SaveCast(context.Background(), id.String(), strings.NewReader(`{"version":2}`+"\n"))
+			return id
+		}
+		seedWorkspace := func() uuid.UUID {
+			id := uuid.New()
+			ast.mu.Lock()
+			ast.workspaces[id] = types.Workspace{
+				ID: id, Name: "ws-foreign", OwnedBy: foreignSub, Status: types.WorkspaceScanned,
+				Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
+			}
+			ast.mu.Unlock()
+			return id
+		}
+		sec := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
+		var probed int
+		for key, rc := range routeMatrix {
+			if rc.class != classOwner {
+				continue
+			}
+			method, pattern, ok := strings.Cut(key, " ")
+			if !ok {
+				t.Fatalf("malformed routeMatrix key %q", key)
+			}
+			t.Run(key, func(t *testing.T) {
+				var foreignID uuid.UUID
+				switch rc.entity {
+				case entityRun:
+					foreignID = seedRun()
+				case entityApproval:
+					foreignID = aap.seed(seedRun())
+				case entityWorkspace:
+					foreignID = seedWorkspace()
+				default:
+					t.Fatalf("classOwner route %q has no entity set", key)
+				}
+				w := doSSO(t, srv, method, buildPath(pattern, foreignID.String()), sec, bodyFor(method))
+				switch rc.ownerTier {
+				case tierSuper:
+					// The byte-identical 404 a non-owner gets: no existence
+					// oracle, and no ladder — a security admin does not reach a
+					// live PTY, a recording replay or a workspace write on
+					// someone else's entity.
+					if w.Code != http.StatusNotFound {
+						t.Errorf("security_admin on a FOREIGN entity, tierSuper route: status = %d, want 404 "+
+							"(the tiers do not nest); body=%s", w.Code, w.Body.String())
+					}
+				case tierSecurity:
+					// Inspect-or-stop IS this tier's warrant, so the bypass must
+					// work — a route silently narrowed to super would strand
+					// incident response, which is the other direction of the
+					// same drift.
+					if w.Code == http.StatusNotFound || w.Code == http.StatusForbidden || w.Code == http.StatusUnauthorized {
+						t.Errorf("security_admin on a FOREIGN entity, tierSecurity route: status = %d, want the "+
+							"handler's own answer — inspect-or-stop is this tier's warrant; body=%s", w.Code, w.Body.String())
+					}
+				default:
+					t.Fatalf("classOwner route %q has no ownerTier set", key)
+				}
+			})
+			probed++
+		}
+		// Every owner-scoped route is probed, not a subset: the count is what
+		// catches a route that silently leaves classOwner.
+		if probed != 16 {
+			t.Errorf("probed %d classOwner routes, want 16 — a route that left classOwner takes its tier "+
+				"assertion with it", probed)
+		}
+	})
 
 	var sec, super int
 	for key, rc := range routeMatrix {
