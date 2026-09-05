@@ -30,6 +30,14 @@ const userDriveCols = `id, name, backend, host_root, storage_class, home_templat
 const userDriveGrantCols = `id, subject_type, subject, drive_id, priority, ` +
 	`size_mib_override, writable_override, home_override, enabled, created_at, created_by`
 
+// shareBackend is the ONE backend whose object name carries no drive component
+// (types.DriveObjectName: `<host_root>/<home>`), which is why the home_override
+// uniqueness guard has to widen its namespace for it. Spliced from the Go
+// constant rather than typed as a SQL literal so the two cannot drift — it is a
+// compile-time constant from this repo's own closed enum, never caller input,
+// and the column it is compared against is written from the same enum.
+const shareBackend = string(types.DriveBackendHostPath)
+
 // userDriveDest is the scan target list for userDriveCols, written ONCE so the
 // column list and the destinations cannot drift: the resolver selects a drive
 // JOINed to its grant and would otherwise carry a second hand-written copy of
@@ -190,26 +198,66 @@ func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, erro
 // and "the drive you named does not exist" is a 404 the caller can act on, not
 // a 500.
 //
-// Returns ErrConflict when ANOTHER subject already holds this drive with the
-// SAME home_override. A home_override names ONE PERSON'S directory — that is
-// the whole reason a group or all row may not carry one (ValidateUserDriveGrant:
-// "would hand every member of that group the SAME directory — the isolation a
-// per-user subdirectory buys") — and two user rows carrying one override is
-// that same loss spelled with two rows instead of one. It matters most on a
-// MANAGED backend, where the override is the only remaining way to name a
-// minted object non-injectively (the home_template arm is refused by
-// types.ValidateUserDrive, and a hash home folds the subject), so without this
-// guard Wardyn itself creates one volume and binds it into two people's
-// sandboxes, read-write wherever the allocations are writable.
+// Returns ErrConflict when ANOTHER subject already holds the SAME
+// home_override in the same OBJECT-NAME NAMESPACE. A home_override names ONE
+// PERSON'S directory — that is the whole reason a group or all row may not carry
+// one (ValidateUserDriveGrant: "would hand every member of that group the SAME
+// directory — the isolation a per-user subdirectory buys") — and two user rows
+// carrying one override is that same loss spelled with two rows instead of one.
+// It matters most on a MANAGED backend, where the override is the only
+// remaining way to name a minted object non-injectively (the home_template arm
+// is refused by types.ValidateUserDrive, and a hash home folds the subject), so
+// without this guard Wardyn itself creates one volume and binds it into two
+// people's sandboxes, read-write wherever the allocations are writable.
+//
+// ─── THE NAMESPACE IS THE OBJECT NAME'S, NOT THE ROW'S ────────────────────────
+//
+// Scoping this to drive_id — which is what it and migration 0059's index both
+// did — states the rule over the row that happens to carry the name rather than
+// over the thing the name has to be unique IN, and the two are only the same on
+// a MANAGED backend. types.DriveObjectName is explicit about it: a managed name
+// is `wardyn-drive-<drive-slug>-<home>`, so the drive is IN the name and
+// drive_id is exactly right; a host_path (share) name is `<host_root>/<home>`,
+// with no drive component at all, because the directory was named by whoever
+// owns the tree and a slug there would name a directory that does not exist.
+//
+// So on shares the drive_id scope was the wrong question. Two share drives on
+// ONE host_root — the shape internal/api's driveHostRootNesting deliberately
+// permits, since equal roots are a naming question and only NESTED roots are a
+// containment one — let the same override be typed once on each, and the two
+// principals were handed one absolute host directory: both bind it at
+// /home/agent/drive, read-write wherever their allocation is writable, and
+// every bind-time assertion passes because each allocation is individually
+// legitimate. The guard now asks the question in the namespace's own terms:
+// same drive, OR two host_path drives over the same host_root.
+//
+// host_root is compared as the STORED STRING, which is the same comparison
+// DriveObjectName makes: types.ValidateUserDrive refuses a host_root that is not
+// already filepath.Clean'd, so equal names here are equal paths. What it does
+// not see is two textually different roots that resolve to one tree through a
+// symlink; that needs the filesystem, which the store has no access to, and it
+// is driveHostRootNesting (which does resolve, on the drive-write path) that
+// owns the resolved half. RESIDUAL, stated rather than implied: a DERIVED home
+// — no override at all — can still collide across two same-root shares, because
+// two drives may carry different home_templates and a share's derived name is a
+// claim substring rather than a digest (types.ValidateUserDrive refuses `hash`
+// on a share precisely because the directory is not Wardyn's to name). Refusing
+// that at THIS boundary is not possible: a group- or all-tier grant covers
+// principals whose claims are not known until they sign in. Closing it is a
+// design decision about whether two shares may share a root at all, and it
+// belongs where that decision lives, not here.
 //
 // THE GUARD IS IN THE STATEMENT, not in a read before it, so the window between
 // "nobody else holds this name" and the write is one statement rather than two
 // round trips. It is still not a constraint: two concurrent inserts can both
-// pass NOT EXISTS under READ COMMITTED. The race-free form is a partial unique
-// index — CREATE UNIQUE INDEX ... ON user_drive_grants (drive_id, home_override)
-// WHERE home_override <> ” — which belongs in a migration; this guard closes
-// the reachable case (an admin typing one directory name twice) and stays
-// correct as belt-and-braces once the index exists.
+// pass NOT EXISTS under READ COMMITTED. Migration 0059's partial unique index on
+// (drive_id, home_override) is the race-free floor for the SAME-DRIVE half and
+// keeps working unchanged; the cross-drive half has no index form, because a
+// unique index cannot span two tables (host_root lives on user_drives) — so on
+// shares this statement is the whole guard, and the residual is the concurrent
+// second writer, the same one driveHostRootNesting states for its own read-then-
+// write. Both close the case that actually happens: one admin, one directory
+// name, typed twice.
 //
 // Enabled is written VERBATIM, so a zero-value grant is a DISABLED one. That is
 // the fail-closed half (an allocation nobody enabled mounts nothing) and it
@@ -221,9 +269,15 @@ func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, erro
 //
 // home_override IS an identity field. The object a member binds is derived
 // from it (DriveObjectName over the resolved home), so clearing one re-homes
-// that person: their next run mounts `wardyn-drive-<hash>` instead of
-// `wardyn-drive-bsmith`, and the object holding their work is left behind with
-// nothing in Wardyn naming it. That is the SAME act driveRehomeGuard answers
+// that person: on a managed backend their next run mounts
+// `wardyn-drive-corp-nas-d-9f2a1c04` instead of `wardyn-drive-corp-nas-bsmith`,
+// and the object holding their work is left behind with nothing in Wardyn
+// naming it. The DRIVE SLUG is in both halves because it is in the minted name
+// — types.DriveObjectName is `wardyn-drive-<drive-slug>-<home>`, and only the
+// <home> half moves when an override is cleared; writing the pair without the
+// slug read as though the whole name changed, which is a different (and
+// larger) act than the one this guard refuses. On a share the same clearing
+// re-homes them from `<host_root>/bsmith` to `<host_root>/<derived>`. That is the SAME act driveRehomeGuard answers
 // 409 for one surface over, on the drive row — and this write had no
 // counterpart, because ON CONFLICT replaced every override wholesale. A POST
 // that only meant to change a priority, or to repoint a subject at another
@@ -253,9 +307,15 @@ func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant, ho
 			size_mib_override, writable_override, home_override, enabled, created_by)
 		SELECT $1::uuid,$2::text,$3::text,$4::uuid,$5::int,$6::int,$7::boolean,$8::text,$9::boolean,$10::text
 		WHERE $8::text = '' OR NOT EXISTS (
-			SELECT 1 FROM user_drive_grants
-			WHERE drive_id = $4::uuid AND home_override = $8::text
-			  AND NOT (subject_type = $2::text AND subject = $3::text)
+			SELECT 1
+			FROM user_drive_grants og
+			JOIN user_drives od ON od.id = og.drive_id
+			JOIN user_drives nd ON nd.id = $4::uuid
+			WHERE og.home_override = $8::text
+			  AND NOT (og.subject_type = $2::text AND og.subject = $3::text)
+			  AND (og.drive_id = $4::uuid
+			       OR (nd.backend = '` + shareBackend + `' AND od.backend = '` + shareBackend + `'
+			           AND nd.host_root <> '' AND od.host_root = nd.host_root))
 		)
 		ON CONFLICT (subject_type, subject) DO UPDATE
 			SET drive_id = EXCLUDED.drive_id, priority = EXCLUDED.priority,

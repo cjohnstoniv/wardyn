@@ -510,7 +510,24 @@ func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEv
 	if err != nil {
 		return fmt.Errorf("store: marshal audit data: %w", err)
 	}
-	tx, err := pool.Begin(ctx)
+	// READ COMMITTED IS PINNED HERE, not inherited. Since 0056 the head read
+	// that decides prev_hash happens INSIDE the trigger, i.e. inside THIS
+	// transaction — so under REPEATABLE READ the transaction snapshot, taken by
+	// the advisory-lock statement below BEFORE the lock is granted, is the one
+	// the head read uses. A writer that queued behind the lock then reads a head
+	// from before the winner committed and chains to it: two rows claiming one
+	// predecessor, which the verify sweep reports as a break. Executed, not
+	// argued: with nothing changed but the isolation level, an in-tree-shaped
+	// writer forked the chain.
+	//
+	// The level came from default_transaction_isolation, a USERSET GUC — settable
+	// by any role, per-role or per-database, with no superuser needed and nothing
+	// in this tree pinning or checking it. Correctness of the append-only log's
+	// link structure must not rest on that. A transaction-level isolation level
+	// OVERRIDES the GUC, so setting it here is the fix rather than a request in a
+	// runbook; db.ensureAuditTriggers additionally REPORTS a non-read-committed
+	// default at boot, for writers this package knows nothing about.
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return fmt.Errorf("store: begin audit tx: %w", err)
 	}
