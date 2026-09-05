@@ -790,6 +790,39 @@ func (s *Server) ceilingWithUnusableGroups(ctx context.Context, users []string, 
 		return governanceCeiling{}, fmt.Errorf("api: resolve governance profile: %w", herr)
 	}
 	if hasGroupTier {
+		// AUDITED, at the ONE site that produces this refusal.
+		//
+		// docs/OPERATIONS.md's "Every denial that isn't a 404" makes
+		// authz.denied the record of every member denial that is not a plain
+		// foreign-resource 404, and this 403 is member-reachable from six seams
+		// (GET /policies/default, POST /runs, /runs/preflight, the secrets list,
+		// the profile read, the drives door) — and produced none. An operator
+		// reading the denial stream saw nothing at all for a member who cannot
+		// use the product.
+		//
+		// HERE rather than in writeCeilingError, and that placement is the fix
+		// rather than an implementation detail: writeCeilingError is a free
+		// function with no server and no context, and there are three of them
+		// (writeCeilingError, writeCeilingErrorPrefixed, ceilingErrorStatus) —
+		// auditing at the WRITE sites would mean one emit per seam and a seam
+		// that hands the code upward (ceilingErrorStatus) emitting nothing.
+		// This is the only place the refusal is DECIDED, so it is the only place
+		// it can be recorded once.
+		//
+		// ONCE PER REQUEST, not once per seam, because effectiveCeiling memoizes
+		// (ceilingMemo): a create that asks three times is one denial, which is
+		// what an operator counting denials means.
+		// Guarded on the SINK, not merely handed to recordAudit's own nil check:
+		// auditEvent is evaluated as recordAudit's ARGUMENT, so a server with no
+		// recorder would still build the event — and stamp it from cfg.Now,
+		// which a Server assembled without New() does not have. Nothing records
+		// on such a build by definition, so the cheapest correct thing is not to
+		// build the row at all.
+		if s.cfg.Audit != nil {
+			s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, oidcHumanFromContext(ctx),
+				"authz.denied", "governance.ceiling", "denied",
+				mustJSON(map[string]any{"reason": "groups_snapshot_stale"})))
+		}
 		return governanceCeiling{}, errGroupsSnapshotStale
 	}
 	return s.ceilingFromProfile(p, err, deployment)
