@@ -115,3 +115,17 @@ c7d58c0efb6876879fc8a2e83729cc12c151dd93:internal/store/store_secret_migration_p
 05f5383ba439e0722d111946d90f0f79146508c3:scripts/test-install-sh-trust.sh:generic-api-key:284
 # false positive: a fake AWS access key id in the k8s SecretEnv test fixture (F9, lane/v0.7-d4)
 c9a5f79ea091ced42f46f019867a970ce41dc4ac:internal/runner/k8s/sandbox_test.go:aws-access-token:816
+
+# scripts/test-install-sh-trust.sh (R5 fix wave, commits f8a21684 + af6cb8f7): the install test's own
+# fixtures — a STUB age key ("AGE-SECRET-KEY-1STUB…" over a repeating 4-character bech32 pattern; not a
+# keygen output) and a 0-9a-f cycle used as the "real-shaped admin token to keep" case (T5). Both are also
+# the fixtures in deploy/helm/wardyn/ci/all-on-values.yaml and cmd/wardynd/main_test.go. generic-api-key
+# matches their shape; neither is a credential. Fingerprints copied from the report of
+# `gitleaks git -c .gitleaks.toml --report-format json` on RC d6857083.
+af6cb8f7ab7f49c561d64dddb36969f2319f4826:scripts/test-install-sh-trust.sh:generic-api-key:558
+af6cb8f7ab7f49c561d64dddb36969f2319f4826:scripts/test-install-sh-trust.sh:generic-api-key:559
+f8a21684af4b6b1b4921f14437913efc8ab2aaaa:scripts/test-install-sh-trust.sh:generic-api-key:194
+f8a21684af4b6b1b4921f14437913efc8ab2aaaa:scripts/test-install-sh-trust.sh:generic-api-key:195
+f8a21684af4b6b1b4921f14437913efc8ab2aaaa:scripts/test-install-sh-trust.sh:generic-api-key:470
+f8a21684af4b6b1b4921f14437913efc8ab2aaaa:scripts/test-install-sh-trust.sh:generic-api-key:471
+f8a21684af4b6b1b4921f14437913efc8ab2aaaa:scripts/test-install-sh-trust.sh:generic-api-key:488
