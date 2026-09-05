@@ -353,6 +353,22 @@ func migrateOn(ctx context.Context, db migrationExecutor) error {
 	if err != nil {
 		return err
 	}
+	// DEFERRED, not called on the success path, and the difference is the whole
+	// promise. A migration that FAILS is not an exotic state here: 0059 and 0060
+	// both fail loudly by design and nominate "fix the rows and re-run" as the
+	// supported response, and 0056-0058 sit BEFORE them in apply order — so by
+	// the time the loop returns an error, three committed DROP TRIGGER + CREATE
+	// TRIGGER pairs have already put tgenabled back to 'O'. Returning there left
+	// the hardening stripped with nothing logged, and stripped FOR GOOD: the
+	// remediated boot's capture reads that 'O' as the shipped state and finds
+	// 0056-0058 already recorded applied, so there is nothing left to restore
+	// and nothing left to notice. Deferring it here covers every exit — a loop
+	// error, an ensureAuditTriggers refusal, a cancelled ctx — with the same
+	// re-apply-or-say-so the success path always had. It still runs LAST, after
+	// ensureAuditTriggers, which is what the tail call was careful about: that
+	// function's restore path replays the trigger-defining migrations and
+	// re-creates the trigger as plain 'O' for the same reason the loop does.
+	defer restoreAlwaysTriggers(ctx, db, hardened)
 
 	entries, err := migrationFS.ReadDir("migrations")
 	if err != nil {
@@ -392,14 +408,9 @@ func migrateOn(ctx context.Context, db migrationExecutor) error {
 		}
 		slog.InfoContext(ctx, "db: applied migration", slog.String("file", name), slog.Duration("elapsed", time.Since(start)))
 	}
-	if err := ensureAuditTriggers(ctx, db); err != nil {
-		return err
-	}
-	// AFTER ensureAuditTriggers, not just after the loop: its restore path
-	// replays the trigger-defining migrations, which re-creates the trigger as
-	// plain 'O' for exactly the same reason the loop does.
-	restoreAlwaysTriggers(ctx, db, hardened)
-	return nil
+	// The hardening restore is the deferred call registered above, so it runs
+	// after this returns however it returns.
+	return ensureAuditTriggers(ctx, db)
 }
 
 // auditAlwaysTriggers returns the audit_events triggers an operator has hardened
