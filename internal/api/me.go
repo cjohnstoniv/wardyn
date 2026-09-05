@@ -119,7 +119,30 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	// is told "I cannot answer", never "yes" to a question nobody answered.
 	if doorUnknown {
 		body["user_drive"] = nil
-		unavailable = driveUnavailableGovernance
+		// THE WIDENING YIELDS TO A DIFFERENT REMEDY, and only to that.
+		//
+		// PF-26's own motivating case is a TRUNCATED group snapshot, which fails
+		// BOTH resolves: the drive resolver names it groups_snapshot_stale — the
+		// same token the launch path's 403 carries — and the ceiling resolve
+		// then fails for the identical reason. Overwriting unconditionally
+		// replaced the specific token with the generic one, so /me told the
+		// member "governance is unavailable" (wait, or ask an operator) while
+		// POST /runs told them "sign in again (or re-mint your API token)". One
+		// of those is theirs to act on, and it was the one being discarded.
+		//
+		// SCOPED TO THAT TOKEN rather than to "any narrower reason", because the
+		// key exists for the CLIENT to pick a remedy: `unavailable` and
+		// `governance_unavailable` both mean "the server could not answer — wait
+		// or ask an operator", so preferring one over the other tells the member
+		// nothing new and would only churn a pinned answer.
+		// groups_snapshot_stale is the one token whose remedy is the member's
+		// own, which is exactly why it must survive.
+		//
+		// The SUPPRESSION above stays unconditional: an unknown door must never
+		// ship beside an allocation, whichever reason names it.
+		if unavailable != driveUnavailableGroups {
+			unavailable = driveUnavailableGovernance
+		}
 	}
 	// THE THIRD KEY, and the reason there are three rather than two. The door
 	// needed its own key because four states do not fit in one; this is the same

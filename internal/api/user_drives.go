@@ -912,6 +912,10 @@ func (s *Server) resolveMeUserDrive(r *http.Request) (*meUserDrive, string) {
 // an allocation would not help them, and a field folded into user_drive could
 // not have said so.
 //
+// THE SECOND RETURN IS "I CANNOT ANSWER THE DOOR", and it now covers TWO
+// causes, both of which must not read as an open door: a ceiling that could not
+// be resolved, and a door that is shut under a profile with no name to quote.
+//
 // It reads driveDoorProfile — the SAME predicate denyMemberDrive enforces with,
 // whose keying (operator exempt, unassigned member has no door) is documented
 // there. A ceiling that cannot be resolved reports "" for resolveMeUserDrive's
@@ -933,7 +937,27 @@ func (s *Server) userDriveDeniedByProfile(r *http.Request) (name string, unresol
 		// create the server would then refuse.
 		return "", true
 	}
-	name, _ = s.driveDoorProfile(r.Context(), ceiling)
+	// THE BOOL IS THE DECISION, and discarding it here was the same fail-open
+	// driveDoorShut's own bool was introduced to close, left standing at the
+	// sibling call site. governance_profiles.name is TEXT NOT NULL UNIQUE with
+	// no non-empty CHECK, so a profile with DenyUserDrive set and a blank name
+	// reports ("", true): the name key then shipped "" — which the documented
+	// contract reads as "no profile denies you" — beside a fully populated,
+	// writable user_drive, while POST /runs with drive.enabled answered 403
+	// 'mounting a user drive is not allowed by your governance profile ""'.
+	//
+	// UNNAMED-BUT-SHUT TAKES THE DOOR-UNKNOWN PATH (the remediation's second
+	// option), rather than a new value on either key. The display key cannot say
+	// "shut" without a name to quote — that is what it is FOR — so the honest
+	// answer is the one /me already has for "I cannot answer the door": suppress
+	// the allocation so the card cannot offer a mount the launch refuses, and
+	// let the reason key carry it. A NAMED deny is untouched: it keeps shipping
+	// the profile name beside the allocation, which is the four-state doctrine
+	// working as designed (an allocation and a door are different facts).
+	name, shut := s.driveDoorProfile(r.Context(), ceiling)
+	if shut && name == "" {
+		return "", true
+	}
 	return name, false
 }
 
