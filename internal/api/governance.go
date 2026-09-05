@@ -720,12 +720,7 @@ func (s *Server) effectiveCeiling(ctx context.Context) (governanceCeiling, error
 	// request and the next one resolves afresh. A background caller (reconcile,
 	// the boot heal) carries no memo and resolves normally.
 	if memo := ceilingMemoFromContext(ctx); memo != nil {
-		if c, err, done := memo.get(); done {
-			return c, err
-		}
-		c, err := s.resolveEffectiveCeiling(ctx)
-		memo.put(c, err)
-		return c, err
+		return memo.do(ctx, s.resolveEffectiveCeiling)
 	}
 	return s.resolveEffectiveCeiling(ctx)
 }
@@ -980,18 +975,48 @@ type ceilingMemo struct {
 	err   error
 }
 
-func (m *ceilingMemo) get() (governanceCeiling, error, bool) {
+// do is the memo's whole contract: resolve AT MOST ONCE, and hand every caller
+// that one answer.
+//
+// SINGLE-FLIGHT, not last-writer-wins, and the difference is the bug. The lock
+// used to be released between the check and the fill, so two concurrent callers
+// both missed, both resolved, and the loser returned ITS OWN pair rather than
+// the memo's — the store was asked twice and the two callers received DIFFERENT
+// profiles. That is precisely the divergence the memo exists to remove: a
+// security admin narrowing a profile mid-request could still land a run whose
+// egress was clamped under one ceiling and whose grants were filtered under
+// another, which is what the memo was introduced to make impossible.
+//
+// The lock is HELD ACROSS THE RESOLVE, deliberately. A concurrent caller waits
+// for the answer instead of starting a second read, which is the point — the
+// alternative (resolve twice, keep the first) still asks the store twice and
+// still lets the two reads straddle a profile edit. The cost is bounded by the
+// request itself: a single request fans out to at most a couple of goroutines
+// (dispatch runs inline on a WithoutCancel copy that shares these values), and
+// resolveEffectiveCeiling never re-enters this method, so there is no
+// self-deadlock to reason about.
+//
+// A WAITER'S OWN CONTEXT IS NOT CONSULTED while it waits: it gets the answer the
+// first caller's resolve produced, cancelled context or not. That is correct for
+// this memo — the answer is about the PRINCIPAL, not about the waiter's
+// deadline, and handing one caller a "context cancelled" where another got a
+// ceiling would reintroduce the disagreement by another route.
+//
+// THE SCOPE IS ONE REQUEST, which is what makes a lock held across a store read
+// safe to reason about at all. The memo lives on the request context
+// (ceilingMemoKey, installed once per authenticated request by the auth
+// middleware), so the longest anything waits here is one in-flight resolve for
+// the SAME principal in the SAME request — never another request's, and a
+// memoized failure dies with the request rather than souring the next one.
+func (m *ceilingMemo) do(ctx context.Context, resolve func(context.Context) (governanceCeiling, error)) (governanceCeiling, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.value, m.err, m.done
-}
-
-func (m *ceilingMemo) put(c governanceCeiling, err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !m.done {
-		m.value, m.err, m.done = c, err, true
+	if m.done {
+		return m.value, m.err
 	}
+	m.value, m.err = resolve(ctx)
+	m.done = true
+	return m.value, m.err
 }
 
 // withCeilingMemo installs an empty memo. Called once per authenticated request
