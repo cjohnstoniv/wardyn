@@ -47,6 +47,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -359,6 +360,7 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 		// oauth2.Config.Endpoint's AuthStyle doc.
 		oa.Endpoint.AuthStyle = oauth2.AuthStyleInParams
 	}
+	warnUnrequestedGroupsScope(provider, oa.Scopes, cfg)
 
 	verifier := provider.Verifier(&gooidc.Config{ClientID: cfg.ClientID})
 
@@ -369,6 +371,79 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 		hmacKey:    hmacKey,
 		httpClient: httpClient,
 	}, nil
+}
+
+// groupsScope is the scope name an IdP that gates its group claim expects in
+// the authorization request. Wardyn does NOT request it — see
+// warnUnrequestedGroupsScope for why, and for the one thing it does instead.
+const groupsScope = "groups"
+
+// warnUnrequestedGroupsScope emits the single boot line an operator gets when
+// this deployment's role map is keyed on a claim the authorization request
+// never asks for.
+//
+// The authorization request is fixed at "openid profile email" and deliberately
+// does not append `groups`. Entra ID defines no such scope and rejects
+// unrecognised ones, so a blanket addition breaks the documented Entra path
+// outright; and even an IdP that ADVERTISES the scope may not have granted it
+// to this client registration, where asking is an invalid_scope error — a login
+// outage for every human, arriving on an upgrade nobody opted into. Requesting
+// a scope is not a safe default, which is why this function only ever warns.
+//
+// The cost of not asking is real and worth naming: a scope-gated IdP simply
+// omits the claim, and an omitted `groups` is byte-for-byte "asked, and there
+// were none". sessionGroups reports a COMPLETE empty snapshot, deriveRole reads
+// "checked, and nothing matched", and a group-keyed row decides nothing. Unlike
+// an Entra overage there is no `_claim_names` marker to fail closed on — the
+// IdP is not saying anything at all, so no runtime signal can tell this apart
+// from a human genuinely in no groups. Boot is therefore the only honest place
+// to raise it, while the operator can still act.
+//
+// SCOPED TO THE DEPLOYMENTS IT IS ABOUT, or it becomes the line every operator
+// learns to scroll past: the provider's own discovery document must advertise a
+// `groups` scope, AND the chart role map must hold a key only a CLAIM can
+// answer. An email key is matched against the `email` claim this request does
+// ask for, so a map keyed purely on emails is unaffected and stays silent — as
+// does every Entra tenant, whose scopes_supported carries no `groups` at all.
+//
+// The chart map (Config.RoleMap) is what is knowable at construction. Console-
+// managed rows are read per login from a store this constructor has no context
+// to query, and group-subject capability grants and governance assignments live
+// in the database entirely — so SILENCE HERE IS NOT A PROOF that nothing on
+// this deployment depends on the group claim.
+func warnUnrequestedGroupsScope(provider *gooidc.Provider, requested []string, cfg Config) {
+	if slices.Contains(requested, groupsScope) {
+		return
+	}
+	// A key holding "@" is an email, answered by a claim already requested.
+	// Everything else can only arrive on `roles` or `groups`.
+	var claimKeyed []string
+	for k := range cfg.RoleMap {
+		if !strings.Contains(k, "@") {
+			claimKeyed = append(claimKeyed, k)
+		}
+	}
+	if len(claimKeyed) == 0 {
+		return
+	}
+	var meta struct {
+		ScopesSupported []string `json:"scopes_supported"`
+	}
+	// A discovery document this build cannot read is not evidence that the
+	// provider gates `groups`; stay quiet rather than guess at a provider's
+	// posture and cry wolf on every login screen that follows.
+	if err := provider.Claims(&meta); err != nil {
+		return
+	}
+	if !slices.Contains(meta.ScopesSupported, groupsScope) {
+		return
+	}
+	slices.Sort(claimKeyed) // stable line across restarts; map order is not
+	slog.Warn("oidc: this provider advertises a `groups` scope that Wardyn does not request, and the role map is keyed on values only a claim can answer — "+
+		"if the IdP gates its group claim behind that scope it will send none, which is indistinguishable from `this human is in no groups`, "+
+		"so those rows would silently decide nothing",
+		"issuer", cfg.IssuerURL, "scope", groupsScope, "requested_scopes", requested,
+		"claim_keyed_role_map_values", claimKeyed, "env", "WARDYN_OIDC_ROLE_MAP")
 }
 
 // LoginHandler initiates the OIDC authorization code flow. It generates a
@@ -541,14 +616,34 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	// deriveRole — fail closed on that one claim, not the whole login), and a
 	// malformed roles claim can't discard a valid groups claim or vice versa
 	// since each has its own struct.
+	//
+	// TOLERATING THE SHAPE AND REPORTING THE LOSS ARE DIFFERENT JOBS, and the
+	// decode error used to be discarded, which collapsed them. A claim the IdP
+	// DID send in a shape this build cannot read then arrived at derivation as
+	// nil — byte-for-byte "asked, there were none". The group the human really
+	// holds vanished from the snapshot with the PF-26 partial bit CLEAR, so
+	// capScan never consulted capUnresolvableGroupDeny and effectiveCeiling
+	// never took ceilingWithUnusableGroups: a group-subject DENY protected
+	// nothing and a group-tier ceiling degraded to the deployment default, with
+	// no refusal, no audit row and nothing to notice. It is the same evaporation
+	// the byte cap and the Entra overage are already closed for, on the one
+	// input neither can see, so unreadableClaims below stamps the same bit and
+	// takes the same role-widening refusal. The claim still contributes NOTHING
+	// to derivation: coercing a scalar into a one-element list would let the raw
+	// string match a role-map row (TestCallbackScalarGroupsClaimMapSetContributesNothing).
+	var unreadableClaims []string
 	var rc struct {
 		Roles []string `json:"roles"`
 	}
-	_ = idToken.Claims(&rc)
+	if err := idToken.Claims(&rc); err != nil {
+		unreadableClaims = append(unreadableClaims, "roles")
+	}
 	var gc struct {
 		Groups []string `json:"groups"`
 	}
-	_ = idToken.Claims(&gc)
+	if err := idToken.Claims(&gc); err != nil {
+		unreadableClaims = append(unreadableClaims, "groups")
+	}
 	// The distributed-claim pointer, decoded just as tolerantly and for the
 	// same fail-closed reason: when `_claim_names` names "groups" (or "roles"),
 	// the claim above is absent because the IdP OMITTED it — an overage — not
@@ -556,10 +651,17 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	// truncation bit. map[string]any rather than map[string]string so a value
 	// shape this package does not read cannot fail the decode and hide the
 	// marker.
+	//
+	// A marker this build cannot read is a question that cannot be answered, so
+	// it joins unreadableClaims too — defense in depth rather than a live arm:
+	// go-oidc parses the distributed-claim block during Verify and refuses such
+	// an id_token outright, one step earlier (TestUnreadableClaimNamesIsRefusedUpstream).
 	var dc struct {
 		ClaimNames map[string]any `json:"_claim_names"`
 	}
-	_ = idToken.Claims(&dc)
+	if err := idToken.Claims(&dc); err != nil {
+		unreadableClaims = append(unreadableClaims, "_claim_names")
+	}
 
 	// (4) Domain check — fail closed.
 	if len(a.cfg.AllowedEmailDomains) > 0 {
@@ -643,6 +745,22 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 		redirectAuthError(w, r, authErrorClaimsOverage)
 		return
 	}
+	// The UNREADABLE half of the same question, kept as its own branch so each
+	// denial logs the cause it actually knows. The IdP sent the claim, so
+	// `_claim_names` says nothing and claimNamesKeys would log an empty list;
+	// what an operator needs here is WHICH claim arrived in a shape this build
+	// could not decode. The auth_error code is shared deliberately: to the human
+	// at the sign-in screen both mean "this console could not read the claim
+	// your access depends on and will not guess", and retrying sends the same
+	// token either way.
+	if unanswerableWidensRole(len(unreadableClaims) > 0, role, matches) {
+		slog.Warn("oidc: login denied — the IdP sent a claim role derivation depends on in a shape this build cannot decode, and the default role would widen this session",
+			"sub", idToken.Subject, "default_role", a.cfg.DefaultRole,
+			"env", "WARDYN_OIDC_DEFAULT_ROLE", "unreadable_claims", unreadableClaims)
+		clearCookie(w, sessionCookieName)
+		redirectAuthError(w, r, authErrorClaimsOverage)
+		return
+	}
 	if len(matches) > 0 {
 		slog.Debug("oidc: role derivation matched", "sub", idToken.Subject, "role", role, "matches", matches)
 	}
@@ -662,6 +780,19 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	// and never fails the login. The `_claim_names` pointer rides along so an
 	// IdP-side overage stamps the snapshot partial instead of empty.
 	groups, groupsTruncated := sessionGroups(rc.Roles, gc.Groups, dc.ClaimNames)
+	if len(unreadableClaims) > 0 {
+		// PF-26's third cause, stamped here rather than inside sessionGroups
+		// because it is the DECODE that failed, and sessionGroups only ever
+		// sees what survived one. "Contributes nothing to the role" and
+		// "contributes nothing to the snapshot" were both already true; what
+		// was missing is that the snapshot said so. Without this the login
+		// carries a COMPLETE-and-empty group identity for a human whose IdP
+		// just named their groups, and every group-subject DENY and group-tier
+		// ceiling written for them evaporates silently.
+		groupsTruncated = true
+		slog.Warn("oidc: group snapshot marked partial — the id_token carried a role/group claim in a shape this build cannot decode, so the human's real groups are not in it",
+			"sub", idToken.Subject, "unreadable_claims", unreadableClaims)
+	}
 	sess := Session{
 		Sub:             idToken.Subject,
 		Email:           claims.Email,
