@@ -47,6 +47,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -359,6 +360,7 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 		// oauth2.Config.Endpoint's AuthStyle doc.
 		oa.Endpoint.AuthStyle = oauth2.AuthStyleInParams
 	}
+	warnUnrequestedGroupsScope(provider, oa.Scopes, cfg)
 
 	verifier := provider.Verifier(&gooidc.Config{ClientID: cfg.ClientID})
 
@@ -369,6 +371,79 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 		hmacKey:    hmacKey,
 		httpClient: httpClient,
 	}, nil
+}
+
+// groupsScope is the scope name an IdP that gates its group claim expects in
+// the authorization request. Wardyn does NOT request it — see
+// warnUnrequestedGroupsScope for why, and for the one thing it does instead.
+const groupsScope = "groups"
+
+// warnUnrequestedGroupsScope emits the single boot line an operator gets when
+// this deployment's role map is keyed on a claim the authorization request
+// never asks for.
+//
+// The authorization request is fixed at "openid profile email" and deliberately
+// does not append `groups`. Entra ID defines no such scope and rejects
+// unrecognised ones, so a blanket addition breaks the documented Entra path
+// outright; and even an IdP that ADVERTISES the scope may not have granted it
+// to this client registration, where asking is an invalid_scope error — a login
+// outage for every human, arriving on an upgrade nobody opted into. Requesting
+// a scope is not a safe default, which is why this function only ever warns.
+//
+// The cost of not asking is real and worth naming: a scope-gated IdP simply
+// omits the claim, and an omitted `groups` is byte-for-byte "asked, and there
+// were none". sessionGroups reports a COMPLETE empty snapshot, deriveRole reads
+// "checked, and nothing matched", and a group-keyed row decides nothing. Unlike
+// an Entra overage there is no `_claim_names` marker to fail closed on — the
+// IdP is not saying anything at all, so no runtime signal can tell this apart
+// from a human genuinely in no groups. Boot is therefore the only honest place
+// to raise it, while the operator can still act.
+//
+// SCOPED TO THE DEPLOYMENTS IT IS ABOUT, or it becomes the line every operator
+// learns to scroll past: the provider's own discovery document must advertise a
+// `groups` scope, AND the chart role map must hold a key only a CLAIM can
+// answer. An email key is matched against the `email` claim this request does
+// ask for, so a map keyed purely on emails is unaffected and stays silent — as
+// does every Entra tenant, whose scopes_supported carries no `groups` at all.
+//
+// The chart map (Config.RoleMap) is what is knowable at construction. Console-
+// managed rows are read per login from a store this constructor has no context
+// to query, and group-subject capability grants and governance assignments live
+// in the database entirely — so SILENCE HERE IS NOT A PROOF that nothing on
+// this deployment depends on the group claim.
+func warnUnrequestedGroupsScope(provider *gooidc.Provider, requested []string, cfg Config) {
+	if slices.Contains(requested, groupsScope) {
+		return
+	}
+	// A key holding "@" is an email, answered by a claim already requested.
+	// Everything else can only arrive on `roles` or `groups`.
+	var claimKeyed []string
+	for k := range cfg.RoleMap {
+		if !strings.Contains(k, "@") {
+			claimKeyed = append(claimKeyed, k)
+		}
+	}
+	if len(claimKeyed) == 0 {
+		return
+	}
+	var meta struct {
+		ScopesSupported []string `json:"scopes_supported"`
+	}
+	// A discovery document this build cannot read is not evidence that the
+	// provider gates `groups`; stay quiet rather than guess at a provider's
+	// posture and cry wolf on every login screen that follows.
+	if err := provider.Claims(&meta); err != nil {
+		return
+	}
+	if !slices.Contains(meta.ScopesSupported, groupsScope) {
+		return
+	}
+	slices.Sort(claimKeyed) // stable line across restarts; map order is not
+	slog.Warn("oidc: this provider advertises a `groups` scope that Wardyn does not request, and the role map is keyed on values only a claim can answer — "+
+		"if the IdP gates its group claim behind that scope it will send none, which is indistinguishable from `this human is in no groups`, "+
+		"so those rows would silently decide nothing",
+		"issuer", cfg.IssuerURL, "scope", groupsScope, "requested_scopes", requested,
+		"claim_keyed_role_map_values", claimKeyed, "env", "WARDYN_OIDC_ROLE_MAP")
 }
 
 // LoginHandler initiates the OIDC authorization code flow. It generates a
