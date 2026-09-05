@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -48,10 +49,22 @@ type AuditSpool struct {
 	//
 	// SEEDED FROM THE SIDECAR at NewAuditSpool, because the condition it reports
 	// is PERSISTENT ON DISK while a process-local counter is not. Any restart
-	// after a quarantine - a deploy, a crash loop, a pod reschedule - returned
-	// it to 0 while the sidecar still held the missing events, and /metrics then
-	// showed a completely healthy audit surface over a trail that is
-	// permanently incomplete.
+	// after a quarantine returned it to 0 while the sidecar still held the
+	// missing events, and /metrics then showed a completely healthy audit
+	// surface over a trail that is permanently incomplete.
+	//
+	// AS DURABLE AS THE DIRECTORY, AND NO MORE — the earlier wording promised
+	// "a deploy, a crash loop, a pod reschedule" flatly, and that promise is
+	// only true on a substrate that gives the spool directory durable storage:
+	// compose's `audit` named volume, or a chart install with
+	// persistence.enabled=true. On the chart's DEFAULT (persistence.enabled
+	// false) WARDYN_AUDIT_SPOOL is /tmp/audit-spool.jsonl and /tmp is an
+	// emptyDir, so a rolling deploy or a reschedule discards the sidecar with
+	// the pod: the counter reads 0 again and the permanently-refused events it
+	// accounts for are gone with it. A process restart in place still keeps
+	// both, on every substrate. ephemeralSpoolDir names the case that does not,
+	// and NewAuditSpool WARNs about it at boot rather than leaving the operator
+	// to discover the difference from a counter that silently reset.
 	quarantined atomic.Int64
 	// lines is the number of un-replayed events in the spool: the
 	// wardyn_audit_spool_lines gauge. An atomic maintained by Append and Drain
@@ -135,7 +148,41 @@ func NewAuditSpool(path string) (*AuditSpool, error) {
 	// events sat untouched beside the spool.
 	a.lines.Store(countSpoolLines(path))
 	a.quarantined.Store(countSpoolLines(a.quarantinePath()))
+	// Said once, at boot, where an operator reads it — not left to be inferred
+	// from a quarantine counter that came back 0 after a deploy. WARN rather
+	// than a refusal: an ephemeral spool is still better than no spool (it
+	// survives the store outage it exists for, which is the common case), and
+	// refusing to boot over it would take the deployment down for a durability
+	// property the deployment may not need.
+	if dir, ephemeral := ephemeralSpoolDir(path); ephemeral {
+		slog.Warn("api: the audit spool is on ephemeral storage; a redeploy or reschedule discards un-drained events AND the quarantine sidecar",
+			"path", path, "dir", dir,
+			"remedy", "point WARDYN_AUDIT_SPOOL at durable storage (helm: persistence.enabled=true; compose: the `audit` named volume)")
+	}
 	return a, nil
+}
+
+// ephemeralSpoolDir reports whether path's directory is one this project KNOWS
+// is discarded with the container, and names it.
+//
+// A PATH TEST, deliberately, and its limits are the reason it is one. The case
+// that matters is the Helm chart's own default — persistence.enabled=false
+// points WARDYN_AUDIT_SPOOL at /tmp/audit-spool.jsonl and mounts /tmp as an
+// emptyDir — and an emptyDir is NOT a distinguishable filesystem: it is the
+// node's disk, so statfs sees ext4/overlayfs and reports nothing unusual. There
+// is no syscall that answers "will this survive a pod reschedule". What there IS
+// is a convention every substrate this ships on honours: /tmp is scratch.
+//
+// It therefore UNDER-reports rather than over-reports: an operator who points
+// the spool at some other ephemeral mount gets no warning, and that is the safe
+// direction for a heuristic — a false alarm on a durable path would teach
+// operators to ignore the line.
+func ephemeralSpoolDir(path string) (string, bool) {
+	dir := filepath.Clean(filepath.Dir(path))
+	if dir == os.TempDir() || dir == "/tmp" || strings.HasPrefix(dir, "/tmp/") {
+		return dir, true
+	}
+	return dir, false
 }
 
 // countSpoolLines counts the JSONL lines in path, 0 for a missing or unreadable
