@@ -38,7 +38,7 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:], os.Stdin, os.Stdout); err != nil {
+	if err := run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "wardyn-toolgate:", err)
 		os.Exit(1)
 	}
@@ -49,7 +49,7 @@ func main() {
 // records the decision, the recording records the session.
 const maxCmdBytes = 4096
 
-func run(args []string, in io.Reader, out io.Writer) error {
+func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	fs := flag.NewFlagSet("wardyn-toolgate", flag.ContinueOnError)
 	// The proxy is the sandbox's one route out, so its address is already in
 	// every agent's environment as the standard proxy variable.
@@ -68,7 +68,7 @@ func run(args []string, in io.Reader, out io.Writer) error {
 	}
 
 	g := &gate{base: strings.TrimRight(*base, "/"), poll: *poll, deadline: *deadline,
-		client: &http.Client{Timeout: 30 * time.Second}}
+		client: &http.Client{Timeout: 30 * time.Second}, stderr: errOut}
 	return g.serve(in, out)
 }
 
@@ -77,6 +77,20 @@ type gate struct {
 	poll     time.Duration
 	deadline time.Duration
 	client   *http.Client
+	// stderr receives poll-failure diagnostics (F159); nil (the zero value used
+	// by every existing test literal) falls back to io.Discard via errOut(), so
+	// this is purely additive and never nil-panics.
+	stderr io.Writer
+}
+
+// errOut returns g.stderr, defaulting to io.Discard so a gate constructed
+// without one (every pre-F159 call site, including tests) never nil-panics on
+// a poll-failure log line.
+func (g *gate) errOut() io.Writer {
+	if g.stderr == nil {
+		return io.Discard
+	}
+	return g.stderr
 }
 
 // rpcMsg is the subset of JSON-RPC 2.0 the MCP stdio transport uses:
@@ -179,17 +193,37 @@ func (g *gate) decide(params json.RawMessage) any {
 		return permissionResult(deny("could not raise the approval: " + err.Error()))
 	}
 
+	// consecutivePollFailures distinguishes "no human decided in time" (a real
+	// PENDING held to the deadline) from "the control plane was unreachable the
+	// whole time" (F159): the two were denied with the identical deadline
+	// message, misattributing every proxy/control-plane outage to a slow human
+	// with zero diagnostics anywhere (contrast wardyn-git-helper's
+	// poll-approval logging for the same condition).
+	consecutivePollFailures := 0
 	end := time.Now().Add(g.deadline)
 	for time.Now().Before(end) {
 		state, err := g.state(id)
 		if err == nil {
+			consecutivePollFailures = 0
 			if res, terminal := g.resultForTerminal(state, a, "the Wardyn operator"); terminal {
 				return res
+			}
+		} else {
+			consecutivePollFailures++
+			// First failure, then every 30th (rate-limited so a persistent
+			// outage doesn't spam stderr for up to 24h at the default -poll).
+			if consecutivePollFailures == 1 || consecutivePollFailures%30 == 0 {
+				fmt.Fprintf(g.errOut(), "wardyn-toolgate: poll approval %s: %v (retrying, %d consecutive failures)\n",
+					id, err, consecutivePollFailures)
 			}
 		}
 		// PENDING, or a transient poll error: keep waiting. The proxy route is
 		// the sandbox's own approval, so a persistent error ends at deadline.
 		time.Sleep(g.poll)
+	}
+	if consecutivePollFailures > 0 {
+		return permissionResult(deny(fmt.Sprintf(
+			"approval gate could not reach the control plane (%d consecutive poll failures) — denied", consecutivePollFailures)))
 	}
 	return permissionResult(deny("approval wait deadline reached — denied"))
 }
