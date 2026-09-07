@@ -129,3 +129,5 @@ f8a21684af4b6b1b4921f14437913efc8ab2aaaa:scripts/test-install-sh-trust.sh:generi
 f8a21684af4b6b1b4921f14437913efc8ab2aaaa:scripts/test-install-sh-trust.sh:generic-api-key:470
 f8a21684af4b6b1b4921f14437913efc8ab2aaaa:scripts/test-install-sh-trust.sh:generic-api-key:471
 f8a21684af4b6b1b4921f14437913efc8ab2aaaa:scripts/test-install-sh-trust.sh:generic-api-key:488
+# R3 fix wave: egress-b F123 mask test mints a FAKE GitLab PAT fixture (pat_broker_mask_test.go); commit-scoped (gitleaks scans every ref in the shared repo)
+7ea6a2783ac5bd8c680382cfc056ca6949e3db4b:internal/egress/proxy/pat_broker_mask_test.go:gitlab-pat:42
