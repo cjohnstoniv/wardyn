@@ -34,8 +34,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -49,7 +50,7 @@ import (
 const ssoCacheSubdir = ".aws/sso/cache"
 
 // resolveTimeout bounds the best-effort account/role lookup so a slow or
-// hanging `aws` CLI can never hang the upload.
+// hanging SSO portal call can never hang the upload.
 const resolveTimeout = 15 * time.Second
 
 func main() {
@@ -65,7 +66,7 @@ func main() {
 }
 
 func run() error {
-	url, err := proxyURL()
+	endpoint, err := proxyURL()
 	if err != nil {
 		return err
 	}
@@ -81,17 +82,28 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// Best-effort account/role resolution (ponytail: a failure just leaves
-	// these blank; the server accepts that — see awsSSOBlob.valid).
+	// Best-effort account/role resolution. The control plane REQUIRES both:
+	// awsSSOBlob.valid (internal/api/harnesscred.go) rejects a half-resolved
+	// capture and internal/api/ssotoken.go answers 400 (pinned by
+	// TestUploadSSOToken_HalfResolvedCaptureRejected), so a failure here means
+	// the upload is refused and the operator re-runs the login — it is never a
+	// fatal error in THIS process (see run()'s non-fatal upload branch).
+	// This used to shell out to `aws sso list-accounts`/`list-account-roles
+	// --access-token <token>`, which put the live SSO access token on a CHILD
+	// PROCESS's own argv for the call's duration — readable by any /proc
+	// reader in the sandbox sharing its PID namespace, not just same-uid
+	// (F160). resolveAccountRole now calls the SSO portal API directly over
+	// HTTP with the token in the x-amz-sso_bearer_token header instead, so it
+	// never leaves this process's own memory for anywhere but that header —
+	// no exec, no argv, ever.
 	if accountID, roleName, ok := resolveAccountRole(blob.AccessToken, blob.Region); ok {
 		blob.AccountID, blob.RoleName = accountID, roleName
 	}
-
 	body, err := json.Marshal(blob)
 	if err != nil {
 		return fmt.Errorf("marshal sso token: %w", err)
 	}
-	if derr := sidecar.Upload(url, body); derr != nil {
+	if derr := sidecar.Upload(endpoint, body); derr != nil {
 		fmt.Fprintln(os.Stderr, "wardyn-aws-sso: sso-token upload failed (non-fatal):", derr)
 		return nil
 	}
@@ -239,12 +251,23 @@ func parseSSOTime(s string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("unrecognized timestamp %q", s)
 }
 
-// resolveAccountRole best-effort shells out to `aws sso list-accounts` /
-// `list-account-roles` and picks (first account, first role) — good enough
-// for a single-account SSO setup; a multi-account operator can leave this
-// blank and resolve later. Any failure (aws CLI missing, no accounts,
-// timeout, malformed output) returns ok=false — callers must treat that as
-// "leave it empty", not a fatal error (see run()).
+// ssoPortalBase returns the AWS SSO portal API's base URL for region.
+// Overridable ONLY in tests (see TestRun_NeverInvokesAWSCLIForAccountRoleLookup
+// and TestResolveAccountRole_LeavesBlankOnPortalFailure), to point
+// resolveAccountRole at a fake SSO portal instead of the real one.
+var ssoPortalBase = func(region string) string {
+	return "https://portal.sso." + region + ".amazonaws.com"
+}
+
+// resolveAccountRole best-effort calls the SSO portal API directly and picks
+// (first account, first role) — good enough for a single-account SSO setup; a
+// multi-account operator can leave this blank and resolve later. The access
+// token travels ONLY in the x-amz-sso_bearer_token header on an HTTP request
+// this process makes itself (through the sandbox's egress proxy, honored by
+// net/http's default transport) — never on a child process's argv (F160:
+// the retired `aws` CLI shellout put it there). Any failure (network, non-2xx,
+// decode, empty list) returns ok=false — callers must treat that as "leave it
+// empty", not a fatal error (see run()).
 func resolveAccountRole(accessToken, region string) (accountID, roleName string, ok bool) {
 	if accessToken == "" || region == "" {
 		return "", "", false
@@ -252,12 +275,15 @@ func resolveAccountRole(accessToken, region string) (accountID, roleName string,
 	ctx, cancel := context.WithTimeout(context.Background(), resolveTimeout)
 	defer cancel()
 
+	client := &http.Client{Timeout: resolveTimeout}
+	base := ssoPortalBase(region)
+
 	var accounts struct {
 		AccountList []struct {
 			AccountID string `json:"accountId"`
 		} `json:"accountList"`
 	}
-	if !runAWSJSON(ctx, &accounts, "sso", "list-accounts", "--access-token", accessToken, "--region", region) ||
+	if !ssoPortalGET(ctx, client, base+"/assignment/accounts", accessToken, &accounts) ||
 		len(accounts.AccountList) == 0 {
 		return "", "", false
 	}
@@ -268,19 +294,33 @@ func resolveAccountRole(accessToken, region string) (accountID, roleName string,
 			RoleName string `json:"roleName"`
 		} `json:"roleList"`
 	}
-	if !runAWSJSON(ctx, &roles, "sso", "list-account-roles", "--access-token", accessToken,
-		"--account-id", accountID, "--region", region) || len(roles.RoleList) == 0 {
+	rolesURL := base + "/assignment/roles?account_id=" + url.QueryEscape(accountID)
+	if !ssoPortalGET(ctx, client, rolesURL, accessToken, &roles) || len(roles.RoleList) == 0 {
 		return "", "", false
 	}
 	return accountID, roles.RoleList[0].RoleName, true
 }
 
-// runAWSJSON runs `aws <args> --output json` and decodes stdout into dst,
-// reporting false on any exec or decode failure.
-func runAWSJSON(ctx context.Context, dst any, args ...string) bool {
-	out, err := exec.CommandContext(ctx, "aws", append(args, "--output", "json")...).Output()
+// ssoPortalGET performs a GET against the SSO portal API with the SSO access
+// token in the x-amz-sso_bearer_token header — the header ListAccounts/
+// ListAccountRoles read it from (botocore sso/2019-06-10/service-2.json
+// AccessTokenType, location=header; enforced by test/awsssofake.checkBearer).
+// Reports false on any failure (request build, transport, non-2xx status,
+// decode) — never panics, never exec's, never places accessToken anywhere
+// but this request's own header.
+func ssoPortalGET(ctx context.Context, client *http.Client, rawURL, accessToken string, dst any) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return false
 	}
-	return json.Unmarshal(out, dst) == nil
+	req.Header.Set("x-amz-sso_bearer_token", accessToken)
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return false
+	}
+	return json.NewDecoder(resp.Body).Decode(dst) == nil
 }

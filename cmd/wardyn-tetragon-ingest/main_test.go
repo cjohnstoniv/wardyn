@@ -4,8 +4,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -118,6 +120,47 @@ func TestTailExport_ReadsRotatedFileFromStart(t *testing.T) {
 	// skipped by a seek-to-end.
 	waitFor(func() bool { return bodyContains(binB) },
 		"post-rotation event B was dropped: tailer seeked to END of the rotated file instead of START")
+}
+
+// TestTailExport_LogsOnUnopenableExportFile covers F158: openFile's os.Open
+// error was discarded with `return false` and no log at any level, so a
+// typo'd/unreadable -export path left the sensor silently blind forever while
+// heartbeats and the stats loop kept printing as if it were healthy.
+//
+// Red-first: against the pre-fix openFile (silent `return false`) nothing in
+// this window ever names the bad path, so the assertion below fails.
+func TestTailExport_LogsOnUnopenableExportFile(t *testing.T) {
+	dir := t.TempDir()
+	// Parent directory does not exist, so every os.Open(path) fails for the
+	// whole run — this is the "typo'd or unreadable path" from the finding.
+	path := filepath.Join(dir, "does-not-exist", "tetragon.log")
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	sink := newEventSink("http://127.0.0.1:1", "tok", 8, 8, 20*time.Millisecond, http.DefaultClient)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		sink.close(ctx)
+	})
+	mapper := groundtruth.NewMapper(nil)
+
+	// tailExport retries the open every second; run past that so at least one
+	// failed attempt has had the chance to log.
+	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+	defer cancel()
+	tailExport(ctx, path, mapper, sink)
+
+	out := buf.String()
+	if !strings.Contains(out, path) {
+		t.Fatalf("expected a log line naming the unopenable export path %q; got:\n%s", path, out)
+	}
+	if !strings.Contains(strings.ToLower(out), "cannot open") {
+		t.Fatalf("expected a log line describing the open failure; got:\n%s", out)
+	}
 }
 
 func appendLine(t *testing.T, path, line string) {
