@@ -320,6 +320,55 @@ func (s *Server) getWorkspaceReadable(w http.ResponseWriter, r *http.Request, id
 	return types.Workspace{}, false
 }
 
+// mayLaunchWorkspace reports whether the caller of r may turn ws's id into
+// BOUND HOST STATE inside a sandbox they control — the launch tier, which is
+// deliberately NARROWER than the read tier next door.
+//
+// Operator-owned (OwnedBy == "") is launchable by every authenticated caller:
+// that is the ordinary shape of an onboarded deployment and the reason the read
+// getter admits it too. A member-owned row is launchable by its OWNER or by a
+// SUPER admin, and by nobody else.
+//
+// DELIBERATELY ownsWorkspaceOrAdmin (super only), NOT the read twin
+// ownsWorkspaceOrSecurityAdmin: reading a foreign workspace to decide its egress
+// is the security tier's stated purpose, but MOUNTING that workspace's host
+// directory into a sandbox the security admin owns is credential material and
+// the host — two of the three axes the tier is defined never to reach
+// (internal/auth/oidc's RoleSecurityAdmin). The read/launch split is why this is
+// a third predicate rather than a reuse of either existing one.
+func (s *Server) mayLaunchWorkspace(r *http.Request, ws types.Workspace) bool {
+	return ws.OwnedBy == "" || s.ownsWorkspaceOrAdmin(r, ws)
+}
+
+// getWorkspaceLaunchable loads the workspace a run REQUEST named and authorizes
+// the CALLER to launch against it (mayLaunchWorkspace). Callers must return
+// immediately when ok is false.
+//
+// It is getWorkspaceReadable's launch twin, and it exists because the create
+// path had no caller-scoped gate at all: seedRequestWorkspace resolved the id
+// through the store and folded its sources onto the spec, and the only
+// member-mount check downstream is evaluated against the workspace OWNER's
+// roots — so per-principal roots did not constrain the caller, and any member
+// (or a security admin) could bind another member's host directory into a
+// sandbox they own.
+//
+// A foreign member-owned row gets denyForeignWorkspace's byte-identical 404,
+// which on this route is the SAME answer getWorkspaceOr404 gives a truly-missing
+// id — so the status is not an existence oracle across members. That parity is
+// why the load happens HERE rather than being folded into seedRequestWorkspace's
+// own 422 arm, which answers a different code for a missing row.
+func (s *Server) getWorkspaceLaunchable(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.Workspace, bool) {
+	ws, ok := s.getWorkspaceOr404(w, r, id)
+	if !ok {
+		return types.Workspace{}, false
+	}
+	if s.mayLaunchWorkspace(r, ws) {
+		return ws, true
+	}
+	s.denyForeignWorkspace(w, r, ws)
+	return types.Workspace{}, false
+}
+
 // getRunOr404 loads a run, writing a 404 (missing) or 500 (store error) and
 // returning ok=false on failure — the run-noun twin of getWorkspaceOr404.
 // Callers must return immediately when ok is false.

@@ -361,6 +361,20 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 // LAST because it is the single chokepoint on the RESOLVED spec, which is what
 // makes it un-bypassable by a hand-authored stored policy.
 func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWriter, r *http.Request, spec *types.RunPolicySpec, req *createRunRequest) ([]string, bool) {
+	// FIRST, before a single source is folded: authorize the SELECTION against
+	// the CALLER. Everything below this line reasons about host paths that are
+	// about to become binds, and until now nothing on the path asked whose
+	// workspace they came from — the only member-mount check downstream is
+	// evaluated against the workspace OWNER, so any member (and a security
+	// admin, a tier defined never to reach the host) could name another
+	// member's workspace id and get their directory bound inside a sandbox they
+	// control. The store-less case is left to seedRequestWorkspace, which
+	// answers it with its own 422.
+	if req.WorkspaceID != nil && s.cfg.Store != nil {
+		if _, ok := s.getWorkspaceLaunchable(w, r, *req.WorkspaceID); !ok {
+			return nil, false
+		}
+	}
 	ephemeralDirs, seededImageOwner, code, seedErr := s.seedRequestWorkspace(ctx, spec, req)
 	if seedErr != nil {
 		writeError(w, code, "workspace_id: "+seedErr.Error())
@@ -374,6 +388,14 @@ func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWrite
 		return nil, false
 	}
 	if code, err := s.validateWorkspaceSources(ctx, *spec); err != nil {
+		writeError(w, code, "workspace: "+err.Error())
+		return nil, false
+	}
+	// The caller-scoped twin of the onboarding gate above: onboarded is not the
+	// same question as "onboarded BY SOMEONE THIS CALLER MAY LAUNCH AS", and a
+	// policy naming a host path directly never passes through the workspace_id
+	// door that answers the second one.
+	if code, err := s.authorizeSpecWorkspaceSources(ctx, r, *spec); err != nil {
 		writeError(w, code, "workspace: "+err.Error())
 		return nil, false
 	}
