@@ -145,6 +145,24 @@ test-race: ## Race-detector sweep over BOTH tag sets (tagless + -tags docker)
 	@echo "Running Go tests under the race detector (-tags docker)..."
 	WARDYN_TEST_PG= go test -race -tags docker ./...
 
+# THE PG LANE UNDER -race. `test-race` above deliberately strips the DSN
+# (WARDYN_TEST_PG=), so every WARDYN_TEST_PG-gated test is SKIPPED there — and
+# `test-report-pg`, the one target that sets the DSN, runs without -race. The
+# result was that internal/broker's exactly-once concurrency proofs
+# (concurrency_pg_test.go: TestPG_ConcurrentMint_ExactlyOnceWins,
+# TestPG_ConcurrentMint_AutoApprovalGrant_Independent,
+# TestPG_ConcurrentMintOnApproval_ExactlyOnce) — tests whose entire value is
+# that they spawn goroutines racing on a credential mint — were never executed
+# under the race detector by ANY gate (F137).
+#
+# Scoped to TestPG_ in the two packages that race on the shared database rather
+# than the whole pg suite: -race over every pg package would multiply the job's
+# runtime for tests that are sequential by construction. -p 1 for test-report-pg's
+# reason — one shared database.
+test-race-pg: ## Race-detector pass over the Postgres-gated concurrency proofs (needs WARDYN_TEST_PG)
+	@echo "Running the Postgres-gated concurrency proofs under the race detector (requires WARDYN_TEST_PG)..."
+	go test -race -p 1 -count=1 -run 'TestPG_' ./internal/broker/... ./internal/store/...
+
 test-docker: ## Run all Go tests with -tags docker
 	@echo "Running Go tests (-tags docker)..."
 	WARDYN_TEST_PG= go test -tags docker ./...

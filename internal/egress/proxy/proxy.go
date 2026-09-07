@@ -259,9 +259,13 @@ type vettedIPKey struct{}
 
 // parseMITMHostPort normalizes one Options.MITMHosts entry (trim, lowercase,
 // drop a trailing dot) and splits its optional ":port" suffix. port==0 means
-// the entry carried none — the historical bare-host format (Bedrock's
-// runtimeHost, a pre-fix redirect) — and matches any port; a malformed or
-// out-of-range port suffix is treated the same as absent rather than guessed.
+// the entry carried none — the historical bare-host format, kept only for a
+// config written before the port suffix existed — and matches ANY port; a
+// malformed or out-of-range port suffix is treated the same as absent rather
+// than guessed. No live caller authors a bare entry any more: both
+// planArtifactRedirect (W13-S1-5) and authorBedrockBearerInjection (F037) join
+// the host to the port they actually configured, so the any-port arm is not a
+// default that a new lane can fall into by accident.
 // A clean "host:port" (what planArtifactRedirect now authors, W13-S1-5) scopes
 // the entry to exactly that port.
 func parseMITMHostPort(entry string) (host string, port int) {

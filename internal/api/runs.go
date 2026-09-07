@@ -179,7 +179,12 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 	createdByType, createdBy := actorFromRequest(r)
 	runID := uuid.New()
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, createdBy, createdBy, internalAudience)
+	// SUBJECT vs ATTRIBUTION (F099): createdBy is the ATTRIBUTION — the run row's
+	// CreatedBy, the sponsor claim, every audit actor — and in LocalMode it may be
+	// the DEV-ONLY X-Wardyn-Principal header. The SUBJECT is what selects the
+	// secret namespace at mint/inject time, so it comes from runIdentitySubject,
+	// which no request header can move.
+	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, createdBy), createdBy, internalAudience)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "mint run identity: "+err.Error())
 		return

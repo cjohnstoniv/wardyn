@@ -51,11 +51,28 @@ func EnvOr(key, def string) string {
 // WARDYN_RUNNER "none", WARDYN_DEFAULT_POLICY, WARDYN_GIT_PAT_BROKER "on", ...)
 // for anyone whose orchestrator passes every known variable through. The
 // escape hatch for a genuinely-intended blank is `-name=`, which states it.
+//
+// The env value is applied to the flag's VARIABLE, never to its registered
+// DEFAULT (F157). flag.String captures whatever default it is handed as
+// Flag.DefValue, and PrintDefaults renders a non-empty string default as
+// `(default "…")` — printed not only for -help but for EVERY parse error, since
+// flag.CommandLine is ExitOnError. Seeding the default from the env therefore
+// wrote WARDYN_ADMIN_TOKEN, WARDYN_AGE_KEY (the secret store's master identity),
+// WARDYN_OIDC_CLIENT_SECRET and WARDYN_GROUNDTRUTH_TOKEN verbatim to stderr —
+// container logs, journald, any log shipper — on one typo'd flag in a compose
+// command, a systemd unit or a Helm args list. Writing through the returned
+// pointer instead keeps the exact same precedence (an explicit -name= set at
+// Parse overwrites the env value, because the flag package only calls Set for
+// flags actually present on the command line) while the usage block shows only
+// the COMPILED default, which is never a credential. FlagBool/FlagDuration/
+// FlagIntEnv are unaffected: none of them carries a secret, and their env values
+// are bounded token/number sets rather than free-form strings.
 func FlagEnv(name, env, def, usage string) *string {
+	p := flag.String(name, def, usage+" (env "+env+")")
 	if v := os.Getenv(env); v != "" {
-		def = v
+		*p = v
 	}
-	return flag.String(name, def, usage+" (env "+env+")")
+	return p
 }
 
 // FlagBool defines a bool flag whose default is overridden by an env var.

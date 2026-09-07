@@ -340,10 +340,18 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		// Sidecars may only raise egress/tool approvals. credential approvals are
 		// created by the broker mint path, never by an untrusted sidecar.
 	default:
+		// RECORDED (F068): this refusal is the forgery the case above exists to
+		// stop — a sidecar asking Wardyn to raise a `credential` approval — and it
+		// used to answer 400 and write nothing anywhere, so probing for that path
+		// left no trace. Same rate-bound auth.failed row, limiter and suppressed
+		// counter as every other refusal; the KIND is a closed enum of our own
+		// types, never echoed from the body.
+		s.auditAuthFailedAs(r, internalApprovalActor, "unsupported_internal_approval_kind")
 		writeError(w, http.StatusBadRequest, "unsupported approval kind for internal request")
 		return
 	}
 	if len(body.RequestedScope) == 0 {
+		s.auditAuthFailedAs(r, internalApprovalActor, "missing_requested_scope")
 		writeError(w, http.StatusBadRequest, "requested_scope is required")
 		return
 	}

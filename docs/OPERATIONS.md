@@ -513,7 +513,12 @@ rows the rate limiter dropped — the trail is capped at roughly one row per
 second, so past a small burst it stops describing the volume it is bounding and
 **a credential-stuffing run reads quieter than a handful of typos**. Alert on
 this series, not on the audit row count: flat rows with this climbing is the
-attack. `wardyn_auth_store_errors_total` counts requests an authentication lane
+attack. Both the public lane and the INTERNAL lane (the sandbox's run token and
+the host sensor's token) feed that one limiter and that one counter, so a
+process inside a sandbox brute-forcing run tokens is visible on this series
+without being able to flood the append-only log; the `auth.failed` row's actor
+(`wardyn/adminAuth` vs `wardyn/internalAuth` / `wardyn/internalAuthGroundtruth`
+/ `wardyn/internalApproval`) is what tells the two incidents apart. `wardyn_auth_store_errors_total` counts requests an authentication lane
 could not decide because its store read failed and answered `500` — a state with
 no audit row (there is no authenticated principal to attribute one to) and no
 client-visible cause.
@@ -2259,7 +2264,10 @@ boot-time operator posture, never a live API write, never agent-reachable —
 token_integration_ref, ecosystem}` entries. Each substitutes a public/upstream URL
 or host for a corporate-internal one in every run's egress, with an optional token
 injected proxy-side as a Bearer credential for `to`'s host (the sandbox never
-holds it). It replaced the old `artifact_overrides` map (one entry per package
+holds it). The egress entry a redirect adds is scoped to `to`'s **port** (443 when
+`to` names none) — the same port its TLS termination and token injection use — so
+a `to` on a literal IP is never trusted on some other port of that address; reach
+the mirror on a different port by naming that port in `to`. It replaced the old `artifact_overrides` map (one entry per package
 ecosystem) because a corporate estate redirects container registries and internal
 appliances too — the shape generalized to "a list of From → To pairs over any
 URL, host, or IP".

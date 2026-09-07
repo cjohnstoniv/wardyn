@@ -570,7 +570,7 @@ func TestGovernanceProfileNonEscape_Dispatch(t *testing.T) {
 				MinConfinementClass: types.CC2,
 			},
 		})
-		if !slices.Contains(envelope.AllowedDomains, govCorpMirror) {
+		if !slices.Contains(envelope.AllowedDomains, govCorpMirrorEntry) {
 			t.Fatalf("allowed_domains = %v — the redirect never fired, so this row proves nothing", envelope.AllowedDomains)
 		}
 		if !slices.Contains(envelope.DeniedDomains, govCorpDeny) {

@@ -325,9 +325,12 @@ because a literal has no hostname behind it to rebind. It is bounded the same wa
 and by the same predicates as the first — `blockPrivate` only, so no
 loopback/link-local/metadata/NAT64 literal is ever trusted however it is
 allow-listed, and never an address on the proxy's own subnets or its
-control-plane host — and it is narrower in one respect: it admits only the EXACT
-address an operator typed, never a range. `denied_domains` still wins over both
-(`RunPolicy.AllowsLiteralIP` checks the deny lists first).
+control-plane host — and it is narrower in two respects: it admits only the EXACT
+address an operator typed, never a range, and only on the ONE PORT the redirect's
+`to` names (`substituteArtifactEgress` writes the entry `net.JoinHostPort`-qualified,
+defaulting to the 443 the redirect's TLS-MITM half already assumes, so the SSRF
+trust and the token injection are scoped to the same port). `denied_domains` still
+wins over both (`RunPolicy.AllowsLiteralIP` checks the deny lists first).
 
 The internal model gateway (residual #29) is NOT a second exception: its relaxed
 per-request vet (`Proxy.vetTrustedHost`, reached only via `Proxy.gatewayTarget`)
@@ -829,7 +832,15 @@ hiding them would repeat the failure mode we are designed to avoid.
     | `POST /runs/{id}/kill` | **owner-or-admin, not open** (`getRunAuthorized` → `ownsRunOrAdmin`): a member killing a run they did not create gets the byte-identical 404 a missing run would, audited `authz.denied` / `not_owner`. `ownsRunOrAdmin` is `isSecurityOperator`, so a `security_admin` may stop ANY run — deliberately: inspect-or-stop is the whole of that tier's warrant over a foreign run | same |
 
     The admin token and local mode are always operators (one shared credential
-    carries no human to demote). So the §1 insider raises their own ceiling rather
+    carries no human to demote). Local mode's `X-Wardyn-Principal` dev override
+    is ATTRIBUTION ONLY: it names `created_by`, the sponsor claim and the audit
+    actor, but the run identity's `sub` — the string that selects the SECRET
+    NAMESPACE at broker-mint and proxy-inject time — is taken from the principal
+    wardynd injected, never from the header (`api.runIdentitySubject`). So a
+    local caller cannot mint a named member's stored `git_pat`/`ssh_key` by
+    claiming to be them, which matters on a database that already carries
+    member-owned rows from an SSO-configured era and is later served in local
+    mode. So the §1 insider raises their own ceiling rather
     than exceeding it: `PUT` a wide-open policy, or point every run's upstream proxy
     at a host they control (site-config names a secret ref, and
     `PUT /secrets/{name}` is in the same group). What bounds this is the operator
@@ -1537,9 +1548,12 @@ exactly these terms.
   OpenAI/Codex path **inspectable** (the proxy terminates TLS with a per-run CA
   whose PRIVATE key never enters the sandbox; the sandbox trusts only the public
   cert). Without `intercept_tls`, those CONNECT tunnels stay **opaque and flagged
-  `llm.scan.blind`**; Bedrock stays opaque regardless (client-side SigV4 cannot be
-  re-forwarded). The `require_inspectable_llm` policy fails an opaque-transport run
-  **closed** at schedule time for strict operators.
+  `llm.scan.blind`**; Bedrock stays opaque regardless — SigV4 because a MITM'd
+  request cannot be re-signed, and the bearer sub-mode because Wardyn has no
+  Bedrock extractor or prompt-bearing channel, so terminating its TLS makes the
+  body readable but never scanned. The `require_inspectable_llm` policy fails an
+  opaque-transport run **closed** at schedule time for strict operators: that
+  refusal covers **both** Bedrock sub-modes (SigV4 and bearer), not only SigV4.
 - Detections recorded **without storing the secret** — detector + field path +
   offset + count + masked placeholder only; never the matched bytes, never a
   reversible hash.
@@ -1649,7 +1663,12 @@ therefore the one to prefer when the never-resident posture matters: a bearer to
 is a *static* `Authorization` header, so the proxy TLS-MITMs `bedrock-runtime.*` and
 injects it exactly like an api-key (the CA private key stays in proxy memory; the
 host is an exact, non-wildcard operator-configured MITM entry with a paired
-injection rule — the corp-artifact-host trust boundary in `isMITMHost`).
+injection rule — the corp-artifact-host trust boundary in `isMITMHost`). That
+entry is authored as `host:port` — the data-plane port the run actually reaches
+(443 unless `WARDYN_BEDROCK_BASE_URL` names another) — so the TLS termination
+and the bearer injection are scoped to that port exactly as an artifact
+redirect's are; a CONNECT to the same host on any other port falls through as an
+opaque tunnel and is never offered the operator's bearer.
 
 **Known v1 coverage gaps (recorded honestly; not silent):**
 - Only the **system prompt + the last message** of each turn are scanned. Secrets

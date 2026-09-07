@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"net"
 	"sort"
 	"strings"
 	"testing"
@@ -476,8 +477,12 @@ func TestResolveBedrockAuth_BaseURLOverride_Bearer(t *testing.T) {
 	if !ok {
 		t.Fatal("authorBedrockBearerInjection failed; want ok")
 	}
-	if len(mitmHosts) != 1 || mitmHosts[0] != bedrockOverrideHost {
-		t.Errorf("MITM hosts = %v, want exactly the override host %q — MITM'ing the public host would terminate TLS for a host this run never dials", mitmHosts, bedrockOverrideHost)
+	// host:PORT, not a bare host (F037): a bare MITM entry is any-port in the
+	// proxy, so the operator's Bearer would be injected on whatever answered on
+	// a port nobody configured. The override names no port, so 443.
+	wantMITM := net.JoinHostPort(bedrockOverrideHost, "443")
+	if len(mitmHosts) != 1 || mitmHosts[0] != wantMITM {
+		t.Errorf("MITM hosts = %v, want exactly the override host:port %q — MITM'ing the public host would terminate TLS for a host this run never dials, and a BARE entry would MITM the override host on every port", mitmHosts, wantMITM)
 	}
 	if len(injections) != 1 {
 		t.Fatalf("injections = %d, want 1", len(injections))

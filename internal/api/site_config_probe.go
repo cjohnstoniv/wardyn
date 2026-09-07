@@ -331,6 +331,7 @@ func curlFailureDetail(exitCode int) string {
 // failReason codes in the same human-readable style as curlFailureDetail.
 var upstreamResolveFailDetail = map[string]string{
 	"unsupported-scheme":   "it is not an http:// URL (https is not supported)",
+	"unusable-proxy-url":   "the wardyn-proxy sidecar refuses it (missing host, or a port outside 1..65535)",
 	"reserved-secret-name": "its secret ref names a reserved secret",
 	"no-secret-store":      "no secret store is configured",
 	"secret-not-found":     "its secret ref does not resolve to a stored secret",

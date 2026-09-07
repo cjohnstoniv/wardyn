@@ -270,3 +270,100 @@ func TestPG_ListApprovalsPageByRunCreator(t *testing.T) {
 		t.Errorf("an unknown creator was served %v, want none", ids)
 	}
 }
+
+// TestPG_ListApprovalsPageByRun pins the SQL behind the ?run_id= list (F072):
+// the WHERE runs at the DB, the state filter composes with it rather than
+// replacing it, and LIMIT/OFFSET window the RUN's set. Before this method
+// existed, that request went through ListApprovals -> Page{} -> no LIMIT clause
+// at all, so a run's detail page read the whole approvals table on every poll.
+//
+// Every row is marker-scoped (a fresh run id) so the assertions hold inside the
+// shared database.
+func TestPG_ListApprovalsPageByRun(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+
+	// Each row gets a DISTINCT scope: approvals_pending_noncred_uniq (0022)
+	// refuses two PENDING rows with the same (run, kind, scope).
+	seed := func(runID uuid.UUID, state types.ApprovalState, host string, at time.Time) uuid.UUID {
+		t.Helper()
+		ap := types.ApprovalRequest{
+			ID: uuid.New(), RunID: runID, Kind: types.ApprovalEgressDomain,
+			RequestedScope: []byte(`{"host":"` + host + `"}`),
+			State:          state, RequestedAt: at,
+		}
+		if _, err := pg.CreateApproval(ctx, ap); err != nil {
+			t.Fatalf("create approval: %v", err)
+		}
+		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM approvals WHERE id=$1`, ap.ID) })
+		return ap.ID
+	}
+
+	mine, other := uuid.New(), uuid.New()
+	r := newRun(types.RunRunning)
+	r.ID = mine
+	persistRun(t, ctx, pool, r)
+	r2 := newRun(types.RunRunning)
+	r2.ID = other
+	persistRun(t, ctx, pool, r2)
+
+	base := time.Now().UTC()
+	newest := seed(mine, types.ApprovalPending, "a.example.com", base)
+	older := seed(mine, types.ApprovalPending, "b.example.com", base.Add(-time.Minute))
+	decided := seed(mine, types.ApprovalApproved, "c.example.com", base.Add(-2*time.Minute))
+	foreign := seed(other, types.ApprovalPending, "d.example.com", base)
+
+	ids := func(got []types.ApprovalRequest) []uuid.UUID {
+		out := make([]uuid.UUID, 0, len(got))
+		for _, ap := range got {
+			out = append(out, ap.ID)
+		}
+		return out
+	}
+
+	got, err := pg.ListApprovalsPageByRun(ctx, mine, "", store.Page{})
+	if err != nil {
+		t.Fatalf("unfiltered: %v", err)
+	}
+	want := []uuid.UUID{newest, older, decided}
+	if g := ids(got); len(g) != len(want) || g[0] != want[0] || g[1] != want[1] || g[2] != want[2] {
+		t.Fatalf("got %v, want exactly this run's rows in requested_at DESC order %v", g, want)
+	}
+	for _, id := range ids(got) {
+		if id == foreign {
+			t.Errorf("another run's approval %s was returned", foreign)
+		}
+	}
+
+	pending, err := pg.ListApprovalsPageByRun(ctx, mine, types.ApprovalPending, store.Page{})
+	if err != nil {
+		t.Fatalf("state-filtered: %v", err)
+	}
+	if g := ids(pending); len(g) != 2 || g[0] != newest || g[1] != older {
+		t.Errorf("state=PENDING gave %v, want [%s %s]", g, newest, older)
+	}
+
+	first, err := pg.ListApprovalsPageByRun(ctx, mine, "", store.Page{Limit: 1})
+	if err != nil {
+		t.Fatalf("limit: %v", err)
+	}
+	if len(first) != 1 || first[0].ID != newest {
+		t.Errorf("limit=1 gave %v, want just %s", ids(first), newest)
+	}
+	second, err := pg.ListApprovalsPageByRun(ctx, mine, "", store.Page{Limit: 1, Offset: 1})
+	if err != nil {
+		t.Fatalf("offset: %v", err)
+	}
+	if len(second) != 1 || second[0].ID != older {
+		t.Errorf("limit=1 offset=1 gave %v, want %s", ids(second), older)
+	}
+
+	none, err := pg.ListApprovalsPageByRun(ctx, uuid.New(), "", store.Page{})
+	if err != nil {
+		t.Fatalf("unknown run: %v", err)
+	}
+	if len(none) != 0 {
+		t.Errorf("an unknown run was served %v, want none", ids(none))
+	}
+}

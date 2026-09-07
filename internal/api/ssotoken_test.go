@@ -16,27 +16,52 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ssoLoginRunStore is a minimal store.Store returning a fixed run from
-// GetRun — the only method the sso-token upload handler needs.
+// ssoLoginRunStore is a minimal store.Store returning a fixed run from GetRun
+// plus that run's audit trail from QueryAuditEvents — the two reads the
+// sso-token upload handler makes against trusted server state (the run kind,
+// and the operator's own start URL recorded on harness.login.started).
 type ssoLoginRunStore struct {
 	store.Store
-	run types.AgentRun
+	run    types.AgentRun
+	events []types.AuditEvent
 }
 
 func (s ssoLoginRunStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
 	return s.run, nil
 }
 
+func (s ssoLoginRunStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]types.AuditEvent, error) {
+	return s.events, nil
+}
+
+// ssoLoginStartedEvents is the harness.login.started row launchHarnessLoginRun
+// writes for runID, carrying the operator's declared access-portal URL. The
+// upload handler binds the uploaded start_url to it (F006).
+func ssoLoginStartedEvents(runID uuid.UUID, startURL string) []types.AuditEvent {
+	return []types.AuditEvent{{
+		ID: uuid.New(), RunID: &runID, ActorType: types.ActorSystem, Actor: "wardynd",
+		Action: "harness.login.started", Target: runID.String(), Outcome: "success",
+		Data: mustJSON(map[string]any{"provider": awsSSOProvider, "sso_start_url": startURL}),
+	}}
+}
+
 // newSSOUploadSrv wires a Server over an aws-sso harness-login run + an
-// in-memory secret store, and returns a valid run token for that run.
+// in-memory secret store, and returns a valid run token for that run. The boot
+// config and the login-run audit trail declare the same start URL/region
+// validSSOBody carries, so these cases exercise the guards under test rather
+// than tripping the F006 operator binding.
 func newSSOUploadSrv(t *testing.T) (*Server, *memSecrets, string, uuid.UUID) {
 	t.Helper()
 	h := newHarness(t)
 	runID := uuid.New()
-	st := ssoLoginRunStore{run: types.AgentRun{ID: runID, Task: harnessLoginTask, Agent: awsSSOAgent}}
+	st := ssoLoginRunStore{
+		run:    types.AgentRun{ID: runID, Task: harnessLoginTask, Agent: awsSSOAgent},
+		events: ssoLoginStartedEvents(runID, "https://my-sso.awsapps.com/start"),
+	}
 	sec := &memSecrets{m: map[string][]byte{}}
 	cfg := baseTestConfig(h, st)
 	cfg.Secrets = sec
+	cfg.BedrockRegion = "us-west-2"
 	srv := New(cfg)
 	return srv, sec, h.mintRunToken(t, runID), runID
 }
@@ -59,10 +84,14 @@ const validSSOBody = `{
 func TestUploadSSOToken_HappyPath(t *testing.T) {
 	h := newHarness(t)
 	runID := uuid.New()
-	st := ssoLoginRunStore{run: types.AgentRun{ID: runID, Task: harnessLoginTask, Agent: awsSSOAgent}}
+	st := ssoLoginRunStore{
+		run:    types.AgentRun{ID: runID, Task: harnessLoginTask, Agent: awsSSOAgent},
+		events: ssoLoginStartedEvents(runID, "https://my-sso.awsapps.com/start"),
+	}
 	sec := &memSecrets{m: map[string][]byte{}}
 	cfg := baseTestConfig(h, st)
 	cfg.Secrets = sec
+	cfg.BedrockRegion = "us-west-2"
 	srv := New(cfg)
 	h.srv = srv
 	tok := h.mintRunToken(t, runID)
@@ -208,9 +237,10 @@ func TestUploadSSOToken_NonHarnessLoginRunRejected(t *testing.T) {
 		{ID: runID},
 	}
 	for _, run := range cases {
-		st := ssoLoginRunStore{run: run}
+		st := ssoLoginRunStore{run: run, events: ssoLoginStartedEvents(runID, "https://my-sso.awsapps.com/start")}
 		cfg := baseTestConfig(h, st)
 		cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+		cfg.BedrockRegion = "us-west-2"
 		srv := New(cfg)
 
 		w := do(t, srv, http.MethodPut, "/api/v1/internal/sso-token/"+runID.String(), tok, validSSOBody)

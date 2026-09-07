@@ -135,8 +135,11 @@ func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member memberM
 // side, masked from decision-log/stdout by the proxy — a deliberate,
 // already-documented tradeoff (see runner.ProxyConfig.UpstreamProxyURL), not a
 // new one. Fail SAFE: neither field configured, an unresolvable secret, or a
-// non-http URL (from either source) all return "" (direct egress, today's
-// behavior) plus an audit event; none of them fail the run or crash dispatch.
+// URL the sidecar itself would refuse (from either source — resolveUpstreamProxyURL
+// runs the sidecar's OWN parser, proxy.ValidUpstreamProxyURL, not a narrower
+// copy of it) all return "" (direct egress, today's behavior) plus an audit
+// event; none of them fail the run, crash dispatch, or ship a config that
+// exits the wardyn-proxy sidecar 1 at startup (F028).
 // Extracted verbatim from dispatchRun.
 func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, siteCfg types.SiteConfig, siteCfgErr error) string {
 	if siteCfgErr != nil {

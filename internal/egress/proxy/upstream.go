@@ -106,6 +106,24 @@ func parseUpstreamProxy(raw string) (*upstreamProxy, error) {
 	return up, nil
 }
 
+// ValidUpstreamProxyURL reports whether raw is an upstream-proxy URL the
+// wardyn-proxy sidecar will actually accept at startup, returning the sidecar's
+// own error (never echoing the raw URL, which may carry user:pass) when it will
+// not. It is parseUpstreamProxy — the very rule Config.applyDefaultsAndValidate
+// runs, whose failure is an os.Exit(1) in cmd/wardyn-proxy — exported so the
+// control plane can apply THE SAME rule at write time and at dispatch instead of
+// keeping a second, narrower copy of it.
+//
+// This mirrors ValidNoProxyEntry (egress_target.go), exported for exactly the
+// same reason and consumed by internal/api/site_config_noproxy.go: a dual
+// validator over ONE operator-authored value drifts, and here it drifted in the
+// direction where wardynd accepts a value that kills the sidecar of every run.
+// The empty string is accepted (upstream disabled), same as parseUpstreamProxy.
+func ValidUpstreamProxyURL(raw string) error {
+	_, err := parseUpstreamProxy(raw)
+	return err
+}
+
 // maskValues returns the secret byte-strings that must be masked from any
 // decision-log / stdout output: the base64 credential as it appears on the wire
 // (Proxy-Authorization), the decoded user:pass, and the password half alone.

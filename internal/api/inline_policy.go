@@ -656,7 +656,7 @@ func (s *Server) filterMemberGrants(ctx context.Context, owner string, allowedDo
 	}
 	ceiling := resolved.Spec.EligibleGrants
 	for _, g := range grants {
-		host, secretRef, knownHostsRef, covered, derr := storedSecretGrantPairing(g)
+		host, secretRef, _, covered, derr := storedSecretGrantPairing(g)
 		if !covered {
 			kept = append(kept, g) // github_token (scope-intersected by the clamp), cloud_sts, …
 			continue
@@ -696,7 +696,7 @@ func (s *Server) filterMemberGrants(ctx context.Context, owner string, allowedDo
 			warns = append(warns, envSecretAdminOnlyWarning(secretRef))
 			continue
 		}
-		if !storedSecretPairingInCeiling(g.Kind, host, secretRef, knownHostsRef, ceiling) {
+		if !storedSecretPairingInCeiling(g, ceiling) {
 			warns = append(warns, fmt.Sprintf(
 				"dropped %s grant pairing secret %q with host %q: not in the operator's eligible grants (the run's own model access is provisioned by the platform)",
 				g.Kind, secretRef, host))
@@ -758,9 +758,18 @@ func storedSecretGrantPairing(g types.GrantSpec) (host, secretRef, knownHostsRef
 
 // storedSecretPairingInCeiling reports whether some operator eligible-grant of
 // the same kind pairs the SAME host with the SAME secret (host case-insensitive)
-// AND, for ssh_key, the SAME known_hosts_secret_ref (empty included) — an
-// exact-pairing match, so a member may only reuse a pairing the operator
-// explicitly listed, never invent one.
+// AND, for ssh_key, the SAME known_hosts_secret_ref (empty included), AND, for
+// api_key, the SAME header and format (header case-insensitive, both defaulted
+// the way injectionRuleFromScope defaults them) — an exact-pairing match, so a
+// member may only reuse a pairing the operator explicitly listed, never invent
+// one.
+//
+// header/format joined the match in F097: without them a member grant that kept
+// the operator's blessed (host, secret) pairing but moved the secret under an
+// arbitrary header matched the ceiling and was kept, and the proxy writes that
+// header verbatim onto the forwarded request while relaying the upstream
+// response to the sandbox verbatim — so an upstream that echoes the offending
+// header hands the operator's key back to the sandbox.
 //
 // known_hosts_secret_ref is part of this match (W12-B-2): before this it was
 // left out of the comparison entirely, so a member could reuse an
@@ -788,8 +797,8 @@ func storedSecretGrantPairing(g types.GrantSpec) (host, secretRef, knownHostsRef
 // The pairing DECODE here (storedSecretGrantPairing) stays, because it answers a
 // different question: whether a grant is well-formed enough to DELIVER, which
 // fails a malformed scope closed rather than merely declining to match it.
-func storedSecretPairingInCeiling(kind types.GrantKind, host, secretRef, knownHostsRef string, ceiling []types.GrantSpec) bool {
-	return composer.PairingInCeiling(kind, host, secretRef, knownHostsRef, ceiling)
+func storedSecretPairingInCeiling(g types.GrantSpec, ceiling []types.GrantSpec) bool {
+	return composer.PairingInCeiling(g, ceiling)
 }
 
 func (s *Server) validateInlineSecretRefs(ctx context.Context, owner string, spec types.RunPolicySpec) (int, error) {

@@ -351,6 +351,21 @@ func TestRedirectLiteralIP_TrustedForItsRunOnly(t *testing.T) {
 	}).egressTarget("100.64.5.7", 443); err == nil {
 		t.Fatal("a denied literal must stay denied")
 	}
+
+	// F106: the entry substituteArtifactEgress actually writes is PORT-QUALIFIED
+	// (net.JoinHostPort of the To's host and redirectPort), matching the
+	// mitmHosts the same redirect authors. A second port of that address is
+	// therefore refused — with the BARE entry the substitution used to write,
+	// every port of it was reachable.
+	portScoped := mk(types.RunPolicySpec{AllowedDomains: []string{"100.64.5.7:8443"}})
+	if _, _, err := portScoped.egressTarget("100.64.5.7", 8443); err != nil {
+		t.Fatalf("the port the redirect named must be reachable: %v", err)
+	}
+	for _, port := range []int{22, 443, 5432} {
+		if _, _, err := portScoped.egressTarget("100.64.5.7", port); err == nil {
+			t.Errorf("port %d of the redirect's address is reachable, and the redirect named only 8443", port)
+		}
+	}
 }
 
 // TestRedirectLiteralIP_AuditedAsItsOwnGrant: the end-to-end decision log

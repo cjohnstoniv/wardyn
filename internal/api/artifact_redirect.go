@@ -54,7 +54,9 @@ func redirectPublicHosts(r types.EgressRedirect) []string {
 // redirectPort extracts the port from a redirect's To URL/host, defaulting to
 // 443 (every corp mirror/relay this feature targets is HTTPS — the sandbox
 // never dials it directly, the proxy always TLS-terminates it, see mitm.go)
-// when none is given. Mirrors workspacescan.HostOf's own scheme/path
+// when none is given. Also used for the Bedrock data-plane authority
+// (WARDYN_BEDROCK_BASE_URL, runs_bedrock.go) so the two MITM-authoring lanes
+// derive their port by the SAME rule rather than each keeping a copy (F037). Mirrors workspacescan.HostOf's own scheme/path
 // stripping so the two agree on where the authority ends; unlike HostOf it
 // keeps the port instead of discarding it — planArtifactRedirect needs both,
 // so mitmHosts can carry "host:port" and the proxy's TLS termination dials

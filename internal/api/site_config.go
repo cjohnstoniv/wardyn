@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/ipguard"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -164,8 +165,20 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 		// in cleartext. Before this gate, an https:// URL saved clean, displayed
 		// as the live chain (site_config_probe.go), and was silently dropped at
 		// dispatch — every run went direct with no signal anywhere (W13-S1-4).
+		//
+		// SAME gate, WHOLE rule: normalizedHTTPProxyURL now delegates to the
+		// sidecar's own parser (proxy.ValidUpstreamProxyURL), so the authority
+		// half — a port outside 1..65535, a missing host — is refused HERE too.
+		// Before that, "http://proxy.corp:0" saved clean and audited as a
+		// SUCCESSFUL resolve, and then wardyn-proxy exited 1 at startup on
+		// `bad port "0"`, leaving every run in the deployment with no egress
+		// path at all and the cause only in a dead sidecar's logs.
 		if _, ok := normalizedHTTPProxyURL(cfg.UpstreamProxyURL); !ok {
-			return fmt.Errorf("upstream_proxy_url: must be http:// — https is not supported (the hop to the corp proxy is a plaintext CONNECT that cannot be TLS-wrapped)")
+			if upstreamProxyFailReason(cfg.UpstreamProxyURL) == "unsupported-scheme" {
+				return fmt.Errorf("upstream_proxy_url: must be http:// — https is not supported (the hop to the corp proxy is a plaintext CONNECT that cannot be TLS-wrapped)")
+			}
+			return fmt.Errorf("upstream_proxy_url: %w — the wardyn-proxy sidecar refuses this URL at startup, so every run would come up with no egress path",
+				proxy.ValidUpstreamProxyURL(strings.TrimSpace(cfg.UpstreamProxyURL)))
 		}
 	}
 	for i, red := range cfg.EgressRedirects {
