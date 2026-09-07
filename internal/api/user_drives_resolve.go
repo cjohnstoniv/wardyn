@@ -435,7 +435,10 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 	//
 	// BEFORE the derivation, like the managed arm above: the home it would
 	// derive is exactly the unmakeable one, and a check downstream of it would
-	// be reasoning about a value it had already accepted.
+	// be reasoning about a value it had already accepted. Since R1 F294 the
+	// share rule keys on who NAMES the object (types.DriveObjectNamedByWardyn):
+	// host_path refuses `hash`, and k8s_pvc_static — a share Wardyn names —
+	// refuses `email_local` instead, so this arm fires for both share backends.
 	if types.ShareBackendRejectsTemplate(d.Backend, d.HomeTemplate) {
 		slog.Warn("wardynd: user drive: a share drive is templated on a hash, which names a directory nobody created",
 			slog.String("drive", d.Name), slog.String("backend", string(d.Backend)),

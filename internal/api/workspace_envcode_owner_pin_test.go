@@ -40,16 +40,6 @@ import (
 // are admitted debt. Either way the entry is a decision rather than an omission,
 // and the anti-rot arm below deletes it for you when it stops being true.
 var ownerAdmitNotInTheControl = map[string]string{
-	// PINNED ELSEWHERE. R1 F287 moved this route off the member tier to
-	// owner-or-super, so it is no longer a sibling of the three member reads in
-	// OwnerReachesOwn. Its admit direction is pinned by
-	// TestEnvAsCodeWithholdsTheArtifactRegistryFromNonFullReaders — "the
-	// workspace's own member owner still gets it" — added under R1 F288, which
-	// asserts the owning member reaches it AND receives the artifact-registry
-	// content that decides the tier. Adding {GET, "/env-as-code"} to
-	// OwnerReachesOwn as well is filed and would pass; when it lands, delete
-	// this entry.
-	"GET /env-as-code": "pinned by TestEnvAsCodeWithholdsTheArtifactRegistryFromNonFullReaders (the owning-member arm, R1 F288)",
 
 	// ADMITTED DEBT, and it is the same class of hole F315 names — recorded
 	// here because the completeness check surfaced it, not because it is fixed.

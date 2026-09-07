@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // asciiOnlyPredicates are the homes of the "is this string pure ASCII" rule.
@@ -20,8 +21,8 @@ import (
 // oidc.ASCIIOnly's (`strings.IndexFunc(s, func(r rune) bool { return r >
 // unicode.MaxASCII }) < 0`). Uncomment it at assembly; nothing else changes.
 var asciiOnlyPredicates = map[string]func(string) bool{
-	"oidc.ASCIIOnly": oidc.ASCIIOnly,
-	// "types.ASCIIOnlySubject": types.ASCIIOnlySubject,
+	"oidc.ASCIIOnly":         oidc.ASCIIOnly,
+	"types.ASCIIOnlySubject": types.ASCIIOnlySubject,
 }
 
 // TestASCIIOnlyPredicatesHaveOneAnswer is R1 F342.
