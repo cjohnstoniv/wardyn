@@ -274,9 +274,12 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// -> decided is one-way. It loads what it needs (and nothing when the switch
 	// is off), so a deployment that has not opted in pays no round trip.
 	//
-	// It REPORTS the admin-token break-glass rather than recording it: that row
-	// says a four-eyes rule was bypassed on a decision that was MADE, and no
-	// decision has been made yet at this line. The emit is below Decide().
+	// It REPORTS the admin-token break-glass rather than recording it: the row
+	// carries the OUTCOME of the decision the bypass was spent on, and no
+	// decision has been made yet at this line. Both emits are below Decide() —
+	// success on the decided path, failure on the error path — so every bypass
+	// leaves a row (docs/ENV.md's promise) and no row claims a decision that
+	// did not happen (the repair that moved the emit down here).
 	bypassedSecondHuman, ok := s.requireSecondHuman(w, r, id, ap, run, haveAP, haveRun)
 	if !ok {
 		return
@@ -300,6 +303,28 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		ExpiresAt: body.ExpiresAt,
 	})
 	if err != nil {
+		// THE BREAK-GLASS LEAVES A ROW EVEN WHEN THE DECISION FAILS, because
+		// what the row records is that a four-eyes rule was bypassed — and it
+		// was, at the gate above, before this call. docs/ENV.md promises the
+		// operator that EVERY admin-token bypass writes one; an emit that only
+		// fires on success makes the count of break-glass uses depend on
+		// whether the store happened to answer, so a probing caller who never
+		// completes a decision leaves nothing behind at all.
+		//
+		// THE OUTCOME IS WHAT KEEPS THE EARLIER ROUND'S REPAIR: this row must
+		// never claim a decision was made. "failure" plus the error class says
+		// exactly what happened — the gate was passed, the decision was not —
+		// and it is the absence of an approval.decide beside it that a reader
+		// would otherwise have to notice for themselves. The scope checks that
+		// moved ABOVE the break-glass branch still hold, so a failure row can
+		// only ever name an egress_domain approval that exists.
+		if bypassedSecondHuman {
+			s.recordAudit(r.Context(), s.auditEvent(bypassRunID(ap, haveAP), decidedByType, decidedBy,
+				"approval.second_human.bypass", id.String(), "failure", mustJSON(map[string]any{
+					"reason": "admin_token_break_glass", "switch": envEgressSecondHuman,
+					"error": decideErrorClass(err),
+				})))
+		}
 		switch {
 		// One sentinel: approval.ErrAlreadyDecided IS store.ErrAlreadyDecided.
 		case errors.Is(err, approval.ErrAlreadyDecided):
@@ -317,11 +342,13 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// approval.Decide itself: internal/api imports internal/approval, so the
 	// dependency only runs this way.
 	s.metrics.approvalDecided(approve)
-	// The four-eyes break-glass, recorded HERE and not inside the gate that
-	// detected it. docs/ENV.md, docs/OPERATIONS.md and the threat model all
-	// describe this row the same way — the four-eyes rule WAS bypassed, on a
-	// decision that WAS made — and only this side of Decide() can honour that
-	// sentence. Written from the gate's decision that the switch applied, so it
+	// The four-eyes break-glass on a decision that WAS made — the success half
+	// of the pair, the failure half being the emit on Decide's error path
+	// above. Recorded HERE and not inside the gate that detected it, so this
+	// row can carry the outcome of the decision the bypass was spent on: only
+	// this side of Decide() knows it happened, and only outcome="success"
+	// honours the sentence docs/ENV.md, docs/OPERATIONS.md and the threat model
+	// all use. Written from the gate's decision that the switch applied, so it
 	// covers exactly the egress_domain approvals that exist and that the gate
 	// would otherwise have blocked, and carrying the run id so the
 	// actor_type=system approval.decide it sits beside is findable from it.
@@ -478,6 +505,34 @@ const envEgressSecondHuman = "WARDYN_EGRESS_SECOND_HUMAN"
 // is fine, or stay silent for one that is not.
 func EgressSecondHumanEnabled() bool { return envEnabled(os.Getenv(envEgressSecondHuman)) }
 
+// decideErrorClass names WHY a decision failed for the break-glass audit row,
+// in the same three buckets the response switch below answers with — a class,
+// never the raw error, since an audit row is read by people who did not make
+// the request and a store error string can carry connection detail.
+func decideErrorClass(err error) string {
+	switch {
+	case errors.Is(err, approval.ErrAlreadyDecided):
+		return "already_decided"
+	case errors.Is(err, store.ErrNotFound):
+		return "not_found"
+	default:
+		return "error"
+	}
+}
+
+// bypassRunID is the run a failed break-glass row points at, when this handler
+// knows it. decide() holds the approval only on the paths that had a reason to
+// load it, and the gate's own load is by value, so this is nil for a bodyless
+// decision on an approval nothing else needed. That is honest rather than
+// lossy: a FAILED decide writes no approval.decide row for the id to correlate
+// with, and the row's target — the approval id — is the durable link either way.
+func bypassRunID(ap types.ApprovalRequest, haveAP bool) *uuid.UUID {
+	if !haveAP || ap.RunID == uuid.Nil {
+		return nil
+	}
+	return &ap.RunID
+}
+
 // requireSecondHuman is decide's rule 8: under envEgressSecondHuman, refuse an
 // egress_domain decision whose decider IS the run's creator. It returns false
 // having already written its own 4xx/5xx, exactly like the other rule helpers.
@@ -533,8 +588,10 @@ func EgressSecondHumanEnabled() bool { return envEnabled(os.Getenv(envEgressSeco
 //
 // It returns (bypassed, ok). `bypassed` marks the admin-token break-glass, and
 // it is REPORTED rather than recorded here: decide() writes the
-// approval.second_human.bypass row once Decide() has succeeded, so the row can
-// only ever describe a four-eyes rule bypassed on a decision that was made.
+// approval.second_human.bypass row on BOTH of Decide()'s arms, so every bypass
+// leaves a row and the row's OUTCOME says whether the decision it was spent on
+// actually happened. Recording it here instead would lose that distinction —
+// which is the whole reason the emit moved down.
 //
 // A run with an EMPTY created_by (system-created follow-on runs) has no human
 // creator to be the same as, so the rule cannot apply and passes. Said out loud
@@ -579,8 +636,9 @@ func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id u
 	// The break-glass itself, now that both "does this gate apply" questions are
 	// answered. Still ahead of the local-mode refusal below, so an admin token
 	// remains the way past a switch that mode cannot enforce. Reported, not
-	// recorded: the third half of the same finding is a bypass row for a
-	// decision that then FAILED, which only an emit after Decide() closes.
+	// recorded: a bypass spent on a decision that then FAILED is a real
+	// break-glass use and must leave a row, but not one that says a decision
+	// was made — only an emit after Decide() can tell those two apart.
 	if actorType == types.ActorSystem && principal == adminTokenPrincipal {
 		return true, true
 	}
