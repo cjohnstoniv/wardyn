@@ -119,14 +119,36 @@ func TestMeWithholdsAnUnbindableDrive(t *testing.T) {
 }
 
 // driveRefusedMetric reads the total across every reason from /metrics.
+//
+// R1 F321: this helper could not fail. It scraped /metrics on a Server with no
+// AdminToken, so the response was a 401 whose 60-byte body contains no series at
+// all; it then matched the prefix `wardyn_user_drive_refused_total`, which
+// nothing emits — the exposition is `wardyn_drive_refusals_total`
+// (metrics.go). Two independent reasons to return 0 unconditionally, so the
+// subtest that reads "a /me read moves no refusal metric" passed with the
+// regression injected: adding s.metrics.driveRefused(...) to the top of
+// resolveMeUserDrive left it green.
+//
+// THE FATALS ARE THE FIX, not the prefix. A metric helper that silently returns
+// 0 when it read nothing is a helper that turns every assertion built on it into
+// a tautology, and the two defects above were each individually enough to do
+// that. So a non-200 and an empty match are now failures in their own right, and
+// the next way this helper stops seeing the series — a renamed metric, a
+// re-tiered /metrics, a harness that stops carrying the token — fails loudly
+// instead of quietly reporting that nothing happened.
 func driveRefusedMetric(t *testing.T, srv *Server) int {
 	t.Helper()
-	body := do(t, srv, http.MethodGet, "/metrics", adminToken, "").Body.String()
-	n := 0
-	for _, line := range strings.Split(body, "\n") {
-		if !strings.HasPrefix(line, "wardyn_user_drive_refused_total") {
+	w := do(t, srv, http.MethodGet, "/metrics", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /metrics = %d, want 200: a scrape that was REFUSED reads back as every counter at zero, "+
+			"which makes 'the metric did not move' true by construction (body=%s)", w.Code, w.Body.String())
+	}
+	n, matched := 0, 0
+	for _, line := range strings.Split(w.Body.String(), "\n") {
+		if !strings.HasPrefix(line, "wardyn_drive_refusals_total") {
 			continue
 		}
+		matched++
 		f := strings.Fields(line)
 		if len(f) == 2 {
 			var v int
@@ -134,6 +156,11 @@ func driveRefusedMetric(t *testing.T, srv *Server) int {
 				n += v
 			}
 		}
+	}
+	if matched == 0 {
+		t.Fatalf("no wardyn_drive_refusals_total series in /metrics — every series is printed from the first "+
+			"scrape (metrics.go), so matching none means this helper is reading the wrong name and any "+
+			"assertion over its result is vacuous. Body:\n%s", w.Body.String())
 	}
 	return n
 }

@@ -47,9 +47,17 @@ func driveRunServer(st *driveStore, runnerTarget string) (*Server, *recRecorder)
 // the deployment fact driveShareIsBindable re-checks and the row cannot carry.
 // Nil roots is the deployment that has un-set the variable since the drive was
 // authored.
+//
+// IT CARRIES AN AdminToken (R1 F321) purely so /metrics can be READ. The
+// refusal-metric assertions in this family scrape the same Server the refusal
+// happened on, and /metrics is operator-gated: without a token the scrape
+// answered 401 and every counter read back as 0, which is a pin that cannot
+// fail. Nothing else in these tests authenticates by bearer — they drive the
+// handlers with an operator context — so the token changes no other behaviour.
 func driveShareServer(st *driveStore, roots []string) (*Server, *recRecorder) {
 	audit := &recRecorder{}
-	return New(Config{Store: st, Audit: audit, RunnerTarget: "docker", UserDriveHostRoots: roots}), audit
+	return New(Config{Store: st, Audit: audit, RunnerTarget: "docker", UserDriveHostRoots: roots,
+		AdminToken: adminToken}), audit
 }
 
 // driveRunRequest is a create-run request carrying the drive flag. readOnly nil
