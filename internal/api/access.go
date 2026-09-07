@@ -427,8 +427,10 @@ func (s *Server) accessLockoutErr(r *http.Request, existing []types.RoleMapping,
 		// SAME REFUSAL, the caller's own REMEDY. The two lanes reach this arm
 		// for the same reason — a frozen snapshot that cannot reproduce the
 		// admin they hold — but only the cookie lane can fix it by signing in
-		// again; a token's snapshot is stamped at mint and no login refreshes
-		// it. Telling the token lane to sign in again is a refusal with no exit.
+		// again; a token's GROUP snapshot is stamped at mint and no login
+		// refreshes that half (RefreshAPITokenRoles re-stamps the role column
+		// and provably does not touch groups — see accessStaleSnapshotToken).
+		// Telling the token lane to sign in again is a refusal with no exit.
 		if apiTokenIDFromContext(r.Context()) != uuid.Nil {
 			return errors.New(accessStaleSnapshotToken)
 		}
@@ -558,9 +560,10 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	}
 	// A DEMOTION MADE HERE IS EFFECTIVE HERE. A role mapping decides the role a
 	// LOGIN derives; an outstanding wdn_ token carries a role stamped at MINT
-	// and read verbatim on every request, and no sign-in refreshes it (see
-	// staleRoleSnapshotCount for why that is unbounded where the SSH lane's
-	// equivalent is not). So if this write takes a tier away from the value,
+	// and read verbatim on every request until its owner's OWN next login
+	// re-stamps it (store.RefreshAPITokenRoles) — a real bound, but on their
+	// schedule rather than the operator's, and one that never arrives for
+	// someone who has left. So if this write takes a tier away from the value,
 	// the affected principals' tokens are revoked now rather than announced —
 	// scoped to snapshots that actually lose a tier, so a member's CI
 	// credential naming the same group keeps working. The count is taken FIRST

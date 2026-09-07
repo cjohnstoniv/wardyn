@@ -450,21 +450,24 @@ func (s *Server) revokeAPIToken(w http.ResponseWriter, r *http.Request, principa
 //
 // WHY THIS EXISTS. An api_token's role is stamped at mint (handleCreateAPIToken)
 // and read verbatim on every request (apiTokenAuth) — since 0.7 that stamp can
-// be security_admin. The sibling credential got a bound in migration 0046: an
-// SSH key's admin override is refused once RoleCheckedAt is older than
-// WARDYN_SSH_ROLE_TTL (sshgateway.go's sshRoleFresh). A wdn_ token has no such
-// bound, so removing someone's admin through the People screen leaves their
-// outstanding tokens holding it until a human separately remembers DELETE
-// /api/v1/tokens/{id} or POST /sessions/revoke — and nothing in the demotion
-// path said so.
+// be security_admin. The stamp is BOUNDED-STALE, NOT FROZEN, and the ceiling is
+// the owner's own next login: store.RefreshAPITokenRoles re-stamps role on
+// every unrevoked token that principal holds, fired from the same OnLogin hook
+// that has refreshed SSH keys since 0.6 (the SSH lane's bound is a TTL instead
+// — sshgateway.go's sshRoleFresh against WARDYN_SSH_ROLE_TTL). What the login
+// hook does NOT refresh is the GROUP snapshot, and what it cannot bound at all
+// is a human who is demoted and never signs in again. Both are why this count,
+// and the revoke beside it, exist.
 //
 // WHAT IT IS NOT: it is not a TTL. It is the INFORMATIONAL half — how many
-// frozen snapshots name this value at all, elevated or not — and it revokes
+// mint-time snapshots name this value at all, elevated or not — and it revokes
 // nothing itself. The acting half is revokeDemotedRoleSnapshots below, which
 // the owner adjudication for F112 requires: a demotion must be effective
-// immediately, not merely announced. Telling the admin was this counter's whole
-// remedy and it was the wrong one — an operator who removes someone's admin has
-// removed nothing until a second, separately-remembered call.
+// IMMEDIATELY, not merely announced and not deferred to whenever the demoted
+// human happens to sign in next. Telling the admin was this counter's whole
+// remedy and it was the wrong one — the login refresh is a real bound, but it
+// is the owner's schedule, not the operator's, and it never arrives for someone
+// who has left.
 //
 // The self-DoS this used to fear is answered by SCOPE, not by inaction: the
 // revoke fires only when the edit actually takes a tier away from the edited
@@ -542,12 +545,13 @@ func (s *Server) roleSnapshotDrops(stamped, derived string) bool {
 // this edit takes a tier away from. Returns how many rows it revoked.
 //
 // WHY IT REVOKES AT ALL (owner adjudication, F112). An api_token's role is
-// stamped at mint and read verbatim forever; the sibling credential got a bound
-// in migration 0046 (an SSH key's admin override expires with
-// WARDYN_SSH_ROLE_TTL) and this lane had none. Removing someone's admin through
-// the People screen left their tokens holding it until a human separately
-// remembered POST /sessions/revoke. "Removing admin removes admin" is the
-// contract; a count in an audit row is not it.
+// stamped at mint and read verbatim on every request until something re-stamps
+// it, and the only thing that does is the owner's own next login
+// (store.RefreshAPITokenRoles). So removing someone's admin through the People
+// screen took effect on THEIR schedule — and never at all for someone who has
+// left, which is the case a demotion is most often about. "Removing admin
+// removes admin" is the contract; a bound that waits for the demoted human to
+// come back is not it, and neither is a count in an audit row.
 //
 // TWO SCOPES KEEP THE BLAST RADIUS AT THE DEMOTION, which is what makes this
 // safe where a blanket sweep would not be:
@@ -625,7 +629,26 @@ func (s *Server) revokeDemotedRoleSnapshots(ctx context.Context, value string, b
 	return revoked
 }
 
-// noteStaleRoleSnapshots counts the frozen token snapshots a role-mapping write
+// roleSnapshotWarnNote / roleSnapshotWarnRemedy are the operator-facing halves
+// of the role-mapping WARN, kept as named constants because they are a CLAIM
+// about system behaviour that has now drifted twice.
+//
+// The line used to end "a token's role is frozen at mint and no sign-in
+// refreshes it", which the same release had already made false: the token lane
+// gained the login hook the key lane had since 0046 (store.RefreshAPITokenRoles,
+// and CHANGELOG 0.7 says so in plain words). Then the demotion path itself began
+// revoking what it demotes (F112). An operator acting on a stale remedy line
+// either does unnecessary work or assumes a bound that is not there, so the two
+// strings say exactly the three things that are true at once: what this edit
+// already did, what the owner's next login will do, and when the human still has
+// to reach for the lever.
+const (
+	roleSnapshotWarnNote = "counted BEFORE this edit acted; the snapshots this edit demotes were revoked with it (see the revoke line), and the rest keep a role this edit did not change"
+
+	roleSnapshotWarnRemedy = "nothing further is needed for the principals this edit demoted — they were revoked. For the rest, the owner's next sign-in re-stamps the role on every unrevoked token they hold (store.RefreshAPITokenRoles, the same OnLogin hook that has refreshed SSH keys since 0.6); POST /api/v1/sessions/revoke {\"sub\":\"<principal>\"} or DELETE /api/v1/tokens/{id} is the lever when a change has to take effect immediately or the owner will not sign in again"
+)
+
+// noteStaleRoleSnapshots counts the mint-time token snapshots a role-mapping write
 // does not reach and says so at WARN, naming the lever. Returns the count for
 // the handler to publish; 0 on any failure, which is the quiet direction — a
 // count this could not take must not read as "none outstanding" in the audit
@@ -638,10 +661,9 @@ func (s *Server) noteStaleRoleSnapshots(ctx context.Context, value, what string)
 		return 0
 	}
 	if n > 0 {
-		slog.WarnContext(ctx, "api: role mapping changed; outstanding api tokens carry a role snapshot frozen at mint",
+		slog.WarnContext(ctx, "api: role mapping changed; outstanding api tokens carry a role stamped at mint",
 			"value", value, "change", what, "tokens", n,
-			"note", "counted BEFORE this edit acted; the snapshots this edit demotes are revoked with it (see the revoke line), and the rest keep a role this edit did not change",
-			"remedy", "POST /api/v1/sessions/revoke {\"sub\":\"<principal>\"} or DELETE /api/v1/tokens/{id} — for anything the demotion scope deliberately leaves alone")
+			"note", roleSnapshotWarnNote, "remedy", roleSnapshotWarnRemedy)
 	}
 	return n
 }
