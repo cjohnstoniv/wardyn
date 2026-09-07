@@ -645,7 +645,10 @@ func (s *Server) revokeDemotedRoleSnapshots(ctx context.Context, value string, b
 const (
 	roleSnapshotWarnNote = "counted BEFORE this edit acted; the snapshots this edit demotes were revoked with it (see the revoke line), and the rest keep a role this edit did not change"
 
-	roleSnapshotWarnRemedy = "nothing further is needed for the principals this edit demoted — they were revoked. For the rest, the owner's next sign-in re-stamps the role on every unrevoked token they hold (store.RefreshAPITokenRoles, the same OnLogin hook that has refreshed SSH keys since 0.6); POST /api/v1/sessions/revoke {\"sub\":\"<principal>\"} or DELETE /api/v1/tokens/{id} is the lever when a change has to take effect immediately or the owner will not sign in again"
+	roleSnapshotWarnRemedy = "nothing further is needed for the principals this edit demoted — they were revoked. For the rest, the owner's next sign-in re-stamps the " +
+		"role on every unrevoked token they hold (store.RefreshAPITokenRoles, the same OnLogin hook that has refreshed SSH keys since 0.6); POST " +
+		"/api/v1/sessions/revoke {\"sub\":\"<principal>\"} or DELETE /api/v1/tokens/{id} is the lever when a change has to take effect immediately or " +
+		"the owner will not sign in again"
 )
 
 // noteStaleRoleSnapshots counts the mint-time token snapshots a role-mapping write

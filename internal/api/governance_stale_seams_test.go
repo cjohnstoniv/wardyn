@@ -26,7 +26,7 @@ import (
 // authz.denied row, against docs/OPERATIONS.md:1508's categorical claim that
 // every member denial which is not a plain foreign-resource 404 is audited. The
 // fix records at the site that DECIDES the refusal rather than at the six-odd
-// seams that write it, and governance.go:812 argues that placement at length:
+// seams that write it, and the emit inside effectiveCeiling in governance.go argues that placement at length:
 // the three write helpers (writeCeilingError, writeCeilingErrorPrefixed,
 // ceilingErrorStatus) are free functions with no server and no context, so
 // auditing there would mean one emit per seam and a seam that hands the code

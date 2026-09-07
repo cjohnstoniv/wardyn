@@ -143,8 +143,8 @@ func TestMePollsAreNotDenials(t *testing.T) {
 	// than a hole. The launch really is refused, so it really is recorded.
 	//
 	// ONE ROW PER REFUSED REQUEST, not two, and that is a property of the order
-	// rather than of the mark: handleCreateRun resolves the ceiling (runs.go:153)
-	// BEFORE it reaches the drive seam (runs.go:170), so on a deployment where
+	// rather than of the mark: handleCreateRun resolves the ceiling (resolveRunPolicy, in handleCreateRun)
+	// BEFORE it reaches the drive seam (seedRequestDrive, later in the same handler), so on a deployment where
 	// both group-tier reads are true the ceiling refuses first and the drive
 	// resolver is never asked. Which site speaks is therefore decided by the
 	// deployment shape, and both are asserted below rather than assumed.

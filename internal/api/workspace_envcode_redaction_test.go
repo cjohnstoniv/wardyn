@@ -21,7 +21,7 @@ const envcodeCorpRegistry = "https://nexus.corp.internal/repository/npm"
 // actually reads.
 //
 // It matters that this is a separate double. r3TopologyStore's site-config sets
-// ArtifactOverrides, and artifactBaseURLs (artifact_redirect.go:140) reads
+// ArtifactOverrides, and artifactBaseURLs (the artifactBaseURLs function in artifact_redirect.go) reads
 // EgressRedirects — so on that fixture the artifact bases are always nil and the
 // leak F288 names cannot occur, whatever the route does. A pin written against
 // it would be green for a reason that has nothing to do with the property.
