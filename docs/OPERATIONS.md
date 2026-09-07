@@ -260,8 +260,24 @@ logs at ERROR with the event's id and action and increments
 `wardyn_audit_spool_quarantined_total`: alert on it, because a spool that has
 drained back to 0 no longer implies the queryable trail is complete. The counter
 is **re-read from the sidecar at startup**, so it survives a restart the way the
-condition it reports does — a deploy or a crash loop does not clear the alert
-while the events are still sitting in `<spool>.quarantine`.
+condition it reports does — a restart in place does not clear the alert while
+the events are still sitting in `<spool>.quarantine`.
+
+**That is as durable as the spool's directory, and no more.** It holds where the
+spool has durable storage: compose's `audit` named volume, or a chart install
+with `persistence.enabled=true`. It does **not** hold on the chart's shipped
+default, where `WARDYN_AUDIT_SPOOL` renders to `/tmp/audit-spool.jsonl` and the
+only `/tmp` volume is an `emptyDir`
+(`deploy/helm/wardyn/templates/deployment.yaml`, which says so itself: "durable
+across a container restart, not a reschedule"). A rolling deploy — which is what
+`helm upgrade` does to a Deployment — or a pod reschedule gives the new Pod a new
+empty directory, so the counter reads 0 again and the permanently-refused events
+it accounted for are gone with it. wardynd says so at every boot rather than
+leaving it to be inferred from a counter that silently reset: it WARNs `the audit
+spool is on ephemeral storage; a redeploy or reschedule discards un-drained
+events AND the quarantine sidecar`, and the remedy is the one that line names —
+point `WARDYN_AUDIT_SPOOL` at durable storage (`persistence.enabled=true` on the
+chart, the `audit` named volume on compose).
 
 **Two limits of that rule, stated.** First, the probe needs a line BEHIND the
 suspect to land, so two or more *adjacent* unacceptable lines still wedge — the
@@ -487,9 +503,10 @@ happened** — permanently, per the latch above.
 **What the lock does not decide is which head you read.** The trigger's head
 lookup is an ordinary `SELECT`, running in the CALLER's transaction, so it sees
 what that transaction's snapshot sees. Under `READ COMMITTED` — Postgres's
-default, and what every in-tree writer uses — that statement takes a fresh
-snapshot after the lock is acquired, so the head it finds is the row the previous
-writer just committed and the link is right. A writer whose snapshot was fixed
+default, and the level every in-tree writer PINS on its own transaction rather
+than inheriting — that statement takes a fresh snapshot after the lock is
+acquired, so the head it finds is the row the previous writer just committed
+and the link is right. A writer whose snapshot was fixed
 EARLIER (`REPEATABLE READ` or `SERIALIZABLE`, begun before that commit landed)
 still takes its place in line and still gets a correct `seq` — and still chains
 onto the stale head its snapshot can see. Two rows then carry the same
@@ -499,7 +516,22 @@ external writer to `audit_events` must use `READ COMMITTED`.** Nothing in the
 database enforces that: there is no row conflict for Postgres to raise a
 serialization failure over, so a `REPEATABLE READ` insert succeeds quietly.
 
-The costs are honest, and there are two: that isolation rule, and a session that
+The GUC that decides this is `default_transaction_isolation`, and it is
+`USERSET`: any role can set it per session, per role (`ALTER ROLE ... SET`) or
+per database (`ALTER DATABASE ... SET`) with no superuser involved. Wardyn's
+own writers are unaffected — `store.InsertAuditEvent`, the broker's mint
+transaction and the boot chain canary each pin `READ COMMITTED` on their own
+transaction, and a transaction-level isolation level overrides the GUC — so
+this rule binds writers Wardyn does not know about. wardynd reads the setting
+at boot and, when it is anything but `read committed`, logs at ERROR with the
+statement to run: `ALTER DATABASE <db> SET default_transaction_isolation =
+'read committed'` (or the matching `ALTER ROLE`). It reports rather than
+refuses, and it reads the setting on whichever connection ran the migrations:
+in a split-DSN deployment that is the MIGRATE role, so a clean line there is
+not a promise about the role the serving pool uses.
+
+The costs are honest, and there are two: that isolation rule (and the
+`default_transaction_isolation` default it is read from), and a session that
 holds a transaction open after inserting into `audit_events` blocks every other
 audit append until it commits or rolls back — so do not leave an interactive
 `psql` transaction sitting on that table.
@@ -720,7 +752,8 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 
 | Surface | Gate |
 |---|---|
-| managed harness credential; policy create/update/delete; `PUT /site-config` (a full-document replace, integration credential refs included); `GET /metrics`; the `/access` role-mapping routes below — they bound who derives admin at all | ⛔ admin only |
+| managed harness credential; policy create/update/delete; `PUT /site-config` (a full-document replace, integration credential refs included — and the matching `GET` is gated too, see the operator-topology reads below); `GET /metrics`; the `/access` role-mapping routes below — they bound who derives admin at all | ⛔ admin only |
+| the operator-topology READS — `GET /site-config`, `GET /sources`, `GET /sources/{id}`, `GET /base-images`: they carry the upstream-proxy secret ref, a `local_dir` source Locator and internal registry refs, so reading them is reading the deployment's own topology | ⛔ admin only |
 | the `/workspaces` routes that BIND CREDENTIAL MATERIAL or WRITE THE HOST — `llm-cred`, `requirements`, `env-as-code/write` — plus `reassign` (user administration) | ⛔ admin only |
 | the `/workspaces` routes that DECIDE AN EGRESS CEILING — `approved-egress`, `denied-egress`, `promote-egress`: deciding which hosts a workspace's runs may reach is the same authority as deciding an egress approval, and `promote-egress` is that decision in bulk | ⛔ admin or `security_admin` |
 | launching a recording session (`POST /workspaces/{id}/record`) — it sat with the egress-decision routes above until 0.7 re-tiered it, because the route does not decide a ceiling: it LAUNCHES a credentialed, host-mounting, open-egress sandbox and stamps the caller as its owner, which is reach into a run and at the host. The egress DECISION stays delegable; only the launch moved | ⛔ admin only |
@@ -734,6 +767,21 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | the user-drive **door** — `DenyUserDrive` on a governance profile (`internal/types/governance.go`) | 🟡 security admin too, through `/governance` — a limit on a profile, not a drive; it refuses the mount, it does not deallocate anything |
 | mounting YOUR OWN drive on a run (`drive.enabled`) | 🟢 the person, per run — read-only unless their allocation says otherwise, and the run flag may only narrow that, never widen it |
 | `POST /runs`, `POST /runs/{id}/kill` | 🟢 any signed-in human — using the product is a member act |
+
+**Documented gaps — routes gated but not yet named above.** Ten further gated
+routes have no covering row in the tier table — a pre-0.7 omission the F316
+completeness check surfaced, not something this wave caused: the `/sources`
+writes (`POST /sources`, `POST /sources/{id}/scan`, `DELETE /sources/{id}`);
+the `/base-images` writes (`POST /base-images`, `DELETE /base-images/{id}`);
+the integration writes (`PUT /integrations/{id}`, `DELETE /integrations/{id}`,
+implied today only inside the `PUT /site-config` row above); `POST
+/admin/sandboxes/sweep`; `POST /setup/onboarding-complete` (the setup family
+above is named only as "managed harness credential", which this route is
+not); and `GET /runs/{id}/attach`. Each is named, with its reason, in
+`docTierUndocumented` (`internal/api/operations_tier_doc_test.go`), and
+`TestOperationsTierTableMatchesRouteMatrix`'s completeness check blocks any
+new gated route from joining that list unnoticed — a route sits there only
+until a docs pass moves it into `docTierRows` with the token that covers it.
 
 **Ownership scoping — real, not just admin-vs-everyone.** A member reaches their
 OWN resources the same way an admin reaches any of them
@@ -1617,6 +1665,16 @@ who is demoted and never signs in again keeps the role their tokens were minted
 with indefinitely. **Explicit revocation is the only thing that ends it on your
 schedule.**
 
+A demotion made on the People page is now one of those explicit revocations:
+when a role-mapping write or delete takes a tier away from a value, Wardyn
+revokes the outstanding tokens of every principal whose own derivation that
+edit demotes and whose stamp still carries what was lost, and reports the
+number as `tokens_revoked` in the response and the audit row. It is scoped to
+that demotion — a promotion, an unrelated value, and a member-stamped
+credential naming the same group are all left alone — and a token whose group
+snapshot is missing or partial cannot be re-derived, so an elevated stamp in
+that state is revoked rather than assumed safe.
+
 That matters most for the tier 0.7 added. A human demoted out of `security_admin`
 keeps, through any token they minted while they held it, exactly what the tier
 governs: profile authoring and assignment, capability-grant writes, session and
@@ -1768,7 +1826,7 @@ Every member denial that isn't a plain foreign-resource 404 is audited under
 | `capability_integration` | `integration_id`: a member named a model-provider integration they aren't granted (same seam). Tier 1 only — a workspace's own pin and the site default are never gated | ⛔ `403` |
 | `governance_profile` | the member's assigned governance profile refuses this run SHAPE. Five causes, one per emitted `target`: `task_mode=exec` (`runs.task_mode`), an interactive run (`runs.interactive`), `seed_auto_tools` (`runs.seed_auto_tools`), codex-cli under hold-deriving rules (`runs.agent`), and — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `denyMemberDrive`). A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
 | `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_MEMBER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
-| `groups_snapshot_stale` | the resolver cannot answer this caller's group tier — their login-time group snapshot is missing or was truncated at sign-in, and the deployment assigns governance profiles by group — so every ceiling-bounded seam refuses. Emitted ONCE per request at the one site that decides it (`ceilingWithUnusableGroups`, `internal/api/governance.go`), at target `governance.ceiling`, because the ceiling is memoized per request: the count means denials, not ceiling reads. The remedy is the caller's own and is in the refusal body — sign in again, or re-mint the API token | ⛔ `403` |
+| `groups_snapshot_stale` | the resolver cannot answer this caller's group tier — their login-time group snapshot is missing or was truncated at sign-in, and the deployment assigns governance profiles by group — so every ceiling-bounded seam refuses. Emitted ONCE per request at each site that decides it, and there are two: `ceilingWithUnusableGroups` (`internal/api/governance.go`) at target `governance.ceiling`, and `driveWithUnusableGroups` (`internal/api/user_drives_resolve.go`) at target `runs.drive`. The ceiling is memoized per request and the drive resolver is asked once, so the count still means denials rather than resolves. A deployment that assigns governance profiles by group emits the first; one that allocates user drives by group emits the second; one that does both emits both, for the same member, because they are two separate refusals the member meets at two separate doors. The remedy is the caller's own and is in the refusal body — sign in again, or re-mint the API token | ⛔ `403` |
 | `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | ⛔ `403` |
 
 The drop rows are why `POST /runs` mostly *narrows* rather than refuses: a member
@@ -2552,6 +2610,14 @@ re-applying a file saved before this release would otherwise silently wipe the
 proxy and every redirect rather than just fail to update them. A body that sets
 both fields is rejected (400) rather than guessed at. `wardyn site-config get`
 after upgrading no longer returns `artifact_overrides` — re-save the file then.
+
+A PUT that does not MENTION a field added after v0.6.6 (`internal_hosts`,
+`upstream_proxy_no_proxy`) leaves the stored value alone rather than clearing
+it, so an older SDK/CLI's get-edit-apply round trip can no longer erase a
+field its struct has no name for
+(`carryForwardUnnamedSiteConfigFields`, `internal/api/site_config.go`). To
+clear one deliberately, send it explicitly as `[]` or `null` — the body
+naming a field is what decides it.
 
 ### Integrations are not part of this round-trip
 

@@ -1460,6 +1460,16 @@ hiding them would repeat the failure mode we are designed to avoid.
     ticket on a foreign run, and no capability grant widens it to admin
     (`TestCapabilityGrantsNeverReachTheAdminTier`).
 
+    Since 0.7 the demotion itself also ends it: a People-page role-mapping
+    write or delete that takes a tier away from a value revokes the affected
+    principals' unrevoked tokens in the same call (`internal/api/apitokens.go`,
+    `revokeDemotedRoleSnapshots`), so the window for a demotion performed
+    through that surface closes at the edit rather than at the demoted
+    human's next sign-in. The residual that remains is a stamp that goes
+    stale for a reason no role-mapping edit expresses — a chart-map change or
+    an IdP-side group removal — which still waits for that human's next login
+    or an explicit revoke.
+
     **The remediation exists, is the only one, and has to be invoked
     deliberately.** `GET /api/v1/tokens` lists every live token with its owner
     and `last_used_at`; `DELETE /api/v1/tokens/{id}` revokes one; `POST

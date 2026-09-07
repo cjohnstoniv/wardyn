@@ -40,6 +40,13 @@ var docTierGate = map[routeClass]string{
 var docTierRows = []struct{ route, token string }{
 	// operatorOnly (SUPER)
 	{"PUT /api/v1/site-config", "`PUT /site-config`"},
+	// R1 F316's four operator-topology reads: re-tiered to admin this wave and
+	// filed as docTierUndocumented until the docs pass landed the row naming
+	// them. Now that it has, they move here keyed on the row's own token.
+	{"GET /api/v1/site-config", "the operator-topology READS"},
+	{"GET /api/v1/sources", "the operator-topology READS"},
+	{"GET /api/v1/sources/{id}", "the operator-topology READS"},
+	{"GET /api/v1/base-images", "the operator-topology READS"},
 	{"GET /metrics", "`GET /metrics`"},
 	{"POST /api/v1/access/mappings", "`/access` role-mapping routes"},
 	{"PUT /api/v1/workspaces/{id}/llm-cred", "`llm-cred`"},
@@ -118,20 +125,12 @@ var docTierRows = []struct{ route, token string }{
 // list fails the completeness check below rather than joining the 37 nobody
 // noticed.
 //
-// Every entry is a documentation gap R1 F316 opened, and the four marked FILED
-// are the finding's own: this wave re-tiered them to admin and the table never
-// gained a row, so an operator reading it to decide what to delegate cannot
-// learn that these reads are gated at all. The replacement row is written and
-// filed for the docs pass (lane api2's json, kind doc-sentence); when it lands,
-// delete those four entries and add them to docTierRows with the new token.
+// R1 F316's own four operator-topology reads used to sit here as FILED entries:
+// this wave re-tiered them to admin and the table never gained a row, so an
+// operator reading it to decide what to delegate could not learn that these
+// reads are gated at all. The docs pass landed the replacement row ("the
+// operator-topology READS") and moved all four into docTierRows above.
 var docTierUndocumented = map[string]string{
-	// FILED — R1 F316's four operator-topology reads. They carry the
-	// upstream-proxy secret ref, a local_dir source Locator and internal
-	// registry refs, which is why they moved to admin.
-	"GET /api/v1/site-config":  "FILED (R1 F316): the table names only PUT /site-config, and phrases it so the GET reads as open",
-	"GET /api/v1/sources":      "FILED (R1 F316): re-tiered to admin this wave; no row names the /sources family",
-	"GET /api/v1/sources/{id}": "FILED (R1 F316): as above",
-	"GET /api/v1/base-images":  "FILED (R1 F316): re-tiered to admin this wave; no row names /base-images",
 	// The pre-existing gaps the completeness check surfaced. Filed as a second,
 	// lower-priority doc item: each is a gated write whose family the table has
 	// never named, so the omission is older than this wave rather than caused
