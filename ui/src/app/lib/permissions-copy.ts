@@ -157,6 +157,12 @@ export const PERM = {
   ENFORCE_ON_TITLE: (kind: string) => `Enforce ${kind}?`,
   ENFORCE_ON_BODY: (n: number) =>
     `${n} member${n === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} bounded by the grants below from their next request. Anything not granted starts being refused.`,
+  // ADDITION to §7.2 (0.7 R4/F133): the count comes from GET /runs, which can be
+  // refused or fail. The canon table froze only the counted form, so an unread
+  // count printed as "0 members are bounded" — the opposite of the lockout risk
+  // this dialog exists to state. Same sentence, minus the number.
+  ENFORCE_ON_BODY_UNKNOWN:
+    "Members are bounded by the grants below from their next request. Anything not granted starts being refused.",
   ENFORCE_ON_ZERO:
     "There are no allow grants for this capability. Enforcing it now refuses every member request until you add one.",
   // ADDITION to §7.2 (0.6 implementation): the canon table froze one title and

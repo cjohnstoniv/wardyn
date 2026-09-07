@@ -17,6 +17,7 @@
 //      instead of coasting on the context's fail-open default.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
 const getSetupStatusMock = vi.fn();
@@ -135,5 +136,66 @@ describe("SettingsScreen — the proxy posture is operator-only", () => {
       screen.getByText(/proxy\.internal\.corp\.example:3128/),
     ).toBeInTheDocument();
     expect(screen.getByText(/^Internet$/)).toBeInTheDocument();
+  });
+});
+
+// R4/F069 — the operator's own FAILED read is the case the operator-only gate
+// above does not cover, and the operator is the person these two sentences are
+// addressed to. SettingsScreen.load swallows every site-config failure into
+// `null` and still resolves state="ready", so a 500 or a dead network produced
+// "Internet: Direct" and "Not configured — sandboxes go direct" — two POSITIVE
+// claims about a deployment nothing had read. On a proxied deployment whose
+// site-config endpoint is briefly down, both are false, and "sandboxes go
+// direct" is false in the direction an operator acts on.
+//
+// The rule the file already applies to members, one state further: absence is
+// honest, a statement is not. The funnel link itself stays — it is how the
+// operator goes and finds out.
+describe("SettingsScreen — a FAILED site-config read is not a proxy posture", () => {
+  it("claims neither 'Direct' nor 'Not configured' when the read failed", async () => {
+    getSiteConfigMock.mockRejectedValue(new Error("HTTP 500 store unavailable"));
+    renderScreen(true);
+
+    // The screen still renders — a site-config failure is not a page failure.
+    expect(
+      await screen.findByRole("heading", { name: "Host", level: 3 }),
+    ).toBeInTheDocument();
+    // The way in is still offered…
+    expect(screen.getByText(/corporate proxy & egress/i)).toBeInTheDocument();
+    // …but nothing on the card states a posture nothing read.
+    expect(screen.queryByText(/sandboxes go direct/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Internet$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Direct$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/through the corporate proxy/i)).not.toBeInTheDocument();
+  });
+
+  // The negative control, so the fix cannot be satisfied by deleting the
+  // feature: a server that ANSWERS "nothing is configured" is a real answer and
+  // still says so.
+  it("an answered empty config still says 'Not configured' — that one is a fact", async () => {
+    getSiteConfigMock.mockResolvedValue({});
+    renderScreen(true);
+    expect(
+      await screen.findByText(/not configured — sandboxes go direct/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/^Internet$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Direct$/)).toBeInTheDocument();
+  });
+
+  // …and a retry that succeeds must recover: the failure state is per-load, not
+  // sticky. "Re-check this host" is the control that drives it.
+  it("recovers on a re-check that succeeds", async () => {
+    getSiteConfigMock
+      .mockRejectedValueOnce(new Error("HTTP 500 store unavailable"))
+      .mockResolvedValue({ upstream_proxy_url: "http://proxy.corp.example:3128" });
+    renderScreen(true);
+    expect(
+      await screen.findByRole("heading", { name: "Host", level: 3 }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^Internet$/)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /re-check this host/i }));
+    expect(await screen.findByText(/^Internet$/)).toBeInTheDocument();
+    expect(screen.getByText(/proxy\.corp\.example:3128/)).toBeInTheDocument();
   });
 });

@@ -174,7 +174,13 @@ export function PermissionsScreen() {
   // their own grants; they are audited, and they reach nothing that exemption
   // would give them.
   const securityOperator = useSecurityOperator();
-  const [snap, setSnap] = React.useState<PermissionsSnapshot>({ grants: [], enforcement: {} });
+  // `null` is the UNKNOWN state, and it exists on purpose: PermissionsSnapshot's
+  // `enforcement` map encodes an absent key as "not enforced" (types/permissions.ts),
+  // so a seed object of `{ grants: [], enforcement: {} }` is byte-identical to a
+  // real zero-config answer — a failed fetch would paint every kind "Not enforced"
+  // with its member-powers prose as fact. There is no seed; there is no snapshot
+  // until one arrives.
+  const [snap, setSnap] = React.useState<PermissionsSnapshot | null>(null);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [confirm, setConfirm] = React.useState<{ kind: CapabilityKind; next: boolean } | null>(null);
   const [toRemove, setToRemove] = React.useState<CapabilityGrant | null>(null);
@@ -188,15 +194,18 @@ export function PermissionsScreen() {
         setSnap(s);
         setStatus("ready");
       })
-      .catch(() => setStatus("error"));
+      .catch(() => {
+        setSnap(null);
+        setStatus("error");
+      });
   }, []);
   React.useEffect(load, [load]);
 
   const memberCount = useAffectedMemberCount();
 
   const grantsFor = React.useCallback(
-    (kind: CapabilityKind) => snap.grants.filter((g) => g.capability === kind),
-    [snap.grants],
+    (kind: CapabilityKind) => (snap?.grants ?? []).filter((g) => g.capability === kind),
+    [snap],
   );
 
   const writeEnforcement = async (kind: CapabilityKind, next: boolean) => {
@@ -205,9 +214,9 @@ export function PermissionsScreen() {
       // FULL-MAP replace: send every kind's current state with this one
       // changed, because an omitted key is a real "stop enforcing".
       const body: Record<string, boolean> = {};
-      for (const k of CAPABILITY_KINDS) body[k] = k === kind ? next : !!snap.enforcement[k];
+      for (const k of CAPABILITY_KINDS) body[k] = k === kind ? next : !!snap?.enforcement[k];
       const saved = await api.putEnforcement(body);
-      setSnap((s) => ({ ...s, enforcement: saved }));
+      setSnap((s) => ({ grants: s?.grants ?? [], enforcement: saved }));
       setConfirm(null);
     } catch (e) {
       toast.error("Failed to save enforcement", { description: getErrorMessage(e) });
@@ -220,7 +229,7 @@ export function PermissionsScreen() {
     setBusy(true);
     try {
       await api.deleteGrant(g.id);
-      setSnap((s) => ({ ...s, grants: s.grants.filter((x) => x.id !== g.id) }));
+      setSnap((s) => (s ? { ...s, grants: s.grants.filter((x) => x.id !== g.id) } : s));
       setToRemove(null);
     } catch (e) {
       toast.error("Failed to remove grant", { description: getErrorMessage(e) });
@@ -229,7 +238,7 @@ export function PermissionsScreen() {
     }
   };
 
-  const nothingEnforced = CAPABILITY_KINDS.every((k) => !snap.enforcement[k]);
+  const nothingEnforced = !!snap && CAPABILITY_KINDS.every((k) => !snap.enforcement[k]);
 
   return (
     <div className="mx-auto max-w-[1120px] px-6 py-6">
@@ -241,7 +250,7 @@ export function PermissionsScreen() {
       </div>
 
       {/* The upgrade-from-0.5 posture: every kind off and no grants at all. */}
-      {status === "ready" && nothingEnforced && snap.grants.length === 0 && (
+      {status === "ready" && nothingEnforced && snap!.grants.length === 0 && (
         <Note>{PERM.DEFAULT_POSTURE}</Note>
       )}
 
@@ -251,16 +260,25 @@ export function PermissionsScreen() {
           <p className="mt-0.5 text-body text-muted-foreground">{PERM.ENFORCEMENT_LEAD}</p>
         </div>
         <div className="mt-4">
-          {CAPABILITY_KINDS.map((kind) => (
-            <KindRow
-              key={kind}
-              kind={kind}
-              enforced={!!snap.enforcement[kind]}
-              grants={grantsFor(kind)}
-              disabled={!securityOperator || status !== "ready"}
-              onToggle={(next) => setConfirm({ kind, next })}
-            />
-          ))}
+          {/* Same three-way as the grant table below: a kind's state is a claim
+              about what the daemon is refusing right now, so it is drawn only
+              from a snapshot that actually arrived. */}
+          {status === "loading" ? (
+            <TableSkeleton rows={CAPABILITY_KINDS.length} cols={2} />
+          ) : status === "error" || !snap ? (
+            <ErrorState onRetry={load} />
+          ) : (
+            CAPABILITY_KINDS.map((kind) => (
+              <KindRow
+                key={kind}
+                kind={kind}
+                enforced={!!snap.enforcement[kind]}
+                grants={grantsFor(kind)}
+                disabled={!securityOperator}
+                onToggle={(next) => setConfirm({ kind, next })}
+              />
+            ))
+          )}
         </div>
       </section>
 
@@ -273,7 +291,7 @@ export function PermissionsScreen() {
         <div className="mt-4">
           {status === "loading" ? (
             <TableSkeleton rows={4} cols={5} />
-          ) : status === "error" ? (
+          ) : status === "error" || !snap ? (
             <ErrorState onRetry={load} />
           ) : snap.grants.length === 0 ? (
             <EmptyState icon={ShieldCheck} title={PERM.EMPTY_TITLE} description={PERM.EMPTY_BODY} />
@@ -435,7 +453,7 @@ function ConfirmEnforcement({
   onConfirm,
 }: {
   state: { kind: CapabilityKind; next: boolean } | null;
-  memberCount: number;
+  memberCount: number | null;
   hasAllow: boolean;
   busy: boolean;
   onCancel: () => void;
@@ -451,7 +469,11 @@ function ConfirmEnforcement({
             {(turningOn ? PERM.ENFORCE_ON_TITLE : PERM.ENFORCE_OFF_TITLE)(state ? KIND[state.kind].label : "")}
           </AlertDialogTitle>
           <AlertDialogDescription>
-            {turningOn ? PERM.ENFORCE_ON_BODY(memberCount) : PERM.ENFORCE_OFF_BODY}
+            {turningOn
+              ? memberCount === null
+                ? PERM.ENFORCE_ON_BODY_UNKNOWN
+                : PERM.ENFORCE_ON_BODY(memberCount)
+              : PERM.ENFORCE_OFF_BODY}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {lockout && <Note tone="red">{PERM.ENFORCE_ON_ZERO}</Note>}
@@ -604,9 +626,12 @@ function AddGrantForm({ disabled, onAdded }: { disabled: boolean; onAdded: () =>
 // member who has never launched one. Upgrade path: a server-side principal
 // roster (or a count on GET /permissions), at which point this hook reads it
 // instead of deriving it.
-function useAffectedMemberCount(): number {
+// `null` is UNKNOWN, not zero: listRuns() can be refused (403) or fail, and a
+// dialog that then reads "0 members are bounded" states the opposite of the
+// lockout risk it exists to communicate.
+function useAffectedMemberCount(): number | null {
   const principal = usePrincipal();
-  const [count, setCount] = React.useState(0);
+  const [count, setCount] = React.useState<number | null>(null);
   React.useEffect(() => {
     let live = true;
     runsApi
@@ -621,7 +646,9 @@ function useAffectedMemberCount(): number {
         setCount(people.size);
       })
       .catch(() => {
-        /* the dialog still states the consequence; only the count is unknown */
+        // The dialog still states the consequence; the count stays null, and
+        // ConfirmEnforcement says so instead of printing a number it never read.
+        if (live) setCount(null);
       });
     return () => {
       live = false;

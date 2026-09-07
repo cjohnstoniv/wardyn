@@ -691,3 +691,40 @@ test.describe("governance — the walls, asserted where this harness can reach t
     expect(body).not.toMatch(/\d+ assignment/);
   });
 });
+
+// R4/F032 — the Limits cell tested only the three BOOLEAN doors, so a profile
+// whose one limit is a run quota read GOV.LIMITS_NONE ("None") while
+// denyMemberRunQuota (internal/api/runs_create_validate.go) was refusing that
+// member's next run with a 422. Real profile, real row: only the rendered table
+// proves the cell, and only a stored max_concurrent_runs proves it round-trips
+// the wire.
+test.describe("governance — a quota-only profile is not 'None' (R4/F032)", () => {
+  test("names the cap in the Limits column, and leaves an unlimited profile reading None", async ({
+    page,
+  }) => {
+    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const capped = `quota-only-${randomUUID().slice(0, 8)}`;
+    const free = `unlimited-${randomUUID().slice(0, 8)}`;
+    for (const [name, limits] of [
+      [capped, { max_concurrent_runs: 3 }],
+      [free, {}],
+    ] as const) {
+      const res = await page.request.post("/api/v1/governance/profiles", {
+        headers: auth,
+        data: { name, ceiling: YOLO_CEILING, limits },
+      });
+      expect(res.status()).toBe(201);
+    }
+
+    await gotoConsole(page);
+    await navTo(page, "Governance");
+
+    const cappedRow = page.getByRole("row").filter({ hasText: capped });
+    await expect(cappedRow.getByText(GOV.LIMIT_QUOTA_LABEL(3))).toBeVisible();
+    await expect(cappedRow.getByText(GOV.LIMITS_NONE, { exact: true })).toHaveCount(0);
+    // ...and the genuinely unlimited one still says None.
+    await expect(
+      page.getByRole("row").filter({ hasText: free }).getByText(GOV.LIMITS_NONE, { exact: true }),
+    ).toBeVisible();
+  });
+});

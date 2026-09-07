@@ -131,3 +131,44 @@ test.describe("permissions — the admin surface, end to end", () => {
     await expect(page.getByText(PERM.CHIP_ON, { exact: true })).toHaveCount(0);
   });
 });
+
+// R4/F015 + R4/F133 — the two places this screen used to state, as fact, an
+// answer it never received. Both need a REAL failed response, which only the
+// browser can produce, so they live here rather than only in RTL.
+//
+// Not in the serial block above: these route-intercept their own requests and
+// write nothing.
+test.describe("permissions — a snapshot, and a count, that never arrived", () => {
+  test("a failed GET /permissions paints no kind state at all — never six 'Not enforced' chips", async ({
+    page,
+  }) => {
+    await page.route("**/api/v1/permissions", (route) => route.fulfill({ status: 503, body: "{}" }));
+    await gotoConsole(page);
+    await navTo(page, "Permissions");
+
+    // The screen is honest about not knowing: a retry, not a posture.
+    await expect(page.getByRole("button", { name: /retry/i }).first()).toBeVisible();
+    await expect(page.getByText(PERM.CHIP_OFF, { exact: true })).toHaveCount(0);
+    await expect(page.getByText(PERM.CHIP_ON, { exact: true })).toHaveCount(0);
+    await expect(page.getByText(PERM.DEFAULT_POSTURE)).toHaveCount(0);
+    for (const k of CAPABILITY_KINDS) {
+      await expect(page.getByText(KIND[k].unenforced)).toHaveCount(0);
+    }
+  });
+
+  test("a refused GET /runs leaves the enforce dialog without a count, never '0 members'", async ({
+    page,
+  }) => {
+    // The count is derived from the runs list; refusing it must not read as
+    // "this affects nobody", which is the opposite of the lockout risk.
+    await page.route("**/api/v1/runs?**", (route) => route.fulfill({ status: 403, body: "{}" }));
+    await gotoConsole(page);
+    await navTo(page, "Permissions");
+
+    await page.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.egress_host.label}` }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog.getByText(PERM.ENFORCE_ON_BODY_UNKNOWN)).toBeVisible();
+    await expect(dialog.getByText(/\b0 members\b/)).toHaveCount(0);
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+  });
+});

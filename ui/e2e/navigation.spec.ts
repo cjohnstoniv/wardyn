@@ -217,3 +217,66 @@ test.describe("error boundary (no spurious fallback)", () => {
     }
   });
 });
+
+// R4/F066 — a store outage must raise the unreachable banner.
+//
+// The banner is the only thing separating a quiet fleet from a dead control
+// plane, and its verdict used to be `/healthz`'s `status === "ok"` alone —
+// which handleHealthz writes as a LITERAL and never derives from the store
+// (internal/api/healthz.go). So with wardynd up and Postgres down, /healthz
+// answered 200 {"status":"ok"}, the banner stayed down, and every polled screen
+// (runs 3s, run-detail 4s, approvals 10s, audit 5s) went on rendering last-good
+// data behind its own silent `.catch`: a live-looking cockpit frozen at the
+// instant the store died. App.tsx now also reads /readyz, which already Pings
+// the store and answers 503 (internal/api/security_headers.go:124-136).
+//
+// DEFERRED (Docker down for the R4 fix wave — never run, never skipped):
+//   DOCKER_HOST=unix:///var/run/docker.sock WARDYN_E2E_ADDR=:8288 \
+//   WARDYN_E2E_UI_ADDR=:8289 WARDYN_E2E_PG_CONTAINER=wardyn-profiles-pg \
+//   WARDYN_E2E_PG_HOSTPORT=localhost:55434 ./scripts/run-ui-e2e.sh e2e/navigation.spec.ts
+test.describe("the unreachable banner sees a store outage (R4/F066)", () => {
+  const BANNER = /Control plane unreachable — showing the last data received/i;
+
+  test("a live daemon with an unreachable store raises the banner", async ({ page }) => {
+    // /healthz keeps saying "ok" — it is liveness, and it is telling the truth.
+    // /readyz reports what handleReadyz reports when Store.Ping fails.
+    await page.route("**/readyz", (route) =>
+      route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "error", postgres: "unreachable" }),
+      }),
+    );
+    await gotoConsole(page);
+    await expect(page.getByRole("status").filter({ hasText: BANNER })).toBeVisible({
+      timeout: 15_000,
+    });
+  });
+
+  test("…and it clears on its own when the store comes back", async ({ page }) => {
+    let down = true;
+    await page.route("**/readyz", async (route) => {
+      if (!down) return route.fallback();
+      return route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "error", postgres: "unreachable" }),
+      });
+    });
+    await gotoConsole(page);
+    await expect(page.getByRole("status").filter({ hasText: BANNER })).toBeVisible({
+      timeout: 15_000,
+    });
+    down = false;
+    await expect(page.getByRole("status").filter({ hasText: BANNER })).toHaveCount(0, {
+      timeout: 15_000,
+    });
+  });
+
+  test("a healthy deployment shows no banner — the negative control", async ({ page }) => {
+    await gotoConsole(page);
+    // Give the health poll a couple of ticks to be wrong in, then assert.
+    await page.waitForTimeout(6_000);
+    await expect(page.getByRole("status").filter({ hasText: BANNER })).toHaveCount(0);
+  });
+});

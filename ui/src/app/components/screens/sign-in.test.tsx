@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ThemeProvider } from "../wardyn/theme-provider";
 import { getToken } from "../../lib/api/core";
@@ -44,6 +44,57 @@ describe("SignIn — SSO entry point", () => {
     renderSignIn();
     expect(await screen.findByRole("button", { name: /sign in with sso/i })).toBeDisabled();
     expect(screen.queryByRole("link", { name: /sign in with sso/i })).not.toBeInTheDocument();
+  });
+
+  // R4/F027: health() resolves the EMPTY object for a network error or ANY
+  // non-2xx, and the gate read it ONCE on mount. So a daemon that was still
+  // starting — the single likeliest moment for a human to be sitting on this
+  // screen — made an SSO-ONLY deployment render a bare admin-token field and no
+  // way in, permanently, because nothing ever asked again. "Couldn't ask" is not
+  // "not configured": the gate keeps the last known answer and re-asks.
+  it("an outage does not turn the SSO button off — the gate re-asks and it comes back", async () => {
+    vi.useFakeTimers();
+    try {
+      // First answer is the outage shape, then the daemon comes up.
+      healthMock.mockReset();
+      healthMock.mockResolvedValueOnce({}).mockResolvedValue({ status: "ok", sso: true });
+      renderSignIn();
+      // The outage answer has landed and taught the gate nothing — no link, and
+      // (this is the point) no permanent "not configured" verdict either.
+      await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+      expect(healthMock).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("link", { name: /sign in with sso/i })).not.toBeInTheDocument();
+
+      await act(async () => void (await vi.advanceTimersByTimeAsync(10_000)));
+      await vi.waitFor(() =>
+        expect(screen.getByRole("link", { name: /sign in with sso/i })).toHaveAttribute(
+          "href",
+          "/auth/login",
+        ),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The other half of the same rule: a LATER outage must not retract an answer
+  // the daemon already gave. Losing the SSO link mid-outage is the same dead end
+  // as never rendering it.
+  it("a later outage does not retract an SSO answer the daemon already gave", async () => {
+    vi.useFakeTimers();
+    try {
+      healthMock.mockReset();
+      healthMock.mockResolvedValueOnce({ status: "ok", sso: true }).mockResolvedValue({});
+      renderSignIn();
+      await vi.waitFor(() =>
+        expect(screen.getByRole("link", { name: /sign in with sso/i })).toBeInTheDocument(),
+      );
+      await act(async () => void (await vi.advanceTimersByTimeAsync(30_000)));
+      expect(healthMock.mock.calls.length).toBeGreaterThan(1);
+      expect(screen.getByRole("link", { name: /sign in with sso/i })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

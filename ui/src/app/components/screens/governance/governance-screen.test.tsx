@@ -69,6 +69,9 @@ import type { GovernanceProfile, GovernanceSnapshot } from "../../../lib/api/gov
 import { DIRECTORY, GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { ACCESS_STATE, PEOPLE, PREVIEW } from "../../../lib/people-access-copy";
 import { PERM } from "../../../lib/permissions-copy";
+// R4/F035: the drives templates flow through the SAME question() helper, so the
+// hostile-name pin covers all four here rather than in two half-suites.
+import { DRIVES } from "../../../lib/user-drives-copy";
 import type { RunPolicySpec } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { question } from "./display";
@@ -550,6 +553,44 @@ describe("question — the confirm split", () => {
     expect(`${head} ${rest}`).toBe(s);
     expect(head.endsWith("?")).toBe(true);
   });
+
+  // R4/F035 — the split used to take the FIRST "? ", and a profile / drive name
+  // is validated only as non-empty, <=128 bytes and control-char-free
+  // (internal/api/governance.go:138-144), so "? " is a legal substring of one.
+  // Every one of these templates interpolates a name BEFORE its question mark,
+  // so a name that carried one truncated the dialog title mid-name and started
+  // the description mid-name too — with the profile the operator is about to
+  // DELETE only half-named on the screen asking them to confirm it.
+  const HOSTILE = 'prod? really';
+  it.each([
+    ["GOV.DELETE_CONFIRM", GOV.DELETE_CONFIRM(HOSTILE)],
+    ["GOV.UNASSIGN_CONFIRM", GOV.UNASSIGN_CONFIRM("wardyn.platform", HOSTILE)],
+    ["GOV.UNASSIGN_CONFIRM (name in the subject)", GOV.UNASSIGN_CONFIRM(HOSTILE, "Greenfield")],
+    ["DRIVES.DELETE_CONFIRM", DRIVES.DELETE_CONFIRM(HOSTILE)],
+    ["DRIVES.REMOVE_CONFIRM", DRIVES.REMOVE_CONFIRM("wardyn.platform", HOSTILE)],
+  ])("%s survives a name containing '? '", (_label, s) => {
+    const [head, rest] = question(s);
+    // Still lossless…
+    expect(`${head} ${rest}`).toBe(s);
+    // …and now split at the SENTENCE boundary: the whole name is in the title,
+    // and the consequence half starts a sentence rather than mid-name.
+    expect(head).toContain(HOSTILE);
+    expect(head.endsWith("?")).toBe(true);
+    expect(rest).not.toContain(HOSTILE);
+    expect(rest[0]).toBe(rest[0]?.toUpperCase());
+  });
+
+  // The invariant the last-"? " rule rests on: no consequence half is itself a
+  // question. If copy ever adds one, THIS fails — visibly, in the copy's own
+  // pin — rather than the split silently landing in the wrong sentence.
+  it.each([
+    ["GOV.DELETE_CONFIRM", GOV.DELETE_CONFIRM("X")],
+    ["GOV.UNASSIGN_CONFIRM", GOV.UNASSIGN_CONFIRM("who", "X")],
+    ["DRIVES.DELETE_CONFIRM", DRIVES.DELETE_CONFIRM("X")],
+    ["DRIVES.REMOVE_CONFIRM", DRIVES.REMOVE_CONFIRM("who", "X")],
+  ])("%s's consequence half asks nothing", (_label, s) => {
+    expect(question(s)[1]).not.toContain("?");
+  });
 });
 
 // The user-drive DOOR (0.7 user drives, mock state 6). Its two strings are
@@ -592,5 +633,31 @@ describe("GovernanceScreen — the third limit is the user-drive door", () => {
     // …and a profile with no limits still reads LIMITS_NONE, which the third
     // flag must not have quietly turned into "one limit set".
     expect(limits.getByText(GOV.LIMITS_NONE)).toBeInTheDocument();
+  });
+
+  // R4/F032: the cell tested the three BOOLEAN doors only, so a profile whose
+  // one limit is a run quota read "None" — while denyMemberRunQuota
+  // (internal/api/runs_create_validate.go) refused that member's next run with
+  // a 422. "None" is a claim about every field of GovernanceLimits.
+  it("a quota-only profile names its cap and never reads 'None'", async () => {
+    renderScreen(
+      snapshot({ profiles: [profile({ limits: { max_concurrent_runs: 3 } }), PLATFORM] }),
+    );
+    await screen.findByText(GREENFIELD.name);
+    const rows = within(screen.getAllByRole("table")[0]).getAllByRole("row");
+    const quotaRow = within(rows.find((r) => within(r).queryByText(GREENFIELD.name))!);
+    // The symptom first: the row claimed this profile bounds nothing.
+    expect(quotaRow.queryByText(GOV.LIMITS_NONE)).toBeNull();
+    expect(quotaRow.getByText(GOV.LIMIT_QUOTA_LABEL(3))).toBeInTheDocument();
+    // The genuinely unlimited profile still reads None — the new field must not
+    // have turned every row into "one limit set".
+    const noneRow = within(rows.find((r) => within(r).queryByText(PLATFORM.name))!);
+    expect(noneRow.getByText(GOV.LIMITS_NONE)).toBeInTheDocument();
+  });
+
+  it("says 'run', not 'runs', for a cap of one", async () => {
+    renderScreen(snapshot({ profiles: [profile({ limits: { max_concurrent_runs: 1 } }), PLATFORM] }));
+    await screen.findByText(GREENFIELD.name);
+    expect(within(screen.getAllByRole("table")[0]).getByText(GOV.LIMIT_QUOTA_LABEL(1))).toBeInTheDocument();
   });
 });

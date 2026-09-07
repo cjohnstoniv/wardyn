@@ -141,6 +141,26 @@ describe("GettingStarted (member direct navigation — B4 HIGH-4)", () => {
     expect(screen.queryByText("Sandboxed. Governed. Self-hosted. Free.")).not.toBeInTheDocument();
   });
 
+  // R4/F034: the guard was two-valued (`role === "member"`) after role became
+  // three-valued, so a security admin fell THROUGH to the deployer funnel —
+  // built from a SetupStatus the server redacts for them
+  // (redactSetupStatusForMember zeroes Checks/Providers/Secrets,
+  // internal/api/setup.go), driving mutations that are super-admin-only.
+  // setupGateActive already reads `!== "admin"` for exactly this reason.
+  it("a security admin sees the member Getting Started, not the deployer funnel", async () => {
+    // The literal redacted payload the server hands a non-operator.
+    getSetupStatusMock.mockResolvedValue(status({ checks: [], providers: [], secrets: { present: [], github_app: false } }));
+    render(
+      <MemoryRouter>
+        <RoleProvider role="security_admin">
+          <GettingStarted onDone={() => {}} />
+        </RoleProvider>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("Getting started")).toBeInTheDocument();
+    expect(screen.queryByText("Sandboxed. Governed. Self-hosted. Free.")).not.toBeInTheDocument();
+  });
+
   it("an admin (or the fail-open default) still sees the welcome hero", async () => {
     render(<GettingStarted onDone={() => {}} />);
     expect(screen.getByText("Sandboxed. Governed. Self-hosted. Free.")).toBeInTheDocument();

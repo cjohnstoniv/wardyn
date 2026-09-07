@@ -231,3 +231,109 @@ test.describe("auth / sign-in gate", () => {
     expect(await readToken(page)).toBeNull();
   });
 });
+
+// R4/F027 — a 5xx from the daemon is not a statement about the caller.
+//
+// probeAuth used to return a bare boolean, so a 500 on the mount probe was
+// byte-identical to a 401: App.tsx set auth="unauthed" and rendered the gate,
+// while the console's ONE reachability signal (refreshHealth / the unreachable
+// banner) was itself gated behind auth==="authed" and so never ran. The console
+// therefore told a signed-in operator they were signed out and offered no hint
+// that anything was down. probeAuth now answers "unreachable" for that case and
+// App.tsx records it on the same flag the banner reads, with the health poll
+// running in every auth state so the flag clears itself.
+//
+// DEFERRED (Docker down for the R4 fix wave — never run, never skipped):
+//   DOCKER_HOST=unix:///var/run/docker.sock WARDYN_E2E_ADDR=:8288 \
+//   WARDYN_E2E_UI_ADDR=:8289 WARDYN_E2E_PG_CONTAINER=wardyn-profiles-pg \
+//   WARDYN_E2E_PG_HOSTPORT=localhost:55434 ./scripts/run-ui-e2e.sh e2e/auth.spec.ts
+test.describe("outage vs. rejection (R4/F027)", () => {
+  test("a 5xx mount probe does not clear a stored token the daemon never rejected", async ({ page }) => {
+    // The daemon is up enough to serve the console, but the runs list 500s —
+    // a store outage, a rolling restart, a failing-over Postgres.
+    await page.route("**/api/v1/runs?limit=1", (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "database unavailable" }),
+      }),
+    );
+    await bootWithStoredToken(page, GOOD_TOKEN);
+
+    // The gate is the honest screen (no verified session), but the token was
+    // never rejected — a 401 clears it, a 500 must not.
+    await expect(signInToken(page)).toBeVisible();
+    expect(await readToken(page)).toBe(GOOD_TOKEN);
+    // …and the console never claims the token was refused, because nothing
+    // refused it.
+    await expect(page.getByText(/admin token was rejected/i)).toHaveCount(0);
+  });
+
+  test("the gate keeps asking /healthz, so an SSO-only deployment is not left with no way in", async ({ page }) => {
+    // /healthz is down for the gate's FIRST read only. The one-shot mount fetch
+    // this replaced read that as sso:false and never asked again.
+    let served = 0;
+    await page.route("**/healthz", async (route) => {
+      served += 1;
+      if (served === 1) return route.fulfill({ status: 503, body: "" });
+      return route.fallback();
+    });
+    await clearTokenInit(page);
+    await page.goto("/");
+    await expect(signInToken(page)).toBeVisible();
+
+    // The SSO control is present either way; what must NOT happen is it being
+    // frozen on the outage's answer. On an OIDC deployment the link appears on a
+    // later poll; on a token-only one the button stays disabled — in both cases
+    // the gate has asked more than once.
+    await expect
+      .poll(() => served, { timeout: 30_000 })
+      .toBeGreaterThan(1);
+  });
+});
+
+// R4/F116 — MID-SESSION EXPIRY, the one auth path no spec in either tier drove.
+//
+// wfetch routes every 401 to the module-level onUnauthorized handler, and
+// App.tsx wires that to setAuth("unauthed") — the sign-in gate. It is the
+// console's ONLY route back to a door the human can open once an SSO session
+// dies or an admin token is revoked mid-work; without it the operator keeps a
+// console that answers 401 to everything and never says why. Deleting the
+// handler call left the whole vitest suite green, and every spec above boots
+// EITHER already authenticated OR already rejected: none revokes a session that
+// the console has already accepted.
+//
+// DEFERRED (Docker down for the R4 fix wave — never run, never skipped):
+//   DOCKER_HOST=unix:///var/run/docker.sock WARDYN_E2E_ADDR=:8288 \
+//   WARDYN_E2E_UI_ADDR=:8289 WARDYN_E2E_PG_CONTAINER=wardyn-profiles-pg \
+//   WARDYN_E2E_PG_HOSTPORT=localhost:55434 ./scripts/run-ui-e2e.sh e2e/auth.spec.ts
+test.describe("a session revoked mid-run (R4/F116)", () => {
+  test("a 401 arriving on an ALREADY-authenticated console returns to the sign-in gate", async ({
+    page,
+  }) => {
+    // In, the ordinary way: a stored token the daemon accepts.
+    await bootWithStoredToken(page, GOOD_TOKEN);
+    await expect(runsNav(page)).toBeVisible();
+
+    // Now the session dies underneath the console: every API call 401s from
+    // here on, exactly as it would after an SSO session expiry or a revoked
+    // token. /healthz is left alone — the daemon is up, it is this CALLER who
+    // is no longer welcome, and that is the distinction the gate must draw.
+    await page.route("**/api/v1/**", (route) =>
+      route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "unauthorized" }),
+      }),
+    );
+
+    // The console's own polls (the attention badge / the run list) reach the
+    // 401 on their own; a navigation guarantees a call without waiting one out.
+    await runsNav(page).click();
+
+    await expect(signInToken(page)).toBeVisible();
+    // …and the gate is a real door, not a dead end: the submit control is there
+    // to be used.
+    await expect(useTokenButton(page)).toBeVisible();
+  });
+});

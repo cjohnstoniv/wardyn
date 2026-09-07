@@ -21,9 +21,11 @@
 // access-panel.tsx's withMono helper), not baked into the string itself.
 //
 // Casing rule (§7.2): a {role}/{defaultRole} interpolated INSIDE a sentence is
-// lowercase ("admin"/"member") — PEOPLE.ROLE_ADMIN/ROLE_MEMBER below are the
-// ONLY title-case forms (the chip/label shape) and are never interpolated
-// into a sentence as-is.
+// lowercase ("admin"/"security admin"/"member"). PEOPLE.ROLE_ADMIN /
+// ROLE_SECURITY_ADMIN / ROLE_MEMBER below are the ONLY title-case forms — the
+// chip/label shape — and a sentence takes the chip's LOWERCASE rather than the
+// chip as-is; access-panel.tsx's roleLabelInSentence is the one derivation that
+// owns that lowering (a fourth tier is one case there, not a new rule here).
 
 export const PEOPLE = {
   TABLE_TITLE: "Role mappings",
@@ -40,7 +42,9 @@ export const PEOPLE = {
   // DIRECTORY.ROLE_SECURITY_ADMIN. It lives HERE, next to ROLE_ADMIN/
   // ROLE_MEMBER, because §7.9 says so in as many words ("one string for all
   // three" — picker option, table chip, mapped-role label — "next to
-  // PEOPLE.ROLE_ADMIN / PEOPLE.ROLE_MEMBER, which is why it is title case").
+  // PEOPLE.ROLE_ADMIN / PEOPLE.ROLE_MEMBER, which is why it is title case AS
+  // THE CHIP/LABEL FORM"). A sentence takes its lowercase — see the casing
+  // rule above.
   // When Phase 6's governance-copy.ts transcribes §7.9's DIRECTORY block for
   // the combobox, it re-exports this constant rather than retyping the
   // string: two homes for one frozen label is how they drift.

@@ -115,6 +115,14 @@ export interface ShellMeta {
   // operator-context.tsx's UserDriveContext for the whole argument).
   userDrive: MeUserDrive | null;
   userDriveDeniedByProfile: string;
+  // R4/F091 — the THIRD drive key: WHY /me could not answer, "" when it could.
+  // The server always sends it on 0.7 and suppresses the allocation alongside
+  // it; without it four distinguishable answers reach the member as the single
+  // one whose remedy is wrong for all of them (operator-context.tsx's
+  // UserDriveMeta.unavailable carries the whole argument). Same fail-closed
+  // default as the two above: an unresolved or failed /me reads as "" —
+  // nothing is claimed about a drive that is also null.
+  userDriveUnavailable: string;
 }
 
 function useMeta(): ShellMeta {
@@ -132,6 +140,7 @@ function useMeta(): ShellMeta {
     memberLocalDirRoot: null,
     userDrive: null,
     userDriveDeniedByProfile: "",
+    userDriveUnavailable: "",
   });
   React.useEffect(() => {
     let alive = true;
@@ -156,6 +165,7 @@ function useMeta(): ShellMeta {
           memberLocalDirRoot: me?.member_local_dir_root ?? null,
           userDrive: me?.user_drive ?? null,
           userDriveDeniedByProfile: me?.user_drive_denied_by_profile ?? "",
+          userDriveUnavailable: me?.user_drive_unavailable ?? "",
         });
       })
       .catch(() => {
@@ -471,6 +481,7 @@ export function AppShell({
       memberLocalDirRoot={meta.memberLocalDirRoot}
       userDrive={meta.userDrive}
       userDriveDeniedByProfile={meta.userDriveDeniedByProfile}
+      userDriveUnavailable={meta.userDriveUnavailable}
     >
       <RoleProvider role={meta.role} roleResolved={meta.resolved}>
         <FocusContext.Provider value={focusValue}>

@@ -3,7 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { describe, it, expect } from "vitest";
+
 import { ACCESS_ERROR, GUARD, PEOPLE, PREVIEW, SIGNIN } from "./people-access-copy";
 
 // Sentinel byte-exact pins against docs/design/people-access-prompt.md §7 — a
@@ -94,8 +98,10 @@ describe("people-access-copy — SIGNIN arms (§7.7)", () => {
   });
 });
 
-// Casing rule (§7.2): {role} interpolated INSIDE a sentence is lowercase; the
-// ROLE_ADMIN/ROLE_MEMBER chip labels are the only title-case forms.
+// Casing rule (§7.2): {role} interpolated INSIDE a sentence is lowercase —
+// "admin"/"security admin"/"member"; the ROLE_ADMIN/ROLE_SECURITY_ADMIN/
+// ROLE_MEMBER chip labels are the only title-case forms, and a sentence takes
+// the chip's lowercase via access-panel.tsx's roleLabelInSentence.
 describe("people-access-copy — casing rule", () => {
   it("ROLE_ADMIN/ROLE_MEMBER are title case (chip labels only)", () => {
     expect(PEOPLE.ROLE_ADMIN).toBe("Admin");
@@ -106,5 +112,56 @@ describe("people-access-copy — casing rule", () => {
     expect(GUARD.FIRST_ROW_BODY("an admin", "sign in as a member")).not.toMatch(/After this mapping, they will Sign/);
     expect(PREVIEW.RESULT_MATCHED("admin", "x")).toContain("as admin");
     expect(PREVIEW.RESULT_MATCHED("admin", "x")).not.toContain("as Admin");
+  });
+
+  // THE DOC HALF of the same rule (R4/F033). renderPreviewResult now lowers a
+  // THIRD tier into RESULT_MATCHED/_DEFAULT/_LEGACY via roleLabelInSentence
+  // (access-panel.tsx), so a security_admin verdict reads "Would sign in as
+  // security admin — matched by …" where it used to read "member". §7.2's rule
+  // enumerated only admin/member, which made the doc false about a shipped
+  // string; these pin the enumeration and the one derivation that owns it, in
+  // both docs, so neither can drift back.
+  it("people-access-prompt §7.2's casing rule names the lowercase third tier and its derivation", () => {
+    const doc = readFileSync(resolve(process.cwd(), "../docs/design/people-access-prompt.md"), "utf8");
+    const rule = doc.slice(doc.indexOf("**Casing rule:**"), doc.indexOf("`COL_ADDED`'s chart-row"));
+    expect(rule).not.toBe("");
+    expect(rule).toContain("`security admin`");
+    expect(rule).toContain("ROLE_SECURITY_ADMIN");
+    expect(rule).toContain("roleLabelInSentence");
+    // The in-sentence form is exactly the chip's lowercase — the module is the
+    // truth for the chip, so the doc's third-tier word is derived, not retyped.
+    expect(PEOPLE.ROLE_SECURITY_ADMIN).toBe("Security admin");
+    expect(rule).toContain(PEOPLE.ROLE_SECURITY_ADMIN.toLowerCase());
+    // THE MODULE HALF (R4/CANON-F033-B). The doc is not the only place this
+    // rule is written down: people-access-copy.ts's own header transcribes it,
+    // and that transcription enumerated admin/member only. Rule (b) moves the
+    // module WITH the doc, so pin the module's copy of the rule too — a doc
+    // fixed alone rots back the moment the next author reads the source.
+    const mod = readFileSync(resolve(process.cwd(), "src/app/lib/people-access-copy.ts"), "utf8");
+    const modRule = mod.slice(mod.indexOf("// Casing rule (§7.2)"), mod.indexOf("export const PEOPLE"));
+    expect(modRule).not.toBe("");
+    expect(modRule).toContain(PEOPLE.ROLE_SECURITY_ADMIN.toLowerCase());
+    expect(modRule).toContain("ROLE_SECURITY_ADMIN");
+    expect(modRule).toContain("roleLabelInSentence");
+    expect(modRule).not.toMatch(/never interpolated into a sentence/);
+  });
+
+  it("governance-prompt §7.9 agrees — title case as the CHIP, lowercased in a sentence", () => {
+    const gov = readFileSync(resolve(process.cwd(), "../docs/design/governance-prompt.md"), "utf8");
+    const from = gov.indexOf("`ROLE_SECURITY_ADMIN` is the picker option");
+    expect(from).toBeGreaterThan(-1);
+    const note = gov.slice(from, gov.indexOf("\n\n", from));
+    expect(note).toContain("`security admin`");
+    expect(note).toContain("roleLabelInSentence");
+    // The statement F033 falsified, gone: it IS interpolated, lowercased.
+    expect(note).not.toMatch(/title case and never interpolated into a sentence/);
+    // THE MODULE HALF (R4/CANON-F033-B): governance-copy.ts cites §7.9 as its
+    // authority and quoted that same retired sentence verbatim, so the doc fix
+    // left the code contradicting the doc it points at.
+    const govMod = readFileSync(resolve(process.cwd(), "src/app/lib/governance-copy.ts"), "utf8");
+    const govNote = govMod.slice(govMod.indexOf("// RE-EXPORTED, never retyped"), govMod.indexOf("ROLE_SECURITY_ADMIN: PEOPLE.ROLE_SECURITY_ADMIN"));
+    expect(govNote).not.toBe("");
+    expect(govNote).not.toMatch(/never interpolated into a sentence/);
+    expect(govNote).toContain("roleLabelInSentence");
   });
 });

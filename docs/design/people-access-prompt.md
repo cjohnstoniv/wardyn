@@ -307,9 +307,16 @@ Value shown for `DEFAULT_ROLE_LABEL` when set: `ROLE_ADMIN` or `ROLE_MEMBER`, re
 separate string) — see Q2 (§9) on the display treatment.
 
 **Casing rule:** `{role}`/`{defaultRole}` interpolations inside a sentence (§7.3, §7.5, §7.7)
-are lowercase — `admin`/`member` — the way prose names a role mid-sentence. `ROLE_ADMIN` /
-`ROLE_MEMBER` above are the chip/label forms only (`Admin`/`Member`, title case) and are never
-interpolated into a sentence as-is.
+are lowercase — `admin`/`security admin`/`member` — the way prose names a role mid-sentence.
+`ROLE_ADMIN` / `ROLE_MEMBER` above, and `ROLE_SECURITY_ADMIN` (frozen in `governance-prompt.md`
+§7.9, shipped in this module beside them), are the chip/label forms only (`Admin` / `Member` /
+`Security admin`, title case) and are never interpolated into a sentence **as-is**: a sentence
+takes the LOWERCASE of the chip, which for the third tier is `security admin` — so a
+`security_admin` preview verdict reads "Would sign in as security admin — matched by
+{matched}.", never "member". One derivation owns that lowering (`roleLabelInSentence`,
+`ui/src/app/components/screens/setup/access-panel.tsx`, derived from the `roleLabel` chip form
+beside it), so a fourth tier is one case there and no new rule here; an unrecognized claim value
+renders ITSELF rather than a role it is not.
 
 `COL_ADDED`'s chart-row cells show `ADDED_CHART_NA` (chart rows have no console-tracked add
 time). Console-row cells show a relative timestamp — reuse the existing

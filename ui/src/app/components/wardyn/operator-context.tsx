@@ -71,9 +71,30 @@ export interface UserDriveMeta {
   /** The governance profile's NAME when its DenyUserDrive limit refuses this
    *  caller a drive; "" when it does not. */
   deniedByProfile: string;
+  /** WHY /me could not answer for this caller's drive; "" when it could.
+   *
+   *  R4/F091 — THE THIRD KEY, and the reason there are three rather than two
+   *  (internal/api/me.go:126-137). `drive: null` alone means "you have no
+   *  allocation", which is ADVICE ("ask an admin for one") — and it was also
+   *  what a member got when their group snapshot was stale, when their
+   *  allocation could not name a directory, and when the store was down. The
+   *  server ships the reason as a closed vocabulary beside the null
+   *  (`groups_snapshot_stale` / `unmountable` / `unavailable` /
+   *  `governance_unavailable`, user_drives_resolve.go) and suppresses the
+   *  allocation alongside it; the console typed the key and then read it
+   *  nowhere, so all four arrived as the one answer whose remedy is wrong for
+   *  every one of them.
+   *
+   *  Carried here so a consumer CAN tell them apart. Non-empty means the drive
+   *  affordance must not be offered — the server has not said the mount would
+   *  work. RENDERING the per-reason remedy is a copy change and a mock round
+   *  (CONSOLE-RULES §12); this is the plumbing it will read, and until it lands
+   *  the consumers behave exactly as they do today, because `drive` is null in
+   *  every one of these states anyway. */
+  unavailable: string;
 }
 
-const NO_USER_DRIVE: UserDriveMeta = { drive: null, deniedByProfile: "" };
+const NO_USER_DRIVE: UserDriveMeta = { drive: null, deniedByProfile: "", unavailable: "" };
 const UserDriveContext = React.createContext<UserDriveMeta>(NO_USER_DRIVE);
 
 // Whether the signed-in caller holds the SECURITY-governance tier — admin OR
@@ -122,6 +143,7 @@ export function OperatorProvider({
   memberLocalDirRoot = null,
   userDrive = null,
   userDriveDeniedByProfile = "",
+  userDriveUnavailable = "",
   children,
 }: {
   operator: boolean;
@@ -137,14 +159,22 @@ export function OperatorProvider({
   memberLocalDirRoot?: string | null;
   userDrive?: MeUserDrive | null;
   userDriveDeniedByProfile?: string;
+  /** GET /me's `user_drive_unavailable` — see UserDriveMeta.unavailable.
+   *  Defaults to "" ("nothing is wrong") so every existing caller that passes
+   *  only the first two keeps today's behaviour. */
+  userDriveUnavailable?: string;
   children: React.ReactNode;
 }) {
   // Memoised: the two /me fields are a fresh object literal on every shell
   // render otherwise, which would re-render every drive consumer on each
   // heartbeat tick for a value that never changed.
   const drive = React.useMemo<UserDriveMeta>(
-    () => ({ drive: userDrive ?? null, deniedByProfile: userDriveDeniedByProfile }),
-    [userDrive, userDriveDeniedByProfile],
+    () => ({
+      drive: userDrive ?? null,
+      deniedByProfile: userDriveDeniedByProfile,
+      unavailable: userDriveUnavailable,
+    }),
+    [userDrive, userDriveDeniedByProfile, userDriveUnavailable],
   );
   return (
     <OperatorContext.Provider value={operator}>
