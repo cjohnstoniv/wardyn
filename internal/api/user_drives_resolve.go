@@ -279,7 +279,11 @@ func (s *Server) driveWithUnusableGroups(ctx context.Context, users []string) (*
 // SET BY THE DISPLAY CALLERS, never by a middleware, so the default is
 // "enforcing" and a new enforcement seam cannot silently inherit the
 // suppression: seedRequestDrive, the launch and preflight paths and every other
-// caller reach the deciding sites unmarked and keep recording. The DECISION is
+// caller reach the deciding sites unmarked and keep recording. There are two
+// display callers — GET /me, and POST /drives/preview, whose handler doc has
+// always said it is "STILL NOT AUDITED" and whose steps reach both deciding
+// sites; the preview is the sharper case, because the row it wrote named the
+// ADMIN asking about somebody else as the refused principal. The DECISION is
 // unchanged either way — /me still refuses to answer, and still reports
 // groups_snapshot_stale on the wire; what the mark removes is only the
 // operator-facing ROW for a request nobody was refused by.
@@ -672,9 +676,25 @@ func drivePreviewWarning(tmpl types.HomeTemplate, users []string) string {
 // event: nothing is minted and nothing changes, and denyMemberDrive's
 // authz.denied row is about a member's own attempt to launch.
 //
+// AND THAT IS ENFORCED, not merely stated (R1 F227). Both of this handler's
+// steps reach a site that DOES record — drivePreviewDoorIsOpen calls
+// ceilingWithUnusableGroups, previewResolveUserDrive calls
+// driveWithUnusableGroups — so once those sites began emitting authz.denied for
+// the stale-snapshot refusal, an admin previewing a member's drive wrote a
+// denial row of their own. Executed: one preview of carol's drive produced
+// `authz.denied target=governance.ceiling actor="sub-admin-alice"` — the ADMIN
+// named as the refused principal, for a question they merely asked about
+// somebody else. That is worse than the silence F227 set out to fix: a denial
+// stream with the wrong person in it cannot be read at all.
+//
+// The whole request is marked as a DISPLAY READ, once, here rather than at each
+// step: every line of this endpoint is a display, so a step added later inherits
+// the right posture instead of having to remember it.
+//
 // Routing is D2's (SUPER-only, beside the /drives CRUD family); this handler is
 // deliberately complete so that registration is one line.
 func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) {
+	r = r.WithContext(withDisplayRead(r.Context()))
 	var req governancePreviewRequest
 	if !decodeStrict(w, r, &req) {
 		return
