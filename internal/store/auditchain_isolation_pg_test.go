@@ -49,13 +49,23 @@ func repeatableReadSchemaPool(t *testing.T) *pgxpool.Pool {
 	}
 	ctx := context.Background()
 
+	// AN UNREACHABLE SERVER IS A FAILURE, NOT AN UNMET PRECONDITION.
+	//
+	// The two guards above are the preconditions: no DSN, or a DSN this helper
+	// cannot point at another schema. Past them the operator has NAMED a server
+	// and asked for it to be used, so failing to reach it is an operational
+	// failure of the lane — and a skip here reports `ok` and exit 0 with the
+	// audit-chain ordering invariant never exercised, which is indistinguishable
+	// from having proven it. Same treatment as the sibling helpers
+	// (internal/db/migrate_pg_test.go, internal/store/store_runs_pg_test.go),
+	// which have always Fatalf'd on connect.
 	base, err := pgxpool.New(ctx, dsn)
 	if err != nil {
-		t.Skipf("connect: %v", err)
+		t.Fatalf("connect to the server WARDYN_TEST_PG names: %v", err)
 	}
 	t.Cleanup(base.Close)
 	if err := base.Ping(ctx); err != nil {
-		t.Skipf("ping: %v", err)
+		t.Fatalf("ping the server WARDYN_TEST_PG names: %v", err)
 	}
 	schema := fmt.Sprintf("wardyn_iso_%d", time.Now().UnixNano()%1_000_000_000)
 	if _, err := base.Exec(ctx, `CREATE SCHEMA `+schema); err != nil {
@@ -86,7 +96,13 @@ func repeatableReadSchemaPool(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("read default_transaction_isolation: %v", err)
 	}
 	if iso != "repeatable read" {
-		t.Skipf("default_transaction_isolation is %q, not repeatable read; this server does not accept it as a startup parameter", iso)
+		// A genuine server precondition, so it stays a skip on a lane that
+		// cannot provide it — but on a lane that CAN (the one CI runs), a skip
+		// here silently retires the only test of the posture this file exists
+		// for, so it is routed through the package's derived discipline rather
+		// than skipping unconditionally.
+		storeSkipOrFatal(t, base, "default_transaction_isolation is %q, not repeatable read; this server does not "+
+			"accept it as a startup parameter", iso)
 	}
 	if err := db.Migrate(ctx, pool); err != nil {
 		t.Fatalf("Migrate into schema %s: %v", schema, err)
