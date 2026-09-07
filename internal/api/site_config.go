@@ -398,6 +398,12 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 // integration — this is a whole-document replace, and a client with no
 // knowledge of the field would naturally omit it.
 //
+// onboarding_completed_at is server-owned in the same way, but is IGNORED
+// rather than rejected: the stored mark is carried forward and a submitted one
+// is reported back as onboarding_completed_at_ignored (see the comment at the
+// carry-forward). GET emits that key, so refusing it broke the very round-trip
+// above — and refusing it can protect nothing the carry-forward does not.
+//
 // A legacy body's artifact_overrides is folded into egress_redirects
 // (foldLegacyArtifactOverrides) before validation, so a document saved before
 // EgressRedirects existed keeps applying rather than 400ing or silently
@@ -446,32 +452,27 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Same reasoning as Integrations above: onboarding state is server-owned and
-	// is carried forward from the stored document below. A caller trying to SET
-	// it is told why rather than watching it silently not take — but ONLY when
-	// it names a different instant than the one already stored. GET emits this
-	// key (it is a plain field of the same types.SiteConfig this handler
-	// persists), so rejecting it unconditionally refused the very round-trip the
-	// doc above mandates: `wardyn site-config get > f` / `wardyn site-config
-	// apply f`, and every console save that spreads the GET document, 400ed on
-	// any install whose operator had finished the Getting Started funnel. Echoing
-	// the stored value changes nothing, so it is not an attempt to set it — and
-	// neither does naming one on an install that holds NONE. `make reset` takes
-	// the site config with the volume, so the captured corp-baseline.json
-	// applied afterwards (the capture-before-a-reset, apply-after round-trip in
-	// docs/OPERATIONS.md) and the MDM-delivered /etc/wardyn/site-config.json
-	// landing on a fresh machine (docs/DESKTOP.md) are exactly that body against
-	// a stored mark of nil — refusing them broke the very round-trip this
-	// handler exists to serve. A submitted value can never take effect either
-	// way, since the carry-forward below overwrites it unconditionally, so the
-	// 400 is reserved for the one case where it tells the caller something
-	// true: a mark the server actually HOLDS, named as a different instant.
-	// Checked HERE, against the same read the carry-forward below uses, so the
-	// comparison cannot race another writer (SEAM-1).
-	if existing.OnboardingCompletedAt != nil && cfg.OnboardingCompletedAt != nil &&
-		!cfg.OnboardingCompletedAt.Equal(*existing.OnboardingCompletedAt) {
-		writeError(w, http.StatusBadRequest, "onboarding_completed_at is managed by the setup flow, not PUT /site-config")
-		return
-	}
+	// is carried forward from the stored document below — so a submitted value is
+	// IGNORED, never refused. GET emits this key (it is a plain field of the same
+	// types.SiteConfig this handler persists), so every honest client echoes it
+	// back: `wardyn site-config get > f` / `wardyn site-config apply f`, the
+	// MDM-delivered /etc/wardyn/site-config.json that deploy/desktop re-applies on
+	// EVERY boot, and every console save that spreads the GET document. Rejecting
+	// the key outright 400ed all three; rejecting only a value that names a
+	// DIFFERENT instant than the stored one still 400ed the two recovery flows
+	// this handler exists to serve — the MDM file, once that laptop finishes its
+	// own funnel and holds a mark of its own, and capture / `make reset` /
+	// re-onboard / apply, where the captured baseline names the install's PREVIOUS
+	// mark. Neither refusal protected anything: the carry-forward below overwrites
+	// the submitted value unconditionally, so a body can never SET, CLEAR or MOVE
+	// the server's mark whatever it says. What the caller gets instead of a 400 is
+	// a true report — onboarding_completed_at_ignored in the response, beside
+	// dangling_secret_refs, which `wardyn site-config apply` prints as a warning
+	// the way it prints the integrations one, so the drop is never silent.
+	// Computed HERE, against the SAME read the carry-forward below uses, so it
+	// cannot race another writer (SEAM-1).
+	ignoredOnboardingMark := cfg.OnboardingCompletedAt != nil &&
+		(existing.OnboardingCompletedAt == nil || !cfg.OnboardingCompletedAt.Equal(*existing.OnboardingCompletedAt))
 	cfg.Integrations = existing.Integrations
 	// Carry forward, or a round-trip PUT by any client erases the install's
 	// onboarding state — the exact footgun already solved once for Integrations.
@@ -496,18 +497,29 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// reference a secret that was never restored — never rejected (dangling is
 	// a valid mid-recovery state), always reported.
 	writeJSON(w, http.StatusOK, siteConfigPutResponse{
-		SiteConfig:         saved,
-		DanglingSecretRefs: danglingSiteConfigSecretRefs(saved, s.presentSecretNames(r.Context())),
+		SiteConfig:                   saved,
+		DanglingSecretRefs:           danglingSiteConfigSecretRefs(saved, s.presentSecretNames(r.Context())),
+		OnboardingCompletedAtIgnored: ignoredOnboardingMark,
 	})
 }
 
 // siteConfigPutResponse is PUT /site-config's response body: the persisted
-// document plus DanglingSecretRefs (see danglingSiteConfigSecretRefs). GET
+// document plus the write's advisory signals — DanglingSecretRefs (see
+// danglingSiteConfigSecretRefs) and OnboardingCompletedAtIgnored. GET
 // /site-config deliberately returns the bare types.SiteConfig, not this type —
-// DanglingSecretRefs is a freshly-computed, PUT-time-only signal, never
-// persisted, so it must never round-trip through a `site-config get` capture
-// back into a later `site-config apply` body.
+// both signals are freshly-computed, PUT-time-only facts, never persisted, so
+// neither must ever round-trip through a `site-config get` capture back into a
+// later `site-config apply` body.
 type siteConfigPutResponse struct {
 	types.SiteConfig
 	DanglingSecretRefs []string `json:"dangling_secret_refs,omitempty"`
+	// OnboardingCompletedAtIgnored reports that the request body named an
+	// onboarding_completed_at the server did not keep — a different instant
+	// than the stored mark, or any mark at all against a store that holds
+	// none. The write still succeeded: the field is server-owned and always
+	// carried forward, so this is a REPORT of a dropped value, never a
+	// refusal (see handlePutSiteConfig). It is what the capture/reset/apply
+	// and MDM every-boot flows see instead of the 400 that used to break
+	// them, and `wardyn site-config apply` prints it as a warning.
+	OnboardingCompletedAtIgnored bool `json:"onboarding_completed_at_ignored,omitempty"`
 }

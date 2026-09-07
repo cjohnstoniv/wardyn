@@ -66,6 +66,27 @@ func TestClassifyLLMBothSpellingsOfEveryPromptBearingArm(t *testing.T) {
 		{"anthropic", http.MethodPost, "v1/models", scanOpaque},
 		{"anthropic", http.MethodGet, "models", scanNone},
 		{"anthropic", http.MethodGet, "v1/models", scanNone},
+		// F088/F112 SECOND AXIS — the VERB. hasScannableBody accepts POST, PUT
+		// and PATCH, so a PUT/PATCH body reaches the vendor exactly as a POST
+		// body does; the classifiers used to answer scanNone for anything but a
+		// POST, which made `PUT /v1/messages` a silent brokered forward with the
+		// secret in the body under mode=block. Every body-bearing verb that is
+		// not the vendor's documented POST must land on the fail-closed default.
+		{"anthropic", http.MethodPut, "v1/messages", scanOpaque},
+		{"anthropic", http.MethodPatch, "v1/messages", scanOpaque},
+		{"anthropic", http.MethodPut, "messages", scanOpaque},
+		{"anthropic", http.MethodPatch, "v1/messages/count_tokens", scanOpaque},
+		{"anthropic", http.MethodPut, "v1/files", scanOpaque},
+		{"openai", http.MethodPut, "v1/chat/completions", scanOpaque},
+		{"openai", http.MethodPatch, "v1/chat/completions", scanOpaque},
+		{"openai", http.MethodPut, "chat/completions", scanOpaque},
+		{"openai", http.MethodPut, "v1/files", scanOpaque},
+		// Bodiless verbs stay quiet on BOTH vendors — the negative control that
+		// keeps the fix from turning every read into an uninspected-channel row.
+		{"anthropic", http.MethodDelete, "v1/files/abc", scanNone},
+		{"anthropic", http.MethodHead, "v1/models", scanNone},
+		{"openai", http.MethodDelete, "v1/files/abc", scanNone},
+		{"openai", http.MethodHead, "v1/models", scanNone},
 	}
 	for _, tc := range cases {
 		t.Run(tc.channel+"/"+tc.method+"/"+tc.rest, func(t *testing.T) {

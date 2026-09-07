@@ -504,9 +504,19 @@ also releases `example.org:22`, `:5432` and every other port for whatever reach
 the scope names — with **no further approval raised**, and, on `always`,
 permanently for every future run of the workspace. This is the same "every
 port, not just 443" reading the deny paragraph above states, applied to
-allows: read the scope column as *how long*, never as *how narrow*. If a host
-must not be reachable on its other ports, deny it (`denied_domains`) — the
-proxy returns on a deny before it ever considers an approval.
+allows: read the scope column as *how long*, never as *how narrow*.
+
+**There is no way to approve one port and refuse another on the same host.**
+`denied_domains` is not that remedy: a bare deny entry is port-blind too, so
+denying `files.example.org` takes `:443` away with `:22`. What CAN be
+port-scoped is the ALLOWLIST, which does accept a `host:port` qualifier
+(`allowed_domains: ["files.example.org:443"]`, `classifyDomain` in
+`internal/egress/proxy/policy.go`) — but only for a host the policy already
+names, since an approval-raised host is exactly the case where no allowlist
+entry exists yet. So the honest options for a host whose other ports must stay
+closed are: allow-list it port-qualified instead of leaving it to first-use
+approval, or deny it outright and accept that the deny is host-wide (the proxy
+returns on a deny before it ever considers an approval).
 
 An unrecognised `decision_scope` is rejected at write time, same as
 `first_use_approval` above — `Valid()` only accepts empty or one of the four

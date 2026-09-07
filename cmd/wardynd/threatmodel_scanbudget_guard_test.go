@@ -70,19 +70,36 @@ func TestThreatModelDocScanBudgetCaveatPresent(t *testing.T) {
 	}
 }
 
-// B7 (R3 scan-git fix-up round 4): THREAT-MODEL.md 5.1a's findings-cap bullet
-// stated the severity keep-back UNCONDITIONALLY ("a finding AT OR ABOVE
-// `block_min_severity` is kept ... and still blocks under `mode=block`" reads
-// as a description of the cap's general behavior, not a mode=block-only one),
-// but the code (internal/contentscan/contentscan.go) only keeps a
-// block-relevant finding back in ModeBlock — in mode=alert every finding past
-// the cap is dropped regardless of severity, so an operator running alert
-// mode (5.1a's own baseline configuration) is told their critical finding
-// survives truncation into the decision log when it does not. This guard
-// fails if the bullet ever again describes the keep-back without scoping it
-// to mode=block, or drops the alert-mode "dropped regardless of severity"
-// disclosure.
-func TestThreatModelDocFindingsCapKeepBackScopedToBlockMode(t *testing.T) {
+// B7 (R3 scan-git fix-up round 4, RE-DERIVED in the adversarial fix-up round):
+// THREAT-MODEL.md 5.1a's findings-cap bullet must state what the cap actually
+// does, and the code moved under it.
+//
+// Round 4's claim was "the severity keep-back applies under `mode=block` ONLY;
+// under `mode=alert` findings past the cap are dropped regardless of severity"
+// — true of the code as it then stood, and the reason this guard exists. The
+// adversarial round found that behaviour is itself the defect (F075): alert
+// mode's only product IS the alert, and 900 cheap low-severity findings evicted
+// the operator's high-severity one from it. internal/contentscan now applies
+// severity priority in EVERY mode — block mode GROWS the report to a hard
+// ceiling, every other mode DISPLACES a retained below-threshold finding — so
+// the doc claim is re-derived here against the merged tree rather than skipped.
+//
+// The guard therefore asserts the CODE premise (the keep-back is not
+// conditioned on ModeBlock) and the DOC's two disclosures: severity priority in
+// every mode, and that findings below the threshold are still dropped, so the
+// decision log remains truncated rather than complete.
+func TestThreatModelDocFindingsCapKeepBackAppliesInEveryMode(t *testing.T) {
+	// Premise: the keep-back arm no longer gates on the mode.
+	src := readRepoFile(t, "internal/contentscan/contentscan.go")
+	if strings.Contains(src, "if e.mode == ModeBlock && severityRank(f.Severity) >= severityRank(e.blockMin)") {
+		t.Fatal("the findings-cap keep-back is gated on ModeBlock again — re-derive this doc claim " +
+			"(and F075's alert-mode pin) before trusting this guard")
+	}
+	if !strings.Contains(src, "severityRank(kept[displace].Severity)") {
+		t.Fatal("the non-block displacement arm is gone from ScanRequest's truncation — the doc's " +
+			"\"survives in every mode\" claim would no longer be true")
+	}
+
 	doc := readRepoFile(t, "threatmodel/THREAT-MODEL.md")
 	idx := strings.Index(doc, "A separate **findings cap**")
 	if idx < 0 {
@@ -94,17 +111,26 @@ func TestThreatModelDocFindingsCapKeepBackScopedToBlockMode(t *testing.T) {
 	if end := strings.Index(bullet, "\n- **Walled-garden coverage"); end > 0 {
 		bullet = bullet[:end]
 	}
-	if !strings.Contains(bullet, "under `mode=block`") {
-		t.Fatal("5.1a's findings-cap bullet must scope the severity keep-back to `mode=block` " +
-			"explicitly — the code (contentscan.go) only exempts a block-relevant finding from the " +
-			"cap when e.mode == ModeBlock; stating the keep-back without that scope tells an " +
-			"alert-mode operator their critical finding survives truncation when it does not (B7)")
+	for _, want := range []string{
+		"in EVERY mode", // the keep-back's scope
+		"mode=block",    // ... and how it differs per mode
+		"mode=alert",
+		"DISPLACES",
+		"truncated, not complete", // the honest ceiling that survives the fix
+	} {
+		if !strings.Contains(bullet, want) {
+			t.Fatalf("5.1a's findings-cap bullet no longer says %q — it must state that a finding at or "+
+				"above `block_min_severity` survives the cap in every mode (block by keeping it past the "+
+				"cap, alert by displacing a lower-severity one) AND that lower-severity findings past the "+
+				"cap are still dropped, so the decision log is truncated. Bullet text:\n%s", want, bullet)
+		}
 	}
-	hasSeverityDisclosure := strings.Contains(bullet, "regardless of severity") ||
-		strings.Contains(bullet, "REGARDLESS OF SEVERITY")
-	if !strings.Contains(bullet, "mode=alert") || !hasSeverityDisclosure {
-		t.Fatal("5.1a's findings-cap bullet must also disclose that under `mode=alert` (where nothing " +
-			"is enforced) findings past the cap are dropped regardless of severity, so a high-finding-" +
-			"count alert body's decision log is truncated, not complete (B7)")
+	// The BYTE bound is part of the same claim: the cap alone does not bound the
+	// decision log's size (F075's amplification finding).
+	if !strings.Contains(bullet, "field_path") || !strings.Contains(bullet, "sanitizePath") {
+		t.Fatal("5.1a's findings-cap bullet must also disclose the per-finding field_path bound " +
+			"(internal/contentscan/patterns.go, sanitizePath): the findings cap bounds the NUMBER of " +
+			"findings, and without the byte bound a 0.3 MiB body of long agent-authored keys still " +
+			"produced a 46 MB decision log under a cap that never fired")
 	}
 }

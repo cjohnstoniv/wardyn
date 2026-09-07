@@ -420,11 +420,15 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	var bodyReader io.Reader
 	var scanSummary *egress.ScanSummary
 	var blocked bool
+	// The inspected body stays charged to maxRetainedScanBytes until this
+	// request's own round trip has consumed it (F074).
+	releaseBody := func() {}
+	defer func() { releaseBody() }()
 	if channel == contentscan.ChannelGeneric && p.scanner != nil &&
 		p.scanner.InspectForwardEgress() && p.scanner.Mode() != contentscan.ModeOff && hasScannableBody(r) {
-		bodyReader, scanSummary, blocked = p.inspectForwardBody(w, r, host, port)
+		bodyReader, scanSummary, releaseBody, blocked = p.inspectForwardBody(w, r, host, port)
 	} else {
-		bodyReader, scanSummary, blocked = p.inspectLLM(w, r, host, port, rest, channel)
+		bodyReader, scanSummary, releaseBody, blocked = p.inspectLLM(w, r, host, port, rest, channel)
 		// Honest coverage (F036): a MITM'd tunnel whose channel we cannot parse
 		// carried a body we did NOT look at. inspectLLM's scanNone default is
 		// silent by design (it is the "not prompt-bearing" case), which on THIS

@@ -2151,12 +2151,16 @@ A captured document carries `onboarding_completed_at` whenever the install it
 came from had finished the Getting Started funnel, and `apply` forwards it
 verbatim — deliberately: no client strips it, so the same file works through
 `curl` and as the MDM-delivered `/etc/wardyn/site-config.json`. The server owns
-that mark, so it is ignored on the write and the STORED one (none, on a fresh
-install) is carried forward: applying a captured baseline restores corporate
-network config, never the funnel's completion state. `PUT` refuses the body only
-when it names a *different* instant than one the server actually holds — the
-case where the caller is trying to change server-owned state rather than echo it
-back (`internal/api/site_config.go`, `handlePutSiteConfig`).
+that mark, so it is ignored on the write and the STORED one (none on a fresh
+install; this install's own once its operator has finished the funnel) is
+carried forward: applying a captured baseline restores corporate network config,
+never the funnel's completion state. `PUT` never refuses a body over this field
+— it cannot be set, cleared or moved through that endpoint whatever it says, so
+a refusal would only have broken the recovery flows (`internal/api/site_config.go`,
+`handlePutSiteConfig`). When the file's copy is dropped — a captured baseline
+applied after re-onboarding, or the MDM file re-applied to a laptop that has
+since finished its own funnel — the response says so
+(`onboarding_completed_at_ignored`) and `apply` prints it as a warning.
 
 ### Upstream proxy: plain URL vs. secret
 
@@ -2179,13 +2183,16 @@ wardyn secret set upstream-proxy-url          # paste the full, credentialed URL
 #   "upstream_proxy_secret_ref": "upstream-proxy-url"
 ```
 
-Either way, the URL is checked at the write by the **proxy sidecar's own
-loader** (`proxy.ValidUpstreamProxyURL` over `parseUpstreamProxy`), not by a
-second copy of the rule: an `http://` scheme, a host, and a port in 1-65535. A
-port the sidecar refuses used to save with `200 OK` and then `os.Exit(1)` the
-egress sidecar of every dispatched run at container start; a URL that reaches
-dispatch through the secret ref and fails the same check is dropped with an
-audited reason instead of delivered.
+Both paths are checked by the **proxy sidecar's own loader**
+(`proxy.ValidUpstreamProxyURL` over `parseUpstreamProxy`), not by a second copy
+of the rule: an `http://` scheme, a host, and a port in 1-65535. The plain
+`upstream_proxy_url` is checked at the write — a port the sidecar refuses used
+to save with `200 OK` and then `os.Exit(1)` the egress sidecar of every
+dispatched run at container start. A URL held in a secret is checked at
+DISPATCH instead, because no write-time validator can see inside the secret: it
+is dropped there with an audited reason (`unloadable-upstream-url`, a
+`run.upstream_proxy.resolve` failure) and the run falls back to direct egress
+rather than being delivered.
 
 If both fields are set, `upstream_proxy_url` wins — harmless mid-migration
 from one to the other, but don't rely on it; clear whichever you're not using.
@@ -2653,10 +2660,10 @@ Both endpoints may also carry `warning` (below).
 | `state` | Means |
 |---|---|
 | 🟢 `reached` | The path works — proxy or mirror reachable, and for a redirect, the public host is correctly *blocked* when dialed directly. |
-| ⛔ `blocked` | Could not reach the proxy or the mirror. `detail` names the real cause — DNS failure, connection refused, TLS failure, timeout, or curl's own exit code — never a generic "failed". |
+| ⛔ `blocked` | Could not reach the proxy or the mirror. `detail` names the real cause — DNS failure, connection refused, TLS failure, timeout, or curl's own exit code — never a generic "failed". It also carries the one case where the mirror answered but the direct dial of the public host produced no connection fact at all to read (a `from` curl cannot dial — a space, a path, an unsupported scheme): `detail` then says the redirect was NOT tested, and the setup gate stays held, because an untested redirect must never render as `reached`. |
 | ⛔ `bypass` | **The one that looks fine but isn't.** The mirror answers, but the public host it's supposed to replace is *also* still reachable, directly, from a sandbox. The redirect is configured but not enforced: a run can silently pull from the internet instead of the mirror, and every other signal — the row is filled in, the mirror answers — looks exactly like a working redirect. "Reachable" means the public host **answered** — any HTTP status, a 403 included, or a TLS-level reply — not that the fetch succeeded: a host that answers `403` is one the confinement class did not block, and so is one that merely **accepted** the TCP connection and then stalled (the probe reads curl's own `num_connects`, because a timeout alone cannot tell an accepted-then-tarpitted dial from one that never left the sandbox). `test-redirect` only. |
 | 🟡 `no_runner` | No runner is configured; there's nothing to launch a probe with. Not an error, and not a guess. |
-| 🟡 `not_run` | A runner IS configured, but the throwaway sandbox never got to running the probe — an image pull failure, or a confinement class this host can't enforce. Distinct from `blocked`: `blocked` means the probe DID run and observed a real network fact; `not_run` means nothing was learned either way. Setup's gate treats it the same as `no_runner` (unlocks Next with a neutral note, never a click-past). |
+| 🟡 `not_run` | A runner IS configured, but the throwaway sandbox never got to running the probe — an image pull failure, or a confinement class this host can't enforce. Distinct from `blocked`: `blocked` means the probe DID run — usually observing a real network fact, and otherwise saying in `detail` that nothing was learned; `not_run` means nothing was learned either way. Setup's gate treats it the same as `no_runner` (unlocks Next with a neutral note, never a click-past). |
 | 🟡 `timed_out` | The probe sandbox started and the task launched, but the run never reported completion within the wait budget (90s) — provably **not** a network verdict, unlike `blocked`. `detail` names the sandbox agent's own observed status at the deadline and `WARDYN_CONTROL_PLANE_URL` to check. Usual cause: the run's recording upload hanging against an unreachable control plane — see "Recording upload path on Kubernetes" below. |
 
 The recorder's upload bound ships inside the agent images: an image pinned through

@@ -91,13 +91,17 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		summary      *egress.ScanSummary
 		blocked      bool
 	)
+	// releaseBody returns the inspected body's bytes to maxRetainedScanBytes; it
+	// has to outlive the RoundTrip that reads them (F074).
+	releaseBody := func() {}
+	defer func() { releaseBody() }()
 	channel := p.channelForHost(host)
 	scanning := p.scanner != nil && p.scanner.Mode() != contentscan.ModeOff
 	switch {
 	case scanning && p.isLLMHost(host) && channel != contentscan.ChannelGeneric:
-		bodyOverride, summary, blocked = p.inspectLLM(w, r, host, port, strings.TrimPrefix(r.URL.Path, "/"), channel)
+		bodyOverride, summary, releaseBody, blocked = p.inspectLLM(w, r, host, port, strings.TrimPrefix(r.URL.Path, "/"), channel)
 	case scanning && p.scanner.InspectForwardEgress() && hasScannableBody(r):
-		bodyOverride, summary, blocked = p.inspectForwardBody(w, r, host, port)
+		bodyOverride, summary, releaseBody, blocked = p.inspectForwardBody(w, r, host, port)
 	}
 	if blocked {
 		return
@@ -127,7 +131,7 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 
 	// 5. Credential injection (plain HTTP only, exact-allow host only, and only
 	// on a transport that may carry the credential — see injectableTransport).
-	p.inject.apply(outReq, host, port)
+	p.applyInjection(outReq, host, port)
 
 	// 6. Forward to the vetted target over the pinned transport. Its DialContext
 	// dials the vetted ip:port carried on the request context (vettedIPKey), so the

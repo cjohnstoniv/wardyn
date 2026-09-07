@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 
@@ -447,6 +448,38 @@ func (p *Policy) AllowsLiteralIP(host string, port int) bool {
 	return ok
 }
 
+// AuthoredPortFor reports whether the operator authored a PORT-QUALIFIED
+// allowlist entry covering host:port — "vendor.example:8443", or the wildcard
+// form "*.example.com:8443".
+//
+// It is the closest thing the compiled policy has to declared TRANSPORT INTENT
+// (F110): a BARE entry matches any port, so it says nothing about which port
+// the operator meant; a port-qualified one is the operator naming the port in
+// writing. Credential injection over CLEARTEXT reads it that way — see
+// Proxy.injectableTransport, which asks this only AFTER its unconditional
+// clamp on port 443, so an authored `host:443` can never re-admit a cleartext
+// credential to the TLS port. Deny still beats allow, on the same two lookups
+// AllowsLiteralIP uses.
+func (p *Policy) AuthoredPortFor(host string, port int) bool {
+	if p == nil {
+		return false
+	}
+	host = canonHost(host)
+	if _, ok := p.deniedExact[host]; ok {
+		return false
+	}
+	if _, ok := p.deniedExactPort[hostPortKey(host, port)]; ok {
+		return false
+	}
+	if matchWildPort(host, port, p.deniedWildPort) {
+		return false
+	}
+	if _, ok := p.allowedExactPort[hostPortKey(host, port)]; ok {
+		return true
+	}
+	return matchWildPort(host, port, p.allowedWildPort)
+}
+
 // egressHeaderDetail carries the CAUSE behind an address-range refusal, beside
 // the static rule_source egressHeaderReason already carries.
 //
@@ -614,7 +647,9 @@ func vetHostLift(host string, res resolver, lift func(net.IP) bool) IPGuardResul
 
 // blockKind classifies why isBlockedIP denies an address. Only blockPrivate is
 // ever eligible for vetHostLift's lift predicate — the other kinds are denied
-// unconditionally, by construction (never offered to lift).
+// unconditionally, by construction (never offered to lift). blockNAT64 and
+// blockV4Compat are the two EMBEDDED-v4 shapes: an IPv6 literal whose low 32
+// bits are a blocked IPv4 that To4() cannot see.
 type blockKind uint8
 
 const (
@@ -623,7 +658,39 @@ const (
 	blockPrivate                        // RFC1918/ULA/CGNAT — the ONLY liftable kind (ipguard.Liftable)
 	blockReservedOther                  // other ipguard.ReservedV4/ReservedV6 entries — never liftable
 	blockNAT64                          // NAT64-embedded smuggling — never liftable
+	blockV4Compat                       // IPv4-compatible ::/96-embedded smuggling — never liftable
 )
+
+// v4CompatiblePrefix is the DEPRECATED IPv4-compatible IPv6 range (RFC 4291
+// §2.5.5.1): "::127.0.0.1" and "::169.254.169.254" carry a real IPv4 in their
+// low 32 bits, exactly as a NAT64 prefix does.
+//
+// It is NOT in ipguard.ReservedV6 (which denies wholesale) on purpose: the
+// prefix also contains :: and ::1, which the stdlib predicates already name
+// precisely, and denying all of ::/96 would refuse an address whose embedded
+// v4 is public. Only the embedded address decides — see isBlockedIP.
+var v4CompatiblePrefix = netip.MustParsePrefix("::/96")
+
+// v4CompatibleEmbeddedV4 returns the IPv4 embedded in the low 32 bits of an
+// IPv4-COMPATIBLE ::/96 address, and (nil, false) for anything else —
+// including an IPv4-mapped ::ffff:/96 address, which Unmap turns back into the
+// IPv4 the canonical path already judges.
+//
+// TRUST BOUNDARY: deny-only, like nonCanonicalLiteralIP. Its one consumer
+// (isBlockedIP) uses it to DENY; the extracted address is never offered to
+// trustsExactLiteralIP, so a spelling the operator did not type inherits no
+// allowed_domains grant.
+func v4CompatibleEmbeddedV4(ip net.IP) (net.IP, bool) {
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return nil, false
+	}
+	if addr = addr.Unmap(); !addr.Is6() || !v4CompatiblePrefix.Contains(addr) {
+		return nil, false
+	}
+	b := addr.As16()
+	return net.IP(b[12:16]), true
+}
 
 // isBlockedIP reports whether ip is in an unconditionally-denied range:
 // loopback, link-local (incl. the 169.254.169.254 metadata address), multicast,
@@ -677,6 +744,26 @@ func isBlockedIP(ip net.IP) (blockKind, string) {
 			return blockNAT64, "nat64-embedded " + why
 		}
 		return blockNAT64, "nat64 prefix (RFC 6052/8215)"
+	}
+	// The IPv4-COMPATIBLE ::/96 form is the THIRD embedded-v4 shape, and the one
+	// the predicates above cannot see: "::127.0.0.1" and "::169.254.169.254"
+	// carry a real IPv4 in their low 32 bits, and net.ParseIP PARSES them — so
+	// unlike the inet_aton spellings there is nothing for literal_ip_guard.go's
+	// gap-filler to fill. They arrive here on the CANONICAL path with To4() ==
+	// nil (To4 unwraps only ::ffff:/96), IsLoopback/IsLinkLocalUnicast answer
+	// false, and PrivateReserved has no ::/96 entry — so the address walked past
+	// step 0 AND past vetHostLift's literal fast path, leaving nothing but the
+	// default-deny allowlist between that spelling and a dial. Re-run the
+	// embedded v4 the same way the NAT64 arm does, so the denial names the real
+	// target and both guards agree with what dials.
+	//
+	// Only the embedded address decides (the prefix is not denied wholesale, and
+	// :: / ::1 are already named above), so this can only ADD denials that the
+	// canonical spelling of the same address already gets.
+	if embedded, ok := v4CompatibleEmbeddedV4(ip); ok {
+		if kind, why := isBlockedIP(embedded); kind != blockNone {
+			return blockV4Compat, "ipv4-compatible-embedded " + why
+		}
 	}
 	return blockNone, ""
 }

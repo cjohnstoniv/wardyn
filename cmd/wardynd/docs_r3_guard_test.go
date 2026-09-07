@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -686,6 +687,105 @@ func TestAuditActionsDocNamesTheErrorScanAction(t *testing.T) {
 	}
 }
 
+// llmScanAuditKey pulls one quoted map[string]any key out of
+// recordLLMScanAudit's body — deliberately narrow to that literal's shape
+// (lowercase, underscored) so it does not also match the doc strings or the
+// audit action literal sitting in the same function.
+var llmScanAuditKey = regexp.MustCompile(`"([a-z][a-z_]*)":`)
+
+// maxAuditFindingsConst pins the llm.scan.* doc row's truncation-bound prose
+// to the const it names, rather than a hand-typed number that can drift.
+var maxAuditFindingsConst = regexp.MustCompile(`(?m)^const maxAuditFindings = (\d+)`)
+
+// TestAuditActionsDocLLMScanDataFieldsMatchTheEmitSite (B1-AUDITACTIONS-LLMSCAN-ROW-STALE)
+// pins AUDIT-ACTIONS.md's llm.scan.* row's Data column to every key
+// recordLLMScanAudit actually marshals onto the wire.
+//
+// F075 added findings_capped, findings_past_cap and findings_reported to the
+// emit site's map[string]any{...} literal, and repointed finding_count away
+// from len(sc.Findings) to the pre-cap total — a SIEM rule author reading only
+// the doc would never learn either fact, which is exactly the case an auditor
+// hits when a scan was truncated. No prior guard read the emit site's key set
+// at all, which is why every other gate stayed green with the row wrong.
+func TestAuditActionsDocLLMScanDataFieldsMatchTheEmitSite(t *testing.T) {
+	body := methodBody(t, readSrc(t, "internal", "api", "internal.go"), "recordLLMScanAudit")
+	mapStart := strings.Index(body, "json.Marshal(map[string]any{")
+	if mapStart < 0 {
+		t.Fatalf("recordLLMScanAudit's map[string]any literal not found — the guard's anchor moved")
+	}
+	mapEnd := strings.Index(body[mapStart:], "})")
+	if mapEnd < 0 {
+		t.Fatalf("recordLLMScanAudit's map[string]any literal has no closing '})' — the guard's anchor moved")
+	}
+	mapLiteral := body[mapStart : mapStart+mapEnd]
+
+	matches := llmScanAuditKey.FindAllStringSubmatch(mapLiteral, -1)
+	if len(matches) == 0 {
+		t.Fatalf("recordLLMScanAudit's map[string]any literal has no quoted keys — the guard's anchor moved")
+	}
+	seen := map[string]bool{}
+	var keys []string
+	for _, m := range matches {
+		if k := m[1]; !seen[k] {
+			seen[k] = true
+			keys = append(keys, k)
+		}
+	}
+
+	root := repoRoot(t)
+	raw, err := os.ReadFile(filepath.Join(root, "docs", "AUDIT-ACTIONS.md"))
+	if err != nil {
+		t.Fatalf("read docs/AUDIT-ACTIONS.md: %v", err)
+	}
+	var dataCell, proseCell string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "| `llm.scan.*`") {
+			cells := strings.Split(line, "|")
+			if len(cells) < 4 {
+				t.Fatalf("llm.scan.* row has fewer cells than expected: %q", line)
+			}
+			proseCell = cells[2]
+			dataCell = cells[3]
+			break
+		}
+	}
+	if dataCell == "" {
+		t.Fatalf("docs/AUDIT-ACTIONS.md's llm.scan.* row not found — the guard's anchor moved")
+	}
+	for _, k := range keys {
+		if !strings.Contains(dataCell, "`"+k+"`") {
+			t.Errorf("docs/AUDIT-ACTIONS.md's llm.scan.* row Data column is missing %q, which recordLLMScanAudit marshals onto the wire: %q", k, strings.TrimSpace(dataCell))
+		}
+	}
+
+	// B1/B2-LLMSCAN-FINDINGS-REPORTED-NOT-THE-ROWS-ON-THE-WIRE pin the row's
+	// PROSE (not just its Data-column key list) to two code facts that a
+	// truncated-scan reader relies on: (a) the embedded `findings` array is
+	// truncated to maxAuditFindings records, a number that must move with the
+	// const rather than being hand-typed and drifting, and (b) `finding_count`
+	// exceeding `findings_reported` is a one-way implication of
+	// `findings_capped`, not an iff — block mode's severity keep-backs can
+	// leave a capped scan's two counts equal.
+	internalSrc := readSrc(t, "internal", "api", "internal.go")
+	constMatch := maxAuditFindingsConst.FindStringSubmatch(internalSrc)
+	if constMatch == nil {
+		t.Fatalf("const maxAuditFindings = <N> not found in internal/api/internal.go — the guard's anchor moved")
+	}
+	maxFindings, err := strconv.Atoi(constMatch[1])
+	if err != nil {
+		t.Fatalf("parse maxAuditFindings value %q: %v", constMatch[1], err)
+	}
+	if !strings.Contains(proseCell, strconv.Itoa(maxFindings)) {
+		t.Errorf("docs/AUDIT-ACTIONS.md's llm.scan.* row prose does not name the maxAuditFindings bound (%d) that recordLLMScanAudit truncates the embedded `findings` array to: %q", maxFindings, strings.TrimSpace(proseCell))
+	}
+	if !strings.Contains(proseCell, "ONLY when `findings_capped`") {
+		t.Errorf("docs/AUDIT-ACTIONS.md's llm.scan.* row prose must state the finding_count-exceeds-findings_reported relation as a ONE-WAY implication of findings_capped (block mode's keep-backs make the converse false), not an \"exactly when\" iff: %q", strings.TrimSpace(proseCell))
+	}
+	if strings.Contains(proseCell, "exactly when `findings_capped`") {
+		t.Errorf("docs/AUDIT-ACTIONS.md's llm.scan.* row prose still claims finding_count exceeds findings_reported \"exactly when\" findings_capped is true — that is a false iff, reproduced false by block mode's severity keep-backs: %q", strings.TrimSpace(proseCell))
+	}
+}
+
 // TestArchitectureDocGitPATProxyInjectionClaimMatchesTheBroker (F040) pins
 // ARCHITECTURE.md's git-egress prose to the PAT broker's default-on posture.
 //
@@ -715,54 +815,118 @@ func TestArchitectureDocGitPATProxyInjectionClaimMatchesTheBroker(t *testing.T) 
 	)
 }
 
-// TestThreatModelDocLiteralIPBoundNamesNonCanonicalResidual (F114) pins the
-// upstream corp-proxy residual's bound (3) to what the step-0 guard actually
-// parses.
+// TestThreatModelDocLiteralIPBoundNamesNonCanonicalResidual (F114, RE-DERIVED
+// in the adversarial fix-up round) pins the upstream corp-proxy residual's
+// bound (3) to what the step-0 guard actually parses.
 //
 // The threat model said a literal private/loopback/link-local/metadata IP "is
 // still denied at the literal-IP guard". Before R3's fix wave that promise held
 // only for spellings net.ParseIP accepts; the POSIX inet_aton forms (127.1,
 // 0x7f000001, 2130706433, 0251.0376.0.1) proceeded as ordinary hostnames and,
-// on the corp-upstream lane, reached the corp proxy verbatim. F105 (egress
-// lane) closed that gap: evaluate's step 0 is now literalIPGuard, whose
-// non-canonical arm (nonCanonicalIPv4, deny-only) covers those spellings, and
-// egressTarget's upstream branch re-runs the block check on the inet_aton
-// reading. This guard therefore pins the COVERAGE claim the doc now makes —
-// and fails loudly if the code stops delivering it, so the doc cannot outlive
-// the guard it describes.
+// on the corp-upstream lane, reached the corp proxy verbatim. F105 closed that,
+// and the adversarial round found the SAME assumption still open on a second
+// axis — a zone-suffixed IPv6 literal (fe80::1%eth0, and the RFC 6874
+// authority spelling fe80::1%25eth0), which net.ParseIP refuses, netip.ParseAddr
+// parses and net.Dial dials: the canonical fe80::1 denied at step 0 while the
+// zoned spelling went to policy and could raise a first-use approval for a
+// link-local address, which literalIPGuard's own invariant 3 says must never be
+// raisable.
+//
+// Three things are pinned, because the doc asserts all three:
+//   - the COVERAGE: step 0 and egressTarget's upstream branch both run the
+//     gap-filler, and it covers both axes;
+//   - the PAIRINGS: the doc's examples must name the address each spelling
+//     ACTUALLY resolves to (0251.0376.0.1 is 169.254.0.1, link-local — not
+//     127.0.0.1, which the merged text claimed and which glibc, the repo's own
+//     ipguard table and the guard itself all contradict);
+//   - the QUALIFIER on bound (3), so the unhedged "is still denied at the
+//     literal-IP guard" promise cannot return unnoticed: the guard covers the
+//     spellings it PARSES, and the residual it does not cover is stated.
 func TestThreatModelDocLiteralIPBoundNamesNonCanonicalResidual(t *testing.T) {
-	// (1) The premise: step 0 is literalIPGuard and its non-canonical arm exists.
+	// (1) The premise: step 0 is literalIPGuard and its non-canonical arm covers
+	// both axes.
 	eval := methodBody(t, readSrc(t, "internal", "egress", "proxy", "proxy.go"), "evaluate")
 	if !strings.Contains(eval, "literalIPGuard(") {
 		t.Fatalf("evaluate no longer routes step 0 through literalIPGuard — re-derive the doc's literal-IP bound before trusting this guard")
 	}
+	// The THIRD embedded-v4 shape the doc now claims is CLOSED rather than
+	// residual: ::127.0.0.1 / ::169.254.169.254 (RFC 4291 §2.5.5.1). net.ParseIP
+	// PARSES those, so the gap-filler is not involved — isBlockedIP's own arm is,
+	// and this assertion is what makes the doc and that arm fail together.
+	// (The behaviour itself is executed in the proxy package:
+	// TestBlockedRangesMatchPreExtractionLists and
+	// TestNonCanonicalLiteralIPIsDeniedLikeItsCanonicalSpelling.)
+	blockedIP := funcBody(t, readSrc(t, "internal", "egress", "proxy", "policy.go"), "isBlockedIP")
+	if !strings.Contains(blockedIP, "v4CompatibleEmbeddedV4(") {
+		t.Fatalf("isBlockedIP no longer re-runs the embedded v4 of an IPv4-compatible ::/96 address — " +
+			"THREAT-MODEL.md §5.1 claims ::127.0.0.1 is denied at step 0 AND in VetHost, and it is that " +
+			"arm that makes both true; re-derive the doc before deleting it")
+	}
 	lig := readSrc(t, "internal", "egress", "proxy", "literal_ip_guard.go")
-	for _, want := range []string{"func nonCanonicalIPv4(", "nonCanonicalIPv4(host)"} {
+	for _, want := range []string{
+		"func nonCanonicalLiteralIP(", "nonCanonicalLiteralIP(host)",
+		"func nonCanonicalIPv4(", "func zonedIPv6Literal(",
+	} {
 		if !strings.Contains(lig, want) {
 			t.Fatalf("literal_ip_guard.go no longer contains %q — the non-canonical coverage the doc claims has changed shape", want)
 		}
 	}
 
-	// (2) The corp-upstream branch re-runs the block check on the inet_aton
-	// reading before it forwards the name.
+	// (2) The corp-upstream branch re-runs the block check on the same reading
+	// before it forwards the name.
 	target := methodBody(t, readSrc(t, "internal", "egress", "proxy", "egress_target.go"), "egressTarget")
-	if !strings.Contains(target, "nonCanonicalIPv4(host)") {
+	if !strings.Contains(target, "nonCanonicalLiteralIP(host)") {
 		t.Fatalf("egressTarget's upstream branch no longer re-checks non-canonical literals — re-derive the doc's bound before trusting this guard")
 	}
 
-	// (3) The doc states the coverage and its deny-only property, and no longer
-	// carries the pre-F105 qualifier or the residual it used to disclose.
+	// (3) The doc states the coverage, the correct PAIRINGS, the deny-only
+	// property, and bound (3)'s qualifier.
 	doc := readDoc(t, "threatmodel/THREAT-MODEL.md")
 	mustSay(t, doc, "threatmodel/THREAT-MODEL.md",
 		"covers the NON-CANONICAL spellings too",
-		"127.1", "0x7f000001", "2130706433", "0251.0376.0.1",
-		"`nonCanonicalIPv4`",
+		"`127.1`",
+		"`0x7f000001` and `2130706433` as `127.0.0.1`",
+		"`0251.0376.0.1` as\n  `169.254.0.1`", // the pairing the merged text got wrong
+		"fe80::1%eth0",
+		"fe80::1%25eth0",
+		"`nonCanonicalLiteralIP`",
 		"Deny only: a spelling the",
+		// Bound (3) is qualified, and the residual is named rather than implied.
+		"**in every literal spelling that guard parses**",
+		"**Residual, stated rather than hedged:**",
+		"::127.0.0.1",
+		// The IPv4-compatible form is stated as CLOSED, by the arm that closes it.
+		"`v4CompatibleEmbeddedV4`",
+		"step 0 AND in `VetHost`",
+		// ...and what is genuinely left over is named, not implied.
+		"NETWORK-SPECIFIC RFC 6052 NAT64",
 	)
 	mustNotSay(t, doc, "threatmodel/THREAT-MODEL.md",
 		"in Go's `net.ParseIP` syntax",
-		"Residual, stated rather than hedged",
+		// The false pairing, in the exact shape the merge shipped it.
+		"`2130706433` and `0251.0376.0.1` as `127.0.0.1`",
+		// The false residual the adversarial round found: isBlockedIP admitted
+		// ::127.0.0.1 at step 0 AND in VetHost (vetHostLift's literal fast path
+		// calls the same predicate), so "VetHost still binds it" was never true.
+		"so it is not denied at step 0",
+		"(`VetHost`, step 4) still binds it",
 	)
+	// §4.2's FIRST statement of the same bound must carry the same qualifier and
+	// cite the file the guard actually lives in (it moved out of proxy.go).
+	s42 := doc[strings.Index(doc, "### 4.2 The unconditional IP guard"):]
+	if i := strings.Index(s42, "\n### "); i > 0 {
+		s42 = s42[:i]
+	}
+	for _, want := range []string{
+		"internal/egress/proxy/literal_ip_guard.go",
+		"in every spelling that guard parses",
+	} {
+		if !strings.Contains(s42, want) {
+			t.Fatalf("THREAT-MODEL.md §4.2's opening statement of the literal-IP bound is missing %q — "+
+				"the section bound (3) forwards the reader to must not restate the promise unqualified, "+
+				"nor cite proxy.go for a guard that lives in literal_ip_guard.go", want)
+		}
+	}
 }
 
 // TestDataFlowAuditSinkRowCarriesTheOutageQualifier (F048, round-2 residue)
@@ -791,4 +955,65 @@ func TestDataFlowAuditSinkRowCarriesTheOutageQualifier(t *testing.T) {
 		"whose Postgres write succeeded",
 		"is not re-streamed when the spool drains",
 	)
+}
+
+// TestAuditActionsRuleSourceRowsCiteEveryLiveEmitSite (F114 item 4, and the
+// adversarial fix-up's own correction of the same shape) pins the two
+// rule_source rows whose citations the R3 wave moved.
+//
+// TestAuditActionsDocCitationsAreLive cannot see this class. It parses a
+// backtick span as a CITATION only when the span carries a path, so the
+// "same file, second line" shorthand these rows used — a `proxy.go` line
+// number followed by a bare `:N` sibling — is read as a bare ANCHOR and never
+// resolved against anything. Both were wrong: the step-0 private-IP guard moved out of
+// proxy.go entirely (literal_ip_guard.go), and `builtin:dial-failed` is emitted
+// from four places, none of them the duplicated line. A citation nobody checks
+// is how the doc came to name a file the guard no longer lives in.
+//
+// So the rule here is the one the live-citation guard can then enforce: in
+// these rows every site is spelled out in full, and no bare `:N` shorthand is
+// left for a reader (or a guard) to resolve by guesswork.
+func TestAuditActionsRuleSourceRowsCiteEveryLiveEmitSite(t *testing.T) {
+	doc := readRepoFile(t, "docs/AUDIT-ACTIONS.md")
+	bareLineSpan := regexp.MustCompile("`:[0-9]+`")
+	citation := regexp.MustCompile("`(internal/[A-Za-z0-9_/.-]+\\.go):([0-9]+)`")
+
+	for _, ruleSource := range []string{"builtin:private-ip", "builtin:dial-failed"} {
+		var row string
+		for _, line := range strings.Split(doc, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "| `"+ruleSource+"` |") {
+				row = line
+				break
+			}
+		}
+		if row == "" {
+			t.Fatalf("docs/AUDIT-ACTIONS.md has no rule_source row for %q — that table is where an "+
+				"operator looks up what a decision line means; re-derive this guard before deleting it",
+				ruleSource)
+		}
+		if m := bareLineSpan.FindString(row); m != "" {
+			t.Errorf("the %s row still carries the bare line shorthand %s: "+
+				"TestAuditActionsDocCitationsAreLive resolves a span only when it names a path, so a "+
+				"bare %s is a citation nothing checks — spell the file out",
+				ruleSource, m, m)
+		}
+		sites := citation.FindAllStringSubmatch(row, -1)
+		if len(sites) < 2 {
+			t.Errorf("the %s row cites %d site(s): this rule_source is emitted from more than one "+
+				"place, and a row that names only one tells an operator the other emitters do not exist",
+				ruleSource, len(sites))
+		}
+		for _, m := range sites {
+			lines := strings.Split(readRepoFile(t, m[1]), "\n")
+			n, err := strconv.Atoi(m[2])
+			if err != nil || n < 1 || n > len(lines) {
+				t.Errorf("%s cites %s:%s, which is past the end of the file", ruleSource, m[1], m[2])
+				continue
+			}
+			if !strings.Contains(lines[n-1], ruleSource) {
+				t.Errorf("%s cites %s:%s, but that line does not emit it:\n\t%s",
+					ruleSource, m[1], m[2], strings.TrimSpace(lines[n-1]))
+			}
+		}
+	}
 }

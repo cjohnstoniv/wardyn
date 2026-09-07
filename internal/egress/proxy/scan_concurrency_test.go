@@ -70,7 +70,8 @@ func TestScanBufferedBodyBoundsConcurrentBuffering(t *testing.T) {
 	go func() {
 		defer close(firstDone)
 		req := httptest.NewRequest(http.MethodPost, "http://connector.test/a", held)
-		p.scanBufferedBody(httptest.NewRecorder(), req, contentscan.ChannelGeneric, "read body", noop)
+		_, _, release, _ := p.scanBufferedBody(httptest.NewRecorder(), req, contentscan.ChannelGeneric, "read body", noop)
+		release()
 	}()
 
 	select {
@@ -84,7 +85,8 @@ func TestScanBufferedBodyBoundsConcurrentBuffering(t *testing.T) {
 		defer close(secondDone)
 		req := httptest.NewRequest(http.MethodPost, "http://connector.test/b",
 			strings.NewReader(`{"payload":"small"}`))
-		p.scanBufferedBody(httptest.NewRecorder(), req, contentscan.ChannelGeneric, "read body", noop)
+		_, _, release, _ := p.scanBufferedBody(httptest.NewRecorder(), req, contentscan.ChannelGeneric, "read body", noop)
+		release()
 	}()
 
 	select {
@@ -143,7 +145,8 @@ func TestScanSlotWaitIsContextBoundAndFailsClosed(t *testing.T) {
 	go func() {
 		defer close(firstDone)
 		req := httptest.NewRequest(http.MethodPost, "http://connector.test/slow", held)
-		p.scanBufferedBody(httptest.NewRecorder(), req, contentscan.ChannelGeneric, "read body", noop)
+		_, _, release, _ := p.scanBufferedBody(httptest.NewRecorder(), req, contentscan.ChannelGeneric, "read body", noop)
+		release()
 	}()
 	select {
 	case <-held.entered:
@@ -169,8 +172,10 @@ func TestScanSlotWaitIsContextBoundAndFailsClosed(t *testing.T) {
 	got := make(chan outcome, 1)
 	go func() {
 		var o outcome
-		_, _, o.blocked = p.scanBufferedBody(rec, req, contentscan.ChannelGeneric, "read body",
+		var release func()
+		_, _, release, o.blocked = p.scanBufferedBody(rec, req, contentscan.ChannelGeneric, "read body",
 			func(d egress.Decision, _ string, _ *egress.ScanSummary) { o.decision, o.emitted = d, true })
+		release()
 		got <- o
 	}()
 
@@ -195,5 +200,79 @@ func TestScanSlotWaitIsContextBoundAndFailsClosed(t *testing.T) {
 			"scan-slot send: the wait is neither context-aware nor deadlined, so one slow-loris " +
 			"POST from the sandbox parks every other inspected request of the run indefinitely, " +
 			"each holding a goroutine and a socket")
+	}
+}
+
+// TestScanBufferedBodyHoldsTheBufferBudgetUntilRelease pins the F074 fix-up:
+// the bound has to cover the buffer's LIFETIME, not just the window in which it
+// is extracted and scanned.
+//
+// The scan slot was released the moment scanBufferedBody returned, while the
+// caller still held the whole buffered body and was about to stream it through
+// RoundTrip — measured on the shipped code as `len(scanSlots)=0` with 1,048,590
+// bytes still live in the returned reader. So N requests stalled on a slow
+// upstream each retained up to maxLLMScanBody (32 MiB) with NO slot held, and
+// the "two concurrent in-cap bodies exceed the 256 MiB cgroup cap" arithmetic
+// that maxConcurrentScans exists to prevent was reachable around it.
+//
+// Two claims, both asserted here: the bytes are still charged after the call
+// returns, and a request that cannot be charged fails CLOSED (Deny + 502) like
+// every other arm of this function.
+func TestScanBufferedBodyHoldsTheBufferBudgetUntilRelease(t *testing.T) {
+	p := newProxy(Options{
+		RunID:    uuid.New(),
+		Policy:   CompilePolicy(types.RunPolicySpec{AllowAllEgress: true}),
+		Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Scanner:  forwardScanEngine(t, "alert"),
+		Resolver: publicResolver{},
+	})
+	noop := func(egress.Decision, string, *egress.ScanSummary) {}
+	body := `{"payload":"a body whose bytes stay live until the caller is done with them"}`
+
+	orig := maxRetainedScanBytes
+	maxRetainedScanBytes = len(body) // room for exactly ONE of these at a time
+	t.Cleanup(func() { maxRetainedScanBytes = orig })
+
+	req := httptest.NewRequest(http.MethodPost, "http://connector.test/a", strings.NewReader(body))
+	reader, _, release, blocked := p.scanBufferedBody(httptest.NewRecorder(), req,
+		contentscan.ChannelGeneric, "read body", noop)
+	if blocked || reader == nil {
+		t.Fatalf("a clean in-cap body must be returned for forwarding (blocked=%v reader=%v)", blocked, reader)
+	}
+	if got := scanRetained.inUse(); got != len(body) {
+		t.Fatalf("bytes charged after scanBufferedBody returned = %d, want %d — the buffer is still "+
+			"reachable (the caller has not streamed it upstream yet), so it must still be charged; "+
+			"releasing at return is what let N requests retain N x 32 MiB with no slot held", got, len(body))
+	}
+
+	// While it is charged, a second body that would exceed the budget cannot be
+	// admitted — and is refused, never forwarded unscanned.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rec := httptest.NewRecorder()
+	var denied bool
+	req2 := httptest.NewRequest(http.MethodPost, "http://connector.test/b",
+		strings.NewReader(body)).WithContext(ctx)
+	_, _, release2, blocked2 := p.scanBufferedBody(rec, req2, contentscan.ChannelGeneric, "read body",
+		func(d egress.Decision, _ string, _ *egress.ScanSummary) { denied = d == egress.Deny })
+	release2()
+	if !blocked2 || !denied || rec.Code != http.StatusBadGateway {
+		t.Fatalf("a body that could not be charged to the retained-bytes budget was NOT refused "+
+			"(blocked=%v denied=%v status=%d): the budget wait fails CLOSED, exactly as the scan-slot "+
+			"wait does", blocked2, denied, rec.Code)
+	}
+
+	// Released, the budget is free again and the next body proceeds.
+	release()
+	if got := scanRetained.inUse(); got != 0 {
+		t.Fatalf("bytes still charged after release() = %d, want 0", got)
+	}
+	req3 := httptest.NewRequest(http.MethodPost, "http://connector.test/c", strings.NewReader(body))
+	_, _, release3, blocked3 := p.scanBufferedBody(httptest.NewRecorder(), req3,
+		contentscan.ChannelGeneric, "read body", noop)
+	release3()
+	if blocked3 {
+		t.Fatal("a body must be admitted once the previous one released its bytes — the budget bounds " +
+			"memory, it must not become a one-shot")
 	}
 }

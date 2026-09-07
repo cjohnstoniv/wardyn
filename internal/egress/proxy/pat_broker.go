@@ -199,7 +199,14 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// Strip any sandbox-supplied credential BEFORE injecting ours, so a rogue
 	// in-sandbox client cannot smuggle its own onto the outbound request. Same
 	// order, and the same reason, as the GitHub lane.
-	outReq.Header.Del("Authorization")
+	//
+	// F104: through stripSandboxCredentials — the ONE definition (inject.go) —
+	// not a local Header.Del("Authorization"). The narrower spelling left
+	// Private-Token (GitLab's own access-token header, on the very forge kind
+	// this lane exists for), X-Api-Key, Api-Key, X-Auth-Token and Cookie on the
+	// request beside the brokered Basic auth, so the FORGE chose which
+	// credential won while the decision row still read as brokered egress.
+	stripSandboxCredentials(outReq.Header)
 	outReq.SetBasicAuth(username, token)
 	outReq.Host = host
 	outReq.Header.Del("Host")
@@ -233,11 +240,16 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 // wants "oauth2", and an operator override rides the grant. An EMPTY username
 // is the one value that fails on every forge, so it is never sent.
 func (p *Proxy) patToken(ctx context.Context, g PATGrant) (token, username string, err error) {
-	tok, user, err := p.brokeredToken(ctx, g.GrantID)
+	// The mask must be registered under the username THIS lane sends, so the
+	// fallback chain is handed to brokeredToken rather than re-derived after it
+	// (F120): masking base64(<mint user>:tok) while the wire carries
+	// base64("pat":tok) protects a rendering that never leaves the process.
+	wireUser := func(mintUser string) string { return cmp.Or(mintUser, g.Username, "pat") }
+	tok, user, err := p.brokeredToken(ctx, g.GrantID, wireUser)
 	if err != nil {
 		return "", "", err
 	}
-	username = cmp.Or(user, g.Username, "pat")
+	username = wireUser(user)
 	// Register the brokered PAT with the process-global mask registry before it
 	// can reach any output stream — the raw token AND the base64(username +
 	// ":" + tok) that SetBasicAuth puts on the wire, under the username THIS

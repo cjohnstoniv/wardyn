@@ -18,12 +18,14 @@
 #   allowed_code.txt : 200 / 301 / 302   (allowed host reachable via proxy)
 #   denied_probe.txt : rc!=0 (+ maybe 403) (denied host could NOT be reached)
 #   metadata_rc.txt  : nonzero            (metadata IP unreachable: no route)
+#   metadata_connects.txt : 0             (…and nothing ever CONNECTED to it)
 set -u
 
 read_file() { tr -d ' \t\r\n' < "/ws/$1" 2>/dev/null; }
 
 allowed="$(read_file allowed_code.txt)"
 mrc="$(read_file metadata_rc.txt)"
+mconns="$(read_file metadata_connects.txt)"
 denied_rc="$(sed -n 's/^rc=//p' /ws/denied_probe.txt 2>/dev/null | head -1 | tr -d ' \t\r')"
 denied_raw="$(cat /ws/denied_probe.txt 2>/dev/null)"
 
@@ -54,13 +56,24 @@ else
     echo "FAIL denied host failed (rc=$denied_rc) but with NO proxy 403 — cannot prove a POLICY deny (a dead/allow-all proxy also fails an unresolvable host)"; ok=0
 fi
 
-# 3) Metadata IP unreachable directly (structural no-route L0 block).
+# 3) Metadata IP unreachable directly (structural no-route L0 block). BOTH facts
+#    are required, because a nonzero curl exit is not proof of a block: curl
+#    returns 28 for a connect() that never completed AND for a transfer that
+#    timed out AFTER the TCP connection was established, so an accept-and-hold
+#    listener on the metadata address (a tarpit, an intercepting middlebox, a
+#    host slower than the budget) graded PASS on rc alone. %{num_connects} is the
+#    fact that separates them: 1 whenever a connection was actually made. Missing
+#    or unreadable evidence is a FAIL — "no connection fact" is not a block.
 if [ -z "$mrc" ]; then
     echo "FAIL metadata_rc.txt missing"; ok=0
 elif [ "$mrc" = "0" ]; then
     echo "FAIL metadata IP was reachable (curl rc=0) — expected no route"; ok=0
+elif [ -z "$mconns" ]; then
+    echo "FAIL metadata_connects.txt missing — curl's exit code alone cannot prove the block (28 is both 'never connected' and 'connected, then timed out')"; ok=0
+elif [ "$mconns" != "0" ]; then
+    echo "FAIL metadata IP ACCEPTED a TCP connection (num_connects=$mconns, curl rc=$mrc) — a transfer that failed AFTER connect is not a no-route block"; ok=0
 else
-    echo "PASS metadata IP unreachable (curl rc=$mrc)"
+    echo "PASS metadata IP unreachable (curl rc=$mrc, num_connects=0)"
 fi
 
 if [ "$ok" -eq 1 ]; then

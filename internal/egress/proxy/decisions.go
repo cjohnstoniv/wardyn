@@ -124,7 +124,16 @@ func (s *decisionSink) run() {
 			// Piggyback: surface accrued drops on the next successful flush so a
 			// drop is visible in the audit trail long before shutdown.
 			s.reportDropped(&reported)
-			_ = s.post(log) // individual decision: best-effort, must never block egress
+			// Individual decision: best-effort, must never block egress — but a
+			// decision the control plane REFUSED is a decision that was not
+			// individually recorded, which is exactly what s.dropped counts and
+			// reportDropped summarizes (F075 fix-up). Discarding the error made
+			// an over-large or rejected decision vanish from the audit trail
+			// with nothing anywhere saying so: internal/api's MaxBytesReader
+			// 413s a body over maxJSONBody, and that 413 used to be silent.
+			if err := s.post(log); err != nil {
+				s.dropped.Add(1)
+			}
 		case <-ticker.C:
 			// Idle path: drops accrued but no traffic to piggyback on.
 			s.reportDropped(&reported)

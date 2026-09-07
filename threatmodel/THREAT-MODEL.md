@@ -324,7 +324,10 @@ forms, which no verbatim matcher catches.
 ### 4.2 The unconditional IP guard, and its two admin-authored exceptions
 
 A literal-IP target is denied before policy or approval run (`evaluate` step 0,
-`internal/egress/proxy/proxy.go`), and every direct-dialed hostname is re-vetted
+`literalIPGuard` in `internal/egress/proxy/literal_ip_guard.go`) — in every
+spelling that guard parses: the canonical one, the `inet_aton` non-canonical
+IPv4 forms, and a zone-suffixed IPv6 literal (`fe80::1%eth0`); the residual
+below states what that set does not cover. Every direct-dialed hostname is re-vetted
 post-DNS-resolution (`VetHost`/`isBlockedIP`, `internal/egress/proxy/policy.go`)
 against loopback/link-local/multicast/unspecified, RFC1918/ULA/reserved and
 NAT64-embedded-v4 ranges. That re-check runs AFTER, and is unaffected by, the
@@ -1742,24 +1745,35 @@ injection rule — the corp-artifact-host trust boundary in `isMITMHost`).
   fail-closed refusal, so the strict operator's one hard control was bypassable
   by choosing a different suffix. A bodiless read (`GET /v1/models`) is still
   quiet. Base64 `image`/`document` bytes are scanned only under
-  `scan_attachments` (opt-in, off by default). `count_tokens` **is** scanned.
+  `scan_attachments` (opt-in, off by default). `count_tokens` **is** scanned. A
+  block that cannot be base64-decoded under any known alphabet is recorded
+  `attachment_decode_error` (not silently treated as a clean scan) and honors
+  `on_scanner_error` exactly like `span_oversize`.
 - A per-request **scan budget** (`scan_budget`, 4 MiB total scanned bytes
   across every span — on top of the per-span `max_scan_bytes` cap) bounds the
   CPU cost of an adversarial body split into many sub-`max_scan_bytes` spans
   by actually stopping the scan once exhausted; it fails **open** by default
   and honors `on_scanner_error=block` like every other skip reason above.
-- A separate **findings cap** (`findings_capped`, 500 per request) bounds only
-  the SIZE of the decision log copied to stdout / the control-plane audit —
-  it does **not** stop scanning (the scan budget above is what bounds CPU).
-  Once exceeded, under `mode=block` a finding AT OR ABOVE the policy's
-  `block_min_severity` is kept past the cap (up to a hard ceiling) and still
-  blocks, so an agent cannot buy a forward past its operator's block threshold
-  by fanning out cheap low-severity noise ahead of the real secret; every
-  finding below `block_min_severity` is dropped from the report. Under
-  `mode=alert` (where nothing is enforced) the cap is a pure audit-size bound:
-  findings past it are dropped from the decision log REGARDLESS OF SEVERITY,
-  so a high-finding-count alert body's decision log is truncated, not
-  complete. Only the reporting truncation itself fails
+- A separate **findings cap** (`findings_capped`, 500 per request) bounds the
+  NUMBER of findings one request reports — not, by itself, the SIZE of the
+  decision log, which is bounded separately by a 256-byte cap on each finding's
+  `field_path` (agent-authored JSON keys, `sanitizePath`,
+  `internal/contentscan/patterns.go`; without it a 0.3 MiB body of enormous keys
+  produced a 46 MB decision log under a cap that never fired). It does **not**
+  stop scanning either — the scan budget above is what bounds CPU.
+  Once the cap is exceeded, a finding AT OR ABOVE the policy's
+  `block_min_severity` survives the truncation in EVERY mode: under `mode=block`
+  it is kept past the cap (up to a hard ceiling) and still blocks, so an agent
+  cannot buy a forward past its operator's block threshold by fanning out cheap
+  low-severity noise ahead of the real secret; under `mode=alert` — where the
+  alert IS the product — it DISPLACES a retained finding below
+  `block_min_severity`, so the report stays exactly cap-sized and still names
+  what the operator asked to hear about. Findings below `block_min_severity`
+  past the cap are dropped from the report, so a high-finding-count body's
+  decision log is truncated, not complete; the truncation is stated on the wire
+  (`findings_capped`, `findings_past_cap`, `findings_total` on the scan summary)
+  and recorded even when an earlier skip reason (`span_oversize`, `scan_budget`)
+  already claimed `skip_reason`. Only the reporting truncation itself fails
   **open** by default (honoring `on_scanner_error=block` like every other skip
   reason above) — enforcement of an already-detected qualifying finding never
   does.
@@ -1787,17 +1801,42 @@ injection rule — the corp-artifact-host trust boundary in `isMITMHost`).
   the upstream proxy, (2) the run's own egress **policy** allows that hostname
   (default-deny allowlist + first-use approval + method rules, all unaffected), and
   (3) the destination is named by HOSTNAME: a literal
-  private/loopback/link-local/metadata IP is still denied at the literal-IP guard.
+  private/loopback/link-local/metadata IP is still denied at the literal-IP
+  guard, **in every literal spelling that guard parses** (see below).
   Only the PIN is deferred, to the operator's own corp proxy; §4.2 states the two
   residuals that deferral leaves.
   That literal-IP guard covers the NON-CANONICAL spellings too: `net.ParseIP`
   accepts only the canonical dotted-quad, while `inet_aton(3)` — and so glibc
   `getaddrinfo`, and so the corp proxy that finally dials — also reads `127.1`,
-  `0x7f000001`, `2130706433` and `0251.0376.0.1` as `127.0.0.1`, so `evaluate`
-  step 0 and `egressTarget`'s upstream branch both re-run the block check on the
-  inet_aton reading (`nonCanonicalIPv4`,
-  `internal/egress/proxy/literal_ip_guard.go`). Deny only: a spelling the
-  operator did not type inherits no `allowed_domains` grant.
+  `0x7f000001` and `2130706433` as `127.0.0.1`, and `0251.0376.0.1` as
+  `169.254.0.1` (link-local — the octal example is NOT loopback; the pairing is
+  pinned per host in `TestNonCanonicalLiteralIPIsDeniedLikeItsCanonicalSpelling`).
+  `net.ParseIP` is likewise nil for a ZONE-SUFFIXED IPv6 literal — `fe80::1%eth0`,
+  and the RFC 6874 authority spelling `fe80::1%25eth0` — which `netip.ParseAddr`
+  parses and `net.Dial` dials, so the zone id alone used to decide the verdict for
+  an address whose canonical spelling is denied. `evaluate` step 0 and
+  `egressTarget`'s upstream branch both re-run the block check on all of these
+  (`nonCanonicalLiteralIP`, `internal/egress/proxy/literal_ip_guard.go`).
+  Deny only: a spelling the operator did not type inherits no `allowed_domains`
+  grant.
+  A third EMBEDDED-v4 shape is covered on the canonical path rather than by that
+  gap-filler: the deprecated IPv4-compatible IPv6 form (`::127.0.0.1`,
+  `::169.254.169.254`, RFC 4291 §2.5.5.1) is one `net.ParseIP` DOES parse, and it
+  carries a real IPv4 in its low 32 bits that `To4()` cannot see (`To4` unwraps
+  only `::ffff:/96`), so every stdlib predicate answered false for it. It is
+  denied by `isBlockedIP`'s IPv4-compatible arm (`v4CompatibleEmbeddedV4`,
+  `internal/egress/proxy/policy.go`), which re-runs the embedded address through
+  the same check the NAT64 arm beside it uses — so the form is bound at `evaluate`
+  step 0 AND in `VetHost` (whose literal fast path calls that same predicate), not
+  by one instead of the other. Only the embedded address decides: `::8.8.8.8` stays
+  reachable, so the arm can only add the denials the canonical spelling already gets.
+  **Residual, stated rather than hedged:** the guard covers the spellings it
+  PARSES and the embedded-v4 prefixes it KNOWS. A NETWORK-SPECIFIC RFC 6052 NAT64
+  prefix is unknowable here without operator config (`ipguard.NAT64Prefixes` carries
+  the well-known `64:ff9b::/96` and local-use `64:ff9b:1::/48` only), so an address
+  inside a site's own translation prefix is judged on its IPv6 form alone; under a
+  corp upstream that is left to the operator's own egress controls, like any other
+  name only that proxy resolves.
 - The optional **sidecar** (`detector_sidecar_url`) treats an
   error/timeout/non-200 as a scanner error like the in-process detectors: fails
   **open** by default, and `on_scanner_error=block` **does** extend to it, so

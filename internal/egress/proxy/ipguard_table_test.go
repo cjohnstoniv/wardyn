@@ -24,13 +24,26 @@ func TestBlockedRangesMatchPreExtractionLists(t *testing.T) {
 		"255.255.255.255",                 // limited broadcast
 		"::1", "fc00::1", "fe80::1", "::", // v6 loopback / ULA / link-local / unspecified
 		"::ffff:127.0.0.1", // IPv4-mapped loopback must not smuggle through
+		// The DEPRECATED IPv4-COMPATIBLE form (::a.b.c.d, RFC 4291 §2.5.5.1).
+		// net.ParseIP PARSES these, so unlike the inet_aton spellings there is
+		// nothing for literal_ip_guard.go's gap-filler to fill — they arrive on
+		// the CANONICAL path with To4() == nil (To4 unwraps only ::ffff:/96), so
+		// every stdlib predicate answered false and they were admitted at step 0
+		// AND by VetHost's literal fast path.
+		"::127.0.0.1",       // loopback, IPv4-compatible spelling
+		"::169.254.169.254", // cloud metadata, IPv4-compatible spelling
+		"::10.0.0.1",        // RFC1918, IPv4-compatible spelling
+		"2002:7f00:1::1",    // 6to4 loopback — denied wholesale via ReservedV6
 	}
 	for _, s := range blocked {
 		if kind, _ := isBlockedIP(net.ParseIP(s)); kind == blockNone {
 			t.Errorf("isBlockedIP(%s) = blockNone, want blocked", s)
 		}
 	}
-	for _, s := range []string{"8.8.8.8", "93.184.216.34", "2606:4700:4700::1111"} {
+	// ...and the guard must not over-deny: ::/96 is not blocked wholesale, only
+	// the embedded address decides, so an IPv4-compatible spelling of a PUBLIC
+	// address stays reachable exactly as its canonical spelling does.
+	for _, s := range []string{"8.8.8.8", "93.184.216.34", "2606:4700:4700::1111", "::8.8.8.8"} {
 		if kind, why := isBlockedIP(net.ParseIP(s)); kind != blockNone {
 			t.Errorf("isBlockedIP(%s) = %v (%s), want allowed", s, kind, why)
 		}

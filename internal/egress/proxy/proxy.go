@@ -25,6 +25,12 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// controlPlaneCallTimeout bounds ONE local-route forward to the control plane
+// (mint, approval poll, injection resolve, decision post). See the comment at
+// the p.localClient construction in newProxy for why it exists and why the
+// value is what it is.
+const controlPlaneCallTimeout = 130 * time.Second
+
 // Proxy is the L2 forward proxy. It serves both absolute-URI plain HTTP
 // requests and CONNECT tunnels for TLS (hostname-only visibility; no
 // interception in v0). All egress flows through the decision pipeline:
@@ -493,7 +499,20 @@ func newProxy(opts Options) *Proxy {
 	// plane carry the vetted dial target on the request context so the host is
 	// never re-resolved (same TOCTOU guard), and they NEVER chain through the
 	// upstream corp proxy — the run token stays off the corp-proxy wire.
-	p.localClient = &http.Client{Transport: p.controlTransport}
+	//
+	// The Timeout is load-bearing (F070 sibling), not hygiene: every caller of
+	// forwardToControlPlane rides r.Context(), and the agent-facing listener sets
+	// ReadTimeout/WriteTimeout to 0 because streaming bodies and CONNECT tunnels
+	// need it (NewServer, server.go), so without it a control plane that accepts
+	// a connection and then never answers parked a brokered mint, an approval
+	// poll or a credential relay FOREVER — with the sandbox's request goroutine
+	// and socket held in a 256 MiB sidecar. Every one of these forwards reads a
+	// CAPPED body (maxBrokeredBody), never a stream, so a whole-request ceiling
+	// is the right shape here. The value mirrors the shipped client in
+	// cmd/wardyn-proxy/main.go for the same reason its comment gives: it must
+	// exceed the subscription delegated-refresh budget (120s) so an injection
+	// resolve at the token-expiry boundary is not failed closed early.
+	p.localClient = &http.Client{Transport: p.controlTransport, Timeout: controlPlaneCallTimeout}
 
 	// Audit the deliberate private-IP-guard relaxation for the operator-
 	// configured upstream proxy hop (one record per run; each real destination

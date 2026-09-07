@@ -241,62 +241,135 @@ func registerBasicAuthCredential(user, tok string) {
 // upstream honours is then the UPSTREAM's choice, not Wardyn's — so an agent
 // can substitute its own credential for the operator's on an allowlisted host
 // and Wardyn's decision row still reads as brokered egress. forwardInspectedLLM
-// (the brokered LLM route and the MITM path) has always stripped these four;
-// injector.apply — the plain forward lane's injection — only did Header.Set, so
-// the same request could reach the upstream carrying BOTH. One list, both
-// injecting paths.
+// (the brokered LLM route and the MITM path) has always stripped the first
+// four; injector.apply — the plain forward lane's injection — only did
+// Header.Set, and the two BROKER lanes (handleGitBroker, handleGitPATBroker)
+// each re-spelled a narrower `Header.Del("Authorization")` at the call site, so
+// the same request reached the forge carrying the brokered Basic auth AND the
+// sandbox's own Private-Token/X-Api-Key/… One list, all four injecting paths.
+//
+// The list is every header a vendor Wardyn brokers for reads as a credential,
+// verified against each vendor's own documentation rather than from memory:
+//   - Authorization / X-Api-Key / Api-Key / X-Auth-Token — the generic set.
+//   - Private-Token — GitLab's REST API personal/project/group access-token
+//     header (docs.gitlab.com/api/rest/authentication), first-class on exactly
+//     the forge kind the PAT lane exists for.
+//   - X-Goog-Api-Key — Google's documented API-key header
+//     (docs.cloud.google.com/docs/authentication/api-keys-use).
+//   - X-Amz-Security-Token — the AWS SigV4 temporary-session-token header.
+//   - X-Functions-Key — the Azure Functions access-key header
+//     (learn.microsoft.com/azure/azure-functions/function-keys-how-to).
+//   - X-Access-Token, Anthropic-Api-Key — credential spellings observed on the
+//     brokered lanes' own upstreams.
+//   - Cookie — a session credential the upstream may prefer over the header we
+//     inject; on an injecting path it is the sandbox's, never the operator's.
+//
+// Proxy-Authorization is deliberately absent: it is hop-by-hop and already
+// removed by removeHopByHop (proxy.go) on every one of these paths.
 func stripSandboxCredentials(h http.Header) {
-	h.Del("Authorization")
-	h.Del("X-Api-Key")
-	h.Del("Api-Key")
-	h.Del("X-Auth-Token")
+	for _, name := range []string{
+		"Authorization",
+		"X-Api-Key",
+		"Api-Key",
+		"X-Auth-Token",
+		"Anthropic-Api-Key",
+		"Cookie",
+		"Private-Token",
+		"X-Access-Token",
+		"X-Amz-Security-Token",
+		"X-Functions-Key",
+		"X-Goog-Api-Key",
+	} {
+		h.Del(name)
+	}
 }
 
 // injectableTransport reports whether a brokered credential may be attached to
 // a forward request bound for scheme://host:port.
 //
-// TRUST BOUNDARY (F110, partial — the residual is filed): injection keys on the
-// lowercased hostname alone — no scheme, no port — and addAPIKeyGrant couples
-// each grant to a BARE exact allowlist entry, which policy.go matches on ANY
-// port. The sandbox therefore picks the transport: `POST http://<host>:443/…`
-// on the plain lane made the proxy attach the operator's credential to a
-// request it then sent in CLEARTEXT to the TLS port — visible to every on-path
-// device and to the corporate proxy hop the deployment guide tells operators to
-// put in front of egress. The no-resident-secrets invariant still holds (the
-// sandbox never sees the value), but the value leaves the proxy unencrypted.
+// TRUST BOUNDARY (F110): injection keys on the lowercased hostname alone, and
+// addAPIKeyGrant couples each grant to a BARE exact allowlist entry, which
+// policy.go matches on ANY port. The SANDBOX therefore picks the transport:
+// `POST http://<host>:443/…` on the plain lane made the proxy attach the
+// operator's credential to a request it then sent in CLEARTEXT — visible to
+// every on-path device and to the corporate proxy hop the deployment guide
+// tells operators to put in front of egress. The no-resident-secrets invariant
+// still holds (the sandbox never sees the value), but the value left the proxy
+// unencrypted. Clamping the single port 443 closed one spelling of that and
+// left 8443/9443/every other port open, so the clamp is stated as a rule now,
+// not as a magic number:
 //
-// Cleartext to :443 is the one half of that the code can decide alone: nothing
-// serves plaintext on the https port, so refusing it cannot break a connector
-// an operator authored, and it is only reachable at all because the bare
-// allowlist entry is port-blind. It is REFUSED (no injection — the upstream
-// answers 401) rather than denied, so no audit string changes.
+//   - https: the proxy runs the TLS leg. Always injectable.
+//   - cleartext to port 443: NEVER, whatever the allowlist says. This is the
+//     unconditional clamp F110 named, kept unconditional on purpose: an
+//     AUTHORED port cannot re-admit it. `allowed_domains: ["files.example.org:443"]`
+//     is the port-scoping remedy docs/POLICIES.md recommends, and addAPIKeyGrant
+//     (internal/api/llmcred.go) appends the BARE host beside whatever the
+//     operator wrote — so the authored and bare entries coexist, the grant
+//     resolves, and AuthoredPortFor answers true for :443. Reading that as
+//     transport intent would put the credential in cleartext on the https port
+//     for the very configuration the docs tell operators to write. There is no
+//     plaintext connector on 443 to break.
+//   - cleartext to a host the proxy itself only ever speaks TLS to (isLLMHost —
+//     the vendor hosts and the operator's configured gateways, which
+//     forwardInspectedLLM dials with a hardcoded https scheme): NEVER. There is
+//     no plaintext connector behind those names to break.
+//   - cleartext to port 80: injectable. That is the ONLY shape plain-lane
+//     injection has ever meaningfully worked in (a CONNECT tunnel cannot be
+//     injected into) and the default port of the plaintext connector an
+//     operator authors on purpose.
+//   - cleartext to any OTHER port: only when the operator authored that port in
+//     the allowlist ("connector.internal:8080" rather than a bare
+//     "connector.internal" — Policy.AuthoredPortFor). A bare entry is silent
+//     about the port, so a sandbox-chosen non-default port over cleartext is
+//     the sandbox choosing the transport, and the credential is withheld.
 //
-// The other half is NOT closed here: an operator who authored an api_key for an
-// https vendor still cannot say so, because InjectionRule carries no scheme, so
-// `POST http://<host>/…` on port 80 is indistinguishable from a legitimately
-// plaintext internal connector — the ONLY shape plain-lane injection has ever
-// worked in (a CONNECT tunnel cannot be injected into). Fixing that requires
-// declaring transport intent in policy; see the filed follow-up.
-func injectableTransport(scheme string, port int) bool {
+// Refusal means NO INJECTION (the upstream answers 401), never a deny, so no
+// audit string changes and no request is newly refused.
+//
+// RESIDUAL, unchanged and stated rather than hedged: an operator who authored
+// an api_key for an https-only vendor that is NOT one of the hosts this proxy
+// knows to be TLS-only still cannot say so — InjectionRule carries no scheme —
+// so `POST http://<that host>/…` on port 80 is indistinguishable from a
+// legitimately plaintext internal connector and is still injected. Closing that
+// needs transport intent declared in the grant scope; see the filed follow-up.
+func (p *Proxy) injectableTransport(scheme, host string, port int) bool {
 	if strings.EqualFold(scheme, "https") {
 		return true // the proxy itself runs the TLS leg
 	}
-	return port != 443
+	if port == defaultPortForScheme("https") {
+		return false // the clamp, unconditional: an authored :443 does not re-admit it
+	}
+	if p.isLLMHost(host) {
+		return false
+	}
+	return port == defaultPortForScheme("http") || p.policy.AuthoredPortFor(host, port)
+}
+
+// applyInjection is the plain forward lane's credential injection.
+//
+// The split is deliberate (F110): the PROXY decides whether the TRANSPORT may
+// carry a brokered credential — that question needs the run's policy and the
+// vendor table, neither of which the injector holds — and the INJECTOR decides
+// whether a rule matches the host. A host with no rule is left byte-for-byte
+// alone either way: the strip is part of injection, never a blanket header
+// filter on ordinary forward egress.
+func (p *Proxy) applyInjection(req *http.Request, host string, port int) {
+	if req.URL == nil || !p.injectableTransport(req.URL.Scheme, host, port) {
+		return
+	}
+	p.inject.apply(req, host, port)
 }
 
 // apply strips the sandbox's own credential headers and sets the injected one
-// if an exactly-allowed rule matches req's host AND the transport may carry it
-// (injectableTransport). (Forward-proxy plain-HTTP path; a dynamic entry that
-// fails to re-resolve simply isn't injected here — dynamic credentials target
-// the TLS-MITM path, which fails closed via resolve.) A host with NO rule is
-// left byte-for-byte alone: the strip is part of injection, never a blanket
-// header filter on ordinary forward egress.
+// if an exactly-allowed rule matches req's host. (Forward-proxy plain-HTTP
+// path; a dynamic entry that fails to re-resolve simply isn't injected here —
+// dynamic credentials target the TLS-MITM path, which fails closed via
+// resolve.) Whether the TRANSPORT may carry the credential at all is decided by
+// its ONE caller, Proxy.applyInjection/injectableTransport.
 func (i *injector) apply(req *http.Request, host string, port int) {
 	h, ok, err := i.resolve(host)
 	if err != nil || !ok {
-		return
-	}
-	if req.URL == nil || !injectableTransport(req.URL.Scheme, port) {
 		return
 	}
 	stripSandboxCredentials(req.Header)

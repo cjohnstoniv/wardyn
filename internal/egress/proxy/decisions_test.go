@@ -278,3 +278,33 @@ func TestMaskDecisionBytesMasksJSONEscapedSecrets(t *testing.T) {
 		}
 	}
 }
+
+// TestDecisionSinkCountsARefusedPostAsDropped pins the F075 fix-up's fifth
+// item: `_ = s.post(log)` discarded the error, so a decision the control plane
+// REFUSED simply vanished — s.dropped never advanced and reportDropped never
+// summarized it.
+//
+// That is not hypothetical: the control plane's MaxBytesReader 413s a decision
+// body over maxJSONBody (internal/api/helpers.go), and an inspected request can
+// produce one. The audit trail must say "N decisions were not individually
+// recorded", not lose them silently.
+func TestDecisionSinkCountsARefusedPostAsDropped(t *testing.T) {
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Every post refused, exactly as an over-large decision body is.
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+	}))
+	defer cp.Close()
+
+	s := newDecisionSink(cp.URL, newTokenSource("tok"), 8, cp.Client(), &bytes.Buffer{})
+	s.emit(decisionLog(egress.Request{Host: "refused.test"}, egress.Allow, "policy:allowed"))
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && s.droppedCount() == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if s.droppedCount() == 0 {
+		t.Fatal("a decision the control plane REFUSED was not counted as dropped: the audit trail loses " +
+			"it entirely — no individual record, and nothing in the dropped summary either")
+	}
+	_ = s.close(context.Background())
+}

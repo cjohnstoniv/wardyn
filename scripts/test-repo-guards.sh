@@ -115,5 +115,26 @@ else
     ok "no live references to the reader-less $DEAD_KNOB knob"
 fi
 
+# ── 5. L0 block evidence reads a CONNECTION FACT, not a bare curl exit code ──
+# curl exits 28 for two opposite facts: a connect() that never completed (what
+# no route looks like) and a transfer that timed out AFTER the TCP handshake
+# completed. So `rc != 0` is not proof of a block — an accept-and-hold listener
+# on the metadata IP (a tarpit, an intercepting middlebox, a slow host) made
+# BOTH of the release's L0 metadata checks report a connection the sandbox had
+# actually established as "unreachable, no route". %{num_connects} is the fact
+# that separates them (1 whenever a connection was made), so every script that
+# certifies the L0 metadata block must record it and refuse a non-zero count.
+# The same reading is already shipped in the redirect probe
+# (internal/api/site_config_probe.go, redirectProbeScript).
+l0_evidence_fail=0
+for f in test/e2e/e2e.sh test/e2e/tasks/egress-boundary/solution.sh; do
+    grep -q 'num_connects' "$f"         || { bad "$f: the metadata probe must record %{num_connects} — curl's exit code alone cannot tell 'never connected' from 'connected, then timed out', so an accept-and-hold host grades as blocked"; l0_evidence_fail=1; }
+done
+for f in test/e2e/e2e.sh test/e2e/tasks/egress-boundary/grade.sh; do
+    grep -q 'ACCEPTED a TCP connection' "$f"         || { bad "$f: the metadata verdict must FAIL on a non-zero connect count (the 'ACCEPTED a TCP connection' arm) — recording the count and not judging it proves nothing"; l0_evidence_fail=1; }
+done
+grep -q 'metadata_connects.txt' test/e2e/tasks/egress-boundary/solution.sh     || { bad "test/e2e/tasks/egress-boundary/solution.sh: the connect count must be written as evidence (metadata_connects.txt) — grade.sh reads only the workspace"; l0_evidence_fail=1; }
+if [ "$l0_evidence_fail" = 0 ]; then ok "the L0 metadata checks read %{num_connects}, and fail on a connection that was actually made"; fi
+
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
 exit "$fail"

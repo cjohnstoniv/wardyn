@@ -113,6 +113,11 @@ func TestPlainLaneInjectionStripsSandboxCredential(t *testing.T) {
 		anthropicMessagesBody("hello"))
 	req.Header.Set("Authorization", "Bearer SANDBOX-OWN-KEY")
 	req.Header.Set("X-Auth-Token", "SANDBOX-OWN-TOKEN")
+	// F104 fix-up: the strip list has to cover every header a vendor Wardyn
+	// brokers for reads as a credential, not four of them.
+	for h, v := range sandboxCredentialHeaders {
+		req.Header.Set(h, v)
+	}
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, req)
 
@@ -129,6 +134,7 @@ func TestPlainLaneInjectionStripsSandboxCredential(t *testing.T) {
 	if got := cu.header.Get("X-Auth-Token"); got != "" {
 		t.Fatalf("upstream saw the sandbox's X-Auth-Token %q", got)
 	}
+	assertNoSandboxCredentials(t, cu.header, "the plain lane's injection")
 	if d := lastDecision(t, buf); d.Decision != egress.Allow {
 		t.Fatalf("decision = %+v, want allow", d)
 	}
@@ -166,25 +172,32 @@ func TestPlainLaneHTTPSAbsoluteFormPort(t *testing.T) {
 }
 
 // TestPlainLaneNoCleartextInjectionToTheTLSPort pins the half of F110 the code
-// can decide alone: a sandbox-chosen `http://<injected-host>:443/…` is a
-// cleartext request to the TLS port — reachable only because an api_key grant's
-// exact allowlist entry is port-blind — and the brokered credential must NOT be
-// attached to it. The two controls below are the "cannot break a real
-// connector" half of the claim: https still injects, and so does an ordinary
-// http connector on its own port.
+// can decide alone: a sandbox-chosen cleartext request to a port the operator
+// never authored — reachable only because an api_key grant's exact allowlist
+// entry is port-blind — must NOT carry the brokered credential.
+//
+// The fix-up round widened this from the single value 443 (8443/9443/… were
+// wide open, and a brokered LLM key rode cleartext to them) to the rule
+// injectableTransport now states: https always; a host this proxy only ever
+// speaks TLS to (isLLMHost) never over cleartext; port 80 yes; any other
+// cleartext port only when the operator AUTHORED it in the allowlist. The
+// controls below are the "cannot break a real connector" half: https injects,
+// an ordinary http connector on :80 injects, and an operator-authored
+// "vendor.test:8080" injects.
 func TestPlainLaneNoCleartextInjectionToTheTLSPort(t *testing.T) {
 	inj := func() *injector {
 		return staticInj(map[string]injectedHeader{
 			"vendor.test": {name: "X-Api-Key", value: "BROKERED-KEY"},
+			anthropicHost: {name: "X-Api-Key", value: "BROKERED-KEY"},
 		})
 	}
-	newVendorProxy := func(t *testing.T, useTLS bool) (*Proxy, *capturedUpstream) {
+	newVendorProxyDomains := func(t *testing.T, useTLS bool, domains []string) (*Proxy, *capturedUpstream) {
 		t.Helper()
 		cu := captureUpstream(t, useTLS, "ok")
 		buf := &bytes.Buffer{}
 		p := newProxy(Options{
 			RunID:           uuid.New(),
-			Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"vendor.test"}}),
+			Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: domains}),
 			Injector:        inj(),
 			Sink:            &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
 			Resolver:        publicResolver{},
@@ -192,6 +205,10 @@ func TestPlainLaneNoCleartextInjectionToTheTLSPort(t *testing.T) {
 			TLSClientConfig: testInsecureTLSConfig,
 		})
 		return p, cu
+	}
+	newVendorProxy := func(t *testing.T, useTLS bool) (*Proxy, *capturedUpstream) {
+		t.Helper()
+		return newVendorProxyDomains(t, useTLS, []string{"vendor.test", anthropicHost})
 	}
 
 	t.Run("cleartext to the TLS port is not injected", func(t *testing.T) {
@@ -223,6 +240,68 @@ func TestPlainLaneNoCleartextInjectionToTheTLSPort(t *testing.T) {
 		if rec.Code != http.StatusOK || cu.header.Get("X-Api-Key") != "BROKERED-KEY" {
 			t.Fatalf("a plaintext connector on its own port must be unchanged: status=%d key=%q",
 				rec.Code, cu.header.Get("X-Api-Key"))
+		}
+	})
+
+	// The fix-up: 443 was one value of an open axis, not the axis.
+	for _, port := range []string{"8443", "9443", "8080"} {
+		t.Run("cleartext to an unauthored port "+port+" is not injected", func(t *testing.T) {
+			p, cu := newVendorProxy(t, false)
+			rec := httptest.NewRecorder()
+			p.ServeHTTP(rec, mustAbsReq(t, http.MethodPost, "http://vendor.test:"+port+"/x", `{"a":1}`))
+			if !cu.reached {
+				t.Fatalf("request should still be forwarded (uncredentialed), status=%d", rec.Code)
+			}
+			if got := cu.header.Get("X-Api-Key"); got != "" {
+				t.Fatalf("upstream received the brokered credential %q IN CLEARTEXT on a sandbox-chosen "+
+					"http:// request to port %s, which the operator never authored", got, port)
+			}
+		})
+	}
+
+	// The authored-port escape hatch must NOT reach back to the TLS port: an
+	// api_key grant appends the BARE host beside whatever the operator wrote
+	// (addAPIKeyGrant, internal/api/llmcred.go), so "vendor.test:443" — the
+	// port-scoping remedy docs/POLICIES.md now recommends — and "vendor.test"
+	// coexist, the grant still resolves, and AuthoredPortFor answers true for
+	// :443. Without the unconditional clamp that spelling puts the operator's
+	// brokered credential on the wire in cleartext on the https port.
+	t.Run("an authored :443 cannot re-admit cleartext injection", func(t *testing.T) {
+		p, cu := newVendorProxyDomains(t, false, []string{"vendor.test:443", "vendor.test"})
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, mustAbsReq(t, http.MethodPost, "http://vendor.test:443/x", `{"a":1}`))
+		if !cu.reached {
+			t.Fatalf("request should still be forwarded (uncredentialed), status=%d", rec.Code)
+		}
+		if got := cu.header.Get("X-Api-Key"); got != "" {
+			t.Fatalf("upstream received the brokered credential %q IN CLEARTEXT on the TLS port after the "+
+				"operator authored \"vendor.test:443\" — an authored port must never re-admit :443", got)
+		}
+	})
+
+	t.Run("an operator-authored cleartext port still injects", func(t *testing.T) {
+		p, cu := newVendorProxyDomains(t, false, []string{"vendor.test:8080"})
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, mustAbsReq(t, http.MethodPost, "http://vendor.test:8080/x", `{"a":1}`))
+		if rec.Code != http.StatusOK || cu.header.Get("X-Api-Key") != "BROKERED-KEY" {
+			t.Fatalf("a connector the operator authored as \"vendor.test:8080\" must still be injected: "+
+				"status=%d key=%q — the escape hatch for a plaintext connector on a non-default port",
+				rec.Code, cu.header.Get("X-Api-Key"))
+		}
+	})
+
+	t.Run("a TLS-only vendor host is never injected over cleartext", func(t *testing.T) {
+		for _, target := range []string{
+			"http://" + anthropicHost + "/v1/x",
+			"http://" + anthropicHost + ":8443/v1/x",
+		} {
+			p, cu := newVendorProxy(t, false)
+			rec := httptest.NewRecorder()
+			p.ServeHTTP(rec, mustAbsReq(t, http.MethodPost, target, `{"a":1}`))
+			if got := cu.header.Get("X-Api-Key"); got != "" {
+				t.Fatalf("%s delivered the brokered credential %q in cleartext: this proxy only ever "+
+					"dials a model-API host over TLS, so there is no plaintext connector to break", target, got)
+			}
 		}
 	})
 }

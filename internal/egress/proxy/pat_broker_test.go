@@ -25,7 +25,24 @@ import (
 // and the git username the forge expects) instead of a github_token.
 func newPATBrokerUpstream(t *testing.T, token, username string) *gitBrokerUpstream {
 	t.Helper()
-	return newBrokerUpstream(t, `{"kind":"git_pat","token":"`+token+`","username":"`+username+`"}`)
+	return newPATBrokerUpstreamTTL(t, token, username, time.Hour)
+}
+
+// newPATBrokerUpstreamTTL is newPATBrokerUpstream with the mint's STATED expiry
+// under test.
+//
+// A real git_pat mint always states one — internal/broker/broker_mint_kinds.go
+// mints with `ExpiresAt: time.Now().Add(ttlFor(spec))`, and ttlFor honours an
+// operator's GrantSpec.TTLSeconds up to the 1h cap, so an operator can author a
+// grant whose whole life is shorter than a cache margin. The fixture that
+// stated NO expiry exercised only brokeredToken's unparseable-response arm
+// (expiresAt == 0, cache forever), which is why the 5-minute margin bug (F120)
+// survived a green cache pin.
+func newPATBrokerUpstreamTTL(t *testing.T, token, username string, ttl time.Duration) *gitBrokerUpstream {
+	t.Helper()
+	exp := time.Now().Add(ttl).UTC().Format(time.RFC3339)
+	return newBrokerUpstream(t,
+		`{"kind":"git_pat","token":"`+token+`","username":"`+username+`","jti":"j","expires_at":"`+exp+`"}`)
 }
 
 // newPATBrokerProxy is newGitBrokerProxy for the git_pat lane: the per-HOST
@@ -326,6 +343,45 @@ func TestPATBrokerCachesTheMintAcrossOneClone(t *testing.T) {
 	}
 	if up.mintCalls != 1 {
 		t.Fatalf("control-plane mint calls for ONE clone = %d, want 1 — a single-use (approval-gated) git_pat grant 409s ErrAlreadyMinted on the second", up.mintCalls)
+	}
+}
+
+// TestPATBrokerCachesAShortTTLMintAcrossOneClone is the same contract for the
+// grant shape the cache used to fail on outright (F120 fix-up).
+//
+// The freshness margin was injectRefreshMargin (5m), sized for a rotating
+// INJECTED credential. A git_pat grant states a real expiry and an operator may
+// author ttl_seconds as low as they like, so any grant with ttl <= 5m was born
+// INSIDE the margin: `time.Now().Before(exp - 5m)` was false on the very next
+// sub-request, the second half of one clone re-minted, and a single-use grant
+// 409'd ErrAlreadyMinted. Two mints for one clone is exactly the failure this
+// lane's cache exists to prevent.
+func TestPATBrokerCachesAShortTTLMintAcrossOneClone(t *testing.T) {
+	for _, ttl := range []time.Duration{2 * time.Minute, 45 * time.Second, time.Hour} {
+		t.Run(ttl.String(), func(t *testing.T) {
+			up := newPATBrokerUpstreamTTL(t, "T", "oauth2", ttl)
+			p, _ := newPATBrokerProxy(t,
+				map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
+
+			for _, step := range []struct {
+				method, path string
+				body         io.Reader
+			}{
+				{http.MethodGet, "/wardyn/git/gitlab.com/org/repo.git/info/refs?service=git-upload-pack", nil},
+				{http.MethodPost, "/wardyn/git/gitlab.com/org/repo.git/git-upload-pack", strings.NewReader("0000")},
+			} {
+				rec := httptest.NewRecorder()
+				p.ServeHTTP(rec, mustLocalReq(t, step.method, step.path, step.body))
+				if rec.Code != http.StatusOK {
+					t.Fatalf("%s %s -> %d body=%q", step.method, step.path, rec.Code, rec.Body.String())
+				}
+			}
+			if up.mintCalls != 1 {
+				t.Fatalf("ttl=%s: control-plane mint calls for ONE clone = %d, want 1 — a grant whose "+
+					"whole life is shorter than the cache margin must still serve one clone from one mint",
+					ttl, up.mintCalls)
+			}
+		})
 	}
 }
 

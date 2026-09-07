@@ -143,3 +143,48 @@ func TestSiteConfigApply_ForwardsTheOnboardingMark(t *testing.T) {
 		t.Errorf("server received onboarding_completed_at = %v, want %v", got.OnboardingCompletedAt, want)
 	}
 }
+
+// TestSiteConfigApply_WarnsTheOnboardingMarkWasNotApplied is the CLI half of the
+// signal that REPLACED the 400 (R3 F025 fix-up): onboarding_completed_at is
+// server-owned, so a captured document's copy is dropped on the write. The
+// server says so with onboarding_completed_at_ignored, and `apply` must print
+// that the way it prints the integrations warning ten lines above — this file is
+// exactly the one an operator applies after a reset, or an MDM re-applies on
+// every boot, when the mark it carries is another install's. Silence here reads
+// as a restore that happened; a 400 here broke the recovery flow outright.
+func TestSiteConfigApply_WarnsTheOnboardingMarkWasNotApplied(t *testing.T) {
+	captured := `{"scm_hosts":["gitlab.corp"],"onboarding_completed_at":"2026-08-30T12:00:00Z"}`
+
+	// The shape the server answers when the body named a mark it did not keep:
+	// the write succeeded, the install's OWN mark came back, and the drop is
+	// reported beside it.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/api/v1/site-config" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"scm_hosts":["gitlab.corp"],` +
+			`"onboarding_completed_at":"2026-09-01T09:00:00Z","onboarding_completed_at_ignored":true}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	_, stderr, err := runSiteConfigApply(t, srv.URL, captured)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if !strings.Contains(stderr, "onboarding_completed_at") {
+		t.Errorf("stderr = %q, want a warning that the file's onboarding_completed_at was not applied", stderr)
+	}
+
+	// And the ordinary case stays quiet: a server that reports no drop (an exact
+	// echo, or a build that predates the signal) must print no warning at all.
+	var got types.SiteConfig
+	_, quiet, err := runSiteConfigApply(t, applyServer(t, &got).URL, captured)
+	if err != nil {
+		t.Fatalf("apply against an echoing server: %v", err)
+	}
+	if strings.Contains(quiet, "onboarding_completed_at") {
+		t.Errorf("stderr = %q, want silence when the server reports no dropped mark", quiet)
+	}
+}

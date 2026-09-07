@@ -62,11 +62,27 @@ func TestApprovalScopeIsDocumentedAsPortWide(t *testing.T) {
 	}
 
 	// (4) What the document must now say.
-	mustSay(t, readDoc(t, "docs/POLICIES.md"), "docs/POLICIES.md",
+	doc := readDoc(t, "docs/POLICIES.md")
+	mustSay(t, doc, "docs/POLICIES.md",
 		"**Every scope in that table is HOST-wide — on every port.**",
 		"also releases `example.org:22`, `:5432` and every other port",
 		"read the scope column as *how long*, never as *how narrow*",
+		// The remedy the paragraph offers has to BE one (adversarial fix-up):
+		// it recommended denied_domains for "this host must not be reachable on
+		// its other ports", but a bare deny entry is port-blind by the very
+		// paragraph above it, so the deny takes :443 away with :22. The
+		// allowlist IS port-qualifiable — that is the honest answer.
+		"**There is no way to approve one port and refuse another on the same host.**",
+		"`allowed_domains: [\"files.example.org:443\"]`",
 	)
+	mustNotSay(t, doc, "docs/POLICIES.md",
+		"If a host\nmust not be reachable on its other ports, deny it (`denied_domains`)",
+	)
+	// The escape hatch the corrected remedy names must actually exist.
+	if !strings.Contains(readSrc(t, "internal", "egress", "proxy", "policy.go"), "func classifyDomain(d string) (exact, wild string, port int)") {
+		t.Error("classifyDomain's port qualifier is gone — POLICIES.md's corrected remedy (port-qualify " +
+			"the allowlist entry) would then name something that does not exist")
+	}
 }
 
 // TestUpstreamGuardResidualIsDocumented (F008) pins the threat model and the

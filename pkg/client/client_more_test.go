@@ -557,7 +557,7 @@ func TestPutSiteConfig_StripsIntegrations(t *testing.T) {
 			{ID: "acme-anthropic", Kind: types.IntegrationKindAnthropicAPIKey},
 		},
 	}
-	if _, _, err := newTestClient(srv).PutSiteConfig(context.Background(), captured); err != nil {
+	if _, _, _, err := newTestClient(srv).PutSiteConfig(context.Background(), captured); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, present := gotBody["integrations"]; present {

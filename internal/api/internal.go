@@ -120,16 +120,32 @@ func (s *Server) recordLLMScanAudit(ctx context.Context, runID uuid.UUID, actor,
 	case "error":
 		outcome = "failure"
 	}
+	// finding_count is the number of findings the scan PRODUCED before the cap
+	// truncated the list (F075), which the proxy counts as it produces them and
+	// sends as findings_total: the proxy caps how many findings it REPORTS, so
+	// len(sc.Findings) is the reported count, and an audit row that states it as
+	// the finding count makes a truncated scan indistinguishable from one that
+	// found exactly the cap. findings_capped / findings_past_cap carry the
+	// truncation itself, and findings_past_cap is an UPPER bound on what was
+	// pushed out (block mode's severity keep-backs are counted past the cap and
+	// still reported), which is why finding_count is not derived from it.
+	findingCount := len(sc.Findings)
+	if sc.FindingsTotal > findingCount {
+		findingCount = sc.FindingsTotal
+	}
 	data, _ := json.Marshal(map[string]any{
-		"host":          host,
-		"channel":       sc.Channel,
-		"mode":          sc.Mode,
-		"coverage":      sc.Coverage,
-		"scanned":       sc.Scanned,
-		"skipped":       sc.Skipped,
-		"skip_reason":   sc.SkipReason,
-		"finding_count": len(sc.Findings),
-		"findings":      findings,
+		"host":              host,
+		"channel":           sc.Channel,
+		"mode":              sc.Mode,
+		"coverage":          sc.Coverage,
+		"scanned":           sc.Scanned,
+		"skipped":           sc.Skipped,
+		"skip_reason":       sc.SkipReason,
+		"finding_count":     findingCount,
+		"findings_reported": len(sc.Findings),
+		"findings_capped":   sc.FindingsCapped,
+		"findings_past_cap": sc.FindingsPastCap,
+		"findings":          findings,
 	})
 	ev := s.auditEvent(&runID, types.ActorAgent, actor,
 		"llm.scan."+sc.Action, host, outcome, data)

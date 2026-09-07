@@ -6,6 +6,8 @@ package contentscan
 import (
 	"math"
 	"regexp"
+	"strconv"
+	"strings"
 )
 
 // ─── regex secret catalog ─────────────────────────────────────────────────────
@@ -155,10 +157,38 @@ func shannonEntropy(s string) float64 {
 
 // ─── shared path sanitizer ────────────────────────────────────────────────────
 
+// maxFieldPathBytes bounds one Finding's FieldPath.
+//
+// TRUST BOUNDARY (F075 fix-up): the per-request findings cap bounds the NUMBER
+// of findings, not their SIZE, and a FieldPath is built by walkValue (extract.go)
+// as `path + "." + key` out of AGENT-CONTROLLED JSON keys — sanitized, never
+// truncated. The scan budget counts span TEXT (values), so a body of enormous
+// KEYS burns neither limit: a measured 324,654-byte body of 301 long-key leaves
+// produced 301 findings (cap 500 never fires, Skipped=false) whose marshalled
+// findings JSON was 46,323,600 bytes — 143x the body, and 44x
+// internal/api/helpers.go's 1 MiB maxJSONBody, so the audit POST is refused,
+// the decision is silently lost, and the proxy still mirrors the whole 46 MB
+// line to stdout. Bounding the path is what makes the decision log bounded in
+// BYTES rather than only in rows.
+//
+// 256 bytes is far beyond any real field path (the deepest schema paths this
+// repo extracts are tens of bytes) and small enough that a full cap's worth of
+// findings cannot approach the control plane's body limit.
+const maxFieldPathBytes = 256
+
 // sanitizePath masks any well-known secret FORMAT appearing in a field path
 // (agent-controlled JSON object keys can contain one) so a Finding stays
-// content-free by construction. The known-secret detector additionally masks
-// operator-declared corpus values from the path (see knownSecretDetector.safePath).
+// content-free by construction, and TRUNCATES it to maxFieldPathBytes so one
+// finding cannot be arbitrarily large. The known-secret detector additionally
+// masks operator-declared corpus values from the path (see
+// knownSecretDetector.safePath).
+//
+// Masking runs BEFORE truncation so a secret-shaped key is masked wherever it
+// sits, including in the part that is then cut. The head+tail form keeps both
+// ends an operator navigates by (the root object and the leaf key) and states
+// the original length, so a truncated path reads as truncated rather than as a
+// different path. Idempotent: re-sanitizing a truncated path is a no-op,
+// because the result is already under the bound.
 func sanitizePath(path string) string {
 	if path == "" {
 		return path
@@ -167,5 +197,17 @@ func sanitizePath(path string) string {
 	for _, rule := range secretRules {
 		out = rule.re.ReplaceAllString(out, maskedPlaceholder)
 	}
-	return out
+	return truncateFieldPath(out)
+}
+
+// truncateFieldPath cuts a path to maxFieldPathBytes, on rune boundaries so the
+// audit stream never carries a split UTF-8 sequence.
+func truncateFieldPath(path string) string {
+	if len(path) <= maxFieldPathBytes {
+		return path
+	}
+	const head, tail = 160, 48
+	return strings.ToValidUTF8(path[:head], "") +
+		"…[+" + strconv.Itoa(len(path)-head-tail) + "B]…" +
+		strings.ToValidUTF8(path[len(path)-tail:], "")
 }

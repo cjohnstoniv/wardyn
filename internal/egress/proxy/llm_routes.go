@@ -27,6 +27,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
@@ -85,6 +86,105 @@ const maxConcurrentScans = 1
 // scanSlots is maxConcurrentScans' semaphore. Package-level because the bound
 // it enforces is the PROCESS's cgroup memory cap, not any one Proxy's.
 var scanSlots = make(chan struct{}, maxConcurrentScans)
+
+// maxRetainedScanBytes bounds the total buffered request bytes inspection may
+// hold live at once, counted for as long as the buffer is REACHABLE — not just
+// while it is being scanned.
+//
+// TRUST BOUNDARY (F074 fix-up): the scan slot above bounds the buffer+extract
+// WINDOW; it says nothing about the buffer's LIFETIME. scanBufferedBody hands
+// its caller a re-readable copy of the whole body and the caller then streams
+// it through RoundTrip, so the slot was already released while up to
+// maxLLMScanBody (32 MiB) stayed live per in-flight request. N requests stalled
+// on a slow upstream therefore retained N x 32 MiB with NO slot held: one 32
+// MiB body extracting (~170 MiB at the measured 5.3x) plus three already-scanned
+// ones waiting on the upstream (96 MiB) is ~266 MiB against the sidecar's hard
+// 256 MiB cgroup cap — the very arithmetic maxConcurrentScans exists to
+// prevent, reached around it.
+//
+// 64 MiB leaves room beside one in-flight extraction under that cap, and the
+// budget is charged AFTER the scan peak (see scanBufferedBody) so the two do
+// not double-count the same request's peak. A var so tests can shrink it
+// instead of allocating tens of MiB.
+var maxRetainedScanBytes = 64 << 20 // 64 MiB
+
+// scanRetained is that budget. Package-level for the same reason scanSlots is:
+// the ceiling is the PROCESS's.
+var scanRetained = &byteBudget{limit: func() int { return maxRetainedScanBytes }}
+
+// byteBudget is a context-bounded semaphore over BYTES (the slot semaphore
+// counts requests, which is the wrong unit for a memory bound).
+//
+// Acquisition is serialized by construction: scanBufferedBody charges the
+// budget while still holding its scan slot, and maxConcurrentScans is 1, so
+// there is never more than one acquirer and a partial acquisition cannot
+// deadlock against another. The `used == 0` escape hatch keeps a single body
+// larger than the whole budget from waiting forever on a budget only it could
+// free.
+type byteBudget struct {
+	limit    func() int
+	mu       sync.Mutex
+	used     int
+	released chan struct{}
+}
+
+// acquire charges n bytes, waiting (ctx-bounded) for room. It reports whether
+// the charge was taken; false means the caller must FAIL CLOSED, exactly as an
+// expired scan-slot wait does.
+func (b *byteBudget) acquire(ctx context.Context, n int) bool {
+	tick := time.NewTicker(scanRetainPollInterval)
+	defer tick.Stop()
+	for {
+		b.mu.Lock()
+		if b.used == 0 || b.used+n <= b.limit() {
+			b.used += n
+			b.mu.Unlock()
+			return true
+		}
+		if b.released == nil {
+			b.released = make(chan struct{}, 1)
+		}
+		waiter := b.released
+		b.mu.Unlock()
+		select {
+		case <-waiter:
+		case <-tick.C: // re-check: a wakeup may have been coalesced
+		case <-ctx.Done():
+			return false
+		}
+	}
+}
+
+// release returns n bytes. Idempotent per call site via the closure
+// scanBufferedBody hands out, so a caller's `defer release()` cannot
+// double-credit.
+func (b *byteBudget) release(n int) {
+	b.mu.Lock()
+	b.used -= n
+	if b.used < 0 {
+		b.used = 0
+	}
+	waiter := b.released
+	b.mu.Unlock()
+	if waiter != nil {
+		select {
+		case waiter <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// inUse reports the bytes currently charged (tests observe the LIFETIME claim
+// with it).
+func (b *byteBudget) inUse() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.used
+}
+
+// scanRetainPollInterval re-checks the budget after a coalesced wakeup. Only
+// reached under memory pressure.
+const scanRetainPollInterval = 25 * time.Millisecond
 
 // scanQueueWait bounds how long a request may wait for a scan slot.
 //
@@ -179,7 +279,10 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 	// returns blocked=true. Otherwise it returns the body to forward and a
 	// content-free scan summary to attach (non-nil only when there is something
 	// to report — a clean turn stays quiet).
-	bodyReader, scanSummary, blocked := p.inspectLLM(w, r, host, port, rest, channel)
+	bodyReader, scanSummary, releaseBody, blocked := p.inspectLLM(w, r, host, port, rest, channel)
+	// The buffered body stays charged to maxRetainedScanBytes until the upstream
+	// round trip has consumed it (F074).
+	defer releaseBody()
 	if blocked {
 		return
 	}
@@ -307,6 +410,19 @@ func scanSummaryFrom(res contentscan.Result, serr error, eng *contentscan.Engine
 		Channel:    string(channel),
 		Skipped:    res.Skipped,
 		SkipReason: res.SkipReason,
+		// The truncation, on the wire (F075): the flag survives an earlier skip
+		// reason claiming SkipReason, and the counts let an auditor tell a
+		// capped scan from one that found exactly maxFindings.
+		FindingsCapped:  res.FindingsCapped || res.SkipReason == "findings_capped",
+		FindingsPastCap: res.FindingsDropped,
+	}
+	if s.FindingsCapped {
+		// The COUNTED pre-cap total, not len(Findings)+FindingsDropped: under
+		// mode=block capFindings keeps a block-relevant past-cap finding back
+		// INTO Findings while still counting it as dropped, so that sum
+		// double-counts every keep-back (measured: 1,500 for a 1,200-finding
+		// body). See contentscan.Result.FindingsSeen.
+		s.FindingsTotal = res.FindingsSeen
 	}
 	for _, f := range res.Findings {
 		s.Findings = append(s.Findings, egress.ScanFinding{
@@ -324,9 +440,9 @@ func scanSummaryFrom(res contentscan.Result, serr error, eng *contentscan.Engine
 		s.Action = overrideAction
 	case serr != nil || (res.Skipped && res.SkipReason == "parse_error"):
 		s.Action = "error"
-	case res.Skipped && len(res.Findings) > 0 &&
-		(res.SkipReason == "findings_capped" || res.SkipReason == "scan_budget" ||
-			res.SkipReason == "attachment_decode_error"):
+	case (res.Skipped || res.FindingsCapped) && len(res.Findings) > 0 &&
+		(res.FindingsCapped || res.SkipReason == "findings_capped" ||
+			res.SkipReason == "scan_budget" || res.SkipReason == "attachment_decode_error"):
 		// B2/B4 (F075/F073/F056 fix-up): findings_capped, scan_budget, and
 		// attachment_decode_error all set Result.Skipped, and this switch used
 		// to resolve `case res.Skipped` before ever reaching "alert" — so the
@@ -358,9 +474,12 @@ func scanSummaryFrom(res contentscan.Result, serr error, eng *contentscan.Engine
 // chat/completions (OpenAI) are scanned; other prompt-bearing subpaths are
 // honestly marked uninspected (never silently allowed); non-prompt paths stream
 // through quietly. host names the upstream for honest per-host decision logging.
-func (p *Proxy) inspectLLM(w http.ResponseWriter, r *http.Request, host string, port int, rest string, channel contentscan.Channel) (io.Reader, *egress.ScanSummary, bool) {
+//
+// The returned release must be deferred by the caller — see scanBufferedBody.
+func (p *Proxy) inspectLLM(w http.ResponseWriter, r *http.Request, host string, port int, rest string, channel contentscan.Channel) (io.Reader, *egress.ScanSummary, func(), bool) {
+	noRelease := func() {}
 	if p.scanner == nil || p.scanner.Mode() == contentscan.ModeOff {
-		return r.Body, nil, false
+		return r.Body, nil, noRelease, false
 	}
 	switch classifyLLM(channel, r.Method, rest) {
 	case scanMessages:
@@ -375,30 +494,47 @@ func (p *Proxy) inspectLLM(w http.ResponseWriter, r *http.Request, host string, 
 		if p.scanner.BlocksOnError() {
 			p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLMBlocked, p.skipSummary("block", "uninspected_channel", channel))
 			writeScanBlocked(w, 0, nil, "uninspected_channel")
-			return nil, nil, true
+			return nil, nil, noRelease, true
 		}
-		return r.Body, p.skipSummary("skipped", "uninspected_channel", channel), false
+		return r.Body, p.skipSummary("skipped", "uninspected_channel", channel), noRelease, false
 	default: // scanNone: not prompt-bearing — stream through, stay quiet
-		return r.Body, nil, false
+		return r.Body, nil, noRelease, false
+	}
+}
+
+// bodyBearingMethod reports whether a method may carry a request body Wardyn
+// would want to inspect.
+//
+// TRUST BOUNDARY (F088/F112): this is the ONE definition, shared by
+// hasScannableBody and by both LLM endpoint classifiers, because the two used
+// to disagree — hasScannableBody accepted POST/PUT/PATCH while the classifiers
+// opened with `if method != http.MethodPost { return scanNone }`. The sandbox
+// picks the verb as freely as it picks the suffix, so `PUT /v1/messages` with a
+// secret in the body reached the vendor with the operator's brokered credential
+// under mode=block, allowed, with scanSummary=nil — audit-indistinguishable
+// from a bodiless GET /v1/models. Closing the suffix axis (F112's fail-closed
+// default) while leaving the verb axis open just moved the same bypass one
+// keystroke sideways.
+func bodyBearingMethod(method string) bool {
+	switch method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch:
+		return true
+	default:
+		return false
 	}
 }
 
 // hasScannableBody reports whether a forward-proxy request carries a body worth
 // inspecting (a body-bearing method with a non-empty/unknown-length body).
 func hasScannableBody(r *http.Request) bool {
-	switch r.Method {
-	case http.MethodPost, http.MethodPut, http.MethodPatch:
-	default:
-		return false
-	}
-	return r.Body != nil && r.ContentLength != 0
+	return bodyBearingMethod(r.Method) && r.Body != nil && r.ContentLength != 0
 }
 
 // inspectForwardBody scans a GENERIC (non-LLM) plaintext-HTTP forward body. Like
 // the LLM scanMessages path: buffer (cap), block before forwarding on a confident
 // finding, else return the buffered body + a content-free summary. blocked=true
 // means a 403/error was already written.
-func (p *Proxy) inspectForwardBody(w http.ResponseWriter, r *http.Request, host string, port int) (io.Reader, *egress.ScanSummary, bool) {
+func (p *Proxy) inspectForwardBody(w http.ResponseWriter, r *http.Request, host string, port int) (io.Reader, *egress.ScanSummary, func(), bool) {
 	return p.scanBufferedBody(w, r, contentscan.ChannelGeneric, "read body",
 		func(d egress.Decision, ruleSource string, scan *egress.ScanSummary) {
 			p.emitLLMDecision(r, host, port, d, ruleSource, scan)
@@ -412,7 +548,12 @@ func (p *Proxy) inspectForwardBody(w http.ResponseWriter, r *http.Request, host 
 // scans for the channel, and either writes the 403 (blocked=true) or returns the
 // buffered body plus a content-free summary. emit records the decision for the
 // caller's transport (port 443 LLM route vs the generic forward port).
-func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, channel contentscan.Channel, readErrMsg string, emit func(egress.Decision, string, *egress.ScanSummary)) (io.Reader, *egress.ScanSummary, bool) {
+//
+// The returned release MUST be deferred by the caller: it is what gives the
+// buffer back to maxRetainedScanBytes, and the buffer stays charged until it
+// runs (F074 — the scan slot only ever bounded the extract window). It is
+// always non-nil and safe to call more than once.
+func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, channel contentscan.Channel, readErrMsg string, emit func(egress.Decision, string, *egress.ScanSummary)) (io.Reader, *egress.ScanSummary, func(), bool) {
 	// Take a scan slot BEFORE buffering: the slot is what bounds live heap
 	// against the sidecar's cgroup cap, so it has to be held across the
 	// io.ReadAll as well as the extract+scan (see maxConcurrentScans).
@@ -421,6 +562,7 @@ func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, channel
 	// (scanQueueWait) because nothing above this call deadlines it, and it fails
 	// CLOSED on either: a request that could not be inspected is denied, never
 	// forwarded unscanned.
+	noRelease := func() {}
 	ctx, cancel := context.WithTimeout(r.Context(), scanQueueWait)
 	defer cancel()
 	select {
@@ -429,34 +571,60 @@ func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, channel
 	case <-ctx.Done():
 		emit(egress.Deny, ruleSourceLLM, nil)
 		p.httpError(w, readErrMsg, ctx.Err(), http.StatusBadGateway)
-		return nil, nil, true
+		return nil, nil, noRelease, true
 	}
 
 	buffered, rerr := io.ReadAll(io.LimitReader(r.Body, int64(maxLLMScanBody)+1))
 	if rerr != nil {
 		emit(egress.Deny, ruleSourceLLM, nil)
 		http.Error(w, readErrMsg, http.StatusBadRequest)
-		return nil, nil, true
+		return nil, nil, noRelease, true
+	}
+	// Charge the buffer to the LIFETIME budget before handing it back. Done
+	// here, after the read and the scan peak, for two reasons: the size is only
+	// known now, and the extraction peak this request is about to leave behind
+	// is what the slot above already accounted for. Still under the slot, so
+	// there is exactly one acquirer (see byteBudget). Expiry fails CLOSED — the
+	// same Deny + 502 the slot wait takes — so memory pressure can never turn
+	// into a body forwarded unscanned.
+	charge := func() (func(), bool) {
+		n := len(buffered)
+		if !scanRetained.acquire(ctx, n) {
+			emit(egress.Deny, ruleSourceLLM, nil)
+			p.httpError(w, readErrMsg, ctx.Err(), http.StatusBadGateway)
+			return noRelease, false
+		}
+		var once sync.Once
+		return func() { once.Do(func() { scanRetained.release(n) }) }, true
 	}
 	if len(buffered) > maxLLMScanBody {
 		if p.scanner.BlocksOnError() {
 			emit(egress.Deny, ruleSourceLLMBlocked, p.skipSummary("block", "body_oversize", channel))
 			writeScanBlocked(w, 0, nil, "body_oversize")
-			return nil, nil, true
+			return nil, nil, noRelease, true
 		}
-		return io.MultiReader(bytes.NewReader(buffered), r.Body), p.skipSummary("skipped", "body_oversize", channel), false
+		release, ok := charge()
+		if !ok {
+			return nil, nil, noRelease, true
+		}
+		return io.MultiReader(bytes.NewReader(buffered), r.Body),
+			p.skipSummary("skipped", "body_oversize", channel), release, false
 	}
 	res, _, serr := p.scanner.ScanRequest(channel, buffered)
 	if p.scanner.ShouldBlock(res) {
 		emit(egress.Deny, ruleSourceLLMBlocked, scanSummaryFrom(res, serr, p.scanner, "block", channel))
 		writeScanBlocked(w, len(res.Findings), categoriesOf(res.Findings), res.SkipReason)
-		return nil, nil, true
+		return nil, nil, noRelease, true
 	}
 	var sum *egress.ScanSummary
 	if len(res.Findings) > 0 || res.Skipped || serr != nil {
 		sum = scanSummaryFrom(res, serr, p.scanner, "", channel)
 	}
-	return bytes.NewReader(buffered), sum, false
+	release, ok := charge()
+	if !ok {
+		return nil, nil, noRelease, true
+	}
+	return bytes.NewReader(buffered), sum, release, false
 }
 
 // skipSummary builds a content-free "scanning did not run" summary (oversize /
@@ -517,18 +685,24 @@ func classifyLLM(channel contentscan.Channel, method, rest string) int {
 
 // classifyAnthropicLLM decides how a request to the Anthropic route is inspected.
 // count_tokens shares the Messages schema, so it is scanned with the same
-// extractor; every other POST carries content in a shape we cannot parse yet,
-// so it is marked uninspected rather than silently allowed — see the default
-// arm's F112 note.
+// extractor; every other body-bearing request carries content in a shape we
+// cannot parse yet, so it is marked uninspected rather than silently allowed —
+// see the default arm's F112/F088 note.
 func classifyAnthropicLLM(method, rest string) int {
-	if method != http.MethodPost {
+	// The quiet answer belongs to methods that carry NO body (GET/HEAD/DELETE/…),
+	// not to "anything that is not a POST" (F088/F112 — bodyBearingMethod is the
+	// one definition hasScannableBody uses too). The named arms below stay
+	// POST-only because POST is the only verb the vendor documents for them, so
+	// a PUT/PATCH to the same path is exactly an unrecognised body-bearing
+	// request and falls to the fail-closed default.
+	if !bodyBearingMethod(method) {
 		return scanNone
 	}
 	r := strings.Trim(rest, "/")
 	switch {
-	case r == "messages" || strings.HasSuffix(r, "/messages"):
+	case method == http.MethodPost && (r == "messages" || strings.HasSuffix(r, "/messages")):
 		return scanMessages
-	case strings.HasSuffix(r, "/count_tokens"):
+	case method == http.MethodPost && strings.HasSuffix(r, "/count_tokens"):
 		return scanMessages
 	default:
 		// FAIL-CLOSED DEFAULT (F112): every OTHER POST on this route is
@@ -547,6 +721,11 @@ func classifyAnthropicLLM(method, rest string) int {
 		// forwards <rest> verbatim) and the VENDOR adds endpoints without asking
 		// us. So the default is the honest answer — "prompt-bearing but no
 		// extractor yet" — and a new arm above is what earns silence.
+		//
+		// F088 second axis: the same is true of the VERB. `PUT /v1/messages` is
+		// not a documented Anthropic call, so it lands here rather than on the
+		// scanMessages arm — uninspected and refused under fail-closed blocking,
+		// instead of the silent brokered forward it used to get.
 		return scanOpaque
 	}
 }
@@ -556,12 +735,15 @@ func classifyAnthropicLLM(method, rest string) int {
 // embeddings carry prompt/input text in shapes we do not parse yet, so they are
 // honestly marked uninspected rather than silently allowed.
 func classifyOpenAILLM(method, rest string) int {
-	if method != http.MethodPost {
+	// Same two rules as classifyAnthropicLLM: only a bodiless method is quiet
+	// (F088/F112), and the named arm is POST-only so any other body-bearing verb
+	// on the same path is an unrecognised call, not a scanned one.
+	if !bodyBearingMethod(method) {
 		return scanNone
 	}
 	r := strings.Trim(rest, "/")
 	switch {
-	case r == "chat/completions" || strings.HasSuffix(r, "/chat/completions"):
+	case method == http.MethodPost && (r == "chat/completions" || strings.HasSuffix(r, "/chat/completions")):
 		return scanMessages
 	default:
 		// FAIL-CLOSED DEFAULT (F112), same rule as classifyAnthropicLLM: /responses,

@@ -95,15 +95,18 @@ func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, 
 	// ran allow/deny/approval/method before reaching here.
 	if p.upstream != nil && !p.bypassUpstream(host) {
 		// The one thing the upstream hop cannot be trusted to re-derive: a
-		// NON-CANONICAL literal (127.1, 0x7f000001, 2130706433, 0251.0376.0.1).
-		// net.ParseIP refuses those spellings, so evaluate's step-0 literal-IP
+		// NON-CANONICAL literal — an inet_aton IPv4 spelling (127.1, 0x7f000001,
+		// 2130706433 = 127.0.0.1; 0251.0376.0.1 = 169.254.0.1) or a
+		// zone-suffixed IPv6 literal (fe80::1%eth0, fe80::1%25eth0).
+		// net.ParseIP refuses all of those, so evaluate's step-0 literal-IP
 		// guard never saw them and the string would be forwarded to the corp
-		// proxy verbatim — where inet_aton turns it back into loopback/metadata.
+		// proxy verbatim — where inet_aton (or the dialer's own zone-aware
+		// parser) turns it back into loopback/link-local/metadata.
 		// Checked HERE as well as at step 0 because serveMITMRequest and the two
 		// brokers reach this function without going through evaluate (F105).
 		// Canonical literals are deliberately NOT re-vetted here: evaluate has
 		// already decided them, including the operator's egress-redirect trust.
-		if ip := nonCanonicalIPv4(host); ip != nil {
+		if ip := nonCanonicalLiteralIP(host); ip != nil {
 			if kind, why := isBlockedIP(ip); kind != blockNone {
 				return "", "", fmt.Errorf("host %q denied: non-canonical literal for %s: %s", host, ip, why)
 			}
