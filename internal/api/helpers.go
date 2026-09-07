@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -528,6 +529,43 @@ func decodeStrictMsg(w http.ResponseWriter, r *http.Request, dst any) string {
 		return "invalid JSON body: " + err.Error()
 	}
 	return ""
+}
+
+// decodeStrictKeys is decodeStrictMsg plus the SET OF TOP-LEVEL KEYS the body
+// actually carried, for the one thing a decoded struct cannot answer: whether a
+// zero value was WRITTEN or merely OMITTED.
+//
+// It exists because a whole-document PUT and an older client are a data-loss
+// pair. A v0.6.x SDK GETs /site-config, decodes into ITS OWN SiteConfig — which
+// has no field for anything 0.7 added — re-marshals, and PUTs the result: the
+// newer fields are simply gone from the body, and a handler that cannot tell
+// "absent" from "cleared" writes empty over the operator's stored value. The
+// same footgun was already solved twice by hand on this document (Integrations,
+// OnboardingCompletedAt), each time for one field.
+//
+// SAME CAP, SAME STRICTNESS. The body is read once under maxJSONBody and the
+// struct decode runs over those bytes with DisallowUnknownFields exactly as
+// decodeStrictMsg does — this is a second QUESTION about the same body, never a
+// second, looser decode path.
+func decodeStrictKeys(w http.ResponseWriter, r *http.Request, dst any) (present map[string]bool, msg string) {
+	body, ok := readCappedBody(w, r, maxJSONBody, "request body")
+	if !ok {
+		return nil, "" // readCappedBody already answered
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return nil, "invalid JSON body: " + err.Error()
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(body, &keys); err != nil {
+		return nil, "invalid JSON body: " + err.Error()
+	}
+	present = make(map[string]bool, len(keys))
+	for k := range keys {
+		present[k] = true
+	}
+	return present, ""
 }
 
 // decodeStrict is decodeStrictMsg with the 400 written for the caller, for the
