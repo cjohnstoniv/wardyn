@@ -581,6 +581,9 @@ describe("user-drives-prompt §7.7 — the member refusals match the Go source",
       expect(g.trimEnd().endsWith(close), `a backend refusal escapes the frozen envelope: ${g}`).toBe(true);
     }
 
+  });
+});
+
 // R4/F051 — §7.3 froze the preview as a five-row <dl> while POST /drives/preview
 // answers seven fields, and PREVIEW_OBJECT_HINT ("What the reclaim command
 // names — copy it when someone leaves") promised the object name UNCONDITIONALLY.

@@ -9,6 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import type { RecordResult, SetupStatus, Workspace } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 
 const getWorkspaceMock = vi.fn();
 const deleteWorkspaceMock = vi.fn();
@@ -41,6 +42,7 @@ const killRunMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: (...a: unknown[]) => killRunMock(...a) } }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 
+import { toast } from "sonner";
 import { WorkspaceDetailScreen } from "./workspace-detail";
 
 function ws(over: Partial<Workspace> = {}): Workspace {
@@ -81,14 +83,17 @@ function RunsRouteProbe() {
   return <div>runs screen{state?.openNewRun ? " (openNewRun)" : ""}</div>;
 }
 
-function renderDetail(id = "ws-1", operator = true) {
+function renderDetail(id = "ws-1", operator = true, securityOperator = operator) {
   return render(
     <MemoryRouter initialEntries={[`/workspaces/${id}`]}>
       {/* 0.7 §B: the Sessions pane and both host cards moved to
           useSecurityOperator, so this fixture's viewer must be a MEMBER on
           both predicates; the workspace Delete/Rebuild controls it also
-          asserts stay on useOperator. */}
-      <OperatorProvider operator={operator} securityOperator={operator}>
+          asserts stay on useOperator. `securityOperator` defaults to
+          `operator` so every existing caller is unchanged, and splits for the
+          SECURITY-ADMIN persona (operator=false, securityOperator=true) — the
+          caller F030 is about, which this fixture could not express. */}
+      <OperatorProvider operator={operator} securityOperator={securityOperator}>
         <Routes>
           <Route path="/workspaces/:id" element={<WorkspaceDetailScreen />} />
           <Route path="/workspaces" element={<div>back on the list</div>} />
@@ -389,5 +394,64 @@ describe("WorkspaceDetailScreen — a viewer's write controls are disabled", () 
     expect(await screen.findByRole("button", { name: "Remove registry.npmjs.org" })).not.toBeDisabled();
     expect(screen.getByRole("button", { name: "Remove evil.example.com" })).not.toBeDisabled();
     expect(screen.getByRole("button", { name: /delete this workspace/i })).toBeDisabled();
+  });
+});
+
+// F030 — removing an allowed host is up to TWO writes on TWO tiers: PUT
+// .../approved-egress (securityOps) and, when an operator-authored
+// requirements row backs the host, PUT .../requirements (operatorOnly). The
+// card was gated on the security tier alone and treated the pair as atomic.
+describe("WorkspaceDetailScreen — Allowed hosts, the two-tier remove", () => {
+  const operatorSet = { level: "required" as const, provenance: "operator_set" as const };
+
+  it("a security admin may not remove a host whose requirements row is operator_set, but may remove a plain approved one", async () => {
+    getWorkspaceMock.mockResolvedValue(
+      ws({
+        approved_egress: ["registry.npmjs.org", "pypi.org"],
+        requirements: { "egress:registry.npmjs.org": operatorSet },
+      }),
+    );
+    renderDetail("ws-1", false, true);
+
+    const blocked = await screen.findByRole("button", { name: "Remove registry.npmjs.org" });
+    // Disabled because the SECOND write is operatorOnly — not because the card
+    // is closed to this caller: the sibling row proves the card is live.
+    expect(blocked).toBeDisabled();
+    expect(blocked).toHaveAttribute("title", OPERATOR_ONLY_REASON);
+    expect(screen.getByRole("button", { name: "Remove pypi.org" })).not.toBeDisabled();
+  });
+
+  it("publishes the landed allowlist write and reports a failed requirements clear as PARTIAL, not as a total failure", async () => {
+    getWorkspaceMock.mockResolvedValue(
+      ws({
+        approved_egress: ["registry.npmjs.org"],
+        requirements: { "egress:registry.npmjs.org": operatorSet },
+      }),
+    );
+    // The first PUT LANDS: the server has already dropped the host from the
+    // allowlist, and its requirements row is all that still holds it.
+    setApprovedEgressMock.mockResolvedValue(
+      ws({ approved_egress: [], requirements: { "egress:registry.npmjs.org": operatorSet } }),
+    );
+    setRequirementsMock.mockRejectedValue(new Error("operator role required"));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail();
+
+    expect(await screen.findByText("Allowed hosts · 2")).toBeInTheDocument();
+    expect(screen.getByText("approved for this workspace")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remove registry.npmjs.org" }));
+
+    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalled());
+    // The landed half was published: the row re-renders from the FIRST write's
+    // workspace, so its provenance is now the requirements row, not the
+    // allowlist the server has already dropped it from.
+    expect(await screen.findByText("required by this workspace")).toBeInTheDocument();
+    expect(screen.queryByText("approved for this workspace")).toBeNull();
+    // ...and the operator is told which half failed.
+    expect(toast.error).toHaveBeenCalledWith(
+      "Removed registry.npmjs.org from the allowlist, but its required-host row could not be cleared",
+      { description: "operator role required" },
+    );
+    expect(toast.error).not.toHaveBeenCalledWith("Failed to remove registry.npmjs.org", expect.anything());
   });
 });
