@@ -200,16 +200,17 @@ func workspaceCmd(client clientFn) *cobra.Command {
 	create.Flags().BoolVar(&createJSON, "json", false, "emit the created workspace as JSON")
 
 	var listJSON bool
-	var listLimit int
+	var listLimit, listOffset int
 	list := &cobra.Command{
 		Use:   "list",
 		Short: "List onboarded workspaces",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			wss, err := client().ListWorkspaces(cmd.Context(), listPageOpts(listLimit)...)
+			wss, truncated, err := client().ListWorkspacesPage(cmd.Context(), listPageOptsAt(listLimit, listOffset)...)
 			if err != nil {
 				return err
 			}
+			warnListTruncated(cmd, truncated, "workspace", len(wss), listOffset)
 			if listJSON {
 				return emitJSON(wss)
 			}
@@ -223,6 +224,7 @@ func workspaceCmd(client clientFn) *cobra.Command {
 	}
 	list.Flags().BoolVar(&listJSON, "json", false, "emit raw JSON")
 	list.Flags().IntVar(&listLimit, "limit", 0, "max rows to return (0 = server default page)")
+	list.Flags().IntVar(&listOffset, "offset", 0, "skip this many rows (page forward past a truncated list)")
 
 	getJSON := true
 	get := &cobra.Command{

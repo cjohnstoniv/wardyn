@@ -41,5 +41,54 @@ if [ -s "$OUT/cover.out" ]; then
   echo ">> coverage total: ${TOTAL:-n/a}"
 fi
 
+# ── the skip floor ───────────────────────────────────────────────────────────
+# A test that SKIPS produces `--- SKIP` -> `ok` -> exit 0, and everything above
+# grades on the exit code alone. So a probe that quietly stopped running looked
+# exactly like a probe that passed, and the invariant it proves - audit_events is
+# append-only, and the boot check says so honestly - was unfalsifiable from CI's
+# own output. The probes now derive fail-not-skip from the connection, but that
+# derivation is itself only observable here: if it ever stops holding, this is
+# the step that says so.
+#
+# NAMED, not "no skips anywhere": a suite legitimately skips what its lane cannot
+# provide (no Docker, no cluster). The floor covers the tests whose whole purpose
+# is to be falsifiable, matched by NAME so a rename cannot quietly empty the set -
+# an empty match is itself a failure.
+# The DEFAULT floor applies to the pg suite, and only when the lane actually
+# declared a database: a run with WARDYN_TEST_PG unset has no substrate, and
+# skipping what the environment genuinely cannot provide is the one sanctioned
+# skip. An explicitly-set regex is honoured either way, because then somebody
+# asserted the lane can satisfy it.
+REQUIRE_PASS="${WARDYN_TEST_REPORT_REQUIRE_PASS:-}"
+if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "pg" ] && [ -n "${WARDYN_TEST_PG:-}" ]; then
+  REQUIRE_PASS='^TestPG_ProbeF11_'
+fi
+if [ -n "$REQUIRE_PASS" ] && [ -s "$OUT/test-output.json" ]; then
+  # go test -json emits one event per line; a top-level test's outcome is the
+  # event whose Test is the bare name (subtests carry a "/"). Extracted with
+  # grep/sed so this needs no jq on the runner.
+  names() {
+    grep -o "\"Action\":\"$1\",\"Package\":\"[^\"]*\",\"Test\":\"[^\"/]*\"" "$OUT/test-output.json" \
+      | sed 's/.*"Test":"//; s/"$//' | grep -E "$REQUIRE_PASS" | sort -u
+  }
+  PASSED="$(names pass)"
+  SKIPPED="$(names skip)"
+  FAILED="$(names fail)"
+  if [ -z "$PASSED$SKIPPED$FAILED" ]; then
+    echo ">> SKIP FLOOR: no test matching /$REQUIRE_PASS/ ran in suite '$SUITE'." >&2
+    echo ">> Those probes are the falsifiable proof of the append-only invariant; a set that matches nothing" >&2
+    echo ">> is a rename that silently removed the floor, not a suite with nothing to check." >&2
+    GO_EXIT=1
+  elif [ -n "$SKIPPED" ]; then
+    echo ">> SKIP FLOOR: these probes SKIPPED on a lane that declared its substrate:" >&2
+    echo "$SKIPPED" | sed 's/^/>>   /' >&2
+    echo ">> A skip here reports \`ok\` and exit 0 while proving nothing. Give the lane a CREATE ROLE-capable" >&2
+    echo ">> role over a URL-form DSN, or set WARDYN_TEST_PG_SUPERUSER=1 to assert it." >&2
+    GO_EXIT=1
+  else
+    echo ">> skip floor: $(echo "$PASSED" | wc -l | tr -d ' ') probe(s) matching /$REQUIRE_PASS/ passed"
+  fi
+fi
+
 echo ">> reports in $OUT"
 exit $GO_EXIT

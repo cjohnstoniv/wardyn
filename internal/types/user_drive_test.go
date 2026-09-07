@@ -623,21 +623,43 @@ func TestManagedBackendTakesOnlyTheHashTemplate(t *testing.T) {
 		}
 	})
 
-	// A share is the opposite case and must not be caught by the new rule: its
+	// host_path is the opposite case and must not be caught by the rule: its
 	// directories exist already under names Wardyn did not choose, so a claim
 	// template is the ONLY thing that can name one.
-	t.Run("a share still takes both claim templates", func(t *testing.T) {
-		for _, b := range []DriveBackend{DriveBackendHostPath, DriveBackendK8sPVCStatic} {
-			for _, tmpl := range []HomeTemplate{HomeTemplateSub, HomeTemplateEmailLocal} {
-				d := UserDrive{Name: "Corp NAS", Backend: b, HomeTemplate: tmpl}
-				if b == DriveBackendHostPath {
-					d.HostRoot = "/srv/homes"
-				}
-				if err := ValidateUserDrive(&d, b.RunnerTarget()); err != nil {
-					t.Errorf("ValidateUserDrive(%s, %s) = %v, want it accepted — only a claim can name a "+
-						"directory Wardyn did not create", b, tmpl, err)
-				}
+	//
+	// CORRECTED: this subtest used to make the same claim for k8s_pvc_static, on
+	// the managed/share split. It does not hold there — Wardyn MINTS a static
+	// claim's name (DriveObjectNamedByWardyn), so the collision half of the rule
+	// above applies to it verbatim: `email_local` folds two addresses onto one
+	// claim and the driver's static arm has no per-drive labels to separate them.
+	// Only the EXPOSURE half is relaxed, because an admin has to recognise the
+	// claims they pre-provision.
+	t.Run("host_path still takes both claim templates", func(t *testing.T) {
+		for _, tmpl := range []HomeTemplate{HomeTemplateSub, HomeTemplateEmailLocal} {
+			d := UserDrive{Name: "Corp NAS", Backend: DriveBackendHostPath, HostRoot: "/srv/homes", HomeTemplate: tmpl}
+			if err := ValidateUserDrive(&d, DriveBackendHostPath.RunnerTarget()); err != nil {
+				t.Errorf("ValidateUserDrive(host_path, %s) = %v, want it accepted — only a claim can name a "+
+					"directory Wardyn did not create", tmpl, err)
 			}
+		}
+	})
+
+	t.Run("a static PVC takes hash and sub, never email_local", func(t *testing.T) {
+		for _, tmpl := range []HomeTemplate{HomeTemplateHash, HomeTemplateSub} {
+			d := UserDrive{Name: "Corp NAS", Backend: DriveBackendK8sPVCStatic, HomeTemplate: tmpl}
+			if err := ValidateUserDrive(&d, DriveBackendK8sPVCStatic.RunnerTarget()); err != nil {
+				t.Errorf("ValidateUserDrive(k8s_pvc_static, %s) = %v, want it accepted", tmpl, err)
+			}
+		}
+		d := UserDrive{Name: "Corp NAS", Backend: DriveBackendK8sPVCStatic, HomeTemplate: HomeTemplateEmailLocal}
+		err := ValidateUserDrive(&d, DriveBackendK8sPVCStatic.RunnerTarget())
+		if err == nil {
+			t.Fatalf("ValidateUserDrive(k8s_pvc_static, email_local) = nil, want a refusal — Wardyn mints the claim " +
+				"name, so two addresses sharing the part before the \"@\" bind ONE pre-provisioned claim")
+		}
+		if !strings.Contains(err.Error(), string(HomeTemplateEmailLocal)) || !strings.Contains(err.Error(), string(HomeTemplateHash)) {
+			t.Errorf("ValidateUserDrive(k8s_pvc_static, email_local) = %v, want a message naming both %q and %q",
+				err, HomeTemplateEmailLocal, HomeTemplateHash)
 		}
 	})
 

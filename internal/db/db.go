@@ -233,6 +233,11 @@ func TryAdvisoryLock(ctx context.Context, pool *pgxpool.Pool, key int64) (releas
 // role setup). Fails safe: any ambiguity (missing table, error) reports NOT
 // protected.
 //
+// THE LEGS THEMSELVES LIVE IN AuditDDLBypassRoutes, which answers the same
+// question and NAMES the routes that fired so the boot log can tell an operator
+// which one to close. This function is that answer as a bool, and there is no
+// second query anywhere that could disagree with it.
+//
 // THE TRIGGER PRIVILEGE IS PART OF THE CLAIM, and it is the least obvious third
 // of it. A role that is neither owner nor superuser but holds
 // GRANT TRIGGER ON audit_events cannot drop the shipped triggers — it can do
@@ -251,7 +256,7 @@ func TryAdvisoryLock(ctx context.Context, pool *pgxpool.Pool, key int64) (releas
 // TRIGGER from PUBLIC precisely because of that, but a deploy is free to grant
 // it back, so the claim has to be checked and not inferred.
 //
-// ALL THREE ROLE LEGS TEST MEMBERSHIP, not a role attribute. The superuser leg asks
+// ALL FOUR ROLE LEGS TEST MEMBERSHIP, not a role attribute. The superuser leg asks
 // whether current_user is a member of ANY role with rolsuper — not whether
 // current_user itself has rolsuper. Reading the attribute off the current_user
 // row missed the ordinary managed-Postgres shape (GRANT some admin role TO the
@@ -274,23 +279,81 @@ func TryAdvisoryLock(ctx context.Context, pool *pgxpool.Pool, key int64) (releas
 // of role names that rots with every Postgres release: once the database host is
 // compromised, no claim Wardyn makes about that database survives anyway.
 func AuditDDLProtected(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
-	var canBypass bool
+	routes, err := AuditDDLBypassRoutes(ctx, pool)
+	if err != nil {
+		return false, err
+	}
+	return len(routes) == 0, nil
+}
+
+// The four routes, in the words the boot log hands an operator. Each one names
+// the capability AND what it buys, because the remedy differs per route: the
+// first two are fixed by connecting as a different role, the third by a REVOKE,
+// and the fourth by a REVOKE on a PARAMETER that no amount of table-privilege
+// tidying touches.
+const (
+	auditBypassSuperuser = "membership in a superuser role"
+	auditBypassOwner     = "membership in audit_events' owner role"
+	auditBypassTrigger   = "the TRIGGER privilege on audit_events (lets the role add its own BEFORE INSERT trigger and rewrite the row)"
+	auditBypassReplica   = "the SET privilege on the session_replication_role parameter, held directly or through a role this one can SET ROLE into " +
+		"(silences every simply-enabled trigger for the session, with no DDL at all)"
+	auditBypassNoTable = "audit_events was not found, so no protection can be claimed for it"
+)
+
+// AuditDDLBypassRoutes names EVERY route by which pool's role can reach past
+// audit_events' append-only guard. An empty slice means protected, and is what
+// AuditDDLProtected is defined as.
+//
+// IT EXISTS SO THE BOOT LOG CAN NAME THE ROUTE. A bare bool made the daemon
+// guess: its WARN told the operator the app role "still owns audit_events or is
+// a superuser" and prescribed "connect wardynd as a distinct non-owner role",
+// which is the wrong remedy for two of the four routes and actively misleading
+// for the fourth — a role that owns nothing and is nobody's superuser, but holds
+// GRANT SET ON PARAMETER session_replication_role, gets a warning naming two
+// things it is not. Reporting the route is also the operator-facing half of the
+// decision taken on this finding: report the replication-role route rather than
+// arming ENABLE ALWAYS.
+//
+// ONE PREDICATE, so the report and the verdict cannot disagree: the bool is
+// len(routes) == 0 and there is no second query anywhere that answers it.
+//
+// FAILS SAFE, exactly as the bool did: a missing table, or any error, is a
+// bypass rather than a protection claim.
+func AuditDDLBypassRoutes(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
+	var found, superuser, owner, trigger bool
 	err := pool.QueryRow(ctx, `
-		SELECT COALESCE(
-			bool_or(EXISTS (SELECT 1 FROM pg_roles s
-			                 WHERE s.rolsuper
-			                   AND pg_has_role(current_user, s.oid, 'MEMBER'))
-			        OR pg_has_role(current_user, c.relowner, 'MEMBER')
-			        OR has_table_privilege(current_user, c.oid, 'TRIGGER')),
-			true)
+		SELECT count(*) > 0,
+		       COALESCE(bool_or(EXISTS (SELECT 1 FROM pg_roles s
+		                                 WHERE s.rolsuper
+		                                   AND pg_has_role(current_user, s.oid, 'MEMBER'))), false),
+		       COALESCE(bool_or(pg_has_role(current_user, c.relowner, 'MEMBER')), false),
+		       COALESCE(bool_or(has_table_privilege(current_user, c.oid, 'TRIGGER')), false)
 		FROM pg_class c
 		WHERE c.relname = 'audit_events' AND c.relkind = 'r'`,
-	).Scan(&canBypass)
+	).Scan(&found, &superuser, &owner, &trigger)
 	if err != nil {
-		return false, fmt.Errorf("db: check audit ddl protection: %w", err)
+		return nil, fmt.Errorf("db: check audit ddl protection: %w", err)
 	}
-	if canBypass {
-		return false, nil // already answered; the fourth leg cannot make it more false
+	if !found {
+		return []string{auditBypassNoTable}, nil
+	}
+	var routes []string
+	if superuser {
+		routes = append(routes, auditBypassSuperuser)
+	}
+	if owner {
+		routes = append(routes, auditBypassOwner)
+	}
+	if trigger {
+		routes = append(routes, auditBypassTrigger)
+	}
+	if len(routes) > 0 {
+		// SHORT-CIRCUITED, and deliberately: the verdict is already decided, and
+		// the two extra round trips below are the only place this function can
+		// fail on a server that answered the first query — a boot that used to
+		// reach a clean refusal must not start failing fatally on the version
+		// probe instead. The routes reported are the ones that fired.
+		return routes, nil
 	}
 	// THE FOURTH LEG, AND IT IS NOT A DDL ONE. The three above ask who can DROP
 	// or DISABLE a trigger. `SET session_replication_role = 'replica'` needs no
@@ -319,18 +382,47 @@ func AuditDDLProtected(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
 	var granular bool
 	if err := pool.QueryRow(ctx,
 		`SELECT current_setting('server_version_num')::int >= 150000`).Scan(&granular); err != nil {
-		return false, fmt.Errorf("db: read server version for the session_replication_role check: %w", err)
+		return nil, fmt.Errorf("db: read server version for the session_replication_role check: %w", err)
 	}
 	if !granular {
-		return true, nil
+		return nil, nil
 	}
+	//
+	// AND IT FOLLOWS ROLE MEMBERSHIP, exactly as the three legs above do. Asking
+	// has_parameter_privilege(current_user, …) alone answers only for the role's
+	// OWN and inherited grants, so the ordinary managed-Postgres shape the
+	// superuser leg was itself rewritten for — GRANT some admin role TO the app
+	// role, the app role NOINHERIT — slipped straight through this leg: the
+	// parameter grant sits on the admin role, current_user's own answer is false,
+	// and the app role then runs SET ROLE admin; SET session_replication_role =
+	// 'replica'; RESET ROLE and appends unchained rows as ITSELF. Executed rather
+	// than argued in the probe beside this function: row_hash came back NULL and
+	// a DELETE removed an audit row past the append-only guard, both while this
+	// function reported PROTECTED. The EXISTS below asks the same question of
+	// every role current_user can reach; a role is a member of itself, so the
+	// direct grant is simply the r = current_user row and nothing is lost.
+	//
+	// 'MEMBER' RATHER THAN 'SET' is deliberate on both axes. It is the privilege
+	// the other three legs use, and it is the CONSERVATIVE one: since PostgreSQL
+	// 16 a membership can be granted WITH SET FALSE, which pg_has_role reports as
+	// MEMBER = true, SET = false — so MEMBER is a superset of "can SET ROLE into
+	// it" and can only ever report protection WEAKER than the role setup, never
+	// stronger, which is this function's stated direction of error. 'SET' is also
+	// not a recognised pg_has_role privilege before PostgreSQL 16, while this leg
+	// runs from 15 up.
 	var canSilenceTriggers bool
-	if err := pool.QueryRow(ctx,
-		`SELECT has_parameter_privilege(current_user, 'session_replication_role', 'SET')`,
+	if err := pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_roles r
+			 WHERE pg_has_role(current_user, r.oid, 'MEMBER')
+			   AND has_parameter_privilege(r.oid, 'session_replication_role', 'SET'))`,
 	).Scan(&canSilenceTriggers); err != nil {
-		return false, fmt.Errorf("db: check session_replication_role privilege: %w", err)
+		return nil, fmt.Errorf("db: check session_replication_role privilege: %w", err)
 	}
-	return !canSilenceTriggers, nil
+	if canSilenceTriggers {
+		return []string{auditBypassReplica}, nil
+	}
+	return nil, nil
 }
 
 // Connect opens a pgxpool to dsn and performs a lightweight liveness check.
@@ -411,7 +503,26 @@ func migrateOn(ctx context.Context, db migrationExecutor) error {
 	// ensureAuditTriggers, which is what the tail call was careful about: that
 	// function's restore path replays the trigger-defining migrations and
 	// re-creates the trigger as plain 'O' for the same reason the loop does.
-	defer restoreAlwaysTriggers(ctx, db, hardened)
+	//
+	// AND ON A CONTEXT THE CALLER CANNOT CANCEL, which is what makes the
+	// "cancelled ctx" claim above true rather than aspirational. wardynd gives
+	// the whole connect-and-migrate step a deadline (cmd/wardynd/boot_deps.go),
+	// and the loop deliberately logs each file's elapsed time so a slow one is
+	// visible BEFORE that deadline turns it fatal — i.e. a deadline firing
+	// between two migrations is a designed-for outcome, not an exotic one. Handed
+	// the same expired ctx, every statement in the restore fails before it
+	// reaches the wire, so the deferred call could only log that it could not
+	// tell — and the hardening is then lost for good for exactly the reason the
+	// loop-error case was: the next boot's capture reads the reverted 'O' and
+	// 0056-0058 are already recorded applied. context.WithoutCancel keeps the
+	// caller's values (logging/trace) and drops only its cancellation; the fresh
+	// deadline keeps a wedged server from turning a best-effort restore into a
+	// boot that never returns.
+	defer func() {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), restoreHardeningTimeout)
+		defer cancel()
+		restoreAlwaysTriggers(rctx, db, hardened)
+	}()
 
 	entries, err := migrationFS.ReadDir("migrations")
 	if err != nil {
@@ -491,6 +602,27 @@ func migrateOn(ctx context.Context, db migrationExecutor) error {
 // the boot continue: those are bounded, transient and self-clearing (the whole
 // subject of AuditChainLockTimeout), and bricking a boot over one is a failure
 // this check would cause rather than one it would find.
+// AuditChainCanary runs the boot canary against an arbitrary pool, for the ONE
+// caller that needs it on a pool Migrate never touched.
+//
+// WHY THE SPLIT-ROLE POSTURE NEEDS IT. Migrate — and so the canary at its tail —
+// runs on the MIGRATE pool when WARDYN_PG_MIGRATE_DSN is set, and that is the
+// posture the daemon's own boot log recommends. But the migrate role is not the
+// role that writes audit rows: every real audit write goes through the APP pool,
+// as a different role, with a different search_path and different privileges. A
+// canary that only ever ran as the migrator therefore proved the chain works for
+// a connection nothing audits on, and a split-role boot could start clean while
+// the app pool's very next audit write came back unchained — the exact failure
+// class this check exists to convert from post-hoc to boot-time.
+//
+// SAME FUNCTION, not a second copy: the refusal rules, the rolled-back
+// transaction, the READ COMMITTED pin and the transient-error treatment are the
+// ones documented on auditChainCanary below, so the two boot paths cannot come
+// to different conclusions about what a working chain is.
+func AuditChainCanary(ctx context.Context, pool *pgxpool.Pool) error {
+	return auditChainCanary(ctx, pool)
+}
+
 func auditChainCanary(ctx context.Context, db migrationExecutor) error {
 	var exists bool
 	if err := db.QueryRow(ctx, `SELECT to_regclass('audit_events') IS NOT NULL`).Scan(&exists); err != nil {
@@ -633,8 +765,15 @@ func restoreAlwaysTriggers(ctx context.Context, db migrationExecutor, want []str
 	}
 	still, err := auditAlwaysTriggers(ctx, db)
 	if err != nil {
-		slog.ErrorContext(ctx, "db: cannot tell whether the migration loop reverted an ENABLE ALWAYS audit trigger; re-check pg_trigger.tgenabled by hand",
-			slog.Any("error", err), slog.Any("hardened_before", want))
+		// NAMING THE STATEMENTS, not just the trigger names: this branch is
+		// reached exactly when the connection or the context is no longer good
+		// enough to read the catalog (a boot whose deadline expired mid-loop is
+		// the live case), so it is the last chance the operator gets to be told
+		// what to run. docs/OPERATIONS.md promises an ERROR that names the
+		// statement whenever the hardening cannot be re-applied.
+		slog.ErrorContext(ctx, "db: cannot tell whether the migration loop reverted an ENABLE ALWAYS audit trigger; re-check pg_trigger.tgenabled and re-apply by hand if it is not 'A'",
+			slog.Any("error", err), slog.Any("hardened_before", want),
+			slog.Any("statements", alwaysTriggerStatements(want)))
 		return
 	}
 	always := make(map[string]bool, len(still))
@@ -645,7 +784,7 @@ func restoreAlwaysTriggers(ctx context.Context, db migrationExecutor, want []str
 		if always[name] {
 			continue // untouched by this run; nothing to re-apply
 		}
-		stmt := `ALTER TABLE audit_events ENABLE ALWAYS TRIGGER ` + pgx.Identifier{name}.Sanitize()
+		stmt := alwaysTriggerStatement(name)
 		if _, err := db.Exec(ctx, stmt); err != nil {
 			slog.ErrorContext(ctx, "db: a migration reverted this trigger's ENABLE ALWAYS hardening and it could NOT be re-applied; it now fires only for ordinary writes, not under session_replication_role = replica — re-apply it by hand",
 				slog.String("trigger", name), slog.String("statement", stmt), slog.Any("error", err))
@@ -655,6 +794,30 @@ func restoreAlwaysTriggers(ctx context.Context, db migrationExecutor, want []str
 			slog.String("trigger", name))
 	}
 }
+
+// alwaysTriggerStatement is the one statement that re-applies an operator's
+// hardening to a single trigger. Kept in one place so the ERROR lines quote
+// exactly what restoreAlwaysTriggers itself would have run.
+func alwaysTriggerStatement(name string) string {
+	return `ALTER TABLE audit_events ENABLE ALWAYS TRIGGER ` + pgx.Identifier{name}.Sanitize()
+}
+
+// alwaysTriggerStatements is the same for a whole capture, for the branch that
+// could not even read the catalog back and so cannot say which of them are
+// still needed.
+func alwaysTriggerStatements(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		out = append(out, alwaysTriggerStatement(n))
+	}
+	return out
+}
+
+// restoreHardeningTimeout bounds the detached ENABLE ALWAYS restore registered
+// by migrateOn. It runs on a context the caller cannot cancel (that is the
+// point), so it needs a deadline of its own: a best-effort re-apply must never
+// be the reason a boot fails to return.
+const restoreHardeningTimeout = 10 * time.Second
 
 // auditChainTrigger is the BEFORE INSERT trigger that hash-chains audit_events
 // (0047, redefined by 0056). auditAppendOnlyTriggers are the two that make the

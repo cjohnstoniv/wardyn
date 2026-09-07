@@ -57,6 +57,35 @@ func userDriveGrantDest(g *types.UserDriveGrant) []any {
 		&g.CreatedAt, &g.CreatedBy}
 }
 
+// driveNameSlugIndex is the partial unique index migration 0061 puts on
+// user_drives.name_slug — the fragment every minted object name is built from.
+const driveNameSlugIndex = "user_drives_name_slug_uniq"
+
+// userDriveUniqueConflict translates a unique-violation from the drive write
+// into the sentinel that carries the right REMEDY, or nil when err is not one.
+//
+// TOLD APART BY CONSTRAINT NAME, because the two refusals are different
+// problems. UNIQUE(name) means the name is taken: pick another. The 0061 index
+// means the name is free and its SLUG is not — "Corp NAS" against an existing
+// "corp nas" — so an admin handed "a user drive named %q already exists" would
+// go looking for a row that does not exist and conclude the control plane is
+// lying. Folding both into one ErrConflict is what made that possible.
+//
+// A 23505 from neither index still maps to ErrConflict: it is a uniqueness
+// refusal and a 409 is the honest status, and inventing a fourth outcome for a
+// constraint nobody has added yet would be the guess this function exists to
+// stop making.
+func userDriveUniqueConflict(err error) error {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+		return nil
+	}
+	if pgErr.ConstraintName == driveNameSlugIndex {
+		return ErrDriveSlugConflict
+	}
+	return ErrConflict
+}
+
 // UpsertUserDrive writes one drive, keyed on its PRIMARY KEY: a caller-minted
 // id that does not exist yet INSERTs, one that does UPDATEs in place (name
 // included, so a drive can be renamed while grants still point at it — which
@@ -89,6 +118,53 @@ func userDriveGrantDest(g *types.UserDriveGrant) []any {
 // 409 with the name in the message, never a raw driver error (the CreatePolicy
 // contract).
 //
+// ─── AND THE CROSS-ROW GUARD: TWO SHARES OVER ONE ROOT MUST AGREE ON HOW A
+// HOME IS NAMED ─────────────────────────────────────────────────────────────
+//
+// A share's object name is `<host_root>/<home>` (types.DriveObjectName) — no
+// drive component at all, because the directory was named by whoever owns the
+// tree. So on host_path the NAMESPACE a home name has to be unique in is the
+// host_root, not the drive. UpsertUserDriveGrant already closes the half an
+// admin can type: the same home_override on two same-root shares. This closes
+// the half nobody types — the DERIVED one, which that guard's own doc names as
+// its residual and hands to "where the decision lives", i.e. here.
+//
+// THE REFUSAL IS TEMPLATE DISAGREEMENT, NOT AN EQUAL ROOT. Two host_path drives
+// on one root stay legal, because that is a real deployment shape and the one
+// driveHostRootNesting deliberately permits: a read-write and a read-only view
+// of /srv/homes, or two size ceilings over it. What is refused is the pair that
+// makes the derivation non-injective ACROSS the two rows. With equal templates
+// it cannot be: `sub` maps each principal to its own subject, so equal homes
+// mean the same person and the same directory, which is the correct answer.
+// Give the two drives DIFFERENT templates and it collapses — drive A on `sub`
+// and drive B on `email_local`, a member whose sub is "alice" and a member whose
+// address is alice@corp.example both derive "alice", and two principals are
+// handed /srv/homes/alice read-write with every bind-time assertion passing,
+// because each allocation is individually legitimate. That is migration 0059's
+// stated invariant ("one home directory belongs to one principal") failing on
+// the backend its index cannot reach.
+//
+// RESIDUAL, stated rather than implied: `email_local` folds two principals whose
+// addresses share the part before the "@" onto one home. That fold is a property
+// of the template itself and happens on a SINGLE drive just as readily, so it is
+// not this guard's shape and closing it here would leave `sub` as the only
+// authorable share template; it belongs to the template rules in
+// types.ValidateUserDrive, which already refuses `email_local` on a managed
+// backend for exactly that reason.
+//
+// IN THE STATEMENT, not in a read before it, for the reason
+// UpsertUserDriveGrant's guard is: one round trip rather than two, so the window
+// between "no other root-mate names homes differently" and the write is a single
+// statement. It is still not a constraint — a cross-row rule over one table
+// cannot be an index — so two concurrent registrations can both pass NOT EXISTS
+// under READ COMMITTED. The case that actually happens is one admin registering
+// a second view of a tree, and that is closed.
+//
+// od.id <> the row being written, so an UPDATE never trips over itself; and the
+// ON CONFLICT (id) DO UPDATE is gated by the same WHERE, so an EDIT that moves a
+// drive onto a colliding root, or changes its template into disagreement with
+// its root-mates, is refused on the same terms as a create.
+//
 // created_by and created_at are NOT touched on the update path: creation
 // provenance stays with whoever registered the drive, even after a later edit
 // by a different admin (the same rule UpsertGovernanceProfile follows).
@@ -98,22 +174,40 @@ func (s PG) UpsertUserDrive(ctx context.Context, d types.UserDrive) (types.UserD
 	}
 	const q = `
 		INSERT INTO user_drives (id, name, backend, host_root, storage_class,
-			home_template, size_mib, writable, reclaim, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+			home_template, size_mib, writable, reclaim, created_by, name_slug)
+		SELECT $1::uuid,$2::text,$3::text,$4::text,$5::text,$6::text,$7::int,$8::boolean,$9::text,$10::text,$11::text
+		WHERE $3::text <> '` + shareBackend + `' OR $4::text = '' OR NOT EXISTS (
+			SELECT 1
+			FROM user_drives od
+			WHERE od.id <> $1::uuid
+			  AND od.backend = '` + shareBackend + `'
+			  AND od.host_root = $4::text
+			  AND od.home_template <> $6::text
+		)
 		ON CONFLICT (id) DO UPDATE
 			SET name = EXCLUDED.name, backend = EXCLUDED.backend,
 			    host_root = EXCLUDED.host_root, storage_class = EXCLUDED.storage_class,
 			    home_template = EXCLUDED.home_template, size_mib = EXCLUDED.size_mib,
 			    writable = EXCLUDED.writable, reclaim = EXCLUDED.reclaim,
-			    updated_at = now()
+			    name_slug = EXCLUDED.name_slug, updated_at = now()
 		RETURNING ` + userDriveCols
 	out, err := scanUserDrive(s.Pool.QueryRow(ctx, q,
 		d.ID, d.Name, d.Backend, d.HostRoot, d.StorageClass,
-		d.HomeTemplate, d.SizeMiB, d.Writable, d.Reclaim, d.CreatedBy))
+		d.HomeTemplate, d.SizeMiB, d.Writable, d.Reclaim, d.CreatedBy,
+		types.DriveSlug(d.Name)))
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return types.UserDrive{}, ErrConflict
+		if conflict := userDriveUniqueConflict(err); conflict != nil {
+			return types.UserDrive{}, conflict
+		}
+		// NO ROWS IS THE CROSS-ROW GUARD ABOVE AND NOTHING ELSE. The SELECT is a
+		// row of constants, so only its WHERE can empty it; UNIQUE(name) raises
+		// 23505 (handled just above) and the primary key is absorbed by ON
+		// CONFLICT. scanUserDrive folds pgx.ErrNoRows into ErrNotFound for the
+		// READ callers that share it, which on THIS statement would be the wrong
+		// word to hand a caller — the row it asked to write is not missing, it
+		// was refused.
+		if errors.Is(err, ErrNotFound) {
+			return types.UserDrive{}, ErrDriveHomeNamespaceConflict
 		}
 		return types.UserDrive{}, err
 	}

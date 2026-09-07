@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -44,12 +45,41 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 	if err != nil {
 		return types.APIToken{}, err
 	}
-	const q = `
+	// created_at IS WRITTEN ON THE DATABASE'S CLOCK, back-dated by the request's
+	// own AGE. It used to bind t.CreatedAt straight through, so the row's
+	// timestamp came from wardynd while the value it is compared against —
+	// oidc_session_revocations.revoked_at — comes from Postgres. Two clocks, one
+	// inequality, and the failing direction is the security one: with wardynd
+	// ahead of the database, a token minted BEFORE a revoke carries a created_at
+	// AFTER the cutoff and survives it, so "revoke every session for this human"
+	// silently does not.
+	//
+	// The age, not now(), because plain now() would re-open F143: the API stamps
+	// t.CreatedAt at request ADMISSION, before it reads the body, precisely so a
+	// caller who holds a mint request open across POST /sessions/revoke cannot
+	// land a created_at after the cutoff. now() - age keeps that and adds the
+	// clock — the duration is measured entirely on the app's own clock, so no
+	// skew rides in on it.
+	//
+	// A ZERO CreatedAt means the caller stamped no admission time, so there is
+	// none to preserve: it becomes the database's now(), which is what binding
+	// the zero value could never have meant. Fail closed is NOT the answer here
+	// — an age of two millennia would mint a token already revoked by any cutoff
+	// on record.
+	age := int64(0)
+	if !t.CreatedAt.IsZero() {
+		age = db.AppClockAgeMicros(t.CreatedAt, time.Now())
+	}
+	// q is built rather than const: the created_at expression has ONE definition
+	// (db.AppClockAgeSQL), shared with the session-revocation comparison that
+	// reads these rows, and a const cannot call it. A string concatenation per
+	// mint, on a path that already does a network round trip.
+	q := `
 		INSERT INTO api_tokens (id, principal, email, role, groups, groups_truncated, name, token_sha256, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,` + db.AppClockAgeSQL("$9") + `)
 		RETURNING ` + apiTokenCols
 	out, err := scanAPIToken(s.Pool.QueryRow(ctx, q,
-		t.ID, t.Principal, t.Email, t.Role, groups, t.GroupsTruncated, t.Name, hashToken(raw), t.CreatedAt))
+		t.ID, t.Principal, t.Email, t.Role, groups, t.GroupsTruncated, t.Name, hashToken(raw), age))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
