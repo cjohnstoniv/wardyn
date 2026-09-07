@@ -49,6 +49,8 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
@@ -293,6 +295,20 @@ type Authenticator struct {
 	verifier   *gooidc.IDTokenVerifier
 	hmacKey    []byte
 	httpClient *http.Client // nil means http.DefaultClient; stored for test injection
+
+	// groupsScopeUnrequested records the one fact about this provider that the
+	// LOGIN-TIME half of the groups-scope warning needs and cannot recompute:
+	// the discovery document advertises a `groups` scope the authorization
+	// request does not ask for. Discovery happens once, in New; a login has no
+	// discovery document to consult. False for every Entra tenant, which is
+	// what keeps both halves off the documented Entra path entirely.
+	groupsScopeUnrequested bool
+	// warnedMergedGroupsScope bounds that login-time line to ONE per process —
+	// it is a deployment-shaped observation, not a per-request event — and
+	// sawGroupClaim silences it for good the moment any login proves this IdP
+	// does send the claim after all. See warnMergedMapNeedsGroupsScope.
+	warnedMergedGroupsScope sync.Once
+	sawGroupClaim           atomic.Bool
 }
 
 // New constructs an Authenticator by performing OIDC discovery against
@@ -360,7 +376,10 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 		// oauth2.Config.Endpoint's AuthStyle doc.
 		oa.Endpoint.AuthStyle = oauth2.AuthStyleInParams
 	}
-	warnUnrequestedGroupsScope(provider, oa.Scopes, cfg)
+	// Read once, here: providerGatesGroupsScope is the only place a discovery
+	// document is available, and BOTH halves of the warning key off its answer.
+	groupsScopeUnrequested := providerGatesGroupsScope(provider, oa.Scopes)
+	warnUnrequestedGroupsScope(groupsScopeUnrequested, oa.Scopes, cfg)
 
 	// The ID-token key set is fetched through a JWKS-TOLERANT client, so one
 	// entry the JOSE stack cannot parse skips instead of failing the whole
@@ -376,11 +395,12 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 	verifier := provider.VerifierContext(keySetCtx, &gooidc.Config{ClientID: cfg.ClientID})
 
 	return &Authenticator{
-		cfg:        cfg,
-		oauth2:     oa,
-		verifier:   verifier,
-		hmacKey:    hmacKey,
-		httpClient: httpClient,
+		cfg:                    cfg,
+		oauth2:                 oa,
+		verifier:               verifier,
+		hmacKey:                hmacKey,
+		httpClient:             httpClient,
+		groupsScopeUnrequested: groupsScopeUnrequested,
 	}, nil
 }
 
@@ -417,44 +437,54 @@ const groupsScope = "groups"
 // ask for, so a map keyed purely on emails is unaffected and stays silent — as
 // does every Entra tenant, whose scopes_supported carries no `groups` at all.
 //
-// The chart map (Config.RoleMap) is what is knowable at construction. Console-
-// managed rows are read per login from a store this constructor has no context
-// to query, and group-subject capability grants and governance assignments live
-// in the database entirely — so SILENCE HERE IS NOT A PROOF that nothing on
-// this deployment depends on the group claim.
-func warnUnrequestedGroupsScope(provider *gooidc.Provider, requested []string, cfg Config) {
-	if slices.Contains(requested, groupsScope) {
+// The chart map (Config.RoleMap) is ALL that is knowable at construction, and
+// it is not the map a login uses: Config.RoleMappings — the console's Getting
+// Started -> People store — is merged on top at EVERY login, and its rows are
+// written and deleted while the process runs. A deployment whose group->role
+// rows are all console-managed therefore boots completely silent here, and a
+// boot-time store read would not fix it either: the row an admin adds at 10am
+// was not there at 9am. That half of the question is answered at login instead,
+// by warnMergedMapNeedsGroupsScope's twin — see groups_scope.go.
+//
+// Group-subject capability grants and group-tier governance assignments live in
+// the database entirely and are internal/api's to know about, so SILENCE FROM
+// BOTH HALVES IS STILL NOT A PROOF that nothing on this deployment depends on
+// the group claim.
+func warnUnrequestedGroupsScope(gated bool, requested []string, cfg Config) {
+	if !gated {
 		return
 	}
-	// A key holding "@" is an email, answered by a claim already requested.
-	// Everything else can only arrive on `roles` or `groups`.
-	var claimKeyed []string
-	for k := range cfg.RoleMap {
-		if !strings.Contains(k, "@") {
-			claimKeyed = append(claimKeyed, k)
-		}
-	}
+	claimKeyed := claimKeyedRoleMapValues(cfg.RoleMap)
 	if len(claimKeyed) == 0 {
 		return
 	}
-	var meta struct {
-		ScopesSupported []string `json:"scopes_supported"`
-	}
-	// A discovery document this build cannot read is not evidence that the
-	// provider gates `groups`; stay quiet rather than guess at a provider's
-	// posture and cry wolf on every login screen that follows.
-	if err := provider.Claims(&meta); err != nil {
-		return
-	}
-	if !slices.Contains(meta.ScopesSupported, groupsScope) {
-		return
-	}
-	slices.Sort(claimKeyed) // stable line across restarts; map order is not
 	slog.Warn("oidc: this provider advertises a `groups` scope that Wardyn does not request, and the role map is keyed on values only a claim can answer — "+
 		"if the IdP gates its group claim behind that scope it will send none, which is indistinguishable from `this human is in no groups`, "+
 		"so those rows would silently decide nothing",
 		"issuer", cfg.IssuerURL, "scope", groupsScope, "requested_scopes", requested,
 		"claim_keyed_role_map_values", claimKeyed, "env", "WARDYN_OIDC_ROLE_MAP")
+}
+
+// providerGatesGroupsScope reports whether this provider's discovery document
+// advertises a `groups` scope that the authorization request does not ask for —
+// the single condition both halves of the warning are keyed on, computed in one
+// place so they can never disagree about a provider's posture.
+//
+// A discovery document this build cannot read, or one that publishes no
+// scopes_supported at all, is NOT evidence that the provider gates `groups`:
+// both answer false rather than guess and cry wolf on every login screen that
+// follows.
+func providerGatesGroupsScope(provider *gooidc.Provider, requested []string) bool {
+	if slices.Contains(requested, groupsScope) {
+		return false // asked for; there is nothing to warn about
+	}
+	var meta struct {
+		ScopesSupported []string `json:"scopes_supported"`
+	}
+	if err := provider.Claims(&meta); err != nil {
+		return false
+	}
+	return slices.Contains(meta.ScopesSupported, groupsScope)
 }
 
 // LoginHandler initiates the OIDC authorization code flow. It generates a

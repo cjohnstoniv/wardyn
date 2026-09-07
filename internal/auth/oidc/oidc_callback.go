@@ -300,6 +300,11 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 			slog.Warn("oidc: one or more console-managed role mappings were shadowed by chart/operator config or rejected as invalid", "shadowed", shadowed)
 		}
 	}
+	// The MERGED map is the only place the console's group->role rows are
+	// visible, and it exists nowhere but here — so this is where the
+	// groups-scope question gets asked about them. One line per process,
+	// never a denial; see warnMergedMapNeedsGroupsScope.
+	a.warnMergedMapNeedsGroupsScope(roleMap, cc.roles, cc.groups)
 	role, matches, ok := deriveRole(cc.roles, cc.groups, cc.email, roleMap, a.cfg.LegacyAdminEmails, a.cfg.DefaultRole)
 	if !ok {
 		// L6: a denied login must not leave a PRE-EXISTING session cookie
