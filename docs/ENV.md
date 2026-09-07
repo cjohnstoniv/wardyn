@@ -403,3 +403,27 @@ gate + built-agent-image override, `test/conformance/conformance_k8s_test.go`
 gateway's second listener on the Playwright e2e backend, default `:8089`;
 `scripts/e2e-backend.sh` — it must differ from `WARDYN_E2E_ADDR`, which the
 daemon itself enforces).
+
+The rest of the Playwright e2e backend's knobs (`scripts/e2e-backend.sh`,
+`scripts/run-ui-e2e.sh`, `scripts/screenshots.sh`, `test/e2e/e2e.sh`) are
+shell-only too — no Go file reads them, so neither ratchet direction above
+sees them; a dedicated shell-side scan
+(`TestEnvDoc_E2EShellVarsAreDocumented`) covers this table instead (F063 —
+until it landed, ten of these thirteen were undocumented and unenforced in
+*both* directions):
+
+| Var | Type | Default | Meaning |
+|---|---|---|---|
+| `WARDYN_E2E_DSN` | string (DSN) | `postgres://wardyn:wardyn@localhost:55432/wardyn_e2e?sslmode=disable` | The Postgres DSN `wardynd` itself connects with. `run-ui-e2e.sh`/`screenshots.sh` compose this FOR you from `WARDYN_E2E_PG_HOSTPORT` + the DB name — set it directly only when calling `e2e-backend.sh` outside those wrappers |
+| `WARDYN_E2E_PG_HOSTPORT` | string (`host:port`) | `localhost:55432` | Where `run-ui-e2e.sh`/`screenshots.sh` point `WARDYN_E2E_DSN` at. **The one var to set on a shared box** where `:55432` is held by another job's Postgres — pair it with a `WARDYN_E2E_PG_CONTAINER` that actually publishes that port, or `e2e-backend.sh` refuses the mismatch loudly (F062) |
+| `WARDYN_E2E_PG_CONTAINER` | string | `wardyn-test-pg` | The container `e2e-backend.sh` runs `pg_isready`/`psql`/seed SQL against via `docker exec` — independent of the DSN's host:port, which is why the two must agree |
+| `WARDYN_E2E_PG_DBNAME` | string | `wardyn_e2e` | The e2e database name; `screenshots.sh` overrides it to `wardyn_shots` so its own run never collides with a concurrent `run-ui-e2e.sh` |
+| `WARDYN_E2E_TOKEN` | string | `wardyn-e2e-token` | The fixed admin bearer token the seeded backend accepts, so specs never need a real sign-in flow |
+| `WARDYN_E2E_AGE_KEY` | string | (unset = mint a fresh one) | Pins the backend's secret-store age identity instead of minting one per `up` via `wardynd -gen-age-key`. Leave unset — a committed value would be a publicly-known key, and `wardynd` fail-closed refuses those |
+| `WARDYN_E2E_SKIP_BUILD` | bool | (unset = build) | `1` reuses the already-built `.e2e-bin/wardynd` instead of rebuilding it. `run-ui-e2e.sh`/`screenshots.sh` set this themselves after their own one-time build, so later `e2e-backend.sh up` calls in the same run don't rebuild per spec |
+| `WARDYN_E2E_NO_UI_BUILD` | bool | (unset = build) | `1` reuses the existing `ui/dist` instead of rebuilding it — set it by hand while iterating on the composer so a UI-only change doesn't pay the backend build too |
+| `WARDYN_E2E_KEEP` | bool | (unset = tear down) | `test/e2e/e2e.sh` only: `1` leaves the compose stack up on exit (success or failure) instead of tearing it down, for post-mortem inspection |
+| `WARDYN_E2E_NO_BUILD` | bool | (unset = build) | `test/e2e/e2e.sh` only: `1` reuses existing images instead of building fresh ones |
+| `WARDYN_E2E_ANTHROPIC_KEY` | string (credential) | (unset = skip) | `test/e2e/e2e.sh` only: when set, the real-LLM path records against a live Anthropic key at boot instead of skipping that leg. Credential-shaped — never commit a value, and it never appears in captured output |
+| `WARDYN_E2E_ALLOW_ALL_SKIPPED` | string (space-separated spec basenames) | (unset = none allowlisted) | `run-ui-e2e.sh` only (F061): names spec files allowed to report zero executed tests (every test in the file skipped) without failing the gate. Empty by default — a spec that skips its whole file is a red flag until named here on purpose |
+| `WARDYN_SCREENSHOTS` | bool | (unset = skip) | Set by `screenshots.sh` itself (never by hand): gates `ui/e2e/screenshots/docs.spec.ts` so a bare `pnpm e2e` never regenerates the doc PNGs — only `make screenshots` does |

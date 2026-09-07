@@ -17,11 +17,19 @@
 #   scripts/e2e-backend.sh seed     # (re)seed fixtures into a running backend
 #   scripts/e2e-backend.sh wait     # block until /healthz is ready
 #
-# Env:
-#   WARDYN_E2E_DSN    Postgres DSN          (default: dockerized wardyn-test-pg :55432/wardyn_e2e)
-#   WARDYN_E2E_TOKEN  admin bearer token    (default: wardyn-e2e-token)
-#   WARDYN_E2E_ADDR   listen address        (default: :8088)
-#   WARDYN_E2E_PG_CONTAINER  psql container (default: wardyn-test-pg) — used for SQL state seeding
+# Env (this file's own reads only — WARDYN_E2E_PG_HOSTPORT and the rest of
+# docs/ENV.md's Test/internal-only e2e table are wrapper knobs run-ui-e2e.sh /
+# screenshots.sh convert INTO WARDYN_E2E_DSN before this script ever runs;
+# F063):
+#   WARDYN_E2E_DSN           Postgres DSN     (default: dockerized wardyn-test-pg :55432/wardyn_e2e)
+#   WARDYN_E2E_TOKEN         admin bearer token (default: wardyn-e2e-token)
+#   WARDYN_E2E_ADDR          listen address   (default: :8088)
+#   WARDYN_E2E_UI_ADDR       UI-sandbox gateway listen address (default: :8089) — must differ from WARDYN_E2E_ADDR
+#   WARDYN_E2E_PG_CONTAINER  psql container   (default: wardyn-test-pg) — used for SQL state seeding
+#   WARDYN_E2E_PG_DBNAME     e2e database name (default: wardyn_e2e)
+#   WARDYN_E2E_AGE_KEY       pinned age identity (default: unset, mint a fresh one per `up`)
+#   WARDYN_E2E_SKIP_BUILD    1 reuses the built .e2e-bin/wardynd instead of rebuilding it
+#   WARDYN_E2E_NO_UI_BUILD   1 reuses the existing ui/dist instead of rebuilding it
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -113,26 +121,39 @@ cmd_wait() {
 
 cmd_up() {
   mkdir -p "${BIN_DIR}"
+  # Parsed up front (not just "a few lines later") so BOTH fail-closed messages
+  # below can report the port this run is actually configured for — F062: the
+  # first die() used to hardcode ":55432" even when WARDYN_E2E_DSN pointed
+  # elsewhere, telling an operator on a repointed lane to look at the wrong
+  # port entirely.
+  # -n ... p, NOT a bare s///: sed echoes its INPUT UNCHANGED when the pattern
+  # does not match, so a DSN with no explicit port (postgres://host/db) used to
+  # set dsn_port to the entire DSN — which printed a whole DSN where the die()
+  # below promises a port, made the `<unknown ...>` fallback unreachable, and
+  # tripped the mismatch check below into aborting a perfectly valid run.
+  # Suppress-and-print makes a non-match yield the empty string instead.
+  dsn_port="$(printf '%s' "${DSN}" | sed -nE 's#^[a-zA-Z]+://[^/]*:([0-9]+)/.*#\1#p')"
   if ! docker exec "${PG_CONTAINER}" pg_isready -U wardyn >/dev/null 2>&1; then
     if [[ "${PG_CONTAINER}" == "wardyn-test-pg" ]]; then
       log "Postgres container '${PG_CONTAINER}' not ready; self-provisioning via scripts/up.sh pg"
       "${REPO_ROOT}/scripts/up.sh" pg || die "scripts/up.sh pg failed to provision ${PG_CONTAINER}"
     else
-      die "Postgres container '${PG_CONTAINER}' not ready on :55432. Start it (docker run ... postgres), or unset WARDYN_E2E_PG_CONTAINER to let 'scripts/up.sh pg' self-provision the default."
+      die "Postgres container '${PG_CONTAINER}' not ready on :${dsn_port:-<unknown — WARDYN_E2E_DSN did not parse>}. Start it (docker run ... postgres) on that port, or unset WARDYN_E2E_PG_CONTAINER to let 'scripts/up.sh pg' self-provision the default."
     fi
   fi
   # wardynd CONNECTS via DSN's host:port, but every seed/reset call below goes
   # through `docker exec ${PG_CONTAINER}` — a plain container exec, which is
   # blind to DSN and always reaches whatever THAT container serves on ITS OWN
-  # published port. A caller who repoints DSN's port (run-ui-e2e.sh's
-  # WARDYN_E2E_PG_HOSTPORT) without repointing PG_CONTAINER to match would
-  # otherwise silently serve one database while seeding another. Loud and early
-  # beats that silent split: fail closed rather than run a spec suite against
-  # data it never actually seeded.
-  dsn_port="$(printf '%s' "${DSN}" | sed -E 's#^[a-zA-Z]+://[^/]*:([0-9]+)/.*#\1#')"
+  # published port. A caller who repoints DSN's port (WARDYN_E2E_DSN — the
+  # variable this script actually reads; run-ui-e2e.sh's WARDYN_E2E_PG_HOSTPORT
+  # and screenshots.sh's equivalent are wrapper-only knobs converted INTO a
+  # DSN before this script ever sees them) without repointing PG_CONTAINER to
+  # match would otherwise silently serve one database while seeding another.
+  # Loud and early beats that silent split: fail closed rather than run a spec
+  # suite against data it never actually seeded.
   container_port="$(docker port "${PG_CONTAINER}" 5432/tcp 2>/dev/null | head -1 | sed -E 's#.*:##')"
   if [[ -n "${dsn_port}" && -n "${container_port}" && "${dsn_port}" != "${container_port}" ]]; then
-    die "DSN port ${dsn_port} != '${PG_CONTAINER}' published port ${container_port} — wardynd would SERVE ${dsn_port} while every seed/reset below hits ${container_port}. Point both at the same Postgres (match WARDYN_E2E_PG_HOSTPORT to the container's real port, or set WARDYN_E2E_PG_CONTAINER to the container actually listening on ${dsn_port})."
+    die "DSN port ${dsn_port} != '${PG_CONTAINER}' published port ${container_port} — wardynd would SERVE ${dsn_port} while every seed/reset below hits ${container_port}. Point both at the same Postgres (set WARDYN_E2E_DSN to a DSN on port ${container_port}, or set WARDYN_E2E_PG_CONTAINER to the container actually listening on ${dsn_port})."
   fi
   # THE one place the e2e database gets created (callers used to each hand-copy
   # this line). up.sh pg only precreates the default wardyn_e2e, so a custom

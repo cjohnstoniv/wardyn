@@ -31,18 +31,34 @@ var envDocAllow = map[string]bool{
 	"WARDYN_E2E_BASE_URL": true, "WARDYN_E2E_CLAUDE_CREDS": true,
 	"WARDYN_E2E_REAL_MODEL": true, "WARDYN_E2E_TASKS_DIR": true,
 	"WARDYN_E2E_WORK_ROOT": true, "WARDYN_E2E_EXPECT_INJECT": true,
-	// k8s conformance suite gating (test/conformance/conformance_k8s_test.go):
-	// outside envDocRoots (test/, not cmd/ or internal/) so the forward ratchet
-	// never sees these anyway, but listed here too (and in ENV.md's Test/
-	// internal-only section) so the allowlist itself stays the honest, complete
-	// registry of every test-only WARDYN_* var, not just the ones the mechanical
-	// scan happens to reach.
+	// k8s conformance suite gating (test/conformance/conformance_k8s_test.go): a
+	// .go file under test/, which is outside BOTH envDocRoots (cmd/, internal/
+	// only — the forward ratchet never walks it) AND envDocE2EShellFiles below
+	// (a curated .sh list, and this is a .go file besides) — so unlike the
+	// shell-only block that follows, this pair's presence in ENV.md is
+	// asserted by hand, not enforced by any ratchet. Keep it in sync manually
+	// until something scans test/*.go too.
 	"WARDYN_TEST_K8S": true, "WARDYN_TEST_K8S_AGENT_IMAGE": true,
 	// The Playwright e2e backend's two listen addresses (scripts/e2e-backend.sh):
-	// the console's and the UI-sandbox gateway's, which must differ. Shell-only
-	// like the block below, but test scaffolding rather than operator config, so
-	// they belong here.
+	// the console's and the UI-sandbox gateway's, which must differ. Shell-only,
+	// so — unlike the pair above — TestEnvDoc_E2EShellVarsAreDocumented DOES
+	// enforce these stay documented; test scaffolding rather than operator
+	// config is why they are allowlisted rather than in the registry proper.
 	"WARDYN_E2E_ADDR": true, "WARDYN_E2E_UI_ADDR": true,
+	// F063: the REST of the e2e backend's shell-only knobs (e2e-backend.sh,
+	// run-ui-e2e.sh, screenshots.sh, test/e2e/e2e.sh) — none read by Go, so
+	// TestEnvDoc_E2EShellVarsAreDocumented below is what actually enforces these
+	// stay documented in ENV.md's Test/internal-only table; ten of the eleven
+	// were in neither place until this landed.
+	"WARDYN_E2E_DSN": true, "WARDYN_E2E_PG_HOSTPORT": true,
+	"WARDYN_E2E_PG_CONTAINER": true, "WARDYN_E2E_PG_DBNAME": true,
+	"WARDYN_E2E_TOKEN": true, "WARDYN_E2E_AGE_KEY": true,
+	"WARDYN_E2E_SKIP_BUILD": true, "WARDYN_E2E_NO_UI_BUILD": true,
+	"WARDYN_E2E_KEEP": true, "WARDYN_E2E_NO_BUILD": true,
+	"WARDYN_E2E_ANTHROPIC_KEY": true,
+	// F061: run-ui-e2e.sh's allowlist for a spec allowed to skip its whole
+	// file, and screenshots.sh's own self-set gate for docs.spec.ts.
+	"WARDYN_E2E_ALLOW_ALL_SKIPPED": true, "WARDYN_SCREENSHOTS": true,
 }
 
 // envDocShellOnly lists vars read ONLY by deploy/compose/docker-compose.yaml and
@@ -252,6 +268,72 @@ func TestEnvDoc_ReverseEveryRowHasReader(t *testing.T) {
 		if !seen[v] {
 			t.Errorf("%s has a docs/ENV.md row but no reader in non-test Go under %v — delete the stale row (or add it to envDocAllow if it is test-only, or envDocShellOnly if compose/scripts read it)", v, envDocRoots)
 		}
+	}
+}
+
+// envDocE2EShellFiles are the Playwright-e2e-backend shell scripts whose
+// WARDYN_E2E_* reads must also stay documented — F063. readVars above walks
+// only non-test .go under envDocRoots, so a var read EXCLUSIVELY by one of
+// these scripts (WARDYN_E2E_PG_HOSTPORT chief among them: the one var an
+// operator must set to run the UI e2e gate on a shared box) was invisible to
+// both TestEnvDoc_Forward* and TestEnvDoc_ReverseEveryRowHasReader no matter
+// how load-bearing it was — eleven of them were undocumented, ten of those
+// eleven with nothing anywhere that would ever have caught it.
+//
+// Deliberately a curated FILE list, not a recursive scripts/+test/ walk: the
+// rest of scripts/ (the demo-recording and ci-run harnesses chief among them)
+// reads dozens of its own WARDYN_* vars that are real, but out of scope for
+// F063 and not audited here — documenting those is separate work with its
+// own review, not a side effect of closing this gap.
+var envDocE2EShellFiles = []string{
+	"scripts/e2e-backend.sh",
+	"scripts/run-ui-e2e.sh",
+	"scripts/screenshots.sh",
+	"test/e2e/e2e.sh",
+}
+
+// readE2EShellVars returns every WARDYN_* token found in envDocE2EShellFiles.
+// Same broad literal-scan approach as readVars (any WARDYN_* string, not just
+// a confirmed `${VAR}` expansion) — a name that merely appears in a script's
+// Usage/comment block still deserves a row.
+func readE2EShellVars(t *testing.T, root string) map[string]bool {
+	t.Helper()
+	seen := map[string]bool{}
+	for _, f := range envDocE2EShellFiles {
+		b, err := os.ReadFile(filepath.Join(root, f))
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		for _, m := range wardynVarLit.FindAllString(string(b), -1) {
+			seen[m] = true
+		}
+	}
+	return seen
+}
+
+// TestEnvDoc_E2EShellVarsAreDocumented is the forward ratchet's shell-side
+// half for the Playwright e2e backend specifically: every WARDYN_* token read
+// by envDocE2EShellFiles must appear as a literal token somewhere in
+// docs/ENV.md. A new WARDYN_E2E_* var with no doc row fails here instead of
+// drifting silently forever, the way ten of the eleven it caught on
+// introduction had.
+//
+// R4 F063-B1: this used to also pass on `envDocAllow[v] || envDocShellOnly[v]`
+// — and the same diff that added this test also added all 13 WARDYN_E2E_*
+// vars to envDocAllow, so the ENV.md rows were never what made it pass; a
+// deleted row could not turn it red. envDocAllow/envDocShellOnly stay the
+// gate for the OTHER two ratchets above (which reason about Go readers, a
+// question those maps genuinely answer); this one reasons about shell
+// scripts, where the only question is "does docs/ENV.md say this name
+// anywhere", so the check is that condition alone.
+func TestEnvDoc_E2EShellVarsAreDocumented(t *testing.T) {
+	root := repoRoot(t)
+	documented := documentedVars(readEnvDoc(t, root))
+	for v := range readE2EShellVars(t, root) {
+		if documented[v] {
+			continue
+		}
+		t.Errorf("%s is read by one of %v but does not appear anywhere in docs/ENV.md — add a row (or a prose mention) for it", v, envDocE2EShellFiles)
 	}
 }
 

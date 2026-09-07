@@ -215,6 +215,12 @@ Every write outcome is drawn, because each is a different kind of "no":
 - **A share drive with a `hash` directory name — REFUSED (400).** A corporation names its own
   homes; the console disables the derived option for share backends and says why in
   `HOME_HINT`, and the server refuses the API path.
+- **A managed drive with any non-`hash` directory name — REFUSED (400), mirror of the above
+  (scope widened 2026-09-03).** A managed backend names the object after the directory, so a
+  claim-derived template (`sub` or `email_local`) would publish the principal into a
+  `docker volume ls` / `kubectl get pvc` name and collide two people who share it; the console
+  disables every non-derived option for managed backends, `HOME_HINT` says why, and the server
+  refuses the API path (§7.1).
 - **Deleting a drive that is still allocated — REFUSED (409).** `ALLOCATED_COUNT` is
   client-visible, so at a non-zero count the delete dialog opens **pre-filled** with the
   refusal and its confirm disabled; the 409 stays authoritative for the race the count cannot

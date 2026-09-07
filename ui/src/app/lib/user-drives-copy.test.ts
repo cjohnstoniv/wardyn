@@ -426,3 +426,26 @@ describe("user-drives-prompt §7.1 — the server-composed table matches the Go 
     expect(checked).toBeGreaterThanOrEqual(6);
   });
 });
+
+// F049: §2.4's refusal register named the home-template rule's share-side
+// direction only, while drive-editor.tsx's `homeDisabled` has gated BOTH
+// directions since the scope widened 2026-09-03 (a managed backend refuses
+// every non-hash template, not just email_local). Pin both halves so a
+// revert to one-directional gating — in the doc OR the component — fails
+// here instead of drifting silently again.
+describe("user-drives-prompt §2.4 — the home-template rule's mirror direction", () => {
+  const doc224 = readFileSync(resolve(process.cwd(), "../docs/design/user-drives-prompt.md"), "utf8");
+  const editorSrc = readFileSync(
+    resolve(process.cwd(), "src/app/components/screens/drives/drive-editor.tsx"),
+    "utf8",
+  );
+
+  it("§2.4 documents the managed-backend mirror, not just the share-side rule", () => {
+    expect(doc224).toContain("A share drive with a `hash` directory name");
+    expect(doc224).toMatch(/A managed drive with any non-`hash` directory name.*mirror/);
+  });
+
+  it("drive-editor.tsx's homeDisabled still gates both directions", () => {
+    expect(editorSrc).toMatch(/homeDisabled\s*=\s*\(t: HomeTemplate\)\s*=>\s*\(managed \? t !== "hash" : t === "hash"\)/);
+  });
+});
