@@ -24,7 +24,10 @@
 // the two homes cannot answer differently.
 package types
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 // CanonicalGroupSubject canonicalizes an operator-authored group name into the
 // EXACT string a session snapshot carries for a claim of that name, or reports
@@ -44,6 +47,53 @@ func CanonicalGroupSubject(s string) (string, bool) {
 		return "", false
 	}
 	return strings.ToLower(s), true
+}
+
+// CanonicalUserSubject canonicalizes an operator-authored USER subject — an
+// OIDC `sub` or an email address — into the form a write boundary stores.
+//
+// SAME ORDER, DIFFERENT ANSWER FOR NON-ASCII. Like CanonicalGroupSubject it
+// looks at the RAW value before folding, and for the same reason: strings.ToLower
+// does Unicode case mapping, so KELVIN SIGN U+212A folds to ASCII 'k' and U+0130
+// folds to 'i'. An admin who types a look-alike spelling of a real human's
+// address would otherwise have it FOLDED ONTO that human's subject and the row
+// stored against them — a drive allocated to somebody nobody named, with an
+// audit trail showing the exotic string the admin actually typed. Guard first,
+// fold second, and there is nothing to fold onto.
+//
+// It does NOT refuse a non-ASCII value, which is the one place it parts company
+// with the group rule, deliberately. A group subject is matched by exact
+// equality against the login-time snapshot, which carries printable ASCII only,
+// so a non-ASCII group can never match anyone and saying so at the boundary is
+// the honest answer. A USER subject is an identity, not an operator-authored
+// label: the `sub` claim is whatever the identity provider issues, and refusing
+// one because it is not ASCII would refuse a real person. So it is kept exactly
+// as typed — unfolded, because folding is precisely what makes a look-alike
+// dangerous, and unrefused, because it may be somebody.
+//
+// The residual, stated rather than implied: internal/api's capabilitySubjects
+// folds the session's own subject with a bare strings.ToLower, so a non-ASCII
+// subject stored verbatim here is matched against a folded one there and the row
+// matches nobody. It is a dead row, not a misdirected one — the direction that
+// fails closed — and it is unreachable through the email lane, which oidc's
+// deriveEmail already ASCII-guards at login. Closing it belongs on the session
+// surface, where the fold is.
+func CanonicalUserSubject(s string) string {
+	s = strings.TrimSpace(s)
+	if !ASCIIOnlySubject(s) {
+		return s
+	}
+	return strings.ToLower(s)
+}
+
+// ASCIIOnlySubject reports whether s contains no rune above ASCII. It is the
+// same rule oidc.ASCIIOnly states for the login-time match surface, spelled here
+// because internal/types is imported by pkg/client and cmd/wardyn and must not
+// drag the server's OIDC dependency stack in to answer a question about a
+// string. internal/api's TestCanonicalGroupSubjectHasOneAnswer already pins the
+// sibling pair against drift; the same idea covers this one.
+func ASCIIOnlySubject(s string) bool {
+	return strings.IndexFunc(s, func(r rune) bool { return r > unicode.MaxASCII }) < 0
 }
 
 // printableASCII reports whether every rune of s is a printable ASCII character

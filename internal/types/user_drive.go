@@ -898,7 +898,21 @@ func ValidateUserDriveGrant(g *UserDriveGrant) error {
 			}
 			g.Subject = subject
 		} else {
-			g.Subject = strings.ToLower(g.Subject)
+			// The USER half is CanonicalUserSubject, not a bare lowercase, and
+			// for the escalating half of the same reason the group arm states.
+			// strings.ToLower folds U+212A onto ASCII 'k' and U+0130 onto 'i',
+			// so an admin who typed a look-alike spelling of a real human's
+			// address had the allocation stored against THAT human's subject —
+			// a drive handed to somebody nobody named, while the audit row shows
+			// the exotic string that was actually typed. This was the third and
+			// last write boundary left on the loose rule; the other two are
+			// internal/api's permission and governance-assignment validators.
+			//
+			// It KEEPS a non-ASCII subject rather than refusing it, unlike the
+			// group arm: a `sub` claim is whatever the identity provider issues,
+			// and a boundary that refused one would refuse a real person. See
+			// CanonicalUserSubject for what that costs and where it is settled.
+			g.Subject = CanonicalUserSubject(g.Subject)
 		}
 		if len(g.Subject) > maxUserDriveFieldLen || !driveTextIsClean(g.Subject) {
 			return fmt.Errorf("subject: invalid")
