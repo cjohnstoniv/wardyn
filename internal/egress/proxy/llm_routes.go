@@ -205,7 +205,10 @@ const (
 
 // scanSummaryFrom builds a CONTENT-FREE decision summary from a scan result.
 // overrideAction (e.g. "block") wins; otherwise the action is derived from the
-// result (error > skipped > alert). It never copies raw matched bytes.
+// result (error > skip-with-findings > skipped > alert) — a scan that hit
+// findings_capped, scan_budget, or attachment_decode_error but still produced
+// findings alerts (B2/B4 below), not "skipped". It never copies raw matched
+// bytes.
 func scanSummaryFrom(res contentscan.Result, serr error, eng *contentscan.Engine, overrideAction string, channel contentscan.Channel) *egress.ScanSummary {
 	s := &egress.ScanSummary{
 		Scanned:    res.Scanned,
@@ -231,6 +234,24 @@ func scanSummaryFrom(res contentscan.Result, serr error, eng *contentscan.Engine
 		s.Action = overrideAction
 	case serr != nil || (res.Skipped && res.SkipReason == "parse_error"):
 		s.Action = "error"
+	case res.Skipped && len(res.Findings) > 0 &&
+		(res.SkipReason == "findings_capped" || res.SkipReason == "scan_budget" ||
+			res.SkipReason == "attachment_decode_error"):
+		// B2/B4 (F075/F073/F056 fix-up): findings_capped, scan_budget, and
+		// attachment_decode_error all set Result.Skipped, and this switch used
+		// to resolve `case res.Skipped` before ever reaching "alert" — so the
+		// decision's Action flipped from "alert" to "skipped" exactly when a
+		// real secret was also found alongside a budget/decode limit
+		// (egress.ScanSummary.Action is the literal audit-action suffix,
+		// docs/AUDIT-ACTIONS.md:71: llm.scan.alert vs llm.scan.skipped — a SIEM
+		// rule keyed on llm.scan.alert lost the detected secret). A skipped
+		// scan that still carries findings is the loudest scan there is: it
+		// still alerts; the truncation/decode-limit rides on
+		// Skipped/SkipReason, not on Action. span_oversize is deliberately
+		// excluded: it already read "skipped" with findings on base, so
+		// including it would be a behaviour change outside this lane's
+		// findings.
+		s.Action = "alert"
 	case res.Skipped:
 		s.Action = "skipped"
 	default:

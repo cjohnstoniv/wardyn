@@ -1655,14 +1655,41 @@ injection rule — the corp-artifact-host trust boundary in `isMITMHost`).
 - Only the **system prompt + the last message** of each turn are scanned. Secrets
   in earlier seeded messages, in a 2nd+ new message appended the same turn, or
   split across turns are missed. The primary inadvertent-leak paths (a fresh paste,
-  a `tool_result` of a just-read file) are the last element and are covered.
+  a `tool_result` of a just-read file) are the last element and are covered — up to
+  the per-request `scan_budget` below: once 4 MiB of spans have been scanned, the
+  REST of that same message goes unscanned too, so an agent that pads its newest
+  message with 4 MiB of sub-`max_scan_bytes` blocks ahead of a secret is forwarded
+  (fail-open by default; refused under `on_scanner_error=block`).
 - A single span over `max_scan_bytes` (default **1 MiB**) or a body over **32 MiB**
   is forwarded **unscanned** (`span_oversize` / `body_oversize`). Fails **open** by
   default; `block` + `on_scanner_error=block` fails it **closed**.
 - `POST /v1/messages/batches` (N prompts, different schema) is recorded
   `uninspected_channel` (refused under fail-closed block). Base64
   `image`/`document` bytes are scanned only under `scan_attachments` (opt-in, off
-  by default). `count_tokens` **is** scanned.
+  by default). `count_tokens` **is** scanned. A block that cannot be
+  base64-decoded under any known alphabet is recorded `attachment_decode_error`
+  (not silently treated as a clean scan) and honors `on_scanner_error` exactly
+  like `span_oversize`.
+- A per-request **scan budget** (`scan_budget`, 4 MiB total scanned bytes
+  across every span — on top of the per-span `max_scan_bytes` cap) bounds the
+  CPU cost of an adversarial body split into many sub-`max_scan_bytes` spans
+  by actually stopping the scan once exhausted; it fails **open** by default
+  and honors `on_scanner_error=block` like every other skip reason above.
+- A separate **findings cap** (`findings_capped`, 500 per request) bounds only
+  the SIZE of the decision log copied to stdout / the control-plane audit —
+  it does **not** stop scanning (the scan budget above is what bounds CPU).
+  Once exceeded, under `mode=block` a finding AT OR ABOVE the policy's
+  `block_min_severity` is kept past the cap (up to a hard ceiling) and still
+  blocks, so an agent cannot buy a forward past its operator's block threshold
+  by fanning out cheap low-severity noise ahead of the real secret; every
+  finding below `block_min_severity` is dropped from the report. Under
+  `mode=alert` (where nothing is enforced) the cap is a pure audit-size bound:
+  findings past it are dropped from the decision log REGARDLESS OF SEVERITY,
+  so a high-finding-count alert body's decision log is truncated, not
+  complete. Only the reporting truncation itself fails
+  **open** by default (honoring `on_scanner_error=block` like every other skip
+  reason above) — enforcement of an already-detected qualifying finding never
+  does.
 - **Walled-garden coverage (`inspect_forward_egress`, `classified_markers`):**
   inspection extends to the GENERIC plaintext-HTTP forward path (custom connectors)
   and to MCP/JSON-RPC bodies via the generic walker, and operator
