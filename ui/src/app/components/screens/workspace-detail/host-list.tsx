@@ -12,6 +12,15 @@ export interface HostRow {
   host: string;
   provenance: string;
   removable: boolean;
+  // Set when the row is removable in principle but THIS caller may not remove
+  // it — the sentence saying why (an existing canon reason, e.g.
+  // copy.ts's OPERATOR_ONLY_REASON). A removal can need a HIGHER tier than the
+  // card's own `canRemove` when it takes two writes on two different route
+  // tiers (AllowedHostsCard's approved-egress + requirements pair, F030);
+  // rendering a live button over a route the server refuses is the bug this
+  // field exists to prevent. Distinct from `removable: false`, which means the
+  // row has no remove control at all (a structural host).
+  removeBlockedReason?: string;
 }
 
 export function HostList({ rows, emptyText, canRemove, removing, onRemove }: {
@@ -33,9 +42,10 @@ export function HostList({ rows, emptyText, canRemove, removing, onRemove }: {
               size="icon"
               variant="ghost"
               className="size-7 shrink-0"
-              disabled={!canRemove || removing === r.host}
+              disabled={!canRemove || !!r.removeBlockedReason || removing === r.host}
               onClick={() => onRemove(r.host)}
               aria-label={`Remove ${r.host}`}
+              title={r.removeBlockedReason}
             >
               <X className="size-3.5" />
             </Button>

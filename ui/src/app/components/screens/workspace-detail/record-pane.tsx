@@ -139,21 +139,24 @@ export function RecordPane({
   // Open the existing ProfileReview drawer on a record run (Save profile).
   onOpenProfile: (runId: string, suggestedName?: string) => void;
 }) {
-  // useSecurityOperator, not useOperator (0.7 §B): the DECISION routes this
-  // pane drives are on securityOps — .../record/{task}/promote-egress and the
-  // approve-hosts path's PUT .../approved-egress. Promoting a workspace's
-  // observed egress into its allowlist IS the security tier's loop.
+  // useSecurityOperator, not useOperator (0.7 §B): the DECISION route this
+  // pane drives is on securityOps — .../record/{task}/promote-egress.
+  // Promoting a workspace's observed egress into its allowlist IS the security
+  // tier's loop, so the pane as a whole opens to a security admin.
   //
-  // The LAUNCH controls are the exception and are gated separately, in the two
-  // components that own them (NewSessionForm and SessionCard): R1 moved
-  // POST /workspaces/{id}/record to operatorOnly, because it does not decide an
-  // egress question — it starts an interactive sandbox with open egress, the
-  // workspace's local_dir bind-mounted, the clone credential minted and the
-  // operator's LLM credential attached, and stamps the caller as the run's
-  // owner. Same pattern as "Save profile", whose drawer POSTs the super-only
-  // /policies and is gated in profile-review.tsx: the control is gated where
-  // its call lives, so this pane never shows a security admin a live button
-  // over a route the server now refuses.
+  // Two families of control are the exception and gate themselves, in the
+  // components that own them, because their calls land on operatorOnly:
+  //   - LAUNCH (NewSessionForm, SessionCard): R1 moved POST
+  //     /workspaces/{id}/record there — it decides no egress question, it
+  //     starts a sandbox with open egress, the local_dir bind-mounted, the
+  //     clone credential minted and the operator's LLM credential attached.
+  //   - APPROVE HOSTS (CaughtHosts): the approve-hosts path no longer PUTs
+  //     .../approved-egress — workspace-detail.tsx's approveHosts writes ONE
+  //     PUT .../requirements for N hosts, and requirements is operatorOnly
+  //     (F031).
+  // Same pattern as "Save profile", gated in profile-review.tsx over the
+  // super-only /policies: the control is gated where its call lives, so this
+  // pane never shows a security admin a live button the server refuses.
   const securityOperator = useSecurityOperator();
   const sessions = recordSessions(ws);
   const orphans = orphanedVerifySessions(ws);
@@ -173,13 +176,16 @@ export function RecordPane({
 
   return (
     // Every control in this pane (record/replay/approve-host/promote-egress)
-    // is operatorOnly server-side; a viewer would see them all enabled and
-    // 403 on the first click. A native disabled fieldset gates the whole
-    // subtree at once — same disabled:opacity-50 every Button here already
-    // carries — instead of threading `disabled={!securityOperator}` through
-    // SessionCard/RecordReviewCard/ConfinedReviewCard/NewSessionForm one by
-    // one. The border/padding/min-width a bare <fieldset> adds are reset so
-    // it stays visually identical to the plain <div> it replaces.
+    // needs at LEAST the security tier server-side; a member would see them
+    // all enabled and 403 on the first click. A native disabled fieldset gates
+    // the whole subtree at once — same disabled:opacity-50 every Button here
+    // already carries — instead of threading `disabled={!securityOperator}`
+    // through SessionCard/RecordReviewCard/ConfinedReviewCard/NewSessionForm
+    // one by one. The border/padding/min-width a bare <fieldset> adds are
+    // reset so it stays visually identical to the plain <div> it replaces.
+    // This is the FLOOR, not the whole answer: the launch and approve-host
+    // controls need the higher operatorOnly tier on top of it, and add their
+    // own useOperator gate where they live (see the note above).
     <fieldset disabled={!securityOperator} className="m-0 min-w-0 border-0 p-0 space-y-4">
       {!securityOperator && <p className="text-xs text-muted-foreground">{OPERATOR_ONLY_REASON}</p>}
       {/* No "Sessions" label here — the DetailSectionCard wrapping this pane already
@@ -898,6 +904,11 @@ function CaughtHosts({
   // A settled replay's observations are immutable, so seeding once is right —
   // and it means an operator's un/checking is never stomped by the detail
   // page's poll. (A re-replay unmounts this card via the "replaying" stage.)
+  // approveHosts writes PUT /workspaces/{id}/requirements — operatorOnly, NOT
+  // the securityOps tier the pane's fieldset gates. Without this second gate a
+  // security admin got live Approve buttons over a route the server refuses,
+  // and the guided approve→replay chain silently never fired (F031).
+  const operator = useOperator();
   const [selected, setSelected] = React.useState<Set<string>>(
     () => new Set(caught.filter((c) => !c.denied).map((c) => c.host)),
   );
@@ -935,14 +946,26 @@ function CaughtHosts({
             <span className={denied ? "text-meta text-danger" : "text-meta text-warning"}>
               {denied ? "blocked" : "pending approval"}
             </span>
-            <Button size="sm" variant="outline" className="h-7" onClick={() => onApproveHosts([host])}>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7"
+              disabled={!operator}
+              title={!operator ? OPERATOR_ONLY_REASON : undefined}
+              onClick={() => onApproveHosts([host])}
+            >
               <Check className="size-3.5" /> Approve
             </Button>
           </li>
         ))}
       </ul>
       {replayName && (
-        <Button size="sm" disabled={picked.length === 0} onClick={() => onApproveHosts(picked, replayName)}>
+        <Button
+          size="sm"
+          disabled={!operator || picked.length === 0}
+          title={!operator ? OPERATOR_ONLY_REASON : undefined}
+          onClick={() => onApproveHosts(picked, replayName)}
+        >
           <ShieldCheck className="size-3.5" /> Approve {picked.length} selected host
           {picked.length === 1 ? "" : "s"} and replay again
         </Button>

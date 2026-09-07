@@ -206,6 +206,12 @@ export function WorkspaceDetailScreen() {
   // ADDITIVE ApprovedEgress writer. Read-modify-write of the workspace's OWN
   // overlay (the PUT is a full replacement); last-write-wins is accepted, same
   // as the lane it replaces.
+  //
+  // TIER, since the move changed it: PUT /workspaces/{id}/requirements is
+  // registered on operatorOnly, while the pane that offers these controls is
+  // gated on the securityOps tier. The Approve controls therefore carry their
+  // OWN useOperator gate, in CaughtHosts where they live (F031) — anything
+  // that grows a new caller of approveHosts owes the same gate.
   const approveHosts = async (hosts: string[]) => {
     if (!ws || hosts.length === 0) return;
     try {
