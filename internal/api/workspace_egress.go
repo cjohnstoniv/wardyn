@@ -148,7 +148,11 @@ func (s *Server) unionSiteConfigScmHosts(ctx context.Context, spec *types.RunPol
 // every MATCHING run"; without this, an unrelated sealed run gained the corp To
 // host (and, via planArtifactRedirect, the operator's injected registry token) it
 // never asked for. A run that names none of a redirect's public hosts is left
-// entirely untouched by it.
+// entirely untouched by THIS function's allow-side substitution. A
+// network-only row's deny side is not scoped the same way — see
+// appendNetworkRedirectDenials below, applied unconditionally on every run
+// regardless of whether it reaches this redirect (docs/OPERATIONS.md, "Egress
+// redirects: two tiers").
 //
 // The dropped hosts are matched port- and wildcard-aware (GAP-EGRESS-6): a
 // "*.pythonhosted.org" or "pypi.org:443" allowlist entry — both legal in

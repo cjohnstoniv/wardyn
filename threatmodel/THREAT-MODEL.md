@@ -326,7 +326,10 @@ and by the same predicates as the first — `blockPrivate` only, so no
 loopback/link-local/metadata/NAT64 literal is ever trusted however it is
 allow-listed, and never an address on the proxy's own subnets or its
 control-plane host — and it is narrower in one respect: it admits only the EXACT
-address an operator typed, never a range. `denied_domains` still wins over both
+address an operator typed, never a range — but WIDER in another: the port is
+dropped (`substituteArtifactEgress` writes `hostrules.HostOf(r.To)`, a bare
+address), so the trust is not to the `to:port` an operator typed but to that
+address on ANY port. `denied_domains` still wins over both
 (`RunPolicy.AllowsLiteralIP` checks the deny lists first).
 
 The internal model gateway (residual #29) is NOT a second exception: its relaxed
@@ -1685,8 +1688,22 @@ injection rule — the corp-artifact-host trust boundary in `isMITMHost`).
   the upstream proxy, (2) the run's own egress **policy** allows that hostname
   (default-deny allowlist + first-use approval + method rules, all unaffected), and
   (3) the destination is named by HOSTNAME: a literal
-  private/loopback/link-local/metadata IP is still denied at the literal-IP guard.
-  Only the resolved-IP re-check is deferred, to the operator's own corp proxy.
+  private/loopback/link-local/metadata IP **in Go's `net.ParseIP` syntax**
+  (IPv4 dotted-decimal, IPv6, or IPv4-mapped IPv6) is still denied at the
+  literal-IP guard. Only the resolved-IP re-check is deferred, to the
+  operator's own corp proxy.
+
+  **Residual, stated rather than hedged:** the step-0 guard
+  (`internal/egress/proxy/proxy.go`, `evaluate`) gates on `net.ParseIP`, which
+  returns `nil` — and so skips the guard entirely, as an ordinary hostname —
+  for every NON-canonical IPv4 spelling: `127.1`, `0x7f000001`, `2130706433`,
+  `010.0.0.1` (POSIX `inet_aton`'s short/hex/octal forms, IEEE Std 1003.1-2024).
+  On the upstream corp-proxy lane, `egressTarget`
+  (`internal/egress/proxy/egress_target.go`) hands such a string to the corp
+  proxy VERBATIM as the CONNECT target, and a corp proxy resolving it with
+  `inet_aton` semantics can land on 127.0.0.1 or another blocked address —
+  bound (3) above holds only for a canonically-spelled literal, not for one in
+  the wider `inet_aton` grammar.
 - The optional **sidecar** (`detector_sidecar_url`) treats an
   error/timeout/non-200 as a scanner error like the in-process detectors: fails
   **open** by default, and `on_scanner_error=block` **does** extend to it, so
