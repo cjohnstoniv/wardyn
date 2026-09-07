@@ -251,7 +251,7 @@ func TryAdvisoryLock(ctx context.Context, pool *pgxpool.Pool, key int64) (releas
 // TRIGGER from PUBLIC precisely because of that, but a deploy is free to grant
 // it back, so the claim has to be checked and not inferred.
 //
-// ALL THREE ROLE LEGS TEST MEMBERSHIP, not a role attribute. The superuser leg asks
+// ALL FOUR ROLE LEGS TEST MEMBERSHIP, not a role attribute. The superuser leg asks
 // whether current_user is a member of ANY role with rolsuper — not whether
 // current_user itself has rolsuper. Reading the attribute off the current_user
 // row missed the ordinary managed-Postgres shape (GRANT some admin role TO the
@@ -324,9 +324,35 @@ func AuditDDLProtected(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
 	if !granular {
 		return true, nil
 	}
+	//
+	// AND IT FOLLOWS ROLE MEMBERSHIP, exactly as the three legs above do. Asking
+	// has_parameter_privilege(current_user, …) alone answers only for the role's
+	// OWN and inherited grants, so the ordinary managed-Postgres shape the
+	// superuser leg was itself rewritten for — GRANT some admin role TO the app
+	// role, the app role NOINHERIT — slipped straight through this leg: the
+	// parameter grant sits on the admin role, current_user's own answer is false,
+	// and the app role then runs SET ROLE admin; SET session_replication_role =
+	// 'replica'; RESET ROLE and appends unchained rows as ITSELF. Executed rather
+	// than argued in the probe beside this function: row_hash came back NULL and
+	// a DELETE removed an audit row past the append-only guard, both while this
+	// function reported PROTECTED. The EXISTS below asks the same question of
+	// every role current_user can reach; a role is a member of itself, so the
+	// direct grant is simply the r = current_user row and nothing is lost.
+	//
+	// 'MEMBER' RATHER THAN 'SET' is deliberate on both axes. It is the privilege
+	// the other three legs use, and it is the CONSERVATIVE one: since PostgreSQL
+	// 16 a membership can be granted WITH SET FALSE, which pg_has_role reports as
+	// MEMBER = true, SET = false — so MEMBER is a superset of "can SET ROLE into
+	// it" and can only ever report protection WEAKER than the role setup, never
+	// stronger, which is this function's stated direction of error. 'SET' is also
+	// not a recognised pg_has_role privilege before PostgreSQL 16, while this leg
+	// runs from 15 up.
 	var canSilenceTriggers bool
-	if err := pool.QueryRow(ctx,
-		`SELECT has_parameter_privilege(current_user, 'session_replication_role', 'SET')`,
+	if err := pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_roles r
+			 WHERE pg_has_role(current_user, r.oid, 'MEMBER')
+			   AND has_parameter_privilege(r.oid, 'session_replication_role', 'SET'))`,
 	).Scan(&canSilenceTriggers); err != nil {
 		return false, fmt.Errorf("db: check session_replication_role privilege: %w", err)
 	}
