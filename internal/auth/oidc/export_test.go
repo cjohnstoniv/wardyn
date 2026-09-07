@@ -88,3 +88,26 @@ func DeriveRoleForTest(rolesClaim, groupsClaim []string, email string, roleMap m
 func MergeRoleMapsForTest(chart map[string]string, legacyAdminEmails []string, rows []RoleMapping) (merged map[string]string, shadowed []string) {
 	return mergeRoleMaps(chart, legacyAdminEmails, rows)
 }
+
+// EmailDomainAllowedForTest exposes the WARDYN_OIDC_EMAIL_DOMAINS gate so the
+// fold-escalation ordering (guard the RAW domain, THEN lower) pins directly as
+// a table, the way emailInList's and CanonicalGroupSubject's twin guards
+// already do — without signing an id_token per case.
+func EmailDomainAllowedForTest(email string, allowed []string) bool {
+	return emailDomainAllowed(email, allowed)
+}
+
+// NewTolerantJWKSClientForTest exposes the HTTP client the ID-token key set is
+// fetched through, so the per-key JWKS tolerance can be driven against a real
+// gooidc.RemoteKeySet without standing up a whole Authenticator.
+func NewTolerantJWKSClientForTest(base *http.Client) *http.Client {
+	return newTolerantJWKSClient(base)
+}
+
+// FilterJWKSForTest exposes the document rewrite itself, so the shapes that
+// must pass through UNTOUCHED (not JSON, no "keys" member, nothing survived)
+// pin as a table rather than through an HTTP round trip.
+func FilterJWKSForTest(body []byte) (out []byte, droppedCount int) {
+	out, dropped := filterJWKS(body)
+	return out, len(dropped)
+}
