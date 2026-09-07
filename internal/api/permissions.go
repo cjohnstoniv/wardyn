@@ -165,9 +165,10 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 		g.Subject = ""
 		return nil
 	}
-	// user/group: lowercased the SAME way the caller's own identities are
+	// user/group: canonicalized the SAME way the caller's own identities are
 	// (capabilitySubjects, sessionGroups) — a grant written "Alice@Corp.com"
-	// must still hit the lowercased sub/email the resolver compares against.
+	// must still hit the folded sub/email the resolver compares against, and
+	// each half asks the MATCH surface's own function rather than restating it.
 	g.Subject = strings.TrimSpace(g.Subject)
 	if g.Subject == "" {
 		return fmt.Errorf("subject: required for subject_type %q", g.SubjectType)
@@ -190,7 +191,14 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 		}
 		g.Subject = subject
 	} else {
-		g.Subject = strings.ToLower(g.Subject)
+		// A USER subject gets canonicalUserSubject, not a bare ToLower. The
+		// fold is UNICODE: U+212A folds to ASCII 'k' and U+0130 to ASCII 'i',
+		// so a plain lowercase stored an admin's "Kim@Korp.com" (crafted K's)
+		// as "kim@korp.com" — binding a DENY, or a governance profile, to a
+		// real human the author never named, and to the exact string that
+		// human's own claims resolve to. Same function as the read side, so
+		// what a caller can BE is what this can store.
+		g.Subject = canonicalUserSubject(g.Subject)
 	}
 	if len(g.Subject) > maxCapabilityGrantFieldLen || !controlCharFree(g.Subject) {
 		return fmt.Errorf("subject: invalid")

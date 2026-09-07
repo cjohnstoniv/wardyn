@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -88,6 +89,49 @@ const capWildcard = "*"
 
 // ─── resolution ───────────────────────────────────────────────────────────────
 
+// canonicalUserSubject canonicalizes ONE human identity — an IdP `sub` or an
+// email claim — into the exact string a `user` subject row is matched by. It is
+// the user half of oidc.CanonicalGroupSubject, and it is used by BOTH sides of
+// the match: the caller's own subject list (capabilitySubjects, just below) and
+// every surface that writes a `user` subject (validateCapabilityGrant,
+// validateGovernanceAssignment, the governance preview's claim normalizer).
+// One function, so what a caller can BE is exactly what an admin can WRITE.
+//
+// THE ASCII GUARD RUNS ON THE RAW VALUE, BEFORE THE FOLD, and the ORDER is the
+// security property — the same ordering CanonicalGroupSubject, ParseRoleMap and
+// deriveRole already use, for the same reason. strings.ToLower does UNICODE
+// case mapping: KELVIN SIGN U+212A folds to ASCII 'k' and U+0130 folds to ASCII
+// 'i'. Folding first therefore let a crafted email claim "Kim@Korp.com"
+// resolve to "kim@korp.com" — the exact string another human's capability
+// grants, governance assignment and drive allocation are written against, since
+// every one of those columns is matched by `subject = ANY($1::text[])` exact
+// equality. The tree stated the opposite premise in two places ("A plain
+// ToLower is the WHOLE rule for a user subject"); it was the whole rule for an
+// ASCII one only.
+//
+// A NON-ASCII identity is kept VERBATIM rather than dropped, and that is where
+// this differs from the group rule — deliberately. A group subject is matched
+// against a STORED login-time snapshot that can only carry printable ASCII, so
+// a non-ASCII group name is a row nobody can ever match and the write boundary
+// refuses it. A user subject is the caller's OWN identity, recomputed per
+// request from claims the IdP chooses: dropping it would silently discard a
+// DENY written against a human whose directory hands out non-ASCII subjects,
+// and refusing it at the write boundary would make that human ungovernable.
+// Verbatim is safe in the only direction that matters — a string that is never
+// folded can only ever equal itself, so it inherits nobody's grants — and
+// because both sides call this function, a subject that can be written is
+// exactly a subject that can be matched.
+//
+// TRIMMED ON BOTH ARMS. The sub arm used not to be, so a claim with a trailing
+// space resolved to a subject no write boundary (which trims) could produce.
+func canonicalUserSubject(s string) string {
+	s = strings.TrimSpace(s)
+	if !oidc.ASCIIOnly(s) {
+		return s
+	}
+	return strings.ToLower(s)
+}
+
 // capabilitySubjects returns the grant subjects that describe the caller on
 // ctx: their user identities and their group snapshot.
 //
@@ -113,10 +157,10 @@ const capWildcard = "*"
 // more is strictly safer. It is the rows that are MISSING that stale is for
 // (capScan's unresolvable-deny check).
 func capabilitySubjects(ctx context.Context) (users, groups []string, stale bool) {
-	if sub := oidcHumanFromContext(ctx); sub != "" {
-		users = append(users, strings.ToLower(sub))
+	if sub := canonicalUserSubject(oidcHumanFromContext(ctx)); sub != "" {
+		users = append(users, sub)
 	}
-	if email := strings.ToLower(strings.TrimSpace(oidcEmailFromContext(ctx))); email != "" && !slices.Contains(users, email) {
+	if email := canonicalUserSubject(oidcEmailFromContext(ctx)); email != "" && !slices.Contains(users, email) {
 		users = append(users, email)
 	}
 	groups = oidcGroupsFromContext(ctx)
