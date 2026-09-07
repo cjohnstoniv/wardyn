@@ -7,7 +7,14 @@
 // DecisionOptions/decisionArgs live in lib/types/approvals.ts, not here — see
 // that file's comment on decisionArgs for why (every UI test that decides an
 // approval mocks THIS module wholesale, which would silently break a second
-// named export added here).
+// named export added here). The consequence of that rule is that NO consumer
+// test ever observes the body approve()/deny() build, and the daemon decodes
+// the decision body BY HAND without DisallowUnknownFields (internal/api/
+// approvals.go's decodeDecisionRequest), so a wrong key is dropped in silence
+// and Normalize() keeps the default `run` scope — no 400, no log, nothing
+// visible. approvals.wire.test.ts is therefore the ONLY thing pinning the two
+// decision_* key names below; it exercises this module for real (fetch stubbed,
+// module unmocked) and reads the Go json tags out of internal/api/approvals.go.
 import type { ApprovalRequest, DecisionOptions } from "../types";
 import { asJson, unwrapList, wfetch, withLimit } from "./core";
 

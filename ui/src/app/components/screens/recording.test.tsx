@@ -4,30 +4,44 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { AgentRun, Recording } from "../../lib/types";
+import type { RecordingProbe } from "../../lib/api/recordings";
 
 // The screen has no "list all recordings" endpoint to call — it lists every
-// run, then probes api.getRecording(run.id) per run and keeps only the ones
+// run, then probes api.probeRecording(run.id) per run and keeps only the ones
 // that resolve with a cast. MEDIUM behaviors pinned here (re-expressed
 // against that client-synthesized library, which replaced the old
 // single-run picker):
 //  - a listRuns() rejection renders its own distinct, retryable error and
 //    never fires any per-run checks.
-//  - a per-run getRecording() 404 (resolves undefined) is silently "no
+//  - a per-run probeRecording() 404 (resolves undefined) is silently "no
 //    recording" — no card, no failure count.
-//  - a per-run getRecording() REJECTION is a real check failure: it must
+//  - a per-run probeRecording() REJECTION is a real check failure: it must
 //    surface a retryable "N runs couldn't be checked" banner, not vanish.
 //  - "no runs at all", "every run checked but none recorded", and "filters
 //    hid everything" are three distinct empty states with their own CTAs.
+//  - the probes go out at most PROBE_CONCURRENCY at a time, and a card's cast
+//    is parsed only when it is played (F077: the bare forEach put every run's
+//    request in flight at once and held a parsed event stream for each).
 
 const listRunsMock = vi.fn();
-const getRecordingMock = vi.fn();
+const probeRecordingMock = vi.fn();
+// parseCast stands in for the real parser (an AsciicastEvent per output frame).
+// It is a spy, not a stub, because WHEN it runs is the point: once, for the one
+// cast a viewer pressed play on.
+const parseCastMock = vi.fn((runId: string, text: string): Recording => ({
+  run_id: runId,
+  header: { version: 2, width: 80, height: 24 },
+  events: [],
+  cast: text,
+}));
 const healthMock = vi.fn();
 vi.mock("../../lib/api/recordings", () => ({
   recordings: {
-    getRecording: (...a: unknown[]) => getRecordingMock(...a),
+    probeRecording: (...a: unknown[]) => probeRecordingMock(...a),
+    parseCast: (runId: string, text: string) => parseCastMock(runId, text),
   },
 }));
 vi.mock("../../lib/api/runs", () => ({
@@ -51,7 +65,7 @@ vi.mock("../wardyn/terminal-player", () => ({
   ),
 }));
 
-import { RecordingScreen } from "./recording";
+import { PROBE_CONCURRENCY, RecordingScreen } from "./recording";
 
 function run(id: string, overrides: Partial<AgentRun> = {}): AgentRun {
   return {
@@ -70,8 +84,8 @@ function run(id: string, overrides: Partial<AgentRun> = {}): AgentRun {
   } as AgentRun;
 }
 
-function rec(id: string): Recording {
-  return { run_id: id, header: { version: 2, width: 80, height: 24 }, events: [], cast: "x" };
+function probe(id: string): RecordingProbe {
+  return { run_id: id, durationSec: 12, bytes: 1, cast: "x" };
 }
 
 function renderScreen() {
@@ -85,7 +99,8 @@ function renderScreen() {
 describe("RecordingScreen", () => {
   beforeEach(() => {
     listRunsMock.mockReset();
-    getRecordingMock.mockReset();
+    probeRecordingMock.mockReset();
+    parseCastMock.mockClear();
     healthMock.mockReset().mockResolvedValue({});
   });
 
@@ -98,7 +113,7 @@ describe("RecordingScreen", () => {
     );
     expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
     expect(screen.queryByText(/none of your runs have a recording yet/i)).not.toBeInTheDocument();
-    expect(getRecordingMock).not.toHaveBeenCalled();
+    expect(probeRecordingMock).not.toHaveBeenCalled();
   });
 
   it("shows the true-empty state (no runs at all) with a 'Go to Runs' CTA", async () => {
@@ -107,7 +122,7 @@ describe("RecordingScreen", () => {
 
     await screen.findByText(/recordings appear once a run's terminal session is captured/i);
     expect(screen.getByRole("link", { name: /go to runs/i })).toBeInTheDocument();
-    expect(getRecordingMock).not.toHaveBeenCalled();
+    expect(probeRecordingMock).not.toHaveBeenCalled();
   });
 
   it("builds a card only for runs whose recording resolves — a 404 is silently 'no recording', a rejection is a real check failure", async () => {
@@ -116,8 +131,8 @@ describe("RecordingScreen", () => {
       run("run_2", { task: "add retries" }),
       run("run_3", { task: "bump deps" }),
     ]);
-    getRecordingMock.mockImplementation((id: string) => {
-      if (id === "run_1") return Promise.resolve(rec("run_1"));
+    probeRecordingMock.mockImplementation((id: string) => {
+      if (id === "run_1") return Promise.resolve(probe("run_1"));
       if (id === "run_2") return Promise.resolve(undefined); // 404 => no recording
       return Promise.reject(new Error("HTTP 500")); // run_3: real fetch error
     });
@@ -135,7 +150,7 @@ describe("RecordingScreen", () => {
 
   it("shows the 'none recorded' empty state once every run is checked and none has a recording", async () => {
     listRunsMock.mockResolvedValue([run("run_1"), run("run_2")]);
-    getRecordingMock.mockResolvedValue(undefined);
+    probeRecordingMock.mockResolvedValue(undefined);
     renderScreen();
 
     await screen.findByText(/none of your runs have a recording yet/i);
@@ -161,7 +176,7 @@ describe("RecordingScreen", () => {
   it("the 'none recorded' state also names the disabled deployment when components.recording is 'none'", async () => {
     healthMock.mockResolvedValue({ components: { recording: { selected: "none", source: "disabled" } } });
     listRunsMock.mockResolvedValue([run("run_1"), run("run_2")]);
-    getRecordingMock.mockResolvedValue(undefined);
+    probeRecordingMock.mockResolvedValue(undefined);
     renderScreen();
 
     await screen.findByText(/session recording is disabled on this deployment/i);
@@ -171,7 +186,7 @@ describe("RecordingScreen", () => {
   it("filters down to a 'no recordings match' empty state, and Clear filters restores the library", async () => {
     const runs = Array.from({ length: 5 }, (_, i) => run(`run_${i}`, { task: `task number ${i}` }));
     listRunsMock.mockResolvedValue(runs);
-    getRecordingMock.mockImplementation((id: string) => Promise.resolve(rec(id)));
+    probeRecordingMock.mockImplementation((id: string) => Promise.resolve(probe(id)));
     renderScreen();
 
     await screen.findByText("task number 0");
@@ -187,7 +202,7 @@ describe("RecordingScreen", () => {
 
   it("opens the replay dialog with that run's recording when its card is clicked", async () => {
     listRunsMock.mockResolvedValue([run("run_1", { task: "ship the fix" })]);
-    getRecordingMock.mockResolvedValue(rec("run_1"));
+    probeRecordingMock.mockResolvedValue(probe("run_1"));
     renderScreen();
 
     fireEvent.click(await screen.findByText("ship the fix"));
@@ -197,7 +212,7 @@ describe("RecordingScreen", () => {
 
   it("gives a KILLED run the same enforcement badge (RunStateBadge) runs.tsx/run-detail.tsx use", async () => {
     listRunsMock.mockResolvedValue([run("run_1", { task: "escape attempt", state: "KILLED" })]);
-    getRecordingMock.mockResolvedValue(rec("run_1"));
+    probeRecordingMock.mockResolvedValue(probe("run_1"));
     renderScreen();
 
     await screen.findByText("escape attempt");
@@ -212,7 +227,7 @@ describe("RecordingScreen", () => {
   // only resolves the card at all once role="button" is present.
   it("is keyboard-reachable: getByRole('button') resolves the card, and Enter fires onPlay", async () => {
     listRunsMock.mockResolvedValue([run("run_1", { task: "ship the fix" })]);
-    getRecordingMock.mockResolvedValue(rec("run_1"));
+    probeRecordingMock.mockResolvedValue(probe("run_1"));
     renderScreen();
 
     await screen.findByText("ship the fix");
@@ -226,7 +241,7 @@ describe("RecordingScreen", () => {
 
   it("is keyboard-reachable: Space also fires onPlay", async () => {
     listRunsMock.mockResolvedValue([run("run_1", { task: "ship the fix" })]);
-    getRecordingMock.mockResolvedValue(rec("run_1"));
+    probeRecordingMock.mockResolvedValue(probe("run_1"));
     renderScreen();
 
     await screen.findByText("ship the fix");
@@ -242,7 +257,7 @@ describe("RecordingScreen", () => {
   // keyboard path silently yields the wrong screen (replay dialog, not the run).
   it("Enter on 'Open run →' is left to the link — it does not open the replay dialog", async () => {
     listRunsMock.mockResolvedValue([run("run_1", { task: "ship the fix" })]);
-    getRecordingMock.mockResolvedValue(rec("run_1"));
+    probeRecordingMock.mockResolvedValue(probe("run_1"));
     renderScreen();
 
     await screen.findByText("ship the fix");
@@ -261,7 +276,7 @@ describe("RecordingScreen", () => {
   // outside the button's subtree, not merely reachable despite the nesting.
   it("'Open run' is NOT nested inside the role=button card (no nested-interactive anti-pattern)", async () => {
     listRunsMock.mockResolvedValue([run("run_1", { task: "ship the fix" })]);
-    getRecordingMock.mockResolvedValue(rec("run_1"));
+    probeRecordingMock.mockResolvedValue(probe("run_1"));
     renderScreen();
 
     await screen.findByText("ship the fix");
@@ -273,5 +288,62 @@ describe("RecordingScreen", () => {
     // card's OUTER container (the button div's parent), and it isn't inside
     // the button div itself.
     expect(card.querySelector("a")).toBeNull();
+  });
+  // F077: the library used to fire one request per run in a bare forEach —
+  // 200 runs measured 200 requests in flight at once. The window is the fix;
+  // the total work and the order are unchanged.
+  it(`probes at most PROBE_CONCURRENCY (${PROBE_CONCURRENCY}) runs at a time, and still checks every run`, async () => {
+    const N = 30;
+    listRunsMock.mockResolvedValue(Array.from({ length: N }, (_, i) => run(`run_${i}`)));
+    let inFlight = 0;
+    let peak = 0;
+    const pending: Array<() => void> = [];
+    probeRecordingMock.mockImplementation(
+      () =>
+        new Promise<undefined>((resolve) => {
+          inFlight++;
+          peak = Math.max(peak, inFlight);
+          pending.push(() => {
+            inFlight--;
+            resolve(undefined);
+          });
+        }),
+    );
+    renderScreen();
+
+    await waitFor(() => expect(probeRecordingMock).toHaveBeenCalledTimes(PROBE_CONCURRENCY));
+    // Nothing else goes out until a lane frees up — drain one at a time.
+    for (let i = 0; i < N; i++) {
+      await waitFor(() => expect(pending.length).toBeGreaterThan(0));
+      const release = pending.shift() as () => void;
+      await act(async () => {
+        release();
+      });
+    }
+    await waitFor(() => expect(probeRecordingMock).toHaveBeenCalledTimes(N));
+    expect(peak).toBeLessThanOrEqual(PROBE_CONCURRENCY);
+    expect(peak).toBeGreaterThan(1); // …and it is a WINDOW, not a serial queue
+    expect(new Set(probeRecordingMock.mock.calls.map((c) => c[0])).size).toBe(N);
+  });
+
+  // F077: a card renders a duration and a size. Parsing every probed cast into
+  // an event stream on load was work nobody asked for, held live in state for
+  // every run at once.
+  it("parses a cast only when its card is played — never at probe time", async () => {
+    listRunsMock.mockResolvedValue([
+      run("run_1", { task: "ship the fix" }),
+      run("run_2", { task: "second one" }),
+    ]);
+    probeRecordingMock.mockImplementation((id: string) => Promise.resolve(probe(id)));
+    renderScreen();
+
+    await screen.findByText("ship the fix");
+    await screen.findByText("second one");
+    expect(parseCastMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText("ship the fix"));
+    await waitFor(() => expect(screen.getByTestId("player")).toHaveAttribute("data-run", "run_1"));
+    expect(parseCastMock).toHaveBeenCalledTimes(1);
+    expect(parseCastMock).toHaveBeenCalledWith("run_1", "x");
   });
 });
