@@ -755,6 +755,17 @@ func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap 
 	// "your own approval vanished". Do not "fix" this back.
 	if !s.isSecurityOperator(r.Context()) { // LOCKSTEP with authorizeMemberDecision; see http.go
 		writeError(w, http.StatusForbidden, "decision_scope always is operator-only")
+		// AUDITED, like every other member denial on this path (the capability
+		// refusal above and the four-eyes one below both write this row): a
+		// member reaching for `always` is reaching for a permanent workspace
+		// allowlist entry through the approval queue, which is the back door
+		// rule 6 exists to close, and a closed door nobody records is a door
+		// nobody can prove was tried. security_admin_surface is the reason for
+		// this predicate — the same one requireSecurityOperator writes.
+		s.recordAudit(r.Context(), s.auditEvent(&ap.RunID, actorTypeFromRequest(r), principalFromRequest(r),
+			"authz.denied", ap.ID.String(), "denied", mustJSON(map[string]any{
+				"reason": "security_admin_surface", "method": r.Method,
+			})))
 		return uuid.Nil, false
 	}
 

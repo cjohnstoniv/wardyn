@@ -282,6 +282,21 @@ func (s *Server) secretOwnerParam(w http.ResponseWriter, r *http.Request) (owner
 	}
 	if !s.isOperator(r.Context()) {
 		writeError(w, http.StatusForbidden, "?owner= is admin-only")
+		// AUDITED, because this is a member reaching for ANOTHER human's
+		// credential namespace and the row is the only trace it happened.
+		// docs/AUDIT-ACTIONS.md's contract is "every member denial that isn't a
+		// plain foreign-resource 404", and a middleware-gated admin route
+		// already writes exactly this row for the same member — an in-handler
+		// gate that stays silent makes the audit trail depend on WHERE the
+		// refusal happens to live.
+		//
+		// SHAPE-IDENTICAL to the middleware's and to getWorkspaceAuthorized's
+		// in-handler twin: reason from the closed vocabulary, target the path,
+		// method in the data. It names no namespace: the refusal is constant and
+		// runs before any lookup, so neither the response nor the row can say
+		// whether the principal ?owner= asked about exists.
+		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+			"authz.denied", r.URL.Path, "denied", mustJSON(map[string]any{"reason": "admin_surface", "method": r.Method})))
 		return "", false
 	}
 	resolved, refusal := s.resolveSecretOwner(r.Context(), q)
