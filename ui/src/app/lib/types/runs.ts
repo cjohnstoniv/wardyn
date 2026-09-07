@@ -358,7 +358,8 @@ export type SetupItemKind =
   | "config_pair"
   // A secret a mounted workspace's own files declare a need for. "missing" rows
   // carry a fix:{action:"add_secret", secret_name}. Deliberately NOT gated into
-  // the destructive treatment (see step-review.tsx): the run still launches —
+  // the destructive treatment the retired composer Review gave llm_access /
+  // secret (step-review.tsx, deleted): the run still launches —
   // the workspace just may lack a credential it wants, an amber gap, not a red one.
   | "workspace_secret"
   // An integration a mounted workspace's requirements contract names as
@@ -409,9 +410,17 @@ export interface SetupItem {
 // production credential). risk_assessment/overall_risk are the SAME
 // composer.Grade/OverallLevel output — optional for older-server tolerance:
 // an absent value renders no risk panel and no acknowledgment gate rather
-// than crashing. Advisory only — rendered on the wizard's Review step, never
-// gating Review itself (only Launch, and only for a HIGH grade — see
-// step-review.tsx's RiskPanel).
+// than crashing. Advisory only, never a gate.
+//
+// WHERE THESE ARE READ, honestly: the sole consumer is the new-run rail's
+// preflight block (new-run-rail.tsx's RunRail), which renders overall_risk,
+// enforced_confinement_class and warnings. `setup_items` has NO consumer — the
+// five-step wizard's Review step (step-review.tsx) that used to render it was
+// deleted with the wizard, and nothing replaced that surface. It is fetched on
+// every Review and discarded; the field and its SetupItem subtree stay declared
+// because they are a live server contract (compose_setup.go) and the mirror
+// rule forbids dropping a wire field the daemon still sends. Rendering it again
+// is FILED as a 0.7.1 follow-up (R4-F009), not decided here.
 export interface PreflightResult {
   setup_items: SetupItem[];
   enforced_confinement_class: ConfinementClass;

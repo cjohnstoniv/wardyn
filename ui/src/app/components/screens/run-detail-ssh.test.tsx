@@ -8,7 +8,7 @@
 // (ConnectSSHCard is exported for exactly this) rather than mounting the
 // whole RunDetailScreen's fetch graph. Moved out of run-detail.test.tsx
 // alongside the component (B4 file-size gate) — zero behavior change.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { AgentRun } from "../../lib/types";
@@ -58,6 +58,11 @@ function renderCard(run: Partial<AgentRun> = {}, principal = OWNER, operator = t
   );
 }
 
+// Every health() fixture below carries status:"ok" because a real /healthz body
+// always does (internal/api/healthz.go:61) — and the card reads exactly that
+// bit to tell "the daemon answered, both gateways are off" apart from "no
+// answer at all", which lib/api/health.ts reports as the same resolved `{}`
+// (R4-F037).
 beforeEach(() => {
   healthMock.mockReset();
   listKeysMock.mockReset();
@@ -66,7 +71,7 @@ beforeEach(() => {
 
 describe("ConnectSSHCard — visibility", () => {
   it("renders nothing for a MEMBER on a run they do not own", async () => {
-    healthMock.mockResolvedValue({ ssh: { enabled: true, advertise_addr: "wardyn.corp.example:2222" } });
+    healthMock.mockResolvedValue({ status: "ok", ssh: { enabled: true, advertise_addr: "wardyn.corp.example:2222" } });
     listKeysMock.mockResolvedValue([{ fingerprint: "SHA256:x", principal: OWNER, name: "k", public_key: "", created_at: "" }]);
     const { container } = renderCard({}, "mallory@example.com", false);
     // Give any (unexpected) fetch a tick to resolve before asserting absence.
@@ -79,7 +84,7 @@ describe("ConnectSSHCard — visibility", () => {
   // uigateway.go's role check, sshgateway.go's admin arm). Hiding the card from
   // an admin offered less than the API already serves them.
   it("renders for an ADMIN on a run they do not own", async () => {
-    healthMock.mockResolvedValue({ ssh: { enabled: true, advertise_addr: "wardyn.corp.example:2222" } });
+    healthMock.mockResolvedValue({ status: "ok", ssh: { enabled: true, advertise_addr: "wardyn.corp.example:2222" } });
     listKeysMock.mockResolvedValue([{ fingerprint: "SHA256:x", principal: "admin@example.com", name: "k", public_key: "", created_at: "" }]);
     const { container } = renderCard({}, "admin@example.com", true);
     await waitFor(() => expect(container.querySelector("section")).not.toBeNull());
@@ -87,7 +92,7 @@ describe("ConnectSSHCard — visibility", () => {
   });
 
   it("renders nothing for a stopped run, even when owned", async () => {
-    healthMock.mockResolvedValue({ ssh: { enabled: true } });
+    healthMock.mockResolvedValue({ status: "ok", ssh: { enabled: true } });
     const { container } = renderCard({ state: "COMPLETED" });
     await new Promise((r) => setTimeout(r, 0));
     expect(container.querySelector("section")).toBeNull();
@@ -100,7 +105,7 @@ describe("ConnectSSHCard — visibility", () => {
   // card now always renders for a running run you own, and says plainly that SSH
   // is the part that is off.
   it("with SSH disabled it still offers the CLI, and says what would turn SSH on", async () => {
-    healthMock.mockResolvedValue({});
+    healthMock.mockResolvedValue({ status: "ok" });
     listKeysMock.mockResolvedValue([]);
     renderCard();
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
@@ -120,7 +125,7 @@ describe("ConnectSSHCard — visibility", () => {
   });
 
   it("the CLI lane names the same live session the page's terminal is attached to", async () => {
-    healthMock.mockResolvedValue({});
+    healthMock.mockResolvedValue({ status: "ok" });
     listKeysMock.mockResolvedValue([]);
     renderCard();
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
@@ -133,7 +138,7 @@ describe("ConnectSSHCard — visibility", () => {
 // not a typed field — these two cases are its whole contract.
 describe("ConnectSSHCard — external-tool notice", () => {
   it("renders the external-tool line when description starts with 'external:'", async () => {
-    healthMock.mockResolvedValue({});
+    healthMock.mockResolvedValue({ status: "ok" });
     listKeysMock.mockResolvedValue([]);
     renderCard({ description: "external:my-tool" });
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
@@ -143,7 +148,7 @@ describe("ConnectSSHCard — external-tool notice", () => {
   });
 
   it("omits the line when description is absent or does not start with 'external:'", async () => {
-    healthMock.mockResolvedValue({});
+    healthMock.mockResolvedValue({ status: "ok" });
     listKeysMock.mockResolvedValue([]);
     renderCard({ description: "a run I described myself" });
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
@@ -154,6 +159,7 @@ describe("ConnectSSHCard — external-tool notice", () => {
 describe("ConnectSSHCard — content", () => {
   it("shows the full card (command, ssh config, fingerprint, VS Code disclosure) when a key is registered", async () => {
     healthMock.mockResolvedValue({
+      status: "ok",
       ssh: { enabled: true, advertise_addr: "wardyn.corp.example:2222", host_key_fingerprint: "SHA256:abc123" },
     });
     listKeysMock.mockResolvedValue([
@@ -173,7 +179,7 @@ describe("ConnectSSHCard — content", () => {
   });
 
   it("leads with 'Add your SSH key first' when the caller has no keys, but still shows the real command", async () => {
-    healthMock.mockResolvedValue({ ssh: { enabled: true, advertise_addr: "wardyn.corp.example:2222" } });
+    healthMock.mockResolvedValue({ status: "ok", ssh: { enabled: true, advertise_addr: "wardyn.corp.example:2222" } });
     listKeysMock.mockResolvedValue([]);
     renderCard();
 
@@ -190,7 +196,7 @@ describe("ConnectSSHCard — content", () => {
   });
 
   it("does not claim 'no key is registered' when listKeys merely fails (transient error, not a confirmed empty list)", async () => {
-    healthMock.mockResolvedValue({ ssh: { enabled: true, advertise_addr: "wardyn.corp.example:2222" } });
+    healthMock.mockResolvedValue({ status: "ok", ssh: { enabled: true, advertise_addr: "wardyn.corp.example:2222" } });
     listKeysMock.mockRejectedValue(new Error("network blip"));
     renderCard();
 
@@ -200,7 +206,7 @@ describe("ConnectSSHCard — content", () => {
   });
 
   it("omits the -p flag when advertise_addr carries no port", async () => {
-    healthMock.mockResolvedValue({ ssh: { enabled: true, advertise_addr: "wardyn.corp.example" } });
+    healthMock.mockResolvedValue({ status: "ok", ssh: { enabled: true, advertise_addr: "wardyn.corp.example" } });
     listKeysMock.mockResolvedValue([{ fingerprint: "SHA256:x", principal: OWNER, name: "k", public_key: "", created_at: "" }]);
     renderCard();
 
@@ -209,7 +215,7 @@ describe("ConnectSSHCard — content", () => {
   });
 
   it("splits a bracketed IPv6 advertise_addr into host + port, not a mangled fragment", async () => {
-    healthMock.mockResolvedValue({ ssh: { enabled: true, advertise_addr: "[2001:db8::1]:2222" } });
+    healthMock.mockResolvedValue({ status: "ok", ssh: { enabled: true, advertise_addr: "[2001:db8::1]:2222" } });
     listKeysMock.mockResolvedValue([{ fingerprint: "SHA256:x", principal: OWNER, name: "k", public_key: "", created_at: "" }]);
     renderCard();
 
@@ -218,7 +224,7 @@ describe("ConnectSSHCard — content", () => {
   });
 
   it("treats a bare (unbracketed) IPv6 advertise_addr as host-only — no port to split off", async () => {
-    healthMock.mockResolvedValue({ ssh: { enabled: true, advertise_addr: "2001:db8::1" } });
+    healthMock.mockResolvedValue({ status: "ok", ssh: { enabled: true, advertise_addr: "2001:db8::1" } });
     listKeysMock.mockResolvedValue([{ fingerprint: "SHA256:x", principal: OWNER, name: "k", public_key: "", created_at: "" }]);
     renderCard();
 
@@ -231,7 +237,7 @@ describe("ConnectSSHCard — content", () => {
 // sub-affordance under the SAME owner+running gate as SSH/CLI above.
 describe("ConnectSSHCard — UI apps lane", () => {
   it("is hidden along with the whole card for a non-owner member or a stopped run", async () => {
-    healthMock.mockResolvedValue({ ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
+    healthMock.mockResolvedValue({ status: "ok", ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
     listKeysMock.mockResolvedValue([]);
     const nonOwner = renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] }, "mallory@example.com", false);
     await new Promise((r) => setTimeout(r, 0));
@@ -244,7 +250,7 @@ describe("ConnectSSHCard — UI apps lane", () => {
   });
 
   it("off-state names WARDYN_UI_SANDBOX_LISTEN, byte-matching the frozen mock string", async () => {
-    healthMock.mockResolvedValue({});
+    healthMock.mockResolvedValue({ status: "ok" });
     listKeysMock.mockResolvedValue([]);
     renderCard();
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
@@ -261,7 +267,7 @@ describe("ConnectSSHCard — UI apps lane", () => {
   // mock M6: the off-state's one affordance is a pointer to the page that says
   // how to turn it on, placed next to the need rather than in a footer (§9).
   it("off-state carries the doc pointer, naming the page — not a dead link and not a button", async () => {
-    healthMock.mockResolvedValue({});
+    healthMock.mockResolvedValue({ status: "ok" });
     listKeysMock.mockResolvedValue([]);
     renderCard();
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
@@ -280,6 +286,7 @@ describe("ConnectSSHCard — UI apps lane", () => {
 
   it("the doc pointer belongs to the off-state only — an enabled deployment does not show it", async () => {
     healthMock.mockResolvedValue({
+      status: "ok",
       ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" },
     });
     listKeysMock.mockResolvedValue([]);
@@ -289,7 +296,7 @@ describe("ConnectSSHCard — UI apps lane", () => {
   });
 
   it("names the policy field when enabled but the run declares no apps", async () => {
-    healthMock.mockResolvedValue({ ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
+    healthMock.mockResolvedValue({ status: "ok", ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
     listKeysMock.mockResolvedValue([]);
     renderCard({ ui_apps: [] });
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
@@ -300,7 +307,7 @@ describe("ConnectSSHCard — UI apps lane", () => {
   });
 
   it("renders one row per declared app, byte-matching the frozen intro/new-tab/no-recording strings", async () => {
-    healthMock.mockResolvedValue({ ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
+    healthMock.mockResolvedValue({ status: "ok", ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
     listKeysMock.mockResolvedValue([]);
     renderCard({ ui_apps: [{ name: "vscode", port: 8080 }, { name: "docs", port: 3000, path: "/readme" }] });
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
@@ -318,7 +325,7 @@ describe("ConnectSSHCard — UI apps lane", () => {
   });
 
   it("mints a ticket and opens the app on the UI-sandbox origin, substituting run/app/ticket", async () => {
-    healthMock.mockResolvedValue({ ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
+    healthMock.mockResolvedValue({ status: "ok", ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
     listKeysMock.mockResolvedValue([]);
     attachTicketMock.mockResolvedValue("tkt_abc123");
     const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
@@ -343,6 +350,7 @@ describe("ConnectSSHCard — UI apps lane", () => {
 
   it("substitutes EVERY placeholder, including the {run} host-mode templates carry twice", async () => {
     healthMock.mockResolvedValue({
+      status: "ok",
       ui_sandbox: {
         enabled: true,
         // WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE (host mode) — {run} in the host AND
@@ -371,7 +379,7 @@ describe("ConnectSSHCard — UI apps lane", () => {
   });
 
   it("renders lane.error.launcher above the server's verbatim body when the ticket mint fails with that message, and leaves the other app untouched", async () => {
-    healthMock.mockResolvedValue({ ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
+    healthMock.mockResolvedValue({ status: "ok", ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
     listKeysMock.mockResolvedValue([]);
     attachTicketMock.mockRejectedValue(
       new Error("no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found"),
@@ -395,6 +403,7 @@ describe("ConnectSSHCard — UI apps lane", () => {
 
   it("renders the UI apps lane LAST — after the ssh command, per the mock's S3 order", async () => {
     healthMock.mockResolvedValue({
+      status: "ok",
       ssh: { enabled: true, advertise_addr: "wardyn.corp.example:2222" },
       ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" },
     });
@@ -408,5 +417,85 @@ describe("ConnectSSHCard — UI apps lane", () => {
     // The lane was originally inserted right after the SSH *heading*, which put
     // it AHEAD of the ssh command the heading introduces.
     expect(sshCommand.compareDocumentPosition(uiHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
+// R4-F037: the card's OFF copy is a claim about the DEPLOYMENT ("Off on this
+// deployment... an operator turns it on by setting WARDYN_SSH_LISTEN"), and it
+// used to render on a /healthz that never answered. The real failure mode is
+// NOT a rejected promise — lib/api/health.ts swallows every non-ok response
+// and every network/parse/abort error into a resolved `{}` — so these cases
+// drive the REAL health() through a stubbed fetch, which is the shape a live
+// 5xx or blip actually produces. `status:"ok"` (healthz.go:61, present in
+// every successful body) is the only thing that separates "answered: both off"
+// from "no answer".
+describe("ConnectSSHCard — a FAILED /healthz asserts nothing about the deployment", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  async function useRealHealth() {
+    const actual = await vi.importActual<typeof import("../../lib/api/health")>(
+      "../../lib/api/health",
+    );
+    healthMock.mockImplementation(() => actual.health.health());
+  }
+
+  function haveKeys() {
+    listKeysMock.mockResolvedValue([
+      { fingerprint: "SHA256:x", principal: OWNER, name: "k", public_key: "", created_at: "" },
+    ]);
+  }
+
+  // Every way /healthz can fail to answer, as health() actually reports it.
+  const failures: [string, () => unknown][] = [
+    ["a 503 from the daemon", () => ({ ok: false, status: 503, json: async () => ({}) })],
+    ["a refused connection", () => { throw new TypeError("Failed to fetch"); }],
+  ];
+
+  for (const [label, respond] of failures) {
+    it(`shows neither lane's OFF copy on ${label}`, async () => {
+      await useRealHealth();
+      vi.stubGlobal("fetch", vi.fn(async () => respond() as Response));
+      haveKeys();
+      const { container } = renderCard();
+      // The card itself still renders — the CLI lane needs no gateway at all.
+      await waitFor(() => expect(container.querySelector("section")).not.toBeNull());
+      await waitFor(() => expect(healthMock).toHaveBeenCalled());
+      // Let the swallowed failure settle before asserting absence.
+      await new Promise((r) => setTimeout(r, 0));
+
+      // queryAll, not query: with the defect BOTH lanes claim it, and a
+      // multiple-match throw would hide which.
+      expect(screen.queryAllByText(/Off on this deployment/)).toHaveLength(0);
+      expect(screen.queryAllByText(new RegExp(UI_APPS_LANE.off.slice(0, 40)))).toHaveLength(0);
+      // Both headings stay: the lanes exist, we just have no answer about them.
+      expect(screen.getByText("SSH")).toBeInTheDocument();
+      expect(screen.getByText(UI_APPS_LANE.title)).toBeInTheDocument();
+    });
+  }
+
+  // The other direction, through the same real code path: a daemon that DOES
+  // answer, with neither gateway configured, must still say so.
+  it("says OFF for both lanes when a real /healthz answers with neither gateway", async () => {
+    await useRealHealth();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ status: "ok" }) }) as unknown as Response),
+    );
+    haveKeys();
+    renderCard();
+    // Both lanes' OFF paragraphs open with the same sentence (copy.ts:470).
+    await waitFor(() => expect(screen.getAllByText(/Off on this deployment/).length).toBe(2));
+    expect(screen.getByText(new RegExp(UI_APPS_LANE.off.slice(0, 40)))).toBeInTheDocument();
+  });
+
+  // And with the module mocked, the same answer shape — a body that carries
+  // status but neither gateway key — so the pin cannot be satisfied by an
+  // unreachable daemon's `{}`.
+  it("says OFF when health() ANSWERS status:ok with neither lane present", async () => {
+    healthMock.mockResolvedValue({ status: "ok" });
+    haveKeys();
+    renderCard();
+    await waitFor(() => expect(screen.getAllByText(/Off on this deployment/).length).toBe(2));
+    expect(screen.getByText(new RegExp(UI_APPS_LANE.off.slice(0, 40)))).toBeInTheDocument();
   });
 });

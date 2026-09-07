@@ -41,7 +41,8 @@ export function SandboxWidget({ runId, live }: { runId: string; live: boolean })
 
   const load = React.useCallback(
     (foreground: boolean) => {
-      runsApi
+      // Returned for usePoll's in-flight guard (R4-F073/F074).
+      return runsApi
         .getResources(runId)
         .then((data) => setState({ kind: "ready", data }))
         .catch((err) => {

@@ -65,11 +65,49 @@ export class HttpError extends Error {
 // so the clamp stays fail-closed.
 export const ccRank = (cc: string): number => CC_ORDER.indexOf(cc as ConfinementClass) + 1;
 
+// Every console request is bounded. A daemon that ACCEPTS a connection and
+// never writes a response is not hypothetical here — internal/db/db.go:110-121
+// describes reaching it with no Wardyn bug at all (one idle psql transaction
+// exhausts the pool, "every other query in the process starts blocking"
+// against an http.Server that "deliberately sets no WriteTimeout") — and an
+// un-bounded fetch() waits for it forever. Forever is not a slow screen: the
+// shell gates EVERY route behind health()+whoami() settling (app-shell's
+// useMeta -> App.tsx's roleResolved), so one stalled read is a permanent
+// spinner with no error, no retry and nothing a reload changes. The deadline
+// turns that into the rejection every caller already handles: the shell's
+// "Control plane unreachable" banner, sign-in's "Could not reach the control
+// plane.", a launch button that un-disables.
+//
+// 60s, not a snappy 5-10s: this bounds a HANG, it is not a latency budget, and
+// the slowest legitimate console call (an import step, a policy verify) must
+// still fit under it. A call that genuinely needs longer passes its own
+// timeoutMs.
+export const WFETCH_TIMEOUT_MS = 60_000;
+
+// TIMEOUT_STATUS: no HTTP response ever happened, so there is no status to
+// report. Callers that branch on `e.status === 401` are unaffected, and the
+// message is the sentence sign-in already shows for an unreachable daemon —
+// this path adds no new console copy, it just stops the wait.
+export const TIMEOUT_STATUS = 0;
+const TIMEOUT_MESSAGE = "Could not reach the control plane.";
+
+// deadlineSignal composes the caller's signal (if any) with our timeout, so a
+// caller-driven abort still works and the deadline still applies.
+function deadlineSignal(caller: AbortSignal | null | undefined, timeoutMs: number): AbortSignal {
+  const deadline = AbortSignal.timeout(timeoutMs);
+  return caller ? AbortSignal.any([caller, deadline]) : deadline;
+}
+
 // Central fetch wrapper:
 //  (a) attaches Bearer token when a wardyn_admin_token is set,
 //  (b) always sends the OIDC session cookie (credentials: 'include'),
-//  (c) routes HTTP 401 to the module-level onUnauthorized handler.
-export async function wfetch(path: string, init: RequestInit = {}): Promise<Response> {
+//  (c) routes HTTP 401 to the module-level onUnauthorized handler,
+//  (d) bounds the request — see WFETCH_TIMEOUT_MS.
+export async function wfetch(
+  path: string,
+  init: RequestInit = {},
+  timeoutMs: number = WFETCH_TIMEOUT_MS,
+): Promise<Response> {
   const headers = new Headers(init.headers);
   const token = getToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -78,11 +116,27 @@ export async function wfetch(path: string, init: RequestInit = {}): Promise<Resp
   }
   headers.set("Accept", headers.get("Accept") ?? "application/json");
 
-  const res = await fetch(`${BASE}${path}`, {
-    ...init,
-    headers,
-    credentials: "include",
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      ...init,
+      headers,
+      credentials: "include",
+      signal: deadlineSignal(init.signal, timeoutMs),
+    });
+  } catch (e) {
+    // A caller's OWN abort stays an abort (it is their control flow, not a
+    // failure); only the deadline is reported as the unreachable-daemon case.
+    if (init.signal?.aborted) throw e;
+    // Read .name off the value, not `e instanceof Error`: an aborted fetch
+    // rejects with a DOMException, which is not an Error in every runtime the
+    // console and its jsdom test env run in.
+    const name = (e as { name?: unknown } | null)?.name;
+    if (name === "TimeoutError" || name === "AbortError") {
+      throw new HttpError(TIMEOUT_STATUS, TIMEOUT_MESSAGE);
+    }
+    throw e;
+  }
 
   if (res.status === 401) {
     _unauthorized?.();

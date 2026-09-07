@@ -11,7 +11,7 @@
 // description now names that reason too (without disambiguating which case
 // applies — preserves the anti-enumeration property).
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
@@ -59,11 +59,12 @@ afterEach(() => {
   auditMocks.taskMode = undefined;
   auditMocks.ending = undefined;
 });
+const getRecordingMock = vi.fn().mockResolvedValue(null);
 vi.mock("../../lib/api/recordings", () => ({
   // Resolves, rather than a bare vi.fn() returning undefined: a FINISHED run on
   // Overview now fetches its cast on mount (the hero pane replays in place), so
   // a mock that is not thenable takes the whole screen down.
-  recordings: { getRecording: vi.fn().mockResolvedValue(null) },
+  recordings: { getRecording: (...a: unknown[]) => getRecordingMock(...a) },
 }));
 vi.mock("../../lib/api/health", () => ({
   health: { health: vi.fn().mockResolvedValue({}) },
@@ -78,6 +79,8 @@ beforeEach(() => {
   listApprovalsMock.mockResolvedValue([]);
   listAuditMock.mockReset();
   listAuditMock.mockResolvedValue([]);
+  getRecordingMock.mockReset();
+  getRecordingMock.mockResolvedValue(null);
 });
 
 const RUN = {
@@ -376,5 +379,214 @@ describe("RunDetailScreen — open full Audit link", () => {
       "href",
       "/audit?run_id=run-1",
     );
+  });
+});
+
+// R4-F002: the Approvals tab used to pull the WHOLE fleet's list
+// (listApprovals("")) and filter in the browser — i.e. AFTER the server's
+// requested_at DESC window — so past LIST_LIMIT lifetime approvals a run's own
+// holds vanished from its own detail page, PENDING badge and all
+// (internal/api/approvals.go:56-61). The fetch must carry ?run_id=.
+describe("RunDetailScreen — its approvals are scoped server-side", () => {
+  it("asks /approvals for THIS run, so an old run past the list window still shows its holds", async () => {
+    // The honest server: an un-scoped read answers with the newest window,
+    // which for an old run contains none of its rows.
+    listApprovalsMock.mockImplementation((_state: unknown, runId: unknown) =>
+      Promise.resolve(
+        runId === "run-1"
+          ? [
+              {
+                id: "ap-old",
+                run_id: "run-1",
+                kind: "egress_domain",
+                requested_scope: { host: "unlisted.example" },
+                state: "PENDING",
+                requested_at: new Date().toISOString(),
+              },
+            ]
+          : [],
+      ),
+    );
+    renderRun(RUN);
+
+    const tab = await screen.findByRole("tab", { name: /approvals/i });
+    expect(tab).toHaveTextContent("1");
+    expect(listApprovalsMock).toHaveBeenCalledWith("", "run-1");
+  });
+});
+
+// R4-F004: the hero pane's notice had three arms — loading/idle,
+// recordingDisabled, else recordingMissing — so a FAILED getRecording fell
+// through to "This run has no captured terminal session", a statement about the
+// RUN made from a fetch that never established it. The Recording tab, fed by
+// the same recState, said "Couldn't load this run's recording." — one failed
+// fetch, two contradictory answers, and the one on the DEFAULT tab was false.
+describe("RunDetailScreen — a failed recording fetch is not a claim about the run", () => {
+  it("says the recording could not be loaded, never that the run has none", async () => {
+    getRecordingMock.mockRejectedValue(new Error("recording store unreachable"));
+    renderRun({ ...RUN, state: "COMPLETED", interactive: true });
+
+    const pane = await screen.findByTestId("run-terminal-pane");
+    await waitFor(() => expect(pane).toHaveTextContent(RUN_COCKPIT.recordingError));
+    expect(pane).not.toHaveTextContent(RUN_COCKPIT.recordingMissing);
+  });
+
+  it("still says the run has none when the fetch SUCCEEDS with no cast", async () => {
+    getRecordingMock.mockResolvedValue(null);
+    renderRun({ ...RUN, state: "COMPLETED", interactive: true });
+
+    const pane = await screen.findByTestId("run-terminal-pane");
+    await waitFor(() => expect(pane).toHaveTextContent(RUN_COCKPIT.recordingMissing));
+  });
+});
+
+// R4-F073/F074: the cockpit fires FIVE requests per DETAIL_POLL_MS tick, and
+// load() used to fire-and-forget — so a control plane slower than the interval
+// stacked a new set of five on every tick (34 concurrent in-flight measured at
+// 12s latency, 97 at 40s), and a BACKGROUNDED tab kept paying all of it for a
+// human who could see none of it. load() now RETURNS its Promise.all so
+// usePoll's in-flight guard has something to wait on.
+describe("RunDetailScreen — a slow or unwatched control plane costs one set of requests, not one per tick", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    // Only the document.hidden spy is undone here: vi.restoreAllMocks() would
+    // also strip the module mocks' inline mockResolvedValue()s, which this
+    // file's beforeEach does not re-seed.
+    hiddenSpy?.mockRestore();
+    hiddenSpy = null;
+  });
+  let hiddenSpy: ReturnType<typeof vi.spyOn> | null = null;
+
+  it("does not stack a second poll on top of one that has not answered", async () => {
+    let settleRun: ((r: unknown) => void) | null = null;
+    getRunMock.mockReset();
+    // The FIRST (foreground) load answers so the screen renders; every poll
+    // after it hangs, which is exactly the slow-backend case.
+    getRunMock
+      .mockResolvedValueOnce({ ...RUN, state: "RUNNING" })
+      .mockImplementation(() => new Promise((res) => (settleRun = res)));
+
+    render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <Routes>
+          <Route path="/runs/:id" element={<RunDetailScreen />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(getRunMock).toHaveBeenCalled());
+    await screen.findAllByText(RUN.task);
+    const afterFirstLoad = getRunMock.mock.calls.length;
+
+    // One tick starts a poll; five more intervals go by with it unanswered.
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(getRunMock.mock.calls.length).toBe(afterFirstLoad + 1);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(getRunMock.mock.calls.length).toBe(afterFirstLoad + 1);
+
+    // ...and the poller is not wedged: the moment it answers, ticks resume.
+    settleRun!({ ...RUN, state: "RUNNING" });
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(getRunMock.mock.calls.length).toBeGreaterThan(afterFirstLoad + 1);
+  });
+
+  it("polls nothing at all while the tab is hidden", async () => {
+    getRunMock.mockReset();
+    getRunMock.mockResolvedValue({ ...RUN, state: "RUNNING" });
+    render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <Routes>
+          <Route path="/runs/:id" element={<RunDetailScreen />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await screen.findAllByText(RUN.task);
+
+    hiddenSpy = vi.spyOn(document, "hidden", "get").mockReturnValue(true) as never;
+    document.dispatchEvent(new Event("visibilitychange"));
+    const before = getRunMock.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60_000); // fifteen ticks nobody can see
+    expect(getRunMock.mock.calls.length).toBe(before);
+  });
+});
+
+// R4-F141: load() awaited FIVE fetches with Promise.all, so ONE subsidiary
+// rejection took the whole cockpit down to ErrorState's "We couldn't reach the
+// Wardyn control plane" — an outage claim that is false when GET /runs/{id}
+// answered 200, and one that costs a live run its Kill button, its terminal and
+// its approvals strip. The rejection is routine: handleListApprovals answers
+// 500 "approval listing is not scoped for members on this backend" without
+// ApprovalsByRunCreatorPager (internal/api/approvals.go), and a degraded audit
+// store fails listAudit.
+const CONTROL_PLANE_SENTENCE = "We couldn't reach the Wardyn control plane. Please try again.";
+
+describe("RunDetailScreen — a failing side fetch is not an outage", () => {
+  it("keeps the cockpit — heading, state and Kill — when audit and approvals both fail", async () => {
+    listAuditMock.mockReset();
+    listAuditMock.mockRejectedValue(new Error("audit store degraded"));
+    listApprovalsMock.mockReset();
+    listApprovalsMock.mockRejectedValue(new Error("approval listing is not scoped for members"));
+
+    renderRun({ ...RUN, state: "RUNNING" });
+
+    // The run rendered, so the page must say what the run says.
+    expect((await screen.findAllByText(RUN.task)).length).toBeGreaterThan(0);
+    // ...and the one control that ends a runaway run is still reachable.
+    expect(screen.getByRole("button", { name: /Kill/ })).toBeInTheDocument();
+    expect(screen.queryByText(CONTROL_PLANE_SENTENCE)).toBeNull();
+  });
+
+  it("still errors when the RUN itself is the fetch that failed", async () => {
+    getRunMock.mockReset();
+    getRunMock.mockRejectedValue(new Error("control plane down"));
+    render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <Routes>
+          <Route path="/runs/:id" element={<RunDetailScreen />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText(CONTROL_PLANE_SENTENCE)).toBeInTheDocument();
+  });
+});
+
+// R4-F127: the foreground/background split at the end of load() is the rule
+// that a poll blip must not wipe a live cockpit — and nothing tested it, so
+// deleting the `if (foreground)` guard left all sixteen tests green. A blip
+// here is not cosmetic: the ErrorState it would render carries no run state, no
+// terminal and no Kill button, and it would return every DETAIL_POLL_MS.
+describe("RunDetailScreen — a background poll blip keeps the last-good cockpit", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("does not replace the page with the control-plane error when a tick fails", async () => {
+    getRunMock.mockReset();
+    // The foreground load answers; every poll after it rejects.
+    getRunMock
+      .mockResolvedValueOnce({ ...RUN, state: "RUNNING" })
+      .mockRejectedValue(new Error("control plane hiccup"));
+
+    render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <Routes>
+          <Route path="/runs/:id" element={<RunDetailScreen />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await screen.findAllByText(RUN.task);
+    const afterFirstLoad = getRunMock.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(20_000); // five ticks, all rejecting
+    expect(getRunMock.mock.calls.length).toBeGreaterThan(afterFirstLoad);
+
+    expect(screen.queryByText(CONTROL_PLANE_SENTENCE)).toBeNull();
+    expect((await screen.findAllByText(RUN.task)).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /Kill/ })).toBeInTheDocument();
   });
 });

@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { AgentRun, AuditEvent } from "../../lib/types";
@@ -512,5 +512,49 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(screen.getByText("Decided by rule")).toBeInTheDocument();
     expect(screen.getByText("policy:tool-deny")).toBeInTheDocument();
     expect(screen.queryByText("Refused by the built-in guard")).not.toBeInTheDocument();
+  });
+});
+
+// R4-F132: the live-tail deliberately swallows a failed tick to keep the last
+// good view, so `status` stays "ready" forever — and the green pulsing
+// "Live · appending" chip rode on `status` alone. A control plane that died
+// after the first read therefore left a confident liveness claim over a frozen
+// trail. CONSOLE-RULES §10: a result verb needs a real result behind it.
+describe("AuditScreen — the liveness chip stops claiming a feed that stopped answering", () => {
+  beforeEach(() => {
+    listAuditMock.mockReset();
+    listAuditMock.mockResolvedValue([]);
+    getRunMock.mockReset().mockResolvedValue(undefined);
+    healthMock.mockReset().mockResolvedValue({});
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("drops the chip once a poll stops answering, and brings it back when the feed recovers", async () => {
+    // Fake timers BEFORE the render: usePoll's setInterval has to be the fake
+    // one, or advancing time never reaches a tick.
+    vi.useFakeTimers();
+    listAuditMock.mockResolvedValueOnce([ev({ id: "e1", run_id: "run_111", action: "egress.allow" })]);
+    renderScreen();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByText("Live · appending")).toBeInTheDocument();
+
+    // Every later read 503s — the harness's `auditdead` case.
+    listAuditMock.mockRejectedValue(new Error("503"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000);
+    });
+    expect(screen.queryByText("Live · appending")).toBeNull();
+    // The last good view is still there — the fix removes the CLAIM, not the data.
+    expect(screen.getByText("1 event")).toBeInTheDocument();
+
+    // ...and it is not a one-way latch: a feed that comes back is live again.
+    listAuditMock.mockReset();
+    listAuditMock.mockResolvedValue([ev({ id: "e1", run_id: "run_111", action: "egress.allow" })]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000);
+    });
+    expect(screen.getByText("Live · appending")).toBeInTheDocument();
   });
 });

@@ -240,8 +240,10 @@ export default function App() {
   // independently — a broken approvals call still leaves an honest run badge.
   // Counts, not lists, stay in state: this re-renders the whole shell, and the
   // number is the only thing it renders.
+  // RETURNED for usePoll's in-flight guard (R4-F074): the badge fetch is two
+  // un-scoped LIST_LIMIT reads, the most expensive tick in the shell.
   const refreshBadges = React.useCallback(() => {
-    Promise.all([
+    return Promise.all([
       approvalsApi.listApprovals("PENDING").catch(() => null),
       runsApi.listRuns().catch(() => null),
       /* both already route 401 through onUnauthorized */
@@ -317,8 +319,9 @@ export default function App() {
   const [confinementClasses, setConfinementClasses] = React.useState<
     ConfinementClass[] | undefined
   >(undefined);
+  // RETURNED for usePoll's in-flight guard (R4-F074).
   const refreshHealth = React.useCallback(() => {
-    void health.health().then((h) => {
+    return health.health().then((h) => {
       const ok = h.status === "ok";
       setUnreachable(!ok);
       if (!ok) return;

@@ -67,6 +67,23 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
     enabled?: boolean;
     enter_url_template?: string;
   } | null>(null);
+  // Did /healthz actually ANSWER? `ssh`/`uiSandbox` being null conflates two
+  // facts — "not loaded yet" and "loaded, and the deployment has it off" — and
+  // the OFF copy below is a statement about the DEPLOYMENT ("Off on this
+  // deployment... an operator turns it on by setting WARDYN_SSH_LISTEN"). This
+  // card used to render that on a 5xx or a network blip and never re-check
+  // (the effect's deps never change on this page).
+  //
+  // The signal has to come from the BODY, not from the promise: health()
+  // CANNOT reject — lib/api/health.ts:242-247 returns {} for a non-ok response
+  // and {} from its catch for every network/parse/abort failure (App.tsx:311
+  // says the same of it) — so a .catch here would be dead code, and a resolved
+  // {} means "no answer", not "both lanes are off". `status` is the bit that
+  // separates them: internal/api/healthz.go:61 emits "status":"ok" in every
+  // successful body, and App.tsx:325 already reads this exact predicate for
+  // the control-plane-unreachable banner. Same principle the sibling
+  // listKeys().catch states: never assert a fact the fetch did not confirm.
+  const [healthAnswered, setHealthAnswered] = React.useState(false);
   // Which declared app's ticket-mint/open is in flight, and the last failure
   // (scoped to one app — the other rows stay untouched per the mock's S5).
   const [openingApp, setOpeningApp] = React.useState<string | null>(null);
@@ -79,6 +96,9 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
       if (!alive) return;
       setSSH(h.ssh ?? null);
       setUISandbox(h.ui_sandbox ?? null);
+      // Only a real answer licenses the OFF copy; a swallowed failure ({})
+      // leaves both lanes as their heading alone.
+      setHealthAnswered(h.status === "ok");
     });
     sshKeysApi
       .listKeys()
@@ -186,7 +206,7 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
 
       <div className="mt-4 border-t border-border pt-3">
         <p className="text-xs font-medium text-foreground">SSH</p>
-        {!sshOn && (
+        {healthAnswered && !sshOn && (
           <p className="mt-0.5 text-meta leading-relaxed text-muted-foreground">
             Off on this deployment. It gives you <Mono className="text-foreground">ssh</Mono>, scp and VS Code
             Remote-SSH straight into the sandbox, keyed to the SSH keys in Settings. An operator turns it on by
@@ -260,7 +280,7 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
           orders the card CLI -> SSH (heading + command) -> UI apps. */}
       <div className="mt-4 border-t border-border pt-3">
         <p className="text-xs font-medium text-foreground">{UI_APPS_LANE.title}</p>
-        {!uiSandboxOn && (
+        {healthAnswered && !uiSandboxOn && (
           <>
             <p className="mt-0.5 text-meta leading-relaxed text-muted-foreground">
               {monoTokens(UI_APPS_LANE.off, "WARDYN_UI_SANDBOX_LISTEN")}

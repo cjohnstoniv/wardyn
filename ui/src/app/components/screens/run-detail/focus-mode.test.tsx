@@ -56,9 +56,10 @@ function ctx(overrides: Partial<WidgetContext> = {}): WidgetContext {
   return {
     run: RUN as unknown as WidgetContext["run"],
     finished: false,
-    // null keeps the ssh widget unavailable (owner-only), so this suite never
-    // has to stand up the health / ssh-key fetches.
+    // A non-owner, non-admin viewer keeps the ssh widget unavailable, so this
+    // suite never has to stand up the health / ssh-key fetches.
     principal: null,
+    operator: false,
     grants: [],
     egress: [],
     audit: [],

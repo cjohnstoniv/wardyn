@@ -418,6 +418,41 @@ describe("NewRunScreen — Preflight", () => {
     resolve({ setup_items: [], enforced_confinement_class: "CC1", warnings: [] });
     await waitFor(() => expect(button).toBeEnabled());
   });
+
+  // R4-F090: the verdict sits directly above Launch, "the last thing read
+  // before committing" — so it may only be shown while it is still a verdict
+  // about the body Launch would send. It used to survive ANY edit: preflight a
+  // title, change the run, and the graded-elsewhere badge stayed beside the
+  // button while createRun shipped something the verdict never saw.
+  it("drops the verdict as soon as the run body changes — a stale grade is never rendered beside Launch", async () => {
+    preflightRunMock.mockResolvedValue({
+      setup_items: [],
+      enforced_confinement_class: "CC1",
+      overall_risk: "low",
+      warnings: [],
+    });
+    const button = await readyScreen();
+    await user.click(button);
+    expect(await screen.findByTestId("preflight-result")).toBeInTheDocument();
+
+    // Any field that reaches the wire body — the title is the cheapest one.
+    await user.type(screen.getByLabelText("Title"), " v2 PROD");
+
+    await waitFor(() => expect(screen.queryByTestId("preflight-result")).toBeNull());
+  });
+
+  it("drops a preflight ERROR on the same edit — it graded a body that no longer exists", async () => {
+    preflightRunMock.mockRejectedValue(new Error('workspaces[0]: unknown secret "prod-db"'));
+    const button = await readyScreen();
+    await user.click(button);
+    expect(await screen.findByText('workspaces[0]: unknown secret "prod-db"')).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Title"), " v2 PROD");
+
+    await waitFor(() =>
+      expect(screen.queryByText('workspaces[0]: unknown secret "prod-db"')).toBeNull(),
+    );
+  });
 });
 
 // M4/rulebook §8: the keyboard contract. Launching a run is consequential, so
@@ -600,5 +635,65 @@ describe("NewRunScreen — the member's drive reaches the wire", () => {
     // read_only is ABSENT, not false: the member did not narrow this run, and
     // the wizard sends the narrowing only when it is asked for.
     expect(createRunMock.mock.calls[0][0].drive).toEqual({ enabled: true });
+  });
+});
+
+// R4-F118 — "Review predicts launch", the SCREEN half.
+//
+// runs.wire.fields.test.ts proves runWireBody maps one input to byte-identical
+// create/preflight bodies. Nothing proved the SCREEN hands both doors the same
+// input: the four Preflight cases above assert only on the RESPONSE, and never
+// read preflightRunMock's argument. Mutating the screen to preflight
+// `{...buildRunInput(), drive: undefined, workspaces: undefined,
+// integration_id: undefined}` — Review predicting a driveless, workspace-less,
+// credential-less launch for a run that will carry all three — left the whole
+// 1823-test suite green.
+describe("NewRunScreen — Preflight sends the body Launch sends", () => {
+  it("preflight's argument deep-equals createRun's, from one unchanged state", async () => {
+    preflightRunMock.mockResolvedValue({
+      setup_items: [],
+      enforced_confinement_class: "CC2",
+      overall_risk: "low",
+      warnings: [],
+    });
+    renderScreen(baseMe({ user_drive: baseMeDrive() }));
+    await user.click(await screen.findByLabelText(DM.NR_CHECKBOX));
+    await user.type(screen.getByLabelText("Title"), "Refund flow");
+
+    await user.click(screen.getByRole("button", { name: /^Preflight$/ }));
+    await waitFor(() => expect(preflightRunMock).toHaveBeenCalled());
+
+    // Nothing is touched between the two clicks: Review is a dry run of THIS
+    // request, so any divergence is the prediction lying about the launch.
+    await user.click(screen.getByRole("button", { name: /Launch run/ }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalled());
+
+    expect(preflightRunMock.mock.calls[0][0]).toEqual(createRunMock.mock.calls[0][0]);
+  });
+
+  it("...and the three fields a silent drop is invisible in survive on BOTH", async () => {
+    preflightRunMock.mockResolvedValue({
+      setup_items: [],
+      enforced_confinement_class: "CC2",
+      overall_risk: "low",
+      warnings: [],
+    });
+    renderScreen(baseMe({ user_drive: baseMeDrive() }));
+    await user.click(await screen.findByLabelText(DM.NR_CHECKBOX));
+    await user.type(screen.getByLabelText("Title"), "Refund flow");
+
+    await user.click(screen.getByRole("button", { name: /^Preflight$/ }));
+    await waitFor(() => expect(preflightRunMock).toHaveBeenCalled());
+    await user.click(screen.getByRole("button", { name: /Launch run/ }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalled());
+
+    const flown = preflightRunMock.mock.calls[0][0];
+    const launched = createRunMock.mock.calls[0][0];
+    // The member ticked their drive: it must be on the predicted body too, or
+    // Review answers for a run that is not the one about to start.
+    expect(flown.drive).toEqual({ enabled: true });
+    expect(flown.drive).toEqual(launched.drive);
+    expect(flown.workspaces).toEqual(launched.workspaces);
+    expect(flown.integration_id).toEqual(launched.integration_id);
   });
 });

@@ -312,10 +312,20 @@ export function AuditScreen() {
     return api.listAudit(runFilter || undefined).then(setEvents);
   }, [runFilter]);
 
+  // Whether the LAST read actually answered. `status` cannot carry this: the
+  // live tail deliberately keeps the last good view on a failed tick and so
+  // stays "ready" forever, which is what let the green chip below keep
+  // claiming the trail was appending over a feed that had stopped answering
+  // (CONSOLE-RULES §10 — a result verb needs a real result behind it).
+  const [pollStale, setPollStale] = React.useState(false);
+
   const load = React.useCallback(() => {
     setStatus("loading");
     fetchEvents()
-      .then(() => setStatus("ready"))
+      .then(() => {
+        setPollStale(false);
+        setStatus("ready");
+      })
       .catch(() => setStatus("error"));
   }, [fetchEvents]);
   React.useEffect(load, [load]);
@@ -324,9 +334,13 @@ export function AuditScreen() {
   // events only ever get added). Refresh quietly — never flip back to the
   // loading skeleton, that would flicker the whole list every tick.
   const tick = React.useCallback(() => {
-    fetchEvents().catch(() => {
-      /* transient poll failure — keep the last good view, retry next tick */
-    });
+    fetchEvents()
+      .then(() => setPollStale(false))
+      .catch(() => {
+        /* transient poll failure — keep the last good view and retry next
+           tick, but stop asserting the trail is live while it is not. */
+        setPollStale(true);
+      });
   }, [fetchEvents]);
   usePoll(tick, AUDIT_POLL_MS, status !== "ready");
 
@@ -448,7 +462,7 @@ export function AuditScreen() {
 
         <div className="ml-auto flex items-center gap-3">
           <GroundTruthChip value={groundTruth} />
-          {status === "ready" && (
+          {status === "ready" && !pollStale && (
             <Chip tone="success" dot pulse title="Polling for new events">
               Live · appending
             </Chip>

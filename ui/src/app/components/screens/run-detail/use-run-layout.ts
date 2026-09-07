@@ -65,6 +65,14 @@ export function useRunLayout(preset: RunLayoutPreset): RunLayoutState {
   const layoutRef = React.useRef(layout);
   const persistRef = React.useRef(true);
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Has the human arranged anything since this preset's GET was issued? A slow
+  // control plane made the load's answer land AFTER a drag/remove/add, and the
+  // load committed it unconditionally — silently undoing the gesture on screen
+  // while the debounced PUT (which closes over the human's layout, not
+  // layoutRef) still wrote the edit to the server. Screen and server then
+  // disagreed until the next page load. The load now drops its own answer the
+  // same way it already drops it after unmount.
+  const dirty = React.useRef(false);
 
   const commit = (next: RunLayoutWidget[]) => {
     layoutRef.current = next;
@@ -109,6 +117,7 @@ export function useRunLayout(preset: RunLayoutPreset): RunLayoutState {
   const apply = React.useCallback(
     (next: RunLayoutWidget[]) => {
       const norm = normalizeLayout(next, preset);
+      dirty.current = true;
       commit(norm);
       cancelPending();
       timer.current = setTimeout(() => {
@@ -126,6 +135,7 @@ export function useRunLayout(preset: RunLayoutPreset): RunLayoutState {
 
   const reset = React.useCallback(() => {
     cancelPending();
+    dirty.current = true;
     commit(presetLayout(preset));
     // PUT [] is the reset: there is no DELETE route, and storing today's
     // default as a personal choice would freeze this human out of every future
@@ -135,16 +145,26 @@ export function useRunLayout(preset: RunLayoutPreset): RunLayoutState {
 
   React.useEffect(() => {
     let alive = true;
+    // A fresh request for a (possibly new) preset: nothing has been arranged
+    // against THIS load yet, so a gesture made under the previous preset must
+    // not suppress this one's answer.
+    dirty.current = false;
     setLoaded(false);
     runLayoutApi
       .getLayout(preset)
       .then((res) => {
-        if (!alive) return;
+        if (!alive || dirty.current) {
+          if (alive) setLoaded(true);
+          return;
+        }
         commit(res.layout.length > 0 ? normalizeLayout(res.layout, preset) : presetLayout(preset));
         setLoaded(true);
       })
       .catch(() => {
-        if (!alive) return;
+        if (!alive || dirty.current) {
+          if (alive) setLoaded(true);
+          return;
+        }
         commit(presetLayout(preset));
         setLoaded(true);
       });

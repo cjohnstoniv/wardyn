@@ -78,6 +78,13 @@ export interface ShellMeta {
   // derived from `method` ("" after a failed /me) or a failed fetch strands
   // "/" on a spinner forever; the role it then reads is the fail-open admin.
   resolved: boolean;
+  // True only when /me actually ANSWERED (a body came back), which `resolved`
+  // above deliberately does not say — whoami() swallows every failure and
+  // returns null, so `resolved` flips on a FAILED fetch too. Anything that
+  // picks a lane off `operator` rather than merely offering a control needs
+  // this one instead (R4-F110; see operator-context.tsx's
+  // OperatorResolvedContext for the attach-WS case that named it).
+  identityResolved: boolean;
   // Fail-open (see operator-context.tsx): starts true and stays true unless
   // /me resolves and explicitly says otherwise — an unresolved or failed
   // fetch must never read as "viewer".
@@ -117,6 +124,7 @@ function useMeta(): ShellMeta {
     principal: "…",
     method: "",
     resolved: false,
+    identityResolved: false,
     operator: true,
     securityOperator: true,
     role: "admin",
@@ -136,6 +144,7 @@ function useMeta(): ShellMeta {
           principal: me?.principal || "unknown",
           method: me?.method || "",
           resolved: true,
+          identityResolved: me !== null,
           operator: me?.operator ?? true,
           // ?? true, not `?? me?.operator`: an older daemon that never sends
           // this field must fail OPEN like every other identity signal here.
@@ -456,6 +465,7 @@ export function AppShell({
   return (
     <OperatorProvider
       operator={meta.operator}
+      operatorResolved={meta.identityResolved}
       securityOperator={meta.securityOperator}
       principal={meta.principal}
       memberLocalDirRoot={meta.memberLocalDirRoot}
