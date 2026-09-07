@@ -183,6 +183,27 @@ func (s *Server) routes() chi.Router {
 			// all, and both /site-config callers already tolerate a null), so it
 			// is not built on spec.
 			//
+			// ONE RULE, AND IT IS NOT "THESE FOUR ROUTES". The tier does not
+			// reach the host axis — local_dir paths, the operator's registry
+			// coordinate, stored secret NAMES — on ANY route, and there are two
+			// ways for a route to honour that. These four stay narrowed because
+			// they serve whole operator documents nobody projects. GET
+			// /workspaces{,/{id},/build,/observed-egress} instead WITHHOLD that
+			// axis per reader (helpers.go's workspaceReadSecurity: paths and
+			// base_image.image blanked, the secret:/write: requirement keys and
+			// the scanned profile's host keys dropped) while keeping the EGRESS
+			// axis, which is the input to the decision this tier is widened to
+			// make.
+			//
+			// Said here because the asymmetry is what a reader notices first: a
+			// security_admin is answered 403 by /sources and 200 by
+			// /workspaces/{id} on what looks like the same datum, and the
+			// tempting resolution — widen these four to match — is the wrong
+			// one. The workspace read is not wider; it is projected. Pinned
+			// field by field by TestSecurityAdminForeignWorkspaceFieldByField
+			// (security_admin_workspace_read_test.go), and this paragraph is
+			// pinned against the code by TestSecurityTierNoteStatesOneRule.
+			//
 			// Stored-policy WRITES (POST/PUT/DELETE /policies) stay on
 			// operatorOnly for the twin reason: a stored run_policy is selectable
 			// CONTENT, so a SEC write path there would let a security admin
