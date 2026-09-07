@@ -878,15 +878,18 @@ func previewDriveHTTP(t *testing.T, srv *Server, users, groups []string) *httpte
 // offboarding command rather than compute from a hash by hand.
 func TestPreviewUserDrive(t *testing.T) {
 	t.Run("a match is answered with the object name", func(t *testing.T) {
-		// A STATIC PVC, because `email_local` is a SHARE template: a managed
-		// backend names its object after the home alone, so the write boundary
-		// and the resolver both refuse that pair now (two people whose addresses
-		// share a local part would be allocated one object).
+		// A STATIC PVC on `sub`. `email_local` is authorable only where the
+		// object name is NOT Wardyn's to mint: every backend Wardyn NAMES —
+		// managed, and k8s_pvc_static, whose claim name it mints without
+		// creating the claim — refuses it at the write boundary and the
+		// resolver, because two people whose addresses share a local part would
+		// be allocated one object. `sub` keeps this row's point, which is that
+		// the preview folds a claim exactly as the enforcement path does.
 		d := driveFixture(func(d *types.UserDrive) {
-			d.Name, d.Backend, d.HomeTemplate = "Corp NAS", types.DriveBackendK8sPVCStatic, types.HomeTemplateEmailLocal
+			d.Name, d.Backend, d.HomeTemplate = "Corp NAS", types.DriveBackendK8sPVCStatic, types.HomeTemplateSub
 		})
 		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
-		w := previewDriveHTTP(t, driveServerOn(st, "k8s"), []string{"sub-abc", "Alice@Corp.Example"}, []string{"Eng"})
+		w := previewDriveHTTP(t, driveServerOn(st, "k8s"), []string{"Sub-ABC", "Alice@Corp.Example"}, []string{"Eng"})
 		if w.Code != http.StatusOK {
 			t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
 		}
@@ -895,12 +898,12 @@ func TestPreviewUserDrive(t *testing.T) {
 			t.Fatalf("decode: %v (body=%s)", err, w.Body.String())
 		}
 		// The claims are folded exactly as the enforcement path folds them —
-		// grants are stored lowercased, and a preview that passed `Alice@…`
+		// grants are stored lowercased, and a preview that passed `Sub-ABC`
 		// through raw would answer a home this member's run would never get.
-		if got.HomeName != "alice" {
-			t.Errorf("home_name = %q, want the folded email-local %q", got.HomeName, "alice")
+		if got.HomeName != "sub-abc" {
+			t.Errorf("home_name = %q, want the folded subject %q", got.HomeName, "sub-abc")
 		}
-		if got.ObjectName != "wardyn-drive-corp-nas-alice" {
+		if got.ObjectName != "wardyn-drive-corp-nas-sub-abc" {
 			t.Errorf("object_name = %q, want the PVC name an admin can delete by", got.ObjectName)
 		}
 		if got.DriveName != "Corp NAS" || got.MatchedTier != types.CapabilitySubjectUser {
@@ -910,7 +913,7 @@ func TestPreviewUserDrive(t *testing.T) {
 		// not a second copy of it: this is the tie that keeps the preview and
 		// the runner (TestSeedRequestDriveMountShape asserts the same pair on
 		// the enforcement path) reading one function.
-		wantHome, err := types.DriveHomeName(*d, "Alice@Corp.Example", "")
+		wantHome, err := types.DriveHomeName(*d, "Sub-ABC", "")
 		if err != nil {
 			t.Fatalf("DriveHomeName: %v", err)
 		}

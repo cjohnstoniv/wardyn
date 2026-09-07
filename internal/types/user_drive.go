@@ -648,12 +648,29 @@ func driveSlug(name string) string {
 // under it was named by whoever owns the tree, not by Wardyn — a slug there
 // would name a directory that does not exist.
 func DriveObjectName(d UserDrive, home string) string {
-	switch d.Backend {
-	case DriveBackendHostPath:
+	if !DriveObjectNamedByWardyn(d.Backend) {
 		return filepath.Join(filepath.Clean(d.HostRoot), home)
-	default:
-		return driveObjectPrefix + driveSlug(d.Name) + "-" + home
 	}
+	return driveObjectPrefix + driveSlug(d.Name) + "-" + home
+}
+
+// DriveObjectNamedByWardyn reports whether WARDYN MINTS this backend's storage
+// object name — the `wardyn-drive-<drive-slug>-<home>` arm of DriveObjectName —
+// rather than joining a path somebody else already created.
+//
+// IT IS NOT THE MANAGED/SHARE SPLIT, and conflating the two is what the
+// home-template rules got wrong. DriveKind answers "does Wardyn CREATE the
+// object?"; this answers "does Wardyn NAME it?". k8s_pvc_static is a SHARE by
+// the first question — an admin provisions the claim and wardynd only ever Gets
+// it — and a Wardyn-named object by the second, because a claim is addressed by
+// name in a namespace and the name Wardyn asks for is the one it mints. Only
+// host_path is on the other side: its object is `<host_root>/<home>`, a
+// directory the share owner made and named.
+//
+// It is the SAME expression DriveObjectName branches on, called rather than
+// restated, so the rules keyed on it cannot drift from the name they are about.
+func DriveObjectNamedByWardyn(b DriveBackend) bool {
+	return b != DriveBackendHostPath
 }
 
 // ─── write-boundary validation ────────────────────────────────────────────────
@@ -717,9 +734,11 @@ func ValidateUserDrive(d *UserDrive, runnerTarget string) error {
 	if !d.HomeTemplate.Valid() {
 		return fmt.Errorf("home_template: invalid %q", d.HomeTemplate)
 	}
-	// A SHARE's directories are named by whoever owns the share, so a hash
-	// would name a directory that does not exist and Wardyn does not create
-	// one: a missing home on a share is a refusal, not a mkdir.
+	// A host_path drive's directories are named by whoever owns the tree, so a
+	// hash would name a directory that does not exist and Wardyn does not create
+	// one: a missing home on a share is a refusal, not a mkdir. It is the ONLY
+	// backend this applies to — a k8s_pvc_static claim's name is Wardyn's to
+	// mint, so `hash` is allowed there and is the default.
 	if ShareBackendRejectsTemplate(d.Backend, d.HomeTemplate) {
 		return fmt.Errorf("home_template %q is not allowed on a share backend — a share's directories are named by "+
 			"your directory, so pick %s or %s", HomeTemplateHash, HomeTemplateSub, HomeTemplateEmailLocal)
@@ -755,6 +774,15 @@ func ValidateUserDrive(d *UserDrive, runnerTarget string) error {
 	// a human navigates, which is precisely what a share backend is for — and
 	// share backends keep every template.
 	if ManagedBackendRejectsTemplate(d.Backend, d.HomeTemplate) {
+		if d.Backend.Kind() == DriveKindShare {
+			// k8s_pvc_static: only the collision half applies, so the sentence
+			// names the collision and the two templates that remain.
+			return fmt.Errorf("home_template %q is not allowed on a %s drive — Wardyn mints the claim name, so "+
+				"%s folds two people whose addresses share the part before the \"@\" onto ONE claim and they bind each "+
+				"other's volume. Use %s (recommended: the preview endpoint prints the exact claim name to pre-provision) "+
+				"or %s",
+				d.HomeTemplate, d.Backend, HomeTemplateEmailLocal, HomeTemplateHash, HomeTemplateSub)
+		}
 		return fmt.Errorf("home_template %q is not allowed on a managed backend — Wardyn names the object after the "+
 			"directory, so the template lands in a %s object name that `docker volume ls` and `kubectl get pvc` show "+
 			"without inspecting anything; %s also collides two people whose addresses share the part before the \"@\". "+
@@ -945,7 +973,33 @@ func driveTextIsClean(s string) bool {
 // name, which is the exposure the widening exists to prevent. One predicate, so
 // a third site cannot diverge again.
 func ManagedBackendRejectsTemplate(backend DriveBackend, tmpl HomeTemplate) bool {
-	return backend.Kind() == DriveKindManaged && tmpl != "" && tmpl != HomeTemplateHash
+	if tmpl == "" || tmpl == HomeTemplateHash {
+		return false
+	}
+	// THE AXIS IS WHO NAMES THE OBJECT, not who creates it. Everything this rule
+	// is about — a claim-derived segment concatenated into a name that
+	// `docker volume ls` and `kubectl get pvc` print without inspecting
+	// anything, and `email_local` folding two principals onto one name — is true
+	// of every object WARDYN NAMES. It was keyed on DriveKind instead, which put
+	// k8s_pvc_static on the wrong side of both halves of the rule.
+	if !DriveObjectNamedByWardyn(backend) {
+		return false
+	}
+	if backend.Kind() == DriveKindManaged {
+		return true
+	}
+	// k8s_pvc_static: Wardyn names the claim but does NOT create it, and that
+	// difference decides how much of the rule applies. The EXPOSURE half cannot
+	// be enforced by refusing `sub` here, because an admin has to pre-provision
+	// claims under the names this deployment will ask for and must be able to
+	// recognise them — `hash` is now available (and is the default) for the
+	// admin who would rather read the preview endpoint than the roster, which is
+	// the recommended posture. The COLLISION half is not negotiable in the same
+	// way: `email_local` folds alice@corp.example and alice@acquired.example onto
+	// ONE claim name, and the static arm of the driver's identity check has no
+	// per-drive labels to tell them apart, so the two would silently share one
+	// pre-created volume.
+	return tmpl == HomeTemplateEmailLocal
 }
 
 // ShareBackendRejectsTemplate is the MIRROR rule, and it is exported for the
@@ -966,5 +1020,15 @@ func ManagedBackendRejectsTemplate(backend DriveBackend, tmpl HomeTemplate) bool
 // no template must fall through to the derivation rather than refuse a shape
 // this rule has no opinion about.
 func ShareBackendRejectsTemplate(backend DriveBackend, tmpl HomeTemplate) bool {
-	return backend.Kind() == DriveKindShare && tmpl == HomeTemplateHash
+	// KEYED ON WHO NAMES THE OBJECT, not on DriveKind. The reason a `hash` is
+	// refused is that it names a directory nobody made and Wardyn will not make
+	// — which is true of host_path, whose object is a path under a tree the share
+	// owner created, and NOT true of k8s_pvc_static, whose object name Wardyn
+	// mints exactly as it does for a managed claim. Reading it off the
+	// managed/share split refused `hash` on a static PVC, leaving `sub` and
+	// `email_local` as the only authorable templates and so FORCING every static
+	// allocation to publish the member's sign-in subject or address in a name
+	// Wardyn itself minted — the exposure the managed half of this rule exists to
+	// refuse.
+	return !DriveObjectNamedByWardyn(backend) && tmpl == HomeTemplateHash
 }

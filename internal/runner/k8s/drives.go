@@ -243,6 +243,27 @@ func driveClaimIdentity(claim *corev1.PersistentVolumeClaim, drive *types.DriveM
 			return fmt.Errorf("k8s: drive: claim %q is a %s=true claim wardynd provisioned as one person's managed drive, not an administrator's share: %w",
 				claim.Name, labelManaged, errDriveClaimForeign)
 		}
+		// AND THE SAME SUBJECT CHECK THE MANAGED ARM MAKES, presence-guarded for
+		// the same reason. A static claim's NAME is minted by Wardyn
+		// (types.DriveObjectNamedByWardyn), so a template that folds two
+		// principals onto one home folds them onto one claim — and this arm,
+		// which had no per-principal evidence at all, bound it for both of them.
+		// types.ValidateUserDrive now refuses `email_local` on this backend,
+		// which closes the shape that reaches here by authoring; this closes the
+		// row that predates the rule, the one written by hand, and the admin's
+		// own mistake of pointing two members at one pre-provisioned claim.
+		//
+		// PRESENCE-GUARDED, so it is opt-in for the operator: an admin's
+		// pre-provisioned claim carries none of Wardyn's labels and stays
+		// bindable exactly as before. An admin who DOES stamp
+		// wardyn.subject=<DriveSubjectHash(subject)> on the claims they
+		// provision gets per-principal binding enforced by the driver — a digest,
+		// never the subject itself, which is why it is a label a share owner can
+		// safely publish.
+		if got := claim.Labels[labelDriveSubject]; got != "" && got != drive.SubjectHash {
+			return fmt.Errorf("k8s: drive: claim %q carries %s=%q, this run's subject hashes to %q: %w",
+				claim.Name, labelDriveSubject, got, drive.SubjectHash, errDriveClaimForeign)
+		}
 	}
 	return nil
 }
