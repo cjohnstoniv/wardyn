@@ -303,7 +303,12 @@ func validateGovernanceAssignment(a *types.GovernanceAssignment) error {
 		}
 		a.Subject = subject
 	} else {
-		a.Subject = strings.ToLower(a.Subject)
+		// The USER half is canonicalUserSubject for the same guard-before-fold
+		// reason (capabilities.go): a bare ToLower folds U+212A onto ASCII 'k'
+		// and U+0130 onto 'i', so a crafted spelling of a real human's address
+		// was stored as THAT human's subject — an assignment binding someone
+		// else's ceiling to them.
+		a.Subject = canonicalUserSubject(a.Subject)
 	}
 	if len(a.Subject) > maxCapabilityGrantFieldLen || !controlCharFree(a.Subject) {
 		return fmt.Errorf("subject: invalid")
@@ -497,19 +502,24 @@ func (s *Server) handlePreviewGovernanceProfile(w http.ResponseWriter, r *http.R
 // claim typed `Eng` against a row the real run matches, which is the drift this
 // endpoint exists to remove.
 //
-// A plain ToLower is the WHOLE rule for a user subject and is NOT the whole rule
-// for a group: this comment used to say "sessionGroups lowercases every group",
-// and that sentence was the premise a real divergence rested on. sessionGroups
-// applies a printable-ASCII guard BEFORE the fold (oidc.CanonicalGroupSubject),
-// so a group claim is either canonical ASCII or it is not in the snapshot at
-// all. Groups therefore go through normalizeGovernancePreviewGroups below.
+// NEITHER half is a plain ToLower, and this comment used to say both were. It
+// first said "sessionGroups lowercases every group" — the premise a real group
+// divergence rested on — and then, once corrected, that "a plain ToLower is the
+// WHOLE rule for a user subject", which was the premise the USER divergence
+// rested on. It is the whole rule for an ASCII subject only: strings.ToLower is
+// a UNICODE fold, so U+212A becomes ASCII 'k' and U+0130 becomes 'i', and a
+// preview claim typed in either spelling would answer for a DIFFERENT human's
+// row than the run resolves. Both halves therefore ask the match surface's own
+// canonicalizer — users through canonicalUserSubject (capabilities.go, the same
+// function capabilitySubjects and the two write boundaries use), groups through
+// normalizeGovernancePreviewGroups below (oidc.CanonicalGroupSubject).
 func normalizeGovernancePreviewClaims(in []string, field string) ([]string, string) {
 	if len(in) > maxGovernancePreviewClaims {
 		return nil, fmt.Sprintf("%s: at most %d claims", field, maxGovernancePreviewClaims)
 	}
 	out := make([]string, 0, len(in))
 	for _, v := range in {
-		if c := strings.ToLower(strings.TrimSpace(v)); c != "" && !slices.Contains(out, c) {
+		if c := canonicalUserSubject(v); c != "" && !slices.Contains(out, c) {
 			out = append(out, c)
 		}
 	}

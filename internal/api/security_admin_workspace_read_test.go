@@ -14,8 +14,11 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -99,9 +102,21 @@ func newWorkspaceReadServer(t *testing.T, ownedBy string) (*Server, *wsReadStore
 func TestSecurityAdminReadsForeignWorkspace(t *testing.T) {
 	const memberSub = "sub-ws-owner"
 	routes := workspaceReadRoutes()
-	if len(routes) < 4 {
-		t.Fatalf("derived %d classMember workspace GET routes (%v); want the four getWorkspaceReadable serves — "+
-			"if a route left classMember this test now covers less than it claims", len(routes), routes)
+	// EXACT SET, not a count: getWorkspaceReadable serves these three at member
+	// class, and GET .../env-as-code — its fourth consumer until F287 — moved to
+	// owner-or-super because its emitted files render the operator's authored
+	// environment whole. It is covered below on its own terms, so a route
+	// leaving OR joining classMember still fails here rather than quietly
+	// shrinking what this test claims.
+	wantRoutes := []string{
+		"GET /api/v1/workspaces/{id}",
+		"GET /api/v1/workspaces/{id}/build",
+		"GET /api/v1/workspaces/{id}/observed-egress",
+	}
+	slices.Sort(routes)
+	if !slices.Equal(routes, wantRoutes) {
+		t.Fatalf("derived classMember workspace GET routes %v, want %v — the getter's member-class consumer set moved; "+
+			"decide the new route's tier and update this list with it", routes, wantRoutes)
 	}
 
 	sec := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
@@ -141,6 +156,28 @@ func TestSecurityAdminReadsForeignWorkspace(t *testing.T) {
 		})
 	}
 
+	// THE GETTER'S FOURTH CONSUMER, on its own terms (F287). GET
+	// .../env-as-code left classMember because its emitted files render the
+	// operator's authored environment whole — the FROM line naming the internal
+	// registry coordinate the workspace reads blank, the site-config artifact
+	// redirects /site-config is admin-only for, the scanned setup commands. The
+	// tier that governs this workspace's EGRESS is not the tier that reads its
+	// build recipe.
+	t.Run("GET env-as-code did not widen with the read", func(t *testing.T) {
+		srv, st := newWorkspaceReadServer(t, memberSub)
+		p := fmt.Sprintf("/api/v1/workspaces/%s/env-as-code", st.ws.ID)
+		for who, session := range map[string]*http.Cookie{"security_admin": sec, "a foreign member": other} {
+			if w := doSSO(t, srv, http.MethodGet, p, session, ""); w.Code == http.StatusOK {
+				t.Errorf("%s read the operator's committable environment (200) — this route moved to owner-or-super "+
+					"with its operatorOnly write twin; body=%s", who, w.Body.String())
+			}
+		}
+		// And the OWNER keeps it: the move is a tier, not a shutdown.
+		if w := doSSO(t, srv, http.MethodGet, p, member, ""); w.Code == http.StatusNotFound || w.Code == http.StatusForbidden {
+			t.Errorf("the workspace's OWNER lost their own env-as-code (%d); body=%s", w.Code, w.Body.String())
+		}
+	})
+
 	// THE WRITE PREDICATE, in the same test and deliberately so.
 	t.Run("the write tier did NOT widen with the read", func(t *testing.T) {
 		srv, st := newWorkspaceReadServer(t, memberSub)
@@ -166,4 +203,130 @@ func TestSecurityAdminReadsForeignWorkspace(t *testing.T) {
 				w.Code, w.Body.String())
 		}
 	})
+}
+
+// TestSecurityAdminForeignWorkspaceFieldByField is F246.
+//
+// The finding is an ASYMMETRY on one stated axis: routes.go refuses to widen
+// GET /sources to this tier because a local_dir source carries "the /srv NFS
+// path ... credential material and the host, two of the three axes this tier is
+// DEFINED never to reach" — while GET /workspaces/{id} answered the same
+// session 200 with that same path in it.
+//
+// The resolution is not to widen /sources but to hold BOTH to the one rule: the
+// tier never reaches the host axis, so a route either withholds it (the
+// workspace reads, at workspaceReadSecurity) or stays narrowed (those four,
+// which serve whole documents nobody projects). This pins the withholding FIELD
+// BY FIELD rather than by substring, because "the path is absent from the body"
+// and "the path field is blank" are different claims and only the second is the
+// projection actually working.
+func TestSecurityAdminForeignWorkspaceFieldByField(t *testing.T) {
+	srv, st := newTopologyWorkspaceServer(t, "sub-ws-owner")
+	sec := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
+
+	// THE ASYMMETRY IS REAL, and this is the half that makes the rule load-
+	// bearing rather than decorative: the same session, the same datum, two
+	// answers.
+	if w := doSSO(t, srv, http.MethodGet, "/api/v1/sources", sec, ""); w.Code != http.StatusForbidden {
+		t.Fatalf("security_admin GET /sources = %d, want 403 — this test is about the tier that route refuses", w.Code)
+	}
+	w := doSSO(t, srv, http.MethodGet, "/api/v1/workspaces/"+st.ws.ID.String(), sec, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("security_admin GET /workspaces/{id} = %d, want 200 — the tier governs this workspace's egress "+
+			"and may read it; body=%s", w.Code, w.Body.String())
+	}
+
+	var got types.Workspace
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, w.Body.String())
+	}
+
+	// ── the HOST axis, field by field ──
+	for i, src := range got.Sources {
+		if src.Type == types.WorkspaceSourceTypeLocalDir && src.Path != "" {
+			t.Errorf("sources[%d].path = %q, want blank — this is the exact datum /sources answers this tier 403 for",
+				i, src.Path)
+		}
+	}
+	if got.Source != "" {
+		t.Errorf("source = %q, want blank — the derived single-source mirror carries the same host path", got.Source)
+	}
+	if got.BaseImage != nil && got.BaseImage.Image != "" {
+		t.Errorf("base_image.image = %q, want blank — the operator's authored registry coordinate is the same class "+
+			"/base-images answers this tier 403 for", got.BaseImage.Image)
+	}
+	for key := range got.Requirements {
+		if typ, _, ok := types.SplitRequirementKey(key); ok && (typ == "secret" || typ == "write") {
+			t.Errorf("requirements has %q — a secret: key names a stored credential and a write: key is the host "+
+				"path just blanked above", key)
+		}
+	}
+
+	// ── what the tier KEEPS, because withholding it would break the decision
+	// this tier is widened to make ──
+	if got.Name != "payments" {
+		t.Errorf("name = %q, want the workspace to remain identifiable", got.Name)
+	}
+	if got.OwnedBy == "" {
+		t.Errorf("owned_by is blank — the tier deciding this workspace's egress has to know whose it is")
+	}
+	var sawEgressReq bool
+	for key := range got.Requirements {
+		if typ, _, ok := types.SplitRequirementKey(key); ok && typ == "egress" {
+			sawEgressReq = true
+		}
+	}
+	if !sawEgressReq {
+		t.Errorf("requirements has no egress: key — egress is the INPUT to the decision this tier is widened for, "+
+			"and it cannot decide blind (requirements=%v)", got.Requirements)
+	}
+
+	// ── the scanned profile republishes both axes under its own keys ──
+	var profile map[string]json.RawMessage
+	if len(got.Profile) > 0 {
+		if err := json.Unmarshal(got.Profile, &profile); err != nil {
+			t.Fatalf("decode profile: %v", err)
+		}
+	}
+	for _, k := range profileHostAxisKeys {
+		if _, ok := profile[k]; ok {
+			t.Errorf("profile still carries %q — the scan result travels in this same document and republishes the "+
+				"host axis under its own keys", k)
+		}
+	}
+	for _, k := range profileEgressAxisKeys {
+		if _, ok := profile[k]; !ok {
+			t.Errorf("profile lost %q — the egress axis is what this tier reads the profile FOR", k)
+		}
+	}
+}
+
+// TestSecurityTierNoteStatesOneRule is F246's other half: routes.go states the
+// axis this tier never reaches, and a reader comparing "/sources is 403" with
+// "/workspaces/{id} is 200" needs the note to say WHY both are true at once.
+// Otherwise the next reader resolves the asymmetry the other way and widens the
+// four narrowed reads.
+func TestSecurityTierNoteStatesOneRule(t *testing.T) {
+	src, err := os.ReadFile("routes.go")
+	if err != nil {
+		t.Fatalf("read routes.go: %v", err)
+	}
+	note := string(src)
+	i := strings.Index(note, "WHY THE OPERATOR-TOPOLOGY READS ARE NOT HERE")
+	if i < 0 {
+		t.Fatal("routes.go no longer carries the operator-topology tier note this pin is keyed to")
+	}
+	j := strings.Index(note[i:], "securityOps := r.With(")
+	if j < 0 {
+		t.Fatal("could not bound the tier note")
+	}
+	block := note[i : i+j]
+	for _, want := range []struct{ frag, why string }{
+		{"workspaceReadSecurity", "name the mechanism that lets a member-class workspace read coexist with these four narrowed ones"},
+		{"/workspaces", "the asymmetry a reader will notice is with the workspace read; a note that never mentions it invites widening these four instead"},
+	} {
+		if !strings.Contains(block, want.frag) {
+			t.Errorf("the operator-topology tier note does not mention %q — %s\nnote=%s", want.frag, want.why, block)
+		}
+	}
 }

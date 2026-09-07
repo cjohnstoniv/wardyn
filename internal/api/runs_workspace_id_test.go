@@ -492,7 +492,7 @@ func TestResolveWorkspaceImage_RepoOwnDevcontainerWinsVerbatim(t *testing.T) {
 		// goroutine does on success) — nothing about this lane's caveat-free
 		// build should confuse the ordinary "done" reporting.
 		srv.builds.finish(ws.ID, built, "")
-		view := srv.resolveBuildView(ws)
+		view := srv.resolveBuildView(ws, workspaceReadFull)
 		if view.State != "done" || view.Image != built {
 			t.Errorf("resolveBuildView = %+v, want state=done image=%q", view, built)
 		}
@@ -618,7 +618,7 @@ func TestResolveBuildView_AgreesWithBuiltHash(t *testing.T) {
 	// like the process that reads this row after a restart.
 	fresh := New(baseTestConfig(h, &resolveImageStoreFake{}))
 	ws.ImageRef, ws.BuiltProfileHash = built, st.builtHash
-	view := fresh.resolveBuildView(ws)
+	view := fresh.resolveBuildView(ws, workspaceReadFull)
 	if view.State != "done" || view.Image != built {
 		t.Errorf("resolveBuildView = %+v, want state=done image=%q — the reader disagrees with the writer's hash", view, built)
 	}

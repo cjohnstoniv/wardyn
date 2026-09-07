@@ -147,7 +147,11 @@ func TestWorkspaceCollisionAsksTheQuestionItMeans(t *testing.T) {
 	}}
 	srv := New(Config{Store: st, Audit: &recRecorder{}, RunnerTarget: "docker"})
 
-	warnings := srv.warnWorkspaceCollision(context.Background(), mine, path)
+	// The caller here holds no verified human (the admin-token / local-mode
+	// shape), so isSecurityOperator is true and every colliding run is visible
+	// to them — this test is about the READ, and F336's ownership filter is
+	// pinned separately in r3_workspace_collision_test.go.
+	warnings := srv.warnWorkspaceCollision(collisionRequest(), mine, path)
 
 	if st.activeCalls != 1 {
 		t.Errorf("ActiveRunsAtWorkspacePath called %d times, want exactly 1 — the create path must ask "+
@@ -179,7 +183,7 @@ func TestWorkspaceCollisionAsksTheQuestionItMeans(t *testing.T) {
 	// NO COLLISION reads nothing beyond the one scoped query and warns nothing.
 	clean := &collisionStore{runs: st.runs}
 	srvClean := New(Config{Store: clean, Audit: &recRecorder{}, RunnerTarget: "docker"})
-	if w := srvClean.warnWorkspaceCollision(context.Background(), uuid.New(), "/srv/untouched"); len(w) != 0 {
+	if w := srvClean.warnWorkspaceCollision(collisionRequest(), uuid.New(), "/srv/untouched"); len(w) != 0 {
 		t.Errorf("warnings = %v for a path nothing runs on, want none", w)
 	}
 	if clean.listRunsCalls != 0 {

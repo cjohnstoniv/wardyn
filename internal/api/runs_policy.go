@@ -396,6 +396,36 @@ func actorTypeFromRequest(r *http.Request) types.ActorType {
 	return t
 }
 
+// localPrincipalOverride reads the DEV-ONLY X-Wardyn-Principal override and
+// returns it only when it is a value this package would let any other caller
+// put in a row: trimmed, non-empty, at most maxCapabilityGrantFieldLen bytes and
+// control-character-free — the identical pair access.go's canonicalRoleMapValue
+// and apitokens.go's token name already apply. "" means "no usable override".
+//
+// WHY A DEV-ONLY, LOCAL-MODE-ONLY HEADER IS STILL VALIDATED. Local mode trusts
+// the caller to SAY who they are; that is the whole point of the override. It
+// does not follow that the audit trail has to accept the bytes they say it in.
+// This value becomes the ACTOR of append-only rows, and unbounded it wrote a
+// 4096-byte name into every row a request produced, newlines, NULs and JSON
+// metacharacters included — so the one field a later investigation reads first
+// carried whatever a log reader, a SIEM's line splitter or a terminal makes of
+// those bytes. Every other caller-supplied string that reaches a row in this
+// package is capped and control-char-checked; this was the one that was not.
+//
+// IT FALLS BACK RATHER THAN REFUSING, unlike its two siblings, because this is
+// an ATTRIBUTION string and not an authorization input: nothing about the
+// request's reach changes with it. A malformed header must not 400 a working
+// local workflow — it must simply not become the actor, leaving the configured
+// local operator, which is the honest answer for a machine that authenticates
+// nobody.
+func localPrincipalOverride(r *http.Request) string {
+	h := strings.TrimSpace(r.Header.Get("X-Wardyn-Principal"))
+	if h == "" || len(h) > maxCapabilityGrantFieldLen || !controlCharFree(h) {
+		return ""
+	}
+	return h
+}
+
 // actorFromRequest resolves the audit actor (type + name) for an admin-gated
 // public-API action. Resolution order, strongest attribution first (invariant 4):
 //
@@ -424,7 +454,7 @@ func actorFromRequest(r *http.Request) (types.ActorType, string) {
 		return ta.actorType, ta.principal
 	}
 	if op := localPrincipalFromContext(r.Context()); op != "" {
-		if h := r.Header.Get("X-Wardyn-Principal"); h != "" {
+		if h := localPrincipalOverride(r); h != "" {
 			return types.ActorHuman, h
 		}
 		return types.ActorHuman, op

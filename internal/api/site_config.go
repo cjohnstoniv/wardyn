@@ -357,6 +357,41 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, cfg)
 }
 
+// siteConfigFieldsAfter066 are the SiteConfig keys that did not exist in the
+// last release whose SDK/CLI is documented to GET-then-PUT this whole document
+// (v0.6.6: upstream_proxy_secret_ref, upstream_proxy_url, artifact_overrides,
+// egress_redirects, scm_hosts, integrations). A client built against that
+// vocabulary cannot NAME these, so their absence from its body is not a
+// decision.
+//
+// ADD A KEY HERE WHEN YOU ADD ONE TO types.SiteConfig, and
+// TestSiteConfigRoundTripKeepsFieldsAnOlderClientCannotName fails until you
+// have decided which side of this line it sits on.
+var siteConfigFieldsAfter066 = []string{"upstream_proxy_no_proxy", "internal_hosts"}
+
+// carryForwardUnnamedSiteConfigFields preserves a stored value that the request
+// body did not MENTION, for the fields an older client cannot know about.
+//
+// ABSENT IS NOT CLEARED, and that distinction is the whole fix. PUT /site-config
+// is a whole-document replace, so a v0.6.6 `wardyn site-config get | ... | apply`
+// round trip — decode into a struct with no field for internal_hosts, re-marshal,
+// PUT — silently erased the operator's internal_hosts and upstream_proxy_no_proxy
+// with no warning on either side. Integrations and onboarding_completed_at were
+// each rescued from this by hand; these two were added afterwards and were not.
+//
+// A BARE CARRY-FORWARD WOULD MAKE THEM UNCLEARABLE, which is why this keys on
+// the body's own keys rather than on emptiness: `{"internal_hosts": []}` and
+// `{"internal_hosts": null}` both MENTION the field and both clear it, exactly
+// as a 0.7 client intends. Only silence is treated as silence.
+func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.SiteConfig, present map[string]bool) {
+	if !present["upstream_proxy_no_proxy"] {
+		cfg.UpstreamProxyNoProxy = existing.UpstreamProxyNoProxy
+	}
+	if !present["internal_hosts"] {
+		cfg.InternalHosts = existing.InternalHosts
+	}
+}
+
 // handlePutSiteConfig validates and persists the operator-wide site config.
 // Every URL/host field is checked (validateSiteConfig) before the write; the
 // write REPLACES the whole document (no partial merge — the caller must
@@ -385,7 +420,15 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 // PUT /permissions/enforcement gets in permissions.go.
 func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	var cfg types.SiteConfig
-	if !decodeStrict(w, r, &cfg) {
+	// THE KEYS THE BODY CARRIED, not just the values it decoded to — see the
+	// carry-forward below for why this document cannot answer with the struct
+	// alone.
+	present, msg := decodeStrictKeys(w, r, &cfg)
+	if present == nil && msg == "" {
+		return // readCappedBody already answered
+	}
+	if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 	if err := foldLegacyArtifactOverrides(&cfg); err != nil {
@@ -431,6 +474,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// Carry forward, or a round-trip PUT by any client erases the install's
 	// onboarding state — the exact footgun already solved once for Integrations.
 	cfg.OnboardingCompletedAt = existing.OnboardingCompletedAt
+	carryForwardUnnamedSiteConfigFields(&cfg, existing, present)
 	saved, err := s.cfg.Store.PutSiteConfig(r.Context(), cfg)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())

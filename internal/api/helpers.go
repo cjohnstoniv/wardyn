@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -320,6 +321,55 @@ func (s *Server) getWorkspaceReadable(w http.ResponseWriter, r *http.Request, id
 	return types.Workspace{}, false
 }
 
+// mayLaunchWorkspace reports whether the caller of r may turn ws's id into
+// BOUND HOST STATE inside a sandbox they control — the launch tier, which is
+// deliberately NARROWER than the read tier next door.
+//
+// Operator-owned (OwnedBy == "") is launchable by every authenticated caller:
+// that is the ordinary shape of an onboarded deployment and the reason the read
+// getter admits it too. A member-owned row is launchable by its OWNER or by a
+// SUPER admin, and by nobody else.
+//
+// DELIBERATELY ownsWorkspaceOrAdmin (super only), NOT the read twin
+// ownsWorkspaceOrSecurityAdmin: reading a foreign workspace to decide its egress
+// is the security tier's stated purpose, but MOUNTING that workspace's host
+// directory into a sandbox the security admin owns is credential material and
+// the host — two of the three axes the tier is defined never to reach
+// (internal/auth/oidc's RoleSecurityAdmin). The read/launch split is why this is
+// a third predicate rather than a reuse of either existing one.
+func (s *Server) mayLaunchWorkspace(r *http.Request, ws types.Workspace) bool {
+	return ws.OwnedBy == "" || s.ownsWorkspaceOrAdmin(r, ws)
+}
+
+// getWorkspaceLaunchable loads the workspace a run REQUEST named and authorizes
+// the CALLER to launch against it (mayLaunchWorkspace). Callers must return
+// immediately when ok is false.
+//
+// It is getWorkspaceReadable's launch twin, and it exists because the create
+// path had no caller-scoped gate at all: seedRequestWorkspace resolved the id
+// through the store and folded its sources onto the spec, and the only
+// member-mount check downstream is evaluated against the workspace OWNER's
+// roots — so per-principal roots did not constrain the caller, and any member
+// (or a security admin) could bind another member's host directory into a
+// sandbox they own.
+//
+// A foreign member-owned row gets denyForeignWorkspace's byte-identical 404,
+// which on this route is the SAME answer getWorkspaceOr404 gives a truly-missing
+// id — so the status is not an existence oracle across members. That parity is
+// why the load happens HERE rather than being folded into seedRequestWorkspace's
+// own 422 arm, which answers a different code for a missing row.
+func (s *Server) getWorkspaceLaunchable(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.Workspace, bool) {
+	ws, ok := s.getWorkspaceOr404(w, r, id)
+	if !ok {
+		return types.Workspace{}, false
+	}
+	if s.mayLaunchWorkspace(r, ws) {
+		return ws, true
+	}
+	s.denyForeignWorkspace(w, r, ws)
+	return types.Workspace{}, false
+}
+
 // getRunOr404 loads a run, writing a 404 (missing) or 500 (store error) and
 // returning ok=false on failure — the run-noun twin of getWorkspaceOr404.
 // Callers must return immediately when ok is false.
@@ -481,6 +531,43 @@ func decodeStrictMsg(w http.ResponseWriter, r *http.Request, dst any) string {
 	return ""
 }
 
+// decodeStrictKeys is decodeStrictMsg plus the SET OF TOP-LEVEL KEYS the body
+// actually carried, for the one thing a decoded struct cannot answer: whether a
+// zero value was WRITTEN or merely OMITTED.
+//
+// It exists because a whole-document PUT and an older client are a data-loss
+// pair. A v0.6.x SDK GETs /site-config, decodes into ITS OWN SiteConfig — which
+// has no field for anything 0.7 added — re-marshals, and PUTs the result: the
+// newer fields are simply gone from the body, and a handler that cannot tell
+// "absent" from "cleared" writes empty over the operator's stored value. The
+// same footgun was already solved twice by hand on this document (Integrations,
+// OnboardingCompletedAt), each time for one field.
+//
+// SAME CAP, SAME STRICTNESS. The body is read once under maxJSONBody and the
+// struct decode runs over those bytes with DisallowUnknownFields exactly as
+// decodeStrictMsg does — this is a second QUESTION about the same body, never a
+// second, looser decode path.
+func decodeStrictKeys(w http.ResponseWriter, r *http.Request, dst any) (present map[string]bool, msg string) {
+	body, ok := readCappedBody(w, r, maxJSONBody, "request body")
+	if !ok {
+		return nil, "" // readCappedBody already answered
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return nil, "invalid JSON body: " + err.Error()
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(body, &keys); err != nil {
+		return nil, "invalid JSON body: " + err.Error()
+	}
+	present = make(map[string]bool, len(keys))
+	for k := range keys {
+		present[k] = true
+	}
+	return present, ""
+}
+
 // decodeStrict is decodeStrictMsg with the 400 written for the caller, for the
 // handlers that have no further validation message of their own. Callers must
 // return immediately when it reports false.
@@ -583,6 +670,19 @@ func (s *Server) workspaceReadTierFor(r *http.Request, ws types.Workspace) works
 //     console renders on the launch card, not a credential ref; the credential
 //     it resolves is the integration row's secret_name, which the integrations
 //     projection (setup_integrations.go) withholds separately.
+//   - profile.git_remotes stays, for the same reason Sources[].Source does for a
+//     REPO workspace: a repo coordinate is how a member identifies what they are
+//     launching against, and it is not one of the four classes R1 declared
+//     member-forbidden. Only the local_dir HOST path is.
+//
+// THE SCANNED PROFILE IS PROJECTED TOO (redactProfileForRead). It travels in
+// this same document and republishes every one of these axes under its own keys
+// — required_secrets is the stored secret NAME the requirements map was just
+// stripped of, secret_files_present and leak_findings[].path are the host path
+// Sources[].Path was just blanked for, and egress_domains/suggested_egress are
+// the internal hosts the egress: requirement keys were just dropped for.
+// Projecting the wrapper and shipping the scan result intact would have made the
+// whole redaction cosmetic.
 func redactWorkspaceForRead(ws types.Workspace, tier workspaceReadTier) types.Workspace {
 	if tier == workspaceReadFull {
 		return ws
@@ -611,7 +711,54 @@ func redactWorkspaceForRead(ws types.Workspace, tier workspaceReadTier) types.Wo
 	}
 	ws.Requirements = redactRequirementsForRead(ws.Requirements, tier)
 	ws.EffectiveRequirements = redactRequirementsForRead(ws.EffectiveRequirements, tier)
+	ws.Profile = redactProfileForRead(ws.Profile, tier)
 	return ws
+}
+
+// profileHostAxisKeys are the scanned-profile keys carrying the HOST axis: a
+// stored secret NAME, and host paths. Gone for BOTH non-full tiers, exactly like
+// the `secret:` and `write:` requirement keys they duplicate.
+var profileHostAxisKeys = []string{"required_secrets", "secret_files_present", "leak_findings"}
+
+// profileEgressAxisKeys are the scanned-profile keys carrying INTERNAL EGRESS
+// HOSTS. Gone at the member tier and kept at the security tier, exactly like the
+// `egress:` requirement keys they duplicate — the security admin decides this
+// workspace's egress and cannot decide blind.
+var profileEgressAxisKeys = []string{"egress_domains", "suggested_egress"}
+
+// redactProfileForRead projects the scanned profile (internal/workspacescan's
+// WorkspaceProfile, opaque to this package) down to its reader's tier.
+//
+// It deletes KEYS from the decoded object rather than round-tripping through the
+// typed struct: the profile is a versioned scan result this package deliberately
+// does not model, and re-marshalling a typed copy would silently drop whatever a
+// newer scanner added — turning a redaction into a data-loss bug the moment the
+// two definitions drift.
+//
+// A profile that will not decode FAILS CLOSED (withheld entirely). A blob whose
+// fields cannot be inspected cannot be certified free of the axes above, and
+// shipping it unread is the exact posture this function exists to end.
+func redactProfileForRead(raw json.RawMessage, tier workspaceReadTier) json.RawMessage {
+	if tier == workspaceReadFull || len(raw) == 0 {
+		return raw
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil
+	}
+	for _, k := range profileHostAxisKeys {
+		delete(doc, k)
+	}
+	if tier == workspaceReadMember {
+		for _, k := range profileEgressAxisKeys {
+			delete(doc, k)
+		}
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return nil
+	}
+	return out
 }
 
 // redactRequirementsForRead drops the requirement keys whose KEY is itself the
