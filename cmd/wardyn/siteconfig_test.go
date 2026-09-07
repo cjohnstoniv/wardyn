@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -110,5 +111,35 @@ func TestSiteConfigApply_WarnsIntegrationsNotRestored(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "integration") {
 		t.Errorf("stderr = %q, want a warning that the file's integrations were not applied", stderr)
+	}
+}
+
+// TestSiteConfigApply_ForwardsTheOnboardingMark is the CLI half of the
+// round-trip contract internal/api's TestPutSiteConfig_GetBodyRoundTripsVerbatim
+// pins on the server: `wardyn site-config get > corp-baseline.json` emits
+// onboarding_completed_at on any install whose operator finished the Getting
+// Started funnel, and `apply` forwards that document VERBATIM — no client-side
+// strip stands between the operator's file and the handler. That is why the
+// server had to stop 400ing it (R3 F025): the fix belongs in the one place
+// every consumer routes through, and a strip added here instead would silently
+// re-break the hand-rolled curl and the MDM-delivered
+// /etc/wardyn/site-config.json, which no client of ours touches.
+//
+// Unlike the server-side pin this one is green at the RC too — deliberately:
+// its job is to fail if someone later "fixes" the same footgun client-side, the
+// way Integrations is stripped ten lines above in PutSiteConfig.
+func TestSiteConfigApply_ForwardsTheOnboardingMark(t *testing.T) {
+	var got types.SiteConfig
+	srv := applyServer(t, &got)
+
+	captured := `{"scm_hosts":["gitlab.corp"],"onboarding_completed_at":"2026-08-30T12:00:00Z"}`
+	if _, _, err := runSiteConfigApply(t, srv.URL, captured); err != nil {
+		t.Fatalf("apply of a captured document: %v", err)
+	}
+	if got.OnboardingCompletedAt == nil {
+		t.Fatalf("server received %+v, want onboarding_completed_at forwarded verbatim", got)
+	}
+	if want := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC); !got.OnboardingCompletedAt.Equal(want) {
+		t.Errorf("server received onboarding_completed_at = %v, want %v", got.OnboardingCompletedAt, want)
 	}
 }

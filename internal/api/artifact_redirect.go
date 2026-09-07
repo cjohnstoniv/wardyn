@@ -51,26 +51,72 @@ func redirectPublicHosts(r types.EgressRedirect) []string {
 	return nil
 }
 
-// redirectPort extracts the port from a redirect's To URL/host, defaulting to
-// 443 (every corp mirror/relay this feature targets is HTTPS — the sandbox
-// never dials it directly, the proxy always TLS-terminates it, see mitm.go)
-// when none is given. Mirrors workspacescan.HostOf's own scheme/path
-// stripping so the two agree on where the authority ends; unlike HostOf it
-// keeps the port instead of discarding it — planArtifactRedirect needs both,
-// so mitmHosts can carry "host:port" and the proxy's TLS termination dials
-// the mirror's REAL port instead of always assuming 443 (W13-S1-5).
-func redirectPort(rawURL string) int {
+// redirectEndpointPort reads the port a redirect endpoint (a full URL or a bare
+// "host[:port][/path]", per validSiteURLOrHost) SPELLS, off the same authority
+// hostrules.HostOf reads its host from — so the two parsers cannot disagree
+// about the one string. HostOf ends the authority at IndexAny("/:"); this ends
+// it at IndexAny("/?#"), which is the same boundary for everything before the
+// port, and then takes the port from the first ':' exactly where HostOf stops.
+// Cutting only at '/' (as this did) handed strconv "8443?repo=npm" for a To of
+// scheme://host:port?query and silently fell back to 443.
+//
+// Three outcomes, kept distinct because the callers need different ones:
+//
+//	(p, true, true)   a port is spelled and is a decimal 1-65535
+//	(0, false, true)  no port is spelled — the caller applies its scheme default
+//	(0, true, false)  a port IS spelled and is not usable (":0", ":99999", ":-1",
+//	                  a query glued to the authority). validateSiteConfig REFUSES
+//	                  this at PUT rather than letting a downstream parser coerce
+//	                  it to a port the operator never configured.
+//
+// Taking the port from the FIRST ':' is HostOf's own boundary, so a bracketed
+// IPv6 authority ("[fd00::1]:8443") reads as spelled-but-unusable here. That is
+// inert today and deliberately left so: validSiteURLOrHost already refuses
+// every IPv6 spelling of a redirect endpoint (HostOf cuts at IndexAny("/:")
+// too), so nothing reachable regresses — but a future IPv6 story must teach
+// BOTH parsers at once rather than inherit this answer.
+func redirectEndpointPort(rawURL string) (port int, spelled, ok bool) {
 	s := strings.TrimSpace(rawURL)
 	if i := strings.Index(s, "://"); i >= 0 {
 		s = s[i+3:]
 	}
-	if i := strings.IndexByte(s, '/'); i >= 0 {
+	if i := strings.IndexAny(s, "/?#"); i >= 0 {
 		s = s[:i]
 	}
-	if _, ps, err := net.SplitHostPort(s); err == nil {
-		if p, err := strconv.Atoi(ps); err == nil && p > 0 && p < 65536 {
-			return p
-		}
+	i := strings.IndexByte(s, ':')
+	if i < 0 {
+		return 0, false, true
+	}
+	p, err := strconv.Atoi(s[i+1:])
+	if err != nil || p < 1 || p > 65535 {
+		return 0, true, false
+	}
+	return p, true, true
+}
+
+// redirectPort is the port a redirect's To endpoint NAMES: the one it spells,
+// else the default of the SCHEME it spells — 80 for an explicit "http://",
+// 443 otherwise (a bare host and an "https://" URL are both dialed as a
+// CONNECT tunnel the proxy TLS-terminates, see mitm.go). Scheme-blindness here
+// is what made the redirect probe dial a plain-http mirror's 443 and report a
+// working mirror as blocked, and what put a host:443 entry in mitmHosts for a
+// mirror that serves cleartext on 80.
+//
+// planArtifactRedirect needs the port beside the host so mitmHosts can carry
+// "host:port" and the proxy's TLS termination dials the mirror's REAL port
+// instead of always assuming 443 (W13-S1-5); an http:// To is reached through
+// handlePlain, never a CONNECT, so the 80 default narrows that MITM-eligibility
+// entry to a port no CONNECT arrives on rather than widening anything.
+//
+// A port that is spelled but unusable cannot reach here from a stored config —
+// validateSiteConfig refuses it at PUT — so the scheme default also covers a
+// row written before that gate existed, fail-safe and unchanged from before.
+func redirectPort(rawURL string) int {
+	if p, spelled, ok := redirectEndpointPort(rawURL); ok && spelled {
+		return p
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(rawURL)), "http://") {
+		return 80
 	}
 	return 443
 }

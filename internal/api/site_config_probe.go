@@ -226,10 +226,21 @@ fi
 //     reachable ONLY after connect() succeeded against the public host, so each
 //     is proof the class let the connection out; a middlebox that intercepts
 //     the direct dial is still a dial that left the sandbox. Bypass.
+//   - %{num_connects}, from the SAME -w. An exit code alone cannot answer the
+//     only question probe 2 asks, because curl returns 28 for two opposite
+//     facts: a connect() that never completed (the DROP rule's signature) AND a
+//     --max-time/handshake expiry AFTER connect() succeeded. A tarpit, an
+//     accept-and-hold load balancer, or a public host merely slower than the
+//     budget therefore scored as "correctly blocked" -- a wide-open network
+//     reported as enforced, the one verdict an operator must never be handed
+//     wrongly. num_connects is 1 whenever a TCP connection was actually
+//     established and 0 when none was, so ANY non-zero count is bypass whatever
+//     rc says. Read, never inferred.
 //
-// Everything else -- 6 (DNS), 7 (refused/unreachable), 28 (timeout, the DROP
-// rule's signature) and any other code -- is a dial that never reached the
-// host, which is what enforcement looks like: exit 0, reported as reached.
+// Everything else -- 6 (DNS), 7 (refused/unreachable), a 28 that connected to
+// nothing, and any other code with num_connects=0 -- is a dial that never
+// reached the host, which is what enforcement looks like: exit 0, reported as
+// reached.
 //
 // PROBE 1 HAS TWO SHAPES, and the second is why WARDYN_PROBE_TO_CONNECT exists.
 // A private-endpoint To is a LITERAL IP whose TLS certificate is scoped to the
@@ -254,10 +265,13 @@ if [ -n "$WARDYN_PROBE_TO_CONNECT" ]; then
 else
   to "$WARDYN_PROBE_TO_URL" || exit $?
 fi
-code=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 15 --noproxy '*' "$WARDYN_PROBE_FROM_URL")
+out=$(curl -sS -o /dev/null -w '%{http_code} %{num_connects}' --connect-timeout 5 --max-time 15 --noproxy '*' "$WARDYN_PROBE_FROM_URL")
 rc=$?
+code=${out%% *}
+conns=${out##* }
 [ "$rc" -eq 0 ] && [ "$code" != "000" ] && exit 250
 case "$rc" in 35|52|56|60) exit 250 ;; esac
+[ -n "$conns" ] && [ "$conns" != "0" ] && exit 250
 exit 0`
 
 // redirectProbeTo decides HOW probe 1 dials this redirect: the URL to request
@@ -330,10 +344,13 @@ func curlFailureDetail(exitCode int) string {
 // upstreamResolveFailDetail names resolveUpstreamProxyURL's (runs_bedrock.go)
 // failReason codes in the same human-readable style as curlFailureDetail.
 var upstreamResolveFailDetail = map[string]string{
-	"unsupported-scheme":   "it is not an http:// URL (https is not supported)",
-	"reserved-secret-name": "its secret ref names a reserved secret",
-	"no-secret-store":      "no secret store is configured",
-	"secret-not-found":     "its secret ref does not resolve to a stored secret",
+	"unsupported-scheme": "it is not an http:// URL (https is not supported)",
+	// The sidecar's own loader (proxy.ValidUpstreamProxyURL) refused the
+	// authority — in practice a port outside 1-65535, or no host at all.
+	"unloadable-upstream-url": "the proxy sidecar's own loader refuses it (check the host and port)",
+	"reserved-secret-name":    "its secret ref names a reserved secret",
+	"no-secret-store":         "no secret store is configured",
+	"secret-not-found":        "its secret ref does not resolve to a stored secret",
 }
 
 func upstreamFailDetail(reason string) string {

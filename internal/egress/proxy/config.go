@@ -203,6 +203,26 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 	return &c, nil
 }
 
+// ValidUpstreamProxyURL reports whether raw is an upstream/corp proxy URL this
+// sidecar's own loader will ACCEPT — the write-time delegate for
+// UpstreamProxyURL that ValidNoProxyEntry already is for UpstreamProxyNoProxy,
+// and for the same reason: a second copy of the rule in the API package is a
+// dual matcher over one operator-authored field, and this one drifted. The
+// control plane checked only url.Parse + the http scheme, so a port of `0` or
+// `99999` was persisted with 200 OK and then failed applyDefaultsAndValidate
+// below at container start, which cmd/wardyn-proxy/main.go turns into
+// os.Exit(1) — the egress sidecar of EVERY dispatched run, killed by a value
+// the write path said was fine.
+//
+// The error is returned rather than a bool so the caller can name the real
+// cause; parseUpstreamProxy never echoes the raw URL (it may carry
+// user:pass credentials), so the message is always safe to surface. The empty
+// string is valid (upstream disabled), matching parseUpstreamProxy.
+func ValidUpstreamProxyURL(raw string) error {
+	_, err := parseUpstreamProxy(raw)
+	return err
+}
+
 func (c *Config) applyDefaultsAndValidate() error {
 	if c.Listen == "" {
 		c.Listen = defaultListen

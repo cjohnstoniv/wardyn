@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -113,4 +114,77 @@ func (s *fakeOnboardingStatusStore) ListRuns(context.Context) ([]types.AgentRun,
 // unimplemented embedded method panics before the guard can skip it.
 func (s *fakeOnboardingStatusStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
 	return nil, context.Canceled
+}
+
+// TestPutSiteConfig_GetBodyRoundTripsVerbatim is the contract handlePutSiteConfig's
+// own doc states — "the caller must round-trip a GET first to preserve fields it
+// does not intend to change" — asserted on the ONE body that must always work:
+// the exact bytes GET emitted. onboarding_completed_at is a plain field of the
+// same types.SiteConfig GET serialises, so on any install whose operator has
+// finished the funnel that key IS in the GET body, and refusing it refused
+// `wardyn site-config get > f` / `wardyn site-config apply f` (the documented
+// disaster-recovery round-trip, docs/OPERATIONS.md) and every console save,
+// which builds its PUT by spreading the GET document. Echoing the stored value
+// is not an attempt to set it; the leg above still 400s a DIFFERENT instant.
+func TestPutSiteConfig_GetBodyRoundTripsVerbatim(t *testing.T) {
+	stamped := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	fake := &fakeSiteConfigStore{cfg: types.SiteConfig{
+		ScmHosts:              []string{"gitlab.corp"},
+		OnboardingCompletedAt: &stamped,
+	}}
+	srv, _ := newSiteConfigHarness(t, fake)
+
+	g := do(t, srv, http.MethodGet, "/api/v1/site-config", adminToken, "")
+	if g.Code != http.StatusOK {
+		t.Fatalf("GET: code = %d, want 200; body=%s", g.Code, g.Body.String())
+	}
+	captured := g.Body.String()
+	if !strings.Contains(captured, "onboarding_completed_at") {
+		t.Fatalf("GET must emit onboarding_completed_at on a completed install (that is the whole footgun); body=%s", captured)
+	}
+
+	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, captured)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT of the GET body verbatim: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if fake.putSeen == nil || fake.putSeen.OnboardingCompletedAt == nil ||
+		!fake.putSeen.OnboardingCompletedAt.Equal(stamped) {
+		t.Fatalf("the round-trip must carry the stored mark forward, got %+v", fake.putSeen)
+	}
+	if len(fake.putSeen.ScmHosts) != 1 || fake.putSeen.ScmHosts[0] != "gitlab.corp" {
+		t.Fatalf("the round-trip must persist the rest of the document, got %+v", fake.putSeen)
+	}
+
+	// The console's save shape: spread the GET document, change one field, PUT.
+	var spread map[string]any
+	if err := json.Unmarshal([]byte(captured), &spread); err != nil {
+		t.Fatal(err)
+	}
+	spread["upstream_proxy_url"] = "http://proxy.corp.internal:3128"
+	edited, err := json.Marshal(spread)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w = do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, string(edited))
+	if w.Code != http.StatusOK {
+		t.Fatalf("console-shaped save: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	// The CROSS-RESET leg, which is the flow the round-trip exists for and the
+	// one an echo-only gate still refused: `make reset` takes the site config
+	// with the volume, so the captured document is applied against a store whose
+	// mark is NIL — as is the MDM-delivered /etc/wardyn/site-config.json landing
+	// on a fresh machine (docs/DESKTOP.md). Same bytes, empty store.
+	fresh := &fakeSiteConfigStore{}
+	srvFresh, _ := newSiteConfigHarness(t, fresh)
+	w = do(t, srvFresh, http.MethodPut, "/api/v1/site-config", adminToken, captured)
+	if w.Code != http.StatusOK {
+		t.Fatalf("apply of the captured document after a reset: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if fresh.putSeen == nil || fresh.putSeen.OnboardingCompletedAt != nil {
+		t.Fatalf("a fresh install must not inherit the captured mark (the setup flow owns it), got %+v", fresh.putSeen)
+	}
+	if len(fresh.putSeen.ScmHosts) != 1 || fresh.putSeen.ScmHosts[0] != "gitlab.corp" {
+		t.Fatalf("the corporate baseline itself must land after a reset, got %+v", fresh.putSeen)
+	}
 }

@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -156,5 +157,72 @@ func TestRedirectProbeScript_Probe2DoesNotFailOnHTTPErrors(t *testing.T) {
 	}
 	if !strings.Contains(redirectProbeScript, "to() { curl -sS -f ") {
 		t.Error("probe 1 must KEEP -f: there an HTTP error means the mirror did not serve the request")
+	}
+}
+
+// TestRedirectProbe2_AcceptAndHoldIsBypass drives the SHIPPED script against a
+// public "From" that accepts the TCP connection and then says nothing — a
+// tarpit, an accept-and-hold load balancer, or simply a host slower than the
+// probe's budget. curl reports 28 for that, the SAME code it reports for a dial
+// that never left the sandbox, so an exit-code-only reading called a wide-open
+// network "correctly blocked when dialed directly (redirect enforced)". The
+// connection fact is in curl's own -w (%{num_connects} = 1 here, 0 for a real
+// block, as the refused row of TestRedirectProbe2_ClassifiesAnsweredVsUnreachable
+// keeps proving), so the verdict must follow it: bypass.
+func TestRedirectProbe2_AcceptAndHoldIsBypass(t *testing.T) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl not on PATH")
+	}
+	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mirror.Close()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			// Accepted and held: never read, never written, never closed until
+			// the test's own cleanup tears the listener down.
+			defer c.Close() //nolint:revive // held open deliberately for the life of the probe
+		}
+	}()
+	t.Cleanup(func() { <-done })
+
+	// https:// so curl stalls inside the TLS handshake on a socket it already
+	// connected — the shape a tarpitting middlebox produces.
+	from := "https://" + ln.Addr().String() + "/"
+	if got := runRedirectProbe(t, mirror.URL, from); got != redirectProbeBypassCode {
+		t.Fatalf("exit = %d, want %d (bypass): %s ACCEPTED the sandbox's connection and then stalled — "+
+			"reporting that as 'redirect enforced' tells the operator a wide-open path is blocked", got, redirectProbeBypassCode, from)
+	}
+}
+
+// TestRedirectProbeScript_Probe2ReadsTheConnectFact pins the SHAPE of the read,
+// so the ambiguity cannot come back by deleting one arm: probe 2's -w must ask
+// for num_connects, and the script must have an arm that exits the bypass
+// sentinel on a non-zero count.
+func TestRedirectProbeScript_Probe2ReadsTheConnectFact(t *testing.T) {
+	var probe2 string
+	for _, line := range strings.Split(redirectProbeScript, "\n") {
+		if strings.Contains(line, "--noproxy") {
+			probe2 = line
+		}
+	}
+	if !strings.Contains(probe2, "%{num_connects}") {
+		t.Errorf("probe 2 must read %%{num_connects}: curl exit 28 alone cannot tell a connect that never happened "+
+			"from one that did and then stalled; got %q", probe2)
+	}
+	if !strings.Contains(redirectProbeScript, `[ "$conns" != "0" ] && exit 250`) {
+		t.Errorf("the script must exit the bypass sentinel on a non-zero connect count:\n%s", redirectProbeScript)
 	}
 }
