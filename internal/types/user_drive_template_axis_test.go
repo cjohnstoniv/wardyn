@@ -29,7 +29,7 @@ func TestUserDriveTemplateRulesKeyOnWhoNamesTheObject(t *testing.T) {
 	// The axis itself, against the function whose branch it is.
 	for _, b := range []DriveBackend{DriveBackendDockerVolume, DriveBackendK8sPVC, DriveBackendK8sPVCStatic, DriveBackendHostPath} {
 		d := UserDrive{Name: "Corp NAS", Backend: b, HostRoot: "/srv/homes"}
-		minted := DriveObjectName(d, "home") == driveObjectPrefix+driveSlug(d.Name)+"-home"
+		minted := DriveObjectName(d, "home") == driveObjectPrefix+DriveSlug(d.Name)+"-home"
 		if got := DriveObjectNamedByWardyn(b); got != minted {
 			t.Errorf("DriveObjectNamedByWardyn(%s) = %v but DriveObjectName mints = %v; the rules and the name have drifted",
 				b, got, minted)

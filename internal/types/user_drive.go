@@ -606,10 +606,23 @@ const driveSlugMaxLen = 40
 // cannot produce two different objects for one drive.
 var driveSlugUnsafeRe = regexp.MustCompile(`[^a-z0-9]+`)
 
-// driveSlug folds a drive's human name into the DNS-1123 fragment a PVC name
+// DriveSlug folds a drive's human name into the DNS-1123 fragment a PVC name
 // carries. ValidateUserDrive refuses a name that folds to nothing, so this
 // never returns "" for a stored drive.
-func driveSlug(name string) string {
+//
+// EXPORTED BECAUSE THE FOLD IS NOT INJECTIVE AND SOMETHING HAS TO ENFORCE THAT.
+// It is a fold on purpose — "Corp NAS" and "  Corp   NAS! " are one slug, so a
+// cosmetic rename does not re-home anybody (driveIdentityFields compares through
+// it for exactly that reason). Across two ROWS the same property is a collision:
+// UNIQUE(name) admits "Corp NAS" and "corp nas" as different names, and both
+// mint wardyn-drive-corp-nas-bsmith for one home, so two drives hand one object to
+// two sets of members with different sizes, writability and reclaim policy —
+// caught today only at mount time, as a run failure, by the runners' wardyn.drive
+// label check. The store writes this value into user_drives.name_slug and
+// migration 0061 makes it UNIQUE for every backend whose object name Wardyn
+// mints, which is the namespace the collision is actually in. The Go definition
+// is the one that decides: the column holds what this function returned.
+func DriveSlug(name string) string {
 	s := driveSlugUnsafeRe.ReplaceAllString(strings.ToLower(strings.TrimSpace(name)), "-")
 	s = strings.Trim(s, "-")
 	if len(s) > driveSlugMaxLen {
@@ -651,7 +664,7 @@ func DriveObjectName(d UserDrive, home string) string {
 	if !DriveObjectNamedByWardyn(d.Backend) {
 		return filepath.Join(filepath.Clean(d.HostRoot), home)
 	}
-	return driveObjectPrefix + driveSlug(d.Name) + "-" + home
+	return driveObjectPrefix + DriveSlug(d.Name) + "-" + home
 }
 
 // DriveObjectNamedByWardyn reports whether WARDYN MINTS this backend's storage
@@ -707,7 +720,7 @@ func ValidateUserDrive(d *UserDrive, runnerTarget string) error {
 	if len(d.Name) > maxUserDriveNameLen || !driveTextIsClean(d.Name) {
 		return fmt.Errorf("name: invalid")
 	}
-	if driveSlug(d.Name) == "" {
+	if DriveSlug(d.Name) == "" {
 		return fmt.Errorf("name: must contain at least one letter or digit (it names the drive's storage objects)")
 	}
 	if !d.Backend.Valid() {

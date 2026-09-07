@@ -57,6 +57,35 @@ func userDriveGrantDest(g *types.UserDriveGrant) []any {
 		&g.CreatedAt, &g.CreatedBy}
 }
 
+// driveNameSlugIndex is the partial unique index migration 0061 puts on
+// user_drives.name_slug — the fragment every minted object name is built from.
+const driveNameSlugIndex = "user_drives_name_slug_uniq"
+
+// userDriveUniqueConflict translates a unique-violation from the drive write
+// into the sentinel that carries the right REMEDY, or nil when err is not one.
+//
+// TOLD APART BY CONSTRAINT NAME, because the two refusals are different
+// problems. UNIQUE(name) means the name is taken: pick another. The 0061 index
+// means the name is free and its SLUG is not — "Corp NAS" against an existing
+// "corp nas" — so an admin handed "a user drive named %q already exists" would
+// go looking for a row that does not exist and conclude the control plane is
+// lying. Folding both into one ErrConflict is what made that possible.
+//
+// A 23505 from neither index still maps to ErrConflict: it is a uniqueness
+// refusal and a 409 is the honest status, and inventing a fourth outcome for a
+// constraint nobody has added yet would be the guess this function exists to
+// stop making.
+func userDriveUniqueConflict(err error) error {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+		return nil
+	}
+	if pgErr.ConstraintName == driveNameSlugIndex {
+		return ErrDriveSlugConflict
+	}
+	return ErrConflict
+}
+
 // UpsertUserDrive writes one drive, keyed on its PRIMARY KEY: a caller-minted
 // id that does not exist yet INSERTs, one that does UPDATEs in place (name
 // included, so a drive can be renamed while grants still point at it — which
@@ -145,8 +174,8 @@ func (s PG) UpsertUserDrive(ctx context.Context, d types.UserDrive) (types.UserD
 	}
 	const q = `
 		INSERT INTO user_drives (id, name, backend, host_root, storage_class,
-			home_template, size_mib, writable, reclaim, created_by)
-		SELECT $1::uuid,$2::text,$3::text,$4::text,$5::text,$6::text,$7::int,$8::boolean,$9::text,$10::text
+			home_template, size_mib, writable, reclaim, created_by, name_slug)
+		SELECT $1::uuid,$2::text,$3::text,$4::text,$5::text,$6::text,$7::int,$8::boolean,$9::text,$10::text,$11::text
 		WHERE $3::text <> '` + shareBackend + `' OR $4::text = '' OR NOT EXISTS (
 			SELECT 1
 			FROM user_drives od
@@ -160,15 +189,15 @@ func (s PG) UpsertUserDrive(ctx context.Context, d types.UserDrive) (types.UserD
 			    host_root = EXCLUDED.host_root, storage_class = EXCLUDED.storage_class,
 			    home_template = EXCLUDED.home_template, size_mib = EXCLUDED.size_mib,
 			    writable = EXCLUDED.writable, reclaim = EXCLUDED.reclaim,
-			    updated_at = now()
+			    name_slug = EXCLUDED.name_slug, updated_at = now()
 		RETURNING ` + userDriveCols
 	out, err := scanUserDrive(s.Pool.QueryRow(ctx, q,
 		d.ID, d.Name, d.Backend, d.HostRoot, d.StorageClass,
-		d.HomeTemplate, d.SizeMiB, d.Writable, d.Reclaim, d.CreatedBy))
+		d.HomeTemplate, d.SizeMiB, d.Writable, d.Reclaim, d.CreatedBy,
+		types.DriveSlug(d.Name)))
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return types.UserDrive{}, ErrConflict
+		if conflict := userDriveUniqueConflict(err); conflict != nil {
+			return types.UserDrive{}, conflict
 		}
 		// NO ROWS IS THE CROSS-ROW GUARD ABOVE AND NOTHING ELSE. The SELECT is a
 		// row of constants, so only its WHERE can empty it; UNIQUE(name) raises

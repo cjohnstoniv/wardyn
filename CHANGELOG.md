@@ -27,6 +27,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   gateway clears its handshake deadline once the session is up, so a deadlocked
   connection has no timer left to reap it. Fixed upstream in 0.56.0; no other
   dependency moves.
+- **Two user drives can no longer name one storage object.** `user_drives.name` is UNIQUE, but the name that actually addresses storage is the DNS-1123 fold of it (`wardyn-drive-<drive-slug>-<home>`), so "Corp NAS" and "corp nas" — or "Corp NAS (eng)" and "corp-nas-eng" — were two rows minting one volume or one claim, handing one directory to two sets of members with different size ceilings, writability and reclaim policies. It was caught only at mount time, by the runner's `wardyn.drive` label check, as somebody's run failing. Registering or renaming a drive onto another drive's fold is now refused 409 at the write boundary (`0061_user_drives_name_slug_unique` adds the column the store writes and the partial unique index over it; `host_path` is excluded, because a share's object name is `<host_root>/<home>` and carries no slug). **An upgrade fails if the install already holds such a pair** — that pair is the defect, and the remedy is to rename one drive: `SELECT name_slug, array_agg(name) FROM user_drives WHERE backend <> 'host_path' AND name_slug <> '' GROUP BY 1 HAVING count(*) > 1;`. (R1 F284)
 
 ### Added
 

@@ -49,6 +49,22 @@ var ErrConflict = errors.New("store: conflict")
 var ErrDriveHomeNamespaceConflict = fmt.Errorf(
 	"%w: another host_path drive on this host_root derives home directory names by a different rule", ErrConflict)
 
+// ErrDriveSlugConflict is returned by UpsertUserDrive when a drive's name folds
+// to a storage-object slug another drive already holds — "Corp NAS" against an
+// existing "corp nas", or "Corp NAS (eng)" against "corp-nas-eng".
+//
+// It is a DIFFERENT refusal from UNIQUE(name) with a different remedy, which is
+// why it is its own sentinel: the name really is free, and an admin told "a
+// drive named %q already exists" would go looking for a row that is not there.
+// What is taken is types.DriveSlug(name) — the fragment every minted object name
+// is built from (wardyn-drive-<slug>-<home>) — so the remedy is a name that
+// differs by more than case or punctuation.
+//
+// It wraps ErrConflict for the same reason ErrDriveHomeNamespaceConflict does:
+// every caller that only asks "is this a 409?" keeps working unchanged.
+var ErrDriveSlugConflict = fmt.Errorf(
+	"%w: another user drive's name folds to the same storage-object name", ErrConflict)
+
 // ErrAlreadyDecided is returned when DecideApproval is called on an approval
 // that has already left the PENDING state. Fail closed: never allow a second
 // decision to silently overwrite the first.
