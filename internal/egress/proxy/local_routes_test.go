@@ -10,6 +10,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -616,24 +619,45 @@ func TestRelayStripsHopByHopResponseHeaders(t *testing.T) {
 // Deny row under that route's own rule source — never a silent 200, and never an
 // audit gap where a brokered call simply left no trace.
 //
-// The per-route rule source is the point of the table: these four share one tail,
+// The per-route rule source is the point of the table: these SIX share one tail,
 // so a tail that emitted a single generic source would still pass a one-route
 // test while making the decision log unable to say WHICH brokered call failed.
-func TestBrokeredRouteControlPlaneDownDeniesAndFails502(t *testing.T) {
-	runID := uuid.New()
-	cases := []struct {
-		name       string
-		method     string
-		route      string
-		body       string
-		ruleSource string
-	}{
-		{"mint", http.MethodPost, routeMint, `{"grant_id":"` + uuid.New().String() + `"}`, ruleSourceMint},
-		{"approval", http.MethodGet, routeApprovals + uuid.New().String(), "", ruleSourceApprovals},
-		{"recording", http.MethodPut, routeRecordings + runID.String(), `{"version":2}`, ruleSourceRecordings},
-		{"scan-result", http.MethodPut, routeScanResults + runID.String(), `{"facts":1}`, ruleSourceScanResults},
+//
+// F144: the table said "these four" and carried four rows while the dispatcher
+// (local_routes.go) routed six calls into relayControlPlane. routeSSOToken —
+// the sandbox's WRITE channel to the operator-wide AWS SSO blob, and the only
+// 0%-covered handler in the file — and routeApprovalsCreate were both missing.
+// The stale count was the tell, so the row set is no longer maintained by hand:
+// constName is checked against the dispatcher itself by
+// TestBrokeredRouteTableCoversEveryDispatchedRoute below.
+// brokeredRouteCase is one row of the fail-closed table. constName names the
+// dispatcher constant the row stands for, so the coverage guard below can hold
+// the table to the dispatcher instead of to a comment.
+type brokeredRouteCase struct {
+	name       string
+	constName  string
+	method     string
+	route      string
+	body       string
+	ruleSource string
+}
+
+// brokeredRouteFailClosedCases is the row set, shared by the fail-closed table
+// and the dispatcher-coverage guard so neither can drift from the other.
+func brokeredRouteFailClosedCases(runID uuid.UUID) []brokeredRouteCase {
+	return []brokeredRouteCase{
+		{"mint", "routeMint", http.MethodPost, routeMint, `{"grant_id":"` + uuid.New().String() + `"}`, ruleSourceMint},
+		{"approval", "routeApprovals", http.MethodGet, routeApprovals + uuid.New().String(), "", ruleSourceApprovals},
+		{"approval-create", "routeApprovalsCreate", http.MethodPost, routeApprovalsCreate,
+			`{"kind":"tool_call","payload":{"tool":"Bash","cmd":"ls"}}`, ruleSourceApprovals},
+		{"recording", "routeRecordings", http.MethodPut, routeRecordings + runID.String(), `{"version":2}`, ruleSourceRecordings},
+		{"scan-result", "routeScanResults", http.MethodPut, routeScanResults + runID.String(), `{"facts":1}`, ruleSourceScanResults},
+		{"sso-token", "routeSSOToken", http.MethodPut, routeSSOToken + runID.String(), `{"accessToken":"x"}`, ruleSourceSSOToken},
 	}
-	for _, tc := range cases {
+}
+
+func TestBrokeredRouteControlPlaneDownDeniesAndFails502(t *testing.T) {
+	for _, tc := range brokeredRouteFailClosedCases(uuid.New()) {
 		t.Run(tc.name, func(t *testing.T) {
 			// "127.0.0.1:1" is the repo's dead-port convention: the control-plane
 			// URL resolves and vets fine, and then nothing answers the dial.
@@ -657,4 +681,75 @@ func TestBrokeredRouteControlPlaneDownDeniesAndFails502(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBrokeredRouteTableCoversEveryDispatchedRoute is the F144 root cause: the
+// fail-closed table was maintained by hand and fell one (in fact two) routes
+// behind the dispatcher, silently, for as long as the stale "these four" comment
+// had been wrong. Read the dispatcher's own switch and require a row per
+// route<Name> constant it dispatches, so a NEW brokered route cannot be added
+// without one.
+func TestBrokeredRouteTableCoversEveryDispatchedRoute(t *testing.T) {
+	src, err := os.ReadFile("local_routes.go")
+	if err != nil {
+		t.Fatalf("read local_routes.go: %v", err)
+	}
+	var covered []string
+	for _, tc := range brokeredRouteFailClosedCases(uuid.New()) {
+		covered = append(covered, tc.constName)
+	}
+	dispatched := dispatchedRouteConsts(t, string(src))
+	if len(dispatched) < 5 {
+		t.Fatalf("found only %v dispatched route constants — the parser, not the dispatcher, "+
+			"is what changed; fix this guard rather than deleting it", dispatched)
+	}
+	for _, name := range dispatched {
+		if !slices.Contains(covered, name) {
+			t.Errorf("%s is dispatched to a brokered handler but has no row in "+
+				"TestBrokeredRouteControlPlaneDownDeniesAndFails502: every brokered "+
+				"sandbox->control-plane route must be pinned to the 502 + per-route deny shape "+
+				"(F144 — routeSSOToken, the sandbox's write channel to the operator SSO blob, "+
+				"was the one that went missing)", name)
+		}
+	}
+}
+
+// dispatchedRouteConsts extracts the route<Name> constants whose dispatched
+// handler is defined IN local_routes.go and reaches the shared
+// relayControlPlane tail (directly or via forwardBrokeredUpload) — i.e. exactly
+// the brokered sandbox->control-plane routes this table is about. The git/PAT
+// broker lanes have their own files and their own tails, and the LLM prefixes
+// are not route<Name> constants at all.
+func dispatchedRouteConsts(t *testing.T, src string) []string {
+	t.Helper()
+	var out []string
+	dispatch := regexp.MustCompile(`(?m)^\tcase [^\n]*\b(route[A-Z]\w*)[^\n]*:\n\t\tp\.(\w+)\(`)
+	for _, m := range dispatch.FindAllStringSubmatch(src, -1) {
+		routeConst, handler := m[1], m[2]
+		body := funcBody(src, handler)
+		if body == "" {
+			continue // handler lives in another file: another lane, another tail
+		}
+		if !strings.Contains(body, "relayControlPlane(") && !strings.Contains(body, "forwardBrokeredUpload(") {
+			continue
+		}
+		if !slices.Contains(out, routeConst) {
+			out = append(out, routeConst)
+		}
+	}
+	return out
+}
+
+// funcBody returns the source of `func (p *Proxy) <name>(...)` in src, or "" if
+// it is not defined there.
+func funcBody(src, name string) string {
+	start := strings.Index(src, "func (p *Proxy) "+name+"(")
+	if start < 0 {
+		return ""
+	}
+	rest := src[start:]
+	if end := strings.Index(rest, "\n}\n"); end >= 0 {
+		return rest[:end]
+	}
+	return rest
 }

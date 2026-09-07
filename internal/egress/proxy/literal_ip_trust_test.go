@@ -27,12 +27,12 @@ func literalIPProxy(t *testing.T, allowed ...string) *Proxy {
 		t.Fatalf("parse own subnet: %v", err)
 	}
 	return newProxy(Options{
-		RunID:          uuid.New(),
-		Policy:         CompilePolicy(types.RunPolicySpec{AllowedDomains: allowed}),
-		Sink:           &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
-		Resolver:       publicResolver{},
-		LocalSubnets:   []*net.IPNet{ownSubnet},
-		ControlPlaneIP: net.ParseIP("172.18.0.2"),
+		RunID:           uuid.New(),
+		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: allowed}),
+		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Resolver:        publicResolver{},
+		LocalSubnets:    []*net.IPNet{ownSubnet},
+		ControlPlaneIPs: []net.IP{net.ParseIP("172.18.0.2")},
 	})
 }
 

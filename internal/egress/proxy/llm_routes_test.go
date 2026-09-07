@@ -32,11 +32,29 @@ func TestIsLLMHost_BedrockPrivateEndpoint(t *testing.T) {
 		{"bedrock-runtime.us-gov-west-1.amazonaws.com", true, "four-part gov region"},
 		{"bedrock-runtime.ap-southeast-4.amazonaws.com", true, "region label with a digit"},
 
+		// --- the rest of AWS's published service labels (F113) ---
+		// docs.aws.amazon.com/general/latest/gr/bedrock.html publishes eight
+		// service labels plus their -fips variants. isBedrockHost matched two of
+		// them, so every FIPS endpoint — the host a FedRAMP-High workload is
+		// generally REQUIRED to use, GovCloud included — and the whole agent
+		// family fell out of isLLMHost, and with it the llm.scan.blind coverage
+		// row THREAT-MODEL.md promises for an opaque model tunnel.
+		{"bedrock-runtime-fips.us-east-1.amazonaws.com", true, "FIPS data plane"},
+		{"bedrock-runtime-fips.us-gov-west-1.amazonaws.com", true, "GovCloud FIPS data plane"},
+		{"bedrock-fips.us-gov-east-1.amazonaws.com", true, "GovCloud FIPS control plane"},
+		{"bedrock-agent-runtime.us-east-1.amazonaws.com", true, "InvokeAgent data plane — prompt-bearing"},
+		{"bedrock-agent-runtime-fips.us-east-1.amazonaws.com", true, "InvokeAgent data plane, FIPS"},
+		{"bedrock-agent.us-east-1.amazonaws.com", true, "agents build-time"},
+		{"bedrock-data-automation-runtime.us-east-1.amazonaws.com", true, "data automation data plane"},
+		{"bedrock-runtime.us-east-1.api.aws", true, "dual-stack endpoint (api.aws is AWS-owned too)"},
+		{"bedrock-data-automation.us-west-2.api.aws", true, "dual-stack data automation"},
+
 		// --- PrivateLink / VPC endpoint (the gap this closes) ---
 		{"vpce-0a1b2c3d4e5f6a7b8-9zyxwvut.bedrock-runtime.us-east-1.vpce.amazonaws.com", true, "interface endpoint"},
 		{"vpce-0a1b2c3d-9zyx-us-east-1a.bedrock-runtime.us-east-1.vpce.amazonaws.com", true, "zonal endpoint"},
 		{"vpce-0a1b2c3d4e5f6a7b8-bedrock-runtime.us-east-1.vpce.amazonaws.com", true, "hyphen-glued service name"},
 		{"vpce-0a1b2c3d4e5f6a7b8-9zyxwvut.bedrock.us-east-1.vpce.amazonaws.com", true, "control plane via PrivateLink"},
+		{"vpce-0a1b2c3d4e5f6a7b8-bedrock-agent-runtime.us-east-1.vpce.amazonaws.com", true, "hyphen-glued agent runtime"},
 
 		// --- hostile lookalikes: the rows that matter ---
 		{"bedrock-runtime.evil.com", false, "attacker-owned zone wearing the service name"},
@@ -50,6 +68,12 @@ func TestIsLLMHost_BedrockPrivateEndpoint(t *testing.T) {
 		{"bedrockruntime.us-east-1.amazonaws.com", false, "not the service name"},
 		{"my-bedrock-runtime.corp.internal", false, "corp artifact host that must keep the artifact scan path"},
 		{"s3.us-east-1.amazonaws.com", false, "AWS, but not Bedrock"},
+		{"bedrock-runtime-fips.evil.com", false, "FIPS label off-AWS"},
+		{"bedrock-runtime.us-east-1.api.aws.evil.com", false, "dual-stack host as a left-hand prefix"},
+		{"bedrock-runtime.us-east-1.api.com", false, "api.aws is the zone, not api.<anything>"},
+		{"bedrock-agent-runtime.s3.amazonaws.com", false, "agent label on the squattable S3 virtual host"},
+		{"bedrock-runtime-fips-extra.us-east-1.amazonaws.com", false, "-fips is a suffix, not a wildcard"},
+		{"bedrock-agentcore.us-east-1.amazonaws.com", false, "not one of the published Bedrock labels"},
 		{"", false, "empty host"},
 	} {
 		if got := p.isLLMHost(tc.host); got != tc.want {

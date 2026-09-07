@@ -103,7 +103,7 @@ func TestMITMLLMHost_GatedOnIntent(t *testing.T) {
 	// intended → a direct CONNECT to Anthropic/OpenAI must stay opaque.
 	artifactOnly := newProxy(Options{CA: ca, MITMHosts: []string{"artifactory.corp"}, MITMLLM: false})
 	for _, h := range []string{anthropicHost, openaiHost} {
-		if artifactOnly.mitmLLMHost(h) {
+		if artifactOnly.mitmLLMHost(h, 443) {
 			t.Errorf("artifact-only run (mitmLLM=false) must NOT MITM LLM host %q despite a CA being present", h)
 		}
 	}
@@ -111,14 +111,14 @@ func TestMITMLLMHost_GatedOnIntent(t *testing.T) {
 	// Subscription/intercept_tls run: LLM MITM intended → LLM hosts are terminated.
 	llmIntent := newProxy(Options{CA: ca, MITMLLM: true})
 	for _, h := range []string{anthropicHost, openaiHost} {
-		if !llmIntent.mitmLLMHost(h) {
+		if !llmIntent.mitmLLMHost(h, 443) {
 			t.Errorf("run with LLM MITM intent (mitmLLM=true) must MITM LLM host %q", h)
 		}
 	}
 
 	// No CA at all → never MITM, regardless of intent flag.
 	noCA := newProxy(Options{MITMLLM: true})
-	if noCA.mitmLLMHost(anthropicHost) {
+	if noCA.mitmLLMHost(anthropicHost, 443) {
 		t.Errorf("no CA configured must never MITM an LLM host")
 	}
 }

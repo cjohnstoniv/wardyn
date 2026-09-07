@@ -23,15 +23,19 @@ func newInternalHostsProxy(t *testing.T, spec types.RunPolicySpec, res resolver,
 	t.Helper()
 	buf := &bytes.Buffer{}
 	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
+	var cpIPs []net.IP
+	if cpIP != nil {
+		cpIPs = []net.IP{cpIP}
+	}
 	return newProxy(Options{
-		RunID:          uuid.New(),
-		Policy:         CompilePolicy(spec),
-		Sink:           sink,
-		Resolver:       res,
-		Dial:           redirectDial(upstreamAddr),
-		InternalHosts:  hosts,
-		LocalSubnets:   localSubnets,
-		ControlPlaneIP: cpIP,
+		RunID:           uuid.New(),
+		Policy:          CompilePolicy(spec),
+		Sink:            sink,
+		Resolver:        res,
+		Dial:            redirectDial(upstreamAddr),
+		InternalHosts:   hosts,
+		LocalSubnets:    localSubnets,
+		ControlPlaneIPs: cpIPs,
 	}), buf
 }
 

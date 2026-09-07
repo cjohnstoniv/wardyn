@@ -445,7 +445,12 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   k8s runner substrate refuses to construct on an empty value
   (`errProxyImageUnset`), which is a boot-time failure, not a per-run one —
   wardynd itself never comes up, it does not boot fine with runs merely
-  failing closed. See "Build and push wardynd" above for how to build and
+  failing closed. **Bump it in lockstep with `image.tag`**: the sidecar's config
+  is written by whatever wardynd is running, so an older sidecar meets config
+  keys its binary does not know. Since 0.7 the sidecar decodes that config
+  strictly and refuses to start on a key it cannot honour (naming the key), so
+  a skew shows up as a failed proxy sidecar rather than as a policy silently
+  half in force. See "Build and push wardynd" above for how to build and
   push it (`deploy/compose/Dockerfile.proxy`).
 - `k8s.imagePullSecret`: optional pre-existing Secret name
   (`WARDYN_K8S_IMAGE_PULL_SECRET`) threaded onto every pod the substrate

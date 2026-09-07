@@ -5,6 +5,8 @@ package proxy
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -65,6 +67,45 @@ func scanEngine(t *testing.T, mode string, secrets ...string) *contentscan.Engin
 	}
 	return eng
 }
+
+// scanEngineFailClosed builds the engine a STRICT operator actually buys:
+// mode=block PLUS on_scanner_error=block, i.e. Engine.BlocksOnError() == true.
+//
+// F090: every other scan test in this package builds a fail-OPEN engine
+// (scanEngine leaves on_scanner_error at its default) and asserts the ALLOW
+// outcome, so the two fail-CLOSED refusals in llm_routes.go — the
+// uninspected-channel refusal and the oversize refusal — were executed by ZERO
+// tests, while THREAT-MODEL.md §5.1a sells that mode as what the strict
+// operator is buying. The BlocksOnError assertion below is part of the pin: if
+// engine construction ever stops honouring on_scanner_error, these tests fail
+// on the fixture rather than silently degrading into fail-open coverage.
+func scanEngineFailClosed(t *testing.T, secrets ...string) *contentscan.Engine {
+	t.Helper()
+	corpus := make([][]byte, 0, len(secrets))
+	for _, s := range secrets {
+		corpus = append(corpus, []byte(s))
+	}
+	eng, err := contentscan.NewEngine(types.LLMInspectionSpec{
+		Mode: "block", DetectSecrets: true, OnScannerError: "block",
+	}, corpus)
+	if err != nil {
+		t.Fatalf("NewEngine(fail-closed): %v", err)
+	}
+	if eng == nil {
+		t.Fatal("expected a non-nil engine")
+	}
+	if !eng.BlocksOnError() {
+		t.Fatal("fixture is not fail-closed: on_scanner_error=block must make BlocksOnError() true")
+	}
+	return eng
+}
+
+// errBody is a request body whose read fails — the only way to reach
+// scanBufferedBody's unconditional read-error deny.
+type errBody struct{}
+
+func (errBody) Read([]byte) (int, error) { return 0, errors.New("simulated body read failure") }
+func (errBody) Close() error             { return nil }
 
 func anthropicMessagesBody(content string) string {
 	return `{"model":"claude","max_tokens":16,"messages":[{"role":"user","content":"` + content + `"}]}`
@@ -405,5 +446,106 @@ func TestLLMScanBlindOnOpaqueConnect(t *testing.T) {
 	doConnect()
 	if after := strings.Count(buf.String(), ruleSourceLLMBlind); after != before {
 		t.Fatalf("blind must be once-per-host: before=%d after=%d", before, after)
+	}
+}
+
+// TestLLMScanFailClosedRefusesUninspectedChannel pins the fail-CLOSED half of
+// the uninspected-channel arm (llm_routes.go, inspectLLM's scanOpaque case):
+// under mode=block + on_scanner_error=block a prompt-bearing subpath the
+// parser cannot inspect is REFUSED, not forwarded. Its fail-open sibling is
+// TestLLMScanBatchesMarkedUninspected above, which asserts the opposite
+// outcome for the same request under a fail-open engine — the two together are
+// the whole contract.
+func TestLLMScanFailClosedRefusesUninspectedChannel(t *testing.T) {
+	cu := captureUpstream(t, true, "ok")
+	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cu.srv),
+		anthropicInjector(), testInsecureTLSConfig)
+	p.scanner = scanEngineFailClosed(t, scanTestSecret)
+
+	rec := httptest.NewRecorder()
+	req := mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"v1/messages/batches",
+		strings.NewReader(`{"requests":[]}`))
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("fail-closed must REFUSE an uninspectable prompt-bearing subpath, got %d", rec.Code)
+	}
+	if cu.reached {
+		t.Fatal("a refused request must not reach the upstream")
+	}
+	d := lastDecision(t, buf)
+	if d.Decision != egress.Deny || d.RuleSource != ruleSourceLLMBlocked {
+		t.Fatalf("decision = %+v, want deny/%s", d, ruleSourceLLMBlocked)
+	}
+	if d.Scan == nil || d.Scan.Action != "block" || d.Scan.SkipReason != "uninspected_channel" {
+		t.Fatalf("scan summary = %+v, want block/uninspected_channel", d.Scan)
+	}
+	if strings.Contains(rec.Body.String(), scanTestSecret) {
+		t.Fatal("the 403 body must never carry scanned content")
+	}
+}
+
+// TestLLMScanFailClosedRefusesOversizeBody pins the fail-CLOSED half of the
+// oversize arm (scanBufferedBody): a body larger than maxLLMScanBody cannot be
+// inspected, so under on_scanner_error=block it is refused rather than
+// forwarded intact. TestLLMScanOversizeBodyForwardedIntact is the fail-open
+// sibling for the same request.
+func TestLLMScanFailClosedRefusesOversizeBody(t *testing.T) {
+	saved := maxLLMScanBody
+	maxLLMScanBody = 64 // force the oversize path without allocating tens of MiB
+	defer func() { maxLLMScanBody = saved }()
+
+	cu := captureUpstream(t, true, "ok")
+	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cu.srv),
+		anthropicInjector(), testInsecureTLSConfig)
+	p.scanner = scanEngineFailClosed(t, scanTestSecret)
+
+	body := anthropicMessagesBody("padding " + strings.Repeat("x", 300))
+	if len(body) <= maxLLMScanBody {
+		t.Fatal("test body must exceed the scan cap")
+	}
+	rec := httptest.NewRecorder()
+	req := mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"v1/messages", strings.NewReader(body))
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("fail-closed must REFUSE an oversize (uninspectable) body, got %d", rec.Code)
+	}
+	if cu.reached {
+		t.Fatal("a refused oversize body must not reach the upstream")
+	}
+	d := lastDecision(t, buf)
+	if d.Decision != egress.Deny || d.RuleSource != ruleSourceLLMBlocked {
+		t.Fatalf("decision = %+v, want deny/%s", d, ruleSourceLLMBlocked)
+	}
+	if d.Scan == nil || d.Scan.Action != "block" || d.Scan.SkipReason != "body_oversize" || d.Scan.Scanned {
+		t.Fatalf("scan summary = %+v, want unscanned block/body_oversize", d.Scan)
+	}
+}
+
+// TestLLMScanBodyReadErrorDenies pins scanBufferedBody's read-error arm, which
+// is UNCONDITIONAL (it does not consult BlocksOnError): a body the proxy could
+// not read whole was never inspected, so it must be denied rather than
+// forwarded — proved here with a fail-OPEN engine so the assertion is about
+// the arm itself, not about on_scanner_error.
+func TestLLMScanBodyReadErrorDenies(t *testing.T) {
+	cu := captureUpstream(t, true, "ok")
+	p, buf := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cu.srv),
+		anthropicInjector(), testInsecureTLSConfig)
+	p.scanner = scanEngine(t, "alert", scanTestSecret) // fail-OPEN on purpose
+
+	rec := httptest.NewRecorder()
+	req := mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"v1/messages", strings.NewReader("{}"))
+	req.Body = io.NopCloser(errBody{})
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("an unreadable body must be refused 400, got %d", rec.Code)
+	}
+	if cu.reached {
+		t.Fatal("an unreadable body must not reach the upstream")
+	}
+	if d := lastDecision(t, buf); d.Decision != egress.Deny {
+		t.Fatalf("decision = %+v, want deny (never a silent allow for a body we could not read)", d)
 	}
 }

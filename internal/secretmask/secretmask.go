@@ -10,6 +10,14 @@
 // representations of the secret are NOT caught. This is intentional and
 // documented here so the limitation is visible at the implementation site.
 //
+// Stated precisely, because the wider reading is the one that bites (F155): the
+// unit of protection is a RENDERING, not a credential. Registering "Bearer
+// sk-abc" does not mask a bare "sk-abc" in the same buffer, and registering a
+// token does not mask the base64 an Authorization: Basic header carries it in.
+// It is the REGISTERING side's job to add every rendering its credential can
+// appear in — see upstreamProxy.maskValues and registerHeaderCredential /
+// registerBasicAuthCredential in internal/egress/proxy.
+//
 // Fail-CLOSED policy on masker panic: if Masker.Mask panics, the recovered
 // panic is surfaced as an error AND the affected chunk is replaced with the
 // placeholder instead of being forwarded verbatim. We must never emit raw,

@@ -90,14 +90,25 @@ func (f *fakeUpstream) snapshot() (connect, auth string) {
 }
 
 // newUpstreamProxy builds a Proxy with a REAL dialer (so it can reach the
-// loopback fake corp proxy) and the given upstream configured.
+// loopback fake corp proxy) and the given upstream configured, under the
+// ordinary single-host allowlist the tunnel tests need.
 func newUpstreamProxy(t *testing.T, up *upstreamProxy) *Proxy {
+	t.Helper()
+	return newUpstreamProxyPolicy(t, up, types.RunPolicySpec{AllowedDomains: []string{"tls.test"}})
+}
+
+// newUpstreamProxyPolicy is newUpstreamProxy with the policy spelled out, so a
+// test can say which layer it is actually exercising. A guard test for a
+// BUILTIN denial has to run under allow_all_egress: under a default-deny
+// allowlist every host it names is refused by policy whether the guard exists
+// or not (F004).
+func newUpstreamProxyPolicy(t *testing.T, up *upstreamProxy, spec types.RunPolicySpec) *Proxy {
 	t.Helper()
 	buf := &bytes.Buffer{}
 	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
 	return newProxy(Options{
 		RunID:    uuid.New(),
-		Policy:   CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"tls.test"}}),
+		Policy:   CompilePolicy(spec),
 		Sink:     sink,
 		Resolver: publicResolver{},
 		Upstream: up,
@@ -179,19 +190,112 @@ func TestUpstreamPrivateIPException(t *testing.T) {
 // exception is scoped to the CONFIGURED proxy address ONLY: with an upstream
 // proxy set, an AGENT-chosen egress target that is a literal private/loopback/
 // metadata IP is STILL denied by the step-0 guard (no SSRF-via-corp-proxy).
+//
+// F004 — why the policy and the rule_source assertion are load-bearing: this
+// test used to run under AllowedDomains=["tls.test"], i.e. DEFAULT-DENY, and
+// assert only `dec != egress.Deny`... in fact only that the decision was Deny.
+// Every host it named was refused by `policy:default-deny` whether or not the
+// builtin guard existed, so deleting evaluate's whole step-0 block left it
+// GREEN — it pinned the policy engine, not the guard it is named for. Under
+// allow_all_egress the ONLY thing that can deny these targets is the builtin
+// guard, and the rule_source assertion says so out loud. The table also carries
+// the non-canonical inet_aton spellings, which a corp proxy's own getaddrinfo
+// resolves to the same blocked addresses.
 func TestUpstreamDoesNotWeakenLiteralIPGuard(t *testing.T) {
 	f := startFakeUpstream(t)
 	up, err := parseUpstreamProxy("http://" + f.addr())
 	if err != nil {
 		t.Fatalf("parse upstream: %v", err)
 	}
-	p := newUpstreamProxy(t, up) // upstream != nil
-	for _, target := range []string{"169.254.169.254", "127.0.0.1", "10.0.0.5"} {
-		dec, _, _ := p.evaluate(context.Background(), target, 443, "CONNECT", "")
+	// allow_all_egress: nothing but the builtin literal-IP guard stands between
+	// the sandbox and these targets.
+	p := newUpstreamProxyPolicy(t, up, types.RunPolicySpec{AllowAllEgress: true}) // upstream != nil
+
+	// Control: allow_all_egress really does allow an ordinary public host here,
+	// so a Deny below cannot be the policy engine speaking.
+	if dec, _, log := p.evaluate(context.Background(), "example.com", 443, "CONNECT", ""); dec != egress.Allow {
+		t.Fatalf("control: example.com = %v (rule %q), want allow — the table below would prove "+
+			"nothing under a policy that denies by default", dec, log.RuleSource)
+	}
+
+	for _, target := range []string{
+		// Canonical spellings.
+		"169.254.169.254", "127.0.0.1", "10.0.0.5",
+		// inet_aton spellings of the same addresses: net.ParseIP refuses them,
+		// glibc getaddrinfo (and therefore the corp proxy that finally dials)
+		// does not.
+		"0xa9fea9fe", "2852039166", // 169.254.169.254
+		"127.1", "0x7f000001", "2130706433", // 127.0.0.1
+		"0xa000005", "167772165", // 10.0.0.5
+	} {
+		dec, dialTarget, log := p.evaluate(context.Background(), target, 443, "CONNECT", "")
 		if dec != egress.Deny {
 			t.Errorf("agent target %s must be DENIED even with an upstream proxy set (got %v)", target, dec)
+			continue
+		}
+		if dialTarget != "" {
+			t.Errorf("agent target %s: dial target must be empty on deny, got %q", target, dialTarget)
+		}
+		if log == nil || log.RuleSource != "builtin:private-ip" {
+			t.Errorf("agent target %s: rule_source = %q, want builtin:private-ip — a deny from the "+
+				"policy engine would leave the builtin guard unproven", target, ruleSourceOf(log))
 		}
 	}
+}
+
+// TestUpstreamNeverHandsANonCanonicalLiteralToTheCorpProxy is the END of the
+// F143 gap: the table above proves the DECISION, this proves the WIRE.
+//
+// The upstream lane is the one place the exposure is real — evaluate hands the
+// destination to the operator's proxy BY NAME, unresolved, so whatever the corp
+// proxy's own inet_aton-based resolver makes of the string is what gets dialled.
+// A test that only asserts a Deny cannot see a second code path that still
+// forwards; this one asks the fake corp proxy what CONNECT authority it was
+// actually given, and the answer must be "none at all".
+func TestUpstreamNeverHandsANonCanonicalLiteralToTheCorpProxy(t *testing.T) {
+	f := startFakeUpstream(t)
+	up, err := parseUpstreamProxy("http://" + f.addr())
+	if err != nil {
+		t.Fatalf("parse upstream: %v", err)
+	}
+	// allow_all_egress: only the builtin literal-IP guard can refuse these.
+	p := newUpstreamProxyPolicy(t, up, types.RunPolicySpec{AllowAllEgress: true})
+	proxySrv := httptest.NewServer(p)
+	defer proxySrv.Close()
+
+	for _, host := range []string{"2130706433", "0x7f000001", "127.1", "0177.0.0.1", "0xa9fea9fe"} {
+		t.Run(host, func(t *testing.T) {
+			conn, status := connectThrough(t, proxySrv.URL, host+":443")
+			defer conn.Close()
+			if !strings.Contains(status, "403") {
+				t.Errorf("CONNECT %s:443 = %q, want 403", host, status)
+			}
+			if gotConnect, _ := f.snapshot(); gotConnect != "" {
+				t.Errorf("the corp proxy was handed %q for host %q: a spelling glibc resolves to a "+
+					"blocked address must never reach the hop that does the resolving", gotConnect, host)
+			}
+		})
+	}
+
+	// Control: the same proxy DOES hand an ordinary host over, so an empty
+	// snapshot above means "refused", not "this test cannot see a CONNECT".
+	conn, status := connectThrough(t, proxySrv.URL, "tls.test:443")
+	defer conn.Close()
+	if !strings.Contains(status, "200") {
+		t.Fatalf("control CONNECT tls.test:443 = %q, want 200", status)
+	}
+	if gotConnect, _ := f.snapshot(); gotConnect != "CONNECT tls.test:443" {
+		t.Fatalf("control: corp proxy saw %q, want CONNECT tls.test:443", gotConnect)
+	}
+}
+
+// ruleSourceOf is nil-safe so a missing decision log reports as a rule_source
+// mismatch rather than panicking the whole package's test binary.
+func ruleSourceOf(log *egress.DecisionLog) string {
+	if log == nil {
+		return "<no decision log>"
+	}
+	return log.RuleSource
 }
 
 // TestControlPlaneBypassesUpstream proves the transport split: with an upstream

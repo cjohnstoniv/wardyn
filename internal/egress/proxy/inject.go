@@ -4,7 +4,9 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,10 +22,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// procRegistry is the proxy-process-global secret mask registry. Formatted
-// injection values (the actual header credential bytes) are registered here at
-// startup so they can be masked from decision-log stdout lines and any other
-// output stream before it leaves the process.
+// procRegistry is the proxy-process-global secret mask registry. Every proxy-held
+// credential is registered here — in EVERY rendering it can appear in, not just
+// the one the holding call site carries (registerHeaderCredential /
+// registerBasicAuthCredential) — so it is masked from decision-log stdout lines
+// and from every sandbox-facing error body before it leaves the process.
 //
 // A nil *Registry is safe throughout the secretmask package, so failing to
 // initialise it (or not needing it) is a safe no-op rather than a panic.
@@ -109,15 +112,11 @@ func buildInjector(ctx context.Context, base string, token *tokenSource, pol *Po
 			expiresAt: resolved.ExpiresAt,
 		}
 
-		// Register the formatted secret value (e.g. "Bearer sk-...") in the
-		// process-global Registry so it is masked from decision-log output
-		// before it can leave the proxy process.
-		//
-		// HONEST RESIDUAL: masking catches verbatim byte-identical leakage only;
-		// base64/hex/model-narrated forms of the credential are NOT caught.
-		if resolved.Value != "" {
-			procRegistry.AddGlobal([]byte(resolved.Value))
-		}
+		// Register the injected credential in the process-global Registry so it
+		// is masked from decision-log output and from every sandbox-facing
+		// error body before it can leave the proxy process. EVERY rendering,
+		// not just the formatted header value — see registerHeaderCredential.
+		registerHeaderCredential(resolved.Value)
 	}
 	return inj, nil
 }
@@ -155,21 +154,152 @@ func (i *injector) resolve(host string) (injectedHeader, bool, error) {
 	}
 	e.header = injectedHeader{name: resolved.Header, value: resolved.Value}
 	e.expiresAt = resolved.ExpiresAt
-	if resolved.Value != "" {
-		procRegistry.AddGlobal([]byte(resolved.Value))
-	}
+	registerHeaderCredential(resolved.Value)
 	return e.header, true, nil
 }
 
-// apply sets the injected header on req if an exactly-allowed rule matches its
-// host. (Forward-proxy plain-HTTP path; a dynamic entry that fails to re-resolve
-// simply isn't injected here — dynamic credentials target the TLS-MITM path,
-// which fails closed via resolve.)
-func (i *injector) apply(req *http.Request, host string) {
+// ─── credential mask renderings ──────────────────────────────────────────────
+
+// registerHeaderCredential registers, with the process-global mask registry,
+// every rendering of ONE header credential the proxy holds — not merely the
+// rendering the call site happens to be carrying.
+//
+// TRUST BOUNDARY (F155 — the mask is per-RENDERING, not per-credential; read
+// before trimming an arm): procRegistry is what stands between a proxy-held
+// credential and every sandbox-facing error body (Proxy.httpError ->
+// maskDecisionBytes) and every decision-log line (decisions.go). And
+// secretmask.Masker.Mask is EXACT BYTES: a credential is protected in exactly
+// the renderings that were registered, so registering only "Bearer sk-…" leaves
+// a bare "sk-…" in the same buffer untouched — and the bare form is the one a
+// vendor echoes back in an error body and the one an operator sees in a config.
+//
+// The renderings, in the order they are registered:
+//
+//	"Bearer sk-…"     the formatted header value, as the header carries it
+//	"sk-…"            the credential alone — the header scheme is a PREFIX, so
+//	                  the space-separated tail is the credential itself
+//	"user:pass"       when that tail decodes as base64 "user:pass" (the Basic
+//	                  scheme), the decoded pair …
+//	"pass"            … and its password half, the most sensitive part
+//
+// This is the shape upstreamProxy.maskValues (upstream.go) already applies to
+// the corp-proxy credential, and the shape the control plane states outright at
+// api/injection.go ("the formatted value … is what the agent might observe in
+// proxy error messages; the raw value covers direct leakage"). One definition,
+// every proxy-side site.
+//
+// HONEST RESIDUAL, narrowed but not closed: masking still catches only the
+// renderings listed above, verbatim. A credential the proxy never sees in a
+// given rendering (an arbitrary Format string that glues the secret to a
+// suffix, e.g. "%s;v=1") cannot be derived here, and a hex-encoded or
+// model-narrated form is not caught at all.
+func registerHeaderCredential(formatted string) {
+	if formatted == "" {
+		return
+	}
+	procRegistry.AddGlobal([]byte(formatted))
+	i := strings.LastIndexByte(formatted, ' ')
+	if i < 0 || i+1 >= len(formatted) {
+		return // no scheme prefix: the formatted value IS the credential
+	}
+	tail := formatted[i+1:]
+	procRegistry.AddGlobal([]byte(tail))
+	dec, err := base64.StdEncoding.DecodeString(tail)
+	if err != nil {
+		return
+	}
+	if c := bytes.IndexByte(dec, ':'); c >= 0 && c+1 < len(dec) {
+		procRegistry.AddGlobal(dec)
+		procRegistry.AddGlobal(dec[c+1:])
+	}
+}
+
+// registerBasicAuthCredential registers a credential the proxy puts on the wire
+// with http.Request.SetBasicAuth(user, tok) — the git-broker installation token
+// and the PAT lane's minted token.
+//
+// TRUST BOUNDARY (F155): SetBasicAuth does not send tok; it sends
+// base64(user + ":" + tok). Registering only the raw token therefore leaves the
+// form that is actually on the wire — and the form that lands in a transport
+// error quoting the request — unmasked. Both go in, via the same one definition
+// registerHeaderCredential holds.
+func registerBasicAuthCredential(user, tok string) {
+	if tok == "" {
+		return
+	}
+	procRegistry.AddGlobal([]byte(tok))
+	registerHeaderCredential("Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+tok)))
+}
+
+// stripSandboxCredentials removes EVERY credential header the sandbox may have
+// put on a request that is about to be injected with an operator-brokered one.
+//
+// TRUST BOUNDARY (F104 — this is the single definition, do not re-spell it at a
+// call site): setting the brokered header is not enough, because the sandbox
+// chooses the OTHER headers. A rule that injects under `X-Api-Key` leaves an
+// `Authorization: Bearer <sandbox key>` untouched, and which of the two the
+// upstream honours is then the UPSTREAM's choice, not Wardyn's — so an agent
+// can substitute its own credential for the operator's on an allowlisted host
+// and Wardyn's decision row still reads as brokered egress. forwardInspectedLLM
+// (the brokered LLM route and the MITM path) has always stripped these four;
+// injector.apply — the plain forward lane's injection — only did Header.Set, so
+// the same request could reach the upstream carrying BOTH. One list, both
+// injecting paths.
+func stripSandboxCredentials(h http.Header) {
+	h.Del("Authorization")
+	h.Del("X-Api-Key")
+	h.Del("Api-Key")
+	h.Del("X-Auth-Token")
+}
+
+// injectableTransport reports whether a brokered credential may be attached to
+// a forward request bound for scheme://host:port.
+//
+// TRUST BOUNDARY (F110, partial — the residual is filed): injection keys on the
+// lowercased hostname alone — no scheme, no port — and addAPIKeyGrant couples
+// each grant to a BARE exact allowlist entry, which policy.go matches on ANY
+// port. The sandbox therefore picks the transport: `POST http://<host>:443/…`
+// on the plain lane made the proxy attach the operator's credential to a
+// request it then sent in CLEARTEXT to the TLS port — visible to every on-path
+// device and to the corporate proxy hop the deployment guide tells operators to
+// put in front of egress. The no-resident-secrets invariant still holds (the
+// sandbox never sees the value), but the value leaves the proxy unencrypted.
+//
+// Cleartext to :443 is the one half of that the code can decide alone: nothing
+// serves plaintext on the https port, so refusing it cannot break a connector
+// an operator authored, and it is only reachable at all because the bare
+// allowlist entry is port-blind. It is REFUSED (no injection — the upstream
+// answers 401) rather than denied, so no audit string changes.
+//
+// The other half is NOT closed here: an operator who authored an api_key for an
+// https vendor still cannot say so, because InjectionRule carries no scheme, so
+// `POST http://<host>/…` on port 80 is indistinguishable from a legitimately
+// plaintext internal connector — the ONLY shape plain-lane injection has ever
+// worked in (a CONNECT tunnel cannot be injected into). Fixing that requires
+// declaring transport intent in policy; see the filed follow-up.
+func injectableTransport(scheme string, port int) bool {
+	if strings.EqualFold(scheme, "https") {
+		return true // the proxy itself runs the TLS leg
+	}
+	return port != 443
+}
+
+// apply strips the sandbox's own credential headers and sets the injected one
+// if an exactly-allowed rule matches req's host AND the transport may carry it
+// (injectableTransport). (Forward-proxy plain-HTTP path; a dynamic entry that
+// fails to re-resolve simply isn't injected here — dynamic credentials target
+// the TLS-MITM path, which fails closed via resolve.) A host with NO rule is
+// left byte-for-byte alone: the strip is part of injection, never a blanket
+// header filter on ordinary forward egress.
+func (i *injector) apply(req *http.Request, host string, port int) {
 	h, ok, err := i.resolve(host)
 	if err != nil || !ok {
 		return
 	}
+	if req.URL == nil || !injectableTransport(req.URL.Scheme, port) {
+		return
+	}
+	stripSandboxCredentials(req.Header)
 	req.Header.Set(h.name, h.value)
 }
 

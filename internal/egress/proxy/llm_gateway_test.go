@@ -183,12 +183,12 @@ func TestLLMGateway_ResolvesToOwnSubnet_Refused(t *testing.T) {
 	cpIP := net.ParseIP("10.40.0.9")
 	res := fakeResolver{m: map[string][]net.IP{host: ips("10.40.0.9")}}
 	p := newProxy(Options{
-		RunID:          uuid.New(),
-		Policy:         CompilePolicy(types.RunPolicySpec{}),
-		Sink:           &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
-		Resolver:       res,
-		LLMUpstreams:   map[string]string{anthropicHost: "https://" + host + "/v1"},
-		ControlPlaneIP: cpIP,
+		RunID:           uuid.New(),
+		Policy:          CompilePolicy(types.RunPolicySpec{}),
+		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Resolver:        res,
+		LLMUpstreams:    map[string]string{anthropicHost: "https://" + host + "/v1"},
+		ControlPlaneIPs: []net.IP{cpIP},
 	})
 
 	if _, err := p.gatewayTarget(host, 443); !errors.Is(err, errGatewayVet) {

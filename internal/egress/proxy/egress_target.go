@@ -91,6 +91,20 @@ func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, 
 	// still denied. The bypass also grants no policy allow — evaluate() already
 	// ran allow/deny/approval/method before reaching here.
 	if p.upstream != nil && !p.bypassUpstream(host) {
+		// The one thing the upstream hop cannot be trusted to re-derive: a
+		// NON-CANONICAL literal (127.1, 0x7f000001, 2130706433, 0251.0376.0.1).
+		// net.ParseIP refuses those spellings, so evaluate's step-0 literal-IP
+		// guard never saw them and the string would be forwarded to the corp
+		// proxy verbatim — where inet_aton turns it back into loopback/metadata.
+		// Checked HERE as well as at step 0 because serveMITMRequest and the two
+		// brokers reach this function without going through evaluate (F105).
+		// Canonical literals are deliberately NOT re-vetted here: evaluate has
+		// already decided them, including the operator's egress-redirect trust.
+		if ip := nonCanonicalIPv4(host); ip != nil {
+			if kind, why := isBlockedIP(ip); kind != blockNone {
+				return "", "", fmt.Errorf("host %q denied: non-canonical literal for %s: %s", host, ip, why)
+			}
+		}
 		return net.JoinHostPort(host, strconv.Itoa(port)), "", nil
 	}
 	// A literal IP the operator explicitly allowed EXACTLY is trusted here for
@@ -391,13 +405,31 @@ func (p *Proxy) liftInternalHost(host string, ip net.IP) bool {
 }
 
 // onOwnSubnetOrControlPlane reports whether ip is one of this proxy's own
-// interface subnets or its resolved control-plane host — both captured once at
-// construction (NewServer). The sidecar shares its control-plane network with
-// postgres/dex/registry (docker-compose), so an internal-host declaration must
-// never let a run reach the proxy's own network neighbors.
+// interface subnets or one of its resolved control-plane addresses — all
+// captured once at construction (NewServer). The sidecar shares its
+// control-plane network with postgres/dex/registry (docker-compose), so an
+// internal-host declaration must never let a run reach the proxy's own network
+// neighbors.
+//
+// TRUST BOUNDARY (F002): this is the CLAMP on both admin-authored exceptions to
+// the private-IP guard — liftInternalHost and trustsExactLiteralIP — and on the
+// gateway's own vet (vetTrustedHost). Its inputs are captured best-effort at
+// startup, and when that capture FAILED an empty clamp silently answered "no"
+// for every address, which makes the exceptions fire MORE widely rather than
+// less. On Kubernetes the pod's own interface does not carry the wardynd
+// ClusterIP, so there the control-plane answers are the ONLY thing standing
+// between a declared internal host (or a redirect literal) and the control
+// plane. exclusionUnknown therefore answers "yes" for every address — refusing
+// every lift and every trust — which is the fail-closed direction NewServer's
+// comment always claimed and the code did not have.
 func (p *Proxy) onOwnSubnetOrControlPlane(ip net.IP) bool {
-	if p.controlPlaneIP != nil && p.controlPlaneIP.Equal(ip) {
+	if p.exclusionUnknown {
 		return true
+	}
+	for _, cp := range p.controlPlaneIPs {
+		if cp.Equal(ip) {
+			return true
+		}
 	}
 	for _, n := range p.localSubnets {
 		if n.Contains(ip) {

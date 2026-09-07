@@ -171,5 +171,16 @@ func (p *Proxy) patToken(ctx context.Context, g PATGrant) (token, username strin
 		return "", "", fmt.Errorf("mint status %d: %s", status, strings.TrimSpace(string(body)))
 	}
 	username = cmp.Or(user, g.Username, "pat")
+	// Register the minted PAT with the process-global mask registry before it
+	// can reach any output stream — the raw token AND the base64(username +
+	// ":" + tok) that SetBasicAuth (:142) puts on the wire.
+	//
+	// TRUST BOUNDARY (F155, same root cause as the git lane's): procRegistry is
+	// what maskDecisionBytes consults for every sandbox-facing error body
+	// (Proxy.httpError) and every decision-log line, and the mask is exact-bytes
+	// per RENDERING. This lane registered NOTHING at all, so a transport error
+	// quoting the outbound request would have carried the operator's PAT out
+	// verbatim. registerBasicAuthCredential (inject.go) is the one definition.
+	registerBasicAuthCredential(username, tok)
 	return tok, username, nil
 }

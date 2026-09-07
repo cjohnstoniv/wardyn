@@ -80,12 +80,12 @@ func TestF7_LiteralIPTrust_RefusesOwnSubnetAndControlPlane(t *testing.T) {
 	neighbour := "172.18.0.5" // e.g. postgres on wardyn-internal
 
 	p := newProxy(Options{
-		RunID:          uuid.New(),
-		Policy:         CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{neighbour, controlPlane.String()}}),
-		Sink:           &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
-		Resolver:       publicResolver{},
-		LocalSubnets:   []*net.IPNet{ownSubnet},
-		ControlPlaneIP: controlPlane,
+		RunID:           uuid.New(),
+		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{neighbour, controlPlane.String()}}),
+		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Resolver:        publicResolver{},
+		LocalSubnets:    []*net.IPNet{ownSubnet},
+		ControlPlaneIPs: []net.IP{controlPlane},
 	})
 
 	for _, host := range []string{neighbour, controlPlane.String()} {
