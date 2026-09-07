@@ -78,15 +78,26 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 		// An operator who pointed WARDYN_PG_MIGRATE_DSN at the same (or another
 		// owner/superuser) role gets no protection — logging "protected"
 		// unconditionally would be an overclaim (invariant 5).
-		protected, perr := db.AuditDDLProtected(connectCtx, pool)
+		// THE ROUTES, not a bool, because the remedy differs per route. This
+		// warning used to assert the cause — "still owns audit_events or is a
+		// superuser" — and prescribe "connect wardynd as a distinct non-owner
+		// role", which is the wrong remedy for two of the four routes the check
+		// counts and actively misleading for the fourth: a role that owns
+		// nothing and is nobody's superuser, but was GRANTed SET on the
+		// session_replication_role parameter, can silence every simply-enabled
+		// trigger with no DDL at all and was handed a warning naming two things
+		// it is not. db.AuditDDLBypassRoutes answers the same question the bool
+		// did and says WHICH.
+		routes, perr := db.AuditDDLBypassRoutes(connectCtx, pool)
 		if perr != nil {
 			pool.Close()
 			return nil, fmt.Errorf("verify audit ddl protection: %w", perr)
 		}
-		if protected {
+		if len(routes) == 0 {
 			slog.InfoContext(rootCtx, "wardynd: migrations applied via WARDYN_PG_MIGRATE_DSN (owner/migrator role); app role is a verified non-owner of audit_events — the append-only guard is DDL-protected")
 		} else {
-			slog.WarnContext(rootCtx, "wardynd: WARDYN_PG_MIGRATE_DSN is set but the app role (WARDYN_PG_DSN) still owns audit_events or is a superuser — DDL protection is NOT in effect; connect wardynd as a distinct non-owner role that has only INSERT/SELECT on audit_events")
+			slog.WarnContext(rootCtx, "wardynd: WARDYN_PG_MIGRATE_DSN is set but the app role (WARDYN_PG_DSN) can still reach past audit_events' append-only guard by the route(s) named here — DDL protection is NOT in effect; connect wardynd as a distinct role that holds only INSERT/SELECT on audit_events and none of these",
+				slog.Any("bypass_routes", routes))
 		}
 		return pool, nil
 	}

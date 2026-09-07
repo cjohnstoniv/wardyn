@@ -233,6 +233,11 @@ func TryAdvisoryLock(ctx context.Context, pool *pgxpool.Pool, key int64) (releas
 // role setup). Fails safe: any ambiguity (missing table, error) reports NOT
 // protected.
 //
+// THE LEGS THEMSELVES LIVE IN AuditDDLBypassRoutes, which answers the same
+// question and NAMES the routes that fired so the boot log can tell an operator
+// which one to close. This function is that answer as a bool, and there is no
+// second query anywhere that could disagree with it.
+//
 // THE TRIGGER PRIVILEGE IS PART OF THE CLAIM, and it is the least obvious third
 // of it. A role that is neither owner nor superuser but holds
 // GRANT TRIGGER ON audit_events cannot drop the shipped triggers — it can do
@@ -274,23 +279,81 @@ func TryAdvisoryLock(ctx context.Context, pool *pgxpool.Pool, key int64) (releas
 // of role names that rots with every Postgres release: once the database host is
 // compromised, no claim Wardyn makes about that database survives anyway.
 func AuditDDLProtected(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
-	var canBypass bool
+	routes, err := AuditDDLBypassRoutes(ctx, pool)
+	if err != nil {
+		return false, err
+	}
+	return len(routes) == 0, nil
+}
+
+// The four routes, in the words the boot log hands an operator. Each one names
+// the capability AND what it buys, because the remedy differs per route: the
+// first two are fixed by connecting as a different role, the third by a REVOKE,
+// and the fourth by a REVOKE on a PARAMETER that no amount of table-privilege
+// tidying touches.
+const (
+	auditBypassSuperuser = "membership in a superuser role"
+	auditBypassOwner     = "membership in audit_events' owner role"
+	auditBypassTrigger   = "the TRIGGER privilege on audit_events (lets the role add its own BEFORE INSERT trigger and rewrite the row)"
+	auditBypassReplica   = "the SET privilege on the session_replication_role parameter, held directly or through a role this one can SET ROLE into " +
+		"(silences every simply-enabled trigger for the session, with no DDL at all)"
+	auditBypassNoTable = "audit_events was not found, so no protection can be claimed for it"
+)
+
+// AuditDDLBypassRoutes names EVERY route by which pool's role can reach past
+// audit_events' append-only guard. An empty slice means protected, and is what
+// AuditDDLProtected is defined as.
+//
+// IT EXISTS SO THE BOOT LOG CAN NAME THE ROUTE. A bare bool made the daemon
+// guess: its WARN told the operator the app role "still owns audit_events or is
+// a superuser" and prescribed "connect wardynd as a distinct non-owner role",
+// which is the wrong remedy for two of the four routes and actively misleading
+// for the fourth — a role that owns nothing and is nobody's superuser, but holds
+// GRANT SET ON PARAMETER session_replication_role, gets a warning naming two
+// things it is not. Reporting the route is also the operator-facing half of the
+// decision taken on this finding: report the replication-role route rather than
+// arming ENABLE ALWAYS.
+//
+// ONE PREDICATE, so the report and the verdict cannot disagree: the bool is
+// len(routes) == 0 and there is no second query anywhere that answers it.
+//
+// FAILS SAFE, exactly as the bool did: a missing table, or any error, is a
+// bypass rather than a protection claim.
+func AuditDDLBypassRoutes(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
+	var found, superuser, owner, trigger bool
 	err := pool.QueryRow(ctx, `
-		SELECT COALESCE(
-			bool_or(EXISTS (SELECT 1 FROM pg_roles s
-			                 WHERE s.rolsuper
-			                   AND pg_has_role(current_user, s.oid, 'MEMBER'))
-			        OR pg_has_role(current_user, c.relowner, 'MEMBER')
-			        OR has_table_privilege(current_user, c.oid, 'TRIGGER')),
-			true)
+		SELECT count(*) > 0,
+		       COALESCE(bool_or(EXISTS (SELECT 1 FROM pg_roles s
+		                                 WHERE s.rolsuper
+		                                   AND pg_has_role(current_user, s.oid, 'MEMBER'))), false),
+		       COALESCE(bool_or(pg_has_role(current_user, c.relowner, 'MEMBER')), false),
+		       COALESCE(bool_or(has_table_privilege(current_user, c.oid, 'TRIGGER')), false)
 		FROM pg_class c
 		WHERE c.relname = 'audit_events' AND c.relkind = 'r'`,
-	).Scan(&canBypass)
+	).Scan(&found, &superuser, &owner, &trigger)
 	if err != nil {
-		return false, fmt.Errorf("db: check audit ddl protection: %w", err)
+		return nil, fmt.Errorf("db: check audit ddl protection: %w", err)
 	}
-	if canBypass {
-		return false, nil // already answered; the fourth leg cannot make it more false
+	if !found {
+		return []string{auditBypassNoTable}, nil
+	}
+	var routes []string
+	if superuser {
+		routes = append(routes, auditBypassSuperuser)
+	}
+	if owner {
+		routes = append(routes, auditBypassOwner)
+	}
+	if trigger {
+		routes = append(routes, auditBypassTrigger)
+	}
+	if len(routes) > 0 {
+		// SHORT-CIRCUITED, and deliberately: the verdict is already decided, and
+		// the two extra round trips below are the only place this function can
+		// fail on a server that answered the first query — a boot that used to
+		// reach a clean refusal must not start failing fatally on the version
+		// probe instead. The routes reported are the ones that fired.
+		return routes, nil
 	}
 	// THE FOURTH LEG, AND IT IS NOT A DDL ONE. The three above ask who can DROP
 	// or DISABLE a trigger. `SET session_replication_role = 'replica'` needs no
@@ -319,10 +382,10 @@ func AuditDDLProtected(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
 	var granular bool
 	if err := pool.QueryRow(ctx,
 		`SELECT current_setting('server_version_num')::int >= 150000`).Scan(&granular); err != nil {
-		return false, fmt.Errorf("db: read server version for the session_replication_role check: %w", err)
+		return nil, fmt.Errorf("db: read server version for the session_replication_role check: %w", err)
 	}
 	if !granular {
-		return true, nil
+		return nil, nil
 	}
 	//
 	// AND IT FOLLOWS ROLE MEMBERSHIP, exactly as the three legs above do. Asking
@@ -354,9 +417,12 @@ func AuditDDLProtected(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
 			 WHERE pg_has_role(current_user, r.oid, 'MEMBER')
 			   AND has_parameter_privilege(r.oid, 'session_replication_role', 'SET'))`,
 	).Scan(&canSilenceTriggers); err != nil {
-		return false, fmt.Errorf("db: check session_replication_role privilege: %w", err)
+		return nil, fmt.Errorf("db: check session_replication_role privilege: %w", err)
 	}
-	return !canSilenceTriggers, nil
+	if canSilenceTriggers {
+		return []string{auditBypassReplica}, nil
+	}
+	return nil, nil
 }
 
 // Connect opens a pgxpool to dsn and performs a lightweight liveness check.
