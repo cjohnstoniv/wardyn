@@ -632,6 +632,19 @@ func (s *Server) workspaceReadTierFor(r *http.Request, ws types.Workspace) works
 //     console renders on the launch card, not a credential ref; the credential
 //     it resolves is the integration row's secret_name, which the integrations
 //     projection (setup_integrations.go) withholds separately.
+//   - profile.git_remotes stays, for the same reason Sources[].Source does for a
+//     REPO workspace: a repo coordinate is how a member identifies what they are
+//     launching against, and it is not one of the four classes R1 declared
+//     member-forbidden. Only the local_dir HOST path is.
+//
+// THE SCANNED PROFILE IS PROJECTED TOO (redactProfileForRead). It travels in
+// this same document and republishes every one of these axes under its own keys
+// — required_secrets is the stored secret NAME the requirements map was just
+// stripped of, secret_files_present and leak_findings[].path are the host path
+// Sources[].Path was just blanked for, and egress_domains/suggested_egress are
+// the internal hosts the egress: requirement keys were just dropped for.
+// Projecting the wrapper and shipping the scan result intact would have made the
+// whole redaction cosmetic.
 func redactWorkspaceForRead(ws types.Workspace, tier workspaceReadTier) types.Workspace {
 	if tier == workspaceReadFull {
 		return ws
@@ -660,7 +673,54 @@ func redactWorkspaceForRead(ws types.Workspace, tier workspaceReadTier) types.Wo
 	}
 	ws.Requirements = redactRequirementsForRead(ws.Requirements, tier)
 	ws.EffectiveRequirements = redactRequirementsForRead(ws.EffectiveRequirements, tier)
+	ws.Profile = redactProfileForRead(ws.Profile, tier)
 	return ws
+}
+
+// profileHostAxisKeys are the scanned-profile keys carrying the HOST axis: a
+// stored secret NAME, and host paths. Gone for BOTH non-full tiers, exactly like
+// the `secret:` and `write:` requirement keys they duplicate.
+var profileHostAxisKeys = []string{"required_secrets", "secret_files_present", "leak_findings"}
+
+// profileEgressAxisKeys are the scanned-profile keys carrying INTERNAL EGRESS
+// HOSTS. Gone at the member tier and kept at the security tier, exactly like the
+// `egress:` requirement keys they duplicate — the security admin decides this
+// workspace's egress and cannot decide blind.
+var profileEgressAxisKeys = []string{"egress_domains", "suggested_egress"}
+
+// redactProfileForRead projects the scanned profile (internal/workspacescan's
+// WorkspaceProfile, opaque to this package) down to its reader's tier.
+//
+// It deletes KEYS from the decoded object rather than round-tripping through the
+// typed struct: the profile is a versioned scan result this package deliberately
+// does not model, and re-marshalling a typed copy would silently drop whatever a
+// newer scanner added — turning a redaction into a data-loss bug the moment the
+// two definitions drift.
+//
+// A profile that will not decode FAILS CLOSED (withheld entirely). A blob whose
+// fields cannot be inspected cannot be certified free of the axes above, and
+// shipping it unread is the exact posture this function exists to end.
+func redactProfileForRead(raw json.RawMessage, tier workspaceReadTier) json.RawMessage {
+	if tier == workspaceReadFull || len(raw) == 0 {
+		return raw
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil
+	}
+	for _, k := range profileHostAxisKeys {
+		delete(doc, k)
+	}
+	if tier == workspaceReadMember {
+		for _, k := range profileEgressAxisKeys {
+			delete(doc, k)
+		}
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return nil
+	}
+	return out
 }
 
 // redactRequirementsForRead drops the requirement keys whose KEY is itself the

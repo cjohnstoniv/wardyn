@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -41,7 +42,23 @@ const (
 	r3TopologyImage    = "registry.corp.internal/base:1"
 	r3TopologySecret   = "acme-prod-db-password"
 	r3TopologyEgress   = "artifacts.corp.internal"
+	// The SCANNED PROFILE republishes the same three axes under its own keys —
+	// the residue F245's first fix left: redactWorkspaceForRead projected
+	// Sources/BaseImage/Requirements and never touched Workspace.Profile, which
+	// travels in the SAME response.
+	r3TopologyLeakPath  = "/srv/nfs-prod/payments/config/prod.env"
+	r3TopologySuggested = "candidate.corp.internal"
 )
+
+// r3TopologyProfile is a scanned internal/workspacescan profile carrying one
+// datum of each member-forbidden class: a stored secret NAME, host paths, and
+// internal egress hosts.
+const r3TopologyProfile = `{"languages":["go"],"confidence":"high","source":"deterministic",` +
+	`"egress_domains":["` + r3TopologyEgress + `"],` +
+	`"suggested_egress":["` + r3TopologySuggested + `"],` +
+	`"required_secrets":[{"name":"` + r3TopologySecret + `"}],` +
+	`"secret_files_present":["` + r3TopologyLeakPath + `"],` +
+	`"leak_findings":[{"path":"` + r3TopologyLeakPath + `","kind":"aws_key","line":3}]}`
 
 func newTopologyWorkspaceServer(t *testing.T, ownedBy string) (*Server, *r3TopologyStore) {
 	t.Helper()
@@ -59,6 +76,7 @@ func newTopologyWorkspaceServer(t *testing.T, ownedBy string) (*Server, *r3Topol
 			"write:" + r3TopologyHostPath:     {},
 			"integration:git_host:github.com": {},
 		},
+		Profile: json.RawMessage(r3TopologyProfile),
 	}}
 	st.ws.EffectiveRequirements = st.ws.Requirements
 	h := newHarness(t)
