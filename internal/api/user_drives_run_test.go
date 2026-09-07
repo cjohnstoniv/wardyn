@@ -1619,8 +1619,9 @@ func TestDriveRefusalLeavesAnOperatorVisibleRecord(t *testing.T) {
 // connection and a pool slot for as long as it stays unreachable.
 func TestDriveShareProbeIsBounded(t *testing.T) {
 	// ANSWERS: the probe returns the check's own error, unchanged.
+	srv := New(Config{Store: &driveStore{}, RunnerTarget: "docker"})
 	sentinel := errors.New("the check's own answer")
-	if err, ok := driveShareProbe(context.Background(), func() error { return sentinel }); !ok || !errors.Is(err, sentinel) {
+	if err, ok := srv.driveShareProbe(context.Background(), t.Name()+"/answers", func() error { return sentinel }); !ok || !errors.Is(err, sentinel) {
 		t.Fatalf("probe = (%v, %v), want the check's error and ok", err, ok)
 	}
 
@@ -1632,7 +1633,7 @@ func TestDriveShareProbeIsBounded(t *testing.T) {
 	blocked := make(chan struct{})
 	t.Cleanup(func() { close(blocked) })
 	start := time.Now()
-	err, ok := driveShareProbe(ctx, func() error { <-blocked; return nil })
+	err, ok := srv.driveShareProbe(ctx, t.Name()+"/blocked", func() error { <-blocked; return nil })
 	if ok {
 		t.Fatal("probe reported an answer from a check that never returned")
 	}
