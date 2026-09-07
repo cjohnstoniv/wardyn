@@ -362,7 +362,18 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 	}
 	warnUnrequestedGroupsScope(provider, oa.Scopes, cfg)
 
-	verifier := provider.Verifier(&gooidc.Config{ClientID: cfg.ClientID})
+	// The ID-token key set is fetched through a JWKS-TOLERANT client, so one
+	// entry the JOSE stack cannot parse skips instead of failing the whole
+	// document and locking every human out of the console — see
+	// tolerantJWKSTransport for why that belongs here and not in the go-jose
+	// version pin. VerifierContext rather than Verifier is only what lets the
+	// key set have its own HTTP client: everything else — the issuer to check,
+	// the discovery document's id_token_signing_alg_values_supported allowlist
+	// — is exactly what provider.Verifier would have built, and the background
+	// context is the one Verifier uses too (the key set outlives this call, so
+	// it must never capture a request-scoped context).
+	keySetCtx := gooidc.ClientContext(context.Background(), newTolerantJWKSClient(httpClient))
+	verifier := provider.VerifierContext(keySetCtx, &gooidc.Config{ClientID: cfg.ClientID})
 
 	return &Authenticator{
 		cfg:        cfg,

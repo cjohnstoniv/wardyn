@@ -96,3 +96,18 @@ func MergeRoleMapsForTest(chart map[string]string, legacyAdminEmails []string, r
 func EmailDomainAllowedForTest(email string, allowed []string) bool {
 	return emailDomainAllowed(email, allowed)
 }
+
+// NewTolerantJWKSClientForTest exposes the HTTP client the ID-token key set is
+// fetched through, so the per-key JWKS tolerance can be driven against a real
+// gooidc.RemoteKeySet without standing up a whole Authenticator.
+func NewTolerantJWKSClientForTest(base *http.Client) *http.Client {
+	return newTolerantJWKSClient(base)
+}
+
+// FilterJWKSForTest exposes the document rewrite itself, so the shapes that
+// must pass through UNTOUCHED (not JSON, no "keys" member, nothing survived)
+// pin as a table rather than through an HTTP round trip.
+func FilterJWKSForTest(body []byte) (out []byte, droppedCount int) {
+	out, dropped := filterJWKS(body)
+	return out, len(dropped)
+}
