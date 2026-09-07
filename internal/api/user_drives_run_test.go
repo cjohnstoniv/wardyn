@@ -769,9 +769,37 @@ func TestSeedRequestDriveTruncatedGroupsIs403(t *testing.T) {
 			if !strings.Contains(w.Body.String(), "groups_snapshot_stale") {
 				t.Errorf("body = %s, want the stale-snapshot refusal naming its remedy", w.Body.String())
 			}
-			// Not an authz.denied: this is "we cannot tell", not "you may not".
-			if len(rec.events) != 0 {
-				t.Errorf("audit = %v, want none", driveAuditActions(rec))
+			// IT IS AN authz.denied, and it did not used to be. The comment
+			// here read "this is 'we cannot tell', not 'you may not'" and
+			// asserted an empty audit stream — while the GOVERNANCE resolver's
+			// mirror-image branch, for the same member on the same request,
+			// recorded the refusal (ceilingWithUnusableGroups, R1 F227). One
+			// tree cannot hold both readings of one condition, and R1 F317
+			// settled it the way the docs already had: OPERATIONS.md's "Every
+			// denial that isn't a 404" and AUDIT-ACTIONS.md:208's closed enum
+			// both list groups_snapshot_stale as an authz.denied reason. A
+			// member who cannot launch is a denial whichever resolver noticed
+			// first; "we cannot tell" is what the REASON says, not a licence to
+			// say nothing.
+			//
+			// Asserted exactly rather than loosened to "at least one": one
+			// refused launch is one row, at the drive seam's own target, and a
+			// second row would mean the resolver is being asked twice.
+			if len(rec.events) != 1 {
+				t.Fatalf("audit = %v, want exactly one authz.denied — the denial stream is the operator's only "+
+					"view of who cannot use the product", driveAuditActions(rec))
+			}
+			ev := rec.events[0]
+			if ev.Action != "authz.denied" || ev.Target != "runs.drive" {
+				t.Errorf("audit row = %s/%s, want authz.denied/runs.drive", ev.Action, ev.Target)
+			}
+			var data map[string]any
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				t.Fatal(err)
+			}
+			if data["reason"] != "groups_snapshot_stale" {
+				t.Errorf("reason = %v, want groups_snapshot_stale — the reason is the whole vocabulary, so a "+
+					"row outside the closed enum is as unreadable as no row", data["reason"])
 			}
 		})
 	}

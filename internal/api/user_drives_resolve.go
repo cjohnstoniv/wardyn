@@ -195,12 +195,78 @@ func (s *Server) driveWithUnusableGroups(ctx context.Context, users []string) (*
 		return nil, fmt.Errorf("api: resolve user drive: %w", herr)
 	}
 	if hasGroupTier {
+		// AUDITED, at the SECOND site that decides this refusal (R1 F317).
+		//
+		// This branch is the mirror image of ceilingWithUnusableGroups' own, and
+		// it was the silent one: docs/AUDIT-ACTIONS.md and OPERATIONS.md both
+		// described groups_snapshot_stale as emitted "at the ONE site that
+		// decides it", naming the governance resolver — while the DRIVES
+		// resolver raised the identical 403 from here and recorded nothing. On
+		// the deployment shape that has group-tier DRIVE grants and no
+		// group-tier governance assignment, that made the whole denial stream
+		// empty: executed, 0 authz.denied rows out of 0 events for a member the
+		// launch door refuses 403.
+		//
+		// HERE rather than at writeDriveError, for the reason the governance
+		// twin gives: writeDriveError is a free function with no server and no
+		// context, and auditing at the write sites would mean one emit per seam.
+		// This is the only place the drive refusal is DECIDED.
+		//
+		// runs.drive IS THE TARGET, matching denyMemberDrive — the other refusal
+		// this seam writes — rather than governance.ceiling. The two rows say
+		// different things: one is "your profile shuts the drive door", the
+		// other "nobody can tell whether it is shut", and an operator filtering
+		// by target is asking about the drive either way.
+		//
+		// Guarded on the SINK for the reason the twin states: auditEvent is
+		// evaluated as recordAudit's ARGUMENT, so a Server assembled without
+		// New() would still build the row and stamp it from a nil cfg.Now.
+		if s.cfg.Audit != nil && !isDisplayRead(ctx) {
+			s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, oidcHumanFromContext(ctx),
+				"authz.denied", "runs.drive", "denied",
+				mustJSON(map[string]any{"reason": "groups_snapshot_stale"})))
+		}
 		return nil, errGroupsSnapshotStale
 	}
 	if err != nil {
 		return nil, nil // ErrNotFound, and no group tier could have been hiding one
 	}
 	return newResolvedDrive(d, g, tier, users)
+}
+
+// displayReadCtxKey marks a resolve made to DISPLAY a state, not to enforce one.
+//
+// It exists because the two groups_snapshot_stale deciding sites write an
+// authz.denied row, and GET /me reaches BOTH of them on every console poll. A
+// member with an unanswerable group snapshot therefore produced denial rows on a
+// TIMER — two per poll on a deployment that assigns governance by group and
+// allocates drives by group — for a member who never asked for a run. Executed
+// before the mark existed: three /me polls, three rows.
+//
+// That is the same argument resolveMeUserDrive already makes one layer up about
+// the metric and the WARN ("THE DECISION, NOT THE REFUSAL: a /me poll is a
+// display read on a timer, so running the writer here would inflate
+// wardyn_user_drive_refused_total and fill the log with WARNs for a member who
+// never asked for a run"), and an audit row is a STRONGER artefact than a WARN:
+// it is the operator's count of who was refused, and page views are not
+// refusals.
+//
+// SET BY THE DISPLAY CALLERS, never by a middleware, so the default is
+// "enforcing" and a new enforcement seam cannot silently inherit the
+// suppression: seedRequestDrive, the launch and preflight paths and every other
+// caller reach the deciding sites unmarked and keep recording. The DECISION is
+// unchanged either way — /me still refuses to answer, and still reports
+// groups_snapshot_stale on the wire; what the mark removes is only the
+// operator-facing ROW for a request nobody was refused by.
+type displayReadCtxKey struct{}
+
+func withDisplayRead(ctx context.Context) context.Context {
+	return context.WithValue(ctx, displayReadCtxKey{}, true)
+}
+
+func isDisplayRead(ctx context.Context) bool {
+	v, _ := ctx.Value(displayReadCtxKey{}).(bool)
+	return v
 }
 
 // resolveUserDriveFor is the store read plus the absent-row doctrine, shared by

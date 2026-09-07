@@ -880,7 +880,14 @@ type meUserDrive struct {
 // the answer, on the wire, so a client can tell them apart: the same argument
 // the door already won as its own sibling key.
 func (s *Server) resolveMeUserDrive(r *http.Request) (*meUserDrive, string) {
-	resolved, err := s.resolveUserDrive(r.Context())
+	// A DISPLAY READ (withDisplayRead, user_drives_resolve.go). The same
+	// argument the paragraph above makes about the metric and the WARN, applied
+	// to the audit row the stale-snapshot refusal now writes: a poll on a timer
+	// is not a denial, and an operator counting denials must not be counting
+	// page views. The refusal itself is unchanged — this still answers
+	// groups_snapshot_stale on the wire.
+	ctx := withDisplayRead(r.Context())
+	resolved, err := s.resolveUserDrive(ctx)
 	if err != nil {
 		return nil, driveUnavailableReason(err)
 	}
@@ -911,7 +918,7 @@ func (s *Server) resolveMeUserDrive(r *http.Request) (*meUserDrive, string) {
 	// (the runner could not be asked) is not about the drive at all, so it takes
 	// `unavailable`, matching writeDriveError's own status mapping.
 	if !resolved.Paused {
-		if f := s.driveBindFailureHere(r.Context(), *resolved); f != nil {
+		if f := s.driveBindFailureHere(ctx, *resolved); f != nil {
 			if f.status == http.StatusServiceUnavailable {
 				return nil, driveUnavailableUnknown
 			}
@@ -957,7 +964,11 @@ func (s *Server) userDriveDeniedByProfile(r *http.Request) (name string, unresol
 	if s.isOperator(r.Context()) {
 		return "", false
 	}
-	ceiling, err := s.effectiveCeiling(r.Context())
+	// A DISPLAY READ, for the reason resolveMeUserDrive states: this is the
+	// SECOND deciding site /me reaches, so without the mark here a poll still
+	// wrote one authz.denied row even after the drive seam stopped.
+	ctx := withDisplayRead(r.Context())
+	ceiling, err := s.effectiveCeiling(ctx)
 	if err != nil {
 		// UNKNOWN IS NOT OPEN. "" on this key is an affirmative promise that no
 		// profile shuts the door, and serving it for a ceiling that could not be
@@ -985,7 +996,7 @@ func (s *Server) userDriveDeniedByProfile(r *http.Request) (name string, unresol
 	// let the reason key carry it. A NAMED deny is untouched: it keeps shipping
 	// the profile name beside the allocation, which is the four-state doctrine
 	// working as designed (an allocation and a door are different facts).
-	name, shut := s.driveDoorProfile(r.Context(), ceiling)
+	name, shut := s.driveDoorProfile(ctx, ceiling)
 	if shut && name == "" {
 		return "", true
 	}
