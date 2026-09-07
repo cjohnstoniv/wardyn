@@ -6,6 +6,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -84,4 +85,83 @@ func TestLocalModeHonorsOperatorAndDevHeader(t *testing.T) {
 	if typ, name := actorFromRequest(r2); typ != types.ActorHuman || name != "dev@example.com" {
 		t.Fatalf("LocalMode dev override = (%q,%q), want (human, dev@example.com)", typ, name)
 	}
+}
+
+// TestLocalPrincipalOverrideIsBoundedAndClean is F339.
+//
+// In LOCAL MODE the X-Wardyn-Principal header IS honoured — the machine
+// authenticates nobody, so the caller saying who they are is the only
+// attribution there is. It was taken verbatim: no trim, no length cap, no
+// control-character guard, while every other caller-supplied string that
+// reaches a row in this package gets exactly that pair (access.go's
+// canonicalRoleMapValue, apitokens.go's token name). The value becomes the
+// ACTOR of append-only audit rows, so a 4096-byte header wrote a 4096-byte
+// actor, and \n / \x00 / JSON metacharacters went into the one field a later
+// investigation reads first, byte for byte.
+//
+// A rejected header falls back to the configured local operator rather than
+// failing the request: this is attribution, not authorization, and nothing
+// about the caller's reach turns on it.
+func TestLocalPrincipalOverrideIsBoundedAndClean(t *testing.T) {
+	const operator = "local:alice"
+	local := func(t *testing.T, header string) (types.ActorType, string) {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/approvals/x/approve", nil)
+		if header != "" {
+			r.Header.Set("X-Wardyn-Principal", header)
+		}
+		r = r.WithContext(withLocalPrincipal(r.Context(), operator))
+		return actorFromRequest(r)
+	}
+
+	t.Run("an ordinary override is still honoured", func(t *testing.T) {
+		typ, name := local(t, "alice@example.com")
+		if typ != types.ActorHuman || name != "alice@example.com" {
+			t.Errorf("actor = %s/%q, want human/alice@example.com — the dev override is the point of local mode", typ, name)
+		}
+	})
+
+	t.Run("it is trimmed", func(t *testing.T) {
+		if _, name := local(t, "  alice@example.com \t"); name != "alice@example.com" {
+			t.Errorf("actor name = %q, want the trimmed value — a padded header must not write a padded actor", name)
+		}
+	})
+
+	for _, tc := range []struct {
+		name, header string
+	}{
+		{"a control character", "alice@example.com\n\"actor\":\"admin\""},
+		{"a NUL", "alice@example.com\x00"},
+		{"a carriage return", "alice\r\nX-Forged: 1"},
+		{"over the field cap", strings.Repeat("a", maxCapabilityGrantFieldLen+1)},
+		{"whitespace only", "   \t "},
+	} {
+		t.Run(tc.name+" falls back to the configured operator", func(t *testing.T) {
+			typ, name := local(t, tc.header)
+			if name != operator {
+				t.Errorf("actor name = %q (len %d), want %q — a header this package would refuse from any other "+
+					"caller must not become the actor of an append-only row", name, len(name), operator)
+			}
+			if typ != types.ActorHuman {
+				t.Errorf("actor_type = %q, want %q — falling back changes WHO, never WHAT KIND", typ, types.ActorHuman)
+			}
+		})
+	}
+
+	t.Run("at the cap exactly is accepted", func(t *testing.T) {
+		at := strings.Repeat("a", maxCapabilityGrantFieldLen)
+		if _, name := local(t, at); name != at {
+			t.Errorf("a header of exactly the cap was refused — the boundary belongs on the inside")
+		}
+	})
+
+	// FIX #10 is untouched by any of this: outside local mode the header is
+	// ignored however clean it is.
+	t.Run("a clean header still forges nothing off local mode", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/approvals/x/approve", nil)
+		r.Header.Set("X-Wardyn-Principal", "alice@example.com")
+		if typ, name := actorFromRequest(r); typ != types.ActorSystem || name != adminTokenPrincipal {
+			t.Errorf("actor = %s/%q, want %s/%q (FIX #10)", typ, name, types.ActorSystem, adminTokenPrincipal)
+		}
+	})
 }
