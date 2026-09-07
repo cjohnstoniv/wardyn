@@ -33,7 +33,7 @@
 import * as React from "react";
 import { Loader2, Users } from "lucide-react";
 import { toast } from "sonner";
-import { HttpError } from "../../../lib/api/core";
+import { HttpError, LIST_LIMIT } from "../../../lib/api/core";
 import { previewClaims } from "../../../lib/api/governance";
 import {
   drives as api,
@@ -65,7 +65,7 @@ import { DirectoryCombobox } from "../../wardyn/directory-combobox";
 import { Field, Switch } from "../../wardyn/form-primitives";
 import { useOperator } from "../../wardyn/operator-context";
 import { Chip } from "../../wardyn/primitives";
-import { EmptyState } from "../../wardyn/states";
+import { EmptyState, TruncatedNote } from "../../wardyn/states";
 import { SUBJECTS, SUBJECT_LABEL, Segmented, subjectText } from "../permissions";
 import { Note, enforcementGloss, modeText, modeTone, question, sizeText } from "./display";
 
@@ -88,11 +88,25 @@ const WRITABLE_CHOICES: { value: WritableChoice; label: string }[] = [
 export function AllocationsBlock({
   drives,
   grants,
+  grantTotal = 0,
   collapsed,
   onChanged,
 }: {
   drives: UserDriveListItem[];
   grants: UserDriveGrant[];
+  /** GET /drives's `grant_total`: how many allocations EXIST, against the page
+   *  `grants` carries (R4/F092). The server bounds this read at maxListLimit
+   *  because user_drive_grants holds one row per SUBJECT — its size is the
+   *  deployment's HEADCOUNT — and ships the total beside the page precisely so
+   *  a client can tell "this is all of them" from "this is the first page"
+   *  (internal/api/user_drives.go:99-104). Without it this table showed one
+   *  bounded window as if it were every allocation, and the search below it —
+   *  which filters client-side over that window — could answer "no matches" for
+   *  a person who holds a drive.
+   *
+   *  Defaults to 0, so a standalone render and a pre-0.7 daemon that never sends
+   *  the key show no note rather than an invented one. */
+  grantTotal?: number;
   /** The drive editor is open: the add form collapses for exactly that span. */
   collapsed: boolean;
   onChanged: () => void;
@@ -129,6 +143,16 @@ export function AllocationsBlock({
           <p className="mt-1 text-body text-muted-foreground">{DRIVES.ALLOC_LEAD}</p>
           <Note>{DRIVES.PRECEDENCE}</Note>
         </div>
+        {/* Asked of the SERVER'S OWN total rather than TruncatedNote's
+            count >= cap stand-in (states.tsx), which exists for the lists whose
+            total the client cannot see. The sentence is the shared one and says
+            the page it sent: parseListPage defaults THIS route to maxListLimit
+            (user_drives.go), so the window is the first LIST_LIMIT rows. */}
+        {grantTotal > grants.length && (
+          <div className="mt-4 px-6">
+            <TruncatedNote count={LIST_LIMIT} cap={LIST_LIMIT} />
+          </div>
+        )}
         <div className="mt-4">
           {grants.length === 0 ? (
             <EmptyState icon={Users} title={DRIVES.EMPTY_ALLOC_TITLE} description={DRIVES.EMPTY_ALLOC_BODY} />

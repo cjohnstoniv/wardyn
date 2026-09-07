@@ -334,6 +334,7 @@ export function DrivesScreen() {
             <AllocationsBlock
               drives={snap.drives}
               grants={snap.grants}
+              grantTotal={snap.grant_total ?? 0}
               collapsed={editorOpen}
               onChanged={load}
             />

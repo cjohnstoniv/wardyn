@@ -111,6 +111,12 @@ export const GOVERNANCE = {
   // Inline pluralisation, the shape PERM.ENFORCE_ON_BODY already uses — not a
   // second pluralisation helper (§7.2).
   ASSIGNED_COUNT: (n: number) => `${n} subject${n === 1 ? "" : "s"}`,
+  // ADDITION to §7.2 (0.7 R4/F032): the Limits cell tested only the three
+  // BOOLEAN doors, so a profile whose one limit is a run quota read "None" —
+  // while denyMemberRunQuota (internal/api/runs_create_validate.go) was
+  // refusing that member's fourth run with a 422. Same inline pluralisation as
+  // ASSIGNED_COUNT; the wording tracks the server's own "too many runs at once".
+  LIMIT_QUOTA_LABEL: (n: number) => `Max ${n} run${n === 1 ? "" : "s"} at once`,
   LIMITS_NONE: "None",
   EMPTY_TITLE: "No profiles yet",
   EMPTY_BODY: "Everyone runs under the deployment ceiling from WARDYN_DEFAULT_POLICY. Add a profile to give a group its own.",
@@ -317,8 +323,10 @@ export const DIRECTORY = {
   // RE-EXPORTED, never retyped: §7.9 freezes this as the picker option, the
   // table chip AND the mapped-role label — one string for all three — and puts
   // its home next to PEOPLE.ROLE_ADMIN / PEOPLE.ROLE_MEMBER, which is why it
-  // is title case and never interpolated into a sentence. Two homes for one
-  // frozen label is how they drift (people-access-copy.ts:39-46 says so).
+  // is title case AS THE CHIP; a sentence takes its lowercase
+  // (people-access-prompt.md §7.2, access-panel.tsx's roleLabelInSentence).
+  // Two homes for one frozen label is how they drift
+  // (people-access-copy.ts:41-50 says so).
   ROLE_SECURITY_ADMIN: PEOPLE.ROLE_SECURITY_ADMIN,
   SUGGEST_ROW: (displayName: string, detail: string) => `${displayName} — ${detail}`,
   GROUP_PICKED_CHIP: (displayName: string) => `Group · ${displayName}`,

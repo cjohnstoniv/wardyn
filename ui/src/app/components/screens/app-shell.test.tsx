@@ -10,7 +10,14 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { AppShell, MobileNav, TopBar, useFocusMode } from "./app-shell";
-import { useRoleResolved, useUserDrive, type Role } from "../wardyn/operator-context";
+import {
+  useOperator,
+  useRole,
+  useRoleResolved,
+  useSecurityOperator,
+  useUserDrive,
+  type Role,
+} from "../wardyn/operator-context";
 import { ThemeProvider } from "../wardyn/theme-provider";
 import { baseMeDrive } from "../../lib/test-fixtures";
 import type { ConfinementClass } from "../../lib/types";
@@ -40,6 +47,7 @@ function renderMobileNav(role: Role = "admin") {
           memberLocalDirRoot: null,
           userDrive: null,
           userDriveDeniedByProfile: "",
+          userDriveUnavailable: "",
         }}
       />
     </MemoryRouter>,
@@ -485,6 +493,7 @@ function renderTopBar(role: Role) {
             memberLocalDirRoot: null,
             userDrive: null,
             userDriveDeniedByProfile: "",
+            userDriveUnavailable: "",
           }}
           pendingApprovals={0}
           attentionCount={0}
@@ -526,6 +535,30 @@ describe("AppShell (roleResolved after a failed /me)", () => {
     return <span data-testid="probe">{useRoleResolved() ? "resolved" : "pending"}</span>;
   }
 
+  // R4/F119 — the TIER the failed /me leaves behind, which is the half this
+  // describe never read. useMeta seeds operator/securityOperator/role with
+  // `?? true` / `?? "admin"` and the comments around them call the DIRECTION
+  // load-bearing ("an older daemon that never sends this field must fail OPEN
+  // like every other identity signal here"; operator-context.tsx: 'Never
+  // "harden" this default to false either'). Nothing asserted it: flipping all
+  // three to `?? false` / `?? "member"` left the whole suite green, and the one
+  // path where the defaults decide what a real human sees is exactly this one —
+  // a 5xx, a dropped network, a pre-0.7 daemon. Fail-CLOSED here does not
+  // protect anything (the server refuses every write regardless, requireOperator
+  // is the enforcement point); it just hides the console from the admin who is
+  // trying to find out what is wrong.
+  function TierProbe() {
+    return (
+      <span data-testid="tier-probe">
+        {JSON.stringify({
+          operator: useOperator(),
+          securityOperator: useSecurityOperator(),
+          role: useRole(),
+        })}
+      </span>
+    );
+  }
+
   it("flips to resolved once /me settles, even when it fails", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("connection refused")));
     render(
@@ -555,6 +588,103 @@ describe("AppShell (roleResolved after a failed /me)", () => {
     expect(screen.getByTestId("probe")).toHaveTextContent("pending");
     await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("resolved"));
   });
+
+  it("leaves the tier FAIL-OPEN when /me never answers (R4/F119)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("connection refused")));
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <Routes>
+            <Route
+              element={
+                <AppShell
+                  pendingApprovals={0}
+                  attentionCount={0}
+                  onSignOut={() => {}}
+                  unreachable={true}
+                  lastOkAt={null}
+                  confinementClasses={[]}
+                />
+              }
+            >
+              <Route
+                index
+                element={
+                  <>
+                    <Probe />
+                    <TierProbe />
+                  </>
+                }
+              />
+            </Route>
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    const open = JSON.stringify({ operator: true, securityOperator: true, role: "admin" });
+    // Before the rejection lands…
+    expect(screen.getByTestId("tier-probe")).toHaveTextContent(open);
+    // …and after it has been SEEN (roleResolved is the shell's own "this /me is
+    // settled" signal, so this is the resolved tier and not the seed it equals):
+    // a /me that never answered must not RESTRICT the console. `?? false` / `??
+    // "member"` in useMeta fails here, which is the whole point.
+    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("resolved"));
+    expect(screen.getByTestId("tier-probe")).toHaveTextContent(open);
+  });
+
+  it("keeps the tier fail-OPEN for a daemon whose /me omits the fields entirely", async () => {
+    // A pre-0.7 daemon: /me answers 200 with the identity keys it has always
+    // sent and none of the three tier keys. Absent must read as OPEN, not as
+    // "member" — the same rule, on the path that actually reaches the `??`.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: RequestInfo | URL) => {
+        const u = String(url);
+        if (u.endsWith("/healthz")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ trust_domain: "wardyn.local", identity_provider: "embedded" }),
+          });
+        }
+        if (u.endsWith("/api/v1/me")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ principal: "root@wardyn.local", method: "token" }),
+          });
+        }
+        return Promise.resolve({ ok: true, json: async () => ({}) });
+      }) as unknown as typeof fetch,
+    );
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <Routes>
+            <Route
+              element={<AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />}
+            >
+              <Route
+                index
+                element={
+                  <>
+                    <Probe />
+                    <TierProbe />
+                  </>
+                }
+              />
+            </Route>
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    // Wait for the real /me to settle, so this reads the RESOLVED value rather
+    // than the seed it happens to equal.
+    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("resolved"));
+    expect(screen.getByTestId("tier-probe")).toHaveTextContent(
+      JSON.stringify({ operator: true, securityOperator: true, role: "admin" }),
+    );
+  });
 });
 
 // 0.7 — the shell's ONE GET /me is what fills UserDriveContext: New Run and the
@@ -567,8 +697,16 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   function DriveProbe() {
-    const { drive, deniedByProfile } = useUserDrive();
-    return <span data-testid="drive-probe">{JSON.stringify({ drive, deniedByProfile })}</span>;
+    const { drive, deniedByProfile, unavailable } = useUserDrive();
+    return (
+      <>
+        <span data-testid="drive-probe">{JSON.stringify({ drive, deniedByProfile })}</span>
+        {/* R4/F091 — read as its OWN element rather than folded into the JSON
+            above, so the three cases that predate the third key keep asserting
+            the exact string they always did. */}
+        <span data-testid="drive-unavailable-probe">{`[${unavailable}]`}</span>
+      </>
+    );
   }
 
   function renderShellWithMe(me: Record<string, unknown>) {
@@ -650,5 +788,64 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
     expect(screen.getByTestId("drive-probe")).toHaveTextContent(
       JSON.stringify({ drive: null, deniedByProfile: "" }),
     );
+    // …and the third key reads as "nothing is wrong", not as a reason invented
+    // out of an absent field.
+    expect(screen.getByTestId("drive-unavailable-probe")).toHaveTextContent("[]");
+  });
+
+  // R4/F091 — the THIRD key. /me suppresses the allocation for all four of
+  // these (me.go:119-123), so `drive: null` is the SAME answer for every one of
+  // them and the reason is the only thing that tells them apart. The shell
+  // typed the key and read it nowhere, so the context handed every consumer
+  // "you have no allocation" — the one remedy that is wrong in all four cases.
+  // One case per token in the server's closed vocabulary
+  // (user_drives_resolve.go:87-99): a token this test does not carry is a
+  // token the console silently drops again.
+  it.each([
+    ["groups_snapshot_stale"],
+    ["unmountable"],
+    ["unavailable"],
+    ["governance_unavailable"],
+  ])("carries %s through to UserDriveContext beside the suppressed allocation", async (reason) => {
+    renderShellWithMe({
+      principal: "alice@corp.example",
+      method: "sso",
+      operator: false,
+      role: "member",
+      user_drive: null,
+      user_drive_denied_by_profile: "",
+      user_drive_unavailable: reason,
+    });
+
+    // Negative control: the fail-closed seed paints first, so the assertion
+    // below cannot be a constant.
+    expect(screen.getByTestId("drive-unavailable-probe")).toHaveTextContent("[]");
+    await waitFor(() =>
+      expect(screen.getByTestId("drive-unavailable-probe")).toHaveTextContent(`[${reason}]`),
+    );
+    // The allocation stays null — the reason REPLACES the offer, it does not
+    // ride beside one.
+    expect(screen.getByTestId("drive-probe")).toHaveTextContent(
+      JSON.stringify({ drive: null, deniedByProfile: "" }),
+    );
+  });
+
+  it("keeps the reason and the door as SEPARATE bits — a denied door is not an outage", async () => {
+    renderShellWithMe({
+      principal: "alice@corp.example",
+      method: "sso",
+      operator: false,
+      role: "member",
+      user_drive: null,
+      user_drive_denied_by_profile: "Greenfield contractors",
+      user_drive_unavailable: "",
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("drive-probe")).toHaveTextContent(
+        JSON.stringify({ drive: null, deniedByProfile: "Greenfield contractors" }),
+      ),
+    );
+    expect(screen.getByTestId("drive-unavailable-probe")).toHaveTextContent("[]");
   });
 });

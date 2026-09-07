@@ -261,10 +261,20 @@ export default function App() {
 
   // Probe auth on mount: a live OIDC session cookie or a stored admin token
   // lets us straight into the console; otherwise show the sign-in gate.
+  //
+  // R4/F027: the probe answers THREE ways (core.ts's AuthProbe), not two. Only
+  // a real 401 means "signed out". "unreachable" — a daemon 5xx or a dead
+  // network — still lands on the gate (the console has no verified session to
+  // show), but it must not ALSO leave the shell claiming nothing is wrong: it
+  // records the outage on the same `unreachable` flag the banner and the
+  // barrier chip already read, and the health poll below now runs at the gate
+  // so that flag clears itself the moment the daemon comes back.
   React.useEffect(() => {
     let active = true;
-    probeAuth().then((ok) => {
-      if (active) setAuth(ok ? "authed" : "unauthed");
+    void probeAuth().then((probe) => {
+      if (!active) return;
+      if (probe === "unreachable") setUnreachable(true);
+      setAuth(probe === "authed" ? "authed" : "unauthed");
     });
     return () => {
       active = false;
@@ -317,24 +327,45 @@ export default function App() {
   const [confinementClasses, setConfinementClasses] = React.useState<
     ConfinementClass[] | undefined
   >(undefined);
+  // R4/F066: BOTH probes, because /healthz alone cannot see the outage this
+  // banner exists for. handleHealthz writes `"status": "ok"` as a literal and
+  // never touches the store (internal/api/healthz.go) — deliberately, since
+  // liveness must not restart a pod over a Postgres failover — so a DB-down
+  // console read as a healthy quiet fleet: banner down, every screen's silent
+  // `.catch` holding last-good data on screen, nothing anywhere saying why
+  // nothing changes. /readyz is the probe that already Pings the store and
+  // answers 503 for it. Unreachable is therefore "not live OR not ready".
+  //
+  // The two are asked TOGETHER (one Promise.all, one tick of the same poll):
+  // sequenced, a slow store ping would delay the liveness answer it is supposed
+  // to be independent of.
   const refreshHealth = React.useCallback(() => {
-    void health.health().then((h) => {
-      const ok = h.status === "ok";
-      setUnreachable(!ok);
-      if (!ok) return;
-      setLastOkAt(new Date());
+    void Promise.all([health.health(), health.readyz()]).then(([h, r]) => {
+      const live = h.status === "ok";
+      const ready = r.status === "ok";
+      setUnreachable(!live || !ready);
+      // The daemon's own facts still land whenever IT answered — a store outage
+      // does not make the trust boundary or the class list stale.
+      if (!live) return;
+      // …but "last data received" must not tick forward while the store is
+      // down: no data IS being received, which is the whole claim of the
+      // sentence this timestamp completes.
+      if (ready) setLastOkAt(new Date());
       setConfinementClasses(
         (h.confinement_classes ?? []) as ConfinementClass[],
       );
     });
   }, []);
   React.useEffect(() => {
-    if (auth === "authed") {
-      refreshSetupStatus();
-      refreshHealth();
-    }
-  }, [auth, refreshSetupStatus, refreshHealth]);
-  usePoll(refreshHealth, HEALTH_POLL_MS, auth !== "authed");
+    if (auth === "authed") refreshSetupStatus();
+  }, [auth, refreshSetupStatus]);
+  // R4/F027: reachability is NOT gated on being signed in. /healthz is the one
+  // unauthenticated endpoint the console has, and the state where it matters
+  // most is the one this used to skip — an outage that sent the human to the
+  // gate. Polled from mount so the verdict is live in every auth state, and so
+  // an outage recorded by the mount probe above clears on its own.
+  React.useEffect(refreshHealth, [refreshHealth]);
+  usePoll(refreshHealth, HEALTH_POLL_MS, false);
 
   if (auth === "checking") {
     return (

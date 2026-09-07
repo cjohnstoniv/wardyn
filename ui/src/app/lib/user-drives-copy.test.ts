@@ -426,3 +426,88 @@ describe("user-drives-prompt §7.1 — the server-composed table matches the Go 
     expect(checked).toBeGreaterThanOrEqual(6);
   });
 });
+
+// R4/F051 — §7.3 froze the preview as a five-row <dl> while POST /drives/preview
+// answers seven fields, and PREVIEW_OBJECT_HINT ("What the reclaim command
+// names — copy it when someone leaves") promised the object name UNCONDITIONALLY.
+// For the one request shape the endpoint's own `warning` names — an address
+// pasted first against a `hash`/`sub` drive — that name is well-formed and names
+// an object no run will ever mount, and docs/OPERATIONS.md sends an operator to
+// this very preview to collect the argument for `docker volume rm`.
+//
+// The ledger's decision for that defect was "(a) now (API-only, no frozen-copy
+// change) + a §7.3 note later"; the note is the half that never landed. These
+// pin it in BOTH directions, so it cannot rot the way it was written:
+// the doc must name what the endpoint answers AND the console must still be
+// dropping it — the day a mock round renders the row, this fails and the note
+// has to be rewritten rather than quietly becoming false in the other
+// direction.
+describe("user-drives-prompt §7.3 — the preview note matches what the endpoint answers", () => {
+  const doc = readFileSync(DOC, "utf8");
+  const section = doc.slice(doc.indexOf("### 7.3 "), doc.indexOf("### 7.4 "));
+  const allocations = readFileSync(
+    resolve(process.cwd(), "src/app/components/screens/drives/allocations.tsx"),
+    "utf8",
+  );
+
+  it.each(["home_subject", "warning"])(
+    "names the answered-but-unrendered field %s",
+    (field) => {
+      expect(section).toContain(field);
+    },
+  );
+
+  it("quotes the server's warning verbatim — the Go literal is the truth for it", () => {
+    const lit = "the directory name keys on the sign-in subject; paste it first";
+    // Really emitted (drivePreviewWarning, internal/api/user_drives_resolve.go).
+    expect(literals).toContain(lit);
+    expect(section).toContain(lit);
+  });
+
+  it("names drivePreviewWarning, which must still exist", () => {
+    expect(section).toContain("drivePreviewWarning");
+    expect([...funcNames].includes("drivePreviewWarning")).toBe(true);
+  });
+
+  // The other direction. `warning` appears inside the word "warnings" nowhere in
+  // this file today; matched on the wire-key spelling the panel would have to
+  // read.
+  it.each(["home_subject", "a.warning"])(
+    "…and the allocations panel still renders none of it (%s)",
+    (read) => {
+      expect(allocations).not.toContain(read);
+    },
+  );
+});
+
+// R4/F092 put a NEW ROW on the allocations block: the console's shared
+// TruncatedNote, above the table, whenever `grant_total` exceeds the page
+// `grants` carries. A new element on a surface §7 freezes has to be in the doc
+// that freezes it, even when it introduces no string of its own. Pinned in BOTH
+// directions — the doc must describe the note AND the block must still render
+// it, gated on the server's own total rather than a client-side stand-in.
+describe("user-drives-prompt §7.3 — the allocations truncation note (R4/F092)", () => {
+  const doc = readFileSync(DOC, "utf8");
+  const section = doc.slice(doc.indexOf("### 7.3 "), doc.indexOf("### 7.4 "));
+  const allocations = readFileSync(
+    resolve(process.cwd(), "src/app/components/screens/drives/allocations.tsx"),
+    "utf8",
+  );
+
+  it("names the shared note, where it lives, and the server key that raises it", () => {
+    expect(section).toContain("TruncatedNote");
+    expect(section).toContain("ui/src/app/components/wardyn/states.tsx");
+    expect(section).toContain("grant_total");
+  });
+
+  it("freezes no string of its own — §7.3's table gains no row for it", () => {
+    expect(section).not.toMatch(/^\| `[A-Z_]*TRUNCAT/m);
+  });
+
+  it("…and the block still renders that shared note, gated on the server's total", () => {
+    expect(allocations).toContain("grantTotal > grants.length");
+    expect(allocations).toContain("<TruncatedNote count={LIST_LIMIT} cap={LIST_LIMIT} />");
+    // No children override: the shared sentence is used as-is.
+    expect(allocations).not.toMatch(/<TruncatedNote[^/]*>[^<]/);
+  });
+});

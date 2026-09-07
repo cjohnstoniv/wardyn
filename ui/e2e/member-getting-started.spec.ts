@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, mockMemberRole, navToRoute } from "./fixtures";
+import { test, expect, gotoConsole, mockMemberRole, mockSecurityAdminRole, navToRoute } from "./fixtures";
 
 // Member Getting Started (Phase 5) — same mockMemberRole splice
 // member-console.spec.ts uses (the seeded backend always authenticates as
@@ -117,5 +117,33 @@ test.describe("admin session at /setup (unmocked — negative control)", () => {
     for (const title of MEMBER_SECTION_TITLES) {
       await expect(page.getByRole("heading", { name: title })).toHaveCount(0);
     }
+  });
+});
+
+// R4/F034: the guard in GettingStarted was `role === "member"` after role went
+// three-valued, so a SECURITY ADMIN fell through to the deployer funnel — built
+// from a SetupStatus the server redacts for every non-operator
+// (redactSetupStatusForMember zeroes Checks/Providers/Secrets,
+// internal/api/setup.go), over mutations that are super-admin-only. It reads
+// `role !== "admin"` now, the way setupGateActive already did.
+//
+// Browser-only: this is a ROUTE decision made from /me, so only a real
+// navigation with a security-admin /me proves it.
+test.describe("security admin at /setup (mocked /me role) — R4/F034", () => {
+  test.beforeEach(async ({ page }) => {
+    await mockSecurityAdminRole(page);
+  });
+
+  test("lands on the member Getting Started, never the deployer funnel", async ({ page }) => {
+    await gotoConsole(page);
+    await navToRoute(page, "/setup");
+
+    for (const title of MEMBER_SECTION_TITLES) {
+      await expect(page.getByRole("heading", { name: title })).toBeVisible();
+    }
+    // The operator welcome hero and the funnel's barrier picker — the two
+    // surfaces built from the redacted status.
+    await expect(page.getByText("Sandboxed. Governed. Self-hosted. Free.")).toHaveCount(0);
+    await expect(page.getByText("Pick your barrier")).toHaveCount(0);
   });
 });

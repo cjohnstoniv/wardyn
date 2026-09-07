@@ -139,15 +139,36 @@ export function unwrapList<T>(payload: unknown): T[] {
   return Array.isArray(payload) ? (payload as T[]) : [];
 }
 
+// The three answers a mount-time auth probe can honestly give. R4/F027: this
+// used to be a plain boolean, so a daemon 5xx and a dead network both returned
+// exactly `false` — indistinguishable from a real 401 — and App.tsx turned that
+// single bit into "unauthed" and rendered the sign-in gate with no hint that
+// anything was down. sign-in.tsx:116-123 had ALREADY made this split by hand
+// for submitToken, for the same reason and in the same words ("probeAuth
+// collapsed every failure ... to the same boolean `false`"); the sibling call
+// site was left on the old shape. Splitting it HERE is the one place both can
+// share, rather than a third hand-rolled copy.
+//
+//   "authed"      the protected row came back — this caller is signed in.
+//   "unauthed"    a REAL 401: no session cookie, or a rejected admin token.
+//   "unreachable" the daemon did not answer the question (any other non-2xx,
+//                 or a transport failure). NOT a statement about the caller's
+//                 credentials, and must never be reported as one.
+export type AuthProbe = "authed" | "unauthed" | "unreachable";
+
 // Probe auth by hitting a protected endpoint. It needs only a yes/no on the
 // response status, so it asks for a single row (?limit=1) rather than pulling
 // the whole runs list just to discard it.
-export async function probeAuth(): Promise<boolean> {
+export async function probeAuth(): Promise<AuthProbe> {
   try {
     const res = await wfetch(withLimit("/runs", 1), { method: "GET" });
-    return res.ok;
-  } catch {
-    return false;
+    // wfetch has already thrown HttpError(401) for a real rejection, so a
+    // non-ok response here is a 403/5xx: the request carried whatever
+    // credentials the caller has and the daemon still could not answer.
+    return res.ok ? "authed" : "unreachable";
+  } catch (e) {
+    if (e instanceof HttpError && e.status === 401) return "unauthed";
+    return "unreachable";
   }
 }
 

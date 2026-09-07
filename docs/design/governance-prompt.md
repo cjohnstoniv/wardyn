@@ -488,6 +488,7 @@ time) and one must be able to change without the other.
 | `DELETE` | Delete |
 | `ASSIGNED_NONE` | Not assigned |
 | `ASSIGNED_COUNT(n)` | {n} subject / {n} subjects |
+| `LIMIT_QUOTA_LABEL(n)` | Max {n} run at once / Max {n} runs at once |
 | `LIMITS_NONE` | None |
 | `EMPTY_TITLE` | No profiles yet |
 | `EMPTY_BODY` | Everyone runs under the deployment ceiling from `WARDYN_DEFAULT_POLICY`. Add a profile to give a group its own. |
@@ -512,7 +513,12 @@ time) and one must be able to change without the other.
 `TITLE` is **one string for two places** — the `NAV_ITEMS` label and the screen heading — the
 way every other nav entry already works; there is no second "Governance profiles" label.
 `ASSIGNED_COUNT` follows the inline-pluralisation shape `PERM.ENFORCE_ON_BODY` already uses
-(`${n} subject${n === 1 ? "" : "s"}`), not a second pluralisation helper. `COL_GRADE`'s cell
+(`${n} subject${n === 1 ? "" : "s"}`), not a second pluralisation helper; `LIMIT_QUOTA_LABEL`
+uses the same shape. `LIMIT_QUOTA_LABEL` is a **0.7 ADDITION, not from this round**: the Limits
+cell tested only the three boolean doors, so a profile whose only limit is `max_concurrent_runs`
+read `LIMITS_NONE` ("None") while `denyMemberRunQuota`
+(`internal/api/runs_create_validate.go`) was refusing that member's next run with a 422. "None"
+is a claim about every field of `GovernanceLimits`, so the fourth one needed a chip. `COL_GRADE`'s cell
 renders the embedded `SafetyMeter`'s own vocabulary (Safety · Safest / Guarded / Elevated /
 Weakest), and `COL_UPDATED` the shipped `relativeTime` helper — both existing canon, neither
 re-frozen here.
@@ -728,8 +734,12 @@ configured the endpoint answers with its unconfigured code and the control IS th
 
 `ROLE_SECURITY_ADMIN` is the picker option, the table chip, and the mapped-role label —
 one string for all three, next to `PEOPLE.ROLE_ADMIN` / `PEOPLE.ROLE_MEMBER`, which is why it
-is title case and never interpolated into a sentence (that casing rule is
-`people-access-copy.ts`'s and carries over unchanged).
+is title case **as the chip/label form**. That casing rule is `people-access-copy.ts`'s and
+carries over unchanged — including its other half: a sentence never interpolates a chip as-is,
+it takes the chip's lowercase, so the third tier's in-sentence form is `security admin`
+(`people-access-prompt.md` §7.2). One derivation owns that lowering — `roleLabelInSentence` in
+`ui/src/app/components/screens/setup/access-panel.tsx`, beside the `roleLabel` chip form it is
+derived from — so this string stays the only frozen spelling.
 
 ## 8. Where to apply (once implemented, out of scope this round)
 

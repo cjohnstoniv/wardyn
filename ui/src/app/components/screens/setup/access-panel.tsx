@@ -89,6 +89,29 @@ function roleLabel(role: string): string {
   }
 }
 
+// The same closed set as roleLabel(), in the ONE casing the preview sentences
+// take: people-access-prompt.md §7.2's casing rule says a {role} interpolated
+// INSIDE a sentence is lowercase, so RESULT_MATCHED / RESULT_DEFAULT /
+// RESULT_LEGACY cannot reuse roleLabel()'s title-case chip form as-is.
+//
+// It exists for exactly the reason roleLabel() above does, and it is the
+// SIBLING CALL SITE that move missed: renderPreviewResult still carried the
+// two-role ternary `role === "admin" ? "admin" : "member"`, so a security_admin
+// verdict read "Would sign in as member" — the panel's one unforgivable error,
+// on the surface an operator uses to check a mapping BEFORE trusting it.
+// Derived from roleLabel so a fourth tier is one case there, not two here; an
+// unrecognized claim value still renders ITSELF, never a role it is not.
+function roleLabelInSentence(role: string): string {
+  switch (role) {
+    case "admin":
+    case "security_admin":
+    case "member":
+      return roleLabel(role).toLowerCase();
+    default:
+      return role;
+  }
+}
+
 // A quiet inline note — the ONLY error surface this panel uses (F-11's lesson:
 // in-viewport, next to the control that raised it, never a toast that can
 // scroll out of frame). Mirrors permissions.tsx's own private Note.
@@ -622,11 +645,11 @@ function PreviewPanel({ mapEmpty }: { mapEmpty: boolean }) {
   // and is only true once a non-empty map's fallthrough decided it.
   function renderPreviewResult(res: Awaited<ReturnType<typeof api.previewRole>>): React.ReactNode {
     if (res.error) return PREVIEW.RESULT_UNKNOWN;
-    const roleLabel = res.role === "admin" ? "admin" : "member";
+    const label = roleLabelInSentence(res.role);
     if (res.ok && res.matched.length > 0) {
-      return PREVIEW.RESULT_MATCHED(roleLabel, res.matched.map((m) => m.value).join(", "));
+      return PREVIEW.RESULT_MATCHED(label, res.matched.map((m) => m.value).join(", "));
     }
-    if (res.ok) return mapEmpty ? PREVIEW.RESULT_LEGACY(roleLabel) : PREVIEW.RESULT_DEFAULT(roleLabel);
+    if (res.ok) return mapEmpty ? PREVIEW.RESULT_LEGACY(label) : PREVIEW.RESULT_DEFAULT(label);
     return PREVIEW.RESULT_DENIED;
   }
 

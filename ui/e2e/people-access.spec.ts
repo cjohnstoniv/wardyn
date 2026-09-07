@@ -531,6 +531,34 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
     await expect(page.getByText(PREVIEW.RESULT_UNKNOWN)).toBeVisible();
   });
 
+  // R4/F033: renderPreviewResult kept the two-role ternary
+  // (`role === "admin" ? "admin" : "member"`) that roleLabel() was introduced
+  // to kill, so the ONE surface an operator uses to check a mapping before
+  // trusting it called a security_admin a member. §7.2's casing rule keeps the
+  // in-sentence form lowercase.
+  test("(f2) preview: a security_admin verdict says so — never 'member' (R4/F033)", async ({ page }) => {
+    await mockSsoStatus(page);
+    await mockAccessGet(page, baseAccessBody({ posture: { map_empty: false, before: "x", after: "y", changes: false } }));
+    await page.route("**/api/v1/access/preview", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          role: "security_admin",
+          ok: true,
+          matched: [{ value: "sec-team", role: "security_admin", source: "console" }],
+        }),
+      });
+    });
+
+    await gotoPeopleStep(page);
+    await page.getByLabel(PREVIEW.FIELD_CLAIMS).fill("sec-team");
+    await page.getByRole("button", { name: PREVIEW.RUN_CTA }).click();
+
+    await expect(page.getByText(PREVIEW.RESULT_MATCHED("security admin", "sec-team"))).toBeVisible();
+    await expect(page.getByText(PREVIEW.RESULT_MATCHED("member", "sec-team"))).toHaveCount(0);
+  });
+
   // ---------------------------------------------------------------------
   // (g) ONE non-intercepted case: /setup/status flipped to sso but /access
   // left REAL — the harness backend has no OIDC configured, so

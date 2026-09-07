@@ -75,7 +75,15 @@ export function GettingStarted({
   React.useEffect(() => {
     markGateFired();
   }, []);
-  if (role === "member") {
+  // DELIBERATELY `!== "admin"`, NOT `role === "member"`, for the reason
+  // setupGateActive (setup/setup-gate.ts) is written the same way now that role
+  // is three-valued: GET /setup/status is REDACTED for every non-operator
+  // (handleSetupStatus -> redactSetupStatusForMember zeroes Checks, Providers
+  // and Secrets, internal/api/setup.go), and every mutation the deployer funnel
+  // drives is super-admin-only server-side. A security admin falling through
+  // here got the operator funnel built from a status they cannot act on and a
+  // wizard whose every button 403s.
+  if (role !== "admin") {
     // No onDone: this is a page a member returns to, not a funnel step with
     // an exit action — the old MemberSetupNotice's "Go to Runs" button (and
     // the onDone it called) leaves with it.
