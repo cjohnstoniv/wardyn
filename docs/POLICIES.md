@@ -196,7 +196,11 @@ beside the brokered one. That gap is now closed, at write time and at dispatch:
   (`isBrokeredGitGrant`) matches `github_token` grant ids only, so a caller that
   POSTs the mint route directly — rather than going through
   `wardyn-git-helper`, which every GitHub host on a brokered run already refuses
-  — used to be answered with the PAT.
+  — used to be answered with the PAT. Because that residual has no other belt,
+  the check fails CLOSED when it cannot read the run's grants: an unreadable
+  grant list answers `503` and mints nothing. A daemon configured with no grant
+  store at all still mints — there is then no persisted pre-exclusivity policy
+  for the check to find.
 
 | Lane | Route to the forge | What binds a push |
 |---|---|---|

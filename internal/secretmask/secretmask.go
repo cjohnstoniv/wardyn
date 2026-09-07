@@ -43,11 +43,33 @@ type Registry struct {
 	mu      sync.RWMutex
 	perRun  map[uuid.UUID][][]byte // run id -> set of secret values
 	globals [][]byte               // process-wide secrets applied to every run
+
+	// gen bumps on every mutation that CHANGES the corpus (a de-duplicated Add
+	// is not a change). It is the cache key below: a Masker built at generation
+	// g stays valid until something is registered or evicted.
+	gen uint64
+	// cached holds the derived Maskers per run, keyed by the generation they
+	// were built at. Building one clones and sorts the whole corpus, and the two
+	// consumers do it on EVERY event they mask (a PTY chunk, an audit row), so
+	// without this the masking hot path re-derives an unchanged set thousands of
+	// times per run. Evict drops a run's entry with its secrets.
+	cached map[uuid.UUID]*runMaskers
+}
+
+// runMaskers is one run's derived masking state at a single registry generation.
+// variant (the JSONEscapedVariants expansion the audit recorder needs) is built
+// lazily: it triples the set and is documented O(n^2), and the PTY lane never
+// asks for it.
+type runMaskers struct {
+	gen         uint64
+	plain       Masker
+	variant     Masker
+	haveVariant bool
 }
 
 // NewRegistry returns an empty, ready-to-use Registry.
 func NewRegistry() *Registry {
-	return &Registry{perRun: make(map[uuid.UUID][][]byte)}
+	return &Registry{perRun: make(map[uuid.UUID][][]byte), cached: map[uuid.UUID]*runMaskers{}}
 }
 
 // Add registers value as a secret for runID. Values shorter than MinLen are
@@ -57,10 +79,28 @@ func (r *Registry) Add(runID uuid.UUID, value []byte) {
 	if r == nil || len(value) < MinLen {
 		return
 	}
-	cp := bytes.Clone(value)
 	r.mu.Lock()
-	r.perRun[runID] = append(r.perRun[runID], cp)
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	// Re-registering a value already in this run's corpus (or already a global)
+	// is a no-op — the same rule AddGlobal has carried since it was written, for
+	// the same stated reason, which the per-run lane never got. The growth driver
+	// is real: broker.mint re-Adds the minted token on every mint, and under the
+	// per-run lease a git_pat run re-mints the SAME PAT on every git operation
+	// with no rate limiter anywhere in internal/broker, so one run accumulated
+	// one entry per git operation. Snapshot clones and NewMasker sorts the whole
+	// set, and both ran on every PTY chunk and every audit event, so each
+	// duplicate was paid for again on every masked byte.
+	//
+	// De-duplicating changes nothing about WHAT is masked: masking is exact-match
+	// over a set, so a second copy of a value could never mask anything the first
+	// did not. There is deliberately no CAP here — dropping a registered secret
+	// past a ceiling would fail OPEN and emit it unmasked, which is the one thing
+	// this package exists to prevent.
+	if containsSlice(r.perRun[runID], value) || containsSlice(r.globals, value) {
+		return
+	}
+	r.perRun[runID] = append(r.perRun[runID], bytes.Clone(value))
+	r.gen++
 }
 
 // AddGlobal registers value as a process-global secret applied on every run.
@@ -81,6 +121,7 @@ func (r *Registry) AddGlobal(value []byte) {
 		}
 	}
 	r.globals = append(r.globals, bytes.Clone(value))
+	r.gen++
 }
 
 // Snapshot returns the combined set of secrets for runID (per-run + global).
@@ -94,6 +135,89 @@ func (r *Registry) Snapshot(runID uuid.UUID) [][]byte {
 	globals := r.globals
 	r.mu.RUnlock()
 
+	out := make([][]byte, 0, len(perRun)+len(globals))
+	for _, v := range perRun {
+		out = append(out, bytes.Clone(v))
+	}
+	for _, v := range globals {
+		out = append(out, bytes.Clone(v))
+	}
+	return out
+}
+
+// Masker returns a Masker over runID's combined corpus (per-run + global),
+// built ONCE per registry generation and shared thereafter.
+//
+// This is the accessor the masking hot paths use instead of
+// NewMasker(Snapshot(id)). That pair clones every secret twice and sorts the
+// whole set, and its callers run it per masked event — every PTY output chunk of
+// an interactive attach, every audit event the recorder writes — so an unchanged
+// corpus was re-derived from scratch thousands of times per run. Registrations
+// are rare and masked events are not, so the derivation belongs on the write
+// side of that ratio.
+//
+// The returned Masker is immutable by contract (NewMasker's own guarantee), which
+// is what makes handing the same one to every caller safe. A nil *Registry
+// returns a zero Masker, which masks nothing — the same pass-through Snapshot
+// gives.
+func (r *Registry) Masker(runID uuid.UUID) Masker {
+	if r == nil {
+		return Masker{}
+	}
+	r.mu.RLock()
+	if c := r.cached[runID]; c != nil && c.gen == r.gen {
+		m := c.plain
+		r.mu.RUnlock()
+		return m
+	}
+	r.mu.RUnlock()
+	return r.rebuild(runID, false).plain
+}
+
+// JSONVariantMasker returns a Masker over runID's corpus expanded with
+// JSONEscapedVariants — the set the audit recorder needs, because ev.Data is
+// JSON and a secret bearing a newline or a quote (a minted ssh_key PEM) lands
+// there escaped. Cached on the same generation as Masker, and built lazily: the
+// expansion triples the set and is documented O(n^2), so the PTY lane never
+// pays for it.
+func (r *Registry) JSONVariantMasker(runID uuid.UUID) Masker {
+	if r == nil {
+		return Masker{}
+	}
+	r.mu.RLock()
+	if c := r.cached[runID]; c != nil && c.gen == r.gen && c.haveVariant {
+		m := c.variant
+		r.mu.RUnlock()
+		return m
+	}
+	r.mu.RUnlock()
+	return r.rebuild(runID, true).variant
+}
+
+// rebuild derives runID's Maskers at the CURRENT generation and caches them.
+// It re-checks under the write lock: two masked events racing on a cold cache
+// would otherwise both build, and the second would overwrite a newer entry.
+func (r *Registry) rebuild(runID uuid.UUID, withVariant bool) *runMaskers {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c := r.cached[runID]
+	if c == nil || c.gen != r.gen {
+		c = &runMaskers{gen: r.gen, plain: NewMasker(r.snapshotLocked(runID))}
+		if r.cached == nil {
+			r.cached = map[uuid.UUID]*runMaskers{}
+		}
+		r.cached[runID] = c
+	}
+	if withVariant && !c.haveVariant {
+		c.variant = NewMasker(JSONEscapedVariants(c.plain.secrets))
+		c.haveVariant = true
+	}
+	return c
+}
+
+// snapshotLocked is Snapshot's body without the lock. The caller holds r.mu.
+func (r *Registry) snapshotLocked(runID uuid.UUID) [][]byte {
+	perRun, globals := r.perRun[runID], r.globals
 	out := make([][]byte, 0, len(perRun)+len(globals))
 	for _, v := range perRun {
 		out = append(out, bytes.Clone(v))
@@ -122,6 +246,8 @@ func (r *Registry) Evict(runID uuid.UUID) {
 	}
 	r.mu.Lock()
 	delete(r.perRun, runID)
+	delete(r.cached, runID)
+	r.gen++
 	r.mu.Unlock()
 }
 
@@ -233,6 +359,16 @@ func NewMasker(secrets [][]byte) Masker {
 	}
 	return Masker{secrets: kept, maxLen: maxLen}
 }
+
+// Secrets returns the masking set, longest-first, filtered to values of at least
+// MinLen (exactly the set Mask applies). It exists so a caller that needs the
+// corpus as well as the masking — api's liveMaskWriter, which also asks whether
+// the chunk ends mid-secret — can read it off the CACHED Masker instead of
+// taking a second Snapshot of the same unchanged set.
+//
+// The returned slices are the Masker's own. A Masker is immutable by contract,
+// so callers must READ them only.
+func (m Masker) Secrets() [][]byte { return m.secrets }
 
 // Mask replaces all verbatim occurrences of each registered secret in p with
 // "<secret-hidden>". Exact byte match only — no regex, no entropy scoring.

@@ -128,7 +128,8 @@ func countMintAudits(ctx context.Context, t *testing.T, pool *pgxpool.Pool, runI
 // real PgxStore: a single approved github_token grant mints once (writing
 // minted_jti in the same tx, the provable join), the persisted jti matches the
 // returned one, the no-widening scope is honored, and RevokeRun finds the
-// minted jti through the real MintedJTIs bulk read and emits one audit revoke.
+// minted credential through the real MintedCredentials bulk read
+// (mintedCredentialsSQL, pgx.go) and emits one audit revoke.
 func TestPG_MintRevokeRoundTrip(t *testing.T) {
 	pool := pgPool(t)
 	ctx := context.Background()
@@ -174,14 +175,20 @@ func TestPG_MintRevokeRoundTrip(t *testing.T) {
 		t.Fatalf("success mint must not double-write through the post-commit recorder")
 	}
 
-	// Revoke through the real PgxStore.MintedJTIs bulk read.
+	// Revoke through the real PgxStore.MintedCredentials bulk read
+	// (mintedCredentialsSQL).
 	au2 := &fakeAudit{}
 	b2 := New(NewPgxStore(pool), nil, au2, nil, nil)
 	if err := b2.RevokeRun(ctx, runID); err != nil {
 		t.Fatalf("RevokeRun: %v", err)
 	}
+	// Still exactly ONE row under mintedCredentialsSQL's UNION, and that count is
+	// current rather than stale: this mint burns an approval AND writes a success
+	// credential.mint audit row, so BOTH halves of the UNION match it — and both
+	// derive (jti, kind) from the SAME credential_grants row, so the UNION
+	// (not UNION ALL) collapses them to one credential, one revoke.
 	if n := len(au2.byAction("credential.revoke")); n != 1 {
-		t.Fatalf("expected 1 credential.revoke for the one minted jti, got %d", n)
+		t.Fatalf("expected 1 credential.revoke for the one minted credential, got %d", n)
 	}
 }
 

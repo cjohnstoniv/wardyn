@@ -122,6 +122,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const (
@@ -466,14 +467,16 @@ type mintResponse struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
-// mint 409-conflict "code" values — mirrors internal/api/internal.go's
-// mintConflict* constants (the ONE place both sides of this wire contract
-// must agree, W19-W19a-2).
+// mint 409-conflict "code" values, bound to types.MintConflict* — the ONE place
+// both sides of this wire contract agree (W19-W19a-2). This block used to
+// declare its own literals and CLAIM to be that one place; it was a second copy
+// that could drift from the server's silently (F134). internal/types is a leaf
+// package, so reading them costs this sandbox-side binary no dependency.
 const (
-	mintConflictPending       = "pending"
-	mintConflictDenied        = "denied"
-	mintConflictScopeMismatch = "scope_mismatch"
-	mintConflictAlreadyMinted = "already_minted"
+	mintConflictPending       = types.MintConflictPending
+	mintConflictDenied        = types.MintConflictDenied
+	mintConflictScopeMismatch = types.MintConflictScopeMismatch
+	mintConflictAlreadyMinted = types.MintConflictAlreadyMinted
 )
 
 // pendingResponse is the broker's 409 shape — covers all four conflict

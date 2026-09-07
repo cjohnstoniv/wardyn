@@ -2108,7 +2108,13 @@ The **explicit kill** path (`handleKillRun`) runs this fixed order:
    partially failed can be retried to actually free the sandbox/credentials.
 2. **Sandbox teardown** — runner `KillSandbox`.
 3. **Run-token deny-list** — embedded identity revocation.
-4. **Broker credential revoke** — every minted credential for the run.
+4. **Broker credential revoke** — every minted credential for the run: the
+   cascade enumerates the run's successful `credential.mint` audit rows UNION
+   the approvals whose `minted_jti` was burnt (`internal/broker/pgx.go`,
+   `mintedCredentialsSQL`), so an AUTO-MINTABLE grant — which creates no
+   approval row at all — and a leased `git_pat`'s 2nd..Nth mint are covered
+   too. What each row records is an AUDIT join, not an invalidation: see the
+   TTL residual below.
 
 Any of steps 2-4 failing is audited loudly (one `run.kill` event carrying the
 aggregate outcome, plus a distinct `run.revoke` failure event) instead of reporting
