@@ -121,7 +121,23 @@ func (s *Server) claimImportStep(ctx context.Context, ws types.Workspace, runID 
 // what differs (the trusted linkage, Task specifics, AutoStopAfterSec, the
 // login lane's agent + Interactive) before the row is returned; callers take
 // run.CreatedAt as the launch clock.
-func (s *Server) newStepRun(ctx context.Context, runID uuid.UUID, actor, task string, cc types.ConfinementClass, set func(*types.AgentRun)) (types.AgentRun, string, error) {
+//
+// IT IS ALSO THE LIMITS-AXIS CHOKEPOINT (F153). Every server-launched lane that
+// creates a run passes through here, and gov is a REQUIRED argument with no
+// usable zero value, so a lane added later cannot compile without saying which
+// of the acting principal's governance limits bind the run it is about to
+// create. Reading the limits per call site is exactly how POST /runs came to be
+// the only lane that read them at all, while a member-reachable scan created
+// runs for a walled principal that counted against nothing.
+func (s *Server) newStepRun(ctx context.Context, runID uuid.UUID, actor, task string, cc types.ConfinementClass, gov stepRunGovernance, set func(*types.AgentRun)) (types.AgentRun, string, error) {
+	if !gov.decided {
+		// Fail closed on a zero value: a lane that did not decide must not
+		// silently inherit "no limit binds".
+		return types.AgentRun{}, "", fmt.Errorf("api: step run %q created with no governance decision (use stepRunGoverned)", task)
+	}
+	if err := s.stepRunCeilingLimits(ctx, actor, gov); err != nil {
+		return types.AgentRun{}, "", err
+	}
 	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, actor, actor, internalAudience)
 	if err != nil {
 		return types.AgentRun{}, "", fmt.Errorf("mint run identity: %w", err)
@@ -141,9 +157,9 @@ func (s *Server) newStepRun(ctx context.Context, runID uuid.UUID, actor, task st
 
 // newWorkspaceStepRun is newStepRun linked to ws through WorkspaceID — the
 // TRUSTED linkage each step's upload authorises on, never sandbox input.
-func (s *Server) newWorkspaceStepRun(ctx context.Context, runID uuid.UUID, actor, task string, ws types.Workspace, cc types.ConfinementClass) (types.AgentRun, string, error) {
+func (s *Server) newWorkspaceStepRun(ctx context.Context, runID uuid.UUID, actor, task string, ws types.Workspace, cc types.ConfinementClass, gov stepRunGovernance) (types.AgentRun, string, error) {
 	wsID := ws.ID
-	return s.newStepRun(ctx, runID, actor, task, cc, func(run *types.AgentRun) {
+	return s.newStepRun(ctx, runID, actor, task, cc, gov, func(run *types.AgentRun) {
 		run.WorkspaceID = &wsID
 	})
 }
@@ -232,16 +248,74 @@ func (s *Server) mintRecordAPIKeyInjections(ctx context.Context, runID uuid.UUID
 // the status the create path answers for the same limit instead of a 500.
 var errRecordCeilingLimit = errors.New("governance profile limit")
 
-// recordCeilingLimits applies the Limits axis to a record launch: the two limits
-// that can bind this lane, in the same order and by the same rule the create
-// path applies them (denyMemberGovernance, denyMemberRunQuota).
+// stepRunGovernance is ONE step lane's answer to the Limits axis: which of the
+// acting principal's governance limits bind a run that lane creates. It has NO
+// usable zero value — newStepRun refuses one — so a lane added later cannot
+// compile without deciding, which is the anti-forgetting device dispatchCeiling
+// already gives the deny axis.
 //
-// ASSIGNED SUBJECTS ONLY (Profile != nil), the same scoping the create path
-// uses: an unassigned member has no profile, so there is no limit to read and no
-// deployment-wide default to fall back on (PF-36 — the `all` assignment IS the
-// opt-in).
+// Two questions, because the two limits ask different things of a lane:
 //
-// The MESSAGES are the frozen member copy from those two sites, reused verbatim
+//   - interactive: does this lane open an attachable session? deny_interactive
+//     is about a human getting a terminal, and a lane's answer is structural
+//     (a record session always is, a scan never is) rather than request-shaped,
+//     which is why it is stated here and not derived from requestIsInteractive.
+//   - counted: does the run this lane creates count against
+//     max_concurrent_runs? "How many runs you can have going" means every run
+//     attributed to that principal, so a lane says no only when the run is not
+//     the principal's own work.
+//
+// deny_task_mode_exec is deliberately absent: no step lane runs `exec`.
+type stepRunGovernance struct {
+	ceiling     governanceCeiling
+	interactive bool
+	counted     bool
+	// decided is set only by the constructors below, so the zero value is
+	// distinguishable from a deliberate "neither limit binds".
+	decided bool
+}
+
+// stepRunGoverned is the general constructor: state both answers explicitly.
+func stepRunGoverned(ceiling governanceCeiling, interactive, counted bool) stepRunGovernance {
+	return stepRunGovernance{ceiling: ceiling, interactive: interactive, counted: counted, decided: true}
+}
+
+// recordRunGovernance: a record/verify session comes up idle for the attach
+// terminal (always interactive) and is a run the principal has going.
+func recordRunGovernance(ceiling governanceCeiling) stepRunGovernance {
+	return stepRunGoverned(ceiling, true, true)
+}
+
+// scanRunGovernance: a scan run is server-authored and unattachable
+// (deny_interactive has nothing to say about it) but it IS one of the runs the
+// principal has going, so the quota binds it. This is the lane F153's residue
+// exposed: POST /workspaces/{id}/scan is member-reachable, it creates a run for
+// that member, and until this it read no limit at all — a member at their cap
+// could keep spawning scans.
+func scanRunGovernance(ceiling governanceCeiling) stepRunGovernance {
+	return stepRunGoverned(ceiling, false, true)
+}
+
+// operatorStepGovernance: a lane mounted operator-only, whose run is the
+// DEPLOYMENT's diagnostic rather than any principal's work (the site-config
+// proxy probe, the managed-harness login). Neither limit binds — and the
+// resolved ceiling is carried anyway so the value still says which profile the
+// decision was made against.
+func operatorStepGovernance(ceiling governanceCeiling) stepRunGovernance {
+	return stepRunGoverned(ceiling, false, false)
+}
+
+// stepRunCeilingLimits applies the Limits axis to one step lane's launch,
+// scoped by that lane's own stepRunGovernance answer.
+//
+// THE SCOPING RULE, stated once here the way ceilingForDispatch states the deny
+// axis's, so "absent row => absent behaviour" cannot be re-decided per call
+// site: the Limits axis binds POST /runs (runs_create_validate.go) and every
+// lane that reaches newStepRun. An unassigned principal has no profile, so
+// there is no limit to read and no deployment-wide default to fall back on
+// (PF-36 — the `all` assignment IS the opt-in).
+//
+// The MESSAGES are the frozen member copy from the create path, reused verbatim
 // rather than reworded: one limit means one sentence wherever a member meets it,
 // and a second wording for the same refusal is how "your profile denies this"
 // stops being recognisable. The interactive sentence's tail ("Launch with a
@@ -251,20 +325,21 @@ var errRecordCeilingLimit = errors.New("governance profile limit")
 // A quota COUNT failure is a store error, not a refusal, and is returned as
 // itself so the handler keeps answering 500 for it — an outage must not read as
 // a policy decision.
-func (s *Server) recordCeilingLimits(ctx context.Context, actor string, ceiling governanceCeiling) error {
-	if ceiling.Profile == nil {
+func (s *Server) stepRunCeilingLimits(ctx context.Context, actor string, gov stepRunGovernance) error {
+	if gov.ceiling.Profile == nil {
 		return nil
 	}
-	name := ceiling.Profile.Name
-	// A record session is ALWAYS interactive (see launchRecordRun's doc comment:
-	// the sandbox comes up idle for the attach terminal), so there is no request
-	// shape to inspect — the route itself IS the interactive request. That is
-	// why this reads the limit directly rather than through requestIsInteractive.
-	if ceiling.Limits.DenyInteractive {
+	name := gov.ceiling.Profile.Name
+	ceiling := gov.ceiling
+	// gov.interactive, not requestIsInteractive: whether a step lane opens an
+	// attachable session is STRUCTURAL (a record session always does, a scan
+	// never can), so the lane states it rather than the request shape implying
+	// it — there is no request shape here to inspect.
+	if ceiling.Limits.DenyInteractive && gov.interactive {
 		//lint:ignore ST1005 canon member sentence (docs/design/governance-prompt.md limits table), pinned verbatim by governance_limits_test.go; it ends the way the doc writes it
 		return fmt.Errorf("%w: interactive runs are not allowed by your governance profile %q, and a request with no task comes up interactive too. Launch with a task, and without `--interactive`.", errRecordCeilingLimit, name)
 	}
-	if limit := ceiling.Limits.MaxConcurrentRuns; limit > 0 {
+	if limit := ceiling.Limits.MaxConcurrentRuns; limit > 0 && gov.counted {
 		active, err := s.cfg.Store.CountActiveRunsBy(ctx, actor)
 		if err != nil {
 			return fmt.Errorf("count active runs: %w", err)
@@ -291,10 +366,21 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// what make a confined replay authenticate the way a real run does. Both
 	// stay. What must NOT follow from them is that a profile-walled principal
 	// gets a server-authored, allow-all, credentialed sandbox they can attach
-	// to on demand — and POST /workspaces/{id}/record is a SECURITY-tier route
-	// (§B), so a security admin can open one. They are bounded by their own
-	// assigned profile like anyone else (effectiveCeiling short-circuits on
-	// isOperator, which a security admin fails, by design).
+	// to on demand.
+	//
+	// POST /workspaces/{id}/record IS OPERATOR-ONLY (routes.go), not a
+	// security-tier route — an earlier version of this comment said the
+	// opposite, and the guard it justified could therefore never fire.
+	// requireOperator gates on s.isOperator and effectiveCeiling short-circuits
+	// on that SAME predicate, so every principal who reaches this function
+	// arrives with Profile == nil. A security admin gets 403 at the door:
+	// mounting the lane on securityOps would hand the tier that is defined never
+	// to reach credential material or the host exactly both, which is why the
+	// route did not move to make the guard live (F153).
+	//
+	// recordCeilingLimits below is therefore a FAIL-CLOSED assertion rather than
+	// a live gate: any resolved profile refuses the lane outright. It costs
+	// nothing today and is what a re-mount, or a second caller, meets.
 	//
 	// WHICH WALLS RIDE ALONG, named rather than implied — the earlier wording
 	// ("the same walls as their ordinary runs") was true of one axis and false
@@ -304,13 +390,15 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	//   - the member CLAMP is deliberately skipped, for the reason just given;
 	//   - the LIMITS axis is applied BELOW, in this function. It is read nowhere
 	//     else that this lane passes through: dispatch never reads it, and
-	//     denyMemberGovernance/denyMemberRunQuota sit on POST /runs. Until this
-	//     call existed, a profile setting deny_interactive or
-	//     max_concurrent_runs bound a member's ordinary run and NOT the
-	//     interactive, attachable, allow-all session this route opens for the
-	//     same principal — while the sentence this comment replaces asserted the
-	//     opposite. deny_task_mode_exec genuinely does not apply: a record
-	//     session runs an agent, never `exec`.
+	//     denyMemberGovernance/denyMemberRunQuota sit on POST /runs.
+	//     THE SCOPING RULE, stated once here the way ceilingForDispatch states
+	//     the deny axis's, so it cannot be re-decided per call site: the Limits
+	//     axis binds POST /runs and this lane, and this lane binds it by
+	//     refusing every assigned profile outright rather than by reading limit
+	//     by limit — because the axis that makes this lane dangerous is the
+	//     member CLAMP it skips, which is not a limit and can never be one.
+	//     deny_task_mode_exec genuinely does not apply: a record session runs an
+	//     agent, never `exec`.
 	//
 	// Unwalled principals thread nothing: no assignment ⇒ no denies ⇒ Record
 	// Mode byte-for-byte unchanged, moat workflow intact.
@@ -331,7 +419,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	}
 	// BEFORE the CAS claim below, so a refusal costs no state and needs no
 	// abort() — the same reason the ceiling resolve sits where it does.
-	if lerr := s.recordCeilingLimits(ctx, actor, ceiling); lerr != nil {
+	if lerr := s.stepRunCeilingLimits(ctx, actor, recordRunGovernance(ceiling)); lerr != nil {
 		return types.AgentRun{}, false, lerr
 	}
 	caps, cerr := s.cfg.Runner.Capabilities(ctx)
@@ -367,7 +455,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		return release(reason)
 	}
 
-	run, runToken, err := s.newWorkspaceStepRun(ctx, runID, actor, "workspace record", ws, cc)
+	run, runToken, err := s.newWorkspaceStepRun(ctx, runID, actor, "workspace record", ws, cc, recordRunGovernance(ceiling))
 	if err != nil {
 		return types.AgentRun{}, false, abort(err)
 	}

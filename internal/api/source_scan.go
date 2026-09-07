@@ -211,7 +211,12 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	}
 	cc := ceilingFloorClass(ceiling)
 	srcID := src.ID
-	run, token, err := s.newStepRun(ctx, runID, actor, "source scan", cc, func(run *types.AgentRun) {
+	// THE LIMITS AXIS (F153). This lane creates a run FOR the acting member, so
+	// max_concurrent_runs binds it; a scan run is server-authored and
+	// unattachable, so deny_interactive does not. Until newStepRun made the
+	// decision a required argument, this lane read no limit at all and a member
+	// sitting at their cap could keep spawning scans.
+	run, token, err := s.newStepRun(ctx, runID, actor, "source scan", cc, scanRunGovernance(ceiling), func(run *types.AgentRun) {
 		run.SourceID = &srcID
 		run.Repo = src.Locator
 		run.AutoStopAfterSec = scanIdleCapSec
