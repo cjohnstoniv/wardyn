@@ -458,12 +458,19 @@ func (s *Server) revokeAPIToken(w http.ResponseWriter, r *http.Request, principa
 // /api/v1/tokens/{id} or POST /sessions/revoke — and nothing in the demotion
 // path said so.
 //
-// WHAT IT IS NOT: it is not a TTL and it does not revoke anything. Auto-revoking
-// on a mapping edit would be a self-DoS with the blast radius of a group — one
-// edit killing every CI credential whose snapshot happens to name that group —
-// so the admin is TOLD rather than surprised. (POST /sessions/revoke is the
-// lever, and since F143 a token minted at-or-before that cutoff stops
-// authenticating, so the remedy this names actually works.)
+// WHAT IT IS NOT: it is not a TTL. It is the INFORMATIONAL half — how many
+// frozen snapshots name this value at all, elevated or not — and it revokes
+// nothing itself. The acting half is revokeDemotedRoleSnapshots below, which
+// the owner adjudication for F112 requires: a demotion must be effective
+// immediately, not merely announced. Telling the admin was this counter's whole
+// remedy and it was the wrong one — an operator who removes someone's admin has
+// removed nothing until a second, separately-remembered call.
+//
+// The self-DoS this used to fear is answered by SCOPE, not by inaction: the
+// revoke fires only when the edit actually takes a tier away from the edited
+// value, and then only for snapshots that lose one, so an ordinary member CI
+// credential naming the same group is never touched. See
+// revokeDemotedRoleSnapshots.
 //
 // THE MATCH IS THE SNAPSHOT'S OWN VOCABULARY. api_tokens carries the principal,
 // the email and the login-time GROUP snapshot (migration 0045 + the 0.7 groups
@@ -496,6 +503,128 @@ func (s *Server) staleRoleSnapshotCount(ctx context.Context, value string) (int,
 	return n, nil
 }
 
+// apiTokenSnapshotAnswerable reports whether a token's login-time GROUP snapshot
+// can be re-derived from at all. NULL groups_truncated reads as TRUNCATED, the
+// same PF-26 rule apiTokenAuth applies: a pre-0.7 row's completeness was never
+// recorded, so "no groups" and "the groups we kept" are indistinguishable.
+func apiTokenSnapshotAnswerable(t types.APIToken) bool {
+	return t.Groups != nil && t.GroupsTruncated != nil && !*t.GroupsTruncated
+}
+
+// roleSnapshotCtx is the minimal context the two tier predicates read: a
+// verified human (so neither takes its shared-credential arm) carrying exactly
+// this role.
+func roleSnapshotCtx(role string) context.Context {
+	return withOIDCRole(withOIDCHuman(context.Background(), "role-snapshot"), role)
+}
+
+// roleSnapshotDrops reports whether re-deriving a human's role as `derived`
+// takes authority AWAY from a frozen snapshot that says `stamped`.
+//
+// THE TIERS ARE ASKED, NEVER RE-DERIVED. This builds the context each predicate
+// reads and calls s.isOperator / s.isSecurityOperator themselves, because
+// http.go states that a predicate there is the tier's ONLY definition and
+// nothing in this package may re-derive one from a role comparison of its own.
+//
+// BOTH are asked because the tiers DO NOT NEST — RoleSecurityAdmin is beside
+// RoleAdmin, not below it. security_admin ⇒ admin takes nothing away (a super
+// admin is a security admin too); admin ⇒ security_admin takes away the run
+// reach an admin stamp carries and IS a drop. A ladder would get exactly one of
+// those two backwards.
+func (s *Server) roleSnapshotDrops(stamped, derived string) bool {
+	was, now := roleSnapshotCtx(stamped), roleSnapshotCtx(derived)
+	return (s.isOperator(was) && !s.isOperator(now)) ||
+		(s.isSecurityOperator(was) && !s.isSecurityOperator(now))
+}
+
+// revokeDemotedRoleSnapshots makes a role-mapping demotion EFFECTIVE: it
+// revokes the outstanding wdn_ tokens of every principal whose derived role
+// this edit takes a tier away from. Returns how many rows it revoked.
+//
+// WHY IT REVOKES AT ALL (owner adjudication, F112). An api_token's role is
+// stamped at mint and read verbatim forever; the sibling credential got a bound
+// in migration 0046 (an SSH key's admin override expires with
+// WARDYN_SSH_ROLE_TTL) and this lane had none. Removing someone's admin through
+// the People screen left their tokens holding it until a human separately
+// remembered POST /sessions/revoke. "Removing admin removes admin" is the
+// contract; a count in an audit row is not it.
+//
+// TWO SCOPES KEEP THE BLAST RADIUS AT THE DEMOTION, which is what makes this
+// safe where a blanket sweep would not be:
+//
+//  1. THE EDIT ITSELF must take a tier away. before/after are the real merged
+//     derivations for the edited value (PreviewRoleAgainst over the same
+//     candidate row set the posture-flip guard uses), so a promotion, a
+//     no-op re-save, and a delete of a row the chart still grants revoke
+//     nothing.
+//  2. THIS EDIT must be what takes it. Each live token is re-derived from its
+//     OWN login-time claims TWICE — against the pre-edit rows and the post-edit
+//     rows — so a snapshot the edit does not move is left alone even if it is
+//     stale for some other reason. An admin-stamped token naming a different
+//     group is untouched.
+//  3. THE STAMP must still carry what was lost. A member-stamped CI credential
+//     that names the demoted group keeps working: member ⇒ member drops
+//     nothing, so there is nothing stale to revoke.
+//
+// AN UNANSWERABLE SNAPSHOT FAILS CLOSED, and this is the count's old
+// undercount corrected: a token whose group snapshot is nil or PARTIAL (PF-26)
+// cannot be re-derived, so it cannot be shown to have kept its tier. Elevated
+// stamps in that state are revoked; member stamps are not, since there is
+// nothing for them to lose. The old slices.Contains(t.Groups, value) test
+// reported 1 of 3 live admin-stamped tokens for exactly this reason.
+//
+// BEST EFFORT BY CONTRACT, like the counter: the mapping edit is already
+// durable when this runs, so a store failure is logged at WARN and reported as
+// zero — never turned into a 500 that would misdescribe what happened.
+func (s *Server) revokeDemotedRoleSnapshots(ctx context.Context, value string, before, after []oidc.RoleMapping) int {
+	if s.cfg.Store == nil || s.cfg.OIDC == nil || value == "" {
+		return 0
+	}
+	was, _ := s.cfg.OIDC.PreviewRoleAgainst(before, nil, []string{value}, "")
+	now, _ := s.cfg.OIDC.PreviewRoleAgainst(after, nil, []string{value}, "")
+	if !s.roleSnapshotDrops(was, now) {
+		return 0
+	}
+	toks, err := s.cfg.Store.ListAPITokens(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "api: could not list api tokens to revoke a demoted role snapshot; the demotion is NOT yet effective for outstanding tokens",
+			"value", value, "error", err)
+		return 0
+	}
+	var principals []string
+	for _, t := range toks {
+		if t.RevokedAt != nil {
+			continue
+		}
+		if apiTokenSnapshotAnswerable(t) {
+			wasT, _ := s.cfg.OIDC.PreviewRoleAgainst(before, nil, t.Groups, t.Email)
+			nowT, _ := s.cfg.OIDC.PreviewRoleAgainst(after, nil, t.Groups, t.Email)
+			if !s.roleSnapshotDrops(wasT, nowT) || !s.roleSnapshotDrops(t.Role, nowT) {
+				continue
+			}
+		} else if !s.roleSnapshotDrops(t.Role, oidc.RoleMember) {
+			continue
+		}
+		if !slices.Contains(principals, t.Principal) {
+			principals = append(principals, t.Principal)
+		}
+	}
+	revoked := 0
+	for _, p := range principals {
+		n, rerr := s.revokeAPITokensFor(ctx, p)
+		revoked += n
+		if rerr != nil {
+			slog.WarnContext(ctx, "api: could not revoke every api token of a demoted principal",
+				"principal", p, "value", value, "revoked", n, "error", rerr)
+		}
+	}
+	if revoked > 0 {
+		slog.WarnContext(ctx, "api: role mapping demoted a value; the affected principals' api tokens were revoked",
+			"value", value, "was", was, "now", now, "tokens_revoked", revoked, "principals", len(principals))
+	}
+	return revoked
+}
+
 // noteStaleRoleSnapshots counts the frozen token snapshots a role-mapping write
 // does not reach and says so at WARN, naming the lever. Returns the count for
 // the handler to publish; 0 on any failure, which is the quiet direction — a
@@ -509,9 +638,10 @@ func (s *Server) noteStaleRoleSnapshots(ctx context.Context, value, what string)
 		return 0
 	}
 	if n > 0 {
-		slog.WarnContext(ctx, "api: role mapping changed; outstanding api tokens still carry the OLD role snapshot",
+		slog.WarnContext(ctx, "api: role mapping changed; outstanding api tokens carry a role snapshot frozen at mint",
 			"value", value, "change", what, "tokens", n,
-			"remedy", "POST /api/v1/sessions/revoke {\"sub\":\"<principal>\"} or DELETE /api/v1/tokens/{id} — a token's role is frozen at mint and no sign-in refreshes it")
+			"note", "counted BEFORE this edit acted; the snapshots this edit demotes are revoked with it (see the revoke line), and the rest keep a role this edit did not change",
+			"remedy", "POST /api/v1/sessions/revoke {\"sub\":\"<principal>\"} or DELETE /api/v1/tokens/{id} — for anything the demotion scope deliberately leaves alone")
 	}
 	return n
 }
