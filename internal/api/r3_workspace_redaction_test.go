@@ -30,6 +30,18 @@ func (s *r3TopologyStore) ListWorkspaces(context.Context) ([]types.Workspace, er
 	return []types.Workspace{s.ws}, nil
 }
 
+// ListRuns completes the double for the observed-egress read, which scans the
+// runs that referenced this workspace. Empty: the route's own ownsRunOrAdmin
+// filter is pinned elsewhere; here it is one of the four consumers the
+// redaction sweep must cover.
+func (s *r3TopologyStore) ListRuns(context.Context) ([]types.AgentRun, error) { return nil, nil }
+
+// GetSiteConfig completes the double for the env-as-code generation, which
+// folds the operator's artifact-registry redirects into the emitted files.
+func (s *r3TopologyStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{ArtifactOverrides: map[string]types.ArtifactOverride{"npm": {BaseURL: "https://nexus.corp.internal/npm"}}}, nil
+}
+
 func (s *r3TopologyStore) GetWorkspace(_ context.Context, id uuid.UUID) (types.Workspace, error) {
 	if id == s.ws.ID {
 		return s.ws, nil

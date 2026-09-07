@@ -114,12 +114,28 @@ func (s *Server) envAsCodeFor(w http.ResponseWriter, r *http.Request, ws types.W
 // the operator is meant to COMMIT dies with the import dialog. Nothing is
 // persisted: the files are deterministic from stored state, so this reflects a
 // later re-scan or setup-command edit rather than a finalize-time snapshot.
+//
+// OWNER-OR-SUPER, not member-readable, and it is the emitted CONTENT that
+// decides it. These files are the operator's authored environment rendered
+// whole: a `FROM <base_image.image>` line naming the internal registry
+// coordinate redactWorkspaceForRead blanks on GET /workspaces{,/{id}}, plus the
+// site-config artifact-registry redirects (artifactBaseURLs) that R1 narrowed
+// GET /site-config to admin-only to withhold, plus the scanned profile's setup
+// commands. There is no per-field projection that leaves this route useful —
+// the whole point of the response is that it is committable — so the tier moves
+// instead, joining its own write twin (POST .../env-as-code/write, operatorOnly)
+// and the console, which already treats env-as-code as an operator action.
+//
+// getWorkspaceAuthorized rather than a new predicate: its population is exactly
+// workspaceReadFull (the owner, or a super admin) and its two refusals are
+// already the right ones — 403 "requires admin role" for an operator-owned row,
+// the byte-identical 404 for another member's.
 func (s *Server) handleGetEnvAsCode(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "workspace")
 	if !ok {
 		return
 	}
-	ws, ok := s.getWorkspaceReadable(w, r, id)
+	ws, ok := s.getWorkspaceAuthorized(w, r, id)
 	if !ok {
 		return
 	}

@@ -155,7 +155,7 @@ func TestResolveBuildView_ExplicitImageNeedsBuilder(t *testing.T) {
 
 	// No builder wired: the honest "none" report, not the false "nothing_to_build".
 	noBuilder := &Server{}
-	view := noBuilder.resolveBuildView(ws)
+	view := noBuilder.resolveBuildView(ws, workspaceReadFull)
 	if view.State != "none" {
 		t.Fatalf("state = %q, want %q (no builder wired — the base image is refused at run creation, not verbatim)", view.State, "none")
 	}
@@ -170,7 +170,7 @@ func TestResolveBuildView_ExplicitImageNeedsBuilder(t *testing.T) {
 	// unaffected by the builder-less fix above.
 	wired := &Server{}
 	wired.cfg.ImageBuilder = fakeImageBuilder{}
-	view = wired.resolveBuildView(ws)
+	view = wired.resolveBuildView(ws, workspaceReadFull)
 	if view.State != "nothing_to_build" || view.Image != "golang:1.26" {
 		t.Fatalf("wired-builder view = %+v, want nothing_to_build/golang:1.26", view)
 	}

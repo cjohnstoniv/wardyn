@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -99,9 +100,21 @@ func newWorkspaceReadServer(t *testing.T, ownedBy string) (*Server, *wsReadStore
 func TestSecurityAdminReadsForeignWorkspace(t *testing.T) {
 	const memberSub = "sub-ws-owner"
 	routes := workspaceReadRoutes()
-	if len(routes) < 4 {
-		t.Fatalf("derived %d classMember workspace GET routes (%v); want the four getWorkspaceReadable serves — "+
-			"if a route left classMember this test now covers less than it claims", len(routes), routes)
+	// EXACT SET, not a count: getWorkspaceReadable serves these three at member
+	// class, and GET .../env-as-code — its fourth consumer until F287 — moved to
+	// owner-or-super because its emitted files render the operator's authored
+	// environment whole. It is covered below on its own terms, so a route
+	// leaving OR joining classMember still fails here rather than quietly
+	// shrinking what this test claims.
+	wantRoutes := []string{
+		"GET /api/v1/workspaces/{id}",
+		"GET /api/v1/workspaces/{id}/build",
+		"GET /api/v1/workspaces/{id}/observed-egress",
+	}
+	slices.Sort(routes)
+	if !slices.Equal(routes, wantRoutes) {
+		t.Fatalf("derived classMember workspace GET routes %v, want %v — the getter's member-class consumer set moved; "+
+			"decide the new route's tier and update this list with it", routes, wantRoutes)
 	}
 
 	sec := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
@@ -140,6 +153,28 @@ func TestSecurityAdminReadsForeignWorkspace(t *testing.T) {
 			}
 		})
 	}
+
+	// THE GETTER'S FOURTH CONSUMER, on its own terms (F287). GET
+	// .../env-as-code left classMember because its emitted files render the
+	// operator's authored environment whole — the FROM line naming the internal
+	// registry coordinate the workspace reads blank, the site-config artifact
+	// redirects /site-config is admin-only for, the scanned setup commands. The
+	// tier that governs this workspace's EGRESS is not the tier that reads its
+	// build recipe.
+	t.Run("GET env-as-code did not widen with the read", func(t *testing.T) {
+		srv, st := newWorkspaceReadServer(t, memberSub)
+		p := fmt.Sprintf("/api/v1/workspaces/%s/env-as-code", st.ws.ID)
+		for who, session := range map[string]*http.Cookie{"security_admin": sec, "a foreign member": other} {
+			if w := doSSO(t, srv, http.MethodGet, p, session, ""); w.Code == http.StatusOK {
+				t.Errorf("%s read the operator's committable environment (200) — this route moved to owner-or-super "+
+					"with its operatorOnly write twin; body=%s", who, w.Body.String())
+			}
+		}
+		// And the OWNER keeps it: the move is a tier, not a shutdown.
+		if w := doSSO(t, srv, http.MethodGet, p, member, ""); w.Code == http.StatusNotFound || w.Code == http.StatusForbidden {
+			t.Errorf("the workspace's OWNER lost their own env-as-code (%d); body=%s", w.Code, w.Body.String())
+		}
+	})
 
 	// THE WRITE PREDICATE, in the same test and deliberately so.
 	t.Run("the write tier did NOT widen with the read", func(t *testing.T) {
