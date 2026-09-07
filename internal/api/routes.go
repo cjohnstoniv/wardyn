@@ -498,8 +498,25 @@ func (s *Server) routes() chi.Router {
 
 			// Effective integration set (stored ∪ legacy-derived) with live
 			// capabilities — see internal/api/integrations.go /
-			// setup_integrations.go. Read-only, same RBAC posture as
-			// site-config's GET: Credentials only ever holds secret NAMES.
+			// setup_integrations.go. Read-only, member-class, and deliberately
+			// NOT the posture of the site-config GET above it. This note used
+			// to claim that parity and justify it with "Credentials only ever
+			// holds secret NAMES"; both went false in the same move. The
+			// sibling narrowed to operatorOnly precisely BECAUSE a secret NAME
+			// is a credential REF (see its own tier note), and this route
+			// serves the very rows that document embeds — so the payload
+			// argument was the sibling's argument for narrowing, read
+			// backwards.
+			//
+			// What makes the wider tier honest is the PROJECTION, not a claim
+			// about the payload: a non-operator is answered
+			// memberSafeIntegration's view (setup_integrations.go) — identity,
+			// kind, disabled, default_for and the live capability matrix, its
+			// reasons scrubbed of anything withheld — with secrets[], egress[],
+			// config and docs dropped. The tier stays wide because the launch
+			// card picks an integration by identity; the credential refs and
+			// the internal hosts do not cross it. GET /setup/status publishes
+			// the same rows through the same projection.
 			r.Get("/integrations", s.handleListIntegrations)
 			// Integration writes: PUT creates-or-replaces a stored row, DELETE
 			// removes one. operatorOnly — same corp-wide blast radius as
