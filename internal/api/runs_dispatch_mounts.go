@@ -134,9 +134,13 @@ func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member memberM
 // SAME posture as RunToken today: proxy-process-only, never on the sandbox
 // side, masked from decision-log/stdout by the proxy — a deliberate,
 // already-documented tradeoff (see runner.ProxyConfig.UpstreamProxyURL), not a
-// new one. Fail SAFE: neither field configured, an unresolvable secret, or a
-// non-http URL (from either source) all return "" (direct egress, today's
-// behavior) plus an audit event; none of them fail the run or crash dispatch.
+// new one. Fail SAFE: neither field configured, an unresolvable secret, a
+// non-http URL, or a URL the sidecar's own loader refuses (proxy
+// .ValidUpstreamProxyURL — in practice a port outside 1-65535; from either
+// source) all return "" (direct egress, today's behavior) plus an audit event;
+// none of them fail the run or crash dispatch. That last class is the one the
+// sidecar used to answer with os.Exit(1) at container start, taking the run's
+// whole egress path with it instead of degrading to this audited fallback.
 // Extracted verbatim from dispatchRun.
 func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, siteCfg types.SiteConfig, siteCfgErr error) string {
 	if siteCfgErr != nil {

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -68,7 +69,7 @@ func mavenProxyOpts(proxyURL string) string {
 func resolveUpstreamProxyURL(ctx context.Context, plainURL, secretRef string, getSecret func(context.Context, string) ([]byte, error)) (proxyURL, failReason string) {
 	if plainURL != "" {
 		if raw, ok := normalizedHTTPProxyURL(plainURL); ok {
-			return raw, ""
+			return loadableUpstreamProxyURL(raw)
 		}
 		return "", "unsupported-scheme"
 	}
@@ -86,9 +87,27 @@ func resolveUpstreamProxyURL(ctx context.Context, plainURL, secretRef string, ge
 		return "", "secret-not-found"
 	}
 	if raw, ok := normalizedHTTPProxyURL(string(val)); ok {
-		return raw, ""
+		return loadableUpstreamProxyURL(raw)
 	}
 	return "", "unsupported-scheme"
+}
+
+// loadableUpstreamProxyURL is the last gate BOTH resolve lanes pass through: a
+// URL the sidecar's own loader (proxy.ValidUpstreamProxyURL) would refuse is
+// dropped here, with a reason, instead of being delivered in
+// WARDYN_PROXY_CONFIG_JSON to a wardyn-proxy that then os.Exit(1)s at container
+// start and takes the run's whole egress path with it. validateSiteConfig
+// applies the same gate at PUT /site-config, so reaching this is either a row
+// written before that check existed or a URL that arrived through the SECRET
+// lane, which no write-time validator can see inside — exactly the
+// defense-in-depth split the reserved-secret-name guard above already makes.
+// The loader's error is never returned: a secret-sourced URL may carry
+// user:pass, and this function's result is audited.
+func loadableUpstreamProxyURL(raw string) (proxyURL, failReason string) {
+	if err := proxy.ValidUpstreamProxyURL(raw); err != nil {
+		return "", "unloadable-upstream-url"
+	}
+	return raw, ""
 }
 
 // normalizedHTTPProxyURL trims raw and reports (trimmed, true) when it parses

@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/ipguard"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -167,6 +168,16 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 		if _, ok := normalizedHTTPProxyURL(cfg.UpstreamProxyURL); !ok {
 			return fmt.Errorf("upstream_proxy_url: must be http:// — https is not supported (the hop to the corp proxy is a plaintext CONNECT that cannot be TLS-wrapped)")
 		}
+		// And the PORT, by the sidecar's OWN loader (proxy.ValidUpstreamProxyURL),
+		// exactly as upstream_proxy_no_proxy delegates to proxy.ValidNoProxyEntry
+		// (site_config_noproxy.go) — the gate above checks the scheme and
+		// hostrules.HostOf discards the port entirely, so ":0"/":99999" saved with
+		// 200 OK and then failed the sidecar's applyDefaultsAndValidate at
+		// container start, os.Exit(1)ing the egress proxy of every dispatched run.
+		// One matcher, at the trust boundary, so the two can never drift again.
+		if err := proxy.ValidUpstreamProxyURL(cfg.UpstreamProxyURL); err != nil {
+			return fmt.Errorf("upstream_proxy_url: %w (the proxy sidecar loads this URL itself and refuses to start on it)", err)
+		}
 	}
 	for i, red := range cfg.EgressRedirects {
 		if !validSiteURLOrHost(red.From) {
@@ -186,6 +197,21 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 			// allow + optional token injection) — no config file ever reads
 			// it, so a bare "host[:port][/path]" is fine.
 			return fmt.Errorf("egress_redirects[%d]: invalid to %q", i, red.To)
+		}
+		// The PORT of both endpoints, which NOTHING above examines:
+		// validSiteURLOrHost bottoms out in hostrules.HostOf, and HostOf discards
+		// everything from the first ':' onward. An unusable port therefore saved
+		// with 200 OK and was then read differently by every downstream parser —
+		// redirectPort coerced ":0"/":99999"/a query-bearing authority to 443
+		// (mis-scoping the MITM/token-injection set and making the redirect probe
+		// dial a port the operator never configured), while url.Parse refused
+		// ":-1" outright and dropped the probe's --connect-to swap. One decision,
+		// at the write, so no two readers of the stored string can disagree.
+		for _, ep := range []struct{ field, raw string }{{"from", red.From}, {"to", red.To}} {
+			if _, _, ok := redirectEndpointPort(ep.raw); !ok {
+				return fmt.Errorf("egress_redirects[%d]: invalid port in %s %q — a port must be a decimal 1-65535, "+
+					"and must not be followed by a query or fragment", i, ep.field, ep.raw)
+			}
 		}
 		if red.Ecosystem != "" && !validArtifactEcosystems[red.Ecosystem] {
 			return fmt.Errorf("egress_redirects[%d]: unknown ecosystem %q", i, red.Ecosystem)
@@ -396,14 +422,6 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "integrations are managed through their own endpoints, not PUT /site-config")
 		return
 	}
-	// Same reasoning as Integrations above: onboarding state is server-owned and
-	// is carried forward from the stored document below. Rejected rather than
-	// ignored so a caller trying to set it learns why, instead of watching it
-	// silently not take.
-	if cfg.OnboardingCompletedAt != nil {
-		writeError(w, http.StatusBadRequest, "onboarding_completed_at is managed by the setup flow, not PUT /site-config")
-		return
-	}
 	if err := validateSiteConfig(cfg); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
 		return
@@ -425,6 +443,33 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	if !ifMatchSatisfied(r, computeETag(existing)) {
 		writeError(w, http.StatusPreconditionFailed,
 			"If-Match does not match the current site config — GET /site-config again and retry")
+		return
+	}
+	// Same reasoning as Integrations above: onboarding state is server-owned and
+	// is carried forward from the stored document below. A caller trying to SET
+	// it is told why rather than watching it silently not take — but ONLY when
+	// it names a different instant than the one already stored. GET emits this
+	// key (it is a plain field of the same types.SiteConfig this handler
+	// persists), so rejecting it unconditionally refused the very round-trip the
+	// doc above mandates: `wardyn site-config get > f` / `wardyn site-config
+	// apply f`, and every console save that spreads the GET document, 400ed on
+	// any install whose operator had finished the Getting Started funnel. Echoing
+	// the stored value changes nothing, so it is not an attempt to set it — and
+	// neither does naming one on an install that holds NONE. `make reset` takes
+	// the site config with the volume, so the captured corp-baseline.json
+	// applied afterwards (the capture-before-a-reset, apply-after round-trip in
+	// docs/OPERATIONS.md) and the MDM-delivered /etc/wardyn/site-config.json
+	// landing on a fresh machine (docs/DESKTOP.md) are exactly that body against
+	// a stored mark of nil — refusing them broke the very round-trip this
+	// handler exists to serve. A submitted value can never take effect either
+	// way, since the carry-forward below overwrites it unconditionally, so the
+	// 400 is reserved for the one case where it tells the caller something
+	// true: a mark the server actually HOLDS, named as a different instant.
+	// Checked HERE, against the same read the carry-forward below uses, so the
+	// comparison cannot race another writer (SEAM-1).
+	if existing.OnboardingCompletedAt != nil && cfg.OnboardingCompletedAt != nil &&
+		!cfg.OnboardingCompletedAt.Equal(*existing.OnboardingCompletedAt) {
+		writeError(w, http.StatusBadRequest, "onboarding_completed_at is managed by the setup flow, not PUT /site-config")
 		return
 	}
 	cfg.Integrations = existing.Integrations

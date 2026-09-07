@@ -126,3 +126,47 @@ func TestUpstreamProxy_MemberRowNeverChangesURL(t *testing.T) {
 			"a member row named as the site-config ref must never change it", got)
 	}
 }
+
+// TestUpstreamProxyURL_PortIsGatedByTheSidecarsOwnLoader pins the write-time and
+// dispatch-time halves of one rule: an upstream proxy URL the sidecar's own
+// loader refuses must never be persisted, and must never be delivered to a
+// sidecar if it is already stored. The API package's own gate checked only
+// url.Parse + the http scheme (hostrules.HostOf discards the port entirely), so
+// ":0" and ":99999" saved with 200 OK and then failed
+// Config.applyDefaultsAndValidate at container start — cmd/wardyn-proxy
+// os.Exit(1)s on that, killing the egress sidecar of EVERY dispatched run. The
+// gate is proxy.ValidUpstreamProxyURL, the same delegation upstream_proxy_no_proxy
+// already makes to proxy.ValidNoProxyEntry, so one matcher decides.
+func TestUpstreamProxyURL_PortIsGatedByTheSidecarsOwnLoader(t *testing.T) {
+	bad := []string{"http://proxy.corp.internal:0", "http://proxy.corp.internal:99999"}
+	for _, raw := range bad {
+		t.Run("PUT refuses "+raw, func(t *testing.T) {
+			// The write-time gate, on the same value the sidecar would load.
+			if err := validateSiteConfig(types.SiteConfig{UpstreamProxyURL: raw}); err == nil {
+				t.Fatalf("validateSiteConfig(%q) = nil: the sidecar's own loader (proxy.ValidUpstreamProxyURL over "+
+					"parseUpstreamProxy) refuses this port, so PUT /site-config must not persist it", raw)
+			}
+		})
+		t.Run("dispatch drops "+raw, func(t *testing.T) {
+			// The plain lane, for a row written before the gate existed.
+			if url, reason := resolveUpstreamProxyURL(context.Background(), raw, "", nil); url != "" || reason == "" {
+				t.Errorf("plain lane: got (%q, %q), want (\"\", a fail reason) — delivering this URL "+
+					"os.Exit(1)s the sidecar at container start", url, reason)
+			}
+			// The SECRET lane, which no write-time validator can see inside.
+			sec := &memSecrets{m: map[string][]byte{"corp-proxy-url": []byte(raw)}}
+			if url, reason := resolveUpstreamProxyURL(context.Background(), "", "corp-proxy-url", sec.Get); url != "" || reason == "" {
+				t.Errorf("secret lane: got (%q, %q), want (\"\", a fail reason) — a credentialed URL in a "+
+					"secret must not smuggle a port the sidecar refuses", url, reason)
+			}
+		})
+	}
+	// The control: a good URL still resolves, from both lanes, and still saves.
+	if err := validateSiteConfig(types.SiteConfig{UpstreamProxyURL: "http://proxy.corp.internal:3128"}); err != nil {
+		t.Fatalf("a valid upstream proxy URL must still save: %v", err)
+	}
+	sec := &memSecrets{m: map[string][]byte{"corp-proxy-url": []byte("http://user:pass@proxy.corp:8080")}}
+	if url, reason := resolveUpstreamProxyURL(context.Background(), "", "corp-proxy-url", sec.Get); reason != "" || url == "" {
+		t.Fatalf("a valid credentialed secret URL must still resolve, got (%q, %q)", url, reason)
+	}
+}

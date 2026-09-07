@@ -127,7 +127,11 @@ func (p proxyProbeSubject) pathClause() string {
 
 // timedOutDetail words the shared state=timed_out detail both classify*
 // functions use (see probeRunResult.timedOut's doc for what the state
-// means). agentStatus is probeAgentStatusAtDeadline's best-effort read
+// means). The budget is rendered in SECONDS — %d on a time.Duration is an
+// int64 of NANOSECONDS, legal to the toolchain (go vet is silent) and read by
+// the operator as "90000000000s", ~2853 years; site_config_probe.go's sibling
+// message in this same feature already converts. agentStatus is
+// probeAgentStatusAtDeadline's best-effort read
 // ("unknown" when it could not be determined); controlPlaneURL is
 // s.cfg.ControlPlaneURL, unmasked (it is operator-configured, never a
 // secret).
@@ -136,7 +140,7 @@ func timedOutDetail(agentStatus, controlPlaneURL string) string {
 		"The probe sandbox started and ran, but the run never reported completion within %ds — not a network verdict. "+
 			"Sandbox agent status at the deadline: %s. The usual cause on Kubernetes is the run's recording upload to the "+
 			"control plane (via the proxy pod) hanging: check WARDYN_CONTROL_PLANE_URL (%s) is reachable from the runs namespace.",
-		siteConfigProbeWaitTimeout, agentStatus, controlPlaneURL)
+		int(siteConfigProbeWaitTimeout.Seconds()), agentStatus, controlPlaneURL)
 }
 
 // classifyProxyProbe turns what runSiteConfigProbe actually observed into the

@@ -680,3 +680,49 @@ func TestHandlePutSiteConfig_IfMatch(t *testing.T) {
 		t.Fatalf("no If-Match: code = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 }
+
+// TestValidateSiteConfig_RedirectEndpointPort is Requirement 11's port half:
+// two parsers must never disagree about one stored string, so the disagreement
+// is refused at the write instead of resolved differently by each reader.
+// Nothing in the PUT path examined a redirect endpoint's port before this —
+// validSiteURLOrHost bottoms out in hostrules.HostOf, which discards everything
+// from the first ':' onward — so ":0", ":99999", ":-1" and a query glued to the
+// authority all saved with 200 OK. Downstream, redirectPort coerced three of
+// them to 443 (mis-scoping plan.mitmHosts, i.e. WHERE the operator's registry
+// token is injected, and making the redirect probe dial a port the operator
+// never configured) while url.Parse refused the fourth, dropping the probe's
+// --connect-to swap into the false-"blocked" it exists to prevent.
+func TestValidateSiteConfig_RedirectEndpointPort(t *testing.T) {
+	bad := []string{"10.40.2.11:0", "10.40.2.11:99999", "10.40.2.11:-1",
+		"https://10.40.2.11:0", "mirror.corp.example:0", "mirror.corp.example:65536"}
+	for _, to := range bad {
+		cfg := types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+			{From: "registry.npmjs.org", To: to},
+		}}
+		err := validateSiteConfig(cfg)
+		if err == nil {
+			t.Errorf("to %q was accepted: redirectPort then silently reads it as %d, a port the operator never configured",
+				to, redirectPort(to))
+			continue
+		}
+		if !strings.Contains(err.Error(), "egress_redirects[0]") {
+			t.Errorf("to %q: error %q must name the offending index", to, err)
+		}
+	}
+	// From is validated by the same rule — it is the authority the probe's
+	// PORT1 and the run's egress host both come from.
+	if err := validateSiteConfig(types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+		{From: "registry.npmjs.org:0", To: "10.40.2.11:8443"},
+	}}); err == nil {
+		t.Error("from \"registry.npmjs.org:0\" was accepted; the port must be validated on BOTH endpoints")
+	}
+	// The shapes that must keep saving: a real port, no port, and a path.
+	for _, to := range []string{"10.40.2.11:8443", "10.40.2.11", "mirror.corp.example:8443",
+		"https://mirror.corp.example:8443/artifactory/api/npm/npm-remote", "registry.corp.internal/ghcr-remote"} {
+		if err := validateSiteConfig(types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+			{From: "registry.npmjs.org", To: to},
+		}}); err != nil {
+			t.Errorf("to %q must still save: %v", to, err)
+		}
+	}
+}
