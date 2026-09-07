@@ -280,6 +280,26 @@ func (s *Server) writeUserDrive(w http.ResponseWriter, r *http.Request, id uuid.
 		return
 	}
 	saved, err := s.cfg.Store.UpsertUserDrive(r.Context(), d)
+	// THE THREE 409s, and they are three because they have three remedies. All
+	// of them wrap store.ErrConflict, so the STATUS was already right and the
+	// SENTENCE was not: both of the arms below used to fall through to "a user
+	// drive named %q already exists" — for a name that is free. An admin told
+	// that goes looking for a row that is not there, which is a worse outcome
+	// than a vague refusal: it is a confident wrong direction.
+	//
+	// ORDER: the two specific arms precede the UNIQUE(name) one because both
+	// WRAP it. They are disjoint, so their order relative to each other does not
+	// matter. store.ErrDriveHomeNamespaceConflict's own doc says it exists so
+	// "the ONE caller that writes the sentence can tell this refusal apart"; this
+	// is that caller.
+	if errors.Is(err, store.ErrDriveSlugConflict) {
+		writeError(w, http.StatusConflict, fmt.Sprintf("another user drive's name folds to the same storage-object name as %q; storage is addressed by the name with case and punctuation removed, so pick a name that differs by more than that", d.Name))
+		return
+	}
+	if errors.Is(err, store.ErrDriveHomeNamespaceConflict) {
+		writeError(w, http.StatusConflict, fmt.Sprintf("another host_path drive on %q derives home directory names by a different rule; two shares over one host root must use the same home_template, or two members are allocated the same directory", d.HostRoot))
+		return
+	}
 	if errors.Is(err, store.ErrConflict) {
 		writeError(w, http.StatusConflict, fmt.Sprintf("a user drive named %q already exists", d.Name))
 		return
