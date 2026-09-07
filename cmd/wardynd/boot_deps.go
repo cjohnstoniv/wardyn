@@ -78,6 +78,21 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 		// An operator who pointed WARDYN_PG_MIGRATE_DSN at the same (or another
 		// owner/superuser) role gets no protection — logging "protected"
 		// unconditionally would be an overclaim (invariant 5).
+		// AND THE CANARY ON THE POOL THAT ACTUALLY AUDITS. db.Migrate ran on
+		// mpool, so its tail canary proved the chain works for the MIGRATOR —
+		// a different role, a different search_path, different privileges, and
+		// not the connection a single audit row is ever written on. Every real
+		// audit write goes through `pool`, so the functional check has to be
+		// asked there too, or a split-role boot starts clean and the app pool's
+		// very next audit write comes back unchained. Same function, same
+		// refusal rules: a chain that demonstrably does not chain refuses the
+		// boot; a canary that could not RUN (chain lock busy, statement
+		// cancelled) reports at ERROR and lets it continue.
+		if cerr := db.AuditChainCanary(connectCtx, pool); cerr != nil {
+			pool.Close()
+			return nil, fmt.Errorf("verify the audit chain on the app role: %w", cerr)
+		}
+
 		// THE ROUTES, not a bool, because the remedy differs per route. This
 		// warning used to assert the cause — "still owns audit_events or is a
 		// superuser" — and prescribe "connect wardynd as a distinct non-owner

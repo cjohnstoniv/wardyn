@@ -602,6 +602,27 @@ func migrateOn(ctx context.Context, db migrationExecutor) error {
 // the boot continue: those are bounded, transient and self-clearing (the whole
 // subject of AuditChainLockTimeout), and bricking a boot over one is a failure
 // this check would cause rather than one it would find.
+// AuditChainCanary runs the boot canary against an arbitrary pool, for the ONE
+// caller that needs it on a pool Migrate never touched.
+//
+// WHY THE SPLIT-ROLE POSTURE NEEDS IT. Migrate — and so the canary at its tail —
+// runs on the MIGRATE pool when WARDYN_PG_MIGRATE_DSN is set, and that is the
+// posture the daemon's own boot log recommends. But the migrate role is not the
+// role that writes audit rows: every real audit write goes through the APP pool,
+// as a different role, with a different search_path and different privileges. A
+// canary that only ever ran as the migrator therefore proved the chain works for
+// a connection nothing audits on, and a split-role boot could start clean while
+// the app pool's very next audit write came back unchained — the exact failure
+// class this check exists to convert from post-hoc to boot-time.
+//
+// SAME FUNCTION, not a second copy: the refusal rules, the rolled-back
+// transaction, the READ COMMITTED pin and the transient-error treatment are the
+// ones documented on auditChainCanary below, so the two boot paths cannot come
+// to different conclusions about what a working chain is.
+func AuditChainCanary(ctx context.Context, pool *pgxpool.Pool) error {
+	return auditChainCanary(ctx, pool)
+}
+
 func auditChainCanary(ctx context.Context, db migrationExecutor) error {
 	var exists bool
 	if err := db.QueryRow(ctx, `SELECT to_regclass('audit_events') IS NOT NULL`).Scan(&exists); err != nil {
