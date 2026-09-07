@@ -437,7 +437,26 @@ func migrateOn(ctx context.Context, db migrationExecutor) error {
 	// ensureAuditTriggers, which is what the tail call was careful about: that
 	// function's restore path replays the trigger-defining migrations and
 	// re-creates the trigger as plain 'O' for the same reason the loop does.
-	defer restoreAlwaysTriggers(ctx, db, hardened)
+	//
+	// AND ON A CONTEXT THE CALLER CANNOT CANCEL, which is what makes the
+	// "cancelled ctx" claim above true rather than aspirational. wardynd gives
+	// the whole connect-and-migrate step a deadline (cmd/wardynd/boot_deps.go),
+	// and the loop deliberately logs each file's elapsed time so a slow one is
+	// visible BEFORE that deadline turns it fatal — i.e. a deadline firing
+	// between two migrations is a designed-for outcome, not an exotic one. Handed
+	// the same expired ctx, every statement in the restore fails before it
+	// reaches the wire, so the deferred call could only log that it could not
+	// tell — and the hardening is then lost for good for exactly the reason the
+	// loop-error case was: the next boot's capture reads the reverted 'O' and
+	// 0056-0058 are already recorded applied. context.WithoutCancel keeps the
+	// caller's values (logging/trace) and drops only its cancellation; the fresh
+	// deadline keeps a wedged server from turning a best-effort restore into a
+	// boot that never returns.
+	defer func() {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), restoreHardeningTimeout)
+		defer cancel()
+		restoreAlwaysTriggers(rctx, db, hardened)
+	}()
 
 	entries, err := migrationFS.ReadDir("migrations")
 	if err != nil {
@@ -659,8 +678,15 @@ func restoreAlwaysTriggers(ctx context.Context, db migrationExecutor, want []str
 	}
 	still, err := auditAlwaysTriggers(ctx, db)
 	if err != nil {
-		slog.ErrorContext(ctx, "db: cannot tell whether the migration loop reverted an ENABLE ALWAYS audit trigger; re-check pg_trigger.tgenabled by hand",
-			slog.Any("error", err), slog.Any("hardened_before", want))
+		// NAMING THE STATEMENTS, not just the trigger names: this branch is
+		// reached exactly when the connection or the context is no longer good
+		// enough to read the catalog (a boot whose deadline expired mid-loop is
+		// the live case), so it is the last chance the operator gets to be told
+		// what to run. docs/OPERATIONS.md promises an ERROR that names the
+		// statement whenever the hardening cannot be re-applied.
+		slog.ErrorContext(ctx, "db: cannot tell whether the migration loop reverted an ENABLE ALWAYS audit trigger; re-check pg_trigger.tgenabled and re-apply by hand if it is not 'A'",
+			slog.Any("error", err), slog.Any("hardened_before", want),
+			slog.Any("statements", alwaysTriggerStatements(want)))
 		return
 	}
 	always := make(map[string]bool, len(still))
@@ -671,7 +697,7 @@ func restoreAlwaysTriggers(ctx context.Context, db migrationExecutor, want []str
 		if always[name] {
 			continue // untouched by this run; nothing to re-apply
 		}
-		stmt := `ALTER TABLE audit_events ENABLE ALWAYS TRIGGER ` + pgx.Identifier{name}.Sanitize()
+		stmt := alwaysTriggerStatement(name)
 		if _, err := db.Exec(ctx, stmt); err != nil {
 			slog.ErrorContext(ctx, "db: a migration reverted this trigger's ENABLE ALWAYS hardening and it could NOT be re-applied; it now fires only for ordinary writes, not under session_replication_role = replica — re-apply it by hand",
 				slog.String("trigger", name), slog.String("statement", stmt), slog.Any("error", err))
@@ -681,6 +707,30 @@ func restoreAlwaysTriggers(ctx context.Context, db migrationExecutor, want []str
 			slog.String("trigger", name))
 	}
 }
+
+// alwaysTriggerStatement is the one statement that re-applies an operator's
+// hardening to a single trigger. Kept in one place so the ERROR lines quote
+// exactly what restoreAlwaysTriggers itself would have run.
+func alwaysTriggerStatement(name string) string {
+	return `ALTER TABLE audit_events ENABLE ALWAYS TRIGGER ` + pgx.Identifier{name}.Sanitize()
+}
+
+// alwaysTriggerStatements is the same for a whole capture, for the branch that
+// could not even read the catalog back and so cannot say which of them are
+// still needed.
+func alwaysTriggerStatements(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		out = append(out, alwaysTriggerStatement(n))
+	}
+	return out
+}
+
+// restoreHardeningTimeout bounds the detached ENABLE ALWAYS restore registered
+// by migrateOn. It runs on a context the caller cannot cancel (that is the
+// point), so it needs a deadline of its own: a best-effort re-apply must never
+// be the reason a boot fails to return.
+const restoreHardeningTimeout = 10 * time.Second
 
 // auditChainTrigger is the BEFORE INSERT trigger that hash-chains audit_events
 // (0047, redefined by 0056). auditAppendOnlyTriggers are the two that make the
