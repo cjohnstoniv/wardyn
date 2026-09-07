@@ -342,7 +342,55 @@ type closedEnumCheck struct {
 // sources.status, sources.kind and base_images.kind had no equivalent guard,
 // so any of them could silently drift the way agent_runs.state once did.
 func TestClosedEnumChecksMatchConstants(t *testing.T) {
-	cases := []closedEnumCheck{
+	for _, c := range closedEnumChecks() {
+		t.Run(c.table+"."+c.column, func(t *testing.T) {
+			allowed := effectiveCheckValues(t, c.table, c.column)
+			if allowed == nil {
+				t.Fatalf("no %s.%s CHECK found in migrations", c.table, c.column)
+			}
+			compareClosedEnum(t, c, allowed, "the migrations' CHECK")
+		})
+	}
+}
+
+// compareClosedEnum asserts a set of admitted values against the Go constants,
+// in BOTH directions, and is shared by the migration-text guard above and the
+// live-catalog guard in migrations_check_pg_test.go — so the two can never come
+// to different ideas of what parity means.
+func compareClosedEnum(t *testing.T, c closedEnumCheck, allowed map[string]bool, source string) {
+	t.Helper()
+	compareClosedEnumTo(t, c, allowed, source)
+}
+
+// enumReporter is the slice of *testing.T compareClosedEnumTo needs, so the
+// live-catalog guard's counterfactual can assert that this comparison FAILS on a
+// widened constraint without failing the test that proves it.
+type enumReporter interface {
+	Helper()
+	Errorf(format string, args ...any)
+}
+
+func compareClosedEnumTo(t enumReporter, c closedEnumCheck, allowed map[string]bool, source string) {
+	t.Helper()
+	for v := range c.known {
+		if !allowed[v] {
+			t.Errorf("%s: %s.%s does not allow %q, which the Go side defines", source, c.table, c.column, v)
+		}
+	}
+	for v := range allowed {
+		if !c.known[v] {
+			t.Errorf("%s: %s.%s allows %q, which is not a defined Go constant", source, c.table, c.column, v)
+		}
+	}
+}
+
+// closedEnumChecks is the table of columns whose CHECK must agree with a closed
+// Go set. It is a FUNCTION rather than a literal inside one test because two
+// guards read it: the always-on one over the migration text, and the PG-backed
+// one over what the database actually enforces. A case that existed in only one
+// of them would be a case whose two answers nobody compared.
+func closedEnumChecks() []closedEnumCheck {
+	return []closedEnumCheck{
 		{"workspaces", "status", workspaceStatusValues()},
 		{"sources", "status", workspaceStatusValues()},
 		{"sources", "kind", stringSet(string(types.SourceLocalDir), string(types.SourceRepo))},
@@ -443,23 +491,5 @@ func TestClosedEnumChecksMatchConstants(t *testing.T) {
 			string(types.CapabilitySubjectUser), string(types.CapabilitySubjectGroup),
 			string(types.CapabilitySubjectAll),
 		)},
-	}
-	for _, c := range cases {
-		t.Run(c.table+"."+c.column, func(t *testing.T) {
-			allowed := effectiveCheckValues(t, c.table, c.column)
-			if allowed == nil {
-				t.Fatalf("no %s.%s CHECK found in migrations", c.table, c.column)
-			}
-			for v := range c.known {
-				if !allowed[v] {
-					t.Errorf("%s.%s CHECK does not allow %q, which the Go side defines", c.table, c.column, v)
-				}
-			}
-			for v := range allowed {
-				if !c.known[v] {
-					t.Errorf("%s.%s CHECK allows %q, which is not a defined Go constant", c.table, c.column, v)
-				}
-			}
-		})
 	}
 }
