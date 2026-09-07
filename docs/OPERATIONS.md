@@ -2330,7 +2330,21 @@ the run's egress allowlist, token injected proxy-side, but **no config file is
 written** — there is no `.npmrc` equivalent for an arbitrary host. That is a real
 cost: the workspace still needs telling to pull from the mirror itself (`docker
 login` against the internal registry, an appliance client's own config), or a run
-reaches an allowed, credentialed host that nothing in the sandbox asks for. The UI
+reaches an allowed, credentialed host that nothing in the sandbox asks for.
+
+**A network-only row also has a third effect the two columns above don't
+show: it denies its own `from` host outright, in EVERY run, not only a run
+this redirect otherwise covers.** `appendNetworkRedirectDenials`
+(`internal/api/workspace_egress.go`) appends every network-only row's `from`
+to `policy.DeniedDomains` unconditionally on every dispatch
+(`internal/api/runs_dispatch.go`), unlike the substitution and the token plan,
+both of which are scoped to a run that actually reaches one of the redirect's
+public hosts. Deny beats `allow_all_egress`, so this closes the public route
+even for a run the redirect's substitution never touches — the intended
+GAP-EGRESS-4 protection against an allow-all Record session reaching the
+public host the redirect was configured to steer away from — but it also means
+a redirect an operator scoped narrowly still costs every OTHER run that public
+host, with neither the `to` host nor the token to show for it. The UI
 labels these rows `network only` so the gap stays visible.
 
 **A `to` that is a literal IP** — the normal shape of a private endpoint — is
@@ -2339,8 +2353,12 @@ proxy vets (the opaque tunnel, the TLS-terminated token-injection path, and the
 git/PAT brokers alike), and shows in the audit trail as `rule_source:
 site-config:egress-redirect` rather than a generic policy allow. The trust comes
 from the exact allowlist entry the substitution writes, so it is scoped to those
-runs and to that address; a run the redirect does not cover is refused, and a
-`denied_domains` entry still wins. `test-redirect` understands the shape too
+runs and to that address — **on any port**: `substituteArtifactEgress` writes
+`hostrules.HostOf(r.To)`, which strips a `:port` the operator typed into `to`,
+so the entry it adds is a bare address and `Policy.AllowsLiteralIP` matches it
+against every port, not only the one `to` named. A run the redirect does not
+cover is refused, and a `denied_domains` entry still wins. `test-redirect`
+understands the shape too
 (`redirectProbeTo`): it dials the `to` address while presenting the `from`
 hostname for TLS, because a private endpoint's certificate names the public host
 — probing the address directly failed verification and reported a correct

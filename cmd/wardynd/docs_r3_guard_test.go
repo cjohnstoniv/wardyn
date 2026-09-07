@@ -427,6 +427,344 @@ func TestGroupClaimCaveatCitesThePageThatCarriesIt(t *testing.T) {
 	}
 }
 
+// ruleSourceConst finds every `ruleSource<Name> = "<value>"` constant declared
+// across internal/egress/proxy (excluding tests) — the closed vocabulary
+// AUDIT-ACTIONS.md's rule_source table has to enumerate.
+var ruleSourceConst = regexp.MustCompile(`(?m)^\truleSource[A-Za-z]*\s+= "([a-z0-9:-]+)"`)
+
+// inlineRuleSourceLiteral finds evaluate()'s OWN decisionLog(...) call sites
+// in internal/egress/proxy/proxy.go whose rule_source argument is an inline
+// string literal rather than a named ruleSource* constant — the second,
+// previously-undocumented family F093's B1 blocking item added (the
+// "evaluator's own inline sources" table).
+var inlineRuleSourceLiteral = regexp.MustCompile(`decisionLog\([^,]+,\s*egress\.[A-Za-z]+,\s*"([a-z:-]+)"\)`)
+
+// TestAuditActionsDocEnumeratesEveryRuleSource (F093) pins the new
+// egress.*'s rule_source values table to the actual closed set of
+// ruleSource* constants — a new constant with no doc row fails here instead
+// of silently drifting, the same guard the finding's remediation asked for.
+// It also pins the second family (F093 B1): the inline literals evaluate()
+// itself writes at its decisionLog call sites in proxy.go, plus the
+// "approval:"+approvalID concatenation form.
+func TestAuditActionsDocEnumeratesEveryRuleSource(t *testing.T) {
+	dir := filepath.Join(repoRoot(t), "internal", "egress", "proxy")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read internal/egress/proxy: %v", err)
+	}
+	var values []string
+	var proxySrc string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		for _, m := range ruleSourceConst.FindAllStringSubmatch(string(b), -1) {
+			if !slices.Contains(values, m[1]) {
+				values = append(values, m[1])
+			}
+		}
+		if name == "proxy.go" {
+			proxySrc = string(b)
+		}
+	}
+	if len(values) < 15 {
+		t.Fatalf("found %d ruleSource* constants (%v) — the matcher needs updating, it is checking almost nothing", len(values), values)
+	}
+	if proxySrc == "" {
+		t.Fatal("internal/egress/proxy/proxy.go not found — the inline-literal scan needs updating")
+	}
+	for _, m := range inlineRuleSourceLiteral.FindAllStringSubmatch(proxySrc, -1) {
+		if !slices.Contains(values, m[1]) {
+			values = append(values, m[1])
+		}
+	}
+	if !strings.Contains(proxySrc, `"approval:"+`) {
+		t.Fatal(`proxy.go no longer builds a rule_source via "approval:"+approvalID.String() — re-derive the approval:<approval-id> doc row before trusting this guard`)
+	}
+	values = append(values, "approval:<approval-id>")
+
+	// F093 B1 premise: the branch-ns-off row's Meaning cell claims both the
+	// deployment-wide env switch and the per-run git_push_any_branch policy
+	// field feed the SAME branch of this condition — re-derive the row before
+	// trusting this guard if the branch itself changes shape.
+	if !strings.Contains(readSrc(t, "internal", "egress", "proxy", "git_broker.go"),
+		"if isPush && (!BranchNSEnforced() || p.policy.GitPushAnyBranch()) {") {
+		t.Fatal("internal/egress/proxy/git_broker.go no longer branches on " +
+			"\"if isPush && (!BranchNSEnforced() || p.policy.GitPushAnyBranch())\" — " +
+			"re-derive the brokered:git:branch-ns-off row's two-switches claim before trusting this guard")
+	}
+
+	doc := readDoc(t, "docs/AUDIT-ACTIONS.md")
+	for _, v := range values {
+		if !strings.Contains(doc, "`"+v+"`") {
+			t.Errorf("docs/AUDIT-ACTIONS.md's rule_source tables never name %q, a rule_source value emitted by internal/egress/proxy", v)
+		}
+	}
+	mustSay(t, doc, "docs/AUDIT-ACTIONS.md",
+		"the only decisions carved out of it",
+		"one ALLOW that REPLACES the ordinary",
+		"never which of the six causes",
+		"both switches take the same branch",
+		"git_push_any_branch",
+	)
+}
+
+// TestTestGapsDocMatchesTheCoverpkgBlindSpot (F092) pins docs/TEST-GAPS.md's
+// "Untested" bucket claim to test-report.sh's actual go test invocation.
+//
+// The union profile the inventory is built from runs `go test` with no
+// -coverpkg, so Go instruments only each package's own code for its own
+// tests: a func exercised solely through a DIFFERENT package's tests reads
+// 0.0% and lands in "Untested" despite being covered. The doc (and its
+// generator template in scripts/test-gaps.sh) called that bucket "genuinely
+// no test reaches these" — stronger than the measurement supports.
+func TestTestGapsDocMatchesTheCoverpkgBlindSpot(t *testing.T) {
+	if strings.Contains(readSrc(t, "scripts", "test-report.sh"), "-coverpkg") {
+		t.Fatal("test-report.sh now passes -coverpkg — the blind spot this guard pins may be closed; re-derive the doc claim before trusting this skip")
+	}
+	gen := readSrc(t, "scripts", "test-gaps.sh")
+	for _, want := range []string{"no same-package test", "-coverpkg"} {
+		if !strings.Contains(gen, want) {
+			t.Errorf("scripts/test-gaps.sh no longer mentions %q", want)
+		}
+	}
+	mustNotSay(t, gen, "scripts/test-gaps.sh (header comment)",
+		"Untested       — genuinely no test reaches it",
+	)
+
+	doc := readDoc(t, "docs/TEST-GAPS.md")
+	mustNotSay(t, doc, "docs/TEST-GAPS.md",
+		"## Untested — genuinely no test reaches these",
+	)
+	mustSay(t, doc, "docs/TEST-GAPS.md",
+		"no same-package test",
+		"WITHOUT `-coverpkg`",
+		"## Untested — no test in the SAME PACKAGE reaches these",
+	)
+}
+
+// TestAuditActionsDocNamesTheDroppedDecisionSummary (F067) pins the
+// egress.* row to the synthetic egress.decisions.dropped marker
+// droppedSummaryLog posts on buffer overflow — a Deny with an empty target
+// that lands as an ordinary egress.deny row.
+func TestAuditActionsDocNamesTheDroppedDecisionSummary(t *testing.T) {
+	src := readSrc(t, "internal", "egress", "proxy", "decisions.go")
+	if !strings.Contains(src, `RuleSource: fmt.Sprintf("egress.decisions.dropped:%d", n)`) {
+		t.Fatal("droppedSummaryLog no longer emits the egress.decisions.dropped:<n> marker — re-derive the doc row before trusting this guard")
+	}
+	doc := readDoc(t, "docs/AUDIT-ACTIONS.md")
+	mustSay(t, doc, "docs/AUDIT-ACTIONS.md",
+		"egress.decisions.dropped:<n>",
+		"droppedSummaryLog",
+		"not a policy denial of an actual request",
+	)
+}
+
+// TestLiteralIPRedirectDocsNameThePortDrop (F053) pins OPERATIONS.md and
+// THREAT-MODEL.md's "scoped to that address" claim to the fact that
+// substituteArtifactEgress writes a PORT-STRIPPED bare address, so the trust
+// it grants is not to `to:port` but to that address on any port.
+func TestLiteralIPRedirectDocsNameThePortDrop(t *testing.T) {
+	src := readSrc(t, "internal", "api", "workspace_egress.go")
+	if !strings.Contains(src, "to := strings.ToLower(hostrules.HostOf(r.To))") {
+		t.Fatal("substituteArtifactEgress no longer writes hostrules.HostOf(r.To) — re-derive the doc claim before trusting this guard")
+	}
+	policy := readSrc(t, "internal", "egress", "proxy", "policy.go")
+	if !strings.Contains(policy, "or a port-qualified one") {
+		t.Fatal("Policy.AllowsLiteralIP's doc comment no longer describes a port-qualified entry as an alternative — re-derive the doc claim before trusting this guard")
+	}
+
+	ops := readDoc(t, "docs/OPERATIONS.md")
+	mustSay(t, ops, "docs/OPERATIONS.md",
+		"on any port", "strips a `:port`", "hostrules.HostOf(r.To)",
+	)
+	tm := readDoc(t, "threatmodel/THREAT-MODEL.md")
+	mustSay(t, tm, "threatmodel/THREAT-MODEL.md",
+		"the port is\ndropped", "that\naddress on ANY port",
+	)
+}
+
+// TestOperationsDocNamesTheUnscopedNetworkRedirectDeny (F052) pins the
+// "Egress redirects: two tiers" section to appendNetworkRedirectDenials'
+// actual scope — or rather its absence.
+//
+// The substitution and the token plan are both scoped to a run that reaches
+// one of the redirect's public hosts; appendNetworkRedirectDenials takes no
+// such scope input at all (just the running deny-list and the site config),
+// so it denies a network-only row's From host in every run regardless. The
+// two-tier table and prose described only the two scoped effects.
+func TestOperationsDocNamesTheUnscopedNetworkRedirectDeny(t *testing.T) {
+	src := readSrc(t, "internal", "api", "workspace_egress.go")
+	if !strings.Contains(src, "func appendNetworkRedirectDenials(denied []string, sc types.SiteConfig) []string {") {
+		t.Fatal("appendNetworkRedirectDenials's signature changed — it may now take a run-scope input, which would close this residual; re-derive the doc claim before trusting this guard")
+	}
+	dispatch := readSrc(t, "internal", "api", "runs_dispatch.go")
+	if !strings.Contains(dispatch, "policy.DeniedDomains = appendNetworkRedirectDenials(policy.DeniedDomains, siteCfg)") {
+		t.Fatal("runs_dispatch.go no longer calls appendNetworkRedirectDenials this way — re-derive the doc claim before trusting this guard")
+	}
+	if strings.Contains(src, "// A run that names none of a redirect's public hosts is left\n// entirely untouched by it.\n") {
+		t.Error("workspace_egress.go's SCOPE comment still claims an out-of-scope run is left entirely untouched, unqualified — appendNetworkRedirectDenials' unconditional deny contradicts it")
+	}
+
+	doc := readDoc(t, "docs/OPERATIONS.md")
+	mustSay(t, doc, "docs/OPERATIONS.md",
+		"it denies its own `from` host outright, in EVERY run",
+		"appendNetworkRedirectDenials",
+		"Deny beats `allow_all_egress`",
+	)
+}
+
+// TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun (F042) pins the
+// credential.revoke row to what Broker.RevokeRun actually emits: it names no
+// Data fields and calls the event "revoked", but RevokeRun writes jti+note and
+// its own doc comment states GitHub tokens CANNOT be revoked before expiry.
+func TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun(t *testing.T) {
+	src := readSrc(t, "internal", "broker", "broker.go")
+	fn := funcBody(t, src, "(b *Broker) RevokeRun")
+	if !strings.Contains(fn, `"jti":  jti`) || !strings.Contains(fn, `"note":`) {
+		t.Fatal("Broker.RevokeRun no longer writes jti+note — re-derive the doc row before trusting this guard")
+	}
+	if !strings.Contains(src, "CANNOT be revoked individually before their") {
+		t.Fatal("RevokeRun's doc comment no longer states the per-token revocation limitation — re-derive the doc row before trusting this guard")
+	}
+
+	// F042 fix-up: MintedJTIs must still select on kind='credential' with no
+	// grant-kind narrowing — every brokered grant kind (github_token, api_key,
+	// git_pat, ssh_key) inserts its approval with kind='credential' (sql.go),
+	// so the doc's "every minted credential jti, every kind alike" claim
+	// depends on this query never narrowing to one grant kind.
+	pgxSrc := readSrc(t, "internal", "broker", "pgx.go")
+	if !strings.Contains(pgxSrc, `kind = 'credential' AND minted_jti <> ''`) {
+		t.Fatal("PgxStore.MintedJTIs no longer selects kind = 'credential' AND minted_jti <> '' — re-derive the doc row before trusting this guard")
+	}
+
+	doc := readDoc(t, "docs/AUDIT-ACTIONS.md")
+	mustNotSay(t, doc, "docs/AUDIT-ACTIONS.md",
+		"`credential.revoke` | A minted credential is revoked (kill-switch, run stop) | —",
+	)
+	mustNotSay(t, doc, "docs/AUDIT-ACTIONS.md",
+		"Every minted GitHub App installation `jti`",
+	)
+	mustSay(t, doc, "docs/AUDIT-ACTIONS.md",
+		"`credential.revoke`", "`jti`", "`note`",
+		"Every minted credential `jti`",
+		"`api_key`", "`ssh_key`",
+		"GitHub has no per-token revocation API",
+		"TTL expiry",
+	)
+}
+
+// TestAuditActionsDocNamesTheErrorScanAction (F041) pins AUDIT-ACTIONS.md's
+// llm.scan.* suffix enumeration, and egress.ScanSummary.Action's own comment,
+// to the literal `scanSummaryFrom` actually assigns on a scanner error or an
+// unparsed body.
+func TestAuditActionsDocNamesTheErrorScanAction(t *testing.T) {
+	body := funcBody(t, readSrc(t, "internal", "egress", "proxy", "llm_routes.go"), "scanSummaryFrom")
+	if !strings.Contains(body, `s.Action = "error"`) {
+		t.Fatalf(`scanSummaryFrom no longer assigns s.Action = "error" — re-derive AUDIT-ACTIONS.md's suffix list before trusting this guard`)
+	}
+
+	doc := readDoc(t, "docs/AUDIT-ACTIONS.md")
+	mustSay(t, doc, "docs/AUDIT-ACTIONS.md", "`llm.scan.error`")
+
+	comment := readSrc(t, "internal", "egress", "egress.go")
+	if i := strings.Index(comment, `Action     string        `+"`json:\"action\"`"); i < 0 {
+		t.Fatal("ScanSummary.Action field declaration not found — the guard's anchor moved")
+	} else {
+		line := comment[i:]
+		if end := strings.Index(line, "\n"); end >= 0 {
+			line = line[:end]
+		}
+		if !strings.Contains(line, `"error"`) {
+			t.Errorf("egress.ScanSummary.Action's enumeration comment omits \"error\": %q", line)
+		}
+	}
+}
+
+// TestArchitectureDocGitPATProxyInjectionClaimMatchesTheBroker (F040) pins
+// ARCHITECTURE.md's git-egress prose to the PAT broker's default-on posture.
+//
+// The section's table row already named the PAT broker, but the paragraph right
+// below it still said "git_pat and ssh_key cannot be proxy-injected at all" —
+// contradicting the row above it in the same section. Only ssh_key has no
+// credential-helper seam; git_pat is proxy-injected by its own broker whenever
+// WARDYN_GIT_PAT_BROKER is not turned off.
+func TestArchitectureDocGitPATProxyInjectionClaimMatchesTheBroker(t *testing.T) {
+	boot := readSrc(t, "cmd", "wardynd", "boot_flags.go")
+	if !strings.Contains(boot, `flagEnv("git-pat-broker", "WARDYN_GIT_PAT_BROKER", "on"`) {
+		t.Fatalf("WARDYN_GIT_PAT_BROKER's default moved off boot_flags.go's known declaration — re-derive the doc claim before trusting this guard")
+	}
+	arch := readDoc(t, "ARCHITECTURE.md")
+	mustNotSay(t, arch, "ARCHITECTURE.md",
+		"Conversely `git_pat` and `ssh_key` cannot be proxy-injected at all",
+	)
+	mustNotSay(t, arch, "ARCHITECTURE.md",
+		"### Git egress: two mechanisms",
+		"Git has TWO credential lanes",
+	)
+	mustSay(t, arch, "ARCHITECTURE.md",
+		"`git_pat` CAN be proxy-injected",
+		"`ssh_key` cannot be proxy-injected at all",
+		"WARDYN_GIT_PAT_BROKER=on",
+		"three credential lanes",
+	)
+}
+
+// TestThreatModelDocLiteralIPBoundNamesNonCanonicalResidual (F114) pins the
+// upstream corp-proxy residual's bound (3) to what the step-0 guard actually
+// parses.
+//
+// The threat model said a literal private/loopback/link-local/metadata IP "is
+// still denied at the literal-IP guard". Before R3's fix wave that promise held
+// only for spellings net.ParseIP accepts; the POSIX inet_aton forms (127.1,
+// 0x7f000001, 2130706433, 0251.0376.0.1) proceeded as ordinary hostnames and,
+// on the corp-upstream lane, reached the corp proxy verbatim. F105 (egress
+// lane) closed that gap: evaluate's step 0 is now literalIPGuard, whose
+// non-canonical arm (nonCanonicalIPv4, deny-only) covers those spellings, and
+// egressTarget's upstream branch re-runs the block check on the inet_aton
+// reading. This guard therefore pins the COVERAGE claim the doc now makes —
+// and fails loudly if the code stops delivering it, so the doc cannot outlive
+// the guard it describes.
+func TestThreatModelDocLiteralIPBoundNamesNonCanonicalResidual(t *testing.T) {
+	// (1) The premise: step 0 is literalIPGuard and its non-canonical arm exists.
+	eval := methodBody(t, readSrc(t, "internal", "egress", "proxy", "proxy.go"), "evaluate")
+	if !strings.Contains(eval, "literalIPGuard(") {
+		t.Fatalf("evaluate no longer routes step 0 through literalIPGuard — re-derive the doc's literal-IP bound before trusting this guard")
+	}
+	lig := readSrc(t, "internal", "egress", "proxy", "literal_ip_guard.go")
+	for _, want := range []string{"func nonCanonicalIPv4(", "nonCanonicalIPv4(host)"} {
+		if !strings.Contains(lig, want) {
+			t.Fatalf("literal_ip_guard.go no longer contains %q — the non-canonical coverage the doc claims has changed shape", want)
+		}
+	}
+
+	// (2) The corp-upstream branch re-runs the block check on the inet_aton
+	// reading before it forwards the name.
+	target := methodBody(t, readSrc(t, "internal", "egress", "proxy", "egress_target.go"), "egressTarget")
+	if !strings.Contains(target, "nonCanonicalIPv4(host)") {
+		t.Fatalf("egressTarget's upstream branch no longer re-checks non-canonical literals — re-derive the doc's bound before trusting this guard")
+	}
+
+	// (3) The doc states the coverage and its deny-only property, and no longer
+	// carries the pre-F105 qualifier or the residual it used to disclose.
+	doc := readDoc(t, "threatmodel/THREAT-MODEL.md")
+	mustSay(t, doc, "threatmodel/THREAT-MODEL.md",
+		"covers the NON-CANONICAL spellings too",
+		"127.1", "0x7f000001", "2130706433", "0251.0376.0.1",
+		"`nonCanonicalIPv4`",
+		"Deny only: a spelling the",
+	)
+	mustNotSay(t, doc, "threatmodel/THREAT-MODEL.md",
+		"in Go's `net.ParseIP` syntax",
+		"Residual, stated rather than hedged",
+	)
+}
+
 // TestDataFlowAuditSinkRowCarriesTheOutageQualifier (F048, round-2 residue)
 // extends the audit-sink guard's AUDIT-ACTIONS.md-style assertion to the third
 // file that makes the same off-box promise.

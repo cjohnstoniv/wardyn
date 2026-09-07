@@ -64,7 +64,7 @@ type ScanSummary struct {
 	Scanned    bool          `json:"scanned"`
 	Coverage   string        `json:"coverage"`              // "inspectable" | "tunneled-opaque"
 	Mode       string        `json:"mode,omitempty"`        // "alert" | "block"
-	Action     string        `json:"action"`                // "alert" | "block" | "skipped" | "blind"
+	Action     string        `json:"action"`                // "alert" | "block" | "skipped" | "blind" | "error"
 	Channel    string        `json:"channel,omitempty"`     // e.g. "anthropic.messages"
 	Skipped    bool          `json:"skipped,omitempty"`     // a span/the body was not fully scanned
 	SkipReason string        `json:"skip_reason,omitempty"` // "span_oversize" | "parse_error" | "sidecar_error" | "body_oversize" | "uninspected_channel"

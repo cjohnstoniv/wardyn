@@ -280,10 +280,10 @@ workspace's `approved_egress`/`denied_egress`. See
 [docs/POLICIES.md](docs/POLICIES.md) "Approval decision scopes" for the full
 semantics.
 
-### Git egress: two mechanisms, disjoint host sets
+### Git egress: three credential lanes, disjoint host sets
 
-Git has TWO credential lanes and they are not duplicates — which serves a clone
-is decided by grant kind and host, and neither can cover the other's set:
+Git has THREE credential lanes and they are not duplicates — which serves a
+clone is decided by grant kind and host, and none can cover another's set:
 
 | Grant / transport | Mechanism | Where the credential lives |
 |---|---|---|
@@ -293,9 +293,13 @@ is decided by grant kind and host, and neither can cover the other's set:
 
 The broker is structurally github.com-only and App-token-only: it has no host
 parameter and no username plumbing, and authenticates as
-`x-access-token`. An ADO/GitLab PAT cannot traverse it. Conversely `git_pat` and
-`ssh_key` cannot be proxy-injected at all — git-over-HTTPS to those hosts is an
-opaque CONNECT tunnel, and git's SSH transport has no credential-helper seam
+`x-access-token`. An ADO/GitLab PAT cannot traverse it. Conversely `ssh_key`
+cannot be proxy-injected at all — git's SSH transport has no credential-helper
+seam. `git_pat` CAN be proxy-injected, but only through its OWN broker (the row
+above): on the default `WARDYN_GIT_PAT_BROKER=on`, `agent-run`'s rewrite REMOVES
+the tunnel rather than injecting into it, terminating the request at the proxy
+and re-originating with Basic auth; with the broker off, git-over-HTTPS to that
+host is the same opaque CONNECT tunnel `ssh_key` faces
 (`internal/types/types.go`, `GrantGitPAT`/`GrantSSHKey`). Deleting either lane
 drops a supported SCM. (The helper deliberately does NOT serve the GitHub-App
 lane on a **brokered** run — one the broker serves at least one repo for,

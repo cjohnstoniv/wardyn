@@ -378,7 +378,10 @@ and by the same predicates as the first — `blockPrivate` only, so no
 loopback/link-local/metadata/NAT64 literal is ever trusted however it is
 allow-listed, and never an address on the proxy's own subnets or its
 control-plane host — and it is narrower in one respect: it admits only the EXACT
-address an operator typed, never a range. `denied_domains` still wins over both
+address an operator typed, never a range — but WIDER in another: the port is
+dropped (`substituteArtifactEgress` writes `hostrules.HostOf(r.To)`, a bare
+address), so the trust is not to the `to:port` an operator typed but to that
+address on ANY port. `denied_domains` still wins over both
 (`RunPolicy.AllowsLiteralIP` checks the deny lists first).
 
 The internal model gateway (residual #29) is NOT a second exception: its relaxed
