@@ -11,10 +11,21 @@ SSH.md point here** rather than re-listing actions themselves.
 
 To reproduce or extend this table: `grep -rn 'auditEvent(\|"[a-z_]\+\.[a-z_.]\+"' internal/api/*.go`
 (excluding `_test.go`) finds every call site; each site's `mustJSON(map[string]any{...})`
-or `Data:` literal is the field list. There is no CI check tying this file to
-the source — a new action can go undocumented — that is a known gap, not a
-promise this page is exhaustive (see `internal/api/audit.go`'s `parseAuditFilter`
-for the filterable envelope fields, which are stable regardless of action).
+or `Data:` literal is the field list. CI enforces doc↔emit parity in both
+directions: `TestAuditActionsDocCitationsAreLive` checks every `path:line`
+citation in this table still names what it claims
+(`cmd/wardynd/audit_actions_doc_guard_test.go`), and
+`TestAuditActionsDoc_EveryEmitHasRow` plus
+`TestAuditActionsForwardGuardCoversEveryEmitShape` check the other direction —
+every emitted action literal has either a row here or an entry in
+`auditActionAllow` (`cmd/wardynd/audit_actions_forward_guard_test.go`'s own
+escape hatch for a literal deliberately outside the registry — empty today,
+so nothing is currently excluded this way); all three run in
+`cmd/wardynd` and gate `make ci` via `test-race`. The residual gap is
+narrower now than "no CI check" — a `Data:` field can still go undocumented or
+drift unguarded (see `internal/api/audit.go`'s `parseAuditFilter` for the
+filterable envelope fields, which are stable regardless of action): the
+action SET is guarded, the per-action field LISTS are not.
 
 **Stable vs internal**, as used below: *stable* means another Wardyn doc
 already commits to the name and its fields as an integration point (a SIEM
@@ -205,7 +216,7 @@ Data is unchanged.
 | `access.role_mapping.write` | `POST /access/mappings` (Phase 2 lane A, migration `0051`, the People step): a console role mapping is added, or re-added over an existing value (upsert on the natural `value` key — 201 vs 200 tells the two apart, this action name does not) | `role`, `value` | `internal/api/access.go:555` | internal |
 | `access.role_mapping.delete` | `DELETE /access/mappings/{id}`. Records the DELETED row's `value`/`role` — captured from the matched row before the store delete, since the row (and its id-to-value mapping) is gone by the time the event is written | `role`, `value` | `internal/api/access.go:645` | internal |
 | `approval.second_human.bypass` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the decider was the `admin-token` principal, so the four-eyes rule was BYPASSED (break-glass). A shared token carries no per-human identity to compare against, so it is exempt by design — this event is what keeps that exemption from being silent, and sits beside the `actor_type=system` `approval.decide` the decision itself writes | `reason`, `switch` | `internal/api/approvals.go:330` (`requireSecondHuman`) | internal |
-| `authz.denied` | Every member denial that isn't a plain foreign-resource 404 — see `docs/OPERATIONS.md`'s "Every denial that isn't a 404" for the full `reason` vocabulary (`admin_surface`, `security_admin_surface`, `not_owner`, `attach_ticket_foreign_run`, `byoi_member`, `capability_workspace`, `capability_egress_host`, `capability_secret`, `capability_agent`, `capability_integration`, `governance_profile`, `grant_pairing_not_eligible`, `groups_snapshot_stale`, `second_human_required`). The `governance_profile` reason covers the user-drive door too, at target `runs.drive` (`denyMemberDrive`, `internal/api/user_drives_run.go:239`) — a new target, not a new reason. 0.7 does add three reasons, all listed above: `security_admin_surface` (the second admin tier's own refusal), `attach_ticket_foreign_run`, and `groups_snapshot_stale` (the resolver cannot answer this caller's group tier, so every ceiling-bounded seam refuses 403 — emitted ONCE per request at the one site that decides it, `internal/api/governance.go`'s `ceilingWithUnusableGroups`, at target `governance.ceiling`) | `dropped`, `host`, `method`, `reason` | multiple sites; documented `docs/OPERATIONS.md:1669-1676` | **stable** (documented, closed `reason` enum) |
+| `authz.denied` | Every member denial that isn't a plain foreign-resource 404 — see `docs/OPERATIONS.md`'s "Every denial that isn't a 404" for the full `reason` vocabulary (`admin_surface`, `security_admin_surface`, `not_owner`, `attach_ticket_foreign_run`, `byoi_member`, `capability_workspace`, `capability_egress_host`, `capability_secret`, `capability_agent`, `capability_integration`, `governance_profile`, `grant_pairing_not_eligible`, `groups_snapshot_stale`, `second_human_required`). The `governance_profile` reason covers the user-drive door too, at target `runs.drive` (`denyMemberDrive`, `internal/api/user_drives_run.go:239`) — a new target, not a new reason. 0.7 does add three reasons, all listed above: `security_admin_surface` (the second admin tier's own refusal), `attach_ticket_foreign_run`, and `groups_snapshot_stale` (the resolver cannot answer this caller's group tier, so every ceiling-bounded seam refuses 403 — emitted ONCE per request at the one site that decides it, `internal/api/governance.go`'s `ceilingWithUnusableGroups`, at target `governance.ceiling`) | `dropped`, `host`, `method`, `reason` | multiple sites; documented `docs/OPERATIONS.md:1748-1755` | **stable** (documented, closed `reason` enum) |
 | `auth.failed` | A public-API authentication attempt fails: an `adminAuth` 401 (admin token not configured, missing bearer, or a bearer that doesn't match), OR a presented OIDC session cookie was rejected (tampered/malformed or expired) — whichever reason is more specific wins when both apply on the same request. Actor is always `system` (`wardyn/adminAuth`; no verified caller identity exists at this point). Content-free: `reason` is a closed enum (`admin_token_not_configured`, `missing_bearer_token`, `invalid_admin_token`, `invalid_session`, `expired_session`, `revoked_session`, `session_revocation_unavailable` — the last two only when session revocation is wired), never a user-supplied string; the request path is `Target`, the TCP peer is `SourceIP`. Rate-bound (process-global token bucket, 1/sec with a burst of 5) so a scanner throwing 401s cannot flood the append-only log — **so this action's row count is NOT the failure rate**: past the burst the trail flattens while the real volume grows, and the dropped emits are counted as `wardyn_auth_failed_suppressed_total` on `/metrics` ([OPERATIONS.md](OPERATIONS.md) → Monitoring). Alert on that series, not on rows of this action | `reason` | `internal/api/http.go` (`auditAuthFailed`); session-rejection reason from `internal/auth/oidc/oidc.go`'s `Middleware`/`SessionRejectedFromContext` | internal |
 | `egress.*` | The proxy reports an egress decision for a run — the literal suffix is the decision itself: `egress.allow`, `egress.deny`, or `egress.pending` (`egress.Decision`, `internal/egress/egress.go:27-31`). A synthetic `blind` scan decision emits only `llm.scan.blind`, never a duplicate `egress.allow` for the tunnel | `approval_id`, `host`, `method`, `path`, `port`, `rule_source` | `internal/api/internal.go:80` | internal |
 
@@ -255,10 +266,14 @@ is `types.ActorSystem` and `Actor` is a fixed component name
 ## Notes on completeness
 
 - This table is hand-curated from a source grep, not generated by a build
-  step. A newly-added action literal will not appear here until this file is
-  updated by hand — there is no CI gate enforcing it (unlike, for example,
-  the closed-enum DB `CHECK` constraints `internal/db`'s
-  `TestClosedEnumChecksMatchConstants` pins).
+  step, but it is CI-gated like the closed-enum DB `CHECK` constraints
+  `internal/db`'s `TestClosedEnumChecksMatchConstants` pins: a newly-added
+  action literal with no row here fails `TestAuditActionsDoc_EveryEmitHasRow`
+  / `TestAuditActionsForwardGuardCoversEveryEmitShape`, and a row whose
+  citation no longer names what it claims fails
+  `TestAuditActionsDocCitationsAreLive` (all three `cmd/wardynd`, gating
+  `make ci`'s `test-race`). What is NOT enforced is the `Data` field list
+  inside a row — see the next point.
 - `Data` field lists were read from the `mustJSON(map[string]any{...})` or
   `Data:` literal at the cited call site; a field marked here can still be
   `omitempty`'d away on a given event (e.g. `error` only appears on a

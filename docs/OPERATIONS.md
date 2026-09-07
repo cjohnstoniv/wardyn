@@ -188,13 +188,34 @@ to another event) cannot alter the stored row, so it is named in the boot log at
 ERROR rather than refused — a deployment may legitimately hang a replication or
 notify trigger off this table.
 
+The boot does more than count triggers. After the catalog check, wardynd
+appends ONE synthetic audit row inside a transaction it always rolls back and
+asserts it came out chained — `row_hash` set, and `prev_hash` equal to the
+head read under the same lock. A chain that demonstrably does not chain
+REFUSES THE START: the trigger can be present, enabled and correctly named and
+still not work (that is the `0057` state `0058` repaired), and a wardynd
+serving over it writes a log the verify sweep reports as broken for as long
+as it runs. A canary that could not be RUN — the chain lock was busy, or the
+statement was cancelled — is reported at ERROR and the boot continues,
+because those are bounded and self-clearing. In the split-role posture the
+canary runs on BOTH pools: the migrator's, at the end of `Migrate`, and the
+app role's, which is the connection every audit row is actually written on.
+
 A trigger you have hardened with `ALTER TABLE … ENABLE ALWAYS TRIGGER`
 (`tgenabled='A'`, so it fires even under `session_replication_role = replica` —
 the bypass the sweep otherwise only catches after the fact) is left **exactly as
 it is**, and that holds across an upgrade, not just across a restart. The boot
 check counts `'A'` as firing, never re-creates it as plain `'O'`, and never
 refuses over it. `Migrate` reads which triggers are hardened *before* it applies
-anything and re-applies `ENABLE ALWAYS` to any the run reverted: every migration
+anything and re-applies `ENABLE ALWAYS` to any the run reverted. That re-apply
+runs on **every** exit from the migration run, not only a clean one — a
+migration that fails loudly by design (0059's colliding `home_override`,
+0060's out-of-set `api_tokens.role`) and a boot whose own deadline expires
+mid-run both reach it, the latter on a context the boot cannot cancel, because
+by then the trigger-defining files have already committed their
+`CREATE TRIGGER` and the hardening would otherwise be unrecoverable: the next
+boot reads the reverted `'O'` as the shipped state and finds those files
+already recorded applied. Every migration
 that redefines an audit trigger ends in `CREATE TRIGGER`, which always yields
 `'O'`, so without that the 0.7 upgrade would have quietly stripped the hardening
 off a 0.6.x deployment that had installed it. The restore is narrow — a trigger
@@ -311,10 +332,13 @@ The triggers above stop `UPDATE`/`DELETE`/`TRUNCATE` *through Wardyn's schema*,
 and the role split hardens that against the app role. Neither binds a **table
 owner or superuser**, who can `ALTER TABLE … DISABLE TRIGGER` and rewrite a row —
 the residual `0007_audit_least_privilege.sql` states plainly. The role-split check
-that reports this posture at boot (`AuditDDLProtected`) counts THREE ways to
+that reports this posture at boot (`AuditDDLProtected`) counts FOUR ways to
 bypass, not two: membership in a superuser role, membership in the owner role,
-and the **`TRIGGER` privilege** on `audit_events`. All three are **membership**
-tests, not attribute lookups — `GRANT some_admin_role TO app_role`, the ordinary
+the **`TRIGGER` privilege** on `audit_events`, and — on PostgreSQL 15 and later,
+where it is GRANTable to a non-superuser — the **`SET` privilege on the
+`session_replication_role` parameter**, which silences every simply-enabled
+trigger for the session without touching DDL at all. All four are
+**membership** tests, not attribute lookups — `GRANT some_admin_role TO app_role`, the ordinary
 managed-Postgres migration shape, leaves `app_role` with `rolsuper = false` while
 it can still `SET ROLE` and `ALTER TABLE … DISABLE TRIGGER`, and the chain is
 followed to any depth whether or not the role `INHERIT`s. Membership in
@@ -333,6 +357,24 @@ Either way the stored row is self-consistent and the verify sweep reports clean,
 which is why the boot check now refuses to start over ANY foreign row-level
 BEFORE INSERT trigger on this table. So a deploy that grants `TRIGGER` back is
 reported as NOT protected.
+
+**The fourth leg needs no DDL at all.** `SET session_replication_role =
+'replica'` silences every trigger left at the ordinary `tgenabled='O'` for the
+session, so a role holding nothing but `INSERT` can append a row past all
+three guards above — unchained, unrewritten by the chain trigger — checked
+only on PostgreSQL 15 and later, where `has_parameter_privilege` exists and
+the `SET` privilege on the parameter is itself GRANTable to a non-superuser
+(`internal/db/db.go:295-333`); on an older server only a superuser can set the
+GUC, so leg one already covers it. It is why `ENABLE ALWAYS`
+(`tgenabled='A'`, which fires regardless of replication role — see "A trigger
+you have hardened…" above) is the documented hardening rather than an edge
+case. Failing any of the four legs is reported at boot as NOT protected, with
+the remediation logged verbatim: `wardynd: WARDYN_PG_MIGRATE_DSN is set but
+the app role (WARDYN_PG_DSN) can still reach past audit_events' append-only
+guard by the route(s) named here — DDL protection is NOT in effect; connect
+wardynd as a distinct role that holds only INSERT/SELECT on audit_events and
+none of these`, followed by a `bypass_routes=[…]` attribute naming which of
+the four fired (`cmd/wardynd/boot_deps.go`'s `connectAndMigrate`).
 
 **The app role's grant set does not grow to keep the chain working.** `INSERT`
 and `SELECT` on `audit_events` is still the whole of it. The chain trigger
@@ -461,6 +503,18 @@ The costs are honest, and there are two: that isolation rule, and a session that
 holds a transaction open after inserting into `audit_events` blocks every other
 audit append until it commits or rolls back — so do not leave an interactive
 `psql` transaction sitting on that table.
+
+**The lever is `default_transaction_isolation`, a `user`-context GUC** —
+settable by any role, per role or per database, no superuser involved. wardynd
+checks it on every boot (`reportTransactionIsolation`, `internal/db/db.go:815-829`)
+and, when it reads anything other than `read committed`, logs an ERROR naming
+the value and the fix — `ALTER DATABASE <db> SET default_transaction_isolation
+= 'read committed'` (or the matching `ALTER ROLE`) — without refusing to
+start: Wardyn's own writers pin `READ COMMITTED` on their own transaction
+(`store.InsertAuditEvent`'s `Begin`, `internal/store/store.go:530`; a
+transaction-level isolation level overrides the GUC) and are unaffected
+either way, so this is a posture to report for an EXTERNAL writer this
+package cannot see, not a defect to boot-refuse over (`internal/db/db.go:803-814`).
 
 ### Retention, erasure and GDPR — a residual, not a solved problem
 
@@ -774,7 +828,19 @@ migration `0050`)** are the second and third owned nouns after runs.
   member-substitutable value there would be a guard bypass, not a convenience.
 - **`?owner=<principal>` is admin-only** on `PUT`/`DELETE`/`GET /secrets` (an
   admin's cross-write lands in the NAMED member's namespace, never the
-  operator's), refused with a constant 403 for anyone else.
+  operator's), refused with a constant 403 for anyone else. The value names a
+  HUMAN and is RESOLVED to the namespace key that person's own writes land in:
+  matched case-insensitively against the principals this deployment knows, and
+  mapped from the email form through the same (principal, email) pairing
+  `POST /sessions/revoke` matches on. A subject is opaque and case-sensitive,
+  so the fold cannot be a first-hit scan: an EXACT subject match wins
+  outright, and a value that folds case-insensitively onto MORE THAN ONE known
+  principal is refused `422` rather than resolved to whichever the directory
+  happened to list first — guessing there would write a credential into the
+  wrong human's namespace. An email address that pairs to no known
+  principal is refused 422 rather than silently creating a namespace its owner
+  never reads, and a cross-namespace `DELETE` that removed nothing answers 404
+  rather than an idempotent 204.
 - **Cross-user admin access is queryable.** An admin acting on a member-owned
   workspace stays the ADMIN in the audit actor (no impersonation) with
   `workspace_owner` naming the member; `secret.write`/`secret.delete` carry
@@ -1059,10 +1125,16 @@ the share mount, never holds a share credential, and never creates a volume with
 
    **Two `host_path` drives may not nest.** Registering a drive whose
    `host_root` is inside — or contains — another `host_path` drive's `host_root`
-   answers `422`, naming the other drive. Drives on the *same* root are fine
-   (one share, two allocations with different home templates), and so are
-   sibling trees; what is refused is one drive rooted inside a tree whose
-   directories another drive's members can rewrite from inside a run.
+   answers `422`, naming the other drive. Two `host_path` drives may share one
+   `host_root` — a read-write and a read-only view of `/srv/homes` is a
+   supported shape, and only a NESTED root is refused — and so are sibling
+   trees; what is refused is one drive rooted inside a tree whose directories
+   another drive's members can rewrite from inside a run. They must agree on
+   `home_template`, and a second one that disagrees is refused `409`: a
+   share's storage object is `<host_root>/<home>` with no drive component, so
+   two different derivation rules over one tree hand two different members the
+   same directory (a member whose `sub` is `alice` and a member whose address
+   is `alice@corp.example` both derive `alice`).
 
    The question is asked on the stored strings **and again on the
    symlink-resolved paths**, and either answer refuses — a root that is a link
@@ -1599,9 +1671,13 @@ guard.
 derivable from the operator allowlist; you create one by mapping an IdP App Role
 or group to `security_admin` in the role map (chart or People page). Security
 admins read the whole workspace inventory AND any workspace in it — the list,
-the row, its build status, its env-as-code and its **observed egress** — because
-they decide that workspace's allowed and denied hosts and the observed traffic is
-the input to that decision. They cannot otherwise WRITE a workspace: renaming,
+the row (projected), its build status (image and log blanked) and its
+**observed egress** — because they decide that workspace's allowed and denied
+hosts and the observed traffic is the input to that decision.
+`GET /workspaces/{id}/env-as-code` is NOT in that set (owner-or-super, since
+F287): its files carry the internal registry coordinate, the site-config
+artifact redirects and the operator's setup commands, none of which are an
+egress-decision input. They cannot otherwise WRITE a workspace: renaming,
 reassigning, deleting, binding credential material and launching a recording all
 stay with the super admin. Security
 admins author and assign **governance profiles** (named ceilings bound to users or
@@ -2881,15 +2957,29 @@ so `/home/agent/drive/shared` too — is refused to every policy
 workspace `local_dir` source target (`ValidateAuthoredTarget`,
 `internal/runner/mount.go`, the authored-target arm of the same validator every
 mount target runs). Before 0.7 the rule was only the allowed-prefix one
-(`/home/agent`, `/work`, `/workspace`), which admits it. Nothing re-validates a
-stored row on read — `validatePolicySpec` runs on the two **write** paths — so
-such a row survives the upgrade and fails at **run** time instead, with
-`workspace_mounts[0]: target /home/agent/drive is reserved for the user drive`
-at create and, for anything that reaches the driver,
-`docker: denied workspace mount "<source>" -> "<target>": target
-/home/agent/drive is reserved for the user drive` immediately before
-`ContainerCreate`. Find them before the upgrade window rather than in somebody's
-run:
+(`/home/agent`, `/work`, `/workspace`), which admits it. What a stored row does
+next splits by where it lives. A stored **workspace** source IS re-validated,
+at run-create — `seedRequestWorkspace` re-runs `ValidateAuthoredTarget` over
+every `ws.Sources` target (`internal/api/runs_create.go:94-115`) — and is
+refused `422` with `workspace <id> source target: target /home/agent/drive is
+reserved for the user drive`. A stored **policy**'s `workspace_mounts` or
+`workspace_repos` row is never re-validated on read — `validatePolicySpec`
+runs on the two **write** paths only — so it survives the upgrade and reaches
+dispatch intact; `buildRunMounts` re-checks the reserved target there and
+**drops** the mount rather than failing the run, logging `wardynd: stored
+policy binds the reserved user-drive target; dropping that mount` at WARN
+(`internal/api/runs_dispatch_mounts.go:96-104`) — the run starts one bind
+short. `buildRepoRecords` makes the same drop for a stored policy's
+`workspace_repos[].target`, folded into its destination validation
+(`internal/api/runs_scm.go:166`), but with **no** distinct log line for that
+arm. That WARN is the *only* run-time signal a stored policy row produces —
+no HTTP error, nothing the member sees — and `buildRunMounts`' drop means
+dispatch never reaches the driver-level `docker: denied workspace mount
+"<source>" -> "<target>": target /home/agent/drive is reserved for the user
+drive` refusal (`internal/runner/docker/driver_mounts.go:120-123`) for this
+case at all; that check now guards only a path a stored policy row can no
+longer take. Find both shapes before the upgrade window rather than in
+somebody's run or wardynd's log:
 
 ```sh
 for path in policies workspaces; do
@@ -2993,8 +3083,20 @@ state, not a repair of it. In the scenario above, `0050` and `0051` commit befor
 at `0060` instead leaves `0050`–`0059` applied. Migrations are forward-only with
 no `down` path, so **restoring the pre-upgrade dump is the only supported
 recovery** — putting the older binary back does not undo the migrations that
-already committed, and it will not boot against the schema they left. Take the
-dump before the upgrade, not after the refusal.
+already committed, and **it boots anyway**: `migrateOn`'s apply loop iterates
+only the binary's own embedded migration files and skips any name
+`isMigrationApplied` already finds recorded (`internal/db/db.go:425-436`), so
+nothing there refuses a schema newer than the binary. It then fails at the
+first write the older schema no longer supports, not at boot — on the scenario
+above that is the first secret write: `0050` moves the `secrets` primary key
+from `(name)` to `(owned_by, name)` (`internal/db/migrations/0050_secret_owned_by.sql:19-24`),
+and the older binary's `INSERT … ON CONFLICT (name)`
+(`internal/secretstore/pg/pg.go:78` at `v0.6.6`; the same statement on this
+branch already reads `ON CONFLICT (owned_by, name)`, `internal/secretstore/pg/pg.go:94`)
+names a constraint that no longer exists, which Postgres refuses as
+`SQLSTATE 42P10` ("no unique or exclusion constraint matching the ON CONFLICT
+specification") on every secret upsert. Take the dump before the upgrade, not
+after the refusal.
 
 The permission error itself has no way forward except giving the migrator
 ownership; do that on the restored database, not on the half-upgraded one.
@@ -3030,13 +3132,22 @@ back every privilege the split just removed, and the boot check below is written
 to catch exactly that.
 
 **wardynd verifies the claim rather than asserting it.** On the next boot it
-queries whether the app role is a superuser, a member of `audit_events`' owner,
-or holds `TRIGGER` on it (`db.AuditDDLProtected`), and logs one of two lines:
+queries whether the app role can reach past the guard by any of FOUR routes —
+membership in a superuser role, membership in `audit_events`'s owner role, the
+`TRIGGER` privilege on the table, or (PostgreSQL 15+) the `SET` privilege on
+the `session_replication_role` parameter, held directly or through a role it
+can `SET ROLE` into (`db.AuditDDLBypassRoutes`) — and logs one of two lines:
 
 - `migrations applied via WARDYN_PG_MIGRATE_DSN … app role is a verified
   non-owner of audit_events — the append-only guard is DDL-protected`
 - `WARDYN_PG_MIGRATE_DSN is set but the app role … still owns audit_events or is
   a superuser — DDL protection is NOT in effect`
+
+The second line now carries a `bypass_routes` field naming the route(s) that
+fired, because the remedy differs per route: the first two are closed by
+connecting as a different role, the third by a `REVOKE TRIGGER ON
+audit_events`, and the fourth by `REVOKE SET ON PARAMETER
+session_replication_role` — which no amount of role-swapping reaches.
 
 The second line means the split did not take; the deployment is no worse off than
 single-DSN mode, and no better.
@@ -3398,6 +3509,18 @@ provisioned — typically over an NFS/SMB export — and wardynd only ever looks
 up by name. A missing one fails the run with *"your drive's volume is not
 provisioned on this cluster"* rather than being invented as an empty volume where
 somebody's files were meant to be.
+
+**`home_template` on a `k8s_pvc_static` share.** The claim you provision is
+yours, but its NAME is minted by Wardyn exactly as for a managed drive, so
+`hash` is allowed here and is the recommended template: run the preview
+endpoint for a member to get the exact claim name to pre-create, and nothing
+about that member's identity is published in it. `email_local` is refused on
+this backend for the same reason it is refused on a managed one — two
+addresses that share the part before the `@` would be allocated ONE claim.
+`sub` remains available for operators who need to recognise the claims they
+pre-provision by sight. Stamping `wardyn.subject=<the preview's subject
+digest>` on a claim you pre-create makes the runner refuse to bind it for
+anyone else.
 
 **RBAC is two verbs.** `userDrives.enabled=true` adds exactly
 `persistentvolumeclaims: ["get","create"]` to the namespaced runner Role

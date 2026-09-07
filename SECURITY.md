@@ -95,6 +95,8 @@ residual-risk disclosures, so they live with the others in
 published, not hidden; they are out of scope for this process as written, and a
 *more severe than documented* instance is in scope.
 
+Dependency security tracking here is **advisory-lagged**: `govulncheck` matches known advisory IDs, so an upstream security release is invisible to it until an advisory is filed against that module — go-jose/v4 v4.1.5 (2026-09-03) shipped seven upstream-labelled security fixes with no advisory, and the scan stayed green throughout. Where a dependency sits on a token-verification path, the floor is therefore also held by a behavioural test that fails on a downgrade (`internal/auth/oidc/r3b_jose_currency_test.go`), not by the scan alone.
+
 ## Coordinated disclosure
 
 - We aim to **acknowledge** a report within **3 business days** and to provide an

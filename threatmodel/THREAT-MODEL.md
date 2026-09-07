@@ -435,8 +435,10 @@ action, target, outcome, source_ip, data))`, computed **inside Postgres** in a
 `BEFORE INSERT` trigger, so the writer cannot choose it and both in-tree insert
 paths (the store and the broker's in-tx `credential.mint`) inherit the chain.
 Editing one row breaks its own hash; deleting one breaks its neighbours' link; the
-operator-invoked sweep (`GET /api/v1/audit/chain/verify`, admin-only, never run at
-boot) names the first broken `seq` and why.
+operator-invoked sweep (`GET /api/v1/audit/chain/verify`, admin or
+`security_admin` — the `securityOps` tier, `requireSecurityOperator` /
+`isSecurityOperator` — never run at boot) names the first broken `seq` and
+why.
 
 **WHAT IT IS NOT: tamper-EVIDENCE, not tamper-proofness.** An actor who can
 rewrite one row can usually rewrite every row after it and re-chain the tail, and
@@ -653,21 +655,27 @@ share one drive**: two agents writing the same directory can corrupt each
 other's lock files, v1 mounts it anyway, and no warning fires — the existing
 collision warning keys on the run's workspace path, which a drive deliberately
 does not set, so a drive-aware warning waits on run-row persistence. And the
-admin preview and the member preflight are honest about the ALLOCATION only —
-though less narrowly than that used to mean. Since 0.7 the preview now runs the
+admin preview and the member preflight are no longer the same claim. The
+**preview** (admin-only, creates no run) is honest about the ALLOCATION
+only — though less narrowly than that used to mean. Since 0.7 it runs the
 governance door (`drivePreviewDoorIsOpen`), the unusable/stale group-snapshot arm
 (`driveWithUnusableGroups`, reached through `previewResolveUserDrive` in
 `internal/api/user_drives_resolve.go`) and the would-it-bind-here check
 (`driveIsMountableHere` in `internal/api/user_drives_run.go`), in the enforcement
 path's own order and with the enforcement path's own refusals — and for a
-`host_path` share that last check does touch the substrate: `driveShareIsBindable`
+`host_path` share that last check does touch the substrate: `driveShareBindFailure`
 re-runs the deployment's host-root ceiling and `os.Stat`s the person's own home.
-What it does NOT run is `driveMountFor`'s narrowing arm, which folds a run
-request's `read_only` and has no counterpart in a preview that holds no run
-request. And on a MANAGED backend the bind check short-circuits, so nothing here
-asks the CLUSTER whether a claim can bind: the stock chart's missing PVC rule, or
-a storage class with no provisioner, is still discovered at dispatch, after the
-row is written.
+What the PREVIEW does not run is `driveMountFor`'s narrowing arm, which folds a
+run request's `read_only` and has no counterpart in a preview that holds no run
+request. **The member preflight is not narrower at all**: `POST /runs/preflight`
+and `POST /runs` share one chokepoint (`resolveRunPolicy`) and one drive seed
+(`seedRequestDrive`, called from both `handlePreflightRun` and
+`handleCreateRun`), which ends in the SAME `driveMountFor` call a
+launch makes — a green preflight is the launch's own answer, not a lookalike of
+it. On a MANAGED backend the bind check short-circuits either way, so nothing
+here asks the CLUSTER whether a claim can bind: the stock chart's missing PVC
+rule, or a storage class with no provisioner, is still discovered at dispatch,
+after the row is written.
 
 ---
 
@@ -1308,7 +1316,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     host compromise. Existing corporate homes owned by per-user uids are
     supported read-only where uid 1000 can read them; where it cannot, Wardyn
     does NOT refuse — the directory only has to EXIST for wardynd's own uid
-    (`driveShareIsBindable`), so the mount succeeds and the agent sees permission
+    (`driveShareBindFailure`), so the mount succeeds and the agent sees permission
     denied at first access. Kerberos,
     `multiuser` SMB and per-user uids are deferred with their migration cost
     named (a uid-agnostic rebuild of all five agent images, `userns-remap`
