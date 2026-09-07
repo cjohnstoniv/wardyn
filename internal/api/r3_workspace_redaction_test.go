@@ -39,7 +39,9 @@ func (s *r3TopologyStore) ListRuns(context.Context) ([]types.AgentRun, error) { 
 // GetSiteConfig completes the double for the env-as-code generation, which
 // folds the operator's artifact-registry redirects into the emitted files.
 func (s *r3TopologyStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
-	return types.SiteConfig{ArtifactOverrides: map[string]types.ArtifactOverride{"npm": {BaseURL: "https://nexus.corp.internal/npm"}}}, nil
+	return types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+		{From: "https://registry.npmjs.org", To: "https://nexus.corp.internal/npm", Ecosystem: "npm"},
+	}}, nil
 }
 
 func (s *r3TopologyStore) GetWorkspace(_ context.Context, id uuid.UUID) (types.Workspace, error) {
