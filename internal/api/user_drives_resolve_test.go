@@ -86,6 +86,14 @@ type driveStore struct {
 	// double that hides a whole class of defect.
 	sawUsers  [][]string
 	sawGroups [][]string
+	// sawGovUsers / sawGovGroups are the same for the GOVERNANCE twin, and they
+	// exist for the identical reason (R1 F349). The drive resolver's arguments
+	// were already recorded; the ceiling resolver's were taken as `_`, so
+	// nothing in the package could see WHICH identity a ceiling was resolved on
+	// — and the fail-closed rule ceilingWithUnusableGroups exists to hold is
+	// entirely a statement about those arguments.
+	sawGovUsers  [][]string
+	sawGovGroups [][]string
 }
 
 func (s *driveStore) HasGroupTierAssignments(context.Context) (bool, error) {
@@ -96,8 +104,10 @@ func (s *driveStore) HasGroupTierAssignments(context.Context) (bool, error) {
 // DRIVE DOOR for the claims under test. The preview resolves the ceiling for
 // the previewed principal, not for the admin asking, so this is the only way to
 // state "this person's profile forbids a drive".
-func (s *driveStore) ResolveGovernanceProfile(_ context.Context, _, _ []string) (
+func (s *driveStore) ResolveGovernanceProfile(_ context.Context, users, groups []string) (
 	*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+	s.sawGovUsers = append(s.sawGovUsers, users)
+	s.sawGovGroups = append(s.sawGovGroups, groups)
 	if s.err != nil {
 		return nil, "", s.err
 	}
