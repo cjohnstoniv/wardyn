@@ -38,6 +38,17 @@ var ErrNotFound = errors.New("store: not found")
 // already claimed, or the requirements merge hitting the key cap.
 var ErrConflict = errors.New("store: conflict")
 
+// ErrDriveHomeNamespaceConflict is returned by UpsertUserDrive when a host_path
+// drive would share a host_root with another host_path drive that derives home
+// directory NAMES by a different rule.
+//
+// It wraps ErrConflict so every caller that only asks "is this a 409?" keeps
+// working unchanged; the wrap exists so the ONE caller that writes the sentence
+// can tell this refusal apart from UNIQUE(name), which is a different remedy
+// (pick another name vs. pick the same home_template, or another root).
+var ErrDriveHomeNamespaceConflict = fmt.Errorf(
+	"%w: another host_path drive on this host_root derives home directory names by a different rule", ErrConflict)
+
 // ErrAlreadyDecided is returned when DecideApproval is called on an approval
 // that has already left the PENDING state. Fail closed: never allow a second
 // decision to silently overwrite the first.
