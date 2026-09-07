@@ -204,7 +204,35 @@ type createAPITokenRequest struct {
 //  2. The caller is itself a token. A token minting a successor token would make
 //     revocation meaningless: pull the leaked credential and its child, minted
 //     minutes after the leak, still works under a different id.
+//
+// apiTokenNoHumanRefusal is the ONE sentence this handler gives a caller with
+// no live signed-in human behind the request — no verified human on the
+// context at all, or a session the revocation lever cut off while the mint was
+// in flight. Shared verbatim so the two arms cannot drift into an oracle that
+// distinguishes "you were never signed in" from "your session was just
+// revoked".
+const apiTokenNoHumanRefusal = "an API token belongs to a signed-in human — sign in to the console and create one from Account, or keep using the admin token directly"
+
 func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
+	// THE CREDENTIAL'S AUTHORITY TIME, stamped HERE — before a single byte of
+	// the request body is read.
+	//
+	// created_at is not a display field: apiTokenAuth compares it against the
+	// POST /sessions/revoke cutoff, so it means "the moment from which this
+	// credential's authority runs". The authority was established upstream, by
+	// the session gate that admitted this request (oidc.Middleware's
+	// IsSessionRevoked). Stamping the row with s.cfg.Now() at INSERT time
+	// instead put the field minutes or hours after the moment it stands for,
+	// and the API server sets no ReadTimeout by design: a caller who holds the
+	// mint request's body open across the lever got created_at AFTER the
+	// cutoff, escaped the sweep's ListAPITokens snapshot exactly as before, and
+	// passed the read-side check too — a permanent wdn_ credential surviving
+	// the 204 the incident lever answered with.
+	//
+	// The whole client-controlled window lives between request admission and
+	// this handler's store write; taking the timestamp at the top removes it,
+	// because everything an attacker can stretch happens after this line.
+	authorizedAt := s.cfg.Now().UTC()
 	var req createAPITokenRequest
 	if !decodeStrict(w, r, &req) {
 		return
@@ -212,8 +240,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	sub := oidcHumanFromContext(ctx)
 	if sub == "" {
-		writeError(w, http.StatusForbidden,
-			"an API token belongs to a signed-in human — sign in to the console and create one from Account, or keep using the admin token directly")
+		writeError(w, http.StatusForbidden, apiTokenNoHumanRefusal)
 		return
 	}
 	if apiTokenIDFromContext(ctx) != uuid.Nil {
@@ -286,6 +313,37 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	// say "known complete" (false) distinctly from a pre-0.7 row's "nobody
 	// recorded it" (NULL). See types.APIToken.GroupsTruncated.
 	groupsTruncated := oidcGroupsTruncatedFromContext(ctx)
+	// THE LEVER MAY HAVE FIRED WHILE THIS REQUEST WAS IN FLIGHT. The gate that
+	// admitted it ran in oidc.Middleware before the handler was entered, and
+	// everything since — the body read, the quota list — is time an attacker
+	// can stretch. Ask the same question the gate asked, as late as possible
+	// and about the same instant the row will carry: is a session admitted at
+	// authorizedAt now cut off?
+	//
+	// This does not replace the read-side check in apiTokenAuth above; the two
+	// close different halves. A cutoff committed BEFORE this line refuses the
+	// mint outright, so no dead credential is minted and no success audit row
+	// claims one was. A cutoff committed AFTER it postdates authorizedAt, so
+	// the row is born at-or-before the cutoff and never authenticates.
+	//
+	// The refusal is BYTE-IDENTICAL to the no-verified-human arm above: a
+	// caller whose session the lever just killed is exactly a caller with no
+	// signed-in human behind them, and answering differently would make this
+	// handler an oracle for "that revoke has landed".
+	//
+	// An unanswerable check fails closed with the same 500 the store errors
+	// below give — never as "not revoked".
+	if s.cfg.SessionRevocations != nil {
+		revoked, rerr := s.cfg.SessionRevocations.IsSessionRevoked(ctx, sub, oidcEmailFromContext(ctx), authorizedAt)
+		if rerr != nil {
+			writeError(w, http.StatusInternalServerError, "create api token: "+rerr.Error())
+			return
+		}
+		if revoked {
+			writeError(w, http.StatusForbidden, apiTokenNoHumanRefusal)
+			return
+		}
+	}
 	created, err := s.cfg.Store.CreateAPIToken(ctx, types.APIToken{
 		ID:              uuid.New(),
 		Principal:       sub,
@@ -294,7 +352,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		Groups:          oidcGroupsFromContext(ctx),
 		GroupsTruncated: &groupsTruncated,
 		Name:            name,
-		CreatedAt:       s.cfg.Now().UTC(),
+		CreatedAt:       authorizedAt,
 	}, plaintext)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "create api token: "+err.Error())
