@@ -9,7 +9,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1561,6 +1565,9 @@ func TestDriveRefusalLeavesAnOperatorVisibleRecord(t *testing.T) {
 		name   string
 		build  func(t *testing.T) (*driveStore, *Server)
 		reason string
+		// req defaults to driveRunRequest(true, nil); the read_only arm is the
+		// one refusal the REQUEST decides rather than the deployment.
+		req *createRunRequest
 	}{
 		{
 			name: "no allocation",
@@ -1593,6 +1600,74 @@ func TestDriveRefusalLeavesAnOperatorVisibleRecord(t *testing.T) {
 			reason: driveRefusalBackendElsewhere,
 		},
 		{name: "the home directory is missing from the share", build: shareStore, reason: driveRefusalHomeMissing},
+		// THE FOUR ARMS THE TABLE NEVER EXERCISED (R1 F310). Every one of them
+		// is a reachable deployment failure whose whole point is that an
+		// operator sees it, and not one of them had ever emitted its own series
+		// in a test — so the reason constant, the WARN and the counter could
+		// each have been wrong in a different way and nothing would have said
+		// so. The guard below now proves the LABEL SET is complete; these prove
+		// the labels are reachable, which is the half a set comparison cannot
+		// state.
+		{
+			name: "the runner cannot mount drives",
+			build: func(*testing.T) (*driveStore, *Server) {
+				// docker_volume on a docker deployment: it PASSES the
+				// backend-vs-target check, so the runner's own capability is
+				// the only thing that can refuse it.
+				d := driveFixture(nil)
+				st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+				return st, New(Config{Store: st, Audit: &recRecorder{}, RunnerTarget: "docker",
+					Runner: driveCapsRunner{fakeRunner: &fakeRunner{}, drives: false}})
+			},
+			reason: driveRefusalRunnerCannotMount,
+		},
+		{
+			name: "the share is outside the deployment's roots",
+			build: func(t *testing.T) (*driveStore, *Server) {
+				t.Helper()
+				// The allocation's host_root was legal when an admin wrote it
+				// and the deployment's WARDYN_USER_DRIVE_HOST_ROOTS has since
+				// been narrowed away from it — the "ceiling moved" case, which
+				// is a re-check rather than a trusted row.
+				d := driveFixture(func(d *types.UserDrive) {
+					d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateSub, t.TempDir()
+				})
+				st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+				srv, _ := driveShareServer(st, []string{t.TempDir()})
+				return st, srv
+			},
+			reason: driveRefusalCeilingMoved,
+		},
+		{
+			name: "the share did not answer in time",
+			build: func(t *testing.T) (*driveStore, *Server) {
+				t.Helper()
+				root := t.TempDir()
+				d := driveFixture(func(d *types.UserDrive) {
+					d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateSub, root
+				})
+				st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+				srv, _ := driveShareServer(st, []string{root})
+				// A probe on this root already outstanding past its bound: the
+				// hung-mount state, reached without hanging the test on a real
+				// five-second syscall (see driveShareProbes, R1 F295).
+				driveShareProbes.Store("root:"+root, time.Now().Add(-time.Minute))
+				t.Cleanup(func() { driveShareProbes.Delete("root:" + root) })
+				return st, srv
+			},
+			reason: driveRefusalShareUnreachable,
+		},
+		{
+			name: "read_only:false cannot widen a read-only allocation",
+			build: func(*testing.T) (*driveStore, *Server) {
+				d := driveFixture(func(d *types.UserDrive) { d.Writable = false })
+				st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+				s, _ := driveRunServer(st, "docker")
+				return st, s
+			},
+			reason: driveRefusalReadOnly,
+			req:    func() *createRunRequest { r := driveRunRequest(true, boolPtr(false)); return &r }(),
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, srv := tc.build(t)
@@ -1601,7 +1676,11 @@ func TestDriveRefusalLeavesAnOperatorVisibleRecord(t *testing.T) {
 			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 			t.Cleanup(func() { slog.SetDefault(restore) })
 
-			_, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, driveMemberCtx([]string{"eng"}, false))
+			req := driveRunRequest(true, nil)
+			if tc.req != nil {
+				req = *tc.req
+			}
+			_, ok, w := driveSeed(t, srv, req, governanceCeiling{}, driveMemberCtx([]string{"eng"}, false))
 			if ok || w.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("ok = %v, code = %d, want a 422 refusal: %s", ok, w.Code, w.Body.String())
 			}
@@ -1625,6 +1704,36 @@ func TestDriveRefusalLeavesAnOperatorVisibleRecord(t *testing.T) {
 	// EVERY reason /metrics prints is one this file can actually emit, and
 	// every reason this file emits is printed: a label set that drifts is a
 	// dashboard that silently stops counting an arm.
+	//
+	// ANCHORED IN THE CONSTANT DECLARATIONS, not in driveRefusalReasons (R1
+	// F310). This loop used to walk driveRefusalReasons and look for each entry
+	// in /metrics — while metrics.go builds that output by walking the SAME
+	// slice. Deleting an entry deleted it from both sides at once, so the guard
+	// passed, the whole package passed, and the series for a still-reachable
+	// refusal simply stopped existing. Executed: with driveRefusalReadOnly
+	// removed from the slice, this test and all 221 test files were green.
+	//
+	// The declarations are the independent source, so the comparison has two
+	// sides that can actually disagree: a constant with no entry is an arm that
+	// refuses members while no dashboard counts it, and an entry with no
+	// constant is a series nothing can ever move.
+	declared := driveRefusalConstants(t)
+	listed := map[string]bool{}
+	for _, reason := range driveRefusalReasons {
+		listed[reason] = true
+		if !declared[reason] {
+			t.Errorf("driveRefusalReasons carries %q, which no driveRefusal* constant declares — /metrics "+
+				"prints a series no refusal can ever move", reason)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(declared)) {
+		if !listed[name] {
+			t.Errorf("the constant for %q is declared and reachable, but driveRefusalReasons omits it, so "+
+				"refuseDrive can emit it while /metrics never prints it: the arm refuses members and no "+
+				"dashboard counts them. Add it to driveRefusalReasons", name)
+		}
+	}
+
 	var out bytes.Buffer
 	(&metrics{}).write(&out)
 	for _, reason := range driveRefusalReasons {
@@ -1633,6 +1742,48 @@ func TestDriveRefusalLeavesAnOperatorVisibleRecord(t *testing.T) {
 				"which is the one time nobody is looking", reason)
 		}
 	}
+}
+
+// driveRefusalConstants reads the driveRefusal* string constants straight out of
+// internal/api/user_drives_run.go, so the label-set guard above has a source of
+// truth that is not the list it is checking. Same genre as cmd/wardynd's
+// envdoc_guard_test.go and this package's TestPreflightMirrorsLaunchGates: a
+// hand-maintained inventory is only an inventory if something reads the thing it
+// claims to inventory.
+func driveRefusalConstants(t *testing.T) map[string]bool {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), "user_drives_run.go", nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse user_drives_run.go: %v", err)
+	}
+	out := map[string]bool{}
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range vs.Names {
+				if !strings.HasPrefix(name.Name, "driveRefusal") || i >= len(vs.Values) {
+					continue
+				}
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				out[strings.Trim(lit.Value, `"`)] = true
+			}
+		}
+	}
+	if len(out) == 0 {
+		t.Fatal("no driveRefusal* constants found in user_drives_run.go — this guard reads them from source; " +
+			"re-point it at the new shape rather than deleting it")
+	}
+	return out
 }
 
 // TestDriveShareProbeIsBounded pins the deadline on the share filesystem
