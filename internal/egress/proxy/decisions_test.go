@@ -233,3 +233,48 @@ func TestDroppedSummary_FailedPostDoesNotBurnDelta(t *testing.T) {
 		t.Fatalf("delivered summary must advance reported to 3, got %d", reported2)
 	}
 }
+
+// F125: both decision-log call sites hand maskDecisionBytes JSON, so the mask
+// must know the JSON-escaped rendering of a secret, not just its raw bytes.
+//
+// json.Marshal escapes \n, \" and \\ inside any string and HTML-escapes & < >
+// to \u0026 \u003c \u003e by default, so an ordinary special-character secret
+// stops being byte-identical inside the marshalled body and a raw-value masker
+// slides straight past it — into the proxy's stdout decision line (mirror) and
+// the body of the /internal/decisions POST (post). The two sibling JSON sinks
+// (recording upload, audit maskingRecorder) were fixed for exactly this with
+// secretmask.JSONEscapedVariants; this lane's sink was not. A plain-ASCII
+// secret masks correctly either way, which is why the gap survived.
+func TestMaskDecisionBytesMasksJSONEscapedSecrets(t *testing.T) {
+	for _, secret := range []string{
+		"f125-amp&secret&value-01",   // & -> \u0026
+		"f125-lt<gt>secret-value-2",  // < > -> \u003c \u003e
+		"f125-nl\nsecret-value-0003", // newline -> \n
+		"f125-plain-ascii-value-04",  // control: masked before this fix too
+	} {
+		procRegistry.AddGlobal([]byte(secret))
+		body, err := json.Marshal(decisionLog(
+			egress.Request{Host: "x.test", Method: http.MethodGet, Path: "/x?k=" + secret},
+			egress.Allow, "policy:allowed"))
+		if err != nil {
+			t.Fatalf("marshal decision log: %v", err)
+		}
+		// The secret AS IT APPEARS inside a JSON string — json.Marshal of the
+		// value itself, minus the surrounding quotes.
+		q, err := json.Marshal(secret)
+		if err != nil {
+			t.Fatalf("marshal secret: %v", err)
+		}
+		escaped := string(q[1 : len(q)-1])
+		if !strings.Contains(string(body), escaped) {
+			t.Fatalf("the marshalled decision log does not carry %q at all — the probe is asserting nothing", escaped)
+		}
+		masked := string(maskDecisionBytes(body))
+		if strings.Contains(masked, escaped) {
+			t.Errorf("secret %q survives maskDecisionBytes in its JSON-escaped form %q:\n%s", secret, escaped, masked)
+		}
+		if !strings.Contains(masked, "<secret-hidden>") {
+			t.Errorf("secret %q left no redaction placeholder behind:\n%s", secret, masked)
+		}
+	}
+}

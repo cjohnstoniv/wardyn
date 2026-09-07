@@ -87,9 +87,20 @@ invitation, not an embarrassment.
    `allow_all_egress` would permit (measured). See `docs/POLICIES.md`.
 
    **The parser binds the brokered App lane only, but on the SAME forge no second
-   lane is left beside it.** A `git_pat` push is an opaque CONNECT and an `ssh_key`
-   push is not smart-HTTP, so no receive-pack parser can bind either — but for a
-   forge a run IS brokered for, `api.validateGrantLaneExclusivity` refuses a policy
+   lane is left beside it.** An `ssh_key` push is not smart-HTTP, so no
+   receive-pack parser can bind it. A `git_pat` push is a different case since
+   0.7 and this paragraph used to get it wrong: the never-resident git_pat lane
+   (default ON) removes the tunnel by design — `pat_broker.go` terminates the
+   sandbox's request on the proxy's own cleartext route and `validGitRest` admits
+   `POST git-receive-pack` there — so a parser COULD bind it, and leaving it
+   unconfined is a scoping DECISION rather than an impossibility. The decision:
+   a PAT carries whatever scope the operator issued and Wardyn cannot narrow it,
+   so the namespace would be a convention imposed on a credential it does not
+   bound, over forges whose push-ref conventions are not GitHub's; extending it
+   needs its own switch, its own decision-log rule sources and its own row in
+   `docs/ENV.md` (`BranchNSEnforced` in `internal/egress/proxy/git_broker.go`
+   states the same reasoning beside the code). Either way it is not a second lane
+   on a brokered forge: for a forge a run IS brokered for, `api.validateGrantLaneExclusivity` refuses a policy
    declaring a `github_token` grant alongside an `ssh_key` **or** `git_pat` grant
    for it, and dispatch's `api.dropBrokeredGrants` withholds any already-stored
    `ssh_key` **or** `git_pat` grant from the sandbox env (audited
@@ -307,6 +318,28 @@ policy verdict — a host `allow_all_egress` would pass is still denied when it
 resolves into one of those ranges. The guard lives in the proxy's code, not the
 network topology, so unlike L0 it does not depend on gatewaylessness.
 
+**Under a corporate upstream the pin is relaxed, the guard is not.** When
+`SiteConfig.UpstreamProxy` is configured the corp proxy performs the outbound
+DNS and dial, so the target is sent to it BY NAME rather than as a
+proxy-resolved literal (an upstream handed a literal refuses it). The guard
+still runs: `Proxy.egressTarget` resolves the name locally for the check alone
+and denies a host that answers into a blocked range, so the guard binds the
+HOSTNAME spelling and not only the literal one `evaluate` step 0 catches — a
+run under `allow_all_egress` cannot reach `169.254.169.254` by naming a host
+that resolves to it here. **Two residuals, stated:** a name this proxy cannot
+resolve at all (`resolve failed` / no addresses) is forwarded unvetted, because
+on a private-endpoint estate the sandbox host frequently cannot resolve external
+names and denying that would break every upstream deployment; such a name is
+left to the corp proxy's own egress controls — and, because the target is sent
+by NAME, the guard is checked against THIS proxy's resolution while the corp
+proxy performs its own, so a name that answers differently to the two resolvers
+(short-TTL rebinding, or a split-horizon zone only the corp proxy can see) is
+bound only at check time. The direct-dial lane closes that by pinning the vetted
+address; this hop cannot, which is why it is a relaxation of the PIN and is
+listed in §5.1a. A destination on the operator's
+`upstream_proxy_no_proxy` bypass list is dialed locally and takes the full
+pinning guard, unchanged.
+
 **The first admin-authored exception** is `SiteConfig.InternalHosts`
 (`vetHostLift`/`Proxy.vetHost`): it lifts the RFC1918/ULA/CGNAT slice ONLY —
 never loopback/link-local/metadata/multicast/NAT64 — for a declared hostname,
@@ -333,8 +366,9 @@ The internal model gateway (residual #29) is NOT a second exception: its relaxed
 per-request vet (`Proxy.vetTrustedHost`, reached only via `Proxy.gatewayTarget`)
 is scoped to the brokered `/wardyn/llm/*` route, never an ordinary sandbox
 CONNECT/MITM naming the gateway host, which `Proxy.vetHost` covers unchanged.
-The one hop that defers the post-resolution re-check — the opt-in upstream
-corp-proxy lane — is §5.1a's disclosed TOCTOU residual; step 0 still holds there.
+The one hop that relaxes the resolved-IP PIN — the opt-in upstream corp-proxy
+lane — is §5.1a's disclosed TOCTOU residual; the guard itself still runs there
+(§4.2) and step 0 still holds.
 
 ### 4.3 Capability grants (v0.6) — the mechanism
 
@@ -1672,21 +1706,24 @@ injection rule — the corp-artifact-host trust boundary in `isMITMHost`).
   stays opaque (a `MITM-all-egress` mode is a deliberate future option, gated on
   cert-pinning / non-HTTP-over-443 risks). DNS-tunnel and domain-fronting residuals
   (§5 #2, #3) are unchanged.
-- **Upstream corp-proxy hop relaxes the resolved-IP TOCTOU guard.** That mode is a
-  supported, operator-configured egress lane (site-config only — not sandbox- or
-  agent-controlled) and the intended path to internal/corporate endpoints from a
+- **Upstream corp-proxy hop relaxes the resolved-IP PIN, not the guard.** That mode
+  is a supported, operator-configured egress lane (site-config only — not sandbox-
+  or agent-controlled) and the intended path to internal/corporate endpoints from a
   sandbox with no direct internet route. The *residual* is one relaxation: with
   `p.upstream` set the proxy hands the corp proxy the target HOSTNAME rather than a
-  proxy-resolved-and-pinned IP, so `VetHost`'s resolved-IP re-check is skipped for
-  that hop (the `p.upstream` branch of step 4 in `evaluate`,
-  `internal/egress/proxy/proxy.go`). **Bounds, stated exactly so operators don't
+  proxy-resolved-and-pinned IP, so the dial is not pinned to a proxy-resolved
+  address; `egressTarget` still resolves the name for the guard and denies an
+  answer in a blocked range (§4.2), and only a name this proxy cannot resolve at
+  all is forwarded unvetted (the `p.upstream` branch of `Proxy.egressTarget`,
+  `internal/egress/proxy/egress_target.go`). **Bounds, stated exactly so operators don't
   over- or under-read it:** this does NOT make private IPs reachable. Reaching an
   internal-IP-resolving hostname still requires ALL of — (1) an operator configured
   the upstream proxy, (2) the run's own egress **policy** allows that hostname
   (default-deny allowlist + first-use approval + method rules, all unaffected), and
   (3) the destination is named by HOSTNAME: a literal
   private/loopback/link-local/metadata IP is still denied at the literal-IP guard.
-  Only the resolved-IP re-check is deferred, to the operator's own corp proxy.
+  Only the PIN is deferred, to the operator's own corp proxy; §4.2 states the two
+  residuals that deferral leaves.
 - The optional **sidecar** (`detector_sidecar_url`) treats an
   error/timeout/non-200 as a scanner error like the in-process detectors: fails
   **open** by default, and `on_scanner_error=block` **does** extend to it, so

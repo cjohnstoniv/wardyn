@@ -525,9 +525,16 @@ func extractApprovalID(body []byte) *uuid.UUID {
 }
 
 // emitLocalDecision records a DecisionLog for a brokered local route so it
-// lands in audit via the existing decisions pipeline. Every brokered local route
-// forwards to the control plane, so its host AND port are the recorded upstream
-// (an unparseable URL leaves both zero rather than fabricating a port).
+// lands in audit via the existing decisions pipeline. It is for the routes that
+// FORWARD TO THE CONTROL PLANE — mint, approval lookup, recording upload — whose
+// host AND port are therefore the recorded upstream (an unparseable URL leaves
+// both zero rather than fabricating a port).
+//
+// The two broker routes that re-originate to a forge do NOT use it and must not:
+// they have their own emitters that record the forge they actually dialled
+// (emitGitDecision -> github.com:443, emitPATDecision -> the granted PAT host).
+// Logging those through here recorded the control plane instead, which made a
+// clone of one forge indistinguishable from a mint, and from a clone of another.
 func (p *Proxy) emitLocalDecision(r *http.Request, decision egress.Decision, ruleSource string, approvalID *uuid.UUID) {
 	if p.sink == nil {
 		return

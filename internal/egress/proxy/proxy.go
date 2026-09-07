@@ -641,15 +641,22 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	}
 
 	// 4. IP vetting (unconditional private/loopback/link-local/metadata deny).
-	// When an upstream corp proxy is configured we do NOT resolve+pin the real
-	// host ourselves: the corp proxy performs the outbound DNS+dial, and the
-	// sandbox host frequently CANNOT resolve external names at all. The vetted-IP
-	// TOCTOU guard is therefore deliberately relaxed for the upstream hop — the
-	// literal-IP guard at step 0 still denies an agent naming a private/metadata
-	// IP directly (so SSRF-via-corp-proxy to loopback/metadata stays blocked),
-	// and policy/approval/method above are unchanged. Every DIRECT-dial path
-	// keeps the full VetHost guard. The target carries the HOSTNAME (not an IP)
-	// so egressDial issues CONNECT <real-host> to the corp proxy.
+	// When an upstream corp proxy is configured we do not PIN a resolved address:
+	// the corp proxy performs the outbound DNS+dial, and the target carries the
+	// HOSTNAME (not an IP) so egressDial issues CONNECT <real-host> to it — an
+	// upstream handed a resolved literal refuses it. What is relaxed there is the
+	// vetted-IP TOCTOU pin, NOT the guard: egressTarget still resolves the name
+	// locally for the guard and denies one that answers into blocked space, so
+	// SSRF-via-corp-proxy to loopback/metadata is blocked for the NAME spelling
+	// and not only for the literal one the step-0 guard catches. Two residuals,
+	// stated rather than papered over: a name this proxy cannot resolve at all is
+	// forwarded unvetted, because on a private-endpoint estate the sandbox host
+	// frequently cannot resolve external names and denying that would break every
+	// upstream deployment; and, the target being sent by name, the guard binds it
+	// at CHECK time only — the corp proxy resolves again for the dial, so a name
+	// that answers differently to the two resolvers is not bound at dial time.
+	// Policy/approval/method above are unchanged, and every DIRECT-dial path keeps
+	// the full pinning VetHost guard.
 	if trustedLiteralIP != nil {
 		target := net.JoinHostPort(trustedLiteralIP.String(), strconv.Itoa(port))
 		log := p.allowLog(req, approvalID)

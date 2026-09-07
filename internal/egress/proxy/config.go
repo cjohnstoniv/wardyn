@@ -114,10 +114,11 @@ type Config struct {
 	// (SiteConfig.UpstreamProxyNoProxy, forwarded verbatim): host/domain
 	// suffixes and CIDRs this sidecar dials DIRECTLY instead of CONNECTing
 	// through UpstreamProxyURL. It is the operator-hop equivalent of the
-	// NO_PROXY the sandbox already honours internally, and it exists because a
-	// corporate forward proxy will not CONNECT to an internal address — so on a
-	// private-endpoint estate every private endpoint times out while the
-	// upstream takes every dial.
+	// NO_PROXY the sandbox already honours internally. This sidecar vets the
+	// name on the upstream branch too (egressTarget): an endpoint that resolves
+	// into blocked space is denied HERE (builtin:private-ip), and one that does
+	// not is handed to a corporate forward proxy that will not CONNECT to an
+	// internal address; either way the bypass is what moves the dial local.
 	//
 	// It is a ROUTING list only: a bypassed dial falls through to the same
 	// unconditional private/reserved-IP guard an unproxied dial does, so it
