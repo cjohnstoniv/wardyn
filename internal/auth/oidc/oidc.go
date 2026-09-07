@@ -555,12 +555,42 @@ func randomToken() string {
 // emailDomainAllowed returns true if the email's domain (part after last '@')
 // matches one of the allowed domains (case-insensitive). Fail closed: returns
 // false for empty/malformed email addresses.
+//
+// THE ASCII GUARD RUNS ON THE RAW DOMAIN, BEFORE THE FOLD, and the order is the
+// security property — the same ordering emailInList, deriveRole's lookup loop,
+// ParseRoleMap and CanonicalGroupSubject already use, for the same reason.
+// strings.ToLower does Unicode case MAPPING, not an ASCII fold: KELVIN SIGN
+// U+212A maps to ASCII 'k' and LATIN CAPITAL LETTER I WITH DOT ABOVE U+0130
+// maps to 'i'. Lowering first therefore let a crafted claim domain
+// "\u212aorp.com" fold ONTO the operator-authored ASCII entry "korp.com" in
+// WARDYN_OIDC_EMAIL_DOMAINS — and "\u0130nfra.com" onto "infra.com" — passing
+// the one gate whose whole job is to keep that address out, on an id_token the
+// attacker's own tenant signed. Every entry on that list is operator-authored
+// ASCII (WARDYN_OIDC_EMAIL_DOMAINS, documented EXACT MATCH), so a domain that
+// is not printable ASCII can never legitimately equal one: refusing it before
+// the fold costs a real login nothing and closes the escalating direction.
+// Fold first, guard second, and the guard is decorative.
+//
+// printableASCII rather than ASCIIOnly, and on the DOMAIN rather than the whole
+// address: it is the domain that is compared against the allowlist (the local
+// part is discarded at the '@' split and cannot reach the comparison), and a
+// control character is no more a real domain than a Kelvin sign is — the same
+// predicate, on the same raw-value-first order, that CanonicalGroupSubject uses
+// for the group half of this package's ASCII rule.
 func emailDomainAllowed(email string, allowed []string) bool {
 	at := strings.LastIndex(email, "@")
 	if at < 0 {
 		return false
 	}
-	domain := strings.ToLower(email[at+1:])
+	raw := email[at+1:]
+	// Guard the RAW value, before ToLower — see above. The empty case makes
+	// this function's "fail closed for malformed addresses" contract true for
+	// "user@" too: an address with no domain at all must never be able to
+	// match an allowlist entry that happens to be empty.
+	if raw == "" || !printableASCII(raw) {
+		return false
+	}
+	domain := strings.ToLower(raw)
 	for _, a := range allowed {
 		if strings.ToLower(a) == domain {
 			return true
