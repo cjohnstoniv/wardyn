@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -133,12 +134,97 @@ func (s *Server) integrationsWithCapabilitiesUsing(ctx context.Context, present 
 // kind), whether it is off, what it is the default for, and the live capability
 // matrix — enough to choose an integration for a run, and nothing about how the
 // platform reaches it. Source stays too: "stored" vs "legacy" is not topology.
+//
+// THE CAPABILITY MATRIX IS DERIVED FROM WHAT THIS DROPS, so nil-ing the four
+// fields is not enough on its own: capabilitiesFor computes each cell FROM the
+// row, and a needs_setup cell states why — gatedCap/secretGate interpolate the
+// credential ref verbatim ("secret %q not stored", integrations.go). A member
+// therefore read acme-artifactory-token out of capabilities[].reason in the
+// very response whose secrets[] had been emptied to withhold it. The cell's
+// ANSWER is not the leak and is kept (a member must still learn the capability
+// is unusable); the derived TEXT is scrubbed of anything the projection
+// withheld — see memberSafeCapabilities.
 func memberSafeIntegration(in SetupIntegration) SetupIntegration {
+	in.Capabilities = memberSafeCapabilities(in.Capabilities, in.Integration)
 	in.Secrets = nil
 	in.Egress = nil
 	in.Config = nil
 	in.Docs = ""
 	return in
+}
+
+// memberSafeCapabilities is the anti-forgetting half of the projection: a
+// member-visible DERIVED string may not restate a datum the projection
+// withheld. Rather than allowlisting today's reason sentences (which the canon
+// pass rewrites) or teaching this file which reasons happen to interpolate a
+// ref (which the next capability cell would silently break), it compares each
+// reason against the row's OWN withheld values and replaces the whole sentence
+// when one appears. A new cell that interpolates a secret name, an egress host
+// or an operator config value is therefore projected correctly the day it is
+// written, without anyone remembering this rule.
+//
+// The replacement is secretGate's already-shipped ref-less sentence, not a new
+// string: it is what this same field already says for the OTHER half of the
+// same gate (a capability whose credential ref is unset), and it is the honest
+// member-facing form of every case here — the credential this cell needs is not
+// usable, and which credential it is belongs to the operator.
+//
+// Non-mutating, like memberSafeIntegrations: both publishing routes share one
+// value computed per request, so editing the slice in place would reach an
+// operator's copy.
+func memberSafeCapabilities(caps []Capability, in types.Integration) []Capability {
+	if len(caps) == 0 {
+		return caps
+	}
+	withheld := withheldIntegrationValues(in)
+	out := make([]Capability, len(caps))
+	copy(out, caps)
+	for i := range out {
+		if out[i].Reason == "" {
+			continue
+		}
+		for _, bad := range withheld {
+			if strings.Contains(out[i].Reason, bad) {
+				out[i].Reason = reasonCredentialWithheld
+				break
+			}
+		}
+	}
+	return out
+}
+
+// reasonCredentialWithheld is secretGate's own ref-less sentence
+// (integrations.go), reused verbatim so this projection introduces no new
+// member-facing copy.
+const reasonCredentialWithheld = "no credential configured"
+
+// withheldIntegrationValues lists the strings memberSafeIntegration drops from
+// a row: the credential refs, the egress entries (and their bare hosts, since a
+// reason may name the host without the ":port" the entry carries), the
+// operator's config values and the docs link. Empty and 1-2 character values
+// are skipped — they cannot identify a host or a credential, and would blank
+// every reason that happens to contain the fragment.
+func withheldIntegrationValues(in types.Integration) []string {
+	var out []string
+	add := func(v string) {
+		if v = strings.TrimSpace(v); len(v) > 2 {
+			out = append(out, v)
+		}
+	}
+	for _, sec := range in.Secrets {
+		add(sec.SecretName)
+	}
+	for _, host := range in.Egress {
+		add(host)
+		if h, _, ok := strings.Cut(host, ":"); ok {
+			add(h)
+		}
+	}
+	for _, v := range in.Config {
+		add(fmt.Sprint(v))
+	}
+	add(in.Docs)
+	return out
 }
 
 // memberSafeIntegrations projects a whole list, leaving the caller's slice
