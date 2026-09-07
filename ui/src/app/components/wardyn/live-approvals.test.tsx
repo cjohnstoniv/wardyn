@@ -558,3 +558,23 @@ describe("LiveApprovals — precedence and the two-row overflow", () => {
     release({});
   });
 });
+
+// R4-F002: the strip's PENDING read must carry ?run_id=. Filtering the fleet's
+// list in the browser filters AFTER the server's requested_at DESC window
+// (internal/api/approvals.go:56-61), so on a busy fleet this run's own holds
+// never reach the strip that is supposed to be its primary decision surface.
+describe("LiveApprovals — the PENDING read is scoped server-side", () => {
+  beforeEach(() => {
+    listApprovalsMock.mockReset().mockResolvedValue([]);
+  });
+
+  it("asks /approvals for THIS run, so a hold past the list window still lands on the strip", async () => {
+    listApprovalsMock.mockImplementation((_state: unknown, runId: unknown) =>
+      Promise.resolve(runId === "r1" ? [pending({ id: "scoped" })] : []),
+    );
+    render(<LiveApprovals runId="r1" />);
+    const panel = await screen.findByTestId("live-approvals");
+    expect(within(panel).getByText("unlisted.example")).toBeInTheDocument();
+    expect(listApprovalsMock).toHaveBeenCalledWith("PENDING", "r1");
+  });
+});

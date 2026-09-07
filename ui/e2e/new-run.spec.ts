@@ -163,3 +163,38 @@ test.describe("New run — one page", () => {
     await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/, { timeout: 15_000 });
   });
 });
+
+// R4-F118 — "Review predicts launch", proved on the wire.
+//
+// runs.wire.fields.test.ts pins runWireBody; new-run-screen.test.tsx pins that
+// the SCREEN hands both doors the same input. Neither watches the bytes, and
+// `grep -rn preflight e2e/*.spec.ts e2e/fixtures.ts` matched nothing at all
+// before this — preflight had no browser coverage in either tier. This asserts
+// the two request BODIES the daemon actually receives are the same object.
+test.describe("New run — Preflight sends the body Launch sends", () => {
+  test("POST /runs/preflight and POST /runs carry byte-identical bodies", async ({ page }) => {
+    const bodies: Record<string, string> = {};
+    page.on("request", (req) => {
+      if (req.method() !== "POST") return;
+      const path = new URL(req.url()).pathname;
+      if (path === "/api/v1/runs/preflight") bodies.preflight = req.postData() ?? "";
+      // The bare create route, not the preflight one under it.
+      if (path === "/api/v1/runs") bodies.create = req.postData() ?? "";
+    });
+
+    await openNewRun(page);
+    await page.getByLabel("Title").fill("e2e preflight parity");
+
+    await page.getByRole("button", { name: /^Preflight$/ }).click();
+    await expect(page.getByTestId("preflight-result")).toBeVisible();
+
+    // Nothing is touched between the two clicks, so Review answered for exactly
+    // this launch — or it lied.
+    await page.getByRole("button", { name: "Launch run" }).click();
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/, { timeout: 15_000 });
+
+    expect(bodies.preflight).toBeTruthy();
+    expect(bodies.create).toBeTruthy();
+    expect(JSON.parse(bodies.preflight)).toEqual(JSON.parse(bodies.create));
+  });
+});

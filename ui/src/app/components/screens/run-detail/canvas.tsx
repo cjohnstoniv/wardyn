@@ -29,11 +29,11 @@ import { toast } from "sonner";
 import type { RunLayoutPreset } from "../../../lib/api/run-layout";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { cn } from "../../ui/utils";
-import { ErrorBoundary } from "../../wardyn/error-boundary";
 import { RUN_COCKPIT } from "../../wardyn/copy";
 import { useFocusMode } from "../app-shell";
 import { FocusMode } from "./focus-mode";
 import { useRunLayout } from "./use-run-layout";
+import { WidgetSlot } from "./widget-slot";
 import {
   GRID_COLS,
   GRID_ROWS,
@@ -67,18 +67,6 @@ const GHOST = [
   "[&_.react-grid-item.react-grid-placeholder]:border-primary/60",
   "[&_.react-grid-item.react-grid-placeholder]:bg-primary/10",
   "[&_.react-grid-item.react-grid-placeholder]:opacity-100",
-].join(" ");
-
-// Make any widget fill its tile without touching the five widget files (they
-// are not this lane's to change, and none of them forwards a className):
-// a WidgetCard renders a <section>, so stretch that, and give its BODY — the
-// section's last child — the scroll it needs when a tile is smaller than its
-// contents. Clipping evidence silently is the one thing the rail this replaces
-// was explicitly built not to do.
-const FILL_TILE = [
-  "[&>section]:min-h-0 [&>section]:flex-1",
-  "[&>section>*:last-child]:min-h-0 [&>section>*:last-child]:flex-1",
-  "[&>section>*:last-child]:overflow-y-auto",
 ].join(" ");
 
 /** Measures the scroll box: width for the grid, height to size a row.
@@ -144,11 +132,13 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   const sizeLabel = (w: number, h: number) =>
     `${Math.round(w * colWidth + (w - 1) * MARGIN[0])} × ${Math.round(h * rowHeight + (h - 1) * MARGIN[1])}`;
 
-  // A widget can be placed but not renderable right now (ssh on a run you do
-  // not own). Keep it OUT of the grid — an empty tile over a dot grid is worse
-  // than nothing — but keep its saved placement, or merely viewing someone
-  // else's run would quietly delete it.
-  const visible = layout.filter((w) => RUN_WIDGETS[w.widget as WidgetId].available?.(ctx) ?? true);
+  // ONE renderability gate, and every consumer reads it. A widget can be placed
+  // but not renderable right now (ssh on a run you do not own, or any finished
+  // run). Keep it OUT of the grid — an empty tile over a dot grid is worse than
+  // nothing — but keep its saved placement, or merely viewing someone else's
+  // run would quietly delete it.
+  const renderable = (id: WidgetId) => RUN_WIDGETS[id].available?.(ctx) ?? true;
+  const visible = layout.filter((w) => renderable(w.widget as WidgetId));
   const hidden = layout.filter((w) => !visible.includes(w));
 
   const items: Layout = visible.map((w) => ({
@@ -245,15 +235,12 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
                     onRemove={def.required ? undefined : () => toggleWidget(id)}
                   />
                 )}
-                <div className={cn("flex min-h-0 flex-1 flex-col", FILL_TILE)}>
-                  {/* One widget throwing must not blank the whole canvas —
-                      each tile gets its own boundary, keyed on the run so a
-                      stale crash from a PREVIOUS run can never survive
-                      switching to this one. */}
-                  <ErrorBoundary region={def.label} resetKey={ctx.run.id}>
-                    {def.component(ctx)}
-                  </ErrorBoundary>
-                </div>
+                {/* WidgetSlot, not a bare div: the FILL stretch and the
+                    per-widget boundary are shared with focus mode's dock, which
+                    renders this same def.component(ctx). */}
+                <WidgetSlot region={def.label} resetKey={ctx.run.id}>
+                  {def.component(ctx)}
+                </WidgetSlot>
               </div>
             );
           })}
@@ -283,9 +270,16 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
             </button>
           ))}
           <span className="h-5 w-px bg-border" />
+          {/* The catalog offers exactly what a tile could appear for. Deriving
+              it from the whole table while the GRID derived from `renderable`
+              made "Attach from your terminal" a dead control on every finished
+              run and every run you did not start: the click ticked the row, ran
+              addWidget and PUT the phantom placement, and no tile ever came
+              back. Two gates, one of them uninformed. */}
           <Catalog
             open={catalogOpen}
             onOpenChange={setCatalogOpen}
+            ids={WIDGET_IDS.filter(renderable)}
             placed={layout.map((w) => w.widget)}
             onToggle={toggleWidget}
           />
@@ -407,10 +401,15 @@ function Catalog({
   open,
   onOpenChange,
   placed,
+  ids,
   onToggle,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** The renderable ids, already filtered by the canvas's `renderable` gate —
+   *  never WIDGET_IDS. Offering an id whose tile cannot appear is a control
+   *  that persists a placement and changes nothing on screen. */
+  ids: WidgetId[];
   placed: string[];
   onToggle: (id: WidgetId) => void;
 }) {
@@ -430,7 +429,7 @@ function Catalog({
           <div className="label-eyebrow">{RUN_COCKPIT.addWidget}</div>
         </div>
         <div className="flex flex-col">
-          {WIDGET_IDS.map((id) => {
+          {ids.map((id) => {
             const def = RUN_WIDGETS[id];
             const Icon = def.Icon;
             const on = placed.includes(id);

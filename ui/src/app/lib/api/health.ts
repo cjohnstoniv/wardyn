@@ -7,7 +7,7 @@
 // The small "server & session" surface the shell always needs.
 import type { SiteConfig } from "../types";
 import type { DriveBackend, StorageEnforcement } from "./drives";
-import { asJson, wfetch } from "./core";
+import { WFETCH_TIMEOUT_MS, asJson, wfetch } from "./core";
 
 // GET /me's `user_drive` (0.7, migration 0054) — what this caller would mount
 // if they asked for it on their next run, or null when they would mount
@@ -228,7 +228,17 @@ export const health = {
     components?: Record<string, { selected?: string; available?: string[]; source?: string }>;
   }> {
     try {
-      const res = await fetch("/healthz", { credentials: "include" });
+      // /healthz is un-prefixed (not under /api/v1), so it is the ONE call
+      // that cannot go through wfetch — and therefore the one that has to
+      // repeat its deadline. Without it a hung /healthz alone strands the
+      // shell: useMeta only sets resolved:true once health() SETTLES, and
+      // every route is gated behind that (app-shell.tsx:128-158, App.tsx's
+      // roleResolved). The catch below already turns a failure into {}, which
+      // is exactly how the shell reads "control plane unreachable".
+      const res = await fetch("/healthz", {
+        credentials: "include",
+        signal: AbortSignal.timeout(WFETCH_TIMEOUT_MS),
+      });
       if (!res.ok) return {};
       return (await res.json()) as Record<string, unknown>;
     } catch {

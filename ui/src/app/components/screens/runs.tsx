@@ -153,8 +153,11 @@ export function RunsScreen() {
 
   // Background refresh: update in place, silent on failure (a blip shouldn't
   // blow the board away — keep last-good data and recover next tick).
+  // RETURNED so usePoll's in-flight guard has something to wait on: without
+  // it a control plane slower than POLL_MS stacked a fresh board fetch on every
+  // tick (R4-F074).
   const refresh = React.useCallback(() => {
-    fetchRuns().catch(() => {
+    return fetchRuns().catch(() => {
       /* keep last-good data */
     });
   }, [fetchRuns]);

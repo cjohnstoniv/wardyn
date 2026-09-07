@@ -34,18 +34,12 @@ import { cn } from "../../ui/utils";
 import { ConfinementChip } from "../../wardyn/primitives";
 import { Kbd, MOD } from "../../wardyn/kbd";
 import { RUN_WIDGETS, WIDGET_IDS, type WidgetContext, type WidgetId } from "./widget-registry";
+import { WidgetSlot } from "./widget-slot";
+import { ErrorBoundary } from "../../wardyn/error-boundary";
 
 // Glass: the board's rgba panel + backdrop blur, in theme tokens so it survives
 // a light theme instead of being a hard-coded dark rgba.
 const GLASS = "border border-border bg-popover/85 backdrop-blur-md";
-
-/** The dock's own copy of the FILL_TILE trick from canvas.tsx: a WidgetCard is
- *  a <section>, so stretch it and let its body scroll. */
-const FILL = [
-  "[&>section]:min-h-0 [&>section]:flex-1",
-  "[&>section>*:last-child]:min-h-0 [&>section>*:last-child]:flex-1",
-  "[&>section>*:last-child]:overflow-y-auto",
-].join(" ");
 
 export function FocusMode({ ctx, onExit }: { ctx: WidgetContext; onExit: () => void }) {
   // "the dock carries the same widget set rather than a reduced one" (the
@@ -93,7 +87,11 @@ export function FocusMode({ ctx, onExit }: { ctx: WidgetContext; onExit: () => v
         {/* Full-bleed: the padding only keeps the session clear of the HUD pill
             above it and the dock rail beside it. */}
         <div className="flex h-full min-h-0 flex-col py-3 pl-4 pr-[4.75rem] pt-16">
-          {ctx.terminalPane}
+          {/* Focus mode IS the session, so a throw in the hero must not escape
+              to app-shell's boundary and take the whole main region with it. */}
+          <ErrorBoundary region={RUN_WIDGETS.terminal.label} resetKey={ctx.run.id}>
+            {ctx.terminalPane}
+          </ErrorBoundary>
         </div>
 
         <div className={cn("absolute left-4 top-3 flex items-center gap-3 rounded-xl px-3 py-1.5", GLASS)}>
@@ -144,7 +142,11 @@ function Dock({
             GLASS,
           )}
         >
-          <div className={cn("flex min-h-0 flex-1 flex-col", FILL)}>{def.component(ctx)}</div>
+          {/* Same slot the canvas mounts its tiles through: one throwing dock
+              widget degrades to a card inside the dock, not a blanked screen. */}
+          <WidgetSlot region={def.label} resetKey={ctx.run.id}>
+            {def.component(ctx)}
+          </WidgetSlot>
         </section>
       )}
 

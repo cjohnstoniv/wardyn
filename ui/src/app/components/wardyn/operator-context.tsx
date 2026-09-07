@@ -88,8 +88,35 @@ const UserDriveContext = React.createContext<UserDriveMeta>(NO_USER_DRIVE);
 // provider above it). Never "harden" this default to false either.
 const SecurityOperatorContext = React.createContext<boolean>(true);
 
+// Whether `operator` above is the SERVER'S answer yet, or still the fail-open
+// default. The default itself is right and must not be hardened — but a caller
+// that CHOOSES A LANE on it needs to know which of the two it is holding.
+//
+// The case that made this a context rather than a comment (R4-F110): whoami()
+// swallows every failure and returns null (lib/api/health.ts), so one transient
+// /me failure leaves `operator === true` and `principal === "unknown"` for the
+// whole page load. attach-terminal picks its WebSocket auth lane off exactly
+// those two, and for a MEMBER who owns the run both halves are wrong at once —
+// `owned` is false (createdBy !== "unknown") and `operator` is true, so it takes
+// the cookie lane, which is ticketOrHumanAuth's admin-only fall-through
+// (internal/api/attach_ticket.go). The server refuses with 403 and writes an
+// authz.denied/admin_surface audit row against the legitimate owner, five times
+// over the reconnect budget — while the TICKET lane, which is owner-or-admin
+// and would have worked, is never tried.
+//
+// Note this is NOT RoleResolvedContext: app-shell sets `resolved` once the /me
+// fetch SETTLES, success or failure (it is the landing gate's "stop
+// spinning" signal), so it is true after a failed /me too. This one is true only
+// when a body actually came back.
+//
+// Default TRUE, the same fail-open rationale as every other default in this
+// file: every component mounted with no provider above it (every existing test)
+// must read as "the answer is known", not as "still loading forever".
+const OperatorResolvedContext = React.createContext<boolean>(true);
+
 export function OperatorProvider({
   operator,
+  operatorResolved = true,
   securityOperator = true,
   principal = "",
   memberLocalDirRoot = null,
@@ -98,6 +125,10 @@ export function OperatorProvider({
   children,
 }: {
   operator: boolean;
+  /** Whether `operator` is the server's answer rather than the fail-open
+   *  default — see OperatorResolvedContext. Optional, defaulting TRUE, so every
+   *  existing caller keeps today's behaviour. */
+  operatorResolved?: boolean;
   // Optional, defaulting TRUE: every existing caller that passes only
   // `operator` keeps today's fail-open behavior rather than silently becoming
   // the restricted case.
@@ -117,6 +148,7 @@ export function OperatorProvider({
   );
   return (
     <OperatorContext.Provider value={operator}>
+      <OperatorResolvedContext.Provider value={operatorResolved}>
       <SecurityOperatorContext.Provider value={securityOperator}>
         <PrincipalContext.Provider value={principal}>
           <MemberLocalDirRootContext.Provider value={memberLocalDirRoot}>
@@ -124,6 +156,7 @@ export function OperatorProvider({
           </MemberLocalDirRootContext.Provider>
         </PrincipalContext.Provider>
       </SecurityOperatorContext.Provider>
+      </OperatorResolvedContext.Provider>
     </OperatorContext.Provider>
   );
 }
@@ -149,6 +182,13 @@ export function useUserDrive(): UserDriveMeta {
 // this list since 0.7 — they moved to useSecurityOperator below.
 export function useOperator(): boolean {
   return React.useContext(OperatorContext);
+}
+
+// Whether useOperator()'s answer came from the server — see
+// OperatorResolvedContext. Use it only where the fail-open default would pick a
+// WRONG LANE rather than merely offer a control the server will refuse.
+export function useOperatorResolved(): boolean {
+  return React.useContext(OperatorResolvedContext);
 }
 
 // Whether the signed-in caller may perform SECURITY-GOVERNANCE actions:

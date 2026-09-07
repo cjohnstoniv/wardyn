@@ -63,8 +63,14 @@ export type WidgetContext = {
   /** The run has stopped (isTerminalRunState). Inverted for the polling
    *  widgets' `live` prop, which asks the opposite question. */
   finished: boolean;
-  /** The signed-in principal, for the ssh widget's owner gate. */
+  /** The signed-in principal, for the ssh widget's owner-or-admin gate. */
   principal: string | null;
+  /** Whether the viewer is an admin (useOperator). The ssh widget's gate is
+   *  owner OR admin — the registry cannot express the admin arm without it,
+   *  and the arm is not optional: all three server lanes are owner-or-admin
+   *  (attach_ticket.go's isOperator, uigateway.go's ta.role check,
+   *  sshgateway.go's admin arm), and ConnectSSHCard renders on both. */
+  operator: boolean;
   grants: CredentialGrant[];
   egress: EgressDecision[];
   audit: AuditEvent[];
@@ -91,9 +97,11 @@ export type WidgetDef = {
    *  to, so `finished` leaves both out (the catalog can still add them). */
   presets: Partial<Record<RunLayoutPreset, WidgetPlacement>>;
   /** False = render no tile at all right now. Only ssh needs this: its card
-   *  returns null unless you own a RUNNING run, and a null inside a grid tile
-   *  is an empty box with a dot grid behind it, not nothing. Mirrors
-   *  ConnectSSHCard's own gate. */
+   *  returns null unless you may attach to a RUNNING run, and a null inside a
+   *  grid tile is an empty box with a dot grid behind it, not nothing. Mirrors
+   *  ConnectSSHCard's own gate — which is owner OR admin, so this predicate
+   *  must read ctx.operator too or an admin's canvas silently drops the tile
+   *  on every run they did not start, even one their saved layout names. */
   available?: (ctx: WidgetContext) => boolean;
   /** Cannot be removed — see removeWidget below. */
   required?: boolean;
@@ -178,8 +186,10 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     // hole — at the bottom of the rail that hole costs nothing, between two
     // widgets it is a visible gap on every run you did not start.
     presets: { live: { x: 8, y: 20, w: 4, h: 5 } },
+    // run-detail-ssh.tsx:50 verbatim, plus the RUNNING check: owner OR admin.
     available: (ctx) =>
-      ctx.run.state === "RUNNING" && !!ctx.principal && ctx.run.created_by === ctx.principal,
+      ctx.run.state === "RUNNING" &&
+      ((!!ctx.principal && ctx.run.created_by === ctx.principal) || ctx.operator),
   },
 };
 
