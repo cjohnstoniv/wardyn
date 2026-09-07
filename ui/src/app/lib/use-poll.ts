@@ -33,6 +33,12 @@ export function usePoll(fn: () => void, intervalMs: number, paused: boolean): vo
     const id = setInterval(() => {
       if (!pausedRef.current) fnRef.current();
     }, intervalMs);
+    // The hook's ONLY leak guard, and every screen that polls depends on it:
+    // without this line an unmounted Runs board / cockpit / approvals view
+    // keeps hitting the API for the life of the tab, and a cadence change
+    // leaves two intervals running at once. Pinned by use-poll.test.ts's
+    // "stops polling on unmount" and "replaces the timer when intervalMs
+    // changes" cases — before those, deleting it kept 64 tests green.
     return () => clearInterval(id);
   }, [intervalMs]);
 }

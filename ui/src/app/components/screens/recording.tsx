@@ -53,11 +53,38 @@ import { TerminalPlayer } from "../wardyn/terminal-player";
 // run, then check each one.
 interface RecordedRun {
   run: AgentRun;
-  recording: Recording;
   /** Real elapsed seconds, taken from the last captured event — never fabricated. */
   durationSec?: number;
   /** Real byte size of the fetched cast payload (Blob), not a backend field. */
   bytes: number;
+  /** The raw asciicast document. Parsed into a Recording only when a viewer
+   *  presses play (playRecording below) — a card renders the two numbers
+   *  above and nothing else, so building an AsciicastEvent per output frame
+   *  for every run on screen was pure waste held live in React state. */
+  cast: string;
+}
+
+// How many runs are probed at once. The list this walks is every run the
+// caller can see (LIST_LIMIT = 1000), and it used to be probed in a bare
+// forEach: 200 runs meant 200 simultaneous requests, which is a self-inflicted
+// burst on the daemon and on the browser's connection pool for a screen nobody
+// is blocked on. A small window keeps the same total work, in order, with the
+// first cards appearing just as fast.
+export const PROBE_CONCURRENCY = 6;
+
+/**
+ * Run `work` over `items` with at most `limit` in flight, in list order.
+ * `work` must not reject — every caller below already funnels failures into
+ * its own counter — because a rejection here would stop that lane's queue.
+ */
+function pool<T>(items: T[], limit: number, work: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const lane = (): Promise<void> => {
+    const i = next++;
+    if (i >= items.length) return Promise.resolve();
+    return work(items[i]).then(lane);
+  };
+  return Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane)).then(() => undefined);
 }
 
 // W21-S1-7: shared copy for both empty states below — a stock Helm install
@@ -89,6 +116,13 @@ export function RecordingScreen() {
   const [agentFacet, setAgentFacet] = React.useState("all");
   const [stateFacet, setStateFacet] = React.useState("all");
   const [playing, setPlaying] = React.useState<RecordedRun | null>(null);
+  // The parsed cast for the ONE card being replayed. Parsing is synchronous
+  // and happens here rather than at probe time, so closing the dialog drops
+  // the event array with it.
+  const playingRecording = React.useMemo<Recording | null>(
+    () => (playing ? api.parseCast(playing.run.id, playing.cast) : null),
+    [playing],
+  );
   // W21-S1-7: /healthz's components.recording is the honest "will this
   // deployment EVER produce one" signal (server.go's ComponentInfo) — "none"
   // means the recording store never came up (stock Helm install: persistence
@@ -121,21 +155,22 @@ export function RecordingScreen() {
         if (cancelled) return;
         setStatus("ready");
         setTotalRuns(runs.length);
-        // fires one getRecording() per run with no concurrency cap
-        // or pagination — fine for a single-operator console's run list; add
-        // a queue/limit if that list ever grows into the thousands.
-        runs.forEach((run) => {
-          api
-            .getRecording(run.id)
-            .then((rec) => {
-              if (cancelled) return;
-              if (rec) {
-                const durationSec = rec.events.length
-                  ? rec.events[rec.events.length - 1][0]
-                  : undefined;
-                const bytes = new Blob([rec.cast]).size;
-                setLibrary((prev) => [...prev, { run, recording: rec, durationSec, bytes }]);
-              }
+        // One probe per run, PROBE_CONCURRENCY at a time — the backend has no
+        // "list recordings" route, so this screen still has to ask every run,
+        // but it asks in a window instead of all at once, and a cancelled load
+        // (Refresh, unmount) stops ISSUING requests rather than only ignoring
+        // their answers. probeRecording, not getRecording: a card needs a
+        // duration and a size, not a parsed event stream.
+        void pool(runs, PROBE_CONCURRENCY, (run) => {
+          if (cancelled) return Promise.resolve();
+          return api
+            .probeRecording(run.id)
+            .then((probe) => {
+              if (cancelled || !probe) return;
+              setLibrary((prev) => [
+                ...prev,
+                { run, durationSec: probe.durationSec, bytes: probe.bytes, cast: probe.cast },
+              ]);
             })
             .catch(() => {
               if (!cancelled) setCheckFailures((f) => f + 1);
@@ -359,7 +394,7 @@ export function RecordingScreen() {
                 <Mono>{playing.run.repo}</Mono>
               </DialogDescription>
             </DialogHeader>
-            <TerminalPlayer recording={playing.recording} />
+            {playingRecording && <TerminalPlayer recording={playingRecording} />}
           </DialogContent>
         </Dialog>
       )}
