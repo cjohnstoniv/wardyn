@@ -56,3 +56,43 @@ func TestNAT64EmbeddedV4(t *testing.T) {
 		}
 	}
 }
+
+// F089: the gateway predicate's whole table, in the ONE place it now lives.
+//
+// It used to be two byte-identical unexported copies (api.llmGatewayIPRefused,
+// proxy.trustedGatewayIPRefused) coupled by a comment, and the proxy copy's
+// NAT64 arm was unpinned: replacing it with `return false` left the entire
+// internal/egress/proxy suite green, while a gateway hostname resolving to
+// 64:ff9b::a9fe:a9fe — NAT64-mapped 169.254.169.254 — would be admitted by the
+// per-request re-check and dialled with the brokered model credential.
+//
+// Both halves matter and both are listed: the refusals are the trust boundary,
+// and the admissions are why this is not PrivateReserved — an internal gateway
+// is EXPECTED to live on RFC1918/ULA/CGNAT, so refusing those would break the
+// feature rather than secure it.
+func TestGatewayIPRefused(t *testing.T) {
+	for _, ip := range []string{
+		"127.0.0.1", "::1", "::ffff:127.0.0.1", // loopback, incl. v4-mapped
+		"169.254.169.254", "fe80::1", // link-local, the metadata address included
+		"224.0.0.1", "ff02::1", // multicast
+		"0.0.0.0", "::", // unspecified
+		"64:ff9b::a9fe:a9fe", "64:ff9b::808:808", "64:ff9b:1::a9fe:a9fe", // NAT64-embedded
+	} {
+		if !GatewayIPRefused(net.ParseIP(ip)) {
+			t.Errorf("GatewayIPRefused(%s) = false, want true — a model gateway can never legitimately be this address", ip)
+		}
+	}
+	for _, ip := range []string{
+		"10.0.0.5", "172.16.0.1", "192.168.1.1", "fd00::1", "100.64.0.1", // where an internal gateway lives
+		"0.1.2.3", "192.0.0.1", "198.18.0.1", "255.255.255.255", // reserved, but not this predicate's business
+		"8.8.8.8", "2001:4860:4860::8888",
+	} {
+		if GatewayIPRefused(net.ParseIP(ip)) {
+			t.Errorf("GatewayIPRefused(%s) = true, want false — refusing it would break the internal-gateway feature", ip)
+		}
+	}
+	// An address that is not an address at all fails CLOSED.
+	if !GatewayIPRefused(nil) {
+		t.Error("GatewayIPRefused(nil) = false, want true (fail closed)")
+	}
+}

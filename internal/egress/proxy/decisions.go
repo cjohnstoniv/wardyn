@@ -221,7 +221,18 @@ func maskDecisionBytes(b []byte) []byte {
 	if len(snap) == 0 {
 		return b
 	}
-	return secretmask.NewMasker(snap).Mask(b)
+	// BOTH decision-log callers hand this JSON, not plain text: mirror() masks
+	// the marshalled stdout line and post() masks the marshalled body of the
+	// /internal/decisions POST. json.Marshal escapes \n, \" and \\ inside any
+	// string and HTML-escapes & < > to \u0026 \u003c \u003e by default, so a
+	// registered secret carrying any of those bytes is NOT byte-identical inside
+	// the body and a raw-value masker cannot match it — the plain-ASCII case
+	// masking correctly is what makes the gap invisible. JSONEscapedVariants is
+	// the one home for that expansion (D31), already used by the two sibling JSON
+	// sinks: internal/api/recording.go (asciicast upload) and cmd/wardynd's audit
+	// maskingRecorder. It COPIES snap first, so the raw entries survive and
+	// httpError's plain-text path through this helper is unaffected.
+	return secretmask.NewMasker(secretmask.JSONEscapedVariants(snap)).Mask(b)
 }
 
 // droppedCount reports how many decision logs were dropped on backpressure.

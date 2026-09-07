@@ -769,9 +769,10 @@ migration `0050`)** are the second and third owned nouns after runs.
 - **A run resolves its owner's row, falling back to the operator's** — never
   another member's, even when an inline policy names it by hand. The upstream
   (corporate) proxy secret always stays resolved from the operator namespace:
-  under a configured upstream the sidecar skips the SSRF guard for every host it
-  proxies (all of them, minus `upstream_proxy_no_proxy`), so a
-  member-substitutable value there would be a guard bypass, not a convenience.
+  under a configured upstream the sidecar hands the corp proxy a HOSTNAME rather
+  than a pinned address for every host it proxies (all of them, minus
+  `upstream_proxy_no_proxy`), so a member-substitutable value there would put a
+  member in control of which proxy resolves and dials every one of them.
 - **`?owner=<principal>` is admin-only** on `PUT`/`DELETE`/`GET /secrets` (an
   admin's cross-write lands in the NAMED member's namespace, never the
   operator's), refused with a constant 403 for anyone else.
@@ -2181,10 +2182,15 @@ the plain `http://` proxy URL in the secret even when it embeds a credential.
 
 ### Upstream proxy: the bypass list (`upstream_proxy_no_proxy`)
 
-With an upstream configured, **every** forward dial is `CONNECT`ed through it —
-and a corporate forward proxy will not `CONNECT` to an internal address. So on an
-estate whose endpoints are private (a VPC endpoint / PrivateLink, an in-cluster
-service, a corp mirror on RFC 6598) every one of them times out.
+With an upstream configured, **every** forward dial is `CONNECT`ed through it,
+and the sidecar resolves the name for its own private/reserved-IP guard before it does.
+So on an estate whose endpoints are private (a VPC endpoint / PrivateLink, an
+in-cluster service, a corp mirror on RFC 6598) a name that resolves here is refused
+`builtin:private-ip` before the corp proxy is asked, and one this proxy cannot
+resolve reaches a corporate forward proxy that will not `CONNECT` to an internal
+address and times out. Neither is reachable: `internal_hosts` lifts the guard,
+`upstream_proxy_no_proxy` is the bypass that moves the dial to this sidecar, and
+the estate needs both.
 `upstream_proxy_no_proxy` is the bypass — the operator-hop equivalent of the
 `NO_PROXY` the sandbox already honours internally, spelled the same way:
 
@@ -2202,20 +2208,29 @@ Wildcards are refused at write time: "bypass everything" is spelled by clearing
 CIDR nor a host is a 400 too, because the proxy drops what it cannot compile and
 a typo would otherwise mean "still proxied" — silently, at run time.
 
-**It changes which hop dials, and nothing else.** A bypassed dial falls straight
-through to the same unconditional private/reserved-IP guard an unproxied dial
-faces, and still needs its `allowed_domains` entry. So on a private-endpoint
-estate the bypass and `internal_hosts` are one configuration in two fields, and
-**neither works alone**:
+**It changes which hop dials; the guard binds both columns.** A bypassed dial
+falls straight through to the same unconditional private/reserved-IP guard an
+unproxied dial faces, and a dial that goes THROUGH the corp proxy is vetted too:
+the sidecar resolves the name for the guard before it hands the hostname over.
+Either way the destination still needs its `allowed_domains` entry, and
+`internal_hosts` is the only field that lifts the guard — the bypass never
+does. The bypass is the other half of the same configuration: it decides which
+hop takes the dial, and on a private-endpoint estate the corp proxy cannot make
+it, so the two fields are set together:
 
 | | Without `internal_hosts` | With `internal_hosts` |
 |---|---|---|
-| **No bypass** | corp proxy takes the dial, cannot reach an internal address → timeout | same; the guard never even runs |
-| **Bypassed** | dialled directly, then refused `builtin:private-ip` | **reaches the endpoint** (`rule_source: site-config:internal-host`) |
+| **No bypass** | the guard resolves the name and refuses `builtin:private-ip` before the corp proxy is asked (a name this proxy cannot resolve at all still goes to the corp proxy) | the guard lifts and the HOSTNAME is handed to the corp proxy (`rule_source: site-config:internal-host`); whether that proxy will `CONNECT` to a private address is the estate's own routing — on the private-endpoint estates this section is written for it will not, which is why the bypass exists |
+| **Bypassed** | dialled directly, then refused `builtin:private-ip` | **reaches the endpoint** dialled directly (`rule_source: site-config:internal-host`) |
 
-The bottom-left cell is the safety property, not a rough edge: bypassing a host
-never makes a private address reachable. A refusal there names its own cause in
-the `X-Wardyn-Egress-Detail` response header and points at `internal_hosts`.
+The left column is the safety property, not a rough edge: neither bypassing a
+host nor proxying it lifts the guard — only `internal_hosts` does. A refusal
+there names its own cause in the `X-Wardyn-Egress-Detail` response header and
+points at `internal_hosts`. The right column is not a promise of reachability:
+lifting the guard is necessary, never sufficient, because the dial still has to
+leave whichever hop takes it. That is why the bottom-right cell — bypass AND
+lift — is the working private-endpoint configuration, and why the recipes below
+set both fields.
 
 ### Corporate TLS-inspection root
 

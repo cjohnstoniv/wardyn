@@ -108,7 +108,11 @@ to the same forge. The narrowed envelope is disclosed in the
 
 **It is a name deny, and that is the whole of its reach.** The proxy keys the
 verdict on the host string the sandbox asked for (`evalHost`), so a `CONNECT` to
-a raw GitHub IP is a different key and none of these denies see it. Under
+a raw GitHub IP is a different key and none of these denies see it. A deny
+entry that IS a literal IP is the one case where the key is not the raw string:
+host strings and policy entries alike are canonicalized through `net.IP` first,
+so denying `93.184.216.34` also denies `::ffff:93.184.216.34` and every other
+spelling of that same address — a different ADDRESS is still a different key. Under
 the default posture that changes nothing — an unlisted host is `always_deny` —
 but under `allow_all_egress` a literal public IP is allowed (private, loopback,
 link-local and metadata ranges are denied regardless of policy — with one
@@ -489,6 +493,20 @@ on either is refused at write time (`decide()`, `internal/api/approvals.go`).
 | `run` | The rest of this run — **the default**, and the only scope that existed before this table did. **Caveat:** during a `workspace record` session an `egress_domain` approve at this scope ALSO writes a permanent, workspace-wide required `egress:<host>` row that widens every future run of the workspace (see `wait_for_review` above). | Same cache, held for the run's lifetime. |
 | `until` | This run, up to `decision_expires_at` — whichever comes first. | Same cache, plus the timestamp. |
 | `always` | Every future run of the target workspace, not just this one. | `workspaces.approved_egress` (allow) / `denied_egress` (deny). |
+
+**Every scope in that table is HOST-wide — on every port.** The approval a
+human is shown carries a bare host and nothing else (`egressScope` in
+`internal/egress/proxy/approvals.go` has a `host` and a `mode`, no port; the
+proxy's first-use cache is keyed on that same bare host; and the durable
+`always` write goes through `hostrules.ValidApprovedHost`, which refuses a
+port by construction). So an approval raised by a CONNECT to `example.org:443`
+also releases `example.org:22`, `:5432` and every other port for whatever reach
+the scope names — with **no further approval raised**, and, on `always`,
+permanently for every future run of the workspace. This is the same "every
+port, not just 443" reading the deny paragraph above states, applied to
+allows: read the scope column as *how long*, never as *how narrow*. If a host
+must not be reachable on its other ports, deny it (`denied_domains`) — the
+proxy returns on a deny before it ever considers an approval.
 
 An unrecognised `decision_scope` is rejected at write time, same as
 `first_use_approval` above — `Valid()` only accepts empty or one of the four

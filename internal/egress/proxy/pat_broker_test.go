@@ -6,9 +6,13 @@ package proxy
 import (
 	"bytes"
 	"encoding/base64"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -101,10 +105,19 @@ func TestPATBrokerClonesGrantedHost(t *testing.T) {
 		t.Fatalf("upstream query = %q, want service preserved", up.gitQuery)
 	}
 	if up.mintCalls != 1 {
-		t.Fatalf("mintCalls = %d, want 1 (the PAT is minted server-side, per request)", up.mintCalls)
+		t.Fatalf("mintCalls = %d, want 1 (the PAT is minted server-side and cached per grant)", up.mintCalls)
 	}
-	if d := lastDecision(t, sink); d.RuleSource != ruleSourcePAT || d.Decision != egress.Allow {
+	// F014: the row must name the FORGE it dialled. Logged through
+	// emitLocalDecision it named the CONTROL PLANE, so a clone of gitlab.com and
+	// a credential mint were the same row, and two granted forges could not be
+	// told apart at all — in the one stream an egress review reads.
+	d := lastDecision(t, sink)
+	if d.RuleSource != ruleSourcePAT || d.Decision != egress.Allow {
 		t.Fatalf("decision = %+v, want a %s allow row", d, ruleSourcePAT)
+	}
+	if d.Request.Host != "gitlab.com" || d.Request.Port != 443 {
+		t.Fatalf("decision row host:port = %s:%d, want gitlab.com:443 (the forge this request actually reached)",
+			d.Request.Host, d.Request.Port)
 	}
 }
 
@@ -169,5 +182,184 @@ func TestPATGrants_EmptyMeansNoHostBrokered(t *testing.T) {
 	}
 	if _, ok := p.patGrants["gitlab.com"]; ok {
 		t.Error("an ungranted host resolved a grant")
+	}
+}
+
+// F085: the smart-HTTP verb check reads the DECODED path, so a '#' (%23) or '?'
+// (%3F) inside the sandbox-supplied rest used to satisfy the "/info/refs" suffix
+// and then re-split the concatenated upstream URL — the brokered PAT delivered
+// to an arbitrary path on the granted forge (the forge's REST API included),
+// which is exactly what handlePATBroker's own comment forbids and what the
+// GitHub-lane sibling prevents by building the URL from validated pieces.
+//
+// The pin is the credential, not the status code: a smuggled shape must reach
+// NEITHER the mint nor the forge.
+func TestPATBrokerRejectsPathSmuggle(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, path string
+	}{
+		{"fragment", http.MethodGet, "/wardyn/git/gitlab.com/api/v4/user%23/info/refs?service=git-upload-pack"},
+		{"query", http.MethodGet, "/wardyn/git/gitlab.com/api/v4/user%3Fz/info/refs?service=git-upload-pack"},
+		{"postFragment", http.MethodPost, "/wardyn/git/gitlab.com/api/v4/user%23/git-upload-pack"},
+		{"traversal", http.MethodGet, "/wardyn/git/gitlab.com/api/v4/user/..%2f..%2finfo/refs?service=git-upload-pack"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			up := newPATBrokerUpstream(t, "T", "oauth2")
+			p, _ := newPATBrokerProxy(t,
+				map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
+
+			rec := httptest.NewRecorder()
+			p.ServeHTTP(rec, mustLocalReq(t, tc.method, tc.path, nil))
+
+			if up.gitHits != 0 {
+				t.Errorf("forge saw %d request(s) at path %q — a re-split path carried the brokered PAT off the smart-HTTP surface",
+					up.gitHits, up.gitPath)
+			}
+			if up.mintCalls != 0 {
+				t.Errorf("mintCalls = %d, want 0 (a path the verb check cannot vouch for must be denied BEFORE the mint)", up.mintCalls)
+			}
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("status = %d, want 403", rec.Code)
+			}
+		})
+	}
+}
+
+// The same fix must not narrow the lane below the forge paths it exists for: an
+// Azure DevOps project name may contain a space, and the rebuilt URL escapes it
+// rather than refusing it.
+func TestPATBrokerForwardsOrdinaryForgePath(t *testing.T) {
+	up := newPATBrokerUpstream(t, "T", "oauth2")
+	p, _ := newPATBrokerProxy(t,
+		map[string]PATGrant{"dev.azure.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodGet,
+		"/wardyn/git/dev.azure.com/org/my%20project/_git/repo/info/refs?service=git-upload-pack", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%q, want 200", rec.Code, rec.Body.String())
+	}
+	if up.gitPath != "/org/my project/_git/repo/info/refs" {
+		t.Fatalf("upstream path = %q, want the space-bearing project preserved", up.gitPath)
+	}
+	if up.gitQuery != "service=git-upload-pack" {
+		t.Fatalf("upstream query = %q, want service preserved", up.gitQuery)
+	}
+}
+
+// patApprovalUpstream is gitBrokerApprovalUpstream's git_pat sibling: the first
+// mint 409s with an approval_id, the approval polls PENDING then APPROVED, and
+// the re-mint answers a git_pat credential. Any other path is the forge.
+type patApprovalUpstream struct {
+	srv        *httptest.Server
+	approvalID uuid.UUID
+
+	mu        sync.Mutex
+	mintCalls int
+	pollCalls int
+	gitAuth   string
+	gitHits   int
+}
+
+func newPATApprovalUpstream(t *testing.T, token string, approvalID uuid.UUID, approvePollsAfter int) *patApprovalUpstream {
+	t.Helper()
+	u := &patApprovalUpstream{approvalID: approvalID}
+	u.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		switch {
+		case r.URL.Path == "/api/v1/internal/credentials/mint":
+			u.mintCalls++
+			w.Header().Set("Content-Type", "application/json")
+			if u.mintCalls == 1 {
+				w.WriteHeader(http.StatusConflict)
+				_, _ = io.WriteString(w, `{"code":"pending","approval_id":"`+u.approvalID.String()+`"}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"kind":"git_pat","token":"`+token+`","username":"oauth2"}`)
+		case strings.HasPrefix(r.URL.Path, "/api/v1/internal/approvals/"):
+			u.pollCalls++
+			state := "PENDING"
+			if u.pollCalls > approvePollsAfter {
+				state = "APPROVED"
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"id":"`+u.approvalID.String()+`","state":"`+state+`"}`)
+		default:
+			u.gitHits++
+			u.gitAuth = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+			_, _ = io.WriteString(w, "git-pack-data")
+		}
+	}))
+	t.Cleanup(u.srv.Close)
+	return u
+}
+
+// F120: ONE clone is ONE mint on the git_pat lane too.
+//
+// patToken used to call the control-plane mint route on every sub-request, and
+// a clone is two of them (GET info/refs, then POST git-upload-pack). An
+// approval-gated git_pat grant is SINGLE-USE, so the second mint 409s
+// ErrAlreadyMinted and the clone dies half-way — the default posture
+// (WARDYN_GIT_PAT_BROKER=on) for every ADO/GitLab run. The GitHub lane has
+// carried the per-grant cache + single-flight for exactly this reason since it
+// shipped; this pins that the sibling lane now shares it.
+func TestPATBrokerCachesTheMintAcrossOneClone(t *testing.T) {
+	up := newPATBrokerUpstream(t, "T", "oauth2")
+	p, _ := newPATBrokerProxy(t,
+		map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
+
+	for _, step := range []struct {
+		method, path string
+		body         io.Reader
+	}{
+		{http.MethodGet, "/wardyn/git/gitlab.com/org/repo.git/info/refs?service=git-upload-pack", nil},
+		{http.MethodPost, "/wardyn/git/gitlab.com/org/repo.git/git-upload-pack", strings.NewReader("0000")},
+	} {
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, mustLocalReq(t, step.method, step.path, step.body))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s %s -> %d body=%q", step.method, step.path, rec.Code, rec.Body.String())
+		}
+	}
+	if up.mintCalls != 1 {
+		t.Fatalf("control-plane mint calls for ONE clone = %d, want 1 — a single-use (approval-gated) git_pat grant 409s ErrAlreadyMinted on the second", up.mintCalls)
+	}
+}
+
+// F120: a PENDING credential approval must be waited out, not returned as a 502.
+//
+// The broker mints server-side with no caller able to retry, so the GitHub lane
+// polls the same approval itself (W23-S1-1 / W19-W19a-1). patToken returned an
+// error on any non-200, which made the FIRST clone against an approval-gated
+// git_pat grant fail before a human could possibly have approved it.
+func TestPATBrokerWaitsOutAPendingApproval(t *testing.T) {
+	orig := gitApprovalPollInterval
+	gitApprovalPollInterval = 5 * time.Millisecond
+	t.Cleanup(func() { gitApprovalPollInterval = orig })
+
+	approvalID := uuid.New()
+	up := newPATApprovalUpstream(t, "pat-after-approval", approvalID, 2 /* PENDING twice, then APPROVED */)
+	p, _ := newPATBrokerProxy(t,
+		map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodGet,
+		"/wardyn/git/gitlab.com/org/repo.git/info/refs?service=git-upload-pack", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%q, want 200 once the approval clears", rec.Code, rec.Body.String())
+	}
+	wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("oauth2:pat-after-approval"))
+	if up.gitAuth != wantAuth {
+		t.Fatalf("upstream Authorization = %q, want %q (the post-approval PAT)", up.gitAuth, wantAuth)
+	}
+	if up.mintCalls != 2 {
+		t.Fatalf("mintCalls = %d, want 2 (initial 409 pending + re-mint after approval)", up.mintCalls)
+	}
+	if up.pollCalls < 3 {
+		t.Fatalf("pollCalls = %d, want >= 3 (two PENDING + the APPROVED that releases it)", up.pollCalls)
 	}
 }

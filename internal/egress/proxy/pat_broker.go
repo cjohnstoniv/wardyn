@@ -33,8 +33,8 @@ package proxy
 import (
 	"cmp"
 	"context"
-	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
@@ -68,11 +68,65 @@ func parsePATBrokerPath(p string) (host, rest string, ok bool) {
 	return strings.ToLower(host), "/" + rest, true
 }
 
+// emitPATDecision records a git_pat broker decision against the FORGE, the way
+// the GitHub lane's emitGitDecision records github.com:443.
+//
+// handlePATBroker is the ONE brokered local route that does not forward to the
+// control plane — it re-originates to the granted forge — so emitLocalDecision's
+// premise ("its host AND port are the recorded upstream", i.e. the control
+// plane's) is false for it. Logged through that helper, a git-receive-pack to
+// gitlab.com landed in the decision stream as the control-plane host:port,
+// indistinguishable from a mint or an approval poll, with the forge in no field
+// of the row — and a run granted several forges produced rows that could not be
+// told apart at all. An egress review reads this stream.
+//
+// host is "" only on the one path where the request named no forge this proxy
+// could parse; the empty host is the truthful record there, and still tells that
+// row apart from a real forge's.
+func (p *Proxy) emitPATDecision(r *http.Request, host string, decision egress.Decision, ruleSource string) {
+	if p.sink == nil {
+		return
+	}
+	p.sink.emit(decisionLog(p.reqOf(r, host, 443), decision, ruleSource))
+}
+
+// patForwardSafe reports whether a sandbox-supplied upstream path and query can
+// be forwarded as the SAME value the smart-HTTP verb check ran on.
+//
+// The verb check reads the DECODED path (r.URL.Path), so any character that is
+// structurally significant when the URL is rebuilt lets the two diverge: '#' and
+// '?' start a fragment/query, so "/api/v4/user#/info/refs" satisfies the
+// "/info/refs" suffix and then leaves the proxy as a bare "/api/v4/user" — the
+// brokered PAT delivered to the forge's REST API. A backslash and the control
+// characters are refused on the same "no second spelling" ground, and a "."/".."
+// segment because the forge, not this proxy, would normalize it away.
+//
+// The forge path is arbitrarily deep here (gitlab subgroups, "o/p/_git/r" on
+// Azure DevOps), so this cannot be the GitHub lane's closed enum; it is the
+// widest predicate under which the checked path and the forwarded path are one
+// string. Ordinary forge segments — including a space in an Azure DevOps project
+// name — still pass and are escaped by net/url on the way out.
+func patForwardSafe(rest, rawQuery string) bool {
+	for _, s := range []string{rest, rawQuery} {
+		for _, c := range s {
+			if c < 0x20 || c == 0x7f || c == '#' || c == '?' || c == '\\' {
+				return false
+			}
+		}
+	}
+	for _, seg := range strings.Split(rest, "/") {
+		if seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return true
+}
+
 // handlePATBroker serves /wardyn/git/<host>/<rest> for a git_pat-granted host.
 func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	host, rest, ok := parsePATBrokerPath(r.URL.Path)
 	if !ok {
-		p.emitLocalDecision(r, egress.Deny, ruleSourcePATDenied, nil)
+		p.emitPATDecision(r, "", egress.Deny, ruleSourcePATDenied)
 		http.Error(w, "invalid git broker path", http.StatusNotFound)
 		return
 	}
@@ -81,7 +135,7 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// is formed, so a traversal or an extra segment cannot reach the network.
 	grant, granted := p.patGrants[host]
 	if !granted {
-		p.emitLocalDecision(r, egress.Deny, ruleSourcePATDenied, nil)
+		p.emitPATDecision(r, host, egress.Deny, ruleSourcePATDenied)
 		http.Error(w, "host not granted to this run", http.StatusForbidden)
 		return
 	}
@@ -97,29 +151,36 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	if strings.HasSuffix(rest, "/info/refs") {
 		verb = "info/refs"
 	}
-	if !validGitRest(r.Method, verb, r.URL.Query().Get("service")) {
-		p.emitLocalDecision(r, egress.Deny, ruleSourcePATDenied, nil)
+	// patForwardSafe first: the verb check runs on the DECODED path, so a rest
+	// that can re-split the rebuilt URL would let the checked value and the
+	// forwarded value differ — the one way this lane could become the
+	// "credentialed proxy to the whole forge" the comment above forbids.
+	if !patForwardSafe(rest, r.URL.RawQuery) || !validGitRest(r.Method, verb, r.URL.Query().Get("service")) {
+		p.emitPATDecision(r, host, egress.Deny, ruleSourcePATDenied)
 		http.Error(w, "unsupported git request", http.StatusForbidden)
 		return
 	}
 
 	token, username, err := p.patToken(r.Context(), grant)
 	if err != nil {
-		p.emitLocalDecision(r, egress.Deny, ruleSourcePATDenied, nil)
+		p.emitPATDecision(r, host, egress.Deny, ruleSourcePATDenied)
 		p.httpError(w, "mint git_pat", err, http.StatusBadGateway)
 		return
 	}
 
-	upstream := "https://" + host + rest
-	if q := r.URL.RawQuery; q != "" {
-		upstream += "?" + q
-	}
+	// Build the upstream URL from the MATCHED allowlist key + the validated rest
+	// and let net/url do the escaping — never a raw concatenation of the decoded
+	// path, which re-parses as a NEW url whose Path is whatever a '#'/'?' left in
+	// front of it. This is the invariant the GitHub-lane sibling states and keeps
+	// (git_broker.go: "never the raw request path"); patForwardSafe above is what
+	// makes the two spellings the same string.
+	upstream := (&url.URL{Scheme: "https", Host: host, Path: rest, RawQuery: r.URL.RawQuery}).String()
 	// Vet the destination through the SAME guard every other egress takes: a
 	// granted host that resolves into private space is still denied. The broker
 	// is a credential path, not a bypass of the IP guard.
 	target, _, err := p.egressTarget(host, 443)
 	if err != nil {
-		p.emitLocalDecision(r, egress.Deny, ruleSourcePATDenied, nil)
+		p.emitPATDecision(r, host, egress.Deny, ruleSourcePATDenied)
 		p.httpError(w, "vet git host", err, http.StatusForbidden)
 		return
 	}
@@ -128,7 +189,7 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 		context.WithValue(r.Context(), vettedIPKey{}, target),
 		r.Method, upstream, r.Body)
 	if err != nil {
-		p.emitLocalDecision(r, egress.Deny, ruleSourcePATDenied, nil)
+		p.emitPATDecision(r, host, egress.Deny, ruleSourcePATDenied)
 		p.httpError(w, "build git request", err, http.StatusBadGateway)
 		return
 	}
@@ -143,7 +204,7 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	outReq.Host = host
 	outReq.Header.Del("Host")
 
-	p.emitLocalDecision(r, egress.Allow, ruleSourcePAT, nil)
+	p.emitPATDecision(r, host, egress.Allow, ruleSourcePAT)
 
 	resp, err := p.transport.RoundTrip(outReq)
 	if err != nil {
@@ -155,32 +216,37 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	relay(w, resp)
 }
 
-// patToken mints the PAT server-side, returning it with the git username the
-// host expects.
+// patToken returns the brokered PAT with the git username the host expects.
+//
+// It goes through brokeredToken — the SAME per-grant cache, single-flight and
+// 409-pending wait the GitHub lane uses — rather than calling the mint route
+// itself. Both guards are load-bearing here for the same reason they are there:
+// one clone is TWO sub-requests (GET info/refs, then POST git-upload-pack), and
+// an approval-gated git_pat grant is single-use, so a per-request mint 409s
+// ErrAlreadyMinted on the second and the clone fails outright; and a first mint
+// against such a grant 409s PENDING, which must be waited out (the proxy holds
+// the run token and no caller can retry for it), not returned as a 502 before
+// any human could have approved.
 //
 // The username falls back to the grant's configured value and then to "pat":
 // Azure DevOps ignores the username entirely as long as one is present, GitLab
 // wants "oauth2", and an operator override rides the grant. An EMPTY username
 // is the one value that fails on every forge, so it is never sent.
 func (p *Proxy) patToken(ctx context.Context, g PATGrant) (token, username string, err error) {
-	tok, user, _, status, body, err := p.callMintGit(ctx, g.GrantID)
+	tok, user, err := p.brokeredToken(ctx, g.GrantID)
 	if err != nil {
 		return "", "", err
 	}
-	if status != http.StatusOK {
-		return "", "", fmt.Errorf("mint status %d: %s", status, strings.TrimSpace(string(body)))
-	}
 	username = cmp.Or(user, g.Username, "pat")
-	// Register the minted PAT with the process-global mask registry before it
+	// Register the brokered PAT with the process-global mask registry before it
 	// can reach any output stream — the raw token AND the base64(username +
-	// ":" + tok) that SetBasicAuth (:142) puts on the wire.
+	// ":" + tok) that SetBasicAuth puts on the wire, under the username THIS
+	// lane sends (which may differ from the mint's).
 	//
 	// TRUST BOUNDARY (F155, same root cause as the git lane's): procRegistry is
 	// what maskDecisionBytes consults for every sandbox-facing error body
 	// (Proxy.httpError) and every decision-log line, and the mask is exact-bytes
-	// per RENDERING. This lane registered NOTHING at all, so a transport error
-	// quoting the outbound request would have carried the operator's PAT out
-	// verbatim. registerBasicAuthCredential (inject.go) is the one definition.
+	// per RENDERING. registerBasicAuthCredential (inject.go) is the one definition.
 	registerBasicAuthCredential(username, tok)
 	return tok, username, nil
 }

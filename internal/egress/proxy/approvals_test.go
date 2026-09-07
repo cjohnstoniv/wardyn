@@ -6,6 +6,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -269,4 +270,104 @@ func TestResolveWaitHold(t *testing.T) {
 			t.Fatalf("saturated cap should fail fast, took %v", elapsed)
 		}
 	})
+}
+
+// F070: the hold deadline must bound the WHOLE of ResolveWait, not just the
+// parked wait at the end of it.
+//
+// The 30s timer was armed only after the concurrent-raise retry loop, and
+// nothing else bounded those calls: the request ctx from handleConnect carries
+// no deadline, so the retry loop spent concurrentRaiseRetries+1 full
+// control-plane client timeouts before the timer existed — 6x130s = 785s on the
+// shipped proxy client, against a first_use_hold_seconds docs/POLICIES.md sells
+// as 30s. This pins the operator's budget, not the timer's placement: a black-
+// holed control plane must cost one hold, and must still fail CLOSED.
+func TestResolveWaitBoundsTheWholeHoldAgainstAHungControlPlane(t *testing.T) {
+	saved := holdPollInterval
+	holdPollInterval = 20 * time.Millisecond
+	defer func() { holdPollInterval = saved }()
+
+	// A control plane that accepts the raise and never answers (partitioned or
+	// black-holed), which is the shape that exposes the unbounded round trips.
+	done := make(chan struct{})
+	cp := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-done:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(func() { close(done); cp.Close() })
+
+	const hold = 2 * time.Second
+	// A client Timeout stands in for the proxy's own 130s ceiling: the only bound
+	// these calls used to have, and one the retry loop multiplies.
+	ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(),
+		&http.Client{Transport: cp.Client().Transport, Timeout: time.Second})
+	ap.configureHold(types.FirstUseWaitForReview, hold, 4)
+
+	start := time.Now()
+	r := ap.ResolveWait(context.Background(), "egress.test")
+	elapsed := time.Since(start)
+
+	if r.State != apPending {
+		t.Fatalf("state = %v, want apPending — a hung control plane must fail closed", r.State)
+	}
+	if elapsed > hold+1500*time.Millisecond {
+		t.Fatalf("ResolveWait held %s against a hung control plane; the operator's hold budget is %s. "+
+			"The raise and the concurrent-raise retries run BEFORE the hold timer is armed, so nothing bounds them.",
+			elapsed.Round(time.Millisecond), hold)
+	}
+}
+
+// F071: one run must not be able to grow the approval cache — and the approvals
+// table behind it — without bound from inside the sandbox.
+//
+// Nothing capped either side: a.hosts had no cap and its entries are never
+// removed, and the control plane has no per-run cap, so a loop over generated
+// hostnames produced one cache entry and one PENDING row per name (measured:
+// 20,000 of each in 3.9s). Past the cap a NEW host must resolve to pending —
+// fail closed, no raise — while hosts already in the cache keep their state, so
+// a decision a human already made is never dropped and re-raised.
+func TestResolveCapsTheHostCacheAndTheRaises(t *testing.T) {
+	var raises atomic.Int32
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/internal/approvals") {
+			raises.Add(1)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: uuid.New(), State: types.ApprovalPending})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: uuid.New(), State: types.ApprovalPending})
+	}))
+	defer cp.Close()
+
+	ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
+	// Seed one host so we can prove an EXISTING entry still resolves past the cap.
+	seeded := uuid.New()
+	ap.mu.Lock()
+	ap.hosts["kept.test"] = &hostApproval{state: apApproved, approvalID: seeded, lastPoll: time.Now()}
+	ap.mu.Unlock()
+
+	// The pin is BOUNDEDNESS, not the cap's value: flood distinctly more hosts
+	// than any cap this file would sanely choose and require the two counts to
+	// stop tracking the flood 1:1. Stated this way it compiles against the
+	// pre-cap tree too, so the red is an assertion, not a build error.
+	const flood = 8192
+	for i := range flood {
+		ap.Resolve(context.Background(), fmt.Sprintf("h%06d.flood.test", i))
+	}
+
+	ap.mu.Lock()
+	entries := len(ap.hosts)
+	ap.mu.Unlock()
+	if entries >= flood {
+		t.Errorf("%d distinct hosts produced %d cache entries — the cache grows 1:1 with names the sandbox invents", flood, entries)
+	}
+	if got := int(raises.Load()); got >= flood {
+		t.Errorf("%d distinct hosts raised %d approvals — one run can insert unbounded PENDING rows", flood, got)
+	}
+	// The cap must not evict, or a human's decision would be silently re-asked.
+	if r := ap.Resolve(context.Background(), "kept.test"); r.State != apApproved || r.ApprovalID != seeded {
+		t.Errorf("a host decided BEFORE the cap now resolves %+v, want the seeded approval still granted", r)
+	}
 }

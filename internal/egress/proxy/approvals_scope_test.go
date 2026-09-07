@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -350,5 +352,54 @@ func TestResolveThenResolveWaitDoesNotDoubleConsume(t *testing.T) {
 
 	if got := ap.ResolveWait(context.Background(), "egress.test").State; got != apApproved {
 		t.Fatalf("ResolveWait on a cached `once` grant = %v, want apApproved (the grant must not be dropped)", got)
+	}
+}
+
+// TestApprovalGrantReleasesEveryPortOnTheHost (F145) is the missing PORT axis of
+// this file. Every test above locks a scope down along TIME (once / run / until
+// / always); nothing anywhere encoded how WIDE one grant reaches, and neither
+// approvals test file contained the string "port" or a port literal at all.
+//
+// The behaviour is deliberate and now documented (docs/POLICIES.md, "Every scope
+// in that table is HOST-wide — on every port"): the human is asked about a bare
+// host, the cache is keyed on that bare host, and the durable `always` write
+// goes through hostrules.ValidApprovedHost, which refuses a port by
+// construction. Nothing pinned it, so a well-meant change to key the cache (or
+// evaluate's call into it) on host:port would silently make every already-granted
+// approval stop covering the ports the operator was told it covered — and the
+// whole existing suite would stay green, because it drives approvalClient
+// directly and never goes through evaluate.
+//
+// So the pin drives evaluate, on the four ports the finding measured, and
+// asserts BOTH halves: allowed, and attributed to the SAME approval — an allow
+// that re-raised a second approval per port would satisfy a naive "still
+// reachable" assertion while breaking the promise the document makes.
+func TestApprovalGrantReleasesEveryPortOnTheHost(t *testing.T) {
+	apID := uuid.New()
+	cp, _ := decidedCP(t, apID, types.ApprovalApproved, types.ScopeRun, nil)
+	ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
+	seed(ap, "mirror.test", hostApproval{
+		state: apApproved, approvalID: apID, scope: types.ScopeRun, lastPoll: time.Now(),
+	})
+
+	p, _ := newTestProxy(t, types.RunPolicySpec{
+		FirstUseApproval: types.FirstUseDenyWithReview,
+	}, "127.0.0.1:1", ap, nil)
+
+	// 443 is the port the approval would have been raised by; the other three are
+	// ports no human was ever asked about.
+	for _, port := range []int{443, 22, 3306, 6379} {
+		decision, target, log := p.evaluate(context.Background(), "mirror.test", port, "CONNECT", "")
+		if decision != egress.Allow {
+			t.Fatalf("mirror.test:%d = %q (rule %q), want allow — one approval is HOST-wide, "+
+				"and docs/POLICIES.md's scope table tells the operator so", port, decision, log.RuleSource)
+		}
+		if target != "93.184.216.34:"+strconv.Itoa(port) {
+			t.Errorf("mirror.test:%d target = %q, want the vetted address on the requested port", port, target)
+		}
+		if log.ApprovalID == nil || *log.ApprovalID != apID {
+			t.Errorf("mirror.test:%d attributed to %v, want the ONE approval %s — a per-port re-raise would "+
+				"ask the operator again for a decision the document says they already made", port, log.ApprovalID, apID)
+		}
 	}
 }
