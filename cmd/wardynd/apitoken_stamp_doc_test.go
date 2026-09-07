@@ -4,6 +4,9 @@
 package main
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -73,16 +76,26 @@ func TestAPITokenStampResidualIsPublished(t *testing.T) {
 
 	// (3) The contrast the docs draw is real: SSH keys DO get re-stamped on
 	// login, which is why the token stamp is the worse of the two.
-	boot, err := os.ReadFile("boot_deps.go")
-	if err != nil {
-		t.Fatalf("read boot_deps.go: %v", err)
-	}
-	for _, hook := range []string{"RefreshSSHKeyRoles", "RefreshAPITokenRoles"} {
-		if !strings.Contains(string(boot), hook) {
-			t.Errorf("boot_deps.go no longer wires OnLogin to %s — one of the two stamps this residual compares is "+
-				"no longer re-checked at login, so docs/OPERATIONS.md and residual #38 need re-reading", hook)
-		}
-	}
+	//
+	// READ AS STRUCTURE, NOT AS A STRING. This was
+	// strings.Contains(boot_deps.go, "RefreshAPITokenRoles"), and the refactor
+	// that fixed the transposition half of this finding DEFEATED it — in the one
+	// direction it was the only cover for. At the time, that name occurred in
+	// boot_deps.go exactly once, at the call site, so gutting the OnLogin
+	// closure made this test fail. Extracting the closure into refreshLoginStamps
+	// put the same name into a loginStampStore interface declaration and a
+	// paragraph of explanation IN THE SAME FILE the guard greps, and a grep
+	// cannot tell a call from a comment: replacing the OnLogin body with a no-op
+	// — which makes the demoted-admin bound dead in production on BOTH lanes —
+	// left the whole package green.
+	//
+	// So it now asks the two structural questions the string was standing in
+	// for: does the OnLogin callback CALL refreshLoginStamps, and does
+	// refreshLoginStamps CALL both store methods on the store it was handed. It
+	// is strictly stronger than the grep it replaces — a file with the name
+	// nowhere in it fails both — and it is the DELETION half that
+	// login_stamp_test.go, which drives the function directly, cannot see.
+	assertLoginStampWiring(t)
 
 	// (4) The operator document names the tier and the remedy, with the receipt
 	// that tells an operator the revoke actually named somebody.
@@ -190,4 +203,109 @@ func apiTokenUpdatedColumns(t *testing.T) []string {
 		t.Fatal("no UPDATE api_tokens found in the store — revisit this guard rather than the docs")
 	}
 	return out
+}
+
+// assertLoginStampWiring reads boot_deps.go as a syntax tree and asserts the
+// login re-stamp is actually WIRED, not merely mentioned:
+//
+//	OnLogin: func(...) { ... refreshLoginStamps(...) ... }
+//	func refreshLoginStamps(ctx, st, ...) { st.RefreshSSHKeyRoles(...); st.RefreshAPITokenRoles(...) }
+//
+// Both halves matter and neither implies the other. A gutted OnLogin leaves a
+// perfectly good refreshLoginStamps nothing calls; a gutted refreshLoginStamps
+// leaves a call that stamps nothing. Each is the whole demoted-admin bound gone,
+// on one or both credential lanes, with every other test in this package green.
+//
+// The calls are required to be ON THE STORE PARAMETER, so a future refactor that
+// keeps the names but stamps something else is not mistaken for the bound.
+func assertLoginStampWiring(t *testing.T) {
+	t.Helper()
+	const rel = "boot_deps.go"
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, rel, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", rel, err)
+	}
+
+	// (a) The OIDC config's OnLogin callback calls refreshLoginStamps.
+	wired, sawOnLogin := false, false
+	ast.Inspect(f, func(n ast.Node) bool {
+		kv, ok := n.(*ast.KeyValueExpr)
+		if !ok {
+			return true
+		}
+		if key, ok := kv.Key.(*ast.Ident); !ok || key.Name != "OnLogin" {
+			return true
+		}
+		sawOnLogin = true
+		ast.Inspect(kv.Value, func(n ast.Node) bool {
+			if call, ok := n.(*ast.CallExpr); ok {
+				if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "refreshLoginStamps" {
+					wired = true
+				}
+			}
+			return true
+		})
+		return true
+	})
+	if !sawOnLogin {
+		t.Errorf("%s no longer sets an OnLogin callback on the OIDC config — every login-time re-stamp is gone, so "+
+			"docs/OPERATIONS.md and residual #38 overstate what is bounded", rel)
+	} else if !wired {
+		t.Errorf("%s sets OnLogin but its body never calls refreshLoginStamps. Nothing re-stamps a demoted human's "+
+			"ssh_public_keys or api_tokens rows at login, on either lane — the exact hole a grep for the method NAME "+
+			"cannot see, because the name still appears in this file's interface declaration and comments", rel)
+	}
+
+	// (b) refreshLoginStamps calls BOTH store methods, on its store parameter.
+	var decl *ast.FuncDecl
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == "refreshLoginStamps" {
+			decl = fn
+		}
+	}
+	if decl == nil {
+		t.Fatalf("%s no longer declares refreshLoginStamps; re-derive this guard against whatever replaced it rather "+
+			"than deleting it — it is the only thing standing between a demoted admin and their outstanding "+
+			"credentials", rel)
+	}
+	store := paramNamed(decl, "loginStampStore")
+	if store == "" {
+		t.Fatalf("refreshLoginStamps no longer takes a loginStampStore; re-derive this guard against its new shape")
+	}
+	called := map[string]bool{}
+	ast.Inspect(decl.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if recv, ok := sel.X.(*ast.Ident); ok && recv.Name == store {
+			called[sel.Sel.Name] = true
+		}
+		return true
+	})
+	for _, hook := range []string{"RefreshSSHKeyRoles", "RefreshAPITokenRoles"} {
+		if !called[hook] {
+			t.Errorf("refreshLoginStamps no longer calls %s.%s — one of the two stamps this residual COMPARES is no "+
+				"longer re-checked at login, so docs/OPERATIONS.md and residual #38 need re-reading. Both lanes are "+
+				"best-effort and independent: a failure of one is not a reason to drop the other", store, hook)
+		}
+	}
+}
+
+// paramNamed returns the name of fn's first parameter whose type is the named
+// (unqualified) type, or "".
+func paramNamed(fn *ast.FuncDecl, typeName string) string {
+	for _, field := range fn.Type.Params.List {
+		id, ok := field.Type.(*ast.Ident)
+		if !ok || id.Name != typeName || len(field.Names) == 0 {
+			continue
+		}
+		return field.Names[0].Name
+	}
+	return ""
 }
