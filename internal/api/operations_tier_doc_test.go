@@ -71,6 +71,81 @@ var docTierRows = []struct{ route, token string }{
 	{"GET /api/v1/audit/chain/verify", "`GET /audit/chain/verify`"},
 	{"POST /api/v1/governance/profiles", "`/governance` profile and assignment routes"},
 	{"GET /api/v1/access/directory/search", "`GET /access/directory/search`"},
+
+	// ─── the rest of the gated surface (R1 F316) ─────────────────────────────
+	//
+	// Through 0.7 this list was 22 hand-picked representatives out of 59 gated
+	// routes, and nothing bounded it: the guard checked that the rows we had
+	// named were right, never that every gated route had a row. Four
+	// operator-topology READS were re-tiered to admin in this wave and appear
+	// nowhere in the table, and no test could see it.
+	//
+	// So every gated route now names the token that covers it, and a route with
+	// NO covering token is listed in docTierUndocumented below with the reason.
+	// Several rows deliberately cover a FAMILY — the doc names
+	// `mountUserDriveRoutes` rather than six /drives lines — and that is the
+	// document being readable rather than the guard being loose: the mapping is
+	// per route either way, so a route that leaves the family still has to be
+	// re-pointed here.
+	{"GET /api/v1/drives", "`mountUserDriveRoutes`"},
+	{"PUT /api/v1/drives/{id}", "`mountUserDriveRoutes`"},
+	{"DELETE /api/v1/drives/{id}", "`mountUserDriveRoutes`"},
+	{"DELETE /api/v1/drives/grants/{id}", "`mountUserDriveRoutes`"},
+	{"POST /api/v1/drives/preview", "`mountUserDriveRoutes`"},
+	{"DELETE /api/v1/access/mappings/{id}", "`/access` role-mapping routes"},
+	{"GET /api/v1/access", "`/access` role-mapping routes"},
+	{"POST /api/v1/access/preview", "`/access` role-mapping routes"},
+	{"POST /api/v1/policies", "policy create/update/delete"},
+	{"PUT /api/v1/policies/{id}", "policy create/update/delete"},
+	{"DELETE /api/v1/policies/{id}", "policy create/update/delete"},
+	{"POST /api/v1/setup/harness-login", "managed harness credential"},
+	{"PUT /api/v1/setup/harness-credential/{provider}", "managed harness credential"},
+	{"DELETE /api/v1/setup/harness-credential/{provider}", "managed harness credential"},
+	{"DELETE /api/v1/tokens/{id}", "`GET`/`DELETE /tokens`"},
+	{"GET /api/v1/governance", "`/governance` profile and assignment routes"},
+	{"PUT /api/v1/governance/profiles/{id}", "`/governance` profile and assignment routes"},
+	{"DELETE /api/v1/governance/profiles/{id}", "`/governance` profile and assignment routes"},
+	{"POST /api/v1/governance/assignments", "`/governance` profile and assignment routes"},
+	{"DELETE /api/v1/governance/assignments/{id}", "`/governance` profile and assignment routes"},
+	{"POST /api/v1/governance/preview", "`/governance` profile and assignment routes"},
+	{"POST /api/v1/permissions/grants", "the `/permissions` routes below"},
+	{"DELETE /api/v1/permissions/grants/{id}", "the `/permissions` routes below"},
+}
+
+// docTierUndocumented names the gated routes the tier table does not cover, each
+// with the reason it is not covered yet. It is a RATCHET, not an exemption list:
+// a route here is admitted debt, and a NEW gated route that lands in neither
+// list fails the completeness check below rather than joining the 37 nobody
+// noticed.
+//
+// Every entry is a documentation gap R1 F316 opened, and the four marked FILED
+// are the finding's own: this wave re-tiered them to admin and the table never
+// gained a row, so an operator reading it to decide what to delegate cannot
+// learn that these reads are gated at all. The replacement row is written and
+// filed for the docs pass (lane api2's json, kind doc-sentence); when it lands,
+// delete those four entries and add them to docTierRows with the new token.
+var docTierUndocumented = map[string]string{
+	// FILED — R1 F316's four operator-topology reads. They carry the
+	// upstream-proxy secret ref, a local_dir source Locator and internal
+	// registry refs, which is why they moved to admin.
+	"GET /api/v1/site-config":  "FILED (R1 F316): the table names only PUT /site-config, and phrases it so the GET reads as open",
+	"GET /api/v1/sources":      "FILED (R1 F316): re-tiered to admin this wave; no row names the /sources family",
+	"GET /api/v1/sources/{id}": "FILED (R1 F316): as above",
+	"GET /api/v1/base-images":  "FILED (R1 F316): re-tiered to admin this wave; no row names /base-images",
+	// The pre-existing gaps the completeness check surfaced. Filed as a second,
+	// lower-priority doc item: each is a gated write whose family the table has
+	// never named, so the omission is older than this wave rather than caused
+	// by it.
+	"POST /api/v1/sources":                   "no /sources row in the table (pre-0.7 omission)",
+	"POST /api/v1/sources/{id}/scan":         "no /sources row in the table (pre-0.7 omission)",
+	"DELETE /api/v1/sources/{id}":            "no /sources row in the table (pre-0.7 omission)",
+	"POST /api/v1/base-images":               "no /base-images row in the table (pre-0.7 omission)",
+	"DELETE /api/v1/base-images/{id}":        "no /base-images row in the table (pre-0.7 omission)",
+	"PUT /api/v1/integrations/{id}":          "the table names integration credential refs only inside the PUT /site-config row",
+	"DELETE /api/v1/integrations/{id}":       "as above",
+	"POST /api/v1/admin/sandboxes/sweep":     "no row names the admin sandbox sweep",
+	"POST /api/v1/setup/onboarding-complete": "the setup family is named only as 'managed harness credential', which this route is not",
+	"GET /api/v1/runs/{id}/attach":           "no row names the attach socket's tier",
 }
 
 // TestOperationsTierTableMatchesRouteMatrix pins docs/OPERATIONS.md's "What
@@ -115,6 +190,42 @@ func TestOperationsTierTableMatchesRouteMatrix(t *testing.T) {
 		if !strings.HasPrefix(got[0], want) {
 			t.Errorf("%s is %s in the router, but OPERATIONS.md's tier table gates %s as %q, want it to lead with %q",
 				dr.route, rc.class, dr.token, got[0], want)
+		}
+	}
+
+	// THE REVERSE DIRECTION, which is what makes this a guard rather than a
+	// spot-check (R1 F316). Everything above asks "are the rows we listed
+	// right"; this asks "is every gated route listed", which is what the
+	// section claims to be. Without it the list was 22 of 59 and a re-tiering
+	// could land in routeMatrix with no doc row and nothing to say so — exactly
+	// how four operator-topology reads became admin-only in silence.
+	covered := map[string]bool{}
+	for _, dr := range docTierRows {
+		covered[dr.route] = true
+	}
+	for route, rc := range routeMatrix {
+		if rc.class != classAdmin && rc.class != classSecurity {
+			continue
+		}
+		if covered[route] || docTierUndocumented[route] != "" {
+			continue
+		}
+		t.Errorf("%s is gated (%s) and the OPERATIONS.md tier table does not cover it. An operator reads that "+
+			"table to decide what to delegate, so a gated surface missing from it is a delegation boundary "+
+			"nobody can see. Name it in docTierRows with the token that covers it, or add it to "+
+			"docTierUndocumented with the reason and file the row for the docs pass", route, rc.class)
+	}
+
+	// …and the debt list must not rot. An entry naming a route the table now
+	// covers, or one the router no longer gates, is a stale licence to omit.
+	for route, why := range docTierUndocumented {
+		rc, ok := routeMatrix[route]
+		if !ok || (rc.class != classAdmin && rc.class != classSecurity) {
+			t.Errorf("docTierUndocumented names %q (%s), which the router no longer gates — drop the entry", route, why)
+			continue
+		}
+		if covered[route] {
+			t.Errorf("docTierUndocumented names %q, which docTierRows now covers — drop the entry", route)
 		}
 	}
 }
