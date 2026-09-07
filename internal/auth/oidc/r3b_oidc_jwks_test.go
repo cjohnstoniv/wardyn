@@ -161,4 +161,38 @@ func TestR3BJWKSSurvivesAnUnrepresentableKey(t *testing.T) {
 			t.Fatalf("verified payload = %s, want the signed body", payload)
 		}
 	})
+
+	// ARM E: the same clause, on the two shapes that were broken IDENTICALLY
+	// BEFORE AND AFTER the dependency wave.
+	//
+	// Arm D's Ed25519 case is a regression — go-jose v4.1.4 accepted that entry
+	// (silently zero-padding it) and v4.1.5 rejects it, correctly. A malformed
+	// EC or RSA entry was never accepted by either version, on either go-oidc:
+	// it failed the whole key set at base_sha and it failed it on the round
+	// tree, so the "one odd JWKS key cannot break login" claim was untrue for
+	// this class from the day it was written. NO dependency version closes it,
+	// which is exactly why the tolerance had to be Wardyn's own layer rather
+	// than a pin — and why this arm is here, in the file that makes the claim,
+	// rather than only in jwks_tolerant_test.go where the rest of the depth
+	// (several bad entries at once, and the floor that an unusable key still
+	// verifies nothing) lives.
+	//
+	// Both shapes in ONE key set: a real IdP publishing junk rarely publishes
+	// exactly one piece of it, and the good key must survive all of it.
+	t.Run("E: malformed EC and RSA entries, the class that predates the wave", func(t *testing.T) {
+		url, token := r3bJWKS(t,
+			`{"kty":"EC","crv":"P-256","kid":"bad-ec","x":"AA","y":"AA"}`,
+			`{"kty":"RSA","kid":"bad-rsa","e":"AQAB"}`)
+		keySetCtx := gooidc.ClientContext(ctx, writoidc.NewTolerantJWKSClientForTest(nil))
+		payload, err := gooidc.NewRemoteKeySet(keySetCtx, url).VerifySignature(keySetCtx, token)
+		if err != nil {
+			t.Fatalf("a malformed EC or RSA entry failed the WHOLE key set, so no signing key loaded and every "+
+				"SSO login is down: %v — this class is not a regression and no go-jose/go-oidc version fixes "+
+				"it; RFC 7517 s5's \"missing required members\" and \"values out of the supported ranges\" "+
+				"clauses are tolerantJWKSTransport's to honour", err)
+		}
+		if string(payload) != `{"sub":"x"}` {
+			t.Fatalf("verified payload = %s, want the signed body", payload)
+		}
+	})
 }
