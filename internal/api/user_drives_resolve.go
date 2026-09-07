@@ -80,6 +80,31 @@ func driveUnavailableReason(err error) string {
 	}
 }
 
+// ceilingUnavailableReason is driveUnavailableReason's twin for the OTHER half
+// of /me's answer: why the DOOR could not be decided.
+//
+// It exists because userDriveDeniedByProfile used to hand back a bare bool, and
+// R1 F273's residue is exactly what that bool discarded. A truncated group
+// snapshot fails BOTH resolves, and on a deployment that assigns governance by
+// group while allocating drives per USER the drive resolver succeeds — so the
+// only component that knows the remedy is the member's own ("sign in again") is
+// the ceiling error, and a bool cannot carry it. /me then said
+// governance_unavailable (wait for an operator) while POST /runs said 403
+// groups_snapshot_stale (sign in again): the member was shown the one remedy
+// that is not theirs, which is the whole finding.
+//
+// TWO ARMS ONLY, and deliberately not driveUnavailableReason's three: what
+// failed here is the CEILING, so "the allocation could not be read" is not one
+// of the answers. Everything that is not the stale snapshot is
+// governance_unavailable — the token whose documented meaning is "nothing is
+// wrong with the allocation; what is unknown is permission".
+func ceilingUnavailableReason(err error) string {
+	if errors.Is(err, errGroupsSnapshotStale) {
+		return driveUnavailableGroups
+	}
+	return driveUnavailableGovernance
+}
+
 // The closed reason set. `user_drive_unavailable` carries exactly one of these,
 // and "" is the ordinary answer: /me could answer, and user_drive says what it
 // answered (an allocation, or null for none).

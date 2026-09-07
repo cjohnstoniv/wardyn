@@ -4,6 +4,7 @@
 package api
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -47,6 +48,70 @@ func TestMeUnavailableReasonPrecedence(t *testing.T) {
 		}
 		if denied != "" {
 			t.Errorf("user_drive_denied_by_profile = %q, want empty — no profile was read", denied)
+		}
+	})
+
+	// THE RESIDUE, and the population the first fix could not reach: a
+	// deployment that assigns GOVERNANCE profiles by group while allocating
+	// drives per USER. Still a group-governed deployment, still an over-cap
+	// snapshot — but the drive resolver succeeds, so the drive-side token is ""
+	// and the earlier me.go comparison had nothing to preserve. The widening
+	// fired unconditionally and /me said governance_unavailable (wait for an
+	// operator) while POST /runs said 403 groups_snapshot_stale (sign in
+	// again). Executed on both the old and the new tree with identical output
+	// before this fix: the layer was wrong, not the comparison. The ceiling's
+	// error is the only component that knows, and userDriveDeniedByProfile
+	// returned a bare bool that discarded it.
+	t.Run("a per-user drive on a group-governed deployment keeps the launch path's token", func(t *testing.T) {
+		d := driveFixture(nil)
+		st := &driveStore{
+			// A USER-TIER allocation: resolvable whatever the snapshot hides,
+			// so the drive half answers cleanly and names no reason at all.
+			drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser,
+			// …while governance IS assigned by group, so the ceiling cannot be
+			// resolved for a snapshot that was truncated at the cookie cap.
+			hasGroupTierAssignments: true,
+		}
+		srv, _ := driveRunServer(st, "docker")
+		ctx := driveMemberCtx(nil, true)
+
+		ud, denied, reason := meDriveBody(t, srv, ctx)
+		if reason != driveUnavailableGroups {
+			t.Errorf("user_drive_unavailable = %q, want %q — the drive resolved, so only the CEILING failed, "+
+				"and it failed for a reason whose remedy is the member's own. %q sends them to an operator "+
+				"who has nothing to fix", reason, driveUnavailableGroups, driveUnavailableGovernance)
+		}
+		if ud != nil {
+			t.Errorf("user_drive = %v beside an unknown door, want null — the suppression is unconditional", ud)
+		}
+		if denied != "" {
+			t.Errorf("user_drive_denied_by_profile = %q, want empty — no profile was read", denied)
+		}
+
+		// AND THE LAUNCH REALLY DOES SAY THAT, asserted rather than assumed:
+		// the whole finding is the two doors disagreeing, so a test that only
+		// read /me could not see it.
+		if _, err := srv.effectiveCeiling(ctx); !errors.Is(err, errGroupsSnapshotStale) {
+			t.Errorf("the launch path's ceiling resolve = %v, want errGroupsSnapshotStale — /me must not be "+
+				"pinned to a token the enforcement path does not carry", err)
+		}
+	})
+
+	// THE CONTROL that keeps the widening meaningful: a ceiling that failed for
+	// any OTHER reason is still governance_unavailable. `unavailable` and
+	// `governance_unavailable` both mean "the server could not answer", so
+	// preferring one over the other tells the member nothing — only
+	// groups_snapshot_stale carries a remedy they can perform, which is why it
+	// is the one token that survives.
+	t.Run("an ordinary ceiling outage is still governance_unavailable", func(t *testing.T) {
+		d := driveFixture(nil)
+		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser,
+			err: errors.New("pg: connection refused")}
+		srv, _ := driveRunServer(st, "docker")
+		if _, _, reason := meDriveBody(t, srv, driveMemberCtx([]string{"eng"}, false)); reason != driveUnavailableGovernance {
+			t.Errorf("user_drive_unavailable = %q, want %q — a store outage is not a remedy the member can "+
+				"perform, and telling them to sign in again would be a wrong instruction rather than a vague one",
+				reason, driveUnavailableGovernance)
 		}
 	})
 }

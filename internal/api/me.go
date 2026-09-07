@@ -109,7 +109,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	// one where the obvious advice — "ask an admin for an allocation" — is
 	// wrong. Always PRESENT (never omitted), so an older daemon's missing key is
 	// distinguishable from an open door.
-	deniedBy, doorUnknown := s.userDriveDeniedByProfile(r)
+	deniedBy, doorReason := s.userDriveDeniedByProfile(r)
 	body["user_drive_denied_by_profile"] = deniedBy
 	// A ceiling that could not be resolved makes the DOOR unknown, not open, and
 	// an unknown door must not ship beside an allocation the card would then
@@ -117,7 +117,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	// mount the create path refuses at that same ceiling. So the allocation is
 	// suppressed with it and the reason says which half is missing — the caller
 	// is told "I cannot answer", never "yes" to a question nobody answered.
-	if doorUnknown {
+	if doorReason != "" {
 		body["user_drive"] = nil
 		// THE WIDENING YIELDS TO A DIFFERENT REMEDY, and only to that.
 		//
@@ -140,7 +140,18 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		//
 		// The SUPPRESSION above stays unconditional: an unknown door must never
 		// ship beside an allocation, whichever reason names it.
-		if unavailable != driveUnavailableGroups {
+		//
+		// FROM EITHER HALF (R1 F273's residue). The earlier form asked only
+		// whether the DRIVE resolver had said groups_snapshot_stale, which is
+		// true when the drive is allocated by group — and silently false on a
+		// deployment that assigns governance by group while allocating drives
+		// per user, where the drive resolves fine and the CEILING is the half
+		// that could not answer. userDriveDeniedByProfile now returns that
+		// reason instead of a bool, so the token survives from whichever
+		// resolver actually met it.
+		if unavailable == driveUnavailableGroups || doorReason == driveUnavailableGroups {
+			unavailable = driveUnavailableGroups
+		} else {
 			unavailable = driveUnavailableGovernance
 		}
 	}

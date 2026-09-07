@@ -954,15 +954,26 @@ func (s *Server) resolveMeUserDrive(r *http.Request) (*meUserDrive, string) {
 // causes, both of which must not read as an open door: a ceiling that could not
 // be resolved, and a door that is shut under a profile with no name to quote.
 //
+// IT IS THE REASON, NOT A BOOL, and that is R1 F273's residue rather than a
+// refactor. A bool says "I could not answer" and throws away WHY, so the
+// ceiling's own groups_snapshot_stale could never reach the wire: on a
+// deployment that assigns governance profiles by group and allocates drives per
+// USER, the drive resolver succeeds and the ceiling is the only half that
+// failed — /me answered governance_unavailable ("wait for an operator") while
+// POST /runs answered 403 groups_snapshot_stale ("sign in again"), showing the
+// member the one remedy that is not theirs. The earlier fix compared the DRIVE
+// resolver's token in me.go, which closes that for the population where the
+// drive resolve also fails and changes nothing for this one.
+//
 // It reads driveDoorProfile — the SAME predicate denyMemberDrive enforces with,
 // whose keying (operator exempt, unassigned member has no door) is documented
 // there. A ceiling that cannot be resolved reports "" for resolveMeUserDrive's
 // own reason — /me is a display read, and the ENFORCEMENT path answers the same
 // failure with a refusal. The operator short-circuit stays HERE too, ahead of
 // the resolve: a display read must not cost an operator a ceiling round-trip.
-func (s *Server) userDriveDeniedByProfile(r *http.Request) (name string, unresolved bool) {
+func (s *Server) userDriveDeniedByProfile(r *http.Request) (name, unresolved string) {
 	if s.isOperator(r.Context()) {
-		return "", false
+		return "", ""
 	}
 	// A DISPLAY READ, for the reason resolveMeUserDrive states: this is the
 	// SECOND deciding site /me reaches, so without the mark here a poll still
@@ -977,7 +988,7 @@ func (s *Server) userDriveDeniedByProfile(r *http.Request) (name string, unresol
 		// same outage refuses the run. Shipped beside a fully populated
 		// user_drive it made /me promise a mountable, writable drive for a
 		// create the server would then refuse.
-		return "", true
+		return "", ceilingUnavailableReason(err)
 	}
 	// THE BOOL IS THE DECISION, and discarding it here was the same fail-open
 	// driveDoorShut's own bool was introduced to close, left standing at the
@@ -998,9 +1009,14 @@ func (s *Server) userDriveDeniedByProfile(r *http.Request) (name string, unresol
 	// working as designed (an allocation and a door are different facts).
 	name, shut := s.driveDoorProfile(ctx, ceiling)
 	if shut && name == "" {
-		return "", true
+		// The ceiling RESOLVED here; what cannot be said is which profile shut
+		// the door. governance_unavailable is still the honest token — the
+		// answer to "may you mount" is unknown — and it is the one this arm has
+		// always produced, so F274's behaviour is unchanged by the widening
+		// above becoming reason-carrying.
+		return "", driveUnavailableGovernance
 	}
-	return name, false
+	return name, ""
 }
 
 // driveRefusal composes a 422 body in the frozen member voice: lowercase
