@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -97,6 +98,10 @@ type Proxy struct {
 	// controlPlaneURL is the base URL of wardynd, used ONLY by the local
 	// brokered routes (/wardyn/v1/...) to forward to the internal API.
 	controlPlaneURL string
+	// topologyRe are the operator-configured endpoints redactTopology removes
+	// from a SANDBOX-facing error body (httpError) — the control-plane base URL
+	// and the corp upstream proxy address. Compiled once; see topologyPatterns.
+	topologyRe []*regexp.Regexp
 	// runToken is the per-run token that authenticates internal calls. It is
 	// held ONLY here in proxy memory and injected toward controlPlaneURL on the
 	// local mint/approvals routes; it is NEVER exposed to the sandbox and NEVER
@@ -143,11 +148,22 @@ type Proxy struct {
 	// internal-host declaration must not let a run reach the proxy's own
 	// network neighbors.
 	localSubnets []*net.IPNet
-	// controlPlaneIP is this run's wardynd address, resolved ONCE at
-	// construction (NewServer, before the Proxy exists) — never re-read per
-	// request. liftInternalHost refuses to lift this address for the same
-	// reason as localSubnets.
-	controlPlaneIP net.IP
+	// controlPlaneIPs are EVERY address this run's wardynd resolves to,
+	// resolved ONCE at construction (NewServer, before the Proxy exists) —
+	// never re-read per request. liftInternalHost refuses to lift any of them
+	// for the same reason as localSubnets. All of them, not just the first: a
+	// wardynd behind more than one A record had only its first address
+	// excluded, while THREAT-MODEL.md states the exclusion covers "its resolved
+	// control-plane host" (F002).
+	controlPlaneIPs []net.IP
+	// exclusionUnknown is set when NewServer's startup capture of localSubnets
+	// or controlPlaneIPs FAILED. Both admin-authored exceptions to the private-
+	// IP guard (the InternalHosts lift and the exact-literal-IP redirect trust)
+	// are clamped by onOwnSubnetOrControlPlane, so a silently empty clamp made
+	// those exceptions fire MORE widely, not less — the opposite of the
+	// fail-closed NewServer's comment claimed. With this set the clamp answers
+	// "yes" for every address, which refuses every lift/trust (F002).
+	exclusionUnknown bool
 
 	// llmUpstreams is the OPERATOR-CONFIGURED internal-gateway table (vendor
 	// public host -> {host,port,prefix}), parsed once from Options.LLMUpstreams.
@@ -233,9 +249,15 @@ type Options struct {
 	// captured once by NewServer before constructing Options). See
 	// Proxy.localSubnets.
 	LocalSubnets []*net.IPNet
-	// ControlPlaneIP is this run's wardynd address, resolved once by NewServer
-	// before constructing Options. See Proxy.controlPlaneIP.
-	ControlPlaneIP net.IP
+	// ControlPlaneIPs are every address this run's wardynd resolves to,
+	// resolved once by NewServer before constructing Options. See
+	// Proxy.controlPlaneIPs.
+	ControlPlaneIPs []net.IP
+	// ExclusionUnknown reports that NewServer's startup capture of LocalSubnets
+	// or ControlPlaneIPs failed, so the own-subnet/control-plane clamp must
+	// refuse every lift/trust rather than silently permit them. See
+	// Proxy.exclusionUnknown.
+	ExclusionUnknown bool
 	// LLMUpstreams maps a public vendor host to an operator-configured internal
 	// gateway base URL (Config.LLMUpstreams, forwarded verbatim). Empty == every
 	// brokered LLM route dials the vendor host. See Proxy.llmUpstreams.
@@ -383,32 +405,34 @@ func newProxy(opts Options) *Proxy {
 		gatewayVendor[host] = vendor
 	}
 	p := &Proxy{
-		runID:           opts.RunID,
-		policy:          opts.Policy,
-		evaluator:       evaluator,
-		approval:        opts.Approval,
-		inject:          opts.Injector,
-		sink:            opts.Sink,
-		res:             res,
-		scanner:         opts.Scanner,
-		ca:              opts.CA,
-		mitmHosts:       mitmHosts,
-		mitmPorts:       mitmPorts,
-		mitmLLM:         opts.MITMLLM,
-		gitGrants:       gitGrants,
-		patGrants:       patGrants,
-		gitTokens:       make(map[uuid.UUID]*gitTokEntry),
-		controlPlaneURL: strings.TrimRight(opts.ControlPlaneURL, "/"),
-		runToken:        opts.RunToken,
-		upstream:        opts.Upstream,
-		noProxy:         compileNoProxy(opts.UpstreamNoProxy),
-		internalHosts:   internalHosts,
-		localSubnets:    opts.LocalSubnets,
-		controlPlaneIP:  opts.ControlPlaneIP,
-		llmUpstreams:    llmUpstreams,
-		gatewayVendor:   gatewayVendor,
-		dial:            dial,
-		now:             now,
+		runID:            opts.RunID,
+		policy:           opts.Policy,
+		evaluator:        evaluator,
+		approval:         opts.Approval,
+		inject:           opts.Injector,
+		sink:             opts.Sink,
+		res:              res,
+		scanner:          opts.Scanner,
+		ca:               opts.CA,
+		mitmHosts:        mitmHosts,
+		mitmPorts:        mitmPorts,
+		mitmLLM:          opts.MITMLLM,
+		gitGrants:        gitGrants,
+		patGrants:        patGrants,
+		gitTokens:        make(map[uuid.UUID]*gitTokEntry),
+		controlPlaneURL:  strings.TrimRight(opts.ControlPlaneURL, "/"),
+		runToken:         opts.RunToken,
+		upstream:         opts.Upstream,
+		topologyRe:       topologyPatterns(strings.TrimRight(opts.ControlPlaneURL, "/"), opts.Upstream),
+		noProxy:          compileNoProxy(opts.UpstreamNoProxy),
+		internalHosts:    internalHosts,
+		localSubnets:     opts.LocalSubnets,
+		controlPlaneIPs:  opts.ControlPlaneIPs,
+		exclusionUnknown: opts.ExclusionUnknown,
+		llmUpstreams:     llmUpstreams,
+		gatewayVendor:    gatewayVendor,
+		dial:             dial,
+		now:              now,
 	}
 
 	// directDial dials the vetted IP carried on the request context and never
@@ -544,35 +568,12 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		Time:   p.now(),
 	}
 
-	// 0. Unconditional literal-IP guard: a blocked address (private/loopback/
-	// link-local/metadata) is denied BEFORE policy and BEFORE first-use
-	// approval — an approval must never even be raisable for these ranges
-	// (invariant 3: blocked regardless of policy). Hostnames that RESOLVE to
-	// blocked ranges are caught by VetHost at step 4 after policy/approval.
-	//
-	// trustedLiteralIP is the ONE deliberate exception: a literal IP the
-	// operator explicitly typed into an EXACT AllowedDomains entry (e.g. an
-	// egress-redirect "To" target on RFC1918/CGNAT space — see
-	// trustsExactLiteralIP) carries no DNS-rebinding risk, since there is
-	// no hostname behind it to rebind. Set here, it also skips VetHost at
-	// step 4 below (which would otherwise re-derive and re-deny the same
-	// address) so the operator's own configured destination is actually
-	// reachable instead of always denied with "the customer's network is at
-	// fault" (W13-S1-3). Only blockPrivate OFF the proxy's own subnets and
-	// control-plane host qualifies: a declared loopback, link-local/metadata or
-	// NAT64 literal — or one of the sidecar's own docker-network neighbours —
-	// still hits the else and is denied, so the operator can hand the sandbox
-	// neither 169.254.169.254 nor the control plane by allow-listing it.
-	var trustedLiteralIP net.IP
-	if ip := net.ParseIP(strings.TrimSuffix(strings.ToLower(host), ".")); ip != nil {
-		if kind, _ := isBlockedIP(ip); kind != blockNone {
-			if p.trustsExactLiteralIP(ip, port) {
-				trustedLiteralIP = ip
-			} else {
-				log := decisionLog(req, egress.Deny, "builtin:private-ip")
-				return egress.Deny, "", &log
-			}
-		}
+	// 0. Unconditional literal-IP guard, before policy and before first-use
+	// approval — see literalIPGuard (literal_ip_guard.go), which holds the rule
+	// and both spellings of it.
+	trustedLiteralIP, denied := p.literalIPGuard(req, host, port)
+	if denied != nil {
+		return egress.Deny, "", denied
 	}
 
 	// 1. Policy host verdict (deny beats allow, default-deny) — delegated to the
@@ -593,12 +594,38 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	// through approval (a direct policy allow).
 	var approvalID uuid.UUID
 
-	switch verdict {
-	case egress.VerdictDeny:
+	if verdict == egress.VerdictDeny {
 		log := decisionLog(req, egress.Deny, "policy:denied")
 		return egress.Deny, "", &log
+	}
+
+	// 2. Method restriction (CONNECT counts as method "CONNECT"), applied BEFORE
+	// the first-use approval flow below.
+	//
+	// F032: it used to sit after the raise, so a request whose method can NEVER
+	// pass — allowed_methods=["GET"] and the sandbox sends POST — still POSTed an
+	// egress_domain ApprovalRequest to the control plane, and under
+	// wait_for_review PARKED the connection in ResolveWait until a human answered
+	// or the hold deadline passed. A human was asked to decide egress for a
+	// request the very next step refuses unconditionally, and since the SANDBOX
+	// picks the method it also picked how many approval rows and hold slots it
+	// could create: N POSTs to N unknown hosts under a GET-only policy fill the
+	// operator's queue and saturate max_holds, stalling the run's legitimate
+	// first-use approvals. The check depends on nothing the approval produces,
+	// so refusing first is free — and it also stops a method-denied request from
+	// SPENDING a scope=once grant (the trade-off approvals.go documents for the
+	// already-granted half of this ordering).
+	//
+	// Order against policy:denied is unchanged: a host the policy denies outright
+	// still logs policy:denied, never policy:method.
+	if !p.evaluator.MethodAllowed(req.Method) {
+		log := decisionLog(req, egress.Deny, "policy:method")
+		return egress.Deny, "", &log
+	}
+
+	switch verdict {
 	case egress.VerdictUnknown:
-		// 2. First-use approval (only for the review modes). always_deny falls to
+		// 3. First-use approval (only for the review modes). always_deny falls to
 		// the else (hard deny). deny_with_review raises + fails fast (Resolve).
 		// wait_for_review HOLDS the connection until decided or the hold deadline
 		// (ResolveWait) — transparent to the sandbox if approved in time.
@@ -632,12 +659,6 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		}
 	case egress.VerdictAllow:
 		// fall through.
-	}
-
-	// 3. Method restriction (CONNECT counts as method "CONNECT").
-	if !p.evaluator.MethodAllowed(req.Method) {
-		log := decisionLog(req, egress.Deny, "policy:method")
-		return egress.Deny, "", &log
 	}
 
 	// 4. IP vetting (unconditional private/loopback/link-local/metadata deny).
@@ -693,88 +714,6 @@ func (p *Proxy) allowLog(req egress.Request, approvalID uuid.UUID) egress.Decisi
 	return log
 }
 
-// handlePlain forwards an absolute-URI plain HTTP request.
-func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
-	// A forward-proxy request carries an absolute URI; the host lives in the
-	// URL, not just the Host header.
-	if r.URL == nil || r.URL.Host == "" {
-		http.Error(w, "proxy requires absolute-form request URI", http.StatusBadRequest)
-		return
-	}
-	host, port := splitHostPort(r.URL.Host, 80)
-
-	decision, target, log := p.evaluate(r.Context(), host, port, r.Method, r.URL.Path)
-	switch decision {
-	case egress.Deny:
-		if log != nil {
-			p.sink.emit(*log)
-		}
-		p.writeEgressDeny(w, host, port, log)
-		return
-	case egress.Pending:
-		if log != nil {
-			p.sink.emit(*log)
-		}
-		setEgressRefusalHeaders(w, egressRefusalPending, host)
-		writeApprovalPending(w, log)
-		return
-	}
-
-	// OPTIONAL generic content inspection of a custom (non-LLM) HTTP connector's
-	// body — the walled-garden extension, opt-in via inspect_forward_egress. When
-	// disabled (the default) or for bodiless methods this is a no-op and the path
-	// below is byte-for-byte the original streaming forward. A confident block
-	// writes the 403 itself (before the allow decision is emitted).
-	var bodyOverride io.Reader
-	if p.scanner != nil && p.scanner.InspectForwardEgress() && p.scanner.Mode() != contentscan.ModeOff && hasScannableBody(r) {
-		buffered, summary, blocked := p.inspectForwardBody(w, r, host, port)
-		if blocked {
-			return
-		}
-		bodyOverride = buffered
-		if summary != nil && log != nil {
-			log.Scan = summary
-		}
-	}
-	outReq := r.Clone(context.WithValue(r.Context(), vettedIPKey{}, target))
-	// RequestURI must be empty for client requests.
-	outReq.RequestURI = ""
-	if bodyOverride != nil {
-		// Forward the buffered (re-readable) body; bytes are unchanged so the
-		// cloned ContentLength still matches.
-		outReq.Body = io.NopCloser(bodyOverride)
-	}
-	// Strip hop-by-hop headers before forwarding.
-	removeHopByHop(outReq.Header)
-
-	// 5. Credential injection (plain HTTP only, exact-allow host only).
-	p.inject.apply(outReq, host)
-
-	// 6. Forward to the vetted target over the pinned transport. Its DialContext
-	// dials the vetted ip:port carried on the request context (vettedIPKey), so the
-	// host is never re-resolved. Invoked only post-allow+vet.
-	resp, err := p.transport.RoundTrip(outReq)
-	if err != nil {
-		// The allow decision is emitted only AFTER a successful round-trip (same
-		// accuracy fix as handleConnect, E3): a failed upstream dial must NOT
-		// over-report an allow. Emit a dial-failed deny (carrying any scan
-		// summary) instead.
-		if log != nil {
-			dl := decisionLog(log.Request, egress.Deny, "builtin:dial-failed")
-			dl.Scan = log.Scan
-			p.sink.emit(dl)
-		}
-		p.httpError(w, "upstream error", err, http.StatusBadGateway)
-		return
-	}
-	if log != nil {
-		p.sink.emit(*log)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	relay(w, resp)
-}
-
 // handleConnect establishes a raw TCP tunnel for CONNECT (TLS passthrough).
 // Credentials CANNOT be injected into a CONNECT tunnel: the proxy has
 // hostname-only visibility and never sees the encrypted request headers.
@@ -812,14 +751,16 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// bookkeeping; these hosts are not model APIs and are never content-scanned.
 	//
 	// PORT-SCOPED (W13-S1-5): mitmHosts is host-only, so also require the CONNECT
-	// port to match what was actually configured (mitmPorts; 0 == the entry
-	// carried no port and stays any-port, for backward compat with a bare
+	// port to match what was actually configured (mitmPortAllowed; 0 == the
+	// entry carried no port and stays any-port, for backward compat with a bare
 	// legacy entry). Without this a CONNECT to the same hostname on a port the
 	// operator never configured would ALSO be MITM'd and token-injected — wider
 	// than the redirect actually authored. A non-matching port falls through to
-	// an ordinary opaque tunnel, still gated by the policy decision above.
+	// an ordinary opaque tunnel, still gated by the policy decision above — and
+	// the SAME clamp is inside mitmLLMHost below, so the fall-through cannot be
+	// re-admitted by the LLM branch for a host that is both (F009).
 	if p.ca != nil && p.isCorpMITMHost(host) {
-		if cport := p.mitmPorts[host]; cport == 0 || cport == port {
+		if p.mitmPortAllowed(host, port) {
 			if log != nil {
 				p.sink.emit(*log)
 			}
@@ -837,7 +778,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		// an artifact-only run would TLS-terminate a direct CONNECT to Anthropic/OpenAI
 		// it never asked to intercept. serveMITMRequest does inspection AND/OR OAuth
 		// injection (inspectLLM no-ops with a nil scanner).
-		if p.mitmLLMHost(host) {
+		if p.mitmLLMHost(host, port) {
 			// The MITM path establishes its own TLS-terminated tunnel and emits
 			// per-request decisions inside; record the CONNECT allow here.
 			if log != nil {
@@ -901,22 +842,43 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	tunnel(clientConn, upstream)
 }
 
-// tunnel pipes bytes in both directions until either side closes, then closes
-// both connections.
+// tunnel pipes bytes in both directions until EITHER side finishes, then closes
+// both connections — the standard CONNECT-proxy shape.
+//
+// F079 — why the first finisher and not both: this used to wg.Wait() for BOTH
+// io.Copy calls before closing anything. When the sandbox side went away the
+// client->upstream copy returned and half-closed the upstream write side, but
+// the upstream->client copy stayed blocked in Read until the upstream sent or
+// closed. An upstream that never does — an attacker-controlled allowed host, a
+// hung TLS endpoint, a dropped FIN — pinned that goroutine, its 32 KiB copy
+// buffer, the hijacked client socket and the upstream socket FOREVER: the
+// listener's IdleTimeout (server.go) does not apply to a hijacked connection,
+// and nothing else deadlines or caps an opaque tunnel (the inner MITM server
+// has ReadHeaderTimeout/ReadTimeout/IdleTimeout, mitm.go — this lane had
+// none). A prompt-injected process in the sandbox could open and abandon
+// tunnels in a loop, measured at 2 goroutines + both sockets retained per
+// tunnel, inside a sidecar sized at 256 MiB.
+//
+// Closing on the first finisher bounds that to the lifetime of whichever
+// direction ends first, and costs nothing a CONNECT tunnel relies on: the
+// half-close below still fires first, so a peer that is merely done SENDING
+// sees EOF exactly as before, and a TLS session (every real user of this lane)
+// is over for both directions once either endpoint is gone. The second copy
+// goroutine returns as soon as Close unblocks its Read; done is buffered so it
+// can never block on a receiver that has already left.
 func tunnel(a, b net.Conn) {
-	var wg sync.WaitGroup
-	wg.Add(2)
+	done := make(chan struct{}, 2)
 	cp := func(dst, src net.Conn) {
-		defer wg.Done()
 		_, _ = io.Copy(dst, src)
 		// Half-close the write side if supported so the peer sees EOF.
 		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
 			_ = cw.CloseWrite()
 		}
+		done <- struct{}{}
 	}
 	go cp(a, b)
 	go cp(b, a)
-	wg.Wait()
+	<-done
 	_ = a.Close()
 	_ = b.Close()
 }
@@ -931,17 +893,6 @@ func writeApprovalPending(w http.ResponseWriter, log *egress.DecisionLog) {
 	}
 	// {"wardyn":"approval_pending","approval_id":...}
 	_, _ = fmt.Fprintf(w, `{"wardyn":"approval_pending","approval_id":%q}`, id)
-}
-
-// httpError writes "<msg>: <err>" to the SANDBOX with the process-global secret
-// mask applied to the error text — the same mask the decision-log path uses. A
-// proxy error routinely wraps upstream/control-plane text (see resolveInjection's
-// status echo), and the sandbox is the one party that must never observe an
-// injected credential, so error strings are masked here rather than at each site
-// — every sandbox-facing error goes through this helper, so no handler in the
-// package holds a raw err.Error().
-func (p *Proxy) httpError(w http.ResponseWriter, msg string, err error, code int) {
-	http.Error(w, msg+": "+string(maskDecisionBytes([]byte(err.Error()))), code)
 }
 
 // hopByHopHeaders are stripped before forwarding (RFC 7230 §6.1).

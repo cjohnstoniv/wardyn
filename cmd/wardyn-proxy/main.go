@@ -16,6 +16,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -99,6 +101,10 @@ func main() {
 		os.Exit(2)
 	}
 
+	// Tell the Go runtime about the sidecar's cgroup ceiling BEFORE any request
+	// is served — see applyCgroupMemoryLimit.
+	applyCgroupMemoryLimit()
+
 	// State the git-broker push posture ONCE at boot — see logBranchNSPosture.
 	logBranchNSPosture(cfg.RunID)
 
@@ -169,4 +175,65 @@ func logBranchNSPosture(runID uuid.UUID) {
 		slog.Warn("wardyn-proxy: WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false — push branch-namespace confinement is OFF for this proxy; a brokered git push may update ANY ref in a granted repo, including the default branch",
 			slog.String("run_id", runID.String()))
 	}
+}
+
+// cgroupMemoryHeadroom is the fraction of the cgroup ceiling the Go heap may
+// target. The remainder covers the non-heap footprint the GC's soft limit does
+// not account for at all (thread stacks, the runtime's own mappings) plus the
+// slack a soft limit needs to be a BACKPRESSURE signal rather than a cliff.
+const cgroupMemoryHeadroom = 0.8
+
+// applyCgroupMemoryLimit points the Go GC's soft memory limit at the sidecar's
+// own cgroup ceiling.
+//
+// The wardyn-proxy sidecar runs under a hard memory cap (256 MiB, with swap
+// pinned equal), but nothing ever told the runtime that: with no GOMEMLIMIT the
+// GC targets roughly 2x live heap and will happily grow INTO the cgroup limit
+// and be OOM-killed rather than collect harder — and killing this sidecar takes
+// the run's only network path with it. That matters because outbound content
+// inspection buffers a request body and the extractor expands it several times
+// over (F074; see maxConcurrentScans in internal/egress/proxy). A soft limit
+// makes the GC work harder first, which is the whole point.
+//
+// Best effort and silent about a miss: an operator-set GOMEMLIMIT wins (the
+// runtime has already applied it), and outside a memory-capped cgroup — the
+// host-mode and unit-test cases — there is simply nothing to read.
+func applyCgroupMemoryLimit() {
+	if os.Getenv("GOMEMLIMIT") != "" {
+		return
+	}
+	limit, ok := cgroupMemoryLimitBytes()
+	if !ok {
+		return
+	}
+	soft := int64(float64(limit) * cgroupMemoryHeadroom)
+	if soft <= 0 {
+		return
+	}
+	debug.SetMemoryLimit(soft)
+	slog.Info("wardyn-proxy: GC soft memory limit set from the cgroup ceiling",
+		slog.Int64("cgroup_bytes", limit), slog.Int64("gomemlimit_bytes", soft))
+}
+
+// cgroupMemoryLimitBytes reads this process's memory ceiling from cgroup v2
+// (memory.max) or v1 (memory.limit_in_bytes). "max" — and v1's
+// effectively-unlimited sentinel — report no limit.
+func cgroupMemoryLimitBytes() (int64, bool) {
+	for _, path := range []string{
+		"/sys/fs/cgroup/memory.max",
+		"/sys/fs/cgroup/memory/memory.limit_in_bytes",
+	} {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		v, perr := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+		// A v1 cgroup with no limit reports a sentinel near maxint; treat
+		// anything at or above 1 TiB as "no meaningful cap".
+		if perr != nil || v <= 0 || v >= 1<<40 {
+			continue
+		}
+		return v, true
+	}
+	return 0, false
 }

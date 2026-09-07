@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"bytes"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
@@ -171,9 +172,28 @@ func LoadConfig(path string) (*Config, error) {
 // LoadConfigBytes parses and validates a Config from raw JSON. Used by the
 // sidecar's env-var config path (WARDYN_PROXY_CONFIG_JSON), which is how the
 // docker driver delivers the run's policy without managing host files.
+//
+// The decode is STRICT (DisallowUnknownFields), matching the decodeStrict
+// posture the control plane's own write paths already use.
+//
+// TRUST BOUNDARY (F029 — read before relaxing): the sidecar image is pinned by
+// the OPERATOR, independently of wardynd (WARDYN_PROXY_IMAGE, k8s.proxyImage,
+// and the shipped desktop examples pin it by DIGEST), so a config written by a
+// NEWER control plane routinely meets an OLDER proxy binary. A lenient
+// json.Unmarshal accepted such a config with err == nil and silently discarded
+// every key the old binary did not know — and the keys this release added are
+// exactly the ones a private-endpoint estate depends on
+// (upstream_proxy_no_proxy, trusted_ca_pem, internal_hosts, llm_upstreams,
+// pat_grants). The failure mode was therefore: the corp CA never added, the
+// bypass list inert, the internal-host lift never firing — an operator's
+// routing document half-honoured, with no error, no warning and no version
+// handshake anywhere. A key this binary cannot honour must fail the sidecar's
+// startup loudly instead of being dropped on the floor.
 func LoadConfigBytes(b []byte) (*Config, error) {
 	var c Config
-	if err := json.Unmarshal(b, &c); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&c); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	if err := c.applyDefaultsAndValidate(); err != nil {

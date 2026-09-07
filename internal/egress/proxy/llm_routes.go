@@ -18,13 +18,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
@@ -57,6 +60,52 @@ const (
 // never truncate (that would corrupt the request). A var (not const) so tests can
 // exercise the oversize path without allocating tens of MiB.
 var maxLLMScanBody = 32 << 20 // 32 MiB
+
+// maxConcurrentScans bounds how many request bodies may be BUFFERED AND
+// EXTRACTED at once, process-wide (one proxy per sidecar process).
+//
+// It is a memory bound, not a throughput knob (F074). The buffer+extract path
+// does not cost one body: contentscan's extractor re-materialises it several
+// times over (content array -> []json.RawMessage, each block -> a struct with
+// its own string, a generic body -> interface{} boxing), measured at ~5.3x live
+// heap and essentially independent of which detectors are on — it is the
+// extractor, not the scanning. Meanwhile the wardyn-proxy sidecar runs under a
+// HARD 256 MiB cgroup cap with swap pinned equal (internal/runner/docker's
+// proxyMemoryMiB, internal/runner/k8s). One in-cap 30 MiB body peaks at ~158
+// MiB of live heap; TWO concurrent peak at ~274 MiB — already over the cap, and
+// an OOM-killed proxy sidecar takes the run's only network path with it. The
+// agent inside the sandbox picks both the body sizes and the concurrency, so
+// nothing else bounds this.
+//
+// Waiting (rather than skipping the scan) is deliberate: a queued request is
+// still fully inspected, so load can never turn into unscanned egress. The wait
+// is bounded by scanQueueWait below — NOT by anything above this call.
+const maxConcurrentScans = 1
+
+// scanSlots is maxConcurrentScans' semaphore. Package-level because the bound
+// it enforces is the PROCESS's cgroup memory cap, not any one Proxy's.
+var scanSlots = make(chan struct{}, maxConcurrentScans)
+
+// scanQueueWait bounds how long a request may wait for a scan slot.
+//
+// It has to be bounded HERE, because nothing above this call bounds it: the
+// agent-facing listener that serves handlePlain and /wardyn/llm/* sets
+// ReadTimeout 0 — streaming bodies and CONNECT tunnels need it (NewServer,
+// server.go) — and only the inner MITM server carries a whole-request deadline.
+// With maxConcurrentScans at 1 and the slot held across io.ReadAll of a
+// SANDBOX-controlled body, a single slow-loris POST would otherwise park every
+// other inspected request of the run in the semaphore send forever, each
+// retaining a goroutine and a socket in a 256 MiB sidecar (the retention class
+// F079 names, reached through the inspection path and triggerable by the
+// untrusted sandbox).
+//
+// Expiring the wait fails CLOSED — Deny + 502, like the read-error arm beside
+// it — so the bound cannot become a way to get a body forwarded unscanned. The
+// value is generous relative to a healthy scan (an in-cap body extracts and
+// scans in well under a second) and short relative to a hung one, so it fires
+// on abuse rather than on load.
+const scanQueueWait = 30 * time.Second
+
 // handleLLMAnthropic proxies /wardyn/llm/anthropic/<rest> to
 // https://api.anthropic.com/<rest> — or an operator-configured internal
 // gateway (Config.LLMUpstreams) — with the brokered Anthropic credential.
@@ -103,14 +152,15 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 		return
 	}
 
-	// gatewayTarget is this route's OWN resolver, never egressTarget: upstream-
-	// first same as every other forward-egress path, but otherwise the
-	// gateway's relaxed per-request vet (vetTrustedHost) — never the
-	// SSRF-guarded p.vetHost path egressTarget applies to an ordinary host
+	// llmRouteTarget picks the resolver by what the host actually IS: a
+	// CONTROL-PLANE-authored gateway gets gatewayTarget's relaxed per-request
+	// vet (vetTrustedHost); every other host — including the PUBLIC vendor host
+	// when no gateway is configured at all — gets egressTarget's SSRF-guarded
+	// p.vetHost, exactly as on every other forward-egress path
 	// (W23-S1-4 / W19-W19d-3 covered the corp-upstream branch; folding the
 	// gateway vet into egressTarget too used to lift the private-IP guard for
 	// the gateway HOSTNAME on evaluate/serveMITMRequest as well).
-	target, err := p.gatewayTarget(host, port)
+	target, err := p.llmRouteTarget(host, port)
 	if err != nil {
 		// A refused/unreachable configured gateway is a per-request dial
 		// failure, not an SSRF-shaped denial — distinguish it in the decision
@@ -138,6 +188,32 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 	p.forwardInspectedLLM(w, r, host, port, rest, target, &hdr, ruleSourceLLM, bodyReader, scanSummary)
 }
 
+// llmRouteTarget resolves the brokered LLM route's dial target, choosing the
+// vet by what host IS rather than by which route asked.
+//
+// TRUST BOUNDARY (F087 — read before widening): gatewayTarget/vetTrustedHost is
+// the RELAXED vet. It admits RFC1918/ULA/CGNAT by design, because an
+// operator-configured internal model gateway is expected to live there, and it
+// is safe ONLY because that host was typed into the control plane at boot.
+// Applying it unconditionally to every host proxyLLMRequest dials extended the
+// relaxation to `api.anthropic.com`/`api.openai.com` on a run with NO gateway
+// configured, so a poisoned/split-horizon resolver answering RFC1918 for the
+// public vendor host got the startup-minted brokered credential delivered to
+// it — the exact DNS-rebinding case the unconditional private-IP guard exists
+// for, and the guard v0.6.6 had on this path. A host that is not in
+// p.gatewayVendor is an ordinary host: it takes egressTarget.
+//
+// This is what THREAT-MODEL.md residual #29 and OPERATIONS.md already state —
+// "only the brokered /wardyn/llm/* route (Proxy.gatewayTarget) resolves or
+// dials the GATEWAY with the relaxed per-request vet" — the code now matches.
+func (p *Proxy) llmRouteTarget(host string, port int) (string, error) {
+	if _, isGateway := p.gatewayVendor[strings.TrimSuffix(strings.ToLower(host), ".")]; isGateway {
+		return p.gatewayTarget(host, port)
+	}
+	target, _, err := p.egressTarget(host, port)
+	return target, err
+}
+
 // forwardInspectedLLM is the shared credential-strip + forward-and-respond tail
 // for a brokered/MITM'd LLM upstream, used by both proxyLLMRequest and
 // serveMITMRequest. It builds the upstream request to host[:port]/<rest> over
@@ -155,13 +231,28 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 	if port != 443 {
 		hostport = net.JoinHostPort(host, strconv.Itoa(port))
 	}
-	upstreamURL := "https://" + hostport + "/" + rest
-	if r.URL.RawQuery != "" {
-		upstreamURL += "?" + r.URL.RawQuery
+	// Build the upstream target as a STRUCTURED url.URL, never by concatenating
+	// `rest` into a string that http.NewRequestWithContext then re-PARSES.
+	//
+	// TRUST BOUNDARY (F035): `rest` is the PERCENT-DECODED path (r.URL.Path),
+	// and it is the same value classifyLLM keys the inspection decision on. Fed
+	// back through a URL parser, a decoded "#" becomes a FRAGMENT and a decoded
+	// "?" becomes a QUERY, so `POST /wardyn/llm/anthropic/v1/messages%23z`
+	// classified as "v1/messages#z" (scanNone — streamed through unscanned)
+	// while the wire carried `POST /v1/messages`: the scanner and the upstream
+	// disagreed about where the path ends, which is a bypass of block mode from
+	// inside the sandbox. Setting URL.Path (an already-decoded field) makes the
+	// request re-encode those bytes as %23/%3F, so the path the classifier
+	// judged is byte-for-byte the path that is sent.
+	upstreamURL := &url.URL{
+		Scheme:   "https",
+		Host:     hostport,
+		Path:     "/" + rest,
+		RawQuery: r.URL.RawQuery,
 	}
 	outReq, err := http.NewRequestWithContext(
 		context.WithValue(r.Context(), vettedIPKey{}, target),
-		r.Method, upstreamURL, bodyReader)
+		r.Method, upstreamURL.String(), bodyReader)
 	if err != nil {
 		p.emitLLMDecision(r, host, port, egress.Deny, ruleSource, nil)
 		p.httpError(w, "build llm request", err, http.StatusBadGateway)
@@ -170,10 +261,9 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 	copyHeader(outReq.Header, r.Header)
 	removeHopByHop(outReq.Header)
 	if hdr != nil {
-		outReq.Header.Del("Authorization")
-		outReq.Header.Del("X-Api-Key")
-		outReq.Header.Del("Api-Key")
-		outReq.Header.Del("X-Auth-Token")
+		// One definition of "the sandbox's own credential headers", shared with
+		// the plain forward lane's injector.apply (inject.go, F104).
+		stripSandboxCredentials(outReq.Header)
 		outReq.Header.Set(hdr.name, hdr.value)
 	}
 	outReq.Host = hostport
@@ -302,6 +392,25 @@ func (p *Proxy) inspectForwardBody(w http.ResponseWriter, r *http.Request, host 
 // buffered body plus a content-free summary. emit records the decision for the
 // caller's transport (port 443 LLM route vs the generic forward port).
 func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, channel contentscan.Channel, readErrMsg string, emit func(egress.Decision, string, *egress.ScanSummary)) (io.Reader, *egress.ScanSummary, bool) {
+	// Take a scan slot BEFORE buffering: the slot is what bounds live heap
+	// against the sidecar's cgroup cap, so it has to be held across the
+	// io.ReadAll as well as the extract+scan (see maxConcurrentScans).
+	//
+	// The wait is taken through the request context AND a wall-clock bound
+	// (scanQueueWait) because nothing above this call deadlines it, and it fails
+	// CLOSED on either: a request that could not be inspected is denied, never
+	// forwarded unscanned.
+	ctx, cancel := context.WithTimeout(r.Context(), scanQueueWait)
+	defer cancel()
+	select {
+	case scanSlots <- struct{}{}:
+		defer func() { <-scanSlots }()
+	case <-ctx.Done():
+		emit(egress.Deny, ruleSourceLLM, nil)
+		p.httpError(w, readErrMsg, ctx.Err(), http.StatusBadGateway)
+		return nil, nil, true
+	}
+
 	buffered, rerr := io.ReadAll(io.LimitReader(r.Body, int64(maxLLMScanBody)+1))
 	if rerr != nil {
 		emit(egress.Deny, ruleSourceLLM, nil)
@@ -387,8 +496,9 @@ func classifyLLM(channel contentscan.Channel, method, rest string) int {
 
 // classifyAnthropicLLM decides how a request to the Anthropic route is inspected.
 // count_tokens shares the Messages schema, so it is scanned with the same
-// extractor; batches carries N prompts in a different shape we cannot parse yet,
-// so it is marked uninspected rather than silently allowed.
+// extractor; every other POST carries content in a shape we cannot parse yet,
+// so it is marked uninspected rather than silently allowed — see the default
+// arm's F112 note.
 func classifyAnthropicLLM(method, rest string) int {
 	if method != http.MethodPost {
 		return scanNone
@@ -399,15 +509,24 @@ func classifyAnthropicLLM(method, rest string) int {
 		return scanMessages
 	case strings.HasSuffix(r, "/count_tokens"):
 		return scanMessages
-	case r == "batches" || strings.HasSuffix(r, "/batches"):
-		return scanOpaque
-	case r == "complete" || strings.HasSuffix(r, "/complete"):
-		// Legacy text-completions endpoint: carries the prompt in a shape we don't
-		// parse yet — mark uninspected rather than forwarding the brokered
-		// credential silently unscanned via the scanNone default.
-		return scanOpaque
 	default:
-		return scanNone
+		// FAIL-CLOSED DEFAULT (F112): every OTHER POST on this route is
+		// uninspected, not quiet. /v1/messages/batches and the legacy /v1/complete
+		// used to be the only named ones, so the vendor's CONTENT-UPLOAD surface
+		// fell to the old scanNone default: POST /v1/files is a multipart upload
+		// of arbitrary user bytes (documented 500 MB ceiling) and it was forwarded
+		// with the operator's brokered credential, unscanned, carrying NO scan
+		// block at all — a row indistinguishable in audit from GET /v1/models.
+		// Worse, under block + on_scanner_error=block the strict operator's one
+		// hard control refused `batches` as uninspected_channel while forwarding
+		// `files`: the control was bypassable by choosing a different suffix.
+		//
+		// An enumerated allowlist cannot hold this line, because the SANDBOX picks
+		// the whole suffix (handleLocalRoute dispatches on a bare prefix match and
+		// forwards <rest> verbatim) and the VENDOR adds endpoints without asking
+		// us. So the default is the honest answer — "prompt-bearing but no
+		// extractor yet" — and a new arm above is what earns silence.
+		return scanOpaque
 	}
 }
 
@@ -423,15 +542,18 @@ func classifyOpenAILLM(method, rest string) int {
 	switch {
 	case r == "chat/completions" || strings.HasSuffix(r, "/chat/completions"):
 		return scanMessages
-	case strings.HasSuffix(r, "/responses") || strings.HasSuffix(r, "/embeddings"):
-		return scanOpaque
-	case r == "completions" || strings.HasSuffix(r, "/completions"):
-		// Legacy (non-chat) completions: prompt shape we don't parse yet — mark
-		// uninspected, not silently allowed via scanNone. Checked AFTER
-		// chat/completions above so that route still scans as Messages.
-		return scanOpaque
 	default:
-		return scanNone
+		// FAIL-CLOSED DEFAULT (F112), same rule as classifyAnthropicLLM: /responses,
+		// /embeddings and the legacy /completions used to be enumerated here while
+		// the vendor's own OpenAPI spec also defines POST /v1/files and the
+		// multipart /v1/audio/{transcriptions,translations} uploads plus
+		// /v1/audio/speech — all of which fell to the old scanNone default and
+		// streamed through with the brokered credential and no scan block. The
+		// enumeration also had to carry each endpoint's BARE spelling (F088: with
+		// no gateway prefix configured, `rest` for POST /wardyn/llm/openai/responses
+		// is exactly "responses", which a suffix-only arm missed) — a second way
+		// the same list could silently lose an endpoint. The default answers both.
+		return scanOpaque
 	}
 }
 
@@ -487,10 +609,12 @@ var awsRegionLabel = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d+$`)
 // `vpce-svc-<hex>`), so a bedrock component there is genuinely Bedrock's.
 func isBedrockHost(h string) bool {
 	labels := strings.Split(h, ".")
-	bedrock := func(l string) bool { return l == "bedrock-runtime" || l == "bedrock" }
-	// Public: bedrock-runtime.<region>.amazonaws.com / bedrock.<region>.amazonaws.com.
-	if len(labels) == 4 && bedrock(labels[0]) &&
-		labels[2] == "amazonaws" && labels[3] == "com" && awsRegionLabel.MatchString(labels[1]) {
+	// Public: <service>.<region>.amazonaws.com, and the dual-stack
+	// <service>.<region>.api.aws form AWS publishes beside it. Both tails are
+	// AWS-owned zones; the region shape stays the anchor that keeps the
+	// customer-squattable S3 virtual-host labels out.
+	if len(labels) == 4 && bedrockServiceLabel(labels[0]) && awsRegionLabel.MatchString(labels[1]) &&
+		((labels[2] == "amazonaws" && labels[3] == "com") || (labels[2] == "api" && labels[3] == "aws")) {
 		return true
 	}
 	// PrivateLink: the bedrock service rides a MIDDLE label (or the tail of the
@@ -499,9 +623,51 @@ func isBedrockHost(h string) bool {
 		return false
 	}
 	for _, l := range labels {
-		if bedrock(l) || strings.HasSuffix(l, "-bedrock-runtime") || strings.HasSuffix(l, "-bedrock") {
+		if bedrockServiceLabel(l) {
 			return true
 		}
+		// Hyphen-glued: `vpce-<id>-bedrock-agent-runtime`. The service name must
+		// start at a hyphen boundary — `notbedrock-runtime` is not Bedrock.
+		if i := strings.Index(l, "-bedrock"); i > 0 && bedrockServiceLabel(l[i+1:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// bedrockServiceLabel reports whether l is one of the Bedrock service labels AWS
+// publishes in its service-endpoint reference
+// (https://docs.aws.amazon.com/general/latest/gr/bedrock.html), with or without
+// the `-fips` variant.
+//
+// F113 — this used to be the two literals `bedrock-runtime` and `bedrock`, so
+// six of AWS's eight published labels fell out of isLLMHost: every `-fips`
+// endpoint (a FedRAMP-High workload is generally REQUIRED to use one, and
+// GovCloud publishes `bedrock-runtime-fips.us-gov-{west,east}-1.amazonaws.com`)
+// and the whole agent family, including `bedrock-agent-runtime` — the
+// InvokeAgent DATA plane, i.e. prompt-bearing model traffic. The consequence is
+// on the honesty side: proxy.go emits the one-time `llm.scan.blind` coverage row
+// only under isLLMHost, so a CONNECT to a FIPS Bedrock endpoint was opaque AND
+// unflagged — an audit trail showing an egress.allow and no blind row anywhere,
+// which reads as "no model tunnel happened", against a THREAT-MODEL.md that
+// says those tunnels "stay opaque and flagged llm.scan.blind". It also mislabels
+// the MITM decision row for such a host as corp-artifact rather than model
+// traffic.
+//
+// The enumeration is deliberately exhaustive-by-name rather than a
+// `strings.HasPrefix(l, "bedrock")`: isBedrockHost's callers treat a match as
+// "this is model traffic", and a prefix test would admit any future
+// AWS-adjacent label — and, inside `.vpce.amazonaws.com`, any label an operator
+// happened to name that way — without anyone re-reading the security note above.
+func bedrockServiceLabel(l string) bool {
+	switch strings.TrimSuffix(l, "-fips") {
+	case "bedrock", // control plane
+		"bedrock-runtime",                 // InvokeModel data plane
+		"bedrock-agent",                   // agents build-time
+		"bedrock-agent-runtime",           // InvokeAgent data plane
+		"bedrock-data-automation",         // data automation build-time
+		"bedrock-data-automation-runtime": // data automation data plane
+		return true
 	}
 	return false
 }
@@ -541,8 +707,24 @@ func (p *Proxy) emitLLMBlindOnce(host string) {
 	// Bound the dedup map: an agent under a permissive allowlist could otherwise
 	// enumerate distinct (e.g. bedrock-runtime.*) hostnames to grow it without
 	// limit. Past the cap we stop tracking/emitting new blind signals.
+	//
+	// F066 — the cap SUPPRESSES the coverage signal; it does not make the tunnel
+	// inspectable, and this function exists precisely so "audit never implies
+	// inspection that did not happen". Returning silently made the 65th
+	// uninspected model tunnel read exactly like no model tunnel at all, on the
+	// one stream internal/api/healthz.go delegates coverage reporting to. So
+	// account for it where the sink ALREADY accounts for decision records it
+	// could not deliver: decisionSink.dropped feeds the periodic synthetic
+	// `egress.decisions.dropped:<n>` summary (reportDropped/droppedSummaryLog)
+	// and close()'s "closed with N dropped records". A blind row we refuse to
+	// emit IS an unrecorded decision, so it belongs on that counter — one
+	// mechanism, no second counter, no new audit string — plus an operator-side
+	// log line naming the host and the cap, which a count cannot carry.
 	if len(p.blindHosts) >= maxBlindHosts {
 		p.blindMu.Unlock()
+		p.sink.dropped.Add(1)
+		slog.Warn("llm.scan.blind coverage suppressed: per-run blind-host cap reached",
+			"host", h, "cap", maxBlindHosts, "rule_source", ruleSourceLLMBlind)
 		return
 	}
 	p.blindHosts[h] = struct{}{}

@@ -147,11 +147,14 @@ func (a *approvalClient) configureHold(mode types.FirstUseMode, timeout time.Dur
 //     copy says "one connection": honest for HTTPS, understated (never
 //     overstated) for HTTP.
 //   - A `once` grant is SPENT BEFORE SUCCESS IS GUARANTEED. evaluate falls
-//     through from apApproved into the method check and VetHost IP vetting, and
-//     handleConnect dials only after that — so a DNS-rebind denial or a failed
-//     dial burns the grant and the operator is re-asked. Consuming after the
-//     dial instead would mean holding a.mu across it; this is the cheaper end of
-//     that trade, not an oversight.
+//     through from apApproved into VetHost IP vetting, and handleConnect dials
+//     only after that — so a DNS-rebind denial or a failed dial burns the grant
+//     and the operator is re-asked. Consuming after the dial instead would mean
+//     holding a.mu across it; this is the cheaper end of that trade, not an
+//     oversight. The METHOD check is no longer part of that window: since F032
+//     it runs BEFORE the approval flow (proxy.go, evaluate step 2), so a
+//     method-denied request neither raises an approval, nor takes a hold slot,
+//     nor spends a `once` grant.
 //   - `until` is enforced against TWO CLOCKS. The control plane validates
 //     DecisionExpiresAt (<= now+30d) against its own; this code enforces
 //     time.Now().After(st.expiresAt) against the sidecar's. Negligible when they

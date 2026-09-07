@@ -41,6 +41,12 @@ const (
 	routeGitBroker = "/wardyn/gh/"
 	ruleSourceGit  = "brokered:git"
 	githubHost     = "github.com"
+	// gitBrokerUsername is the git username a GitHub App INSTALLATION token
+	// authenticates as — fixed by GitHub, not configurable. Named because it is
+	// half of the credential's wire rendering (SetBasicAuth sends
+	// base64(gitBrokerUsername + ":" + token)), so the mask registration and the
+	// outbound header must derive it from the same place (F155).
+	gitBrokerUsername = "x-access-token"
 	// ruleSourceGitRef marks a decision-log row denied by push branch-namespace
 	// confinement (as opposed to the per-repo allowlist), so audit says WHICH gate
 	// closed. The offending ref goes to slog, never to the decision log (which has
@@ -214,7 +220,7 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	// Defensive: strip any sandbox-supplied credential before injecting ours, so a
 	// rogue in-sandbox client can't smuggle its own onto the outbound request.
 	outReq.Header.Del("Authorization")
-	outReq.SetBasicAuth("x-access-token", token) // GitHub App installation-token auth
+	outReq.SetBasicAuth(gitBrokerUsername, token) // GitHub App installation-token auth
 	outReq.Host = githubHost
 	outReq.Header.Del("Host")
 
@@ -298,9 +304,13 @@ func (p *Proxy) gitToken(ctx context.Context, grantID uuid.UUID) (string, error)
 	// AddGlobal dedupes by value, so the cache's re-mints add at most one entry
 	// per rotation on a process that lives one run.
 	//
-	// HONEST RESIDUAL, same as inject.go's: verbatim bytes only — a base64/hex or
-	// model-narrated form of the token is not caught.
-	procRegistry.AddGlobal([]byte(tok))
+	// BOTH RENDERINGS (F155): the raw `ghs_...` AND the base64("x-access-token:"
+	// + tok) that SetBasicAuth below (:217) actually puts on the wire. Registering
+	// only the raw token left the wire form — the one a transport error quoting
+	// the outbound request carries — unmasked; the mask is exact-bytes, so it
+	// protects exactly the renderings it was given. registerBasicAuthCredential
+	// (inject.go) is the one definition of that set.
+	registerBasicAuthCredential(gitBrokerUsername, tok)
 	e.token, e.expiresAt = tok, expMs
 	return tok, nil
 }

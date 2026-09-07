@@ -53,11 +53,23 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// both before any request is served. net.InterfaceAddrs() at this point
 	// already sees the control-plane network — NetworkConnect precedes
 	// ContainerStart on the docker driver, so the sidecar's container is joined
-	// to wardyn-internal before this process starts. A lookup failure for
-	// either is non-fatal: it just means the lift can never fire (fail closed
-	// toward the ORIGINAL unconditional deny, not toward widening it).
-	localSubnets := localInterfaceSubnets()
-	cpIP := resolveControlPlaneIP(cfg.ControlPlaneURL)
+	// to wardyn-internal before this process starts.
+	//
+	// A lookup failure for either is non-fatal but NOT free: the exclusion is a
+	// CLAMP on the lift, so an empty clamp widens the lift instead of narrowing
+	// it. This comment used to claim the opposite ("fail closed toward the
+	// ORIGINAL unconditional deny") of what the code did, and nothing logged
+	// the failure. Both are fixed here: the failure is carried into the Proxy as
+	// ExclusionUnknown, which makes the clamp refuse every lift/trust, and it is
+	// logged (F002).
+	localSubnets, subnetsOK := localInterfaceSubnets()
+	cpIPs, cpOK := resolveControlPlaneIPs(cfg.ControlPlaneURL)
+	exclusionUnknown := !subnetsOK || !cpOK
+	if exclusionUnknown {
+		slog.WarnContext(ctx, "wardyn-proxy: own-subnet/control-plane exclusion unavailable; the internal-host lift and the exact-literal-IP redirect trust are refused for every address",
+			slog.Bool("interface_subnets_ok", subnetsOK),
+			slog.Bool("control_plane_resolved", cpOK))
+	}
 
 	// ONE live token for the whole sidecar: the config's run token is the seed,
 	// and the renewer (started by ListenAndServe) rotates it in place before its
@@ -187,26 +199,27 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// build for real here" split.
 
 	p := newProxy(Options{
-		RunID:           cfg.RunID,
-		Policy:          pol,
-		Approval:        ap,
-		Injector:        inj,
-		Sink:            sink,
-		Scanner:         scanner,
-		CA:              ca,
-		MITMHosts:       cfg.MITMHosts,
-		MITMLLM:         cfg.MITMLLM,
-		GitGrants:       cfg.GitGrants,
-		PATGrants:       cfg.PATGrants,
-		ControlPlaneURL: cfg.ControlPlaneURL,
-		RunToken:        ts,
-		Upstream:        up,
-		UpstreamNoProxy: cfg.UpstreamProxyNoProxy,
-		TLSClientConfig: tlsCfg,
-		InternalHosts:   cfg.InternalHosts,
-		LLMUpstreams:    cfg.LLMUpstreams,
-		LocalSubnets:    localSubnets,
-		ControlPlaneIP:  cpIP,
+		RunID:            cfg.RunID,
+		Policy:           pol,
+		Approval:         ap,
+		Injector:         inj,
+		Sink:             sink,
+		Scanner:          scanner,
+		CA:               ca,
+		MITMHosts:        cfg.MITMHosts,
+		MITMLLM:          cfg.MITMLLM,
+		GitGrants:        cfg.GitGrants,
+		PATGrants:        cfg.PATGrants,
+		ControlPlaneURL:  cfg.ControlPlaneURL,
+		RunToken:         ts,
+		Upstream:         up,
+		UpstreamNoProxy:  cfg.UpstreamProxyNoProxy,
+		TLSClientConfig:  tlsCfg,
+		InternalHosts:    cfg.InternalHosts,
+		LLMUpstreams:     cfg.LLMUpstreams,
+		LocalSubnets:     localSubnets,
+		ControlPlaneIPs:  cpIPs,
+		ExclusionUnknown: exclusionUnknown,
 	})
 	if ca != nil && len(cfg.MITMHosts) > 0 {
 		slog.InfoContext(ctx, "wardyn-proxy: TLS-MITM also enabled for operator-configured corp artifact host(s) (token injection)",
@@ -274,14 +287,16 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // Addr returns the configured listen address.
 func (s *Server) Addr() string { return s.http.Addr }
 
-// localInterfaceSubnets returns this process's own interface subnets (best
-// effort — nil on any lookup failure, which only means the internal-host lift
-// can never exclude them, never that it admits more). Used ONLY by the
-// internal-host lift's own-subnet exclusion (Proxy.onOwnSubnetOrControlPlane).
-func localInterfaceSubnets() []*net.IPNet {
+// localInterfaceSubnets returns this process's own interface subnets and
+// whether the lookup SUCCEEDED. The second return is the point: a nil slice
+// from a failed net.InterfaceAddrs() is indistinguishable from a host with no
+// addresses, and the caller must be able to tell, because an empty exclusion
+// set widens the internal-host lift rather than narrowing it (F002). Used ONLY
+// by the lift's own-subnet exclusion (Proxy.onOwnSubnetOrControlPlane).
+func localInterfaceSubnets() ([]*net.IPNet, bool) {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	out := make([]*net.IPNet, 0, len(addrs))
 	for _, a := range addrs {
@@ -289,26 +304,30 @@ func localInterfaceSubnets() []*net.IPNet {
 			out = append(out, n)
 		}
 	}
-	return out
+	return out, true
 }
 
-// resolveControlPlaneIP resolves rawURL's host to a single IP using the
-// production resolver, mirroring resolveTrustedURL's own resolve step — but
-// runs before any Proxy exists (NewServer, ahead of newProxy), so it cannot go
-// through a *Proxy method. Best effort: nil on any parse/resolve failure,
-// which only means the internal-host lift can never exclude the control-plane
-// host, never that it admits more.
-func resolveControlPlaneIP(rawURL string) net.IP {
+// resolveControlPlaneIPs resolves rawURL's host to EVERY address it names,
+// using the production resolver and mirroring resolveTrustedURL's own resolve
+// step — but it runs before any Proxy exists (NewServer, ahead of newProxy), so
+// it cannot go through a *Proxy method. The bool reports whether the resolve
+// succeeded, which the caller needs because a nil result must fail the
+// exclusion CLOSED rather than silently widen the lift (F002).
+//
+// Every answer, not ips[0]: vetTrustedHost already checks every answer of a
+// gateway host, and a wardynd behind two A records had exactly one of them
+// excluded — the other was liftable by a declared internal host.
+func resolveControlPlaneIPs(rawURL string) ([]net.IP, bool) {
 	host, _, err := hostPortFromURL(rawURL)
 	if err != nil || host == "" {
-		return nil
+		return nil, false
 	}
 	if ip := net.ParseIP(host); ip != nil {
-		return ip
+		return []net.IP{ip}, true
 	}
 	ips, err := (netResolver{}).LookupIP(host)
 	if err != nil || len(ips) == 0 {
-		return nil
+		return nil, false
 	}
-	return ips[0]
+	return ips, true
 }

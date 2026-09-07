@@ -28,9 +28,33 @@ import (
 // realistically <5). Past the cap, leaves are minted but not cached.
 const maxLeafCerts = 256
 
-// leafCertTTL is the validity window of a minted per-host leaf. Short-lived: the
-// cert is regenerated whenever the proxy restarts.
+// leafCertTTL is the validity window of a minted per-host leaf, measured from
+// NotBefore = now-1h (so 25h of wall clock). Short-lived by design.
 const leafCertTTL = 24 * time.Hour
+
+// leafRenewBefore is how long before NotAfter a CACHED leaf stops being reused
+// and is re-minted instead.
+//
+// The cache used to be a plain map hit with no expiry check, on the assumption
+// (stated in this file, never implemented) that "the cert is regenerated
+// whenever the proxy restarts". A per-run proxy sidecar has no lifetime bound —
+// internal/lifecycle skips the idle reaper entirely when the run's
+// AutoStopAfterSec <= 0, which is the default, and the per-run MITM CA is
+// minted for a YEAR (internal/api/mitmca.go) precisely because runs are
+// expected to outlive a day. Past 25h of uptime every NEW CONNECT to a MITM'd
+// host was answered "200 Connection Established" and then failed the sandbox's
+// TLS handshake with "certificate has expired", silently and permanently
+// (F078). The margin keeps a leaf from expiring mid-handshake on a conn that
+// picked it up moments before NotAfter.
+const leafRenewBefore = time.Hour
+
+// leafUsableAt reports whether a cached leaf is still safely reusable at now —
+// i.e. it parsed, and it does not expire within leafRenewBefore. An unparsed
+// leaf (cert.Leaf == nil) is treated as unusable so the cache can never serve a
+// certificate whose validity it cannot check.
+func leafUsableAt(c *tls.Certificate, now time.Time) bool {
+	return c != nil && c.Leaf != nil && now.Before(c.Leaf.NotAfter.Add(-leafRenewBefore))
+}
 
 // certAuthority mints per-host leaf certificates signed by a Wardyn CA so the proxy
 // can terminate TLS for a known LLM host and inspect the plaintext request inside
@@ -43,6 +67,18 @@ type certAuthority struct {
 
 	mu     sync.Mutex
 	leaves map[string]*tls.Certificate
+
+	// now is the clock leafFor mints and expires against. Injectable so a test
+	// can fast-forward past leafCertTTL without sleeping; nil means time.Now.
+	now func() time.Time
+}
+
+// clock returns the authority's time source (time.Now unless a test injected one).
+func (a *certAuthority) clock() time.Time {
+	if a.now != nil {
+		return a.now()
+	}
+	return time.Now()
 }
 
 // newCertAuthority parses a CA cert+key (PEM) into a leaf minter.
@@ -84,8 +120,9 @@ func newCertAuthority(certPEM, keyPEM []byte) (*certAuthority, error) {
 // MITMs -- still reported the redirect as reached.
 func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	now := a.clock()
 	a.mu.Lock()
-	if c, ok := a.leaves[host]; ok {
+	if c, ok := a.leaves[host]; ok && leafUsableAt(c, now) {
 		a.mu.Unlock()
 		return c, nil
 	}
@@ -99,7 +136,6 @@ func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
 		Subject:      pkix.Name{CommonName: host},
@@ -176,10 +212,34 @@ func (p *Proxy) isMITMHost(host string) bool {
 // The per-run CA may instead have been minted purely for artifact-token injection
 // (mitmHosts), so "a CA exists" alone must NOT terminate a direct CONNECT to
 // Anthropic/OpenAI: an artifact-only run leaves the LLM hosts opaque passthrough.
-// (Corp artifact hosts are handled earlier via isCorpMITMHost, so isMITMHost here
-// is effectively the LLM-host membership check.)
-func (p *Proxy) mitmLLMHost(host string) bool {
-	return p.ca != nil && p.mitmLLM && p.isMITMHost(host)
+// (Corp artifact hosts are handled earlier via isCorpMITMHost — but only when
+// their port ALSO matched, so isMITMHost here is not by itself the LLM-host
+// membership check; the same mitmPortAllowed clamp is applied here so a
+// port-mismatched corp entry cannot be re-admitted through this branch.)
+func (p *Proxy) mitmLLMHost(host string, port int) bool {
+	return p.ca != nil && p.mitmLLM && p.isMITMHost(host) && p.mitmPortAllowed(host, port)
+}
+
+// mitmPortAllowed reports whether an authored mitmHosts entry for host covers
+// port. It is the W13-S1-5 clamp itself, and it lives HERE — beside the
+// membership predicates — rather than inline in one branch of handleConnect.
+//
+// TRUST BOUNDARY (F009): eligibility must never be decidable without the port.
+// The clamp used to be written only inside handleConnect's isCorpMITMHost
+// branch, so a port MISMATCH fell through to the LLM branch, whose
+// mitmLLMHost consulted no port at all — and any operator-configured MITM host
+// that also satisfies isLLMHost (a bedrock/vpce host, which dispatch itself
+// authors onto MITMHosts, or a configured gateway host) was TLS-terminated and
+// credential-injected on ports the operator never configured. It also keys the
+// map on the NORMALIZED host, as compileMITMHosts does: reading p.mitmPorts
+// with the raw CONNECT spelling let a trailing dot or an uppercase letter miss
+// the entry and read 0 == any-port, while isCorpMITMHost normalized and matched.
+//
+// 0 == the authored entry carried no port and stays any-port (a bare legacy
+// entry), the same backward-compatible meaning it has always had.
+func (p *Proxy) mitmPortAllowed(host string, port int) bool {
+	cport := p.mitmPorts[strings.TrimSuffix(strings.ToLower(host), ".")]
+	return cport == 0 || cport == port
 }
 
 // isCorpMITMHost reports whether host is an operator-configured corp artifact
@@ -292,6 +352,30 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 // a tokened tunnel dialed to the wrong port presents the operator's credential
 // to whatever answers there instead of the intended mirror (W13-S1-5).
 func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host string, port int) {
+	// F107 — allowed_methods applies to the inner requests too. The CONNECT that
+	// opened this tunnel was evaluated as method "CONNECT"; every request inside
+	// it is chosen by the SANDBOX afterwards, and the proxy is holding the
+	// plaintext, so `allowed_methods: [GET, CONNECT]` used to open the tunnel and
+	// then forward an inner POST 200, audited decision=allow — the restriction
+	// silently unenforced on exactly the lane where the proxy can see the method.
+	//
+	// The APPROVAL half of "one CONNECT carries many inner requests" stays as it
+	// is and is documented (approvals.go's ceilings note, docs/POLICIES.md's
+	// "'One connection' is the honest word"): re-entering the approval flow per
+	// inner request would raise an approval per request. The METHOD check depends
+	// on nothing the approval produces, costs nothing to re-apply, and is the
+	// same rule_source the plain lane and the CONNECT itself emit, so it is
+	// applied here rather than exempted — same ordering rationale as evaluate's
+	// step 2 (proxy.go).
+	if !p.evaluator.MethodAllowed(r.Method) {
+		log := decisionLog(p.reqOf(r, host, port), egress.Deny, "policy:method")
+		if p.sink != nil {
+			p.sink.emit(log)
+		}
+		p.writeEgressDeny(w, host, port, &log)
+		return
+	}
+
 	rest := strings.TrimPrefix(r.URL.Path, "/")
 	channel := p.channelForHost(host)
 	// Decision-log source: honest about WHY this tunnel was terminated — LLM
@@ -312,24 +396,46 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 		return
 	}
 
-	// LLM hosts go through inspectLLM's per-endpoint classifier as always. A
-	// corp artifact host, though, is ALWAYS ChannelGeneric — which classifyLLM
-	// unconditionally treats as scanNone (not prompt-bearing) — so inspectLLM
-	// would silently stream it through unscanned even when the operator has
-	// opted every generic forward body into inspection via
-	// inspect_forward_egress. That flag already extends scanning to the plain
-	// (non-MITM) forward path (handlePlain/inspectForwardBody); route the
-	// artifact-MITM body through the SAME scanBufferedBody core here so the
-	// flag's promise holds on this path too (W19-W19d-1: a MITM'd non-LLM
-	// tunnel used to be unconditionally unscanned, no matter the policy).
+	// Pick the inspection core by whether the body is actually PARSEABLE (the
+	// channel), never by whether the host is classified as an LLM. A host whose
+	// channelForHost is ChannelGeneric — a corp artifact mirror, and equally a
+	// Bedrock host — is one classifyLLM unconditionally treats as scanNone (not
+	// prompt-bearing), so inspectLLM would silently stream it through unscanned
+	// even when the operator has opted every generic forward body into
+	// inspection via inspect_forward_egress. That flag already extends scanning
+	// to the plain (non-MITM) forward path (handlePlain/inspectForwardBody);
+	// route the body through the SAME scanBufferedBody core here so the flag's
+	// promise holds on this path too (W19-W19d-1: a MITM'd non-LLM tunnel used
+	// to be unconditionally unscanned, no matter the policy).
+	//
+	// F036 is why the condition is the CHANNEL and not `mitmSource ==
+	// ruleSourceArtifactMITM`: widening isBedrockHost to the PrivateLink form
+	// moved vpce Bedrock hosts from !isLLMHost (artifact branch, scanned) to
+	// isLLMHost (LLM branch, ChannelGeneric ⇒ scanNone, UNSCANNED) — a
+	// legitimate matcher fix silently removing scan coverage, and emitting a
+	// bare `scan:mitm` allow with no scan block, which reads to an auditor as
+	// "inspected via MITM" for a turn that was never inspected. The channel is
+	// the honest question: LLM-classified hosts whose channel is a real model
+	// schema still take inspectLLM's per-endpoint classifier as always.
 	var bodyReader io.Reader
 	var scanSummary *egress.ScanSummary
 	var blocked bool
-	if mitmSource == ruleSourceArtifactMITM && p.scanner != nil &&
+	if channel == contentscan.ChannelGeneric && p.scanner != nil &&
 		p.scanner.InspectForwardEgress() && p.scanner.Mode() != contentscan.ModeOff && hasScannableBody(r) {
 		bodyReader, scanSummary, blocked = p.inspectForwardBody(w, r, host, port)
 	} else {
 		bodyReader, scanSummary, blocked = p.inspectLLM(w, r, host, port, rest, channel)
+		// Honest coverage (F036): a MITM'd tunnel whose channel we cannot parse
+		// carried a body we did NOT look at. inspectLLM's scanNone default is
+		// silent by design (it is the "not prompt-bearing" case), which on THIS
+		// path produced a bare scan:mitm allow with no scan block at all — a row
+		// an auditor reads as "inspected via MITM". Say what actually happened
+		// instead, with the same uninspected_channel skip the brokered route
+		// already emits for a prompt-bearing subpath it cannot parse.
+		if scanSummary == nil && channel == contentscan.ChannelGeneric && p.scanner != nil &&
+			p.scanner.Mode() != contentscan.ModeOff && hasScannableBody(r) {
+			scanSummary = p.skipSummary("skipped", "uninspected_channel", channel)
+		}
 	}
 	if blocked {
 		return

@@ -275,6 +275,20 @@ recorder's PTY read boundaries stays a residual the verbatim match cannot close,
 since the `"],[t,"o","` framing interrupts the byte run. The live-attach path
 masks raw PTY bytes and is unaffected.
 
+**Verbatim-match means per-RENDERING, not per-credential**, and that is the
+reading that bites: registering `Bearer sk-…` does not mask a bare `sk-…` in the
+same buffer, and registering a token does not mask the base64 an
+`Authorization: Basic` header carries it in. Adding every rendering is the
+REGISTERING side's job. Proxy-side (`internal/egress/proxy`, the registry
+`Proxy.httpError` and the decision log consult) all four sites now do it through
+one definition — `registerHeaderCredential` / `registerBasicAuthCredential`
+(`inject.go`) and `upstreamProxy.maskValues` (`upstream.go`) — covering the
+formatted header value, the bare credential under a scheme prefix, and the
+decoded `user:pass` and password half behind a Basic rendering. Not covered, and
+underivable from what the proxy holds: a `Format` that glues the secret to a
+suffix rather than a space-separated prefix, and hex-encoded or model-narrated
+forms, which no verbatim matcher catches.
+
 **Two named unmasked paths.**
 
 - The optional `WARDYN_RECORDING_MOUNT`/`-out-dir` single-host recording
@@ -311,11 +325,16 @@ network topology, so unlike L0 it does not depend on gatewaylessness.
 (`vetHostLift`/`Proxy.vetHost`): it lifts the RFC1918/ULA/CGNAT slice ONLY —
 never loopback/link-local/metadata/multicast/NAT64 — for a declared hostname,
 scoped to declared CIDRs, and never for an address on the proxy's own interface
-subnets or its resolved control-plane host (`Proxy.onOwnSubnetOrControlPlane`).
+subnets or ANY of its resolved control-plane addresses
+(`Proxy.onOwnSubnetOrControlPlane`).
 On Docker that excludes the `wardyn-internal` neighbours (Postgres/Dex/registry);
 on Kubernetes those are ClusterIP Services off the pod's own interface, so there
 the declared `cidrs` are the bound (`docs/OPERATIONS.md` § Internal hosts). The
 metadata address stays unreachable regardless of what an operator declares.
+Both of that clamp's inputs are captured once at startup (`NewServer`), and a
+capture FAILURE is fail-closed: the clamp then answers "yes" for every address,
+so both exceptions below are refused outright rather than firing more widely,
+and the failure is logged (`internal/egress/proxy/server.go`).
 
 **The second** is the literal-IP trust an `EgressRedirect` whose `to` is a bare
 address rides on (`Proxy.trustsExactLiteralIP`, consulted by `evaluate` step 0
@@ -1538,8 +1557,17 @@ exactly these terms.
   whose PRIVATE key never enters the sandbox; the sandbox trusts only the public
   cert). Without `intercept_tls`, those CONNECT tunnels stay **opaque and flagged
   `llm.scan.blind`**; Bedrock stays opaque regardless (client-side SigV4 cannot be
-  re-forwarded). The `require_inspectable_llm` policy fails an opaque-transport run
-  **closed** at schedule time for strict operators.
+  re-forwarded). The blind flag is emitted for the model hosts the proxy
+  RECOGNISES — the two built-in vendor hosts, any operator-configured LLM
+  gateway, and AWS's published Bedrock service labels including their `-fips`
+  and dual-stack `api.aws` forms (`isBedrockHost`,
+  `internal/egress/proxy/llm_routes.go`) — once per host, and capped at 64
+  distinct hosts per run; a suppression past that cap is COUNTED on the decision
+  sink's drop counter (surfacing as `egress.decisions.dropped:<n>`) rather than
+  silently omitted, so the blind rows are a lower bound on uninspected model
+  tunnels, never a claim that there were no others. The `require_inspectable_llm`
+  policy fails an opaque-transport run **closed** at schedule time for strict
+  operators.
 - Detections recorded **without storing the secret** — detector + field path +
   offset + count + masked placeholder only; never the matched bytes, never a
   reversible hash.
@@ -1659,10 +1687,21 @@ injection rule — the corp-artifact-host trust boundary in `isMITMHost`).
 - A single span over `max_scan_bytes` (default **1 MiB**) or a body over **32 MiB**
   is forwarded **unscanned** (`span_oversize` / `body_oversize`). Fails **open** by
   default; `block` + `on_scanner_error=block` fails it **closed**.
-- `POST /v1/messages/batches` (N prompts, different schema) is recorded
-  `uninspected_channel` (refused under fail-closed block). Base64
-  `image`/`document` bytes are scanned only under `scan_attachments` (opt-in, off
-  by default). `count_tokens` **is** scanned.
+- **Every POST on a brokered LLM route that is not `messages`/`count_tokens`
+  (Anthropic) or `chat/completions` (OpenAI) is recorded `uninspected_channel`**
+  and refused under fail-closed block — the classifiers' default arm, not an
+  enumerated list (`classifyAnthropicLLM`/`classifyOpenAILLM`,
+  `internal/egress/proxy/llm_routes.go`). That covers `POST /v1/messages/batches`
+  (N prompts, different schema), the legacy `/v1/complete` and `/v1/completions`,
+  OpenAI `/v1/responses` and `/v1/embeddings`, **and the vendors' content-upload
+  surface** — Anthropic `POST /v1/files`, OpenAI `POST /v1/files` and the
+  multipart `/v1/audio/{transcriptions,translations}` plus `/v1/audio/speech`.
+  Those upload paths used to fall to a quiet default: forwarded with the brokered
+  credential, unscanned, with no scan block on the decision row and no
+  fail-closed refusal, so the strict operator's one hard control was bypassable
+  by choosing a different suffix. A bodiless read (`GET /v1/models`) is still
+  quiet. Base64 `image`/`document` bytes are scanned only under
+  `scan_attachments` (opt-in, off by default). `count_tokens` **is** scanned.
 - **Walled-garden coverage (`inspect_forward_egress`, `classified_markers`):**
   inspection extends to the GENERIC plaintext-HTTP forward path (custom connectors)
   and to MCP/JSON-RPC bodies via the generic walker, and operator
@@ -1687,6 +1726,14 @@ injection rule — the corp-artifact-host trust boundary in `isMITMHost`).
   (3) the destination is named by HOSTNAME: a literal
   private/loopback/link-local/metadata IP is still denied at the literal-IP guard.
   Only the resolved-IP re-check is deferred, to the operator's own corp proxy.
+  That literal-IP guard covers the NON-CANONICAL spellings too: `net.ParseIP`
+  accepts only the canonical dotted-quad, while `inet_aton(3)` — and so glibc
+  `getaddrinfo`, and so the corp proxy that finally dials — also reads `127.1`,
+  `0x7f000001`, `2130706433` and `0251.0376.0.1` as `127.0.0.1`, so `evaluate`
+  step 0 and `egressTarget`'s upstream branch both re-run the block check on the
+  inet_aton reading (`nonCanonicalIPv4`,
+  `internal/egress/proxy/literal_ip_guard.go`). Deny only: a spelling the
+  operator did not type inherits no `allowed_domains` grant.
 - The optional **sidecar** (`detector_sidecar_url`) treats an
   error/timeout/non-200 as a scanner error like the in-process detectors: fails
   **open** by default, and `on_scanner_error=block` **does** extend to it, so
@@ -1696,8 +1743,25 @@ injection rule — the corp-artifact-host trust boundary in `isMITMHost`).
   tracking, field-level **redaction** (corrupts tool I/O + prompt caching), and
   response-side **SSE** scanning. Residuals, not silent gaps.
 - The 32 MiB per-request buffer (only when inspection is enabled) raises proxy
-  memory vs. the prior streaming path; bounded per-request, relying on the run's
-  cgroup memory limit under high concurrency.
+  memory vs. the prior streaming path. It is bounded per-request AND in
+  aggregate: the extractor's live-heap amplification (~5.3x, and independent of
+  which detectors are on) means two concurrent in-cap bodies would exceed the
+  proxy sidecar's 256 MiB cgroup cap, so concurrent inspection is limited by a
+  semaphore (`maxConcurrentScans`, `internal/egress/proxy/llm_routes.go`) and
+  `wardyn-proxy` sets the Go GC's soft memory limit from that same cgroup
+  ceiling at boot. An over-budget request WAITS and is still fully inspected —
+  load never turns into unscanned egress. That wait is itself BOUNDED, by the
+  request's own context and a wall-clock cap (`scanQueueWait`), because nothing
+  above the call bounds it: the agent-facing listener sets `ReadTimeout 0` so
+  that streaming bodies and CONNECT tunnels work, and only the inner MITM server
+  carries a whole-request deadline — so without the cap one slow-loris POST from
+  the sandbox, holding the single slot across the read of its own body, would
+  park every other inspected request of the run indefinitely, each retaining a
+  goroutine and a socket. A wait that expires, or a client that goes away, is
+  DENIED with a 502 — the bound is not a way to get a body forwarded unscanned.
+  The cgroup limit alone was not a bound: without a
+  soft limit the GC targets ~2x live heap and grows into the cap, and an
+  OOM-killed sidecar takes the run's only network path with it.
 - **TLS-MITM (`intercept_tls`) residuals:** the proxy sees DECRYPTED bodies for the
   intercepted hosts (added trust surface — the per-run CA private key in proxy
   memory). The MITM core (terminate → leaf-mint → inspect → re-originate) is proven
