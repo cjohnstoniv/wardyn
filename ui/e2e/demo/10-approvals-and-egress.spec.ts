@@ -612,6 +612,10 @@ test("beats 0-5 — the wait-for-review hold, and the scope ladder", async () =>
 
   await spotlight(page, alwaysOption);
   await caption(page, "And Always would save it to a workspace — greyed out here, because this demo run has none.");
+  // Two lines back to back: the first is 5.7 s of speech, and caption() does
+  // not wait — without this beat the second cue lands 4 ms after the first and
+  // the mux has to slide it (the 2026-09-08 take failed its overlap gate).
+  await beat(page);
   await caption(page, "We'll do that one for real in a minute.");
   await beat(page, PACE.read);
   // THE PAYOFF of this beat, and the setup for beat 6's contrast. A REAL
