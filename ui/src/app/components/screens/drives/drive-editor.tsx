@@ -14,9 +14,14 @@
 //     `host_path` option is DISABLED WITH ITS REASON rather than offered and
 //     refused. The 400 stays on the API path, where `wardyn drive apply` will
 //     meet it.
-//  2. A SHARE NAMES ITS OWN HOMES. The derived (`hash`) directory option is
-//     disabled for share backends and HOME_HINT says why — the same refusal the
-//     server raises, avoided rather than met.
+//  2. THE HOME-TEMPLATE RULE RUNS BOTH WAYS. A share names its own homes, so
+//     the derived (`hash`) directory option is disabled for share backends;
+//     a MANAGED backend is the mirror — every non-hash template is disabled,
+//     since the home segment is concatenated into the object name `docker
+//     volume ls` / `kubectl get pvc` print, and a subject-bearing template
+//     would publish the principal there (scope widened 2026-09-03, see
+//     `homeDisabled` below). HOME_HINT says why either way — the same
+//     refusal the server raises, avoided rather than met.
 //  3. THE SERVER COMPOSES ITS OWN REFUSALS. The roots are an env-borne ceiling
 //     the console cannot read, so a host-root refusal is POST-ATTEMPT: the
 //     console contributes SAVE_REFUSED_TITLE and the body is the server's text,

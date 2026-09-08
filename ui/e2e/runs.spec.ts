@@ -341,3 +341,177 @@ test.describe("Killing an active run", () => {
     ).toHaveCount(9);
   });
 });
+
+// R4-F002: the console used to pull the WHOLE fleet's approvals and filter in
+// the browser — i.e. AFTER the server's requested_at DESC window — so past
+// LIST_LIMIT lifetime approvals a run's own holds vanished from its own detail
+// page (internal/api/approvals.go:56-61 spells out why the predicate has to run
+// server-side). jsdom pins the call args; only a real browser proves the wire.
+test.describe("Run detail — approvals are scoped on the wire", () => {
+  test("GET /approvals carries ?run_id= for the run being viewed", async ({ page }) => {
+    const approvalRequests: string[] = [];
+    page.on("request", (req) => {
+      const url = req.url();
+      if (req.method() === "GET" && /\/api\/v1\/approvals(\?|$)/.test(url)) {
+        approvalRequests.push(url);
+      }
+    });
+
+    await openRuns(page);
+    await page.getByText("e2e fixture 2").click();
+    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page.getByRole("heading", { name: "e2e fixture 2", level: 1 })).toBeVisible();
+
+    const runId = new URL(page.url()).pathname.split("/").pop() ?? "";
+    expect(runId).not.toEqual("");
+
+    await expect
+      .poll(() => approvalRequests.some((u) => u.includes(`run_id=${runId}`)))
+      .toBe(true);
+    // (The shell's own attention poll — App.tsx's fleet-wide PENDING count — is
+    // legitimately un-scoped and keeps ticking here, so "no un-scoped read at
+    // all" is not the assertion; "this page asks for THIS run" is.)
+  });
+});
+
+
+// R4-F020: the Add-widget catalog enumerated the whole registry while the grid
+// drew only what `available` admitted. On a FINISHED run the ssh widget can
+// never render, yet the catalog still offered "Attach from your terminal" —
+// one click ticked the row, ran addWidget and PUT the phantom placement to
+// /api/v1/me/run-layout, and no tile came back. canvas.test.tsx pins the
+// absence in jsdom; only a real browser proves nothing is PERSISTED.
+test.describe("Run cockpit — the layout catalog offers no dead controls", () => {
+  test("a finished run's catalog omits the ssh widget, and persists nothing", async ({ page }) => {
+    const layoutWrites: string[] = [];
+    page.on("request", (req) => {
+      if (req.method() === "PUT" && new URL(req.url()).pathname === "/api/v1/me/run-layout") {
+        layoutWrites.push(req.postData() ?? "");
+      }
+    });
+
+    await openRuns(page);
+    await page.getByText("e2e fixture 4").click(); // Completed
+    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page.getByRole("heading", { name: "e2e fixture 4", level: 1 })).toBeVisible();
+
+    await page.getByRole("button", { name: "Edit layout" }).click();
+    await page.getByRole("button", { name: "Add widget" }).click();
+    const catalog = page.getByRole("dialog");
+    await expect(catalog).toBeVisible();
+
+    await expect(catalog.getByRole("button", { name: "Attach from your terminal" })).toHaveCount(0);
+    // The entries that CAN render are still offered.
+    await expect(catalog.getByRole("button", { name: "Sandbox" })).toBeVisible();
+    // Opening the catalog wrote nothing, and no phantom widget can have been
+    // stored because none was offered.
+    expect(layoutWrites.every((b) => !b.includes('"ssh"'))).toBe(true);
+  });
+});
+
+// R4-F141: RunDetailScreen.load() awaited FIVE fetches with Promise.all, so any
+// ONE of them rejecting replaced the whole cockpit with ErrorState's "We
+// couldn't reach the Wardyn control plane" — an outage claim that is false when
+// GET /runs/{id} answered 200, and one that takes the run's state, its terminal,
+// its approvals strip and its KILL button with it. The rejection is routine, not
+// hypothetical: handleListApprovals answers 500 "approval listing is not scoped
+// for members on this backend" without ApprovalsByRunCreatorPager
+// (internal/api/approvals.go), and a degraded audit store fails listAudit.
+// run-detail.test.tsx pins the state machine; only a browser proves the page a
+// human is left holding.
+test.describe("Run detail — a failing side fetch is not an outage", () => {
+  test("keeps the cockpit when /audit and /approvals both 500", async ({ page }) => {
+    await openRuns(page);
+
+    // Fail the two subsidiary reads for the detail page only; /runs/{id} is
+    // left alone, which is the whole point — the run loaded.
+    await page.route("**/api/v1/audit*", (route) =>
+      route.fulfill({ status: 500, contentType: "application/json", body: '{"error":"audit store degraded"}' }),
+    );
+    await page.route("**/api/v1/approvals*", (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: '{"error":"approval listing is not scoped for members on this backend"}',
+      }),
+    );
+
+    await page.getByText("e2e fixture 2").click(); // RUNNING
+    await expect(page).toHaveURL(/\/runs\/.+/);
+
+    await expect(page.getByRole("heading", { name: "e2e fixture 2", level: 1 })).toBeVisible();
+    await expect(page.getByText("We couldn't reach the Wardyn control plane. Please try again.")).toHaveCount(0);
+    // The one control that ends a runaway run is still reachable.
+    await expect(page.getByRole("button", { name: "Kill" })).toBeVisible();
+
+    await page.unroute("**/api/v1/audit*");
+    await page.unroute("**/api/v1/approvals*");
+  });
+});
+
+// R4-F142: the canvas tile's FILL rule was written for a widget that renders ONE
+// root card (`[&>section]:flex-1`), and the terminal widget renders a FRAGMENT —
+// the M7(b) failure block, then the pane. The rule therefore caught the failure
+// block, a `shrink-0` <section> built to size to its content, and gave it
+// `flex: 1 1 0%`: measured in Chromium at 271px of a 518px tile, half the replay
+// pane gone on every KILLED/FAILED run. jsdom computes no layout, so the vitest
+// pin can only assert the selector — this is the one that reads real pixels.
+test.describe("Run cockpit — the failure block sizes to its content, not to half the tile", () => {
+  test("a killed run keeps its replay pane", async ({ page }) => {
+    await openRuns(page);
+    await page.getByText("e2e fixture 7").click(); // KILLED — always gets the block
+    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page.getByRole("heading", { name: "e2e fixture 7", level: 1 })).toBeVisible();
+
+    const block = page.getByTestId("run-failure-block");
+    await expect(block).toBeVisible();
+
+    const measured = await block.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      const parent = el.parentElement as HTMLElement;
+      return {
+        flexGrow: cs.flexGrow,
+        blockH: el.getBoundingClientRect().height,
+        scrollH: el.scrollHeight,
+        parentH: parent.getBoundingClientRect().height,
+      };
+    });
+
+    // Not stretched...
+    expect(measured.flexGrow).toBe("0");
+    // ...and not stretched in effect either: it is as tall as its own content
+    // (within a rounding pixel), never a fixed share of the tile.
+    expect(measured.blockH).toBeLessThanOrEqual(measured.scrollH + 2);
+    // The replay pane below it keeps the bulk of the hero.
+    expect(measured.blockH).toBeLessThan(measured.parentH / 2);
+  });
+});
+
+// R4-F037: the attach card's OFF paragraphs are claims about the DEPLOYMENT
+// ("Off on this deployment... an operator turns it on by setting
+// WARDYN_SSH_LISTEN"). lib/api/health.ts swallows a non-ok /healthz into a
+// resolved `{}`, so the card used to print both claims after a 503 and never
+// re-check (the effect's deps never change on this page). The vitest pin drives
+// the same code path with a stubbed fetch; this one drives a real browser
+// against a real daemon whose /healthz is failing.
+test.describe("Attach card — a failing /healthz claims nothing about the deployment", () => {
+  test("prints neither lane's OFF copy while /healthz 503s", async ({ page }) => {
+    await openRuns(page);
+    // Installed BEFORE the run opens: the card asks once, on mount.
+    await page.route("**/healthz", (route) =>
+      route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"unavailable"}' }),
+    );
+
+    await page.getByText("e2e fixture 2").click(); // RUNNING — the card's gate
+    await expect(page).toHaveURL(/\/runs\/.+/);
+    // The card still renders: the CLI lane needs no gateway at all.
+    await expect(page.getByText("Attach from your terminal")).toBeVisible();
+    await expect(page.getByText("Wardyn CLI")).toBeVisible();
+    // ...and asserts nothing about the two lanes it got no answer for.
+    await expect(page.getByText(/Off on this deployment/)).toHaveCount(0);
+    // Both headings stay — the lanes exist, their state is simply unknown.
+    await expect(page.getByText("UI apps")).toBeVisible();
+
+    await page.unroute("**/healthz");
+  });
+});

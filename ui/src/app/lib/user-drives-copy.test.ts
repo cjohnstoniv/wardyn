@@ -426,3 +426,269 @@ describe("user-drives-prompt §7.1 — the server-composed table matches the Go 
     expect(checked).toBeGreaterThanOrEqual(6);
   });
 });
+
+// ---------------------------------------------------------------------------
+// §7.7 — DRIVE_MEMBER's refusals, across the language boundary.
+//
+// The suite above proves TS == doc for all 140 keys. §7.7 is titled
+// "DRIVE_MEMBER — refusals (server-composed)", and that title is the hole this
+// block closes: no production TypeScript renders those eight constants. The
+// bytes a member is actually refused with are composed in Go (user_drives_run.go,
+// user_drives_resolve.go, runner/mount.go), so before this block the canon pin
+// compared TS to the doc while the SHIPPED string came from a third copy nothing
+// compared to either — and the Go tests that cover them HAND-RETYPE the
+// sentence, which is exactly the Go-to-Go anti-pattern this file's header says
+// it eliminated. A counterfactual proved it: rewording REFUSED_WRITABLE in the
+// server AND its Go test copies left `go test ./internal/api/` and the whole UI
+// canon suite green, with the frozen canon left describing bytes nobody emits.
+//
+// The check is a SHAPE comparison, not a substring hunt: a Go format verb and a
+// doc {placeholder} both become one hole, %q brings the quotes it renders, and
+// the two envelopes the server adds around the frozen sentence are stripped from
+// the doc side rather than pretended away —
+//   - `drive: ` — driveRefusal() (internal/api/user_drives.go), on all six
+//     REFUSED_* that go through refuseDrive / errDriveUnmountable;
+//   - `workspace_mounts[0]: ` — the caller's own field prefix, which the canon
+//     spells because §7.7 says it does (`[0]` is the mount's position).
+// Both are re-derived from the Go source below, so neither can rot into a fudge.
+const HOLE = "\u0000";
+const GO_VERB = /%[#+\- 0]*\d*(?:\.\d+)?[a-zA-Z]/g;
+
+/** A Go literal as the shape its runtime output has: verbs become holes, %q keeps the quotes it renders. */
+const goShape = (lit: string) => lit.replace(GO_VERB, (v) => (v.endsWith("q") ? `"${HOLE}"` : HOLE));
+/** A doc cell as the same shape: `{name}` is the hole the verb fills. */
+const docShape = (text: string) => text.replace(/\{[A-Za-z_]+\}/g, HOLE);
+
+/** key -> frozen string, for the rows of ONE `### 7.N` table. */
+function parseOneSection(heading: RegExp): Map<string, string> {
+  const rows = new Map<string, string>();
+  let inSection = false;
+  for (const line of readFileSync(DOC, "utf8").split("\n")) {
+    if (line.startsWith("#")) {
+      inSection = heading.test(line);
+      continue;
+    }
+    if (!inSection || !line.startsWith("|")) continue;
+    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
+    if (cells[0] === "Key" || /^:?-+:?$/.test(cells[0])) continue;
+    rows.set(unmono(cells[0]), unmono(cells[cells.length - 1]));
+  }
+  return rows;
+}
+
+const sec77 = parseOneSection(/^### 7\.7\b/);
+const mountGo = readFileSync(resolve(process.cwd(), "../internal/runner/mount.go"), "utf8");
+const userDrivesGo = readFileSync(resolve(process.cwd(), "../internal/api/user_drives.go"), "utf8");
+const DRIVE_TARGET = (/const DriveTarget = "([^"]+)"/.exec(mountGo) ?? [])[1];
+const DRIVE_PREFIX = "drive: ";
+const MOUNT_PREFIX = "workspace_mounts[0]: ";
+
+// The one row whose Go literal legitimately carries MORE than the frozen
+// sentence: types.DriveHomeStricterRuleClause is APPENDED (the §7.1
+// server-composed class — the canon is frozen, so the k8s-only clause could not
+// be worded into it) and strings.TrimSpace removes the join when it is empty.
+const ALLOWED_TAIL: Record<string, string> = {
+  "REFUSED_HOME_INVALID(claim)": ` ${HOLE}`,
+};
+
+// REFUSED_BACKEND's `{reason}` is not a format verb — it is driveMountFor's own
+// prose, a different clause per cause (§7.7's own note). So its row is checked
+// as the ENVELOPE it is: every backend refusal the server composes must open
+// with the frozen prefix and close the parenthesis, and there must be several.
+const COMPOSED = "REFUSED_BACKEND(reason)";
+
+/** The doc row spelled the way the Go literal for it would be. */
+function docCandidates(text: string): string[] {
+  const base = docShape(text);
+  const out = [base];
+  for (const p of [DRIVE_PREFIX, MOUNT_PREFIX]) {
+    if (base.startsWith(p)) out.push(base.slice(p.length));
+  }
+  // The reserved target is a CONSTANT the canon spells out where the server
+  // interpolates runner.DriveTarget (§7.7: "the frozen string spells the first
+  // mount's, so the canon equals the server's bytes").
+  if (DRIVE_TARGET) {
+    for (const c of [...out]) {
+      if (c.includes(DRIVE_TARGET)) out.push(c.split(DRIVE_TARGET).join(HOLE));
+    }
+  }
+  return out;
+}
+
+describe("user-drives-prompt §7.7 — the member refusals match the Go source", () => {
+  const shapes = literals.map(goShape);
+
+  it("finds all 8 refusal rows", () => {
+    expect([...sec77.keys()].sort()).toEqual(
+      [
+        "DENIED_DRIVE(name)",
+        "REFUSED_BACKEND(reason)",
+        "REFUSED_HOME_INVALID(claim)",
+        "REFUSED_HOME_MISSING(name)",
+        "REFUSED_NO_GRANT",
+        "REFUSED_PAUSED",
+        "REFUSED_TARGET_RESERVED",
+        "REFUSED_WRITABLE",
+      ].sort(),
+    );
+  });
+
+  it("strips only the envelopes the Go source actually adds", () => {
+    // driveRefusal() — internal/api/user_drives.go
+    expect(userDrivesGo).toContain(`return "${DRIVE_PREFIX}" + strings.TrimSpace(reason)`);
+    // …and the mount prefix is the caller's own field convention, which
+    // ValidateAuthoredTarget's refusal is documented to be given.
+    expect(mountGo).toContain("is reserved for the user drive");
+    expect(MOUNT_PREFIX.startsWith("workspace_mounts[")).toBe(true);
+  });
+
+  it("REFUSED_TARGET_RESERVED spells runner.DriveTarget itself", () => {
+    expect(DRIVE_TARGET).toBe("/home/agent/drive");
+    expect(sec77.get("REFUSED_TARGET_RESERVED")).toContain(DRIVE_TARGET as string);
+  });
+
+  it.each([...sec77.keys()].filter((k) => k !== COMPOSED).map((k) => [k] as const))(
+    "%s is a string the Go side actually composes",
+    (key) => {
+      const text = sec77.get(key) as string;
+      const cands = docCandidates(text);
+      const tail = ALLOWED_TAIL[key] ?? "";
+      const hit = shapes.find(
+        (g) => cands.includes(g) || (tail !== "" && g.endsWith(tail) && cands.includes(g.slice(0, -tail.length))),
+      );
+      if (!hit) {
+        throw new Error(
+          `no literal in ${GO_DIRS.join(" / ")} composes this §7.7 row — §7.7 is SERVER-composed, so ` +
+            `the Go source is the truth for its bytes; reword both sides or neither:\n  ${text}`,
+        );
+      }
+    },
+  );
+
+  it(`${COMPOSED}: every backend refusal the server composes fits the frozen envelope`, () => {
+    const [open, close] = docShape(sec77.get(COMPOSED) as string).split(HOLE);
+    expect(close).toBe(")");
+    const bare = open.startsWith(DRIVE_PREFIX) ? open.slice(DRIVE_PREFIX.length) : open;
+    const fits = shapes.filter((g) => g.includes(bare));
+    // The arms driveMountFor / driveShareBindFailure / resolveUserDrive
+    // compose: an unsupported runner, a backend that dispatches elsewhere, an
+    // unreachable share, and the two template-vs-backend refusals.
+    expect(
+      fits.length,
+      `no Go literal opens with REFUSED_BACKEND's frozen prefix: ${bare}`,
+    ).toBeGreaterThanOrEqual(4);
+    for (const g of fits) {
+      expect(g.trimEnd().endsWith(close), `a backend refusal escapes the frozen envelope: ${g}`).toBe(true);
+    }
+
+  });
+});
+
+// R4/F051 — §7.3 froze the preview as a five-row <dl> while POST /drives/preview
+// answers seven fields, and PREVIEW_OBJECT_HINT ("What the reclaim command
+// names — copy it when someone leaves") promised the object name UNCONDITIONALLY.
+// For the one request shape the endpoint's own `warning` names — an address
+// pasted first against a `hash`/`sub` drive — that name is well-formed and names
+// an object no run will ever mount, and docs/OPERATIONS.md sends an operator to
+// this very preview to collect the argument for `docker volume rm`.
+//
+// The ledger's decision for that defect was "(a) now (API-only, no frozen-copy
+// change) + a §7.3 note later"; the note is the half that never landed. These
+// pin it in BOTH directions, so it cannot rot the way it was written:
+// the doc must name what the endpoint answers AND the console must still be
+// dropping it — the day a mock round renders the row, this fails and the note
+// has to be rewritten rather than quietly becoming false in the other
+// direction.
+describe("user-drives-prompt §7.3 — the preview note matches what the endpoint answers", () => {
+  const doc = readFileSync(DOC, "utf8");
+  const section = doc.slice(doc.indexOf("### 7.3 "), doc.indexOf("### 7.4 "));
+  const allocations = readFileSync(
+    resolve(process.cwd(), "src/app/components/screens/drives/allocations.tsx"),
+    "utf8",
+  );
+
+  it.each(["home_subject", "warning"])(
+    "names the answered-but-unrendered field %s",
+    (field) => {
+      expect(section).toContain(field);
+    },
+  );
+
+  it("quotes the server's warning verbatim — the Go literal is the truth for it", () => {
+    const lit = "the directory name keys on the sign-in subject; paste it first";
+    // Really emitted (drivePreviewWarning, internal/api/user_drives_resolve.go).
+    expect(literals).toContain(lit);
+    expect(section).toContain(lit);
+  });
+
+  it("names drivePreviewWarning, which must still exist", () => {
+    expect(section).toContain("drivePreviewWarning");
+    expect([...funcNames].includes("drivePreviewWarning")).toBe(true);
+  });
+
+  // The other direction. `warning` appears inside the word "warnings" nowhere in
+  // this file today; matched on the wire-key spelling the panel would have to
+  // read.
+  it.each(["home_subject", "a.warning"])(
+    "…and the allocations panel still renders none of it (%s)",
+    (read) => {
+      expect(allocations).not.toContain(read);
+    },
+  );
+});
+
+// R4/F092 put a NEW ROW on the allocations block: the console's shared
+// TruncatedNote, above the table, whenever `grant_total` exceeds the page
+// `grants` carries. A new element on a surface §7 freezes has to be in the doc
+// that freezes it, even when it introduces no string of its own. Pinned in BOTH
+// directions — the doc must describe the note AND the block must still render
+// it, gated on the server's own total rather than a client-side stand-in.
+describe("user-drives-prompt §7.3 — the allocations truncation note (R4/F092)", () => {
+  const doc = readFileSync(DOC, "utf8");
+  const section = doc.slice(doc.indexOf("### 7.3 "), doc.indexOf("### 7.4 "));
+  const allocations = readFileSync(
+    resolve(process.cwd(), "src/app/components/screens/drives/allocations.tsx"),
+    "utf8",
+  );
+
+  it("names the shared note, where it lives, and the server key that raises it", () => {
+    expect(section).toContain("TruncatedNote");
+    expect(section).toContain("ui/src/app/components/wardyn/states.tsx");
+    expect(section).toContain("grant_total");
+  });
+
+  it("freezes no string of its own — §7.3's table gains no row for it", () => {
+    expect(section).not.toMatch(/^\| `[A-Z_]*TRUNCAT/m);
+  });
+
+  it("…and the block still renders that shared note, gated on the server's total", () => {
+    expect(allocations).toContain("grantTotal > grants.length");
+    expect(allocations).toContain("<TruncatedNote count={LIST_LIMIT} cap={LIST_LIMIT} />");
+    // No children override: the shared sentence is used as-is.
+    expect(allocations).not.toMatch(/<TruncatedNote[^/]*>[^<]/);
+
+  });
+});
+
+// F049: §2.4's refusal register named the home-template rule's share-side
+// direction only, while drive-editor.tsx's `homeDisabled` has gated BOTH
+// directions since the scope widened 2026-09-03 (a managed backend refuses
+// every non-hash template, not just email_local). Pin both halves so a
+// revert to one-directional gating — in the doc OR the component — fails
+// here instead of drifting silently again.
+describe("user-drives-prompt §2.4 — the home-template rule's mirror direction", () => {
+  const doc224 = readFileSync(resolve(process.cwd(), "../docs/design/user-drives-prompt.md"), "utf8");
+  const editorSrc = readFileSync(
+    resolve(process.cwd(), "src/app/components/screens/drives/drive-editor.tsx"),
+    "utf8",
+  );
+
+  it("§2.4 documents the managed-backend mirror, not just the share-side rule", () => {
+    expect(doc224).toContain("A share drive with a `hash` directory name");
+    expect(doc224).toMatch(/A managed drive with any non-`hash` directory name.*mirror/);
+  });
+
+  it("drive-editor.tsx's homeDisabled still gates both directions", () => {
+    expect(editorSrc).toMatch(/homeDisabled\s*=\s*\(t: HomeTemplate\)\s*=>\s*\(managed \? t !== "hash" : t === "hash"\)/);
+  });
+});

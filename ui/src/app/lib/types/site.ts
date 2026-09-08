@@ -68,7 +68,26 @@ export interface SiteConfig {
   // reader exists yet (the Network step's rendering ships later); the field
   // mirrors the server shape so a GET/PUT round-trip never drops it.
   internal_hosts?: InternalHost[];
+  // RESPONSE-ONLY, never-PUT, exactly like `integrations` above: when the
+  // operator finished (or deliberately left) the Getting Started funnel on
+  // THIS INSTALL. Mirrors types.SiteConfig.OnboardingCompletedAt
+  // (internal/types/types.go:340, `json:"onboarding_completed_at,omitempty"`),
+  // stamped by POST /setup/onboarding/complete; PUT /site-config hard-400s any
+  // body that carries it ("onboarding_completed_at is managed by the setup
+  // flow, not PUT /site-config", internal/api/site_config.go). It is typed here
+  // precisely so health.putSiteConfig can strip it — an untyped key rides
+  // invisibly through the GET-spread idiom every writer uses.
+  readonly onboarding_completed_at?: string;
 }
+
+// The keys GET /site-config returns that PUT /site-config REFUSES: each one is
+// server-owned, echoed on the read so a caller can see it, and a hard 400 on
+// the write. Every SiteConfig writer in the console starts from a GET and
+// spreads onto it (`mutate({ ...(siteConfig ?? {}), field })`), so any such key
+// rides into the PUT body unless it is stripped centrally —
+// health.putSiteConfig does that, ONCE, from this list. A fourth server-owned
+// field is a line here and nothing else.
+export const SERVER_OWNED_SITE_CONFIG_KEYS = ["integrations", "onboarding_completed_at"] as const satisfies readonly (keyof SiteConfig)[];
 
 // One SiteConfig.internal_hosts entry — see that field's doc.
 export interface InternalHost {

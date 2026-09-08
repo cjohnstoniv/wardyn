@@ -202,7 +202,11 @@ export function LiveApprovals({
 
   const refresh = React.useCallback(async () => {
     try {
-      const all = await api.listApprovals("PENDING");
+      // Scoped SERVER-side (?run_id=): the un-scoped PENDING list is capped at
+      // LIST_LIMIT over a requested_at DESC read, so filtering it here would
+      // lose this run's holds behind a busy fleet — approvals.ts's
+      // listApprovals comment and internal/api/approvals.go:56-61.
+      const all = await api.listApprovals("PENDING", runId);
       // egress_domain + tool_call: both park the run live, so both belong on the
       // surface the human is already watching. tool_call gained its first
       // producer with the toolgate (a `hold` run raises one per mutating tool
@@ -222,6 +226,9 @@ export function LiveApprovals({
       // card instead.
       setPending(
         all.filter(
+          // run_id is a belt-and-braces no-op now that the fetch above carries
+          // ?run_id=; it stays so a backend that ignored the predicate cannot
+          // surface another run's holds on this run's strip.
           (a) =>
             a.run_id === runId &&
             (a.kind === "egress_domain" ||

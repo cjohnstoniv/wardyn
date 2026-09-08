@@ -141,28 +141,60 @@ export function RunDetailScreen() {
     (foreground: boolean) => {
       if (!id) return;
       if (foreground) setStatus("loading");
+      // RETURNED, not fired and forgotten: usePoll's in-flight guard waits on
+      // this promise, so a control plane slower than DETAIL_POLL_MS costs one
+      // outstanding set of requests instead of a new set every 4s (R4-F074).
       // Egress is derived from the same audit events we already fetch here — call
       // egressFromAudit(a) instead of api.getEgress (which would re-fetch /audit).
-      Promise.all([
+      // allSettled, NOT all (R4-F141). The PAGE is the run; the other four are
+      // panes on it. Under Promise.all a single subsidiary rejection replaced
+      // the whole cockpit — run state, live terminal, approvals strip and the
+      // KILL button for a RUNNING run — with ErrorState's "we couldn't reach
+      // the Wardyn control plane", an outage claim that was false: GET
+      // /runs/{id} had just returned 200. And the rejection is routine, not
+      // hypothetical: handleListApprovals answers 500 "approval listing is not
+      // scoped for members on this backend" on a backend without
+      // ApprovalsByRunCreatorPager (internal/api/approvals.go), and a degraded
+      // audit store fails listAudit. Each pane now keeps its last-good value
+      // and the page stays operable.
+      return Promise.allSettled([
         runsApi.getRun(id),
         runsApi.getGrants(id),
-        approvalsApi.listApprovals(""),
+        // Scoped SERVER-side (?run_id=). Filtering this list in the browser
+        // instead drops the run's own approvals once the fleet has more than
+        // LIST_LIMIT lifetime rows — see approvals.ts's listApprovals comment
+        // and internal/api/approvals.go:56-61.
+        approvalsApi.listApprovals("", id),
         auditApi.listAudit(id),
         auditApi.listAudit(id, "session.recording"),
       ])
-        .then(([r, g, allApprovals, a, recA]) => {
-          setRun(r ?? null);
-          setGrants(g);
-          setEgress(egressFromAudit(a));
-          setApprovals(allApprovals.filter((x) => x.run_id === id));
-          setAudit(a);
-          setRecordingAudit(recA);
+        .then(([r, g, runApprovals, a, recA]) => {
+          if (r.status === "rejected") {
+            // The run itself is the one fetch this page cannot render without.
+            // Foreground load shows the error state; a background poll blip
+            // keeps last-good data silently (matches the Runs board) rather
+            // than replacing a live cockpit every DETAIL_POLL_MS during a
+            // control-plane hiccup.
+            if (foreground) setStatus("error");
+            return;
+          }
+          setRun(r.value ?? null);
+          if (g.status === "fulfilled") setGrants(g.value);
+          if (a.status === "fulfilled") {
+            setEgress(egressFromAudit(a.value));
+            setAudit(a.value);
+          }
+          // The ?run_id= above is what makes this list this run's; the filter
+          // is a belt-and-braces no-op kept so a backend that ignored the
+          // predicate cannot leak another run's rows onto this page.
+          if (runApprovals.status === "fulfilled")
+            setApprovals(runApprovals.value.filter((x) => x.run_id === id));
+          if (recA.status === "fulfilled") setRecordingAudit(recA.value);
           setStatus("ready");
         })
         .catch(() => {
-          // Foreground load shows the error state; a background poll blip keeps
-          // last-good data silently (matches the Runs board) rather than toasting
-          // every DETAIL_POLL_MS tick during a control-plane hiccup.
+          // allSettled never rejects, so this is a bug in the block above, not
+          // a network answer. Same foreground rule.
           if (foreground) setStatus("error");
         });
     },
@@ -451,6 +483,9 @@ function Cockpit({
   // one of them and must never be told otherwise. The SUPER-only surfaces on
   // this page (attach, take-over) read useOperator in their own components.
   const securityOperator = useSecurityOperator();
+  // The SUPER-admin question, for the widget context: ConnectSSHCard reads it
+  // itself, and RUN_WIDGETS.ssh.available has to ask the same one.
+  const operator = useOperator();
   const viewerBlocked =
     pending.length > 0 && !securityOperator && !pending.some((p) => canDecideApproval(false, p.kind));
 
@@ -506,6 +541,8 @@ function Cockpit({
     run,
     finished: terminal,
     principal,
+    // The ssh widget's gate is owner-or-admin, like the card it places.
+    operator,
     grants,
     egress,
     audit,
@@ -568,12 +605,21 @@ function TerminalPane({
           </div>
         ) : (
           <PaneNotice
+            // "error" is its OWN arm. Falling through to recordingMissing
+            // asserted a fact about the RUN ("this run has no captured terminal
+            // session") from a fetch that never established it — and on the
+            // DEFAULT tab, while the Recording tab, fed by the same recState,
+            // correctly admitted the failure. recordingDisabled cannot rescue
+            // it either: that is a /healthz boot fact, so on a deployment where
+            // recording IS enabled the false arm is the one that fires.
             text={
               recState === "loading" || recState === "idle"
                 ? RUN_COCKPIT.recordingLoading
-                : recordingDisabled
-                  ? RUN_COCKPIT.recordingDisabled
-                  : RUN_COCKPIT.recordingMissing
+                : recState === "error"
+                  ? RUN_COCKPIT.recordingError
+                  : recordingDisabled
+                    ? RUN_COCKPIT.recordingDisabled
+                    : RUN_COCKPIT.recordingMissing
             }
             action={
               <button onClick={onGoRecording} className="text-xs font-medium text-primary hover:underline">
@@ -884,7 +930,7 @@ function RecordingTab({
         </div>
       ) : state === "error" ? (
         <div className="rounded-xl border border-border bg-card">
-          <ErrorState message="Couldn't load this run's recording." onRetry={onRetry} />
+          <ErrorState message={RUN_COCKPIT.recordingError} onRetry={onRetry} />
         </div>
       ) : !recording ? (
         <div className="rounded-xl border border-border bg-card">

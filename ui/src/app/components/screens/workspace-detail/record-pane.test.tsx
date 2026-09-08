@@ -16,6 +16,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ProfileObservations, RecordResult, Workspace } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 
 // The embedded terminal is heavy (xterm) and irrelevant to what this pane decides,
 // so stub it to a marker — we only assert it MOUNTS for a recording session.
@@ -70,13 +71,24 @@ function renderPane(
   operator = true,
   launch: { warnings?: string[]; confinementClass?: string } | null = null,
   hostClasses: ("CC1" | "CC2" | "CC3")[] | null = null,
+  // R4/F001: the two predicates used to be ONE argument
+  // (`securityOperator={operator}`), so this helper could only ever produce
+  // admin (both true) or member (both false) — and the one tier 0.7 §B
+  // introduced, and the only one where the pane's split gate is observable
+  // (operator:false, securityOperator:true), was unreachable from every test in
+  // this file. It defaults to `operator`, so every existing call site keeps
+  // exactly the viewer it had.
+  securityOperator = operator,
 ) {
   return render(
-    // 0.7 §B: the pane moved to useSecurityOperator (record + promote-egress +
-    // approved-egress are all securityOps), so the fixture's `operator=false`
-    // viewer must be a MEMBER on both predicates — a security admin CAN drive
-    // this pane, which is the point of the move.
-    <OperatorProvider operator={operator} securityOperator={operator}>
+    // 0.7 §B: the pane moved to useSecurityOperator (record + promote-egress
+    // are securityOps), so the fixture's `operator=false` viewer must be a
+    // MEMBER on both predicates — a security admin CAN drive this pane, which
+    // is the point of the move. `securityOperator` defaults to `operator` so
+    // every existing caller is unchanged, and splits for the SECURITY-ADMIN
+    // persona (operator=false, securityOperator=true) — the caller F031 is
+    // about, whose approve-hosts write lands on operatorOnly.
+    <OperatorProvider operator={operator} securityOperator={securityOperator}>
       <RecordPane
         ws={ws(over)}
         notice={null}
@@ -769,24 +781,10 @@ describe("RecordPane — a viewer's controls are disabled", () => {
         domains: [{ host: "registry.npmjs.org", allow_count: 4, deny_count: 0, pending_count: 0 }],
       } as unknown as RecordResult["observations"],
     };
-    render(
-      <OperatorProvider operator={false} securityOperator={true}>
-        <RecordPane
-          ws={ws({ record_results: { "build-test": recorded } })}
-          notice={null}
-          launch={null}
-          busyTask={null}
-          modelReady={true}
-          hostClasses={null}
-          onRecord={noop}
-          onReplayConfined={noop}
-          onDoneRecording={noop}
-          onPromoteEgress={noop}
-          onApproveHosts={noop}
-          onOpenProfile={noop}
-        />
-      </OperatorProvider>,
-    );
+    // Through renderPane, not a hand-rolled render: the helper is the file's
+    // one harness, and a tier only one bespoke block can reach is a tier the
+    // other 800 lines silently cannot test (R4/F001).
+    renderPane({ record_results: { "build-test": recorded } }, {}, true, false, null, null, true);
     // The DECISION half — promoting observed egress into the allowlist — is
     // theirs and stays live. This is what makes the pane worth showing them at
     // all, and what a blanket useOperator gate would have taken away.
@@ -796,6 +794,31 @@ describe("RecordPane — a viewer's controls are disabled", () => {
     expect(screen.getByRole("button", { name: /^replay confined$/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /re-record/i })).toBeDisabled();
     expect(screen.getByLabelText(/session name/i)).toBeDisabled();
+    // The reason is stated where the dead control is (NewSessionForm's own
+    // note) and NOT at pane level — the pane itself is theirs to drive.
+    expect(screen.getByTestId("record-new-session")).toHaveTextContent(OPERATOR_ONLY_REASON);
+    expect(screen.getAllByText(OPERATOR_ONLY_REASON)).toHaveLength(1);
+  });
+
+  // The other operatorOnly control on this pane, at the same tier: an orphaned
+  // confined session's Done button. Reachable only now that the helper splits
+  // the predicates.
+  it("leaves a security admin the orphaned session's Done button — it is inside the securityOps fieldset", () => {
+    const running: RecordResult = { run_id: "vr-live", label: "verify", mode: "interactive", confined: true, status: "recording" };
+    renderPane({ record_results: { "verify:verify": running } }, {}, true, false, null, null, true);
+    expect(screen.getByRole("button", { name: /^done$/i })).not.toBeDisabled();
+  });
+
+  // The mirror image: a plain MEMBER (both predicates false) sees the whole
+  // pane dead and the reason once, at pane level.
+  it("gives a plain member a dead pane with the reason stated once, at pane level", () => {
+    const recorded: RecordResult = { run_id: "r1", label: "build & test", mode: "interactive", status: "recorded" };
+    renderPane({ record_results: { "build-test": recorded } }, {}, true, false, null, null, false);
+    expect(screen.getByLabelText(/session name/i)).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^replay confined$/i })).toBeDisabled();
+    // Twice: the pane-level note AND NewSessionForm's own — both gates are shut
+    // for a member, and each states why where it sits.
+    expect(screen.getAllByText(OPERATOR_ONLY_REASON)).toHaveLength(2);
   });
 
   it("disables the New-session field, Start recording, and a session's Replay/Re-record buttons", () => {
@@ -815,5 +838,48 @@ describe("RecordPane — a viewer's controls are disabled", () => {
     const running: RecordResult = { run_id: "vr-live", label: "verify", mode: "interactive", confined: true, status: "recording" };
     renderPane({ record_results: { "verify:verify": running } }, {}, true, false);
     expect(screen.getByRole("button", { name: /^done$/i })).toBeDisabled();
+  });
+});
+
+// F031 — the pane opens to a security admin (its fieldset gates on the
+// securityOps tier), but the Approve controls call approveHosts, whose PUT
+// .../requirements is registered on operatorOnly. They must carry their own
+// gate, or a security admin gets live buttons over a route the server refuses
+// and the guided approve->replay chain silently never fires its replay.
+describe("RecordPane — approve-hosts is operatorOnly, above the pane's own tier", () => {
+  const learningRR: RecordResult = { run_id: "o1", label: "build & test", mode: "interactive", status: "recorded" };
+  const confinedRR: RecordResult = {
+    run_id: "vr1",
+    label: "build & test",
+    mode: "interactive",
+    confined: true,
+    status: "recorded",
+    observations: obs({
+      domains: [{ host: "evil.example.com", allow_count: 0, deny_count: 0, pending_count: 1 }],
+    }),
+  };
+  const caughtWs = { record_results: { "build-test": learningRR, "verify:build-test": confinedRR } };
+
+  it("disables both Approve controls for a security admin, and says which role they need", () => {
+    // operator=false, securityOperator=true — the security-admin caller.
+    renderPane(caughtWs, {}, true, false, null, null, true);
+    const blocked = screen.getByTestId("verify-session-blocked");
+    // The pane itself is OPEN to this caller (its fieldset is keyed on the
+    // security tier) — proven by a sibling control that stays live.
+    expect(within(blocked).getByRole("checkbox", { name: "Approve evil.example.com" })).toBeEnabled();
+
+    const perHost = within(blocked).getByRole("button", { name: /^approve$/i });
+    expect(perHost).toBeDisabled();
+    expect(perHost).toHaveAttribute("title", OPERATOR_ONLY_REASON);
+    const guided = screen.getByRole("button", { name: /^approve 1 selected host and replay again$/i });
+    expect(guided).toBeDisabled();
+    expect(guided).toHaveAttribute("title", OPERATOR_ONLY_REASON);
+  });
+
+  it("leaves both Approve controls live for an admin, who holds the requirements tier", () => {
+    renderPane(caughtWs);
+    const blocked = screen.getByTestId("verify-session-blocked");
+    expect(within(blocked).getByRole("button", { name: /^approve$/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^approve 1 selected host and replay again$/i })).toBeEnabled();
   });
 });

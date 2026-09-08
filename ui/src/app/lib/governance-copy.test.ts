@@ -59,7 +59,7 @@ const doc = parseFrozenTables();
 
 // The two keys whose doc cell carries an "A / B" pluralisation alternation
 // rather than a single renderable string — checked in their own test.
-const PLURALISED = ["ASSIGNED_COUNT(n)", "DELETE_RESTRICT_BODY(name, n)"];
+const PLURALISED = ["ASSIGNED_COUNT(n)", "DELETE_RESTRICT_BODY(name, n)", "LIMIT_QUOTA_LABEL(n)"];
 
 // Every other key, rendered from the module exactly as the doc spells it.
 const rendered: Record<string, string> = {
@@ -168,8 +168,8 @@ const rendered: Record<string, string> = {
 };
 
 describe("governance-copy — §7.2-§7.9 parsed out of the prompt doc", () => {
-  it("finds all 89 frozen keys in the doc", () => {
-    expect(doc.size).toBe(89);
+  it("finds all 90 frozen keys in the doc", () => {
+    expect(doc.size).toBe(90);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {
@@ -190,6 +190,14 @@ describe("governance-copy — §7.2-§7.9 parsed out of the prompt doc", () => {
     expect(GOVERNANCE.ASSIGNED_COUNT(1)).toBe(singular.replace("{n}", "1"));
     expect(GOVERNANCE.ASSIGNED_COUNT(0)).toBe(plural.replace("{n}", "0"));
     expect(GOVERNANCE.ASSIGNED_COUNT(4)).toBe(plural.replace("{n}", "4"));
+  });
+
+  // R4/F032's addition, same inline-pluralisation shape §7.2 pins.
+  it("LIMIT_QUOTA_LABEL renders both arms of its doc cell", () => {
+    const [singular, plural] = doc.get("LIMIT_QUOTA_LABEL(n)")!.split(" / ");
+    expect(GOVERNANCE.LIMIT_QUOTA_LABEL(1)).toBe(singular.replace("{n}", "1"));
+    expect(GOVERNANCE.LIMIT_QUOTA_LABEL(3)).toBe(plural.replace("{n}", "3"));
+    expect(GOVERNANCE.LIMIT_QUOTA_LABEL(0)).toBe(plural.replace("{n}", "0"));
   });
 
   it("DELETE_RESTRICT_BODY renders both arms of its doc cell", () => {

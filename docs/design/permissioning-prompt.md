@@ -246,6 +246,7 @@ the member holds.
 | `DENY_BEFORE_ENFORCE` | A deny applies even while this capability is not enforced — you can block one host for one person without bounding everyone. |
 | `ENFORCE_ON_TITLE(kind)` | Enforce {kind}? |
 | `ENFORCE_ON_BODY(n)` | {n} members are bounded by the grants below from their next request. Anything not granted starts being refused. *(singular: "1 member is bounded…")* |
+| `ENFORCE_ON_BODY_UNKNOWN` | Members are bounded by the grants below from their next request. Anything not granted starts being refused. *(0.7 ADDITION, not from this round: the count is derived from `GET /runs`, which can be refused or fail; the counted form then printed "0 members are bounded", i.e. "this affects nobody".)* |
 | `ENFORCE_ON_ZERO` | There are no allow grants for this capability. Enforcing it now refuses every member request until you add one. |
 | `ENFORCE_OFF_TITLE(kind)` | Stop enforcing {kind}? *(0.6 ADDITION, not from this round: the table froze only one title, so the off-dialog asked "Enforce {kind}?" above a body about going back and a "Stop enforcing" button.)* |
 | `ENFORCE_OFF_BODY` | Members go back to the powers they had before this capability was enforced. Denies still apply. |

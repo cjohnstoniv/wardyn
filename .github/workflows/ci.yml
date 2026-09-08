@@ -161,6 +161,17 @@ jobs:
       # that matrix, because it needs pnpm/node and the matrix is uniform setup-go.
       - name: Audit UI production dependencies (advisories)
         run: make npm-audit
+      # F065/R4-E2E-B3: npm-audit above is deliberately blind to dev-only
+      # advisories, and a pnpm.overrides pin (an EXACT version, not a floor)
+      # is exactly the kind of thing that rots silently once a newer GHSA
+      # lands below it — which is precisely how F065 went undetected for as
+      # long as it did. This step is the watcher: it runs the full (dev+prod)
+      # scan on every push/PR so a rotted pin surfaces here, in the log,
+      # without gating the merge (continue-on-error) — dev-dep noise still
+      # never blocks anyone.
+      - name: Audit ALL UI dependencies, including dev (non-blocking watcher)
+        continue-on-error: true
+        run: make npm-audit-dev
       # Routed through make so the gate is single-sourced (make = CI reality).
       # The ui-* targets bundle an idempotent `pnpm install --frozen-lockfile`;
       # against the already-installed tree above it is a no-op, so behavior is

@@ -5,6 +5,7 @@
 
 import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
+import { EPISODES } from "../src/app/lib/demo-videos";
 
 // The welcome hero's episode catalog, grouped by deployment path (Shape C,
 // approved mock round 2026-08-31). The hero only renders on a
@@ -56,7 +57,16 @@ test.describe("episode catalog — Shape C path grouping", () => {
     await expect(page.getByText("Your deployment — multi-user")).toBeVisible();
     await expect(page.getByText("Your deployment — single-user")).toHaveCount(0);
     await expect(page.getByText(/^The single-user path — \d+ episodes$/)).toBeVisible();
-    // 04b + 13: the multi path's member-audience episodes carry the chip.
-    await expect(page.getByText("For your members")).toHaveCount(2);
+    // The multi path's member-audience episodes carry the chip. DERIVED from
+    // the catalog, never a literal: this count was hard-coded 2 and episode
+    // 04d ("Your drive", multi/member) made it 3, which only this spec could
+    // see — `make ci` does not run Playwright, so the drift sat on the one
+    // layer nothing else covers. EpisodeList chips exactly the multi group's
+    // member rows (episode-card.tsx's `memberChips && e.audience === "member"`),
+    // so the filter below IS the render rule, and the next episode cannot
+    // break this the same way.
+    const memberChips = EPISODES.filter((e) => e.path === "multi" && e.audience === "member").length;
+    expect(memberChips, "the multi path has no member-audience episode to chip").toBeGreaterThan(0);
+    await expect(page.getByText("For your members")).toHaveCount(memberChips);
   });
 });

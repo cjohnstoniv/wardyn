@@ -237,9 +237,16 @@ export function GovernanceScreen() {
                           <TableCell>{n === 0 ? GOV.ASSIGNED_NONE : GOV.ASSIGNED_COUNT(n)}</TableCell>
                           <TableCell>
                             <span className="flex flex-wrap items-center gap-1.5">
+                              {/* "None" is a claim that this profile bounds
+                                  nothing, so it is derived from EVERY field of
+                                  GovernanceLimits — not from the boolean doors
+                                  alone. max_concurrent_runs is enforced
+                                  (denyMemberRunQuota's 422), and a quota-only
+                                  profile used to read "None". */}
                               {!p.limits.deny_task_mode_exec &&
                                 !p.limits.deny_interactive &&
                                 !p.limits.deny_user_drive &&
+                                !((p.limits.max_concurrent_runs ?? 0) > 0) &&
                                 GOV.LIMITS_NONE}
                               {p.limits.deny_task_mode_exec && <Chip tone="neutral">{GOV.LIMIT_EXEC_LABEL}</Chip>}
                               {p.limits.deny_interactive && (
@@ -248,6 +255,9 @@ export function GovernanceScreen() {
                               {/* The user-drive door's chip, beside the other
                                   two (user-drives mock, state 6). */}
                               {p.limits.deny_user_drive && <Chip tone="neutral">{GOV.LIMIT_DRIVE_LABEL}</Chip>}
+                              {(p.limits.max_concurrent_runs ?? 0) > 0 && (
+                                <Chip tone="neutral">{GOV.LIMIT_QUOTA_LABEL(p.limits.max_concurrent_runs!)}</Chip>
+                              )}
                             </span>
                           </TableCell>
                           <TableCell>

@@ -263,6 +263,43 @@ describe("DrivesScreen — allocations", () => {
 // writable_override is a *bool whose absence is a THIRD state, enabled=false is
 // a pause rather than a delete, and home_override/size_mib_override are refused
 // outright off the user tier.
+// R4/F092 — the allocations table is ONE PAGE. handleGetUserDrives bounds the
+// grants read at maxListLimit (user_drive_grants holds one row per SUBJECT, so
+// its size is the deployment's headcount) and ships `grant_total` beside the
+// page so a client can tell "this is all of them" from "this is the first page"
+// without comparing against a limit it may not have sent. The console typed the
+// key, dropped it in getDrives' projection and rendered the window as the whole
+// set — and the search on this screen filters CLIENT-SIDE over that window, so
+// past the cap "no matches" can be a lie about a person who does hold a drive.
+//
+// The affordance is the console's existing one (TruncatedNote, states.tsx, on
+// Runs / Workspaces / Policies / Audit / run-detail); no new copy.
+describe("DrivesScreen — a bounded allocations page says so (R4/F092)", () => {
+  const TRUNCATED = /Showing the first 1000 \(truncated\)/;
+
+  it("shows the truncation note when more allocations exist than this page carries", async () => {
+    renderScreen(snapshot({ grant_total: 4000 }));
+    await screen.findByText(DRIVES.ALLOC_TITLE);
+    expect(screen.getByText(TRUNCATED)).toBeInTheDocument();
+  });
+
+  it("stays silent when the page IS every allocation", async () => {
+    // grant_total === grants.length: one page, all of them. A note here would be
+    // a false claim in the other direction.
+    renderScreen(snapshot({ grant_total: 1 }));
+    await screen.findByText(DRIVES.ALLOC_TITLE);
+    expect(screen.queryByText(TRUNCATED)).toBeNull();
+  });
+
+  it("stays silent for a pre-0.7 daemon that never sends grant_total", async () => {
+    // Absent is UNKNOWN, not "4000 exist" and not "1 exists" — the console must
+    // not invent a disclosure the server never made.
+    renderScreen(snapshot());
+    await screen.findByText(DRIVES.ALLOC_TITLE);
+    expect(screen.queryByText(TRUNCATED)).toBeNull();
+  });
+});
+
 describe("DrivesScreen — the allocation form's wire shapes", () => {
   // The body every arm below differs from by one key: the group tier, the
   // Scratch drive, and nothing overridden.

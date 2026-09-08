@@ -340,6 +340,12 @@ export const RUN_COCKPIT = {
   recordingDisabled: "Session recording is disabled on this deployment",
   recordingMissing:
     "This run has no captured terminal session. A recording is produced once an agent process runs in the sandbox.",
+  // The THIRD fact, and the one the pane used to state as the second: a fetch
+  // that FAILED establishes nothing about the run, so it may not be reported as
+  // "this run has no recording". Same sentence the Recording tab already shows
+  // for the same failure (run-detail.tsx's RecordingTab) — hoisted here so the
+  // two cannot drift, exactly like the two above it.
+  recordingError: "Couldn't load this run's recording.",
 
   // --- Evidence widgets ---
   // Same eligibility framing as the full Credential grants card, tightened for

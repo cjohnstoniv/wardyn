@@ -256,6 +256,49 @@ describe("AccessPanel — the security_admin tier (§B, §7.9)", () => {
     expect(chip(PEOPLE.ROLE_MEMBER)).toHaveLength(0);
   });
 
+  // R4/F033: the SIBLING call site the roleLabel() move missed —
+  // renderPreviewResult kept `role === "admin" ? "admin" : "member"`, so the
+  // one surface an operator uses to CHECK a mapping before trusting it called
+  // a security_admin a member. Casing is §7.2's: lowercase mid-sentence.
+  it("a security_admin preview verdict says so — never 'member'", async () => {
+    previewRoleMock.mockResolvedValue({
+      role: "security_admin",
+      ok: true,
+      matched: [{ value: "sec-team", role: "security_admin", source: "console" }],
+    });
+    renderPanel(baseAccess());
+    await userEvent.type(screen.getByLabelText(PREVIEW.FIELD_CLAIMS), "sec-team");
+    await userEvent.click(screen.getByRole("button", { name: PREVIEW.RUN_CTA }));
+
+    expect(await screen.findByText(PREVIEW.RESULT_MATCHED("security admin", "sec-team"))).toBeInTheDocument();
+    expect(screen.queryByText(PREVIEW.RESULT_MATCHED("member", "sec-team"))).toBeNull();
+  });
+
+  it("a security_admin default-role verdict says so too", async () => {
+    previewRoleMock.mockResolvedValue({ role: "security_admin", ok: true, matched: [] });
+    renderPanel(baseAccess({ posture: { map_empty: false, before: "x", after: "y", changes: false } }));
+    await userEvent.type(screen.getByLabelText(PREVIEW.FIELD_CLAIMS), "nobody");
+    await userEvent.click(screen.getByRole("button", { name: PREVIEW.RUN_CTA }));
+
+    expect(await screen.findByText(PREVIEW.RESULT_DEFAULT("security admin"))).toBeInTheDocument();
+    expect(screen.queryByText(PREVIEW.RESULT_DEFAULT("member"))).toBeNull();
+  });
+
+  // An unrecognized wire role renders ITSELF rather than falling through to a
+  // role it is not — the same honesty rule roleLabel() carries.
+  it("an unrecognized role renders itself, not 'member'", async () => {
+    previewRoleMock.mockResolvedValue({
+      role: "auditor",
+      ok: true,
+      matched: [{ value: "aud-team", role: "auditor", source: "chart" }],
+    });
+    renderPanel(baseAccess());
+    await userEvent.type(screen.getByLabelText(PREVIEW.FIELD_CLAIMS), "aud-team");
+    await userEvent.click(screen.getByRole("button", { name: PREVIEW.RUN_CTA }));
+
+    expect(await screen.findByText(PREVIEW.RESULT_MATCHED("auditor", "aud-team"))).toBeInTheDocument();
+  });
+
   it("the role picker offers all three roles and posts the third one on the wire", async () => {
     upsertMappingMock.mockResolvedValue({ mapping: { id: "new", value: "sec-team", role: "security_admin" }, created: true });
     renderPanel(baseAccess({ posture: { map_empty: false, before: "an admin", after: "sign in as a member", changes: true } }));

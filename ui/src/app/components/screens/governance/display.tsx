@@ -71,7 +71,19 @@ export function Note({
 // A DISPLAY split of one frozen string, never a rewrite: the two halves
 // concatenate back to the original byte for byte, and the assigned-delete
 // dialog reuses the head alone because its consequence half would be false.
+//
+// R4/F035 — the split point is the LAST "? ", not the first. Every template
+// that flows through here (GOV.DELETE_CONFIRM / UNASSIGN_CONFIRM,
+// DRIVES.DELETE_CONFIRM / REMOVE_CONFIRM) interpolates a NAME before its
+// question mark, and a profile or drive name is validated only as non-empty,
+// <=128 bytes and control-char-free (internal/api/governance.go:138-144) — so
+// "? " is a legal substring of one. A name like `prod? really` split the
+// dialog inside itself: the title was `Delete "prod?` and the description
+// began mid-name. The consequence half of every template is a statement, never
+// a question, so the last "? " IS the sentence boundary; the pin in
+// governance-screen.test.tsx asserts that of each template so a future
+// question-shaped consequence fails there rather than here.
 export function question(s: string): [string, string] {
-  const at = s.indexOf("? ");
+  const at = s.lastIndexOf("? ");
   return at < 0 ? [s, ""] : [s.slice(0, at + 1), s.slice(at + 2)];
 }

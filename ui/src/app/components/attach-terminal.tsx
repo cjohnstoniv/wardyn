@@ -60,7 +60,7 @@ import {
   AlertDialogTitle,
 } from "./ui/alert-dialog";
 import { RUN_COCKPIT } from "./wardyn/copy";
-import { useOperator, usePrincipal } from "./wardyn/operator-context";
+import { useOperator, useOperatorResolved, usePrincipal } from "./wardyn/operator-context";
 
 // ---------------------------------------------------------------------------
 // Auth-mode detection
@@ -152,6 +152,18 @@ const MAX_RECONNECT_ATTEMPTS = 4;
 const RECONNECT_BASE_DELAY_MS = 600;
 const RECONNECT_MAX_DELAY_MS = 5000;
 
+// A HANDSHAKE THAT NEITHER COMPLETES NOR CLOSES (R4-F143). Every state here is
+// driven off the socket's open/close/error events, and a WebSocket upgrade can
+// do none of the three — the deploy README's own warning, "an ingress
+// controller in front of it must not buffer or strip the 101 upgrade"
+// (deploy/helm/wardyn/README.md), names exactly a proxy that accepts the TCP
+// connection and then sits on it. Measured in Chromium: "Connecting…" with a
+// spinner, no message, indefinitely. This deadline turns that silence into a
+// FAILED ATTEMPT for the reconnect budget below, so the panel reaches the same
+// honest closed state a refused socket does. Longer than any healthy upgrade
+// (one round trip), shorter than a human's patience.
+const CONNECT_TIMEOUT_MS = 15_000;
+
 // THE DISPLACEMENT CONTRACT (internal/api/attach_holder.go). A take-over closes
 // the displaced client's socket with code 1008 (StatusPolicyViolation) and a
 // reason of exactly `taken over by <principal>`. That close MUST NOT take the
@@ -181,6 +193,9 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // detail, the demo screen, …): no failed ticket POST, no WS handshake the
   // server would refuse anyway.
   const operator = useOperator();
+  // Whether `operator` is the SERVER'S answer or still the fail-open default —
+  // see the lane choice in connect() below.
+  const operatorResolved = useOperatorResolved();
   const principal = usePrincipal();
   const owned = !!createdBy && createdBy === principal;
   const containerRef = React.useRef<HTMLDivElement>(null);
@@ -369,6 +384,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     // autoRun fires once per mounted run, across reconnects.
     let autoRunSent = false;
     let autoRunTimer: ReturnType<typeof setTimeout> | null = null;
+    let connectTimer: ReturnType<typeof setTimeout> | null = null;
 
     const send = (payload: ArrayBufferView | string) => {
       const cur = wsRef.current;
@@ -396,7 +412,19 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       // handshake) AND for a non-operator owner (the cookie lane is
       // admin-only server-side — ticketOrHumanAuth's fall-through, http.go);
       // an operator on a cookie session keeps using the cookie lane directly.
-      if (tokenOnlyMode || !operator) {
+      //
+      // ...and ALSO whenever the admin role is not POSITIVELY known
+      // (R4-F110). `operator` is fail-open by design, so one swallowed /me
+      // failure (health.ts's whoami returns null on any 4xx/5xx) leaves a
+      // MEMBER reading as an operator with principal "unknown" — `owned` false,
+      // `operator` true — and this branch then picked the ADMIN-ONLY cookie
+      // lane for a member who owns the run. The server refuses it 403 and
+      // writes an authz.denied/admin_surface row against the legitimate owner,
+      // once per reconnect attempt, while the ticket lane that would have
+      // worked was never tried. Preferring the ticket lane when unsure costs an
+      // admin nothing: minting is itself owner-or-admin (handleAttachTicket,
+      // attach_ticket.go), so the lane serves both.
+      if (tokenOnlyMode || !operator || !operatorResolved) {
         // Mint a fresh single-use ticket per (re)connect — the previous one was
         // consumed by the last handshake — then open the WS with ?ticket=.
         runs
@@ -424,7 +452,31 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
 
+      // Arm the deadline for THIS attempt. Closing a socket still in CONNECTING
+      // fires onclose with an abnormal code — the one path that already knows
+      // backoff, the attempt budget and the closed state, so a stalled upgrade
+      // needs no second failure vocabulary of its own.
+      if (connectTimer) clearTimeout(connectTimer);
+      connectTimer = setTimeout(() => {
+        connectTimer = null;
+        if (disposed || wsRef.current !== ws) return;
+        if (ws.readyState !== WebSocket.CONNECTING) return;
+        try {
+          ws.close();
+        } catch {
+          /* already closing — onclose still runs the bookkeeping */
+        }
+      }, CONNECT_TIMEOUT_MS);
+
+      const clearConnectTimer = () => {
+        if (connectTimer) {
+          clearTimeout(connectTimer);
+          connectTimer = null;
+        }
+      };
+
       ws.onopen = () => {
+        clearConnectTimer();
         if (reconnectAttempts > 0) {
           term.writeln("\r\n\x1b[2m[reconnected]\x1b[0m");
         }
@@ -470,6 +522,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       };
 
       ws.onclose = (ev) => {
+        clearConnectTimer();
         if (disposed) return;
         // DISPLACED — checked BEFORE the reconnect path, because it is the one
         // close that looks unexpected and must never be retried. See
@@ -526,6 +579,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       };
 
       ws.onerror = () => {
+        clearConnectTimer();
         // An error is always followed by a close event; let onclose drive the
         // reconnect/backoff. Only surface a hard error banner once we've given
         // up (no attempts left), so a transient blip doesn't flash an error.
@@ -624,6 +678,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       disposed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (autoRunTimer) clearTimeout(autoRunTimer);
+      if (connectTimer) clearTimeout(connectTimer);
       cancelAnimationFrame(rafId);
       window.removeEventListener("resize", onWinResize);
       mount.removeEventListener("paste", onPaste, true);
@@ -645,7 +700,10 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     // /me resolves to a non-owning viewer shortly after an optimistic mount;
     // the early return above then tears the effect back down via its own
     // cleanup before running again.
-  }, [runId, tokenOnlyMode, refit, operator, owned]);
+    // operatorResolved rides with operator for the same reason: when /me lands
+    // late, the lane the socket picked on the fail-open default must be
+    // re-decided against the answer.
+  }, [runId, tokenOnlyMode, refit, operator, operatorResolved, owned]);
 
   // Refit shortly after entering/leaving fullscreen (the box just changed).
   React.useEffect(() => {

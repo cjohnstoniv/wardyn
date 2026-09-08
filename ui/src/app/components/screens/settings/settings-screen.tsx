@@ -58,7 +58,12 @@ function HostCard({
   onRecheck,
 }: {
   status: SetupStatus;
-  siteConfig: SiteConfig | null;
+  /**
+   * The site config, `null` for "this caller may not read it" (a member), or
+   * "error" for "the read FAILED" — three states, because the last two used to
+   * be one and the console spoke for the server in the difference (R4/F069).
+   */
+  siteConfig: SiteConfig | null | "error";
   onRecheck: () => void;
 }) {
   const navigate = useNavigate();
@@ -80,7 +85,17 @@ function HostCard({
   // and a member simply does not see them — they also link into an operator
   // funnel step, which was never theirs to open.
   const operator = useOperator();
-  const proxied = isProxyConfigured(siteConfig);
+  // R4/F069 — the operator's own FAILED read is the case the reasoning above
+  // misses, and the operator is the person the statement is addressed to.
+  // SettingsScreen.load swallows every site-config failure into null and still
+  // resolves state="ready", so a 500 or a dead network rendered "Internet:
+  // Direct" and "Not configured — sandboxes go direct" — two POSITIVE claims
+  // about a deployment nothing had read. Same rule, one state further: absence
+  // is honest, a statement is not, so a failed read shows neither claim. The
+  // funnel link itself STAYS — it is how the operator goes and finds out.
+  const configUnknown = siteConfig === "error";
+  const cfg: SiteConfig | null = configUnknown ? null : siteConfig;
+  const proxied = !configUnknown && isProxyConfigured(cfg);
 
   return (
     <section className="rounded-xl border border-border bg-card p-4">
@@ -130,7 +145,7 @@ function HostCard({
             )
           }
         />
-        {operator && (
+        {operator && !configUnknown && (
           <Row
             label="Internet"
             value={proxied ? "Through the corporate proxy" : "Direct"}
@@ -150,16 +165,18 @@ function HostCard({
             <span className="block text-body font-medium text-foreground">
               Corporate proxy &amp; egress
             </span>
-            <span className="block text-meta text-muted-foreground">
-              {proxied ? (
-                <>
-                  Upstream proxy set —{" "}
-                  <Mono>{siteConfig?.upstream_proxy_url || "configured"}</Mono>
-                </>
-              ) : (
-                "Not configured — sandboxes go direct"
-              )}
-            </span>
+            {!configUnknown && (
+              <span className="block text-meta text-muted-foreground">
+                {proxied ? (
+                  <>
+                    Upstream proxy set —{" "}
+                    <Mono>{cfg?.upstream_proxy_url || "configured"}</Mono>
+                  </>
+                ) : (
+                  "Not configured — sandboxes go direct"
+                )}
+              </span>
+            )}
           </span>
           <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
         </button>
@@ -181,15 +198,26 @@ export function SettingsScreen() {
   );
   const [status, setStatus] = React.useState<SetupStatus | null>(null);
   const [siteConfig, setSiteConfig] = React.useState<SiteConfig | null>(null);
+  // R4/F069: the site-config read failing is NOT the same fact as it answering
+  // "nothing is configured", and this screen turned both into `null`. Kept
+  // beside the config rather than folded into it so the three other cards keep
+  // the two-state prop they already reason about; HostCard is the one that
+  // makes POSITIVE claims from it, so it is the one that is told.
+  const [configFailed, setConfigFailed] = React.useState(false);
 
   const load = React.useCallback(() => {
+    let failed = false;
     Promise.all([
       setupApi.getSetupStatus(),
-      health.getSiteConfig().catch(() => null),
+      health.getSiteConfig().catch(() => {
+        failed = true;
+        return null;
+      }),
     ])
       .then(([s, cfg]) => {
         setStatus(s);
         setSiteConfig(cfg);
+        setConfigFailed(failed);
         setState("ready");
       })
       .catch(() => setState("error"));
@@ -206,7 +234,11 @@ export function SettingsScreen() {
       {state === "error" && <ErrorState onRetry={load} />}
       {state === "ready" && status && (
         <div className="space-y-4">
-          <HostCard status={status} siteConfig={siteConfig} onRecheck={load} />
+          <HostCard
+            status={status}
+            siteConfig={configFailed ? "error" : siteConfig}
+            onRecheck={load}
+          />
           <ModelProviderCard
             status={status}
             siteConfig={siteConfig}

@@ -94,10 +94,12 @@ export interface UserDrivesSnapshot {
    * the server: every grant's drive_id is an FK to a drive, so the per-drive
    * `grant_count` values above sum to it.
    *
-   * The two being unequal means this is a page. The screen does not act on that
-   * yet — paging the allocations table needs a control and its copy, which is a
-   * mock round — so `grant_count` per drive stays the number to trust for
-   * "how many people hold this drive". Absent on a pre-0.7 daemon.
+   * The two being unequal means this is a page, and the Allocations block says
+   * so with the console's existing TruncatedNote (R4/F092). PAGING that table —
+   * an offset control and the copy that names which window you are on — is
+   * still a mock round, so `grant_count` per drive stays the number to trust for
+   * "how many people hold this drive". Absent on a pre-0.7 daemon, which reads
+   * as "unknown" and shows no note rather than an invented one.
    */
   grant_total?: number;
   host_roots_configured: boolean;
@@ -211,6 +213,13 @@ export const drives = {
     return {
       drives: unwrapList<UserDriveListItem>(body.drives),
       grants: unwrapList<UserDriveGrant>(body.grants),
+      // R4/F092 — CARRIED, not rebuilt away. This projection is a fresh object
+      // literal, so a declared key that is not named here is dropped before any
+      // consumer can see it: `grant_total` was typed above and then discarded
+      // right here, which is why the Allocations table rendered one bounded page
+      // as if it were every allocation. Left as `undefined` for a pre-0.7 daemon
+      // that never sends it — the absence is "unknown", not zero.
+      grant_total: body.grant_total,
       host_roots_configured: !!body.host_roots_configured,
       runner_target: body.runner_target ?? "",
     };

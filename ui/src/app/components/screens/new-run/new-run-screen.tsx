@@ -130,6 +130,14 @@ export function NewRunScreen() {
   const [preflighting, setPreflighting] = React.useState(false);
   const [preflightResult, setPreflightResult] = React.useState<PreflightResult | null>(null);
   const [preflightError, setPreflightError] = React.useState<string | null>(null);
+  // The request body the verdict on screen was graded FROM. A preflight result
+  // is a statement about one body, and the rail renders it directly above
+  // Launch as "the last thing read before committing" — so the moment the body
+  // stops matching (policy document, confinement pick, workspace, drive, any
+  // wizard field at all), the verdict stops being about the run that is about
+  // to launch and must not be shown. Held as state, not a ref, so an edit made
+  // WHILE a preflight is in flight also invalidates the answer when it lands.
+  const [preflightedBody, setPreflightedBody] = React.useState<string | null>(null);
   const [savedPolicies, setSavedPolicies] = React.useState<
     { id: string; name: string; spec: RunPolicySpec }[]
   >([]);
@@ -412,6 +420,21 @@ export function NewRunScreen() {
   // A dry-run of launch's own resolution: same body, same 4xx surface, but
   // mints/dispatches nothing. Renders the member-clamp warnings, the risk
   // grade, and the confinement class the run will actually be enforced at.
+  // The identity of the request Launch would send right now. buildRunInput
+  // throws while the policy document is unparseable (`problem` disables both
+  // actions in that state), which is itself a body change — hence the catch.
+  const currentBody = (() => {
+    try {
+      return JSON.stringify(buildRunInput());
+    } catch {
+      return null;
+    }
+  })();
+  // Stale BY CONSTRUCTION rather than by operator discipline: nothing has to
+  // remember to clear the verdict, because a verdict graded from a different
+  // body is never rendered in the first place.
+  const preflightIsCurrent = preflightedBody !== null && preflightedBody === currentBody;
+
   const preflight = async () => {
     // The saved lane with nothing picked has NO body to dry-run — falling
     // through would preflight the leftover Custom document this lane will
@@ -420,12 +443,17 @@ export function NewRunScreen() {
     if (useSaved && !state.selectedPolicyId) return;
     setPreflightError(null);
     setPreflightResult(null);
+    setPreflightedBody(null);
     setPreflighting(true);
+    // Grade the body we actually send, and remember exactly that one.
+    const body = buildRunInput();
+    const key = JSON.stringify(body);
     try {
-      setPreflightResult(await runsApi.preflightRun(buildRunInput()));
+      setPreflightResult(await runsApi.preflightRun(body));
     } catch (e) {
       setPreflightError(getErrorMessage(e) || "Preflight failed.");
     } finally {
+      setPreflightedBody(key);
       setPreflighting(false);
     }
   };
@@ -865,7 +893,11 @@ export function NewRunScreen() {
             problem,
             error,
           }}
-          preflight={{ error: preflightError, result: preflightResult }}
+          preflight={
+            preflightIsCurrent
+              ? { error: preflightError, result: preflightResult }
+              : { error: null, result: null }
+          }
         />
       </div>
 

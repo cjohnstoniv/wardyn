@@ -215,6 +215,12 @@ Every write outcome is drawn, because each is a different kind of "no":
 - **A share drive with a `hash` directory name — REFUSED (400).** A corporation names its own
   homes; the console disables the derived option for share backends and says why in
   `HOME_HINT`, and the server refuses the API path.
+- **A managed drive with any non-`hash` directory name — REFUSED (400), mirror of the above
+  (scope widened 2026-09-03).** A managed backend names the object after the directory, so a
+  claim-derived template (`sub` or `email_local`) would publish the principal into a
+  `docker volume ls` / `kubectl get pvc` name and collide two people who share it; the console
+  disables every non-derived option for managed backends, `HOME_HINT` says why, and the server
+  refuses the API path (§7.1).
 - **Deleting a drive that is still allocated — REFUSED (409).** `ALLOCATED_COUNT` is
   client-visible, so at a non-zero count the delete dialog opens **pre-filled** with the
   refusal and its confirm disabled; the 409 stays authoritative for the race the count cannot
@@ -705,6 +711,17 @@ read once at sign-in, so a group's allocation reaches them at their next *sign-i
 API token, its next mint. `GOV.SIGNIN_NOTE` is not reused: it ends on "keep their current
 ceiling", and what lags here is a mount.
 
+**The allocations table renders one bounded PAGE, and says so.** `GET /drives` bounds the grants
+read at the list cap and ships `grant_total` — how many allocations EXIST — beside the page it
+sends (`internal/api/user_drives.go`), so when `grant_total` exceeds the rows delivered the block
+renders the console's SHARED truncation note (`TruncatedNote`,
+`ui/src/app/components/wardyn/states.tsx`: the same warning-toned row `runs`, `workspaces` and
+`policies` already carry) above the table. **No string is frozen here** — the shared sentence is
+used with no override, and the note is warning-toned because the Who search below it filters
+CLIENT-SIDE over that window, so past the cap "no matches" would otherwise be a lie about someone
+who holds a drive. Real `?offset=` paging for this block is not this round's (R4/F092-a); the note
+is the honest statement until it lands.
+
 **The preview has no field label or hint of its own** — it takes the claims a token would
 carry, which is what the People step's and the governance preview take, so it renders
 `PREVIEW.FIELD_CLAIMS / _HINT` (§7.1). Its footer is `GOV.PREVIEW_NOT_SAVED`; its failure arm is
@@ -716,6 +733,24 @@ not a person lookup; a truncated snapshot surfaces at the member's launch as
 `COL_SIZE` → the size, `COL_MODE` → `MODE_RO` / `MODE_RW`, `PREVIEW_ENFORCEMENT_LABEL` → the
 `ENFORCEMENT_*` gloss. `{tier}` is one of the three `PREVIEW_TIER_*` words, frozen in the table
 rather than in prose (the governance round's `MATCHED_*` addition, learned from).
+
+**The `<dl>` above is FIVE ROWS AND THE ENDPOINT ANSWERS SEVEN FIELDS** — this section describes
+what the console renders today, and the two it drops are named here so the gap is a recorded
+decision rather than drift. `POST /drives/preview` also composes `home_subject` (WHICH of the
+submitted claims the directory name was derived from) and a server-written `warning`
+(`drivePreviewWarning`, `internal/api/user_drives_resolve.go:503-522`, whose one sentence is
+*"the directory name keys on the sign-in subject; paste it first"*, raised for a `hash`/`sub`
+drive previewed with an address pasted first). Both are typed in the TS mirror and rendered by nothing
+(`ui/src/app/lib/api/drives.ts`), because a new row is a new surface and a surface arrives
+through a mock round — the placement is `CONSOLE-RULES §12`'s to give, not this section's.
+
+Until it does, **`PREVIEW_OBJECT_HINT` is qualified by that omission and not by its own words**:
+for the one request shape the `warning` names, the object name shown is well-formed and names an
+object no run will ever mount, so copying it into the reclaim command reclaims nothing. That is
+also the promise `docs/OPERATIONS.md`'s offboarding step sends an operator here to collect, so
+the caveat belongs on both ends of it. The remedy is the admin's and takes no new copy: paste
+the sign-in subject first and preview again. `PREVIEW_LEAD`'s *"which drive and directory they
+would mount"* is answered for the claims **as typed**, never for the person behind them.
 
 **The Overrides column** renders zero or more chips: `OVERRIDE_SIZE`, `MODE_RO` / `MODE_RW`
 (a writable override, in the mode's own chip vocabulary), `OVERRIDE_HOME`, and `PAUSED_CHIP` for

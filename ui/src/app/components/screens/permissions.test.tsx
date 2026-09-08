@@ -197,6 +197,61 @@ describe("PermissionsScreen — enforcement confirms", () => {
   });
 });
 
+describe("PermissionsScreen — a snapshot that never arrived (R4/F015)", () => {
+  // The enforcement block states what the daemon is refusing RIGHT NOW. Its
+  // "Not enforced" chip and the member-powers prose beneath it are claims, so
+  // they may only come from a snapshot that actually arrived — the seed object
+  // `{ grants: [], enforcement: {} }` is indistinguishable from a real
+  // zero-config answer, which is why there is no seed any more.
+  it("paints no kind state at all when GET /permissions fails — an ErrorState, not six 'Not enforced' chips", async () => {
+    getPermissionsMock.mockRejectedValue(new Error("boom"));
+    renderScreen();
+
+    await screen.findAllByRole("button", { name: /retry/i });
+    expect(screen.queryAllByText(PERM.CHIP_OFF)).toHaveLength(0);
+    expect(screen.queryByText(PERM.CHIP_ON)).toBeNull();
+    for (const k of CAPABILITY_KINDS) {
+      expect(screen.queryByText(KIND[k].unenforced)).toBeNull();
+      expect(screen.queryByText(KIND[k].enforced)).toBeNull();
+    }
+    // ...and it must not claim the zero-config posture either.
+    expect(screen.queryByText(PERM.DEFAULT_POSTURE)).toBeNull();
+  });
+
+  it("retrying after a failure renders the kinds from the snapshot that arrives", async () => {
+    getPermissionsMock.mockRejectedValueOnce(new Error("boom")).mockResolvedValue({
+      grants: [grant()],
+      enforcement: { egress_host: true },
+    });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+
+    const retry = (await screen.findAllByRole("button", { name: /retry/i }))[0];
+    await user.click(retry);
+    await screen.findByText(KIND.egress_host.enforced);
+    expect(screen.getAllByText(PERM.CHIP_OFF)).toHaveLength(CAPABILITY_KINDS.length - 1);
+  });
+});
+
+describe("PermissionsScreen — an affected-member count that could not be read (R4/F133)", () => {
+  it("says members are bounded WITHOUT a number when GET /runs is refused — never '0 members'", async () => {
+    getPermissionsMock.mockResolvedValue({ grants: [grant()], enforcement: {} });
+    listRunsMock.mockRejectedValue(new Error("403"));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+
+    await screen.findByText(KIND.egress_host.unenforced);
+    await user.click(screen.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.egress_host.label}` }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    // The counted form said "0 members are bounded" — i.e. "this affects
+    // nobody", the opposite of the lockout risk the dialog exists to state.
+    expect(within(dialog).queryByText(/\b0 members\b/)).toBeNull();
+    expect(within(dialog).queryByText(PERM.ENFORCE_ON_BODY(0))).toBeNull();
+    expect(within(dialog).getByText(PERM.ENFORCE_ON_BODY_UNKNOWN)).toBeInTheDocument();
+  });
+});
+
 describe("PermissionsScreen — the grant table", () => {
   it("renders who/capability/value/effect, allow amber and deny red — never a success tone", async () => {
     getPermissionsMock.mockResolvedValue({

@@ -5,9 +5,9 @@
 
 // Health/liveness, session (logout/whoami), and the operator-wide site config.
 // The small "server & session" surface the shell always needs.
-import type { SiteConfig } from "../types";
+import { SERVER_OWNED_SITE_CONFIG_KEYS, type SiteConfig } from "../types";
 import type { DriveBackend, StorageEnforcement } from "./drives";
-import { asJson, wfetch } from "./core";
+import { WFETCH_TIMEOUT_MS, asJson, wfetch } from "./core";
 
 // GET /me's `user_drive` (0.7, migration 0054) — what this caller would mount
 // if they asked for it on their next run, or null when they would mount
@@ -145,8 +145,15 @@ export const health = {
   // the server's hard 400 ("integrations are managed through their own
   // endpoints, not PUT /site-config") on every save. Strip it here, once, so
   // no caller has to remember to.
+  //
+  // R4/F029: `integrations` was stripped by NAME, so the SECOND server-owned
+  // field added to the same document (onboarding_completed_at) repeated the
+  // bug verbatim — every Corporate-network save 400'd once onboarding had
+  // completed. The strip is now driven by SERVER_OWNED_SITE_CONFIG_KEYS
+  // (lib/types/site.ts), the one list a third such field gets added to.
   async putSiteConfig(cfg: SiteConfig): Promise<void> {
-    const { integrations: _integrations, ...body } = cfg;
+    const body: Record<string, unknown> = { ...cfg };
+    for (const k of SERVER_OWNED_SITE_CONFIG_KEYS) delete body[k];
     const res = await wfetch("/site-config", { method: "PUT", body: JSON.stringify(body) });
     await asJson<SiteConfig>(res);
   },
@@ -228,9 +235,49 @@ export const health = {
     components?: Record<string, { selected?: string; available?: string[]; source?: string }>;
   }> {
     try {
-      const res = await fetch("/healthz", { credentials: "include" });
+      // /healthz is un-prefixed (not under /api/v1), so it is the ONE call
+      // that cannot go through wfetch — and therefore the one that has to
+      // repeat its deadline. Without it a hung /healthz alone strands the
+      // shell: useMeta only sets resolved:true once health() SETTLES, and
+      // every route is gated behind that (app-shell.tsx:128-158, App.tsx's
+      // roleResolved). The catch below already turns a failure into {}, which
+      // is exactly how the shell reads "control plane unreachable".
+      const res = await fetch("/healthz", {
+        credentials: "include",
+        signal: AbortSignal.timeout(WFETCH_TIMEOUT_MS),
+      });
       if (!res.ok) return {};
       return (await res.json()) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  },
+
+  // GET /readyz — READINESS, which is a different question from the liveness
+  // /healthz answers, and R4/F066 is what it cost to read only the first one.
+  //
+  // handleHealthz emits `"status": "ok"` as a LITERAL (internal/api/healthz.go)
+  // — it never touches the store, deliberately: liveness must not restart a pod
+  // because Postgres failed over. So with wardynd up and the store down,
+  // /healthz says "ok", the console's unreachable banner stays down, and every
+  // polled screen keeps rendering last-good data behind its own silent
+  // `.catch` — a live-looking cockpit frozen at the moment the store died,
+  // which is the EXACT state App.tsx's own comment says the banner exists to
+  // prevent ("without this reads exactly like a healthy quiet fleet").
+  //
+  // /readyz is the endpoint that already asks: it Pings the store under a 3s
+  // timeout and answers 503 {"status":"error","postgres":"unreachable"}
+  // (internal/api/security_headers.go:124-136). Anonymous, like /healthz
+  // (routes.go:38), so the gate can read it too.
+  //
+  // Same {}-on-no-answer contract as health() above: a 503, a non-JSON body and
+  // a dead network all resolve to an object with no `status`, so a missing
+  // status:"ok" IS the not-ready verdict and no caller has to catch.
+  async readyz(): Promise<{ status?: string; postgres?: string }> {
+    try {
+      const res = await fetch("/readyz", { credentials: "include" });
+      if (!res.ok) return {};
+      return (await res.json()) as { status?: string; postgres?: string };
     } catch {
       return {};
     }

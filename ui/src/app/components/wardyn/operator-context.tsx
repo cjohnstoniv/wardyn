@@ -71,9 +71,30 @@ export interface UserDriveMeta {
   /** The governance profile's NAME when its DenyUserDrive limit refuses this
    *  caller a drive; "" when it does not. */
   deniedByProfile: string;
+  /** WHY /me could not answer for this caller's drive; "" when it could.
+   *
+   *  R4/F091 — THE THIRD KEY, and the reason there are three rather than two
+   *  (internal/api/me.go:126-137). `drive: null` alone means "you have no
+   *  allocation", which is ADVICE ("ask an admin for one") — and it was also
+   *  what a member got when their group snapshot was stale, when their
+   *  allocation could not name a directory, and when the store was down. The
+   *  server ships the reason as a closed vocabulary beside the null
+   *  (`groups_snapshot_stale` / `unmountable` / `unavailable` /
+   *  `governance_unavailable`, user_drives_resolve.go) and suppresses the
+   *  allocation alongside it; the console typed the key and then read it
+   *  nowhere, so all four arrived as the one answer whose remedy is wrong for
+   *  every one of them.
+   *
+   *  Carried here so a consumer CAN tell them apart. Non-empty means the drive
+   *  affordance must not be offered — the server has not said the mount would
+   *  work. RENDERING the per-reason remedy is a copy change and a mock round
+   *  (CONSOLE-RULES §12); this is the plumbing it will read, and until it lands
+   *  the consumers behave exactly as they do today, because `drive` is null in
+   *  every one of these states anyway. */
+  unavailable: string;
 }
 
-const NO_USER_DRIVE: UserDriveMeta = { drive: null, deniedByProfile: "" };
+const NO_USER_DRIVE: UserDriveMeta = { drive: null, deniedByProfile: "", unavailable: "" };
 const UserDriveContext = React.createContext<UserDriveMeta>(NO_USER_DRIVE);
 
 // Whether the signed-in caller holds the SECURITY-governance tier — admin OR
@@ -88,16 +109,48 @@ const UserDriveContext = React.createContext<UserDriveMeta>(NO_USER_DRIVE);
 // provider above it). Never "harden" this default to false either.
 const SecurityOperatorContext = React.createContext<boolean>(true);
 
+// Whether `operator` above is the SERVER'S answer yet, or still the fail-open
+// default. The default itself is right and must not be hardened — but a caller
+// that CHOOSES A LANE on it needs to know which of the two it is holding.
+//
+// The case that made this a context rather than a comment (R4-F110): whoami()
+// swallows every failure and returns null (lib/api/health.ts), so one transient
+// /me failure leaves `operator === true` and `principal === "unknown"` for the
+// whole page load. attach-terminal picks its WebSocket auth lane off exactly
+// those two, and for a MEMBER who owns the run both halves are wrong at once —
+// `owned` is false (createdBy !== "unknown") and `operator` is true, so it takes
+// the cookie lane, which is ticketOrHumanAuth's admin-only fall-through
+// (internal/api/attach_ticket.go). The server refuses with 403 and writes an
+// authz.denied/admin_surface audit row against the legitimate owner, five times
+// over the reconnect budget — while the TICKET lane, which is owner-or-admin
+// and would have worked, is never tried.
+//
+// Note this is NOT RoleResolvedContext: app-shell sets `resolved` once the /me
+// fetch SETTLES, success or failure (it is the landing gate's "stop
+// spinning" signal), so it is true after a failed /me too. This one is true only
+// when a body actually came back.
+//
+// Default TRUE, the same fail-open rationale as every other default in this
+// file: every component mounted with no provider above it (every existing test)
+// must read as "the answer is known", not as "still loading forever".
+const OperatorResolvedContext = React.createContext<boolean>(true);
+
 export function OperatorProvider({
   operator,
+  operatorResolved = true,
   securityOperator = true,
   principal = "",
   memberLocalDirRoot = null,
   userDrive = null,
   userDriveDeniedByProfile = "",
+  userDriveUnavailable = "",
   children,
 }: {
   operator: boolean;
+  /** Whether `operator` is the server's answer rather than the fail-open
+   *  default — see OperatorResolvedContext. Optional, defaulting TRUE, so every
+   *  existing caller keeps today's behaviour. */
+  operatorResolved?: boolean;
   // Optional, defaulting TRUE: every existing caller that passes only
   // `operator` keeps today's fail-open behavior rather than silently becoming
   // the restricted case.
@@ -106,17 +159,26 @@ export function OperatorProvider({
   memberLocalDirRoot?: string | null;
   userDrive?: MeUserDrive | null;
   userDriveDeniedByProfile?: string;
+  /** GET /me's `user_drive_unavailable` — see UserDriveMeta.unavailable.
+   *  Defaults to "" ("nothing is wrong") so every existing caller that passes
+   *  only the first two keeps today's behaviour. */
+  userDriveUnavailable?: string;
   children: React.ReactNode;
 }) {
   // Memoised: the two /me fields are a fresh object literal on every shell
   // render otherwise, which would re-render every drive consumer on each
   // heartbeat tick for a value that never changed.
   const drive = React.useMemo<UserDriveMeta>(
-    () => ({ drive: userDrive ?? null, deniedByProfile: userDriveDeniedByProfile }),
-    [userDrive, userDriveDeniedByProfile],
+    () => ({
+      drive: userDrive ?? null,
+      deniedByProfile: userDriveDeniedByProfile,
+      unavailable: userDriveUnavailable,
+    }),
+    [userDrive, userDriveDeniedByProfile, userDriveUnavailable],
   );
   return (
     <OperatorContext.Provider value={operator}>
+      <OperatorResolvedContext.Provider value={operatorResolved}>
       <SecurityOperatorContext.Provider value={securityOperator}>
         <PrincipalContext.Provider value={principal}>
           <MemberLocalDirRootContext.Provider value={memberLocalDirRoot}>
@@ -124,6 +186,7 @@ export function OperatorProvider({
           </MemberLocalDirRootContext.Provider>
         </PrincipalContext.Provider>
       </SecurityOperatorContext.Provider>
+      </OperatorResolvedContext.Provider>
     </OperatorContext.Provider>
   );
 }
@@ -149,6 +212,13 @@ export function useUserDrive(): UserDriveMeta {
 // this list since 0.7 — they moved to useSecurityOperator below.
 export function useOperator(): boolean {
   return React.useContext(OperatorContext);
+}
+
+// Whether useOperator()'s answer came from the server — see
+// OperatorResolvedContext. Use it only where the fail-open default would pick a
+// WRONG LANE rather than merely offer a control the server will refuse.
+export function useOperatorResolved(): boolean {
+  return React.useContext(OperatorResolvedContext);
 }
 
 // Whether the signed-in caller may perform SECURITY-GOVERNANCE actions:

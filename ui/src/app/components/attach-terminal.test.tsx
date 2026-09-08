@@ -99,7 +99,15 @@ class FakeWebSocket {
     this.onmessage?.({ data });
   }
   close() {
+    // Faithful to the spec's "fail the WebSocket connection": closing a socket
+    // that is still CONNECTING aborts the handshake and DOES fire a close
+    // event, abnormally (1006). Without that, a fake cannot express the one
+    // failure R4-F143 is about — a 101 upgrade a proxy accepted and then sat
+    // on. An OPEN socket keeps the old silent behaviour: the component's own
+    // teardown closes those, and it has already detached the handlers.
+    const wasConnecting = this.readyState === FakeWebSocket.CONNECTING;
     this.readyState = FakeWebSocket.CLOSED;
+    if (wasConnecting) this.onclose?.({ code: 1006, reason: "" });
   }
 }
 
@@ -322,6 +330,43 @@ describe("AttachTerminal — role-aware attach", () => {
     expect(FakeWebSocket.instances[0].url).toContain("ticket=tic_abc");
   });
 
+  // R4-F110: whoami() swallows every failure and returns null (health.ts), so
+  // ONE transient /me failure leaves the shell's fail-open `operator: true` and
+  // `principal: "unknown"` for the whole page load. For a MEMBER who owns the
+  // run both halves are wrong at once — `owned` is false and `operator` is true
+  // — so the component took the cookie lane, which is ticketOrHumanAuth's
+  // admin-only fall-through: a 403 plus an authz.denied/admin_surface audit row
+  // against the legitimate owner, once per reconnect attempt, while the ticket
+  // lane that WOULD have worked was never tried.
+  it("an UNRESOLVED admin role takes the ticket lane, not the admin-only cookie lane", async () => {
+    const attachTicket = vi.mocked(runs.attachTicket);
+    attachTicket.mockReset();
+    attachTicket.mockResolvedValueOnce("tic_ok");
+    render(
+      // Exactly app-shell's post-/me-failure state: fail-open operator, the
+      // "unknown" principal, and a run owned by a real member.
+      <OperatorProvider operator={true} operatorResolved={false} principal="unknown">
+        <AttachTerminal runId="run_1" createdBy="alice@example.com" />
+      </OperatorProvider>,
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    expect(attachTicket).toHaveBeenCalledWith("run_1");
+    expect(FakeWebSocket.instances[0].url).toContain("ticket=tic_ok");
+  });
+
+  it("a RESOLVED admin keeps the cookie lane — no ticket, exactly today's behaviour", () => {
+    const attachTicket = vi.mocked(runs.attachTicket);
+    attachTicket.mockReset();
+    render(
+      <OperatorProvider operator={true} operatorResolved={true} principal="admin@example.com">
+        <AttachTerminal runId="run_1" createdBy="alice@example.com" />
+      </OperatorProvider>,
+    );
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(FakeWebSocket.instances[0].url).not.toContain("ticket=");
+    expect(attachTicket).not.toHaveBeenCalled();
+  });
+
   // A non-owning member (createdBy set, but not to this principal) is still
   // refused — createdBy alone must not blanket-bypass the gate.
   it("member who does NOT own this run: still refused, no ticket minted", async () => {
@@ -527,5 +572,56 @@ describe("AttachTerminal — take-over reconnects to claim the writer slot", () 
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
     // ...and does NOT show the 409 text as an error the operator cannot act on.
     expect(screen.queryByText(/nothing to take over/)).toBeNull();
+  });
+});
+
+// R4-F143: every state in this component came off the socket's open/close/error
+// events, and a stalled 101 upgrade fires none of them. The deploy README warns
+// about exactly that proxy ("must not buffer or strip the 101 upgrade"), and
+// measured against one, the panel read "Connecting…" with a spinner and no
+// message for 25s and would have read it forever. A connect deadline makes the
+// silence a failed attempt, so the panel reaches the same bounded, honest
+// closed state a refused socket already reached.
+describe("AttachTerminal — a handshake that never completes is a failure, not a spinner", () => {
+  beforeEach(() => {
+    stubTerminalEnv();
+    writeln.mockClear();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("waits, then spends the reconnect budget and says the panel is closed", async () => {
+    render(<AttachTerminal runId="run_1" />);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    // Still inside the deadline: nothing has been given up on, and the socket
+    // is deliberately left alone (a slow-but-live upgrade must not be killed).
+    await act(() => vi.advanceTimersByTimeAsync(14_000));
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(screen.getByText("Connecting…")).toBeInTheDocument();
+
+    // Past it: the attempt is abandoned and the existing backoff takes over —
+    // no second failure vocabulary, the same bounded 1 + MAX_RECONNECT_ATTEMPTS.
+    await act(() => vi.advanceTimersByTimeAsync(2_000));
+    expect(FakeWebSocket.instances.length).toBeGreaterThan(1);
+
+    // ...and it ENDS. Every later socket stalls the same way; the budget runs
+    // out and the panel stops claiming it is connecting.
+    await act(() => vi.advanceTimersByTimeAsync(120_000));
+    expect(FakeWebSocket.instances.length).toBeLessThanOrEqual(5);
+    expect(screen.queryByText("Connecting…")).toBeNull();
+    expect(screen.getByText("[closed] run_1")).toBeInTheDocument();
+  });
+
+  it("leaves a handshake that DOES complete alone — no deadline fires on a live socket", async () => {
+    render(<AttachTerminal runId="run_1" />);
+    act(() => FakeWebSocket.instances[0].open());
+
+    await act(() => vi.advanceTimersByTimeAsync(120_000));
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(FakeWebSocket.instances[0].readyState).toBe(FakeWebSocket.OPEN);
   });
 });

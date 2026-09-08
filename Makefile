@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down compose-config dco npm-license npm-audit ci
+.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down compose-config dco npm-license npm-audit npm-audit-dev ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -898,6 +898,20 @@ npm-license: ## Every shipped (prod) UI dependency licence must be on the shared
 npm-audit: ## Fail closed on a high/critical advisory in a SHIPPED (prod) UI dependency
 	@echo "Auditing UI production dependencies for advisories (high+)..."
 	cd ui && pnpm audit --prod --audit-level=high
+
+# --prod above is deliberately blind to dev-only advisories, and ui/package.json's
+# pnpm.overrides pins several of them FORWARD (brace-expansion, browserslist,
+# undici, postcss, mermaid, dompurify) — a pin is an exact version, not a floor,
+# so once a newer GHSA lands below a pinned version the override is itself what
+# holds the tree on the vulnerable release, and --prod never sees it (F065: two
+# overrides rotted below the patched floor, six high advisories, npm-audit green
+# throughout). This target is intentionally NOT wired into `ci` — dev-dep noise
+# still never gates a merge — but .github/workflows/ci.yml's `ui` job runs it
+# directly, on every push/PR, as a continue-on-error watcher step (R4-E2E-B3):
+# non-blocking, but the drift now surfaces in the log instead of rotting silently.
+npm-audit-dev: ## Non-blocking: full (dev+prod) advisory scan, to catch a pinned-forward override rotting stale
+	@echo "Auditing ALL UI dependencies (including dev) for advisories (high+)..."
+	cd ui && pnpm audit --audit-level=high
 
 # ── daemon-free merge gate ───────────────────────────────────────────────────
 # green `make ci` != CI is green. This runs the merge-gating checks

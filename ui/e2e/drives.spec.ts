@@ -1041,3 +1041,91 @@ test.describe("drives — the admin's authoring walk (needs a runner that can mo
     await expect(drivesTable(page).getByRole("cell", { name: RENAMED, exact: true })).toHaveCount(0);
   });
 });
+
+// R4/F092 — the allocations table is ONE PAGE of a HEADCOUNT-sized list.
+//
+// handleGetUserDrives bounds the grants read at maxListLimit and ships
+// `grant_total` beside the page so a client can tell "this is all of them" from
+// "this is the first page" (internal/api/user_drives.go:99-104). The console
+// typed the key, dropped it in getDrives' projection, and rendered the window as
+// the whole set — and the Who search on this screen filters CLIENT-SIDE over
+// that window, so past the cap "no matches" can be a lie about a person who
+// does hold a drive.
+//
+// DRIVEN THROUGH THE WIRE, and deliberately: reaching the cap for real needs
+// 1,001 allocations, which is a headcount no fixture database here has. What is
+// under test is what the console DOES with the server's own disclosure, so each
+// test takes the daemon's real GET /drives answer — runner_target,
+// host_roots_configured and all — and replaces only the three keys the
+// disclosure is made of. No registry state is created, so these tests are
+// order-independent and leave nothing behind.
+//
+// DEFERRED (Docker down for the R4 fix wave — never run, never skipped):
+//   DOCKER_HOST=unix:///var/run/docker.sock WARDYN_E2E_ADDR=:8288 \
+//   WARDYN_E2E_UI_ADDR=:8289 WARDYN_E2E_PG_CONTAINER=wardyn-profiles-pg \
+//   WARDYN_E2E_PG_HOSTPORT=localhost:55434 ./scripts/run-ui-e2e.sh e2e/drives.spec.ts
+test.describe("allocations: a bounded page says so (R4/F092)", () => {
+  const TRUNCATED = /Showing the first 1000 \(truncated\)/;
+
+  const DRIVE = {
+    id: "f092-drive",
+    name: "F092 homes",
+    backend: "docker_volume",
+    home_template: "sub",
+    reclaim: "retain",
+    grant_count: 1,
+    created_at: "2026-09-01T00:00:00Z",
+    updated_at: "2026-09-01T00:00:00Z",
+  };
+  const GRANT = {
+    id: "f092-grant",
+    subject_type: "user",
+    subject: "alice@corp.example",
+    drive_id: DRIVE.id,
+    priority: 0,
+    enabled: true,
+    created_at: "2026-09-01T00:00:00Z",
+  };
+
+  /** Serve the daemon's own GET /drives with exactly the page + total this test
+   *  is about. `total === null` is a pre-0.7 daemon: the key is absent. */
+  async function servePage(page: Page, total: number | null): Promise<void> {
+    await page.route("**/api/v1/drives", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const res = await route.fetch();
+      const body = (await res.json()) as Record<string, unknown>;
+      body.drives = [DRIVE];
+      body.grants = [GRANT];
+      if (total === null) delete body.grant_total;
+      else body.grant_total = total;
+      await route.fulfill({ response: res, body: JSON.stringify(body) });
+    });
+  }
+
+  test("more allocations exist than this page carries: the table says it is a window", async ({
+    page,
+  }) => {
+    await servePage(page, 4000);
+    await gotoDrives(page);
+    await expect(page.getByText(DRIVES.ALLOC_TITLE)).toBeVisible();
+    await expect(page.getByText(TRUNCATED)).toBeVisible();
+  });
+
+  test("a total that IS the page is not a truncation claim", async ({ page }) => {
+    // grant_total === grants.length: one page, all of them. A note here would be
+    // the same defect pointing the other way.
+    await servePage(page, 1);
+    await gotoDrives(page);
+    await expect(page.getByText(DRIVES.ALLOC_TITLE)).toBeVisible();
+    await expect(page.getByText(TRUNCATED)).toHaveCount(0);
+  });
+
+  test("a pre-0.7 daemon that never sends grant_total claims nothing", async ({ page }) => {
+    // Absent is UNKNOWN — the console must not invent a disclosure the server
+    // never made, nor withhold the table over a key it did not get.
+    await servePage(page, null);
+    await gotoDrives(page);
+    await expect(page.getByText(DRIVES.ALLOC_TITLE)).toBeVisible();
+    await expect(page.getByText(TRUNCATED)).toHaveCount(0);
+  });
+});

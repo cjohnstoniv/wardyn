@@ -28,6 +28,12 @@ import {
 } from "../../lib/api/core";
 import { health } from "../../lib/api/health";
 import { SIGNIN } from "../../lib/people-access-copy";
+import { usePoll } from "../../lib/use-poll";
+
+// How often the gate re-asks /healthz for `sso` (R4/F027). Slower than the
+// shell's 5s health poll: nothing here is live data, this only has to notice a
+// daemon that came up after the gate rendered.
+const SSO_POLL_MS = 10000;
 
 // W31-S1-5: the OIDC callback (internal/auth/oidc/oidc.go's CallbackHandler)
 // redirects a user-actionable login denial to "/?auth_error=<code>" instead
@@ -87,11 +93,26 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
   // Defaults false: without the flow mounted the link would 404, and an older
   // server simply omits the field.
   const [sso, setSso] = React.useState(false);
-  React.useEffect(() => {
+  // R4/F027: health() resolves `{}` on a network error or ANY non-2xx, so a
+  // single mount fetch against a daemon that is merely starting (or briefly
+  // 5xx-ing) read as `sso: false` and left the SSO button unrendered — on an
+  // SSO-only deployment that is a bare token field and no way in, forever,
+  // because nothing ever asked again. So: only believe an answer that actually
+  // came back, leave the last known value alone otherwise, and keep asking.
+  const refreshSso = React.useCallback(() => {
     // Still fetched for `sso` alone: it decides whether the SSO button exists.
     // trust_domain / identity_provider are deliberately NOT read here any more.
-    health.health().then((h) => setSso(!!h.sso));
+    void health.health().then((h) => {
+      // health() resolves the EMPTY object for "no answer" (health.ts:237-243:
+      // `if (!res.ok) return {}` / `catch { return {} }`), and a real /healthz
+      // body is never empty — it always carries at least status and version. So
+      // an empty object is the outage, and the last known answer survives it.
+      if (Object.keys(h).length === 0) return;
+      setSso(!!h.sso);
+    });
   }, []);
+  React.useEffect(refreshSso, [refreshSso]);
+  usePoll(refreshSso, SSO_POLL_MS, false);
 
   // W31-S1-5: render the OIDC callback's ?auth_error=<code> (see
   // authErrorMessage above) inline, reusing the same alert box submitToken's
