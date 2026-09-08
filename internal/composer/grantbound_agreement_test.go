@@ -157,3 +157,151 @@ func TestCeilingGrantsCoveringIsTheIdentityAxis(t *testing.T) {
 		t.Errorf("covering(undecodable scope) returned %d grants, want none (fail closed)", len(got))
 	}
 }
+
+// ─── THE TWO DOMINATION AXES A MUTATION COULD DELETE UNSEEN ──────────────────
+//
+// grantDominatedBy asks three questions, and clampGrants' whole shape turns on
+// the answer: when ONE covering ceiling grant dominates the proposal the clamp
+// bounds against THAT grant alone, and otherwise it MEETS every candidate. So a
+// domination axis that stops being asked does not fail loudly — it moves a
+// proposal from the meet to a single wider entry, and the run gets MORE than the
+// operator's ceiling wrote.
+//
+// Two of the three axes were pinned by nothing. Deleting grantDominatedBy's
+// approval guard, or relaxing normalizeClampTTL's `<= 0` to `== 0`, left the
+// whole internal/api + internal/composer suite at exit 0 while each measurably
+// widened a github_token proposal's repo set. The cases below are the shapes
+// that separate the meet from the shortcut; the sibling axes (the scope axis,
+// and the shortcut itself) already had theirs.
+//
+// WHY GITHUB_TOKEN CARRIES BOTH. It names no stored secret, so every same-kind
+// ceiling entry covers the proposal and the meet has something to intersect —
+// which makes "did the clamp meet, or take the shortcut?" observable in the repo
+// list. On a paired kind the two answers coincide and the mutation hides.
+
+// TestClampApprovalAxisKeepsTheProposalOnTheMeet pins grantDominatedBy's FIRST
+// question: a ceiling grant that REQUIRES approval does not dominate a proposal
+// that does not.
+//
+// The ceiling carves two entries: a wide one (both repos, 3600s) that requires
+// approval, and a narrow one (one repo, 300s) that does not. Neither dominates a
+// proposal for both repos at 600s without approval — the wide one because of the
+// approval axis, the narrow one because of the TTL — so the clamp MEETS them:
+// repos intersect to the narrow set, the TTL cap is the minimum, and approval is
+// forced on because one of them requires it.
+//
+// Drop the approval guard and the wide entry dominates, the clamp bounds against
+// it ALONE, and the run keeps both repos at 600s. That is the operator's
+// approval-gated breadth handed over on a proposal that declined the gate.
+func TestClampApprovalAxisKeepsTheProposalOnTheMeet(t *testing.T) {
+	wideNeedsApproval := githubGrant(t, []string{"org/alpha", "org/beta"}, map[string]string{"contents": "read"}, true, 3600)
+	narrowNoApproval := githubGrant(t, []string{"org/alpha"}, map[string]string{"contents": "read"}, false, 300)
+	proposal := githubGrant(t, []string{"org/alpha", "org/beta"}, map[string]string{"contents": "read"}, false, 600)
+
+	for _, c := range []struct {
+		name    string
+		ceiling []types.GrantSpec
+	}{
+		{"[wide,narrow]", []types.GrantSpec{wideNeedsApproval, narrowNoApproval}},
+		{"[narrow,wide]", []types.GrantSpec{narrowNoApproval, wideNeedsApproval}},
+	} {
+		got, warns := clampOne(t, proposal, c.ceiling...)
+		repos := githubRepos(t, got)
+		if len(repos) != 1 || repos[0] != "org/alpha" {
+			t.Errorf("%s: clamped repos = %v, want [org/alpha]. The only ceiling entry carrying org/beta requires "+
+				"approval, and this proposal declined it, so that entry cannot dominate — the clamp must meet both "+
+				"entries. Handing back org/beta is the run receiving breadth the operator gated behind an approval "+
+				"(warns=%q)", c.name, repos, warns)
+		}
+		if got.TTLSeconds != 300 {
+			t.Errorf("%s: clamped ttl_seconds = %d, want 300 — the meet takes the strictest cap, and 600 is the "+
+				"approval-requiring entry's allowance", c.name, got.TTLSeconds)
+		}
+		if !got.RequiresApproval {
+			t.Errorf("%s: clamped requires_approval = false; one bounding entry requires it, and the operator can "+
+				"only ever tighten", c.name)
+		}
+	}
+}
+
+// TestClampNegativeTTLIsNotDominatedByAShorterCeiling pins normalizeClampTTL's
+// SECOND reading — the one that lives inside grantDominatedBy rather than in the
+// output cap.
+//
+// A negative ttl_seconds means the broker maximum, exactly as
+// internal/api's normalizeGrantTTLSeconds reads it. So a proposal at -1 asks for
+// 3600 and is dominated by NEITHER a 300s nor a 600s ceiling entry, and the
+// clamp meets them: repos intersect down to the narrow set.
+//
+// Relax the fold to `== 0` and -1 stays -1, which is below every ceiling TTL, so
+// the wide entry dominates and the clamp bounds against it alone — the proposal
+// keeps both repos. TestClampNegativeTTLResolvesToTheCap cannot see this: it
+// asserts the OUTPUT TTL, which the `g.TTLSeconds <= 0` cap fixes at 300 either
+// way. The widening is in the repo list, and only a ceiling with two entries has
+// one.
+func TestClampNegativeTTLIsNotDominatedByAShorterCeiling(t *testing.T) {
+	wideShortTTL := githubGrant(t, []string{"org/alpha", "org/beta"}, map[string]string{"contents": "read"}, false, 300)
+	narrowLongTTL := githubGrant(t, []string{"org/alpha"}, map[string]string{"contents": "read"}, false, 600)
+	proposal := githubGrant(t, []string{"org/alpha", "org/beta"}, map[string]string{"contents": "read"}, false, -1)
+
+	for _, c := range []struct {
+		name    string
+		ceiling []types.GrantSpec
+	}{
+		{"[wide,narrow]", []types.GrantSpec{wideShortTTL, narrowLongTTL}},
+		{"[narrow,wide]", []types.GrantSpec{narrowLongTTL, wideShortTTL}},
+	} {
+		got, warns := clampOne(t, proposal, c.ceiling...)
+		repos := githubRepos(t, got)
+		if len(repos) != 1 || repos[0] != "org/alpha" {
+			t.Errorf("%s: clamped repos = %v, want [org/alpha]. ttl_seconds=-1 resolves to the broker maximum, which "+
+				"exceeds BOTH ceiling entries, so neither dominates and the clamp must meet them. Reading -1 as a "+
+				"short TTL makes the widest entry dominate and hands the run its repo set (warns=%q)",
+				c.name, repos, warns)
+		}
+		if got.TTLSeconds != 300 {
+			t.Errorf("%s: clamped ttl_seconds = %d, want 300 (the strictest cap)", c.name, got.TTLSeconds)
+		}
+	}
+}
+
+// TestNormalizeClampTTLReadsEveryNonPositiveAsTheMaximum states the rule the two
+// cases above depend on, directly, so a change to it is a change to a documented
+// contract and not a silent re-partitioning of which grants dominate which.
+// internal/api's normalizeGrantTTLSeconds gives the identical reading; that is
+// what makes the clamp and the write-time comparator comparable at all.
+func TestNormalizeClampTTLReadsEveryNonPositiveAsTheMaximum(t *testing.T) {
+	for _, ttl := range []int{0, -1, -300, maxGrantTTLSeconds + 1} {
+		if got := normalizeClampTTL(ttl); got != maxGrantTTLSeconds {
+			t.Errorf("normalizeClampTTL(%d) = %d, want %d — a value the comparator resolves to the broker maximum "+
+				"must resolve to it here too, or a proposal one side refuses is dominated on the other", ttl, got, maxGrantTTLSeconds)
+		}
+	}
+	for _, ttl := range []int{1, 300, maxGrantTTLSeconds} {
+		if got := normalizeClampTTL(ttl); got != ttl {
+			t.Errorf("normalizeClampTTL(%d) = %d, want it unchanged", ttl, got)
+		}
+	}
+}
+
+// TestClampApprovalAxisThroughTheExportedClamp runs the approval shape through
+// Clamp itself, the entry point boundMemberSpec calls, so the axis is pinned at
+// the boundary a caller actually reaches and not only at the helper.
+func TestClampApprovalAxisThroughTheExportedClamp(t *testing.T) {
+	ceiling := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{
+		githubGrant(t, []string{"org/alpha", "org/beta"}, map[string]string{"contents": "read"}, true, 3600),
+		githubGrant(t, []string{"org/alpha"}, map[string]string{"contents": "read"}, false, 300),
+	}}
+	proposed := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{
+		githubGrant(t, []string{"org/alpha", "org/beta"}, map[string]string{"contents": "read"}, false, 600),
+	}}
+
+	out, warns := Clamp(proposed, ceiling)
+	if len(out.EligibleGrants) != 1 {
+		t.Fatalf("Clamp returned %d grants, want 1 (warns=%q)", len(out.EligibleGrants), warns)
+	}
+	if repos := githubRepos(t, out.EligibleGrants[0]); len(repos) != 1 || repos[0] != "org/alpha" {
+		t.Errorf("Clamp handed the run repos %v, want [org/alpha] — org/beta is only in the entry that requires "+
+			"approval, which this proposal declined (warns=%q)", repos, warns)
+	}
+}

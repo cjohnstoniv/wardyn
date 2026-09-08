@@ -68,6 +68,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -495,7 +496,15 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, req c
 // directory, the other is an operator's mount) and telling a member the first
 // when the second is true sends them to the wrong person.
 //
-// ponytail: one os.Stat, on a path already derived, on the create path only.
+// TWO CALLERS, NOT ONE. The note here used to read "on the create path only",
+// and that stopped being true when F269 gave GET /me the same DECISION so the
+// console would stop offering a mount the launch refuses: resolveMeUserDrive
+// (user_drives.go) reaches this through driveBindFailureHere as well. A display
+// read on a console timer therefore runs the same uncancellable syscalls, which
+// is why the strand short-circuit in driveShareProbe below is load-bearing
+// rather than an optimisation — see R1 F295.
+//
+// ponytail: one os.Stat, on a path already derived, once per share generation.
 
 // driveShareBindFailure is the share half of driveBindFailureHere's DECISION, with no writer — see
 // driveBindFailure for why the two audiences are split.
@@ -503,7 +512,8 @@ func (s *Server) driveShareBindFailure(ctx context.Context, resolved types.Resol
 	if resolved.Drive.Backend != types.DriveBackendHostPath {
 		return nil
 	}
-	rootErr, ok := driveShareProbe(ctx, func() error { return s.userDriveHostRootCheck()(resolved.Drive.HostRoot) })
+	rootErr, ok := s.driveShareProbe(ctx, "root:"+resolved.Drive.HostRoot,
+		func() error { return s.userDriveHostRootCheck()(resolved.Drive.HostRoot) })
 	if !ok {
 		return &driveBindFailure{status: http.StatusUnprocessableEntity, reason: driveRefusalShareUnreachable,
 			member: fmt.Sprintf("this deployment cannot mount your drive (drive %q did not answer in time — ask an admin)",
@@ -532,7 +542,7 @@ func (s *Server) driveShareBindFailure(ctx context.Context, resolved types.Resol
 	// REFUSED_HOME_INVALID's `. _ -` are wire text here and mono on screen. Three
 	// refusals used to type them and shipped literal backticks a member read as
 	// punctuation.
-	statErr, ok := driveShareProbe(ctx, func() error {
+	statErr, ok := s.driveShareProbe(ctx, "home:"+resolved.ObjectName, func() error {
 		st, err := os.Stat(resolved.ObjectName)
 		if err != nil {
 			return err
@@ -568,6 +578,19 @@ func (s *Server) driveShareBindFailure(ctx context.Context, resolved types.Resol
 // knob to turn, and the refusal names the drive so they know which.
 const driveShareProbeTimeout = 5 * time.Second
 
+// driveShareProbes holds the subjects — a host root, a home object — whose probe
+// thread has been started and has not come back, and when it started.
+//
+// PROCESS-SCOPED ON PURPOSE, not a Server field. What it remembers is a
+// STRANDED KERNEL THREAD, and threads belong to the process rather than to any
+// one Server: two Servers over one hung mount strand into the same pool, and a
+// per-Server map would let the second start the probes the first already
+// learned not to. Keys are absolute paths, so distinct shares never collide.
+// Entries are removed by the probe goroutine itself when the syscall finally
+// returns — i.e. when the mount comes back — so nothing here outlives the
+// condition it describes and there is no TTL to guess.
+var driveShareProbes sync.Map // string -> time.Time (probe start)
+
 // driveShareProbe runs one uncancellable filesystem check with a deadline,
 // returning its error and whether it ANSWERED at all. ok=false means the probe
 // is still running and we stopped waiting.
@@ -578,15 +601,59 @@ const driveShareProbeTimeout = 5 * time.Second
 //
 // The caller's ctx is honoured too, so a member who gave up on the request does
 // not hold the connection for the rest of the timeout.
-func driveShareProbe(ctx context.Context, check func() error) (err error, ok bool) {
+//
+// IT DOES NOT START A PROBE BEHIND ONE THAT IS ALREADY STRANDED (R1 F295), and
+// that is what makes this bound hold for a caller on a TIMER. The syscall is
+// uncancellable, so every probe we give up on leaves a thread in the kernel
+// until the mount answers; GET /me runs this same DECISION on every console
+// poll for a host_path allocation, so a hard-mounted share that stops answering
+// used to cost TWO stranded threads and up to ten seconds of first paint PER
+// POLL, accumulating for as long as the console stayed open. Asking again
+// cannot produce a different answer while the first ask is still outstanding —
+// the share is, demonstrably, not answering — so a subject already known to be
+// stranded is refused from memory: no new thread, no wait, and the same
+// "did not answer in time" the launch door would give.
+//
+// STRANDED MEANS "OVERDUE", not merely "running": an entry younger than the
+// timeout is a probe a concurrent request legitimately has in flight, and
+// short-circuiting on that would turn ordinary concurrency into a refusal.
+// LoadOrStore keeps the FIRST start time, so a queue of readers against one hung
+// share measures the age of the oldest outstanding syscall rather than resetting
+// the clock on itself.
+func (s *Server) driveShareProbe(ctx context.Context, key string, check func() error) (err error, ok bool) {
+	prior, loaded := driveShareProbes.LoadOrStore(key, time.Now())
+	if loaded {
+		if t, isTime := prior.(time.Time); isTime && time.Since(t) >= driveShareProbeTimeout {
+			return nil, false
+		}
+	}
 	done := make(chan error, 1)
-	go func() { done <- check() }()
+	go func() {
+		// ONLY THE OWNER CLEARS THE MARK — the caller whose LoadOrStore actually
+		// stored it. A concurrent reader that found a probe already in flight
+		// and inside its bound runs its own check (concurrency stays allowed)
+		// but must not touch the entry: deleting on its way out would retire the
+		// FIRST probe's mark while that probe is still outstanding, and if that
+		// one then strands, the map has forgotten it and the next reader starts
+		// a syscall behind it — the exact stacking this exists to stop.
+		if !loaded {
+			defer driveShareProbes.Delete(key)
+		}
+		done <- check()
+	}()
 	timer := time.NewTimer(driveShareProbeTimeout)
 	defer timer.Stop()
 	select {
 	case err := <-done:
 		return err, true
 	case <-timer.C:
+		// SAID ONCE PER STRAND, which is what the short-circuit above buys: the
+		// accumulation used to be invisible (no metric, no log on the /me path),
+		// and logging per POLL would have been a flood rather than a signal.
+		// Now one overdue probe produces one line, and the reads behind it
+		// produce none.
+		slog.WarnContext(ctx, "wardynd: a user-drive share probe did not answer; its thread is stranded until the mount does, and reads behind it are refused from memory",
+			slog.String("subject", key), slog.Duration("timeout", driveShareProbeTimeout))
 		return nil, false
 	case <-ctx.Done():
 		return nil, false

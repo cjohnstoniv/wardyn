@@ -37,7 +37,7 @@ func TestStateStoreTableCoversUserDrives(t *testing.T) {
 	// from the inputs — so the doc's placeholder shapes ARE its output on
 	// placeholder inputs.
 	// A NAMED drive, because a nameless one is not a drive: DriveObjectName is
-	// prefix + driveSlug(Name) + "-" + home, so feeding the zero UserDrive
+	// prefix + types.DriveSlug(Name) + "-" + home, so feeding the zero UserDrive
 	// derived "wardyn-drive--<home>" — a double hyphen no valid row can produce
 	// (ValidateUserDrive requires a name) and which therefore appears in no
 	// document. Derive with a real slug and swap it for the doc's placeholder:

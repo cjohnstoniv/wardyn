@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -24,15 +25,22 @@ const (
 // r3IntegStore serves one SiteConfig carrying a stored integration with a
 // credential ref, an internal egress host, operator config and an internal docs
 // link — the exact row shape GET /site-config answers a member 403 for.
+//
+// The token is PROXY_HEADER-DELIVERED on purpose: that is the shape whose
+// credential cell runs through gatedCap/secretGate, so the row's capability
+// matrix carries a reason DERIVED from the very secret_name the projection
+// drops (`secret %q not stored`). A row with no delivery lane never reaches
+// gatedCap, which is why the first cut of this pin could not see the leak.
 type r3IntegStore struct{ r3PlainStore }
 
 func (r3IntegStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return types.SiteConfig{Integrations: []types.Integration{{
 		ID: "corp-artifactory", Name: "Corp Artifactory", Kind: "artifactory",
-		Secrets: []types.IntegrationSecret{{Role: "token", SecretName: r3IntegSecretRef}},
-		Egress:  []string{r3IntegEgress},
-		Config:  map[string]any{"base_url": r3IntegConfig},
-		Docs:    r3IntegDocs,
+		Secrets: []types.IntegrationSecret{{Role: "token", SecretName: r3IntegSecretRef,
+			Delivery: &types.IntegrationDelivery{Mode: types.DeliveryProxyHeader, Header: "Authorization", Format: "Bearer %s"}}},
+		Egress: []string{r3IntegEgress},
+		Config: map[string]any{"base_url": r3IntegConfig},
+		Docs:   r3IntegDocs,
 	}}}, nil
 }
 func (r3IntegStore) ListRoleMappings(context.Context) ([]types.RoleMapping, error) { return nil, nil }
@@ -103,6 +111,82 @@ func TestIntegrationProjectionWithholdsCredentialRefs(t *testing.T) {
 			}
 		})
 	}
+
+	// F250 RESIDUE. The projection KEEPS Capabilities on purpose — a member's
+	// launch card needs the live matrix — but a capability REASON is DERIVED
+	// from the four fields the projection drops: gatedCap's needs_setup reason
+	// interpolates the credential ref verbatim (`secret %q not stored`,
+	// integrations.go), so the ref crossed the tier a second time through the
+	// derived half of the same row, in the same response whose secrets[] was
+	// emptied to withhold it. The rule this pins: a member-visible DERIVED
+	// string may not restate a withheld datum — and the cell's ANSWER (state)
+	// survives, because withholding the ref is not withholding the verdict.
+	t.Run("a member's capability reasons restate nothing withheld", func(t *testing.T) {
+		srv := newSrv(t)
+		w := doSSO(t, srv, http.MethodGet, "/api/v1/integrations",
+			ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleMember), "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("member GET /integrations = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		var got struct {
+			Integrations []SetupIntegration `json:"integrations"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v; body=%s", err, w.Body.String())
+		}
+		if len(got.Integrations) == 0 {
+			t.Fatalf("no integration rows; body=%s", w.Body.String())
+		}
+		sawGated := false
+		for _, row := range got.Integrations {
+			for _, c := range row.Capabilities {
+				for _, bad := range withheld {
+					if strings.Contains(c.Reason, bad) {
+						t.Errorf("capability %q reason restated withheld %q to a member: %q\n"+
+							"secrets[]/egress[]/config are dropped for this reader; a reason derived from them "+
+							"republishes the same datum through the same response.", c.ID, bad, c.Reason)
+					}
+				}
+				if c.ID == "credential" {
+					sawGated = true
+					if c.State != CapNeedsSetup {
+						t.Errorf("credential state = %q, want %q — the projection withholds the REF, not the answer.", c.State, CapNeedsSetup)
+					}
+					if strings.TrimSpace(c.Reason) == "" {
+						t.Errorf("credential reason blanked entirely — a member still has to be told the cell is unusable.")
+					}
+				}
+			}
+		}
+		if !sawGated {
+			t.Fatalf("fixture produced no gatedCap-derived credential cell, so this pin cannot see the leak it exists for; body=%s", w.Body.String())
+		}
+	})
+
+	// An OPERATOR still gets the diagnostic reason: this is a projection for
+	// non-operators, not a deletion of the datum from the surface.
+	t.Run("an operator's capability reason still names the secret", func(t *testing.T) {
+		srv := newSrv(t)
+		w := doSSO(t, srv, http.MethodGet, "/api/v1/integrations",
+			ssoSession(t, "sub-super", "super@corp.example", oidc.RoleAdmin), "")
+		var got struct {
+			Integrations []SetupIntegration `json:"integrations"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v; body=%s", err, w.Body.String())
+		}
+		found := false
+		for _, row := range got.Integrations {
+			for _, c := range row.Capabilities {
+				if strings.Contains(c.Reason, r3IntegSecretRef) {
+					found = true
+				}
+			}
+		}
+		if !found {
+			t.Errorf("no operator-visible capability reason named %q; body=%s", r3IntegSecretRef, w.Body.String())
+		}
+	})
 
 	// The projection must not edit the caller's rows in place: /setup/status
 	// computes the integration list ONCE per request and hands the same value to

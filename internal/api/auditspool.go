@@ -13,7 +13,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -159,7 +158,7 @@ func NewAuditSpool(path string) (*AuditSpool, error) {
 	// restart. The file's own doc claimed the bound was "a crash between
 	// rec.Record succeeding and the on-disk trim", i.e. the in-flight batch;
 	// this makes that sentence true.
-	a.consumed = seedSpoolCursor(a.consumedPath(), spoolFileSize(path))
+	a.consumed = seedSpoolCursor(a.consumedPath(), path, spoolFileSize(path))
 	a.lines.Store(countSpoolLinesFrom(path, a.consumed))
 	a.quarantined.Store(countSpoolLines(a.quarantinePath()))
 	// Said once, at boot, where an operator reads it — not left to be inferred
@@ -206,91 +205,6 @@ func spoolFileSize(path string) int64 {
 		return 0
 	}
 	return fi.Size()
-}
-
-// consumedPath is the CURSOR sidecar: the byte offset of the first un-replayed
-// line. Beside the spool and the quarantine sidecar, named the same way, so an
-// operator looking at the spool directory sees the three files as one set.
-func (a *AuditSpool) consumedPath() string { return a.path + ".consumed" }
-
-// saveSpoolCursor fsyncs the cursor beside the spool. Best effort BY DESIGN: a
-// failure here costs a duplicate replay after a restart, which is the
-// at-least-once residual this file already documents and accepts, while failing
-// the drain over it would stop replaying events that HAVE landed. Logged rather
-// than returned so the cost is visible without being fatal.
-func (a *AuditSpool) saveSpoolCursor() {
-	tmp := a.consumedPath() + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err == nil {
-		_, err = f.WriteString(strconv.FormatInt(a.consumed, 10))
-		if err == nil {
-			err = f.Sync()
-		}
-		if cerr := f.Close(); err == nil {
-			err = cerr
-		}
-		if err == nil {
-			err = os.Rename(tmp, a.consumedPath())
-		}
-	}
-	if err != nil {
-		_ = os.Remove(tmp)
-		slog.Warn("wardynd: audit spool cursor not persisted; a restart may replay already-recorded events",
-			slog.String("path", a.consumedPath()), slog.Any("err", err))
-	}
-}
-
-// seedSpoolCursor reads the cursor back, bounded by the spool's ACTUAL size.
-//
-// A cursor past the end of the file describes a file that no longer exists — the
-// spool was compacted, truncated or replaced while this sidecar was stale — and
-// honouring it would SKIP un-replayed events, which is the one direction this
-// file never errs in. So an out-of-range or unreadable cursor reads as 0: replay
-// from the start, at-least-once, exactly the pre-cursor behaviour.
-func seedSpoolCursor(path string, size int64) int64 {
-	buf, err := os.ReadFile(path)
-	if err != nil {
-		return 0
-	}
-	n, err := strconv.ParseInt(strings.TrimSpace(string(buf)), 10, 64)
-	if err != nil || n < 0 || n > size {
-		return 0
-	}
-	return n
-}
-
-// countSpoolLinesFrom counts the UN-REPLAYED lines: those after the cursor. The
-// gauge means "events still to replay", so seeding it from the whole file would
-// report a backlog that is already in the store.
-func countSpoolLinesFrom(path string, from int64) int64 {
-	buf, err := os.ReadFile(path)
-	if err != nil {
-		return 0
-	}
-	if from > 0 && from <= int64(len(buf)) {
-		buf = buf[from:]
-	}
-	return countSpoolLinesIn(buf)
-}
-
-// countSpoolLines counts the JSONL lines in path, 0 for a missing or unreadable
-// one. Same line semantics as Drain: a trailing newline is a terminator, and a
-// torn tail with no newline is still a line.
-func countSpoolLines(path string) int64 {
-	buf, err := os.ReadFile(path)
-	if err != nil {
-		return 0
-	}
-	return countSpoolLinesIn(buf)
-}
-
-// countSpoolLinesIn is countSpoolLines over bytes already in hand.
-func countSpoolLinesIn(buf []byte) int64 {
-	trimmed := bytes.TrimRight(buf, "\n")
-	if len(bytes.TrimSpace(trimmed)) == 0 {
-		return 0
-	}
-	return int64(bytes.Count(trimmed, []byte{'\n'}) + 1)
 }
 
 // Append writes one event as a single JSON line and fsyncs it, so a crash right
@@ -743,6 +657,21 @@ func (a *AuditSpool) compact(head [][]byte, tailStart, size int64) error {
 		tf.Close()
 		return err
 	}
+	// THE CURSOR IS RETIRED BEFORE THE RENAME, not after it. The window between
+	// them is a real crash window, and what it used to leave behind is the OLD
+	// offset standing over the NEW, compacted file — which is SMALLER, so an
+	// offset that was in range for the file it was measured against is very
+	// often in range for the replacement too. That is R1 F280's own shape, and a
+	// size bound cannot see it; seedSpoolCursor's fingerprint now can, but the
+	// ordering removes the window rather than relying on the check that catches
+	// it. Zero over the OLD file is safe in the only direction that matters: it
+	// replays lines that already landed (at-least-once, the residual C1
+	// accepts), where a stale offset over the new file SKIPS lines that did not.
+	//
+	// a.consumed is NOT moved here: this rename can still fail, and a compaction
+	// that failed must leave the in-memory cursor describing the file that is
+	// still on disk.
+	a.writeSpoolCursor(0)
 	if err := os.Rename(tmp, a.path); err != nil {
 		tf.Close()
 		return err
@@ -750,10 +679,6 @@ func (a *AuditSpool) compact(head [][]byte, tailStart, size int64) error {
 	_ = a.f.Close()
 	a.f = tf
 	a.consumed = 0
-	// The file the cursor described is gone; the new one starts un-replayed at
-	// byte 0. seedSpoolCursor's out-of-range guard would already refuse a stale
-	// offset here, but writing it is one fsync and removes the reliance.
-	a.saveSpoolCursor()
 	return nil
 }
 

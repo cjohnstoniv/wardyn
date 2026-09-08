@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/approval"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -118,21 +119,63 @@ func TestR3BSecondHumanBypassIsScopedToDecisionsTheGateGoverns(t *testing.T) {
 		}
 	})
 
-	t.Run("a decision that FAILS writes no bypass row", func(t *testing.T) {
-		t.Setenv(envEgressSecondHuman, "1")
-		h, srv, runID := r3bSecondHumanFixture(t)
-		apID := seedEgressApproval(h, runID, "registry.npmjs.org")
-		h.approvals.decideErr = errors.New("decide approval: connection reset by peer")
+	// F318. This subtest used to require ZERO rows here, and the concern behind
+	// that is kept verbatim below: nothing was decided, so no row may CLAIM a
+	// decision. But the bypass itself did happen — the gate was passed, at the
+	// gate, before Decide was ever called — and docs/ENV.md promises the
+	// operator that each admin-token bypass writes approval.second_human.bypass.
+	// An emit that fired only on success made the count of break-glass uses
+	// depend on whether the store answered, so a caller who never completes a
+	// decision left nothing behind at all. The OUTCOME is what tells the two
+	// apart, which is why the emit stays below Decide rather than moving back
+	// into the gate.
+	for _, tc := range []struct {
+		name      string
+		decideErr error
+		wantCode  int
+		wantClass string
+	}{
+		{"a store failure", errors.New("decide approval: connection reset by peer"), http.StatusInternalServerError, "error"},
+		{"an already-decided approval", approval.ErrAlreadyDecided, http.StatusConflict, "already_decided"},
+	} {
+		t.Run("a decision that FAILS ("+tc.name+") writes a failure bypass row", func(t *testing.T) {
+			t.Setenv(envEgressSecondHuman, "1")
+			h, srv, runID := r3bSecondHumanFixture(t)
+			apID := seedEgressApproval(h, runID, "registry.npmjs.org")
+			h.approvals.decideErr = tc.decideErr
 
-		w := do(t, srv, http.MethodPost, "/api/v1/approvals/"+apID.String()+"/approve", adminToken, "")
-		if w.Code != http.StatusInternalServerError {
-			t.Fatalf("failed decide: code = %d, want 500; body=%s", w.Code, w.Body.String())
-		}
-		if rows := r3bBypassRows(h.audit.events); len(rows) != 0 {
-			t.Errorf("approval.second_human.bypass rows = %d, want 0 — nothing was decided, so no four-eyes "+
-				"rule was bypassed on a decision; the row would name a break-glass that never happened", len(rows))
-		}
-	})
+			w := do(t, srv, http.MethodPost, "/api/v1/approvals/"+apID.String()+"/approve", adminToken, "")
+			if w.Code != tc.wantCode {
+				t.Fatalf("failed decide: code = %d, want %d; body=%s", w.Code, tc.wantCode, w.Body.String())
+			}
+			rows := r3bBypassRows(h.audit.events)
+			if len(rows) != 1 {
+				t.Fatalf("approval.second_human.bypass rows = %d, want 1 — the admin-token caller got past the "+
+					"four-eyes gate, and docs/ENV.md says each one writes a row; a break-glass that leaves nothing "+
+					"behind when the store errors is a hole in the count an operator audits", len(rows))
+			}
+			// THE ORIGINAL ASSERTION, kept exactly: no row may say a four-eyes
+			// rule was bypassed on a decision that WAS made, because none was.
+			if rows[0].Outcome == "success" {
+				t.Errorf("the bypass row for a FAILED decision has outcome=success — it names a break-glass on a " +
+					"decision that never happened, which is the record this emit was moved below Decide to avoid")
+			}
+			if rows[0].Outcome != "failure" {
+				t.Errorf("bypass row outcome = %q, want \"failure\"", rows[0].Outcome)
+			}
+			var data map[string]any
+			if err := json.Unmarshal(rows[0].Data, &data); err != nil {
+				t.Fatal(err)
+			}
+			if data["error"] != tc.wantClass {
+				t.Errorf("bypass row data = %v, want error %q — a reader has to be able to tell a store outage from "+
+					"a race on an already-decided approval without the raw error", data, tc.wantClass)
+			}
+			if data["reason"] != "admin_token_break_glass" {
+				t.Errorf("bypass row data = %v, want reason admin_token_break_glass (unchanged from the success row)", data)
+			}
+		})
+	}
 
 	t.Run("switch off: no bypass row at all", func(t *testing.T) {
 		h, srv, runID := r3bSecondHumanFixture(t)

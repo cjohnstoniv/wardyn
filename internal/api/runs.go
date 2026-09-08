@@ -64,13 +64,31 @@ func parseConfinementClass(s string) (types.ConfinementClass, bool) {
 // is the old behaviour, kept for the test doubles that are not PG: the answer
 // is identical either way, which is what makes an unconditional fallback safe
 // here and not on the ownership-scoped list.
-func (s *Server) warnWorkspaceCollision(ctx context.Context, runID uuid.UUID, workspacePath string) []string {
+func (s *Server) warnWorkspaceCollision(r *http.Request, runID uuid.UUID, workspacePath string) []string {
 	if workspacePath == "" {
 		return nil
 	}
-	var others []string
-	if r, ok := s.cfg.Store.(store.ActiveRunsAtPathReader); ok {
-		active, lerr := r.ActiveRunsAtWorkspacePath(ctx, workspacePath)
+	ctx := r.Context()
+	// TWO LISTS, and the split is the point. `others` is every colliding run and
+	// belongs to the AUDIT row: an operator investigating two agents that fought
+	// over a directory needs all of them, and that row is written by wardynd
+	// (ActorSystem) for operators, not returned to the caller. `visible` is what
+	// this CALLER may already see — the ownsRunOrAdmin rule handleObservedEgress
+	// applies to the same class of cross-user run telemetry — and it is the only
+	// half that reaches the response.
+	//
+	// Before this, the 201 body enumerated every active run id at the path,
+	// so any member could learn another principal's run ids (and, by repeating
+	// the create, watch them come and go) from an ADVISORY sentence.
+	var others, visible []string
+	note := func(e types.AgentRun) {
+		others = append(others, e.ID.String())
+		if s.ownsRunOrAdmin(r, e) {
+			visible = append(visible, e.ID.String())
+		}
+	}
+	if pr, ok := s.cfg.Store.(store.ActiveRunsAtPathReader); ok {
+		active, lerr := pr.ActiveRunsAtWorkspacePath(ctx, workspacePath)
 		if lerr != nil {
 			return nil
 		}
@@ -79,7 +97,7 @@ func (s *Server) warnWorkspaceCollision(ctx context.Context, runID uuid.UUID, wo
 			// and it stays here because the run being created is this handler's
 			// fact rather than a column the query could have filtered on.
 			if e.ID != runID {
-				others = append(others, e.ID.String())
+				note(e)
 			}
 		}
 	} else {
@@ -89,18 +107,28 @@ func (s *Server) warnWorkspaceCollision(ctx context.Context, runID uuid.UUID, wo
 		}
 		for _, e := range existing {
 			if e.ID != runID && e.WorkspacePath == workspacePath && !isTerminalRunState(e.State) {
-				others = append(others, e.ID.String())
+				note(e)
 			}
 		}
 	}
 	if len(others) == 0 {
 		return nil
 	}
+	// AUDITED WHENEVER IT HAPPENS, not only when it is said out loud: the
+	// operator's record of a collision must not shrink because the caller who
+	// caused it owns none of the runs it collided with.
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.collision",
 		workspacePath, "success", mustJSON(map[string]any{"other_runs": others})))
+	if len(visible) == 0 {
+		// Nothing to name that this caller may see. The advisory sentence is
+		// canon and names its ids, so it is not re-worded here to carry a bare
+		// count — a member-facing string change is the canon pass's, and it is
+		// filed as one.
+		return nil
+	}
 	return []string{fmt.Sprintf(
 		"host workspace %q is already in use by %d active run(s) (%s); independent agents sharing a directory can interfere — proceeding anyway",
-		workspacePath, len(others), strings.Join(others, ", "))}
+		workspacePath, len(visible), strings.Join(visible, ", "))}
 }
 
 // handleCreateRun validates policy, gates on confinement class against what the
@@ -220,7 +248,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// were true of nothing a member ever saw. The strings are
 	// narrowMemberInlinePolicy's/filterMemberGrants' own: they name the kind
 	// and the dropped VALUE (a host, a secret NAME), never a secret value.
-	warnings := withUnpublishedImageWarning(append(policyWarns, s.warnWorkspaceCollision(ctx, runID, workspacePath)...), req.Agent, s.cfg.AgentImages)
+	warnings := withUnpublishedImageWarning(append(policyWarns, s.warnWorkspaceCollision(r, runID, workspacePath)...), req.Agent, s.cfg.AgentImages)
 	if taskWarning != "" {
 		warnings = append(warnings, taskWarning)
 	}
@@ -361,6 +389,20 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 // LAST because it is the single chokepoint on the RESOLVED spec, which is what
 // makes it un-bypassable by a hand-authored stored policy.
 func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWriter, r *http.Request, spec *types.RunPolicySpec, req *createRunRequest) ([]string, bool) {
+	// FIRST, before a single source is folded: authorize the SELECTION against
+	// the CALLER. Everything below this line reasons about host paths that are
+	// about to become binds, and until now nothing on the path asked whose
+	// workspace they came from — the only member-mount check downstream is
+	// evaluated against the workspace OWNER, so any member (and a security
+	// admin, a tier defined never to reach the host) could name another
+	// member's workspace id and get their directory bound inside a sandbox they
+	// control. The store-less case is left to seedRequestWorkspace, which
+	// answers it with its own 422.
+	if req.WorkspaceID != nil && s.cfg.Store != nil {
+		if _, ok := s.getWorkspaceLaunchable(w, r, *req.WorkspaceID); !ok {
+			return nil, false
+		}
+	}
 	ephemeralDirs, seededImageOwner, code, seedErr := s.seedRequestWorkspace(ctx, spec, req)
 	if seedErr != nil {
 		writeError(w, code, "workspace_id: "+seedErr.Error())
@@ -374,6 +416,14 @@ func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWrite
 		return nil, false
 	}
 	if code, err := s.validateWorkspaceSources(ctx, *spec); err != nil {
+		writeError(w, code, "workspace: "+err.Error())
+		return nil, false
+	}
+	// The caller-scoped twin of the onboarding gate above: onboarded is not the
+	// same question as "onboarded BY SOMEONE THIS CALLER MAY LAUNCH AS", and a
+	// policy naming a host path directly never passes through the workspace_id
+	// door that answers the second one.
+	if code, err := s.authorizeSpecWorkspaceSources(ctx, r, *spec); err != nil {
 		writeError(w, code, "workspace: "+err.Error())
 		return nil, false
 	}

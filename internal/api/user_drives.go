@@ -280,6 +280,26 @@ func (s *Server) writeUserDrive(w http.ResponseWriter, r *http.Request, id uuid.
 		return
 	}
 	saved, err := s.cfg.Store.UpsertUserDrive(r.Context(), d)
+	// THE THREE 409s, and they are three because they have three remedies. All
+	// of them wrap store.ErrConflict, so the STATUS was already right and the
+	// SENTENCE was not: both of the arms below used to fall through to "a user
+	// drive named %q already exists" — for a name that is free. An admin told
+	// that goes looking for a row that is not there, which is a worse outcome
+	// than a vague refusal: it is a confident wrong direction.
+	//
+	// ORDER: the two specific arms precede the UNIQUE(name) one because both
+	// WRAP it. They are disjoint, so their order relative to each other does not
+	// matter. store.ErrDriveHomeNamespaceConflict's own doc says it exists so
+	// "the ONE caller that writes the sentence can tell this refusal apart"; this
+	// is that caller.
+	if errors.Is(err, store.ErrDriveSlugConflict) {
+		writeError(w, http.StatusConflict, fmt.Sprintf("another user drive's name folds to the same storage-object name as %q; storage is addressed by the name with case and punctuation removed, so pick a name that differs by more than that", d.Name))
+		return
+	}
+	if errors.Is(err, store.ErrDriveHomeNamespaceConflict) {
+		writeError(w, http.StatusConflict, fmt.Sprintf("another host_path drive on %q derives home directory names by a different rule; two shares over one host root must use the same home_template, or two members are allocated the same directory", d.HostRoot))
+		return
+	}
 	if errors.Is(err, store.ErrConflict) {
 		writeError(w, http.StatusConflict, fmt.Sprintf("a user drive named %q already exists", d.Name))
 		return
@@ -829,172 +849,4 @@ func (s *Server) userDriveGrantAuditData(r *http.Request, g types.UserDriveGrant
 		out["reclaim"] = d.Reclaim
 	}
 	return mustJSON(out)
-}
-
-// ─── /me ───────────────────────────────────────────────────────────────────
-
-// meUserDrive is the /me.user_drive object: what the caller would mount if they
-// asked for it on their next run, or nil when they would mount nothing.
-//
-// It is the MEMBER's view of the same resolution the run path takes, and it is
-// keyed on the resolver rather than on role: a security admin's own drive
-// resolves exactly like a member's, because a drive is per-principal and not
-// per-tier. An operator with no per-human subjects (admin token, local mode)
-// resolves to nil, which is the resolver's own step 2 and not a special case
-// here.
-//
-// IT CARRIES NO DOOR FIELD, deliberately (owner ruling at the mock gate). This
-// object means ONE thing — "what is allocated to you" — and the door is a
-// property of the caller's PROFILE, not of the allocation. Folding them would
-// make the two states that matter inexpressible: a member who is denied and has
-// no allocation would be indistinguishable from a member who simply has none,
-// which is exactly the pair the console has to tell apart. The door rides
-// beside it as /me.user_drive_denied_by_profile.
-type meUserDrive struct {
-	Name        string                   `json:"name"`
-	Backend     types.DriveBackend       `json:"backend"`
-	SizeMiB     int                      `json:"size_mib,omitempty"`
-	Writable    bool                     `json:"writable"`
-	Enforcement types.StorageEnforcement `json:"enforcement"`
-	HomeName    string                   `json:"home_name,omitempty"`
-	// Paused: allocated, disabled by an admin — the chip says so and the New Run
-	// card renders the paused line where the checkbox would be.
-	Paused bool `json:"paused,omitempty"`
-}
-
-// resolveMeUserDrive answers the /me.user_drive field, or nil.
-//
-// EVERY FAILURE IS nil, and that is the one place in this feature where failing
-// quiet is right: /me is a display read whose other fields the console needs to
-// render the shell at all, so a store hiccup must degrade the drive chip rather
-// than 500 the whole endpoint and log the human out of their own console. The
-// ENFORCEMENT path (seedRequestDrive) makes the opposite choice for the same
-// error, and must: mounting nothing where an admin allocated something is a
-// data loss, while showing nothing for a moment is a refresh.
-// WHAT WAS WRONG WAS NOT THE nil — IT WAS THAT nil WAS THE WHOLE ANSWER. Three
-// distinct states the launch path refuses with 403, 422 and 500 all arrived here
-// as the SAME `{"user_drive":null}` a genuinely unallocated member gets, and the
-// console renders that as no drive affordance at all — so a member could never
-// reach the refusal naming their remedy, and an admin-fixable home name looked
-// exactly like "you have no allocation". The reason string is the second half of
-// the answer, on the wire, so a client can tell them apart: the same argument
-// the door already won as its own sibling key.
-func (s *Server) resolveMeUserDrive(r *http.Request) (*meUserDrive, string) {
-	resolved, err := s.resolveUserDrive(r.Context())
-	if err != nil {
-		return nil, driveUnavailableReason(err)
-	}
-	if resolved == nil {
-		return nil, "" // answered, and the answer is "no allocation"
-	}
-	// WOULD IT ACTUALLY BIND HERE. driveIsMountableHere ran at the launch door
-	// and at the ADMIN preview and never on the member's own surface, so /me
-	// offered a mountable-looking allocation — name, size, writable, home_name,
-	// user_drive_unavailable "" — for a drive this deployment refuses 422 at
-	// launch ("directory carol does not exist on the share — ask an admin to
-	// create it"). The New Run card drew the checkbox and its writable sentence
-	// for a mount the create path was going to reject.
-	//
-	// THE DECISION, NOT THE REFUSAL (driveBindFailureHere): a /me poll is a
-	// display read on a timer, so running the writer here — even against a
-	// throwaway ResponseWriter — would inflate wardyn_user_drive_refused_total
-	// and fill the log with WARNs for a member who never asked for a run.
-	//
-	// SKIPPED FOR A PAUSED ROW, the same scoping the preview uses: nothing was
-	// derived above it, there is no object name to stat, and "paused" is already
-	// the answer the response carries.
-	//
-	// THE EXISTING `unmountable` TOKEN, not a new one. Its own doc reads "an
-	// allocation EXISTS and cannot be mounted — a home name that cannot name a
-	// directory, a share that is not there. 422 at launch, and the one state
-	// whose remedy is an admin's" — which is this state exactly. The 503 arm
-	// (the runner could not be asked) is not about the drive at all, so it takes
-	// `unavailable`, matching writeDriveError's own status mapping.
-	if !resolved.Paused {
-		if f := s.driveBindFailureHere(r.Context(), *resolved); f != nil {
-			if f.status == http.StatusServiceUnavailable {
-				return nil, driveUnavailableUnknown
-			}
-			return nil, driveUnavailableUnmountable
-		}
-	}
-	return &meUserDrive{
-		Name:        resolved.Drive.Name,
-		Backend:     resolved.Drive.Backend,
-		SizeMiB:     resolved.SizeMiB,
-		Writable:    resolved.Writable,
-		Enforcement: resolved.Enforcement,
-		HomeName:    resolved.HomeName,
-		Paused:      resolved.Paused,
-	}, ""
-}
-
-// userDriveDeniedByProfile names the profile whose DenyUserDrive door is shut
-// for this caller, or "" when the door is open — the /me sibling field
-// user_drive_denied_by_profile.
-//
-// A STRING, not a bool, because the member-facing sentence quotes the profile
-// by name ("your governance profile %q does not allow…") and a bool would make
-// the console invent the rest of it or omit the one word that tells an admin
-// which profile to look at.
-//
-// INDEPENDENT OF THE ALLOCATION, which is the point of the split: a member with
-// no drive AND a shut door is a real, distinct state — asking their admin for
-// an allocation would not help them, and a field folded into user_drive could
-// not have said so.
-//
-// THE SECOND RETURN IS "I CANNOT ANSWER THE DOOR", and it now covers TWO
-// causes, both of which must not read as an open door: a ceiling that could not
-// be resolved, and a door that is shut under a profile with no name to quote.
-//
-// It reads driveDoorProfile — the SAME predicate denyMemberDrive enforces with,
-// whose keying (operator exempt, unassigned member has no door) is documented
-// there. A ceiling that cannot be resolved reports "" for resolveMeUserDrive's
-// own reason — /me is a display read, and the ENFORCEMENT path answers the same
-// failure with a refusal. The operator short-circuit stays HERE too, ahead of
-// the resolve: a display read must not cost an operator a ceiling round-trip.
-func (s *Server) userDriveDeniedByProfile(r *http.Request) (name string, unresolved bool) {
-	if s.isOperator(r.Context()) {
-		return "", false
-	}
-	ceiling, err := s.effectiveCeiling(r.Context())
-	if err != nil {
-		// UNKNOWN IS NOT OPEN. "" on this key is an affirmative promise that no
-		// profile shuts the door, and serving it for a ceiling that could not be
-		// resolved answers an unknown question permissively — the exact thing
-		// writeCeilingError refuses to do at the enforcement door, where this
-		// same outage refuses the run. Shipped beside a fully populated
-		// user_drive it made /me promise a mountable, writable drive for a
-		// create the server would then refuse.
-		return "", true
-	}
-	// THE BOOL IS THE DECISION, and discarding it here was the same fail-open
-	// driveDoorShut's own bool was introduced to close, left standing at the
-	// sibling call site. governance_profiles.name is TEXT NOT NULL UNIQUE with
-	// no non-empty CHECK, so a profile with DenyUserDrive set and a blank name
-	// reports ("", true): the name key then shipped "" — which the documented
-	// contract reads as "no profile denies you" — beside a fully populated,
-	// writable user_drive, while POST /runs with drive.enabled answered 403
-	// 'mounting a user drive is not allowed by your governance profile ""'.
-	//
-	// UNNAMED-BUT-SHUT TAKES THE DOOR-UNKNOWN PATH (the remediation's second
-	// option), rather than a new value on either key. The display key cannot say
-	// "shut" without a name to quote — that is what it is FOR — so the honest
-	// answer is the one /me already has for "I cannot answer the door": suppress
-	// the allocation so the card cannot offer a mount the launch refuses, and
-	// let the reason key carry it. A NAMED deny is untouched: it keeps shipping
-	// the profile name beside the allocation, which is the four-state doctrine
-	// working as designed (an allocation and a door are different facts).
-	name, shut := s.driveDoorProfile(r.Context(), ceiling)
-	if shut && name == "" {
-		return "", true
-	}
-	return name, false
-}
-
-// driveRefusal composes a 422 body in the frozen member voice: lowercase
-// opening, prefixed `drive:`, and it names the remedy. One helper so the four
-// refusal sites cannot drift into four different tones for one feature.
-func driveRefusal(reason string) string {
-	return "drive: " + strings.TrimSpace(reason)
 }

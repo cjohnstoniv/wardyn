@@ -21,9 +21,35 @@ type PgxStore struct {
 // NewPgxStore wraps a pgx pool for use as the broker's db.
 func NewPgxStore(pool *pgxpool.Pool) *PgxStore { return &PgxStore{Pool: pool} }
 
-// Begin starts a real pgx transaction.
+// Begin starts a real pgx transaction, PINNED TO READ COMMITTED.
+//
+// THE MINT TRANSACTION IS AN AUDIT-CHAIN WRITER. broker.mint does its work and
+// then calls insertAuditEventTx on this same transaction, so the audit row it
+// appends is chained inside it — and since migration 0056 the read that decides
+// prev_hash happens INSIDE the trigger, i.e. inside this transaction. Under
+// REPEATABLE READ the snapshot is taken by the first statement, BEFORE the
+// chain's advisory lock is granted, so a mint that queued behind another writer
+// reads a head from before that writer committed and chains onto it: two rows
+// claiming one predecessor, which store.VerifyAuditChain reports as "a row was
+// deleted or reordered" — a permanent false tamper verdict over an untampered
+// log. Executed rather than argued: with nothing changed but the isolation
+// level, the production mint sequence forked the chain.
+//
+// The level otherwise came from default_transaction_isolation, a USERSET GUC
+// any role can set per-role or per-database with no superuser needed. A
+// transaction-level isolation level OVERRIDES it, which is why this is the fix
+// rather than a line in a runbook. It is the SAME pin store.InsertAuditEvent
+// and db.beginReadCommitted already carry, and this was the one in-tree writer
+// left without it — while db.go's boot ERROR and comment already told the
+// operator that "Wardyn's own audit writers pin READ COMMITTED per transaction
+// and are unaffected".
+//
+// PINNED HERE RATHER THAN AT THE CALL SITE because this is the only place the
+// broker opens a transaction: an interface with a plain Begin() cannot carry
+// TxOptions without every fake in the package restating them, and the pin
+// belongs with the pool it is a property of.
 func (s *PgxStore) Begin(ctx context.Context) (Tx, error) {
-	tx, err := s.Pool.Begin(ctx)
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return nil, err
 	}

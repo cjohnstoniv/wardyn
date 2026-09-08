@@ -427,8 +427,10 @@ func (s *Server) accessLockoutErr(r *http.Request, existing []types.RoleMapping,
 		// SAME REFUSAL, the caller's own REMEDY. The two lanes reach this arm
 		// for the same reason — a frozen snapshot that cannot reproduce the
 		// admin they hold — but only the cookie lane can fix it by signing in
-		// again; a token's snapshot is stamped at mint and no login refreshes
-		// it. Telling the token lane to sign in again is a refusal with no exit.
+		// again; a token's GROUP snapshot is stamped at mint and no login
+		// refreshes that half (RefreshAPITokenRoles re-stamps the role column
+		// and provably does not touch groups — see accessStaleSnapshotToken).
+		// Telling the token lane to sign in again is a refusal with no exit.
 		if apiTokenIDFromContext(r.Context()) != uuid.Nil {
 			return errors.New(accessStaleSnapshotToken)
 		}
@@ -556,16 +558,23 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	if saved.ID != m.ID {
 		status = http.StatusOK
 	}
-	// WHAT THIS WRITE DOES NOT REACH, said in the two places an operator looks.
-	// A role mapping decides the role a LOGIN derives; an outstanding wdn_ token
-	// carries a role stamped at MINT and read verbatim on every request, and no
-	// sign-in refreshes it (see staleRoleSnapshotCount for why that is unbounded
-	// where the SSH lane's equivalent is not). So a demotion made here is not
-	// yet effective for those tokens, and until now nothing said so anywhere.
+	// A DEMOTION MADE HERE IS EFFECTIVE HERE. A role mapping decides the role a
+	// LOGIN derives; an outstanding wdn_ token carries a role stamped at MINT
+	// and read verbatim on every request until its owner's OWN next login
+	// re-stamps it (store.RefreshAPITokenRoles) — a real bound, but on their
+	// schedule rather than the operator's, and one that never arrives for
+	// someone who has left. So if this write takes a tier away from the value,
+	// the affected principals' tokens are revoked now rather than announced —
+	// scoped to snapshots that actually lose a tier, so a member's CI
+	// credential naming the same group keeps working. The count is taken FIRST
+	// and is the informational half — how many live frozen snapshots named this
+	// value before the edit acted — so the audit row carries both numbers:
+	// what was outstanding, and what this write actually revoked.
 	stale := s.noteStaleRoleSnapshots(r.Context(), saved.Value, "upsert")
+	revoked := s.revokeDemotedRoleSnapshots(r.Context(), saved.Value, toOIDCRoleMappings(existing), candidate)
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		action, saved.ID.String(), "success", mustJSON(map[string]any{
-			"value": saved.Value, "role": saved.Role, "stale_token_snapshots": stale,
+			"value": saved.Value, "role": saved.Role, "stale_token_snapshots": stale, "tokens_revoked": revoked,
 		})))
 	// EMBEDDED, so the response is a strict SUPERSET of the RoleMapping every
 	// existing client already decodes — the console, pkg/client and the CLI keep
@@ -575,7 +584,8 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, status, struct {
 		types.RoleMapping
 		StaleTokenSnapshots int `json:"stale_token_snapshots,omitempty"`
-	}{RoleMapping: saved, StaleTokenSnapshots: stale})
+		TokensRevoked       int `json:"tokens_revoked,omitempty"`
+	}{RoleMapping: saved, StaleTokenSnapshots: stale, TokensRevoked: revoked})
 }
 
 // ─── DELETE /access/mappings/{id} ──────────────────────────────────────────
@@ -635,15 +645,18 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "delete role mapping: "+err.Error())
 		return
 	}
-	// The delete side of the same gap, and the sharper one: removing a mapping
-	// is how an admin takes a role AWAY. The response is 204 with no body, so
-	// the count rides the audit row and the WARN line rather than the wire — a
-	// body here would change this route's status shape for every existing
-	// client to carry a number most deletes will report as zero.
+	// The delete side of the same act, and the sharper one: removing a mapping
+	// is how an admin takes a role AWAY. Same revoke, same scoping — and the
+	// candidate set is the real post-delete row set, so a value the CHART still
+	// grants (or a second console row still names) is not a demotion and
+	// revokes nothing. The response is 204 with no body, so both numbers ride
+	// the audit row and the WARN line rather than the wire — a body here would
+	// change this route's status shape for every existing client.
 	staleDeleted := s.noteStaleRoleSnapshots(r.Context(), matched.Value, "delete")
+	revokedDeleted := s.revokeDemotedRoleSnapshots(r.Context(), matched.Value, toOIDCRoleMappings(existing), candidate)
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"access.role_mapping.delete", id.String(), "success", mustJSON(map[string]any{
-			"value": matched.Value, "role": matched.Role, "stale_token_snapshots": staleDeleted,
+			"value": matched.Value, "role": matched.Role, "stale_token_snapshots": staleDeleted, "tokens_revoked": revokedDeleted,
 		})))
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -71,7 +71,7 @@ func triggersOff(t *testing.T, pool *pgxpool.Pool, fn func(tx pgx.Tx) error) {
 	err := withTriggersOff(context.Background(), pool, fn)
 	switch {
 	case errors.Is(err, errNoTriggerBypass):
-		t.Skipf("skipping tamper probe: %v", err)
+		storeSkipOrFatal(t, pool, "skipping tamper probe: %v", err)
 	case err != nil:
 		t.Fatalf("tamper step: %v", err)
 	}
@@ -88,7 +88,7 @@ func requireTriggerBypass(t *testing.T, pool *pgxpool.Pool) {
 		t.Fatalf("read role: %v", err)
 	}
 	if !super {
-		t.Skip("skipping: WARDYN_TEST_PG role is not a superuser, so the probe could not restore the shared audit_events table afterwards")
+		storeSkipOrFatal(t, pool, "WARDYN_TEST_PG role is not a superuser, so the probe could not restore the shared audit_events table afterwards")
 	}
 }
 
@@ -250,7 +250,7 @@ func TestPG_ProbeF11_SplicedOutRowReportsSuccessorSeq(t *testing.T) {
 		return err
 	})
 	if errors.Is(err, errNoTriggerBypass) {
-		t.Skip(err)
+		storeSkipOrFatal(t, pool, "%v", err)
 	}
 	if err != nil {
 		t.Fatalf("splice: %v", err)

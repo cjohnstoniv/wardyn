@@ -56,11 +56,18 @@ func r3bCaptureStdout(t *testing.T, fn func()) string {
 	return out
 }
 
-// TestR3BListCmdsWarnOnTruncation is F265's CLI half: `wardyn run list` and
-// `wardyn approvals list` against a page the server flagged truncated printed
-// the rows, exited 0, wrote nothing to stderr and left no marker in --json —
-// indistinguishable from a complete list. `wardyn audit` has warned on exactly
-// this signal since W16-S1-2; these two now do the same.
+// TestR3BListCmdsWarnOnTruncation is F265's CLI half: a list command against a
+// page the server flagged truncated printed the rows, exited 0, wrote nothing to
+// stderr and left no marker in --json — indistinguishable from a complete list.
+// `wardyn audit` has warned on exactly this signal since W16-S1-2; the four list
+// families named in the finding now do the same.
+//
+// ALL FOUR, because the first pass covered two. `policy list` and `workspace
+// list` kept calling the plain SDK wrappers, so the truncation bit the server
+// set was discarded before the CLI could see it and neither command had an
+// --offset to page with — the same defect, unfixed, on a binary whose sibling
+// commands were fixed. A table with two of the four entries is what let that
+// read as done.
 //
 // STDERR is asserted, and stdout is asserted NOT to carry it: --json output
 // must keep the plain array shape existing scripts parse.
@@ -72,6 +79,12 @@ func TestR3BListCmdsWarnOnTruncation(t *testing.T) {
 	}{
 		{"run list", []string{"run", "list"}, []types.AgentRun{{ID: uuid.New(), State: types.RunRunning}}},
 		{"approvals list", []string{"approvals", "list"}, []types.ApprovalRequest{{ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalEgressDomain}}},
+		// The two the first pass skipped. Both were named in this finding's own
+		// blast radius and both still reproduced it verbatim on the FIXED
+		// binary: rows, exit 0, EMPTY stderr, no marker in --json — which is
+		// this finding's definition of the defect, not a lesser version of it.
+		{"policy list", []string{"policy", "list"}, []types.RunPolicy{{ID: uuid.New(), Name: "example"}}},
+		{"workspace list", []string{"workspace", "list"}, []types.Workspace{{ID: uuid.New(), Name: "example"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := r3bTruncatedListServer(t, tc.body)

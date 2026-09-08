@@ -418,7 +418,7 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 	// ceiling-bound here — and this lane dispatches a sandbox carrying the
 	// site-config's integration grants as EligibleGrants plus proxy-side
 	// injections for them. FAIL CLOSED on a resolver error.
-	dc, _, dcErr := s.resolveDispatchCeiling(launchCtx)
+	dc, probeCeiling, dcErr := s.resolveDispatchCeiling(launchCtx)
 	if dcErr != nil {
 		return runID, probeRunResult{}, dcErr
 	}
@@ -427,7 +427,9 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 	if capsErr != nil || cc == "" {
 		return runID, probeRunResult{}, errProbeNoRunner
 	}
-	run, token, err := s.newStepRun(launchCtx, runID, actor, script, cc, func(run *types.AgentRun) {
+	// The proxy probe is the DEPLOYMENT's diagnostic on an operator-only route,
+	// not any principal's work: neither governance limit binds it (F153).
+	run, token, err := s.newStepRun(launchCtx, runID, actor, script, cc, operatorStepGovernance(probeCeiling), func(run *types.AgentRun) {
 		run.AutoStopAfterSec = siteConfigProbeIdleCapSec
 		// The probe runs a plain curl, never a coding agent (see the Image
 		// comment on dispatchRun below) -- its own agent label should say so,

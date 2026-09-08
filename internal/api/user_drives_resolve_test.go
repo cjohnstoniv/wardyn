@@ -86,6 +86,14 @@ type driveStore struct {
 	// double that hides a whole class of defect.
 	sawUsers  [][]string
 	sawGroups [][]string
+	// sawGovUsers / sawGovGroups are the same for the GOVERNANCE twin, and they
+	// exist for the identical reason (R1 F349). The drive resolver's arguments
+	// were already recorded; the ceiling resolver's were taken as `_`, so
+	// nothing in the package could see WHICH identity a ceiling was resolved on
+	// — and the fail-closed rule ceilingWithUnusableGroups exists to hold is
+	// entirely a statement about those arguments.
+	sawGovUsers  [][]string
+	sawGovGroups [][]string
 }
 
 func (s *driveStore) HasGroupTierAssignments(context.Context) (bool, error) {
@@ -96,8 +104,10 @@ func (s *driveStore) HasGroupTierAssignments(context.Context) (bool, error) {
 // DRIVE DOOR for the claims under test. The preview resolves the ceiling for
 // the previewed principal, not for the admin asking, so this is the only way to
 // state "this person's profile forbids a drive".
-func (s *driveStore) ResolveGovernanceProfile(_ context.Context, _, _ []string) (
+func (s *driveStore) ResolveGovernanceProfile(_ context.Context, users, groups []string) (
 	*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+	s.sawGovUsers = append(s.sawGovUsers, users)
+	s.sawGovGroups = append(s.sawGovGroups, groups)
 	if s.err != nil {
 		return nil, "", s.err
 	}
@@ -878,15 +888,25 @@ func previewDriveHTTP(t *testing.T, srv *Server, users, groups []string) *httpte
 // offboarding command rather than compute from a hash by hand.
 func TestPreviewUserDrive(t *testing.T) {
 	t.Run("a match is answered with the object name", func(t *testing.T) {
-		// A STATIC PVC, because `email_local` is a SHARE template: a managed
-		// backend names its object after the home alone, so the write boundary
-		// and the resolver both refuse that pair now (two people whose addresses
-		// share a local part would be allocated one object).
+		// A STATIC PVC ON `sub` (R1 F294, lane core's handoff). The pair this
+		// previously used — k8s_pvc_static + `email_local` — is the shape F294
+		// refuses: Wardyn MINTS the claim name for a static PVC, so an
+		// email-local home folds two addresses that share a local part onto one
+		// claim. Retargeted rather than deleted, because every assertion below
+		// is about the PREVIEW answering through the resolver, not about which
+		// template it answered for: the claim still folds to lowercase, the
+		// object name is still the one an admin copies into an offboarding
+		// command, the enforcement is still external, and both literals are
+		// still tied back to types.DriveHomeName / types.DriveObjectName.
+		//
+		// The email-local FOLD that pairing also covered has its own subtest
+		// below, on a host_path drive — the backend where that template is the
+		// right answer — so the property survives the move.
 		d := driveFixture(func(d *types.UserDrive) {
-			d.Name, d.Backend, d.HomeTemplate = "Corp NAS", types.DriveBackendK8sPVCStatic, types.HomeTemplateEmailLocal
+			d.Name, d.Backend, d.HomeTemplate = "Corp NAS", types.DriveBackendK8sPVCStatic, types.HomeTemplateSub
 		})
 		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
-		w := previewDriveHTTP(t, driveServerOn(st, "k8s"), []string{"sub-abc", "Alice@Corp.Example"}, []string{"Eng"})
+		w := previewDriveHTTP(t, driveServerOn(st, "k8s"), []string{"Sub-ABC", "alice@corp.example"}, []string{"Eng"})
 		if w.Code != http.StatusOK {
 			t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
 		}
@@ -895,12 +915,12 @@ func TestPreviewUserDrive(t *testing.T) {
 			t.Fatalf("decode: %v (body=%s)", err, w.Body.String())
 		}
 		// The claims are folded exactly as the enforcement path folds them —
-		// grants are stored lowercased, and a preview that passed `Alice@…`
+		// grants are stored lowercased, and a preview that passed `Sub-ABC`
 		// through raw would answer a home this member's run would never get.
-		if got.HomeName != "alice" {
-			t.Errorf("home_name = %q, want the folded email-local %q", got.HomeName, "alice")
+		if got.HomeName != "sub-abc" {
+			t.Errorf("home_name = %q, want the folded sub claim %q", got.HomeName, "sub-abc")
 		}
-		if got.ObjectName != "wardyn-drive-corp-nas-alice" {
+		if got.ObjectName != "wardyn-drive-corp-nas-sub-abc" {
 			t.Errorf("object_name = %q, want the PVC name an admin can delete by", got.ObjectName)
 		}
 		if got.DriveName != "Corp NAS" || got.MatchedTier != types.CapabilitySubjectUser {
@@ -910,7 +930,7 @@ func TestPreviewUserDrive(t *testing.T) {
 		// not a second copy of it: this is the tie that keeps the preview and
 		// the runner (TestSeedRequestDriveMountShape asserts the same pair on
 		// the enforcement path) reading one function.
-		wantHome, err := types.DriveHomeName(*d, "Alice@Corp.Example", "")
+		wantHome, err := types.DriveHomeName(*d, "Sub-ABC", "")
 		if err != nil {
 			t.Fatalf("DriveHomeName: %v", err)
 		}
@@ -923,6 +943,53 @@ func TestPreviewUserDrive(t *testing.T) {
 		// number beside it is not read as a cap Wardyn enforces.
 		if got.Enforcement != types.StorageEnforcementExternal {
 			t.Errorf("enforcement = %q, want %q", got.Enforcement, types.StorageEnforcementExternal)
+		}
+	})
+
+	// AN EMAIL-LOCAL PREVIEW, restored here by R1 F294's fixture change rather
+	// than lost with it. The subtest above previewed `email_local` until that
+	// pairing became the shape F294 refuses, and retargeting it to `sub` left
+	// the endpoint with no email-local coverage at all — so the template most
+	// share deployments actually use would have had its preview answered by
+	// nothing.
+	//
+	// A HOST_PATH drive, because that is where `email_local` is the right
+	// answer: a share's directories are named by whoever owns it, and an
+	// address's local part is what they are usually named after. The assertion
+	// is the same tie the subtest above makes — the preview's home is the TYPES
+	// package's derivation, not a second copy of it — on the one template pair
+	// that pairing no longer reaches.
+	t.Run("an email-local home previews as the derivation gives it", func(t *testing.T) {
+		d := driveFixture(func(d *types.UserDrive) {
+			d.Name, d.Backend, d.HomeTemplate = "Corp NAS", types.DriveBackendHostPath, types.HomeTemplateEmailLocal
+		})
+		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
+		// The share helper, so the preview's own roots re-check and home stat
+		// answer for a directory that exists: this subtest is about the FOLD,
+		// and a 422 from an absent home would hide it.
+		w := previewDriveHTTP(t, drivePreviewShareServer(t, st, "alice"), []string{"sub-abc", "Alice@Corp.Example"}, []string{"Eng"})
+		if w.Code != http.StatusOK {
+			t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		var got userDrivePreviewResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v (body=%s)", err, w.Body.String())
+		}
+		// The EMAIL claim, lowercased — not the sub, which is what the same
+		// request would derive under a `sub` template. The lowercasing is
+		// types.DriveHomeName's; what this pins is that the preview reached it
+		// with the right claim and returned what it gave.
+		if got.HomeName != "alice" {
+			t.Errorf("home_name = %q, want the folded email-local %q", got.HomeName, "alice")
+		}
+		// Tied to the types package's own derivation, not to a second copy of
+		// it — the same tie the subtest above makes for `sub`.
+		wantHome, err := types.DriveHomeName(*d, "Alice@Corp.Example", "")
+		if err != nil {
+			t.Fatalf("DriveHomeName: %v", err)
+		}
+		if got.HomeName != wantHome {
+			t.Errorf("home_name = %q, want the derivation's %q", got.HomeName, wantHome)
 		}
 	})
 

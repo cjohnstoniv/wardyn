@@ -183,6 +183,27 @@ func (s *Server) routes() chi.Router {
 			// all, and both /site-config callers already tolerate a null), so it
 			// is not built on spec.
 			//
+			// ONE RULE, AND IT IS NOT "THESE FOUR ROUTES". The tier does not
+			// reach the host axis — local_dir paths, the operator's registry
+			// coordinate, stored secret NAMES — on ANY route, and there are two
+			// ways for a route to honour that. These four stay narrowed because
+			// they serve whole operator documents nobody projects. GET
+			// /workspaces{,/{id},/build,/observed-egress} instead WITHHOLD that
+			// axis per reader (helpers.go's workspaceReadSecurity: paths and
+			// base_image.image blanked, the secret:/write: requirement keys and
+			// the scanned profile's host keys dropped) while keeping the EGRESS
+			// axis, which is the input to the decision this tier is widened to
+			// make.
+			//
+			// Said here because the asymmetry is what a reader notices first: a
+			// security_admin is answered 403 by /sources and 200 by
+			// /workspaces/{id} on what looks like the same datum, and the
+			// tempting resolution — widen these four to match — is the wrong
+			// one. The workspace read is not wider; it is projected. Pinned
+			// field by field by TestSecurityAdminForeignWorkspaceFieldByField
+			// (security_admin_workspace_read_test.go), and this paragraph is
+			// pinned against the code by TestSecurityTierNoteStatesOneRule.
+			//
 			// Stored-policy WRITES (POST/PUT/DELETE /policies) stay on
 			// operatorOnly for the twin reason: a stored run_policy is selectable
 			// CONTENT, so a SEC write path there would let a security admin
@@ -498,8 +519,25 @@ func (s *Server) routes() chi.Router {
 
 			// Effective integration set (stored ∪ legacy-derived) with live
 			// capabilities — see internal/api/integrations.go /
-			// setup_integrations.go. Read-only, same RBAC posture as
-			// site-config's GET: Credentials only ever holds secret NAMES.
+			// setup_integrations.go. Read-only, member-class, and deliberately
+			// NOT the posture of the site-config GET above it. This note used
+			// to claim that parity and justify it with "Credentials only ever
+			// holds secret NAMES"; both went false in the same move. The
+			// sibling narrowed to operatorOnly precisely BECAUSE a secret NAME
+			// is a credential REF (see its own tier note), and this route
+			// serves the very rows that document embeds — so the payload
+			// argument was the sibling's argument for narrowing, read
+			// backwards.
+			//
+			// What makes the wider tier honest is the PROJECTION, not a claim
+			// about the payload: a non-operator is answered
+			// memberSafeIntegration's view (setup_integrations.go) — identity,
+			// kind, disabled, default_for and the live capability matrix, its
+			// reasons scrubbed of anything withheld — with secrets[], egress[],
+			// config and docs dropped. The tier stays wide because the launch
+			// card picks an integration by identity; the credential refs and
+			// the internal hosts do not cross it. GET /setup/status publishes
+			// the same rows through the same projection.
 			r.Get("/integrations", s.handleListIntegrations)
 			// Integration writes: PUT creates-or-replaces a stored row, DELETE
 			// removes one. operatorOnly — same corp-wide blast radius as

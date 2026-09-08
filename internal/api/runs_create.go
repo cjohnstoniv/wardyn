@@ -163,6 +163,56 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	return ephemeralDirs, seededImageOwner, 0, nil
 }
 
+// authorizeSpecWorkspaceSources is the RESOLVED-SPEC half of F335's gate: every
+// onboarded workspace the spec's mount sources and repos resolve to must be one
+// the caller may launch against (mayLaunchWorkspace).
+//
+// The workspace_id door is authorized by getWorkspaceLaunchable before any
+// source is folded, but a source can also reach the spec WITHOUT naming an id —
+// a hand-authored inline or stored policy naming the host path directly. That
+// second door landed in the same room: validateWorkspaceSources admits the
+// source because it IS onboarded, and memberMountAllowed then re-checks it
+// against the OWNING member's roots, so a per-principal root map constrains the
+// caller not at all. This closes it at the same chokepoint the onboarding gate
+// uses, over the RESOLVED spec, so no authoring surface can route around it.
+//
+// The refusal is BYTE-IDENTICAL to validateWorkspaceSources' not-onboarded
+// refusal, deliberately: a distinct "another member owns this" sentence would be
+// the cross-member existence oracle denyForeignWorkspace exists to close, told
+// about a host path instead of an id. From the caller's side another member's
+// workspace simply is not onboarded.
+//
+// Runs AFTER validateWorkspaceSources (which has already refused every
+// un-onboarded source), so the index lookups below can only miss for a source
+// that gate deliberately let past — a blessed system mount, whose source is the
+// operator's own staged creds dir and belongs to no workspace.
+func (s *Server) authorizeSpecWorkspaceSources(ctx context.Context, r *http.Request, spec types.RunPolicySpec) (int, error) {
+	if s.cfg.Store == nil || (len(spec.WorkspaceMounts) == 0 && len(spec.WorkspaceRepos) == 0) {
+		return 0, nil
+	}
+	all, err := s.cfg.Store.ListWorkspaces(ctx)
+	if err != nil {
+		return http.StatusUnprocessableEntity, fmt.Errorf("list workspaces: %w", err)
+	}
+	idx := indexWorkspacesBySource(all)
+	for _, wm := range spec.WorkspaceMounts {
+		if systemMountTargets[wm.Target] {
+			continue // operator-blessed system creds mount — source already vetted against the ceiling
+		}
+		if ws, ok := idx.localDir[wm.Source]; ok && !s.mayLaunchWorkspace(r, ws) {
+			return http.StatusUnprocessableEntity, fmt.Errorf(
+				"mount source %q is not an onboarded local directory (onboard it first via the workspaces API)", wm.Source)
+		}
+	}
+	for _, wr := range spec.WorkspaceRepos {
+		if ws, ok := idx.repo[wr.Repo]; ok && !s.mayLaunchWorkspace(r, ws) {
+			return http.StatusUnprocessableEntity, fmt.Errorf(
+				"repo %q is not an onboarded repository (onboard it first via the workspaces API)", wr.Repo)
+		}
+	}
+	return 0, nil
+}
+
 // requirementAuditEntry is one audit-worthy fact applyWorkspaceRequirements
 // produced (an auto-attached secret grant, or a non-empty egress addition).
 // applyWorkspaceRequirements itself never audits — like foldRunIntegration, the

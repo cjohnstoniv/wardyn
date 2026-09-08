@@ -313,8 +313,8 @@ func TestThreatModelDrivePreviewResidualMatchesTheHandler(t *testing.T) {
 		"the preview skips the door, the stale-snapshot arm and `driveMountFor`, and neither touches the substrate",
 	)
 	mustSay(t, tm, "threatmodel/THREAT-MODEL.md",
-		"the preview now runs the governance door",
-		"What it does NOT run is `driveMountFor`'s narrowing arm",
+		"it runs the\ngovernance door (`drivePreviewDoorIsOpen`)",
+		"What the PREVIEW does not run is `driveMountFor`'s narrowing arm",
 		"nothing here asks the CLUSTER whether a claim can bind",
 	)
 }

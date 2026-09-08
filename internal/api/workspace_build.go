@@ -202,7 +202,33 @@ type buildResponse struct {
 // a bare ProfileHash()) — both are pure functions of the profile now that the
 // standard agent-tool install is unconditional rather than derived from the
 // workspace's named integrations.
-func (s *Server) resolveBuildView(ws types.Workspace) buildResponse {
+// The `tier` argument is the READER's projection tier (workspaceReadTierFor),
+// and it is a required argument rather than a field on the workspace for the
+// same reason dispatchCeiling is: this response is fed by getWorkspaceReadable,
+// so a plain member and a foreign security admin reach it for an OPERATOR-owned
+// workspace, and two of the branches below answer with ws.BaseImage.Image — the
+// operator's authored registry coordinate, exactly the datum
+// redactWorkspaceForRead blanks on GET /workspaces{,/{id}}. A new call site
+// cannot compile without deciding.
+//
+// The BUILT image (st.Image / ws.ImageRef) is NOT blanked: it is the image the
+// member's own run against this workspace actually executes, kept for the same
+// reason redactWorkspaceForRead keeps image_ref. Log IS blanked below the full
+// tier — a build log is the operator's build output and reproduces the base
+// ref verbatim in its FROM line.
+func (s *Server) resolveBuildView(ws types.Workspace, tier workspaceReadTier) buildResponse {
+	authoredImage := func(ref string) string {
+		if tier == workspaceReadFull {
+			return ref
+		}
+		return ""
+	}
+	buildLog := func(l []string) []string {
+		if tier == workspaceReadFull {
+			return l
+		}
+		return nil
+	}
 	// An explicit image CHOICE (registry/byo) boots verbatim ONLY once an image
 	// builder has wrapped it with the agent runtime — resolveWorkspaceImage's
 	// FinalizeBase call, the SAME wrap a devcontainer build needs. W7-S1-2: this
@@ -213,17 +239,17 @@ func (s *Server) resolveBuildView(ws types.Workspace) buildResponse {
 	// as-is. Gate on the builder so a builder-less host instead falls through
 	// to the same honest report "custom" already gets below.
 	if b := ws.BaseImage; b != nil && b.Kind != "recommended" && b.Kind != "custom" && b.Image != "" && s.cfg.ImageBuilder != nil {
-		return buildResponse{State: "nothing_to_build", Image: b.Image,
+		return buildResponse{State: "nothing_to_build", Image: authoredImage(b.Image),
 			Detail: "this image boots as-is — no build involved"}
 	}
 	st := s.builds.get(ws.ID)
 	switch {
 	case st.Building:
-		return buildResponse{State: "building", StartedAt: &st.StartedAt, Log: st.Log}
+		return buildResponse{State: "building", StartedAt: &st.StartedAt, Log: buildLog(st.Log)}
 	case st.Error != "":
-		return buildResponse{State: "failed", Detail: st.Error, Log: st.Log}
+		return buildResponse{State: "failed", Detail: st.Error, Log: buildLog(st.Log)}
 	case st.Image != "":
-		return buildResponse{State: "done", Image: st.Image, Log: st.Log}
+		return buildResponse{State: "done", Image: st.Image, Log: buildLog(st.Log)}
 	}
 	if prof, ok := workspaceProfile(ws); ok && ws.ImageRef != "" {
 		if ws.BuiltProfileHash == prof.CacheKey() {
@@ -236,7 +262,7 @@ func (s *Server) resolveBuildView(ws types.Workspace) buildResponse {
 			// the generic "sessions boot the stock agent image" fallback below,
 			// this workspace's chosen image is refused outright at run creation
 			// rather than silently substituted (PARITY-4, runs_create.go).
-			return buildResponse{State: "none", Image: b.Image,
+			return buildResponse{State: "none", Image: authoredImage(b.Image),
 				Detail: "the sandbox image builder is not wired on this host, so this base image cannot be wrapped with the agent runtime — a run against this workspace is REFUSED, not silently substituted; set WARDYN_ENVBUILD on a wardynd built with -tags docker to enable it, or drop the base image"}
 		}
 		return buildResponse{State: "none",
@@ -257,7 +283,7 @@ func (s *Server) handleGetWorkspaceBuild(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, s.resolveBuildView(ws))
+	writeJSON(w, http.StatusOK, s.resolveBuildView(ws, s.workspaceReadTierFor(r, ws)))
 }
 
 // handleBuildWorkspace kicks the workspace's image build asynchronously —
@@ -277,7 +303,7 @@ func (s *Server) handleBuildWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	view := s.resolveBuildView(ws)
+	view := s.resolveBuildView(ws, s.workspaceReadTierFor(r, ws))
 	if view.State == "nothing_to_build" || view.State == "done" {
 		writeJSON(w, http.StatusOK, view)
 		return

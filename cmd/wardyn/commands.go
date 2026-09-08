@@ -914,21 +914,22 @@ func warnListTruncated(cmd *cobra.Command, truncated bool, kind string, shown, o
 		kind, shown, offset+shown)
 }
 
-// listPageOptsAt is listPageOpts with an explicit offset, for the list commands
-// that carry --offset. Kept SEPARATE rather than widening listPageOpts, whose
-// other callers (policy.go, workspace.go) have no offset flag of their own yet.
+// listPageOptsAt turns --limit and --offset into the SDK's variadic ListOpts.
+// Both unset sends nothing, so the server applies its default page and the
+// output is byte-identical to the unparameterised call it replaced.
+//
+// It is now the ONLY form. It used to sit beside a limit-only listPageOpts and
+// say why — "policy.go, workspace.go have no offset flag of their own yet" —
+// which was an accurate note about a gap rather than a reason: those two
+// commands printed a truncated list at exit 0 with nothing on stderr, exactly
+// the finding the offset-carrying form was added to close for `run` and
+// `approvals`. They carry --offset now, the limit-only helper had no callers
+// left, and there is one way to page a list.
 func listPageOptsAt(limit, offset int) []sdk.ListOpts {
 	if limit <= 0 && offset <= 0 {
 		return nil
 	}
 	return []sdk.ListOpts{{Limit: limit, Offset: offset}}
-}
-
-func listPageOpts(limit int) []sdk.ListOpts {
-	if limit <= 0 {
-		return nil
-	}
-	return []sdk.ListOpts{{Limit: limit}}
 }
 
 // emitJSON writes v to stdout as indented JSON (the CLI's --json output shape).

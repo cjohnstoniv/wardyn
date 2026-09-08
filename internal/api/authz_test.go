@@ -410,7 +410,6 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/workspaces":                      {class: classMember},
 	"GET /api/v1/workspaces/{id}":                 {class: classMember},
 	"GET /api/v1/workspaces/{id}/build":           {class: classMember},
-	"GET /api/v1/workspaces/{id}/env-as-code":     {class: classMember},
 	"GET /api/v1/workspaces/{id}/observed-egress": {class: classMember},
 	// Creating a workspace is the member ON-RAMP (the created row is
 	// owner-stamped from the session) — there is no {id} to own yet.
@@ -428,6 +427,12 @@ var routeMatrix = map[string]classifiedRoute{
 	// reaches every one. The 403 an operator-owned row still returns to a member
 	// is NOT exercised here (this probe only ever seeds member-owned fixtures) —
 	// TestWorkspaceOwnership_OperatorOwnedStaysAdminOnly pins it.
+	// GET env-as-code is owner-or-super, NOT a member read, and it is the
+	// emitted CONTENT that decides it: the files carry the internal registry
+	// coordinate the workspace reads blank, the site-config artifact redirects
+	// /site-config is admin-only for, and the operator's setup commands. Its
+	// write twin below has always been operatorOnly (F287).
+	"GET /api/v1/workspaces/{id}/env-as-code": {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
 	"PUT /api/v1/workspaces/{id}":             {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
 	"DELETE /api/v1/workspaces/{id}":          {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
 	"POST /api/v1/workspaces/{id}/scan":       {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
@@ -931,8 +936,11 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		}
 		// Every owner-scoped route is probed, not a subset: the count is what
 		// catches a route that silently leaves classOwner.
-		if probed != 16 {
-			t.Errorf("probed %d classOwner routes, want 16 — a route that left classOwner takes its tier "+
+		// 17 since F287 moved GET /workspaces/{id}/env-as-code here from
+		// classMember (its emitted files are the operator's authored
+		// environment, and its write twin was already operatorOnly).
+		if probed != 17 {
+			t.Errorf("probed %d classOwner routes, want 17 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})

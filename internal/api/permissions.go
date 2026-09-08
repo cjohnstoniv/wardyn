@@ -10,6 +10,7 @@ package api
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"unicode"
@@ -30,8 +31,58 @@ const maxCapabilityGrantFieldLen = 512
 // the per-kind enforcement switches, in one call — the admin Permissions
 // screen's entire data need (plan: "one call").
 type permissionsResponse struct {
-	Grants      []types.CapabilityGrant `json:"grants"`
-	Enforcement map[string]bool         `json:"enforcement"`
+	Grants      []grantView     `json:"grants"`
+	Enforcement map[string]bool `json:"enforcement"`
+}
+
+// grantView is a stored grant plus ONE derived bit: whether its value is a
+// value the resolver can never be asked about, so the Permissions screen stops
+// rendering a rule that protects nothing as if it were active.
+//
+// A strict SUPERSET of types.CapabilityGrant — every field an existing client
+// decodes is still there and `inert` is omitempty, so the console, pkg/client
+// and the CLI keep working byte for byte and a client that wants the signal
+// reads one more key.
+//
+// WHY IT EXISTS. capability_grants shipped in v0.6.0 and the per-kind value
+// rule (canonicalGrantValue) is a WRITE-boundary rule, so every non-canonical
+// row written before it — an uppercase workspace uuid, an uppercase secret
+// name, a free-text value where a uuid was meant — survives the upgrade
+// unchanged and keeps rendering as an active DENY that has never once fired.
+// The upgrade cannot safely rewrite them (a normalizing migration would make an
+// inert ALLOW start granting, unreviewed, at boot), and it must not silently
+// drop them either. So it SAYS SO, at the surface where an operator is looking
+// at the row, and re-saving it through POST /permissions/grants canonicalizes
+// it or refuses it by name.
+type grantView struct {
+	types.CapabilityGrant
+	Inert bool `json:"inert,omitempty"`
+}
+
+// markInertGrants derives grantView.Inert by asking the write boundary's own
+// function what it would store for each row: a row is inert exactly when
+// canonicalGrantValue refuses its value or would have stored something else.
+// One rule, so the marker cannot drift from the behaviour it describes.
+//
+// WARNs once per call listing the offenders, because the operator who most
+// needs to know may be reading logs rather than the Permissions screen — and
+// because the console does not render this field yet.
+func (s *Server) markInertGrants(r *http.Request, grants []types.CapabilityGrant) []grantView {
+	out := make([]grantView, len(grants))
+	var inert []string
+	for i, g := range grants {
+		out[i] = grantView{CapabilityGrant: g}
+		if canonical, err := canonicalGrantValue(g.Capability, g.Value); err != nil || canonical != g.Value {
+			out[i].Inert = true
+			inert = append(inert, g.Capability+"="+g.Value)
+		}
+	}
+	if len(inert) > 0 {
+		slog.WarnContext(r.Context(), "api: capability grants stored before the per-kind value rule can never match anything",
+			"grants", len(grants), "inert", len(inert), "values", strings.Join(inert, ", "),
+			"remedy", "re-save each row through POST /api/v1/permissions/grants — the write boundary canonicalizes it into the form the resolver compares, or refuses it by name")
+	}
+	return out
 }
 
 // handleGetPermissions returns every capability grant (admin audience — the
@@ -52,7 +103,7 @@ func (s *Server) handleGetPermissions(w http.ResponseWriter, r *http.Request) {
 	// caller can round-trip it as PUT /permissions/enforcement's If-Match
 	// (etag.go) — that endpoint's own whole-document replace, not this one.
 	w.Header().Set("ETag", computeETag(enf))
-	writeJSON(w, http.StatusOK, permissionsResponse{Grants: grants, Enforcement: enf})
+	writeJSON(w, http.StatusOK, permissionsResponse{Grants: s.markInertGrants(r, grants), Enforcement: enf})
 }
 
 // grantWriteRequest is POST /permissions/grants's body. ID/CreatedAt/CreatedBy
@@ -105,59 +156,15 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 	if len(g.Value) > maxCapabilityGrantFieldLen || !controlCharFree(g.Value) {
 		return fmt.Errorf("value: invalid")
 	}
-	// egress_host values are HOSTS, and they are matched by the proxy's own
-	// entry semantics — so they get the proxy's own shape check, the same one
-	// every allowed_domains ingest runs. Without it "*example.com" stored fine
-	// and then covered "evilexample.com" (entryCoversAny is a bare suffix
-	// test), and a mid-label or URL-shaped value stored as a row that can never
-	// match — a deny that protects nothing. The "*" wildcard is this table's
-	// own spelling for "every value of this kind", not a domain, so it is
-	// exempt.
-	if g.Capability == capEgressHost && g.Value != capWildcard {
-		if err := proxy.ValidDomainEntry(g.Value); err != nil {
-			return fmt.Errorf("value: %w", err)
-		}
+	// THE VALUE, canonicalized per kind by the ONE function the read side also
+	// asks (canonicalGrantValue below): a value that can never match anything
+	// the resolver will be asked about is refused or folded here, never stored
+	// 201-Created to render as an active rule that protects nothing.
+	v, verr := canonicalGrantValue(g.Capability, g.Value)
+	if verr != nil {
+		return verr
 	}
-	// workspace values are UUIDs, and the resolver compares them by EXACT
-	// STRING EQUALITY (capValueMatches: every kind but egress_host is
-	// `grantValue == want`) against uuid.UUID.String(), which is always the
-	// canonical lowercase-hyphenated form. So the VALUE half needs the same
-	// treatment the SUBJECT half and the egress_host value already get: a
-	// spelling the resolver will never be asked about is refused or
-	// canonicalized at the write boundary, not stored 201-Created.
-	//
-	// MEASURED before this: all four alternative spellings uuid.Parse accepts —
-	// uppercase, braced, urn:uuid:, unhyphenated — validated clean, rendered on
-	// the Permissions screen as an active DENY, and capValueOverlaps answered
-	// false for every request naming that workspace. The deny protected nothing,
-	// which is the one thing capabilities.go promises it always does. The
-	// canonical spelling (the control) bit correctly, so nothing in the UI or
-	// the audit trail distinguished the two.
-	//
-	// CANONICALIZED, not refused, for the spellings uuid.Parse accepts: an admin
-	// who pastes a braced id from a tool means the workspace, and storing the
-	// canonical form ALSO folds the five spellings onto one natural key
-	// (subject_type, subject, capability, value) instead of five rows that each
-	// claim to govern the same workspace. A value uuid.Parse cannot read at all
-	// IS refused — it can never name a workspace, so storing it would be the
-	// same inert row by another route.
-	//
-	// The "*" wildcard is this table's own spelling for "every value of this
-	// kind" (capValueMatches short-circuits on it), not a workspace id, so it is
-	// exempt exactly as it is on the egress_host arm above.
-	if g.Capability == capWorkspace && g.Value != capWildcard {
-		id, err := uuid.Parse(g.Value)
-		if err != nil {
-			return fmt.Errorf("value: %q is not a workspace id — a workspace capability names a workspace by uuid, and the resolver compares it exactly, so a value it cannot read can never match anything", g.Value)
-		}
-		g.Value = id.String()
-	}
-	// EVERY OTHER KIND IS AN EXACT, CASE-SENSITIVE IDENTIFIER STORED VERBATIM,
-	// and that is a decision rather than an omission. A secret name, an agent
-	// id, an image ref and an integration id are all authored elsewhere in the
-	// system with their own case, and there is no canonical form to fold them
-	// onto: lowercasing a secret name here would stop it matching the row
-	// secrets.go stores, which is the opposite of what this block is for.
+	g.Value = v
 	if g.SubjectType == types.CapabilitySubjectAll {
 		// "all" names every signed-in human; the migration is explicit that
 		// subject is '' for this type, so a caller-supplied value is dropped
@@ -165,9 +172,10 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 		g.Subject = ""
 		return nil
 	}
-	// user/group: lowercased the SAME way the caller's own identities are
+	// user/group: canonicalized the SAME way the caller's own identities are
 	// (capabilitySubjects, sessionGroups) — a grant written "Alice@Corp.com"
-	// must still hit the lowercased sub/email the resolver compares against.
+	// must still hit the folded sub/email the resolver compares against, and
+	// each half asks the MATCH surface's own function rather than restating it.
 	g.Subject = strings.TrimSpace(g.Subject)
 	if g.Subject == "" {
 		return fmt.Errorf("subject: required for subject_type %q", g.SubjectType)
@@ -190,12 +198,109 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 		}
 		g.Subject = subject
 	} else {
-		g.Subject = strings.ToLower(g.Subject)
+		// A USER subject gets canonicalUserSubject, not a bare ToLower. The
+		// fold is UNICODE: U+212A folds to ASCII 'k' and U+0130 to ASCII 'i',
+		// so a plain lowercase stored an admin's "Kim@Korp.com" (crafted K's)
+		// as "kim@korp.com" — binding a DENY, or a governance profile, to a
+		// real human the author never named, and to the exact string that
+		// human's own claims resolve to. Same function as the read side, so
+		// what a caller can BE is what this can store.
+		g.Subject = canonicalUserSubject(g.Subject)
 	}
 	if len(g.Subject) > maxCapabilityGrantFieldLen || !controlCharFree(g.Subject) {
 		return fmt.Errorf("subject: invalid")
 	}
 	return nil
+}
+
+// canonicalGrantValue is the ONE per-kind rule for a capability grant VALUE: it
+// returns the exact string the resolver will be asked to match, or an error
+// when the given value can never match anything at all.
+//
+// TWO CALLERS, WHICH IS THE POINT. validateCapabilityGrant applies it at the
+// write boundary, and handleGetPermissions asks it about a STORED row to mark
+// the rows an older Wardyn accepted before this rule existed (grantView.Inert).
+// A row is inert exactly when this function refuses it or would have stored
+// something else — so the marker cannot drift from the rule, and a new kind
+// gets both behaviours from one place.
+//
+// PER KIND, and each arm states what the resolver is actually asked about:
+//
+//   - egress_host: the proxy's own entry grammar (proxy.ValidDomainEntry), the
+//     same check every allowed_domains ingest runs. Without it "*example.com"
+//     stored fine and then covered "evilexample.com" (entryCoversAny is a bare
+//     suffix test), and a mid-label or URL-shaped value stored as a row that can
+//     never match — a deny that protects nothing.
+//
+//   - workspace: uuid.Parse, stored as .String(). The resolver compares
+//     capValueMatches' `grantValue == want` against uuid.UUID.String(), which is
+//     always canonical lowercase-hyphenated, so all four alternative spellings
+//     uuid.Parse accepts were stored 201-Created, rendered as an active DENY,
+//     and matched nothing. CANONICALIZED rather than refused, because an admin
+//     who pastes a braced id from a tool means the workspace — and folding also
+//     collapses five spellings onto one natural key instead of five rows each
+//     claiming to govern the same workspace. A value uuid.Parse cannot read at
+//     all IS refused: it can never name a workspace.
+//
+//   - secret and integration: LOWERCASED, then held to the grammar their own
+//     rows are held to (secretNameRE, integrationRefRE — both lowercase-only).
+//     This arm's comment used to say the opposite ("lowercasing a secret name
+//     here would stop it matching the row secrets.go stores"), and the premise
+//     was inverted: secrets.go cannot store an uppercase name at all, so an
+//     uppercase capSecret DENY was byte-for-byte the same inert row the
+//     workspace arm exists to prevent, and folding can only ever make the grant
+//     match the row the author meant. The ASCII guard runs BEFORE the fold, the
+//     same order canonicalUserSubject and oidc.CanonicalGroupSubject use: a
+//     non-ASCII value can never name one of these rows, and folding first would
+//     let U+212A land on an ASCII name the author never typed.
+//
+//   - agent and image: STORED VERBATIM, and that is a decision rather than an
+//     omission. An agent id is not held to a closed catalog at the run boundary
+//     (a BYOA run names its own), and an image ref's tag may legitimately carry
+//     uppercase, so neither vocabulary is provably narrower than what is typed
+//     — folding them would be this function inventing a canonical form the
+//     resolver does not use.
+//
+// The "*" wildcard is this table's own spelling for "every value of this kind"
+// (capValueMatches short-circuits on it), not a value of any kind, so it is
+// exempt everywhere.
+func canonicalGrantValue(capability, value string) (string, error) {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return "", fmt.Errorf("value: required")
+	}
+	if len(v) > maxCapabilityGrantFieldLen || !controlCharFree(v) {
+		return "", fmt.Errorf("value: invalid")
+	}
+	if v == capWildcard {
+		return v, nil
+	}
+	switch capability {
+	case capEgressHost:
+		if err := proxy.ValidDomainEntry(v); err != nil {
+			return "", fmt.Errorf("value: %w", err)
+		}
+	case capWorkspace:
+		id, err := uuid.Parse(v)
+		if err != nil {
+			return "", fmt.Errorf("value: %q is not a workspace id — a workspace capability names a workspace by uuid, and the resolver compares it exactly, so a value it cannot read can never match anything", v)
+		}
+		return id.String(), nil
+	case capSecret, capIntegration:
+		grammar, what := secretNameRE, "secret name"
+		if capability == capIntegration {
+			grammar, what = integrationRefRE, "integration id"
+		}
+		if !oidc.ASCIIOnly(v) {
+			return "", fmt.Errorf("value: %q is not a %s — one is written in lowercase ASCII, so this value can never match a stored row", v, what)
+		}
+		lowered := strings.ToLower(v)
+		if !grammar.MatchString(lowered) {
+			return "", fmt.Errorf("value: %q is not a %s — the resolver compares it exactly against a row whose own name rule this value cannot satisfy, so it can never match anything", v, what)
+		}
+		return lowered, nil
+	}
+	return v, nil
 }
 
 // handleUpsertCapabilityGrant creates or re-grants one row, keyed on the

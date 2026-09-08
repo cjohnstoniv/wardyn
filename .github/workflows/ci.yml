@@ -545,9 +545,17 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+      # WARDYN_TEST_PG_SUPERUSER asserts what this lane already is: `postgres`,
+      # over a URL-form DSN, which can satisfy every precondition the append-only
+      # probes guard on. With it set, a probe that would have SKIPPED (and so
+      # reported `ok` and exit 0 while proving nothing) FAILS instead — and
+      # test-report.sh's skip floor catches the same class from the other side,
+      # over the JSON event stream, in case a guard is ever added that does not
+      # consult the marker.
       - name: Postgres-gated integration suite (with reports)
         env:
           WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
+          WARDYN_TEST_PG_SUPERUSER: "1"
         run: make test-report-pg
       - name: Upload PG test reports
         if: always()

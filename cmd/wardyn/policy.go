@@ -29,16 +29,17 @@ func policyCmd(client clientFn) *cobra.Command {
 	}
 
 	var listJSON bool
-	var listLimit int
+	var listLimit, listOffset int
 	list := &cobra.Command{
 		Use:   "list",
 		Short: "List all policies",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			policies, err := client().ListPolicies(cmd.Context(), listPageOpts(listLimit)...)
+			policies, truncated, err := client().ListPoliciesPage(cmd.Context(), listPageOptsAt(listLimit, listOffset)...)
 			if err != nil {
 				return err
 			}
+			warnListTruncated(cmd, truncated, "policy", len(policies), listOffset)
 			if listJSON {
 				return emitJSON(policies)
 			}
@@ -55,6 +56,7 @@ func policyCmd(client clientFn) *cobra.Command {
 	}
 	list.Flags().BoolVar(&listJSON, "json", false, "emit raw JSON")
 	list.Flags().IntVar(&listLimit, "limit", 0, "max rows to return (0 = server default page)")
+	list.Flags().IntVar(&listOffset, "offset", 0, "skip this many rows (page forward past a truncated list)")
 
 	get := &cobra.Command{
 		Use:   "get <policy-id>",

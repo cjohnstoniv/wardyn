@@ -160,6 +160,7 @@ func TestWorkspaceOwnership_OwnerReachesOwn(t *testing.T) {
 		{http.MethodGet, ""},
 		{http.MethodGet, "/build"},
 		{http.MethodGet, "/observed-egress"},
+		{http.MethodGet, "/env-as-code"},
 	} {
 		w := doSSO(t, srv, c.method, "/api/v1/workspaces/"+own.String()+c.suffix, member, "")
 		if w.Code == http.StatusForbidden || w.Code == http.StatusNotFound {

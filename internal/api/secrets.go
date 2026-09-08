@@ -230,6 +230,14 @@ func (s *Server) admitSecretCount(w http.ResponseWriter, r *http.Request, owner,
 // ?owner= for a non-operator, and For(owner) never resolves a different
 // owner's row), so deleting one 204s exactly like deleting a never-set name —
 // no existence oracle. Audited.
+//
+// THE EXPLICIT ?owner= ARM IS NOT IDEMPOTENT, and the asymmetry is the point.
+// The no-existence-oracle posture above is about MEMBERS: a member must not
+// learn from a status code whether another member holds a name. An admin who
+// has already named the namespace has no such oracle to gain, and the 204 they
+// got for a namespace that never held the row is exactly how F341's mis-aimed
+// revoke looked identical to a real one — 204 with an outcome=success audit
+// row while the secret stayed live. So this arm reports the miss instead.
 func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	owner, ok := s.secretOwnerParam(w, r)
@@ -237,6 +245,9 @@ func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.writableSecretName(w, name, owner) {
+		return
+	}
+	if r.URL.Query().Get("owner") != "" && !s.crossOwnerDeleteHitsARow(w, r, owner, name) {
 		return
 	}
 	if err := s.cfg.Secrets.For(owner).Delete(r.Context(), name); err != nil {
@@ -255,16 +266,187 @@ func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 // CONSTANT 403 — refused before any lookup, so it never varies with whether
 // the named principal exists — the same posture handleReassignWorkspace's
 // admin-only gate uses for the analogous workspace-ownership query.
+//
+// THE VALUE IS RESOLVED, NOT PASSED THROUGH. It used to become the namespace
+// key verbatim, so it matched exactly ONE identity form: an admin naming a real
+// member by their email, or by a case-variant of their subject, got 204 and an
+// outcome=success audit row while the PUT landed in a namespace nobody reads and
+// the DELETE left the live secret in place. ?owner= names a HUMAN; a namespace
+// is keyed by the principal that human's own writes stamp
+// (secretOwnerFromRequest), and resolveSecretOwner is what maps the one onto the
+// other.
 func (s *Server) secretOwnerParam(w http.ResponseWriter, r *http.Request) (owner string, ok bool) {
-	q := r.URL.Query().Get("owner")
+	q := strings.TrimSpace(r.URL.Query().Get("owner"))
 	if q == "" {
 		return s.secretOwnerFromRequest(r), true
 	}
 	if !s.isOperator(r.Context()) {
 		writeError(w, http.StatusForbidden, "?owner= is admin-only")
+		// AUDITED, because this is a member reaching for ANOTHER human's
+		// credential namespace and the row is the only trace it happened.
+		// docs/AUDIT-ACTIONS.md's contract is "every member denial that isn't a
+		// plain foreign-resource 404", and a middleware-gated admin route
+		// already writes exactly this row for the same member — an in-handler
+		// gate that stays silent makes the audit trail depend on WHERE the
+		// refusal happens to live.
+		//
+		// SHAPE-IDENTICAL to the middleware's and to getWorkspaceAuthorized's
+		// in-handler twin: reason from the closed vocabulary, target the path,
+		// method in the data. It names no namespace: the refusal is constant and
+		// runs before any lookup, so neither the response nor the row can say
+		// whether the principal ?owner= asked about exists.
+		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+			"authz.denied", r.URL.Path, "denied", mustJSON(map[string]any{"reason": "admin_surface", "method": r.Method})))
 		return "", false
 	}
-	return q, true
+	resolved, refusal := s.resolveSecretOwner(r.Context(), q)
+	if refusal != "" {
+		writeError(w, http.StatusUnprocessableEntity, refusal)
+		return "", false
+	}
+	return resolved, true
+}
+
+// secretOwnerUnresolvedMsg is the refusal for an ?owner= email form that pairs
+// to no principal this deployment knows. CONSTANT, and it names no value back:
+// the point is to tell the admin the write would have gone nowhere, not to echo
+// caller-supplied bytes into a response.
+const secretOwnerUnresolvedMsg = "?owner= names an email address that no principal on this deployment is known by. " +
+	"A secret namespace is keyed by the OIDC subject, so storing under an email the IdP did not make the subject " +
+	"would create a namespace the owner's own runs never read — name the subject instead."
+
+// secretOwnerAmbiguousMsg is the refusal for a value that folds onto SEVERAL
+// known principals. An OIDC subject is an opaque, case-SENSITIVE string, so a
+// deployment may legitimately hold two that differ only by case; guessing which
+// one an admin meant would write a credential into the wrong human's namespace,
+// which is worse than the miss F341 is about.
+const secretOwnerAmbiguousMsg = "?owner= matches more than one known principal; name the subject exactly"
+
+// principalIdentity pairs a stored namespace key (the principal exactly as that
+// human's own writes stamp it) with the email their IdP sent alongside it.
+type principalIdentity struct{ principal, email string }
+
+// knownPrincipals is the identity directory ?owner= resolves against.
+//
+// api_tokens is the ONLY place this codebase holds a (principal, email)
+// PAIRING, and it is already the directory revokeAPITokensFor matches a named
+// principal through — using the same rows here is what keeps the two
+// admin-facing "name a human" surfaces from disagreeing about who was named.
+// workspaces.owned_by adds the principals an operator has already acted for,
+// subject-form only.
+//
+// DELIBERATELY NOT capability-grant or governance-assignment subjects: those are
+// matched at read time against a caller's sub AND email (capabilitySubjects), so
+// a `user` row may hold either form with nothing to pair it to — admitting one
+// would let an email become a namespace key again, which is the whole failure.
+func (s *Server) knownPrincipals(ctx context.Context) []principalIdentity {
+	if s.cfg.Store == nil {
+		return nil
+	}
+	var out []principalIdentity
+	if toks, err := s.cfg.Store.ListAPITokens(ctx); err == nil {
+		for _, t := range toks {
+			if t.Principal != "" {
+				out = append(out, principalIdentity{principal: t.Principal, email: t.Email})
+			}
+		}
+	}
+	if wss, err := s.cfg.Store.ListWorkspaces(ctx); err == nil {
+		for _, ws := range wss {
+			if ws.OwnedBy != "" {
+				out = append(out, principalIdentity{principal: ws.OwnedBy})
+			}
+		}
+	}
+	return out
+}
+
+// resolveSecretOwner maps an admin-supplied ?owner= value onto the namespace key
+// the named human's own writes land in. It returns an empty refusal when it
+// resolved, or the exact sentence to answer 422 with.
+//
+// Order, and the order is the design:
+//
+//  1. An EXACT, case-sensitive match against a known principal wins outright. A
+//     subject is an opaque IdP string: when the admin typed one this deployment
+//     actually issues, there is nothing left to infer, and no case-fold below
+//     can second-guess it.
+//  2. Otherwise, every DISTINCT known principal the value folds onto. Exactly
+//     one ⇒ that principal — this is what makes ?owner=Alice reach alice's own
+//     namespace instead of minting a second one beside it. More than one ⇒
+//     REFUSED: two subjects differing only by case is legal, and picking the
+//     first listed would put a credential in the wrong human's namespace.
+//  3. The same two answers against the known EMAILS, which is the dual-identity
+//     rule capabilitySubjects and revokeAPITokensFor already apply, brought to
+//     the one admin surface that lacked it.
+//  4. Neither, and it is email-shaped ⇒ REFUSED. An "@" value that pairs to no
+//     principal cannot be a subject this deployment issues, so writing it could
+//     only create a namespace the owner never reads — the silent no-op F341
+//     names. A bare value is taken verbatim: refusing a subject merely because
+//     this deployment has not seen it yet would break pre-provisioning for a
+//     member who has not signed in.
+func (s *Server) resolveSecretOwner(ctx context.Context, v string) (owner, refusal string) {
+	known := s.knownPrincipals(ctx)
+	for _, p := range known {
+		if p.principal == v {
+			return v, ""
+		}
+	}
+	for _, byEmail := range []bool{false, true} {
+		switch hits := foldedPrincipals(known, v, byEmail); len(hits) {
+		case 1:
+			return hits[0], ""
+		case 0:
+		default:
+			return "", secretOwnerAmbiguousMsg
+		}
+	}
+	if strings.Contains(v, "@") {
+		return "", secretOwnerUnresolvedMsg
+	}
+	return v, ""
+}
+
+// foldedPrincipals returns the DISTINCT stored principals whose own subject
+// (byEmail=false) or paired email (byEmail=true) equals v case-insensitively.
+// Distinct by the PRINCIPAL string, since one human commonly appears in the
+// directory several times (one row per api token, plus each owned workspace)
+// and those repeats are not an ambiguity.
+func foldedPrincipals(known []principalIdentity, v string, byEmail bool) []string {
+	var out []string
+	for _, p := range known {
+		field := p.principal
+		if byEmail {
+			field = p.email
+		}
+		if field == "" || !strings.EqualFold(field, v) {
+			continue
+		}
+		if !slices.Contains(out, p.principal) {
+			out = append(out, p.principal)
+		}
+	}
+	return out
+}
+
+// crossOwnerDeleteHitsARow reports whether the named namespace actually holds
+// name, writing the 404 and a failure audit row when it does not. Only the
+// explicit ?owner= arm calls it (handleDeleteSecret's own doc says why).
+//
+// A List failure is fail-OPEN (proceed to the Delete): a store that cannot
+// answer "does this row exist" must not turn a legitimate revoke into a 404 —
+// the Delete below reports a real store failure on its own.
+func (s *Server) crossOwnerDeleteHitsARow(w http.ResponseWriter, r *http.Request, owner, name string) bool {
+	names, err := s.cfg.Secrets.For(owner).List(r.Context())
+	if err != nil || slices.Contains(names, name) {
+		return true
+	}
+	writeError(w, http.StatusNotFound, "that owner holds no secret by that name")
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"secret.delete", name, "failure", mustJSON(map[string]any{
+			"secret_owner": owner, "reason": "not_found",
+		})))
+	return false
 }
 
 // secretOwnerAuditData is the secret.write/secret.delete audit Data: nil for

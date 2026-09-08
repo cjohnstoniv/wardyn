@@ -26,12 +26,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"math"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/google/uuid"
 )
@@ -606,10 +604,23 @@ const driveSlugMaxLen = 40
 // cannot produce two different objects for one drive.
 var driveSlugUnsafeRe = regexp.MustCompile(`[^a-z0-9]+`)
 
-// driveSlug folds a drive's human name into the DNS-1123 fragment a PVC name
+// DriveSlug folds a drive's human name into the DNS-1123 fragment a PVC name
 // carries. ValidateUserDrive refuses a name that folds to nothing, so this
 // never returns "" for a stored drive.
-func driveSlug(name string) string {
+//
+// EXPORTED BECAUSE THE FOLD IS NOT INJECTIVE AND SOMETHING HAS TO ENFORCE THAT.
+// It is a fold on purpose — "Corp NAS" and "  Corp   NAS! " are one slug, so a
+// cosmetic rename does not re-home anybody (driveIdentityFields compares through
+// it for exactly that reason). Across two ROWS the same property is a collision:
+// UNIQUE(name) admits "Corp NAS" and "corp nas" as different names, and both
+// mint wardyn-drive-corp-nas-bsmith for one home, so two drives hand one object to
+// two sets of members with different sizes, writability and reclaim policy —
+// caught today only at mount time, as a run failure, by the runners' wardyn.drive
+// label check. The store writes this value into user_drives.name_slug and
+// migration 0061 makes it UNIQUE for every backend whose object name Wardyn
+// mints, which is the namespace the collision is actually in. The Go definition
+// is the one that decides: the column holds what this function returned.
+func DriveSlug(name string) string {
 	s := driveSlugUnsafeRe.ReplaceAllString(strings.ToLower(strings.TrimSpace(name)), "-")
 	s = strings.Trim(s, "-")
 	if len(s) > driveSlugMaxLen {
@@ -648,286 +659,29 @@ func driveSlug(name string) string {
 // under it was named by whoever owns the tree, not by Wardyn — a slug there
 // would name a directory that does not exist.
 func DriveObjectName(d UserDrive, home string) string {
-	switch d.Backend {
-	case DriveBackendHostPath:
+	if !DriveObjectNamedByWardyn(d.Backend) {
 		return filepath.Join(filepath.Clean(d.HostRoot), home)
-	default:
-		return driveObjectPrefix + driveSlug(d.Name) + "-" + home
 	}
+	return driveObjectPrefix + DriveSlug(d.Name) + "-" + home
 }
 
-// ─── write-boundary validation ────────────────────────────────────────────────
-
-// maxUserDriveNameLen bounds a drive name on write — a human handle rendered in
-// a picker and folded into an object name, not a description. Matched to the
-// governance profile-name cap so the two admin objects behave alike.
-const maxUserDriveNameLen = 128
-
-// maxUserDriveFieldLen bounds the free-text columns (host_root, storage_class,
-// subject, home_override) so a row cannot be used as storage.
-const maxUserDriveFieldLen = 512
-
-// ValidateUserDrive normalizes d in place and validates it, in the same shape
-// validateGovernanceAssignment applies to an assignment: trim, lowercase where
-// the value is matched case-insensitively downstream, length, no control
-// characters.
+// DriveObjectNamedByWardyn reports whether WARDYN MINTS this backend's storage
+// object name — the `wardyn-drive-<drive-slug>-<home>` arm of DriveObjectName —
+// rather than joining a path somebody else already created.
 //
-// runnerTarget is the deployment's own Config.RunnerTarget, and the match is
-// REQUIRED rather than advisory: a k8s drive on a Docker deployment is a row
-// whose every resolution ends in a runtime refusal, so it is a 400 at the write
-// instead of a 422 on somebody's run three days later. An empty or unknown
-// target refuses every backend — a control plane that dispatches nowhere has no
-// business registering storage for it.
+// IT IS NOT THE MANAGED/SHARE SPLIT, and conflating the two is what the
+// home-template rules got wrong. DriveKind answers "does Wardyn CREATE the
+// object?"; this answers "does Wardyn NAME it?". k8s_pvc_static is a SHARE by
+// the first question — an admin provisions the claim and wardynd only ever Gets
+// it — and a Wardyn-named object by the second, because a claim is addressed by
+// name in a namespace and the name Wardyn asks for is the one it mints. Only
+// host_path is on the other side: its object is `<host_root>/<home>`, a
+// directory the share owner made and named.
 //
-// It deliberately does NOT check host_root against the deployment's env ceiling
-// (see UserDriveHostRootCheck): this package cannot read the environment, and a
-// ceiling that lived in two places would be a ceiling one of them could forget.
-func ValidateUserDrive(d *UserDrive, runnerTarget string) error {
-	d.Name = strings.TrimSpace(d.Name)
-	if d.Name == "" {
-		return fmt.Errorf("name: required")
-	}
-	if len(d.Name) > maxUserDriveNameLen || !driveTextIsClean(d.Name) {
-		return fmt.Errorf("name: invalid")
-	}
-	if driveSlug(d.Name) == "" {
-		return fmt.Errorf("name: must contain at least one letter or digit (it names the drive's storage objects)")
-	}
-	if !d.Backend.Valid() {
-		return fmt.Errorf("backend: invalid %q", d.Backend)
-	}
-	if d.Backend.RunnerTarget() != runnerTarget {
-		return fmt.Errorf("backend %q cannot be mounted by this deployment's runner (%s)", d.Backend, runnerTarget)
-	}
-	if err := validateDriveHostRoot(d); err != nil {
-		return err
-	}
-	if d.StorageClass = strings.TrimSpace(d.StorageClass); d.StorageClass != "" {
-		if d.Backend != DriveBackendK8sPVC {
-			return fmt.Errorf("storage_class: only a %q drive provisions a volume; %q does not",
-				DriveBackendK8sPVC, d.Backend)
-		}
-		if len(d.StorageClass) > maxUserDriveFieldLen || !driveTextIsClean(d.StorageClass) {
-			return fmt.Errorf("storage_class: invalid")
-		}
-	}
-	if d.HomeTemplate == "" {
-		d.HomeTemplate = HomeTemplateHash
-	}
-	if !d.HomeTemplate.Valid() {
-		return fmt.Errorf("home_template: invalid %q", d.HomeTemplate)
-	}
-	// A SHARE's directories are named by whoever owns the share, so a hash
-	// would name a directory that does not exist and Wardyn does not create
-	// one: a missing home on a share is a refusal, not a mkdir.
-	if ShareBackendRejectsTemplate(d.Backend, d.HomeTemplate) {
-		return fmt.Errorf("home_template %q is not allowed on a share backend — a share's directories are named by "+
-			"your directory, so pick %s or %s", HomeTemplateHash, HomeTemplateSub, HomeTemplateEmailLocal)
-	}
-	// AND THE MIRROR IMAGE, for a reason that is security rather than symmetry.
-	// A MANAGED object's name ENDS in the HOME segment, and everything before it
-	// is fixed for the drive (DriveObjectName: `wardyn-drive-<drive-slug>-<home>`),
-	// so under `email_local` two principals whose addresses share the part before
-	// the "@" — alice@corp.example and alice@acquired.example, the ordinary
-	// shape of a merged tenant — resolve to ONE object name. On a SHARE that is
-	// an admin's problem with a filesystem they own and can see; on a managed
-	// backend Wardyn ALLOCATES the object, and the Docker driver adopts a volume
-	// labelled with this same drive rather than refusing it (ensureDriveVolume's
-	// inspect-hit arm keys on the drive id, which matches). The result is two
-	// people silently sharing one drive, with write access to each other's files
-	// whenever the allocation is writable.
-	//
-	// REFUSED, not warned: the collision is invisible from the admin surface
-	// (both allocations preview a perfectly well-formed object name), and the
-	// the remedy is cheap — `hash`, which puts the subject in the digest and is
-	// already the default.
-	//
-	// SCOPE WIDENED (2026-09-03): the refusal covers EVERY non-hash template on a
-	// managed backend, not just email_local. `sub` was previously allowed here as
-	// the collision-free alternative, which answered collision but never asked the
-	// EXPOSURE question DriveSubjectHash settles for labels: the home segment is
-	// concatenated into the object name (DriveObjectName ->
-	// `wardyn-drive-<drive-slug>-<home>`), and an object name is read by
-	// `docker volume ls` / `kubectl get pvc` WITHOUT
-	// the inspect or describe a label needs. So `sub` was refused in the LESS
-	// exposed place and permitted in the MORE exposed one. `hash` is unique AND
-	// reveals nothing, so nothing is lost: a managed volume's name is not a thing
-	// a human navigates, which is precisely what a share backend is for — and
-	// share backends keep every template.
-	if ManagedBackendRejectsTemplate(d.Backend, d.HomeTemplate) {
-		return fmt.Errorf("home_template %q is not allowed on a managed backend — Wardyn names the object after the "+
-			"directory, so the template lands in a %s object name that `docker volume ls` and `kubectl get pvc` show "+
-			"without inspecting anything; %s also collides two people whose addresses share the part before the \"@\". "+
-			"Use %s, which is unique and reveals nothing; a share backend keeps every template",
-			d.HomeTemplate, d.Backend, HomeTemplateEmailLocal, HomeTemplateHash)
-	}
-	if d.SizeMiB < 0 {
-		return fmt.Errorf("size_mib: must not be negative")
-	}
-	if d.SizeMiB > maxUserDriveInt {
-		return fmt.Errorf("size_mib: must be at most %d — %s", maxUserDriveInt, userDriveIntColumnReason)
-	}
-	// A k8s_pvc drive is the ONE backend where the size is not a display value:
-	// it becomes the PVC's resources.requests.storage, and a claim requesting
-	// zero bytes is rejected by the apiserver. So 0 — which every other backend
-	// reads as "no allocation shown" — is a row whose every member's run would
-	// fail at bind time on the cluster, and it is refused at authoring instead.
-	if d.Backend == DriveBackendK8sPVC && d.SizeMiB <= 0 {
-		return fmt.Errorf("size_mib must be above 0 for a %s drive — it is the volume request", DriveBackendK8sPVC)
-	}
-	if d.Reclaim == "" {
-		d.Reclaim = DriveReclaimRetain
-	}
-	if !d.Reclaim.Valid() {
-		return fmt.Errorf("reclaim: invalid %q", d.Reclaim)
-	}
-	return nil
-}
-
-// validateDriveHostRoot is ValidateUserDrive's host_path arm: the root must be
-// absolute and already cleaned for a host_path drive, and EMPTY for every other
-// backend.
-//
-// Requiring the cleaned form rather than cleaning it silently is deliberate:
-// the stored string is the one an operator compares against the env allowlist
-// by eye, and "/srv/homes/../homes" and "/srv/homes" reading as the same root
-// while LOOKING different is how an allowlist review misses a row.
-func validateDriveHostRoot(d *UserDrive) error {
-	d.HostRoot = strings.TrimSpace(d.HostRoot)
-	if d.Backend != DriveBackendHostPath {
-		if d.HostRoot != "" {
-			return fmt.Errorf("host_root: only a %q drive binds a host tree", DriveBackendHostPath)
-		}
-		return nil
-	}
-	if d.HostRoot == "" {
-		return fmt.Errorf("host_root: required for a %q drive", DriveBackendHostPath)
-	}
-	if len(d.HostRoot) > maxUserDriveFieldLen || !driveTextIsClean(d.HostRoot) {
-		return fmt.Errorf("host_root: invalid")
-	}
-	if !filepath.IsAbs(d.HostRoot) {
-		return fmt.Errorf("host_root: must be an absolute path")
-	}
-	if filepath.Clean(d.HostRoot) != d.HostRoot {
-		return fmt.Errorf("host_root: must be a cleaned path (%q)", filepath.Clean(d.HostRoot))
-	}
-	return nil
-}
-
-// ValidateUserDriveGrant normalizes g in place and validates it, applying the
-// SAME subject hygiene validateGovernanceAssignment applies — trim, length, no
-// control characters, and for a GROUP subject the shared CanonicalGroupSubject
-// the login-time snapshot itself is built with — because the three tables are
-// written against the identical subject vocabulary and resolved through the
-// identical capabilitySubjects call. A subject normalized one way here and
-// another way there is a row that silently never matches.
-func ValidateUserDriveGrant(g *UserDriveGrant) error {
-	if !g.SubjectType.Valid() {
-		return fmt.Errorf("subject_type: invalid %q", g.SubjectType)
-	}
-	if g.DriveID == uuid.Nil {
-		return fmt.Errorf("drive_id: required")
-	}
-	if g.SubjectType == CapabilitySubjectAll {
-		// "all" names every signed-in human; the migration is explicit that
-		// subject is '' for this type, so a caller-supplied value is dropped
-		// rather than trusted — honouring it would create a second,
-		// unreachable everyone row.
-		g.Subject = ""
-	} else {
-		g.Subject = strings.TrimSpace(g.Subject)
-		if g.Subject == "" {
-			return fmt.Errorf("subject: required for subject_type %q", g.SubjectType)
-		}
-		if g.SubjectType == CapabilitySubjectGroup {
-			// The group half of that hygiene is CanonicalGroupSubject, not a
-			// lowercase. A group subject is matched by EXACT equality against
-			// the login-time snapshot, which carries printable ASCII guarded
-			// before the Unicode fold — so a plain ToLower both ACCEPTS a
-			// subject no session can ever carry (an allocation that matches
-			// nobody, while HasGroupTierDriveGrants counts the dead row as a
-			// group tier that exists) and, worse, folds U+212A / U+0130 ONTO an
-			// operator-authored ASCII group, binding a drive to a group the
-			// author never named. This was the one write boundary of the three
-			// left on the loose rule.
-			subject, ok := CanonicalGroupSubject(g.Subject)
-			if !ok {
-				return fmt.Errorf("subject: must be printable ASCII — a group subject is matched against the login-time group snapshot, which carries printable ASCII only, so this value can never match anyone")
-			}
-			g.Subject = subject
-		} else {
-			g.Subject = strings.ToLower(g.Subject)
-		}
-		if len(g.Subject) > maxUserDriveFieldLen || !driveTextIsClean(g.Subject) {
-			return fmt.Errorf("subject: invalid")
-		}
-	}
-	if g.SizeMiBOverride < 0 {
-		return fmt.Errorf("size_mib_override: must not be negative")
-	}
-	if g.SizeMiBOverride > maxUserDriveInt {
-		return fmt.Errorf("size_mib_override: must be at most %d — %s", maxUserDriveInt, userDriveIntColumnReason)
-	}
-	if g.Priority > maxUserDriveInt || g.Priority < minUserDriveInt {
-		return fmt.Errorf("priority: must be between %d and %d — %s", minUserDriveInt, maxUserDriveInt, userDriveIntColumnReason)
-	}
-	g.HomeOverride = strings.ToLower(strings.TrimSpace(g.HomeOverride))
-	if g.HomeOverride == "" {
-		return nil
-	}
-	// USER TIER ONLY. A home override on a group or all row would hand every
-	// member of that group the SAME directory — the isolation a per-user
-	// subdirectory buys, removed by a field that reads like a convenience.
-	if g.SubjectType != CapabilitySubjectUser {
-		return fmt.Errorf("home_override is accepted on a %s-tier allocation only — a group cannot share one directory",
-			CapabilitySubjectUser)
-	}
-	// The DOCKER rule, and deliberately the looser of the two: this row holds a
-	// drive_id, not the drive, so the backend that will have to hold the name
-	// is not knowable here. DriveHomeName re-checks against the real backend at
-	// resolve time — the same shape ValidateUserDrive takes with the host-root
-	// ceiling it also cannot see.
-	if !driveHomeSegmentRe.MatchString(g.HomeOverride) {
-		return fmt.Errorf("home_override: %q is not a valid home name (%s)", g.HomeOverride, driveHomeSegmentRe)
-	}
-	return nil
-}
-
-// maxUserDriveInt / minUserDriveInt are the range EVERY integer column on these
-// two tables actually has, and it is the COLUMN'S rather than a policy: 0054
-// declares user_drives.size_mib, user_drive_grants.priority and
-// user_drive_grants.size_mib_override as INT — PostgreSQL's 4-byte signed
-// integer — while Go's int is 64-bit on every platform wardynd ships on. So a
-// value in the gap validated here, was written, and the DATABASE refused it
-// with SQLSTATE 22003 ("integer out of range"), which is neither ErrConflict
-// nor ErrNotFound and therefore reached the admin as a 500 carrying the raw
-// driver string. That is the shape the CreatePolicy contract exists to keep off
-// the wire, and the row was the caller's to fix all along.
-//
-// A CEILING, NOT A SIZE OPINION. 2 PiB of size_mib is not a number this package
-// has grounds to argue with; a number the column cannot hold is. Priority is
-// bounded in BOTH directions because negative priorities are legitimate (a
-// deliberate de-prioritised group row) and int32 is asymmetric.
-const (
-	maxUserDriveInt = math.MaxInt32
-	minUserDriveInt = math.MinInt32
-)
-
-// userDriveIntColumnReason is the half of those three refusals that says WHY,
-// written once so the three cannot drift into three different explanations of
-// one column type.
-const userDriveIntColumnReason = "the column is a 32-bit integer (migration 0054), and a larger value is refused by the database rather than stored"
-
-// driveTextIsClean reports whether s carries no control characters — the same
-// field hygiene the capability-grant and governance-assignment writes apply,
-// restated here because this package must not import internal/api.
-//
-// unicode.IsControl covers C0 and DEL exactly as the hand-rolled loop did, and
-// ALSO the C1 range U+0080-U+009F — strictly tighter at every call site, never
-// looser. Same expression, same stance as internal/api's controlCharFree.
-func driveTextIsClean(s string) bool {
-	return !strings.ContainsFunc(s, unicode.IsControl)
+// It is the SAME expression DriveObjectName branches on, called rather than
+// restated, so the rules keyed on it cannot drift from the name they are about.
+func DriveObjectNamedByWardyn(b DriveBackend) bool {
+	return b != DriveBackendHostPath
 }
 
 // ManagedBackendRejectsTemplate is THE managed-backend home-template rule: a
@@ -945,7 +699,33 @@ func driveTextIsClean(s string) bool {
 // name, which is the exposure the widening exists to prevent. One predicate, so
 // a third site cannot diverge again.
 func ManagedBackendRejectsTemplate(backend DriveBackend, tmpl HomeTemplate) bool {
-	return backend.Kind() == DriveKindManaged && tmpl != "" && tmpl != HomeTemplateHash
+	if tmpl == "" || tmpl == HomeTemplateHash {
+		return false
+	}
+	// THE AXIS IS WHO NAMES THE OBJECT, not who creates it. Everything this rule
+	// is about — a claim-derived segment concatenated into a name that
+	// `docker volume ls` and `kubectl get pvc` print without inspecting
+	// anything, and `email_local` folding two principals onto one name — is true
+	// of every object WARDYN NAMES. It was keyed on DriveKind instead, which put
+	// k8s_pvc_static on the wrong side of both halves of the rule.
+	if !DriveObjectNamedByWardyn(backend) {
+		return false
+	}
+	if backend.Kind() == DriveKindManaged {
+		return true
+	}
+	// k8s_pvc_static: Wardyn names the claim but does NOT create it, and that
+	// difference decides how much of the rule applies. The EXPOSURE half cannot
+	// be enforced by refusing `sub` here, because an admin has to pre-provision
+	// claims under the names this deployment will ask for and must be able to
+	// recognise them — `hash` is now available (and is the default) for the
+	// admin who would rather read the preview endpoint than the roster, which is
+	// the recommended posture. The COLLISION half is not negotiable in the same
+	// way: `email_local` folds alice@corp.example and alice@acquired.example onto
+	// ONE claim name, and the static arm of the driver's identity check has no
+	// per-drive labels to tell them apart, so the two would silently share one
+	// pre-created volume.
+	return tmpl == HomeTemplateEmailLocal
 }
 
 // ShareBackendRejectsTemplate is the MIRROR rule, and it is exported for the
@@ -966,5 +746,15 @@ func ManagedBackendRejectsTemplate(backend DriveBackend, tmpl HomeTemplate) bool
 // no template must fall through to the derivation rather than refuse a shape
 // this rule has no opinion about.
 func ShareBackendRejectsTemplate(backend DriveBackend, tmpl HomeTemplate) bool {
-	return backend.Kind() == DriveKindShare && tmpl == HomeTemplateHash
+	// KEYED ON WHO NAMES THE OBJECT, not on DriveKind. The reason a `hash` is
+	// refused is that it names a directory nobody made and Wardyn will not make
+	// — which is true of host_path, whose object is a path under a tree the share
+	// owner created, and NOT true of k8s_pvc_static, whose object name Wardyn
+	// mints exactly as it does for a managed claim. Reading it off the
+	// managed/share split refused `hash` on a static PVC, leaving `sub` and
+	// `email_local` as the only authorable templates and so FORCING every static
+	// allocation to publish the member's sign-in subject or address in a name
+	// Wardyn itself minted — the exposure the managed half of this rule exists to
+	// refuse.
+	return !DriveObjectNamedByWardyn(backend) && tmpl == HomeTemplateHash
 }

@@ -106,14 +106,14 @@ func TestSpoolCursorRefusesAnOutOfRangeSidecar(t *testing.T) {
 	}
 
 	for _, junk := range []string{"", "not-a-number", "-5"} {
-		if got := seedSpoolCursor(filepath.Join(dir, "x"), 100); got != 0 {
+		if got := seedSpoolCursor(filepath.Join(dir, "x"), path, 100); got != 0 {
 			t.Errorf("a missing cursor seeded %d, want 0", got)
 		}
 		p := filepath.Join(dir, "junk.consumed")
 		if err := os.WriteFile(p, []byte(junk), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if got := seedSpoolCursor(p, 100); got != 0 {
+		if got := seedSpoolCursor(p, path, 100); got != 0 {
 			t.Errorf("cursor %q seeded %d, want 0", junk, got)
 		}
 	}

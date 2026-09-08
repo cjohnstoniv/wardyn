@@ -120,6 +120,47 @@ func TestClampAndComparatorAgreeOnEveryCeilingShape(t *testing.T) {
 			pairingInCeiling: true,
 		},
 		{
+			// R1 F292, shape (a), handed over by lane core: the two ceiling
+			// shapes the COMPOSER-side mutants live under, asserted here for the
+			// half the composer cannot reach. composer/grantbound_test.go pins
+			// what Clamp PRODUCES for these (repos [org/alpha], ttl 300,
+			// approval forced true); it cannot pin that internal/api's
+			// governanceGrantsWithinCeiling gives the same answer for the same
+			// input, because the composer must not import internal/api. That
+			// AGREEMENT is this table's whole subject, so the two shapes belong
+			// in both places.
+			//
+			// OVERLAPPING repo sets, not disjoint ones: [alpha,beta] and [alpha]
+			// share a repo, so the permissive entry dominates the proposal's
+			// SCOPE while the strict one holds the tighter ttl and the approval
+			// requirement. No single entry dominates on every axis — the
+			// permissive one is out-approved, the strict one is out-scoped — so
+			// the comparator refuses and only D2 applies: whatever the clamp
+			// keeps must be something a single ceiling entry actually wrote.
+			name: "github_token: overlapping repo sets, split ttl and approval",
+			ceiling: []types.GrantSpec{
+				gh([]string{"org/alpha", "org/beta"}, map[string]string{"contents": "write"}, true, 3600),
+				gh([]string{"org/alpha"}, map[string]string{"contents": "write"}, false, 300),
+			},
+			proposal:         gh([]string{"org/alpha", "org/beta"}, map[string]string{"contents": "write"}, false, 600),
+			pairingInCeiling: true,
+		},
+		{
+			// R1 F292, shape (b). The same overlap with the NEGATIVE ttl the
+			// case below covers for api_key — and it is worth having twice,
+			// because the two kinds clamp their scope by different code
+			// (clampGitHubScope re-marshals a repo list; api_key's scope is
+			// compared whole), so a ttl rule that holds for one is not evidence
+			// about the other.
+			name: "github_token: a negative ttl_seconds against overlapping repo sets",
+			ceiling: []types.GrantSpec{
+				gh([]string{"org/alpha", "org/beta"}, map[string]string{"contents": "write"}, false, 300),
+				gh([]string{"org/alpha"}, map[string]string{"contents": "write"}, false, 600),
+			},
+			proposal:         gh([]string{"org/alpha", "org/beta"}, map[string]string{"contents": "write"}, false, -1),
+			pairingInCeiling: true,
+		},
+		{
 			// The comparator resolves a NEGATIVE ttl_seconds to the broker maximum
 			// (governance_grantbound.go's normalizeGrantTTLSeconds) and refuses it
 			// under a 300s ceiling. The clamp tested `== 0` and passed the negative

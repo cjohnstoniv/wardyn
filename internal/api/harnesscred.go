@@ -423,7 +423,11 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	}
 
 	runID := uuid.New()
-	run, token, err := s.newStepRun(ctx, runID, actor, harnessLoginTask, cc, func(run *types.AgentRun) {
+	// The managed-harness login sits on operatorOnly and connects the SHARED
+	// subscription every run inherits — the deployment's credential, not a
+	// principal's work — so neither governance limit binds it (F153). The
+	// ceiling is resolved further down, for the dispatch deny axis.
+	run, token, err := s.newStepRun(ctx, runID, actor, harnessLoginTask, cc, operatorStepGovernance(governanceCeiling{}), func(run *types.AgentRun) {
 		run.Agent = hl.agent // the vendor CLI being logged into, never the catalog default
 		run.Interactive = true
 	})

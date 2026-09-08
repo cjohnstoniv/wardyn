@@ -80,6 +80,31 @@ func driveUnavailableReason(err error) string {
 	}
 }
 
+// ceilingUnavailableReason is driveUnavailableReason's twin for the OTHER half
+// of /me's answer: why the DOOR could not be decided.
+//
+// It exists because userDriveDeniedByProfile used to hand back a bare bool, and
+// R1 F273's residue is exactly what that bool discarded. A truncated group
+// snapshot fails BOTH resolves, and on a deployment that assigns governance by
+// group while allocating drives per USER the drive resolver succeeds — so the
+// only component that knows the remedy is the member's own ("sign in again") is
+// the ceiling error, and a bool cannot carry it. /me then said
+// governance_unavailable (wait for an operator) while POST /runs said 403
+// groups_snapshot_stale (sign in again): the member was shown the one remedy
+// that is not theirs, which is the whole finding.
+//
+// TWO ARMS ONLY, and deliberately not driveUnavailableReason's three: what
+// failed here is the CEILING, so "the allocation could not be read" is not one
+// of the answers. Everything that is not the stale snapshot is
+// governance_unavailable — the token whose documented meaning is "nothing is
+// wrong with the allocation; what is unknown is permission".
+func ceilingUnavailableReason(err error) string {
+	if errors.Is(err, errGroupsSnapshotStale) {
+		return driveUnavailableGroups
+	}
+	return driveUnavailableGovernance
+}
+
 // The closed reason set. `user_drive_unavailable` carries exactly one of these,
 // and "" is the ordinary answer: /me could answer, and user_drive says what it
 // answered (an allocation, or null for none).
@@ -195,12 +220,82 @@ func (s *Server) driveWithUnusableGroups(ctx context.Context, users []string) (*
 		return nil, fmt.Errorf("api: resolve user drive: %w", herr)
 	}
 	if hasGroupTier {
+		// AUDITED, at the SECOND site that decides this refusal (R1 F317).
+		//
+		// This branch is the mirror image of ceilingWithUnusableGroups' own, and
+		// it was the silent one: docs/AUDIT-ACTIONS.md and OPERATIONS.md both
+		// described groups_snapshot_stale as emitted "at the ONE site that
+		// decides it", naming the governance resolver — while the DRIVES
+		// resolver raised the identical 403 from here and recorded nothing. On
+		// the deployment shape that has group-tier DRIVE grants and no
+		// group-tier governance assignment, that made the whole denial stream
+		// empty: executed, 0 authz.denied rows out of 0 events for a member the
+		// launch door refuses 403.
+		//
+		// HERE rather than at writeDriveError, for the reason the governance
+		// twin gives: writeDriveError is a free function with no server and no
+		// context, and auditing at the write sites would mean one emit per seam.
+		// This is the only place the drive refusal is DECIDED.
+		//
+		// runs.drive IS THE TARGET, matching denyMemberDrive — the other refusal
+		// this seam writes — rather than governance.ceiling. The two rows say
+		// different things: one is "your profile shuts the drive door", the
+		// other "nobody can tell whether it is shut", and an operator filtering
+		// by target is asking about the drive either way.
+		//
+		// Guarded on the SINK for the reason the twin states: auditEvent is
+		// evaluated as recordAudit's ARGUMENT, so a Server assembled without
+		// New() would still build the row and stamp it from a nil cfg.Now.
+		if s.cfg.Audit != nil && !isDisplayRead(ctx) {
+			s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, oidcHumanFromContext(ctx),
+				"authz.denied", "runs.drive", "denied",
+				mustJSON(map[string]any{"reason": "groups_snapshot_stale"})))
+		}
 		return nil, errGroupsSnapshotStale
 	}
 	if err != nil {
 		return nil, nil // ErrNotFound, and no group tier could have been hiding one
 	}
 	return newResolvedDrive(d, g, tier, users)
+}
+
+// displayReadCtxKey marks a resolve made to DISPLAY a state, not to enforce one.
+//
+// It exists because the two groups_snapshot_stale deciding sites write an
+// authz.denied row, and GET /me reaches BOTH of them on every console poll. A
+// member with an unanswerable group snapshot therefore produced denial rows on a
+// TIMER — two per poll on a deployment that assigns governance by group and
+// allocates drives by group — for a member who never asked for a run. Executed
+// before the mark existed: three /me polls, three rows.
+//
+// That is the same argument resolveMeUserDrive already makes one layer up about
+// the metric and the WARN ("THE DECISION, NOT THE REFUSAL: a /me poll is a
+// display read on a timer, so running the writer here would inflate
+// wardyn_user_drive_refused_total and fill the log with WARNs for a member who
+// never asked for a run"), and an audit row is a STRONGER artefact than a WARN:
+// it is the operator's count of who was refused, and page views are not
+// refusals.
+//
+// SET BY THE DISPLAY CALLERS, never by a middleware, so the default is
+// "enforcing" and a new enforcement seam cannot silently inherit the
+// suppression: seedRequestDrive, the launch and preflight paths and every other
+// caller reach the deciding sites unmarked and keep recording. There are two
+// display callers — GET /me, and POST /drives/preview, whose handler doc has
+// always said it is "STILL NOT AUDITED" and whose steps reach both deciding
+// sites; the preview is the sharper case, because the row it wrote named the
+// ADMIN asking about somebody else as the refused principal. The DECISION is
+// unchanged either way — /me still refuses to answer, and still reports
+// groups_snapshot_stale on the wire; what the mark removes is only the
+// operator-facing ROW for a request nobody was refused by.
+type displayReadCtxKey struct{}
+
+func withDisplayRead(ctx context.Context) context.Context {
+	return context.WithValue(ctx, displayReadCtxKey{}, true)
+}
+
+func isDisplayRead(ctx context.Context) bool {
+	v, _ := ctx.Value(displayReadCtxKey{}).(bool)
+	return v
 }
 
 // resolveUserDriveFor is the store read plus the absent-row doctrine, shared by
@@ -340,7 +435,10 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 	//
 	// BEFORE the derivation, like the managed arm above: the home it would
 	// derive is exactly the unmakeable one, and a check downstream of it would
-	// be reasoning about a value it had already accepted.
+	// be reasoning about a value it had already accepted. Since R1 F294 the
+	// share rule keys on who NAMES the object (types.DriveObjectNamedByWardyn):
+	// host_path refuses `hash`, and k8s_pvc_static — a share Wardyn names —
+	// refuses `email_local` instead, so this arm fires for both share backends.
 	if types.ShareBackendRejectsTemplate(d.Backend, d.HomeTemplate) {
 		slog.Warn("wardynd: user drive: a share drive is templated on a hash, which names a directory nobody created",
 			slog.String("drive", d.Name), slog.String("backend", string(d.Backend)),
@@ -581,9 +679,25 @@ func drivePreviewWarning(tmpl types.HomeTemplate, users []string) string {
 // event: nothing is minted and nothing changes, and denyMemberDrive's
 // authz.denied row is about a member's own attempt to launch.
 //
+// AND THAT IS ENFORCED, not merely stated (R1 F227). Both of this handler's
+// steps reach a site that DOES record — drivePreviewDoorIsOpen calls
+// ceilingWithUnusableGroups, previewResolveUserDrive calls
+// driveWithUnusableGroups — so once those sites began emitting authz.denied for
+// the stale-snapshot refusal, an admin previewing a member's drive wrote a
+// denial row of their own. Executed: one preview of carol's drive produced
+// `authz.denied target=governance.ceiling actor="sub-admin-alice"` — the ADMIN
+// named as the refused principal, for a question they merely asked about
+// somebody else. That is worse than the silence F227 set out to fix: a denial
+// stream with the wrong person in it cannot be read at all.
+//
+// The whole request is marked as a DISPLAY READ, once, here rather than at each
+// step: every line of this endpoint is a display, so a step added later inherits
+// the right posture instead of having to remember it.
+//
 // Routing is D2's (SUPER-only, beside the /drives CRUD family); this handler is
 // deliberately complete so that registration is one line.
 func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) {
+	r = r.WithContext(withDisplayRead(r.Context()))
 	var req governancePreviewRequest
 	if !decodeStrict(w, r, &req) {
 		return
