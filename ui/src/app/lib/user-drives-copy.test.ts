@@ -446,7 +446,7 @@ describe("user-drives-prompt §7.1 — the server-composed table matches the Go 
 // doc {placeholder} both become one hole, %q brings the quotes it renders, and
 // the two envelopes the server adds around the frozen sentence are stripped from
 // the doc side rather than pretended away —
-//   - `drive: ` — driveRefusal() (internal/api/user_drives.go), on all six
+//   - `drive: ` — driveRefusal() (internal/api/user_drives_me.go since the size-cap split), on all six
 //     REFUSED_* that go through refuseDrive / errDriveUnmountable;
 //   - `workspace_mounts[0]: ` — the caller's own field prefix, which the canon
 //     spells because §7.7 says it does (`[0]` is the mount's position).
@@ -478,7 +478,14 @@ function parseOneSection(heading: RegExp): Map<string, string> {
 
 const sec77 = parseOneSection(/^### 7\.7\b/);
 const mountGo = readFileSync(resolve(process.cwd(), "../internal/runner/mount.go"), "utf8");
-const userDrivesGo = readFileSync(resolve(process.cwd(), "../internal/api/user_drives.go"), "utf8");
+// The drives-bearing api files as ONE text: the size-cap split (53674b46) moved driveRefusal()
+// into user_drives_me.go, and a pure move must not redden a parity test — so every
+// non-test internal/api/user_drives*.go is read, not one file by name.
+const userDrivesGo = readdirSync(resolve(process.cwd(), "../internal/api"))
+  .filter((n) => /^user_drives.*\.go$/.test(n) && !n.endsWith("_test.go"))
+  .sort()
+  .map((n) => readFileSync(resolve(process.cwd(), "../internal/api", n), "utf8"))
+  .join("\n");
 const DRIVE_TARGET = (/const DriveTarget = "([^"]+)"/.exec(mountGo) ?? [])[1];
 const DRIVE_PREFIX = "drive: ";
 const MOUNT_PREFIX = "workspace_mounts[0]: ";
@@ -534,7 +541,7 @@ describe("user-drives-prompt §7.7 — the member refusals match the Go source",
   });
 
   it("strips only the envelopes the Go source actually adds", () => {
-    // driveRefusal() — internal/api/user_drives.go
+    // driveRefusal() — internal/api/user_drives_me.go (moved there by the size-cap split; scanned as part of the user_drives*.go set)
     expect(userDrivesGo).toContain(`return "${DRIVE_PREFIX}" + strings.TrimSpace(reason)`);
     // …and the mount prefix is the caller's own field convention, which
     // ValidateAuthoredTarget's refusal is documented to be given.

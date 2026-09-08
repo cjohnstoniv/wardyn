@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { health } from "./health";
 import { SERVER_OWNED_SITE_CONFIG_KEYS } from "../types";
@@ -373,7 +373,14 @@ function tsInterfaceKeys(src: string, name: string): string[] {
 describe("source parity — GET /me's Go body vs the TS Me mirror (F010)", () => {
   const root = repoRoot();
   const meGo = readFileSync(join(root, "internal/api/me.go"), "utf8");
-  const drivesGo = readFileSync(join(root, "internal/api/user_drives.go"), "utf8");
+  // Every non-test internal/api/user_drives*.go as one text: meUserDrive moved to
+  // user_drives_me.go in the size-cap split (53674b46) — a pure move must not redden
+  // the F010 parity check, and the struct name is unique across the set.
+  const drivesGo = readdirSync(join(root, "internal/api"))
+    .filter((n) => /^user_drives.*\.go$/.test(n) && !n.endsWith("_test.go"))
+    .sort()
+    .map((n) => readFileSync(join(root, "internal/api", n), "utf8"))
+    .join("\n");
   const healthTs = readFileSync(join(root, "ui/src/app/lib/api/health.ts"), "utf8");
 
   it("every key handleMe writes is declared on Me, and every Me key is one handleMe writes", () => {
