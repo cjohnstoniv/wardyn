@@ -17,7 +17,8 @@ share one clock; verify-demo-take's drift gate then asserts the RESULT
 (webm vs corrected cues ≈ rate 1.000) instead of gating on the raw mismatch.
 
 Idempotent by refusal: a corrected file carries "clockfixed": true and is not
-mapped twice. Originals are kept beside as *-raw.json (first run only). The
+mapped twice. Originals are kept beside as *-raw.json (refreshed on every
+mapping — a work dir outlives its takes). The
 fit file is stamped "applied": true on success — verify's proof for takes.
 """
 
@@ -55,9 +56,10 @@ def main() -> int:
         if doc.get("clockfixed"):
             print(f"demo-clockfix: {p.name} already on the picture clock — skipped", file=sys.stderr)
             continue
-        raw = p.with_name(p.stem + "-raw.json")
-        if not raw.exists():
-            shutil.copy2(p, raw)
+        # We only get here when the doc is NOT yet on the picture clock, i.e. it
+        # IS the raw one — so the backup is refreshed every time. Keeping the
+        # first one left take 1's cues beside take 2's picture (03b, 2026-09-08).
+        shutil.copy2(p, p.with_name(p.stem + "-raw.json"))
         if kind == "timeline":
             for c in doc.get("cues", []):
                 c["tMs"] = remap(c["tMs"], rate, off_ms)

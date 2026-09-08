@@ -64,8 +64,9 @@ def winpath(ffmpeg: str, p: str) -> str:
     return out.stdout.strip() or p
 
 
-def transitions(ffmpeg: str, video: str) -> list[float]:
-    """Picture times (seconds) where the caption bubble's ink changed.
+def transitions(ffmpeg: str, video: str) -> tuple[list[float], float]:
+    """Picture times (seconds) where the caption bubble's ink changed, and the
+    picture's last sampled time (its length, to the sample step).
 
     ffmpeg does the arithmetic: difference each sampled frame against the one
     before it (tblend) and print its average luma (signalstats). No numpy, no
@@ -92,7 +93,7 @@ def transitions(ffmpeg: str, video: str) -> list[float]:
             samples.append((t, float(m.group(1))))
             t = None
     if not samples:
-        return []
+        return [], 0.0
 
     # A caption swap moves far more ink than the compression noise between two
     # identical frames, so the floor is set off the take's own noise rather than
@@ -105,7 +106,7 @@ def transitions(ffmpeg: str, video: str) -> list[float]:
     for t, v in samples:
         if v > thr and (not hits or t - hits[-1] > 0.6):
             hits.append(t)
-    return hits
+    return hits, samples[-1][0]
 
 
 def _nearest(hits: list[float], want: float) -> float:
@@ -131,7 +132,10 @@ def fit(cues_s: list[float], hits: list[float]) -> tuple[float, float, int]:
     """
     hits = sorted(hits)
     best = (1.0, 0.0, -1, 0.0)
-    for i in range(-60, 141):  # rate 0.970 .. 1.070
+    # rate 0.900 .. 1.100. The old floor was 0.970: headless takes on a loaded
+    # box ran 5.4-5.7% SHORT (03a/03b, 2026-09-08), the grid clamped at its
+    # edge, and clockfix "corrected" with a rate that was not the take's.
+    for i in range(-200, 201):
         rate = 1.0 + i * 0.0005
         for j in range(-40, 41):  # offset -2.0s .. +2.0s
             off = j * 0.05
@@ -155,6 +159,11 @@ def selftest() -> None:
     assert abs(rate - 1.03) < 0.002, rate
     assert n == 8, n
     assert fit([1, 9, 20], [1.0, 9.0, 20.0])[0] == 1.0
+    # 2026-09-08: a headless take whose picture ran 5.7% short sat outside the
+    # old grid and clamped at 0.970 — the grid must reach it.
+    short = [c * 0.943 - 0.1 for c in (1, 9, 20, 44, 80, 130, 190, 212, 260, 300)]
+    rate, off, n = fit([1, 9, 20, 44, 80, 130, 190, 212, 260, 300], short)
+    assert abs(rate - 0.943) < 0.002 and n == 10, (rate, off, n)
     print("demo-drift: selftest ok")
 
 
@@ -202,7 +211,7 @@ def main() -> int:
         print("demo-drift: fewer than 5 cues — nothing to measure", file=sys.stderr)
         return 2
 
-    hits = transitions(ffmpeg, args.video)
+    hits, pic_end = transitions(ffmpeg, args.video)
     if not hits:
         print("demo-drift: no caption changes found in the picture", file=sys.stderr)
         return 2
@@ -230,7 +239,20 @@ def main() -> int:
         f"{'' if args.quiet else chr(10)}  rate {rate:.4f} ({pct:+.2f}%)  offset {off:+.2f}s  "
         f"matched {matched}/{len(cues_s)} cues  worst lag {worst:.2f}s"
     )
-    good_fit = matched >= max(5, int(0.6 * len(cues_s)))
+    # A fit that puts the last cue past the end of the picture is impossible,
+    # however many cues it matched: 03a (2026-09-08) matched 96/128 at +1.9%
+    # while the picture was 5% SHORTER than its cue span, and the verifier
+    # then re-found the same 96 on the rewritten cues and called it in sync.
+    # The picture's own length is the one number a fit cannot be tuned to.
+    impossible = cues_s[-1] * rate + off > pic_end + 0.5
+    at_edge = rate <= 0.9 + 1e-9 or rate >= 1.1 - 1e-9
+    if impossible:
+        print(f"  IMPOSSIBLE FIT: the last cue would land at {cues_s[-1] * rate + off:.1f}s in a "
+              f"{pic_end:.1f}s picture — the matches are coincidence", file=sys.stderr)
+    if at_edge:
+        print("  FIT AT THE GRID EDGE: the real rate is beyond ±10% — check the take, not the clocks",
+              file=sys.stderr)
+    good_fit = matched >= max(5, int(0.6 * len(cues_s))) and not impossible and not at_edge
     if args.emit_fit:
         Path(args.emit_fit).write_text(json.dumps({
             "rate": round(rate, 6), "offset_s": round(off, 3),
@@ -247,6 +269,8 @@ def main() -> int:
             f"  a mux correction would be a guess. Check the take, not the clocks.",
             file=sys.stderr,
         )
+        return 1
+    if impossible or at_edge:
         return 1
     if abs(pct) > 1.0:
         print(
