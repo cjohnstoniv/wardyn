@@ -141,12 +141,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - An operator can point the API-key model-access lane at an internal gateway instead of the public provider host (`WARDYN_ANTHROPIC_BASE_URL` / `WARDYN_OPENAI_BASE_URL`); subscription and Wardyn-managed runs still reach the public provider directly.
 - A member can bring their own model API key: it works in their own runs with no admin setup and is never reachable from anyone else's run. Members can set and remove their own secrets (`GET /secrets` now also returns `mine`); AWS/Bedrock credential names stay admin-only, and an admin can still manage a member's secrets via `?owner=`.
 
-
-  This pipeline could previously only be exercised by tagging, so its bugs were
-  unobservable until a real tag pushed — which is why 0.6.2 shipped images with no
-  provenance and 0.6.3 shipped an SBOM that understated its own contents. Both
-  would have failed a dry run. `make release-check` was green every time, because
-  it validates the repository, not the workflow.
 - **A browser desktop (noVNC) is a shipped image variant.**
   `deploy/images/novnc/`, `make agent-image-novnc`, declared as
   `"name": "novnc"`. It changed **no server code**, which is exactly what the
