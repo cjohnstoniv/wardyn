@@ -3203,7 +3203,7 @@ other way round — pointing `WARDYN_PG_MIGRATE_DSN` at a fresh "migrator" that
 owns nothing — fails on the first migration that touches an existing object,
 because PostgreSQL requires ownership for `ALTER TABLE` and for
 `CREATE OR REPLACE FUNCTION`. That is not hypothetical on a 0.6 → 0.7 upgrade. Every 0.6.x release ships
-through `0049`, so this path applies `0050`–`0060`, and most of it is exactly
+through `0049`, so this path applies `0050`–`0061`, and most of it is exactly
 this shape: `0050` (secrets), `0052` and `0060` (api_tokens, created back in
 `0045`) and `0055` (workspaces) are `ALTER TABLE` on tables an earlier release
 created — `0050` also drops and re-adds a primary key, `0060` drops and re-adds
