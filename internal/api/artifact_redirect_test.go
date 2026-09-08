@@ -54,16 +54,16 @@ func TestSubstituteArtifactEgress_CorpReplacesPublic(t *testing.T) {
 			t.Errorf("host %q (unconfigured/unrelated) should have been kept; got %v", kept, got)
 		}
 	}
-	if !gotSet["artifactory.corp"] {
-		t.Errorf("corp host artifactory.corp should have been added; got %v", got)
+	if !gotSet["artifactory.corp:443"] {
+		t.Errorf("corp host artifactory.corp:443 should have been added; got %v", got)
 	}
-	if !gotSet["registry.corp.internal"] {
-		t.Errorf("network-only To host registry.corp.internal should have been added; got %v", got)
+	if !gotSet["registry.corp.internal:443"] {
+		t.Errorf("network-only To host registry.corp.internal:443 should have been added; got %v", got)
 	}
 	// One corp host even though two ecosystems share it.
 	corpCount := 0
 	for _, d := range got {
-		if d == "artifactory.corp" {
+		if d == "artifactory.corp:443" {
 			corpCount++
 		}
 	}
@@ -136,7 +136,7 @@ func TestSubstituteArtifactEgress_ScopedToMatchingRun(t *testing.T) {
 	for _, d := range got {
 		set[d] = true
 	}
-	if set["registry.npmjs.org"] || !set["artifactory.corp"] {
+	if set["registry.npmjs.org"] || !set["artifactory.corp:443"] {
 		t.Errorf("a matching run should drop the public host and gain the corp host; got %v", got)
 	}
 }
@@ -159,7 +159,7 @@ func TestSubstituteArtifactEgress_WildcardAndPortDrop(t *testing.T) {
 	for _, d := range got {
 		set[d] = true
 	}
-	if !set["github.com"] || !set["pypi.corp.example"] {
+	if !set["github.com"] || !set["pypi.corp.example:443"] {
 		t.Errorf("unrelated host kept + corp added expected; got %v", got)
 	}
 }
@@ -321,12 +321,12 @@ func TestFoldCompat_ArtifactOverridesGoldenBehavior(t *testing.T) {
 	if !gotSet["github.com"] {
 		t.Errorf("post-fold substitution: unrelated host github.com should be kept; got %v", got)
 	}
-	if !gotSet["go-mirror.corp"] {
-		t.Errorf("post-fold substitution: go-mirror.corp should have been added; got %v", got)
+	if !gotSet["go-mirror.corp:443"] {
+		t.Errorf("post-fold substitution: go-mirror.corp:443 should have been added; got %v", got)
 	}
 	corpCount := 0
 	for _, d := range got {
-		if d == "artifactory.corp" {
+		if d == "artifactory.corp:443" {
 			corpCount++
 		}
 	}

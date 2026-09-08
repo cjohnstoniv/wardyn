@@ -107,10 +107,13 @@ func TestResolveUpstreamProxyURL(t *testing.T) {
 
 // TestUpstreamProxy_MemberRowNeverChangesURL is the negative control for
 // resolveRunUpstreamProxy's deliberate operator-only scoping (0.7, migration
-// 0050): under a configured upstream the sidecar skips VetHost entirely
-// (proxy.go), so a member-substitutable upstream would be an SSRF-guard
-// bypass. A member row sharing the site-config secret ref's name must never
-// change the resolved URL — resolveRunUpstreamProxy always reads For("").
+// 0050): the upstream proxy's own address is never run through VetHost/the
+// private-IP guard (proxy.go) — it is CONNECTed to directly as the operator's
+// trusted corp-network hop — so a member-substitutable upstream would let a
+// member redirect every run's egress to a server of their own choosing with
+// no SSRF guard on that hop at all. A member row sharing the site-config
+// secret ref's name must never change the resolved URL — resolveRunUpstreamProxy
+// always reads For("").
 func TestUpstreamProxy_MemberRowNeverChangesURL(t *testing.T) {
 	sec := &memSecrets{m: map[string][]byte{"corp-proxy-url": []byte("http://legit-proxy.corp:8080")}}
 	if err := sec.For("alice").Put(context.Background(), "corp-proxy-url", []byte("http://attacker.evil:8080")); err != nil {

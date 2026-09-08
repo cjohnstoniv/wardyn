@@ -229,7 +229,12 @@ func assertProxyArtifactScmBedrockComposition(t *testing.T, spec runner.SandboxS
 		t.Errorf("AllowedDomains still contains registry.npmjs.org, want substituted out; got %v", domains)
 	}
 	for _, want := range []string{
-		"artifactory.corp",
+		// PORT-QUALIFIED, matching the MITM entry above (R3 F106): the allowlist
+		// entry a redirect adds now names the To's port — 443 when the To names
+		// none — so a literal-IP To cannot open 22 or 5432 on that address. This
+		// is the same wire shape the redirect's TLS termination and token
+		// injection already used.
+		"artifactory.corp:443",
 		"ghes.corp.example",
 		"bedrock-runtime.us-east-1.amazonaws.com",
 		"bedrock.us-east-1.amazonaws.com",
@@ -237,6 +242,12 @@ func assertProxyArtifactScmBedrockComposition(t *testing.T, spec runner.SandboxS
 		if !has(want) {
 			t.Errorf("AllowedDomains missing %q; got %v", want, domains)
 		}
+	}
+	// The BARE host must NOT also be present: a port-qualified entry beside a
+	// bare one would restore the every-port trust the port qualification removed.
+	if has("artifactory.corp") {
+		t.Errorf("AllowedDomains carries the BARE redirect host beside the port-qualified one; "+
+			"that re-opens every port on the mirror's address: %v", domains)
 	}
 }
 

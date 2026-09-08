@@ -122,7 +122,11 @@ func (s *Server) claimImportStep(ctx context.Context, ws types.Workspace, runID 
 // login lane's agent + Interactive) before the row is returned; callers take
 // run.CreatedAt as the launch clock.
 func (s *Server) newStepRun(ctx context.Context, runID uuid.UUID, actor, task string, cc types.ConfinementClass, set func(*types.AgentRun)) (types.AgentRun, string, error) {
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, actor, actor, internalAudience)
+	// SUBJECT vs ATTRIBUTION (F099): actor stays the attribution (CreatedBy, the
+	// sponsor claim); the identity's SUBJECT — the secret-namespace selector — is
+	// runIdentitySubject's, so a LocalMode X-Wardyn-Principal header cannot point
+	// a server-launched step/probe/login run at another principal's stored rows.
+	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, actor), actor, internalAudience)
 	if err != nil {
 		return types.AgentRun{}, "", fmt.Errorf("mint run identity: %w", err)
 	}

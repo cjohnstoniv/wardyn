@@ -24,6 +24,10 @@ const (
 	govCeilingSecret = "corp-registry-token"
 	govCorpDeny      = "*.corp.example"
 	govCorpMirror    = "mirror.corp.example"
+	// govCorpMirrorEntry is the ALLOWLIST form of that mirror: substituteArtifactEgress
+	// adds the redirect's To port-qualified (F106), so an egress entry is
+	// "host:port" while an injection host stays bare.
+	govCorpMirrorEntry = govCorpMirror + ":443"
 )
 
 // ceilingDispatchStore is dispatchTestStore with the two reads the widening
@@ -156,7 +160,7 @@ func TestCeilingReassertion_RunsBelowEveryWideningPhase(t *testing.T) {
 	})
 
 	// The widening really happened — without it this test proves nothing.
-	if !slices.Contains(envelope.AllowedDomains, govCorpMirror) {
+	if !slices.Contains(envelope.AllowedDomains, govCorpMirrorEntry) {
 		t.Fatalf("the artifact redirect did not widen this run (allowed=%v); the fixture, not the phase, is broken", envelope.AllowedDomains)
 	}
 	// (1) the ceiling's wall is present on the post-widening envelope.
@@ -171,7 +175,7 @@ func TestCeilingReassertion_RunsBelowEveryWideningPhase(t *testing.T) {
 	// Deny beats allow at the proxy, so the wall holds without shredding an
 	// operator-declared widening — that is the MEET, and it is the reason this
 	// phase can be applied to a fully-composed run at all.
-	if !slices.Contains(spec.ProxyConfig.Policy.AllowedDomains, govCorpMirror) {
+	if !slices.Contains(spec.ProxyConfig.Policy.AllowedDomains, govCorpMirrorEntry) {
 		t.Errorf("allowed_domains = %v — the phase re-intersected allows; it must union denies only", spec.ProxyConfig.Policy.AllowedDomains)
 	}
 	// (4) and the drop is disclosed, not silent.

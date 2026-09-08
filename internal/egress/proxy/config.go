@@ -214,6 +214,11 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 // os.Exit(1) — the egress sidecar of EVERY dispatched run, killed by a value
 // the write path said was fine.
 //
+// It IS parseUpstreamProxy — the very rule applyDefaultsAndValidate runs below —
+// exported so the control plane can apply THE SAME rule at write time
+// (validateSiteConfig) and at dispatch (loadableUpstreamProxyURL,
+// internal/api/runs_bedrock.go) instead of keeping a second, narrower copy.
+//
 // The error is returned rather than a bool so the caller can name the real
 // cause; parseUpstreamProxy never echoes the raw URL (it may carry
 // user:pass credentials), so the message is always safe to surface. The empty

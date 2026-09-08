@@ -208,6 +208,54 @@ func (s PG) ListApprovalsPageByRunCreator(ctx context.Context, createdBy string,
 	return collect(ctx, s.Pool, "list", "approvals by run creator", q, args, scanApproval)
 }
 
+// ApprovalsByRunPager is Pager.ListApprovalsPage narrowed to ONE run — the
+// ?run_id= shape of GET /api/v1/approvals, which the CLI and the console's run
+// detail page poll. A capability interface for Pager's reason.
+//
+// WHY IT EXISTS. handleListApprovals installed the DB-paged reader only when
+// run_id was ABSENT, so a run-scoped request fell to the fetch-all branch:
+// Approvals.List -> store.ListApprovals -> ListApprovalsPage(ctx, state,
+// Page{}) -> a Page with Limit<=0, which emits NO LIMIT clause at all. One
+// run-scoped poll therefore materialised EVERY approval row the deployment had
+// ever written, in Go, and discarded all but one run's. Decided rows are never
+// deleted, so that read grew with deployment age — exactly the cost
+// ListApprovalsPage was added to remove for the unfiltered list, left in place
+// for the filtered one.
+//
+// Same fail-safe contract as Pager (NOT ApprovalsByRunCreatorPager's fail-CLOSED
+// one): an absent implementation falls back to the fetch-all + in-Go filter,
+// which returns the identical rows and is merely slower. Ownership scoping is
+// decided BEFORE this is reached (getRunAuthorized), so the fallback is not a
+// privilege question.
+type ApprovalsByRunPager interface {
+	ListApprovalsPageByRun(ctx context.Context, runID uuid.UUID, stateFilter types.ApprovalState, p Page) ([]types.ApprovalRequest, error)
+}
+
+// Compile-time assertion: PG satisfies ApprovalsByRunPager.
+var _ ApprovalsByRunPager = PG{}
+
+// ListApprovalsPageByRun is ListApprovalsPage narrowed to one run, same state
+// filter and ordering.
+//
+// ponytail: no new index. 0001's approvals_run_idx (run_id) already makes this
+// an index scan, and a single run's approvals are few enough that sorting them
+// by requested_at is free — the cost this removes was never a missing index, it
+// was reading the whole table. A composite (run_id, requested_at DESC) is the
+// upgrade if one run ever accumulates enough approvals to notice.
+func (s PG) ListApprovalsPageByRun(ctx context.Context, runID uuid.UUID, stateFilter types.ApprovalState, p Page) ([]types.ApprovalRequest, error) {
+	q := `
+		SELECT ` + approvalCols + `
+		FROM approvals WHERE run_id = $1`
+	args := []any{runID}
+	if stateFilter != "" {
+		q += ` AND state = $2`
+		args = append(args, string(stateFilter))
+	}
+	q += ` ORDER BY requested_at DESC`
+	q, args = p.appendTo(q, args)
+	return collect(ctx, s.Pool, "list", "approvals by run", q, args, scanApproval)
+}
+
 // ListRunsPage returns runs in reverse creation order, bounded by p. The
 // agent_runs_created_at_idx (0020) makes the ORDER BY + LIMIT an index scan.
 func (s PG) ListRunsPage(ctx context.Context, p Page) ([]types.AgentRun, error) {

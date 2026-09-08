@@ -63,10 +63,9 @@ func TestNewSessionRecorder_MasksAndPersists(t *testing.T) {
 	body, _ := io.ReadAll(rc)
 	cast := string(body)
 
-	// (a) secret must be masked out of the recording (invariant 1).
-	if strings.Contains(cast, secret) {
-		t.Errorf("recording leaked the verbatim secret:\n%s", cast)
-	}
+	// (a) secret must be masked out of the recording (invariant 1) — in the
+	// framed bytes AND in the payload a player reassembles.
+	assertCastHasNoSecret(t, cast, secret, "single-write secret")
 	// The placeholder is JSON-encoded in the cast (< and > become </>).
 	// Assert on the decoded output payloads, which is what the player renders.
 	if !strings.Contains(decodeCastOutput(t, cast), "<secret-hidden>") {
@@ -178,9 +177,11 @@ func TestNewSessionRecorder_MasksSecretSplitAcrossWrites(t *testing.T) {
 	body, _ := io.ReadAll(rc)
 	cast := string(body)
 
-	if strings.Contains(cast, secret) {
-		t.Errorf("boundary-split secret leaked verbatim into persisted cast:\n%s", cast)
-	}
+	// THE headline assertion of this test, and the one that could not fire
+	// before F147: the secret is split across two writes, so it lands in two
+	// different "o" events and never appears contiguously in the framed bytes.
+	// It has to be looked for in the reassembled output.
+	assertCastHasNoSecret(t, cast, secret, "boundary-split secret")
 	// The tail-resident placeholder is only present if finish flushed the tail;
 	// this proves both the split reassembly and the flush (not-dropped) path.
 	if !strings.Contains(decodeCastOutput(t, cast), "<secret-hidden>") {
@@ -307,6 +308,36 @@ func TestNewSessionRecorder_ConcurrentWriteAndFinishRaceFree(t *testing.T) {
 		if err := json.Unmarshal([]byte(ln), &ev); err != nil || len(ev) != 3 {
 			t.Fatalf("torn cast event on line %d: %q (err=%v)", i, ln, err)
 		}
+	}
+}
+
+// assertCastHasNoSecret is THE leak check for a persisted asciicast, and it
+// searches BOTH forms of the recording: the framed bytes as stored, and the
+// REASSEMBLED output payload decodeCastOutput rebuilds from the "o" events.
+//
+// The reassembled half is the load-bearing one and it was missing (F147). A
+// secret that straddles two PTY writes — the exact scenario the split test
+// constructs — lands in two different "o" events separated by `"]\n[t,"o","`,
+// so the contiguous secret NEVER appears in the framed bytes whether masking
+// works or not: with the tail-retention fix disabled the cast plainly read
+// `[...,"o","prefix super-secret-t"] / [...,"o","oken-value-1234"]` and the
+// framed search stayed silent. Only the placeholder assertion beside it
+// reported — and that one asserts merely that SOME placeholder exists, so a
+// session leaking one occurrence while masking another passed both.
+//
+// Kept as one helper rather than two lines per call site so every recording
+// test asks the same question, and a new one cannot re-introduce the framed-only
+// search by copying its neighbour.
+func assertCastHasNoSecret(t *testing.T, cast, secret, what string) {
+	t.Helper()
+	if strings.Contains(cast, secret) {
+		t.Errorf("%s: secret leaked verbatim into the persisted cast bytes:\n%s", what, cast)
+	}
+	if decoded := decodeCastOutput(t, cast); strings.Contains(decoded, secret) {
+		t.Errorf("%s: secret leaked into the REASSEMBLED cast output — the bytes a player renders "+
+			"and a `cat` of the replay shows. The framed search alone cannot see this: asciicast event "+
+			"framing breaks the byte run wherever the secret straddles two writes.\ndecoded: %q\ncast:\n%s",
+			what, decoded, cast)
 	}
 }
 

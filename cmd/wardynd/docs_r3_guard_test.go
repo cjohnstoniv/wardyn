@@ -566,14 +566,19 @@ func TestAuditActionsDocNamesTheDroppedDecisionSummary(t *testing.T) {
 	)
 }
 
-// TestLiteralIPRedirectDocsNameThePortDrop (F053) pins OPERATIONS.md and
-// THREAT-MODEL.md's "scoped to that address" claim to the fact that
-// substituteArtifactEgress writes a PORT-STRIPPED bare address, so the trust
-// it grants is not to `to:port` but to that address on any port.
-func TestLiteralIPRedirectDocsNameThePortDrop(t *testing.T) {
+// TestLiteralIPRedirectDocsNameThePortScope (F053, re-derived for F106) pins
+// OPERATIONS.md and THREAT-MODEL.md's "scoped to that address" claim to what
+// substituteArtifactEgress now actually writes: a PORT-QUALIFIED entry, so the
+// trust it grants is to `to:port` and not to that address on any port.
+//
+// The claim it originally pinned was the opposite one — the port was STRIPPED,
+// and the docs had to say so. F106 fixed the code; the guard is re-derived
+// against the merged tree rather than skipped, so the docs can never drift back
+// to describing either shape while the other one ships.
+func TestLiteralIPRedirectDocsNameThePortScope(t *testing.T) {
 	src := readSrc(t, "internal", "api", "workspace_egress.go")
-	if !strings.Contains(src, "to := strings.ToLower(hostrules.HostOf(r.To))") {
-		t.Fatal("substituteArtifactEgress no longer writes hostrules.HostOf(r.To) — re-derive the doc claim before trusting this guard")
+	if !strings.Contains(src, "entry := net.JoinHostPort(to, strconv.Itoa(redirectPort(r.To)))") {
+		t.Fatal("substituteArtifactEgress no longer writes a net.JoinHostPort-qualified entry — re-derive the doc claim before trusting this guard")
 	}
 	policy := readSrc(t, "internal", "egress", "proxy", "policy.go")
 	if !strings.Contains(policy, "or a port-qualified one") {
@@ -582,10 +587,17 @@ func TestLiteralIPRedirectDocsNameThePortDrop(t *testing.T) {
 
 	ops := readDoc(t, "docs/OPERATIONS.md")
 	mustSay(t, ops, "docs/OPERATIONS.md",
-		"on any port", "strips a `:port`", "hostrules.HostOf(r.To)",
+		"PORT-QUALIFIED", "net.JoinHostPort(hostrules.HostOf(r.To), redirectPort(r.To))",
+		"A bare address would have matched\nEVERY port instead",
+	)
+	mustNotSay(t, ops, "docs/OPERATIONS.md",
+		"strips a `:port`",
 	)
 	tm := readDoc(t, "threatmodel/THREAT-MODEL.md")
 	mustSay(t, tm, "threatmodel/THREAT-MODEL.md",
+		"only on the ONE PORT the redirect's", "`net.JoinHostPort`-qualified",
+	)
+	mustNotSay(t, tm, "threatmodel/THREAT-MODEL.md",
 		"the port is\ndropped", "that\naddress on ANY port",
 	)
 }

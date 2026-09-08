@@ -34,35 +34,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **The fail-closed refusals an `on_scanner_error=block` operator buys now have regression pins**, as does the upstream lane's literal-IP guard: its named regression passed with the entire guard deleted, because it ran under a default-deny allowlist and asserted no rule source. (R3 F090, F004)
 - **The proxy-side mask covers every rendering of a credential, not one.** It registered `Bearer <tok>` but not the bare `<tok>` a vendor echoes back, the git installation token but not the `base64("x-access-token:…")` actually on the wire, and the minted PAT not at all — so an error body or decision line carrying the other rendering left the proxy in cleartext. One definition now registers all of them. (R3 F155)
 - **`responses` and `embeddings` are refused fail-closed in both spellings.** The bare form (the default, gateway-less spelling) fell through to "not prompt-bearing" and was forwarded with the brokered credential unscanned. (R3 F088)
-- **The member-mode (m′) desktop envelope now exists.**
-  `docs/DESKTOP.md` has documented member mode in full — `WARDYN_MEMBER_MODE`,
-  an MDM-injected admin token the developer never reads, four member-mount
-  bounds — while the tree contained **zero** matching lines under
-  `deploy/desktop/`. The only shipped variant was "SSO instead of local mode",
-  which sets OIDC and stops, so the m′ profile rendered as-is produced a member
-  who **cannot mount their own project directory** — the one power m′ exists to
-  add.
-
-  `deploy/desktop/wardyn.env.m-prime.example` is a second COMPLETE envelope, not
-  a commented variant block: `scripts/test-desktop-profile.sh` parses only
-  uncommented `^VAR=` lines, so a commented m′ would have been invisible to every
-  syntax and `docs/ENV.md` parity assertion — shipping unchecked while the suite
-  printed PASS.
-
-  It carries `WARDYN_ADMIN_TOKEN` **only as a pointer to `secret.env`**, never as
-  a value: compose falls back to the *published* literal `demo-admin-token`, and
-  on a loopback bind that default warns and boots, so an envelope that omits the
-  token hands every developer operator rights and m′'s whole invariant is false
-  on every device.
-
-### Fixed
-- **A MITM leaf is re-minted before it expires.** The per-host cache never consulted `NotAfter`, so past ~25h of sidecar uptime every new CONNECT to a MITM'd host was answered `200 Connection Established` and then failed the sandbox's TLS handshake, silently and permanently. (R3 F078)
-- **Concurrent content inspection is bounded, and the proxy tells the Go GC about its cgroup cap.** The extractor expands a buffered body ~5.3x, so two concurrent in-cap bodies exceeded the proxy sidecar's 256 MiB ceiling and got it OOM-killed — taking the run's only network path with it. An over-budget request now waits and is still fully inspected, and the wait itself is bounded by the request context plus a wall-clock cap that fails closed — the agent-facing listener has no ReadTimeout, so one slow-loris POST used to park every other inspected request of the run. (R3 F074)
-- A security admin can now read the workspaces it already governs. It could see every workspace in the list and could rewrite any of their allowed and denied hosts, but opening one — or reading the traffic that workspace had actually been observed making — answered "not found", so the tier was deciding a denylist without being able to look at the evidence for it or check its own work afterwards. Reading those four views now works for that tier. Nothing else moved: another member still cannot see someone else's workspace, and a security admin still cannot rename, reassign, delete or attach credentials to one.
-- Demoting someone now reaches their API tokens. A token recorded its owner's role when it was minted and nothing could ever update it, so taking admin away from a person left every token they already held still acting as an admin until somebody remembered to revoke each one by hand. Signing in now refreshes the role on all of that person's tokens — the same thing their SSH keys have done since 0.6. The limit is stated plainly rather than implied: someone who is demoted and never signs in again keeps the old role on their tokens, so revoke when a change has to take effect immediately or when the owner has left.
-- An admin reading another person's secret namespace is now recorded. Every *write* through the admin-only `?owner=` surface already stamped whose namespace it landed in; the *read* on that same surface recorded nothing, so an admin could enumerate someone else's secret names and leave nothing for a later investigation to find. The new row says plainly what it is — names were listed, and how many — because that route returns names only and never a secret's value. A member listing their own namespace, which the console does on every page load, is deliberately not recorded.
-- Two authentication failures that were previously invisible to monitoring now have counters. Wardyn caps how many failed-sign-in audit rows it writes per second, so a password-guessing run against a deployment produced the same handful of rows as a few typos and looked *quieter* the harder it was pushed; the dropped rows are now counted, so the real rate is graphable and alertable. And a database error that makes every API-token request fail used to leave nothing behind at all — no audit row, no log line, and a store health gauge still reporting green, because that gauge only pings the database and a reachable database can still fail a query. It now logs at error level, increments its own counter, and the gauge says plainly what it does and does not cover.
-- The group-completeness safety check no longer reads the entire permissions table on every request that triggers it. The check exists so a group DENY cannot quietly evaporate for a caller whose group list arrived incomplete — including every API token minted before 0.7, on every request it makes — but it answered by scanning the whole grant table once per value examined, so the cost of a permission decision grew with the size of the table and a single old token could force that scan repeatedly. It now asks for just the rows that could possibly match. The refusal itself is unchanged, and a test pins the new path against the old scan over a matrix of cases rather than only measuring that it got faster.
 - **The git_pat broker builds its upstream URL from validated pieces.** A `%23`/`%3F` in the sandbox-supplied path satisfied the smart-HTTP verb check and then re-split the concatenated URL, sending the brokered PAT to an arbitrary path on the granted forge — the forge's REST API included. (R3 F085)
 - **The proxy's decision log masks JSON-escaped secrets.** `maskDecisionBytes` matched raw bytes while both its callers hand it marshalled JSON, so an `&`/`<`/newline-bearing registered secret survived into the stdout decision line and the control-plane decision POST. (R3 F125)
 - **A run cannot grow the first-use approval cache without bound.** Past a 4096-host cap a new host resolves to pending — fail closed, no approval raised — where 20,000 invented hostnames previously produced 20,000 cache entries and 20,000 `PENDING` rows. (R3 F071)
@@ -71,70 +42,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **A brokered forge's `git_pat` is withheld from BOTH halves of dispatch.** The proxy's PAT-broker allowlist was built from the unfiltered grant map, so a PAT dispatch withheld from the sandbox and audited as withheld was still published to `/wardyn/git/<host>/`; only the mint handler's refusal closed it. (R3 F216)
 - **The threat model no longer justifies the unconfined `git_pat` push with an impossibility.** Since the 0.7 PAT broker terminates that push on the proxy's own cleartext route, leaving it outside branch-namespace confinement is a stated scoping decision, not something no parser could bind. (R3 F121)
 - **The model-gateway refusal predicate has one body.** The control plane's boot validator and the proxy's per-request re-check were byte-identical copies coupled by a comment, and the proxy copy's NAT64 arm was unpinned; both now call `ipguard.GatewayIPRefused`. (R3 F089)
-- **The member-mode (m′) desktop envelope now exists.**
-  `docs/DESKTOP.md` has documented member mode in full — `WARDYN_MEMBER_MODE`,
-  an MDM-injected admin token the developer never reads, four member-mount
-  bounds — while the tree contained **zero** matching lines under
-  `deploy/desktop/`. The only shipped variant was "SSO instead of local mode",
-  which sets OIDC and stops, so the m′ profile rendered as-is produced a member
-  who **cannot mount their own project directory** — the one power m′ exists to
-  add.
-
-  `deploy/desktop/wardyn.env.m-prime.example` is a second COMPLETE envelope, not
-  a commented variant block: `scripts/test-desktop-profile.sh` parses only
-  uncommented `^VAR=` lines, so a commented m′ would have been invisible to every
-  syntax and `docs/ENV.md` parity assertion — shipping unchecked while the suite
-  printed PASS.
-
-  It carries `WARDYN_ADMIN_TOKEN` **only as a pointer to `secret.env`**, never as
-  a value: compose falls back to the *published* literal `demo-admin-token`, and
-  on a loopback bind that default warns and boots, so an envelope that omits the
-  token hands every developer operator rights and m′'s whole invariant is false
-  on every device.
-
-### Fixed
-- **An approval-gated `git_pat` grant can clone again.** The PAT broker minted per sub-request with no cache or single-flight, so the second half of a clone 409'd `already_minted`, and a pending credential approval was a 502 instead of a wait; both lanes now share one credential lifecycle. (R3 F120)
-- **`wait_for_review` holds for the operator's budget.** The hold deadline was armed after the concurrent-raise retry loop, so a hung control plane blocked a request for roughly six times the control-plane client timeout instead of `first_use_hold_seconds`. (R3 F070)
-- **A brokered `git_pat` decision names the forge it reached**, not the control-plane host, so two granted forges are no longer the same row in the egress decision stream. (R3 F014)
-- A security admin can now read the workspaces it already governs. It could see every workspace in the list and could rewrite any of their allowed and denied hosts, but opening one — or reading the traffic that workspace had actually been observed making — answered "not found", so the tier was deciding a denylist without being able to look at the evidence for it or check its own work afterwards. Reading those four views now works for that tier. Nothing else moved: another member still cannot see someone else's workspace, and a security admin still cannot rename, reassign, delete or attach credentials to one.
-- Demoting someone now reaches their API tokens. A token recorded its owner's role when it was minted and nothing could ever update it, so taking admin away from a person left every token they already held still acting as an admin until somebody remembered to revoke each one by hand. Signing in now refreshes the role on all of that person's tokens — the same thing their SSH keys have done since 0.6. The limit is stated plainly rather than implied: someone who is demoted and never signs in again keeps the old role on their tokens, so revoke when a change has to take effect immediately or when the owner has left.
-- An admin reading another person's secret namespace is now recorded. Every *write* through the admin-only `?owner=` surface already stamped whose namespace it landed in; the *read* on that same surface recorded nothing, so an admin could enumerate someone else's secret names and leave nothing for a later investigation to find. The new row says plainly what it is — names were listed, and how many — because that route returns names only and never a secret's value. A member listing their own namespace, which the console does on every page load, is deliberately not recorded.
-- Two authentication failures that were previously invisible to monitoring now have counters. Wardyn caps how many failed-sign-in audit rows it writes per second, so a password-guessing run against a deployment produced the same handful of rows as a few typos and looked *quieter* the harder it was pushed; the dropped rows are now counted, so the real rate is graphable and alertable. And a database error that makes every API-token request fail used to leave nothing behind at all — no audit row, no log line, and a store health gauge still reporting green, because that gauge only pings the database and a reachable database can still fail a query. It now logs at error level, increments its own counter, and the gauge says plainly what it does and does not cover.
-- The group-completeness safety check no longer reads the entire permissions table on every request that triggers it. The check exists so a group DENY cannot quietly evaporate for a caller whose group list arrived incomplete — including every API token minted before 0.7, on every request it makes — but it answered by scanning the whole grant table once per value examined, so the cost of a permission decision grew with the size of the table and a single old token could force that scan repeatedly. It now asks for just the rows that could possibly match. The refusal itself is unchanged, and a test pins the new path against the old scan over a matrix of cases rather than only measuring that it got faster.
-- **The member-mode (m′) desktop envelope now exists.**
-  `docs/DESKTOP.md` has documented member mode in full — `WARDYN_MEMBER_MODE`,
-  an MDM-injected admin token the developer never reads, four member-mount
-  bounds — while the tree contained **zero** matching lines under
-  `deploy/desktop/`. The only shipped variant was "SSO instead of local mode",
-  which sets OIDC and stops, so the m′ profile rendered as-is produced a member
-  who **cannot mount their own project directory** — the one power m′ exists to
-  add.
-
-  `deploy/desktop/wardyn.env.m-prime.example` is a second COMPLETE envelope, not
-  a commented variant block: `scripts/test-desktop-profile.sh` parses only
-  uncommented `^VAR=` lines, so a commented m′ would have been invisible to every
-  syntax and `docs/ENV.md` parity assertion — shipping unchecked while the suite
-  printed PASS.
-
-  It carries `WARDYN_ADMIN_TOKEN` **only as a pointer to `secret.env`**, never as
-  a value: compose falls back to the *published* literal `demo-admin-token`, and
-  on a loopback bind that default warns and boots, so an envelope that omits the
-  token hands every developer operator rights and m′'s whole invariant is false
-  on every device.
-
-### Fixed
-
-- `wardyn site-config apply` accepts what `wardyn site-config get` emits again. Once an operator finished the Getting Started funnel the document carried `onboarding_completed_at`, and `PUT /site-config` refused any body containing it — so the documented disaster-recovery round-trip, the MDM-delivered `/etc/wardyn/site-config.json`, and every console save on the Corporate network screen (which builds its body by spreading the GET document) 400ed. The stored mark is now carried forward and the body's copy ignored unconditionally — including on a FRESH store and when the file names a different instant than the one this install holds (the MDM file re-applied after the laptop's own funnel, or a captured baseline applied after re-onboarding); the drop is reported as `onboarding_completed_at_ignored` in PUT's response and printed by `wardyn site-config apply`. (R3 F025)
-- The redirect probe no longer reports a public host that ACCEPTED the sandbox's connection as "correctly blocked when dialed directly (redirect enforced)". curl returns the same timeout code for a dial that never left the sandbox and for one that connected and then stalled, so a tarpit, an accept-and-hold load balancer or a host merely slower than the probe's budget scored a wide-open network as enforced. The probe now reads curl's own connection count beside the status code and calls any completed connection a bypass. (R3 F148)
-- `PUT /site-config` refuses an `upstream_proxy_url` the proxy sidecar's own loader would refuse. A port of `0` or `99999` saved with `200 OK` and then failed the sidecar's config validation at container start, which exits it — killing the egress path of every dispatched run. The write now delegates to the sidecar's own parser (as `upstream_proxy_no_proxy` already did), and a URL that reaches dispatch through the secret ref and fails the same check is dropped with an audited reason instead of delivered. (R3 F003)
-- An egress redirect's port is now read the same way by everyone that reads it. A query or fragment ends the authority, so `https://mirror:8443?repo=npm` is port 8443 and no longer silently 443 — which had mis-scoped the TLS-MITM/token-injection set (the operator's registry token withheld on the port the redirect names, presented on one it does not) and made the probe dial the wrong port. A `to` that spells `http://` with no port is port 80, not 443, so a working plain-http mirror is no longer reported as unreachable. And a port outside 1-65535 is refused at the write instead of being coerced to 443 by one reader and rejected outright by another. (R3 F033, F082, F091)
-- The `timed_out` probe verdict names the real budget. Both `/site-config` probes formatted the wait as a raw nanosecond count, so the operator was told the run never reported completion "within 90000000000s" instead of within 90s. (R3 F149)
-
-- A security admin can now read the workspaces it already governs. It could see every workspace in the list and could rewrite any of their allowed and denied hosts, but opening one — or reading the traffic that workspace had actually been observed making — answered "not found", so the tier was deciding a denylist without being able to look at the evidence for it or check its own work afterwards. Reading those four views now works for that tier. Nothing else moved: another member still cannot see someone else's workspace, and a security admin still cannot rename, reassign, delete or attach credentials to one.
-- Demoting someone now reaches their API tokens. A token recorded its owner's role when it was minted and nothing could ever update it, so taking admin away from a person left every token they already held still acting as an admin until somebody remembered to revoke each one by hand. Signing in now refreshes the role on all of that person's tokens — the same thing their SSH keys have done since 0.6. The limit is stated plainly rather than implied: someone who is demoted and never signs in again keeps the old role on their tokens, so revoke when a change has to take effect immediately or when the owner has left.
-- An admin reading another person's secret namespace is now recorded. Every *write* through the admin-only `?owner=` surface already stamped whose namespace it landed in; the *read* on that same surface recorded nothing, so an admin could enumerate someone else's secret names and leave nothing for a later investigation to find. The new row says plainly what it is — names were listed, and how many — because that route returns names only and never a secret's value. A member listing their own namespace, which the console does on every page load, is deliberately not recorded.
-- Two authentication failures that were previously invisible to monitoring now have counters. Wardyn caps how many failed-sign-in audit rows it writes per second, so a password-guessing run against a deployment produced the same handful of rows as a few typos and looked *quieter* the harder it was pushed; the dropped rows are now counted, so the real rate is graphable and alertable. And a database error that makes every API-token request fail used to leave nothing behind at all — no audit row, no log line, and a store health gauge still reporting green, because that gauge only pings the database and a reachable database can still fail a query. It now logs at error level, increments its own counter, and the gauge says plainly what it does and does not cover.
-- The group-completeness safety check no longer reads the entire permissions table on every request that triggers it. The check exists so a group DENY cannot quietly evaporate for a caller whose group list arrived incomplete — including every API token minted before 0.7, on every request it makes — but it answered by scanning the whole grant table once per value examined, so the cost of a permission decision grew with the size of the table and a single old token could force that scan repeatedly. It now asks for just the rows that could possibly match. The refusal itself is unchanged, and a test pins the new path against the old scan over a matrix of cases rather than only measuring that it got faster.
 - **Content inspection bounds findings-per-request and scanned-bytes-per-request, not just per-span.** A body split into many sub-`max_scan_bytes` spans (an agent-controlled JSON body, tool input, or attachment) previously fanned out into unbounded CPU cost and, separately, unbounded findings copied verbatim into the decision log mirrored to stdout and POSTed to the control-plane audit — measured at 600,000 findings / ~104 MiB of decision-log output for one 22.4 MiB request, and 14.6s of proxy CPU for another with zero findings. A 4 MiB total-scanned-bytes budget (`scan_budget`) now stops the scan honestly, the same Skipped/SkipReason shape as `span_oversize`. A separate 500-finding cap (`findings_capped`) bounds only the size of the reported decision log — scanning itself is not stopped by it, and a finding at or above the policy's `block_min_severity` is kept past the cap (up to a hard ceiling) so `mode=block` cannot be bypassed by fanning out cheap low-severity noise ahead of the real secret. (R3 F075, F073)
 - **An undecodable content-inspection attachment is no longer reported as "inspected clean."** `extractAnthropicAttachments` now tries every base64 alphabet a real client might use before declaring failure, and a genuine decode failure is recorded `Skipped{attachment_decode_error}` — honoring `on_scanner_error=block` like every other scanner-error case — instead of silently passing as a clean scan. (R3 F056)
 - **The OpenAI/Codex content-inspection channel now scans the system prompt.** `extractOpenAIChat` previously read only the last message, so a system prompt carried as a `role:"system"` message (OpenAI has no top-level `system` field the way Anthropic does) was scanned only in the degenerate case where it was also the last message — understating THREAT-MODEL.md 5.1a's own coverage claim on exactly the channel it was meant to bound honestly. (R3 F049)
@@ -142,7 +49,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **`wardyn-aws-sso` no longer shells out to the `aws` CLI with the live SSO access token as a command-line argument.** The best-effort account/role lookup (`resolveAccountRole`) put the token on that child process's argv, readable by any `/proc` reader sharing the sandbox's PID namespace; it now calls the SSO portal API directly over HTTP (the token in the `x-amz-sso_bearer_token` header the SSO portal's `authtype: none` operations read, through the sandbox's egress proxy) instead of exec'ing `aws`. A blank account/role is not actually accepted by the control plane (`internal/api/harnesscred.go`'s `awsSSOBlob.valid` requires both non-empty, and rejects a half-resolved capture with 400), so the lookup could not simply be dropped. (R3 F160)
 - **`wardyn-toolgate` now names a control-plane outage instead of blaming the human.** A poll error while waiting on an approval was silently treated as PENDING with no log anywhere; it is now logged to stderr (rate-limited) and, if every poll failed through the deadline, the deny message says so instead of reading as "no human decided in time". (R3 F159)
 - **`wardyn-tetragon-ingest` now logs when its export file cannot be opened.** A typo'd or unreadable `-export` path retried silently forever while heartbeats and the stats loop kept printing as if the sensor were healthy; the open failure (and its recovery) is now logged. (R3 F158)
-
+- **The Bedrock bearer's TLS-MITM entry names its port.** It was authored as a bare host, which the proxy treats as any-port, so an agent could CONNECT to the Bedrock data-plane host on a port nobody configured and have that tunnel terminated with the Wardyn leaf and the operator's `Authorization: Bearer` injected onto whatever answered. The entry is now `host:port` (443 unless `WARDYN_BEDROCK_BASE_URL` names another), matching what an artifact redirect has authored since 0.6. (R3 F037)
+- **The sandbox/host-sensor auth boundary now leaves a trace when it refuses.** `internalAuth`, `internalAuthGroundtruth` and the internal approval handler's two 400s — including the one that refuses a sidecar trying to raise a `credential` approval — answered 401/400 and recorded nothing: no audit row, no log line, no metric. All of them now emit the public lane's own rate-bound `auth.failed` row, with an actor naming which boundary refused, and share its `wardyn_auth_failed_suppressed_total` counter so a burst from inside a sandbox is visible without flooding the log. (R3 F068)
+- **The local-mode `X-Wardyn-Principal` override cannot choose whose secrets a run mints.** It steered the run identity's `sub`, which is the secret-namespace selector for broker mints and proxy-side injection — and a stored row owned by the named principal wins over the operator's — so on a database carrying member-owned secrets from an SSO-configured era, a local caller could mint another member's `git_pat` or `ssh_key` by naming them in a header. The header keeps its documented attribution job; the namespace now comes from the principal wardynd injected. (R3 F099)
+- **A login sandbox cannot choose process-global redaction patterns.** The AWS SSO capture registers its uploaded token with the login run's own mask set instead of the process-wide one; the credential is still masked everywhere it is used, because the dispatch that actually selects it registers the stored value globally. (R3 F007)
+- **A typo'd flag no longer prints your secrets.** Environment-supplied values are applied to the flag's variable instead of its registered default, so `-help` and any flag parse error show only the compiled default — `WARDYN_ADMIN_TOKEN`, `WARDYN_AGE_KEY`, `WARDYN_OIDC_CLIENT_SECRET`, `WARDYN_GROUNDTRUTH_TOKEN` and `wardyn-rec`'s `-run-token` were written verbatim to stderr, and thus to container logs. Precedence is unchanged: an explicit flag still beats the environment. (R3 F157)
+- **`llm_inspection.workspace_secret_names` takes the reserved-name guard every other credential sink takes.** Resolution puts the named secret's plaintext in the proxy sidecar's policy, so a policy naming `wardyn-signing-key`, `wardyn-session-key`, a harness OAuth blob or a resident AWS SigV4 secret is now refused at write time and skipped (audited by name) at dispatch. (R3 F126)
+- **An egress redirect trusts its target on the port it named, not every port of the address.** The allowlist entry a site-config redirect adds is now port-qualified — the port `to` spells, else the default of the scheme `to` spells (`80` for an explicit `http://`, `443` otherwise) — matching the port its TLS termination and token injection already used — so a `to` on a literal IP no longer opens 22 or 5432 on that address. (R3 F106)
+- **A member cannot re-home the operator's blessed api_key secret under a header of their own.** The eligible-grant pairing an inline or profile grant must match now includes the api_key rule's header and format, not only its host and secret name, and the policy path applies the same format rule the integration authoring path always did (exactly one `%s`, no other verb, no line break). (R3 F097)
+- **`require_inspectable_llm` refuses BOTH Bedrock sub-modes.** The bearer sub-mode was admitted as "inspectable" because the proxy TLS-terminates it — but Wardyn has no Bedrock extractor or prompt-bearing channel, so such a run was scheduled with zero scan coverage under a policy that promises the opposite. Both Bedrock sub-modes now fail closed at schedule time; `threatmodel/THREAT-MODEL.md` 5.1a says so. (R3 F048)
+- **A captured AWS SSO credential is bound to what the operator asked for, not just to which run may upload it.** The sso-token upload now refuses a blob whose `region` or `start_url` disagrees with the operator's configured SSO region and the access-portal URL that login run was launched with, and refuses a second capture from the same run — so code inside the vendor login sandbox can no longer substitute an attacker's IdP session as the operator-wide credential every later Bedrock run authenticates with. (R3 F006)
 - **`make setup` refuses what wardynd refuses.** It no longer warns and boots through a `-gen-age-key` mint that produced no key (an ephemeral key makes wardynd fail closed and crash-loop on its second boot against the persistent Postgres volume — the condition `install.sh` and the Helm chart already refuse) or a `deploy/compose/.env` carrying both `WARDYN_LOCAL_MODE=true` and `WARDYN_OIDC_ISSUER` (wardynd refuses to boot on that pair). Both refusals name the fix; no override was added, because `WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC` is not forwarded by the compose file. The one-line installer discloses the SSH listener it enables on every install and says when a pre-v2.1.1 Compose left "Wardyn is running" unprobed. (R5 F150, F012, F153, F231)
 - **The confined replay applies the same egress-provenance gate as run-create.** With the operator-set provenance gate on (its 0.7 default), a confined replay's allowlist is now narrowed to operator-approved hosts exactly as a launch is; previously the replay path built its allowlist from every recorded host, scan-seeded ones included. (R6 F008)
 - **`install.sh` waits for health before it says "Wardyn is running", and never discards `WARDYN_PORT` in silence.** The upgrade path names the discard and the two-step remedy instead of ignoring an explicit port; the banner follows a `docker compose up --wait` (probed for support) and a failed wait prints the daemon log and exits. (R6 F036, F037)
@@ -160,7 +76,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   gateway clears its handshake deadline once the session is up, so a deadlocked
   connection has no timer left to reap it. Fixed upstream in 0.56.0; no other
   dependency moves.
-
 ### Added
 
 - **Helm: `image.digest`.** `deploy/helm/wardyn/values.yaml` gains `image.digest` (default `""`, byte-identical render when empty). Set it to `sha256:<64 hex>` and the Deployment pulls `<repository>@<digest>`; a non-empty `image.tag` is kept alongside as `repo:tag@sha256:…` rather than dropped; a digest not beginning with `sha256:` is refused at render. Until now the blessed Kubernetes path could only float on a mutable tag. (R5 F195)
@@ -168,12 +83,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - A governance profile can cap **how many runs one person has going at once**, and self-service secrets gain the per-owner cap the sibling surfaces already had. Both answer with a quota refusal rather than a denial, because the caller is authorized and simply at a limit; an overwrite at the secret cap still rotates a key.
 - The **who** fields suggest from your directory. Picking a group fills the object GUID Wardyn actually matches against while showing the name, and says so. A deployment without the connector sees a plain text field — no banner, nothing disabled.
 - A corporate proxy can be told **which destinations to skip** (`upstream_proxy_no_proxy`), so a private endpoint is dialled directly instead of through a proxy that cannot route it. It is a routing decision only: a skipped destination still faces the address guard and the run's policy, which is why reaching a private endpoint also needs an internal-host declaration.
-
 - **User drives**: an admin registers persistent storage — a share the platform already mounts, or a volume Wardyn creates per person — and allocates it to people, groups or everyone, with per-person size, mode and directory-name overrides. A member mounts theirs per run at `/home/agent/drive`, **read-only unless allowed**, and a run request carries only a flag: the server resolves which drive belongs to the signed-in caller and derives their own directory from their own identity, so nobody can name someone else's. A governance profile can deny the door outright. Wardyn says plainly where the size is enforced: on Kubernetes it is the volume request and the storage class decides whether it binds, on Docker a managed drive has no byte cap at all, a share is bounded by its own quota — **the size you see is the allocation, not a guarantee**. Registering a drive on a host path is fenced by an operator-set allowlist (`WARDYN_USER_DRIVE_HOST_ROOTS`) that is unset, and therefore closed, by default.
 - **Governance profiles**: a named policy ceiling an admin can ASSIGN — to a person, to an SSO group, or to everyone — so a contractor group and a platform team can hold genuinely different limits on one install. Precedence is user over group over all, with a subject claim beating an email and priority then name breaking ties, so the answer never depends on the query plan. A profile REPLACES the site-wide default rather than composing with it, which is the only shape where reading a profile tells you what it permits; with no assignment, every resolution is exactly what it was before. A profile can only ever NARROW credential eligibility, and that bound is re-applied when the ceiling resolves, not just when it is saved, so a redeployed default that drops a pairing cannot leave a stale profile serving it. Denies are re-asserted inside dispatch, after the phases that add corporate hosts and credential injections — including the brokered git and PAT lanes, which never consulted the deny list before.
 - **A security-admin role**, and a console that can be delegated to it. A security admin governs the verdict — profiles, permissions, egress decisions, token inventory, audit verification — and deliberately does NOT reach into a run: it is never stamped on an SSH key or an attach ticket, and no capability grant can widen it. That separation is what makes the surface safe to hand out. Forty gated routes are classified in an exhaustive table that a test walks from both tiers.
 - Bedrock can be reached through a **VPC (PrivateLink) endpoint**: `WARDYN_BEDROCK_BASE_URL` points the data plane at a private endpoint, full model ARNs — including the `application-inference-profile` form — are documented as accepted model identifiers, and a private-endpoint hostname is now recognised as model traffic so the audit trail classifies the call an auditor will ask about. The endpoint is a boot flag rather than a runtime setting because in bearer mode it is the TLS-interception and credential-injection target.
-
 - A fresh install now **remembers being set up server-side**: finishing Getting Started records completion on the install itself (`POST /setup/onboarding-complete`, idempotent and audited), so a different browser — or a different admin — lands past the funnel too. Until then, every console access force-lands an admin in Getting Started (once per page load; the funnel's own affordances can still leave), while members are never gated. The old per-browser flag survives only as a fallback for older daemons.
 - The demo-video catalog groups by **deployment path**: core "Start here" episodes lead, the install's own path (single-user vs multi-user, read off the live install) follows, path-agnostic running-work episodes next, and the other deployment's path folds behind a disclosure. Member-audience episodes in the multi-user group carry a "For your members" chip, and the member Getting Started rail leads with "Your path".
 - Egress demo **"Denied, however you spell it"**: allow-all plus one `denied_domains` entry, then the trailing-dot spelling of the blocked host meeting the identical 403 — the deny-list dodge the proxy's host canonicalization closes — with the refusal's machine-readable reason headers (`X-Wardyn-Egress`, `-Reason`, `-Host`) on camera for the first time. Held-at-the-door's missed-window step now names the `approval-pending` value that distinguishes "wait, then retry" from a hard no.
@@ -206,7 +119,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   provenance and 0.6.3 shipped an SBOM that understated its own contents. Both
   would have failed a dry run. `make release-check` was green every time, because
   it validates the repository, not the workflow.
-
 - **A browser desktop (noVNC) is a shipped image variant.**
   `deploy/images/novnc/`, `make agent-image-novnc`, declared as
   `"name": "novnc"`. It changed **no server code**, which is exactly what the
@@ -225,7 +137,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `docs/UI-SANDBOXES.md` — nothing inside a relayed app is recorded, its
   JavaScript runs in the operator's unconfined browser, and the relay cookie
   never re-checks the principal. None is new; a desktop makes each bigger.
-
 - **The BYOI-wrap and UI-sandbox e2e lanes now run nightly, and a failure opens
   an issue.** `make test-e2e-byoi` and `make test-e2e-ui-sandbox` ran in **no
   workflow at all** — and the BYOI lane is the one that reproduces the
@@ -241,7 +152,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   expensively. The lanes still wired nowhere (`test-e2e-ssh-k8s`,
   `test-e2e-subscription`, `test-e2e-concurrent`) are now named in the workflow
   with the reason, so "it runs nightly" is not read as "everything does".
-
 - **A blocked egress request now says WHICH rule blocked it.** Eight distinct
   outcomes collapsed into one `X-Wardyn-Egress: denied`, and they call for
   completely different actions — ask the operator to allowlist a host, versus
@@ -251,18 +161,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `builtin:private-ip`, …). Same static strings the audit trail already records,
   so nothing new is disclosed. Documented in `docs/UI-SANDBOXES.md`, which is
   where developers most often meet the egress policy.
-
 - **`examples/policies/ui-sandbox.json`** — the first shipped example declaring
   a `ui_apps` block. `grep -rl ui_apps examples/policies/` previously returned
   nothing, so the one policy field the UI-sandbox feature turns on had no worked
   example anywhere.
-
 - **An SSH channel refused by the per-run cap is now audited**
   (`ssh.channel_rejected`, naming the channel type). A refusal used to be
   invisible to the deployment: the client saw `ResourceShortage` and nothing was
   recorded. That mattered less while the gateway was off by default — the
   desktop envelope now ships it **on**.
-
 - **Git PATs for non-GitHub forges are never resident.** The two git lanes had
   opposite credential postures: a `github_token` was minted proxy-side and
   injected on the outbound leg — never in the sandbox, per-repo, ref-confined,
@@ -287,7 +194,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `WARDYN_GIT_PAT_BROKER=off` restores the old lane. There is deliberately **no
   automatic fallback** — falling back would silently return the PAT to the
   sandbox.
-
 - **`threatmodel/AGENT-THREAT-MODEL.md`** — a portable threat model for agent
   systems generally: terminology, fourteen threat categories, and who owns which
   control. The shipped `THREAT-MODEL.md` is excellent and is a threat model **of
@@ -308,7 +214,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   credential can exhaust it) and **approval fatigue** (the platform leans heavily
   on human approvals with no rate limit, no batching guard, no anomaly signal and
   no separation of duty).
-
 - **`docs/PLUGGABILITY.md` answers the four-layer question directly** — physical
   sandbox / ingress-egress / LLM gateway / MCP tool gateway — with the honest
   score: **one of four is genuinely pluggable.** It also promotes the strongest
@@ -316,7 +221,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   has **two independently-built implementations held to one conformance
   contract**, both enforced in CI. And it states plainly that `wardyn-toolgate` is
   **not** an MCP gateway despite speaking MCP.
-
 - **The desktop tier is packageable** as a `.deb`, an `.rpm` and a tarball. `scripts/build-desktop-package.sh` builds
   a `.deb` and a tarball, **from a clean git tree — never by copying the working
   directory**. `deploy/compose/.env` is a real file on a maintainer's box: 0600,
@@ -341,7 +245,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   The payload keeps the `deploy/` level because `wardyn-desktop.sh` computes
   `REPO_ROOT` as `../..`, and it ships the **`wardyn` CLI**, which the packaged
   tier otherwise lacked (the one-line installer is fixed separately below).
-
 - **Model access on the member-mode profile (m′) has a documented, working path that needs no member secret at all — it is Bedrock.** Three
   shipped mechanisms compose into what reads as a dead end (m′ mandates OIDC;
   OIDC refuses subscription injection;), and the
@@ -351,34 +254,29 @@ and does not yet follow semantic versioning (interfaces are not stable).
   no member secret write. It appeared **zero times** in `docs/DESKTOP.md` and in
   both envelopes; it is now documented in each, with the `claude-code`-only
   constraint stated.
-
 - **Log rotation.** The LaunchDaemon appended stdout *and* stderr to one file
   every 300s forever with no `max-size` anywhere. Ships a `newsyslog` fragment
   (macOS) and a `logrotate` one (Linux, where journald otherwise handles it),
   keeping **seven** generations on purpose: the audit-drop counter surfaces only
   in that file on a laptop, so rotating aggressively would destroy the evidence
   that the SIEM fanout dropped events.
-
 - **An operator can sweep leaked sandboxes on demand** —
   `POST /api/v1/admin/sandboxes/sweep`. Not a ticker (the sweep is an unpaged
   `ListRuns` plus a probe per terminal run, so it grows with history and would
   need leader election) and **not a second boot pass**: the existing reconciler
   already covers boot, and adding it there tears the same sandbox down twice.
   The gap it fills is a laptop that suspends for a week and never reboots.
-
 - **The desktop tier installs on Linux.** `deploy/desktop/install.sh` hard-refused
   every non-Darwin host (*"the Linux/systemd path is not built yet"*), so a tier
   whose own topology diagram showed Linux had no Linux path. It now branches on
   `uname -s` and ships `wardyn.service` + `wardyn.timer` — `Type=oneshot` driven
   by the timer, mirroring launchd's `RunAtLoad` + `StartInterval 300`, logging to
   journald. The two platforms' intervals are asserted equal so they cannot drift.
-
 - **There is an uninstaller.** `grep -rn uninstall deploy/` previously returned
   nothing on either platform. `install.sh --uninstall` stops the converge job and
   the stack and **keeps** `age.key` and the Postgres volume, so a re-install
   recovers the device; `--purge` destroys both, after saying exactly what becomes
   unrecoverable.
-
 - **`WARDYN_DOCKER_SOCK` is honored from the envelope.** The converge job runs as
   root while Docker Desktop, Colima, rootless Docker and Podman all expose a
   **per-user** socket — and auto-detection shells `docker context inspect`, which
@@ -387,7 +285,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   resolves, **refuses and prints what it tried** rather than converging against
   the wrong daemon. Documented in `docs/DESKTOP.md` "Which Docker socket", with
   the decision — system-scope unit — recorded.
-
 - **The desktop tier can now be reached from your own terminal.** Both listener
   variables default to empty in the included stack, and **empty means off — no
   listener, not even a generated host key**. The desktop envelope and the
@@ -396,7 +293,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   stated outcome is that a developer reaches a governed sandbox from their own
   tools. `WARDYN_SSH_LISTEN`/`_ADVERTISE` are now set in both, with the
   recording ceiling stated beside them.
-
 - **The one-line installer installs the `wardyn` CLI.** It previously installed
   **no host binary at all** — the only command path was `docker compose exec`,
   which is in-container and root-only — so `wardyn ssh <run-id>` had no client
@@ -404,7 +300,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   os/arch and **verified against the release's cosign-signed `SHA256SUMS`**; a
   mismatch is fatal, and an unavailable `SHA256SUMS` skips the CLI rather than
   installing it unverified.
-
 - **The member-mode (m′) desktop envelope now exists.**
   `docs/DESKTOP.md` has documented member mode in full — `WARDYN_MEMBER_MODE`,
   an MDM-injected admin token the developer never reads, four member-mount
@@ -428,11 +323,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A MITM leaf is re-minted before it expires.** The per-host cache never consulted `NotAfter`, so past ~25h of sidecar uptime every new CONNECT to a MITM'd host was answered `200 Connection Established` and then failed the sandbox's TLS handshake, silently and permanently. (R3 F078)
+- **Concurrent content inspection is bounded, and the proxy tells the Go GC about its cgroup cap.** The extractor expands a buffered body ~5.3x, so two concurrent in-cap bodies exceeded the proxy sidecar's 256 MiB ceiling and got it OOM-killed — taking the run's only network path with it. An over-budget request now waits and is still fully inspected, and the wait itself is bounded by the request context plus a wall-clock cap that fails closed — the agent-facing listener has no ReadTimeout, so one slow-loris POST used to park every other inspected request of the run. (R3 F074)
 - A security admin can now read the workspaces it already governs. It could see every workspace in the list and could rewrite any of their allowed and denied hosts, but opening one — or reading the traffic that workspace had actually been observed making — answered "not found", so the tier was deciding a denylist without being able to look at the evidence for it or check its own work afterwards. Reading those four views now works for that tier. Nothing else moved: another member still cannot see someone else's workspace, and a security admin still cannot rename, reassign, delete or attach credentials to one.
 - Demoting someone now reaches their API tokens. A token recorded its owner's role when it was minted and nothing could ever update it, so taking admin away from a person left every token they already held still acting as an admin until somebody remembered to revoke each one by hand. Signing in now refreshes the role on all of that person's tokens — the same thing their SSH keys have done since 0.6. The limit is stated plainly rather than implied: someone who is demoted and never signs in again keeps the old role on their tokens, so revoke when a change has to take effect immediately or when the owner has left.
 - An admin reading another person's secret namespace is now recorded. Every *write* through the admin-only `?owner=` surface already stamped whose namespace it landed in; the *read* on that same surface recorded nothing, so an admin could enumerate someone else's secret names and leave nothing for a later investigation to find. The new row says plainly what it is — names were listed, and how many — because that route returns names only and never a secret's value. A member listing their own namespace, which the console does on every page load, is deliberately not recorded.
 - Two authentication failures that were previously invisible to monitoring now have counters. Wardyn caps how many failed-sign-in audit rows it writes per second, so a password-guessing run against a deployment produced the same handful of rows as a few typos and looked *quieter* the harder it was pushed; the dropped rows are now counted, so the real rate is graphable and alertable. And a database error that makes every API-token request fail used to leave nothing behind at all — no audit row, no log line, and a store health gauge still reporting green, because that gauge only pings the database and a reachable database can still fail a query. It now logs at error level, increments its own counter, and the gauge says plainly what it does and does not cover.
 - The group-completeness safety check no longer reads the entire permissions table on every request that triggers it. The check exists so a group DENY cannot quietly evaporate for a caller whose group list arrived incomplete — including every API token minted before 0.7, on every request it makes — but it answered by scanning the whole grant table once per value examined, so the cost of a permission decision grew with the size of the table and a single old token could force that scan repeatedly. It now asks for just the rows that could possibly match. The refusal itself is unchanged, and a test pins the new path against the old scan over a matrix of cases rather than only measuring that it got faster.
+- **An approval-gated `git_pat` grant can clone again.** The PAT broker minted per sub-request with no cache or single-flight, so the second half of a clone 409'd `already_minted`, and a pending credential approval was a 502 instead of a wait; both lanes now share one credential lifecycle. (R3 F120)
+- **`wait_for_review` holds for the operator's budget.** The hold deadline was armed after the concurrent-raise retry loop, so a hung control plane blocked a request for roughly six times the control-plane client timeout instead of `first_use_hold_seconds`. (R3 F070)
+- **A brokered `git_pat` decision names the forge it reached**, not the control-plane host, so two granted forges are no longer the same row in the egress decision stream. (R3 F014)
+- `wardyn site-config apply` accepts what `wardyn site-config get` emits again. Once an operator finished the Getting Started funnel the document carried `onboarding_completed_at`, and `PUT /site-config` refused any body containing it — so the documented disaster-recovery round-trip, the MDM-delivered `/etc/wardyn/site-config.json`, and every console save on the Corporate network screen (which builds its body by spreading the GET document) 400ed. The stored mark is now carried forward and the body's copy ignored unconditionally — including on a FRESH store and when the file names a different instant than the one this install holds (the MDM file re-applied after the laptop's own funnel, or a captured baseline applied after re-onboarding); the drop is reported as `onboarding_completed_at_ignored` in PUT's response and printed by `wardyn site-config apply`. (R3 F025)
+- The redirect probe no longer reports a public host that ACCEPTED the sandbox's connection as "correctly blocked when dialed directly (redirect enforced)". curl returns the same timeout code for a dial that never left the sandbox and for one that connected and then stalled, so a tarpit, an accept-and-hold load balancer or a host merely slower than the probe's budget scored a wide-open network as enforced. The probe now reads curl's own connection count beside the status code and calls any completed connection a bypass. (R3 F148)
+- `PUT /site-config` refuses an `upstream_proxy_url` the proxy sidecar's own loader would refuse. A port of `0` or `99999` saved with `200 OK` and then failed the sidecar's config validation at container start, which exits it — killing the egress path of every dispatched run. The write now delegates to the sidecar's own parser (as `upstream_proxy_no_proxy` already did), and a URL that reaches dispatch through the secret ref and fails the same check is dropped with an audited reason instead of delivered. (R3 F003, F028)
+- An egress redirect's port is now read the same way by everyone that reads it. A query or fragment ends the authority, so `https://mirror:8443?repo=npm` is port 8443 and no longer silently 443 — which had mis-scoped the TLS-MITM/token-injection set (the operator's registry token withheld on the port the redirect names, presented on one it does not) and made the probe dial the wrong port. A `to` that spells `http://` with no port is port 80, not 443, so a working plain-http mirror is no longer reported as unreachable. And a port outside 1-65535 is refused at the write instead of being coerced to 443 by one reader and rejected outright by another. (R3 F033, F082, F091)
+- The `timed_out` probe verdict names the real budget. Both `/site-config` probes formatted the wait as a raw nanosecond count, so the operator was told the run never reported completion "within 90000000000s" instead of within 90s. (R3 F149)
+- The recording leak check now searches the reassembled session output, not just the stored bytes. A secret split across two PTY writes lands in two asciicast events, so the framed byte run is always broken and the headline assertion of the boundary-split masking test could never fail — proven by disabling the tail-retention fix and watching a cleartext credential pass that check. (R3 F147)
+- The Postgres-gated concurrency proofs now run under the race detector. The only race job strips the database DSN, so every `WARDYN_TEST_PG`-gated test skipped there, and the job that sets the DSN ran without `-race` — leaving the broker's exactly-once credential-mint proofs, whose whole value is racing goroutines, unchecked by any gate. `make test-race-pg` is that gate, and CI's `test-pg` job runs it. (R3 F137)
+- A run's approvals list is read from the database, one run at a time. `GET /api/v1/approvals?run_id=` — the shape the CLI and a run's detail page poll — installed no page window, so it loaded every approval row the deployment had ever written and filtered them in memory; decided rows are never deleted, so that read grew with the deployment's age. The run filter, the state filter and the page window now all run in one indexed query. (R3 F072)
 - **Revoking a human by email now actually revokes them.** `wardyn sessions revoke --sub` advertised "the OIDC sub/email", but only the sub was ever matched — so on an identity provider where the two differ (Entra, whose `sub` is an opaque per-app identifier nobody reads off a screen), naming the email logged nobody out, revoked none of their API tokens, and still answered success to the responder and to the audit log. Both halves of a revoke now match either identity, the email case-insensitively, the way a per-user permission grant already did.
 - Documented what a security admin's "revoke sessions and API tokens" actually reaches: a **super admin's** sessions and tokens too, and the revoke-all arm logs out every principal and permanently revokes every API token in the deployment, CI credentials included. That is the tier working as designed — incident response is its job and a revocation only ever takes reach away — and what bounds it is now stated as well: the session cutoff is a timestamp, so signing in again clears it, and the admin bearer break-glass ignores revocations entirely. Only the API tokens do not heal by themselves, which is why the deployment-wide arm is an incident lever rather than a routine one.
 - A member is no longer silently promoted to full admin by a directory change. Entra stops sending the group (or App Role) claim once someone is in more groups than its token limit, and Wardyn read that absence as "this person is in no groups" — so on a deployment where unmatched people default to admin, the person the hidden claim was going to wall got the top tier instead, with no warning and nothing in the session to show it. Such a sign-in is now refused with a reason that says what to change, and the refusal is narrow: anyone whose claims actually matched signs in as before, and so does anyone defaulting to the ordinary member role.
@@ -464,20 +372,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - A member could name a base image they were not granted, by putting it on a workspace they own and launching against it — the image was copied onto the run after the check had already run. The check now runs again on the seeded value, scoped to member-owned workspaces so operator-authored ones behave exactly as before. Members also can no longer bind a model provider at workspace creation, which was admin-only on every other path.
 - An egress redirect's target is trusted where the operator declared it. It had to ALSO be pasted into a policy's allowed domains or the run was refused, which nothing documented — so an operator following the mechanism the product pointed them at still got a denial.
 - The redirect probe no longer fails a correct configuration. It dialled a literal address directly, presenting that address for TLS against a certificate scoped to the hostname; it now dials the target while presenting the original hostname, which is what a real run does.
-
 - The AWS toolchain now trusts a corporate CA. AWS CLI v2 ships its own Python and its own certificate store and reads none of the four trust variables the sandbox already set, so on a TLS-inspecting network the one image built for the AWS CLI — and every intercepted Bedrock or STS call — failed certificate verification while the operating system's trust store was perfectly correct. The variable list had been written out twice, once per caller, and the two copies had already drifted; both now read one list.
-
 - The `agent-aws-sso` image now ships AWS's `THIRD_PARTY_LICENSES` attribution
   file at `/usr/share/doc/aws-cli/THIRD_PARTY_LICENSES`. The AWS CLI installer
   copies only its `dist/` tree, so every previously published tag of this image
   conveyed the CLI's bundled third-party components without their attribution
   text; the build now preserves the file and fails closed if the installer zip
   stops carrying it.
-
 - `GET /runs/{id}/files` reported `vcs:"none"` for every `--repo` run because it inspected the workspace mount target instead of the clone one level below it — the console's files widget claimed "no git repository" for a sandbox holding a full clone. It now finds the run's clone.
 - Console surfaces that referenced a nonexistent `bg-surface-1` token painted no background (new-run rail, settings and connection cards).
 - Focus rings now clear WCAG 1.4.11's 3:1 floor in both themes (`--ring` raised; the shared focus recipes no longer dilute it to 50%).
-
 - **A wardynd restart could kill a healthy, just-started run on Kubernetes and
   report it FAILED.** Between the apiserver accepting the agent's ephemeral
   exec container and the kubelet publishing that container's first status, the
@@ -493,7 +397,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `Spec` — and used it worse. Present-in-Spec-but-not-in-Status is now
   `STARTING`; an exec id absent from `Spec` was never exec'd against that pod
   and stays terminal.
-
 - **`docs/PLUGGABILITY.md` claimed a selection convention that does not hold.**
   Its rule — *"every seam selects via a `WARDYN_<SEAM>` env var"* — is false for
   `egress.Evaluator`, which has a real interface and a conformance suite but **no
@@ -503,7 +406,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   claim was in `internal/component/registry.go`'s package doc. Both corrected, and
   the doc now states the distinction it exists to keep straight: an interface plus
   a conformance suite is a head start on pluggability, not a swappable seam.
-
 - **The threat model's own citation rule had no gate, and had rotted again.**
   `threatmodel/THREAT-MODEL.md` §8 states that citations must name symbols, not
   line numbers — *"an earlier pass pinned line numbers and six of nine had rotted
@@ -513,7 +415,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `threatmodel/*.md`. Also fixes four `Tier-1`/`Tier-3` occurrences (the pre-`CC`
   names) and a security-doc contradiction: `docs/DATA-FLOW.md` called
   `wardyn-proxy` the **L1** egress gateway; every other document calls it L2.
-
 - **The GPL corresponding-source offer covered the wrong images.** Its hardcoded
   list still named `agent-claude-code`, unpublished since 0.6.2, and omitted
   `agent-base`, which publishes in its place — so the loop errored on a ref that
@@ -533,7 +434,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   silently regenerates the offer for the wrong release — and a new guard fails
   when the offer's image list and `release.yml`'s publish matrix disagree in
   either direction.
-
 - **`RELEASING.md`'s tag-gate job list was wrong in both directions.** It named
   `sbom-stub`, which was **deleted** along with `make sbom` — so a maintainer
   following it literally waited on a job that can never report — and it omitted
@@ -541,7 +441,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the one job that catches a GPL regression on a release that adds an X stack.
   Both corrected, and a new guard fails when `ci.yml` and that list disagree in
   either direction; this list had already drifted twice.
-
 - **`tool_approvals=hold` on an interactive run was accepted and silently
   discarded.** Dispatch writes `WARDYN_TOOL_APPROVALS` only for non-interactive
   runs, so the caller got a 201 and none of the supervision they asked for. It
@@ -550,7 +449,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   refuses a contradiction rather than closing a hole. The guard sits **after**
   the empty-task→interactive coercion, because a guard placed before it passes
   and the field is still dropped.
-
 - **The custom base-image `steps` surface pretended to do something.**
   Validation, caps and UI copy implied operator-authored Dockerfile lines would
   be applied; nothing applies them, and nothing may — operator `RUN` lines would
@@ -558,7 +456,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   tier. The user-facing surface is gone. **The field itself stays**, documented
   as catalog identity: it is part of the `base_images` UNIQUE index, so deleting
   it would make every upsert write NULL and mint duplicate catalog rows.
-
 - **`env_get` killed its caller when a key was absent.** Its contract says
   *"("" when absent)"*, but `grep` exits 1 and every caller runs under
   `set -euo pipefail`, where `PIPEFAIL` propagates that — so
@@ -567,7 +464,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   used the value inside an `if`, which `set -e` exempts; 0.7's new
   `WARDYN_DOCKER_SOCK` lookup is the first plain assignment, and it stopped the
   desktop launcher dead with no output.
-
 - **The desktop tier's image pin did not work at all.** `wardyn-desktop.sh`
   `export`ed `WARDYN_WARDYND_IMAGE` with a `:latest` default *before* running
   `compose --env-file`, and **compose prefers the shell environment over
@@ -576,7 +472,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `publish-image.yml` pushes `wardynd:latest` on every push to `main`, so that
   default had managed laptops tracking tip-of-main, unreleased, several times a
   day. The launcher now reads both pins **from the envelope**.
-
 - **Every run's egress sidecar was unresolvable on a managed laptop, and
   nothing pulled it on either install path.** `deploy/desktop/` set
   `WARDYN_PROXY_IMAGE` nowhere, so the base compose file handed `wardynd`
@@ -590,18 +485,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   already fails closed. Verified both directions: with the fix the image is
   absent, gets pulled, and the run COMPLETEs; without it the run fails with
   `create proxy: No such image`.
-
 - **`--pull always` on a 300s timer bricked an offline laptop.** Under
   `set -euo pipefail` an unreachable registry killed the launcher, so the stack
   did not come up **even though every image was already local**. Now
   `--pull missing`; with envelope pins there is nothing for `always` to catch.
-
 - **There was no way to stop the stack.** `up` was the only subcommand while the
   daemon re-asserted every 300s — so uninstall, rollback, the offline lane and
   `wardynd -rotate-age-key` had no way to reach a stopped daemon.
   `wardyn-desktop.sh down` keeps all data; `down --purge` destroys the Postgres
   volume and says so first. It never removes `age.key`.
-
 - **Site-config never applied on the member-mode profile, for a reason that was
   not true.** The apply was gated on `WARDYN_LOCAL_MODE=true`, skipping m′ with
   *"the SSO envelope variant has no CLI-usable credential here"*. It has one:
@@ -609,14 +501,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   container, `compose exec` inherits it, and it authenticates even with OIDC
   configured. The gate is deleted — no new flag, since the container already
   carries the variable.
-
 - **Re-running the one-line installer at a new version ran the new topology on
   the old images.** It overwrote `docker-compose.yaml` at the new tag but its
   `if [ ! -f .env ]` guard skipped the entire `.env` write *including the image
   pins* — and told the user "Wardyn is running". The upgrade path now rewrites
   exactly the version-derived lines, adds listeners an older install lacks, and
   leaves the age key, admin token and ports untouched.
-
 - **Only one of three agent names resolved on a published install.**
   `internal/api/harness.go` ships three catalog rows; `agent-claude-code` and
   `agent-none` both 404 on every published deployment, leaving `codex-cli` as
@@ -647,7 +537,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   had silently downgraded to `info` for the default install — `agent-base`
   carries node/npm/python3 but no Go, Java or Rust, so the warn still applies and
   now fires.
-
 - **`scripts/test-desktop-profile.sh` checked only one envelope.** It read a
   single hardcoded `wardyn.env.example`, so any second variant shipped with no
   syntax check, no ENV.md parity check and no policy-path check. It now loops
@@ -657,7 +546,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   member-root **width** — `/` or a home directory leaves the dotfile deny-list as
   the only thing between a member and the operator's `~/.ssh`, and an
   `.env.example` copied fleet-wide by MDM is exactly where that propagates.
-
 - **The BYOI wrap produced images that could not pass their own contract
   selftest.** `FinalizeBase` COPYed the `wardyn-git-helper` binary onto `PATH`
   but wired nothing to it, so git never called it. Any run whose policy declares
@@ -673,7 +561,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and home while `provision_git_helper_secret` always writes
   `${HOME}/.wardyn/git-helper.secret`; hardcoding it would have left the
   caller-auth gate silently falling open on every BYOI image.
-
 - **The selftest failed closed on a base image with no git at all.** Absent git
   is not an unwired helper — there is no git to no-op — and
   `selftest_check_bins` had already ruled git "not required for this task mode"
@@ -682,7 +569,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   never once been green. Both halves are now consistent; where git absence
   genuinely matters (harness mode, or exec mode with repo wiring)
   `selftest_check_bins` still requires it.
-
 - **Both documented install paths were broken.** `install.sh` resolved its
   version from `releases/latest`, which EXCLUDES pre-releases — and RELEASING.md
   mandates `--prerelease` on every Wardyn release, so that endpoint returned
@@ -699,12 +585,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Nothing caught either one: the root `install.sh` had no lint, no `sh -n` and no
   test, though `release.yml` ships it in the cosign-signed `SHA256SUMS`.
   `scripts/test-install-sh.sh` now covers it, in `make test-scripts`.
-
 - **The README handed out an unsigned installer.** It curled `install.sh` from
   `main`, so the cosign-signed copy in the release assets was never the one
   anyone executed. It now points at the pinned `releases/download/` asset;
   RELEASING.md step 1b sweeps that version with the other four.
-
 - **`docs/EXPORT.md` recorded an export-control obligation that does not exist.**
   It listed a BIS/NSA notification as *"PENDING — not yet sent"*, open since
   0.6.2. EAR §742.15(b)(1) places publicly available 5D002 encryption source code
@@ -730,9 +614,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **Helm: two new render refusals, one NetworkPolicy change, and image pins — all upgrade-affecting.** (1) A `WARDYN_AGE_KEY` in `env`/`extraEnv` now counts as an age-identity source, so naming it together with `secrets.ageKeySecretRef` / `ageKeyFromSecret` / `ageKey` fails at render where it previously rendered and the plaintext literal silently won — drop one (R5 F189). (2) `env`/`extraEnv` `WARDYN_ADMIN_TOKEN` together with `auth.adminToken.secretRef.name` or `.value` fails at render; either alone still renders, and the 401 refusal no longer recommends the plaintext door (R5 F192). (3) With `ssh.enabled` or `uiSandbox.enabled`, those ports now ride a NetworkPolicy rule that excludes pods labelled `wardyn.managed`, so a run pod in the release namespace can no longer reach wardynd's SSH or UI-sandbox port — deliberately; HTTP is unchanged and operator-supplied peers other than a bare `podSelector: {}` pass through untouched (R5 F018, F193). (4) Agent images: `NPM_VERSION` 11.19.0 → 11.19.1 — 11.19.0 vendors node-tar inside CVE-2026-73566 (R5 F177); `agent-codex-cli` pins `CODEX_VERSION=0.149.1`, the first release in which that image is reproducible (R5 F120, F165, F178).
 - **Helm: the chart's cluster-scoped RBAC objects now carry the release namespace in their names.** The ClusterRole and ClusterRoleBinding were named without it (release `wardyn` in namespace `wardyn` rendered `wardyn-k8s-runtimeclasses`), so two releases in one cluster contended for one object. They now render as `wardyn-wardyn-k8s-runtimeclasses`; `helm upgrade` replaces them in place. Anything outside the chart that referenced the old names — an RBAC audit, an admission policy — needs the new ones. (R5 s2-ops-2:ops2-04)
 - `GET /access` no longer carries `issuer`; `provider` is unchanged. The raw OIDC issuer URL was never read by the console — the human-facing IdP name it shows is derived from the issuer server-side and sent as `provider`.
-
 - **Everyone signs in once after upgrading.** The session cookie's format version is stamped, so cookies issued by an older daemon are re-derived rather than accepted. This is deliberate and it is one field's fault: the cookie now records whether a member's group list was truncated, and an absent bit would decode as "not truncated" — the exact wrong answer, since group membership decides which governance profile applies. API tokens carry the same marker from the moment they are minted.
-
 - The GPL corresponding-source offer (`deploy/images/THIRD-PARTY-GPL.md`) is
   regenerated against the 0.6.6 published digests, and offers owed for
   withdrawn tags now live as frozen text in
@@ -745,13 +627,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   deployment; `WARDYN_ENVBUILD_IMAGE` (`-envbuild-image`) still moves the pin.
 - Console type scale collapsed to four body rungs (`--text-meta` 11px, `text-xs`, `--text-body` 13px, `text-sm`) replacing ~260 ad-hoc sizes; three elevation levels with one `--shadow-floating`; body tracking `0.01em`; helper text at 12px; thin scrollbars on every scroller; radius one-offs onto the card scale.
 - `KILLED` counts as needing attention on the board and badge (rank beside `FAILED`); rule-decided tool calls file under the Audit screen's **Tool calls** facet rather than **Egress**.
-
 - The `secrets` table's primary key widens from `name` to `(owned_by, name)` (migration `0050`) so a member can hold their own copy of a name the operator already uses; existing rows are unaffected and keep working exactly as before.
-
 - **In-editor extension installation is documented as unsupported by default.**
   It reaches marketplace CDNs no shipped policy allowlists. The fix is baking
   extensions into the image, not pasting a rotating CDN list into a policy.
-
 - **Scan-seeded egress now requires operator provenance, by default.**
   `WARDYN_REQUIRE_OPERATOR_SET_EGRESS` shipped in 0.6 fully built and **off**,
   because turning it on narrows egress for existing workspaces. 0.7 turns it on:
@@ -764,7 +643,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `scan_seeded` stops having them auto-added, and the run's warnings name what
   was skipped; an operator declaring the host is the intended fix. Set
   `WARDYN_REQUIRE_OPERATOR_SET_EGRESS=false` to restore the old behaviour.
-
 - **`--agent` is no longer required for a `task_mode=exec` run that names an
   image.** exec runs the task as a plain shell command — no agent harness, no
   model call — so naming an agent was a formality, and `docs/CI.md` documented

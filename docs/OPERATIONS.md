@@ -513,7 +513,12 @@ rows the rate limiter dropped — the trail is capped at roughly one row per
 second, so past a small burst it stops describing the volume it is bounding and
 **a credential-stuffing run reads quieter than a handful of typos**. Alert on
 this series, not on the audit row count: flat rows with this climbing is the
-attack. `wardyn_auth_store_errors_total` counts requests an authentication lane
+attack. Both the public lane and the INTERNAL lane (the sandbox's run token and
+the host sensor's token) feed that one limiter and that one counter, so a
+process inside a sandbox brute-forcing run tokens is visible on this series
+without being able to flood the append-only log; the `auth.failed` row's actor
+(`wardyn/adminAuth` vs `wardyn/internalAuth` / `wardyn/internalAuthGroundtruth`
+/ `wardyn/internalApproval`) is what tells the two incidents apart. `wardyn_auth_store_errors_total` counts requests an authentication lane
 could not decide because its store read failed and answered `500` — a state with
 no audit row (there is no authenticated principal to attribute one to) and no
 client-visible cause.
@@ -2300,7 +2305,12 @@ boot-time operator posture, never a live API write, never agent-reachable —
 token_integration_ref, ecosystem}` entries. Each substitutes a public/upstream URL
 or host for a corporate-internal one in every run's egress, with an optional token
 injected proxy-side as a Bearer credential for `to`'s host (the sandbox never
-holds it). It replaced the old `artifact_overrides` map (one entry per package
+holds it). The egress entry a redirect adds is scoped to `to`'s **port** — the
+one `to` spells, else the default of the scheme `to` spells (`80` for an explicit
+`http://`, `443` otherwise) — the same port its TLS termination and token
+injection use — so a `to` on a literal IP is never trusted on some other port of
+that address; reach
+the mirror on a different port by naming that port in `to`. It replaced the old `artifact_overrides` map (one entry per package
 ecosystem) because a corporate estate redirects container registries and internal
 appliances too — the shape generalized to "a list of From → To pairs over any
 URL, host, or IP".
@@ -2360,11 +2370,16 @@ proxy vets (the opaque tunnel, the TLS-terminated token-injection path, and the
 git/PAT brokers alike), and shows in the audit trail as `rule_source:
 site-config:egress-redirect` rather than a generic policy allow. The trust comes
 from the exact allowlist entry the substitution writes, so it is scoped to those
-runs and to that address — **on any port**: `substituteArtifactEgress` writes
-`hostrules.HostOf(r.To)`, which strips a `:port` the operator typed into `to`,
-so the entry it adds is a bare address and `Policy.AllowsLiteralIP` matches it
-against every port, not only the one `to` named. A run the redirect does not
-cover is refused, and a `denied_domains` entry still wins. `test-redirect`
+runs, to that address, and to **one port**: `substituteArtifactEgress` writes
+`net.JoinHostPort(hostrules.HostOf(r.To), redirectPort(r.To))`, a
+PORT-QUALIFIED entry, and `Policy.AllowsLiteralIP` matches it on that port only
+— the one `to` spells, else the default of the scheme `to` spells (`80` for an
+explicit `http://`, `443` otherwise), which is the SAME port the redirect's
+TLS-MITM/token-injection half is scoped to. A bare address would have matched
+EVERY port instead, so a `to` of `https://10.40.2.11:8443/` used to trust
+`10.40.2.11:22` and `:5432` as well — a mirror reached on some other port needs
+that port in the `to`, exactly as the token injection has always required. A run
+the redirect does not cover is refused, and a `denied_domains` entry still wins. `test-redirect`
 understands the shape too
 (`redirectProbeTo`): it dials the `to` address while presenting the `from`
 hostname for TLS, because a private endpoint's certificate names the public host

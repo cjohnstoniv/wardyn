@@ -111,6 +111,10 @@ func redirectEndpointPort(rawURL string) (port int, spelled, ok bool) {
 // A port that is spelled but unusable cannot reach here from a stored config —
 // validateSiteConfig refuses it at PUT — so the scheme default also covers a
 // row written before that gate existed, fail-safe and unchanged from before.
+//
+// Also used for the Bedrock data-plane authority — WARDYN_BEDROCK_BASE_URL,
+// runs_bedrock.go — so the two MITM-authoring lanes derive their port by the
+// SAME rule rather than each keeping a copy (F037).
 func redirectPort(rawURL string) int {
 	if p, spelled, ok := redirectEndpointPort(rawURL); ok && spelled {
 		return p

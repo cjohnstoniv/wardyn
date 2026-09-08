@@ -56,11 +56,29 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 		return
 	}
 	var resolved, missing int
+	var reserved []string
 	// run.CreatedBy: the run's own owner's row wins, falling back to the
 	// operator's (secretOwnerFromRequest.stamped rows never collide with an
 	// operator's own run identity string — see injection.go's Get for the
 	// same reasoning).
 	for _, name := range li.WorkspaceSecretNames {
+		// F126: the reserved-name guard every credential SINK takes
+		// (sinkReservedSecret, secrets.go — "reject it at every sink"), which
+		// this one was missing while its direct sibling below
+		// (resolveEnvSecretGrants) carried it. This lane resolves a name to
+		// PLAINTEXT on the policy copy handed to the proxy sidecar, so without
+		// it a stored, inline or WARDYN_DEFAULT_POLICY llm_inspection block
+		// shipped wardyn-signing-key / wardyn-session-key / the harness OAuth
+		// blobs / the resident AWS SigV4 secrets out of the store — the exact
+		// identity-forging and long-lived-key exposure injection.go calls "the
+		// single chokepoint that protects every current and future caller".
+		// Skipped by NAME (never a value) and audited, matching this lane's
+		// fail-open-per-name discipline; validateLLMInspection refuses the same
+		// name at write time so an operator sees a 400 rather than a silent skip.
+		if sinkReservedSecret(name) {
+			reserved = append(reserved, name)
+			continue
+		}
 		val, err := s.cfg.Secrets.For(run.CreatedBy).Get(ctx, name)
 		if err != nil || len(val) == 0 {
 			missing++
@@ -73,13 +91,17 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 		}
 	}
 	outcome := "success"
-	if missing > 0 {
+	if missing > 0 || len(reserved) > 0 {
 		outcome = "failure"
 	}
+	data := map[string]any{
+		"resolved": resolved, "missing": missing, "names": li.WorkspaceSecretNames,
+	}
+	if len(reserved) > 0 {
+		data["reserved_skipped"] = reserved
+	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm_inspection.secrets_resolve",
-		run.ID.String(), outcome, mustJSON(map[string]any{
-			"resolved": resolved, "missing": missing, "names": li.WorkspaceSecretNames,
-		})))
+		run.ID.String(), outcome, mustJSON(data)))
 }
 
 // envAllowMemberEnvSecret opts a deployment IN to letting MEMBERS hold

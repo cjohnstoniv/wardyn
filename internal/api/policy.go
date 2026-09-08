@@ -258,6 +258,31 @@ func validateUIAppPath(p string) error {
 	return nil
 }
 
+// validInjectionFormat is THE rule for the format string of a proxy-injected
+// credential header, shared by the two authoring paths that write one: an
+// integration's proxy_header delivery (validateIntegrationDelivery) and an
+// api_key eligible-grant scope (validateEligibleGrant). fmt.Sprintf substitutes
+// the secret into it at the sink (formatInjectionValue), so it needs exactly one
+// %s — a format with none silently DROPS the credential and sends a bare prefix,
+// one with two renders "%!s(MISSING)" — and no CR/LF of its own, which would be
+// a header-splitting shape rather than a typo. An empty format is the caller's
+// question: the integration path materializes it as "%s", the api_key path as
+// "Bearer %s" (injectionRuleFromScope), and neither reaches here empty by
+// accident. The error strings are the ones the integrations path has always
+// returned; the api_key path wraps them with its own index prefix.
+func validInjectionFormat(format string) error {
+	if format == "" {
+		return nil
+	}
+	if strings.Count(format, "%s") != 1 || strings.Count(format, "%") != 1 {
+		return fmt.Errorf("format: %q must contain exactly one %%s (where the secret goes) and no other verb", format)
+	}
+	if strings.ContainsAny(format, "\r\n") {
+		return fmt.Errorf("format: must not contain a line break")
+	}
+	return nil
+}
+
 // validateEligibleGrant enforces the per-kind structural invariants of one
 // eligible_grants entry (extracted from validatePolicySpec to keep each
 // function under the gocyclo gate; behavior is identical).
@@ -314,6 +339,20 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 		}
 		if !egress.ValidHeaderName(rule.Header) {
 			return fmt.Errorf("eligible_grants[%d]: api_key header %q is not a valid HTTP header name", i, rule.Header)
+		}
+		// F097: FORMAT takes the same rule the INTEGRATION authoring path has
+		// always applied to the identical wire field (validateIntegrationDelivery
+		// — one implementation, called from both, so the two authoring paths for
+		// one InjectionRule cannot enforce different rules). It was checked
+		// NOWHERE on this path, while the sink does fmt.Sprintf(format, secret)
+		// unconditionally: a format with no %s silently DROPS the credential and
+		// sends a bare prefix, one with two renders "%!s(MISSING)" into the
+		// header, and a CR/LF in it is a header-splitting shape written verbatim
+		// onto the forwarded request. rule.Format is injectionRuleFromScope's
+		// resolved value ("Bearer %s" when the author left it empty), so the
+		// empty case is already normalized here.
+		if err := validInjectionFormat(rule.Format); err != nil {
+			return fmt.Errorf("eligible_grants[%d]: api_key %w", i, err)
 		}
 	}
 	// A git_pat grant returns the STORED PAT VALUE to the git credential
@@ -542,6 +581,18 @@ func validateLLMInspection(spec types.RunPolicySpec) error {
 	if len(li.WorkspaceSecretValues) > 0 {
 		return fmt.Errorf("llm_inspection.workspace_secret_values may not be set on a policy write " +
 			"(it is resolved internally, store->proxy, at dispatch — see workspace_secret_names)")
+	}
+	// F126: the write-time half of the SINK guard. workspace_secret_names is
+	// resolved to PLAINTEXT onto the policy copy handed to the proxy sidecar
+	// (resolveLLMInspectionSecrets), which makes it a credential sink like the
+	// api_key/git_pat/ssh_key lanes — and sinkReservedSecret is the one guard
+	// they all take ("reject it at every sink", secrets.go). Refusing here means
+	// an operator authoring a reserved name gets a 400 instead of a run whose
+	// scanner silently covers one fewer value than they asked for.
+	for i, name := range li.WorkspaceSecretNames {
+		if sinkReservedSecret(name) {
+			return fmt.Errorf("llm_inspection.workspace_secret_names[%d]: %q is a reserved platform-internal secret name", i, name)
+		}
 	}
 	if mode != "" && mode != "off" {
 		if !li.DetectSecrets && !li.DetectSecretPatterns && !li.DetectEntropy &&

@@ -79,7 +79,16 @@ func run(args []string) error {
 	// Delivery flags.
 	outDir := fs.String("out-dir", "", "copy finished recording into this shared-volume directory")
 	uploadURL := fs.String("upload-url", "", "PUT finished cast to this URL (control-plane endpoint)")
-	runToken := fs.String("run-token", os.Getenv("WARDYN_RUN_TOKEN"), "bearer token for -upload-url auth (env: WARDYN_RUN_TOKEN)")
+	// EMPTY default + write-through, never a default seeded from the env
+	// (F157, the same rule cliutil.FlagEnv states at length): flag captures the
+	// default it is handed as Flag.DefValue and PrintDefaults renders it as
+	// `(default "…")` on -help AND on every parse error, so seeding it here put
+	// the live run token on stderr. This FlagSet is private (ContinueOnError,
+	// not flag.CommandLine), which is why it cannot simply call FlagEnv.
+	runToken := fs.String("run-token", "", "bearer token for -upload-url auth (env: WARDYN_RUN_TOKEN)")
+	if v := os.Getenv("WARDYN_RUN_TOKEN"); v != "" {
+		*runToken = v
+	}
 
 	if err := fs.Parse(args); err != nil {
 		return err

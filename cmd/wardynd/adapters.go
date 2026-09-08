@@ -288,6 +288,17 @@ func (s *approvalService) ListApprovalsPageByRunCreator(ctx context.Context, cre
 
 var _ store.ApprovalsByRunCreatorPager = (*approvalService)(nil)
 
+// ListApprovalsPageByRun is the ?run_id= analogue — the shape the CLI and the
+// console's run detail page poll. Without this delegation the handler's
+// type-assert misses and a run-scoped list falls back to reading EVERY approval
+// row in the deployment and filtering in Go (F072). Pure delegation, promoted
+// from the embedded store.PG exactly like ListApprovalsPage.
+func (s *approvalService) ListApprovalsPageByRun(ctx context.Context, runID uuid.UUID, state types.ApprovalState, p store.Page) ([]types.ApprovalRequest, error) {
+	return s.st.ListApprovalsPageByRun(ctx, runID, state, p)
+}
+
+var _ store.ApprovalsByRunPager = (*approvalService)(nil)
+
 // ─── audit fanout ─────────────────────────────────────────────────────────────
 
 // buildAuditFanout parses the -audit-sinks JSON config into a Fanout and starts
