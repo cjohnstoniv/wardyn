@@ -68,8 +68,15 @@ type fakeDB struct {
 	// before taking the lock (db.AuditChainLockTimeout).
 	lockTimeoutSet bool
 
+	// readCommitted counts BeginReadCommitted calls — the fake's only way to
+	// witness that the broker asked for the isolation pin at all.
+	readCommitted int
+
 	beginErr  error
 	commitErr error
+	// mintedErr fails MintedCredentials — RevokeRun's only input. Zero value
+	// (nil) is the ordinary behaviour every other test sees.
+	mintedErr error
 }
 
 // auditRow captures an in-tx INSERT INTO audit_events, recording whether it ran
@@ -78,6 +85,10 @@ type auditRow struct {
 	action, actor, outcome string
 	actorType              types.ActorType
 	preCommit              bool
+	// runID mirrors the audit_events.run_id column the mint tx binds. The
+	// MintedCredentials mirror below reads the run's mint rows off it, exactly
+	// as mintedCredentialsSQL's audit half does.
+	runID *uuid.UUID
 	// data is the marshalled Data column — the lease tests read the lease
 	// marker off it, so the fake stores what the statement actually bound
 	// rather than a re-derived guess.
@@ -105,22 +116,67 @@ func newFakeDB() *fakeDB {
 	}
 }
 
-func (db *fakeDB) Begin(_ context.Context) (Tx, error) {
+// BeginReadCommitted is the only transaction start on the TxBeginner seam; the
+// fake has no isolation to model, so it records that the pin was asked for and
+// hands back an ordinary fake tx.
+func (db *fakeDB) BeginReadCommitted(_ context.Context) (Tx, error) {
 	if db.beginErr != nil {
 		return nil, db.beginErr
 	}
+	db.mu.Lock()
+	db.readCommitted++
+	db.mu.Unlock()
 	return &fakeTx{db: db}, nil
 }
 
-// MintedJTIs is the TxBeginner bulk read RevokeRun's audit cascade uses.
-func (db *fakeDB) MintedJTIs(_ context.Context, runID uuid.UUID) ([]string, error) {
+// MintedCredentials is the TxBeginner bulk read RevokeRun's audit cascade uses.
+// It mirrors mintedCredentialsSQL: the approvals burn UNION the run's successful
+// credential.mint audit rows, de-duplicated by jti, each carrying its grant kind.
+// The audit half is what makes an AUTO-MINTED credential (no approvals row exists
+// at all) and a leased git_pat's 2nd..Nth mint visible to the cascade.
+func (db *fakeDB) MintedCredentials(_ context.Context, runID uuid.UUID) ([]MintedCredential, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	var out []string
+	if db.mintedErr != nil {
+		return nil, db.mintedErr
+	}
+	kindOf := func(grantID uuid.UUID) string {
+		if g := db.grants[grantID]; g != nil {
+			return string(g.spec.Kind)
+		}
+		return ""
+	}
+	seen := map[string]bool{}
+	var out []MintedCredential
+	add := func(jti, kind string) {
+		if jti == "" || seen[jti] {
+			return
+		}
+		seen[jti] = true
+		out = append(out, MintedCredential{JTI: jti, Kind: kind})
+	}
 	for _, a := range db.approvals {
 		if a.runID == runID && a.kind == "credential" && a.mintedJTI != "" {
-			out = append(out, a.mintedJTI)
+			add(a.mintedJTI, kindOf(a.grantID))
 		}
+	}
+	for _, r := range db.auditRows {
+		if r.action != "credential.mint" || r.outcome != "success" || r.runID == nil || *r.runID != runID {
+			continue
+		}
+		var d struct {
+			JTI     string `json:"jti"`
+			GrantID string `json:"grant_id"`
+		}
+		if err := json.Unmarshal([]byte(r.data), &d); err != nil {
+			continue
+		}
+		gid, err := uuid.Parse(d.GrantID)
+		if err != nil {
+			add(d.JTI, "")
+			continue
+		}
+		add(d.JTI, kindOf(gid))
 	}
 	return out, nil
 }
@@ -243,7 +299,9 @@ func (tx *fakeTx) Exec(_ context.Context, sql string, args ...any) (int64, error
 		// D29 in-tx mint audit. args: id, time, run_id, actor_type, actor, action,
 		// target, outcome, source_ip, data. Record preCommit so the atomicity test
 		// can prove it rode the tx rather than a separate post-commit connection.
+		runID, _ := args[2].(*uuid.UUID)
 		tx.db.auditRows = append(tx.db.auditRows, auditRow{
+			runID:     runID,
 			actorType: types.ActorType(args[3].(string)),
 			actor:     args[4].(string),
 			action:    args[5].(string),
@@ -319,11 +377,23 @@ func (r *ensureApprovalRow) Scan(dest ...any) error {
 type fakeAudit struct {
 	mu     sync.Mutex
 	events []types.AuditEvent
+	// failAction / failErr make Record fail for ONE action, so a test can prove
+	// a best-effort emitter keeps going past a sink failure without breaking the
+	// mint path that runs first. Zero values (empty/nil) never fail anything.
+	failAction string
+	failErr    error
+	// failed counts records the hook rejected — the only way to witness that a
+	// best-effort emitter kept ATTEMPTING past a sink failure.
+	failed int
 }
 
 func (a *fakeAudit) Record(_ context.Context, ev types.AuditEvent) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.failAction != "" && ev.Action == a.failAction {
+		a.failed++
+		return a.failErr
+	}
 	a.events = append(a.events, ev)
 	return nil
 }
@@ -823,4 +893,61 @@ func TestMint_AuditRidesTxAtomicWithJTI(t *testing.T) {
 	if got := au.byAction("credential.mint"); len(got) != 0 {
 		t.Fatalf("success mint must not double-write through the post-commit recorder: %+v", got)
 	}
+}
+
+// TestRevokeRun_ErrorArms pins the two arms F135 measured at count=0 in the
+// coverage profile (RevokeRun's MintedCredentials error and its audit.Record
+// failure). They are the arms that decide what the KILL CASCADE does when
+// something under it is broken, so "untested" is the wrong state for them:
+//
+//   - an unreadable mint list must PROPAGATE, not be reported as a clean
+//     cascade over zero credentials. The caller is the kill switch; a nil error
+//     tells it every minted credential was accounted for.
+//   - a failing audit sink must NOT abort the loop. The revoke rows are
+//     best-effort by design (LogWriteFailure, not a return), and one wedged sink
+//     must not cost the remaining credentials their rows.
+func TestRevokeRun_ErrorArms(t *testing.T) {
+	t.Run("an unreadable mint list propagates", func(t *testing.T) {
+		b, db, au, _ := newTestBroker(t)
+		db.mintedErr = errors.New("store: connection reset by peer")
+		if err := b.RevokeRun(context.Background(), uuid.New()); err == nil {
+			t.Fatal("RevokeRun with an unreadable mint list returned nil — the kill switch would read that as a complete cascade")
+		}
+		if n := len(au.byAction("credential.revoke")); n != 0 {
+			t.Errorf("credential.revoke rows = %d, want 0", n)
+		}
+	})
+
+	t.Run("a failing audit sink does not abort the cascade", func(t *testing.T) {
+		b, db, au, _ := newTestBroker(t)
+		runID := uuid.New()
+		for range 3 {
+			gid := seedGrant(db, runID, githubGrantSpec(t, false))
+			if _, err := b.MintForGrant(context.Background(), callerFor(runID), gid); err != nil {
+				t.Fatalf("MintForGrant: %v", err)
+			}
+		}
+		minted, err := db.MintedCredentials(context.Background(), runID)
+		if err != nil || len(minted) != 3 {
+			t.Fatalf("MintedCredentials = %d rows, err=%v; want 3", len(minted), err)
+		}
+		au.failAction, au.failErr = "credential.revoke", errors.New("audit sink: no space left on device")
+		if err := b.RevokeRun(context.Background(), runID); err != nil {
+			t.Fatalf("RevokeRun with a failing sink = %v, want nil (revoke rows are best-effort)", err)
+		}
+		au.mu.Lock()
+		attempted := au.failed
+		au.mu.Unlock()
+		if attempted != 3 {
+			t.Errorf("revoke rows attempted past the first sink failure = %d, want 3 — one wedged sink must not cost the remaining credentials their rows", attempted)
+		}
+		// And with the sink healthy again the same cascade lands every row.
+		au.failAction, au.failErr = "", nil
+		if err := b.RevokeRun(context.Background(), runID); err != nil {
+			t.Fatalf("RevokeRun: %v", err)
+		}
+		if n := len(au.byAction("credential.revoke")); n != 3 {
+			t.Errorf("credential.revoke rows = %d, want 3 — the cascade must cover every minted credential", n)
+		}
+	})
 }

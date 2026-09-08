@@ -632,28 +632,55 @@ func TestOperationsDocNamesTheUnscopedNetworkRedirectDeny(t *testing.T) {
 	)
 }
 
-// TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun (F042) pins the
-// credential.revoke row to what Broker.RevokeRun actually emits: it names no
-// Data fields and calls the event "revoked", but RevokeRun writes jti+note and
-// its own doc comment states GitHub tokens CANNOT be revoked before expiry.
+// TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun (F042, re-derived at
+// the R3 credentials merge) pins the credential.revoke row to what
+// Broker.RevokeRun actually emits.
+//
+// The credentials lane (F096/F122/F013) moved RevokeRun to internal/broker/revoke.go,
+// replaced the approvals-only MintedJTIs bulk read with MintedCredentials
+// (mintedCredentialsSQL: the approvals burn UNION the run's successful
+// credential.mint audit rows), and replaced the one GitHub-shaped note with the
+// per-kind revokeNote. The row was re-derived with it; this guard is re-derived
+// against the merged tree rather than skipped.
 func TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun(t *testing.T) {
-	src := readSrc(t, "internal", "broker", "broker.go")
+	src := readSrc(t, "internal", "broker", "revoke.go")
 	fn := funcBody(t, src, "(b *Broker) RevokeRun")
-	if !strings.Contains(fn, `"jti":  jti`) || !strings.Contains(fn, `"note":`) {
-		t.Fatal("Broker.RevokeRun no longer writes jti+note — re-derive the doc row before trusting this guard")
+	if !strings.Contains(fn, `"jti":  mc.JTI`) || !strings.Contains(fn, `"note": revokeNote(mc.Kind)`) {
+		t.Fatal("Broker.RevokeRun no longer writes jti+revokeNote(kind) — re-derive the doc row before trusting this guard")
 	}
-	if !strings.Contains(src, "CANNOT be revoked individually before their") {
+	if !strings.Contains(fn, "b.db.MintedCredentials(ctx, runID)") {
+		t.Fatal("Broker.RevokeRun no longer enumerates via MintedCredentials — re-derive the doc row before trusting this guard")
+	}
+	if !strings.Contains(fn, `d["kind"] = mc.Kind`) {
+		t.Fatal("Broker.RevokeRun no longer stamps kind conditionally — the doc row's \"absent when the grant row behind the mint is gone\" claim depends on it")
+	}
+	// The honesty limitation the row publishes: GitHub's endpoint is REAL but
+	// needs the token itself, and RevokeRun holds only the jti.
+	if !strings.Contains(src, "DELETE /installation/token") || !strings.Contains(src, "RevokeRun has only the jti") {
 		t.Fatal("RevokeRun's doc comment no longer states the per-token revocation limitation — re-derive the doc row before trusting this guard")
 	}
+	note := funcBody(t, src, "revokeNote")
+	for _, want := range []string{
+		"wardyn does not call GitHub's DELETE /installation/token",
+		"operator must rotate this secret at the forge",
+		"api_key values stay proxy-side",
+	} {
+		if !strings.Contains(note, want) {
+			t.Fatalf("revokeNote no longer says %q — re-derive the doc row before trusting this guard", want)
+		}
+	}
 
-	// F042 fix-up: MintedJTIs must still select on kind='credential' with no
+	// The cascade's approvals half must still select on kind='credential' with no
 	// grant-kind narrowing — every brokered grant kind (github_token, api_key,
-	// git_pat, ssh_key) inserts its approval with kind='credential' (sql.go),
-	// so the doc's "every minted credential jti, every kind alike" claim
-	// depends on this query never narrowing to one grant kind.
+	// git_pat, ssh_key) inserts its approval with kind='credential' (sql.go), so
+	// the doc's "every kind alike" claim depends on it never narrowing to one
+	// grant kind; the audit half must stay keyed on a SUCCESSFUL credential.mint.
 	pgxSrc := readSrc(t, "internal", "broker", "pgx.go")
-	if !strings.Contains(pgxSrc, `kind = 'credential' AND minted_jti <> ''`) {
-		t.Fatal("PgxStore.MintedJTIs no longer selects kind = 'credential' AND minted_jti <> '' — re-derive the doc row before trusting this guard")
+	if !strings.Contains(pgxSrc, "a.kind = 'credential' AND a.minted_jti <> ''") {
+		t.Fatal("mintedCredentialsSQL's approvals half no longer selects kind = 'credential' AND minted_jti <> '' — re-derive the doc row before trusting this guard")
+	}
+	if !strings.Contains(pgxSrc, "e.action = 'credential.mint' AND e.outcome = 'success'") {
+		t.Fatal("mintedCredentialsSQL's audit half no longer selects successful credential.mint rows — re-derive the doc row before trusting this guard")
 	}
 
 	doc := readDoc(t, "docs/AUDIT-ACTIONS.md")
@@ -663,11 +690,20 @@ func TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun(t *testing.T) {
 	mustNotSay(t, doc, "docs/AUDIT-ACTIONS.md",
 		"Every minted GitHub App installation `jti`",
 	)
-	mustSay(t, doc, "docs/AUDIT-ACTIONS.md",
-		"`credential.revoke`", "`jti`", "`note`",
-		"Every minted credential `jti`",
-		"`api_key`", "`ssh_key`",
+	// The row must not resurrect the two claims the merged code falsifies: the
+	// approvals-only enumeration, and "GitHub has no per-token revocation API".
+	mustNotSay(t, doc, "docs/AUDIT-ACTIONS.md",
+		"`MintedJTIs`",
 		"GitHub has no per-token revocation API",
+	)
+	mustSay(t, doc, "docs/AUDIT-ACTIONS.md",
+		"`credential.revoke`", "`jti`", "`note`", "`kind`",
+		"the cascade enumerates the run's successful `credential.mint` rows UNION the approvals whose `minted_jti` was burnt",
+		"`mintedCredentialsSQL`",
+		"`revokeNote`",
+		"wardyn does not call GitHub's `DELETE /installation/token`",
+		"`RevokeRun` holds only the `jti`",
+		"`api_key`", "`ssh_key`",
 		"TTL expiry",
 	)
 }

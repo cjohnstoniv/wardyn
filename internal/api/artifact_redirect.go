@@ -278,7 +278,23 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		// is last-write-wins, so a colliding row would swap an artifact token
 		// onto model traffic (or, for the public-host half, land the token on
 		// a live subscription/managed request that never expected one).
-		if s.isModelProviderHost(host) {
+		//
+		// isModelProviderRejectHost (llmcred.go), NOT isModelProviderHost: this
+		// is a REJECT test, and the Bedrock lane's bedrock-runtime.<region> /
+		// bedrock.<region> pair — plus a WARDYN_BEDROCK_BASE_URL endpoint —
+		// carries proxy-side bearer injection exactly as the anthropic/openai
+		// lanes do (resolveBedrockAuth's preferred bearer mode, runs_bedrock.go),
+		// so a redirect To one of them is the SAME last-write-wins collision.
+		// Same predicate gap as F019, in the same direction.
+		//
+		// A ZERO types.Workspace is passed deliberately. This plan is composed
+		// before dispatch resolves the run's LLM transport (the resolveLLMTransport
+		// block below this call in runs_dispatch.go), and a run can reference
+		// several onboarded workspaces (run.WorkspaceIDs), so there is no single
+		// workspace to consult here — only the daemon-wide BedrockRegion pair is
+		// decidable at this point. bedrockLaneHosts' per-workspace half is
+		// therefore not exercised at this site (FILED: F019-artifact-redirect-ws).
+		if s.isModelProviderRejectHost(ctx, types.Workspace{}, host) {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
 				run.ID.String(), "warn", mustJSON(map[string]any{
 					"ecosystem": r.Ecosystem, "host": host,

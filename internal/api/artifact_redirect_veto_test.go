@@ -73,6 +73,61 @@ func TestPlanArtifactRedirect_ToPublicProviderRefused(t *testing.T) {
 	assertRefusalAudited(t, rec, "api.anthropic.com")
 }
 
+// TestPlanArtifactRedirect_ToBedrockHostRefused pins B1, the reject-direction
+// sibling of F019: this veto is a REJECT test, but it consulted the
+// anthropic/openai-only isModelProviderHost, so a redirect whose To named the
+// Bedrock lane's data/control host (or a WARDYN_BEDROCK_BASE_URL endpoint) was
+// still allowed to author an artifact-token injection — and buildInjector's
+// byHost map is last-write-wins, so that row could swap the artifact token onto
+// the run's Bedrock traffic, which resolveBedrockAuth's preferred bearer mode
+// injects proxy-side.
+//
+// RED on the base tree: the two bedrock rows plan an injection. The
+// Bedrock-disabled row is here so a fix that simply refused every amazonaws.com
+// host could not pass.
+func TestPlanArtifactRedirect_ToBedrockHostRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		bedrockRegion string
+		bedrockBase   string
+		to            string
+		refused       bool
+	}{
+		{"bedrock data plane", "us-east-1", "", "bedrock-runtime.us-east-1.amazonaws.com", true},
+		{"bedrock control plane", "us-east-1", "", "bedrock.us-east-1.amazonaws.com", true},
+		{
+			"WARDYN_BEDROCK_BASE_URL override host", "us-east-1",
+			"https://vpce-abc.bedrock-runtime.us-east-1.vpce.amazonaws.com",
+			"vpce-abc.bedrock-runtime.us-east-1.vpce.amazonaws.com", true,
+		},
+		{"bedrock host with Bedrock disabled still plans", "", "", "bedrock-runtime.us-east-1.amazonaws.com", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, rec := newVetoRedirectServer("corp-token")
+			s.cfg.BedrockRegion = tc.bedrockRegion
+			s.cfg.BedrockBaseURL = tc.bedrockBase
+			sc := types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+				{From: "registry.example.com", To: tc.to, TokenSecretRef: "corp-token"},
+			}}
+			run := types.AgentRun{ID: uuid.New()}
+			plan := s.planArtifactRedirect(context.Background(), run, sc, []string{"registry.example.com"})
+			if tc.refused {
+				if len(plan.injections) != 0 {
+					t.Fatalf("a redirect To %q must not author an injection, got %+v", tc.to, plan.injections)
+				}
+				if len(plan.mitmHosts) != 0 {
+					t.Fatalf("a redirect To %q must not become MITM-eligible, got %v", tc.to, plan.mitmHosts)
+				}
+				assertRefusalAudited(t, rec, tc.to)
+				return
+			}
+			if len(plan.injections) != 1 {
+				t.Fatalf("with Bedrock disabled the redirect must still plan an injection, got %+v", plan.injections)
+			}
+		})
+	}
+}
+
 // TestPlanArtifactRedirect_UnrelatedToStillPlans: the veto is narrow — an
 // ordinary corp-mirror redirect unrelated to any model-provider host still
 // plans normally.

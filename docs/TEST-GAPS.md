@@ -77,7 +77,7 @@ them at 0.0%.
 `test/reports/go/pg`. Exercised on the `ci test-pg` job / `make test-report-pg`.
 
 - **cmd/wardynd**: Record, Record
-- **internal/broker**: Begin, Commit, Exec, MintedJTIs, NewPgxStore, QueryRow, Rollback, Scan
+- **internal/broker**: BeginReadCommitted, Commit, Exec, MintedCredentials, NewPgxStore, QueryRow, Rollback, Scan
 - **internal/db**: Connect, Migrate, TryAdvisoryLock
 - **internal/recording**: NewPGStore, OpenCast, SaveCast, SaveCastNamed
 - **internal/secretstore/pg**: Delete, For, Get, List, Put, Rekey

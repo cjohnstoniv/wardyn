@@ -393,7 +393,7 @@ func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error 
 		// WHOLE block (the old guard was `m.reg != nil && ev.RunID != nil`),
 		// bypassing masking entirely instead of falling back to the
 		// PROCESS-GLOBAL corpus (Bedrock SSO / subscription creds registered
-		// via AddGlobal). Snapshot(uuid.Nil) returns exactly that — globals
+		// via AddGlobal). The uuid.Nil corpus is exactly that — globals
 		// only, since uuid.Nil is never a real run's perRun key — so a
 		// run-less row is now masked against the same globals every real run
 		// already is, just with no per-run corpus layered on top (there is
@@ -404,14 +404,19 @@ func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error 
 		if ev.RunID != nil {
 			runID = *ev.RunID
 		}
-		snap := m.reg.Snapshot(runID)
-		if len(snap) > 0 {
-			// D31: ev.Data is JSON, so a registered secret bearing a newline,
-			// quote, or backslash (e.g. a minted ssh_key PEM) lands there in its
-			// JSON-escaped form, which the raw-value masker would miss. Expand the
-			// snapshot with the same escaped variants the recording-upload path
-			// applies to asciicast bodies before building the masker.
-			masker := secretmask.NewMasker(secretmask.JSONEscapedVariants(snap))
+		// D31: ev.Data is JSON, so a registered secret bearing a newline, quote,
+		// or backslash (e.g. a minted ssh_key PEM) lands there in its JSON-escaped
+		// form, which the raw-value masker would miss — hence the escaped-variant
+		// expansion, the same one the recording-upload path applies to asciicast
+		// bodies.
+		//
+		// JSONVariantMasker, not NewMasker(JSONEscapedVariants(Snapshot(...))):
+		// that chain clones the corpus, triples it through a documented O(n^2)
+		// de-dup, and sorts the result — on EVERY audit event (F076). The registry
+		// now derives it once per generation and hands back the same immutable
+		// masker until something is registered or evicted.
+		masker := m.reg.JSONVariantMasker(runID)
+		if len(masker.Secrets()) > 0 {
 			if len(ev.Data) > 0 {
 				masked := masker.Mask([]byte(ev.Data))
 				ev.Data = json.RawMessage(masked)

@@ -230,10 +230,11 @@ func assertProxyArtifactScmBedrockComposition(t *testing.T, spec runner.SandboxS
 	}
 	for _, want := range []string{
 		// PORT-QUALIFIED, matching the MITM entry above (R3 F106): the allowlist
-		// entry a redirect adds now names the To's port — 443 when the To names
-		// none — so a literal-IP To cannot open 22 or 5432 on that address. This
-		// is the same wire shape the redirect's TLS termination and token
-		// injection already used.
+		// entry a redirect adds now names the To's port — and when the To spells
+		// none, the SCHEME's default, which redirectPort resolves as 80 for an
+		// explicit http:// To and 443 otherwise — so a literal-IP To cannot open
+		// 22 or 5432 on that address. This is the same wire shape the redirect's
+		// TLS termination and token injection already used.
 		"artifactory.corp:443",
 		"ghes.corp.example",
 		"bedrock-runtime.us-east-1.amazonaws.com",
