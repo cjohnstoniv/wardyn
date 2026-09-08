@@ -604,9 +604,15 @@ test.describe("drives — what the member is told at New run", () => {
     // Off by default: mounting is a choice per run, never a default.
     await expect(page.locator("#nr-drive-mount")).not.toBeChecked();
 
-    // Only a writable allocation can be narrowed, and the toggle defaults OFF
-    // (Q5) — a run may narrow what an admin granted, never widen it.
+    // Only a writable allocation being MOUNTED can be narrowed, and the toggle
+    // defaults OFF (Q5) — a run may narrow what an admin granted, never widen
+    // it. Unmounted, there is no mount to make read-only, so the control is
+    // ABSENT (never disabled) until the box is ticked — workspace-card.tsx
+    // renders it under `enabled && drive.writable`.
     const readOnly = page.locator("#nr-drive-readonly");
+    await expect(readOnly).toHaveCount(0);
+    await page.locator("#nr-drive-mount").click();
+    await expect(page.locator("#nr-drive-mount")).toBeChecked();
     await expect(readOnly).toBeVisible();
     await expect(readOnly).not.toBeChecked();
     await readOnly.click();

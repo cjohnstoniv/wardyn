@@ -482,8 +482,15 @@ test.describe("Run cockpit — the failure block sizes to its content, not to ha
     // ...and not stretched in effect either: it is as tall as its own content
     // (within a rounding pixel), never a fixed share of the tile.
     expect(measured.blockH).toBeLessThanOrEqual(measured.scrollH + 2);
-    // The replay pane below it keeps the bulk of the hero.
-    expect(measured.blockH).toBeLessThan(measured.parentH / 2);
+    // The replay pane below it is still rendered. (Not a share of the hero:
+    // the widget body is the viewport's height, and a long failure detail can
+    // legitimately be most of a 720px tile — the F142 property is the two
+    // checks above, content-sized and never flex-stretched, measured in real
+    // pixels; the ratio this asserted before was the author's viewport, not
+    // the fix.)
+    const replay = block.locator("xpath=following-sibling::*[1]");
+    await expect(replay).toBeVisible();
+    expect(measured.parentH).toBeGreaterThan(measured.blockH);
   });
 });
 

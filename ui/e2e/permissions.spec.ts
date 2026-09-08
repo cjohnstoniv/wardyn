@@ -161,7 +161,14 @@ test.describe("permissions — a snapshot, and a count, that never arrived", () 
   }) => {
     // The count is derived from the runs list; refusing it must not read as
     // "this affects nobody", which is the opposite of the lockout risk.
-    await page.route("**/api/v1/runs?**", (route) => route.fulfill({ status: 403, body: "{}" }));
+    // Refuse the runs LIST the enforce dialog counts from — but not the
+    // console's boot probe (GET /runs?limit=1, core.ts probeAuth), which a 403
+    // would turn into "unreachable" and park the console at the sign-in gate
+    // before the screen under test ever renders.
+    await page.route(
+      (url) => url.pathname.endsWith("/api/v1/runs") && url.searchParams.get("limit") !== "1",
+      (route) => route.fulfill({ status: 403, body: "{}" }),
+    );
     await gotoConsole(page);
     await navTo(page, "Permissions");
 
