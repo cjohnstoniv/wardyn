@@ -13,10 +13,14 @@ package main
 // the admin's "revoke every session for this human" silently does nothing for
 // the next d.
 //
-// The skew is SIMULATED HONESTLY — by handing IsSessionRevoked an issuedAt that
-// is ahead of the database's clock, which is exactly what an app-stamped `iat`
-// looks like to Postgres when the two hosts disagree. Nothing here changes any
-// clock; it does not have to.
+// The skew is SIMULATED HONESTLY — by giving the adapter an APP CLOCK that runs
+// ahead of the database's (pgSessionRevocations.now) and stamping the session's
+// `iat` from that same clock, which is exactly what a fast wardynd does: both the
+// stamp and the later age measurement come from the one fast clock. Handing the
+// adapter a bare issuedAt from the future would NOT model that — the age helper
+// clamps a stamp from its own future to zero (db.AppClockAgeMicros), so such a
+// stamp reads as "minted just now", which is a different (and impossible) input.
+// Nothing here changes the host's clock; it does not have to.
 //
 // Guarded by WARDYN_TEST_PG; skipped cleanly when unset.
 
@@ -56,18 +60,24 @@ func revocationPool(t *testing.T) *pgxpool.Pool {
 func TestPG_RevokeBeatsASessionStampedByAClockThatRunsFast(t *testing.T) {
 	pool := revocationPool(t)
 	ctx := context.Background()
-	rev := &pgSessionRevocations{pool: pool}
+	// wardynd's clock is 10 minutes fast: every reading it takes — the `iat` it
+	// stamps AND the age it later measures — is 10 minutes ahead of Postgres.
+	const skew = 10 * time.Minute
+	appClock := func() time.Time { return time.Now().Add(skew) }
+	rev := &pgSessionRevocations{pool: pool, now: appClock}
 
 	sub := "auth0|clock-skew-" + uuid.NewString()
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM oidc_session_revocations WHERE sub = $1`, sub)
 	})
 
-	// The session was minted BEFORE the revoke, in real time — but wardynd's
-	// clock is 10 minutes fast, so the `iat` it stamped is 10 minutes in the
-	// database's future.
-	const skew = 10 * time.Minute
-	issuedAt := time.Now().Add(skew)
+	// The session was minted BEFORE the revoke, in real time — stamped by the
+	// fast clock, so its `iat` is 10 minutes in the database's future.
+	issuedAt := appClock()
+	// "Minted BEFORE the revoke" has to hold by more than the round-trip the
+	// age measurement itself costs; the finding is a skew of minutes, so a few
+	// ms of daylight between the stamp and the revoke is the honest margin.
+	time.Sleep(25 * time.Millisecond)
 
 	// No cutoff yet: nothing is revoked, however skewed the stamp.
 	if revoked, err := rev.IsSessionRevoked(ctx, sub, "", issuedAt); err != nil {
@@ -93,11 +103,14 @@ func TestPG_RevokeBeatsASessionStampedByAClockThatRunsFast(t *testing.T) {
 	}
 
 	// The other direction, so this is a rule and not a blanket "always revoked":
-	// a session minted AFTER the cutoff, on either clock, still authenticates.
-	if revoked, err := rev.IsSessionRevoked(ctx, sub, "", time.Now().Add(time.Hour)); err != nil {
+	// a session minted AFTER the cutoff — stamped by the same fast clock, in
+	// real time after the revoke — still authenticates.
+	time.Sleep(25 * time.Millisecond)
+	later := appClock()
+	if revoked, err := rev.IsSessionRevoked(ctx, sub, "", later); err != nil {
 		t.Fatalf("IsSessionRevoked for a session minted after the cutoff: %v", err)
-	} else if !revoked {
-		t.Log("a session an hour ahead survives the cutoff, as it must")
+	} else if revoked {
+		t.Fatal("a session minted after the revoke, on the same fast clock, read as revoked — the rule became a blanket \"always revoked\"")
 	}
 }
 
@@ -107,7 +120,9 @@ func TestPG_RevokeBeatsASessionStampedByAClockThatRunsFast(t *testing.T) {
 func TestPG_GlobalRevokeBeatsAFastClockToo(t *testing.T) {
 	pool := revocationPool(t)
 	ctx := context.Background()
-	rev := &pgSessionRevocations{pool: pool}
+	const skew = 10 * time.Minute
+	appClock := func() time.Time { return time.Now().Add(skew) }
+	rev := &pgSessionRevocations{pool: pool, now: appClock}
 
 	var restore *time.Time
 	var had bool
@@ -125,7 +140,8 @@ func TestPG_GlobalRevokeBeatsAFastClockToo(t *testing.T) {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM oidc_session_revocations WHERE sub = $1`, globalRevokeSub)
 	})
 
-	issuedAt := time.Now().Add(10 * time.Minute)
+	issuedAt := appClock() // minted before the revoke, stamped by the fast clock
+	time.Sleep(25 * time.Millisecond)
 	if err := rev.RevokeAll(ctx); err != nil {
 		t.Fatalf("RevokeAll: %v", err)
 	}

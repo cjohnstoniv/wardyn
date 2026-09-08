@@ -112,6 +112,20 @@ const globalRevokeSub = ""
 // entirely (a stateless signed cookie has no row of its own to delete).
 type pgSessionRevocations struct {
 	pool *pgxpool.Pool
+	// now is the APP clock IsSessionRevoked measures a credential's age on; nil
+	// means time.Now. A test injects a clock that runs ahead of the database's,
+	// which is the only honest way to simulate the F289 skew: the age helper
+	// clamps a stamp from its own future to zero, so handing IsSessionRevoked an
+	// issuedAt ahead of the real clock does not model a fast wardynd — it models
+	// a stamp the app itself could never have written.
+	now func() time.Time
+}
+
+func (r *pgSessionRevocations) appNow() time.Time {
+	if r.now != nil {
+		return r.now()
+	}
+	return time.Now()
 }
 
 // IsSessionRevoked reports revoked when issuedAt is at-or-before the LATER of
@@ -171,7 +185,7 @@ func (r *pgSessionRevocations) IsSessionRevoked(ctx context.Context, sub, email 
 		   OR sub = $3`
 	var cutoff sql.NullTime
 	var byDBClock sql.NullBool
-	age := db.AppClockAgeMicros(issuedAt, time.Now())
+	age := db.AppClockAgeMicros(issuedAt, r.appNow())
 	if err := r.pool.QueryRow(ctx, q, sub, email, globalRevokeSub, age).Scan(&cutoff, &byDBClock); err != nil {
 		return false, fmt.Errorf("wardynd: is-session-revoked query: %w", err)
 	}
