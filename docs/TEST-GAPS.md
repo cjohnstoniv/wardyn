@@ -7,9 +7,14 @@ _Generated 2026-09-01 by `scripts/test-gaps.sh` from `test/reports/go/union/cove
 This is an **inventory, not a promise**. An exported func listed here is not
 automatically a bug: a thin pass-through, a driver only a live daemon exercises,
 or a helper covered indirectly can legitimately read 0.0%. The list exists so the
-*genuinely untested* public surface stays a watched number, kept separate from the
+*no-same-package-test* public surface stays a watched number, kept separate from the
 service-gated code a per-PR run structurally cannot reach. Only exported funcs are
-counted (the package's public surface); unexported helpers are omitted.
+counted (the package's public surface); unexported helpers are omitted. **The union
+profile is built WITHOUT `-coverpkg`** (`scripts/test-report.sh`), so a func called
+only from a DIFFERENT package's tests reads 0.0% here and lands in "Untested" below
+despite being covered — read that bucket as "no same-package test", not "no test".
+Statement coverage also cannot see a branch inside an already-covered func that no
+input exercises.
 
 Refresh: `make cover-check` (+ `make test-report-pg` for the PG cross-check), then `./scripts/test-gaps.sh`.
 
@@ -19,14 +24,17 @@ Refresh: `make cover-check` (+ `make test-report-pg` for the PG cross-check), th
 |---|---:|
 | **PG-gated** (proven covered by `ci test-pg`) | 113 |
 | **Docker-gated** (needs `WARDYN_TEST_DOCKER=1`) | 6 |
-| **Untested** (no test reaches it) | 164 |
+| **Untested** (no same-package test reaches it) | 164 |
 | Total 0.0% exported | 283 |
 | _(of 601 exported funcs in the union)_ | |
 
-## Untested — genuinely no test reaches these
+## Untested — no test in the SAME PACKAGE reaches these
 
-The real backlog: exported funcs no lane covers. PG-package funcs appear here
-only when the Postgres lane ALSO leaves them at 0.0%.
+Exported funcs no lane covers FROM WITHIN THEIR OWN PACKAGE's tests — the closest
+number to a real backlog this profile can measure, not a proof nothing calls them.
+A func exercised only by a different package's test binary (no `-coverpkg`) reads
+0.0% here too. PG-package funcs appear here only when the Postgres lane ALSO leaves
+them at 0.0%.
 
 - **cmd/wardyn-toolgate**: Error
 - **cmd/wardynd**: BuildDevcontainer, BuildFromDevcontainerFiles, Decide, FinalizeBase, Get, IsRevoked, IsSessionRevoked, List, ListApprovalsPage, ListRoleMappings, ListRunningWithPolicy, Request, RevokeAll, RevokeJTI, RevokeRun, RevokeSub, StopRun, SweepOrphanedBuilds, Write
@@ -69,7 +77,7 @@ only when the Postgres lane ALSO leaves them at 0.0%.
 `test/reports/go/pg`. Exercised on the `ci test-pg` job / `make test-report-pg`.
 
 - **cmd/wardynd**: Record, Record
-- **internal/broker**: Begin, Commit, Exec, MintedJTIs, NewPgxStore, QueryRow, Rollback, Scan
+- **internal/broker**: BeginReadCommitted, Commit, Exec, MintedCredentials, NewPgxStore, QueryRow, Rollback, Scan
 - **internal/db**: Connect, Migrate, TryAdvisoryLock
 - **internal/recording**: NewPGStore, OpenCast, SaveCast, SaveCastNamed
 - **internal/secretstore/pg**: Delete, For, Get, List, Put, Rekey

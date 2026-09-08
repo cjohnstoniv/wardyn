@@ -48,7 +48,7 @@ on `/policies`) and validate through the same `validatePolicySpec`.
 | `first_use_approval` | `string` | `always_deny` | How an unknown domain is handled. See the three modes below. A legacy boolean still decodes (`true`→`deny_with_review`, `false`→`always_deny`). |
 | `first_use_hold_seconds` | `int` | `0` (→ `30`) | Only `wait_for_review`: how long a connection is held awaiting a decision before it fails closed. `0`/absent keeps the built-in **30s**. |
 | `max_holds` | `int` | `0` (→ `16`) | Only `wait_for_review`: cap on concurrent held connections; the next held connection over the cap fails fast. `0`/absent keeps the built-in **16**. |
-| `allowed_methods` | `[]string` | `[]` (all) | Optional HTTP method restriction. |
+| `allowed_methods` | `[]string` | `[]` (all) | Optional HTTP method restriction. Enforced on every lane the proxy can read a method on: the plain forward request, the `CONNECT` that opens a tunnel (method `CONNECT`), and — since the proxy holds the plaintext there — each request **inside** a TLS-intercepted tunnel (`intercept_tls` / subscription injection). A refused request is `403` with `rule_source` `policy:method` and is never forwarded. An opaque (un-intercepted) tunnel is the exception the transport forces: only its `CONNECT` is seen, so the methods carried inside it are neither visible nor restricted. |
 | `min_confinement_class` | `string` | — (**required**) | `CC1` (hardened runc), `CC2` (gVisor), or `CC3` (Kata microVM). The run refuses to launch below it; an unrecognised value is rejected at write time and would otherwise rank below CC1. |
 | `eligible_grants` | `[]GrantSpec` | `[]` | The ceiling of credential scopes this run may request. Eligibility is not issuance — the broker still mints. |
 | `auto_stop_after_sec` | `int` | `0` | Idle auto-stop. `> 0` = stop after that many seconds of wall-clock idleness plus a fixed 30s activity-debounce slack (egress-driven clock resets are coalesced to one per 30s, so the slack guarantees an active run is never read as idle; the `run.autostop` audit event's `threshold_sec` records the effective value, configured + 30); `0` = never reaped; `< 0` = never reaped, stated explicitly (what an interactive run should set, so the reaper does not stop it the moment it looks idle). Idleness is `updated_at` age — an attach or an egress call resets it, local CPU/disk work does not (`internal/lifecycle`). **Under a governance ceiling that sets no positive maximum of its own, the composer clamp leaves this field exactly as authored** — so a run there is never idle-reaped whether the field is absent, `0`, or negative: the reaper skips every policy value `<= 0`, which makes those three the same run. A ceiling that wants member runs reaped states a positive maximum, which the clamp then binds them to. |
@@ -108,7 +108,11 @@ to the same forge. The narrowed envelope is disclosed in the
 
 **It is a name deny, and that is the whole of its reach.** The proxy keys the
 verdict on the host string the sandbox asked for (`evalHost`), so a `CONNECT` to
-a raw GitHub IP is a different key and none of these denies see it. Under
+a raw GitHub IP is a different key and none of these denies see it. A deny
+entry that IS a literal IP is the one case where the key is not the raw string:
+host strings and policy entries alike are canonicalized through `net.IP` first,
+so denying `93.184.216.34` also denies `::ffff:93.184.216.34` and every other
+spelling of that same address — a different ADDRESS is still a different key. Under
 the default posture that changes nothing — an unlisted host is `always_deny` —
 but under `allow_all_egress` a literal public IP is allowed (private, loopback,
 link-local and metadata ranges are denied regardless of policy — with one
@@ -196,7 +200,11 @@ beside the brokered one. That gap is now closed, at write time and at dispatch:
   (`isBrokeredGitGrant`) matches `github_token` grant ids only, so a caller that
   POSTs the mint route directly — rather than going through
   `wardyn-git-helper`, which every GitHub host on a brokered run already refuses
-  — used to be answered with the PAT.
+  — used to be answered with the PAT. Because that residual has no other belt,
+  the check fails CLOSED when it cannot read the run's grants: an unreadable
+  grant list answers `503` and mints nothing. A daemon configured with no grant
+  store at all still mints — there is then no persisted pre-exclusivity policy
+  for the check to find.
 
 | Lane | Route to the forge | What binds a push |
 |---|---|---|
@@ -490,6 +498,30 @@ on either is refused at write time (`decide()`, `internal/api/approvals.go`).
 | `until` | This run, up to `decision_expires_at` — whichever comes first. | Same cache, plus the timestamp. |
 | `always` | Every future run of the target workspace, not just this one. | `workspaces.approved_egress` (allow) / `denied_egress` (deny). |
 
+**Every scope in that table is HOST-wide — on every port.** The approval a
+human is shown carries a bare host and nothing else (`egressScope` in
+`internal/egress/proxy/approvals.go` has a `host` and a `mode`, no port; the
+proxy's first-use cache is keyed on that same bare host; and the durable
+`always` write goes through `hostrules.ValidApprovedHost`, which refuses a
+port by construction). So an approval raised by a CONNECT to `example.org:443`
+also releases `example.org:22`, `:5432` and every other port for whatever reach
+the scope names — with **no further approval raised**, and, on `always`,
+permanently for every future run of the workspace. This is the same "every
+port, not just 443" reading the deny paragraph above states, applied to
+allows: read the scope column as *how long*, never as *how narrow*.
+
+**There is no way to approve one port and refuse another on the same host.**
+`denied_domains` is not that remedy: a bare deny entry is port-blind too, so
+denying `files.example.org` takes `:443` away with `:22`. What CAN be
+port-scoped is the ALLOWLIST, which does accept a `host:port` qualifier
+(`allowed_domains: ["files.example.org:443"]`, `classifyDomain` in
+`internal/egress/proxy/policy.go`) — but only for a host the policy already
+names, since an approval-raised host is exactly the case where no allowlist
+entry exists yet. So the honest options for a host whose other ports must stay
+closed are: allow-list it port-qualified instead of leaving it to first-use
+approval, or deny it outright and accept that the deny is host-wide (the proxy
+returns on a deny before it ever considers an approval).
+
 An unrecognised `decision_scope` is rejected at write time, same as
 `first_use_approval` above — `Valid()` only accepts empty or one of the four
 values in the table. The one place an unrecognised value can still appear is
@@ -573,9 +605,13 @@ are ever consulted.
 
 **Which ceiling entry bounds a grant.** When a member's run policy is clamped to
 their ceiling, each proposed grant is bounded by the ceiling entry that names the
-**same pairing** — the same `(host, secret_name)` for `api_key`/`git_pat`, the
-same `(host, key_secret_ref, known_hosts_secret_ref)` for `ssh_key`, the same
-`(name, secret_name)` for `env_secret`. So a ceiling listing two `ssh_key` grants
+**same pairing** — the same `(host, secret_name, header, format)` for `api_key`
+(header case-insensitively; an absent `header`/`format` compares as the
+`Authorization`/`Bearer %s` they resolve to), the same `(host, secret_name)` for
+`git_pat`, the same `(host, key_secret_ref, known_hosts_secret_ref)` for
+`ssh_key`, the same `(name, secret_name)` for `env_secret`. `header` and
+`format` are part of `api_key`'s identity because moving the operator's secret
+under a header they never authorized is a different grant, not a narrower one. So a ceiling listing two `ssh_key` grants
 for two forges holds a run to *its own* forge's `ttl_seconds` and
 `requires_approval`, and the order the entries appear in never changes the
 answer. A proposed grant whose pairing no entry names — and every `github_token`
@@ -594,7 +630,7 @@ profile's eligible grants are within the deployment ceiling.
 |---|---|---|
 | `github_token` | `{"repos":[…],"permissions":{…}}` | Validated with the broker's own mint-time predicate, so a malformed permission is a 400 at policy write, not a mint failure mid-run. **Once any repo is covered the run is brokered and unconditionally loses `github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com`, and the forge's `ssh.<forge>` endpoint** — see "Brokered GitHub" above. Also refuses a co-declared `ssh_key` or `git_pat` grant for the same forge at write time (see "The `ssh_key` and `git_pat` lanes are closed too"). Drop the grant if the run needs direct GitHub fetches. |
 | `cloud_sts` | `{}` | Must decode as a JSON object if present. Hard-requires the SPIRE identity provider, which does not ship — it mints nothing today, and a policy carrying one is refused at run-create (422), before any sandbox exists. |
-| `api_key` | `{"host":"…","header":"…","secret_name":"…","format":"…"}` | `host` and `secret_name` are required — a scope missing either is rejected at write time (422, `validateInlineSecretRefs`) for a stored policy, an inline run policy, or `WARDYN_DEFAULT_POLICY`. `header` defaults to `Authorization`; `format` defaults to `Bearer %s` (a `%s` template the secret value is substituted into — set it for a scheme other than `Bearer <value>`, e.g. a raw value or a different prefix). Proxy-side injection only; the value never enters the sandbox. Referencing a reserved platform secret (`wardyn-signing-key`, `wardyn-session-key`) is refused. |
+| `api_key` | `{"host":"…","header":"…","secret_name":"…","format":"…"}` | `host` and `secret_name` are required — a scope missing either is rejected at write time (422, `validateInlineSecretRefs`) for a stored policy, an inline run policy, or `WARDYN_DEFAULT_POLICY`. `header` defaults to `Authorization`; `format` defaults to `Bearer %s` (a `%s` template the secret value is substituted into — set it for a scheme other than `Bearer <value>`, e.g. a raw value or a different prefix). A non-empty `format` must hold exactly one `%s`, no other verb and no line break, and both fields are part of the pairing a member's grant must match, so a member cannot re-home the operator's secret under a header of their own. Proxy-side injection only; the value never enters the sandbox. Referencing a reserved platform secret (`wardyn-signing-key`, `wardyn-session-key`) is refused. |
 | `git_pat` | `{"host":"…","secret_name":"…","username":"…"}` | `host` + `secret_name` required; reserved secret names refused. The stored PAT **value** is handed to the git credential helper (ADO/GitLab have no injectable seam), so it is resident for the git operation (only with `WARDYN_GIT_PAT_BROKER=off` — the default broker keeps it never-resident). `username` defaults by convention (ADO `pat`, GitLab `oauth2`). With `requires_approval: true`, approving with `decision_scope=run` (`wardyn approve <id> --scope run`) takes a **per-run lease** — one decision, re-mintable for the rest of the run, instead of one approval per git operation; every other scope and every pre-v0.6 decision stays single-use, and the lease dies with the run (see `docs/OPERATIONS.md`). A GitHub `host` (`github.com` or a `*.github.com` host) may not be combined with a `github_token` grant — refused at write, withheld at dispatch, refused at mint (see "The `ssh_key` and `git_pat` lanes are closed too"); every other host is unaffected. |
 | `ssh_key` | `{"host":"…","key_secret_ref":"…","username":"…","known_hosts_secret_ref":"…"}` | `host` + `key_secret_ref` required; reserved secret names refused for either ref. `host` must be an SSH-over-443 provider Wardyn supports (`github.com`, `dev.azure.com`). A **documented exception** to the no-resident-secret rule: the key lands as a 0400 file for the clone and is wiped right after — except for the same forge as a co-declared `github_token` grant, which this kind may not be combined with (see "The `ssh_key` and `git_pat` lanes are closed too"). |
 | `env_secret` | `{"name":"MY_TOKEN","secret_name":"…"}` | Both required. Puts the stored secret's **value** into the sandbox environment under `name`, resolved at dispatch — there is no mint, so `requires_approval` is **refused** rather than silently ignored, `ttl_seconds` means nothing, and the broker rejects the grant id outright if anything POSTs it at the mint route. `name` must match `[A-Z_][A-Z0-9_]*` and may not start with `WARDYN_` (those configure the sandbox harness itself); reserved secret names are refused; and a grant may not overwrite a variable dispatch already set. **The weakest-bounded kind: resident for the whole run, no TTL, and nothing to revoke** — the value is mask-registered but a secret already in a process env cannot be taken back. **Admin-only by default**: a member's `env_secret` grant is dropped even for a ceiling-listed pairing unless the operator sets `WARDYN_ALLOW_MEMBER_ENV_SECRET` — on every route a run policy arrives by (inline body, selected stored row, deployment default) and whatever governance profile the member is assigned, since the rule is a role check rather than a ceiling check. Prefer `api_key` whenever the tool can be pointed at a host + header instead. See `threatmodel/THREAT-MODEL.md` §5.1a. |
@@ -712,7 +748,7 @@ count if it ever appears at all.
 | Field | Type | Default | What it does |
 |---|---|---|---|
 | `mode` | `string` | `off` | `off`, `alert` (scan + audit, forward unchanged), or `block` (a qualifying finding refuses the request). When not off, at least one detector — a `detect_*`, a sidecar URL, or `classified_markers` — must be enabled. |
-| `workspace_secret_names` | `[]string` | `[]` | Operator-declared secret **names**, resolved against the at-rest secret store. This is what you author — the storable form of the detection corpus. A name is not sensitive the way a value is, so it round-trips freely through a stored policy, a read, or a proposal. |
+| `workspace_secret_names` | `[]string` | `[]` | Operator-declared secret **names**, resolved against the at-rest secret store. This is what you author — the storable form of the detection corpus. A name is not sensitive the way a value is, so it round-trips freely through a stored policy, a read, or a proposal. A **reserved platform-internal name** (`wardyn-signing-key`, `wardyn-session-key`, the harness OAuth blobs, the resident AWS SigV4 secrets) is refused at write time and skipped at dispatch — resolution puts the value in the proxy sidecar, so this field is a credential sink and takes the same reserved-name guard every other sink does. |
 | `workspace_secret_values` | `[]string` | `[]` | **Not settable on a policy write** — populated internally by dispatch from `workspace_secret_names`, only in memory, only for the proxy sidecar. Never stored, never read back, never logged (a stray value is redacted to a count wherever the spec is otherwise echoed). Values shorter than the masking floor are ignored. |
 | `detect_secrets` | `bool` | `false` | Exact match against the resolved `workspace_secret_names` corpus. |
 | `detect_secret_patterns` | `bool` | `false` | Regex catalog of well-known secret *formats* (AWS/GitHub/Slack/Google keys, PEM, JWTs, Stripe). Higher precision than entropy; false-positives on example keys in code. |

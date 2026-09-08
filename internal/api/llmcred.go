@@ -207,6 +207,63 @@ func (s *Server) isModelProviderHost(h string) bool {
 	return false
 }
 
+// bedrockLaneHosts are the Bedrock hosts that carry proxy-side credential
+// injection for the EFFECTIVE region: the daemon-wide BedrockRegion pair, plus
+// the pair for the region of ws's own bound bedrock integration when a workspace
+// is in hand (workspaceModelProviderHosts, record.go — the same resolver the
+// record-mode skip list already uses, so all three lanes follow one derivation).
+//
+// Both halves go through s.bedrockDataPlaneHost, so a WARDYN_BEDROCK_BASE_URL
+// override (a VPC/PrivateLink endpoint) is picked up here for free rather than
+// derived a sixth time; the control host is deliberately not overridden, exactly
+// as runs_bedrock.go documents. A zero Workspace is fine — the workspace half
+// returns nil when ws declares no LLM credential.
+func (s *Server) bedrockLaneHosts(ctx context.Context, ws types.Workspace) []string {
+	var out []string
+	if r := s.cfg.BedrockRegion; r != "" {
+		out = append(out, s.bedrockDataPlaneHost(r), bedrockControlHost(r))
+	}
+	return append(out, s.workspaceModelProviderHosts(ctx, ws)...)
+}
+
+// isModelProviderRejectHost is the REJECT-lane model-provider predicate: every
+// host isModelProviderHost names, PLUS the Bedrock lane (bedrockLaneHosts).
+//
+// It is a SECOND predicate rather than a widening of isModelProviderHost on
+// purpose. isModelProviderHost also gates an ACCEPT: inline_policy.go's 6c
+// own-key arm admits a member's OWN api_key secret with no operator eligible-grant
+// pairing whenever the paired host is a model-provider host. Teaching that
+// predicate about bedrock-runtime.<region> would hand the Bedrock lane a new
+// unpaired-grant accept as a side effect of fixing a deny guard. The reject
+// direction is where the Bedrock lane belongs: resolveBedrockAuth's PREFERRED
+// bearer mode TLS-MITMs bedrock-runtime and injects the Authorization header
+// proxy-side (runs_bedrock.go), which is exactly the "proxy-side credential
+// injection refuses a denied host" failure denyAlwaysReject exists to prevent —
+// and promoteSkipHosts (record.go) already had to patch the same predicate gap
+// on the promotion lane.
+//
+// Both REJECT-direction callers of the concept use THIS one, and the sentence is
+// meant to be grep-checkable: denyAlwaysReject (approvals_writeback.go) and
+// planArtifactRedirect's To-host veto (artifact_redirect.go). The two remaining
+// callers of the narrow isModelProviderHost are not reject tests — inline_policy.go's
+// 6c own-key ACCEPT arm, and modelProviderEgress, which only filters entries the
+// operator already wrote into their own ceiling.
+func (s *Server) isModelProviderRejectHost(ctx context.Context, ws types.Workspace, h string) bool {
+	if s.isModelProviderHost(h) {
+		return true
+	}
+	hl := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
+	if hl == "" {
+		return false
+	}
+	for _, b := range s.bedrockLaneHosts(ctx, ws) {
+		if strings.ToLower(strings.TrimSuffix(strings.TrimSpace(b), ".")) == hl {
+			return true
+		}
+	}
+	return false
+}
+
 // ceilingBlessesClaudeCreds reports whether the operator ceiling blesses a Claude
 // credential mount (a WorkspaceMount targeting /home/agent/.claude). Only the
 // operator authors ceiling mounts, so this is the control-plane-level half of the

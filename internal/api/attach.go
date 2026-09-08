@@ -644,12 +644,19 @@ func (w *liveMaskWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	snap := w.reg.Snapshot(w.runID)
+	// One CACHED masker per registry generation, not NewMasker(Snapshot(...)) per
+	// chunk: the pair cloned every secret twice and sorted the whole set on every
+	// PTY write, which is why a 32 KiB chunk went from 29.8us at one secret to
+	// 1.51ms at 1024 (F076). Masker.Secrets is the same corpus the snapshot was,
+	// longest-first, so pendingTailLen below reads it off the cached masker
+	// instead of taking a second snapshot of the unchanged set.
+	masker := w.reg.Masker(w.runID)
+	snap := masker.Secrets()
 	// Prepend the withheld tail so a secret straddling the previous/this write is
 	// reassembled before masking. Re-masking already-masked tail bytes is a no-op
 	// (the placeholder contains no secret).
 	buf := append(w.tail, p...) //nolint:gocritic // intentional tail+chunk join
-	masked := secretmask.NewMasker(snap).Mask(buf)
+	masked := masker.Mask(buf)
 
 	// Withhold only the trailing bytes that are a genuine in-progress secret (a
 	// strict prefix of some registered secret) so a secret split across this write
@@ -678,7 +685,7 @@ func (w *liveMaskWriter) flushLocked() {
 	if len(w.tail) == 0 {
 		return
 	}
-	masked := secretmask.NewMasker(w.reg.Snapshot(w.runID)).Mask(w.tail)
+	masked := w.reg.Masker(w.runID).Mask(w.tail)
 	w.tail = nil
 	_, _ = w.dst.Write(masked)
 }

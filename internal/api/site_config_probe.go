@@ -47,6 +47,17 @@ const (
 	// this literal is reached only via its own explicit `exit`, never via a
 	// passed-through `$?`.
 	redirectProbeBypassCode = 250
+	// redirectProbeInconclusiveCode is redirectProbeScript's own sentinel for
+	// "probe 2 produced no connection FACT at all" -- curl wrote no
+	// %{num_connects} (it never started a transfer), or failed before any dial
+	// with 1 (unsupported protocol) / 3 (malformed URL). None of those is
+	// evidence of a block, and exiting 0 on them reported an untested redirect
+	// as "correctly blocked when dialed directly (redirect enforced)" -- the
+	// verdict this file's own comment says an operator must never be handed
+	// wrongly. A From the operator can save reaches it: `example.com/a b`
+	// passes validateSiteConfig and makes curl exit 3 with `000 0`. Same
+	// reserved range and same rule as redirectProbeBypassCode.
+	redirectProbeInconclusiveCode = 252
 	// proxyProbeInterceptedCode is proxyProbeScript's own sentinel for "an
 	// endpoint ANSWERED, but with something other than its known payload" --
 	// i.e. a captive portal or a corporate block page replied 200 in its place.
@@ -226,10 +237,34 @@ fi
 //     reachable ONLY after connect() succeeded against the public host, so each
 //     is proof the class let the connection out; a middlebox that intercepts
 //     the direct dial is still a dial that left the sandbox. Bypass.
+//   - %{num_connects}, from the SAME -w. An exit code alone cannot answer the
+//     only question probe 2 asks, because curl returns 28 for two opposite
+//     facts: a connect() that never completed (the DROP rule's signature) AND a
+//     --max-time/handshake expiry AFTER connect() succeeded. A tarpit, an
+//     accept-and-hold load balancer, or a public host merely slower than the
+//     budget therefore scored as "correctly blocked" -- a wide-open network
+//     reported as enforced, the one verdict an operator must never be handed
+//     wrongly. num_connects is 1 whenever a TCP connection was actually
+//     established and 0 when none was, so ANY non-zero count is bypass whatever
+//     rc says. Read, never inferred.
 //
-// Everything else -- 6 (DNS), 7 (refused/unreachable), 28 (timeout, the DROP
-// rule's signature) and any other code -- is a dial that never reached the
-// host, which is what enforcement looks like: exit 0, reported as reached.
+// Everything else -- 6 (DNS), 7 (refused/unreachable), a 28 that connected to
+// nothing, and any other code with num_connects=0 -- is a dial that never
+// reached the host, which is what enforcement looks like: exit 0, reported as
+// reached.
+//
+// WITH ONE EXCEPTION, because "no connection was made" and "curl never tried"
+// are not the same fact either. A curl that fails BEFORE any dial writes no
+// count to read: %{num_connects} comes back empty when curl wrote no -w output
+// at all, and rc is 1 (unsupported protocol) or 3 (malformed URL) when the URL
+// itself was never usable. An empty conns skipped the count arm and an rc of
+// 1/3 matched no case, so both fell through to exit 0 -- a redirect that was
+// never TESTED reported as enforced. validateSiteConfig accepts spellings that
+// land there (`example.com/a b` -> curl 3, `000 0`), so this is a From an
+// operator can save, not a theoretical shape. Both now exit
+// redirectProbeInconclusiveCode, which classifyRedirectProbe reports as an
+// untested redirect. The bypass arms are checked FIRST, so nothing that DID
+// connect can be downgraded to inconclusive.
 //
 // PROBE 1 HAS TWO SHAPES, and the second is why WARDYN_PROBE_TO_CONNECT exists.
 // A private-endpoint To is a LITERAL IP whose TLS certificate is scoped to the
@@ -245,19 +280,26 @@ fi
 // proxy too), so the policy leg of the test is unchanged. Empty (a hostname
 // To) leaves probe 1 byte-identical to before.
 //
-// Both sentinels keep their meaning: 250 is still probe 2's explicit bypass
-// exit (redirectProbeBypassCode) and 251 stays reserved for the proxy probe
-// (proxyProbeInterceptedCode); probe 1 still propagates curl's own code.
+// All three sentinels keep their meaning: 250 is still probe 2's explicit
+// bypass exit (redirectProbeBypassCode), 251 stays reserved for the proxy probe
+// (proxyProbeInterceptedCode) and 252 is probe 2's "no connection fact was
+// produced" exit (redirectProbeInconclusiveCode); probe 1 still propagates
+// curl's own code.
 const redirectProbeScript = `to() { curl -sS -f -o /dev/null --connect-timeout 5 --max-time 15 "$@"; }
 if [ -n "$WARDYN_PROBE_TO_CONNECT" ]; then
   to --connect-to "$WARDYN_PROBE_TO_CONNECT" "$WARDYN_PROBE_TO_URL" || exit $?
 else
   to "$WARDYN_PROBE_TO_URL" || exit $?
 fi
-code=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 15 --noproxy '*' "$WARDYN_PROBE_FROM_URL")
+out=$(curl -sS -o /dev/null -w '%{http_code} %{num_connects}' --connect-timeout 5 --max-time 15 --noproxy '*' "$WARDYN_PROBE_FROM_URL")
 rc=$?
+code=${out%% *}
+conns=${out##* }
 [ "$rc" -eq 0 ] && [ "$code" != "000" ] && exit 250
 case "$rc" in 35|52|56|60) exit 250 ;; esac
+[ -n "$conns" ] && [ "$conns" != "0" ] && exit 250
+[ -z "$conns" ] && exit 252
+case "$rc" in 1|3) exit 252 ;; esac
 exit 0`
 
 // redirectProbeTo decides HOW probe 1 dials this redirect: the URL to request
@@ -330,10 +372,13 @@ func curlFailureDetail(exitCode int) string {
 // upstreamResolveFailDetail names resolveUpstreamProxyURL's (runs_bedrock.go)
 // failReason codes in the same human-readable style as curlFailureDetail.
 var upstreamResolveFailDetail = map[string]string{
-	"unsupported-scheme":   "it is not an http:// URL (https is not supported)",
-	"reserved-secret-name": "its secret ref names a reserved secret",
-	"no-secret-store":      "no secret store is configured",
-	"secret-not-found":     "its secret ref does not resolve to a stored secret",
+	"unsupported-scheme": "it is not an http:// URL (https is not supported)",
+	// The sidecar's own loader (proxy.ValidUpstreamProxyURL) refused the
+	// authority — in practice a port outside 1-65535, or no host at all.
+	"unloadable-upstream-url": "the proxy sidecar's own loader refuses it (check the host and port)",
+	"reserved-secret-name":    "its secret ref names a reserved secret",
+	"no-secret-store":         "no secret store is configured",
+	"secret-not-found":        "its secret ref does not resolve to a stored secret",
 }
 
 func upstreamFailDetail(reason string) string {

@@ -64,11 +64,31 @@ type ScanSummary struct {
 	Scanned    bool          `json:"scanned"`
 	Coverage   string        `json:"coverage"`              // "inspectable" | "tunneled-opaque"
 	Mode       string        `json:"mode,omitempty"`        // "alert" | "block"
-	Action     string        `json:"action"`                // "alert" | "block" | "skipped" | "blind"
+	Action     string        `json:"action"`                // "alert" | "block" | "skipped" | "blind" | "error"
 	Channel    string        `json:"channel,omitempty"`     // e.g. "anthropic.messages"
 	Skipped    bool          `json:"skipped,omitempty"`     // a span/the body was not fully scanned
-	SkipReason string        `json:"skip_reason,omitempty"` // "span_oversize" | "parse_error" | "sidecar_error" | "body_oversize" | "uninspected_channel"
+	SkipReason string        `json:"skip_reason,omitempty"` // "span_oversize" | "parse_error" | "sidecar_error" | "body_oversize" | "uninspected_channel" | "findings_capped"
 	Findings   []ScanFinding `json:"findings,omitempty"`
+	// FindingsCapped and FindingsPastCap put the per-request findings cap ON
+	// THE WIRE (F075).
+	//
+	// Findings above carries at most the cap's worth of rows, so a truncated
+	// scan used to be indistinguishable in the audit from one that happened to
+	// find exactly that many — and when an earlier skip reason (span_oversize,
+	// scan_budget) had already claimed SkipReason, nothing said the result was
+	// truncated at all. FindingsCapped is that flag; FindingsPastCap is the
+	// count of findings examined past the cap (an upper bound on how many were
+	// pushed out, since severity keep-backs are counted too — see
+	// contentscan.Result.FindingsDropped). FindingsTotal is what an auditor
+	// comparing "how much was found" against "how much was reported" needs: the
+	// number of findings the detectors PRODUCED before the cap truncated the
+	// list, copied from contentscan.Result.FindingsSeen, which COUNTS them as
+	// they are produced. It is deliberately not FindingsPastCap + the reported
+	// rows: block mode keeps a past-cap finding back into the report while
+	// still counting it past the cap, so that sum double-counts every keep-back.
+	FindingsCapped  bool `json:"findings_capped,omitempty"`
+	FindingsPastCap int  `json:"findings_past_cap,omitempty"`
+	FindingsTotal   int  `json:"findings_total,omitempty"`
 }
 
 // ScanFinding is one content-free detection record (detector + location only).

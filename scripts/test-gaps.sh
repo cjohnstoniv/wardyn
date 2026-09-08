@@ -15,14 +15,24 @@
 #                    (WARDYN_TEST_DOCKER=1); the fakeDocker tests self-skip the
 #                    real-daemon funcs, so they read 0.0% everywhere the daemon
 #                    is absent. Classified by package (no daemon here to prove it).
-#   Untested       — genuinely no test reaches it (including PG-package funcs the
-#                    PG lane ALSO leaves at 0.0%).
+#   Untested       — no test in the SAME PACKAGE reaches it (including
+#                    PG-package funcs the PG lane ALSO leaves at 0.0%).
 #
 # This is an INVENTORY, not a promise or a TODO list: an exported func here is
 # not automatically a bug — a thin pass-through, a driver only real hardware
 # exercises, or a helper covered indirectly can legitimately read 0.0%. It exists
-# so the "genuinely untested exported surface" is a number someone can watch,
+# so the "no-same-package-test exported surface" is a number someone can watch,
 # distinct from the service-gated code the per-PR run structurally can't touch.
+#
+# METHODOLOGY CAVEAT, load-bearing: the union profile is built WITHOUT
+# -coverpkg (see scripts/test-report.sh), so `go test` instruments only each
+# package's OWN code for its OWN tests. A func exercised solely through a
+# DIFFERENT package's test binary reads 0.0% in this profile and lands in the
+# "Untested" bucket below despite being covered — that bucket is NOT "genuinely
+# no test reaches these", only "no test in the same package does". This
+# inventory also cannot see BRANCH-level gaps inside a func that IS called:
+# statement coverage marks a func covered the moment any one line inside it
+# runs on any input.
 #
 # Only EXPORTED funcs (leading uppercase) are inventoried — the package's public
 # surface. Unexported helpers are implementation detail and are not listed.
@@ -211,9 +221,14 @@ render_cat() {
   echo "This is an **inventory, not a promise**. An exported func listed here is not"
   echo "automatically a bug: a thin pass-through, a driver only a live daemon exercises,"
   echo "or a helper covered indirectly can legitimately read 0.0%. The list exists so the"
-  echo "*genuinely untested* public surface stays a watched number, kept separate from the"
+  echo "*no-same-package-test* public surface stays a watched number, kept separate from the"
   echo "service-gated code a per-PR run structurally cannot reach. Only exported funcs are"
-  echo "counted (the package's public surface); unexported helpers are omitted."
+  echo "counted (the package's public surface); unexported helpers are omitted. **The union"
+  echo "profile is built WITHOUT \`-coverpkg\`** (\`scripts/test-report.sh\`), so a func called"
+  echo "only from a DIFFERENT package's tests reads 0.0% here and lands in \"Untested\" below"
+  echo "despite being covered — read that bucket as \"no same-package test\", not \"no test\"."
+  echo "Statement coverage also cannot see a branch inside an already-covered func that no"
+  echo "input exercises."
   echo
   echo "Refresh: \`make cover-check\` (+ \`make test-report-pg\` for the PG cross-check), then \`./scripts/test-gaps.sh\`."
   echo
@@ -223,14 +238,17 @@ render_cat() {
   echo "|---|---:|"
   echo "| **PG-gated** (proven covered by \`ci test-pg\`) | ${n_pg} |"
   echo "| **Docker-gated** (needs \`WARDYN_TEST_DOCKER=1\`) | ${n_dk} |"
-  echo "| **Untested** (no test reaches it) | ${n_ut} |"
+  echo "| **Untested** (no same-package test reaches it) | ${n_ut} |"
   echo "| Total 0.0% exported | ${n_gap} |"
   echo "| _(of ${EXPORTED_TOTAL} exported funcs in the union)_ | |"
   echo
-  echo "## Untested — genuinely no test reaches these"
+  echo "## Untested — no test in the SAME PACKAGE reaches these"
   echo
-  echo "The real backlog: exported funcs no lane covers. PG-package funcs appear here"
-  echo "only when the Postgres lane ALSO leaves them at 0.0%."
+  echo "Exported funcs no lane covers FROM WITHIN THEIR OWN PACKAGE's tests — the closest"
+  echo "number to a real backlog this profile can measure, not a proof nothing calls them."
+  echo "A func exercised only by a different package's test binary (no \`-coverpkg\`) reads"
+  echo "0.0% here too. PG-package funcs appear here only when the Postgres lane ALSO leaves"
+  echo "them at 0.0%."
   echo
   render_cat UNTESTED
   echo

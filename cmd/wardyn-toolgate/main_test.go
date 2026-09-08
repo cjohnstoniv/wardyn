@@ -12,6 +12,87 @@ import (
 	"time"
 )
 
+// TestPollFailureDenyMessageNamesTheCause is the half of F159's pin that
+// compiles unchanged against the pre-fix gate struct (no new field): it only
+// inspects the returned deny message, so red-here is a genuine assertion
+// failure, not a compile error — the sibling test below additionally proves
+// the stderr diagnostic exists, which needs the new field and so cannot
+// compile pre-fix (documented there).
+//
+// Red-first: pre-fix, every poll failure is silently treated as PENDING, so
+// the loop always exhausts the deadline and returns the generic
+// "approval wait deadline reached" message even though every poll failed —
+// the assertion below fails.
+func TestPollFailureDenyMessageNamesTheCause(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/wardyn/v1/approvals":
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "11111111-2222-3333-4444-555555555555"})
+		case r.Method == http.MethodGet:
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	g := &gate{base: srv.URL, poll: 10 * time.Millisecond, deadline: 150 * time.Millisecond,
+		client: &http.Client{Timeout: 2 * time.Second}}
+	in := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"approve","arguments":{"tool_name":"Bash","input":{},"tool_use_id":"t"}}}` + "\n")
+	var out strings.Builder
+	if err := g.serve(in, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	if !strings.Contains(out.String(), "consecutive poll failures") {
+		t.Fatalf("deny message does not name the real cause (poll failures), got %q", out.String())
+	}
+}
+
+// TestPollFailuresAreLoggedAndNamedInDenyMessage covers F159: every poll
+// error was treated identically to PENDING with no log anywhere (stdout,
+// stderr, or the returned message), so a control-plane outage during the wait
+// parked the agent for the full deadline and then denied it with a message
+// that reads as "no human decided in time" when in fact every poll failed.
+//
+// Red-first: against the pre-fix decide() (bare `if err == nil {...}`, no
+// else) stderr stays empty and the deny message is the generic deadline
+// string, so both assertions below fail.
+func TestPollFailuresAreLoggedAndNamedInDenyMessage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/wardyn/v1/approvals":
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "11111111-2222-3333-4444-555555555555"})
+		case r.Method == http.MethodGet:
+			// Every poll fails — the stub control plane is "up" for create but
+			// broken for status, e.g. a proxy/control-plane outage mid-wait.
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	var stderr strings.Builder
+	g := &gate{base: srv.URL, poll: 10 * time.Millisecond, deadline: 150 * time.Millisecond,
+		client: &http.Client{Timeout: 2 * time.Second}, stderr: &stderr}
+
+	in := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"approve","arguments":{"tool_name":"Bash","input":{},"tool_use_id":"t"}}}` + "\n")
+	var out strings.Builder
+	if err := g.serve(in, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+
+	if stderr.Len() == 0 {
+		t.Fatalf("want a poll-failure line on stderr, got none (out=%q)", out.String())
+	}
+	if !strings.Contains(stderr.String(), "poll approval") {
+		t.Fatalf("stderr does not describe the poll failure: %q", stderr.String())
+	}
+	if !strings.Contains(out.String(), "consecutive poll failures") {
+		t.Fatalf("deny message does not name the real cause (poll failures), got %q", out.String())
+	}
+}
+
 // drive runs one full MCP conversation (initialize → tools/list → tools/call)
 // against a gate pointed at the given fake control plane, and returns the
 // PermissionResult the tools/call answer carried.

@@ -100,7 +100,14 @@ func TestGrantPairingIsExact(t *testing.T) {
 		{"different host", "git.other.example", "corp_key", "", false},
 		{"member-chosen known_hosts", "git.corp.example", "corp_key", "any-secret", false},
 	} {
-		if got := PairingInCeiling(types.GrantSSHKey, c.host, c.secret, c.knownHosts, ceiling); got != c.want {
+		sc, err := json.Marshal(map[string]any{
+			"host": c.host, "key_secret_ref": c.secret, "known_hosts_secret_ref": c.knownHosts,
+		})
+		if err != nil {
+			t.Fatalf("marshal ssh_key scope: %v", err)
+		}
+		proposed := types.GrantSpec{Kind: types.GrantSSHKey, Scope: sc}
+		if got := PairingInCeiling(proposed, ceiling); got != c.want {
 			t.Errorf("%s: PairingInCeiling = %v, want %v", c.name, got, c.want)
 		}
 	}
@@ -108,7 +115,7 @@ func TestGrantPairingIsExact(t *testing.T) {
 	// A wildcard/undecodable ceiling scope carries no pairing and authorizes no
 	// member-chosen one.
 	junk := []types.GrantSpec{{Kind: types.GrantSSHKey, Scope: json.RawMessage(`{"nope":1}`)}}
-	if PairingInCeiling(types.GrantSSHKey, "git.corp.example", "corp_key", "", junk) {
+	if PairingInCeiling(sshKeyGrant(t, "git.corp.example", "corp_key", false, 3600), junk) {
 		t.Error("an undecodable ceiling scope matched a pairing — a wildcard entry must authorize the KIND, never a member's chosen secret+host")
 	}
 	if _, _, _, covered, ok := GrantPairing(junk[0]); !covered || ok {

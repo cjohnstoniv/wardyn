@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -54,10 +55,10 @@ func mavenProxyOpts(proxyURL string) string {
 // validSecretRef already reject this at PUT /api/v1/site-config write time,
 // but this guards a row written before that check existed, mirroring
 // handleInternalInjection's sink-side reserved-name guard), a missing secret
-// store, an unresolvable secret, or a non-http URL (from EITHER source) all
-// return ("", <reason>) — the caller audits the reason and dispatches with
-// direct egress instead of failing the run. A resolved http URL returns
-// (url, "").
+// store, an unresolvable secret, a non-http URL, or a URL the SIDECAR itself
+// would refuse (from EITHER source) all return ("", <reason>) — the caller
+// audits the reason and dispatches with direct egress instead of failing the
+// run. A resolved, loadable http URL returns (url, "").
 //
 // Scheme is restricted to http for BOTH sources because the sidecar's own
 // config validation (parseUpstreamProxy, internal/egress/proxy/upstream.go)
@@ -65,10 +66,18 @@ func mavenProxyOpts(proxyURL string) string {
 // Proxy-Authorization today, and an https:// proxy URL would need a TLS wrap
 // first or leak that Basic credential in cleartext — so an https value is
 // skipped here rather than crashing the proxy sidecar at startup.
+//
+// The scheme is only HALF the rule, which is why the resolved value then goes
+// through loadableUpstreamProxyURL rather than being returned here: a local
+// copy DID drift: the scheme half alone accepted "http://proxy.corp:0",
+// "http://proxy.corp:99999" and "http:///path", which the sidecar refuses with
+// `bad port "0"` / `missing host` — so wardynd audited
+// run.upstream_proxy.resolve as SUCCESS and every run in the deployment came up
+// with its only egress path already dead (F028).
 func resolveUpstreamProxyURL(ctx context.Context, plainURL, secretRef string, getSecret func(context.Context, string) ([]byte, error)) (proxyURL, failReason string) {
 	if plainURL != "" {
 		if raw, ok := normalizedHTTPProxyURL(plainURL); ok {
-			return raw, ""
+			return loadableUpstreamProxyURL(raw)
 		}
 		return "", "unsupported-scheme"
 	}
@@ -86,14 +95,41 @@ func resolveUpstreamProxyURL(ctx context.Context, plainURL, secretRef string, ge
 		return "", "secret-not-found"
 	}
 	if raw, ok := normalizedHTTPProxyURL(string(val)); ok {
-		return raw, ""
+		return loadableUpstreamProxyURL(raw)
 	}
 	return "", "unsupported-scheme"
 }
 
+// loadableUpstreamProxyURL is the last gate BOTH resolve lanes pass through: a
+// URL the sidecar's own loader (proxy.ValidUpstreamProxyURL) would refuse is
+// dropped here, with a reason, instead of being delivered in
+// WARDYN_PROXY_CONFIG_JSON to a wardyn-proxy that then os.Exit(1)s at container
+// start and takes the run's whole egress path with it. validateSiteConfig
+// applies the same gate at PUT /site-config, so reaching this is either a row
+// written before that check existed or a URL that arrived through the SECRET
+// lane, which no write-time validator can see inside — exactly the
+// defense-in-depth split the reserved-secret-name guard above already makes.
+// The loader's error is never returned: a secret-sourced URL may carry
+// user:pass, and this function's result is audited.
+//
+// It DELEGATES rather than re-stating the rule: proxy.ValidUpstreamProxyURL is
+// parseUpstreamProxy, the rule Config.applyDefaultsAndValidate runs and
+// cmd/wardyn-proxy turns into os.Exit(1), so the whole rule travels together —
+// scheme, a non-empty host, and a port in 1..65535. This is the
+// ValidNoProxyEntry pattern (site_config_noproxy.go) applied to the value
+// beside the list, and it is what keeps the authority half from drifting away
+// from the sidecar again (F028).
+func loadableUpstreamProxyURL(raw string) (proxyURL, failReason string) {
+	if err := proxy.ValidUpstreamProxyURL(raw); err != nil {
+		return "", "unloadable-upstream-url"
+	}
+	return raw, ""
+}
+
 // normalizedHTTPProxyURL trims raw and reports (trimmed, true) when it parses
 // as an http-scheme URL, else ("", false). Shared by both resolveUpstreamProxyURL
-// sources so the scheme restriction can never drift between them.
+// sources AND by validateSiteConfig's write-time gate, so the scheme
+// restriction can never drift between them.
 func normalizedHTTPProxyURL(raw string) (string, bool) {
 	trimmed := strings.TrimSpace(raw)
 	u, err := url.Parse(trimmed)
@@ -165,6 +201,15 @@ type bedrockAuth struct {
 	// every mode; in bearer mode it is additionally the TLS-MITM and
 	// Authorization-injection target.
 	runtimeHost string
+	// runtimePort is the port runtimeHost is reached on: the
+	// WARDYN_BEDROCK_BASE_URL override's port when it names one, else 443. It
+	// exists so bearer mode can author its TLS-MITM entry as "host:port"
+	// (net.JoinHostPort) exactly as planArtifactRedirect does — a BARE MITM
+	// entry is any-port (proxy.parseMITMHostPort), so an agent that can reach
+	// the Bedrock host at all could CONNECT to it on a port nobody configured
+	// and have the tunnel TLS-terminated with the Wardyn leaf and the
+	// operator's Bearer injected onto whatever answered there (F037).
+	runtimePort int
 	// awsMount selects the host-mode ~/.aws bind-mount path: the SDK resolves
 	// credentials (incl. auto-refreshing AWS SSO) from the read-only mount, so no
 	// static keys are stored and none are resident in env. awsMountSource is the
@@ -345,6 +390,7 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 		return bedrockAuth{}
 	}
 	runtimeHost := s.bedrockDataPlaneHost(region)
+	runtimePort := redirectPort(s.cfg.BedrockBaseURL)
 	hosts := []string{runtimeHost, bedrockControlHost(region)}
 	// Common Bedrock env: the on-switch, region, and model id. AWS_REGION is what
 	// claude-code reads; AWS_DEFAULT_REGION is the broader AWS-SDK fallback. The
@@ -383,6 +429,7 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 	// TLS-MITM + Authorization-injection target).
 	ready := func(b bedrockAuth) bedrockAuth {
 		b.ready, b.region, b.model, b.runtimeHost = true, region, model, runtimeHost
+		b.runtimePort = runtimePort
 		return b
 	}
 

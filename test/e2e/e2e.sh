@@ -164,10 +164,20 @@ if echo "${ROUTE}" | grep -qw default; then bad "agent HAS a default route (L0 v
 else ok "no default route (only on-link internal subnet): ${ROUTE//$'\n'/ ; }"; fi
 
 log "(b) metadata IP 169.254.169.254 unreachable from sandbox"
-MD="$(docker exec "${AGENT}" curl -sS -o /dev/null -m 6 --connect-timeout 5 -w '%{http_code}' \
-       http://169.254.169.254/latest/meta-data/ 2>&1)"; MRC=$?
-if [[ ${MRC} -ne 0 ]]; then ok "metadata IP unreachable (curl rc=${MRC}, no route)";
-else bad "metadata IP REACHABLE (http_code=${MD}) — invariant 3 violated"; fi
+# The CONNECTION FACT decides this, not curl's exit code: curl returns 28 both
+# for a connect() that never completed (what no route looks like) and for a
+# transfer that timed out AFTER the TCP connection was established, so an
+# accept-and-hold listener on the metadata address passed this check while the
+# host had accepted the sandbox's connection. %{num_connects} is 1 whenever a
+# connection was actually made and 0 when none was. stderr is dropped so stdout
+# carries the -w output and nothing else.
+MD="$(docker exec "${AGENT}" curl -sS -o /dev/null -m 6 --connect-timeout 5 -w '%{http_code} %{num_connects}' \
+       http://169.254.169.254/latest/meta-data/ 2>/dev/null)"; MRC=$?
+MD_CODE="${MD%% *}"; MD_CONNS="${MD##* }"
+if [[ ${MRC} -eq 0 ]]; then bad "metadata IP REACHABLE (http_code=${MD_CODE}) — invariant 3 violated";
+elif [[ -z "${MD}" || -z "${MD_CONNS}" ]]; then bad "metadata probe produced no connection fact (curl rc=${MRC}, no %{num_connects} written) — nothing was proven about invariant 3";
+elif [[ "${MD_CONNS}" != "0" ]]; then bad "metadata IP ACCEPTED a TCP connection (num_connects=${MD_CONNS}, curl rc=${MRC}) — invariant 3 violated: a transfer that failed after connect is not a block";
+else ok "metadata IP unreachable (curl rc=${MRC}, num_connects=0, no route)"; fi
 
 # ── 4. allow/deny/pending/metadata through the AUTO-LAUNCHED sidecar ───────--
 # GAP-1 is closed: the driver delivers the run's full proxy config (incl. the

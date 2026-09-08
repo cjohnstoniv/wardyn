@@ -80,7 +80,19 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 		"egress."+string(dl.Decision), dl.Request.Host, outcome, data)
 	ev.SourceIP = r.RemoteAddr
 	s.recordAudit(r.Context(), ev)
-	if dl.Decision == egress.Deny {
+	// F065: wardyn_egress_denies_total is exposed as "denied by policy", and it
+	// is the only egress counter Wardyn has. A builtin:dial-failed (a flaky
+	// upstream, on a request policy ALLOWED) and the synthetic
+	// egress.decisions.dropped:<n> audit-fidelity summary both arrive here as
+	// egress.Deny; counting them paged operators for policy denials that never
+	// happened and made the true deny rate unreadable off the series. Both still
+	// record their egress.deny AUDIT row unchanged — only the counter is scoped.
+	// One accepted residual rides on the first exclusion: llm_routes.go reuses
+	// builtin:dial-failed for vetTrustedHost's GUARD refusal of the configured
+	// model gateway, so that refusal stops moving the counter as well. It keeps
+	// its egress.deny audit row; see isPolicyDeny (metrics.go) for why it is not
+	// separable at this handler.
+	if dl.Decision == egress.Deny && isPolicyDeny(dl.RuleSource) {
 		s.metrics.egressDenied()
 	}
 
@@ -120,16 +132,32 @@ func (s *Server) recordLLMScanAudit(ctx context.Context, runID uuid.UUID, actor,
 	case "error":
 		outcome = "failure"
 	}
+	// finding_count is the number of findings the scan PRODUCED before the cap
+	// truncated the list (F075), which the proxy counts as it produces them and
+	// sends as findings_total: the proxy caps how many findings it REPORTS, so
+	// len(sc.Findings) is the reported count, and an audit row that states it as
+	// the finding count makes a truncated scan indistinguishable from one that
+	// found exactly the cap. findings_capped / findings_past_cap carry the
+	// truncation itself, and findings_past_cap is an UPPER bound on what was
+	// pushed out (block mode's severity keep-backs are counted past the cap and
+	// still reported), which is why finding_count is not derived from it.
+	findingCount := len(sc.Findings)
+	if sc.FindingsTotal > findingCount {
+		findingCount = sc.FindingsTotal
+	}
 	data, _ := json.Marshal(map[string]any{
-		"host":          host,
-		"channel":       sc.Channel,
-		"mode":          sc.Mode,
-		"coverage":      sc.Coverage,
-		"scanned":       sc.Scanned,
-		"skipped":       sc.Skipped,
-		"skip_reason":   sc.SkipReason,
-		"finding_count": len(sc.Findings),
-		"findings":      findings,
+		"host":              host,
+		"channel":           sc.Channel,
+		"mode":              sc.Mode,
+		"coverage":          sc.Coverage,
+		"scanned":           sc.Scanned,
+		"skipped":           sc.Skipped,
+		"skip_reason":       sc.SkipReason,
+		"finding_count":     findingCount,
+		"findings_reported": len(sc.Findings),
+		"findings_capped":   sc.FindingsCapped,
+		"findings_past_cap": sc.FindingsPastCap,
+		"findings":          findings,
 	})
 	ev := s.auditEvent(&runID, types.ActorAgent, actor,
 		"llm.scan."+sc.Action, host, outcome, data)
@@ -340,10 +368,18 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		// Sidecars may only raise egress/tool approvals. credential approvals are
 		// created by the broker mint path, never by an untrusted sidecar.
 	default:
+		// RECORDED (F068): this refusal is the forgery the case above exists to
+		// stop — a sidecar asking Wardyn to raise a `credential` approval — and it
+		// used to answer 400 and write nothing anywhere, so probing for that path
+		// left no trace. Same rate-bound auth.failed row, limiter and suppressed
+		// counter as every other refusal; the KIND is a closed enum of our own
+		// types, never echoed from the body.
+		s.auditAuthFailedAs(r, internalApprovalActor, "unsupported_internal_approval_kind")
 		writeError(w, http.StatusBadRequest, "unsupported approval kind for internal request")
 		return
 	}
 	if len(body.RequestedScope) == 0 {
+		s.auditAuthFailedAs(r, internalApprovalActor, "missing_requested_scope")
 		writeError(w, http.StatusBadRequest, "requested_scope is required")
 		return
 	}
@@ -450,6 +486,22 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 	// neither an ssh_key nor a git_pat populates Minted.Injection, so it cannot
 	// return either credential.
 	if kind, host, refuse := s.brokeredForgeMintKind(r.Context(), claims.RunID, body.GrantID); refuse {
+		// kind == "" is the UNVERIFIABLE refusal: the grant list could not be
+		// read, so the check could not run at all (F098). It gets its own audit
+		// reason and its own status — 503, because nothing about this run is
+		// known to be wrong and the caller should retry — rather than the
+		// single-lane 403, whose message asserts a github_token grant this
+		// request never managed to observe.
+		if kind == "" {
+			s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID, "credential.mint",
+				body.GrantID.String(), "denied", mustJSON(map[string]any{
+					"grant_id": body.GrantID.String(),
+					"reason":   "brokered_forge_single_lane_unverifiable",
+				})))
+			writeError(w, http.StatusServiceUnavailable, "wardyn: could not read this run's grants to check the brokered-forge single-lane rule, "+
+				"so the mint is refused rather than answered unchecked. Retry.")
+			return
+		}
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID, "credential.mint",
 			body.GrantID.String(), "denied", mustJSON(map[string]any{
 				"grant_id": body.GrantID.String(),
@@ -499,13 +551,25 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 // and whose run's clone set never touched github.com) and never under-refuse,
 // which is the correct direction for a defence-in-depth check.
 //
-// FAILS OPEN, twice, on purpose — the opposite of handleInternalTokenRenew's
-// nil-Store guard, which fails closed because it cannot otherwise prove the run's
-// authority still exists. This one proves nothing: the mint's authority checks
-// (ownership, approval, no-widening) all live in the broker transaction below and
-// are unaffected by what happens here. So a missing Store (every newHarness-based
-// test) or a transient list error costs the belt, not the braces, and must not
-// turn a legitimate mint into a 403.
+// A nil Store FAILS OPEN on purpose (every newHarness-based test runs without
+// one); a LIST ERROR fails CLOSED, signalled to the caller as refuse=true with an
+// EMPTY kind, which the handler answers 503 rather than the single-lane 403.
+//
+// F098 corrected that second arm. It used to fail open too, on the argument that
+// the mint's authority checks (ownership, approval, no-widening) all live in the
+// broker transaction below, so a transient list error costs the belt, not the
+// braces. But the braces do not cover the case this check exists for — a policy
+// STORED BEFORE validateGrantLaneExclusivity, whose ssh_key/git_pat grant row for
+// a brokered forge is still mintable by anyone who learns the grant id (see the
+// handler's own comment above). For exactly that residual, this check IS the only
+// belt, and answering it with the raw credential whenever one SELECT fails made
+// the residual re-openable for the length of a store hiccup. The brief's stated
+// acceptance criterion ("brokeredForgeMintKind fails CLOSED on a store error")
+// and the security direction agree; the code now matches both.
+//
+// The nil-Store arm stays open because it is not a failure at all — it is the
+// configuration in which there is no grant store to consult, and no persisted
+// pre-exclusivity policy can exist to be exploited.
 //
 // A pre-transaction read is as authoritative as one inside the broker's FOR
 // UPDATE lock: credential_grants is INSERT-ONLY (no UPDATE/DELETE anywhere in the
@@ -516,9 +580,9 @@ func (s *Server) brokeredForgeMintKind(ctx context.Context, runID, grantID uuid.
 	}
 	grants, err := s.cfg.Store.ListGrantsByRun(ctx, runID)
 	if err != nil {
-		slog.WarnContext(ctx, "wardynd: could not list run grants for the single-lane mint check; allowing the mint (the broker still enforces ownership, approval and scope)",
+		slog.WarnContext(ctx, "wardynd: could not list run grants for the single-lane mint check; REFUSING the mint (F098: the residual this check covers has no other belt)",
 			slog.String("run_id", runID.String()), slog.String("error", err.Error()))
-		return "", "", false
+		return "", "", true
 	}
 	var target *types.GrantSpec
 	brokered := false
@@ -552,16 +616,15 @@ func (s *Server) brokeredForgeMintKind(ctx context.Context, runID, grantID uuid.
 	return "", "", false
 }
 
-// Mint 409-conflict "code" values (W19-W19a-2) — the machine-readable
-// discriminator between the four distinct fail-closed conditions that all
-// share HTTP 409, so a caller (cmd/wardyn-git-helper's callMint) can name the
-// real cause instead of guessing from which optional fields happen to be
-// present.
+// Mint 409-conflict "code" values, bound to the ONE home both sides of the wire
+// contract read (types.MintConflict*, internal/types/mint_wire.go). These are
+// bindings, not a second declaration: the literal strings live in exactly one
+// place, so this block and cmd/wardyn-git-helper's cannot drift (F134).
 const (
-	mintConflictPending       = "pending"
-	mintConflictDenied        = "denied"
-	mintConflictScopeMismatch = "scope_mismatch"
-	mintConflictAlreadyMinted = "already_minted"
+	mintConflictPending       = types.MintConflictPending
+	mintConflictDenied        = types.MintConflictDenied
+	mintConflictScopeMismatch = types.MintConflictScopeMismatch
+	mintConflictAlreadyMinted = types.MintConflictAlreadyMinted
 )
 
 // writeMintError maps broker errors to the documented fail-closed HTTP shape.

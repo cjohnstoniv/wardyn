@@ -87,9 +87,20 @@ invitation, not an embarrassment.
    `allow_all_egress` would permit (measured). See `docs/POLICIES.md`.
 
    **The parser binds the brokered App lane only, but on the SAME forge no second
-   lane is left beside it.** A `git_pat` push is an opaque CONNECT and an `ssh_key`
-   push is not smart-HTTP, so no receive-pack parser can bind either — but for a
-   forge a run IS brokered for, `api.validateGrantLaneExclusivity` refuses a policy
+   lane is left beside it.** An `ssh_key` push is not smart-HTTP, so no
+   receive-pack parser can bind it. A `git_pat` push is a different case since
+   0.7 and this paragraph used to get it wrong: the never-resident git_pat lane
+   (default ON) removes the tunnel by design — `pat_broker.go` terminates the
+   sandbox's request on the proxy's own cleartext route and `validGitRest` admits
+   `POST git-receive-pack` there — so a parser COULD bind it, and leaving it
+   unconfined is a scoping DECISION rather than an impossibility. The decision:
+   a PAT carries whatever scope the operator issued and Wardyn cannot narrow it,
+   so the namespace would be a convention imposed on a credential it does not
+   bound, over forges whose push-ref conventions are not GitHub's; extending it
+   needs its own switch, its own decision-log rule sources and its own row in
+   `docs/ENV.md` (`BranchNSEnforced` in `internal/egress/proxy/git_broker.go`
+   states the same reasoning beside the code). Either way it is not a second lane
+   on a brokered forge: for a forge a run IS brokered for, `api.validateGrantLaneExclusivity` refuses a policy
    declaring a `github_token` grant alongside an `ssh_key` **or** `git_pat` grant
    for it, and dispatch's `api.dropBrokeredGrants` withholds any already-stored
    `ssh_key` **or** `git_pat` grant from the sandbox env (audited
@@ -275,6 +286,20 @@ recorder's PTY read boundaries stays a residual the verbatim match cannot close,
 since the `"],[t,"o","` framing interrupts the byte run. The live-attach path
 masks raw PTY bytes and is unaffected.
 
+**Verbatim-match means per-RENDERING, not per-credential**, and that is the
+reading that bites: registering `Bearer sk-…` does not mask a bare `sk-…` in the
+same buffer, and registering a token does not mask the base64 an
+`Authorization: Basic` header carries it in. Adding every rendering is the
+REGISTERING side's job. Proxy-side (`internal/egress/proxy`, the registry
+`Proxy.httpError` and the decision log consult) all four sites now do it through
+one definition — `registerHeaderCredential` / `registerBasicAuthCredential`
+(`inject.go`) and `upstreamProxy.maskValues` (`upstream.go`) — covering the
+formatted header value, the bare credential under a scheme prefix, and the
+decoded `user:pass` and password half behind a Basic rendering. Not covered, and
+underivable from what the proxy holds: a `Format` that glues the secret to a
+suffix rather than a space-separated prefix, and hex-encoded or model-narrated
+forms, which no verbatim matcher catches.
+
 **Two named unmasked paths.**
 
 - The optional `WARDYN_RECORDING_MOUNT`/`-out-dir` single-host recording
@@ -299,7 +324,10 @@ masks raw PTY bytes and is unaffected.
 ### 4.2 The unconditional IP guard, and its two admin-authored exceptions
 
 A literal-IP target is denied before policy or approval run (`evaluate` step 0,
-`internal/egress/proxy/proxy.go`), and every direct-dialed hostname is re-vetted
+`literalIPGuard` in `internal/egress/proxy/literal_ip_guard.go`) — in every
+spelling that guard parses: the canonical one, the `inet_aton` non-canonical
+IPv4 forms, and a zone-suffixed IPv6 literal (`fe80::1%eth0`); the residual
+below states what that set does not cover. Every direct-dialed hostname is re-vetted
 post-DNS-resolution (`VetHost`/`isBlockedIP`, `internal/egress/proxy/policy.go`)
 against loopback/link-local/multicast/unspecified, RFC1918/ULA/reserved and
 NAT64-embedded-v4 ranges. That re-check runs AFTER, and is unaffected by, the
@@ -307,15 +335,42 @@ policy verdict — a host `allow_all_egress` would pass is still denied when it
 resolves into one of those ranges. The guard lives in the proxy's code, not the
 network topology, so unlike L0 it does not depend on gatewaylessness.
 
+**Under a corporate upstream the pin is relaxed, the guard is not.** When
+`SiteConfig.UpstreamProxy` is configured the corp proxy performs the outbound
+DNS and dial, so the target is sent to it BY NAME rather than as a
+proxy-resolved literal (an upstream handed a literal refuses it). The guard
+still runs: `Proxy.egressTarget` resolves the name locally for the check alone
+and denies a host that answers into a blocked range, so the guard binds the
+HOSTNAME spelling and not only the literal one `evaluate` step 0 catches — a
+run under `allow_all_egress` cannot reach `169.254.169.254` by naming a host
+that resolves to it here. **Two residuals, stated:** a name this proxy cannot
+resolve at all (`resolve failed` / no addresses) is forwarded unvetted, because
+on a private-endpoint estate the sandbox host frequently cannot resolve external
+names and denying that would break every upstream deployment; such a name is
+left to the corp proxy's own egress controls — and, because the target is sent
+by NAME, the guard is checked against THIS proxy's resolution while the corp
+proxy performs its own, so a name that answers differently to the two resolvers
+(short-TTL rebinding, or a split-horizon zone only the corp proxy can see) is
+bound only at check time. The direct-dial lane closes that by pinning the vetted
+address; this hop cannot, which is why it is a relaxation of the PIN and is
+listed in §5.1a. A destination on the operator's
+`upstream_proxy_no_proxy` bypass list is dialed locally and takes the full
+pinning guard, unchanged.
+
 **The first admin-authored exception** is `SiteConfig.InternalHosts`
 (`vetHostLift`/`Proxy.vetHost`): it lifts the RFC1918/ULA/CGNAT slice ONLY —
 never loopback/link-local/metadata/multicast/NAT64 — for a declared hostname,
 scoped to declared CIDRs, and never for an address on the proxy's own interface
-subnets or its resolved control-plane host (`Proxy.onOwnSubnetOrControlPlane`).
+subnets or ANY of its resolved control-plane addresses
+(`Proxy.onOwnSubnetOrControlPlane`).
 On Docker that excludes the `wardyn-internal` neighbours (Postgres/Dex/registry);
 on Kubernetes those are ClusterIP Services off the pod's own interface, so there
 the declared `cidrs` are the bound (`docs/OPERATIONS.md` § Internal hosts). The
 metadata address stays unreachable regardless of what an operator declares.
+Both of that clamp's inputs are captured once at startup (`NewServer`), and a
+capture FAILURE is fail-closed: the clamp then answers "yes" for every address,
+so both exceptions below are refused outright rather than firing more widely,
+and the failure is logged (`internal/egress/proxy/server.go`).
 
 **The second** is the literal-IP trust an `EgressRedirect` whose `to` is a bare
 address rides on (`Proxy.trustsExactLiteralIP`, consulted by `evaluate` step 0
@@ -325,16 +380,22 @@ because a literal has no hostname behind it to rebind. It is bounded the same wa
 and by the same predicates as the first — `blockPrivate` only, so no
 loopback/link-local/metadata/NAT64 literal is ever trusted however it is
 allow-listed, and never an address on the proxy's own subnets or its
-control-plane host — and it is narrower in one respect: it admits only the EXACT
-address an operator typed, never a range. `denied_domains` still wins over both
-(`RunPolicy.AllowsLiteralIP` checks the deny lists first).
+control-plane host — and it is narrower in two respects: it admits only the EXACT
+address an operator typed, never a range, and only on the ONE PORT the redirect's
+`to` names (`substituteArtifactEgress` writes the entry `net.JoinHostPort`-qualified,
+defaulting to the port the `to`'s SCHEME names — 80 for an explicit `http://`, 443
+otherwise — by the SAME `redirectPort` the redirect's TLS-MITM half derives its
+port from, so the SSRF trust and the token injection are scoped to the same port).
+`denied_domains` still wins over both (`RunPolicy.AllowsLiteralIP` checks the deny
+lists first).
 
 The internal model gateway (residual #29) is NOT a second exception: its relaxed
 per-request vet (`Proxy.vetTrustedHost`, reached only via `Proxy.gatewayTarget`)
 is scoped to the brokered `/wardyn/llm/*` route, never an ordinary sandbox
 CONNECT/MITM naming the gateway host, which `Proxy.vetHost` covers unchanged.
-The one hop that defers the post-resolution re-check — the opt-in upstream
-corp-proxy lane — is §5.1a's disclosed TOCTOU residual; step 0 still holds there.
+The one hop that relaxes the resolved-IP PIN — the opt-in upstream corp-proxy
+lane — is §5.1a's disclosed TOCTOU residual; the guard itself still runs there
+(§4.2) and step 0 still holds.
 
 ### 4.3 Capability grants (v0.6) — the mechanism
 
@@ -837,7 +898,15 @@ hiding them would repeat the failure mode we are designed to avoid.
     | `POST /runs/{id}/kill` | **owner-or-admin, not open** (`getRunAuthorized` → `ownsRunOrAdmin`): a member killing a run they did not create gets the byte-identical 404 a missing run would, audited `authz.denied` / `not_owner`. `ownsRunOrAdmin` is `isSecurityOperator`, so a `security_admin` may stop ANY run — deliberately: inspect-or-stop is the whole of that tier's warrant over a foreign run | same |
 
     The admin token and local mode are always operators (one shared credential
-    carries no human to demote). So the §1 insider raises their own ceiling rather
+    carries no human to demote). Local mode's `X-Wardyn-Principal` dev override
+    is ATTRIBUTION ONLY: it names `created_by`, the sponsor claim and the audit
+    actor, but the run identity's `sub` — the string that selects the SECRET
+    NAMESPACE at broker-mint and proxy-inject time — is taken from the principal
+    wardynd injected, never from the header (`api.runIdentitySubject`). So a
+    local caller cannot mint a named member's stored `git_pat`/`ssh_key` by
+    claiming to be them, which matters on a database that already carries
+    member-owned rows from an SSO-configured era and is later served in local
+    mode. So the §1 insider raises their own ceiling rather
     than exceeding it: `PUT` a wide-open policy, or point every run's upstream proxy
     at a host they control (site-config names a secret ref, and
     `PUT /secrets/{name}` is in the same group). What bounds this is the operator
@@ -1555,9 +1624,22 @@ exactly these terms.
   OpenAI/Codex path **inspectable** (the proxy terminates TLS with a per-run CA
   whose PRIVATE key never enters the sandbox; the sandbox trusts only the public
   cert). Without `intercept_tls`, those CONNECT tunnels stay **opaque and flagged
-  `llm.scan.blind`**; Bedrock stays opaque regardless (client-side SigV4 cannot be
-  re-forwarded). The `require_inspectable_llm` policy fails an opaque-transport run
-  **closed** at schedule time for strict operators.
+  `llm.scan.blind`**; Bedrock stays opaque regardless — SigV4 because a MITM'd
+  request cannot be re-signed, and the bearer sub-mode because Wardyn has no
+  Bedrock extractor or prompt-bearing channel, so terminating its TLS makes the
+  body readable but never scanned. The blind flag is emitted for the model hosts
+  the proxy RECOGNISES — the two built-in vendor hosts, any operator-configured
+  LLM gateway, and AWS's published Bedrock service labels including their `-fips`
+  and dual-stack `api.aws` forms (`isBedrockHost`,
+  `internal/egress/proxy/llm_routes.go`) — once per host, and capped at 64
+  distinct hosts per run (`maxBlindHosts`); a suppression past that cap is
+  COUNTED on the decision sink's drop counter (surfacing as
+  `egress.decisions.dropped:<n>`) rather than silently omitted, so the blind rows
+  are a lower bound on uninspected model tunnels, never a claim that there were
+  no others. The `require_inspectable_llm` policy fails an opaque-transport run
+  **closed** at schedule time for strict operators, and that refusal covers
+  **both** Bedrock sub-modes (SigV4 and bearer), not only SigV4
+  (`enforceInspectableLLM`, `internal/api/runs_dispatch_llm.go`).
 - Detections recorded **without storing the secret** — detector + field path +
   offset + count + masked placeholder only; never the matched bytes, never a
   reversible hash.
@@ -1667,20 +1749,71 @@ therefore the one to prefer when the never-resident posture matters: a bearer to
 is a *static* `Authorization` header, so the proxy TLS-MITMs `bedrock-runtime.*` and
 injects it exactly like an api-key (the CA private key stays in proxy memory; the
 host is an exact, non-wildcard operator-configured MITM entry with a paired
-injection rule — the corp-artifact-host trust boundary in `isMITMHost`).
+injection rule — the corp-artifact-host trust boundary in `isMITMHost`). That
+entry is authored as `host:port` — the data-plane port the run actually reaches
+(443 unless `WARDYN_BEDROCK_BASE_URL` names another) — so the TLS termination
+and the bearer injection are scoped to that port exactly as an artifact
+redirect's are; a CONNECT to the same host on any other port falls through as an
+opaque tunnel and is never offered the operator's bearer.
 
 **Known v1 coverage gaps (recorded honestly; not silent):**
 - Only the **system prompt + the last message** of each turn are scanned. Secrets
   in earlier seeded messages, in a 2nd+ new message appended the same turn, or
   split across turns are missed. The primary inadvertent-leak paths (a fresh paste,
-  a `tool_result` of a just-read file) are the last element and are covered.
+  a `tool_result` of a just-read file) are the last element and are covered — up to
+  the per-request `scan_budget` below: once 4 MiB of spans have been scanned, the
+  REST of that same message goes unscanned too, so an agent that pads its newest
+  message with 4 MiB of sub-`max_scan_bytes` blocks ahead of a secret is forwarded
+  (fail-open by default; refused under `on_scanner_error=block`).
 - A single span over `max_scan_bytes` (default **1 MiB**) or a body over **32 MiB**
   is forwarded **unscanned** (`span_oversize` / `body_oversize`). Fails **open** by
   default; `block` + `on_scanner_error=block` fails it **closed**.
-- `POST /v1/messages/batches` (N prompts, different schema) is recorded
-  `uninspected_channel` (refused under fail-closed block). Base64
-  `image`/`document` bytes are scanned only under `scan_attachments` (opt-in, off
-  by default). `count_tokens` **is** scanned.
+- **Every POST on a brokered LLM route that is not `messages`/`count_tokens`
+  (Anthropic) or `chat/completions` (OpenAI) is recorded `uninspected_channel`**
+  and refused under fail-closed block — the classifiers' default arm, not an
+  enumerated list (`classifyAnthropicLLM`/`classifyOpenAILLM`,
+  `internal/egress/proxy/llm_routes.go`). That covers `POST /v1/messages/batches`
+  (N prompts, different schema), the legacy `/v1/complete` and `/v1/completions`,
+  OpenAI `/v1/responses` and `/v1/embeddings`, **and the vendors' content-upload
+  surface** — Anthropic `POST /v1/files`, OpenAI `POST /v1/files` and the
+  multipart `/v1/audio/{transcriptions,translations}` plus `/v1/audio/speech`.
+  Those upload paths used to fall to a quiet default: forwarded with the brokered
+  credential, unscanned, with no scan block on the decision row and no
+  fail-closed refusal, so the strict operator's one hard control was bypassable
+  by choosing a different suffix. A bodiless read (`GET /v1/models`) is still
+  quiet. Base64 `image`/`document` bytes are scanned only under
+  `scan_attachments` (opt-in, off by default). `count_tokens` **is** scanned. A
+  block that cannot be base64-decoded under any known alphabet is recorded
+  `attachment_decode_error` (not silently treated as a clean scan) and honors
+  `on_scanner_error` exactly like `span_oversize`.
+- A per-request **scan budget** (`scan_budget`, 4 MiB total scanned bytes
+  across every span — on top of the per-span `max_scan_bytes` cap) bounds the
+  CPU cost of an adversarial body split into many sub-`max_scan_bytes` spans
+  by actually stopping the scan once exhausted; it fails **open** by default
+  and honors `on_scanner_error=block` like every other skip reason above.
+- A separate **findings cap** (`findings_capped`, 500 per request) bounds the
+  NUMBER of findings one request reports — not, by itself, the SIZE of the
+  decision log, which is bounded separately by a 256-byte cap on each finding's
+  `field_path` (agent-authored JSON keys, `sanitizePath`,
+  `internal/contentscan/patterns.go`; without it a 0.3 MiB body of enormous keys
+  produced a 46 MB decision log under a cap that never fired). It does **not**
+  stop scanning either — the scan budget above is what bounds CPU.
+  Once the cap is exceeded, a finding AT OR ABOVE the policy's
+  `block_min_severity` survives the truncation in EVERY mode: under `mode=block`
+  it is kept past the cap (up to a hard ceiling) and still blocks, so an agent
+  cannot buy a forward past its operator's block threshold by fanning out cheap
+  low-severity noise ahead of the real secret; under `mode=alert` — where the
+  alert IS the product — it DISPLACES a retained finding below
+  `block_min_severity`, so the report stays exactly cap-sized and still names
+  what the operator asked to hear about. Findings below `block_min_severity`
+  past the cap are dropped from the report, so a high-finding-count body's
+  decision log is truncated, not complete; the truncation is stated on the wire
+  (`findings_capped`, `findings_past_cap`, `findings_total` on the scan summary)
+  and recorded even when an earlier skip reason (`span_oversize`, `scan_budget`)
+  already claimed `skip_reason`. Only the reporting truncation itself fails
+  **open** by default (honoring `on_scanner_error=block` like every other skip
+  reason above) — enforcement of an already-detected qualifying finding never
+  does.
 - **Walled-garden coverage (`inspect_forward_egress`, `classified_markers`):**
   inspection extends to the GENERIC plaintext-HTTP forward path (custom connectors)
   and to MCP/JSON-RPC bodies via the generic walker, and operator
@@ -1690,21 +1823,57 @@ injection rule — the corp-artifact-host trust boundary in `isMITMHost`).
   stays opaque (a `MITM-all-egress` mode is a deliberate future option, gated on
   cert-pinning / non-HTTP-over-443 risks). DNS-tunnel and domain-fronting residuals
   (§5 #2, #3) are unchanged.
-- **Upstream corp-proxy hop relaxes the resolved-IP TOCTOU guard.** That mode is a
-  supported, operator-configured egress lane (site-config only — not sandbox- or
-  agent-controlled) and the intended path to internal/corporate endpoints from a
+- **Upstream corp-proxy hop relaxes the resolved-IP PIN, not the guard.** That mode
+  is a supported, operator-configured egress lane (site-config only — not sandbox-
+  or agent-controlled) and the intended path to internal/corporate endpoints from a
   sandbox with no direct internet route. The *residual* is one relaxation: with
   `p.upstream` set the proxy hands the corp proxy the target HOSTNAME rather than a
-  proxy-resolved-and-pinned IP, so `VetHost`'s resolved-IP re-check is skipped for
-  that hop (the `p.upstream` branch of step 4 in `evaluate`,
-  `internal/egress/proxy/proxy.go`). **Bounds, stated exactly so operators don't
+  proxy-resolved-and-pinned IP, so the dial is not pinned to a proxy-resolved
+  address; `egressTarget` still resolves the name for the guard and denies an
+  answer in a blocked range (§4.2), and only a name this proxy cannot resolve at
+  all is forwarded unvetted (the `p.upstream` branch of `Proxy.egressTarget`,
+  `internal/egress/proxy/egress_target.go`). **Bounds, stated exactly so operators don't
   over- or under-read it:** this does NOT make private IPs reachable. Reaching an
   internal-IP-resolving hostname still requires ALL of — (1) an operator configured
   the upstream proxy, (2) the run's own egress **policy** allows that hostname
   (default-deny allowlist + first-use approval + method rules, all unaffected), and
   (3) the destination is named by HOSTNAME: a literal
-  private/loopback/link-local/metadata IP is still denied at the literal-IP guard.
-  Only the resolved-IP re-check is deferred, to the operator's own corp proxy.
+  private/loopback/link-local/metadata IP is still denied at the literal-IP
+  guard, **in every literal spelling that guard parses** (see below).
+  Only the PIN is deferred, to the operator's own corp proxy; §4.2 states the two
+  residuals that deferral leaves.
+  That literal-IP guard covers the NON-CANONICAL spellings too: `net.ParseIP`
+  accepts only the canonical dotted-quad, while `inet_aton(3)` — and so glibc
+  `getaddrinfo`, and so the corp proxy that finally dials — also reads `127.1`,
+  `0x7f000001` and `2130706433` as `127.0.0.1`, and `0251.0376.0.1` as
+  `169.254.0.1` (link-local — the octal example is NOT loopback; the pairing is
+  pinned per host in `TestNonCanonicalLiteralIPIsDeniedLikeItsCanonicalSpelling`).
+  `net.ParseIP` is likewise nil for a ZONE-SUFFIXED IPv6 literal — `fe80::1%eth0`,
+  and the RFC 6874 authority spelling `fe80::1%25eth0` — which `netip.ParseAddr`
+  parses and `net.Dial` dials, so the zone id alone used to decide the verdict for
+  an address whose canonical spelling is denied. `evaluate` step 0 and
+  `egressTarget`'s upstream branch both re-run the block check on all of these
+  (`nonCanonicalLiteralIP`, `internal/egress/proxy/literal_ip_guard.go`).
+  Deny only: a spelling the operator did not type inherits no `allowed_domains`
+  grant.
+  A third EMBEDDED-v4 shape is covered on the canonical path rather than by that
+  gap-filler: the deprecated IPv4-compatible IPv6 form (`::127.0.0.1`,
+  `::169.254.169.254`, RFC 4291 §2.5.5.1) is one `net.ParseIP` DOES parse, and it
+  carries a real IPv4 in its low 32 bits that `To4()` cannot see (`To4` unwraps
+  only `::ffff:/96`), so every stdlib predicate answered false for it. It is
+  denied by `isBlockedIP`'s IPv4-compatible arm (`v4CompatibleEmbeddedV4`,
+  `internal/egress/proxy/policy.go`), which re-runs the embedded address through
+  the same check the NAT64 arm beside it uses — so the form is bound at `evaluate`
+  step 0 AND in `VetHost` (whose literal fast path calls that same predicate), not
+  by one instead of the other. Only the embedded address decides: `::8.8.8.8` stays
+  reachable, so the arm can only add the denials the canonical spelling already gets.
+  **Residual, stated rather than hedged:** the guard covers the spellings it
+  PARSES and the embedded-v4 prefixes it KNOWS. A NETWORK-SPECIFIC RFC 6052 NAT64
+  prefix is unknowable here without operator config (`ipguard.NAT64Prefixes` carries
+  the well-known `64:ff9b::/96` and local-use `64:ff9b:1::/48` only), so an address
+  inside a site's own translation prefix is judged on its IPv6 form alone; under a
+  corp upstream that is left to the operator's own egress controls, like any other
+  name only that proxy resolves.
 - The optional **sidecar** (`detector_sidecar_url`) treats an
   error/timeout/non-200 as a scanner error like the in-process detectors: fails
   **open** by default, and `on_scanner_error=block` **does** extend to it, so
@@ -1714,8 +1883,25 @@ injection rule — the corp-artifact-host trust boundary in `isMITMHost`).
   tracking, field-level **redaction** (corrupts tool I/O + prompt caching), and
   response-side **SSE** scanning. Residuals, not silent gaps.
 - The 32 MiB per-request buffer (only when inspection is enabled) raises proxy
-  memory vs. the prior streaming path; bounded per-request, relying on the run's
-  cgroup memory limit under high concurrency.
+  memory vs. the prior streaming path. It is bounded per-request AND in
+  aggregate: the extractor's live-heap amplification (~5.3x, and independent of
+  which detectors are on) means two concurrent in-cap bodies would exceed the
+  proxy sidecar's 256 MiB cgroup cap, so concurrent inspection is limited by a
+  semaphore (`maxConcurrentScans`, `internal/egress/proxy/llm_routes.go`) and
+  `wardyn-proxy` sets the Go GC's soft memory limit from that same cgroup
+  ceiling at boot. An over-budget request WAITS and is still fully inspected —
+  load never turns into unscanned egress. That wait is itself BOUNDED, by the
+  request's own context and a wall-clock cap (`scanQueueWait`), because nothing
+  above the call bounds it: the agent-facing listener sets `ReadTimeout 0` so
+  that streaming bodies and CONNECT tunnels work, and only the inner MITM server
+  carries a whole-request deadline — so without the cap one slow-loris POST from
+  the sandbox, holding the single slot across the read of its own body, would
+  park every other inspected request of the run indefinitely, each retaining a
+  goroutine and a socket. A wait that expires, or a client that goes away, is
+  DENIED with a 502 — the bound is not a way to get a body forwarded unscanned.
+  The cgroup limit alone was not a bound: without a
+  soft limit the GC targets ~2x live heap and grows into the cap, and an
+  OOM-killed sidecar takes the run's only network path with it.
 - **TLS-MITM (`intercept_tls`) residuals:** the proxy sees DECRYPTED bodies for the
   intercepted hosts (added trust surface — the per-run CA private key in proxy
   memory). The MITM core (terminate → leaf-mint → inspect → re-originate) is proven
@@ -2126,7 +2312,13 @@ The **explicit kill** path (`handleKillRun`) runs this fixed order:
    partially failed can be retried to actually free the sandbox/credentials.
 2. **Sandbox teardown** — runner `KillSandbox`.
 3. **Run-token deny-list** — embedded identity revocation.
-4. **Broker credential revoke** — every minted credential for the run.
+4. **Broker credential revoke** — every minted credential for the run: the
+   cascade enumerates the run's successful `credential.mint` audit rows UNION
+   the approvals whose `minted_jti` was burnt (`internal/broker/pgx.go`,
+   `mintedCredentialsSQL`), so an AUTO-MINTABLE grant — which creates no
+   approval row at all — and a leased `git_pat`'s 2nd..Nth mint are covered
+   too. What each row records is an AUDIT join, not an invalidation: see the
+   TTL residual below.
 
 Any of steps 2-4 failing is audited loudly (one `run.kill` event carrying the
 aggregate outcome, plus a distinct `run.revoke` failure event) instead of reporting

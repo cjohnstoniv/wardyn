@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"bytes"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
@@ -114,10 +115,11 @@ type Config struct {
 	// (SiteConfig.UpstreamProxyNoProxy, forwarded verbatim): host/domain
 	// suffixes and CIDRs this sidecar dials DIRECTLY instead of CONNECTing
 	// through UpstreamProxyURL. It is the operator-hop equivalent of the
-	// NO_PROXY the sandbox already honours internally, and it exists because a
-	// corporate forward proxy will not CONNECT to an internal address — so on a
-	// private-endpoint estate every private endpoint times out while the
-	// upstream takes every dial.
+	// NO_PROXY the sandbox already honours internally. This sidecar vets the
+	// name on the upstream branch too (egressTarget): an endpoint that resolves
+	// into blocked space is denied HERE (builtin:private-ip), and one that does
+	// not is handed to a corporate forward proxy that will not CONNECT to an
+	// internal address; either way the bypass is what moves the dial local.
 	//
 	// It is a ROUTING list only: a bypassed dial falls through to the same
 	// unconditional private/reserved-IP guard an unproxied dial does, so it
@@ -171,15 +173,59 @@ func LoadConfig(path string) (*Config, error) {
 // LoadConfigBytes parses and validates a Config from raw JSON. Used by the
 // sidecar's env-var config path (WARDYN_PROXY_CONFIG_JSON), which is how the
 // docker driver delivers the run's policy without managing host files.
+//
+// The decode is STRICT (DisallowUnknownFields), matching the decodeStrict
+// posture the control plane's own write paths already use.
+//
+// TRUST BOUNDARY (F029 — read before relaxing): the sidecar image is pinned by
+// the OPERATOR, independently of wardynd (WARDYN_PROXY_IMAGE, k8s.proxyImage,
+// and the shipped desktop examples pin it by DIGEST), so a config written by a
+// NEWER control plane routinely meets an OLDER proxy binary. A lenient
+// json.Unmarshal accepted such a config with err == nil and silently discarded
+// every key the old binary did not know — and the keys this release added are
+// exactly the ones a private-endpoint estate depends on
+// (upstream_proxy_no_proxy, trusted_ca_pem, internal_hosts, llm_upstreams,
+// pat_grants). The failure mode was therefore: the corp CA never added, the
+// bypass list inert, the internal-host lift never firing — an operator's
+// routing document half-honoured, with no error, no warning and no version
+// handshake anywhere. A key this binary cannot honour must fail the sidecar's
+// startup loudly instead of being dropped on the floor.
 func LoadConfigBytes(b []byte) (*Config, error) {
 	var c Config
-	if err := json.Unmarshal(b, &c); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&c); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	if err := c.applyDefaultsAndValidate(); err != nil {
 		return nil, err
 	}
 	return &c, nil
+}
+
+// ValidUpstreamProxyURL reports whether raw is an upstream/corp proxy URL this
+// sidecar's own loader will ACCEPT — the write-time delegate for
+// UpstreamProxyURL that ValidNoProxyEntry already is for UpstreamProxyNoProxy,
+// and for the same reason: a second copy of the rule in the API package is a
+// dual matcher over one operator-authored field, and this one drifted. The
+// control plane checked only url.Parse + the http scheme, so a port of `0` or
+// `99999` was persisted with 200 OK and then failed applyDefaultsAndValidate
+// below at container start, which cmd/wardyn-proxy/main.go turns into
+// os.Exit(1) — the egress sidecar of EVERY dispatched run, killed by a value
+// the write path said was fine.
+//
+// It IS parseUpstreamProxy — the very rule applyDefaultsAndValidate runs below —
+// exported so the control plane can apply THE SAME rule at write time
+// (validateSiteConfig) and at dispatch (loadableUpstreamProxyURL,
+// internal/api/runs_bedrock.go) instead of keeping a second, narrower copy.
+//
+// The error is returned rather than a bool so the caller can name the real
+// cause; parseUpstreamProxy never echoes the raw URL (it may carry
+// user:pass credentials), so the message is always safe to surface. The empty
+// string is valid (upstream disabled), matching parseUpstreamProxy.
+func ValidUpstreamProxyURL(raw string) error {
+	_, err := parseUpstreamProxy(raw)
+	return err
 }
 
 func (c *Config) applyDefaultsAndValidate() error {

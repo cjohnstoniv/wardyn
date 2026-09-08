@@ -60,7 +60,7 @@ func TestDispatch_AuditsEffectivePolicyEnvelope(t *testing.T) {
 	if !reflect.DeepEqual(got.AllowedDomains, enforced) {
 		t.Errorf("audited envelope != the policy handed to the proxy:\n audited  = %v\n enforced = %v", got.AllowedDomains, enforced)
 	}
-	if slices.Contains(got.AllowedDomains, "registry.npmjs.org") || !slices.Contains(got.AllowedDomains, "artifactory.corp") {
+	if slices.Contains(got.AllowedDomains, "registry.npmjs.org") || !slices.Contains(got.AllowedDomains, "artifactory.corp:443") {
 		t.Errorf("envelope snapshots the PRE-widening policy; want the corp mirror substituted in: %v", got.AllowedDomains)
 	}
 }

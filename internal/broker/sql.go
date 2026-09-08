@@ -23,7 +23,7 @@ var errNoRow = errors.New("broker: no row")
 
 // loadGrant reads a grant's spec and run id (no lock; routing pre-check only).
 func (b *Broker) loadGrant(ctx context.Context, grantID uuid.UUID) (types.GrantSpec, uuid.UUID, error) {
-	tx, err := b.db.Begin(ctx)
+	tx, err := b.db.BeginReadCommitted(ctx)
 	if err != nil {
 		return types.GrantSpec{}, uuid.Nil, fmt.Errorf("broker: begin tx: %w", err)
 	}
@@ -80,7 +80,7 @@ const selectLiveCredentialApproval = `
 // recovery. DENIED is a real human decision and stays terminal — it is
 // deliberately NOT skipped.
 func (b *Broker) ensureApproval(ctx context.Context, grantID, runID uuid.UUID, spec types.GrantSpec) (types.ApprovalRequest, error) {
-	tx, err := b.db.Begin(ctx)
+	tx, err := b.db.BeginReadCommitted(ctx)
 	if err != nil {
 		return types.ApprovalRequest{}, fmt.Errorf("broker: begin tx: %w", err)
 	}

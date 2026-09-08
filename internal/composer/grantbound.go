@@ -31,13 +31,48 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// grantPairing is the (host, secret, known_hosts) triple a stored-secret grant
-// names — the identity a ceiling entry is matched on, as opposed to the BOUNDS
-// (approval, TTL, github scope) that are clamped once a match is found.
+// grantPairing is the identity a ceiling entry is matched on, as opposed to the
+// BOUNDS (approval, TTL, github scope) that are clamped once a match is found.
+//
+// F097: header/format are part of that IDENTITY for api_key, not a bound. The
+// pairing used to be (host, secret, known_hosts) only, so a member or profile
+// grant that kept the operator's blessed (host, secret) pairing but named a
+// DIFFERENT header — or a different format — matched the ceiling and was kept.
+// The proxy writes the authored header verbatim onto the forwarded request
+// (internal/egress/proxy/inject.go; the brokered LLM lane strips the four known
+// credential headers and then sets the authored one) and relays the upstream
+// response to the sandbox verbatim, so re-homing the operator's blessed secret
+// under a header the vendor echoes reads the key back. Re-homing is a DIFFERENT
+// grant, so it must not match a ceiling entry that never authorized it.
 type grantPairing struct {
 	host          string // the destination host; for env_secret, the env var NAME (see below)
 	secretRef     string
 	knownHostsRef string // ssh_key only; empty (and compared as such) for every other kind
+	// header/format: api_key only (empty, and compared as such, for every other
+	// kind). Normalized exactly the way internal/api's injectionRuleFromScope
+	// defaults them — absent header == "Authorization", absent format ==
+	// "Bearer %s" — so the two decoders of one wire shape cannot disagree about
+	// which grants are the same grant.
+	header string
+	format string
+}
+
+// apiKeyHeader/apiKeyFormat mirror injectionRuleFromScope's defaults
+// (internal/api/runs_scm.go). Header names are case-insensitive per RFC 9110,
+// so the pairing folds case on the header and compares the format byte-exactly
+// (it is a fmt verb string, not a name).
+func apiKeyHeader(h string) string {
+	if strings.TrimSpace(h) == "" {
+		return "authorization"
+	}
+	return strings.ToLower(strings.TrimSpace(h))
+}
+
+func apiKeyFormat(f string) string {
+	if f == "" {
+		return "Bearer %s"
+	}
+	return f
 }
 
 // GrantPairing returns the pairing a grant names and whether its kind names a
@@ -74,9 +109,20 @@ func grantPairingOf(g types.GrantSpec) (p grantPairing, covered, ok bool) {
 		SecretName          string `json:"secret_name"`
 		KeySecretRef        string `json:"key_secret_ref"`
 		KnownHostsSecretRef string `json:"known_hosts_secret_ref"`
+		Header              string `json:"header"`
+		Format              string `json:"format"`
 	}
 	switch g.Kind {
-	case types.GrantAPIKey, types.GrantGitPAT:
+	case types.GrantAPIKey:
+		if json.Unmarshal(g.Scope, &sc) != nil || sc.Host == "" || sc.SecretName == "" {
+			return grantPairing{}, true, false
+		}
+		// header/format ride the identity (F097) — see grantPairing.
+		return grantPairing{
+			host: sc.Host, secretRef: sc.SecretName,
+			header: apiKeyHeader(sc.Header), format: apiKeyFormat(sc.Format),
+		}, true, true
+	case types.GrantGitPAT:
 		if json.Unmarshal(g.Scope, &sc) != nil || sc.Host == "" || sc.SecretName == "" {
 			return grantPairing{}, true, false
 		}
@@ -108,7 +154,8 @@ func grantPairingOf(g types.GrantSpec) (p grantPairing, covered, ok bool) {
 // refs byte-exactly (a secret NAME is a store key, not a hostname).
 func samePairing(a, b grantPairing) bool {
 	norm := func(h string) string { return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), ".")) }
-	return a.secretRef == b.secretRef && norm(a.host) == norm(b.host) && a.knownHostsRef == b.knownHostsRef
+	return a.secretRef == b.secretRef && norm(a.host) == norm(b.host) && a.knownHostsRef == b.knownHostsRef &&
+		a.header == b.header && a.format == b.format
 }
 
 // PairingInCeiling reports whether some ceiling grant of the SAME kind names the
@@ -116,10 +163,21 @@ func samePairing(a, b grantPairing) bool {
 // internal/api's storedSecretPairingInCeiling forwards to it, so the member
 // grant filter, the governance profile bound and the runtime clamp cannot drift
 // into three answers for one question.
-func PairingInCeiling(kind types.GrantKind, host, secretRef, knownHostsRef string, ceiling []types.GrantSpec) bool {
-	want := grantPairing{host: host, secretRef: secretRef, knownHostsRef: knownHostsRef}
+//
+// It takes the whole proposed grant rather than a destructured pairing so the
+// pairing rule lives in exactly ONE decoder (grantPairingOf). It used to take
+// (kind, host, secretRef, knownHostsRef), which is why an api_key axis added to
+// the pairing — header/format, F097 — could not reach this caller at all.
+// A grant whose kind names no stored secret, or whose scope does not decode,
+// is in no pairing (fail closed); its kind-level ceiling membership is the
+// caller's question (CeilingGrantsCovering).
+func PairingInCeiling(g types.GrantSpec, ceiling []types.GrantSpec) bool {
+	want, covered, ok := grantPairingOf(g)
+	if !covered || !ok {
+		return false
+	}
 	for _, cg := range ceiling {
-		if cg.Kind != kind {
+		if cg.Kind != g.Kind {
 			continue
 		}
 		got, covered, ok := grantPairingOf(cg)

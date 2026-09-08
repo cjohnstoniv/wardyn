@@ -54,30 +54,51 @@ func extractGeneric(body []byte, yield func(Span)) error {
 	return nil
 }
 
+// decodeAttachmentBase64 tries every base64 alphabet a real client attachment
+// might arrive in — standard padded, standard unpadded (RawStdEncoding), and
+// the URL-safe alphabet (both padded and unpadded) — before declaring a
+// decode failure (F056). A well-formed attachment that merely used a
+// non-StdEncoding alphabet must not be silently treated as "nothing here".
+func decodeAttachmentBase64(s string) ([]byte, bool) {
+	for _, enc := range []*base64.Encoding{
+		base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding,
+	} {
+		if dec, err := enc.DecodeString(s); err == nil {
+			return dec, true
+		}
+	}
+	return nil, false
+}
+
 // extractAnthropicAttachments decodes base64 image/document attachment bytes in
 // the newest message and yields the decoded content as spans (opt-in; off by
-// default). Best-effort: undecodable/oversized blocks are skipped.
-func extractAnthropicAttachments(body []byte, yield func(Span)) {
+// default). It reports (via the return value) whether any base64 block could
+// not be decoded under ANY known alphabet, so the caller can record an honest
+// Skipped{attachment_decode_error} instead of a silent "inspected clean"
+// (F056) — a malformed body is still tolerated (returns false, nothing to
+// report) the same as before.
+func extractAnthropicAttachments(body []byte, yield func(Span)) bool {
 	var req struct {
 		Messages []json.RawMessage `json:"messages"`
 	}
 	if json.Unmarshal(body, &req) != nil || len(req.Messages) == 0 {
-		return
+		return false
 	}
 	var m struct {
 		Content json.RawMessage `json:"content"`
 	}
 	if json.Unmarshal(req.Messages[len(req.Messages)-1], &m) != nil {
-		return
+		return false
 	}
 	raw := bytes.TrimSpace(m.Content)
 	if len(raw) == 0 || raw[0] != '[' {
-		return
+		return false
 	}
 	var blocks []json.RawMessage
 	if json.Unmarshal(raw, &blocks) != nil {
-		return
+		return false
 	}
+	decodeFailed := false
 	for i, b := range blocks {
 		var blk struct {
 			Type   string `json:"type"`
@@ -90,7 +111,16 @@ func extractAnthropicAttachments(body []byte, yield func(Span)) {
 			continue
 		}
 		if (blk.Type == "image" || blk.Type == "document") && blk.Source.Type == "base64" && blk.Source.Data != "" {
-			if dec, err := base64.StdEncoding.DecodeString(blk.Source.Data); err == nil && len(dec) > 0 {
+			dec, ok := decodeAttachmentBase64(blk.Source.Data)
+			if !ok {
+				// Genuinely undecodable under every known alphabet: the caller must
+				// NOT record this as a clean scan (F056) — it sets
+				// Skipped{attachment_decode_error} so ShouldBlock/on_scanner_error
+				// still governs whether this refuses the request under block mode.
+				decodeFailed = true
+				continue
+			}
+			if len(dec) > 0 {
 				yield(Span{
 					FieldPath: fmt.Sprintf("messages[%d].content[%d].source.data(decoded)", len(req.Messages)-1, i),
 					Text:      string(dec),
@@ -98,11 +128,14 @@ func extractAnthropicAttachments(body []byte, yield func(Span)) {
 			}
 		}
 	}
+	return decodeFailed
 }
 
 // extractOpenAIChat yields the text the agent is sending THIS turn for an OpenAI
-// /v1/chat/completions request: the LAST message's content (string or text
-// parts) plus its tool_call function arguments (a JSON string we walk). Same
+// /v1/chat/completions request: every role:"system" message (OpenAI/Codex has
+// no top-level `system` field the way Anthropic does — the system prompt rides
+// as a message, F049) plus the LAST message's content (string or text parts)
+// and its tool_call function arguments (a JSON string we walk). Same
 // newest-message heuristic and known false-negatives as the Anthropic walker.
 func extractOpenAIChat(body []byte, yield func(Span)) error {
 	var req struct {
@@ -114,6 +147,21 @@ func extractOpenAIChat(body []byte, yield func(Span)) error {
 	n := len(req.Messages)
 	if n == 0 {
 		return nil
+	}
+	// Scan every system-role message (bounded: system messages are rare and
+	// singular in practice — this does not turn into a full-history scan the
+	// way walking every message unconditionally would). The last message is
+	// walked below regardless of its own role, so skip it here to avoid a
+	// double scan when the last message IS the system prompt.
+	for i, raw := range req.Messages[:n-1] {
+		var hdr struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		}
+		if json.Unmarshal(raw, &hdr) != nil || hdr.Role != "system" {
+			continue
+		}
+		walkTextOrBlocks(hdr.Content, fmt.Sprintf("messages[%d].content", i), yield)
 	}
 	var m struct {
 		Content   json.RawMessage `json:"content"`

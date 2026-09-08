@@ -557,6 +557,16 @@ jobs:
           WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
           WARDYN_TEST_PG_SUPERUSER: "1"
         run: make test-report-pg
+      # The `race` job above strips the DSN (Makefile: `WARDYN_TEST_PG= go test
+      # -race ./...`), so the WARDYN_TEST_PG-gated tests are SKIPPED there — and
+      # the step above, the only one that sets the DSN, runs without -race. The
+      # broker's exactly-once concurrency proofs are therefore the tests most in
+      # need of the detector and the ones no gate was pointing it at. This step
+      # is that gate (F137).
+      - name: PG concurrency proofs (race detector)
+        env:
+          WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
+        run: make test-race-pg
       - name: Upload PG test reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

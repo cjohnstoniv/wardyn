@@ -54,11 +54,21 @@ const maxDecisionUntil = 30 * 24 * time.Hour
 // deployment age. A lister without it (test fakes) keeps servePage's fetch-all
 // fallback.
 //
-// ?run_id= stays on the fetch-all path and filters INSIDE the closure, i.e.
-// before servePage windows the result. That ordering is the whole point: the
-// list is requested_at DESC and capped at maxListLimit, so filtering after the
-// window would drop a run older than the newest 1000 approvals from its own
-// detail page — silently, with a PENDING badge of 0.
+// ?run_id= gets its OWN DB-paged reader (store.ApprovalsByRunPager), because
+// the alternative is not "unpaged" but "read the whole table": the fetch-all
+// branch calls Approvals.List, which is ListApprovalsPage with an empty Page,
+// and Page.appendTo emits no LIMIT at all for Limit<=0 — so one run-scoped poll
+// materialised every approval row the deployment ever wrote and discarded all
+// but one run's (F072). Decided rows are never deleted, so that read grew with
+// deployment age.
+//
+// A lister without that capability keeps the fetch-all path, and there it must
+// filter INSIDE the closure, i.e. BEFORE servePage windows the result. That
+// ordering is the whole point: the list is requested_at DESC and capped at
+// maxListLimit, so filtering after the window would drop a run older than the
+// newest 1000 approvals from its own detail page — silently, with a PENDING
+// badge of 0. The DB reader gets the same ordering for free: the WHERE is
+// applied before the LIMIT by construction.
 //
 // Ownership scoping (item 2): a member's ?run_id= must name an owned run —
 // checked via the SAME getRunAuthorized gate GET/kill/profile/grants use, so a
@@ -109,9 +119,21 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var pageFn func(store.Page) ([]types.ApprovalRequest, error)
-	if pl, ok := s.cfg.Approvals.(approvalPageLister); ok && runID == uuid.Nil {
-		pageFn = func(p store.Page) ([]types.ApprovalRequest, error) {
-			return pl.ListApprovalsPage(r.Context(), state, p)
+	switch {
+	case runID != uuid.Nil:
+		// Run-scoped: filter AT THE DB. Fail-SAFE (not fail-closed): a backend
+		// without the capability falls through to the fetch-all closure below,
+		// which returns the identical rows. Ownership was already proven above.
+		if pager, capable := s.cfg.Approvals.(store.ApprovalsByRunPager); capable {
+			pageFn = func(p store.Page) ([]types.ApprovalRequest, error) {
+				return pager.ListApprovalsPageByRun(r.Context(), runID, state, p)
+			}
+		}
+	default:
+		if pl, ok := s.cfg.Approvals.(approvalPageLister); ok {
+			pageFn = func(p store.Page) ([]types.ApprovalRequest, error) {
+				return pl.ListApprovalsPage(r.Context(), state, p)
+			}
 		}
 	}
 	servePage(w, page, pageFn, func() ([]types.ApprovalRequest, error) {

@@ -225,6 +225,11 @@ func tailExport(ctx context.Context, path string, mapper mapLiner, sink *eventSi
 		// to START (the post-rotation file is entirely unread), closing the race
 		// window instead of falling back to SeekEnd and dropping its head.
 		rotationPending bool
+		// openFailStreak counts consecutive os.Open failures since the last
+		// success. Without it a typo'd/unreadable -export path retried silently
+		// forever (F158): no line anywhere named the bad path while heartbeats
+		// and the stats loop kept printing as if the sensor were healthy.
+		openFailStreak int
 	)
 	// seekEnd=true only on the INITIAL open, so we do not replay an existing
 	// large historical log on startup. A rotation reopen must seek to START:
@@ -234,7 +239,24 @@ func tailExport(ctx context.Context, path string, mapper mapLiner, sink *eventSi
 	openFile := func(seekEnd bool) bool {
 		nf, err := os.Open(path)
 		if err != nil {
+			openFailStreak++
+			// First failure and then every 30th (~30s at the 1s retry interval)
+			// so a persistently bad path stays visible without spamming the log.
+			if openFailStreak == 1 || openFailStreak%30 == 0 {
+				slog.WarnContext(ctx, "wardyn-tetragon-ingest: cannot open export file — sensor is blind until this clears",
+					slog.String("path", path),
+					slog.Any("err", err),
+					slog.Int("consecutive_failures", openFailStreak),
+				)
+			}
 			return false
+		}
+		if openFailStreak > 0 {
+			slog.InfoContext(ctx, "wardyn-tetragon-ingest: export file open recovered",
+				slog.String("path", path),
+				slog.Int("failures", openFailStreak),
+			)
+			openFailStreak = 0
 		}
 		if seekEnd {
 			_, _ = nf.Seek(0, io.SeekEnd)

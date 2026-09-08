@@ -206,7 +206,7 @@ func Rekey(ctx context.Context, pool *pgxpool.Pool, oldID, newID age.Identity) (
 		return 0, fmt.Errorf("pg secretstore: rekey new identity: %w", err)
 	}
 
-	tx, err := pool.Begin(ctx)
+	tx, err := beginReadCommitted(ctx, pool)
 	if err != nil {
 		return 0, fmt.Errorf("pg secretstore: rekey begin: %w", err)
 	}
@@ -274,6 +274,32 @@ func Rekey(ctx context.Context, pool *pgxpool.Pool, oldID, newID age.Identity) (
 		return 0, fmt.Errorf("pg secretstore: rekey commit (%d rows, NOTHING committed — the old key still reads every secret): %w", len(all), err)
 	}
 	return len(all), nil
+}
+
+// beginReadCommitted starts a transaction on pool pinned to READ COMMITTED.
+//
+// Rekey rewrites EVERY ciphertext in the store under one transaction and its
+// caller (cmd/wardynd -rotate-age-key) emits the secret.rekey audit event for it,
+// so this transaction must not inherit default_transaction_isolation: on a pool
+// set to REPEATABLE READ a long rekey takes a snapshot at its first statement and
+// then holds it for the whole rewrite, which turns any concurrent writer into a
+// serialization failure the rotation reports as an abort. READ COMMITTED is also
+// exactly the isolation the FOR UPDATE lock reasoning above is written against.
+//
+// SET TRANSACTION rather than pgx.TxOptions: equivalent as long as it is the FIRST
+// statement of the transaction, which it is. A failed SET rolls the half-open
+// transaction back so no unpinned tx is ever returned (same shape as the broker's
+// PgxStore.BeginReadCommitted and internal/db's beginReadCommitted).
+func beginReadCommitted(ctx context.Context, pool *pgxpool.Pool) (pgx.Tx, error) {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `SET TRANSACTION ISOLATION LEVEL READ COMMITTED`); err != nil {
+		_ = tx.Rollback(context.Background())
+		return nil, fmt.Errorf("pin read committed: %w", err)
+	}
+	return tx, nil
 }
 
 // rekeyAbort formats the one error Rekey fails with: what broke, on which

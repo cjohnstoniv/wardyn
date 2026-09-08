@@ -106,7 +106,12 @@ func (s *Server) approveAlwaysRejects(ctx context.Context, ws types.Workspace) m
 func (s *Server) denyAlwaysReject(ctx context.Context, ws types.Workspace, host string) string {
 	const caveat = " (this guard covers model-provider and required-integration hosts only; " +
 		"a deny on another injected host fails loudly at proxy build instead)"
-	if s.isModelProviderHost(host) {
+	// isModelProviderRejectHost, not isModelProviderHost: the Bedrock lane's
+	// bedrock-runtime.<region> (and the WARDYN_BEDROCK_BASE_URL override host)
+	// carries proxy-side bearer injection too, and this guard consulted the
+	// anthropic/openai-only predicate, so a workspace-bricking deny·always on it
+	// was accepted (F019).
+	if s.isModelProviderRejectHost(ctx, ws, host) {
 		return "deny always on " + host + " would permanently break model access for this workspace: " +
 			"proxy-side credential injection refuses a denied host" + caveat
 	}

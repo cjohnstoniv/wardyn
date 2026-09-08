@@ -233,3 +233,78 @@ func TestDroppedSummary_FailedPostDoesNotBurnDelta(t *testing.T) {
 		t.Fatalf("delivered summary must advance reported to 3, got %d", reported2)
 	}
 }
+
+// F125: both decision-log call sites hand maskDecisionBytes JSON, so the mask
+// must know the JSON-escaped rendering of a secret, not just its raw bytes.
+//
+// json.Marshal escapes \n, \" and \\ inside any string and HTML-escapes & < >
+// to \u0026 \u003c \u003e by default, so an ordinary special-character secret
+// stops being byte-identical inside the marshalled body and a raw-value masker
+// slides straight past it — into the proxy's stdout decision line (mirror) and
+// the body of the /internal/decisions POST (post). The two sibling JSON sinks
+// (recording upload, audit maskingRecorder) were fixed for exactly this with
+// secretmask.JSONEscapedVariants; this lane's sink was not. A plain-ASCII
+// secret masks correctly either way, which is why the gap survived.
+func TestMaskDecisionBytesMasksJSONEscapedSecrets(t *testing.T) {
+	for _, secret := range []string{
+		"f125-amp&secret&value-01",   // & -> \u0026
+		"f125-lt<gt>secret-value-2",  // < > -> \u003c \u003e
+		"f125-nl\nsecret-value-0003", // newline -> \n
+		"f125-plain-ascii-value-04",  // control: masked before this fix too
+	} {
+		procRegistry.AddGlobal([]byte(secret))
+		body, err := json.Marshal(decisionLog(
+			egress.Request{Host: "x.test", Method: http.MethodGet, Path: "/x?k=" + secret},
+			egress.Allow, "policy:allowed"))
+		if err != nil {
+			t.Fatalf("marshal decision log: %v", err)
+		}
+		// The secret AS IT APPEARS inside a JSON string — json.Marshal of the
+		// value itself, minus the surrounding quotes.
+		q, err := json.Marshal(secret)
+		if err != nil {
+			t.Fatalf("marshal secret: %v", err)
+		}
+		escaped := string(q[1 : len(q)-1])
+		if !strings.Contains(string(body), escaped) {
+			t.Fatalf("the marshalled decision log does not carry %q at all — the probe is asserting nothing", escaped)
+		}
+		masked := string(maskDecisionBytes(body))
+		if strings.Contains(masked, escaped) {
+			t.Errorf("secret %q survives maskDecisionBytes in its JSON-escaped form %q:\n%s", secret, escaped, masked)
+		}
+		if !strings.Contains(masked, "<secret-hidden>") {
+			t.Errorf("secret %q left no redaction placeholder behind:\n%s", secret, masked)
+		}
+	}
+}
+
+// TestDecisionSinkCountsARefusedPostAsDropped pins the F075 fix-up's fifth
+// item: `_ = s.post(log)` discarded the error, so a decision the control plane
+// REFUSED simply vanished — s.dropped never advanced and reportDropped never
+// summarized it.
+//
+// That is not hypothetical: the control plane's MaxBytesReader 413s a decision
+// body over maxJSONBody (internal/api/helpers.go), and an inspected request can
+// produce one. The audit trail must say "N decisions were not individually
+// recorded", not lose them silently.
+func TestDecisionSinkCountsARefusedPostAsDropped(t *testing.T) {
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Every post refused, exactly as an over-large decision body is.
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+	}))
+	defer cp.Close()
+
+	s := newDecisionSink(cp.URL, newTokenSource("tok"), 8, cp.Client(), &bytes.Buffer{})
+	s.emit(decisionLog(egress.Request{Host: "refused.test"}, egress.Allow, "policy:allowed"))
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && s.droppedCount() == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if s.droppedCount() == 0 {
+		t.Fatal("a decision the control plane REFUSED was not counted as dropped: the audit trail loses " +
+			"it entirely — no individual record, and nothing in the dropped summary either")
+	}
+	_ = s.close(context.Background())
+}

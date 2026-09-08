@@ -386,6 +386,46 @@ func (s *Server) secretOwnerFromRequest(r *http.Request) string {
 	return principalFromRequest(r)
 }
 
+// runIdentitySubject resolves the subject a RUN IDENTITY is minted with — the
+// string that becomes claims.Sub and therefore SELECTS THE SECRET NAMESPACE
+// every credential-bearing path resolves against: broker ownerOf(caller) ==
+// caller.Sub (internal/broker/broker_mint_kinds.go, used by mintGitPAT and
+// mintSSHKey), the injection sink's Secrets.For(claims.Sub)
+// (internal/api/injection.go), and pg.Store.Get's
+// `owned_by IN (”, $1) ORDER BY (owned_by = $1) DESC`
+// (internal/secretstore/pg/pg.go) — where the attacker-chosen string IS the
+// selector and the named owner's own row WINS over the operator's.
+//
+// It is deliberately NOT actorFromRequest's name (F099). In LocalMode that name
+// is the DEV-ONLY X-Wardyn-Principal header when one is present, and a header
+// the caller writes must not choose whose stored secrets a run may mint. The
+// header keeps its documented job — ATTRIBUTION: it still names run.CreatedBy,
+// the sponsor claim and every audit actor — but the namespace comes from the
+// principal humanOrAdminAuth INJECTED, which no request header can move.
+//
+// The "trusted single-dev machine" premise the header override rests on
+// (actorFromRequest's case 1) is one this codebase already refuses to rely on
+// elsewhere: approvals.go's requireSecondHuman answers 503 rather than compare
+// two client-supplied operands precisely because Config.LocalTrustForwarder
+// documents LocalMode as the compose/team topology too. The exposure this
+// closes is a deployment whose secrets table already carries member-owned rows
+// from an SSO-configured era (or a shared database) and is later served in
+// LocalMode.
+//
+// ctx-keyed rather than request-keyed on purpose: it is the ONE chokepoint both
+// mint sites reach — handleCreateRun (runs.go) and newStepRun
+// (workspace_run.go), which is handed the request's context by every
+// server-launched step/probe/login lane. Where the local principal is not on the
+// context it returns actor unchanged, i.e. exactly today's behaviour: SSO and
+// admin-token callers are unaffected, since actorFromRequest never honors the
+// header for them.
+func runIdentitySubject(ctx context.Context, actor string) string {
+	if op := localPrincipalFromContext(ctx); op != "" {
+		return op
+	}
+	return actor
+}
+
 // actorTypeFromRequest is the actor-type half of actorFromRequest, for audit
 // sites that already pass principalFromRequest(r) for the name. Pairing them as
 // (actorTypeFromRequest(r), principalFromRequest(r)) records a bare admin-token

@@ -23,6 +23,15 @@ package db
 //	       docs/OPERATIONS.md promises no writer can pick.
 //
 // Both need a live Postgres (WARDYN_TEST_PG); both skip cleanly without one.
+//
+// The UPGRADE boundary those same migrations cross — rows already chained by
+// 0047's trigger, then 0056/0057/0058 rewriting the function underneath them —
+// is pinned in internal/store, not here: it needs both the databaseBefore
+// harness and store.PG.VerifyAuditChain, and internal/store imports internal/db
+// so this package cannot reach either. See
+// TestPG_AuditChainSurvivesTheTriggerRewriteOnAPopulatedDatabase
+// (internal/store/auditchain_upgrade_pg_test.go). Everything in THIS file
+// starts from a fully migrated schema (F023).
 
 import (
 	"context"

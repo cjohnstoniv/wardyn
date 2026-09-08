@@ -4,6 +4,10 @@
 package main
 
 import (
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,6 +16,114 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/test/awsssofake"
 )
+
+// TestRun_NeverInvokesAWSCLIForAccountRoleLookup covers F160: run() used to
+// best-effort shell out to `aws sso list-accounts`/`list-account-roles
+// --access-token <token>`, putting the live SSO access token on that child
+// process's own argv — readable by any /proc reader in the sandbox sharing
+// its PID namespace, not just same-uid. A stub `aws` on PATH stands in for
+// the real CLI: if run() ever execs it, the token would have been on its
+// command line (see the finding's own repro, which greps /proc/self/cmdline).
+//
+// It also pins the fix's completeness: resolveAccountRole was rewritten to
+// call the SSO portal over HTTP (Bearer header, never argv) rather than
+// dropped outright, so a normal capture still uploads non-blank
+// account_id/role_name — a blank pair is exactly the shape
+// internal/api/ssotoken_test.go's TestUploadSSOToken_HalfResolvedCaptureRejected
+// pins the control plane 400ing on, so a capture that could not actually be
+// stored must never again be this test's own "success".
+//
+// Red-first: pre-fix, run() calls resolveAccountRole -> runAWSJSON, which
+// execs the stub (present on PATH) with --access-token <token>; the marker
+// file it touches on invocation exists afterward, so the assertion fails.
+func TestRun_NeverInvokesAWSCLIForAccountRoleLookup(t *testing.T) {
+	home := t.TempDir()
+	cacheDir := filepath.Join(home, ssoCacheSubdir)
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Repo's own fake SSO portal (test/awsssofake) rather than an ad-hoc
+	// stub: it enforces the REAL x-amz-sso_bearer_token contract
+	// (checkBearer, per botocore's sso/2019-06-10/service-2.json), so a
+	// build that authenticates with the wrong header 401s here exactly as
+	// it would against the real portal.sso.<region>.amazonaws.com.
+	portal := awsssofake.New()
+	t.Cleanup(portal.Close)
+	token := portal.AccessToken()
+	cache := `{"accessToken":"` + token + `","startUrl":"https://x.awsapps.com/start","region":"us-east-1","expiresAt":"2100-01-01T00:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(cacheDir, "abc123.json"), []byte(cache), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	binDir := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "aws-cli-invoked")
+	stub := "#!/bin/sh\ntouch '" + marker + "'\necho '{\"accountList\":[],\"roleList\":[]}'\n"
+	if err := os.WriteFile(filepath.Join(binDir, "aws"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	prevBase := ssoPortalBase
+	ssoPortalBase = func(string) string { return portal.URL() }
+	t.Cleanup(func() { ssoPortalBase = prevBase })
+
+	var uploaded []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		uploaded, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("WARDYN_PROXY_URL", srv.URL)
+	t.Setenv("WARDYN_RUN_ID", "run-1")
+
+	if err := run(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the aws CLI stub was invoked — the live SSO access token would have been placed on its argv (F160)")
+	}
+	if uploaded == nil {
+		t.Fatal("expected an sso-token upload to have happened")
+	}
+	var got struct {
+		AccountID string `json:"account_id"`
+		RoleName  string `json:"role_name"`
+	}
+	if err := json.Unmarshal(uploaded, &got); err != nil {
+		t.Fatalf("decode uploaded body: %v", err)
+	}
+	// This is exactly the predicate internal/api/harnesscred.go's
+	// awsSSOBlob.valid applies server-side (AccountID != "" && RoleName != "");
+	// a capture with either blank is a shape the control plane 400s (see
+	// ssotoken_test.go's TestUploadSSOToken_HalfResolvedCaptureRejected), so
+	// asserting it here means this test cannot pass on a build that dropped
+	// resolution instead of reworking it to avoid argv.
+	if got.AccountID == "" || got.RoleName == "" {
+		t.Fatalf("uploaded body has blank account_id/role_name (%+v) — the control plane's awsSSOBlob.valid rejects exactly this shape with 400", got)
+	}
+	fixture := portal.Account()
+	if got.AccountID != fixture.AccountID || got.RoleName != fixture.RoleName {
+		t.Errorf("uploaded account_id/role_name = %q/%q, want the fake portal's fixture %q/%q", got.AccountID, got.RoleName, fixture.AccountID, fixture.RoleName)
+	}
+}
+
+// TestResolveAccountRole_LeavesBlankOnPortalFailure covers the non-fatal
+// residual: any portal failure (network, non-2xx, decode, empty list) must
+// leave the caller free to upload a blank account/role rather than erroring
+// out of run() entirely — a resolution failure must never turn into an
+// upload failure.
+func TestResolveAccountRole_LeavesBlankOnPortalFailure(t *testing.T) {
+	prevBase := ssoPortalBase
+	ssoPortalBase = func(string) string { return "http://127.0.0.1:1" } // nothing listening
+	t.Cleanup(func() { ssoPortalBase = prevBase })
+
+	accountID, roleName, ok := resolveAccountRole("tok", "us-east-1")
+	if ok {
+		t.Fatalf("expected ok=false on an unreachable portal, got accountID=%q roleName=%q", accountID, roleName)
+	}
+}
 
 func TestIsSSOToken(t *testing.T) {
 	tokenFile := ssoCacheFile{AccessToken: "tok", StartURL: "https://x.awsapps.com/start", Region: "us-west-2"}

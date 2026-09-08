@@ -99,12 +99,21 @@ func siteConfigApplyCmd(client clientFn) *cobra.Command {
 			if n := len(cfg.Integrations); n > 0 {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %d integration(s) in this file were not applied — integrations are managed through their own endpoints (`/api/v1/integrations`, or Settings), never this document; the stored ones are left as they are\n", n)
 			}
-			out, dangling, err := client().PutSiteConfig(cmd.Context(), cfg)
+			out, dangling, onboardingIgnored, err := client().PutSiteConfig(cmd.Context(), cfg)
 			if err != nil {
 				return err
 			}
 			for _, name := range dangling {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: secret %q is referenced but not set — restore it with `wardyn secret set %s`\n", name, name)
+			}
+			// Same rule as the integrations warning above: onboarding_completed_at
+			// is server-owned, so a captured document's copy is dropped on the
+			// write (the server carries its OWN mark forward). Say so — silence
+			// here reads as a restore that happened, and this file is exactly the
+			// one an operator applies after a reset, when the mark it carries is
+			// the pre-reset install's.
+			if onboardingIgnored {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: onboarding_completed_at in this file was not applied — the setup flow owns that mark on this install; the stored one is left as it is\n")
 			}
 			return emitJSON(out)
 		},

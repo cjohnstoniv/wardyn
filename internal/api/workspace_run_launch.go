@@ -132,7 +132,11 @@ func (s *Server) newStepRun(ctx context.Context, runID uuid.UUID, actor, task st
 	if err := s.stepRunCeilingLimits(ctx, actor, gov); err != nil {
 		return types.AgentRun{}, "", err
 	}
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, actor, actor, internalAudience)
+	// SUBJECT vs ATTRIBUTION (F099): actor stays the attribution (CreatedBy, the
+	// sponsor claim); the identity's SUBJECT — the secret-namespace selector — is
+	// runIdentitySubject's, so a LocalMode X-Wardyn-Principal header cannot point
+	// a server-launched step/probe/login run at another principal's stored rows.
+	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, actor), actor, internalAudience)
 	if err != nil {
 		return types.AgentRun{}, "", fmt.Errorf("mint run identity: %w", err)
 	}

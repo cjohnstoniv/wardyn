@@ -103,7 +103,7 @@ func validateOneLLMGateway(publicHost, raw string) (string, error) {
 	// Rule 4: an IP literal is allowed only OUTSIDE loopback/link-local/
 	// metadata/unspecified/multicast/NAT64 — RFC1918/CGNAT literals ARE
 	// allowed (that is the whole point of an internal gateway).
-	if ip := net.ParseIP(host); ip != nil && llmGatewayIPRefused(ip) {
+	if ip := net.ParseIP(host); ip != nil && ipguard.GatewayIPRefused(ip) {
 		return "", fmt.Errorf("IP literal %q is loopback/link-local/metadata/unspecified/multicast/NAT64 — unreachable from the sandbox netns", host)
 	}
 	// Rule 5: must not equal the public provider host — a gateway "pointing at
@@ -126,20 +126,6 @@ func validateOneLLMGateway(publicHost, raw string) (string, error) {
 	}
 	u.Path = strings.TrimSuffix(u.Path, "/")
 	return u.String(), nil
-}
-
-// llmGatewayIPRefused reports whether ip is a kind an internal model gateway
-// can never legitimately be: loopback, link-local (the metadata address
-// included), unspecified, multicast, or NAT64-embedded. RFC1918/ULA/CGNAT
-// literals are NOT refused here — those are exactly the addresses an internal
-// gateway is expected to live on.
-func llmGatewayIPRefused(ip net.IP) bool {
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsMulticast() || ip.IsUnspecified() {
-		return true
-	}
-	_, isNAT64 := ipguard.NAT64EmbeddedV4(ip)
-	return isNAT64
 }
 
 // gatewayHost extracts the bare host (no scheme, port, or path) from an

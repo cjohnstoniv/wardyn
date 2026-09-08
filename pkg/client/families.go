@@ -192,11 +192,14 @@ func (c *Client) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
 }
 
 // PutSiteConfig replaces the operator-wide site config and returns the
-// persisted value plus danglingSecretRefs — the names of any secret the
-// document now references that the secret store doesn't currently hold (e.g.
-// a `site-config apply` recovery run before the referenced secrets were
-// restored). Advisory only, never an error: the ref is still saved as given.
-// PUT /api/v1/site-config.
+// persisted value plus the write's two advisory signals: danglingSecretRefs —
+// the names of any secret the document now references that the secret store
+// doesn't currently hold (e.g. a `site-config apply` recovery run before the
+// referenced secrets were restored) — and onboardingMarkIgnored, true when the
+// body named an onboarding_completed_at the server did not keep (that mark is
+// server-owned and always carried forward; see types.SiteConfig). Both are
+// advisory only, never an error: the ref is still saved as given, and the write
+// still succeeded. PUT /api/v1/site-config.
 //
 // Integrations is stripped from cfg before the request: the server rejects a
 // non-empty one outright (integrations are managed through their own
@@ -206,14 +209,17 @@ func (c *Client) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
 // ever stored (PLATFORM-API-5). Stripped here, once, so no caller has to
 // remember to (mirrors ui/src/app/lib/api/health.ts's identical fix on the
 // TS side).
-func (c *Client) PutSiteConfig(ctx context.Context, cfg types.SiteConfig) (out types.SiteConfig, danglingSecretRefs []string, err error) {
+func (c *Client) PutSiteConfig(ctx context.Context, cfg types.SiteConfig) (
+	out types.SiteConfig, danglingSecretRefs []string, onboardingMarkIgnored bool, err error,
+) {
 	cfg.Integrations = nil
 	var resp struct {
 		types.SiteConfig
-		DanglingSecretRefs []string `json:"dangling_secret_refs,omitempty"`
+		DanglingSecretRefs           []string `json:"dangling_secret_refs,omitempty"`
+		OnboardingCompletedAtIgnored bool     `json:"onboarding_completed_at_ignored,omitempty"`
 	}
 	err = c.do(ctx, http.MethodPut, "/api/v1/site-config", cfg, &resp)
-	return resp.SiteConfig, resp.DanglingSecretRefs, err
+	return resp.SiteConfig, resp.DanglingSecretRefs, resp.OnboardingCompletedAtIgnored, err
 }
 
 // SetupStatus returns the first-run setup checklist as raw JSON (the response is

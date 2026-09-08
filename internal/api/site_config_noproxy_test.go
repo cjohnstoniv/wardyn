@@ -95,6 +95,34 @@ func TestRedirectProbeTo(t *testing.T) {
 			red:     types.EgressRedirect{From: "", To: "https://100.64.5.7"},
 			wantURL: "https://100.64.5.7",
 		},
+		{
+			// PORT2 follows the SCHEME To spells, not a hard-coded 443: a
+			// plain-http mirror addressed by literal IP serves 80, and dialing
+			// its 443 made curl fail and the operator read "could not reach the
+			// mirror" for a redirect real runs use successfully. The expected
+			// port is written literally here, never derived from redirectPort,
+			// so the pin cannot move with the code it pins.
+			name:          "a plain-http To with no port is dialed on 80, not 443",
+			red:           types.EgressRedirect{From: "pypi.org", To: "http://10.40.1.5"},
+			wantURL:       "http://pypi.org",
+			wantConnectTo: "pypi.org:80:10.40.1.5:80",
+		},
+		{
+			// A query/fragment ends the authority just as '/' does. Cutting only
+			// at '/' handed strconv "8443?repo=npm", which failed, and PORT2
+			// silently became 443 — the probe dialing a port the operator never
+			// configured, for a To that validateSiteConfig accepts.
+			name:          "a query-bearing To keeps its own port",
+			red:           types.EgressRedirect{From: "registry.npmjs.org", To: "https://10.40.2.11:8443?repo=npm-remote"},
+			wantURL:       "https://registry.npmjs.org",
+			wantConnectTo: "registry.npmjs.org:443:10.40.2.11:8443",
+		},
+		{
+			name:          "a fragment-bearing To keeps its own port",
+			red:           types.EgressRedirect{From: "registry.npmjs.org", To: "https://10.40.2.11:8443#frag"},
+			wantURL:       "https://registry.npmjs.org",
+			wantConnectTo: "registry.npmjs.org:443:10.40.2.11:8443",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -6,6 +6,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -472,8 +474,18 @@ func (s *Server) authorSubscriptionInjection(ctx context.Context, run types.Agen
 // the MITM host list; ok=false means the grant write failed, the run was marked
 // FAILED (CAS from STARTING), and dispatch must stop. Extracted verbatim from
 // dispatchRun.
+//
+// The MITM entry is "host:port" (net.JoinHostPort), NOT a bare host, for the
+// same reason planArtifactRedirect authors one (artifact_redirect.go): a bare
+// entry is ANY-PORT in the proxy (parseMITMHostPort returns port 0, and
+// handleConnect's `cport == 0 || cport == port` then matches everything), so
+// an agent that can reach the Bedrock host at all could CONNECT to it on a
+// port nobody configured and have that tunnel TLS-terminated with the Wardyn
+// leaf and the operator's Bearer injected onto whatever answered there (F037).
+// The injection SCOPE below stays a bare host — buildInjector requires that —
+// only the MITM-eligibility set carries the port.
 func (s *Server) authorBedrockBearerInjection(ctx context.Context, run types.AgentRun, t llmTransport, injections []runner.InjectionGrant) ([]runner.InjectionGrant, []string, bool) {
-	mitmHosts := []string{t.bedrock.runtimeHost}
+	mitmHosts := []string{net.JoinHostPort(t.bedrock.runtimeHost, strconv.Itoa(t.bedrock.runtimePort))}
 	beScope, _ := json.Marshal(map[string]string{
 		"host":        t.bedrock.runtimeHost,
 		"header":      "Authorization",
@@ -509,20 +521,28 @@ func llmInspectMITMEnabled(policy *types.RunPolicySpec) bool {
 // enforceInspectableLLM fails CLOSED at schedule time when inspection is
 // REQUIRED but the resolved LLM transport is OPAQUE. Opaque transports:
 // (a) a subscription/OAuth transport that is NOT being MITM'd (injectSub /
-// intercept_tls auto-enable MITM, making it inspectable); (b) SigV4 Bedrock via
-// ~/.aws or resident keys — uninspectable by construction (we cannot re-sign a
-// MITM'd SigV4 request), so only the Bedrock BEARER path (proxy-injected,
-// MITM'd) is inspectable. Previously only the subscription case failed closed,
-// silently exempting opaque Bedrock. The default (require_inspectable_llm=false)
-// instead degrades visibly rather than failing. Returns false when the run was
-// marked FAILED (CAS from STARTING so a concurrent kill's KILLED is not
-// clobbered) and dispatch must stop. Extracted verbatim from dispatchRun.
+// intercept_tls auto-enable MITM, making it inspectable); (b) BEDROCK, BOTH
+// sub-modes. Previously only the subscription case failed closed, silently
+// exempting opaque Bedrock; then the SigV4 sub-mode failed closed while the
+// BEARER sub-mode was exempted on the claim that proxy-injected + MITM'd makes
+// it inspectable. That claim was FALSE (F048): require_inspectable_llm is a
+// RUNTIME guarantee (policy.go), and MITM only makes a body READABLE — SCANNING
+// it needs an extractor and a prompt-bearing channel, and there is neither for
+// Bedrock. contentscan.Extract handles anthropic.messages / openai.chat /
+// generic / mcp.jsonrpc only, and channelForHost gives a bedrock-runtime host
+// ChannelGeneric, which classifyLLM treats as not prompt-bearing — so a bearer
+// Bedrock run admitted as "inspectable" gets ZERO scan coverage. Both sub-modes
+// therefore fail closed until a Bedrock extractor + channel exist; when they do,
+// re-exempt the bearer arm HERE (one predicate) and say so in THREAT-MODEL 5.1a.
+// The default (require_inspectable_llm=false) instead degrades visibly rather
+// than failing. Returns false when the run was marked FAILED (CAS from STARTING
+// so a concurrent kill's KILLED is not clobbered) and dispatch must stop.
 func (s *Server) enforceInspectableLLM(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, llm llmTransport) bool {
 	li := policy.LLMInspection
 	if li == nil || !li.RequireInspectableLLM || li.Mode == "" || strings.EqualFold(li.Mode, "off") {
 		return true
 	}
-	if (llm.subscription && !li.InterceptTLS && !llm.injectSub) || (llm.bedrockReady && !llm.bedrock.bearer) {
+	if (llm.subscription && !li.InterceptTLS && !llm.injectSub) || llm.bedrockReady {
 		s.failAndRevoke(ctx, run.ID, types.RunStarting,
 			"require_inspectable_llm: the resolved LLM transport is opaque (subscription without MITM, or SigV4 Bedrock); enable intercept_tls or use an inspectable transport")
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
@@ -543,7 +563,8 @@ type dispatchLLMPlan struct {
 	// needs one. The PRIVATE key reaches ONLY the proxy sidecar.
 	mitmCACertPEM string
 	mitmCAKeyPEM  string
-	// bedrockMITMHosts is the Bedrock bearer's per-run MITM host, if any.
+	// bedrockMITMHosts is the Bedrock bearer's per-run MITM host, if any, as
+	// "host:port" (never a bare host — see authorBedrockBearerInjection, F037).
 	bedrockMITMHosts []string
 	// mitmLLM is whether the BUILT-IN LLM hosts should be intercepted —
 	// subscription/managed injection or intercept_tls inspection, never a CA

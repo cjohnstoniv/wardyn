@@ -493,6 +493,48 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	return s.refreshRun(ctx, runID, created), nil
 }
 
+// maxLoginStartAuditScan bounds the read-back below. harness.login.started is
+// written by launchHarnessLoginRun immediately after CreateRun, so it is among
+// the FIRST events a login run ever has and QueryAuditEvents returns a run's
+// events chronologically (store.QueryAuditEventsPage) — a small window always
+// contains it. It is a bound on a hostile/wedged read, not a sizing.
+const maxLoginStartAuditScan = 100
+
+// loginRunSSOStartURL reads back the operator-declared AWS access-portal URL
+// THIS login run was launched with, from the run's own harness.login.started
+// audit event (launchHarnessLoginRun above, ActorSystem/"wardynd" — server-set
+// at launch from the operator's request, never sandbox input). The audit log is
+// the system of record (Invariant 6), and the same read-back-your-own-run's-
+// trail shape already serves execSucceeded (site_config_probe.go).
+//
+// This exists so handleUploadSSOToken can bind WHAT a login sandbox uploads to
+// WHAT the operator asked for, without a new run column or a new trust source.
+// A missing/blank value is NOT an error here: the caller compares it to the
+// uploaded value, so "no operator declaration on record" fails the comparison
+// and the upload is refused — fail-closed by construction.
+func (s *Server) loginRunSSOStartURL(ctx context.Context, runID uuid.UUID) (string, error) {
+	if s.cfg.Store == nil {
+		return "", fmt.Errorf("no store configured")
+	}
+	events, err := s.cfg.Store.QueryAuditEvents(ctx, runID, maxLoginStartAuditScan)
+	if err != nil {
+		return "", fmt.Errorf("read login run audit trail: %w", err)
+	}
+	for _, ev := range events {
+		if ev.Action != "harness.login.started" || ev.Outcome != "success" {
+			continue
+		}
+		var data struct {
+			SSOStartURL string `json:"sso_start_url"`
+		}
+		if uerr := json.Unmarshal(ev.Data, &data); uerr != nil {
+			continue
+		}
+		return data.SSOStartURL, nil
+	}
+	return "", nil
+}
+
 // ── HTTP: setup/harness-* (humanOrAdmin group) ───────────────────────────────
 
 type harnessLoginRequest struct {

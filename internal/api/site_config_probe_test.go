@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -193,6 +194,13 @@ func TestClassifyRedirectProbe_TimedOut(t *testing.T) {
 	}
 	if !strings.Contains(got.Detail, testControlPlaneURL) {
 		t.Errorf("detail = %q, want it to name the control plane URL to check", got.Detail)
+	}
+	// Both endpoints word this state with the SAME timedOutDetail, so the unit
+	// is pinned from both: %d on a time.Duration renders nanoseconds ("within
+	// 90000000000s", ~2853 years) and go vet accepts it, so the wrong unit
+	// reaches the operator's screen through whichever endpoint is unpinned.
+	if want := fmt.Sprintf("within %ds", int(siteConfigProbeWaitTimeout.Seconds())); !strings.Contains(got.Detail, want) {
+		t.Errorf("detail = %q, want it to name the real budget %q", got.Detail, want)
 	}
 }
 
@@ -845,6 +853,13 @@ func TestClassifyProxyProbe_TimedOut(t *testing.T) {
 	}
 	if !strings.Contains(got.Detail, "never reported completion") {
 		t.Errorf("detail = %q, want it to say the run never reported completion", got.Detail)
+	}
+	// The BUDGET, not just the sentence: %d on a time.Duration renders
+	// nanoseconds ("within 90000000000s", ~2853 years) and go vet accepts it,
+	// so a substring match on the wording alone let the wrong unit ship to the
+	// operator's screen (the console prints this detail verbatim).
+	if want := fmt.Sprintf("within %ds", int(siteConfigProbeWaitTimeout.Seconds())); !strings.Contains(got.Detail, want) {
+		t.Errorf("detail = %q, want it to name the real budget %q", got.Detail, want)
 	}
 	if !strings.Contains(got.Detail, "waiting: CreateContainerConfigError") {
 		t.Errorf("detail = %q, want it to name the observed agent status", got.Detail)

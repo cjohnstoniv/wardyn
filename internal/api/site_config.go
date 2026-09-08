@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/ipguard"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -167,6 +168,16 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 		if _, ok := normalizedHTTPProxyURL(cfg.UpstreamProxyURL); !ok {
 			return fmt.Errorf("upstream_proxy_url: must be http:// — https is not supported (the hop to the corp proxy is a plaintext CONNECT that cannot be TLS-wrapped)")
 		}
+		// And the PORT, by the sidecar's OWN loader (proxy.ValidUpstreamProxyURL),
+		// exactly as upstream_proxy_no_proxy delegates to proxy.ValidNoProxyEntry
+		// (site_config_noproxy.go) — the gate above checks the scheme and
+		// hostrules.HostOf discards the port entirely, so ":0"/":99999" saved with
+		// 200 OK and then failed the sidecar's applyDefaultsAndValidate at
+		// container start, os.Exit(1)ing the egress proxy of every dispatched run.
+		// One matcher, at the trust boundary, so the two can never drift again.
+		if err := proxy.ValidUpstreamProxyURL(cfg.UpstreamProxyURL); err != nil {
+			return fmt.Errorf("upstream_proxy_url: %w (the proxy sidecar loads this URL itself and refuses to start on it)", err)
+		}
 	}
 	for i, red := range cfg.EgressRedirects {
 		if !validSiteURLOrHost(red.From) {
@@ -186,6 +197,21 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 			// allow + optional token injection) — no config file ever reads
 			// it, so a bare "host[:port][/path]" is fine.
 			return fmt.Errorf("egress_redirects[%d]: invalid to %q", i, red.To)
+		}
+		// The PORT of both endpoints, which NOTHING above examines:
+		// validSiteURLOrHost bottoms out in hostrules.HostOf, and HostOf discards
+		// everything from the first ':' onward. An unusable port therefore saved
+		// with 200 OK and was then read differently by every downstream parser —
+		// redirectPort coerced ":0"/":99999"/a query-bearing authority to 443
+		// (mis-scoping the MITM/token-injection set and making the redirect probe
+		// dial a port the operator never configured), while url.Parse refused
+		// ":-1" outright and dropped the probe's --connect-to swap. One decision,
+		// at the write, so no two readers of the stored string can disagree.
+		for _, ep := range []struct{ field, raw string }{{"from", red.From}, {"to", red.To}} {
+			if _, _, ok := redirectEndpointPort(ep.raw); !ok {
+				return fmt.Errorf("egress_redirects[%d]: invalid port in %s %q — a port must be a decimal 1-65535, "+
+					"and must not be followed by a query or fragment", i, ep.field, ep.raw)
+			}
 		}
 		if red.Ecosystem != "" && !validArtifactEcosystems[red.Ecosystem] {
 			return fmt.Errorf("egress_redirects[%d]: unknown ecosystem %q", i, red.Ecosystem)
@@ -407,6 +433,12 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 // integration — this is a whole-document replace, and a client with no
 // knowledge of the field would naturally omit it.
 //
+// onboarding_completed_at is server-owned in the same way, but is IGNORED
+// rather than rejected: the stored mark is carried forward and a submitted one
+// is reported back as onboarding_completed_at_ignored (see the comment at the
+// carry-forward). GET emits that key, so refusing it broke the very round-trip
+// above — and refusing it can protect nothing the carry-forward does not.
+//
 // A legacy body's artifact_overrides is folded into egress_redirects
 // (foldLegacyArtifactOverrides) before validation, so a document saved before
 // EgressRedirects existed keeps applying rather than 400ing or silently
@@ -439,14 +471,6 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "integrations are managed through their own endpoints, not PUT /site-config")
 		return
 	}
-	// Same reasoning as Integrations above: onboarding state is server-owned and
-	// is carried forward from the stored document below. Rejected rather than
-	// ignored so a caller trying to set it learns why, instead of watching it
-	// silently not take.
-	if cfg.OnboardingCompletedAt != nil {
-		writeError(w, http.StatusBadRequest, "onboarding_completed_at is managed by the setup flow, not PUT /site-config")
-		return
-	}
 	if err := validateSiteConfig(cfg); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
 		return
@@ -470,6 +494,28 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 			"If-Match does not match the current site config — GET /site-config again and retry")
 		return
 	}
+	// Same reasoning as Integrations above: onboarding state is server-owned and
+	// is carried forward from the stored document below — so a submitted value is
+	// IGNORED, never refused. GET emits this key (it is a plain field of the same
+	// types.SiteConfig this handler persists), so every honest client echoes it
+	// back: `wardyn site-config get > f` / `wardyn site-config apply f`, the
+	// MDM-delivered /etc/wardyn/site-config.json that deploy/desktop re-applies on
+	// EVERY boot, and every console save that spreads the GET document. Rejecting
+	// the key outright 400ed all three; rejecting only a value that names a
+	// DIFFERENT instant than the stored one still 400ed the two recovery flows
+	// this handler exists to serve — the MDM file, once that laptop finishes its
+	// own funnel and holds a mark of its own, and capture / `make reset` /
+	// re-onboard / apply, where the captured baseline names the install's PREVIOUS
+	// mark. Neither refusal protected anything: the carry-forward below overwrites
+	// the submitted value unconditionally, so a body can never SET, CLEAR or MOVE
+	// the server's mark whatever it says. What the caller gets instead of a 400 is
+	// a true report — onboarding_completed_at_ignored in the response, beside
+	// dangling_secret_refs, which `wardyn site-config apply` prints as a warning
+	// the way it prints the integrations one, so the drop is never silent.
+	// Computed HERE, against the SAME read the carry-forward below uses, so it
+	// cannot race another writer (SEAM-1).
+	ignoredOnboardingMark := cfg.OnboardingCompletedAt != nil &&
+		(existing.OnboardingCompletedAt == nil || !cfg.OnboardingCompletedAt.Equal(*existing.OnboardingCompletedAt))
 	cfg.Integrations = existing.Integrations
 	// Carry forward, or a round-trip PUT by any client erases the install's
 	// onboarding state — the exact footgun already solved once for Integrations.
@@ -495,18 +541,29 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// reference a secret that was never restored — never rejected (dangling is
 	// a valid mid-recovery state), always reported.
 	writeJSON(w, http.StatusOK, siteConfigPutResponse{
-		SiteConfig:         saved,
-		DanglingSecretRefs: danglingSiteConfigSecretRefs(saved, s.presentSecretNames(r.Context())),
+		SiteConfig:                   saved,
+		DanglingSecretRefs:           danglingSiteConfigSecretRefs(saved, s.presentSecretNames(r.Context())),
+		OnboardingCompletedAtIgnored: ignoredOnboardingMark,
 	})
 }
 
 // siteConfigPutResponse is PUT /site-config's response body: the persisted
-// document plus DanglingSecretRefs (see danglingSiteConfigSecretRefs). GET
+// document plus the write's advisory signals — DanglingSecretRefs (see
+// danglingSiteConfigSecretRefs) and OnboardingCompletedAtIgnored. GET
 // /site-config deliberately returns the bare types.SiteConfig, not this type —
-// DanglingSecretRefs is a freshly-computed, PUT-time-only signal, never
-// persisted, so it must never round-trip through a `site-config get` capture
-// back into a later `site-config apply` body.
+// both signals are freshly-computed, PUT-time-only facts, never persisted, so
+// neither must ever round-trip through a `site-config get` capture back into a
+// later `site-config apply` body.
 type siteConfigPutResponse struct {
 	types.SiteConfig
 	DanglingSecretRefs []string `json:"dangling_secret_refs,omitempty"`
+	// OnboardingCompletedAtIgnored reports that the request body named an
+	// onboarding_completed_at the server did not keep — a different instant
+	// than the stored mark, or any mark at all against a store that holds
+	// none. The write still succeeded: the field is server-owned and always
+	// carried forward, so this is a REPORT of a dropped value, never a
+	// refusal (see handlePutSiteConfig). It is what the capture/reset/apply
+	// and MDM every-boot flows see instead of the 400 that used to break
+	// them, and `wardyn site-config apply` prints it as a warning.
+	OnboardingCompletedAtIgnored bool `json:"onboarding_completed_at_ignored,omitempty"`
 }

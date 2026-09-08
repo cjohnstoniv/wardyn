@@ -36,6 +36,11 @@ type gitBrokerUpstream struct {
 	gitProto  string
 	gitBody   []byte // body the forge received (proves byte-for-byte forwarding)
 	gitHits   int
+	// gitHeaders is the FULL header set the forge saw. gitAuth alone could not
+	// see F104: the lane stripped Authorization and forwarded every other
+	// sandbox-set credential header (Private-Token, X-Api-Key, …) beside the
+	// brokered Basic auth.
+	gitHeaders http.Header
 }
 
 // newBrokerUpstream builds that server with mintJSON as the mint response body.
@@ -59,6 +64,7 @@ func newBrokerUpstream(t *testing.T, mintJSON string) *gitBrokerUpstream {
 		u.gitPath = r.URL.Path
 		u.gitQuery = r.URL.RawQuery
 		u.gitProto = r.Header.Get("Git-Protocol")
+		u.gitHeaders = r.Header.Clone()
 		u.gitBody, _ = io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
 		_, _ = io.WriteString(w, "git-pack-data")
@@ -67,11 +73,21 @@ func newBrokerUpstream(t *testing.T, mintJSON string) *gitBrokerUpstream {
 	return u
 }
 
+// newGitBrokerUpstream mints the PRODUCTION github_token shape — no `username`
+// key at all.
+//
+// internal/broker/broker_mint_kinds.go's mintGitHubToken leaves Minted.Username
+// empty for this kind (internal/broker/broker.go: "Empty for github_token"; the
+// caller authenticates as x-access-token), and internal/api serialises it as an
+// empty string. The fixture used to inject `"username":"x-access-token"`, a
+// shape the broker never emits — which made the mask pin green while the
+// rendering actually on the wire, base64("x-access-token:"+tok), was
+// unregistered (F120): brokeredToken registered base64(":"+tok) instead.
 func newGitBrokerUpstream(t *testing.T, token string) *gitBrokerUpstream {
 	t.Helper()
 	exp := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
 	return newBrokerUpstream(t,
-		`{"kind":"github_token","token":"`+token+`","username":"x-access-token","jti":"j","expires_at":"`+exp+`"}`)
+		`{"kind":"github_token","token":"`+token+`","jti":"j","expires_at":"`+exp+`"}`)
 }
 
 // newGitBrokerProxyWithSpec is newGitBrokerProxy with the compiled policy

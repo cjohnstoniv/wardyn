@@ -599,7 +599,12 @@ rows the rate limiter dropped — the trail is capped at roughly one row per
 second, so past a small burst it stops describing the volume it is bounding and
 **a credential-stuffing run reads quieter than a handful of typos**. Alert on
 this series, not on the audit row count: flat rows with this climbing is the
-attack. `wardyn_auth_store_errors_total` counts requests an authentication lane
+attack. Both the public lane and the INTERNAL lane (the sandbox's run token and
+the host sensor's token) feed that one limiter and that one counter, so a
+process inside a sandbox brute-forcing run tokens is visible on this series
+without being able to flood the append-only log; the `auth.failed` row's actor
+(`wardyn/adminAuth` vs `wardyn/internalAuth` / `wardyn/internalAuthGroundtruth`
+/ `wardyn/internalApproval`) is what tells the two incidents apart. `wardyn_auth_store_errors_total` counts requests an authentication lane
 could not decide because its store read failed and answered `500` — a state with
 no audit row (there is no authenticated principal to attribute one to) and no
 client-visible cause.
@@ -871,9 +876,10 @@ migration `0050`)** are the second and third owned nouns after runs.
 - **A run resolves its owner's row, falling back to the operator's** — never
   another member's, even when an inline policy names it by hand. The upstream
   (corporate) proxy secret always stays resolved from the operator namespace:
-  under a configured upstream the sidecar skips the SSRF guard for every host it
-  proxies (all of them, minus `upstream_proxy_no_proxy`), so a
-  member-substitutable value there would be a guard bypass, not a convenience.
+  under a configured upstream the sidecar hands the corp proxy a HOSTNAME rather
+  than a pinned address for every host it proxies (all of them, minus
+  `upstream_proxy_no_proxy`), so a member-substitutable value there would put a
+  member in control of which proxy resolves and dials every one of them.
 - **`?owner=<principal>` is admin-only** on `PUT`/`DELETE`/`GET /secrets` (an
   admin's cross-write lands in the NAMED member's namespace, never the
   operator's), refused with a constant 403 for anyone else. The value names a
@@ -2280,6 +2286,21 @@ warning naming every such dangling ref, and the setup checklist's "Site config"
 row grades `warn` (never the plain `info` of a fully-live config) while one
 remains.
 
+A captured document carries `onboarding_completed_at` whenever the install it
+came from had finished the Getting Started funnel, and `apply` forwards it
+verbatim — deliberately: no client strips it, so the same file works through
+`curl` and as the MDM-delivered `/etc/wardyn/site-config.json`. The server owns
+that mark, so it is ignored on the write and the STORED one (none on a fresh
+install; this install's own once its operator has finished the funnel) is
+carried forward: applying a captured baseline restores corporate network config,
+never the funnel's completion state. `PUT` never refuses a body over this field
+— it cannot be set, cleared or moved through that endpoint whatever it says, so
+a refusal would only have broken the recovery flows (`internal/api/site_config.go`,
+`handlePutSiteConfig`). When the file's copy is dropped — a captured baseline
+applied after re-onboarding, or the MDM file re-applied to a laptop that has
+since finished its own funnel — the response says so
+(`onboarding_completed_at_ignored`) and `apply` prints it as a warning.
+
 ### Upstream proxy: plain URL vs. secret
 
 - `upstream_proxy_url` — a plain URL (`http://proxy.corp.internal:8080`), stored
@@ -2301,6 +2322,17 @@ wardyn secret set upstream-proxy-url          # paste the full, credentialed URL
 #   "upstream_proxy_secret_ref": "upstream-proxy-url"
 ```
 
+Both paths are checked by the **proxy sidecar's own loader**
+(`proxy.ValidUpstreamProxyURL` over `parseUpstreamProxy`), not by a second copy
+of the rule: an `http://` scheme, a host, and a port in 1-65535. The plain
+`upstream_proxy_url` is checked at the write — a port the sidecar refuses used
+to save with `200 OK` and then `os.Exit(1)` the egress sidecar of every
+dispatched run at container start. A URL held in a secret is checked at
+DISPATCH instead, because no write-time validator can see inside the secret: it
+is dropped there with an audited reason (`unloadable-upstream-url`, a
+`run.upstream_proxy.resolve` failure) and the run falls back to direct egress
+rather than being delivered.
+
 If both fields are set, `upstream_proxy_url` wins — harmless mid-migration
 from one to the other, but don't rely on it; clear whichever you're not using.
 
@@ -2315,10 +2347,15 @@ the plain `http://` proxy URL in the secret even when it embeds a credential.
 
 ### Upstream proxy: the bypass list (`upstream_proxy_no_proxy`)
 
-With an upstream configured, **every** forward dial is `CONNECT`ed through it —
-and a corporate forward proxy will not `CONNECT` to an internal address. So on an
-estate whose endpoints are private (a VPC endpoint / PrivateLink, an in-cluster
-service, a corp mirror on RFC 6598) every one of them times out.
+With an upstream configured, **every** forward dial is `CONNECT`ed through it,
+and the sidecar resolves the name for its own private/reserved-IP guard before it does.
+So on an estate whose endpoints are private (a VPC endpoint / PrivateLink, an
+in-cluster service, a corp mirror on RFC 6598) a name that resolves here is refused
+`builtin:private-ip` before the corp proxy is asked, and one this proxy cannot
+resolve reaches a corporate forward proxy that will not `CONNECT` to an internal
+address and times out. Neither is reachable: `internal_hosts` lifts the guard,
+`upstream_proxy_no_proxy` is the bypass that moves the dial to this sidecar, and
+the estate needs both.
 `upstream_proxy_no_proxy` is the bypass — the operator-hop equivalent of the
 `NO_PROXY` the sandbox already honours internally, spelled the same way:
 
@@ -2336,20 +2373,29 @@ Wildcards are refused at write time: "bypass everything" is spelled by clearing
 CIDR nor a host is a 400 too, because the proxy drops what it cannot compile and
 a typo would otherwise mean "still proxied" — silently, at run time.
 
-**It changes which hop dials, and nothing else.** A bypassed dial falls straight
-through to the same unconditional private/reserved-IP guard an unproxied dial
-faces, and still needs its `allowed_domains` entry. So on a private-endpoint
-estate the bypass and `internal_hosts` are one configuration in two fields, and
-**neither works alone**:
+**It changes which hop dials; the guard binds both columns.** A bypassed dial
+falls straight through to the same unconditional private/reserved-IP guard an
+unproxied dial faces, and a dial that goes THROUGH the corp proxy is vetted too:
+the sidecar resolves the name for the guard before it hands the hostname over.
+Either way the destination still needs its `allowed_domains` entry, and
+`internal_hosts` is the only field that lifts the guard — the bypass never
+does. The bypass is the other half of the same configuration: it decides which
+hop takes the dial, and on a private-endpoint estate the corp proxy cannot make
+it, so the two fields are set together:
 
 | | Without `internal_hosts` | With `internal_hosts` |
 |---|---|---|
-| **No bypass** | corp proxy takes the dial, cannot reach an internal address → timeout | same; the guard never even runs |
-| **Bypassed** | dialled directly, then refused `builtin:private-ip` | **reaches the endpoint** (`rule_source: site-config:internal-host`) |
+| **No bypass** | the guard resolves the name and refuses `builtin:private-ip` before the corp proxy is asked (a name this proxy cannot resolve at all still goes to the corp proxy) | the guard lifts and the HOSTNAME is handed to the corp proxy (`rule_source: site-config:internal-host`); whether that proxy will `CONNECT` to a private address is the estate's own routing — on the private-endpoint estates this section is written for it will not, which is why the bypass exists |
+| **Bypassed** | dialled directly, then refused `builtin:private-ip` | **reaches the endpoint** dialled directly (`rule_source: site-config:internal-host`) |
 
-The bottom-left cell is the safety property, not a rough edge: bypassing a host
-never makes a private address reachable. A refusal there names its own cause in
-the `X-Wardyn-Egress-Detail` response header and points at `internal_hosts`.
+The left column is the safety property, not a rough edge: neither bypassing a
+host nor proxying it lifts the guard — only `internal_hosts` does. A refusal
+there names its own cause in the `X-Wardyn-Egress-Detail` response header and
+points at `internal_hosts`. The right column is not a promise of reachability:
+lifting the guard is necessary, never sufficient, because the dial still has to
+leave whichever hop takes it. That is why the bottom-right cell — bypass AND
+lift — is the working private-endpoint configuration, and why the recipes below
+set both fields.
 
 ### Corporate TLS-inspection root
 
@@ -2393,7 +2439,12 @@ boot-time operator posture, never a live API write, never agent-reachable —
 token_integration_ref, ecosystem}` entries. Each substitutes a public/upstream URL
 or host for a corporate-internal one in every run's egress, with an optional token
 injected proxy-side as a Bearer credential for `to`'s host (the sandbox never
-holds it). It replaced the old `artifact_overrides` map (one entry per package
+holds it). The egress entry a redirect adds is scoped to `to`'s **port** — the
+one `to` spells, else the default of the scheme `to` spells (`80` for an explicit
+`http://`, `443` otherwise) — the same port its TLS termination and token
+injection use — so a `to` on a literal IP is never trusted on some other port of
+that address; reach
+the mirror on a different port by naming that port in `to`. It replaced the old `artifact_overrides` map (one entry per package
 ecosystem) because a corporate estate redirects container registries and internal
 appliances too — the shape generalized to "a list of From → To pairs over any
 URL, host, or IP".
@@ -2430,7 +2481,21 @@ the run's egress allowlist, token injected proxy-side, but **no config file is
 written** — there is no `.npmrc` equivalent for an arbitrary host. That is a real
 cost: the workspace still needs telling to pull from the mirror itself (`docker
 login` against the internal registry, an appliance client's own config), or a run
-reaches an allowed, credentialed host that nothing in the sandbox asks for. The UI
+reaches an allowed, credentialed host that nothing in the sandbox asks for.
+
+**A network-only row also has a third effect the two columns above don't
+show: it denies its own `from` host outright, in EVERY run, not only a run
+this redirect otherwise covers.** `appendNetworkRedirectDenials`
+(`internal/api/workspace_egress.go`) appends every network-only row's `from`
+to `policy.DeniedDomains` unconditionally on every dispatch
+(`internal/api/runs_dispatch.go`), unlike the substitution and the token plan,
+both of which are scoped to a run that actually reaches one of the redirect's
+public hosts. Deny beats `allow_all_egress`, so this closes the public route
+even for a run the redirect's substitution never touches — the intended
+GAP-EGRESS-4 protection against an allow-all Record session reaching the
+public host the redirect was configured to steer away from — but it also means
+a redirect an operator scoped narrowly still costs every OTHER run that public
+host, with neither the `to` host nor the token to show for it. The UI
 labels these rows `network only` so the gap stays visible.
 
 **A `to` that is a literal IP** — the normal shape of a private endpoint — is
@@ -2439,14 +2504,27 @@ proxy vets (the opaque tunnel, the TLS-terminated token-injection path, and the
 git/PAT brokers alike), and shows in the audit trail as `rule_source:
 site-config:egress-redirect` rather than a generic policy allow. The trust comes
 from the exact allowlist entry the substitution writes, so it is scoped to those
-runs and to that address; a run the redirect does not cover is refused, and a
-`denied_domains` entry still wins. `test-redirect` understands the shape too
+runs, to that address, and to **one port**: `substituteArtifactEgress` writes
+`net.JoinHostPort(hostrules.HostOf(r.To), redirectPort(r.To))`, a
+PORT-QUALIFIED entry, and `Policy.AllowsLiteralIP` matches it on that port only
+— the one `to` spells, else the default of the scheme `to` spells (`80` for an
+explicit `http://`, `443` otherwise), which is the SAME port the redirect's
+TLS-MITM/token-injection half is scoped to. A bare address would have matched
+EVERY port instead, so a `to` of `https://10.40.2.11:8443/` used to trust
+`10.40.2.11:22` and `:5432` as well — a mirror reached on some other port needs
+that port in the `to`, exactly as the token injection has always required. A run
+the redirect does not cover is refused, and a `denied_domains` entry still wins. `test-redirect`
+understands the shape too
 (`redirectProbeTo`): it dials the `to` address while presenting the `from`
 hostname for TLS, because a private endpoint's certificate names the public host
 — probing the address directly failed verification and reported a correct
 configuration as broken. It speaks the protocol the stored `to` names, never the
 one `from` happens to be spelled with: only `to` knows whether the mirror serves
-TLS or cleartext on that port.
+TLS or cleartext on that port — and it dials the port `to` names, which is the
+one `to` spells, else the default of the scheme `to` spells (`80` for an
+explicit `http://`, `443` otherwise). A `to` whose port is not a decimal
+1-65535 is refused at `PUT /site-config` rather than silently read as `443` by
+one reader and rejected outright by another.
 
 ### Internal hosts
 
@@ -2739,10 +2817,10 @@ Both endpoints may also carry `warning` (below).
 | `state` | Means |
 |---|---|
 | 🟢 `reached` | The path works — proxy or mirror reachable, and for a redirect, the public host is correctly *blocked* when dialed directly. |
-| ⛔ `blocked` | Could not reach the proxy or the mirror. `detail` names the real cause — DNS failure, connection refused, TLS failure, timeout, or curl's own exit code — never a generic "failed". |
-| ⛔ `bypass` | **The one that looks fine but isn't.** The mirror answers, but the public host it's supposed to replace is *also* still reachable, directly, from a sandbox. The redirect is configured but not enforced: a run can silently pull from the internet instead of the mirror, and every other signal — the row is filled in, the mirror answers — looks exactly like a working redirect. "Reachable" means the public host **answered** — any HTTP status, a 403 included, or a TLS-level reply — not that the fetch succeeded: a host that answers `403` is one the confinement class did not block. `test-redirect` only. |
+| ⛔ `blocked` | Could not reach the proxy or the mirror. `detail` names the real cause — DNS failure, connection refused, TLS failure, timeout, or curl's own exit code — never a generic "failed". It also carries the one case where the mirror answered but the direct dial of the public host produced no connection fact at all to read (a `from` curl cannot dial — a space, a path, an unsupported scheme): `detail` then says the redirect was NOT tested, and the setup gate stays held, because an untested redirect must never render as `reached`. |
+| ⛔ `bypass` | **The one that looks fine but isn't.** The mirror answers, but the public host it's supposed to replace is *also* still reachable, directly, from a sandbox. The redirect is configured but not enforced: a run can silently pull from the internet instead of the mirror, and every other signal — the row is filled in, the mirror answers — looks exactly like a working redirect. "Reachable" means the public host **answered** — any HTTP status, a 403 included, or a TLS-level reply — not that the fetch succeeded: a host that answers `403` is one the confinement class did not block, and so is one that merely **accepted** the TCP connection and then stalled (the probe reads curl's own `num_connects`, because a timeout alone cannot tell an accepted-then-tarpitted dial from one that never left the sandbox). `test-redirect` only. |
 | 🟡 `no_runner` | No runner is configured; there's nothing to launch a probe with. Not an error, and not a guess. |
-| 🟡 `not_run` | A runner IS configured, but the throwaway sandbox never got to running the probe — an image pull failure, or a confinement class this host can't enforce. Distinct from `blocked`: `blocked` means the probe DID run and observed a real network fact; `not_run` means nothing was learned either way. Setup's gate treats it the same as `no_runner` (unlocks Next with a neutral note, never a click-past). |
+| 🟡 `not_run` | A runner IS configured, but the throwaway sandbox never got to running the probe — an image pull failure, or a confinement class this host can't enforce. Distinct from `blocked`: `blocked` means the probe DID run — usually observing a real network fact, and otherwise saying in `detail` that nothing was learned; `not_run` means nothing was learned either way. Setup's gate treats it the same as `no_runner` (unlocks Next with a neutral note, never a click-past). |
 | 🟡 `timed_out` | The probe sandbox started and the task launched, but the run never reported completion within the wait budget (90s) — provably **not** a network verdict, unlike `blocked`. `detail` names the sandbox agent's own observed status at the deadline and `WARDYN_CONTROL_PLANE_URL` to check. Usual cause: the run's recording upload hanging against an unreachable control plane — see "Recording upload path on Kubernetes" below. |
 
 The recorder's upload bound ships inside the agent images: an image pinned through

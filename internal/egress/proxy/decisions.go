@@ -124,7 +124,16 @@ func (s *decisionSink) run() {
 			// Piggyback: surface accrued drops on the next successful flush so a
 			// drop is visible in the audit trail long before shutdown.
 			s.reportDropped(&reported)
-			_ = s.post(log) // individual decision: best-effort, must never block egress
+			// Individual decision: best-effort, must never block egress — but a
+			// decision the control plane REFUSED is a decision that was not
+			// individually recorded, which is exactly what s.dropped counts and
+			// reportDropped summarizes (F075 fix-up). Discarding the error made
+			// an over-large or rejected decision vanish from the audit trail
+			// with nothing anywhere saying so: internal/api's MaxBytesReader
+			// 413s a body over maxJSONBody, and that 413 used to be silent.
+			if err := s.post(log); err != nil {
+				s.dropped.Add(1)
+			}
 		case <-ticker.C:
 			// Idle path: drops accrued but no traffic to piggyback on.
 			s.reportDropped(&reported)
@@ -221,7 +230,18 @@ func maskDecisionBytes(b []byte) []byte {
 	if len(snap) == 0 {
 		return b
 	}
-	return secretmask.NewMasker(snap).Mask(b)
+	// BOTH decision-log callers hand this JSON, not plain text: mirror() masks
+	// the marshalled stdout line and post() masks the marshalled body of the
+	// /internal/decisions POST. json.Marshal escapes \n, \" and \\ inside any
+	// string and HTML-escapes & < > to \u0026 \u003c \u003e by default, so a
+	// registered secret carrying any of those bytes is NOT byte-identical inside
+	// the body and a raw-value masker cannot match it — the plain-ASCII case
+	// masking correctly is what makes the gap invisible. JSONEscapedVariants is
+	// the one home for that expansion (D31), already used by the two sibling JSON
+	// sinks: internal/api/recording.go (asciicast upload) and cmd/wardynd's audit
+	// maskingRecorder. It COPIES snap first, so the raw entries survive and
+	// httpError's plain-text path through this helper is unaffected.
+	return secretmask.NewMasker(secretmask.JSONEscapedVariants(snap)).Mask(b)
 }
 
 // droppedCount reports how many decision logs were dropped on backpressure.

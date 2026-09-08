@@ -526,8 +526,12 @@ func TestInternalMintApprovalPending(t *testing.T) {
 	if resp["approval_id"] != apID.String() {
 		t.Errorf("approval_id = %v, want %s", resp["approval_id"], apID)
 	}
-	if resp["code"] != mintConflictPending {
-		t.Errorf("code = %v, want %q (W19-W19a-2)", resp["code"], mintConflictPending)
+	// The LITERAL, not mintConflictPending: comparing the decoded JSON against
+	// the very constant the handler wrote is self-referential — all four wire
+	// values could be renamed with the suite green (F134). A wire contract is
+	// pinned by its bytes.
+	if resp["code"] != "pending" {
+		t.Errorf("code = %v, want %q (W19-W19a-2)", resp["code"], "pending")
 	}
 }
 
@@ -542,8 +546,8 @@ func TestInternalMintScopeMismatchFailsClosed(t *testing.T) {
 	}
 	var resp map[string]any
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp["code"] != mintConflictScopeMismatch {
-		t.Errorf("code = %v, want %q (W19-W19a-2)", resp["code"], mintConflictScopeMismatch)
+	if resp["code"] != "scope_mismatch" { // literal, not the constant — see F134
+		t.Errorf("code = %v, want %q (W19-W19a-2)", resp["code"], "scope_mismatch")
 	}
 }
 
@@ -565,8 +569,8 @@ func TestInternalMintAlreadyMintedCarriesDiscriminatingCode(t *testing.T) {
 	}
 	var resp map[string]any
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp["code"] != mintConflictAlreadyMinted {
-		t.Errorf("code = %v, want %q — the git helper cannot otherwise tell this apart from a pending/denied 409", resp["code"], mintConflictAlreadyMinted)
+	if resp["code"] != "already_minted" { // literal, not the constant — see F134
+		t.Errorf("code = %v, want %q — the git helper cannot otherwise tell this apart from a pending/denied 409", resp["code"], "already_minted")
 	}
 	if _, hasApprovalID := resp["approval_id"]; hasApprovalID {
 		t.Errorf("already-minted response carries approval_id = %v, want none (this is not an approval-flow condition)", resp["approval_id"])

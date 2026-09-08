@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -41,6 +42,12 @@ const (
 	routeGitBroker = "/wardyn/gh/"
 	ruleSourceGit  = "brokered:git"
 	githubHost     = "github.com"
+	// gitBrokerUsername is the git username a GitHub App INSTALLATION token
+	// authenticates as — fixed by GitHub, not configurable. Named because it is
+	// half of the credential's wire rendering (SetBasicAuth sends
+	// base64(gitBrokerUsername + ":" + token)), so the mask registration and the
+	// outbound header must derive it from the same place (F155).
+	gitBrokerUsername = "x-access-token"
 	// ruleSourceGitRef marks a decision-log row denied by push branch-namespace
 	// confinement (as opposed to the per-repo allowlist), so audit says WHICH gate
 	// closed. The offending ref goes to slog, never to the decision log (which has
@@ -76,6 +83,47 @@ const (
 	defaultGitApprovalTimeout = 120 * time.Second
 )
 
+// brokerRefreshMargin is how close to a STATED expiry brokeredToken re-mints.
+//
+// It is deliberately NOT injectRefreshMargin (inject.go, 5m). That margin is
+// sized for a rotating injected credential the proxy re-resolves in the
+// background; this cache exists to serve ONE clone — two sub-requests seconds
+// apart — from one mint, because an approval-gated grant is single-use and a
+// second mint 409s ErrAlreadyMinted. A git_pat or api_key grant states a REAL
+// expiry (internal/broker/broker_mint_kinds.go mints with ttlFor, honouring an
+// operator ttl_seconds), so any grant authored with ttl_seconds <= 300 was born
+// INSIDE a 5-minute margin: the cached token was treated as stale on the very
+// next sub-request and the clone re-minted and failed (F120). At the
+// sub-request scale the margin only has to cover the round trip.
+const brokerRefreshMargin = 30 * time.Second
+
+// gitApprovalBudget is the operator's ceiling for ONE brokered-credential
+// acquisition: the first mint call, the approval wait, and every poll inside
+// it. WARDYN_GIT_APPROVAL_TIMEOUT names it; defaultGitApprovalTimeout is the
+// default.
+//
+// TRUST BOUNDARY (F070 sibling): before this the env var bounded only the
+// approval WAIT's timer, and nothing bounded the HTTP calls that timer
+// supervises — handleGitBroker/handlePATBroker pass r.Context() (server.go sets
+// ReadTimeout/WriteTimeout to 0) and forwardToControlPlane rides p.localClient,
+// which carried no Timeout at all (proxy.go). Against a control plane that
+// accepts a connection and then never answers, a clone blocked FOREVER even
+// with WARDYN_GIT_APPROVAL_TIMEOUT=1s. Derived once at the top of
+// brokeredToken and passed down — exactly as approvalClient.ResolveWait now
+// does for the egress_domain hold — so the documented timeout is a real bound.
+//
+// SAME RESIDUAL as ResolveWait's, stated rather than hidden: this ctx and the
+// timer inside waitForGitApproval share one budget, so the human's approval
+// window shrinks by however long the first mint round trip took.
+func gitApprovalBudget() time.Duration {
+	if v := os.Getenv(envGitApprovalTimeout); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return defaultGitApprovalTimeout
+}
+
 // gitApprovalPollInterval is how often mintGitToken re-polls a pending
 // mint-approval. A var so tests can shrink it.
 var gitApprovalPollInterval = 2 * time.Second
@@ -83,14 +131,20 @@ var gitApprovalPollInterval = 2 * time.Second
 // gitServices is the closed set of valid ?service= values / smart-HTTP verbs.
 var gitServices = map[string]bool{"git-upload-pack": true, "git-receive-pack": true}
 
-// gitTokEntry caches one grant's minted GitHub App installation token. token +
+// gitTokEntry caches one grant's minted broker credential. token + username +
 // expiresAt are guarded by reMu, which ALSO single-flights the mint so info/refs
 // and the following git-upload-pack don't stampede a double-mint — fatal for a
 // single-use (approval-gated) grant, whose second mint 409s (broker ErrAlreadyMinted).
+//
+// It backs BOTH broker lanes (see brokeredToken): the git_pat lane's credential
+// is single-use in exactly the same way, and username is what that lane needs
+// back from the mint (a github_token mint always authenticates as
+// x-access-token and its caller discards this field).
 type gitTokEntry struct {
 	reMu      sync.Mutex
 	token     string
-	expiresAt int64 // unix ms; 0 = unset
+	username  string
+	expiresAt int64 // unix ms; 0 = no expiry stated by the mint
 }
 
 // handleGitBroker serves /wardyn/gh/<org>/<repo>[.git]/<rest>. It is
@@ -213,8 +267,12 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	removeHopByHop(outReq.Header)
 	// Defensive: strip any sandbox-supplied credential before injecting ours, so a
 	// rogue in-sandbox client can't smuggle its own onto the outbound request.
-	outReq.Header.Del("Authorization")
-	outReq.SetBasicAuth("x-access-token", token) // GitHub App installation-token auth
+	// F104: stripSandboxCredentials is the one definition of that set (inject.go);
+	// the local Header.Del("Authorization") this replaces left every OTHER
+	// credential header the sandbox set — X-Api-Key, Cookie, X-Access-Token — on
+	// the request alongside the brokered installation token.
+	stripSandboxCredentials(outReq.Header)
+	outReq.SetBasicAuth(gitBrokerUsername, token) // GitHub App installation-token auth
 	outReq.Host = githubHost
 	outReq.Header.Del("Host")
 
@@ -264,10 +322,41 @@ func (p *Proxy) isBrokeredGitGrant(body []byte) bool {
 	return false
 }
 
-// gitToken returns a cached (or freshly minted) installation token for grantID,
-// re-minting only when unset or within injectRefreshMargin of expiry. reMu
-// single-flights per grant so concurrent git sub-requests don't double-mint.
+// gitToken returns a cached (or freshly minted) installation token for grantID.
+// The GitHub lane always authenticates as x-access-token, so it discards the
+// username brokeredToken carries for its git_pat sibling.
 func (p *Proxy) gitToken(ctx context.Context, grantID uuid.UUID) (string, error) {
+	// The wire username is the CONSTANT this lane authenticates as, never what
+	// the mint returned (a github_token mint returns none).
+	tok, _, err := p.brokeredToken(ctx, grantID, func(string) string { return gitBrokerUsername })
+	return tok, err
+}
+
+// brokeredToken returns a cached (or freshly minted) broker credential for
+// grantID, re-minting only when unset or within brokerRefreshMargin of a STATED
+// expiry. reMu single-flights per grant so concurrent git sub-requests don't
+// double-mint.
+//
+// BOTH broker lanes route through here. patToken used to re-implement the mint
+// with neither guard: it called the mint route on EVERY sub-request (one clone
+// is two — GET info/refs then POST git-upload-pack), so an approval-gated
+// git_pat grant, which is single-use, 409'd ErrAlreadyMinted on the second and
+// could not clone at all; and a 409 PENDING was returned as a hard error rather
+// than waited out. One credential lifecycle, one place, for both lanes.
+//
+// A mint that states NO expiry (expiresAt == 0 — an unparseable expiry lands
+// here too) is cached for the process rather than re-minted per request:
+// re-minting is precisely the fatal act for a single-use grant, and a
+// credential whose expiry the mint never stated cannot be re-validated by
+// minting it again. Every kind the control plane mints DOES state one
+// (internal/broker/broker_mint_kinds.go: ttlFor, clamped to 1h), so this is the
+// unparseable-response arm, not the normal one.
+//
+// wireUser maps the mint's username to the one the CALLING LANE will actually
+// put on the wire, so the mask registered below covers the rendering that
+// leaves the process (F120) — the GitHub lane always sends gitBrokerUsername,
+// while a github_token mint returns no username at all.
+func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser func(mintUsername string) string) (token, username string, err error) {
 	p.gitTokMu.Lock()
 	e, ok := p.gitTokens[grantID]
 	if !ok {
@@ -278,15 +367,21 @@ func (p *Proxy) gitToken(ctx context.Context, grantID uuid.UUID) (string, error)
 
 	e.reMu.Lock()
 	defer e.reMu.Unlock()
-	if e.token != "" && time.Now().Before(time.UnixMilli(e.expiresAt).Add(-injectRefreshMargin)) {
-		return e.token, nil
+	if e.token != "" && (e.expiresAt == 0 ||
+		time.Now().Before(time.UnixMilli(e.expiresAt).Add(-brokerRefreshMargin))) {
+		return e.token, e.username, nil
 	}
+	// One budget for the whole acquisition below — the first mint, the approval
+	// wait and every poll (F070 sibling; see gitApprovalBudget). Armed after the
+	// cache check so a cache hit costs nothing.
+	ctx, cancel := context.WithTimeout(ctx, gitApprovalBudget())
+	defer cancel()
 	// one token per grant for the run. Auto-mintable grants re-mint past
 	// TTL fine; approval-gated grants are single-use, so a run outliving the ~1h
 	// installation-token TTL fails here on re-mint — a pre-existing ceiling.
-	tok, expMs, err := p.mintGitToken(ctx, grantID)
+	tok, user, expMs, err := p.mintGitToken(ctx, grantID)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	// Register the installation token in the process-global mask registry, the
 	// same place injector values land (inject.go) and the same one httpError's
@@ -298,11 +393,25 @@ func (p *Proxy) gitToken(ctx context.Context, grantID uuid.UUID) (string, error)
 	// AddGlobal dedupes by value, so the cache's re-mints add at most one entry
 	// per rotation on a process that lives one run.
 	//
-	// HONEST RESIDUAL, same as inject.go's: verbatim bytes only — a base64/hex or
-	// model-narrated form of the token is not caught.
-	procRegistry.AddGlobal([]byte(tok))
-	e.token, e.expiresAt = tok, expMs
-	return tok, nil
+	// BOTH RENDERINGS (F155): the raw token AND the base64(username + ":" + tok)
+	// that SetBasicAuth puts on the wire. Registering only the raw token left the
+	// wire form — the one a transport error quoting the outbound request carries —
+	// unmasked; the mask is exact-bytes, so it protects exactly the renderings it
+	// was given. registerBasicAuthCredential (inject.go) is the one definition of
+	// that set.
+	//
+	// wireUser(user), NOT the mint's username (F120): the two lanes send
+	// different usernames and only the caller knows which. internal/broker
+	// leaves Username empty for a github_token (broker.go, "Empty for
+	// github_token") while handleGitBroker authenticates as the constant
+	// gitBrokerUsername — so registering base64(":"+tok) masked a rendering that
+	// never goes on the wire and left base64("x-access-token:"+tok), the one
+	// that does, in cleartext through httpError and the decision log.
+	// HONEST RESIDUAL, same as inject.go's: verbatim bytes of those renderings
+	// only — a hex or model-narrated form of the token is not caught.
+	registerBasicAuthCredential(wireUser(user), tok)
+	e.token, e.username, e.expiresAt = tok, user, expMs
+	return tok, user, nil
 }
 
 // mintGitToken calls the control-plane mint route server-side (run token injected
@@ -318,20 +427,20 @@ func (p *Proxy) gitToken(ctx context.Context, grantID uuid.UUID) (string, error)
 // with no caller able to retry — so it polls the SAME approval itself here
 // (the proxy already holds the run token) rather than 502ing the clone before
 // any human could possibly have approved it (W23-S1-1 / W19-W19a-1).
-func (p *Proxy) mintGitToken(ctx context.Context, grantID uuid.UUID) (string, int64, error) {
-	tok, _, expMs, status, body, err := p.callMintGit(ctx, grantID)
+func (p *Proxy) mintGitToken(ctx context.Context, grantID uuid.UUID) (token, username string, expMs int64, err error) {
+	tok, user, exp, status, body, err := p.callMintGit(ctx, grantID)
 	if err != nil {
-		return "", 0, err
+		return "", "", 0, err
 	}
 	if status == http.StatusOK {
-		return tok, expMs, nil
+		return tok, user, exp, nil
 	}
 	if status != http.StatusConflict {
-		return "", 0, fmt.Errorf("mint status %d: %s", status, strings.TrimSpace(string(body)))
+		return "", "", 0, fmt.Errorf("mint status %d: %s", status, strings.TrimSpace(string(body)))
 	}
 	approvalID := extractApprovalID(body)
 	if approvalID == nil {
-		return "", 0, fmt.Errorf("mint status 409 without approval_id")
+		return "", "", 0, fmt.Errorf("mint status 409 without approval_id")
 	}
 	return p.waitForGitApproval(ctx, grantID, *approvalID)
 }
@@ -384,13 +493,8 @@ func (p *Proxy) callMintGit(ctx context.Context, grantID uuid.UUID) (token, user
 // gitApprovalTimeout elapses, then re-mints exactly once on APPROVED. A
 // transient poll error is retried, not fatal — the same posture
 // approvalClient.poll takes for the egress_domain flow.
-func (p *Proxy) waitForGitApproval(ctx context.Context, grantID, approvalID uuid.UUID) (string, int64, error) {
-	timeout := defaultGitApprovalTimeout
-	if v := os.Getenv(envGitApprovalTimeout); v != "" {
-		if d, perr := time.ParseDuration(v); perr == nil && d > 0 {
-			timeout = d
-		}
-	}
+func (p *Proxy) waitForGitApproval(ctx context.Context, grantID, approvalID uuid.UUID) (token, username string, expMs int64, err error) {
+	timeout := gitApprovalBudget()
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 	ticker := time.NewTicker(gitApprovalPollInterval)
@@ -398,9 +502,17 @@ func (p *Proxy) waitForGitApproval(ctx context.Context, grantID, approvalID uuid
 	for {
 		select {
 		case <-ctx.Done():
-			return "", 0, ctx.Err()
+			// brokeredToken's budget can expire before this timer does — they
+			// share it (gitApprovalBudget) — so say what the deadline arm says
+			// rather than a bare "context deadline exceeded". A CANCELLED ctx is
+			// the sandbox hanging up, which is a different thing.
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return "", "", 0, fmt.Errorf("timed out after %s waiting for credential approval %s — "+
+					"approve it in the Wardyn UI and re-run", timeout, approvalID)
+			}
+			return "", "", 0, ctx.Err()
 		case <-deadline.C:
-			return "", 0, fmt.Errorf("timed out after %s waiting for credential approval %s — "+
+			return "", "", 0, fmt.Errorf("timed out after %s waiting for credential approval %s — "+
 				"approve it in the Wardyn UI and re-run", timeout, approvalID)
 		case <-ticker.C:
 		}
@@ -410,18 +522,18 @@ func (p *Proxy) waitForGitApproval(ctx context.Context, grantID, approvalID uuid
 		}
 		switch state {
 		case types.ApprovalApproved:
-			tok, _, expMs, status, body, err := p.callMintGit(ctx, grantID)
-			if err != nil {
-				return "", 0, err
+			tok, user, exp, status, body, mErr := p.callMintGit(ctx, grantID)
+			if mErr != nil {
+				return "", "", 0, mErr
 			}
 			if status != http.StatusOK {
-				return "", 0, fmt.Errorf("re-mint after approval status %d: %s", status, strings.TrimSpace(string(body)))
+				return "", "", 0, fmt.Errorf("re-mint after approval status %d: %s", status, strings.TrimSpace(string(body)))
 			}
-			return tok, expMs, nil
+			return tok, user, exp, nil
 		case types.ApprovalDenied:
-			return "", 0, fmt.Errorf("credential approval %s was denied by the operator", approvalID)
+			return "", "", 0, fmt.Errorf("credential approval %s was denied by the operator", approvalID)
 		case types.ApprovalExpired:
-			return "", 0, fmt.Errorf("credential approval %s expired before a decision was made", approvalID)
+			return "", "", 0, fmt.Errorf("credential approval %s expired before a decision was made", approvalID)
 		default: // still PENDING: keep polling
 		}
 	}
@@ -519,10 +631,24 @@ func BranchNSPrefix(runID uuid.UUID) string {
 // convention in task text. Set WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false to opt
 // back out (e.g. an image whose agent-run predates the run branch).
 //
-// SCOPE, honestly: this binds the BROKERED path only. It sees git-receive-pack
-// because the sandbox->proxy hop is cleartext on the proxy's own route; a PAT push
-// or an SSH push is an opaque tunnel no pkt-line parser can read, and the
-// installation token itself is repo-scoped but not ref-scoped. Dispatch removes AND
+// SCOPE, honestly: this binds the BROKERED GITHUB path only — handleGitBroker,
+// not its git_pat sibling. It sees git-receive-pack because the sandbox->proxy
+// hop is cleartext on the proxy's own route, and the installation token itself
+// is repo-scoped but not ref-scoped.
+//
+// An SSH push is still an opaque tunnel no pkt-line parser can read. A PAT push
+// is NOT, and saying so was the stale half of this comment: the never-resident
+// git_pat lane (default ON since 0.7) removes that tunnel by design — the proxy
+// terminates the request itself and holds the same cleartext command section
+// (see pat_broker.go). Nothing structural stops the parser there; the reason it
+// is not wired in is a DECISION, and it is this: a PAT carries whatever scope
+// the operator issued and Wardyn cannot narrow it, so the namespace would be a
+// convention imposed on a credential it does not bound, over forges whose push
+// ref conventions are not GitHub's. Extending it needs its own switch, its own
+// decision-log rule_source values and its own row in docs/ENV.md — a deliberate
+// widening, not an implied one. This is not a hole in THIS lane's confinement:
+// api.validateGrantLaneExclusivity already refuses a git_pat grant for the same
+// forge as a github_token grant, so a brokered repo has no PAT path beside it. Dispatch removes AND
 // denies the broker-managed GitHub host names on a brokered run — plus that forge's
 // ssh.<forge> endpoint, so a co-granted ssh_key leaves no push path beside the
 // brokered one (confineGitBrokerEgress in internal/api/runs_dispatch_gitbroker.go,

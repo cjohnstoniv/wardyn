@@ -639,6 +639,33 @@ func (s *Server) adminAuth(next http.Handler) http.Handler {
 const sessionRevocationUnavailable = "session_revocation_unavailable"
 
 func (s *Server) auditAuthFailed(r *http.Request, reason string) {
+	s.auditAuthFailedAs(r, adminAuthActor, reason)
+}
+
+// adminAuthActor / internalAuthActor / groundtruthAuthActor /
+// internalApprovalActor name WHICH boundary refused, as the auth.failed row's
+// Actor. They exist because the row's reason enum alone cannot say
+// whether a refusal came from the PUBLIC lane (a human or an API token) or from
+// the INTERNAL lane (a sandbox sidecar or the host sensor) — and those are
+// different incidents with different runbooks: credential stuffing on the public
+// lane, a compromised or probing sidecar on the internal one.
+const (
+	adminAuthActor        = "wardyn/adminAuth"
+	internalAuthActor     = "wardyn/internalAuth"
+	groundtruthAuthActor  = "wardyn/internalAuthGroundtruth"
+	internalApprovalActor = "wardyn/internalApproval"
+)
+
+// auditAuthFailedAs is the ONE rate-bound emit every authentication refusal
+// funnels through, public and internal alike. actor names the boundary that
+// refused (see the *Actor constants); reason is that boundary's bounded enum. Split out of auditAuthFailed so the internal (sandbox/host-sensor) lane
+// gets the SAME limiter, the SAME suppressed counter and the SAME content-free
+// row shape instead of a second, divergent copy — before F068 that lane answered
+// 401/400 and recorded nothing anywhere, so a process inside a sandbox
+// brute-forcing run tokens against /api/v1/internal/*, or a sidecar probing for
+// the credential-approval path its own handler comment says must never come from
+// an untrusted sidecar, left no trace at all.
+func (s *Server) auditAuthFailedAs(r *http.Request, actor, reason string) {
 	// RESOLVED BEFORE THE LIMITER, not after. The row's content is unchanged by
 	// the move — but the store-outage arm below has to count every REQUEST, and
 	// the limiter drops most of them: measured, 50 requests during a revocation
@@ -682,7 +709,7 @@ func (s *Server) auditAuthFailed(r *http.Request, reason string) {
 		s.metrics.authFailedSuppressedInc()
 		return
 	}
-	ev := s.auditEvent(nil, types.ActorSystem, "wardyn/adminAuth", "auth.failed", r.URL.Path,
+	ev := s.auditEvent(nil, types.ActorSystem, actor, "auth.failed", r.URL.Path,
 		"failure", mustJSON(map[string]any{"reason": reason}))
 	ev.SourceIP = r.RemoteAddr
 	s.recordAudit(r.Context(), ev)
@@ -694,17 +721,23 @@ func (s *Server) auditAuthFailed(r *http.Request, reason string) {
 func (s *Server) internalAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.Identity == nil {
+			s.auditAuthFailedAs(r, internalAuthActor, "identity_provider_not_configured")
 			writeError(w, http.StatusUnauthorized, "identity provider not configured")
 			return
 		}
 		tok, ok := bearerToken(r)
 		if !ok {
+			s.auditAuthFailedAs(r, internalAuthActor, "missing_run_token")
 			writeError(w, http.StatusUnauthorized, "missing run token")
 			return
 		}
 		claims, err := s.cfg.Identity.Verify(r.Context(), tok, internalAudience)
 		if err != nil {
-			// Do not leak the verification reason (revoked vs expired vs forged).
+			// Do not leak the verification reason (revoked vs expired vs forged)
+			// TO THE CALLER. The audit row is equally coarse — one reason for the
+			// whole verify failure — so the trail records THAT a run token was
+			// refused without telling a brute-forcer which half it got wrong.
+			s.auditAuthFailedAs(r, internalAuthActor, "invalid_run_token")
 			writeError(w, http.StatusUnauthorized, "invalid run token")
 			return
 		}
@@ -731,17 +764,21 @@ func (s *Server) internalAuth(next http.Handler) http.Handler {
 func (s *Server) internalAuthGroundtruth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.Identity == nil {
+			s.auditAuthFailedAs(r, groundtruthAuthActor, "identity_provider_not_configured")
 			writeError(w, http.StatusUnauthorized, "identity provider not configured")
 			return
 		}
 		tok, ok := bearerToken(r)
 		if !ok {
+			s.auditAuthFailedAs(r, groundtruthAuthActor, "missing_sensor_token")
 			writeError(w, http.StatusUnauthorized, "missing sensor token")
 			return
 		}
 		if _, err := s.cfg.Identity.Verify(r.Context(), tok, groundtruthAudience); err != nil {
 			// Do not leak the verification reason (revoked vs expired vs
-			// wrong-audience vs forged).
+			// wrong-audience vs forged) TO THE CALLER; the audit row is equally
+			// coarse for the same reason.
+			s.auditAuthFailedAs(r, groundtruthAuthActor, "invalid_sensor_token")
 			writeError(w, http.StatusUnauthorized, "invalid sensor token")
 			return
 		}

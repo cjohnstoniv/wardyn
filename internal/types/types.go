@@ -333,10 +333,15 @@ type SiteConfig struct {
 	// same console reached at 127.0.0.1 and at localhost disagreed about
 	// whether onboarding had happened.
 	//
-	// NOT settable through PUT /site-config: the handler rejects a client-supplied
-	// value and carries the stored one forward, exactly as it does for
-	// Integrations — otherwise a naive GET-then-PUT round-trip by an older
-	// client would silently erase it.
+	// NOT settable through PUT /site-config: the handler IGNORES a
+	// client-supplied value and carries the stored one forward, exactly as it
+	// does for Integrations — otherwise a naive GET-then-PUT round-trip by an
+	// older client would silently erase it. Ignored, never REFUSED: GET emits
+	// this key, so the documented capture/apply round-trip and the
+	// MDM-delivered /etc/wardyn/site-config.json echo it back on every write,
+	// and the carry-forward already makes a submitted value inert. A dropped
+	// value is reported instead — onboarding_completed_at_ignored in PUT's
+	// response body, which `wardyn site-config apply` prints as a warning.
 	OnboardingCompletedAt *time.Time `json:"onboarding_completed_at,omitempty"`
 }
 

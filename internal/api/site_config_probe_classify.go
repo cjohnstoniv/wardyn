@@ -127,7 +127,11 @@ func (p proxyProbeSubject) pathClause() string {
 
 // timedOutDetail words the shared state=timed_out detail both classify*
 // functions use (see probeRunResult.timedOut's doc for what the state
-// means). agentStatus is probeAgentStatusAtDeadline's best-effort read
+// means). The budget is rendered in SECONDS — %d on a time.Duration is an
+// int64 of NANOSECONDS, legal to the toolchain (go vet is silent) and read by
+// the operator as "90000000000s", ~2853 years; site_config_probe.go's sibling
+// message in this same feature already converts. agentStatus is
+// probeAgentStatusAtDeadline's best-effort read
 // ("unknown" when it could not be determined); controlPlaneURL is
 // s.cfg.ControlPlaneURL, unmasked (it is operator-configured, never a
 // secret).
@@ -136,7 +140,7 @@ func timedOutDetail(agentStatus, controlPlaneURL string) string {
 		"The probe sandbox started and ran, but the run never reported completion within %ds — not a network verdict. "+
 			"Sandbox agent status at the deadline: %s. The usual cause on Kubernetes is the run's recording upload to the "+
 			"control plane (via the proxy pod) hanging: check WARDYN_CONTROL_PLANE_URL (%s) is reachable from the runs namespace.",
-		siteConfigProbeWaitTimeout, agentStatus, controlPlaneURL)
+		int(siteConfigProbeWaitTimeout.Seconds()), agentStatus, controlPlaneURL)
 }
 
 // classifyProxyProbe turns what runSiteConfigProbe actually observed into the
@@ -219,9 +223,9 @@ func classifyProxyProbe(res probeRunResult, subj proxyProbeSubject, controlPlane
 // Same shape as classifyProxyProbe: the fields every verdict carries are set
 // once up front and each arm sets only State/Detail, so elapsed_ms cannot be
 // forgotten by a new arm (it was repeated at all six return sites). The arm
-// ORDER is the contract -- the bypass sentinel is matched before the generic
-// hasExitCode arm, and no arm may be reached without an exit code (see
-// TestClassifyRedirectProbe_BypassNeverInferred).
+// ORDER is the contract -- both sentinels (bypass, then inconclusive) are
+// matched before the generic hasExitCode arm, and no arm may be reached
+// without an exit code (see TestClassifyRedirectProbe_BypassNeverInferred).
 func classifyRedirectProbe(res probeRunResult, toHost, fromHost, controlPlaneURL string) siteConfigProbeResponse {
 	resp := siteConfigProbeResponse{ElapsedMS: res.elapsed.Milliseconds()}
 	switch {
@@ -233,6 +237,18 @@ func classifyRedirectProbe(res probeRunResult, toHost, fromHost, controlPlaneURL
 		resp.State = "bypass"
 		resp.Detail = fmt.Sprintf("%s is reachable via the mirror, but %s is ALSO still reachable directly from a sandbox — "+
 			"the redirect is configured but not enforced; runs can still bypass the mirror", toHost, fromHost)
+	case res.hasExitCode && res.exitCode == redirectProbeInconclusiveCode:
+		// The probe RAN and proved nothing: its direct dial of the public host
+		// produced no connection fact (see redirectProbeInconclusiveCode). Not
+		// "reached" -- that verdict claims the direct dial was blocked, and
+		// nothing here observed that. It shares "blocked"'s state because that
+		// is this endpoint's non-green bucket (the console holds the setup gate
+		// on it and offers a re-test), and the detail says exactly what
+		// happened rather than dressing an untested redirect as an enforced one.
+		resp.State = "blocked"
+		resp.Detail = fmt.Sprintf("the redirect was NOT tested: the direct dial of %s never produced a connection attempt to read, "+
+			"so nothing was learned about whether %s is still reachable from a sandbox. Check how %s is spelled in the redirect (a path, a space "+
+			"or a scheme curl cannot dial does this) and test again", fromHost, fromHost, fromHost)
 	case res.hasExitCode:
 		resp.State = "blocked"
 		resp.Detail = fmt.Sprintf("could not reach the mirror %s: %s", toHost, curlFailureDetail(res.exitCode))

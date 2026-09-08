@@ -351,6 +351,21 @@ func TestRedirectLiteralIP_TrustedForItsRunOnly(t *testing.T) {
 	}).egressTarget("100.64.5.7", 443); err == nil {
 		t.Fatal("a denied literal must stay denied")
 	}
+
+	// F106: the entry substituteArtifactEgress actually writes is PORT-QUALIFIED
+	// (net.JoinHostPort of the To's host and redirectPort), matching the
+	// mitmHosts the same redirect authors. A second port of that address is
+	// therefore refused — with the BARE entry the substitution used to write,
+	// every port of it was reachable.
+	portScoped := mk(types.RunPolicySpec{AllowedDomains: []string{"100.64.5.7:8443"}})
+	if _, _, err := portScoped.egressTarget("100.64.5.7", 8443); err != nil {
+		t.Fatalf("the port the redirect named must be reachable: %v", err)
+	}
+	for _, port := range []int{22, 443, 5432} {
+		if _, _, err := portScoped.egressTarget("100.64.5.7", port); err == nil {
+			t.Errorf("port %d of the redirect's address is reachable, and the redirect named only 8443", port)
+		}
+	}
 }
 
 // TestRedirectLiteralIP_AuditedAsItsOwnGrant: the end-to-end decision log
@@ -406,5 +421,53 @@ func TestLiteralIPDenialNamesTheCause(t *testing.T) {
 	}
 	if got := literalIPDenialDetail("", 443, pol); got != "" {
 		t.Errorf("empty host detail = %q, want \"\"", got)
+	}
+}
+
+// F008: under a corporate upstream the vetted-IP PIN is relaxed, but the SSRF
+// guard itself must still bind the HOSTNAME.
+//
+// egressTarget's upstream branch returned before p.vetHost, and evaluate step 0
+// only guards LITERAL IPs — so a name the agent controls that resolves into
+// blocked space was handed to the corp proxy to resolve and dial for it. That
+// is exactly the outcome policy.go's SECURITY INVARIANTS, THREAT-MODEL.md's L2
+// row ("metadata-server theft and DNS-rebinding, including under
+// allow_all_egress") and evaluate's own parenthetical ("SSRF-via-corp-proxy to
+// loopback/metadata stays blocked") all claim is closed.
+//
+// The second half pins the residual the fix deliberately keeps: a name this
+// proxy cannot resolve AT ALL is still forwarded by name, because that is the
+// case the relaxation was written for.
+func TestUpstream_MetadataHostnameIsVettedNotForwarded(t *testing.T) {
+	f := startFakeUpstream(t)
+	d := &routingDialer{upstreamAddr: f.addr(), directAddr: f.addr()}
+	res := fakeResolver{m: map[string][]net.IP{
+		"metadata.evil.test": ips("169.254.169.254"),
+		// mirror.corp.internal is deliberately ABSENT: this proxy cannot resolve
+		// it, which is the estate shape the upstream branch exists for.
+	}}
+	p, sink := newNoProxyProxy(t,
+		types.RunPolicySpec{AllowedDomains: []string{"metadata.evil.test", "mirror.corp.internal"}},
+		res, nil, nil, mustUpstream(t, f.addr()), d)
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, "http://metadata.evil.test/latest/meta-data/"))
+	if got := atomic.LoadInt32(&f.accepts); got != 0 {
+		connect, _ := f.snapshot()
+		t.Errorf("the corp proxy was asked to reach the metadata host (accepts=%d); it saw %q — the SSRF guard must bind the NAME, not only the literal", got, connect)
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 — a hostname resolving to the metadata address must be denied under an upstream too", rec.Code)
+	}
+	if d := lastDecision(t, sink); d.Decision != egress.Deny || d.RuleSource != "builtin:private-ip" {
+		t.Errorf("decision = %+v, want a builtin:private-ip deny", d)
+	}
+
+	// The stated residual: unresolvable HERE, so it goes to the corp proxy by
+	// name and the corp proxy's own controls decide.
+	rec = httptest.NewRecorder()
+	p.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, "http://mirror.corp.internal/"))
+	if got := atomic.LoadInt32(&f.accepts); got != 1 {
+		t.Fatalf("accepts = %d, want 1 — a name this proxy cannot resolve must still chain through the corp proxy", got)
 	}
 }

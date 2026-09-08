@@ -123,13 +123,12 @@ func validateIntegrationDelivery(d types.IntegrationDelivery) error {
 			return fmt.Errorf("header: %q is not a valid HTTP header name "+
 				"(letters, digits and !#$%%&'*+-.^_`|~ only — no spaces, no ':', no line breaks)", d.Header)
 		}
-		if d.Format != "" {
-			if strings.Count(d.Format, "%s") != 1 || strings.Count(d.Format, "%") != 1 {
-				return fmt.Errorf("format: %q must contain exactly one %%s (where the secret goes) and no other verb", d.Format)
-			}
-			if strings.ContainsAny(d.Format, "\r\n") {
-				return fmt.Errorf("format: must not contain a line break")
-			}
+		// ONE implementation of the format rule, shared with the api_key
+		// eligible-grant path (validInjectionFormat, policy.go) — the two
+		// authoring paths write the identical wire field, and until F097 only
+		// this one checked it.
+		if err := validInjectionFormat(d.Format); err != nil {
+			return err
 		}
 		return nil
 	case types.DeliveryResidentFile, types.DeliveryResidentEnv:

@@ -155,6 +155,14 @@ header is ignored and the action is recorded as `actor_type=system`, principal
 attribution — a shared dev server on an admin token is exactly where this header
 stops working.
 
+The override is **attribution only**. It names the run's `created_by`, the
+identity's sponsor claim and the audit actor; it does **not** choose which
+secret namespace the run resolves credentials from. That namespace comes from
+the principal wardynd injected in local mode, so naming another principal in
+this header cannot make a run mint that principal's stored `git_pat` or
+`ssh_key` — which matters on a database that already carries member-owned
+secret rows from an SSO-configured era and is later served in local mode.
+
 ## Raw HTTP (curl)
 
 The API is **fail-closed behind a bearer token** (it also accepts a valid OIDC

@@ -5,7 +5,9 @@ package api
 
 import (
 	"context"
+	"net"
 	neturl "net/url"
+	"strconv"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
@@ -148,7 +150,11 @@ func (s *Server) unionSiteConfigScmHosts(ctx context.Context, spec *types.RunPol
 // every MATCHING run"; without this, an unrelated sealed run gained the corp To
 // host (and, via planArtifactRedirect, the operator's injected registry token) it
 // never asked for. A run that names none of a redirect's public hosts is left
-// entirely untouched by it.
+// entirely untouched by THIS function's allow-side substitution. A
+// network-only row's deny side is not scoped the same way — see
+// appendNetworkRedirectDenials below, applied unconditionally on every run
+// regardless of whether it reaches this redirect (docs/OPERATIONS.md, "Egress
+// redirects: two tiers").
 //
 // The dropped hosts are matched port- and wildcard-aware (GAP-EGRESS-6): a
 // "*.pythonhosted.org" or "pypi.org:443" allowlist entry — both legal in
@@ -183,9 +189,25 @@ func substituteArtifactEgress(domains []string, sc types.SiteConfig) []string {
 		for _, h := range pub {
 			dropHost[strings.ToLower(h)] = true
 		}
-		if !added[to] {
-			added[to] = true
-			add = append(add, to)
+		// PORT-QUALIFIED, never bare (F106). A bare allowlist entry matches on
+		// EVERY port (classifyDomain gives it port 0, and Policy.AllowsLiteralIP
+		// answers true from allowedExact before it ever consults the
+		// port-qualified map), so a redirect To of https://10.40.2.11:8443/ used
+		// to trust 10.40.2.11:22 and :5432 as well — the private-IP guard's whole
+		// job, undone on ports the operator never named. The MITM/token half of
+		// the SAME redirect has been port-exact since W13-S1-5
+		// (planArtifactRedirect authors mitmHosts as net.JoinHostPort(host,
+		// redirectPort(r.To))), so the credential was scoped to one port while
+		// the SSRF trust was not. Both halves now derive the port from ONE
+		// function, so a To that names no port trusts exactly the port the MITM
+		// half already assumed for it — the port To's scheme names (80 for an
+		// explicit http://, 443 otherwise) — a mirror reached on some other port
+		// needs that port in the To, which is the same thing the token injection has
+		// always required.
+		entry := net.JoinHostPort(to, strconv.Itoa(redirectPort(r.To)))
+		if !added[entry] {
+			added[entry] = true
+			add = append(add, entry)
 		}
 	}
 	out := make([]string, 0, len(domains)+len(add))

@@ -54,16 +54,16 @@ func TestSubstituteArtifactEgress_CorpReplacesPublic(t *testing.T) {
 			t.Errorf("host %q (unconfigured/unrelated) should have been kept; got %v", kept, got)
 		}
 	}
-	if !gotSet["artifactory.corp"] {
-		t.Errorf("corp host artifactory.corp should have been added; got %v", got)
+	if !gotSet["artifactory.corp:443"] {
+		t.Errorf("corp host artifactory.corp:443 should have been added; got %v", got)
 	}
-	if !gotSet["registry.corp.internal"] {
-		t.Errorf("network-only To host registry.corp.internal should have been added; got %v", got)
+	if !gotSet["registry.corp.internal:443"] {
+		t.Errorf("network-only To host registry.corp.internal:443 should have been added; got %v", got)
 	}
 	// One corp host even though two ecosystems share it.
 	corpCount := 0
 	for _, d := range got {
-		if d == "artifactory.corp" {
+		if d == "artifactory.corp:443" {
 			corpCount++
 		}
 	}
@@ -136,7 +136,7 @@ func TestSubstituteArtifactEgress_ScopedToMatchingRun(t *testing.T) {
 	for _, d := range got {
 		set[d] = true
 	}
-	if set["registry.npmjs.org"] || !set["artifactory.corp"] {
+	if set["registry.npmjs.org"] || !set["artifactory.corp:443"] {
 		t.Errorf("a matching run should drop the public host and gain the corp host; got %v", got)
 	}
 }
@@ -159,7 +159,7 @@ func TestSubstituteArtifactEgress_WildcardAndPortDrop(t *testing.T) {
 	for _, d := range got {
 		set[d] = true
 	}
-	if !set["github.com"] || !set["pypi.corp.example"] {
+	if !set["github.com"] || !set["pypi.corp.example:443"] {
 		t.Errorf("unrelated host kept + corp added expected; got %v", got)
 	}
 }
@@ -321,12 +321,12 @@ func TestFoldCompat_ArtifactOverridesGoldenBehavior(t *testing.T) {
 	if !gotSet["github.com"] {
 		t.Errorf("post-fold substitution: unrelated host github.com should be kept; got %v", got)
 	}
-	if !gotSet["go-mirror.corp"] {
-		t.Errorf("post-fold substitution: go-mirror.corp should have been added; got %v", got)
+	if !gotSet["go-mirror.corp:443"] {
+		t.Errorf("post-fold substitution: go-mirror.corp:443 should have been added; got %v", got)
 	}
 	corpCount := 0
 	for _, d := range got {
-		if d == "artifactory.corp" {
+		if d == "artifactory.corp:443" {
 			corpCount++
 		}
 	}
@@ -361,5 +361,62 @@ func TestPublicRegistryHostsCoverage(t *testing.T) {
 	}
 	if hostrules.PublicRegistryHosts("bogus") != nil {
 		t.Errorf("unknown ecosystem must return nil")
+	}
+}
+
+// TestRedirectPort_AuthorityAndSchemeShapes pins the two things TestRedirectPort
+// above does not exercise, both of which reached the MITM/token-injection set
+// and the redirect probe from ordinary operator input that validateSiteConfig
+// accepts:
+//
+//   - where the AUTHORITY ends. A query or fragment terminates it exactly as
+//     '/' does; cutting only at '/' handed strconv "8443?repo=npm" and fell
+//     back to 443, so plan.mitmHosts carried host:443 for a mirror on 8443 —
+//     the proxy's mitmPorts gate then withheld the operator's token on the port
+//     the redirect names and presented it on one the operator never configured.
+//   - which DEFAULT the scheme names. 443 is the default of https and of a bare
+//     host (both are reached through a CONNECT the proxy TLS-terminates); an
+//     explicit http:// names 80, and calling it 443 made the probe dial a port
+//     the plain-http mirror does not serve.
+//
+// Expected ports are written literally, never derived from redirectPort.
+func TestRedirectPort_AuthorityAndSchemeShapes(t *testing.T) {
+	cases := []struct {
+		name string
+		to   string
+		want int
+	}{
+		{"query ends the authority", "https://mirror.corp.example:8443?repo=npm-remote", 8443},
+		{"fragment ends the authority", "https://mirror.corp.example:8443#frag", 8443},
+		{"query on a literal-IP To", "https://10.40.2.11:8443?x=1", 8443},
+		{"query with no port keeps the https default", "https://mirror.corp.example?repo=npm", 443},
+		{"an explicit http:// with no port is 80", "http://10.40.1.5", 80},
+		{"an explicit http:// with a port keeps it", "http://10.40.1.5:8080", 8080},
+		{"https with no port stays 443", "https://mirror.corp.example", 443},
+		{"a bare host stays 443", "mirror.corp.example", 443},
+		{"a bare host:port keeps its port", "mirror.corp.example:8443", 8443},
+	}
+	for _, c := range cases {
+		if got := redirectPort(c.to); got != c.want {
+			t.Errorf("%s: redirectPort(%q) = %d, want %d", c.name, c.to, got, c.want)
+		}
+	}
+}
+
+// TestRedirectEndpointPort_SpelledButUnusable is the write-time half of the same
+// parser: a port that IS spelled and is not a decimal 1-65535 must be reported
+// as unusable, so validateSiteConfig can refuse it instead of letting a
+// downstream reader coerce it to 443.
+func TestRedirectEndpointPort_SpelledButUnusable(t *testing.T) {
+	for _, raw := range []string{"10.40.2.11:0", "10.40.2.11:99999", "10.40.2.11:-1",
+		"mirror.corp:8443:9", "mirror.corp:80x"} {
+		if _, spelled, ok := redirectEndpointPort(raw); ok || !spelled {
+			t.Errorf("redirectEndpointPort(%q) = (spelled=%v, ok=%v), want a spelled-but-unusable port", raw, spelled, ok)
+		}
+	}
+	for _, raw := range []string{"mirror.corp", "https://mirror.corp/path", "https://mirror.corp?q=1"} {
+		if _, spelled, ok := redirectEndpointPort(raw); !ok || spelled {
+			t.Errorf("redirectEndpointPort(%q) = (spelled=%v, ok=%v), want no port spelled", raw, spelled, ok)
+		}
 	}
 }

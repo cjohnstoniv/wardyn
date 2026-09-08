@@ -134,9 +134,16 @@ func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member memberM
 // SAME posture as RunToken today: proxy-process-only, never on the sandbox
 // side, masked from decision-log/stdout by the proxy — a deliberate,
 // already-documented tradeoff (see runner.ProxyConfig.UpstreamProxyURL), not a
-// new one. Fail SAFE: neither field configured, an unresolvable secret, or a
-// non-http URL (from either source) all return "" (direct egress, today's
-// behavior) plus an audit event; none of them fail the run or crash dispatch.
+// new one. Fail SAFE: neither field configured, an unresolvable secret, a
+// non-http URL, or a URL the sidecar itself would refuse (from either source —
+// resolveUpstreamProxyURL runs the sidecar's OWN parser,
+// proxy.ValidUpstreamProxyURL, not a narrower copy of it; in practice a port
+// outside 1-65535 or a missing host) all return "" (direct egress, today's
+// behavior) plus an audit event; none of them fail the run, crash dispatch, or
+// ship a config that exits the wardyn-proxy sidecar 1 at startup (F028). That
+// last class is the one the sidecar used to answer with os.Exit(1) at container
+// start, taking the run's whole egress path with it instead of degrading to
+// this audited fallback.
 // Extracted verbatim from dispatchRun.
 func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, siteCfg types.SiteConfig, siteCfgErr error) string {
 	if siteCfgErr != nil {
@@ -149,9 +156,14 @@ func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, s
 	}
 	var getSecret func(context.Context, string) ([]byte, error)
 	if s.cfg.Secrets != nil {
-		// Operator namespace ONLY (0.7): under an upstream the sidecar skips
-		// VetHost entirely, so a member-substitutable secret here would be an
-		// SSRF-guard bypass, not a convenience.
+		// Operator namespace ONLY (0.7): the upstream proxy's own address is
+		// never run through VetHost/the private-IP guard — it is expected to be
+		// a private corp-network hop and CONNECTed to directly (F008 only made
+		// the guard bind the NAME of the destination the upstream is asked to
+		// dial, not the upstream's own address) — so a member-substitutable
+		// secret here would let a member redirect every run's egress to a
+		// server of their own choosing with no SSRF guard on that hop at all,
+		// not merely widen what a vetted destination allows.
 		getSecret = s.cfg.Secrets.For("").Get
 	}
 	detail := map[string]any{

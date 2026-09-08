@@ -11,13 +11,16 @@ package proxy
 // (this is the ONE decision every forward-egress caller shares), not a size
 // dodge.
 //
-// THE COMPOSITION worth holding in one place: on a private-endpoint estate the
-// bypass and the lift are two halves of ONE working configuration and neither
-// alone suffices. Without the bypass the corp upstream takes the dial and
-// cannot CONNECT to an internal address (it times out); with the bypass the
-// dial is made locally, where the unconditional private/reserved-IP guard
-// denies RFC 6598 — and InternalHosts is what lifts THAT. Bypass routes,
-// InternalHosts admits.
+// THE COMPOSITION worth holding in one place: the guard runs on BOTH branches
+// and InternalHosts is what lifts it on either. Under the corp upstream this
+// file resolves the name for the guard alone, denies an answer in a blocked
+// range, and on a lift stamps site-config:internal-host on the HOSTNAME it then
+// hands the corp proxy — which still has to be able to dial that address, and
+// on the private-endpoint estates this branch exists for it cannot. With the
+// bypass the dial is made locally instead, where the same unconditional
+// private/reserved-IP guard denies RFC 6598 — and InternalHosts is what lifts
+// THAT. So on such an estate the two fields are one configuration: Bypass
+// routes, InternalHosts admits.
 
 import (
 	"errors"
@@ -91,7 +94,54 @@ func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, 
 	// still denied. The bypass also grants no policy allow — evaluate() already
 	// ran allow/deny/approval/method before reaching here.
 	if p.upstream != nil && !p.bypassUpstream(host) {
-		return net.JoinHostPort(host, strconv.Itoa(port)), "", nil
+		// The one thing the upstream hop cannot be trusted to re-derive: a
+		// NON-CANONICAL literal — an inet_aton IPv4 spelling (127.1, 0x7f000001,
+		// 2130706433 = 127.0.0.1; 0251.0376.0.1 = 169.254.0.1) or a
+		// zone-suffixed IPv6 literal (fe80::1%eth0, fe80::1%25eth0).
+		// net.ParseIP refuses all of those, so evaluate's step-0 literal-IP
+		// guard never saw them and the string would be forwarded to the corp
+		// proxy verbatim — where inet_aton (or the dialer's own zone-aware
+		// parser) turns it back into loopback/link-local/metadata.
+		// Checked HERE as well as at step 0 because serveMITMRequest and the two
+		// brokers reach this function without going through evaluate (F105).
+		// Canonical literals are deliberately NOT re-vetted here: evaluate has
+		// already decided them, including the operator's egress-redirect trust.
+		if ip := nonCanonicalLiteralIP(host); ip != nil {
+			if kind, why := isBlockedIP(ip); kind != blockNone {
+				return "", "", fmt.Errorf("host %q denied: non-canonical literal for %s: %s", host, ip, why)
+			}
+		}
+		// The corp proxy dials, but the SSRF guard still binds the NAME. Without
+		// this the "unconditional" private/loopback/link-local/metadata guard
+		// (policy.go's SECURITY INVARIANTS, THREAT-MODEL.md L2) held only for the
+		// LITERAL spelling under an upstream: evaluate()'s step 0 guards literals,
+		// this branch returned before p.vetHost, and a name the agent controls
+		// that resolves to 169.254.169.254 was handed to the corp proxy to resolve
+		// and dial for it. So resolve HERE for the guard only, and keep sending
+		// the HOSTNAME onward — an upstream that was handed a resolved literal
+		// refuses it (W23-S1-4 / W19-W19d-3), which is what this branch exists for.
+		//
+		// Unresolved is the one denial that does NOT bite: on a private-endpoint
+		// estate the sandbox host frequently cannot resolve external names at all,
+		// and turning that into a deny would break every upstream deployment. That
+		// residual is stated in policy.go's invariants and in THREAT-MODEL.md
+		// rather than papered over: under an upstream the guard binds every name
+		// this proxy CAN resolve, and a name only the corp proxy can resolve is
+		// left to the corp proxy's own egress controls.
+		//
+		// The SECOND residual, for the same reason the pin is gone: the guard
+		// binds the name at CHECK time only — the corp proxy resolves again for
+		// the dial, so a name that answers differently to the two resolvers
+		// (short-TTL rebinding, or a split-horizon zone only the corp proxy can
+		// see) is not bound at dial time. The direct-dial path below closes that
+		// by pinning the vetted address; this branch cannot. THREAT-MODEL.md §4.2
+		// states both.
+		if guard := p.vetHost(host); guard.Denied && !guard.Unresolved {
+			return "", "", fmt.Errorf("host %q denied: %s", host, guard.Reason)
+		} else if guard.Lifted {
+			ruleSource = ruleSourceInternalHost
+		}
+		return net.JoinHostPort(host, strconv.Itoa(port)), ruleSource, nil
 	}
 	// A literal IP the operator explicitly allowed EXACTLY is trusted here for
 	// the same reason evaluate() step 0 trusts it — an egress-redirect "To" on
@@ -315,7 +365,7 @@ func (p *Proxy) gatewayTarget(host string, port int) (string, error) {
 func (p *Proxy) vetTrustedHost(host string, port int) (string, error) {
 	h := strings.TrimSuffix(strings.ToLower(host), ".")
 	if ip := net.ParseIP(h); ip != nil {
-		if trustedGatewayIPRefused(ip) || p.onOwnSubnetOrControlPlane(ip) {
+		if ipguard.GatewayIPRefused(ip) || p.onOwnSubnetOrControlPlane(ip) {
 			return "", errGatewayVet
 		}
 		return net.JoinHostPort(ip.String(), strconv.Itoa(port)), nil
@@ -329,24 +379,11 @@ func (p *Proxy) vetTrustedHost(host string, port int) (string, error) {
 		return "", errGatewayVet
 	}
 	for _, ip := range ips {
-		if trustedGatewayIPRefused(ip) || p.onOwnSubnetOrControlPlane(ip) {
+		if ipguard.GatewayIPRefused(ip) || p.onOwnSubnetOrControlPlane(ip) {
 			return "", errGatewayVet
 		}
 	}
 	return net.JoinHostPort(ips[0].String(), strconv.Itoa(port)), nil
-}
-
-// trustedGatewayIPRefused mirrors api.llmGatewayIPRefused (validated at boot)
-// for the proxy's own per-request re-check: loopback/link-local/unspecified/
-// multicast/NAT64-embedded are refused; RFC1918/ULA/CGNAT are NOT — an
-// internal gateway is expected to live there.
-func trustedGatewayIPRefused(ip net.IP) bool {
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsMulticast() || ip.IsUnspecified() {
-		return true
-	}
-	_, isNAT64 := ipguard.NAT64EmbeddedV4(ip)
-	return isNAT64
 }
 
 // vetHost is VetHost plus the operator-declared internal-host exception: an
@@ -391,13 +428,31 @@ func (p *Proxy) liftInternalHost(host string, ip net.IP) bool {
 }
 
 // onOwnSubnetOrControlPlane reports whether ip is one of this proxy's own
-// interface subnets or its resolved control-plane host — both captured once at
-// construction (NewServer). The sidecar shares its control-plane network with
-// postgres/dex/registry (docker-compose), so an internal-host declaration must
-// never let a run reach the proxy's own network neighbors.
+// interface subnets or one of its resolved control-plane addresses — all
+// captured once at construction (NewServer). The sidecar shares its
+// control-plane network with postgres/dex/registry (docker-compose), so an
+// internal-host declaration must never let a run reach the proxy's own network
+// neighbors.
+//
+// TRUST BOUNDARY (F002): this is the CLAMP on both admin-authored exceptions to
+// the private-IP guard — liftInternalHost and trustsExactLiteralIP — and on the
+// gateway's own vet (vetTrustedHost). Its inputs are captured best-effort at
+// startup, and when that capture FAILED an empty clamp silently answered "no"
+// for every address, which makes the exceptions fire MORE widely rather than
+// less. On Kubernetes the pod's own interface does not carry the wardynd
+// ClusterIP, so there the control-plane answers are the ONLY thing standing
+// between a declared internal host (or a redirect literal) and the control
+// plane. exclusionUnknown therefore answers "yes" for every address — refusing
+// every lift and every trust — which is the fail-closed direction NewServer's
+// comment always claimed and the code did not have.
 func (p *Proxy) onOwnSubnetOrControlPlane(ip net.IP) bool {
-	if p.controlPlaneIP != nil && p.controlPlaneIP.Equal(ip) {
+	if p.exclusionUnknown {
 		return true
+	}
+	for _, cp := range p.controlPlaneIPs {
+		if cp.Equal(ip) {
+			return true
+		}
 	}
 	for _, n := range p.localSubnets {
 		if n.Contains(ip) {

@@ -23,6 +23,15 @@
 #                     DIRECTLY (--noproxy, bypassing the proxy) -> expect nonzero
 #                     (no default route => cannot connect); the structural L0
 #                     block, not a proxy decision.
+#   metadata_connects.txt
+#                     curl's %{num_connects} for that SAME probe -> expect 0.
+#                     The exit code alone cannot prove the block: curl returns 28
+#                     both for a connect() that never completed (the no-route
+#                     signature) and for a timeout AFTER the TCP connection was
+#                     established, so an accept-and-hold listener on the metadata
+#                     address would be graded as "unreachable". num_connects is 1
+#                     whenever a connection was actually made, so it is the fact
+#                     grade.sh reads. Recorded, never inferred.
 set -u
 
 PROXY="${https_proxy:-${HTTPS_PROXY:-http://wardyn-proxy:3128}}"
@@ -40,9 +49,14 @@ denied_msg="$(curl -sS -o /dev/null -m 12 --connect-timeout 8 -w '%{http_code}' 
 denied_rc=$?
 { echo "rc=${denied_rc}"; echo "${denied_msg}"; } > denied_probe.txt
 
-# METADATA IP probed DIRECTLY (bypass the proxy): no route => nonzero exit.
-curl -sS -o /dev/null -m 8 --connect-timeout 6 --noproxy '*' \
-    http://169.254.169.254/latest/meta-data/ >/dev/null 2>&1
-echo "$?" > metadata_rc.txt
+# METADATA IP probed DIRECTLY (bypass the proxy): no route => nonzero exit AND
+# no completed connection. Both facts are recorded (see the header): an empty
+# write-out means curl reported no connection fact at all, which is not evidence
+# of a block either — it is written as "unknown" and grade.sh fails on it.
+md_connects="$(curl -sS -o /dev/null -m 8 --connect-timeout 6 --noproxy '*' \
+    -w '%{num_connects}' http://169.254.169.254/latest/meta-data/ 2>/dev/null)"
+md_rc=$?
+echo "${md_rc}" > metadata_rc.txt
+echo "${md_connects:-unknown}" > metadata_connects.txt
 
-echo "solution.sh: allowed=$(cat allowed_code.txt) denied_rc=${denied_rc} metadata_rc=$(cat metadata_rc.txt)" >&2
+echo "solution.sh: allowed=$(cat allowed_code.txt) denied_rc=${denied_rc} metadata_rc=$(cat metadata_rc.txt) metadata_connects=$(cat metadata_connects.txt)" >&2

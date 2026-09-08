@@ -64,9 +64,15 @@ const defaultMaxTTL = time.Hour
 // see docs/POLICIES.md.
 //
 // STILL NOT COVERED, stated plainly: the property binds the BROKERED App lane
-// only. A git_pat or ssh_key push does not traverse this route (SSH is not
-// smart-HTTP; a PAT push is an opaque CONNECT), so those are bounded by the
-// operator who supplied the credential, not by this namespace. On a BROKERED run
+// only. An ssh_key push does not traverse this route at all (SSH is not
+// smart-HTTP). A git_pat push DOES traverse a brokered, cleartext smart-HTTP
+// route since 0.7 (the never-resident lane, default ON — internal/egress/proxy/
+// pat_broker.go), so calling it "an opaque CONNECT" is no longer the reason it
+// is unconfined: the reason is that a PAT carries whatever scope the operator
+// issued and Wardyn cannot narrow it, over forges whose push ref conventions are
+// not GitHub's. Either way both are bounded by the operator who supplied the
+// credential, not by this namespace — and on a brokered run no such second path
+// exists for the same forge (validateGrantLaneExclusivity refuses the pairing). On a BROKERED run
 // no such second path is left BY NAME (same IP-literal caveat as above):
 // policy-write refuses a github_token grant declared alongside an ssh_key grant
 // for the same forge (api.validateGrantLaneExclusivity), and dispatch subtracts +
@@ -197,16 +203,46 @@ type Row interface {
 }
 
 // TxBeginner opens a transaction exposing a Querier, and answers the one
-// non-transactional bulk read the broker needs (MintedJTIs, for RevokeRun's
-// audit cascade). *pgxAdapter wraps a real *pgxpool.Pool; tests provide a fake.
-// Commit/Rollback bound the mint tx.
+// non-transactional bulk read the broker needs (MintedCredentials, for
+// RevokeRun's audit cascade). *pgxAdapter wraps a real *pgxpool.Pool; tests
+// provide a fake. Commit/Rollback bound the mint tx.
 //
-// MintedJTIs is on the interface, not an optional type assertion: an
+// MintedCredentials is on the interface, not an optional type assertion: an
 // implementation that silently answered "nothing minted" would make RevokeRun
 // emit ZERO credential.revoke events with a nil error. The compiler must ask.
+//
+// BeginReadCommitted is likewise on the interface rather than a type assertion,
+// and every transaction in this package that can carry an audit_events row goes
+// through it. An audit-joining writer must NOT inherit default_transaction_isolation:
+// under a pool set to REPEATABLE READ, two writers racing on the audit chain
+// advisory lock both read the chain head from their OWN pre-lock snapshot, so the
+// loser's prev_hash points at a row that is no longer the head and the hash chain
+// FORKS (the same defect P1 reproduced on store.InsertAuditEvent and fixed at
+// internal/store/store.go BeginTx, commit 081c075b). READ COMMITTED makes the
+// post-lock read see the winner's committed row, which is the whole point of
+// taking the lock. Implementations pin it as the FIRST statement of the tx.
 type TxBeginner interface {
-	Begin(ctx context.Context) (Tx, error)
-	MintedJTIs(ctx context.Context, runID uuid.UUID) ([]string, error)
+	// BeginReadCommitted starts a transaction pinned to READ COMMITTED. It is
+	// the ONLY transaction start on this seam — there is deliberately no bare
+	// Begin for a new call site to reach for, because every transaction the
+	// broker opens either writes an audit row itself (mint) or holds grant /
+	// approval rows a mint tx will join.
+	BeginReadCommitted(ctx context.Context) (Tx, error)
+	MintedCredentials(ctx context.Context, runID uuid.UUID) ([]MintedCredential, error)
+}
+
+// MintedCredential is one credential this run actually minted: the jti recorded
+// on the credential.mint audit row (or burnt onto its approval) and the grant
+// KIND it was minted for. RevokeRun needs the kind because the honest revoke
+// story differs per kind — a github_token expires on its own <=1h TTL, while a
+// git_pat or ssh_key is an operator-managed secret Wardyn can neither expire nor
+// down-scope (see broker_mint_kinds.go's mintGitPAT/mintSSHKey doc comments).
+// Kind is "" when the grant row behind the mint is gone (a deleted grant still
+// leaves its audit row), which RevokeRun reports as the unknown-kind note rather
+// than guessing.
+type MintedCredential struct {
+	JTI  string
+	Kind string
 }
 
 // Tx is a Querier with commit/rollback. Rollback after Commit is a no-op.
@@ -367,7 +403,7 @@ func (b *Broker) MintForGrant(ctx context.Context, caller *identity.Claims, gran
 // ensureApproval); when Nil it resolves the approval (or auto-approval) by
 // grant id. caller.SPIFFEID is the audit actor.
 func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, approvalHint uuid.UUID) (Minted, error) {
-	tx, err := b.db.Begin(ctx)
+	tx, err := b.db.BeginReadCommitted(ctx)
 	if err != nil {
 		return Minted{}, fmt.Errorf("broker: begin tx: %w", err)
 	}
@@ -808,43 +844,6 @@ type sshKeyScope struct {
 	KeySecretRef        string `json:"key_secret_ref"`
 	Username            string `json:"username"`
 	KnownHostsSecretRef string `json:"known_hosts_secret_ref"`
-}
-
-// RevokeRun best-effort revokes credentials minted for a run, part of the
-// kill-switch cascade. HONEST LIMITATION: GitHub App installation tokens
-// CANNOT be revoked individually before their (<=1h) expiry — the GitHub API
-// has no per-token revocation endpoint. We therefore (a) audit each minted jti
-// as a revoke with outcome=success for the audit join, recording in the event
-// data that GitHub tokens expire rather than revoke, and (b) rely on identity
-// revocation (identity.Provider.RevokeRun, called by the kill cascade) to deny
-// any further mints for the run. Returns the count attempted.
-func (b *Broker) RevokeRun(ctx context.Context, runID uuid.UUID) error {
-	jtis, err := b.db.MintedJTIs(ctx, runID)
-	if err != nil {
-		return err
-	}
-	actor := spiffeForRun(runID)
-	for _, jti := range jtis {
-		data, _ := json.Marshal(map[string]any{
-			"jti":  jti,
-			"note": "github installation tokens expire (<=1h); no per-token revocation API — relying on TTL expiry + identity denylist",
-		})
-		ev := types.AuditEvent{
-			ID:        uuid.New(),
-			Time:      time.Now().UTC(),
-			RunID:     &runID,
-			ActorType: types.ActorSystem,
-			Actor:     "wardyn-broker",
-			Action:    "credential.revoke",
-			Target:    actor,
-			Outcome:   "success",
-			Data:      data,
-		}
-		if err := b.audit.Record(ctx, ev); err != nil {
-			audit.LogWriteFailure(ctx, ev, err)
-		}
-	}
-	return nil
 }
 
 // mintEvent builds a credential.mint audit event with full attribution

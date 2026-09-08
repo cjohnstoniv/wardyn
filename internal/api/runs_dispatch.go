@@ -231,7 +231,26 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// shape: one authoritative write, read by both the env half below and the
 	// ProxyConfig half further down, with no second variable to fall out of step.
 	p.PATBroker = !s.cfg.DisableGitPATBroker
-	droppedSSH, droppedPAT := applyDispatchModeEnv(sandboxEnv, run, p)
+	// AND THE SAME STAMP FOR THE GRANTS THEMSELVES, for the same reason. A
+	// git_pat grant for a BROKERED forge is withheld from the sandbox and audited
+	// as withheld (dropBrokeredGrants, below) — but ProxyConfig.PATGrants was
+	// built further down from the UNFILTERED p.GitPATGrants, so the /wardyn/git/
+	// route still published that very host. Dispatch then answered "which PAT may
+	// this run use for this forge?" two ways: withheld on the sandbox half,
+	// granted on the proxy half, with nothing in this package closing the gap —
+	// only brokeredForgeMintKind's refusal one layer down in the mint handler,
+	// which is a guard in another package standing in for a computation that
+	// belongs here.
+	//
+	// Filtering ONCE, through p, is what makes "the git-broker route is its only
+	// route to that forge" a property of dispatch rather than of a downstream
+	// check: both halves now read the same map. applyDispatchModeEnv still runs
+	// the same filter on its own copy — it is idempotent on an already-filtered
+	// map, and it keeps that function correct (and pinned) when it is called
+	// directly rather than through dispatchRun.
+	patKept, droppedPAT := dropBrokeredGrants(p.GitPATGrants, p.GitGrants, brokeredForgeHost)
+	p.GitPATGrants = patKept
+	droppedSSH, _ := applyDispatchModeEnv(sandboxEnv, run, p)
 	s.auditBrokeredGrantDrop(ctx, run.ID, "ssh_key", "run.ssh.brokered_forge", droppedSSH,
 		"this run is brokered for a repo on this forge, so the git-broker route is its only route to it BY NAME "+
 			"(confineGitBrokerEgress denies the forge and its SSH endpoint). Withholding the key is load-bearing, not "+
@@ -407,6 +426,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// hosts, minting the stored PAT proxy-side so it never enters the
 			// sandbox. Empty when the lane is off, which makes the route 403 —
 			// the same state as a run with no PAT grants at all.
+			//
+			// p.GitPATGrants is the map dropBrokeredGrants already filtered above,
+			// not the caller's: a brokered forge's PAT is withheld from BOTH halves
+			// of dispatch or from neither.
 			PATGrants: patBrokerGrants(p.GitPATGrants, p.PATBroker),
 			// Resolved above from site-config.UpstreamProxySecretRef; "" when
 			// unconfigured or unresolvable (direct dial, backward-compatible).
@@ -805,6 +828,12 @@ func (s *Server) byoiSelftest(ctx context.Context, run types.AgentRun, ref strin
 
 // patBrokerGrants converts the run's {host: grant_id} PAT grants into the
 // proxy's per-host broker allowlist, or nil when the lane is off.
+//
+// It converts what it is handed and filters nothing: dispatchRun feeds it the
+// map dropBrokeredGrants already narrowed, so a brokered forge never reaches
+// here. Re-deriving "is this forge brokered?" inside would be a second answer to
+// a question the sandbox half also answers — which is exactly how the two halves
+// came apart.
 //
 // The username is left empty here on purpose: the control plane resolves the
 // host's git username at MINT time (ADO wants "pat", GitLab "oauth2", and an

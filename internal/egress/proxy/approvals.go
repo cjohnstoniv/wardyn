@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -97,6 +98,29 @@ var holdPollInterval = 1 * time.Second
 // production worst case is a handful of seconds — well inside holdTimeout.
 const concurrentRaiseRetries = 5
 
+// maxApprovalHosts bounds the per-run first-use approval cache — and, with it,
+// how many approvals ONE run can raise, because this client is the only thing
+// that raises an egress_domain approval (the sandbox-facing route accepts
+// tool_call and nothing else, deliberately).
+//
+// Neither side was bounded: a.hosts had no cap and entries are never removed
+// (consumeIfOnce RESETS in place — delete() would nil-panic the unguarded
+// re-reads after Resolve's unlock), and the control plane has no per-run cap, so
+// 20,000 generated hostnames from inside the sandbox produced 20,000 cache
+// entries and 20,000 PENDING rows in under four seconds. Decided rows are never
+// deleted either, so the console list then has to scan them.
+//
+// Past the cap a NEW host resolves to pending, which evaluate turns into a
+// refusal: fail CLOSED, and no eviction, so a grant a human already made can
+// never be silently dropped and re-raised. The cap is far above any governed
+// run's real distinct-host count — the shape it stops is a loop, not a workload.
+// The sibling bound is maxLeafCerts (mitm.go).
+const maxApprovalHosts = 4096
+
+// approvalCapWarnOnce keeps the cap's log line to once per process: the
+// condition is a run-long state, and a per-request ERROR would bury it.
+var approvalCapWarnOnce sync.Once
+
 // approvalTTL bounds how long a granted (apApproved) host is trusted from cache
 // before Resolve re-validates it against the control plane. Without it an
 // approval that later EXPIRES or is REVOKED is never observed and egress keeps
@@ -147,11 +171,14 @@ func (a *approvalClient) configureHold(mode types.FirstUseMode, timeout time.Dur
 //     copy says "one connection": honest for HTTPS, understated (never
 //     overstated) for HTTP.
 //   - A `once` grant is SPENT BEFORE SUCCESS IS GUARANTEED. evaluate falls
-//     through from apApproved into the method check and VetHost IP vetting, and
-//     handleConnect dials only after that — so a DNS-rebind denial or a failed
-//     dial burns the grant and the operator is re-asked. Consuming after the
-//     dial instead would mean holding a.mu across it; this is the cheaper end of
-//     that trade, not an oversight.
+//     through from apApproved into VetHost IP vetting, and handleConnect dials
+//     only after that — so a DNS-rebind denial or a failed dial burns the grant
+//     and the operator is re-asked. Consuming after the dial instead would mean
+//     holding a.mu across it; this is the cheaper end of that trade, not an
+//     oversight. The METHOD check is no longer part of that window: since F032
+//     it runs BEFORE the approval flow (proxy.go, evaluate step 2), so a
+//     method-denied request neither raises an approval, nor takes a hold slot,
+//     nor spends a `once` grant.
 //   - `until` is enforced against TWO CLOCKS. The control plane validates
 //     DecisionExpiresAt (<= now+30d) against its own; this code enforces
 //     time.Now().After(st.expiresAt) against the sidecar's. Negligible when they
@@ -216,6 +243,25 @@ func consumeIfOnce(st *hostApproval) (state approvalState, id uuid.UUID, consume
 // (pending) state, which the caller turns into a 403 with the approval left
 // PENDING (so wait_for_review degrades to deny_with_review, never to allow).
 func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveResult {
+	// Arm the operator's budget HERE, before the first control-plane round trip —
+	// not at the timer below, which is armed only after the concurrent-raise retry
+	// loop. Nothing else bounds these calls: handleConnect/handlePlain carry no
+	// deadline (server.go sets ReadTimeout/WriteTimeout 0), so the only ceiling
+	// used to be the shared control-plane http.Client's own Timeout, and the
+	// retry loop spends up to concurrentRaiseRetries+1 of them PLUS its sleeps
+	// before the hold timer exists. Against a black-holed control plane that is
+	// 6x the client timeout — 785s on the shipped 130s client — for a hold
+	// docs/POLICIES.md sells as first_use_hold_seconds (default 30s).
+	//
+	// Deriving the ctx once and passing it to every Resolve/raise/poll below puts
+	// the retry loop, the raise and every poll inside that one budget; the timer
+	// stays because it is what makes the WAIT itself readable, and it can only
+	// fire at or before this deadline. Cancellation of the caller's ctx still
+	// propagates through, and the result on expiry is unchanged: pending, i.e.
+	// fail closed.
+	ctx, cancel := context.WithTimeout(ctx, a.holdTimeout)
+	defer cancel()
+
 	// First resolve raises the approval (or returns a cached terminal state).
 	r := a.Resolve(ctx, host)
 	// A concurrent first-touch connection to the SAME new host can land here
@@ -335,10 +381,38 @@ type resolveResult struct {
 // the current actionable state. It is safe for concurrent use and never
 // blocks on the request path beyond a single bounded HTTP round-trip used to
 // raise or poll an approval.
+//
+// KEYED ON THE HOST, AND ON NOTHING ELSE. evaluate calls this with req.Host and
+// discards the port, so ONE approval releases EVERY port of that host for
+// whatever reach its scope names, with no second approval raised — an approve
+// raised by a CONNECT to :443 also allows :22 and :5432, and on scope=always it
+// does so for every future run of the workspace. That is a property of the whole
+// path and not of this map: the raise body a human is shown carries {host, mode}
+// and no port (egressScope), and the durable always-write goes through
+// hostrules.ValidApprovedHost, which refuses a port by construction. Port
+// scoping would therefore be a behaviour change at all three places, not a key
+// change here.
+//
+// It is written down in code as well as in docs/POLICIES.md's scope table
+// ("Every scope in that table is HOST-wide — on every port") because the table's
+// columns describe how LONG a decision lasts and never how NARROW it is, and the
+// one nearby passage that does mention ports documents the DENY side as
+// port-blind — which a reader can fairly take to imply that a grant is not.
 func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult {
 	a.mu.Lock()
 	st, ok := a.hosts[host]
 	if !ok {
+		if len(a.hosts) >= maxApprovalHosts {
+			// Fail closed: no entry, no raise, no row. Already-decided hosts keep
+			// working — they have their entries — so this bites only new names.
+			a.mu.Unlock()
+			approvalCapWarnOnce.Do(func() {
+				slog.Error("wardyn-proxy: first-use approval host cap reached; further NEW hosts are refused without raising an approval",
+					slog.Int("cap", maxApprovalHosts),
+					slog.String("run_id", a.runID.String()))
+			})
+			return resolveResult{State: apPending}
+		}
 		st = &hostApproval{state: apNone}
 		a.hosts[host] = st
 	}
