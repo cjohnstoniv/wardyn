@@ -14,7 +14,9 @@
  */
 
 /** Where scripts/record-demo.sh materializes the workspace copy. */
-export const WORKSPACE_PATH = process.env.WARDYN_DEMO_WORKSPACE || `${process.env.HOME}/wardyn-demo/slugify`;
+export const WORKSPACE_PATH =
+  process.env.WARDYN_DEMO_WORKSPACE ||
+  `${process.env.WARDYN_DEMO_ROOT || `${process.env.HOME}/wardyn-demo`}/slugify`;
 
 /** The name typed into the Add workspace dialog. */
 export const WORKSPACE_NAME = "slugify";

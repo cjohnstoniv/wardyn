@@ -522,12 +522,20 @@ breaks the driver loudly, and this table is where you look to fix it.
 | Beat | Command |
 |---|---|
 | Clean slate | `WARDYN_FORCE_RESET=1 ./scripts/up.sh reset-all --purge-env` — **without** `--purge-images`; rebuilding agent images is minutes of dead air |
-| Bring it up | `WARDYN_SETUP_MODE=container WARDYN_WORKSPACES_ROOT=~/wardyn-demo WARDYN_UP_NO_BROWSER=1 make setup` |
+| Bring it up | `WARDYN_SETUP_MODE=container WARDYN_DEMO_ROOT=/srv/wardyn-demo WARDYN_WORKSPACES_ROOT=/srv/wardyn-demo WARDYN_UP_NO_BROWSER=1 make setup` |
 | Model | `wardyn subscription connect --token-stdin < ~/.wardyn-demo-token` — visible command, invisible token |
 
 The workspace is rebuilt from the fixture every take (a previous recording left
 the agent's `slugify()` in it) and `git init`ed, so the run's Files surface has a
 real diff.
+
+**The demo root is ON CAMERA.** The console prints a workspace's source path in
+the Workspaces table, the workspace detail header and every run header, so
+whatever `WARDYN_DEMO_ROOT` points at is published in the take. Record under a
+root that carries no operator identity — `/srv/wardyn-demo`, not `~/wardyn-demo`,
+whose `$HOME` spells your username on screen. `WARDYN_DEMO_ROOT` is the single
+root every episode and `scripts/verify-demo-take.sh` fall back to, so setting it
+once covers the whole series.
 
 ### Act 1 — first light
 

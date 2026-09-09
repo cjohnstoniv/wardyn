@@ -115,7 +115,8 @@ const WORKSPACE = "egress-lab";
  * would otherwise be prose in a script nobody reads on shoot day.
  */
 const WORKSPACE_PATH =
-  process.env.WARDYN_DEMO_EGRESS_WORKSPACE || `${process.env.HOME}/wardyn-demo/egress-lab`;
+  process.env.WARDYN_DEMO_EGRESS_WORKSPACE ||
+  `${process.env.WARDYN_DEMO_ROOT || `${process.env.HOME}/wardyn-demo`}/egress-lab`;
 
 /** The host the whole video is about: held, approved, then permanently granted. */
 const HELD_HOST = "example.org";

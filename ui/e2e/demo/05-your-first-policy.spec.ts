@@ -42,8 +42,8 @@
  * distinction, and the floor-refuses beat are LIFTED VERBATIM from old-08
  * (the retired policies episode — deleted in the 0.7 cleanup; its 24 captions
  * with no counterpart here are held in local/episode-06-firstrun-proposal.md — whose material this
- * episode absorbs per Workstream C of /home/cjohn/.claude/plans/merry-snacking-
- * harbor.md). Owner lines MOVE unchanged; the safety-meter beats, the panel/
+ * episode absorbs per Workstream C of the episode-06 planning note, an
+ * untracked working note). Owner lines MOVE unchanged; the safety-meter beats, the panel/
  * template intro, the forward-looking reuse teaching, and the conclusion are
  * NEW, marked [OWNER SLOT — drafted] in local/episode-05-policy-proposal.md (untracked working note).
  * The three B4 floor lines carry old-08's own DIALOG-STALE note (the refusal is
