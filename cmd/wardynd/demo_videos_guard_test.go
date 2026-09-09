@@ -34,7 +34,8 @@ func TestDemoVideoManifestMatchesREADME(t *testing.T) {
 	for _, m := range linkRe.FindAllStringSubmatch(string(readme), -1) {
 		readmePairs[[2]string{m[1], m[2]}] = true
 	}
-	if len(readmePairs) < 13 {
+	// 0.7 ships eleven episodes; the rest read "coming soon" in README and carry no link.
+	if len(readmePairs) < 11 {
 		t.Fatalf("parsed only %d (tag, file) pairs from README.md — the parse regressed and this guard would pass vacuously", len(readmePairs))
 	}
 
