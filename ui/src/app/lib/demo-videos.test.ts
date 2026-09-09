@@ -12,7 +12,7 @@ describe("demo-videos", () => {
     const e = EPISODES.find((x) => x.id === "01");
     expect(e).toBeDefined();
     expect(episodeUrl(e!)).toBe(
-      "https://github.com/cjohnstoniv/wardyn/releases/download/v0.6.0/wardyn-01-why-govern-agents.mp4",
+      "https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.0/wardyn-01-why-govern-agents.mp4",
     );
   });
 
@@ -70,8 +70,12 @@ describe("demo-videos", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("ships exactly 13 episodes with a non-null tag", () => {
-    expect(EPISODES.filter((e) => e.tag !== null).length).toBe(13);
+  it("ships exactly the six 0.7 takes that show no operator path, and nothing else carries a tag", () => {
+    // 0.7 re-recorded the series; five clean-by-content takes were held back because the console's own
+    // headers filmed the recording host's home path. They re-record and join this list when they pass.
+    const shipped = EPISODES.filter((e) => e.tag !== null).map((e) => e.id);
+    expect(shipped).toEqual(["01", "02", "03a", "03b", "03d", "05"]);
+    expect(EPISODES.filter((e) => e.tag !== null).every((e) => e.tag === "v0.7.0")).toBe(true);
   });
 
   // Coupling check: every step id an episode declares has to resolve
