@@ -8,6 +8,517 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-09-09
+
+Two of the three headline blockers an enterprise adopter reported against 0.6.6 are
+fixed here — both were already built when the report arrived. An operator can trust a
+TLS-inspecting proxy's root CA (`WARDYN_TRUSTED_CA_FILE`): the daemon, the proxy
+sidecar and every sandbox pick it up. And an operator can declare internal hostnames —
+an in-cluster service, a corporate registry — allowed to resolve to private/CGNAT
+addresses (`SiteConfig.internal_hosts`), so an internal service is reachable by name
+instead of only by a literal IP. Everyone signs in once after upgrading: cookies
+issued by an older daemon are re-derived rather than accepted. The rest of 0.7 is
+assignable governance profiles, a security-admin tier, user drives, and never-resident
+git PATs.
+
+### Highlights
+
+- **Governance profiles** — a named policy ceiling an admin can ASSIGN to a person, to an SSO group, or to everyone, so a contractor group and a platform team can hold genuinely different limits on one install. A profile REPLACES the site-wide default rather than composing with it. - **A security-admin role**, and a console that can be delegated to it — the second admin tier governs the verdict (profiles, permissions, egress decisions, token inventory, audit verification) and deliberately does NOT reach into a run. - A governance profile can cap **how many runs one person has going at once**, and self-service secrets gain the per-owner cap the sibling surfaces already had. - An admin can fence **which agents and which model providers** a member may name on their own run, as two more permission kinds on the existing Permissions page. - **User drives** — an admin registers persistent storage and allocates it to people, groups or everyone; a member mounts theirs per run at `/home/agent/drive`, **read-only unless allowed**, and the server resolves which drive belongs to the signed-in caller. Registering a drive on a host path is fenced by `WARDYN_USER_DRIVE_HOST_ROOTS`, unset and therefore closed by default. - **Git PATs for non-GitHub forges are never resident** — `agent-run` rewrites a granted host to a plain-HTTP broker path, the proxy mints server-side and injects Basic auth itself, and the grant ids are withheld from the sandbox env. `WARDYN_GIT_PAT_BROKER=off` restores the old lane; there is deliberately **no automatic fallback**.   - The lane is on by default and, until this release candidate, **was not actually running**: "the switch resolved into a setting nothing read, and the lane was carried by an internal per-launch flag no launch path ever set". - An operator can trust a corporate TLS-inspecting proxy's root CA (`WARDYN_TRUSTED_CA_FILE`), delivered on compose, the desktop profile and the Helm chart. - An operator can declare internal hostnames allowed to resolve to private/CGNAT addresses (`SiteConfig.internal_hosts`), and can tell a corporate proxy **which destinations to skip** (`upstream_proxy_no_proxy`). - Bedrock can be reached through a **VPC (PrivateLink) endpoint** (`WARDYN_BEDROCK_BASE_URL`), with full model ARNs documented as accepted identifiers. - An operator can point the API-key model-access lane at an **internal gateway** (`WARDYN_ANTHROPIC_BASE_URL` / `WARDYN_OPENAI_BASE_URL`). - **A member can bring their own model API key** and set and remove their own secrets — it works in their own runs with no admin setup and is never reachable from anyone else's run. - The **People step becomes an acting surface**: an admin adds, edits and deletes `WARDYN_OIDC_ROLE_MAP` role mappings live from the console, guarded by a posture-flip acknowledgement and a lockout refusal. - Console `tool_rules`: a per-tool allow / hold / deny editor in the policy panel, a "What this run can do" line on the New run rail, and audit rows that read **Decided by rule** with the verbatim `rule_source`. - **A blocked egress request now says WHICH rule blocked it** — `X-Wardyn-Egress-Reason` carries the decision log's own rule source (`policy:default-deny`, `approval:denied`, `builtin:private-ip`, …). - Wardyn reports whether the Kubernetes NetworkPolicy that isolates sandboxes is **actually enforced** (`/healthz`'s `network_policy` field, plus a boot-time audit event on an unenforced-but-allowed cluster). - **Helm `image.digest`** — the blessed Kubernetes path no longer has to float on a mutable tag. - External clients can drive a sandbox over the SSH gateway: `wardyn ssh-key ensure|list`, `wardyn run wait-ready <id> --json`, `wardyn ssh <id> --json`, plus the per-run `git_push_any_branch` opt-out. - **A browser desktop (noVNC) is a shipped image variant** (`deploy/images/novnc/`, `make agent-image-novnc`) — local build only, and it changed no server code. - A fresh install **remembers being set up server-side** (`POST /setup/onboarding-complete`), so a different browser — or a different admin — lands past the funnel too. - `threatmodel/AGENT-THREAT-MODEL.md` — a portable threat model for agent systems generally, carrying twice as many non-mitigated verdicts as mitigated ones. 
+### Hardening pass
+
+0.7 was reviewed before release rather than after. Seven independent verification
+runs (R1–R7) were opened over the release candidate, one per subject area, staffed
+with blind reviewer agents working from a written brief. Six of them produced ledgers;
+the seventh (R2, the run plane) was abandoned before its first round finished, and that
+gap is stated below rather than averaged away. Every finding the six recorded is in a
+ledger, and every fix claim names the command that proves it. This section is the
+arithmetic out of those ledgers, the contract changes an operator will notice, and what
+is still open. **The bullets in the sections below this one are the individual fixes
+those runs produced.**
+
+Read the table with two qualifications, both load-bearing:
+
+- **"Fixed" mostly means fix-claimed, not reviewer-verified.** Six of the seven runs
+  ended `INCONCLUSIVE (budget)`: the fix wave landed, the gates were re-run green on
+  the release candidate (`make ci` 24/24 plus the PostgreSQL lane, `gate exit=0 tree
+  776c1065` and `gate exit=0 tree 0e8a751d`), but a second blind reviewer round to
+  confirm the fixes was not funded. Only R1 carries reviewer-verified fixes (101 of
+  them), and even there the 62 final-wave fixes are "fixed-unverified, gate-green".
+- **"Open" is almost entirely Low/Info residue** deliberately left for 0.7.1, listed
+  in `local/review-0.7/FOLLOW-UPS-0.7.1.md`. Only one open finding is above Low (a
+  single R7 Medium). The ten `deferred` findings are the ones to read: two of them are
+  **High** (R3 F055, R4 F107) and both are named under Residuals below.
+
+| Run | Subject | Critical | High | Medium | Low | Info | Total | Fixed | Disputed | Deferred | Open | Verdict | Source |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **R1** | authz + governance | 11 | 41 | 117 | 124 | 58 | **351** | 163 (101 verified-fixed + 62 fix-claimed) | 3 rejected | 3 | 182 | INCONCLUSIVE (budget) — 65 unverified | `local/review-0.7/runs/R1-REPORT.md` §0 — 351 = 284 on the re-init ledger + 67 carried from the deep ledger |
+| **R2** | run plane | 0 | 0 | 0 | 0 | 0 | **0** | 0 | 0 | 0 | 0 | not reviewed — the round was abandoned before ingest and the ledger is empty (its report's verdict string reads APPROVED over zero findings) | `~/.claude/verify-runs/wardyn-0.7-r2-20260904-161449/report.md` |
+| **R3** | egress + credentials | 2 | 32 | 62 | 45 | 23 | **164** | 95 fix-claimed | 0 | 1 | 68 | INCONCLUSIVE (budget) — 56 unverified | `~/.claude/verify-runs/wardyn-0.7-r3-20260904-161453/report.md` |
+| **R4** | UI console | 0 | 17 | 46 | 67 | 16 | **146** | 57 fix-claimed | 0 | 6 | 83 | INCONCLUSIVE (budget) — 51 unverified | `~/.claude/verify-runs/wardyn-0.7-r4-20260904-160926/report.md` |
+| **R5** | ops / install / CLI | 0 | 12 | 125 | 84 | 17 | **238** | 137 fix-claimed | 0 | 0 | 101 | INCONCLUSIVE (budget) — 96 unverified | `~/.claude/verify-runs/wardyn-0.7-r5-20260903-202842/report.md` |
+| **R6** | docs + threat model | 0 | 8 | 62 | 57 | 7 | **134** | 70 fix-claimed | 0 | 0 | 64 | INCONCLUSIVE (budget) — 45 unverified | `~/.claude/verify-runs/wardyn-0.7-r6-20260903-202659/report.md` |
+| **R7** | user drives | 1 | 7 | 41 | 44 | 14 | **107** | 44 fix-claimed | 4 disputed | 0 | 59 | INCONCLUSIVE (budget) — 27 unverified | `~/.claude/verify-runs/wardyn-0.7-r7-20260903-160043/report.md` |
+| | **Total** (arithmetic over the rows above; not read from any single file) | **14** | **117** | **453** | **421** | **135** | **1140** | **566** | **7** | **10** | **557** | | |
+
+R2 is the one subject area 0.7 did not verify: its abandoned round banked 18 lens files with 75 untriaged candidate rows (4 High, 36 Medium, 26 Low, 9 Info), which are 0.7.1's first triage (`local/review-0.7/FOLLOW-UPS-0.7.1.md`). Nothing in this release claims to have reviewed the run plane.
+
+Full verdict strings, verbatim from each report's `## Final Verdict`:
+
+- R1 — `VERIFY wardyn-0.7-r1-std-20260905-214053 INCONCLUSIVE (budget) — 65 unverified (mode: repo) (tools changed r1: ledger.py, references/convergence.md) 386dc19`
+  · source: `local/review-0.7/runs/R1-REPORT.md:5`, also `~/.claude/verify-runs/wardyn-0.7-r1-std-20260905-214053/report.md:3428`
+- R2 — `VERIFY wardyn-0.7-r2-20260904-161449 APPROVED (mode: repo) 3a46853`
+  · source: `~/.claude/verify-runs/wardyn-0.7-r2-20260904-161449/report.md:46`
+- R3 — `VERIFY wardyn-0.7-r3-20260904-161453 INCONCLUSIVE (budget) — 56 unverified (mode: repo) (tools changed r1: ledger.py) 3a46853`
+  · source: `~/.claude/verify-runs/wardyn-0.7-r3-20260904-161453/report.md:2239`
+- R4 — `VERIFY wardyn-0.7-r4-20260904-160926 INCONCLUSIVE (budget) — 51 unverified (mode: repo) (tools changed r1: ledger.py, references/convergence.md) 3a46853`
+  · source: `~/.claude/verify-runs/wardyn-0.7-r4-20260904-160926/report.md:1994`
+- R5 — `VERIFY wardyn-0.7-r5-20260903-202842 INCONCLUSIVE (budget) — 96 unverified (mode: repo) (tools changed r1: ledger.py, review_round.js) 020b09d`
+  · source: `~/.claude/verify-runs/wardyn-0.7-r5-20260903-202842/report.md:3232`
+- R6 — `VERIFY wardyn-0.7-r6-20260903-202659 INCONCLUSIVE (budget) — 45 unverified (mode: repo) (tools changed r1: ledger.py, review_round.js) 020b09d`
+  · source: `~/.claude/verify-runs/wardyn-0.7-r6-20260903-202659/report.md:1964`
+- R7 — `VERIFY wardyn-0.7-r7-20260903-160043 INCONCLUSIVE (budget) — 27 unverified 386dc19`
+  · source: `~/.claude/verify-runs/wardyn-0.7-r7-20260903-160043/report.md:1521`
+
+
+
+
+#### Contract and compatibility changes
+
+Every row below is one `[Unreleased]` bullet. The **compat note** column is the
+bullet's own words where it carries one, and `—` where the bullet states none; nothing
+in that column is inferred. `CHANGELOG.md` line numbers are the pre-rename numbering.
+
+**Upgrade-affecting first — read these five before upgrading:**
+
+| Line | What | Compat note (the bullet's own words) |
+|---|---|---|
+| 645 | **Everyone signs in once after upgrading.** The session cookie's format version is stamped; cookies issued by an older daemon are re-derived rather than accepted. API tokens carry the same marker from the moment they are minted. | "This is deliberate and it is one field's fault: the cookie now records whether a member's group list was truncated" |
+| 639 | **Helm `k8s.runsNamespace` must be set** — `k8s.enabled=true` with an empty value is now refused at render. | "**Upgrading a k8s install that relied on the default:** set `k8s.runsNamespace` to a dedicated, pre-existing namespace (create it first — the chart never does) … or set the new `k8s.allowRunsInReleaseNamespace: true` to render as before and accept the shared blast radius. Installs that already set `k8s.runsNamespace` are unaffected." |
+| 662 | **`WARDYN_REQUIRE_OPERATOR_SET_EGRESS` default flips off → ON.** | "**Upgrade impact:** a workspace whose egress requirements are `scan_seeded` stops having them auto-added, and the run's warnings name what was skipped; an operator declaring the host is the intended fix. Set `WARDYN_REQUIRE_OPERATOR_SET_EGRESS=false` to restore the old behaviour." |
+| 105 | **Migration `0061_user_drives_name_slug_unique`** refuses two drives whose DNS-1123 fold collides. | "**An upgrade fails if the install already holds such a pair** — that pair is the defect, and the remedy is to rename one drive: `SELECT name_slug, array_agg(name) FROM user_drives WHERE backend <> 'host_path' AND name_slug <> '' GROUP BY 1 HAVING count(*) > 1;`" |
+| 635 | **Rebuild the agent images before upgrading if you use user drives** (`make agent-images-core`, then re-pin `WARDYN_AGENT_IMAGES` if you pin). | "on a pre-0.7 image an allocated drive appears as a root-owned directory the agent cannot write. BYOI images must do the same. 0.7 also refuses `/home/agent/drive` as an authored mount target: a pre-0.7 policy or workspace row that names it is dropped with a WARN at dispatch until you edit it (OPERATIONS.md Upgrades has the sweep)." |
+
+**Database migrations.** 0.7 carries **twelve**: `0050`–`0061`. `v0.6.6` ends at
+`0049`. Four are named in the bullets below; the rest ship unnarrated.
+
+| Migration | Named at | What |
+|---|---|---|
+| `0050_secret_owned_by` | CHANGELOG.md:658 | "The `secrets` table's primary key widens from `name` to `(owned_by, name)` … existing rows are unaffected and keep working exactly as before." |
+| `0051_role_mappings` | not named | console-managed role mappings (the People step's write target) |
+| `0052_governance_profiles` | not named | governance profiles and their assignments |
+| `0053_role_mappings_security_admin` | not named | the `security_admin` tier in the role map |
+| `0054_user_drives` | not named | the user-drive tables |
+| `0055_workspace_egress_edited_at` | not named | `workspaces.egress_edited_at` (the boot-heal marker at CHANGELOG.md:638) |
+| `0056_audit_chain_serialize` | CHANGELOG.md:91 (by consequence) | audit-chain serialization moved into the trigger |
+| `0057_audit_chain_security_definer` | CHANGELOG.md:91 | "the `0057` state `0058` repaired" |
+| `0058_audit_chain_schema_qualified` | CHANGELOG.md:91 | the repair for the `0057` state |
+| `0059_user_drive_grants_home_override_unique` | not named in `[Unreleased]` | one `home_override` per drive (`docs/OPERATIONS.md:212` names it) |
+| `0060_api_tokens_role_check` | not named | API-token role constraint |
+| `0061_user_drives_name_slug_unique` | CHANGELOG.md:105 | see the upgrade table above |
+
+
+**New environment variables.**
+
+| Line | Var | What | Compat note |
+|---|---|---|---|
+| 114 | `WARDYN_USER_DRIVE_HOST_ROOTS` | allowlist a `host_path` drive may be registered inside | "unset, and therefore closed, by default" |
+| 117 | `WARDYN_BEDROCK_BASE_URL` | Bedrock data plane at a VPC/PrivateLink endpoint | "The endpoint is a boot flag rather than a runtime setting because in bearer mode it is the TLS-interception and credential-injection target." |
+| 135 | `WARDYN_TRUSTED_CA_FILE` | trust a corporate TLS-inspecting proxy's root CA across daemon, sidecar and every sandbox | — |
+| 137 | `WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` | opts in to an email-shaped console role mapping | "An email-shaped console mapping is refused by default" |
+| 141 | `WARDYN_ANTHROPIC_BASE_URL`, `WARDYN_OPENAI_BASE_URL` | point the API-key model lane at an internal gateway | "subscription and Wardyn-managed runs still reach the public provider directly" |
+| 222 | `WARDYN_GIT_PAT_BROKER` | `off` restores the pre-0.7 resident-PAT lane | "There is deliberately **no automatic fallback** — falling back would silently return the PAT to the sandbox." |
+| 332 | `deploy/desktop/wardyn.env.m-prime.example` (`WARDYN_MEMBER_MODE` envelope) | second complete m′ envelope | "`WARDYN_ADMIN_TOKEN` carried only as a pointer to `secret.env`, never as a value" |
+
+**Existing environment variables whose meaning or default moved.**
+
+| Line | Var | Change | Compat note |
+|---|---|---|---|
+| 17 | `WARDYN_GIT_APPROVAL_TIMEOUT` | widened: "One budget now covers the mint, the wait and every poll" | — |
+| 33 | `WARDYN_PROXY_IMAGE` | sidecar config decode is strict; unknown keys are named, not discarded | "Bump `WARDYN_PROXY_IMAGE`/`k8s.proxyImage` in lockstep." |
+| 89 | `WARDYN_PORT` | the installer upgrade path "never discards `WARDYN_PORT` in silence" | — |
+| 90 | `WARDYN_PG_DSN` | "`pool_max_conns=1` now boots with a warning, and the recommended floor with the ground-truth rotator enabled is 4 (was 3)" | — |
+| 91 | `WARDYN_PG_MIGRATE_DSN` | the boot audit-chain canary "now runs on BOTH pools" in the split-role posture | — |
+| 92 | `WARDYN_VERSION` | `install.sh` refuses a value that is not a plain release tag (`/` or `..`) | "Legitimate tags (`v0.7.0`, `v0.7.0-rc1`) are unaffected." |
+| 308 | `WARDYN_DOCKER_SOCK` | honored from the envelope; when nothing resolves the launcher "refuses and prints what it tried" | — |
+| 316 | `WARDYN_SSH_LISTEN` / `WARDYN_SSH_ADVERTISE` | now set in both the desktop envelope and the one-line installer | "**empty means off — no listener, not even a generated host key**" |
+| 389 | `WARDYN_EGRESS_SECOND_HUMAN` | in local mode the switch is now answered with a `503` naming the incompatibility | "scoped to egress decisions so nothing else in local mode changes" |
+| 393 | `WARDYN_ALLOW_MEMBER_ENV_SECRET` | `env_secret`'s admin-only posture now binds on inline body, selected row AND deployment default | "Operators are unaffected; a deployment that deliberately serves `env_secret` to members opens `WARDYN_ALLOW_MEMBER_ENV_SECRET` as documented." |
+| 496 | `WARDYN_WARDYND_IMAGE` | the desktop launcher now reads both pins from the envelope instead of its exported `:latest` default | — |
+| 549 | `WARDYN_AGENT_IMAGES` | `--agent claude-code` re-points to `agent-base` | "an override in `WARDYN_AGENT_IMAGES` is still consulted first and is keyed by agent name, so an operator who pins the image is unaffected" |
+| 641 | every `WARDYN_*` string setting | an empty value now reads as "unset, keep the default" (previously `WARDYN_LISTEN=` bound `0.0.0.0:80` and silenced all three listen refusals) | "to blank a value deliberately, pass the flag (`-listen=`)" |
+| 641 | `WARDYN_*` / `ANTHROPIC_API_KEY` inheritance | `wardyn ssh`, `wardyn setup`'s `docker info` and the `setup wall/vault --run` installer no longer inherit them | "`docker compose config` inside `support-bundle` still does, deliberately, and its output is redacted" |
+| 655 | `WARDYN_ENVBUILD_IMAGE` | default workspace-build image pinned by tag **and** digest instead of `:latest` | "`WARDYN_ENVBUILD_IMAGE` (`-envbuild-image`) still moves the pin" |
+| 662 | `WARDYN_REQUIRE_OPERATOR_SET_EGRESS` | **default off → on** | see the upgrade table above |
+
+**Helm values and render refusals.**
+
+| Line | Value | Change | Compat note |
+|---|---|---|---|
+| 109 | `image.digest` (NEW), `image.tag` | `sha256:<64 hex>` pulls by digest; a non-`sha256:` value is refused at render; a non-empty tag is kept as `repo:tag@sha256:…` | "default `\"\"`, byte-identical render when empty" |
+| 33 | `k8s.proxyImage` | must move with wardynd | "Bump `WARDYN_PROXY_IMAGE`/`k8s.proxyImage` in lockstep." |
+| 90 | `allowMultiReplica` | now passes the new `-allow-multi-instance` flag for you; `strategy: Recreate` is what lets an upgrade converge | "under RollingUpdate the new pod would refuse while the old one holds the lock" |
+| 632 | `env.WARDYN_AGE_KEY` (checklist hint) | the age-key hint steers the key into the chart's Secret-backed options instead of a plaintext `env.WARDYN_AGE_KEY` | — |
+| 637 | pod `fsGroup` on drive pods | only a managed `k8s_pvc` claim keeps `fsGroup: 1000` with `OnRootMismatch`; a `k8s_pvc_static` share pod carries none | "**Compat:** an admission policy or check asserting `fsGroup` on drive pods must scope itself to managed drives." |
+| 639 | `k8s.runsNamespace` (now REQUIRED), `k8s.allowRunsInReleaseNamespace` (NEW, default false) | render refusal on an empty runs namespace | see the upgrade table above |
+| 642 | `env`/`extraEnv` `WARDYN_AGE_KEY` beside `secrets.ageKeySecretRef` / `ageKeyFromSecret` / `ageKey` | now fails at render (previously rendered and the plaintext literal silently won) | "drop one" |
+| 642 | `env`/`extraEnv` `WARDYN_ADMIN_TOKEN` beside `auth.adminToken.secretRef.name` / `.value` | now fails at render | "either alone still renders, and the 401 refusal no longer recommends the plaintext door" |
+| 642 | `ssh.enabled` / `uiSandbox.enabled` NetworkPolicy | those ports now exclude pods labelled `wardyn.managed` | "HTTP is unchanged and operator-supplied peers other than a bare `podSelector: {}` pass through untouched" |
+| 643 | ClusterRole / ClusterRoleBinding names | now carry the release namespace (`wardyn-wardyn-k8s-runtimeclasses`) | "`helm upgrade` replaces them in place. Anything outside the chart that referenced the old names — an RBAC audit, an admission policy — needs the new ones." |
+
+**Routes.**
+
+| Line | Route | Change |
+|---|---|---|
+| 42 | `/wardyn/git/<host>/` | a withheld `git_pat` is no longer published to the proxy's PAT-broker path — "withheld from BOTH halves of dispatch" |
+| 116 | forty gated routes | classified across the two admin tiers in an exhaustive table a test walks from both |
+| 118 | `POST /setup/onboarding-complete` | NEW; "idempotent and audited" |
+| 137 | `GET /access`, `POST /access/mappings`, `DELETE /access/mappings/{id}`, `POST /access/preview` | NEW; live role-mapping CRUD from the console |
+| 356 | workspace detail + observed-traffic reads | now readable by `security_admin` (previously answered "not found") — "Nothing else moved" |
+| 371 | `GET /api/v1/approvals?run_id=` | now paged; "The run filter, the state filter and the page window now all run in one indexed query" |
+| 385 | `POST /api/v1/admin/sandboxes/sweep` (added at 291) | stays admin-only "on the reason that actually holds"; "No behaviour changed" |
+| 387 | site config, source library (list + detail), base-image catalog | **all four move member → admin tier**; "nothing member-facing consumed them" |
+| 390 | recording-session launch | **admin-only again** (had sat on the security-admin tier); "Promoting recorded egress into the allowlist … stays with security admins" |
+| 398 | `/metrics` | no longer disappears during an audit-store outage |
+| 686 | `GET /auth/logout` | **REMOVED**; "Signing out is `POST /api/v1/auth/logout` … `GET /auth/login` and `GET /auth/callback` are unchanged." |
+
+**Wire fields, headers, audit actions and metrics.**
+
+| Line | Identifier | Change | Compat note |
+|---|---|---|---|
+| 15 | broker request-header strip list | wider and shared: "`Cookie`, `Private-Token`, `X-Goog-Api-Key`, `X-Amz-Security-Token`, `X-Functions-Key`, `X-Access-Token`, `Anthropic-Api-Key`" | — |
+| 20 | `findings_capped`, `findings_past_cap`, `findings_total` | NEW on the decision wire; `finding_count` in the audit row now **is** `findings_total`, counted as produced rather than inferred | — |
+| 28 | plain-lane injection header strip (`Authorization` / `X-Api-Key`) | one definition shared by both injecting paths | — |
+| 46 | `Skipped{attachment_decode_error}` | NEW skip reason; honors `on_scanner_error=block` | — |
+| 53 | `auth.failed` row + `wardyn_auth_failed_suppressed_total` | the sandbox/host-sensor boundary refusals now emit the public lane's rate-bound row with an actor naming which boundary refused | — |
+| 54 | `X-Wardyn-Principal` (local mode) | narrowed: no longer steers the run identity's `sub` / secret namespace | "The header keeps its documented attribution job; the namespace now comes from the principal wardynd injected." |
+| 61 | AWS SSO upload `region` / `start_url` | refused when they disagree with the operator's configured SSO region and portal URL; a second capture from the same run is refused | — |
+| 64 | `wardyn_egress_denies_total` | narrowed: `builtin:dial-failed` and `egress.decisions.dropped:<n>` no longer move it | "they still record their `egress.deny` audit row, neither moves the counter" |
+| 66 | mint 409 `code` values (`types.MintConflict*`) | one home shared by the API handler and `wardyn-git-helper`; the `denied` arm is now covered | — |
+| 67 | `credential.revoke` rows on the kill cascade | now enumerate the run's successful `credential.mint` rows, each with a per-KIND note | "a `git_pat`/`ssh_key` says the operator must rotate the secret at the forge rather than claiming GitHub's TTL-expiry semantics" |
+| 114 | run-request user-drive flag | "a run request carries only a flag: the server resolves which drive belongs to the signed-in caller and derives their own directory from their own identity, so nobody can name someone else's" | — |
+| 120 | `X-Wardyn-Egress-Reason: approval-pending` | the value "that distinguishes 'wait, then retry' from a hard no" | — |
+| 122 | SDK `ListSSHKeys`, `AddSSHKey`, `RunFiles` | NEW SDK methods | — |
+| 123 | audit `brokered:git:branch-ns-off` | NEW; every `git_push_any_branch` push is audited with it | "clamped away from members' inline policies" |
+| 126 | audit `rule_source` on rule-decided tool calls | rendered as "Decided by rule" with the verbatim value | — |
+| 139 | `/healthz` → `network_policy` | NEW field, plus a boot-time audit event on an unenforced-but-allowed cluster | — |
+| 142 | `GET /secrets` → `mine` | NEW; "AWS/Bedrock credential names stay admin-only, and an admin can still manage a member's secrets via `?owner=`" | — |
+| 183 | `X-Wardyn-Egress-Reason` | NEW response header carrying the decision log's own rule source | "Same static strings the audit trail already records, so nothing new is disclosed." |
+| 196 | `ssh.channel_rejected` | NEW audit event naming the channel type | — |
+| 358 | admin `?owner=` secret-namespace READ | now audited — "names were listed, and how many" | "A member listing their own namespace, which the console does on every page load, is deliberately not recorded." |
+| 359 | dropped failed-sign-in audit rows; API-token store-error counter | both now counted | "the gauge says plainly what it does and does not cover" |
+| 363 | brokered `git_pat` egress decision | names the forge it reached, not the control-plane host | — |
+| 364 | `PUT /site-config` `onboarding_completed_at` → response `onboarding_completed_at_ignored` | PUT no longer 400s on a body containing it; the stored mark is carried forward and the submitted copy reported as ignored | — |
+| 379 | malformed egress-approval scope | the second bad shape now audits identically, "naming which of the two it was" | — |
+| 383 | group-snapshot refusal error body | the remedy guidance travels with the error; the launch endpoint drops its false "policy invalid" prefix | — |
+| 397 | `wardyn_audit_spool_lines` | meaning clarified | "Mid-drain the spool file can hold lines already replayed; `wardyn_audit_spool_lines` remains the backlog." |
+| 399 | `wardyn_audit_spool_quarantined_total` | now survives a restart | — |
+| 410 | `GET /runs/{id}/files` → `vcs` | no longer `"none"` for every `--repo` run | — |
+| 413 | k8s run state | present-in-Spec-but-not-in-Status is now `STARTING` (was a terminal `FAILED`) | "an exec id absent from `Spec` was never exec'd against that pod and stays terminal" |
+| 634 | console allocation form `home_override` | sent only when the field was touched | "so an untouched repoint keeps the pinned directory name" |
+| 636 | `home_override` on a grant repoint | keeps the pinned override, and answers **409** rather than clearing the column | "`home_override` is optional on the wire: absent ≠ `\"\"`; **compat:** a client that wants to clear must send `\"\"`" |
+| 636 | `wardyn_drive_refusals_total{reason}` | NEW metric; refusals recorded once at one chokepoint with a closed reason set | — |
+| 636 | `host_roots_configured` in setup status | tightened: true only when a configured root is one a drive could actually bind | — |
+| 637 | member-visible drive refusal text | names the drive and the directory, never a host path or another person's home | "**Compat:** a runbook that read the path from the member's failure hint must read the log." |
+| 638 | `egress_edited_at` | a workspace edit that clears the approved-egress list now stamps it | — |
+| 641 | `GET /setup/status` | no longer returns `scm`, `host_proxy` or `deployment` to non-operators; `harness` rows reduce to `provider`/`captured`/`expired` | "operators see the full response" |
+| 644 | `GET /access` → `issuer` | **REMOVED** | "`provider` is unchanged." |
+
+**CLI.**
+
+| Line | Command | Change | Compat note |
+|---|---|---|---|
+| 90 | `wardynd -allow-multi-instance` (NEW flag) | wardynd refuses to start while another instance holds its database | "a command-line flag with no environment variable, deliberately" |
+| 95 | `scripts/ci-run.sh` | no longer passes the admin bearer on the host `docker` command line | "no configuration change is needed" |
+| 122 | `wardyn ssh-key ensure\|list`, `wardyn run wait-ready <id> --json`, `wardyn ssh <id> --json` | NEW | — |
+| 150 | `make agent-image-novnc` / agent name `"novnc"` | NEW image variant, local build only | "It changed **no server code**" |
+| 252 | `scripts/build-desktop-package.sh --rpm` | NEW; `.deb`, `.rpm` and tarball built from a clean git tree | — |
+| 297 | `deploy/desktop/install.sh` on Linux | previously hard-refused every non-Darwin host | "The two platforms' intervals are asserted equal so they cannot drift." |
+| 304 | `install.sh --uninstall` / `--purge` | NEW; first uninstaller on either platform | "`--uninstall` … **keeps** `age.key` and the Postgres volume … `--purge` destroys both, after saying exactly what becomes unrecoverable." |
+| 372 | `wardyn sessions revoke --sub` | now matches either identity, "the email case-insensitively" | — |
+| 516 | desktop converge `--pull always` → `--pull missing` | an unreachable registry no longer kills the launcher | "with envelope pins there is nothing for `always` to catch" |
+| 520 | `wardyn-desktop.sh down` / `down --purge` | NEW subcommand | "It never removes `age.key`." |
+| 600 | `install.sh` / README Helm version resolution | all three now resolve from `releases?per_page=1` (`releases/latest` 404s on a pre-release) | — |
+| 631 | a mistyped subcommand under any `wardyn` group | now exits non-zero with an error on stderr instead of exiting 0 with help on stdout (eleven groups) | "A bare `wardyn <group>` still prints help and succeeds." |
+| 632 | `wardyn setup fence` | never existed; the no-barrier banner now offers `wardyn setup status` (no `sudo`) | — |
+| 641 | `wardyn --help` `--token` default | no longer prints `WARDYN_ADMIN_TOKEN`/`WARDYN_TOKEN` | "the token is resolved when used, precedence unchanged" |
+| 641 | `wardyn ssh <run-id>` | refuses a non-UUID run id before contacting the daemon; `--print`, `--json`, `--config` refuse identically | — |
+| 641 | `wardyn support-bundle` redaction | now covers `APIKEY`, `PASSWD`, `PASSPHRASE`, `AUTH`/`AUTHORIZATION`, `COOKIE`, `BEARER`, JSON-nested secrets and `--flag=value` argv entries | — |
+| 641 | `wardyn setup proxy-relay` | keeps its `0.0.0.0` default but says what that exposes and warns on a non-loopback bind | "the command exists because a VM-backed Docker host cannot reach loopback" |
+| 674 | `--agent` for `task_mode=exec` with an image | no longer required | "It is **not a blanket default** … Harness mode still requires an agent." |
+
+**Policy and site-config keys.**
+
+| Line | Key | Change | Compat note |
+|---|---|---|---|
+| 16 | `allowed_domains` port-qualified entry | the escape hatch for cleartext injection to a non-443 port: `allowed_domains: ["connector.internal:8080"]` | "The 443 clamp stays UNCONDITIONAL" |
+| 18 | git grant `ttl_seconds` | a grant with `ttl_seconds <= 300` is no longer born stale | — |
+| 23 | `mitm_hosts` | the configured-port clamp moved into the eligibility predicate itself | — |
+| 25 | `inspect_forward_egress` | an unparseable tunnel channel now takes it like any other generic body | — |
+| 32 | `allowed_methods` | a method the policy can never allow is refused `policy:method` before the approval flow | "It also no longer spends a `once` grant." |
+| 40 | `denied_domains` | both sides canonicalized; `::ffff:93.184.216.34` no longer dodges a deny on `93.184.216.34` | — |
+| 45 | `scan_budget` (NEW), 500-finding cap, `block_min_severity` keep-back | a 4 MiB total-scanned-bytes budget stops the scan honestly; a finding at or above `block_min_severity` is kept past the cap | — |
+| 57 | `llm_inspection.workspace_secret_names` | a reserved secret name is refused at write time and skipped (audited by name) at dispatch | — |
+| 58 | site-config egress-redirect allowlist entry | now port-qualified: the port `to` spells, else the scheme's default | — |
+| 59 | api_key eligible-grant pairing | now includes the rule's header **and** format ("exactly one `%s`, no other verb, no line break") | — |
+| 60 | `require_inspectable_llm` | refuses BOTH Bedrock sub-modes at schedule time | — |
+| 110 | permission kinds: agents, model providers | NEW | "Both narrow: until one is enforced members keep the powers they had, and a deny bites even before enforcement." |
+| 111 | governance profile `max_concurrent_runs` + per-owner secret cap | NEW; answered as a quota refusal, not a denial | "an overwrite at the secret cap still rotates a key" |
+| 114 | `/home/agent/drive` | reserved mount target; the member mount is **read-only unless allowed** | "the size you see is the allocation, not a guarantee" |
+| 115 | governance profiles | a profile REPLACES the site-wide default; denies are re-asserted inside dispatch | "with no assignment, every resolution is exactly what it was before" |
+| 123 | `git_push_any_branch` | NEW per-run opt-out of push branch-namespace confinement | "clamped away from members' inline policies" |
+| 126 | `tool_rules` | console editor refusing what the API refuses, in the same order, before the round trip | — |
+| 140 | `SiteConfig.internal_hosts` | declare internal hostnames allowed to resolve to private/CGNAT addresses | — |
+| 192 | `ui_apps` / `examples/policies/ui-sandbox.json` | first shipped example declaring the block | — |
+| 362 | `first_use_hold_seconds` | the hold deadline is now armed before the concurrent-raise retry loop | — |
+| 366 | `upstream_proxy_url` on `PUT /site-config` | now validated by the sidecar's own parser | — |
+| 367 | egress redirect `to` port parsing | a query/fragment ends the authority; a port outside 1-65535 is refused at the write | — |
+| 384 | reserved mount `target` `/home/agent/drive` on the record/verify path | refused on both run paths with the same wording and status | "a `target` copied from the docs could be rejected on write" |
+| 391 | ceiling grant selection | now by pairing, order-independent | "A grant whose pairing no entry names is bounded by the strictest same-kind entry rather than an arbitrary one." |
+| 401 | egress redirect target | no longer needs a duplicate `allowed_domains` entry | — |
+| 472 | `tool_approvals=hold` on an interactive run | now a **400** naming the field (was a 201 with the field silently discarded) | "The run does not become unsupervised — interactive tool use is already supervised in the attach pane" |
+| 480 | custom base-image `steps` | the user-facing surface is gone | "**The field itself stays**, documented as catalog identity: it is part of the `base_images` UNIQUE index" |
+| 631 | `allowed_domains` > 256 entries | **400** `allowed_domains: at most 256 entries` | "a new 4xx a member can hit, applied before the per-entry narrowing that walks the list" |
+| 631 | `auto_stop_after_sec: -1` | left alone under a ceiling with no positive maximum; the warning is gone | "the reaper skips every value ≤ 0" |
+| 631 | `disk_mib` on an overlay2 host | still refuses to dispatch unless the backing filesystem is xfs, and now says so first | "the code's claim that ext4 enforced the quota was false (owner: keep fail-closed)" |
+| 638 | managed drive non-`hash` home template | now refused **422** by the run-time resolver as well as by the validator | — |
+
+**Image pins.**
+
+| Line | Pin | Change |
+|---|---|---|
+| 94 | `make setup` in-network probe container | was `curlimages/curl:latest`; now digest-pinned and `--pull=never` |
+| 96 | `golang.org/x/crypto` 0.55.0 → 0.56.0 | GO-2026-6354 / GO-2026-6355, reachable from the SSH gateway; "no other dependency moves" |
+| 495 | `WARDYN_WARDYND_IMAGE` in `wardyn-desktop.sh` | both pins now read from the envelope |
+| 503 | `WARDYN_PROXY_IMAGE` on desktop / one-line installs | both envelopes pin it by digest |
+| 532 | one-line installer upgrade path | now rewrites exactly the version-derived `.env` image pins |
+| 642 | `NPM_VERSION` 11.19.0 → 11.19.1 | "11.19.0 vendors node-tar inside CVE-2026-73566" |
+| 642 | `CODEX_VERSION=0.149.1` (`agent-codex-cli`) | "the first release in which that image is reproducible" |
+| 652 | `ghcr.io/coder/envbuilder:1.3.0@sha256:…` | tag **and** digest instead of `:latest` |
+
+**Other user-visible behaviour changes with no new knob.** Most turn a
+previously-permitted shape into a refusal, or narrow what a lane forwards; none has an
+opt-out. `CHANGELOG.md` lines 13, 14, 16, 19, 21, 22, 24, 26, 27, 29, 30, 31, 36, 37,
+39, 41, 47, 48, 49, 52, 62, 63, 87, 88, 91, 93, 137, 196, 201, 355, 357, 361, 365, 374,
+375, 377, 378, 380, 381, 382, 388, 392, 394, 395, 400, 403, 538, 555, 577, 592, 616,
+634, 636, 637, 657. The two with a stated caveat worth repeating:
+
+- **The one-line installer now installs the `wardyn` CLI**, verified against the release's cosign-signed `SHA256SUMS` — "a mismatch is fatal, and an unavailable `SHA256SUMS` skips the CLI rather than installing it unverified". - **`--agent claude-code` resolves to `agent-base`**; the container-login lane deliberately does not follow the re-point — "**Named gap:** that ref is unpublished, so on a published install the login lane needs a locally-built image named in `WARDYN_AGENT_IMAGES` — unchanged from before, not a regression". 
+
+#### Database migrations (0050–0061)
+
+Every 0.6.x release ships through `0049`, so an upgrade to 0.7.0 applies twelve
+new migrations on the first boot, in one run, under one advisory lock. **Take the
+Postgres dump before the restart** — migrations are forward-only, there is no
+`down` path, and that dump is the only rollback there is
+(`docs/OPERATIONS.md` §Upgrades).
+
+- **0050** — `secrets` gains `owned_by` (`TEXT NOT NULL DEFAULT ''`) and its
+  primary key moves from `(name)` to `(owned_by, name)`, so a member can hold
+  their own `anthropic-api-key` alongside the operator's. `''` means
+  operator-owned: every existing row lands there and resolves exactly as it did
+  before.
+  - **0051** — creates `role_mappings` (`value` → `admin`/`member`, unique on
+  `value`), the store-backed half of console-managed SSO role mappings. Rows are
+  merged at login with the chart's `WARDYN_OIDC_ROLE_MAP` and the chart wins a
+  collision. It is its own table rather than a `site_config` field because
+  `PUT /site-config` is a full replace, and a stale client round-tripping an older
+  document would silently drop mappings an admin had since added.
+  - **0052** — creates `governance_profiles` and `governance_assignments` (a named
+  policy ceiling an admin assigns to a person, an SSO group, or everyone), and
+  adds `api_tokens.groups_truncated`. Deleting a profile that still binds a
+  subject is refused by the FK (`ON DELETE RESTRICT`) and surfaces as a 409
+  rather than silently widening its members back to the deployment ceiling.
+  `groups_truncated` is **nullable, and NULL is not `false`**: a token minted
+  before 0.7 has an unknown-completeness group snapshot and is treated as
+  truncated wherever a group-tier assignment exists, which costs legacy-token
+  holders one re-mint on deployments that adopt group profiles and nothing at all
+  on deployments that do not.
+  - **0053** — widens `role_mappings.role` to accept `security_admin`, dropping and
+  re-adding the CHECK under the explicit name `role_mappings_role_check`. Without
+  it, `POST /access/mappings` with `role=security_admin` passed API validation and
+  was then refused by Postgres — a 500 on a surface the console offers. Widening
+  only: no stored row can violate the new constraint, and there is no backfill.
+  - **0054** — creates `user_drives` and `user_drive_grants`, the per-user storage
+  an admin registers (a share the platform already mounts, or a volume Wardyn
+  creates per person) and allocates to people, groups or everyone. Same
+  `ON DELETE RESTRICT`, for a sharper reason: cascading would drop the allocations
+  of a drive deleted by mistake while the directories they named still held
+  somebody's work, now unreachable and unaudited.
+  - **0055** — adds `workspaces.egress_edited_at`, the mark that says the operator
+  has spoken more recently than an `always`-scoped approval verdict. The boot heal
+  re-applies decided `always` egress approvals, so a host an operator promoted and
+  later removed through `PUT /workspaces/{id}/approved-egress` came back at the
+  next restart with no audit event; the heal now skips any decision decided before
+  this stamp. **Nullable with no default, deliberately** — a `now()` default would
+  suppress the heal for every decision made before the upgrade, which is the loss
+  the heal exists to repair. Do not backfill it.
+  - **0056** — the audit chain serializes **in the database**. The `BEFORE INSERT`
+  trigger now takes the chain advisory lock first and allocates `NEW.seq` itself,
+  so chain order is seq order for every writer, not only the two in-tree ones that
+  remembered to lock. Before it, any other insert (psql, a seed script, a test
+  helper) chained to the same head as a concurrent locked writer and the verify
+  sweep reported **a tamper that never happened**. Nothing already written
+  changes and no row is re-chained. **Operator-visible cost:** a session that
+  inserts into `audit_events` and holds its transaction open now blocks every
+  other audit append; the request-path write fails after 5s
+  (`db.AuditChainLockTimeout`) and goes to the local spool, except a credential
+  mint, whose audit row shares the mint's transaction and which is refused rather
+  than issued unaudited.
+  - **0057** — runs that trigger as its **owner**. `SECURITY DEFINER` with a pinned
+  `search_path`, because `0056` replaced a privilege-free identity default with an
+  ordinary `nextval()` call that checks `USAGE`: the documented split-role posture
+  (an app role holding `INSERT` and `SELECT` on `audit_events` and nothing else)
+  would have upgraded into `permission denied for sequence audit_events_seq_seq`
+  on **every** audit insert — every write to the spool, the spool unable to drain,
+  and every credential mint refused. Nothing is widened for the caller: a trigger
+  function cannot be invoked directly, and a split-role deploy needs no new
+  `GRANT`.
+  - **0058** — repairs `0057`. The function now resolves `audit_events` and
+  `audit_row_hash` **by schema** — discovered from the catalog when the migration
+  applies — with `pg_temp` last in the pinned path, instead of trusting a
+  hard-coded `pg_catalog, public`. Two defects, one root cause: on an install
+  whose objects are not in `public` (an `ALTER ROLE … SET search_path` away, or
+  stock Postgres's own `"$user", public` when a same-named schema exists),
+  `Migrate` reported success and every audit insert then failed inside the trigger
+  with `relation "audit_events" does not exist`; and an `INSERT`-capable role could
+  have shadowed `audit_events` with a temp table and had the definer-privileged
+  head read answer out of it, choosing its own row's `prev_hash`. Not a data
+  migration. This is the state wardynd's boot canary refuses to serve over — a
+  trigger can be present, enabled and correctly named and still not work.
+  - **0059** — one directory, one principal: a partial unique index on
+  `user_drive_grants (drive_id, home_override) WHERE home_override <> ''`. Two
+  user-tier grants on one drive could carry the same `home_override` and hand two
+  people one storage object, each mounting `/home/agent/drive` over the other's
+  bytes. This is the race-free floor **under** the store's application guard, not
+  a replacement for it: that guard answers the reachable case with a 409, which a
+  raw `23505` is not, but cannot exclude a concurrent second writer. The index
+  reaches the namespace `(drive_id, home_override)` addresses — which is the
+  managed backends' `wardyn-drive-<drive-slug>-<home>`. A share's object name is
+  `<host_root>/<home>` with no drive component, so the cross-drive share case is
+  the store guard's alone; `host_root` lives on another table and an index cannot
+  follow it there.
+  - **0060** — constrains `api_tokens.role` to `admin`, `security_admin`, `member`,
+  and **newly rejects a class of write that previously succeeded**. `0045`
+  shipped the column unconstrained on the argument that the privileged set was the
+  singleton `{admin}`, so any other value was inert; 0.7 stopped re-deriving the
+  column and started copying the caller's verbatim session role, `security_admin`
+  is not inert (the whole `securityOps` route group gates on it), and the set now
+  grows with every tier. The CHECK is a **drift guard**, not a defence against an
+  application-level attacker — writing an arbitrary role needs direct table write
+  access, which the threat model already concedes.
+  - **0061** — two drives can no longer name one storage object. `user_drives.name`
+  is UNIQUE, but the name that *addresses* storage is its DNS-1123 fold, so
+  "Corp NAS" and "corp nas" — or "Corp NAS (eng)" and "corp-nas-eng" — were two
+  rows minting one volume or one claim for two sets of members with different size
+  ceilings, writability and reclaim policy, caught only at mount time as somebody's
+  run failing. Adds `user_drives.name_slug` (written by Go on every insert and
+  update, so the indexed value is the one the object name is built from),
+  backfills it once with an ASCII-pinned SQL fold, and adds a partial unique index
+  over it. `host_path` is excluded: a share's object name is `<host_root>/<home>`
+  and carries no slug.
+  
+**Apply notes.** All twelve apply on the first boot of the new wardynd, in
+filename order, each in its own transaction, recorded in `schema_migrations` as it
+commits. Ordering is not something an operator chooses — but three things follow
+from it.
+
+*Do not stop between `0056` and `0058`.* `0056` alone breaks the documented
+split-role deployment (`permission denied for sequence audit_events_seq_seq` on
+every audit insert), and `0057` alone is broken on any install whose objects are
+not in `public` (`relation "audit_events" does not exist`, from inside the
+trigger, after `Migrate` reports success). The three are one repair delivered in
+three files, and a single boot applies them together; the only way to be stranded
+in between is a migration that fails mid-sequence, which is the next note.
+
+*A failure leaves the database half-upgraded, not rolled back.* Per-migration
+atomicity bounds one file: a failure at *N* leaves `0…N-1` committed **and
+recorded** and only *N* undone, and wardynd's refusal to boot is a refusal to
+serve that state, not a repair of it. Putting the older binary back does not undo
+what committed — and it boots anyway, then fails at the first write the older
+schema no longer supports. Restoring the pre-upgrade dump is the only supported
+recovery, which is why the dump has to be taken first.
+
+*Three of the twelve fail loudly on purpose, and on a clean 0.6.6 → 0.7.0 upgrade
+none of them can fire.* `0059` and `0061` constrain `user_drive_grants` and
+`user_drives`, which `0054` creates in the same run, so no upgrading database
+holds a row to violate them; `0060`'s column can only hold `admin` or `member`,
+because `security_admin` did not exist to be stamped. They fail only on a database
+already carrying 0.7 pre-release data or hand edits — and failing is the point: a
+constraint that quietly skipped itself would leave the guard absent with nothing
+to say so. **Before upgrading such a database**, run the three checks the
+migrations themselves name, and expect zero rows from each:
+
+```sql
+-- 0059: two user-tier grants on one drive naming one directory
+SELECT drive_id, home_override, count(*) FROM user_drive_grants
+ WHERE home_override <> '' GROUP BY 1, 2 HAVING count(*) > 1;
+-- 0060: a role outside the closed set
+SELECT id, principal, role FROM api_tokens
+ WHERE role NOT IN ('admin', 'security_admin', 'member');
+-- 0061: two drive names that fold to one storage-object name
+SELECT name_slug, array_agg(name) FROM user_drives
+ WHERE backend <> 'host_path' AND name_slug <> '' GROUP BY 1 HAVING count(*) > 1;
+```
+
+**Also check before upgrading, whatever your data:** that the role in
+`WARDYN_PG_MIGRATE_DSN` is the one that already *owns* the objects, if you run the
+split-role posture — `0050`, `0052`, `0055` and `0060` `ALTER TABLE` on tables an
+earlier release created and `0056`–`0058` replace a function `0047` created, all of
+which require ownership; and that your backup covers user-drive **bytes**, which
+the Postgres dump does not hold (it brings back the drive rows, and the runner
+otherwise creates a fresh empty volume on first use, silently).
+
+`docs/OPERATIONS.md` already covers all of this and is the place to point an
+operator, rather than repeating it here: §Upgrades (`:3054-3075`, forward-only, and
+the once-only SSO sign-out that rides the same restart), §Upgrading a one-line
+install (`:3158-3189`), §Splitting the migrator and app roles (`:3191-3247`, which
+enumerates the ownership-requiring migrations and spells out the half-upgraded
+failure shape), §`helm upgrade` (`:3318-3323`), the audit-log boot checks and the
+`ENABLE ALWAYS` hardening that survives a failed migration run (`:167-227`), the
+chain's serialization and `SECURITY DEFINER` posture (`:395-410`, `:494-500`,
+`:3299-3306`), and the user-drive backup and restore steps (`:72-81`, `:113-131`).
+
+**Reversibility: none of the twelve, and none by oversight.** This repo has no
+down-migration mechanism at all — no `-- down` sections, no goose, no
+`+migrate Down`, and nothing in `internal/db` that could run one.
+`schema_migrations` stores a filename and an applied timestamp and nothing else;
+`migrateOn` reads the embedded `migrations/*.sql` in lexical order, skips what is
+recorded, and applies the rest forward. A rollback is `pg_dump` restored onto the
+older binary, and `install.sh` refuses a downgrade outright rather than let one
+proceed.
+
+
+#### Demo videos
+
+Six episodes of the walkthrough series were re-recorded on this release and ship as its assets (01, 02, 03a, 03b, 03d, 05). The rest are being re-recorded on 0.7 and are uploaded to this same release as each take passes; until then their rows in the README and the console read *coming soon*, and no 0.6.0 footage is linked, because the console it shows has changed.
+
+#### Known residuals and owner-gated items
+
+**Owner-gated — the release does not claim them.**
+
+- **The real-tenant Entra walk has not been run.** "The connector is unit-tested against a fake; the `mail` / `userPrincipalName` `$search` legs and the guest `#EXT#` UPN shape have never met a real tenant." `deploy/azure-entra-sso/` scripts the walk and `deploy/helm/wardyn/README.md:353` says "Run it end to end before trusting any of this against a tenant that matters" — the runbook is shipped; running it is the operator's. - **The real-AWS PrivateLink walk has not been run.** "No AWS account in the harness; the composed dispatch test covers the wiring, not the network." `docs/OPERATIONS.md` says the same of itself: "The composed dispatch test proves the env vars propagate, not that TLS validates." - **Adopter acceptance is pending.** The three handoffs "all came from one deployment behind a TLS-inspecting corporate proxy on a PrivateLink estate, written against 0.6.6", and "the three adopter handoffs' own acceptance tests … need that estate". The two blockers this release leads with are fixed against the reported symptoms, not against the adopter's network. 
+**Named residuals — known, stated, not closed.**
+
+- **R3's one open High, F055, was fixed after the counts above were taken** (`fix/v0.7-f055`, merged 41079162): a name that did not resolve was audited as the private-IP guard; it is now audited as itself. The R3 row still counts it as open.
+- **Twenty-four of R1's first-run claims carry a wrong `fix_elsewhere` annotation.** The fixes and their evidence are real; the claim script that stamped them had a column bug. The annotations were left as they are rather than rewritten.
+- **PF-48 — resident credential lanes sit above the ceiling re-assertion.** "Resident credential lanes (`WARDYN_GIT_PAT_GRANTS` with the broker off, `WARDYN_SSH_GRANTS`) are marshalled into the sandbox ABOVE the re-assertion phase, so a ceiling-denied host's PAT or key is still resident and exfiltratable through other egress. Named, not closed." The code says the same: they "are marshalled into env at `applyDispatchModeEnv`, above this phase … a resident credential for a denied host still meets that deny on every named dial." - **PF-1 residual — an unassigned member still selects stored policies unclamped.** "Closing it deployment-wide is an `all`-subject assignment, by design." The governance code keys every refusal on `ceiling.Profile != nil`, "never on the ceiling's contents — an UNASSIGNED member is byte-for-byte today here (PF-1's stated residual)". - **An egress redirect's `to` cannot be an IPv6 literal.** R3 F005, severity Info, **status `open`**: "No site-config field can name an IPv6 literal: `hostrules.HostOf` cuts at the first ':' inside the brackets … Every such value is rejected at PUT with 'invalid URL'/'invalid host'; the operator has no spelling that works." Pre-existing, unrelated to this campaign, unfixed. Use a hostname or an IPv4 literal. - **The redirect probe's SNI swap has one edge it can green wrongly.** The probe now "dials the target while presenting the original hostname, which is what a real run does" (fixed, `CHANGELOG.md:402`, with `WARDYN_PROBE_TO_CONNECT`). The residual: "The narrow edge is an **Ecosystem** redirect whose `To` is a literal IP: the agent's tool dials the To address directly, so its SNI is the To IP, and the probe's From-SNI swap would green a config the real tool fails." `redirectProbeTo` still fires the swap on `net.ParseIP(toHost) != nil` alone and reads no redirect kind. "Confirm on the real-mirror walk before changing probe code." - **F055 — a DNS failure is still reported as an SSRF deny, and closing it is an owner decision.** R3 F055, severity **High**, status **`deferred-proposed`**: "A DNS/resolver failure is audited and reported to the sandbox as an SSRF private-IP deny, with a remediation instruction to widen the SSRF guard." It is deferred because the fix is all canon surface: "The fix REQUIRES a new quoted audit decision string in the decision stream (`builtin:resolve-failed`), a new row in `docs/UI-SANDBOXES.md`'s `rule_source` table, and a new operator-facing `X-Wardyn-Egress-Detail` sentence / 403 body". Recorded as an owner decision: "F055 [High] is `deferred-proposed` (canon-strings law) and is an OWNER decision (FOLLOW-UPS P0)." **One of exactly two High-severity findings in the whole campaign that ship neither fixed nor rejected** (the other is R4 F107, below). - **R4 F107 — a failed sign-out looks identical to a successful one.** Severity **High**, status **`deferred-proposed`**: "A failed sign-out is reported only to the devtools console, so the human sees the sign-in gate while the HttpOnly SSO session stays alive … a page reload re-enters the console through the still-valid session cookie without any credential being presented." It is deferred with the other five R4 items that need new console copy under the canon rule: "R4 DEFERRED-PROPOSED six (owner mock round; new copy/state under canon rule (c)): R4-F009 preflight `setup_items` in the rail, R4-F052 the four `user_drive_unavailable` sentences …, R4-F070 security-tier probes surface, R4-F093 preview `home_subject`/`warning` rows, R4-F107 sign-out-failed strings, R4-F144 terminal keyboard-trap chord." - **R4 F144 — the cockpit terminal is a WCAG 2.1.2 keyboard trap.** Severity Medium, status `deferred-proposed`: "Keyboard focus cannot leave the cockpit terminal … Tab, Shift+Tab and Escape all stay in the PTY textarea." Deferred with the same six; it is the one on that list with an accessibility-conformance name attached. 
+**Closed since the handoff was written — do not re-publish these.**
+
+- **The ssh cockpit widget predicate.** `local/HANDOFF-0.7-RELEASE.md:142-146` says the widget is owner-only while `ConnectSSHCard`'s `mayAttach` is owner-or-admin. That is no longer true in the tree: `widget-registry.ts:189-192` now reads `ctx.run.state === "RUNNING" && ((!!ctx.principal && ctx.run.created_by === ctx.principal) || ctx.operator)` with the comment "run-detail-ssh.tsx:50 verbatim, plus the RUNNING check: owner OR admin", and `run-detail.tsx:580-584` asserts "all three must agree". What survives is a **test** gap — R4 F129, "The SSH widget's owner-only availability gate has no test, and the canvas suite is constructed to avoid it", status `fix-claimed`, verification `unverified-budget`. 
+**Verification debt owed before 0.7.1 can claim "reviewed".**
+
+Quoted from `local/review-0.7/FOLLOW-UPS-0.7.1.md:19` (P1) and :28 (P4), and §"Deferred review work" (30-45):
+
+- **R2 (run plane) — NO review in 0.7.** The one subject area with no verification at all. 75 candidate rows (4 High, 36 Medium, 26 Low, 9 Info) sit untriaged in `~/.claude/verify-runs/wardyn-0.7-r2-20260904-161449/inbox/round-1`.
+- **R5 — 137 fix claims unverified by reviewer**; **R6 — 70**; **R3 — no blind round 2** (a Critical/High-only adversarial pass was the 0.7 substitute); **R4 — no round 2**, 51 unverified; **R7 — round 2 dropped** by owner decision ("treat R7 like R5/R6"), 27 claims unverified; **R1 — 62 wave fixes "fixed-unverified, gate-green"**.
+- **Low/Info residue, all runs, deliberately unfixed**: R1 182 · R3 68 · R4 83 · R5 101 · R6 64 · R7 59.
+
+**Published threat-model residuals.** `threatmodel/THREAT-MODEL.md` §5 now lists 39;
+`v0.6.6` listed 27. **#28–#39 are new in 0.7.** The ones a 0.7 operator should read
+before turning a 0.7 feature on:
+
+- **#28** — a configured `WARDYN_TRUSTED_CA_FILE` "makes the corporate middlebox a trusted issuer for `wardynd`, every proxy sidecar, and every sandbox — not merely tolerated on one hop." - **#29** — "The operator's model-provider credential is disclosed to whatever host they nominate as the internal gateway." - **#30** — "`/healthz` is anonymous and now also names the k8s substrate's NetworkPolicy posture". - **#31** — "Directory autocomplete grants the control plane read of the WHOLE directory". - **#32** — "The one-line installer trusts the release ORIGIN: the compose definition has no digest". - **#33–#37** — the five user-drive residuals: a share extends trust to whoever administers the host and the share (#33); two drive-and-directory pairs can name one object, refusing one person's run (#34); a drive inherits the member-mount check-then-bind race (#35); "A drive's SIZE is an allocation Wardyn never enforces, on any substrate" (#36); renaming a drive orphans every object already provisioned under it (#37, with 0.7.1 named as the fix target). - **#38** — "A per-user API token's GROUP SNAPSHOT is frozen at mint, with no expiry". - **#39** — "A group claim the IdP FILTERS is indistinguishable from a complete one, so a shrink-the-claim workaround loses grants silently." 
+
 ### Security
 
 - **A name that did not resolve is audited as itself, not as the private-IP guard.** A resolver outage, NXDOMAIN or a zero-answer lookup was denied under `builtin:private-ip` with advice to declare the host under `internal_hosts` — advice that cannot fix a DNS fault and points at widening an SSRF control. The deny now carries its own reason, `builtin:resolve-failed`, its own operator sentence (check the sandbox's resolver, not the allowlist) and its own row in the audit panel; `builtin:private-ip` is reserved for a real private-address block. Fails closed exactly as before. (R3 F055)

@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.6.6)
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.7.0)
 **Status:** published alongside the codebase.
 
 **Implementation status markers.** Controls are tagged inline: **[shipped]**

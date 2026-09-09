@@ -36,9 +36,6 @@ const migrationDocFloor = 38
 var undocumentedMigrations = map[string]string{
 	"0044_run_failure_hint":                       "adds agent_runs.failure_hint",
 	"0049_oidc_session_revocations":               "adds the oidc_session_revocations table behind POST /sessions/revoke",
-	"0055_workspace_egress_edited_at":             "adds workspaces.egress_edited_at, the boot heal's newer-action guard",
-	"0059_user_drive_grants_home_override_unique": "adds a unique index over (drive_id, home_override)",
-	"0060_api_tokens_role_check":                  "adds a CHECK on api_tokens.role that REJECTS a previously-valid write",
 }
 
 // TestEveryMigrationIsDocumented is the ratchet nothing supplied: a migration is
