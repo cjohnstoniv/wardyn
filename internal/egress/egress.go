@@ -46,7 +46,7 @@ type Request struct {
 type DecisionLog struct {
 	Request    Request    `json:"request"`
 	Decision   Decision   `json:"decision"`
-	RuleSource string     `json:"rule_source"` // "policy" | "approval:<id>" | "builtin:private-ip" | ...
+	RuleSource string     `json:"rule_source"` // "policy" | "approval:<id>" | "builtin:private-ip" | "builtin:resolve-failed" | ...
 	ApprovalID *uuid.UUID `json:"approval_id,omitempty"`
 	// Scan, when non-nil, carries the OUTBOUND content-inspection summary for an
 	// LLM route decision (off-by-default; nil when inspection is disabled). It

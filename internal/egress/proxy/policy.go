@@ -521,6 +521,20 @@ func literalIPDenialDetail(host string, port int, pol *Policy) string {
 		"it is not listed; an egress_redirects \"to\" pointing at this address adds that entry automatically for the runs it covers"
 }
 
+// resolveFailedDetail is egressHeaderDetail's value for a builtin:resolve-failed
+// refusal: the proxy never learned an address for the name, so nothing was
+// vetted and nothing about the policy or the address-range guard explains the
+// deny. It is a FIXED sentence like the ones above and never echoes the host —
+// X-Wardyn-Host already carries that.
+//
+// It exists because the deny used to arrive labelled builtin:private-ip with
+// literalIPDenialDetail's "declare it under internal_hosts" advice attached
+// (F055): advice that cannot fix a resolver outage, pointed at loosening an
+// SSRF control, for a fault that is neither.
+const resolveFailedDetail = "this host did not resolve (DNS failure, no such name, or no address records), so no address " +
+	"could be vetted; this is a name-resolution fault, not the private-address guard — check the sandbox's resolver, " +
+	"not the allowlist"
+
 // writeEgressDeny writes the 403 both forward paths (handlePlain,
 // handleConnect) give a DENIED request: the static refusal headers, plus — for
 // the one refusal an operator reliably misreads — the cause and where to fix
@@ -531,11 +545,15 @@ func literalIPDenialDetail(host string, port int, pol *Policy) string {
 // the rule it explains (and so proxy.go stays under the 1000-line split gate).
 func (p *Proxy) writeEgressDeny(w http.ResponseWriter, host string, port int, log *egress.DecisionLog) {
 	body := "egress denied by policy"
-	if decisionReason(log) == "builtin:private-ip" {
+	switch decisionReason(log) {
+	case "builtin:private-ip":
 		if detail := literalIPDenialDetail(host, port, p.policy); detail != "" {
 			w.Header().Set(egressHeaderDetail, detail)
 			body = "egress denied: " + detail
 		}
+	case "builtin:resolve-failed":
+		w.Header().Set(egressHeaderDetail, resolveFailedDetail)
+		body = "egress denied: " + resolveFailedDetail
 	}
 	setEgressRefusalHeadersWithReason(w, egressRefusalDenied, host, decisionReason(log))
 	http.Error(w, body, http.StatusForbidden)
@@ -556,12 +574,15 @@ type IPGuardResult struct {
 	Lifted bool
 	// Unresolved distinguishes a denial that means "this proxy could not learn
 	// the addresses at all" (local DNS failed, or answered with nothing) from
-	// one that means "an address is blocked". Only egressTarget's corp-upstream
-	// branch reads it: under an operator upstream the sandbox host frequently
-	// CANNOT resolve external names, which is the whole reason that branch
-	// exists, so a resolve failure there must not become a denial — while a
-	// name that DOES resolve into blocked space must be, which it was not
-	// before. Every other caller treats Denied as Denied.
+	// one that means "an address is blocked". egressTarget's corp-upstream
+	// branch reads it to EXCUSE the case: under an operator upstream the sandbox
+	// host frequently CANNOT resolve external names, which is the whole reason
+	// that branch exists, so a resolve failure there must not become a denial —
+	// while a name that DOES resolve into blocked space must be, which it was
+	// not before. egressTarget's direct-dial branch reads it to ATTRIBUTE the
+	// case (errHostUnresolved -> builtin:resolve-failed): there it still denies,
+	// but it is a DNS fault and not the address-range guard, and the two have
+	// opposite fixes. Every other caller treats Denied as Denied.
 	Unresolved bool
 }
 

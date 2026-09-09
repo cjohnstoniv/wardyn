@@ -22,8 +22,9 @@ const (
 // egressHeaderStatus / egressHeaderHost / egressHeaderReason name those headers.
 //
 // The REASON header exists because "denied" alone is ambiguous in a way that
-// costs a developer real time: EIGHT distinct outcomes collapse into it —
-// builtin:private-ip, policy:denied (an explicit deny-list hit),
+// costs a developer real time: NINE distinct outcomes collapse into it —
+// builtin:private-ip, builtin:resolve-failed (the name never resolved, which is
+// not the address-range guard), policy:denied (an explicit deny-list hit),
 // policy:default-deny (simply not on the allowlist), policy:method,
 // approval:denied (a human said no), policy:evaluator-error and
 // builtin:dial-failed among them. Those call for completely different actions —

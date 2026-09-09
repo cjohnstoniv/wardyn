@@ -52,6 +52,19 @@ const (
 	ruleSourceEgressRedirect = "site-config:egress-redirect"
 )
 
+// errHostUnresolved is egressTarget's sentinel for the three outcomes that are
+// NOT private-IP blocks — a resolver outage, NXDOMAIN, and a zero-answer lookup
+// — so a caller can attribute them honestly instead of folding them into
+// builtin:private-ip. Same reason errGatewayVet exists.
+//
+// It matters because the two denials have OPPOSITE fixes: a private-address
+// block is fixed in site config (internal_hosts), a name that never resolved is
+// fixed at the sandbox's resolver. Audited as the first, an operator reads a DNS
+// outage as an SSRF-guard hit and goes to widen an SSRF control over it.
+//
+// Wrapped, never returned bare, so the vet's own Reason still reaches the log.
+var errHostUnresolved = errors.New("proxy: host did not resolve")
+
 // egressTarget resolves host:port to the dial target a forward-egress call
 // site should use for THIS proxy's mode — hiding the corp-upstream branch so
 // every forward-egress caller (evaluate, serveMITMRequest, handleGitBroker,
@@ -167,6 +180,14 @@ func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, 
 	}
 	guard := p.vetHost(host)
 	if guard.Denied {
+		// Unresolved is the vet's own "no address was ever learned" — the same
+		// field the upstream branch above reads to excuse the case. Here it
+		// still DENIES (fail closed: a direct dial has no second resolver to
+		// defer to), but as itself, so evaluate can audit it as a resolver
+		// fault instead of as the private-address guard.
+		if guard.Unresolved {
+			return "", "", fmt.Errorf("host %q: %s: %w", host, guard.Reason, errHostUnresolved)
+		}
 		return "", "", fmt.Errorf("host %q denied: %s", host, guard.Reason)
 	}
 	if guard.Lifted {
