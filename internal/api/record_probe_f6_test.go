@@ -9,7 +9,7 @@
 //
 // RUN (no Postgres needed — every store touch is the record_test.go fake):
 //
-//	cd /home/cjohn/wt-v07-profiles && \
+//	cd <repo root> && \
 //	cp local/review-0.7/deep/F6-record-promote-verify/record_probe_f6_test.go internal/api/ && \
 //	nice -n 10 GOMAXPROCS=8 go test ./internal/api/ -run 'TestF6' -count=1 -v ; \
 //	rm -f internal/api/record_probe_f6_test.go

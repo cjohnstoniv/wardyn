@@ -37,7 +37,7 @@ for _f in "${REPO_ROOT}"/scripts/lib/verify-demo-take-*.sh; do [[ "${_f}" == *_t
 command -v wardyn_pick_docker_host >/dev/null 2>&1 && wardyn_pick_docker_host
 
 VIDEO="${1:-}"
-WS="${WARDYN_DEMO_WORKSPACE:-${HOME}/wardyn-demo/slugify}"
+WS="${WARDYN_DEMO_WORKSPACE:-${WARDYN_DEMO_ROOT:-${HOME}/wardyn-demo}/slugify}"
 PASS=0; FAIL=0
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; PASS=$((PASS+1)); }
 bad()  { printf '  \033[31m✗\033[0m %s\n' "$*"; FAIL=$((FAIL+1)); }
@@ -282,7 +282,7 @@ PYEOF
 [[ "${STATE}" == "COMPLETED" ]] && ok "run '${V03_TITLE}' COMPLETED" || bad "run state=${STATE} (want COMPLETED)"
 
 head_ "Video 03 · the artifact on disk"
-INV="${WARDYN_DEMO_WORKSPACE:-${HOME}/wardyn-demo/slugify}/NOTES-INVENTORY.txt"
+INV="${WARDYN_DEMO_WORKSPACE:-${WARDYN_DEMO_ROOT:-${HOME}/wardyn-demo}/slugify}/NOTES-INVENTORY.txt"
 [[ -s "${INV}" ]] && ok "inventory file landed: ${INV}" || bad "no ${INV} — the write never reached the host"
 }
 

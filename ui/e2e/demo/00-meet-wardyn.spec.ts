@@ -97,7 +97,8 @@ test.describe.configure({ mode: "serial" });
  *  take. Overridable, because a box whose $HOME is not where the demo tree
  *  lives still has to be able to shoot this episode. */
 const WORKSPACE_PATH =
-  process.env.WARDYN_DEMO_MEET_WORKSPACE || `${process.env.HOME}/wardyn-demo/meet-wardyn`;
+  process.env.WARDYN_DEMO_MEET_WORKSPACE ||
+  `${process.env.WARDYN_DEMO_ROOT || `${process.env.HOME}/wardyn-demo`}/meet-wardyn`;
 
 /**
  * The workspace act 1 creates on camera, and the close deletes on camera.

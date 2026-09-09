@@ -16,7 +16,7 @@
 #
 # DETERMINISM. Output must be byte-identical between a laptop and CI or the drift
 # gate is useless: LC_ALL=C sort everywhere, no timestamps, no hostnames, and never
-# emit pnpm's `paths[]` (they are absolute — /home/cjohn/... locally, /home/runner/...
+# emit pnpm's `paths[]` (they are absolute — /home/<you>/... locally, /home/runner/...
 # in CI).
 #
 # PACKAGES THAT PUBLISH NO LICENCE FILE. ~36 of the runtime UI dependencies (the

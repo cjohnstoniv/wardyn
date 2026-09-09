@@ -117,7 +117,9 @@ let slugifyRunUrl = "";
 // take-6 failure); exec makes no model call at all, and the mint it exists to
 // film happens identically (probed live, 2026-08-18).
 const PROOF_WS_NAME = "secrets-proof";
-const PROOF_WS_PATH = process.env.WARDYN_DEMO_PROOF_WS || `${process.env.HOME}/wardyn-demo/secrets-proof`;
+const PROOF_WS_PATH =
+  process.env.WARDYN_DEMO_PROOF_WS ||
+  `${process.env.WARDYN_DEMO_ROOT || `${process.env.HOME}/wardyn-demo`}/secrets-proof`;
 const PROOF_TITLE = "Borrowed by name — never held";
 /** Video 02's secret and canary. If 02 was never shot on this stack the
  *  beforeAll stores the secret itself, so this video stands alone. */

@@ -13,7 +13,7 @@ import (
 // sees only what WARDYN_WORKSPACES_ROOT mounts in — and the message never said
 // so. The detail is the wizard's failure headline, so it carries the fix.
 func TestLocalDirScanFailureDetail(t *testing.T) {
-	const p = "/home/cjohn/containerized-agent-envs"
+	const p = "/home/operator/containerized-agent-envs"
 	cases := []struct {
 		name          string
 		notDir        bool
@@ -34,20 +34,20 @@ func TestLocalDirScanFailureDetail(t *testing.T) {
 		},
 		{
 			name: "path outside the configured root names the root",
-			root: "/home/cjohn/projects", containerized: true,
-			want: []string{"under its configured workspaces root (/home/cjohn/projects)", "move the project under it"},
+			root: "/home/operator/projects", containerized: true,
+			want: []string{"under its configured workspaces root (/home/operator/projects)", "move the project under it"},
 		},
 		{
 			// Under the root but still absent = a real miss (typo / not created)
 			// — blaming the mount would send the operator to the wrong fix.
 			name: "path UNDER the configured root falls back to the plain miss",
-			root: "/home/cjohn", containerized: true,
+			root: "/home/operator", containerized: true,
 			want:       []string{"local directory not found on this host: " + p},
 			wantAbsent: []string{"workspaces root"},
 		},
 		{
 			name:   "not-a-directory stays its own message",
-			notDir: true, root: "/home/cjohn/projects", containerized: true,
+			notDir: true, root: "/home/operator/projects", containerized: true,
 			want:       []string{"onboarded source is not a directory: " + p},
 			wantAbsent: []string{"not found"},
 		},
@@ -76,11 +76,11 @@ func TestPathWithinRoot(t *testing.T) {
 		root, path string
 		want       bool
 	}{
-		{"/home/cjohn/projects", "/home/cjohn/projects/app", true},
-		{"/home/cjohn/projects", "/home/cjohn/projects", true},
-		{"/home/cjohn/projects", "/home/cjohn/projects-evil", false},
-		{"/home/cjohn/projects", "/home/cjohn", false},
-		{"/home/cjohn/projects/", "/home/cjohn/projects/app/", true},
+		{"/home/operator/projects", "/home/operator/projects/app", true},
+		{"/home/operator/projects", "/home/operator/projects", true},
+		{"/home/operator/projects", "/home/operator/projects-evil", false},
+		{"/home/operator/projects", "/home/operator", false},
+		{"/home/operator/projects/", "/home/operator/projects/app/", true},
 	}
 	for _, c := range cases {
 		if got := pathWithinRoot(c.root, c.path); got != c.want {
