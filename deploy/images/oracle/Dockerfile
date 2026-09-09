@@ -26,7 +26,7 @@
 #   docker build -f deploy/images/oracle/Dockerfile -t wardyn/agent-oracle:local .
 
 # ── Stage 1: Go builder (wardyn-rec) ──────────────────────────────────────────
-FROM golang:1.27@sha256:4013ae0f9e7994f8535c58c811f8f863fbed38b72e0d51e6592156f758d66146 AS builder
+FROM golang:1.27@sha256:512690a5660563b57d37ecc31129e7f136e831db2aed24a1dbeb8ad7380dc0fa AS builder
 WORKDIR /build
 
 # Corporate build support (no-ops on an OSS build): GOTOOLCHAIN=local skips the
