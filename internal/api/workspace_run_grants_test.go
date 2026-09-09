@@ -354,7 +354,7 @@ func TestWireWorkspaceSource_ReservedDriveTargetRefusedOnEveryBranch(t *testing.
 		src  types.WorkspaceSource
 	}{
 		{"local_dir at the reserved path", types.WorkspaceSource{
-			Type: types.WorkspaceSourceTypeLocalDir, Path: "/home/cjohn/legacy",
+			Type: types.WorkspaceSourceTypeLocalDir, Path: "/home/operator/legacy",
 			Target: runner.DriveTarget, Writable: true,
 		}},
 		{"repo UNDER the reserved subtree", types.WorkspaceSource{
@@ -391,7 +391,7 @@ func TestWireWorkspaceSource_ReservedDriveTargetRefusedOnEveryBranch(t *testing.
 		var run types.AgentRun
 		var policy types.RunPolicySpec
 		ws := types.Workspace{ID: uuid.New(), Sources: []types.WorkspaceSource{
-			{Type: types.WorkspaceSourceTypeLocalDir, Path: "/home/cjohn/app", Target: "/home/agent/work"},
+			{Type: types.WorkspaceSourceTypeLocalDir, Path: "/home/operator/app", Target: "/home/agent/work"},
 		}}
 		if _, _, err := wireWorkspaceSource(&run, &policy, ws); err != nil {
 			t.Fatalf("an ordinary target was refused: %v", err)

@@ -24,7 +24,7 @@
 //
 // Run:
 //
-//	cd /home/cjohn/wt-v07-profiles && \
+//	cd <repo root> && \
 //	cp local/review-0.7/deep/F2-sso-to-ceiling/groups_overage_probe_test.go internal/auth/oidc/ && \
 //	nice -n 10 GOMAXPROCS=8 go test ./internal/auth/oidc/ -run 'TestF2_GroupsOverage' -count=1 -p 4 -v ; \
 //	rm -f internal/auth/oidc/groups_overage_probe_test.go

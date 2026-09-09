@@ -11,7 +11,7 @@
 //    workspace_egress.go — nothing new is exported or mocked.)
 //
 // RUN (no PG needed — every fixture here is the in-memory authzStore):
-//   cd /home/cjohn/wt-v07-profiles && cp local/review-0.7/deep/F1-approval-to-mint-to-egress/approvals_f1_probe_test.go internal/api/ \
+//   cd <repo root> && cp local/review-0.7/deep/F1-approval-to-mint-to-egress/approvals_f1_probe_test.go internal/api/ \
 //     && nice -n 10 GOMAXPROCS=8 WARDYN_TEST_PG= go test ./internal/api/ -run 'TestF1_' -count=1 -v ; rm internal/api/approvals_f1_probe_test.go
 //
 // EXPECTED on fa910735 (feat/v0.7-profiles):
