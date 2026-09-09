@@ -30,7 +30,7 @@
 # --platform=$BUILDPLATFORM: runs on the BUILDER's arch and cross-compiles to
 # $TARGETARCH below (pure Go, CGO_ENABLED=0) — no QEMU for the compile. Stage 2
 # does need it (apt + npm run as the target arch).
-FROM --platform=$BUILDPLATFORM golang:1.27@sha256:4013ae0f9e7994f8535c58c811f8f863fbed38b72e0d51e6592156f758d66146 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27@sha256:512690a5660563b57d37ecc31129e7f136e831db2aed24a1dbeb8ad7380dc0fa AS builder
 
 WORKDIR /build
 
@@ -67,7 +67,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-rec ./
  && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-scan ./cmd/wardyn-scan
 
 # ── Stage 2: agent runtime ────────────────────────────────────────────────────
-FROM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e
+FROM node:26-bookworm-slim@sha256:367679cf9792759492a486e4aa4b421764d71a9546a6dae8aab81a99eb797b3e
 
 # Apache-2.0 s4(a) requires a copy of the Licence to accompany the distribution and
 # s4(d) requires the NOTICE contents to be carried. Publishing an image IS
