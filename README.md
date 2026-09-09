@@ -134,7 +134,7 @@ indexed in [docs/](docs/README.md).
 
 ## Watch it work
 
-Eleven narrated walkthroughs ship with this release, about 66 minutes end to end;
+Six narrated walkthroughs ship with this release, about 41 minutes end to end;
 the rest of the series is being re-recorded on 0.7 and lands in the same release as
 each episode passes (those rows read *coming soon*). Every one drives
 the real console against real sandboxes — the policies are live, the refusals
@@ -147,37 +147,32 @@ credential brokering, the audit trail — are the same for any sandboxed workloa
 
 | Episode | What it shows | Length |
 |---|---|---|
-| [00 — Meet Wardyn][v00] | **The front door.** One keyless run answers what a run may reach, what it may touch, and what it is handed | 5:53 |
+| 00 — Meet Wardyn | **The front door.** One keyless run answers what a run may reach, what it may touch, and what it is handed | coming soon |
 | [01 — Why govern agents][v01] | The blast radius anything inherits when it runs as you | 6:50 |
 | [02 — Set up the host][v02] | `make setup`, from a bare host to a running control plane | 7:26 |
 | [03a — What it stops][v03a] | **The core.** Four things that happen to a host a run may not reach, then the secret the sandbox is never handed | 11:45 |
 | [03b — The network, three more ways][v03b] | A real agent boxed in, a policy recorded from a run, an approval that lasts one connection | 5:05 |
 | 03c — Authorized, then issued | A bearer token attached at the boundary; a PAT that only ever exists in a pipe | coming soon |
 | [03d — The kinds that can't use a header][v03d] | SSH keys, brokered GitHub tokens, cloud STS — credentials no header injection can carry | 5:58 |
-| [04 — Add a workspace][v04] | Onboarding a source, so a run can mount only what was declared | 4:39 |
+| 04 — Add a workspace | Onboarding a source, so a run can mount only what was declared | coming soon |
 | [05 — Your first policy][v05] | Writing the ceiling every run is clamped to | 3:58 |
-| [06 — Your first run][v06] | One governed run, launched and read back from its record | 3:58 |
+| 06 — Your first run | One governed run, launched and read back from its record | coming soon |
 | 07 — Interactive runs | Attaching a live terminal to a running sandbox | coming soon |
 | 08 — An autonomous agent | A real coding agent doing real work inside the boundary | coming soon |
-| [09 — Record a run][v09] | Run open, derive the minimal policy, replay it confined | 6:06 |
-| [10 — Approvals and egress][v10] | Deciding a held request — once, this run, until, always | 3:56 |
+| 09 — Record a run | Run open, derive the minimal policy, replay it confined | coming soon |
+| 10 — Approvals and egress | Deciding a held request — once, this run, until, always | coming soon |
 
 They ship as [release assets](https://github.com/cjohnstoniv/wardyn/releases/tag/v0.7.0),
 not in the repo, so a clone stays small. Links pin `v0.7.0`; later releases
 re-publish under the same filenames. An episode without a link has not been
 re-recorded on 0.7 yet; it is uploaded to this same release the moment its take passes.
 
-[v00]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.0/wardyn-00-meet-wardyn.mp4
 [v01]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.0/wardyn-01-why-govern-agents.mp4
 [v02]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.0/wardyn-02-set-up-the-host.mp4
 [v03a]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.0/wardyn-03a-what-it-stops.mp4
 [v03b]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.0/wardyn-03b-the-network-three-more-ways.mp4
 [v03d]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.0/wardyn-03d-the-kinds-that-cant-use-a-header.mp4
-[v04]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.0/wardyn-04-add-a-workspace.mp4
 [v05]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.0/wardyn-05-your-first-policy.mp4
-[v06]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.0/wardyn-06-your-first-run.mp4
-[v09]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.0/wardyn-09-record-a-run.mp4
-[v10]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.0/wardyn-10-approvals-and-egress.mp4
 
 ## Architecture at a glance
 
