@@ -7,8 +7,8 @@
 # (copyleft-ish). An allowlist with a wildcard in it is a denylist wearing a costume.
 #
 # Every id below is present in the current dependency set (see local/oss-review-2026-08/):
-#   Go, 77 shipped modules : Apache-2.0 42, BSD-3-Clause 22, MIT 16, ISC 2, BSD-2-Clause 1
-#   UI, production deps    : MIT, Apache-2.0, ISC, 0BSD, OFL-1.1
+#   Go, 84 shipped modules : Apache-2.0 42, BSD-3-Clause 23, MIT 16, ISC 2, BSD-2-Clause 1
+#   UI, 91 production deps : MIT 85, Apache-2.0 2, OFL-1.1 2, ISC 1, 0BSD 1
 #
 # Every id here is BACKED by a canonical text in licenses/canonical/ and IN USE by
 # a current dependency. Adding an id means adding its text in the same commit —

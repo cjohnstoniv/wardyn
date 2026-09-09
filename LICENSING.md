@@ -53,9 +53,13 @@ Wardyn is distributed through four channels:
 | **CLI binaries** | `wardyn-{linux,darwin}-{amd64,arm64}`, attached to each GitHub release |
 | **Helm chart** | pushed to `oci://ghcr.io/cjohnstoniv/charts` on release; also installable straight from this repo |
 
-Three more agent Dockerfiles (`vscode`, `novnc`, `full`) are **local build
-recipes only**: `make agent-images` builds them on your own machine, no registry
-publishes them, and a release gate keeps them out of the publish matrix.
+Five more agent Dockerfiles (`claude-code`, `oracle`, `vscode`, `novnc`, `full`)
+are **local build recipes only**: `make agent-images` builds them on your own
+machine, no registry publishes them, and a release gate keeps them out of the
+publish matrix. What such a build then downloads from a vendor — Anthropic's
+Claude Code, code-server, a JDK — arrives under **that vendor's** terms, direct
+from that vendor to you. Wardyn neither relicenses it nor conveys it; the
+Dockerfile is a recipe, not a distribution.
 
 **Wardyn's own code and all of its dependencies are permissively licensed.** Every
 Go module compiled into the shipped binaries and every npm package bundled into
@@ -87,6 +91,20 @@ binary:
 You do not have to take any of this on trust: every published image is
 cosign-signed and carries an attested CycloneDX SBOM and build provenance.
 [`docs/VERIFY.md`](docs/VERIFY.md) is the copy-pasteable procedure.
+
+One thing to know before your scanner reads that SBOM. A Vite bundle strips
+every `package.json`, so scanning the `wardynd` image finds no npm packages at
+all; the release job therefore merges in a scan of `ui/pnpm-lock.yaml`, and a
+lockfile records **build-time** dependencies as well as shipped ones. So the
+`wardynd` SBOM lists ~609 npm components where only 91 are bundled into the
+console, and among the extra ~518 are build tools under MPL-2.0
+(`lightningcss`), EPL-2.0 (`elkjs`), CC-BY-4.0 (`caniuse-lite`) and one
+(`khroma`) that declares no licence in `package.json` (its tarball carries an
+MIT text). None of them are in the console bundle, none are executed at
+runtime, and none of their terms reach the artifact you receive: a compiler is
+not a component. `pnpm licenses list --prod` — which is what `make npm-license`
+gates on — is the list of what actually ships, and it is MIT, Apache-2.0,
+OFL-1.1, ISC and 0BSD only.
 
 The complete component inventory is in
 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md), with verbatim licence texts in

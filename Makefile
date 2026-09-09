@@ -484,7 +484,7 @@ gitleaks: ## Scan the FULL git history for committed secrets
 # gate that would have caught it out of the box. `reciprocal` (MPL/EPL/CDDL) was
 # allowed under either. The two flags are mutually exclusive (see
 # `go-licenses check --help`), so closing all three holes means swapping, not
-# adding. Verified zero-cost: all 77 shipped modules classify as type `notice`.
+# adding. Verified zero-cost: all 84 shipped modules classify as type `notice`.
 #
 # go-licenses has no -tags flag, so the docker-tagged deps (moby/moby/*,
 # containerd/errdefs) and the k8s-tagged deps (k8s.io/client-go et al) are

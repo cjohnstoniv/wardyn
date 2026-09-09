@@ -13,12 +13,12 @@ None of these packages are modified by Wardyn. Every one is the unmodified
 distribution package, so the corresponding source is the distribution's own,
 obtainable from:
 
-- **Debian** (`debian:bookworm-slim`, `node:22-bookworm-slim`, and the
+- **Debian** (`debian:bookworm-slim`, `node:24-bookworm-slim`, and the
   `gcr.io/distroless/static-debian12` base): `https://snapshot.debian.org`
   pinned to the package version below, or `apt-get source <package>` on a
   bookworm host. Per-package copyright and licence text also ships inside each
   image at `/usr/share/doc/<package>/copyright`.
-- **Alpine** (`alpine:3.20`): `https://gitlab.alpinelinux.org/alpine/aports`
+- **Alpine** (`alpine:3.24`): `https://gitlab.alpinelinux.org/alpine/aports`
   at the matching aport version.
 - **asciinema** (installed by Wardyn's own Dockerfile, not inherited):
   `https://github.com/asciinema/asciinema` at the version below.
