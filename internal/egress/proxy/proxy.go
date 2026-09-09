@@ -715,6 +715,15 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	}
 	target, ruleSource, terr := p.egressTarget(host, port)
 	if terr != nil {
+		// A name that never resolved is not an SSRF block, and auditing it as
+		// one is a lie with a cost: the operator cannot tell a DNS outage from a
+		// real guard denial in the decision stream, and the deny's own detail
+		// sentence then sends them to widen an SSRF control over an unrelated
+		// fault. Both still fail closed — only the attribution differs.
+		if errors.Is(terr, errHostUnresolved) {
+			log := decisionLog(req, egress.Deny, "builtin:resolve-failed")
+			return egress.Deny, "", &log
+		}
 		log := decisionLog(req, egress.Deny, "builtin:private-ip")
 		return egress.Deny, "", &log
 	}

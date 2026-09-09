@@ -94,7 +94,7 @@ func TestConnectDenyRefusalHeaders(t *testing.T) {
 	}
 }
 
-// B4: "denied" alone is ambiguous. EIGHT distinct outcomes collapse into it,
+// B4: "denied" alone is ambiguous. NINE distinct outcomes collapse into it,
 // and they call for completely different actions — ask the operator to allowlist
 // a host, versus stop trying because a human already refused, versus fix a
 // broken policy. The reason header carries the decision log's own RuleSource so
@@ -107,6 +107,7 @@ func TestEgressRefusalHeaders_CarryTheReason(t *testing.T) {
 		{"an explicit deny-list hit", "policy:denied"},
 		{"a human refused the approval", "approval:denied"},
 		{"the private-IP guard", "builtin:private-ip"},
+		{"a name that never resolved", "builtin:resolve-failed"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

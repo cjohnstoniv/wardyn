@@ -99,6 +99,13 @@ describe("ruleSourceLabel", () => {
       label: "Refused by a built-in address-range rule, not your policy",
       tone: "danger",
     });
+    // A name that never resolved is not the address-range floor: labelled as
+    // one (or as the generic guard) the operator widens an SSRF control over a
+    // DNS outage, which is the deny the console must not mis-name (F055).
+    expect(ruleSourceLabel("builtin:resolve-failed")).toEqual({
+      label: "Refused because the name did not resolve, not by policy or the address rule",
+      tone: "danger",
+    });
     expect(ruleSourceLabel("builtin:dial-failed")).toEqual({
       label: "Refused by the built-in guard",
       tone: "danger",

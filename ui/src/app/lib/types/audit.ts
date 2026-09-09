@@ -93,6 +93,14 @@ export function ruleSourceLabel(source: string): RuleSourceLabel | null {
   if (source === "builtin:private-ip") {
     return { label: "Refused by a built-in address-range rule, not your policy", tone: "danger" };
   }
+  // builtin:resolve-failed is the SAME misreading one step earlier: the proxy
+  // never learned an address at all (resolver outage, no such name, no address
+  // records). Under the generic builtin label it reads as a guard hit, and the
+  // operator widens an SSRF control over a DNS outage — so this one names its
+  // cause too, and points at the resolver instead.
+  if (source === "builtin:resolve-failed") {
+    return { label: "Refused because the name did not resolve, not by policy or the address rule", tone: "danger" };
+  }
   // builtin:* is the proxy's own guard family (dial-failed, upstream-proxy, …)
   // — all refusals.
   if (source.startsWith("builtin:")) return { label: "Refused by the built-in guard", tone: "danger" };

@@ -266,16 +266,17 @@ rides in the value itself:
 | `rule_source` | Meaning | Defined at |
 |---|---|---|
 | `builtin:upstream-proxy` | A configured corp upstream proxy is in the path; recorded once at proxy construction, the hop the SSRF re-check is deferred to | `internal/egress/proxy/proxy.go:528` |
-| `builtin:private-ip` | The literal-IP guard denied a private/loopback/link-local/metadata literal no `internal_hosts` lift or `egress_redirects` `to` trusts exactly — step 0 and the post-`egressTarget` re-check alike | `internal/egress/proxy/literal_ip_guard.go:78` (step 0), `internal/egress/proxy/proxy.go:718` (post-`egressTarget`) |
+| `builtin:private-ip` | The literal-IP guard denied a private/loopback/link-local/metadata literal no `internal_hosts` lift or `egress_redirects` `to` trusts exactly — step 0 and the post-`egressTarget` re-check alike | `internal/egress/proxy/literal_ip_guard.go:78` (step 0), `internal/egress/proxy/proxy.go:727` (post-`egressTarget`) |
+| `builtin:resolve-failed` | The name never resolved — a resolver outage, NXDOMAIN, or a zero-answer lookup — so no address was ever vetted. A DNS fault, NOT the address-range guard it used to be audited as: the two have opposite fixes, and this one is fixed at the sandbox's resolver rather than by declaring an `internal_hosts` lift | `internal/egress/proxy/proxy.go:724` (post-`egressTarget`, `errHostUnresolved`) |
 | `policy:evaluator-error` | The pluggable evaluator returned an error: fail-closed deny | `internal/egress/proxy/proxy.go:604` |
 | `policy:denied` | The run policy's deny list names the host (deny beats allow) | `internal/egress/proxy/proxy.go:617` |
 | `approval:denied` | A first-use approval for this host was refused | `internal/egress/proxy/proxy.go:665` |
 | `approval:pending` | A first-use approval is open and undecided — the request is held, not denied | `internal/egress/proxy/proxy.go:668` |
 | `policy:default-deny` | No allowlist entry names the host and no approval covers it | `internal/egress/proxy/proxy.go:676` |
 | `policy:method` | The host is allowed but the request's HTTP method is not | `internal/egress/proxy/proxy.go:639` |
-| `policy:allowed` | An ordinary standing allowlist allow (`allowLog`, `approvalID == Nil`) | `internal/egress/proxy/proxy.go:704` |
-| `approval:<approval-id>` | Allowed by one specific approval — the UUID rides IN the value, so the trail self-joins to the approval (`allowLog`) | `approvalID.String()`, `internal/egress/proxy/proxy.go:738` |
-| `builtin:dial-failed` | The vetted dial itself failed, so the earlier allow is superseded by a deny rather than over-reported (E3) | `internal/egress/proxy/proxy.go:851` (CONNECT tunnel), `internal/egress/proxy/plain_lane.go:146` (plain forward), `internal/egress/proxy/llm_routes.go:270` (configured gateway did not answer), `internal/egress/proxy/llm_routes.go:381` (brokered LLM round trip) |
+| `policy:allowed` | An ordinary standing allowlist allow (`allowLog`, `approvalID == Nil`) | `internal/egress/proxy/proxy.go:749` |
+| `approval:<approval-id>` | Allowed by one specific approval — the UUID rides IN the value, so the trail self-joins to the approval (`allowLog`) | `approvalID.String()`, `internal/egress/proxy/proxy.go:751` |
+| `builtin:dial-failed` | The vetted dial itself failed, so the earlier allow is superseded by a deny rather than over-reported (E3) | `internal/egress/proxy/proxy.go:860` (CONNECT tunnel), `internal/egress/proxy/plain_lane.go:146` (plain forward), `internal/egress/proxy/llm_routes.go:270` (configured gateway did not answer), `internal/egress/proxy/llm_routes.go:381` (brokered LLM round trip) |
 
 ## Kernel ground-truth (eBPF/Tetragon stream)
 
