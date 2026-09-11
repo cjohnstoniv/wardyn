@@ -8,6 +8,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The console header shows who you are, not your IdP's object id.** For an SSO
+  user the account chip and its menu rendered `me.principal` — the raw OIDC `sub`
+  (an Entra object id; `gsv-member-0001` on the kind demo) — even though
+  `GET /api/v1/me` already returned the email beside it. The header now reads the
+  IdP's `name` claim, then the email, and falls back to the principal only for an
+  admin token or local mode, where there is neither; the opaque subject stays in
+  the account menu as a secondary mono line, since that is the string
+  `docs/OPERATIONS.md` tells an admin to paste. `GET /api/v1/me` gains `name`
+  (`""` outside SSO) and the session cookie carries the claim; a cookie minted by
+  0.7.0 has no `name` and is still a valid session — nobody is signed out. The
+  signed-in principal every ownership check compares against is still the `sub`.
+
 ## [0.7.0] — 2026-09-09
 
 Two of the three headline blockers an enterprise adopter reported against 0.6.6 are

@@ -47,6 +47,10 @@ export interface Me {
   security_operator: boolean;
   role: "admin" | "security_admin" | "member";
   email: string;
+  // The IdP's display-name claim — "" outside SSO or when the IdP sent none,
+  // absent on a pre-0.7.1 daemon. Display only: the header reads name, then
+  // email, then principal; `principal` stays the ownership key.
+  name?: string;
   // ISO timestamp the SSO session dies at, with no refresh (W31-S1-7) —
   // present only for method:"sso". Absent for local/token auth, which has no
   // session to expire.

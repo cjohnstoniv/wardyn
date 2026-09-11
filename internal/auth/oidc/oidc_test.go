@@ -1873,3 +1873,50 @@ func TestCallbackEmailVerifiedOmittedIsItsOwnCode(t *testing.T) {
 	}
 	assertSessionCookieCleared(t, w)
 }
+
+// TestSessionRoundTripName (0.7.1) proves the display-name claim survives the
+// encode/decode round trip beside Sub/Email — and that a session WITHOUT it,
+// i.e. every cookie 0.7.0 minted, is still a session: Name is fail-safe (the
+// header falls back to the email), so it rides omitempty under the SAME codec
+// version rather than signing everyone out for a display string.
+func TestSessionRoundTripName(t *testing.T) {
+	env := newIdPEnv(t)
+	auth := env.newAuth(t, nil)
+
+	roundTrip := func(t *testing.T, sess writoidc.Session) (gotName string, authenticated bool) {
+		t.Helper()
+		cookie, err := writoidc.EncodeSessionForTest(auth, sess)
+		if err != nil {
+			t.Fatalf("EncodeSessionForTest: %v", err)
+		}
+		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			authenticated = writoidc.PrincipalFromContext(r.Context()) != ""
+			gotName = writoidc.NameFromContext(r.Context())
+			w.WriteHeader(http.StatusOK)
+		})
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.AddCookie(cookie)
+		auth.Middleware(next).ServeHTTP(httptest.NewRecorder(), r)
+		return gotName, authenticated
+	}
+
+	t.Run("name survives the round trip", func(t *testing.T) {
+		name, ok := roundTrip(t, writoidc.Session{
+			Sub: "sub-dana", Email: "dana@example.com", Name: "Dana Example",
+			Role: writoidc.RoleMember, Expiry: time.Now().Add(time.Hour),
+		})
+		if !ok || name != "Dana Example" {
+			t.Fatalf("authenticated=%v name=%q, want authenticated with name %q", ok, name, "Dana Example")
+		}
+	})
+
+	t.Run("a session minted without a name (a 0.7.0 cookie) is still a session", func(t *testing.T) {
+		name, ok := roundTrip(t, writoidc.Session{
+			Sub: "sub-dana", Email: "dana@example.com",
+			Role: writoidc.RoleMember, Expiry: time.Now().Add(time.Hour),
+		})
+		if !ok || name != "" {
+			t.Fatalf("authenticated=%v name=%q, want authenticated with an empty name", ok, name)
+		}
+	})
+}

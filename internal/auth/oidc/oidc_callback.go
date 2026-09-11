@@ -86,9 +86,12 @@ func consumeCallbackCookies(w http.ResponseWriter, r *http.Request) (nonce, veri
 type callbackClaims struct {
 	email         string
 	emailVerified *bool
-	roles         []string
-	groups        []string
-	claimNames    map[string]any
+	// name is the IdP's display-name claim, carried on the session for the
+	// console header only (Session.Name) — never gates, never logged.
+	name       string
+	roles      []string
+	groups     []string
+	claimNames map[string]any
 	// unreadable lists the claims the IdP sent in a shape this build cannot
 	// decode; CallbackHandler stamps the snapshot partial and refuses a
 	// role-widening default on it.
@@ -112,6 +115,11 @@ func decodeCallbackClaims(idToken *gooidc.IDToken) (callbackClaims, error) {
 		// C1: the gate below (4) treats nil and false as distinct denials,
 		// each with its own auth_error code.
 		EmailVerified *bool `json:"email_verified"`
+		// Display name for the console header (0.7.1). Optional by nature — an
+		// absent key decodes to "" and is not an error; ONLY "name", never
+		// preferred_username/upn, which are email substitutes and would
+		// silently re-base the AllowedEmailDomains gate if routed anywhere.
+		Name string `json:"name"`
 	}
 	if err := idToken.Claims(&claims); err != nil {
 		return callbackClaims{}, err // CallbackHandler answers 401 "id_token claims extraction failed", unchanged
@@ -177,6 +185,7 @@ func decodeCallbackClaims(idToken *gooidc.IDToken) (callbackClaims, error) {
 	return callbackClaims{
 		email:         claims.Email,
 		emailVerified: claims.EmailVerified,
+		name:          claims.Name,
 		roles:         rc.Roles,
 		groups:        gc.Groups,
 		claimNames:    dc.ClaimNames,
@@ -380,6 +389,7 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	sess := Session{
 		Sub:             idToken.Subject,
 		Email:           cc.email,
+		Name:            cc.name,
 		Role:            role,
 		Expiry:          idToken.Expiry,
 		IssuedAt:        time.Now().UTC(), // D16: the cutoff SessionRevocations compares against

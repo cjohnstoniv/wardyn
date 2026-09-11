@@ -32,9 +32,9 @@ Teal is the only loud color, and it means *"press this."* Everything else is gre
 | Affirmative action | `--primary` / `--primary-foreground` | The **one** `default` Button per surface (`button.tsx:12`) | Hover backgrounds, decoration, headings, ornamental icons |
 | Selected state | `--primary` at low alpha | `OptionCard` selected (`form-primitives.tsx:80`), `Checkbox`/`RadioGroup` checked, text `selection:` (`input.tsx:11`) | Anything not actually selected |
 | Focus ring | `--ring` | `focus-visible:border-ring focus-visible:ring-ring focus-visible:ring-[3px]` (`button.tsx:8`, `input.tsx:12`) — full alpha; a `/50` ring never met the 3:1 floor | Anything merely selected — the ring stays neutral so focus and selection read differently |
-| Active nav item | `--sidebar-accent` fill + `--sidebar-primary` rail | `navLinkClass` (`app-shell.tsx:305–311`) and the active rail (`app-shell.tsx:331`) | A third active treatment — use the shipped one |
+| Active nav item | `--sidebar-accent` fill + `--sidebar-primary` rail | `navLinkClass` (`app-shell.tsx:320–326`) and the active rail (`app-shell.tsx:346`) | A third active treatment — use the shipped one |
 | Barrier tier | METALS: `--fence-*` bronze, `--wall-*` silver, `--vault-*` gold | `ConfinementChip` (`primitives.tsx:246–267`), `BarrierStrengthStrip`, `tier-illustration.tsx:70–72`, the tier matrix (`setup/environment-step.tsx:53–55`) | Card borders, run state, buttons, section headers |
-| Run / approval / health state | `--success` `--warning` `--danger` `--info` `--cyan` + their `-subtle` fills | `Chip` tones (`primitives.tsx:51–60`), shell banners (`app-shell.tsx:494`), `TruncatedNote` | Decoration. Always paired with a glyph or word — never color alone |
+| Run / approval / health state | `--success` `--warning` `--danger` `--info` `--cyan` + their `-subtle` fills | `Chip` tones (`primitives.tsx:51–60`), shell banners (`app-shell.tsx:509`), `TruncatedNote` | Decoration. Always paired with a glyph or word — never color alone |
 | Agent identity | `--agent-claude` and the per-agent badge colors | `AgentBadge` monogram (`primitives.tsx:389–395`) | Anything but the WHO badge |
 | Destructive | `--destructive` (= `--danger`) | `destructive` Button, delete confirmations | Deny, Cancel, or any reversible action |
 | Everything else | `--muted`, `--muted-foreground`, `--accent`, `--border`, `--border-strong`, `--surface-2` | Surfaces, rows, hairlines, secondary text | — |
@@ -212,7 +212,7 @@ Bind `disabled` the instant the action fires; reveal the spinner later.
   takes an `action`; omit it only when the emptiness is good news. Put the doc link next
   to the need.
 - **Persistent errors render inline** with something to read, retry, or act on:
-  `ErrorState` (`states.tsx:44`) for a pane, a shell banner (`app-shell.tsx:494`),
+  `ErrorState` (`states.tsx:44`) for a pane, a shell banner (`app-shell.tsx:509`),
   `TruncatedNote` (`states.tsx:84–103`) for a partial result.
 - **Toasts (`sonner`) are transient confirmations only** — "Copied", "Secret saved".
   Anything worth reading twice is not a toast.

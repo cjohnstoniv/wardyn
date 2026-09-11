@@ -56,6 +56,16 @@ func EmailFromContext(ctx context.Context) string {
 	return e
 }
 
+// NameFromContext returns the display-name ("name") claim of the session
+// Middleware verified, or "" when there is no SSO session or the IdP sent
+// none. Display only — internal/api shows it in the console header and
+// nothing else reads it; the identity every decision is keyed on stays the
+// sub (PrincipalFromContext) and the allowlist identity stays the email.
+func NameFromContext(ctx context.Context) string {
+	n, _ := ctx.Value(nameCtxKey{}).(string)
+	return n
+}
+
 // RoleFromContext returns the Wardyn role (RoleAdmin or RoleMember) derived
 // for the session Middleware verified, or "" when there is no SSO session.
 // This package only DERIVES and CARRIES the role — see CallbackHandler /
@@ -120,6 +130,7 @@ func GroupsTruncatedFromContext(ctx context.Context) bool {
 func contextWithPrincipal(ctx context.Context, sess Session) context.Context {
 	ctx = context.WithValue(ctx, principalCtxKey{}, sess.Sub)
 	ctx = context.WithValue(ctx, emailCtxKey{}, sess.Email)
+	ctx = context.WithValue(ctx, nameCtxKey{}, sess.Name)
 	ctx = context.WithValue(ctx, groupsCtxKey{}, sess.Groups)
 	ctx = context.WithValue(ctx, groupsTruncatedCtxKey{}, sess.GroupsTruncated)
 	ctx = context.WithValue(ctx, roleCtxKey{}, sess.Role)
@@ -133,6 +144,10 @@ type principalCtxKey struct{}
 // emailCtxKey is the context key for the session's email claim.
 // Unexported: use EmailFromContext.
 type emailCtxKey struct{}
+
+// nameCtxKey is the context key for the session's display-name claim.
+// Unexported: use NameFromContext.
+type nameCtxKey struct{}
 
 // roleCtxKey is the context key for the session's derived role.
 // Unexported: use RoleFromContext.

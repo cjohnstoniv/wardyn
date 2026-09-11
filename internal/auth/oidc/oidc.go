@@ -222,9 +222,15 @@ type Session struct {
 	// encodeSession so no caller has to remember it. A payload carrying any
 	// other value — a pre-0.7 cookie's absent key decodes to 0 — is not a
 	// session.
-	V      int       `json:"v"`
-	Sub    string    `json:"sub"`
-	Email  string    `json:"email"`
+	V     int    `json:"v"`
+	Sub   string `json:"sub"`
+	Email string `json:"email"`
+	// Name is the IdP's display-name claim ("name"), carried for the console
+	// header ONLY: it gates nothing, keys nothing, and is never logged (the
+	// same hygiene Email already keeps). omitempty and no codec bump on
+	// purpose — an absent key decodes to "" and the header falls back to the
+	// email, which is fail-safe, so a pre-0.7.1 cookie stays a session.
+	Name   string    `json:"name,omitempty"`
 	Role   string    `json:"role"`
 	Expiry time.Time `json:"expiry"`
 	// IssuedAt (D16) is when CallbackHandler minted this cookie — the value

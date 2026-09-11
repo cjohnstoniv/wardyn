@@ -140,3 +140,54 @@ func TestHandleMe_MemberLocalDirRoot(t *testing.T) {
 		}
 	})
 }
+
+// 0.7.1: the console header shows the person, not the IdP's object id. /me
+// must publish the display name and the email BESIDE the principal — the
+// principal stays the ownership key the console compares against, the other
+// two are what it renders — and say "" for both when there is no SSO session.
+func TestHandleMe_PublishesNameAndEmailBesidePrincipal(t *testing.T) {
+	s := &Server{}
+
+	t.Run("SSO session: principal, email and name are three distinct keys", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+		ctx := withOIDCHuman(r.Context(), "gsv-member-0001")
+		ctx = withOIDCEmail(ctx, "alice.smith@corp.example")
+		ctx = withOIDCName(ctx, "Alice Smith")
+		ctx = withOIDCRole(ctx, oidc.RoleMember)
+		r = r.WithContext(ctx)
+
+		w := httptest.NewRecorder()
+		s.handleMe(w, r)
+
+		var body map[string]any
+		if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		for key, want := range map[string]string{
+			"principal": "gsv-member-0001",
+			"email":     "alice.smith@corp.example",
+			"name":      "Alice Smith",
+		} {
+			if got, _ := body[key].(string); got != want {
+				t.Errorf("%s = %q, want %q", key, got, want)
+			}
+		}
+	})
+
+	t.Run("no SSO session (admin token / local mode): name and email are empty, never absent", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+		w := httptest.NewRecorder()
+		s.handleMe(w, r)
+
+		var body map[string]any
+		if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		for _, key := range []string{"email", "name"} {
+			got, ok := body[key].(string)
+			if !ok || got != "" {
+				t.Errorf("%s = %#v, want the empty string (present, empty)", key, body[key])
+			}
+		}
+	})
+}

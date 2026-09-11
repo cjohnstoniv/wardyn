@@ -71,7 +71,14 @@ import type { ConfinementClass } from "../../lib/types";
 export interface ShellMeta {
   trustDomain: string;
   identityProvider: string;
+  // principal is the OWNERSHIP key (the OIDC sub, "admin-token", "local:…"):
+  // it feeds PrincipalContext and every `usePrincipal() === run.created_by`
+  // gate. email and name are DISPLAY ONLY — what the header shows for "you",
+  // in that order of preference — and are "" outside SSO or when the IdP sent
+  // none, so the header falls back to the principal there (0.7.1).
   principal: string;
+  email: string;
+  name: string;
   method: string;
   // True once the /me fetch has SETTLED — success or failure. This is the
   // landing gate's signal (App.tsx's FirstRunLanding), and it must not be
@@ -130,6 +137,8 @@ function useMeta(): ShellMeta {
     trustDomain: "…",
     identityProvider: "…",
     principal: "…",
+    email: "",
+    name: "",
     method: "",
     resolved: false,
     identityResolved: false,
@@ -151,6 +160,10 @@ function useMeta(): ShellMeta {
           trustDomain: h.trust_domain || "unknown",
           identityProvider: h.identity_provider || "unknown",
           principal: me?.principal || "unknown",
+          email: me?.email ?? "",
+          // ?? "": a pre-0.7.1 daemon never sends name — absent must read as
+          // "none", which falls back to the email, then the principal.
+          name: me?.name ?? "",
           method: me?.method || "",
           resolved: true,
           identityResolved: me !== null,
@@ -206,7 +219,9 @@ function useSessionExpiringSoon(expiresAt: Date | null): boolean {
 
 function initials(principal: string): string {
   const base = principal.split("@")[0] || principal;
-  const parts = base.split(/[.\-_]/).filter(Boolean);
+  // Whitespace joins the separators (0.7.1): the value may now be an IdP
+  // display name ("Alice Smith" → AS), not only an email local-part.
+  const parts = base.split(/[\s.\-_]+/).filter(Boolean);
   const s = (parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? parts[0]?.[1] ?? "");
   return (s || base.slice(0, 2)).toUpperCase();
 }
@@ -599,6 +614,10 @@ export function TopBar({
   confinementClasses: ConfinementClass[];
   onNewRun: () => void;
 }) {
+  // What the header calls "you": the IdP's display name, else the session
+  // email, else the principal itself (an admin token or local mode has
+  // neither). Display only — PrincipalContext below keeps meta.principal.
+  const display = meta.name || meta.email || meta.principal;
   const { theme, toggle } = useTheme();
   return (
     <header className="flex h-14 shrink-0 items-center gap-4 border-b border-border bg-card/70 px-4 backdrop-blur">
@@ -666,10 +685,10 @@ export function TopBar({
               className="h-auto gap-2 rounded-md px-1.5 py-1"
             >
               <span className="flex size-7 items-center justify-center rounded-full bg-secondary text-xs text-foreground">
-                {initials(meta.principal)}
+                {initials(display)}
               </span>
-              <span className="hidden text-sm sm:block">
-                {meta.principal.split("@")[0]}
+              <span className="hidden max-w-48 truncate text-sm sm:block">
+                {display.split("@")[0]}
               </span>
               <ChevronsUpDown className="size-3.5 text-muted-foreground" />
             </Button>
@@ -677,8 +696,8 @@ export function TopBar({
           <DropdownMenuContent align="end" className="w-56">
             <DropdownMenuLabel>
               <div className="flex items-center gap-1.5">
-                <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
-                  {meta.principal}
+                <span className="min-w-0 truncate text-xs" title={display}>
+                  {display}
                 </span>
                 {/* Role is a fact, not an alert (prompt-v2): a quiet chip, no
                     banner, no callout — admin is unchanged, member just says so.
@@ -695,6 +714,17 @@ export function TopBar({
                   </Chip>
                 )}
               </div>
+              {/* The sign-in subject, kept where admins are told to copy it from
+                  (OPERATIONS.md: paste the sign-in subject) — only when the
+                  line above is not already showing it. */}
+              {display !== meta.principal && (
+                <div
+                  className="min-w-0 truncate font-mono text-xs text-muted-foreground"
+                  title={meta.principal}
+                >
+                  {meta.principal}
+                </div>
+              )}
               <div className="mt-0.5 text-meta text-muted-foreground">
                 {meta.method === "sso"
                   ? "signed in via SSO"

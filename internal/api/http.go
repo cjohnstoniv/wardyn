@@ -70,6 +70,23 @@ func oidcEmailFromContext(ctx context.Context) string {
 	return e
 }
 
+// oidcNameCtxKey carries the display-name claim of the same verified OIDC
+// session, for /me and nothing else: the console header shows it, no gate
+// reads it, no log line carries it (the same hygiene as the email above).
+// Published only by the SSO branch of humanOrAdminAuth — the api-token lane
+// snapshots no name (api_tokens has no such column) and /me's consumer falls
+// back to the email there.
+type oidcNameCtxKey struct{}
+
+func withOIDCName(ctx context.Context, name string) context.Context {
+	return context.WithValue(ctx, oidcNameCtxKey{}, name)
+}
+
+func oidcNameFromContext(ctx context.Context) string {
+	n, _ := ctx.Value(oidcNameCtxKey{}).(string)
+	return n
+}
+
 // oidcRoleCtxKey carries the Wardyn role (oidc.RoleAdmin / oidc.RoleMember) B1
 // derived for the same verified OIDC session, published by humanOrAdminAuth next
 // to the principal/email for the same reason those two keys exist: isOperator
@@ -391,6 +408,10 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 				oidc.RoleFromContext(r.Context()),
 				oidc.GroupsFromContext(r.Context()),
 				oidc.GroupsTruncatedFromContext(r.Context()))
+			// The display name rides along for /me only (0.7.1) — outside
+			// withHumanIdentity on purpose: the token lane, which shares that
+			// function, has no name to publish and must not grow a fake one.
+			ctx = withOIDCName(ctx, oidc.NameFromContext(r.Context()))
 			// The session expiry rides along so /me can warn ahead of it —
 			// W31-S1-7: there is no refresh, so the alternative is a silent 401
 			// that wipes mid-work console state back to the sign-in gate.

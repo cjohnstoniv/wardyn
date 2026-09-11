@@ -45,6 +45,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"method":    method,
 		"role":      role,
 		"email":     oidcEmailFromContext(r.Context()),
+		// The IdP's display name, "" outside SSO or when the IdP sent none. The
+		// console header reads name, then email, then principal — the principal
+		// (the sub) stays the key every ownership check compares against.
+		"name": oidcNameFromContext(r.Context()),
 		// The SAME predicate operatorOnly gates every admin route with
 		// (isOperator, http.go) — never a second, driftable copy of the rule.
 		// Kept for the console, which already consumes it: operator == role==admin.
