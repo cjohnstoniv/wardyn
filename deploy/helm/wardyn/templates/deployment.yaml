@@ -191,27 +191,29 @@ spec:
                   key: age-key
             {{- end }}
             {{- if not (hasKey .Values.env "WARDYN_RECORDING_STORE") }}
-            # wardynd's own default store is `pg` — Postgres-backed, needs no
-            # volume, visible to every replica. The chart pins `fs` anyway so
-            # persistence.enabled stays the SINGLE recording switch it is
-            # documented to be: with `pg`, WARDYN_RECORDING_DIR below is a no-op
-            # and a stock install (persistence off, the default) would silently
-            # start persisting every PTY asciicast into the control-plane
+            # persistence.enabled is the SINGLE recording switch it is documented
+            # to be: on => the per-pod `fs` store on the persistent volume (path
+            # below); off => `off`, no recording and no replay. Spelled out rather
+            # than left to wardynd's own default (`pg`) because that store would
+            # silently persist every PTY asciicast into the control-plane
             # database — forever, since WARDYN_RECORDING_RETENTION_DAYS defaults
             # to keep-everything. That is a storage AND privacy decision, so it
             # is opt-in: set env.WARDYN_RECORDING_STORE=pg to take it (and then
             # leave persistence off — pg needs no PVC).
+            #
+            # Until 0.7.1 the off half was `fs` plus an EMPTY WARDYN_RECORDING_DIR.
+            # wardynd keeps a compiled default when an env value is empty
+            # (docs/ENV.md), so that spelling kept ./data/recordings, hit the
+            # read-only root FS at boot and crash-looped the stock install.
             - name: WARDYN_RECORDING_STORE
-              value: "fs"
+              value: {{ if .Values.persistence.enabled }}"fs"{{ else }}"off"{{ end }}
             {{- end }}
-            {{- if not (hasKey .Values.env "WARDYN_RECORDING_DIR") }}
+            {{- if and .Values.persistence.enabled (not (hasKey .Values.env "WARDYN_RECORDING_DIR")) }}
             # wardynd's own default (./data/recordings) lands on the read-only
-            # root FS, and NewFSStore's MkdirAll failure is a hard boot error —
-            # the chart's defaults would CrashLoopBackOff. Point it at the
-            # persistent mount, else empty = replay off (the documented no-op in
-            # internal/recording/registry.go). An .Values.env entry overrides.
+            # root FS — point the fs store at the persistent mount instead. An
+            # .Values.env entry overrides.
             - name: WARDYN_RECORDING_DIR
-              value: {{ if .Values.persistence.enabled }}{{ printf "%s/recordings" .Values.persistence.mountPath | quote }}{{ else }}""{{ end }}
+              value: {{ printf "%s/recordings" .Values.persistence.mountPath | quote }}
             {{- end }}
             {{- if not (hasKey .Values.env "WARDYN_AUDIT_SPOOL") }}
             # wardynd's own default (./data/audit-spool.jsonl) is the audit

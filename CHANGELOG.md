@@ -23,6 +23,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (`""` outside SSO) and the session cookie carries the claim; a cookie minted by
   0.7.0 has no `name` and is still a valid session — nobody is signed out. The
   signed-in principal every ownership check compares against is still the `sub`.
+- **A stock `helm install` boots again.** With `persistence.enabled=false` (the
+  chart's default) the chart spelled "recording off" as `WARDYN_RECORDING_STORE=fs`
+  plus an empty `WARDYN_RECORDING_DIR`; since 0.7.0 wardynd keeps a compiled default
+  when an env value is empty (F011/F067), so the empty dir became
+  `./data/recordings`, `mkdir` hit the read-only root filesystem, and the pod
+  crash-looped — `ci.yml`'s `helm-install-test` had been red since the 0.7.0
+  release commit. Recording off is now a store of its own, `WARDYN_RECORDING_STORE=off`;
+  the chart sets it when persistence is off and `fs` + the volume path when on.
 
 ## [0.7.0] — 2026-09-09
 

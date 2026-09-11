@@ -899,10 +899,11 @@ See `values.yaml` for all options. Key settings:
   secret-bearing variables docs/ENV.md marks 🔒: `WARDYN_OIDC_CLIENT_SECRET`,
   and `WARDYN_AUDIT_SINKS` (its JSON carries the SIEM
   `bearer_token`).
-- `persistence.enabled`: also decides `WARDYN_RECORDING_DIR` —
-  `<mountPath>/recordings` when on, empty (replay disabled) when off. wardynd's
-  own default writes to the read-only root FS and would crash-loop the pod.
-  The chart pins `WARDYN_RECORDING_STORE=fs` — not because `pg` is unsafe here
+- `persistence.enabled`: decides the recording store — `WARDYN_RECORDING_STORE=fs`
+  with `WARDYN_RECORDING_DIR=<mountPath>/recordings` when on, `WARDYN_RECORDING_STORE=off`
+  (no recording, no replay) when off. wardynd's own default directory writes to the
+  read-only root FS and would crash-loop the pod (it did, on 0.7.0's empty-dir spelling).
+  The chart pins the store itself — not because `pg` is unsafe here
   (its casts are already readable from any replica), but because this chart is
   single-replica by policy (see `replicas` below), so there is no HA reason to
   force the unbounded-by-default `pg` store on every install. Without the pin,

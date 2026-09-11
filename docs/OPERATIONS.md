@@ -3428,11 +3428,11 @@ so the backup is your Postgres's own backup story — Wardyn adds no mechanism.
 What it adds is three corrections to the compose recipe:
 
 - **Recordings are NOT in the dump on a stock chart install.** The chart pins
-  `WARDYN_RECORDING_STORE=fs` (`deploy/helm/wardyn/values.yaml`, the
-  `persistence` block) — the *opposite* of wardynd's own `pg` default the compose
-  recipe relies on to sweep asciicasts up with the database. With
-  `persistence.enabled=false` (the shipped default) `WARDYN_RECORDING_DIR`
-  renders empty and replay is off, so there is nothing to lose. Turn
+  the recording store itself (`deploy/helm/wardyn/values.yaml`, the
+  `persistence` block) — `fs` on the PVC, or `off` — the *opposite* of wardynd's
+  own `pg` default the compose recipe relies on to sweep asciicasts up with the
+  database. With `persistence.enabled=false` (the shipped default) the store is
+  `off` and replay is off, so there is nothing to lose. Turn
   `persistence` on and every asciicast lives on that PVC alone: `pg_dump` will
   not carry them, and the PVC needs its own snapshot. Setting
   `env.WARDYN_RECORDING_STORE=pg` instead puts them back in the dump.

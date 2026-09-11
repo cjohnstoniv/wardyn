@@ -30,6 +30,15 @@ import (
 // database: New("", ...) with no pool hits pg's constructor and observes ITS
 // nil-pool guard — proving "" resolved to pg, not fs (which would have
 // happily returned a nil Store for an empty Dir instead of erroring).
+// 0.7.1: "off" is the one spelling of "no recording" an environment can carry
+// now that an empty env value keeps the compiled default (FlagEnv, F011/F067).
+func TestNew_OffIsDisabled(t *testing.T) {
+	s, err := recording.New("off", recording.Deps{})
+	if err != nil || s != nil {
+		t.Fatalf(`New("off", no deps) = %v, %v; want a nil Store and no error`, s, err)
+	}
+}
+
 func TestNew_DefaultIsPG(t *testing.T) {
 	if _, err := recording.New("", recording.Deps{}); err == nil {
 		t.Fatal(`New("", no pool) succeeded; want the pg constructor's nil-pool error (proves "" resolves to pg)`)

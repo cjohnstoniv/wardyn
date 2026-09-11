@@ -411,12 +411,14 @@ resources:
     memory: 128Mi
 
 # Persistent recording volume. Off by default (Postgres is the source of truth;
-# recordings are optional). This switch decides WARDYN_RECORDING_DIR:
-# enabled => "<mountPath>/recordings", off => empty, i.e. replay disabled. It
-# cannot default to wardynd's own ./data/recordings — that lands on the
-# read-only root FS and boot fails. Override via env.WARDYN_RECORDING_DIR.
+# recordings are optional). This switch decides the recording store: enabled =>
+# WARDYN_RECORDING_STORE=fs with WARDYN_RECORDING_DIR="<mountPath>/recordings";
+# off => WARDYN_RECORDING_STORE=off, i.e. no recording and no replay. (Until
+# 0.7.1 "off" was spelled as an EMPTY WARDYN_RECORDING_DIR, which wardynd reads
+# as "keep the default" — ./data/recordings, on the read-only root FS — and the
+# pod crash-looped.) Override via env.WARDYN_RECORDING_STORE / _DIR.
 #
-# The chart also pins WARDYN_RECORDING_STORE=fs (see templates/deployment.yaml),
+# The chart pins WARDYN_RECORDING_STORE itself (fs or off, see templates/deployment.yaml),
 # because wardynd's own default (`pg`) ignores WARDYN_RECORDING_DIR entirely and
 # would make this switch a lie — a stock install would persist every PTY
 # asciicast into Postgres, unbounded. Want that instead? Set
