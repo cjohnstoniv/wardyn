@@ -327,11 +327,15 @@ test.describe("a session revoked mid-run (R4/F116)", () => {
       }),
     );
 
-    // The console's own polls (the attention badge / the run list) reach the
-    // 401 on their own; a navigation guarantees a call without waiting one out.
-    await runsNav(page).click();
-
-    await expect(signInToken(page)).toBeVisible();
+    // The console's own polls (the attention badge, every 5 s) reach the 401
+    // on their own. This used to click the Runs nav to force one sooner — but
+    // the gate can replace the shell BETWEEN Playwright resolving that link
+    // and dispatching the click (a 401 from a poll, or from a boot request
+    // still in flight when the route landed), and the click then waits 30 s
+    // on a detached element. A race the test loses on a cold CI runner (6/6
+    // on 2026-09-11) and sometimes locally, on 0.7.0 itself. So the door is
+    // asserted directly, with room for one full poll period.
+    await expect(signInToken(page)).toBeVisible({ timeout: 15_000 });
     // …and the gate is a real door, not a dead end: the submit control is there
     // to be used.
     await expect(useTokenButton(page)).toBeVisible();
