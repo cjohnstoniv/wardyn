@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-09-11
+
 ### Fixed
 
 - **The console header shows who you are, not your IdP's object id.** For an SSO
