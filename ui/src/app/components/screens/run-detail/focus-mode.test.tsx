@@ -82,7 +82,23 @@ afterEach(() => vi.unstubAllGlobals());
 // through the real AppShell rather than a stub context, because "the shell
 // hides its own chrome" is the assertion.
 function renderCockpitInShell() {
-  vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL) =>
+      // A /me that ANSWERS (operator). These suites are about the cockpit, not
+      // identity: since B1's route-shell gate, a settled-but-unknown identity
+      // renders the banner and no route at all — so a rejected /me here would
+      // mount nothing to test. Everything else stays "network down".
+      String(input).endsWith("/api/v1/me")
+        ? Promise.resolve(
+            new Response(
+              JSON.stringify({ principal: "operator", method: "token", operator: true, role: "admin", identity_provider: "embedded" }),
+              { status: 200, headers: { "content-type": "application/json" } },
+            ),
+          )
+        : Promise.reject(new Error("network down")),
+    ),
+  );
   render(
     <MemoryRouter initialEntries={["/runs/run-1"]}>
       <ThemeProvider>

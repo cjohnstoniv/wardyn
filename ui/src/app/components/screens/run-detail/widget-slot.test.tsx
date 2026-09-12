@@ -78,11 +78,31 @@ function ctx(): WidgetContext {
 beforeEach(() => {
   getLayout.mockReset().mockResolvedValue({ preset: "live", layout: [] });
   putLayout.mockReset().mockResolvedValue({ preset: "live", layout: [] });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL) =>
+      // A /me that ANSWERS (operator). These suites are about the cockpit, not
+      // identity: since B1's route-shell gate, a settled-but-unknown identity
+      // renders the banner and no route at all — so a rejected /me here would
+      // mount nothing to test. Everything else stays "network down".
+      String(input).endsWith("/api/v1/me")
+        ? Promise.resolve(
+            new Response(
+              JSON.stringify({ principal: "operator", method: "token", operator: true, role: "admin", identity_provider: "embedded" }),
+              { status: 200, headers: { "content-type": "application/json" } },
+            ),
+          )
+        : Promise.reject(new Error("network down")),
+    ),
+  );
   // The boundary logs the caught error on purpose (error-boundary.tsx's
   // componentDidCatch); silence it so a deliberate throw is not read as noise.
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("one throwing widget is contained — in BOTH renderers of RUN_WIDGETS", () => {
   it("the canvas keeps the session and shows the widget's own error card", async () => {
