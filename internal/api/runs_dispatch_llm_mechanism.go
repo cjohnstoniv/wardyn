@@ -8,10 +8,11 @@
 // 422 form (enforceCreateLLMMechanism).
 //
 // It is a sibling file rather than more of runs_dispatch_llm.go because it is a
-// real seam and that file sits at its 1000-line gate: resolveLLMTransport
-// DECIDES a transport by a fixed precedence, and everything here COMPARES that
-// decision against an admin's declaration. The two never mix — nothing in this
-// file resolves a credential, and nothing in the transport file reads a roster.
+// real seam: resolveLLMTransport DECIDES a transport by a fixed precedence, and
+// everything here COMPARES that decision against an admin's declaration. The two
+// never mix — nothing in this file resolves a credential, and nothing in the
+// transport file reads a roster. (Inlined it would also put that file over the
+// 1000-line gate, which is how the seam got noticed, not why it exists.)
 package api
 
 import (
@@ -44,13 +45,21 @@ const (
 	llmMechanismDeadSentence = "this run's model access is configured as %s, and that credential %s — " +
 		"sign in again under Settings → Model provider. Wardyn does not substitute a different model provider."
 
-	// llmMechanismStateNotConfigured is the state above for a declared lane that
-	// did not fire — whether nothing credentialed the run at all or a DIFFERENT
-	// lane would have. The two read the same to the person: the lane their admin
-	// declared is not the one carrying their run.
+	// llmMechanismStateNotConfigured is the state above when NOTHING credentials
+	// the run: the declared lane did not fire and no other one did either.
 	//
 	// DRAFT (M2 canon pending)
 	llmMechanismStateNotConfigured = "is not configured"
+
+	// llmMechanismStateNotTheLane is the state above when a DIFFERENT lane fired.
+	// It names that lane, because "is not configured" is false of a row whose
+	// credential is sitting right there working — an admin told that their api
+	// key is missing, on a deployment where Bedrock quietly took the run, goes
+	// looking for the wrong problem. %s is the lane that won. This is the sentence
+	// the whole gate exists to be able to say.
+	//
+	// DRAFT (M2 canon pending)
+	llmMechanismStateNotTheLane = "is not the lane this run resolved to, which is %s"
 
 	// llmDetailBedrockExpired is the brokered-LLM 404's detail for a
 	// half-configured Bedrock deployment (see llmUnavailableDetail). %s = the
@@ -157,14 +166,22 @@ func mechanismSatisfied(row types.AgentProvider, selected types.AgentMechanism, 
 }
 
 // llmMechanismRefusal is the sentence for a declared lane that is not carrying
-// this run. The captured-SSO lane's own renewal failure wins when it has one:
-// that sentence names WHY (spent refresh token, or AWS not answering) and what
-// to do about it, which "is not configured" cannot.
-func llmMechanismRefusal(row types.AgentProvider, ssoRefreshFailure string) string {
+// this run. It names BOTH lanes whenever there are two to name — the one the
+// admin declared and the one that actually resolved — and says only "is not
+// configured" for the case where that is literally true: nothing fired at all.
+//
+// The captured-SSO lane's own renewal failure wins when it has one: that sentence
+// names WHY (a spent refresh token, or AWS not answering) and what to do about
+// it, which neither state above can.
+func llmMechanismRefusal(row types.AgentProvider, selected types.AgentMechanism, ok bool, ssoRefreshFailure string) string {
 	if ssoRefreshFailure != "" && row.Mechanism == types.AgentMechanismBedrockSSO {
 		return ssoRefreshFailure
 	}
-	return fmt.Sprintf(llmMechanismDeadSentence, llmMechanismWords[row.Mechanism], llmMechanismStateNotConfigured)
+	state := llmMechanismStateNotConfigured
+	if ok {
+		state = fmt.Sprintf(llmMechanismStateNotTheLane, llmMechanismWords[selected])
+	}
+	return fmt.Sprintf(llmMechanismDeadSentence, llmMechanismWords[row.Mechanism], state)
 }
 
 // enforceConfiguredLLMMechanism fails a run CLOSED when the org declared HOW this
@@ -210,6 +227,10 @@ func (s *Server) enforceConfiguredLLMMechanism(ctx context.Context, run types.Ag
 	if _, needsModel := agentLLMProvider(run.Agent); !needsModel {
 		return true
 	}
+	// agentProviderFor ignores Disabled, and so does this gate: a disabled row is
+	// refused earlier and more clearly, at run create and at the record launcher
+	// (agentRosterRefusal), so a disabled row never reaches dispatch to be read
+	// here for its mechanism.
 	row, declared := agentProviderFor(sc, run.Agent)
 	if !declared {
 		return true
@@ -220,7 +241,7 @@ func (s *Server) enforceConfiguredLLMMechanism(ctx context.Context, run types.Ag
 	if mechanismSatisfied(row, selected, ok) {
 		return true
 	}
-	msg := llmMechanismRefusal(row, llm.bedrock.ssoRefreshFailure)
+	msg := llmMechanismRefusal(row, selected, ok, llm.bedrock.ssoRefreshFailure)
 	s.failAndRevoke(ctx, run.ID, types.RunStarting, msg)
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 		run.ID.String(), "failure", mustJSON(map[string]any{"error": msg})))
@@ -248,8 +269,9 @@ func llmMechanismGateApplies(req createRunRequest) bool {
 type llmLanes struct {
 	// subscription: the policy bind-mounts the resident ~/.claude.
 	subscription bool
-	// managed: the Wardyn-managed setup-token would credential this run
-	// (claude-code, no resident mount, no api-key opt-in, some egress).
+	// managed: the Wardyn-managed setup-token would credential this run —
+	// managedSubscriptionLane, the SAME predicate dispatch applies, on the same
+	// terms and in the same order.
 	managed bool
 	// apiKey: the resolved spec already brokers an api_key grant for this
 	// agent's provider host — the operator's explicit api-key choice.
@@ -269,16 +291,25 @@ func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, s
 	llmProv, _ := s.llmProviderFor(req.Agent)
 	_, l.apiKey = apiKeyGrantForHost(spec, llmProv.host)
 	l.subscription = specHasMountTarget(spec, claudeCredTarget)
-	// Mirrors dispatch's precedence: a compose-mode managed token credentials a
-	// claude run with no resident subscription mount and no anthropic api-key grant.
-	l.managed = req.Agent == "claude-code" && !l.subscription &&
-		!l.apiKey && s.managedInjectReady(req.Agent) &&
-		(spec.AllowAllEgress || len(spec.AllowedDomains) > 0)
+	// BEDROCK FIRST, because managed is the fallback BELOW it: dispatch computes
+	// managed with !bedrockReady, so resolving managed before Bedrock here would
+	// make create fold a Bedrock run onto the subscription lane (selectedMechanism
+	// tests subscription/managed before Bedrock) and refuse a run dispatch would
+	// have credentialed perfectly well.
+	//
 	// refresh=false: create is a dry run over a ONE-USE rotating token. An
 	// expired-but-renewable captured SSO session still reads READY here (dispatch
 	// renews it), so create never warns about — or refuses — a failure that
 	// cannot happen.
 	l.bedrock = s.resolveBedrockAuth(ctx, req.Agent, l.subscription, true, false, bedrockRef)
+	// The SAME predicate dispatch applies, with the same terms — including the
+	// posture term, whose absence here made every SSO deployment's managed run
+	// read as "subscription" at create and dispatch as something else.
+	// modelRun/harnessLogin are this request's own: a run that makes no model call
+	// has no lane at all, which is what dispatch decides for it too.
+	l.managed = s.managedSubscriptionLane(req.Agent,
+		isModelRun(req.TaskMode, req.WorkspaceID, nil, req.Interactive), req.Task == harnessLoginTask,
+		l.subscription, l.bedrock.ready, l.apiKey, spec)
 	return l
 }
 
@@ -318,7 +349,7 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 		return true
 	}
 	// No ssoRefreshFailure at create: nothing here redeems a refresh token.
-	writeError(w, http.StatusUnprocessableEntity, llmMechanismRefusal(row, ""))
+	writeError(w, http.StatusUnprocessableEntity, llmMechanismRefusal(row, selected, ok, ""))
 	return false
 }
 
@@ -332,8 +363,21 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 // SSO session on file to name an expiry from. That is the half-configured
 // deployment the field report arrived from — the run dispatched on the api-key
 // placeholder and the 404 said nothing about Bedrock at all.
-func (s *Server) llmUnavailableDetail(ctx context.Context, llm llmTransport) string {
+//
+// It must be the WHOLE truth about the route it explains, so two runs are
+// excluded even with Bedrock half-configured: an agent Bedrock cannot credential
+// (resolveBedrockAuth is claude-code only — a codex-cli run's OpenAI route 404
+// has nothing to do with Bedrock), and a run that already carries an api-key
+// injection for its provider (whatever 404'd, it was not this).
+//
+// C4: readAWSSSOBlob is the OPERATOR's blob. Under a per_user row the expiry
+// named here is the admin's, not the reader's — when C4 makes that read
+// owner-scoped, this call follows it and the sentence becomes the member's own.
+func (s *Server) llmUnavailableDetail(ctx context.Context, run types.AgentRun, llm llmTransport,
+	injections []runner.InjectionGrant,
+) string {
 	if llm.bedrockReady || !llm.modelRun || llm.harnessLogin ||
+		run.Agent != "claude-code" || s.hasAnthropicAPIKeyInjection(run.Agent, injections) ||
 		s.cfg.BedrockRegion == "" || s.cfg.BedrockModel == "" {
 		return ""
 	}

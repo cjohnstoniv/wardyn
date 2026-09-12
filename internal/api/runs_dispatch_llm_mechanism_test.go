@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -347,13 +348,14 @@ func TestMechanismSatisfied_PerUserAdmitsOnlyTheSSOLane(t *testing.T) {
 	}
 }
 
-// TestLLMMechanismRefusal_NamesTheDeclaredLaneAndItsState: the refusal says what
-// was configured, that it is not working, and that nothing is substituted for it.
-// A renewable captured SSO session that could not be renewed carries C1's own
-// sentence instead, which names WHY.
-func TestLLMMechanismRefusal_NamesTheDeclaredLaneAndItsState(t *testing.T) {
+// TestLLMMechanismRefusal_NamesBothLanes: the refusal says what was configured,
+// what state it is in, and — when a DIFFERENT lane took the run — which one, so
+// an admin is not sent looking for a missing credential that is sitting there
+// working. A renewable captured SSO session that could not be renewed carries
+// C1's own sentence instead, which names WHY.
+func TestLLMMechanismRefusal_NamesBothLanes(t *testing.T) {
 	row := types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO}
-	msg := llmMechanismRefusal(row, "")
+	msg := llmMechanismRefusal(row, "", false, "")
 	for _, want := range []string{
 		llmMechanismWords[types.AgentMechanismBedrockSSO],
 		llmMechanismStateNotConfigured,
@@ -363,12 +365,25 @@ func TestLLMMechanismRefusal_NamesTheDeclaredLaneAndItsState(t *testing.T) {
 			t.Errorf("refusal %q is missing %q", msg, want)
 		}
 	}
-	if got := llmMechanismRefusal(row, awsSSORefreshSpentSentence); got != awsSSORefreshSpentSentence {
+	// A MISMATCH names both lanes and never claims the declared one is missing.
+	apiKeyRow := types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismAnthropicAPIKey}
+	mismatch := llmMechanismRefusal(apiKeyRow, types.AgentMechanismBedrockBearer, true, "")
+	for _, want := range []string{
+		llmMechanismWords[types.AgentMechanismAnthropicAPIKey],
+		llmMechanismWords[types.AgentMechanismBedrockBearer],
+	} {
+		if !strings.Contains(mismatch, want) {
+			t.Errorf("mismatch refusal %q is missing %q", mismatch, want)
+		}
+	}
+	if strings.Contains(mismatch, llmMechanismStateNotConfigured) {
+		t.Errorf("mismatch refusal %q calls a working credential unconfigured", mismatch)
+	}
+	if got := llmMechanismRefusal(row, "", false, awsSSORefreshSpentSentence); got != awsSSORefreshSpentSentence {
 		t.Errorf("a renewal failure must carry its own sentence, got %q", got)
 	}
 	// Another declared lane's refusal must not borrow the SSO sentence.
-	apiKey := types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismAnthropicAPIKey}
-	if got := llmMechanismRefusal(apiKey, awsSSORefreshSpentSentence); got == awsSSORefreshSpentSentence {
+	if got := llmMechanismRefusal(apiKeyRow, "", false, awsSSORefreshSpentSentence); got == awsSSORefreshSpentSentence {
 		t.Error("an api-key row must not report an AWS SSO renewal failure")
 	}
 	// Every closed mechanism has words: a refusal must never name an empty lane.
@@ -450,5 +465,131 @@ func TestCreateRunAuditData_CarriesClampWarnings(t *testing.T) {
 	}
 	if _, present := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), "jti", nil)["clamp_warnings"]; present {
 		t.Error("clamp_warnings must be absent when launch narrowed nothing")
+	}
+}
+
+// pgRosterSrv is a PG-backed server driving the REAL POST /runs door with an
+// agent roster stored the way an admin's PUT stores it. site_config is a
+// store-wide singleton, so the roster is restored to the zero value afterward —
+// a value seeded here otherwise leaks into every other test sharing
+// WARDYN_TEST_PG.
+func pgRosterSrv(t *testing.T, fr *fakeRunner, row types.AgentProvider) *Server {
+	t.Helper()
+	srv, _ := pgHarnessWithRunner(t, fr)
+	ctx := context.Background()
+	if _, err := srv.cfg.Store.PutSiteConfig(ctx, types.SiteConfig{
+		AgentProviders: &types.AgentProviders{Agents: []types.AgentProvider{row}},
+	}); err != nil {
+		t.Fatalf("seed agent roster: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := srv.cfg.Store.PutSiteConfig(context.Background(), types.SiteConfig{}); err != nil {
+			t.Errorf("restore site config: %v", err)
+		}
+	})
+	return srv
+}
+
+// TestRosterRun_ManagedLaneFoldsTheSameAtCreateAndDispatch is the regression for
+// the two halves of one bug: create resolved the MANAGED subscription lane on
+// different terms than dispatch, and selectedMechanism tests subscription before
+// Bedrock, so the two ends disagreed about what a run would dispatch on.
+//
+// Both arms are driven end to end — POST /runs, then the spec the runner was
+// actually handed — because that disagreement is invisible from either half
+// alone: each side's own unit test passed the whole time.
+func TestRosterRun_ManagedLaneFoldsTheSameAtCreateAndDispatch(t *testing.T) {
+	// (a) BEDROCK WINS OVER MANAGED. A managed token is connected AND Bedrock is
+	// configured with a bearer key, under a bedrock_bearer row. Dispatch suppresses
+	// managed (!bedrockReady) and dispatches Bedrock — so create must admit. With
+	// create's copy of the managed terms missing that condition, it folded the run
+	// onto the subscription lane and 422'd every model run at the door.
+	t.Run("bedrock configured under a bedrock row still launches", func(t *testing.T) {
+		fr := &fakeRunner{}
+		srv := pgRosterSrv(t, fr, types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismBedrockBearer})
+		srv.cfg.SubscriptionPostureOK = true
+		srv.cfg.ManagedToken = fakeSubProvider{tok: subscription.Token{Value: "managed-tok"}}
+		srv.cfg.BedrockRegion = "us-east-1"
+		srv.cfg.BedrockModel = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+		srv.cfg.Secrets = &memSecrets{m: map[string][]byte{bedrockAPIKeySecret: []byte("bedrock-bearer-test")}}
+		srv.cfg.MaskRegistry = secretmask.NewRegistry()
+
+		w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken,
+			`{"agent":"claude-code","repo":"acme/widgets","task":"do the thing"}`)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create = %d, want 201 — dispatch would have credentialed this run; body=%s", w.Code, w.Body.String())
+		}
+		if fr.createCalls != 1 {
+			t.Fatalf("CreateSandbox calls = %d, want 1", fr.createCalls)
+		}
+		if fr.lastSpec.Env["CLAUDE_CODE_USE_BEDROCK"] != "1" {
+			t.Errorf("the run dispatched on %v, want the Bedrock lane its row declares", fr.lastSpec.Env)
+		}
+	})
+
+	// (b) POSTURE. Every multi-user/SSO deployment — the only kind with a roster —
+	// runs SubscriptionPostureOK=false, where dispatch refuses to serve the
+	// operator's own subscription to a member. Create used to ignore that and read
+	// "managed" as the lane, admitting a subscription-row run that then reached
+	// dispatch with nothing: 201, then FAILED with no sandbox — the boot-and-die
+	// this gate exists to prevent. It must be refused AT THE DOOR instead.
+	t.Run("off-posture managed is refused at the door, never launched", func(t *testing.T) {
+		fr := &fakeRunner{}
+		srv := pgRosterSrv(t, fr, types.AgentProvider{
+			ID: "claude-code", Mechanism: types.AgentMechanismAnthropicSubscription,
+			CredentialSource: types.CredentialSourceShared,
+		})
+		srv.cfg.SubscriptionPostureOK = false
+		srv.cfg.ManagedToken = fakeSubProvider{tok: subscription.Token{Value: "managed-tok"}}
+
+		w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken,
+			`{"agent":"claude-code","repo":"acme/widgets","task":"do the thing"}`)
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("create = %d, want 422; body=%s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "does not substitute a different model provider") {
+			t.Errorf("body = %q, want the declared-mechanism refusal", w.Body.String())
+		}
+		if fr.createCalls != 0 {
+			t.Errorf("CreateSandbox calls = %d, want 0 — a refused run boots nothing", fr.createCalls)
+		}
+	})
+}
+
+// TestRecordLaunchRefusedMintsNothing pins the OTHER half of the promise, on the
+// one production path that still reaches the DISPATCH refusal: a record session
+// (newStepRun bypasses run create entirely, and it is an interactive MODEL run).
+// The gate sits ahead of the MITM CA and every grant author, so a refused run
+// must reach no sandbox at all and carry no credential in any env it composed.
+func TestRecordLaunchRefusedMintsNothing(t *testing.T) {
+	fr := &fakeRunner{}
+	// A row declaring a lane this deployment has no credential for: nothing is
+	// selected, so the declared mechanism is not carrying the run.
+	srv := pgRosterSrv(t, fr, types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO})
+	ctx := context.Background()
+	// A unique name: workspaces.name is UNIQUE store-wide and every PG-backed
+	// test in this package shares one database.
+	ws, err := srv.cfg.Store.CreateWorkspace(ctx, types.Workspace{
+		ID: uuid.New(), Name: "c2-record-" + uuid.NewString(), Status: types.WorkspaceScanned,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: "/home/agent/work"}},
+	})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	run, _, err := srv.launchRecordRun(ctx, "admin@corp.example", ws, "capture", "capture", false)
+	if err != nil {
+		t.Fatalf("launchRecordRun err = %v — the roster admits this agent; the refusal is the run's, not the launcher's", err)
+	}
+	if run.State != types.RunFailed {
+		t.Errorf("run state = %q, want FAILED — the declared lane is not carrying this run", run.State)
+	}
+	if fr.createCalls != 0 {
+		t.Fatalf("CreateSandbox calls = %d, want 0 — a refused run mints nothing", fr.createCalls)
+	}
+	for _, k := range []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_USE_BEDROCK", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"} {
+		if v, ok := fr.lastSpec.Env[k]; ok {
+			t.Errorf("a refused run composed %s=%q", k, v)
+		}
 	}
 }

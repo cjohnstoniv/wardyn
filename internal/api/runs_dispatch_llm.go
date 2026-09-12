@@ -186,9 +186,8 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	// here: this lane is a DEFAULT FALLBACK for every claude-code run, needing no
 	// policy, no integration id and no flag, so on a multi-user stack it silently
 	// serves the operator's subscription to every member.
-	managed := s.cfg.SubscriptionPostureOK && modelRun && !t.harnessLogin && !t.subscription && !t.bedrockReady &&
-		!s.hasAnthropicAPIKeyInjection(run.Agent, injections) && s.managedInjectReady(run.Agent) &&
-		(policy.AllowAllEgress || len(policy.AllowedDomains) > 0)
+	managed := s.managedSubscriptionLane(run.Agent, modelRun, t.harnessLogin, t.subscription, t.bedrockReady,
+		s.hasAnthropicAPIKeyInjection(run.Agent, injections), policy)
 	t.injectManaged = managed
 
 	if t.harnessLogin {
@@ -235,6 +234,38 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	}
 
 	return t
+}
+
+// managedSubscriptionLane reports whether the Wardyn-managed setup-token lane
+// credentials this run. It is a function rather than an expression inside
+// resolveLLMTransport because CREATE resolves the same lane (resolveRunLLMLanes)
+// to decide what a run WOULD dispatch on, and the two spellings drifted the
+// moment there were two: create's copy was missing the posture term and the
+// Bedrock term, so on any multi-user deployment — the only kind that has an
+// agent roster at all — create computed "managed" for a run dispatch would
+// credential some other way, and the declared-mechanism gate then refused at one
+// end or the other. One spelling, both callers, no drift.
+//
+// Each term, in the order it matters:
+//   - posture: a shared subscription is a single-user desktop setting; on a
+//     multi-user stack this lane would silently serve the operator's own
+//     subscription to every member.
+//   - modelRun / !harnessLogin: a run that makes no model call gets no
+//     credential, and the login box has none to be given yet.
+//   - !subscription / !bedrockReady: managed is the FALLBACK — the host-staged
+//     mount and a resolved Bedrock posture both outrank it.
+//   - !apiKey: an api_key grant already brokered for this agent's provider host
+//     is the operator's explicit choice; letting managed fire would drop it and
+//     bill the subscription instead.
+//   - managedInjectReady: a managed token is actually connected (claude-code only).
+//   - some egress: managed injection APPENDS api.anthropic.com to the allow-list,
+//     and a fallback must not widen a policy its author sealed.
+func (s *Server) managedSubscriptionLane(agent string, modelRun, harnessLogin, subscription, bedrockReady, apiKey bool,
+	policy *types.RunPolicySpec,
+) bool {
+	return s.cfg.SubscriptionPostureOK && modelRun && !harnessLogin && !subscription && !bedrockReady &&
+		!apiKey && s.managedInjectReady(agent) &&
+		(policy.AllowAllEgress || len(policy.AllowedDomains) > 0)
 }
 
 // applyBedrockTransport wires a READY Bedrock posture onto the run: it copies
@@ -693,7 +724,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		llm: llm, injections: injections,
 		mitmCACertPEM: mitmCACertPEM, mitmCAKeyPEM: mitmCAKeyPEM,
 		bedrockMITMHosts:     bedrockMITMHosts,
-		llmUnavailableDetail: s.llmUnavailableDetail(ctx, llm),
+		llmUnavailableDetail: s.llmUnavailableDetail(ctx, run, llm, injections),
 		mitmLLM:              llm.injectSub || llm.injectManaged || mitmForInspect,
 	}, true
 }
