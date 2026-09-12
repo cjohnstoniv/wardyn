@@ -701,10 +701,15 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// leaves it false, which is the conservative direction: it opens the funnel
 	// rather than hiding it.
 	onboardingComplete := false
+	// The SAME read feeds the agent roster below (setupHarnessTools): one
+	// site-config read per status call, not two. A failed read leaves the zero
+	// value, which reads as legacy open mode there — see that function.
+	var siteCfg types.SiteConfig
 	if s.cfg.Store != nil {
 		if sc, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
 			checks = append(checks, siteConfigCheck(sc, present), artifactRepoCheck(sc))
 			onboardingComplete = sc.OnboardingCompletedAt != nil
+			siteCfg = sc
 		}
 		// permissions_posture (#19b): non-blocking/informational, so a read
 		// failure here is skipped rather than surfaced as a setup/status 500 —
@@ -774,7 +779,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		// Integrations reuses the single integrationsWithCapabilitiesUsing call
 		// hoisted above (PLATFORM-API-7 optimization + HIGH-4 llm_ready reuse).
 		Integrations: integrations,
-		Harnesses:    setupHarnessTools(),
+		Harnesses:    setupHarnessTools(siteCfg),
 		LLMReady:     llmReady,
 		// A count derived from the SAME PEM string TrustedCAPEM's doc comment
 		// describes — no second boot-time field to keep in sync. 0 when unset.

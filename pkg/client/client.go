@@ -46,6 +46,9 @@
 //   - /api/v1/workspace-providers — the org's git-provider policy (allowed base
 //     URLs, credential lanes) and storage ceilings (0.7.2). Admin-only, and
 //     authored through the console's providers page rather than by tooling
+//   - /api/v1/agent-providers — the org's agent roster: which coding agents this
+//     deployment offers, each one's model-access lane, and whether that
+//     credential is shared or per-person (0.7.2). Admin-only, same page
 //   - /api/v1/integrations   — integration definitions (0.7)
 //   - /api/v1/base-images    — the base-image library (0.7)
 //   - /api/v1/admin          — operator maintenance (the sandbox sweep)

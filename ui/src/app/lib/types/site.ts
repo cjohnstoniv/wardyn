@@ -77,6 +77,13 @@ export interface SiteConfig {
   // GET-spread body via SERVER_OWNED_SITE_CONFIG_KEYS so a Network-step save
   // can never clobber the providers page.
   workspace_providers?: WorkspaceProviders;
+  // The org's agent roster — which coding agents this deployment offers, the one
+  // model-access lane each may use, and whose credential that is. Absent (the
+  // default) is legacy open mode. Written through its own
+  // GET/PUT /agent-providers endpoints on exactly the terms the sibling block
+  // above is, and stripped from every GET-spread body for the same reason
+  // (SERVER_OWNED_SITE_CONFIG_KEYS).
+  agent_providers?: AgentProviders;
   // RESPONSE-ONLY, never-PUT: the git hosts this deployment actually admits —
   // scm_hosts MINUS every host a provider row claims, UNION every enabled row's
   // hosts (internal/api/workspace_providers.go's effectiveScmHosts). ONE
@@ -115,8 +122,38 @@ export const SERVER_OWNED_SITE_CONFIG_KEYS = [
   "integrations",
   "onboarding_completed_at",
   "workspace_providers",
+  "agent_providers",
   "effective_scm_hosts",
 ] as const satisfies readonly (keyof SiteConfig)[];
+
+// The org's agent roster. Hand-maintained mirror of Go's types.AgentProviders
+// (internal/types/agent_provider.go) — the json tags verbatim; a removed wire
+// field is a runtime TypeError only e2e catches.
+export interface AgentProviders {
+  agents?: AgentProvider[];
+}
+
+// One agent row. `disabled` is negative-sense so the zero value is ENABLED, and
+// a disabled row is rendered disabled with a reason, never hidden.
+export interface AgentProvider {
+  // A harness-catalog id ("claude-code", "codex-cli", "none") or a
+  // WARDYN_AGENT_IMAGES key — the server admits both and refuses anything else.
+  id: string;
+  disabled?: boolean;
+  // Closed set, server-validated: "anthropic_subscription" | "anthropic_api_key"
+  // | "openai_api_key" | "bedrock_bearer" | "bedrock_sso" | "bedrock_env" |
+  // "bedrock_aws_dir" | "none". The ONE lane this agent's runs may use; there is
+  // no cross-mechanism fallback once it is declared.
+  mechanism: string;
+  // Closed set, server-validated: "shared" | "per_user". Absent reads as
+  // "shared" — today's behaviour. "per_user" is available for "bedrock_sso"
+  // only in 0.7.2.
+  credential_source?: string;
+  // The AWS access portal every principal signs in against — required when
+  // mechanism is "bedrock_sso" and credential_source is "per_user", refused
+  // otherwise. ADMIN-OWNED: a member's sign-in never chooses another.
+  sso_start_url?: string;
+}
 
 // The org's workspace-provider policy. Hand-maintained mirror of Go's
 // types.WorkspaceProviders (internal/types/workspace_provider.go) — the json

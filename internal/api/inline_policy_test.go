@@ -563,6 +563,12 @@ func (s stubPolicyStore) GetPolicy(context.Context, uuid.UUID) (types.RunPolicy,
 	return s.policy, nil
 }
 
+// The agent roster's create-path read (agent_providers.go). The zero value is
+// legacy open mode — no roster, nothing refused — which is what these cases mean.
+func (s stubPolicyStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
+
 // TestCreateRun_StoredPolicyMissingSecretRejected asserts a run created with
 // policy_id pointing at a STORED policy whose api_key grant references a
 // not-yet-stored secret is rejected 422, naming the secret, at create — the

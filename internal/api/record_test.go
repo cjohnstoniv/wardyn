@@ -80,6 +80,13 @@ type recordStore struct {
 	mergeErr error
 }
 
+// GetSiteConfig backs the agent roster's launch-path read (agent_providers.go).
+// The zero value is legacy open mode — no roster, nothing refused — which is the
+// state every case in this file means.
+func (s *recordStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
+
 // LatestAuditEventByAction backs ebpfGroundtruthCaveat's heartbeat lookup.
 // Every recordStore-based test now exercises this (reconcileRecordRun calls
 // it unconditionally on every capture) — default to "no heartbeat ever" so

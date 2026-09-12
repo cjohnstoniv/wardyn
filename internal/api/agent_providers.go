@@ -1,0 +1,428 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Agent providers: the org-level policy for WHICH coding agents this deployment
+// offers and HOW EACH ONE REACHES ITS MODEL. This file owns the write boundary —
+// validation, the two endpoints, the audit row — and the predicates every later
+// site reads:
+//
+//	agentProvidersConfigured(sc)       is this install in legacy open mode?
+//	agentProviderFor(sc, agentID)      the row governing this agent, if any
+//	(*Server) agentRosterRefusal(...)  the launch-path refusal, one spelling
+//
+// The predicates live here, next to the validation that shapes the rows they
+// read, so there is exactly ONE spelling of "is this agent offered" — the call
+// sites (run create, the record launcher, the setup roster) only ask.
+//
+// WHAT THIS FILE DOES NOT DO, so the seams are findable: it never enforces a
+// row's Mechanism at dispatch (that is enforceConfiguredLLMMechanism's, which
+// reads these rows), never captures a per-user credential, and never renders a
+// console surface.
+package api
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"slices"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// AGENT_400 / AGENT_422 — the refusal bodies this file writes.
+//
+// DRAFT (M2 canon pending): every string here is provisional until the owner's
+// canon sitting freezes it. They are constants, and the tests assert THROUGH the
+// constants, so the post-sitting swap is a one-file diff with no test churn.
+const (
+	agent400Unknown           = "agents: %q names no agent this deployment can run — a catalog id or a WARDYN_AGENT_IMAGES key"
+	agent400CustomMechanism   = "agents: %q is not in the agent catalog, so its mechanism must be none — Wardyn wires no model credential into a custom image (%s would show a live credential that binds nothing)"
+	agent400PerUser           = "agents: %q: credential_source per_user is available for bedrock_sso only, not %s"
+	agent400SSOStartURL       = "agents: %q: sso_start_url is required when mechanism is bedrock_sso and credential_source is per_user"
+	agent400SSOStartURLUnused = "agents: %q: sso_start_url applies only when mechanism is bedrock_sso and credential_source is per_user"
+	agent400DupID             = "agents: id %q is not unique"
+	agent400Mechanism         = "agents[%d].mechanism: %q is not a model-access mechanism — want one of: %s"
+	agent400Source            = "agents[%d].credential_source: %q is not a credential source — want one of: %s"
+	agent400NoManagedAuth     = "agents: %q is the bring-your-own-agent row, which Wardyn wires no model credential for, so its mechanism must be none"
+	agent400NeedsLane         = "agents: %q is a catalog agent Wardyn can wire a model credential for, so mechanism none would leave every run of it without one — name the lane you configured"
+	agent412Stale             = "agents changed since you loaded them — reload and retry"
+
+	// AGENT_422 — the ONE launch-path refusal, and the one string in this file a
+	// MEMBER ever reads. It names the agent and nothing else: no base URL, no
+	// secret name, no mechanism, no start URL.
+	agent422NotEnabled = "agent: %q is not an enabled agent on this deployment — ask an admin"
+)
+
+// errAgentNotEnabled marks a step-run launch refused by the agent roster, so the
+// handler can answer 422 (the status run create answers for the identical cause)
+// instead of the 500 every other launch failure maps to — the errRecordCeilingLimit
+// precedent, and for the same reason: a policy decision must not read as a fault.
+var errAgentNotEnabled = errors.New("agent not enabled")
+
+// mountAgentProviderRoutes registers the two agent-roster endpoints. A mount
+// rather than two lines in routes() for the reason every other 0.7 family is:
+// routes() sits at its funlen ratchet and the file's own route-tier map lists
+// mounts, not individual routes.
+//
+// operatorOnly for BOTH, the sibling /workspace-providers reasoning: the block
+// names an org's model-provider choices and, under per_user, its AWS access
+// portal URL — corporate topology. The member-safe projection already exists and
+// is deliberately a DIFFERENT, narrower document: the three per-row fields on
+// SetupHarnessTool (setup_integrations.go), which carry enabled/mechanism/source
+// and never the start URL. There is no DELETE: removing a row is a PUT without it.
+func (s *Server) mountAgentProviderRoutes(operatorOnly chi.Router) {
+	operatorOnly.Get("/agent-providers", s.handleGetAgentProviders)
+	operatorOnly.Put("/agent-providers", s.handlePutAgentProviders)
+}
+
+// agentProviderRows is the stored agent rows, or nil. Every predicate starts
+// here so the nil-block and empty-slice cases can never disagree.
+func agentProviderRows(sc types.SiteConfig) []types.AgentProvider {
+	if sc.AgentProviders == nil {
+		return nil
+	}
+	return sc.AgentProviders.Agents
+}
+
+// agentProvidersConfigured reports whether this install has an agent roster at
+// all — the ONE place "legacy open mode" is decided for agents.
+//
+// CONFIGURED == A NON-NIL BLOCK, not "has rows", and the two cannot diverge:
+// normalizeAgentProviders turns an empty block back into nil on every write
+// (the {} clear form), so a stored block always carries at least one row. A
+// caller therefore never has to decide what a present-but-rowless block means —
+// it cannot be stored.
+func agentProvidersConfigured(sc types.SiteConfig) bool {
+	return sc.AgentProviders != nil
+}
+
+// agentProviderFor returns the row governing agentID, and whether one exists.
+// Lookup is exact on the --agent string: ids are never folded or normalized (the
+// image map is keyed by the same literal), so a row and a run name the same agent
+// or they do not.
+func agentProviderFor(sc types.SiteConfig, agentID string) (types.AgentProvider, bool) {
+	for _, row := range agentProviderRows(sc) {
+		if row.ID == agentID {
+			return row, true
+		}
+	}
+	return types.AgentProvider{}, false
+}
+
+// agentEnabled reports whether a run naming agentID may launch. Legacy open mode
+// (no block) admits everything, which is what makes an upgraded install
+// byte-identical to what it was; with a block, an agent is offered only if it has
+// a row and that row is on.
+func agentEnabled(sc types.SiteConfig, agentID string) bool {
+	if !agentProvidersConfigured(sc) {
+		return true
+	}
+	row, ok := agentProviderFor(sc, agentID)
+	return ok && !row.Disabled
+}
+
+// agentRosterRefusal is the ONE spelling of the launch-path check: it returns the
+// member-safe refusal sentence when agent has no enabled row, "" when the launch
+// may proceed, and an error only when the site config could not be read.
+//
+// An EMPTY agent is always "" — a task_mode=exec run naming an image and no agent
+// is a thing agentRequirementError deliberately still admits, and a roster of
+// agents has nothing to say about a run that names none.
+//
+// A read failure is returned as itself rather than swallowed in either direction:
+// admitting on a database hiccup would silently reopen the roster, and refusing
+// would blame the caller for an outage.
+func (s *Server) agentRosterRefusal(ctx context.Context, agent string) (string, error) {
+	if agent == "" || s.cfg.Store == nil {
+		return "", nil
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return "", err
+	}
+	if agentEnabled(sc, agent) {
+		return "", nil
+	}
+	return fmt.Sprintf(agent422NotEnabled, agent), nil
+}
+
+// recordRosterRefusal is agentRosterRefusal in the shape a step-run launcher
+// needs: one error, already wrapped in errAgentNotEnabled so the handler can
+// answer 422 rather than 500 (record.go maps it).
+func (s *Server) recordRosterRefusal(ctx context.Context, agent string) error {
+	msg, err := s.agentRosterRefusal(ctx, agent)
+	if err != nil {
+		return fmt.Errorf("read agent roster: %w", err)
+	}
+	if msg != "" {
+		return fmt.Errorf("%w: %s", errAgentNotEnabled, msg)
+	}
+	return nil
+}
+
+// storedAgentProviders is the stored block as a VALUE — the shape
+// GET /agent-providers returns and the shape both doors' ETag is computed over,
+// so a nil pointer and a present-but-empty block are one document.
+func storedAgentProviders(sc types.SiteConfig) types.AgentProviders {
+	if sc.AgentProviders == nil {
+		return types.AgentProviders{}
+	}
+	return *sc.AgentProviders
+}
+
+// normalizeAgentProviders canonicalizes a block on its way to storage and returns
+// nil for an EMPTY one, which is what makes {} the clear form on both doors:
+// without it, a caller who cleared their last row would leave
+// "agent_providers":{} rendered on every GET /site-config forever.
+//
+// Only whitespace is trimmed. Ids, mechanisms and sources are NOT folded: their
+// grammars are exact (an id must equal a catalog id or an image-map key
+// verbatim), so an off-case value is a refusal at the write boundary, never a
+// silent rewrite of what the admin wrote down.
+func normalizeAgentProviders(p *types.AgentProviders) *types.AgentProviders {
+	if p == nil {
+		return nil
+	}
+	for i := range p.Agents {
+		p.Agents[i].ID = strings.TrimSpace(p.Agents[i].ID)
+		p.Agents[i].SSOStartURL = strings.TrimSpace(p.Agents[i].SSOStartURL)
+	}
+	if p.Empty() {
+		return nil
+	}
+	return p
+}
+
+// validateAgentProviders is the ONE write-boundary gate both doors run
+// (PUT /agent-providers and PUT /site-config) — a nil block is valid (legacy open
+// mode), so the common "not configured" case costs nothing.
+//
+// images is the boot agent-image map (Config.AgentImages): it is a parameter
+// rather than a package read because this is the one validation on this struct
+// that needs SERVER state, and passing it keeps the gate callable from a test
+// with a two-entry map.
+func validateAgentProviders(p *types.AgentProviders, images map[string]string) error {
+	if p == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	for i, row := range p.Agents {
+		if seen[row.ID] {
+			return fmt.Errorf(agent400DupID, row.ID)
+		}
+		seen[row.ID] = true
+		if !row.Mechanism.Valid() {
+			return fmt.Errorf(agent400Mechanism, i, string(row.Mechanism),
+				strings.Join(types.ClosedAgentMechanismList(), ", "))
+		}
+		if row.CredentialSource != "" && !row.CredentialSource.Valid() {
+			return fmt.Errorf(agent400Source, i, string(row.CredentialSource),
+				strings.Join(types.ClosedCredentialSourceList(), ", "))
+		}
+		if err := validateAgentMechanism(row, images); err != nil {
+			return err
+		}
+		if err := validateAgentCredentialSource(row); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateAgentMechanism decides whether THIS agent can actually be reached on
+// THIS lane, and it is the check that keeps the Agents tab honest: a row the
+// dispatch path cannot honour would render a "live" chip that binds nothing.
+//
+// Three cases, in the order they are decided:
+//
+//  1. NOT IN THE CATALOG (a WARDYN_AGENT_IMAGES key) — the only valid mechanism
+//     is none. No code path can honour another: resolveBedrockAuth is not-ready
+//     for a non-claude-code agent, managedInjectReady is claude-code-only, and
+//     hasAnthropicAPIKeyInjection is false without a catalog Gateway.
+//  2. THE BYOA CATALOG ROW (NoManagedAuth) — mechanism none, for the same reason
+//     stated as the catalog's own flag rather than as an id literal.
+//  3. A CATALOG ROW WITH LANES — the mechanism FOLDS to the coarse provider type
+//     harnessDef.ProviderTypes is keyed by ("bedrock" for all four sub-lanes),
+//     and an impossible pair is refused with that map's EXISTING verbatim reason,
+//     which is reviewed user-facing copy (harness.go's reasonX* constants). Never
+//     a second opinion about what Codex CLI can speak.
+func validateAgentMechanism(row types.AgentProvider, images map[string]string) error {
+	def, inCatalog := harnessByID(row.ID)
+	if !inCatalog {
+		if _, known := images[row.ID]; !known {
+			return fmt.Errorf(agent400Unknown, row.ID)
+		}
+		if row.Mechanism != types.AgentMechanismNone {
+			return fmt.Errorf(agent400CustomMechanism, row.ID, string(row.Mechanism))
+		}
+		return nil
+	}
+	if def.NoManagedAuth {
+		if row.Mechanism != types.AgentMechanismNone {
+			return fmt.Errorf(agent400NoManagedAuth, row.ID)
+		}
+		return nil
+	}
+	if row.Mechanism == types.AgentMechanismNone {
+		return fmt.Errorf(agent400NeedsLane, row.ID)
+	}
+	if reason := def.ProviderTypes[row.Mechanism.ProviderType()]; reason != "" {
+		return errors.New(reason)
+	}
+	return nil
+}
+
+// validateAgentCredentialSource holds the per-user half: per_user is bedrock_sso
+// only (the one mechanism with a per-principal capture path in 0.7.2), and a
+// per-user bedrock_sso row MUST carry the admin-owned start URL every principal
+// signs in against — validated by the same gate the login request's own URL
+// passes, so the two cannot disagree about what an access-portal URL is.
+//
+// The start URL is forbidden on every other row rather than ignored: a value
+// accepted and never read is how an admin comes to believe they pinned a portal
+// they did not.
+func validateAgentCredentialSource(row types.AgentProvider) error {
+	perUser := row.CredentialSource == types.CredentialSourcePerUser
+	if perUser && row.Mechanism != types.AgentMechanismBedrockSSO {
+		return fmt.Errorf(agent400PerUser, row.ID, string(row.Mechanism))
+	}
+	if !perUser {
+		if row.SSOStartURL != "" {
+			return fmt.Errorf(agent400SSOStartURLUnused, row.ID)
+		}
+		return nil
+	}
+	if row.SSOStartURL == "" {
+		return fmt.Errorf(agent400SSOStartURL, row.ID)
+	}
+	if err := validateSSOStartURL(row.SSOStartURL); err != nil {
+		return fmt.Errorf("agents: %q: %w", row.ID, err)
+	}
+	return nil
+}
+
+// handleGetAgentProviders returns the stored agent roster.
+//
+// The response carries an ETag so a caller that means to base a later PUT on
+// exactly this read can send it back as If-Match; a never-configured install gets
+// the zero-value document with 200, never a 404.
+//
+//	GET /api/v1/agent-providers
+func (s *Server) handleGetAgentProviders(w http.ResponseWriter, r *http.Request) {
+	sc, err := s.cfg.Store.GetSiteConfig(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		return
+	}
+	block := storedAgentProviders(sc)
+	w.Header().Set("ETag", computeETag(block))
+	writeJSON(w, http.StatusOK, block)
+}
+
+// handlePutAgentProviders replaces the WHOLE agent roster: there is no delete
+// route because removing a row is PUTting the document without it, and {} is the
+// clear form (normalizeAgentProviders turns it back into an absent key rather
+// than an empty object rendered forever).
+//
+// If-Match (etag.go) is optional optimistic concurrency, exactly as the sibling
+// /workspace-providers PUT: absent behaves as last-writer-wins, a present-but-stale
+// value is refused with 412 before the write reaches the store.
+//
+//	PUT /api/v1/agent-providers
+func (s *Server) handlePutAgentProviders(w http.ResponseWriter, r *http.Request) {
+	var body types.AgentProviders
+	if !decodeStrict(w, r, &body) {
+		return
+	}
+	block := normalizeAgentProviders(&body)
+	if err := validateAgentProviders(block, s.cfg.AgentImages); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid agent providers: "+err.Error())
+		return
+	}
+	// SEAM-1: serializes this read-modify-write against the site config's other
+	// writers (handlePutSiteConfig, handlePutWorkspaceProviders and the two
+	// integration handlers), which read and rewrite the SAME singleton document —
+	// see handlePutIntegration's SEAM-1 comment for why an unguarded RMW here
+	// silently erases a concurrent one.
+	s.siteConfigMu.Lock()
+	defer s.siteConfigMu.Unlock()
+	ctx := r.Context()
+	existing, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		return
+	}
+	if !ifMatchSatisfied(r, computeETag(storedAgentProviders(existing))) {
+		writeError(w, http.StatusPreconditionFailed, agent412Stale)
+		return
+	}
+	candidate := existing
+	candidate.AgentProviders = block
+	// EffectiveScmHosts is projected on read and never stored — a value that rode
+	// in on a GET-spread body would otherwise be persisted into the JSONB.
+	candidate.EffectiveScmHosts = nil
+	saved, err := s.cfg.Store.PutSiteConfig(ctx, candidate)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
+		return
+	}
+	savedBlock := storedAgentProviders(saved)
+	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"agent_provider.write", "agent_providers", "success",
+		mustJSON(agentProviderAuditData(savedBlock))))
+	w.Header().Set("ETag", computeETag(savedBlock))
+	writeJSON(w, http.StatusOK, savedBlock)
+}
+
+// agentProviderAuditData is agent_provider.write's datum: what an incident review
+// actually needs — how many rows, which agents, which lanes, whose credential,
+// and which rows are off.
+//
+// THE START URL IS NEVER HERE. It is the one field of this block that names an
+// organisation's identity provider, the audit log is read by more people than the
+// providers page is, and no review question needs it: "which agents, on which
+// lane, whose credential" is answered without it.
+func agentProviderAuditData(block types.AgentProviders) map[string]any {
+	ids, mechanisms, sources, disabled := []string{}, []string{}, []string{}, []string{}
+	for _, row := range block.Agents {
+		ids = append(ids, row.ID)
+		if m := string(row.Mechanism); !slices.Contains(mechanisms, m) {
+			mechanisms = append(mechanisms, m)
+		}
+		src := string(row.CredentialSource)
+		if src == "" {
+			src = string(types.CredentialSourceShared)
+		}
+		if !slices.Contains(sources, src) {
+			sources = append(sources, src)
+		}
+		if row.Disabled {
+			disabled = append(disabled, row.ID)
+		}
+	}
+	slices.Sort(ids)
+	slices.Sort(mechanisms)
+	slices.Sort(sources)
+	slices.Sort(disabled)
+	return map[string]any{
+		"agent_count": len(block.Agents), "ids": ids,
+		"mechanisms": mechanisms, "credential_sources": sources, "disabled": disabled,
+	}
+}
+
+// enabledAgentProviderCount is site_config.write's count of ENABLED rows — the
+// number that says how much this document narrows, which a disabled row does not
+// contribute to.
+func enabledAgentProviderCount(sc types.SiteConfig) int {
+	n := 0
+	for _, row := range agentProviderRows(sc) {
+		if !row.Disabled {
+			n++
+		}
+	}
+	return n
+}

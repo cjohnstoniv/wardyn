@@ -114,6 +114,10 @@ func (s *Server) routes() chi.Router {
 			//   mountUserDriveRoutes   (user_drives.go) operatorOnly
 			//   mountWorkspaceProviderRoutes        operatorOnly
 			//       (workspace_providers.go)
+			//   mountAgentProviderRoutes            operatorOnly
+			//       (agent_providers.go)
+			//   mountSiteConfigProbeRoutes          securityOps
+			//       (site_config_probe.go)
 			//
 			// Re-derive by hand ONE ADDEND AT A TIME if you need to (W7-S1-1): a
 			// same-file grep silently misses every addend registered through a
@@ -516,14 +520,19 @@ func (s *Server) routes() chi.Router {
 			// operatorOnly because it replaces the WHOLE document, integration
 			// credential refs included; a SEC-writable per-field subset is the
 			// top phase-2 item, not something to fake with a second gate here.
-			securityOps.Post("/site-config/test-proxy", s.handleTestSiteConfigProxy)
-			securityOps.Post("/site-config/test-redirect", s.handleTestSiteConfigRedirect)
-			// Workspace providers (0.7.2) — see mountWorkspaceProviderRoutes. A
-			// MOUNT, and attached to the line above with no blank, because this
-			// function sits at the funlen ratchet (.golangci.yml, 150 non-comment
-			// lines) and is AT it after this line: the next route family to land
-			// here has to extract an existing block into its own mount first.
+			// EXTRACTED INTO A MOUNT (0.7.2), and the extraction is the point:
+			// this function was AT the funlen ratchet (.golangci.yml, 150
+			// non-comment lines) after the workspace-provider line below, so the
+			// note there said the next route family to land here had to free a
+			// line by extracting an existing block. The agent roster is that
+			// family, and these two probes are that block — same tier, same file,
+			// already one paragraph.
+			s.mountSiteConfigProbeRoutes(securityOps)
+			// Workspace providers (0.7.2) — see mountWorkspaceProviderRoutes, and
+			// the agent roster beside it (agent_providers.go). Both MOUNTS,
+			// attached with no blank line, for the ratchet reason just above.
 			s.mountWorkspaceProviderRoutes(operatorOnly)
+			s.mountAgentProviderRoutes(operatorOnly)
 
 			// Effective integration set (stored ∪ legacy-derived) with live
 			// capabilities — see internal/api/integrations.go /

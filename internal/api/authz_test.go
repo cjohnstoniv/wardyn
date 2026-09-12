@@ -244,8 +244,16 @@ var routeMatrix = map[string]classifiedRoute{
 	// verbs are SUPER for the sibling GET's reason: a provider's base URLs name
 	// the org's forge hosts and org paths, which is corporate topology, and the
 	// member tier is served the provider KIND in a refusal instead.
-	"GET /api/v1/workspace-providers":  {class: classAdmin},
-	"PUT /api/v1/workspace-providers":  {class: classAdmin},
+	"GET /api/v1/workspace-providers": {class: classAdmin},
+	"PUT /api/v1/workspace-providers": {class: classAdmin},
+	// The agent roster (0.7.2) — which agents this deployment offers, the lane
+	// each reaches its model on, and (under per_user) the org's AWS access portal
+	// URL. SUPER for the sibling block's reason: it names the org's model-provider
+	// choices and its IdP. The member tier is served a DIFFERENT, narrower
+	// document — SetupStatus.harnesses' enabled/mechanism/credential_source —
+	// which carries no start URL.
+	"GET /api/v1/agent-providers":      {class: classAdmin},
+	"PUT /api/v1/agent-providers":      {class: classAdmin},
 	"PUT /api/v1/integrations/{id}":    {class: classAdmin},
 	"DELETE /api/v1/integrations/{id}": {class: classAdmin},
 	// Access / role mappings (migration 0051, Phase 2 lane A): the console's
@@ -998,12 +1006,13 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// SUPER — GET /site-config, /sources, /sources/{id} and /base-images, which
 	// returned operator topology and credential refs to the whole member tier —
 	// so 21 SEC / 38 SUPER. 0.7.2 then added the two /workspace-providers verbs,
-	// born SUPER for the same topology reason as those four reads, = 40 SUPER.
-	// A route silently reclassified in the table above
+	// born SUPER for the same topology reason as those four reads, = 40 SUPER,
+	// and the two /agent-providers verbs beside them for the same reason again,
+	// = 42 SUPER. A route silently reclassified in the table above
 	// would still pass every probe — it would just be enforcing the WRONG tier,
 	// exactly the drift the per-route loop cannot see.
-	if sec != 21 || super != 40 {
-		t.Errorf("tier split = %d security / %d admin, want 21 / 40 (§B's 14 SEC + governance's 7 + §I's directory search, MINUS record; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers)", sec, super)
+	if sec != 21 || super != 42 {
+		t.Errorf("tier split = %d security / %d admin, want 21 / 42 (§B's 14 SEC + governance's 7 + §I's directory search, MINUS record; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers)", sec, super)
 	}
 }
 

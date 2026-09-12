@@ -1,0 +1,564 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// testAgentImages is the boot image map every case here validates against: one
+// custom agent the catalog does not know, which is exactly the shape
+// harnessByID documents as supported and a roster therefore has to be able to
+// name.
+var testAgentImages = map[string]string{"acme-agent": "ghcr.io/acme/agent:1"}
+
+func agentRow(id string, m types.AgentMechanism) types.AgentProvider {
+	return types.AgentProvider{ID: id, Mechanism: m}
+}
+
+func agentBlock(rows ...types.AgentProvider) *types.AgentProviders {
+	return &types.AgentProviders{Agents: rows}
+}
+
+// TestValidateAgentProviders is the write-boundary table: every rule §5c.4
+// names, each as its own case, because these are the only thing standing
+// between an admin's choice and a roster that renders a live credential chip
+// over a lane nothing can honour.
+func TestValidateAgentProviders(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		block *types.AgentProviders
+		want  string // "" = accepted; otherwise a substring the refusal must carry
+	}{
+		{name: "a nil block is legacy open mode", block: nil},
+		{name: "an empty block is valid (the clear form normalizes it away first)",
+			block: &types.AgentProviders{}},
+		{name: "claude-code on bedrock_sso", block: agentBlock(agentRow("claude-code", types.AgentMechanismBedrockSSO))},
+		{name: "claude-code on the subscription lane",
+			block: agentBlock(agentRow("claude-code", types.AgentMechanismAnthropicSubscription))},
+		{name: "codex-cli on its own api key", block: agentBlock(agentRow("codex-cli", types.AgentMechanismOpenAIAPIKey))},
+		{name: "the BYOA catalog row takes none", block: agentBlock(agentRow("none", types.AgentMechanismNone))},
+		{name: "a custom image-map agent takes none", block: agentBlock(agentRow("acme-agent", types.AgentMechanismNone))},
+
+		{name: "an agent this deployment cannot run", block: agentBlock(agentRow("ghost", types.AgentMechanismNone)),
+			want: "names no agent"},
+		{name: "a custom image with a model mechanism",
+			block: agentBlock(agentRow("acme-agent", types.AgentMechanismBedrockSSO)),
+			want:  "its mechanism must be none"},
+		// THE FOLD: bedrock_bearer is one sub-lane of the coarse "bedrock" the
+		// catalog is keyed by, and the refusal is the catalog's OWN reviewed
+		// sentence — never a second opinion about what Codex CLI speaks.
+		{name: "an impossible pair is refused with the catalog's verbatim reason",
+			block: agentBlock(agentRow("codex-cli", types.AgentMechanismBedrockBearer)),
+			want:  reasonXBedrockCodex},
+		{name: "the other direction, folded the same way",
+			block: agentBlock(agentRow("claude-code", types.AgentMechanismOpenAIAPIKey)),
+			want:  reasonXOpenAIClaude},
+		{name: "none on a catalog agent Wardyn wires a credential for",
+			block: agentBlock(agentRow("claude-code", types.AgentMechanismNone)),
+			want:  "name the lane you configured"},
+		{name: "a lane on the BYOA row",
+			block: agentBlock(agentRow("none", types.AgentMechanismBedrockSSO)),
+			want:  "mechanism must be none"},
+		{name: "an unknown mechanism", block: agentBlock(agentRow("claude-code", "bedrock_magic")),
+			want: "is not a model-access mechanism"},
+		{name: "an unknown credential source", block: agentBlock(types.AgentProvider{
+			ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO, CredentialSource: "everyone",
+		}), want: "is not a credential source"},
+		{name: "duplicate ids", block: agentBlock(
+			agentRow("claude-code", types.AgentMechanismBedrockSSO),
+			agentRow("claude-code", types.AgentMechanismAnthropicAPIKey)),
+			want: "is not unique"},
+
+		{name: "per_user off bedrock_sso", block: agentBlock(types.AgentProvider{
+			ID: "claude-code", Mechanism: types.AgentMechanismBedrockBearer,
+			CredentialSource: types.CredentialSourcePerUser,
+		}), want: "per_user is available for bedrock_sso only"},
+		{name: "per_user with no start URL", block: agentBlock(types.AgentProvider{
+			ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+			CredentialSource: types.CredentialSourcePerUser,
+		}), want: "sso_start_url is required"},
+		{name: "per_user with a start URL that is not one", block: agentBlock(types.AgentProvider{
+			ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+			CredentialSource: types.CredentialSourcePerUser, SSOStartURL: "my-org.awsapps.com/start",
+		}), want: "AWS access portal URL"},
+		{name: "per_user, fully stated", block: agentBlock(types.AgentProvider{
+			ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+			CredentialSource: types.CredentialSourcePerUser, SSOStartURL: "https://acme.awsapps.com/start",
+		})},
+		// Accepted-and-never-read is how an admin comes to believe they pinned a
+		// portal they did not.
+		{name: "a start URL on a shared row is refused, not ignored", block: agentBlock(types.AgentProvider{
+			ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+			SSOStartURL: "https://acme.awsapps.com/start",
+		}), want: "sso_start_url applies only when"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateAgentProviders(tc.block, testAgentImages)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("validateAgentProviders() = %v, want accepted", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("validateAgentProviders() = nil, want a refusal naming %q", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("refusal = %q, want it to name %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
+// TestAgentMechanismProviderType pins the FOLD itself: harnessDef.ProviderTypes
+// is keyed by four COARSE values, so every bedrock_* sub-lane has to collapse
+// onto "bedrock" before it is looked up. A mechanism that folded to itself would
+// read "" (possible) out of that map and admit every impossible pair silently.
+func TestAgentMechanismProviderType(t *testing.T) {
+	for m, want := range map[types.AgentMechanism]string{
+		types.AgentMechanismBedrockBearer:         types.AgentProviderTypeBedrock,
+		types.AgentMechanismBedrockSSO:            types.AgentProviderTypeBedrock,
+		types.AgentMechanismBedrockEnv:            types.AgentProviderTypeBedrock,
+		types.AgentMechanismBedrockAWSDir:         types.AgentProviderTypeBedrock,
+		types.AgentMechanismAnthropicAPIKey:       "anthropic_api_key",
+		types.AgentMechanismAnthropicSubscription: "anthropic_subscription",
+		types.AgentMechanismOpenAIAPIKey:          "openai_api_key",
+		types.AgentMechanismNone:                  "none",
+	} {
+		if got := m.ProviderType(); got != want {
+			t.Errorf("%s.ProviderType() = %q, want %q", m, got, want)
+		}
+	}
+	// …and every folded value except "none" must be a key the catalog's claude-code
+	// row actually answers for, or the fold points at nothing.
+	def, ok := harnessByID("claude-code")
+	if !ok {
+		t.Fatal("the catalog has no claude-code row")
+	}
+	for _, m := range types.ClosedAgentMechanismList() {
+		pt := types.AgentMechanism(m).ProviderType()
+		if pt == string(types.AgentMechanismNone) {
+			continue
+		}
+		if _, named := def.ProviderTypes[pt]; !named {
+			t.Errorf("mechanism %s folds to %q, which claude-code's ProviderTypes does not name — "+
+				"an unnamed key reads as POSSIBLE, so an impossible pair would be admitted", m, pt)
+		}
+	}
+}
+
+func newAgentProvidersHarness(t *testing.T, fake *fakeSiteConfigStore) (*Server, *recRecorder) {
+	t.Helper()
+	h := newHarness(t)
+	cfg := baseTestConfig(h, fake)
+	cfg.AgentImages = testAgentImages
+	return New(cfg), h.audit
+}
+
+// TestAgentProvidersGet pins the read: a never-configured install gets the
+// zero-value document with 200 and an ETag it can send back.
+func TestAgentProvidersGet(t *testing.T) {
+	srv, _ := newAgentProvidersHarness(t, &fakeSiteConfigStore{})
+	w := do(t, srv, http.MethodGet, "/api/v1/agent-providers", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if got := strings.TrimSpace(w.Body.String()); got != "{}" {
+		t.Errorf("unconfigured GET body = %s, want {}", got)
+	}
+	if w.Header().Get("ETag") == "" {
+		t.Error("GET carries no ETag — the console's If-Match round trip has nothing to send")
+	}
+}
+
+// TestAgentProvidersPut is the write: it persists, it audits WITHOUT the start
+// URL, it hands back the new ETag, {} clears, and a stale If-Match is 412.
+func TestAgentProvidersPut(t *testing.T) {
+	fake := &fakeSiteConfigStore{cfg: types.SiteConfig{ScmHosts: []string{"github.com"}}}
+	srv, audit := newAgentProvidersHarness(t, fake)
+
+	const startURL = "https://acme.awsapps.com/start"
+	body := `{"agents":[{"id":"claude-code","mechanism":"bedrock_sso","credential_source":"per_user",` +
+		`"sso_start_url":"` + startURL + `"},{"id":"codex-cli","mechanism":"openai_api_key","disabled":true}]}`
+	w := do(t, srv, http.MethodPut, "/api/v1/agent-providers", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if fake.putSeen == nil || fake.putSeen.AgentProviders == nil {
+		t.Fatal("the agent roster was not written")
+	}
+	if len(fake.putSeen.AgentProviders.Agents) != 2 {
+		t.Fatalf("stored %d rows, want 2", len(fake.putSeen.AgentProviders.Agents))
+	}
+	// The rest of the site config is untouched: this door writes one sub-object.
+	if len(fake.putSeen.ScmHosts) != 1 {
+		t.Errorf("scm_hosts = %v, want the rest of the document untouched", fake.putSeen.ScmHosts)
+	}
+	if w.Header().Get("ETag") == "" {
+		t.Error("PUT echoes no ETag")
+	}
+
+	// THE AUDIT DATUM, and the one field that must NEVER be in it.
+	var writes []types.AuditEvent
+	for _, ev := range audit.events {
+		if ev.Action == "agent_provider.write" {
+			writes = append(writes, ev)
+		}
+	}
+	if len(writes) != 1 {
+		t.Fatalf("agent_provider.write events = %d, want 1", len(writes))
+	}
+	if strings.Contains(string(writes[0].Data), startURL) {
+		t.Errorf("the AWS access portal URL reached the audit log: %s", writes[0].Data)
+	}
+	var datum struct {
+		AgentCount        int      `json:"agent_count"`
+		IDs               []string `json:"ids"`
+		Mechanisms        []string `json:"mechanisms"`
+		CredentialSources []string `json:"credential_sources"`
+		Disabled          []string `json:"disabled"`
+	}
+	if err := json.Unmarshal(writes[0].Data, &datum); err != nil {
+		t.Fatal(err)
+	}
+	if datum.AgentCount != 2 || len(datum.IDs) != 2 {
+		t.Errorf("datum = %+v, want both rows counted and named", datum)
+	}
+	if strings.Join(datum.Mechanisms, ",") != "bedrock_sso,openai_api_key" {
+		t.Errorf("mechanisms = %v, want both lanes, sorted", datum.Mechanisms)
+	}
+	// An unset source renders as its EFFECTIVE value, not as "".
+	if strings.Join(datum.CredentialSources, ",") != "per_user,shared" {
+		t.Errorf("credential_sources = %v, want per_user and shared", datum.CredentialSources)
+	}
+	if strings.Join(datum.Disabled, ",") != "codex-cli" {
+		t.Errorf("disabled = %v, want the one row that is off", datum.Disabled)
+	}
+
+	t.Run("a stale If-Match is refused before the write", func(t *testing.T) {
+		w := doWithHeaders(t, srv, http.MethodPut, "/api/v1/agent-providers", adminToken,
+			`{"agents":[{"id":"claude-code","mechanism":"anthropic_api_key"}]}`,
+			map[string]string{"If-Match": `"stale"`})
+		if w.Code != http.StatusPreconditionFailed {
+			t.Fatalf("stale If-Match = %d, want 412; body=%s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), agent412Stale) {
+			t.Errorf("412 body = %s, want the DRAFT sentence", w.Body.String())
+		}
+	})
+
+	t.Run("the GET's own ETag satisfies the PUT", func(t *testing.T) {
+		etag := do(t, srv, http.MethodGet, "/api/v1/agent-providers", adminToken, "").Header().Get("ETag")
+		w := doWithHeaders(t, srv, http.MethodPut, "/api/v1/agent-providers", adminToken,
+			`{"agents":[{"id":"claude-code","mechanism":"anthropic_api_key"}]}`,
+			map[string]string{"If-Match": etag})
+		if w.Code != http.StatusOK {
+			t.Fatalf("fresh If-Match = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("{} is the clear form and normalizes back to an absent key", func(t *testing.T) {
+		w := do(t, srv, http.MethodPut, "/api/v1/agent-providers", adminToken, `{}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("clear = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		if fake.putSeen.AgentProviders != nil {
+			t.Errorf("an empty block was stored as %+v, want nil — {} must clear, not persist an empty object",
+				fake.putSeen.AgentProviders)
+		}
+		if agentProvidersConfigured(fake.cfg) {
+			t.Error("a cleared roster still reads as configured — the install is back in legacy open mode")
+		}
+	})
+
+	t.Run("an unwritable row is refused with the DRAFT constant", func(t *testing.T) {
+		w := do(t, srv, http.MethodPut, "/api/v1/agent-providers", adminToken,
+			`{"agents":[{"id":"acme-agent","mechanism":"bedrock_sso"}]}`)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("PUT = %d, want 400; body=%s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "its mechanism must be none") {
+			t.Errorf("400 body = %s, want the custom-image sentence", w.Body.String())
+		}
+	})
+
+	t.Run("an unknown field is refused", func(t *testing.T) {
+		if w := do(t, srv, http.MethodPut, "/api/v1/agent-providers", adminToken, `{"bogus":1}`); w.Code != http.StatusBadRequest {
+			t.Fatalf("unknown field = %d, want 400", w.Code)
+		}
+	})
+}
+
+// TestSiteConfigDoorCarriesTheAgentRoster is the MDM half: /etc/wardyn/site-config.json
+// is re-applied on every boot and predates this key, so silence must carry the
+// roster forward — and an explicit {} must still clear it.
+func TestSiteConfigDoorCarriesTheAgentRoster(t *testing.T) {
+	stored := types.SiteConfig{
+		AgentProviders: agentBlock(agentRow("claude-code", types.AgentMechanismBedrockSSO)),
+	}
+
+	t.Run("a body that never names the key carries it forward", func(t *testing.T) {
+		fake := &fakeSiteConfigStore{cfg: stored}
+		srv, _ := newAgentProvidersHarness(t, fake)
+		w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{"scm_hosts":["github.com"]}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("PUT = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		if fake.putSeen.AgentProviders == nil {
+			t.Fatal("an older client's silence DELETED the org's agent roster — every desktop boot would")
+		}
+	})
+
+	t.Run("an explicit {} clears it", func(t *testing.T) {
+		fake := &fakeSiteConfigStore{cfg: stored}
+		srv, _ := newAgentProvidersHarness(t, fake)
+		w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{"agent_providers":{}}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("PUT = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		if fake.putSeen.AgentProviders != nil {
+			t.Errorf("agent_providers = %+v, want nil — {} is the clear form on BOTH doors", fake.putSeen.AgentProviders)
+		}
+	})
+
+	t.Run("the same validator guards this door", func(t *testing.T) {
+		fake := &fakeSiteConfigStore{}
+		srv, _ := newAgentProvidersHarness(t, fake)
+		w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken,
+			`{"agent_providers":{"agents":[{"id":"ghost","mechanism":"none"}]}}`)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("PUT = %d, want 400 — the MDM door must not store what /agent-providers refuses; body=%s",
+				w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "names no agent") {
+			t.Errorf("400 body = %s, want the unknown-agent sentence", w.Body.String())
+		}
+	})
+
+	t.Run("site_config.write records the enabled count", func(t *testing.T) {
+		fake := &fakeSiteConfigStore{}
+		srv, audit := newAgentProvidersHarness(t, fake)
+		w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken,
+			`{"agent_providers":{"agents":[{"id":"claude-code","mechanism":"bedrock_sso"},`+
+				`{"id":"codex-cli","mechanism":"openai_api_key","disabled":true}]}}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("PUT = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		for _, ev := range audit.events {
+			if ev.Action != "site_config.write" {
+				continue
+			}
+			var d struct {
+				AgentProviders int `json:"agent_providers"`
+			}
+			if err := json.Unmarshal(ev.Data, &d); err != nil {
+				t.Fatal(err)
+			}
+			if d.AgentProviders != 1 {
+				t.Errorf("site_config.write agent_providers = %d, want 1 (a disabled row narrows nothing)", d.AgentProviders)
+			}
+			return
+		}
+		t.Fatal("no site_config.write event")
+	})
+}
+
+// agentRosterFixture is one create-and-dispatch server whose site config carries
+// (or does not carry) a roster — integStore is already the shape a member create
+// drives, with a settable SiteConfig.
+func agentRosterFixture(t *testing.T, block *types.AgentProviders) *Server {
+	t.Helper()
+	h := newHarness(t)
+	st := &integStore{
+		govEscapeStore: newGovEscapeStore(&capStore{}),
+		site:           types.SiteConfig{AgentProviders: block},
+	}
+	cfg := baseTestConfig(h, st)
+	cfg.Broker = h.broker
+	cfg.Runner = &fakeRunner{}
+	cfg.AgentImages = testAgentImages
+	return New(cfg)
+}
+
+// TestAgentRosterRefusesRunCreate is the enforcement half, and its FIRST half is
+// the one that matters most: with no block, nothing changes.
+func TestAgentRosterRefusesRunCreate(t *testing.T) {
+	t.Run("legacy open mode admits every agent, as it did in 0.7.1", func(t *testing.T) {
+		srv := agentRosterFixture(t, nil)
+		for _, agent := range []string{"claude-code", "acme-agent"} {
+			w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken,
+				`{"task":"echo hi","agent":"`+agent+`"}`)
+			if w.Code == http.StatusUnprocessableEntity && strings.Contains(w.Body.String(), "not an enabled agent") {
+				t.Errorf("--agent %s was refused with NO roster configured: %s", agent, w.Body.String())
+			}
+		}
+	})
+
+	t.Run("an enabled row admits its agent", func(t *testing.T) {
+		srv := agentRosterFixture(t, agentBlock(agentRow("claude-code", types.AgentMechanismBedrockSSO)))
+		w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, `{"task":"echo hi","agent":"claude-code"}`)
+		if w.Code == http.StatusUnprocessableEntity {
+			t.Fatalf("an enabled agent was refused: %s", w.Body.String())
+		}
+	})
+
+	t.Run("an agent with no row is refused with the member sentence", func(t *testing.T) {
+		srv := agentRosterFixture(t, agentBlock(agentRow("codex-cli", types.AgentMechanismOpenAIAPIKey)))
+		w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, `{"task":"echo hi","agent":"claude-code"}`)
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("create = %d, want 422; body=%s", w.Code, w.Body.String())
+		}
+		want := strings.SplitN(agent422NotEnabled, "%q", 2)[1] // the half after the agent name
+		if !strings.Contains(w.Body.String(), want) {
+			t.Errorf("422 body = %s, want the DRAFT sentence", w.Body.String())
+		}
+		// A member-facing refusal names the agent and NOTHING else.
+		if strings.Contains(w.Body.String(), "codex-cli") || strings.Contains(w.Body.String(), "openai") {
+			t.Errorf("the refusal discloses the roster: %s", w.Body.String())
+		}
+	})
+
+	t.Run("a disabled row is refused too", func(t *testing.T) {
+		srv := agentRosterFixture(t, agentBlock(types.AgentProvider{
+			ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO, Disabled: true,
+		}))
+		w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, `{"task":"echo hi","agent":"claude-code"}`)
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("create = %d, want 422; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("an exec run naming an image and no agent is not touched", func(t *testing.T) {
+		// agentRequirementError deliberately admits this shape, and a roster of
+		// agents has nothing to say about a run that names none.
+		srv := agentRosterFixture(t, agentBlock(agentRow("codex-cli", types.AgentMechanismOpenAIAPIKey)))
+		w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken,
+			`{"task":"echo hi","task_mode":"exec","image":"ubuntu:24.04"}`)
+		if w.Code == http.StatusUnprocessableEntity && strings.Contains(w.Body.String(), "not an enabled agent") {
+			t.Fatalf("an agentless exec run was refused by the agent roster: %s", w.Body.String())
+		}
+	})
+}
+
+// TestAgentRosterRefusesRecordLaunch is the STEP-RUN half. newStepRun hardcodes
+// claude-code and calls Store.CreateRun directly, so every server-launched lane
+// bypasses run create's identical check — and a record session is an interactive
+// MODEL run, so a codex-only org must not be able to record through claude-code.
+func TestAgentRosterRefusesRecordLaunch(t *testing.T) {
+	newSrv := func(t *testing.T, block *types.AgentProviders) (*Server, *fakeRunner) {
+		t.Helper()
+		h := newHarness(t)
+		ws := types.Workspace{ID: uuid.New(), Status: types.WorkspaceScanned}
+		st := newRecordLLMModeStore(ws)
+		st.sc = types.SiteConfig{AgentProviders: block}
+		fr := &fakeRunner{}
+		cfg := baseTestConfig(h, ceilingRecordStore{recordLLMModeStore: st})
+		cfg.Runner = fr
+		cfg.Broker = h.broker
+		return New(cfg), fr
+	}
+
+	t.Run("a codex-only roster refuses the record launch", func(t *testing.T) {
+		srv, _ := newSrv(t, agentBlock(agentRow("codex-cli", types.AgentMechanismOpenAIAPIKey)))
+		_, _, err := srv.launchRecordRun(t.Context(), "admin@corp.example",
+			types.Workspace{ID: uuid.New(), Status: types.WorkspaceScanned}, "build", "build", false)
+		if !errors.Is(err, errAgentNotEnabled) {
+			t.Fatalf("launchRecordRun err = %v, want the agent-roster refusal", err)
+		}
+		if !strings.Contains(err.Error(), "not an enabled agent") {
+			t.Errorf("err = %v, want the same sentence run create answers with", err)
+		}
+	})
+
+	t.Run("no roster launches exactly as it did", func(t *testing.T) {
+		srv, _ := newSrv(t, nil)
+		_, _, err := srv.launchRecordRun(t.Context(), "admin@corp.example",
+			types.Workspace{ID: uuid.New(), Status: types.WorkspaceScanned}, "build", "build", false)
+		if errors.Is(err, errAgentNotEnabled) {
+			t.Fatalf("a record launch was refused with NO roster configured: %v", err)
+		}
+	})
+
+	t.Run("an enabled claude-code row launches", func(t *testing.T) {
+		srv, _ := newSrv(t, agentBlock(agentRow("claude-code", types.AgentMechanismBedrockSSO)))
+		_, _, err := srv.launchRecordRun(t.Context(), "admin@corp.example",
+			types.Workspace{ID: uuid.New(), Status: types.WorkspaceScanned}, "build", "build", false)
+		if errors.Is(err, errAgentNotEnabled) {
+			t.Fatalf("an enabled agent was refused: %v", err)
+		}
+	})
+}
+
+// TestSetupHarnessToolsCarryTheRoster is the member-safe projection: the console's
+// only roster reader. The ROW COUNT never changes — a disabled agent is published
+// as disabled, never hidden — and the start URL is never in it.
+func TestSetupHarnessToolsCarryTheRoster(t *testing.T) {
+	sc := types.SiteConfig{AgentProviders: agentBlock(types.AgentProvider{
+		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: "https://acme.awsapps.com/start",
+	})}
+	tools := setupHarnessTools(sc)
+	if len(tools) != len(harnessCatalog) {
+		t.Fatalf("len = %d, want %d — the server never filters this list by the roster",
+			len(tools), len(harnessCatalog))
+	}
+	byID := map[string]SetupHarnessTool{}
+	for _, tool := range tools {
+		byID[tool.ID] = tool
+	}
+	claude := byID["claude-code"]
+	if !claude.Enabled || claude.Mechanism != "bedrock_sso" || claude.CredentialSource != "per_user" {
+		t.Errorf("claude-code = %+v, want enabled on the per-user SSO lane", claude)
+	}
+	codex := byID["codex-cli"]
+	if codex.Enabled || codex.Mechanism != "" {
+		t.Errorf("codex-cli = %+v, want disabled with nothing claimed — the roster does not name it", codex)
+	}
+	raw, err := json.Marshal(tools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "awsapps.com") {
+		t.Errorf("the AWS access portal URL reached the member-safe projection: %s", raw)
+	}
+	// enabled:false must be on the wire. omitempty here would make a disabled row
+	// indistinguishable from an older daemon's silence, and the console renders
+	// those two states differently on purpose.
+	if !strings.Contains(string(raw), `"enabled":false`) {
+		t.Errorf("a disabled row serialized without enabled=false: %s", raw)
+	}
+}
+
+// TestRedactSetupStatusKeepsTheRoster: the three fields survive the member
+// reduction. A member deciding whether to sign in has to see that their org
+// captures credentials per person, and which agents are on offer.
+func TestRedactSetupStatusKeepsTheRoster(t *testing.T) {
+	st := SetupStatus{Harnesses: setupHarnessTools(types.SiteConfig{
+		AgentProviders: agentBlock(types.AgentProvider{
+			ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+			CredentialSource: types.CredentialSourcePerUser, SSOStartURL: "https://acme.awsapps.com/start",
+		}),
+	})}
+	got := redactSetupStatusForMember(st)
+	if len(got.Harnesses) != len(harnessCatalog) {
+		t.Fatalf("a member sees %d harness rows, want all %d", len(got.Harnesses), len(harnessCatalog))
+	}
+	for _, tool := range got.Harnesses {
+		if tool.ID != "claude-code" {
+			continue
+		}
+		if !tool.Enabled || tool.Mechanism != "bedrock_sso" || tool.CredentialSource != "per_user" {
+			t.Errorf("the member reduction dropped the roster fields: %+v", tool)
+		}
+	}
+}

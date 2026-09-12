@@ -333,6 +333,14 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnprocessableEntity, lerr.Error())
 			return
 		}
+		// The agent roster (0.7.2): 422, the SAME status run create answers when
+		// it refuses the identical agent for the identical reason — the two doors
+		// must not disagree about what "this agent is not offered here" costs.
+		// The sentence is the create path's, verbatim (agent_providers.go).
+		if errors.Is(lerr, errAgentNotEnabled) {
+			writeError(w, http.StatusUnprocessableEntity, strings.TrimPrefix(lerr.Error(), errAgentNotEnabled.Error()+": "))
+			return
+		}
 		// A governance LIMIT is a refusal, not a fault: 403, the same status
 		// denyMemberGovernance answers when the identical limit refuses the
 		// identical principal's ordinary run. Both limits map here — the quota

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
@@ -773,6 +774,23 @@ func probeTargetURL(raw string) string {
 		return raw
 	}
 	return "https://" + raw
+}
+
+// mountSiteConfigProbeRoutes registers the two live connectivity probes.
+//
+// securityOps, NOT the /site-config PUT's tier: these are NON-MUTATING — they
+// write no config, bind no credential, and answer "does the baseline this
+// deployment already declares actually work", which is the evidence half of the
+// security admin's job. The PUT stays operatorOnly because it replaces the WHOLE
+// document, integration credential refs included; a SEC-writable per-field subset
+// is the top phase-2 item, not something to fake with a second gate here.
+//
+// A MOUNT rather than two lines in routes() only because that function is at its
+// funlen ratchet and the agent-roster family needed the line (routes.go says so
+// at the call site). The tier and the handlers are unchanged by the move.
+func (s *Server) mountSiteConfigProbeRoutes(securityOps chi.Router) {
+	securityOps.Post("/site-config/test-proxy", s.handleTestSiteConfigProxy)
+	securityOps.Post("/site-config/test-redirect", s.handleTestSiteConfigRedirect)
 }
 
 // handleTestSiteConfigProxy is POST /api/v1/site-config/test-proxy

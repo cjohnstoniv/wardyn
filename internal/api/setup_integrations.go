@@ -457,17 +457,58 @@ type SetupHarnessTool struct {
 	HasGateway    bool   `json:"has_gateway"`
 	HasLogin      bool   `json:"has_login"`
 	NoManagedAuth bool   `json:"no_managed_auth,omitempty"`
+	// Enabled is the ADMIN'S answer for this row: may a run name this agent?
+	// True for every row when no AgentProviders block exists (legacy open mode),
+	// otherwise the row's own state — and false for a catalog agent the block
+	// does not mention at all.
+	//
+	// NOT omitempty, and that is the whole point: false is the value that has to
+	// reach the console, which renders a disabled row DISABLED WITH A REASON
+	// rather than hiding it. A roster that silently drops agents is how "Claude
+	// Code is just gone" becomes a support ticket.
+	Enabled bool `json:"enabled"`
+	// Mechanism and CredentialSource are the row's declared model-access lane and
+	// whose credential it uses, empty when no block exists or no row names this
+	// agent. They are the MEMBER-SAFE half of the agent policy: a lane name and
+	// "shared"/"per_user" carry no host, no secret name and never the AWS access
+	// portal URL, which is why redactSetupStatusForMember keeps them — a member
+	// deciding whether to sign in has to be able to see that their org captures
+	// credentials per person.
+	Mechanism        string `json:"mechanism,omitempty"`
+	CredentialSource string `json:"credential_source,omitempty"`
 }
 
-// setupHarnessTools projects the static harness catalog for SetupStatus.
-func setupHarnessTools() []SetupHarnessTool {
+// setupHarnessTools projects the static harness catalog for SetupStatus, folded
+// with the org's agent roster (agent_providers.go).
+//
+// THE ROW COUNT IS THE CATALOG'S, always: the server never filters this list by
+// the roster. An agent the admin did not enable is published as a row with
+// enabled=false so the console can say "not enabled by your admin" — the state
+// the field report asked for, and the reason setup_test.go's
+// len(Harnesses) == len(harnessCatalog) still holds.
+//
+// A zero-value sc (no store, or a read that failed) is legacy open mode: every
+// row enabled, no mechanism claimed. That is the conservative direction here —
+// it claims nothing unavailable on a blip.
+func setupHarnessTools(sc types.SiteConfig) []SetupHarnessTool {
+	configured := agentProvidersConfigured(sc)
 	out := make([]SetupHarnessTool, len(harnessCatalog))
 	for i, d := range harnessCatalog {
-		out[i] = SetupHarnessTool{
+		tool := SetupHarnessTool{
 			ID: d.ID, Display: d.Display,
 			HasGateway: d.Gateway != nil, HasLogin: d.Login != nil,
 			NoManagedAuth: d.NoManagedAuth,
+			Enabled:       true,
 		}
+		if configured {
+			row, ok := agentProviderFor(sc, d.ID)
+			tool.Enabled = ok && !row.Disabled
+			if ok {
+				tool.Mechanism = string(row.Mechanism)
+				tool.CredentialSource = string(row.CredentialSource)
+			}
+		}
+		out[i] = tool
 	}
 	return out
 }

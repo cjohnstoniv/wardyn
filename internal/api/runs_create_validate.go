@@ -80,6 +80,24 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, msg)
 		return req, noCeiling, "", "", false
 	}
+	// …and, once an AgentProviders block exists, that the agent NAMED is one this
+	// deployment actually offers (agent_providers.go). The sibling of the check
+	// above, and placed with it: "agent is required" and "and it must be an
+	// enabled one" are one question the caller asks once.
+	//
+	// 422, not 400: the request is well formed — it names an agent that is simply
+	// not offered here — and 422 is what every other org-policy refusal on this
+	// path answers. Operators and members alike, because the roster is the ORG's
+	// statement of what this install runs, not a per-principal ceiling. With NO
+	// block nothing is refused: agentRosterRefusal short-circuits to "" and this
+	// path is byte-for-byte 0.7.1.
+	if msg, err := s.agentRosterRefusal(r.Context(), req.Agent); err != nil {
+		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		return req, noCeiling, "", "", false
+	} else if msg != "" {
+		writeError(w, http.StatusUnprocessableEntity, msg)
+		return req, noCeiling, "", "", false
+	}
 
 	// W15-d (CRIT, rbac-bypass): reject a client-supplied task that forges a
 	// server-set discriminator (reservedRunTasks below) — e.g. a plain member

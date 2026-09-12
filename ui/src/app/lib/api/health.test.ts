@@ -97,6 +97,9 @@ describe("health — site-config integrations round-trip", () => {
       // a stale spread would revert an admin's providers to whatever this tab
       // last read. effective_scm_hosts is a plain read-only projection.
       workspace_providers: { git: [{ id: "gh", kind: "github", base_urls: ["https://github.com/acme"] }] },
+      // The agent roster rides on the same door and needs the same strip: a
+      // stale spread would silently re-enable an agent the admin just turned off.
+      agent_providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },
       effective_scm_hosts: ["github.com"],
     };
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(echoed), { status: 200 }));

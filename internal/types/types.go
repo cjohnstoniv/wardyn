@@ -343,6 +343,18 @@ type SiteConfig struct {
 	// deploy/wardyn-desktop.sh re-applies /etc/wardyn/site-config.json on every
 	// boot.
 	WorkspaceProviders *WorkspaceProviders `json:"workspace_providers,omitempty"`
+	// AgentProviders is the org's agent-enablement POLICY — which coding agents
+	// this deployment offers, the ONE model-access lane each may use, and whether
+	// that credential is shared or per-person. See AgentProviders (a POINTER for
+	// the same byte-identical-GET reason WorkspaceProviders is one). Nil (the
+	// default) is legacy open mode: the image map decides availability and the
+	// existing credential precedence chain decides auth, exactly as in 0.7.1.
+	//
+	// Written through its own GET/PUT /agent-providers endpoints AND through
+	// PUT /site-config on the same terms as the sibling block above — an absent
+	// key carries the stored value forward, an explicit {} clears it — which is
+	// what makes the agent roster MDM-deliverable to a laptop.
+	AgentProviders *AgentProviders `json:"agent_providers,omitempty"`
 	// EffectiveScmHosts is READ-ONLY and SERVER-OWNED: the one spelling of
 	// "which git hosts does this deployment actually admit" — ScmHosts MINUS
 	// every host a present provider row claims, UNION the hosts of every ENABLED

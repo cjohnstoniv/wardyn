@@ -64,6 +64,11 @@ var docTierRows = []struct{ route, token string }{
 	// pass on the write's row.
 	{"GET /api/v1/workspace-providers", "`GET /workspace-providers`"},
 	{"PUT /api/v1/workspace-providers", "`PUT /workspace-providers`"},
+	// The agent roster (0.7.2), separate tokens per verb for the same reason as
+	// the two rows above: the READ is the half a later member-safe projection
+	// could widen, and that must red here rather than pass on the write's row.
+	{"GET /api/v1/agent-providers", "`GET /agent-providers`"},
+	{"PUT /api/v1/agent-providers", "`PUT /agent-providers`"},
 	// securityOps (SEC) — the eight the pre-0.7 table marked admin-only, plus
 	// the rest of the tier the same table now names.
 	{"PUT /api/v1/workspaces/{id}/approved-egress", "`approved-egress`"},

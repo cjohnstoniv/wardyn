@@ -350,6 +350,57 @@ func (s *Server) stepRunCeilingLimits(ctx context.Context, actor string, gov ste
 	return nil
 }
 
+// recordSessionPolicy is the spec one record session launches under. EXTRACTED
+// from launchRecordRun (0.7.2) rather than written new: that function sits at the
+// funlen ratchet (.golangci.yml, 150 non-comment lines), and the agent-roster
+// check it gained is what forced a block out. Nothing about the policy changed —
+// the comments are the originals, moved with the code they explain.
+func (s *Server) recordSessionPolicy(ws types.Workspace, cc types.ConfinementClass, confined bool) types.RunPolicySpec {
+	// A confined verify HOLDS an off-policy host at the door (wait_for_review:
+	// the connection parks while the approval surfaces in the verify panel's
+	// live strip; approve releases it, deny/timeout fails it). The old
+	// deny_with_review here leaned on a stale "unattended probe must fail
+	// fast" rationale — every session is interactive now (the operator drives
+	// the attach terminal), so the operator IS present to decide, and a held
+	// request that gets approved both completes in-flight AND lands as an
+	// egress: requirement row via the decide() hook. A learning session
+	// (allow-all) makes this inert.
+	verifyFirstUse := types.FirstUseAlwaysDeny
+	if confined {
+		verifyFirstUse = types.FirstUseWaitForReview
+	}
+	return types.RunPolicySpec{
+		MinConfinementClass: cc,
+		// A CONFINED REPLAY session is default-deny, limited to AllowedDomains
+		// (baseline clone/registry hosts ∪ the workspace's approved egress) — so
+		// re-running the same steps proves they work under least privilege. A
+		// learning session (open) allows all egress so the capture is complete.
+		// Same interactive attach either way.
+		AllowAllEgress: !confined,
+		AllowedDomains: s.confinedEgressDomains(ws),
+		// The operator's permanent per-workspace denies (Phase 4's `deny · always`)
+		// must reach BOTH branches above, not just the confined AllowedDomains set —
+		// deny beats allow_all_egress at the proxy (docs/POLICIES.md), so this line
+		// is what actually stops the AllowAllEgress:true LEARNING session from
+		// reaching (and then durably LEARNING — offering for promotion) a host the
+		// operator already permanently blocked, which is exactly the branch that
+		// looks least like it needs a deny-list. Raw column, not routed through
+		// confinedEgressDomains: that helper's return stays allow-only (mirrors
+		// unionWorkspaceEgress's contract) and there is no per-source deny contract
+		// to fold the way the required-egress loop inside it folds allows.
+		DeniedDomains: ws.DeniedEgress,
+		// In a confined replay, an off-policy host ESCALATES to the operator instead
+		// of a silent hard-deny — so a "bad curl" surfaces an approve/reject decision
+		// in the record panel as it happens. Inert under allow-all, so it's a no-op
+		// for a learning session. (Cloud-metadata / private IPs stay unconditionally
+		// blocked regardless.)
+		FirstUseApproval: verifyFirstUse,
+		// Generous but FINITE idle cap — an abandoned open-egress recording
+		// self-terminates (and revokes) instead of living forever.
+		AutoStopAfterSec: int(recordInteractiveIdleCap.Seconds()),
+	}
+}
+
 func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Workspace, sessionKey, sessionLabel string, confined bool) (types.AgentRun, bool, error) {
 	if s.cfg.Runner == nil {
 		return types.AgentRun{}, false, fmt.Errorf("no runner configured")
@@ -459,50 +510,30 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	}
 	now := run.CreatedAt
 	run.Interactive = true
-	// A confined verify HOLDS an off-policy host at the door (wait_for_review:
-	// the connection parks while the approval surfaces in the verify panel's
-	// live strip; approve releases it, deny/timeout fails it). The old
-	// deny_with_review here leaned on a stale "unattended probe must fail
-	// fast" rationale — every session is interactive now (the operator drives
-	// the attach terminal), so the operator IS present to decide, and a held
-	// request that gets approved both completes in-flight AND lands as an
-	// egress: requirement row via the decide() hook. A learning session
-	// (allow-all) makes this inert.
-	verifyFirstUse := types.FirstUseAlwaysDeny
-	if confined {
-		verifyFirstUse = types.FirstUseWaitForReview
-	}
-	policy := types.RunPolicySpec{
-		MinConfinementClass: cc,
-		// A CONFINED REPLAY session is default-deny, limited to AllowedDomains
-		// (baseline clone/registry hosts ∪ the workspace's approved egress) — so
-		// re-running the same steps proves they work under least privilege. A
-		// learning session (open) allows all egress so the capture is complete.
-		// Same interactive attach either way.
-		AllowAllEgress: !confined,
-		AllowedDomains: s.confinedEgressDomains(ws),
-		// The operator's permanent per-workspace denies (Phase 4's `deny · always`)
-		// must reach BOTH branches above, not just the confined AllowedDomains set —
-		// deny beats allow_all_egress at the proxy (docs/POLICIES.md), so this line
-		// is what actually stops the AllowAllEgress:true LEARNING session from
-		// reaching (and then durably LEARNING — offering for promotion) a host the
-		// operator already permanently blocked, which is exactly the branch that
-		// looks least like it needs a deny-list. Raw column, not routed through
-		// confinedEgressDomains: that helper's return stays allow-only (mirrors
-		// unionWorkspaceEgress's contract) and there is no per-source deny contract
-		// to fold the way the required-egress loop inside it folds allows.
-		DeniedDomains: ws.DeniedEgress,
-		// In a confined replay, an off-policy host ESCALATES to the operator instead
-		// of a silent hard-deny — so a "bad curl" surfaces an approve/reject decision
-		// in the record panel as it happens. Inert under allow-all, so it's a no-op
-		// for a learning session. (Cloud-metadata / private IPs stay unconditionally
-		// blocked regardless.)
-		FirstUseApproval: verifyFirstUse,
-		// Generous but FINITE idle cap — an abandoned open-egress recording
-		// self-terminates (and revokes) instead of living forever.
-		AutoStopAfterSec: int(recordInteractiveIdleCap.Seconds()),
-	}
+	// The session's policy, built one function over (recordSessionPolicy).
+	policy := s.recordSessionPolicy(ws, cc, confined)
 	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row
+	// THE AGENT ROSTER, on the one step lane it binds (agent_providers.go).
+	// newStepRun hardcodes run.Agent and calls Store.CreateRun/dispatchRun
+	// directly, so every server-launched lane bypasses decodeAndValidateCreateRun's
+	// identical check — and a RECORD session is an interactive MODEL run, so a
+	// codex-only org must not be able to record through claude-code.
+	//
+	// THE OTHER STEP LANES ARE EXEMPT, deliberately: scan, verify, Build and the
+	// harness-login capture are non-model steps Wardyn authors for its own
+	// purposes, and refusing them on an agent roster would make a login run —
+	// the very thing that repairs a credential — unreachable.
+	//
+	// Through abort(), so the refusal leaves the record panel a failure hint with
+	// the sentence in it rather than a silently released slot; the sentinel is
+	// what lets handleStartRecord answer 422 instead of 500.
+	//
+	// THREE LINES, and a helper for the two they would otherwise be: this
+	// function is AT the funlen ratchet (.golangci.yml, 150 non-comment lines)
+	// with them, so the next lane to add a statement here extracts a block first.
+	if rerr := s.recordRosterRefusal(ctx, run.Agent); rerr != nil {
+		return types.AgentRun{}, false, abort(rerr)
+	}
 	cloneURLs, ephemeralDirs, werr := wireWorkspaceSource(&run, &policy, ws)
 	if werr != nil {
 		return types.AgentRun{}, false, abort(werr)

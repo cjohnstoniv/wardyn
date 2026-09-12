@@ -208,6 +208,22 @@ export interface SetupHarnessTool {
   has_gateway: boolean;
   has_login: boolean;
   no_managed_auth?: boolean;
+  // The org's answer for this row (0.7.2, SiteConfig.agent_providers): may a run
+  // name this agent? True for every row when no roster exists — legacy open mode
+  // — otherwise the row's own state, and false for a catalog agent the roster
+  // does not mention. NOT optional in the wire shape (the server always sends
+  // it), but optional HERE because an older daemon omits it: treat absent as
+  // "unknown", never as false, and keep rendering today's picker.
+  //
+  // A disabled row is rendered DISABLED WITH A REASON, never hidden — hiding is
+  // how "Claude Code is just gone" becomes a support ticket.
+  enabled?: boolean;
+  // The row's declared model-access lane and whose credential it uses, absent
+  // when no roster exists or no row names this agent. The member-safe half of
+  // the agent policy: a lane name and "shared"/"per_user", never the AWS access
+  // portal URL (see the Go SetupHarnessTool doc).
+  mechanism?: string;
+  credential_source?: string;
 }
 
 export interface SetupStatus {

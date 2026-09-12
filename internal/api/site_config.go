@@ -248,6 +248,12 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 	// both write doors (this one and PUT /workspace-providers), so an
 	// MDM-delivered document can never store a block the providers endpoint
 	// would have refused (workspace_providers.go).
+	//
+	// The SIBLING agent_providers block is validated by its own gate at each of
+	// those two doors instead of here (validateAgentProviders, agent_providers.go):
+	// admitting a row needs the BOOT AGENT-IMAGE MAP, which is server state this
+	// deliberately pure function has no access to. Both doors run it, so the
+	// "one validator, two doors" property is the same.
 	return validateWorkspaceProviders(cfg.WorkspaceProviders)
 }
 
@@ -403,7 +409,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 // ADD A KEY HERE WHEN YOU ADD ONE TO types.SiteConfig, and
 // TestSiteConfigRoundTripKeepsFieldsAnOlderClientCannotName fails until you
 // have decided which side of this line it sits on.
-var siteConfigFieldsAfter066 = []string{"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers"}
+var siteConfigFieldsAfter066 = []string{"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers"}
 
 // carryForwardUnnamedSiteConfigFields preserves a stored value that the request
 // body did not MENTION, for the fields an older client cannot know about.
@@ -435,6 +441,14 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 	// instead of an empty object rendered on every later GET.
 	if !present["workspace_providers"] {
 		cfg.WorkspaceProviders = existing.WorkspaceProviders
+	}
+	// agent_providers on identical terms, and for the identical MDM reason: the
+	// /etc/wardyn/site-config.json a laptop re-applies on every boot predates
+	// this key, so without the carry-forward every boot would silently delete the
+	// org's agent roster — and an install whose roster vanished falls back to
+	// legacy open mode, which is the OPPOSITE of what the admin wrote down.
+	if !present["agent_providers"] {
+		cfg.AgentProviders = existing.AgentProviders
 	}
 	// effective_scm_hosts is NOT carried forward: it is server-owned and
 	// PROJECTED on read (handleGetSiteConfig), never stored, so there is nothing
@@ -499,6 +513,11 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// what gets stored: {} becomes an absent key, base URLs get their canonical
 	// lowercase-host/no-trailing-slash form.
 	cfg.WorkspaceProviders = normalizeWorkspaceProviders(cfg.WorkspaceProviders)
+	cfg.AgentProviders = normalizeAgentProviders(cfg.AgentProviders)
+	if err := validateAgentProviders(cfg.AgentProviders, s.cfg.AgentImages); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
+		return
+	}
 	if err := validateSiteConfig(cfg); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
 		return
@@ -581,6 +600,10 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		// the legacy lists behind it.
 		"git_providers":      enabledGitProviderCount(saved),
 		"storage_configured": storageProvidersConfigured(saved),
+		// The agent roster this door can also write (CLI/MDM): the count of
+		// ENABLED rows, so a roster narrowed by an MDM push is reviewable
+		// from the audit log alone.
+		"agent_providers": enabledAgentProviderCount(saved),
 	}
 	// Only when the body NAMED the block — see the count above.
 	if narrowed != nil {

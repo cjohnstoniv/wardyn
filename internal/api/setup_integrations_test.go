@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // TestHandleListIntegrations_ShapeAndNoSecretValues asserts the GET
@@ -86,7 +88,7 @@ func TestHandleListIntegrations_NoStoredRowsIsEmptyNot404(t *testing.T) {
 }
 
 func TestSetupHarnessTools(t *testing.T) {
-	tools := setupHarnessTools()
+	tools := setupHarnessTools(types.SiteConfig{})
 	if len(tools) != len(harnessCatalog) {
 		t.Fatalf("len = %d, want %d (one per catalog row)", len(tools), len(harnessCatalog))
 	}
@@ -101,5 +103,13 @@ func TestSetupHarnessTools(t *testing.T) {
 	}
 	if !claude.HasGateway || !claude.HasLogin {
 		t.Errorf("claude-code = %+v, want HasGateway and HasLogin both true", claude)
+	}
+	// No AgentProviders block: every row enabled, nothing claimed about its lane.
+	// This is the legacy-open-mode half of the roster contract, and the reason an
+	// upgraded install's New Run picker is byte-for-byte what it was.
+	for _, tool := range tools {
+		if !tool.Enabled || tool.Mechanism != "" || tool.CredentialSource != "" {
+			t.Errorf("with no agent roster, %s = %+v; want enabled with no mechanism or source", tool.ID, tool)
+		}
 	}
 }
