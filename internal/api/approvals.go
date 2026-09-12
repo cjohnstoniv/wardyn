@@ -208,6 +208,44 @@ func (s *Server) handleDenyApproval(w http.ResponseWriter, r *http.Request) {
 // with its run.
 const approvalRunEndedBody = "the run ended before anyone decided this; the approval has been cancelled and nothing was approved or denied"
 
+// refuseIfRunEnded is decide()'s last pre-Decide() rule. The terminal cascade
+// (cancelRunApprovals) is supposed to have moved a dead run's rows to
+// CANCELLED already, but that cascade is best-effort — a failed CancelForRun
+// is logged and audited, never retried — and the three terminal writers all
+// race a decision that is already in flight. A stranded PENDING row that
+// reached Decide() would be decided for real: an `always` approve replays
+// into the workspace allowlist (approvals_reconcile.go) on behalf of a
+// sandbox that is gone, which is exactly the widening CANCELLED exists to
+// stop. So CAS-cancel it here and answer 409, rather than a question whose
+// asker no longer exists. It costs at most two reads, and only on the paths
+// that had not already loaded the rows (the member gate loads both; an
+// explicit scope loads the approval); the rows it loads are handed back so
+// the caller never reads them twice. ok=false means the response is written.
+func (s *Server) refuseIfRunEnded(
+	w http.ResponseWriter, r *http.Request, id uuid.UUID,
+	ap types.ApprovalRequest, run types.AgentRun, haveAP, haveRun bool,
+) (types.ApprovalRequest, types.AgentRun, bool, bool, bool) {
+	if !haveAP {
+		var err error
+		if ap, err = s.cfg.Approvals.Get(r.Context(), id); err != nil {
+			writeError(w, http.StatusNotFound, "approval not found")
+			return ap, run, haveAP, haveRun, false
+		}
+		haveAP = true
+	}
+	if !haveRun && ap.RunID != uuid.Nil && s.cfg.Store != nil {
+		if got, gerr := s.cfg.Store.GetRun(r.Context(), ap.RunID); gerr == nil {
+			run, haveRun = got, true
+		}
+	}
+	if haveRun && isTerminalRunState(run.State) {
+		s.cancelRunApprovals(r.Context(), ap.RunID)
+		writeError(w, http.StatusConflict, approvalRunEndedBody)
+		return ap, run, haveAP, haveRun, false
+	}
+	return ap, run, haveAP, haveRun, true
+}
+
 func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	id, ok := parseIDParam(w, r, "id", "approval")
 	if !ok {
@@ -317,36 +355,9 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	}
 
 	// V1-D1 — DEFENCE IN DEPTH: the run may have ENDED while this approval sat in
-	// the queue. The terminal cascade (cancelRunApprovals) is supposed to have
-	// moved it to CANCELLED already, but that cascade is best-effort — a failed
-	// CancelForRun is logged and audited, never retried — and the three terminal
-	// writers all race a decision that is already in flight. A stranded PENDING
-	// row that reaches Decide() here is decided for real: an `always` approve
-	// replays into the workspace allowlist (approvals_reconcile.go) on behalf of
-	// a sandbox that is gone, which is exactly the widening CANCELLED exists to
-	// stop. So CAS-cancel it ourselves and refuse, rather than answer a question
-	// whose asker no longer exists.
-	//
-	// Placed with the other pre-Decide() rules, and for their reason: PENDING ->
-	// decided is one-way. It costs at most two reads, and only on the paths that
-	// had not already loaded the rows (the member gate loads both; an explicit
-	// scope loads the approval).
-	if !haveAP {
-		var err error
-		if ap, err = s.cfg.Approvals.Get(r.Context(), id); err != nil {
-			writeError(w, http.StatusNotFound, "approval not found")
-			return
-		}
-		haveAP = true
-	}
-	if !haveRun && ap.RunID != uuid.Nil && s.cfg.Store != nil {
-		if got, gerr := s.cfg.Store.GetRun(r.Context(), ap.RunID); gerr == nil {
-			run, haveRun = got, true
-		}
-	}
-	if haveRun && isTerminalRunState(run.State) {
-		s.cancelRunApprovals(r.Context(), ap.RunID)
-		writeError(w, http.StatusConflict, approvalRunEndedBody)
+	// the queue (refuseIfRunEnded). Placed with the other pre-Decide() rules, and
+	// for their reason: PENDING -> decided is one-way.
+	if ap, run, haveAP, haveRun, ok = s.refuseIfRunEnded(w, r, id, ap, run, haveAP, haveRun); !ok {
 		return
 	}
 
