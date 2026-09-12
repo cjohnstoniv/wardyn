@@ -191,6 +191,19 @@ describe("buildSpec — allow-all egress + LLM api_key grant", () => {
     expect(inline_policy.allowed_domains).toEqual([]);
   });
 
+  // BYOA ("none", harness.go's NoManagedAuth row): Wardyn wires that image no
+  // model credential and knows no host for it, so a stored secret name must not
+  // conjure an Anthropic injection rule — and an Anthropic host in
+  // allowed_domains — onto a run that never speaks to Anthropic.
+  it("names no host for the BYOA agent, so no api_key grant and no pinned host ship", () => {
+    const { inline_policy } = buildSpec(stateWithLlmKey({ agent: "none" }));
+    expect((inline_policy.eligible_grants ?? []).some((g) => g.kind === "api_key")).toBe(false);
+    expect(inline_policy.allowed_domains ?? []).not.toContain("api.anthropic.com");
+    expect(impliedEgressHosts(stateWithLlmKey({ agent: "none" })).map((h) => h.host)).not.toContain(
+      "api.anthropic.com",
+    );
+  });
+
   it("non-allow-all behavior is unchanged (allowlist + required hosts unioned)", () => {
     const { inline_policy } = buildSpec(
       stateWithLlmKey({ allowAllEgress: false, allowedDomains: ["pypi.org"] }),

@@ -31,6 +31,7 @@ import type {
   EgressDecision,
 } from "../../../lib/types";
 import type { RunLayoutPreset, RunLayoutWidget } from "../../../lib/api/run-layout";
+import { createRequestFromAudit } from "../../../lib/api/audit";
 import { ConnectSSHCard } from "../run-detail-ssh";
 import {
   CredentialsWidget,
@@ -208,6 +209,12 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
       live: { x: 8, y: 25, w: 4, h: 4 },
       finished: { x: 0, y: 12, w: 6, h: 4 },
     },
+    // The widget returns null whenever the run's own run.create row never
+    // stamped clamp_warnings (a pre-C2 trail, or an audit read that failed) —
+    // and a null inside a grid tile is a reserved hole mid-canvas, plus a dock
+    // button that opens a blank pane (focus-mode.tsx). Same reason ssh carries
+    // one: the predicate must mirror the component's own gate exactly.
+    available: (ctx) => createRequestFromAudit(ctx.audit).clamp_warnings !== undefined,
   },
   ssh: {
     label: "Attach from your terminal",

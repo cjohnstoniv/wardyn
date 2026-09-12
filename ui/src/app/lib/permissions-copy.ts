@@ -251,9 +251,10 @@ export const DENIED = {
 
   // (§7.3's SECRET_DROPPED(n)/EGRESS_DROPPED(n) are deliberately NOT here. They
   // are count-shaped copy for a preflight/Review surface, and 0.6 ships none:
-  // the drop is surfaced at launch instead, as one toast per dropped value
-  // carrying the SERVER's text, which names the kind and the exact value
-  // (internal/api/runs.go -> new-run/run-warnings.ts). A string defined here
+  // the drop is surfaced at launch instead, listed inline in the New Run rail
+  // under AGENTS.LAUNCH_WARNING_TITLE, carrying the SERVER's text, which names
+  // the kind and the exact value (internal/api/runs.go -> new-run-rail.tsx's
+  // launch.warnings block, 0.7.2's §5c.8). A string defined here
   // and rendered nowhere is not canon, it is a claim — so it waits for the
   // surface that draws it.)
 

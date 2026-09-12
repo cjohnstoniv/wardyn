@@ -143,6 +143,9 @@ export function NewRunScreen() {
   const [error, setError] = React.useState<string | null>(null);
   // The 201's advisory `warnings[]` (§5c.8) — inline in the rail, not a toast.
   const [launchWarnings, setLaunchWarnings] = React.useState<string[]>([]);
+  // Set ONLY while a launched run's advisories are on screen — the rail's
+  // "Open run" is what carries the member there, at their own pace.
+  const [launchedRunId, setLaunchedRunId] = React.useState<string | null>(null);
   // Preflight is a dry-run of the SAME request Launch sends — see buildRunInput
   // below. Independent loading/result/error state from Launch's: the two
   // actions can be in flight or have failed independently of one another.
@@ -450,19 +453,25 @@ export function NewRunScreen() {
     setError(null);
     setLaunching(true);
     setLaunchWarnings([]);
+    setLaunchedRunId(null);
     try {
       const created: CreateRunResult = await runsApi.createRun(buildRunInput());
       // (A best-effort "save this as a policy" write used to live here, gated on
       // state.saveAsProfile — a flag no control on this screen has ever set. It
       // was unreachable from the moment the five-step wizard was replaced.)
       const warnings = created.warnings ?? [];
-      const goToRun = () => navigate(`/runs/${encodeURIComponent(created.id)}`);
-      // A beat to actually read them (§5c.8) before this screen unmounts.
+      // §5c.8: a run that launched WITH advisories is never navigated away from
+      // on a clock. A 1.6s timer both raced every other way off this screen
+      // (Esc and the ghost "Runs" button each landed on /runs, then the timer
+      // yanked the member to /runs/:id) and gave a multi-line advisory a fixed
+      // beat nobody can finish reading. The screen HOLDS instead: the warnings
+      // stay listed in the rail and Launch becomes OPEN_RUN_CTA, which is the
+      // only thing that navigates. No timer.
       if (warnings.length > 0) {
         setLaunchWarnings(warnings);
-        window.setTimeout(goToRun, 1600);
+        setLaunchedRunId(created.id);
       } else {
-        goToRun();
+        navigate(`/runs/${encodeURIComponent(created.id)}`);
       }
     } catch (e) {
       setError(getErrorMessage(e) || "Failed to launch run.");
@@ -962,6 +971,9 @@ export function NewRunScreen() {
             problem,
             error,
             warnings: launchWarnings,
+            onOpenRun: launchedRunId
+              ? () => navigate(`/runs/${encodeURIComponent(launchedRunId)}`)
+              : null,
           }}
           preflight={
             preflightIsCurrent

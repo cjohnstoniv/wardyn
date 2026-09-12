@@ -59,9 +59,12 @@ import type { AgentRun, SetupStatus } from "../../../lib/types";
 
 type Variant = "default" | "outline";
 
-// SetupModelAccess.state -> AGENTS.MODEL_ACCESS_* label (C4.5's six states,
-// setup.ts's own doc comment). "live" alone is success-toned above; every
-// other key here renders warning.
+// SetupModelAccess.state -> AGENTS.MODEL_ACCESS_* label. FIVE keys, not the
+// six lifecycle states §5c.6 names: `expired_renewable` is NOT one of them
+// because dispatch renews it, so it folds into `live` server-side and never
+// reaches this map (setup.ts's own doc comment says the same). The five are
+// live / expiring / expired_signin / not_configured / shared_expired. "live"
+// alone is success-toned above; every other key here renders warning.
 const MODEL_ACCESS_CHIP_LABEL: Record<string, string> = {
   live: AGENTS.MODEL_ACCESS_LIVE,
   expiring: AGENTS.MODEL_ACCESS_EXPIRING,

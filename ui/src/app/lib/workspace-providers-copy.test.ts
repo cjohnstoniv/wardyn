@@ -15,7 +15,7 @@ import { DRIVES, DRIVE_MEMBER, DRIVE_RUN } from "./user-drives-copy";
 // precedent, user-drives-copy.test.ts's parseFrozenTables()): this suite does
 // not hand-retype a sample of the canon — it PARSES docs/design/
 // workspace-providers-prompt.md §7.2-§7.5 + §7.7 back out of the doc and
-// compares all 91 keys. A swapped hyphen, a dropped ellipsis, a reworded
+// compares all 95 keys. A swapped hyphen, a dropped ellipsis, a reworded
 // clause, a new doc row or a deleted one all fail here rather than shipping.
 //
 // §7.6 is STAGING (field-report strings owned by other lanes, parsed by
@@ -79,7 +79,7 @@ function splitKey(docKey: string): [string, string[]] {
 }
 
 // ONE lookup across the three namespaces is safe because none of their keys
-// collide (56 / 3 / 32); the completeness test below is what keeps that true.
+// collide (56 / 3 / 36); the completeness test below is what keeps that true.
 function render(docKey: string): string {
   const [name, args] = splitKey(docKey);
   const ns = NAMESPACES.find((n) => name in n);
@@ -91,8 +91,8 @@ function render(docKey: string): string {
 const RENDERABLE = [...doc.keys()].filter((k) => !PLURALISED.includes(k));
 
 describe("workspace-providers-copy — §7.2-§7.5 + §7.7 parsed out of the prompt doc", () => {
-  it("finds all 91 frozen keys in the doc (§7.6 excluded)", () => {
-    expect(doc.size).toBe(91);
+  it("finds all 95 frozen keys in the doc (§7.6 excluded)", () => {
+    expect(doc.size).toBe(95);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {

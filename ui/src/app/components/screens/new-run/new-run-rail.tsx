@@ -22,6 +22,7 @@ import { Button } from "../../ui/button";
 import { Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
 import { GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
+import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { RailSection } from "./new-run-primitives";
 
 interface RunRailProps {
@@ -57,6 +58,11 @@ interface RunRailProps {
     /** The 201's advisory `warnings[]`, once Launch has actually fired
      *  (§5c.8) — rendered here, inline, instead of a toast. */
     warnings: string[];
+    /** Set once a run launched WITH warnings: the screen stays put and this
+     *  replaces Launch, so the member opens the run when they have read them.
+     *  Null on every other state. A timed redirect used to do this and raced
+     *  every other navigation off the screen. */
+    onOpenRun: (() => void) | null;
   };
   preflight: { error: string | null; result: PreflightResult | null };
 }
@@ -165,7 +171,7 @@ export function RunRail({
           was gone the instant the run navigated away. */}
       {launch.warnings.length > 0 && (
         <div className="mt-3 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-warning">
-          <p className="font-medium text-foreground">Run launched with a warning</p>
+          <p className="font-medium text-foreground">{AGENTS.LAUNCH_WARNING_TITLE}</p>
           <ul className="mt-1 list-disc space-y-0.5 pl-4">
             {launch.warnings.map((w, i) => (
               <li key={i}>{w}</li>
@@ -179,19 +185,27 @@ export function RunRail({
           Launch, because "what would be clamped" is the last thing read before
           committing. */}
       <div className="mt-4 flex gap-2">
-        <Button
-          type="button"
-          className="flex-1"
-          disabled={launch.disabled || !!launch.problem}
-          onClick={launch.onLaunch}
-        >
-          {/* The icon slot always renders (never just on launching) so the
-              has-[>svg] padding rule and the icon+gap width never change —
-              toggling `invisible` cannot shift "Launch run" sideways the way
-              mounting/unmounting the icon would. */}
-          <Loader2 className={launch.spinning ? "size-4 animate-spin" : "size-4 animate-spin invisible"} />
-          Launch run
-        </Button>
+        {launch.onOpenRun ? (
+          // The run IS launched — Launch has nothing left to do, and the one
+          // teal here becomes the way on. Nothing navigates until it is clicked.
+          <Button type="button" className="flex-1" onClick={launch.onOpenRun}>
+            {AGENTS.OPEN_RUN_CTA}
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            className="flex-1"
+            disabled={launch.disabled || !!launch.problem}
+            onClick={launch.onLaunch}
+          >
+            {/* The icon slot always renders (never just on launching) so the
+                has-[>svg] padding rule and the icon+gap width never change —
+                toggling `invisible` cannot shift "Launch run" sideways the way
+                mounting/unmounting the icon would. */}
+            <Loader2 className={launch.spinning ? "size-4 animate-spin" : "size-4 animate-spin invisible"} />
+            Launch run
+          </Button>
+        )}
       </div>
       {/* A disabled button that doesn't say why is a dead end. This screen had
           NO client-side validation at all before — an empty form launched, and
@@ -222,7 +236,7 @@ export function RunRail({
               ))}
             </ul>
           ) : (
-            <p className="text-xs text-muted-foreground">No adjustments.</p>
+            <p className="text-xs text-muted-foreground">{AGENTS.EFFECTIVE_NONE}</p>
           )}
         </div>
       )}

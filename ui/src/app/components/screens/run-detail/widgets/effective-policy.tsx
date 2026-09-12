@@ -12,9 +12,10 @@
 // Absent (renders nothing) when the run.create row itself is missing (an
 // audit read that failed, or a trail authored before this field existed —
 // clamp_warnings undefined either way, and undefined is "unknown", not "none
-// tightened"). "No adjustments." (new-run-rail.tsx's own Review-rail string,
-// reused rather than re-typed) only once the row affirmatively says so with an
-// empty list.
+// tightened"). The registry carries the SAME predicate as `available`, so the
+// canvas reserves no tile for a null. AGENTS.EFFECTIVE_NONE — the canon key the
+// New Run rail's preflight block reads too — only once the row affirmatively
+// says so with an empty list.
 import { ShieldCheck } from "lucide-react";
 import type { AuditEvent } from "../../../../lib/types";
 import { createRequestFromAudit } from "../../../../lib/api/audit";
@@ -35,7 +36,7 @@ export function EffectivePolicyWidget({ audit }: { audit: AuditEvent[] }) {
           ))}
         </ul>
       ) : (
-        <p className="text-xs text-muted-foreground">No adjustments.</p>
+        <p className="text-xs text-muted-foreground">{AGENTS.EFFECTIVE_NONE}</p>
       )}
     </WidgetCard>
   );

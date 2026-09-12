@@ -400,7 +400,7 @@ describe("NewRunScreen — Preflight", () => {
     await user.click(button);
 
     const result = await screen.findByTestId("preflight-result");
-    expect(within(result).getByText("No adjustments.")).toBeInTheDocument();
+    expect(within(result).getByText(AGENTS.EFFECTIVE_NONE)).toBeInTheDocument();
     expect(within(result).getByText("Low")).toBeInTheDocument();
     expect(within(result).getByText("Fence")).toBeInTheDocument();
   });
@@ -851,5 +851,67 @@ describe("NewRunScreen — the unparseable barrier-class hint", () => {
     const textarea = await screen.findByLabelText("Spec (JSON)");
     fireEvent.change(textarea, { target: { value: JSON.stringify({ allowed_domains: [] }, null, 2) } });
     expect(screen.queryByText(/isn't a barrier class/)).not.toBeInTheDocument();
+  });
+});
+
+// §5c.8 — a run that launched WITH advisories.
+//
+// This used to be a 1.6s setTimeout that navigated to /runs/:id. It raced every
+// other way off the screen (Esc and the ghost "Runs" button both land on
+// /runs, and the timer then yanked the member to the run), and it gave a
+// multi-line advisory a fixed beat nobody finishes reading. The screen HOLDS
+// now: the warnings stay listed and the primary button becomes "Open run",
+// which is the only thing that navigates.
+describe("NewRunScreen — the 201's warnings hold the screen, no timer", () => {
+  async function launchWith(warnings?: string[]) {
+    createRunMock.mockResolvedValue({ id: "run_9", warnings });
+    renderScreen();
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    await user.click(screen.getByRole("button", { name: /Launch run/ }));
+  }
+
+  it("navigates immediately when the 201 carries no warnings", async () => {
+    await launchWith();
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/runs/run_9"));
+    expect(screen.queryByRole("button", { name: AGENTS.OPEN_RUN_CTA })).toBeNull();
+  });
+
+  it("lists the warnings and navigates NOWHERE until Open run is clicked", async () => {
+    await launchWith([
+      "egress_host: internal.example.com was dropped — not granted to you",
+      "secret: DEPLOY_KEY was dropped — not granted to you",
+    ]);
+
+    expect(await screen.findByText(AGENTS.LAUNCH_WARNING_TITLE)).toBeInTheDocument();
+    expect(
+      screen.getByText("egress_host: internal.example.com was dropped — not granted to you"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("secret: DEPLOY_KEY was dropped — not granted to you")).toBeInTheDocument();
+    // Launch is gone: the run is launched, and re-firing it is not the next move.
+    expect(screen.queryByRole("button", { name: /Launch run/ })).toBeNull();
+    expect(navigateMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: AGENTS.OPEN_RUN_CTA }));
+    expect(navigateMock).toHaveBeenCalledWith("/runs/run_9");
+  });
+
+  // The load-bearing regression: NOTHING is pending. Real timers here would
+  // only prove 1.6s hadn't elapsed yet.
+  it("leaves no pending navigation behind — the member backs out and stays out", async () => {
+    await launchWith(["secret: DEPLOY_KEY was dropped — not granted to you"]);
+    await screen.findByText(AGENTS.LAUNCH_WARNING_TITLE);
+
+    vi.useFakeTimers();
+    try {
+      // The ghost "Runs" button is the way out that the timer used to fight.
+      fireEvent.click(screen.getByRole("button", { name: "Runs" }));
+      expect(navigateMock).toHaveBeenCalledWith("/runs");
+      navigateMock.mockReset();
+      // Ten seconds, six times the beat the timer used to take.
+      vi.advanceTimersByTime(10_000);
+      expect(navigateMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

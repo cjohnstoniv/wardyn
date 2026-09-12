@@ -63,8 +63,9 @@ export function impliedEgressHosts(
   workspaces: Workspace[] = [],
 ): ImpliedEgressHost[] {
   const out: ImpliedEgressHost[] = [];
-  if (state.llmSecretName) {
-    out.push({ host: llmHostForSecret(state.agent, state.llmSecretName), why: "model key" });
+  const impliedLlmHost = state.llmSecretName ? llmHostForSecret(state.agent, state.llmSecretName) : undefined;
+  if (impliedLlmHost) {
+    out.push({ host: impliedLlmHost, why: "model key" });
   }
   // Any repo-kind selection implies the GitHub clone hosts even with the
   // GitHub grant untouched — claim 3's sharpest sub-case. When the grant IS
@@ -264,8 +265,9 @@ export function buildSpec(
 
   // The LLM api_key grant — no manual picker in step-access.tsx (model access
   // resolves from integrations instead).
-  if (state.llmSecretName) {
-    const host = llmHostForSecret(state.agent, state.llmSecretName);
+  const llmGrantHost = state.llmSecretName ? llmHostForSecret(state.agent, state.llmSecretName) : undefined;
+  if (llmGrantHost) {
+    const host = llmGrantHost;
     const { header, format } = apiKeyInjectionFor(host);
     grants.push({
       kind: "api_key",
@@ -309,8 +311,8 @@ export function buildSpec(
   // pinned host under allow-all — they're reached via plain egress, not a proxy
   // injection rule — so we only force the api_key host through here.)
   const grantInjectionHosts: string[] = [];
-  if (state.llmSecretName) {
-    grantInjectionHosts.push(llmHostForSecret(state.agent, state.llmSecretName));
+  if (llmGrantHost) {
+    grantInjectionHosts.push(llmGrantHost);
   }
 
   const allowedDomains = allowAll
@@ -444,8 +446,14 @@ function githubPermissionsMap(perm: GitHubPermission): Record<string, string> {
     : { contents: "read" };
 }
 
-// The LLM key target host. Anthropic for Claude Code, OpenAI for Codex.
-function llmHostForSecret(agent: WizardAgent, _secret: string): string {
+// The LLM key target host. Anthropic for Claude Code, OpenAI for Codex, and
+// UNDEFINED for "none" (BYOA): Wardyn wires that image no model credential and
+// knows no host for it (harness.go's NoManagedAuth row), so answering
+// api.anthropic.com pinned an Anthropic injection rule — and an Anthropic host
+// in allowed_domains — onto a run that never speaks to Anthropic. Callers skip
+// the grant, the implied-egress line and the pinned host when it is undefined.
+function llmHostForSecret(agent: WizardAgent, _secret: string): string | undefined {
+  if (agent === "none") return undefined;
   return agent === "codex-cli" ? "api.openai.com" : "api.anthropic.com";
 }
 

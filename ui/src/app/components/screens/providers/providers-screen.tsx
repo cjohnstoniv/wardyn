@@ -199,7 +199,11 @@ export function ProvidersScreen() {
                   shared one below is withheld while it's active. */}
               {tab === "agents" && (
                 <AgentsTab
-                  harnesses={setupStatus?.harnesses ?? []}
+                  /* UNDEFINED, never `?? []`: the tab builds its whole PUT
+                     body from this, so an older daemon's absent roster read
+                     as an empty one saved `{agents: []}` and disabled every
+                     agent. Absent is unknown (setup.ts's own rule). */
+                  harnesses={setupStatus?.harnesses}
                   modelAccess={setupStatus?.model_access}
                   operator={operator}
                 />

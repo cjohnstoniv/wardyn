@@ -15,7 +15,7 @@
 // their own.
 //
 // workspace-providers-copy.test.ts PARSES §7.2-§7.5 + §7.7 back out of the
-// prompt doc and compares all 91 keys below against them (§7.6 is STAGING —
+// prompt doc and compares all 95 keys below against them (§7.6 is STAGING —
 // field-report strings owned by other lanes — and is excluded, the way this
 // doc's own header says: `/^### 7\.[2-57]\b/`), so a swapped hyphen, a dropped
 // ellipsis or a new doc row fails a gate instead of shipping.
@@ -207,4 +207,17 @@ export const AGENTS = {
   FLOOR_UNPARSEABLE: (value: string) => `"${value}" isn't a barrier class, so this policy sets no floor — the barrier above is what launches.`,
   EFFECTIVE_TITLE: "Effective policy",
   EFFECTIVE_LEAD: "What launch narrowed, one line each. Your policy is what you wrote; this is what ran.",
+  // The "nothing was narrowed" arm, read by BOTH the run-detail widget and the
+  // New Run rail's preflight block — one key so the two can't drift into two
+  // spellings of the same sentence.
+  EFFECTIVE_NONE: "No adjustments.",
+  // The 201's advisory `warnings[]`, inline in the New Run rail. The run
+  // LAUNCHED; these are advisories, so the screen holds rather than navigating,
+  // and OPEN_RUN_CTA becomes its primary button until the member is done
+  // reading (no timer ever moves them).
+  LAUNCH_WARNING_TITLE: "Run launched with a warning",
+  OPEN_RUN_CTA: "Open run",
+  // The off row's neutral chip. Its own key rather than AGENT_ROW_DISABLED_HINT
+  // sliced at its colon — a reworded hint must not silently reword a chip.
+  AGENT_ROW_DISABLED_CHIP: "Off",
 } as const;

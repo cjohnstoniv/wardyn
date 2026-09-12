@@ -43,7 +43,11 @@ import { HarnessLoginPane } from "../settings/harness-login-pane";
 // no capability here — its only valid mechanism is "none" (validateAgentMechanism).
 type AgentCapability = "claude_code" | "codex_cli";
 
-function agentCapabilityFor(id: string): AgentCapability | undefined {
+// Exported ONLY for its parity gate (agents-tab.test.tsx): this hand-typed
+// fold is the other half of internal/api/harness.go's catalog, and nothing but
+// that test checks the two still agree — a Gateway-bearing harness added there
+// with no entry here silently loses its impossible-pair reasons.
+export function agentCapabilityFor(id: string): AgentCapability | undefined {
   if (id === "claude-code") return "claude_code";
   if (id === "codex-cli") return "codex_cli";
   return undefined;
@@ -145,9 +149,11 @@ function Row({
           <span className="block text-sm font-medium text-foreground">{harness.display}</span>
           <span className="block font-mono text-meta text-muted-foreground">{harness.id}</span>
         </div>
-        {/* Off is a fact, never red (§4's colour rule) — the row's own hint's
-            leading word, taken rather than a second hand-typed copy of it. */}
-        <Chip tone="neutral">{enabled ? PROVIDERS.FIELD_ENABLED : AGENTS.AGENT_ROW_DISABLED_HINT.split(":")[0]}</Chip>
+        {/* Off is a fact, never red (§4's colour rule). Its OWN canon key —
+            slicing AGENT_ROW_DISABLED_HINT at its colon made the chip a
+            side-effect of that sentence's punctuation, so a reworded hint
+            silently reworded (or emptied) the chip. */}
+        <Chip tone="neutral">{enabled ? PROVIDERS.FIELD_ENABLED : AGENTS.AGENT_ROW_DISABLED_CHIP}</Chip>
       </div>
 
       {!enabled ? (
@@ -262,7 +268,13 @@ export function AgentsTab({
   modelAccess,
   operator,
 }: {
-  harnesses: SetupHarnessTool[];
+  /** The harness catalog off SetupStatus.harnesses. UNDEFINED is "unknown"
+   *  (an older daemon omits the field, or the status read failed) — NEVER an
+   *  empty roster: save() builds its whole PUT body from this, so an absent
+   *  roster read as [] PUT `{agents: []}` and disabled every catalog agent on
+   *  the deployment. Unknown renders the same fetch-failed state a failed GET
+   *  does: no rows, no Save, nothing to PUT. */
+  harnesses?: SetupHarnessTool[];
   /** The SIGNED-IN caller's own model-access state — claude-code only. */
   modelAccess?: SetupModelAccess;
   operator: boolean;
@@ -289,7 +301,8 @@ export function AgentsTab({
   React.useEffect(load, [load]);
 
   const agents = draft?.agents ?? [];
-  const catalogIds = new Set(harnesses.map((h) => h.id));
+  const roster = harnesses ?? [];
+  const catalogIds = new Set(roster.map((h) => h.id));
   // Any row not in this build's catalog (a custom WARDYN_AGENT_IMAGES id) is
   // preserved byte-for-byte — this tab offers no UI to author one, and a
   // rewrite here would be a silent drop of an admin's own row.
@@ -306,7 +319,7 @@ export function AgentsTab({
     setSaving(true);
     setSaveError(null);
     try {
-      const catalogRows = harnesses.map((h) => resolvedRow(agents, h));
+      const catalogRows = roster.map((h) => resolvedRow(agents, h));
       const next: AgentProviders = { agents: [...catalogRows, ...customRows] };
       const result = await api.putAgentProviders(next, etag);
       setDraft(result.providers);
@@ -326,6 +339,24 @@ export function AgentsTab({
     }
   };
 
+  // An UNKNOWN roster is the same dead end as a failed GET, and is checked
+  // FIRST: without a catalog there are no rows to render and no body to PUT,
+  // so a Save control here would be a button whose only possible effect is to
+  // wipe the deployment's agent policy.
+  if (!harnesses) {
+    return (
+      <EmptyState
+        icon={AlertTriangle}
+        title={PROVIDERS.FETCH_FAILED_TITLE}
+        description={PROVIDERS.FETCH_FAILED_BODY}
+        action={
+          <Button variant="outline" size="sm" onClick={load}>
+            Retry
+          </Button>
+        }
+      />
+    );
+  }
   if (status === "loading") {
     return (
       <div className="space-y-4">
@@ -371,7 +402,7 @@ export function AgentsTab({
           )}
 
           <div className="space-y-3">
-            {harnesses.map((h) => (
+            {roster.map((h) => (
               <Row
                 key={h.id}
                 harness={h}
@@ -383,11 +414,18 @@ export function AgentsTab({
             ))}
           </div>
 
-          <div className="flex justify-end border-t border-border pt-4">
-            <Button disabled={!operator || saving} onClick={save}>
-              {PROVIDERS.SAVE_CTA}
-            </Button>
-          </div>
+          {/* A daemon that legitimately reports an EMPTY roster is a different
+              case from an absent one — the lead still reads, and the rows are
+              simply none. But Save stays withheld: with no row on screen the
+              only thing it could write is `{agents: []}`, which nobody asked
+              for. A control appears when there is something to save. */}
+          {roster.length > 0 && (
+            <div className="flex justify-end border-t border-border pt-4">
+              <Button disabled={!operator || saving} onClick={save}>
+                {PROVIDERS.SAVE_CTA}
+              </Button>
+            </div>
+          )}
         </>
       )}
     </div>

@@ -89,12 +89,12 @@ takes its place.
 **How a member is refused today.** A capability door is a 403 composed server-side (`denyMemberField`,
 `runs_create_validate.go`), audited as `authz.denied`; "authorised and simply nothing there" is a 422
 with no audit. Both bodies are `writeError` text — a lowercase-opening clause naming the wire field —
-and **the console renders them verbatim** (`new-run/run-warnings.ts`'s rule). §7.4's server-composed
+and **the console renders them verbatim** (the New Run rail's `launch.warnings` rule). §7.4's server-composed
 tables are written in that shape for that reason.
 
 **The 201 warnings and the Review rail.** New Run's Review rail already renders the composer's
 clamp tightenings one line each, or "No adjustments." (`new-run-rail.tsx`); after launch the same
-warnings are a sonner toast (`run-warnings.ts`) and gone, and run detail renders only `policy_id`
+warnings were a sonner toast (`run-warnings.ts`) and gone, and run detail rendered only `policy_id`
 (`run-detail/widgets/identity.tsx`). A member cannot tell "the ceiling narrowed this" from "the
 product ignored my input" (§4c C5).
 
@@ -419,7 +419,7 @@ Colour, stated per rule:
 these is a broken test, not a free edit:
 
 - `ui/src/app/lib/workspace-providers-copy.test.ts` (U1's clone) — this doc's own `doc.size` is
-  **121** over §7.2–§7.7 (91 with §7.6 excluded, after U3 moved `REHOME_TITLE` and
+  **125** over §7.2–§7.7 (95 with §7.6 excluded, after U3 moved `REHOME_TITLE` and
   `DRIVES_OFF_BANNER` to `user-drives-prompt.md`); the pin moves only with a row.
 - `ui/src/app/lib/user-drives-copy.test.ts:109` — `doc.size` 140; U1's `ENFORCEMENT_EVICTION` row
   moved it to 141, U3's re-home dialog row + the two `NR_*` unavailable sentences to 144, and the
@@ -523,8 +523,6 @@ the thing refused — and the console renders them verbatim under its own headin
 | `MEMBER.GS_CHIP(name)` | `governance-copy.ts` | Governance · {name} |
 | `HarnessLoginPane` AWS flow title | `settings/harness-login-pane.tsx` | Connect an AWS SSO session via container login |
 | New Run agent picker literals | `new-run-screen.tsx` | Agent · Claude Code · Codex CLI |
-| Review rail empty arm | `new-run-rail.tsx` | No adjustments. |
-| Launch-warning toast title | `run-warnings.ts` | Run launched with a warning |
 | `IdentityWidget` labels | `run-detail/widgets/identity.tsx` | Identity · Run · Image · Policy · Runner · Sandbox · Started |
 | Workspaces page header | `workspaces.tsx` | Workspaces · A repo or directory a run can attach. Runs can only attach what's listed here. · Add workspace |
 | Setup step labels (existing) | `setup/steps.ts` | Environment · People · Network · Secrets · Workspaces · Review; badge words Optional · Skipped |
@@ -838,6 +836,10 @@ GROUPS` verbatim, and `unmountable` renders `NR_UNAVAILABLE` too — NOT `REFUSE
 | `FLOOR_UNPARSEABLE(value)` | "{value}" isn't a barrier class, so this policy sets no floor — the barrier above is what launches. |
 | `EFFECTIVE_TITLE` | Effective policy |
 | `EFFECTIVE_LEAD` | What launch narrowed, one line each. Your policy is what you wrote; this is what ran. |
+| `EFFECTIVE_NONE` | No adjustments. |
+| `LAUNCH_WARNING_TITLE` | Run launched with a warning |
+| `OPEN_RUN_CTA` | Open run |
+| `AGENT_ROW_DISABLED_CHIP` | Off |
 
 The six lifecycle states and what each renders: `live` → `MODEL_ACCESS_LIVE`, success, no action
 (`expired_renewable` folds in — dispatch renews it); `expiring` → `MODEL_ACCESS_EXPIRING` +
@@ -851,8 +853,11 @@ action line renders under the chip row, in the member's own words, and `SIGN_IN_
 Anthropic and OpenAI lanes reuse the model card's titles (§7.1). `UNAVAILABLE` is the picker item's
 sub-line (the plan's fragment, sentence-cased). `FLOOR_UNPARSEABLE` renders under the JSON policy
 field only when a parse succeeds and `min_confinement_class` names no class; precedence is unchanged.
-`AGENTS_TITLE` / `AGENTS_LEAD` head the tab; the row's switch reuses `PROVIDERS.FIELD_ENABLED` (one word, one key). `EFFECTIVE_*` head the run-detail widget; its lines are the server's clamp warnings (§7.1) and its
-empty arm is the rail's "No adjustments.".
+`AGENTS_TITLE` / `AGENTS_LEAD` head the tab; the row's switch reuses `PROVIDERS.FIELD_ENABLED` (one word, one key), and `AGENT_ROW_DISABLED_CHIP` is the off row's neutral chip — its own key, not `AGENT_ROW_DISABLED_HINT` sliced at the colon. `EFFECTIVE_*` head the run-detail widget; its lines are the server's clamp warnings (§7.1) and its
+empty arm is `EFFECTIVE_NONE`, which the New Run rail's preflight block renders too — one spelling, both sites.
+`LAUNCH_WARNING_TITLE` heads the 201's advisory `warnings[]` inline in that rail, and `OPEN_RUN_CTA` is the
+primary button the screen becomes while they are on screen: a run that launched WITH a warning is never
+navigated away from on a timer — the member opens it when they have read them.
 
 ## 8. Where to apply (once implemented, out of scope this round)
 
