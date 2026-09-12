@@ -59,4 +59,15 @@ describe("drives.getDrives() — the disclosure keys survive the projection", ()
     expect(snap.grants).toEqual([]);
     expect(snap.drives).toEqual([]);
   });
+
+  // `disabled` (S2/0.7.2, the org switch) is the same shape of key as
+  // `grant_total` above — this projection's own precedent for why every
+  // wire key gets a pin here, not just the ones a screen already reads.
+  it("carries disabled through, and defaults it false for an older daemon", async () => {
+    fetchMock.mockResolvedValueOnce(body({ disabled: true }));
+    expect((await drives.getDrives()).disabled).toBe(true);
+
+    fetchMock.mockResolvedValueOnce(body());
+    expect((await drives.getDrives()).disabled).toBe(false);
+  });
 });

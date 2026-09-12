@@ -65,7 +65,13 @@ import { AllocationsBlock } from "./allocations";
 import { DriveEditor } from "./drive-editor";
 import { Note, enforcementGloss, modeText, modeTone, noteClass, question, sizeText, withMono } from "./display";
 
-const EMPTY: UserDrivesSnapshot = { drives: [], grants: [], host_roots_configured: false, runner_target: "" };
+const EMPTY: UserDrivesSnapshot = {
+  drives: [],
+  grants: [],
+  host_roots_configured: false,
+  runner_target: "",
+  disabled: false,
+};
 
 export function DrivesScreen() {
   // The SUPER tier, not the security one: a drive names a host path or a
@@ -154,6 +160,17 @@ export function DrivesScreen() {
   return (
     <div className="mx-auto max-w-[1120px] px-6 py-6">
       <PageHeader title={DRIVES.TITLE} description={withMono(DRIVES.LEAD)} />
+
+      {/* The ORG SWITCH (GET /drives's `disabled`, S2/0.7.2) — one notice
+          ABOVE the table it still shows in full. Everything below renders
+          exactly as it does with the switch on; only a write meets the 422
+          it describes. Ready-only: during loading/forbidden/error the flag
+          isn't known (or isn't the relevant fact) yet. */}
+      {status === "ready" && snap.disabled && (
+        <div className="mt-4">
+          <Note tone="amber">{DRIVES.DRIVES_OFF_BANNER}</Note>
+        </div>
+      )}
 
       {status === "forbidden" ? (
         /* The tier, said as a tier: OPERATOR_ONLY_REASON, the same sentence

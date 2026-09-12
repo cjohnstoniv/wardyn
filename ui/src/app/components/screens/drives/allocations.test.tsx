@@ -110,6 +110,7 @@ function snapshot(over: Partial<UserDrivesSnapshot> = {}): UserDrivesSnapshot {
     ],
     host_roots_configured: false,
     runner_target: "k8s",
+    disabled: false,
     ...over,
   };
 }

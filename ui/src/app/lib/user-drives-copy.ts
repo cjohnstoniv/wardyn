@@ -123,6 +123,13 @@ export const DRIVES = {
   // title — the way GOVERNANCE.TITLE serves nav and heading (§7.2 prose).
   TITLE: "User drives",
   LEAD: "Persistent storage a run can mount at /home/agent/drive. An admin registers a drive and allocates it to people or groups; each person gets their own directory in it, and chooses per run whether to mount it.",
+  // The org switch (`disabled` on GET /drives's snapshot, S2/0.7.2): renders
+  // ABOVE the table it still shows in full — everything here is kept, nothing
+  // mounts until the switch is back on. Q9 (workspace-providers-prompt.md):
+  // moved here from that module (U3) because the screen it renders on already
+  // owns every other string beside it.
+  DRIVES_OFF_BANNER:
+    "User drives are turned off for this deployment under Workspace providers. Everything here is kept; nothing mounts until they are turned back on.",
   DRIVES_TITLE: "Drives",
   DRIVES_LEAD:
     "A drive is one place storage comes from: a share your platform already mounts, or a volume Wardyn creates per person.",
@@ -308,6 +315,12 @@ export const DRIVES = {
   FETCH_FAILED_TITLE: "Couldn't load user drives",
   FETCH_FAILED_BODY:
     "Something went wrong reaching the server. Allocations that already exist still bind every run — this list just can't show them right now.",
+  // The ONE row the re-home confirm dialog adds (U3, 0.7.2): driveRehomeGuard's
+  // 409 (§7.1) already names what moves and who it moves for — this is only
+  // the console's heading over that server text. Cancel is PEOPLE.CANCEL; the
+  // confirm reuses SAVE_CTA above, painted destructive, because the action IS
+  // saving the drive and it strands work if confirmed.
+  REHOME_TITLE: "Saving this moves people's directories",
 
   // ---- §7.5 the card (setup step and Settings) and the entry points ----
   // One component in two homes (setup/user-drives-card.tsx; the Settings
@@ -381,6 +394,18 @@ export const DRIVE_MEMBER = {
   // attempt, not a caption on an offer nobody was made.
   NR_PAUSED: "Your drive is paused by your admin.",
   NR_DENIED: (profile: string) => `Your governance profile "${profile}" does not allow mounting a drive.`,
+  // Two of /me.user_drive_unavailable's four tokens (U3, R1-F139 == R4-F052).
+  // `groups_snapshot_stale` reuses MEMBER.DENIED_STALE_GROUPS (governance-
+  // copy.ts) verbatim rather than a new row. `unmountable` renders THIS
+  // sentence too, NOT REFUSED_BACKEND below: REFUSED_BACKEND's {reason} is
+  // driveMountFor's launch-time prose, which driveUnavailableReason
+  // (user_drives_resolve.go) deliberately discards before it reaches /me — the
+  // wire carries only the bare token, so there is no {reason} here to fill it
+  // with. Same shape as NR_PAUSED/NR_DENIED: one line where the checkbox
+  // would be.
+  NR_UNAVAILABLE: "Your drive couldn't be checked, so it stays unmounted for this run. Try again, or ask an admin.",
+  NR_GOVERNANCE_UNAVAILABLE:
+    "Your governance profile couldn't be resolved, so your drive stays unmounted for this run — sign in again.",
   GS_DRIVE_CHIP: (name: string, size: string, mode: string) => `Drive · ${name}, ${size}, ${mode}`,
   GS_DRIVE_CHIP_NOSIZE: (name: string, mode: string) => `Drive · ${name}, ${mode}`,
   GS_DRIVE_CHIP_PAUSED: (name: string) => `Drive · ${name} · Paused`,

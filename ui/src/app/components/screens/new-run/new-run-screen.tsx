@@ -187,7 +187,7 @@ export function NewRunScreen() {
   // the same seam member_local_dir_root rides). With no provider above, on an
   // older daemon, or after a failed read it is null/"" — which renders as
   // today's card, the same honest answer the server's own resolver gives.
-  const { drive: userDrive, deniedByProfile: driveDeniedBy } = useUserDrive();
+  const { drive: userDrive, deniedByProfile: driveDeniedBy, unavailable: driveUnavailable } = useUserDrive();
 
   React.useEffect(() => {
     runsApi
@@ -790,6 +790,7 @@ export function NewRunScreen() {
             onAddWorkspace={() => setAddWsOpen(true)}
             drive={userDrive}
             driveDeniedBy={driveDeniedBy}
+            driveUnavailable={driveUnavailable}
           />
 
           <SectionCard title="Policy">

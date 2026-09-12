@@ -419,9 +419,11 @@ Colour, stated per rule:
 these is a broken test, not a free edit:
 
 - `ui/src/app/lib/workspace-providers-copy.test.ts` (U1's clone) — this doc's own `doc.size` is
-  **123** over §7.2–§7.7 (93 with §7.6 excluded); the pin moves only with a row.
+  **121** over §7.2–§7.7 (91 with §7.6 excluded, after U3 moved `REHOME_TITLE` and
+  `DRIVES_OFF_BANNER` to `user-drives-prompt.md`); the pin moves only with a row.
 - `ui/src/app/lib/user-drives-copy.test.ts:109` — `doc.size` 140; U1's `ENFORCEMENT_EVICTION` row
-  moves it to 141 and U3's re-home row to 142, each in the commit that ships the key.
+  moved it to 141, U3's re-home dialog row + the two `NR_*` unavailable sentences to 144, and the
+  `DRIVES_OFF_BANNER` move from this module to 145 — each in the commit that ships the key.
 - `ui/src/app/lib/governance-copy.test.ts:172` — `doc.size` 90 → 96 with U2's six keys.
 - `ui/src/app/lib/scm-provider.test.ts:111-113` — `LANE_META` tooltips ARE `CAPABILITY.*`.
 - `ui/src/app/components/screens/setup/setup-screen.test.tsx:606-628` — the Secrets-step Git host
@@ -646,7 +648,6 @@ that names the retired card. `REMOVE_CONFIRM`'s `{kind}` is `KIND_*`.
 | `DRIVE_CEILING_TITLE` | Drive ceiling |
 | `FIELD_DRIVES_ENABLED` | User drives |
 | `DRIVES_ENABLED_HINT` | Off means this deployment offers no drives: nothing is mounted and every drive write is refused. Existing drives and allocations are kept. |
-| `DRIVES_OFF_BANNER` | User drives are turned off for this deployment under Workspace providers. Everything here is kept; nothing mounts until they are turned back on. |
 | `FIELD_MAX_DRIVE` | Largest drive (MiB) |
 | `MAX_DRIVE_HINT` | An allocation or override above this is refused at write and clamped at resolve. 0 means no ceiling. |
 | `CEILING` | A ceiling bounds what an admin may allocate. It does not bound what the volume will hold. |
@@ -657,9 +658,10 @@ The enforcement word under the two disk fields is `DRIVES.ENFORCEMENT_*` (§7.1)
 `MaxEphemeralDiskMiB` row) whenever the word is not `filesystem`, because any of the three can
 leave a run with a non-zero `disk_mib` on such a host, and it reads the AUTHORING daemon's driver,
 never a laptop's. `CEILING` renders once, as the plain note under `FIELD_MAX_DRIVE`; the drives
-honesty sentence stays on `/drives`. `DRIVES_OFF_BANNER` renders on `/drives` (an `EmptyState`-
-toned banner above the drives table) — it is keyed here, not in the drives module, because the
-switch it describes lives here (Q9). The `UserDrivesCard` link out follows the form.
+honesty sentence stays on `/drives`. **Q9 resolved (0.7.2, U3): `DRIVES_OFF_BANNER` moved to
+`DRIVES.DRIVES_OFF_BANNER` (`user-drives-prompt.md` §7.2)** — it renders on `/drives` itself, the
+same screen that already owns every other string it stands beside, rather than pulling a screen's
+banner text from a module for a page it never opens. The `UserDrivesCard` link out follows the form.
 
 ### 7.4 Write refusals and states — console, then server-composed (every row DRAFT)
 
@@ -668,15 +670,15 @@ switch it describes lives here (Q9). The `UserDrivesCard` link out follows the f
 | `FETCH_FAILED_TITLE` | Couldn't load workspace providers |
 | `FETCH_FAILED_BODY` | Something went wrong reaching the server. The providers already saved still bound every run — this page just can't show them right now. |
 | `CARD_NOT_ADMITTED` | Not an enabled git provider — runs can't clone this until an admin enables its host. |
-| `REHOME_TITLE` | Saving this moves people's directories |
 
 `FETCH_FAILED_*` is distinct from the legacy banner (a confident empty state would be a false claim);
 Retry is `ACCESS_STATE.FETCH_FAILED_RETRY`. `SAVE_ERROR` (§7.2) is the unreachable-server arm;
 `SAVE_REFUSED_TITLE` heads every 400 below. `CARD_NOT_ADMITTED` renders on the workspace row and
-as the Workspace `<Select>`'s reason line, from the server's `admitted` flag (U3). `REHOME_TITLE`
-is the ONE row the re-home confirm dialog adds (it lands in `user-drives-prompt.md` §7.4 with U3):
-the body is the server's 409 verbatim (§7.1), Cancel is `PEOPLE.CANCEL`, and the confirm is
-`DRIVES.SAVE_CTA` painted `destructive` — the action IS saving the drive, and it strands work.
+as the Workspace `<Select>`'s reason line, from the server's `admitted` flag (U3). **`REHOME_TITLE`
+moved to `DRIVES.REHOME_TITLE`** (`user-drives-prompt.md` §7.4, 0.7.2, U3) rather than being copied
+here too — the re-home confirm dialog it heads lives on `/drives`, the body is the server's 409
+verbatim (§7.1), Cancel is `PEOPLE.CANCEL`, and the confirm is `DRIVES.SAVE_CTA` painted
+`destructive` — the action IS saving the drive, and it strands work.
 
 **Server-composed member doors — `PROVIDER_MEMBER` (parsed; the `DRIVE_MEMBER` precedent: keyed in
 the module AND byte-checked against the Go literal, `user-drives-copy.test.ts`'s §7.7 check). A
@@ -790,9 +792,10 @@ stays allowed):**
 | `KIND_WP_UNENFORCED` | Members can clone from any enabled provider. |
 | `KIND_WP_ENFORCED` | A member can only clone from providers granted to them. A repository on any other provider is refused at launch, with the reason. |
 
-**U3 → `user-drives-prompt.md` §7.6 / `user-drives-copy.ts` (F139/F052 — the two
-`user_drive_unavailable` values with no door sentence; `groups_snapshot_stale` reuses
-`MEMBER.DENIED_STALE_GROUPS` and `unmountable` reuses `REFUSED_BACKEND`):**
+**U3 → `user-drives-prompt.md` §7.6 / `user-drives-copy.ts` (F139/F052 — two new sentences for
+`/me.user_drive_unavailable`'s four values; `groups_snapshot_stale` reuses `MEMBER.DENIED_STALE_
+GROUPS` verbatim, and `unmountable` renders `NR_UNAVAILABLE` too — NOT `REFUSED_BACKEND`, whose
+`{reason}` is launch-time-only prose `driveUnavailableReason` discards before `/me` ever sees it):**
 
 | Key | String |
 |---|---|
@@ -897,7 +900,10 @@ that stays until the next save** — a count of newly-refused sources is worth r
 
 **Q9.** `DRIVES_OFF_BANNER`'s home: **(a) this module** (keyed here, rendered on `/drives`) — the
 switch it describes is here; **(b) `user-drives-prompt.md` §7.4** with U1. Either way the string is
-the same; (b) moves one row and one count.
+the same; (b) moves one row and one count. **Resolved (b), 0.7.2, landed by U3 in §7.2 (not §7.4 —
+DRIVES's own screen-banner rows sit beside `SAVE_CTA` there, not the write-refusal table):** the
+banner renders on the screen that already owns every other string beside it, and a member of this
+module with zero consumers is worse than one row moved.
 
 **Q10.** The step's done rule and badge: the plan carries both `enabledGitProviders > 0` /
 `Ready · N providers` (§9.1) and `≥ 1 enabled agent row` / `Ready · N agents` (§5c.4) for the one

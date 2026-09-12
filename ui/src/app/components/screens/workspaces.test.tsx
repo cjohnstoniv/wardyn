@@ -39,6 +39,7 @@ import { WorkspacesScreen, sourceSubLine, workspaceImage } from "./workspaces";
 import { WorkspaceLLMCredDialog } from "./workspace-llm-cred";
 import { OperatorProvider, RoleProvider } from "../wardyn/operator-context";
 import { DRIVES } from "../../lib/user-drives-copy";
+import { PROVIDERS } from "../../lib/workspace-providers-copy";
 
 function renderScreen() {
   return render(
@@ -115,6 +116,60 @@ describe("WorkspacesScreen — list columns", () => {
     renderScreen();
     await screen.findByText("payments");
     expect(screen.getByText("—")).toBeInTheDocument();
+  });
+});
+
+// A3's per-repo-source `admitted` flag (§5.3) — the `user_drive_unavailable`
+// precedent's shape: the row present, dimmed, never removed, with one
+// sentence naming neither a base URL nor a row id (the server withholds both).
+describe("WorkspacesScreen — a source is not an enabled provider", () => {
+  // A real https URL as the workspace's OWN source (rendered plainly
+  // elsewhere on the row, same as any onboarded repo) makes the "no base
+  // URL" check non-vacuous — a slug like "acme/payments" would never contain
+  // "https://" regardless of whether the render code leaked anything.
+  const REPO_URL = "https://git.acme.example/acme/payments";
+
+  it("dims the row and renders CARD_NOT_ADMITTED under the source, with no base URL and no row id", async () => {
+    const w = ws({}, {
+      id: "ws-secret-1",
+      kind: "repo",
+      source: REPO_URL,
+      status: "scanned",
+    }) as unknown as Workspace & { sources: unknown[] };
+    w.sources = [{ type: "repo", source: REPO_URL, admitted: false }];
+    listWorkspacesMock.mockResolvedValue([w]);
+    renderScreen();
+    const text = await screen.findByText(PROVIDERS.CARD_NOT_ADMITTED);
+    expect(text).toBeInTheDocument();
+    // Byte-exact — nothing appended to the frozen sentence itself, so neither
+    // the provider's base URL nor the workspace's own row id could have
+    // leaked into it (the server's `admitted` flag carries nothing else).
+    expect(text.textContent).toBe(PROVIDERS.CARD_NOT_ADMITTED);
+    expect(text.textContent).not.toContain("https://");
+    expect(text.textContent).not.toContain("ws-secret-1");
+    expect(screen.getByRole("row", { name: /payments/ })).toHaveClass("opacity-70");
+  });
+
+  it("a row with admitted:true renders no sentence", async () => {
+    const w = ws({}, { kind: "repo", source: "acme/payments", status: "scanned" }) as unknown as Workspace & {
+      sources: unknown[];
+    };
+    w.sources = [{ type: "repo", source: "acme/payments", admitted: true }];
+    listWorkspacesMock.mockResolvedValue([w]);
+    renderScreen();
+    await screen.findByText("payments");
+    expect(screen.queryByText(PROVIDERS.CARD_NOT_ADMITTED)).toBeNull();
+  });
+
+  it("an older daemon's absent `admitted` key (undefined, never false) renders no sentence", async () => {
+    const w = ws({}, { kind: "repo", source: "acme/payments", status: "scanned" }) as unknown as Workspace & {
+      sources: unknown[];
+    };
+    w.sources = [{ type: "repo", source: "acme/payments" }];
+    listWorkspacesMock.mockResolvedValue([w]);
+    renderScreen();
+    await screen.findByText("payments");
+    expect(screen.queryByText(PROVIDERS.CARD_NOT_ADMITTED)).toBeNull();
   });
 });
 

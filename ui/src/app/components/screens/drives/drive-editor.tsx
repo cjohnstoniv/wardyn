@@ -26,6 +26,11 @@
 //     the console cannot read, so a host-root refusal is POST-ATTEMPT: the
 //     console contributes SAVE_REFUSED_TITLE and the body is the server's text,
 //     verbatim. SAVE_ERROR is the other failure — no answer at all.
+//  4. A 409 IS NOT THE SAME REFUSAL (UD-rehome, 0.7.2, U3). An identity-
+//     affecting edit on a drive WITH allocations meets driveRehomeGuard's
+//     confirm gate, not "this is written wrong" — the confirm dialog owns it,
+//     over the server's text verbatim, and retries the SAME save with
+//     `?confirm=rehome` (api/drives.ts's `confirmRehome`).
 //
 // Every product string comes from user-drives-copy.ts. This file adds none.
 import * as React from "react";
@@ -42,6 +47,16 @@ import {
   type UserDriveInput,
 } from "../../../lib/api/drives";
 import { DRIVES, PEOPLE } from "../../../lib/user-drives-copy";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../../ui/alert-dialog";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
@@ -117,6 +132,11 @@ export function DriveEditor({
   // `title` is set for a refusal the SERVER composed; a transport failure has no
   // server text at all and renders SAVE_ERROR alone.
   const [error, setError] = React.useState<{ title?: string; message: string } | null>(null);
+  // driveRehomeGuard's 409 (UD-rehome, U3): an identity-affecting edit
+  // (backend/host_root/storage_class/home_template) on a drive with
+  // allocations. Its message is the confirm dialog's body verbatim — the
+  // console contributes only the heading (REHOME_TITLE).
+  const [rehome, setRehome] = React.useState<string | null>(null);
 
   const managed = isManagedBackend(backend);
   // The rule runs BOTH ways, and until 2026-09-03 only one way was gated here.
@@ -137,7 +157,7 @@ export function DriveEditor({
     if (isManagedBackend(b) && home !== "hash") setHome("hash");
   };
 
-  const save = async () => {
+  const save = async (confirmRehome = false) => {
     setSaving(true);
     setError(null);
     const input: UserDriveInput = {
@@ -151,10 +171,17 @@ export function DriveEditor({
       reclaim,
     };
     try {
-      if (drive) await api.updateDrive(drive.id, input);
+      if (drive) await api.updateDrive(drive.id, input, confirmRehome);
       else await api.createDrive(input);
       onSaved();
     } catch (e) {
+      // A 409 on an EDIT (never on create — there is no prior row to re-home)
+      // is driveRehomeGuard's own confirm gate, not a "this is written wrong"
+      // refusal: the confirm dialog owns it instead of SAVE_REFUSED_TITLE.
+      if (drive && e instanceof HttpError && e.status === 409) {
+        setRehome(e.message);
+        return;
+      }
       // The server names the path, the roots, the prefix, the backend and the
       // runner — all of which a frozen sentence would have had to drop. The
       // console contributes only the heading.
@@ -325,11 +352,38 @@ export function DriveEditor({
         </Button>
         {/* The screen's ONE `default` button while the editor is open — the
             allocation form below collapses and takes its teal with it. */}
-        <Button onClick={save} disabled={disabled || saving || noBackend || !name.trim()}>
+        <Button onClick={() => save()} disabled={disabled || saving || noBackend || !name.trim()}>
           {saving ? <Loader2 className="size-4 animate-spin" /> : null}
           {DRIVES.SAVE_CTA}
         </Button>
       </div>
+
+      {/* UD-rehome (U3): driveRehomeGuard's 409 on an identity-affecting edit
+          of an ALLOCATED drive. The body is the server's text verbatim; the
+          console contributes only REHOME_TITLE. Confirm reuses SAVE_CTA
+          painted destructive — the action IS saving the drive, and it strands
+          every allocated person's work if confirmed. */}
+      <AlertDialog open={!!rehome} onOpenChange={(o) => !o && setRehome(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{DRIVES.REHOME_TITLE}</AlertDialogTitle>
+            <AlertDialogDescription>{rehome}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{PEOPLE.CANCEL}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                setRehome(null);
+                void save(true);
+              }}
+              className="bg-danger text-danger-foreground hover:bg-danger/90"
+            >
+              {DRIVES.SAVE_CTA}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

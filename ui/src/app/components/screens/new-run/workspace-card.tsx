@@ -40,14 +40,26 @@
 // The door is checked FIRST, and independently of the allocation, because
 // "denied AND unallocated" is a real state in which the obvious advice — ask
 // an admin for an allocation — is the wrong advice.
+//
+// A FIFTH bit, /me.user_drive_unavailable (0.7.2, R1-F139 == R4-F052), rides
+// beside the door and the allocation and outranks the allocation the same
+// way: when /me itself could not answer for this caller's drive, `drive` is
+// already null (the server suppresses it), so the fifth bit is what tells
+// "no allocation" apart from "couldn't say" and gives the reason line a
+// sentence instead of silently falling into the absent row. It is checked
+// AFTER the door (a resolved, named deny still outranks an unrelated resolve
+// failure) and BEFORE `!drive` (see unavailableReason below for which of the
+// four closed tokens gets which sentence).
 import * as React from "react";
 import { Plus } from "lucide-react";
 import type { MeCapabilities, Workspace } from "../../../lib/types";
 import type { MeUserDrive } from "../../../lib/api/health";
 import { capabilityAllowed } from "../../../lib/capabilities";
+import { MEMBER } from "../../../lib/governance-copy";
 import { DENIED } from "../../../lib/permissions-copy";
 import { DRIVE_MEMBER } from "../../../lib/user-drives-copy";
 import { driveModeWord, driveSizeLabel } from "../../../lib/user-drives-display";
+import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { statusWord } from "../../../lib/workspace-status";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
@@ -55,7 +67,34 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { makeMono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
 import { SectionCard } from "./new-run-primitives";
+import { hasSourceNotAdmitted } from "./wizard-types";
 import type { WizardState } from "./wizard-types";
+
+// /me.user_drive_unavailable's four closed tokens (user_drives_resolve.go),
+// mapped to the sentence the reason line renders. Two are new copy
+// (NR_UNAVAILABLE / NR_GOVERNANCE_UNAVAILABLE); `groups_snapshot_stale`
+// reuses the launch path's own MEMBER.DENIED_STALE_GROUPS verbatim — all
+// three per workspace-providers-prompt.md §7.7 (U3). `unmountable` wraps
+// driveMountFor's specific reason (REFUSED_BACKEND's {reason}) ONLY at
+// launch — driveUnavailableReason deliberately discards it before it reaches
+// /me, so there is no {reason} to fill REFUSED_BACKEND with here. Q14 (same
+// doc) left this token's own card state to a later mock round; until then it
+// falls back to the same generic line `unavailable` renders — both are
+// honestly "couldn't confirm this, ask an admin" for a member who has no
+// more specific advice to act on.
+function unavailableReason(token: string): string | null {
+  switch (token) {
+    case "groups_snapshot_stale":
+      return MEMBER.DENIED_STALE_GROUPS;
+    case "governance_unavailable":
+      return DRIVE_MEMBER.NR_GOVERNANCE_UNAVAILABLE;
+    case "unmountable":
+    case "unavailable":
+      return DRIVE_MEMBER.NR_UNAVAILABLE;
+    default:
+      return null;
+  }
+}
 
 // Backtick-mono rendering (user-drives-prompt.md §7's header rule): the mount
 // target is a literal and renders font-mono wherever it appears, while the
@@ -80,18 +119,27 @@ function ReasonLine({ children }: { children: React.ReactNode }) {
 function DriveBlock({
   drive,
   deniedBy,
+  unavailable,
   enabled,
   readOnly,
   patch,
 }: {
   drive: MeUserDrive | null;
   deniedBy: string;
+  /** /me.user_drive_unavailable — one of the four closed tokens, or "". */
+  unavailable: string;
   enabled: boolean;
   readOnly: boolean;
   patch: (p: Partial<WizardState>) => void;
 }) {
   // The door outranks everything, allocation or not — see the header note.
   if (deniedBy) return <ReasonLine>{DRIVE_MEMBER.NR_DENIED(deniedBy)}</ReasonLine>;
+  // /me itself could not answer — `drive` is already null for every one of
+  // these tokens (the server suppresses it alongside the reason), so this
+  // must be checked before the `!drive` fallthrough below or it would render
+  // as the silent absent row instead of naming why.
+  const reason = unavailable ? unavailableReason(unavailable) : null;
+  if (reason) return <ReasonLine>{reason}</ReasonLine>;
   // No allocation and no door: no checkbox, no line, no placeholder.
   if (!drive) return null;
   if (drive.paused) return <ReasonLine>{DRIVE_MEMBER.NR_PAUSED}</ReasonLine>;
@@ -167,23 +215,31 @@ export function WorkspaceCard({
   onAddWorkspace,
   drive,
   driveDeniedBy,
+  driveUnavailable,
 }: {
   state: WizardState;
   patch: (p: Partial<WizardState>) => void;
   workspaces: Workspace[];
   caps: MeCapabilities | null;
   onAddWorkspace: () => void;
-  // /me's two drive bits. Both default to "nothing to show" for an unresolved
-  // or failed read, which renders as today's card — the honest answer, since
-  // the server resolver itself answers every failure with nil.
+  // /me's drive bits. All default to "nothing to show" for an unresolved or
+  // failed read, which renders as today's card — the honest answer, since
+  // the server resolver itself answers every failure with nil/"".
   drive: MeUserDrive | null;
   driveDeniedBy: string;
+  driveUnavailable?: string;
 }) {
   // Whether the workspace this run is aimed at is one the caller may launch
   // against. Advisory — denyMemberRequest is the real gate.
   const pickedWorkspaceId = state.workspaces[0]?.workspaceId;
+  const pickedWorkspace = workspaces.find((w) => w.id === pickedWorkspaceId);
   const selectedWorkspaceUngranted =
     !!pickedWorkspaceId && !capabilityAllowed(caps, "workspace", pickedWorkspaceId);
+  // A3's per-repo-source `admitted` flag (§5.3): the same "not an enabled git
+  // provider" refusal the workspace-row state renders (workspaces.tsx), here
+  // as the Select's own reason line — the server withholds the base URL and
+  // the row id, so PROVIDERS.CARD_NOT_ADMITTED names neither.
+  const selectedNotAdmitted = !!pickedWorkspace && hasSourceNotAdmitted(pickedWorkspace);
 
   return (
     <SectionCard title="Workspace">
@@ -218,9 +274,13 @@ export function WorkspaceCard({
       {selectedWorkspaceUngranted && (
         <p className="mt-2 text-xs text-muted-foreground">{DENIED.WORKSPACE_BODY}</p>
       )}
+      {selectedNotAdmitted && (
+        <p className="mt-2 text-xs text-muted-foreground">{PROVIDERS.CARD_NOT_ADMITTED}</p>
+      )}
       <DriveBlock
         drive={drive}
         deniedBy={driveDeniedBy}
+        unavailable={driveUnavailable ?? ""}
         enabled={state.driveEnabled}
         readOnly={state.driveReadOnly}
         patch={patch}

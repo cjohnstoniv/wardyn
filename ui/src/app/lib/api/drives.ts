@@ -108,6 +108,14 @@ export interface UserDrivesSnapshot {
   grant_total?: number;
   host_roots_configured: boolean;
   runner_target: string;
+  /**
+   * The ORG SWITCH (`storage.user_drive.disabled` on the providers block,
+   * 0.7.2/S2) — not the per-profile door, which is a member's own and answered
+   * per principal on `/me`, and not derived from the rows below, which is
+   * exactly why the console cannot compute it. `true` means every drive and
+   * grant write answers 422 and no run mounts one; everything here is kept.
+   */
+  disabled: boolean;
 }
 
 // userDriveRequest — the POST/PUT body. id/created_at/updated_at/created_by are
@@ -226,6 +234,7 @@ export const drives = {
       grant_total: body.grant_total,
       host_roots_configured: !!body.host_roots_configured,
       runner_target: body.runner_target ?? "",
+      disabled: !!body.disabled,
     };
   },
 
@@ -239,8 +248,14 @@ export const drives = {
 
   // PUT /api/v1/drives/{id} -> 200. Rename included: ON DELETE RESTRICT makes
   // delete-and-recreate impossible for an allocated drive.
-  async updateDrive(id: string, input: UserDriveInput): Promise<UserDrive> {
-    const res = await wfetch(`/drives/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(input) });
+  //
+  // An identity-affecting edit (backend/host_root/storage_class/home_template)
+  // on a drive with allocations answers 409 (driveRehomeGuard) UNLESS
+  // `confirmRehome` is set, which re-sends the SAME body with `?confirm=rehome`
+  // — the one query param the guard reads (user_drives.go's driveRehomeConfirm).
+  async updateDrive(id: string, input: UserDriveInput, confirmRehome = false): Promise<UserDrive> {
+    const qs = confirmRehome ? "?confirm=rehome" : "";
+    const res = await wfetch(`/drives/${encodeURIComponent(id)}${qs}`, { method: "PUT", body: JSON.stringify(input) });
     return asJson<UserDrive>(res);
   },
 

@@ -15,7 +15,7 @@
 // their own.
 //
 // workspace-providers-copy.test.ts PARSES §7.2-§7.5 + §7.7 back out of the
-// prompt doc and compares all 93 keys below against them (§7.6 is STAGING —
+// prompt doc and compares all 91 keys below against them (§7.6 is STAGING —
 // field-report strings owned by other lanes — and is excluded, the way this
 // doc's own header says: `/^### 7\.[2-57]\b/`), so a swapped hyphen, a dropped
 // ellipsis or a new doc row fails a gate instead of shipping.
@@ -113,10 +113,9 @@ export const PROVIDERS = {
   FIELD_DRIVES_ENABLED: "User drives",
   DRIVES_ENABLED_HINT:
     "Off means this deployment offers no drives: nothing is mounted and every drive write is refused. Existing drives and allocations are kept.",
-  // Renders on /drives (an EmptyState-toned banner above the drives table),
-  // keyed here because the switch it describes lives here (Q9).
-  DRIVES_OFF_BANNER:
-    "User drives are turned off for this deployment under Workspace providers. Everything here is kept; nothing mounts until they are turned back on.",
+  // DRIVES_OFF_BANNER (Q9) MOVED to DRIVES.DRIVES_OFF_BANNER
+  // (user-drives-copy.ts) — the banner it describes renders on /drives, and
+  // that module already owns every other string that screen renders.
   FIELD_MAX_DRIVE: "Largest drive (MiB)",
   MAX_DRIVE_HINT: "An allocation or override above this is refused at write and clamped at resolve. 0 means no ceiling.",
   // Renders once, as the plain note under FIELD_MAX_DRIVE. The drives
@@ -130,11 +129,8 @@ export const PROVIDERS = {
   // Renders on the workspace row and as the New Run Workspace <Select>'s
   // reason line, from the server's per-source `admitted` flag (U3's wire).
   CARD_NOT_ADMITTED: "Not an enabled git provider — runs can't clone this until an admin enables its host.",
-  // The ONE row the re-home confirm dialog adds (lands in
-  // user-drives-prompt.md §7.4 with U3); the body is the server's 409
-  // verbatim, Cancel is PEOPLE.CANCEL, the confirm is DRIVES.SAVE_CTA painted
-  // destructive.
-  REHOME_TITLE: "Saving this moves people's directories",
+  // REHOME_TITLE MOVED to DRIVES.REHOME_TITLE (user-drives-copy.ts) — the
+  // re-home confirm dialog it heads lives on /drives, not this screen.
 
   // ---- §7.5 the card, the step, and the entry points ----
   CARD_LEAD: "Which git hosts a run may clone, and the storage ceilings it works inside.",

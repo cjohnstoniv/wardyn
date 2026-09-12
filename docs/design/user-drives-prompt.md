@@ -581,6 +581,7 @@ confirming happens through the API.
 |---|---|
 | `TITLE` | User drives |
 | `LEAD` | Persistent storage a run can mount at `/home/agent/drive`. An admin registers a drive and allocates it to people or groups; each person gets their own directory in it, and chooses per run whether to mount it. |
+| `DRIVES_OFF_BANNER` | User drives are turned off for this deployment under Workspace providers. Everything here is kept; nothing mounts until they are turned back on. |
 | `DRIVES_TITLE` | Drives |
 | `DRIVES_LEAD` | A drive is one place storage comes from: a share your platform already mounts, or a volume Wardyn creates per person. |
 | `COL_NAME` | Name |
@@ -661,7 +662,11 @@ prompt.md` §2.8/§7.1) is Kubernetes' fifth enforcement word for ephemeral scra
 measures periodically and evicts the pod over the limit, so the write itself is never refused.
 `HOME_RULE` renders under the directory-name field for every option.
 `SIZE_HINT_REQUIRED` replaces `SIZE_HINT` under the Size field when the backend is `k8s_pvc`
-(Q7); no required-marker glyph exists — the hint carries the word.
+(Q7); no required-marker glyph exists — the hint carries the word. `DRIVES_OFF_BANNER` (0.7.2,
+U3 — Q9 resolved (b)) renders ABOVE the drives table, ONE notice, whenever `GET /drives`'s
+`disabled` flag (S2) is true — the table beneath it, the New drive action and every existing row
+render exactly as they do with the switch on; only a write meets the 422 the switch describes.
+With the switch off nothing else on the screen changes.
 
 ### 7.3 `DRIVES` — allocations and the preview
 
@@ -772,6 +777,7 @@ repointed an existing row — not a toast: it is worth reading twice.
 | `DELETE_RESTRICT_BODY(name, n)` | "{name}" is still allocated to {n} subject / {n} subjects. Remove those allocations first. Deleting the row never deletes data — their directories stay until you reclaim them. |
 | `FETCH_FAILED_TITLE` | Couldn't load user drives |
 | `FETCH_FAILED_BODY` | Something went wrong reaching the server. Allocations that already exist still bind every run — this list just can't show them right now. |
+| `REHOME_TITLE` | Saving this moves people's directories |
 
 `DELETE_CONFIRM` is shown only when the drives table reports `ALLOCATED_COUNT` = 0 — otherwise
 the dialog opens pre-filled with `DELETE_RESTRICT_TITLE / _BODY` and its confirm disabled
@@ -779,7 +785,11 @@ the dialog opens pre-filled with `DELETE_RESTRICT_TITLE / _BODY` and its confirm
 confirm still enabled. `SAVE_REFUSED_TITLE` (§7.2) heads every 400 the editor can meet, over the
 server's text; `SAVE_ERROR` is the unreachable-server arm, not a refusal. Retry on fetch-failed
 is `ACCESS_STATE.FETCH_FAILED_RETRY`. There is no "drives not configured" state: with no drives
-the feature is empty, not unconfigured, and `EMPTY_TITLE / EMPTY_BODY` say so.
+the feature is empty, not unconfigured, and `EMPTY_TITLE / EMPTY_BODY` say so. `REHOME_TITLE`
+(0.7.2, U3) is the ONE row the re-home confirm dialog adds, over `driveRehomeGuard`'s 409 (§7.1)
+verbatim as the dialog body — the console contributes only the heading. Cancel is `PEOPLE.CANCEL`;
+the confirm is `SAVE_CTA` (§7.2) painted destructive, because the action IS saving the drive and
+it strands the allocated people's work if confirmed.
 
 ### 7.5 `DRIVES` — the card (setup step and Settings) and the entry points
 
@@ -812,6 +822,8 @@ SUPER only.
 | `NR_READONLY_TOGGLE` | Mount read-only for this run |
 | `NR_PAUSED` | Your drive is paused by your admin. |
 | `NR_DENIED(profile)` | Your governance profile "{profile}" does not allow mounting a drive. |
+| `NR_UNAVAILABLE` | Your drive couldn't be checked, so it stays unmounted for this run. Try again, or ask an admin. |
+| `NR_GOVERNANCE_UNAVAILABLE` | Your governance profile couldn't be resolved, so your drive stays unmounted for this run — sign in again. |
 | `GS_DRIVE_CHIP(name, size, mode)` | Drive · {name}, {size}, {mode} |
 | `GS_DRIVE_CHIP_NOSIZE(name, mode)` | Drive · {name}, {mode} |
 | `GS_DRIVE_CHIP_PAUSED(name)` | Drive · {name} · Paused |
@@ -825,10 +837,19 @@ run, so the sentence never promises persistence a read-only mount cannot give. `
 `NR_READONLY_TOGGLE` is on. `size_mib = 0`
 selects the `_NOSIZE` twin rather than rendering `SIZE_NONE` inside a member's sentence.
 `NR_READONLY_TOGGLE` renders only when the allocation is writable and defaults **off** (Q5).
-The two reason lines render **in place of** the checkbox: an unmountable drive is not a
-disabled checkbox with a tooltip, it is one sentence where the checkbox would be. There is no
-third: no-allocation-and-no-door is the absent row (§2.5), and the launch-path answer to that
-same condition is a SERVER string (`REFUSED_NO_GRANT`, §7.7) — a reply to an attempt, not a
+The four reason lines render **in place of** the checkbox: an unmountable drive is not a
+disabled checkbox with a tooltip, it is one sentence where the checkbox would be. `NR_UNAVAILABLE`
+and `NR_GOVERNANCE_UNAVAILABLE` (0.7.2, U3 — R1-F139 == R4-F052) are two of `/me.user_drive_
+unavailable`'s four tokens; `groups_snapshot_stale` reuses existing canon rather than re-freezing
+it (`MEMBER.DENIED_STALE_GROUPS`, §7.1, already the sentence a member meets for that condition).
+`unmountable` renders `NR_UNAVAILABLE` too, NOT `REFUSED_BACKEND` (§7.7): `REFUSED_BACKEND`'s
+`{reason}` is `driveMountFor`'s launch-time prose, and `driveUnavailableReason`
+(`user_drives_resolve.go`) deliberately discards it before it reaches `/me` — the wire carries only
+the bare token, so there is no `{reason}` here to fill it with. A member who cannot mount for either
+reason gets the same honest "couldn't be checked, ask an admin" line; a later mock round can give
+`unmountable` its own sentence once the resolver has something more specific to say pre-emptively.
+There is still no fifth: no-allocation-and-no-door is the absent row (§2.5), and the launch-path answer to
+that same condition is a SERVER string (`REFUSED_NO_GRANT`, §7.7) — a reply to an attempt, not a
 caption on an offer nobody was made. `GS_DRIVE_CHIP`
 follows `BARRIER_CHIP`'s `Label · value` shape (Q2) and sits beside `MEMBER.GS_CHIP`, the
 governance chip, in the same row. `GS_DRIVE_BODY` renders in the "Add your workspace" card,

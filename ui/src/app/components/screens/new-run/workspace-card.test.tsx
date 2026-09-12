@@ -16,8 +16,11 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { MeUserDrive } from "../../../lib/api/health";
+import { MEMBER } from "../../../lib/governance-copy";
 import { baseMeDrive } from "../../../lib/test-fixtures";
+import type { Workspace } from "../../../lib/types";
 import { DRIVES, DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
+import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { WorkspaceCard } from "./workspace-card";
 import { initialWizardState, type WizardState } from "./wizard-types";
 
@@ -33,6 +36,8 @@ const drive = baseMeDrive;
 function renderCard(opts: {
   drive?: MeUserDrive | null;
   deniedBy?: string;
+  unavailable?: string;
+  workspaces?: Workspace[];
   state?: Partial<WizardState>;
 } = {}) {
   const patch = vi.fn();
@@ -41,11 +46,12 @@ function renderCard(opts: {
     <WorkspaceCard
       state={state}
       patch={patch}
-      workspaces={[]}
+      workspaces={opts.workspaces ?? []}
       caps={null}
       onAddWorkspace={() => {}}
       drive={opts.drive ?? null}
       driveDeniedBy={opts.deniedBy ?? ""}
+      driveUnavailable={opts.unavailable ?? ""}
     />,
   );
   return { patch, view };
@@ -192,5 +198,93 @@ describe("WorkspaceCard — the governance door", () => {
     renderCard({ drive: drive({ paused: true }), deniedBy: profile });
     expect(screen.getAllByTestId("nr-drive-reason")).toHaveLength(1);
     expect(screen.getByTestId("nr-drive-reason")).toHaveTextContent(DM.NR_DENIED(profile));
+  });
+});
+
+// /me.user_drive_unavailable's four closed tokens (R1-F139 == R4-F052): the
+// server already suppresses `drive` to null for every one of them, so each
+// gets its own reason line instead of falling into the absent row.
+describe("WorkspaceCard — /me could not answer for the drive", () => {
+  it("groups_snapshot_stale renders the launch path's own MEMBER.DENIED_STALE_GROUPS verbatim", () => {
+    renderCard({ drive: null, unavailable: "groups_snapshot_stale" });
+    expect(screen.getByTestId("nr-drive-reason")).toHaveTextContent(MEMBER.DENIED_STALE_GROUPS);
+    expect(screen.queryByTestId("nr-drive")).toBeNull();
+  });
+
+  it("unavailable renders NR_UNAVAILABLE", () => {
+    renderCard({ drive: null, unavailable: "unavailable" });
+    expect(screen.getByTestId("nr-drive-reason")).toHaveTextContent(DM.NR_UNAVAILABLE);
+  });
+
+  it("unmountable falls back to the same generic line as unavailable (no {reason} reaches /me)", () => {
+    renderCard({ drive: null, unavailable: "unmountable" });
+    expect(screen.getByTestId("nr-drive-reason")).toHaveTextContent(DM.NR_UNAVAILABLE);
+  });
+
+  it("governance_unavailable renders NR_GOVERNANCE_UNAVAILABLE", () => {
+    renderCard({ drive: null, unavailable: "governance_unavailable" });
+    expect(screen.getByTestId("nr-drive-reason")).toHaveTextContent(DM.NR_GOVERNANCE_UNAVAILABLE);
+  });
+
+  it("outranks an allocation the wire also sent (the server suppresses it, but the reason still wins)", () => {
+    renderCard({ drive: drive(), unavailable: "unavailable" });
+    expect(screen.getAllByTestId("nr-drive-reason")).toHaveLength(1);
+    expect(screen.getByTestId("nr-drive-reason")).toHaveTextContent(DM.NR_UNAVAILABLE);
+    expect(screen.queryByTestId("nr-drive")).toBeNull();
+  });
+
+  it("the governance door still outranks it — a named deny beats an unrelated resolve failure", () => {
+    renderCard({ drive: null, deniedBy: "Greenfield contractors", unavailable: "unavailable" });
+    expect(screen.getAllByTestId("nr-drive-reason")).toHaveLength(1);
+    expect(screen.getByTestId("nr-drive-reason")).toHaveTextContent(DM.NR_DENIED("Greenfield contractors"));
+  });
+});
+
+// A3's per-repo-source `admitted` flag (§5.3) — the workspace-row precedent's
+// "not an enabled git provider" state, rendered here as the Select's own
+// reason line.
+describe("WorkspaceCard — a selected workspace's source is not an enabled provider", () => {
+  function repoWorkspace(over: Partial<Workspace> = {}): Workspace {
+    return {
+      id: "ws-1",
+      name: "payments",
+      kind: "repo",
+      source: "acme/payments",
+      status: "scanned",
+      created_at: "",
+      updated_at: "",
+      sources: [{ type: "repo", source: "acme/payments", admitted: false }],
+      ...over,
+    };
+  }
+
+  it("names it under the Select once that workspace is picked, with no base URL and no row id", () => {
+    // A real https URL (rendered plainly elsewhere for any onboarded repo)
+    // makes the "no base URL" check non-vacuous, and a distinctive id proves
+    // neither leaks into the reason line specifically.
+    const ws = repoWorkspace({
+      id: "ws-secret-1",
+      source: "https://git.acme.example/acme/payments",
+      sources: [{ type: "repo", source: "https://git.acme.example/acme/payments", admitted: false }],
+    });
+    renderCard({ workspaces: [ws], state: { workspaces: [{ workspaceId: ws.id, enabledOptional: [] }] } });
+    const text = screen.getByText(PROVIDERS.CARD_NOT_ADMITTED);
+    expect(text).toBeInTheDocument();
+    // Byte-exact — the frozen sentence carries nothing else.
+    expect(text.textContent).toBe(PROVIDERS.CARD_NOT_ADMITTED);
+    expect(text.textContent).not.toContain("https://");
+    expect(text.textContent).not.toContain("ws-secret-1");
+  });
+
+  it("says nothing when the source IS admitted", () => {
+    const ws = repoWorkspace({ sources: [{ type: "repo", source: "acme/payments", admitted: true }] });
+    renderCard({ workspaces: [ws], state: { workspaces: [{ workspaceId: ws.id, enabledOptional: [] }] } });
+    expect(screen.queryByText(PROVIDERS.CARD_NOT_ADMITTED)).toBeNull();
+  });
+
+  it("says nothing when no workspace is picked yet", () => {
+    const ws = repoWorkspace();
+    renderCard({ workspaces: [ws] });
+    expect(screen.queryByText(PROVIDERS.CARD_NOT_ADMITTED)).toBeNull();
   });
 });

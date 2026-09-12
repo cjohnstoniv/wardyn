@@ -92,6 +92,15 @@ export function compositionSummary(ws: Workspace): string | null {
   return bits.join(" · ");
 }
 
+// Whether ANY of this workspace's attached sources is refused by the current
+// workspace-provider policy (`admitted === false`, A3's per-repo-source wire
+// flag — the ONLY value meaning "refused"; `undefined` means "nothing to
+// say", never "no"). ONE predicate so the /workspaces list row and the New
+// Run picker's reason line never diverge on what counts as not-admitted.
+export function hasSourceNotAdmitted(ws: Workspace): boolean {
+  return workspaceSources(ws).some((s) => s.admitted === false);
+}
+
 // Only TWO agents are valid on the wire — fix the old claude_code/codex/cursor
 // bug by constraining the picker to exactly these dotted ids.
 // SEAM: there is no harness/tool-catalog endpoint exposed to the UI yet (no GET

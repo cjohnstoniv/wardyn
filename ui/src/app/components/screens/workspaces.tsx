@@ -8,8 +8,9 @@ import { useNavigate } from "react-router-dom";
 import { FolderGit2, FolderOpen, Hourglass, MoreHorizontal, Plus, RotateCw, Trash2 } from "lucide-react";
 import { workspaces as api } from "../../lib/api/workspaces";
 import { LIST_LIMIT } from "../../lib/api/core";
-import { compositionSummary } from "./new-run/wizard-types";
+import { compositionSummary, hasSourceNotAdmitted } from "./new-run/wizard-types";
 import type { Workspace, WorkspaceKind, WorkspaceProfile } from "../../lib/types";
+import { PROVIDERS } from "../../lib/workspace-providers-copy";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import {
@@ -203,6 +204,11 @@ export function WorkspacesScreen() {
               {filtered.map((w) => {
                 const kindMeta = KIND_META[w.kind] ?? KIND_META.local_dir;
                 const image = workspaceImage(w);
+                // A3's per-repo-source `admitted` flag (§5.3): the row present,
+                // dimmed, never removed — the `user_drive_unavailable`
+                // precedent's shape. No base URL, no row id: the server
+                // already withholds both from PROVIDERS.CARD_NOT_ADMITTED.
+                const notAdmitted = hasSourceNotAdmitted(w);
                 return (
                   <TableRow
                     key={w.id}
@@ -221,7 +227,7 @@ export function WorkspacesScreen() {
                         openDetail(w.id);
                       }
                     }}
-                    className="cursor-pointer"
+                    className={notAdmitted ? "cursor-pointer opacity-70" : "cursor-pointer"}
                   >
                     <TableCell>
                       <span className="inline-flex items-center gap-2.5">
@@ -238,6 +244,11 @@ export function WorkspacesScreen() {
                       >
                         {sourceSubLine(w)}
                       </Mono>
+                      {notAdmitted && (
+                        <p className="mt-1 max-w-[260px] text-meta text-muted-foreground">
+                          {PROVIDERS.CARD_NOT_ADMITTED}
+                        </p>
+                      )}
                     </TableCell>
                     <TableCell>
                       <Chip tone="neutral" mono={image.kind === "ref"} className="max-w-[220px] truncate" title={image.label}>

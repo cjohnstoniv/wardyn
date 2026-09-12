@@ -115,6 +115,7 @@ function snapshot(over: Partial<UserDrivesSnapshot> = {}): UserDrivesSnapshot {
     ],
     host_roots_configured: false,
     runner_target: "k8s",
+    disabled: false,
     ...over,
   };
 }
@@ -264,6 +265,28 @@ describe("DrivesScreen — states", () => {
     const teal = tealButtons();
     expect(teal).toHaveLength(1);
     expect(teal[0]).toHaveTextContent(DRIVES.ADD_CTA);
+  });
+});
+
+// The org switch (GET /drives's `disabled`, S2/0.7.2): one notice above a
+// table that still renders in full — everything kept, nothing mounts.
+describe("DrivesScreen — the org-switch banner", () => {
+  it("renders DRIVES_OFF_BANNER when the snapshot says disabled, above the untouched table", async () => {
+    renderScreen(snapshot({ disabled: true }));
+    expect(await screen.findByText(DRIVES.DRIVES_OFF_BANNER)).toBeInTheDocument();
+    // The switch changes nothing else: both drives, New drive and Allocate
+    // all render exactly as they do with the switch off (SCRATCH.name also
+    // seeds the allocation form's Drive select, hence getAllByText here).
+    expect(screen.getByText(HOMES.name)).toBeInTheDocument();
+    expect(screen.getAllByText(SCRATCH.name).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: DRIVES.NEW_CTA })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: DRIVES.ADD_CTA })).toBeInTheDocument();
+  });
+
+  it("is absent when the switch is off", async () => {
+    renderScreen(snapshot({ disabled: false }));
+    await screen.findByText(HOMES.name);
+    expect(screen.queryByText(DRIVES.DRIVES_OFF_BANNER)).toBeNull();
   });
 });
 
@@ -453,6 +476,43 @@ describe("DrivesScreen — the editor offers only this runner's backends (Q3)", 
     updateDriveMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
     await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
     expect(await screen.findByText(DRIVES.SAVE_ERROR)).toBeInTheDocument();
+  });
+});
+
+describe("DrivesScreen — the re-home confirm dialog (UD-rehome, U3)", () => {
+  it("a 409 on an edit opens the confirm dialog over the server's text, and confirming retries with ?confirm=rehome", async () => {
+    const conflict =
+      'this drive is allocated to 2 subjects and this change re-homes them: backend "k8s_pvc_static" -> "k8s_pvc". Confirming is an API action, not a console one: re-send as PUT /drives/{id}?confirm=rehome.';
+    updateDriveMock.mockRejectedValueOnce(new HttpError(409, conflict));
+    updateDriveMock.mockResolvedValueOnce(HOMES);
+    renderScreen();
+    await screen.findByText(HOMES.name);
+    await userEvent.click(screen.getByRole("button", { name: `${DRIVES.EDIT} ${HOMES.name}` }));
+    await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(DRIVES.REHOME_TITLE)).toBeInTheDocument();
+    // The server's own text, verbatim — the console contributes only the heading.
+    expect(within(dialog).getByText(conflict)).toBeInTheDocument();
+    // A DIFFERENT refusal from the ordinary "written wrong" heading.
+    expect(screen.queryByText(DRIVES.SAVE_REFUSED_TITLE)).not.toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: DRIVES.SAVE_CTA }));
+    expect(updateDriveMock).toHaveBeenLastCalledWith(HOMES.id, expect.anything(), true);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("cancelling the confirm dialog saves nothing", async () => {
+    updateDriveMock.mockRejectedValueOnce(new HttpError(409, "this drive is allocated to 1 subject…"));
+    renderScreen();
+    await screen.findByText(HOMES.name);
+    await userEvent.click(screen.getByRole("button", { name: `${DRIVES.EDIT} ${HOMES.name}` }));
+    await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: PEOPLE.CANCEL }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(updateDriveMock).toHaveBeenCalledTimes(1);
   });
 });
 
