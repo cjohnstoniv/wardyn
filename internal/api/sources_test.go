@@ -33,6 +33,15 @@ type sourcesEndpointFake struct {
 func (s *sourcesEndpointFake) UpsertSource(ctx context.Context, src types.Source) (types.Source, error) {
 	return s.lib.UpsertSource(ctx, src)
 }
+
+// GetSiteConfig answers the EMPTY site config: no workspace-provider rows, which
+// is legacy open mode — so provider admission (0.7.2) is a no-op at this door and
+// every case below means exactly what it meant before it existed. The provider
+// legs live in workspace_admission_test.go, which drives the same handler with a
+// policy in place.
+func (s *sourcesEndpointFake) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
 func (s *sourcesEndpointFake) GetSource(_ context.Context, id uuid.UUID) (types.Source, error) {
 	for _, src := range s.lib.sources {
 		if src.ID == id {

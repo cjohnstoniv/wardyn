@@ -243,14 +243,25 @@ func TestCapabilityWorkspaceProviderAtEveryDoor(t *testing.T) {
 				assertNotRefused(t, w, "a capability bounds the tier below the one writing the grants")
 			})
 
-			// A row that CLAIMS the host and refuses anyway still names itself,
-			// so the capability check runs. Keying the gate on providerFor's
-			// admission bit instead of on the row skipped exactly this case —
-			// the disabled row, and the enabled row whose base path did not
-			// match, which is the case org-path scoping exists for.
-			t.Run("a DISABLED row still keys the check", func(t *testing.T) {
+			// A row that CLAIMS the host and refuses anyway still names itself, so
+			// denyMemberWorkspaceProviders keys on it (see that helper's own doc:
+			// keying on providerFor's admission BIT would skip exactly this case).
+			// At the DOOR, though, ADMISSION reaches it first (0.7.2, A3) and
+			// refuses it outright — a disabled row is the admin saying "off",
+			// which binds operators too, so it is never merely a missing grant.
+			// The refusal a member sees is therefore the admission sentence, and
+			// no authz.denied row is written: nobody was denied by a capability.
+			t.Run("a DISABLED row is refused by ADMISSION, ahead of the capability", func(t *testing.T) {
 				srv, w := door.fire(t, &capStore{enf: capProviderEnforced()}, capProviderDisabledSite(), door.member(t))
-				assertProviderDenied(t, srv, w)
+				if w.Code != http.StatusForbidden {
+					t.Fatalf("status = %d, want 403: %s", w.Code, w.Body.String())
+				}
+				if body := w.Body.String(); !strings.Contains(body, admitMember) {
+					t.Errorf("body = %s, want the admission refusal %q", body, admitMember)
+				}
+				if r := auditReasons(t, srv, "authz.denied"); len(r) != 0 {
+					t.Errorf("authz.denied reasons = %v; admission refused before any capability did", r)
+				}
 			})
 		})
 	}
@@ -272,11 +283,16 @@ func TestCapabilityWorkspaceProviderUnclaimedHostIsANoOp(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		sc   types.SiteConfig
+		// admitted says whether ADMISSION (0.7.2, A3) lets it through. The
+		// capability is a no-op EITHER WAY — that is this test's whole claim —
+		// but only the legacy-listed host is launchable, and conflating the two
+		// questions is what this separation exists to prevent.
+		admitted bool
 	}{
-		{"unclaimed host", capProviderSite()},
+		{"unclaimed host", capProviderSite(), false},
 		{"unclaimed host still on the legacy scm_hosts list", providersConfig(
 			[]types.GitProvider{githubRow(capProviderRowID, false, "https://github.com/acme")},
-			"gitlab.example.com")},
+			"gitlab.example.com"), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			door := providerRunDoor("POST /runs (legacy repo field)", body, nil)
@@ -284,7 +300,9 @@ func TestCapabilityWorkspaceProviderUnclaimedHostIsANoOp(t *testing.T) {
 			if r := auditReasons(t, srv, "authz.denied"); slices.Contains(r, "capability_"+capWorkspaceProvider) {
 				t.Errorf("authz.denied reasons = %v; a host no row claims must not be refused by the capability", r)
 			}
-			assertNotRefused(t, w, "the capability gate is a no-op for a host no row claims")
+			if tc.admitted {
+				assertNotRefused(t, w, "the capability gate is a no-op for a host no row claims")
+			}
 		})
 	}
 }

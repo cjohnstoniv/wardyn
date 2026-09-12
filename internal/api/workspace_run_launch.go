@@ -500,10 +500,19 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// member's sentence in the record panel, the one thing handleRecordWorkspace
 	// strips before answering 422. Nothing this check reads is built yet.
 	//
-	// THREE LINES, and a helper for the two they would otherwise be: this
-	// function is at the funlen ratchet (.golangci.yml, 150 non-comment lines),
-	// so the next lane to add a statement here extracts a block first.
-	if rerr := s.recordRosterRefusal(ctx, stepRunAgent); rerr != nil {
+	// AND PROVIDER ADMISSION (0.7.2), which earns its place here for every one of
+	// the reasons above: a record session's clone URLs are derived from
+	// ws.Sources by wireWorkspaceSource below — a PURE function with no *Server
+	// and no site config in scope — so the call belongs at this call site, ahead
+	// of the server-side build clone; a workspace onboarded before a provider row
+	// narrowed it must not keep recording through it; and its refusal is bare and
+	// pre-claim for the identical reasons.
+	//
+	// THREE LINES, and a helper for the two refusals they would otherwise be:
+	// this function is at the funlen ratchet (.golangci.yml, 150 non-comment
+	// lines), so the next lane to add a statement here extracts a block first —
+	// which is what recordLaunchRefusals is.
+	if rerr := s.recordLaunchRefusals(ctx, ws, stepRunAgent); rerr != nil {
 		return types.AgentRun{}, false, rerr
 	}
 	caps, cerr := s.cfg.Runner.Capabilities(ctx)

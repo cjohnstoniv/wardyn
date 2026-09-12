@@ -267,6 +267,16 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	if taskWarning != "" {
 		warnings = append(warnings, taskWarning)
 	}
+	// Provider admission ALREADY refused anything outside the enabled rows, at
+	// three doors above (the resolved spec, req.repo, req.devcontainer_repo).
+	// What is left to say is the one thing it ADMITTED on sufferance: a host the
+	// legacy scm_hosts list still names and no provider row claims. Said once
+	// here — the only run-create response with a warnings channel — over all
+	// three inputs, rather than at each door, so one host earns one sentence.
+	// The AUDIT half is not here: admitRepoSources records it at every one of the
+	// ten doors, so the eight with no warnings channel are not silent either.
+	warnings = append(warnings, s.legacyHostAdmissionWarnings(ctx,
+		append(repoLocatorsOf(spec.WorkspaceRepos), req.Repo, req.DevcontainerRepo)...)...)
 
 	// Record the model-access + requirements folds that ran ABOVE the confinement
 	// floor (SPINE-2). The spec was already mutated there — so the floor/grade saw
@@ -289,6 +299,11 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Provider-lane honesty, the same shape one line earlier in the pipeline: a
+	// credential lane the deployment's provider row does not permit was not wired,
+	// and the 201 says so (persistRunGrants collected the sentences as it declined
+	// each one).
+	warnings = append(warnings, gw.warnings...)
 	// SSH-lane honesty: drop the wiring for agents with no SSH clone lane
 	// (codex-cli) and advise BYOI images about the required tools.
 	warnings = append(warnings, s.applySSHLaneWarnings(ctx, req, runID, &gw)...)
@@ -442,14 +457,20 @@ func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWrite
 		writeError(w, code, "workspace: "+err.Error())
 		return nil, false
 	}
-	// A3: providerFor admission goes here.
+	// Both provider gates sit at this chokepoint, over the RESOLVED spec's repos
+	// — the un-bypassable one, reached alike by workspace_id, a stored policy and
+	// a hand-authored inline policy. ADMISSION runs first (the operator-binding
+	// question), then the member capability.
 	//
-	// The capability gate sits at the chokepoint the admission verdict will sit
-	// at, over the RESOLVED spec's repos — the un-bypassable one, reached alike
-	// by workspace_id, a stored policy and a hand-authored inline policy.
-	repos := make([]string, 0, len(spec.WorkspaceRepos))
-	for _, wr := range spec.WorkspaceRepos {
-		repos = append(repos, wr.Repo)
+	// HERE and not in validateWorkspaceSources above, which is the other function
+	// that sees the resolved spec: this scope holds the request, so the refusal
+	// can read the caller's tier (a member's 403 names the kind, an operator's 422
+	// lists the addresses) and answer the frozen sentence verbatim rather than
+	// through that function's "workspace: " error prefix. Its other two callers
+	// are the POLICY write doors (policies.go), where nothing clones.
+	repos := repoLocatorsOf(spec.WorkspaceRepos)
+	if s.admitRepoSources(w, r, repos...) {
+		return nil, false
 	}
 	if s.denyMemberWorkspaceProviders(w, r, "runs.workspace_provider", repos...) {
 		return nil, false

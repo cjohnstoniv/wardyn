@@ -341,6 +341,13 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnprocessableEntity, strings.TrimPrefix(lerr.Error(), errAgentNotEnabled.Error()+": "))
 			return
 		}
+		// Provider admission (0.7.2), the roster refusal's sibling and mapped the
+		// same way: the status and the sentence are the ones every other admission
+		// door answers, so "this repository is not on an enabled provider" costs
+		// the same here as it does at create.
+		if s.writeAdmissionLaunchRefusal(w, r, lerr) {
+			return
+		}
 		// A governance LIMIT is a refusal, not a fault: 403, the same status
 		// denyMemberGovernance answers when the identical limit refuses the
 		// identical principal's ordinary run. Both limits map here — the quota

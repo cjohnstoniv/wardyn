@@ -146,6 +146,13 @@ export interface WorkspaceSourceInput {
   ref?: string;
   target?: string;
   writable?: boolean;
+  // SERVER-OWNED, read-only: does this deployment's workspace-provider policy
+  // admit this repo source today? Present on repo sources only, and ABSENT on a
+  // deployment with no provider rows — so `admitted === false` is the ONLY value
+  // meaning "refused"; `undefined` means "nothing to say", never "no". Never sent
+  // on a write (the server drops it), and never recomputed here: the match rule
+  // has exactly one spelling, in Go.
+  admitted?: boolean;
 }
 
 export type WorkspaceBaseImageKind = "recommended" | "registry" | "custom" | "byo";

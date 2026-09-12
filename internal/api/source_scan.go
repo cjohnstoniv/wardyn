@@ -83,6 +83,14 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "a scan is already running for this source")
 			return
 		}
+		// Provider admission refused the clone: the policy answer, not a daemon
+		// fault — 422/403 with the same sentence every request door writes, never
+		// the 500 below.
+		if s.writeAdmissionLaunchRefusal(w, r, lerr) {
+			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
+				"source.scan", id.String(), "failure", mustJSON(map[string]any{"detail": lerr.Error()})))
+			return
+		}
 		if lerr != nil {
 			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
 				"source.scan", id.String(), "failure", mustJSON(map[string]any{"detail": lerr.Error()})))
@@ -177,6 +185,15 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	if url == "" {
 		return types.AgentRun{}, fmt.Errorf("repo %q has no derivable clone URL", src.Locator)
 	}
+	// PROVIDER ADMISSION, at the launcher's own clone-URL derivation. This lane
+	// creates a run without passing decodeAndValidateCreateRun or
+	// validateWorkspaceSources, so the request doors above it cannot cover it: a
+	// source onboarded before a provider row narrowed it must not keep cloning
+	// through a scan. BEFORE the fence claim below, so a refusal costs no state
+	// and needs no release() — the same siting the ceiling checks get.
+	if aerr := s.admitLauncherRepo(ctx, src.Locator); aerr != nil {
+		return types.AgentRun{}, aerr
+	}
 	// Detach from request cancellation before the durable launch work (the
 	// launchRecordRun rationale: a client that walks away must
 	// not cancel it).
@@ -264,6 +281,46 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	}), nil
 }
 
+// handleScanWorkspace scans an onboarded workspace — a fan-out over its
+// attached sources, each of which owns its own scan lifecycle (the tier-1
+// retarget that fixed the old 3-branch switch's bug: a repo+dir workspace
+// never scanned its dirs, because the repo branch won on every call):
+//
+//   - every attached local_dir scans HOST-SIDE inline (bounded, read-only
+//     workspacescan.Scan), landing on the SOURCE row immediately;
+//   - every attached repo launches its own governed clone-and-scan run,
+//     fenced on that source's active_run_id (202 with scan_run_ids);
+//   - ephemeral attachments have nothing to scan — an ephemeral-only
+//     composition reads scanned with an empty profile straight from the
+//     hydrate pass.
+//
+// The workspace's profile/status are DERIVED (merge/worst-of its sources) at
+// the store's hydrate pass, so the 200 body is the freshly-merged profile.
+func (s *Server) handleScanWorkspace(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseIDParam(w, r, "id", "workspace")
+	if !ok {
+		return
+	}
+	ws, ok := s.getWorkspaceAuthorized(w, r, id)
+	if !ok {
+		return
+	}
+	// A scan is a SERVER-SIDE clone (launchSourceScanRun, repoCloneURL of each
+	// attached source's locator), reachable by the workspace's member owner —
+	// the same reason the Build step is gated. A workspace onboarded before a
+	// row narrowed it, or owned by a member whose grant was taken away, must
+	// not keep cloning through this door. The launcher itself re-asks
+	// (admitLauncherRepo): this door is the one that answers a status a caller
+	// can read, not the last line of defence.
+	if s.admitRepoSources(w, r, repoSourceLocators(ws.Sources)...) {
+		return
+	}
+	if s.denyMemberWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(ws.Sources)...) {
+		return
+	}
+	s.scanAttachedSources(w, r, ws)
+}
+
 // scanAttachedSources is the whole-workspace scan's attachment-backed branch:
 // fan out over every attached non-ephemeral source — dirs inline, repos as
 // their own governed runs. 202 when anything launched (the workspace's merged
@@ -333,6 +390,14 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 			run, lerr := s.launchSourceScanRun(r.Context(), actor, src)
 			if errors.Is(lerr, store.ErrConflict) {
 				continue // raced another claim — that run covers it
+			}
+			// Same mapping as handleScanSource's: a provider refusal is the policy
+			// answering, so the fan-out stops with the admission status rather than
+			// a 500 (the workspace door above refuses first; this covers a source
+			// narrowed between that check and this launch).
+			if s.writeAdmissionLaunchRefusal(w, r, lerr) {
+				partialAudit(id, lerr.Error())
+				return
 			}
 			if lerr != nil {
 				partialAudit(id, lerr.Error())

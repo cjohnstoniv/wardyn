@@ -92,6 +92,14 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request) (workspaceRe
 		req.Sources = []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: defaultEphemeralTarget}}
 	}
 
+	// `admitted` is the server's OWN read projection (types.WorkspaceSource), so a
+	// body carrying it is dropped rather than stored: a client round-tripping a GET
+	// must not be able to persist a provider verdict, and the read path recomputes
+	// it on every response anyway.
+	for i := range req.Sources {
+		req.Sources[i].Admitted = nil
+	}
+
 	seenTargets := make(map[string]int, len(req.Sources))
 	for i, src := range req.Sources {
 		if msg := validateWorkspaceSource(src); msg != "" {
@@ -281,13 +289,24 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	// the detail route applies (redactWorkspaceForRead) — the list hands out the
 	// identical document, so redacting only the detail read would have moved the
 	// disclosure one route sideways rather than closing it.
+	// The per-source `admitted` flag rides the SAME projection, one site-config
+	// read for the whole page: the console renders "not an enabled git provider"
+	// from the server's answer rather than re-implementing the match rule (it
+	// mirrors only the host union, and a second spelling of admission is exactly
+	// how a UI comes to claim a repo is fine while every run refuses it). nil in
+	// legacy open mode, where the key is absent from every row.
+	stamp := s.admissionStamper(r.Context())
 	redact := func(rows []types.Workspace, err error) ([]types.Workspace, error) {
 		if err != nil {
 			return nil, err
 		}
 		out := make([]types.Workspace, 0, len(rows))
 		for _, ws := range rows {
-			out = append(out, redactWorkspaceForRead(ws, s.workspaceReadTierFor(r, ws)))
+			ws = redactWorkspaceForRead(ws, s.workspaceReadTierFor(r, ws))
+			if stamp != nil {
+				ws = stamp(ws)
+			}
+			out = append(out, ws)
 		}
 		return out, nil
 	}
@@ -347,7 +366,14 @@ func (s *Server) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 	// they see, and the two are separate because the same getter feeds
 	// workspace_build.go and workspace_envcode.go, which need the real host
 	// paths and image refs to do their work.
-	writeJSON(w, http.StatusOK, redactWorkspaceForRead(ws, s.workspaceReadTierFor(r, ws)))
+	out := redactWorkspaceForRead(ws, s.workspaceReadTierFor(r, ws))
+	// The single-row read carries the same server-owned `admitted` flag the list
+	// does — one document, one projection (the list route learned that lesson for
+	// redaction one release ago).
+	if stamp := s.admissionStamper(r.Context()); stamp != nil {
+		out = stamp(out)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // sshWorkspaceSourcesReady returns a 400-worthy message when any repo source's
@@ -404,11 +430,13 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	// A3: providerFor admission goes here.
-	//
-	// Onboarding is the first door a repository comes through, so the member
-	// capability sits at it too — refusing at create rather than at the first
-	// run against a workspace they were allowed to make.
+	// Onboarding is the first door a repository comes through, so BOTH provider
+	// questions sit at it: ADMISSION first (may anyone clone this here?), then
+	// the member capability — refusing at create rather than at the first run
+	// against a workspace they were allowed to make.
+	if s.admitRepoSources(w, r, repoSourceLocators(req.Sources)...) {
+		return
+	}
 	if s.denyMemberWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(req.Sources)...) {
 		return
 	}
@@ -555,11 +583,13 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	// A3: providerFor admission goes here.
-	//
 	// Over the INCOMING sources, not the stored ones: an edit is how a member
 	// moves a workspace they were allowed to create onto a provider they are
-	// not granted, and the scan/verify/record clones follow the new sources.
+	// not granted — or onto a host no provider admits at all — and the
+	// scan/verify/record clones follow the new sources.
+	if s.admitRepoSources(w, r, repoSourceLocators(req.Sources)...) {
+		return
+	}
 	if s.denyMemberWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(req.Sources)...) {
 		return
 	}
@@ -945,41 +975,4 @@ func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"workspace.delete", id.String(), "success", auditWorkspaceData(r, ws.OwnedBy, nil)))
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// handleScanWorkspace scans an onboarded workspace — a fan-out over its
-// attached sources, each of which owns its own scan lifecycle (the tier-1
-// retarget that fixed the old 3-branch switch's bug: a repo+dir workspace
-// never scanned its dirs, because the repo branch won on every call):
-//
-//   - every attached local_dir scans HOST-SIDE inline (bounded, read-only
-//     workspacescan.Scan), landing on the SOURCE row immediately;
-//   - every attached repo launches its own governed clone-and-scan run,
-//     fenced on that source's active_run_id (202 with scan_run_ids);
-//   - ephemeral attachments have nothing to scan — an ephemeral-only
-//     composition reads scanned with an empty profile straight from the
-//     hydrate pass.
-//
-// The workspace's profile/status are DERIVED (merge/worst-of its sources) at
-// the store's hydrate pass, so the 200 body is the freshly-merged profile.
-func (s *Server) handleScanWorkspace(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseIDParam(w, r, "id", "workspace")
-	if !ok {
-		return
-	}
-	ws, ok := s.getWorkspaceAuthorized(w, r, id)
-	if !ok {
-		return
-	}
-	// A3: providerFor admission goes here.
-	//
-	// A scan is a SERVER-SIDE clone (launchSourceScanRun, repoCloneURL of each
-	// attached source's locator), reachable by the workspace's member owner —
-	// the same reason the Build step is gated. A workspace onboarded before a
-	// row narrowed it, or owned by a member whose grant was taken away, must
-	// not keep cloning through this door.
-	if s.denyMemberWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(ws.Sources)...) {
-		return
-	}
-	s.scanAttachedSources(w, r, ws)
 }

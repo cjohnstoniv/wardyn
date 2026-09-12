@@ -403,8 +403,9 @@ func (s *Server) routes() chi.Router {
 			// same way policy WorkspaceMounts do (runner.ValidateMount /
 			// ValidateTarget) or the way AgentRun.Repo does (repoFieldSafe +
 			// repoCloneURL); writes are audited. Scan is a separate endpoint
-			// (workspaces.go handleScanWorkspace) that runs the deterministic
-			// workspacescan and persists the profile + status.
+			// (source_scan.go handleScanWorkspace, beside the fan-out it drives)
+			// that runs the deterministic workspacescan and persists the
+			// profile + status.
 			// Tier-1 source library + tier-2 base-image catalog routes —
 			// mounted from sources.go, same posture as the workspaces block.
 			s.mountLibraryRoutes(r, operatorOnly)

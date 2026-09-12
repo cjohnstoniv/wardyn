@@ -181,6 +181,19 @@ func (s *Server) maybeGitHubReadGrant(ctx context.Context, runID uuid.UUID, now 
 	if repo == "" {
 		return nil, nil
 	}
+	// PROVIDER LANE VETO (0.7.2): a row that does not permit the `app` lane gets
+	// no brokered GitHub token, on this lane exactly as on run create's. Sited
+	// BEFORE the grant is written, for this function's own stated reason: an
+	// eligibility record nothing may mint would still set
+	// WARDYN_GITHUB_GRANT_ID and point the in-sandbox helper at a mint that can
+	// only fail.
+	//
+	// Decided by the row that ADMITTED this clone URL, never by whichever row
+	// claims github.com first: a GHES row and a cloud row are both `kind:
+	// github`, so the host question would let one decide the other's lanes.
+	if vetoed, verr := s.laneVetoedForLauncher(ctx, runID, types.GitLaneApp, types.GrantGitHubToken, cloneURL); verr != nil || vetoed {
+		return nil, verr
+	}
 	gid := uuid.New()
 	scope, _ := json.Marshal(map[string]any{
 		"repos": []string{repo}, "permissions": map[string]string{"contents": "read"},
@@ -213,6 +226,16 @@ func (s *Server) maybeSSHKeyGrant(ctx context.Context, runID uuid.UUID, now time
 	secretName, ok := canonicalSSHKeySecret(host)
 	if !ok {
 		return nil, nil
+	}
+	// PROVIDER LANE VETO (0.7.2), the `ssh` arm: a row that does not permit the
+	// SSH lane mints no run-scoped key grant, so nothing writes a private key into
+	// the sandbox for a clone the admin said must not use one. ABOVE the
+	// secret-store read below, because the lane question does not depend on
+	// whether the key happens to be stored — and a vetoed lane should not pay a
+	// secret-store round trip to learn it was vetoed. Decided by the ADMITTING
+	// row, for the reason maybeGitHubReadGrant states.
+	if vetoed, verr := s.laneVetoedForLauncher(ctx, runID, types.GitLaneSSH, types.GrantSSHKey, cloneURL); verr != nil || vetoed {
+		return nil, verr
 	}
 	// Only synthesize a grant when the key is actually present — otherwise the
 	// clone would fail; the onboarding guard (below) rejects that case up front.

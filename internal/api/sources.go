@@ -242,6 +242,15 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
+	// PROVIDER ADMISSION on the LIBRARY door, not only the workspace one. This is
+	// the other way a repo locator is onboarded: a source added here clones
+	// through the scan launcher, and attaching it to a workspace re-enters the
+	// workspace door (upsertAndAttach). Refusing at CREATE, while the caller can
+	// still fix the locator, beats refusing at the first scan of a row the
+	// library already accepted. A local_dir source names no repository.
+	if src.Kind == types.SourceRepo && s.admitRepoSources(w, r, src.Locator) {
+		return
+	}
 	created, err := s.cfg.Store.UpsertSource(r.Context(), src)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "upsert source: "+err.Error())

@@ -150,6 +150,19 @@ type WorkspaceSource struct {
 	// (e.g. a rename) can never silently wipe an override set on an earlier
 	// PUT; an explicit map, empty or not, REPLACES it outright.
 	Overrides map[string]string `json:"overrides,omitempty"`
+	// Admitted is a SERVER-OWNED READ PROJECTION, never persisted and never taken
+	// from a write body (decodeWorkspaceRequest clears it): does this deployment's
+	// workspace-provider policy admit this repo source's clone URL today? repo
+	// sources only, and ABSENT entirely where no provider row exists — which is
+	// what keeps an upgraded install's workspace documents byte-identical to
+	// 0.7.1's.
+	//
+	// A POINTER so "no answer" (a local_dir source, legacy open mode) stays
+	// distinguishable from "not admitted". Projected by the server precisely so
+	// the console never re-implements the match rule: internal/api's admitRepoURL
+	// is its only spelling, and a second one in TypeScript is how a UI comes to
+	// call a repo fine while every run refuses it.
+	Admitted *bool `json:"admitted,omitempty"`
 }
 
 // WorkspaceBaseImage is a Workspace's base-image choice: what the sandbox's

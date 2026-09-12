@@ -136,10 +136,20 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// is not a spec entry) — and is nonetheless cloned by the sandbox,
 	// broker-minted for and unioned into the run's egress. Its provider is the
 	// member's own free-text choice, so it is gated exactly like the resolved
-	// spec's repos, at the chokepoint A3's admission will share.
+	// spec's repos, at the chokepoint the admission verdict shares.
 	//
-	// A3: providerFor admission goes here (this field and req.DevcontainerRepo).
-	if req.Repo != "" && s.denyMemberWorkspaceProviders(w, r, "runs.workspace_provider", req.Repo) {
+	// req.devcontainer_repo rides the SAME call, and its siting is the point:
+	// the image builder clones it SERVER-SIDE (resolveWorkspaceImage ->
+	// envbuilder's ENVBUILDER_GIT_URL), and the only principals who can set it at
+	// all are operators — members are refused it by denyMemberRequest above. So
+	// the check belongs HERE, after that return and UNCONDITIONAL on req.Image,
+	// not beside the member refusal (unreachable for the field's only callers) and
+	// not in validateImageBuildRequest (gated on req.Image != ""). Before today
+	// there was no operator-side devcontainer_repo validator at all.
+	// ONE call for both provider questions over both fields (see
+	// requestRepoProviderRefusals): this function is at the gocyclo ratchet, and a
+	// second branch here is what tipped it over.
+	if s.requestRepoProviderRefusals(w, r, req) {
 		return req, noCeiling, "", "", false
 	}
 

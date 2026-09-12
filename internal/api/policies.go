@@ -248,6 +248,11 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 	// Authoring fail-fast: a policy's user-workspace mounts/repos must be onboarded
 	// (the run-create chokepoint is the load-bearing gate; this surfaces the error
 	// at author time instead of at launch).
+	// NOT the workspace-provider admission verdict, deliberately (0.7.2): that one
+	// lives at run create, so a policy naming a repo no provider admits can still be
+	// WRITTEN — and is then refused at every door that would clone it. Authoring is
+	// not cloning, and narrowing the provider rows must not retroactively make a
+	// stored policy unsaveable.
 	if code, err := s.validateWorkspaceSources(r.Context(), req.Spec); err != nil {
 		writeError(w, code, "workspace: "+err.Error())
 		return
