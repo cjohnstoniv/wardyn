@@ -131,7 +131,12 @@ deployment answers byte-for-byte what it answered before.
   it is why a member's chip can stop reading a deployment fact that showed green
   over their own lapsed session. `harness.credential.captured` and `.refresh` carry
   the owner and the credential source, so "whose credential" is answerable from the
-  trail.
+  trail. **What this release does NOT do** is floor the confinement class: the SSO
+  cache blob is not a grant, so `RequiredConfinementFloor` — which raises a
+  grant-delivered credential to CC3 at create — never sees it, and the blob is
+  resident in the sandbox at whatever class the run requested. `per_user` narrows
+  the blast radius to one person; the class is a 0.7.3/0.8 decision, and the
+  threat model carries it as a stated residual rather than as an implication.
 - **The console half of the roster: four surfaces and one widget.** Agents get
   their own tab on `/providers` — enabled, the one model-access mechanism, and
   whose credential it is, over the server's own roster rather than a row the
@@ -181,6 +186,27 @@ deployment answers byte-for-byte what it answered before.
 
 ### Fixed
 
+- **A repository the run cannot clone is named on the 201, not dropped in
+  silence.** The reserved user-drive target is refused at the write door
+  (`400`), but a policy STORED before that rule is handed to the run verbatim —
+  `resolvePolicy` does not re-validate it — so a `workspace_repos` row pointing
+  into `/home/agent/drive` produced a `201`, an empty `WARDYN_REPOS` and an agent
+  hunting for a repository nothing ever cloned. The drop still happens (a clone
+  into the drive would write somebody else's repository into a member's
+  persistent storage), and it is now stated: a warning on the launch response
+  naming the repository AND the refused target, plus the `slog.Warn` the
+  neighbouring dest-collision drop has always had. Inline policies are unchanged
+  — they still `400` before the run exists.
+- **A run whose agent exec id could not be persisted fails now, honestly, instead
+  of being killed later as a mystery.** The post-`Exec` `SetRunAgentExecID` write
+  was best-effort (`_ =`); the boot reconciler reserves the resulting empty value
+  for "the dispatcher died before it ever exec'd the agent", so a lost write made
+  a healthy, running agent indistinguishable from a corpse — finalized `FAILED`
+  and torn down on the next restart, while this dispatch's `run.exec` audit row
+  said `success`. The write is now retried once and, if it still cannot land, the
+  run fails at dispatch through the same path a failed `Exec` takes: the sandbox
+  stopped, the run `FAILED` with a hint naming the write, and a `run.exec` row
+  carrying `outcome=failure` and the store error. The happy path is unchanged.
 - **The console stops guessing who you are when `/me` does not answer.** It used
   to render the full admin nav off the fail-open default, so a human correctly
   DENIED at login still saw Policies, Governance, Permissions, Secrets and Audit —

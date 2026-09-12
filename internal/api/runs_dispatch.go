@@ -691,7 +691,32 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 		if persistExecID == "" {
 			persistExecID = mainProcessExecID
 		}
-		_ = s.cfg.Store.SetRunAgentExecID(ctx, run.ID, persistExecID)
+		// NOT best-effort, whatever the comment above once said. reconcile.go's
+		// strand guard reserves "" for "SetRunAgentExecID was never called", so a
+		// LOST write leaves a healthy, running agent looking exactly like a run
+		// whose dispatcher died mid-dispatch — the next boot finalizes it FAILED
+		// and tears the sandbox down, while this audit row said the exec
+		// succeeded. One retry (the write is idempotent and the common failure is
+		// a transient connection blip), then fail the run HERE, visibly, rather
+		// than hand the reconciler a lie to misread hours later.
+		xerr = s.cfg.Store.SetRunAgentExecID(ctx, run.ID, persistExecID)
+		if xerr != nil {
+			// One retry: the write is idempotent and the failure this actually
+			// sees is a transient pool/connection blip, not a rejected value.
+			xerr = s.cfg.Store.SetRunAgentExecID(ctx, run.ID, persistExecID)
+		}
+		if xerr != nil {
+			slog.ErrorContext(ctx, "wardynd: could not persist the agent exec id; failing the run",
+				slog.String("run_id", run.ID.String()), slog.Any("err", xerr))
+			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
+				run.ID.String(), "failure", mustJSON(map[string]any{"argv": argv, "error": xerr.Error()})))
+			// The agent IS running; stop it, the same order the Exec-failure arm
+			// above uses, so a FAILED run never leaves a live agent behind.
+			s.stopSandboxOrAudit(ctx, run.ID, ref, "run.exec")
+			s.failAndRevoke(ctx, run.ID, types.RunRunning,
+				"the agent started but its exec id could not be persisted, so the run could not be tracked: "+xerr.Error())
+			return
+		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
 			run.ID.String(), "success", mustJSON(map[string]any{"argv": argv})))
 

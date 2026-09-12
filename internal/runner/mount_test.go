@@ -6,6 +6,7 @@ package runner
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -97,5 +98,56 @@ func TestValidateMount_Symlink(t *testing.T) {
 	missing := filepath.Join(dir, "does-not-exist")
 	if err := ValidateMount(Mount{Source: missing, Target: "/work/x"}); err != nil {
 		t.Errorf("ValidateMount(%q) = %v, want nil (non-existent source, lexical-only)", missing, err)
+	}
+}
+
+// TestValidateMountSource_WidenedRuntimeSocketsAndContainerdState pins the half
+// of the 0.7.2 deny-list widening that nothing pinned (test-2/C3).
+//
+// 0.7.2 widened deniedSource from `case "docker.sock"` to the four
+// container-runtime socket basenames, and added /var/lib/containerd to
+// deniedSourcePrefixes. Reverting both stayed green: the one test naming the
+// change asserted `strings.Contains(err, "denied user drive")` — a sentence the
+// user-drive wrapper produces for EVERY refusal, including the "could not be
+// resolved on this host" one a non-existent path earns anyway. So the test
+// passed with the rule gone, for a reason unrelated to the rule.
+//
+// Each row therefore asserts a fragment naming ITS OWN path, and each path is
+// chosen to be refused by the WIDENED rule alone: none of them is under a
+// pre-0.7.2 denied prefix, so with the widening reverted every row here returns
+// nil and reds.
+func TestValidateMountSource_WidenedRuntimeSocketsAndContainerdState(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"containerd socket outside /run", "/opt/sockets/containerd.sock",
+			`mount source "/opt/sockets/containerd.sock" references a container-runtime socket`},
+		{"podman socket outside /run", "/opt/sockets/podman.sock",
+			`mount source "/opt/sockets/podman.sock" references a container-runtime socket`},
+		{"cri-o socket outside /run", "/opt/sockets/crio.sock",
+			`mount source "/opt/sockets/crio.sock" references a container-runtime socket`},
+		{"containerd state root", "/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs",
+			`is under denied host path "/var/lib/containerd"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateMountSource(tc.src)
+			if err == nil {
+				t.Fatalf("ValidateMountSource(%q) = nil, want the widened refusal", tc.src)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("ValidateMountSource(%q) = %q, want a message containing %q — a refusal that "+
+					"cannot be told apart from the neighbouring rules' cannot pin this one", tc.src, err, tc.want)
+			}
+		})
+	}
+
+	// The control: docker.sock was the only basename before the widening, and it
+	// still refuses with the same sentence — so the rows above fail because the
+	// WIDENING is gone, never because the socket rule as a whole is.
+	if err := ValidateMountSource("/opt/sockets/docker.sock"); err == nil ||
+		!strings.Contains(err.Error(), "references a container-runtime socket") {
+		t.Errorf("premise changed: docker.sock is no longer refused by the socket rule (%v)", err)
 	}
 }

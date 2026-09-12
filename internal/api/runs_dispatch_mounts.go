@@ -422,7 +422,9 @@ func applyRepoCloneEnv(sandboxEnv map[string]string, run types.AgentRun, policy 
 			sandboxEnv["WARDYN_REPO_URL"] = url
 		}
 	}
-	if repos := buildRepoRecords(run.Repo, policy.WorkspaceRepos); repos != "" {
+	// The drop sentences are create's to surface (they ride the 201); here the
+	// slog.Warn inside buildRepoRecords is the whole record.
+	if repos, _ := buildRepoRecords(run.Repo, policy.WorkspaceRepos); repos != "" {
 		sandboxEnv["WARDYN_REPOS"] = repos
 	}
 }

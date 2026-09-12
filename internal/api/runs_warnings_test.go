@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -189,4 +190,86 @@ func TestWorkspaceCollisionAsksTheQuestionItMeans(t *testing.T) {
 	if clean.listRunsCalls != 0 {
 		t.Errorf("ListRuns called %d times on the no-collision path", clean.listRunsCalls)
 	}
+}
+
+// TestCreateRun_StoredReservedRepoTargetIsSaidOutLoud is s2-compat-3-01.
+//
+// The reserved-target rule (0.7.2) lives on the WRITE door only: an INLINE
+// policy naming /home/agent/drive as a workspace_repos target is refused 400,
+// and that half is unchanged. But resolvePolicy hands a STORED spec to the run
+// VERBATIM — no validatePolicySpec on the create path — so a row written before
+// the rule existed still reaches buildRepoRecords, which drops the repo. That
+// produced a 201, an empty WARDYN_REPOS and an agent looking for a repository
+// nothing ever cloned, while the dest-collision skip two lines below it had been
+// slog.Warn-ing all along.
+//
+// The 201 now NAMES the dropped repo and the refused target, the
+// applySSHLaneWarnings/sshHostLevelWarnings shape. No new audit action: the
+// documented dropped-repo events are all provider-lane vetoes (run.provider.*),
+// which this is not, and inventing one for a stale policy row would be a durable
+// row for a condition the operator fixes by editing the policy.
+func TestCreateRun_StoredReservedRepoTargetIsSaidOutLoud(t *testing.T) {
+	// The stored spec arrives through DefaultPolicy, which — exactly like a
+	// policy row — is never re-validated at create.
+	create := func(t *testing.T, target string) createRunResponse {
+		t.Helper()
+		h := newHarness(t)
+		// The repo is ONBOARDED — the run-create door refuses an un-onboarded one
+		// long before the clone list is built, so without this the 201 the defect
+		// is about is unreachable.
+		st := &storedRepoStore{runWarnStore: &runWarnStore{capStore: &capStore{}}, ws: []types.Workspace{{
+			ID:      uuid.New(),
+			Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: "octocat/hello"}},
+		}}}
+		cfg := baseTestConfig(h, st)
+		cfg.OIDC = &oidc.Authenticator{}
+		cfg.DefaultPolicy = types.RunPolicySpec{
+			MinConfinementClass: types.CC2,
+			WorkspaceRepos:      []types.WorkspaceRepo{{Repo: "octocat/hello", Target: target}},
+		}
+		srv := New(cfg)
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs",
+			ssoSession(t, "sub-stored-repo", "admin@corp.example", oidc.RoleAdmin),
+			`{"agent":"claude-code","task":"t"}`)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create = %d, want 201 (a stale stored target drops the repo, it does not refuse the run): %s",
+				w.Code, w.Body.String())
+		}
+		var got createRunResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v; body=%s", err, w.Body.String())
+		}
+		return got
+	}
+
+	got := create(t, runner.DriveTarget)
+	var named string
+	for _, warn := range got.Warnings {
+		if strings.Contains(warn, "octocat/hello") && strings.Contains(warn, runner.DriveTarget) {
+			named = warn
+		}
+	}
+	if named == "" {
+		t.Fatalf("warnings = %v, want one naming the dropped repo AND the reserved target %q", got.Warnings, runner.DriveTarget)
+	}
+
+	// The control: an ordinary target clones and says nothing, so the sentence
+	// is the reserved rule rather than "a run with workspace_repos warns".
+	for _, warn := range create(t, "/home/agent/work/hello").Warnings {
+		if strings.Contains(warn, "octocat/hello") {
+			t.Errorf("an ordinary target warned too: %q", warn)
+		}
+	}
+}
+
+// storedRepoStore is runWarnStore with an ONBOARDED repo workspace, so a
+// resolved spec naming that repo clears the onboarding gate on the way to the
+// clone list.
+type storedRepoStore struct {
+	*runWarnStore
+	ws []types.Workspace
+}
+
+func (s *storedRepoStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
+	return s.ws, nil
 }

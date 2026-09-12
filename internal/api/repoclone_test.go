@@ -328,7 +328,7 @@ func TestBuildRepoRecordsCanonicalisesGitHubURLs(t *testing.T) {
 		// NOT github: left completely alone (its own lane, its own host allowlist).
 		{"https://gitlab.com/o/r.git", "https://gitlab.com/o/r.git\t/home/agent/work/r\thttps://gitlab.com/o/r.git\t"},
 	} {
-		if got := buildRepoRecords(tc.in, nil); got != tc.want {
+		if got, _ := buildRepoRecords(tc.in, nil); got != tc.want {
 			t.Errorf("buildRepoRecords(%q) =\n  %q\nwant\n  %q", tc.in, got, tc.want)
 		}
 	}
@@ -336,7 +336,7 @@ func TestBuildRepoRecordsCanonicalisesGitHubURLs(t *testing.T) {
 	// A trailing-slash URL and its bare slug are the SAME repo: canonicalisation
 	// makes the dest dedup see that, instead of cloning it twice into
 	// ~/work/repo and ~/work/hello-world.
-	both := buildRepoRecords("octocat/hello-world", []types.WorkspaceRepo{{Repo: "https://github.com/octocat/hello-world/"}})
+	both, _ := buildRepoRecords("octocat/hello-world", []types.WorkspaceRepo{{Repo: "https://github.com/octocat/hello-world/"}})
 	if strings.Contains(both, "\n") {
 		t.Errorf("buildRepoRecords: the same repo in two spellings produced two records:\n%s", both)
 	}
@@ -347,7 +347,7 @@ func TestBuildRepoRecordsCanonicalisesGitHubURLs(t *testing.T) {
 // (agent-run-lib.sh) is the only remaining consumer that can actually check it
 // out, but it can't if buildRepoRecords never emits it in the first place.
 func TestBuildRepoRecordsCarriesRef(t *testing.T) {
-	got := buildRepoRecords("", []types.WorkspaceRepo{{Repo: "acme/payments", Ref: "release-2.0"}})
+	got, _ := buildRepoRecords("", []types.WorkspaceRepo{{Repo: "acme/payments", Ref: "release-2.0"}})
 	want := "https://github.com/acme/payments.git\t/home/agent/work/payments\tacme/payments\trelease-2.0"
 	if got != want {
 		t.Errorf("buildRepoRecords with Ref =\n  %q\nwant\n  %q", got, want)
@@ -355,14 +355,14 @@ func TestBuildRepoRecordsCarriesRef(t *testing.T) {
 
 	// No ref declared: the field is still present (empty) — the format is
 	// fixed-arity so agent-run-lib.sh's `read` splits it the same way either way.
-	got = buildRepoRecords("", []types.WorkspaceRepo{{Repo: "acme/payments"}})
+	got, _ = buildRepoRecords("", []types.WorkspaceRepo{{Repo: "acme/payments"}})
 	if strings.Count(got, "\t") != 3 {
 		t.Errorf("buildRepoRecords with no Ref = %q, want exactly 3 tabs (4 fields, ref empty)", got)
 	}
 
 	// A ref containing a control character/whitespace must be rejected the same
 	// way an unsafe slug or dest already is — never smuggled past the tab framing.
-	got = buildRepoRecords("", []types.WorkspaceRepo{{Repo: "acme/payments", Ref: "evil\tref"}})
+	got, _ = buildRepoRecords("", []types.WorkspaceRepo{{Repo: "acme/payments", Ref: "evil\tref"}})
 	if got != "" {
 		t.Errorf("buildRepoRecords with an unsafe ref = %q, want \"\" (record dropped)", got)
 	}

@@ -168,9 +168,15 @@ func repoCloneURL(slug string) string {
 // Ref is optional (branch/tag/sha, or "" for the remote's default branch) —
 // clone_one (agent-run-lib.sh) is the consumer that actually checks it out.
 // Returns "" when there is nothing to clone.
-func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) string {
+//
+// The SECOND return is the sentences for the drops a caller must say out loud
+// — one per repo dropped for a target this function refuses. Run create appends
+// them to the 201's warnings[]; dispatch discards them (the run is already
+// created by then, and the slog.Warn at the skip is the record there).
+func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, []string) {
 	const workRoot = "/home/agent/work"
 	seenDest := map[string]bool{}
+	var warnings []string
 	var b strings.Builder
 	add := func(slug, dest, ref string) {
 		slug = strings.TrimSpace(slug)
@@ -215,7 +221,24 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) string {
 			}
 			dest = workRoot + "/" + name
 		}
-		if !repoFieldSafe(dest) || runner.ValidateAuthoredTarget(dest) != nil {
+		if !repoFieldSafe(dest) {
+			return
+		}
+		if terr := runner.ValidateAuthoredTarget(dest); terr != nil {
+			// LOUD, for the same reason the dest-collision skip below is (W8-S1-3)
+			// and one the write door cannot cover: 0.7.2 put the reserved-target
+			// rule on POST /policies only (validatePolicySpec → 400), and
+			// resolvePolicy hands dispatch a STORED spec VERBATIM. A pre-0.7.2
+			// workspace_repos row targeting /home/agent/drive therefore still
+			// reaches here, where the repo was dropped in silence — a 201, an
+			// empty WARDYN_REPOS, and an agent that starts looking for a repo
+			// nothing ever cloned. Say it on the 201 (run create appends the
+			// returned sentence) and in the log.
+			slog.Warn("wardynd: repo clone target is not an allowed destination; dropping the repo",
+				slog.String("slug", slug), slog.String("dest", dest), slog.String("err", terr.Error()))
+			warnings = append(warnings, fmt.Sprintf(
+				"repository %s was NOT cloned: its workspace_repos target %s is refused (%s) — fix the target in the policy and launch again",
+				slug, dest, terr))
 			return
 		}
 		if seenDest[dest] {
@@ -246,7 +269,7 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) string {
 	for _, wr := range repos {
 		add(wr.Repo, wr.Target, wr.Ref)
 	}
-	return b.String()
+	return b.String(), warnings
 }
 
 // injectionRuleFromScope decodes an api_key grant scope into its proxy-side

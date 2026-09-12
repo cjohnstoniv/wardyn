@@ -4,9 +4,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -61,6 +64,22 @@ type bootReconcileStore struct {
 	// sweeper goroutine does on its own schedule without polling.
 	beats  chan uuid.UUID
 	finals chan types.RunState
+
+	// setExecIDErr, when non-nil, fails EVERY SetRunAgentExecID — the store
+	// outage c5 is about. setExecIDCalls counts the attempts, so the single
+	// retry is pinned as behaviour and not merely as a comment.
+	setExecIDErr   error
+	setExecIDCalls int
+	// hint is the failure sentence failAndRevoke persisted (optional store
+	// capability, runFailureHintSetter).
+	hint string
+}
+
+func (s *bootReconcileStore) SetRunFailureHint(_ context.Context, _ uuid.UUID, hint string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hint = hint
+	return nil
 }
 
 func (s *bootReconcileStore) ListRuns(context.Context) ([]types.AgentRun, error) {
@@ -113,6 +132,10 @@ func (s *bootReconcileStore) SetSandboxRef(context.Context, uuid.UUID, string) e
 func (s *bootReconcileStore) SetRunAgentExecID(_ context.Context, id uuid.UUID, execID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.setExecIDCalls++
+	if s.setExecIDErr != nil {
+		return s.setExecIDErr
+	}
 	if id == s.run.ID {
 		s.run.AgentExecID = execID
 	}
@@ -585,5 +608,112 @@ func TestReconcileOnBoot_ImageBuilderWithoutSweepCapabilityIsNoop(t *testing.T) 
 	srv := &Server{cfg: Config{ImageBuilder: fakeImageBuilder{}}}
 	if err := srv.ReconcileOnBoot(context.Background()); err != nil {
 		t.Fatalf("ReconcileOnBoot: %v", err)
+	}
+}
+
+// TestDispatchExecIDWriteLostFailsTheRunLoudly is correctness-1/c5.
+//
+// SetRunAgentExecID was `_ =`'d — "best-effort, like SetSandboxRef". It is not
+// like SetSandboxRef: reconcile.go's strand guard RESERVES the resulting "" for
+// "the dispatcher died before it ever exec'd the agent", so a lost write makes a
+// healthy, running agent indistinguishable from a corpse. The next boot
+// finalizes it FAILED and tears the sandbox down — while the run.exec audit row
+// this dispatch wrote said `success`. The trail disagreed with the outcome, and
+// the only record of the disagreement was nothing at all.
+//
+// So: one retry (the write is idempotent; the failure this sees is a connection
+// blip), then fail the run HERE, through the dispatch-failure path the Exec-error
+// arm fifteen lines above already uses — the sandbox stopped, the run FAILED with
+// a hint naming the write, and the audit row saying `failure`.
+func TestDispatchExecIDWriteLostFailsTheRunLoudly(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	h := newHarness(t)
+	run := execRun(t, "")
+	run.Task = "do the thing"
+	fr := &fakeRunner{}
+	fake := &bootReconcileStore{run: run, setExecIDErr: errors.New("pool exhausted")}
+	cfg := baseTestConfig(h, fake)
+	cfg.Runner = fr
+	cfg.Broker = h.broker
+	cfg.BaseCtx = bootTestCtx(t)
+	srv := New(cfg)
+
+	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false)
+
+	// Retried exactly once before giving up — a single attempt turns a blip into
+	// a dead run, and an unbounded loop holds the dispatcher open forever.
+	if fake.setExecIDCalls != 2 {
+		t.Errorf("SetRunAgentExecID attempts = %d, want 2 (the write plus one retry)", fake.setExecIDCalls)
+	}
+	// FAILED, not left running for the reconciler to misread hours later.
+	if to, got := fake.finalTransition(); !got || to != types.RunFailed {
+		t.Fatalf("run state written = (%q, applied=%v), want FAILED — a run whose exec id was lost must not be left looking healthy", to, got)
+	}
+	fake.mu.Lock()
+	hint := fake.hint
+	fake.mu.Unlock()
+	if !strings.Contains(hint, "exec id") {
+		t.Errorf("failure hint = %q, want it to name the persisted-exec-id write that could not be made", hint)
+	}
+	// The audit row says FAILURE and carries the store error — the row that used
+	// to say `success` is the one an operator reads when the reconciler kills the
+	// run later.
+	var execRows int
+	for _, ev := range h.audit.events {
+		if ev.Action != "run.exec" {
+			continue
+		}
+		execRows++
+		if ev.Outcome != "failure" {
+			t.Errorf("run.exec outcome = %q, want failure", ev.Outcome)
+		}
+		if !strings.Contains(string(ev.Data), "pool exhausted") {
+			t.Errorf("run.exec data = %s, want the store error", ev.Data)
+		}
+	}
+	if execRows != 1 {
+		t.Errorf("run.exec rows = %d, want exactly 1 (the failure)", execRows)
+	}
+	if !strings.Contains(buf.String(), "exec id") {
+		t.Errorf("log = %q, want an error line naming the lost exec-id write", buf.String())
+	}
+}
+
+// TestDispatchExecIDWritePersistsOnTheHappyPath is the other half: nothing above
+// changes the ordinary launch — one write, no retry, the `success` row, and the
+// run left RUNNING.
+func TestDispatchExecIDWritePersistsOnTheHappyPath(t *testing.T) {
+	h := newHarness(t)
+	run := execRun(t, "")
+	run.Task = "do the thing"
+	fake := &bootReconcileStore{run: run}
+	cfg := baseTestConfig(h, fake)
+	cfg.Runner = &fakeRunner{}
+	cfg.Broker = h.broker
+	cfg.BaseCtx = bootTestCtx(t)
+	srv := New(cfg)
+
+	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false)
+
+	if fake.setExecIDCalls != 1 {
+		t.Errorf("SetRunAgentExecID attempts = %d, want 1 on the happy path", fake.setExecIDCalls)
+	}
+	fake.mu.Lock()
+	persisted := fake.run.AgentExecID
+	fake.mu.Unlock()
+	if persisted != "fake-exec-id" {
+		t.Errorf("persisted exec id = %q, want the value Exec returned", persisted)
+	}
+	if to, got := fake.finalTransition(); got {
+		t.Fatalf("a healthy launch was finalized %q", to)
+	}
+	for _, ev := range h.audit.events {
+		if ev.Action == "run.exec" && ev.Outcome != "success" {
+			t.Errorf("run.exec outcome = %q on the happy path, want success", ev.Outcome)
+		}
 	}
 }

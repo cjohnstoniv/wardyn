@@ -350,6 +350,17 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// mid-run refusal from arriving as a support ticket.
 	warnings = append(warnings, warnCeilingDeniedWorkspaceEgress(ceiling, wsRefs)...)
 
+	// …and the LATE drop nothing else says: a STORED policy is handed to dispatch
+	// verbatim (resolvePolicy), so a workspace_repos target the write door now
+	// refuses — /home/agent/drive, reserved since 0.7.2 — still reaches
+	// buildRepoRecords, which drops the repo. Until now that produced a 201, an
+	// empty WARDYN_REPOS and an agent hunting for a repo that was never cloned.
+	// Same inputs dispatch will use (run.Repo is req.Repo), so the sentence and
+	// the drop cannot disagree. Inline policies are unaffected: they still 400.
+	if _, repoDrops := buildRepoRecords(req.Repo, spec.WorkspaceRepos); len(repoDrops) > 0 {
+		warnings = append(warnings, repoDrops...)
+	}
+
 	// CLIENT-DISCONNECT ISOLATION, same rationale as dispatchRun's own
 	// detach — which sits AFTER this block and so never covered it. From here on the
 	// run row exists and MUST be driven to a terminal state or dispatched. An image

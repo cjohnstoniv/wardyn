@@ -138,7 +138,28 @@ type fakeDocker struct {
 	volumeInspectMissesExisting bool
 	// failVolumeCreate makes VolumeCreate fail (quota, driver refusal).
 	failVolumeCreate bool
+
+	// listItems is what ContainerList answers — a test seeds it to model the
+	// daemon's view for SweepOrphanedSandboxes. lastListFilters/lastListAll
+	// record the call, so the label-filtered All:true scan is pinnable.
+	listItems       []container.Summary
+	lastListFilters client.Filters
+	lastListAll     bool
 }
+
+// ContainerList makes this fake a containerListerAPI, the narrow seam
+// SweepOrphanedSandboxes type-asserts for. The label filter is RECORDED rather
+// than applied: the sweep's own skips (unparseable run id, age, live run) are
+// what the tests drive, and pre-filtering here would hide them.
+func (f *fakeDocker) ContainerList(_ context.Context, opts client.ContainerListOptions) (client.ContainerListResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastListFilters = opts.Filters
+	f.lastListAll = opts.All
+	return client.ContainerListResult{Items: f.listItems}, nil
+}
+
+var _ containerListerAPI = (*fakeDocker)(nil)
 
 func newFakeDocker() *fakeDocker {
 	return &fakeDocker{

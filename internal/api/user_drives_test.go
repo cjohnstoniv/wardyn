@@ -1229,14 +1229,26 @@ func TestDriveTargetIsReservedFromAuthoring(t *testing.T) {
 	// than with a repo in the wrong place.
 	t.Run("a stored repo row at the reserved target never reaches the clone", func(t *testing.T) {
 		for _, target := range []string{runner.DriveTarget, runner.DriveTarget + "/x"} {
-			if got := buildRepoRecords("", []types.WorkspaceRepo{{Repo: "octocat/hello", Target: target}}); got != "" {
+			got, warns := buildRepoRecords("", []types.WorkspaceRepo{{Repo: "octocat/hello", Target: target}})
+			if got != "" {
 				t.Errorf("a repo destined for %q reached WARDYN_REPOS: %q", target, got)
+			}
+			// …and NOT in silence (s2-compat-3-01): dropping the repo without
+			// saying so produced a 201 that cloned nothing, which is the whole
+			// defect. The sentence must name the repo AND the refused target,
+			// because "one of your repos was dropped" is not actionable.
+			if len(warns) != 1 {
+				t.Fatalf("dropping the repo at %q produced %d warnings, want exactly 1: %q", target, len(warns), warns)
+			}
+			if !strings.Contains(warns[0], "octocat/hello") || !strings.Contains(warns[0], target) {
+				t.Errorf("the drop warning must name the repo and the refused target, got: %q", warns[0])
 			}
 		}
 		// The control: an ordinary destination still clones, so the rule is the
-		// reserved subtree rather than "repos with an explicit target".
-		if got := buildRepoRecords("", []types.WorkspaceRepo{{Repo: "octocat/hello", Target: "/home/agent/work/hello"}}); !strings.Contains(got, "/home/agent/work/hello") {
-			t.Errorf("an ordinary destination was dropped too: %q", got)
+		// reserved subtree rather than "repos with an explicit target" — and it
+		// warns about nothing.
+		if got, warns := buildRepoRecords("", []types.WorkspaceRepo{{Repo: "octocat/hello", Target: "/home/agent/work/hello"}}); !strings.Contains(got, "/home/agent/work/hello") || len(warns) != 0 {
+			t.Errorf("an ordinary destination was dropped too: %q (warnings %q)", got, warns)
 		}
 	})
 }

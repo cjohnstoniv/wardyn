@@ -6,9 +6,11 @@
 package docker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -569,35 +571,56 @@ func TestCreateSandbox_DeniedDriveMountsRejected(t *testing.T) {
 		t.Fatalf("symlink: %v", err)
 	}
 
+	// wantLog, where set, is the fragment naming WHICH rule refused — asserted
+	// in the LOG, not in the error, because the member-facing sentence
+	// deliberately does not name it (RefuseUserDriveBind's disclosure split:
+	// "wardynd's log names the rule that refused it"). It is not decoration on
+	// the two socket rows: the bare "denied user drive" assertion below is
+	// produced by EVERY refusal this wrapper makes — including the plain "could
+	// not be resolved on this host" a non-existent path earns anyway — so with
+	// 0.7.2's socket widening reverted, the row named after the containerd
+	// socket still passed, for a reason unrelated to the rule it names.
 	cases := []struct {
-		name  string
-		src   string
-		roots []string
+		name    string
+		src     string
+		roots   []string
+		wantLog string
 	}{
-		{"under-etc", "/etc/wardyn-drives/alice", []string{"/etc/wardyn-drives"}},
-		{"socket-basename", filepath.Join(root, "docker.sock"), []string{root}},
-		{"containerd-socket-basename", filepath.Join(root, "containerd.sock"), []string{root}},
-		{"symlink-escapes-root", escaping, []string{root}},
-		{"outside-the-roots", home, []string{filepath.Join(filepath.Dir(root), "other-share")}},
-		{"no-roots-configured", home, nil},
+		{"under-etc", "/etc/wardyn-drives/alice", []string{"/etc/wardyn-drives"}, ""},
+		{"socket-basename", filepath.Join(root, "docker.sock"), []string{root},
+			"references a container-runtime socket"},
+		{"containerd-socket-basename", filepath.Join(root, "containerd.sock"), []string{root},
+			"references a container-runtime socket"},
+		{"symlink-escapes-root", escaping, []string{root}, ""},
+		{"outside-the-roots", home, []string{filepath.Join(filepath.Dir(root), "other-share")}, ""},
+		{"no-roots-configured", home, nil, ""},
 		// The source IS the root: lexically fine, inside the ceiling, and it
 		// would bind the WHOLE share — every other person's home — into this one
 		// member's sandbox. Only a bug can produce it (a home that resolved to
 		// "." or "", a symlink from a home back to its parent), which is exactly
 		// what a last-thing-before-ContainerCreate check is for.
-		{"source-is-the-root", root, []string{root}},
-		{"traversal-source", root + "/../alice", []string{root}},
-		{"relative-source", "shares/alice", []string{root}},
-		{"missing-directory", filepath.Join(root, "no-such-home"), []string{root}},
+		{"source-is-the-root", root, []string{root}, ""},
+		{"traversal-source", root + "/../alice", []string{root}, ""},
+		{"relative-source", "shares/alice", []string{root}, ""},
+		{"missing-directory", filepath.Join(root, "no-such-home"), []string{root}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			var logged bytes.Buffer
+			if tc.wantLog != "" {
+				prev := slog.Default()
+				slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
+				t.Cleanup(func() { slog.SetDefault(prev) })
+			}
 			f, _, err := createWithDrive(t, hostPathDrive(tc.src), tc.roots)
 			if err == nil {
 				t.Fatalf("CreateSandbox with denied drive source %q should FAIL CLOSED, got nil error", tc.src)
 			}
 			if !strings.Contains(err.Error(), "denied user drive") {
 				t.Errorf("error should identify the denied drive, got: %v", err)
+			}
+			if tc.wantLog != "" && !strings.Contains(logged.String(), tc.wantLog) {
+				t.Errorf("the log should name the rule that refused (%q), got: %s", tc.wantLog, logged.String())
 			}
 			if f.containers[agentContainerName(testSpec().RunID)] != nil {
 				t.Error("agent container exists after the refusal — the check must precede ContainerCreate")
