@@ -223,12 +223,13 @@ export function ProvidersScreen() {
               {/* ONE teal button at a time (CONSOLE-RULES §6, prompt §4): in
                   the legacy-open empty state the Git tab's own banner action IS
                   the state's one affirmative, so the screen's Save providers is
-                  withheld rather than doubling it. The test is the LOADED
-                  snapshot, not the draft: a draft emptied by Remove is a pending
-                  CHANGE, and withholding Save there left no way to commit it
-                  (the banner's Add steps down to outline instead — git-tab.tsx's
-                  `loadedEmpty`). */}
-              {tab !== "agents" && !(tab === "git" && loadedEmpty) && (
+                  withheld rather than doubling it. Withheld only while there is
+                  NOTHING to save — the loaded snapshot was empty AND the draft
+                  still is: a draft emptied by Remove is a pending CHANGE (Save
+                  stays; the banner's Add steps down to outline — git-tab.tsx's
+                  `loadedEmpty`), and a first row added on a fresh install is one
+                  too (Save appears the moment the draft has a row). */}
+              {tab !== "agents" && !(tab === "git" && loadedEmpty && (draft.git ?? []).length === 0) && (
                 <div className="flex justify-end border-t border-border pt-4">
                   <Button disabled={!operator || saving} onClick={save}>
                     {PROVIDERS.SAVE_CTA}

@@ -164,6 +164,24 @@ describe("ProvidersScreen", () => {
     expect(screen.queryByRole("button", { name: PROVIDERS.SAVE_CTA })).not.toBeInTheDocument();
   });
 
+  // The withhold is "nothing to save", not "the org started empty": on a fresh
+  // install the first row an admin adds is a pending change, and Save must
+  // appear with it — the providers e2e authoring walk caught a rule that hid
+  // Save whenever the loaded snapshot was empty.
+  it("a fresh install shows Save the moment the first row is added, and the PUT carries it", async () => {
+    getWorkspaceProvidersMock.mockResolvedValue({ providers: {}, etag: '"e10"' });
+    putWorkspaceProvidersMock.mockResolvedValue({ providers: {}, etag: '"e11"', sourcesNoLongerAdmitted: 0 });
+    renderScreen();
+    await screen.findByText(PROVIDERS.LEGACY_OPEN_TITLE);
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.ADD_ROW_CTA }));
+    await screen.findByTestId("provider-row-github");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    expect(putWorkspaceProvidersMock).toHaveBeenCalledWith(
+      expect.objectContaining({ git: [expect.objectContaining({ kind: "github" })] }),
+      '"e10"',
+    );
+  });
+
   // V1 lens E finding 1 (HIGH), the other half: a second address typed into the
   // textarea reaches the PUT — the write path, not just the rendered value.
   it("Save sends a second base URL typed into the textarea", async () => {
