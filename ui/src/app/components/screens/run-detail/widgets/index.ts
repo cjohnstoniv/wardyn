@@ -8,3 +8,4 @@ export { FilesChangedWidget } from "./files-changed";
 export { SandboxWidget } from "./sandbox";
 export { CredentialsWidget } from "./credentials";
 export { IdentityWidget } from "./identity";
+export { EffectivePolicyWidget } from "./effective-policy";

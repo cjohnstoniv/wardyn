@@ -28,7 +28,7 @@
 // by new-run-screen.tsx's "Policy" SectionCard.
 import * as React from "react";
 import { CircleCheck, CircleX, Globe, Plus, ShieldCheck, Timer, Trash2 } from "lucide-react";
-import type { RunPolicySpec, ToolEffect, ToolRule } from "../../lib/types";
+import type { ConfinementClass, RunPolicySpec, ToolEffect, ToolRule } from "../../lib/types";
 import {
   TOOL_EFFECTS,
   TOOL_RULE_DEFAULT,
@@ -631,6 +631,19 @@ export function parseSpec(text: string): ParsedSpec {
     return { ok: false, message: "the spec must be a JSON object." };
   }
   return { ok: true, spec: value as RunPolicySpec };
+}
+
+// C5's one real trap, named: a parse that SUCCEEDS but whose
+// min_confinement_class names no real barrier class silently sets no floor —
+// the caller's own barrier control is what actually launches, and nothing
+// said so. Returns the unparseable value (for the caller's hint) or null —
+// null for an OMITTED field too (a policy that authors no floor on purpose is
+// not a trap).
+export function unparseableFloorClass(parsed: ParsedSpec): string | null {
+  if (!parsed.ok) return null;
+  const raw = (parsed.spec as { min_confinement_class?: unknown }).min_confinement_class;
+  const known: ConfinementClass[] = ["CC1", "CC2", "CC3"];
+  return typeof raw === "string" && raw.length > 0 && !known.includes(raw as ConfinementClass) ? raw : null;
 }
 
 /* ---------- the panel ---------- */

@@ -36,6 +36,8 @@ import {
   SectionLabel,
 } from "../../wardyn/primitives";
 import { EPISODES_COPY as EP, MEMBER_GETTING_STARTED as T } from "../../wardyn/copy";
+import { AGENTS } from "../../../lib/workspace-providers-copy";
+import { HarnessLoginPane } from "../settings/harness-login-pane";
 import { CC_META } from "../../wardyn/cc-meta";
 import { strongestAvailable } from "../../wardyn/default-confinement";
 import { useMemberLocalDirRoot, useUserDrive } from "../../wardyn/operator-context";
@@ -57,9 +59,23 @@ import type { AgentRun, SetupStatus } from "../../../lib/types";
 
 type Variant = "default" | "outline";
 
+// SetupModelAccess.state -> AGENTS.MODEL_ACCESS_* label (C4.5's six states,
+// setup.ts's own doc comment). "live" alone is success-toned above; every
+// other key here renders warning.
+const MODEL_ACCESS_CHIP_LABEL: Record<string, string> = {
+  live: AGENTS.MODEL_ACCESS_LIVE,
+  expiring: AGENTS.MODEL_ACCESS_EXPIRING,
+  expired_signin: AGENTS.MODEL_ACCESS_EXPIRED,
+  not_configured: AGENTS.MODEL_ACCESS_NOT_CONFIGURED,
+  shared_expired: AGENTS.MODEL_ACCESS_SHARED_EXPIRED,
+};
+
 export function MemberGettingStarted() {
   const [status, setStatus] = React.useState<SetupStatus | null>(null);
   const [retryTick, setRetryTick] = React.useState(0);
+  // The member's own AWS sign-in pane (C4.3) — opens IN PLACE under the card,
+  // per the mock; HarnessLoginPane is reused unchanged.
+  const [awsLoginOpen, setAwsLoginOpen] = React.useState(false);
 
   React.useEffect(() => {
     let active = true;
@@ -228,7 +244,18 @@ export function MemberGettingStarted() {
                 )}
                 {hasOwnKey ? (
                   <Chip tone="success">{T.MODEL_ACCESS_OWN_CHIP}</Chip>
+                ) : status?.model_access ? (
+                  // C4.5/C3: the chip stops reading llm_ready (a DEPLOYMENT
+                  // fact) and reads THIS caller's own model-access state —
+                  // success ONLY for live; the action rides its own line
+                  // below, never inside the chip.
+                  <Chip tone={status.model_access.state === "live" ? "success" : "warning"}>
+                    {MODEL_ACCESS_CHIP_LABEL[status.model_access.state] ?? AGENTS.MODEL_ACCESS_NOT_CONFIGURED}
+                  </Chip>
                 ) : llmReady ? (
+                  // model_access absent (older daemon, or the fetch failed) —
+                  // today's rendering, unchanged: never claim a dead
+                  // credential on a blip.
                   <Chip tone="success">{T.MODEL_ACCESS_PROVIDED_CHIP}</Chip>
                 ) : null}
                 {status?.auth.mode === "sso" && (
@@ -246,6 +273,36 @@ export function MemberGettingStarted() {
                     allocated — no chip, no placeholder. */}
                 {userDrive && <Chip tone="neutral">{driveChipLabel(userDrive)}</Chip>}
               </div>
+              {/* The server's own words, verbatim, as the chip row's own line
+                  — never reworded client-side (C4.5). */}
+              {!hasOwnKey && status?.model_access?.action && (
+                <p className="mt-2 text-sm text-warning">{status.model_access.action}</p>
+              )}
+              {/* not_configured / expired_signin / expiring are the per_user
+                  states — the member's OWN sign-in. shared_expired (an
+                  admin's dead credential) and live get no button: there is
+                  either nothing to do, or nothing this member can do about it. */}
+              {!hasOwnKey &&
+                status?.model_access &&
+                ["not_configured", "expired_signin", "expiring"].includes(status.model_access.state) &&
+                (awsLoginOpen ? (
+                  <div className="mt-3 max-w-md">
+                    <HarnessLoginPane
+                      provider="aws"
+                      onDone={() => {
+                        setAwsLoginOpen(false);
+                        setRetryTick((n) => n + 1);
+                      }}
+                      onCancel={() => setAwsLoginOpen(false)}
+                    />
+                  </div>
+                ) : (
+                  // outline: this card is informational (file header) and
+                  // never enters the page's one-teal-at-a-time computation.
+                  <Button size="sm" variant="outline" className="mt-3" onClick={() => setAwsLoginOpen(true)}>
+                    {AGENTS.SIGN_IN_AWS}
+                  </Button>
+                ))}
               <p className="mt-3 text-sm text-muted-foreground">
                 {T.SETUP_SUMMARY_HELPER}
               </p>

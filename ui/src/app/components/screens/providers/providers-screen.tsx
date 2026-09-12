@@ -40,6 +40,7 @@ import { OperatorOnlyHint } from "../../wardyn/primitives";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
 import { useOperator } from "../../wardyn/operator-context";
 import { Segmented } from "../permissions";
+import { AgentsTab } from "./agents-tab";
 import { GitTab } from "./git-tab";
 import { StorageTab } from "./storage-tab";
 
@@ -190,11 +191,24 @@ export function ProvidersScreen() {
                   operator={operator}
                 />
               )}
+              {/* Agents is its OWN resource (SiteConfig.agent_providers, its
+                  own GET/PUT) — a separate document from Git/Storage's
+                  WorkspaceProviders, so it fetches and saves itself (the
+                  UserDrivesCard precedent) rather than riding this screen's
+                  draft/save. Its own Save button is the tab's one teal — the
+                  shared one below is withheld while it's active. */}
+              {tab === "agents" && (
+                <AgentsTab
+                  harnesses={setupStatus?.harnesses ?? []}
+                  modelAccess={setupStatus?.model_access}
+                  operator={operator}
+                />
+              )}
               {/* ONE teal button at a time (CONSOLE-RULES §6, prompt §4): in
                   the legacy-open empty state (zero git rows) the Git tab's own
                   banner action IS the state's one affirmative, so the
                   screen's Save providers is withheld rather than doubling it. */}
-              {!(tab === "git" && (draft.git ?? []).length === 0) && (
+              {tab !== "agents" && !(tab === "git" && (draft.git ?? []).length === 0) && (
                 <div className="flex justify-end border-t border-border pt-4">
                   <Button disabled={!operator || saving} onClick={save}>
                     {PROVIDERS.SAVE_CTA}

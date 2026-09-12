@@ -29,11 +29,11 @@ import * as React from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
-import type { AgentRun, ConfinementClass, PreflightResult, RunPolicySpec, Workspace } from "../../../lib/types";
+import type { ConfinementClass, CreateRunResult, PreflightResult, RunPolicySpec, SetupHarnessTool, Workspace } from "../../../lib/types";
 import { Link } from "react-router-dom";
-import type { WizardAgent } from "./wizard-types";
 import { SectionCard, Seg } from "./new-run-primitives";
 import { RunRail } from "./new-run-rail";
+import { AgentPicker } from "./agent-picker";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { policies as policiesApi } from "../../../lib/api/policies";
 import { health as healthApi } from "../../../lib/api/health";
@@ -54,8 +54,9 @@ import { Chip } from "../../wardyn/primitives";
 import { useOperator, useUserDrive } from "../../wardyn/operator-context";
 import { CC_META } from "../../wardyn/cc-meta";
 import { RUN, RUN_MODE } from "../../wardyn/copy";
+import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { getDefaultCc, resolveDefaultCc } from "../../wardyn/default-confinement";
-import { PolicyPanel, POLICY_TEMPLATES, parseSpec, toolRulesSummary } from "../../wardyn/policy-panel";
+import { PolicyPanel, POLICY_TEMPLATES, parseSpec, toolRulesSummary, unparseableFloorClass } from "../../wardyn/policy-panel";
 import { AddWorkspaceDialog } from "../add-workspace-dialog";
 import { WorkspaceCard } from "./workspace-card";
 import { buildSpec, mergeRunSelections } from "./wizard-spec";
@@ -66,7 +67,6 @@ import {
   type RunPrefill,
   type WizardState,
 } from "./wizard-types";
-import { surfaceRunWarnings } from "./run-warnings";
 
 const ORDERED_CLASSES: ConfinementClass[] = ["CC1", "CC2", "CC3"];
 
@@ -141,6 +141,8 @@ export function NewRunScreen() {
   // spinner once the request has been running long enough to need one.
   const { disabled: launchDisabled, showSpinner: launchSpinning } = useDeferredBusy(launching);
   const [error, setError] = React.useState<string | null>(null);
+  // The 201's advisory `warnings[]` (§5c.8) — inline in the rail, not a toast.
+  const [launchWarnings, setLaunchWarnings] = React.useState<string[]>([]);
   // Preflight is a dry-run of the SAME request Launch sends — see buildRunInput
   // below. Independent loading/result/error state from Launch's: the two
   // actions can be in flight or have failed independently of one another.
@@ -165,6 +167,9 @@ export function NewRunScreen() {
   // fails its first model call, so the rail must say so BEFORE launch rather
   // than promising credentials that cannot be minted.
   const [llmReady, setLlmReady] = React.useState<boolean | null>(null);
+  // SetupStatus.harnesses — absent while unfetched or failed, same "unknown
+  // stays unknown" rule as llmReady above (AgentPicker's own fallback).
+  const [harnesses, setHarnesses] = React.useState<SetupHarnessTool[] | undefined>(undefined);
   // Existing run titles, offered as a native <datalist> under the Title input.
   // Grouping is by EXACT string, so without this the operator has to retype a
   // title character-perfect for a run to ever join its family — the feature
@@ -205,7 +210,10 @@ export function NewRunScreen() {
   React.useEffect(() => {
     setupApi
       .getSetupStatus()
-      .then((st) => setLlmReady(hasLlmPath(st)))
+      .then((st) => {
+        setLlmReady(hasLlmPath(st));
+        setHarnesses(st.harnesses);
+      })
       .catch(() => {
         /* unknown stays unknown — never claim a missing model path on a blip */
       });
@@ -342,6 +350,10 @@ export function NewRunScreen() {
     setParsedFloor(ORDERED_CLASSES.includes(f) ? f : undefined);
   }, [specText]);
 
+  // C5's one real trap (policy-panel.tsx's own doc) — the field is present and
+  // this build can't spell it.
+  const unparseableFloor = unparseableFloorClass(parsed);
+
   // The ACTIVE floor: a picked saved policy's stored floor, else the last
   // successful parse's. Both paths refuse to launch below it server-side.
   const floor = useSaved ? (selectedPolicy?.spec.min_confinement_class as ConfinementClass | undefined) : parsedFloor;
@@ -437,13 +449,21 @@ export function NewRunScreen() {
   const launch = async () => {
     setError(null);
     setLaunching(true);
+    setLaunchWarnings([]);
     try {
-      const created: AgentRun = await runsApi.createRun(buildRunInput());
+      const created: CreateRunResult = await runsApi.createRun(buildRunInput());
       // (A best-effort "save this as a policy" write used to live here, gated on
       // state.saveAsProfile — a flag no control on this screen has ever set. It
       // was unreachable from the moment the five-step wizard was replaced.)
-      surfaceRunWarnings(created);
-      navigate(`/runs/${encodeURIComponent(created.id)}`);
+      const warnings = created.warnings ?? [];
+      const goToRun = () => navigate(`/runs/${encodeURIComponent(created.id)}`);
+      // A beat to actually read them (§5c.8) before this screen unmounts.
+      if (warnings.length > 0) {
+        setLaunchWarnings(warnings);
+        window.setTimeout(goToRun, 1600);
+      } else {
+        goToRun();
+      }
     } catch (e) {
       setError(getErrorMessage(e) || "Failed to launch run.");
       setLaunching(false);
@@ -623,19 +643,7 @@ export function NewRunScreen() {
                 ]}
               />
 
-              {isAgent && (
-                <Field label="Agent" htmlFor="nr-agent">
-                  <Select value={state.agent} onValueChange={(v) => patch({ agent: v as WizardAgent })}>
-                    <SelectTrigger id="nr-agent">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="claude-code">Claude Code</SelectItem>
-                      <SelectItem value="codex-cli">Codex CLI</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </Field>
-              )}
+              {isAgent && <AgentPicker value={state.agent} harnesses={harnesses} onChange={(agent) => patch({ agent })} />}
 
               {/* The mode comes BEFORE the field it selects: an interactive run
                   is configured by a startup choice, an autonomous run by a prompt, and
@@ -836,6 +844,11 @@ export function NewRunScreen() {
                 }}
               />
 
+              {/* C5: named, not left to the barrier above silently winning. */}
+              {!useSaved && unparseableFloor && (
+                <p className="text-xs text-warning">{AGENTS.FLOOR_UNPARSEABLE(unparseableFloor)}</p>
+              )}
+
               {/* What buildSpec unions in AFTER the parse, named out loud. A
                   policy the operator did not write is one they cannot be held
                   to — and these are exactly the entries the document itself
@@ -948,6 +961,7 @@ export function NewRunScreen() {
             inFlight: launching,
             problem,
             error,
+            warnings: launchWarnings,
           }}
           preflight={
             preflightIsCurrent

@@ -54,6 +54,9 @@ interface RunRailProps {
     /** Why Launch cannot be pressed — a disabled button that won't say is a dead end. */
     problem: string | null;
     error: string | null;
+    /** The 201's advisory `warnings[]`, once Launch has actually fired
+     *  (§5c.8) — rendered here, inline, instead of a toast. */
+    warnings: string[];
   };
   preflight: { error: string | null; result: PreflightResult | null };
 }
@@ -156,6 +159,19 @@ export function RunRail({
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
           {launch.error}
         </p>
+      )}
+
+      {/* §5c.8: the 201's advisory warnings, inline — the toast this replaced
+          was gone the instant the run navigated away. */}
+      {launch.warnings.length > 0 && (
+        <div className="mt-3 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-warning">
+          <p className="font-medium text-foreground">Run launched with a warning</p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-4">
+            {launch.warnings.map((w, i) => (
+              <li key={i}>{w}</li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {/* Preflight moved ONTO the Policy panel, next to the document it checks —

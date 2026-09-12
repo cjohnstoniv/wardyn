@@ -112,7 +112,11 @@ export function hasSourceNotAdmitted(ws: Workspace): boolean {
 // runtime, and a TS union cannot be asked. Widening the roster is then one
 // edit here — a second literal list somewhere else is how a new agent ships
 // pickable but unclonable.
-export const WIZARD_AGENTS = ["claude-code", "codex-cli"] as const;
+// "none" (BYOA — the harness catalog's own id, harness.go) widened in here per
+// the comment above: a third harness (Your own tools) is now offered by
+// SetupStatus.harnesses (C-UI, W4), so it joins the roster this build can spell
+// — the same list, not a second one.
+export const WIZARD_AGENTS = ["claude-code", "codex-cli", "none"] as const;
 export type WizardAgent = (typeof WIZARD_AGENTS)[number];
 
 /** Whether a wire agent id is one this build can put in the picker. */
@@ -698,7 +702,11 @@ export type { ImpliedEgressHost, ImpliedEgressWhy } from "./wizard-spec";
 // prose (RD.NONE_LINE, step-access.tsx's OverridePeek) so "Codex CLI" can
 // never come out as the hardcoded "Claude Code" default.
 export function agentLabel(agent: WizardAgent): string {
-  return agent === "codex-cli" ? "Codex CLI" : "Claude Code";
+  if (agent === "codex-cli") return "Codex CLI";
+  // "none" (BYOA) — the harness catalog's own display name (harness.go), so a
+  // custom-image run's rail/startup prose never calls it "Claude Code".
+  if (agent === "none") return "Your own tools";
+  return "Claude Code";
 }
 
 // EXPORTED: wizard-spec.ts's buildSpec shares this ONE dedupe.

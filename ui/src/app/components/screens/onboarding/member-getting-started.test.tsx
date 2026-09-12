@@ -57,6 +57,7 @@ import type { Me } from "../../../lib/api/health";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { MEMBER } from "../../../lib/governance-copy";
 import { DRIVES, DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
+import { AGENTS } from "../../../lib/workspace-providers-copy";
 
 function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
   return baseStatus({
@@ -339,5 +340,77 @@ describe("MemberGettingStarted", () => {
     expect(await screen.findByText(MEMBER.GS_CHIP("walled"))).toBeInTheDocument();
     expect(screen.queryByText(DM.GS_DRIVE_BODY)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Drive · /)).not.toBeInTheDocument();
+  });
+
+  // C4.5/C3 — the chip stops reading the deployment-wide llm_ready and reads
+  // THIS caller's own SetupStatus.model_access instead: success tone ONLY for
+  // "live", every other state warning with the server's own `action` verbatim
+  // as the chip row's own line.
+  describe("the Model access chip reads status.model_access", () => {
+    it("live: success tone, no action line, no CTA", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "live" } }));
+      renderPage();
+      const chip = await screen.findByText(AGENTS.MODEL_ACCESS_LIVE);
+      expect(chip).toBeInTheDocument();
+      expect(chip.closest("span")?.className).toMatch(/success/);
+      expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
+    });
+
+    it("expiring: warning tone, the server's action verbatim, and the CTA", async () => {
+      getSetupStatusMock.mockResolvedValue(
+        status({ model_access: { state: "expiring", action: "Sign in again before 2026-09-12 09:00" } }),
+      );
+      renderPage();
+      const chip = await screen.findByText(AGENTS.MODEL_ACCESS_EXPIRING);
+      expect(chip.closest("span")?.className).toMatch(/warning/);
+      expect(screen.getByText("Sign in again before 2026-09-12 09:00")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
+    });
+
+    it("expired_signin: warning tone and the CTA", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "expired_signin" } }));
+      renderPage();
+      await screen.findByText(AGENTS.MODEL_ACCESS_EXPIRED);
+      expect(screen.getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
+    });
+
+    it("not_configured: warning tone and the CTA", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" } }));
+      renderPage();
+      await screen.findByText(AGENTS.MODEL_ACCESS_NOT_CONFIGURED);
+      expect(screen.getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
+    });
+
+    it("shared_expired: warning tone, the action line, and NO button — nothing the member can do", async () => {
+      getSetupStatusMock.mockResolvedValue(
+        status({
+          model_access: {
+            state: "shared_expired",
+            action: "Your admin's model credential expired — ask them to reconnect it",
+          },
+        }),
+      );
+      renderPage();
+      await screen.findByText(AGENTS.MODEL_ACCESS_SHARED_EXPIRED);
+      expect(
+        screen.getByText("Your admin's model credential expired — ask them to reconnect it"),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
+    });
+
+    it("model_access absent (older daemon / a failed fetch) keeps today's llm_ready rendering", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ llm_ready: true }));
+      renderPage();
+      expect(await screen.findByText("Model access · Provided by your admin")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
+    });
+
+    it("clicking Sign in to AWS opens HarnessLoginPane in place", async () => {
+      const user = userEvent.setup();
+      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" } }));
+      renderPage();
+      await user.click(await screen.findByRole("button", { name: AGENTS.SIGN_IN_AWS }));
+      expect(screen.getByTestId("harness-login-pane")).toBeInTheDocument();
+    });
   });
 });

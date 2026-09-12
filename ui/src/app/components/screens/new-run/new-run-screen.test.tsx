@@ -76,6 +76,7 @@ import { OperatorProvider } from "../../wardyn/operator-context";
 import { GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
 import { DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 import { RUN } from "../../wardyn/copy";
+import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { setDefaultCc } from "../../wardyn/default-confinement";
 import { lsSet } from "../../../lib/storage";
 
@@ -800,5 +801,55 @@ describe("NewRunScreen — a cloned run reaches the wire as the run it cloned", 
     await screen.findByRole("button", { name: /Launch run/ });
     expect(screen.queryByText(RUN.CLONE_NOTE)).toBeNull();
     expect(screen.queryByText(RUN.CLONE_CEILING_NOTE)).toBeNull();
+  });
+});
+
+// §5c.4 — the Agent picker reads SetupStatus.harnesses. Roster-unknown (the
+// fetch never landed, or the field is absent — an older daemon) keeps today's
+// two literals and marks nothing unavailable; once the roster arrives, every
+// row renders, a disabled one WITH its reason, never hidden.
+describe("NewRunScreen — the Agent picker reads the harness roster", () => {
+  it("roster-unknown keeps today's two catalog literals, nothing marked unavailable", async () => {
+    renderScreen();
+    await user.click(await screen.findByRole("combobox", { name: "Agent" }));
+    expect(await screen.findByRole("option", { name: "Claude Code" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Codex CLI" })).toBeInTheDocument();
+    expect(screen.queryByText(AGENTS.UNAVAILABLE)).not.toBeInTheDocument();
+  });
+
+  it("a roster with a disabled row renders it disabled with AGENTS.UNAVAILABLE, never hidden", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({
+        harnesses: [
+          { id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, enabled: true },
+          { id: "codex-cli", display: "Codex CLI", has_gateway: true, has_login: false, enabled: false },
+        ],
+      }),
+    );
+    renderScreen();
+    await user.click(await screen.findByRole("combobox", { name: "Agent" }));
+    const codex = await screen.findByRole("option", { name: /Codex CLI/ });
+    expect(codex).toHaveAttribute("aria-disabled", "true");
+    expect(codex).toHaveTextContent(AGENTS.UNAVAILABLE);
+  });
+});
+
+// C5's one real trap: a class the JSON parses but this build can't spell
+// silently sets no floor. Say so under the field.
+describe("NewRunScreen — the unparseable barrier-class hint", () => {
+  it("renders when the JSON parses but min_confinement_class names no real class", async () => {
+    renderScreen();
+    const textarea = await screen.findByLabelText("Spec (JSON)");
+    fireEvent.change(textarea, {
+      target: { value: JSON.stringify({ min_confinement_class: "vault", allowed_domains: [] }, null, 2) },
+    });
+    expect(await screen.findByText(AGENTS.FLOOR_UNPARSEABLE("vault"))).toBeInTheDocument();
+  });
+
+  it("says nothing when the field is simply absent", async () => {
+    renderScreen();
+    const textarea = await screen.findByLabelText("Spec (JSON)");
+    fireEvent.change(textarea, { target: { value: JSON.stringify({ allowed_domains: [] }, null, 2) } });
+    expect(screen.queryByText(/isn't a barrier class/)).not.toBeInTheDocument();
   });
 });

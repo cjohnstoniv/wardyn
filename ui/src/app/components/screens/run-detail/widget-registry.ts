@@ -11,17 +11,19 @@
 //
 // The ids are NOT ours to choose: internal/api/ui_layout.go's
 // runLayoutWidgetIDs is a CLOSED set the server validates every PUT against
-// ("terminal, egress, files, sandbox, credentials, identity, ssh"). An id
-// outside it is a 400, so this table's keys must match that slice exactly —
-// the two halves of the contract are kept in sync by hand. That file's own
-// doc explains what is deliberately absent: `timeline` (deleted by the
-// terminal-first redesign) and the three TABS, which have no x/y/w/h.
+// ("terminal, egress, files, sandbox, credentials, identity, effective-policy,
+// ssh"). An id outside it is a 400, so this table's keys must match that slice
+// exactly — the two halves of the contract are kept in sync by hand (C-UI adds
+// `effective-policy` to BOTH, in the same commit — a client-only add would
+// 400 every layout PUT that ever placed it). That file's own doc explains what
+// is deliberately absent: `timeline` (deleted by the terminal-first redesign)
+// and the three TABS, which have no x/y/w/h.
 //
 // No JSX here on purpose — this is a .ts data table, so the render functions
 // use React.createElement rather than turning the registry into a component
 // module.
 import * as React from "react";
-import { Box, FileDiff, Fingerprint, Globe, KeyRound, SquareTerminal, Terminal } from "lucide-react";
+import { Box, FileDiff, Fingerprint, Globe, KeyRound, ShieldCheck, SquareTerminal, Terminal } from "lucide-react";
 import type {
   AgentRun,
   AuditEvent,
@@ -32,6 +34,7 @@ import type { RunLayoutPreset, RunLayoutWidget } from "../../../lib/api/run-layo
 import { ConnectSSHCard } from "../run-detail-ssh";
 import {
   CredentialsWidget,
+  EffectivePolicyWidget,
   EgressWidget,
   FilesChangedWidget,
   IdentityWidget,
@@ -53,6 +56,7 @@ export type WidgetId =
   | "sandbox"
   | "credentials"
   | "identity"
+  | "effective-policy"
   | "ssh";
 
 // Everything a widget can need, assembled once by the screen. Widgets keep
@@ -189,6 +193,20 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     presets: {
       live: { x: 8, y: 16, w: 4, h: 4 },
       finished: { x: 6, y: 8, w: 6, h: 4 },
+    },
+  },
+  // §5c.8 (C-UI): "Effective policy" beside "Identity"'s own Policy row — one
+  // line per tightening launch actually applied, read off the run's own
+  // audit trail (the widget renders nothing when the datum itself is absent,
+  // so it never claims a story the trail can't back).
+  "effective-policy": {
+    label: "Effective policy",
+    Icon: ShieldCheck,
+    component: (ctx) => React.createElement(EffectivePolicyWidget, { audit: ctx.audit }),
+    defaultLayout: { w: 4, h: 4, minW: 3, minH: 2 },
+    presets: {
+      live: { x: 8, y: 25, w: 4, h: 4 },
+      finished: { x: 0, y: 12, w: 6, h: 4 },
     },
   },
   ssh: {
