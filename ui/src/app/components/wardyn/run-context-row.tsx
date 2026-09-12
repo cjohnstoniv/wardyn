@@ -17,16 +17,39 @@ import { AgentBadge, ConfinementChip } from "./primitives";
 // per-row fetch is fine (the row stays mounted across the parent's poll because
 // it's keyed by approval id, so [runId] never re-fires). A missing/gone run
 // still renders the id + Open-run link so the approver can always drill in.
-export function RunContextRow({ runId }: { runId: string }) {
+export function RunContextRow({
+  runId,
+  onRun,
+}: {
+  runId: string;
+  /** B4: the fetched run, handed back to the card above. The approval card has
+   *  to know whether the run has ENDED — a terminal run's PENDING approvals are
+   *  cancelled by the lifecycle cascade, so offering Approve/Deny on one is a
+   *  dead control on a governance surface — and this row already fetches
+   *  exactly that record. A second getRun in the parent would be two reads of
+   *  one run that can disagree. null = gone, or unreadable by this caller. */
+  onRun?: (run: AgentRun | null) => void;
+}) {
   // undefined = loading, null = fetch failed / run gone, AgentRun = loaded.
   const [run, setRun] = React.useState<AgentRun | null | undefined>(undefined);
+  // A ref, not a dependency: a fresh closure on every parent render must not
+  // re-fire the fetch (the reason attach-terminal.tsx keeps onClose in one).
+  const onRunRef = React.useRef(onRun);
+  React.useEffect(() => {
+    onRunRef.current = onRun;
+  }, [onRun]);
 
   React.useEffect(() => {
     let alive = true;
+    const settle = (r: AgentRun | null) => {
+      if (!alive) return;
+      setRun(r);
+      onRunRef.current?.(r);
+    };
     api
       .getRun(runId)
-      .then((r) => alive && setRun(r ?? null))
-      .catch(() => alive && setRun(null));
+      .then((r) => settle(r ?? null))
+      .catch(() => settle(null));
     return () => {
       alive = false;
     };

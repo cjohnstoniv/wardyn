@@ -36,7 +36,12 @@ import {
 import { isTerminalRunState } from "../../lib/types";
 import { runs as runsApi } from "../../lib/api/runs";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
-import { audit as auditApi, egressFromAudit, exitCodeFromAudit, taskModeFromAudit } from "../../lib/api/audit";
+import {
+  audit as auditApi,
+  createRequestFromAudit,
+  egressFromAudit,
+  exitCodeFromAudit,
+} from "../../lib/api/audit";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { recordings as recordingsApi } from "../../lib/api/recordings";
 import { health } from "../../lib/api/health";
@@ -79,6 +84,7 @@ import { SummaryHeader } from "./run-detail-summary-header";
 import { RunDetailCommandBar } from "./run-detail-command-bar";
 import { RunCanvas } from "./run-detail/canvas";
 import { RunFailureBlock } from "./run-detail/failure-block";
+import { runPrefill } from "./new-run/wizard-types";
 import type { WidgetContext } from "./run-detail/widget-registry";
 
 // Live refresh cadence for a non-terminal run's detail.
@@ -467,8 +473,9 @@ function Cockpit({
   grants: CredentialGrant[];
   egress: EgressDecision[];
   audit: AuditEvent[];
-  /** This run's PENDING approvals — only used to decide whether the viewer
-   *  note applies; the decision surface itself is LiveApprovals' own poll. */
+  /** This run's PENDING approvals — the viewer note, and (B3) the ONE live
+   *  held count every widget reads; the decision surface itself is
+   *  LiveApprovals' own poll. */
   pending: ApprovalRequest[];
   recording: Recording | null;
   recState: "idle" | "loading" | "error" | "ready";
@@ -477,6 +484,12 @@ function Cockpit({
   onGoRecording: () => void;
 }) {
   const principal = usePrincipal();
+  const navigate = useNavigate();
+  // The run's REQUEST-scoped facts, off its run.create audit row — the only
+  // durable record of task_mode, interactive_start, seed_auto_tools and
+  // tool_approvals, none of which lands on AgentRun. Read once here; the exec
+  // pane and B4b's clone both need it.
+  const createRequest = createRequestFromAudit(audit);
   // useSecurityOperator, not useOperator (0.7 §B): this banner says "you can't
   // decide any of these", and authorizeMemberDecision (approvals.go:392)
   // early-returns for the security tier — so a security admin can decide every
@@ -496,7 +509,16 @@ function Cockpit({
   // task_mode lives only in the run.create audit event (request-scoped, never
   // on AgentRun) — this page already holds the full trail, so the pane can
   // speak honestly about a no-harness run for free.
-  const execMode = taskModeFromAudit(audit) === "exec";
+  const execMode = createRequest.task_mode === "exec";
+  // B4b — "Start a run like this one", built from the TWO durable sources this
+  // page already holds: the run row and its run.create audit event (the only
+  // record of task_mode, interactive_start, seed_auto_tools and
+  // tool_approvals). Nothing is re-fetched and no new read path opens, so a
+  // member still clones only runs the server already let them read
+  // (getRunAuthorized). Create re-clamps, so a clone of a run authored above
+  // the caller's ceiling is narrowed at launch with its reason, not here.
+  const onClone = () =>
+    navigate("/runs/new", { state: { prefill: runPrefill(run, createRequest) } });
   const terminalPane = (
     <>
       {/* M7(b): above the terminal, because on a run that ended badly the
@@ -504,7 +526,7 @@ function Cockpit({
           rather than beside it so the canvas keeps placing exactly one hero,
           and nothing on this page moves for a run that ended fine (the block
           renders null unless the audit trail says otherwise). */}
-      <RunFailureBlock run={run} audit={audit} onGoAudit={onGoAudit} />
+      <RunFailureBlock run={run} audit={audit} onGoAudit={onGoAudit} onClone={onClone} />
       <TerminalPane
         run={run}
         terminal={terminal}
@@ -545,6 +567,11 @@ function Cockpit({
     operator,
     grants,
     egress,
+    // B3 — the SAME derivation the command bar's "sandbox held" and the board's
+    // card state already use (isHeld, live-approvals.tsx), not a second copy
+    // and not a count of audit rows. `egress` above stays the history the rows
+    // render; this is the state the alarm chip states.
+    heldCount: pending.filter(isHeld).length,
     audit,
     onGoAudit,
     terminalPane,

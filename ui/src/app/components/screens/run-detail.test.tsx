@@ -49,7 +49,10 @@ vi.mock("../../lib/api/audit", () => ({
   audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) },
   egressFromAudit: () => [],
   exitCodeFromAudit: () => undefined,
-  taskModeFromAudit: () => auditMocks.taskMode,
+  // B4b: the request-scoped half of the run, off its run.create row —
+  // task_mode included (it replaced taskModeFromAudit here), plus the fields a
+  // clone needs that the run record never held.
+  createRequestFromAudit: () => ({ task_mode: auditMocks.taskMode }),
   // The failure block reads the run's ending off the same trail. Mocked to
   // "nothing to explain" by default so every existing case here keeps its
   // exact layout; failure-block.test.tsx exercises the real derivation.

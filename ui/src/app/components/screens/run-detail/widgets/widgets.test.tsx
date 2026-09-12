@@ -148,11 +148,48 @@ describe("EgressWidget", () => {
       { id: "e1", time: new Date().toISOString(), domain: "api.github.com", decision: "pending" },
       { id: "e2", time: new Date().toISOString(), domain: "api.anthropic.com", decision: "allow" },
     ];
-    render(<EgressWidget egress={egress} />);
+    render(<EgressWidget egress={egress} heldCount={1} />);
 
-    expect(screen.getByText("1 held")).toBeInTheDocument();
+    expect(screen.getByText(RUN_COCKPIT.held(1))).toBeInTheDocument();
     expect(screen.getByText("pending")).toBeInTheDocument();
     expect(screen.getByText("api.github.com")).toBeInTheDocument();
+  });
+
+  // B3 — the finding, written as the case that used to fail. The audit trail is
+  // APPEND-ONLY (0001_init.sql, chained by 0047), so an egress.pending row is a
+  // historical EVENT and never stops being one: deriving the chip from those
+  // rows counted a request approved an hour ago, forever, on the one surface
+  // whose entire job is to be the alarm. The row still renders as history; only
+  // the NUMBER moved to the live derivation (isHeld, live-approvals.tsx).
+  it("does not count an egress.pending ROW whose approval has since been APPROVED", () => {
+    const egress: EgressDecision[] = [
+      {
+        id: "e1",
+        time: new Date().toISOString(),
+        domain: "api.github.com",
+        decision: "pending",
+        approval_id: "apr_1",
+      },
+    ];
+    // The run's live approvals hold nothing — apr_1 came back APPROVED.
+    render(<EgressWidget egress={egress} heldCount={0} />);
+
+    // No chip at all, and in particular not a "1 held" derived from the row.
+    expect(screen.queryByText(/held/)).not.toBeInTheDocument();
+    // The history itself is untouched — the row and its decision still render.
+    expect(screen.getByText("pending")).toBeInTheDocument();
+    expect(screen.getByText("api.github.com")).toBeInTheDocument();
+  });
+
+  // Absent reads as ZERO, never as "fall back to counting the rows" — that
+  // fallback IS the bug, and a widget mounted without the cockpit above it
+  // (the catalog preview) must not resurrect it.
+  it("an unpassed heldCount is no chip, even with pending rows in the trail", () => {
+    const egress: EgressDecision[] = [
+      { id: "e1", time: new Date().toISOString(), domain: "api.github.com", decision: "pending" },
+    ];
+    render(<EgressWidget egress={egress} />);
+    expect(screen.queryByText(/held/)).not.toBeInTheDocument();
   });
 });
 

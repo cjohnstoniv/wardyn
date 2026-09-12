@@ -85,6 +85,7 @@ function ctx(overrides: Partial<WidgetContext> = {}): WidgetContext {
     operator: false,
     grants: [],
     egress: [],
+    heldCount: 0,
     audit: [],
     onGoAudit: () => {},
     terminalPane: <div>the session</div>,

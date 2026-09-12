@@ -13,6 +13,8 @@ import {
   buildSpec,
   impliedEgressHosts,
   initialWizardState,
+  runPrefill,
+  WIZARD_AGENTS,
 } from "./wizard-types";
 import { mergeRunSelections } from "./wizard-spec";
 import type { WizardState } from "./wizard-types";
@@ -821,5 +823,155 @@ describe("buildSpec — drive", () => {
   it("never emits a drive for a narrowing with no mount asked for", () => {
     const { run } = buildSpec({ ...initialWizardState(), driveReadOnly: true });
     expect(run.drive).toBeUndefined();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// B4b — "Start a run like this one"
+//
+// The field report asked for a re-run button and assumed the run record held
+// everything needed. It does not: AgentRun carries no task_mode, no
+// interactive_start, no seed_auto_tools and no tool_approvals, and an inline
+// policy is never persisted at all. So the clone reads TWO durable sources —
+// the run row and its `run.create` audit event — and NAMES the one thing it
+// cannot carry. A clone that silently dropped `tool_approvals: hold` would
+// launch a less supervised run than the one it copied, which is exactly the
+// class of failure this product exists to prevent.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("B4b — runPrefill: the clone carries both sources, and says what it cannot", () => {
+  // A killed run as the two sources actually leave it behind.
+  const row = {
+    agent: "codex-cli",
+    task: "rerun the migration",
+    title: "Migration 0062",
+    description: "ticket 4412",
+    policy_id: "pol-7",
+    confinement_class: "CC3" as const,
+    interactive: true,
+    workspace_ids: ["ws-a", "ws-b"],
+  };
+  // …and everything createRunAuditData stamps that the row cannot hold.
+  const created = {
+    task_mode: "exec",
+    interactive_start: "shell",
+    seed_auto_tools: true,
+    tool_approvals: "hold",
+    inline_policy: false,
+  };
+
+  it("round-trips every field the two sources carry", () => {
+    const state = initialWizardState("CC1", runPrefill(row, created).state);
+
+    // From the run ROW.
+    expect(state.title).toBe("Migration 0062");
+    expect(state.description).toBe("ticket 4412");
+    expect(state.agent).toBe("codex-cli");
+    expect(state.task).toBe("rerun the migration");
+    expect(state.confinementClass).toBe("CC3"); // NOT the "CC1" default above
+    expect(state.mode).toBe("interactive");
+    expect(state.selectedPolicyId).toBe("pol-7");
+    expect(state.workspaces).toEqual([{ workspaceId: "ws-a" }, { workspaceId: "ws-b" }]);
+
+    // From the run.create AUDIT ROW — the half the run record cannot hold, and
+    // the half a clone built off the row alone would have silently dropped.
+    expect(state.runType).toBe("command"); // task_mode: exec
+    expect(state.interactiveStart).toBe("shell");
+    expect(state.seedAutoTools).toBe(true);
+    expect(state.toolApprovals).toBe("hold");
+  });
+
+  it("the DOCUMENTED REMAINDER stays at its fresh-wizard default, never a stale copy", () => {
+    const fresh = initialWizardState("CC1");
+    const state = initialWizardState("CC1", runPrefill(row, created).state);
+
+    // Credentials and the approvals gating them are minted per run: carrying
+    // them over would mint a credential nobody asked for on THIS launch.
+    expect(state.githubEnabled).toBe(fresh.githubEnabled);
+    expect(state.gitPatEnabled).toBe(fresh.gitPatEnabled);
+    expect(state.llmSecretName).toBe(fresh.llmSecretName);
+    // Egress and first-use posture live in the policy (carried by policy_id,
+    // or named as lost) — never re-derived from the run's own decisions.
+    expect(state.allowedDomains).toEqual(fresh.allowedDomains);
+    expect(state.firstUseApproval).toBe(fresh.firstUseApproval);
+    // AgentRun.image is the RESOLVED sandbox image; WizardState.image is a BYOI
+    // BASE, which buildSpec sends as one. Carrying it would turn every clone
+    // into a BYOI request — refused where no image builder is wired, re-wrapped
+    // where one is, and for a real BYOI run it would ask to wrap that run's own
+    // wrapper. No UI field shows it, so the operator could not even see it.
+    expect(state.image).toBe("");
+    // Request-scoped and on neither source: there is nothing durable to read.
+    expect(state.driveEnabled).toBe(fresh.driveEnabled);
+    expect(state.integrationId).toBeUndefined();
+    expect(state.lifecycle).toBe(fresh.lifecycle);
+    expect(state.autoStopMinutes).toBe(fresh.autoStopMinutes);
+  });
+
+  it("an INLINE-policy run clones without its policy, and the clone says so", () => {
+    // inline_policy runs record `inline_policy: true` and a nil policy id —
+    // the document itself is never stored (internal/api/inline_policy.go), so
+    // there is nothing to prefill and the wizard must not pretend otherwise.
+    const prefill = runPrefill({ ...row, policy_id: undefined }, { ...created, inline_policy: true });
+
+    expect(prefill.inlinePolicy).toBe(true);
+    expect(prefill.state.selectedPolicyId).toBeUndefined();
+    // The barrier still comes across — it IS on the row — so the clone is not
+    // silently weaker than the run it copies on the one axis it can carry.
+    expect(initialWizardState("CC1", prefill.state).confinementClass).toBe("CC3");
+  });
+
+  it("a saved-policy run carries the reference and raises no ceiling note", () => {
+    const prefill = runPrefill(row, created);
+    expect(prefill.inlinePolicy).toBe(false);
+    expect(prefill.state.selectedPolicyId).toBe("pol-7");
+  });
+
+  it("an older trail with no run.create data leaves the request-scoped half at its default", () => {
+    // The pre-0.7 case, and the truncated-trail case: absent must read as "not
+    // asked for", never as a guess. An invented `tool_approvals: hold` would be
+    // as wrong as a dropped one.
+    const state = initialWizardState("CC1", runPrefill(row).state);
+    expect(state.runType).toBe("agent");
+    expect(state.interactiveStart).toBe("agent");
+    expect(state.seedAutoTools).toBe(false);
+    expect(state.toolApprovals).toBe("auto");
+  });
+
+  it("an agent id this build cannot spell leaves the picker on its default", () => {
+    // A retired harness on an old run must not write an unlaunchable value
+    // into the picker — buildSpec would emit it and create would 400.
+    const state = initialWizardState("CC1", runPrefill({ ...row, agent: "cursor" }).state);
+    expect(state.agent).toBe(initialWizardState("CC1").agent);
+  });
+
+  // …and the check is asked of the ROSTER, so widening it (C-UI reads the
+  // harness catalog) carries the clone path with it. A second literal pair is
+  // how a new agent ships pickable but unclonable.
+  it("clones every agent the roster carries, whatever the roster becomes", () => {
+    for (const agent of WIZARD_AGENTS) {
+      expect(initialWizardState("CC1", runPrefill({ ...row, agent }).state).agent).toBe(agent);
+    }
+  });
+
+  // The BYOI trap, stated on the wire body rather than only on the state: this
+  // is the assertion that would have caught it.
+  it("the built body of a cloned NON-BYOI run carries no image at all", () => {
+    const { run } = buildSpec(initialWizardState("CC1", runPrefill(row, created).state));
+    expect(run.image).toBeUndefined();
+  });
+
+  // The prefill travels as react-router navigation state, which is
+  // structured-cloned into history — a function or a class instance on it
+  // would throw at navigate() time, in the browser, and nowhere else.
+  it("is structured-cloneable, because it rides history state", () => {
+    expect(() => structuredClone(runPrefill(row, created))).not.toThrow();
+  });
+
+  // And the whole point: the clone is LAUNCHABLE. A prefill that produced a
+  // spec create would refuse is a button that looks like a remedy and is not.
+  it("produces a spec buildSpec accepts", () => {
+    const state = initialWizardState("CC1", runPrefill(row, created).state);
+    const { run } = buildSpec(state);
+    expect(run.agent).toBe("codex-cli");
+    expect(run.confinement_class).toBe("CC3");
   });
 });

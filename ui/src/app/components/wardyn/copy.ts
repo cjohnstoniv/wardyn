@@ -133,6 +133,18 @@ export const APPROVAL_KIND_LABEL: Record<ApprovalKind, string> = {
 // DRAFT (M2) — not yet owner-frozen.
 export const APPROVAL = {
   STATE_CANCELLED: "Cancelled",
+  // B4, console half: what a human reads WHERE the Approve/Deny pair used to
+  // be once the run has ended, and on the decided row the cascade wrote. One
+  // string for both surfaces on purpose — they state the same fact, and two
+  // copies would be two wordings of it.
+  // DRAFT (M2 canon pending) — staged in workspace-providers-prompt.md §7.6.
+  CANCELLED_BODY: "The run ended before anyone decided this. Nothing was approved and nothing was denied.",
+  // P0.3 (R3-F001/F108/F145): an egress_domain approval is HOST-WIDE — the
+  // server strips any port before it keys the decision (approvalHostKey,
+  // internal/egress/proxy/approvals.go). 0.7.2 aligns the three surfaces to SAY
+  // so rather than rely on it quietly; the port-scoped semantic is 0.8's.
+  // DRAFT (M2 canon pending).
+  HOST_WIDE_NOTE: "This covers the host, not one port — an approval here answers every port on it.",
 } as const;
 
 // ============================================================
@@ -335,7 +347,7 @@ export const RUN_COCKPIT = {
   // 3. No PTY to type into — the agent drives.
   autonomous: "autonomous — the agent drives",
   // 3b. Same pane, exec task mode: a shell command ran with NO agent harness
-  // (task_mode is audit-only, taskModeFromAudit) — "the agent drives" would be
+  // (task_mode is audit-only, createRequestFromAudit) — "the agent drives" would be
   // false five ways on a run whose form said "No agent, no model".
   execNoHarness: "exec — shell command, no agent harness",
   // 4. Terminal state: the pane becomes the replay surface in place.
@@ -680,4 +692,77 @@ export const SITE = {
   // F22: the Network step's trusted-CA count, from /setup/status
   // (trusted_ca_certs) — the inline ternary (§5 #9), never a second helper.
   TRUSTED_CA_COUNT: (n: number) => `${n} trusted CA certificate${n === 1 ? "" : "s"}`,
+} as const;
+
+// DRAFT (M2 canon pending) — staged in workspace-providers-prompt.md §7.6
+// ("B-γ → wardyn/copy.ts"), parsed by nothing today.
+//
+// The shell's identity states (B1, R4-F107). Both are about the ONE question
+// the console cannot answer for itself: who is signed in. A failed /me used to
+// render the admin nav off a fail-open guess — indistinguishable from an authz
+// breach to the human reading it — and a failed sign-out used to be a
+// console.error nobody sees.
+export const SHELL = {
+  // B1: settled, but /me never answered. Rendered instead of a guessed nav, so
+  // it has to say that the emptiness is ignorance and not a denial.
+  UNKNOWN_BODY:
+    "We couldn't confirm who you are. Nothing here is hidden from you on purpose — reload, or sign in again.",
+  // M2 §1: no new word — the banner's action re-fires whoami(), which is
+  // exactly what the member Getting Started page's Retry already means.
+  UNKNOWN_ACTION: MEMBER_GETTING_STARTED.RETRY,
+  // R4-F107: POST /auth/logout failed, so the HttpOnly OIDC session cookie may
+  // still be live — the local token is gone either way, which is why the title
+  // says "here".
+  // DRAFT (M2) — DIVERGES from the §7.6 staging ("Couldn't sign you out" /
+  // "Your session is still live…"): these two are the M2 sitting sheet's §2
+  // texts, which do not overclaim — a failed POST does not PROVE the session
+  // survived, only that nothing confirmed it died.
+  SIGN_OUT_FAILED_TITLE: "Signed out here, but not on the server",
+  SIGN_OUT_FAILED_BODY: "Your session may still be active on the server. Close the browser, or try signing out again.",
+} as const;
+
+// DRAFT (M2 canon pending) — B4b, the clone of a run that ended.
+export const RUN = {
+  // The affordance the killed panel's own advice ("Start a new run if the work
+  // still needs doing") never had.
+  CLONE_CTA: "Start a run like this one",
+  // What carried over, and — the half that matters — what deliberately did not.
+  CLONE_NOTE:
+    "Prefilled from this run — task, agent, barrier, policy and what it attached. Credentials and approvals are minted fresh.",
+  // The one thing a clone CANNOT carry: an inline policy is never persisted
+  // (internal/api/inline_policy.go attaches it with a nil id), so the run row
+  // records only that there was one. A named ceiling beats a silent default.
+  CLONE_INLINE_POLICY_CEILING:
+    "This run used an inline policy, which isn't stored — pick a saved policy or write one again.",
+  // DRAFT (M2) — §7.6's staged RUN_CLONE_CEILING_NOTE, which shipped nowhere
+  // until now. It is the console half of §7 B4b's "create re-clamps": a member
+  // cloning an admin's run is narrowed AT LAUNCH, not flattered in this form,
+  // and the banner has to say so before they press Launch rather than after.
+  CLONE_CEILING_NOTE:
+    "Your ceiling applies again at launch — anything this run had above it is narrowed, with the reason.",
+} as const;
+
+// DRAFT (M2 canon pending) — R4-F144, WCAG 2.1.2: the cockpit terminal takes
+// Tab, Shift+Tab and Escape into the PTY, so a keyboard user needs an advertised
+// way out and 2.1.2 requires it be advised ON ENTRY.
+//
+// Chord: Ctrl+] — the M2 sheet's alternative, taken over the filed proposal's
+// Ctrl+Shift+Esc because Windows intercepts that at OS level (Task Manager)
+// before the browser ever sees it, and Esc/Shift+Tab are already spoken for.
+// Ctrl+] collides only with vim's tag-jump, inside the PTY, where the chord
+// deliberately does not reach the shell.
+// ONE spelling of the chord, composed into the sentence rather than typed
+// twice. The owner may yet rule a different one (a filed note: Ctrl+] needs
+// AltGr on DE/FR/ES layouts, where the browser then sees altKey and the binding
+// does not fire), and a hint that disagreed with the binding would be worse
+// than no hint at all — 2.1.2 is satisfied by an exit that WORKS, not by a
+// sentence about one.
+const ESCAPE_CHORD = "Ctrl+]";
+export const TERMINAL = {
+  ESCAPE_CHORD,
+  // DRAFT (M2) — DIVERGES from the §7.6 staging, which spells this
+  // `TERMINAL_ESCAPE_HINT(chord)` = "{chord} moves focus out of the terminal."
+  // This is the M2 sitting sheet's §2 wording; the chord is that sheet's ruled
+  // alternative to the filed Ctrl+Shift+Esc.
+  ESCAPE_CHORD_HINT: `${ESCAPE_CHORD} leaves the terminal`,
 } as const;

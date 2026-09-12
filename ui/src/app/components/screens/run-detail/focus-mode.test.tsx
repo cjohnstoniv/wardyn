@@ -62,6 +62,7 @@ function ctx(overrides: Partial<WidgetContext> = {}): WidgetContext {
     operator: false,
     grants: [],
     egress: [],
+    heldCount: 0,
     audit: [],
     onGoAudit: () => {},
     terminalPane: <div>the session</div>,
@@ -179,6 +180,11 @@ describe("Focus mode — the bottom strip states the facts", () => {
       <FocusMode
         ctx={ctx({
           egress,
+          // B3: one of the four rows above is an egress.pending EVENT, and one
+          // approval is held right now. They agree here so the other
+          // assertions stay readable; the case where they DISAGREE — which is
+          // the bug — is the next test.
+          heldCount: 1,
           grants: [{ id: "g1", scope: "repo:acme/widgets", audience: "github", state: "active" }],
           audit: [
             {
@@ -205,6 +211,21 @@ describe("Focus mode — the bottom strip states the facts", () => {
     expect(strip().getByText("Wall")).toBeInTheDocument();
     expect(screen.queryByText("CC2")).toBeNull();
     expect(strip().getByText("docker")).toBeInTheDocument();
+  });
+
+  // B3 — the SECOND copy of the lying count (the first is the Egress widget's
+  // own chip). The audit trail is append-only, so the egress.pending row for a
+  // hold that was approved an hour ago is still there and always will be:
+  // deriving "held" from it made the strip claim a hold on a run holding
+  // nothing. allow/deny still come from the rows, because those ARE settled.
+  it("states the LIVE held count, not the egress.pending rows in the trail", () => {
+    render(<FocusMode ctx={ctx({ egress, heldCount: 0 })} onExit={() => {}} />);
+
+    expect(strip().getByText(RUN_COCKPIT.held(0))).toBeInTheDocument();
+    expect(strip().queryByText(RUN_COCKPIT.held(1))).toBeNull();
+    // …and the settled halves are untouched by the change.
+    expect(strip().getByText(RUN_COCKPIT.allow(2))).toBeInTheDocument();
+    expect(strip().getByText(RUN_COCKPIT.deny(1))).toBeInTheDocument();
   });
 
   it("does NOT count a denied credential.mint as brokered", () => {

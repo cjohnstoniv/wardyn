@@ -36,7 +36,7 @@ import {
 } from "lucide-react";
 import { WardynWordmark } from "../wardyn/logo";
 import { Chip, ConfinementChip } from "../wardyn/primitives";
-import { SITE } from "../wardyn/copy";
+import { SHELL, SITE } from "../wardyn/copy";
 import { useTheme } from "../wardyn/theme-provider";
 import { strongestAvailable } from "../wardyn/default-confinement";
 import { lastCheckedLabel } from "../../lib/readiness";
@@ -137,7 +137,12 @@ export interface ShellMeta {
   networkPolicy?: "enforced" | "unenforced" | "acknowledged";
 }
 
-function useMeta(): ShellMeta {
+/** The shell's identity, plus the retry that re-fires /me (B1's banner action). */
+function useMeta(): [ShellMeta, () => void] {
+  // Bumped by retry(), which is the effect's only other dependency: /me is
+  // fetched once per load today, so after a failure identityResolved would stay
+  // false forever and the banner below would have nothing to offer.
+  const [attempt, setAttempt] = React.useState(0);
   const [meta, setMeta] = React.useState<ShellMeta>({
     trustDomain: "…",
     identityProvider: "…",
@@ -197,8 +202,8 @@ function useMeta(): ShellMeta {
     return () => {
       alive = false;
     };
-  }, []);
-  return meta;
+  }, [attempt]);
+  return [meta, React.useCallback(() => setAttempt((n) => n + 1), [])];
 }
 
 // SESSION_WARN_MS — how far ahead of the session's real expiry to start
@@ -289,7 +294,17 @@ const NAV_ITEMS: NavItem[] = [
 // discovering an admin-only screen as a raw 403 or an empty list instead of
 // simply not offering it.
 const MEMBER_NAV_PATHS = new Set(["/runs", "/approvals", "/workspaces"]);
-function navItemsForRole(role: Role): NavItem[] {
+function navItemsForRole(role: Role, identityResolved: boolean): NavItem[] {
+  // B1 — the fix the field report bought: `role` is FAIL-OPEN "admin" for an
+  // unresolved /me AND for one that failed, so the nav used to offer Policies /
+  // Governance / Permissions / Secrets / Audit to a human the server had
+  // correctly refused. Indistinguishable from an authz breach, and it cost a
+  // customer hours of incident response. So "not known yet" renders NEITHER
+  // nav — not the admin set, not the member set — and the banner below says
+  // why. `role`'s own fail-open default stays exactly as it was (see
+  // operator-context.tsx: never harden it), because the answer to a guess is
+  // not a different guess, it is declining to draw one.
+  if (!identityResolved) return [];
   // `!== "member"` and NOT `=== "admin"`, which is what makes this correct
   // unchanged under the three-tier model: a SECURITY ADMIN gets the full nav
   // (they reach approvals, audit, permissions and governance), and each of
@@ -347,7 +362,7 @@ function SidebarNav({
   meta: ShellMeta;
   onNavigate?: () => void;
 }) {
-  const items = navItemsForRole(meta.role);
+  const items = navItemsForRole(meta.role, meta.identityResolved);
   return (
     <>
       <nav className="space-y-0.5">
@@ -465,7 +480,11 @@ export function AppShell({
   // instead of flashing "No barrier" for a merely quiet control plane.
   confinementClasses?: ConfinementClass[];
 }) {
-  const meta = useMeta();
+  const [meta, retryIdentity] = useMeta();
+  // B1 — SETTLED and still unknown: /me answered nothing, so every tier the
+  // shell holds is the fail-open seed. Distinct from "not settled yet", which is
+  // an ordinary first paint and says nothing to anybody.
+  const identityUnknown = meta.resolved && !meta.identityResolved;
   const sessionExpiringSoon = useSessionExpiringSoon(meta.sessionExpiresAt);
   const location = useLocation();
   const navigate = useNavigate();
@@ -544,6 +563,29 @@ export function AppShell({
                   Control plane unreachable — showing the last data received.{" "}
                   {lastCheckedLabel(lastOkAt ?? null)}
                 </span>
+              </div>
+            )}
+            {/* B1 — the settled-but-unknown identity, beside the unreachable
+          banner above and in the same treatment: a state the console is IN,
+          stated where it cannot be missed. It replaces nothing the human could
+          have acted on — with no nav and no landing redirect, this banner and
+          its Retry are the page. Kept below the unreachable banner deliberately:
+          a dead control plane is the better explanation of the two and should be
+          read first. */}
+            {identityUnknown && (
+              <div
+                role="status"
+                className="relative z-50 flex shrink-0 items-center gap-2 border-b border-border bg-warning-subtle px-4 py-2 text-sm text-warning"
+              >
+                <AlertTriangle className="size-4 shrink-0" />
+                <span>{SHELL.UNKNOWN_BODY}</span>
+                <button
+                  type="button"
+                  onClick={retryIdentity}
+                  className="font-medium underline underline-offset-2"
+                >
+                  {SHELL.UNKNOWN_ACTION}
+                </button>
               </div>
             )}
             {/* W31-S1-7: the SSO session dies outright at its expiry, with no

@@ -40,6 +40,9 @@ export function egressFromAudit(events: AuditEvent[]): EgressDecision[] {
         domain,
         decision: map[e.action],
         bytes: num(d.bytes),
+        // B3: only egress.pending stamps one (docs/AUDIT-ACTIONS.md); str()
+        // answers undefined for the other two actions and for an older trail.
+        approval_id: str(d.approval_id),
       } satisfies EgressDecision;
     });
 }
@@ -96,17 +99,57 @@ export function exitCodeFromAudit(events: AuditEvent[]): number | undefined {
   return code;
 }
 
-// Whether the run executed a plain shell command with no agent harness. Like
-// the exit code, task_mode is request-scoped and never lands on AgentRun — the
-// run.create audit event is its only durable record (runs.go stamps it there
-// for exactly this reason). undefined = a harness run, or an older trail.
-export function taskModeFromAudit(events: AuditEvent[]): string | undefined {
-  for (const e of events) {
-    if (e.action !== "run.create") continue;
-    const m = e.data?.task_mode;
-    if (typeof m === "string" && m) return m;
-  }
-  return undefined;
+// B4b — every REQUEST-SCOPED field of a run, read back off its `run.create`
+// audit row.
+//
+// This REPLACES taskModeFromAudit, which read one field of this row the same
+// way (its last caller, run-detail.tsx, reads `.task_mode` off this instead —
+// there is no wrapper, because one would be a second name for the same read).
+// The reason the shape had to widen is the one that reshaped B4b: "everything
+// the run record already holds" is not enough to re-run a run. AgentRun
+// (lib/types/runs.ts) carries no task_mode, no
+// interactive_start, no seed_auto_tools and no tool_approvals — createRunAuditData
+// (internal/api/runs.go) stamps all four onto the run.create event precisely
+// BECAUSE none of them is stored on the row, which makes that event their only
+// durable record. A clone that read the row alone would silently drop a
+// tool-approval posture, and "silently" is the whole problem: the second run
+// would be less supervised than the one it copied.
+//
+// Each field is optional on the wire (the Go side omits a zero value), so each
+// is optional here. Absent = the server never stamped it: an older trail, or a
+// run that did not ask for it. Never guessed.
+export type CreateRequestFromAudit = {
+  /** "exec" — the run was a plain shell command, no agent harness. */
+  task_mode?: string;
+  /** What an interactive run's session opened with: "agent" or "shell". */
+  interactive_start?: string;
+  /** The boot seed was allowed tools before a human attached. */
+  seed_auto_tools?: boolean;
+  /** "hold" — an autonomous run's tool calls were routed to approvals. */
+  tool_approvals?: string;
+  /** The policy was written INLINE, and inline policies are never persisted
+   *  (internal/api/inline_policy.go attaches with a nil id) — so this is the
+   *  one thing a clone knows it cannot carry, and must say so. */
+  inline_policy?: boolean;
+  /** Every way launch NARROWED the request (resolveRunPolicy's clamp). Read
+   *  back so a clone can say what the original was already held to. */
+  clamp_warnings?: string[];
+};
+
+export function createRequestFromAudit(events: AuditEvent[]): CreateRequestFromAudit {
+  const e = events.find((x) => x.action === "run.create");
+  const d = (e?.data ?? {}) as Record<string, unknown>;
+  const bool = (v: unknown) => (typeof v === "boolean" ? v : undefined);
+  return {
+    task_mode: str(d.task_mode),
+    interactive_start: str(d.interactive_start),
+    seed_auto_tools: bool(d.seed_auto_tools),
+    tool_approvals: str(d.tool_approvals),
+    inline_policy: bool(d.inline_policy),
+    clamp_warnings: Array.isArray(d.clamp_warnings)
+      ? d.clamp_warnings.filter((w): w is string => typeof w === "string")
+      : undefined,
+  };
 }
 
 // Which audit action is the ROOT cause of a FAILED run, in the order a run

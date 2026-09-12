@@ -15,6 +15,8 @@ import { render, act, screen, waitFor, within, fireEvent } from "@testing-librar
 // --- Mock xterm so we don't need real DOM measurement in jsdom -------------
 const writeln = vi.fn();
 const resizeCalls: Array<[number, number]> = [];
+// The handler AttachTerminal installs via attachCustomKeyEventHandler (F144).
+let keyHandler: ((e: KeyboardEvent) => boolean) | null = null;
 vi.mock("@xterm/xterm", () => {
   class Terminal {
     cols = 80;
@@ -36,7 +38,12 @@ vi.mock("@xterm/xterm", () => {
     onBinary() {
       return { dispose() {} };
     }
-    attachCustomKeyEventHandler() {}
+    // F144: captured, not swallowed. The escape chord is bound through this
+    // hook, so a no-op mock would make the keyboard-trap fix untestable — and
+    // untestable is how it got filed in the first place.
+    attachCustomKeyEventHandler(fn: (e: KeyboardEvent) => boolean) {
+      keyHandler = fn;
+    }
     dispose() {}
   }
   return { Terminal };
@@ -113,7 +120,7 @@ class FakeWebSocket {
 
 import { AttachTerminal } from "./attach-terminal";
 import { OperatorProvider } from "./wardyn/operator-context";
-import { RUN_COCKPIT } from "./wardyn/copy";
+import { RUN_COCKPIT, TERMINAL } from "./wardyn/copy";
 import { runs } from "../lib/api/runs";
 import { HttpError } from "../lib/api/core";
 
@@ -623,5 +630,74 @@ describe("AttachTerminal — a handshake that never completes is a failure, not 
     await act(() => vi.advanceTimersByTimeAsync(120_000));
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(FakeWebSocket.instances[0].readyState).toBe(FakeWebSocket.OPEN);
+  });
+});
+
+// ── R4-F144: WCAG 2.1.2, No Keyboard Trap ───────────────────────────────────
+// xterm takes Tab, Shift+Tab and Escape into the PTY — correct for a terminal,
+// and it means a keyboard user who focuses this panel cannot leave the page
+// without a pointer. 2.1.2 allows a non-standard exit only if it is ADVISED ON
+// ENTRY, so the chord and its announcement are one feature: either alone still
+// fails the criterion.
+//
+// The chord is Ctrl+] and NOT the filed proposal's Ctrl+Shift+Esc — Windows
+// intercepts that at OS level (Task Manager) before the browser sees it, so on
+// the platform most likely to need it the exit would silently not exist.
+describe("AttachTerminal — the keyboard trap has an advertised exit (F144)", () => {
+  beforeEach(() => {
+    keyHandler = null;
+    FakeWebSocket.instances = [];
+    vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const chord = () =>
+    ({
+      type: "keydown",
+      key: "]",
+      ctrlKey: true,
+      shiftKey: false,
+      altKey: false,
+      metaKey: false,
+    }) as unknown as KeyboardEvent;
+
+  it("advertises the chord in the chrome AND to a screen reader", () => {
+    const { container } = render(<AttachTerminal runId="run_1" />);
+    // Visible, in the title bar, before anyone is trapped.
+    expect(screen.getByText(TERMINAL.ESCAPE_CHORD_HINT)).toBeInTheDocument();
+    // …and on the grid itself, for the reader who never sees the title bar.
+    expect(
+      container.querySelector(`[aria-description="${TERMINAL.ESCAPE_CHORD_HINT}"]`),
+    ).not.toBeNull();
+  });
+
+  it("Ctrl+] moves focus OUT of the terminal and is not forwarded to the PTY", () => {
+    render(<AttachTerminal runId="run_1" />);
+    act(() => FakeWebSocket.instances[0].open());
+    expect(keyHandler).not.toBeNull();
+
+    const handled = keyHandler!(chord());
+
+    // false = xterm must not also send it to the shell. Without this the chord
+    // would leave the terminal AND type into the agent's session.
+    expect(handled).toBe(false);
+    // Focus is on the panel — tabIndex -1, so Tab continues from here in
+    // document order rather than restarting at the top of the page.
+    expect(document.activeElement).not.toBeNull();
+    expect((document.activeElement as HTMLElement).tabIndex).toBe(-1);
+  });
+
+  it("leaves an ordinary ] alone — the terminal still gets its bracket", () => {
+    render(<AttachTerminal runId="run_1" />);
+    act(() => FakeWebSocket.instances[0].open());
+    const plain = { ...chord(), ctrlKey: false } as unknown as KeyboardEvent;
+    expect(keyHandler!(plain)).toBe(true);
+  });
+
+  it("leaves Ctrl+Shift+] alone — one chord, no near-miss that also escapes", () => {
+    render(<AttachTerminal runId="run_1" />);
+    act(() => FakeWebSocket.instances[0].open());
+    const near = { ...chord(), shiftKey: true } as unknown as KeyboardEvent;
+    expect(keyHandler!(near)).toBe(true);
   });
 });

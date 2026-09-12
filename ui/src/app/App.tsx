@@ -6,7 +6,9 @@
 import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { Navigate, Route, Routes, useNavigate, Outlet } from "react-router-dom";
+import { toast } from "sonner";
 import { Toaster } from "./components/ui/sonner";
+import { SHELL } from "./components/wardyn/copy";
 import { ThemeProvider } from "./components/wardyn/theme-provider";
 import { SignIn } from "./components/screens/sign-in";
 import { AppShell } from "./components/screens/app-shell";
@@ -24,7 +26,7 @@ import {
   markGateFired,
   setupGateActive,
 } from "./components/screens/setup/setup-gate";
-import { useRole, useRoleResolved } from "./components/wardyn/operator-context";
+import { useOperatorResolved, useRole, useRoleResolved } from "./components/wardyn/operator-context";
 import { approvals as approvalsApi } from "./lib/api/approvals";
 import { runs as runsApi } from "./lib/api/runs";
 import { usePoll } from "./lib/use-poll";
@@ -189,6 +191,14 @@ function RouteFallback() {
 export function FirstRunLanding({ status }: { status: SetupStatus | null }) {
   const role = useRole();
   const roleResolved = useRoleResolved();
+  // B1: "settled" is not "answered". roleResolved flips on a FAILED /me too (it
+  // is the stop-spinning signal and must stay that), which left this gate
+  // picking a landing out of the fail-open "admin" default for a human the
+  // server may have refused. useOperatorResolved is the signal that says /me
+  // actually answered — when it did not, redirect NOWHERE: the shell's
+  // identity-unknown banner (app-shell.tsx) is the page, instead of a guess.
+  const identityResolved = useOperatorResolved();
+  if (roleResolved && !identityResolved) return null;
   if (status === null || !roleResolved) return <RouteFallback />;
   return <Navigate to={firstRunLanding(status, role)} replace />;
 }
@@ -208,6 +218,13 @@ export function FirstRunLanding({ status }: { status: SetupStatus | null }) {
 function RequireSetup({ status }: { status: SetupStatus | null }) {
   const role = useRole();
   const roleResolved = useRoleResolved();
+  // B1, same reasoning as FirstRunLanding above: setupGateActive() reads the
+  // role, so a /me that never answered would bounce an unknown human into the
+  // ADMIN funnel on the fail-open default. Decline to gate instead — the route
+  // below still enforces itself server-side, and the shell says why the console
+  // looks empty.
+  const identityResolved = useOperatorResolved();
+  if (roleResolved && !identityResolved) return <Outlet />;
   if (status === null || !roleResolved) return <RouteFallback />;
   // Once per load: an access lands a gated install in the funnel; navigation
   // OUT of the funnel afterwards is informed wandering, not a gate escape —
@@ -422,7 +439,19 @@ export default function App() {
                 // left the HttpOnly session cookie alive, so the next auth probe
                 // silently re-signed us back in. logout() is best-effort and always
                 // resolves, so we then drop the local token and return to the gate.
-                await health.logout();
+                //
+                // R4-F107: …and SAY SO when the server did not confirm it. The
+                // local token is gone regardless (this tab is signed out), but
+                // the OIDC session cookie may still be live, so a reload
+                // re-enters the console — which, on a shared machine, is the
+                // one thing the button exists to prevent. The toast outlives
+                // the branch switch below: sonner's store is a module
+                // singleton and the sign-in gate mounts its own <Toaster />.
+                if (!(await health.logout())) {
+                  toast.error(SHELL.SIGN_OUT_FAILED_TITLE, {
+                    description: SHELL.SIGN_OUT_FAILED_BODY,
+                  });
+                }
                 setToken(null);
                 setAuth("unauthed");
               }}

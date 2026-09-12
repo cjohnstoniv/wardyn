@@ -26,7 +26,7 @@
 // egress hosts those grants require — is unioned back in by mergeRunSelections
 // and NAMED on screen, never merged behind the operator's back.
 import * as React from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 import type { AgentRun, ConfinementClass, PreflightResult, RunPolicySpec, Workspace } from "../../../lib/types";
@@ -53,13 +53,19 @@ import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
 import { useOperator, useUserDrive } from "../../wardyn/operator-context";
 import { CC_META } from "../../wardyn/cc-meta";
-import { RUN_MODE } from "../../wardyn/copy";
+import { RUN, RUN_MODE } from "../../wardyn/copy";
 import { getDefaultCc, resolveDefaultCc } from "../../wardyn/default-confinement";
 import { PolicyPanel, POLICY_TEMPLATES, parseSpec, toolRulesSummary } from "../../wardyn/policy-panel";
 import { AddWorkspaceDialog } from "../add-workspace-dialog";
 import { WorkspaceCard } from "./workspace-card";
 import { buildSpec, mergeRunSelections } from "./wizard-spec";
-import { agentLabel, initialWizardState, primaryWorkspaceId, type WizardState } from "./wizard-types";
+import {
+  agentLabel,
+  initialWizardState,
+  primaryWorkspaceId,
+  type RunPrefill,
+  type WizardState,
+} from "./wizard-types";
 import { surfaceRunWarnings } from "./run-warnings";
 
 const ORDERED_CLASSES: ConfinementClass[] = ["CC1", "CC2", "CC3"];
@@ -80,16 +86,27 @@ export function NewRunScreen() {
   // are annotated instead.
   const operator = useOperator();
   const caps = useMyCapabilities(!operator);
+  // B4b — "Start a run like this one". The run cockpit hands the prefill over
+  // in navigation state (navigate("/runs/new", { state: { prefill } })) rather
+  // than through a query string or a second GET: it is already holding the run
+  // row and the run.create audit event, so this screen re-reads nothing and —
+  // the part that matters for a member — opens no new read path. Who may see a
+  // run stays the server's getRunAuthorized question, answered before the
+  // cockpit rendered at all.
+  const prefill = (useLocation().state as { prefill?: RunPrefill } | null)?.prefill;
   // Seed with the PERSISTED default (Settings' promise); the health probe
   // below re-resolves it against what this host actually enforces. The old
   // resolveDefaultCc(…, ["CC1"]) hardcoded the availability list, so a saved
   // Wall/Vault default could never win — Settings' promise was untrue here.
   const [state, setState] = React.useState<WizardState>(() =>
-    initialWizardState(getDefaultCc() ?? "CC1"),
+    initialWizardState(getDefaultCc() ?? "CC1", prefill?.state),
   );
   // The policy this run ships, as the operator wrote it. `useSaved` is the mode
   // row: reuse a stored policy by REFERENCE (policy_id) or author one here.
-  const [useSaved, setUseSaved] = React.useState(false);
+  // A clone of a run that launched by reference opens in that mode — otherwise
+  // the picker would hold the id while the panel showed an authored document
+  // nobody wrote.
+  const [useSaved, setUseSaved] = React.useState(!!prefill?.state.selectedPolicyId);
   // The DEFAULT body floors at the operator's own default barrier (persisted
   // pick, else CC1) — NOT Minimal's authored CC2. The pre-panel screen was
   // launchable by construction (its composed floor was the selected tier); a
@@ -256,7 +273,23 @@ export function NewRunScreen() {
         if (classes.length) {
           // Re-resolve the persisted default against real availability —
           // this, not the seed above, is where Settings' promise comes true.
-          const resolved = resolveDefaultCc(getDefaultCc(), classes);
+          //
+          // B4b: …except for a CLONE, whose barrier is the SOURCE RUN's and not
+          // the operator's persisted default. This effect ran a tick AFTER
+          // initialWizardState applied the prefill and overwrote it — and moved
+          // pristineCc with it, so the change did not even register as dirty.
+          // A CC3 run cloned on a machine defaulting to CC1 launched at CC1
+          // while CLONE_NOTE promised the barrier carried: silently weaker than
+          // the run it copies, which is the one direction this must never err.
+          //
+          // Fall back to the persisted default only when this host cannot BUILD
+          // the cloned tier — and that is not silent either: the picker already
+          // states it in its own words ("Vault isn't installed on this host.")
+          // beside a disabled option. The policy floor still up-clamps from
+          // here exactly as it does for a hand-authored run.
+          const cloned = prefill?.state.confinementClass;
+          const resolved =
+            cloned && classes.includes(cloned) ? cloned : resolveDefaultCc(getDefaultCc(), classes);
           pristineCc.current = resolved;
           setState((s) => ({ ...s, confinementClass: resolved }));
         }
@@ -494,6 +527,28 @@ export function NewRunScreen() {
         </Button>
         <h1 className="text-foreground">New run</h1>
       </div>
+
+      {/* B4b — a clone says what it carried and, in the same breath, what it
+          could not. A prefilled form that looks hand-typed is the failure mode:
+          the operator would have no way to know the tool-approval posture came
+          across but the credentials deliberately did not. */}
+      {prefill && (
+        <div
+          role="status"
+          className="mb-6 space-y-1 rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground"
+        >
+          <p>{RUN.CLONE_NOTE}</p>
+          {/* …and that carrying a setting over is not the same as being allowed
+              it. Create re-clamps against the caller's governance ceiling, so a
+              member cloning an admin's run is narrowed at launch — said here,
+              before Launch, rather than as a warning after it. */}
+          <p>{RUN.CLONE_CEILING_NOTE}</p>
+          {/* The one named ceiling: an inline policy is never stored, so there
+              is nothing to prefill and the barrier below is this wizard's
+              default rather than the original run's document. */}
+          {prefill.inlinePolicy && <p className="text-warning">{RUN.CLONE_INLINE_POLICY_CEILING}</p>}
+        </div>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
         {/* ── Left: the form ─────────────────────────────────────── */}

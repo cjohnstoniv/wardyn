@@ -7,7 +7,7 @@
 // cannot assert these: whether a model provider exists there depends on whether
 // the machine running the suite has a logged-in Claude CLI, which setupProviders
 // detects — so the same assertion passes on a laptop and fails on CI.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -16,8 +16,12 @@ const getSetupStatusMock = vi.fn();
 vi.mock("../../../lib/api/setup", () => ({
   setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) },
 }));
+// Which barriers this host can BUILD. Mutable because the clone cases below
+// need a host that has the tier the cloned run used — the default stays the
+// CC1-only host every other case here has always run on.
+let mockConfinementClasses: string[] = ["CC1"];
 vi.mock("../../../lib/api/health", () => ({
-  health: { health: () => Promise.resolve({ confinement_classes: ["CC1"] }) },
+  health: { health: () => Promise.resolve({ confinement_classes: mockConfinementClasses }) },
 }));
 // getDefaultPolicy names the caller's governance profile for the rail's ceiling
 // section. The default answer carries no governance_profile_name — an
@@ -71,6 +75,9 @@ import { baseMe, baseMeDrive, baseStatus } from "../../../lib/test-fixtures";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
 import { DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
+import { RUN } from "../../wardyn/copy";
+import { setDefaultCc } from "../../wardyn/default-confinement";
+import { lsSet } from "../../../lib/storage";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -116,6 +123,7 @@ function renderAsMember(me: Me = baseMe()) {
 }
 
 beforeEach(() => {
+  mockConfinementClasses = ["CC1"];
   getSetupStatusMock.mockReset().mockResolvedValue(baseStatus());
   listWorkspacesMock.mockReset().mockResolvedValue([]);
   preflightRunMock.mockReset();
@@ -695,5 +703,102 @@ describe("NewRunScreen — Preflight sends the body Launch sends", () => {
     expect(flown.drive).toEqual(launched.drive);
     expect(flown.workspaces).toEqual(launched.workspaces);
     expect(flown.integration_id).toEqual(launched.integration_id);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// B4b — a clone, MOUNTED.
+//
+// wizard-spec.test.ts proves runPrefill + initialWizardState compose the right
+// state. It cannot prove the SCREEN keeps it: the mount-time barrier probe
+// re-seeded confinementClass from the operator's persisted default a tick after
+// the prefill applied — and moved pristineCc with it, so the overwrite did not
+// even read as dirty. A CC3 run cloned on a CC1-default machine launched at CC1
+// while the banner promised the barrier carried over. Silently weaker than the
+// run it copies is the one direction a governance product must never err, and
+// only a mounted test that reads the WIRE BODY can see it.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("NewRunScreen — a cloned run reaches the wire as the run it cloned", () => {
+  const prefill = {
+    inlinePolicy: false,
+    state: {
+      title: "Migration 0062",
+      task: "rerun the migration",
+      confinementClass: "CC3" as const,
+      toolApprovals: "hold" as const,
+      mode: "batch" as const,
+    },
+  };
+
+  // THE fixture that makes this test able to fail: the operator's persisted
+  // default has to DISAGREE with the cloned run's barrier. With nothing
+  // persisted, resolveDefaultCc falls through to the strongest tier the host
+  // has — which is CC3 here, so the bug and the fix would agree and the case
+  // would pass on both.
+  beforeEach(() => setDefaultCc("CC1"));
+  afterEach(() => lsSet("wardyn-default-confinement", null));
+
+  function renderClone(state: unknown = { prefill }) {
+    return render(
+      <MemoryRouter initialEntries={[{ pathname: "/runs/new", state }]}>
+        <OperatorProvider operator>
+          <NewRunScreen />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("launches at the SOURCE run's barrier, not the operator's persisted default", async () => {
+    mockConfinementClasses = ["CC1", "CC2", "CC3"];
+    renderClone();
+    // Wait for the barrier probe to settle — this is the effect that used to
+    // overwrite the prefill, so asserting before it lands would pass on the bug.
+    await screen.findByRole("button", { name: /Launch run/ });
+    await waitFor(() =>
+      expect(screen.getByRole("radio", { name: "Vault" })).toHaveAttribute("aria-checked", "true"),
+    );
+
+    await user.click(screen.getByRole("button", { name: /Launch run/ }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalled());
+    expect(createRunMock.mock.calls[0][0].confinement_class).toBe("CC3");
+  });
+
+  it("says what carried over and that the ceiling re-applies at launch", async () => {
+    mockConfinementClasses = ["CC1", "CC2", "CC3"];
+    renderClone();
+    expect(await screen.findByText(RUN.CLONE_NOTE)).toBeInTheDocument();
+    expect(screen.getByText(RUN.CLONE_CEILING_NOTE)).toBeInTheDocument();
+    // Not an inline-policy clone, so no ceiling sentence about a lost policy.
+    expect(screen.queryByText(RUN.CLONE_INLINE_POLICY_CEILING)).toBeNull();
+  });
+
+  it("names the inline policy it could not carry", async () => {
+    mockConfinementClasses = ["CC1", "CC2", "CC3"];
+    renderClone({ prefill: { ...prefill, inlinePolicy: true } });
+    expect(await screen.findByText(RUN.CLONE_INLINE_POLICY_CEILING)).toBeInTheDocument();
+  });
+
+  // The fallback, and it is not silent: a host that cannot BUILD the cloned
+  // tier resolves to the persisted default and the picker says why in its own
+  // words beside the disabled option.
+  it("falls back to the default when this host cannot build the cloned tier, and says so", async () => {
+    mockConfinementClasses = ["CC1"];
+    renderClone();
+    await screen.findByRole("button", { name: /Launch run/ });
+    expect(await screen.findByText(/Vault isn't installed on this host\./)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Launch run/ }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalled());
+    expect(createRunMock.mock.calls[0][0].confinement_class).toBe("CC1");
+  });
+
+  // The negative control: an ordinary /runs/new is untouched by any of this —
+  // it still gets the persisted default re-resolved against the real host.
+  it("leaves a NON-clone on the persisted default, banner and all", async () => {
+    mockConfinementClasses = ["CC1", "CC2", "CC3"];
+    renderScreen();
+    await screen.findByRole("button", { name: /Launch run/ });
+    expect(screen.queryByText(RUN.CLONE_NOTE)).toBeNull();
+    expect(screen.queryByText(RUN.CLONE_CEILING_NOTE)).toBeNull();
   });
 });

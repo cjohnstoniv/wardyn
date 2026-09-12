@@ -14,6 +14,7 @@ import type { EgressDecision } from "../../../../lib/types";
 import { relativeTime } from "../../../../lib/format";
 import { cn } from "../../../ui/utils";
 import { Chip, EgressDecisionChip, WidgetCard } from "../../../wardyn/primitives";
+import { RUN_COCKPIT } from "../../../wardyn/copy";
 
 // Fixed-width, shrink-0 rail widget — an unbounded live feed would grow it
 // without limit. Same silent-cap shape as the (retired) Overview tab's Egress
@@ -23,19 +24,27 @@ const MAX_ROWS = 8;
 
 export function EgressWidget({
   egress,
+  heldCount = 0,
   onGoAudit,
 }: {
   egress: EgressDecision[];
+  /** How many approvals are HELD right now, from the run's live PENDING rows
+   *  (WidgetContext.heldCount). Optional so the widget stays renderable without
+   *  the cockpit above it; absent reads as ZERO.
+   *
+   *  B3 — this used to be `egress.filter(e => e.decision === "pending").length`,
+   *  counted over an AUDIT projection. The trail is append-only, so an
+   *  `egress.pending` row is a historical event that never stops being one: the
+   *  chip counted every hold the run ever had and read "3 held" on a run
+   *  holding nothing, on the surface whose entire job is to be the alarm. The
+   *  rows below still render those events as history — it is the NUMBER that
+   *  had to become state. */
+  heldCount?: number;
   /** Jump to this run's Audit tab. Optional so the widget stays renderable
    *  without a parent that owns tab state (the phase-2 canvas mounts it the
    *  same way), but the parent SHOULD pass it — see the footer below. */
   onGoAudit?: () => void;
 }) {
-  // Counted over the WHOLE list, and the header says so — the rows below are
-  // the 8 newest, so a hold that scrolled off would otherwise make the chip
-  // read "3 held" with none of those three on screen. The chip is the alarm;
-  // it must count every held request, not the ones that happen to fit.
-  const heldCount = egress.filter((e) => e.decision === "pending").length;
   const visible = React.useMemo(
     () => [...egress].sort((a, b) => b.time.localeCompare(a.time)).slice(0, MAX_ROWS),
     [egress],
@@ -47,8 +56,8 @@ export function EgressWidget({
       Icon={Globe}
       right={
         heldCount > 0 && (
-          <Chip tone="warning" title={`${heldCount} held across all ${egress.length} decisions`}>
-            {heldCount} held
+          <Chip tone="warning" title={`${heldCount} held now · ${egress.length} decisions recorded`}>
+            {RUN_COCKPIT.held(heldCount)}
           </Chip>
         )
       }
@@ -71,7 +80,10 @@ export function EgressWidget({
                   "min-w-0 flex-1 truncate font-mono",
                   e.decision === "pending" ? "text-foreground" : "text-muted-foreground",
                 )}
-                title={e.domain}
+                // B3: the historical row carries the approval it raised
+                // (data.approval_id), so a hold that was DECIDED later is
+                // traceable from the row the chip no longer counts.
+                title={e.approval_id ? `${e.domain} · approval ${e.approval_id}` : e.domain}
               >
                 {e.domain}
               </span>

@@ -49,17 +49,8 @@ import { getErrorMessage } from "../lib/format";
 import { Eye, Loader2, TriangleAlert, Maximize2, Minimize2, RotateCw } from "lucide-react";
 import { cn } from "./ui/utils";
 import { Button } from "./ui/button";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "./ui/alert-dialog";
-import { RUN_COCKPIT } from "./wardyn/copy";
+import { TakeoverConfirmDialog } from "./attach-takeover-dialog";
+import { RUN_COCKPIT, TERMINAL } from "./wardyn/copy";
 import { useOperator, useOperatorResolved, usePrincipal } from "./wardyn/operator-context";
 
 // ---------------------------------------------------------------------------
@@ -636,6 +627,19 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     // Alt+Enter sequence (ESC + CR) which Claude Code and similar TUIs treat as
     // "newline". (Plain Enter still submits; "\\" + Enter also works in Claude.)
     term.attachCustomKeyEventHandler((e) => {
+      // R4-F144 — WCAG 2.1.2 (No Keyboard Trap). xterm takes Tab, Shift+Tab and
+      // Escape into the PTY, which is right for a terminal and means a keyboard
+      // user who focuses this panel cannot leave the page without a pointer.
+      // 2.1.2 permits a non-standard exit only if it is ADVISED ON ENTRY — the
+      // title bar and the grid's aria-description carry that, and copy.ts's
+      // TERMINAL block holds the why-this-chord; this is the binding behind it.
+      // Focus lands on the panel (tabIndex -1 below) so the next Tab continues
+      // in document order, and `false` keeps xterm from ALSO forwarding the
+      // chord — it would otherwise leave the terminal AND type into it.
+      if (e.type === "keydown" && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key === "]") {
+        panelRef.current?.focus();
+        return false;
+      }
       if (e.type === "keydown" && e.key === "Enter" && (e.shiftKey || e.ctrlKey)) {
         send(new TextEncoder().encode("\x1b\r"));
         return false; // don't let xterm also send a plain CR
@@ -826,8 +830,12 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   return (
     <div
       ref={panelRef}
+      // R4-F144: the chord's landing pad. -1 keeps it out of the tab ORDER (it
+      // is not a control) while making it focusable programmatically, so Tab
+      // after the chord continues in document order from here.
+      tabIndex={-1}
       className={cn(
-        "flex flex-col overflow-hidden border border-border bg-[#0d1117]",
+        "flex flex-col overflow-hidden border border-border bg-[#0d1117] focus:outline-none",
         // In native fullscreen the element already fills the screen, so it only
         // needs to drop its rounding and its fixed height. The `fixed inset-0`
         // branch is the no-API fallback described above.
@@ -870,6 +878,13 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
               {geom.cols}×{geom.rows}
             </span>
           )}
+          {/* R4-F144: 2.1.2 wants the exit advised BEFORE it is needed, so it
+              is in the chrome — not a tooltip or a help page a trapped keyboard
+              user cannot reach. Hidden below sm (the readout already wraps
+              there); the grid's aria-description carries it at every width. */}
+          <span className="hidden font-mono text-meta text-muted-foreground sm:inline">
+            {TERMINAL.ESCAPE_CHORD_HINT}
+          </span>
           {(connState === "connecting" || connState === "reconnecting") && (
             <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
           )}
@@ -917,6 +932,10 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
         <div
           ref={containerRef}
           className={cn("min-h-0 flex-1 p-1", ptyCols && "overflow-x-auto")}
+          // R4-F144: the same sentence the title bar shows, for the reader who
+          // cannot see it — 2.1.2's "advised on entry" has to hold for a screen
+          // reader landing in the grid, not only for a sighted user.
+          aria-description={TERMINAL.ESCAPE_CHORD_HINT}
           // Keep clicks on the terminal from bubbling to the outer shell (focus).
           onMouseDown={(e) => e.stopPropagation()}
         />
@@ -963,30 +982,12 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
         </div>
       )}
 
-      {/* Take-over ends another human's live session, so it gets the same
-          confirm stop as the deny confirm in live-approvals.tsx. (NOT
-          "irreversible" — a deny can re-raise at `once` scope and can always
-          be undone in the workspace's egress settings at `always` scope;
-          this is a consequential-action stop, not a claim about undoability.) */}
-      <AlertDialog open={confirmTakeover} onOpenChange={(o) => !o && setConfirmTakeover(false)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{RUN_COCKPIT.takeOver}</AlertDialogTitle>
-            <AlertDialogDescription>{RUN_COCKPIT.takeOverConfirm(holderPrincipal)}</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={(e) => {
-                e.preventDefault();
-                void doTakeover();
-              }}
-            >
-              {RUN_COCKPIT.takeOver}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <TakeoverConfirmDialog
+        open={confirmTakeover}
+        holderPrincipal={holderPrincipal}
+        onOpenChange={(o) => !o && setConfirmTakeover(false)}
+        onConfirm={() => void doTakeover()}
+      />
     </div>
   );
 });

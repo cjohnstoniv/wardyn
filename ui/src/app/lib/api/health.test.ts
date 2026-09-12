@@ -34,14 +34,27 @@ describe("health.logout()", () => {
     expect(init?.credentials).toBe("include");
   });
 
-  it("resolves even when the server returns an error (best-effort logout)", async () => {
+  // R4-F107. A failed logout was swallowed to console.error — which nobody has
+  // open while signing out — so the HttpOnly OIDC session stayed alive and the
+  // next reload silently re-entered the console. On a shared machine that is
+  // the one thing the button exists to prevent. It must still RESOLVE (a hung
+  // sign-out is worse than an unconfirmed one) and the local token is dropped
+  // either way; the answer is what App.tsx turns into a visible sentence.
+  it("resolves FALSE when the server returns an error — never a silent success", async () => {
     fetchMock.mockResolvedValueOnce(new Response("boom", { status: 500 }));
-    await expect(health.logout()).resolves.toBeUndefined();
+    await expect(health.logout()).resolves.toBe(false);
   });
 
-  it("resolves even when the network throws (best-effort logout)", async () => {
+  it("resolves FALSE when the network throws", async () => {
     fetchMock.mockRejectedValueOnce(new TypeError("network down"));
-    await expect(health.logout()).resolves.toBeUndefined();
+    await expect(health.logout()).resolves.toBe(false);
+  });
+
+  // The negative control: a confirmed sign-out must not warn. A logout that
+  // cried wolf on every success would train the operator past the one that
+  // matters.
+  it("resolves TRUE when the server confirms it", async () => {
+    await expect(health.logout()).resolves.toBe(true);
   });
 });
 

@@ -97,7 +97,19 @@ export function compositionSummary(ws: Workspace): string | null {
 // SEAM: there is no harness/tool-catalog endpoint exposed to the UI yet (no GET
 // listing installable agent CLIs) — if one ships, read the picker's options from
 // it instead of hand-adding a third literal here.
-export type WizardAgent = "claude-code" | "codex-cli";
+//
+// A RUNTIME list with the type derived from it, not the other way round: the
+// clone path (runPrefill) has to ask "can this build spell that agent?" at
+// runtime, and a TS union cannot be asked. Widening the roster is then one
+// edit here — a second literal list somewhere else is how a new agent ships
+// pickable but unclonable.
+export const WIZARD_AGENTS = ["claude-code", "codex-cli"] as const;
+export type WizardAgent = (typeof WIZARD_AGENTS)[number];
+
+/** Whether a wire agent id is one this build can put in the picker. */
+export function isWizardAgent(agent: string): agent is WizardAgent {
+  return (WIZARD_AGENTS as readonly string[]).includes(agent);
+}
 
 export type RunMode = "interactive" | "batch";
 export type GitHubPermission = "read" | "read+write";
@@ -240,7 +252,129 @@ export interface WizardState {
   // construction — the JSON IS the document.
 }
 
-export function initialWizardState(defaultCc: ConfinementClass = "CC1"): WizardState {
+// B4b — what a CLONE of an existing run carries into a fresh wizard, and (the
+// half that earns the type) what it knowingly could not.
+//
+// The prefill travels as react-router location state, so every field here must
+// be structured-cloneable: plain objects, no class instances, no functions.
+export type RunPrefill = {
+  /** The overlay initialWizardState applies over its own defaults. */
+  state: Partial<WizardState>;
+  /** The source run's policy was written INLINE, and an inline policy is never
+   *  persisted (internal/api/inline_policy.go attaches it with a nil id;
+   *  runs.go records only `inline_policy: true`). The clone therefore cannot
+   *  carry the one thing that governed the run it copies — a named ceiling the
+   *  wizard states, never a silent fall back to the default policy. */
+  inlinePolicy: boolean;
+};
+
+/** The request-scoped half of a run, as read back off its `run.create` audit
+ *  row (lib/api/audit.ts's createRequestFromAudit). Structurally typed so this
+ *  module does not depend on the api layer. */
+export type RunCreateRequestFacts = {
+  task_mode?: string;
+  interactive_start?: string;
+  seed_auto_tools?: boolean;
+  tool_approvals?: string;
+  inline_policy?: boolean;
+};
+
+// A minimal AgentRun view — everything the run ROW durably holds that a clone
+// can use. Narrow on purpose: it names, in one place, the exact set of fields
+// the row is good for, and the remainder below says what it is not.
+type ClonableRun = {
+  agent: string;
+  task: string;
+  title?: string;
+  description?: string;
+  policy_id?: string;
+  confinement_class: ConfinementClass;
+  interactive?: boolean;
+  workspace_ids?: string[];
+};
+
+/**
+ * Build the wizard overlay for "start a run like this one" from the TWO durable
+ * sources a finished run leaves behind: the run row, and its `run.create` audit
+ * event.
+ *
+ * Why two: the row carries no task_mode, no interactive_start, no
+ * seed_auto_tools and no tool_approvals — createRunAuditData
+ * (internal/api/runs.go) stamps those on the event precisely because none of
+ * them is stored. A clone off the row alone would quietly downgrade a run that
+ * had been launched with `tool_approvals: hold` into an unsupervised one.
+ *
+ * The DOCUMENTED REMAINDER — what no clone carries, and why, so the list is a
+ * decision and not an omission:
+ *   - the inline policy body (never persisted; see RunPrefill.inlinePolicy),
+ *   - credential grants: github_token / git_pat / the LLM api_key secret. They
+ *     are minted per run and per approval; re-attaching them from a record
+ *     would be minting a credential nobody asked for on this launch.
+ *   - approvals: every one is a fresh question about a fresh run.
+ *   - egress allow/deny lists and first-use posture: they live in the policy,
+ *     which a saved policy_id carries whole and an inline one cannot carry
+ *     at all — re-deriving them from the run's egress DECISIONS would author a
+ *     policy the operator never wrote.
+ *   - the user drive, per-workspace read_only / enabled_optional overrides, the
+ *     run override integration, lifecycle/auto-stop: request-scoped and NOT on
+ *     the audit row either, so there is nothing durable to read.
+ *   - the IMAGE. AgentRun.image is the RESOLVED sandbox image — the convention
+ *     image, a devcontainer build, a workspace-built one, or a BYOI wrap — not
+ *     the caller's request. WizardState.image is the opposite: a BYOI BASE, and
+ *     buildSpec sends anything in it as one. Carrying it across would turn
+ *     every clone into a BYOI request: refused outright where no image builder
+ *     is wired (validateImageBuildRequest, runs_create_validate.go), re-wrapped
+ *     where one is, and for a real BYOI run it would ask to wrap that run's own
+ *     wrapper (wardyn-byoi/<old-run-id>:latest). There is no UI field showing
+ *     it either, so the operator could not see what they were about to send.
+ * Create re-clamps everything (resolveRunPolicy), so a member cloning an
+ * admin's run is narrowed honestly at launch rather than flattered here.
+ */
+export function runPrefill(run: ClonableRun, created: RunCreateRequestFacts = {}): RunPrefill {
+  return {
+    inlinePolicy: created.inline_policy === true,
+    state: {
+      title: run.title ?? "",
+      description: run.description ?? "",
+      // task_mode is the audit row's, and it is the ONLY record that this run
+      // was a plain shell command rather than an agent task.
+      runType: created.task_mode === "exec" ? "command" : "agent",
+      // An agent this build cannot spell (an older run, a retired id) leaves
+      // the picker on its default rather than writing an unlaunchable value.
+      // Asked of the roster, never of a second literal pair — WIZARD_AGENTS is
+      // what widens when a third harness ships.
+      ...(isWizardAgent(run.agent) ? { agent: run.agent } : {}),
+      task: run.task,
+      mode: run.interactive ? "interactive" : "batch",
+      interactiveStart: created.interactive_start === "shell" ? "shell" : "agent",
+      seedAutoTools: created.seed_auto_tools === true,
+      toolApprovals: created.tool_approvals === "hold" ? "hold" : "auto",
+      confinementClass: run.confinement_class,
+      // undefined for an inline-policy run — which is what makes the ceiling
+      // sentence necessary rather than decorative.
+      selectedPolicyId: run.policy_id,
+      // workspace_ids is the create-time denormalization of what the run
+      // resolved to. The per-selection OPTIONS are not on it (see the
+      // remainder above), so each comes back as a plain attachment.
+      workspaces: (run.workspace_ids ?? []).map((id) => ({ workspaceId: id })),
+    },
+  };
+}
+
+/**
+ * A fresh wizard, optionally overlaid with a prefill (B4b's clone). The overlay
+ * is applied WHOLE over the defaults rather than merged field-by-field: every
+ * key it carries is one runPrefill above decided to carry, and a partial merge
+ * would be a second, disagreeing place where that decision is made.
+ */
+export function initialWizardState(
+  defaultCc: ConfinementClass = "CC1",
+  overlay?: Partial<WizardState>,
+): WizardState {
+  return { ...freshWizardState(defaultCc), ...(overlay ?? {}) };
+}
+
+function freshWizardState(defaultCc: ConfinementClass): WizardState {
   return {
     title: "",
     description: "",

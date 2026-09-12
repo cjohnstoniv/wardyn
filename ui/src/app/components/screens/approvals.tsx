@@ -17,7 +17,15 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { canDecideApproval, decisionArgs, type ApprovalKind, type ApprovalRequest, type ApprovalScope } from "../../lib/types";
+import {
+  canDecideApproval,
+  decisionArgs,
+  isTerminalRunState,
+  type AgentRun,
+  type ApprovalKind,
+  type ApprovalRequest,
+  type ApprovalScope,
+} from "../../lib/types";
 import { approvals as api } from "../../lib/api/approvals";
 import { anyCapabilityEnforced, capabilityAllowed, useMyCapabilities } from "../../lib/capabilities";
 import { DENIED } from "../../lib/permissions-copy";
@@ -35,6 +43,7 @@ import { PageHeader } from "../wardyn/page-header";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { useOperator, useRole, useSecurityOperator } from "../wardyn/operator-context";
 import {
+  APPROVAL,
   APPROVAL_BANNER_LABEL,
   APPROVAL_KIND_LABEL,
   CAPABILITY,
@@ -489,7 +498,21 @@ function PendingCard({
   // never bounded by it.
   const host = item.kind === "egress_domain" ? str(scope, "host", "domain") : undefined;
   const hostUngranted = !securityOperator && !!host && !capabilityAllowed(caps, "egress_host", host);
-  const canDecide = kindDecidable && !hostUngranted;
+  // B4 — the run this approval gates, from the context row below's OWN fetch.
+  // A run that has ended cancels its PENDING approvals (types.ApprovalCancelled;
+  // the finalizeRunTail / handleKillRun cascade), so Approve and Deny here
+  // answer a question nobody is waiting on: the sandbox is torn down, the
+  // identity revoked, and the server refuses the decision. A dead control on a
+  // governance surface is worse than no control — it reads as the system still
+  // being in your hands.
+  //
+  // undefined (still fetching) and null (gone, or unreadable by this caller)
+  // both leave the controls exactly as they were: the screen withdraws them on
+  // a KNOWN terminal state, never on a guess, which is the same direction the
+  // rest of this card errs in.
+  const [run, setRun] = React.useState<AgentRun | null | undefined>(undefined);
+  const runEnded = !!run && isTerminalRunState(run.state);
+  const canDecide = kindDecidable && !hostUngranted && !runEnded;
 
   return (
     <div className="rounded-xl border border-warning/30 bg-warning/5 p-4">
@@ -505,7 +528,7 @@ function PendingCard({
         </span>
       </div>
 
-      <RunContextRow runId={item.run_id} />
+      <RunContextRow runId={item.run_id} onRun={setRun} />
 
       {/* Blast-radius banner (D1) — derived from the real scope above. */}
       <div className="mt-3 space-y-1 rounded-lg border border-border bg-background px-3 py-2.5 text-sm leading-relaxed">
@@ -528,15 +551,35 @@ function PendingCard({
         <JsonBlock value={scope} className="mt-2" />
       </details>
 
+      {/* P0.3 (R3-F001/F108/F145) — an egress_domain approval is HOST-WIDE, and
+          has been all along: the proxy strips any port before it keys the
+          decision (approvalHostKey). 0.7.2 aligns the surfaces to SAY so rather
+          than rely on it quietly, because "allow api.example.com" reads as the
+          one connection in front of you. The scope words above are canon and
+          not paraphrased, so this is its own line. */}
+      {item.kind === "egress_domain" && (
+        <p className="mt-2.5 max-w-[72ch] text-xs text-muted-foreground">{APPROVAL.HOST_WIDE_NOTE}</p>
+      )}
+
+      {/* B4 — the decision pair is GONE, not merely disabled, once the run has
+          ended: there is nothing left to decide and no state a retry could
+          reach. A disabled Approve would still read as "this is yours to
+          answer". */}
       <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">
-        <Button size="sm" variant="info" onClick={() => onAct("approve")} disabled={!canDecide}>
-          <Check className="size-4" /> Approve
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => onAct("deny")} disabled={!canDecide}>
-          <X className="size-4" /> Deny
-        </Button>
-        {!canDecide && (
-          <Chip tone="neutral">{hostUngranted ? DENIED.APPROVE_CHIP : OPERATOR_ONLY_REASON}</Chip>
+        {runEnded ? (
+          <p className="max-w-[72ch] text-xs text-muted-foreground">{APPROVAL.CANCELLED_BODY}</p>
+        ) : (
+          <>
+            <Button size="sm" variant="info" onClick={() => onAct("approve")} disabled={!canDecide}>
+              <Check className="size-4" /> Approve
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => onAct("deny")} disabled={!canDecide}>
+              <X className="size-4" /> Deny
+            </Button>
+            {!canDecide && (
+              <Chip tone="neutral">{hostUngranted ? DENIED.APPROVE_CHIP : OPERATOR_ONLY_REASON}</Chip>
+            )}
+          </>
         )}
         <span className="ml-auto text-xs text-muted-foreground" title={item.requested_at}>
           requested {relativeTime(item.requested_at)}
@@ -582,6 +625,15 @@ function DecidedRow({ item }: { item: ApprovalRequest }) {
       <ApprovalStateBadge state={item.state} />
       {scopeBadge && <Chip tone="neutral">{scopeBadge}</Chip>}
       <span className="whitespace-nowrap text-xs text-muted-foreground">{meta}</span>
+      {/* B4 — CANCELLED is the one archived state whose badge does not explain
+          itself: "by system · 3h ago" beside a word that could mean anybody
+          withdrew it. The row says which of the three things happened, because
+          none of them did: nothing was approved, nothing was denied, and the
+          run ended first. Full width (basis-full) so it reads as a sentence
+          under the row rather than a fourth column. */}
+      {item.state === "CANCELLED" && (
+        <p className="basis-full text-xs text-muted-foreground">{APPROVAL.CANCELLED_BODY}</p>
+      )}
     </div>
   );
 }

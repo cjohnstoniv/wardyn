@@ -301,19 +301,25 @@ export const health = {
   // is sent via credentials:"include". Best-effort: a failed logout (server
   // error / network down) still resolves so the client can fall back to the
   // sign-in gate; we never want a hung spinner blocking sign-out.
-  async logout(): Promise<void> {
-    // FIX #6: do NOT silently swallow a failed logout — a non-OK response or a
-    // network error means the server-side OIDC session may STILL be valid, so the
-    // operator only *believes* they signed out. Surface it (console.error) while
-    // still resolving, so the caller can fall back to the sign-in gate without a
-    // hung spinner, but a failed sign-out is never invisible.
+  // R4-F107: answers whether the SERVER confirmed the sign-out. Still never
+  // rejects — the caller drops the local token either way, and a hung sign-out
+  // is worse than an unconfirmed one — but the caller now has something to say.
+  async logout(): Promise<boolean> {
+    // FIX #6 + R4-F107: a console.error is not "surfaced". Nobody has DevTools
+    // open while signing out, so a failed logout left the HttpOnly OIDC session
+    // alive and the next reload silently re-entered the console — invisible,
+    // and on a shared machine it is the whole point of the button. The log line
+    // stays (it names the status); the BOOLEAN is what App.tsx turns into words.
     try {
       const res = await wfetch("/auth/logout", { method: "POST" });
       if (!res.ok) {
         console.error(`logout: server returned HTTP ${res.status}; session may still be active`);
+        return false;
       }
+      return true;
     } catch (err) {
       console.error("logout: request failed; session may still be active", err);
+      return false;
     }
   },
 

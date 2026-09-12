@@ -27,26 +27,44 @@ vi.mock("sonner", () => ({
 // failure. `mock`-prefixed so vi.mock's hoisting can reference them.
 let mockPendingKind: ApprovalRequest["kind"] = "credential";
 let mockPendingEmpty = false;
+let mockCancelledRow = false;
 const denyMock = vi.fn();
 const approveMock = vi.fn();
 vi.mock("../../lib/api/approvals", () => {
   return {
     approvals: {
-      listApprovals: (state: string) =>
-        Promise.resolve(
-          state === "PENDING" && !mockPendingEmpty
-            ? [
-                {
-                  id: "apr_1",
-                  run_id: "run_1",
-                  kind: mockPendingKind,
-                  requested_scope: { host: "api.example.com" },
-                  state: "PENDING",
-                  requested_at: new Date().toISOString(),
-                } satisfies ApprovalRequest,
-              ]
-            : [],
-        ),
+      listApprovals: (state: string) => {
+        if (state === "PENDING" && !mockPendingEmpty) {
+          return Promise.resolve([
+            {
+              id: "apr_1",
+              run_id: "run_1",
+              kind: mockPendingKind,
+              requested_scope: { host: "api.example.com" },
+              state: "PENDING",
+              requested_at: new Date().toISOString(),
+            } satisfies ApprovalRequest,
+          ]);
+        }
+        // B4: the archived row a terminal run's cascade writes — decided_by
+        // "system", reason run_killed. Off by default so no existing case sees
+        // a second row in the Decided tab.
+        if (state === "CANCELLED" && mockCancelledRow) {
+          return Promise.resolve([
+            {
+              id: "apr_2",
+              run_id: "run_1",
+              kind: "egress_domain",
+              requested_scope: { host: "api.example.com" },
+              state: "CANCELLED",
+              requested_at: new Date().toISOString(),
+              decided_at: new Date().toISOString(),
+              decided_by: "system",
+            } satisfies ApprovalRequest,
+          ]);
+        }
+        return Promise.resolve([]);
+      },
       deny: (...a: unknown[]) => denyMock(...a),
       approve: (...a: unknown[]) => approveMock(...a),
     },
@@ -65,7 +83,10 @@ vi.mock("../../lib/api/permissions", () => ({
   permissions: { getMyCapabilities: () => Promise.resolve(mockCaps) },
 }));
 
-// RunContextRow (redesign) fetches the gated run to inline its context.
+// RunContextRow (redesign) fetches the gated run to inline its context — and
+// since B4 the card above reads its STATE off that same fetch, so the tests
+// drive it from here.
+let mockRunState = "RUNNING";
 vi.mock("../../lib/api/runs", () => ({
   runs: {
     getRun: () =>
@@ -75,7 +96,7 @@ vi.mock("../../lib/api/runs", () => ({
         repo: "acme/widgets",
         task: "Fix flaky auth tests",
         confinement_class: "CC2",
-        state: "RUNNING",
+        state: mockRunState,
       }),
   },
 }));
@@ -83,6 +104,14 @@ vi.mock("../../lib/api/runs", () => ({
 import { ApprovalsScreen } from "./approvals";
 import { OperatorProvider, RoleProvider } from "../wardyn/operator-context";
 import { DENIED } from "../../lib/permissions-copy";
+import { APPROVAL } from "../wardyn/copy";
+
+// Every describe below assumes a LIVE run unless it says otherwise (B4 gates
+// the decision pair on the run's state), and no archived CANCELLED row.
+beforeEach(() => {
+  mockRunState = "RUNNING";
+  mockCancelledRow = false;
+});
 
 describe("ApprovalsScreen — deny error handling", () => {
   beforeEach(() => {
@@ -342,5 +371,84 @@ describe("ApprovalsScreen ?tab=", () => {
     );
     const decided = await screen.findByRole("tab", { name: /decided/i });
     expect(decided).toHaveAttribute("aria-selected", "false");
+  });
+});
+
+// ── B4: a terminal run's PENDING approvals ──────────────────────────────────
+// Killing a run used to strand its approvals: they sat PENDING for up to 24h
+// (WARDYN_APPROVAL_EXPIRY_AFTER) while the console kept offering Approve and
+// Deny on them. Both buttons were dead — the sandbox was torn down, the
+// identity revoked, the server refuses — and a dead control on a governance
+// surface reads as "this is still yours to answer". 0.7.2 cancels them
+// server-side (types.ApprovalCancelled) and the screen stops asking.
+describe("ApprovalsScreen — the run has ended (B4)", () => {
+  it("offers no decision on a KILLED run, and says what happened instead", async () => {
+    mockRunState = "KILLED";
+    render(
+      <MemoryRouter>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+
+    // The sentence arrives with the run fetch the context row already makes.
+    expect(await screen.findByText(APPROVAL.CANCELLED_BODY)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^approve$/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^deny$/i })).toBeNull();
+  });
+
+  // The negative control, and the reason the gate reads the RUN rather than
+  // just the approval: a live run's queue is untouched.
+  it("leaves the decision pair alone while the run is still going", async () => {
+    render(
+      <MemoryRouter>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("button", { name: /^approve$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^deny$/i })).toBeInTheDocument();
+    expect(screen.queryByText(APPROVAL.CANCELLED_BODY)).toBeNull();
+  });
+
+  // The archived side. "Cancelled · by system · 3h ago" could mean anyone
+  // withdrew it; the row has to say that NOTHING was decided — which is a
+  // different fact from a denial, and the only one true here.
+  it("a CANCELLED row in the Decided tab says nothing was approved and nothing denied", async () => {
+    mockCancelledRow = true;
+    render(
+      <MemoryRouter initialEntries={["/approvals?tab=decided"]}>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText(APPROVAL.CANCELLED_BODY)).toBeInTheDocument();
+    expect(screen.getByText("by system", { exact: false })).toBeInTheDocument();
+  });
+});
+
+// ── P0.3 (R3-F001/F108/F145) ────────────────────────────────────────────────
+// An egress_domain approval has always been HOST-WIDE — the proxy strips any
+// port before keying the decision (approvalHostKey). Three surfaces relied on
+// that quietly while "Reach api.example.com" read, to a human, like the one
+// connection in front of them. 0.7.2 says it out loud; the port-scoped
+// semantic is a 0.8 change at three places at once.
+describe("ApprovalsScreen — an egress approval says it is host-wide (P0.3)", () => {
+  it("states the host-wide scope on an egress_domain card", async () => {
+    mockPendingKind = "egress_domain";
+    render(
+      <MemoryRouter>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText(APPROVAL.HOST_WIDE_NOTE)).toBeInTheDocument();
+  });
+
+  it("says nothing of the sort on a credential card, where it would be false", async () => {
+    mockPendingKind = "credential";
+    render(
+      <MemoryRouter>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("button", { name: /^approve$/i });
+    expect(screen.queryByText(APPROVAL.HOST_WIDE_NOTE)).toBeNull();
   });
 });

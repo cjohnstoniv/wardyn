@@ -73,6 +73,16 @@ export type WidgetContext = {
   operator: boolean;
   grants: CredentialGrant[];
   egress: EgressDecision[];
+  /** How many of this run's approvals are HELD right now — isHeld over the
+   *  live PENDING rows (live-approvals.tsx), computed once by run-detail.tsx
+   *  and shared by every surface that states the number.
+   *
+   *  B3: `egress` above is a projection of AUDIT rows, and the trail is
+   *  append-only — an `egress.pending` row is a historical EVENT, so counting
+   *  it counted every hold the run ever had, forever. The alarm chip said
+   *  "3 held" on a run holding nothing. The audit rows stay as history; the
+   *  COUNT comes from the live derivation every other surface already uses. */
+  heldCount: number;
   audit: AuditEvent[];
   onGoAudit: () => void;
   /** The terminal hero, built by run-detail.tsx — it owns AttachTerminal, the
@@ -132,7 +142,12 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
   egress: {
     label: "Egress",
     Icon: Globe,
-    component: (ctx) => React.createElement(EgressWidget, { egress: ctx.egress, onGoAudit: ctx.onGoAudit }),
+    component: (ctx) =>
+      React.createElement(EgressWidget, {
+        egress: ctx.egress,
+        heldCount: ctx.heldCount,
+        onGoAudit: ctx.onGoAudit,
+      }),
     defaultLayout: { w: 4, h: 4, minW: 3, minH: 2 },
     presets: {
       live: { x: 8, y: 0, w: 4, h: 4 },

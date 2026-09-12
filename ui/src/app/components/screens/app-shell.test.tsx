@@ -20,6 +20,7 @@ import {
 } from "../wardyn/operator-context";
 import { ThemeProvider } from "../wardyn/theme-provider";
 import { baseMeDrive } from "../../lib/test-fixtures";
+import { SHELL } from "../wardyn/copy";
 import type { ConfinementClass } from "../../lib/types";
 
 // below md the desktop aside is hidden, so this Sheet-based hamburger is
@@ -560,6 +561,26 @@ describe("TopBar — account-menu Demos entry (Phase 5)", () => {
 // non-empty" — a failed /me leaves method "" for good, and a signal derived
 // from it would strand "/" on a spinner forever. Here fetch rejects outright
 // (whoami → null), so the signal has to flip on the failure path too.
+//
+// B1 (0.7.2) RESTATES this describe rather than adding a sibling that would
+// contradict it, because the two halves are one rule and the field report cost
+// a customer hours by reading only the first:
+//
+//   1. roleResolved KEEPS meaning "settled, success or failure". Pointing it at
+//      identityResolved instead — the first draft of this fix — would strand "/"
+//      on RouteFallback forever, since nothing retried /me. The existing cases
+//      below pin that, defaults and all.
+//   2. …and "settled" is therefore NOT "answered". So the SIDEBAR is gated on
+//      identityResolved: a settled-but-unknown identity renders NEITHER the
+//      admin nav nor the member nav, plus one banner saying so and a Retry that
+//      re-fires whoami(). Before this, a human the server had correctly DENIED
+//      saw Policies / Governance / Permissions / Secrets / Audit off the
+//      fail-open "admin" default — indistinguishable from an authz breach, on a
+//      governance product, which is worse than a cosmetic bug.
+//
+// The tier defaults themselves stay fail-OPEN (case 2 below, R4/F119). That is
+// the point: the fix is to stop DRAWING a nav from a guess, not to harden the
+// guess into a different one.
 describe("AppShell (roleResolved after a failed /me)", () => {
   afterEach(() => vi.unstubAllGlobals());
 
@@ -716,6 +737,100 @@ describe("AppShell (roleResolved after a failed /me)", () => {
     expect(screen.getByTestId("tier-probe")).toHaveTextContent(
       JSON.stringify({ operator: true, securityOperator: true, role: "admin" }),
     );
+  });
+
+  // ── B1, the half above pins the rule for ─────────────────────────────────
+  // The tier stays fail-open (the three cases above) AND the sidebar stops
+  // drawing anything from it. Both, or the fix is the one the round rejected.
+  it("renders NEITHER nav and says why when /me never answers", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("connection refused")));
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <Routes>
+            <Route
+              element={<AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />}
+            >
+              <Route index element={<Probe />} />
+            </Route>
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("resolved"));
+
+    // Not the admin set — the fail-open default would have offered all of it…
+    for (const label of ["Policies", "Governance", "Permissions", "Secrets", "Audit", "Recordings"]) {
+      expect(screen.queryByRole("link", { name: new RegExp(`^${label}`) })).toBeNull();
+    }
+    // …and not the member set either. "We don't know" is a THIRD answer, not a
+    // quieter guess: showing the member nav would be just as unfounded.
+    for (const label of ["Runs", "Approvals", "Workspaces"]) {
+      expect(screen.queryByRole("link", { name: new RegExp(`^${label}`) })).toBeNull();
+    }
+    // One sentence in place of the guessed nav, and an action behind it.
+    expect(screen.getByText(SHELL.UNKNOWN_BODY)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: SHELL.UNKNOWN_ACTION })).toBeInTheDocument();
+  });
+
+  it("Retry re-fires /me, and an answer restores the nav it earns", async () => {
+    const user = userEvent.setup();
+    // First /me rejects; the second answers as a MEMBER. Both halves matter:
+    // the retry has to actually re-fetch (the effect ran once, on mount), and
+    // what comes back has to drive the nav — proving the banner state was
+    // ignorance and not a latch.
+    let meCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: RequestInfo | URL) => {
+        const u = String(url);
+        if (u.endsWith("/healthz")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ trust_domain: "wardyn.local", identity_provider: "embedded" }),
+          });
+        }
+        if (u.endsWith("/api/v1/me")) {
+          meCalls++;
+          if (meCalls === 1) return Promise.reject(new Error("connection refused"));
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              principal: "alice@corp.example",
+              method: "sso",
+              operator: false,
+              security_operator: false,
+              role: "member",
+            }),
+          });
+        }
+        return Promise.resolve({ ok: true, json: async () => ({}) });
+      }) as unknown as typeof fetch,
+    );
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <Routes>
+            <Route
+              element={<AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />}
+            >
+              <Route index element={<Probe />} />
+            </Route>
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByText(SHELL.UNKNOWN_BODY)).toBeInTheDocument());
+    expect(meCalls).toBe(1);
+
+    await user.click(screen.getAllByRole("button", { name: SHELL.UNKNOWN_ACTION })[0]);
+
+    await waitFor(() => expect(meCalls).toBe(2));
+    // The banner is gone and the MEMBER nav — not the admin one it defaulted
+    // to a moment ago — is what the answer produced.
+    await waitFor(() => expect(screen.queryByText(SHELL.UNKNOWN_BODY)).toBeNull());
+    expect(screen.getAllByRole("link", { name: /^Runs/ }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("link", { name: /^Audit/ })).toBeNull();
   });
 });
 
